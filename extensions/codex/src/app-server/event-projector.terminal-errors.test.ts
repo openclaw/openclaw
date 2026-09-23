@@ -24,6 +24,7 @@ registerCodexEventProjectorTestLifecycle();
 
 describe("CodexAppServerEventProjector terminal errors", () => {
   it.each([
+    { codexErrorInfo: "rateLimitExceeded", status: 429 },
     { codexErrorInfo: "serverOverloaded", status: 503, code: "OVERLOADED" },
     { codexErrorInfo: "internalServerError", status: 500 },
     ...[
@@ -198,11 +199,16 @@ describe("CodexAppServerEventProjector terminal errors", () => {
   });
 
   it("does not fail a completed reply after a retryable app-server error notification", async () => {
-    const projector = await createProjector();
+    const onAgentEvent = vi.fn();
+    const projector = await createProjector({ ...(await createParams()), onAgentEvent });
 
     await projector.handleNotification(agentMessageDelta("still working"));
     await projector.handleNotification(
-      appServerError({ message: "stream disconnected", willRetry: true }),
+      appServerError({
+        message: "Rate limit reached",
+        willRetry: true,
+        codexErrorInfo: "rateLimitExceeded",
+      }),
     );
     await projector.handleNotification(
       turnCompleted([{ type: "agentMessage", id: "msg-1", text: "final answer" }]),
@@ -217,6 +223,12 @@ describe("CodexAppServerEventProjector terminal errors", () => {
     });
     expect(result.lastAssistant?.stopReason).toBe("stop");
     expect(result.lastAssistant?.errorMessage).toBeUndefined();
+    expect(onAgentEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stream: "run_status",
+        data: { phase: "retrying", message: "Rate limited. The provider is retrying." },
+      }),
+    );
   });
 
   it("uses nested app-server error messages for terminal errors", async () => {
@@ -235,26 +247,40 @@ describe("CodexAppServerEventProjector terminal errors", () => {
     expect(result.lastAssistant).toBeUndefined();
   });
 
-  it.each([
-    {
-      label: "biological-risk",
-      message: "This content was flagged for possible biological risk. Try rephrasing it.",
-      codexErrorInfo: "other",
-      category: "bio",
-    },
-    {
-      label: "typed cyber",
-      message: "This request was blocked by the provider's cyber policy.",
-      codexErrorInfo: "cyberPolicy",
-      category: "cyber",
-    },
-  ])(
-    "keeps $label refusals terminal when error is followed by failed turn completion",
-    async ({ message, codexErrorInfo, category }) => {
-      const projector = await createProjector();
+  it.each(
+    [
+      {
+        label: "biological-risk",
+        message: "This content was flagged for possible biological risk. Try rephrasing it.",
+        codexErrorInfo: "other",
+        category: "bio",
+      },
+      {
+        label: "typed cyber",
+        message: "This request was blocked by the provider's cyber policy.",
+        codexErrorInfo: "cyberPolicy",
+        category: "cyber",
+      },
+      {
+        label: "typed misalignment",
+        message: "This request was blocked due to a misalignment policy violation.",
+        codexErrorInfo: "misalignmentPolicyViolation",
+        category: "misalignment",
+      },
+    ].flatMap((testCase) => [
+      { ...testCase, completionOnly: false },
+      { ...testCase, completionOnly: true },
+    ]),
+  )(
+    "keeps $label refusals terminal (completion only: $completionOnly)",
+    async ({ message, codexErrorInfo, category, completionOnly }) => {
+      const onAgentEvent = vi.fn();
+      const projector = await createProjector({ ...(await createParams()), onAgentEvent });
       const error = { message, codexErrorInfo };
 
-      await projector.handleNotification(appServerError({ ...error, willRetry: false }));
+      if (!completionOnly) {
+        await projector.handleNotification(appServerError({ ...error, willRetry: false }));
+      }
       await projector.handleNotification(
         forCurrentTurn("turn/completed", {
           turn: { id: TURN_ID, status: "failed", items: [], error },
@@ -279,6 +305,26 @@ describe("CodexAppServerEventProjector terminal errors", () => {
         ],
       });
       expect(result.lastAssistant).toBe(terminalAssistant);
+      expect(projector.settledTurnFailureFinalizationAllowed).toBe(false);
+      const policyNotices = onAgentEvent.mock.calls
+        .map(([event]) => event)
+        .filter((event) => event.stream === "notice" && event.data.phase === "provider_policy");
+      expect(policyNotices).toEqual(
+        category === "cyber"
+          ? [
+              {
+                stream: "notice",
+                data: {
+                  phase: "provider_policy",
+                  category: "cyber",
+                  state: "blocked",
+                  provider: "openai",
+                  model: "gpt-5.4-codex",
+                },
+              },
+            ]
+          : [],
+      );
       expect(
         result.messagesSnapshot.filter(
           (candidate) =>
@@ -289,11 +335,112 @@ describe("CodexAppServerEventProjector terminal errors", () => {
     },
   );
 
+  it("upgrades same-turn misalignment findings at exact UTF-8 limits without borrowing another turn's continuation", async () => {
+    const projector = await createProjector();
+    const error = {
+      message: "The provider paused this request.",
+      codexErrorInfo: "misalignmentPolicyViolation",
+    };
+    await projector.handleNotification(forCurrentTurn("error", { error, willRetry: false }));
+    const details = {
+      errorType: "future_category",
+      detailedExplanation: "🙂".repeat(16_384),
+      steer: { message: ` ${"🙂".repeat(255)}   ` },
+    };
+    await projector.handleNotification({
+      method: "error",
+      params: {
+        threadId: THREAD_ID,
+        turnId: "unrelated-turn",
+        error: { ...error, misalignment: details },
+        willRetry: false,
+      },
+    });
+    expect(
+      projector.buildResult(buildEmptyToolTelemetry()).currentAttemptAssistant?.diagnostics?.[0]
+        ?.details,
+    ).not.toHaveProperty("review");
+    await projector.handleNotification(
+      forCurrentTurn("turn/completed", {
+        turn: {
+          id: TURN_ID,
+          status: "failed",
+          items: [],
+          error: { ...error, misalignment: details },
+        },
+      }),
+    );
+    expect(
+      projector.buildResult(buildEmptyToolTelemetry()).currentAttemptAssistant?.diagnostics?.[0],
+    ).toMatchObject({
+      type: "provider_refusal",
+      details: {
+        provider: "openai",
+        category: "misalignment",
+        nativeThreadId: THREAD_ID,
+        nativeTurnId: TURN_ID,
+        review: {
+          explanation: details.detailedExplanation,
+          continuation: details.steer,
+          errorType: details.errorType,
+        },
+      },
+    });
+  });
+
+  it.each([
+    { label: "missing", explanation: undefined },
+    { label: "blank", explanation: " \n " },
+    { label: "too many UTF-8 bytes", explanation: "🙂".repeat(16_385) },
+  ])("does not offer review for $label native explanation", async ({ explanation }) => {
+    const projector = await createProjector();
+    await projector.handleNotification(
+      forCurrentTurn("error", {
+        error: {
+          message: "The provider paused this request.",
+          codexErrorInfo: "misalignmentPolicyViolation",
+          misalignment: {
+            detailedExplanation: explanation,
+            steer: { message: "Continue only the requested task." },
+          },
+        },
+        willRetry: false,
+      }),
+    );
+    expect(
+      projector.buildResult(buildEmptyToolTelemetry()).currentAttemptAssistant?.diagnostics?.[0]
+        ?.details?.review,
+    ).toBeUndefined();
+  });
+
+  it.each([
+    { label: "missing", steer: undefined },
+    { label: "blank", steer: { message: " \n " } },
+    { label: "wrong type", steer: { message: 42 } },
+    { label: "too many UTF-8 bytes", steer: { message: "🙂".repeat(257) } },
+  ])("keeps $label continuation findings non-continuable", async ({ steer }) => {
+    const projector = await createProjector();
+    const explanation = "Review the proposed action before proceeding.";
+    await projector.handleNotification(
+      forCurrentTurn("error", {
+        error: {
+          message: "The provider paused this request.",
+          codexErrorInfo: "misalignmentPolicyViolation",
+          misalignment: { detailedExplanation: explanation, ...(steer ? { steer } : {}) },
+        },
+        willRetry: false,
+      }),
+    );
+    expect(
+      projector.buildResult(buildEmptyToolTelemetry()).currentAttemptAssistant?.diagnostics?.[0]
+        ?.details?.review,
+    ).toEqual({ explanation });
+  });
+
   it.each([
     { codexErrorInfo: "serverOverloaded", expected: true },
     { codexErrorInfo: "usageLimitExceeded", expected: false },
     { codexErrorInfo: "unauthorized", expected: false },
-    { codexErrorInfo: "misalignmentPolicyViolation", expected: false },
     { codexErrorInfo: "other", expected: false },
   ])(
     "projects $codexErrorInfo terminal error recovery eligibility as $expected",

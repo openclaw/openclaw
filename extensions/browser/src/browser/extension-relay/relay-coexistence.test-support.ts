@@ -4,8 +4,8 @@ import path from "node:path";
 import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { withEnvAsync, withTempDir } from "openclaw/plugin-sdk/test-env";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
+import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import { expect } from "vitest";
-import { WebSocket } from "ws";
 import { relayTestKey } from "../../../chrome-extension/relay-key.test-support.js";
 import { stopBrowserControlService } from "../../control-service.js";
 import { runExtensionRelayDaemon } from "../relay-daemon.js";
@@ -99,11 +99,11 @@ export async function withConnectedDaemon(
     port: number,
     stateDir: string,
     config: object,
-  ) => Promise<{ stop: () => void; done: Promise<unknown> }>,
-  handleCdpCommand?: (
+  ) => Promise<{ port: number | null; stop: () => void; done: Promise<unknown> }>,
+  handleExtensionCommand?: (
     command: Record<string, unknown>,
     send: (message: Record<string, unknown>) => void,
-  ) => void,
+  ) => boolean,
 ) {
   await withTempDir("relay-coexistence-", async (dir) => {
     const stateDir = await fs.realpath(dir);
@@ -122,9 +122,20 @@ export async function withConnectedDaemon(
     await withEnvAsync(
       { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_OAUTH_DIR: credentials },
       async () => {
-        let daemon = startDaemon
-          ? await startDaemon(port, stateDir, config)
-          : await runExtensionRelayDaemon({ port });
+        const start = async () => {
+          const started = startDaemon
+            ? await startDaemon(port, stateDir, config)
+            : await runExtensionRelayDaemon({ port });
+          if (started.port !== port) {
+            started.stop();
+            const reason = await started.done;
+            throw new Error(
+              `Relay fixture startup failed: expected port ${port}, got ${started.port ?? "no listener"} (${String(reason)})`,
+            );
+          }
+          return started;
+        };
+        let daemon = await start();
         const extension = new WebSocket(
           `ws://127.0.0.1:${port}/extension`,
           BROWSER_RELAY_EXTENSION_SUBPROTOCOL,
@@ -168,8 +179,9 @@ export async function withConnectedDaemon(
               extension.send(JSON.stringify({ type: "pong" }));
               return;
             }
-            if (command.type === "cdp" && handleCdpCommand) {
-              handleCdpCommand(command, (message) => extension.send(JSON.stringify(message)));
+            const send = (message: Record<string, unknown>) =>
+              extension.send(JSON.stringify(message));
+            if (handleExtensionCommand?.(command, send)) {
               return;
             }
             if (command.type === "detach" && detachHeld) {
@@ -227,9 +239,7 @@ export async function withConnectedDaemon(
             restartDaemon: async () => {
               daemon.stop();
               await daemon.done;
-              daemon = startDaemon
-                ? await startDaemon(port, stateDir, config)
-                : await runExtensionRelayDaemon({ port });
+              daemon = await start();
             },
             holdDetach: () => {
               detachHeld = true;

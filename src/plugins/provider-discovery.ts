@@ -8,7 +8,7 @@ import {
   copyProviderCatalogOutcomes,
   copyProviderCatalogResultProjection,
 } from "./provider-catalog-result.js";
-import type { ProviderCatalogOutcome } from "./provider-catalog.types.js";
+import type { ProviderCatalogContext, ProviderCatalogOutcome } from "./provider-catalog.types.js";
 import type { ProviderCatalogOrder, ProviderPlugin } from "./types.js";
 
 const DISCOVERY_ORDER: readonly ProviderCatalogOrder[] = ["simple", "profile", "paired", "late"];
@@ -40,10 +40,11 @@ function isSafeProviderConfigKey(value: string): boolean {
 type PreparedProviderStaticCatalogEntry = Readonly<{
   provider: ProviderPlugin;
   result: Awaited<ReturnType<typeof runProviderStaticCatalog>>;
+  providerConfigs: Readonly<Record<string, ModelProviderConfig>>;
 }>;
 
 export type PreparedProviderStaticCatalog = Readonly<{
-  /** Discovery-entry providers captured for this config/workspace generation. */
+  /** Provider handles captured for this config/workspace generation. */
   providers?: readonly ProviderPlugin[];
   entries: readonly PreparedProviderStaticCatalogEntry[];
 }>;
@@ -162,21 +163,10 @@ export async function runProviderCatalog(params: {
   agentDir?: string;
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
-  resolveProviderApiKey: (providerId?: string) => {
-    apiKey: string | undefined;
-    discoveryApiKey?: string;
-  };
-  resolveProviderAuth: (
-    providerId?: string,
-    options?: { oauthMarker?: string },
-  ) => {
-    apiKey: string | undefined;
-    discoveryApiKey?: string;
-    mode: "api_key" | "aws-sdk" | "oauth" | "token" | "none";
-    source: "env" | "profile" | "none";
-    profileId?: string;
-  };
+  resolveProviderApiKey: ProviderCatalogContext["resolveProviderApiKey"];
+  resolveProviderAuth: ProviderCatalogContext["resolveProviderAuth"];
   reportCatalogOutcome?: (outcome: ProviderCatalogOutcome) => void;
+  isActive?: () => boolean;
 }) {
   const hook = resolveProviderCatalogHook(params.provider);
   if (!hook) {
@@ -191,6 +181,9 @@ export async function runProviderCatalog(params: {
     resolveProviderApiKey: params.resolveProviderApiKey,
     resolveProviderAuth: params.resolveProviderAuth,
   });
+  if (params.isActive?.() === false) {
+    return undefined;
+  }
   for (const outcome of copyProviderCatalogOutcomes(result)) {
     if (
       params.providerIds !== undefined &&
@@ -205,8 +198,13 @@ export async function runProviderCatalog(params: {
   return result;
 }
 
-export function runProviderStaticCatalog(params: { provider: ProviderPlugin }) {
+export function runProviderStaticCatalog(params: {
+  provider: ProviderPlugin;
+  signal?: AbortSignal;
+}) {
+  params.signal?.throwIfAborted();
   return params.provider.staticCatalog?.run({
+    ...(params.signal ? { signal: params.signal } : {}),
     config: {},
     env: {},
     resolveProviderApiKey: () => ({
@@ -226,6 +224,7 @@ export function runProviderStaticCatalog(params: { provider: ProviderPlugin }) {
  */
 export async function prepareProviderStaticCatalog(params: {
   providers: readonly ProviderPlugin[];
+  signal?: AbortSignal;
 }): Promise<PreparedProviderStaticCatalog> {
   const entries: PreparedProviderStaticCatalogEntry[] = [];
   const byOrder = groupPluginDiscoveryProvidersByOrder([...params.providers]);
@@ -234,10 +233,13 @@ export async function prepareProviderStaticCatalog(params: {
       if (!provider.staticCatalog) {
         continue;
       }
+      const result = await runProviderStaticCatalog({ provider, signal: params.signal });
+      params.signal?.throwIfAborted();
       entries.push(
         Object.freeze({
           provider,
-          result: await runProviderStaticCatalog({ provider }),
+          result,
+          providerConfigs: normalizePluginDiscoveryResult({ provider, result }),
         }),
       );
     }
@@ -246,4 +248,14 @@ export async function prepareProviderStaticCatalog(params: {
     providers: Object.freeze([...params.providers]),
     entries: Object.freeze(entries),
   });
+}
+
+export function resolvePreparedProviderStaticConfigs(
+  prepared: PreparedProviderStaticCatalog | undefined,
+): Record<string, ModelProviderConfig> {
+  const providers: Record<string, ModelProviderConfig> = {};
+  for (const entry of prepared?.entries ?? []) {
+    Object.assign(providers, entry.providerConfigs);
+  }
+  return providers;
 }

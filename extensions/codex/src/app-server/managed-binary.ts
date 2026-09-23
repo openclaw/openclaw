@@ -214,6 +214,9 @@ function resolveManagedCodexAppServerCommandCandidates(
 ): string[] {
   const packageCommand = resolveManagedCodexPackageEntrypoint(pluginRoot);
   const packageCommandPaths = packageCommand ? [packageCommand] : [];
+  if (managedCommandOrder === "package-only") {
+    return packageCommandPaths;
+  }
   const desktopCommandPaths = resolveMacOSDesktopCodexAppServerCommandCandidates(platform);
   // Ordinary turns must honor the pinned package version. Computer Use opts
   // into the desktop app owner because its macOS TCC permissions live there.
@@ -224,7 +227,7 @@ function resolveManagedCodexAppServerCommandCandidates(
   return orderedCommandPaths;
 }
 
-function resolveManagedCodexPackageEntrypoint(pluginRoot: string): string | undefined {
+export function resolveManagedCodexPackageEntrypoint(pluginRoot: string): string | undefined {
   try {
     // Use the pinned package's official launcher on every OS. It owns platform
     // selection, manager environment markers, signal forwarding, and exit status.

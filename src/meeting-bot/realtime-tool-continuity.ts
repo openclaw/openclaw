@@ -1,4 +1,7 @@
-import type { RealtimeVoiceToolCallEvent } from "../talk/provider-types.js";
+import type {
+  RealtimeVoiceAgentConsultRunner,
+  RealtimeVoiceToolCallEvent,
+} from "../talk/provider-types.js";
 import type { RealtimeVoiceSessionHarness } from "../talk/realtime-session-harness.js";
 import type { RealtimeVoiceBridgeSession } from "../talk/session-runtime.js";
 import type { TalkEventInput } from "../talk/talk-events.js";
@@ -31,6 +34,25 @@ export function createMeetingRealtimeToolContinuity<
       controller.abort(reason);
     }
     activeControllers.clear();
+  };
+
+  const runConsult = async (
+    request: Parameters<RealtimeVoiceAgentConsultRunner>[0],
+    consult: RealtimeVoiceAgentConsultRunner,
+  ) => {
+    const controller = new AbortController();
+    activeControllers.add(controller);
+    const signal = request.signal
+      ? AbortSignal.any([controller.signal, request.signal])
+      : controller.signal;
+    try {
+      signal.throwIfAborted();
+      const result = await consult({ ...request, signal });
+      signal.throwIfAborted();
+      return result;
+    } finally {
+      activeControllers.delete(controller);
+    }
   };
 
   const run = (params: {
@@ -78,5 +100,5 @@ export function createMeetingRealtimeToolContinuity<
       });
   };
 
-  return { reset, run };
+  return { reset, run, runConsult };
 }

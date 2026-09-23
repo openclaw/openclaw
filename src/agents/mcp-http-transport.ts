@@ -15,6 +15,8 @@ import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
 const STREAM_RETRY_EXHAUSTED_RE = /^Maximum reconnection attempts \(\d+\) exceeded\.$/;
 const SESSION_TERMINATION_TIMEOUT_MS = 5_000;
 
+export class McpSseSessionExpiredError extends Error {}
+
 class McpHttpResponseTooLargeError extends Error {
   readonly code = "MCP_HTTP_RESPONSE_TOO_LARGE";
 
@@ -73,22 +75,42 @@ function limitMcpResponseStream<Chunk extends Uint8Array>(
           return;
         }
 
-        for (const byte of chunk) {
-          if (previousByteWasCr && byte === 0x0a) {
-            previousByteWasCr = false;
-            continue;
-          }
+        const bytes = Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength);
+        let cursor = previousByteWasCr && bytes[0] === 0x0a ? 1 : 0;
+        if (bytes.length > 0) {
           previousByteWasCr = false;
-          if (byte === 0x0d || byte === 0x0a) {
-            finishEventLine();
-            previousByteWasCr = byte === 0x0d;
-            continue;
+        }
+        // Keep both delimiter positions so many short lines cannot repeatedly
+        // scan the rest of the chunk for an absent delimiter.
+        let lf = bytes.indexOf(0x0a, cursor);
+        let cr = bytes.indexOf(0x0d, cursor);
+        while (cursor < bytes.length) {
+          const delimiter = lf < 0 ? cr : cr < 0 ? lf : Math.min(lf, cr);
+          const end = delimiter < 0 ? bytes.length : delimiter;
+          if (end > cursor) {
+            if (lineBytes === 0) {
+              lineIsComment = bytes[cursor] === 0x3a;
+            }
+            lineBytes += end - cursor;
+            previousByteWasCr = false;
+            checkEventLimit();
           }
-          if (lineBytes === 0) {
-            lineIsComment = byte === 0x3a;
+          if (delimiter < 0) {
+            break;
           }
-          lineBytes += 1;
-          checkEventLimit();
+          finishEventLine();
+          previousByteWasCr = bytes[delimiter] === 0x0d;
+          cursor = delimiter + 1;
+          if (previousByteWasCr && bytes[cursor] === 0x0a) {
+            cursor += 1;
+            previousByteWasCr = false;
+          }
+          if (lf >= 0 && lf < cursor) {
+            lf = bytes.indexOf(0x0a, cursor);
+          }
+          if (cr >= 0 && cr < cursor) {
+            cr = bytes.indexOf(0x0d, cursor);
+          }
         }
         controller.enqueue(chunk);
       },
@@ -210,7 +232,16 @@ export class OpenClawSSEClientTransport extends OpenClawMcpHttpTransport {
     const configuredEventSourceFetch = eventSourceInit?.fetch;
     this.transport = new SSEClientTransport(url, {
       ...options,
-      fetch: limitedFetch,
+      fetch: async (input, init) => {
+        const response = await limitedFetch(input, init);
+        // The SDK discards POST status codes. Preserve session expiration for
+        // the runtime owner without closing before the failed request settles.
+        if (init?.method === "POST" && response.status === 404) {
+          const text = await response.text().catch(() => null);
+          throw new McpSseSessionExpiredError(`Error POSTing to endpoint (HTTP 404): ${text}`);
+        }
+        return response;
+      },
       eventSourceInit: {
         ...eventSourceInit,
         fetch: async (eventUrl, init) => {
@@ -376,8 +407,10 @@ export class OpenClawStreamableHTTPClientTransport extends OpenClawMcpHttpTransp
       headers,
       signal: AbortSignal.timeout(SESSION_TERMINATION_TIMEOUT_MS),
     });
-    await response.body?.cancel();
-    if (!response.ok && response.status !== 405) {
+    void response.body?.cancel().catch(() => undefined);
+    // A terminated session is no longer addressable; MCP servers report 404
+    // for that id, which is already the desired outcome of cleanup.
+    if (!response.ok && response.status !== 404 && response.status !== 405) {
       throw new StreamableHTTPError(
         response.status,
         `Failed to terminate session: ${response.statusText}`,

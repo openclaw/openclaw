@@ -15,9 +15,11 @@ import {
   authorizeClientVoiceConfirmation,
   bindAuthorizedClientVoiceConfirmation,
   checkClientVoiceToolConfirmationPolicy,
-  noteClientVoiceConfirmationUtterance,
 } from "../talk/client-voice-confirmation.js";
-import { resetClientVoiceConfirmationStateForTest } from "../talk/client-voice-confirmation.test-support.js";
+import {
+  noteClientVoiceConfirmationUtteranceForTest as noteClientVoiceConfirmationUtterance,
+  resetClientVoiceConfirmationStateForTest,
+} from "../talk/client-voice-confirmation.test-support.js";
 import * as clientVoiceSession from "../talk/client-voice-session.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { resetAdjustedParamsByToolCallIdForTests } from "./agent-tools.before-tool-call.state.js";
@@ -99,8 +101,8 @@ function createHostHarness(
 }
 
 describe("Code Mode subscribed host denial", () => {
-  afterEach(() => {
-    resetCodeModeTestState();
+  afterEach(async () => {
+    await resetCodeModeTestState();
     resetGlobalHookRunner();
     resetAdjustedParamsByToolCallIdForTests();
     vi.restoreAllMocks();
@@ -163,9 +165,10 @@ describe("Code Mode subscribed host denial", () => {
         );
         expect(harness.spawn).not.toHaveBeenCalled();
         expect(harness.remote).not.toHaveBeenCalled();
+        // One nested exec owns one item; command output does not create a second lifecycle.
         expect(harness.subscription.getItemLifecycle()).toMatchObject({
-          startedCount: 2,
-          completedCount: 2,
+          startedCount: 1,
+          completedCount: 1,
           activeCount: 0,
         });
       } finally {

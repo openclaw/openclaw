@@ -1,4 +1,6 @@
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import type { WorkerSessionPlacementState } from "./placement-state.js";
+import type { WorkerWorkspaceResultConflict } from "./workspace-conflicts.js";
 
 export const FORCED_WORKER_ABANDONMENT_ERROR =
   "Worker result abandoned by forced operator teardown";
@@ -15,6 +17,12 @@ export type WorkerSessionPlacementIdentity = {
   sessionId: string;
   agentId: string;
   sessionKey: string;
+};
+
+export type WorkerSessionPlacementChangeSnapshot = WorkerSessionPlacementIdentity & {
+  state: WorkerSessionPlacementState;
+  generation: number;
+  updatedAtMs: number;
 };
 
 export type WorkerPlacementExecutionMode = "worker-turn" | "remote-exec";
@@ -93,12 +101,6 @@ export type PersistedTurnClaim =
       ownerEpoch: number;
     };
 
-export type WorkerWorkspaceResultConflict = {
-  paths: string[];
-  stagedResultRef: string;
-  totalCount?: number;
-};
-
 type PersistedLocalTurnClaim = Extract<PersistedTurnClaim, { owner: "local" }>;
 
 type PlacementRecordBase<TurnClaim extends PersistedTurnClaim | null> =
@@ -116,7 +118,7 @@ type PlacementRecordBase<TurnClaim extends PersistedTurnClaim | null> =
 type UnclaimedPlacementRecordBase = PlacementRecordBase<null>;
 type LocalClaimablePlacementRecordBase = PlacementRecordBase<PersistedLocalTurnClaim | null>;
 
-export type EmptyWorkerPlacementMetadata = {
+type EmptyWorkerPlacementMetadata = {
   environmentId: null;
   activeOwnerEpoch: null;
   workspaceBaseManifestRef: null;
@@ -168,7 +170,7 @@ type StartingPlacementMetadata = {
   terminalAtMs: null;
 };
 
-export type OwnedWorkerPlacementMetadata = {
+type OwnedWorkerPlacementMetadata = {
   environmentId: string;
   activeOwnerEpoch: number;
   workspaceBaseManifestRef: string;
@@ -253,6 +255,7 @@ export function reportPlacementTransition(
   placement: WorkerSessionPlacementRecord,
 ): void {
   try {
+    sessionChanges.emit({ agentId: placement.agentId, sessionKey: placement.sessionKey });
     observer?.(placement);
   } catch {
     // Reporting cannot overturn the durable placement transition.
@@ -371,41 +374,7 @@ export function nextGeneration(generation: number): number {
   return next;
 }
 
-export function localTurnClaimForState(
-  turnClaim: PersistedTurnClaim | null,
-  state: "local" | "requested" | "failed",
-): PersistedLocalTurnClaim | null {
-  if (turnClaim?.owner === "worker") {
-    throw new Error(`Worker turn claim cannot survive placement ${state}`);
-  }
-  return turnClaim;
-}
-
-export function activeTurnClaimForState(
-  turnClaim: PersistedTurnClaim | null,
-  state: "active" | "draining",
-  executionMode: WorkerPlacementExecutionMode,
-): PersistedTurnClaim | null {
-  if (
-    (turnClaim?.owner === "local" && executionMode !== "remote-exec") ||
-    (turnClaim?.owner === "worker" && executionMode !== "worker-turn")
-  ) {
-    throw new Error(`Turn claim owner does not match ${executionMode} placement ${state}`);
-  }
-  return turnClaim;
-}
-
-export function unclaimedTurnForState(
-  turnClaim: PersistedTurnClaim | null,
-  state: "provisioning" | "syncing" | "starting" | "reconciling" | "reclaimed",
-): null {
-  if (turnClaim !== null) {
-    throw new Error(`Turn claim cannot survive placement ${state}`);
-  }
-  return null;
-}
-
-export function assertRecordShape(record: {
+type PlacementRecordShape = {
   state: WorkerSessionPlacementState;
   executionMode: WorkerPlacementExecutionMode;
   environmentId: string | null;
@@ -419,7 +388,18 @@ export function assertRecordShape(record: {
   terminalReason: string | null;
   terminalAtMs: number | null;
   turnClaim: PersistedTurnClaim | null;
-}): void {
+};
+
+type ValidatedPlacementRecordShape = {
+  [State in WorkerSessionPlacementState]: Pick<
+    Extract<WorkerSessionPlacementRecord, { state: State }>,
+    keyof PlacementRecordShape
+  >;
+}[WorkerSessionPlacementState];
+
+export function assertRecordShape(
+  record: PlacementRecordShape,
+): asserts record is ValidatedPlacementRecordShape {
   const terminal = record.state === "reclaimed" || record.state === "failed";
   if (terminal) {
     normalizeTimestamp(record.terminalAtMs, "terminal timestamp");

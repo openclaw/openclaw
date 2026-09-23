@@ -384,6 +384,9 @@ describe("native owner content records", () => {
 
   it.each([
     ["CI helper", ".ci-harness", "cache/metadata-v1.3/registry.example/package.json"],
+    ["Swift release", "apps/macos/.build", "arm64/release/description.json"],
+    ["Swift debug", "apps/macos/.build-local", "debug/description.json"],
+    ["MLX helper", "apps/macos-mlx-tts/.build", "arm64/release/description.json"],
     [
       "pnpm store",
       ".cache/openclaw-pnpm-store",
@@ -445,6 +448,27 @@ describe("native owner content records", () => {
       expect(signature()).not.toBe(first);
     },
   );
+
+  it("keeps a compiled generation warm across native app scratch creation and removal", () => {
+    const f = fixture();
+    const record = f.seal(f.prepare());
+    const matches = () =>
+      new BoundaryInputSnapshot(f.root).matches(
+        record,
+        f.config,
+        f.args,
+        Object.keys(record.outputs),
+        f.outputRoot,
+      );
+    expect(matches()).toBe(true);
+    f.write("apps/macos/.build/arm64/release/description.json", "{}");
+    f.write("apps/macos/.build/arm64/checkouts/library/package.json", "{}");
+    expect(matches()).toBe(true);
+    fs.rmSync(path.join(f.root, "apps/macos/.build"), { recursive: true });
+    expect(matches()).toBe(true);
+    f.write("nested/value.ts", "export const value = 2;");
+    expect(matches()).toBe(false);
+  });
 
   it("propagates non-ENOENT link resolution errors", () => {
     const f = fixture(true);

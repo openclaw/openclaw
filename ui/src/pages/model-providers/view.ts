@@ -1,19 +1,25 @@
 // Control UI view renders the Models settings page content.
-import { html, nothing } from "lit";
-import type { FastMode, ModelsProbeResult } from "../../api/types.ts";
+import { html, nothing, type TemplateResult } from "lit";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { FastMode, ModelAuthStatusResult, ModelsProbeResult } from "../../api/types.ts";
+import { titleForRoute } from "../../app-navigation.ts";
+import type { DecisionModelEntry } from "../../components/decision-model-picker.ts";
 import { icons } from "../../components/icons.ts";
 import { renderProviderBrandIcon } from "../../components/provider-icon.ts";
 import { renderProviderUsageDetails } from "../../components/provider-usage.ts";
 import {
+  renderLearnMoreLink,
   renderSettingsEmpty,
   renderSettingsGroup,
   renderSettingsLoadingSkeleton,
   renderSettingsPage,
+  renderSettingsPageHeader,
   renderSettingsRow,
   renderSettingsSection,
   renderSettingsStatus,
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
+import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
@@ -21,25 +27,28 @@ import { formatCompactTokenCount, formatCost, formatTimeMs } from "../../lib/for
 import { MODEL_SETTINGS_TARGET_IDS } from "../config/route-data.ts";
 import "../../styles/model-providers.css";
 import "../../styles/usage.css";
+import type { ModelProviderRowMessage } from "./config-mutation.ts";
 import type {
   DefaultModelSelection,
   ModelPickerEntry,
   ModelProviderCard,
-  ModelProviderLogoutTarget,
+  ModelProviderPendingLogout,
   ProviderOption,
 } from "./data.ts";
 import { renderDefaultModels } from "./default-models-view.ts";
-import { hasVerifiedProvider, renderProviderStatus } from "./view-status.ts";
+import { renderProviderProfiles } from "./profiles-view.ts";
+import {
+  hasVerifiedProvider,
+  renderProviderStatus,
+  renderMutationMessage,
+  renderModelProviderConnectAction,
+} from "./view-status.ts";
 
 registerSettingsEnglish();
 
-export type ModelProviderRowMessage = {
-  kind: "success" | "error";
-  text: string;
-  warning?: string;
-};
-
 type ModelProvidersViewProps = {
+  usageClient?: GatewayBrowserClient | null;
+  usageAgentId?: string;
   connected: boolean;
   loading: boolean;
   refreshing: boolean;
@@ -51,16 +60,25 @@ type ModelProvidersViewProps = {
   credentialAgentLabel: string;
   cards: ModelProviderCard[];
   configuredModels: ModelPickerEntry[];
+  decisionModels: DecisionModelEntry[];
   defaultModels: DefaultModelSelection;
+  authStatus?: ModelAuthStatusResult | null;
+  automaticUtilityModel?: string | null;
   thinkingLevel: string | undefined;
   thinkingOverridden: boolean;
   fastMode: FastMode | undefined;
   fastModeOverridden: boolean;
+  /** True while picker-triggered catalog discovery is in flight. */
+  catalogDiscovering: boolean;
+  /** Retryable error from a picker-triggered catalog discovery. */
+  catalogDiscoveryError: string | null;
   configBusy: boolean;
   quickAddSupported: boolean;
   unconfiguredProviders: ProviderOption[];
+  canViewProfiles: boolean;
   canMutate: boolean;
   mutationBlockedReason: string | null;
+  defaultsMutationBlockedReason: string | null;
   /** Usage never converged before the retry budget ran out; cards lack usage. */
   providerUsageStalled: boolean;
   probeAvailable: boolean;
@@ -69,10 +87,11 @@ type ModelProvidersViewProps = {
   probeResults: Record<string, ModelsProbeResult>;
   keyEditorProvider: string | null;
   keyDraft: string;
-  pendingLogoutProvider: string | null;
+  profileOrders: Record<string, string[]>;
   addProviderOpen: boolean;
   addProviderId: string;
   addProviderKey: string;
+  installedAgents: TemplateResult | typeof nothing;
   onRefresh: () => void;
   onOpenKeyEditor: (provider: string) => void;
   onCloseKeyEditor: () => void;
@@ -80,9 +99,8 @@ type ModelProvidersViewProps = {
   onSaveKey: (provider: string, configKey: string) => void;
   onRemoveKey: (provider: string, configKey: string) => void;
   onProbe: (cardId: string, providers: string[]) => void;
-  onRequestLogout: (provider: string) => void;
-  onCancelLogout: () => void;
-  onLogout: (cardId: string, targets: ModelProviderLogoutTarget[]) => void;
+  onRequestLogout: (pending: ModelProviderPendingLogout) => void;
+  onProfileOrderChange: (cardId: string, provider: string, profileIds: string[] | null) => void;
   onAddProviderToggle: () => void;
   onAddProviderIdChange: (provider: string) => void;
   onAddProviderKeyChange: (value: string) => void;
@@ -90,31 +108,23 @@ type ModelProvidersViewProps = {
   onPrimaryChange: (model: string) => void;
   onFallbackChange: (model: string | null) => void;
   onUtilityChange: (model: string | null) => void;
+  onDecisionChange: (model: string | null) => void;
   onThinkingChange: (level: string, element: HTMLElement) => void;
   onThinkingReset: () => void;
   onFastModeChange: (mode: FastMode) => void;
   onFastModeReset: () => void;
-  onOpenModelSetup: () => void;
+  onCatalogRetry: () => void;
+  providerScope?: TemplateResult;
+  providerQuery?: string;
+  onProviderQueryChange?: (value: string) => void;
+  onConnectProvider: () => void;
+  onConnect: (card: ModelProviderCard) => void;
+  canConnect: (card: ModelProviderCard) => boolean;
+  loginBusy: boolean;
 };
 
 function configMutationDisabled(props: ModelProvidersViewProps): boolean {
   return !props.canMutate || props.configBusy;
-}
-
-function renderMutationMessage(message: ModelProviderRowMessage | undefined) {
-  if (!message) {
-    return nothing;
-  }
-  return html`
-    <div class="callout ${message.kind}" role=${message.kind === "error" ? "alert" : "status"}>
-      ${message.text}
-    </div>
-    ${
-      message.warning
-        ? html`<div class="callout warning" role="status">${message.warning}</div>`
-        : nothing
-    }
-  `;
 }
 
 function modelsText(card: ModelProviderCard): string | null {
@@ -145,7 +155,7 @@ function renderLocalCost(card: ModelProviderCard, costDays: number) {
       <div class="model-providers__local-cost-detail">
         ${t("modelProviders.localCostDetail", {
           tokens: formatCompactTokenCount(cost.totalTokens),
-          sessions: String(cost.sessionCount),
+          messages: String(cost.messageCount),
         })}
       </div>
     </div>
@@ -277,10 +287,8 @@ function renderProviderActions(card: ModelProviderCard, props: ModelProvidersVie
     ? card.credentialProviderIds
     : [card.id];
   const isConfigured = card.hasConfigApiKey || Boolean(card.apiKey) || card.profiles.length > 0;
-  const canLogout = card.logoutTargets.length > 0;
   const probeBusy = Boolean(props.busy[`probe:${card.id}`]);
   const keyBusy = Boolean(props.busy[`key:${card.id}`]);
-  const logoutBusy = Boolean(props.busy[`logout:${card.id}`]);
   const blocked = props.mutationBlockedReason ?? "";
   const authModeBlocked = Boolean(card.configAuthMode && card.configAuthMode !== "api-key");
   const apiKeyUnsupported = card.apiKeySupported === false;
@@ -290,6 +298,18 @@ function renderProviderActions(card: ModelProviderCard, props: ModelProvidersVie
     : blocked;
   return html`
     <div class="model-providers__card-actions">
+      ${
+        props.canConnect(card) && card.profiles.length === 0
+          ? html`<button
+              class="btn btn--sm"
+              data-models-connect-provider=${card.id}
+              ?disabled=${mutationDisabled || props.loginBusy}
+              @click=${() => props.onConnect(card)}
+            >
+              ${t("modelProviders.login.action")}
+            </button>`
+          : nothing
+      }
       ${
         isConfigured
           ? html`
@@ -314,16 +334,13 @@ function renderProviderActions(card: ModelProviderCard, props: ModelProvidersVie
                 title=${keyBlocked}
                 @click=${() => props.onOpenKeyEditor(card.id)}
               >
-                ${
-                  card.hasConfigApiKey
-                    ? t("modelProviders.apiKey.replace")
-                    : t("modelProviders.apiKey.set")
-                }
+                ${t("modelProviders.apiKey.set")}
               </button>
             `
       }
       ${
-        card.hasConfigApiKey
+        card.hasConfigApiKey ||
+        card.profiles.some((profile) => profile.type === "api_key" && profile.logoutSupported)
           ? html`
               <button
                 class="btn btn--sm danger"
@@ -336,46 +353,7 @@ function renderProviderActions(card: ModelProviderCard, props: ModelProvidersVie
             `
           : nothing
       }
-      ${
-        canLogout
-          ? html`
-              <button
-                class="btn btn--sm"
-                ?disabled=${logoutBusy || mutationDisabled}
-                title=${blocked}
-                @click=${() => props.onRequestLogout(card.id)}
-              >
-                ${t("modelProviders.logout.action")}
-              </button>
-            `
-          : nothing
-      }
     </div>
-    ${
-      props.pendingLogoutProvider === card.id
-        ? html`
-            <div class="model-providers__confirm" role="alert">
-              <span>${t("modelProviders.logout.confirm", { provider: card.displayName })}</span>
-              <div class="model-providers__form-actions">
-                <button
-                  class="btn danger btn--sm"
-                  ?disabled=${logoutBusy || mutationDisabled}
-                  @click=${() => props.onLogout(card.id, card.logoutTargets)}
-                >
-                  ${
-                    logoutBusy
-                      ? t("modelProviders.logout.loggingOut")
-                      : t("modelProviders.logout.action")
-                  }
-                </button>
-                <button class="btn btn--sm" ?disabled=${logoutBusy} @click=${props.onCancelLogout}>
-                  ${t("common.cancel")}
-                </button>
-              </div>
-            </div>
-          `
-        : nothing
-    }
   `;
 }
 
@@ -402,7 +380,22 @@ function renderProviderRow(card: ModelProviderCard, props: ModelProvidersViewPro
           ${renderProviderStatus(card)}
         </div>
       </div>
-      ${renderCredentialSummary(card, props.credentialAgentLabel)}
+      ${
+        card.profiles.length > 0 && props.canViewProfiles
+          ? renderProviderProfiles(card, {
+              usageClient: props.usageClient,
+              usageAgentId: props.usageAgentId,
+              busy: props.busy,
+              canMutate: props.canMutate && !props.configBusy,
+              mutationBlockedReason: props.mutationBlockedReason,
+              profileOrders: props.profileOrders,
+              onAddAccount: props.canConnect(card) ? () => props.onConnect(card) : undefined,
+              addAccountDisabled: props.loginBusy || configMutationDisabled(props),
+              onProfileOrderChange: props.onProfileOrderChange,
+              onRequestLogout: props.onRequestLogout,
+            })
+          : renderCredentialSummary(card, props.credentialAgentLabel)
+      }
       <div
         class="model-providers__global-metrics"
         aria-busy=${props.supplementalLoading ? "true" : "false"}
@@ -424,82 +417,56 @@ function renderProviderRow(card: ModelProviderCard, props: ModelProvidersViewPro
 }
 
 function renderAddProvider(props: ModelProvidersViewProps) {
+  if (!props.addProviderOpen) {
+    return nothing;
+  }
   const busy = Boolean(props.busy.add);
   const disabled = configMutationDisabled(props) || busy;
-  const rows = html`
-    ${
-      props.unconfiguredProviders.length === 0
-        ? renderSettingsEmpty(t("modelProviders.add.none"))
-        : nothing
-    }
-    ${
-      props.addProviderOpen
-        ? html`
-            <div class="settings-row settings-row--stacked">
-              <div class="model-providers__add-form">
-                <label class="field">
-                  <span>${t("modelProviders.add.provider")}</span>
-                  <select
-                    class="settings-select"
-                    .value=${props.addProviderId}
-                    ?disabled=${disabled}
-                    @change=${(event: Event) =>
-                      props.onAddProviderIdChange((event.target as HTMLSelectElement).value)}
-                  >
-                    <option value="">${t("modelProviders.add.selectProvider")}</option>
-                    ${props.unconfiguredProviders.map(
-                      (provider) =>
-                        html`<option value=${provider.id}>${provider.displayName}</option>`,
-                    )}
-                  </select>
-                </label>
-                <label class="field">
-                  <span>${t("modelProviders.apiKey.label")}</span>
-                  <input
-                    type="password"
-                    autocomplete="off"
-                    placeholder=${t("modelProviders.apiKey.placeholder")}
-                    .value=${props.addProviderKey}
-                    ?disabled=${disabled}
-                    @input=${(event: Event) =>
-                      props.onAddProviderKeyChange((event.target as HTMLInputElement).value)}
-                  />
-                </label>
-                <button
-                  class="btn primary"
-                  ?disabled=${disabled || !props.addProviderId || !props.addProviderKey.trim()}
-                  @click=${props.onAddProvider}
-                >
-                  ${props.busy.add ? t("modelProviders.saving") : t("modelProviders.add.save")}
-                </button>
-              </div>
-              ${renderMutationMessage(props.messages.add)}
-            </div>
-          `
-        : nothing
-    }
+  const provider = props.unconfiguredProviders.find((entry) => entry.id === props.addProviderId);
+  return html`
+    <openclaw-modal-dialog
+      label=${t("modelProviders.add.title")}
+      @modal-cancel=${(event: Event) => {
+        event.preventDefault();
+        if (!busy) {
+          props.onAddProviderToggle();
+        }
+      }}
+    >
+      <div class="model-setup-wizard" data-models-key-dialog>
+        <div class="model-setup-wizard__header">
+          <h2>${provider?.displayName ?? props.addProviderId}</h2>
+        </div>
+        <div class="model-setup-wizard__body">
+          <p>${t("modelProviders.credentials.label", { agent: props.credentialAgentLabel })}</p>
+          <label class="field">
+            <span>${t("modelProviders.apiKey.label")}</span>
+            <input
+              type="password"
+              autocomplete="off"
+              placeholder=${t("modelProviders.apiKey.placeholder")}
+              .value=${props.addProviderKey}
+              ?disabled=${disabled}
+              @input=${(event: Event) => props.onAddProviderKeyChange((event.target as HTMLInputElement).value)}
+            />
+          </label>
+          ${renderMutationMessage(props.messages.add)}
+        </div>
+        <div class="model-setup-wizard__footer">
+          <button class="btn" ?disabled=${busy} @click=${props.onAddProviderToggle}>
+            ${t("common.cancel")}
+          </button>
+          <button
+            class="btn primary"
+            ?disabled=${disabled || !props.addProviderId || !props.addProviderKey.trim()}
+            @click=${props.onAddProvider}
+          >
+            ${busy ? t("modelProviders.saving") : t("modelProviders.add.save")}
+          </button>
+        </div>
+      </div>
+    </openclaw-modal-dialog>
   `;
-  return renderSettingsSection(
-    {
-      title: t("modelProviders.add.title"),
-      description: t("modelProviders.add.subtitle"),
-      actions: html`
-        <button
-          class="btn btn--sm"
-          ?disabled=${
-            busy ||
-            (!props.addProviderOpen &&
-              (configMutationDisabled(props) || props.unconfiguredProviders.length === 0))
-          }
-          title=${props.mutationBlockedReason ?? ""}
-          @click=${props.onAddProviderToggle}
-        >
-          ${props.addProviderOpen ? t("common.cancel") : t("modelProviders.add.action")}
-        </button>
-      `,
-    },
-    rows,
-  );
 }
 
 function renderModelReadiness(props: ModelProvidersViewProps) {
@@ -520,8 +487,13 @@ function renderModelReadiness(props: ModelProvidersViewProps) {
                 ? t("modelProviders.readiness.noModels")
                 : t("modelProviders.readiness.modelRequired"),
             })}
-            <button class="btn primary" @click=${props.onOpenModelSetup}>
-              ${signedIn ? t("modelProviders.readiness.chooseProvider") : t("modelSetup.heading")}
+            <button
+              class="btn primary"
+              ?disabled=${configMutationDisabled(props) || props.loginBusy}
+              title=${props.mutationBlockedReason ?? ""}
+              @click=${props.onConnectProvider}
+            >
+              ${t("modelProviders.login.action")}
             </button>
           `,
         }),
@@ -546,34 +518,22 @@ export function renderModelProviders(props: ModelProvidersViewProps) {
       renderSettingsGroup(renderSettingsEmpty(t("modelProviders.disconnected"))),
     );
   }
-  if (props.loading) {
-    return renderSettingsPage(html`
-      <div id=${MODEL_SETTINGS_TARGET_IDS.behavior}>
-        ${renderDefaultModels({
-          models: props.configuredModels,
-          selection: props.defaultModels,
-          thinkingLevel: props.thinkingLevel,
-          thinkingOverridden: props.thinkingOverridden,
-          fastMode: props.fastMode,
-          fastModeOverridden: props.fastModeOverridden,
-          loading: true,
-          canMutate: !configMutationDisabled(props),
-          mutationBlockedReason: props.mutationBlockedReason,
-          busy: props.busy,
-          message: props.messages.defaults,
-          onPrimaryChange: props.onPrimaryChange,
-          onFallbackChange: props.onFallbackChange,
-          onUtilityChange: props.onUtilityChange,
-          onThinkingChange: props.onThinkingChange,
-          onThinkingReset: props.onThinkingReset,
-          onFastModeChange: props.onFastModeChange,
-          onFastModeReset: props.onFastModeReset,
-        })}
-      </div>
-      ${renderSettingsGroup(renderSettingsLoadingSkeleton())}
-    `);
-  }
+  const query = (props.providerQuery ?? "").trim().toLocaleLowerCase();
+  const matchingCards = props.cards.filter((card) =>
+    [card.id, card.displayName, ...card.credentialProviderIds].some((value) =>
+      value.toLocaleLowerCase().includes(query),
+    ),
+  );
   const providerRows = html`
+    <label class="field model-providers__search">
+      <input
+        type="search"
+        aria-label=${t("modelProviders.search")}
+        placeholder=${t("modelProviders.search")}
+        .value=${props.providerQuery ?? ""}
+        @input=${(event: Event) => props.onProviderQueryChange?.((event.currentTarget as HTMLInputElement).value)}
+      />
+    </label>
     <div class="model-providers__provider-list">
       ${props.error ? renderSettingsGroup(renderProviderNoticeRow(props.error)) : nothing}
       ${
@@ -590,39 +550,52 @@ export function renderModelProviders(props: ModelProvidersViewProps) {
                   )}`,
               ),
             )
-          : props.cards.map((card) => renderSettingsGroup(renderProviderRow(card, props)))
+          : matchingCards.map((card) => renderSettingsGroup(renderProviderRow(card, props)))
       }
+      ${props.cards.length > 0 && matchingCards.length === 0 ? renderSettingsEmpty(t("modelProviders.noMatches")) : nothing}
     </div>
   `;
-  const needsModelSetup = !props.configuredModels.some((model) => model.available !== false);
-  return renderSettingsPage(html`
+  const needsModelSetup =
+    !props.loading && !props.configuredModels.some((model) => model.available !== false);
+  return html`${renderSettingsPage(html`
     ${needsModelSetup ? renderModelReadiness(props) : nothing}
     <div id=${MODEL_SETTINGS_TARGET_IDS.behavior}>
       ${renderDefaultModels({
         models: props.configuredModels,
+        decisionModels: props.decisionModels,
         selection: props.defaultModels,
+        authStatus: props.authStatus,
+        automaticUtilityModel: props.automaticUtilityModel,
         thinkingLevel: props.thinkingLevel,
         thinkingOverridden: props.thinkingOverridden,
         fastMode: props.fastMode,
         fastModeOverridden: props.fastModeOverridden,
-        canMutate: !configMutationDisabled(props),
-        mutationBlockedReason: props.mutationBlockedReason,
+        loading: props.loading,
+        catalogDiscovering: props.catalogDiscovering,
+        catalogDiscoveryError: props.catalogDiscoveryError,
+        canMutate: props.defaultsMutationBlockedReason === null && !props.configBusy,
+        mutationBlockedReason: props.defaultsMutationBlockedReason,
         busy: props.busy,
         message: props.messages.defaults,
         onPrimaryChange: props.onPrimaryChange,
         onFallbackChange: props.onFallbackChange,
         onUtilityChange: props.onUtilityChange,
+        onDecisionChange: props.onDecisionChange,
         onThinkingChange: props.onThinkingChange,
         onThinkingReset: props.onThinkingReset,
         onFastModeChange: props.onFastModeChange,
         onFastModeReset: props.onFastModeReset,
+        onCatalogRetry: props.onCatalogRetry,
       })}
     </div>
+    ${props.installedAgents}
     ${renderSettingsSection(
       {
-        title: t("modelProviders.title"),
+        title: t("modelProviders.accessTitle"),
+        description: t("modelProviders.accessDescription"),
         count: props.cards.length,
         actions: html`
+          ${props.providerScope}
           ${
             props.updatedAt
               ? html`<span class="model-providers__updated"
@@ -650,13 +623,49 @@ export function renderModelProviders(props: ModelProvidersViewProps) {
           </openclaw-tooltip>
         `,
       },
-      providerRows,
+      props.loading
+        ? renderSettingsGroup(renderSettingsLoadingSkeleton())
+        : props.cards.length === 0 &&
+            props.installedAgents !== nothing &&
+            !props.error &&
+            !props.providerUsageFailed
+          ? nothing
+          : providerRows,
     )}
-    ${props.quickAddSupported ? renderAddProvider(props) : nothing}
     ${
       props.providerUsageStalled
         ? html`<div class="callout warning" role="status">${t("usage.providerUsage.stalled")}</div>`
         : nothing
     }
-  `);
+  `)}${renderAddProvider(props)}`;
+}
+
+/** The Settings selection scopes provider access, never the global defaults above it. */
+export function renderModelProviderScope(props: {
+  agentLabel: string;
+  onConnect: () => void;
+  connectDisabled: boolean;
+}): TemplateResult {
+  return html`
+    <span class="muted" data-models-provider-agent
+      >${t("agentScope.label")}: ${props.agentLabel}</span
+    >
+    ${renderModelProviderConnectAction(props)}
+  `;
+}
+
+export function renderModelProvidersPageShell(props: {
+  body: TemplateResult;
+  login: TemplateResult;
+  loginMessage?: ModelProviderRowMessage;
+}): TemplateResult {
+  return html`
+    ${renderSettingsPageHeader({
+      title: titleForRoute("model-providers"),
+      subtitle: html`${t("modelProviders.subtitle")}
+      ${renderLearnMoreLink("https://docs.openclaw.ai/concepts/model-providers")}`,
+    })}
+    ${renderSettingsWorkspace(html`${renderMutationMessage(props.loginMessage)}${props.body}`)}
+    ${props.login}
+  `;
 }

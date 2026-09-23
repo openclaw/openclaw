@@ -1,0 +1,672 @@
+import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  TRANSCRIPTS_EXPORT_MAX_BYTES,
+  TRANSCRIPTS_LEGACY_RESULT_MAX_BYTES,
+  TRANSCRIPTS_RESULT_MAX_BYTES,
+} from "../../packages/gateway-protocol/src/schema/transcripts.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
+import { activeSessions } from "./capture.js";
+import { transcriptLibraryTimezoneEntrypoint } from "./library-timezone-runtime.test-support.js";
+import { exportTranscriptLibrary, getTranscriptLibrary, listTranscriptLibrary } from "./library.js";
+import {
+  createTranscriptLibraryStoreFixture,
+  transcriptLibrarySession as session,
+} from "./library.store.test-support.js";
+import { meetingTranscriptDb } from "./store-sqlite.js";
+import { transcriptSessionSelector } from "./store.js";
+import { summarizeTranscripts } from "./summary.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(async () => {
+  vi.restoreAllMocks();
+  activeSessions.clear();
+  await closeOpenClawStateDatabaseAsync();
+  closeOpenClawStateDatabaseForTest();
+});
+
+function fixture() {
+  return createTranscriptLibraryStoreFixture(tempDirs.make("transcript-library-"));
+}
+
+describe("transcript library SQLite reads", () => {
+  it("skips empty transcription artifacts without losing pagination or rewriting the archive", async () => {
+    const { store } = fixture();
+    const target = session("transcription-artifacts");
+    await store.writeSession(target);
+    const texts = ["context:", "###", "Transcribe the audio.", "Context: ship the fix.", "はい。"];
+    for (const text of texts) {
+      await store.appendUtteranceForSession(target, { text });
+    }
+    let cursor: string | undefined;
+    const visible: string[] = [];
+    do {
+      const page = await getTranscriptLibrary(store, {
+        selector: transcriptSessionSelector(target),
+        includeUtterances: true,
+        limit: 1,
+        cursor,
+      });
+      visible.push(...(page.utterances ?? []).map((utterance) => utterance.text));
+      if (!page.nextCursor) {
+        break;
+      }
+      cursor = page.nextCursor;
+    } while (cursor);
+    expect(visible).toEqual(texts.slice(3));
+    const exported = await exportTranscriptLibrary(store, {
+      selector: transcriptSessionSelector(target),
+      format: "jsonl",
+    });
+    expect(
+      Buffer.from(exported.data, "base64")
+        .toString("utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line).text),
+    ).toEqual(texts.slice(3));
+    expect(
+      (await store.readUtterancesForSession(target)).map((utterance) => utterance.text),
+    ).toEqual(texts);
+  });
+  it("orders and filters stored offset dates by instant without rewriting their identities", async () => {
+    const { store } = fixture();
+    const rows = [
+      session("offset-at-1000", { startedAt: "2026-08-20T03:00:00-07:00" }),
+      session("utc-at-0930", { startedAt: "2026-08-20T09:30:00.000Z" }),
+      session("utc-at-1030", { startedAt: "2026-08-20T10:30:00.000Z" }),
+    ];
+    for (const row of rows) {
+      await store.writeSession(row);
+    }
+    const result = await listTranscriptLibrary(store, { startedAfter: "2026-08-20T09:00:00Z" });
+    expect(result.sessions.map(({ sessionId }) => sessionId)).toEqual([
+      "utc-at-1030",
+      "offset-at-1000",
+      "utc-at-0930",
+    ]);
+    for (const row of rows) {
+      expect(await store.readSession(transcriptSessionSelector(row))).toEqual(row);
+    }
+  });
+
+  it("paginates equal instants and unknown dates using original identity ties and date-string semantics", async () => {
+    const { store } = fixture();
+    const ordered = [
+      session("later", { startedAt: "2026-08-20T06:30:00Z" }),
+      session("fraction-tail", { startedAt: "2026-08-20T06:00:00.9999Z" }),
+      session("basic", { startedAt: "2026-08-20T06:00:00+0000" }),
+      session("fraction", { startedAt: "2026-08-20T06:00:00.0005Z" }),
+      session("same", { startedAt: "2026-08-19T23:00:00-07:00" }),
+      session("same", { startedAt: "2026-08-20T06:00:00.000Z" }),
+      session("earlier", { startedAt: "2026-08-20T05:30:00Z" }),
+      session("unknown", { startedAt: "2026-08-21Tbad" }),
+      session("unknown", { startedAt: "2026-08-22Tbad" }),
+      session("unknown-z", { startedAt: "2026-08-20Tbad" }),
+    ];
+    for (const row of ordered.toReversed()) {
+      await store.writeSession(row);
+    }
+    const seen: Array<{ sessionId: string; startedAt: string; selector: string }> = [];
+    let cursor: string | undefined;
+    for (let index = 0; index < ordered.length; index++) {
+      const page = await listTranscriptLibrary(store, { limit: 1, cursor });
+      expect(page.sessions).toHaveLength(1);
+      const { sessionId, startedAt, selector } = page.sessions[0]!;
+      seen.push({ sessionId, startedAt, selector });
+      expect(page.nextCursor).toEqual(index === ordered.length - 1 ? null : expect.any(String));
+      cursor = page.nextCursor ?? undefined;
+    }
+    expect(seen).toEqual(
+      ordered.map((row) => ({
+        sessionId: row.sessionId,
+        startedAt: row.startedAt,
+        selector: transcriptSessionSelector(row),
+      })),
+    );
+    expect(
+      (
+        await listTranscriptLibrary(store, {
+          startedAfter: "2026-08-20T06:00:00.0005Z",
+          startedBefore: "2026-08-20T06:00:00.001Z",
+        })
+      ).sessions.map(({ sessionId }) => sessionId),
+    ).toEqual(["basic", "fraction", "same", "same"]);
+  });
+
+  it(
+    "uses the process timezone for unzoned stored dates and range bounds",
+    { timeout: 45_000 },
+    () => {
+      const stateDir = tempDirs.make("transcript-library-timezone-");
+      const child = spawnSync(
+        resolveTestNodeExecPath(),
+        [
+          ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(transcriptLibraryTimezoneEntrypoint)),
+          stateDir,
+        ],
+        {
+          encoding: "utf8",
+          timeout: 30_000,
+          env: {
+            ...process.env,
+            TZ: "America/Los_Angeles",
+            OPENCLAW_STATE_DIR: stateDir,
+            OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+          },
+        },
+      );
+      expect(child.error, child.stderr).toBeUndefined();
+      expect(child.status, child.stderr).toBe(0);
+    },
+  );
+
+  it.each(["at-cap", "oversized-ascii", "oversized-utf8"] as const)(
+    "bounds %s stored date input before the JavaScript parser",
+    async (kind) => {
+      const { store } = fixture();
+      const prefix = "2026-08-20T";
+      const remaining = TRANSCRIPTS_RESULT_MAX_BYTES - prefix.length;
+      const startedAt =
+        prefix +
+        (kind === "oversized-utf8"
+          ? "é".repeat(Math.floor(remaining / 2) + 1)
+          : "x".repeat(remaining + Number(kind === "oversized-ascii")));
+      await store.writeSession(session(kind, { startedAt }));
+      const parse = vi.spyOn(Date, "parse");
+      await expect(listTranscriptLibrary(store, {})).rejects.toThrow(
+        expect.objectContaining({ type: "transcript_result_too_large" }),
+      );
+      expect(parse.mock.calls.some(([value]) => value === startedAt)).toBe(kind === "at-cap");
+    },
+  );
+
+  it("keeps unread notes outside the chronological page and its lookahead", async () => {
+    const { store, database } = fixture();
+    const old = session("old", { startedAt: "2026-08-18T00:00:00Z" });
+    await store.writeSession(old);
+    await store.writeSummary(summarizeTranscripts({ session: old, utterances: [] }), old);
+    const db = database();
+    executeSqliteQuerySync(
+      db,
+      meetingTranscriptDb(db)
+        .updateTable("meeting_transcript_summaries")
+        .set({ summary_json: "unreadable old notes" })
+        .where("session_id", "=", old.sessionId),
+    );
+    for (const id of ["b", "a"]) {
+      await store.writeSession(session(id));
+    }
+    const result = await listTranscriptLibrary(store, { limit: 1 });
+    expect(result.sessions.map(({ sessionId }) => sessionId)).toEqual(["a"]);
+    expect(result.nextCursor).toEqual(expect.any(String));
+  });
+
+  it("shares date registration across readers and registers a fresh canonical connection after close", async () => {
+    const { store, database } = fixture();
+    await store.writeSession(session("one"));
+    const db = database();
+    const schema = db.prepare("SELECT type, name, sql FROM sqlite_schema ORDER BY name").all();
+    expect((await listTranscriptLibrary(store, {})).sessions).toHaveLength(1);
+    const held = db.prepare("SELECT 1 UNION ALL SELECT 2").iterate();
+    held.next();
+    try {
+      expect((await listTranscriptLibrary(store, {})).sessions).toHaveLength(1);
+    } finally {
+      held.return?.();
+    }
+    expect(db.prepare("SELECT type, name, sql FROM sqlite_schema ORDER BY name").all()).toEqual(
+      schema,
+    );
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    expect(database() === db).toBe(false);
+    expect((await listTranscriptLibrary(store, {})).sessions).toHaveLength(1);
+  });
+
+  it("clips legacy speech before its transport envelope while retaining modern raw-row bounds", async () => {
+    const { store } = fixture();
+    const target = session("legacy-clipping");
+    const selector = transcriptSessionSelector(target);
+    await store.writeSession(target);
+    await store.appendUtteranceForSession(target, {
+      text: "\u001b[31m" + "x".repeat(TRANSCRIPTS_LEGACY_RESULT_MAX_BYTES + 1),
+    });
+    const legacy = await getTranscriptLibrary(store, { selector, includeUtterances: true });
+    expect(legacy.utterances).toEqual([{ sequence: 0, text: "x".repeat(4000) }]);
+    await expect(
+      getTranscriptLibrary(store, { selector, includeUtterances: true, limit: 1 }),
+    ).rejects.toThrow(
+      expect.objectContaining({
+        type: "transcript_result_too_large",
+        maxBytes: TRANSCRIPTS_RESULT_MAX_BYTES,
+      }),
+    );
+    await store.writeSession({
+      ...target,
+      title: "x".repeat(TRANSCRIPTS_LEGACY_RESULT_MAX_BYTES + 1),
+    });
+    await expect(getTranscriptLibrary(store, { selector })).rejects.toThrow(
+      expect.objectContaining({
+        type: "transcript_result_too_large",
+        maxBytes: TRANSCRIPTS_LEGACY_RESULT_MAX_BYTES,
+      }),
+    );
+  });
+
+  it("preserves ID-only stored speakers across legacy reads, pages, and exports", async () => {
+    const { store, database } = fixture();
+    const target = session("speaker-id-only");
+    const selector = transcriptSessionSelector(target);
+    await store.writeSession(target);
+    await store.appendUtteranceForSession(target, {
+      id: "speech-id",
+      text: "Saved speech",
+      speaker: { id: "speaker-id", label: "Stored label" },
+    });
+    const db = database();
+    executeSqliteQuerySync(
+      db,
+      meetingTranscriptDb(db)
+        .updateTable("meeting_transcript_utterances")
+        .set({
+          speaker_label: null,
+          metadata_json: JSON.stringify({ private: "x".repeat(2 * TRANSCRIPTS_RESULT_MAX_BYTES) }),
+        })
+        .where("session_id", "=", target.sessionId)
+        .where("session_started_at", "=", target.startedAt),
+    );
+    for (const limit of [undefined, 1]) {
+      const read = await getTranscriptLibrary(store, { selector, includeUtterances: true, limit });
+      expect(read.utterances?.[0]).toMatchObject({ speakerId: "speaker-id", text: "Saved speech" });
+      expect(read.utterances?.[0]?.speakerLabel).toBeUndefined();
+      expect(read.utterances?.[0]?.id).toBe(limit === undefined ? undefined : "speech-id");
+    }
+    const exported = await exportTranscriptLibrary(store, { selector, format: "jsonl" });
+    expect(JSON.parse(Buffer.from(exported.data, "base64").toString("utf8"))).toEqual({
+      sequence: 0,
+      id: "speech-id",
+      speakerId: "speaker-id",
+      text: "Saved speech",
+    });
+  });
+
+  it("pages with a stable tie-break, a default of 50, and an explicit upper bound", async () => {
+    const { store } = fixture();
+    for (let index = 0; index < 103; index++) {
+      await store.writeSession(session(`session-${String(index).padStart(3, "0")}`));
+    }
+    const first = await listTranscriptLibrary(store, {});
+    expect(first.sessions).toHaveLength(50);
+    const second = await listTranscriptLibrary(store, { cursor: first.nextCursor! });
+    const third = await listTranscriptLibrary(store, { cursor: second.nextCursor! });
+    expect(second.sessions).toHaveLength(50);
+    expect(third.sessions).toHaveLength(3);
+    expect(third.nextCursor).toBeNull();
+    expect(
+      [...first.sessions, ...second.sessions, ...third.sessions].map((entry) => entry.sessionId),
+    ).toEqual(
+      Array.from({ length: 103 }, (_, index) => `session-${String(index).padStart(3, "0")}`),
+    );
+    expect((await listTranscriptLibrary(store, { limit: 100 })).sessions).toHaveLength(100);
+    expect((await listTranscriptLibrary(store, { limit: 200 })).sessions).toHaveLength(103);
+    for (const limit of [0, 201, 1.5]) {
+      await expect(listTranscriptLibrary(store, { limit })).rejects.toThrow("between 1 and 200");
+    }
+    await store.writeSession(session("newer", { startedAt: "2026-08-21T10:00:00.000Z" }));
+    expect(
+      (await listTranscriptLibrary(store, { cursor: first.nextCursor! })).sessions[0]?.sessionId,
+    ).toBe("session-050");
+  });
+
+  it("combines literal title/source search, exact owner/account/provider filters and inclusive/exclusive dates", async () => {
+    const { store } = fixture();
+    const source = {
+      providerId: "room-provider",
+      accountId: "work",
+      channelId: "room-a",
+      kind: "live-audio" as const,
+    };
+    await store.writeSession(
+      session("one", { title: "100% Launch_review", source, metadata: { agentId: "ops" } }),
+    );
+    await store.writeSession(
+      session("two", {
+        source,
+        metadata: { agentId: "main" },
+        startedAt: "2026-08-21T10:00:00.000Z",
+      }),
+    );
+    await store.writeSession(session("legacy", { source }));
+    const filters = {
+      providerId: "room-provider",
+      accountId: "work",
+      agentId: "ops",
+      startedAfter: "2026-08-20T03:00:00-07:00",
+      startedBefore: "2026-08-21T10:00:00Z",
+    };
+    expect(
+      (await listTranscriptLibrary(store, { ...filters, query: "% LAUNCH_" })).sessions.map(
+        (entry) => entry.sessionId,
+      ),
+    ).toEqual(["one"]);
+    expect(
+      (await listTranscriptLibrary(store, { ...filters, query: "ROOM-A" })).sessions.map(
+        (entry) => entry.sessionId,
+      ),
+    ).toEqual(["one"]);
+    expect(
+      (await listTranscriptLibrary(store, { ...filters, accountId: "personal" })).sessions,
+    ).toEqual([]);
+    expect(
+      (await listTranscriptLibrary(store, { ...filters, providerId: "different" })).sessions,
+    ).toEqual([]);
+    expect(
+      (await listTranscriptLibrary(store, { agentId: "main" })).sessions.map(
+        (entry) => entry.sessionId,
+      ),
+    ).toEqual(["two"]);
+    expect(
+      (await listTranscriptLibrary(store, {})).sessions.find(
+        (entry) => entry.sessionId === "legacy",
+      )?.agentId,
+    ).toBeNull();
+    await expect(listTranscriptLibrary(store, { startedAfter: "bad date" })).rejects.toThrow(
+      "date filter",
+    );
+    await expect(
+      listTranscriptLibrary(store, { startedAfter: "2026-08-22", startedBefore: "2026-08-21" }),
+    ).rejects.toThrow("range");
+  });
+
+  it("preserves full canonical handles and pages/searches durable utterances without reading exports", async () => {
+    const { store, stateDir } = fixture();
+    const hidden = [
+      "fixture-user-amber",
+      "fixture-pass-cobalt",
+      "fixture-query-violet",
+      "fixture-fragment-ochre",
+    ];
+    const meetingUrl = new URL(`https://example.test/room?invite=${hidden[2]}#${hidden[3]}`);
+    meetingUrl.username = hidden[0]!;
+    meetingUrl.password = hidden[1]!;
+    const target = session("standup:@room?opaque", {
+      title: "Public planning",
+      source: {
+        providerId: "meet",
+        accountId: "public-account",
+        guildId: "public-guild",
+        channelId: "public-channel",
+        threadTs: "public-thread",
+        fileId: "public-file",
+        meetingUrl: meetingUrl.href,
+        privateKey: "not-for-ui",
+      },
+      metadata: { private: "not-for-ui" },
+    });
+    await store.writeSession(target);
+    const utterances = [
+      {
+        text: "First decision: approved.",
+        speaker: { label: "Sam", id: "speaker-1" },
+        startedAt: "2026-08-20T10:01:00.000Z",
+        final: true,
+      },
+      { text: "Background." },
+      {
+        text: "Follow up: FIRST milestone.",
+        endedAt: "2026-08-20T10:03:00.000Z",
+        metadata: { private: "not-for-ui" },
+      },
+    ];
+    for (const utterance of utterances) {
+      await store.appendUtteranceForSession(target, utterance);
+    }
+    await store.writeSummary(summarizeTranscripts({ session: target, utterances }), target);
+    // Reopen a raw legacy-shaped URL row without Doctor or read-time normalization.
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    const selector = (await listTranscriptLibrary(store, {})).sessions[0]!.selector;
+    for (const query of [
+      "PLANNING",
+      "opaque",
+      "meet",
+      "public-account",
+      "public-guild",
+      "public-channel",
+      "public-thread",
+      "public-file",
+      "FIRST MILESTONE",
+    ]) {
+      expect(
+        (await listTranscriptLibrary(store, { query })).sessions.map((entry) => entry.selector),
+        query,
+      ).toEqual([selector]);
+    }
+    for (const query of [
+      ...hidden.flatMap((part) => [part, part.slice(0, -3).toUpperCase()]),
+      "invite",
+      "example.test",
+    ]) {
+      const selectors: string[] = [];
+      for await (const entry of store.iterateReadEntries({ query })) {
+        selectors.push(entry.selector);
+      }
+      expect(selectors, query).toEqual([]);
+      expect((await listTranscriptLibrary(store, { query })).sessions, query).toEqual([]);
+    }
+    const first = await getTranscriptLibrary(store, {
+      selector,
+      includeUtterances: true,
+      limit: 1,
+      query: "first",
+    });
+    expect(first.session).toMatchObject({
+      selector: transcriptSessionSelector(target),
+      sessionId: target.sessionId,
+      utteranceCount: 3,
+      lastUtteranceAt: "2026-08-20T10:03:00.000Z",
+      activeSubscription: false,
+      source: { providerId: "meet", meetingUrl: "https://example.test/room" },
+    });
+    expect(first.utterances).toEqual([
+      {
+        sequence: 0,
+        text: utterances[0]!.text,
+        speakerId: "speaker-1",
+        speakerLabel: "Sam",
+        startedAt: utterances[0]!.startedAt,
+        final: true,
+      },
+    ]);
+    expect(first.summary).toMatchObject({ utteranceCount: 3 });
+    expect(first.summary).not.toHaveProperty("transcript");
+    const last = await getTranscriptLibrary(store, {
+      selector,
+      includeUtterances: true,
+      limit: 1,
+      query: "first",
+      cursor: first.nextCursor!,
+    });
+    expect(last.utterances).toEqual([
+      { sequence: 2, text: utterances[2]!.text, endedAt: "2026-08-20T10:03:00.000Z" },
+    ]);
+    expect(last.nextCursor).toBeNull();
+    expect(JSON.stringify(first)).not.toContain("private");
+    const publicOutputs = [
+      JSON.stringify(first),
+      JSON.stringify(await listTranscriptLibrary(store, {})),
+    ];
+    for (const format of ["markdown", "jsonl"] as const) {
+      const exported = await exportTranscriptLibrary(store, { selector, format });
+      const content = Buffer.from(exported.data, "base64").toString("utf8");
+      expect(content).toContain("First decision: approved.");
+      expect(content).toContain("Follow up: FIRST milestone.");
+      publicOutputs.push(content);
+    }
+    for (const output of publicOutputs) {
+      for (const part of hidden) {
+        expect(output).not.toContain(part);
+      }
+    }
+    expect((await store.readSession(selector))?.source.meetingUrl).toBe(meetingUrl.href);
+    expect(fs.existsSync(path.join(stateDir, "transcripts"))).toBe(false);
+    await expect(getTranscriptLibrary(store, { selector: target.sessionId })).rejects.toThrow(
+      "not found",
+    );
+  });
+
+  it("rejects malformed and cross-filter, cross-transcript or cross-method cursors", async () => {
+    const { store } = fixture();
+    for (const id of ["one", "two"]) {
+      const target = session(id);
+      await store.writeSession(target);
+      await store.appendUtteranceForSession(target, { text: "a" });
+      await store.appendUtteranceForSession(target, { text: "b" });
+    }
+    const listed = await listTranscriptLibrary(store, { limit: 1 });
+    const selector = listed.sessions[0]!.selector;
+    const read = await getTranscriptLibrary(store, { selector, includeUtterances: true, limit: 1 });
+    await expect(listTranscriptLibrary(store, { cursor: "not-a-cursor" })).rejects.toThrow(
+      "cursor",
+    );
+    await expect(
+      listTranscriptLibrary(store, { cursor: listed.nextCursor!, agentId: "other" }),
+    ).rejects.toThrow("cursor");
+    await expect(
+      getTranscriptLibrary(store, { selector, cursor: listed.nextCursor! }),
+    ).rejects.toThrow("cursor");
+    await expect(
+      getTranscriptLibrary(store, { selector, cursor: read.nextCursor!, query: "a" }),
+    ).rejects.toThrow("cursor");
+    await expect(
+      getTranscriptLibrary(store, {
+        selector: transcriptSessionSelector(session("two")),
+        cursor: read.nextCursor!,
+      }),
+    ).rejects.toThrow("cursor");
+  });
+
+  it.each(["structured", "structured-only", "divergent-markdown", "markdown-only"] as const)(
+    "exports full canonical content with %s notes even when the stored summary covers only a tail",
+    async (notesKind) => {
+      const { store, stateDir, database } = fixture();
+      const target = session("download");
+      await store.writeSession(target);
+      await store.appendUtteranceForSession(target, {
+        text: "Opening context",
+        id: "utterance-1",
+        speaker: { label: "Alex", id: "speaker-1" },
+        startedAt: "2026-08-20T10:01:00.000Z",
+        metadata: { recordingPath: "/private/provider/audio.wav", private: "provider-only" },
+      });
+      await store.appendUtteranceForSession(target, { text: "Action: verify downloads" });
+      await store.writeSummary(
+        summarizeTranscripts({
+          session: target,
+          utterances: [{ text: "Action: verify downloads" }],
+        }),
+        target,
+      );
+      const canonicalMarkdown =
+        "# Historical notes\r\n\r\nKeep this exact historical decision.\r\n";
+      if (notesKind !== "structured") {
+        const db = database();
+        executeSqliteQuerySync(
+          db,
+          meetingTranscriptDb(db)
+            .updateTable("meeting_transcript_summaries")
+            .set({
+              markdown: notesKind === "structured-only" ? null : canonicalMarkdown,
+              ...(notesKind === "markdown-only" ? { summary_json: null } : {}),
+            })
+            .where("session_id", "=", target.sessionId)
+            .where("session_started_at", "=", target.startedAt),
+        );
+      }
+      const selector = transcriptSessionSelector(target);
+      const markdown = await exportTranscriptLibrary(store, { selector, format: "markdown" });
+      const text = Buffer.from(markdown.data, "base64").toString("utf8");
+      if (notesKind === "divergent-markdown" || notesKind === "markdown-only") {
+        const projectedMarkdown =
+          "# Historical notes\\r\n\\r\nKeep this exact historical decision.\\r\n";
+        expect((await getTranscriptLibrary(store, { selector })).summary?.markdown).toBe(
+          projectedMarkdown,
+        );
+        expect(text).toContain(projectedMarkdown);
+      }
+      expect(text).toContain("Alex: Opening context");
+      expect(text).toContain("Action: verify downloads");
+      expect(text).toContain("Transcript utterances: 2");
+      if (notesKind !== "markdown-only") {
+        expect(text).toContain("Summary covers 1 saved utterances.");
+      }
+      expect(markdown.filename).toMatch(/^transcript-2026-08-20-[a-f0-9]{12}\.md$/);
+      expect(markdown.sizeBytes).toBe(Buffer.byteLength(text));
+      const jsonl = await exportTranscriptLibrary(store, { selector, format: "jsonl" });
+      expect(
+        Buffer.from(jsonl.data, "base64")
+          .toString("utf8")
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line)),
+      ).toEqual(
+        (await getTranscriptLibrary(store, { selector, includeUtterances: true, limit: 50 }))
+          .utterances,
+      );
+      expect(Buffer.from(jsonl.data, "base64").toString("utf8")).not.toContain("provider-only");
+      expect((await store.readUtterancesForSession(target))[0]?.metadata).toEqual({
+        recordingPath: "/private/provider/audio.wav",
+        private: "provider-only",
+      });
+      expect(fs.existsSync(path.join(stateDir, "transcripts"))).toBe(false);
+    },
+  );
+
+  it("leaves missing summaries missing and rejects oversized reads/downloads without partial output", async () => {
+    const { store, stateDir } = fixture();
+    const target = session("large");
+    await store.writeSession(target);
+    const selector = transcriptSessionSelector(target);
+    expect((await getTranscriptLibrary(store, { selector })).summary).toBeUndefined();
+    expect(
+      Buffer.from(
+        (await exportTranscriptLibrary(store, { selector, format: "markdown" })).data,
+        "base64",
+      ).toString("utf8"),
+    ).not.toContain("## Overview");
+    await store.appendUtteranceForSession(target, {
+      text: "x".repeat(TRANSCRIPTS_RESULT_MAX_BYTES + 1),
+    });
+    await expect(
+      getTranscriptLibrary(store, { selector, includeUtterances: true, limit: 50 }),
+    ).rejects.toThrow(expect.objectContaining({ type: "transcript_result_too_large" }));
+    for (const format of ["jsonl", "markdown"] as const) {
+      const exported = await exportTranscriptLibrary(store, { selector, format });
+      expect(exported.sizeBytes).toBeGreaterThan(TRANSCRIPTS_RESULT_MAX_BYTES);
+      expect(exported.sizeBytes).toBeLessThan(TRANSCRIPTS_EXPORT_MAX_BYTES);
+    }
+    await store.appendUtteranceForSession(target, {
+      text: "x".repeat(TRANSCRIPTS_EXPORT_MAX_BYTES),
+    });
+    for (const format of ["jsonl", "markdown"] as const) {
+      await expect(exportTranscriptLibrary(store, { selector, format })).rejects.toThrow(
+        expect.objectContaining({
+          type: "transcript_export_too_large",
+          maxBytes: TRANSCRIPTS_EXPORT_MAX_BYTES,
+        }),
+      );
+    }
+    expect(fs.existsSync(path.join(stateDir, "transcripts"))).toBe(false);
+    expect(await store.readNotes(target)).toEqual({});
+  });
+});

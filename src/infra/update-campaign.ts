@@ -96,7 +96,11 @@ export class UpdateCampaignController {
   clear(): void {
     const onChange = this.announcement?.onChange;
     const hadCampaign = this.campaign !== undefined;
-    this.reset();
+    this.cancelTimer();
+    this.campaign = undefined;
+    this.target = undefined;
+    this.announcement = undefined;
+    this.held = false;
     if (hadCampaign) {
       onChange?.(undefined);
     }
@@ -142,18 +146,6 @@ export class UpdateCampaignController {
     });
     this.scheduleNext();
     return true;
-  }
-
-  resetForTest(): void {
-    this.reset();
-  }
-
-  private reset(): void {
-    this.cancelTimer();
-    this.campaign = undefined;
-    this.target = undefined;
-    this.announcement = undefined;
-    this.held = false;
   }
 
   private reconcile(): void {

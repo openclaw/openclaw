@@ -15,7 +15,7 @@ import {
 import { withTempConfig } from "../../gateway/test-temp-config.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { withEnvAsync } from "../../test-utils/env.js";
-import { cleanupReplacedPluginHostRegistry, runPluginHostCleanup } from "../host-hook-cleanup.js";
+import { createPluginHostRegistryRetirement, runPluginHostCleanup } from "../host-hook-cleanup.js";
 import { clearPluginHostRuntimeState } from "../host-hook-runtime.js";
 import { patchPluginSessionExtension } from "../host-hook-state.js";
 import type { PluginJsonValue } from "../host-hooks.js";
@@ -334,6 +334,11 @@ describe("plugin session extension SessionEntry projection", () => {
           description: "retired pending-final field",
           sessionEntrySlotKey: "pendingFinalDeliveryText",
         });
+        api.registerSessionExtension({
+          namespace: "completion-custody",
+          description: "reserved host completion claim",
+          sessionEntrySlotKey: "restartRecoveryHarnessCompletion",
+        });
         for (const field of ["execSecurity", "execAsk"]) {
           api.registerSessionExtension({
             namespace: `retired-${field.toLowerCase()}`,
@@ -383,6 +388,11 @@ describe("plugin session extension SessionEntry projection", () => {
       {
         pluginId: "slot-collision",
         message: "sessionEntrySlotKey is reserved by SessionEntry: pendingFinalDeliveryText",
+      },
+      {
+        pluginId: "slot-collision",
+        message:
+          "sessionEntrySlotKey is reserved by SessionEntry: restartRecoveryHarnessCompletion",
       },
       {
         pluginId: "slot-collision",
@@ -649,11 +659,11 @@ describe("plugin session extension SessionEntry projection", () => {
         );
 
         await expectNoCleanupFailures(
-          cleanupReplacedPluginHostRegistry({
+          createPluginHostRegistryRetirement({
             cfg: tempConfig as never,
             previousRegistry: previousFixture.registry.registry,
             nextRegistry: nextFixture.registry.registry,
-          }),
+          })(),
           "restart cleanup result",
         );
 
@@ -739,11 +749,11 @@ describe("plugin session extension SessionEntry projection", () => {
         );
 
         await expectNoCleanupFailures(
-          cleanupReplacedPluginHostRegistry({
+          createPluginHostRegistryRetirement({
             cfg: tempConfig as never,
             previousRegistry: previousFixture.registry.registry,
             nextRegistry: nextFixture.registry.registry,
-          }),
+          })(),
           "mixed restart cleanup result",
         );
 
@@ -816,11 +826,11 @@ describe("plugin session extension SessionEntry projection", () => {
         );
 
         await expectNoCleanupFailures(
-          cleanupReplacedPluginHostRegistry({
+          createPluginHostRegistryRetirement({
             cfg: tempConfig as never,
             previousRegistry: previousFixture.registry.registry,
             nextRegistry: nextFixture.registry.registry,
-          }),
+          })(),
           "preserved restart cleanup result",
         );
 

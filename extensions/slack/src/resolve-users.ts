@@ -1,4 +1,3 @@
-// Slack plugin module implements resolve users behavior.
 import type { WebClient } from "@slack/web-api";
 import { resolveDirectoryAllowlistEntries } from "openclaw/plugin-sdk/directory-runtime";
 import {
@@ -7,7 +6,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createSlackLookupClient } from "./client.js";
 import { collectSlackCursorPages } from "./cursor-pages.js";
-import { formatSlackTarget, parseSlackTarget } from "./target-parsing.js";
+import { resolveWorkspaceQualifiedSlackTarget } from "./target-parsing.js";
 
 export type SlackUserLookup = {
   id: string;
@@ -30,25 +29,6 @@ export type SlackUserResolution = {
   isBot?: boolean;
   note?: string;
 };
-
-function resolveWorkspaceQualifiedUser(input: string): SlackUserResolution | undefined {
-  if (!/^team:/i.test(input)) {
-    return undefined;
-  }
-  try {
-    const target = parseSlackTarget(input);
-    if (target?.kind !== "user" || !target.teamId) {
-      return undefined;
-    }
-    return {
-      input,
-      resolved: true,
-      id: formatSlackTarget({ teamId: target.teamId, kind: "user", id: target.id }),
-    };
-  } catch {
-    return undefined;
-  }
-}
 
 function parseSlackUserInput(raw: string): { id?: string; name?: string; email?: string } {
   const trimmed = raw.trim();
@@ -158,10 +138,12 @@ export async function resolveSlackUserAllowlist(params: {
   entries: string[];
   client?: WebClient;
 }): Promise<SlackUserResolution[]> {
-  const workspaceResolved = params.entries.map(resolveWorkspaceQualifiedUser);
+  const workspaceResolved = params.entries.map((input) =>
+    resolveWorkspaceQualifiedSlackTarget(input, "user"),
+  );
   const lookupEntries = params.entries.filter((_, index) => !workspaceResolved[index]);
   if (lookupEntries.length === 0) {
-    return workspaceResolved.filter((entry): entry is SlackUserResolution => entry !== undefined);
+    return workspaceResolved.filter((entry) => entry !== undefined);
   }
   const client = params.client ?? createSlackLookupClient(params.token);
   const users = await listSlackUsers(client);

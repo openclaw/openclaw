@@ -98,6 +98,28 @@ describe("stuck session recovery", () => {
     expect(mocks.resetCommandLane).not.toHaveBeenCalled();
   });
 
+  it.each([false, true])(
+    "rechecks an admitted retry wait before a queued recovery abort (expired=%s)",
+    async (expired) => {
+      mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue("waiting-session");
+      mocks.getDiagnosticSessionActivitySnapshot.mockReturnValue({
+        activeWorkKind: "embedded_run",
+        lastProgressAgeMs: 720_000,
+        activeRetryWaitDeadlineAtMs: Date.now() + (expired ? -1000 : 60_000),
+      });
+      mocks.abortEmbeddedAgentRun.mockReturnValue(true);
+      mocks.waitForEmbeddedAgentRunEnd.mockResolvedValue(true);
+      await recoverStuckDiagnosticSession({
+        sessionId: "waiting-session",
+        sessionKey: "agent:main:waiting",
+        ageMs: 720_000,
+        allowActiveAbort: true,
+      });
+      expect(mocks.abortEmbeddedAgentRun).toHaveBeenCalledTimes(expired ? 1 : 0);
+      expect(mocks.waitForEmbeddedAgentRunEnd).toHaveBeenCalledTimes(expired ? 1 : 0);
+    },
+  );
+
   it("returns an abort outcome for a stale tool call on an active embedded run", async () => {
     mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue("session-tool");
     mocks.abortEmbeddedAgentRun.mockReturnValue(true);

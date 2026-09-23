@@ -2,6 +2,7 @@ import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coe
 import {
   AGENT_RUN_RESTART_ABORT_STOP_REASON,
   createAgentRunRestartAbortError,
+  isAgentRunDirectAbortReason,
 } from "../../agents/run-termination.js";
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -181,17 +182,27 @@ export function createAgentAdmissionController(params: {
     }
   };
 
-  const interrupt = () => {
+  const interrupt = (reason?: Error) => {
     // Draining an already-stopped admission must preserve its original cancellation reason.
     if (admittedRunAbort?.controller.signal.aborted) {
-      return;
+      return undefined;
     }
+    const stopReason = isAgentRunDirectAbortReason(reason)
+      ? "rpc"
+      : AGENT_RUN_RESTART_ABORT_STOP_REASON;
     if (admittedRunAbort?.entry) {
-      admittedRunAbort.entry.abortStopReason = AGENT_RUN_RESTART_ABORT_STOP_REASON;
+      admittedRunAbort.entry.abortStopReason = stopReason;
     }
     if (admittedRunAbort) {
-      admittedRunAbort.controller.abort(createAgentRunRestartAbortError());
-      return;
+      const entry = admittedRunAbort.entry;
+      const ownsRun =
+        entry !== undefined &&
+        params.context.chatAbortControllers.get(params.runId) === entry &&
+        !entry.registrationCleanupRequested;
+      admittedRunAbort.controller.abort(
+        stopReason === "rpc" ? reason : createAgentRunRestartAbortError(),
+      );
+      return ownsRun ? { runId: params.runId } : undefined;
     }
     const reservedEntry = readGatewayDedupeEntry({
       dedupe: params.context.dedupe,
@@ -208,9 +219,10 @@ export function createAgentAdmissionController(params: {
         agentId: admissionAgentId(),
         sessionKey: params.getResolvedSessionKey(),
         runId: params.runId,
-        stopReason: AGENT_RUN_RESTART_ABORT_STOP_REASON,
+        stopReason,
       });
     }
+    return undefined;
   };
 
   const acquire = async (scope: string) => {

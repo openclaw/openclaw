@@ -183,81 +183,90 @@ describe("cua-computer provider", () => {
     expect(getDesktopState).toHaveBeenCalledWith(signal);
   });
 
-  it("mints opaque window and element references and maps background evidence", async () => {
-    const { session, callTool } = driver();
-    callTool.mockImplementation(async (name) => {
-      switch (name) {
-        case "list_windows":
-          return cuaToolResult(CUA_DRIVER_CONTRACT_FIXTURES.listWindows);
-        case "get_window_state":
-          return cuaToolResult(CUA_DRIVER_CONTRACT_FIXTURES.windowState, { image: true });
-        case "click":
-          return cuaToolResult(
-            {},
-            {
-              action:
-                CUA_DRIVER_CONTRACT_FIXTURES.confirmedBackgroundAction as unknown as CuaToolResult["action"],
-            },
-          );
-        default:
-          return cuaToolResult({});
-      }
-    });
-    const computer = await execution(session);
-    const listed = JSON.parse(await computer.act('{"action":"list_windows"}')) as {
-      details: { windows: Array<{ windowRef: string }> };
-    };
-    const windowRef = listed.details.windows[0]!.windowRef;
-    expect(windowRef).toMatch(/^cua:v2:window:/);
-
-    const observed = JSON.parse(
-      await computer.act(JSON.stringify({ action: "get_window_state", windowRef })),
-    ) as {
-      observation: {
-        observationId: string;
-        elements: Array<{ elementRef: string }>;
+  it.each([undefined, true, false])(
+    "mints opaque window and element refs with includeScreenshot=%s and maps background evidence",
+    async (includeScreenshot) => {
+      const { session, callTool } = driver();
+      callTool.mockImplementation(async (name, args) => {
+        switch (name) {
+          case "list_windows":
+            return cuaToolResult(CUA_DRIVER_CONTRACT_FIXTURES.listWindows);
+          case "get_window_state":
+            return cuaToolResult(CUA_DRIVER_CONTRACT_FIXTURES.windowState, {
+              image: args.include_screenshot !== false,
+            });
+          case "click":
+            return cuaToolResult(
+              {},
+              {
+                action:
+                  CUA_DRIVER_CONTRACT_FIXTURES.confirmedBackgroundAction as unknown as CuaToolResult["action"],
+              },
+            );
+          default:
+            return cuaToolResult({});
+        }
+      });
+      const computer = await execution(session);
+      const listed = JSON.parse(await computer.act('{"action":"list_windows"}')) as {
+        details: { windows: Array<{ windowRef: string }> };
       };
-    };
-    const { observationId } = observed.observation;
-    const elementRef = observed.observation.elements[0]!.elementRef;
-    expect(observed).toMatchObject({ details: { coordinateSpace: "image-pixels" } });
-    expect(observationId).toMatch(/^cua:v2:observation:/);
-    expect(elementRef).toMatch(/^cua:v2:element:/);
+      const windowRef = listed.details.windows[0]!.windowRef;
+      expect(windowRef).toMatch(/^cua:v2:window:/);
 
-    const clicked = JSON.parse(
-      await computer.act(
-        JSON.stringify({
-          action: "left_click",
-          windowRef,
-          elementRef,
-          observationId,
+      const observed = JSON.parse(
+        await computer.act(
+          JSON.stringify({ action: "get_window_state", windowRef, includeScreenshot }),
+        ),
+      ) as {
+        observation: {
+          base64?: string;
+          observationId: string;
+          elements: Array<{ elementRef: string }>;
+        };
+      };
+      expect(Boolean(observed.observation.base64)).toBe(includeScreenshot !== false);
+      const { observationId } = observed.observation;
+      const elementRef = observed.observation.elements[0]!.elementRef;
+      expect(observed).toMatchObject({ details: { coordinateSpace: "image-pixels" } });
+      expect(observationId).toMatch(/^cua:v2:observation:/);
+      expect(elementRef).toMatch(/^cua:v2:element:/);
+
+      const clicked = JSON.parse(
+        await computer.act(
+          JSON.stringify({
+            action: "left_click",
+            windowRef,
+            elementRef,
+            observationId,
+            deliveryMode: "background",
+          }),
+        ),
+      ) as { effect: string; details: Record<string, unknown> };
+      expect(clicked).toMatchObject({
+        ok: true,
+        effect: "confirmed",
+        details: {
+          route: "accessibility",
           deliveryMode: "background",
-        }),
-      ),
-    ) as { effect: string; details: Record<string, unknown> };
-    expect(clicked).toMatchObject({
-      ok: true,
-      effect: "confirmed",
-      details: {
-        route: "accessibility",
-        deliveryMode: "background",
-        deliveredCount: 1,
-        evidence: ["value_readback"],
-      },
-    });
-    expect(callTool).toHaveBeenLastCalledWith(
-      "click",
-      {
-        pid: 4242,
-        window_id: 99,
-        element_token: "native-element-token-7",
-        button: "left",
-        count: 1,
-        delivery_mode: "background",
-      },
-      undefined,
-    );
-  });
+          deliveredCount: 1,
+          evidence: ["value_readback"],
+        },
+      });
+      expect(callTool).toHaveBeenLastCalledWith(
+        "click",
+        {
+          pid: 4242,
+          window_id: 99,
+          element_token: "native-element-token-7",
+          button: "left",
+          count: 1,
+          delivery_mode: "background",
+        },
+        undefined,
+      );
+    },
+  );
 
   it("rejects forged window, observation, and element refs before native resolution", async () => {
     const { session, callTool } = driver();
@@ -409,18 +418,113 @@ describe("cua-computer provider", () => {
     );
   });
 
-  it("rejects model-supplied app paths and commands before driver dispatch", async () => {
+  it.each([
+    {
+      label: "Darwin bundle identifier despite an observed path",
+      platform: "darwin",
+      app: {
+        name: "TextEdit",
+        bundle_id: "com.apple.TextEdit",
+        launch_path: "/System/Applications/TextEdit.app",
+      },
+      expected: { bundle_id: "com.apple.TextEdit" },
+    },
+    {
+      label: "Darwin display name without a bundle identifier",
+      platform: "darwin",
+      app: {
+        name: "Example Editor",
+        bundle_id: null,
+        launch_path: "/Applications/Example Editor.app",
+      },
+      expected: { name: "Example Editor" },
+    },
+    {
+      label: "Linux launch command despite a desktop identifier",
+      platform: "linux",
+      app: {
+        name: "Editor",
+        bundle_id: "org.example.Editor",
+        launch_path: "/usr/bin/editor --new-window",
+      },
+      expected: { launch_path: "/usr/bin/editor --new-window" },
+    },
+    {
+      label: "Windows quoted executable and arguments",
+      platform: "win32",
+      app: {
+        name: "Example Editor",
+        bundle_id: "org.example.Editor",
+        launch_path: '"C:\\Program Files\\Example\\Editor.exe" --new-window',
+      },
+      expected: { launch_path: '"C:\\Program Files\\Example\\Editor.exe" --new-window' },
+    },
+    {
+      label: "Windows packaged application launch path",
+      platform: "win32",
+      app: {
+        name: "Example Editor",
+        bundle_id: "Example.Editor_abcdefghijklm!App",
+        launch_path: "shell:appsFolder\\Example.Editor_abcdefghijklm!App",
+      },
+      expected: { launch_path: "shell:appsFolder\\Example.Editor_abcdefghijklm!App" },
+    },
+  ] as const)("launches an observed app using its $label", async ({ platform, app, expected }) => {
     const { session, callTool } = driver();
-    const computer = await execution(session);
-
-    for (const app of ["/usr/bin/open", "../outside", "sh -c 'touch /tmp/owned'"]) {
-      await expect(computer.act(JSON.stringify({ action: "launch_app", app }))).rejects.toThrow(
-        "COMPUTER_STALE_OBSERVATION",
+    callTool.mockImplementation(async (name, args) => {
+      if (name === "list_apps") {
+        return cuaToolResult({ apps: [{ ...app, running: false }] });
+      }
+      if (platform === "darwin" && !args.bundle_id && !args.name) {
+        return cuaToolResult(
+          {},
+          {
+            isError: true,
+            text: "Provide either bundle_id or name to identify the app to launch.",
+          },
+        );
+      }
+      return cuaToolResult({ ...app, pid: 4242, running: true, windows: [] });
+    });
+    const computer = await execution(session, platform);
+    try {
+      const listed = JSON.parse(await computer.act('{"action":"list_apps"}')) as {
+        details: { apps: Array<{ app: string }> };
+      };
+      const launched = JSON.parse(
+        await computer.act(
+          JSON.stringify({ action: "launch_app", app: listed.details.apps[0]!.app }),
+        ),
       );
-    }
 
-    expect(callTool).not.toHaveBeenCalled();
+      expect(launched).toMatchObject({
+        ok: true,
+        details: { app: [{ name: app.name, running: true }] },
+      });
+      expect(callTool).toHaveBeenLastCalledWith("launch_app", expected, undefined);
+    } finally {
+      await computer.close("completion");
+    }
   });
+
+  it.each(["darwin", "linux", "win32"] as const)(
+    "rejects model-supplied app paths and commands before driver dispatch on %s",
+    async (platform) => {
+      const { session, callTool } = driver();
+      const computer = await execution(session, platform);
+      try {
+        for (const app of ["/usr/bin/open", "../outside", "sh -c 'touch /tmp/owned'"]) {
+          await expect(computer.act(JSON.stringify({ action: "launch_app", app }))).rejects.toThrow(
+            "COMPUTER_STALE_OBSERVATION",
+          );
+        }
+
+        expect(callTool).not.toHaveBeenCalled();
+      } finally {
+        await computer.close("completion");
+      }
+    },
+  );
 
   it("maps the complete Linux window pointer and keyboard family", async () => {
     const { session, callTool } = driver();

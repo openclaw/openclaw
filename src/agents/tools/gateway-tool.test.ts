@@ -1,6 +1,14 @@
+import { asRecord, readStringField } from "@openclaw/normalization-core/record-coerce";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { prepareCronPromptRunAdmission } from "../../cron/isolated-agent/run-admission.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
-import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
+import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
+import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
+import {
+  createAdmittedGatewayToolCallerIdentity,
+  getGatewayToolCallerIdentity,
+  withGatewayToolCallerIdentity,
+} from "./gateway-caller-context.js";
 import { createGatewayTool } from "./gateway-tool.js";
 
 const { callGatewayToolMock, dispatchMock, host } = vi.hoisted(() => ({
@@ -14,17 +22,16 @@ vi.mock("./gateway.js", () => ({
   readGatewayCallOptions: vi.fn(() => ({})),
 }));
 
-vi.mock("../../gateway/server-plugins.js", () => ({
+vi.mock("../../gateway/server-plugin-in-process-dispatch.js", () => ({
   dispatchGatewayMethodInProcess: dispatchMock,
   getInProcessGatewayRequestContext: (resolve?: () => GatewayRequestContext | undefined) =>
     resolve ? resolve() : host.context,
-  hasInProcessGatewayContext: (resolve?: () => GatewayRequestContext | undefined) =>
-    Boolean(resolve ? resolve() : host.context),
 }));
 
 describe("gateway tool", () => {
   beforeEach(() => {
     callGatewayToolMock.mockReset();
+    dispatchMock.mockReset();
     callGatewayToolMock.mockResolvedValue({ ok: true });
   });
 
@@ -40,9 +47,33 @@ describe("gateway tool", () => {
       "update.run",
     ]);
     expect(tool.description).toBe(
-      "Read gateway config/schema. update.run: owner-only update on explicit user request; restart + completion notice automatic. Never via shell.",
+      "Read gateway config/schema. update.run: owner request or operator schedule; automatic restart + completion notice. Never via shell.",
     );
   });
+
+  it("exposes only local update arguments without config read authority", () => {
+    const tool = createGatewayTool({ allowConfigReads: false });
+    const parameters = tool.parameters as {
+      properties: { action: { enum: string[] } };
+    };
+
+    expect(parameters.properties.action.enum).toEqual(["update.run"]);
+    expect(Object.keys(parameters.properties).toSorted()).toEqual(["action", "note"]);
+    expect(tool.description).not.toContain("Read gateway config/schema");
+  });
+
+  it.each(["config.get", "config.schema.lookup"])(
+    "rejects %s without config read authority before calling the Gateway",
+    async (action) => {
+      const tool = createGatewayTool({ allowConfigReads: false, senderIsOwner: true });
+
+      await expect(tool.execute("denied-config", { action, path: "channels" })).rejects.toThrow(
+        `Action not available: ${action}`,
+      );
+      expect(callGatewayToolMock).not.toHaveBeenCalled();
+      expect(dispatchMock).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(["restart", "config.apply", "config.patch"])(
     "rejects removed action %s",
@@ -77,6 +108,104 @@ describe("gateway update action", () => {
     host.context = {} as GatewayRequestContext;
   });
 
+  it("refuses scheduler-source injection inside a live non-scheduler run", async () => {
+    const sessionKey = "agent:main:operator";
+    const admission = prepareSystemAgentRunAdmission({}, "operator-run", "main", "test");
+    try {
+      const context = await admission.admit("embedded");
+      bindGatewayContextResolver(context, () => host.context);
+      const caller = createAdmittedGatewayToolCallerIdentity({
+        admittedRunContext: context,
+        agentId: "main",
+        sessionKey,
+      });
+      const injectedIdentity = {
+        agentId: "main",
+        sessionKey,
+        admissionSource: "operator-schedule" as const,
+      };
+      dispatchMock.mockResolvedValue({ ok: true, result: { status: "ok" } });
+      const result = await withGatewayToolCallerIdentity(caller, () =>
+        withGatewayToolCallerIdentity(injectedIdentity, () => {
+          expect(getGatewayToolCallerIdentity()?.approvalAuthority).toBe(caller?.approvalAuthority);
+          return createGatewayTool().execute("injected-update", { action: "update.run" });
+        }),
+      );
+      expect(result.details).toMatchObject({
+        ok: false,
+        code: "owner_required",
+        reason: "owner_required",
+      });
+      expect(dispatchMock).not.toHaveBeenCalled();
+    } finally {
+      admission.close();
+    }
+  });
+
+  it.each(["operator-schedule", "requester-schedule", undefined] as const)(
+    "uses recorded scheduler admission %s independently of audit and chat delivery",
+    async (admissionSource) => {
+      const sessionKey = "agent:main:synthetic-update";
+      const admission = prepareCronPromptRunAdmission({
+        cfg: {},
+        agentId: "main",
+        runId: "synthetic-run",
+        sessionId: "synthetic-session",
+        sessionKey,
+        jobId: "synthetic-job",
+        admissionSource,
+      });
+      try {
+        const context = await admission.preparedRunAdmission.admit("embedded");
+        expect(context.executionIdentityToken).toBeUndefined();
+        bindGatewayContextResolver(context, () => host.context);
+        const caller = createAdmittedGatewayToolCallerIdentity({
+          admittedRunContext: context,
+          agentId: "main",
+          sessionKey,
+          turnSourceChannel: "telegram",
+          turnSourceTo: "123",
+        });
+        dispatchMock.mockResolvedValue({ ok: true, runId: "update-run", result: { status: "ok" } });
+        const invoke = () =>
+          withGatewayToolCallerIdentity(caller, () =>
+            withGatewayToolCallerIdentity({ agentId: "main", sessionKey }, () =>
+              createGatewayTool().execute("scheduled-update", { action: "update.run" }),
+            ),
+          );
+        const result = await invoke();
+        if (admissionSource === "operator-schedule") {
+          expect(result.details).toMatchObject({ ok: true, runId: "update-run" });
+          expect(dispatchMock).toHaveBeenCalledOnce();
+          expect(dispatchMock.mock.calls[0]?.[1]).toMatchObject({
+            sessionKey,
+            requester: undefined,
+            deliveryContext: { channel: "telegram", to: "123" },
+          });
+          admission.close();
+          expect((await invoke()).details).toMatchObject({
+            ok: false,
+            code: "owner_required",
+            reason: "owner_required",
+          });
+          expect(dispatchMock).toHaveBeenCalledOnce();
+        } else {
+          expect(result.details).toMatchObject({
+            ok: false,
+            code: "owner_required",
+            reason: "owner_required",
+            message: expect.stringContaining(
+              "No authenticated owner chat principal or operator-scheduled admission",
+            ),
+          });
+          expect(dispatchMock).not.toHaveBeenCalled();
+        }
+      } finally {
+        admission.close();
+      }
+    },
+  );
+
   it.each([false, undefined])("requires an explicit owner identity (%s)", async (senderIsOwner) => {
     const result = await withGatewayToolCallerIdentity(
       {
@@ -94,15 +223,16 @@ describe("gateway update action", () => {
     expect(result.details).toEqual({
       ok: false,
       code: "owner_required",
+      reason: "owner_required",
       message:
-        "Only the OpenClaw owner can start an update from chat. Ask the operator to add `telegram:123456789` to `commands.ownerAllowFrom`.",
+        "No authenticated owner chat principal or operator-scheduled admission authorizes this update. Ask the operator to add `telegram:123456789` to `commands.ownerAllowFrom`.",
     });
     expect(callGatewayToolMock).not.toHaveBeenCalled();
     expect(dispatchMock).not.toHaveBeenCalled();
   });
 
   it.each([undefined, 0, "topic-42"])(
-    "uses trusted chat routing and ignores model overrides (thread %s)",
+    "uses trusted chat routing without an update deadline (thread %s)",
     async (threadId) => {
       dispatchMock.mockResolvedValue({
         ok: true,
@@ -154,7 +284,6 @@ describe("gateway update action", () => {
             threadId,
           },
           note: "Requested update",
-          timeoutMs: 1_200_000,
         },
         {
           signal,
@@ -162,6 +291,7 @@ describe("gateway update action", () => {
           forceSyntheticClient: true,
           operatorRoleActor: { kind: "system" },
           syntheticScopes: ["operator.admin"],
+          syntheticScopeMode: "minimum",
           resolveGatewayContext: expect.any(Function),
         },
       );
@@ -187,6 +317,19 @@ describe("gateway update action", () => {
       action: "update.run",
     });
     expect(dispatchMock).toHaveBeenCalledOnce();
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
+    expect(result.details).toMatchObject({ ok: true });
+  });
+
+  it("runs the existing update action without config read authority", async () => {
+    dispatchMock.mockResolvedValue({ ok: true, result: { status: "ok", steps: [] } });
+
+    const result = await createGatewayTool({
+      allowConfigReads: false,
+      senderIsOwner: true,
+    }).execute("update-only", { action: "update.run" });
+
+    expect(dispatchMock).toHaveBeenCalledWith("update.run", expect.anything(), expect.anything());
     expect(callGatewayToolMock).not.toHaveBeenCalled();
     expect(result.details).toMatchObject({ ok: true });
   });
@@ -265,5 +408,81 @@ describe("gateway update action", () => {
       action: "update.run",
     });
     expect(result.details).toMatchObject({ handoff: { command: "x".repeat(4000) } });
+  });
+
+  it("preserves update diagnostic Unicode in tool results", async () => {
+    const reason = "r".repeat(239);
+    const name = "n".repeat(99);
+    const stderrTail = "s".repeat(499);
+    dispatchMock.mockResolvedValue({
+      ok: false,
+      result: {
+        status: "error",
+        reason: `${reason}🤖`,
+        before: { version: `${name}🤖` },
+        after: { version: `${name}🤖` },
+        steps: [{ name: `${name}🤖`, exitCode: 1, stderrTail: `🤖${stderrTail}` }],
+      },
+    });
+    const result = await createGatewayTool({ senderIsOwner: true }).execute("update", {
+      action: "update.run",
+    });
+    expect(dispatchMock).toHaveBeenCalledOnce();
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
+    const reasonText = readStringField(asRecord(result.details), "reason");
+    expect(reasonText?.charCodeAt(reasonText.length - 1), "UPDATE_DIAGNOSTIC_UTF16_BOUNDARY").toBe(
+      reason.charCodeAt(reason.length - 1),
+    );
+    expect(result.details).toMatchObject({
+      reason,
+      before: { version: name },
+      after: { version: name },
+      failedSteps: [{ name, exitCode: 1, stderrTail }],
+    });
+    const text = result.content.find((block) => block.type === "text");
+    expect(text?.type === "text" && JSON.parse(text.text)).toEqual(result.details);
+  });
+
+  it.each(["ASCII", "🤖"])("preserves complete %s update diagnostics", async (text) => {
+    dispatchMock.mockResolvedValue({
+      ok: false,
+      result: {
+        status: "error",
+        reason: text,
+        steps: [{ name: text, exitCode: 1, stderrTail: text }],
+      },
+    });
+    const result = await createGatewayTool({ senderIsOwner: true }).execute("update", {
+      action: "update.run",
+    });
+    expect(result.details).toMatchObject({
+      reason: text,
+      failedSteps: [{ name: text, exitCode: 1, stderrTail: text }],
+    });
+  });
+
+  it.each(["error", "skipped"])("retains the selected %s update steps in order", async (status) => {
+    dispatchMock.mockResolvedValue({
+      ok: false,
+      result: {
+        status,
+        steps: [
+          { name: "passed", exitCode: 0 },
+          { name: "missing" },
+          { name: "pending", exitCode: null },
+          { name: "failed", exitCode: 1 },
+        ],
+      },
+    });
+    const result = await createGatewayTool({ senderIsOwner: true }).execute("update", {
+      action: "update.run",
+    });
+    expect(result.details).toMatchObject({
+      failedSteps: [
+        { name: "missing", exitCode: null, stderrTail: "" },
+        ...(status === "error" ? [{ name: "pending", exitCode: null, stderrTail: "" }] : []),
+        { name: "failed", exitCode: 1, stderrTail: "" },
+      ],
+    });
   });
 });

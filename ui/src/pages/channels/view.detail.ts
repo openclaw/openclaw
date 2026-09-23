@@ -8,6 +8,7 @@ import { renderSettingsSection } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import "../../components/modal-dialog.ts";
 import { resolveChannelAccounts } from "../../lib/channels/index.ts";
+import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { channelDocsUrl } from "./hub-meta.ts";
 import { renderChannelConfigSection } from "./view.config.ts";
@@ -224,20 +225,21 @@ export function renderChannelDetail(params: {
   channelId: string;
   label: string;
   pluginIconUrl?: string;
-  preferPluginIcon?: boolean;
   props: ChannelsProps;
   data: ChannelsChannelData;
   onClose: () => void;
   onSetup: () => void;
 }): TemplateResult {
   const body = renderChannelBody(params.channelId, params.props, params.data);
+  const statusIssues = params.props.snapshot?.statusIssues?.filter(
+    (issue) => issue.channel === params.channelId,
+  );
   return html`
     <openclaw-modal-dialog label=${params.label} @modal-cancel=${() => params.onClose()}>
       <div class="channels-detail">
         <div class="channels-detail__header">
           ${renderChannelIcon(params.channelId, params.label, "cover", {
             pluginIconUrl: params.pluginIconUrl,
-            preferPluginIcon: params.preferPluginIcon,
           })}
           <div class="channels-detail__header-actions">
             <a
@@ -273,6 +275,17 @@ export function renderChannelDetail(params: {
               ? html`<div class="callout warn">${t("channels.hub.saveBeforeSetup")}</div>`
               : nothing
           }
+          ${statusIssues?.map(
+            (issue) => html`
+              <div class="callout warn" role="note">
+                <strong>
+                  ${t("channels.hub.stateAttention")} · ${formatUiExternalText(issue.accountId)}
+                </strong>
+                <div>${formatUiExternalText(issue.message)}</div>
+                ${issue.fix ? html`<div>${formatUiExternalText(issue.fix)}</div>` : nothing}
+              </div>
+            `,
+          )}
           ${renderChannelPairingDetail(params.channelId, params.props)} ${body}
         </div>
       </div>

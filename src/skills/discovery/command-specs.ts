@@ -10,7 +10,11 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { loadEnabledClaudeBundleCommands } from "../../plugins/bundle-commands.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { resolveSkillTelemetrySource } from "../loading/source.js";
-import { filterWorkspaceSkills, loadVisibleSkills } from "../loading/workspace-skill-loader.js";
+import {
+  filterWorkspaceSkills,
+  loadVisibleSkills,
+  prepareWorkspaceSkills,
+} from "../loading/workspace-skill-loader.js";
 import type {
   SkillEligibilityContext,
   SkillCommandSpec,
@@ -65,43 +69,73 @@ function resolveUniqueSkillCommandName(base: string, used: Set<string>): string 
   return `${base.slice(0, Math.max(1, SKILL_COMMAND_MAX_LENGTH - 2))}_x`;
 }
 
-/** Builds user-invocable slash command specs for visible workspace skills. */
+type WorkspaceSkillCommandOptions = {
+  bundledSkillName?: string;
+  config?: OpenClawConfig;
+  managedSkillsDir?: string;
+  bundledSkillsDir?: string;
+  entries?: SkillEntry[];
+  librarySelections?: SkillSnapshot["librarySelections"];
+  agentId?: string;
+  skillFilter?: string[];
+  includeAllowlistHidden?: boolean;
+  eligibility?: SkillEligibilityContext;
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
+  reservedNames?: Set<string>;
+};
+
+function resolveCommandSkillLoadOptions(opts?: WorkspaceSkillCommandOptions) {
+  return {
+    bundledSkillName: opts?.bundledSkillName,
+    config: opts?.config,
+    managedSkillsDir: opts?.managedSkillsDir,
+    bundledSkillsDir: opts?.bundledSkillsDir,
+    librarySelections: opts?.librarySelections,
+    agentId: opts?.agentId,
+    agentSkillFilter: opts?.includeAllowlistHidden ? ("ignore" as const) : ("apply" as const),
+    skillFilter: opts?.includeAllowlistHidden
+      ? undefined
+      : (opts?.skillFilter ?? resolveEffectiveAgentSkillFilter(opts?.config, opts?.agentId)),
+    eligibility: opts?.eligibility,
+    pluginMetadataSnapshot: opts?.pluginMetadataSnapshot,
+  };
+}
+
+/** Builds user-invocable slash command specs for synchronous SDK consumers. */
 export function buildWorkspaceSkillCommandSpecs(
   workspaceDir: string,
-  opts?: {
-    config?: OpenClawConfig;
-    managedSkillsDir?: string;
-    bundledSkillsDir?: string;
-    entries?: SkillEntry[];
-    librarySelections?: SkillSnapshot["librarySelections"];
-    agentId?: string;
-    skillFilter?: string[];
-    includeAllowlistHidden?: boolean;
-    eligibility?: SkillEligibilityContext;
-    pluginMetadataSnapshot?: PluginMetadataSnapshot;
-    reservedNames?: Set<string>;
-  },
+  opts?: WorkspaceSkillCommandOptions & { gatewayOnly?: boolean },
 ): SkillCommandSpec[] {
-  const effectiveSkillFilter = opts?.includeAllowlistHidden
-    ? undefined
-    : (opts?.skillFilter ?? resolveEffectiveAgentSkillFilter(opts?.config, opts?.agentId));
+  const loadOptions = { ...resolveCommandSkillLoadOptions(opts), gatewayOnly: opts?.gatewayOnly };
   const eligible = opts?.entries
     ? filterWorkspaceSkills(opts.entries, {
         config: opts?.config,
-        skillFilter: effectiveSkillFilter,
+        skillFilter: loadOptions.skillFilter,
         eligibility: opts?.eligibility,
       })
-    : loadVisibleSkills(workspaceDir, {
-        config: opts?.config,
-        managedSkillsDir: opts?.managedSkillsDir,
-        bundledSkillsDir: opts?.bundledSkillsDir,
-        librarySelections: opts?.librarySelections,
-        agentId: opts?.agentId,
-        agentSkillFilter: opts?.includeAllowlistHidden ? "ignore" : "apply",
-        skillFilter: effectiveSkillFilter,
-        eligibility: opts?.eligibility,
-        pluginMetadataSnapshot: opts?.pluginMetadataSnapshot,
-      });
+    : loadVisibleSkills(workspaceDir, loadOptions);
+  return assembleWorkspaceSkillCommandSpecs(workspaceDir, eligible, opts);
+}
+
+/** Prepares eligibility once before sharing the synchronous command assembly. */
+export async function prepareWorkspaceSkillCommandSpecs(
+  workspaceDir: string,
+  opts: Omit<WorkspaceSkillCommandOptions, "entries" | "eligibility"> & {
+    eligibility: SkillEligibilityContext;
+  },
+): Promise<SkillCommandSpec[]> {
+  const eligible = await prepareWorkspaceSkills(workspaceDir, {
+    ...resolveCommandSkillLoadOptions(opts),
+    eligibility: opts.eligibility,
+  });
+  return assembleWorkspaceSkillCommandSpecs(workspaceDir, eligible, opts);
+}
+
+function assembleWorkspaceSkillCommandSpecs(
+  workspaceDir: string,
+  eligible: SkillEntry[],
+  opts?: WorkspaceSkillCommandOptions,
+): SkillCommandSpec[] {
   const userInvocable = filterUserInvocableSkillEntries(eligible);
   const used = new Set<string>();
   for (const reserved of opts?.reservedNames ?? []) {

@@ -119,6 +119,7 @@ actor MacNodeRuntime {
     private let cameraPTZ: any CameraPTZServicing
     private let nodeHostWorker: (any MacNodeHostWorking)?
     private let makeMainActorServices: @Sendable () async -> any MacNodeRuntimeMainActorServices
+    private let desktopAvailability: MacDesktopAvailabilityCoordinator?
     // Injectable so tests pin the gate instead of racing on process-global UserDefaults.
     private let computerControlEnabled: @Sendable () -> Bool
     private let computerControlProvider: @Sendable () -> ComputerControlProvider
@@ -137,11 +138,13 @@ actor MacNodeRuntime {
     /// Invalidates computer actions admitted before a lifecycle release, including
     /// the first action while the shared main-actor services are still initializing.
     private var computerInputReleaseGeneration: UInt64 = 0
+    private var activeDesktopInvokes: [String: MacDesktopAvailabilityCoordinator.Permit] = [:]
     private var mainSessionKey: String = "main"
 
     init(
         nodeHostWorker: (any MacNodeHostWorking)? = nil,
         cameraPTZ: any CameraPTZServicing = CameraPTZService(),
+        desktopAvailability: MacDesktopAvailabilityCoordinator? = nil,
         makeMainActorServices: @escaping @Sendable () async -> any MacNodeRuntimeMainActorServices = {
             await MainActor.run { LiveMacNodeRuntimeMainActorServices() }
         },
@@ -174,6 +177,7 @@ actor MacNodeRuntime {
         self.nodeHostWorker = nodeHostWorker
         self.cameraPTZ = cameraPTZ
         self.makeMainActorServices = makeMainActorServices
+        self.desktopAvailability = desktopAvailability
         self.computerControlEnabled = computerControlEnabled
         self.computerControlProvider = computerControlProvider
         self.canvasHostedSurfaceResolver = MacNodeCanvasHostedSurfaceResolver(
@@ -197,11 +201,11 @@ actor MacNodeRuntime {
     /// One branch per advertised native command keeps command ownership explicit.
     func handleInvoke(_ req: BridgeInvokeRequest) async -> BridgeInvokeResponse {
         let command = req.command
+        if Self.cuaOwnedCommands.contains(command) {
+            return await self.handleDesktopInvoke(req)
+        }
         if let rejection = Self.canvasCommandRejection(req) {
             return rejection
-        }
-        if let cuaResponse = await handleCuaInvokeIfSelected(req) {
-            return cuaResponse
         }
         do {
             switch command {
@@ -217,12 +221,8 @@ actor MacNodeRuntime {
                 return try await handleCameraInvoke(req)
             case OpenClawLocationCommand.get.rawValue:
                 return try await handleLocationInvoke(req)
-            case MacNodeScreenCommand.snapshot.rawValue:
-                return try await handleScreenSnapshotInvoke(req)
             case MacNodeScreenCommand.record.rawValue:
                 return try await handleScreenRecordInvoke(req)
-            case OpenClawComputerCommand.act.rawValue:
-                return try await handleComputerActInvoke(req)
             case OpenClawSystemCommand.notify.rawValue:
                 return try await handleSystemNotify(req)
             case MacNodeCodexThreadCatalogContract.listCommand,
@@ -262,6 +262,154 @@ actor MacNodeRuntime {
         }
     }
 
+    private struct DesktopExecutionEnvelope: Decodable {
+        var executionId: String?
+        var action: String?
+    }
+
+    private func handleDesktopInvoke(_ req: BridgeInvokeRequest) async -> BridgeInvokeResponse {
+        let envelope: DesktopExecutionEnvelope
+        do {
+            envelope = try Self.decodeParams(DesktopExecutionEnvelope.self, from: req.paramsJSON ?? "{}")
+        } catch {
+            return Self.invalidDesktopParamsResponse(req)
+        }
+        do {
+            if let id = envelope.executionId, UUID(uuidString: id) == nil {
+                return Self.errorResponse(req, code: .invalidRequest, message: "INVALID_REQUEST: invalid executionId")
+            }
+            let generation = self.computerInputReleaseGeneration
+            let closing = req.command == OpenClawComputerCommand.act.rawValue && envelope.action == "__close_execution"
+            if !closing,
+               req.command == OpenClawComputerCommand.act.rawValue || self.computerControlProvider() == .cua,
+               !self.computerControlEnabled()
+            {
+                return Self.errorResponse(
+                    req, code: .unavailable, message: "COMPUTER_DISABLED: enable Computer Control in Settings")
+            }
+            let desktop = if let desktopAvailability {
+                desktopAvailability
+            } else {
+                await MacDesktopAvailabilityCoordinator.shared
+            }
+            if closing {
+                guard let id = envelope.executionId else {
+                    return Self.errorResponse(
+                        req,
+                        code: .invalidRequest,
+                        message: "INVALID_REQUEST: executionId required")
+                }
+                guard let permit = await desktop.beginClose(executionId: id) else {
+                    return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: #"{"ok":true}"#)
+                }
+                await self.cancelDesktopInvokes(permits: [permit])
+                let response: BridgeInvokeResponse = if self.computerControlProvider() == .cua, let nodeHostWorker {
+                    await nodeHostWorker.invoke(req)
+                } else {
+                    BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: #"{"ok":true}"#)
+                }
+                await desktop.finishClose(permit, succeeded: response.ok)
+                return response
+            }
+            let permit = try await desktop.admit(executionId: envelope.executionId)
+            self.activeDesktopInvokes[req.id] = permit
+            defer { self.activeDesktopInvokes.removeValue(forKey: req.id) }
+            _ = await self.mainActorServices()
+            guard generation == self.computerInputReleaseGeneration else {
+                await desktop.invalidate(permit, reason: "admission-retired")
+                await desktop.finishInvocation(permit)
+                return Self.errorResponse(
+                    req, code: .unavailable, message: "UNAVAILABLE: computer control lifecycle changed")
+            }
+            if req.command == OpenClawComputerCommand.act.rawValue || self.computerControlProvider() == .cua,
+               !self.computerControlEnabled()
+            {
+                await desktop.invalidate(permit, reason: "computer-disabled")
+                await desktop.finishInvocation(permit)
+                return Self.errorResponse(
+                    req, code: .unavailable, message: "COMPUTER_DISABLED: enable Computer Control in Settings")
+            }
+            let response: BridgeInvokeResponse
+            do {
+                guard generation == self.computerInputReleaseGeneration else {
+                    await desktop.invalidate(permit, reason: "admission-retired")
+                    throw MacDesktopAvailabilityCoordinator.AvailabilityError.executionClosed
+                }
+                try Task.checkCancellation()
+                if self.computerControlProvider() == .cua {
+                    guard let nodeHostWorker, await nodeHostWorker.supports(req.command) else {
+                        await desktop.finishInvocation(permit)
+                        return Self.errorResponse(
+                            req, code: .unavailable, message: "UNAVAILABLE: selected CUA provider is not ready")
+                    }
+                    try await desktop.validate(permit)
+                    guard generation == self.computerInputReleaseGeneration else {
+                        await desktop.invalidate(permit, reason: "admission-retired")
+                        throw MacDesktopAvailabilityCoordinator.AvailabilityError.executionClosed
+                    }
+                    try Task.checkCancellation()
+                    response = await nodeHostWorker.invoke(req)
+                } else {
+                    try await desktop.validate(permit)
+                    guard generation == self.computerInputReleaseGeneration else {
+                        await desktop.invalidate(permit, reason: "admission-retired")
+                        throw MacDesktopAvailabilityCoordinator.AvailabilityError.executionClosed
+                    }
+                    try Task.checkCancellation()
+                    response = req.command == MacNodeScreenCommand.snapshot.rawValue
+                        ? try await self.handleScreenSnapshotInvoke(req, desktopPermit: permit)
+                        : try await self.handleComputerActInvoke(req, desktopPermit: permit)
+                }
+                try await desktop.validate(permit)
+            } catch {
+                await desktop.finishInvocation(permit)
+                throw error
+            }
+            await desktop.finishInvocation(permit)
+            return response
+        } catch {
+            return Self.errorResponse(req, code: .unavailable, message: error.localizedDescription)
+        }
+    }
+
+    private func cancelDesktopInvokes(permits: [MacDesktopAvailabilityCoordinator.Permit]) async {
+        let requests = self.activeDesktopInvokes.filter { permits.contains($0.value) }.map(\.key)
+        for permit in permits {
+            await self.cachedMainActorServices?.releaseExecutionInput(permit)
+        }
+        for request in requests {
+            await self.nodeHostWorker?.cancel(invokeId: request)
+        }
+    }
+
+    /// Native lock/expiry retires Computer work while leaving the Desktop stream available for login.
+    func revokeDesktopExecutions(
+        _ permits: [MacDesktopAvailabilityCoordinator.Permit],
+        reason: String) async
+    {
+        let desktop = if let desktopAvailability {
+            desktopAvailability
+        } else {
+            await MacDesktopAvailabilityCoordinator.shared
+        }
+        for permit in permits {
+            guard await desktop.beginRevocationCleanup(permit) else { continue }
+            await self.cancelDesktopInvokes(permits: [permit])
+            var succeeded = true
+            if self.computerControlProvider() == .cua, let nodeHostWorker, let executionId = permit.executionId {
+                let params = ["action": "__close_execution", "executionId": executionId, "reason": reason]
+                if let json = try? Self.encodePayload(params) {
+                    let response = await nodeHostWorker.invoke(BridgeInvokeRequest(
+                        id: UUID().uuidString, command: OpenClawComputerCommand.act.rawValue, paramsJSON: json))
+                    succeeded = response.ok
+                } else {
+                    succeeded = false
+                }
+            }
+            await desktop.finishRevocationCleanup(permit, succeeded: succeeded)
+        }
+    }
+
     private static let canvasCommands: Set<String> = [
         OpenClawCanvasCommand.present.rawValue,
         OpenClawCanvasCommand.hide.rawValue,
@@ -285,25 +433,6 @@ actor MacNodeRuntime {
                     message: "CANVAS_DISABLED: enable Canvas in Settings"))
         }
         return nil
-    }
-
-    private func handleCuaInvokeIfSelected(_ req: BridgeInvokeRequest) async -> BridgeInvokeResponse? {
-        guard self.computerControlProvider() == .cua,
-              Self.cuaOwnedCommands.contains(req.command)
-        else { return nil }
-        guard self.computerControlEnabled() else {
-            return Self.errorResponse(
-                req,
-                code: .unavailable,
-                message: "COMPUTER_DISABLED: enable Computer Control in Settings")
-        }
-        guard let nodeHostWorker, await nodeHostWorker.supports(req.command) else {
-            return Self.errorResponse(
-                req,
-                code: .unavailable,
-                message: "UNAVAILABLE: selected CUA provider is not ready")
-        }
-        return await nodeHostWorker.invoke(req)
     }
 
     private func handleCodexThreadInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
@@ -368,9 +497,9 @@ extension MacNodeRuntime {
             }
             let sessionKey = self.mainSessionKey
             try await MainActor.run {
-                _ = try CanvasManager.shared.showDetailed(
+                _ = try CanvasManager.shared.show(
                     sessionKey: sessionKey,
-                    target: effectiveURL,
+                    path: effectiveURL,
                     placement: placement)
             }
             return BridgeInvokeResponse(id: req.id, ok: true)
@@ -564,7 +693,10 @@ extension MacNodeRuntime {
         }
     }
 
-    private func handleComputerActInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
+    private func handleComputerActInvoke(
+        _ req: BridgeInvokeRequest,
+        desktopPermit: MacDesktopAvailabilityCoordinator.Permit) async throws -> BridgeInvokeResponse
+    {
         guard self.computerControlEnabled() else {
             return BridgeInvokeResponse(
                 id: req.id,
@@ -577,10 +709,7 @@ extension MacNodeRuntime {
         do {
             params = try Self.decodeParams(OpenClawComputerActParams.self, from: req.paramsJSON)
         } catch {
-            return Self.errorResponse(
-                req,
-                code: .invalidRequest,
-                message: "INVALID_REQUEST: invalid computer.act params")
+            return Self.invalidDesktopParamsResponse(req)
         }
         let releaseGenerationAtStart = self.computerInputReleaseGeneration
         let services = await mainActorServices()
@@ -594,7 +723,8 @@ extension MacNodeRuntime {
         do {
             let result = try await services.performComputerAct(
                 params,
-                lifecycleGeneration: releaseGenerationAtStart)
+                lifecycleGeneration: releaseGenerationAtStart,
+                desktopPermit: desktopPermit)
             let payload = try Self.encodePayload(result)
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
         } catch let error as ComputerActionService.ComputerActionError {
@@ -673,16 +803,16 @@ extension MacNodeRuntime {
         return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
     }
 
-    private func handleScreenSnapshotInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
+    private func handleScreenSnapshotInvoke(
+        _ req: BridgeInvokeRequest,
+        desktopPermit: MacDesktopAvailabilityCoordinator.Permit) async throws -> BridgeInvokeResponse
+    {
         let params: MacNodeScreenSnapshotParams
         if let paramsJSON = req.paramsJSON {
             do {
                 params = try Self.decodeParams(MacNodeScreenSnapshotParams.self, from: paramsJSON)
             } catch {
-                return Self.errorResponse(
-                    req,
-                    code: .invalidRequest,
-                    message: "INVALID_REQUEST: invalid screen snapshot params")
+                return Self.invalidDesktopParamsResponse(req)
             }
         } else {
             params = MacNodeScreenSnapshotParams()
@@ -695,7 +825,8 @@ extension MacNodeRuntime {
                 screenIndex: params.screenIndex,
                 maxWidth: params.maxWidth,
                 quality: params.quality,
-                format: params.format)
+                format: params.format,
+                desktopPermit: desktopPermit)
         } catch let error as ScreenSnapshotService.ScreenSnapshotError {
             switch error {
             case .noDisplays:
@@ -829,6 +960,14 @@ extension MacNodeRuntime {
 // MARK: - Shared command support
 
 extension MacNodeRuntime {
+    private static func invalidDesktopParamsResponse(_ req: BridgeInvokeRequest) -> BridgeInvokeResponse {
+        if req.command == MacNodeScreenCommand.snapshot.rawValue {
+            return self.errorResponse(
+                req, code: .invalidRequest, message: "INVALID_REQUEST: invalid screen snapshot params")
+        }
+        return self.errorResponse(req, code: .invalidRequest, message: "INVALID_REQUEST: invalid computer.act params")
+    }
+
     private static func decodeParams<T: Decodable>(_ type: T.Type, from json: String?) throws -> T {
         guard let json, let data = json.data(using: .utf8) else {
             throw NSError(domain: "Gateway", code: 20, userInfo: [

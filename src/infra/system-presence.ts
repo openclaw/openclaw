@@ -15,6 +15,7 @@ import { resolveDarwinProductVersion } from "./os-summary.js";
 
 export type SystemPresence = {
   host?: string;
+  clientId?: string;
   ip?: string;
   version?: string;
   platform?: string;

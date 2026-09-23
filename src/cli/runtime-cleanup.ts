@@ -1,8 +1,54 @@
 import type { CliHarnessCleanup } from "./runtime-cleanup-scope.js";
 
+// Match Gateway's harness/MCP shutdown grace; local-provider TERM/KILL already
+// consumes at most two 2-second waits. Keep command teardown bounded independently.
+const DISPOSER_TIMEOUT_MS = 5_000;
+const pendingDisposers = new Map<symbol, { name: string; operation: Promise<void> }>();
+
+export function getPendingCliDisposers(): string[] {
+  return [...pendingDisposers.values()].map(({ name }) => name);
+}
+
+/** Automatic process exit must join cleanup that outlived its reporting grace. */
+export async function waitForPendingCliDisposers(): Promise<void> {
+  while (pendingDisposers.size > 0) {
+    await Promise.allSettled([...pendingDisposers.values()].map(({ operation }) => operation));
+  }
+}
+
+export async function runCliDisposer(
+  name: string,
+  dispose: () => Promise<void>,
+  runCleanup?: (dispose: () => Promise<void>) => Promise<void>,
+  timeoutMs = DISPOSER_TIMEOUT_MS,
+): Promise<void> {
+  const token = Symbol(name);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const operation = Promise.resolve()
+    .then(() => (runCleanup ? runCleanup(dispose) : dispose()))
+    .finally(() => pendingDisposers.delete(token));
+  pendingDisposers.set(token, { name, operation });
+  try {
+    await Promise.race([
+      operation,
+      new Promise<void>((resolve) => {
+        timer = setTimeout(() => {
+          console.error(`CLI cleanup timed out: ${name} after ${timeoutMs}ms`);
+          resolve();
+        }, timeoutMs);
+      }),
+    ]);
+  } catch {
+    // Teardown cannot mask the command outcome or skip later resources.
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function closeCliResources(cleanup?: CliHarnessCleanup): Promise<void> {
-  const finalizers = [
-    async () => {
+  const runCleanup = cleanup?.pluginResources?.runCleanup;
+  const finalizers: Record<string, () => Promise<void>> = {
+    "agent-harnesses": async () => {
       const { listRegisteredAgentHarnesses, disposeRegisteredAgentHarnesses } =
         await import("../agents/harness/registry.js");
       const registered = listRegisteredAgentHarnesses();
@@ -14,7 +60,11 @@ export async function closeCliResources(cleanup?: CliHarnessCleanup): Promise<vo
       }
       const { markPluginRegistryRetired } = await import("../plugins/registry-lifecycle.js");
       try {
-        await Promise.allSettled([...cleanup.harnesses.values()].map((dispose) => dispose()));
+        await Promise.all(
+          [...cleanup.harnesses].map(([harness, dispose]) =>
+            runCliDisposer(`agent-harness/${harness.id}`, dispose, runCleanup),
+          ),
+        );
       } finally {
         // Loader caches outlive operation metadata. Retire only registries used by
         // this terminal process command so their disposed harnesses cannot be reused.
@@ -25,7 +75,7 @@ export async function closeCliResources(cleanup?: CliHarnessCleanup): Promise<vo
         cleanup.registries.clear();
       }
     },
-    async () => {
+    "provider-local-services": async () => {
       const { hasManagedProviderLocalServices } =
         await import("../agents/provider-runtime-lifecycle.js");
       if (hasManagedProviderLocalServices()) {
@@ -34,7 +84,7 @@ export async function closeCliResources(cleanup?: CliHarnessCleanup): Promise<vo
         await stopManagedProviderLocalServices();
       }
     },
-    async () => {
+    "provider-transport-dispatchers": async () => {
       const { hasProviderTransportDispatcherPool } =
         await import("../agents/provider-runtime-lifecycle.js");
       if (hasProviderTransportDispatcherPool()) {
@@ -43,7 +93,7 @@ export async function closeCliResources(cleanup?: CliHarnessCleanup): Promise<vo
         await closeProviderTransportDispatcherPool();
       }
     },
-    async () => {
+    "mcp-loopback": async () => {
       const { getActiveMcpLoopbackRuntime } =
         await import("../gateway/mcp-http.loopback-runtime.js");
       if (getActiveMcpLoopbackRuntime()) {
@@ -51,7 +101,7 @@ export async function closeCliResources(cleanup?: CliHarnessCleanup): Promise<vo
         await closeMcpLoopbackServer();
       }
     },
-    async () => {
+    memory: async () => {
       const { hasMemoryRuntime } = await import("../plugins/memory-state.js");
       if (hasMemoryRuntime()) {
         const { closeActiveMemorySearchManagersCore } =
@@ -59,10 +109,18 @@ export async function closeCliResources(cleanup?: CliHarnessCleanup): Promise<vo
         await closeActiveMemorySearchManagersCore();
       }
     },
-  ];
-  // Teardown is sequential and best-effort so one stale lazy chunk or plugin
-  // failure cannot mask the CLI command's result or skip later resources.
-  for (const finalize of finalizers) {
-    await finalize().catch(() => undefined);
+    "agent-databases": async () => {
+      const { hasOpenClawAgentDatabaseAsyncResources } =
+        await import("../state/openclaw-agent-db-resources.js");
+      if (!hasOpenClawAgentDatabaseAsyncResources()) {
+        return;
+      }
+      const { closeOpenClawAgentDatabasesAsync } =
+        await import("../state/openclaw-agent-db-lifecycle.js");
+      await closeOpenClawAgentDatabasesAsync();
+    },
+  };
+  for (const [name, finalize] of Object.entries(finalizers)) {
+    await runCliDisposer(name, finalize, runCleanup);
   }
 }

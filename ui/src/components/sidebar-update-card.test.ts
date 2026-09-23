@@ -18,6 +18,7 @@ type SidebarUpdateCardElement = HTMLElement & {
   canUpdate: boolean;
   canHoldUpdate: boolean;
   onUpdate: () => void;
+  onDismiss?: () => void;
   refreshRequired: boolean;
   onRefresh: () => Promise<boolean>;
   onHoldUpdate: () => Promise<boolean>;
@@ -222,7 +223,13 @@ describe("SidebarUpdateCard", () => {
 
   it("renders an available update and narrates it after the Gateway drops its metadata", async () => {
     const element = await mount(
-      { currentVersion: "1.0.0", latestVersion: "1.0.0", channel: "dev", commitsBehind: 246 },
+      {
+        currentVersion: "1.0.0",
+        latestVersion: "1.0.0",
+        channel: "dev",
+        commitsBehind: 246,
+        currentSha: "1234567890abcdef",
+      },
       {
         channel: "dev",
         autoEnabled: false,
@@ -237,6 +244,9 @@ describe("SidebarUpdateCard", () => {
     expect(element.querySelector(".sidebar-update-card__action")?.textContent).toContain(
       "246 commits behind",
     );
+    expect(
+      [...element.querySelectorAll(".update-git-revisions code")].map((code) => code.textContent),
+    ).toEqual(["12345678", "abc1234d"]);
 
     element.updateBusy = true;
     await element.updateComplete;
@@ -250,6 +260,62 @@ describe("SidebarUpdateCard", () => {
     expect(element.textContent).toContain("Updating Gateway…");
   });
 
+  it.each(["current", "ahead"] as const)(
+    "retires stale git availability after a refreshed %s comparison",
+    async (status) => {
+      const element = await mount(
+        {
+          currentVersion: "2026.9.2",
+          latestVersion: "2026.9.3",
+          channel: "dev",
+          commitsBehind: 246,
+        },
+        {
+          channel: "dev",
+          autoEnabled: false,
+          install: {
+            kind: "git",
+            git: status === "current" ? { status } : { status, commitsAhead: 1 },
+          },
+          target: {
+            kind: "git",
+            upstreamRef: "origin/main",
+            upstreamSha: "abc1234def",
+            commitsBehind: 246,
+          },
+        },
+      );
+
+      expect(element.querySelector(".sidebar-update-card")).toBeNull();
+    },
+  );
+
+  it("retains cached git availability when the refreshed comparison is unavailable", async () => {
+    const element = await mount(
+      {
+        currentVersion: "2026.9.3",
+        latestVersion: "2026.9.3",
+        channel: "dev",
+        commitsBehind: 246,
+      },
+      {
+        channel: "dev",
+        autoEnabled: false,
+        install: { kind: "git", git: { status: "unavailable", reason: "fetch-failed" } },
+        target: {
+          kind: "git",
+          upstreamRef: "origin/main",
+          upstreamSha: "abc1234def",
+          commitsBehind: 246,
+        },
+      },
+    );
+
+    expect(element.querySelector(".sidebar-update-card__action")?.textContent).toContain(
+      "246 commits behind",
+    );
+  });
+
   it("keeps an available update actionable inside the compact Inbox row", async () => {
     const element = await mount({
       currentVersion: "1.0.0",
@@ -257,6 +323,8 @@ describe("SidebarUpdateCard", () => {
       channel: "stable",
     });
     element.compact = true;
+    element.onDismiss = vi.fn();
+    element.onUpdate = vi.fn();
     await element.updateComplete;
 
     expect(element.querySelector(".sidebar-issues-panel__entity")?.textContent).toBe(
@@ -265,6 +333,13 @@ describe("SidebarUpdateCard", () => {
     expect(element.querySelector(".sidebar-update-card__action")?.textContent).toContain(
       "Update Gateway",
     );
+    const dismiss = element.querySelector<HTMLButtonElement>(".sidebar-issues-panel__dismiss")!;
+    expect(dismiss.getAttribute("aria-label")).toBe("Dismiss Update available");
+    expect(dismiss.querySelector("svg")).not.toBeNull();
+    dismiss.click();
+    expect(element.onDismiss).toHaveBeenCalledOnce();
+    expect(element.onUpdate).not.toHaveBeenCalled();
+    expect(element.querySelector("details")?.open).toBe(false);
   });
 
   it("keeps an unauthorized update discoverable without allowing activation", async () => {

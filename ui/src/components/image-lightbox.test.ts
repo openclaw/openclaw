@@ -1,11 +1,15 @@
 /* @vitest-environment jsdom */
 
+import Panzoom from "@panzoom/panzoom";
 import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { renderChatImageLightbox } from "../pages/chat/components/chat-image-lightbox.ts";
 import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
+import type { ImageLightboxItem } from "./image-lightbox.types.ts";
 
 vi.mock("@panzoom/panzoom", () => ({
-  default: () => ({
+  default: vi.fn(() => ({
     destroy: vi.fn(),
     reset: vi.fn(),
     resetStyle: vi.fn(),
@@ -13,7 +17,7 @@ vi.mock("@panzoom/panzoom", () => ({
     zoomOut: vi.fn(),
     zoomToPoint: vi.fn(),
     zoomWithWheel: vi.fn(),
-  }),
+  })),
 }));
 
 import "./image-lightbox.ts";
@@ -90,6 +94,13 @@ describe("openclaw-image-lightbox", () => {
     );
     expect(fetchImage).toHaveBeenCalledTimes(1);
     expect(root?.querySelector<HTMLButtonElement>(".close")?.hasAttribute("autofocus")).toBe(true);
+
+    modal.imageTitle = "Renamed image";
+    await modal.updateComplete;
+    expect(root?.querySelector<HTMLImageElement>("img")?.alt).toBe("Renamed image");
+    expect(root?.querySelector("openclaw-modal-dialog")?.label).toBe(
+      "Image preview: Renamed image",
+    );
   });
 
   it("renders video in the shared overlay without image zoom controls", async () => {
@@ -131,6 +142,86 @@ describe("openclaw-image-lightbox", () => {
       new KeyboardEvent("keydown", { key: "Tab", shiftKey: true, bubbles: true, composed: true }),
     );
     expect(modal.shadowRoot?.activeElement).toBe(video);
+
+    modal.imageTitle = "Renamed video";
+    await modal.updateComplete;
+    expect(video?.getAttribute("aria-label")).toBe("Renamed video");
+    expect(modal.shadowRoot?.querySelector("openclaw-modal-dialog")?.label).toBe(
+      "Video preview: Renamed video",
+    );
+  });
+
+  it("keeps the preview and zoom until a decoded original replaces it in the open viewer", async () => {
+    const full = createDeferred<ImageLightboxItem | null>();
+    const decoded = createDeferred();
+    const decode = vi.fn(() => decoded.promise);
+    vi.stubGlobal(
+      "Image",
+      class {
+        src = "";
+        decode = decode;
+      },
+    );
+    const original = { src: "blob:original", title: "Screenshot", release: vi.fn() };
+    render(
+      renderChatImageLightbox(
+        {
+          src: "blob:preview",
+          title: "Screenshot",
+          loadFullResolution: () => full.promise,
+        },
+        () => render(nothing, container),
+      ),
+      container,
+    );
+    const modal = container.querySelector("openclaw-image-lightbox")!;
+    await modal.updateComplete;
+    const image = modal.shadowRoot!.querySelector<HTMLImageElement>("img")!;
+    expect(image.src).toBe("blob:preview");
+    expect(modal.shadowRoot!.querySelector(".open-original")).toBeNull();
+    image.dispatchEvent(new Event("load"));
+    image.dispatchEvent(new CustomEvent("panzoomchange", { detail: { scale: 2 } }));
+    await modal.updateComplete;
+
+    full.resolve(original);
+    await vi.waitFor(() => expect(decode).toHaveBeenCalledOnce());
+    expect(image.src).toBe("blob:preview");
+    decoded.resolve();
+    await vi.waitFor(() => expect(image.src).toBe("blob:original"));
+    image.dispatchEvent(new Event("load"));
+    await modal.updateComplete;
+    expect(modal.shadowRoot!.querySelector(".zoom-level")?.textContent?.trim()).toBe("200%");
+    await vi.waitFor(() =>
+      expect(modal.shadowRoot!.querySelector<HTMLAnchorElement>(".open-original")?.href).toBe(
+        "blob:original",
+      ),
+    );
+    modal.shadowRoot!.querySelector<HTMLButtonElement>(".close")!.click();
+    await vi.waitFor(() => expect(original.release).toHaveBeenCalledOnce());
+    expect(container.querySelector("openclaw-image-lightbox")).toBeNull();
+  });
+
+  it("does not preload a gallery from an update queued before detachment", async () => {
+    const { modal } = await renderLightbox();
+    const neighbor = vi.fn(async () => null);
+    modal.gallery = { index: 0, items: [async () => null, neighbor] };
+    modal.remove();
+
+    await modal.updateComplete;
+    await Promise.resolve();
+
+    expect(neighbor).not.toHaveBeenCalled();
+  });
+
+  it("ignores an image load that finishes after the viewer closes", async () => {
+    const { modal } = await renderLightbox();
+    const image = modal.shadowRoot!.querySelector<HTMLImageElement>("img")!;
+    modal.remove();
+    vi.mocked(Panzoom).mockClear();
+
+    image.dispatchEvent(new Event("load"));
+
+    expect(Panzoom).not.toHaveBeenCalled();
   });
 
   it("accepts parameters on safe raster MIME types", async () => {
@@ -238,7 +329,7 @@ describe("openclaw-image-lightbox", () => {
     const root = modal.shadowRoot;
     const image = root?.querySelector<HTMLImageElement>(".image");
     const zoomIn = root?.querySelector<HTMLButtonElement>('[aria-label="Zoom in"]');
-    expect(zoomIn?.disabled).toBe(true);
+    expect(zoomIn?.getAttribute("aria-disabled")).toBe("true");
     const unavailableShortcut = new KeyboardEvent("keydown", {
       key: "+",
       bubbles: true,
@@ -249,11 +340,11 @@ describe("openclaw-image-lightbox", () => {
 
     image?.dispatchEvent(new Event("error"));
     await modal.updateComplete;
-    expect(zoomIn?.disabled).toBe(true);
+    expect(zoomIn?.getAttribute("aria-disabled")).toBe("true");
 
     image?.dispatchEvent(new Event("load"));
     await modal.updateComplete;
-    expect(zoomIn?.disabled).toBe(false);
+    expect(zoomIn?.getAttribute("aria-disabled")).toBe("false");
     const availableShortcut = new KeyboardEvent("keydown", {
       key: "+",
       bubbles: true,

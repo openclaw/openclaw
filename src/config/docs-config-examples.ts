@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import JSON5 from "json5";
 import {
@@ -126,7 +127,9 @@ function stripIncludeKeys(value: unknown): unknown {
 }
 
 function createDocsConfigValidationContext(): DocsConfigValidationContext {
-  const env = resolveRepoBundledPluginEnv(path.join(process.cwd(), "extensions"));
+  const env = resolveRepoBundledPluginEnv(
+    fileURLToPath(new URL("../../extensions", import.meta.url)),
+  );
   return {
     env,
     pluginMetadataSnapshot: loadPluginMetadataSnapshot({

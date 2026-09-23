@@ -12,7 +12,7 @@ import {
 } from "../infra/state-migrations.workspace-setup.js";
 import type { CollectionBackupManifest } from "../skills/workshop/collection-backup.js";
 import { resolveSkillCollectionBackupRoot } from "../skills/workshop/collection-paths.js";
-import { restoreLatestSkillCollectionBackup } from "../skills/workshop/collection-reconcile.js";
+import { restoreLatestSkillCollectionBackup } from "../skills/workshop/collection-restore.js";
 import {
   renderProposalMarkdown,
   stripProposalFrontmatterForSkill,
@@ -717,7 +717,7 @@ describe("doctor Skill Workshop collection backup migration", () => {
     ).resolves.toBe(sourceManifest);
     await expect(fs.access(fixture.destinationBackupDir)).rejects.toMatchObject({ code: "ENOENT" });
     const workspaceMigration = await migrateLegacyWorkspaceState({
-      detected: detectLegacyWorkspaceState({
+      detected: await detectLegacyWorkspaceState({
         cfg: fixture.config,
         stateDir: testState.stateDir,
         env: testState.env,

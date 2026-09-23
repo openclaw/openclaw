@@ -1,6 +1,6 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { html, nothing } from "lit";
 import { buildControlUiResourcePath } from "../../../../src/gateway/control-ui-resource-routes.js";
+import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
 import type { GatewaySessionRow, SessionVisibility } from "../../api/types.ts";
 import { resolveControlUiAuthCandidates } from "../../app/control-ui-auth.ts";
 import { isNativeLocalGateway } from "../../app/native-editor-locality.runtime.ts";
@@ -16,6 +16,7 @@ import {
 import { sessionMenuReasons } from "../../components/session-menu-access.ts";
 import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
 import { t } from "../../i18n/index.ts";
+import { registerBackgroundTasksEnglish } from "../../i18n/locales/en-background-tasks.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import {
   projectPresenceViewers,
@@ -25,10 +26,9 @@ import {
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { collectKnownSessionGroups } from "../../lib/sessions/grouping.ts";
 import {
-  canArchiveSessionRow,
   canDeleteSessionRows,
+  isPinnableUiSessionRow,
   resolveUiConfiguredMainKey,
-  resolveUiSessionNavigationParentKey,
 } from "../../lib/sessions/session-key.ts";
 import {
   canCopySessionMarkdown,
@@ -57,6 +57,7 @@ import {
 import { renderChatPanePlacement } from "./components/chat-pane-placement.ts";
 import {
   canManageChatSessionSharing,
+  renderChatSessionPublicIndicator,
   renderChatSessionSharing,
 } from "./components/chat-session-sharing.ts";
 import type { SessionWorkspaceProps } from "./components/chat-session-workspace.ts";
@@ -73,6 +74,8 @@ import {
   sidebarMainPanel,
   type SidebarLayout,
 } from "./sidebar-layout.ts";
+
+registerBackgroundTasksEnglish();
 
 export abstract class ChatPaneHeader extends ChatPaneDiscussion {
   /** Gateway-served project icon for a session workspace, on the same credentials as agent avatars. */
@@ -136,6 +139,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
               @click=${() =>
                 this.state?.updateSidebarLayout(
                   setSidebarExpanded(ensureSidebarConversation(layout), layout.expanded !== true),
+                  { dashboardPresentation: "personal" },
                 )}
             >
               ${layout.expanded ? icons.minimize : icons.maximize}
@@ -166,7 +170,9 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
             @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
               const dock = event.detail.item.value;
               if (dock === "left" || dock === "right" || dock === "bottom") {
-                this.state?.updateSidebarLayout(setSidebarDock(layout, dock));
+                this.state?.updateSidebarLayout(setSidebarDock(layout, dock), {
+                  geometryOnly: true,
+                });
               }
             }}
           >
@@ -208,6 +214,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     sidebarLayout?: SidebarLayout,
     panelDefinitions = sidebarPanelDefinitions(),
   ) {
+    this.syncSelectedSessionSharing(row);
     const workspace = resolveSessionWorkspace({
       session: row,
       agentWorkspace: row?.worktree ? undefined : agentWorkspace,
@@ -221,6 +228,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     // in-flight lookups racing a dispatch can never surface a wrong branch.
     const rowRemote = Boolean(row?.execNode) || isCloudWorkerPlacementState(row?.placement?.state);
     const branch =
+      row?.repository?.branch ||
       row?.worktree?.branch ||
       (rowRemote || !workspace.root ? null : this.headerBranches.get(workspace.root)?.value) ||
       null;
@@ -265,6 +273,10 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       method: "session.visibility.set",
       requiredScope: "operator.write",
     });
+    const publicShareAccess = readSessionMethodAccess(sharingSnapshot, {
+      method: "session.publicShare.set",
+      requiredScope: "operator.write",
+    });
     const sharingMemberAddAccess = readSessionMethodAccess(sharingSnapshot, {
       method: "session.members.add",
       requiredScope: "operator.write",
@@ -293,12 +305,13 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       agentsList: this.context.agents.state.agentsList,
       hello: this.context.gateway.snapshot.hello,
     });
-    const archiveAllowed = Boolean(row && canArchiveSessionRow(row, configuredMainKey));
+    const archiveAllowed = Boolean(row && this.canArchiveHeaderSession(row));
     const deleteAllowed = Boolean(row && canDeleteSessionRows([row], configuredMainKey));
+    const pinnable = row != null && isPinnableUiSessionRow(row);
     const sessionActionDisabledReasons = row
       ? sessionMenuReasons({
           snapshot: this.context.gateway.snapshot,
-          session: row,
+          session: { ...row, pinnable },
         })
       : {};
     const assignmentAccess = row
@@ -433,6 +446,10 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       onActivate: toggleSessionRail,
     });
     const layoutMenuActions: HeaderMenuQuickAction[] = [];
+    const defaultAction = !catalog && this.dashboardDefaultMenuAction(row, currentLayout);
+    if (defaultAction) {
+      layoutMenuActions.push({ id: "dashboard-default", icon: icons.check, ...defaultAction });
+    }
     if (this.onOpenSplitView) {
       layoutMenuActions.push({
         id: "open-split-view",
@@ -506,6 +523,15 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
             memberRemoveDisabledReason: sharingMemberRemoveAccess.allowed
               ? undefined
               : sharingMemberRemoveAccess.reason,
+            publicShareDisabledReason:
+              !row.sessionId || isIncognitoSessionKey(row.key)
+                ? t("chat.sessionSharing.publicUnavailable")
+                : publicShareAccess.allowed
+                  ? undefined
+                  : publicShareAccess.reason,
+            onPublicShareChange: (enabled: boolean) =>
+              void this.setSessionPublicShare(row, enabled),
+            onCopyPublicLink: () => void this.copySessionPublicLink(row),
             ownerViewing,
             personActivity,
             showOwner: showOwnerChip,
@@ -543,7 +569,10 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       renameDisabledReason,
       actionsDisabled: this.state?.connected !== true,
       panelActions: html`${browserPanelAction}${backgroundTasksAction}`,
-      panelLayoutActions: html`${this.renderPanelLayoutActions(currentLayout, panelDefinitions)}${sidePanelAction}`,
+      panelLayoutActions: html`${this.renderPanelLayoutActions(
+        currentLayout,
+        panelDefinitions,
+      )}${sidePanelAction}`,
       discussionAction: nothing,
       diffAction: nothing,
       backgroundTasksAction: nothing,
@@ -565,6 +594,8 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
         (!this.narrow || !canManageChatSessionSharing(sharing.session))
           ? renderChatSessionSharing(sharing)
           : nothing,
+      publicAccessIndicator:
+        this.narrow && sharing ? renderChatSessionPublicIndicator(sharing) : nothing,
       placementControl: renderChatPanePlacement({
         session: row,
         placementStartupStatus,
@@ -572,29 +603,15 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
         placementRestarting: placement.restarting,
         placementMoveDisabledReason: placement.moveDisabledReason,
         placementReclaimDisabledReason: placement.reclaimDisabledReason,
-        placementRestartDisabledReason: placement.restartDisabledReason,
-        onPlacementMove: () => row && void this.moveHeaderPlacement(row),
+        placementRecoveryDisabledReason: placement.recoveryDisabledReason,
+        onPlacementMove: () => row && void this.changeHeaderPlacement(row, "move"),
         onPlacementReclaim: () => row && void this.reclaimHeaderPlacement(row),
-        onPlacementRestart: () => row && void this.restartHeaderPlacement(row),
+        onPlacementRecover: () => row && void this.changeHeaderPlacement(row, "recover"),
       }),
       sessionMenuAction:
         row && this.state
           ? html`<openclaw-chat-header-session-menu
-              .session=${{
-                label:
-                  normalizeOptionalString(row.label) ??
-                  normalizeOptionalString(this.paneTitle) ??
-                  row.key,
-                sessionId: row.sessionId ?? null,
-                isChild: Boolean(resolveUiSessionNavigationParentKey(row)),
-                pinned: row.pinned === true,
-                unread: row.unread === true,
-                archived: row.archived === true,
-                category: normalizeOptionalString(row.category) ?? null,
-                icon: normalizeOptionalString(row.icon) ?? null,
-                color: normalizeOptionalString(row.color) ?? null,
-                categoryClearReturnsToGroups: false,
-              }}
+              .session=${this.headerSessionMenuData(row, pinnable)}
               .worktreePath=${row.execNode || !isNativeLocalGateway() ? null : workspace.root}
               .onboarding=${this.onboarding}
               .preferencesBrowserOnly=${
@@ -608,6 +625,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
               .settings=${this.state.settings}
               .panelActions=${panelMenuActions}
               .layoutActions=${layoutMenuActions}
+              .boardWidgetMenu=${this.fullscreenBoardWidgetMenu(currentLayout)}
               .sharing=${sharing}
               .groups=${knownGroups}
               .currentOwner=${row.owner?.actor ?? null}
@@ -615,6 +633,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
               .forkDisabled=${this.state.sessionsLoading || row.modelSelectionLocked === true}
               .forkFromLastCompleted=${row.hasActiveRun === true}
               .archiveAllowed=${archiveAllowed}
+              .archiveShortcut=${this.active && this.presented && !this.onboarding}
               .deleteAllowed=${deleteAllowed}
               .onOpen=${() => {
                 void this.loadHeaderMenuData(row, agentWorkspace, workspaceGit);
@@ -625,8 +644,6 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
               .onAction=${(action: HeaderMenuAction) => this.handleHeaderSessionAction(action, row)}
             ></openclaw-chat-header-session-menu>`
           : nothing,
-      nativeGateways: this.nativeGateways,
-      gatewaysSnapshot: this.gatewaysSnapshot,
       onboarding: this.onboarding,
       onBeginRename: () => row && this.beginHeaderRename(row),
       onRenameInput: (value) => {

@@ -5,6 +5,7 @@ import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { replaceManagedMarkdownBlock } from "openclaw/plugin-sdk/memory-host-markdown";
 import { readRegularFile, replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { getMemoryWorkspaceMaintenance } from "./memory-workspace-files.js";
 import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
 import { readStore } from "./short-term-promotion-store.js";
 
@@ -12,7 +13,11 @@ export const DREAMS_FILENAMES = ["DREAMS.md", "dreams.md"] as const;
 const DEEP_START_MARKER = "<!-- openclaw:dreaming:deep:start -->";
 const DEEP_END_MARKER = "<!-- openclaw:dreaming:deep:end -->";
 
-async function resolveDreamsPath(workspaceDir: string): Promise<string> {
+export async function resolveDreamsPath(workspaceDir: string): Promise<string> {
+  const files = getMemoryWorkspaceMaintenance(workspaceDir);
+  if (files) {
+    return await files.resolveDreamsPath();
+  }
   for (const name of DREAMS_FILENAMES) {
     const target = path.join(workspaceDir, name);
     try {
@@ -27,8 +32,7 @@ async function resolveDreamsPath(workspaceDir: string): Promise<string> {
   return path.join(workspaceDir, DREAMS_FILENAMES[0]);
 }
 
-function isEmptyDreamsReadError(err: unknown): boolean {
-  const code = extractErrorCode(err);
+function isEmptyDreamsReadError(err: unknown, code: string | undefined): boolean {
   if (
     code === "ENOENT" ||
     code === "ENOTDIR" ||
@@ -43,11 +47,15 @@ function isEmptyDreamsReadError(err: unknown): boolean {
   return err instanceof Error && err.message === "path must be a regular file";
 }
 
-export async function readDreamsFile(dreamsPath: string): Promise<string> {
+export async function readDreamsFile(dreamsPath: string, workspaceDir?: string): Promise<string> {
+  const files = workspaceDir ? getMemoryWorkspaceMaintenance(workspaceDir) : undefined;
+  if (files) {
+    return await files.readDreams(dreamsPath);
+  }
   try {
     return (await readRegularFile({ filePath: dreamsPath })).buffer.toString("utf-8");
   } catch (err) {
-    if (isEmptyDreamsReadError(err)) {
+    if (isEmptyDreamsReadError(err, extractErrorCode(err))) {
       return "";
     }
     throw err;
@@ -72,7 +80,16 @@ async function assertSafeDreamsPath(dreamsPath: string): Promise<void> {
   }
 }
 
-async function writeDreamsFileAtomic(dreamsPath: string, content: string): Promise<void> {
+export async function writeDreamsFileAtomic(
+  dreamsPath: string,
+  content: string,
+  workspaceDir?: string,
+): Promise<void> {
+  const files = workspaceDir ? getMemoryWorkspaceMaintenance(workspaceDir) : undefined;
+  if (files) {
+    return await files.writeDreams(dreamsPath, content);
+  }
+  await fs.mkdir(path.dirname(dreamsPath), { recursive: true });
   await assertSafeDreamsPath(dreamsPath);
   await replaceFileAtomic({
     filePath: dreamsPath,
@@ -101,11 +118,14 @@ export async function updateDreamsFile<T>(params: {
   // cannot write a pre-deletion file snapshot back over the scrubbed contents.
   return await withMemoryWorkspaceLock(params.workspaceDir, async () => {
     const dreamsPath = await resolveDreamsPath(params.workspaceDir);
-    await fs.mkdir(path.dirname(dreamsPath), { recursive: true });
-    const existing = await readDreamsFile(dreamsPath);
+    const existing = await readDreamsFile(dreamsPath, params.workspaceDir);
     const { content, result, shouldWrite = true } = await params.updater(existing, dreamsPath);
     if (shouldWrite) {
-      await writeDreamsFileAtomic(dreamsPath, content.endsWith("\n") ? content : `${content}\n`);
+      await writeDreamsFileAtomic(
+        dreamsPath,
+        content.endsWith("\n") ? content : `${content}\n`,
+        params.workspaceDir,
+      );
     }
     return result;
   });
@@ -115,7 +135,7 @@ export async function updateDeepDreamsFile(params: {
   workspaceDir: string;
   bodyLines: string[];
 }): Promise<string> {
-  const body = params.bodyLines.length > 0 ? params.bodyLines.join("\n") : "- No durable changes.";
+  const body = params.bodyLines.join("\n");
   return await updateDreamsFile({
     workspaceDir: params.workspaceDir,
     updater: (existing, dreamsPath) => ({
@@ -127,6 +147,7 @@ export async function updateDeepDreamsFile(params: {
         body,
       }),
       result: dreamsPath,
+      shouldWrite: params.bodyLines.length > 0,
     }),
   });
 }
@@ -215,20 +236,8 @@ function normalizeDiaryBlockBody(block: string): string {
 
 function isOptionalDiaryContextReadError(err: unknown): boolean {
   const code = extractErrorCode(err);
-  if (
-    code === "EACCES" ||
-    code === "EPERM" ||
-    code === "ENOENT" ||
-    code === "ENOTDIR" ||
-    code === "not-found" ||
-    code === "not-file" ||
-    code === "path-alias" ||
-    code === "path-mismatch" ||
-    code === "symlink"
-  ) {
-    return true;
-  }
-  return err instanceof Error && err.message === "path must be a regular file";
+  // Optional prompt context may omit unreadable diaries; updates must preserve the failure.
+  return code === "EACCES" || code === "EPERM" || isEmptyDreamsReadError(err, code);
 }
 
 function getDiaryContextEntries(existing: string): string[] {
@@ -254,7 +263,7 @@ export async function readRecentDreamDiaryEntries(params: {
   let existing: string;
   try {
     const dreamsPath = await resolveDreamsPath(params.workspaceDir);
-    existing = await readDreamsFile(dreamsPath);
+    existing = await readDreamsFile(dreamsPath, params.workspaceDir);
   } catch (err) {
     if (isOptionalDiaryContextReadError(err)) {
       return [];
@@ -497,9 +506,7 @@ export async function appendNarrativeEntry(params: {
       // staged inputs and prior diary quotes must survive until this commit.
       if (
         sourceKeys.some((key) => !currentSources?.[key]) ||
-        params.recentDiaryEntries?.some(
-          (block) => !currentDiary.has(clampDreamDiaryContextEntry(block)),
-        )
+        params.recentDiaryEntries?.some((block) => !currentDiary.has(block))
       ) {
         return { content: existing, result: undefined, shouldWrite: false };
       }

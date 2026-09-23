@@ -1,32 +1,29 @@
 // Codex catalog terminal ownership: validated native start/resume commands and plans.
-import { resolveAgentDir, resolveDefaultAgentDir } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveDefaultAgentDir } from "openclaw/plugin-sdk/agent-harness-registration";
+import { resolveAgentDir } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { decodeNodePtyResumeParams, decodeNodePtyStartParams } from "openclaw/plugin-sdk/node-host";
 import type {
   OpenClawPluginApi,
   OpenClawPluginNodeHostCommand,
 } from "openclaw/plugin-sdk/plugin-entry";
-import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { SessionCatalogTerminalPlan } from "openclaw/plugin-sdk/session-catalog";
 import { resolveCodexAppServerLocalHomeDir } from "./app-server/auth-start-options.js";
-import { resolveCodexSupervisionAppServerRuntimeOptions } from "./app-server/config.js";
+import { readCodexPluginConfig } from "./app-server/config-parsing.js";
+import type { resolveCodexSupervisionAppServerRuntimeOptions } from "./app-server/config-runtime.js";
 import type { CodexCatalogHome } from "./session-catalog-homes.js";
+import { lookupNodeCodexCatalogRecord } from "./session-catalog-node-lookup.js";
 import {
   CatalogParamsError,
   CODEX_APP_SERVER_THREADS_CAPABILITY,
   CODEX_APP_SERVER_THREADS_LIST_COMMAND,
   CODEX_LOCAL_SESSION_HOST_ID,
-  CODEX_SESSION_CATALOG_MAX_PAGE_LIMIT,
   isInteractiveThreadSource,
-  MAX_ACTION_CATALOG_PAGES,
-  NODE_INVOKE_TIMEOUT_MS,
-  unwrapNodeInvokePayload,
 } from "./session-catalog-parsing.js";
 import { resolveNodeHostExecutable, runNodePtyCommand } from "./session-catalog-pty.runtime.js";
 import type {
   CodexSessionCatalogControl,
-  CodexSessionCatalogPage,
-  CodexSessionCatalogSession,
+  CodexSessionCatalogControlFactory,
 } from "./session-catalog-types.js";
 
 export const CODEX_TERMINAL_RESUME_COMMAND = "codex.terminal.resume.v1";
@@ -38,6 +35,7 @@ export function createCodexTerminalStartNodeHostCommand(): OpenClawPluginNodeHos
     cap: CODEX_APP_SERVER_THREADS_CAPABILITY,
     dangerous: false,
     duplex: true,
+    hasActiveWork: () => false,
     isAvailable: ({ env }) =>
       Boolean(resolveNodeHostExecutable("codex", { env, strategy: "direct" })),
     handle: async (paramsJSON, io) => {
@@ -70,11 +68,13 @@ export function createCodexTerminalStartNodeHostCommand(): OpenClawPluginNodeHos
 export type CodexTerminalConfigSources = {
   getPluginConfig: () => unknown;
   getRuntimeConfig: () => OpenClawConfig | undefined;
+  resolveRuntimeOptions: typeof resolveCodexSupervisionAppServerRuntimeOptions;
 };
 
 function resolveCodexCatalogTerminalHome(
   sources: CodexTerminalConfigSources & { agentId?: string; source?: CodexCatalogHome },
 ): string {
+  sources.source?.assertCurrent();
   const runtimeConfig = sources.getRuntimeConfig();
   if (!runtimeConfig) {
     throw new Error("OpenClaw runtime config is unavailable");
@@ -86,9 +86,12 @@ function resolveCodexCatalogTerminalHome(
       : resolveDefaultAgentDir(runtimeConfig));
   const startOptions =
     sources.source?.appServer.start ??
-    resolveCodexSupervisionAppServerRuntimeOptions({
+    sources.resolveRuntimeOptions({
       pluginConfig: sources.getPluginConfig(),
     }).start;
+  if (startOptions.transport !== "stdio") {
+    throw new CatalogParamsError("Native terminal requires a local Codex source");
+  }
   return resolveCodexAppServerLocalHomeDir(startOptions, agentDir);
 }
 
@@ -122,19 +125,23 @@ export function codexNodeTerminalCapability(node: {
 }
 
 export function createCodexTerminalNodeHostCommand(
-  bindRequest: (paramsJSON?: string | null) => {
-    agentId: string;
+  bindRequest: (paramsJSON?: string | null) => Promise<{
+    assertCurrent(): void;
+    codexHome: string;
     control: CodexSessionCatalogControl;
+    transport: Awaited<ReturnType<CodexSessionCatalogControlFactory["forNode"]>>["transport"];
     paramsJSON: string;
-  },
-  configSources: CodexTerminalConfigSources,
+  }>,
 ): OpenClawPluginNodeHostCommand {
   return {
     command: CODEX_TERMINAL_RESUME_COMMAND,
     cap: CODEX_APP_SERVER_THREADS_CAPABILITY,
     dangerous: false,
     duplex: true,
-    isAvailable: ({ env }) =>
+    hasActiveWork: () => false,
+    isAvailable: ({ config, env }) =>
+      (readCodexPluginConfig(config.plugins?.entries?.codex?.config).appServer?.transport ??
+        "stdio") === "stdio" &&
       Boolean(
         resolveNodeHostExecutable("codex", {
           env,
@@ -146,7 +153,10 @@ export function createCodexTerminalNodeHostCommand(
       if (!io) {
         throw new Error("Codex terminal command requires duplex transport");
       }
-      const request = bindRequest(paramsJSON);
+      const request = await bindRequest(paramsJSON);
+      if (request.transport !== "stdio") {
+        throw new CatalogParamsError("Native terminal requires a local Codex source");
+      }
       const resume = decodeNodePtyResumeParams(request.paramsJSON, (value) => {
         if (
           typeof value !== "string" ||
@@ -165,17 +175,16 @@ export function createCodexTerminalNodeHostCommand(
       if (!resolution) {
         throw new Error("Codex CLI is unavailable");
       }
+      request.assertCurrent();
       return JSON.stringify(
         await runNodePtyCommand(
           {
             file: resolution.executable,
             args: ["resume", resume.threadId],
+            assertCurrent: () => request.assertCurrent(),
             ...(record.cwd ? { cwd: record.cwd } : {}),
             env: {
-              CODEX_HOME: resolveCodexCatalogTerminalHome({
-                ...configSources,
-                agentId: request.agentId,
-              }),
+              CODEX_HOME: request.codexHome,
             },
             cols: resume.cols,
             rows: resume.rows,
@@ -187,45 +196,6 @@ export function createCodexTerminalNodeHostCommand(
   };
 }
 
-async function resolveNodeCatalogEligibleThread(params: {
-  agentId: string;
-  runtime: PluginRuntime;
-  nodeId: string;
-  threadId: string;
-  parseCatalogPage: (value: unknown) => CodexSessionCatalogPage;
-}): Promise<CodexSessionCatalogSession> {
-  let cursor: string | undefined;
-  const seenCursors = new Set<string>();
-  for (let pageIndex = 0; pageIndex < MAX_ACTION_CATALOG_PAGES; pageIndex += 1) {
-    const raw = await params.runtime.nodes.invoke({
-      nodeId: params.nodeId,
-      command: CODEX_APP_SERVER_THREADS_LIST_COMMAND,
-      params: {
-        agentId: params.agentId,
-        limit: CODEX_SESSION_CATALOG_MAX_PAGE_LIMIT,
-        ...(cursor ? { cursor } : {}),
-      },
-      timeoutMs: NODE_INVOKE_TIMEOUT_MS,
-      scopes: ["operator.write"],
-    });
-    const page = params.parseCatalogPage(unwrapNodeInvokePayload(raw));
-    const record = page.sessions.find((candidate) => candidate.threadId === params.threadId);
-    if (record) {
-      if (isInteractiveThreadSource(record.source)) {
-        return record;
-      }
-      break;
-    }
-    const nextCursor = page.nextCursor?.trim();
-    if (!nextCursor || seenCursors.has(nextCursor)) {
-      break;
-    }
-    seenCursors.add(nextCursor);
-    cursor = nextCursor;
-  }
-  throw new CatalogParamsError("Codex session is not a non-archived interactive Codex session");
-}
-
 export async function openCodexCatalogTerminal(
   params: {
     agentId: string;
@@ -233,7 +203,7 @@ export async function openCodexCatalogTerminal(
     control: CodexSessionCatalogControl;
     hostId: string;
     threadId: string;
-    parseCatalogPage: (value: unknown) => CodexSessionCatalogPage;
+    sourceHomeId?: string;
     source?: CodexCatalogHome;
   } & CodexTerminalConfigSources,
 ): Promise<SessionCatalogTerminalPlan> {
@@ -274,18 +244,27 @@ export async function openCodexCatalogTerminal(
   if (!node) {
     throw new CatalogParamsError("paired-node Codex terminal is unavailable");
   }
-  const record = await resolveNodeCatalogEligibleThread({
+  const lookup = await lookupNodeCodexCatalogRecord({
     agentId: params.agentId,
     runtime: params.api.runtime,
     nodeId,
     threadId: params.threadId,
-    parseCatalogPage: params.parseCatalogPage,
+    sourceHomeId: params.sourceHomeId,
   });
+  if (lookup.kind !== "found" || !isInteractiveThreadSource(lookup.record.source)) {
+    throw new CatalogParamsError("Codex session is not a non-archived interactive Codex session");
+  }
+  const record = lookup.record;
   return {
     kind: "node",
     nodeId,
     command: CODEX_TERMINAL_RESUME_COMMAND,
-    paramsJSON: JSON.stringify({ agentId: params.agentId, threadId: params.threadId }),
+    uploadPathStyle: "native",
+    paramsJSON: JSON.stringify({
+      agentId: params.agentId,
+      threadId: params.threadId,
+      ...(lookup.sourceHomeId ? { sourceHomeId: lookup.sourceHomeId } : {}),
+    }),
     ...(record.cwd ? { cwd: record.cwd } : {}),
     title,
   };
@@ -305,6 +284,7 @@ export async function startCodexCatalogTerminal(
       kind: "node",
       nodeId: params.nodeId,
       command: CODEX_TERMINAL_START_COMMAND,
+      uploadPathStyle: "native",
       paramsJSON: JSON.stringify({ cwd: params.cwd, initialMessage: params.initialMessage }),
       cwd: params.cwd,
       title: "codex",

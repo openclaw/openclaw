@@ -2,7 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { writeFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
-import WebSocket from "ws";
+import WebSocket, { type ClientOptions } from "ws";
 import { z } from "zod";
 import { rawDataToString } from "../packages/gateway-client/src/websocket-data.ts";
 import { PROTOCOL_VERSION } from "../packages/gateway-protocol/src/version.ts";
@@ -144,8 +144,18 @@ async function readResponse(response: Response, scan: (value: string) => void) {
   }
 }
 
-function gatewayClient(url: string, headers: Record<string, string>, scan: (text: string) => void) {
-  const ws = new WebSocket(url, {
+type GatewayWebSocketFactory = (url: string, options: ClientOptions) => WebSocket;
+
+const createGatewayWebSocket: GatewayWebSocketFactory = (url, options) =>
+  new WebSocket(url, options);
+
+function gatewayClient(
+  url: string,
+  headers: Record<string, string>,
+  scan: (text: string) => void,
+  createWebSocket: GatewayWebSocketFactory,
+) {
+  const ws = createWebSocket(url, {
     headers,
     handshakeTimeout: 12_000,
     maxPayload: MAX_BYTES,
@@ -337,13 +347,14 @@ async function probeHarness(
   native: boolean,
   scan: (text: string) => void,
   report: ProbeReport,
+  createWebSocket: GatewayWebSocketFactory,
 ) {
   const prefix = native ? "codex" : "openclaw";
   const agentId = native ? input.codexAgent : input.openclawAgent;
   if (!agentId) {
     throw new Error("agent");
   }
-  let client = gatewayClient(input.gatewayUrl, input.ownerHeaders, scan);
+  let client = gatewayClient(input.gatewayUrl, input.ownerHeaders, scan, createWebSocket);
   try {
     if ((await client.connect()) !== "admitted") {
       throw new Error("admission");
@@ -395,7 +406,7 @@ async function probeHarness(
       return;
     }
     client.close();
-    client = gatewayClient(input.gatewayUrl, input.ownerHeaders, scan);
+    client = gatewayClient(input.gatewayUrl, input.ownerHeaders, scan, createWebSocket);
     if ((await client.connect()) !== "admitted") {
       throw new Error("admission");
     }
@@ -433,7 +444,10 @@ async function probeHarness(
   }
 }
 
-export async function runPrivateCodexProbe(raw: unknown): Promise<ProbeReport> {
+export async function runPrivateCodexProbe(
+  raw: unknown,
+  options: { createWebSocket?: GatewayWebSocketFactory } = {},
+): Promise<ProbeReport> {
   const report = { ...reportTemplate };
   let needles = [SENTINEL];
   const scan = (text: string) => observe(text, needles, report);
@@ -466,13 +480,14 @@ export async function runPrivateCodexProbe(raw: unknown): Promise<ProbeReport> {
     }
     needles = [SENTINEL, ...(input.privateTarget ? [input.privateTarget] : [])];
     report.preflight_pass = 1;
-    const owner = gatewayClient(input.gatewayUrl, input.ownerHeaders, scan);
+    const webSocketFactory = options.createWebSocket ?? createGatewayWebSocket;
+    const owner = gatewayClient(input.gatewayUrl, input.ownerHeaders, scan, webSocketFactory);
     try {
       report.owner_admitted = Number((await owner.connect()) === "admitted");
     } finally {
       owner.close();
     }
-    const nonowner = gatewayClient(input.gatewayUrl, input.nonownerHeaders, scan);
+    const nonowner = gatewayClient(input.gatewayUrl, input.nonownerHeaders, scan, webSocketFactory);
     try {
       report.nonowner_denied = Number((await nonowner.connect()) === "denied");
     } finally {
@@ -562,7 +577,7 @@ export async function runPrivateCodexProbe(raw: unknown): Promise<ProbeReport> {
     if (!report.alias_sse_pass || report.leak_hits || report.explicit_model_failures) {
       throw new Error("stream");
     }
-    await probeHarness(input, false, scan, report);
+    await probeHarness(input, false, scan, report, webSocketFactory);
     if (
       input.nativeSafetyContractApproved &&
       input.codexAgent &&
@@ -570,7 +585,7 @@ export async function runPrivateCodexProbe(raw: unknown): Promise<ProbeReport> {
       !report.explicit_model_failures
     ) {
       report.native_blocked = 0;
-      await probeHarness(input, true, scan, report);
+      await probeHarness(input, true, scan, report, webSocketFactory);
     }
   } catch {
     report.errors++;

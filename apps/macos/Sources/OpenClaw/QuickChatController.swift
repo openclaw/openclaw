@@ -106,7 +106,7 @@ final class QuickChatController: NSObject {
     @ObservationIgnored private var localMonitor: Any?
     @ObservationIgnored private var presentationTask: Task<Void, Never>?
     @ObservationIgnored private var visibleFrame = NSRect.zero
-    @ObservationIgnored private var contentHeight: CGFloat = 58
+    @ObservationIgnored private var contentHeight: CGFloat = 112
     @ObservationIgnored private var transitionID = UUID()
     @ObservationIgnored private var isStarted = false
     @ObservationIgnored private var hotkeyRegistered = false
@@ -118,6 +118,7 @@ final class QuickChatController: NSObject {
     @ObservationIgnored private var dictationRequestID = UUID()
     @ObservationIgnored private var pasteTask: Task<Void, Never>?
     @ObservationIgnored private var pasteRequestID = UUID()
+    @ObservationIgnored private var sendDisclosureRevision: UInt64?
 
     init(
         enableUI: Bool = true,
@@ -176,6 +177,7 @@ final class QuickChatController: NSObject {
             // over the fresh reply would rebind away from the response just sent.
             self.invalidateRecentsFetch()
             self.replyBinding.prepare(route: route)
+            self.sendDisclosureRevision = self.replyBinding.disclosureRevision
         }
     }
 
@@ -262,7 +264,7 @@ final class QuickChatController: NSObject {
         let wasVisible = self.isVisible
         self.isVisible = true
         self.installDismissMonitors()
-        guard self.enableUI, !ProcessInfo.processInfo.isRunningTests else { return }
+        guard self.enableUI else { return }
 
         self.visibleFrame = self.cursorScreen()?.visibleFrame ?? .zero
         self.ensurePanel()
@@ -359,58 +361,16 @@ final class QuickChatController: NSObject {
             object: nil)
     }
 
-    private func makeView() -> QuickChatView {
-        QuickChatView(
-            model: self.model,
-            replyBinding: self.replyBinding,
-            onDismiss: { [weak self] in self?.dismiss() },
-            onSendAccepted: { [weak self] openChat in
-                self?.handleSendAccepted(openChat: openChat)
-            },
-            onShowAgentPicker: { [weak self] in
-                self?.showAgentPicker()
-            },
-            onShowModelMenu: { [weak self] in
-                self?.showModelMenu()
-            },
-            onShowRecentSessions: { [weak self] in
-                self?.showRecentSessionsPicker()
-            },
-            onToggleDictation: { [weak self] in
-                self?.toggleDictation()
-            },
-            onStopDictation: { [weak self] in
-                self?.stopDictation()
-            },
-            onCaptureTextContext: { [weak self] in
-                self?.captureFocusedAppText()
-            },
-            onShowCaptureMenu: { [weak self] in
-                self?.showCaptureMenu()
-            },
-            onGrantPermissions: { [weak self] in
-                self?.grantMissingPermissions()
-            },
-            onPasteReply: { [weak self] in
-                self?.pasteReplyToFrontmostApp()
-            },
-            onContentHeightChange: { [weak self] height in
-                self?.updateContentHeight(height)
-            },
-            onTextViewReady: { [weak self] textView in
-                self?.textView = textView
-                self?.focusEditor()
-            })
-    }
-
     private func handleSendAccepted(openChat: Bool) {
         // Command-Return must open the immutable route that accepted the send,
         // not live model routing state that may already have changed.
         let route = self.model.lastAcceptedRoute
         guard openChat else {
-            if let route {
+            // A newer disclosure action wins over a delayed send acknowledgement.
+            if let route, self.sendDisclosureRevision == self.replyBinding.disclosureRevision {
                 self.replyBinding.show(route: route)
             }
+            self.sendDisclosureRevision = nil
             return
         }
         self.dismiss()
@@ -419,6 +379,16 @@ final class QuickChatController: NSObject {
         } else {
             self.chatOpener(nil, nil)
         }
+    }
+
+    func toggleReply() {
+        guard self.isVisible else { return }
+        if self.replyBinding.isExpanded {
+            self.replyBinding.hide()
+        } else if let route = self.model.routingTarget {
+            self.replyBinding.show(route: route)
+        }
+        self.focusEditor()
     }
 
     private func updateContentHeight(_ height: CGFloat) {
@@ -948,6 +918,55 @@ final class QuickChatController: NSObject {
         self.handleSendAccepted(openChat: openChat)
     }
     #endif
+}
+
+extension QuickChatController {
+    private func makeView() -> QuickChatView {
+        QuickChatView(
+            model: self.model,
+            replyBinding: self.replyBinding,
+            onDismiss: { [weak self] in self?.dismiss() },
+            onSendAccepted: { [weak self] openChat in
+                self?.handleSendAccepted(openChat: openChat)
+            },
+            onShowAgentPicker: { [weak self] in
+                self?.showAgentPicker()
+            },
+            onShowModelMenu: { [weak self] in
+                self?.showModelMenu()
+            },
+            onShowRecentSessions: { [weak self] in
+                self?.showRecentSessionsPicker()
+            },
+            onToggleReply: { [weak self] in
+                self?.toggleReply()
+            },
+            onToggleDictation: { [weak self] in
+                self?.toggleDictation()
+            },
+            onStopDictation: { [weak self] in
+                self?.stopDictation()
+            },
+            onCaptureTextContext: { [weak self] in
+                self?.captureFocusedAppText()
+            },
+            onShowCaptureMenu: { [weak self] in
+                self?.showCaptureMenu()
+            },
+            onGrantPermissions: { [weak self] in
+                self?.grantMissingPermissions()
+            },
+            onPasteReply: { [weak self] in
+                self?.pasteReplyToFrontmostApp()
+            },
+            onContentHeightChange: { [weak self] height in
+                self?.updateContentHeight(height)
+            },
+            onTextViewReady: { [weak self] textView in
+                self?.textView = textView
+                self?.focusEditor()
+            })
+    }
 }
 
 extension QuickChatController: NSWindowDelegate {

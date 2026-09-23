@@ -18,6 +18,7 @@ import {
   installMockGateway,
   navigateInApp,
   waitForCommittedChatRoute,
+  waitForGatewayRecoveryScope,
 } from "./new-session-page.test-support.ts";
 
 const buildId = "startup-recovery-proof";
@@ -97,6 +98,7 @@ suite.define(() => {
         const pane = page.locator(".chat-pane-cache__pane--active");
         const composer = page.locator(".agent-chat__composer-combobox textarea");
         await expect.poll(() => composer.isDisabled()).toBe(false);
+        await waitForGatewayRecoveryScope(page);
         const owner = await page.evaluate(() => {
           const app = document.querySelector("openclaw-app") as HTMLElement & {
             runtime: { context: ApplicationContext };
@@ -147,7 +149,7 @@ suite.define(() => {
         );
         await page.reload();
         await expect.poll(() => moduleRequests).toBe(1);
-        const alert = pane.getByRole("alert").filter({ hasText: "runner startup failed" });
+        const alert = pane.getByRole("alert").filter({ hasText: "startup needs attention" });
         try {
           await alert.getByRole("button", { name: "Retry", exact: true }).waitFor();
         } finally {
@@ -195,7 +197,7 @@ suite.define(() => {
           await page.locator("#new-session-where-trigger").click();
           await page
             .locator("wa-popover.new-session-page__where-popover")
-            .getByRole("button", { name: "Cloud · test-cloud" })
+            .getByRole("button", { name: "test-cloud", exact: true })
             .click();
           await page.getByRole("switch", { name: "Incognito" }).click();
           await page.locator(".new-session-page__message").fill(privateMessage);

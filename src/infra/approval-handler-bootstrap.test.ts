@@ -1,6 +1,6 @@
 // Covers channel approval handler bootstrap lifecycle.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { withTestTimeout } from "../../test/helpers/promise.js";
+import { withTestTimeout, createDeferred } from "../../test/helpers/promise.js";
 import { createRuntimeChannel } from "../plugins/runtime/runtime-channel.js";
 import { startChannelApprovalHandlerBootstrap } from "./approval-handler-bootstrap.js";
 import { createApprovalNativeRuntimeAdapterStubs } from "./approval-handler.test-helpers.js";
@@ -127,15 +127,10 @@ describe("startChannelApprovalHandlerBootstrap", () => {
 
   it("does not start a handler after the runtime context is unregistered mid-boot", async () => {
     const channelRuntime = createRuntimeChannel();
-    let resolveRuntime:
-      | ((value: { start: ReturnType<typeof vi.fn>; stop: ReturnType<typeof vi.fn> }) => void)
-      | undefined;
-    const runtimePromise = new Promise<{
+    const { promise: runtimePromise, resolve: resolveRuntime } = createDeferred<{
       start: ReturnType<typeof vi.fn>;
       stop: ReturnType<typeof vi.fn>;
-    }>((resolve) => {
-      resolveRuntime = resolve;
-    });
+    }>();
     createChannelApprovalHandlerFromCapability.mockReturnValue(runtimePromise);
 
     const cleanup = await startTestBootstrap({ channelRuntime });

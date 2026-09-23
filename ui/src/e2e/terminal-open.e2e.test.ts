@@ -53,7 +53,7 @@ suite.define(() => {
 
       const panel = await openTerminalSidePanel(page);
       await gateway.waitForRequest("terminal.open");
-      await panel.locator(".tabstrip-tab.is-live").waitFor();
+      await page.locator('[data-region-header="side"] .tabstrip-tab.is-live').waitFor();
       const canvas = panel.locator(".tp-host canvas");
       await canvas.waitFor({ state: "visible" });
       await settleTerminalPaint(page);
@@ -155,7 +155,7 @@ suite.define(() => {
 
       await retry.click();
       await expect.poll(async () => (await gateway.getRequests("terminal.open")).length).toBe(2);
-      await panel.locator(".tabstrip-tab.is-live").waitFor();
+      await page.locator('[data-region-header="side"] .tabstrip-tab.is-live').waitFor();
       const canvas = panel.locator(".tp-host canvas");
       await canvas.waitFor({ state: "visible" });
       await settleTerminalPaint(page);

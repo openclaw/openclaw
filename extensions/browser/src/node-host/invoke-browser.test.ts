@@ -1,4 +1,3 @@
-// Browser tests cover invoke browser plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import nodePath from "node:path";
@@ -10,16 +9,13 @@ import {
   BROWSER_PROXY_OWNED_TAB_CLOSE_PATH,
 } from "../browser-proxy-envelope.js";
 import type { BrowserServerState } from "../browser/server-context.js";
-import { toErrorObject } from "../infra/errors.js";
+import { firstBrowserDispatchRequest, stagedReportUpload } from "./invoke-browser.test-support.js";
 
 const BROWSER_PROXY_MAX_FILES = 256;
 const BROWSER_PROXY_MAX_TOTAL_FILE_BYTES = 16 * 1024 * 1024;
-const stagedReportUpload = {
-  body: { paths: ["/tmp/openclaw/uploads/.proxy-upload-1/0/report.txt"] },
-  directory: "/tmp/openclaw/uploads/.proxy-upload-1",
-};
 
 const controlServiceMocks = vi.hoisted(() => ({
+  hasBrowserControlWork: vi.fn(() => false),
   createBrowserControlContext: vi.fn(() => ({ control: true })),
   getBrowserControlState: vi.fn<() => BrowserServerState | null>(() => null),
   startBrowserControlServiceFromConfig: vi.fn<() => Promise<BrowserServerState | null>>(),
@@ -70,53 +66,17 @@ const browserConfigMocks = vi.hoisted(() => ({
 }));
 
 const uploadMocks = vi.hoisted(() => ({
+  hasBrowserProxyUploadWork: vi.fn(() => false),
   stageBrowserProxyUploadRequest: vi.fn(),
   discardStagedBrowserProxyUpload: vi.fn(async () => {}),
   ensureBrowserProxyUploadCleanup: vi.fn(async () => {}),
 }));
 
-vi.mock("../sdk-config.js", () => ({
+vi.mock("../sdk-config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../sdk-config.js")>()),
   getRuntimeConfig: configMocks.loadConfig,
   getRuntimeConfigSourceSnapshot: () => configMocks.sourceConfig,
   loadConfig: configMocks.loadConfig,
-}));
-
-vi.mock("../sdk-node-runtime.js", () => ({
-  withTimeout: vi.fn(
-    async (
-      run: (signal: AbortSignal | undefined) => Promise<unknown>,
-      timeoutMs?: number,
-      label?: string,
-    ) => {
-      const resolved =
-        typeof timeoutMs === "number" && Number.isFinite(timeoutMs)
-          ? Math.max(1, Math.floor(timeoutMs))
-          : undefined;
-      if (!resolved) {
-        return await run(undefined);
-      }
-      const abortCtrl = new AbortController();
-      const timeoutError = new Error(`${label ?? "request"} timed out`);
-      const timer = setTimeout(() => abortCtrl.abort(timeoutError), resolved);
-      try {
-        return await Promise.race([
-          run(abortCtrl.signal),
-          new Promise<never>((_, reject) => {
-            abortCtrl.signal.addEventListener(
-              "abort",
-              () =>
-                reject(
-                  toErrorObject(abortCtrl.signal.reason ?? timeoutError, "Non-Error rejection"),
-                ),
-              { once: true },
-            );
-          }),
-        ]);
-      } finally {
-        clearTimeout(timer);
-      }
-    },
-  ),
 }));
 
 vi.mock("../sdk-setup-tools.js", () => ({
@@ -153,43 +113,6 @@ vi.mock("../browser/config.js", () => ({
 
 vi.mock("../browser-proxy-upload.js", () => uploadMocks);
 
-vi.mock("../browser/request-policy.js", () => ({
-  isPersistentBrowserProfileMutation: vi.fn((method: string, path: string) => {
-    if (method === "POST" && (path === "/profiles/create" || path === "/reset-profile")) {
-      return true;
-    }
-    return method === "DELETE" && /^\/profiles\/[^/]+$/.test(path);
-  }),
-  isBrowserHostLocalRoute: vi.fn((method: string, path: string) => {
-    if (method === "POST" && path === "/profiles/import") {
-      return true;
-    }
-    return method === "GET" && path === "/system-profiles";
-  }),
-  normalizeBrowserRequestPath: vi.fn((path: string) => path),
-  resolveRequestedBrowserProfile: vi.fn(
-    ({
-      query,
-      body,
-      profile,
-    }: {
-      query?: Record<string, unknown>;
-      body?: unknown;
-      profile?: string;
-    }) => {
-      if (query && typeof query.profile === "string" && query.profile.trim()) {
-        return query.profile.trim();
-      }
-      const bodyProfile =
-        body && typeof body === "object" ? (body as { profile?: unknown }).profile : undefined;
-      if (typeof bodyProfile === "string" && bodyProfile.trim()) {
-        return bodyProfile.trim();
-      }
-      return typeof profile === "string" && profile.trim() ? profile.trim() : undefined;
-    },
-  ),
-}));
-
 vi.mock("../browser/routes/dispatcher.js", () => ({
   createBrowserRouteDispatcher: dispatcherMocks.createBrowserRouteDispatcher,
 }));
@@ -200,23 +123,12 @@ vi.mock("../control-service.js", () => ({
   startBrowserControlServiceFromConfig: controlServiceMocks.startBrowserControlServiceFromConfig,
 }));
 
+vi.mock("../browser-control-state.js", () => ({
+  hasBrowserControlWork: controlServiceMocks.hasBrowserControlWork,
+}));
+
 let runBrowserProxyCommand: typeof import("./invoke-browser.js").runBrowserProxyCommand;
 let browserState: BrowserServerState;
-
-type BrowserDispatchRequest = {
-  path?: string;
-  query?: unknown;
-  body?: unknown;
-};
-
-function firstBrowserDispatchRequest(): BrowserDispatchRequest {
-  const [call] = dispatcherMocks.dispatch.mock.calls;
-  if (!call) {
-    throw new Error("expected browser dispatch call");
-  }
-  const [request] = call as [BrowserDispatchRequest, ...unknown[]];
-  return request;
-}
 
 describe("runBrowserProxyCommand", () => {
   beforeEach(async () => {
@@ -406,7 +318,9 @@ describe("runBrowserProxyCommand", () => {
       upload,
       signal: expect.any(AbortSignal),
     });
-    expect(firstBrowserDispatchRequest().body).toEqual(staged.body);
+    expect(firstBrowserDispatchRequest(dispatcherMocks.dispatch.mock.calls).body).toEqual(
+      staged.body,
+    );
     expect(uploadMocks.discardStagedBrowserProxyUpload).not.toHaveBeenCalled();
   });
 
@@ -665,10 +579,7 @@ describe("runBrowserProxyCommand", () => {
 
       const error = await runBrowserProxyCommand(
         JSON.stringify({ method: "POST", path: "/act" }),
-      ).then(
-        () => null,
-        (err: unknown) => err,
-      );
+      ).catch((err: unknown) => err);
       expect(error).toBeInstanceOf(Error);
       expect((error as Error).message).toBe(
         `browser proxy file read failed for ${secondPath}: Error: browser proxy files exceed 16 MiB aggregate limit`,
@@ -702,6 +613,25 @@ describe("runBrowserProxyCommand", () => {
     await expect(
       runBrowserProxyCommand(JSON.stringify({ method: "POST", path: "/act" })),
     ).rejects.toThrow("browser proxy payload exceeds 24 MiB encoded limit");
+  });
+
+  it.each([-1, 0, 1])("enforces the exact quoted payload limit at offset %i", async (delta) => {
+    const prefix = '\0\u0001\b\t\n\f\r"\\/Ω漢🦞\u2028\u2029\ud800a\udc00';
+    const maxBytes = 24 * 1024 * 1024;
+    const overhead = Buffer.byteLength(
+      JSON.stringify(JSON.stringify({ result: { result: prefix } })),
+    );
+    const body = { result: prefix + "a".repeat(maxBytes + delta - overhead) };
+    const expected = JSON.stringify({ result: body });
+    expect(Buffer.byteLength(JSON.stringify(expected))).toBe(maxBytes + delta);
+    dispatcherMocks.dispatch.mockResolvedValueOnce({ status: 200, body });
+
+    const result = runBrowserProxyCommand(JSON.stringify({ method: "POST", path: "/act" }));
+    if (delta > 0) {
+      await expect(result).rejects.toThrow("browser proxy payload exceeds 24 MiB encoded limit");
+    } else {
+      await expect(result).resolves.toBe(expected);
+    }
   });
 
   it("adds profile and browser status details on ws-backed timeouts", async () => {
@@ -937,7 +867,7 @@ describe("runBrowserProxyCommand", () => {
       }),
     );
 
-    const request = firstBrowserDispatchRequest();
+    const request = firstBrowserDispatchRequest(dispatcherMocks.dispatch.mock.calls);
     expect(request.path).toBe("/snapshot");
   });
 
@@ -993,39 +923,23 @@ describe("runBrowserProxyCommand", () => {
     expect(dispatcherMocks.dispatch).not.toHaveBeenCalled();
   });
 
-  it("rejects persistent profile deletion when allowProfiles is configured", async () => {
+  it.each([
+    { name: "deletion", request: { method: "DELETE", path: "/profiles/poc" } },
+    {
+      name: "reset",
+      request: {
+        method: "POST",
+        path: "/reset-profile",
+        body: { profile: "openclaw", name: "openclaw" },
+      },
+    },
+  ])("rejects persistent profile $name when allowProfiles is configured", async ({ request }) => {
     configMocks.loadConfig.mockReturnValue({
       browser: {},
       nodeHost: { browserProxy: { enabled: true, allowProfiles: ["openclaw"] } },
     });
-
     await expect(
-      runBrowserProxyCommand(
-        JSON.stringify({
-          method: "DELETE",
-          path: "/profiles/poc",
-          timeoutMs: 50,
-        }),
-      ),
-    ).rejects.toThrow("INVALID_REQUEST: browser.proxy cannot mutate persistent browser profiles");
-    expect(dispatcherMocks.dispatch).not.toHaveBeenCalled();
-  });
-
-  it("rejects persistent profile reset when allowProfiles is configured", async () => {
-    configMocks.loadConfig.mockReturnValue({
-      browser: {},
-      nodeHost: { browserProxy: { enabled: true, allowProfiles: ["openclaw"] } },
-    });
-
-    await expect(
-      runBrowserProxyCommand(
-        JSON.stringify({
-          method: "POST",
-          path: "/reset-profile",
-          body: { profile: "openclaw", name: "openclaw" },
-          timeoutMs: 50,
-        }),
-      ),
+      runBrowserProxyCommand(JSON.stringify({ ...request, timeoutMs: 50 })),
     ).rejects.toThrow("INVALID_REQUEST: browser.proxy cannot mutate persistent browser profiles");
     expect(dispatcherMocks.dispatch).not.toHaveBeenCalled();
   });
@@ -1049,7 +963,7 @@ describe("runBrowserProxyCommand", () => {
       }),
     );
 
-    const request = firstBrowserDispatchRequest();
+    const request = firstBrowserDispatchRequest(dispatcherMocks.dispatch.mock.calls);
     expect(request.path).toBe("/stop");
     expect(request.query).toEqual({ profile: "openclaw" });
   });

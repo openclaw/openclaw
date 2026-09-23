@@ -1,7 +1,5 @@
-import {
-  isFastModeAutoProgressPayload,
-  resolveSendableOutboundReplyParts,
-} from "openclaw/plugin-sdk/reply-payload";
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 import { shouldSuppressLocalExecApprovalPrompt } from "../../channels/plugins/exec-approval-local.js";
 import { type AgentPlanStep, formatPlanChecklistLines } from "../../channels/streaming.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
@@ -53,7 +51,11 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
   }
 
   let didSendPlanStatusNotice = false;
-  const formatPlanUpdateText = (payload: { explanation?: string; steps?: AgentPlanStep[] }) => {
+  const formatPlanUpdateText = (payload: {
+    explanation?: string;
+    explanationFormat?: "plain";
+    steps?: AgentPlanStep[];
+  }) => {
     const explanation = payload.explanation?.replace(/\s+/g, " ").trim();
     const steps = (payload.steps ?? [])
       .map((entry) => ({ step: entry.step.replace(/\s+/g, " ").trim(), status: entry.status }))
@@ -64,10 +66,14 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
         maxLineChars: 120,
       }).join("\n");
     }
-    return explanation || "Planning next steps.";
+    // Generic notices retain their shipped receipt; prepared notes belong to literal-capable drafts.
+    return payload.explanationFormat === "plain"
+      ? "Progress updated"
+      : explanation || "Planning next steps.";
   };
   const sendPlanUpdate = async (payload: {
     explanation?: string;
+    explanationFormat?: "plain";
     steps?: AgentPlanStep[];
   }): Promise<void> => {
     if (
@@ -129,9 +135,6 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
       return payload;
     }
     if (hasAskUserPayload(payload)) {
-      return payload;
-    }
-    if (isFastModeAutoProgressPayload(payload)) {
       return payload;
     }
     // Group/native flows intentionally suppress tool summary text, but media-only
@@ -267,6 +270,25 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     };
   };
 
+  const reasoningCallback = params.replyOptions?.onReasoningStream;
+  const onReasoningStream = reasoningCallback
+    ? wrapProgressCallback(
+        (payload: Parameters<NonNullable<GetReplyOptions["onReasoningStream"]>>[0]) => {
+          // Preview callbacks bypass queued delivery. Clean the outward snapshot,
+          // not provider reasoning or the archived source used for replay.
+          const text = sanitizeUserFacingText(payload.text, {
+            conversationContext: ctx.BodyForAgent ?? ctx.Body,
+            streaming: true,
+          });
+          const visible = { ...payload, text };
+          if (!text.trim() && !resolveSendableOutboundReplyParts(visible).hasMedia) {
+            return false;
+          }
+          return reasoningCallback(visible);
+        },
+      )
+    : undefined;
+
   // Snapshot verbose progress visibility for this run: commentary
   // classification in the CLI runners is wired once at run start, so a
   // mid-run verbose toggle cannot move inter-tool commentary between lanes.
@@ -360,6 +382,7 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     shouldForwardProgressCallback,
     preserveProgressCallbackStartOrder,
     wrapProgressCallback,
+    onReasoningStream,
     deliverStandaloneCommentaryProgress,
     canForwardSuppressedSourceItemEvents,
     onItemEvent,

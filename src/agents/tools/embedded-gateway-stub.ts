@@ -9,6 +9,7 @@ import type {
   SessionsResolveParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
+import type { SessionRowProjection } from "../../gateway/session-row-projection.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { parseAgentSessionKey, scopeLegacySessionKeyToAgent } from "../../routing/session-key.js";
 import {
@@ -24,6 +25,28 @@ const SESSIONS_SEARCH_MAX_QUERY_CHARS = 4096;
 type EmbeddedGatewayRuntime = typeof import("./embedded-gateway-stub.runtime.js");
 
 let runtimeMod: EmbeddedGatewayRuntime | undefined;
+let sessionProjection: Promise<SessionRowProjection> | undefined;
+
+export function bindEmbeddedSessionRowProjection(projection: Promise<SessionRowProjection>) {
+  sessionProjection = projection;
+  return () => {
+    if (sessionProjection === projection) {
+      sessionProjection = undefined;
+    }
+  };
+}
+
+async function borrowSessionRowProjection() {
+  const publication = sessionProjection;
+  if (!publication) {
+    throw new Error("Embedded session projection is unavailable");
+  }
+  const projection = await publication;
+  if (sessionProjection !== publication) {
+    throw new Error("Embedded session projection is unavailable");
+  }
+  return projection;
+}
 
 async function getRuntime(): Promise<EmbeddedGatewayRuntime> {
   if (!runtimeMod) {
@@ -43,26 +66,16 @@ function readOffsetParam(params: Record<string, unknown>): number | undefined {
 
 async function handleSessionsList(params: Record<string, unknown>) {
   const rt = await getRuntime();
-  const cfg = rt.getRuntimeConfig();
-  const opts = params as SessionsListParams;
-  const { storePath, store, targetsBySessionKey } = rt.loadCombinedSessionStoreForGatewayCore(cfg, {
-    agentId: opts.agentId,
-    projection: "list",
-  });
-  return rt.listSessionsFromStoreAsync({
-    cfg,
-    storePath,
-    store,
-    targetsBySessionKey,
-    opts,
+  return rt.listProjectedSessions({
+    projection: await borrowSessionRowProjection(),
+    opts: params as SessionsListParams,
   });
 }
 
 async function handleSessionsResolve(params: Record<string, unknown>) {
   const rt = await getRuntime();
-  const cfg = rt.getRuntimeConfig();
-  const resolved = await rt.resolveSessionKeyFromResolveParams({
-    cfg,
+  const resolved = rt.resolveSessionKeyFromResolveParams({
+    projection: await borrowSessionRowProjection(),
     client: null,
     p: params as SessionsResolveParams,
   });
@@ -127,7 +140,7 @@ async function handleSessionsSearch(params: Record<string, unknown>) {
     requestedAgentId ??
     agentIds.values().next().value ??
     rt.resolveSessionAgentId({ sessionKey: "main", config: cfg });
-  const result = rt.searchSessionTranscripts({
+  const result = await rt.searchSessionTranscripts({
     agentId,
     storePath: rt.resolveSessionStorePathCore(cfg.session?.store, { agentId }),
     query,
@@ -136,6 +149,9 @@ async function handleSessionsSearch(params: Record<string, unknown>) {
   });
   return {
     results: result.hits,
+    ...(result.archivedTranscriptsExcluded
+      ? { archivedTranscriptsExcluded: result.archivedTranscriptsExcluded }
+      : {}),
     ...(result.indexing ? { indexing: true } : {}),
     ...(result.truncated ? { truncated: true } : {}),
   };
@@ -210,7 +226,7 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
   const requested = typeof limit === "number" ? limit : defaultLimit;
   const max = Math.min(hardMax, requested);
   const maxHistoryBytes = rt.getMaxChatHistoryMessagesBytes();
-  const effectiveMaxChars = rt.resolveEffectiveChatHistoryMaxChars(cfg);
+  const effectiveMaxChars = rt.resolveEffectiveChatHistoryMaxChars();
   const page = await rt.readChatHistoryPage({
     entry: historyEntry,
     provider: resolvedSessionModel.provider,
@@ -248,10 +264,7 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
           totalMessages: pagination.totalMessages,
           offset: pagination.offset,
           rawPageMessages: pagination.rawPageMessages,
-          replayOldestRecord: rt.shouldReplayOldestChatHistoryRecord({
-            projected: page.messages,
-            bounded: capped,
-          }),
+          projected: page.messages,
         })
       : 0;
   const hasMore =

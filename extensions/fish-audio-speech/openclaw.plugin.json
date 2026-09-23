@@ -1,5 +1,6 @@
 {
   "id": "fish-audio-speech",
+  "categories": ["voice"],
   "capabilityCatalogEntry": "./capability-catalog.ts",
   "legacyPluginIds": ["fish-audio"],
   "activation": {

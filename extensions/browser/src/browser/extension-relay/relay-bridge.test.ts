@@ -8,10 +8,140 @@ import {
   sendHello,
   defaultTabs,
   flush,
+  replyFor,
 } from "./relay-bridge.test-support.js";
 import type { RelayToExtensionMessage } from "./relay-protocol.js";
 
+async function holdCdpCommand(
+  bridge: ExtensionRelayBridge,
+  method: string,
+  params: Record<string, unknown> = {},
+) {
+  const extension = wireExtension(bridge, (message) =>
+    message.type === "cdp" && message.method === method ? null : replyFor(message),
+  );
+  const send = extension.socket.send.bind(extension.socket);
+  extension.socket.send = (raw) => {
+    send(raw);
+    if (JSON.parse(raw).type === "ping") {
+      extension.handlers.onMessage(JSON.stringify({ type: "pong" }));
+    }
+  };
+  sendHello(extension.handlers);
+  const client = new FakeSocket();
+  const cdp = bridge.attachCdpClientSocket(client);
+  cdp.onMessage(
+    JSON.stringify({ id: 1, method: "Target.setAutoAttach", params: { autoAttach: true } }),
+  );
+  await vi.advanceTimersByTimeAsync(0);
+  const sessionId = asOptionalRecord(
+    client.frames().find((frame) => frame.method === "Target.attachedToTarget")?.params,
+  )?.sessionId;
+  cdp.onMessage(JSON.stringify({ id: 2, sessionId, method, params }));
+  return { extension, client, cdp, sessionId };
+}
+
 describe("ExtensionRelayBridge", () => {
+  it.each(["Runtime.callFunctionOn", "Runtime.evaluate", "Runtime.awaitPromise"])(
+    "lets an awaited %s reply finish after the ordinary command deadline",
+    async (method) => {
+      vi.useFakeTimers();
+      const bridge = new ExtensionRelayBridge();
+      try {
+        const { extension, client } = await holdCdpCommand(bridge, method, { awaitPromise: true });
+        await vi.advanceTimersByTimeAsync(17_000);
+        expect(client.frames().find((frame) => frame.id === 2)).toBeUndefined();
+        const command = extension.socket
+          .frames()
+          .find((frame) => frame.type === "cdp" && frame.method === method);
+        extension.handlers.onMessage(
+          JSON.stringify({
+            type: "result",
+            seq: command?.seq,
+            result: { result: { value: true } },
+          }),
+        );
+        await vi.advanceTimersByTimeAsync(0);
+        expect(client.frames().find((frame) => frame.id === 2)).toMatchObject({
+          result: { result: { value: true } },
+        });
+      } finally {
+        bridge.dispose();
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.each(["Page.getFrameTree", "Runtime.evaluate", "Runtime.callFunctionOn"])(
+    "keeps the ordinary command deadline for %s without an awaited promise",
+    async (method) => {
+      vi.useFakeTimers();
+      const bridge = new ExtensionRelayBridge();
+      try {
+        const { client } = await holdCdpCommand(bridge, method);
+        await vi.advanceTimersByTimeAsync(15_000);
+        expect(client.frames().find((frame) => frame.id === 2)).toMatchObject({
+          error: { message: "extension relay command timed out: cdp" },
+        });
+      } finally {
+        bridge.dispose();
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("bounds awaited Runtime work beyond the maximum supported action wait", async () => {
+    vi.useFakeTimers();
+    const bridge = new ExtensionRelayBridge();
+    try {
+      const { client } = await holdCdpCommand(bridge, "Runtime.callFunctionOn", {
+        awaitPromise: true,
+      });
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(client.frames().find((frame) => frame.id === 2)).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(client.frames().find((frame) => frame.id === 2)).toMatchObject({
+        error: { message: "extension relay command timed out: cdp" },
+      });
+      expect(bridge.extensionConnected).toBe(true);
+    } finally {
+      bridge.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(["detach", "heartbeat"])("retires an awaited Runtime reply on %s loss", async (loss) => {
+    vi.useFakeTimers();
+    const bridge = new ExtensionRelayBridge();
+    try {
+      const { client, extension, cdp, sessionId } = await holdCdpCommand(
+        bridge,
+        "Runtime.callFunctionOn",
+        { awaitPromise: true },
+      );
+      await vi.advanceTimersByTimeAsync(17_000);
+      expect(client.frames().find((frame) => frame.id === 2)).toBeUndefined();
+      if (loss === "detach") {
+        cdp.onMessage(
+          JSON.stringify({ id: 3, method: "Target.detachFromTarget", params: { sessionId } }),
+        );
+        await vi.advanceTimersByTimeAsync(0);
+        expect(client.frames().find((frame) => frame.id === 3)).toMatchObject({ result: {} });
+      } else {
+        extension.socket.send = (raw) => FakeSocket.prototype.send.call(extension.socket, raw);
+        await vi.advanceTimersByTimeAsync(43_000);
+        expect(bridge.extensionConnected).toBe(false);
+      }
+      expect(client.frames().find((frame) => frame.id === 2)).toMatchObject({
+        error: {
+          message: loss === "detach" ? "Physical session detached" : "extension disconnected",
+        },
+      });
+    } finally {
+      bridge.dispose();
+      vi.useRealTimers();
+    }
+  });
   it("notifies connection waiters only after an authenticated valid hello", async () => {
     vi.useFakeTimers();
     const bridge = new ExtensionRelayBridge();
@@ -539,103 +669,6 @@ describe("ExtensionRelayBridge", () => {
     expect(bridge.extensionConnected).toBe(false);
   });
 
-  it("repairs reconnect attach without undoing a later explicit detach", async () => {
-    const bridge = new ExtensionRelayBridge();
-    const initialSocket = new FakeSocket();
-    const initial = bridge.attachExtensionSocket(initialSocket);
-    sendHello(initial);
-
-    const client = new FakeSocket();
-    const cdp = bridge.attachCdpClientSocket(client);
-    cdp.onMessage(
-      JSON.stringify({ id: 1, method: "Target.setAutoAttach", params: { autoAttach: true } }),
-    );
-    expect(initialSocket.frames().filter((frame) => frame.type === "attach")).toHaveLength(1);
-
-    const replacement = wireExtension(bridge);
-    sendHello(replacement.handlers);
-    await flush();
-
-    expect(replacement.socket.frames().filter((frame) => frame.type === "attach")).toEqual([
-      expect.objectContaining({ tabId: 1 }),
-    ]);
-    cdp.onMessage(JSON.stringify({ id: 2, method: "Target.getTargets" }));
-    await flush();
-    expect(client.frames().find((frame) => frame.id === 2)?.result).toMatchObject({
-      targetInfos: [expect.objectContaining({ targetId: "target-1" })],
-    });
-
-    const attached = client
-      .frames()
-      .findLast((frame) => frame.method === "Target.attachedToTarget");
-    const sessionId = (attached?.params as { sessionId?: string } | undefined)?.sessionId;
-    expect(typeof sessionId).toBe("string");
-    cdp.onMessage(
-      JSON.stringify({ id: 3, method: "Target.detachFromTarget", params: { sessionId } }),
-    );
-    await flush();
-    const afterDetach = wireExtension(bridge);
-    sendHello(afterDetach.handlers, [
-      { tabId: 1, url: "https://example.com", title: "Updated", active: true },
-    ]);
-    await flush();
-
-    expect(afterDetach.socket.frames().filter((frame) => frame.type === "attach")).toHaveLength(0);
-    cdp.onMessage(JSON.stringify({ id: 4, method: "Target.getTargets" }));
-    await flush();
-    expect(client.frames().find((frame) => frame.id === 4)).toMatchObject({
-      error: { message: expect.stringMatching(/target identit.*unavailable/i) },
-    });
-  });
-
-  it("does not project a disconnected zero-tab extension as authoritative empty", async () => {
-    const bridge = new ExtensionRelayBridge();
-    const extension = wireExtension(bridge);
-    sendHello(extension.handlers, []);
-    extension.handlers.onClose();
-    const client = new FakeSocket();
-    const cdp = bridge.attachCdpClientSocket(client);
-
-    cdp.onMessage(JSON.stringify({ id: 1, method: "Target.getTargets" }));
-    await flush();
-
-    expect(client.frames().find((frame) => frame.id === 1)).toMatchObject({
-      error: { message: expect.stringMatching(/extension.*disconnected/i) },
-    });
-  });
-
-  it("does not project a mixed attached target list as authoritative", async () => {
-    const bridge = new ExtensionRelayBridge();
-    const extension = wireExtension(bridge);
-    sendHello(extension.handlers);
-    const client = new FakeSocket();
-    const cdp = bridge.attachCdpClientSocket(client);
-    cdp.onMessage(
-      JSON.stringify({ id: 1, method: "Target.setAutoAttach", params: { autoAttach: true } }),
-    );
-    await flush();
-    cdp.onMessage(
-      JSON.stringify({ id: 2, method: "Target.setAutoAttach", params: { autoAttach: false } }),
-    );
-    extension.handlers.onMessage(
-      JSON.stringify({
-        type: "tabs",
-        tabs: [
-          { tabId: 1, url: "https://one.example", title: "One", active: true },
-          { tabId: 2, url: "https://two.example", title: "Two", active: false },
-        ],
-      }),
-    );
-    await flush();
-
-    cdp.onMessage(JSON.stringify({ id: 3, method: "Target.getTargets" }));
-    await flush();
-
-    expect(client.frames().find((frame) => frame.id === 3)).toMatchObject({
-      error: { message: expect.stringMatching(/target identit.*unavailable/i) },
-    });
-  });
-
   it("reports malformed CDP client JSON instead of leaving the client waiting", () => {
     const bridge = new ExtensionRelayBridge();
     const client = new FakeSocket();
@@ -908,6 +941,35 @@ describe("ExtensionRelayBridge", () => {
     expect(bridge.devtoolsTargetDescriptors()[0]).toMatchObject({ id: "target-1", type: "page" });
   });
 
+  it("rejects a stale cached identity when detached-target repair fails", async () => {
+    const bridge = new ExtensionRelayBridge();
+    let attachAttempts = 0;
+    const extension = wireExtension(bridge, (message) => {
+      if (message.type === "attach" && attachAttempts++ > 0) {
+        return { type: "error", seq: message.seq, message: "replacement target unavailable" };
+      }
+      return replyFor(message);
+    });
+    sendHello(extension.handlers);
+    const client = new FakeSocket();
+    const cdp = bridge.attachCdpClientSocket(client);
+    cdp.onMessage(
+      JSON.stringify({ id: 1, method: "Target.setAutoAttach", params: { autoAttach: true } }),
+    );
+    await flush();
+    extension.handlers.onMessage(
+      JSON.stringify({ type: "detached", tabId: 1, reason: "renderer replaced" }),
+    );
+
+    cdp.onMessage(JSON.stringify({ id: 2, method: "Target.getTargets" }));
+    await flush();
+
+    expect(extension.socket.frames().filter((frame) => frame.type === "attach")).toHaveLength(2);
+    expect(client.frames().find((frame) => frame.id === 2)).toMatchObject({
+      error: { message: expect.stringMatching(/target identit.*unavailable/i) },
+    });
+  });
+
   it("keeps operation identity on the same granted tab across renderer reattachment", async () => {
     const bridge = new ExtensionRelayBridge();
     try {
@@ -928,7 +990,8 @@ describe("ExtensionRelayBridge", () => {
         });
       };
       sendHello(extension.handlers);
-      const cdp = bridge.attachCdpClientSocket(new FakeSocket());
+      const client = new FakeSocket();
+      const cdp = bridge.attachCdpClientSocket(client);
       cdp.onMessage(
         JSON.stringify({ id: 1, method: "Target.setAutoAttach", params: { autoAttach: true } }),
       );
@@ -941,11 +1004,10 @@ describe("ExtensionRelayBridge", () => {
       );
       expect(resolveTarget?.()).toBeUndefined();
       targetId = "replacement-target";
-      cdp.onMessage(
-        JSON.stringify({ id: 2, method: "Target.setAutoAttach", params: { autoAttach: true } }),
-      );
+      cdp.onMessage(JSON.stringify({ id: 2, method: "Target.getTargets" }));
       await flush();
 
+      expect(client.frames().find((frame) => frame.id === 2)?.error).toBeUndefined();
       expect(resolveTarget?.()).toBe("replacement-target");
     } finally {
       bridge.dispose();

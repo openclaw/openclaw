@@ -9,6 +9,8 @@ import { withTimeout } from "../utils/with-timeout.js";
 import { CronService } from "./service.js";
 import { writeCronStoreSnapshot } from "./service.test-harness.js";
 import { getSuspensionVisibleCronTaskRunCount } from "./service/active-run-cancellation.js";
+import * as scheduleMaintenance from "./service/schedule-maintenance.js";
+import { loadCronStore } from "./store.js";
 import type { CronJob } from "./types.js";
 
 const sqliteTransactionLabels = vi.hoisted(() => [] as string[]);
@@ -131,9 +133,11 @@ describe("CronService read ops while job is running", () => {
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
 
+    const maintenance = vi.spyOn(scheduleMaintenance, "recomputeUnownedCronSchedules");
     try {
       await cron.start();
       sqliteTransactionLabels.length = 0;
+      maintenance.mockClear();
 
       await cron.status();
       await cron.list({ includeDisabled: true });
@@ -143,7 +147,9 @@ describe("CronService read ops while job is running", () => {
       expect(
         sqliteTransactionLabels.filter((label) => label === "cron.schedule-unowned"),
       ).toHaveLength(0);
+      expect(maintenance).not.toHaveBeenCalled();
     } finally {
+      maintenance.mockRestore();
       cron.stop();
       await store.cleanup();
     }
@@ -164,6 +170,7 @@ describe("CronService read ops while job is running", () => {
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
 
+    const maintenance = vi.spyOn(scheduleMaintenance, "recomputeUnownedCronSchedules");
     try {
       sqliteTransactionLabels.length = 0;
       await expect(cron.readJob(job.id)).resolves.toMatchObject({
@@ -171,8 +178,13 @@ describe("CronService read ops while job is running", () => {
       });
       expect(
         sqliteTransactionLabels.filter((label) => label === "cron.schedule-unowned"),
-      ).toHaveLength(1);
+      ).toHaveLength(0);
+      expect(maintenance).toHaveBeenCalledOnce();
+      expect((await loadCronStore(store.storePath)).jobs[0]?.state.nextRunAtMs).toBe(
+        nowMs + 60_000,
+      );
     } finally {
+      maintenance.mockRestore();
       cron.stop();
       await store.cleanup();
     }

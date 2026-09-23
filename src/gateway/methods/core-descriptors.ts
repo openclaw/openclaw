@@ -1,15 +1,7 @@
-// Core gateway method descriptors keep handler names, auth scopes, startup availability, and write policy in one table.
-import type { OperatorScope } from "../operator-scopes.js";
-import { isCoreGatewayMethodProfileDependent } from "./core-profile-access.js";
-import {
-  DYNAMIC_GATEWAY_METHOD_SCOPE,
-  NODE_GATEWAY_METHOD_SCOPE,
-  type GatewayMethodDescriptorInput,
-  type GatewayMethodHandler,
-  type GatewayMethodScope,
-} from "./descriptor.js";
+// Canonical append-only method table; derived lookup and dispatch policy lives in core-method-policy.ts.
+import type { GatewayMethodScope } from "./descriptor.js";
 
-type CoreGatewayMethodSpec = {
+export type CoreGatewayMethodSpec = {
   name: string;
   family?: string;
   scope: GatewayMethodScope;
@@ -21,7 +13,6 @@ type CoreGatewayMethodSpec = {
   description?: string;
 };
 
-type CoreGatewayMethodMetadata = Pick<CoreGatewayMethodSpec, "name" | "scope" | "since">;
 type CoreGatewayMethodPolicy = Pick<
   CoreGatewayMethodSpec,
   "advertise" | "startup" | "controlPlaneWrite" | "compatibilityRestored" | "description"
@@ -37,7 +28,7 @@ const CONTROL_PLANE_WRITE = { controlPlaneWrite: true } as const;
 
 // This is the canonical core method policy table: every core handler must appear here so
 // listing, authorization, startup availability, and write throttling stay in sync.
-const CORE_GATEWAY_METHOD_SPECS = [
+export const CORE_GATEWAY_METHOD_SPECS = [
   ["health", "health", "operator.read", "<=2026.7"],
   ["diagnostics.stability", "diagnostics", "operator.read", "<=2026.7"],
   ["doctor.memory.status", "doctor", "operator.read", "<=2026.7"],
@@ -168,7 +159,7 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["taskSuggestions.create", "task-suggestions", "operator.write", "<=2026.7"],
   ["taskSuggestions.accept", "task-suggestions", "operator.admin", "<=2026.7"],
   ["taskSuggestions.dismiss", "task-suggestions", "operator.write", "<=2026.7"],
-  ["environments.list", "environments", "operator.read", "2026.7"],
+  ["environments.list", "environments", "dynamic", "2026.7"],
   ["environments.status", "environments", "operator.read", "2026.7"],
   ["worktrees.list", "worktrees", "operator.read", "2026.7"],
   // Read-only git probe, but it accepts arbitrary host paths; keep it at the
@@ -243,9 +234,6 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["sessions.viewers.set", "sessions-subscriptions", "operator.read", "2026.7"],
   ["sessions.preview", "sessions-read", "operator.read", "<=2026.7"],
   ["sessions.describe", "sessions-read", "operator.read", "<=2026.7"],
-  ["sessions.compaction.list", "sessions-compaction-queries", "operator.read", "<=2026.7"],
-  ["sessions.compaction.branch", "sessions-compaction-checkpoints", "operator.write", "<=2026.7"],
-  ["sessions.compaction.restore", "sessions-compaction-checkpoints", "operator.admin", "<=2026.7"],
   ["sessions.branches.list", "sessions-rewind", "operator.read", "<=2026.7"],
   ["sessions.branches.switch", "sessions-rewind", "operator.admin", "<=2026.7"],
   ["sessions.rewind", "sessions-rewind", "operator.admin", "<=2026.7"],
@@ -357,7 +345,7 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["chat.metadata", "chat", "operator.read", "<=2026.7", { startup: true }],
   ["chat.message.get", "chat", "operator.read", "<=2026.7", { startup: true }],
   ["chat.abort", "chat-abort", "operator.write", "<=2026.7"],
-  ["chat.send", "chat", "operator.write", "<=2026.7", { startup: true }],
+  ["chat.send", "chat-send", "operator.write", "<=2026.7", { startup: true }],
   // Operator terminal: admin-only PTY surface. Appended to the advertised block
   // so existing advertised method indices stay stable for older clients.
   ["terminal.open", "terminal", "operator.admin", "2026.7"],
@@ -419,7 +407,7 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["plugins.install", "plugins-mutations", "operator.admin", "<=2026.7", CONTROL_PLANE_WRITE],
   ["plugins.setEnabled", "plugins-mutations", "operator.admin", "<=2026.7", CONTROL_PLANE_WRITE],
   ["plugins.uninstall", "plugins-mutations", "operator.admin", "<=2026.7", CONTROL_PLANE_WRITE],
-  ["plugins.refresh", "plugins", "operator.admin", "<=2026.7", CONTROL_PLANE_WRITE],
+  ["plugins.refresh", "plugins-mutations", "operator.admin", "<=2026.7", CONTROL_PLANE_WRITE],
   // Session PR chips read the session's own checkout metadata, matching the
   // sessions.files.* trusted-operator read domain.
   ["controlUi.sessionPullRequests.subscribe", "control-ui", "operator.read", "2026.7"],
@@ -580,7 +568,13 @@ const CORE_GATEWAY_METHOD_SPECS = [
     "2026.8",
     CONTROL_PLANE_WRITE,
   ],
-  ["sessions.github.publish", "sessions-github", "operator.write", "2026.8", CONTROL_PLANE_WRITE],
+  [
+    "sessions.github.publish",
+    "sessions-github",
+    "operator.sessions.write",
+    "2026.8",
+    CONTROL_PLANE_WRITE,
+  ],
   ["diagnostics.lanes", "diagnostics", "operator.read", "2026.8"],
   // Evidence-aware member projection is additive so legacy method indices and
   // its required `addedBy` response contract remain unchanged.
@@ -634,134 +628,89 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["transcripts.list", "transcripts", "operator.read", "2026.8"],
   ["transcripts.get", "transcripts", "operator.read", "2026.8"],
   ["models.authOrderSet", "models-auth-order", "operator.admin", "2026.8", CONTROL_PLANE_WRITE],
-  ["canvas.document.view", "canvas", "operator.read", "2026.8"],
-  ["plugins.controlUi.list", "plugins-control-ui", "operator.read", "2026.8"],
+  ["canvas.document.view", "canvas", "operator.read", "2026.9"],
+  ["plugins.controlUi.list", "plugins-control-ui", "operator.read", "2026.9"],
   [
     "plugins.controlUi.reload",
     "plugins-control-ui",
     "operator.admin",
-    "2026.8",
+    "2026.9",
     CONTROL_PLANE_WRITE,
   ],
-  ["plugins.controlUi.report", "plugins-control-ui", "operator.read", "2026.8"],
-  ["plugins.controlUi.status", "plugins-control-ui", "operator.admin", "2026.8"],
+  ["plugins.controlUi.report", "plugins-control-ui", "operator.read", "2026.9"],
+  ["plugins.controlUi.status", "plugins-control-ui", "operator.admin", "2026.9"],
   ["update.runs.get", "update", "operator.admin", "2026.9"],
   ["update.runs.list", "update", "operator.admin", "2026.9"],
   ["gateway.suspend.handoff", "suspend", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
+  ["transcripts.export", "transcripts", "operator.read", "2026.9"],
+  ["transcripts.status", "transcripts", "operator.read", "2026.9"],
+  ["update.report", "update", "operator.admin", "2026.9", { controlPlaneWrite: true }],
+  ["skills.workshop.read", "skills", "operator.read", "2026.9"],
+  // Public sharing appends so every previously advertised method index remains stable.
+  ["session.publicShare.set", "sessions-sharing", "operator.write", "2026.9"],
+  ["claws.monitors", "claws-monitors", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
+  ["plugins.catalog.browse", "plugins", "operator.read", "2026.9"],
+  ["plugins.catalog.categories", "plugins", "operator.read", "2026.9"],
+  ["plugins.catalog.get", "plugins", "operator.read", "2026.9"],
+  ["tasks.history", "tasks", "operator.read", "2026.9"],
+  [
+    "environments.prepare",
+    "environments",
+    "operator.admin",
+    "2026.9",
+    { startup: true, controlPlaneWrite: true },
+  ],
+  ["models.authRefresh", "models-auth-status", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
+  ["models.authLogin", "models-auth-login", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
+  ["models.authSetApiKey", "models-auth-status", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
+  ["sessions.storage.status", "sessions-read", "operator.admin", "2026.9"],
+  ["sessions.storage.run", "sessions-read", "operator.admin", "2026.9"],
+  ["plugins.reload", "plugins-mutations", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
+  ["claws.packages.remove", "claws-packages", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
+  ["canvas.document.preview", "canvas", "operator.read", "2026.9"],
+  ["computer.status", "computer", "operator.read", "2026.9"],
+  ["computer.invoke", "computer", "operator.write", "2026.9"],
+  ["sessions.activitySummary.ensure", "session-activity-summary", "operator.write", "2026.9"],
+  ["controlUi.sessionPullRequests.checks", "control-ui", "operator.read", "2026.9"],
+  ["diagnostics.cpuProfile", "diagnostics", "operator.admin", "2026.9"],
+  ["talk.voice.get", "talk", "operator.talk", "2026.9"],
+  ["talk.voice.set", "talk", "operator.talk", "2026.9"],
+  ["talk.voice.complete", "talk", "operator.talk", "2026.9"],
+  ["plugins.credentials.inspect", "plugins", "operator.admin", "2026.9"],
+  // Plugin skill reads append without shifting previously advertised method indices.
+  ["plugins.skills.read", "plugins", "operator.read", "2026.9"],
+  ["diagnostics.heapProfile", "diagnostics", "operator.admin", "2026.9"],
+  ["desktop.release", "environments", "operator.admin", "2026.9", { startup: true }],
+  ["mcp.authLogin", "mcp-auth-login", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
+  ["environments.session.status", "environments", "operator.read", "2026.9"],
+  [
+    "environments.session.create",
+    "environments",
+    "operator.admin",
+    "2026.9",
+    { controlPlaneWrite: true },
+  ],
+  [
+    "environments.session.destroy",
+    "environments",
+    "operator.admin",
+    "2026.9",
+    { controlPlaneWrite: true },
+  ],
+  ["environments.session.exec", "environments", "operator.admin", "2026.9"],
+  ["sessions.setInvolvement", "sessions-mutations", "operator.read", "2026.9"],
+  ["transcripts.summarize", "transcripts", "operator.write", "2026.9"],
+  ["controlUi.linkPreview", "control-ui", "operator.read", "2026.9"],
+  ["themes.list", "themes", "operator.read", "2026.9"],
+  ["themes.get", "themes", "operator.read", "2026.9"],
+  ["themes.set", "themes", "operator.write", "2026.9"],
+  ["themes.import", "themes", "operator.write", "2026.9"],
+  ["controlUi.githubDetail", "control-ui", "operator.read", "2026.9"],
+  ["progressCard.refresh", "progress-card", "operator.write", "2026.9"],
+  ["webSearch.status", "web-search", "operator.read", "2026.9"],
+  ["webSearch.test", "web-search", "operator.admin", "2026.9"],
+  ["sessions.providerReview.continue", "sessions-provider-review", "operator.write", "2026.9"],
+  ["users.linkChannelIdentity", "users", "operator.admin", "2026.9"],
+  ["users.unlinkChannelIdentity", "users", "operator.admin", "2026.9"],
+  ["users.listChannelIdentities", "users", "operator.admin", "2026.9"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];
-
-export type CoreGatewayHandlerFamily = Exclude<(typeof CORE_GATEWAY_METHOD_SPECS)[number][1], null>;
-
-// Rows are `as const`, so a present policy flag is already the exact literal the spec allows.
-const CORE_GATEWAY_METHOD_SPEC_LIST: readonly CoreGatewayMethodSpec[] =
-  CORE_GATEWAY_METHOD_SPECS.map(([name, family, scope, since, policy]) => {
-    const spec: CoreGatewayMethodSpec = { name, scope, since };
-    if (family) {
-      spec.family = family;
-    }
-    return Object.assign(spec, policy);
-  });
-
-const CORE_GATEWAY_METHOD_SPEC_BY_NAME: ReadonlyMap<string, CoreGatewayMethodSpec> = new Map(
-  CORE_GATEWAY_METHOD_SPEC_LIST.map((spec) => [spec.name, spec]),
-);
-
-/** Core methods that are listed early but return retryable unavailable until sidecars are ready. */
-export const STARTUP_UNAVAILABLE_GATEWAY_METHODS = CORE_GATEWAY_METHOD_SPEC_LIST.filter(
-  (spec) => spec.startup === true,
-).map((spec) => spec.name);
-
-/** Returns the core methods that should be advertised to external gateway clients. */
-export function listCoreAdvertisedGatewayMethodNames(): string[] {
-  return CORE_GATEWAY_METHOD_SPEC_LIST.filter((spec) => spec.advertise !== false).map(
-    (spec) => spec.name,
-  );
-}
-
-/** Returns all registered core method names, including hidden/internal compatibility methods. */
-export function listCoreGatewayMethodNames(): string[] {
-  return CORE_GATEWAY_METHOD_SPEC_LIST.map((spec) => spec.name);
-}
-
-/** Returns the public metadata emitted for every core gateway method. */
-export function listCoreGatewayMethodMetadata(): readonly CoreGatewayMethodMetadata[] {
-  return CORE_GATEWAY_METHOD_SPEC_LIST.map(({ name, scope, since }) => ({ name, scope, since }));
-}
-
-/** Groups lazy-owned core methods by the module family that dispatches them. */
-export function listCoreGatewayHandlerMethodNames(): ReadonlyMap<
-  CoreGatewayHandlerFamily,
-  readonly string[]
-> {
-  const methodsByFamily = new Map<CoreGatewayHandlerFamily, string[]>();
-  for (const [name, family] of CORE_GATEWAY_METHOD_SPECS) {
-    if (!family) {
-      continue;
-    }
-    const methods = methodsByFamily.get(family) ?? [];
-    methods.push(name);
-    methodsByFamily.set(family, methods);
-  }
-  return methodsByFamily;
-}
-
-/** Looks up the raw core method scope, including node and dynamic sentinel scopes. */
-function resolveCoreGatewayMethodScope(method: string): GatewayMethodScope | undefined {
-  return CORE_GATEWAY_METHOD_SPEC_BY_NAME.get(method)?.scope;
-}
-
-/** Looks up an operator-only core method scope, excluding node and dynamic methods. */
-export function resolveCoreOperatorGatewayMethodScope(method: string): OperatorScope | undefined {
-  const scope = resolveCoreGatewayMethodScope(method);
-  return scope === NODE_GATEWAY_METHOD_SCOPE || scope === DYNAMIC_GATEWAY_METHOD_SCOPE
-    ? undefined
-    : scope;
-}
-
-/** Returns true for core methods reserved for authenticated node clients. */
-export function isCoreNodeGatewayMethod(method: string): boolean {
-  return resolveCoreGatewayMethodScope(method) === NODE_GATEWAY_METHOD_SCOPE;
-}
-
-/** Returns true for core methods whose required operator scope is resolved by the handler. */
-export function isDynamicOperatorGatewayMethod(method: string): boolean {
-  return resolveCoreGatewayMethodScope(method) === DYNAMIC_GATEWAY_METHOD_SCOPE;
-}
-
-/** Returns true when a method name has an explicit core policy entry. */
-export function isCoreGatewayMethodClassified(method: string): boolean {
-  return CORE_GATEWAY_METHOD_SPEC_BY_NAME.has(method);
-}
-
-/** Creates dispatch descriptors for core handlers and fails if any handler lacks policy. */
-export function createCoreGatewayMethodDescriptors(
-  handlers: Record<string, GatewayMethodHandler>,
-): GatewayMethodDescriptorInput[] {
-  const descriptors: GatewayMethodDescriptorInput[] = [];
-  for (const spec of CORE_GATEWAY_METHOD_SPEC_LIST) {
-    const handler = handlers[spec.name];
-    if (!handler) {
-      continue;
-    }
-    descriptors.push({
-      name: spec.name,
-      handler,
-      owner: { kind: "core", area: "gateway" },
-      scope: spec.scope,
-      profileAccess: isCoreGatewayMethodProfileDependent(spec.name) ? "required" : "independent",
-      ...(spec.since ? { since: spec.since } : {}),
-      ...(spec.advertise === false ? { advertise: false } : {}),
-      ...(spec.startup === true ? { startup: "unavailable-until-sidecars" } : {}),
-      ...(spec.controlPlaneWrite === true ? { controlPlaneWrite: true } : {}),
-      ...(spec.description ? { description: spec.description } : {}),
-    });
-  }
-  for (const name of Object.keys(handlers)) {
-    if (!CORE_GATEWAY_METHOD_SPEC_BY_NAME.has(name)) {
-      // Unclassified core handlers would bypass scope/startup/write metadata, so fail before the
-      // dispatcher can expose a method with missing policy.
-      throw new Error(`gateway method handler is missing a descriptor: ${name}`);
-    }
-  }
-  return descriptors;
-}

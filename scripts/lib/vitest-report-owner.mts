@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { JsonTestResults } from "vitest/node";
+import { vitestOptionConsumesNextArg } from "./vitest-cli-mode.mts";
 import { parseVitestExecutionArgs } from "./vitest-cli.mts";
 import type { VitestReportCapture } from "./vitest-report-capture.mts";
 
@@ -15,6 +16,7 @@ type Invocation = { config: string; args: string[]; includePatterns?: string[] |
 type Attempt = { json: string; blob: string; outcome?: VitestReportOutcome; error?: string };
 
 const captureReporter = fileURLToPath(new URL("./vitest-report-capture.mts", import.meta.url));
+const reporterConfigModule = new URL("../../test/vitest/vitest.reporters.ts", import.meta.url).href;
 const consoleReporters = new Set([
   "json",
   "default",
@@ -35,9 +37,7 @@ function withoutOutputArgs(args: string[]) {
       return [...result, ...args.slice(index)];
     }
     if (/^--(?:output(?:File|-file)(?:\.[^=]+)?|coverage\.reportsDirectory)(?:=|$)/u.test(arg)) {
-      if (!arg.includes("=")) {
-        index++;
-      }
+      index += vitestOptionConsumesNextArg(arg, args[index + 1]) ? 1 : 0;
     } else {
       result.push(arg);
     }
@@ -241,8 +241,12 @@ export async function createVitestReportOwner(invocations: Invocation[], cwd: st
           ).values(),
         ].map((project) => {
           assert(typeof project.config === "string", "Missing native project configuration");
-          // Native file-project loading otherwise forces the config's directory as root.
-          return { extends: project.config, root: project.root };
+          assert(typeof project.namePrefix === "string", "Missing native project name prefix");
+          return {
+            config: project.config,
+            root: project.root,
+            namePrefix: project.namePrefix,
+          };
         });
         const blobs = path.join(directory, "accepted-blobs");
         fs.mkdirSync(blobs);
@@ -253,22 +257,25 @@ export async function createVitestReportOwner(invocations: Invocation[], cwd: st
         const config = path.join(directory, "vitest.merge.config.mjs");
         fs.writeFileSync(
           config,
-          `export default ${JSON.stringify({
-            root: cwd,
-            test: {
-              // An omitted list lets native Vitest host a wholly empty blob replay.
-              projects: projectConfigs.length ? projectConfigs : undefined,
-              coverage: { enabled: false },
-              passWithNoTests: captures.every((capture) => capture.passWithNoTests),
-              dangerouslyIgnoreUnhandledErrors: captures.every(
-                (capture) => capture.ignoreUnhandledErrors || capture.ended!.unhandledErrors === 0,
-              ),
-              reporters: [
-                ["json", {}],
-                [captureReporter, { expected: captures }],
-              ],
+          `import { createRedactingReporterPlugin } from ${JSON.stringify(reporterConfigModule)};\nconst config = ${JSON.stringify(
+            {
+              root: cwd,
+              test: {
+                // An omitted list lets native Vitest host a wholly empty blob replay.
+                projects: projectConfigs.length ? projectConfigs : undefined,
+                coverage: { enabled: false },
+                passWithNoTests: captures.every((capture) => capture.passWithNoTests),
+                dangerouslyIgnoreUnhandledErrors: captures.every(
+                  (capture) =>
+                    capture.ignoreUnhandledErrors || capture.ended!.unhandledErrors === 0,
+                ),
+                reporters: [
+                  ["json", {}],
+                  [captureReporter, { expected: captures }],
+                ],
+              },
             },
-          })};\n`,
+          )};\nexport default { ...config, plugins: [createRedactingReporterPlugin()] };\n`,
         );
         const mergeArgs = [
           "run",
@@ -277,6 +284,9 @@ export async function createVitestReportOwner(invocations: Invocation[], cwd: st
           "--config",
           config,
           "--configLoader=runner",
+          // Replay loads project configs but needs no transformed test modules.
+          // A CLI override also prevents their caches invalidating the root cache.
+          "--fsModuleCache=false",
           `--outputFile.json=${staged}`,
         ];
         if (typeof runOptions[0]?.pool === "string") {

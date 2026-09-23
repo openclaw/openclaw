@@ -20,14 +20,14 @@ the package to [ClawHub](/clawhub) and users install it with:
 openclaw plugins install clawhub:<package-name>
 ```
 
-Bare package specs still install from npm during the launch cutover. Use the
-`clawhub:` prefix when you want ClawHub resolution.
+Bare package specs install from npm. Use the `clawhub:` prefix when you want
+ClawHub resolution.
 
 ## Requirements
 
 - All plugin APIs are [experimental](/plugins/sdk-overview#api-stability).
   Pin your OpenClaw host version and test each version you declare compatible.
-- Node 22.22.3+, Node 24.15+, or Node 25.9+, and `npm` or `pnpm`.
+- Node 24.16+ or Node 26.1+, and `npm` or `pnpm`.
 - TypeScript ESM modules.
 - For in-repo bundled plugin work, clone the repository and run `pnpm install`.
   Source-checkout plugin development is pnpm-only because OpenClaw discovers
@@ -69,7 +69,7 @@ local proof.
   "version": "1.0.0",
   "type": "module",
   "dependencies": {
-    "typebox": "1.3.18"
+    "typebox": "1.3.30"
   },
   "peerDependencies": {
     "openclaw": ">=2026.3.24-beta.2"
@@ -93,6 +93,7 @@ local proof.
   "id": "my-plugin",
   "name": "My Plugin",
   "description": "Adds a custom tool to OpenClaw",
+  "categories": ["other"],
   "contracts": {
     "tools": ["my_tool"]
   },
@@ -111,6 +112,11 @@ local proof.
     Published external plugins should point runtime entries at built JavaScript
     files. See [SDK entry points](/plugins/sdk-entrypoints) for the full entry
     point contract.
+
+    Choose one [catalog category](/plugins/manifest#catalog-categories) for the
+    plugin's main user purpose. This generic example uses `other`; a calendar
+    plugin would use `scheduling`, a coding helper would use `developer-tools`,
+    and an agent execution backend would use `agent-runtimes`.
 
     Every plugin needs a manifest, even with no config. Runtime tools must
     appear in `contracts.tools` so OpenClaw can discover ownership without
@@ -218,9 +224,12 @@ local proof.
   </Step>
 
   <Step title="Publish">
-    Validate the package before publishing:
+    Publishing uses the separate `clawhub` CLI. Install and sign in first, then
+    validate the package before publishing:
 
     ```bash
+    npm i -g clawhub
+    clawhub login
     clawhub package publish your-org/your-plugin --dry-run
     clawhub package publish your-org/your-plugin
     ```
@@ -238,6 +247,19 @@ local proof.
 
   </Step>
 </Steps>
+
+## Add plugin artwork
+
+Ship `assets/icon.png` for plugin identity in catalogs, settings, and install
+cards. Use a separate monochrome `assets/activity.svg` for compact tool calls
+in chat. Check the activity shape at 16 px in both light and dark themes; avoid
+a filled square behind the mark.
+
+One activity icon covers the plugin. Add `assets/activity/<tool-name>.svg` only
+for tools that need a distinct shape, using their exact `tools.effective` IDs.
+Include the assets in your published package and verify their presence with
+`npm pack --dry-run`. See the [activity icon contract](/plugins/manifest/surfaces#inline-activity-icons)
+for supported SVG geometry, size bounds, and fallback behavior.
 
 <a id="registering-agent-tools"></a>
 
@@ -360,8 +382,12 @@ Custom Gateway RPC methods are an advanced entry point. Keep them on a
 plugin-specific prefix; core admin namespaces such as `config.*`,
 `exec.approvals.*`, `operator.admin.*`, `wizard.*`, and `update.*` stay reserved
 and resolve to `operator.admin`. The
-`openclaw/plugin-sdk/gateway-method-runtime` bridge is reserved for plugin HTTP
-routes that declare `contracts.gatewayMethodDispatch: ["authenticated-request"]`.
+`openclaw/plugin-sdk/gateway-method-runtime` bridge is reserved for authenticated plugin HTTP routes and registered RPC
+handlers that declare `contracts.gatewayMethodDispatch: ["authenticated-request"]`.
+Nested RPC dispatch retains the original authenticated client, live authority
+check, and request-owned cancellation signal. It still checks the target method's
+required scopes and rechecks caller authority at the mutation commit boundary;
+the contract never supplies a synthetic client or additional scopes.
 
 For the full import map, see [Plugin SDK overview](/plugins/sdk-overview).
 
@@ -378,7 +404,7 @@ Oxlint is not type-aware, so it cannot enforce these annotations.
 <Check>Entry point uses `defineChannelPluginEntry` or `definePluginEntry`</Check>
 <Check>All imports use focused `plugin-sdk/<subpath>` paths</Check>
 <Check>Internal imports use local modules, not SDK self-imports</Check>
-<Check>Tests pass (`pnpm test <bundled-plugin-root>/my-plugin/`)</Check>
+<Check>Tests pass (`pnpm test extensions/my-plugin/`)</Check>
 <Check>`pnpm check` passes (in-repo plugins)</Check>
 
 ## Test against beta releases
@@ -420,3 +446,6 @@ Oxlint is not type-aware, so it cannot enforce these annotations.
 
 - [Plugin hooks](/plugins/hooks)
 - [Plugin architecture](/plugins/architecture)
+- [Plugin architecture internals](/plugins/architecture-internals)
+- [Plugin SDK subpaths](/plugins/sdk-subpaths)
+- [Manage plugins](/plugins/manage-plugins)

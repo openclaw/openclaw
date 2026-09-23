@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { bundledPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 
 const {
   detectChangedScope,
@@ -18,7 +19,7 @@ const {
 } = await import("../../scripts/ci-changed-scope.mjs");
 
 const markerPaths: string[] = [];
-const tempDirs: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(() => {
   for (const markerPath of markerPaths) {
@@ -27,10 +28,6 @@ afterEach(() => {
     } catch {}
   }
   markerPaths.length = 0;
-  for (const tempDir of tempDirs) {
-    fs.rmSync(tempDir, { force: true, recursive: true });
-  }
-  tempDirs.length = 0;
 });
 
 function parseGitHubOutput(output: string): Record<string, string> {
@@ -56,8 +53,7 @@ function writeRepoFile(repoDir: string, filePath: string, contents: string): voi
 }
 
 function createSyntheticMergeRepo(prefix: string): { repoDir: string; staleBase: string } {
-  const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-  tempDirs.push(repoDir);
+  const repoDir = tempDirs.make(prefix);
 
   git(repoDir, ["init", "-b", "main"]);
   git(repoDir, ["config", "user.email", "ci@example.invalid"]);
@@ -103,6 +99,32 @@ describe("parseArgs", () => {
 });
 
 describe("detectChangedScope", () => {
+  const expectedNodeOnlyScope = {
+    runNode: true,
+    runMacos: false,
+    runMacosNode: false,
+    runIosBuild: false,
+    runAndroid: false,
+    runWindows: false,
+    runSkillsPython: false,
+    runChangedSmoke: false,
+    runControlUiI18n: false,
+    runUiTests: false,
+  };
+
+  const expectedNodeAndChangedSmokeScope = {
+    runNode: true,
+    runMacos: false,
+    runMacosNode: false,
+    runIosBuild: false,
+    runAndroid: false,
+    runWindows: false,
+    runSkillsPython: false,
+    runChangedSmoke: true,
+    runControlUiI18n: false,
+    runUiTests: false,
+  };
+
   it("routes only native i18n-owned paths to the native inventory job", () => {
     for (const changedPath of [
       "apps/.i18n/native-source.json",
@@ -156,17 +178,13 @@ describe("detectChangedScope", () => {
   });
 
   it("enables node lane for node-relevant files", () => {
-    expect(detectChangedScope(["src/config/defaults.ts"])).toEqual({
-      runNode: true,
-      runMacos: false,
-      runMacosNode: false,
-      runIosBuild: false,
-      runAndroid: false,
-      runWindows: false,
-      runSkillsPython: false,
-      runChangedSmoke: false,
-      runControlUiI18n: false,
-      runUiTests: false,
+    expect(detectChangedScope(["src/config/defaults.ts"])).toEqual(expectedNodeOnlyScope);
+  });
+
+  it("runs Android and Node CI for Android toolchain action changes", () => {
+    expect(detectChangedScope([".github/actions/setup-android-toolchain/action.yml"])).toEqual({
+      ...expectedNodeOnlyScope,
+      runAndroid: true,
     });
   });
 
@@ -255,6 +273,7 @@ describe("detectChangedScope", () => {
       "scripts/format-swift.sh",
       "scripts/install-swift-tools.sh",
       "scripts/install-xcodegen.sh",
+      "scripts/lib/swift-toolchain.sh",
       "scripts/lint-swift.sh",
       "scripts/prepare-apple-mermaid.mjs",
     ]) {
@@ -330,33 +349,11 @@ describe("detectChangedScope", () => {
       runUiTests: false,
     });
 
-    expect(detectChangedScope([".crabbox.yaml"])).toEqual({
-      runNode: true,
-      runMacos: false,
-      runMacosNode: false,
-      runIosBuild: false,
-      runAndroid: false,
-      runWindows: false,
-      runSkillsPython: false,
-      runChangedSmoke: false,
-      runControlUiI18n: false,
-      runUiTests: false,
-    });
+    expect(detectChangedScope([".crabbox.yaml"])).toEqual(expectedNodeOnlyScope);
   });
 
   it("keeps windows lane off for non-runtime GitHub metadata files", () => {
-    expect(detectChangedScope([".github/labeler.yml"])).toEqual({
-      runNode: true,
-      runMacos: false,
-      runMacosNode: false,
-      runIosBuild: false,
-      runAndroid: false,
-      runWindows: false,
-      runSkillsPython: false,
-      runChangedSmoke: false,
-      runControlUiI18n: false,
-      runUiTests: false,
-    });
+    expect(detectChangedScope([".github/labeler.yml"])).toEqual(expectedNodeOnlyScope);
   });
 
   it("runs Python skill tests when skills change", () => {
@@ -408,7 +405,6 @@ describe("detectChangedScope", () => {
     "scripts/codesign-mac-app.sh",
     "scripts/create-dmg.sh",
     "scripts/lib/plistbuddy.sh",
-    "scripts/lib/swift-toolchain.sh",
     "scripts/notarize-mac-artifact.sh",
     "scripts/package-mac-app.sh",
     "scripts/package-mac-dist.sh",
@@ -468,6 +464,8 @@ describe("detectChangedScope", () => {
     ["src/shared/runtime-import.test.ts", true, false],
     ["scripts/npm-runner.mts", true, false],
     ["scripts/lib/format-generated-module.mts", true, false],
+    ["scripts/lib/ci-windows-test-plan.mts", true, false],
+    ["test/scripts/ci-windows-test-plan.test.ts", true, false],
     ["test/scripts/format-generated-module.test.ts", true, false],
     [".github/workflows/openclaw-cross-os-release-checks-reusable.yml", true, false],
     [".github/workflows/windows-testbox-probe.yml", true, false],
@@ -495,213 +493,56 @@ describe("detectChangedScope", () => {
   );
 
   it("runs changed-smoke for install and packaging surfaces", () => {
-    expect(detectChangedScope(["scripts/install.sh"])).toEqual({
-      runNode: true,
-      runMacos: false,
-      runMacosNode: false,
-      runIosBuild: false,
-      runAndroid: false,
-      runWindows: false,
-      runSkillsPython: false,
-      runChangedSmoke: true,
-      runControlUiI18n: false,
-      runUiTests: false,
-    });
-    expect(detectChangedScope(["scripts/install-cli.sh"])).toEqual({
-      runNode: true,
-      runMacos: false,
-      runMacosNode: false,
-      runIosBuild: false,
-      runAndroid: false,
-      runWindows: false,
-      runSkillsPython: false,
-      runChangedSmoke: true,
-      runControlUiI18n: false,
-      runUiTests: false,
-    });
-    expect(detectChangedScope([bundledPluginFile("matrix", "package.json")])).toEqual({
-      runNode: true,
-      runMacos: false,
-      runMacosNode: false,
-      runIosBuild: false,
-      runAndroid: false,
-      runWindows: false,
-      runSkillsPython: false,
-      runChangedSmoke: true,
-      runControlUiI18n: false,
-      runUiTests: false,
-    });
-    expect(detectChangedScope([".github/workflows/install-smoke.yml"])).toEqual({
-      runNode: true,
-      runMacos: false,
-      runMacosNode: false,
-      runIosBuild: false,
-      runAndroid: false,
-      runWindows: false,
-      runSkillsPython: false,
-      runChangedSmoke: true,
-      runControlUiI18n: false,
-      runUiTests: false,
-    });
-    expect(detectChangedScope(["scripts/e2e/qr-import-docker.sh"])).toEqual({
-      runNode: true,
-      runMacos: false,
-      runMacosNode: false,
-      runIosBuild: false,
-      runAndroid: false,
-      runWindows: false,
-      runSkillsPython: false,
-      runChangedSmoke: true,
-      runControlUiI18n: false,
-      runUiTests: false,
-    });
-    expect(detectChangedScope(["scripts/e2e/gateway-network-docker.sh"])).toEqual({
-      runNode: true,
-      runMacos: false,
-      runMacosNode: false,
-      runIosBuild: false,
-      runAndroid: false,
-      runWindows: false,
-      runSkillsPython: false,
-      runChangedSmoke: true,
-      runControlUiI18n: false,
-      runUiTests: false,
-    });
-    expect(detectChangedScope(["scripts/e2e/Dockerfile"])).toEqual({
-      runNode: true,
-      runMacos: false,
-      runMacosNode: false,
-      runIosBuild: false,
-      runAndroid: false,
-      runWindows: false,
-      runSkillsPython: false,
-      runChangedSmoke: true,
-      runControlUiI18n: false,
-      runUiTests: false,
-    });
-    expect(detectChangedScope(["scripts/e2e/agents-delete-shared-workspace-docker.sh"])).toEqual({
-      runNode: true,
-      runMacos: false,
-      runMacosNode: false,
-      runIosBuild: false,
-      runAndroid: false,
-      runWindows: false,
-      runSkillsPython: false,
-      runChangedSmoke: true,
-      runControlUiI18n: false,
-      runUiTests: false,
-    });
-    expect(detectChangedScope(["scripts/e2e/plugin-update-unchanged-docker.sh"])).toEqual({
-      runNode: true,
-      runMacos: false,
-      runMacosNode: false,
-      runIosBuild: false,
-      runAndroid: false,
-      runWindows: false,
-      runSkillsPython: false,
-      runChangedSmoke: false,
-      runControlUiI18n: false,
-      runUiTests: false,
-    });
-    expect(detectChangedScope(["scripts/postinstall-bundled-plugins.mjs"])).toEqual({
-      runNode: true,
-      runMacos: false,
-      runMacosNode: false,
-      runIosBuild: false,
-      runAndroid: false,
-      runWindows: false,
-      runSkillsPython: false,
-      runChangedSmoke: true,
-      runControlUiI18n: false,
-      runUiTests: false,
-    });
-    expect(detectChangedScope(["scripts/ci-changed-scope.mjs"])).toEqual({
-      runNode: true,
-      runMacos: false,
-      runMacosNode: false,
-      runIosBuild: false,
-      runAndroid: false,
-      runWindows: false,
-      runSkillsPython: false,
-      runChangedSmoke: true,
-      runControlUiI18n: false,
-      runUiTests: false,
-    });
+    expect(detectChangedScope(["scripts/install.sh"])).toEqual(expectedNodeAndChangedSmokeScope);
+    expect(detectChangedScope(["scripts/install-cli.sh"])).toEqual(
+      expectedNodeAndChangedSmokeScope,
+    );
+    expect(detectChangedScope([bundledPluginFile("matrix", "package.json")])).toEqual(
+      expectedNodeAndChangedSmokeScope,
+    );
+    expect(detectChangedScope([".github/workflows/install-smoke.yml"])).toEqual(
+      expectedNodeAndChangedSmokeScope,
+    );
+    expect(detectChangedScope(["scripts/e2e/qr-import-docker.sh"])).toEqual(
+      expectedNodeAndChangedSmokeScope,
+    );
+    expect(detectChangedScope(["scripts/e2e/gateway-network-docker.sh"])).toEqual(
+      expectedNodeAndChangedSmokeScope,
+    );
+    expect(detectChangedScope(["scripts/e2e/Dockerfile"])).toEqual(
+      expectedNodeAndChangedSmokeScope,
+    );
+    expect(detectChangedScope(["scripts/e2e/agents-delete-shared-workspace-docker.sh"])).toEqual(
+      expectedNodeAndChangedSmokeScope,
+    );
+    expect(detectChangedScope(["scripts/e2e/plugin-update-unchanged-docker.sh"])).toEqual(
+      expectedNodeOnlyScope,
+    );
+    expect(detectChangedScope(["scripts/postinstall-bundled-plugins.mjs"])).toEqual(
+      expectedNodeAndChangedSmokeScope,
+    );
+    expect(detectChangedScope(["scripts/ci-changed-scope.mjs"])).toEqual(
+      expectedNodeAndChangedSmokeScope,
+    );
   });
 
   it("runs changed-smoke for Docker-covered core runtime surfaces", () => {
-    expect(detectChangedScope(["src/plugins/loader.ts"])).toEqual({
-      runNode: true,
-      runMacos: false,
-      runMacosNode: false,
-      runIosBuild: false,
-      runAndroid: false,
-      runWindows: false,
-      runSkillsPython: false,
-      runChangedSmoke: true,
-      runControlUiI18n: false,
-      runUiTests: false,
-    });
-    expect(detectChangedScope(["src/plugin-sdk/provider-entry.ts"])).toEqual({
-      runNode: true,
-      runMacos: false,
-      runMacosNode: false,
-      runIosBuild: false,
-      runAndroid: false,
-      runWindows: false,
-      runSkillsPython: false,
-      runChangedSmoke: true,
-      runControlUiI18n: false,
-      runUiTests: false,
-    });
-    expect(detectChangedScope(["packages/gateway-protocol/src/schema/messages.ts"])).toEqual({
-      runNode: true,
-      runMacos: false,
-      runMacosNode: false,
-      runIosBuild: false,
-      runAndroid: false,
-      runWindows: false,
-      runSkillsPython: false,
-      runChangedSmoke: true,
-      runControlUiI18n: false,
-      runUiTests: false,
-    });
-    expect(detectChangedScope(["packages/gateway-client/src/client.ts"])).toEqual({
-      runNode: true,
-      runMacos: false,
-      runMacosNode: false,
-      runIosBuild: false,
-      runAndroid: false,
-      runWindows: false,
-      runSkillsPython: false,
-      runChangedSmoke: true,
-      runControlUiI18n: false,
-      runUiTests: false,
-    });
-    expect(detectChangedScope(["src/channels/plugins/catalog.ts"])).toEqual({
-      runNode: true,
-      runMacos: false,
-      runMacosNode: false,
-      runIosBuild: false,
-      runAndroid: false,
-      runWindows: false,
-      runSkillsPython: false,
-      runChangedSmoke: true,
-      runControlUiI18n: false,
-      runUiTests: false,
-    });
-    expect(detectChangedScope([bundledPluginFile("matrix", "index.ts")])).toEqual({
-      runNode: true,
-      runMacos: false,
-      runMacosNode: false,
-      runIosBuild: false,
-      runAndroid: false,
-      runWindows: false,
-      runSkillsPython: false,
-      runChangedSmoke: false,
-      runControlUiI18n: false,
-      runUiTests: false,
-    });
+    expect(detectChangedScope(["src/plugins/loader.ts"])).toEqual(expectedNodeAndChangedSmokeScope);
+    expect(detectChangedScope(["src/plugin-sdk/provider-entry.ts"])).toEqual(
+      expectedNodeAndChangedSmokeScope,
+    );
+    expect(detectChangedScope(["packages/gateway-protocol/src/schema/messages.ts"])).toEqual(
+      expectedNodeAndChangedSmokeScope,
+    );
+    expect(detectChangedScope(["packages/gateway-client/src/client.ts"])).toEqual(
+      expectedNodeAndChangedSmokeScope,
+    );
+    expect(detectChangedScope(["src/channels/plugins/catalog.ts"])).toEqual(
+      expectedNodeAndChangedSmokeScope,
+    );
+    expect(detectChangedScope([bundledPluginFile("matrix", "index.ts")])).toEqual(
+      expectedNodeOnlyScope,
+    );
   });
 
   it("splits install smoke into fast and full scopes", () => {
@@ -748,30 +589,10 @@ describe("detectChangedScope", () => {
   });
 
   it("keeps changed-smoke off for runtime-surface tests", () => {
-    expect(detectChangedScope(["src/plugins/loader.test.ts"])).toEqual({
-      runNode: true,
-      runMacos: false,
-      runMacosNode: false,
-      runIosBuild: false,
-      runAndroid: false,
-      runWindows: false,
-      runSkillsPython: false,
-      runChangedSmoke: false,
-      runControlUiI18n: false,
-      runUiTests: false,
-    });
-    expect(detectChangedScope([bundledPluginFile("matrix", "index.test.ts")])).toEqual({
-      runNode: true,
-      runMacos: false,
-      runMacosNode: false,
-      runIosBuild: false,
-      runAndroid: false,
-      runWindows: false,
-      runSkillsPython: false,
-      runChangedSmoke: false,
-      runControlUiI18n: false,
-      runUiTests: false,
-    });
+    expect(detectChangedScope(["src/plugins/loader.test.ts"])).toEqual(expectedNodeOnlyScope);
+    expect(detectChangedScope([bundledPluginFile("matrix", "index.test.ts")])).toEqual(
+      expectedNodeOnlyScope,
+    );
   });
 
   it("runs control-ui locale check only for control-ui i18n surfaces", () => {
@@ -836,6 +657,8 @@ describe("detectChangedScope", () => {
         "scripts/ci-changed-scope.mjs",
         "scripts/run-vitest.mts",
         "scripts/test-projects.test-support.mts",
+        "scripts/lib/ci-docker-seed-plan.mts",
+        "test/scripts/ci-docker-seed-plan.test.ts",
         "src/commands/status.scan-result.test.ts",
         "src/scripts/ci-changed-scope.control-ui.test.ts",
         "src/scripts/ci-changed-scope.native-i18n.test.ts",
@@ -914,8 +737,7 @@ describe("detectChangedScope", () => {
   });
 
   it("reports both sides of a rename so deleted paths force safe planning", () => {
-    const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ci-scope-rename-"));
-    tempDirs.push(repoDir);
+    const repoDir = tempDirs.make("openclaw-ci-scope-rename-");
     git(repoDir, ["init", "-b", "main"]);
     git(repoDir, ["config", "user.email", "ci@example.invalid"]);
     git(repoDir, ["config", "user.name", "CI"]);
@@ -928,6 +750,28 @@ describe("detectChangedScope", () => {
     git(repoDir, ["commit", "-m", "rename"]);
 
     expect(listChangedPaths(base, "HEAD", repoDir)).toEqual(["src/new.ts", "src/old.ts"]);
+  });
+
+  it("preserves leading spaces and newlines in Git filename tokens", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const repoDir = tempDirs.make("openclaw-ci-scope-raw-paths-");
+    git(repoDir, ["init", "-b", "main"]);
+    git(repoDir, ["config", "user.email", "ci@example.invalid"]);
+    git(repoDir, ["config", "user.name", "CI"]);
+    writeRepoFile(repoDir, "README.md", "base\n");
+    git(repoDir, ["add", "."]);
+    git(repoDir, ["commit", "-m", "base"]);
+    const base = git(repoDir, ["rev-parse", "HEAD"]);
+    const changedPaths = [" scripts/changed-lanes.mts", "scripts/changed\nlanes.mts"];
+    for (const changedPath of changedPaths) {
+      writeRepoFile(repoDir, changedPath, "export {};\n");
+    }
+    git(repoDir, ["add", "--", ...changedPaths]);
+    git(repoDir, ["commit", "-m", "raw paths"]);
+
+    expect(listChangedPaths(base, "HEAD", repoDir).toSorted()).toEqual(changedPaths.toSorted());
   });
 
   it("drops oversized changed-path payloads before workflow environment interpolation", () => {
@@ -955,6 +799,7 @@ describe("detectChangedScope", () => {
     ["empty diff without a manifest", "", "missing", false],
     ["declared native test", "src/process/exec.windows.integration.test.ts", "valid", false],
     ["Mac fixture helper", "test/scripts/mac-script-fixture.test-support.ts", "valid", false],
+    ["shared Talk fixture", "test/fixtures/talk-config-contract.json", "valid", false],
     ["unrelated process test", "src/process/exec.test.ts", "valid", false],
     ["missing manifest", "src/process/exec.test.ts", "missing", true],
     ["invalid manifest", "src/process/exec.test.ts", "invalid", true],
@@ -962,10 +807,7 @@ describe("detectChangedScope", () => {
   ])(
     "runs zero-install scope detection for %s",
     (_label, changedPath, manifest, failSafe, cliArgs) => {
-      const repoDir = fs.realpathSync(
-        fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ci-scope-empty-")),
-      );
-      tempDirs.push(repoDir);
+      const repoDir = fs.realpathSync(tempDirs.make("openclaw-ci-scope-empty-"));
       const outputPath = path.join(repoDir, "github-output.txt");
       const scriptPath = path.join(repoDir, "scripts/ci-changed-scope.mjs");
 
@@ -1011,6 +853,11 @@ describe("detectChangedScope", () => {
       );
 
       const output = parseGitHubOutput(fs.readFileSync(outputPath, "utf8"));
+      if (changedPath === "test/fixtures/talk-config-contract.json") {
+        console.log(
+          `REAL_CI_CHANGED_SCOPE_OUTPUT run_android=${output.run_android} run_macos=${output.run_macos} run_node=${output.run_node}`,
+        );
+      }
       expect(Object.keys(output).toSorted()).toEqual(
         "changed_paths_json run_android run_changed_smoke run_control_ui_i18n run_fast_install_smoke run_full_install_smoke run_ios_build run_ios_screenshots run_macos run_macos_node run_native_i18n run_node run_node_fast_ci_routing run_node_fast_only run_node_fast_plugin_contracts run_skills_python run_ui_tests run_windows strict_control_ui_i18n strict_native_i18n".split(
           " ",
@@ -1024,8 +871,11 @@ describe("detectChangedScope", () => {
           const selected =
             (failSafe && !key.startsWith("run_node_fast")) ||
             (key === "run_node" && Boolean(changedPath)) ||
+            (key === "run_android" && changedPath === "test/fixtures/talk-config-contract.json") ||
             (key === "run_macos_node" &&
-              changedPath === "test/scripts/mac-script-fixture.test-support.ts") ||
+              (changedPath === "test/scripts/mac-script-fixture.test-support.ts" ||
+                changedPath === "test/fixtures/talk-config-contract.json")) ||
+            (key === "run_macos" && changedPath === "test/fixtures/talk-config-contract.json") ||
             (key === "run_windows" &&
               changedPath === "src/process/exec.windows.integration.test.ts");
           expect(value, key).toBe(String(selected));

@@ -1,4 +1,5 @@
 name: Plugin ClawHub New
+run-name: "plugin-clawhub-new.yml [${{ inputs.release_tag || inputs.ref }}] ${{ inputs.dry_run && 'validation' || 'publish' }} parent=${{ inputs.release_publish_run_id || 'manual' }}/${{ inputs.release_publish_run_attempt || '1' }}"
 
 on:
   workflow_dispatch:
@@ -212,6 +213,13 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "false"
 
+      - name: Install trusted plugin tooling dependencies
+        working-directory: .release-tooling
+        env:
+          CI: "true"
+        # Corepack reads this checkout's packageManager before pnpm processes arguments.
+        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
+
       - name: Validate publishable plugin metadata
         env:
           TSX_TSCONFIG_PATH: ${{ github.workspace }}/.release-tooling/tsconfig.json
@@ -354,6 +362,12 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
+
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
 
       - name: Validate release publish approval run
         env:
@@ -515,6 +529,13 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
           install-deps: "true"
+
+      - name: Install trusted plugin tooling dependencies
+        working-directory: .release-harness
+        env:
+          CI: "true"
+        # Corepack reads this checkout's packageManager before pnpm processes arguments.
+        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
 
       - name: Materialize locked ClawHub CLI
         id: clawhub_cli

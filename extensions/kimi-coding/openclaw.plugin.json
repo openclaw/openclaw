@@ -1,10 +1,22 @@
 {
   "id": "kimi",
+  "categories": ["models"],
   "activation": {
     "onStartup": false
   },
   "enabledByDefault": true,
-  "providers": ["kimi", "kimi-coding"],
+  "providers": ["kimi", "kimi-code", "kimi-coding"],
+  "modelIdNormalization": {
+    "providers": {
+      "kimi": {
+        "aliases": {
+          "kimi-code": "kimi-for-coding",
+          "k2p5": "kimi-for-coding",
+          "k3[1m]": "k3"
+        }
+      }
+    }
+  },
   "providerRequest": {
     "providers": {
       "kimi": {
@@ -36,7 +48,6 @@
             "reasoning": true,
             "upstreamModel": "moonshot/kimi-k3",
             "thinkingLevelMap": {
-              "off": null,
               "minimal": "low",
               "low": "low",
               "medium": "high",
@@ -63,7 +74,6 @@
             "reasoning": true,
             "upstreamModel": "moonshot/kimi-k3",
             "thinkingLevelMap": {
-              "off": null,
               "minimal": "low",
               "low": "low",
               "medium": "high",

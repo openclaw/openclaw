@@ -528,7 +528,10 @@ describe("isHighSignalLiveModelRef", () => {
     expect(isHighSignalLiveModelRef({ provider: "openai", id: "gpt-5.1" })).toBe(false);
     expect(isHighSignalLiveModelRef({ provider: "openai", id: "gpt-5.4" })).toBe(false);
     expect(isHighSignalLiveModelRef({ provider: "openai", id: "gpt-5.5" })).toBe(false);
-    for (const id of ["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]) {
+    for (const id of ["gpt-5.6", "gpt-5.6-sol"]) {
+      expect(isHighSignalLiveModelRef({ provider: "openai", id })).toBe(false);
+    }
+    for (const id of ["gpt-5.6-terra", "gpt-5.6-luna"]) {
       expect(isHighSignalLiveModelRef({ provider: "openai", id })).toBe(true);
     }
     expect(isHighSignalLiveModelRef({ provider: "openai", id: "gpt-5.2-codex" })).toBe(false);
@@ -652,6 +655,7 @@ describe("isHighSignalLiveModelRef", () => {
     expect(isHighSignalLiveModelRef({ provider: "xai", id: "grok-4.20-0309-reasoning" })).toBe(
       true,
     );
+    expect(isHighSignalLiveModelRef({ provider: "xai", id: "grok-4.7" })).toBe(true);
     expect(isHighSignalLiveModelRef({ provider: "xai", id: "grok-4.6" })).toBe(true);
     expect(isHighSignalLiveModelRef({ provider: "xai", id: "grok-4.5" })).toBe(true);
     expect(isHighSignalLiveModelRef({ provider: "xai", id: "grok-4.3" })).toBe(false);
@@ -696,6 +700,7 @@ describe("isPrioritizedHighSignalLiveModelRef", () => {
 
   it("lists priority refs as provider/id pairs", () => {
     expect(listPrioritizedHighSignalLiveModelRefs()).toStrictEqual([
+      { provider: "anthropic", id: "claude-opus-5-5" },
       { provider: "anthropic", id: "claude-opus-5" },
       { provider: "anthropic", id: "claude-opus-4-8" },
       { provider: "anthropic", id: "claude-sonnet-5" },
@@ -709,11 +714,12 @@ describe("isPrioritizedHighSignalLiveModelRef", () => {
       { provider: "deepseek", id: "deepseek-v4-flash" },
       { provider: "deepseek", id: "deepseek-v4-pro" },
       { provider: "minimax", id: "minimax-m3" },
-      { provider: "openai", id: "gpt-5.6" },
+      { provider: "openai", id: "gpt-5.6-luna" },
       { provider: "openrouter", id: "openai/gpt-5.2-chat" },
       { provider: "openrouter", id: "minimax/minimax-m2.7" },
       { provider: "opencode-go", id: "glm-5" },
       { provider: "openrouter", id: "ai21/jamba-large-1.7" },
+      { provider: "xai", id: "grok-4.7" },
       { provider: "xai", id: "grok-4.6" },
       { provider: "xai", id: "grok-4.5" },
       { provider: "xai", id: "grok-4.20-0309-reasoning" },

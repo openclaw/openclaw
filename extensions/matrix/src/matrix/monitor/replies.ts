@@ -1,13 +1,9 @@
-// Matrix plugin module implements replies behavior.
 import {
+  createAcceptedChannelDeliveryResult,
   createChannelPartialDeliveryError,
   isChannelPartialDeliveryError,
 } from "openclaw/plugin-sdk/channel-inbound";
-import {
-  createMessageReceiptFromOutboundResults,
-  listMessageReceiptPlatformIds,
-  type MessageReceipt,
-} from "openclaw/plugin-sdk/channel-outbound";
+import type { LivePreviewDeliveryResult } from "openclaw/plugin-sdk/channel-outbound";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { stripReasoningTagsFromText } from "openclaw/plugin-sdk/text-chunking";
@@ -18,13 +14,7 @@ import { sendMessageMatrix } from "../send.js";
 import type { MatrixSendResult } from "../send/types.js";
 import type { OpenClawConfig, ReplyPayload, RuntimeEnv } from "./runtime-api.js";
 
-export type MatrixReplyDeliveryResult = {
-  messageIds?: string[];
-  receipt?: MessageReceipt;
-  visibleReplySent: boolean;
-  content?: string;
-  suppression?: { reason: "no_visible_result" };
-};
+export type MatrixReplyDeliveryResult = LivePreviewDeliveryResult;
 
 function joinMatrixVisibleContent(contents: readonly (string | undefined)[]): string {
   return contents.filter((content): content is string => Boolean(content)).join("\n");
@@ -33,6 +23,10 @@ function joinMatrixVisibleContent(contents: readonly (string | undefined)[]): st
 export function mergeMatrixReplyDeliveryResults(
   results: readonly MatrixReplyDeliveryResult[],
 ): MatrixReplyDeliveryResult {
+  const single = results.length === 1 ? results[0] : undefined;
+  if (single?.visibleReplySent) {
+    return single;
+  }
   const visibleResults = results.filter((result) => result.visibleReplySent);
   if (visibleResults.length === 0) {
     return {
@@ -40,24 +34,13 @@ export function mergeMatrixReplyDeliveryResults(
       suppression: { reason: "no_visible_result" },
     };
   }
-  const receiptInputs: Array<{ receipt: MessageReceipt } | { messageId: string }> = [];
-  for (const result of visibleResults) {
-    if (result.receipt) {
-      receiptInputs.push({ receipt: result.receipt });
-      continue;
-    }
-    for (const messageId of result.messageIds ?? []) {
-      receiptInputs.push({ messageId });
-    }
+  const content = joinMatrixVisibleContent(visibleResults.map((result) => result.content));
+  if (visibleResults.some((result) => result.receipt || result.messageIds?.length)) {
+    return createAcceptedChannelDeliveryResult({ deliveryResults: visibleResults, content });
   }
-  const receipt =
-    receiptInputs.length > 0
-      ? createMessageReceiptFromOutboundResults({ results: receiptInputs })
-      : undefined;
   return {
-    ...(receipt ? { messageIds: listMessageReceiptPlatformIds(receipt), receipt } : {}),
     visibleReplySent: true,
-    content: joinMatrixVisibleContent(visibleResults.map((result) => result.content)),
+    content,
   };
 }
 
@@ -65,9 +48,7 @@ export function toMatrixPartialDeliveryError(
   error: unknown,
   settled: readonly MatrixReplyDeliveryResult[],
 ): unknown {
-  const failedPartial = isChannelPartialDeliveryError(error)
-    ? (error.deliveryResult as MatrixReplyDeliveryResult)
-    : undefined;
+  const failedPartial = isChannelPartialDeliveryError(error) ? error.deliveryResult : undefined;
   const merged = mergeMatrixReplyDeliveryResults([
     ...settled,
     ...(failedPartial ? [failedPartial] : []),
@@ -83,15 +64,10 @@ function createMatrixReplyDeliveryResult(
   if (results.length === 0) {
     return mergeMatrixReplyDeliveryResults([]);
   }
-  const receipt = createMessageReceiptFromOutboundResults({
+  return createAcceptedChannelDeliveryResult({
     results: results.map((result) => ({ receipt: result.receipt })),
-  });
-  return {
-    messageIds: listMessageReceiptPlatformIds(receipt),
-    receipt,
-    visibleReplySent: true,
     content: joinMatrixVisibleContent(results.map((result) => result.content)),
-  };
+  });
 }
 
 function resolveVisibleMatrixReplyText(text?: string): string | undefined {
@@ -152,10 +128,14 @@ export async function deliverMatrixReplies(params: {
 
       const replyToIdForReply =
         explicitReplyToId ||
-        (params.threadId ||
-        (params.replyToMode !== "off" && (params.replyToMode === "all" || !hasRepliedRef.value))
+        (!params.threadId &&
+        params.replyToMode !== "off" &&
+        (params.replyToMode === "all" || !hasRepliedRef.value)
           ? (reply.replyToId ?? params.replyToId)?.trim()
           : undefined);
+      const fallbackReplyToId = params.threadId
+        ? (reply.replyToId ?? params.replyToId)?.trim()
+        : undefined;
       const onDeliveryResult = (result: MatrixSendResult) => {
         // A concrete event consumes the first-reply slot even when a later event fails.
         acceptedResults.push(result);
@@ -174,6 +154,7 @@ export async function deliverMatrixReplies(params: {
           client: params.client,
           cfg: params.cfg,
           replyToId: replyToIdForReply,
+          fallbackReplyToId,
           threadId: params.threadId,
           accountId: params.accountId,
           extraContent,
@@ -191,6 +172,7 @@ export async function deliverMatrixReplies(params: {
           mediaUrl,
           mediaLocalRoots: params.mediaLocalRoots,
           replyToId: replyToIdForReply,
+          fallbackReplyToId,
           threadId: params.threadId,
           audioAsVoice: reply.audioAsVoice,
           accountId: params.accountId,

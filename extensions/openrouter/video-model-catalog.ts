@@ -145,7 +145,7 @@ function buildOpenRouterVideoModelCapabilities(
     sizes,
     supportsAudio,
   });
-  const base: VideoGenerationProviderCapabilities = {
+  const capabilities: OpenRouterVideoModelCatalogCapabilities = {
     providerOptions: {
       callback_url: "string",
       seed: "number",
@@ -159,9 +159,6 @@ function buildOpenRouterVideoModelCapabilities(
     videoToVideo: {
       enabled: false,
     },
-  };
-  const capabilities: OpenRouterVideoModelCatalogCapabilities = {
-    ...base,
   };
   const canonicalSlug = normalizeOptionalString(model.canonical_slug);
   if (canonicalSlug) {
@@ -349,7 +346,9 @@ export async function resolveOpenRouterVideoModelCapabilities(
     allowPrivateNetwork,
     dispatcherPolicy,
   });
-  return projectOpenRouterVideoModelsToCatalogEntries(payload).find(
-    (entry) => entry.model === ctx.model,
-  )?.capabilities;
+  const model = payload.find((row) => {
+    const id = isRecord(row) ? normalizeOptionalString(row.id) : undefined;
+    return id !== undefined && id === ctx.model;
+  });
+  return isRecord(model) ? buildOpenRouterVideoModelCapabilities(model) : undefined;
 }

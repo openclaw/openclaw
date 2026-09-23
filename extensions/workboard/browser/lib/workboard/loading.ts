@@ -1,5 +1,6 @@
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { setWorkboardCards } from "./card-state.ts";
 import { formatError } from "./normalization-utils.ts";
 import { normalizeCardsPayload } from "./normalization.ts";
 import {
@@ -63,7 +64,6 @@ async function loadWorkboardInternal(
     !params.client ||
     state.dispatching ||
     workboardHasActiveWrites(state) ||
-    (catalogOnly && shouldDeferWorkboardLiveRefresh(state)) ||
     (!params.force && (state.loaded || state.loadAttempted))
   ) {
     return false;
@@ -132,13 +132,13 @@ async function loadWorkboardInternal(
         return false;
       }
       if (catalogOnly) {
-        if (shouldDeferWorkboardLiveRefresh(state)) {
-          return false;
-        }
-        // Navigation and session links share card data, but this read does not
-        // establish the page's task freshness or authorize stale edit drafts.
-        state.cards = normalized.cards;
         state.boards = normalized.boards;
+        // Keep navigation current without replacing cards beneath an unfinished draft.
+        if (shouldDeferWorkboardLiveRefresh(state)) {
+          return true;
+        }
+        // Catalog hydration never establishes task freshness or authorizes stale edits.
+        setWorkboardCards(state, normalized.cards);
         state.statuses = normalized.statuses;
         state.tasksByCardId = new Map(
           state.cards.flatMap((card) => {
@@ -278,7 +278,7 @@ async function loadWorkboardInternal(
           delete runtime.defaultTaskDiscoveryCursor;
         }
       }
-      state.cards = taskLinkState.cards;
+      setWorkboardCards(state, taskLinkState.cards);
       state.boards = normalized.boards;
       state.statuses = normalized.statuses;
       state.tasksByCardId = taskLinkState.tasksByCardId;

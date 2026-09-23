@@ -17,6 +17,7 @@ type BrowserDownloadPage = {
 
 export type BrowserDownloadCaptureOptions = {
   beforeSave?: (download: BrowserDownloadCandidate) => Promise<void> | void;
+  cancelOnBeforeSaveError?: (error: unknown) => boolean;
   mode?: "passive" | "explicit";
   outputPath?: string;
   outputRoot?: string;
@@ -48,7 +49,14 @@ export async function saveBrowserDownload(
     url: download.url?.() || "",
     suggestedFilename,
   };
-  await opts.beforeSave?.(candidate);
+  try {
+    await opts.beforeSave?.(candidate);
+  } catch (error) {
+    if (!opts.signal?.aborted && opts.cancelOnBeforeSaveError?.(error)) {
+      await download.cancel?.().catch(() => {});
+    }
+    throw error;
+  }
   opts.signal?.throwIfAborted();
   const saveAs = download.saveAs?.bind(download);
   if (!saveAs) {

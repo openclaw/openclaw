@@ -180,24 +180,11 @@ const CUBE_VALUES = [0, 95, 135, 175, 215, 255];
 // Grayscale ramp values (indices 232-255, 24 grays from 8 to 238)
 const GRAY_VALUES = Array.from({ length: 24 }, (_, i) => 8 + i * 10);
 
-function findClosestCubeIndex(value: number): number {
+function findClosestPaletteIndex(value: number, palette: readonly number[]): number {
   let minDist = Infinity;
   let minIdx = 0;
-  for (const [i, cubeValue] of CUBE_VALUES.entries()) {
-    const dist = Math.abs(value - cubeValue);
-    if (dist < minDist) {
-      minDist = dist;
-      minIdx = i;
-    }
-  }
-  return minIdx;
-}
-
-function findClosestGrayIndex(gray: number): number {
-  let minDist = Infinity;
-  let minIdx = 0;
-  for (const [i, grayValue] of GRAY_VALUES.entries()) {
-    const dist = Math.abs(gray - grayValue);
+  for (const [i, paletteValue] of palette.entries()) {
+    const dist = Math.abs(value - paletteValue);
     if (dist < minDist) {
       minDist = dist;
       minIdx = i;
@@ -223,9 +210,9 @@ function colorDistance(
 
 function rgbTo256(r: number, g: number, b: number): number {
   // Find closest color in the 6x6x6 cube
-  const rIdx = findClosestCubeIndex(r);
-  const gIdx = findClosestCubeIndex(g);
-  const bIdx = findClosestCubeIndex(b);
+  const rIdx = findClosestPaletteIndex(r, CUBE_VALUES);
+  const gIdx = findClosestPaletteIndex(g, CUBE_VALUES);
+  const bIdx = findClosestPaletteIndex(b, CUBE_VALUES);
   const cubeR = CUBE_VALUES[rIdx];
   const cubeG = CUBE_VALUES[gIdx];
   const cubeB = CUBE_VALUES[bIdx];
@@ -237,7 +224,7 @@ function rgbTo256(r: number, g: number, b: number): number {
 
   // Find closest grayscale
   const gray = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
-  const grayIdx = findClosestGrayIndex(gray);
+  const grayIdx = findClosestPaletteIndex(gray, GRAY_VALUES);
   const grayValue = GRAY_VALUES[grayIdx];
   if (grayValue === undefined) {
     throw new Error("Invalid 256-color grayscale index");
@@ -265,38 +252,21 @@ function hexTo256(hex: string): number {
   return rgbTo256(r, g, b);
 }
 
-function fgAnsi(color: string | number, mode: ColorMode): string {
+function colorAnsi(color: string | number, mode: ColorMode, layer: "fg" | "bg"): string {
+  const code = layer === "fg" ? 38 : 48;
   if (color === "") {
-    return "\x1b[39m";
+    return layer === "fg" ? "\x1b[39m" : "\x1b[49m";
   }
   if (typeof color === "number") {
-    return `\x1b[38;5;${color}m`;
+    return `\x1b[${code};5;${color}m`;
   }
   if (color.startsWith("#")) {
     if (mode === "truecolor") {
       const { r, g, b } = hexToRgb(color);
-      return `\x1b[38;2;${r};${g};${b}m`;
+      return `\x1b[${code};2;${r};${g};${b}m`;
     }
     const index = hexTo256(color);
-    return `\x1b[38;5;${index}m`;
-  }
-  throw new Error(`Invalid color value: ${color}`);
-}
-
-function bgAnsi(color: string | number, mode: ColorMode): string {
-  if (color === "") {
-    return "\x1b[49m";
-  }
-  if (typeof color === "number") {
-    return `\x1b[48;5;${color}m`;
-  }
-  if (color.startsWith("#")) {
-    if (mode === "truecolor") {
-      const { r, g, b } = hexToRgb(color);
-      return `\x1b[48;2;${r};${g};${b}m`;
-    }
-    const index = hexTo256(color);
-    return `\x1b[48;5;${index}m`;
+    return `\x1b[${code};5;${index}m`;
   }
   throw new Error(`Invalid color value: ${color}`);
 }
@@ -338,6 +308,15 @@ function resolveThemeColors<T extends Record<string, ColorValue>>(
 // Theme Class
 // ============================================================================
 
+// Keep formatting independent of overridable public ANSI getters.
+function getThemeAnsi(colors: ReadonlyMap<string, string>, color: string, label: string): string {
+  const ansi = colors.get(color);
+  if (!ansi) {
+    throw new Error(`Unknown theme ${label}: ${color}`);
+  }
+  return ansi;
+}
+
 export class Theme {
   readonly name?: string;
   readonly sourcePath?: string;
@@ -358,27 +337,21 @@ export class Theme {
     this.mode = mode;
     this.fgColors = new Map();
     for (const [key, value] of Object.entries(fgColors) as [ThemeColor, string | number][]) {
-      this.fgColors.set(key, fgAnsi(value, mode));
+      this.fgColors.set(key, colorAnsi(value, mode, "fg"));
     }
     this.bgColors = new Map();
     for (const [key, value] of Object.entries(bgColors) as [ThemeBg, string | number][]) {
-      this.bgColors.set(key, bgAnsi(value, mode));
+      this.bgColors.set(key, colorAnsi(value, mode, "bg"));
     }
   }
 
   fg(color: ThemeColor, text: string): string {
-    const ansi = this.fgColors.get(color);
-    if (!ansi) {
-      throw new Error(`Unknown theme color: ${color}`);
-    }
+    const ansi = getThemeAnsi(this.fgColors, color, "color");
     return `${ansi}${text}\x1b[39m`; // Reset only foreground color
   }
 
   bg(color: ThemeBg, text: string): string {
-    const ansi = this.bgColors.get(color);
-    if (!ansi) {
-      throw new Error(`Unknown theme background color: ${color}`);
-    }
+    const ansi = getThemeAnsi(this.bgColors, color, "background color");
     return `${ansi}${text}\x1b[49m`; // Reset only background color
   }
 
@@ -403,19 +376,11 @@ export class Theme {
   }
 
   getFgAnsi(color: ThemeColor): string {
-    const ansi = this.fgColors.get(color);
-    if (!ansi) {
-      throw new Error(`Unknown theme color: ${color}`);
-    }
-    return ansi;
+    return getThemeAnsi(this.fgColors, color, "color");
   }
 
   getBgAnsi(color: ThemeBg): string {
-    const ansi = this.bgColors.get(color);
-    if (!ansi) {
-      throw new Error(`Unknown theme background color: ${color}`);
-    }
-    return ansi;
+    return getThemeAnsi(this.bgColors, color, "background color");
   }
 
   getColorMode(): ColorMode {

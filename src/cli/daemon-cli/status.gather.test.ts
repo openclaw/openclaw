@@ -1,44 +1,70 @@
 // Daemon status gather tests cover service status collection from platform state.
+import { X509Certificate } from "node:crypto";
 import fs from "node:fs/promises";
+import { createServer } from "node:https";
+import type { Socket } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
+import { WebSocketServer } from "ws";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../../test/helpers/tls-fixture.js";
+import { REDACTED_SENTINEL } from "../../config/redact-sentinel.js";
+import type { ExtraGatewayService } from "../../daemon/inspect.js";
+import type { ForeignLaunchdJob } from "../../daemon/launchd-foreign-jobs.js";
 import type { StaleOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import type { ServiceConfigAudit } from "../../daemon/service-audit.js";
+import { ServiceInspectionError } from "../../daemon/service-inspection-error.js";
+import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
-import type { PortListener, PortUsageStatus } from "../../infra/ports-types.js";
+import { gatewayEdgeAuthValueForTarget } from "../../gateway/edge-auth.js";
+import {
+  buildMinimalGatewayHelloOkPayload,
+  closeMinimalGatewayServer,
+  parseMinimalGatewayRequestFrame,
+  sendMinimalGatewayConnectChallenge,
+  sendMinimalGatewayResponse,
+} from "../../gateway/minimal-gateway.test-helpers.js";
+import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import type { GatewayRestartHandoff } from "../../infra/restart-handoff.js";
+import { resetSecretRedactionRegistryForTest } from "../../logging/secret-redaction-registry.test-support.js";
 import { defaultRuntime } from "../../runtime.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
+import { OpenClawDatabaseSchemaPreflightError } from "../../state/openclaw-database-preflight.messages.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
+import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import { VERSION } from "../../version.js";
 import { registerGatewayCli } from "../gateway-cli/register.js";
 import { registerDaemonCli } from "./register.js";
 import type { GatewayRestartSnapshot } from "./restart-health.js";
 import { gatherDaemonStatus, renderPortDiagnosticsForCli } from "./status.gather.js";
+import {
+  callGatewayStatusProbe,
+  capturePrintedDaemonStatus,
+  formatPortDiagnostics,
+  inspectPortConnections,
+  inspectPortUsage,
+  inspectPortUsages,
+  type GatewayStatusProbeOptions,
+  type PortUsageInspectionOptions,
+  type PortUsageTestSummary,
+} from "./status.gather.probes.test-support.js";
+import { registerProxyAuthStatusTests } from "./status.gather.proxy-auth.test-support.js";
 import { printDaemonStatus } from "./status.print.js";
 
-type PortConnections = Awaited<
-  ReturnType<typeof import("../../infra/ports-inspect.js").inspectPortConnections>
->;
-
 const readFile = fs.readFile.bind(fs);
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let readFileSpy: ReturnType<typeof vi.spyOn>;
+const serviceFixture = vi.hoisted(() => ({ label: "LaunchAgent" }));
 
-const callGatewayStatusProbe = vi.fn<
-  (opts?: unknown) => Promise<{
-    ok: boolean;
-    url?: string;
-    error?: string | null;
-    server?: { version?: string | null; buildId?: string | null; connId?: string | null };
-    version?: string | null;
-  }>
->(async (_opts?: unknown) => ({
-  ok: true,
-  url: "ws://127.0.0.1:19001",
-  error: null,
-  server: { version: "2026.5.6", buildId: "build-2026.5.6", connId: "conn-1" },
-}));
+const preflightOpenClawDatabaseSchemas = vi.fn<
+  typeof import("../../state/openclaw-database-preflight.js").preflightOpenClawDatabaseSchemas
+>(async () => ({ incompatible: [], indeterminate: [] }));
+
 const isDefaultInstallIdentity = vi.fn((_env?: NodeJS.ProcessEnv) => true);
 const isGatewayExternallySupervised = vi.fn((_env?: NodeJS.ProcessEnv) => false);
 const resolveGatewayProbeAuthSafeWithSecretInputsCalls = vi.fn<(opts?: unknown) => void>();
@@ -46,53 +72,15 @@ const inspectGatewayTlsCertificate = vi.fn(async (_cfg?: unknown) => ({
   ok: true as const,
   value: { cert: "public-certificate", fingerprintSha256: "sha256:11:22:33:44" },
 }));
-const findExtraGatewayServices = vi.fn(async (_env?: unknown, _opts?: unknown) => []);
+const findExtraGatewayServices = vi.fn<
+  (_env?: unknown, _opts?: unknown) => Promise<ExtraGatewayService[]>
+>(async () => []);
 const findStaleOpenClawUpdateLaunchdJobs = vi.fn<
   (env?: NodeJS.ProcessEnv) => Promise<StaleOpenClawUpdateLaunchdJob[]>
 >(async () => []);
-type PortUsageTestSummary = {
-  port: number;
-  status: PortUsageStatus;
-  listeners: PortListener[];
-  hints: string[];
-};
-
-type PortUsageInspectionOptions = { probeHosts?: readonly string[] };
-
-const inspectPortUsage = vi.fn<
-  (port: number, options?: PortUsageInspectionOptions) => Promise<PortUsageTestSummary>
->(async (port: number) => ({
-  port,
-  status: "free",
-  listeners: [],
-  hints: [],
-}));
-const inspectPortUsages = vi.fn<
-  (
-    ports: readonly number[],
-    options?: { probeHostsByPort?: ReadonlyMap<number, readonly string[]> },
-  ) => Promise<Map<number, PortUsageTestSummary>>
->(
-  async (ports) =>
-    new Map(
-      ports.map((port) => [
-        port,
-        {
-          port,
-          status: "free",
-          listeners: [],
-          hints: [],
-        },
-      ]),
-    ),
+const findForeignLaunchdJobs = vi.fn<(env?: NodeJS.ProcessEnv) => Promise<ForeignLaunchdJob[]>>(
+  async () => [],
 );
-const inspectPortConnections = vi.fn<(port: number) => Promise<PortConnections>>(
-  async (port: number) => ({
-    port,
-    connections: [],
-  }),
-);
-const formatPortDiagnostics = vi.fn<(usage: PortUsageTestSummary) => string[]>(() => []);
 const readLastGatewayErrorLine = vi.fn<
   (_env?: NodeJS.ProcessEnv, _options?: { requirePatternMatch?: boolean }) => Promise<string | null>
 >(async (_env?: NodeJS.ProcessEnv, _options?: { requirePatternMatch?: boolean }) => null);
@@ -113,6 +101,12 @@ const fetchNpmPackageTargetStatus = vi.fn(
 const readGatewayRestartHandoffSync = vi.fn<
   (_env?: NodeJS.ProcessEnv) => GatewayRestartHandoff | null
 >(() => null);
+const readGatewayLastShutdown = vi.fn<
+  (_env?: NodeJS.ProcessEnv) => { reason: string | null; completedAtMs: number } | undefined
+>(() => undefined);
+const findSystemdGatewayInstallation = vi.fn<
+  typeof import("../../daemon/systemd-scope.js").findSystemdGatewayInstallation
+>(async () => ({ kind: "none" }));
 const inspectWindowsGatewayFirewall = vi.fn<(opts?: unknown) => Promise<unknown>>(async () => ({
   applies: false,
   severity: "info" as const,
@@ -127,10 +121,7 @@ const serviceIsLoaded = vi.fn<
   (opts?: { env?: NodeJS.ProcessEnv; timeoutMs?: number }) => Promise<boolean>
 >(async (_opts?: { env?: NodeJS.ProcessEnv; timeoutMs?: number }) => true);
 const serviceReadRuntime = vi.fn<
-  (
-    _env?: NodeJS.ProcessEnv,
-    _opts?: { timeoutMs?: number },
-  ) => Promise<{ status: string; detail?: string }>
+  (_env?: NodeJS.ProcessEnv, _opts?: { timeoutMs?: number }) => Promise<GatewayServiceRuntime>
 >(async (_env?: NodeJS.ProcessEnv, _opts?: { timeoutMs?: number }) => ({ status: "running" }));
 const inspectGatewayRestart = vi.fn<(opts?: unknown) => Promise<GatewayRestartSnapshot>>(
   async (_opts?: unknown) => ({
@@ -248,10 +239,35 @@ vi.mock("../../daemon/inspect.js", () => ({
   findExtraGatewayServices: (env: unknown, opts?: unknown) => findExtraGatewayServices(env, opts),
 }));
 
+vi.mock("../../infra/gateway-boot-lifecycle.js", () => ({
+  readGatewayLastShutdown: (env?: NodeJS.ProcessEnv) => readGatewayLastShutdown(env),
+}));
+
+vi.mock("../../state/openclaw-database-preflight.js", () => ({
+  OpenClawDatabaseSchemaPreflightError,
+  preflightOpenClawDatabaseSchemas: (
+    options: Parameters<typeof preflightOpenClawDatabaseSchemas>[0],
+  ) => preflightOpenClawDatabaseSchemas(options),
+}));
+
+vi.mock("../../daemon/systemd-scope.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../daemon/systemd-scope.js")>()),
+  findSystemdGatewayInstallation: (env: NodeJS.ProcessEnv) => findSystemdGatewayInstallation(env),
+}));
+
 vi.mock("../../daemon/launchd.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../daemon/launchd.js")>()),
   findStaleOpenClawUpdateLaunchdJobs: (env?: NodeJS.ProcessEnv) =>
     findStaleOpenClawUpdateLaunchdJobs(env),
+}));
+
+vi.mock("../../daemon/launchd-foreign-jobs.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../daemon/launchd-foreign-jobs.js")>()),
+  findForeignLaunchdJobs: (env?: NodeJS.ProcessEnv) => findForeignLaunchdJobs(env),
+}));
+
+vi.mock("../../daemon/restart-storm.js", () => ({
+  readGatewayForcedRestartSummary: () => ({ count: 3, windowMs: 600_000 }),
 }));
 
 vi.mock("../../daemon/service-audit.js", () => ({
@@ -262,13 +278,15 @@ vi.mock("../../daemon/service.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../daemon/service.js")>()),
   resolveGatewayService: () =>
     createMockGatewayService({
+      label: serviceFixture.label,
       isLoaded: serviceIsLoaded,
       readCommand: serviceReadCommand,
       readRuntime: serviceReadRuntime,
     }),
 }));
 
-vi.mock("../../gateway/net.js", () => ({
+vi.mock("../../gateway/net.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../gateway/net.js")>()),
   resolveGatewayBindHost: (bindMode: string, customBindHost?: string) =>
     resolveGatewayBindHost(bindMode, customBindHost),
   resolveGatewayRequiredListenHosts: (bindHost: string) =>
@@ -336,7 +354,7 @@ vi.mock("../../infra/update-check-package-target.js", async (importOriginal) => 
 }));
 
 vi.mock("./probe.js", () => ({
-  probeGatewayStatus: (opts: unknown) => callGatewayStatusProbe(opts),
+  probeGatewayStatus: (opts: GatewayStatusProbeOptions) => callGatewayStatusProbe(opts),
 }));
 
 vi.mock("../../plugins/installed-plugin-index-record-reader.js", () => ({
@@ -410,6 +428,7 @@ describe("gatherDaemonStatus", () => {
       "OPENCLAW_STATE_DIR",
       "OPENCLAW_CONFIG_PATH",
       "OPENCLAW_GATEWAY_PORT",
+      "OPENCLAW_GATEWAY_URL",
       "OPENCLAW_GATEWAY_TOKEN",
       "OPENCLAW_GATEWAY_PASSWORD",
       "DAEMON_GATEWAY_TOKEN",
@@ -419,6 +438,7 @@ describe("gatherDaemonStatus", () => {
     setTestEnvValue("OPENCLAW_CONFIG_PATH", "/tmp/openclaw-cli/openclaw.json");
     deleteTestEnvValue("OPENCLAW_GATEWAY_TOKEN");
     deleteTestEnvValue("OPENCLAW_GATEWAY_PASSWORD");
+    deleteTestEnvValue("OPENCLAW_GATEWAY_URL");
     deleteTestEnvValue("DAEMON_GATEWAY_TOKEN");
     deleteTestEnvValue("DAEMON_GATEWAY_PASSWORD");
     isDefaultInstallIdentity.mockReset().mockReturnValue(true);
@@ -438,6 +458,7 @@ describe("gatherDaemonStatus", () => {
     createConfigIOCalls.mockClear();
     findStaleOpenClawUpdateLaunchdJobs.mockReset();
     findStaleOpenClawUpdateLaunchdJobs.mockResolvedValue([]);
+    findForeignLaunchdJobs.mockReset().mockResolvedValue([]);
     loadInstalledPluginIndexInstallRecords.mockClear();
     loadInstalledPluginIndexInstallRecords.mockResolvedValue({});
     fetchNpmPackageTargetStatus.mockClear();
@@ -482,6 +503,11 @@ describe("gatherDaemonStatus", () => {
     readLastGatewayErrorLine.mockReset();
     readLastGatewayErrorLine.mockResolvedValue(null);
     readGatewayRestartHandoffSync.mockClear();
+    readGatewayLastShutdown.mockReset().mockReturnValue(undefined);
+    preflightOpenClawDatabaseSchemas
+      .mockReset()
+      .mockResolvedValue({ incompatible: [], indeterminate: [] });
+    findSystemdGatewayInstallation.mockReset().mockResolvedValue({ kind: "none" });
     serviceIsLoaded.mockClear();
     serviceReadCommand.mockClear();
     serviceReadRuntime.mockClear();
@@ -529,6 +555,53 @@ describe("gatherDaemonStatus", () => {
     ).toEqual([]);
   });
 
+  it.each(["user", "system", undefined] as const)(
+    "uses observed systemd scope %s to label status and exclude only its owned unit",
+    async (scope) => {
+      const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
+      Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
+      serviceFixture.label = "systemd";
+      const userService: ExtraGatewayService = {
+        platform: "linux",
+        label: "openclaw.service",
+        scope: "user",
+        detail: "unit: /home/test/.config/systemd/user/openclaw.service",
+      };
+      const systemService: ExtraGatewayService = {
+        platform: "linux",
+        label: "openclaw.service",
+        scope: "system",
+        detail: "unit: /etc/systemd/system/openclaw.service",
+      };
+      const otherService: ExtraGatewayService = {
+        ...systemService,
+        label: "openclaw-rescue.service",
+        detail: "unit: /etc/systemd/system/openclaw-rescue.service",
+      };
+      findExtraGatewayServices.mockResolvedValueOnce([userService, systemService, otherService]);
+      serviceReadRuntime.mockResolvedValueOnce({
+        status: scope ? "running" : "unknown",
+        systemd: { unit: "openclaw.service", ...(scope ? { scope } : {}) },
+      });
+
+      try {
+        const status = await gatherStatus({ probe: false, deep: true });
+
+        expect(status.extraServices).toEqual(
+          scope === "user"
+            ? [systemService, otherService]
+            : scope === "system"
+              ? [userService, otherService]
+              : [userService, systemService, otherService],
+        );
+        expect(status.service.label).toBe(scope ? `systemd ${scope}` : "systemd");
+      } finally {
+        serviceFixture.label = "LaunchAgent";
+        Object.defineProperty(process, "platform", originalPlatform);
+      }
+    },
+  );
+
   it("uses wss probe URL and forwards TLS fingerprint when daemon TLS is enabled", async () => {
     const status = await gatherStatus();
 
@@ -565,6 +638,288 @@ describe("gatherDaemonStatus", () => {
 
   it.each(
     [
+      ["configured", "wss://remote.example:19443"],
+      ["configured", undefined],
+      ["environment", "wss://remote.example:19443"],
+      ["environment", undefined],
+      ["none", "wss://remote.example:19443"],
+      ["none", undefined],
+      ["configured", "wss://127.0.0.1:19001"],
+      ["configured", "wss://127.0.0.1:19001/other"],
+    ].flatMap(([auth, remoteUrl]) =>
+      [false, true].map((requireRpc) => ({ auth, remoteUrl, requireRpc })),
+    ),
+  )(
+    "uses service $auth credentials with remote=$remoteUrl and requireRpc=$requireRpc",
+    async ({ auth, remoteUrl, requireRpc }) => {
+      const edgeAuth = { "X-Test-Edge-Auth": "synthetic-status-edge-auth" };
+      daemonLoadedConfig = {
+        gateway: {
+          mode: "remote",
+          bind: "loopback",
+          tls: { enabled: true },
+          auth:
+            auth === "none"
+              ? { mode: "none" }
+              : {
+                  mode: "token",
+                  ...(auth === "configured" ? { token: "service-config-token" } : {}),
+                },
+          remote: {
+            url: remoteUrl,
+            edgeAuth,
+            token: "remote-token",
+            password: "remote-password",
+            tlsFingerprint: "sha256:99:88:77:66",
+          },
+        },
+      };
+      const originalConfig = structuredClone(daemonLoadedConfig);
+      serviceReadCommand.mockResolvedValueOnce({
+        programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],
+        environment: {
+          OPENCLAW_STATE_DIR: "/tmp/openclaw-daemon",
+          OPENCLAW_CONFIG_PATH: "/tmp/openclaw-daemon/openclaw.json",
+          OPENCLAW_GATEWAY_TOKEN: "service-env-token",
+        },
+      });
+      setTestEnvValue("OPENCLAW_GATEWAY_TOKEN", "ambient-token");
+      setTestEnvValue("OPENCLAW_GATEWAY_URL", "wss://ambient.example:19444");
+
+      const status = await gatherStatus({ requireRpc });
+      const input = callArg(callGatewayStatusProbe) as Parameters<
+        typeof import("./probe.js").probeGatewayStatus
+      >[0];
+
+      expect(input.url).toBe("wss://127.0.0.1:19001");
+      expect(input.urlOverride).toBeUndefined();
+      expect(input.token).toBe(
+        auth === "none"
+          ? undefined
+          : auth === "configured"
+            ? "service-config-token"
+            : "service-env-token",
+      );
+      expect(input.password).toBeUndefined();
+      expect(input.tlsFingerprint).toBe("sha256:11:22:33:44");
+      expect(input.requireRpc).toBe(requireRpc);
+      assert(input.config);
+      expect(gatewayEdgeAuthValueForTarget({ config: input.config, targetUrl: input.url })).toEqual(
+        remoteUrl === "wss://127.0.0.1:19001" ? edgeAuth : undefined,
+      );
+      expect(input.config.gateway?.mode).toBe("local");
+      expect(input.config.gateway?.remote).toEqual({
+        url: remoteUrl,
+        edgeAuth,
+        tlsFingerprint: "sha256:99:88:77:66",
+      });
+      expect(input.config.gateway?.auth).toEqual({ mode: auth === "none" ? "none" : "token" });
+      expect(input.config.gateway?.tls).toBeUndefined();
+      expect(status.rpc?.url).toBe(input.url);
+      expect(daemonLoadedConfig).toEqual(originalConfig);
+    },
+  );
+
+  it.each(
+    [
+      { auth: {}, remoteUrl: "wss://explicit.example:19445" },
+      { auth: { token: "explicit-token" }, remoteUrl: "wss://explicit.example:19445" },
+      { auth: { password: "explicit-password" }, remoteUrl: "wss://explicit.example:19445" },
+      { auth: { token: "explicit-token" }, remoteUrl: "wss://remote.example:19443" },
+      { auth: { token: "explicit-token" }, remoteUrl: "wss://explicit.example:19445/other" },
+    ].flatMap(({ auth, remoteUrl }) =>
+      [false, true].map((requireRpc) => ({ auth, remoteUrl, requireRpc })),
+    ),
+  )(
+    "isolates explicit status credentials $auth with remote=$remoteUrl and requireRpc=$requireRpc",
+    async ({ auth, remoteUrl, requireRpc }) => {
+      const edgeAuth = { "X-Test-Edge-Auth": "synthetic-status-edge-auth" };
+      daemonLoadedConfig = {
+        gateway: {
+          mode: "remote",
+          tls: { enabled: true },
+          auth: { mode: "token", token: "service-token" },
+          remote: {
+            url: remoteUrl,
+            edgeAuth,
+            token: "remote-token",
+            password: "remote-password",
+            tlsFingerprint: "sha256:99:88:77:66",
+          },
+        },
+      };
+      const originalConfig = structuredClone(daemonLoadedConfig);
+      setTestEnvValue("OPENCLAW_GATEWAY_TOKEN", "ambient-token");
+      await gatherStatus({
+        rpc: { url: "wss://explicit.example:19445", ...auth },
+        allowExecSecretRefs: false,
+        requireRpc,
+      });
+
+      const input = callArg(callGatewayStatusProbe) as Parameters<
+        typeof import("./probe.js").probeGatewayStatus
+      >[0];
+      expect(input).toMatchObject({
+        url: "wss://explicit.example:19445",
+        urlOverride: "wss://explicit.example:19445",
+        ...auth,
+      });
+      expect({ token: input.token, password: input.password }).toEqual(auth);
+      expect(input.tlsFingerprint).toBeUndefined();
+      expect(input.requireRpc).toBe(requireRpc);
+      assert(input.config);
+      expect(gatewayEdgeAuthValueForTarget({ config: input.config, targetUrl: input.url })).toEqual(
+        remoteUrl === input.url ? edgeAuth : undefined,
+      );
+      expect(input.config.gateway?.mode).toBe("local");
+      expect(input.config.gateway?.remote).toEqual({
+        url: remoteUrl,
+        edgeAuth,
+        tlsFingerprint: "sha256:99:88:77:66",
+      });
+      expect(input.config.gateway?.auth).toBeUndefined();
+      expect(input.config.gateway?.tls).toBeUndefined();
+      expect(inspectGatewayTlsCertificate).not.toHaveBeenCalled();
+      expect(resolveGatewayProbeAuthSafeWithSecretInputsCalls).not.toHaveBeenCalled();
+      expect(daemonLoadedConfig).toEqual(originalConfig);
+    },
+  );
+
+  it.each([
+    { name: "matching", pinMatches: true },
+    { name: "mismatched", pinMatches: false },
+  ])("enforces a $name saved TLS pin before explicit status traffic", async ({ pinMatches }) => {
+    const actualProbe = await vi.importActual<typeof import("./probe.js")>("./probe.js");
+    const originalProbe = callGatewayStatusProbe.getMockImplementation();
+    assert(originalProbe);
+    const server = createServer({ key: TEST_TLS_KEY_PEM, cert: TEST_TLS_CERT_PEM });
+    const wss = new WebSocketServer({ noServer: true, maxPayload: 1_000_000 });
+    const sockets = new Set<Socket>();
+    const closedSockets: Promise<void>[] = [];
+    const edgeAuthHeaders: unknown[] = [];
+    const connectTokens: Array<string | undefined> = [];
+    const edgeAuthValue = "synthetic-status-edge-auth";
+    const explicitToken = "synthetic-explicit-status-token";
+    let receivedBytes = 0;
+    let upgrades = 0;
+    server.on("connection", (socket) => {
+      sockets.add(socket);
+      closedSockets.push(
+        new Promise<void>((resolve) => {
+          socket.once("close", () => {
+            sockets.delete(socket);
+            resolve();
+          });
+        }),
+      );
+    });
+    server.on("secureConnection", (socket) => {
+      socket.on("data", (chunk: Buffer) => {
+        receivedBytes += chunk.byteLength;
+      });
+    });
+    server.on("upgrade", (request, socket, head) => {
+      upgrades += 1;
+      edgeAuthHeaders.push(request.headers["x-test-edge-auth"]);
+      if (request.headers["x-test-edge-auth"] !== edgeAuthValue) {
+        socket.destroy();
+        return;
+      }
+      wss.handleUpgrade(request, socket, head, (ws) => {
+        wss.emit("connection", ws, request);
+      });
+    });
+    wss.on("connection", (ws) => {
+      sendMinimalGatewayConnectChallenge(ws);
+      ws.on("message", (raw) => {
+        const frame = parseMinimalGatewayRequestFrame(raw);
+        if (frame.type !== "req" || frame.method !== "connect" || !frame.id) {
+          return;
+        }
+        connectTokens.push(frame.params?.auth?.token);
+        sendMinimalGatewayResponse(
+          ws,
+          frame.id,
+          buildMinimalGatewayHelloOkPayload({
+            auth: { role: "operator", scopes: ["operator.read"] },
+          }),
+        );
+      });
+    });
+    callGatewayStatusProbe.mockImplementation(actualProbe.probeGatewayStatus);
+    try {
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(0, "127.0.0.1", resolve);
+      });
+      const address = server.address();
+      assert(address && typeof address !== "string");
+      const url = `wss://127.0.0.1:${address.port}/gateway`;
+      const savedPin = pinMatches
+        ? new X509Certificate(TEST_TLS_CERT_PEM).fingerprint256
+        : "00".repeat(32);
+      await withStatusConfig(
+        JSON.stringify({
+          gateway: {
+            mode: "remote",
+            tls: { enabled: true },
+            auth: { mode: "token", token: "unrelated-service-token" },
+            remote: {
+              url,
+              token: "unrelated-remote-token",
+              password: "unrelated-remote-password",
+              tlsFingerprint: savedPin,
+              edgeAuth: { "X-Test-Edge-Auth": edgeAuthValue },
+            },
+          },
+        }),
+        async () => {
+          const status = await gatherStatus({
+            rpc: { url, token: explicitToken, json: true, timeout: "2000" },
+            requireRpc: false,
+          });
+          await Promise.all(closedSockets);
+          const input = callGatewayStatusProbe.mock.calls[0]?.[0];
+          assert(input);
+          expect(input.tlsFingerprint).toBeUndefined();
+          expect(input.config?.gateway?.remote).toEqual({
+            url,
+            edgeAuth: { "X-Test-Edge-Auth": edgeAuthValue },
+            tlsFingerprint: savedPin,
+          });
+          expect(input.config?.gateway?.tls).toBeUndefined();
+          expect(inspectGatewayTlsCertificate).not.toHaveBeenCalled();
+          expect(status.rpc?.ok, status.rpc?.error).toBe(pinMatches);
+          if (pinMatches) {
+            expect(receivedBytes).toBeGreaterThan(0);
+            expect(upgrades).toBe(1);
+            expect(edgeAuthHeaders).toEqual([edgeAuthValue]);
+            expect(connectTokens).toEqual([explicitToken]);
+          } else {
+            expect(status.rpc?.error).toMatch(/fingerprint mismatch/i);
+            expect(receivedBytes).toBe(0);
+            expect(upgrades).toBe(0);
+            expect(edgeAuthHeaders).toEqual([]);
+            expect(connectTokens).toEqual([]);
+          }
+        },
+        true,
+      );
+    } finally {
+      callGatewayStatusProbe.mockImplementation(originalProbe);
+      for (const socket of sockets) {
+        socket.destroy();
+      }
+      await closeMinimalGatewayServer(wss);
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+      resetSecretRedactionRegistryForTest();
+    }
+  });
+
+  it.each(
+    [
       ["gateway", "status", "--port", "19002"],
       ["gateway", "--port", "19002", "status"],
       ["gateway", "--port", "19003", "status", "--port", "19002"],
@@ -583,7 +938,15 @@ describe("gatherDaemonStatus", () => {
         expect.objectContaining({
           url: "ws://127.0.0.1:19002",
           localPortOverride: 19002,
-          config: cliLoadedConfig,
+          config: {
+            gateway: {
+              bind: "loopback",
+              mode: "local",
+              remote: undefined,
+              auth: undefined,
+              tls: undefined,
+            },
+          },
           configPath: "/tmp/openclaw-cli/openclaw.json",
         }),
       );
@@ -853,7 +1216,16 @@ describe("gatherDaemonStatus", () => {
         config?: unknown;
         configPath?: string;
       };
-      expect(probeInput.config).toBe(cliLoadedConfig);
+      expect(probeInput.config).toEqual({
+        ...cliLoadedConfig,
+        gateway: {
+          bind: "loopback",
+          mode: "local",
+          auth: undefined,
+          remote: undefined,
+          tls: undefined,
+        },
+      });
       expect(probeInput.configPath).toBe("/tmp/openclaw-cli/openclaw.json");
       const authInput = callArg(resolveGatewayProbeAuthSafeWithSecretInputsCalls) as {
         cfg?: unknown;
@@ -937,90 +1309,88 @@ describe("gatherDaemonStatus", () => {
     ]);
   });
 
-  it("renders Gateway-specific recovery in text and JSON after service reads time out", async () => {
-    serviceIsLoaded.mockImplementationOnce(async (args?: { timeoutMs?: number }) => {
-      if (args?.timeoutMs === undefined) {
-        return await new Promise<boolean>(() => {});
-      }
-      throw new Error("systemctl is-enabled timed out");
-    });
-    serviceReadRuntime.mockImplementationOnce(async (_env, opts) => {
-      if (opts?.timeoutMs === undefined) {
-        return await new Promise<{ status: string }>(() => {});
-      }
-      throw new Error("錯誤: 系統找不到指定的檔案。");
-    });
+  it.each(["darwin", "linux"] as const)(
+    "renders Gateway-specific timeout recovery on %s",
+    async (platform) =>
+      withMockedPlatform(platform, async () => {
+        serviceIsLoaded.mockImplementationOnce(async (args?: { timeoutMs?: number }) => {
+          if (args?.timeoutMs === undefined) {
+            return await new Promise<boolean>(() => {});
+          }
+          throw new Error("systemctl is-enabled timed out");
+        });
+        serviceReadRuntime.mockImplementationOnce(async (_env, opts) => {
+          if (opts?.timeoutMs === undefined) {
+            return await new Promise<{ status: string }>(() => {});
+          }
+          throw new Error("錯誤: 系統找不到指定的檔案。");
+        });
 
-    const status = await gatherStatus({
-      rpc: { timeout: "100", json: true },
-      probe: false,
-      deep: true,
-    });
+        const status = await gatherStatus({
+          rpc: { timeout: "100", json: true },
+          probe: false,
+          deep: true,
+        });
 
-    expect(serviceIsLoaded).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 100 }));
-    expect(serviceReadRuntime).toHaveBeenCalledWith(expect.any(Object), { timeoutMs: 100 });
-    expect(auditGatewayServiceConfig).toHaveBeenCalledWith(
-      expect.objectContaining({ timeoutMs: 100 }),
-    );
-    expect(status.service.loadState).toEqual({
-      status: "unknown",
-      detail: "Error: systemctl is-enabled timed out",
-    });
-    expect(status.service.loaded).toBeNull();
-    expect(status.service.runtime).toEqual({
-      status: "unknown",
-      detail: "service runtime inspection failed; retry with openclaw gateway status --deep",
-      inspectionFailure: {
-        code: "service-runtime-inspection-failed",
-        detail: "錯誤: 系統找不到指定的檔案。",
-      },
-    });
-
-    const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
-    try {
-      printDaemonStatus(status, { json: true, deep: true });
-      expect(writeJson).toHaveBeenCalledOnce();
-      const serialized = JSON.stringify(writeJson.mock.calls[0]?.[0]);
-      if (!serialized) {
-        throw new Error("expected terminal JSON output");
-      }
-      expect(JSON.parse(serialized)).toMatchObject({
-        service: {
-          loaded: null,
-          loadState: {
-            status: "unknown",
-            detail: "Error: systemctl is-enabled timed out",
+        expect(serviceIsLoaded).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 100 }));
+        expect(serviceReadRuntime).toHaveBeenCalledWith(expect.any(Object), { timeoutMs: 100 });
+        expect(auditGatewayServiceConfig).toHaveBeenCalledWith(
+          expect.objectContaining({ timeoutMs: 100 }),
+        );
+        expect(status.service.loadState).toEqual({
+          status: "unknown",
+          detail: "Error: systemctl is-enabled timed out",
+        });
+        expect(status.service.loaded).toBeNull();
+        expect(status.service.runtime).toEqual({
+          status: "unknown",
+          detail: "service runtime inspection failed; retry with openclaw gateway status --deep",
+          inspectionFailure: {
+            code: "service-runtime-inspection-failed",
+            detail: "錯誤: 系統找不到指定的檔案。",
           },
-          runtime: {
-            status: "unknown",
-            detail: "service runtime inspection failed; retry with openclaw gateway status --deep",
-            inspectionFailure: {
-              code: "service-runtime-inspection-failed",
-              detail: "錯誤: 系統找不到指定的檔案。",
+        });
+
+        const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+        try {
+          printDaemonStatus(status, { json: true, deep: true });
+          expect(writeJson).toHaveBeenCalledOnce();
+          const serialized = JSON.stringify(writeJson.mock.calls[0]?.[0]);
+          if (!serialized) {
+            throw new Error("expected terminal JSON output");
+          }
+          expect(JSON.parse(serialized)).toMatchObject({
+            service: {
+              loaded: null,
+              loadState: {
+                status: "unknown",
+                detail: "Error: systemctl is-enabled timed out",
+              },
+              runtime: {
+                status: "unknown",
+                detail:
+                  "service runtime inspection failed; retry with openclaw gateway status --deep",
+                inspectionFailure: {
+                  code: "service-runtime-inspection-failed",
+                  detail: "錯誤: 系統找不到指定的檔案。",
+                },
+              },
             },
-          },
-        },
-      });
-    } finally {
-      writeJson.mockRestore();
-    }
+          });
+        } finally {
+          writeJson.mockRestore();
+        }
 
-    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
-    const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
-    try {
-      printDaemonStatus(status, { json: false, deep: true });
-      const output = log.mock.calls.flat().join("\n");
-      expect(output).toContain("Service: LaunchAgent (unknown)");
-      expect(output).not.toContain("Service: LaunchAgent (not loaded)");
-      expect(output).toContain(
-        "Runtime: unknown (service runtime inspection failed; retry with openclaw gateway status --deep)",
-      );
-      expect(output).not.toContain("系統找不到指定的檔案");
-    } finally {
-      log.mockRestore();
-      error.mockRestore();
-    }
-  }, 1_000);
+        const output = capturePrintedDaemonStatus(status, { json: false, deep: true }).logs;
+        expect(output).toContain("Service: LaunchAgent (unknown)");
+        expect(output).not.toContain("Service: LaunchAgent (not loaded)");
+        expect(output).toContain(
+          "Runtime: unknown (service runtime inspection failed; retry with openclaw gateway status --deep)",
+        );
+        expect(output).not.toContain("系統找不到指定的檔案");
+      }),
+    1_000,
+  );
 
   it.each(["bogus", "0", "-1", "1.5"])(
     "rejects invalid status timeout %s before reading service state",
@@ -1055,6 +1425,50 @@ describe("gatherDaemonStatus", () => {
     expect(inspectGatewayRestart).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { platform: "linux", reason: "service-manager-unavailable", recorded: true },
+    { platform: "linux", reason: "service-manager-unavailable", recorded: false },
+    { platform: "linux", reason: "systemd-user-bus-unavailable", recorded: true },
+    { platform: "darwin", reason: "launchd-gui-domain-unavailable", recorded: true },
+  ] as const)(
+    "reports $reason with recorded service=$recorded without inventing manager availability",
+    async ({ platform, reason, recorded }) =>
+      withMockedPlatform(platform, async () => {
+        const inspectionError = new ServiceInspectionError(reason);
+        serviceIsLoaded.mockRejectedValueOnce(inspectionError);
+        serviceReadRuntime.mockRejectedValueOnce(inspectionError);
+        if (!recorded) {
+          serviceReadCommand.mockResolvedValueOnce(null);
+        }
+        const status = await gatherStatus({ probe: false, deep: true });
+        expect(status.service.inspectionReason).toBe(reason);
+        expect(status.service.loaded).toBeNull();
+        const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+        const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+        try {
+          printDaemonStatus(status, { json: false, deep: true });
+          const output = [...log.mock.calls, ...error.mock.calls].flat().join("\n");
+          if (reason === "service-manager-unavailable") {
+            expect(output).toContain("Service: no supported service manager detected");
+            expect(status.config?.daemon?.path).toBe(status.config?.cli.path);
+            expect(status.gateway?.port).toBe(18789);
+            expect(status.service.targetRole).toBe("diagnostic-only");
+            expect(output.includes("recorded service unit is stale")).toBe(recorded);
+            expect(output.includes("Recorded command:")).toBe(recorded);
+            expect(output).toContain("Restart the Gateway you launched manually");
+            expect(output).not.toContain("Service: LaunchAgent (unknown)");
+            expect(output).not.toContain("Retry: openclaw gateway status --deep");
+          } else {
+            expect(output).toContain("Service: LaunchAgent (unknown)");
+            expect(output).not.toContain("no supported service manager detected");
+          }
+        } finally {
+          log.mockRestore();
+          error.mockRestore();
+        }
+      }),
+  );
+
   it("surfaces recent service restart handoffs only during deep status", async () => {
     readGatewayRestartHandoffSync.mockReturnValueOnce({
       kind: "gateway-supervisor-restart-handoff",
@@ -1078,6 +1492,217 @@ describe("gatherDaemonStatus", () => {
     expect(status.service.restartHandoff?.restartKind).toBe("full-process");
     expect(status.service.restartHandoff?.supervisorMode).toBe("launchd");
   });
+
+  it.each([false, true])(
+    "prints the newer database refusal before loading deep status config (json=%s)",
+    async (json) => {
+      const stateDir = tempDirs.make("openclaw-status-newer-schema-");
+      const env = { OPENCLAW_STATE_DIR: stateDir };
+      const databasePath = resolveOpenClawStateSqlitePath(env);
+      await fs.mkdir(path.dirname(databasePath), { recursive: true });
+      const { DatabaseSync } = requireNodeSqlite();
+      const database = new DatabaseSync(databasePath);
+      try {
+        database.exec(`
+          PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1};
+          CREATE TABLE schema_meta (meta_key TEXT PRIMARY KEY, app_version TEXT);
+          INSERT INTO schema_meta VALUES ('primary', '2026.9.4');
+        `);
+      } finally {
+        database.close();
+      }
+      const before = await fs.readFile(databasePath);
+      const originalPreflight = await vi.importActual<
+        typeof import("../../state/openclaw-database-preflight.js")
+      >("../../state/openclaw-database-preflight.js");
+      preflightOpenClawDatabaseSchemas.mockImplementation(
+        originalPreflight.preflightOpenClawDatabaseSchemas,
+      );
+      serviceReadCommand.mockResolvedValueOnce({
+        programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],
+        environment: env,
+      });
+      const program = new Command().enablePositionalOptions().exitOverride();
+      registerGatewayCli(program);
+      const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+      const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+      const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+      const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => {
+        throw new Error("status-exit");
+      });
+      try {
+        await expect(
+          program
+            .parseAsync(
+              ["gateway", "status", "--deep", "--no-probe", ...(json ? ["--json"] : [])],
+              { from: "user" },
+            )
+            .then(() => undefined),
+        ).rejects.toThrow("status-exit");
+        const output = json
+          ? JSON.stringify(writeJson.mock.calls)
+          : error.mock.calls.flat().join("\n");
+        expect(output).toContain("Gateway refused startup");
+        expect(output).toContain(`schema ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`);
+        expect(output).toContain(`this build supports ${OPENCLAW_STATE_SCHEMA_VERSION}`);
+        expect(output).toContain("writer build 2026.9.4");
+        expect(output).toContain(`Refused by OpenClaw ${VERSION}`);
+        expect(output).toContain("pre-upgrade backup");
+        expect(exit).toHaveBeenCalledWith(1);
+        expect(createConfigIOCalls).not.toHaveBeenCalled();
+        expect(readGatewayLastShutdown).not.toHaveBeenCalled();
+        expect(await fs.readFile(databasePath)).toEqual(before);
+      } finally {
+        log.mockRestore();
+        error.mockRestore();
+        writeJson.mockRestore();
+        exit.mockRestore();
+      }
+    },
+  );
+
+  it("keeps readable shutdown history when a registered agent database has a newer schema", async () => {
+    const stateDir = tempDirs.make("openclaw-status-readable-schema-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const databasePath = resolveOpenClawStateSqlitePath(env);
+    const agentPath = path.join(stateDir, "agent.sqlite");
+    await fs.mkdir(path.dirname(databasePath), { recursive: true });
+    const { DatabaseSync } = requireNodeSqlite();
+    const database = new DatabaseSync(databasePath);
+    try {
+      database.exec(`BEGIN; ${OPENCLAW_STATE_SCHEMA_SQL}
+        PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION};
+        INSERT INTO gateway_boot_lifecycle VALUES
+          ('prior-boot', 1, 1000, 2000, 'clean_stop', NULL, 'stop (SIGTERM)');
+      `);
+      database
+        .prepare("INSERT INTO agent_databases VALUES ('optional', ?, ?, 1, NULL)")
+        .run(agentPath, OPENCLAW_AGENT_SCHEMA_VERSION + 1);
+      database.exec("COMMIT");
+    } finally {
+      database.close();
+    }
+    const agent = new DatabaseSync(agentPath);
+    try {
+      agent.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION + 1}`);
+    } finally {
+      agent.close();
+    }
+    const originalPreflight = await vi.importActual<
+      typeof import("../../state/openclaw-database-preflight.js")
+    >("../../state/openclaw-database-preflight.js");
+    preflightOpenClawDatabaseSchemas.mockImplementation(
+      originalPreflight.preflightOpenClawDatabaseSchemas,
+    );
+    const originalLifecycle = await vi.importActual<
+      typeof import("../../infra/gateway-boot-lifecycle.js")
+    >("../../infra/gateway-boot-lifecycle.js");
+    readGatewayLastShutdown.mockImplementation(originalLifecycle.readGatewayLastShutdown);
+    serviceReadCommand.mockResolvedValueOnce({
+      programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],
+      environment: env,
+    });
+
+    const status = await gatherStatus({ deep: true, probe: false });
+
+    expect(status.gateway?.lastShutdown).toEqual({
+      reason: "stop (SIGTERM)",
+      completedAtMs: 2000,
+    });
+  });
+
+  it("does not inspect local schema compatibility for an explicit remote status target", async () => {
+    preflightOpenClawDatabaseSchemas.mockRejectedValue(new Error("local state is unavailable"));
+    await gatherStatus({
+      deep: true,
+      probe: false,
+      rpc: { url: "wss://gateway.example" },
+    });
+    expect(preflightOpenClawDatabaseSchemas).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { deep: true, remote: false },
+    { deep: false, remote: false },
+    { deep: true, remote: true },
+  ])(
+    "reports the last shutdown only for deep local status ($deep, $remote)",
+    async ({ deep, remote }) => {
+      const lastShutdown = { reason: "stop (SIGTERM)", completedAtMs: 1_800_000_000_000 };
+      readGatewayLastShutdown.mockReturnValue(lastShutdown);
+
+      const status = await gatherStatus({
+        probe: false,
+        deep,
+        rpc: remote ? { url: "wss://gateway.example" } : {},
+      });
+
+      if (deep && !remote) {
+        expect(status.gateway).toMatchObject({ lastShutdown });
+        expect(readGatewayLastShutdown).toHaveBeenCalledWith(
+          expect.objectContaining({ OPENCLAW_STATE_DIR: "/tmp/openclaw-daemon" }),
+        );
+        const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+        const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+        try {
+          printDaemonStatus(status, { json: false, deep });
+          expect(log.mock.calls.flat().join("\n")).toContain(
+            "Last shutdown: stop (SIGTERM) at 2027-01-15T08:00:00.000Z",
+          );
+        } finally {
+          log.mockRestore();
+          error.mockRestore();
+        }
+      } else {
+        expect(readGatewayLastShutdown).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it.each([
+    { deep: true, rpc: {}, diagnose: true },
+    { deep: false, rpc: {}, diagnose: false },
+    { deep: true, rpc: { url: "wss://gateway.example" }, diagnose: false },
+    { deep: true, rpc: { localPortOverride: 19002 }, diagnose: false },
+  ])(
+    "reports dueling systemd diagnosis only for its native target ($deep, $rpc)",
+    async ({ deep, rpc, diagnose }) => {
+      const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+      Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
+      findSystemdGatewayInstallation.mockResolvedValue({
+        kind: "dueling",
+        user: {
+          scope: "user",
+          unitName: "openclaw-gateway.service",
+          unitPath: "/home/test/.config/systemd/user/openclaw-gateway.service",
+        },
+        system: {
+          scope: "system",
+          unitName: "openclaw-gateway.service",
+          unitPath: "/etc/systemd/system/openclaw-gateway.service",
+        },
+      });
+      const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+      const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+      try {
+        const status = await gatherStatus({ probe: false, deep, rpc });
+        printDaemonStatus(status, { json: false, deep });
+        const output = [...log.mock.calls, ...error.mock.calls].flat().join("\n");
+        expect(output.match(/they will SIGTERM each other/g) ?? []).toHaveLength(diagnose ? 1 : 0);
+        if (diagnose) {
+          expect(output).toContain(status.gateway?.duelingScopesWarning);
+          expect(output).toContain("Run `openclaw doctor` interactively");
+        } else {
+          expect(findSystemdGatewayInstallation).not.toHaveBeenCalled();
+          expect(status.gateway?.duelingScopesWarning).toBeUndefined();
+        }
+      } finally {
+        log.mockRestore();
+        error.mockRestore();
+        Object.defineProperty(process, "platform", platform);
+      }
+    },
+  );
 
   it.runIf(process.platform === "darwin")(
     "surfaces stale updater launchd jobs only during deep status",
@@ -1120,6 +1745,31 @@ describe("gatherDaemonStatus", () => {
     },
   );
 
+  it("surfaces foreign launchd jobs and restart correlation without --deep", async () => {
+    const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { configurable: true, value: "darwin" });
+    try {
+      const job: ForeignLaunchdJob = {
+        label: "ai.openclaw.test.w15.restart",
+        program: "/tmp/openclaw-test/restart.sh",
+        keepAlive: true,
+        gatewayActions: ["restart"],
+        safeToRemove: true,
+      };
+      findForeignLaunchdJobs.mockResolvedValue([job]);
+
+      const status = await gatherStatus({ probe: false });
+
+      expect(status.service.foreignLaunchdJobs).toEqual([job]);
+      expect(status.service.forcedRestartSummary).toEqual({ count: 3, windowMs: 600_000 });
+      expect(findForeignLaunchdJobs.mock.calls[0]?.[0]?.OPENCLAW_STATE_DIR).toBe(
+        "/tmp/openclaw-daemon",
+      );
+    } finally {
+      Object.defineProperty(process, "platform", platform);
+    }
+  });
+
   it("does not read restart handoffs during normal status", async () => {
     await gatherStatus({ probe: false });
 
@@ -1158,7 +1808,7 @@ describe("gatherDaemonStatus", () => {
     ]);
   });
 
-  it("skips established gateway connection scans for remote gateway status", async () => {
+  it("skips established gateway connection scans for an explicit remote target", async () => {
     daemonLoadedConfig = {
       gateway: {
         mode: "remote",
@@ -1167,7 +1817,11 @@ describe("gatherDaemonStatus", () => {
       },
     };
 
-    const status = await gatherStatus({ probe: false, deep: true });
+    const status = await gatherStatus({
+      probe: false,
+      deep: true,
+      rpc: { url: "wss://gateway.example" },
+    });
 
     expect(inspectPortConnections).not.toHaveBeenCalled();
     expect(inspectWindowsGatewayFirewall).not.toHaveBeenCalled();
@@ -1301,29 +1955,41 @@ describe("gatherDaemonStatus", () => {
     );
   });
 
-  it("resolves daemon gateway auth password SecretRef values before probing", async () => {
-    daemonLoadedConfig = {
-      gateway: {
-        bind: "lan",
-        tls: { enabled: true },
-        auth: {
-          password: { source: "env", provider: "default", id: "DAEMON_GATEWAY_PASSWORD" },
-        },
-      },
-      secrets: {
-        providers: {
-          default: { source: "env" },
-        },
-      },
-    };
-    setTestEnvValue("DAEMON_GATEWAY_PASSWORD", "daemon-secretref-password"); // pragma: allowlist secret
-
-    await gatherStatus();
-
-    expect((callArg(callGatewayStatusProbe) as { password?: string }).password).toBe(
-      "daemon-secretref-password",
-    ); // pragma: allowlist secret
+  registerProxyAuthStatusTests({
+    setDaemonConfig: (config) => {
+      daemonLoadedConfig = config;
+    },
+    gatherStatus,
+    serviceReadCommand,
   });
+
+  it.each([undefined, "password", "trusted-proxy"] as const)(
+    "resolves daemon %s auth password SecretRef values before probing",
+    async (mode) => {
+      daemonLoadedConfig = {
+        gateway: {
+          bind: "lan",
+          tls: { enabled: true },
+          auth: {
+            mode,
+            password: { source: "env", provider: "default", id: "DAEMON_GATEWAY_PASSWORD" },
+          },
+        },
+        secrets: {
+          providers: {
+            default: { source: "env" },
+          },
+        },
+      };
+      setTestEnvValue("DAEMON_GATEWAY_PASSWORD", "daemon-secretref-password"); // pragma: allowlist secret
+
+      await gatherStatus();
+
+      expect((callArg(callGatewayStatusProbe) as { password?: string }).password).toBe(
+        "daemon-secretref-password",
+      ); // pragma: allowlist secret
+    },
+  );
 
   it("resolves daemon gateway auth token SecretRef values before probing", async () => {
     daemonLoadedConfig = {
@@ -1350,40 +2016,47 @@ describe("gatherDaemonStatus", () => {
     );
   });
 
-  it("skips daemon exec SecretRef probe auth when exec refs are disabled", async () => {
-    daemonLoadedConfig = {
-      gateway: {
-        bind: "lan",
-        tls: { enabled: true },
-        auth: {
-          mode: "token",
-          token: { source: "exec", provider: "vault", id: "gateway/token" },
+  it.each(["token", "trusted-proxy"] as const)(
+    "skips daemon %s exec SecretRef probe auth when exec refs are disabled",
+    async (mode) => {
+      daemonLoadedConfig = {
+        gateway: {
+          bind: "lan",
+          tls: { enabled: true },
+          auth: {
+            mode,
+            [mode === "token" ? "token" : "password"]: {
+              source: "exec",
+              provider: "vault",
+              id: "gateway/credential",
+            },
+          },
         },
-      },
-      secrets: {
-        providers: {
-          vault: { source: "exec", command: "/bin/false" },
+        secrets: {
+          providers: {
+            vault: { source: "exec", command: "/bin/false" },
+          },
         },
-      },
-    };
+      };
 
-    const status = await gatherStatus({ allowExecSecretRefs: false });
+      const status = await gatherStatus({ allowExecSecretRefs: false });
 
-    expect(resolveGatewayProbeAuthSafeWithSecretInputsCalls).not.toHaveBeenCalled();
-    const probeInput = callArg(callGatewayStatusProbe) as {
-      token?: string;
-      password?: string;
-      allowRpcConfigCredentials?: boolean;
-    };
-    expect(probeInput.token).toBeUndefined();
-    expect(probeInput.password).toBeUndefined();
-    expect(probeInput.allowRpcConfigCredentials).toBe(false);
-    expect(status.rpc?.authWarning).toContain(
-      "gateway credentials use an exec SecretRef and exec SecretRefs are disabled",
-    );
-  });
+      expect(resolveGatewayProbeAuthSafeWithSecretInputsCalls).not.toHaveBeenCalled();
+      const probeInput = callArg(callGatewayStatusProbe) as {
+        token?: string;
+        password?: string;
+        allowRpcConfigCredentials?: boolean;
+      };
+      expect(probeInput.token).toBeUndefined();
+      expect(probeInput.password).toBeUndefined();
+      expect(probeInput.allowRpcConfigCredentials).toBe(false);
+      expect(status.rpc?.authWarning).toContain(
+        "gateway credentials use an exec SecretRef and exec SecretRefs are disabled",
+      );
+    },
+  );
 
-  it("skips remote password exec SecretRef auth despite an ambient password", async () => {
+  it("keeps service password auth independent of unused remote exec SecretRefs", async () => {
     daemonLoadedConfig = {
       gateway: {
         mode: "remote",
@@ -1407,18 +2080,16 @@ describe("gatherDaemonStatus", () => {
       allowExecSecretRefs: false,
     });
 
-    expect(resolveGatewayProbeAuthSafeWithSecretInputsCalls).not.toHaveBeenCalled();
+    expect(resolveGatewayProbeAuthSafeWithSecretInputsCalls).toHaveBeenCalledTimes(1);
     const probeInput = callArg(callGatewayStatusProbe) as {
       token?: string;
       password?: string;
       allowRpcConfigCredentials?: boolean;
     };
     expect(probeInput.token).toBeUndefined();
-    expect(probeInput.password).toBeUndefined();
-    expect(probeInput.allowRpcConfigCredentials).toBe(false);
-    expect(status.rpc?.authWarning).toContain(
-      "gateway credentials use an exec SecretRef and exec SecretRefs are disabled",
-    );
+    expect(probeInput.password).toBe("ambient-password");
+    expect(probeInput.allowRpcConfigCredentials).toBe(true);
+    expect(status.rpc?.authWarning).toBeUndefined();
   });
 
   it("ignores remote exec SecretRefs for local probes when exec refs are disabled", async () => {
@@ -1448,7 +2119,7 @@ describe("gatherDaemonStatus", () => {
     expect(probeInput.password).toBeUndefined();
   });
 
-  it("ignores local exec SecretRefs for remote probes when exec refs are disabled", async () => {
+  it("ignores local exec SecretRefs for explicit URL probes when exec refs are disabled", async () => {
     daemonLoadedConfig = {
       gateway: {
         mode: "remote",
@@ -1467,10 +2138,13 @@ describe("gatherDaemonStatus", () => {
       },
     };
 
-    const status = await gatherStatus({ allowExecSecretRefs: false });
+    const status = await gatherStatus({
+      rpc: { url: "wss://gateway.example" },
+      allowExecSecretRefs: false,
+    });
 
     expect(status.rpc?.authWarning).toBeUndefined();
-    expect(resolveGatewayProbeAuthSafeWithSecretInputsCalls).toHaveBeenCalledTimes(1);
+    expect(resolveGatewayProbeAuthSafeWithSecretInputsCalls).not.toHaveBeenCalled();
     const probeInput = callArg(callGatewayStatusProbe) as { token?: string; password?: string };
     expect(probeInput.token).toBeUndefined();
     expect(probeInput.password).toBeUndefined();
@@ -1501,63 +2175,60 @@ describe("gatherDaemonStatus", () => {
     expect(probeInput.password).toBeUndefined();
   });
 
-  it("degrades safely when daemon probe auth SecretRef is unresolved", async () => {
-    daemonLoadedConfig = {
-      gateway: {
-        bind: "lan",
-        tls: { enabled: true },
-        auth: {
-          mode: "token",
-          token: { source: "env", provider: "default", id: "MISSING_DAEMON_GATEWAY_TOKEN" },
+  it.each([
+    { ok: true, redacted: false },
+    { ok: false, redacted: false },
+    { ok: true, redacted: true },
+    { ok: false, redacted: true },
+  ])(
+    "reports unavailable probe auth with redacted=$redacted and ok=$ok",
+    async ({ ok, redacted }) => {
+      const id = redacted ? "DAEMON_GATEWAY_TOKEN" : "MISSING_DAEMON_GATEWAY_TOKEN";
+      daemonLoadedConfig = {
+        gateway: {
+          bind: "lan",
+          tls: { enabled: true },
+          auth: {
+            mode: "token",
+            token: { source: "env", provider: "default", id },
+          },
         },
-      },
-      secrets: {
-        providers: {
-          default: { source: "env" },
-        },
-      },
-    };
+        secrets: { providers: { default: { source: "env" } } },
+      };
+      if (redacted) {
+        setTestEnvValue("DAEMON_GATEWAY_TOKEN", REDACTED_SENTINEL);
+      }
+      callGatewayStatusProbe.mockResolvedValueOnce({
+        ok,
+        url: "wss://127.0.0.1:19001",
+        ...(ok ? {} : { error: "gateway closed" }),
+      });
+      const status = await gatherStatus({ deep: redacted });
+      const probeInput = callArg(callGatewayStatusProbe) as { token?: string; password?: string };
+      expect(probeInput.token).toBeUndefined();
+      expect(probeInput.password).toBeUndefined();
+      expect(status.rpc?.ok).toBe(ok);
+      if (!redacted) {
+        if (ok) {
+          expect(status.rpc?.authWarning).toBeUndefined();
+        } else {
+          expect(status.rpc?.authWarning).toContain(
+            "gateway.auth.token SecretRef is unresolved in this command path",
+          );
+          expect(status.rpc?.authWarning).toContain("probing without configured auth credentials");
+        }
+        return;
+      }
+      expect(status.rpc?.authWarning).toContain("env:default:DAEMON_GATEWAY_TOKEN");
+      expect(status.rpc?.authWarning).toContain("redaction placeholder");
+      expect(status.rpc?.authWarning).toContain("openclaw doctor --fix");
+      expect(capturePrintedDaemonStatus(status, { json: false, deep: true }).errors).toContain(
+        "redaction placeholder",
+      );
+    },
+  );
 
-    const status = await gatherStatus();
-
-    const probeInput = callArg(callGatewayStatusProbe) as { token?: string; password?: string };
-    expect(probeInput.token).toBeUndefined();
-    expect(probeInput.password).toBeUndefined();
-    expect(status.rpc?.authWarning).toBeUndefined();
-  });
-
-  it("surfaces authWarning when daemon probe auth SecretRef is unresolved and probe fails", async () => {
-    daemonLoadedConfig = {
-      gateway: {
-        bind: "lan",
-        tls: { enabled: true },
-        auth: {
-          mode: "token",
-          token: { source: "env", provider: "default", id: "MISSING_DAEMON_GATEWAY_TOKEN" },
-        },
-      },
-      secrets: {
-        providers: {
-          default: { source: "env" },
-        },
-      },
-    };
-    callGatewayStatusProbe.mockResolvedValueOnce({
-      ok: false,
-      error: "gateway closed",
-      url: "wss://127.0.0.1:19001",
-    });
-
-    const status = await gatherStatus();
-
-    expect(status.rpc?.ok).toBe(false);
-    expect(status.rpc?.authWarning).toContain(
-      "gateway.auth.token SecretRef is unresolved in this command path",
-    );
-    expect(status.rpc?.authWarning).toContain("probing without configured auth credentials");
-  });
-
-  it("keeps configured remote password authoritative for remote probes", async () => {
+  it("keeps service token auth authoritative over configured remote password auth", async () => {
     daemonLoadedConfig = {
       gateway: {
         mode: "remote",
@@ -1578,8 +2249,8 @@ describe("gatherDaemonStatus", () => {
     await gatherStatus();
 
     const probeInput = callArg(callGatewayStatusProbe) as { token?: string; password?: string };
-    expect(probeInput.token).toBeUndefined();
-    expect(probeInput.password).toBe("remote-password"); // pragma: allowlist secret
+    expect(probeInput.token).toBe("local-token");
+    expect(probeInput.password).toBe("local-password");
   });
 
   it("skips TLS runtime loading when probe is disabled", async () => {
@@ -1669,7 +2340,7 @@ describe("gatherDaemonStatus", () => {
     expect(status.lastError).toBeUndefined();
   });
 
-  it("does not read local gateway errors in remote mode", async () => {
+  it("reads service gateway errors despite remote client mode", async () => {
     daemonLoadedConfig = {
       gateway: {
         mode: "remote",
@@ -1679,14 +2350,15 @@ describe("gatherDaemonStatus", () => {
     };
     callGatewayStatusProbe.mockResolvedValueOnce({
       ok: false,
-      url: "wss://remote.example:18790",
+      url: "ws://127.0.0.1:19001",
       error: "gateway closed (1000): ",
     });
+    readLastGatewayErrorLine.mockResolvedValueOnce("service gateway failure");
 
     const status = await gatherStatus();
 
-    expect(readLastGatewayErrorLine).not.toHaveBeenCalled();
-    expect(status.lastError).toBeUndefined();
+    expect(readLastGatewayErrorLine).toHaveBeenCalledOnce();
+    expect(status.lastError).toBe("service gateway failure");
   });
 
   it("compares plugin drift against the running gateway version from the probe, not the CLI VERSION", async () => {

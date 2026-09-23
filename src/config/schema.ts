@@ -14,7 +14,6 @@ import {
   type ConfigJsonSchemaObject as JsonSchemaObject,
   type ConfigSchemaResponse,
 } from "./schema.shared.js";
-import { applyDerivedTags } from "./schema.tags.js";
 import { applyConfigTierHints, applyResolvedConfigTierHints } from "./schema.tiers.js";
 
 export { classifyConfigSchemaPathSegment, lookupConfigSchema } from "./schema.lookup.js";
@@ -59,6 +58,8 @@ export type PluginUiMetadata = {
   id: string;
   name?: string;
   description?: string;
+  configSecretInputPaths?: readonly string[];
+  configGroups?: ConfigUiHint["groups"];
   configUiHints?: Record<
     string,
     Pick<
@@ -246,9 +247,15 @@ function applyMetadataHints(
       ...next[`${basePath}.config`],
       label: `${name} Config`,
       help: `Plugin-defined config payload for ${id}.`,
+      ...(plugin.configGroups ? { groups: plugin.configGroups } : {}),
     };
 
     mergeRelativeHints(`${basePath}.config`, plugin.configUiHints);
+    // Manifest paths remain authoritative when local $refs hide secret leaves.
+    for (const relPath of plugin.configSecretInputPaths ?? []) {
+      const key = `${basePath}.config.${relPath}`;
+      next[key] = { ...next[key], sensitive: true };
+    }
   }
 
   for (const channel of channels) {
@@ -374,7 +381,9 @@ function buildMergedSchemaCacheKey(params: {
       name: plugin.name,
       description: plugin.description,
       configSchema: plugin.configSchema ?? null,
+      configSecretInputPaths: plugin.configSecretInputPaths ?? null,
       configUiHints: plugin.configUiHints ?? null,
+      configGroups: plugin.configGroups ?? null,
     }))
     .toSorted((a, b) => a.id.localeCompare(b.id));
   const channels = params.channels
@@ -428,7 +437,7 @@ function getBundledChannelSchemaMetadata(): ChannelUiMetadata[] {
 
 /**
  * Materialize the presentation hints that need the merged schema: tiers resolve
- * per path, then shared channel leaves get their help, then tags derive.
+ * per path, then shared channel leaves get their help.
  */
 function resolveMergedUiHints(
   schema: ConfigSchema,
@@ -444,12 +453,10 @@ function resolveMergedUiHints(
       Object.entries(root?.properties ?? {}).filter(([key]) => changedRoots.includes(key)),
     ),
   };
-  return applyDerivedTags(
-    applySharedChannelFieldHelp(
-      applyResolvedConfigTierHints(
-        changedSchema,
-        applyConfigTierHints(hints, { includePluginOwnedChannels: true }),
-      ),
+  return applySharedChannelFieldHelp(
+    applyResolvedConfigTierHints(
+      changedSchema,
+      applyConfigTierHints(hints, { includePluginOwnedChannels: true }),
     ),
   );
 }
@@ -461,11 +468,9 @@ function buildBaseConfigSchema(): ConfigSchemaResponse {
   const generated = computeBaseConfigSchemaResponse();
   const bundledChannels = getBundledChannelSchemaMetadata();
   const mergedWithoutSensitiveHints = applyMetadataHints(generated.uiHints, [], bundledChannels);
-  const mergedHints = applyDerivedTags(
-    applySensitiveHints(
-      mergedWithoutSensitiveHints,
-      collectExtensionHintKeys(mergedWithoutSensitiveHints, [], bundledChannels),
-    ),
+  const mergedHints = applySensitiveHints(
+    mergedWithoutSensitiveHints,
+    collectExtensionHintKeys(mergedWithoutSensitiveHints, [], bundledChannels),
   );
   const mergedSchema = mergeExtensionSchemas(generated.schema, bundledChannels);
   const next = {
@@ -504,11 +509,9 @@ export function buildConfigSchemaCore(params?: {
     plugins,
     channels,
   );
-  const mergedHints = applyDerivedTags(
-    applySensitiveUrlHints(
-      applySensitiveHints(mergedWithoutSensitiveHints, extensionHintKeys),
-      extensionHintKeys,
-    ),
+  const mergedHints = applySensitiveUrlHints(
+    applySensitiveHints(mergedWithoutSensitiveHints, extensionHintKeys),
+    extensionHintKeys,
   );
   const mergedSchema = mergeExtensionSchemas(cloneSchema(base.schema), channels, plugins);
   const changedRoots = [

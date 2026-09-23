@@ -1,4 +1,3 @@
-// Mistral provider adapts Mistral streams and tool calls to the runtime.
 import { randomUUID } from "node:crypto";
 import { HTTPClient, type Fetcher } from "@mistralai/mistralai/lib/http";
 import type {
@@ -7,12 +6,17 @@ import type {
   CompletionEvent,
   ContentChunk,
   FunctionTool,
+  ReasoningEffort,
 } from "@mistralai/mistralai/models/components";
+import { ReasoningEffort$inboundSchema } from "@mistralai/mistralai/models/components/reasoningeffort.js";
 import { Chat } from "@mistralai/mistralai/sdk/chat";
+import { appendAssistantThinking } from "@openclaw/llm-core/event-stream";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost } from "../host.js";
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
 import { transformProviderMessages as transformMessages } from "../provider-transcript-transform.js";
+// Mistral provider adapts Mistral streams and tool calls to the runtime.
+import { createAssistantOutput } from "../transports/assistant-output.js";
 import {
   assignTransportErrorDetails,
   finalizeTerminalToolCallArguments,
@@ -116,8 +120,6 @@ export function createBoundedMistralFetcher(
 /**
  * Provider-specific options for the Mistral API.
  */
-type MistralReasoningEffort = "none" | "high";
-
 interface MistralOptions extends StreamOptions {
   toolChoice?:
     | "auto"
@@ -126,7 +128,7 @@ interface MistralOptions extends StreamOptions {
     | "required"
     | { type: "function"; function: { name: string } };
   promptMode?: "reasoning";
-  reasoningEffort?: MistralReasoningEffort;
+  reasoningEffort?: ReasoningEffort;
 }
 
 /**
@@ -140,7 +142,7 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
   const stream = new AssistantMessageEventStream();
 
   void (async () => {
-    const output = createOutput(model);
+    const output = createAssistantOutput(model);
 
     try {
       const apiKey = options?.apiKey || getEnvApiKey(model.provider);
@@ -247,36 +249,19 @@ export const streamSimpleMistral: StreamFunction<"mistral-conversations", Simple
     : undefined;
   const reasoning = clampedReasoning === "off" ? undefined : clampedReasoning;
   const shouldUseReasoning = model.reasoning && reasoning !== undefined;
+  const supportsReasoningEffort = usesReasoningEffort(model);
 
   return streamMistral(model, context, {
     ...base,
-    promptMode: shouldUseReasoning && usesPromptModeReasoning(model) ? "reasoning" : undefined,
+    promptMode: shouldUseReasoning && !supportsReasoningEffort ? "reasoning" : undefined,
     reasoningEffort:
-      shouldUseReasoning && usesReasoningEffort(model)
-        ? mapReasoningEffort(model, reasoning)
+      shouldUseReasoning && supportsReasoningEffort
+        ? ReasoningEffort$inboundSchema.parse(
+            model.thinkingLevelMap?.[reasoning] ?? (reasoning === "minimal" ? "none" : "high"),
+          )
         : undefined,
   } satisfies MistralOptions);
 };
-
-function createOutput(model: Model<"mistral-conversations">): AssistantMessage {
-  return {
-    role: "assistant",
-    content: [],
-    api: model.api,
-    provider: model.provider,
-    model: model.id,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
-    stopReason: "stop",
-    timestamp: Date.now(),
-  };
-}
 
 function createMistralToolCallIdNormalizer(): (id: string) => string {
   const idMap = new Map<string, string>();
@@ -482,14 +467,6 @@ async function consumeChatStream(
           params.usedContentIndexes,
         )
       : new Set<number>();
-    const indexCandidates =
-      toolCallIndex === undefined
-        ? new Set<number>()
-        : findIdentityCandidates(
-            (identity) => identity.indexes.has(toolCallIndex),
-            params.usedContentIndexes,
-          );
-
     if (idCandidates.size > 0) {
       let candidates = idCandidates;
       if (nameCandidates.size > 0) {
@@ -535,6 +512,14 @@ async function consumeChatStream(
       }
       return requireSingleCandidate(indexCompatibleCandidates);
     }
+
+    const indexCandidates =
+      toolCallIndex === undefined
+        ? new Set<number>()
+        : findIdentityCandidates(
+            (identity) => identity.indexes.has(toolCallIndex),
+            params.usedContentIndexes,
+          );
 
     if (functionName) {
       // A new name normally starts a sibling call even when the SDK's omitted
@@ -654,10 +639,7 @@ async function consumeChatStream(
         }
 
         if (item.type === "thinking") {
-          const deltaText = item.thinking
-            .map((part) => ("text" in part ? part.text : ""))
-            .filter((text) => text.length > 0)
-            .join("");
+          const deltaText = item.thinking.map((part) => ("text" in part ? part.text : "")).join("");
           const thinkingDelta = sanitizeSurrogates(deltaText);
           if (!thinkingDelta) {
             continue;
@@ -668,7 +650,7 @@ async function consumeChatStream(
             output.content.push(currentBlock);
             stream.push({ type: "thinking_start", contentIndex: blockIndex(), partial: output });
           }
-          currentBlock.thinking += thinkingDelta;
+          appendAssistantThinking(currentBlock, thinkingDelta);
           stream.push({
             type: "thinking_delta",
             contentIndex: blockIndex(),
@@ -980,17 +962,6 @@ function usesReasoningEffort(model: Model<"mistral-conversations">): boolean {
     model.id === "mistral-small-latest" ||
     model.id === "mistral-medium-3-5"
   );
-}
-
-function usesPromptModeReasoning(model: Model<"mistral-conversations">): boolean {
-  return model.reasoning && !usesReasoningEffort(model);
-}
-
-function mapReasoningEffort(
-  model: Model<"mistral-conversations">,
-  level: Exclude<SimpleStreamOptions["reasoning"], undefined>,
-): MistralReasoningEffort {
-  return (model.thinkingLevelMap?.[level] ?? "high") as MistralReasoningEffort;
 }
 
 function mapToolChoice(

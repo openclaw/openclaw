@@ -6,7 +6,6 @@ import { mapAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers"
 import { hasConfiguredUnavailableCredentialStatus } from "../../channels/account-snapshot-fields.js";
 import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
-import { listChannelPlugins } from "../../channels/plugins/index.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.core.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
@@ -16,10 +15,8 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { channelRouteTargetsMatchExact } from "../../plugin-sdk/channel-route.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import { isSecretOwnerAvailable } from "../../secrets/runtime-degraded-state.js";
-import {
-  deliveryContextFromSession,
-  mergeDeliveryContext,
-} from "../../utils/delivery-context.shared.js";
+import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
+import { mergeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
@@ -35,6 +32,7 @@ import {
 } from "./channel-target-prefix.js";
 import { isPotentialConfiguredMessageChannel } from "./message-account-selection.js";
 import { resolveOutboundSessionRoute } from "./outbound-session.js";
+import { listRuntimeVisibleChannelPlugins } from "./runtime-visible-channels.js";
 import { isReservedTargetLiteralError } from "./target-errors.js";
 import { resolveChannelTarget, type ResolvedMessagingTarget } from "./target-resolver.js";
 import {
@@ -153,7 +151,7 @@ function resolveHeartbeatOwnerRoute(params: {
   if (session?.channel) {
     add(resolveOutboundChannelPlugin({ channel: session.channel, cfg: params.cfg }));
   }
-  for (const plugin of listChannelPlugins()) {
+  for (const plugin of listRuntimeVisibleChannelPlugins()) {
     if (isPotentialConfiguredMessageChannel({ cfg: params.cfg, plugin })) {
       add(plugin);
     }
@@ -597,6 +595,7 @@ export async function resolveHeartbeatDeliveryTargetWithSessionRoute(params: {
         agentId: params.agentId,
         accountId: delivery.accountId,
         target: routeResolvedTarget?.to ?? deliveryTo,
+        ...(ownerRouteMustBeDirect ? { deliveryPurpose: "heartbeat-owner" as const } : {}),
         resolvedTarget: routeResolvedTarget,
         currentSessionKey: params.currentSessionKey,
         threadId: delivery.threadId,

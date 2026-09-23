@@ -52,11 +52,14 @@ vi.mock("../session-utils.js", async () => {
   };
 });
 
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   discoverAllSessions,
   loadCostUsageSummaryFromCache,
 } from "../../infra/session-cost-usage.js";
-import { testApi, usageHandlers } from "./usage.js";
+import { resolveDateRange } from "./usage-date-range.js";
+import { loadCostUsageSummaryCached } from "./usage-result-cache.js";
+import { usageHandlers } from "./usage.js";
 
 describe("gateway usage helpers", () => {
   const dayMs = 24 * 60 * 60 * 1000;
@@ -95,7 +98,7 @@ describe("gateway usage helpers", () => {
   });
 
   function expectUtcDateRange(
-    result: ReturnType<typeof testApi.resolveDateRange>,
+    result: ReturnType<typeof resolveDateRange>,
     startDate: string,
     endDate: string,
   ) {
@@ -104,7 +107,7 @@ describe("gateway usage helpers", () => {
     expect(range.endMs).toBe(Date.parse(`${endDate}T00:00:00.000Z`) + dayMs - 1);
   }
 
-  function expectDateRange(result: ReturnType<typeof testApi.resolveDateRange>) {
+  function expectDateRange(result: ReturnType<typeof resolveDateRange>) {
     expect(result.ok).toBe(true);
     if (!result.ok) {
       throw new Error(result.error);
@@ -113,8 +116,6 @@ describe("gateway usage helpers", () => {
   }
 
   beforeEach(() => {
-    testApi.costUsageCache.clear();
-    testApi.sessionsUsageCache.clear();
     vi.useRealTimers();
     vi.clearAllMocks();
   });
@@ -129,7 +130,7 @@ describe("gateway usage helpers", () => {
     [{ startDate: "2026-02-01", endDate: "2026-13-01" }, "invalid endDate"],
     [{ startDate: "2026-02-03", endDate: "2026-02-02" }, "startDate must not be after endDate"],
   ])("resolveDateRange rejects invalid explicit ranges", (params, error) => {
-    expect(testApi.resolveDateRange(params)).toEqual({
+    expect(resolveDateRange(params)).toEqual({
       ok: false,
       error: expect.stringContaining(error),
     });
@@ -247,7 +248,7 @@ describe("gateway usage helpers", () => {
   });
 
   it("resolveDateRange uses explicit start/end as UTC when mode is missing (backward compatible)", () => {
-    const result = testApi.resolveDateRange({
+    const result = resolveDateRange({
       startDate: "2026-02-01",
       endDate: "2026-02-02",
     });
@@ -255,7 +256,7 @@ describe("gateway usage helpers", () => {
   });
 
   it("resolveDateRange accepts a leap day in explicit UTC mode", () => {
-    const result = testApi.resolveDateRange({
+    const result = resolveDateRange({
       startDate: "2024-02-29",
       endDate: "2024-03-01",
       mode: "utc",
@@ -272,7 +273,7 @@ describe("gateway usage helpers", () => {
     ["UTC-0", "2026-02-01T00:00:00.000Z", "2026-02-02T23:59:59.999Z"],
   ])("resolveDateRange applies valid explicit UTC offset %s", (utcOffset, start, end) => {
     const range = expectDateRange(
-      testApi.resolveDateRange({
+      resolveDateRange({
         startDate: "2026-02-01",
         endDate: "2026-02-02",
         mode: "specific",
@@ -287,7 +288,7 @@ describe("gateway usage helpers", () => {
     "resolveDateRange gives IANA DST boundaries precedence over %s",
     (utcOffset) => {
       const range = expectDateRange(
-        testApi.resolveDateRange({
+        resolveDateRange({
           startDate: "2026-10-25",
           endDate: "2026-10-25",
           mode: "specific",
@@ -302,7 +303,7 @@ describe("gateway usage helpers", () => {
 
   it("resolveDateRange crosses a skipped IANA civil date for the prior day's end", () => {
     const range = expectDateRange(
-      testApi.resolveDateRange({
+      resolveDateRange({
         startDate: "2011-12-29",
         endDate: "2011-12-29",
         mode: "specific",
@@ -313,7 +314,7 @@ describe("gateway usage helpers", () => {
     expect(range.startMs).toBe(Date.parse("2011-12-29T10:00:00.000Z"));
     expect(range.endMs).toBe(Date.parse("2011-12-30T10:00:00.000Z") - 1);
     expect(
-      testApi.resolveDateRange({
+      resolveDateRange({
         startDate: "2011-12-30",
         endDate: "2011-12-30",
         mode: "specific",
@@ -329,7 +330,7 @@ describe("gateway usage helpers", () => {
     "resolveDateRange retains UTC for omitted or blank offset %j",
     (utcOffset) => {
       expectUtcDateRange(
-        testApi.resolveDateRange({
+        resolveDateRange({
           startDate: "2026-02-01",
           endDate: "2026-02-02",
           mode: "specific",
@@ -345,7 +346,7 @@ describe("gateway usage helpers", () => {
     "resolveDateRange rejects malformed explicit UTC offset %j",
     (utcOffset) => {
       expect(
-        testApi.resolveDateRange({
+        resolveDateRange({
           startDate: "2026-02-01",
           endDate: "2026-02-02",
           mode: "specific",
@@ -390,7 +391,7 @@ describe("gateway usage helpers", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-02-17T03:57:00.000Z"));
     const range = expectDateRange(
-      testApi.resolveDateRange({
+      resolveDateRange({
         days: 1,
         mode: "specific",
         utcOffset: "UTC-5",
@@ -403,7 +404,7 @@ describe("gateway usage helpers", () => {
   it("resolveDateRange uses gateway local day boundaries in gateway mode", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 1, 5, 12, 34, 56));
-    const range = expectDateRange(testApi.resolveDateRange({ days: 1, mode: "gateway" }));
+    const range = expectDateRange(resolveDateRange({ days: 1, mode: "gateway" }));
     const expectedStart = new Date(2026, 1, 5).getTime();
     expect(range.startMs).toBe(expectedStart);
     expect(range.endMs).toBe(expectedStart + dayMs - 1);
@@ -414,7 +415,7 @@ describe("gateway usage helpers", () => {
       expect(new Date("2026-03-08T05:00:00.000Z").getTimezoneOffset()).toBe(300);
       expect(new Date("2026-03-09T04:00:00.000Z").getTimezoneOffset()).toBe(240);
       const range = expectDateRange(
-        testApi.resolveDateRange({
+        resolveDateRange({
           startDate: "2026-03-08",
           endDate: "2026-03-08",
           mode: "gateway",
@@ -432,7 +433,7 @@ describe("gateway usage helpers", () => {
       vi.useFakeTimers();
       vi.setSystemTime(new Date("2026-03-09T12:00:00.000Z"));
       const range = expectDateRange(
-        testApi.resolveDateRange({
+        resolveDateRange({
           days: 2,
           mode: "gateway",
         }),
@@ -445,15 +446,15 @@ describe("gateway usage helpers", () => {
   it("resolveDateRange clamps days to its supported bounds and defaults to 30 days", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-02-05T12:34:56.000Z"));
-    const oneDay = expectDateRange(testApi.resolveDateRange({ days: 0 }));
+    const oneDay = expectDateRange(resolveDateRange({ days: 0 }));
     expect(oneDay.endMs).toBe(Date.UTC(2026, 1, 5) + dayMs - 1);
     expect(oneDay.startMs).toBe(Date.UTC(2026, 1, 5));
 
-    const maxDays = expectDateRange(testApi.resolveDateRange({ days: Number.MAX_SAFE_INTEGER }));
+    const maxDays = expectDateRange(resolveDateRange({ days: Number.MAX_SAFE_INTEGER }));
     expect(maxDays.endMs).toBe(Date.UTC(2026, 1, 5) + dayMs - 1);
     expect(maxDays.startMs).toBe(Date.UTC(2026, 1, 5) - (36600 - 1) * dayMs);
 
-    const def = expectDateRange(testApi.resolveDateRange({}));
+    const def = expectDateRange(resolveDateRange({}));
     expect(def.endMs).toBe(Date.UTC(2026, 1, 5) + dayMs - 1);
     expect(def.startMs).toBe(Date.UTC(2026, 1, 5) - 29 * dayMs);
   });
@@ -463,12 +464,12 @@ describe("gateway usage helpers", () => {
     vi.setSystemTime(new Date("2026-02-05T00:00:00.000Z"));
 
     const config = {} as OpenClawConfig;
-    const a = await testApi.loadCostUsageSummaryCached({
+    const a = await loadCostUsageSummaryCached({
       startMs: 1,
       endMs: 2,
       config,
     });
-    const b = await testApi.loadCostUsageSummaryCached({
+    const b = await loadCostUsageSummaryCached({
       startMs: 1,
       endMs: 2,
       config,
@@ -480,6 +481,18 @@ describe("gateway usage helpers", () => {
     expect(vi.mocked(loadCostUsageSummaryFromCache).mock.calls.at(0)?.[0]?.refreshMode).toBe(
       "background",
     );
+
+    for (const range of [
+      { startMs: 2, endMs: 2 },
+      { startMs: 1, endMs: 3 },
+    ]) {
+      await loadCostUsageSummaryCached({ startMs: 1, endMs: 2, config });
+      const previousLoads = vi.mocked(loadCostUsageSummaryFromCache).mock.calls.length;
+      await loadCostUsageSummaryCached({ ...range, config });
+      expect(vi.mocked(loadCostUsageSummaryFromCache)).toHaveBeenCalledTimes(previousLoads + 1);
+      await loadCostUsageSummaryCached({ ...range, config });
+      expect(vi.mocked(loadCostUsageSummaryFromCache)).toHaveBeenCalledTimes(previousLoads + 1);
+    }
   });
 
   it("keeps refreshing cost summaries fresh for the TTL window", async () => {
@@ -498,37 +511,35 @@ describe("gateway usage helpers", () => {
     const config = {
       agents: { entries: { ops: { default: true } } },
     } as OpenClawConfig;
-    await testApi.loadCostUsageSummaryCached({ startMs: 1, endMs: 2, config });
+    await loadCostUsageSummaryCached({ startMs: 1, endMs: 2, config });
 
-    const entry = testApi.costUsageCache.get("agent:ops:1-2:gateway");
-    expect(entry?.updatedAt).toBe(Date.now());
     expect(vi.mocked(loadCostUsageSummaryFromCache).mock.calls[0]?.[0]?.agentId).toBe("ops");
 
     await vi.advanceTimersByTimeAsync(29_999);
-    await testApi.loadCostUsageSummaryCached({ startMs: 1, endMs: 2, config });
+    await loadCostUsageSummaryCached({ startMs: 1, endMs: 2, config });
     expect(vi.mocked(loadCostUsageSummaryFromCache)).toHaveBeenCalledTimes(1);
 
     await vi.advanceTimersByTimeAsync(1);
-    await testApi.loadCostUsageSummaryCached({ startMs: 1, endMs: 2, config });
+    await loadCostUsageSummaryCached({ startMs: 1, endMs: 2, config });
     expect(vi.mocked(loadCostUsageSummaryFromCache)).toHaveBeenCalledTimes(2);
   });
 
   it("keeps cost usage cache entries scoped by agentId", async () => {
     const config = {} as OpenClawConfig;
 
-    await testApi.loadCostUsageSummaryCached({
+    await loadCostUsageSummaryCached({
       startMs: 1,
       endMs: 2,
       config,
       agentId: "main",
     });
-    await testApi.loadCostUsageSummaryCached({
+    await loadCostUsageSummaryCached({
       startMs: 1,
       endMs: 2,
       config,
       agentId: "research",
     });
-    await testApi.loadCostUsageSummaryCached({
+    await loadCostUsageSummaryCached({
       startMs: 1,
       endMs: 2,
       config,
@@ -563,31 +574,31 @@ describe("gateway usage helpers", () => {
   it("keeps cost usage cache entries scoped by the complete day bucket", async () => {
     const config = {} as OpenClawConfig;
 
-    await testApi.loadCostUsageSummaryCached({
+    await loadCostUsageSummaryCached({
       startMs: 1,
       endMs: 2,
       dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
       config,
     });
-    await testApi.loadCostUsageSummaryCached({
+    await loadCostUsageSummaryCached({
       startMs: 1,
       endMs: 2,
       dayBucket: { mode: "utc-offset", utcOffsetMinutes: -300 },
       config,
     });
-    await testApi.loadCostUsageSummaryCached({
+    await loadCostUsageSummaryCached({
       startMs: 1,
       endMs: 2,
       dayBucket: { mode: "time-zone", timeZone: "America/New_York" },
       config,
     });
-    await testApi.loadCostUsageSummaryCached({
+    await loadCostUsageSummaryCached({
       startMs: 1,
       endMs: 2,
       dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
       config,
     });
-    await testApi.loadCostUsageSummaryCached({
+    await loadCostUsageSummaryCached({
       startMs: 1,
       endMs: 2,
       dayBucket: { mode: "time-zone", timeZone: "America/New_York" },
@@ -829,14 +840,8 @@ describe("gateway usage helpers", () => {
   it("bounds usage.cost all-agent cache loads", async () => {
     const agentCount = 13;
     const concurrencyLimit = 12;
-    let releaseLoads!: () => void;
-    const loadsReleased = new Promise<void>((resolve) => {
-      releaseLoads = resolve;
-    });
-    let resolveFirstBatchStarted!: () => void;
-    const firstBatchStarted = new Promise<void>((resolve) => {
-      resolveFirstBatchStarted = resolve;
-    });
+    const { promise: loadsReleased, resolve: releaseLoads } = createDeferred();
+    const { promise: firstBatchStarted, resolve: resolveFirstBatchStarted } = createDeferred();
     let started = 0;
     let inFlight = 0;
     let peakInFlight = 0;
@@ -913,14 +918,8 @@ describe("gateway usage helpers", () => {
   it("bounds sessions.usage all-agent session discovery", async () => {
     const agentCount = 13;
     const concurrencyLimit = 12;
-    let releaseLoads!: () => void;
-    const loadsReleased = new Promise<void>((resolve) => {
-      releaseLoads = resolve;
-    });
-    let resolveFirstBatchStarted!: () => void;
-    const firstBatchStarted = new Promise<void>((resolve) => {
-      resolveFirstBatchStarted = resolve;
-    });
+    const { promise: loadsReleased, resolve: releaseLoads } = createDeferred();
+    const { promise: firstBatchStarted, resolve: resolveFirstBatchStarted } = createDeferred();
     let started = 0;
     let inFlight = 0;
     let peakInFlight = 0;

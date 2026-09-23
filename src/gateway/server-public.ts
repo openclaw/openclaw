@@ -1,5 +1,7 @@
 import type { Result } from "@openclaw/normalization-core/result";
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
+import type { ConfigSnapshotPreparation } from "../config/io.snapshot-preparation.types.js";
+import type { GatewayActiveWorkSnapshot } from "../infra/gateway-active-work.js";
 import type { GatewaySuspendHandoffOwner } from "../infra/gateway-suspend-coordinator.js";
 import type { GatewayRestartEmitter } from "../infra/restart.js";
 import type { GatewayTailscaleIngressEndpoint } from "./ingress-attribution.js";
@@ -12,10 +14,26 @@ export type GatewayCloseOptions = {
   drainTimeoutMs?: number | null;
 };
 
+type GatewayShutdownBudget = {
+  timeoutMs: number;
+  reserveMs: number;
+  nativeStopBudget: boolean;
+};
+
+/** Status adds the live lifecycle observation to the run loop's recorded budget. */
+export type GatewayShutdownStatus = GatewayShutdownBudget & {
+  activeWork?: Pick<
+    GatewayActiveWorkSnapshot["counts"],
+    "rootRequests" | "cronRuns" | "sessionMutations" | "terminalPersistence" | "lifecycleWrites"
+  >;
+  writeCustody?: GatewayActiveWorkSnapshot["writeCustody"];
+};
+
 /** A capability for one host iteration; native completion belongs to the host. */
 export type GatewayHostLifecycle = {
   /** Present only when this host owns process exit; the identity never crosses RPC. */
   externalRestart?: GatewaySuspendHandoffOwner;
+  getShutdownBudget?(): GatewayShutdownBudget | undefined;
   request(
     action: "start" | "stop" | "restart",
     assertCaller: () => void,
@@ -38,6 +56,8 @@ export type GatewayServer = {
 };
 
 export type GatewayServerOptions = {
+  /** Internal native-host operation; direct readers retain their own execution owner. */
+  prepareConfigSnapshot?: ConfigSnapshotPreparation;
   /** Internal, closure-bound host authority. Direct servers have no native lifecycle owner. */
   hostLifecycle?: GatewayHostLifecycle;
   /** Internal startup ownership; direct callers own their awaited startup work. */
@@ -81,6 +101,8 @@ export type GatewayServerOptions = {
   /** Test-only: override the channel-setup wizard runner (wizard.start flow "channels"). */
   channelWizardRunner?: import("./server-methods/wizard.js").ChannelSetupWizardRunner;
   sidecarStartup?: GatewaySidecarStartupMode;
+  /** Internal update rehearsal: load plugins without starting autonomous work. */
+  updateCanary?: boolean;
   channelAutostartSuppression?: ChannelAutostartSuppression;
   /** Internal lifecycle callback that re-proves and records crash-loop recovery. */
   tryRecoverChannelAutostartSuppression?: () => boolean;

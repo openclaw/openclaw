@@ -1,42 +1,43 @@
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { GatewayClient } from "./server-methods/types.js";
-import { resolveSessionGroupMutationTargetsByName } from "./session-groups.js";
-import { authorizeSessionSharing, isGatewayAdmin } from "./session-sharing.js";
-import type {
-  GatewaySessionStoreCache,
-  GatewaySessionStoreDiscoveryCache,
-} from "./session-utils-store-lookup.js";
+import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
+import { prepareProjectedSessionPresentation } from "./session-row-presentation.js";
+import { getSessionRowProjection } from "./session-row-projection-access.js";
+import { isGatewayAdmin } from "./session-sharing.js";
+import { resolveSessionStoreAgentId } from "./session-store-key.js";
 
 /** Keep shared group settings visible only where every member session is mutable. */
-export function filterMutableSessionGroupRecords<T extends { name: string }>(params: {
-  cfg: OpenClawConfig;
+export async function filterMutableSessionGroupRecords<T extends { name: string }>(params: {
   client: GatewayClient | null;
-  records: readonly T[];
-}): T[] {
-  const allowed = new Set(params.records.map((record) => record.name));
-  if (isGatewayAdmin(params.client)) {
-    return [...params.records];
+  context: Pick<GatewayRequestContext, "sessionRowProjectionOwner">;
+  records: () => readonly T[];
+}): Promise<T[]> {
+  if (params.records().length === 0) {
+    return [];
   }
-  const storeCache: GatewaySessionStoreCache = new Map();
-  const targetDiscoveryCache: GatewaySessionStoreDiscoveryCache = new Map();
-  for (const [name, targetRefs] of resolveSessionGroupMutationTargetsByName(params.cfg)) {
+  if (isGatewayAdmin(params.client)) {
+    return [...params.records()];
+  }
+  const projection = getSessionRowProjection(params.context);
+  if (!projection) {
+    throw new Error("Session group membership is unavailable during Gateway startup");
+  }
+  do {
+    await projection.prepareMembership();
+  } while (projection.needsMembershipPreparation());
+  const records = params.records();
+  const prepared = prepareProjectedSessionPresentation(projection, params.client);
+  const allowed = new Set(records.map((record) => record.name));
+  for (const [name, targetRefs] of projection.sessionGroupTargets()) {
     if (!allowed.has(name)) {
       continue;
     }
-    for (const targetRef of targetRefs) {
-      if (
-        authorizeSessionSharing({
-          cfg: params.cfg,
-          client: params.client,
-          ...targetRef,
-          storeCache,
-          targetDiscoveryCache,
-        })
-      ) {
+    for (const ref of targetRefs) {
+      const agentId = resolveSessionStoreAgentId(projection.state.cfg, ref.sessionKey, ref.agentId);
+      const target = prepared.target({ agentId, key: ref.sessionKey });
+      if (!target || prepared.sharing.authorizeTarget(target)) {
         allowed.delete(name);
         break;
       }
     }
   }
-  return params.records.filter((record) => allowed.has(record.name));
+  return records.filter((record) => allowed.has(record.name));
 }

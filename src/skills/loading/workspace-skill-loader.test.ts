@@ -1,9 +1,9 @@
-// Workspace skill loader tests cover source merging, metadata, filtering, and precedence.
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
 import { loggingState } from "../../logging/state.js";
@@ -12,8 +12,12 @@ import type {
   PluginManifestRecord,
   PluginManifestRegistry,
 } from "../../plugins/manifest-registry.js";
+// Workspace skill loader tests cover source merging, metadata, filtering, and precedence.
+import { buildPluginMetadataProviderFacts } from "../../plugins/plugin-metadata-provider-facts.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
-import { bumpSkillsSnapshotVersion } from "../runtime/refresh-state.js";
+import { buildDeclaredProviderOwnerIndex } from "../../plugins/provider-owner-index.js";
+import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
+import { bumpSkillsSnapshotVersion, getSkillsSnapshotVersion } from "../runtime/refresh-state.js";
 import { writeSkill, writeWorkspaceSkills } from "../test-support/e2e-test-helpers.js";
 import {
   restoreMockSkillsHomeEnv,
@@ -21,11 +25,13 @@ import {
   type SkillsHomeEnvSnapshot,
 } from "../test-support/home-env.test-support.js";
 import { writePluginWithSkill } from "../test-support/skill-plugin-fixtures.test-support.js";
+import type { OpenClawSkillMetadata, SkillEligibilityContext } from "../types.js";
 import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
 import {
-  loadBundledSkillEntryByName,
   loadVisibleSkills,
   loadWorkspaceSkills,
+  prepareWorkspaceSkills,
+  resolveWorkspaceSkillPromptEntries,
 } from "./workspace-skill-loader.js";
 
 vi.mock("../../plugins/manifest-registry.js", async () => {
@@ -59,6 +65,240 @@ vi.mock("../../plugins/manifest-registry.js", async () => {
       return { plugins, diagnostics: [] };
     },
   };
+});
+
+describe.each(["prompt", "runtime"] as const)("%s asynchronous binary preparation", (caller) => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    setActiveDegradedSecretOwners([]);
+  });
+
+  async function fixture(skills: Array<{ name: string; metadata: OpenClawSkillMetadata }>) {
+    const workspaceDir = await createTempWorkspaceDir();
+    const binDir = path.join(workspaceDir, "bin");
+    const bundledSkillsDir = path.join(workspaceDir, ".bundled");
+    await fs.mkdir(binDir);
+    vi.stubEnv("PATH", binDir);
+    vi.stubEnv("PATHEXT", "");
+    vi.stubEnv("OPENCLAW_TEST_PROBE_KEY", "");
+    for (const skill of skills) {
+      await writeSkill({
+        dir: path.join(
+          skill.name === "bundled" ? bundledSkillsDir : path.join(workspaceDir, "skills"),
+          skill.name,
+        ),
+        name: skill.name,
+        description: skill.name,
+        metadata: JSON.stringify({ openclaw: skill.metadata }),
+      });
+    }
+    const config: OpenClawConfig = { plugins: { enabled: false }, browser: { enabled: false } };
+    const eligibility: SkillEligibilityContext = {};
+    const options = {
+      config,
+      eligibility,
+      bundledSkillsDir,
+      managedSkillsDir: path.join(workspaceDir, ".managed"),
+      pluginMetadataSnapshot: createWorkspacePluginMetadataSnapshot({
+        workspaceDir,
+        config,
+        manifestRegistry: { plugins: [], diagnostics: [] },
+      }),
+    };
+    const resolve = async (assertCurrent?: () => void) => {
+      const entries =
+        caller === "prompt"
+          ? (await resolveWorkspaceSkillPromptEntries(workspaceDir, { ...options, assertCurrent }))
+              .eligible
+          : await prepareWorkspaceSkills(workspaceDir, options, assertCurrent);
+      return entries.map((entry) => entry.skill.name);
+    };
+    return { binDir, config, eligibility, resolve };
+  }
+
+  function degrade(name: string) {
+    setActiveDegradedSecretOwners([
+      {
+        ownerKind: "capability",
+        ownerId: `skill:${name}`,
+        state: "unavailable",
+        paths: [`skills.entries.${name}.apiKey`],
+        refKeys: ["env:default:OPENCLAW_TEST_PROBE_KEY"],
+        reason: "fixture secret unavailable",
+      },
+    ]);
+  }
+
+  it("skips binary IO for cheap exclusions and always skills, while detecting newly installed tools", async () => {
+    const { binDir, config, resolve } = await fixture([
+      {
+        name: "env",
+        metadata: { requires: { bins: ["env-tool"], env: ["OPENCLAW_TEST_PROBE_KEY"] } },
+      },
+      {
+        name: "config",
+        metadata: { requires: { anyBins: ["config-tool"], config: ["browser.enabled"] } },
+      },
+      { name: "disabled", metadata: { always: true, requires: { bins: ["disabled-tool"] } } },
+      { name: "secret", metadata: { always: true, requires: { bins: ["secret-tool"] } } },
+      {
+        name: "os",
+        metadata: { always: true, os: ["unsupported-fixture-os"], requires: { bins: ["os-tool"] } },
+      },
+      { name: "bundled", metadata: { requires: { bins: ["bundled-tool"] } } },
+      { name: "always", metadata: { always: true, requires: { bins: ["always-tool"] } } },
+      { name: "ordinary", metadata: { requires: { anyBins: ["missing-tool", "installed-tool"] } } },
+    ]);
+    config.skills = { allowBundled: ["other"], entries: { disabled: { enabled: false } } };
+    degrade("secret");
+    const access = vi.spyOn(fs, "access");
+    expect(await Promise.all([resolve(), resolve()])).toEqual([["always"], ["always"]]);
+    expect(access.mock.calls.map(([file]) => path.basename(String(file))).toSorted()).toEqual([
+      "installed-tool",
+      "missing-tool",
+    ]);
+    await fs.writeFile(path.join(binDir, "installed-tool"), "fixture", { mode: 0o755 });
+    access.mockClear();
+    expect(await resolve()).toEqual(["always", "ordinary"]);
+    expect(access.mock.calls.map(([file]) => path.basename(String(file))).toSorted()).toEqual([
+      "installed-tool",
+      "missing-tool",
+    ]);
+    access.mockClear();
+    expect(await resolve()).toEqual(["always", "ordinary"]);
+    expect(access.mock.calls.map(([file]) => path.basename(String(file)))).toEqual([
+      "missing-tool",
+    ]);
+  });
+
+  it("keeps concurrent binary preparations independent when one caller is canceled", async () => {
+    const { binDir, resolve } = await fixture([
+      { name: "ordinary", metadata: { requires: { bins: ["installed-tool"] } } },
+    ]);
+    const executable = path.join(binDir, "installed-tool");
+    await fs.writeFile(executable, "fixture", { mode: 0o755 });
+    const entered = createDeferred();
+    const release = createDeferred();
+    const actualAccess = fs.access;
+    vi.spyOn(fs, "access").mockImplementation(async (...args) => {
+      if (args[0] === executable) {
+        entered.resolve();
+        await release.promise;
+      }
+      return actualAccess(...args);
+    });
+    const cancellation = new Error("fixture caller retired");
+    let canceled = false;
+    const results = Promise.allSettled([
+      resolve(() => {
+        if (canceled) {
+          throw cancellation;
+        }
+      }),
+      resolve(),
+    ]);
+    try {
+      await entered.promise;
+      canceled = true;
+    } finally {
+      release.resolve();
+    }
+    expect(await results).toEqual([
+      { status: "rejected", reason: cancellation },
+      { status: "fulfilled", value: ["ordinary"] },
+    ]);
+  });
+
+  it("prepares newly eligible binaries after awaited env, config, secret and remote changes", async () => {
+    const { binDir, config, eligibility, resolve } = await fixture([
+      { name: "gate", metadata: { requires: { bins: ["gate-tool"] } } },
+      {
+        name: "env",
+        metadata: { requires: { bins: ["env-tool"], env: ["OPENCLAW_TEST_PROBE_KEY"] } },
+      },
+      {
+        name: "config",
+        metadata: {
+          requires: { anyBins: ["missing-tool", "config-tool"], config: ["browser.enabled"] },
+        },
+      },
+      { name: "secret", metadata: { requires: { bins: ["secret-tool"] } } },
+      {
+        name: "remote",
+        metadata: { os: ["remote-fixture-os"], requires: { bins: ["remote-tool"] } },
+      },
+      { name: "revoked", metadata: { requires: { bins: ["revoked-tool"] } } },
+    ]);
+    for (const name of ["gate", "env", "config", "secret", "revoked"]) {
+      await fs.writeFile(path.join(binDir, `${name}-tool`), "fixture", { mode: 0o755 });
+    }
+    degrade("secret");
+    const entered = createDeferred();
+    const release = createDeferred();
+    const actualAccess = fs.access;
+    let held = false;
+    const access = vi.spyOn(fs, "access").mockImplementation(async (...args) => {
+      if (!held && args[0] === path.join(binDir, "gate-tool")) {
+        held = true;
+        entered.resolve();
+        await release.promise;
+      }
+      return actualAccess(...args);
+    });
+    const syncAccess = vi.spyOn(fsSync, "accessSync");
+    const pending = resolve();
+    try {
+      await entered.promise;
+      vi.stubEnv("OPENCLAW_TEST_PROBE_KEY", "available");
+      config.browser = { enabled: true };
+      config.skills = { entries: { revoked: { enabled: false } } };
+      setActiveDegradedSecretOwners([]);
+      eligibility.remote = {
+        platforms: ["remote-fixture-os"],
+        hasBin: (bin) => bin === "remote-tool",
+        hasAnyBin: () => false,
+      };
+    } finally {
+      release.resolve();
+    }
+    expect(await pending).toEqual(["config", "env", "gate", "remote", "secret"]);
+    expect(access.mock.calls.map(([file]) => path.basename(String(file)))).toEqual(
+      expect.arrayContaining([
+        "env-tool",
+        "config-tool",
+        "missing-tool",
+        "remote-tool",
+        "secret-tool",
+      ]),
+    );
+    expect(syncAccess.mock.calls.filter(([file]) => path.dirname(String(file)) === binDir)).toEqual(
+      [],
+    );
+    eligibility.remote.hasBin = () => false;
+    expect(await resolve()).toEqual(["config", "env", "gate", "secret"]);
+  });
+
+  it("discards binary facts when PATH changes during an awaited probe", async () => {
+    const { binDir, resolve } = await fixture([
+      { name: "tool", metadata: { requires: { bins: ["selected-tool"] } } },
+    ]);
+    const replacement = path.join(binDir, "replacement");
+    await fs.mkdir(replacement);
+    await fs.writeFile(path.join(binDir, "selected-tool"), "fixture", { mode: 0o755 });
+    const actualAccess = fs.access;
+    const access = vi.spyOn(fs, "access").mockImplementation(async (...args) => {
+      if (args[0] === path.join(binDir, "selected-tool")) {
+        vi.stubEnv("PATH", replacement);
+      }
+      return actualAccess(...args);
+    });
+    expect(await resolve()).toEqual([]);
+    expect(access.mock.calls.map(([file]) => String(file))).toEqual([
+      path.join(binDir, "selected-tool"),
+      path.join(replacement, "selected-tool"),
+    ]);
+  });
 });
 
 let fakeHome = "";
@@ -116,6 +356,8 @@ function createWorkspacePluginMetadataSnapshot(params: {
     setupProviders: new Map(),
     commandAliases: new Map(),
     contracts: new Map(),
+    providerAuthContributions: buildPluginMetadataProviderFacts(params.manifestRegistry.plugins)
+      .providerAuthContributions,
     modelIdNormalizationPolicies: new Map(),
   };
   const index: PluginMetadataSnapshot["index"] = {
@@ -140,6 +382,7 @@ function createWorkspacePluginMetadataSnapshot(params: {
     diagnostics: params.manifestRegistry.diagnostics,
     byPluginId: new Map(params.manifestRegistry.plugins.map((plugin) => [plugin.id, plugin])),
     normalizePluginId: (pluginId) => pluginId,
+    declaredProviderOwners: buildDeclaredProviderOwnerIndex(params.manifestRegistry.plugins),
     owners: ownerMaps,
     metrics: {
       registrySnapshotMs: 0,
@@ -255,7 +498,9 @@ describe("loadWorkspaceSkills", () => {
       managedSkillsDir: path.join(workspaceDir, ".managed"),
     });
     const mergedControlUi = visible.find((entry) => entry.skill.name === "control-ui");
-    const bundledControlUi = loadBundledSkillEntryByName("control-ui", {
+    const [bundledControlUi] = await prepareWorkspaceSkills(workspaceDir, {
+      bundledSkillName: "control-ui",
+      eligibility: {},
       config: {},
       bundledSkillsDir,
     });
@@ -263,7 +508,7 @@ describe("loadWorkspaceSkills", () => {
     expect(mergedControlUi?.skill.source).toBe("openclaw-workspace");
     expect(bundledControlUi?.skill.source).toBe("openclaw-bundled");
     expect(bundledControlUi?.skill.filePath).toBe(
-      path.join(bundledSkillsDir, "control-ui", "SKILL.md"),
+      await fs.realpath(path.join(bundledSkillsDir, "control-ui", "SKILL.md")),
     );
   });
 
@@ -360,6 +605,32 @@ describe("loadWorkspaceSkills", () => {
     } finally {
       directoryReads.mockRestore();
     }
+  });
+
+  it("reconciles incoming plugin metadata before caching a changed watch generation", async () => {
+    const { workspaceDir, managedDir } = await setupWorkspaceSkillPlugin();
+    const config = { plugins: { entries: { "workspace-skills": { enabled: true } } } };
+    const options = { config, managedSkillsDir: managedDir };
+    expect(
+      loadTestWorkspaceSkills(workspaceDir, options).map((entry) => entry.skill.name),
+    ).toContain("drafting");
+    const version = getSkillsSnapshotVersion(workspaceDir);
+    const pluginMetadataSnapshot = createWorkspacePluginMetadataSnapshot({
+      workspaceDir,
+      config,
+      manifestRegistry: { plugins: [], diagnostics: [] },
+    });
+    bumpSkillsSnapshotVersion({
+      workspaceDir,
+      reason: "watch-targets",
+      refreshInputs: { sourceScope: {}, config, pluginMetadataSnapshot },
+    });
+    expect(getSkillsSnapshotVersion(workspaceDir)).toBeGreaterThan(version);
+    expect(
+      loadTestWorkspaceSkills(workspaceDir, { ...options, pluginMetadataSnapshot }).map(
+        (entry) => entry.skill.name,
+      ),
+    ).not.toContain("drafting");
   });
 
   it("filters plugin-shipped skills through plugin config", async () => {

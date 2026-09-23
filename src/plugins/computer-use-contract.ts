@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { type Static, type TSchema, Type } from "typebox";
 import { Compile } from "typebox/compile";
+import { lazyCompile } from "../../packages/gateway-protocol/src/protocol-validator.js";
 import type {
   OpenClawPluginNodeHostCommand,
   OpenClawPluginNodeHostCommandAvailabilityContext,
@@ -85,8 +86,8 @@ const optionalReferenceFields = {
   deliveryMode: Type.Optional(Type.Enum(DELIVERY_MODES, { type: "string" })),
 };
 
-function actionObject<const Properties extends object>(
-  actions: readonly string[],
+function actionObject<const Actions extends string[], const Properties extends object>(
+  actions: readonly [...Actions],
   properties: Properties,
 ) {
   return Type.Object(
@@ -169,6 +170,7 @@ export const ComputerActParamsSchema = Type.Union([
   }),
   actionObject(["get_window_state"], {
     windowRef: Type.String({ minLength: 1 }),
+    includeScreenshot: Type.Optional(Type.Boolean()),
     query: Type.Optional(Type.String()),
     depth: Type.Optional(Type.Integer({ minimum: 0, maximum: 64 })),
     maxElements: Type.Optional(Type.Integer({ minimum: 1, maximum: 2_000 })),
@@ -464,13 +466,11 @@ export function compileComputerUseValidator<const Schema extends TSchema>(
   return (value: unknown): value is Static<Schema> => validator.Check(value);
 }
 
-const validateComputerActParams = compileComputerUseValidator(ComputerActParamsSchema);
-const validateComputerActResult = compileComputerUseValidator(ComputerActResultSchema);
-const validateComputerUseCapabilityDescriptor = compileComputerUseValidator(
-  ComputerUseCapabilityDescriptorSchema,
-);
-const validateScreenSnapshotParams = compileComputerUseValidator(ScreenSnapshotParamsSchema);
-const validateScreenSnapshotResult = compileComputerUseValidator(ScreenSnapshotResultSchema);
+const validateComputerActParams = lazyCompile(ComputerActParamsSchema);
+const validateComputerActResult = lazyCompile(ComputerActResultSchema);
+const validateComputerUseCapabilityDescriptor = lazyCompile(ComputerUseCapabilityDescriptorSchema);
+const validateScreenSnapshotParams = lazyCompile(ScreenSnapshotParamsSchema);
+const validateScreenSnapshotResult = lazyCompile(ScreenSnapshotResultSchema);
 
 function parseParamsJSON<Value>(
   paramsJSON: string | null | undefined,
@@ -569,7 +569,10 @@ export function registerComputerUseProvider(
   provider: ComputerUseProvider,
 ): void {
   let execution: { id: string; promise: Promise<ComputerUseExecution> } | undefined;
-  let closingPromise: Promise<void> = Promise.resolve();
+  let closingPromise: Promise<void> | undefined;
+  let pendingClose: Promise<void> | undefined;
+  const hasActiveWork = () =>
+    execution !== undefined || closingPromise !== undefined || pendingClose !== undefined;
 
   const executionEnvelopeFromParams = (paramsJSON: string | null | undefined) => {
     let value: unknown;
@@ -601,7 +604,10 @@ export function registerComputerUseProvider(
     if (!executionId) {
       throw new Error("COMPUTER_INVALID_REQUEST: executionId is required");
     }
-    await closingPromise;
+    // An earlier queued close can replace the barrier while this acquisition resumes.
+    for (let barrier = closingPromise; barrier !== undefined; barrier = closingPromise) {
+      await barrier;
+    }
     if (execution && execution.id !== executionId) {
       throw new Error("COMPUTER_HOST_BUSY: another provider execution owns this computer");
     }
@@ -620,18 +626,61 @@ export function registerComputerUseProvider(
     }
     return execution.promise;
   };
-  const closeExecution = async (executionId: string | undefined, reason: string) => {
-    await closingPromise;
+  const closeCurrentExecution = (
+    executionId: string | undefined,
+    reason: string,
+  ): Promise<void> => {
     const current = execution;
     if (!current || (executionId !== undefined && current.id !== executionId)) {
-      return;
+      return Promise.resolve();
     }
-    execution = undefined;
-    if (current) {
-      const close = current.promise.then(async (opened) => await opened.close(reason));
-      closingPromise = close.catch(() => {});
-      await close;
+    if (pendingClose) {
+      return pendingClose;
     }
+    // Watcher stop and disconnect must join the same physical close before either yields.
+    const close = current.promise.then(async (opened) => await opened.close(reason));
+    pendingClose = close;
+    closingPromise = close;
+    void close.then(
+      () => {
+        if (execution === current) {
+          execution = undefined;
+        }
+        pendingClose = undefined;
+        closingPromise = undefined;
+      },
+      () => {
+        pendingClose = undefined;
+        // Failed open owns nothing; failed physical close stays owned for an explicit close.
+        if (execution !== current) {
+          closingPromise = undefined;
+        }
+      },
+    );
+    return close;
+  };
+  const closeExecution = (executionId: string | undefined, reason: string): Promise<void> => {
+    if (!pendingClose) {
+      return closeCurrentExecution(executionId, reason);
+    }
+    const joined = (async () => {
+      // Earlier queued operations can publish another close after each barrier settles.
+      for (let barrier = pendingClose; barrier !== undefined; barrier = pendingClose) {
+        const matchesClosingOwner = executionId === undefined || execution?.id === executionId;
+        try {
+          await barrier;
+        } catch (error) {
+          if (matchesClosingOwner) {
+            throw error;
+          }
+          return;
+        }
+      }
+      await closeCurrentExecution(executionId, reason);
+    })();
+    // Watcher cleanup may initiate an unawaited close; joiners still receive the actual failure.
+    void joined.catch(() => {});
+    return joined;
   };
 
   api.registerNodeHostCommand({
@@ -640,6 +689,7 @@ export function registerComputerUseProvider(
     dangerous: false,
     prepare: (context) => provider.prepare?.(context),
     isAvailable: () => provider.isAvailable(),
+    hasActiveWork,
     watchAvailability: (context, onChange) => {
       const stopWatching = provider.watchAvailability?.(context, onChange);
       return () => {
@@ -672,6 +722,7 @@ export function registerComputerUseProvider(
     dangerous: true,
     computerUse: () => provider.capabilities(),
     isAvailable: () => provider.isAvailable(),
+    hasActiveWork,
     handle: async (paramsJSON, _io, context) => {
       const envelope = executionEnvelopeFromParams(paramsJSON);
       if (!envelope.executionId) {

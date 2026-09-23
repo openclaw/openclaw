@@ -252,6 +252,48 @@ describe("google-meet CLI", () => {
     },
   );
 
+  it.each([
+    { command: "artifacts", explicitSummary: false },
+    { command: "artifacts", explicitSummary: true },
+    { command: "attendance", explicitSummary: false },
+    { command: "attendance", explicitSummary: true },
+  ])(
+    "writes $command summary to --output (explicitSummary=$explicitSummary)",
+    async ({ command, explicitSummary }) => {
+      stubMeetArtifactsApi();
+      const tempDir = mkdtempSync(path.join(tmpdir(), "openclaw-google-meet-summary-"));
+      const outputPath = path.join(tempDir, "summary.txt");
+      const stdout = captureStdout();
+      const argv = [
+        "googlemeet",
+        command,
+        "--access-token",
+        "token",
+        "--expires-at",
+        String(Date.now() + 120_000),
+        "--conference-record",
+        "rec-1",
+        ...(explicitSummary ? ["--format", "summary"] : []),
+      ];
+
+      try {
+        await setupCli({}).parseAsync(argv, { from: "user" });
+        const summary = stdout.output();
+        expect(summary).toContain("conference records: 1\n");
+        expect(summary).toContain("token source: cached-access-token\n");
+
+        await setupCli({}).parseAsync([...argv, "--output", outputPath], { from: "user" });
+
+        expect(existsSync(outputPath)).toBe(true);
+        expect(readFileSync(outputPath, "utf8")).toBe(summary);
+        expect(stdout.output().slice(summary.length)).toBe(`wrote: ${outputPath}\n`);
+      } finally {
+        stdout.restore();
+        rmSync(tempDir, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("prints markdown artifact and attendance output", async () => {
     stubMeetArtifactsApi();
     const tempDir = mkdtempSync(path.join(tmpdir(), "openclaw-google-meet-artifacts-"));

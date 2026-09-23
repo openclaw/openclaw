@@ -5,6 +5,7 @@ import {
   SESSION_LIST_DEFAULTS,
   WORKSPACE,
   controlUiSessionPath,
+  createCloudAgentsListResponse,
   createNewSessionPageE2eSuite,
   expectPastedPngImage,
   installMockGateway,
@@ -63,7 +64,7 @@ suite.define(() => {
       await page.locator("#new-session-where-trigger").click();
       await page
         .locator("wa-popover.new-session-page__where-popover")
-        .getByRole("button", { name: "Cloud · aws" })
+        .getByRole("button", { name: "aws", exact: true })
         .click();
       const trigger = page.locator("#new-session-where-trigger");
       await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("aws");
@@ -84,7 +85,7 @@ suite.define(() => {
         .poll(() =>
           page
             .locator("wa-popover.new-session-page__where-popover")
-            .getByRole("button", { name: "Cloud · aws" })
+            .locator('[data-value="cloud:aws"]')
             .isDisabled(),
         )
         .toBe(true);
@@ -113,20 +114,7 @@ suite.define(() => {
     const gateway = await installMockGateway(page, {
       workspaceGit: true,
       methodResponses: {
-        "agents.list": {
-          agents: [
-            {
-              id: "cloud",
-              identity: { name: "Cloud" },
-              name: "Cloud",
-              workspace: WORKSPACE,
-              workspaceGit: true,
-            },
-          ],
-          defaultId: "cloud",
-          mainKey: "main",
-          scope: "agent",
-        },
+        "agents.list": createCloudAgentsListResponse(),
         "environments.list": {
           environments: [],
           profiles: [{ id: "aws", providerId: "crabbox" }],
@@ -175,7 +163,7 @@ suite.define(() => {
       await page.locator("#new-session-where-trigger").click();
       await page
         .locator("wa-popover.new-session-page__where-popover")
-        .getByRole("button", { name: "Cloud · aws" })
+        .getByRole("button", { name: "aws", exact: true })
         .click();
       await page.evaluate(() => {
         const originalSetItem = sessionStorage.setItem.bind(sessionStorage);
@@ -320,20 +308,7 @@ suite.define(() => {
     const gateway = await installMockGateway(page, {
       workspaceGit: true,
       methodResponses: {
-        "agents.list": {
-          agents: [
-            {
-              id: "cloud",
-              identity: { name: "Cloud" },
-              name: "Cloud",
-              workspace: WORKSPACE,
-              workspaceGit: true,
-            },
-          ],
-          defaultId: "cloud",
-          mainKey: "main",
-          scope: "agent",
-        },
+        "agents.list": createCloudAgentsListResponse(),
         "environments.list": {
           environments: [],
           profiles: [{ id: "aws", providerId: "crabbox" }],
@@ -435,7 +410,7 @@ suite.define(() => {
       await page.locator("#new-session-where-trigger").click();
       await page
         .locator("wa-popover.new-session-page__where-popover")
-        .getByRole("button", { name: "Cloud · aws" })
+        .getByRole("button", { name: "aws", exact: true })
         .click();
       await page.locator(".new-session-page__message").fill("start another cloud task");
       await expect

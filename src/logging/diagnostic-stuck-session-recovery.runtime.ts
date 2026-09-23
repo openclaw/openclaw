@@ -86,9 +86,18 @@ function isActiveRunProgressStale(params: {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
   });
-  if (params.allowActiveAbort) {
+  // A retry can start after recovery was queued. Recheck its current owner and
+  // deadline here before an earlier classification is allowed to abort it.
+  if (
+    activity.activeRetryWaitDeadlineAtMs !== undefined &&
+    Date.now() < activity.activeRetryWaitDeadlineAtMs
+  ) {
+    return false;
+  }
+  if (params.allowActiveAbort && activity.activeToolDeadlineAtMs === undefined) {
     // Recovery may have queued before a fresh byte arrived. Revalidate the
-    // backend allowance here; active tools retain their separate recovery policy.
+    // backend allowance here. A tool deadline published during runtime loading
+    // must instead pass the current shared threshold below.
     return (
       activity.activeWorkKind === "tool_call" ||
       activity.activeBackendLivenessDeadlineAtMs === undefined ||

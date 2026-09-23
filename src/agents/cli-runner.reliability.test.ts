@@ -75,7 +75,7 @@ import {
 import { prepareCliRunContext } from "./cli-runner/prepare.js";
 import { hashCliReseedPrompt } from "./cli-runner/reseed-envelope.js";
 import * as sessionHistoryModule from "./cli-runner/session-history.js";
-import type { PreparedCliRunContext } from "./cli-runner/types.js";
+import { captureCliRunStartTime, type PreparedCliRunContext } from "./cli-runner/types.js";
 import { isIntermediateAssistantTranscriptMessage } from "./embedded-agent-runner/message-visibility.js";
 import { FailoverError } from "./failover-error.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "./harness/hook-helpers.js";
@@ -203,7 +203,7 @@ function buildPreparedContext(params: PreparedContextOverrides = {}): PreparedCl
       executionMode: params?.executionMode,
       allowEmptyAssistantReplyAsSilent: params?.allowEmptyAssistantReplyAsSilent,
     },
-    started: Date.now(),
+    ...captureCliRunStartTime(),
     workspaceDir: "/tmp",
     backendResolved: {
       id: provider,
@@ -244,6 +244,20 @@ function makeClaudePreparedContext(
   return buildPreparedContext({ provider: "claude-cli", model: "opus", ...overrides });
 }
 
+async function admitPreparedContext(
+  context: PreparedCliRunContext,
+  runtime: "embedded" | "plugin-harness" = "embedded",
+) {
+  const admission = prepareSystemAgentRunAdmission(
+    {},
+    context.params.runId,
+    "main",
+    "cli-recovery-test",
+  );
+  context.params.admittedRunContext = await admission.admit(runtime);
+  return admission;
+}
+
 async function usePluginLiveBackend(context: PreparedCliRunContext, execute: CliBackendExecute) {
   const backend: CliBackendConfig = {
     command: "/bin/sh",
@@ -259,13 +273,7 @@ async function usePluginLiveBackend(context: PreparedCliRunContext, execute: Cli
   context.preparedBackend.backend = backend;
   context.backendResolved.config = backend;
   context.executionTarget = { kind: "plugin", execute };
-  const admission = prepareSystemAgentRunAdmission(
-    {},
-    context.params.runId,
-    "main",
-    "plugin-recovery-test",
-  );
-  context.params.admittedRunContext = await admission.admit("plugin-harness");
+  const admission = await admitPreparedContext(context, "plugin-harness");
   return { admission, context };
 }
 
@@ -720,7 +728,9 @@ describe("runCliAgent reliability", () => {
     expect(freshArgv).not.toContain("--resume-session-at");
   });
 
-  it("falls back to cold reseed when Claude lacks the checkpoint flag", async () => {
+  it("falls back to cold reseed when Claude lacks the checkpoint flag", async ({
+    onTestFinished,
+  }) => {
     supervisorSpawnMock
       .mockResolvedValueOnce(
         makeManagedRun({
@@ -750,6 +760,7 @@ describe("runCliAgent reliability", () => {
       cliSessionId: "old-claude-session",
       openClawHistoryPrompt: CLI_RESEED_PROMPT,
     });
+    onTestFinished((await admitPreparedContext(context)).close);
     context.preparedBackend.backend = {
       ...context.preparedBackend.backend,
       resumeArgs: ["--resume", "{sessionId}"],
@@ -785,7 +796,9 @@ describe("runCliAgent reliability", () => {
     expect(supervisorSpawnMock).toHaveBeenCalledTimes(3);
   });
 
-  it("cold reseeds an initially armed checkpoint after a Claude downgrade", async () => {
+  it("cold reseeds an initially armed checkpoint after a Claude downgrade", async ({
+    onTestFinished,
+  }) => {
     supervisorSpawnMock
       .mockResolvedValueOnce(
         makeManagedRun({
@@ -804,6 +817,7 @@ describe("runCliAgent reliability", () => {
       cliSessionId: "downgraded-session",
       openClawHistoryPrompt: CLI_RESEED_PROMPT,
     });
+    onTestFinished((await admitPreparedContext(context)).close);
     context.preparedBackend.backend = {
       ...context.preparedBackend.backend,
       resumeArgs: ["--resume", "{sessionId}"],
@@ -839,7 +853,9 @@ describe("runCliAgent reliability", () => {
     expect(supervisorSpawnMock).toHaveBeenCalledTimes(2);
   });
 
-  it("does not treat unsupported-flag wording fragments as a Claude downgrade", async () => {
+  it("does not treat unsupported-flag wording fragments as a Claude downgrade", async ({
+    onTestFinished,
+  }) => {
     supervisorSpawnMock.mockResolvedValueOnce(
       makeManagedRun({
         exitCode: 1,
@@ -854,6 +870,7 @@ describe("runCliAgent reliability", () => {
       cliSessionId: "existing-session",
       openClawHistoryPrompt: CLI_RESEED_PROMPT,
     });
+    onTestFinished((await admitPreparedContext(context)).close);
     context.preparedBackend.backend = {
       ...context.preparedBackend.backend,
       resumeArgs: ["--resume", "{sessionId}"],
@@ -1999,7 +2016,7 @@ describe("runCliAgent reliability", () => {
     });
     const expiredBudgetContext = {
       ...context,
-      started: Date.now() - context.params.timeoutMs - 1,
+      startedMonotonicMs: performance.now() - context.params.timeoutMs - 1,
     };
 
     await expect(
@@ -2033,7 +2050,7 @@ describe("runCliAgent reliability", () => {
     });
     const expiredBudgetContext = {
       ...context,
-      started: Date.now() - context.params.timeoutMs - 1,
+      startedMonotonicMs: performance.now() - context.params.timeoutMs - 1,
     };
 
     await expect(
@@ -4555,63 +4572,6 @@ describe("runCliAgent reliability", () => {
     }
   });
 
-  it("builds fresh-session history reseed prompts from hook-mutated prompts", async () => {
-    const { dir, sessionFile, sessionTarget } = createSessionFixture({
-      history: [{ role: "user", content: "earlier ask" }],
-    });
-    const manager = SessionManager.open(sessionTarget, dir);
-    manager.appendCompaction(
-      "compacted earlier ask",
-      expectDefined(manager.getLeafId(), "retained history entry"),
-      10_000,
-    );
-    const config: OpenClawConfig = { agents: { defaults: { workspace: dir } } };
-    cliBackendsTesting.setDepsForTest({
-      resolvePluginSetupCliBackend: () => undefined,
-      resolveRuntimeCliBackends: () => [
-        {
-          id: "codex-cli",
-          pluginId: "test-codex",
-          config: {
-            command: "codex",
-            args: ["exec"],
-            output: "text",
-            input: "arg",
-            sessionMode: "existing",
-          },
-        },
-      ],
-    });
-    const hookRunner = {
-      hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
-      runBeforePromptBuild: vi.fn(async () => ({ prependContext: "hook context" })),
-    };
-    setHookRunnerForTest(hookRunner);
-
-    try {
-      const context = await prepareCliRunContext({
-        admittedRunContext: createTestAdmittedRunContext("run-history-hook"),
-        sessionId: "s1",
-        sessionFile,
-        sessionTarget,
-        workspaceDir: dir,
-        config,
-        prompt: "current ask",
-        provider: "codex-cli",
-        model: "gpt-5.4",
-        timeoutMs: 1_000,
-        runId: "run-history-hook",
-      });
-
-      expect(context.params.prompt).toBe("hook context\n\ncurrent ask");
-      expect(context.openClawHistoryPrompt).toContain("Compaction summary: compacted earlier ask");
-      expect(context.openClawHistoryPrompt).toContain("hook context");
-      expect(context.openClawHistoryPrompt).toContain("current ask");
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
   it("keeps native control operations out of restrictive prompt preparation", async () => {
     const { dir, sessionFile, sessionTarget } = createSessionFixture({
       history: [{ role: "user", content: "earlier ask" }],
@@ -4643,9 +4603,15 @@ describe("runCliAgent reliability", () => {
     };
     setHookRunnerForTest(hookRunner);
 
+    const admission = prepareSystemAgentRunAdmission(
+      config,
+      "run-native-compact",
+      "main",
+      "cli-native-control-fixture",
+    );
     try {
       const context = await prepareCliRunContext({
-        admittedRunContext: createTestAdmittedRunContext("run-native-compact"),
+        preparedRunAdmission: admission,
         sessionId: "s1",
         sessionFile,
         sessionTarget,
@@ -4675,6 +4641,7 @@ describe("runCliAgent reliability", () => {
       expect(context.contextEngine).toBeUndefined();
       expect(context.claudeSkillsPluginArgs).toEqual([]);
     } finally {
+      admission.close();
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });

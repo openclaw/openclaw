@@ -1,19 +1,18 @@
+import { isCloudWorkerPlacementState } from "../../packages/gateway-protocol/src/schema/session-placement-state.js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import { resolveSessionPermissionCoreToolPolicy } from "../agents/session-permission-exec-mode.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../agents/tool-fs-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
+import { getAgentScopedMediaLocalRoots, getDefaultMediaLocalRoots } from "../media/local-roots.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { getUserProfileListItem } from "../state/user-profiles.js";
-import { resolveHttpProfile } from "./http-auth-user-profile.js";
-import {
-  applyHttpOperatorRoleScopeCeiling,
-  type AuthorizedControlUiReadRequest,
-} from "./http-auth-utils.js";
+import { applyHttpOperatorRoleScopeCeiling, resolveHttpProfile } from "./http-auth-user-profile.js";
+import type { AuthorizedControlUiReadRequest } from "./http-auth-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import { createProfileSessionEntryFilter } from "./session-sharing.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
+import { resolveSessionWorkerPlacementContext } from "./session-worker-placement-context.js";
 import { resolveSessionWorkspaceRoots } from "./session-workspace-roots.js";
 
 export type AssistantMediaSession = {
@@ -86,8 +85,10 @@ export function resolveAssistantMediaPolicy(params: {
   }
   const agentId = loaded?.agentId ?? params.agentId;
   const entry = loaded?.entry;
+  const remote = Boolean(entry?.execNode || entry?.repositoryWorkspaceId);
   let session: AssistantMediaSession | undefined;
   let sessionRoot: string | undefined;
+  let executionCwd: string | undefined;
   if (loaded && entry && agentId) {
     if (!auth.operatorScopes.includes("operator.admin")) {
       const profileId = auth.authenticatedUserProfile?.profileId;
@@ -111,7 +112,11 @@ export function resolveAssistantMediaPolicy(params: {
       }
     }
     session = { sessionKey: loaded.canonicalKey, agentId, sessionId: entry.sessionId };
-    sessionRoot = entry.sessionRoot ?? resolveSessionWorkspaceRoots(config, agentId, entry).root;
+    if (!remote) {
+      const workspace = resolveSessionWorkspaceRoots(config, agentId, entry);
+      sessionRoot = entry.sessionRoot ?? workspace.root;
+      executionCwd = workspace.diffCwd;
+    }
   }
   const workspaceOnly =
     !session ||
@@ -119,15 +124,24 @@ export function resolveAssistantMediaPolicy(params: {
       ? resolveSessionPermissionCoreToolPolicy({ mode: entry.permissionMode }).workspaceOnly
       : resolveEffectiveToolFsWorkspaceOnly({ cfg: config, agentId }));
   const localRoots = [
-    ...getAgentScopedMediaLocalRoots(config, agentId, workspaceOnly ? sessionRoot : undefined),
+    ...(remote
+      ? getDefaultMediaLocalRoots()
+      : getAgentScopedMediaLocalRoots(config, agentId, workspaceOnly ? sessionRoot : undefined)),
   ];
   // Full Access retains established agent-workspace downloads alongside the selected project.
   if (sessionRoot && !localRoots.includes(sessionRoot)) {
     localRoots.push(sessionRoot);
   }
+  // Cloud placement owns its filesystem independently of the session exec-node setting.
+  const placement = session
+    ? resolveSessionWorkerPlacementContext()
+        .workerSessionPlacementService?.getMany([session.sessionId])
+        .get(session.sessionId)
+    : undefined;
   return {
     session,
-    remote: Boolean(entry?.execNode),
+    executionCwd,
+    remote: remote || isCloudWorkerPlacementState(placement?.state),
     localRoots,
     workspaceOnly,
     reader,

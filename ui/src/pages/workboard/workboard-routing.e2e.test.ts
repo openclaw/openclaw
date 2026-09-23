@@ -118,10 +118,17 @@ suite.define(() => {
       const response = await page.goto(`${suite.server.baseUrl}workboard/ops?agent=main`);
       expect(response?.status()).toBe(200);
       await page.locator(".workboard-page-title", { hasText: "Operations" }).waitFor();
-      const headerGlyph = page.locator(".workboard-board-glyph--header");
-      await expect.poll(() => headerGlyph.textContent()).toContain("⚙");
-      await expect.poll(() => headerGlyph.getAttribute("style")).toContain("#22c55e");
-      await page.locator(".workboard-select--toolbar-board").waitFor();
+      const headerGlyph = page.locator(".workboard-board-glyph--header openclaw-appearance-glyph");
+      await expect
+        .poll(() => headerGlyph.evaluate((element) => element.shadowRoot?.textContent ?? ""))
+        .toContain("⚙");
+      await expect
+        .poll(() => headerGlyph.evaluate((element) => getComputedStyle(element).color))
+        .toBe("rgb(34, 197, 94)");
+      const filterTrigger = page.locator(".workboard-filter-trigger");
+      await filterTrigger.click();
+      await page.getByRole("button", { name: /^Filter by board:/u }).waitFor();
+      await filterTrigger.click();
       if (captureUiProofEnabled) {
         await writeFile(
           path.join(artifactDir, "01-board-route.png"),
@@ -227,7 +234,7 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}workboard`);
         await gateway.waitForRequest("agents.list");
 
-        const agentScope = page.locator(".agent-scope-control openclaw-agent-select");
+        const agentScope = page.locator(".workboard-agent-filter openclaw-agent-select");
         await agentScope.locator(".agent-select__trigger").click();
         await expect
           .poll(() =>
@@ -286,6 +293,64 @@ suite.define(() => {
         await page.locator(".workboard-card", { hasText: createdCard.title }).waitFor({
           state: "visible",
         });
+      },
+    );
+  });
+
+  it("refreshes board navigation after browser Back retains an unfinished card draft", async () => {
+    await suite.withPage(
+      { serviceWorkers: "block", viewport: { width: 1600, height: 1000 } },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          ...workboardUi,
+          methodResponses: {
+            "config.get": configSnapshot(true),
+            "sessions.list": sessionsListResponse(),
+            "tasks.list": { nextCursor: null, tasks: [] },
+            "workboard.boards.list": { boards },
+            "workboard.cards.list": { boards, cards: [], statuses: ["todo", "done"] },
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}apps`);
+        const sidebar = page.locator("openclaw-app-sidebar");
+        await sidebar.locator(".sidebar-nav__head-action").click();
+        await sidebar
+          .locator("wa-dropdown.sidebar-more-menu")
+          .getByRole("menuitem", { name: "Edit pinned items" })
+          .click();
+        await sidebar
+          .locator("wa-dropdown.sidebar-customize-menu:not(.sidebar-more-menu)")
+          .getByRole("menuitemcheckbox", { name: /Operations/u })
+          .click();
+        await page.keyboard.press("Escape");
+        const pinnedBoard = sidebar.locator('[data-sidebar-entry="plugin:workboard/board-ops"] a');
+        await pinnedBoard.click();
+        await page.locator(".workboard-page-title", { hasText: "Operations" }).waitFor();
+        await page.getByRole("button", { name: /New card/u }).click();
+        await page.locator(".workboard-draft__title").fill("Keep this unfinished card");
+
+        await page.goBack();
+        await waitForControlUiRoute(page, { pathname: "/apps", routeId: "apps", search: "" });
+        await page.locator(".workboard-draft").waitFor({ state: "detached" });
+        const renamedBoards = boards.map((board) =>
+          board.id === "ops" ? { ...board, name: "Renamed operations" } : board,
+        );
+        await gateway.setMethodResponse("workboard.cards.list", {
+          boards: renamedBoards,
+          cards: [],
+          statuses: ["todo", "done"],
+        });
+        await gateway.setMethodResponse("workboard.boards.list", { boards: renamedBoards });
+        await gateway.emitGatewayEvent("plugin.workboard.changed", {
+          epoch: "workboard-draft-navigation",
+          revision: 1,
+        });
+        await expect.poll(() => pinnedBoard.textContent()).toContain("Renamed operations");
+
+        await page.goForward();
+        await expect
+          .poll(() => page.locator(".workboard-draft__title").inputValue())
+          .toBe("Keep this unfinished card");
       },
     );
   });

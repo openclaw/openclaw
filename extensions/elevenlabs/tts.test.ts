@@ -100,12 +100,7 @@ describe("elevenlabs tts diagnostics", () => {
   });
 
   it("rejects JSON success bodies as malformed audio", async () => {
-    const fetchMock = vi.fn<typeof fetch>(
-      async () =>
-        new Response(JSON.stringify({ error: "not audio" }), {
-          headers: { "content-type": "application/json" },
-        }),
-    );
+    const fetchMock = vi.fn<typeof fetch>(async () => Response.json({ error: "not audio" }));
     globalThis.fetch = fetchMock;
 
     await expectDefaultTtsRequestToThrow("ElevenLabs API error: malformed audio response");
@@ -303,12 +298,7 @@ describe("elevenlabs tts diagnostics", () => {
   });
 
   it("rejects JSON success stream responses as malformed audio", async () => {
-    const fetchMock = vi.fn<typeof fetch>(
-      async () =>
-        new Response(JSON.stringify({ error: "not audio" }), {
-          headers: { "content-type": "application/json" },
-        }),
-    );
+    const fetchMock = vi.fn<typeof fetch>(async () => Response.json({ error: "not audio" }));
     globalThis.fetch = fetchMock;
 
     await expect(elevenLabsTTSStream(createDefaultTtsRequest())).rejects.toThrow(

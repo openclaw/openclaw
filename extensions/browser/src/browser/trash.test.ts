@@ -41,7 +41,6 @@ describe("browser trash", () => {
     browserUtilsMock.configDir = configDir;
     realMkdirSync(configDir, { recursive: true, mode: 0o700 });
     realMkdirSync(path.join(homeDir, ".Trash"), { recursive: true, mode: 0o700 });
-    vi.spyOn(Date, "now").mockReturnValue(123);
     vi.spyOn(os, "homedir").mockReturnValue(homeDir);
     vi.spyOn(fs.realpathSync, "native").mockImplementation((candidate) =>
       realRealpathSyncNative(candidate),
@@ -56,19 +55,24 @@ describe("browser trash", () => {
   });
 
   it("allows managed browser data under a configured state directory outside home", async () => {
-    vi.spyOn(fs, "mkdirSync").mockImplementation(() => undefined);
-    vi.spyOn(fs, "mkdtempSync").mockImplementation((prefix) => {
-      const container = `${prefix}secure`;
-      realMkdirSync(container, { recursive: true });
-      return container;
-    });
-    const renameSync = vi.spyOn(fs, "renameSync").mockImplementation(() => undefined);
     const target = path.join(configDir, "browser", "constructor");
     realMkdirSync(target, { recursive: true });
-    const expected = path.join(homeDir, ".Trash", "constructor-123-secure", "constructor");
+    realWriteFileSync(path.join(target, "Preferences"), "profile data");
 
-    await expect(movePathToTrash(target)).resolves.toBe(expected);
-    expect(renameSync).toHaveBeenCalledWith(target, expected);
+    const moved = await movePathToTrash(target);
+    const trashDir = path.join(homeDir, ".Trash");
+    const reservation = path.dirname(moved);
+    expect(moved.startsWith(`${trashDir}${path.sep}`)).toBe(true);
+    expect(reservation).not.toBe(trashDir);
+    expect(path.basename(moved)).toBe("constructor");
+    expect(fs.realpathSync.native(moved)).toBe(moved);
+    const reservationStat = fs.lstatSync(reservation);
+    expect(reservationStat.isDirectory()).toBe(true);
+    if (process.platform !== "win32") {
+      expect(reservationStat.mode & 0o777).toBe(0o700);
+    }
+    expect(fs.readFileSync(path.join(moved, "Preferences"), "utf8")).toBe("profile data");
+    expect(fs.lstatSync(target, { throwIfNoEntry: false })).toBeUndefined();
   });
 
   it("does not authorize other configured-state paths", async () => {

@@ -1,4 +1,5 @@
 import type { GatewaySuspension } from "../../../packages/gateway-protocol/src/schema/gateway-suspend.js";
+import type { PluginsUiDescriptorsResult } from "../../../packages/gateway-protocol/src/schema/plugins.js";
 import type { ControlUiBootstrapProfileHint } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import type { EventLogEntry } from "../api/event-log.ts";
 import type { GatewayBrowserClient, GatewayEventListener, GatewayHelloOk } from "../api/gateway.ts";
@@ -19,7 +20,9 @@ export type ApplicationGatewaySnapshot = {
   offlineStable: boolean;
   restartPending?: boolean;
   suspensionPhase?: GatewaySuspension["phase"];
+  /** Transport identity stays stable while plugin capability fields are refreshed. */
   hello: GatewayHelloOk | null;
+  pluginCapabilities?: PluginsUiDescriptorsResult | null;
   canvasPluginSurfaceUrl: string | null;
   assistantAgentId: string | null;
   sessionKey: string;
@@ -47,6 +50,8 @@ export type ApplicationGateway = {
   readonly connection: ApplicationGatewayConnection;
   readonly connectionRevision: number;
   readonly eventLog: readonly EventLogEntry[];
+  /** Advances when the connection or authentication context retires diagnostic history. */
+  readonly eventLogRevision: number;
   connect: (connection?: ApplicationGatewayConnectOptions) => void;
   setSessionKey: (sessionKey: string) => void;
   start: () => void;
@@ -55,4 +60,13 @@ export type ApplicationGateway = {
   subscribeEventLog: (listener: (events: readonly EventLogEntry[]) => void) => () => void;
   subscribeEvents: (listener: GatewayEventListener) => () => void;
   updateSelfUser?: (patch: Partial<Omit<AuthenticatedUser, "id">>) => void;
+  /** True when this browser holds a stored operator device token for the current gateway. */
+  hasStoredDeviceToken?: () => boolean;
+  /**
+   * Forget the operator device token this browser stores for the current
+   * gateway, then reconnect without it. Token-only reset: the browser device
+   * identity and other gateways' tokens survive. Returns false when no
+   * credential was stored.
+   */
+  forgetDeviceToken?: () => boolean;
 };

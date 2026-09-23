@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { OperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
+import { isComputerObservationAction } from "../../agents/tools/computer-tool-shared.js";
 import type { ComputerToolTransport } from "../../agents/tools/computer-tool.js";
 import {
   getActiveAgentRunDelegatedAuthority,
@@ -11,15 +12,15 @@ import { getActivePluginGatewayNodePolicyRegistry } from "../../plugins/runtime-
 import type { WorkerComputerLaunchDescriptor } from "../../worker/launch-descriptor.js";
 import { parseNodeWorkerComputerInput } from "../../worker/node-computer-protocol.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
+import type { DesktopSessionRegistry } from "../desktop/session-registry.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
 import { applyPluginNodeInvokePolicy } from "../node-invoke-plugin-policy.js";
 import { invokeNodeWithReadinessRetry } from "../node-invoke-readiness.js";
 import type { NodeWorkerSupervisorTransport } from "../node-registry-private.js";
 import type { GatewayContextResolver } from "../server-methods/types.js";
 import type { WorkerSessionPlacementStore, WorkerSessionTurnClaim } from "./placement-store.js";
-import type { WorkerEnvironmentStore } from "./store.js";
+import type { WorkerEnvironmentRecord, WorkerEnvironmentStore } from "./store.js";
 import { WorkerRunnerUnavailableError } from "./tunnel-contract.js";
-import type { WorkerComputerExecutor } from "./worker-turn-computer-rpc.js";
 
 const COMPUTER_COMMANDS = ["screen.snapshot", "computer.act"] as const;
 
@@ -45,20 +46,32 @@ export type PreparedWorkerComputer = {
   close(reason: string): Promise<void>;
 };
 
-/** Captures one placement's desktop; neither model input nor a copied run ID selects a node. */
-export function createWorkerComputerTransportOwner(options: {
+export type WorkerEnvironmentComputerAuthority = {
+  environmentId: string;
+  ownerEpoch: number;
+  sessionId: string;
+  sessionKey: string;
+  agentId: string;
+  runId: string;
+  assertCurrent(): void;
+  turnClaim?: WorkerSessionTurnClaim;
+};
+
+type WorkerComputerOwnerOptions = {
   store: Pick<WorkerEnvironmentStore, "get">;
-  placements: Pick<WorkerSessionPlacementStore, "get" | "validateTurnClaim">;
   resolveGatewayContext: GatewayContextResolver;
   getNodeTransport: () => NodeWorkerSupervisorTransport | undefined;
+  desktopRegistry?: Pick<DesktopSessionRegistry, "hasController" | "onControlChanged">;
   warn: (message: string) => void;
-}) {
-  return async (claim: WorkerSessionTurnClaim): Promise<PreparedWorkerComputer | undefined> => {
-    const placement = options.placements.get(claim.sessionId);
-    if (placement?.state !== "active" || !options.placements.validateTurnClaim(claim)) {
-      throw new Error("Session desktop placement is no longer active");
-    }
-    const environment = options.store.get(placement.environmentId);
+};
+
+/** Captures one environment's desktop under its placement or conversation attachment owner. */
+export function createEnvironmentComputerTransportOwner(options: WorkerComputerOwnerOptions) {
+  return async (
+    source: WorkerEnvironmentComputerAuthority,
+  ): Promise<PreparedWorkerComputer | undefined> => {
+    source.assertCurrent();
+    const environment = options.store.get(source.environmentId);
     if (!environment?.nodeDeviceId || (!environment.desktop && !environment.sharedHost)) {
       return undefined;
     }
@@ -71,8 +84,7 @@ export function createWorkerComputerTransportOwner(options: {
     if (!node) {
       throw new WorkerRunnerUnavailableError();
     }
-    const environmentIsCurrent = () => {
-      const current = options.store.get(environment.environmentId);
+    const environmentIsCurrent = (current: WorkerEnvironmentRecord | undefined) => {
       const currentNode = context.nodeRegistry.get(node.nodeId);
       return (
         options.resolveGatewayContext() === context &&
@@ -85,26 +97,22 @@ export function createWorkerComputerTransportOwner(options: {
         currentNode.client.invalidated !== true
       );
     };
-    const placementIsCurrent = () => {
-      const current = options.placements.get(claim.sessionId);
+    const sourceIsCurrent = () => {
+      try {
+        source.assertCurrent();
+      } catch {
+        return false;
+      }
       const currentEnvironment = options.store.get(environment.environmentId);
       return (
-        environmentIsCurrent() &&
-        options.placements.validateTurnClaim(claim) &&
-        current?.state === "active" &&
-        current.generation === claim.placementGeneration &&
-        current.sessionKey === placement.sessionKey &&
-        current.agentId === placement.agentId &&
-        current.environmentId === environment.environmentId &&
-        current.activeOwnerEpoch === environment.ownerEpoch &&
-        currentEnvironment?.state === "attached" &&
-        currentEnvironment.destroyRequestedAtMs === null &&
-        currentEnvironment.attachedSessionIds.length === 1 &&
-        currentEnvironment.attachedSessionIds[0] === claim.sessionId
+        environmentIsCurrent(currentEnvironment) &&
+        currentEnvironment?.ownerEpoch === source.ownerEpoch &&
+        ["ready", "idle", "attached"].includes(currentEnvironment.state) &&
+        currentEnvironment.destroyRequestedAtMs === null
       );
     };
     const assertPlacement = () => {
-      if (!placementIsCurrent()) {
+      if (!sourceIsCurrent()) {
         throw new Error("Session desktop placement authority changed");
       }
     };
@@ -113,9 +121,7 @@ export function createWorkerComputerTransportOwner(options: {
     // their private endpoint. A failed private probe never selects another connected computer.
     const privateNode = environment.sharedHost
       ? undefined
-      : (await nodeTransport.listCurrentNodes()).find(
-          (candidate) => candidate.nodeId === node.nodeId,
-        );
+      : await nodeTransport.getCurrentNode(node.nodeId);
     assertPlacement();
     if (!environment.sharedHost && !privateNode) {
       throw new Error("Session desktop node lacks the current private worker protocol");
@@ -126,7 +132,7 @@ export function createWorkerComputerTransportOwner(options: {
         node: privateNode,
         command: NODE_WORKER_DESKTOP_COMPUTER_COMMAND,
         params: { operation: "capabilities" },
-        isDispatchAuthorized: placementIsCurrent,
+        isDispatchAuthorized: sourceIsCurrent,
       });
       assertPlacement();
       if (!nodeTransport.isCurrent(privateNode)) {
@@ -174,9 +180,10 @@ export function createWorkerComputerTransportOwner(options: {
     let closing: Promise<void> | undefined;
     const activeBindings = new Set<{ close(reason: string): Promise<unknown> }>();
     const resourceBindingIsCurrent = () =>
-      environmentIsCurrent() && (!privateNode || nodeTransport.isCurrent(privateNode));
+      environmentIsCurrent(options.store.get(environment.environmentId)) &&
+      (!privateNode || nodeTransport.isCurrent(privateNode));
     const bindingIsCurrent = () =>
-      resourceBindingIsCurrent() &&
+      (!privateNode || nodeTransport.isCurrent(privateNode)) &&
       getActivePluginGatewayNodePolicyRegistry() === registry &&
       policyOwners.every((isCurrent) => isCurrent()) &&
       (privateNode !== undefined ||
@@ -253,7 +260,7 @@ export function createWorkerComputerTransportOwner(options: {
               expectedPairingGeneration: node.pairingGeneration,
               command,
               params: commandParams,
-              sessionKey: placement.sessionKey,
+              sessionKey: source.sessionKey,
               ...params,
               isDispatchAuthorized: isCurrent,
             },
@@ -264,17 +271,17 @@ export function createWorkerComputerTransportOwner(options: {
       descriptor,
       bind(operationalRunInstance) {
         const authority = getActiveAgentRunDelegatedAuthority(operationalRunInstance);
-        if (!authority || operationalRunInstance.runId !== claim.runId) {
+        if (!authority || operationalRunInstance.runId !== source.runId) {
           throw new Error("Session computer requires the exact admitted run");
         }
         const identity: AgentRuntimeIdentity = {
           kind: "agentRuntime",
-          agentId: placement.agentId,
-          sessionKey: placement.sessionKey,
+          agentId: source.agentId,
+          sessionKey: source.sessionKey,
           operationalRunInstance,
           delegatedAuthority:
-            claim.owner.kind === "worker"
-              ? { ...authority, kind: "worker", turnClaim: claim }
+            source.turnClaim?.owner.kind === "worker"
+              ? { ...authority, kind: "worker", turnClaim: source.turnClaim }
               : { ...authority, kind: "local" },
         };
         // Tool construction can also build a schema-only projection. Only an actual
@@ -283,6 +290,10 @@ export function createWorkerComputerTransportOwner(options: {
         let bindingClosed = false;
         let bindingClosing: Promise<unknown> | undefined;
         const inFlight = new Set<Promise<unknown>>();
+        const inputControllers = new Set<AbortController>();
+        let releaseControlListener: (() => void) | undefined;
+        let inputNeedsObservation = false;
+        let controlGeneration = 0;
         const lifetime = new AbortController();
         const assertCurrent = () => {
           if (
@@ -304,11 +315,38 @@ export function createWorkerComputerTransportOwner(options: {
           >,
           assertAuthorized: (() => void) | undefined,
         ) => {
+          const isInput =
+            input.operation === "act" &&
+            !isComputerObservationAction(
+              input.params.action,
+              input.params.action === "browser_dialog" ? input.params.dialogAction : undefined,
+            );
+          const controller = new AbortController();
+          if (isInput) {
+            inputControllers.add(controller);
+          }
           // RPC tool grants can close independently of the run or placement.
           // Carry their exact authority through policy work and the final dispatch.
           const assertInvocationCurrent = () => {
             assertCurrent();
             assertAuthorized?.();
+            if (
+              isInput &&
+              options.desktopRegistry?.hasController(
+                environment.environmentId,
+                environment.ownerEpoch,
+              )
+            ) {
+              throw new Error(
+                "Computer input paused while the operator has control; release control in the Desktop panel to resume",
+              );
+            }
+            if (isInput && inputNeedsObservation) {
+              throw new Error(
+                "COMPUTER_STALE_OBSERVATION: take a fresh screenshot after the operator releases control",
+              );
+            }
+            controller.signal.throwIfAborted();
           };
           const command = input.operation === "snapshot" ? "screen.snapshot" : "computer.act";
           const commandParams = input.params;
@@ -320,83 +358,89 @@ export function createWorkerComputerTransportOwner(options: {
               return false;
             }
           };
-          assertInvocationCurrent();
-          const signal = request.signal
-            ? AbortSignal.any([request.signal, lifetime.signal])
-            : lifetime.signal;
-          const dispatch = async (
-            params: Parameters<typeof send>[1] & { params: unknown },
-          ): Promise<InvokeResult> => {
-            const actual = parseNodeWorkerComputerInput(
-              JSON.stringify({ ...input, params: params.params }),
-            );
-            if (
-              actual.operation === "capabilities" ||
-              actual.operation === "close" ||
-              actual.params.executionId !== execution?.physicalId
-            ) {
-              throw new Error("Computer policy cannot replace the session execution owner");
-            }
-            return await send(actual, {
-              timeoutMs: params.timeoutMs,
-              signal: params.signal,
-              idempotencyKey: params.idempotencyKey,
-              isDispatchAuthorized: () => isCurrent() && params.isDispatchAuthorized(),
-              onDispatchReady: params.onDispatchReady,
-            });
-          };
-          const commandIsAllowed = () => {
-            const currentNode = context.nodeRegistry.get(node.nodeId);
-            const declaredCommands = privateNode
-              ? [...COMPUTER_COMMANDS]
-              : (currentNode?.commands ?? []);
-            return isNodeCommandAllowed({
+          const signal = AbortSignal.any([
+            lifetime.signal,
+            controller.signal,
+            ...(request.signal ? [request.signal] : []),
+          ]);
+          try {
+            assertInvocationCurrent();
+            const dispatch = async (
+              params: Parameters<typeof send>[1] & { params: unknown },
+            ): Promise<InvokeResult> => {
+              const actual = parseNodeWorkerComputerInput(
+                JSON.stringify({ ...input, params: params.params }),
+              );
+              if (
+                actual.operation === "capabilities" ||
+                actual.operation === "close" ||
+                actual.params.executionId !== execution?.physicalId
+              ) {
+                throw new Error("Computer policy cannot replace the session execution owner");
+              }
+              return await send(actual, {
+                timeoutMs: params.timeoutMs,
+                signal: params.signal,
+                idempotencyKey: params.idempotencyKey,
+                isDispatchAuthorized: () => isCurrent() && params.isDispatchAuthorized(),
+                onDispatchReady: params.onDispatchReady,
+              });
+            };
+            const commandIsAllowed = () => {
+              const currentNode = context.nodeRegistry.get(node.nodeId);
+              const declaredCommands = privateNode
+                ? [...COMPUTER_COMMANDS]
+                : (currentNode?.commands ?? []);
+              return isNodeCommandAllowed({
+                command,
+                declaredCommands,
+                allowlist: resolveNodeCommandAllowlist(context.getRuntimeConfig(), {
+                  ...currentNode,
+                  approvedCommands: declaredCommands,
+                }),
+              }).ok;
+            };
+            const result = await applyPluginNodeInvokePolicy({
+              context,
+              client: null,
+              agentRuntimeIdentity: identity,
+              nodeSession: node,
               command,
-              declaredCommands,
-              allowlist: resolveNodeCommandAllowlist(context.getRuntimeConfig(), {
-                ...currentNode,
-                approvedCommands: declaredCommands,
-              }),
-            }).ok;
-          };
-          const result = await applyPluginNodeInvokePolicy({
-            context,
-            client: null,
-            agentRuntimeIdentity: identity,
-            nodeSession: node,
-            command,
-            params: commandParams,
-            sessionKey: placement.sessionKey,
-            timeoutMs: request.timeoutMs,
-            idempotencyKey: request.idempotencyKey,
-            signal,
-            isInvocationCurrent: isCurrent,
-            isApprovalAuthorityActive: isCurrent,
-            privateTransport: {
-              ...(privateNode ? { commands: COMPUTER_COMMANDS } : {}),
-              isCurrent,
-              invoke: dispatch,
-            },
-          });
-          assertInvocationCurrent();
-          if (result) {
-            if (!result.ok) {
-              throw new Error(result.message ?? "Session computer action denied");
+              params: commandParams,
+              sessionKey: source.sessionKey,
+              timeoutMs: request.timeoutMs,
+              idempotencyKey: request.idempotencyKey,
+              signal,
+              isInvocationCurrent: isCurrent,
+              isApprovalAuthorityActive: isCurrent,
+              privateTransport: {
+                ...(privateNode ? { commands: COMPUTER_COMMANDS } : {}),
+                isCurrent,
+                invoke: dispatch,
+              },
+            });
+            assertInvocationCurrent();
+            if (result) {
+              if (!result.ok) {
+                throw new Error(result.message ?? "Session computer action denied");
+              }
+              return result.payloadJSON ? JSON.parse(result.payloadJSON) : result.payload;
             }
-            return result.payloadJSON ? JSON.parse(result.payloadJSON) : result.payload;
+            if ((privateNode && command === "computer.act") || !commandIsAllowed()) {
+              throw new Error("Session computer command has no active policy or permission");
+            }
+            const raw = await dispatch({
+              params: commandParams,
+              timeoutMs: request.timeoutMs,
+              signal,
+              idempotencyKey: request.idempotencyKey,
+              isDispatchAuthorized: () => isCurrent() && commandIsAllowed(),
+            });
+            assertInvocationCurrent();
+            return payload(raw);
+          } finally {
+            inputControllers.delete(controller);
           }
-          if ((privateNode && command === "computer.act") || !commandIsAllowed()) {
-            throw new Error("Session computer command has no active policy or permission");
-          }
-          const raw = await dispatch({
-            params: commandParams,
-            timeoutMs: request.timeoutMs,
-            signal,
-            idempotencyKey: request.idempotencyKey,
-            isDispatchAuthorized: () => isCurrent() && commandIsAllowed(),
-          });
-          assertInvocationCurrent();
-          return payload(raw);
         };
         const binding = {
           close(reason: string): Promise<unknown> {
@@ -405,6 +449,7 @@ export function createWorkerComputerTransportOwner(options: {
             }
             bindingClosed = true;
             lifetime.abort();
+            releaseControlListener?.();
             bindingClosing = (async () => {
               await Promise.allSettled(inFlight);
               if (!execution || !resourceBindingIsCurrent()) {
@@ -458,8 +503,36 @@ export function createWorkerComputerTransportOwner(options: {
             // the native owner, so a copied UUID cannot join or close another binding.
             execution ??= { logicalId, physicalId: randomUUID() };
             activeBindings.add(binding);
+            releaseControlListener ??= options.desktopRegistry?.onControlChanged(
+              environment.environmentId,
+              environment.ownerEpoch,
+              (controlled) => {
+                inputNeedsObservation = true;
+                controlGeneration += 1;
+                if (controlled) {
+                  for (const controller of inputControllers) {
+                    controller.abort(
+                      new Error("Computer input paused while the operator has control"),
+                    );
+                  }
+                }
+              },
+            );
             input.params.executionId = execution.physicalId;
-            const operation = execute(input, request, assertAuthorized);
+            const observedControlGeneration = controlGeneration;
+            const operation = execute(input, request, assertAuthorized).then((result) => {
+              if (
+                input.operation === "snapshot" &&
+                controlGeneration === observedControlGeneration &&
+                !options.desktopRegistry?.hasController(
+                  environment.environmentId,
+                  environment.ownerEpoch,
+                )
+              ) {
+                inputNeedsObservation = false;
+              }
+              return result;
+            });
             inFlight.add(operation);
             void operation.finally(() => inFlight.delete(operation)).catch(() => {});
             return operation;
@@ -489,160 +562,44 @@ export function createWorkerComputerTransportOwner(options: {
   };
 }
 
-export function createWorkerComputerService(
-  options: Parameters<typeof createWorkerComputerTransportOwner>[0] & {
-    placements: Pick<
-      WorkerSessionPlacementStore,
-      "get" | "validateTurnClaim" | "registerTurnClaimClosedHandler"
-    >;
+/** Placement admission retains its exact turn claim; attachments use the same transport owner. */
+export function createWorkerComputerTransportOwner(
+  options: WorkerComputerOwnerOptions & {
+    placements: Pick<WorkerSessionPlacementStore, "get" | "validateTurnClaim">;
   },
 ) {
-  const create = createWorkerComputerTransportOwner(options);
-  type Owner = {
-    claimId: string;
-    prepared: Promise<PreparedWorkerComputer | undefined>;
-    transport?: WorkerComputerTransport;
-    connection?: { signal: AbortSignal; abort: () => void };
-    closeComputer?: PreparedWorkerComputer["close"];
-    closing?: Promise<void>;
-  };
-  const owners = new Map<string, Owner>();
-  const closeOwner = (owner: Owner, reason: string) => {
-    if (owner.closing) {
-      return owner.closing;
+  const create = createEnvironmentComputerTransportOwner(options);
+  return (claim: WorkerSessionTurnClaim): Promise<PreparedWorkerComputer | undefined> => {
+    const placement = options.placements.get(claim.sessionId);
+    if (placement?.state !== "active" || !options.placements.validateTurnClaim(claim)) {
+      return Promise.reject(new Error("Session desktop placement is no longer active"));
     }
-    owner.transport = undefined;
-    owner.connection?.signal.removeEventListener("abort", owner.connection.abort);
-    // Fence this exact owner immediately, but retain cleanup custody until the
-    // native ACK so concurrent claim closure or Gateway stop joins the same close.
-    owner.closing = (async () => {
-      try {
-        await owner.prepared;
-        await owner.closeComputer?.(reason);
-      } finally {
-        if (owners.get(owner.claimId) === owner) {
-          owners.delete(owner.claimId);
+    return create({
+      environmentId: placement.environmentId,
+      ownerEpoch: placement.activeOwnerEpoch,
+      sessionId: claim.sessionId,
+      sessionKey: placement.sessionKey,
+      agentId: placement.agentId,
+      runId: claim.runId,
+      turnClaim: claim,
+      assertCurrent() {
+        const current = options.placements.get(claim.sessionId);
+        const environment = options.store.get(placement.environmentId);
+        if (
+          !options.placements.validateTurnClaim(claim) ||
+          current?.state !== "active" ||
+          current.generation !== claim.placementGeneration ||
+          current.sessionKey !== placement.sessionKey ||
+          current.agentId !== placement.agentId ||
+          current.environmentId !== placement.environmentId ||
+          current.activeOwnerEpoch !== placement.activeOwnerEpoch ||
+          environment?.state !== "attached" ||
+          environment.attachedSessionIds.length !== 1 ||
+          environment.attachedSessionIds[0] !== claim.sessionId
+        ) {
+          throw new Error("Session desktop placement authority changed");
         }
-      }
-    })();
-    return owner.closing;
-  };
-  const unregister = options.placements.registerTurnClaimClosedHandler((claim) => {
-    const owner = owners.get(claim.claimId);
-    if (owner) {
-      void closeOwner(owner, "turn-closed").catch(() =>
-        options.warn("Session computer cleanup failed after turn closure."),
-      );
-    }
-  });
-  let stopped = false;
-  return {
-    prepare: (claim: WorkerSessionTurnClaim) => {
-      if (stopped || !options.placements.validateTurnClaim(claim)) {
-        return Promise.reject(new Error("Session computer owner closed"));
-      }
-      const prior = owners.get(claim.claimId);
-      if (prior) {
-        return prior.prepared;
-      }
-      const prepared = create(claim).then((computer) => {
-        if (!computer) {
-          return undefined;
-        }
-        owner.closeComputer = (reason) => computer.close(reason);
-        const assertOwner = () => {
-          if (stopped || owner.closing || owners.get(claim.claimId) !== owner) {
-            throw new Error("Session computer owner replaced");
-          }
-        };
-        return {
-          ...computer,
-          bind(run: OperationalRunInstanceRef) {
-            assertOwner();
-            const transport = computer.bind(run);
-            const bound: WorkerComputerTransport = {
-              computerUse: transport.computerUse,
-              async resolveNode(query, signal) {
-                assertOwner();
-                const result = await transport.resolveNode(query, signal);
-                assertOwner();
-                return result;
-              },
-              async invoke(request, assertAuthorized) {
-                assertOwner();
-                const result = await transport.invoke(request, () => {
-                  assertOwner();
-                  assertAuthorized?.();
-                });
-                assertOwner();
-                return result;
-              },
-            };
-            owner.transport = bound;
-            return bound;
-          },
-          close: (reason: string) => closeOwner(owner, reason),
-        };
-      });
-      const owner: Owner = { claimId: claim.claimId, prepared };
-      owners.set(claim.claimId, owner);
-      return prepared;
-    },
-    execute: (async ({ identity, request, signal, assertCurrent }) => {
-      assertCurrent();
-      const claim = identity.turnClaim;
-      const owner = claim ? owners.get(claim.claimId) : undefined;
-      const computer = await owner?.prepared;
-      assertCurrent();
-      if (
-        !computer ||
-        !owner?.transport ||
-        owner.closing ||
-        owners.get(owner.claimId) !== owner ||
-        !signal ||
-        (owner.connection && owner.connection.signal !== signal)
-      ) {
-        throw new Error("Session computer connection is unavailable; start a new turn");
-      }
-      signal.throwIfAborted();
-      if (!owner.connection) {
-        // The worker socket owns input between requests too. Reconnects cannot
-        // adopt this execution; Codex's local prepare/bind path has no socket owner.
-        const abort = () => {
-          void closeOwner(owner, "worker-disconnect").catch(() =>
-            options.warn("Session computer cleanup failed after worker disconnect."),
-          );
-        };
-        owner.connection = { signal, abort };
-        signal.addEventListener("abort", abort, { once: true });
-      }
-      const result = await owner.transport.invoke(
-        {
-          nodeId: computer.descriptor.nodeId,
-          command: request.command,
-          commandParams: JSON.parse(request.paramsJson),
-          timeoutMs: request.timeoutMs,
-          idempotencyKey: request.idempotencyKey,
-          signal,
-        },
-        assertCurrent,
-      );
-      assertCurrent();
-      return { resultJson: JSON.stringify(result) };
-    }) satisfies WorkerComputerExecutor,
-    close: async () => {
-      stopped = true;
-      unregister();
-      const results = await Promise.allSettled(
-        [...owners.values()].map((owner) => closeOwner(owner, "gateway-stop")),
-      );
-      const failures = results.filter((result) => result.status === "rejected");
-      if (failures.length) {
-        throw new AggregateError(
-          failures.map((failure) => failure.reason),
-          "Session computer cleanup failed",
-        );
-      }
-    },
+      },
+    });
   };
 }

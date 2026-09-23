@@ -43,10 +43,13 @@ export async function installDesktopClientFake(panel: Locator): Promise<void> {
         element.dataset.usedCredentials = options.credentials?.password ? "true" : "false";
         return {
           disableInput() {},
+          setPresented() {
+            return true;
+          },
           sendBackspace() {},
           sendKeyboardEvent() {},
           sendText() {},
-          setScaleViewport() {},
+          setSizingMode() {},
           disconnect() {
             element.dataset.disconnectCount = String(
               Number(element.dataset.disconnectCount ?? "0") + 1,
@@ -67,6 +70,8 @@ export async function installScriptedRfbServer(
     const GatewaySocket = window.WebSocket;
     const sockets = new Set<FakeRfbSocket>();
     const events: string[] = [];
+    const keyEvents: Array<{ down: boolean; keysym: number }> = [];
+    let keyEventError: string | undefined;
     let nextId = 0;
     let desktopTeardown = false;
     class FakeRfbSocket extends EventTarget {
@@ -114,7 +119,29 @@ export async function installScriptedRfbServer(
           }
         }, 0);
       }
-      send(): void {
+      send(data: Uint8Array): void {
+        if (this.authenticated) {
+          if (data[0] === 4) {
+            // noVNC flushes each KeyEvent and reuses its send buffer immediately.
+            const bytes = data.slice();
+            if (
+              bytes.length !== 8 ||
+              (bytes[1] !== 0 && bytes[1] !== 1) ||
+              bytes[2] !== 0 ||
+              bytes[3] !== 0
+            ) {
+              keyEventError = "Malformed RFB KeyEvent";
+            } else if (keyEvents.length === 1024) {
+              keyEventError = "Scripted RFB keyboard observation limit exceeded";
+            } else {
+              keyEvents.push({
+                down: bytes[1] === 1,
+                keysym: new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(4),
+              });
+            }
+          }
+          return;
+        }
         // Handshake replies are fixed-size, so respond by stage instead of
         // parsing: version -> security types, choice -> ok, init -> ServerInit.
         this.handshake += 1;
@@ -189,6 +216,19 @@ export async function installScriptedRfbServer(
     (window as typeof window & { desktopRfbEvents?: () => string[] }).desktopRfbEvents = () => [
       ...events,
     ];
+    (
+      window as typeof window & { desktopRfbConnectionCount?: () => number }
+    ).desktopRfbConnectionCount = () => nextId;
+    (
+      window as typeof window & {
+        desktopRfbKeyEvents?: () => Array<{ down: boolean; keysym: number }>;
+      }
+    ).desktopRfbKeyEvents = () => {
+      if (keyEventError) {
+        throw new Error(keyEventError);
+      }
+      return keyEvents.map(({ down, keysym }) => ({ down, keysym }));
+    };
     (window as typeof window & { desktopRfbSend?: (chunks: number[][]) => void }).desktopRfbSend = (
       chunks,
     ) => {
@@ -202,6 +242,22 @@ export async function installScriptedRfbServer(
     };
   }, options);
   return {
+    connectionCount: () =>
+      page.evaluate(
+        () =>
+          (
+            window as typeof window & { desktopRfbConnectionCount?: () => number }
+          ).desktopRfbConnectionCount?.() ?? 0,
+      ),
+    keyEvents: () =>
+      page.evaluate(
+        () =>
+          (
+            window as typeof window & {
+              desktopRfbKeyEvents?: () => Array<{ down: boolean; keysym: number }>;
+            }
+          ).desktopRfbKeyEvents?.() ?? [],
+      ),
     send: (chunks: number[][]) =>
       page.evaluate(
         (messages) =>

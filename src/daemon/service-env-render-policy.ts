@@ -7,16 +7,6 @@ import {
 } from "./service-managed-env.js";
 import type { GatewayServiceEnvironmentValueSource } from "./service-types.js";
 
-function isLaunchAgentServiceEnvironment(params: {
-  platform: NodeJS.Platform;
-  serviceEnvironment: Record<string, string | undefined>;
-}): boolean {
-  return (
-    params.platform === "darwin" &&
-    Boolean(params.serviceEnvironment.OPENCLAW_LAUNCHD_LABEL?.trim())
-  );
-}
-
 function addManagedServiceEnvEntries(params: {
   plan: MutableServiceEnvPlan;
   entries: Record<string, string | undefined>;
@@ -41,11 +31,13 @@ export function applyManagedServiceEnvRenderPolicy(params: {
   managedServiceEnvKeys: string | undefined;
   serviceEnvironment: Record<string, string | undefined>;
   platform: NodeJS.Platform;
-  existingEnvironmentFileEnvironment: Record<string, string | undefined>;
+  existingSecretRefEnvironment: Record<string, string | undefined>;
   stateDirDotEnvEnvironment: Record<string, string | undefined>;
   configSecretRefEnvironment: Record<string, string | undefined>;
 }): void {
-  const launchAgent = isLaunchAgentServiceEnvironment(params);
+  const launchAgent =
+    params.platform === "darwin" &&
+    Boolean(params.serviceEnvironment.OPENCLAW_LAUNCHD_LABEL?.trim());
   writeManagedServiceEnvKeysToEnvironment(params.plan.environment, params.managedServiceEnvKeys);
   if (params.plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS) {
     params.plan.environmentValueSources.OPENCLAW_SERVICE_MANAGED_ENV_KEYS = "inline";
@@ -56,12 +48,12 @@ export function applyManagedServiceEnvRenderPolicy(params: {
   if (managedKeys.size === 0) {
     return;
   }
-  // The caller limits these entries to file-backed SecretRefs active in the current config.
-  // Carry them through both file-backed supervisors or systemd can drop their env file.
+  // Preserve installed values for active SecretRefs, migrating legacy inline values
+  // into the supervisor's owner-only env file before the service is rewritten.
   if (launchAgent || params.platform === "linux") {
     addManagedServiceEnvEntries({
       plan: params.plan,
-      entries: params.existingEnvironmentFileEnvironment,
+      entries: params.existingSecretRefEnvironment,
       managedKeys,
       valueSource: "file",
     });

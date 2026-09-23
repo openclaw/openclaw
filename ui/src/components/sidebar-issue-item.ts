@@ -7,6 +7,7 @@ import type { ScopeUpgradeState } from "../app/device-scope-upgrade-availability
 import type { ExecApprovalDecision, ExecApprovalRequest } from "../app/exec-approval.ts";
 import type { UpdateProgress } from "../app/update-confirmation.ts";
 import { t } from "../i18n/index.ts";
+import { registerSidebarAttentionEnglish } from "../i18n/locales/en-sidebar-attention.ts";
 import { formatDateTimeMs, formatRelativeTimestamp } from "../lib/format.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
@@ -18,6 +19,8 @@ import { icons } from "./icons.ts";
 import type { SidebarAttentionItem } from "./sidebar-attention-entries.ts";
 import "./sidebar-update-card.ts";
 import "./viewer-facepile.ts";
+
+registerSidebarAttentionEnglish();
 
 type SidebarIssueItemHandlers = {
   basePath: string;
@@ -48,10 +51,10 @@ function renderSidebarDismissButton(itemLabel: string, onDismiss?: () => void) {
 
 export function renderSidebarMentionItem(params: {
   mention: MentionInboxItem;
-  context: Pick<ApplicationContext, "basePath" | "navigate">;
+  context: Pick<ApplicationContext, "basePath">;
   dismissing: boolean;
   onDismiss: () => void;
-  onClosePanel: () => void;
+  onNavigate: ApplicationContext["navigate"];
 }) {
   const { mention, context } = params;
   const sender: PresenceViewer = {
@@ -112,8 +115,7 @@ export function renderSidebarMentionItem(params: {
                 return;
               }
               event.preventDefault();
-              params.onClosePanel();
-              context.navigate("chat", target.options);
+              params.onNavigate("chat", target.options);
             }}
             >${t("attention.mentions.open")}</a
           >
@@ -134,7 +136,7 @@ export function renderSidebarMentionItem(params: {
 export function renderSidebarApprovalItem(params: {
   approval: ExecApprovalRequest;
   context: ApplicationContext | undefined;
-  onClosePanel: () => void;
+  onNavigate: ApplicationContext["navigate"];
   onDecision: (event: Event, approvalId: string, decision: ExecApprovalDecision) => void;
 }) {
   const context = params.context;
@@ -165,15 +167,14 @@ export function renderSidebarApprovalItem(params: {
             return;
           }
           event.preventDefault();
-          params.onClosePanel();
-          context.navigate("chat", sessionTarget.options);
+          params.onNavigate("chat", sessionTarget.options);
         }
       : undefined,
   });
 }
 
 export function renderSidebarUpdateSurface(params: {
-  context: ApplicationContext | undefined;
+  context: Pick<ApplicationContext, "gateway" | "overlays"> | undefined;
   onDismiss?: () => void;
   onNavigate: () => void;
   visible: boolean;
@@ -206,11 +207,7 @@ export function renderSidebarUpdateSurface(params: {
     .refreshRequired=${false}
     .onHoldUpdate=${() => context.overlays.holdUpdate()}
     .onReviewUpdate=${params.onNavigate}
-    .onDismiss=${
-      snapshot.updateRun && snapshot.updateRun.status !== "running"
-        ? () => context.overlays.acknowledgeUpdateRun()
-        : params.onDismiss
-    }
+    .onDismiss=${params.onDismiss}
   ></openclaw-sidebar-update-card>`;
 }
 

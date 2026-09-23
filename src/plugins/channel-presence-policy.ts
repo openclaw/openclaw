@@ -400,6 +400,9 @@ export function resolveConfiguredChannelPresencePolicy(params: {
   const disabledChannelIds = new Set(listExplicitlyDisabledChannelIdsForConfig(params.config));
   const entrySources = new Map<string, Set<ConfiguredChannelPresenceSource>>();
   const potentialSignals = listPotentialConfiguredChannelPresenceSignals(params.config, env, {
+    persistedAuthChannelIds: params.manifestRecords
+      ? new Set(normalizeChannelIds(params.manifestRecords.flatMap((record) => record.channels)))
+      : undefined,
     includePersistedAuthState: params.includePersistedAuthState,
     ambientEnvTriggers: params.ambientEnvTriggers,
     discovery: params.discovery,
@@ -724,6 +727,10 @@ export function resolveConfiguredChannelPluginIds(params: {
   manifestRecords?: readonly PluginManifestRecord[];
   discovery?: PluginDiscoveryResult;
 }): string[] {
+  // This ID-only query cannot admit disabled owners; presence reports still collect blocked rows.
+  if (!normalizePluginsConfig((params.activationSourceConfig ?? params.config).plugins).enabled) {
+    return [];
+  }
   const configuredChannelIds = normalizeChannelIds([
     ...listConfiguredChannelIdsForReadOnlyScope({
       config: params.config,

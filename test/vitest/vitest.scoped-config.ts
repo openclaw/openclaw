@@ -1,9 +1,11 @@
 // Vitest scoped config helper builds test configs for scoped file patterns.
 import path from "node:path";
 import { defineConfig, type ViteUserConfig } from "vitest/config";
+import { diagnosticForksPool } from "./vitest.forks-pool.ts";
+import { intersectIncludePatterns } from "./vitest.include-patterns.ts";
 import {
-  intersectIncludePatterns,
   loadPatternListFromEnv,
+  matchesVitestGlob,
   narrowIncludePatternsForCli,
   relativizeScopedPatterns,
 } from "./vitest.pattern-file.ts";
@@ -46,7 +48,7 @@ function includePatternIsFullyExcluded(includePattern: string, excludePattern: s
   const exclude = normalizePathPattern(excludePattern);
   return (
     include === exclude ||
-    path.matchesGlob(include, exclude) ||
+    matchesVitestGlob(include, exclude) ||
     directoryPatternCoversInclude(exclude, include)
   );
 }
@@ -63,12 +65,6 @@ export function shouldPassWithNoTestsForCliIncludes(
       includePatternIsFullyExcluded(includePattern, excludePattern),
     ),
   );
-}
-
-export function resolveVitestIsolation(
-  _env: Record<string, string | undefined> = process.env,
-): boolean {
-  return false;
 }
 
 const SCOPED_PROJECT_GROUP_ORDER_BY_NAME = new Map(
@@ -115,6 +111,7 @@ const SCOPED_PROJECT_GROUP_ORDER_BY_NAME = new Map(
     "extension-providers",
     "extension-signal",
     "extension-slack",
+    "extension-database-workers",
     "extension-telegram",
     "extension-voice-call",
     "extension-whatsapp",
@@ -186,6 +183,7 @@ export function createScopedVitestConfig(
     env?: Record<string, string | undefined>;
     environment?: string;
     exclude?: string[];
+    execArgv?: string[];
     argv?: string[];
     includeOpenClawRuntimeSetup?: boolean;
     isolate?: boolean;
@@ -210,7 +208,7 @@ export function createScopedVitestConfig(
   const env = options?.env;
   const externalIncludePatterns = loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env);
   const includeFromEnv = options?.intersectIncludeFile
-    ? intersectIncludePatterns(include, externalIncludePatterns)
+    ? intersectIncludePatterns(include, externalIncludePatterns, matchesVitestGlob)
     : externalIncludePatterns;
   const cliInclude = narrowIncludePatternsForCli(include, options?.argv, {
     scopedDir,
@@ -229,7 +227,7 @@ export function createScopedVitestConfig(
     ? relativizeScopedPatterns(includeFromEnv, scopedDir)
     : includeFromEnv;
   const scopedCliInclude = cliInclude ? relativizeScopedPatterns(cliInclude, scopedDir) : null;
-  const isolate = options?.isolate ?? resolveVitestIsolation(options?.env);
+  const isolate = options?.isolate ?? false;
   const setupFiles = [
     ...new Set([
       ...(baseTest.setupFiles ?? []),
@@ -248,13 +246,21 @@ export function createScopedVitestConfig(
       ...(options?.deps ? { deps: options.deps } : {}),
       ...(options?.name ? { name: options.name } : {}),
       ...(options?.environment ? { environment: options.environment } : {}),
+      ...(options?.execArgv ? { execArgv: options.execArgv } : {}),
       isolate,
       ...(runner ? { runner } : { runner: undefined }),
       setupFiles,
       ...(resolvedScopedDir ? { dir: resolvedScopedDir } : {}),
       include: scopedInclude,
       exclude,
-      ...(options?.pool ? { pool: options.pool } : {}),
+      ...(options?.pool
+        ? {
+            pool:
+              options.pool === "forks" && (scopedDir === "extensions" || options.name === "infra")
+                ? diagnosticForksPool
+                : options.pool,
+          }
+        : {}),
       ...(options?.fileParallelism === undefined
         ? {}
         : { fileParallelism: options.fileParallelism }),

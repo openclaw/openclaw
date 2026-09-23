@@ -1,16 +1,19 @@
 // Runtime LLM helpers adapt plugin provider hooks into the core model runtime.
 import { asFiniteNumber, asFiniteNumberInRange } from "@openclaw/normalization-core";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import { normalizeModelRef } from "../../agents/model-ref-shared.js";
 import type { UsageLike } from "../../agents/usage.js";
-import { normalizeUsage } from "../../agents/usage.js";
+import { hasRecordedUsageCost, normalizeUsage } from "../../agents/usage.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { markHostPluginUsageDiagnosticEvent } from "../../infra/diagnostic-plugin-usage-provenance.js";
 import type { Api, Message } from "../../llm/types.js";
 import { getChildLogger } from "../../logging.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { AsyncWorkScope, captureAsyncWorkTracker } from "../../shared/async-work-scope.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { modelKey } from "../../shared/model-key.js";
 import {
   estimateAggregateUsageCost,
@@ -26,6 +29,7 @@ import {
   isIsolatedAgentRuntimeRequest,
   runIsolatedAgentRuntimeCompletion,
 } from "./runtime-llm-isolated.js";
+import { writeRuntimeLog } from "./runtime-logging.js";
 import type {
   LlmCompleteCaller,
   LlmCompleteParams,
@@ -70,10 +74,10 @@ const defaultLogger = getChildLogger({ capability: "runtime.llm" });
 
 function toRuntimeLogger(logger: typeof defaultLogger): RuntimeLogger {
   return {
-    debug: (message, meta) => logger.debug?.(meta, message),
-    info: (message, meta) => logger.info(meta, message),
-    warn: (message, meta) => logger.warn(meta, message),
-    error: (message, meta) => logger.error(meta, message),
+    debug: (message, meta) => writeRuntimeLog(logger, "debug", message, meta),
+    info: (message, meta) => writeRuntimeLog(logger, "info", message, meta),
+    warn: (message, meta) => writeRuntimeLog(logger, "warn", message, meta),
+    error: (message, meta) => writeRuntimeLog(logger, "error", message, meta),
   };
 }
 
@@ -197,19 +201,17 @@ function readFiniteNonNegativeNumber(value: unknown): number | undefined {
 }
 
 function readExplicitCostUsd(raw: unknown): number | undefined {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    return undefined;
-  }
-  const cost = (raw as { cost?: unknown }).cost;
+  const cost = asOptionalRecord(raw)?.cost;
   if (typeof cost === "number") {
     return readFiniteNonNegativeNumber(cost);
   }
-  if (!cost || typeof cost !== "object" || Array.isArray(cost)) {
+  const record = asOptionalRecord(cost);
+  if (!record) {
     return undefined;
   }
   return (
-    readFiniteNonNegativeNumber((cost as { total?: unknown; totalUsd?: unknown }).totalUsd) ??
-    readFiniteNonNegativeNumber((cost as { total?: unknown }).total)
+    readFiniteNonNegativeNumber(record.totalUsd) ??
+    (hasRecordedUsageCost(record) ? readFiniteNonNegativeNumber(record.total) : undefined)
   );
 }
 
@@ -474,7 +476,7 @@ export function createRuntimeLlm(
 
       const [
         {
-          prepareSimpleCompletionModelForAgent,
+          acquireSimpleCompletionModelForAgent,
           completeWithPreparedSimpleCompletionModel,
           resolveSimpleCompletionSelectionForAgent,
         },
@@ -579,66 +581,105 @@ export function createRuntimeLlm(
         });
       }
 
-      const prepared = await prepareSimpleCompletionModelForAgent({
-        cfg,
-        agentId,
-        modelRef: params.model,
-        preferredProfile,
-        allowBundledStaticCatalogFallback: true,
-        allowMissingApiKeyModes: ["aws-sdk"],
-        skipAgentDiscovery: true,
-      });
-
-      if ("error" in prepared) {
-        throw new Error(`Plugin LLM completion failed: ${prepared.error}`);
-      }
-
-      const context = {
-        systemPrompt: buildSystemPrompt(params),
-        messages: buildMessages({
-          request: params,
-          provider: prepared.model.provider,
-          model: prepared.model.id,
-          api: prepared.model.api,
-        }),
-      };
-
-      const result = await completeWithPreparedSimpleCompletionModel({
-        model: prepared.model,
-        auth: prepared.auth,
-        cfg,
-        context,
-        options: {
-          maxTokens: asFiniteNumber(params.maxTokens),
-          temperature: asFiniteNumber(params.temperature),
-          ...(params.reasoning !== undefined ? { reasoning: params.reasoning } : {}),
-          signal: params.signal,
-        },
-      });
-
-      const text = result.content
-        .filter((c): c is { type: "text"; text: string } => c.type === "text")
-        .map((c) => c.text)
-        .join("");
-      return finalizePluginLlmCompletion({
-        cfg,
-        hostPluginId: pluginPolicyId,
-        // Provider failures resolve as messages; only visible successful output owns usage.
-        suppressUsage: !text.trim() || !["stop", "length", "toolUse"].includes(result.stopReason),
-        rawUsage: result.usage,
-        logger,
-        result: {
-          text,
-          provider: prepared.selection.provider,
-          model: prepared.selection.modelId,
+      const callerResult = createDeferredCore<LlmCompleteResult>();
+      const trackOwner = captureAsyncWorkTracker();
+      // Admit drainage with the parent before acquisition; the caller only waits for its result.
+      void trackOwner(async () => {
+        const preparation = await acquireSimpleCompletionModelForAgent({
+          cfg,
           agentId,
-          execution: {
-            mode: "direct-provider",
-            owner: { kind: "provider", id: prepared.selection.provider },
-          },
-          audit,
-        },
-      });
+          modelRef: params.model,
+          preferredProfile,
+          ...(requestedModelProfile ? { bindAuthOwner: true } : {}),
+          allowBundledStaticCatalogFallback: true,
+          allowMissingApiKeyModes: ["aws-sdk"],
+          skipAgentDiscovery: true,
+          signal: params.signal,
+        });
+
+        if ("error" in preparation) {
+          throw new Error(`Plugin LLM completion failed: ${preparation.error}`);
+        }
+        await using prepared = preparation;
+
+        const work = new AsyncWorkScope();
+        try {
+          callerResult.resolve(
+            await work.track(async () => {
+              if (params.requiredAuthMode && prepared.auth.mode !== params.requiredAuthMode) {
+                throw completionError(
+                  "LLM_COMPLETION_NOT_AUTHORIZED",
+                  "Plugin LLM completion selected a credential with the wrong authentication mode.",
+                );
+              }
+              if (requestedModelProfile && prepared.auth.profileId !== requestedModelProfile) {
+                throw completionError(
+                  "LLM_COMPLETION_NOT_AUTHORIZED",
+                  "Plugin LLM completion selected a different authentication profile.",
+                );
+              }
+
+              const context = {
+                systemPrompt: buildSystemPrompt(params),
+                messages: buildMessages({
+                  request: params,
+                  provider: prepared.model.provider,
+                  model: prepared.model.id,
+                  api: prepared.model.api,
+                }),
+              };
+
+              const result = await completeWithPreparedSimpleCompletionModel({
+                model: prepared.model,
+                auth: prepared.auth,
+                cfg,
+                context,
+                options: {
+                  maxTokens: asFiniteNumber(params.maxTokens),
+                  temperature: asFiniteNumber(params.temperature),
+                  ...(params.responseFormat !== undefined
+                    ? { responseFormat: params.responseFormat }
+                    : {}),
+                  ...(params.reasoning !== undefined ? { reasoning: params.reasoning } : {}),
+                  signal: params.signal,
+                },
+              });
+
+              const text = result.content
+                .filter((c): c is { type: "text"; text: string } => c.type === "text")
+                .map((c) => c.text)
+                .join("");
+              return finalizePluginLlmCompletion({
+                cfg,
+                hostPluginId: pluginPolicyId,
+                // Provider failures resolve as messages; only visible successful output owns usage.
+                suppressUsage:
+                  !text.trim() || !["stop", "length", "toolUse"].includes(result.stopReason),
+                rawUsage: result.usage,
+                logger,
+                result: {
+                  text,
+                  provider: prepared.selection.provider,
+                  model: prepared.selection.modelId,
+                  responseModel: result.responseModel,
+                  stopReason: result.stopReason,
+                  agentId,
+                  execution: {
+                    mode: "direct-provider",
+                    owner: { kind: "provider", id: prepared.selection.provider },
+                  },
+                  audit,
+                },
+              });
+            }),
+          );
+        } catch (error) {
+          callerResult.reject(error);
+        } finally {
+          await work.drain();
+        }
+      }).catch((error: unknown) => callerResult.reject(error));
+      return await callerResult.promise;
     },
   };
 }

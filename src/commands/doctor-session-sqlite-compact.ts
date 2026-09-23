@@ -1,6 +1,7 @@
 /** Runs doctor-owned SQLite file compaction for migrated session stores. */
 import fs from "node:fs";
 import type { SessionStoreTarget } from "../config/sessions/targets.js";
+import { invalidateOpenClawAgentDatabaseIntegrityBeforeMutation } from "../state/openclaw-agent-db-lease.js";
 import {
   assertOpenClawAgentDatabaseForMaintenance,
   clearOpenClawAgentDatabaseOpenFailure,
@@ -52,14 +53,7 @@ export async function compactDoctorSessionSqliteTarget(
     }
   };
   const compactTarget = () => {
-    if (options.operation === "import-finalize") {
-      migrateOpenClawAgentDatabaseForMaintenance({
-        agentId: databaseOptions.agentId,
-        pathname: sqlitePath,
-      });
-      requireQuarantineCleared();
-    }
-
+    invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(sqlitePath, databaseOptions.env);
     const compact = compactDoctorSqliteFile({
       operation: options.operation,
       afterSuccess: () => {
@@ -87,7 +81,15 @@ export async function compactDoctorSessionSqliteTarget(
   };
   // The maintenance lease lives in shared state; never forward the agent database path.
   return options.operation === "import-finalize"
-    ? withAgentDatabaseMaintenanceLease({ env: databaseOptions.env }, async () => compactTarget())
+    ? withAgentDatabaseMaintenanceLease({ env: databaseOptions.env }, async (maintenance) => {
+        await migrateOpenClawAgentDatabaseForMaintenance(
+          { agentId: databaseOptions.agentId, pathname: sqlitePath },
+          maintenance,
+        );
+        maintenance.assertOwned();
+        requireQuarantineCleared();
+        return compactTarget();
+      })
     : compactTarget();
 }
 

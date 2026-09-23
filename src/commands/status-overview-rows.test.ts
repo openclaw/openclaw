@@ -62,7 +62,7 @@ describe("status-overview-rows", () => {
     expect(findRowValue(rows, "Telemetry")).toBe("muted(disabled · update checks only)");
     expect(findRowValue(rows, "Host desktop")).toBe("muted(disabled)");
     expect(findRowValue(rows, "Sessions")).toBe(
-      "2 active · default gpt-5.5 (12k ctx) · store.json",
+      "2 stored · default gpt-5.5 (12k ctx) · store.json",
     );
   });
 
@@ -188,7 +188,7 @@ describe("status-overview-rows", () => {
   it("shows update restart state in fast status output", () => {
     const rows = buildStatusCommandOverviewRows(
       createStatusCommandOverviewRowsParams({
-        updateRestartValue: "failed · managed-service-handoff-failed",
+        updateRows: [{ Item: "Update restart", Value: "failed · managed-service-handoff-failed" }],
       }),
     );
 
@@ -218,9 +218,16 @@ describe("status-overview-rows", () => {
     expect(findRowValue(rows, "Degraded plugins")).toBe("warn(1 configured-unavailable · discord)");
   });
 
-  it.each(["default", "all"])("surfaces startup migration warnings in %s output", (mode) => {
+  it.each([
+    ["default", "startupMigrationWarning", "Startup migrations"],
+    ["all", "startupMigrationWarning", "Startup migrations"],
+    ["default", "startupRecoveryWarning", "Session recovery"],
+    ["all", "startupRecoveryWarning", "Session recovery"],
+    ["default", "installationReplacementWarning", "Installation replaced"],
+    ["all", "installationReplacementWarning", "Installation replaced"],
+  ] as const)("surfaces %s %s output", (mode, field, label) => {
     const params = createStatusCommandOverviewRowsParams();
-    params.summary.startupMigrationWarning = "Retained legacy state. Run openclaw doctor --fix.";
+    params.summary[field] = "Inspect the affected state. Run openclaw doctor.";
     const rows =
       mode === "default"
         ? buildStatusCommandOverviewRows(params)
@@ -229,9 +236,7 @@ describe("status-overview-rows", () => {
             configPath: "/tmp/openclaw.json",
             secretDiagnosticsCount: 0,
           });
-    expect(findRowValue(rows, "Startup migrations")).toContain(
-      params.summary.startupMigrationWarning,
-    );
+    expect(findRowValue(rows, label)).toContain(params.summary[field]);
   });
 
   it("builds status-all overview rows from the shared surface", () => {
@@ -245,6 +250,12 @@ describe("status-overview-rows", () => {
       },
       summary: {
         ...summary,
+        secretEgressProxy: {
+          state: "degraded",
+          caExpiresAt: "2036-09-01T00:00:00.000Z",
+          failedCertificates: 1,
+          message: "Check OpenSSL, then retry the request.",
+        },
         degradedSecretOwners: [
           {
             ownerKind: "capability",
@@ -269,24 +280,45 @@ describe("status-overview-rows", () => {
       osLabel: "macOS",
       configPath: "/tmp/openclaw.json",
       secretDiagnosticsCount: 2,
-      updateValue: "✅ OpenClaw updated to 2026.9.2 (from 2026.9.1).",
-      updateRestartValue: "restart pending health verification",
+      updateRows: [{ Item: "Update restart", Value: "restart pending health verification" }],
       agentStatus: {
         bootstrapPendingCount: 1,
         totalSessions: 2,
         agents: [{ id: "main", lastActiveAgeMs: 60_000 }],
       },
-      tailscaleBackendState: "Running",
     });
 
     expect(findRowValue(rows, "Version")).toBe(VERSION);
     expect(findRowValue(rows, "OS")).toBe("macOS");
     expect(findRowValue(rows, "Config")).toBe("/tmp/openclaw.json");
-    expect(findRowValue(rows, "Update")).toBe("✅ OpenClaw updated to 2026.9.2 (from 2026.9.1).");
+    expect(findRowValue(rows, "Gateway self")).toBe("gateway app 1.2.3");
+    expect(findRowValue(rows, "Update")).toContain("behind 2");
     expect(findRowValue(rows, "Update restart")).toBe("restart pending health verification");
     expect(findRowValue(rows, "Security")).toBe("Run: openclaw security audit --deep");
+    expect(findRowValue(rows, "Secret egress proxy")).toBe(
+      "Check OpenSSL, then retry the request.",
+    );
     expect(findRowValue(rows, "Degraded secrets")).toBe("1 degraded · capability:tts");
     expect(findRowValue(rows, "Degraded plugins")).toBe("1 configured-unavailable · discord");
     expect(findRowValue(rows, "Secrets")).toBe("2 diagnostics");
   });
+
+  it.each([null, {}])(
+    "uses unknown only when Gateway self metadata is absent (%j)",
+    (gatewaySelf) => {
+      const params = createStatusCommandOverviewRowsParams();
+      const surface = { ...params.surface, gatewaySelf };
+      const rows = buildStatusAllOverviewRows({
+        ...params,
+        surface,
+        configPath: "/tmp/openclaw.json",
+        secretDiagnosticsCount: 0,
+      });
+
+      expect(findRowValue(rows, "Gateway self")).toBe("unknown");
+      expect(
+        findRowValue(buildStatusCommandOverviewRows({ ...params, surface }), "Gateway self"),
+      ).toBeUndefined();
+    },
+  );
 });

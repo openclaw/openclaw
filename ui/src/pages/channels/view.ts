@@ -62,7 +62,6 @@ export function renderChannels(props: ChannelsProps) {
       .map((warning) => formatUiExternalText(warning)) ?? [];
   const data = buildChannelData(props);
   const selected = props.selectedChannel;
-  const selectedPlugin = selected ? resolveChannelPlugin(props, selected) : undefined;
 
   return html`
     ${renderSettingsPage(html`
@@ -137,7 +136,6 @@ export function renderChannels(props: ChannelsProps) {
             channelId: selected,
             label: resolveChannelLabel(props, selected),
             pluginIconUrl: props.pluginIconUrls[selected],
-            preferPluginIcon: selectedPlugin?.hasIcon === true,
             props,
             data,
             onClose: () => props.onCloseDetail(),
@@ -151,8 +149,6 @@ export function renderChannels(props: ChannelsProps) {
             wizard: props.wizard,
             channelLabel: (channelId) => resolveChannelLabel(props, channelId),
             channelIconUrl: (channelId) => props.pluginIconUrls[channelId],
-            channelHasPluginIcon: (channelId) =>
-              resolveChannelPlugin(props, channelId)?.hasIcon === true,
             multiselectValues: props.wizardMultiselect,
             onToggleMultiselect: props.onWizardToggleMultiselect,
             textValue: props.wizardTextValue,
@@ -263,10 +259,12 @@ function lastActivityLine(key: ChannelKey, props: ChannelsProps): string | null 
 
 function renderConnectedRow(key: ChannelKey, props: ChannelsProps) {
   const label = resolveChannelLabel(props, key);
-  const description =
-    lastActivityLine(key, props) ??
-    resolveChannelDetailLabel(props, key) ??
-    t("channels.hub.openDetails");
+  const statusIssue = props.snapshot?.statusIssues?.find((issue) => issue.channel === key);
+  const description = statusIssue
+    ? formatUiExternalText(statusIssue.message)
+    : (lastActivityLine(key, props) ??
+      resolveChannelDetailLabel(props, key) ??
+      t("channels.hub.openDetails"));
   return html`
     <button
       type="button"
@@ -275,14 +273,13 @@ function renderConnectedRow(key: ChannelKey, props: ChannelsProps) {
     >
       ${renderChannelIcon(key, label, "tile", {
         pluginIconUrl: props.pluginIconUrls[key],
-        preferPluginIcon: resolveChannelPlugin(props, key)?.hasIcon === true,
       })}
       <div class="settings-row__text">
         <span class="settings-row__title">${label}</span>
         <span class="settings-row__desc">${description}</span>
       </div>
       <div class="settings-row__control">
-        ${rowStatus(resolveRowState(key, props))}
+        ${rowStatus(statusIssue ? "attention" : resolveRowState(key, props))}
         <span class="settings-row__chevron">${icons.chevronRight}</span>
       </div>
     </button>
@@ -304,7 +301,6 @@ function renderAvailableRow(key: ChannelKey, props: ChannelsProps) {
       >
         ${renderChannelIcon(key, label, "tile", {
           pluginIconUrl: props.pluginIconUrls[key],
-          preferPluginIcon: plugin?.hasIcon === true,
         })}
         <span class="settings-row__text">
           <span class="settings-row__title">${label}</span>

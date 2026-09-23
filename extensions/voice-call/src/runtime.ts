@@ -1,4 +1,3 @@
-// Voice Call plugin module implements runtime behavior.
 import { listAgentIds } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -124,20 +123,13 @@ function mapVoiceCallConsultTranscript(
 function createRuntimeResourceLifecycle(params: {
   config: VoiceCallConfig;
   webhookServer: VoiceCallWebhookServer;
+  manager: CallManager;
 }): {
   setTunnelResult: (result: TunnelResult | null) => void;
   stop: (opts?: { suppressErrors?: boolean }) => Promise<void>;
 } {
   let tunnelResult: TunnelResult | null = null;
   let stopPromise: Promise<void> | null = null;
-
-  const runStep = async (step: () => Promise<void>, suppressErrors: boolean) => {
-    if (suppressErrors) {
-      await step().catch(() => {});
-      return;
-    }
-    await step();
-  };
 
   return {
     setTunnelResult: (result) => {
@@ -149,17 +141,24 @@ function createRuntimeResourceLifecycle(params: {
       }
       const suppressErrors = opts?.suppressErrors ?? false;
       stopPromise = (async () => {
-        await runStep(async () => {
-          if (tunnelResult) {
-            await tunnelResult.stop();
+        let failure: { error: unknown } | undefined;
+        for (const step of [
+          async () => {
+            await tunnelResult?.stop();
+          },
+          () => cleanupTailscaleExposure(params.config),
+          () => params.webhookServer.stop(),
+          () => params.manager.stop(),
+        ]) {
+          try {
+            await step();
+          } catch (error) {
+            failure ??= { error };
           }
-        }, suppressErrors);
-        await runStep(async () => {
-          await cleanupTailscaleExposure(params.config);
-        }, suppressErrors);
-        await runStep(async () => {
-          await params.webhookServer.stop();
-        }, suppressErrors);
+        }
+        if (failure && !suppressErrors) {
+          throw failure.error;
+        }
       })();
       return stopPromise;
     },
@@ -329,7 +328,7 @@ export async function createVoiceCallRuntime(params: {
   if (stateRuntime) {
     setVoiceCallStateRuntime({ state: stateRuntime });
   }
-  const manager = new CallManager(config, undefined, cfg.session);
+  const manager = new CallManager(config, undefined, cfg.session, stateRuntime);
   const realtimeVoiceRuntime = config.realtime.enabled ? await loadRealtimeVoiceRuntime() : null;
   const webhookServer = new VoiceCallWebhookServer(
     config,
@@ -360,11 +359,14 @@ export async function createVoiceCallRuntime(params: {
         providerConfigs: effectiveConfig.realtime.providers,
         cfg,
         agentId,
+        surface: "gateway-relay",
+        useProviderDefaultModel: true,
       });
       return {
         agentId,
         provider: resolved.provider,
         providerConfig: resolved.providerConfig,
+        capabilities: resolved.capabilities,
         instructions: resolveRealtimeInstructions(call),
       };
     };
@@ -462,7 +464,7 @@ export async function createVoiceCallRuntime(params: {
     }
     webhookServer.setRealtimeHandler(realtimeHandler);
   }
-  const lifecycle = createRuntimeResourceLifecycle({ config, webhookServer });
+  const lifecycle = createRuntimeResourceLifecycle({ config, webhookServer, manager });
 
   const localUrl = await webhookServer.start();
 

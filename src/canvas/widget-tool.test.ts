@@ -4,19 +4,24 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { InProcessGatewayCaller } from "../agents/tools/in-process-gateway.js";
-import { createTestBoardStore } from "../boards/board-store.test-support.js";
+import { readBoardHtml, createTestBoardStore } from "../boards/board-store.test-support.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { createBoardHandlers } from "../gateway/server-methods/board.js";
 import type { GatewayRequestContext, RespondFn } from "../gateway/server-methods/types.js";
-import { createPluginBoardWidgetContentKindRegistrar } from "../plugins/board-widget-content-kinds.js";
-import { createPluginRecord } from "../plugins/loader-records.js";
 import type { WidgetPresenter } from "../plugins/plugin-registration.types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { resolveCanvasDocumentsDir } from "./documents.js";
+import { registerTestWidgetContentKind as registerDiagramContentKind } from "./widget-tool.content-kinds.test-support.js";
 import { createShowWidgetTool } from "./widget-tool.js";
 import { createBoardPutCaller } from "./widget-tool.test-support.js";
 import { buildWidgetDocument } from "./wrap.js";
@@ -32,7 +37,9 @@ beforeEach(() => {
 
 afterEach(async () => {
   vi.useRealTimers();
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   resetPluginRuntimeStateForTest();
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
@@ -42,29 +49,6 @@ async function createStateDir(): Promise<string> {
   const stateDir = await mkdtemp(path.join(tmpdir(), "openclaw-widget-tool-"));
   tempDirs.push(stateDir);
   return stateDir;
-}
-
-function registerDiagramContentKind(): void {
-  const registry = createEmptyPluginRegistry();
-  const record = createPluginRecord({
-    id: "diagram",
-    source: "diagram-fixture",
-    origin: "bundled",
-    enabled: true,
-    configSchema: false,
-  });
-  createPluginBoardWidgetContentKindRegistrar(registry)(record, {
-    kind: "diagram",
-    label: "Diagram",
-    resources: { surface: "diagram", paths: ["/__openclaw__/diagram/app.js"] },
-    validateSource(source) {
-      if (!source.startsWith("diagram:")) {
-        throw new Error("diagram prefix required");
-      }
-    },
-    composeDocument: ({ source }) => `<main>${source}</main>`,
-  });
-  setActivePluginRegistry(registry);
 }
 
 function createLiveBoardTestContext(
@@ -204,8 +188,9 @@ describe("show_widget", () => {
     });
 
     expect(tool.description).toContain(
-      "Inline hosting is disabled; set pin=true to place it on this session's dashboard",
+      "Inline previews are unavailable this turn; set pin=true to save to the session dashboard",
     );
+    expect(tool.description).not.toContain("Keep one-off visualizations inline");
     await expect(
       tool.execute("unpinned", {
         title: "Diagram",
@@ -228,7 +213,7 @@ describe("show_widget", () => {
       status: "pinned",
       boardWidgetName: "diagram",
       capabilityState: "none",
-      text: "Widget pinned to dashboard tab main as diagram",
+      text: "Widget pinned to dashboard tab main as diagram. Open this dashboard tab in Control UI to view it.",
     });
     expect(callGatewayMock).toHaveBeenCalledExactlyOnceWith(
       "board.widget.put",
@@ -643,8 +628,10 @@ describe("show_widget", () => {
       "utf8",
     );
     expect(html).toContain(
-      `Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:;`,
+      `Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline' https://cdnjs.cloudflare.com`,
     );
+    expect(html).toContain("font-src data:");
+    expect(html).toContain("img-src data:; media-src data: https: blob:; connect-src 'none'");
     expect(html).toContain("<title>&lt;Status&gt;</title>");
     expect(html).toContain("--accent:#bd4531");
     expect(html).toContain("--accent:#ff5c5c");
@@ -686,7 +673,7 @@ describe("show_widget", () => {
       const broadcast = vi.fn();
       const target = { sessionKey, agentId };
       const sibling = { sessionKey: "global", agentId: agentId === "main" ? "research" : "main" };
-      const siblingBefore = store.getSnapshot(sibling);
+      const siblingBefore = await store.getSnapshot(sibling);
       const boardBroadcastScope = { sessionKeys: [sessionKey], agentId };
       const eventSessionKey = sessionKey === "global" ? `agent:${agentId}:global` : sessionKey;
       const cfg: OpenClawConfig = {
@@ -742,12 +729,12 @@ describe("show_widget", () => {
       const result = await pinWidget("<p>ready</p>", true);
       const pinnedTitle = Array.from(title).slice(0, 80).join("");
 
-      expect(store.readWidgetHtml(target, "release-status")).toMatchObject({
+      expect(await readBoardHtml(store, target, "release-status")).toMatchObject({
         html: buildWidgetDocument(pinnedTitle, "<p>ready</p>"),
         revision: 1,
       });
-      expect(store.getSnapshot(target).widgets[0]?.title).toBe(pinnedTitle);
-      expect(store.getSnapshot(target).widgets[0]?.presentation).toBe("frameless");
+      expect((await store.getSnapshot(target)).widgets[0]?.title).toBe(pinnedTitle);
+      expect((await store.getSnapshot(target)).widgets[0]?.presentation).toBe("frameless");
       expect(result.resultText).toContain("pinned to dashboard tab main as release-status (lg)");
       expect(result.boardWidgetName).toBe("release-status");
       expect(broadcast).toHaveBeenCalledWith(
@@ -763,11 +750,11 @@ describe("show_widget", () => {
           content: { kind: "plugin", pluginKind: "workboard:card" },
         }),
       ).rejects.toThrow(/same content kind.*remove/i);
-      expect(store.readWidgetHtml(target, "release-status")?.revision).toBe(1);
+      expect((await readBoardHtml(store, target, "release-status"))?.revision).toBe(1);
 
       const refreshed = await pinWidget("<p>refreshed</p>");
 
-      expect(store.readWidgetHtml(target, "release-status")).toMatchObject({
+      expect(await readBoardHtml(store, target, "release-status")).toMatchObject({
         html: buildWidgetDocument(pinnedTitle, "<p>refreshed</p>"),
         revision: 2,
       });
@@ -777,7 +764,7 @@ describe("show_widget", () => {
         { sessionKey: eventSessionKey, revision: 2, widget: "release-status" },
         boardBroadcastScope,
       );
-      expect(store.getSnapshot(sibling)).toEqual(siblingBefore);
+      expect(await store.getSnapshot(sibling)).toEqual(siblingBefore);
     },
   );
 
@@ -827,7 +814,7 @@ describe("show_widget", () => {
       path.join(resolveCanvasDocumentDir(stateDir, result.viewId), "index.html"),
       "utf8",
     );
-    const pinned = store.readWidgetHtml({ sessionKey: "agent:main:weather" }, "weather");
+    const pinned = await readBoardHtml(store, { sessionKey: "agent:main:weather" }, "weather");
 
     expect(inlineHtml).toContain("connect-src 'none'");
     expect(pinned).toMatchObject({
@@ -959,7 +946,7 @@ describe("show_widget", () => {
       }),
     ]);
     expect(new Set([slash.boardWidgetName, plus.boardWidgetName]).size).toBe(2);
-    expect(store.getSnapshot({ sessionKey }).widgets).toHaveLength(2);
+    expect((await store.getSnapshot({ sessionKey })).widgets).toHaveLength(2);
 
     const composed = await executeWidget({
       stateDir,
@@ -978,7 +965,9 @@ describe("show_widget", () => {
       callGateway,
     });
     expect(decomposed.boardWidgetName).toBe(composed.boardWidgetName);
-    expect(store.readWidgetHtml({ sessionKey }, composed.boardWidgetName ?? "")).toMatchObject({
+    expect(
+      await readBoardHtml(store, { sessionKey }, composed.boardWidgetName ?? ""),
+    ).toMatchObject({
       revision: 2,
     });
   });

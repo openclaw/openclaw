@@ -393,9 +393,7 @@ describe("handleReset", () => {
     mocks.removeLegacyWorkspaceStateForReset.mockRejectedValueOnce(
       new Error("retired state unavailable"),
     );
-    mocks.deleteWorkspaceState.mockImplementationOnce(() => {
-      throw new Error("state database unavailable");
-    });
+    mocks.deleteWorkspaceState.mockRejectedValueOnce(new Error("state database unavailable"));
 
     const reset = withEnvAsync(
       {
@@ -420,9 +418,7 @@ describe("handleReset", () => {
     const stateDir = path.join(homeDir, ".openclaw");
     const workspaceDir = path.join(stateDir, "workspace");
     fs.mkdirSync(workspaceDir, { recursive: true });
-    mocks.deleteWorkspaceState.mockImplementationOnce(() => {
-      throw new Error("state database unavailable");
-    });
+    mocks.deleteWorkspaceState.mockRejectedValueOnce(new Error("state database unavailable"));
 
     await withEnvAsync(
       {

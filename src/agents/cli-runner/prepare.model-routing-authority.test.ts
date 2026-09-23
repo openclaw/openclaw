@@ -1,7 +1,7 @@
 // Exercises CLI routing receipts at the exact post-admission dispatch boundary.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { configureExecutionDecisionWorkSink } from "../../audit/execution-decision-work.js";
-import type { ExecutionDecisionWork } from "../../audit/execution-decision-work.js";
+import type { ExecutionDecisionWork } from "../../audit/execution-decision-work.types.js";
 import { configureExecutionIdentityAdmissionSink } from "../../audit/execution-identity-admission.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -110,14 +110,14 @@ describe("CLI model-routing receipt authority", () => {
     fixture = createCliRunnerPrepareFixture(prepareCliRunContext);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     clearDecisionSink?.();
     clearAdmissionSink?.();
     clearDecisionSink = undefined;
     clearAdmissionSink = undefined;
     resetCliRunnerPrepareTestDeps();
     cliBackendsTesting.resetDepsForTest();
-    fixture.cleanup();
+    await fixture.cleanup();
   });
 
   it.each<{ kind: AuthorityLoss; producer: Producer }>([
@@ -155,8 +155,10 @@ describe("CLI model-routing receipt authority", () => {
       authority.close();
     }
 
+    // History preparation now admits before the final routing producer. Reusing
+    // that context rejects the retired claim before any receipt or dispatch.
     expect.soft(preparationError).toMatchObject({
-      message: "admitted run authority is no longer active",
+      message: "prepared execution authority is no longer active",
     });
     expect.soft(decisionWork).toEqual([]);
     expect.soft(dispatch).not.toHaveBeenCalled();

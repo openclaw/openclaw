@@ -1,4 +1,3 @@
-// Feishu plugin module implements subagent hooks behavior.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -86,27 +85,6 @@ function resolveFeishuRequesterConversation(params: {
         });
         if (matchingTopicBindings.length === 1) {
           const existing = matchingTopicBindings.at(0);
-          if (existing === undefined) {
-            return null;
-          }
-          return {
-            accountId: existing.accountId,
-            conversationId: existing.conversationId,
-            parentConversationId: existing.parentConversationId,
-          };
-        }
-        const senderScopedTopicBindings = matchingTopicBindings.filter((entry) => {
-          const parsed = parseFeishuConversationId({
-            conversationId: entry.conversationId,
-            parentConversationId: entry.parentConversationId,
-          });
-          return parsed?.scope === "group_topic_sender";
-        });
-        if (
-          senderScopedTopicBindings.length === 1 &&
-          matchingTopicBindings.length === senderScopedTopicBindings.length
-        ) {
-          const existing = senderScopedTopicBindings.at(0);
           if (existing === undefined) {
             return null;
           }

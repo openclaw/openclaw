@@ -8,6 +8,7 @@ const path = require("node:path");
 const { createHash } = require("node:crypto");
 const { isUtf8 } = require("node:buffer");
 const { spawnSync } = require("node:child_process");
+const { getSystemErrorMap } = require("node:util");
 const expected = JSON.parse(process.argv[1]);
 const syncRoot = process.cwd();
 const cwd = process.argv[2] ?? syncRoot;
@@ -37,6 +38,33 @@ function hashFile(file, algorithm, blob = false) {
     return hash.digest("hex");
   } finally { fs.closeSync(fd); }
 }
+const gitFailureCause = Object.freeze({
+  noSpace: "no-space", permissionDenied: "permission-denied",
+  commandUnavailable: "command-unavailable", outputLimit: "output-limit",
+  terminated: "terminated", remoteRefMissing: "remote-ref-missing",
+  invalidObjectData: "invalid-object-data", dns: "dns", connection: "connection",
+  auth: "auth", unknown: "unknown",
+});
+function gitFailure(phase, result) {
+  const errors = getSystemErrorMap();
+  const rawCode = result.error?.code;
+  const code = [...errors.values()].some(([name]) => name === rawCode) ? rawCode : null;
+  const text = Buffer.isBuffer(result.stderr) ? result.stderr.toString("utf8").trim() : "";
+  const cause = code === "ENOSPC" ? gitFailureCause.noSpace
+    : code === "EACCES" || code === "EPERM" ? gitFailureCause.permissionDenied
+    : code === "ENOENT" ? gitFailureCause.commandUnavailable
+    : code === "ENOBUFS" ? gitFailureCause.outputLimit
+    : result.signal !== null ? gitFailureCause.terminated
+    : /^fatal: couldn't find remote ref [^\r\n]+$/u.test(text) ? gitFailureCause.remoteRefMissing
+    : /^fatal: (?:pack has bad object(?: at offset \d+)?|bad object [a-f0-9]+|index-pack failed|fetch-pack: invalid index-pack output)$/u.test(text) ? gitFailureCause.invalidObjectData
+    : /^fatal: unable to access '[^'\r\n]+': Could not resolve (?:host|proxy): [^\r\n]+$/u.test(text) ? gitFailureCause.dns
+    : /^fatal: unable to access '[^'\r\n]+': (?:Failed to connect to [^\r\n]+|Recv failure: Connection reset by peer)$/u.test(text) ? gitFailureCause.connection
+    : /^fatal: (?:Authentication failed for '[^'\r\n]+'|could not read Username for '[^'\r\n]+': [^\r\n]+)$/u.test(text) ? gitFailureCause.auth
+    : gitFailureCause.unknown;
+  return { phase, baseSha: /^[a-f0-9]{40}$/u.test(expected.baseSha) ? expected.baseSha : null,
+    status: result.status, signal: result.signal, spawnError: Boolean(result.error),
+    code, errno: errors.has(result.error?.errno) ? result.error.errno : null, cause };
+}
 try {
   if (process.argv[2] && (cwd === syncRoot || cwd.startsWith(syncRoot + path.sep) || syncRoot.startsWith(cwd + path.sep)))
     fail("Testbox execution and sync workspaces overlap; stop this lease and warm a fresh one");
@@ -58,10 +86,10 @@ try {
   delete env.GIT_ALTERNATE_OBJECT_DIRECTORIES;
   delete env.GIT_SHALLOW_FILE;
   function git(args, options = {}) {
-    const { encoding, ...spawnOptions } = options;
+    const { encoding, phase = args[0], ...spawnOptions } = options;
     const result = spawnSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", ...args],
       { cwd, env, maxBuffer: 64 * 1024 * 1024, ...spawnOptions });
-    if (result.status !== 0) fail("source Git operation failed: " + args[0]);
+    if (result.status !== 0) fail("source Git operation failed: " + JSON.stringify(gitFailure(phase, result)));
     if (encoding === "buffer") return result.stdout;
     if (result.stdout === null) return "";
     if (!isUtf8(result.stdout)) fail("unsupported non-UTF-8 Git metadata");
@@ -69,10 +97,12 @@ try {
   }
   git(["init", "-q"]);
   git(["remote", "add", "origin", "https://github.com/openclaw/openclaw.git"]);
-  git(["fetch", "-q", "--depth=2", "origin", expected.baseSha + ":refs/remotes/origin/main"]);
+  git(["fetch", "-q", "--depth=2", "origin", expected.baseSha + ":refs/remotes/origin/main"],
+    { phase: "base-fetch" });
   if (git(["rev-parse", "refs/remotes/origin/main"]).trim() !== expected.baseSha)
     fail("source base mismatch");
-  git(["fetch", "-q", bundle, "refs/openclaw/source-capsule:refs/heads/openclaw-source"]);
+  git(["fetch", "-q", bundle, "refs/openclaw/source-capsule:refs/heads/openclaw-source"],
+    { phase: "capsule-fetch" });
   for (const [ref, value] of [
     ["refs/heads/openclaw-source", expected.carrier],
     ["refs/heads/openclaw-source^{tree}", expected.tree],
@@ -221,8 +251,51 @@ try {
   for (const entry of files) verify(entry);
   if (expected.alias) git(["update-ref", expected.alias, expected.baseSha]);
   git(["symbolic-ref", "HEAD", "refs/heads/openclaw-source"]);
+  const sourceIndex = git(["ls-files", "--stage", "-v", "-z"], { encoding: "buffer" });
   fs.rmSync(".git", { recursive: true, force: true });
   fs.renameSync(gitDir, path.join(cwd, ".git"));
+  env.GIT_DIR = path.join(cwd, ".git");
+  env.GIT_INDEX_FILE = path.join(env.GIT_DIR, "index");
+  const sourceGit = stat(env.GIT_DIR);
+  // The payload consumes Git identity as well as bytes. Lifecycle hooks may refresh
+  // index caches or hooksPath, but cannot change source membership or comparison refs.
+  function verifySource() {
+    const currentGit = stat(env.GIT_DIR);
+    if (!currentGit?.isDirectory() || currentGit.dev !== sourceGit.dev || currentGit.ino !== sourceGit.ino ||
+        !stat(env.GIT_INDEX_FILE)?.isFile() || stat(path.join(env.GIT_DIR, "commondir")))
+      fail("source Git owner mismatch");
+    for (const entry of files) verify(entry);
+    for (const file of deleted) {
+      if (reachable(file) && stat(file)) fail("source deletion mismatch: " + file);
+    }
+    if (!git(["ls-files", "--stage", "-v", "-z"], { encoding: "buffer" }).equals(sourceIndex))
+      fail("source index mismatch");
+    if (git(["symbolic-ref", "HEAD"]).trim() !== "refs/heads/openclaw-source")
+      fail("source HEAD mismatch");
+    for (const [ref, value] of [
+      ["HEAD", expected.carrier], ["refs/remotes/origin/main", expected.baseSha],
+      ...(expected.alias ? [[expected.alias, expected.baseSha]] : []),
+    ]) if (git(["rev-parse", ref]).trim() !== value) fail("source comparison ref mismatch: " + ref);
+    const extras = git(["ls-files", "--others", "--exclude-standard", "-z"])
+      .split("\0").filter(file => file && !file.startsWith(path.basename(temporary) + "/"));
+    if (extras.length) fail("unexpected source entry: " + extras[0]);
+  }
+  verifySource();
+  if (selected.has("pnpm-lock.yaml")) {
+    const installer = ".github/actions/setup-node-env/install-dependencies.sh";
+    if (!selected.has(installer) || !stat(installer)?.isFile())
+      fail("selected source lacks a regular dependency install owner");
+    // Hydration belongs to workflow source. Reconcile through the selected
+    // source's install owner before any caller payload can run.
+    const installEnv = { ...env, CI: "true", GITHUB_WORKSPACE: cwd,
+      NODE_BIN: path.dirname(process.execPath), FROZEN_LOCKFILE: "true",
+      DEPENDENCY_CACHE: "false", DEPENDENCY_CACHE_HIT: "false" };
+    for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"]) delete installEnv[key];
+    process.stderr.write("[crabbox] reconciling selected-source dependencies\n");
+    const install = spawnSync("bash", [installer], { cwd, env: installEnv, stdio: ["inherit", 2, 2] });
+    if (install.status !== 0) fail("selected-source frozen install failed; payload was not run");
+    verifySource();
+  }
   process.stderr.write("[crabbox] verified source=" + expected.sourceSha + " tree=" + expected.tree + " carrier=" + expected.carrier + "\n");
 } catch (error) {
   process.stderr.write("[crabbox] source verification failed: " + error.message + "\n");

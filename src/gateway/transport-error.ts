@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { GatewayConnectionDetails } from "./connection-details.js";
 
 export type GatewayTransportErrorKind = "closed" | "timeout";
@@ -47,6 +48,60 @@ export function isGatewayTransportError(value: unknown): value is GatewayTranspo
     typeof value.connectionDetails === "object" &&
     value.connectionDetails !== null
   );
+}
+
+const DISPATCHED_REQUEST_OUTCOME_GUIDANCE =
+  "The request was already sent to the gateway, so the operation may have been applied " +
+  "even though no response arrived; its outcome is unknown. " +
+  "Verify the current state (for example, re-run the equivalent read-only command) " +
+  "before retrying, especially for write actions.";
+
+export function createGatewayCloseTransportError(params: {
+  code: number;
+  reason: string;
+  connectionDetails: GatewayConnectionDetails;
+  requestDispatched: boolean;
+}): GatewayTransportError {
+  const { code, connectionDetails, requestDispatched } = params;
+  const reason = normalizeOptionalString(params.reason) || "no close reason";
+  const hint =
+    code === 1006 ? "abnormal closure (no close frame)" : code === 1000 ? "normal closure" : "";
+  const suffix = hint ? ` ${hint}` : "";
+  let message = `gateway closed (${code}${suffix}): ${reason}\n${connectionDetails.message}`;
+  if (code === 1006) {
+    // A completed handshake cannot explain a close after request dispatch.
+    const connectionHints = requestDispatched
+      ? "- Connection dropped without a close frame (check network and gateway load)"
+      : "- Connection dropped without a close frame (retry; check network and gateway load)" +
+        "\n- Gateway not yet ready to accept connections (retry after a moment)" +
+        "\n- TLS mismatch (connecting with ws:// to a wss:// gateway, or vice versa)";
+    message +=
+      `\n\nPossible causes:\n${connectionHints}` +
+      "\n- Gateway process stopped or became unreachable (confirm it is still running)" +
+      "\nRun `openclaw doctor` for diagnostics.";
+  }
+  return new GatewayTransportError({
+    kind: "closed",
+    code,
+    reason,
+    connectionDetails,
+    message: requestDispatched ? `${message}\n\n${DISPATCHED_REQUEST_OUTCOME_GUIDANCE}` : message,
+  });
+}
+
+export function createGatewayTimeoutTransportError(params: {
+  timeoutMs: number;
+  connectionDetails: GatewayConnectionDetails;
+  requestDispatched: boolean;
+}): GatewayTransportError {
+  const { timeoutMs, connectionDetails, requestDispatched } = params;
+  const message = `gateway timeout after ${timeoutMs}ms\n${connectionDetails.message}`;
+  return new GatewayTransportError({
+    kind: "timeout",
+    timeoutMs,
+    connectionDetails,
+    message: requestDispatched ? `${message}\n\n${DISPATCHED_REQUEST_OUTCOME_GUIDANCE}` : message,
+  });
 }
 
 /** Transport uncertainty permits read recovery or an exclusively ownership-locked mutation. */

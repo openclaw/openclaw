@@ -2,12 +2,15 @@ import { html, nothing, type TemplateResult } from "lit";
 // Deep import on purpose: the protocol barrel carries typebox and every
 // schema, which must stay out of the Control UI startup bundle.
 import { isCloudWorkerPlacementState } from "../../../packages/gateway-protocol/src/schema/session-placement-state.js";
-import type { SessionPlacementDiskSpace } from "../../../packages/gateway-protocol/src/schema/session-placement.js";
+import type {
+  SessionPlacementDiskSpace,
+  SessionPlacementMachine,
+} from "../../../packages/gateway-protocol/src/schema/session-placement.js";
 import type { SessionCatalogPullRequestSummary } from "../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import type { GatewaySessionRow } from "../api/types.ts";
-import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
 import { t } from "../i18n/index.ts";
 import { icons } from "./icons.ts";
+import { sessionMachineParts } from "./session-machine.ts";
 
 export type SessionPlacementState = NonNullable<GatewaySessionRow["placement"]>["state"];
 
@@ -67,6 +70,7 @@ export function renderSessionRowBadges(params: {
   placementState?: SessionPlacementState;
   placementProviderId?: string;
   placementProfileId?: string;
+  placementMachine?: SessionPlacementMachine;
   diskSpaceStatus?: SessionPlacementDiskSpace["status"];
   workspaceConflictCount?: number;
 }) {
@@ -115,7 +119,14 @@ export function renderSessionRowBadges(params: {
   }
   const placementLabel = displayedPlacementState
     ? params.placementProviderId && params.placementProfileId
-      ? `${params.placementProviderId} · ${params.placementProfileId} · ${displayedPlacementState}`
+      ? [
+          params.placementProviderId,
+          params.placementProfileId,
+          ...sessionMachineParts(params.placementMachine),
+          displayedPlacementState,
+        ]
+          .filter(Boolean)
+          .join(" · ")
       : t("sessionsView.cloudWorkerPlacement", { state: displayedPlacementState })
     : "";
   const cloudPlacementLabel = hasWorkspaceConflict
@@ -201,63 +212,4 @@ export function renderSessionRowBadges(params: {
         : nothing
     }
   </span>`;
-}
-
-export function resolveSidebarConnectionStatus(props: {
-  offline: boolean;
-  restartPending?: boolean;
-  suspensionPhase?: ApplicationGatewaySnapshot["suspensionPhase"];
-}) {
-  if (props.restartPending) {
-    return "restarting";
-  }
-  if (props.offline) {
-    return "offline";
-  }
-  switch (props.suspensionPhase) {
-    case "preparing":
-    case "draining":
-      return "suspending";
-    case "prepared":
-      return "suspended";
-    default:
-      return null;
-  }
-}
-
-export function renderSidebarConnectionStatus(props: {
-  kind: NonNullable<ReturnType<typeof resolveSidebarConnectionStatus>>;
-  queuedOutboxCount?: number;
-  title?: string;
-  onRetry: () => void;
-}) {
-  if (props.kind !== "offline") {
-    return html`<span
-      class=${`sidebar-footer-bar__status sidebar-footer-bar__status--${props.kind}`}
-      role="status"
-      aria-live="polite"
-      ><span class="sidebar-footer-bar__status-dot" aria-hidden="true"></span>${t(
-        `connection.${props.kind}`,
-      )}</span
-    >`;
-  }
-  const offline = t("common.offline");
-  const count = props.queuedOutboxCount ?? 0;
-  const queued = count ? t("connection.queuedCount", { count: String(count) }) : null;
-  return html`<openclaw-tooltip .content=${props.title ?? ""}>
-    <button
-      type="button"
-      class="sidebar-footer-bar__status"
-      aria-live="polite"
-      aria-label=${`${offline} — ${t("connection.retryNow")}${queued ? ` — ${queued}` : ""}`}
-      @click=${props.onRetry}
-    >
-      <span class="sidebar-footer-bar__status-dot" aria-hidden="true"></span>${offline}<span
-        class="sidebar-footer-bar__status-detail"
-        >· ${t("connection.reconnecting")}</span
-      >${
-        queued ? html`<span class="sidebar-footer-bar__status-detail">· ${queued}</span>` : nothing
-      }
-    </button>
-  </openclaw-tooltip>`;
 }

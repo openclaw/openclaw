@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { catalogStartHandler } from "./session-catalog-terminal-start.js";
@@ -73,15 +74,18 @@ describe("sessions.catalog.startTerminal", () => {
     activeProvider = provider();
   });
 
-  it("requires the cliAgents opt-in before terminal start", async () => {
+  it("honors the cliAgents opt-out before terminal start", async () => {
     const startTerminalSession = vi.fn();
     activeProvider = provider({ startTerminalSession });
 
-    const respond = await call({
-      catalogId: "codex",
-      agentId: "main",
-      cwd: process.cwd(),
-    });
+    const respond = await call(
+      {
+        catalogId: "codex",
+        agentId: "main",
+        cwd: process.cwd(),
+      },
+      { gateway: { cliAgents: { enabled: false } } },
+    );
 
     expect(startTerminalSession).not.toHaveBeenCalled();
     expect(respond).toHaveBeenCalledWith(
@@ -177,10 +181,7 @@ describe("sessions.catalog.startTerminal", () => {
 
   it("rechecks local cwd after the provider plan resolves", async () => {
     const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-catalog-start-"));
-    let releasePlan!: () => void;
-    const planGate = new Promise<void>((resolve) => {
-      releasePlan = resolve;
-    });
+    const { promise: planGate, resolve: releasePlan } = createDeferred();
     const startTerminalSession = vi.fn(async () => {
       await planGate;
       return { kind: "local" as const, argv: ["codex"], cwd };
@@ -328,7 +329,6 @@ describe("sessions.catalog.startTerminal", () => {
     activeProvider = provider({ startTerminalSession, resolveCreateSession });
 
     const config = {
-      gateway: { cliAgents: { enabled: true } },
       agents: {
         defaults: {
           model: { primary: "openai/gpt-5" },

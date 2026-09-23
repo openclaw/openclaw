@@ -11,9 +11,9 @@ import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { AcpRuntimeError } from "../runtime/errors.js";
 import { buildAcpDatabaseSessionKey } from "../runtime/session-meta-keys.js";
+import { readAcpSessionMetaForEntry } from "../runtime/session-meta-readonly.js";
 import {
   readAcpSessionEntry,
-  readAcpSessionMetaForEntry,
   writeAcpSessionMetaForMigration,
   upsertAcpSessionMeta,
 } from "../runtime/session-meta.js";

@@ -13,7 +13,7 @@ Plugins extend OpenClaw with channels, model providers, agent harnesses, tools,
 skills, speech, realtime transcription, voice, media understanding, generation,
 web fetch, web search, and other runtime capabilities.
 
-Use this page to install a plugin, restart the Gateway, verify the runtime
+Use this page to install a plugin, apply its configuration, verify the runtime
 loaded it, and route common setup failures. For command-only examples, see
 [Manage plugins](/plugins/manage-plugins). For the generated inventory of
 bundled, official external, and source-only plugins, see
@@ -25,7 +25,7 @@ bundled, official external, and source-only plugins, see
 - network access to the selected source (ClawHub, npm, or a git host)
 - any plugin-specific credentials, config keys, or OS tools named by that
   plugin's setup docs
-- permission for the Gateway that serves your channels to reload or restart
+- administrator access to the Gateway that serves your channels
 
 ## Quick start
 
@@ -37,9 +37,9 @@ bundled, official external, and source-only plugins, see
     openclaw plugins search "calendar"
     ```
 
-    ClawHub is the primary discovery surface for community plugins. During the
-    launch cutover, ordinary bare package specs still install from npm unless
-    they match an official plugin id. Raw `@openclaw/*` specs that match a
+    ClawHub is the primary discovery surface for community plugins. Ordinary
+    bare package specs install from npm unless they match a bundled or official
+    plugin id. Raw `@openclaw/*` specs that match a
     bundled plugin resolve to that bundled copy. Use an explicit source prefix
     when you need one source specifically.
 
@@ -81,24 +81,21 @@ bundled, official external, and source-only plugins, see
     If `plugins.allow` is set, the installed plugin id must be in that list
     before the plugin can load. `openclaw plugins install` adds the installed
     id to an existing `plugins.allow` list and removes the same id from
-    `plugins.deny` so the explicit install can load after restart.
+    `plugins.deny` so the explicit install can load.
 
   </Step>
 
-  <Step title="Let the Gateway reload">
-    Installing, updating, or uninstalling plugin code requires a Gateway
-    restart. A managed Gateway with config reload enabled detects the changed
-    plugin install record and restarts automatically. Otherwise, restart it
-    yourself:
+  <Step title="Apply the changes">
+    <a id="let-the-gateway-reload" />
+    Plugin-management commands apply changes to a running local Gateway without
+    restarting it. If the Gateway is stopped, start it to load the saved changes.
+    See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 
-    ```bash
-    openclaw gateway restart
-    ```
-
-    With the default hybrid reload mode, enable/disable and ordinary plugin
-    config changes hot-reload the existing runtime for new agent turns unless
-    the plugin declares a restart-triggering prefix. Inspect registration next,
-    then verify the running Gateway with an actual hook event or tool call.
+    With the default hybrid reload mode, ordinary plugin config edits also
+    apply automatically. By default, the Gateway replaces the affected plugin instance;
+    a plugin's explicit restart policy can still require a Gateway restart.
+    Inspect registration next, then verify the running Gateway with an actual
+    hook event or tool call.
 
   </Step>
 
@@ -110,8 +107,8 @@ bundled, official external, and source-only plugins, see
     `--runtime` loads the plugin in the inspecting CLI process and reports
     registered tools, hooks, services, Gateway methods, and plugin-owned CLI
     commands. Plain `inspect` is a cold manifest and registry check only.
-    Neither proves an already-running Gateway has loaded the same code. After
-    restarting it, trigger the hook or capability and verify its actual effect.
+    Neither proves an already-running Gateway has loaded the same code. Trigger
+    the hook or capability and verify its actual effect.
 
   </Step>
 </Steps>
@@ -131,7 +128,7 @@ bundled, official external, and source-only plugins, see
 Bare package specs have special compatibility behavior: a bare name that
 matches a bundled plugin id uses that bundled source; a bare name that matches
 an official external plugin id uses the official package catalog; any other
-bare spec installs through npm during the launch cutover. Raw `@openclaw/*`
+bare spec installs through npm. Raw `@openclaw/*`
 specs that match bundled plugins also resolve to the bundled copy before npm
 fallback. Use `npm:@openclaw/<plugin>@<version>` to deliberately install the
 external npm package instead of the bundled copy. Use `clawhub:`, `npm:`,
@@ -187,7 +184,7 @@ The common plugin config shape is:
     enabled: true,
     allow: ["voice-call"],
     deny: ["untrusted-plugin"],
-    load: { paths: ["~/Projects/oss/voice-call-plugin"] },
+    load: { paths: ["~/path/to/oss/voice-call-plugin"] },
     slots: { memory: "memory-core" },
     entries: {
       "voice-call": { enabled: true, config: { provider: "twilio" } },
@@ -286,9 +283,9 @@ bypass global disable, deny, or per-plugin enablement policy.
 An explicit hook policy is also startup intent. For example,
 `plugins.entries.<id>.hooks.allowConversationAccess: true` both authorizes
 non-bundled conversation hooks and selects that configured plugin for Gateway
-startup; normal plugin policy still applies. Restart the Gateway after changing
-the plugin manifest. With the default hybrid reload mode, hook policy changes
-hot-reload the existing plugin runtime. Inspect registration with
+startup; normal plugin policy still applies. Run `openclaw plugins reload <id>`
+after changing the plugin manifest or source. With the default hybrid reload
+mode, hook policy changes hot-reload the plugin runtime. Inspect registration with
 `openclaw plugins inspect <id> --runtime --json`, then trigger an event to verify
 the running process. See [Plugin hooks](/plugins/hooks#quick-start) for a complete
 example.
@@ -304,25 +301,26 @@ When a plugin appears installed but live chat traffic does not use it:
 ```bash
 openclaw gateway status --deep --require-rpc
 openclaw plugins inspect <plugin-id> --runtime --json
-openclaw gateway restart
+openclaw plugins reload <plugin-id>
 ```
 
-Managed Gateways restart automatically after plugin install, update, and
-uninstall changes that alter plugin source. On VPS or container installs, make
-sure any manual restart targets the actual `openclaw gateway run` child that
-serves your channels, not only a wrapper or supervisor.
+Plugin Reload refreshes the selected plugin in the running Gateway. Use it after
+source or manifest edits, or after correcting a failed activation. Successful
+install, update, enable, disable, and uninstall commands already apply their
+changes; they do not need an extra reload. See [Reload](/cli/plugins#reload) for
+compiled bundled code and cleanup limitations.
 
 ## Troubleshooting
 
-| Symptom                                                        | Check                                                                                                                                      | Fix                                                                                                                   |
-| -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------- |
-| Plugin appears in `plugins list` but runtime hooks do not run  | Use `openclaw plugins inspect <id> --runtime --json` and confirm the active Gateway with `gateway status --deep --require-rpc`             | Restart after install, update, or source changes; for config changes, confirm reload mode and plugin restart prefixes |
-| Duplicate channel or tool ownership diagnostics appear         | Run `openclaw plugins list --enabled --verbose`, inspect each suspected plugin with `--runtime --json`, and compare channel/tool ownership | Disable one owner, remove stale installs, or use manifest `preferOver` for intentional replacement                    |
-| Config says a plugin is missing                                | Check [Plugin inventory](/plugins/plugin-inventory) for whether it is bundled, official external, or source-only                           | Install the external package, enable the bundled plugin, or remove stale config                                       |
-| Config is invalid during install                               | Read the validation message and run `openclaw doctor --fix` if it points to stale plugin state                                             | Doctor can quarantine invalid plugin config by disabling the entry and removing the invalid payload                   |
-| Plugin path is blocked for suspicious ownership or permissions | Inspect the diagnostic before the config error                                                                                             | Fix filesystem ownership/permissions, then run `openclaw plugins registry --refresh`                                  |
-| `OPENCLAW_NIX_MODE=1` blocks lifecycle commands                | Confirm the install is managed by Nix                                                                                                      | Change plugin selection in the Nix source instead of using plugin mutator commands                                    |
-| Dependency import fails at runtime                             | Check whether the plugin was installed through npm/git/ClawHub or loaded from a local path                                                 | Run `openclaw plugins update <id>`, reinstall the source, or install local plugin dependencies yourself               |
+| Symptom                                                        | Check                                                                                                                                      | Fix                                                                                                                              |
+| -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------- |
+| Plugin appears in `plugins list` but runtime hooks do not run  | Use `openclaw plugins inspect <id> --runtime --json` and confirm the active Gateway with `gateway status --deep --require-rpc`             | Check activation errors; reload after source edits or repairs. For config changes, check reload mode and plugin restart prefixes |
+| Duplicate channel or tool ownership diagnostics appear         | Run `openclaw plugins list --enabled --verbose`, inspect each suspected plugin with `--runtime --json`, and compare channel/tool ownership | Disable one owner, remove stale installs, or use manifest `preferOver` for intentional replacement                               |
+| Config says a plugin is missing                                | Check [Plugin inventory](/plugins/plugin-inventory) for whether it is bundled, official external, or source-only                           | Install the external package, enable the bundled plugin, or remove stale config                                                  |
+| Config is invalid during install                               | Read the validation message and run `openclaw doctor --fix` if it points to stale plugin state                                             | Doctor can quarantine invalid plugin config by disabling the entry and removing the invalid payload                              |
+| Plugin path is blocked for suspicious ownership or permissions | Inspect the diagnostic before the config error                                                                                             | Fix filesystem ownership/permissions, then run `openclaw plugins registry --refresh`                                             |
+| `OPENCLAW_NIX_MODE=1` blocks lifecycle commands                | Confirm the install is managed by Nix                                                                                                      | Change plugin selection in the Nix source instead of using plugin mutator commands                                               |
+| Dependency import fails at runtime                             | Check whether the plugin was installed through npm/git/ClawHub or loaded from a local path                                                 | Run `openclaw plugins update <id>`, reinstall the source, or install local plugin dependencies yourself                          |
 
 When an enabled managed plugin fails payload verification during Gateway
 startup, OpenClaw quarantines that exact installed plugin root for the boot and
@@ -462,3 +460,6 @@ reload behavior, and legacy cleanup, see
 - [Building plugins](/plugins/building-plugins) - native plugin authoring guide
 - [Plugin SDK overview](/plugins/sdk-overview) - runtime registration, hooks, and API fields
 - [Plugin manifest](/plugins/manifest) - manifest and package metadata
+- [Context engines](/concepts/context-engine) - pluggable context assembly plugins
+- [Diffs](/tools/diffs) - read-only diff viewer and file renderer (optional plugin tool)
+- [ACP agents — setup](/tools/acp-agents-setup) - configuring a plugin-provided ACP agent

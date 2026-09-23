@@ -1,4 +1,3 @@
-// Voice Call plugin module implements telephony audio behavior.
 export { convertPcmToMulaw8k } from "openclaw/plugin-sdk/realtime-voice";
 
 /**

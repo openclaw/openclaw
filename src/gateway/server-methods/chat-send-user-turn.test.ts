@@ -4,12 +4,13 @@ import { describe, expect, it, vi } from "vitest";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
-  type GatewayClientInfo,
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.js";
+import { resolveBootstrapContextForRun } from "../../agents/bootstrap-files.js";
 import { pruneProcessedHistoryImages } from "../../agents/embedded-agent-runner/run/history-image-prune.js";
 import { hydratePromptMediaMessages } from "../../agents/embedded-agent-runner/run/images.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
+import { resolveCommandAuthorization } from "../../auto-reply/command-auth.js";
 import { normalizeCommandBody } from "../../auto-reply/commands-registry.js";
 import { resolveReplyDirectiveRouting } from "../../auto-reply/reply/get-reply-directives-routing.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
@@ -18,94 +19,91 @@ import type { MsgContext } from "../../auto-reply/templating.js";
 import { resolveStateDir } from "../../config/paths.js";
 import {
   listSessionParticipantsReadOnly,
+  loadSessionEntryReadOnly,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { sessionPersonalProfileId } from "../../config/sessions/session-entry-provenance.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { recordAcceptedSessionParticipantInput } from "../../sessions/session-participant-input-recording.js";
-import { prepareChannelParticipantObservation } from "../../sessions/session-participant-input.js";
 import {
-  buildPersistedUserTurnMessage,
-  type UserTurnInput,
-} from "../../sessions/user-turn-transcript.js";
+  isSessionPersonalBootstrapTurn,
+  prepareChannelParticipantObservation,
+} from "../../sessions/session-participant-input.js";
+import { buildPersistedUserTurnMessage } from "../../sessions/user-turn-transcript.js";
+import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as chatAttachments from "../chat-attachments.js";
 import { applyChatSendManagedMedia, prepareChatSendUserTurn } from "./chat-send-user-turn.js";
-
-function createUserTurnInputController(text = "raw message") {
-  const baseInput: UserTurnInput = {
-    text,
-    timestamp: 1,
-    idempotencyKey: "run-1:user",
-  };
-  let inputPromise = Promise.resolve(baseInput);
-  return {
-    controller: {
-      baseInput,
-      setInputPromise: (input: Promise<UserTurnInput>) => {
-        inputPromise = input;
-      },
-    },
-    readInput: () => inputPromise,
-  };
-}
-
-function createClientInfo(overrides: Partial<GatewayClientInfo> = {}): GatewayClientInfo {
-  return {
-    id: GATEWAY_CLIENT_IDS.CLI,
-    version: "test",
-    platform: "test",
-    mode: GATEWAY_CLIENT_MODES.CLI,
-    ...overrides,
-  };
-}
-
-function createAttachments(
-  overrides: Partial<{
-    explicitOriginTargetsPlugin: boolean;
-    mediaPathOffloadPaths: string[];
-    mediaPathOffloadTypes: string[];
-    mediaPathOffloadWorkspaceDir: string | undefined;
-    imageOrder: Array<"inline" | "offloaded">;
-    parsedImages: Array<{
-      type: "image";
-      data: string;
-      mimeType: string;
-      sourceIndex: number;
-    }>;
-    offloadedRefs: Array<{
-      mediaRef: string;
-      id: string;
-      path: string;
-      sourceIndex: number;
-      kind: "image" | "audio" | "video" | "document" | "sticker" | "unknown";
-      mimeType: string;
-      label: string;
-      sizeBytes: number;
-    }>;
-    parsedMessage: string;
-  }> = {},
-) {
-  return {
-    explicitOriginTargetsPlugin: false,
-    imageOrder: [],
-    mediaPathOffloadPaths: [],
-    mediaPathOffloadTypes: [],
-    mediaPathOffloadWorkspaceDir: undefined,
-    offloadedRefs: [],
-    parsedImages: [],
-    parsedMessage: "hello",
-    prepareAttachmentsMs: undefined,
-    ...overrides,
-  };
-}
+import {
+  createUserTurnInputController,
+  createClientInfo,
+  createAttachments,
+} from "./chat-send-user-turn.test-support.js";
 
 describe("prepareChatSendUserTurn", () => {
+  it.each([
+    { profileId: "profile-ada", synthetic: false, verified: true, allowed: true },
+    { profileId: "profile-other", synthetic: false, verified: true, allowed: false },
+    { profileId: "profile-ada", synthetic: true, verified: true, allowed: false },
+    { profileId: "profile-ada", synthetic: false, verified: false, allowed: false },
+  ])(
+    "checks command allowlists against the admitted profile: %j",
+    ({ profileId, synthetic, verified, allowed }) => {
+      const { controller } = createUserTurnInputController("/status");
+      const prepared = prepareChatSendUserTurn({
+        request: {
+          inboundMessage: "/status",
+          clientInfo: createClientInfo({
+            id: GATEWAY_CLIENT_IDS.CONTROL_UI,
+            mode: GATEWAY_CLIENT_MODES.UI,
+          }),
+          suppressCommandInterpretation: false,
+          systemInputProvenance: undefined,
+          systemProvenanceReceipt: undefined,
+        },
+        session: { agentId: "main", clientRunId: "run-1", sessionKey: "agent:main:main" },
+        admission: {
+          originatingRoute: { originatingChannel: "webchat", explicitDeliverRoute: false },
+        },
+        attachments: createAttachments({ parsedMessage: "/status" }),
+        client: {
+          authenticatedUserId: verified ? "ada@example.test" : undefined,
+          authenticatedUserProfile: {
+            profileId,
+            displayName: "Ada",
+            hasAvatar: false,
+            updatedAt: 1,
+          },
+          internal: synthetic ? { syntheticClient: true } : undefined,
+          connect: {
+            minProtocol: 1,
+            maxProtocol: 1,
+            client: createClientInfo({ id: GATEWAY_CLIENT_IDS.CONTROL_UI }),
+            scopes: ["operator.write"],
+          },
+        },
+        logGateway: { warn: vi.fn() } as never,
+        userTurn: controller,
+      });
+      expect(
+        resolveCommandAuthorization({
+          ctx: finalizeInboundContext({ ...prepared.ctx }),
+          cfg: {
+            commands: { ownerAllowFrom: ["profile-ada"], allowFrom: { "*": ["profile-ada"] } },
+          },
+          commandAuthorized: prepared.ctx.CommandAuthorized === true,
+        }),
+      ).toMatchObject({ senderIsOwner: allowed, isAuthorizedSender: allowed });
+    },
+  );
+
   it.each(["profile", "synthetic", "profileless", "profileless-ui", "system"] as const)(
     "records only accepted authenticated external input after retargeting: %s",
     async (kind) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const profile = ensureProfileForEmail("accepted@example.test", { env: state.env });
+        const creator = ensureProfileForEmail("session-creator@example.test", { env: state.env });
         const { controller } = createUserTurnInputController();
         const clientInfo = createClientInfo(
           kind === "profileless-ui"
@@ -149,18 +147,52 @@ describe("prepareChatSendUserTurn", () => {
           userTurn: controller,
         });
         const scope = { agentId: "main", env: state.env, sessionKey: "agent:main:retargeted" };
-        await upsertSessionEntryCore(scope, { sessionId: "retargeted", updatedAt: 2 });
+        await upsertSessionEntryCore(scope, {
+          sessionId: "retargeted",
+          updatedAt: 2,
+          createdActor: { type: "human", source: "profile", id: creator.id },
+        });
         const target = {
           agentId: "main",
           sessionKey: scope.sessionKey,
           storePath: state.statePath("agents", "main", "agent", "openclaw-agent.sqlite"),
         };
+        // Ingress decides turn eligibility; the persisted destination selects its personal file.
+        const workspaceDir = state.statePath("bootstrap-workspace");
+        const creatorDir = path.join(workspaceDir, "users", creator.id);
+        const senderDir = path.join(workspaceDir, "users", profile.id);
+        await fs.mkdir(creatorDir, { recursive: true });
+        await fs.mkdir(senderDir, { recursive: true });
+        await fs.writeFile(path.join(workspaceDir, "USER.md"), "Shared preferences");
+        await fs.writeFile(path.join(creatorDir, "USER.md"), "Session creator preferences");
+        await fs.writeFile(path.join(senderDir, "USER.md"), "Current sender preferences");
+        // Neither authenticated participants nor profile-looking sender labels select an overlay.
+        prepared.ctx.SenderId = profile.id;
+        prepared.ctx.SenderName = profile.id;
+        const entry = loadSessionEntryReadOnly(scope);
+        const bootstrap = await resolveBootstrapContextForRun({
+          workspaceDir,
+          sessionKey: scope.sessionKey,
+          bootstrapUserProfileId: isSessionPersonalBootstrapTurn({ ...prepared.ctx })
+            ? sessionPersonalProfileId(entry)
+            : undefined,
+        });
+        const contents = bootstrap.contextFiles.map((file) => file.content).join("\n");
+        expect(contents).toContain("Shared preferences");
+        expect(contents).not.toContain("Current sender preferences");
+        expect(contents.includes("Session creator preferences")).toBe(
+          kind === "profile" || kind === "profileless",
+        );
         prepareChannelParticipantObservation(prepared.ctx);
         recordAcceptedSessionParticipantInput({ ...prepared.ctx }, target);
         recordAcceptedSessionParticipantInput(prepared.ctx, target);
         await new Promise<void>((resolve) => {
           queueMicrotask(resolve);
         });
+        await runOpenClawAgentWriteAdmission(
+          { agentId: target.agentId, path: target.storePath, env: state.env },
+          () => undefined,
+        );
         expect(listSessionParticipantsReadOnly(scope).get(scope.sessionKey)).toEqual(
           kind === "profile"
             ? [
@@ -415,6 +447,7 @@ describe("prepareChatSendUserTurn", () => {
           updatedAt: 1,
         },
         connect: {
+          client: createClientInfo({ id: GATEWAY_CLIENT_IDS.CONTROL_UI }),
           device: { id: "device-1" },
           scopes: ["operator.admin"],
           caps: ["tool-events"],
@@ -443,6 +476,7 @@ describe("prepareChatSendUserTurn", () => {
       ],
       GatewayClientScopes: ["operator.admin"],
       GatewayClientCaps: ["tool-events"],
+      GatewayUiCommandTarget: { connId: "conn-1", profileId: "profile-ada" },
       SessionCreation: {
         via: "operator",
         actor: { type: "human", id: "profile-ada" },
@@ -453,16 +487,17 @@ describe("prepareChatSendUserTurn", () => {
     await expect(readInput()).resolves.toEqual(controller.baseInput);
   });
 
-  it("carries retained image claim-check facts without changing the trailing prompt line", async () => {
-    const { controller, readInput } = createUserTurnInputController();
+  it("preserves source receipts and image hints when approval changes the user text", async () => {
+    const { controller, readInput } = createUserTurnInputController("inspect");
     const mediaRef = "media://inbound/image-1.png";
+    const receipt = "[Source Receipt]\nbridge=fixture\n[/Source Receipt]";
     const prepared = prepareChatSendUserTurn({
       request: {
         inboundMessage: "inspect",
         clientInfo: createClientInfo(),
         suppressCommandInterpretation: false,
         systemInputProvenance: undefined,
-        systemProvenanceReceipt: undefined,
+        systemProvenanceReceipt: receipt,
       },
       session: {
         agentId: "main",
@@ -496,7 +531,15 @@ describe("prepareChatSendUserTurn", () => {
       userTurn: controller,
     });
 
-    expect(prepared.ctx.Body).toBe(`inspect\n[media attached: ${mediaRef}]`);
+    expect(prepared.ctx.Body).toBe(`${receipt}\n\ninspect\n[media attached: ${mediaRef}]`);
+    prepared.applyApprovedText("Approved inspect");
+    expect(prepared.ctx).toMatchObject({
+      Body: `${receipt}\n\nApproved inspect\n[media attached: ${mediaRef}]`,
+      BodyForAgent: `${receipt}\n\nApproved inspect\n[media attached: ${mediaRef}]`,
+      RawBody: `Approved inspect\n[media attached: ${mediaRef}]`,
+      BodyForCommands: "Approved inspect",
+      CommandBody: "Approved inspect",
+    });
     expect(prepared.replyOptionMedia).toEqual([
       {
         path: "/media/inbound/image-1.png",
@@ -616,6 +659,85 @@ describe("prepareChatSendUserTurn", () => {
       await expect(readInput()).resolves.toMatchObject({
         text: "raw message\n[image attachment omitted: durable managed media claim unavailable]",
       });
+    } finally {
+      persist.mockRestore();
+    }
+  });
+
+  it("exposes an ordinary WebChat inline image as managed media for downstream staging", async () => {
+    const persistedPath = "/state/media/inbound/photo.png";
+    const persist = vi
+      .spyOn(chatAttachments, "persistInboundImagesForTranscript")
+      .mockResolvedValueOnce({
+        entries: [
+          {
+            id: "photo.png",
+            path: persistedPath,
+            sourceIndex: 0,
+            imageKind: "inline",
+            fact: {
+              url: "media://inbound/photo.png",
+              contentType: "image/png",
+              kind: "image",
+              sizeBytes: 10,
+            },
+          },
+        ],
+        omission: "none",
+      });
+    try {
+      const { controller } = createUserTurnInputController();
+      const prepared = prepareChatSendUserTurn({
+        request: {
+          inboundMessage: "inspect",
+          clientInfo: createClientInfo({
+            id: GATEWAY_CLIENT_IDS.CONTROL_UI,
+            mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+          }),
+          suppressCommandInterpretation: false,
+          systemInputProvenance: undefined,
+          systemProvenanceReceipt: undefined,
+        },
+        session: {
+          agentId: "main",
+          clientRunId: "run-inline",
+          sessionKey: "agent:main:main",
+        },
+        admission: {
+          originatingRoute: { originatingChannel: "webchat", explicitDeliverRoute: false },
+        },
+        attachments: createAttachments({
+          imageOrder: ["inline"],
+          parsedImages: [
+            { type: "image", data: "aGVsbG8=", mimeType: "image/png", sourceIndex: 0 },
+          ],
+        }),
+        client: null,
+        logGateway: { warn: vi.fn() } as never,
+        userTurn: controller,
+      });
+
+      const managedMedia = await prepared.pluginBoundMediaPromise;
+      expect(managedMedia).toEqual([
+        {
+          path: persistedPath,
+          contentType: "image/png",
+          hydrationSuppressed: true,
+        },
+      ]);
+      const ctx = {
+        media: [{ path: "uploads/report.pdf", workspaceDir: "/workspace" }],
+      } as MsgContext;
+      applyChatSendManagedMedia(ctx, managedMedia, prepared.managedMediaApplyMode);
+      applyChatSendManagedMedia(ctx, managedMedia, prepared.managedMediaApplyMode);
+      expect(ctx.media).toEqual([
+        { path: "uploads/report.pdf", workspaceDir: "/workspace" },
+        {
+          path: persistedPath,
+          contentType: "image/png",
+          hydrationSuppressed: true,
+        },
+      ]);
     } finally {
       persist.mockRestore();
     }
@@ -745,6 +867,8 @@ describe("prepareChatSendUserTurn", () => {
       { role: "user", content: "more" },
       { role: "assistant", content: "ack" },
     ] as unknown as Parameters<typeof pruneProcessedHistoryImages>[0];
+    expect(pruneProcessedHistoryImages(history)).toBeNull();
+    history.push({ role: "user", content: "next turn", timestamp: 5 });
     const pruned = pruneProcessedHistoryImages(history);
     const first = pruned?.[0] as unknown as Record<string, unknown> | undefined;
     expect(first?.content).toBe(
@@ -849,6 +973,8 @@ describe("prepareChatSendUserTurn", () => {
         { role: "user", content: "more" },
         { role: "assistant", content: "ack" },
       ] as unknown as Parameters<typeof pruneProcessedHistoryImages>[0];
+      expect(pruneProcessedHistoryImages(history)).toBeNull();
+      history.push({ role: "user", content: "next turn", timestamp: 5 });
       const pruned = pruneProcessedHistoryImages(history);
       const first = pruned?.[0] as unknown as Record<string, unknown> | undefined;
       expect(first?.content).toBe(

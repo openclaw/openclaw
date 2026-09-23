@@ -4,9 +4,10 @@ import path from "node:path";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { PresenceEntrySchema } from "../../packages/gateway-protocol/src/schema/snapshot.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { makeUserMessage } from "../../test/helpers/user-message.js";
 import { writeConfigFile } from "../config/config.js";
 import {
   persistSessionTranscriptTurn,
@@ -133,11 +134,7 @@ describe("gateway presence audience", () => {
           updateMode: "none",
           messages: [
             {
-              message: {
-                role: "user",
-                content: "foreign draft transcript",
-                timestamp: 1,
-              },
+              message: makeUserMessage("foreign draft transcript", 1),
               now: Date.parse("2026-09-04T08:00:00.000Z"),
             },
           ],
@@ -217,6 +214,21 @@ describe("gateway presence audience", () => {
           lastActivityAt: expect.any(Number),
           timeZone: "Europe/Vienna",
         });
+        const idleBefore = structuredClone(idlePerson);
+        const now = vi.spyOn(Date, "now").mockReturnValue(idleBefore.ts + 1000);
+        try {
+          for (const email of ["creator@example.com", "presence-unrelated@example.test"]) {
+            // No await: committed profile notifications settle synchronously,
+            // without a heartbeat interleaving with this unchanged-row check.
+            ensureProfileForEmail(email);
+            expect(
+              listSystemPresence().find((entry) => entry.instanceId === "presence-idle"),
+              `${email} must preserve unrelated presence`,
+            ).toEqual(idleBefore);
+          }
+        } finally {
+          now.mockRestore();
+        }
         const declared = await rpcReq(watcher.ws, "sessions.viewers.set", {
           sessionKeys: watchedKeys,
         });
@@ -268,7 +280,7 @@ describe("gateway presence audience", () => {
                 .filter((key) => watchedKeys.includes(key))
                 .toSorted(),
               `${scenario.name} canonical sessions.list visibility`,
-            ).toEqual(scenario.allowed.toSorted());
+            ).toEqual(scenario.allowed.filter((key) => key !== incognitoKey).toSorted());
             const canReadDraft = scenario.allowed.includes(draftKey);
             const described = await rpcReq<{ session: { sessionId?: string } | null }>(
               recipient.ws,
@@ -309,6 +321,10 @@ describe("gateway presence audience", () => {
         sockets.push(unauthenticated);
         const unauthenticatedEvents = observePresence(unauthenticated);
         const readers = recipients.filter(({ canRead }) => canRead);
+        // The viewer declaration already published activity. Typing within its
+        // 30-second window updates the store without another full roster event.
+        const readNow = Date.now;
+        const activityClock = vi.spyOn(Date, "now").mockImplementation(() => readNow() + 30_000);
         const typingStartedAt = Date.now();
         const eventPromises = readers.map(({ ws }) =>
           onceMessage<{ type: string; event: string; payload: { presence: SystemPresence[] } }>(
@@ -337,7 +353,7 @@ describe("gateway presence audience", () => {
               }),
             )
             .then((response) => expect(response).toMatchObject({ ok: true })),
-        ]);
+        ]).finally(() => activityClock.mockRestore());
         const activeWatcher = listSystemPresence().find(
           (entry) => entry.instanceId === watcherInstanceId,
         )!;

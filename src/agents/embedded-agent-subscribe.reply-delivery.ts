@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto";
 import {
+  copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
   markReplyPayloadForSourceSuppressionDelivery,
   setReplyPayloadMetadata,
 } from "../auto-reply/reply-payload.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
-import { emitAgentEvent } from "../infra/agent-events.js";
+import { emitAgentEventIfCurrent } from "../infra/agent-events.js";
 import { normalizeTextForComparison } from "./embedded-agent-helpers.js";
 import type { BlockReplyPayload } from "./embedded-agent-payloads.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
@@ -20,7 +21,9 @@ import type {
   AssistantStreamData,
   EmbeddedAgentSubscribeContext,
 } from "./embedded-agent-subscribe.handlers.types.js";
+import type { EmbeddedAgentEvent } from "./embedded-agent-subscribe.shared-types.js";
 import type { SubscribeEmbeddedAgentSessionParams } from "./embedded-agent-subscribe.types.js";
+import type { AgentMessage } from "./runtime/index.js";
 
 type AssistantStreamDelivery = {
   data: AssistantStreamData;
@@ -94,6 +97,24 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
   let prefix = "";
   let streamedText = "";
   let finalized = false;
+  const publishAgentEvent = (event: EmbeddedAgentEvent) => {
+    if (
+      !emitAgentEventIfCurrent({
+        runId: params.runId,
+        lifecycleGeneration: params.lifecycleGeneration,
+        ...event,
+      })
+    ) {
+      return;
+    }
+    if (params.onAgentEvent) {
+      runBestEffortCallback({
+        label: "assistant agent event",
+        log,
+        callback: () => params.onAgentEvent?.(event),
+      });
+    }
+  };
   const emitAssistantStreamDataSafely = (scope: AssistantStreamScope) => {
     if (!scope.delivery || scope.emitted || state.unsubscribed) {
       return;
@@ -131,14 +152,7 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
       if (event.stream === "item") {
         lastEmittedCommentaryByItem.set(itemId, commentarySignature);
       }
-      emitAgentEvent({ runId: params.runId, ...event });
-      if (params.onAgentEvent) {
-        runBestEffortCallback({
-          label: "assistant agent event",
-          log,
-          callback: () => params.onAgentEvent?.(event),
-        });
-      }
+      publishAgentEvent(event);
     }
     drainPartialReply(scope);
   };
@@ -191,6 +205,17 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
         }
         streamedText = text;
         finalized = options?.finalMessage === true;
+      }
+      if (options?.finalMessage && state.lastAssistant?.stopReason === "error") {
+        const itemId = assistantItemId;
+        const text = streamedText;
+        params.assistantErrorTranscript?.bindStream(state.lastAssistant, (visible) => {
+          clearAssistantStream();
+          publishAgentEvent({
+            stream: "assistant",
+            data: { itemId, text: visible ? text : "", delta: "", replace: true },
+          });
+        });
       }
     }
     // Capture both coordinate domains before any callback can advance message state.
@@ -257,6 +282,11 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
     streamScope = {};
     deferredAssistantScopes.length = 0;
   };
+  const noteLastAssistant = (msg: AgentMessage) => {
+    if (msg.role === "assistant") {
+      state.lastAssistant = msg;
+    }
+  };
   const deferredToolMediaReplies = new WeakMap<
     BlockReplyPayload,
     { pendingToolMedia: BlockReplyPayload; autoDeliveryMediaUrls: string[] }
@@ -303,7 +333,12 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
   };
   const emitBlockReply = (
     payload: BlockReplyPayload,
-    options?: { assistantMessageIndex?: number; consumePendingToolMedia?: boolean },
+    options?: {
+      assistantMessageIndex?: number;
+      consumePendingToolMedia?: boolean;
+      blockSourceText?: string;
+      blockSourceRange?: readonly [start: number, end: number];
+    },
   ) => {
     flushAssistantStream();
     const withAssistantDirectives = consumePendingAssistantReplyDirectivesIntoReply(state, payload);
@@ -329,7 +364,7 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
         pendingToolMedia?.attachments?.[index] ?? {},
       ]),
     );
-    const blockPayload =
+    const blockPayload: BlockReplyPayload =
       autoDeliveryMediaUrls.length === 0
         ? withToolMedia
         : markReplyPayloadForSourceSuppressionDelivery({
@@ -342,6 +377,7 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
             trustedLocalMedia: true,
           });
     const assistantTranscriptMediaUrls = Array.from(new Set(payload.mediaUrls ?? []));
+    copyReplyPayloadMetadata(payload, blockPayload);
     const taggedPayload =
       options?.assistantMessageIndex !== undefined
         ? setReplyPayloadMetadata(blockPayload, {
@@ -349,6 +385,12 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
             ...(assistantTranscriptMediaUrls.length > 0 ? { assistantTranscriptMediaUrls } : {}),
           })
         : blockPayload;
+    if (blockPayload.text && options?.blockSourceText !== undefined) {
+      setReplyPayloadMetadata(taggedPayload, {
+        blockSourceText: options.blockSourceText,
+        blockSourceRange: options.blockSourceRange,
+      });
+    }
     if (state.deferBlockReplyDelivery) {
       if (pendingToolMedia) {
         deferredToolMediaReplies.set(taggedPayload, {
@@ -361,8 +403,44 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
     }
     emitBlockReplySafely(taggedPayload, { pendingToolMedia, autoDeliveryMediaUrls });
   };
-  const flushDeferredBlockReplies = () => {
-    for (const payload of state.deferredBlockReplies.splice(0)) {
+  const releaseDeferredReplies = () => {
+    // A later answer supersedes deferred tool-turn text, not completed answers
+    // to earlier user inputs, media, or reasoning. Reconcile both presentation
+    // lanes before callbacks can advance the current message boundary.
+    const isSuperseded = (index: number | undefined) => {
+      if (index === undefined) {
+        return false;
+      }
+      const segment = state.answerSegments.find((candidate) => index <= candidate.messageEnd);
+      return index < (segment?.finalMessageStart ?? state.assistantMessageStartIndex);
+    };
+    for (const scope of deferredAssistantScopes) {
+      const delivery = scope.delivery;
+      if (delivery && isSuperseded(delivery.blockIndex)) {
+        if (!delivery.data.mediaUrls?.length) {
+          scope.delivery = undefined;
+        } else {
+          delivery.data = { ...delivery.data, text: "", delta: "" };
+          if (delivery.eventData) {
+            delivery.eventData = { ...delivery.eventData, text: "", delta: "" };
+          }
+        }
+      }
+    }
+    const replies = state.deferredBlockReplies.splice(0);
+    for (const payload of replies) {
+      const index = getReplyPayloadMetadata(payload)?.assistantMessageIndex;
+      if (!payload.isReasoning && isSuperseded(index)) {
+        payload.text = undefined;
+        setReplyPayloadMetadata(payload, { blockSourceText: undefined });
+      }
+    }
+    state.deferBlockReplyDelivery = false;
+    flushAssistantStream();
+    for (const payload of replies) {
+      if (!hasAssistantVisibleReply(payload)) {
+        continue;
+      }
       const deferredToolMedia = deferredToolMediaReplies.get(payload);
       emitBlockReplySafely(payload, deferredToolMedia);
     }
@@ -446,9 +524,13 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
     if (state.includeReasoning && text && !params.onBlockReply) {
       replaceCurrentAssistantText(text);
       state.suppressBlockChunks = true;
-    } else if (!addedDuringMessage && !chunkerHasBuffered && text) {
-      // Non-streaming models (no text_delta): ensure assistantTexts gets the final
-      // text when the chunker has nothing buffered to drain.
+    } else if (
+      !addedDuringMessage &&
+      text &&
+      (!chunkerHasBuffered || isSilentReplyText(text, SILENT_REPLY_TOKEN))
+    ) {
+      // Silent markers never produce block payloads. Retain their terminal
+      // evidence before the chunker consumes them without emitting text.
       pushAssistantText(text);
     }
 
@@ -477,7 +559,8 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
     emitBlockReply,
     finalizeAssistantTexts,
     flushAssistantStream,
-    flushDeferredBlockReplies,
+    noteLastAssistant,
+    releaseDeferredReplies,
     pendingBlockReplyTasks,
     pushAssistantText,
     replaceCurrentAssistantText,

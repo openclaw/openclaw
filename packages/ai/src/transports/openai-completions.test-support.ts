@@ -7,6 +7,7 @@ import {
   type AiProviderRequestPolicyInput,
 } from "../host.js";
 import type { Model } from "../types.js";
+import { createZeroUsage } from "../usage.test-support.js";
 import { buildOpenAICompletionsParams } from "./openai-completions-params.js";
 import type { processCompletionsStream } from "./openai-completions-stream.js";
 
@@ -19,17 +20,6 @@ export type CapturedStreamEvent = {
   content?: string;
   partial?: unknown;
 };
-
-type RequestTransportConfig = {
-  proxy?: unknown;
-  tls?: unknown;
-  headers?: Record<string, string>;
-  allowPrivateNetwork?: boolean;
-};
-
-const MODEL_PROVIDER_REQUEST_TRANSPORT_SYMBOL = Symbol.for(
-  "openclaw.modelProviderRequestTransport",
-);
 
 function resolveTestEndpointClass(baseUrl: string | undefined): string {
   if (!baseUrl) {
@@ -134,20 +124,6 @@ configureAiTransportHost({
   },
 });
 
-export function attachModelProviderRequestTransport<TModel extends object>(
-  model: TModel,
-  request: RequestTransportConfig | undefined,
-): TModel {
-  if (!request) {
-    return model;
-  }
-  const next = { ...model } as TModel & {
-    [MODEL_PROVIDER_REQUEST_TRANSPORT_SYMBOL]?: RequestTransportConfig;
-  };
-  next[MODEL_PROVIDER_REQUEST_TRANSPORT_SYMBOL] = request;
-  return next;
-}
-
 export function makeCompletionsModel(
   overrides: Partial<Model<"openai-completions">> = {},
 ): Model<"openai-completions"> {
@@ -208,14 +184,7 @@ export function createAssistantOutput(model: Model<"openai-completions">): OpenA
     api: model.api,
     provider: model.provider,
     model: model.id,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsage(),
     stopReason: "stop",
     timestamp: Date.now(),
   };

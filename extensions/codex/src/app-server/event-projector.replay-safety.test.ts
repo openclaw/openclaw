@@ -23,6 +23,64 @@ import {
 registerCodexEventProjectorTestLifecycle();
 
 describe("CodexAppServerEventProjector replay safety and progress projection", () => {
+  it.each(["completed", "error", "blocked"] as const)(
+    "keeps dynamic card %s outcomes in the correct progress stream",
+    async (terminalType) => {
+      const onToolResult = vi.fn();
+      const projector = await createProjector({
+        ...(await createParams()),
+        verboseLevel: "full",
+        onToolResult,
+      });
+      const success = terminalType === "completed";
+      const text = success ? "Progress card updated" : "Card write unavailable";
+      const item = {
+        type: "dynamicToolCall",
+        id: "card-outcome",
+        tool: "progress_card",
+        arguments: { markdown: '<progress aria-label="private" value="1" max="2"></progress>' },
+        status: "inProgress",
+      };
+      await projector.handleNotification(forCurrentTurn("item/started", { item }));
+      expect(onToolResult).not.toHaveBeenCalled();
+      projector.recordDynamicToolCall({
+        callId: item.id,
+        tool: item.tool,
+        arguments: item.arguments,
+      });
+      expect(onToolResult).not.toHaveBeenCalled();
+
+      const result = {
+        callId: item.id,
+        tool: item.tool,
+        success,
+        terminalType,
+        contentItems: [{ type: "inputText" as const, text }],
+      };
+      projector.recordDynamicToolResult(result);
+      projector.recordDynamicToolResult(result);
+      const completedItem = {
+        ...item,
+        status: success ? "completed" : "failed",
+        success,
+        contentItems: result.contentItems,
+      };
+      await projector.handleNotification(forCurrentTurn("item/completed", { item: completedItem }));
+      await projector.handleNotification(turnCompleted([completedItem]));
+
+      if (success) {
+        expect(onToolResult).not.toHaveBeenCalled();
+      } else {
+        expect(onToolResult).toHaveBeenCalledTimes(2);
+        expect(onToolResult).toHaveBeenCalledWith({
+          text: expect.stringContaining(text),
+          isError: true,
+        });
+        expect(JSON.stringify(onToolResult.mock.calls)).not.toContain("private");
+      }
+    },
+  );
+
   it("clears a prior terminal presentation after a native tool completes", async () => {
     let terminalPresentation: string | undefined = "stale web fetch";
     const projector = await createProjector({
@@ -76,6 +134,7 @@ describe("CodexAppServerEventProjector replay safety and progress projection", (
           id: "stale-dynamic-tool",
           turnId: "turn-old",
           tool: "web_fetch",
+          arguments: {},
           status: "completed",
         },
       ]),
@@ -119,6 +178,7 @@ describe("CodexAppServerEventProjector replay safety and progress projection", (
           id: "dynamic-after-image-view",
           turnId: TURN_ID,
           tool: "web_fetch",
+          arguments: {},
           status: "completed",
         },
         {
@@ -558,8 +618,15 @@ describe("CodexAppServerEventProjector replay safety and progress projection", (
         stream: "item",
         phase: "end",
         itemId: "cmd-future-status",
+      }).data,
+    ).toMatchObject({ phase: "end", summary: "Outcome unknown" });
+    expect(
+      findAgentEvent(onAgentEvent, {
+        stream: "item",
+        phase: "end",
+        itemId: "cmd-future-status",
       }).data.status,
-    ).toBe("completed");
+    ).toBeUndefined();
     const toolResult = findAgentEvent(onAgentEvent, {
       stream: "tool",
       phase: "result",

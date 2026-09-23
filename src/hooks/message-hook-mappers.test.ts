@@ -24,6 +24,13 @@ type ResolveInboundConversationParams = Parameters<
   NonNullable<ChannelMessagingAdapter["resolveInboundConversation"]>
 >[0];
 
+interface MinimalInboundHookContext {
+  from: string;
+  content: string;
+  channelId: string;
+  isGroup: boolean;
+}
+
 function makeInboundCtx(overrides: Partial<FinalizedMsgContext> = {}): FinalizedMsgContext {
   return {
     From: "demo-chat:user:123",
@@ -118,6 +125,26 @@ describe("message hook mappers", () => {
         },
       ]),
     );
+  });
+
+  it("preserves producer enrichment and minimal mapper input compatibility", () => {
+    const derived = deriveInboundMessageHookContext(makeInboundCtx());
+    derived.runId = "run-1";
+    derived.trace = {
+      traceId: "11111111111111111111111111111111",
+      spanId: "2222222222222222",
+    };
+    derived.callDepth = 2;
+    derived.mediaStagingPending = true;
+    derived.originalMedia = [];
+
+    const minimal: MinimalInboundHookContext = {
+      from: "sender",
+      content: "hello",
+      channelId: "demo-chat",
+      isGroup: false,
+    };
+    expect(toPluginMessageContext(minimal)).toMatchObject({ channelId: "demo-chat" });
   });
 
   it("derives canonical inbound context with body precedence and group metadata", () => {
@@ -226,6 +253,95 @@ describe("message hook mappers", () => {
       replyToSender: "Ada",
       replyToIsQuote: true,
     });
+  });
+
+  it.each([
+    { name: "absent", fields: {}, expected: {} },
+    {
+      name: "undefined",
+      fields: {
+        replyToId: undefined,
+        replyToIdFull: undefined,
+        replyToBody: undefined,
+        replyToSender: undefined,
+        replyToIsQuote: undefined,
+      },
+      expected: {},
+    },
+    {
+      name: "empty and false",
+      fields: {
+        replyToId: "",
+        replyToIdFull: "",
+        replyToBody: "",
+        replyToSender: "",
+        replyToIsQuote: false,
+      },
+      expected: {
+        replyToId: "",
+        replyToIdFull: "",
+        replyToBody: "",
+        replyToSender: "",
+        replyToIsQuote: false,
+      },
+    },
+  ])("preserves $name optional reply fields across hook projections", ({ fields, expected }) => {
+    const canonical = {
+      from: "sender",
+      content: "hello",
+      channelId: "demo-chat",
+      isGroup: false,
+      ...fields,
+    };
+    const { context, event } = toPluginInboundClaimPair(canonical);
+    const received = toPluginMessageReceivedEvent(canonical);
+    for (const output of [toPluginMessageContext(canonical), context, event, received]) {
+      const entries = Object.entries(output).filter(([key]) => key.startsWith("replyTo"));
+      expect(entries).toEqual(Object.entries(expected));
+    }
+    for (const metadata of [event.metadata, received.metadata]) {
+      expect(metadata).toMatchObject({
+        replyToId: undefined,
+        replyToIdFull: undefined,
+        replyToBody: undefined,
+        replyToSender: undefined,
+        replyToIsQuote: undefined,
+        ...expected,
+      });
+      expect(Object.keys(metadata ?? {}).filter((key) => key.startsWith("replyTo"))).toEqual([
+        "replyToId",
+        "replyToIdFull",
+        "replyToBody",
+        "replyToSender",
+        "replyToIsQuote",
+      ]);
+    }
+  });
+
+  it("checks reply-field presence before reading a sent context", () => {
+    const reads: PropertyKey[] = [];
+    const canonical = new Proxy(
+      buildCanonicalSentMessageHookContext({
+        to: "target",
+        content: "reply",
+        success: true,
+        channelId: "demo-chat",
+      }),
+      {
+        get(target, key, receiver) {
+          if (typeof key === "string" && key.startsWith("replyTo")) {
+            reads.push(key);
+          }
+          return Reflect.get(target, key, receiver);
+        },
+      },
+    );
+    expect(toPluginMessageContext(canonical)).toEqual({
+      channelId: "demo-chat",
+      accountId: undefined,
+      conversationId: "target",
+    });
+    expect(reads).toEqual([]);
   });
 
   it("falls back to raw body when command body is blank", () => {

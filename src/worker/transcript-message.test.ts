@@ -8,10 +8,7 @@ import {
 } from "../../packages/gateway-protocol/src/index.js";
 import { WORKER_PROTOCOL_MAX_MEDIA_PAYLOAD_BYTES } from "../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
 import type { AssistantMessage } from "../llm/types.js";
-import {
-  createWorkerTranscriptRuntime,
-  toAgentMessage,
-} from "./embedded-agent-transcript.runtime.js";
+import { createWorkerTranscriptRuntime } from "./embedded-agent-transcript.runtime.js";
 import {
   isWorkerTranscriptMessageFrameSafe,
   toWorkerTranscriptMessage,
@@ -89,8 +86,9 @@ describe("worker transcript provider replay", () => {
       );
     },
   );
-  it("projects and restores opaque replay state within frame limits", () => {
+  it.each(["text", "unsupported"])("projects %s content with opaque replay state", (type) => {
     const message = assistantWithReplay();
+    Object.assign(message.content[0]!, { type });
     Object.assign(message.providerReplay!, { providerScratch: "private" });
 
     const result = toWorkerTranscriptMessage(message, "transcript");
@@ -109,8 +107,7 @@ describe("worker transcript provider replay", () => {
         baseLeafId: null,
         messages: [projected],
       }),
-    ).toBe(true);
-    expect(toAgentMessage(projected)).toMatchObject({ providerReplay });
+    ).toBe(type === "text");
   });
 
   it("keeps replay above 48 KiB whole when the complete commit frame fits", () => {

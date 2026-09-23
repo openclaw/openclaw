@@ -2,6 +2,7 @@ import { consume } from "@lit/context";
 import { html, nothing } from "lit";
 import { state } from "lit/decorators.js";
 import { live } from "lit/directives/live.js";
+import { deviceSettingsGroupLabelKey } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import type {
   NativeDeviceSettingsCapability,
@@ -21,11 +22,14 @@ import {
 } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
+import { registerAppsEnglish } from "../../i18n/locales/en-apps.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import "../../components/native-chrome-setup.ts";
 import "./device.css";
 
+registerAppsEnglish();
 registerSettingsEnglish();
 
 type CookieSyncEdits = {
@@ -42,24 +46,24 @@ function retainCookieSyncEdits(capability: NativeDeviceSettingsCapability): Cook
   }
   const edits: CookieSyncEdits = { domains: null, targetProfile: null };
   pendingCookieSyncEdits.set(capability, edits);
-  // Pending writes outlive pages. Only an actual matching publication acknowledges
-  // them; reading a snapshot on navigation could mistake old state for an ACK.
-  const unsubscribe = capability.subscribe(({ browser: { cookieSync } }) => {
-    if (
-      edits.domains?.length === cookieSync.domains.length &&
-      edits.domains.every((domain, index) => domain === cookieSync.domains[index])
-    ) {
-      edits.domains = null;
-    }
-    if (edits.targetProfile?.sent && edits.targetProfile.value === cookieSync.targetProfile) {
-      edits.targetProfile = null;
-    }
-    if (edits.domains === null && edits.targetProfile === null) {
-      unsubscribe();
-      pendingCookieSyncEdits.delete(capability);
-    }
-  });
   return edits;
+}
+
+function settleCookieSyncEdit(
+  capability: NativeDeviceSettingsCapability,
+  key: keyof CookieSyncEdits,
+  edit: CookieSyncEdits[keyof CookieSyncEdits],
+) {
+  const edits = pendingCookieSyncEdits.get(capability);
+  if (!edits || edits[key] !== edit) {
+    return;
+  }
+  // Completion belongs to this exact edit, including Cancel and native normalization.
+  // A newer edit can have the same value and must survive the older reply.
+  edits[key] = null;
+  if (edits.domains === null && edits.targetProfile === null) {
+    pendingCookieSyncEdits.delete(capability);
+  }
 }
 
 class DevicePage extends OpenClawLightDomElement {
@@ -90,11 +94,14 @@ class DevicePage extends OpenClawLightDomElement {
 
   private toggle(
     key: SettingKey,
-    checked: boolean,
+    checked: boolean | undefined,
     label: string,
     description?: string,
     disabled = false,
   ) {
+    if (checked === undefined) {
+      return nothing;
+    }
     return renderSettingsToggleRow({
       title: t(`configPage.deviceSettings.${label}`),
       description,
@@ -130,7 +137,9 @@ class DevicePage extends OpenClawLightDomElement {
     const profile = pendingCookieSyncEdits.get(pending.capability)?.targetProfile;
     if (profile && !profile.sent) {
       profile.sent = true;
-      pending.capability.set("browser.cookieSync.targetProfile", profile.value);
+      pending.capability.set("browser.cookieSync.targetProfile", profile.value, () => {
+        settleCookieSyncEdit(pending.capability, "targetProfile", profile);
+      });
     }
   }
 
@@ -141,7 +150,7 @@ class DevicePage extends OpenClawLightDomElement {
     }
     const domains =
       pendingCookieSyncEdits.get(capability)?.domains ??
-      capability.snapshot?.browser.cookieSync.domains;
+      capability.snapshot?.browser?.cookieSync?.domains;
     if (!domains) {
       return;
     }
@@ -154,26 +163,49 @@ class DevicePage extends OpenClawLightDomElement {
     ];
     retainCookieSyncEdits(capability).domains = values;
     this.requestUpdate();
-    capability.set("browser.cookieSync.domains", values);
+    capability.set("browser.cookieSync.domains", values, () => {
+      settleCookieSyncEdit(capability, "domains", values);
+    });
   }
 
-  private renderBrowser(snapshot: NativeDeviceSettingsSnapshot) {
+  private renderBrowser(browser: NonNullable<NativeDeviceSettingsSnapshot["browser"]>) {
     const capability = this.context.nativeDeviceSettings;
-    const sync = snapshot.browser.cookieSync;
+    const sync = browser.cookieSync;
     const pending = capability ? pendingCookieSyncEdits.get(capability) : undefined;
-    const domains = pending?.domains ?? sync.domains;
+    const domains = pending?.domains ?? sync?.domains ?? [];
     const addDomain = () => {
       this.updateDomains((current) => [...current, this.newDomain]);
       this.newDomain = "";
     };
     return html`
+      ${renderSettingsSection(
+        { title: t("configPage.deviceSettings.chromeExtension") },
+        renderSettingsRow({
+          title: t("configPage.deviceSettings.chromeExtensionSetup"),
+          stacked: true,
+          control: html`
+            <div class="device-extension-setup">
+              <openclaw-native-chrome-setup auto-inspect></openclaw-native-chrome-setup>
+              <div class="device-extension-setup__actions">
+                <a
+                  href="https://chromewebstore.google.com/detail/openclaw/kcdjddhmeafeomebliikmbpblkmkfoig"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  >${t("appsPage.ctaChromeWebStore")}</a
+                >
+                ${renderLearnMoreLink("https://docs.openclaw.ai/tools/chrome-extension")}
+              </div>
+            </div>
+          `,
+        }),
+      )}
       ${
-        snapshot.browser.importAvailable || !sync.available
+        browser.importAvailable || (sync && !sync.available)
           ? renderSettingsSection(
               { title: t("configPage.deviceSettings.browser") },
               html`
                 ${
-                  snapshot.browser.importAvailable
+                  browser.importAvailable
                     ? renderSettingsRow({
                         title: t("configPage.deviceSettings.browserImport"),
                         description: t("configPage.deviceSettings.browserImportHint"),
@@ -188,7 +220,7 @@ class DevicePage extends OpenClawLightDomElement {
                     : nothing
                 }
                 ${
-                  !sync.available
+                  sync && !sync.available
                     ? renderSettingsRow({
                         title: t("configPage.deviceSettings.cookieSync"),
                         description: t("configPage.deviceSettings.cookieSyncUnavailable"),
@@ -200,15 +232,15 @@ class DevicePage extends OpenClawLightDomElement {
           : nothing
       }
       ${
-        sync.available
+        sync?.available
           ? renderSettingsSection(
               {
                 title: t(
-                  snapshot.browser.importAvailable
+                  browser.importAvailable
                     ? "configPage.deviceSettings.cookieSync"
                     : "configPage.deviceSettings.browser",
                 ),
-                description: snapshot.browser.importAvailable
+                description: browser.importAvailable
                   ? undefined
                   : t("configPage.deviceSettings.cookieSync"),
               },
@@ -294,76 +326,197 @@ class DevicePage extends OpenClawLightDomElement {
     const { app, capabilities } = snapshot;
     const capability = this.context.nativeDeviceSettings;
     return html`
-      ${renderSettingsSection(
-        { title: t("configPage.deviceSettings.app") },
-        html`
-          ${this.toggle("app.showDockIcon", app.showDockIcon, "showDockIcon", t("configPage.deviceSettings.showDockIconHint"))}
-          ${this.toggle("app.iconAnimationsEnabled", app.iconAnimationsEnabled, "iconAnimations", t("configPage.deviceSettings.iconAnimationsHint"))}
-          ${this.toggle("app.launchAtLogin", app.launchAtLogin, "launchAtLogin", app.launchAtLoginAvailable ? undefined : t("configPage.deviceSettings.launchAtLoginUnavailable"), !app.launchAtLoginAvailable)}
-          ${this.toggle("app.quickChatEnabled", app.quickChatEnabled, "quickChat", t("configPage.deviceSettings.quickChatHint"))}
-          ${renderSettingsRow({
-            title: t("configPage.deviceSettings.quickChatShortcut"),
-            control: html`
-              ${renderSettingsValue(app.quickChatShortcut ?? t("configPage.deviceSettings.notSet"))}
-              <button
-                type="button"
-                class="btn"
-                @click=${() => capability?.openPanel("quick-chat-shortcut")}
-              >
-                ${t("configPage.deviceSettings.changeShortcut")}
-              </button>
-            `,
-          })}
-        `,
-      )}
-      ${renderSettingsSection(
-        { title: t("configPage.deviceSettings.capabilities") },
-        html`
-          ${this.toggle("capabilities.canvasEnabled", capabilities.canvasEnabled, "canvas", t("configPage.deviceSettings.canvasHint"))}
-          ${this.toggle("capabilities.cameraEnabled", capabilities.cameraEnabled, "camera", t("configPage.deviceSettings.cameraHint"))}
-          ${this.toggle("capabilities.computerControlEnabled", capabilities.computerControlEnabled, "computerControl", t("configPage.deviceSettings.computerControlHint"))}
-          ${
-            capabilities.computerControlEnabled
-              ? renderSettingsRow({
-                  title: t("configPage.deviceSettings.computerControlProvider"),
-                  control: html`<select
-                    class="settings-select"
-                    aria-label=${t("configPage.deviceSettings.computerControlProvider")}
-                    .value=${capabilities.computerControlProvider}
-                    @change=${(event: Event) => {
-                      // SAFETY: This handler is bound directly to the provider select.
-                      const value = (event.currentTarget as HTMLSelectElement).value;
-                      capability?.set("capabilities.computerControlProvider", value);
-                    }}
+      ${
+        app
+          ? renderSettingsSection(
+              { title: t("configPage.deviceSettings.app") },
+              html`
+                ${this.toggle("app.nativeExperienceEnabled", app.nativeExperienceEnabled, "nativeExperience", t("configPage.deviceSettings.nativeExperienceHint"))}
+                ${
+                  app.appearance !== undefined
+                    ? renderSettingsRow({
+                        title: t("configPage.deviceSettings.appearance"),
+                        control: html`<select
+                          class="settings-select"
+                          aria-label=${t("configPage.deviceSettings.appearance")}
+                          .value=${live(app.appearance)}
+                          @change=${(event: Event) => {
+                            // SAFETY: This handler is bound directly to the appearance select.
+                            const value = (event.currentTarget as HTMLSelectElement).value;
+                            capability?.set("app.appearance", value);
+                          }}
+                        >
+                          ${["system", "light", "dark"].map((value) => html`<option value=${value} ?selected=${value === app.appearance}>${t(`configPage.deviceSettings.appearanceModes.${value}`)}</option>`)}
+                        </select>`,
+                      })
+                    : nothing
+                }
+                ${this.toggle("app.notificationsEnabled", app.notificationsEnabled, "notificationsEnabled", t("configPage.deviceSettings.notificationsEnabledHint"))}
+                ${this.toggle("app.showDockIcon", app.showDockIcon, "showDockIcon", t("configPage.deviceSettings.showDockIconHint"))}
+                ${
+                  app.iconStyle
+                    ? renderSettingsRow({
+                        title: t("configPage.deviceSettings.iconStyle"),
+                        description: t("configPage.deviceSettings.iconStyleHint"),
+                        control: html`<select
+                          class="settings-select"
+                          aria-label=${t("configPage.deviceSettings.iconStyle")}
+                          .value=${live(app.iconStyle.selectedId)}
+                          ?disabled=${app.iconStyle.available.length === 0}
+                          @change=${(event: Event) => {
+                            // SAFETY: This handler is bound directly to the Dock icon select.
+                            const value = (event.currentTarget as HTMLSelectElement).value;
+                            capability?.set("app.iconStyle", value);
+                          }}
+                        >
+                          ${app.iconStyle.available.map(
+                            (style) => html`<option
+                              value=${style.id}
+                              ?selected=${style.id === app.iconStyle?.selectedId}
+                            >
+                              ${style.name}
+                            </option>`,
+                          )}
+                        </select>`,
+                      })
+                    : nothing
+                }
+                ${this.toggle("app.iconAnimationsEnabled", app.iconAnimationsEnabled, "iconAnimations", t("configPage.deviceSettings.iconAnimationsHint"))}
+                ${this.toggle("app.launchAtLogin", app.launchAtLogin, "launchAtLogin", app.launchAtLoginAvailable === false ? t("configPage.deviceSettings.launchAtLoginUnavailable") : undefined, app.launchAtLoginAvailable === false)}
+                ${this.toggle("app.quickChatEnabled", app.quickChatEnabled, "quickChat", t("configPage.deviceSettings.quickChatHint"))}
+                ${
+                  app.quickChatShortcut !== undefined
+                    ? renderSettingsRow({
+                        title: t("configPage.deviceSettings.quickChatShortcut"),
+                        control: html`
+                          ${renderSettingsValue(app.quickChatShortcut ?? t("configPage.deviceSettings.notSet"))}
+                          <button
+                            type="button"
+                            class="btn"
+                            @click=${() => capability?.openPanel("quick-chat-shortcut")}
+                          >
+                            ${t("configPage.deviceSettings.changeShortcut")}
+                          </button>
+                        `,
+                      })
+                    : nothing
+                }
+              `,
+            )
+          : nothing
+      }
+      ${
+        capabilities
+          ? renderSettingsSection(
+              { title: t("configPage.deviceSettings.capabilities") },
+              html`
+                ${this.toggle("capabilities.canvasEnabled", capabilities.canvasEnabled, "canvas", t("configPage.deviceSettings.canvasHint"))}
+                ${this.toggle("capabilities.cameraEnabled", capabilities.cameraEnabled, "camera", t("configPage.deviceSettings.cameraHint"))}
+                ${this.toggle("capabilities.keepAwakeEnabled", capabilities.keepAwakeEnabled, "keepAwake", t(snapshot.device.platform === "ios" ? "configPage.deviceSettings.keepAwakeHint" : "configPage.deviceSettings.keepAwakeComputerHint"))}
+                ${capabilities.healthSummaryAvailable ? this.toggle("capabilities.healthSummaryEnabled", capabilities.healthSummaryEnabled, "healthSummary", t("configPage.deviceSettings.healthSummaryHint")) : nothing}
+                ${this.toggle("capabilities.computerControlEnabled", capabilities.computerControlEnabled, "computerControl", t("configPage.deviceSettings.computerControlHint"))}
+                ${this.toggle("capabilities.desktopSharingEnabled", capabilities.desktopSharingEnabled, "desktopSharing", t(snapshot.device.platform === "macos" ? "configPage.deviceSettings.desktopSharingHint" : "configPage.deviceSettings.desktopSharingComputerHint"))}
+                ${
+                  snapshot.desktopSharing
+                    ? renderSettingsRow({
+                        title: t("configPage.deviceSettings.desktopSharingStatus"),
+                        description: snapshot.desktopSharing.detail,
+                        control: renderSettingsStatus({
+                          kind:
+                            snapshot.desktopSharing.state === "error"
+                              ? "danger"
+                              : snapshot.desktopSharing.state === "running"
+                                ? "ok"
+                                : "muted",
+                          label: t(
+                            `configPage.deviceSettings.desktopSharingStates.${snapshot.desktopSharing.state}`,
+                          ),
+                        }),
+                      })
+                    : nothing
+                }
+                ${this.toggle("capabilities.unattendedDesktopEnabled", capabilities.unattendedDesktopEnabled, "unattendedDesktop", t("configPage.deviceSettings.unattendedDesktopHint"))}
+                ${
+                  snapshot.desktopAvailability
+                    ? renderSettingsRow({
+                        title: t("configPage.deviceSettings.desktopAvailability"),
+                        control: renderSettingsStatus({
+                          kind: snapshot.desktopAvailability.state === "unlocked" ? "ok" : "warn",
+                          label: t(
+                            `configPage.deviceSettings.desktopStates.${snapshot.desktopAvailability.state}`,
+                          ),
+                        }),
+                      })
+                    : nothing
+                }
+                ${
+                  capabilities.computerControlEnabled &&
+                  capabilities.computerControlProvider !== undefined
+                    ? renderSettingsRow({
+                        title: t("configPage.deviceSettings.computerControlProvider"),
+                        control: html`<select
+                          class="settings-select"
+                          aria-label=${t("configPage.deviceSettings.computerControlProvider")}
+                          .value=${capabilities.computerControlProvider}
+                          @change=${(event: Event) => {
+                            // SAFETY: This handler is bound directly to the provider select.
+                            const value = (event.currentTarget as HTMLSelectElement).value;
+                            capability?.set("capabilities.computerControlProvider", value);
+                          }}
+                        >
+                          <option
+                            value="peekaboo"
+                            ?selected=${capabilities.computerControlProvider === "peekaboo"}
+                          >
+                            ${t("configPage.deviceSettings.peekaboo")}
+                          </option>
+                          <option
+                            value="cua"
+                            ?selected=${capabilities.computerControlProvider === "cua"}
+                            ?disabled=${!capabilities.cuaDriverBundled}
+                          >
+                            ${t(capabilities.cuaDriverBundled ? "configPage.deviceSettings.cua" : "configPage.deviceSettings.cuaUnavailable")}
+                          </option>
+                        </select>`,
+                      })
+                    : nothing
+                }
+                ${this.toggle("capabilities.peekabooBridgeEnabled", capabilities.peekabooBridgeEnabled, "peekabooBridge", t("configPage.deviceSettings.peekabooBridgeHint"), !capabilities.computerControlEnabled)}
+              `,
+            )
+          : nothing
+      }
+      ${snapshot.browser ? this.renderBrowser(snapshot.browser) : nothing}
+      ${
+        app?.debugPaneEnabled !== undefined
+          ? renderSettingsSection(
+              { title: t("configPage.deviceSettings.developer") },
+              html`
+                ${this.toggle("app.debugPaneEnabled", app.debugPaneEnabled, "debugTools")}
+                ${app.debugPaneEnabled ? renderSettingsRow({ title: t("configPage.deviceSettings.debugWindow"), control: html`<button type="button" class="btn" @click=${() => capability?.openPanel("debug")}>${t("configPage.deviceSettings.openDebug")}</button>` }) : nothing}
+              `,
+            )
+          : nothing
+      }
+      ${
+        snapshot.device.platform === "ios"
+          ? renderSettingsSection(
+              { title: t("configPage.deviceSettings.device") },
+              html`${(["diagnostics", "licenses", "about", "watch"] as const).map((panel) =>
+                renderSettingsRow({
+                  title: t(`configPage.deviceSettings.panels.${panel}`),
+                  control: html`<button
+                    type="button"
+                    class="btn"
+                    @click=${() => capability?.openPanel(panel)}
                   >
-                    <option
-                      value="peekaboo"
-                      ?selected=${capabilities.computerControlProvider === "peekaboo"}
-                    >
-                      ${t("configPage.deviceSettings.peekaboo")}
-                    </option>
-                    <option
-                      value="cua"
-                      ?selected=${capabilities.computerControlProvider === "cua"}
-                      ?disabled=${!capabilities.cuaDriverBundled}
-                    >
-                      ${t(capabilities.cuaDriverBundled ? "configPage.deviceSettings.cua" : "configPage.deviceSettings.cuaUnavailable")}
-                    </option>
-                  </select>`,
-                })
-              : nothing
-          }
-          ${this.toggle("capabilities.peekabooBridgeEnabled", capabilities.peekabooBridgeEnabled, "peekabooBridge", t("configPage.deviceSettings.peekabooBridgeHint"), !capabilities.computerControlEnabled)}
-        `,
-      )}
-      ${this.renderBrowser(snapshot)}
-      ${renderSettingsSection(
-        { title: t("configPage.deviceSettings.developer") },
-        html`
-          ${this.toggle("app.debugPaneEnabled", app.debugPaneEnabled, "debugTools")}
-          ${app.debugPaneEnabled ? renderSettingsRow({ title: t("configPage.deviceSettings.debugWindow"), control: html`<button type="button" class="btn" @click=${() => capability?.openPanel("debug")}>${t("configPage.deviceSettings.openDebug")}</button>` }) : nothing}
-        `,
-      )}
+                    ${t("configPage.deviceSettings.openPanel")}
+                  </button>`,
+                }),
+              )}`,
+            )
+          : nothing
+      }
     `;
   }
 
@@ -377,13 +530,9 @@ class DevicePage extends OpenClawLightDomElement {
         : renderSettingsEmpty(t("configPage.deviceSettings.loading"));
     return html`
       ${renderSettingsPageHeader({
-        title: t(
-          snapshot?.device.platform === "macos"
-            ? "nav.settingsGroupDevice"
-            : "nav.settingsGroupThisDevice",
-        ),
-        subtitle: html`${t("configPage.deviceSettings.intro")}
-        ${renderLearnMoreLink("https://docs.openclaw.ai/platforms/macos")}`,
+        title: t(deviceSettingsGroupLabelKey(snapshot)),
+        subtitle: html`${t(snapshot?.device.platform === "macos" ? "configPage.deviceSettings.intro" : "configPage.deviceSettings.introIos")}
+        ${renderLearnMoreLink(`https://docs.openclaw.ai/platforms/${snapshot?.device.platform ?? "macos"}`)}`,
       })}
       ${renderSettingsWorkspace(renderSettingsPage(body))}
     `;

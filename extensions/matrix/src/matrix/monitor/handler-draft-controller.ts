@@ -1,7 +1,6 @@
 import {
-  type AgentPlanStep,
   createChannelProgressDraftCompositor,
-  formatChannelProgressDraftText,
+  createLivePreviewLifecycle,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
 import type { CoreConfig, MatrixConfig, MatrixStreamingMode, ReplyToMode } from "../../types.js";
@@ -36,9 +35,6 @@ export async function createMatrixDraftController(params: {
     client,
     logVerboseMessage,
   } = params;
-  type DraftDisposition = "active" | "retained" | "consumed";
-  let draftDisposition: DraftDisposition = "active";
-
   const draftStreamingEnabled = streaming !== "off";
   const quietDraftStreaming = streaming === "quiet" || streaming === "progress";
   const progressDraftStreaming = streaming === "progress";
@@ -74,32 +70,17 @@ export async function createMatrixDraftController(params: {
   const pendingDraftBoundaries: PendingDraftBoundary[] = [];
   const latestQueuedDraftBoundaryOffsets = new Map<number, number>();
   let currentDraftReplyToId = draftReplyToId;
-  let previewPlan: AgentPlanStep[] | undefined;
-  let previewPlanExplanation: string | undefined;
-  let previewPlanSuppressed = false;
   const progressConfigEntry = accountConfig ?? cfg.channels?.matrix;
   const progressSeed = `${accountId}:${roomId}`;
-  const renderPreviewPlan = (): string =>
-    formatChannelProgressDraftText({
-      entry: progressConfigEntry,
-      lines: [...progressDraft.getSnapshot().lines],
-      seed: progressSeed,
-      formatLine: formatMatrixToolProgressMarkdownCode,
-      bullet: "-",
-      narration: previewPlanExplanation,
-      plan: previewPlan,
-    });
   const progressDraft = createChannelProgressDraftCompositor({
+    preparedItems: true,
     entry: progressConfigEntry,
     mode: streaming === "quiet" ? "partial" : streaming,
     active: Boolean(draftStream),
     seed: progressSeed,
     formatLine: formatMatrixToolProgressMarkdownCode,
     update: async (text, options) => {
-      const previewText =
-        !progressDraftStreaming && (previewPlan || previewPlanExplanation)
-          ? renderPreviewPlan()
-          : text.replace(/^• /gmu, "- ");
+      const previewText = text.replace(/^• /gmu, "- ");
       if (!draftStream) {
         return false;
       }
@@ -110,14 +91,24 @@ export async function createMatrixDraftController(params: {
       // A queued update is not visible until Matrix has accepted a draft event.
       return Boolean(draftStream.eventId());
     },
+    deleteCurrent: () => draftStream?.deleteCurrentMessage(),
   });
-
-  const resetPreviewToolProgress = () => {
-    previewPlan = undefined;
-    previewPlanExplanation = undefined;
-    previewPlanSuppressed = false;
-    progressDraft.reset();
-  };
+  const previewLifecycle = createLivePreviewLifecycle<ReplyPayload, string>({
+    draft: draftStream
+      ? {
+          flush: draftStream.flush,
+          id: draftStream.eventId,
+          seal: draftStream.seal,
+          discardPending: draftStream.discardPending,
+          clear: draftStream.clear,
+        }
+      : undefined,
+    cleanupUndelivered: true,
+    onFinalStarted: () => progressDraft.markFinalReplyStarted(),
+    onFinalDelivered: () => progressDraft.markFinalReplyDelivered(),
+    onCleanupFailure: (err) =>
+      logVerboseMessage(`matrix draft preview cleanup failed: ${String(err)}`),
+  });
 
   const buildPreviewToolProgressReplyOptions = (): Partial<GetReplyOptions> => {
     if (!shouldSuppressDefaultToolProgressMessages) {
@@ -125,6 +116,8 @@ export async function createMatrixDraftController(params: {
     }
     return {
       suppressDefaultToolProgressMessages: true,
+      progressPreambleEnabled: true,
+      commentaryProgressEnabled: progressDraft.commentaryProgressEnabled,
       onToolStart: async (payload) => {
         return await progressDraft.pushToolEvent(payload);
       },
@@ -135,32 +128,13 @@ export async function createMatrixDraftController(params: {
         if (payload.phase !== "update") {
           return false;
         }
-        if (progressDraftStreaming) {
-          return await progressDraft.pushPlanProgress(payload.steps, {
-            explanation: payload.explanation,
-          });
-        }
-        if (!draftStream || previewPlanSuppressed) {
-          return false;
-        }
-        previewPlan = payload.steps?.length
-          ? payload.steps.map((step) => ({ ...step }))
-          : undefined;
-        previewPlanExplanation = payload.explanation?.replace(/\s+/g, " ").trim() || undefined;
-        const text = renderPreviewPlan();
-        if (text) {
-          draftStream.update(text);
-        }
-        return false;
+        return await progressDraft.pushPlanProgress(payload.steps, {
+          explanation: payload.explanation,
+          explanationFormat: payload.explanationFormat,
+        });
       },
       onApprovalEvent: async (payload) => {
         return await progressDraft.pushApprovalEvent(payload);
-      },
-      onCommandOutput: async (payload) => {
-        return await progressDraft.pushCommandOutputEvent(payload);
-      },
-      onPatchSummary: async (payload) => {
-        return await progressDraft.pushPatchEvent(payload);
       },
     };
   };
@@ -227,7 +201,7 @@ export async function createMatrixDraftController(params: {
   const resetDraftDeliveryState = async () => {
     await draftStream?.discardPending();
     draftStream?.reset();
-    draftDisposition = "active";
+    previewLifecycle.reset();
     currentDraftMessageGeneration = 0;
     currentDraftBlockOffset = 0;
     latestDraftFullText = "";
@@ -235,28 +209,22 @@ export async function createMatrixDraftController(params: {
     latestQueuedDraftBoundaryOffsets.clear();
     currentDraftReplyToId = draftReplyToId;
     progressDraft.beginNewTurn({ force: true });
-    resetPreviewToolProgress();
   };
 
   return {
     draftStream,
+    previewLifecycle,
     cancelProgressDraft: () => progressDraft.cancel(),
     buildPreviewToolProgressReplyOptions,
     queueDraftBlockBoundary,
     advanceDraftBlockBoundary,
     resetDraftBlockOffsets,
-    resetPreviewToolProgress,
+    beginAssistantMessage: () => progressDraft.beginAssistantMessage(),
     resetDraftDeliveryState,
     updateDraftFromLatestFullText,
-    draftDisposition: () => draftDisposition,
     beginDraftGeneration: () => {
-      draftDisposition = "active";
-    },
-    markDraftConsumed: () => {
-      draftDisposition = "consumed";
-    },
-    markDraftRetained: () => {
-      draftDisposition = "retained";
+      previewLifecycle.reset();
+      progressDraft.beginNewTurn({ force: true });
     },
     currentReplyToId: () => currentDraftReplyToId,
     setCurrentReplyToId: (replyToId: string | undefined) => {
@@ -271,10 +239,7 @@ export async function createMatrixDraftController(params: {
       }
       latestDraftFullText = text;
       if (text.trim()) {
-        previewPlanSuppressed = true;
-        previewPlan = undefined;
-        previewPlanExplanation = undefined;
-        progressDraft.suppress();
+        progressDraft.resetActivity({ suppressed: true });
       }
       updateDraftFromLatestFullText();
       return false;

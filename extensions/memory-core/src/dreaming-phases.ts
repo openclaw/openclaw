@@ -1,7 +1,4 @@
-// Memory Core plugin module implements dreaming phases behavior.
 import { createHash } from "node:crypto";
-import type { Dirent } from "node:fs";
-import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
@@ -22,6 +19,10 @@ import { isPromotionOriginBlocked } from "./dreaming-consolidation-candidates.js
 import { readRecentDreamDiaryEntries } from "./dreaming-dreams-file.js";
 import { appendFailedDreamingEvent } from "./dreaming-events.js";
 import {
+  DAILY_MEMORY_FILENAME_RE,
+  compareDailyMemoryFilesByNewestDay,
+  parseDailyMemoryFileName,
+  type DailyMemoryFile,
   normalizeDailyIngestionState,
   normalizeMemoryDay,
   type DailyIngestionFileState,
@@ -42,6 +43,11 @@ import {
   writeMemoryCoreWorkspaceEntries,
 } from "./dreaming-state.js";
 import { listMemorySessionTombstones } from "./memory-entry-origins.js";
+import {
+  inspectWorkspaceFile,
+  listWorkspaceDirectory,
+  readWorkspaceText,
+} from "./memory-workspace-files.js";
 import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
 import { textSimilarity as snippetSimilarity } from "./memory/tokenize.js";
 import {
@@ -106,7 +112,6 @@ type DreamingPhaseRunParams<TConfig extends LightDreamingConfig | RemDreamingCon
   nowMs?: number;
   admissionPolicy?: SessionAdmissionPolicy;
 };
-const DAILY_MEMORY_FILENAME_RE = /^(\d{4}-\d{2}-\d{2})(?:-[^/]+)?\.md$/i;
 const DAILY_INGESTION_SCORE = 0.62;
 const DAILY_INGESTION_MAX_SNIPPET_CHARS = 280;
 const DAILY_INGESTION_MIN_SNIPPET_CHARS = 8;
@@ -514,35 +519,6 @@ type DailyIngestionBatch = {
   >;
 };
 
-type DailyMemoryFile = {
-  fileName: string;
-  day: string;
-  canonical: boolean;
-};
-
-function parseDailyMemoryFileName(fileName: string): DailyMemoryFile | null {
-  const match = fileName.match(DAILY_MEMORY_FILENAME_RE);
-  const day = match?.[1];
-  return day
-    ? {
-        fileName,
-        day,
-        canonical: fileName.toLowerCase() === `${day}.md`,
-      }
-    : null;
-}
-
-function compareDailyMemoryFilesByNewestDay(left: DailyMemoryFile, right: DailyMemoryFile): number {
-  const dayOrder = right.day.localeCompare(left.day);
-  if (dayOrder !== 0) {
-    return dayOrder;
-  }
-  if (left.canonical !== right.canonical) {
-    return left.canonical ? -1 : 1;
-  }
-  return left.fileName.localeCompare(right.fileName);
-}
-
 function resolveWorkspaceMemoryRelativePath(workspaceDir: string, filePath: string): string {
   const relativePath = path.relative(workspaceDir, filePath).replace(/\\/g, "/");
   if (relativePath && relativePath !== ".." && !relativePath.startsWith("../")) {
@@ -824,12 +800,14 @@ async function collectDailyIngestionBatches(params: {
   );
   const memoryDir = path.join(params.workspaceDir, "memory");
   const cutoffMs = calculateLookbackCutoffMs(params.nowMs, params.lookbackDays);
-  const entries = await fs.readdir(memoryDir, { withFileTypes: true }).catch((err: unknown) => {
-    if (extractErrorCode(err) === "ENOENT") {
-      return [] as Dirent[];
-    }
-    throw err;
-  });
+  const entries = await listWorkspaceDirectory(params.workspaceDir, memoryDir).catch(
+    (err: unknown) => {
+      if (extractErrorCode(err) === "ENOENT") {
+        return [];
+      }
+      throw err;
+    },
+  );
   const files = entries
     .filter((entry) => entry.isFile())
     .map((entry) => {
@@ -846,7 +824,12 @@ async function collectDailyIngestionBatches(params: {
     .toSorted(compareDailyMemoryFilesByNewestDay);
 
   const batches: DailyIngestionBatch[] = [];
-  const nextFiles: Record<string, DailyIngestionFileState> = {};
+  const currentPaths = new Set(files.map((file) => `memory/${file.fileName}`));
+  // A bounded sweep must retain checkpoints for current files it never reaches.
+  // Files absent from the current lookback remain pruned from the next state.
+  const nextFiles: Record<string, DailyIngestionFileState> = Object.fromEntries(
+    Object.entries(params.state.files).filter(([relativePath]) => currentPaths.has(relativePath)),
+  );
   let changed = false;
   const totalCap = Math.max(20, params.limit * 4);
   const perFileCap = Math.max(6, Math.ceil(totalCap / Math.max(1, Math.max(files.length, 1))));
@@ -854,13 +837,14 @@ async function collectDailyIngestionBatches(params: {
   for (const file of files) {
     const relativePath = `memory/${file.fileName}`;
     const filePath = path.join(memoryDir, file.fileName);
-    const stat = await fs.stat(filePath).catch((err: unknown) => {
+    const stat = await inspectWorkspaceFile(params.workspaceDir, filePath).catch((err: unknown) => {
       if (extractErrorCode(err) === "ENOENT") {
         return null;
       }
       throw err;
     });
     if (!stat) {
+      delete nextFiles[relativePath];
       continue;
     }
     const fingerprint: DailyIngestionFileState = {
@@ -883,7 +867,7 @@ async function collectDailyIngestionBatches(params: {
     }
     changed = true;
 
-    const raw = await fs.readFile(filePath, "utf-8").catch((err: unknown) => {
+    const raw = await readWorkspaceText(params.workspaceDir, filePath).catch((err: unknown) => {
       if (extractErrorCode(err) === "ENOENT") {
         return "";
       }
@@ -1051,13 +1035,15 @@ export async function seedHistoricalDailyMemorySignals(params: {
       if (importedSignalCount >= totalCap) {
         break;
       }
-      const raw = await fs.readFile(entry.filePath, "utf-8").catch((err: unknown) => {
-        if (extractErrorCode(err) === "ENOENT") {
-          skippedPaths.push(entry.filePath);
-          return "";
-        }
-        throw err;
-      });
+      const raw = await readWorkspaceText(params.workspaceDir, entry.filePath).catch(
+        (err: unknown) => {
+          if (extractErrorCode(err) === "ENOENT") {
+            skippedPaths.push(entry.filePath);
+            return "";
+          }
+          throw err;
+        },
+      );
       if (!raw) {
         continue;
       }
@@ -1128,6 +1114,10 @@ function dedupeEntries(
       duplicate.totalScore = Math.max(duplicate.totalScore, entry.totalScore);
       duplicate.maxScore = Math.max(duplicate.maxScore, entry.maxScore);
       duplicate.queryHashes = uniqueStrings([...duplicate.queryHashes, ...entry.queryHashes]);
+      duplicate.userQueryHashes = uniqueStrings([
+        ...(duplicate.userQueryHashes ?? []),
+        ...(entry.userQueryHashes ?? []),
+      ]);
       duplicate.recallDays = [
         ...new Set([...duplicate.recallDays, ...entry.recallDays]),
       ].toSorted();
@@ -1403,6 +1393,7 @@ async function runLightDreaming(
       workspaceDir: params.workspaceDir,
       phase: "light",
       bodyLines,
+      hasContent: capped.length > 0,
       nowMs,
       timezone: params.config.timezone,
       storage: params.config.storage,
@@ -1480,6 +1471,7 @@ async function runRemDreaming(
       workspaceDir: params.workspaceDir,
       phase: "rem",
       bodyLines: preview.bodyLines,
+      hasContent: entries.length > 0,
       nowMs,
       timezone: params.config.timezone,
       storage: params.config.storage,

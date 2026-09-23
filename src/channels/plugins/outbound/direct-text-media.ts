@@ -37,26 +37,11 @@ function readNumberField(record: Record<string, unknown> | undefined, key: strin
 }
 
 /**
- * Resolves an account-scoped channel media byte limit.
- */
-function resolveScopedChannelMediaMaxBytes(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  resolveChannelLimitMb: (params: { cfg: OpenClawConfig; accountId: string }) => number | undefined;
-}): number | undefined {
-  return resolveChannelMediaMaxBytes({
-    cfg: params.cfg,
-    resolveChannelLimitMb: params.resolveChannelLimitMb,
-    accountId: params.accountId,
-  });
-}
-
-/**
  * Builds a media byte-limit resolver for channels with `mediaMaxMb` config.
  */
 export function createScopedChannelMediaMaxBytesResolver(channel: string) {
   return (params: { cfg: OpenClawConfig; accountId?: string | null }) =>
-    resolveScopedChannelMediaMaxBytes({
+    resolveChannelMediaMaxBytes({
       cfg: params.cfg,
       accountId: params.accountId,
       resolveChannelLimitMb: ({ cfg, accountId }) => {

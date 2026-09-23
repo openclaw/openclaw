@@ -1,15 +1,12 @@
 // Control UI renderers for structured config form nodes.
 import { html, nothing, type TemplateResult } from "lit";
+import { Directive, directive } from "lit/directive.js";
+import { repeat } from "lit/directives/repeat.js";
 import { icons } from "../components/icons.ts";
 import { t } from "../i18n/index.ts";
 import { removePathValue, setPathValue } from "../lib/config-form-utils.ts";
 import { arrayAddCandidates } from "./config-form-array-candidates.ts";
-import {
-  appendArrayRowIdentities,
-  discardArrayRowIdentities,
-  preserveArrayRowIdentities,
-  rowIdentitiesForArray,
-} from "./config-form-array-identity.ts";
+import { ConfigFormArrayIdentity } from "./config-form-array-identity.ts";
 import {
   openCollectionDraft,
   type ConfigFormCollectionDraftCommit,
@@ -32,9 +29,7 @@ import {
 import { renderMapField } from "./config-form.node.collection-map.ts";
 import {
   renderCollectionDefaultDescription,
-  renderFlatDefaultRow,
   renderFieldRow,
-  renderTags,
   schemaWithDefault,
   type ConfigNodeRenderer,
   type ConfigNodeRenderParams,
@@ -50,10 +45,7 @@ import { renderSettingsEmpty } from "./settings-ui.ts";
 const UNSET_ARRAY_SOURCE_IDENTITY = Symbol("unset-array-source");
 const UNSET_MAP_SOURCE_IDENTITY = Symbol("unset-map-source");
 
-export function renderObject(
-  params: ConfigNodeRenderParams,
-  renderNode: ConfigNodeRenderer,
-): TemplateResult {
+export function resolveConfigObjectFields(params: ConfigNodeRenderParams) {
   const {
     schema,
     value,
@@ -62,20 +54,19 @@ export function renderObject(
     unsupported,
     disabled,
     onPatch,
-    searchCriteria,
+    onRemove,
     rawAvailable,
+    maskSensitive,
     revealSensitive,
     isSensitivePathRevealed,
     onToggleSensitivePath,
-    onRemove,
+    searchCriteria,
   } = params;
-  const { label, help, tags } = resolveFieldMeta(path, schema, hints);
   const selfMatched =
     searchCriteria && hasSearchCriteria(searchCriteria)
       ? matchesNodeSelf({ schema, path, hints, criteria: searchCriteria })
       : false;
   const childSearchCriteria = selfMatched ? undefined : searchCriteria;
-
   const inherited = value === undefined && schema.default !== undefined;
   const fallback = inherited ? schema.default : value;
   const objectSourceIdentity = fallback === undefined ? UNSET_MAP_SOURCE_IDENTITY : fallback;
@@ -83,7 +74,6 @@ export function renderObject(
     fallback && typeof fallback === "object" && !Array.isArray(fallback)
       ? (fallback as Record<string, unknown>)
       : {};
-  const defaultDescription = renderCollectionDefaultDescription(params, fallback);
   const entries = objectPropertyKeys(schema)
     .map((key) => [key, objectPropertySchema(schema, key)] as const)
     .filter((entry): entry is readonly [string, ConfigNodeRenderParams["schema"]] =>
@@ -141,51 +131,61 @@ export function renderObject(
     return accepted !== false;
   };
 
-  const fields = html`
-    ${sorted.map(([propertyKey, node]) => {
+  return {
+    fields: sorted.map(([propertyKey, node]) => {
       const hasInheritedChild = inherited && Object.hasOwn(objectValue, propertyKey);
-      return renderNode({
+      return {
         schema: hasInheritedChild ? schemaWithDefault(node, objectValue[propertyKey]) : node,
         value: inherited ? undefined : objectValue[propertyKey],
         path: [...path, propertyKey],
         hints,
         rawAvailable,
+        maskSensitive,
         unsupported,
         disabled,
+        compact: params.compact,
+        commitOnBlur: params.commitOnBlur,
         isRequired: requiredKeys.has(propertyKey),
         sourceIdentity: inherited ? undefined : objectValue[propertyKey],
         controlIdentity: params.controlIdentity ?? objectValue,
-        rowIdentity: params.rowIdentity,
         searchCriteria: childSearchCriteria,
         revealSensitive,
         isSensitivePathRevealed,
         onToggleSensitivePath,
         onPatch: patchObjectChild,
-      });
-    })}
-    ${
-      allowExtra
-        ? renderMapField(
-            {
-              ...params,
-              schema: additionalProperties,
-              value: objectValue,
-              sourceIdentity: objectSourceIdentity,
-              reservedKeys,
-              validateKey: (key) => isObjectPropertyNameValid(schema, key),
-              searchCriteria: childSearchCriteria,
-              onPatch: patchObjectChild,
-            },
-            renderNode,
-          )
-        : nothing
-    }
+      } satisfies ConfigNodeRenderParams;
+    }),
+    additional: allowExtra
+      ? {
+          ...params,
+          schema: additionalProperties,
+          value: objectValue,
+          sourceIdentity: objectSourceIdentity,
+          reservedKeys,
+          validateKey: (key: string) => isObjectPropertyNameValid(schema, key),
+          searchCriteria: childSearchCriteria,
+          onPatch: patchObjectChild,
+        }
+      : null,
+  };
+}
+
+export function renderObject(
+  params: ConfigNodeRenderParams,
+  renderNode: ConfigNodeRenderer,
+): TemplateResult {
+  const { schema, path, hints } = params;
+  const { label, help } = resolveFieldMeta(path, schema, hints);
+  const object = resolveConfigObjectFields(params);
+  const fields = html`
+    ${object.fields.map((field) => renderNode(field))}
+    ${object.additional ? renderMapField(object.additional, renderNode) : nothing}
   `;
 
   // Top-level objects and label-less contexts emit rows directly into the
   // surrounding settings-group so row dividers stay sibling-driven.
   if (path.length === 1 || params.showLabel === false) {
-    return html`${path.length === 1 ? renderFlatDefaultRow(defaultDescription) : nothing}${fields}`;
+    return fields;
   }
 
   // Nested objects get collapsible treatment as an indented sub-block.
@@ -195,15 +195,9 @@ export function renderObject(
         <div class="settings-row__text">
           <span class="settings-row__title">${label}</span>
           ${help ? html`<span class="settings-row__desc">${help}</span>` : nothing}
-          ${
-            schema.default !== undefined
-              ? html`<span class="settings-row__desc">${defaultDescription}</span>`
-              : nothing
-          }
-          ${renderTags(tags)}
         </div>
         <div class="settings-row__control">
-          <span class="settings-row__chevron cfg-object__chevron">${icons.chevronDown}</span>
+          <span class="settings-row__chevron cfg-object__chevron">${icons.chevronRight}</span>
         </div>
       </summary>
       <div class="settings-subrows">${fields}</div>
@@ -211,9 +205,32 @@ export function renderObject(
   `;
 }
 
-export function renderArray(
+class ConfigFormArrayDirective extends Directive {
+  private rows = new ConfigFormArrayIdentity();
+  private field = "";
+
+  render(params: ConfigNodeRenderParams, renderNode: ConfigNodeRenderer): TemplateResult {
+    // Keyed parents carry row identity. Indices still select patch destinations,
+    // but moving a row must not retire its nested field editors.
+    const field = JSON.stringify(params.path.filter((segment) => typeof segment === "string"));
+    if (field !== this.field) {
+      this.rows = new ConfigFormArrayIdentity();
+      this.field = field;
+    }
+    return renderArrayContent(params, renderNode, this.rows);
+  }
+}
+
+const arrayDirective = directive(ConfigFormArrayDirective);
+
+export function renderArray(params: ConfigNodeRenderParams, renderNode: ConfigNodeRenderer) {
+  return html`${arrayDirective(params, renderNode)}`;
+}
+
+function renderArrayContent(
   params: ConfigNodeRenderParams,
   renderNode: ConfigNodeRenderer,
+  rows: ConfigFormArrayIdentity,
 ): TemplateResult {
   const {
     schema,
@@ -225,13 +242,14 @@ export function renderArray(
     onPatch,
     searchCriteria,
     rawAvailable,
+    maskSensitive,
     revealSensitive,
     isSensitivePathRevealed,
     onToggleSensitivePath,
   } = params;
   const showLabel = params.showLabel ?? true;
   const showHeaderMeta = params.showHeaderMeta ?? showLabel;
-  const { label, help, tags } = resolveFieldMeta(path, schema, hints);
+  const { label, help } = resolveFieldMeta(path, schema, hints);
   const selfMatched =
     searchCriteria && hasSearchCriteria(searchCriteria)
       ? matchesNodeSelf({ schema, path, hints, criteria: searchCriteria })
@@ -243,7 +261,6 @@ export function renderArray(
   if (!itemsSchema) {
     return renderFieldRow({
       label,
-      tags: [],
       showLabel: true,
       control: nothing,
       error: t("configForm.unsupportedArray"),
@@ -262,7 +279,9 @@ export function renderArray(
       ? schema.default
       : UNSET_ARRAY_SOURCE_IDENTITY;
   const defaultDescription = renderCollectionDefaultDescription(params, arrayValue);
-  const rowIdentities = rowIdentitiesForArray(arrayValue);
+  const rowIdentities = rows.read(arrayValue);
+  const patch = (nextValue: unknown[], identities: readonly symbol[]) =>
+    rows.patch(nextValue, identities, (next) => onPatch(path, next));
   const {
     minItems: minimumItems,
     maxItems: maximumItems,
@@ -288,7 +307,7 @@ export function renderArray(
     schema: nextItemSchema,
     label,
     disabled: disabled || !canAppend,
-    identity: draftId,
+    identity: JSON.stringify(path.filter((segment) => typeof segment === "string")),
     sourceIdentity: arraySourceIdentity,
     existingValues: uniqueItems ? arrayValue : undefined,
     validateValue: (candidate) => {
@@ -326,12 +345,7 @@ export function renderArray(
       nextValue[itemIndex] = nextItem.value;
     }
     if (canApplyArrayCandidate(schema, arrayValue, nextValue, uniqueItems, true)) {
-      preserveArrayRowIdentities(nextValue, rowIdentities);
-      const accepted = onPatch(path, nextValue) !== false;
-      if (!accepted) {
-        discardArrayRowIdentities(nextValue);
-      }
-      return accepted;
+      return patch(nextValue, rowIdentities);
     }
     return false;
   };
@@ -345,21 +359,30 @@ export function renderArray(
             showHeaderMeta && help ? html`<span class="settings-row__desc">${help}</span>` : nothing
           }
           ${
-            showHeaderMeta && schema.default !== undefined
+            showHeaderMeta && defaultDescription !== nothing
               ? html`<span class="settings-row__desc">${defaultDescription}</span>`
               : nothing
           }
-          ${renderTags(tags)}
         </div>
         <div class="settings-row__control">
-          <span class="settings-row__value"
-            >${t(arrayValue.length === 1 ? "configForm.itemCountOne" : "configForm.itemCount", {
-              count: String(arrayValue.length),
-            })}</span
-          >
+          ${
+            params.compact
+              ? nothing
+              : html`
+                  <span class="settings-row__value"
+                    >${t(
+                      arrayValue.length === 1 ? "configForm.itemCountOne" : "configForm.itemCount",
+                      {
+                        count: String(arrayValue.length),
+                      },
+                    )}</span
+                  >
+                `
+          }
           <button
             type="button"
-            class="btn btn--sm"
+            class=${params.compact ? "btn btn--sm btn--icon" : "btn btn--sm"}
+            aria-label=${t("configForm.add")}
             aria-controls=${draftId}
             ?disabled=${disabled || (!canAppend && atomicCandidate === undefined)}
             @click=${(event: Event) => {
@@ -370,19 +393,17 @@ export function renderArray(
               } else if (requiresDraft) {
                 openCollectionDraft(event, draftId);
               } else if (autoCandidate) {
-                appendArrayRowIdentities(
-                  autoCandidate,
-                  rowIdentities,
-                  autoCandidate.length - arrayValue.length,
+                const appended = Array.from(
+                  { length: autoCandidate.length - arrayValue.length },
+                  () => Symbol("array-row"),
                 );
-                if (onPatch(path, autoCandidate) === false) {
-                  discardArrayRowIdentities(autoCandidate);
+                if (!patch(autoCandidate, [...rowIdentities, ...appended])) {
                   openCollectionDraft(event, draftId);
                 }
               }
             }}
           >
-            ${t("configForm.add")}
+            ${params.compact ? icons.plus : t("configForm.add")}
           </button>
         </div>
       </div>
@@ -400,11 +421,7 @@ export function renderArray(
             (nextValue.length < minimumItems || isSupportedConfigValueValid(schema, nextValue));
           let accepted = false;
           if (canApply) {
-            appendArrayRowIdentities(nextValue, rowIdentities, 1);
-            accepted = onPatch(path, nextValue) !== false;
-            if (!accepted) {
-              discardArrayRowIdentities(nextValue);
-            }
+            accepted = patch(nextValue, [...rowIdentities, Symbol("array-row")]);
           }
           if (!accepted) {
             event.preventDefault();
@@ -413,83 +430,96 @@ export function renderArray(
       ></openclaw-config-form-collection-draft>
       ${
         arrayValue.length === 0
-          ? renderSettingsEmpty(t("configForm.noItems"))
+          ? params.compact
+            ? nothing
+            : renderSettingsEmpty(t("configForm.noItems"))
           : html`
               <div class="settings-subrows">
-                ${arrayValue.map((item, index) => {
-                  const itemSchema = itemSchemaAt(index);
-                  return html`
-                    <div class="settings-row">
-                      <div class="settings-row__text">
-                        <span class="settings-row__title">#${index + 1}</span>
-                      </div>
-                      <div class="settings-row__control">
-                        <openclaw-tooltip .content=${t("configForm.removeItem")}>
-                          <button
-                            type="button"
-                            class="btn btn--icon"
-                            style="width:28px;height:28px;padding:0;"
-                            aria-label=${t("configForm.removeItem")}
-                            ?disabled=${
-                              disabled ||
-                              arrayValue.length <= minimumItems ||
-                              !canApplyArrayCandidate(
-                                schema,
-                                arrayValue,
-                                arrayValue.toSpliced(index, 1),
-                                uniqueItems,
-                                false,
-                              )
-                            }
-                            @click=${() => {
-                              const nextValue = arrayValue.toSpliced(index, 1);
-                              if (
-                                canApplyArrayCandidate(
-                                  schema,
-                                  arrayValue,
-                                  nextValue,
-                                  uniqueItems,
-                                  false,
-                                )
-                              ) {
-                                preserveArrayRowIdentities(
-                                  nextValue,
-                                  rowIdentities.toSpliced(index, 1),
-                                );
-                                if (onPatch(path, nextValue) === false) {
-                                  discardArrayRowIdentities(nextValue);
-                                }
+                ${repeat(
+                  arrayValue,
+                  (_item, index) => rowIdentities[index],
+                  (item, index) => {
+                    const itemSchema = itemSchemaAt(index);
+                    const nextValue = arrayValue.toSpliced(index, 1);
+                    const canRemove = canApplyArrayCandidate(
+                      schema,
+                      arrayValue,
+                      nextValue,
+                      uniqueItems,
+                      false,
+                    );
+                    const removeControl = html` <openclaw-tooltip
+                      .content=${t("configForm.removeItem")}
+                    >
+                      <button
+                        type="button"
+                        class="btn btn--icon"
+                        style="width:28px;height:28px;padding:0;"
+                        aria-label=${t("configForm.removeItem")}
+                        ?disabled=${disabled || arrayValue.length <= minimumItems || !canRemove}
+                        @click=${(event: MouseEvent) => {
+                          const focused = event.currentTarget === document.activeElement;
+                          const add = document.activeElement
+                            ?.closest(".cfg-array")
+                            ?.querySelector<HTMLButtonElement>("button[aria-controls]");
+                          if (
+                            canRemove &&
+                            patch(nextValue, rowIdentities.toSpliced(index, 1)) &&
+                            focused
+                          ) {
+                            // A keyed removal retires the focused button; keep keyboard
+                            // navigation in this array without stealing a later focus choice.
+                            queueMicrotask(() => {
+                              if (document.activeElement === document.body) {
+                                add?.focus();
                               }
-                            }}
-                          >
-                            ${icons.trash}
-                          </button>
-                        </openclaw-tooltip>
-                      </div>
-                    </div>
-                    ${renderNode({
+                            });
+                          }
+                        }}
+                      >
+                        ${icons.trash}
+                      </button>
+                    </openclaw-tooltip>`;
+                    const valueControl = renderNode({
                       schema: inherited ? schemaWithDefault(itemSchema, item) : itemSchema,
                       value: inherited ? undefined : item,
                       path: [...path, index],
                       hints,
                       rawAvailable,
+                      maskSensitive,
                       unsupported,
                       disabled,
+                      compact: params.compact,
+                      commitOnBlur: params.commitOnBlur,
                       isRequired: true,
                       sourceIdentity: inherited ? undefined : item,
                       controlIdentity: arrayValue,
-                      rowIdentity: rowIdentities[index],
                       searchCriteria: childSearchCriteria,
                       showLabel: false,
                       revealSensitive,
                       isSensitivePathRevealed,
                       onToggleSensitivePath,
-                      // Inherited rows stay visually unset, but edits materialize the
-                      // complete effective array through patchArrayItem at the parent path.
+                      // Keep inherited source identity until an edit materializes the
+                      // complete effective array through its parent owner.
                       onPatch: patchArrayItem,
-                    })}
-                  `;
-                })}
+                    });
+                    if (params.compact) {
+                      return html`<div class="cfg-array__item">
+                        <div class="cfg-array__value">${valueControl}</div>
+                        ${removeControl}
+                      </div>`;
+                    }
+                    return html`
+                      <div class="settings-row">
+                        <div class="settings-row__text">
+                          <span class="settings-row__title">#${index + 1}</span>
+                        </div>
+                        <div class="settings-row__control">${removeControl}</div>
+                      </div>
+                      ${valueControl}
+                    `;
+                  },
+                )}
               </div>
             `
       }

@@ -1,5 +1,6 @@
 {
   "id": "inworld",
+  "categories": ["voice"],
   "capabilityCatalogEntry": "./capability-catalog.ts",
   "activation": {
     "onStartup": false
@@ -18,6 +19,20 @@
   "contracts": {
     "speechProviders": ["inworld"]
   },
+  "configGroups": [
+    {
+      "id": "inworld-connection",
+      "title": "Inworld connection",
+      "order": 10,
+      "properties": ["apiKey", "baseUrl"]
+    },
+    {
+      "id": "voice-generation",
+      "title": "Voice generation",
+      "order": 20,
+      "properties": ["voiceId", "modelId", "temperature"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

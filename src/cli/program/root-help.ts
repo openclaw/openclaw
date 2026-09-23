@@ -29,12 +29,7 @@ async function buildRootHelpProgram(renderOptions?: RootHelpRenderOptions): Prom
       : [];
   configureProgramHelp(
     program,
-    {
-      programVersion: VERSION,
-      channelOptions: [],
-      messageChannelOptions: "",
-      agentChannelOptions: "",
-    },
+    { programVersion: VERSION },
     {
       commandsWithSubcommands: new Set(
         pluginDescriptors

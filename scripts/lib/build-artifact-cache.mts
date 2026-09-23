@@ -3,7 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { acquireFileLockSync } from "@openclaw/fs-safe/file-lock";
+import { acquireFileLock, acquireFileLockSync } from "@openclaw/fs-safe/file-lock";
 
 export const ARTIFACT_CACHE_VERSION = 6;
 export type BuildCachePath = {
@@ -279,16 +279,25 @@ function ownerIsDead(payload: unknown) {
   }
 }
 
-/** Own only synchronous cache snapshots; process lifetimes need checkout ownership. */
-export function acquireBuildArtifactLock(target: string, timeoutMs = 600_000) {
-  return acquireFileLockSync(target, {
+function buildArtifactLockOptions(timeoutMs: number) {
+  const reclaim = ({ payload }: { payload: unknown }) => ownerIsDead(payload);
+  return {
     timeoutMs,
     retry: { minTimeout: 500, maxTimeout: 500, factor: 1, randomize: false },
     payload: () => ({ pid: process.pid }),
-    shouldReclaim: ({ payload }) => ownerIsDead(payload),
-    staleRecovery: "remove-if-unchanged",
-    shouldRemoveStaleLock: ({ payload }) => ownerIsDead(payload),
-  });
+    shouldReclaim: reclaim,
+    staleRecovery: "remove-if-unchanged" as const,
+    shouldRemoveStaleLock: reclaim,
+  };
+}
+
+/** Snapshot locks never own subprocess lifetimes. */
+export function acquireBuildArtifactLock(target: string, timeoutMs = 600_000) {
+  return acquireFileLockSync(target, buildArtifactLockOptions(timeoutMs));
+}
+
+export function acquireBuildArtifactLockAsync(target: string, timeoutMs = 600_000) {
+  return acquireFileLock(target, buildArtifactLockOptions(timeoutMs));
 }
 
 export type BuildCache = {
@@ -403,7 +412,8 @@ export function resolveBuildStepCacheState(
     const relativeOutputFiles = outputFiles.map((file) => portableRelativePath(artifactRoot, file));
     const stampedOutputs = Object.keys(stamp?.outputs ?? {});
     const requiredOutputs = resolveCacheRequiredOutputs(step.cache, params.env ?? process.env);
-    const actualOutputsPresent =
+    const actualOutputsAcceptable =
+      step.cache.restore !== "always" &&
       artifactRecordMismatch(artifactRoot, stamp, signature, requiredOutputs) === undefined;
     const cachedOutputMismatch = artifactRecordMismatch(
       outputRoot,
@@ -414,10 +424,7 @@ export function resolveBuildStepCacheState(
     const cachedOutputsPresent = cachedOutputMismatch === undefined;
     const stampMatches =
       (!params.inputSignature || consumedInputs !== undefined) && stamp?.signature === signature;
-    const alwaysRestore = step.cache.restore === "always";
-    const actualOutputsAcceptable = actualOutputsPresent && !alwaysRestore;
-    const restorable =
-      stampMatches && cachedOutputsPresent && (alwaysRestore || !actualOutputsPresent);
+    const restorable = stampMatches && cachedOutputsPresent && !actualOutputsAcceptable;
     const fresh = stampMatches && (actualOutputsAcceptable || cachedOutputsPresent);
     return {
       cacheable: true,

@@ -24,6 +24,7 @@ import {
   createDiscordExecApprovalButtonContext,
   createExecApprovalButton,
 } from "./exec-approvals.js";
+import type { DiscordLivePolicyReader } from "./live-policy.js";
 import {
   createDiscordCommandArgFallbackButton,
   createDiscordModelPickerFallbackButton,
@@ -37,6 +38,7 @@ import type { ThreadBindingManager } from "./thread-bindings.types.js";
 type DiscordVoiceManager = import("../voice/voice-runtime.js").DiscordVoiceManager;
 
 export function createDiscordProviderInteractionSurface(params: {
+  readPolicy?: DiscordLivePolicyReader;
   cfg: OpenClawConfig;
   discordConfig: DiscordAccountConfig;
   accountId: string;
@@ -71,6 +73,7 @@ export function createDiscordProviderInteractionSurface(params: {
       spec.name === DISCORD_VOICE_COMMAND_SPEC.name
     ) {
       return createDiscordVoiceCommand({
+        readPolicy: params.readPolicy,
         cfg: params.cfg,
         discordConfig: params.discordConfig,
         accountId: params.accountId,
@@ -81,6 +84,7 @@ export function createDiscordProviderInteractionSurface(params: {
       });
     }
     return createNativeCommand({
+      readPolicy: params.readPolicy,
       command: spec,
       cfg: params.cfg,
       discordConfig: params.discordConfig,
@@ -88,6 +92,7 @@ export function createDiscordProviderInteractionSurface(params: {
       sessionPrefix: params.sessionPrefix,
       ephemeralDefault: params.ephemeralDefault,
       threadBindings: params.threadBindings,
+      buildContext: params.channelRuntime?.inbound.buildContext,
       dispatchReplyFromConfig: params.channelRuntime?.reply?.dispatchReplyFromConfig,
     });
   });
@@ -123,6 +128,7 @@ export function createDiscordProviderInteractionSurface(params: {
       cfg: params.cfg,
       accountId: params.accountId,
       authContext: {
+        readPolicy: params.readPolicy,
         cfg: params.cfg,
         accountId: params.accountId,
         discordConfig: params.discordConfig,
@@ -134,32 +140,39 @@ export function createDiscordProviderInteractionSurface(params: {
       },
     }),
     createDiscordCommandArgFallbackButton({
+      readPolicy: params.readPolicy,
       cfg: params.cfg,
       discordConfig: params.discordConfig,
       accountId: params.accountId,
       sessionPrefix: params.sessionPrefix,
       threadBindings: params.threadBindings,
+      buildContext: params.channelRuntime?.inbound.buildContext,
       dispatchReplyFromConfig: params.channelRuntime?.reply?.dispatchReplyFromConfig,
     }),
     createDiscordModelPickerFallbackButton({
+      readPolicy: params.readPolicy,
       cfg: params.cfg,
       discordConfig: params.discordConfig,
       accountId: params.accountId,
       sessionPrefix: params.sessionPrefix,
       threadBindings: params.threadBindings,
+      buildContext: params.channelRuntime?.inbound.buildContext,
       dispatchReplyFromConfig: params.channelRuntime?.reply?.dispatchReplyFromConfig,
     }),
     createDiscordModelPickerFallbackSelect({
+      readPolicy: params.readPolicy,
       cfg: params.cfg,
       discordConfig: params.discordConfig,
       accountId: params.accountId,
       sessionPrefix: params.sessionPrefix,
       threadBindings: params.threadBindings,
+      buildContext: params.channelRuntime?.inbound.buildContext,
       dispatchReplyFromConfig: params.channelRuntime?.reply?.dispatchReplyFromConfig,
     }),
   ];
   const activityButton = createDiscordActivityButton(
     {
+      readPolicy: params.readPolicy,
       cfg: params.cfg,
       discordConfig: params.discordConfig,
       accountId: params.accountId,
@@ -192,6 +205,7 @@ export function createDiscordProviderInteractionSurface(params: {
   const agentComponentsConfig = params.discordConfig.agentComponents ?? {};
   if (agentComponentsConfig.enabled ?? true) {
     const componentContext = {
+      readPolicy: params.readPolicy,
       cfg: params.cfg,
       discordConfig: params.discordConfig,
       accountId: params.accountId,

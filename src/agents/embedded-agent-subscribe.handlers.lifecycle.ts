@@ -3,7 +3,6 @@
  */
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { projectChatErrorDetail } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
-import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { hasAcceptedSessionSpawn } from "./accepted-session-spawn.js";
 import { sanitizeForConsole } from "./console-sanitize.js";
@@ -108,11 +107,6 @@ export function handleAgentEnd(
     toolAudioAsVoice:
       ctx.state.pendingToolAudioAsVoice ||
       ctx.state.deferredBlockReplies.some((payload) => payload.audioAsVoice),
-    toolTrustedLocalMedia: resolveTerminalToolMediaTrust({
-      pendingMediaUrls: ctx.state.pendingToolMediaUrls,
-      pendingTrustByUrl: ctx.state.pendingToolMediaTrustByUrl,
-      deferredReplies: ctx.state.deferredBlockReplies,
-    }),
     hasToolMediaBlockReply: ctx.state.hasToolMediaBlockReply,
     didDeliverSourceReplyViaMessageTool:
       ctx.state.messageToolOnlySourceReplyDelivered ||
@@ -218,7 +212,10 @@ export function handleAgentEnd(
       terminalAborted === true && ctx.state.lastToolError
         ? summarizeToolValidationError(ctx.state.lastToolError)
         : undefined;
-    const terminalMeta = {
+    const data = {
+      phase:
+        ctx.params.terminalLifecyclePhase === "finishing" ? "finishing" : isError ? "error" : "end",
+      ...(isError ? { error: lifecycleErrorText ?? GENERIC_ASSISTANT_ERROR_TEXT } : {}),
       ...(errorObservation ? { errorObservation } : {}),
       ...(terminalStopReason ? { stopReason: terminalStopReason } : {}),
       ...(ctx.state.yielded === true ? { yielded: true } : {}),
@@ -228,10 +225,9 @@ export function handleAgentEnd(
         : {}),
       ...(typeof terminalAborted === "boolean" ? { aborted: terminalAborted } : {}),
       ...(toolErrorSummary ? { toolErrorSummary } : {}),
+      ...(livenessState ? { livenessState } : {}),
+      ...(replayInvalid ? { replayInvalid } : {}),
     };
-    const phase =
-      ctx.params.terminalLifecyclePhase === "finishing" ? "finishing" : isError ? "error" : "end";
-    const errorData = isError ? { error: lifecycleErrorText ?? GENERIC_ASSISTANT_ERROR_TEXT } : {};
     emitAgentEvent({
       runId: ctx.params.runId,
       ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
@@ -241,14 +237,7 @@ export function handleAgentEnd(
         ? { lifecycleGeneration: ctx.params.lifecycleGeneration }
         : {}),
       stream: "lifecycle",
-      data: {
-        phase,
-        ...errorData,
-        ...terminalMeta,
-        ...(livenessState ? { livenessState } : {}),
-        ...(replayInvalid ? { replayInvalid } : {}),
-        endedAt: Date.now(),
-      },
+      data: { ...data, endedAt: Date.now() },
     });
     runBestEffortCallback({
       label: "lifecycle agent event",
@@ -256,25 +245,12 @@ export function handleAgentEnd(
       callback: () =>
         ctx.params.onAgentEvent?.({
           stream: "lifecycle",
-          data: {
-            phase,
-            ...errorData,
-            ...terminalMeta,
-            ...(livenessState ? { livenessState } : {}),
-            ...(replayInvalid ? { replayInvalid } : {}),
-          },
+          data,
         }),
     });
   };
 
   const finalizeAgentEnd = () => {
-    ctx.state.blockState.thinking = false;
-    ctx.state.blockState.final = false;
-    ctx.state.blockState.inlineCode = createInlineCodeState();
-    ctx.state.blockState.fence = undefined;
-    ctx.state.blockState.reasoningPendingFenceFragment = undefined;
-    ctx.state.blockState.pendingFenceFragment = undefined;
-
     if (ctx.state.pendingCompactionRetry > 0) {
       ctx.resolveCompactionRetry();
     } else {
@@ -329,9 +305,7 @@ export function handleAgentEnd(
   };
 
   const deliverTerminal = () => {
-    ctx.state.deferBlockReplyDelivery = false;
-    ctx.flushAssistantStream();
-    ctx.flushDeferredBlockReplies();
+    ctx.releaseDeferredReplies();
     const flushBlockReplyBufferResult = ctx.flushBlockReplyBuffer({ final: true });
     finalizeAgentEnd();
     const flushPendingMediaAndChannelResult = isPromiseLike<void>(flushBlockReplyBufferResult)
@@ -429,19 +403,3 @@ export function handleAgentEnd(
   }
   return deliverTerminalWithLifecycleErrorFallback();
 }
-function resolveTerminalToolMediaTrust(params: {
-  pendingMediaUrls: readonly string[];
-  pendingTrustByUrl: ReadonlyMap<string, boolean>;
-  deferredReplies: readonly { mediaUrls?: string[]; trustedLocalMedia?: boolean }[];
-}): boolean {
-  const trust = [
-    ...params.pendingMediaUrls.map((url) => params.pendingTrustByUrl.get(url.trim()) === true),
-    ...params.deferredReplies.flatMap((payload) =>
-      (payload.mediaUrls ?? []).map(() => payload.trustedLocalMedia === true),
-    ),
-  ];
-  return trust.length > 0 && trust.every(Boolean);
-}
-
-const testing = { resolveTerminalToolMediaTrust };
-export { testing as __testing };

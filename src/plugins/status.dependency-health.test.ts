@@ -5,7 +5,7 @@ import {
   buildPluginDependencyStatus,
   projectPluginDependencyHealth,
 } from "./status-dependencies-core.js";
-import { buildPluginDiagnosticsReport, buildPluginSnapshotReport } from "./status.js";
+import { withPluginDiagnosticsReport, buildPluginSnapshotReport } from "./status.js";
 import { createPluginLoadResult, createPluginRecord } from "./status.test-fixtures.js";
 import {
   createColdPluginConfig,
@@ -91,78 +91,82 @@ function createDependencyHealthFixture(
 }
 
 describe("plugin dependency health projection", () => {
-  it.each([
-    { mode: "snapshot", load: buildPluginSnapshotReport },
-    { mode: "runtime", load: buildPluginDiagnosticsReport },
-  ])("surfaces missing required plugin dependencies in $mode inspections", ({ load }) => {
-    const { fixture, reportParams } = createDependencyHealthFixture();
-    loaderState.registry = createDependencyHealthRegistry(fixture.pluginId);
+  it.each(["snapshot", "runtime"])(
+    "surfaces missing required plugin dependencies in %s inspections",
+    async (mode) => {
+      const { fixture, reportParams } = createDependencyHealthFixture();
+      loaderState.registry = createDependencyHealthRegistry(fixture.pluginId);
+      const assertReport = (report: ReturnType<typeof buildPluginSnapshotReport>) => {
+        expect(report.plugins[0]).toEqual(
+          expect.objectContaining({
+            status: "error",
+            error: expect.stringContaining("missing-runtime"),
+          }),
+        );
+        expect(report.diagnostics).toContainEqual(
+          expect.objectContaining({
+            level: "error",
+            pluginId: "missing-dependency-plugin",
+            message: expect.stringContaining("reinstall/update the plugin"),
+          }),
+        );
+      };
+      if (mode === "runtime") {
+        await withPluginDiagnosticsReport(reportParams, assertReport);
+      } else {
+        assertReport(buildPluginSnapshotReport(reportParams));
+      }
+    },
+  );
 
-    const report = load(reportParams);
-
-    expect(report.plugins[0]).toEqual(
-      expect.objectContaining({
-        status: "error",
-        error: expect.stringContaining("missing-runtime"),
-      }),
-    );
-    expect(report.diagnostics).toContainEqual(
-      expect.objectContaining({
-        level: "error",
-        pluginId: "missing-dependency-plugin",
-        message: expect.stringContaining("reinstall/update the plugin"),
-      }),
-    );
-  });
-
-  it("uses prepared manifest facts when runtime records omit dependency metadata", () => {
+  it("uses prepared manifest facts when runtime records omit dependency metadata", async () => {
     const { fixture, reportParams } = createDependencyHealthFixture();
     loaderState.registry = createDependencyHealthRegistry(fixture.pluginId, {
       dependencyStatus: undefined,
     });
 
-    const report = buildPluginDiagnosticsReport(reportParams);
-
-    expect(report.plugins[0]?.dependencyStatus).toEqual(
-      expect.objectContaining({
-        requiredInstalled: false,
-        missing: ["missing-runtime"],
-        missingOptional: ["optional-runtime"],
-      }),
-    );
-    expect(report.plugins[0]?.status).toBe("error");
+    await withPluginDiagnosticsReport(reportParams, (report) => {
+      expect(report.plugins[0]?.dependencyStatus).toEqual(
+        expect.objectContaining({
+          requiredInstalled: false,
+          missing: ["missing-runtime"],
+          missingOptional: ["optional-runtime"],
+        }),
+      );
+      expect(report.plugins[0]?.status).toBe("error");
+    });
   });
 
-  it("does not project package-local dependency health onto bundled plugins", () => {
+  it("does not project package-local dependency health onto bundled plugins", async () => {
     const { fixture, reportParams } = createDependencyHealthFixture();
     loaderState.registry = createDependencyHealthRegistry(fixture.pluginId, {
       dependencyStatus: undefined,
       origin: "bundled",
     });
 
-    const report = buildPluginDiagnosticsReport(reportParams);
-
-    expect(report.plugins[0]?.dependencyStatus).toBeUndefined();
-    expect(report.plugins[0]?.status).toBe("loaded");
-    expect(report.diagnostics).toEqual([]);
+    await withPluginDiagnosticsReport(reportParams, (report) => {
+      expect(report.plugins[0]?.dependencyStatus).toBeUndefined();
+      expect(report.plugins[0]?.status).toBe("loaded");
+      expect(report.diagnostics).toEqual([]);
+    });
   });
 
-  it("projects runtime dependency health onto generic source-external bundled plugins", () => {
+  it("projects runtime dependency health onto generic source-external bundled plugins", async () => {
     const { fixture, reportParams } = createDependencyHealthFixture({ bundledDist: false });
     loaderState.registry = createDependencyHealthRegistry(fixture.pluginId, {
       dependencyStatus: undefined,
       origin: "bundled",
     });
 
-    const report = buildPluginDiagnosticsReport(reportParams);
-
-    expect(report.plugins[0]?.dependencyStatus).toEqual(
-      expect.objectContaining({ requiredInstalled: false, missing: ["missing-runtime"] }),
-    );
-    expect(report.plugins[0]?.status).toBe("error");
+    await withPluginDiagnosticsReport(reportParams, (report) => {
+      expect(report.plugins[0]?.dependencyStatus).toEqual(
+        expect.objectContaining({ requiredInstalled: false, missing: ["missing-runtime"] }),
+      );
+      expect(report.plugins[0]?.status).toBe("error");
+    });
   });
 
-  it("projects dependency health onto bundled official plugins distributed externally", () => {
+  it("projects dependency health onto bundled official plugins distributed externally", async () => {
     const { fixture, reportParams } = createDependencyHealthFixture({
       pluginId: "discord",
       packageName: "@openclaw/discord",
@@ -173,12 +177,12 @@ describe("plugin dependency health projection", () => {
       packageName: "@openclaw/discord",
     });
 
-    const report = buildPluginDiagnosticsReport(reportParams);
-
-    expect(report.plugins[0]?.dependencyStatus).toEqual(
-      expect.objectContaining({ requiredInstalled: false, missing: ["missing-runtime"] }),
-    );
-    expect(report.plugins[0]?.status).toBe("error");
+    await withPluginDiagnosticsReport(reportParams, (report) => {
+      expect(report.plugins[0]?.dependencyStatus).toEqual(
+        expect.objectContaining({ requiredInstalled: false, missing: ["missing-runtime"] }),
+      );
+      expect(report.plugins[0]?.status).toBe("error");
+    });
   });
 
   it("preserves an existing error diagnostic when dependency health also fails", () => {

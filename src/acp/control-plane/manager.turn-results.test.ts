@@ -395,32 +395,10 @@ describe("AcpSessionManager turn results", () => {
         id: "acpx",
         runtime: runtimeState.runtime,
       });
-      hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
-        const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey;
-        if (sessionKey === "agent:codex:acp:child-1") {
-          return {
-            sessionKey,
-            storeSessionKey: sessionKey,
-            entry: {
-              sessionId: "child-1",
-              updatedAt: Date.now(),
-              spawnedBy: "agent:quant:telegram:quant:direct:822430204",
-              label: "Codex investigation",
-            },
-            acp: readySessionMeta(),
-          };
-        }
-        if (sessionKey === "agent:quant:telegram:quant:direct:822430204") {
-          return {
-            sessionKey,
-            storeSessionKey: sessionKey,
-            entry: {
-              sessionId: "parent-1",
-              updatedAt: Date.now(),
-            },
-          };
-        }
-        return null;
+      mockParentedAcpSessionEntries({
+        childSessionKey: "agent:codex:acp:child-1",
+        parentSessionKey: "agent:quant:telegram:quant:direct:822430204",
+        label: "Codex investigation",
       });
 
       const events: string[] = [];
@@ -484,32 +462,10 @@ describe("AcpSessionManager turn results", () => {
         id: "acpx",
         runtime: runtimeState.runtime,
       });
-      hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
-        const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey;
-        if (sessionKey === "agent:codex:acp:child-1") {
-          return {
-            sessionKey,
-            storeSessionKey: sessionKey,
-            entry: {
-              sessionId: "child-1",
-              updatedAt: Date.now(),
-              spawnedBy: "agent:quant:telegram:quant:direct:822430204",
-              label: "Directory check",
-            },
-            acp: readySessionMeta(),
-          };
-        }
-        if (sessionKey === "agent:quant:telegram:quant:direct:822430204") {
-          return {
-            sessionKey,
-            storeSessionKey: sessionKey,
-            entry: {
-              sessionId: "parent-1",
-              updatedAt: Date.now(),
-            },
-          };
-        }
-        return null;
+      mockParentedAcpSessionEntries({
+        childSessionKey: "agent:codex:acp:child-1",
+        parentSessionKey: "agent:quant:telegram:quant:direct:822430204",
+        label: "Directory check",
       });
 
       const events: string[] = [];
@@ -571,32 +527,10 @@ describe("AcpSessionManager turn results", () => {
         id: "acpx",
         runtime: runtimeState.runtime,
       });
-      hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
-        const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey;
-        if (sessionKey === "agent:codex:acp:child-1") {
-          return {
-            sessionKey,
-            storeSessionKey: sessionKey,
-            entry: {
-              sessionId: "child-1",
-              updatedAt: Date.now(),
-              spawnedBy: "agent:quant:telegram:quant:direct:822430204",
-              label: "Complete output",
-            },
-            acp: readySessionMeta(),
-          };
-        }
-        if (sessionKey === "agent:quant:telegram:quant:direct:822430204") {
-          return {
-            sessionKey,
-            storeSessionKey: sessionKey,
-            entry: {
-              sessionId: "parent-1",
-              updatedAt: Date.now(),
-            },
-          };
-        }
-        return null;
+      mockParentedAcpSessionEntries({
+        childSessionKey: "agent:codex:acp:child-1",
+        parentSessionKey: "agent:quant:telegram:quant:direct:822430204",
+        label: "Complete output",
       });
 
       const manager = new AcpSessionManager();
@@ -647,32 +581,10 @@ describe("AcpSessionManager turn results", () => {
         id: "acpx",
         runtime: runtimeState.runtime,
       });
-      hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
-        const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey;
-        if (sessionKey === "agent:codex:acp:child-1") {
-          return {
-            sessionKey,
-            storeSessionKey: sessionKey,
-            entry: {
-              sessionId: "child-1",
-              updatedAt: Date.now(),
-              spawnedBy: "agent:quant:telegram:quant:direct:822430204",
-              label: "Separator final",
-            },
-            acp: readySessionMeta(),
-          };
-        }
-        if (sessionKey === "agent:quant:telegram:quant:direct:822430204") {
-          return {
-            sessionKey,
-            storeSessionKey: sessionKey,
-            entry: {
-              sessionId: "parent-1",
-              updatedAt: Date.now(),
-            },
-          };
-        }
-        return null;
+      mockParentedAcpSessionEntries({
+        childSessionKey: "agent:codex:acp:child-1",
+        parentSessionKey: "agent:quant:telegram:quant:direct:822430204",
+        label: "Separator final",
       });
 
       const manager = new AcpSessionManager();
@@ -723,32 +635,10 @@ describe("AcpSessionManager turn results", () => {
         id: "acpx",
         runtime: runtimeState.runtime,
       });
-      hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
-        const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey;
-        if (sessionKey === "agent:codex:acp:child-1") {
-          return {
-            sessionKey,
-            storeSessionKey: sessionKey,
-            entry: {
-              sessionId: "child-1",
-              updatedAt: Date.now(),
-              spawnedBy: "agent:quant:telegram:quant:direct:822430204",
-              label: "Follow-up planning",
-            },
-            acp: readySessionMeta(),
-          };
-        }
-        if (sessionKey === "agent:quant:telegram:quant:direct:822430204") {
-          return {
-            sessionKey,
-            storeSessionKey: sessionKey,
-            entry: {
-              sessionId: "parent-1",
-              updatedAt: Date.now(),
-            },
-          };
-        }
-        return null;
+      mockParentedAcpSessionEntries({
+        childSessionKey: "agent:codex:acp:child-1",
+        parentSessionKey: "agent:quant:telegram:quant:direct:822430204",
+        label: "Follow-up planning",
       });
 
       const manager = new AcpSessionManager();
@@ -801,32 +691,10 @@ describe("AcpSessionManager turn results", () => {
         id: "acpx",
         runtime: runtimeState.runtime,
       });
-      hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
-        const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey;
-        if (sessionKey === "agent:codex:acp:child-1") {
-          return {
-            sessionKey,
-            storeSessionKey: sessionKey,
-            entry: {
-              sessionId: "child-1",
-              updatedAt: Date.now(),
-              spawnedBy: "agent:quant:telegram:quant:direct:822430204",
-              label: "Progress only",
-            },
-            acp: readySessionMeta(),
-          };
-        }
-        if (sessionKey === "agent:quant:telegram:quant:direct:822430204") {
-          return {
-            sessionKey,
-            storeSessionKey: sessionKey,
-            entry: {
-              sessionId: "parent-1",
-              updatedAt: Date.now(),
-            },
-          };
-        }
-        return null;
+      mockParentedAcpSessionEntries({
+        childSessionKey: "agent:codex:acp:child-1",
+        parentSessionKey: "agent:quant:telegram:quant:direct:822430204",
+        label: "Progress only",
       });
 
       const events: string[] = [];
@@ -952,32 +820,10 @@ describe("AcpSessionManager turn results", () => {
         id: "acpx",
         runtime: runtimeState.runtime,
       });
-      hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
-        const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey;
-        if (sessionKey === "agent:codex:acp:child-1") {
-          return {
-            sessionKey,
-            storeSessionKey: sessionKey,
-            entry: {
-              sessionId: "child-1",
-              updatedAt: Date.now(),
-              spawnedBy: "agent:quant:telegram:quant:direct:822430204",
-              label: "Missing final",
-            },
-            acp: readySessionMeta(),
-          };
-        }
-        if (sessionKey === "agent:quant:telegram:quant:direct:822430204") {
-          return {
-            sessionKey,
-            storeSessionKey: sessionKey,
-            entry: {
-              sessionId: "parent-1",
-              updatedAt: Date.now(),
-            },
-          };
-        }
-        return null;
+      mockParentedAcpSessionEntries({
+        childSessionKey: "agent:codex:acp:child-1",
+        parentSessionKey: "agent:quant:telegram:quant:direct:822430204",
+        label: "Missing final",
       });
 
       const events: string[] = [];
@@ -1046,32 +892,10 @@ describe("AcpSessionManager turn results", () => {
         id: "acpx",
         runtime: runtimeState.runtime,
       });
-      hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
-        const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey;
-        if (sessionKey === "agent:codex:acp:child-1") {
-          return {
-            sessionKey,
-            storeSessionKey: sessionKey,
-            entry: {
-              sessionId: "child-1",
-              updatedAt: Date.now(),
-              spawnedBy: "agent:quant:telegram:quant:direct:822430204",
-              label: "Completed drain",
-            },
-            acp: readySessionMeta(),
-          };
-        }
-        if (sessionKey === "agent:quant:telegram:quant:direct:822430204") {
-          return {
-            sessionKey,
-            storeSessionKey: sessionKey,
-            entry: {
-              sessionId: "parent-1",
-              updatedAt: Date.now(),
-            },
-          };
-        }
-        return null;
+      mockParentedAcpSessionEntries({
+        childSessionKey: "agent:codex:acp:child-1",
+        parentSessionKey: "agent:quant:telegram:quant:direct:822430204",
+        label: "Completed drain",
       });
 
       const events: string[] = [];
@@ -1159,8 +983,12 @@ describe("AcpSessionManager turn results", () => {
     });
   });
 
-  it("fails immediately when startTurn events fail before terminal result settles", async () => {
+  it("cancels a failed startTurn event stream before surfacing its error", async () => {
     const runtimeState = createRuntime();
+    const result = createDeferred<{ status: "cancelled" }>();
+    const cancel = vi.fn(async () => {
+      result.resolve({ status: "cancelled" });
+    });
     const closeStream = vi.fn(async () => {});
     runtimeState.runtime.startTurn = vi.fn((input) => ({
       requestId: input.requestId,
@@ -1168,8 +996,8 @@ describe("AcpSessionManager turn results", () => {
         yield { type: "text_delta" as const, stream: "output" as const, text: "partial" };
         throw new AcpRuntimeError("ACP_TURN_FAILED", "event stream disconnected");
       })(),
-      result: new Promise<never>(() => {}),
-      cancel: vi.fn(async () => {}),
+      result: result.promise,
+      cancel,
       closeStream,
     }));
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
@@ -1196,6 +1024,7 @@ describe("AcpSessionManager turn results", () => {
       code: "ACP_TURN_FAILED",
       message: "event stream disconnected",
     });
+    expect(cancel).toHaveBeenCalledOnce();
     expect(closeStream).toHaveBeenCalledWith({ reason: "turn-events-error" });
   });
 
@@ -1241,32 +1070,10 @@ describe("AcpSessionManager turn results", () => {
         id: "acpx",
         runtime: runtimeState.runtime,
       });
-      hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
-        const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey;
-        if (sessionKey === "agent:codex:acp:child-1") {
-          return {
-            sessionKey,
-            storeSessionKey: sessionKey,
-            entry: {
-              sessionId: "child-1",
-              updatedAt: Date.now(),
-              spawnedBy: "agent:quant:telegram:quant:direct:822430204",
-              label: "Drain progress",
-            },
-            acp: readySessionMeta(),
-          };
-        }
-        if (sessionKey === "agent:quant:telegram:quant:direct:822430204") {
-          return {
-            sessionKey,
-            storeSessionKey: sessionKey,
-            entry: {
-              sessionId: "parent-1",
-              updatedAt: Date.now(),
-            },
-          };
-        }
-        return null;
+      mockParentedAcpSessionEntries({
+        childSessionKey: "agent:codex:acp:child-1",
+        parentSessionKey: "agent:quant:telegram:quant:direct:822430204",
+        label: "Drain progress",
       });
 
       const manager = new AcpSessionManager();

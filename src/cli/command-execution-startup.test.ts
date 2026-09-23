@@ -1,9 +1,14 @@
 // Command execution startup tests cover startup behavior before CLI command execution.
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 
 const emitCliBannerMock = vi.hoisted(() => vi.fn());
 const routeLogsToStderrMock = vi.hoisted(() => vi.fn());
-const ensureCliCommandBootstrapMock = vi.hoisted(() => vi.fn(async () => {}));
+const ensureConfigReadyMock = vi.hoisted(() => vi.fn(async () => {}));
+const ensureCliPluginRegistryLoadedMock = vi.hoisted(() => vi.fn(async () => {}));
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 vi.mock("./banner.js", () => ({
   emitCliBanner: emitCliBannerMock,
@@ -17,8 +22,12 @@ vi.mock("../logging/console.js", async (importOriginal) => {
   };
 });
 
-vi.mock("./command-bootstrap.js", () => ({
-  ensureCliCommandBootstrap: ensureCliCommandBootstrapMock,
+vi.mock("./program/config-guard.js", () => ({
+  ensureConfigReady: ensureConfigReadyMock,
+}));
+
+vi.mock("./plugin-registry-loader.js", () => ({
+  ensureCliPluginRegistryLoaded: ensureCliPluginRegistryLoadedMock,
 }));
 
 describe("command-execution-startup", () => {
@@ -39,131 +48,6 @@ describe("command-execution-startup", () => {
     expect(() =>
       createSubsystemLogger("test/cli-startup").isEnabled("info", "console"),
     ).not.toThrow();
-  });
-
-  it("resolves startup context from argv and mode", () => {
-    expect(
-      mod.resolveCliExecutionStartupContext({
-        argv: ["node", "openclaw", "status", "--json"],
-        jsonOutputMode: true,
-        env: {},
-      }),
-    ).toEqual({
-      invocation: {
-        argv: ["node", "openclaw", "status", "--json"],
-        commandPath: ["status"],
-        primary: "status",
-        hasHelpOrVersion: false,
-        isRootHelpInvocation: false,
-      },
-      commandPath: ["status"],
-      startupPolicy: {
-        suppressDoctorStdout: true,
-        hideBanner: true,
-        skipConfigGuard: true,
-        loadPlugins: false,
-        pluginRegistry: { scope: "channels" },
-      },
-    });
-  });
-
-  it("uses process env banner suppression when startup env is omitted", () => {
-    const originalHideBanner = process.env.OPENCLAW_HIDE_BANNER;
-    try {
-      process.env.OPENCLAW_HIDE_BANNER = "1";
-
-      expect(
-        mod.resolveCliExecutionStartupContext({
-          argv: ["node", "openclaw", "status"],
-          jsonOutputMode: false,
-        }).startupPolicy.hideBanner,
-      ).toBe(true);
-      expect(
-        mod.resolveCliExecutionStartupContext({
-          argv: ["node", "openclaw", "status"],
-          jsonOutputMode: false,
-          env: {},
-        }).startupPolicy.hideBanner,
-      ).toBe(false);
-    } finally {
-      if (originalHideBanner === undefined) {
-        delete process.env.OPENCLAW_HIDE_BANNER;
-      } else {
-        process.env.OPENCLAW_HIDE_BANNER = originalHideBanner;
-      }
-    }
-  });
-
-  it("keeps plain machine stdout clean without treating the command as JSON", () => {
-    const startupPolicy = mod.resolveCliExecutionStartupContext({
-      argv: ["node", "openclaw", "models", "aliases", "list", "--plain"],
-      jsonOutputMode: false,
-      machineOutputMode: true,
-      env: {},
-    }).startupPolicy;
-
-    expect(startupPolicy.suppressDoctorStdout).toBe(true);
-    expect(startupPolicy.hideBanner).toBe(true);
-  });
-
-  it("skips local plugin bootstrap for JSON gateway agent calls", () => {
-    expect(
-      mod.resolveCliExecutionStartupContext({
-        argv: ["node", "openclaw", "agent", "--agent", "main", "--message", "hi", "--json"],
-        jsonOutputMode: true,
-      }).startupPolicy.loadPlugins,
-    ).toBe(false);
-    expect(
-      mod.resolveCliExecutionStartupContext({
-        argv: [
-          "node",
-          "openclaw",
-          "agent",
-          "--agent",
-          "main",
-          "--message",
-          "hi",
-          "--json",
-          "--local",
-        ],
-        jsonOutputMode: true,
-      }).startupPolicy.loadPlugins,
-    ).toBe(true);
-    expect(
-      mod.resolveCliExecutionStartupContext({
-        argv: ["node", "openclaw", "agent", "--agent", "main", "--message", "hi"],
-        jsonOutputMode: false,
-      }).startupPolicy.loadPlugins,
-    ).toBe(false);
-  });
-
-  it("uses the resolved action command path for every execution startup decision", () => {
-    const context = mod.resolveCliExecutionStartupContext({
-      argv: ["node", "openclaw", "gateway", "--token", "secret", "call", "health"],
-      commandPath: ["gateway", "call"],
-      jsonOutputMode: false,
-      env: {},
-    });
-
-    expect(context.invocation.commandPath).toEqual(["gateway", "secret"]);
-    expect(context.commandPath).toEqual(["gateway", "call"]);
-
-    expect(
-      mod.resolveCliExecutionStartupContext({
-        argv: ["node", "openclaw", "acp", "--token", "-secret"],
-        commandPath: ["acp"],
-        jsonOutputMode: false,
-        env: {},
-      }).startupPolicy.suppressDoctorStdout,
-    ).toBe(true);
-    expect(
-      mod.resolveCliExecutionStartupContext({
-        argv: ["node", "openclaw", "acp", "--verbose", "client"],
-        commandPath: ["acp", "client"],
-        jsonOutputMode: false,
-        env: {},
-      }).startupPolicy.suppressDoctorStdout,
-    ).toBe(false);
   });
 
   it("routes logs to stderr and emits banner only when allowed", async () => {
@@ -230,15 +114,13 @@ describe("command-execution-startup", () => {
       },
     });
 
-    expect(ensureCliCommandBootstrapMock).toHaveBeenCalledWith({
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: statusRuntime,
       commandPath: ["status"],
+      measure: expect.any(Function),
       suppressDoctorStdout: true,
-      allowInvalid: undefined,
-      loadPlugins: false,
-      pluginRegistry: { scope: "channels" },
-      skipConfigGuard: false,
     });
+    expect(ensureCliPluginRegistryLoadedMock).not.toHaveBeenCalled();
 
     const messageRuntime = {} as never;
     await mod.ensureCliExecutionBootstrap({
@@ -257,16 +139,117 @@ describe("command-execution-startup", () => {
       skipPristineStartupStateMigrations: true,
     });
 
-    expect(ensureCliCommandBootstrapMock).toHaveBeenLastCalledWith({
+    expect(ensureConfigReadyMock).toHaveBeenLastCalledWith({
       runtime: messageRuntime,
       commandPath: ["message", "send"],
-      suppressDoctorStdout: false,
+      measure: expect.any(Function),
       allowInvalid: true,
-      loadPlugins: true,
-      pluginRegistry: { scope: "all" },
-      skipConfigGuard: false,
       skipPristineCoreStateMigrations: true,
       skipPristineStartupStateMigrations: true,
     });
+    expect(ensureCliPluginRegistryLoadedMock).toHaveBeenCalledWith({
+      scope: "all",
+      routeLogsToStderr: false,
+    });
   });
+
+  it.each([
+    { commandPath: ["gateway"], asyncReads: 2 },
+    { commandPath: ["gateway", "run"], asyncReads: 2 },
+    { commandPath: ["doctor"], asyncReads: 0 },
+  ])(
+    "routes fresh $commandPath snapshots through their host preparation",
+    async ({ commandPath, asyncReads }) => {
+      const root = tempDirs.make("openclaw-cli-snapshot-preparation-");
+      const configPath = path.join(root, "openclaw.json");
+      const env = {
+        HOME: root,
+        USERPROFILE: root,
+        OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+        OPENCLAW_STATE_DIR: path.join(root, "state"),
+        VITEST: "true",
+      };
+      vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+      const [{ createConfigIoContext }, snapshots, metadata, runtime, lifecycle, state] =
+        await Promise.all([
+          import("../config/io.context.js"),
+          import("../config/io.snapshot.js"),
+          import("../config/io.plugin-metadata.js"),
+          import("../config/runtime-snapshot.js"),
+          import("../plugins/plugin-metadata-lifecycle.js"),
+          import("../state/openclaw-state-db.js"),
+        ]);
+      const context = createConfigIoContext({
+        configPath,
+        env,
+        homedir: () => root,
+        observe: false,
+      });
+      const prepare = vi.spyOn(metadata, "resolveConfigWidePluginMetadataSnapshotAsync");
+      const captures: Array<ReturnType<typeof runtime.captureManagedConfigSnapshotPreparation>> =
+        [];
+      ensureConfigReadyMock.mockImplementationOnce(async () => {
+        captures.push(runtime.captureManagedConfigSnapshotPreparation(configPath));
+        expect(
+          runtime.captureManagedConfigSnapshotPreparation(path.join(root, "other.json")),
+        ).toBeNull();
+        expect(runtime.hasManagedRuntimeConfigWriteOwner(configPath)).toBe(false);
+        await expect(
+          runtime.preflightManagedRuntimeConfigWrite(
+            configPath,
+            {},
+            { requireImmediateApplication: true },
+          ),
+        ).rejects.toThrow("The Gateway cannot apply this activation");
+        for (const port of [19001, 19002]) {
+          fs.writeFileSync(
+            configPath,
+            JSON.stringify({ gateway: { mode: "local", port }, plugins: { enabled: false } }),
+          );
+          const result = await snapshots.readConfigFileSnapshotWithPluginMetadataFromContext(
+            context,
+            {
+              allowCurrentPluginMetadata: false,
+            },
+          );
+          expect(result.snapshot.issues).toEqual([]);
+          expect(result.snapshot.valid).toBe(true);
+          expect(result.snapshot.config.gateway?.port).toBe(port);
+          expect(result.pluginMetadataSnapshot).toBeDefined();
+        }
+      });
+      try {
+        await mod.ensureCliExecutionBootstrap({
+          runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+          commandPath,
+          startupPolicy: {
+            suppressDoctorStdout: true,
+            hideBanner: true,
+            skipConfigGuard: false,
+            loadPlugins: false,
+            pluginRegistry: { scope: "all" },
+          },
+        });
+        expect(prepare).toHaveBeenCalledTimes(asyncReads);
+        expect(runtime.captureManagedConfigSnapshotPreparation(configPath)).toBeNull();
+        const captured = captures[0];
+        if (asyncReads > 0) {
+          if (!captured) {
+            throw new Error("Gateway bootstrap did not own snapshot preparation");
+          }
+          await expect(captured(async () => undefined)).rejects.toThrow(
+            "snapshot preparation owner has closed",
+          );
+        } else {
+          expect(captured).toBeNull();
+        }
+      } finally {
+        prepare.mockRestore();
+        vi.unstubAllEnvs();
+        lifecycle.clearPluginMetadataLifecycleCaches();
+        state.closeOpenClawStateDatabaseForTest();
+      }
+    },
+  );
 });

@@ -7,6 +7,7 @@ import {
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { createChatSubmissions } from "../../app/chat-submissions.ts";
+import { chatOutboxDeliveryKey } from "../../lib/chat/outbox-store.ts";
 import {
   admitChatSubmission,
   getChatRunOwner,
@@ -48,7 +49,7 @@ function projectLiveMessage(
   return projection;
 }
 
-function createInitialHandoffFixture() {
+function createInitialHandoffFixture(retain = true) {
   const sessionKey = "agent:main:initial-image";
   const client = {};
   const chatSubmissions = createChatSubmissions();
@@ -59,7 +60,7 @@ function createInitialHandoffFixture() {
     chatMessages: [] as unknown[],
     currentSessionId: "initial-session",
   };
-  chatSubmissions.retain(
+  const initial = expectDefined(
     buildInitialChatSubmission(
       sessionKey,
       {
@@ -84,8 +85,12 @@ function createInitialHandoffFixture() {
       client,
       "initial-run",
     ),
+    "initial input",
   );
-  return { client, chatSubmissions, owner, sessionKey };
+  if (retain) {
+    chatSubmissions.retain(initial);
+  }
+  return { client, chatSubmissions, owner, sessionKey, initial };
 }
 
 function createAuthoritativeInitialMessage(sequence = 1) {
@@ -172,13 +177,12 @@ describe("pane-owned canonical session projection", () => {
   it.each(["messagePersisted", "snapshotLoaded"] as const)(
     "sender provenance does not survive authoritative omission in %s",
     (type) => {
-      const { owner, chatSubmissions, client, sessionKey } = createInitialHandoffFixture();
-      const handoff = chatSubmissions.readInitial(sessionKey, client)!;
+      const { owner, initial: handoff } = createInitialHandoffFixture();
       expect(handoff.message["__openclaw"]).toHaveProperty("senderIdentity", {
         type: "profile",
         id: "local",
       });
-      admitChatSubmission(owner);
+      admitChatSubmission(owner, undefined);
       const authoritative = createAuthoritativeInitialMessage();
       reduceChatSessionProjection(
         owner,
@@ -219,6 +223,42 @@ describe("pane-owned canonical session projection", () => {
       agentId: "main",
       activeLeafEntryId: "selected-leaf",
     });
+  });
+
+  it("does not revive a consumed delivered copy from the cache or consume foreign provenance", () => {
+    const { client, chatSubmissions, owner, sessionKey, initial } =
+      createInitialHandoffFixture(false);
+    const delivered = expectDefined(
+      chatSubmissions.retain({
+        kind: "delivered",
+        owner: client,
+        sessionKey,
+        sessionId: owner.currentSessionId,
+        deliveryKey: chatOutboxDeliveryKey(owner, { sessionKey, agentId: "main" }, "initial-run"),
+        pendingRunId: "initial-run",
+        message: initial.message,
+      }),
+      "delivered source",
+    );
+    delivered.pending = false;
+    const imported = {
+      ...initial.message,
+      __openclaw: { ...initial.message["__openclaw"], importedFrom: "cli", externalId: "peer" },
+    };
+    reduceChatSessionProjection(owner, {
+      type: "snapshotLoaded",
+      messages: [structuredClone(initial.message), imported],
+    });
+    expect(owner.chatMessages).toEqual([imported]);
+
+    reduceChatSessionProjection(
+      owner,
+      { type: "snapshotLoaded", messages: [initial.message] },
+      {
+        scope: { sessionKey, sessionId: "replacement-session" },
+      },
+    );
+    expect(owner.chatMessages).toEqual([initial.message]);
   });
 
   it("publishes each pane reducer transition and displayed transcript together", () => {
@@ -268,21 +308,22 @@ describe("pane-owned canonical session projection", () => {
       eventType: "messagePersisted" as const,
     },
   ])("owns $name in one projection publication", ({ admitFirst, cached, eventType }) => {
-    const { client, chatSubmissions, owner, sessionKey } = createInitialHandoffFixture();
-    const handoff = chatSubmissions.readInitial(sessionKey, client);
-    expect(handoff).not.toBeNull();
-    if (!handoff) {
-      throw new Error("expected initial prompt handoff");
-    }
+    const {
+      client,
+      chatSubmissions,
+      owner,
+      sessionKey,
+      initial: handoff,
+    } = createInitialHandoffFixture();
     if (admitFirst) {
       if (cached) {
         owner.chatMessages = [handoff.message];
       }
-      expect(admitChatSubmission(owner)).toBe(!cached);
+      expect(admitChatSubmission(owner, undefined)).toBe(!cached);
       expect(getChatSessionProjection(owner).entries[0]?.pending).toBe(true);
       const admittedMessage = owner.chatMessages[0];
       reduceChatSessionProjection(owner, { type: "sessionReset" });
-      expect(admitChatSubmission(owner)).toBe(true);
+      expect(admitChatSubmission(owner, undefined)).toBe(true);
       expect(owner.chatMessages).toEqual([admittedMessage]);
       reduceChatSessionProjection(owner, { type: "sessionReset" });
       const reboundScope = readChatSessionProjectionScope(owner, {
@@ -338,23 +379,29 @@ describe("pane-owned canonical session projection", () => {
     if (admitFirst) {
       expect(chatSubmissions.readInitial(sessionKey, client)).not.toBeNull();
       reduceChatSessionProjection(owner, { type: "sessionReset" });
-      expect(admitChatSubmission(owner)).toBe(false);
+      expect(admitChatSubmission(owner, undefined)).toBe(false);
       expect(owner.chatMessages).toEqual([]);
       reduceChatSessionProjection(
         owner,
         { type: "snapshotLoaded", messages: [authoritative] },
         { runActive: false },
       );
-      expect(chatSubmissions.readInitial(sessionKey, client)).toBeNull();
+      expect(chatSubmissions.readInitial(sessionKey, client)).toMatchObject({
+        pending: false,
+        message: null,
+      });
     } else {
-      expect(chatSubmissions.readInitial(sessionKey, client)).toBeNull();
-      expect(admitChatSubmission(owner)).toBe(false);
+      expect(chatSubmissions.readInitial(sessionKey, client)).toMatchObject({
+        pending: false,
+        message: null,
+      });
+      expect(admitChatSubmission(owner, undefined)).toBe(false);
     }
   });
 
   it("adopts the exact submission at its actual committed position", () => {
     const { client, chatSubmissions, owner, sessionKey } = createInitialHandoffFixture();
-    admitChatSubmission(owner);
+    admitChatSubmission(owner, undefined);
     const authoritative = createAuthoritativeInitialMessage(4);
     reduceChatSessionProjection(
       owner,
@@ -362,7 +409,73 @@ describe("pane-owned canonical session projection", () => {
       { runActive: false },
     );
     expect(owner.chatMessages).toEqual([authoritative]);
-    expect(chatSubmissions.readInitial(sessionKey, client)).toBeNull();
+    expect(chatSubmissions.readInitial(sessionKey, client)).toMatchObject({
+      pending: false,
+      message: null,
+    });
+  });
+
+  it("does not revive an initial handoff delivered after its canonical user message", () => {
+    const { chatSubmissions, owner, initial: handoff } = createInitialHandoffFixture(false);
+    const authoritative = createAuthoritativeInitialMessage();
+    reduceChatSessionProjection(owner, { type: "snapshotLoaded", messages: [authoritative] });
+    chatSubmissions.retain(handoff);
+
+    expect(admitChatSubmission(owner, undefined)).toBe(false);
+    expect(owner.chatMessages).toEqual([authoritative]);
+    for (let refresh = 0; refresh < 2; refresh++) {
+      reduceChatSessionProjection(
+        owner,
+        { type: "snapshotLoaded", messages: [] },
+        { runActive: true },
+      );
+      expect(owner.chatMessages).toEqual([]);
+    }
+  });
+
+  it.each(
+    ["messagePersisted", "snapshotLoaded"].flatMap((eventType) =>
+      ["handoff-first", "receipt-first"].map((order) => ({ eventType, order })),
+    ),
+  )("adopts consumed input through $eventType ($order)", ({ eventType, order }) => {
+    const {
+      client,
+      chatSubmissions,
+      owner,
+      sessionKey,
+      initial: handoff,
+    } = createInitialHandoffFixture(false);
+    const canonical = createHistoryMessage("user", "Collected initial input", {
+      id: "aggregate-input",
+      seq: 2,
+      idempotencyKey: "followup-collect:session:batch",
+    });
+    const imported = {
+      ...canonical,
+      __openclaw: { ...canonical["__openclaw"], importedFrom: "cli", externalId: "peer" },
+    };
+    reduceChatSessionProjection(owner, { type: "snapshotLoaded", messages: [imported] });
+    const retain = () => {
+      chatSubmissions.retain({ ...handoff, kind: "initial", consumedByEventId: "aggregate-input" });
+      admitChatSubmission(owner, undefined);
+    };
+    if (order === "handoff-first") {
+      retain();
+      expect(owner.chatMessages).toContain(handoff.message);
+    }
+    reduceChatSessionProjection(
+      owner,
+      eventType === "messagePersisted"
+        ? { type: "messagePersisted", message: canonical }
+        : { type: "snapshotLoaded", messages: [imported, canonical] },
+    );
+    if (order === "receipt-first") {
+      retain();
+    }
+    expect(owner.chatMessages).toContain(canonical);
+    expect(owner.chatMessages).toContain(imported);
+    expect(owner.chatMessages).not.toContain(handoff.message);
+    expect(chatSubmissions.readInitial(sessionKey, client)?.pending).toBe(false);
   });
 
   it("keeps each split pane's live projection independent", () => {

@@ -21,9 +21,12 @@ jobs:
   auto-response:
     if: >-
       ${{
-        github.event_name != 'pull_request_target' ||
-        (github.event.action != 'labeled' && github.event.action != 'unlabeled') ||
-        (github.actor != 'clawsweeper[bot]' && github.actor != 'openclaw-clawsweeper[bot]')
+        (github.event_name != 'issue_comment' || github.event.comment.user.type != 'Bot') &&
+        (
+          github.event_name != 'pull_request_target' ||
+          (github.event.action != 'labeled' && github.event.action != 'unlabeled') ||
+          (github.actor != 'clawsweeper[bot]' && github.actor != 'openclaw-clawsweeper[bot]')
+        )
       }}
     permissions:
       contents: read

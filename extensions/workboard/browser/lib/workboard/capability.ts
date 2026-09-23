@@ -1,3 +1,4 @@
+import { setWorkboardCards } from "./card-state.ts";
 import {
   getWorkboardState,
   stopWorkboardLifecycleRefresh,
@@ -42,7 +43,7 @@ export function createWorkboardCapability(): WorkboardCapability {
       const wasReady = boardsReady;
       boardsReady = false;
       capability.state.boards = [];
-      capability.state.cards = [];
+      setWorkboardCards(capability.state, []);
       capability.state.tasksByCardId.clear();
       capability.state.loaded = false;
       capability.state.loadAttempted = false;

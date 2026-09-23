@@ -4,11 +4,10 @@ import type { RouteLocation, RouteNotFound } from "@openclaw/uirouter";
 import { html, nothing } from "lit";
 import { state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import type { RouteId } from "../app-routes.ts";
 import "../components/gateway-url-confirmation.ts";
-import "../components/github-link-hovercard-registration.ts";
-import "../components/openclaw-mascot.ts";
+import "../components/link-reader-hovercard-registration.ts";
 import { renderLazyElementState, renderLazyViewError } from "../components/lazy-view-error.ts";
+import { renderConnectingSplash } from "../components/loading-skeleton.ts";
 import { installTitleTooltips } from "../components/tooltip-title.ts";
 import { t } from "../i18n/index.ts";
 import { formatUiError } from "../lib/format-error.ts";
@@ -30,7 +29,8 @@ import {
   QUESTION_PAGE_ELEMENT,
   TERMINAL_PANEL_ELEMENT,
 } from "./lazy-custom-element.ts";
-import { isNativeWebChromeHost } from "./native-web-chrome.ts";
+import { availableLinkReaders, availableLinkPreviewReaders } from "./link-reader-routing.ts";
+import { nativeEmbedHost, isNativeWebChromeHost } from "./native-web-chrome.ts";
 import { resolveOnboardingMode } from "./onboarding-mode.ts";
 import { isDesktopPanelAvailable } from "./panel-availability.ts";
 import { resolveGatewayCredentialsForUrlEdit } from "./settings.ts";
@@ -50,20 +50,6 @@ function isRouteNotFound(result: ChatRouteData | RouteNotFound): result is Route
   return "type" in result && result.type === "notFound";
 }
 
-function renderConnectingSplash(status?: string) {
-  return html`
-    <main
-      class="connect-splash"
-      role="status"
-      aria-live="polite"
-      aria-label=${status ?? t("common.loading")}
-    >
-      <openclaw-mascot mood="thinking" .size=${120}></openclaw-mascot>
-      ${status ? html`<span class="connect-splash__status">${status}</span>` : nothing}
-    </main>
-  `;
-}
-
 export class OpenClawApp extends OpenClawLightDomElement {
   // Pinned while a connect submitted from the visible login gate is in
   // flight, so a failed manual attempt cannot flash the shell in between.
@@ -71,8 +57,7 @@ export class OpenClawApp extends OpenClawLightDomElement {
   @state() private loginGatewayUrl = "";
   @state() private loginToken = "";
   @state() private loginPassword = "";
-  @state() private loginShowGatewayToken = false;
-  @state() private loginShowGatewayPassword = false;
+  @state() private loginShowGatewaySecret = false;
   @state() private pendingGatewayUrl: string | null = null;
   @state() private onboarding = resolveOnboardingMode(globalThis.location?.search ?? "");
   @state() private focusDashboardRoute: FocusDashboardRouteState = { kind: "loading" };
@@ -90,7 +75,7 @@ export class OpenClawApp extends OpenClawLightDomElement {
     this.closeDocument(this.context?.basePath ?? ""),
   );
 
-  private get context(): ApplicationContext<RouteId> | undefined {
+  private get context(): ApplicationContext | undefined {
     return this.runtime?.context;
   }
 
@@ -123,11 +108,23 @@ export class OpenClawApp extends OpenClawLightDomElement {
         () => (this.terminalOnly ? this.context?.theme : undefined),
         (theme, notify) => theme.subscribe(notify),
       )
+      .watch(
+        () => this.context?.router,
+        (router, notify) => router.subscribe(notify),
+      )
       .effect(() => this.ownerDocument, installTitleTooltips);
   }
 
   override connectedCallback() {
     super.connectedCallback();
+    const embedHost = nativeEmbedHost();
+    this.ownerDocument.documentElement.classList.toggle(
+      "openclaw-native-embed",
+      embedHost !== null,
+    );
+    if (embedHost) {
+      void import("../styles/native-embed.css");
+    }
     void import("../components/session-progress-hovercard-registration.ts");
     this.resetLoginSensitivePresentation();
     this.runtime = bootstrapApplication();
@@ -218,8 +215,7 @@ export class OpenClawApp extends OpenClawLightDomElement {
   }
 
   private resetLoginSensitivePresentation() {
-    this.loginShowGatewayToken = false;
-    this.loginShowGatewayPassword = false;
+    this.loginShowGatewaySecret = false;
   }
 
   private updateLoginGatewayUrl(value: string) {
@@ -462,6 +458,8 @@ export class OpenClawApp extends OpenClawLightDomElement {
           <openclaw-gateway-url-confirmation
             .props=${{
               pendingGatewayUrl: this.pendingGatewayUrl,
+              currentGatewayUrl: runtime.context.gateway.connection.gatewayUrl,
+              linkCarriesToken: Boolean(runtime.pendingGatewayConnection?.token),
               onConfirm: () => {
                 runtime.confirmPendingGatewayConnection();
                 this.pendingGatewayUrl = null;
@@ -479,7 +477,7 @@ export class OpenClawApp extends OpenClawLightDomElement {
     </openclaw-tooltip-provider>`;
   }
 
-  private renderDocument(context: ApplicationContext<RouteId>, runtime: ApplicationRuntime) {
+  private renderDocument(context: ApplicationContext, runtime: ApplicationRuntime) {
     const gatewaySnapshot = context.gateway.snapshot;
     const gatewayConnected = gatewaySnapshot.phase === "connected";
     const gatewayStartupStatus =
@@ -577,11 +575,21 @@ export class OpenClawApp extends OpenClawLightDomElement {
       gatewaySnapshot.lastError === null &&
       (gatewaySnapshot.phase === "starting" ||
         (gatewaySnapshot.phase === "connecting" && !this.loginGatePinned));
-    if (initialConnectPending) {
+    const warmConnectPending = initialConnectPending && runtime.warmBoot && !this.loginGatePinned;
+    if (initialConnectPending && !warmConnectPending) {
       return renderConnectingSplash(gatewayStartupStatus);
     }
+    const route = context.router.getState();
+    // Browser-local sign-in recovery must remain reachable after auth fails.
+    // This admits only Gateway settings; server operations still require auth.
+    const browserSignInRecovery =
+      (route.pendingMatches[0] ?? route.matches[0])?.routeId === "connection" &&
+      (context.gateway.hasStoredDeviceToken?.() ?? false);
     const shellOwnsRecovery =
-      gatewaySnapshot.phase === "reconnecting" || gatewaySnapshot.phase === "reload-required";
+      browserSignInRecovery ||
+      gatewaySnapshot.phase === "reconnecting" ||
+      gatewaySnapshot.phase === "reload-required" ||
+      warmConnectPending;
     const showLoginGate = !gatewayConnected && !shellOwnsRecovery;
     if (showLoginGate && !isOptionalElementDefined(LOGIN_GATE_ELEMENT)) {
       const loadState = this.loginGateLoader.visibleState;
@@ -603,32 +611,32 @@ export class OpenClawApp extends OpenClawLightDomElement {
         <openclaw-login-gate
           .props=${{
             resourceBasePath: context.resourceBasePath,
+            mascot: context.theme.branding.mascot,
             connected: gatewayConnected,
             lastError: gatewaySnapshot.lastError,
+            reconnectPending:
+              gatewaySnapshot.lastError !== null &&
+              (gatewaySnapshot.phase === "connecting" || gatewaySnapshot.phase === "reconnecting"),
             lastErrorCode: gatewaySnapshot.lastErrorCode,
             lastErrorAuthReason: gatewaySnapshot.lastErrorAuthReason,
             hasToken: Boolean(this.loginToken.trim()),
             hasPassword: Boolean(this.loginPassword.trim()),
             gatewayUrl: this.loginGatewayUrl,
-            token: this.loginToken,
-            password: this.loginPassword,
-            showGatewayToken: this.loginShowGatewayToken,
-            showGatewayPassword: this.loginShowGatewayPassword,
+            secret: this.loginToken || this.loginPassword,
+            showGatewaySecret: this.loginShowGatewaySecret,
             onGatewayUrlChange: (value: string) => {
               this.updateLoginGatewayUrl(value);
             },
-            onTokenChange: (value: string) => {
+            onSecretChange: (value: string) => {
               this.loginToken = value;
+              this.loginPassword = "";
             },
-            onPasswordChange: (value: string) => {
-              this.loginPassword = value;
+            onToggleGatewaySecret: () => {
+              this.loginShowGatewaySecret = !this.loginShowGatewaySecret;
             },
-            onToggleGatewayToken: () => {
-              this.loginShowGatewayToken = !this.loginShowGatewayToken;
-            },
-            onToggleGatewayPassword: () => {
-              this.loginShowGatewayPassword = !this.loginShowGatewayPassword;
-            },
+            onOpenGatewaySettings: context.gateway.hasStoredDeviceToken?.()
+              ? () => context.navigate("connection")
+              : undefined,
             onConnect: () => {
               this.loginGatePinned = true;
               context.gateway.connect({
@@ -648,8 +656,11 @@ export class OpenClawApp extends OpenClawLightDomElement {
       return this.renderQuestionDocument(runtime);
     }
     return html`
-      <openclaw-github-link-hovercard-provider
-        .client=${gatewaySnapshot.client}
+      <openclaw-link-reader-hovercard-provider
+        .client=${gatewayConnected ? gatewaySnapshot.client : null}
+        .readers=${availableLinkPreviewReaders(gatewaySnapshot)}
+        .claimedReaders=${availableLinkReaders(gatewaySnapshot)}
+        .pagePreviewContext=${context}
         .agentId=${
           context.agentSelection.state.selectedId ?? gatewaySnapshot.assistantAgentId ?? undefined
         }
@@ -664,7 +675,7 @@ export class OpenClawApp extends OpenClawLightDomElement {
             .onboarding=${this.onboarding}
           ></openclaw-app-shell>
         </openclaw-session-progress-hovercard-provider>
-      </openclaw-github-link-hovercard-provider>
+      </openclaw-link-reader-hovercard-provider>
     `;
   }
 }

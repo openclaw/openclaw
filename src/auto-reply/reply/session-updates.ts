@@ -7,6 +7,7 @@ import {
 } from "../../agents/exec-defaults.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
+  loadSessionEntry,
   patchSessionEntryCore,
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
@@ -19,49 +20,78 @@ import { getRemoteSkillEligibility } from "../../skills/runtime/remote.js";
 import { resolveReusableWorkspaceSkillSnapshot } from "../../skills/runtime/session-snapshot.js";
 import type { ReplySessionEntryHandle } from "./session-entry-handle.js";
 
+function publishSessionEntry(
+  params: {
+    sessionEntryHandle?: ReplySessionEntryHandle;
+    sessionStore?: Record<string, SessionEntry>;
+    sessionKey?: string;
+  },
+  entry: SessionEntry | undefined,
+): void {
+  if (entry) {
+    if (params.sessionEntryHandle) {
+      params.sessionEntryHandle.replaceCurrent(entry);
+    } else if (params.sessionStore && params.sessionKey) {
+      params.sessionStore[params.sessionKey] = entry;
+    }
+  } else {
+    params.sessionEntryHandle?.clearCurrent();
+    if (params.sessionStore && params.sessionKey) {
+      delete params.sessionStore[params.sessionKey];
+    }
+  }
+}
+
 async function persistSessionEntryUpdate(params: {
-  expectedSessionId: string | undefined;
+  expectedSession: Pick<SessionEntry, "sessionId" | "lifecycleRevision"> | undefined;
   sessionEntryHandle?: ReplySessionEntryHandle;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
   storePath?: string;
   nextEntry: SessionEntry;
   updates: Partial<SessionEntry>;
-}): Promise<SessionEntry | undefined> {
+}): Promise<{ entry: SessionEntry | undefined; updated: boolean }> {
   if (!params.sessionEntryHandle && (!params.sessionStore || !params.sessionKey)) {
-    return undefined;
+    return { entry: undefined, updated: false };
   }
   if (!params.storePath || !params.sessionKey) {
-    if (params.sessionEntryHandle) {
-      params.sessionEntryHandle.replaceCurrent(params.nextEntry);
-    } else if (params.sessionStore && params.sessionKey) {
-      params.sessionStore[params.sessionKey] = {
-        ...params.sessionStore[params.sessionKey],
-        ...params.nextEntry,
-      };
+    const current = params.sessionEntryHandle
+      ? params.sessionKey
+        ? params.sessionEntryHandle.get(params.sessionKey)
+        : params.sessionEntryHandle.getCurrent()
+      : params.sessionKey
+        ? params.sessionStore?.[params.sessionKey]
+        : undefined;
+    if (
+      current?.sessionId !== params.expectedSession?.sessionId ||
+      current?.lifecycleRevision !== params.expectedSession?.lifecycleRevision
+    ) {
+      return { entry: current, updated: false };
     }
-    return params.nextEntry;
+    // Preparation can yield to session management. Apply only the owned fields
+    // to its current row, including field removals such as unpinning.
+    const nextEntry = current ? { ...current, ...params.updates } : params.nextEntry;
+    publishSessionEntry(params, nextEntry);
+    return { entry: nextEntry, updated: true };
   }
+  let updated = false;
   const persistedEntry = await updateSessionEntry(
     {
       storePath: params.storePath,
       sessionKey: params.sessionKey,
     },
-    (entry) => (entry.sessionId === params.expectedSessionId ? params.updates : null),
+    (entry) => {
+      updated =
+        entry.sessionId === params.expectedSession?.sessionId &&
+        entry.lifecycleRevision === params.expectedSession?.lifecycleRevision;
+      return updated ? params.updates : null;
+    },
   );
+  publishSessionEntry(params, persistedEntry ?? undefined);
   if (persistedEntry) {
-    if (params.sessionEntryHandle) {
-      params.sessionEntryHandle.replaceCurrent(persistedEntry);
-    } else if (params.sessionStore && params.sessionKey) {
-      params.sessionStore[params.sessionKey] = persistedEntry;
-    }
-    return persistedEntry;
+    return { entry: persistedEntry, updated };
   }
-  params.sessionEntryHandle?.clearCurrent();
-  if (params.sessionStore && params.sessionKey) {
-    delete params.sessionStore[params.sessionKey];
-  }
-  return undefined;
+  return { entry: undefined, updated: false };
 }
 
 /** Ensures a session entry has the reusable skill snapshot needed for reply runs. */
@@ -75,7 +105,7 @@ export async function ensureSkillSnapshot(params: {
   sessionId?: string;
   isFirstTurnInSession: boolean;
   workspaceDir: string;
-  executionSkillsDir?: string;
+  executionWorkspaceDir?: string;
   cfg: OpenClawConfig;
   execOverrides?: ExecPolicyOverrides;
   /** If provided, only load skills with these names (for per-channel skill filtering) */
@@ -112,6 +142,10 @@ export async function ensureSkillSnapshot(params: {
   } = params;
 
   let nextEntry = sessionEntryHandle?.getCurrent() ?? sessionEntry;
+  const expectedSession = nextEntry && {
+    sessionId: nextEntry.sessionId,
+    lifecycleRevision: nextEntry.lifecycleRevision,
+  };
   let systemSent = sessionEntry?.systemSent ?? false;
   const nodeSkillsEligibility = resolveNodeExecEligibility({
     cfg,
@@ -120,23 +154,25 @@ export async function ensureSkillSnapshot(params: {
     agentId,
     execOverrides: params.execOverrides,
   });
-  const remoteEligibility = getRemoteSkillEligibility({
-    advertiseExecNode: nodeSkillsEligibility.canExec,
-  });
   const existingSnapshot = nextEntry?.skillsSnapshot;
   const resolveSnapshot = (snapshot: SessionEntry["skillsSnapshot"]) =>
     resolveReusableWorkspaceSkillSnapshot({
       workspaceDir,
-      ...(params.executionSkillsDir ? { executionSkillsDir: params.executionSkillsDir } : {}),
+      ...(params.executionWorkspaceDir
+        ? { executionWorkspaceDir: params.executionWorkspaceDir }
+        : {}),
       config: cfg,
       agentId,
       skillFilter,
       skillOverrides,
-      eligibility: { nodeSkills: nodeSkillsEligibility, remote: remoteEligibility },
+      resolveEligibility: () => ({
+        nodeSkills: nodeSkillsEligibility,
+        remote: getRemoteSkillEligibility({ advertiseExecNode: nodeSkillsEligibility.canExec }),
+      }),
       existingSnapshot: snapshot,
       librarySelections: nextEntry?.skillLibrarySelections,
     });
-  const initialSnapshotState = resolveSnapshot(existingSnapshot);
+  const initialSnapshotState = await resolveSnapshot(existingSnapshot);
   const shouldRefreshSnapshot = initialSnapshotState.shouldRefresh;
 
   if (isFirstTurnInSession && (sessionEntryHandle || sessionStore) && sessionKey) {
@@ -149,7 +185,7 @@ export async function ensureSkillSnapshot(params: {
     const skillSnapshot =
       !current.skillsSnapshot || shouldRefreshSnapshot
         ? initialSnapshotState.snapshot
-        : resolveSnapshot(current.skillsSnapshot).snapshot;
+        : (await resolveSnapshot(current.skillsSnapshot)).snapshot;
     nextEntry = {
       ...current,
       sessionId: sessionId ?? current.sessionId ?? crypto.randomUUID(),
@@ -157,8 +193,8 @@ export async function ensureSkillSnapshot(params: {
       systemSent: true,
       skillsSnapshot: skillSnapshot,
     };
-    const persistedEntry = await persistSessionEntryUpdate({
-      expectedSessionId: current.sessionId,
+    const { entry: persistedEntry, updated } = await persistSessionEntryUpdate({
+      expectedSession,
       sessionEntryHandle,
       sessionStore,
       sessionKey,
@@ -171,6 +207,13 @@ export async function ensureSkillSnapshot(params: {
         skillsSnapshot: nextEntry.skillsSnapshot,
       },
     });
+    if (!updated) {
+      return {
+        sessionEntry: persistedEntry,
+        skillsSnapshot: persistedEntry?.skillsSnapshot,
+        systemSent: persistedEntry?.systemSent ?? false,
+      };
+    }
     nextEntry = persistedEntry;
     systemSent = persistedEntry?.systemSent ?? systemSent;
   }
@@ -180,10 +223,10 @@ export async function ensureSkillSnapshot(params: {
     (nextEntry?.skillsSnapshot !== existingSnapshot || !shouldRefreshSnapshot);
   const skillsSnapshot =
     hasFreshSnapshotInEntry && nextEntry?.skillsSnapshot
-      ? resolveSnapshot(nextEntry.skillsSnapshot).snapshot
+      ? (await resolveSnapshot(nextEntry.skillsSnapshot)).snapshot
       : shouldRefreshSnapshot || !nextEntry?.skillsSnapshot
         ? initialSnapshotState.snapshot
-        : resolveSnapshot(nextEntry.skillsSnapshot).snapshot;
+        : (await resolveSnapshot(nextEntry.skillsSnapshot)).snapshot;
   if (
     skillsSnapshot &&
     (sessionEntryHandle || sessionStore) &&
@@ -201,8 +244,8 @@ export async function ensureSkillSnapshot(params: {
       updatedAt: Date.now(),
       skillsSnapshot,
     };
-    nextEntry = await persistSessionEntryUpdate({
-      expectedSessionId: current.sessionId,
+    const { entry: persistedEntry, updated } = await persistSessionEntryUpdate({
+      expectedSession,
       sessionEntryHandle,
       sessionStore,
       sessionKey,
@@ -214,6 +257,39 @@ export async function ensureSkillSnapshot(params: {
         skillsSnapshot: nextEntry.skillsSnapshot,
       },
     });
+    if (!updated) {
+      return {
+        sessionEntry: persistedEntry,
+        skillsSnapshot: persistedEntry?.skillsSnapshot,
+        systemSent: persistedEntry?.systemSent ?? false,
+      };
+    }
+    nextEntry = persistedEntry;
+  }
+
+  if (sessionKey && (sessionEntryHandle || sessionStore)) {
+    // Even a reusable snapshot crosses an await. Return the current row so the
+    // reply caller cannot restore stale metadata or a retired session generation.
+    const current = storePath
+      ? loadSessionEntry({ storePath, sessionKey })
+      : sessionEntryHandle
+        ? sessionEntryHandle.get(sessionKey)
+        : sessionStore?.[sessionKey];
+    if (storePath) {
+      publishSessionEntry(params, current);
+    }
+    if (
+      current?.sessionId !== expectedSession?.sessionId ||
+      current?.lifecycleRevision !== expectedSession?.lifecycleRevision
+    ) {
+      return {
+        sessionEntry: current,
+        skillsSnapshot: current?.skillsSnapshot,
+        systemSent: current?.systemSent ?? false,
+      };
+    }
+    nextEntry = current;
+    systemSent = current?.systemSent ?? false;
   }
 
   return { sessionEntry: nextEntry, skillsSnapshot, systemSent };

@@ -1,6 +1,7 @@
 // Slack tests cover context plugin behavior.
 import type { App } from "@slack/bolt";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import * as runtimeEnv from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setSlackRuntime } from "../runtime.js";
@@ -458,6 +459,77 @@ describe("createSlackMonitorContext channel metadata cache", () => {
 });
 
 describe("createSlackMonitorContext Agent View state", () => {
+  it.each(["available", "installed later", "open fails once"] as const)(
+    "keeps namespace stores separate and reuses successful opens when runtime is %s",
+    async (mode) => {
+      const workspace = { register: vi.fn(), lookup: vi.fn(async () => undefined) };
+      const thread = { register: vi.fn(), lookup: vi.fn(async () => undefined) };
+      const stores = { "agent-view-workspaces": workspace, "agent-view-threads": thread };
+      const attempts = new Map<string, number>();
+      const openKeyedStore = vi.fn(({ namespace }: { namespace: keyof typeof stores }) => {
+        const count = (attempts.get(namespace) ?? 0) + 1;
+        attempts.set(namespace, count);
+        if (mode === "open fails once" && count === 1) {
+          throw new Error("sqlite unavailable");
+        }
+        return stores[namespace];
+      });
+      const installRuntime = () => setSlackRuntime({ state: { openKeyedStore } } as never);
+      const warn = vi.fn();
+      const logger = vi.spyOn(runtimeEnv, "getChildLogger").mockReturnValue({ warn } as never);
+      try {
+        if (mode !== "installed later") {
+          installRuntime();
+        }
+        const ctx = createTestContext();
+        if (mode !== "available") {
+          await expect(ctx.isSlackAgentView()).resolves.toBe(false);
+          await expect(ctx.isSlackManagedViewThread("D123", "10.000")).resolves.toBe(false);
+          installRuntime();
+        }
+        await expect(ctx.isSlackAgentView()).resolves.toBe(false);
+        await expect(ctx.isSlackManagedViewThread("D123", "10.000")).resolves.toBe(false);
+
+        setSlackRuntime(null as never);
+        await ctx.recordSlackAgentView();
+        await ctx.recordSlackAgentView();
+        await ctx.recordSlackManagedViewThread("D123", "10.000");
+        await ctx.recordSlackManagedViewThread("D123", "20.000");
+
+        expect(workspace.lookup).toHaveBeenCalledExactlyOnceWith(
+          JSON.stringify(["workspace", "default", "T_EXPECTED", "A_EXPECTED"]),
+        );
+        expect(workspace.register).toHaveBeenCalledExactlyOnceWith(
+          JSON.stringify(["workspace", "default", "T_EXPECTED", "A_EXPECTED"]),
+          { experience: "agent", observedAt: expect.any(Number) },
+        );
+        expect(thread.lookup).toHaveBeenCalledExactlyOnceWith(
+          JSON.stringify(["thread", "default", "T_EXPECTED", "A_EXPECTED", "D123", "10.000"]),
+        );
+        expect(thread.register.mock.calls).toEqual(
+          ["10.000", "20.000"].map((threadTs) => [
+            JSON.stringify(["thread", "default", "T_EXPECTED", "A_EXPECTED", "D123", threadTs]),
+            { experience: "managed-thread", observedAt: expect.any(Number) },
+          ]),
+        );
+        const expectedOpens = mode === "open fails once" ? 2 : 1;
+        expect([...attempts]).toEqual([
+          ["agent-view-workspaces", expectedOpens],
+          ["agent-view-threads", expectedOpens],
+        ]);
+        expect(openKeyedStore.mock.calls.map(([options]) => options)).toEqual(
+          Array.from({ length: expectedOpens }, () => [
+            { namespace: "agent-view-workspaces", maxEntries: 4096 },
+            { namespace: "agent-view-threads", maxEntries: 4096 },
+          ]).flat(),
+        );
+        expect(warn).toHaveBeenCalledTimes(mode === "open fails once" ? 1 : 0);
+      } finally {
+        logger.mockRestore();
+      }
+    },
+  );
+
   it("records Agent View in the account context without runtime state", async () => {
     const ctx = createTestContext();
 

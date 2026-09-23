@@ -17,6 +17,7 @@ import {
   inspectGatewayRestartWithSnapshot,
   inspectPortUsage,
   makeGatewayService,
+  monotonicClock,
   callGateway,
   gatewayResponseError,
   resetRestartHealthMocks,
@@ -31,6 +32,39 @@ const actualCall =
 describe("restart health", () => {
   beforeEach(resetRestartHealthMocks);
   afterEach(restoreRestartHealthMocks);
+
+  it("keeps native inspection and health RPC within one supplied allowance", async () => {
+    const service = makeGatewayService({ status: "running", pid: 8000 });
+    vi.mocked(service.readRuntime).mockImplementation(async () => {
+      monotonicClock.nowMs += 25_000;
+      return { status: "running", pid: 8000 };
+    });
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "busy",
+      listeners: [{ pid: 8000, commandLine: "openclaw-gateway" }],
+      hints: [],
+    });
+    callGateway.mockImplementation(async (opts) => {
+      const responseMs = 10_000;
+      const allowanceMs = opts.timeoutMs ?? responseMs;
+      monotonicClock.nowMs += Math.min(allowanceMs, responseMs);
+      if (allowanceMs < responseMs) {
+        throw new Error("gateway request timeout for health");
+      }
+      return gatewayHealthResponse({ server: { version: "2026.9.3" } })(opts);
+    });
+    const { inspectGatewayRestart } = await import("./restart-health.js");
+    const health = await inspectGatewayRestart({
+      service,
+      port: 18789,
+      expectedVersion: "2026.9.3",
+      timeoutMs: 30_000,
+    });
+    expect(health.healthy).toBe(false);
+    expect(health.probeError).toBe("gateway request timeout for health");
+    expect(monotonicClock.nowMs).toBe(30_000);
+  });
 
   it("reports HTTP health and readiness independently", async () => {
     const server = createServer((request, response) => {
@@ -80,7 +114,7 @@ describe("restart health", () => {
     };
     callGateway.mockImplementation(
       gatewayHealthResponse({
-        server: { version: "2026.8.1", connId: "tls-ready" },
+        server: { version: "2026.8.1", connId: "tls-ready", bootId: "readiness-boot" },
         health: null,
       }),
     );
@@ -92,7 +126,11 @@ describe("restart health", () => {
         configuredProbe,
         config: { gateway: { tls: { enabled: true } } },
       }),
-    ).resolves.toMatchObject({ reachable: true, gatewayVersion: "2026.8.1" });
+    ).resolves.toMatchObject({
+      reachable: true,
+      gatewayVersion: "2026.8.1",
+      gatewayBootId: "readiness-boot",
+    });
     expect(callGateway).toHaveBeenCalledWith(
       expect.objectContaining({
         localPortOverride: 18789,

@@ -22,6 +22,24 @@ import {
 import { validatePreflightManifest } from "../../scripts/release-candidate-checklist.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
+// Only the default root pack reaches pnpm; git and tar fixtures keep the real binaries.
+const pnpmPack = vi.hoisted(() => ({
+  calls: [] as Array<{ args: string[]; env: NodeJS.ProcessEnv }>,
+  impl: undefined as ((directory: string, destination: string) => unknown) | undefined,
+}));
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  const execFileSyncMock = (file: string, args: string[], options: { env?: NodeJS.ProcessEnv }) => {
+    if (file !== "pnpm") {
+      return (actual.execFileSync as (...params: unknown[]) => unknown)(file, args, options);
+    }
+    pnpmPack.calls.push({ args, env: options.env ?? {} });
+    const value = (flag: string) => args[args.indexOf(flag) + 1] ?? "";
+    return pnpmPack.impl?.(value("--dir"), value("--pack-destination"));
+  };
+  return { ...actual, execFileSync: execFileSyncMock };
+});
+
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const repository = "openclaw/openclaw";
 const sourceSha = "a".repeat(40);
@@ -81,6 +99,12 @@ function packageSourceFixture(
     const staging = tempDirs.make("npm-package-staging-");
     mkdirSync(join(staging, "package"));
     copyFileSync(join(directory, "package.json"), join(staging, "package/package.json"));
+    if (existsSync(join(directory, "npm-shrinkwrap.json"))) {
+      copyFileSync(
+        join(directory, "npm-shrinkwrap.json"),
+        join(staging, "package/npm-shrinkwrap.json"),
+      );
+    }
     return execFileSync("tar", [
       "-czf",
       join(destination, `openclaw-${packageVersion}.tgz`),
@@ -195,7 +219,7 @@ async function bundleFixture(callerWorkflowPath = workflowPath) {
     if (endpoint.includes("/jobs?")) {
       return JSON.stringify({ total_count: 1, jobs: [job] });
     }
-    if (endpoint.endsWith("/attempts/2")) {
+    if (endpoint.endsWith("/attempts/2") || endpoint.endsWith("/runs/12")) {
       return JSON.stringify(run);
     }
     if (endpoint.endsWith("/artifacts/78")) {
@@ -216,7 +240,11 @@ type PreparedFixtureDescriptor = Awaited<ReturnType<typeof bundleFixture>>["desc
 
 async function qualificationFixture<
   Descriptor extends Pick<PreparedFixtureDescriptor, "source" | "producer">,
->(descriptor: Descriptor, pluginSdkApi: object = {}) {
+>(
+  descriptor: Descriptor,
+  pluginSdkApi: object = {},
+  dependencyReports: Record<string, object | string> = {},
+) {
   const source = descriptor.source;
   const makeProducer = (jobId: string, jobName: string) => ({
     ...descriptor.producer,
@@ -243,10 +271,14 @@ async function qualificationFixture<
     kind: string,
     id: string,
     producer: ReturnType<typeof makeProducer>,
-    files: Record<string, object>,
+    files: Record<string, object | string>,
   ) => {
     const entries = Object.entries(files).map(
-      ([name, value]) => [name, Buffer.from(`${JSON.stringify(value)}\n`)] as const,
+      ([name, value]) =>
+        [
+          name,
+          Buffer.from(typeof value === "string" ? value : `${JSON.stringify(value)}\n`),
+        ] as const,
     );
     const zip = new JSZip();
     for (const [name, bytes] of entries) {
@@ -298,6 +330,7 @@ async function qualificationFixture<
     makeProducer("49", "Check npm dependencies"),
     {
       "dependency-evidence-manifest.json": { releaseSha: source.sha },
+      ...dependencyReports,
     },
   );
   const jobs = [sourceCheck, contentsProof, sdkProof, dependencyProof].map(({ producer }) => ({
@@ -416,6 +449,235 @@ describe("prepared npm bundle", () => {
     fixture.job.conclusion = "failure";
     expect(() => verifyNpmBundleProducer(options)).toThrow("unique exact completed producer job");
   });
+
+  it("retains the exact green qualifier when only a later receipt job is retried", async () => {
+    const fixture = await bundleFixture();
+    Object.assign(fixture.run, { status: "completed", conclusion: "failure" });
+    fixture.job.name = "Qualify prepared npm package";
+    const current = { ...fixture.run, run_attempt: 3, conclusion: "success" };
+    const receipt = { ...fixture.job, id: 46, run_attempt: 3, name: "Seal artifact receipt" };
+    const requests: string[] = [];
+    const runGh = (args: string[]) => {
+      const endpoint = args[1] ?? "";
+      requests.push(endpoint);
+      if (endpoint.endsWith("/runs/12")) {
+        return JSON.stringify(current);
+      }
+      if (endpoint.includes("/attempts/3/jobs?")) {
+        return JSON.stringify({ total_count: 1, jobs: [receipt] });
+      }
+      return fixture.runGh(args);
+    };
+    const result = verifyNpmBundleProducer({
+      producer: { ...fixture.descriptor.producer, jobName: fixture.job.name },
+      repository,
+      toolingSha,
+      qualified: true,
+      requireCompletedParent: true,
+      runGh,
+    });
+    expect(result.run.run_attempt).toBe(3);
+    expect(result.job.id).toBe(fixture.job.id);
+    expect(result.job.run_attempt).toBe(2);
+    expect(requests.filter((endpoint) => endpoint.endsWith("/runs/12"))).toHaveLength(2);
+    expect(requests.some((endpoint) => endpoint.includes("/attempts/3/jobs?"))).toBe(true);
+  });
+
+  it.each([
+    "superseded qualifier",
+    "missing attempt jobs",
+    "mismatched attempt jobs",
+    "changed current tooling",
+    "current attempt regressed",
+    "current attempt advanced during verification",
+    "current run restarted during verification",
+  ])("rejects stale producer proof: %s", async (scenario) => {
+    const fixture = await bundleFixture();
+    Object.assign(fixture.run, { status: "completed", conclusion: "success" });
+    fixture.job.name = "Qualify prepared npm package";
+    const current = { ...fixture.run, run_attempt: 3 };
+    const receipt = { ...fixture.job, id: 46, run_attempt: 3, name: "Seal artifact receipt" };
+    let currentReads = 0;
+    const runGh = (args: string[]) => {
+      const endpoint = args[1] ?? "";
+      if (endpoint.endsWith("/runs/12")) {
+        currentReads += 1;
+        return JSON.stringify({
+          ...current,
+          ...(scenario === "changed current tooling" ? { head_sha: "d".repeat(40) } : {}),
+          ...(scenario === "current attempt regressed" ? { run_attempt: 1 } : {}),
+          ...(currentReads === 2 && scenario === "current attempt advanced during verification"
+            ? { run_attempt: 4 }
+            : {}),
+          ...(currentReads === 2 && scenario === "current run restarted during verification"
+            ? { status: "in_progress", conclusion: null }
+            : {}),
+        });
+      }
+      if (endpoint.includes("/attempts/3/jobs?")) {
+        const jobs =
+          scenario === "missing attempt jobs"
+            ? []
+            : [
+                {
+                  ...receipt,
+                  ...(scenario === "superseded qualifier" ? { name: fixture.job.name } : {}),
+                  ...(scenario === "mismatched attempt jobs" ? { run_attempt: 2 } : {}),
+                },
+              ];
+        return JSON.stringify({ total_count: jobs.length, jobs });
+      }
+      return fixture.runGh(args);
+    };
+    expect(() =>
+      verifyNpmBundleProducer({
+        producer: { ...fixture.descriptor.producer, jobName: fixture.job.name },
+        repository,
+        toolingSha,
+        qualified: true,
+        requireCompletedParent: true,
+        runGh,
+      }),
+    ).toThrow(/producer|attempt evidence/);
+  });
+
+  it.each([false, true])(
+    "checks packed legacy runtime dependencies before sealing (complete=%s)",
+    (complete) => {
+      const fixture = packageSourceFixture("2026.7.33");
+      // Use a non-workspace runtime: coverage must protect every declared dependency,
+      // not just the AI package whose omission broke 2026.7.33.
+      writeFileSync(
+        join(fixture.sourceDir, "package.json"),
+        JSON.stringify({
+          name: "openclaw",
+          version: "2026.7.33",
+          files: ["npm-shrinkwrap.json"],
+          dependencies: { "runtime-fixture": "1.0.0" },
+        }),
+      );
+      writeFileSync(
+        join(fixture.sourceDir, "npm-shrinkwrap.json"),
+        JSON.stringify({
+          name: "openclaw",
+          version: "2026.7.33",
+          lockfileVersion: 3,
+          packages: complete
+            ? {
+                "": { dependencies: { "runtime-fixture": "1.0.0" } },
+                "node_modules/runtime-fixture": { version: "1.0.0" },
+              }
+            : { "": {} },
+        }),
+      );
+      if (complete) {
+        const bundle = prepareNpmPackageBundle(fixture);
+        expect(bundle.packageVersion).toBe("2026.7.33");
+        expect(existsSync(join(fixture.outputDir, "package-bundle.json"))).toBe(true);
+      } else {
+        expect(() => prepareNpmPackageBundle(fixture)).toThrow(
+          "npm-shrinkwrap.json is missing declared dependency runtime-fixture",
+        );
+        expect(existsSync(join(fixture.outputDir, "package-bundle.json"))).toBe(false);
+      }
+    },
+  );
+
+  it("packs bundled dependencies under the hoisted linker with prepack scripts enabled", () => {
+    const { runPack, ...fixture } = packageSourceFixture("2026.9.6");
+    pnpmPack.impl = runPack;
+    try {
+      expect(prepareNpmPackageBundle(fixture).packageVersion).toBe("2026.9.6");
+    } finally {
+      pnpmPack.impl = undefined;
+    }
+    expect(pnpmPack.calls).toHaveLength(1);
+    expect(pnpmPack.calls[0]?.args).toEqual([
+      "--dir",
+      fixture.sourceDir,
+      "pack",
+      "--config.node-linker=hoisted",
+      "--pack-destination",
+      fixture.outputDir,
+    ]);
+    expect(pnpmPack.calls[0]?.env.OPENCLAW_PREPACK_PREPARED).toBe("1");
+  });
+
+  it.each([true, false])(
+    "prepares a legacy root shrinkwrap before sealing (has shrinkwrap=%s)",
+    (hasShrinkwrap) => {
+      const version = "2026.7.34";
+      const fixture = packageSourceFixture(version);
+      const aiDir = join(fixture.sourceDir, "packages/ai");
+      mkdirSync(aiDir, { recursive: true });
+      writeFileSync(
+        join(fixture.sourceDir, "package.json"),
+        JSON.stringify({
+          name: "openclaw",
+          version,
+          files: ["npm-shrinkwrap.json"],
+          dependencies: { "@openclaw/ai": version },
+        }),
+      );
+      writeFileSync(join(aiDir, "package.json"), JSON.stringify({ name: "@openclaw/ai", version }));
+      if (hasShrinkwrap) {
+        writeFileSync(
+          join(fixture.sourceDir, "npm-shrinkwrap.json"),
+          JSON.stringify({
+            name: "openclaw",
+            version,
+            lockfileVersion: 3,
+            packages: {
+              "": { dependencies: { "@openclaw/ai": "2026.7.33" } },
+              "node_modules/@openclaw/ai": { version: "2026.7.33" },
+            },
+          }),
+        );
+      }
+      const runPack = vi.fn((directory: string, destination: string) => {
+        const manifest = JSON.parse(readFileSync(join(directory, "package.json"), "utf8")) as {
+          name: string;
+        };
+        const staging = tempDirs.make("npm-package-staging-");
+        mkdirSync(join(staging, "package"));
+        copyFileSync(join(directory, "package.json"), join(staging, "package/package.json"));
+        if (manifest.name === "openclaw" && existsSync(join(directory, "npm-shrinkwrap.json"))) {
+          copyFileSync(
+            join(directory, "npm-shrinkwrap.json"),
+            join(staging, "package/npm-shrinkwrap.json"),
+          );
+        }
+        const tarballName =
+          manifest.name === "@openclaw/ai"
+            ? `openclaw-ai-${version}.tgz`
+            : `openclaw-${version}.tgz`;
+        return execFileSync("tar", [
+          "-czf",
+          join(destination, tarballName),
+          "-C",
+          staging,
+          "package",
+        ]);
+      });
+      const prepareRootShrinkwrap = vi.fn(({ aiTarballPath }: { aiTarballPath: string }) => {
+        expect(existsSync(aiTarballPath)).toBe(true);
+        const shrinkwrapPath = join(fixture.sourceDir, "npm-shrinkwrap.json");
+        const shrinkwrap = JSON.parse(readFileSync(shrinkwrapPath, "utf8"));
+        shrinkwrap.packages[""].dependencies["@openclaw/ai"] = version;
+        shrinkwrap.packages["node_modules/@openclaw/ai"].version = version;
+        writeFileSync(shrinkwrapPath, JSON.stringify(shrinkwrap));
+      });
+
+      const prepared = prepareNpmPackageBundle({
+        ...fixture,
+        prepareRootShrinkwrap,
+        runPack,
+      });
+
+      expect(prepareRootShrinkwrap).toHaveBeenCalledTimes(hasShrinkwrap ? 1 : 0);
+      expect(prepared.dependencyTarballs).toHaveLength(1);
+    },
+  );
 
   it.each([
     ["2026.8.1", "v2026.8.1-2", "same-source"],
@@ -536,7 +798,7 @@ describe("prepared npm bundle", () => {
   });
 
   it.each([undefined, "v2026.8.1"])(
-    "qualifies exact package bytes with large SDK evidence (release tag=%s)",
+    "qualifies exact package bytes with large SDK and npm lock evidence (release tag=%s)",
     async (releaseTag) => {
       const fixture = await bundleFixture();
       const directory = tempDirs.make("npm-bundle-");
@@ -555,11 +817,32 @@ describe("prepared npm bundle", () => {
       expect(readFileSync(downloaded.tarballPath)).toEqual(
         fixture.files.get(fixture.manifest.tarballName),
       );
-      const proof = await qualificationFixture(fixture.descriptor, {
-        baseline: "published",
-        // Successful releases can carry multi-megabyte declaration diffs.
-        diff: { exports: [{ before: "export type Previous = unknown;\n".repeat(150_000) }] },
-      });
+      const npmLocks = `${JSON.stringify({ packages: [{ lock: { packages: { "": { description: "x".repeat(3 * 1024 * 1024) } } } }] })}\n`;
+      const dependencyReports = {
+        ...Object.fromEntries(
+          [
+            "dependency-vulnerability-gate",
+            "transitive-manifest-risk-report",
+            "dependency-ownership-surface-report",
+            "dependency-changes-report",
+          ].flatMap((name) => [
+            [`${name}.json`, {}],
+            [`${name}.md`, "# Report\n"],
+          ]),
+        ),
+        "dependency-evidence-summary.md": "# Dependency evidence\n",
+        "npm-package-locks.json": npmLocks,
+        "npm-package-locks.md": "# npm package-lock mirrors\n",
+      };
+      const proof = await qualificationFixture(
+        fixture.descriptor,
+        {
+          baseline: "published",
+          // Successful releases can carry multi-megabyte declaration diffs.
+          diff: { exports: [{ before: "export type Previous = unknown;\n".repeat(150_000) }] },
+        },
+        dependencyReports,
+      );
       const manifest = await qualifyNpmPackageBundle({
         descriptor: fixture.descriptor,
         inputDir,
@@ -573,6 +856,11 @@ describe("prepared npm bundle", () => {
       });
       expect(manifest.version).toBe(3);
       expect(manifest.preparedBundle).toEqual(fixture.descriptor);
+      for (const [name, value] of Object.entries(dependencyReports)) {
+        expect(readFileSync(join(outputDir, "dependency-evidence", name), "utf8")).toBe(
+          typeof value === "string" ? value : `${JSON.stringify(value)}\n`,
+        );
+      }
       for (const entry of [
         fixture.descriptor.package.fileName,
         ...fixture.descriptor.corePackages.map((pkg) => pkg.tarballName),
@@ -735,7 +1023,7 @@ describe("prepared npm bundle", () => {
         const artifact = proof.archives.get("79")!;
         artifact.archive = Buffer.alloc(artifact.archive.length);
       },
-      "GitHub Actions artifact digest",
+      "GitHub Actions artifact download digest",
     ],
     [
       "SDK proof rebound to another tag",

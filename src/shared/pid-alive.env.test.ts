@@ -36,7 +36,7 @@ it("isolates the lock-owner ps child while retaining its stable locale and timez
       expect(getFileLockProcessStartTime(424242)).toBe(Date.parse("2026-09-03T00:00:00Z") / 1000);
       expect(process.env).toEqual(parent);
       expect(report).toEqual({
-        present: Object.fromEntries(Object.keys(diagnosticCanaries).map((key) => [key, false])),
+        defined: Object.fromEntries(Object.keys(diagnosticCanaries).map((key) => [key, false])),
         routingPreserved: true,
       });
     },

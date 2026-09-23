@@ -1,21 +1,44 @@
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { readRootJsonObjectSync } from "@openclaw/fs-safe/json";
 import { isBunRuntime } from "../daemon/runtime-binary.js";
-import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 
-/** Resolve a source worker sibling or its stable packaged path under dist. */
+/** Resolve an explicit installed root, source sibling, or stable packaged worker path. */
 export function resolveRuntimeWorkerUrl(params: {
   currentModuleUrl: string;
   sourceWorkerName: string;
   distWorkerPath: string;
+  root?: string;
+  /** Package-local output when the nearest dist belongs to this package. */
+  package?: { name: string; distWorkerPath: string };
 }): URL {
+  if (params.root !== undefined) {
+    return pathToFileURL(path.join(params.root, "dist", params.distWorkerPath));
+  }
   const currentPath = fileURLToPath(params.currentModuleUrl);
   const normalized = currentPath.replaceAll(path.sep, "/");
   const distMarker = "/dist/";
   const distIndex = normalized.lastIndexOf(distMarker);
   if (distIndex >= 0) {
     const distRoot = currentPath.slice(0, distIndex + distMarker.length);
-    return pathToFileURL(path.join(distRoot, params.distWorkerPath));
+    let workerPath = params.distWorkerPath;
+    if (params.package) {
+      const packageRoot = path.resolve(distRoot, "..");
+      const manifest = readRootJsonObjectSync({
+        rootDir: packageRoot,
+        relativePath: "package.json",
+        boundaryLabel: "runtime worker package",
+        rejectHardlinks: false,
+      });
+      if (!manifest.ok) {
+        throw new Error(`Cannot resolve runtime worker package: ${packageRoot}/package.json`);
+      }
+      // Standalone plugins keep their own dist root, including shared build chunks.
+      if (manifest.value.name === params.package.name) {
+        workerPath = params.package.distWorkerPath;
+      }
+    }
+    return pathToFileURL(path.join(distRoot, workerPath));
   }
   const extension = path.extname(currentPath) || ".js";
   return new URL(`./${params.sourceWorkerName}${extension}`, params.currentModuleUrl);
@@ -23,22 +46,21 @@ export function resolveRuntimeWorkerUrl(params: {
 
 export function resolveRuntimeWorkerArgv(url: URL, execPath = process.execPath): string[] {
   const entry = fileURLToPath(url);
-  return /\.[cm]?ts$/.test(entry) && !isBunRuntime(execPath) ? ["--import", "tsx", entry] : [entry];
+  // Resolve the preload here: Node resolves bare imports from the child cwd.
+  return /\.[cm]?ts$/.test(entry) && !isBunRuntime(execPath)
+    ? ["--import", import.meta.resolve("tsx"), entry]
+    : [entry];
 }
 
-type RuntimeProcessEntrypointName = keyof typeof runtimeProcessEntrypoints;
-
-const sealedEntrypoints = new Map<RuntimeProcessEntrypointName, URL>();
-
-// Sealed deploy bundles ship an entrypoint beside their own module without a /dist/
-// marker; the bundle registers that sibling before any launch resolves it.
-export function registerSealedRuntimeProcessEntrypoint(
-  name: RuntimeProcessEntrypointName,
+/** Select the source Worker preload without feeding Node's TypeScript loader to Bun. */
+export function resolveRuntimeWorkerThreadExecArgv(
   url: URL,
-): void {
-  sealedEntrypoints.set(name, url);
-}
-
-export function resolveRuntimeProcessEntrypointUrl(name: RuntimeProcessEntrypointName): URL {
-  return sealedEntrypoints.get(name) ?? resolveRuntimeWorkerUrl(runtimeProcessEntrypoints[name]);
+  execPath = process.execPath,
+): string[] {
+  if (url.protocol !== "file:") {
+    return [];
+  }
+  return /\.[cm]?ts$/.test(fileURLToPath(url)) && !isBunRuntime(execPath)
+    ? ["--import", import.meta.resolve("tsx/esm")]
+    : [];
 }

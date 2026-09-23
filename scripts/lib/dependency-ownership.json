@@ -189,6 +189,11 @@
       "class": "core-runtime",
       "risk": ["archive-parser", "untrusted-files"]
     },
+    "koffi": {
+      "owner": "core:process-execution",
+      "class": "core-runtime",
+      "risk": ["native", "ffi", "process-execution", "secret-input"]
+    },
     "kysely": {
       "owner": "core:sqlite-storage",
       "class": "core-runtime",
@@ -246,8 +251,9 @@
       "risk": ["formatting"]
     },
     "quickjs-wasi": {
-      "owner": "core:code-mode",
-      "class": "core-runtime",
+      "owner": "plugin:code-mode-quickjs",
+      "class": "plugin-runtime",
+      "activation": ["tools.codeMode.executor.quickjs"],
       "risk": ["wasm", "sandboxed-js"]
     },
     "clawpdf": {
@@ -280,11 +286,6 @@
       "owner": "core:archive-handling",
       "class": "core-runtime",
       "risk": ["archive-parser", "untrusted-files"]
-    },
-    "tree-sitter-bash": {
-      "owner": "core:command-explainer",
-      "class": "core-runtime",
-      "risk": ["wasm", "parser", "untrusted-shell"]
     },
     "tslog": {
       "owner": "core:logging",

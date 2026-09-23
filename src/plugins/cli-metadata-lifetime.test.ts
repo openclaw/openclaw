@@ -45,7 +45,7 @@ describe("CLI prepared metadata lifetime", () => {
       id: "lifetime-cli",
       dir: path.join(root, "plugin"),
       filename: "index.cjs",
-      body: `module.exports = { id: "lifetime-cli", register(api) { api.registerCli(({program}) => program.command("prepared"), { descriptors: [{ name: "prepared", description: "Lifetime", hasSubcommands: false }] }); } };`,
+      registration: `api.registerCli(({program}) => program.command("prepared"), { descriptors: [{ name: "prepared", description: "Lifetime", hasSubcommands: false }] });`,
     });
     const cfg = { plugins: { load: { paths: [plugin.dir] }, allow: [plugin.id] } };
     const env = {
@@ -75,7 +75,7 @@ describe("CLI prepared metadata lifetime", () => {
       id: "pending-cli",
       dir: path.join(root, "plugin"),
       filename: "index.cjs",
-      body: `module.exports = { id: "pending-cli", register(api) { api.registerCli(({program}) => program.command("prepared"), { commands: ["prepared"] }); } };`,
+      registration: `api.registerCli(({program}) => program.command("prepared"), { commands: ["prepared"] });`,
     });
     const pending = loadPluginCliRegistrationEntriesWithDefaults({
       cfg: { plugins: { load: { paths: [plugin.dir] }, allow: [plugin.id] } },
@@ -479,14 +479,9 @@ describe("CLI prepared metadata lifetime", () => {
           properties: { label: { type: "string" } },
           required: ["label"],
         },
-        body: `module.exports = {
-  id: "prepared-cli",
-  register(api) {
-    api.registerCli(({ program }) => program.command("prepared").description(api.pluginConfig.label), {
-      descriptors: [{ name: "prepared", description: api.pluginConfig.label, hasSubcommands: false }],
-    });
-  },
-};`,
+        registration: `api.registerCli(({ program }) => program.command("prepared").description(api.pluginConfig.label), {
+          descriptors: [{ name: "prepared", description: api.pluginConfig.label, hasSubcommands: false }],
+        });`,
       });
       const env = {
         HOME: root,

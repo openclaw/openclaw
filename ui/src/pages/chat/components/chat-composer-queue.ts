@@ -17,11 +17,12 @@ import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
 
 type ChatQueueProps = {
   queue: ChatQueueItem[];
+  displayQueue?: ChatQueueItem[];
   offline?: boolean;
   canAbort?: boolean;
   onQueueRetry?: (id: string) => void;
   onQueueSteer?: (id: string) => void;
-  onQueueMove?: (id: string, toIndex: number) => void;
+  onQueueMove?: (id: string, targetId: string) => void;
   onQueueEdit?: (id: string) => void;
   onQueueEditChange?: (text: string, mentions?: readonly HumanMention[]) => void;
   onQueueEditSubmit?: () => void;
@@ -136,7 +137,12 @@ function mountQueueEditInput(element: Element | undefined, value: string): void 
 }
 
 function sendStateLabel(item: ChatQueueItem, offline: boolean): string | null {
-  if (offline && item.sendState !== "failed" && item.sendState !== "unconfirmed") {
+  if (
+    offline &&
+    item.sendState !== "failed" &&
+    item.sendState !== "unconfirmed" &&
+    item.sendState !== "held"
+  ) {
     return t("chat.queue.states.waitingForReconnect");
   }
   switch (item.sendState) {
@@ -148,6 +154,7 @@ function sendStateLabel(item: ChatQueueItem, offline: boolean): string | null {
     case "waiting-reconnect":
       return t("chat.queue.states.waitingForReconnect");
     case "unconfirmed":
+    case "held":
       return t("chat.queue.states.needsReview");
     case "failed":
       return t("common.failed");
@@ -157,8 +164,11 @@ function sendStateLabel(item: ChatQueueItem, offline: boolean): string | null {
 }
 
 export function renderChatQueue(props: ChatQueueProps) {
-  const visibleQueue = props.queue.filter(
-    (item) => item.sendState !== "sending" && !isQueuedSendInlineState(item),
+  const visibleQueue = (props.displayQueue ?? props.queue).filter(
+    (item) =>
+      item.sendState !== "submitting" &&
+      item.sendState !== "sending" &&
+      !isQueuedSendInlineState(item),
   );
   // A peer can retire the source while this pane is away. Render its retained
   // correction for recovery/cancel; this never recreates a row in the outbox.
@@ -172,13 +182,13 @@ export function renderChatQueue(props: ChatQueueProps) {
   if (!visibleQueue.length) {
     return nothing;
   }
-  // Move positions address one movable segment, matching what the reorder owner
-  // permutes. A row attached to a run keeps its place and ends the segment, so
-  // the handle never offers a move across it. An edited row holds the queue
-  // behind it in the drain, so it is a barrier on the same terms.
+  // Hidden and edited rows retain their delivery positions and split the
+  // offered segments even though they may not appear in this tray.
+  const visibleIds = new Set(visibleQueue.map((item) => item.id));
   const movableSegments = chatQueueMovableSegments(
-    visibleQueue,
-    (item) => isMovableChatQueueItem(item) && item.id !== props.editingId,
+    props.queue,
+    (item) =>
+      visibleIds.has(item.id) && isMovableChatQueueItem(item) && item.id !== props.editingId,
   ).map((rows) => rows.map((row) => row.id));
   const reorder: ChatQueueReorder = {
     segments: movableSegments,
@@ -190,7 +200,8 @@ export function renderChatQueue(props: ChatQueueProps) {
   // Keep their unresolved delivery visible beside the messages they block.
   const head = props.queue.find((item) => item.sendState !== "failed" || item.localCommandName);
   const globalState =
-    head?.sendState === "unconfirmed" && isQueuedSendInlineState(head)
+    (head?.sendState === "unconfirmed" || head?.sendState === "held") &&
+    isQueuedSendInlineState(head)
       ? { label: t("chat.queue.states.blockedByUnconfirmed"), tone: "warn" }
       : visibleQueue.some((item) => item.sendState === "waiting-model") && !props.offline
         ? { label: t("chat.queue.states.applyingSettings"), tone: "settings" }
@@ -269,7 +280,8 @@ function renderChatQueueItem(
 ) {
   const authorAvatar = renderChatAuthorAvatar(item.sender);
   const hasAuthorAvatar = authorAvatar !== nothing;
-  const failed = item.sendState === "failed" || item.sendState === "unconfirmed";
+  const failed =
+    item.sendState === "failed" || item.sendState === "unconfirmed" || item.sendState === "held";
   const reconnecting = !failed && (props.offline || item.sendState === "waiting-reconnect");
   const stateLabel = sendStateLabel(item, props.offline === true);
   const steered = item.queueMode === "steer" && stateLabel === null;
@@ -360,13 +372,12 @@ function renderChatQueueItem(
           ? (event: DragEvent) => {
               const draggedId = event.dataTransfer?.getData(DRAG_MIME);
               setDropTarget(event, false);
-              // Index space is per segment, so a drop from another one would land
-              // the row at an unrelated position; refuse it instead of guessing.
+              // A drop cannot cross a hidden delivery barrier.
               if (!draggedId || draggedId === item.id || !segment.includes(draggedId)) {
                 return;
               }
               event.preventDefault();
-              move?.(draggedId, moveIndex);
+              move?.(draggedId, item.id);
             }
           : undefined
       }
@@ -404,7 +415,10 @@ function renderChatQueueItem(
                 // The handle owns reordering for pointer and keyboard alike, so
                 // arrow keys here must not also scroll the transcript.
                 event.preventDefault();
-                move?.(item.id, moveIndex + delta);
+                const targetId = segment[moveIndex + delta];
+                if (targetId) {
+                  move?.(item.id, targetId);
+                }
               }}
             >
               <span class="chat-queue__grip-state chat-queue__grip-state--idle" aria-hidden="true"

@@ -98,8 +98,8 @@ describe("markdownToIR tableMode bullets", () => {
 
     const ir = markdownToIR(md, { tableMode: "code" });
 
-    expect(ir.text).toContain("| A | B |");
-    expect(ir.text).toContain("| 1 | 2 |");
+    expect(ir.text).toContain("| A   | B   |");
+    expect(ir.text).toContain("| 1   | 2   |");
     expect(ir.styles.map((style) => style.style)).toContain("code_block");
   });
 

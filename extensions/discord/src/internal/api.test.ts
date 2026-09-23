@@ -21,6 +21,7 @@ import {
   getUser,
   getWebhookMessage,
   createWebhookMessage,
+  editChannelMessage,
   listMessageReactionUsers,
   listApplicationCommands,
   listChannelMessages,
@@ -30,6 +31,7 @@ import {
   pinChannelMessage,
   searchGuildMessages,
   sendChannelTyping,
+  unpinChannelMessage,
 } from "./discord.js";
 import { createFakeRestClient } from "./test-builders.test-support.js";
 
@@ -45,22 +47,23 @@ describe("Discord REST API helpers", () => {
       undefined,
     ]);
     const query = { limit: 2 };
+    const messageId = "18446744073709551615";
 
     await expect(listChannelMessages(rest, "c1", query)).resolves.toEqual([{ id: "m1" }]);
-    await expect(getChannelMessage(rest, "c1", "m2")).resolves.toEqual({ id: "m2" });
+    await expect(getChannelMessage(rest, "c1", ` ${messageId} `)).resolves.toEqual({ id: "m2" });
     await expect(createChannelMessage(rest, "c1", { body: { content: "hello" } })).resolves.toEqual(
       { id: "m3" },
     );
-    await expect(createThread(rest, "c1", { body: { name: "thread" } }, "m2")).resolves.toEqual({
-      id: "t1",
-    });
+    await expect(
+      createThread(rest, "c1", { body: { name: "thread" } }, ` ${messageId} `),
+    ).resolves.toEqual({ id: "t1" });
     await sendChannelTyping(rest, "c1");
-    await pinChannelMessage(rest, "c1", "m2");
-    await deleteChannelMessage(rest, "c1", "m2");
+    await pinChannelMessage(rest, "c1", ` ${messageId} `);
+    await deleteChannelMessage(rest, "c1", ` ${messageId} `);
 
     expect(rest.calls).toEqual([
       { method: "GET", path: Routes.channelMessages("c1"), query },
-      { method: "GET", path: Routes.channelMessage("c1", "m2") },
+      { method: "GET", path: Routes.channelMessage("c1", messageId) },
       {
         method: "POST",
         path: Routes.channelMessages("c1"),
@@ -68,13 +71,78 @@ describe("Discord REST API helpers", () => {
       },
       {
         method: "POST",
-        path: Routes.threads("c1", "m2"),
+        path: Routes.threads("c1", messageId),
         data: { body: { name: "thread" } },
       },
       { method: "POST", path: Routes.channelTyping("c1") },
-      { method: "PUT", path: Routes.channelPin("c1", "m2") },
-      { method: "DELETE", path: Routes.channelMessage("c1", "m2") },
+      { method: "PUT", path: Routes.channelPin("c1", messageId) },
+      { method: "DELETE", path: Routes.channelMessage("c1", messageId) },
     ]);
+  });
+
+  it.each([
+    [
+      "get message",
+      (rest: ReturnType<typeof createFakeRestClient>) => getChannelMessage(rest, "c1", ".."),
+    ],
+    [
+      "edit message",
+      (rest: ReturnType<typeof createFakeRestClient>) =>
+        editChannelMessage(rest, "c1", "..", { body: { content: "hello" } }),
+    ],
+    [
+      "delete message",
+      (rest: ReturnType<typeof createFakeRestClient>) => deleteChannelMessage(rest, "c1", ".."),
+    ],
+    [
+      "pin message",
+      (rest: ReturnType<typeof createFakeRestClient>) => pinChannelMessage(rest, "c1", ".."),
+    ],
+    [
+      "unpin message",
+      (rest: ReturnType<typeof createFakeRestClient>) => unpinChannelMessage(rest, "c1", ".."),
+    ],
+    [
+      "create message-backed thread",
+      (rest: ReturnType<typeof createFakeRestClient>) =>
+        createThread(rest, "c1", { body: { name: "thread" } }, ".."),
+    ],
+    [
+      "add reaction",
+      (rest: ReturnType<typeof createFakeRestClient>) =>
+        createOwnMessageReaction(rest, "c1", "..", "%E2%9C%85"),
+    ],
+    [
+      "remove reaction",
+      (rest: ReturnType<typeof createFakeRestClient>) =>
+        deleteOwnMessageReaction(rest, "c1", "..", "%E2%9C%85"),
+    ],
+    [
+      "list reactions",
+      (rest: ReturnType<typeof createFakeRestClient>) =>
+        listMessageReactionUsers(rest, "c1", "..", "%E2%9C%85"),
+    ],
+    [
+      "get webhook message",
+      (rest: ReturnType<typeof createFakeRestClient>) =>
+        getWebhookMessage(rest, "app1", "wtoken", ".."),
+    ],
+    [
+      "edit webhook message",
+      (rest: ReturnType<typeof createFakeRestClient>) =>
+        editWebhookMessage(rest, "app1", "wtoken", "..", { body: { content: "hello" } }),
+    ],
+    [
+      "delete webhook message",
+      (rest: ReturnType<typeof createFakeRestClient>) =>
+        deleteWebhookMessage(rest, "app1", "wtoken", ".."),
+    ],
+  ])("rejects a malformed message ID before the %s request", async (_label, invoke) => {
+    const rest = createFakeRestClient();
+
+    await expect(invoke(rest)).rejects.toThrow("Invalid Discord message ID");
+
+    expect(rest.calls).toEqual([]);
   });
 
   it("routes guild helpers through the typed REST client", async () => {
@@ -179,26 +247,27 @@ describe("Discord REST API helpers", () => {
   it("routes reaction helpers through the typed REST client", async () => {
     const rest = createFakeRestClient([undefined, [{ id: "u1" }], undefined]);
     const query = { limit: 10 };
+    const messageId = "18446744073709551615";
 
-    await createOwnMessageReaction(rest, "c1", "m1", "%F0%9F%91%8D");
+    await createOwnMessageReaction(rest, "c1", ` ${messageId} `, "%F0%9F%91%8D");
     await expect(
-      listMessageReactionUsers(rest, "c1", "m1", "%F0%9F%91%8D", query),
+      listMessageReactionUsers(rest, "c1", ` ${messageId} `, "%F0%9F%91%8D", query),
     ).resolves.toEqual([{ id: "u1" }]);
-    await deleteOwnMessageReaction(rest, "c1", "m1", "%F0%9F%91%8D");
+    await deleteOwnMessageReaction(rest, "c1", ` ${messageId} `, "%F0%9F%91%8D");
 
     expect(rest.calls).toEqual([
       {
         method: "PUT",
-        path: Routes.channelMessageOwnReaction("c1", "m1", "%F0%9F%91%8D"),
+        path: Routes.channelMessageOwnReaction("c1", messageId, "%F0%9F%91%8D"),
       },
       {
         method: "GET",
-        path: Routes.channelMessageReaction("c1", "m1", "%F0%9F%91%8D"),
+        path: Routes.channelMessageReaction("c1", messageId, "%F0%9F%91%8D"),
         query,
       },
       {
         method: "DELETE",
-        path: Routes.channelMessageOwnReaction("c1", "m1", "%F0%9F%91%8D"),
+        path: Routes.channelMessageOwnReaction("c1", messageId, "%F0%9F%91%8D"),
       },
     ]);
   });
@@ -231,6 +300,7 @@ describe("Discord REST API helpers", () => {
       undefined,
     ]);
     const query = { wait: "true" };
+    const originalResponseId = "@original";
 
     await expect(createInteractionCallback(rest, "i1", "itoken", { type: 5 })).resolves.toEqual({
       ok: true,
@@ -238,11 +308,17 @@ describe("Discord REST API helpers", () => {
     await expect(
       createWebhookMessage(rest, "app1", "wtoken", { body: { content: "hello" } }, query),
     ).resolves.toEqual({ id: "m1" });
-    await expect(getWebhookMessage(rest, "app1", "wtoken", "m1")).resolves.toEqual({ id: "m2" });
+    await expect(getWebhookMessage(rest, "app1", "wtoken", originalResponseId)).resolves.toEqual({
+      id: "m2",
+    });
     await expect(
-      editWebhookMessage(rest, "app1", "wtoken", "m1", { body: { content: "updated" } }),
+      editWebhookMessage(rest, "app1", "wtoken", originalResponseId, {
+        body: { content: "updated" },
+      }),
     ).resolves.toEqual({ id: "m3" });
-    await expect(deleteWebhookMessage(rest, "app1", "wtoken", "m1")).resolves.toBeUndefined();
+    await expect(
+      deleteWebhookMessage(rest, "app1", "wtoken", originalResponseId),
+    ).resolves.toBeUndefined();
     expect(rest.calls).toEqual([
       {
         method: "POST",
@@ -255,13 +331,13 @@ describe("Discord REST API helpers", () => {
         data: { body: { content: "hello" } },
         query,
       },
-      { method: "GET", path: Routes.webhookMessage("app1", "wtoken", "m1") },
+      { method: "GET", path: Routes.webhookMessage("app1", "wtoken", originalResponseId) },
       {
         method: "PATCH",
-        path: Routes.webhookMessage("app1", "wtoken", "m1"),
+        path: Routes.webhookMessage("app1", "wtoken", originalResponseId),
         data: { body: { content: "updated" } },
       },
-      { method: "DELETE", path: Routes.webhookMessage("app1", "wtoken", "m1") },
+      { method: "DELETE", path: Routes.webhookMessage("app1", "wtoken", originalResponseId) },
     ]);
   });
 

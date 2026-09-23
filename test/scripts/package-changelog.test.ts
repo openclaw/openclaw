@@ -1,14 +1,19 @@
 // Package Changelog tests cover package changelog script behavior.
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { renderReleaseDocsMirror } from "../../scripts/lib/release-docs-mirror.mjs";
 import {
   extractCurrentPackageChangelog,
   preparePackageChangelog,
+  readCurrentPackageChangelog,
   resolvePackageChangelogVersions,
   restorePackageChangelog,
 } from "../../scripts/package-changelog.mjs";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function changelog(strings: TemplateStringsArray, ...values: string[]) {
   return `${String.raw({ raw: strings }, ...values)
@@ -43,6 +48,107 @@ const oversizedChangelog = cumulativeChangelog.replace(
 );
 
 describe("package-changelog", () => {
+  it.each([1, 20_000])(
+    "packages a %i-paragraph docs mirror and restores every source artifact",
+    async (paragraphs) => {
+      const root = tempDirs.make("openclaw-package-changelog-mirror-");
+      const version = "2026.5.28";
+      const docsPath = `docs/releases/${version}.md`;
+      const entryPath = `CHANGELOG/${version}.md`;
+      const recordPath = `CHANGELOG/records/${version}.md`;
+      const index = `# Changelog\n\n- [${version}](${entryPath})\n`;
+      const docs = `# Release notes\n\n${"Complete release documentation.\n\n".repeat(paragraphs)}Final release detail.\n`;
+      const record = `## ${version}\n\n### Complete contribution record\n\n- **PR #123** Thanks @contributor.\n`;
+      mkdirSync(path.join(root, "docs", "releases"), { recursive: true });
+      mkdirSync(path.join(root, "CHANGELOG", "records"), { recursive: true });
+      writeFileSync(path.join(root, "package.json"), `${JSON.stringify({ version })}\n`);
+      writeFileSync(path.join(root, docsPath), docs);
+      const mirror = renderReleaseDocsMirror({ rootDir: root, version, sources: [docsPath] });
+      const sources = new Map([
+        ["CHANGELOG.md", index],
+        [docsPath, docs],
+        [entryPath, mirror],
+        [recordPath, record],
+      ]);
+      for (const [file, content] of sources) {
+        writeFileSync(path.join(root, file), content);
+      }
+      await expect(preparePackageChangelog(root)).resolves.toBe(true);
+      const packaged = readFileSync(path.join(root, "CHANGELOG.md"), "utf8");
+      expect(packaged).toContain(`## ${version}`);
+      if (paragraphs === 1) {
+        expect(packaged).toBe(`# Changelog\n\n${mirror.trimEnd()}\n`);
+      } else {
+        expect(Buffer.byteLength(mirror)).toBeGreaterThan(500 * 1024);
+        expect(packaged).toContain(`https://github.com/openclaw/openclaw/blob/main/${entryPath}`);
+        expect(packaged).toContain(
+          `https://github.com/openclaw/openclaw/raw/refs/heads/main/${entryPath}`,
+        );
+        expect(packaged).toContain(`https://github.com/openclaw/openclaw/blob/main/${recordPath}`);
+        expect(packaged).toContain(`https://docs.openclaw.ai/releases/${version}`);
+        expect(packaged).not.toContain(`/v${version}/`);
+      }
+      expect(Buffer.byteLength(packaged)).toBeLessThanOrEqual(500 * 1024);
+
+      await expect(restorePackageChangelog(root)).resolves.toBe(true);
+      for (const [file, content] of sources) {
+        expect(readFileSync(path.join(root, file), "utf8")).toBe(content);
+      }
+    },
+  );
+
+  it("packages only a split release, pins its record, and restores the index after source edits", async () => {
+    const root = tempDirs.make("openclaw-package-changelog-split-");
+    const index = "# Changelog\n\n- [2026.5.28](CHANGELOG/2026.5.28.md)\n";
+    const section = `## 2026.5.28\n\n- Complete editorial notes and credit. Thanks @contributor.\n\n${oversizedContributionRecord}\n`;
+    mkdirSync(path.join(root, "CHANGELOG", "records"), { recursive: true });
+    writeFileSync(path.join(root, "package.json"), '{"version":"2026.5.28-beta.1"}\n');
+    writeFileSync(path.join(root, "CHANGELOG.md"), index);
+    writeFileSync(path.join(root, "CHANGELOG", "2026.5.28.md"), section);
+    writeFileSync(
+      path.join(root, "CHANGELOG", "records", "2026.5.28.md"),
+      `## 2026.5.28\n\n${oversizedContributionRecord}\n`,
+    );
+    writeFileSync(path.join(root, "CHANGELOG", "2026.5.27.md"), "## 2026.5.27\n\n- Old history.\n");
+
+    await expect(preparePackageChangelog(root)).resolves.toBe(true);
+    const packaged = readFileSync(path.join(root, "CHANGELOG.md"), "utf8");
+    expect(packaged).toContain("Complete editorial notes and credit.");
+    expect(packaged).toContain("/blob/v2026.5.28-beta.1/CHANGELOG/records/2026.5.28.md");
+    expect(packaged).not.toContain("Old history");
+    expect(Buffer.byteLength(packaged)).toBeLessThanOrEqual(500 * 1024);
+
+    writeFileSync(
+      path.join(root, "CHANGELOG", "2026.5.28.md"),
+      `${section}\n- Later source edit.\n`,
+    );
+    await expect(restorePackageChangelog(root)).resolves.toBe(true);
+    expect(readFileSync(path.join(root, "CHANGELOG.md"), "utf8")).toBe(index);
+    expect(readFileSync(path.join(root, "CHANGELOG", "2026.5.28.md"), "utf8")).toContain(
+      "Later source edit",
+    );
+  });
+
+  it("keeps split prerelease fallback and rejects unsafe exact notes", () => {
+    const root = tempDirs.make("openclaw-package-changelog-split-");
+    mkdirSync(path.join(root, "CHANGELOG"));
+    writeFileSync(path.join(root, "CHANGELOG.md"), "# Changelog\n");
+    writeFileSync(
+      path.join(root, "CHANGELOG", "2026.5.30.md"),
+      "## 2026.5.30 (Unreleased)\n\n- Pending release notes with sufficient detail.\n",
+    );
+    expect(readCurrentPackageChangelog(root, "2026.5.28-beta.1")).toContain(
+      "Pending release notes",
+    );
+    expect(() => readCurrentPackageChangelog(root, "2026.5.28")).toThrow(
+      "does not contain a release section",
+    );
+    writeFileSync(path.join(root, "CHANGELOG", "2026.5.28.md"), "## 2026.5.28\n- Tiny.\n");
+    expect(() => readCurrentPackageChangelog(root, "2026.5.28-beta.1")).toThrow(
+      "only 7 body bytes",
+    );
+  });
+
   it("maps release-channel package versions to package changelog candidate headings", () => {
     expect(resolvePackageChangelogVersions("2026.5.28")).toEqual(["2026.5.28"]);
     expect(resolvePackageChangelogVersions("2026.5.28-1")).toEqual(["2026.5.28-1"]);
@@ -268,6 +374,8 @@ Docs: https://docs.openclaw.ai
         writeFileSync(path.join(root, "CHANGELOG.md"), unreleasedChangelog, "utf8");
 
         await expect(preparePackageChangelog(root, { allowUnreleased: true })).resolves.toBe(true);
+        // Older published packers retained only the source backup.
+        rmSync(path.join(root, ".artifacts", "package-changelog", "CHANGELOG.md.packaged"));
         await expect(restorePackageChangelog(root)).resolves.toBe(true);
         expect(readFileSync(path.join(root, "CHANGELOG.md"), "utf8")).toBe(unreleasedChangelog);
       } finally {

@@ -8,6 +8,7 @@ import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
+import { fetchControlUiResource } from "./browser-http.ts";
 import { createGatewayStoreTestStore } from "./gateway-store.test-support.ts";
 import * as gatewayStore from "./gateway-store.ts";
 import { loadSettings, loadUiPreferences, patchSettings, persistSessionToken } from "./settings.ts";
@@ -36,6 +37,38 @@ afterEach(() => {
 });
 
 describe("pending Gateway credentials", () => {
+  it.each([
+    ["wss://gateway.example", "Bearer document-gateway-token"],
+    ["wss://gateway.example/other", null],
+    ["wss://gateway.example?tenant=other", null],
+    ["wss://other-gateway.example", null],
+  ])(
+    "scopes browser recovery credentials to the document Gateway (%s)",
+    async (gatewayUrl, authorization) => {
+      const store = createGatewayStoreTestStore({
+        settings: { ...loadSettings(), gatewayUrl, token: "document-gateway-token" },
+      });
+      vi.spyOn(gatewayStore, "createApplicationGateway").mockReturnValue(store.gateway);
+      const fetchMock = vi.fn<typeof fetch>(
+        async (_url, init) =>
+          new Response(null, {
+            status: init?.method === "HEAD" ? 200 : 401,
+            headers: { "content-type": "application/json" },
+          }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      runtime = bootstrapApplication();
+      await fetchControlUiResource("/__openclaw__/assistant-media");
+      await expect
+        .poll(() => fetchMock.mock.calls.filter(([, init]) => init?.method === "HEAD").length)
+        .toBe(1);
+      const [url, probeInit] = fetchMock.mock.calls.find(([, init]) => init?.method === "HEAD")!;
+      expect(url).toBe("https://gateway.example/control-ui-config.json");
+      expect(probeInit?.redirect).toBe("manual");
+      expect(new Headers(probeInit?.headers).get("Authorization")).toBe(authorization);
+    },
+  );
+
   it.each([
     { decision: "confirm", queryGatewayUrl: "" },
     { decision: "cancel", queryGatewayUrl: "" },

@@ -8,6 +8,7 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { showToast } from "../../lib/toast.ts";
 import { createGatewayRequestMock } from "../../test-helpers/gateway-client.ts";
+import { settleLitElement } from "../../test-helpers/lit-settle.ts";
 import {
   installDialogPolyfill,
   submitInputDialog,
@@ -27,6 +28,7 @@ import {
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import { openSessionWorkspacePreview } from "./components/chat-session-workspace-state.ts";
 import type { SidebarContent } from "./components/chat-sidebar.ts";
 import { cacheChatSessionSnapshot, type ChatMessageCache } from "./session-message-cache.ts";
 import { openSlot } from "./sidebar-layout.ts";
@@ -112,11 +114,11 @@ describe("chat pane retained presentation", () => {
     const lifecycle = pane as TestChatPane & { hasUpdated: boolean; render: () => unknown };
     lifecycle.render = () => null;
     ChatPaneBase.prototype.connectedCallback.call(lifecycle);
-    await lifecycle.updateComplete;
+    await settleLitElement(lifecycle);
     const performUpdate = vi.spyOn(lifecycle, "performUpdate");
 
     lifecycle.onPaneSessionChange = () => undefined;
-    await lifecycle.updateComplete;
+    await settleLitElement(lifecycle);
 
     expect(performUpdate).not.toHaveBeenCalled();
     ChatPaneBase.prototype.disconnectedCallback.call(lifecycle);
@@ -608,8 +610,8 @@ describe("chat pane initialization", () => {
     const response = createDeferred<Record<string, unknown>>();
     const request = vi.fn(() => response.promise);
     const client = createGatewayBrowserClientFixture({ request });
-    const sessions = createSessionCapabilityFixture();
-    const { state } = createTestChatPane({ client, sessions });
+    const { state, sessions } = createTestChatPane({ client });
+    vi.spyOn(sessions, "listBranches").mockResolvedValue([]);
     state.chatMessagesBySession = new Map();
     state.chatMessages = [nativeHistoryMessage(1, "prior account transcript")];
     const stop = subscribeChatPaneSnapshotInvalidation(() => state);
@@ -641,8 +643,7 @@ describe("chat pane initialization", () => {
     const client = createGatewayBrowserClientFixture({
       request,
     });
-    const sessions = createSessionCapabilityFixture();
-    const { pane, state } = createTestChatPane({ client, sessions });
+    const { pane, state } = createTestChatPane({ client });
     const canonicalSessionKey = "agent:main:main";
     const hello = {
       features: { methods: ["chat.startup"] },
@@ -699,6 +700,7 @@ describe("chat pane initialization", () => {
     expect(request).toHaveBeenCalledWith(
       "chat.startup",
       expect.objectContaining({ sessionKey: canonicalSessionKey }),
+      { signal: expect.any(AbortSignal) },
     );
   });
 
@@ -712,6 +714,7 @@ describe("chat pane initialization", () => {
     const authStatus = { ts: 1, providers: [] };
     const request = createGatewayRequestMock(async (method) => {
       switch (method) {
+        case "models.list":
         case "chat.metadata":
           return { commands: [], models, swarmEnabled: false };
         case "models.authStatus":
@@ -796,12 +799,12 @@ describe("chat pane keyboard shortcuts", () => {
       "workspace",
     ]);
     expect(state.sidebarContent).toBe(canvasContent);
-    state.attachmentSidebarContent = {
+    openSessionWorkspacePreview(state, "attachment:report", "report.pdf", {
       kind: "attachment",
       attachmentKind: "document",
       title: "report.pdf",
       src: "/media/report.pdf",
-    };
+    });
 
     const collapseEvent = new KeyboardEvent("keydown", {
       cancelable: true,
@@ -816,7 +819,7 @@ describe("chat pane keyboard shortcuts", () => {
     expect(hasWorkspace()).toBe(false);
     expect(state.sidebarLayout.columns[0]?.panels[0]?.slot).toBe("detail");
     expect(state.sidebarContent).toBe(canvasContent);
-    expect(state.attachmentSidebarContent).toBeNull();
+    expect(state.sessionWorkspaceState?.previews ?? []).toEqual([]);
 
     const mainSidebarEvent = dispatchSidebarShortcut(pane, false);
     expect(mainSidebarEvent.defaultPrevented).toBe(false);
@@ -848,6 +851,9 @@ describe("chat pane keyboard shortcuts", () => {
     expect(state.sidebarLayout.columns[0]?.panels.map((panel) => panel.slot)).toEqual(["terminal"]);
     expect(press().defaultPrevented).toBe(true);
     expect(state.sidebarLayout.columns[0]?.panels).toEqual([]);
+    expect(state.sidebarLayout.open).toBe(false);
+    state.terminalAvailable = false;
+    expect(press().defaultPrevented).toBe(false);
     expect(state.sidebarLayout.open).toBe(false);
   });
 });
@@ -945,6 +951,10 @@ describe("chat pane history pagination intent", () => {
     pane.syncHistoryObserver = vi.fn();
     const event = new Event("scroll");
     const thread = document.createElement("div");
+    Object.defineProperties(thread, {
+      scrollHeight: { value: 1000 },
+      clientHeight: { value: 500 },
+    });
     thread.scrollTop = 80;
     Object.defineProperty(event, "target", { value: thread });
 
@@ -965,6 +975,10 @@ describe("chat pane history pagination intent", () => {
     pane.transcriptScrollTop = 100;
     pane.syncHistoryObserver = vi.fn();
     const thread = document.createElement("div");
+    Object.defineProperties(thread, {
+      scrollHeight: { value: 1000 },
+      clientHeight: { value: 500 },
+    });
     const event = new Event("scroll");
     Object.defineProperty(event, "target", { value: thread });
 

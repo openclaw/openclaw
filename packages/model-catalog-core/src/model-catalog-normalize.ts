@@ -1,4 +1,3 @@
-// Model Catalog Core helper module supports model catalog normalize behavior.
 import {
   asFiniteNumber as normalizeFiniteNumber,
   asNonNegativeFiniteNumber as normalizeNonNegativeNumber,
@@ -37,6 +36,7 @@ import {
   type NormalizedModelCatalogRow,
 } from "./model-catalog-types.js";
 import { normalizeProviderId } from "./provider-id.js";
+export { normalizeOpenRouterModelReasoning } from "./model-catalog-reasoning.js";
 
 // Normalizes raw provider model catalogs into stable rows for lookup and merging.
 
@@ -330,6 +330,7 @@ function normalizeModelCatalogCompat(value: unknown): ModelCatalogCompatConfig |
     "sendSessionIdHeader",
     "supportsEagerToolInputStreaming",
     "supportsLongCacheRetention",
+    "supportsResponsesContinuation",
     "requiresOpenAiAnthropicToolPayload",
   ] as const;
   for (const field of booleanFields) {
@@ -353,7 +354,10 @@ function normalizeModelCatalogCompat(value: unknown): ModelCatalogCompatConfig |
   ] as const;
   for (const field of stringListFields) {
     const normalized = normalizeTrimmedStringList(value[field]);
-    if (normalized.length > 0) {
+    if (
+      normalized.length > 0 ||
+      (field === "supportedReasoningEfforts" && Array.isArray(value[field]))
+    ) {
       compat[field] = normalized;
     }
   }
@@ -579,6 +583,15 @@ function normalizeModelCatalogSuppressions(value: unknown): ModelCatalogSuppress
       continue;
     }
     const reason = normalizeOptionalString(entry.reason) ?? "";
+    const replacedBy = isRecord(entry.retirement)
+      ? normalizeOptionalString(entry.retirement.replacedBy)
+      : undefined;
+    const retirement =
+      isRecord(entry.retirement) && (entry.retirement.replacedBy === undefined || replacedBy)
+        ? replacedBy
+          ? { replacedBy }
+          : {}
+        : undefined;
     const rawWhen = isRecord(entry.when) ? entry.when : undefined;
     const baseUrlHosts = normalizeTrimmedStringList(rawWhen?.baseUrlHosts).map((host) =>
       host.toLowerCase(),
@@ -593,10 +606,22 @@ function normalizeModelCatalogSuppressions(value: unknown): ModelCatalogSuppress
             ...(providerConfigApiIn.length > 0 ? { providerConfigApiIn } : {}),
           }
         : undefined;
+    // A malformed retirement scope must never broaden a persistent model repair.
+    if (
+      retirement &&
+      entry.when !== undefined &&
+      (!rawWhen ||
+        !when ||
+        (rawWhen.baseUrlHosts !== undefined && baseUrlHosts.length === 0) ||
+        (rawWhen.providerConfigApiIn !== undefined && providerConfigApiIn.length === 0))
+    ) {
+      continue;
+    }
     suppressions.push({
       provider,
       model,
       ...(reason ? { reason } : {}),
+      ...(retirement ? { retirement } : {}),
       ...(when ? { when } : {}),
     });
   }

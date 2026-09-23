@@ -11,8 +11,8 @@ import ai.openclaw.app.GatewayCronRunSummary
 import ai.openclaw.app.GatewayCronScheduleEdit
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.i18n.resolveNativeText
-import ai.openclaw.app.ui.design.ClawDetailRow
 import ai.openclaw.app.ui.design.ClawIconBadge
+import ai.openclaw.app.ui.design.ClawListItem
 import ai.openclaw.app.ui.design.ClawListPanel
 import ai.openclaw.app.ui.design.ClawPanel
 import ai.openclaw.app.ui.design.ClawPrimaryButton
@@ -38,7 +38,6 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Schedule
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -77,7 +76,7 @@ internal fun CronJobManagementPanel(
   var showDeleteConfirmation by remember(job.id) { mutableStateOf(false) }
 
   if (showDeleteConfirmation) {
-    AlertDialog(
+    AppAlertDialog(
       onDismissRequest = { showDeleteConfirmation = false },
       confirmButton = {
         TextButton(
@@ -204,6 +203,7 @@ private fun CronActionPanel(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
       ) {
         ClawPrimaryButton(
+          // Localization: the pending branch is a disabled execution status, not a command.
           text =
             when {
               busy -> nativeString("Working")
@@ -635,7 +635,7 @@ private fun CronRunHistoryPanel(
 @Composable
 private fun CronRunHistoryRow(run: GatewayCronRunSummary) {
   val status = cronRunStatus(run.status)
-  ClawDetailRow(
+  ClawListItem(
     title = DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(run.ts)),
     subtitle = cronRunSubtitle(run),
     leading = { ClawIconBadge(icon = Icons.Default.Schedule) },

@@ -4,8 +4,16 @@
  * Applies account names and validates setup results for channel onboarding adapters.
  */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  resolveChannelAccountKey,
+  type ChannelAccountKeyPolicy,
+} from "../../routing/account-lookup.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
-import { resolveSingleAccountPromotion } from "./setup-promotion-helpers.js";
+import { writeChannelSection } from "./config-helpers.js";
+import {
+  resolveSingleAccountPromotion,
+  type ChannelSetupPromotionSurface,
+} from "./setup-promotion-helpers.js";
 import type { ChannelSetupAdapter } from "./types.adapters.js";
 import type { ChannelSetupInput } from "./types.core.js";
 
@@ -23,17 +31,10 @@ function getChannelSection(
   return section && typeof section === "object" ? (section as ChannelSectionBase) : undefined;
 }
 
-function writeChannelSection(
-  cfg: OpenClawConfig,
-  channelKey: string,
-  section: ChannelSectionBase,
-): OpenClawConfig {
-  return { ...cfg, channels: { ...cfg.channels, [channelKey]: section } } as OpenClawConfig;
-}
-
 export function applyAccountNameToChannelSection(params: {
   cfg: OpenClawConfig;
   channelKey: string;
+  accountKeyPolicy?: ChannelAccountKeyPolicy;
   accountId: string;
   name?: string;
   alwaysUseAccounts?: boolean;
@@ -45,6 +46,14 @@ export function applyAccountNameToChannelSection(params: {
   const accountId = normalizeAccountId(params.accountId);
   const base = getChannelSection(params.cfg, params.channelKey);
   const accounts = base?.accounts ?? {};
+  const accountKey =
+    resolveChannelAccountKey(
+      accounts,
+      accountId,
+      params.channelKey,
+      (id) => id,
+      params.accountKeyPolicy,
+    ) ?? accountId;
   const useAccounts =
     params.alwaysUseAccounts ||
     accountId !== DEFAULT_ACCOUNT_ID ||
@@ -58,7 +67,7 @@ export function applyAccountNameToChannelSection(params: {
       : (base ?? {});
   return writeChannelSection(params.cfg, params.channelKey, {
     ...baseWithoutName,
-    accounts: { ...accounts, [accountId]: { ...accounts[accountId], name: trimmed } },
+    accounts: { ...accounts, [accountKey]: { ...accounts[accountKey], name: trimmed } },
   });
 }
 
@@ -66,6 +75,7 @@ export function applyAccountNameToChannelSection(params: {
 export function migrateBaseNameToDefaultAccount(params: {
   cfg: OpenClawConfig;
   channelKey: string;
+  accountKeyPolicy?: ChannelAccountKeyPolicy;
   alwaysUseAccounts?: boolean;
 }): OpenClawConfig {
   if (params.alwaysUseAccounts) {
@@ -79,9 +89,17 @@ export function migrateBaseNameToDefaultAccount(params: {
   const accounts: Record<string, Record<string, unknown>> = {
     ...base?.accounts,
   };
-  const defaultAccount = accounts[DEFAULT_ACCOUNT_ID] ?? {};
+  const defaultAccountKey =
+    resolveChannelAccountKey(
+      accounts,
+      DEFAULT_ACCOUNT_ID,
+      params.channelKey,
+      (id) => id,
+      params.accountKeyPolicy,
+    ) ?? DEFAULT_ACCOUNT_ID;
+  const defaultAccount = accounts[defaultAccountKey] ?? {};
   if (!defaultAccount.name) {
-    accounts[DEFAULT_ACCOUNT_ID] = { ...defaultAccount, name: baseName };
+    accounts[defaultAccountKey] = { ...defaultAccount, name: baseName };
   }
   const { name: _ignored, ...rest } = base ?? {};
   return writeChannelSection(params.cfg, params.channelKey, { ...rest, accounts });
@@ -91,6 +109,7 @@ export function migrateBaseNameToDefaultAccount(params: {
 export function prepareScopedSetupConfig(params: {
   cfg: OpenClawConfig;
   channelKey: string;
+  accountKeyPolicy?: ChannelAccountKeyPolicy;
   accountId: string;
   name?: string;
   alwaysUseAccounts?: boolean;
@@ -99,6 +118,7 @@ export function prepareScopedSetupConfig(params: {
   const namedConfig = applyAccountNameToChannelSection({
     cfg: params.cfg,
     channelKey: params.channelKey,
+    accountKeyPolicy: params.accountKeyPolicy,
     accountId: params.accountId,
     name: params.name,
     alwaysUseAccounts: params.alwaysUseAccounts,
@@ -109,6 +129,7 @@ export function prepareScopedSetupConfig(params: {
   return migrateBaseNameToDefaultAccount({
     cfg: namedConfig,
     channelKey: params.channelKey,
+    accountKeyPolicy: params.accountKeyPolicy,
     alwaysUseAccounts: params.alwaysUseAccounts,
   });
 }
@@ -117,6 +138,7 @@ export function prepareScopedSetupConfig(params: {
 export function applySetupAccountConfigPatch(params: {
   cfg: OpenClawConfig;
   channelKey: string;
+  accountKeyPolicy?: ChannelAccountKeyPolicy;
   accountId: string;
   patch: Record<string, unknown>;
 }): OpenClawConfig {
@@ -128,6 +150,7 @@ export function createPatchedAccountSetupAdapter<
   Input extends { name?: string } = ChannelSetupInput,
 >(params: {
   channelKey: string;
+  accountKeyPolicy?: ChannelAccountKeyPolicy;
   alwaysUseAccounts?: boolean;
   ensureChannelEnabled?: boolean;
   ensureAccountEnabled?: boolean;
@@ -135,11 +158,13 @@ export function createPatchedAccountSetupAdapter<
   buildPatch: (input: Input) => Record<string, unknown>;
 }): ChannelSetupAdapter<Input> {
   return {
+    accountKeyPolicy: params.accountKeyPolicy,
     resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
     applyAccountName: ({ cfg, accountId, name }) =>
       prepareScopedSetupConfig({
         cfg,
         channelKey: params.channelKey,
+        accountKeyPolicy: params.accountKeyPolicy,
         accountId,
         name,
         alwaysUseAccounts: params.alwaysUseAccounts,
@@ -149,6 +174,7 @@ export function createPatchedAccountSetupAdapter<
       const next = prepareScopedSetupConfig({
         cfg,
         channelKey: params.channelKey,
+        accountKeyPolicy: params.accountKeyPolicy,
         accountId,
         name: input.name,
         alwaysUseAccounts: params.alwaysUseAccounts,
@@ -158,6 +184,7 @@ export function createPatchedAccountSetupAdapter<
       return patchScopedAccountConfig({
         cfg: next,
         channelKey: params.channelKey,
+        accountKeyPolicy: params.accountKeyPolicy,
         accountId,
         patch,
         accountPatch: patch,
@@ -212,6 +239,7 @@ export function createSetupInputPresenceValidator<
 /** Creates a setup adapter that supports env-backed default account auth and patched credentials. */
 export function createEnvPatchedAccountSetupAdapter(params: {
   channelKey: string;
+  accountKeyPolicy?: ChannelAccountKeyPolicy;
   alwaysUseAccounts?: boolean;
   ensureChannelEnabled?: boolean;
   ensureAccountEnabled?: boolean;
@@ -223,6 +251,7 @@ export function createEnvPatchedAccountSetupAdapter(params: {
 }): ChannelSetupAdapter {
   return createPatchedAccountSetupAdapter({
     channelKey: params.channelKey,
+    accountKeyPolicy: params.accountKeyPolicy,
     alwaysUseAccounts: params.alwaysUseAccounts,
     ensureChannelEnabled: params.ensureChannelEnabled,
     ensureAccountEnabled: params.ensureAccountEnabled,
@@ -243,6 +272,7 @@ export function createEnvPatchedAccountSetupAdapter(params: {
 export function patchScopedAccountConfig(params: {
   cfg: OpenClawConfig;
   channelKey: string;
+  accountKeyPolicy?: ChannelAccountKeyPolicy;
   accountId: string;
   patch: Record<string, unknown>;
   accountPatch?: Record<string, unknown>;
@@ -277,14 +307,22 @@ export function patchScopedAccountConfig(params: {
   }
 
   const accounts = base?.accounts ?? {};
-  const existingAccount = clearFields(accounts[accountId] ?? {});
+  const accountKey =
+    resolveChannelAccountKey(
+      accounts,
+      accountId,
+      params.channelKey,
+      (id) => id,
+      params.accountKeyPolicy,
+    ) ?? accountId;
+  const existingAccount = clearFields(accounts[accountKey] ?? {});
   // Preserve an explicit disabled account while enabling newly created accounts by default.
   return writeChannelSection(params.cfg, params.channelKey, {
     ...base,
     ...(ensureChannelEnabled ? { enabled: true } : {}),
     accounts: {
       ...accounts,
-      [accountId]: {
+      [accountKey]: {
         ...existingAccount,
         ...(ensureAccountEnabled
           ? {
@@ -322,40 +360,38 @@ function moveSingleAccountKeysIntoAccount(params: {
   });
 }
 
-function resolveExistingAccountKey(
-  accounts: Record<string, Record<string, unknown>>,
-  targetAccountId: string,
-): string {
-  return (
-    Object.keys(accounts).find((key) => normalizeAccountId(key) === targetAccountId) ??
-    targetAccountId
-  );
-}
-
 function resolveSingleAccountPromotionTarget(params: {
+  channelKey: string;
   channel: ChannelSectionBase;
-  setupSurface?: ChannelSetupAdapter;
+  setupSurface?: ChannelSetupPromotionSurface;
 }): string {
+  const accounts = params.channel.accounts ?? {};
+  const resolveTargetKey = (accountId: string) =>
+    resolveChannelAccountKey(
+      accounts,
+      normalizeAccountId(accountId),
+      params.channelKey,
+      normalizeAccountId,
+      params.setupSurface?.accountKeyPolicy,
+    );
   const pluginTarget = params.setupSurface?.resolveSingleAccountPromotionTarget?.({
     channel: params.channel,
   });
+  // Explicit plugin targets may create an account; inferred targets must already be eligible.
   if (pluginTarget?.trim()) {
-    return normalizeAccountId(pluginTarget);
+    return resolveTargetKey(pluginTarget) ?? normalizeAccountId(pluginTarget);
   }
-  const accounts = params.channel.accounts ?? {};
   const normalizedDefaultAccount =
     typeof params.channel.defaultAccount === "string" && params.channel.defaultAccount.trim()
       ? normalizeAccountId(params.channel.defaultAccount)
       : undefined;
-  if (normalizedDefaultAccount) {
-    return (
-      Object.keys(accounts).find(
-        (accountId) => normalizeAccountId(accountId) === normalizedDefaultAccount,
-      ) ?? DEFAULT_ACCOUNT_ID
-    );
-  }
   const namedAccounts = Object.keys(accounts).filter(Boolean);
-  return namedAccounts.length === 1 ? (namedAccounts[0] ?? DEFAULT_ACCOUNT_ID) : DEFAULT_ACCOUNT_ID;
+  const targetAccountId =
+    normalizedDefaultAccount ??
+    (namedAccounts.length === 1 ? (namedAccounts[0] ?? DEFAULT_ACCOUNT_ID) : DEFAULT_ACCOUNT_ID);
+  return (
+    resolveTargetKey(targetAccountId) ?? resolveTargetKey(DEFAULT_ACCOUNT_ID) ?? DEFAULT_ACCOUNT_ID
+  );
 }
 
 /**
@@ -364,7 +400,7 @@ function resolveSingleAccountPromotionTarget(params: {
 export function moveSingleAccountChannelSectionToDefaultAccount(params: {
   cfg: OpenClawConfig;
   channelKey: string;
-  setupSurface?: ChannelSetupAdapter;
+  setupSurface?: ChannelSetupAdapter | ChannelSetupPromotionSurface;
 }): OpenClawConfig {
   const base = getChannelSection(params.cfg, params.channelKey);
   if (!base) {
@@ -387,18 +423,20 @@ export function moveSingleAccountChannelSectionToDefaultAccount(params: {
   if (hasAccounts && keysToMove.length === 0) {
     return params.cfg;
   }
-  const targetAccountId = hasAccounts
-    ? resolveSingleAccountPromotionTarget({ channel: base, setupSurface: params.setupSurface })
+  const targetAccountKey = hasAccounts
+    ? resolveSingleAccountPromotionTarget({
+        channel: base,
+        channelKey: params.channelKey,
+        setupSurface: params.setupSurface,
+      })
     : DEFAULT_ACCOUNT_ID;
-  // Reuse the existing account key spelling so configs like `accounts.Ops` keep their shape.
-  const resolvedTargetAccountKey = resolveExistingAccountKey(accounts, targetAccountId);
   return moveSingleAccountKeysIntoAccount({
     cfg: params.cfg,
     channelKey: params.channelKey,
     channel: base,
     accounts,
     keysToMove,
-    targetAccountId: resolvedTargetAccountKey,
-    baseAccount: accounts[resolvedTargetAccountKey],
+    targetAccountId: targetAccountKey,
+    baseAccount: accounts[targetAccountKey],
   });
 }

@@ -74,7 +74,12 @@ describe("private worker launch wire", () => {
       connId,
       declaration: {
         protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-        workerHost: { enabled: true, capacity: { total: 1, available: 1 }, environmentSession: 1 },
+        workerHost: {
+          enabled: true,
+          capacity: { total: 1, available: 1 },
+          environmentSession: 1,
+          capturedExecPolicy: true,
+        },
       },
     });
   });
@@ -236,15 +241,15 @@ describe("private worker launch wire", () => {
       vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
       const controller = new AbortController();
       const startedAt = Date.now();
-      const listCurrentNodes = nodeWorkerSupervisorTransport.listCurrentNodes.bind(
+      const getCurrentNode = nodeWorkerSupervisorTransport.getCurrentNode.bind(
         nodeWorkerSupervisorTransport,
       );
       const discovery = vi
-        .spyOn(nodeWorkerSupervisorTransport, "listCurrentNodes")
-        .mockImplementationOnce(async () => {
-          const nodes = await listCurrentNodes();
+        .spyOn(nodeWorkerSupervisorTransport, "getCurrentNode")
+        .mockImplementationOnce(async (requestedNodeId) => {
+          const node = await getCurrentNode(requestedNodeId);
           vi.setSystemTime(startedAt + 10_000);
-          return nodes;
+          return node;
         });
       const sent = vi.spyOn(socket, "send");
       const unhandledRejection = vi.fn();

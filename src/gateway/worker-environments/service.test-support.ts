@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.js";
 import type {
   WorkerDesktopEndpoint,
@@ -11,6 +11,8 @@ import type {
   WorkerSshEndpoint,
 } from "../../plugins/types.js";
 import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseByPathAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
@@ -111,12 +113,14 @@ export const testState = {} as {
   config: OpenClawConfig;
   nowMs: number;
   providersEnabled: boolean;
+  reuseReadWorkers: boolean;
   prepareInstallation: WorkerEnvironmentServiceOptions["prepareInstallation"];
   bootstrapWorker: WorkerEnvironmentServiceOptions["bootstrapWorker"];
 };
 
-export function setupWorkerEnvironmentServiceSuite() {
+export function setupWorkerEnvironmentServiceSuite(options: { reuseReadWorkers?: boolean } = {}) {
   beforeEach(async () => {
+    testState.reuseReadWorkers = options.reuseReadWorkers === true;
     testState.root = await fs.mkdtemp(
       path.join(await fs.realpath(os.tmpdir()), "openclaw-worker-service-"),
     );
@@ -125,7 +129,7 @@ export function setupWorkerEnvironmentServiceSuite() {
     });
     testState.nowMs = 1_000;
     testState.providersEnabled = true;
-    testState.store = createWorkerEnvironmentStore({
+    testState.store = await createWorkerEnvironmentStore({
       database: testState.stateDb,
       now: () => testState.nowMs,
     });
@@ -154,9 +158,26 @@ export function setupWorkerEnvironmentServiceSuite() {
     // Shutdown may schedule cleanup after a test leaves fake timers installed.
     vi.useRealTimers();
     await testState.service?.stop();
-    closeOpenClawStateDatabaseForTest();
+    await closeWorkerEnvironmentDatabase();
     await fs.rm(testState.root, { recursive: true, force: true });
   });
+
+  if (options.reuseReadWorkers) {
+    afterAll(async () => {
+      await closeOpenClawStateDatabaseAsync();
+      closeOpenClawStateDatabaseForTest();
+    });
+  }
+}
+
+async function closeWorkerEnvironmentDatabase() {
+  if (testState.reuseReadWorkers) {
+    // Close native handles and admission for this case; retain only the reader worker code.
+    await closeOpenClawStateDatabaseByPathAsync(testState.stateDb.path);
+  } else {
+    await closeOpenClawStateDatabaseAsync();
+  }
+  closeOpenClawStateDatabaseForTest();
 }
 
 export function getDevelopmentProfile() {
@@ -169,11 +190,11 @@ export function getDevelopmentProfile() {
 export async function reopenWorkerEnvironmentStore() {
   await testState.service?.stop();
   testState.service = undefined;
-  closeOpenClawStateDatabaseForTest();
+  await closeWorkerEnvironmentDatabase();
   testState.stateDb = openOpenClawStateDatabase({
     env: { OPENCLAW_STATE_DIR: testState.root },
   });
-  testState.store = createWorkerEnvironmentStore({
+  testState.store = await createWorkerEnvironmentStore({
     database: testState.stateDb,
     now: () => testState.nowMs,
   });
@@ -193,7 +214,9 @@ export function createService(
       | "projectNamespace"
       | "resolveSshIdentity"
       | "ensureNodeWorkerBundle"
+      | "registerPreparedWorkspace"
       | "prepareNodeBootstrap"
+      | "prepareNodeArtifacts"
       | "prepareNodeRuntime"
       | "closeNodeRuntime"
       | "prepareNodeEnrollment"
@@ -220,6 +243,9 @@ export function createService(
     resolveProvider: (providerId) =>
       testState.providersEnabled && providerId === provider.id ? provider : undefined,
     prepareInstallation: testState.prepareInstallation,
+    ...(provider.requiresNodeEnrollment
+      ? { prepareNodeBootstrap: async () => NODE_BOOTSTRAP.sha256 }
+      : {}),
     bootstrapWorker: testState.bootstrapWorker,
     resolveSshIdentity: async () => ({ kind: "path", path: "/keys/worker" }),
     generateWorkerCredential: () => CREDENTIAL,
@@ -253,7 +279,7 @@ export function createProvider(overrides: Partial<WorkerProvider> = {}): WorkerP
 
 export function createLiveEvents(overrides: Record<string, unknown> = {}) {
   return {
-    apply: vi.fn(() => LIVE_EVENT_ACK),
+    apply: vi.fn(async () => LIVE_EVENT_ACK),
     bindSession: vi.fn(() => true),
     clear: vi.fn(),
     clearEnvironment: vi.fn(),
@@ -263,19 +289,19 @@ export function createLiveEvents(overrides: Record<string, unknown> = {}) {
   };
 }
 
-export function seedBootstrapping(
+export async function seedBootstrapping(
   environmentId: string,
   install?: WorkerInstallationArtifact["install"],
   sharedHost = false,
 ) {
-  const intent = testState.store.createIntent({
+  const intent = await testState.store.createIntent({
     environmentId,
     providerId: "fake",
     profileId: "development",
     profileSnapshot: { ...(install ? { install } : {}), settings: { region: "test" } },
     provisionOperationId: `provision:${environmentId}`,
   });
-  const provisioning = testState.store.transition({
+  const provisioning = await testState.store.transition({
     environmentId,
     from: intent.state,
     to: "provisioning",
@@ -288,12 +314,12 @@ export function seedBootstrapping(
   });
 }
 
-export function seedReady(
+export async function seedReady(
   environmentId: string,
   install?: WorkerInstallationArtifact["install"],
   sharedHost = false,
 ) {
-  const bootstrapping = seedBootstrapping(environmentId, install, sharedHost);
+  const bootstrapping = await seedBootstrapping(environmentId, install, sharedHost);
   return testState.store.transition({
     environmentId,
     from: bootstrapping.state,
@@ -302,20 +328,23 @@ export function seedReady(
   });
 }
 
-export function seedReadyDesktop(environmentId: string, desktop: WorkerDesktopEndpoint = DESKTOP) {
-  const intent = testState.store.createIntent({
+export async function seedReadyDesktop(
+  environmentId: string,
+  desktop: WorkerDesktopEndpoint = DESKTOP,
+) {
+  const intent = await testState.store.createIntent({
     environmentId,
     providerId: "fake",
     profileId: "development",
     profileSnapshot: { settings: { region: "test", desktop: true } },
     provisionOperationId: `provision:${environmentId}`,
   });
-  const provisioning = testState.store.transition({
+  const provisioning = await testState.store.transition({
     environmentId,
     from: intent.state,
     to: "provisioning",
   });
-  const bootstrapping = testState.store.transition({
+  const bootstrapping = await testState.store.transition({
     environmentId,
     from: provisioning.state,
     to: "bootstrapping",
@@ -333,18 +362,18 @@ export function seedReadyDesktop(environmentId: string, desktop: WorkerDesktopEn
   });
 }
 
-export function seedReadyNodeDesktop(
+export async function seedReadyNodeDesktop(
   environmentId: string,
   desktop: WorkerDesktopEndpoint = DESKTOP,
 ) {
-  const intent = testState.store.createIntent({
+  const intent = await testState.store.createIntent({
     environmentId,
     providerId: "fake",
     profileId: "development",
     profileSnapshot: { settings: { region: "test", desktop: true } },
     provisionOperationId: `provision:${environmentId}`,
   });
-  const provisioning = testState.store.transition({
+  const provisioning = await testState.store.transition({
     environmentId,
     from: intent.state,
     to: "provisioning",
@@ -402,12 +431,12 @@ export function admissionFor(environmentId: string) {
   };
 }
 
-export function seedAttachedIdentity(
+export async function seedAttachedIdentity(
   environmentId: string,
   sessionId: string,
-): WorkerConnectionIdentity {
-  const ready = seedReady(environmentId);
-  const attached = testState.store.transition({
+): Promise<WorkerConnectionIdentity> {
+  const ready = await seedReady(environmentId);
+  const attached = await testState.store.transition({
     environmentId,
     from: ready.state,
     to: "attached",
@@ -510,31 +539,37 @@ export function successfulTranscriptCommit(entryId: string, beforeCommit?: () =>
 }
 
 export function sequencedLiveEvents(ackedSeq = (seq: number) => seq) {
-  const apply = vi.fn(({ request }: { request: LiveEventRequest }) => ({
+  const apply = vi.fn(async ({ request }: { request: LiveEventRequest }) => ({
     ok: true as const,
     result: { ackedSeq: ackedSeq(request.seq) },
   }));
   return { apply, liveEvents: createLiveEvents({ apply }) };
 }
 
-export function placementHarness(
+export async function placementHarness(
   environmentId: string,
   sessionId: string,
   serviceOptions: Parameters<typeof createService>[1] = {},
 ) {
-  const identity = seedAttachedIdentity(environmentId, sessionId);
+  const identity = await seedAttachedIdentity(environmentId, sessionId);
   const claim = identity.turnClaim!;
   const credentialHash = hashWorkerCredential(
     [CREDENTIAL, environmentId, sessionId].join("-"),
     claim,
   );
-  testState.stateDb.db
-    .prepare(
-      "UPDATE worker_environment_credentials SET credential_hash = ? WHERE environment_id = ?",
-    )
-    .run(credentialHash, environmentId);
+  await testState.store.renewCredential({
+    environmentId,
+    expectedOwnerEpoch: identity.ownerEpoch,
+    credentialHash,
+    sessionId,
+    rpcSetVersion: identity.rpcSetVersion,
+    expiresAtMs: identity.credentialExpiresAtMs,
+  });
   identity.credentialHash = credentialHash;
   const placementStore = {
+    assertWorkerRuntimeRefresh: vi.fn(() => {
+      throw new Error("Cannot refresh a worker runtime while its turn is active");
+    }),
     readWorkerTurnClaim: vi.fn(() => claim),
     readWorkerTurnLiveAckCursor: vi.fn(() => 0),
     validateWorkerTurn: vi.fn(() => true),

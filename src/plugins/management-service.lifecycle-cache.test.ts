@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   currentMetadata: undefined as unknown,
   metadata: vi.fn(),
   officialCatalog: vi.fn(),
+  preparePackage: vi.fn(),
 }));
 
 vi.mock("./plugin-metadata-snapshot.js", async (importOriginal) => ({
@@ -26,11 +27,20 @@ vi.mock("./plugin-metadata-snapshot.js", async (importOriginal) => ({
   },
 }));
 
-vi.mock("./official-external-plugin-catalog.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./official-external-plugin-catalog.js")>()),
-  loadConfiguredHostedOfficialExternalPluginCatalogEntries: (...args: unknown[]) =>
-    mocks.officialCatalog(...args),
-}));
+vi.mock("./official-external-plugin-catalog.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./official-external-plugin-catalog.js")>();
+  return {
+    ...actual,
+    loadConfiguredHostedOfficialExternalPluginCatalogEntries: (...args: unknown[]) =>
+      mocks.officialCatalog(...args),
+    resolveOfficialExternalPluginInstall: (
+      ...args: Parameters<typeof actual.resolveOfficialExternalPluginInstall>
+    ) => {
+      mocks.preparePackage(...args);
+      return actual.resolveOfficialExternalPluginInstall(...args);
+    },
+  };
+});
 
 const { listManagedPlugins } = await import("./management-service.js");
 
@@ -112,6 +122,7 @@ describe("plugin management catalog lifecycle", () => {
   beforeEach(() => {
     mocks.metadata.mockReset();
     mocks.officialCatalog.mockReset();
+    mocks.preparePackage.mockClear();
     clearPluginMetadataLifecycleCaches();
   });
 
@@ -145,12 +156,19 @@ describe("plugin management catalog lifecycle", () => {
       .mockResolvedValueOnce({ source: "hosted", entries: [] });
 
     const prewarmed = await listManagedPlugins({ config: {}, env: {} });
+    const coldPreparations = mocks.preparePackage.mock.calls.length;
+    mocks.preparePackage.mockClear();
     const firstHandlerLoad = await listManagedPlugins({ config: {}, env: {} });
 
     expect(prewarmed.plugins).toEqual([expect.objectContaining({ id: "diffs" })]);
     expect(firstHandlerLoad.plugins).toEqual(prewarmed.plugins);
     expect(mocks.metadata).toHaveBeenCalledTimes(1);
     expect(mocks.officialCatalog).toHaveBeenCalledTimes(1);
+    expect(mocks.preparePackage.mock.calls.length).toBeLessThan(coldPreparations);
+
+    firstHandlerLoad.plugins.length = 0;
+    const secondHandlerLoad = await listManagedPlugins({ config: {}, env: {} });
+    expect(secondHandlerLoad.plugins).toEqual(prewarmed.plugins);
 
     clearPluginMetadataLifecycleCaches();
 

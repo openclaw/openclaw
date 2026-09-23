@@ -175,22 +175,33 @@ export function extractToolResultText(
   options?: { includeStructured?: boolean },
 ): string {
   const explicitTexts: string[] = [];
-  const structuredTexts: string[] = [];
+  const structuredBlocks: object[] = [];
   for (const block of blocks) {
-    const text = extractToolResultBlockText(block);
-    if (!text) {
+    if (!block || typeof block !== "object") {
       continue;
     }
-    const record = block as Record<string, unknown>;
-    if (record.type === "text") {
-      explicitTexts.push(text);
+    if ((block as Record<string, unknown>).type === "text") {
+      const text = extractToolResultBlockText(block);
+      if (text) {
+        explicitTexts.push(text);
+      }
     } else {
+      structuredBlocks.push(block);
+    }
+  }
+  if (explicitTexts.length > 0 && !options?.includeStructured) {
+    return explicitTexts.join("\n");
+  }
+  const structuredTexts: string[] = [];
+  for (const block of structuredBlocks) {
+    const text = extractToolResultBlockText(block);
+    if (text) {
       structuredTexts.push(text);
     }
   }
   if (explicitTexts.length > 0) {
     // Text budgets belong to the caller; clipping here can remove continuation instructions.
-    if (options?.includeStructured && structuredTexts.length > 0) {
+    if (structuredTexts.length > 0) {
       explicitTexts.push(truncateStructuredToolText(structuredTexts.join("\n")));
     }
     return explicitTexts.join("\n");

@@ -136,7 +136,12 @@ export async function prepareSyntheticAuthWithProvider(
       pending = Promise.resolve()
         .then(() => {
           options.signal?.throwIfAborted();
-          return prepare({ ...context, env: options.env, signal: options.signal });
+          return prepare({
+            ...context,
+            env: options.env,
+            signal: options.signal,
+            pluginRoot: provider.pluginRoot,
+          });
         })
         .then((prepared) => {
           options.signal?.throwIfAborted();

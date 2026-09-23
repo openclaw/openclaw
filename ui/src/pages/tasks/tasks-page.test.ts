@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import {
   GatewayRequestError,
   type GatewayBrowserClient,
@@ -6,7 +7,11 @@ import {
 } from "../../api/gateway.ts";
 import { sessionRefFromPath } from "../../app-session-route-paths.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { i18n, t } from "../../i18n/index.ts";
+import { captureI18nStateForTesting } from "../../i18n/lib/translate.test-support.ts";
+import { formatMs } from "../../lib/format.ts";
 import type { TaskStatus, TaskSummary } from "../../lib/tasks/task-summary.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import "./tasks-page.ts";
 
@@ -21,16 +26,6 @@ type TasksPageTestElement = HTMLElement & {
   recoverTask: (taskId: string, action: "retry" | "dismiss") => Promise<void>;
   refreshTasks: () => Promise<void>;
 };
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, reject, resolve };
-}
 
 function staleCursorError() {
   return new GatewayRequestError({
@@ -181,6 +176,63 @@ afterEach(() => {
 });
 
 describe("TasksPage concurrent refresh events", () => {
+  it("identifies agents and refreshes row timestamps across events and locale changes", async () => {
+    const restoreI18n = captureI18nStateForTesting();
+    const timestamp = Date.UTC(2026, 8, 12, 12, 30);
+    const tasks = [
+      createTask("home", "running", { updatedAt: timestamp }),
+      createTask("research", "running", { agentId: "research", updatedAt: timestamp }),
+      createTask("zero", "running", { updatedAt: 0 }),
+      createTask("invalid", "running", { updatedAt: "not-a-date" }),
+    ];
+    try {
+      await i18n.setLocale("en");
+      const request = vi.fn(async () => ({ tasks }));
+      const source = createGateway(createTestGatewayClient(request));
+      const page = document.createElement("openclaw-tasks-page") as TasksPageTestElement;
+      page.context = createContext(source.gateway, null);
+      document.body.append(page);
+      const timestampLabel = (id: string) =>
+        page.querySelector<HTMLElement>(`[data-task-id="${id}"] .task-row__links > span`);
+      await waitForFast(() => {
+        const owners = [...page.querySelectorAll(".task-row .agent-row-chip")].map((chip) =>
+          chip.getAttribute("data-agent-id"),
+        );
+        expect(owners).toHaveLength(4);
+        expect(owners).toEqual(expect.arrayContaining(["main", "research"]));
+        expect(timestampLabel("home")?.title).toBe(formatMs(timestamp));
+      });
+      const englishTitle = timestampLabel("home")?.title;
+      await i18n.setLocale("fr");
+      await waitForFast(() => {
+        expect(timestampLabel("home")?.title).toBe(formatMs(timestamp));
+        expect(timestampLabel("home")?.title).not.toBe(englishTitle);
+        for (const id of ["zero", "invalid"]) {
+          expect(timestampLabel(id)?.getAttribute("title")).toBeNull();
+          expect(timestampLabel(id)?.textContent).toBe(t("common.na"));
+        }
+      });
+      const updatedAt = timestamp + 2 * 60 * 60 * 1000;
+      source.emitTask({
+        action: "upserted",
+        task: { ...tasks[0], updatedAt, progressSummary: "Timestamp advanced with task progress" },
+      });
+      await waitForFast(() => {
+        expect(timestampLabel("home")?.title).toBe(formatMs(updatedAt));
+        expect(timestampLabel("research")?.title).toBe(formatMs(timestamp));
+        expect(page.textContent).toContain("Timestamp advanced with task progress");
+      });
+      await i18n.setLocale("en");
+      await waitForFast(() => {
+        expect(timestampLabel("home")?.title).toBe(formatMs(updatedAt));
+        expect(timestampLabel("home")?.title).not.toBe(englishTitle);
+        expect(timestampLabel("research")?.title).toBe(englishTitle);
+      });
+    } finally {
+      await restoreI18n();
+    }
+  });
+
   it("keeps the later recent snapshot when a task transitions to terminal", async () => {
     const initial = createTask("task-progress", "running", {
       toolUseCount: 2,
@@ -670,7 +722,7 @@ describe("TasksPage cancellation lifecycle", () => {
       deliveryStatus: "failed",
       terminalOutcome: "blocked",
     });
-    const clipboardWrite = deferred<void>();
+    const clipboardWrite = deferred();
     const writeText = vi.fn(() => clipboardWrite.promise);
     const request = vi.fn((method: string) => {
       if (method === "tasks.get") {

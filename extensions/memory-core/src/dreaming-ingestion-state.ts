@@ -4,6 +4,40 @@ import {
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 
+export const DAILY_MEMORY_FILENAME_RE = /^(\d{4}-\d{2}-\d{2})(?:-[^/]+)?\.md$/i;
+
+export type DailyMemoryFile = {
+  fileName: string;
+  day: string;
+  canonical: boolean;
+};
+
+export function parseDailyMemoryFileName(fileName: string): DailyMemoryFile | null {
+  const match = fileName.match(DAILY_MEMORY_FILENAME_RE);
+  const day = match?.[1];
+  return day
+    ? {
+        fileName,
+        day,
+        canonical: fileName.toLowerCase() === `${day}.md`,
+      }
+    : null;
+}
+
+export function compareDailyMemoryFilesByNewestDay(
+  left: DailyMemoryFile,
+  right: DailyMemoryFile,
+): number {
+  const dayOrder = right.day.localeCompare(left.day);
+  if (dayOrder !== 0) {
+    return dayOrder;
+  }
+  if (left.canonical !== right.canonical) {
+    return left.canonical ? -1 : 1;
+  }
+  return left.fileName.localeCompare(right.fileName);
+}
+
 const MEMORY_DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 export const SESSION_INGESTION_MAX_TRACKED_MESSAGES_PER_SESSION = 4096;
@@ -22,8 +56,10 @@ export type DailyIngestionState = {
 export type SessionIngestionFileState = {
   mtimeMs: number;
   size: number;
+  /** Canonical hash of the full exported snapshot described by lineCount. */
   contentHash: string;
   lineCount: number;
+  /** Consumption cursor within that snapshot; it may trail lineCount. */
   lastContentLine: number;
   excludedReason?: string;
 };

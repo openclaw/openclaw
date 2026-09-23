@@ -49,18 +49,9 @@ function mapMcpPayloadToAgentToolResult(
   if (!isRecord(payload)) {
     return jsonResult(payload);
   }
-  const textContent =
-    payload.structuredContent === undefined && Array.isArray(payload.content)
-      ? payload.content.flatMap((block) =>
-          isRecord(block) && block.type === "text" && typeof block.text === "string"
-            ? [{ type: "text" as const, text: block.text }]
-            : [],
-        )
-      : [];
   return projectMcpCallToolResult(payload, {
     mcpServer: mcp.server,
     mcpTool: mcp.tool,
-    ...(textContent.length > 0 ? { content: textContent } : {}),
   });
 }
 

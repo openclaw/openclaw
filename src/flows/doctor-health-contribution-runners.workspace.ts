@@ -11,36 +11,12 @@ type PluginVersionRestartReadiness =
 const loadDoctorStateIntegrityModule = async () =>
   await import("../commands/doctor-state-integrity.js");
 
-export async function runActiveToolSchemaWarningsHealth(
-  ctx: DoctorHealthFlowContext,
-): Promise<void> {
-  // Preview mode already collects these while deciding whether to apply repairs.
-  // Repair mode defers the runtime-backed diagnostic until migrations are durable.
-  if (!ctx.prompter.shouldRepair) {
-    return;
-  }
-  const { collectActiveToolSchemaProjectionWarnings } =
-    await import("../commands/doctor/shared/active-tool-schema-warnings.js");
-  const warnings = await collectActiveToolSchemaProjectionWarnings({
-    cfg: ctx.cfg,
-    env: ctx.env ?? process.env,
-    ...(ctx.runWithPluginMetadataSnapshot
-      ? { runWithPluginMetadataSnapshot: ctx.runWithPluginMetadataSnapshot }
-      : {}),
-  });
-  if (warnings.length === 0) {
-    return;
-  }
-  const { note } = await import("../../packages/terminal-core/src/note.js");
-  note(warnings.join("\n"), "Doctor warnings");
-}
-
 export async function runHooksModelHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   if (!ctx.cfg.hooks?.gmail?.model?.trim()) {
     return;
   }
   const { DEFAULT_MODEL, DEFAULT_PROVIDER } = await import("../agents/defaults.js");
-  const { loadPreparedModelCatalog } = await import("../agents/prepared-model-catalog.js");
+  const { readPreparedModelCatalog } = await import("../agents/prepared-model-catalog.js");
   const { getModelRefStatus, resolveConfiguredModelRef, resolveHooksGmailModel } =
     await import("../agents/model-selection.js");
   const { note } = await import("../../packages/terminal-core/src/note.js");
@@ -54,7 +30,7 @@ export async function runHooksModelHealth(ctx: DoctorHealthFlowContext): Promise
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });
-  const catalog = await loadPreparedModelCatalog({
+  const catalog = await readPreparedModelCatalog({
     config: ctx.cfg,
     readOnly: true,
     providerDiscoveryProviderIds: [],
@@ -64,7 +40,7 @@ export async function runHooksModelHealth(ctx: DoctorHealthFlowContext): Promise
     catalog,
     ref: hooksModelRef,
     defaultProvider,
-    defaultModel,
+    defaultModel: { provider: defaultProvider, model: defaultModel },
   });
   const warnings: string[] = [];
   if (!status.allowed) {
@@ -127,6 +103,19 @@ export async function runWorkspaceStatusHealth(ctx: DoctorHealthFlowContext): Pr
       ? { runWithPluginMetadataSnapshot: ctx.runWithPluginMetadataSnapshot }
       : {}),
   });
+}
+
+export async function runWorkspaceAliasHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { collectRepointedWorkspaceAliasFindings } =
+    await import("../commands/doctor-workspace-alias.js");
+  const findings = await collectRepointedWorkspaceAliasFindings(ctx.cfg);
+  if (findings.length > 0) {
+    const { note } = await import("../../packages/terminal-core/src/note.js");
+    note(
+      findings.map((finding) => `${finding.message} ${finding.fixHint}`).join("\n"),
+      "Workspace",
+    );
+  }
 }
 
 export async function runSkillsHealth(ctx: DoctorHealthFlowContext): Promise<void> {

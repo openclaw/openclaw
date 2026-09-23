@@ -11,8 +11,14 @@ import ai.openclaw.app.closeNodeRuntimeTestFixture
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.ui.design.ClawDesignTheme
+import ai.openclaw.app.ui.design.ClawTheme
+import ai.openclaw.wear.shared.WearMessage
+import ai.openclaw.wear.shared.WearReplyText
+import ai.openclaw.wear.shared.WearReplyTextStatus
+import ai.openclaw.wear.shared.WearRpcMethod
 import android.content.ClipboardManager
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.Point
 import android.graphics.Rect
 import android.graphics.RectF
@@ -23,15 +29,19 @@ import android.view.ViewGroup
 import android.view.inspector.WindowInspector
 import android.widget.TextView
 import androidx.activity.findViewTreeOnBackPressedDispatcherOwner
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasContentDescription
@@ -39,9 +49,12 @@ import androidx.compose.ui.test.hasScrollToNodeAction
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
+import androidx.compose.ui.test.isPopup
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performMouseInput
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performSemanticsAction
@@ -92,6 +105,7 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.config.ConfigurationRegistry
+import java.io.File
 import java.net.InetAddress
 import java.util.UUID
 import java.util.concurrent.CopyOnWriteArrayList
@@ -158,7 +172,7 @@ class ChatFullMessageOwnershipLayoutTest {
     model.setForeground(true)
     composeRule.setContent {
       ClawDesignTheme {
-        Box(Modifier.size(width = 360.dp, height = 800.dp).clipToBounds()) {
+        Box(Modifier.size(width = 360.dp, height = 800.dp).background(ClawTheme.colors.canvas).clipToBounds()) {
           ChatScreen(
             viewModel = model,
             talkActive = false,
@@ -178,6 +192,108 @@ class ChatFullMessageOwnershipLayoutTest {
     }
     selectChat(FULL_MESSAGE_FIRST_CHAT)
   }
+
+  @Test
+  @GraphicsMode(GraphicsMode.Mode.NATIVE)
+  fun messageTimestampOpensOnlyItsRecordedMetadataAndPreservesActions() {
+    gateway.historyMessagesOverride =
+      Json.parseToJsonElement(
+        """[
+        {"role":"user","content":"Summarize the garden plan.","timestamp":1789776000000,"__openclaw":{"id":"metadata-user"}},
+        {"role":"assistant","content":"Plant herbs in the sunny bed and keep the shaded corner for leafy greens.","timestamp":1789776060000,"model":"example/garden-model","usage":{"input":1200,"output":240,"cacheRead":800,"cacheWrite":120,"cost":{"total":0.012}},"__openclaw":{"id":"metadata-answer"}}
+      ]""",
+      ) as JsonArray
+    composeRule.runOnIdle { model.refreshChat() }
+    try {
+      composeRule.waitUntil(FULL_MESSAGE_READY_TIMEOUT_MS) {
+        shadowOf(Looper.getMainLooper()).idle()
+        model.chatMessages.value
+          .lastOrNull()
+          ?.entryId == "metadata-answer" && !model.chatHistoryLoading.value
+      }
+    } catch (failure: Exception) {
+      throw AssertionError("Metadata readiness: ids=" + model.chatMessages.value.map { it.entryId } + "; loading=" + model.chatHistoryLoading.value + "; error=" + model.chatError.value + "; history=" + gateway.historyReads.value.takeLast(5), failure)
+    }
+    composeRule.waitForIdle()
+    composeRule.onNodeWithText("Input tokens: 1.2k").assertDoesNotExist()
+    captureMessageMetadata("closed")
+    val timestamp = composeRule.onNode(hasContentDescription("Message information for", substring = true) and hasClickAction())
+    timestamp.assertIsDisplayed().performClick()
+    listOf("Input tokens: 1.2k", "Output tokens: 240", "Cache read: 800", "Cache write: 120", "Est. cost: $0.012", "Model: garden-model").forEach {
+      composeRule.onNodeWithText(it).assertIsDisplayed()
+    }
+    captureMessageMetadata("opened")
+    composeRule.runOnIdle {
+      checkNotNull(WindowInspector.getGlobalWindowViews().firstOrNull()?.findViewTreeOnBackPressedDispatcherOwner()).onBackPressedDispatcher.onBackPressed()
+    }
+    composeRule.waitForIdle()
+    // The metadata action must not replace the bubble's existing long-press actions.
+    composeRule
+      .onNode(hasContentDescription("OpenClaw") and hasText("Plant herbs", substring = true))
+      .performSemanticsAction(SemanticsActions.OnLongClick) { it() }
+    composeRule.onNode(hasText("Reply") and hasClickAction()).assertExists()
+    composeRule.onNode(hasText("Listen") and hasClickAction()).assertExists()
+  }
+
+  private fun captureMessageMetadata(state: String) {
+    val directory = System.getenv("OPENCLAW_MESSAGE_METADATA_CAPTURE_DIR") ?: return
+    val node = if (state == "opened") composeRule.onNode(isPopup()) else composeRule.onRoot()
+    val image = node.captureToImage().asAndroidBitmap()
+    assertTrue(image.width > 0 && image.height > 0)
+    val output = File(directory).apply { mkdirs() }.resolve("message-metadata-$state.png")
+    output.outputStream().use { assertTrue(image.compress(Bitmap.CompressFormat.PNG, 100, it)) }
+  }
+
+  @Test
+  fun wearFullReadUsesItsOwnSelectionThroughThePhysicalGatewayLease() =
+    runBlocking {
+      val session = "agent:main:watch-independent"
+      var offset = 0
+      var revision: String? = null
+      val text = StringBuilder()
+      do {
+        val response = runtime.handleWearProxyRequest("fixture-watch", wearReplyRequest(session, offset, revision))
+        assertTrue(response.ok)
+        val page = WearReplyText.decode(checkNotNull(response.result))
+        assertEquals(WearReplyTextStatus.Ready, page.status)
+        text.append(page.text)
+        revision = page.revision
+        offset = page.nextOffset ?: break
+      } while (true)
+      assertEquals(gateway.fullText(session), text.toString())
+      assertTrue(gateway.fullReads.all { it.sessionKey == session })
+      assertEquals(FULL_MESSAGE_FIRST_CHAT, runtime.chatSessionKey.value)
+    }
+
+  @Test
+  fun wearFullReadDiscardsAReplyAfterPhysicalGatewayRetirement() =
+    runBlocking {
+      gateway.holdFullResponses = true
+      val pending = async(Dispatchers.IO) { runtime.handleWearProxyRequest("fixture-watch", wearReplyRequest(FULL_MESSAGE_FIRST_CHAT, 0, null)) }
+      withTimeout(FULL_MESSAGE_READY_TIMEOUT_MS) { gateway.heldResponses.first { it.isNotEmpty() } }
+      runtime.disconnect()
+      gateway.releaseFullResponses()
+      val response = pending.await()
+      assertTrue(!response.ok || WearReplyText.decode(checkNotNull(response.result)).status != WearReplyTextStatus.Ready)
+    }
+
+  private fun wearReplyRequest(
+    session: String,
+    offset: Int,
+    revision: String?,
+  ) = WearMessage.Request(
+    requestId = "wear-page-$offset",
+    method = WearRpcMethod.ReplyText,
+    params =
+      buildJsonObject {
+        put("source", JsonPrimitive("chat"))
+        put("sessionKey", JsonPrimitive(session))
+        put("agentId", JsonPrimitive("main"))
+        put("entryId", JsonPrimitive(FULL_MESSAGE_ENTRY))
+        put("offset", JsonPrimitive(offset))
+        revision?.let { put("revision", JsonPrimitive(it)) }
+      },
+  )
 
   fun tearDown() {
     try {
@@ -218,6 +334,21 @@ class ChatFullMessageOwnershipLayoutTest {
     viewAll().assertIsDisplayed().performClick()
     awaitInlineExpanded()
     assertEquals("Re-expansion reuses the loaded entry", 1, gateway.fullReads.size)
+  }
+
+  @Test
+  fun mixedToolMessageCanLoadFullTextWithoutDuplicatingTools() {
+    gateway.includeToolCall = true
+    refreshSelectedChat()
+    viewAll().assertIsDisplayed().assertIsEnabled().performClick()
+    awaitInlineExpanded()
+    assertEquals(listOf(expectedRequest()), gateway.fullReads.toList())
+    val timeline = prepareChatHistory(runtime.chatMessages.value, "agent:main:main", mainSessionKey = "agent:main:main").buildTimeline(0, emptyList(), null)
+    assertEquals(1, timeline.items.filterIsInstance<ChatTimelineItem.ToolActivity>().size)
+    composeRule.onNodeWithText("Show less").performScrollTo().performClick()
+    viewAll().performClick()
+    awaitInlineExpanded()
+    assertEquals(1, gateway.fullReads.size)
   }
 
   @Test
@@ -688,6 +819,32 @@ class ChatFullMessageOwnershipLayoutTest {
 
   @Test
   fun readingInsideExpandedCodePausesFollowingUntilJumpToLatest() {
+    assertInnerCodeInputPausesFollowing { viewport ->
+      viewport.performTouchInput { swipeUp(durationMillis = 500) }
+    }
+  }
+
+  @Test
+  fun mouseWheelInsideExpandedCodePausesFollowingUntilJumpToLatest() {
+    assertInnerCodeInputPausesFollowing { viewport ->
+      viewport.performMouseInput {
+        moveTo(center)
+        scroll(1f)
+      }
+    }
+  }
+
+  @Test
+  fun accessibilityScrollInsideExpandedCodePausesFollowingUntilJumpToLatest() {
+    assertInnerCodeInputPausesFollowing { viewport ->
+      val distance = viewport.fetchSemanticsNode().boundsInRoot.height / 2f
+      viewport.performSemanticsAction(SemanticsActions.ScrollBy) { scroll ->
+        assertTrue(scroll(0f, distance))
+      }
+    }
+  }
+
+  private fun assertInnerCodeInputPausesFollowing(scrollInsideCode: (SemanticsNodeInteraction) -> Unit) {
     val code = (0 until 700).joinToString("\n") { "Code line $it: keep this reading position." }
     val full = "```\n$code\n```"
     val response = gateway.fullResponse(FULL_MESSAGE_FIRST_CHAT)
@@ -709,7 +866,7 @@ class ChatFullMessageOwnershipLayoutTest {
     composeRule.onNodeWithText("Copy").performClick()
     val clipboard = app.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
     assertEquals(
-      "The gesture must read the full answer, not its capped history",
+      "The input must read the full answer, not its capped history",
       full,
       clipboard.primaryClip
         ?.getItemAt(0)
@@ -736,6 +893,14 @@ class ChatFullMessageOwnershipLayoutTest {
       assertNull(model.chatError.value)
     }
 
+    // View all pauses following. Return to latest through the outer list before testing the inner input.
+    val latestViewport = transcript.fetchSemanticsNode().boundsInRoot
+    transcript.performSemanticsAction(SemanticsActions.ScrollBy) { scroll ->
+      assertTrue(scroll(0f, -latestViewport.height))
+    }
+    composeRule.waitForIdle()
+    assertEquals("Explicit outer scrolling must settle at latest", 0f, transcript.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value(), 0f)
+
     // Prove live-follow through consecutive updates, not an assumed Jump affordance after layout settles.
     appendAssistant(1)
     composeRule.onNodeWithText(gateway.backgroundText(0)).assertIsDisplayed()
@@ -745,16 +910,16 @@ class ChatFullMessageOwnershipLayoutTest {
     assertEquals("Following must bring the next update to latest without interaction", 0f, transcript.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value(), 0f)
     codeViewport.assertIsDisplayed()
     val initialCode = codeViewport.fetchSemanticsNode()
-    assertEquals("The touch must stay inside the fully visible code viewport", initialCode.size.height.toFloat(), initialCode.boundsInRoot.height, 0.01f)
+    assertEquals("The input target must stay inside the fully visible code viewport", initialCode.size.height.toFloat(), initialCode.boundsInRoot.height, 0.01f)
     val outerBefore = transcript.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value()
     assertEquals("Start in live-follow at the latest message", 0f, outerBefore, 0f)
     jump.assertDoesNotExist()
     val innerBefore = initialCode.config[SemanticsProperties.VerticalScrollAxisRange].value()
-    codeViewport.performTouchInput { swipeUp(durationMillis = 500) }
+    scrollInsideCode(codeViewport)
     composeRule.waitForIdle()
     val reading = codeViewport.fetchSemanticsNode()
     val readingOffset = reading.config[SemanticsProperties.VerticalScrollAxisRange].value()
-    assertTrue("The real touch must move within the code, not its outer transcript", readingOffset > innerBefore)
+    assertTrue("The selected input must move within the code, not its outer transcript", readingOffset > innerBefore)
     assertEquals("The child must consume this gesture without moving the transcript", outerBefore, transcript.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value(), 0f)
 
     appendAssistant(3)
@@ -1776,7 +1941,11 @@ internal class FullMessageGateway : AutoCloseable {
 
   @Volatile var fullResponseOverride: JsonObject? = null
 
+  @Volatile var includeToolCall = false
+
   @Volatile var previewPrefix = ""
+
+  @Volatile var historyMessagesOverride: JsonArray? = null
 
   @Volatile var historyRole = "assistant"
 
@@ -1907,10 +2076,10 @@ internal class FullMessageGateway : AutoCloseable {
                 if (omitMethodCatalog) {
                   ""
                 } else {
-                  "\"methods\":[\"chat.history\",${if (advertiseFullRead) "\"chat.message.get\"," else ""}\"chat.metadata\",\"health\",\"sessions.list\"],"
+                  "\"methods\":[\"chat.history\",${if (advertiseFullRead) "\"chat.message.get\"," else ""}\"chat.metadata\",\"models.list\",\"health\",\"sessions.list\"],"
                 }
               json.parseToJsonElement(
-                """{"type":"hello-ok","protocol":3,"server":{"host":"full-message-$connection","version":"proof"},"features":{$methods"events":[]},"auth":{"role":"$role","scopes":${if (role == "operator") "[\"operator.read\",\"operator.write\"]" else "[]"}},"snapshot":{"sessionDefaults":{"mainSessionKey":"agent:main:main"}}}""",
+                """{"type":"hello-ok","protocol":3,"server":{"host":"full-message-$connection","version":"proof"},"features":{$methods"events":[],"capabilities":["session-scoped-model-catalog"]},"auth":{"role":"$role","scopes":${if (role == "operator") "[\"operator.read\",\"operator.write\"]" else "[]"}},"snapshot":{"sessionDefaults":{"mainSessionKey":"agent:main:main"}}}""",
               )
             }
 
@@ -1920,7 +2089,7 @@ internal class FullMessageGateway : AutoCloseable {
                 put("sessionId", JsonPrimitive("transcript-$session"))
                 put(
                   "messages",
-                  JsonArray(
+                  historyMessagesOverride ?: JsonArray(
                     buildList {
                       add(message(session, truncated = historyTruncated, role = historyRole, text = historyText(session), mirror = historyMessageToolMirror, history = true))
                       repeat(historyAppendCount) { index ->
@@ -1954,7 +2123,11 @@ internal class FullMessageGateway : AutoCloseable {
             }
 
             "chat.metadata" -> {
-              json.parseToJsonElement("""{"commands":[],"models":[]}""")
+              json.parseToJsonElement("""{"commands":[]}""")
+            }
+
+            "models.list" -> {
+              json.parseToJsonElement("""{"models":[]}""")
             }
 
             "sessions.list" -> {
@@ -2062,6 +2235,21 @@ internal class FullMessageGateway : AutoCloseable {
               )
             }
           },
+        )
+      } else if (includeToolCall) {
+        JsonArray(
+          listOf(
+            buildJsonObject {
+              put("type", JsonPrimitive("text"))
+              put("text", JsonPrimitive(text))
+            },
+            buildJsonObject {
+              put("type", JsonPrimitive("toolCall"))
+              put("id", JsonPrimitive("mixed-tool"))
+              put("name", JsonPrimitive("exec"))
+              put("arguments", buildJsonObject { put("command", JsonPrimitive("pwd")) })
+            },
+          ),
         )
       } else if (contentAsBlocks) {
         JsonArray(

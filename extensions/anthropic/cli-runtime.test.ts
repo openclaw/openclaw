@@ -66,12 +66,22 @@ async function createContext(
   };
 }
 
-function createLiveSession(): CliBackendLiveSessionCapability {
+function createLiveSession(cleanup?: () => Promise<void>): CliBackendLiveSessionCapability {
   let current: CliBackendLiveSessionHandle | undefined;
+  let retiredCleanup: Promise<void> | undefined;
   return {
     fingerprint: "synthetic-process-policy",
     current: () => current,
+    restart: async () => {
+      const previous = current;
+      previous?.close("restart");
+      await previous?.waitForExit();
+      await retiredCleanup;
+    },
     register: (handle) => {
+      if (retiredCleanup) {
+        throw new Error("Previous CLI live session cleanup has not settled.");
+      }
       current = handle;
       handles.add(handle);
     },
@@ -79,6 +89,14 @@ function createLiveSession(): CliBackendLiveSessionCapability {
     remove: (handle) => {
       if (current === handle) {
         current = undefined;
+        if (cleanup) {
+          retiredCleanup = handle
+            .waitForExit()
+            .then(cleanup)
+            .then(() => {
+              retiredCleanup = undefined;
+            });
+        }
       }
     },
   };
@@ -148,23 +166,47 @@ describe("Claude native stdio boundary", () => {
     },
   );
 
-  it("starts a fresh process when the host execution fingerprint changes", async () => {
-    const liveSession = createLiveSession();
+  it("starts a fresh process after host cleanup when the execution fingerprint changes", async () => {
+    const gate = createDeferred<void>();
+    const cleanup = vi.fn(() => gate.promise);
+    const liveSession = createLiveSession(cleanup);
     const context = await createContext("normal", { liveSession });
     const first = resultDetail(await collect(context));
     liveSession.fingerprint = "changed-authoritative-prompt";
-    const second = resultDetail(
-      await collect({
-        ...context,
-        useResume: true,
-        systemPrompt: "changed authoritative instructions",
-      }),
-    );
-    expect(second.pid).not.toBe(first.pid);
-    expect(second.turn).toBe(1);
-    expect(second.initialize).toMatchObject({
-      appendSystemPrompt: "changed authoritative instructions",
+    const pending = collect({
+      ...context,
+      useResume: true,
+      systemPrompt: "changed authoritative instructions",
     });
+    void pending.catch(() => {});
+    try {
+      await vi.waitFor(() => expect(cleanup).toHaveBeenCalledOnce());
+      expect(liveSession.current()).toBeUndefined();
+      gate.resolve();
+      const second = resultDetail(await pending);
+      expect(second.pid).not.toBe(first.pid);
+      expect(second.turn).toBe(1);
+      expect(second.initialize).toMatchObject({
+        appendSystemPrompt: "changed authoritative instructions",
+      });
+      expect(() => process.kill(Number(first.pid), 0)).toThrow();
+    } finally {
+      gate.resolve();
+    }
+  });
+
+  it("refuses replacement when the retired predecessor's cleanup failed", async () => {
+    const failure = new Error("artifact cleanup failed");
+    const liveSession = createLiveSession(async () => {
+      throw failure;
+    });
+    const context = await createContext("normal", { liveSession });
+    const first = resultDetail(await collect(context));
+    liveSession.fingerprint = "changed-authoritative-prompt";
+    await expect(
+      collect({ ...context, useResume: true, systemPrompt: "changed authoritative instructions" }),
+    ).rejects.toBe(failure);
+    expect(liveSession.current()).toBeUndefined();
     expect(() => process.kill(Number(first.pid), 0)).toThrow();
   });
 
@@ -181,19 +223,143 @@ describe("Claude native stdio boundary", () => {
   });
 
   it("keeps an interim result open until native background agents report their final answer", async () => {
-    const context = await createContext("background-success", { liveSession: createLiveSession() });
+    const liveSession = createLiveSession();
+    const context = await createContext("background-success", { liveSession });
+    const interim = createDeferred<Record<string, unknown>>();
     let settled = false;
-    const running = collect(context).then((records) => {
+    const running = (async () => {
+      const records: Record<string, unknown>[] = [];
+      for await (const record of executeClaudeCli(context)) {
+        records.push(record);
+        if (record.type === "result") {
+          interim.resolve(record);
+        }
+      }
       settled = true;
       return records;
-    });
-    await vi.waitFor(async () => {
-      expect(await readFile(path.join(context.cwd, "background.ready"), "utf8")).toBe("ready");
-    });
-    expect(settled).toBe(false);
-    await writeFile(path.join(context.cwd, "background.release"), "release");
-    expect(resultDetail(await running).finalBackgroundAnswer).toBe(true);
+    })();
+    try {
+      expect(await interim.promise).toMatchObject({
+        type: "result",
+        openclaw_interim_result: true,
+      });
+      expect(settled).toBe(false);
+      expect(liveSession.current()?.isIdle()).toBe(false);
+    } finally {
+      await writeFile(path.join(context.cwd, "background.release"), "release");
+    }
+    const records = await running;
+    expect(resultDetail(records).finalBackgroundAnswer).toBe(true);
+    expect(records.at(-1)).not.toHaveProperty("openclaw_interim_result");
   });
+
+  it.each([
+    {
+      scenario: "background-bash-success",
+      decision: { behavior: "allow" as const, updatedInput: { file_path: "approved.txt" } },
+    },
+    {
+      scenario: "background-bash-success",
+      decision: { behavior: "deny" as const, message: "Fixture denied." },
+    },
+    {
+      scenario: "background-bash-batched",
+      decision: { behavior: "allow" as const, updatedInput: { file_path: "approved.txt" } },
+    },
+    {
+      scenario: "background-bash-early",
+      decision: { behavior: "allow" as const, updatedInput: { file_path: "approved.txt" } },
+    },
+    {
+      scenario: "background-bash-inline",
+      decision: { behavior: "allow" as const, updatedInput: { file_path: "approved.txt" } },
+    },
+  ])(
+    "retains host policy's $decision.behavior decision for $scenario",
+    async ({ scenario, decision }) => {
+      const context = await createContext(scenario, {
+        liveSession: createLiveSession(),
+        requestToolPermission: vi.fn<CliBackendExecuteContext["requestToolPermission"]>(
+          async () => decision,
+        ),
+      });
+      let settled = false;
+      const running = collect(context).then((records) => {
+        settled = true;
+        return records;
+      });
+      await vi.waitFor(async () => {
+        expect(await readFile(path.join(context.cwd, "background.ready"), "utf8")).toBe("ready");
+      });
+      expect(settled).toBe(false);
+      await writeFile(path.join(context.cwd, "background.release"), "release");
+      const detail = resultDetail(await running);
+      expect(detail.finalBackgroundAnswer).toBe(true);
+      // Host policy, not the stale-run guard, answered the notification turn's hook.
+      expect(context.requestToolPermission).toHaveBeenCalledWith(
+        expect.objectContaining({ toolName: "Read", toolCallId: "tool-bg-read" }),
+      );
+      expect(detail.notificationDecision).toMatchObject({
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: decision.behavior,
+          ...(decision.behavior === "allow"
+            ? { updatedInput: decision.updatedInput }
+            : { permissionDecisionReason: decision.message }),
+        },
+      });
+    },
+  );
+
+  it("does not hold the turn for a Bash call started in the background", async () => {
+    // run_in_background work may never finish; holding it would block the next input.
+    const liveSession = createLiveSession();
+    const context = await createContext("background-bash-explicit", { liveSession });
+    const first = resultDetail(await collect(context));
+    const handle = liveSession.current();
+    expect(first.explicitBackground).toBe(true);
+    expect(handle?.isIdle()).toBe(true);
+    const second = resultDetail(await collect({ ...context, useResume: true }));
+    expect(second).toMatchObject({ explicitBackground: true, turn: 2, pid: first.pid });
+    expect(liveSession.current()).toBe(handle);
+  });
+
+  it.each(["abort", "process exit"])(
+    "rejects a pending Bash continuation on %s and starts the next turn in a fresh process",
+    async (termination) => {
+      const liveSession = createLiveSession();
+      const controller = new AbortController();
+      const context = await createContext("background-bash-success", {
+        liveSession,
+        abortSignal: controller.signal,
+      });
+      const running = collect(context);
+      const outcome = running.catch((error: unknown) => error);
+      await vi.waitFor(async () => {
+        expect(await readFile(path.join(context.cwd, "background.ready"), "utf8")).toBe("ready");
+      });
+      const firstPid = Number(await readFile(path.join(context.cwd, "fixture.pid"), "utf8"));
+      expect(liveSession.current()?.isIdle()).toBe(false);
+      if (termination === "abort") {
+        controller.abort(new Error("Synthetic background turn cancelled."));
+      } else {
+        process.kill(firstPid, "SIGTERM");
+      }
+      expect(await outcome).toBeInstanceOf(Error);
+      expect(liveSession.current()).toBeUndefined();
+      expect(() => process.kill(firstPid, 0)).toThrow();
+      const next = resultDetail(
+        await collect({
+          ...context,
+          useResume: true,
+          env: { ...context.env, CLAUDE_FIXTURE_SCENARIO: "normal" },
+          abortSignal: AbortSignal.timeout(10_000),
+        }),
+      );
+      expect(next.turn).toBe(1);
+      expect(next.pid).not.toBe(firstPid);
+    },
+  );
 
   it.each([
     { type: "token" as const, descriptor: "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR" },
@@ -307,7 +473,12 @@ describe("Claude native stdio boundary", () => {
       "/tmp/synthetic-b",
       "--cache-system-prompt",
     ];
-    context.args = [...context.args, ...nativeArgs, "--exclude-dynamic-system-prompt-sections"];
+    context.args = [
+      ...context.args,
+      ...nativeArgs,
+      "--exclude-dynamic-system-prompt-sections",
+      "--replay-user-messages",
+    ];
     const detail = resultDetail(await collect(context));
     const args = detail.argv as string[];
 
@@ -315,6 +486,7 @@ describe("Claude native stdio boundary", () => {
     expect(args).toEqual(expect.arrayContaining(["--resume", context.sessionId]));
     expect(args).not.toContain("--session-id");
     expect(args).not.toContain(context.systemPrompt);
+    expect(args.filter((arg) => arg === "--replay-user-messages")).toHaveLength(1);
     expect(detail.initialize).toMatchObject({
       appendSystemPrompt: context.systemPrompt,
       excludeDynamicSections: true,
@@ -454,7 +626,11 @@ describe("Claude native stdio boundary", () => {
     expect(handle?.isIdle()).toBe(true);
     expect(context.requestToolPermission).toHaveBeenCalledTimes(4);
     expect(context.requestToolPermission).toHaveBeenCalledWith(
-      expect.objectContaining({ toolName: "Read", toolInput: { file_path: "fixture.txt" } }),
+      expect.objectContaining({
+        cwd: context.cwd,
+        toolName: "Read",
+        toolInput: { file_path: "fixture.txt" },
+      }),
     );
   });
 
@@ -620,6 +796,18 @@ describe("Claude native stdio boundary", () => {
       scenario: "background-raw-result",
       expected: { result: expect.stringContaining('<invoke name="Read">') },
     },
+    {
+      scenario: "background-bash-error",
+      expected: { is_error: true, errors: ["fixture background turn failed"] },
+    },
+    {
+      scenario: "background-bash-raw-result",
+      expected: { result: expect.stringContaining('<invoke name="Read">') },
+    },
+    {
+      scenario: "background-bash-queued-error",
+      expected: { is_error: true, errors: ["fixture background turn failed"] },
+    },
   ])(
     "ends $scenario immediately while native background work remains listed",
     async ({ scenario, expected }) => {
@@ -627,6 +815,7 @@ describe("Claude native stdio boundary", () => {
       const context = await createContext(scenario, { liveSession });
       const records = await collect(context);
       expect(records.at(-1)).toMatchObject({ type: "result", ...expected });
+      expect(records.at(-1)).not.toHaveProperty("openclaw_interim_result");
       const firstPid = Number(await readFile(path.join(context.cwd, "fixture.pid"), "utf8"));
       expect(liveSession.current()).toBeUndefined();
       expect(() => process.kill(firstPid, 0)).toThrow();

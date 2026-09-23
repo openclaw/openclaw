@@ -1,4 +1,5 @@
 // Telegram tests cover native command menu remote synchronization.
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { syncTelegramMenuCommands } from "./bot-native-command-menu.js";
@@ -14,14 +15,6 @@ function waitForTelegramMenuTurn() {
   return new Promise<void>((resolve) => {
     setTimeout(resolve, 0);
   });
-}
-
-function createDeferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
 }
 
 const ledgerRows = new Map<string, unknown>();
@@ -736,7 +729,7 @@ describe("bot-native-command-menu sync lifecycle", () => {
   });
 
   it("queues a later generation until the current remote-owner lane completes", async () => {
-    const gate = createDeferred();
+    const gate = createDeferred<void>();
     const events: string[] = [];
     let active = 0;
     let maxActive = 0;

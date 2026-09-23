@@ -7,7 +7,7 @@ import {
   type LoadedLocalSkill,
   type LocalSkillLoadDiagnostic,
 } from "./local-loader.js";
-import type { PluginSkillRoot } from "./plugin-skills.js";
+import type { PluginSkillRoot } from "./plugin-skill-root.js";
 import { compactSkillPath } from "./skill-paths.js";
 import {
   canonicalSkillDirForSource,

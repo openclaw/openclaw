@@ -193,7 +193,7 @@ describe("admitFollowupTurn", () => {
         sessionFile: "main",
         modelSelectionLocked: true,
       });
-      expect(result.turn.currentInboundContext).toEqual({ text: "fresh goal" });
+      expect(result.turn.queued.currentInboundContext).toEqual({ text: "fresh goal" });
       expect(result.turn.sendPolicy).toBe("deny");
       expect(result.turn.session.current()).toBe(admittedEntry);
     }
@@ -760,7 +760,6 @@ describe("admitFollowupTurn", () => {
       kind: "admitted",
       turn: {
         sendPolicy: "deny",
-        currentInboundContext: { text: "compacted-session" },
         queued: { currentInboundContext: { text: "compacted-session" } },
       },
     });

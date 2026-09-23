@@ -8,7 +8,10 @@ import {
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
+  repairOpenClawStateDatabaseSchema,
+  repairOpenClawStateDatabaseSchemaIfNeeded,
 } from "./openclaw-state-db.js";
+import { removePreparedWorkerOwnershipColumns } from "./openclaw-state-schema-v17.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(() => {
@@ -42,8 +45,68 @@ function createDatabase() {
   };
 }
 
-describe("repairLegacySubagentSuspensionReasons", () => {
-  it("rewrites the shipped reason on open and stays canonical after a second open", () => {
+describe("Doctor historical row repair", () => {
+  it("refuses an automatic older-schema upgrade with invalid foreign keys without repairing rows", () => {
+    const stateDir = tempDirs.make("openclaw-automatic-upgrade-integrity-");
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const { db: initial, path: pathname } = openOpenClawStateDatabase(options);
+    initial.exec("PRAGMA foreign_keys = OFF;");
+    initial
+      .prepare("INSERT INTO task_delivery_state (task_id, requester_origin_json) VALUES (?, ?)")
+      .run("missing-task", '{"channel":"synthetic"}');
+    removePreparedWorkerOwnershipColumns(initial);
+    initial.exec("PRAGMA user_version = 16; UPDATE schema_meta SET schema_version = 16;");
+    closeOpenClawStateDatabaseForTest();
+
+    expect(repairOpenClawStateDatabaseSchemaIfNeeded(options)).toEqual({
+      changes: [],
+      warnings: [expect.stringMatching(/foreign_key_check failed.*task_delivery_state/iu)],
+    });
+    const preserved = new DatabaseSync(pathname, { readOnly: true });
+    try {
+      expect(preserved.prepare("PRAGMA user_version").get()).toEqual({ user_version: 16 });
+      expect(
+        preserved.prepare("SELECT task_id, requester_origin_json FROM task_delivery_state").all(),
+      ).toEqual([{ task_id: "missing-task", requester_origin_json: '{"channel":"synthetic"}' }]);
+      expect(
+        preserved
+          .prepare("PRAGMA table_info(worker_environments)")
+          .all()
+          .map((row) => row.name),
+      ).not.toContain("preparation_key");
+    } finally {
+      preserved.close();
+    }
+  });
+
+  it("leaves retired history on open until Doctor removes it", () => {
+    const stateDir = tempDirs.make("openclaw-retired-history-");
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const initial = openOpenClawStateDatabase(options).db;
+    const transientHistoryTable = ["database", "verifications"].join("_");
+    initial.exec(`CREATE TABLE ${transientHistoryTable} (path TEXT PRIMARY KEY) STRICT;`);
+    initial
+      .prepare("UPDATE schema_meta SET app_version = ? WHERE meta_key = 'primary'")
+      .run("2026.7.0");
+    closeOpenClawStateDatabaseForTest();
+
+    const reopened = openOpenClawStateDatabase(options);
+    expect(
+      reopened.db
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
+        .get(transientHistoryTable),
+    ).toEqual({ name: transientHistoryTable });
+    closeOpenClawStateDatabaseForTest();
+    expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
+    const repaired = openOpenClawStateDatabase(options);
+    expect(
+      repaired.db
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
+        .get(transientHistoryTable),
+    ).toBeUndefined();
+  });
+
+  it("leaves the shipped reason unchanged on open until Doctor repairs it", () => {
     const stateDir = tempDirs.make("openclaw-subagent-suspension-backfill-");
     const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
     const initial = openOpenClawStateDatabase(options);
@@ -77,6 +140,16 @@ describe("repairLegacySubagentSuspensionReasons", () => {
       .run("2026.7.0");
     closeOpenClawStateDatabaseForTest();
 
+    const runtime = openOpenClawStateDatabase(options);
+    expect(
+      runtime.db
+        .prepare(
+          "SELECT json_extract(payload_json, '$.delivery.suspendedReason') AS reason FROM subagent_runs WHERE run_id = ?",
+        )
+        .get(runId),
+    ).toEqual({ reason: "retry-limit" });
+    closeOpenClawStateDatabaseForTest();
+    expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
     const firstOpen = openOpenClawStateDatabase(options);
     const firstStored = firstOpen.db
       .prepare("SELECT payload_json FROM subagent_runs WHERE run_id = ?")
@@ -216,7 +289,7 @@ describe("repairLegacySubagentRetainedResults", () => {
       "completion-run",
       JSON.stringify({
         runId: "completion-run",
-        taskRunId: "task-run",
+        taskRunId: " task-run ",
         completion: { required: true, resultText: "(no_reply)" },
         delivery: {
           status: "suspended",

@@ -14,8 +14,9 @@ import { createComposerProps, resetComposerFixture } from "./chat-composer.test-
 import { createTestTranscript } from "./chat-view.test-helpers.ts";
 import { renderChat, type ChatProps } from "./chat-view.ts";
 import { renderGroupedMessage } from "./components/chat-message-bubble.ts";
-import { threadProps } from "./components/chat-transcript.test-support.ts";
+import { prepareChatMessageRender } from "./components/chat-message-markdown.ts";
 import "../../plugins/control-ui-view.runtime.ts";
+import { threadProps } from "./components/chat-transcript.test-support.ts";
 
 afterEach(() => resetComposerFixture());
 
@@ -88,12 +89,12 @@ describe("native chat view session identity", () => {
       override render() {
         return html`${renderChat(props)}
         ${renderGroupedMessage(
-          {
+          prepareChatMessageRender({
             role: "toolResult",
             toolCallId: "identity-result",
             toolName: "inspect",
             content: [{ type: "text", text: "Inspection complete" }],
-          },
+          }),
           "identity-message",
           {
             isStreaming: false,

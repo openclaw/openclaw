@@ -44,6 +44,7 @@ class ConnectionManager internal constructor(
     internal const val AGENT_KIND_CLIENT_CAPABILITY = "agent-kind"
     internal const val INLINE_WIDGETS_CLIENT_CAPABILITY = "inline-widgets"
     internal const val USAGE_REFRESHING_CLIENT_CAPABILITY = "usage-refreshing"
+    internal const val MODEL_SELECTION_POLICY_CLIENT_CAPABILITY = "model-selection-policy"
 
     internal fun operatorScopesForStoredDeviceToken(storedScopes: List<String>): List<String> {
       val normalized =
@@ -75,54 +76,18 @@ class ConnectionManager internal constructor(
       if (isManual) {
         // Manual remote hosts default to TLS; only local manual hosts may honor the cleartext toggle.
         if (!manualTlsEnabled && cleartextAllowedHost) return null
-        if (!stored.isNullOrBlank()) {
-          return GatewayTlsParams(
-            required = true,
-            expectedFingerprint = stored,
-            allowTOFU = false,
-            stableId = stableId,
-          )
-        }
-        return GatewayTlsParams(
-          required = true,
-          expectedFingerprint = null,
-          allowTOFU = false,
-          stableId = stableId,
-        )
+      } else {
+        val hinted = endpoint.tlsEnabled || !endpoint.tlsFingerprintSha256.isNullOrBlank()
+        if (stored == null && !hinted && cleartextAllowedHost) return null
       }
 
-      // Prefer stored pins. Never let discovery-provided TXT override a stored fingerprint.
-      if (!stored.isNullOrBlank()) {
-        return GatewayTlsParams(
-          required = true,
-          expectedFingerprint = stored,
-          allowTOFU = false,
-          stableId = stableId,
-        )
-      }
-
-      val hinted = endpoint.tlsEnabled || !endpoint.tlsFingerprintSha256.isNullOrBlank()
-      if (hinted) {
-        // TXT is unauthenticated. Do not treat the advertised fingerprint as authoritative.
-        return GatewayTlsParams(
-          required = true,
-          expectedFingerprint = null,
-          allowTOFU = false,
-          stableId = stableId,
-        )
-      }
-
-      if (!cleartextAllowedHost) {
-        // Non-loopback discovered hosts require TLS even without TXT hints.
-        return GatewayTlsParams(
-          required = true,
-          expectedFingerprint = null,
-          allowTOFU = false,
-          stableId = stableId,
-        )
-      }
-
-      return null
+      // TXT may require TLS, but only a stored pin is authoritative.
+      return GatewayTlsParams(
+        required = true,
+        expectedFingerprint = stored,
+        allowTOFU = false,
+        stableId = stableId,
+      )
     }
   }
 
@@ -201,6 +166,7 @@ class ConnectionManager internal constructor(
           add(AGENT_KIND_CLIENT_CAPABILITY)
           if (inlineWidgetsAvailable()) add(INLINE_WIDGETS_CLIENT_CAPABILITY)
           add(USAGE_REFRESHING_CLIENT_CAPABILITY)
+          add(MODEL_SELECTION_POLICY_CLIENT_CAPABILITY)
         },
       commands = emptyList(),
       permissions = emptyMap(),

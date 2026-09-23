@@ -1,6 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
-import { hasErrnoCode } from "../../infra/errno.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -15,6 +14,7 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../../state/openclaw-state-db.js";
+import { isMissingSecretStoreTableError } from "./secret-store-sqlite.js";
 import {
   SECRET_STORE_VALUE_MAX_BYTES,
   SecretStoreValidationError,
@@ -56,14 +56,6 @@ function hiddenGitHubStoreKindFromPrefix(prefix: HiddenGitHubStorePrefix): Hidde
   throw new SecretStoreValidationError(
     "SECRET_STORE_INVALID_NAME",
     'Hidden GitHub secret record prefix must be "github-device" or "github-oauth".',
-  );
-}
-
-function isMissingSecretStoreTableError(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    hasErrnoCode(error, "ERR_SQLITE_ERROR") &&
-    error.message === "no such table: secret_store_entries"
   );
 }
 
@@ -283,6 +275,9 @@ export function listHiddenGitHubSecretRecordNames(params: {
             .select(["name", "value", "created_at_ms", "updated_at_ms"])
             .where("scope_kind", "=", "team")
             .where("scope_id", "=", "")
+            // Bound the existing name index before materializing values; the classifier stays exact.
+            .where("name", ">=", `${params.prefix}-`)
+            .where("name", "<", `${params.prefix}.`)
             .where("kind", "=", "secret")
             .where("allowed_hosts", "is", null)
             .where("deleted_at_ms", "is", null)

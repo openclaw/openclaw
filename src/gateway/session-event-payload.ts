@@ -11,7 +11,7 @@ import type { GatewaySessionRow } from "./session-utils.js";
  * Picker metadata comes from catalog-backed list/patch responses; emitting a
  * locally reconstructed subset here would replace richer client state.
  */
-export function buildGatewaySessionEventFields(params: {
+function buildGatewaySessionEventFields(params: {
   sessionRow: GatewaySessionRow;
   agentId?: string;
   label?: string;
@@ -23,6 +23,8 @@ export function buildGatewaySessionEventFields(params: {
 }): Record<string, unknown> {
   const { sessionRow } = params;
   const omitUnscopedGlobalGoal = sessionRow.key === "global" && !params.agentId;
+  const omitUnscopedSwarm =
+    (sessionRow.key === "global" || sessionRow.key === "unknown") && !params.agentId;
   return {
     updatedAt: sessionRow.updatedAt ?? undefined,
     sessionId: sessionRow.sessionId,
@@ -49,10 +51,21 @@ export function buildGatewaySessionEventFields(params: {
     markedUnreadAt: sessionRow.markedUnreadAt ?? null,
     agentStatus: sessionRow.agentStatus ?? null,
     observerDigest: sessionRow.observerDigest ?? null,
+    ...(sessionRow.activitySummary ? { activitySummary: sessionRow.activitySummary } : {}),
     lastActivityAt: sessionRow.lastActivityAt,
     spawnedBy: sessionRow.spawnedBy,
     controlOwnerSessionKey: sessionRow.controlOwnerSessionKey ?? null,
     swarmGroupId: sessionRow.swarmGroupId,
+    ...(!Object.hasOwn(sessionRow, "swarm") || omitUnscopedSwarm
+      ? {}
+      : {
+          swarm: sessionRow.swarm
+            ? {
+                ...sessionRow.swarm,
+                groups: sessionRow.swarm.groups.map(({ children: _children, ...counts }) => counts),
+              }
+            : null,
+        }),
     spawnedWorkspaceDir: sessionRow.spawnedWorkspaceDir,
     spawnedCwd: sessionRow.spawnedCwd,
     permissionMode: sessionRow.permissionMode ?? null,
@@ -69,12 +82,15 @@ export function buildGatewaySessionEventFields(params: {
     forkSource: sessionRow.forkSource,
     previousSessionId: sessionRow.previousSessionId,
     label: params.label ?? sessionRow.label ?? null,
+    autoLabel: sessionRow.autoLabel ?? null,
     icon: sessionRow.icon ?? null,
     // Explicit null so subscribed clients drop a cleared color during merge-reconcile.
     color: sessionRow.color ?? null,
     channelAvatarUrl: sessionRow.channelAvatarUrl ?? null,
     // Explicit null so subscribed clients drop a cleared category during merge-reconcile.
     category: sessionRow.category ?? null,
+    // Explicit null removes a cleared shared default from subscribed session metadata.
+    boardPresentation: sessionRow.boardPresentation ?? null,
     displayName: params.displayName ?? sessionRow.displayName ?? null,
     deliveryContext: sessionRow.deliveryContext,
     parentSessionKey: params.parentSessionKey ?? sessionRow.parentSessionKey,
@@ -104,6 +120,7 @@ export function buildGatewaySessionEventFields(params: {
     totalTokensFresh: sessionRow.totalTokensFresh,
     ...(omitUnscopedGlobalGoal ? {} : { goal: sessionRow.goal ?? null }),
     contextTokens: sessionRow.contextTokens,
+    contextBudgetStatus: sessionRow.contextBudgetStatus ?? null,
     estimatedCostUsd: sessionRow.estimatedCostUsd,
     responseUsage: sessionRow.responseUsage,
     effectiveResponseUsage: sessionRow.effectiveResponseUsage,
@@ -113,9 +130,11 @@ export function buildGatewaySessionEventFields(params: {
     activeModel: sessionRow.activeModel ?? null,
     modelOverrideSource: sessionRow.modelOverrideSource,
     agentRuntime: sessionRow.agentRuntime,
+    runtimeSelectionLocked: sessionRow.runtimeSelectionLocked,
     status: params.status ?? sessionRow.status,
     // Explicit null lets subscribed clients clear the previous run's failure reason.
     lastRunError: sessionRow.lastRunError ?? null,
+    providerReview: sessionRow.providerReview ?? null,
     // Explicit null lets a newer start evict the previous terminal run identity.
     lastRunId: sessionRow.lastRunId ?? null,
     // Explicit false lets subscribed clients drop the flag during merge-reconcile.
@@ -123,10 +142,8 @@ export function buildGatewaySessionEventFields(params: {
     ...(params.hasActiveRun === undefined ? {} : { hasActiveRun: params.hasActiveRun }),
     ...(params.activeRunIds === undefined ? {} : { activeRunIds: params.activeRunIds }),
     startedAt: sessionRow.startedAt,
-    endedAt: sessionRow.endedAt,
-    runtimeMs: sessionRow.runtimeMs,
-    compactionCheckpointCount: sessionRow.compactionCheckpointCount,
-    latestCompactionCheckpoint: sessionRow.latestCompactionCheckpoint,
+    endedAt: sessionRow.endedAt ?? null,
+    runtimeMs: sessionRow.runtimeMs ?? null,
     pluginExtensions: sessionRow.pluginExtensions,
   };
 }
@@ -199,6 +216,7 @@ export function buildGatewaySessionSnapshot(params: {
       "activeModel",
       "modelOverrideSource",
       "agentRuntime",
+      "runtimeSelectionLocked",
     ] as const) {
       delete sessionRow[field];
       delete eventFields[field];
@@ -212,6 +230,9 @@ export function buildGatewaySessionSnapshot(params: {
     : undefined;
   if (session && sessionRow.key === "global" && !params.agentId) {
     delete session.goal;
+  }
+  if (session && (sessionRow.key === "global" || sessionRow.key === "unknown") && !params.agentId) {
+    delete session.swarm;
   }
   return {
     ...(session ? { session } : {}),

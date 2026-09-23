@@ -92,6 +92,49 @@ if os.name == "nt":
     set_job = bind("SetInformationJobObject", w.BOOL, w.HANDLE, c.c_int, c.c_void_p, w.DWORD)
     query_job = bind("QueryInformationJobObject", w.BOOL, w.HANDLE, c.c_int, c.c_void_p, w.DWORD, c.c_void_p)
     terminate_job = bind("TerminateJobObject", w.BOOL, w.HANDLE, w.UINT)
+    open_process = bind("OpenProcess", w.HANDLE, w.DWORD, w.BOOL, w.DWORD)
+    in_job = bind("IsProcessInJob", w.BOOL, w.HANDLE, w.HANDLE, c.POINTER(w.BOOL))
+    wait_process = kernel.WaitForSingleObject
+    wait_process.argtypes, wait_process.restype = [w.HANDLE, w.DWORD], w.DWORD
+
+    def job_members(job, deadline):
+        # PIDs are discovery hints only. Hold query/synchronize handles and verify
+        # job membership before using them; never signal a process found by PID.
+        before = Accounting()
+        query_job(job, 1, c.byref(before), c.sizeof(before), None)
+        capacity = max(16, before.ActiveProcesses + 1)
+        while True:
+            if time.monotonic() >= deadline or capacity > 65536:
+                raise RuntimeError("Job member census did not complete")
+            class Members(c.Structure):
+                _fields_ = [("assigned", w.DWORD), ("count", w.DWORD),
+                            ("pids", c.c_size_t * capacity)]
+            members = Members()
+            try:
+                query_job(job, 3, c.byref(members), c.sizeof(members), None)
+                break
+            except OSError as error:
+                if error.winerror != 234:  # ERROR_MORE_DATA: retry the census, not cleanup.
+                    raise
+                capacity *= 2
+        handles = []
+        try:
+            for pid in members.pids[:members.count]:
+                handle = open_process(0x00100000 | 0x1000, False, pid)
+                handles.append(handle)
+                member = w.BOOL()
+                in_job(handle, job, c.byref(member))
+                if not member.value:
+                    raise RuntimeError("Job member identity changed during census")
+            after = Accounting()
+            query_job(job, 1, c.byref(after), c.sizeof(after), None)
+            if after.TotalProcesses != before.TotalProcesses:
+                raise RuntimeError("Job membership grew during census")
+            return handles, after.TotalProcesses
+        except BaseException:
+            for handle in handles:
+                close_handle(handle)
+            raise
     bootstrap = windows_api + '''
 job = int(sys.argv[1])
 assign = bind("AssignProcessToJobObject", w.BOOL, w.HANDLE, w.HANDLE)
@@ -108,19 +151,25 @@ def group_signal(pgid, signum, deadline):
     except ProcessLookupError:
         return False
     except PermissionError:
-        # Darwin can report EPERM for a zombie-only group. Only a checked
-        # census proving no live members can authorize continuing.
-        if group_alive(pgid, deadline):
+        # Darwin can refuse signals while members are exiting but not yet zombies.
+        # Keep those members pending until drain proves termination; never accept a live denial.
+        states = group_states(pgid, deadline)
+        if any(not state.startswith("Z") and not (sys.platform == "darwin" and "E" in state)
+               for state in states):
             raise
-        return False
+        return any(not state.startswith("Z") for state in states)
     return True
 
 
 def group_alive(pgid, deadline):
+    return any(not state.startswith("Z") for state in group_states(pgid, deadline))
+
+
+def group_states(pgid, deadline):
     try:
         os.killpg(pgid, 0)
     except ProcessLookupError:
-        return False
+        return []
     except PermissionError:
         pass  # EPERM can mean zombie-only; the census must still prove extinction.
     # Darwin -g selects a group; procps selects its session (a superset because
@@ -149,13 +198,13 @@ def group_alive(pgid, deadline):
         states = [state for group, state in (line.split() for line in result.stdout.splitlines())
                   if int(group) == pgid]
     if states:
-        return any(not state.startswith("Z") for state in states)
+        return states
     # Empty selection (exit 1), or a session with only other groups, can race
     # extinction. Require native ESRCH; a bare status 1 or EPERM proves nothing.
     try:
         os.killpg(pgid, 0)
     except ProcessLookupError:
-        return False
+        return []
     raise RuntimeError("Process group census missed a present group")
 
 
@@ -166,15 +215,36 @@ def drain(child, job):
         # an empty Job alone cannot prove that no Git will start afterwards.
         child.kill()
         child.wait(timeout=max(0.001, deadline - time.monotonic()))
-        terminate_job(job, 1)
-        accounting = Accounting()
-        while True:
-            query_job(job, 1, c.byref(accounting), c.sizeof(accounting), None)
-            if accounting.ActiveProcesses == 0:
-                return
-            if time.monotonic() >= deadline:
-                raise RuntimeError("Job cleanup did not complete")
-            time.sleep(0.05)
+        handles = []
+        terminated = False
+        try:
+            handles, total = job_members(job, deadline)
+            terminate_job(job, 1)
+            terminated = True
+            accounting = Accounting()
+            while True:
+                settled = True
+                for handle in handles:
+                    status = wait_process(handle, 0)
+                    if status == 258:  # WAIT_TIMEOUT: accounting can reach zero first.
+                        settled = False
+                    elif status != 0:
+                        raise c.WinError(c.get_last_error())
+                query_job(job, 1, c.byref(accounting), c.sizeof(accounting), None)
+                if accounting.TotalProcesses != total:
+                    raise RuntimeError("Job membership grew during cleanup")
+                if accounting.ActiveProcesses == 0 and settled:
+                    return
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("Job cleanup did not complete")
+                time.sleep(0.05)
+        finally:
+            try:
+                if not terminated:
+                    terminate_job(job, 1)
+            finally:
+                for handle in handles:
+                    close_handle(handle)
     else:
         # The group remains ours after leader exit. Reserve half the existing
         # cleanup allowance for KILL and extinction verification after TERM.
@@ -390,7 +460,10 @@ def checkout_selected_ref():
 
 def checkout_harness(sha):
     action = ".github/actions/setup-node-env/action.yml"
+    node_setup_scripts = ("scripts/lib/pnpm-lockfile-documents.mjs",)
     evidence_scripts = ("scripts/ios-screenshot-evidence.mjs", "scripts/lib/direct-run.mjs")
+    platform_scripts = ("scripts/lib/swift-toolchain.sh",)
+    upgrade_scripts = ("scripts/lib/release-upgrade-baseline.mjs", "scripts/lib/release-version.mjs")
     if kind == "linux-node" and not os.path.isfile(os.path.join(workspace, action)):
         raise GitFailure(1)
     harness = os.path.join(workspace, ".ci-harness")
@@ -406,19 +479,27 @@ def checkout_harness(sha):
     if sha == os.environ["WORKFLOW_SHA"]:
         # Export the workflow revision from the freshly populated index, replacing
         # retained harness files without updating the index or trusting later edits.
-        pathspecs = [".github/actions"]
+        pathspecs = [".github/actions", *node_setup_scripts]
         if kind in ("platform", "linux-node"):
             pathspecs += evidence_scripts
         elif kind == "preflight":
             pathspecs += ["scripts/lib/release-context.mjs", "scripts/lib/release-version.mjs"]
+        if kind == "platform":
+            pathspecs += platform_scripts
+        if kind == "linux-node":
+            pathspecs += upgrade_scripts
         paths = git_output(workspace, "ls-files", "-z", "--", *pathspecs).split("\0")[:-1]
         run_git(workspace, "checkout-index", "--force", f"--prefix={harness}/", "--", *paths)
     else:
         run_git(harness, "init", harness)
         run_git(harness, "remote", "add", "origin", remote)
-        sparse_paths = ["/.github/actions/"]
+        sparse_paths = ["/.github/actions/", *(f"/{path}" for path in node_setup_scripts)]
         if kind in ("platform", "linux-node"):
             sparse_paths += [f"/{path}" for path in evidence_scripts]
+        if kind == "platform":
+            sparse_paths += [f"/{path}" for path in platform_scripts]
+        if kind == "linux-node":
+            sparse_paths += [f"/{path}" for path in upgrade_scripts]
         # Rooted non-cone patterns keep the kind-owned workflow files exact.
         # Sparse first, then blob-less avoids downloading a second repository snapshot.
         run_git(harness, "sparse-checkout", "set", "--no-cone", *sparse_paths)

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ModelProviderConfig } from "../../config/types.models.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { getModelProviderLocalService } from "../provider-local-service.js";
 import {
@@ -72,11 +73,16 @@ const unconfiguredProvider = {
   staticCatalog: { run: vi.fn() },
 };
 
-function createMetadataSnapshot(pluginIds: string[]): PluginMetadataSnapshot {
+function createMetadataSnapshot(
+  pluginIds: string[],
+  withDiscoveryEntry = true,
+): PluginMetadataSnapshot {
   const plugins = pluginIds.map((id) => ({
     id,
     origin: "bundled" as const,
-    providerDiscoverySource: `/fixtures/${id}/provider-discovery.ts`,
+    ...(withDiscoveryEntry
+      ? { providerDiscoverySource: `/fixtures/${id}/provider-discovery.ts` }
+      : {}),
   }));
   return {
     index: {
@@ -203,9 +209,9 @@ describe("prepared bundled provider static catalogs", () => {
 
   it("projects heterogeneous prepared rows without rerunning hooks or resolving empty providers", async () => {
     mocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([provider]);
-    mocks.normalizePluginDiscoveryResult.mockReturnValue({
+    const rawProviders = {
       google: {
-        api: "fixture-api",
+        api: "openai-completions",
         baseUrl: "https://fixture.example/v1",
         authHeader: false,
         maxTokens: 4096,
@@ -218,7 +224,7 @@ describe("prepared bundled provider static catalogs", () => {
             contextWindow: 1_048_576,
             reasoning: false,
             input: ["text", "image"],
-            cost: { input: 0.5 },
+            cost: { input: 0.5, output: 0, cacheRead: 0, cacheWrite: 0 },
             maxTokens: 0,
           },
           {
@@ -228,23 +234,45 @@ describe("prepared bundled provider static catalogs", () => {
             input: [],
             contextWindow: 0,
             contextTokens: 0,
+            reasoning: false,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            maxTokens: 4096,
           },
         ],
       },
       empty: {
+        baseUrl: "https://empty.example/v1",
         request: {
           headers: { "X-Unused": { source: "env", provider: "default", id: "UNUSED_HEADER" } },
         },
         models: [],
       },
-    });
+    } satisfies Record<string, ModelProviderConfig>;
+    // Deliberately sparse plugin rows exercise the consumer's runtime defaults.
+    Reflect.set(rawProviders.google, "api", "fixture-api");
+    const primary = rawProviders.google.models[0];
+    const fallback = rawProviders.google.models[1];
+    if (!primary || !fallback) {
+      throw new Error("Expected both model fixtures");
+    }
+    for (const field of ["output", "cacheRead", "cacheWrite"]) {
+      Reflect.deleteProperty(primary.cost, field);
+    }
+    for (const field of ["reasoning", "cost", "maxTokens"]) {
+      Reflect.deleteProperty(fallback, field);
+    }
+    const { normalizePluginDiscoveryResult } = await vi.importActual<
+      typeof import("../../plugins/provider-discovery.js")
+    >("../../plugins/provider-discovery.js");
+    const result = { providers: rawProviders };
+    const providerConfigs = normalizePluginDiscoveryResult({ provider, result });
 
     const metadataSnapshot = createMetadataSnapshot(["google"]);
     const models = await loadBundledProviderStaticCatalogContextModels({
       cfg,
       metadataSnapshot,
       preparedStaticProviderCatalog: {
-        entries: [{ provider, result: { marker: "prepared-static-result" } as never }],
+        entries: [{ provider, result, providerConfigs }],
       },
     });
 
@@ -285,35 +313,61 @@ describe("prepared bundled provider static catalogs", () => {
     }
     expect(mocks.resolveRuntimePluginDiscoveryProviders).toHaveBeenCalledOnce();
     expect(mocks.runProviderStaticCatalog).not.toHaveBeenCalled();
+    expect(mocks.normalizePluginDiscoveryResult).not.toHaveBeenCalled();
   });
 
-  it("runs hooks omitted from a configured-only prepared catalog on full load", async () => {
-    mocks.runProviderStaticCatalog.mockResolvedValue({ marker: "full-static-result" });
-    mocks.normalizePluginDiscoveryResult.mockReturnValue({
-      google: {
-        models: [{ id: "gemini-3.1-pro-preview", contextWindow: 1_048_576 }],
-      },
-    });
+  it.each(["prepared", "registered"])(
+    "uses %s static hooks without a discovery entry",
+    async (source) => {
+      mocks.runProviderStaticCatalog.mockResolvedValue({ marker: "full-static-result" });
+      mocks.normalizePluginDiscoveryResult.mockReturnValue({
+        google: {
+          models: [{ id: "gemini-3.1-pro-preview", contextWindow: 1_048_576 }],
+        },
+      });
 
+      await expect(
+        loadBundledProviderStaticCatalogContextModels({
+          cfg,
+          metadataSnapshot: createMetadataSnapshot(["google"], false),
+          registeredProviders:
+            source === "registered"
+              ? [
+                  {
+                    pluginId: "google",
+                    provider: { ...provider, pluginId: "not-the-owner" },
+                    source: "fixture",
+                  },
+                ]
+              : [],
+          preparedStaticProviderCatalog: {
+            providers: source === "prepared" ? [provider] : [],
+            entries: [],
+          },
+        }),
+      ).resolves.toEqual([
+        expect.objectContaining({
+          id: "gemini-3.1-pro-preview",
+          provider: "google",
+        }),
+      ]);
+      expect(mocks.resolveRuntimePluginDiscoveryProviders).not.toHaveBeenCalled();
+      expect(mocks.runProviderStaticCatalog).toHaveBeenCalledWith(
+        expect.objectContaining({ provider }),
+      );
+      expect(mocks.runProviderStaticCatalog).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("does not activate an unknown runtime-only plugin to collect static rows", async () => {
     await expect(
       loadBundledProviderStaticCatalogContextModels({
         cfg,
-        metadataSnapshot: createMetadataSnapshot(["google"]),
-        preparedStaticProviderCatalog: {
-          providers: [provider],
-          entries: [],
-        },
+        metadataSnapshot: createMetadataSnapshot(["google"], false),
       }),
-    ).resolves.toEqual([
-      expect.objectContaining({
-        id: "gemini-3.1-pro-preview",
-        provider: "google",
-      }),
-    ]);
+    ).resolves.toEqual([]);
     expect(mocks.resolveRuntimePluginDiscoveryProviders).not.toHaveBeenCalled();
-    expect(mocks.runProviderStaticCatalog).toHaveBeenCalledWith(
-      expect.objectContaining({ provider }),
-    );
+    expect(mocks.runProviderStaticCatalog).not.toHaveBeenCalled();
   });
 
   it("discovers unconfigured providers when the full catalog is requested", async () => {
@@ -348,7 +402,28 @@ describe("prepared bundled provider static catalogs", () => {
         metadataSnapshot: createMetadataSnapshot(["anthropic", "google"]),
         preparedStaticProviderCatalog: {
           providers: [provider],
-          entries: [{ provider, result: { marker: "prepared-static-result" } as never }],
+          entries: [
+            {
+              provider,
+              result: undefined,
+              providerConfigs: {
+                google: {
+                  baseUrl: "https://fixture.example/v1",
+                  models: [
+                    {
+                      id: "google-model",
+                      name: "google-model",
+                      contextWindow: 128_000,
+                      reasoning: false,
+                      input: ["text"],
+                      maxTokens: 4096,
+                      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    },
+                  ],
+                },
+              },
+            },
+          ],
         },
       }),
     ).resolves.toEqual([

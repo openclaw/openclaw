@@ -25,8 +25,8 @@ import {
   applySessionEntryLifecycleMutation,
   loadSessionEntry,
   patchSessionEntryCore,
-  recordSessionParticipant,
 } from "../config/sessions/session-accessor.js";
+import { recordSessionParticipant } from "../config/sessions/session-accessor.sqlite-participants.native.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
@@ -305,7 +305,7 @@ test.each(["identity", "label-owner", "participants", "removed"] as const)(
         });
         await expect(fs.access(worktree.path)).rejects.toThrow();
       } else {
-        await expect(fs.access(worktree.path)).resolves.toBeUndefined();
+        await fs.access(worktree.path);
       }
     } finally {
       restore.mockRestore();
@@ -440,7 +440,7 @@ test.each(["accepted", "revoked", "replacement"] as const)(
       expect(successorApply).not.toHaveBeenCalled();
       expect(successorAbort).not.toHaveBeenCalled();
       expect(isSessionPermissionChangePending(earlier.sessionId)).toBe(false);
-      await expect(fs.access(worktree.path)).resolves.toBeUndefined();
+      await fs.access(worktree.path);
     } finally {
       release.resolve();
       await Promise.allSettled([pending]);
@@ -453,13 +453,15 @@ test.each(["accepted", "revoked", "replacement"] as const)(
 );
 
 test.each([
-  ["sessions.patch", false, false],
-  ["sessions.patchMany", false, false],
-  ["sessions.patch", true, false],
-  ["sessions.patch", false, true],
+  ["sessions.patch", false, "none"],
+  ["sessions.patchMany", false, "none"],
+  ["sessions.patch", true, "none"],
+  ["sessions.patch", false, "ready"],
+  ["sessions.patch", false, "cleared-selection"],
 ] as const)(
   "%s archives the checkout and restores dirty work without deleting the conversation (already archived=%s, catalog preparation=%s)",
-  async (method, alreadyArchived, prepareCatalog) => {
+  async (method, alreadyArchived, catalogMode) => {
+    const prepareCatalog = catalogMode !== "none";
     const fixture = await createArchiveWorktreeFixture();
     const { key, sessionId, storePath, worktree, workspace } = fixture;
     await fs.writeFile(path.join(worktree.path, "committed.txt"), "unpushed work\n");
@@ -480,8 +482,19 @@ test.each([
     const loadGatewayModelCatalog = vi.fn(async () => {
       catalogEntered.resolve();
       await catalogRelease.promise;
+      if (catalogMode === "cleared-selection") {
+        throw new Error("Synthetic catalog preparation failed");
+      }
       return [];
     });
+    const context = { loadGatewayModelCatalog };
+    if (prepareCatalog) {
+      loadGatewayModelCatalog.mockResolvedValueOnce([]);
+      expect(await directSessionReq("sessions.describe", { key }, { context })).toMatchObject({
+        ok: true,
+      });
+      loadGatewayModelCatalog.mockClear();
+    }
     const patch = (archived: boolean) =>
       directSessionReq(
         method,
@@ -490,10 +503,14 @@ test.each([
               key,
               expectedSessionId: sessionId,
               archived,
-              ...(!archived && prepareCatalog ? { thinkingLevel: "off" } : {}),
+              ...(!archived && prepareCatalog
+                ? catalogMode === "cleared-selection"
+                  ? { model: null }
+                  : { thinkingLevel: "off" }
+                : {}),
             }
           : { targets: [{ key, expectedSessionId: sessionId }], patch: { archived } },
-        !archived && prepareCatalog ? { context: { loadGatewayModelCatalog } } : undefined,
+        prepareCatalog ? { context } : undefined,
       );
 
     expect(await patch(true)).toMatchObject({ ok: true });
@@ -512,6 +529,9 @@ test.each([
     ).not.toContain(worktree.path);
     await expect(loadSeededTranscriptEvents(fixture.transcriptScope)).resolves.toEqual(transcript);
 
+    if (catalogMode === "cleared-selection") {
+      await patchSessionEntryCore({ storePath, sessionKey: key }, () => ({ thinkingLevel: "off" }));
+    }
     const restore = prepareCatalog ? vi.spyOn(managedWorktrees, "restore") : undefined;
     const restored = patch(false);
     try {
@@ -523,13 +543,21 @@ test.each([
           expect.any(Number),
         );
         await expect(fs.access(worktree.path)).rejects.toThrow();
+        if (catalogMode === "cleared-selection") {
+          await patchSessionEntryCore({ storePath, sessionKey: key }, () => ({
+            thinkingLevel: undefined,
+            contextWindow: undefined,
+          }));
+        }
       }
       catalogRelease.resolve();
       expect(await restored).toMatchObject({ ok: true });
       if (prepareCatalog) {
         expect(restore).toHaveBeenCalledOnce();
         expect(loadGatewayModelCatalog).toHaveBeenCalledOnce();
-        expect(loadSessionEntry({ storePath, sessionKey: key })?.thinkingLevel).toBe("off");
+        expect(loadSessionEntry({ storePath, sessionKey: key })?.thinkingLevel).toBe(
+          catalogMode === "cleared-selection" ? undefined : "off",
+        );
       }
     } finally {
       catalogRelease.resolve();
@@ -647,14 +675,7 @@ test.each([
         { context },
       );
       const outcome = method === "sessions.patchMany" ? archived.payload?.outcomes[0] : archived;
-      expect(outcome).toMatchObject({
-        ok: false,
-        error: {
-          code: "UNAVAILABLE",
-          retryable: false,
-          message: expect.stringMatching(/Session archived.*worktree.*retry.*archive/i),
-        },
-      });
+      expect(outcome).toMatchObject({ ok: true });
       if (method === "sessions.patchMany") {
         expect(archived.ok).toBe(true);
         expect(archived.payload?.outcomes.slice(1)).toEqual([{ key: targets[1]!.key, ok: true }]);
@@ -705,45 +726,72 @@ test.each([
   },
 );
 
-test("automatic session archive snapshots the checkout after committing metadata and keeps its transcript", async () => {
-  const fixture = await createArchiveWorktreeFixture();
-  const { key, sessionId, storePath, worktree } = fixture;
-  const old = Date.now() - 31 * 24 * 60 * 60 * 1000;
-  await patchSessionEntryCore(
-    { storePath, sessionKey: key },
-    (entry) => ({
-      ...entry!,
-      updatedAt: old,
-      lastInteractionAt: old,
-      lastActivityAt: old,
-      sessionStartedAt: old,
-    }),
-    { skipMaintenance: true, replaceEntry: true },
-  );
-  expect(loadSessionEntry({ storePath, sessionKey: key })?.updatedAt).toBe(old);
-  const transcript = await loadSeededTranscriptEvents(fixture.transcriptScope);
-  await fs.writeFile(path.join(worktree.path, "draft.txt"), "automatic archive keeps work\n");
+test.each(["dashboard", "age", "count"] as const)(
+  "automatic %s archive snapshots the checkout and can restore its conversation",
+  async (pressure) => {
+    const fixture = await createArchiveWorktreeFixture();
+    const { key, sessionId, storePath, worktree } = fixture;
+    const old = Date.now() - 31 * 24 * 60 * 60 * 1000;
+    await patchSessionEntryCore(
+      { storePath, sessionKey: key },
+      (entry) => ({
+        ...entry!,
+        updatedAt: old,
+        lastInteractionAt: old,
+        lastActivityAt: old,
+        sessionStartedAt: old,
+      }),
+      { skipMaintenance: true, replaceEntry: true },
+    );
+    expect(loadSessionEntry({ storePath, sessionKey: key })?.updatedAt).toBe(old);
+    const transcript = await loadSeededTranscriptEvents(fixture.transcriptScope);
+    await fs.writeFile(path.join(worktree.path, "draft.txt"), "automatic archive keeps work\n");
 
-  const result = await applySessionEntryLifecycleMutation({
-    agentId: "main",
-    storePath,
-    removals: [],
-    maintenanceOverride: { mode: "enforce", archiveDashboardAfterMs: 1 },
-  });
+    const result = await applySessionEntryLifecycleMutation({
+      agentId: "main",
+      storePath,
+      upserts: [
+        {
+          sessionKey: "agent:main:main",
+          entry: { sessionId: "main-retention", updatedAt: Date.now() },
+        },
+      ],
+      maintenanceOverride: {
+        mode: "enforce",
+        archiveDashboardAfterMs: pressure === "dashboard" ? 1 : null,
+        pruneAfterMs: pressure === "age" ? 30 * 24 * 60 * 60 * 1000 : Number.MAX_SAFE_INTEGER,
+        maxEntries: pressure === "count" ? 1 : 5000,
+      },
+    });
 
-  expect(result.archived).toBe(1);
-  expect(loadSessionEntry({ storePath, sessionKey: key })).toMatchObject({
-    sessionId,
-    archivedAt: expect.any(Number),
-    worktree: { id: worktree.id },
-  });
-  await expect(fs.access(worktree.path)).rejects.toThrow();
-  expect(getRegistryWorktree(process.env, worktree.id)).toMatchObject({
-    removedAt: expect.any(Number),
-    snapshotRef: expect.stringMatching(/^refs\/openclaw\/snapshots\//),
-  });
-  await expect(loadSeededTranscriptEvents(fixture.transcriptScope)).resolves.toEqual(transcript);
-});
+    expect(result.archived).toBe(1);
+    expect(loadSessionEntry({ storePath, sessionKey: key })).toMatchObject({
+      sessionId,
+      archivedAt: expect.any(Number),
+      worktree: { id: worktree.id },
+    });
+    await expect(fs.access(worktree.path)).rejects.toThrow();
+    expect(getRegistryWorktree(process.env, worktree.id)).toMatchObject({
+      removedAt: expect.any(Number),
+      snapshotRef: expect.stringMatching(/^refs\/openclaw\/snapshots\//),
+    });
+    await expect(loadSeededTranscriptEvents(fixture.transcriptScope)).resolves.toEqual(transcript);
+    expect(
+      await directSessionReq("sessions.patch", {
+        key,
+        expectedSessionId: sessionId,
+        archived: false,
+      }),
+    ).toMatchObject({ ok: true });
+    expect(loadSessionEntry({ storePath, sessionKey: key })?.archivedAt).toBeUndefined();
+    await expect(fs.readFile(path.join(worktree.path, "draft.txt"), "utf8")).resolves.toBe(
+      "automatic archive keeps work\n",
+    );
+    await expect(loadSeededTranscriptEvents(fixture.transcriptScope)).resolves.toEqual(transcript);
+    const lease = await acquireWorktreeRunLease(worktree.id);
+    await lease.release();
+  },
+);
 
 test.each(["unarchived", "rearchived"] as const)(
   "automatic archive preserves a checkout whose owner was %s while cleanup awaited",
@@ -789,7 +837,7 @@ test.each(["unarchived", "rearchived"] as const)(
       expect(archivedBeforeCleanup).toEqual(expect.any(Number));
       expect(loadSessionEntry({ storePath, sessionKey: key })?.archivedAt).toBe(successorArchive);
       expect(getRegistryWorktree(process.env, worktree.id)?.removedAt).toBeUndefined();
-      await expect(fs.access(worktree.path)).resolves.toBeUndefined();
+      await fs.access(worktree.path);
       await expect(loadSeededTranscriptEvents(fixture.transcriptScope)).resolves.toEqual(
         transcript,
       );

@@ -13,6 +13,7 @@ import {
   selectTrustedFullReleaseCandidate,
   verifySealedFullReleaseCandidate,
 } from "../../scripts/lib/full-release-candidate-reuse.mjs";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import {
   canonicalTestJson,
   fullReleaseCandidateBindingFixture,
@@ -28,6 +29,7 @@ const CONTRACT_SCRIPT = resolve("scripts/full-release-candidate-contract.mjs");
 const SCRIPT = resolve("scripts/full-release-candidate-reuse.mjs");
 const WORKFLOW_PATH = ".github/workflows/full-release-validation.yml";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const testNodeExecPath = resolveTestNodeExecPath();
 
 function sha256(bytes: Buffer): string {
   return createHash("sha256").update(bytes).digest("hex");
@@ -381,7 +383,7 @@ printf '%s\n' '{"artifacts":[]}'
       ),
     );
     const contractResult = spawnSync(
-      process.execPath,
+      testNodeExecPath,
       [CONTRACT_SCRIPT, "request", "--input", rawInputPath, "--output", requestPath],
       { encoding: "utf8", timeout: 10_000 },
     );
@@ -399,7 +401,7 @@ printf '%s\n' '{"artifacts":[]}'
     expect(request.upgradeSurvivorScenarios).toEqual(["base"]);
 
     const result = spawnSync(
-      process.execPath,
+      testNodeExecPath,
       [
         SCRIPT,
         "discover",
@@ -463,7 +465,7 @@ exit 1
     );
     chmodSync(ghPath, 0o755);
     writeFileSync(inputPath, JSON.stringify(fullReleaseCandidateManifestFixture().request));
-    const result = spawnSync(process.execPath, [SCRIPT, "discover", "--request-input", inputPath], {
+    const result = spawnSync(testNodeExecPath, [SCRIPT, "discover", "--request-input", inputPath], {
       encoding: "utf8",
       env: {
         ...process.env,
@@ -508,7 +510,7 @@ cat "$FAKE_GH_PAYLOAD"
       payloadPath,
       JSON.stringify({ artifacts: Array.from({ length: 100 }, () => ({})) }),
     );
-    const result = spawnSync(process.execPath, [SCRIPT, "discover", "--request-input", inputPath], {
+    const result = spawnSync(testNodeExecPath, [SCRIPT, "discover", "--request-input", inputPath], {
       encoding: "utf8",
       env: {
         ...process.env,
@@ -584,7 +586,7 @@ esac
     });
     writeFileSync(inputPath, JSON.stringify(fullReleaseCandidateManifestFixture().request));
     writeFileSync(artifactListingPath, JSON.stringify({ artifacts }));
-    const result = spawnSync(process.execPath, [SCRIPT, "discover", "--request-input", inputPath], {
+    const result = spawnSync(testNodeExecPath, [SCRIPT, "discover", "--request-input", inputPath], {
       encoding: "utf8",
       env: {
         ...process.env,
@@ -676,7 +678,7 @@ globalThis.fetch = async (url) => {
 };
 `,
     );
-    const result = spawnSync(process.execPath, [SCRIPT, "discover", "--request-input", inputPath], {
+    const result = spawnSync(testNodeExecPath, [SCRIPT, "discover", "--request-input", inputPath], {
       encoding: "utf8",
       env: {
         ...process.env,

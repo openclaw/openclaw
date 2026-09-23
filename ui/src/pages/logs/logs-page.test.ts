@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import "./logs-page.ts";
@@ -25,14 +26,6 @@ type TestGateway = ApplicationContext["gateway"] & {
 };
 
 type TestApplicationContext = ApplicationContext & { gateway: TestGateway };
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
-}
 
 function contextWithClient(
   client: GatewayBrowserClient,
@@ -174,7 +167,8 @@ describe("LogsPage lifecycle", () => {
     },
   );
 
-  it("keeps an initial error visible across snapshots until retry succeeds", async () => {
+  it("keeps an initial error visible across snapshots until the next poll succeeds", async () => {
+    vi.useFakeTimers();
     const request = vi.fn().mockRejectedValueOnce(new Error("logs unavailable"));
     const client = { request } as unknown as GatewayBrowserClient;
     const page = document.createElement("openclaw-logs-page") as TestLogsPage;
@@ -189,10 +183,12 @@ describe("LogsPage lifecycle", () => {
     expect(request).toHaveBeenCalledOnce();
     expect(page.logsStatus.hasLoaded).toBe(false);
     request.mockResolvedValueOnce({ cursor: 1, file: "/tmp/retry.log", lines: ["recovered"] });
-    page.querySelector<HTMLButtonElement>(".logs-refresh-status button")!.click();
+    expect(page.querySelector(".logs-refresh-status button")).toBeNull();
+    await vi.advanceTimersByTimeAsync(2_000);
     await vi.waitFor(() => expect(page.logsStatus.hasLoaded).toBe(true));
     expect(page.logsStatus.error).toBeNull();
     expect(page.logsEntries.map((entry) => entry.raw)).toEqual(["recovered"]);
+    expect(page.querySelector(".log-message")?.textContent).toBe("recovered");
   });
 
   it("does not schedule scroll work after disconnect", async () => {
@@ -392,10 +388,16 @@ describe("LogsPage lifecycle", () => {
       error: "logs unavailable",
       hasLoaded: true,
       stale: true,
+      awaitingGateway: false,
     });
 
     await page.loadLogs({ reset: true });
-    expect(page.logsStatus).toEqual({ error: null, hasLoaded: true, stale: false });
+    expect(page.logsStatus).toEqual({
+      error: null,
+      hasLoaded: true,
+      stale: false,
+      awaitingGateway: false,
+    });
     expect(page.logsEntries).toHaveLength(1);
   });
 

@@ -1,11 +1,9 @@
 import { execFile } from "node:child_process";
-import type { Dirent } from "node:fs";
-import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import { walkDirectory } from "@openclaw/fs-safe/walk";
 import pLimit from "p-limit";
-import { z } from "zod";
 
 const execFileAsync = promisify(execFile);
 const PLIST_READ_CONCURRENCY = 8;
@@ -27,12 +25,6 @@ const SYSTEM_APP_NAMES = new Set([
   "Shortcuts",
 ]);
 
-const InfoPlistSchema = z
-  .object({
-    CFBundleIdentifier: z.string().trim().min(1).optional(),
-  })
-  .passthrough();
-
 export type InstalledApp = {
   label: string;
   bundleId?: string;
@@ -53,7 +45,6 @@ type InstalledAppRoots = {
 type ScanInstalledAppsOptions = {
   platform?: NodeJS.Platform;
   roots?: InstalledAppRoots;
-  readBundleId?: (appPath: string) => Promise<string | undefined>;
 };
 
 function defaultRoots(): InstalledAppRoots {
@@ -75,47 +66,29 @@ async function listAppPaths(
   root: string,
   system: boolean,
 ): Promise<Array<{ path: string; system: boolean }>> {
-  let entries: Dirent[];
-  try {
-    entries = await fs.readdir(root, { withFileTypes: true });
-  } catch {
-    return [];
-  }
-  const results = await Promise.all(
-    entries.map(async (entry) => {
-      if (!entry.name.toLowerCase().endsWith(".app")) {
-        return [];
-      }
-      // Dirent.isDirectory() is false for symlinked bundles; /Applications
-      // commonly holds symlinks (brew cask, hand-linked apps) — stat through.
-      let isDirectory = entry.isDirectory();
-      if (!isDirectory && entry.isSymbolicLink()) {
-        isDirectory = await fs
-          .stat(path.join(root, entry.name))
-          .then((stats) => stats.isDirectory())
-          .catch(() => false);
-      }
-      if (!isDirectory) {
-        return [];
+  const { entries } = await walkDirectory(root, {
+    maxDepth: 1,
+    symlinks: "follow",
+    include: (entry) => {
+      if (entry.kind !== "directory" || !entry.name.toLowerCase().endsWith(".app")) {
+        return false;
       }
       const label = entry.name.slice(0, -4);
-      if (isBackupishBundle(label) || (system && !SYSTEM_APP_NAMES.has(label))) {
-        return [];
-      }
-      return [{ path: path.join(root, entry.name), system }];
-    }),
-  );
-  return results.flat();
+      return !isBackupishBundle(label) && (!system || SYSTEM_APP_NAMES.has(label));
+    },
+  });
+  return entries.map((entry) => ({ path: entry.path, system }));
 }
 
 async function readBundleIdWithPlutil(appPath: string): Promise<string | undefined> {
   try {
+    const plistPath = path.join(appPath, "Contents", "Info.plist");
     const { stdout } = await execFileAsync(
       "/usr/bin/plutil",
-      ["-convert", "json", "-o", "-", path.join(appPath, "Contents", "Info.plist")],
+      ["-extract", "CFBundleIdentifier", "raw", "-expect", "string", plistPath],
       { encoding: "utf8", maxBuffer: 1024 * 1024, timeout: PLIST_READ_TIMEOUT_MS },
     );
-    return InfoPlistSchema.parse(JSON.parse(stdout)).CFBundleIdentifier;
+    return stdout.trim() || undefined;
   } catch {
     return undefined;
   }
@@ -137,12 +110,11 @@ export async function scanInstalledApps(
       listAppPaths(roots.systemApplications, true),
     ])
   ).flat();
-  const readBundleId = options.readBundleId ?? readBundleIdWithPlutil;
   const limit = pLimit(PLIST_READ_CONCURRENCY);
   const apps = await Promise.all(
     appPaths.map((entry) =>
       limit(async (): Promise<InstalledApp> => {
-        const bundleId = await readBundleId(entry.path);
+        const bundleId = await readBundleIdWithPlutil(entry.path);
         return {
           label: path.basename(entry.path, ".app"),
           ...(bundleId ? { bundleId } : {}),

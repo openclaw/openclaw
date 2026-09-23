@@ -1,3 +1,4 @@
+import { normalizeJsonSchemaForTypeBox } from "openclaw/plugin-sdk/json-schema-runtime";
 /**
  * Runtime validators for Codex app-server protocol payloads, including schema
  * normalization for generated JSON Schema before TypeBox compilation.
@@ -19,11 +20,9 @@ import {
   type CodexModelListResponse,
   type CodexThread,
   type CodexThreadForkResponse,
-  type CodexThreadForkParams,
   type CodexThreadItem,
   type CodexThreadResumeResponse,
   type CodexThreadStartResponse,
-  type CodexTurn,
   type CodexTurnCompletedNotification,
   type CodexTurnStartResponse,
 } from "./protocol.js";
@@ -129,79 +128,18 @@ const turnCompletedNotificationSchema = materializeCodexSchema(rawTurnCompletedN
 const turnStartResponseSchema = materializeCodexSchema(rawTurnStartResponseSchema);
 
 function compileCodexSchema<T>(schema: unknown): CodexValidator<T> {
-  const validator = Compile(normalizeJsonSchemaNode(schema) as never) as TypeBoxValidator;
+  if (typeof schema !== "boolean" && !isRecord(schema)) {
+    throw new TypeError("Generated Codex schema must be an object or boolean");
+  }
+  const validator = Compile(normalizeJsonSchemaForTypeBox(schema) as never) as TypeBoxValidator;
   return {
     check: (value): value is T => validator.Check(value),
     errors: (value) => [...validator.Errors(value)] as ValidationError[],
   };
 }
 
-const schemaMapKeywords = new Set([
-  "$defs",
-  "definitions",
-  "dependentSchemas",
-  "patternProperties",
-  "properties",
-]);
-const schemaValueKeywords = new Set([
-  "additionalItems",
-  "additionalProperties",
-  "contains",
-  "else",
-  "if",
-  "items",
-  "not",
-  "propertyNames",
-  "then",
-  "unevaluatedItems",
-  "unevaluatedProperties",
-]);
-const schemaArrayKeywords = new Set(["allOf", "anyOf", "oneOf", "prefixItems"]);
-
 function schemaTypeIncludes(schema: Record<string, unknown>, type: string): boolean {
   return schema.type === type || (Array.isArray(schema.type) && schema.type.includes(type));
-}
-
-function normalizeSchemaMap(value: unknown): unknown {
-  if (!isRecord(value)) {
-    return value;
-  }
-  return Object.fromEntries(
-    Object.entries(value).map(([key, entry]) => [key, normalizeJsonSchemaNode(entry)]),
-  );
-}
-
-function expandJsonSchemaTypeArray(schema: Record<string, unknown>): Record<string, unknown> {
-  const { type, ...rest } = schema;
-  if (!Array.isArray(type)) {
-    return schema;
-  }
-  return {
-    anyOf: type.map((entry) => Object.assign({}, rest, { type: entry })),
-  };
-}
-
-function normalizeJsonSchemaNode(schema: unknown): unknown {
-  // Generated schemas can use JSON Schema type arrays; TypeBox validators need
-  // equivalent anyOf branches to preserve nullable/union semantics.
-  if (Array.isArray(schema)) {
-    return schema.map((entry) => normalizeJsonSchemaNode(entry));
-  }
-  if (!isRecord(schema)) {
-    return schema;
-  }
-  const normalizedSchema = expandJsonSchemaTypeArray(schema);
-  return Object.fromEntries(
-    Object.entries(normalizedSchema).map(([key, value]) => {
-      if (schemaMapKeywords.has(key)) {
-        return [key, normalizeSchemaMap(value)];
-      }
-      if (schemaValueKeywords.has(key) || schemaArrayKeywords.has(key)) {
-        return [key, normalizeJsonSchemaNode(value)];
-      }
-      return [key, value];
-    }),
-  );
 }
 
 function readDefault(schema: unknown): unknown {
@@ -331,21 +269,6 @@ export function assertCodexThreadForkResponse(value: unknown): CodexThreadForkRe
   return assertCodexShape(validateThreadStartResponse, normalized, "thread/fork response");
 }
 
-/** Asserts the experimental beforeTurnId request field before it crosses the app-server boundary. */
-export function assertCodexThreadForkParams(value: unknown): CodexThreadForkParams {
-  if (
-    !isRecord(value) ||
-    typeof value.threadId !== "string" ||
-    !value.threadId.trim() ||
-    (value.beforeTurnId !== undefined &&
-      value.beforeTurnId !== null &&
-      typeof value.beforeTurnId !== "string")
-  ) {
-    throw new Error("Invalid Codex app-server thread/fork params");
-  }
-  return value as CodexThreadForkParams;
-}
-
 /** Asserts and normalizes a Codex thread/resume response. */
 export function assertCodexThreadResumeResponse(value: unknown): CodexThreadResumeResponse {
   const normalized = normalizeWithDefaults(threadResumeResponseSchema, value);
@@ -374,22 +297,35 @@ export function assertCodexThreadAcceptsDirectInput(
 
 /** Asserts and normalizes a Codex turn/start response. */
 export function assertCodexTurnStartResponse(value: unknown): CodexTurnStartResponse {
-  const normalized = normalizeWithDefaults(
-    turnStartResponseSchema,
-    normalizeTurnStartResponse(value),
-  );
+  const normalized = normalizeWithDefaults(turnStartResponseSchema, value);
   return assertCodexShape(validateTurnStartResponse, normalized, "turn/start response");
 }
 
-/** Only the current text prompt may be echoed; capabilities and historical items are not passive. */
+/** Prompt echoes and attested managed-hook continuations cannot admit native capabilities. */
 export function assertCodexPassiveTurnItems(
   items: readonly CodexThreadItem[],
   prompt: string,
   taskLabel: string,
+  options: { allowManagedHookPrompts?: boolean } = {},
 ): void {
   let promptEchoSeen = false;
   for (const item of items) {
     if (item.type === "agentMessage" || item.type === "reasoning") {
+      continue;
+    }
+    if (
+      item.type === "hookPrompt" &&
+      options.allowManagedHookPrompts === true &&
+      Array.isArray(item.fragments) &&
+      item.fragments.length > 0 &&
+      item.fragments.every(
+        (fragment) =>
+          isJsonObject(fragment) &&
+          typeof fragment.text === "string" &&
+          typeof fragment.hookRunId === "string" &&
+          fragment.hookRunId.trim().length > 0,
+      )
+    ) {
       continue;
     }
     if (item.type === "userMessage" && !promptEchoSeen) {
@@ -436,26 +372,16 @@ export function assertCodexModelListResponse(value: unknown): CodexModelListResp
   );
 }
 
-/** Reads and normalizes a Codex turn object. */
-export function readCodexTurn(value: unknown): CodexTurn | undefined {
-  const response = readCodexShape(
-    validateTurnStartResponse,
-    normalizeWithDefaults(turnStartResponseSchema, { turn: normalizeTurn(value) }),
-  );
-  return response?.turn;
-}
-
 /** Reads a Codex turn/completed notification payload if it matches the protocol schema. */
 export function readCodexTurnCompletedNotification(
   value: unknown,
 ): CodexTurnCompletedNotification | undefined {
-  return readCodexShape(
+  const notification = readCodexShape(
     validateTurnCompletedNotification,
-    normalizeWithDefaults(
-      turnCompletedNotificationSchema,
-      normalizeTurnCompletedNotification(value),
-    ),
+    normalizeWithDefaults(turnCompletedNotificationSchema, value),
   );
+  // Turn is shared with turn/start, but only terminal states belong in this notification.
+  return notification?.turn.status === "inProgress" ? undefined : notification;
 }
 
 function assertCodexShape<T>(validate: CodexValidator<T>, value: unknown, label: string): T {
@@ -467,69 +393,6 @@ function assertCodexShape<T>(validate: CodexValidator<T>, value: unknown, label:
 
 function readCodexShape<T>(validate: CodexValidator<T>, value: unknown): T | undefined {
   return validate.check(value) ? value : undefined;
-}
-
-function normalizeTurn(value: unknown): unknown {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return value;
-  }
-  return {
-    error: null,
-    startedAt: null,
-    completedAt: null,
-    durationMs: null,
-    ...value,
-    items: Array.isArray((value as { items?: unknown }).items)
-      ? (value as { items: unknown[] }).items.map(normalizeThreadItem)
-      : [],
-  };
-}
-
-function normalizeThreadItem(value: unknown): unknown {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return value;
-  }
-  const item = value as { type?: unknown };
-  switch (item.type) {
-    case "agentMessage":
-      return { phase: null, delivery: null, memoryCitation: null, ...value };
-    case "plan":
-      return { text: "", ...value };
-    case "reasoning":
-      return { summary: [], content: [], ...value };
-    case "dynamicToolCall":
-      return {
-        namespace: null,
-        arguments: null,
-        status: "completed",
-        contentItems: null,
-        success: null,
-        durationMs: null,
-        ...value,
-      };
-    default:
-      return value;
-  }
-}
-
-function normalizeTurnStartResponse(value: unknown): unknown {
-  if (!value || typeof value !== "object" || Array.isArray(value) || !("turn" in value)) {
-    return value;
-  }
-  return {
-    ...value,
-    turn: normalizeTurn((value as { turn?: unknown }).turn),
-  };
-}
-
-function normalizeTurnCompletedNotification(value: unknown): unknown {
-  if (!value || typeof value !== "object" || Array.isArray(value) || !("turn" in value)) {
-    return value;
-  }
-  return {
-    ...value,
-    turn: normalizeTurn((value as { turn?: unknown }).turn),
-  };
 }
 
 function formatValidationErrors(validate: CodexValidator<unknown>, value: unknown): string {

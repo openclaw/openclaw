@@ -27,6 +27,7 @@ import {
   runWithCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityResolver,
 } from "../cron-creator-authority-context.js";
+import { textAssistant } from "../test-helpers/sparse-transcript.test-support.js";
 import { createCronTool } from "./cron-tool.js";
 import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 
@@ -749,7 +750,9 @@ describe("cron tool", () => {
       expect(result.details).toEqual({
         ...page,
         scope: "caller",
-        scopeHint: expect.stringContaining("fresh authenticated Control UI administrator turn"),
+        scopeHint: expect.stringContaining(
+          "fresh authenticated configured channel owner or Control UI administrator turn",
+        ),
       });
     }
   });
@@ -934,6 +937,39 @@ describe("cron tool", () => {
       "WebChat observes that commit live and after reconnect without another user message",
     );
   });
+
+  it.each([true, false])(
+    "warns against replacing known jobs after scoped failures (triggers=%s)",
+    (triggersEnabled) => {
+      const tool = createTestCronTool({
+        config: { cron: { triggers: { enabled: triggersEnabled } } },
+      });
+
+      // #137418 / #123982: pin the non-revealing recovery guidance delivered to
+      // the model, not a guarantee that every model will follow it.
+      expect(tool.description).toContain(
+        "configured channel owner and Control UI administrator turns can list/get/update/run/remove any Gateway automation",
+      );
+      expect(tool.description).toContain(
+        "totals/counts and hasMore describe that scoped view, not global inventory",
+      );
+      expect(tool.description).toContain(
+        "an empty list or failed list/get/update/remove (including not-found) does not establish global absence",
+      );
+      expect(tool.description).toContain("including your own history");
+      expect(tool.description).toContain(
+        "Never recreate or replace a known automation to satisfy an update/remove or reconciliation request solely because of these results",
+      );
+      expect(tool.description).toContain(
+        "ask an authorized administrator to check through a fresh authenticated configured channel owner or Control UI administrator turn or the Automations page",
+      );
+      expect(tool.description).toContain("do not bypass caller scope");
+      expect(tool.description).toContain(
+        "Genuinely new, requested automations can still be created",
+      );
+      expect(tool.description).not.toContain("means the job is outside this scope");
+    },
+  );
 
   it("documents the event-trigger authoring contract", () => {
     const tool = createTestCronTool();
@@ -2176,10 +2212,7 @@ describe("cron tool", () => {
       .mockResolvedValueOnce({
         messages: [
           { role: "user", content: [{ type: "text", text: "Discussed Q2 budget" }] },
-          {
-            role: "assistant",
-            content: [{ type: "text", text: "We agreed to review on Tuesday." }],
-          },
+          textAssistant("We agreed to review on Tuesday."),
           { role: "user", content: [{ type: "text", text: "Remind me about the thing at 2pm" }] },
         ],
       })

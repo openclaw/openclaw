@@ -1,9 +1,10 @@
-// Control UI tests cover collection default provenance and editing behavior.
-import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-import { renderArray, renderObject } from "./config-form.node.collection.ts";
-import { renderJsonTextarea } from "./config-form.node.json.ts";
-import { renderNode } from "./config-form.ts";
+// Control UI tests cover collection default provenance and editing behavior.
+import {
+  renderJsonTextareaFixture,
+  renderArrayFixture,
+  renderObjectFixture,
+} from "../test-helpers/config-form-fixtures.ts";
 
 function expectElement<T extends Element>(element: T | null | undefined, label: string): T {
   expect(element instanceof Element, label).toBe(true);
@@ -22,18 +23,12 @@ describe("config form collection defaults", () => {
       default: { mode: "balanced" },
     };
 
-    render(
-      renderJsonTextarea({
-        schema,
-        value: { mode: "custom" },
-        path: ["payload"],
-        hints: {},
-        unsupported: new Set(),
-        disabled: false,
-        onPatch,
-      }),
-      container,
-    );
+    renderJsonTextareaFixture(container, {
+      schema,
+      value: { mode: "custom" },
+      path: ["payload"],
+      onPatch,
+    });
 
     expect(container.textContent).toContain('Default: {"mode":"balanced"}');
     const textarea = expectElement(
@@ -46,20 +41,15 @@ describe("config form collection defaults", () => {
     expect(onPatch).toHaveBeenCalledWith(["payload"], undefined);
 
     onPatch.mockClear();
-    render(
-      renderJsonTextarea({
-        schema,
-        value: undefined,
-        path: ["payload"],
-        hints: {},
-        unsupported: new Set(),
-        disabled: false,
-        onPatch,
-      }),
-      container,
-    );
+    renderJsonTextareaFixture(container, {
+      schema,
+      value: undefined,
+      path: ["payload"],
+      onPatch,
+    });
 
-    expect(container.textContent).toContain('Using default: {"mode":"balanced"}');
+    expect(container.textContent).not.toContain("Using default:");
+    expect(container.querySelector(".settings-row__desc")).toBeNull();
     expect(
       expectElement(container.querySelector<HTMLTextAreaElement>("textarea"), "inherited JSON")
         .value,
@@ -76,21 +66,12 @@ describe("config form collection defaults", () => {
       default: ["a", "b"],
     };
 
-    render(
-      renderArray(
-        {
-          schema,
-          value: ["custom"],
-          path: ["values"],
-          hints: {},
-          unsupported: new Set(),
-          disabled: false,
-          onPatch,
-        },
-        renderNode,
-      ),
-      container,
-    );
+    renderArrayFixture(container, {
+      schema,
+      value: ["custom"],
+      path: ["values"],
+      onPatch,
+    });
 
     expect(container.textContent).toContain('Default: ["a","b"]');
     expect(container.textContent).toContain("1 item");
@@ -100,23 +81,15 @@ describe("config form collection defaults", () => {
     ).toBe("custom");
 
     onPatch.mockClear();
-    render(
-      renderArray(
-        {
-          schema,
-          value: undefined,
-          path: ["values"],
-          hints: {},
-          unsupported: new Set(),
-          disabled: false,
-          onPatch,
-        },
-        renderNode,
-      ),
-      container,
-    );
+    renderArrayFixture(container, {
+      schema,
+      value: undefined,
+      path: ["values"],
+      onPatch,
+    });
 
-    expect(container.textContent).toContain('Using default: ["a","b"]');
+    expect(container.textContent).not.toContain("Using default:");
+    expect(container.querySelector(".settings-row__desc")).toBeNull();
     expect(container.textContent).toContain("2 items");
     const inheritedInputs = Array.from(container.querySelectorAll<HTMLInputElement>("input"));
     expect(inheritedInputs.map((input) => input.value)).toEqual(["", ""]);
@@ -153,21 +126,12 @@ describe("config form collection defaults", () => {
       },
     };
 
-    render(
-      renderArray(
-        {
-          schema,
-          value: undefined,
-          path: ["entries"],
-          hints: {},
-          unsupported: new Set(),
-          disabled: false,
-          onPatch,
-        },
-        renderNode,
-      ),
-      container,
-    );
+    renderArrayFixture(container, {
+      schema,
+      value: undefined,
+      path: ["entries"],
+      onPatch,
+    });
 
     const labels = Array.from(
       container.querySelectorAll<HTMLInputElement>("input[aria-label='Label']"),
@@ -193,56 +157,40 @@ describe("config form collection defaults", () => {
       "settings.tokens": { sensitive: true },
     };
 
-    render(
-      renderObject(
-        {
-          schema: {
-            type: "object",
-            title: "Profile",
-            default: { apiKey: "default-secret" },
-            properties: { apiKey: { type: "string" } },
-          },
-          value: { apiKey: "authored-secret" },
-          path: ["settings", "profile"],
-          hints,
-          unsupported: new Set(),
-          disabled: false,
-          revealSensitive: false,
-          onPatch,
-        },
-        renderNode,
-      ),
-      container,
-    );
+    renderObjectFixture(container, {
+      schema: {
+        type: "object",
+        title: "Profile",
+        default: { apiKey: "default-secret" },
+        properties: { apiKey: { type: "string" } },
+      },
+      value: { apiKey: "authored-secret" },
+      path: ["settings", "profile"],
+      hints,
+      revealSensitive: false,
+      onPatch,
+    });
 
     expect(container.textContent).not.toContain("default-secret");
 
-    render(
-      renderArray(
-        {
-          schema: {
-            type: "array",
-            title: "Tokens",
-            items: { type: "string" },
-            default: ["default-token"],
-          },
-          value: ["authored-token"],
-          path: ["settings", "tokens"],
-          hints,
-          unsupported: new Set(),
-          disabled: false,
-          revealSensitive: false,
-          onPatch,
-        },
-        renderNode,
-      ),
-      container,
-    );
+    renderArrayFixture(container, {
+      schema: {
+        type: "array",
+        title: "Tokens",
+        items: { type: "string" },
+        default: ["default-token"],
+      },
+      value: ["authored-token"],
+      path: ["settings", "tokens"],
+      hints,
+      revealSensitive: false,
+      onPatch,
+    });
 
     expect(container.textContent).not.toContain("default-token");
   });
 
-  it("shows a top-level object default without nesting the section", () => {
+  it("shows inherited child defaults without an object JSON summary or nested section", () => {
     const container = document.createElement("div");
     const onPatch = vi.fn();
     const onRemove = vi.fn();
@@ -255,47 +203,29 @@ describe("config form collection defaults", () => {
       },
     };
 
-    render(
-      renderObject(
-        {
-          schema,
-          value: { mode: "custom" },
-          path: ["settings"],
-          hints: {},
-          unsupported: new Set(),
-          disabled: false,
-          onPatch,
-          onRemove,
-        },
-        renderNode,
-      ),
-      container,
-    );
+    renderObjectFixture(container, {
+      schema,
+      value: { mode: "custom" },
+      path: ["settings"],
+      onPatch,
+      onRemove,
+    });
 
-    expect(container.textContent).toContain('Default: {"mode":"balanced"}');
+    expect(container.textContent).not.toContain('{"mode":"balanced"}');
     expect(container.querySelector("details")).toBeNull();
     expect(onPatch).not.toHaveBeenCalled();
 
     onPatch.mockClear();
     onRemove.mockClear();
-    render(
-      renderObject(
-        {
-          schema,
-          value: undefined,
-          path: ["settings"],
-          hints: {},
-          unsupported: new Set(),
-          disabled: false,
-          onPatch,
-          onRemove,
-        },
-        renderNode,
-      ),
-      container,
-    );
+    renderObjectFixture(container, {
+      schema,
+      value: undefined,
+      path: ["settings"],
+      onPatch,
+      onRemove,
+    });
 
-    expect(container.textContent).toContain('Using default: {"mode":"balanced"}');
+    expect(container.textContent).not.toContain('{"mode":"balanced"}');
     expect(container.querySelector("details")).toBeNull();
     expect(
       expectElement(container.querySelector<HTMLInputElement>("input"), "inherited mode")
@@ -308,27 +238,19 @@ describe("config form collection defaults", () => {
   it("conceals a sensitive top-level object default", () => {
     const container = document.createElement("div");
 
-    render(
-      renderObject(
-        {
-          schema: {
-            type: "object",
-            title: "Settings",
-            default: { apiKey: "default-secret" },
-            properties: { apiKey: { type: "string" } },
-          },
-          value: { apiKey: "authored-secret" },
-          path: ["settings"],
-          hints: { settings: { sensitive: true } },
-          unsupported: new Set(),
-          disabled: false,
-          revealSensitive: false,
-          onPatch: vi.fn(),
-        },
-        renderNode,
-      ),
-      container,
-    );
+    renderObjectFixture(container, {
+      schema: {
+        type: "object",
+        title: "Settings",
+        default: { apiKey: "default-secret" },
+        properties: { apiKey: { type: "string" } },
+      },
+      value: { apiKey: "authored-secret" },
+      path: ["settings"],
+      hints: { settings: { sensitive: true } },
+      revealSensitive: false,
+      onPatch: vi.fn(),
+    });
 
     expect(container.textContent).not.toContain("default-secret");
     expect(container.querySelector("details")).toBeNull();
@@ -354,25 +276,16 @@ describe("config form collection defaults", () => {
       },
     };
 
-    render(
-      renderObject(
-        {
-          schema,
-          value: {
-            profile: { enabled: false, mode: "custom" },
-            sibling: "preserved",
-          },
-          path: ["settings"],
-          hints: {},
-          unsupported: new Set(),
-          disabled: false,
-          onPatch,
-          onRemove,
-        },
-        renderNode,
-      ),
-      container,
-    );
+    renderObjectFixture(container, {
+      schema,
+      value: {
+        profile: { enabled: false, mode: "custom" },
+        sibling: "preserved",
+      },
+      path: ["settings"],
+      onPatch,
+      onRemove,
+    });
 
     const profile = expectElement(
       Array.from(container.querySelectorAll("details")).find((details) =>
@@ -380,26 +293,17 @@ describe("config form collection defaults", () => {
       ),
       "explicit profile object",
     );
-    expect(profile.textContent).toContain('Default: {"enabled":true,"mode":"balanced"}');
+    expect(profile.textContent).not.toContain('{"enabled":true,"mode":"balanced"}');
     expect(onPatch).not.toHaveBeenCalled();
 
     onRemove.mockClear();
-    render(
-      renderObject(
-        {
-          schema,
-          value: { sibling: "preserved" },
-          path: ["settings"],
-          hints: {},
-          unsupported: new Set(),
-          disabled: false,
-          onPatch,
-          onRemove,
-        },
-        renderNode,
-      ),
-      container,
-    );
+    renderObjectFixture(container, {
+      schema,
+      value: { sibling: "preserved" },
+      path: ["settings"],
+      onPatch,
+      onRemove,
+    });
 
     const inheritedProfile = expectElement(
       Array.from(container.querySelectorAll("details")).find((details) =>
@@ -407,9 +311,7 @@ describe("config form collection defaults", () => {
       ),
       "inherited profile object",
     );
-    expect(inheritedProfile.textContent).toContain(
-      'Using default: {"enabled":true,"mode":"balanced"}',
-    );
+    expect(inheritedProfile.textContent).not.toContain('{"enabled":true,"mode":"balanced"}');
     const enabledRow = expectElement(
       Array.from(inheritedProfile.querySelectorAll(".settings-row")).find((row) =>
         row.textContent?.includes("Enabled"),
@@ -422,8 +324,8 @@ describe("config form collection defaults", () => {
       ),
       "inherited mode row",
     );
-    expect(enabledRow.textContent).toContain("Using default: true");
-    expect(modeRow.textContent).toContain("Using default: balanced");
+    expect(enabledRow.textContent).not.toContain("Using default:");
+    expect(modeRow.textContent).not.toContain("Using default:");
     expect(
       expectElement(modeRow.querySelector<HTMLInputElement>("input"), "inherited mode input")
         .placeholder,

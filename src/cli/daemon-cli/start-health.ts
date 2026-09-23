@@ -27,8 +27,8 @@ export async function verifyGatewayStartReadiness(params: {
       port,
       attempts,
       delayMs: DEFAULT_RESTART_HEALTH_DELAY_MS,
+      timeoutMs: deadlineMs,
       env: context.env,
-      includeUnknownListenersAsStale: process.platform === "win32",
       supervisorKeepsAlive: process.platform === "darwin",
     }),
     waitForGatewayHttpReadiness({

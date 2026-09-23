@@ -1,4 +1,3 @@
-// Slack plugin module implements system event context behavior.
 import type { AllMiddlewareArgs } from "@slack/bolt";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { authorizeSlackSystemEventSender } from "../auth.js";
@@ -20,7 +19,8 @@ export async function authorizeAndResolveSlackSystemEventContext(params: {
   eventKind: string;
   eventScope?: SlackEventScope;
 }): Promise<SlackAuthorizedSystemEventContext | undefined> {
-  const { ctx, senderId, channelId, channelType, eventKind } = params;
+  const { senderId, channelId, channelType, eventKind } = params;
+  const ctx = await params.ctx.readRuntimeContext();
   const auth = await authorizeSlackSystemEventSender({
     ctx,
     senderId,

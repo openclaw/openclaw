@@ -1,6 +1,13 @@
 import { writeSync } from "node:fs";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import { chromium, type Browser, type BrowserContext, type Locator, type Page } from "playwright";
+import {
+  chromium,
+  type Browser,
+  type BrowserContext,
+  type BrowserContextOptions,
+  type Locator,
+  type Page,
+} from "playwright";
 import {
   afterAll,
   afterEach,
@@ -19,6 +26,7 @@ import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-ar
 import {
   captureControlUiE2eFailureDiagnostics,
   controlUiE2eWaitTimeoutMs,
+  installControlUiRpcDiagnostics,
   startControlUiE2eServer,
   type ControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
@@ -91,7 +99,26 @@ export function tooltipTitleText(item: Locator) {
   });
 }
 
+type HeldModuleContext = {
+  closing: boolean;
+  pages: Map<Page, Array<{ release: () => void; installed: ReturnType<Page["route"]> }>>;
+};
+const heldModuleContexts = new WeakMap<BrowserContext, HeldModuleContext>();
+
+function getHeldModuleContext(context: BrowserContext): HeldModuleContext {
+  let held = heldModuleContexts.get(context);
+  if (!held) {
+    held = { closing: false, pages: new Map() };
+    heldModuleContexts.set(context, held);
+  }
+  return held;
+}
+
 export async function holdModuleResponse(page: Page, module: RegExp) {
+  const held = getHeldModuleContext(page.context());
+  if (held.closing) {
+    throw new Error("Cannot hold a module after browser context cleanup begins");
+  }
   let release!: () => void;
   let requested!: (url: string) => void;
   const gate = new Promise<void>((resolve) => {
@@ -101,7 +128,7 @@ export async function holdModuleResponse(page: Page, module: RegExp) {
     requested = resolve;
   });
   let requests = 0;
-  await page.route(module, async (route) => {
+  const installed = page.route(module, async (route) => {
     requests += 1;
     const response = await route.fetch();
     expect(response.status()).toBe(200);
@@ -109,6 +136,11 @@ export async function holdModuleResponse(page: Page, module: RegExp) {
     await gate;
     await route.fulfill({ response });
   });
+  // Register before awaiting installation so teardown also owns a pending route().
+  const registrations = held.pages.get(page) ?? [];
+  registrations.push({ release, installed });
+  held.pages.set(page, registrations);
+  await installed;
   return { request, release, requests: () => requests };
 }
 
@@ -134,6 +166,14 @@ async function settleControlUiCleanup(promises: Promise<unknown>[]): Promise<voi
   throwControlUiCleanupErrors(
     results.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
   );
+}
+
+export function createControlUiE2eContextOptions(): BrowserContextOptions {
+  return {
+    locale: "en-US",
+    serviceWorkers: "block",
+    viewport: { height: 900, width: 1280 },
+  };
 }
 
 export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): ControlUiE2eSuite {
@@ -198,6 +238,8 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
     );
     try {
       return await Promise.race([operation, expired.promise]);
+    } catch (error) {
+      throw retireFork(error, retainedState);
     } finally {
       clearTimeout(deadline);
     }
@@ -206,9 +248,26 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
   const closeBrowserContext = (context: BrowserContext): Promise<void> => {
     let closing = contextClosures.get(context);
     if (!closing) {
+      const held = getHeldModuleContext(context);
+      held.closing = true;
       // Playwright's second close can return while the first is still finalizing.
       closing = Promise.resolve().then(async () => {
-        await context.close();
+        const registrations = [...held.pages.values()].flat();
+        for (const registration of registrations) {
+          registration.release();
+        }
+        // Release all gates before joining installation and every active handler.
+        // A first request or URL change does not settle later matching fetches.
+        // Playwright's wait mode drains handlers without suppressing their errors.
+        await runQaGatewayFixture(
+          () => settleControlUiCleanup(registrations.map(({ installed }) => installed)),
+          () =>
+            settleControlUiCleanup(
+              [...held.pages.keys()].map((page) => page.unrouteAll({ behavior: "wait" })),
+            ),
+          () => context.close(),
+        );
+        held.pages.clear();
         // Requests outlive sockets; pending handlers must release their admission
         // roots before fixture cleanup. waitFor also works in afterAll.
         await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0), {
@@ -442,9 +501,7 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
             throwControlUiCleanupErrors(errors);
             assertControlUiForkActive();
             await resources?.release?.();
-          })().catch((error: unknown) => {
-            throw retireFork(error, resources?.retainedState);
-          });
+          })();
           return joinCleanup(
             teardown,
             "suite teardown",
@@ -468,6 +525,7 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
         async () => {
           const page = await context.newPage();
           fixture = { context, page };
+          installControlUiRpcDiagnostics(page);
           try {
             return await run(fixture);
           } catch (error) {
@@ -487,4 +545,24 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
       );
     },
   };
+}
+
+export async function expandCodingSection(page: Page, required = false) {
+  const toggle = page.locator('[data-session-section="work"] .sidebar-session-group-toggle');
+  if (required) {
+    await toggle.waitFor({ state: "visible" });
+  } else {
+    await page.waitForFunction(() =>
+      Boolean(
+        document.querySelector('[data-session-section="work"]') ??
+        document.querySelector('[data-session-section^="catalog:"]'),
+      ),
+    );
+    if ((await toggle.count()) === 0) {
+      return;
+    }
+  }
+  if ((await toggle.getAttribute("aria-expanded")) === "false") {
+    await toggle.click();
+  }
 }

@@ -36,7 +36,7 @@ OpenClaw loads skills from several roots in a defined [precedence order](/tools/
   <Step title="Write SKILL.md">
     The frontmatter defines metadata; the body gives the agent instructions.
 
-    ```markdown
+    ````markdown
     ---
     name: hello-world
     description: A simple skill that prints a greeting.
@@ -49,7 +49,7 @@ OpenClaw loads skills from several roots in a defined [precedence order](/tools/
     ```bash
     echo "Hello from your custom skill!"
     ```
-    ```
+    ````
 
     Naming rules:
     - Use lowercase letters, digits, and hyphens for `name`.
@@ -290,5 +290,8 @@ personal owner or an organization where you have publisher access.
   </Card>
   <Card title="Building plugins" href="/plugins/building-plugins" icon="plug">
     Plugins can ship skills alongside the tools they document.
+  </Card>
+  <Card title="Slash commands" href="/tools/slash-commands" icon="terminal">
+    How the command a skill registers is invoked and gated.
   </Card>
 </CardGroup>

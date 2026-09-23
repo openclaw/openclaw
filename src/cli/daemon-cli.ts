@@ -19,9 +19,18 @@ export {
   isManagedUpdateRequesterOwner,
   waitForGatewayUpdateRecovery,
 } from "./daemon-cli/lifecycle-context.js";
-// The detached updater loads these closures before replacing its installation.
+// Handoff admission uses the serving runtime; terminal writes load the installed runtime afresh.
 export {
+  adoptUpdateRun,
   finishUpdateRun,
-  recordUpdateRunPhase,
+  getUpdateRun,
+  recordUpdateRunDiagnostic,
+  recordUpdateRunStep,
   recordUpdateRunVerification,
 } from "../infra/update-run-ledger.js";
+
+export {
+  createManagedUpdateRequesterAuthority,
+  prepareManagedUpdateRequesterIdentity,
+} from "../infra/update-requester-authority.js";
+export { assertForegroundUpdateOrigin } from "../infra/update-managed-service-handoff.js";

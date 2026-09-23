@@ -1,6 +1,7 @@
 /** Selects built plugin artifacts without importing active runtime state. */
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isPathInside } from "../infra/path-guards.js";
 import type { OpenClawPackageManifest } from "./manifest.js";
 import {
   isTypeScriptPackageEntry,
@@ -17,6 +18,75 @@ import { getPluginCacheRoot } from "./plugin-cache.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 
 export type PluginRuntimeArtifactPreference = "source" | "bundled" | "all";
+export type PluginRuntimeArtifact = { source: string; rootDir: string };
+export type PluginRuntimeArtifactSelectionParams = PluginRuntimeArtifact & {
+  entryKind: "runtime" | "setup" | "provider-discovery" | "capability-catalog";
+  origin: PluginOrigin;
+  preferBuiltPluginArtifacts: boolean;
+  sourcePreferred?: boolean;
+  packageManifest?: OpenClawPackageManifest;
+};
+
+/** Canonical packaged runtime replaces staging-only dist-runtime artifacts. */
+export function resolveCanonicalDistRuntimeSource(source: string): string {
+  const marker = `${path.sep}dist-runtime${path.sep}extensions${path.sep}`;
+  const index = source.indexOf(marker);
+  if (index === -1) {
+    return source;
+  }
+  const candidate = `${source.slice(0, index)}${path.sep}dist${path.sep}extensions${path.sep}${source.slice(index + marker.length)}`;
+  return pluginCacheExistsSync(candidate) ? candidate : source;
+}
+
+/** Finalize once at execution; discovery and identity retain the selected artifact. */
+export function resolvePluginRuntimeExecutionArtifact(
+  selected: PluginRuntimeArtifact,
+): PluginRuntimeArtifact {
+  // This is the loader's existing final pass, not recursive normalization:
+  // nested staging paths can make another pass select a different file.
+  const source = resolveCanonicalDistRuntimeSource(selected.source);
+  const rootDir = resolveCanonicalDistRuntimeSource(selected.rootDir);
+  return {
+    source,
+    // A partial build can have the canonical directory without this entry;
+    // a staging symlink can also have already resolved into the canonical tree.
+    rootDir:
+      rootDir !== selected.rootDir &&
+      !isPathInside(
+        pluginCacheRealpathSync(rootDir) ?? rootDir,
+        pluginCacheRealpathSync(source) ?? source,
+      )
+        ? selected.rootDir
+        : rootDir,
+  };
+}
+
+/** Selects from lifecycle-owned package facts without pinning a runtime registry. */
+export function resolvePluginRuntimeArtifactSelection(
+  params: PluginRuntimeArtifactSelectionParams,
+): PluginRuntimeArtifact {
+  const { source, rootDir } = resolvePluginRuntimeExecutionArtifact({
+    source: pluginCacheRealpathSync(params.source) ?? path.resolve(params.source),
+    rootDir: pluginCacheRealpathSync(params.rootDir) ?? path.resolve(params.rootDir),
+  });
+  const artifacts = getPluginCacheRoot(rootDir).runtimeArtifacts;
+  const key = JSON.stringify([
+    params.source,
+    params.entryKind,
+    params.origin,
+    params.preferBuiltPluginArtifacts,
+    params.sourcePreferred,
+    params.packageManifest?.build?.bundledDist,
+  ]);
+  let resolved = artifacts.get(key);
+  if (!resolved) {
+    resolved = resolvePluginRuntimeExecutionArtifact(
+      resolvePreferredBuiltRuntimeArtifact({ ...params, source, rootDir }),
+    );
+    artifacts.set(key, resolved);
+  }
+  return resolved;
+}
 
 /** Built hosts default only checkout plugins to compiled execution, not installed packages. */
 export function resolvePluginRuntimeArtifactPreference(
@@ -170,7 +240,7 @@ export function resolvePreferredBundledRootArtifact(params: {
 }
 
 /** Applies source, package-local, and root-build preference without runtime memo state. */
-export function resolvePreferredBuiltRuntimeArtifact(params: {
+function resolvePreferredBuiltRuntimeArtifact(params: {
   source: string;
   rootDir: string;
   origin: PluginOrigin;

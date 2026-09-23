@@ -8,6 +8,7 @@ import { registerSecretValueForRedaction } from "../../logging/secret-redaction-
 import { runCommandBuffered } from "../../process/exec.js";
 import { getProcessSupervisor } from "../../process/supervisor/index.js";
 import type { ManagedRun, ProcessSupervisor, RunExit } from "../../process/supervisor/types.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { getHostDesktopGuidance } from "./host-guidance.js";
 import { probeRfbServer } from "./rfb-probe.js";
 
@@ -25,13 +26,25 @@ type ManagedResources = {
   password: string;
   display: number;
   port: number;
+  env: NodeJS.ProcessEnv;
 };
 
 type ManagedPair = {
+  current: boolean;
   vnc: ManagedRun;
+  bus: ManagedRun;
   session: ManagedRun;
   vncExit: ReturnType<ManagedRun["wait"]>;
+  busExit: ReturnType<ManagedRun["wait"]>;
   sessionExit: ReturnType<ManagedRun["wait"]>;
+  computerLeases: Set<{ onStop(): Promise<void> }>;
+  stopPromise?: Promise<void>;
+};
+
+export type DesktopComputerLease = {
+  env: NodeJS.ProcessEnv;
+  isCurrent(): boolean;
+  release(): void;
 };
 
 export type ManagedLinuxDesktopStatus =
@@ -46,6 +59,7 @@ export type ManagedLinuxDesktop = {
     auth: "vnc-password";
     vncPassword: string;
   }>;
+  acquireComputer(params: { onStop(): Promise<void> }): Promise<DesktopComputerLease>;
   stop(): Promise<void>;
   status(): ManagedLinuxDesktopStatus;
 };
@@ -126,7 +140,10 @@ async function readDisplaySocketNames(socketDir: string): Promise<string[]> {
   }
 }
 
-function binaryError(binary: "Xtigervnc" | "tigervncpasswd" | "startxfce4", error: unknown) {
+function binaryError(
+  binary: "Xtigervnc" | "tigervncpasswd" | "startxfce4" | "dbus-daemon",
+  error: unknown,
+) {
   const reason = error instanceof Error ? error.message : String(error);
   return new Error(
     `managed Linux desktop could not start ${binary}: ${reason}. ${getHostDesktopGuidance("linux")}`,
@@ -175,11 +192,21 @@ export function createManagedLinuxDesktop(
   let resources: ManagedResources | undefined;
   let pair: ManagedPair | undefined;
   let startPromise: Promise<ManagedResources> | undefined;
+  let stopPromise: Promise<void> | undefined;
+  let stopProcesses: (() => Promise<void>) | undefined;
   let epoch = 0;
   let stopping = false;
   let stderrTail = "";
   let restartTimes: number[] = [];
   const activeWaits = new Set<Promise<RunExit>>();
+  const monitorTasks = new Set<Promise<void>>();
+  const isPairCurrent = (current: ManagedPair) =>
+    !stopping &&
+    pair === current &&
+    current.current &&
+    !current.vnc.activity.resultSettled &&
+    !current.bus.activity.resultSettled &&
+    !current.session.activity.resultSettled;
 
   const publicResult = (active: ManagedResources) => ({
     attachment: {
@@ -232,7 +259,17 @@ export function createManagedLinuxDesktop(
       await fs.rm(plaintextFile, { force: true });
       const port = await pickPort({ port: 0, host: "127.0.0.1", exclusive: true });
       const display = chooseDisplayNumber(await readDisplaySocketNames(x11SocketDir));
-      return { tempDir, passwordFile, password, display, port };
+      const env: NodeJS.ProcessEnv = {
+        ...process.env,
+        DISPLAY: `:${display}`,
+        DBUS_SESSION_BUS_ADDRESS: `unix:path=${path.join(tempDir, "bus")}`,
+        XDG_SESSION_TYPE: "x11",
+      };
+      delete env.WAYLAND_DISPLAY;
+      delete env.SESSION_MANAGER;
+      delete env.AT_SPI_BUS_ADDRESS;
+      delete env.DBUS_SESSION_BUS_PID;
+      return { tempDir, passwordFile, password, display, port, env: Object.freeze(env) };
     } catch (error) {
       await fs.rm(tempDir, { recursive: true, force: true });
       throw error;
@@ -268,12 +305,43 @@ export function createManagedLinuxDesktop(
     );
   };
 
-  const stopPair = async (current: ManagedPair | undefined) => {
-    supervisor.cancelScope(scopeKey, "manual-cancel");
-    await Promise.allSettled(activeWaits);
-    if (pair === current) {
-      pair = undefined;
+  const stopPair = (current: ManagedPair | undefined): Promise<void> => {
+    if (current?.stopPromise) {
+      return current.stopPromise;
     }
+    if (current) {
+      current.current = false;
+    }
+    const stopped = Promise.resolve().then(async () => {
+      // Native users must finish cleanup before their X11 and D-Bus session disappears.
+      const outcomes = await Promise.allSettled(
+        [...(current?.computerLeases ?? [])].map(async (lease) => {
+          await lease.onStop();
+          current?.computerLeases.delete(lease);
+        }),
+      );
+      const failure = outcomes.find((outcome) => outcome.status === "rejected");
+      if (failure) {
+        throw failure.reason;
+      }
+      supervisor.cancelScope(scopeKey, "manual-cancel");
+      const cleanup = stopProcesses;
+      await cleanup?.();
+      await Promise.allSettled(activeWaits);
+      if (stopProcesses === cleanup) {
+        stopProcesses = undefined;
+      }
+      if (pair === current) {
+        pair = undefined;
+      }
+    });
+    if (current) {
+      current.stopPromise = stopped;
+      void stopped.catch(() => {
+        current.stopPromise = undefined;
+      });
+    }
+    return stopped;
   };
 
   const waitForRun = (run: ManagedRun): Promise<RunExit> => {
@@ -293,18 +361,24 @@ export function createManagedLinuxDesktop(
   };
 
   const spawnRun = async (
-    binary: "Xtigervnc" | "startxfce4",
+    binary: "Xtigervnc" | "startxfce4" | "dbus-daemon",
     argv: string[],
+    activeEpoch: number,
     env?: NodeJS.ProcessEnv,
+    onStdout?: (chunk: string) => void,
   ) => {
     try {
       return await supervisor.spawn({
-        sessionId: "host-desktop-managed-linux",
-        backendId: binary === "Xtigervnc" ? "managed-vnc" : "managed-session",
         scopeKey,
         mode: "child",
         argv,
         ...(env ? { env } : {}),
+        assertCurrent: () => {
+          if (activeEpoch !== epoch || stopping) {
+            throw new Error("managed Linux desktop stopped during startup");
+          }
+        },
+        ...(onStdout ? { onStdout } : {}),
         stdinMode: "pipe-closed",
         maxCapturedOutputChars: STDERR_TAIL_CHARS,
         onStderr: (chunk) => {
@@ -323,7 +397,8 @@ export function createManagedLinuxDesktop(
 
   const startPair = async (active: ManagedResources, activeEpoch: number): Promise<ManagedPair> => {
     status = { state: "starting", display: active.display, port: active.port };
-    const vnc = await spawnRun("Xtigervnc", buildTigerVncArgv(active));
+    stopProcesses = supervisor.acquireScopeCleanup(scopeKey, { processTree: "required-all" });
+    const vnc = await spawnRun("Xtigervnc", buildTigerVncArgv(active), activeEpoch);
     const vncExit = waitForRun(vnc);
     try {
       await Promise.race([
@@ -335,36 +410,91 @@ export function createManagedLinuxDesktop(
       if (activeEpoch !== epoch || stopping) {
         throw new Error("managed Linux desktop stopped during startup");
       }
-      const session = await spawnRun("startxfce4", buildDesktopSessionArgv(), {
-        ...process.env,
-        DISPLAY: `:${active.display}`,
-      });
+      const busReady = createDeferredCore();
+      let busOutput = "";
+      await fs.rm(path.join(active.tempDir, "bus"), { force: true });
+      const bus = await spawnRun(
+        "dbus-daemon",
+        [
+          "dbus-daemon",
+          "--session",
+          "--nofork",
+          "--nopidfile",
+          "--print-address=1",
+          `--address=${active.env.DBUS_SESSION_BUS_ADDRESS}`,
+        ],
+        activeEpoch,
+        active.env,
+        (chunk) => {
+          busOutput = appendTail(busOutput, chunk);
+          if (busOutput.includes("\n")) {
+            busReady.resolve();
+          }
+        },
+      );
+      const busExit = waitForRun(bus);
+      const busTimeout = setTimeout(
+        () =>
+          busReady.reject(new Error("managed Linux desktop D-Bus session did not become ready")),
+        readinessTimeoutMs,
+      );
+      try {
+        await Promise.race([
+          busReady.promise,
+          busExit.then((exit) => {
+            throw new Error(describeExit("dbus-daemon", exit));
+          }),
+          vncExit.then((exit) => {
+            throw new Error(describeExit("Xtigervnc", exit));
+          }),
+        ]);
+      } finally {
+        clearTimeout(busTimeout);
+      }
+      const session = await spawnRun(
+        "startxfce4",
+        buildDesktopSessionArgv(),
+        activeEpoch,
+        active.env,
+      );
       const nextPair: ManagedPair = {
+        current: true,
         vnc,
+        bus,
         session,
         vncExit,
+        busExit,
         sessionExit: waitForRun(session),
+        computerLeases: new Set(),
       };
       pair = nextPair;
       status = { state: "running", display: active.display, port: active.port };
       return nextPair;
     } catch (error) {
-      vnc.cancel("manual-cancel");
-      await Promise.allSettled([vncExit]);
+      await stopPair(undefined);
       throw error;
     }
   };
 
   const monitorPair = (current: ManagedPair, active: ManagedResources, activeEpoch: number) => {
-    void Promise.race([
+    const task = Promise.race([
       current.vncExit.then((exit) => ({ binary: "Xtigervnc", exit })),
+      current.busExit.then((exit) => ({ binary: "dbus-daemon", exit })),
       current.sessionExit.then((exit) => ({ binary: "startxfce4", exit })),
     ]).then(async ({ binary, exit }) => {
       if (pair !== current || activeEpoch !== epoch || stopping) {
         return;
       }
       const failure = describeExit(binary, exit);
-      await stopPair(current);
+      status = { state: "starting", display: active.display, port: active.port };
+      try {
+        await stopPair(current);
+      } catch (error) {
+        if (activeEpoch === epoch && !stopping) {
+          markFailed(error instanceof Error ? error : new Error(String(error)));
+        }
+        return;
+      }
       if (activeEpoch !== epoch || stopping) {
         return;
       }
@@ -390,6 +520,8 @@ export function createManagedLinuxDesktop(
         }
       }
     });
+    monitorTasks.add(task);
+    void task.finally(() => monitorTasks.delete(task)).catch(() => undefined);
   };
 
   const start = async (activeEpoch: number): Promise<ManagedResources> => {
@@ -411,11 +543,17 @@ export function createManagedLinuxDesktop(
 
   return {
     async acquire() {
+      if (stopping || stopPromise) {
+        throw new Error("managed Linux desktop is stopping");
+      }
       if (status.state === "failed") {
         throw new Error(status.error);
       }
-      if (status.state === "running" && resources) {
+      if (status.state === "running" && resources && pair && isPairCurrent(pair)) {
         return publicResult(resources);
+      }
+      if (monitorTasks.size > 0) {
+        throw new Error("managed Linux desktop is restarting; retry when it is ready");
       }
       if (!startPromise) {
         stopping = false;
@@ -428,16 +566,46 @@ export function createManagedLinuxDesktop(
       }
       return publicResult(await startPromise);
     },
-    async stop() {
+    async acquireComputer(request) {
+      const current = pair;
+      if (status.state !== "running" || !resources || !current || !isPairCurrent(current)) {
+        throw new Error("managed Linux desktop is unavailable for computer control");
+      }
+      const lease = { onStop: () => request.onStop() };
+      current.computerLeases.add(lease);
+      return {
+        env: resources.env,
+        isCurrent: () => isPairCurrent(current) && current.computerLeases.has(lease),
+        release: () => {
+          current.computerLeases.delete(lease);
+        },
+      };
+    },
+    stop() {
+      if (stopPromise) {
+        return stopPromise;
+      }
       stopping = true;
       ++epoch;
       const failed = status.state === "failed" ? status : undefined;
-      await stopPair(pair);
-      await removeResources();
-      startPromise = undefined;
-      restartTimes = [];
-      status = failed ?? { state: "not-started" };
-      stopping = false;
+      const stopped = Promise.resolve().then(async () => {
+        await stopPair(pair);
+        await startPromise?.catch(() => undefined);
+        await Promise.all(monitorTasks);
+        await stopPair(pair);
+        await removeResources();
+        startPromise = undefined;
+        restartTimes = [];
+        status = failed ?? { state: "not-started" };
+        stopping = false;
+      });
+      stopPromise = stopped;
+      void stopped
+        .finally(() => {
+          stopPromise = undefined;
+        })
+        .catch(() => undefined);
+      return stopped;
     },
     status() {
       return { ...status };

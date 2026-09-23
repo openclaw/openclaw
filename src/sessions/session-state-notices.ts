@@ -1,7 +1,7 @@
 /** Stale-state notice text, coalescing keys, and watcher eligibility. */
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
-import { isSubagentSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
+import { isSubagentSessionKey } from "../routing/session-key.js";
 
 const SESSION_STATE_CONTEXT_PREFIX = "session-state:";
 const SESSION_STATE_WAKE_COALESCE_MS = 20_000;
@@ -41,24 +41,16 @@ function shouldWakeWatcher(watcherSessionKey: string): boolean {
   return !isSubagentSessionKey(watcherSessionKey);
 }
 
-// Bare keys (session.scope="global") are store-local per agent, but cursors, the
-// system-event queue, and heartbeat wakes are keyed by session key alone. A notice
-// for one agent's child could be drained and acknowledged by another agent's global
-// turn — a cross-A2A metadata leak plus a lost notification. Until watcher identity
-// is agent-scoped end-to-end, such watchers get durable events and changesSince but
-// no notices.
-export function isNotifiableWatcherKey(watcherSessionKey: string): boolean {
-  return parseAgentSessionKey(watcherSessionKey) != null;
-}
-
 export function enqueueSessionStateNotice(params: {
   watcherSessionKey: string;
+  watcherStorePath?: string | null;
   targetSessionKey: string;
   lastSeenSequence: number;
   queueOnly?: boolean;
 }): void {
   enqueueSystemEvent(sessionStateNoticeText(params.targetSessionKey, params.lastSeenSequence), {
     sessionKey: params.watcherSessionKey,
+    sessionStorePath: params.watcherStorePath ?? null,
     contextKey: `${SESSION_STATE_CONTEXT_PREFIX}${encodeNoticeTarget(params.targetSessionKey)}`,
     ...(params.queueOnly ? { replace: true } : {}),
   });
@@ -77,6 +69,7 @@ export function enqueueSessionStateNotice(params: {
     intent: "immediate",
     reason: `session-state:${params.targetSessionKey}`,
     sessionKey: params.watcherSessionKey,
+    sessionStorePath: params.watcherStorePath ?? null,
     coalesceMs: SESSION_STATE_WAKE_COALESCE_MS,
   });
 }

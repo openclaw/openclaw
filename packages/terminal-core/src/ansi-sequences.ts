@@ -77,6 +77,15 @@ export class AnsiSequenceStripper {
   private csiCompatPrefixOnly = false;
   private compatInParameters = false;
   private compatParameterDigits = 0;
+  private csi: string | undefined;
+
+  constructor(private readonly onCsi?: (sequence: string) => void) {}
+
+  private startCsi() {
+    this.state = "csi";
+    this.csiCompatPrefixOnly = true;
+    this.csi = this.onCsi ? "" : undefined;
+  }
 
   write(input: string): string {
     if (typeof input !== "string") {
@@ -100,8 +109,7 @@ export class AnsiSequenceStripper {
         if (code === 0x1b) {
           this.state = "escape";
         } else if (code === 0x9b) {
-          this.state = "csi";
-          this.csiCompatPrefixOnly = true;
+          this.startCsi();
         } else if (code === 0x9d) {
           this.state = "osc";
         } else {
@@ -131,23 +139,30 @@ export class AnsiSequenceStripper {
         continue;
       }
 
+      // OSC payloads own their escape bytes; only other pending sequences restart.
+      if (code === 0x1b || code === 0x9b || code === 0x9d) {
+        if (code === 0x9b) {
+          this.startCsi();
+        } else {
+          this.state = code === 0x1b ? "escape" : "osc";
+        }
+        index += 1;
+        continue;
+      }
+
       if (this.state === "csi") {
         if (code === 0x18 || code === 0x1a) {
           this.state = "text";
-          index += 1;
-        } else if (code === 0x1b) {
-          this.state = "escape";
-          index += 1;
-        } else if (code === 0x9b) {
-          this.csiCompatPrefixOnly = true;
-          index += 1;
-        } else if (code === 0x9d) {
-          this.state = "osc";
           index += 1;
         } else if (code <= 0x1f || code === 0x7f) {
           output.push(input.charAt(index));
           index += 1;
         } else if (code >= 0x20 && code <= 0x3f) {
+          // Only retain bounded CSI metadata; oversized controls are still stripped
+          // through their final byte, but never dispatch a truncated command.
+          if (this.csi !== undefined) {
+            this.csi = this.csi.length < 64 ? this.csi + input.charAt(index) : undefined;
+          }
           if (!isCompatPrefixCode(code)) {
             this.csiCompatPrefixOnly = false;
           }
@@ -160,6 +175,9 @@ export class AnsiSequenceStripper {
           this.compatParameterDigits = 0;
           index += 1;
         } else if (code >= 0x40 && code <= 0x7e) {
+          if (this.csi !== undefined) {
+            this.onCsi?.(this.csi + input.charAt(index));
+          }
           this.state = "text";
           index += 1;
         } else {
@@ -173,17 +191,7 @@ export class AnsiSequenceStripper {
           this.state = "osc";
           index += 1;
         } else if (code === 0x5b) {
-          this.state = "csi";
-          this.csiCompatPrefixOnly = true;
-          index += 1;
-        } else if (code === 0x1b) {
-          index += 1;
-        } else if (code === 0x9b) {
-          this.state = "csi";
-          this.csiCompatPrefixOnly = true;
-          index += 1;
-        } else if (code === 0x9d) {
-          this.state = "osc";
+          this.startCsi();
           index += 1;
         } else if (isCompatPrefixCode(code)) {
           this.state = "compat";
@@ -206,16 +214,6 @@ export class AnsiSequenceStripper {
 
       if (code === 0x18 || code === 0x1a) {
         this.state = "text";
-        index += 1;
-      } else if (code === 0x1b) {
-        this.state = "escape";
-        index += 1;
-      } else if (code === 0x9b) {
-        this.state = "csi";
-        this.csiCompatPrefixOnly = true;
-        index += 1;
-      } else if (code === 0x9d) {
-        this.state = "osc";
         index += 1;
       } else if (!this.compatInParameters && isCompatPrefixCode(code)) {
         index += 1;
@@ -245,6 +243,7 @@ export class AnsiSequenceStripper {
   }
 
   finish(): string {
+    this.csi = undefined;
     this.state = "text";
     this.csiCompatPrefixOnly = false;
     this.compatInParameters = false;

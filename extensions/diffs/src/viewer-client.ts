@@ -242,7 +242,7 @@ function createToolbar(): HTMLElement {
   return toolbar;
 }
 
-function createRenderOptions(payload: DiffViewerPayload): FileDiffOptions<undefined> {
+function createRenderOptions(payload: DiffViewerPayload): FileDiffOptions<undefined, undefined> {
   return {
     theme: payload.options.theme,
     themeType: viewerState.theme,

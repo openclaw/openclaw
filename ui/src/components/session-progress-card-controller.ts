@@ -11,11 +11,15 @@ type SessionProgressCardControllerOptions = {
   target: () => ProgressCardGetParams | null | undefined;
 };
 
-/** Keeps one chat pane on the gateway-scoped durable progress-card snapshot. */
+/** Keeps one view on the gateway-scoped durable progress-card snapshot. */
 export class SessionProgressCardController implements ReactiveController {
+  private connected = false;
   private store: SessionProgressCardStore | null = null;
   private stopUpdates: (() => void) | null = null;
   private target: ProgressCardGetParams | undefined;
+  private client: ApplicationGateway["snapshot"]["client"] = null;
+  private hello: ApplicationGateway["snapshot"]["hello"] = null;
+  private presentation?: ReturnType<SessionProgressCardController["readPresentation"]>;
 
   constructor(
     private readonly host: ReactiveControllerHost,
@@ -28,40 +32,124 @@ export class SessionProgressCardController implements ReactiveController {
     return this.target ? (this.store?.get(this.target) ?? null) : null;
   }
 
+  get loading(): boolean {
+    return !this.target || this.store?.get(this.target) === undefined;
+  }
+
+  retry = (): void => {
+    if (this.target?.sessionKey) {
+      void this.store?.load(this.target).catch(() => undefined);
+    }
+  };
+
   get error() {
     return this.target ? this.store?.getError(this.target) : undefined;
   }
+
+  get refreshState() {
+    return this.target ? this.store?.getRefreshState(this.target) : undefined;
+  }
+
+  refresh = (card: ProgressCard): void => {
+    if (!this.connected) {
+      return;
+    }
+    // A click retained across a route/connection change must not use the old watch.
+    this.synchronize();
+    if (this.target) {
+      this.store?.refresh(this.target, card);
+    }
+  };
 
   dismiss = (card: ProgressCard): Promise<boolean> =>
     this.target
       ? (this.store?.dismiss(this.target, card) ?? Promise.resolve(false))
       : Promise.resolve(false);
 
-  hostUpdate(): void {
+  hostConnected(): void {
+    this.connected = true;
     this.synchronize();
   }
 
+  hostUpdate(): void {
+    // A queued Lit update can run after disconnect; do not reacquire the released store.
+    if (this.connected) {
+      this.synchronize();
+    }
+  }
+
   hostDisconnected(): void {
+    this.connected = false;
     this.release();
   }
+
+  private readPresentation() {
+    const snapshot = this.options.gateway()?.snapshot;
+    return this.target
+      ? {
+          card: this.store?.get(this.target),
+          error: this.error,
+          refreshState: this.refreshState,
+          client: snapshot?.client,
+          hello: snapshot?.hello,
+          phase: snapshot?.phase,
+        }
+      : undefined;
+  }
+
+  private readonly handleStoreUpdate = () => {
+    const previous = this.presentation;
+    const next = this.readPresentation();
+    this.presentation = next;
+    if (
+      next &&
+      (!previous ||
+        next.card !== previous.card ||
+        next.error !== previous.error ||
+        next.refreshState !== previous.refreshState ||
+        next.client !== previous.client ||
+        next.hello !== previous.hello ||
+        next.phase !== previous.phase)
+    ) {
+      this.host.requestUpdate();
+    }
+  };
 
   private synchronize(): void {
     const gateway = this.options.gateway() ?? null;
     const target = this.options.target() ?? undefined;
+    const client = gateway?.snapshot.client ?? null;
+    const hello = gateway?.snapshot.hello ?? null;
     const nextStore = gateway ? sessionProgressCardsForGateway(gateway) : null;
     if (nextStore !== this.store) {
       this.release();
       this.store = nextStore;
-      this.stopUpdates = nextStore?.subscribe(() => this.host.requestUpdate()) ?? null;
+      this.stopUpdates = nextStore?.subscribe(this.handleStoreUpdate) ?? null;
     }
     if (
       target?.sessionKey === this.target?.sessionKey &&
-      target?.agentId === this.target?.agentId
+      target?.agentId === this.target?.agentId &&
+      (!target || (client === this.client && hello === this.hello))
     ) {
       return;
     }
     this.target = target;
-    this.store?.watch(this, target ? [target] : []);
+    this.client = client;
+    this.hello = hello;
+    this.store?.watch(this, target ? [target] : [], {
+      admitAutomaticRead: () => {
+        const currentTarget = this.options.target();
+        return (
+          this.connected &&
+          this.options.gateway() === gateway &&
+          gateway?.snapshot.client === client &&
+          gateway?.snapshot.hello === hello &&
+          currentTarget?.sessionKey === target?.sessionKey &&
+          currentTarget?.agentId === target?.agentId
+        );
+      },
+    });
+    this.presentation = this.readPresentation();
   }
 
   private release(): void {
@@ -70,5 +158,8 @@ export class SessionProgressCardController implements ReactiveController {
     this.stopUpdates = null;
     this.store = null;
     this.target = undefined;
+    this.client = null;
+    this.hello = null;
+    this.presentation = undefined;
   }
 }

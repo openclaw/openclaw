@@ -1,8 +1,6 @@
 import { createServer } from "node:http";
 import { expectDefined } from "@openclaw/normalization-core";
-// Diagnostics Prometheus tests cover service plugin behavior.
 import type { DiagnosticEventPrivateData } from "openclaw/plugin-sdk/diagnostic-runtime";
-// Diagnostics Prometheus tests cover service plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import type { DiagnosticEventMetadata, DiagnosticEventPayload } from "../api.js";
 import { createDiagnosticsPrometheusExporter } from "./service.js";
@@ -14,6 +12,14 @@ import {
   type ExporterHealthReport,
   type TrustedExporterInternalDiagnostics,
 } from "./service.test-helpers.js";
+
+// HTTP scrapes here exercise an authorized operator; the exporter's scope guard is covered by
+// service.http-scope.test.ts.
+vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
+  getPluginRuntimeGatewayRequestScope: () => ({
+    client: { connect: { scopes: ["operator.read"] } },
+  }),
+}));
 
 describe("diagnostics-prometheus service", () => {
   it("records Gateway RPC timings by method and outcomes without method multiplication", () => {

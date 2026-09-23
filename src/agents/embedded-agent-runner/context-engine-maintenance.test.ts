@@ -1,8 +1,10 @@
 // Coverage for deferred context-engine maintenance and transcript rewrite hooks.
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { resolveDefaultSessionStorePath } from "../../config/sessions/paths.js";
+import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
 import { registerLegacyContextEngine } from "../../context-engine/legacy.registration.js";
 import {
   registerContextEngineForOwner,
@@ -17,17 +19,27 @@ import {
 } from "../../process/command-queue.js";
 import * as commandQueueModule from "../../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
-import { createQueuedTaskRunCore as createQueuedTaskRunOrNull } from "../../tasks/task-executor.js";
+import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { getTaskFlowById } from "../../tasks/task-flow-registry.js";
+import { captureTaskDeliveryWork } from "../../tasks/task-registry-delivery.test-support.js";
 import { getTaskById, listTasksForOwnerKey } from "../../tasks/task-registry.js";
-import type { TaskRecord } from "../../tasks/task-registry.types.js";
 import {
   resetTaskFlowRegistryForTests,
   resetTaskRegistryForTests,
-  setTaskRegistryDeliveryRuntimeForTests,
 } from "../../tasks/task-runtime.test-helpers.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
+import { SessionManager } from "../sessions/session-manager.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
+import {
+  createBackgroundMaintenanceEngine,
+  createQueuedTaskRunCore,
+  expectRecordFields,
+  expectSystemEventContaining,
+  firstMaintainParams,
+  flushAsyncWork,
+  requireRecord,
+  waitForAssertion,
+} from "./context-engine-maintenance.fixtures.test-support.js";
 import { resolveSessionLane } from "./lanes.js";
 
 const rewriteTranscriptEntriesInSessionManagerMock = vi.fn((_params?: unknown) => ({
@@ -35,77 +47,25 @@ const rewriteTranscriptEntriesInSessionManagerMock = vi.fn((_params?: unknown) =
   bytesFreed: 77,
   rewrittenEntries: 1,
 }));
-const openedSessionManager = { kind: "opened-session-manager" };
-const sessionManagerOpenMock = vi.fn((_target?: unknown) => openedSessionManager);
+let openedSessionManager: { getSessionTarget: () => SessionTranscriptRuntimeTarget } | undefined;
+const sessionManagerOpenMock = vi.fn((target: SessionTranscriptRuntimeTarget) => {
+  openedSessionManager = { getSessionTarget: () => target };
+  return openedSessionManager;
+});
 const resolveRuntimeTranscriptReadTargetMock = vi.fn(async (scope: Record<string, unknown>) => ({
   agentId: scope.agentId ?? "main",
   sessionId: scope.sessionId,
   sessionKey: scope.sessionKey,
-  storePath: scope.storePath ?? "/tmp/default-openclaw.sqlite",
+  storePath: scope.storePath ?? resolveDefaultSessionStorePath("main"),
 }));
 let createDeferredTurnMaintenanceAbortSignal: typeof import("./context-engine-maintenance.test-support.js").createDeferredTurnMaintenanceAbortSignal;
 let resetDeferredTurnMaintenanceStateForTest: typeof import("./context-engine-maintenance.test-support.js").resetDeferredTurnMaintenanceStateForTest;
 let waitForDeferredTurnMaintenanceForSession: typeof import("./context-engine-maintenance.js").waitForDeferredTurnMaintenanceForSession;
 
-function createQueuedTaskRunCore(
-  params: Parameters<typeof createQueuedTaskRunOrNull>[0],
-): TaskRecord {
-  // Task creation can legally return null for invalid inputs; tests here always
-  // need a concrete queued task record.
-  const task = createQueuedTaskRunOrNull(params);
-  if (!task) {
-    throw new Error("expected queued task creation to succeed");
-  }
-  return task;
-}
 let runContextEngineMaintenance: typeof import("./context-engine-maintenance.js").runContextEngineMaintenance;
 // Keep this literal aligned with the production module; tests use dynamic
 // import reloading, so they cannot safely import the constant directly.
 const TURN_MAINTENANCE_TASK_KIND = "context_engine_turn_maintenance";
-
-async function flushAsyncWork(times = 4): Promise<void> {
-  for (let index = 0; index < times; index += 1) {
-    await Promise.resolve();
-  }
-}
-
-async function waitForAssertion(
-  assertion: () => void,
-  timeoutMs = 2_000,
-  stepMs = 5,
-): Promise<void> {
-  // Timed polling lets fake-timer tasks advance through queue and delivery
-  // microtasks without binding assertions to a specific internal await count.
-  const startedAt = Date.now();
-  for (;;) {
-    try {
-      assertion();
-      return;
-    } catch (error) {
-      if (Date.now() - startedAt >= timeoutMs) {
-        throw error;
-      }
-      await vi.advanceTimersByTimeAsync(stepMs);
-      await flushAsyncWork();
-    }
-  }
-}
-
-const requireRecord = createRequireRecord("record", "expected-label");
-
-function firstMaintainParams(maintain: { mock: { calls: unknown[][] } }): Record<string, unknown> {
-  return requireRecord(maintain.mock.calls[0]?.[0], "maintain params");
-}
-
-function expectRecordFields(record: Record<string, unknown>, expected: Record<string, unknown>) {
-  for (const [key, value] of Object.entries(expected)) {
-    expect(record[key]).toBe(value);
-  }
-}
-
-function expectSystemEventContaining(sessionKey: string, text: string) {
-  expect(peekSystemEvents(sessionKey).join("\n")).toContain(text);
-}
 
 vi.mock("./context-engine-capabilities.js", () => ({
   resolveContextEngineCapabilities: () => ({ llm: undefined }),
@@ -117,7 +77,9 @@ vi.mock("./transcript-rewrite.js", () => ({
 }));
 
 vi.mock("../sessions/index.js", () => ({
-  SessionManager: { open: (target: unknown) => sessionManagerOpenMock(target) },
+  SessionManager: {
+    open: (target: SessionTranscriptRuntimeTarget) => sessionManagerOpenMock(target),
+  },
 }));
 
 vi.mock("./transcript-runtime-state.js", () => ({
@@ -189,81 +151,84 @@ describe("runContextEngineMaintenance", () => {
   beforeEach(async () => {
     vi.useRealTimers();
     rewriteTranscriptEntriesInSessionManagerMock.mockClear();
+    openedSessionManager = undefined;
     sessionManagerOpenMock.mockClear();
     resolveRuntimeTranscriptReadTargetMock.mockClear();
     await loadFreshContextEngineMaintenanceModuleForTest();
   });
 
   it("passes a rewrite-capable runtime context into maintain()", async () => {
-    const sessionTarget = {
-      agentId: "main",
-      sessionId: "session-1",
-      sessionKey: "agent:main:session-1",
-      storePath: "/tmp/state/openclaw.sqlite",
-    };
-    const maintain = vi.fn(async (_params?: unknown) => ({
-      changed: false,
-      bytesFreed: 0,
-      rewrittenEntries: 0,
-    }));
+    await withStateDirEnv("openclaw-maintenance-runtime-context-", async () => {
+      const sessionTarget = {
+        agentId: "main",
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        storePath: resolveDefaultSessionStorePath("main"),
+      };
+      const maintain = vi.fn(async (_params?: unknown) => ({
+        changed: false,
+        bytesFreed: 0,
+        rewrittenEntries: 0,
+      }));
 
-    const result = await runContextEngineMaintenance({
-      contextEngine: {
-        info: { id: "test", name: "Test Engine" },
-        ingest: async () => ({ ingested: true }),
-        assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
-        compact: async () => ({ ok: true, compacted: false }),
-        maintain,
-      },
-      sessionId: "session-1",
-      sessionKey: "agent:main:session-1",
-      sessionTarget,
-      sessionFile: "/tmp/session.jsonl",
-      reason: "turn",
-      runtimeContext: { workspaceDir: "/tmp/workspace" },
-    });
+      const result = await runContextEngineMaintenance({
+        contextEngine: {
+          info: { id: "test", name: "Test Engine" },
+          ingest: async () => ({ ingested: true }),
+          assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
+          compact: async () => ({ ok: true, compacted: false }),
+          maintain,
+        },
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        sessionTarget,
+        sessionFile: "/tmp/session.jsonl",
+        reason: "turn",
+        runtimeContext: { workspaceDir: "/tmp/workspace" },
+      });
 
-    expect(result).toEqual({
-      changed: false,
-      bytesFreed: 0,
-      rewrittenEntries: 0,
-    });
-    const maintainParams = firstMaintainParams(maintain);
-    expectRecordFields(maintainParams, {
-      sessionId: "session-1",
-      sessionKey: "agent:main:session-1",
-      sessionTarget,
-      sessionFile: "/tmp/session.jsonl",
-    });
-    expect(maintainParams.abortSignal).toBeUndefined();
-    const maintainRuntimeContext = requireRecord(
-      maintainParams.runtimeContext,
-      "maintain runtime context",
-    );
-    expect(maintainRuntimeContext.workspaceDir).toBe("/tmp/workspace");
-    expect(maintainRuntimeContext.sessionTarget).toEqual(sessionTarget);
-    const runtimeContext = maintainParams.runtimeContext as
-      | { rewriteTranscriptEntries?: (request: unknown) => Promise<unknown> }
-      | undefined;
-    if (!runtimeContext?.rewriteTranscriptEntries) {
-      throw new Error("expected maintain runtime context rewrite helper");
-    }
-    const rewriteResult = await runtimeContext.rewriteTranscriptEntries({
-      replacements: [
-        { entryId: "entry-2", message: { role: "user", content: "hello", timestamp: 2 } },
-      ],
-    });
-    expect(rewriteResult).toEqual({
-      changed: true,
-      bytesFreed: 77,
-      rewrittenEntries: 1,
-    });
-    expect(sessionManagerOpenMock).toHaveBeenCalledWith(sessionTarget);
-    expect(rewriteTranscriptEntriesInSessionManagerMock).toHaveBeenCalledWith({
-      sessionManager: openedSessionManager,
-      replacements: [
-        { entryId: "entry-2", message: { role: "user", content: "hello", timestamp: 2 } },
-      ],
+      expect(result).toEqual({
+        changed: false,
+        bytesFreed: 0,
+        rewrittenEntries: 0,
+      });
+      const maintainParams = firstMaintainParams(maintain);
+      expectRecordFields(maintainParams, {
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        sessionTarget,
+        sessionFile: "/tmp/session.jsonl",
+      });
+      expect(maintainParams.abortSignal).toBeUndefined();
+      const maintainRuntimeContext = requireRecord(
+        maintainParams.runtimeContext,
+        "maintain runtime context",
+      );
+      expect(maintainRuntimeContext.workspaceDir).toBe("/tmp/workspace");
+      expect(maintainRuntimeContext.sessionTarget).toEqual(sessionTarget);
+      const runtimeContext = maintainParams.runtimeContext as
+        | { rewriteTranscriptEntries?: (request: unknown) => Promise<unknown> }
+        | undefined;
+      if (!runtimeContext?.rewriteTranscriptEntries) {
+        throw new Error("expected maintain runtime context rewrite helper");
+      }
+      const rewriteResult = await runtimeContext.rewriteTranscriptEntries({
+        replacements: [
+          { entryId: "entry-2", message: { role: "user", content: "hello", timestamp: 2 } },
+        ],
+      });
+      expect(rewriteResult).toEqual({
+        changed: true,
+        bytesFreed: 77,
+        rewrittenEntries: 1,
+      });
+      expect(sessionManagerOpenMock).toHaveBeenCalledWith(sessionTarget);
+      expect(rewriteTranscriptEntriesInSessionManagerMock).toHaveBeenCalledWith({
+        sessionManager: openedSessionManager,
+        replacements: [
+          { entryId: "entry-2", message: { role: "user", content: "hello", timestamp: 2 } },
+        ],
+      });
     });
   });
 
@@ -285,10 +250,7 @@ describe("runContextEngineMaintenance", () => {
         rewrittenEntries: 0,
       };
     });
-    const sessionManager = {
-      appendMessage: vi.fn(),
-      getSessionTarget: () => undefined,
-    } as unknown as Parameters<typeof runContextEngineMaintenance>[0]["sessionManager"];
+    const sessionManager = SessionManager.inMemory();
     rewriteTranscriptEntriesInSessionManagerMock.mockImplementationOnce((_params?: unknown) => {
       events.push("rewrite");
       return {
@@ -372,6 +334,79 @@ describe("runContextEngineMaintenance", () => {
     expect(rewriteTranscriptEntriesInSessionManagerMock).not.toHaveBeenCalled();
   });
 
+  it("retires a deferred worker's retained rewrite capability after disposal and settlement", async () => {
+    await withStateDirEnv("openclaw-retired-maintenance-rewrite-", async () => {
+      resetCommandQueueStateForTest();
+      resetTaskRegistryForTests({ persist: false });
+      resetTaskFlowRegistryForTests({ persist: false });
+      const sessionKey = "agent:main:retained-maintenance-rewrite";
+      const published = vi.fn();
+      const unsubscribe = onSessionTranscriptUpdate((event) => {
+        if (event.sessionKey === sessionKey) {
+          published(event);
+        }
+      });
+      const dispose = vi.fn(async () => {});
+      let rewrite: ContextEngineRuntimeContext["rewriteTranscriptEntries"];
+      let activeRewriteResult: unknown;
+      let deferred: Promise<void> | undefined;
+      const request = {
+        replacements: [
+          {
+            entryId: "entry-1",
+            message: castAgentMessage({ role: "user", content: "updated", timestamp: 1 }),
+          },
+        ],
+      };
+      try {
+        await runContextEngineMaintenance({
+          contextEngine: {
+            info: { id: "retained", name: "Retained rewrite", turnMaintenanceMode: "background" },
+            ingest: async () => ({ ingested: true }),
+            assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
+            compact: async () => ({ ok: true, compacted: false }),
+            maintain: async ({ runtimeContext }) => {
+              rewrite = runtimeContext?.rewriteTranscriptEntries;
+              activeRewriteResult = await rewrite?.(request);
+              return { changed: true, bytesFreed: 77, rewrittenEntries: 1 };
+            },
+            dispose,
+          },
+          sessionId: "retained-maintenance-rewrite",
+          sessionKey,
+          sessionFile: sessionKey,
+          reason: "turn",
+          disposeDeferredContextEngineAfterMaintenance: true,
+          onDeferredMaintenance: (work) => {
+            deferred = work;
+          },
+        });
+        await expectDefined(deferred, "deferred maintenance completion");
+        await waitForDeferredTurnMaintenanceForSession(sessionKey);
+
+        expect(activeRewriteResult).toEqual({ changed: true, bytesFreed: 77, rewrittenEntries: 1 });
+        expect(dispose).toHaveBeenCalledOnce();
+        expect(rewriteTranscriptEntriesInSessionManagerMock).toHaveBeenCalledOnce();
+        expect(published).toHaveBeenCalledOnce();
+        rewriteTranscriptEntriesInSessionManagerMock.mockClear();
+        resolveRuntimeTranscriptReadTargetMock.mockClear();
+        sessionManagerOpenMock.mockClear();
+        published.mockClear();
+
+        await expect(
+          expectDefined(rewrite, "retained rewrite capability")(request),
+        ).rejects.toMatchObject({ name: "AbortError" });
+        expect(resolveRuntimeTranscriptReadTargetMock).not.toHaveBeenCalled();
+        expect(sessionManagerOpenMock).not.toHaveBeenCalled();
+        expect(rewriteTranscriptEntriesInSessionManagerMock).not.toHaveBeenCalled();
+        expect(published).not.toHaveBeenCalled();
+      } finally {
+        await Promise.allSettled(deferred ? [deferred] : []);
+        unsubscribe();
+      }
+    });
+  });
+
   it("defers turn maintenance to a hidden background task when enabled", async () => {
     await withStateDirEnv("openclaw-turn-maintenance-", async () => {
       vi.useFakeTimers();
@@ -412,20 +447,7 @@ describe("runContextEngineMaintenance", () => {
           };
         });
 
-        const backgroundEngine = {
-          info: {
-            id: "test",
-            name: "Test Engine",
-            turnMaintenanceMode: "background" as const,
-          },
-          ingest: async () => ({ ingested: true }),
-          assemble: async ({ messages }: { messages: unknown[] }) => ({
-            messages,
-            estimatedTokens: 0,
-          }),
-          compact: async () => ({ ok: true, compacted: false }),
-          maintain,
-        } as NonNullable<Parameters<typeof runContextEngineMaintenance>[0]["contextEngine"]>;
+        const backgroundEngine = createBackgroundMaintenanceEngine(maintain);
 
         const result = await runContextEngineMaintenance({
           contextEngine: backgroundEngine,
@@ -538,20 +560,7 @@ describe("runContextEngineMaintenance", () => {
           };
         });
 
-        const backgroundEngine = {
-          info: {
-            id: "test",
-            name: "Test Engine",
-            turnMaintenanceMode: "background" as const,
-          },
-          ingest: async () => ({ ingested: true }),
-          assemble: async ({ messages }: { messages: unknown[] }) => ({
-            messages,
-            estimatedTokens: 0,
-          }),
-          compact: async () => ({ ok: true, compacted: false }),
-          maintain,
-        } as NonNullable<Parameters<typeof runContextEngineMaintenance>[0]["contextEngine"]>;
+        const backgroundEngine = createBackgroundMaintenanceEngine(maintain);
 
         await runContextEngineMaintenance({
           contextEngine: backgroundEngine,
@@ -623,20 +632,7 @@ describe("runContextEngineMaintenance", () => {
           };
         });
 
-        const backgroundEngine = {
-          info: {
-            id: "test",
-            name: "Test Engine",
-            turnMaintenanceMode: "background" as const,
-          },
-          ingest: async () => ({ ingested: true }),
-          assemble: async ({ messages }: { messages: unknown[] }) => ({
-            messages,
-            estimatedTokens: 0,
-          }),
-          compact: async () => ({ ok: true, compacted: false }),
-          maintain,
-        } as NonNullable<Parameters<typeof runContextEngineMaintenance>[0]["contextEngine"]>;
+        const backgroundEngine = createBackgroundMaintenanceEngine(maintain);
         const deferredPromises: Promise<void>[] = [];
 
         await runContextEngineMaintenance({
@@ -756,22 +752,10 @@ describe("runContextEngineMaintenance", () => {
         const createOwnedEngine = (
           id: string,
           maintain: typeof firstMaintain | typeof secondMaintain,
-        ) =>
-          ({
-            info: {
-              id,
-              name: "Test Engine",
-              turnMaintenanceMode: "background" as const,
-            },
-            ingest: async () => ({ ingested: true }),
-            assemble: async ({ messages }: { messages: unknown[] }) => ({
-              messages,
-              estimatedTokens: 0,
-            }),
-            compact: async () => ({ ok: true, compacted: false }),
-            maintain,
-            dispose: vi.fn(async () => {}),
-          }) as NonNullable<Parameters<typeof runContextEngineMaintenance>[0]["contextEngine"]>;
+        ) => ({
+          ...createBackgroundMaintenanceEngine(maintain, id),
+          dispose: vi.fn(async () => {}),
+        });
         const firstEngine = createOwnedEngine("first", firstMaintain);
         const secondEngine = createOwnedEngine("second", secondMaintain);
         registerLegacyContextEngine();
@@ -911,20 +895,14 @@ describe("runContextEngineMaintenance", () => {
         rewrittenEntries: 0,
       }));
       const engine = {
+        ...createBackgroundMaintenanceEngine(maintain),
         info: {
           id: "queued",
           name: "Queued Engine",
           turnMaintenanceMode: "background" as const,
         },
-        ingest: async () => ({ ingested: true }),
-        assemble: async ({ messages }: { messages: unknown[] }) => ({
-          messages,
-          estimatedTokens: 0,
-        }),
-        compact: async () => ({ ok: true, compacted: false }),
-        maintain,
         dispose: vi.fn(async () => {}),
-      } as NonNullable<Parameters<typeof runContextEngineMaintenance>[0]["contextEngine"]>;
+      };
       let deferred: Promise<void> | undefined;
 
       try {
@@ -1097,20 +1075,7 @@ describe("runContextEngineMaintenance", () => {
       }));
       const onDeferredMaintenance = vi.fn();
       const onDeferredMaintenanceFailure = vi.fn();
-      const backgroundEngine = {
-        info: {
-          id: "test",
-          name: "Test Engine",
-          turnMaintenanceMode: "background" as const,
-        },
-        ingest: async () => ({ ingested: true }),
-        assemble: async ({ messages }: { messages: unknown[] }) => ({
-          messages,
-          estimatedTokens: 0,
-        }),
-        compact: async () => ({ ok: true, compacted: false }),
-        maintain,
-      } as NonNullable<Parameters<typeof runContextEngineMaintenance>[0]["contextEngine"]>;
+      const backgroundEngine = createBackgroundMaintenanceEngine(maintain);
 
       markGatewayDraining();
       const result = await runContextEngineMaintenance({
@@ -1158,20 +1123,7 @@ describe("runContextEngineMaintenance", () => {
             rewrittenEntries: 0,
           };
         });
-        const backgroundEngine = {
-          info: {
-            id: "test",
-            name: "Test Engine",
-            turnMaintenanceMode: "background" as const,
-          },
-          ingest: async () => ({ ingested: true }),
-          assemble: async ({ messages }: { messages: unknown[] }) => ({
-            messages,
-            estimatedTokens: 0,
-          }),
-          compact: async () => ({ ok: true, compacted: false }),
-          maintain,
-        } as NonNullable<Parameters<typeof runContextEngineMaintenance>[0]["contextEngine"]>;
+        const backgroundEngine = createBackgroundMaintenanceEngine(maintain);
         const firstDeferred: Promise<void>[] = [];
 
         await runContextEngineMaintenance({
@@ -1248,20 +1200,7 @@ describe("runContextEngineMaintenance", () => {
           bytesFreed: 0,
           rewrittenEntries: 0,
         }));
-        const backgroundEngine = {
-          info: {
-            id: "test",
-            name: "Test Engine",
-            turnMaintenanceMode: "background" as const,
-          },
-          ingest: async () => ({ ingested: true }),
-          assemble: async ({ messages }: { messages: unknown[] }) => ({
-            messages,
-            estimatedTokens: 0,
-          }),
-          compact: async () => ({ ok: true, compacted: false }),
-          maintain,
-        } as NonNullable<Parameters<typeof runContextEngineMaintenance>[0]["contextEngine"]>;
+        const backgroundEngine = createBackgroundMaintenanceEngine(maintain);
 
         await runContextEngineMaintenance({
           contextEngine: backgroundEngine,
@@ -1311,20 +1250,7 @@ describe("runContextEngineMaintenance", () => {
           bytesFreed: 0,
           rewrittenEntries: 0,
         }));
-        const backgroundEngine = {
-          info: {
-            id: "test",
-            name: "Test Engine",
-            turnMaintenanceMode: "background" as const,
-          },
-          ingest: async () => ({ ingested: true }),
-          assemble: async ({ messages }: { messages: unknown[] }) => ({
-            messages,
-            estimatedTokens: 0,
-          }),
-          compact: async () => ({ ok: true, compacted: false }),
-          maintain,
-        } as NonNullable<Parameters<typeof runContextEngineMaintenance>[0]["contextEngine"]>;
+        const backgroundEngine = createBackgroundMaintenanceEngine(maintain);
 
         await runContextEngineMaintenance({
           contextEngine: backgroundEngine,
@@ -1380,20 +1306,7 @@ describe("runContextEngineMaintenance", () => {
           };
         });
 
-        const backgroundEngine = {
-          info: {
-            id: "test",
-            name: "Test Engine",
-            turnMaintenanceMode: "background" as const,
-          },
-          ingest: async () => ({ ingested: true }),
-          assemble: async ({ messages }: { messages: unknown[] }) => ({
-            messages,
-            estimatedTokens: 0,
-          }),
-          compact: async () => ({ ok: true, compacted: false }),
-          maintain,
-        } as NonNullable<Parameters<typeof runContextEngineMaintenance>[0]["contextEngine"]>;
+        const backgroundEngine = createBackgroundMaintenanceEngine(maintain);
 
         await runContextEngineMaintenance({
           contextEngine: backgroundEngine,
@@ -1490,20 +1403,7 @@ describe("runContextEngineMaintenance", () => {
           };
         });
 
-        const backgroundEngine = {
-          info: {
-            id: "test",
-            name: "Test Engine",
-            turnMaintenanceMode: "background" as const,
-          },
-          ingest: async () => ({ ingested: true }),
-          assemble: async ({ messages }: { messages: unknown[] }) => ({
-            messages,
-            estimatedTokens: 0,
-          }),
-          compact: async () => ({ ok: true, compacted: false }),
-          maintain,
-        } as NonNullable<Parameters<typeof runContextEngineMaintenance>[0]["contextEngine"]>;
+        const backgroundEngine = createBackgroundMaintenanceEngine(maintain);
 
         await runContextEngineMaintenance({
           contextEngine: backgroundEngine,
@@ -1554,9 +1454,10 @@ describe("runContextEngineMaintenance", () => {
         resetTaskFlowRegistryForTests({ persist: false });
         resetSystemEventsForTest();
         const sendMessageMock = vi.fn();
-        setTaskRegistryDeliveryRuntimeForTests({
+        vi.doMock("../../tasks/task-registry-delivery-runtime.js", () => ({
           sendMessage: sendMessageMock,
-        });
+          prepareTaskControlUiSessionUrl: async () => () => undefined,
+        }));
 
         const sessionKey = "agent:main:session-fast";
         const maintain = vi.fn(async () => ({
@@ -1564,20 +1465,7 @@ describe("runContextEngineMaintenance", () => {
           bytesFreed: 0,
           rewrittenEntries: 0,
         }));
-        const backgroundEngine = {
-          info: {
-            id: "test",
-            name: "Test Engine",
-            turnMaintenanceMode: "background" as const,
-          },
-          ingest: async () => ({ ingested: true }),
-          assemble: async ({ messages }: { messages: unknown[] }) => ({
-            messages,
-            estimatedTokens: 0,
-          }),
-          compact: async () => ({ ok: true, compacted: false }),
-          maintain,
-        } as NonNullable<Parameters<typeof runContextEngineMaintenance>[0]["contextEngine"]>;
+        const backgroundEngine = createBackgroundMaintenanceEngine(maintain);
 
         await runContextEngineMaintenance({
           contextEngine: backgroundEngine,
@@ -1594,15 +1482,9 @@ describe("runContextEngineMaintenance", () => {
           (task) => task.taskKind === TURN_MAINTENANCE_TASK_KIND,
         );
         expect(tasks).toHaveLength(1);
-        await waitForAssertion(() =>
-          expect(
-            getTaskById(expectDefined(tasks[0], "tasks[0] test invariant").taskId)?.status,
-          ).toBe("succeeded"),
-        );
-        const task = requireRecord(
-          getTaskById(expectDefined(tasks[0], "tasks[0] test invariant").taskId),
-          "maintenance task",
-        );
+        const taskId = expectDefined(tasks[0], "tasks[0] test invariant").taskId;
+        await waitForAssertion(() => expect(getTaskById(taskId)?.status).toBe("succeeded"));
+        const task = requireRecord(getTaskById(taskId), "maintenance task");
         expectRecordFields(task, {
           status: "succeeded",
           notifyPolicy: "silent",
@@ -1610,6 +1492,7 @@ describe("runContextEngineMaintenance", () => {
         });
         expect(task.parentFlowId).toBeUndefined();
       } finally {
+        vi.doUnmock("../../tasks/task-registry-delivery-runtime.js");
         vi.useRealTimers();
       }
     });
@@ -1617,7 +1500,11 @@ describe("runContextEngineMaintenance", () => {
 
   it("surfaces long-running deferred maintenance and completion via task updates", async () => {
     await withStateDirEnv("openclaw-turn-maintenance-", async () => {
+      using deliveries = captureTaskDeliveryWork();
       vi.useFakeTimers();
+      const maintenanceStarted = createDeferred();
+      const releaseMaintenance = createDeferred();
+      let deferredMaintenance: Promise<void> | undefined;
       try {
         resetCommandQueueStateForTest();
         resetTaskRegistryForTests({ persist: false });
@@ -1625,31 +1512,16 @@ describe("runContextEngineMaintenance", () => {
         resetSystemEventsForTest();
 
         const sessionKey = "agent:main:session-long";
-        let releaseMaintenance: (() => void) | undefined;
         const maintain = vi.fn(async () => {
-          await new Promise<void>((resolve) => {
-            releaseMaintenance = resolve;
-          });
+          maintenanceStarted.resolve();
+          await releaseMaintenance.promise;
           return {
             changed: false,
             bytesFreed: 0,
             rewrittenEntries: 0,
           };
         });
-        const backgroundEngine = {
-          info: {
-            id: "test",
-            name: "Test Engine",
-            turnMaintenanceMode: "background" as const,
-          },
-          ingest: async () => ({ ingested: true }),
-          assemble: async ({ messages }: { messages: unknown[] }) => ({
-            messages,
-            estimatedTokens: 0,
-          }),
-          compact: async () => ({ ok: true, compacted: false }),
-          maintain,
-        } as NonNullable<Parameters<typeof runContextEngineMaintenance>[0]["contextEngine"]>;
+        const backgroundEngine = createBackgroundMaintenanceEngine(maintain);
 
         await runContextEngineMaintenance({
           contextEngine: backgroundEngine,
@@ -1657,15 +1529,21 @@ describe("runContextEngineMaintenance", () => {
           sessionKey,
           sessionFile: "/tmp/session-long.jsonl",
           reason: "turn",
+          onDeferredMaintenance: (promise) => {
+            deferredMaintenance = promise;
+          },
         });
 
-        await waitForAssertion(() => expect(maintain).toHaveBeenCalledTimes(1));
+        await Promise.race([
+          maintenanceStarted.promise,
+          expectDefined(deferredMaintenance, "deferred maintenance completion"),
+        ]);
+        expect(maintain).toHaveBeenCalledTimes(1);
         await vi.advanceTimersByTimeAsync(11_000);
-        await waitForAssertion(() =>
-          expectSystemEventContaining(
-            sessionKey,
-            "Background task update: Context engine turn maintenance.",
-          ),
+        await deliveries.settle();
+        expectSystemEventContaining(
+          sessionKey,
+          "Background task update: Context engine turn maintenance.",
         );
         const task = listTasksForOwnerKey(sessionKey).find(
           (candidate) => candidate.taskKind === TURN_MAINTENANCE_TASK_KIND,
@@ -1676,26 +1554,32 @@ describe("runContextEngineMaintenance", () => {
         }
         expect(getTaskFlowById(parentFlowId)?.status).toBe("running");
 
-        if (!releaseMaintenance) {
-          throw new Error("Expected maintenance release callback to be initialized");
-        }
-        releaseMaintenance();
-        await waitForAssertion(() =>
-          expectSystemEventContaining(
-            sessionKey,
-            "Background task done: Context engine turn maintenance",
-          ),
+        releaseMaintenance.resolve();
+        await expectDefined(deferredMaintenance, "deferred maintenance completion");
+        await deliveries.settle();
+        expectSystemEventContaining(
+          sessionKey,
+          "Background task done: Context engine turn maintenance",
         );
         expect(getTaskFlowById(parentFlowId)?.status).toBe("succeeded");
       } finally {
-        vi.useRealTimers();
+        releaseMaintenance.resolve();
+        try {
+          await Promise.allSettled(deferredMaintenance ? [deferredMaintenance] : []);
+          await deliveries.settle();
+        } finally {
+          vi.useRealTimers();
+        }
       }
     });
   });
 
   it("surfaces unrelated maintenance failures during shutdown", async () => {
     await withStateDirEnv("openclaw-turn-maintenance-", async () => {
+      using deliveries = captureTaskDeliveryWork();
       vi.useFakeTimers();
+      const maintenanceStarted = createDeferred();
+      let deferredMaintenance: Promise<void> | undefined;
       const keepProcessAlive = () => {};
       process.on("SIGTERM", keepProcessAlive);
       try {
@@ -1705,19 +1589,8 @@ describe("runContextEngineMaintenance", () => {
         resetSystemEventsForTest();
 
         const sessionKey = "agent:main:session-fail";
-        const backgroundEngine = {
-          info: {
-            id: "test",
-            name: "Test Engine",
-            turnMaintenanceMode: "background" as const,
-          },
-          ingest: async () => ({ ingested: true }),
-          assemble: async ({ messages }: { messages: unknown[] }) => ({
-            messages,
-            estimatedTokens: 0,
-          }),
-          compact: async () => ({ ok: true, compacted: false }),
-          maintain: vi.fn(async (rawParams?: unknown) => {
+        const backgroundEngine = createBackgroundMaintenanceEngine(
+          vi.fn(async (rawParams?: unknown) => {
             const signal = (rawParams as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
             if (!signal) {
               throw new Error("expected deferred maintenance abort signal");
@@ -1728,13 +1601,14 @@ describe("runContextEngineMaintenance", () => {
                 reject(new Error("maintenance cleanup failed"));
               };
               signal.addEventListener("abort", onAbort, { once: true });
+              maintenanceStarted.resolve();
               if (signal.aborted) {
                 onAbort();
               }
             });
             return { changed: false, bytesFreed: 0, rewrittenEntries: 0 };
           }),
-        } as NonNullable<Parameters<typeof runContextEngineMaintenance>[0]["contextEngine"]>;
+        );
 
         await runContextEngineMaintenance({
           contextEngine: backgroundEngine,
@@ -1742,14 +1616,21 @@ describe("runContextEngineMaintenance", () => {
           sessionKey,
           sessionFile: "/tmp/session-fail.jsonl",
           reason: "turn",
+          onDeferredMaintenance: (promise) => {
+            deferredMaintenance = promise;
+          },
         });
-        await waitForAssertion(() => expect(backgroundEngine["maintain"]).toHaveBeenCalledTimes(1));
+        await Promise.race([
+          maintenanceStarted.promise,
+          expectDefined(deferredMaintenance, "deferred maintenance completion"),
+        ]);
+        expect(backgroundEngine["maintain"]).toHaveBeenCalledTimes(1);
         process.emit("SIGTERM", "SIGTERM");
-        await waitForAssertion(() =>
-          expectSystemEventContaining(
-            sessionKey,
-            "Background task failed: Context engine turn maintenance",
-          ),
+        await expectDefined(deferredMaintenance, "deferred maintenance completion");
+        await deliveries.settle();
+        expectSystemEventContaining(
+          sessionKey,
+          "Background task failed: Context engine turn maintenance",
         );
         const task = listTasksForOwnerKey(sessionKey).find(
           (candidate) => candidate.taskKind === TURN_MAINTENANCE_TASK_KIND,
@@ -1764,9 +1645,15 @@ describe("runContextEngineMaintenance", () => {
         });
         expect(getTaskFlowById(parentFlowId)?.status).toBe("failed");
       } finally {
-        process.off("SIGTERM", keepProcessAlive);
-        resetDeferredTurnMaintenanceStateForTest();
-        vi.useRealTimers();
+        process.emit("SIGTERM", "SIGTERM");
+        try {
+          await Promise.allSettled(deferredMaintenance ? [deferredMaintenance] : []);
+          await deliveries.settle();
+        } finally {
+          process.off("SIGTERM", keepProcessAlive);
+          resetDeferredTurnMaintenanceStateForTest();
+          vi.useRealTimers();
+        }
       }
     });
   });

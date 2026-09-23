@@ -2,6 +2,7 @@ import { parseControlUiFocusLocation } from "@openclaw/session-url-contract";
 import { render } from "lit";
 /* @vitest-environment jsdom */
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveThemeBranding } from "../../../packages/gateway-protocol/src/theme.ts";
 import type {
   GatewayBrowserClient,
   GatewayBrowserClientOptions,
@@ -95,6 +96,17 @@ function createGatewayHarness() {
   return { gateway, clients };
 }
 
+function createGatewayContext(gateway: ApplicationGateway): ApplicationContext {
+  return {
+    gateway,
+    router: { getState: () => ({ matches: [], pendingMatches: [] }) },
+    basePath: "",
+    agentSelection: { state: { selectedId: null } },
+    config: { current: { terminalEnabled: false } },
+    theme: { resolvedMode: "dark", branding: resolveThemeBranding(undefined) },
+  } as unknown as ApplicationContext;
+}
+
 function createGatewaySurface(gateway: ApplicationGateway, pathname = "/chat") {
   const app = document.createElement("openclaw-app") as unknown as {
     runtime: Pick<
@@ -114,13 +126,7 @@ function createGatewaySurface(gateway: ApplicationGateway, pathname = "/chat") {
     focusLocation: parseControlUiFocusLocation(pathname, ""),
     confirmPendingGatewayConnection: vi.fn(),
     cancelPendingGatewayConnection: vi.fn(),
-    context: {
-      gateway,
-      basePath: "",
-      agentSelection: { state: { selectedId: null } },
-      config: { current: { terminalEnabled: false } },
-      theme: { resolvedMode: "dark" },
-    } as unknown as ApplicationContext,
+    context: createGatewayContext(gateway),
   };
   const container = document.createElement("div");
   const draw = () => {
@@ -250,7 +256,13 @@ describe("Control UI Gateway target lineage", () => {
         synchronizeGateway: (gateway: ApplicationGateway) => void;
         render: () => unknown;
       };
-      app.runtime = { context: pane.context, documentMode: null };
+      app.runtime = {
+        context: {
+          ...pane.context,
+          router: createGatewayContext(gateway).router,
+        } as unknown as ApplicationContext,
+        documentMode: null,
+      };
       const shellContainer = document.createElement("div");
       const drawShell = () => {
         app.synchronizeGateway(gateway);
@@ -378,13 +390,7 @@ describe("Control UI Gateway target lineage", () => {
     };
     app.runtime = {
       documentMode: null,
-      context: {
-        gateway,
-        basePath: "",
-        agentSelection: { state: { selectedId: null } },
-        config: { current: { terminalEnabled: false } },
-        theme: { resolvedMode: "dark" },
-      } as unknown as ApplicationContext,
+      context: createGatewayContext(gateway),
     };
     app.synchronizeGateway(gateway);
     const container = document.createElement("div");
@@ -422,7 +428,7 @@ describe("Control UI Gateway target lineage", () => {
     const surface = renderGatewaySurface(gateway);
 
     expect(gateway.snapshot.phase).toBe("starting");
-    expect(surface).toContain('class="connect-splash"');
+    expect(surface).toContain('class="connect-splash connect-splash--skeleton"');
     expect(surface).toContain("Gateway starting…");
     expect(surface).not.toContain("<openclaw-login-gate");
   });
@@ -442,13 +448,7 @@ describe("Control UI Gateway target lineage", () => {
     };
     app.runtime = {
       documentMode: null,
-      context: {
-        gateway,
-        basePath: "",
-        agentSelection: { state: { selectedId: null } },
-        config: { current: { terminalEnabled: false } },
-        theme: { resolvedMode: "dark" },
-      } as unknown as ApplicationContext,
+      context: createGatewayContext(gateway),
     };
     app.synchronizeGateway(gateway);
     const container = document.createElement("div");
@@ -500,7 +500,7 @@ describe("Control UI Gateway target lineage", () => {
 
       const surface = renderGatewaySurface(gateway, documentView);
 
-      expect(surface).toContain('class="connect-splash"');
+      expect(surface).toContain('class="connect-splash connect-splash--skeleton"');
       expect(surface).toContain("Gateway starting…");
     },
   );

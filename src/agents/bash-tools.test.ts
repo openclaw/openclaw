@@ -4,7 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { requestHeartbeat, setHeartbeatWakeHandler } from "../infra/heartbeat-wake.js";
+import { requestHeartbeatAndWait, setHeartbeatWakeHandler } from "../infra/heartbeat-wake.js";
 import { applyPathPrepend, findPathKey } from "../infra/path-prepend.js";
 import {
   peekSystemEventEntries,
@@ -19,6 +19,7 @@ import {
   markBackgrounded,
   markExited,
   type ProcessSession,
+  resolveProcessCleanupMs,
 } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createExecTool, createProcessTool } from "./bash-tools.js";
@@ -201,7 +202,9 @@ vi.mock("../process/supervisor/index.js", () => {
         if (stagedOutput) {
           input.onStdout?.(stagedOutput);
         }
+        const activity = { resultSettled: false, lastOutputAtMs: Date.now() };
         return {
+          activity,
           runId: "mock-bash-run",
           startedAtMs: Date.now(),
           pid: 123,
@@ -211,7 +214,9 @@ vi.mock("../process/supervisor/index.js", () => {
             await immediate();
             if (deferredOutput) {
               input.onStdout?.(deferredOutput);
+              activity.lastOutputAtMs = Date.now();
             }
+            activity.resultSettled = true;
             return {
               reason: "exit" as const,
               exitCode,
@@ -228,7 +233,6 @@ vi.mock("../process/supervisor/index.js", () => {
       },
       cancel: vi.fn(),
       cancelScope: vi.fn(),
-      getRecord: vi.fn(),
     }),
   };
 });
@@ -636,6 +640,7 @@ const seedFinishedLogSession = (lines: string[]) => {
   const session: ProcessSession = {
     id: `seeded-log-${nextCallId()}`,
     command: "seeded log",
+    cleanupMs: resolveProcessCleanupMs(),
     startedAt: Date.now(),
     maxOutputChars: 100_000,
     pendingMaxOutputChars: 100_000,
@@ -781,16 +786,20 @@ describe("exec notifyOnExit", () => {
   useCapturedEnv([...SHELL_ENV_KEYS], applyDefaultShellEnv);
 
   async function drainPendingHeartbeatWakes(): Promise<void> {
-    const handler = vi.fn(async () => ({ status: "ran" as const, durationMs: 0 }));
-    const dispose = setHeartbeatWakeHandler(handler);
+    const dispose = setHeartbeatWakeHandler(async () => ({ status: "ran", durationMs: 0 }));
     try {
-      requestHeartbeat({
-        source: "other",
-        intent: "immediate",
-        reason: "test-cleanup",
-        coalesceMs: 0,
-      });
-      await expect.poll(() => handler.mock.calls.length, NOTIFY_POLL_OPTIONS).toBeGreaterThan(0);
+      // An older session wake can call the handler before this cleanup barrier settles.
+      await expect(
+        requestHeartbeatAndWait(
+          {
+            source: "other",
+            intent: "immediate",
+            reason: "test-cleanup",
+            coalesceMs: 0,
+          },
+          { abortSignal: AbortSignal.timeout(NOTIFY_EVENT_TIMEOUT_MS) },
+        ),
+      ).resolves.toEqual({ status: "ran", durationMs: 0 });
     } finally {
       dispose();
     }

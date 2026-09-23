@@ -12,6 +12,7 @@ const tableViewportSelector = ".markdown-table__viewport";
 const enhancedTableShells = new WeakSet<HTMLElement>();
 const tableOwnerStates = new WeakMap<HTMLElement, TableOwnerState>();
 const tableCopyResetTimers = new WeakMap<HTMLElement, ReturnType<typeof setTimeout>>();
+const tableCopyAttempts = new WeakMap<HTMLElement, number>();
 
 type TableOwnerState = {
   release: () => void;
@@ -45,7 +46,7 @@ export function installMarkdownTables(markdownParser: MarkdownIt): void {
   };
 }
 
-function tableText(table: HTMLTableElement): string {
+export function markdownTableCopyText(table: HTMLTableElement): string {
   return [...table.rows]
     .map((row) => [...row.cells].map((cell) => cell.textContent?.trim() ?? "").join("\t"))
     .join("\n");
@@ -235,11 +236,23 @@ export function handleMarkdownTableInteraction(event: Event): void {
   }
   const copy = target.closest<HTMLElement>(".markdown-table__copy");
   if (copy) {
-    void copyToClipboard(tableText(table)).then((copied) => {
-      copy.setAttribute("aria-label", t(copied ? "common.copied" : "common.copyFailed"));
-      if (copied) {
-        render(icons.check, copy);
+    const text = markdownTableCopyText(table);
+    const attempt = (tableCopyAttempts.get(copy) ?? 0) + 1;
+    tableCopyAttempts.set(copy, attempt);
+    // A streaming table retains its controls, but only the current payload
+    // may start fallback copying or update their feedback.
+    const isCurrent = () =>
+      copy.isConnected &&
+      table.isConnected &&
+      tableCopyAttempts.get(copy) === attempt &&
+      shell.querySelector("table") === table &&
+      markdownTableCopyText(table) === text;
+    void copyToClipboard(text, isCurrent).then((copied) => {
+      if (!isCurrent()) {
+        return;
       }
+      copy.setAttribute("aria-label", t(copied ? "common.copied" : "common.copyFailed"));
+      render(copied ? icons.check : icons.copy, copy);
       clearTimeout(tableCopyResetTimers.get(copy));
       const resetTimer = setTimeout(
         () => {

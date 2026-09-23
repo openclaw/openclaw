@@ -6,12 +6,13 @@ import {
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { hasUnresolvedConfigPath } from "../config/resolution-facts.js";
+import { hasUnresolvedConfigPath, resolveConfigSecretRef } from "../config/resolution-facts.js";
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveGatewayAuth } from "../gateway/auth-resolve.js";
+import { resolveGatewayAuthForConfig } from "../gateway/auth-resolve.js";
 import { resolveGatewayAuthTokenSourceConflict } from "../gateway/auth-token-source-conflict.js";
 import { createGatewayCredentialPlan } from "../gateway/credential-planner.js";
+import { isInvalidGatewaySecret } from "../gateway/known-weak-gateway-secrets.js";
 import type { SecurityAuditFinding } from "./audit.types.js";
 import { collectCoreInsecureOrDangerousFlags } from "./core-dangerous-config-flags.js";
 import { DEFAULT_GATEWAY_HTTP_TOOL_DENY } from "./dangerous-tools.js";
@@ -33,8 +34,8 @@ export function collectGatewayConfigFindings(
 
   const bind = typeof cfg.gateway?.bind === "string" ? cfg.gateway.bind : "loopback";
   const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
-  const auth = resolveGatewayAuth({
-    authConfig: cfg.gateway?.auth,
+  const auth = resolveGatewayAuthForConfig({
+    config: cfg,
     authOverride: options.gatewayAuthOverride,
     tailscaleMode,
     env,
@@ -281,15 +282,46 @@ export function collectGatewayConfigFindings(
     });
   }
 
-  const token =
-    typeof auth.token === "string" && auth.token.trim().length > 0 ? auth.token.trim() : null;
-  if (auth.mode === "token" && token && token.length < 24) {
-    findings.push({
-      checkId: "gateway.token_too_short",
-      severity: "warn",
-      title: "Gateway token looks short",
-      detail: `gateway auth token is ${token.length} chars; prefer a long random token.`,
-    });
+  for (const credential of ["token", "password"] as const) {
+    if (auth.mode !== credential) {
+      continue;
+    }
+    const configValue = cfg.gateway?.auth?.[credential];
+    const override = options.gatewayAuthOverride?.[credential];
+    const localPlan = credential === "token" ? plan.localToken : plan.localPassword;
+    let input = auth[credential] ?? override ?? configValue;
+    if (override === undefined && localPlan.refPath) {
+      // An unavailable reference cannot lend its ambient fallback to strength checks.
+      const pendingRef =
+        hasUnresolvedConfigPath(cfg, localPlan.refPath) ||
+        resolveConfigSecretRef({
+          config: cfg,
+          path: localPlan.refPath,
+          value: configValue,
+          defaults: cfg.secrets?.defaults,
+        });
+      input = pendingRef ? undefined : configValue;
+    }
+    const value = typeof input === "string" ? input.trim() : null;
+    if (isInvalidGatewaySecret(input)) {
+      findings.push({
+        checkId: `gateway.${credential}_placeholder_value`,
+        severity: "critical",
+        title: `Gateway ${credential} is a blank or undefined/null placeholder`,
+        detail: `The selected Gateway ${credential} is a known non-secret value. Gateway startup rejects it.`,
+        remediation:
+          credential === "token"
+            ? "Run `openclaw doctor --fix --generate-gateway-token` for an inline token; otherwise rotate its external secret source. Restart the Gateway afterward."
+            : "Generate a real secret (for example, `openssl rand -hex 32`) and update OPENCLAW_GATEWAY_PASSWORD or gateway.auth.password (or its external source). Restart the Gateway afterward.",
+      });
+    } else if (value && value.length < 24) {
+      findings.push({
+        checkId: `gateway.${credential}_too_short`,
+        severity: "warn",
+        title: `Gateway ${credential} looks short`,
+        detail: `gateway auth ${credential} is ${value.length} chars; prefer a long random ${credential}.`,
+      });
+    }
   }
 
   if (auth.mode === "trusted-proxy") {

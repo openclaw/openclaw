@@ -1,5 +1,8 @@
 // Discord type declarations define plugin contracts.
-import type { InboundEventKind } from "openclaw/plugin-sdk/channel-inbound";
+import type {
+  GroupThreadMentionFacts,
+  InboundEventKind,
+} from "openclaw/plugin-sdk/channel-inbound";
 import type {
   ChannelIngressContextBinding,
   ResolvedChannelMessageIngress,
@@ -38,6 +41,7 @@ type DiscordMessagePreflightSharedFields = {
   buildContext?: BuildChannelInboundContext;
   botUserId?: string;
   abortSignal?: AbortSignal;
+  isPolicyCurrent?: () => boolean;
   guildHistories: Map<string, DiscordHistoryEntry[]>;
   historyLimit: number;
   mediaMaxBytes: number;
@@ -56,6 +60,7 @@ export type DiscordMessagePreflightContext = DiscordMessagePreflightSharedFields
   author: User;
   sender: DiscordSenderIdentity;
   canonicalMessageId?: string;
+  sourceMessageIds?: readonly string[];
   memberRoleIds: string[];
 
   channelInfo: DiscordChannelInfo | null;
@@ -111,6 +116,7 @@ export type DiscordMessagePreflightContext = DiscordMessagePreflightSharedFields
   allowTextCommands: boolean;
   shouldBypassMention: boolean;
   effectiveWasMentioned: boolean;
+  groupThread?: GroupThreadMentionFacts;
   inboundEventKind: InboundEventKind;
   canDetectMention: boolean;
 

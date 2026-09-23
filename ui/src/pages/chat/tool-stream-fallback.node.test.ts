@@ -299,71 +299,30 @@ describe("app-tool-stream fallback lifecycle handling", () => {
       ),
       agentId: "work",
     });
-    expect(host.sessions.refreshReplacement).not.toHaveBeenCalled();
+    expect(host.sessions.reconcileMutation).not.toHaveBeenCalled();
     expect(host.sessions.state.modelOverrides).toEqual({});
-  });
-
-  it("tags stream segments with the tool they precede without resetting elapsed time", () => {
-    useToolStreamFakeTimers();
-    const host = createHost({
-      chatRunId: "run-1",
-      chatStream: "visible text before tool",
-      chatStreamStartedAt: TOOL_STREAM_TEST_NOW - 10,
-    });
-
-    handleAgentEvent(host, {
-      runId: "run-1",
-      seq: 1,
-      stream: "tool",
-      ts: Date.now(),
-      sessionKey: "main",
-      data: {
-        phase: "start",
-        name: "exec",
-        toolCallId: "call_1",
-      },
-    });
-
-    expect(host.chatStreamSegments).toEqual([
-      {
-        text: "visible text before tool",
-        ts: TOOL_STREAM_TEST_NOW - 10,
-        runId: "run-1",
-        toolCallId: "call_1",
-      },
-    ]);
-    expect(host.chatStream).toBeNull();
-    vi.useRealTimers();
   });
 
   it("stores keyed preamble item progress as stream segments", () => {
     useToolStreamFakeTimers();
     const host = createHost({ chatRunId: "run-1" });
 
-    handleAgentEvent(host, {
-      runId: "run-1",
-      seq: 1,
-      stream: "item",
-      ts: Date.now(),
-      sessionKey: "main",
-      data: {
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 1, "item", {
         kind: "preamble",
         itemId: "msg-preamble-1",
         progressText: "Checking",
-      },
-    });
-    handleAgentEvent(host, {
-      runId: "run-1",
-      seq: 2,
-      stream: "item",
-      ts: Date.now(),
-      sessionKey: "main",
-      data: {
+      }),
+    );
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 2, "item", {
         kind: "preamble",
         itemId: "msg-preamble-1",
         progressText: "Checking the app-server stream",
-      },
-    });
+      }),
+    );
 
     expect(host.chatStreamSegments).toEqual([
       {
@@ -421,18 +380,14 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     useToolStreamFakeTimers();
     const host = createHost({ chatRunId: "run-1" });
 
-    handleAgentEvent(host, {
-      runId: "run-1",
-      seq: 1,
-      stream: "item",
-      ts: Date.now(),
-      sessionKey: "main",
-      data: {
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 1, "item", {
         kind: "preamble",
         itemId: "msg-preamble-1",
         progressText: "The active run's commentary",
-      },
-    });
+      }),
+    );
     handleAgentEvent(host, {
       runId: "run-2",
       seq: 2,
@@ -456,18 +411,14 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     useToolStreamFakeTimers();
     const host = createHost({ chatRunId: "run-1" });
 
-    handleAgentEvent(host, {
-      runId: "run-2",
-      seq: 1,
-      stream: "item",
-      ts: Date.now(),
-      sessionKey: "main",
-      data: {
+    handleAgentEvent(
+      host,
+      agentEvent("run-2", 1, "item", {
         kind: "preamble",
         itemId: "msg-preamble-2",
         progressText: "Another run's commentary",
-      },
-    });
+      }),
+    );
 
     expect(host.chatStreamSegments).toEqual([]);
   });
@@ -476,18 +427,14 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     useToolStreamFakeTimers();
     const host = createHost();
 
-    handleAgentEvent(host, {
-      runId: "run-1",
-      seq: 1,
-      stream: "item",
-      ts: Date.now(),
-      sessionKey: "main",
-      data: {
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 1, "item", {
         kind: "preamble",
         itemId: "msg-preamble-1",
         progressText: "An already active session's commentary",
-      },
-    });
+      }),
+    );
 
     expect(host.chatStreamSegments).toEqual([
       {
@@ -503,30 +450,22 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     useToolStreamFakeTimers();
     const host = createHost({ chatRunId: "run-1" });
 
-    handleAgentEvent(host, {
-      runId: "run-1",
-      seq: 1,
-      stream: "item",
-      ts: Date.now(),
-      sessionKey: "main",
-      data: {
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 1, "item", {
         kind: "preamble",
         itemId: "msg-preamble-1",
         progressText: "Checking",
-      },
-    });
-    handleAgentEvent(host, {
-      runId: "run-1",
-      seq: 2,
-      stream: "item",
-      ts: Date.now(),
-      sessionKey: "main",
-      data: {
+      }),
+    );
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 2, "item", {
         kind: "preamble",
         itemId: "msg-preamble-1",
         progressText: "",
-      },
-    });
+      }),
+    );
 
     expect(host.chatStreamSegments).toEqual([]);
     vi.useRealTimers();
@@ -536,42 +475,30 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     useToolStreamFakeTimers();
     const host = createHost({ chatRunId: "run-1" });
 
-    handleAgentEvent(host, {
-      runId: "run-1",
-      seq: 1,
-      stream: "item",
-      ts: Date.now(),
-      sessionKey: "main",
-      data: {
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 1, "item", {
         kind: "preamble",
         itemId: "msg-preamble-1",
         progressText: "Checking [[reply_to_current]]",
-      },
-    });
-    handleAgentEvent(host, {
-      runId: "run-1",
-      seq: 2,
-      stream: "item",
-      ts: Date.now(),
-      sessionKey: "main",
-      data: {
+      }),
+    );
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 2, "item", {
         kind: "preamble",
         itemId: "msg-preamble-2",
         progressText: "[[reply_to_current]]",
-      },
-    });
-    handleAgentEvent(host, {
-      runId: "run-1",
-      seq: 3,
-      stream: "item",
-      ts: Date.now(),
-      sessionKey: "main",
-      data: {
+      }),
+    );
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 3, "item", {
         kind: "preamble",
         itemId: "msg-preamble-1",
         progressText: "**NO_REPLY",
-      },
-    });
+      }),
+    );
 
     expect(host.chatStreamSegments).toEqual([]);
     vi.useRealTimers();

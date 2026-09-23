@@ -1,5 +1,6 @@
+import { runLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
-import { applyHuggingfaceConfig, HUGGINGFACE_DEFAULT_MODEL_REF } from "./onboard.js";
+import { applyHuggingfaceConnectionConfig, HUGGINGFACE_DEFAULT_MODEL_REF } from "./onboard.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { buildHuggingfaceProvider } from "./provider-catalog.js";
 
@@ -22,7 +23,7 @@ export default defineSingleProviderPluginEntry({
     envVars: ["HUGGINGFACE_HUB_TOKEN", "HF_TOKEN"],
     manifestAuth: {
       defaultModel: HUGGINGFACE_DEFAULT_MODEL_REF,
-      applyConfig: applyHuggingfaceConfig,
+      applyConfig: applyHuggingfaceConnectionConfig,
     },
     catalog: {
       run: async (ctx) => {
@@ -35,16 +36,19 @@ export default defineSingleProviderPluginEntry({
         if (discoveryEnabled === false) {
           return null;
         }
-        const { apiKey, discoveryApiKey } = ctx.resolveProviderApiKey(PROVIDER_ID);
+        const { apiKey, discoveryApiKey, profileId } = ctx.resolveProviderApiKey(PROVIDER_ID);
         if (!apiKey) {
           return null;
         }
-        return {
+        const run = async () => ({
           provider: {
-            ...(await buildHuggingfaceProvider(discoveryApiKey)),
+            ...(await buildHuggingfaceProvider(discoveryApiKey, { discoveryMode: "strict" })),
             apiKey,
           },
-        };
+        });
+        return discoveryApiKey
+          ? await runLiveProviderCatalog({ providerId: PROVIDER_ID, profileId, run })
+          : await run();
       },
       // Startup and unauthenticated catalog reads must not depend on live discovery.
       staticRun: async () => ({ provider: await buildHuggingfaceProvider() }),

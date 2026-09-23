@@ -1,4 +1,5 @@
 import path from "node:path";
+import { setImmediate as flushImmediate } from "node:timers/promises";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
@@ -58,6 +59,12 @@ async function collectDeadlineSnapshot(params: {
     probe: true,
     timeoutMs: params.timeoutMs,
   });
+}
+
+async function flushHealthPreparation() {
+  await vi.advanceTimersByTimeAsync(0);
+  // The fake deadline clock does not drive the real yield after a session read.
+  await flushImmediate();
 }
 
 describe("gateway health collection deadline", () => {
@@ -153,7 +160,7 @@ describe("gateway health collection deadline", () => {
 
     try {
       snapshotPromise = scope.track(() => collectDeadlineSnapshot({ timeoutMs: 50 }));
-      await vi.advanceTimersByTimeAsync(0);
+      await flushHealthPreparation();
       await vi.advanceTimersByTimeAsync(50);
       const snap = await snapshotPromise;
       const channel = snap.channels["deadline-test"];
@@ -207,7 +214,7 @@ describe("gateway health collection deadline", () => {
     ];
 
     const snapshotPromise = collectDeadlineSnapshot({ timeoutMs: 50, audience: "public" });
-    await vi.advanceTimersByTimeAsync(0);
+    await flushHealthPreparation();
     expect(started).toEqual(accountIds.slice(0, 5));
     await vi.advanceTimersByTimeAsync(50);
     const snap = await snapshotPromise;
@@ -251,13 +258,13 @@ describe("gateway health collection deadline", () => {
     ];
 
     const firstSnapshot = collectDeadlineSnapshot({ timeoutMs: 50 });
-    await vi.advanceTimersByTimeAsync(0);
+    await flushHealthPreparation();
     expect(started).toEqual(accountIds);
     await vi.advanceTimersByTimeAsync(50);
     await firstSnapshot;
 
     const secondSnapshot = collectDeadlineSnapshot({ timeoutMs: 50 });
-    await vi.advanceTimersByTimeAsync(0);
+    await flushHealthPreparation();
     expect(started).toEqual(accountIds);
     await vi.advanceTimersByTimeAsync(50);
     const second = await secondSnapshot;

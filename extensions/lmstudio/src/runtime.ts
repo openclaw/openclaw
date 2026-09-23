@@ -1,4 +1,3 @@
-// Lmstudio plugin module implements runtime behavior.
 import {
   CUSTOM_LOCAL_AUTH_MARKER,
   isKnownEnvApiKeyMarker,
@@ -9,12 +8,16 @@ import {
 } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { resolveConfiguredSecretInputString } from "openclaw/plugin-sdk/secret-input-runtime";
+// Lmstudio plugin module implements runtime behavior.
+import { formatCliCommand } from "openclaw/plugin-sdk/setup-tools";
 import {
   LMSTUDIO_DEFAULT_API_KEY_ENV_VAR,
   LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER,
   LMSTUDIO_PROVIDER_ID,
 } from "./defaults.js";
 import { hasLmstudioAuthorizationHeader } from "./provider-auth.js";
+
+export class LmstudioConfigResolutionError extends Error {}
 
 type LmstudioAuthHeadersParams = {
   apiKey?: string;
@@ -87,7 +90,7 @@ export async function resolveLmstudioConfiguredApiKeyForProvider(params: {
     return undefined;
   }
 
-  const path = params.path ?? `models.providers.${params.providerId}.apiKey`;
+  const path = params.path ?? `models.providers[${JSON.stringify(params.providerId)}].apiKey`;
   const env = params.env ?? process.env;
   const directApiKey = normalizeOptionalSecretInput(apiKeyInput);
   const resolved = await resolveConfiguredSecretInputString({
@@ -101,7 +104,7 @@ export async function resolveLmstudioConfiguredApiKeyForProvider(params: {
     if (params.allowUnresolved) {
       return undefined;
     }
-    throw new Error(`${path}: ${resolved.unresolvedRefReason}`);
+    throw new LmstudioConfigResolutionError(`${path}: ${resolved.unresolvedRefReason}`);
   }
   const resolvedValue = normalizeOptionalSecretInput(resolved.value);
   const trimmed = resolvedValue ? normalizeApiKeyConfig(resolvedValue).trim() : "";
@@ -148,11 +151,13 @@ export async function resolveLmstudioProviderHeaders(params: {
       config: params.config,
       env: params.env ?? process.env,
       value: headerValue,
-      path: `${pathPrefix}.${headerName}`,
+      path: `${pathPrefix}[${JSON.stringify(headerName)}]`,
       unresolvedReasonStyle: "detailed",
     });
     if (resolvedHeader.unresolvedRefReason) {
-      throw new Error(`${pathPrefix}.${headerName}: ${resolvedHeader.unresolvedRefReason}`);
+      throw new LmstudioConfigResolutionError(
+        `${pathPrefix}.${headerName}: ${resolvedHeader.unresolvedRefReason}`,
+      );
     }
     const resolvedValue = resolvedHeader.value;
     if (!resolvedValue) {
@@ -229,7 +234,7 @@ export async function resolveLmstudioRuntimeApiKey(params: {
       [
         "LM Studio API key is required.",
         `Set models.providers.lmstudio.apiKey (for example "${envMarker}")`,
-        'or run "openclaw models auth lmstudio".',
+        `or run "${formatCliCommand("openclaw models auth login --provider lmstudio")}".`,
       ].join(" "),
     );
   };

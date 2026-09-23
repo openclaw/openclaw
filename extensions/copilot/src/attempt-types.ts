@@ -169,10 +169,10 @@ export interface CopilotAttemptDeps {
     sdkSessionId: string;
     pooledClient: PooledClient;
     sessionConfig: CopilotSessionConfig;
-  }) => void;
+  }) => void | Promise<void>;
   onDeferredCompaction?: (info: {
     abort: () => void;
     cleanup: Promise<"aborted" | "completed" | "deadline">;
     sdkSessionId: string;
-  }) => void;
+  }) => void | Promise<void>;
 }

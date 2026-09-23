@@ -1,3 +1,4 @@
+import { PassThrough } from "node:stream";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { defineDiscordVoiceTests } from "./voice-test-harness.test-support.js";
 
@@ -15,7 +16,7 @@ defineDiscordVoiceTests(
     createAgentProxyManager,
     expectConnectedStatus,
     getSessionEntry,
-    getVoiceReceive,
+    startTranscripts,
     getLastAudioPlayer,
     loggerErrorMock,
     lastRealtimeBridgeParams,
@@ -45,25 +46,16 @@ defineDiscordVoiceTests(
         try {
           await manager.join({ guildId: "g1", channelId: "1001" });
           const entry = getSessionEntry(manager);
-          const onStop = vi.fn();
-          const transcripts = {
-            sessionId: "notes-1",
-            onUtterance: vi.fn(),
-            onStop: () => {
-              onStop(entry.transcripts);
-              entry.stop();
-            },
-          };
-          await manager.join({ guildId: "g1", channelId: "1001" }, { transcripts });
+          const onUtterance = vi.fn();
+          await startTranscripts(manager, onUtterance);
+          const registration = entry.transcripts;
           decodeOpusStreamChunksMock.mockReturnValueOnce(decoding.promise);
+          const captureStream = new PassThrough({ objectMode: true });
+          const destroyCapture = vi.spyOn(captureStream, "destroy");
+          oldConnection.receiver.subscribe.mockReturnValueOnce(captureStream);
           receive = handleSpeakingStart(manager, entry, "u-owner");
           await vi.waitFor(() => expect(decodeOpusStreamChunksMock).toHaveBeenCalledOnce());
-          const captureStream = expectDefined(
-            oldConnection.receiver.subscribe.mock.results[0]?.value,
-            "voice capture stream",
-          );
-          getVoiceReceive(manager).scheduleCaptureFinalize(entry, "u-owner", "speaker end");
-          expect(entry.capture.get("u-owner")?.finalizeTimer).toBeDefined();
+          oldConnection.receiver.speaking.emit("end", "u-owner");
           const turn = beginSpeakerTurn(entry);
           const { bridgeParams: provider, session: oldProvider } = lastRealtimeBridge();
           const player = getLastAudioPlayer();
@@ -79,9 +71,9 @@ defineDiscordVoiceTests(
 
           expect(manager.status()).toEqual([]);
           expect(entry.realtimeLifecycle.status).toBe("stopped");
-          expect(entry.transcripts).toBeUndefined();
-          expect(onStop).toHaveBeenCalledExactlyOnceWith(undefined);
-          expect(captureStream.destroy).toHaveBeenCalledOnce();
+          expect(entry.transcripts).toBe(registration);
+          expect(registration?.isCurrent()).toBe(true);
+          expect(destroyCapture).toHaveBeenCalledOnce();
           expect(entry.capture.size).toBe(0);
           expect(oldConnection.destroy).toHaveBeenCalledTimes(boundary === "leave" ? 1 : 0);
           expect(oldProvider.close).toHaveBeenCalledOnce();
@@ -97,16 +89,8 @@ defineDiscordVoiceTests(
 
           await manager.join({ guildId: "g1", channelId: "1001" });
           const replacement = getSessionEntry(manager);
+          expect(replacement.transcripts).toBe(registration);
           const replacementProvider = lastRealtimeBridge();
-          const replacementTranscripts = {
-            sessionId: "notes-2",
-            onUtterance: vi.fn(),
-            onStop: vi.fn(),
-          };
-          await manager.join(
-            { guildId: "g1", channelId: "1001" },
-            { transcripts: replacementTranscripts },
-          );
           const inputCalls = oldProvider.sendAudio.mock.calls.length;
           turn.sendInputAudio(Buffer.alloc(3840));
           turn.close();
@@ -125,10 +109,8 @@ defineDiscordVoiceTests(
           expect(loggerErrorMock).not.toHaveBeenCalled();
           expect(oldProvider.sendAudio).toHaveBeenCalledTimes(inputCalls);
           expect(player.play).toHaveBeenCalledOnce();
-          expect(onStop).toHaveBeenCalledOnce();
-          expect(replacementTranscripts.onStop).not.toHaveBeenCalled();
-          expect(transcripts.onUtterance).not.toHaveBeenCalled();
-          expect(replacementTranscripts.onUtterance).not.toHaveBeenCalled();
+          expect(registration?.isCurrent()).toBe(true);
+          expect(onUtterance).not.toHaveBeenCalled();
           beginSpeakerTurn(replacement);
           expect(replacementProvider.session.sendAudio).toHaveBeenCalledOnce();
           expect(oldProvider.sendAudio).toHaveBeenCalledTimes(inputCalls);
@@ -153,7 +135,7 @@ defineDiscordVoiceTests(
           await manager.join({ guildId: "g1", channelId: "1001" });
           const entry = getSessionEntry(manager);
           const provider = lastRealtimeBridgeParams();
-          const destroyConnection = vi.spyOn(entry.connection, "destroy");
+          const destroyConnection = vi.spyOn(entry.audio, "stop");
           provider.onClose?.(reason);
           expect(manager.status()).toEqual([]);
           expect(entry.realtimeLifecycle.status).toBe("stopped");

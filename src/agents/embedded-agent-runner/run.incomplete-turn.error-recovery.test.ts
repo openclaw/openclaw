@@ -9,7 +9,6 @@ import {
   DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT,
   resolveEmptyResponseRetryInstruction,
   shouldRetrySilentErrorAssistantTurn,
-  shouldTreatEmptyAssistantReplyAsSilent,
 } from "./run/incomplete-turn-recovery.js";
 import { resolveIncompleteTurnPayloadText } from "./run/incomplete-turn-resolution.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
@@ -58,22 +57,6 @@ function makeIncompleteTurnParams(
   };
 }
 
-function makeSilentReplyParams(
-  attempt: EmbeddedRunAttemptResult,
-  overrides: Partial<
-    Omit<Parameters<typeof shouldTreatEmptyAssistantReplyAsSilent>[0], "attempt">
-  > = {},
-): Parameters<typeof shouldTreatEmptyAssistantReplyAsSilent>[0] {
-  return {
-    allowEmptyAssistantReplyAsSilent: true,
-    payloadCount: 0,
-    aborted: false,
-    timedOut: false,
-    attempt,
-    ...overrides,
-  };
-}
-
 describe("incomplete-turn error recovery", () => {
   it("retries replay-safe errored turns that only emitted thinking blocks", () => {
     const assistant = makeLastAssistant({
@@ -119,7 +102,178 @@ describe("incomplete-turn error recovery", () => {
       stopReason: "error",
       provider: "ollama",
       model: "glm-5.1:cloud",
+      content: [{ type: "text", text: "" }],
       usage: { input: 100, output: 12, totalTokens: 112 },
+    });
+    expect(
+      shouldRetrySilentErrorAssistantTurn({
+        attempt: makeAttemptResult({ assistantTexts: [], lastAssistant: assistant }),
+        assistant,
+      }),
+    ).toBe(false);
+  });
+
+  it.each([
+    {
+      name: "the shared terminal argument parser",
+      errorMessage: "Provider completed tool call with malformed JSON arguments",
+    },
+    {
+      name: "an unsealed Anthropic tool block",
+      errorMessage: "Provider completed stream with an incomplete tool call",
+    },
+    {
+      name: "the OpenAI Chat Completions tool terminal",
+      errorMessage: "Provider returned an incomplete or malformed tool call",
+    },
+    {
+      name: "the Mistral tool terminal",
+      errorMessage: "Mistral completed tool call has invalid JSON arguments",
+    },
+    {
+      name: "the Responses tool terminal",
+      errorMessage: "Responses stream completed tool call with invalid JSON arguments",
+    },
+  ])(
+    "retries an empty errored turn with output tokens after a pre-dispatch rejection by $name",
+    ({ errorMessage }) => {
+      // Empty content and replay-safe attempt evidence are independent of the error message.
+      const assistant = makeLastAssistant({
+        stopReason: "error",
+        provider: "anthropic",
+        model: "claude-opus-5",
+        errorMessage,
+        usage: { input: 640, output: 1329, totalTokens: 1969 },
+      });
+      expect(
+        shouldRetrySilentErrorAssistantTurn({
+          attempt: makeAttemptResult({ assistantTexts: [], lastAssistant: assistant }),
+          assistant,
+        }),
+      ).toBe(true);
+    },
+  );
+
+  it("retries an empty errored turn with output tokens on the structured rejection code", () => {
+    const assistant = makeLastAssistant({
+      stopReason: "error",
+      provider: "anthropic",
+      model: "claude-opus-5",
+      errorCode: "malformed_tool_call_arguments",
+      errorMessage: "Provider rejected the tool call",
+      usage: { input: 640, output: 1329, totalTokens: 1969 },
+    });
+    expect(
+      shouldRetrySilentErrorAssistantTurn({
+        attempt: makeAttemptResult({ assistantTexts: [], lastAssistant: assistant }),
+        assistant,
+      }),
+    ).toBe(true);
+  });
+
+  it.each([
+    "provider completed tool call with malformed JSON arguments",
+    "Provider completed tool call with malformed json arguments",
+    " Provider completed tool call with malformed JSON arguments",
+    "Provider completed tool call with malformed JSON arguments ",
+    "Provider completed tool call with malformed JSON arguments.",
+    "Error: Provider completed tool call with malformed JSON arguments",
+    "Provider completed tool call with malformed JSON arguments after dispatch",
+    "Provider completed stream with an incomplete tool call.",
+    "Provider returned an incomplete or malformed tool call.",
+    "Mistral completed tool call has invalid JSON arguments.",
+    "Responses stream completed tool call with invalid JSON arguments.",
+  ])("does not retry positive output for a non-exact rejection message: %s", (errorMessage) => {
+    const assistant = makeLastAssistant({
+      stopReason: "error",
+      errorMessage,
+      usage: { input: 640, output: 13, totalTokens: 653 },
+    });
+    expect(
+      shouldRetrySilentErrorAssistantTurn({
+        attempt: makeAttemptResult({ assistantTexts: [], lastAssistant: assistant }),
+        assistant,
+      }),
+    ).toBe(false);
+  });
+
+  it.each([
+    "MALFORMED_TOOL_CALL_ARGUMENTS",
+    " malformed_tool_call_arguments",
+    "malformed_tool_call_arguments ",
+    "malformed_tool_call_arguments_suffix",
+    "invalid_json",
+  ])("does not retry positive output for an unrecognized rejection code: %s", (errorCode) => {
+    const assistant = makeLastAssistant({
+      stopReason: "error",
+      errorCode,
+      errorMessage: "Provider rejected the tool call",
+      usage: { input: 640, output: 13, totalTokens: 653 },
+    });
+    expect(
+      shouldRetrySilentErrorAssistantTurn({
+        attempt: makeAttemptResult({ assistantTexts: [], lastAssistant: assistant }),
+        assistant,
+      }),
+    ).toBe(false);
+  });
+
+  it.each<{ name: string; attempt: Partial<EmbeddedRunAttemptResult> }>([
+    { name: "visible text", attempt: { assistantTexts: ["Applying the edit now."] } },
+    {
+      name: "accepted client call",
+      attempt: { clientToolCalls: [{ name: "pending", params: {} }] },
+    },
+    { name: "yielded work", attempt: { yieldDetected: true } },
+    { name: "approval prompt", attempt: { didSendDeterministicApprovalPrompt: true } },
+    { name: "source reply delivery", attempt: { didDeliverSourceReplyViaMessageTool: true } },
+    {
+      name: "asynchronous work",
+      attempt: { toolMetas: [{ toolName: "probe", asyncStarted: true }] },
+    },
+    { name: "cron creation", attempt: { successfulCronAdds: 1 } },
+    {
+      name: "potential side effects",
+      attempt: {
+        toolMetas: [{ toolName: "write", replaySafe: false }],
+        currentAttemptReplayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+      },
+    },
+  ])("keeps refusing a pre-dispatch rejection after $name", ({ attempt }) => {
+    const assistant = makeLastAssistant({
+      stopReason: "error",
+      provider: "anthropic",
+      model: "claude-opus-5",
+      errorMessage: "Provider completed tool call with malformed JSON arguments",
+      usage: { input: 640, output: 1329, totalTokens: 1969 },
+    });
+    expect(
+      shouldRetrySilentErrorAssistantTurn({
+        attempt: makeAttemptResult({ assistantTexts: [], lastAssistant: assistant, ...attempt }),
+        assistant,
+      }),
+    ).toBe(false);
+  });
+
+  it.each([
+    { errorCode: "ERR_WEBSOCKET_NON_RETRYABLE_CLOSE" },
+    { errorCode: PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE },
+    {
+      errorCode: "malformed_tool_call_arguments",
+      diagnostics: [
+        {
+          type: "provider_refusal",
+          timestamp: 0,
+          details: { provider: "anthropic", category: "cyber" },
+        },
+      ],
+    },
+  ])("preserves terminal rejection evidence: %j", (terminalEvidence) => {
+    const assistant = makeLastAssistant({
+      stopReason: "error",
+      errorMessage: "Provider completed tool call with malformed JSON arguments",
+      usage: { input: 640, output: 13, totalTokens: 653 },
+      ...terminalEvidence,
     });
     expect(
       shouldRetrySilentErrorAssistantTurn({
@@ -153,6 +307,7 @@ describe("incomplete-turn error recovery", () => {
       stopReason: "error",
       provider: "anthropic",
       model: "claude-opus-4-8",
+      errorMessage: "Provider completed tool call with malformed JSON arguments",
       content,
       usage: { input: 100, output: 1120, totalTokens: 1220 },
     });
@@ -305,126 +460,5 @@ describe("incomplete-turn error recovery", () => {
     );
 
     expect(retryInstruction).toBe(EMPTY_RESPONSE_RETRY_INSTRUCTION);
-  });
-
-  it("treats clean empty assistant turns as silent only for reply-optional runs", () => {
-    const attempt = makeAttemptResult({
-      assistantTexts: [],
-      lastAssistant: makeLastAssistant({
-        content: [{ type: "text", text: "" }],
-      }),
-    });
-
-    expect(shouldTreatEmptyAssistantReplyAsSilent(makeSilentReplyParams(attempt))).toBe(false);
-    expect(
-      shouldTreatEmptyAssistantReplyAsSilent(
-        makeSilentReplyParams(attempt, { terminalReplyExpectation: "optional" }),
-      ),
-    ).toBe(true);
-    expect(
-      shouldTreatEmptyAssistantReplyAsSilent(
-        makeSilentReplyParams(attempt, { allowEmptyAssistantReplyAsSilent: false }),
-      ),
-    ).toBe(false);
-  });
-
-  it("treats reasoning-only assistant turns as silent only for reply-optional runs", () => {
-    const attempt = makeAttemptResult({
-      assistantTexts: [],
-      lastAssistant: makeLastAssistant({
-        stopReason: "end_turn",
-        content: [
-          {
-            type: "thinking",
-            thinking: "internal reasoning",
-            thinkingSignature: JSON.stringify({ id: "rs_silent_helper", type: "reasoning" }),
-          },
-        ],
-      }),
-    });
-
-    expect(shouldTreatEmptyAssistantReplyAsSilent(makeSilentReplyParams(attempt))).toBe(false);
-    expect(
-      shouldTreatEmptyAssistantReplyAsSilent(
-        makeSilentReplyParams(attempt, { terminalReplyExpectation: "optional" }),
-      ),
-    ).toBe(true);
-    expect(
-      shouldTreatEmptyAssistantReplyAsSilent(
-        makeSilentReplyParams(attempt, { allowEmptyAssistantReplyAsSilent: false }),
-      ),
-    ).toBe(false);
-  });
-
-  it("treats exact NO_REPLY assistant turns as silent only when the caller allows it", () => {
-    const attempt = makeAttemptResult({
-      assistantTexts: ["NO_REPLY"],
-      lastAssistant: makeLastAssistant({
-        content: [{ type: "text", text: "NO_REPLY" }],
-      }),
-    });
-
-    expect(shouldTreatEmptyAssistantReplyAsSilent(makeSilentReplyParams(attempt))).toBe(true);
-    expect(
-      shouldTreatEmptyAssistantReplyAsSilent(
-        makeSilentReplyParams(attempt, { allowEmptyAssistantReplyAsSilent: false }),
-      ),
-    ).toBe(false);
-  });
-
-  it("treats post-tool exact NO_REPLY assistant turns as intentional silence", () => {
-    const attempt = makeAttemptResult({
-      assistantTexts: ["NO_REPLY"],
-      toolMetas: [{ toolName: "process.poll", meta: "pid=123", replaySafe: true }],
-      lastAssistant: makeLastAssistant({
-        content: [{ type: "text", text: "NO_REPLY" }],
-      }),
-    });
-
-    expect(shouldTreatEmptyAssistantReplyAsSilent(makeSilentReplyParams(attempt))).toBe(true);
-  });
-
-  it("does not treat error or side-effect empty turns as silent", () => {
-    const errorAttempt = makeAttemptResult({
-      assistantTexts: [],
-      lastAssistant: makeLastAssistant({
-        stopReason: "error",
-      }),
-    });
-    const silentErrorAttempt = makeAttemptResult({
-      assistantTexts: ["NO_REPLY"],
-      lastAssistant: makeLastAssistant({
-        stopReason: "error",
-        content: [{ type: "text", text: "NO_REPLY" }],
-      }),
-    });
-    const sideEffectAttempt = makeAttemptResult({
-      assistantTexts: [],
-      didSendViaMessagingTool: true,
-      messagingToolSentTexts: ["sent already"],
-      lastAssistant: makeLastAssistant({
-        content: [{ type: "text", text: "" }],
-      }),
-    });
-    const postToolEmptyAttempt = makeAttemptResult({
-      assistantTexts: [],
-      toolMetas: [{ toolName: "process.poll", meta: "pid=123", replaySafe: true }],
-      lastAssistant: makeLastAssistant({
-        api: "openai-completions",
-        provider: "stepfun",
-        model: "step-router-v1",
-      }),
-    });
-
-    expect(shouldTreatEmptyAssistantReplyAsSilent(makeSilentReplyParams(errorAttempt))).toBe(false);
-    expect(shouldTreatEmptyAssistantReplyAsSilent(makeSilentReplyParams(silentErrorAttempt))).toBe(
-      false,
-    );
-    expect(shouldTreatEmptyAssistantReplyAsSilent(makeSilentReplyParams(sideEffectAttempt))).toBe(
-      false,
-    );
-    expect(
-      shouldTreatEmptyAssistantReplyAsSilent(makeSilentReplyParams(postToolEmptyAttempt)),
-    ).toBe(false);
   });
 });

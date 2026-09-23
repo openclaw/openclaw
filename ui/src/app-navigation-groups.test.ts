@@ -17,7 +17,12 @@ import type { NativeDeviceSettingsCapability } from "./app/native-device-setting
 import { readGatewayOperatorAccess } from "./app/operator-access.ts";
 import { getStaticCommandPaletteCatalogItems } from "./components/command-palette-catalog-search.ts";
 import { findSettingsSearchBlocks } from "./pages/config/settings-search.ts";
-import { createNativeDeviceSettingsSnapshot } from "./test-helpers/native-device-settings.ts";
+import { createChromeExtensionSetupResult } from "./test-helpers/chrome-extension-setup.ts";
+import {
+  createIosNativeDeviceSettingsSnapshot,
+  createNativeDeviceSettingsSnapshot,
+  createTauriDeviceSettingsSnapshot,
+} from "./test-helpers/native-device-settings.ts";
 
 const settingsGroups = visibleSettingsNavigationGroups(true);
 const settingsRoutes = settingsGroups.flatMap((group) => group.routes);
@@ -32,6 +37,7 @@ describe("sidebar entries", () => {
       openSystemSettings: () => undefined,
       openPanel: () => undefined,
       checkForUpdates: () => undefined,
+      setupChromeExtension: async (action) => createChromeExtensionSetupResult({ action }),
       refresh: () => undefined,
       dispose: () => undefined,
     };
@@ -48,8 +54,8 @@ describe("sidebar entries", () => {
     expect(search("Dock icon", capability)).toContainEqual(
       expect.objectContaining({ routeId: "device" }),
     );
-    expect(search("computer presence", null)).toEqual([]);
-    expect(search("computer presence", capability)).toContainEqual(
+    expect(search("System-wide presence detection", null)).toEqual([]);
+    expect(search("System-wide presence detection", capability)).toContainEqual(
       expect.objectContaining({ routeId: "device-permissions" }),
     );
     const browserGroups = visibleSettingsNavigationGroups(canAdmin);
@@ -71,9 +77,70 @@ describe("sidebar entries", () => {
       labelKey: "nav.settingsGroupDevice",
       routes: ["device", "device-permissions"],
     });
+    for (const platform of ["linux", "windows"] as const) {
+      const desktopCapability = {
+        ...capability,
+        snapshot: createTauriDeviceSettingsSnapshot(platform),
+      };
+      expect(visibleSettingsNavigationGroups(canAdmin, desktopCapability)[1]).toEqual({
+        labelKey: "nav.settingsGroupThisComputer",
+        routes: ["device"],
+      });
+      expect(search("Desktop sharing", desktopCapability)).toContainEqual(
+        expect.objectContaining({ routeId: "device" }),
+      );
+      expect(search("Precise location", desktopCapability)).toEqual([]);
+    }
     expect(
       visibleSettingsNavigationGroups(canAdmin, { ...capability, snapshot: null })[1]?.labelKey,
     ).toBe("nav.settingsGroupThisDevice");
+    const iosSnapshot = createIosNativeDeviceSettingsSnapshot();
+    iosSnapshot.voice.speakerphoneEnabled = false;
+    for (const [formFactor, labelKey] of [
+      ["phone", "nav.settingsGroupThisIPhone"],
+      ["pad", "nav.settingsGroupThisIPad"],
+      ["desktop", "nav.settingsGroupThisDevice"],
+      [undefined, "nav.settingsGroupThisDevice"],
+    ] as const) {
+      iosSnapshot.device.formFactor = formFactor;
+      expect(
+        visibleSettingsNavigationGroups(canAdmin, { ...capability, snapshot: iosSnapshot })[1]
+          ?.labelKey,
+      ).toBe(labelKey);
+    }
+    const iosCapability = { ...capability, snapshot: iosSnapshot };
+    for (const [query, routeId] of [
+      ["Health summaries", "device"],
+      ["Apple Watch", "device"],
+      ["Contacts", "device-permissions"],
+      ["Photos", "device-permissions"],
+      ["Use speakerphone", "talk"],
+      ["Talk in the background", "talk"],
+    ] as const) {
+      expect(search(query, iosCapability)).toContainEqual(expect.objectContaining({ routeId }));
+      expect(search(query, null)).toEqual([]);
+      expect(search(query, capability)).toEqual([]);
+      expect(search(query, { ...capability, snapshot: null })).toEqual([]);
+    }
+    for (const query of [
+      "Dock icon",
+      "Launch at login",
+      "Quick Chat",
+      "Cookie sync",
+      "System-wide presence detection",
+    ]) {
+      expect(search(query, capability)).not.toEqual([]);
+      expect(search(query, iosCapability)).toEqual([]);
+    }
+    const sparseIosSnapshot = createIosNativeDeviceSettingsSnapshot();
+    sparseIosSnapshot.capabilities!.healthSummaryAvailable = false;
+    delete sparseIosSnapshot.voice.speakerphoneEnabled;
+    sparseIosSnapshot.permissions.entries = sparseIosSnapshot.permissions.entries.filter(
+      (entry) => entry.id !== "contacts",
+    );
+    for (const query of ["Health summaries", "Use speakerphone", "Contacts"]) {
+      expect(search(query, { ...capability, snapshot: sparseIosSnapshot })).toEqual([]);
+    }
     for (const route of ["device", "device-permissions"] as const) {
       expect(isSettingsNavigationRouteVisible(route, canAdmin)).toBe(false);
       expect(isSettingsNavigationRouteVisible(route, canAdmin, capability)).toBe(true);
@@ -89,7 +156,14 @@ describe("sidebar entries", () => {
     }
   });
   it("keeps operational destinations visible by default", () => {
-    expect(DEFAULT_SIDEBAR_ENTRIES).toEqual(["route:dashboards", "route:cron", "route:plugins"]);
+    expect(DEFAULT_SIDEBAR_ENTRIES).toEqual([
+      "route:agents-home",
+      "route:dashboards",
+      "route:systems",
+      "route:cron",
+      "route:plugins",
+    ]);
+    expect(isSettingsNavigationRoute("agents-home")).toBe(false);
   });
 
   it("drops retired routes from persisted entries", () => {
@@ -134,6 +208,18 @@ describe("sidebar entries", () => {
     expect(isSettingsNavigationRoute("ai-agents")).toBe(true);
     expect(settingsNavigationOwnerRoute("ai-agents")).toBe("agents");
   });
+
+  it.each(["plugin-settings", "skill-settings"] as const)(
+    "keeps %s visible to admins and read-only operators",
+    (routeId) => {
+      expect(visibleSettingsNavigationGroups(true).flatMap((group) => group.routes)).toContain(
+        routeId,
+      );
+      expect(visibleSettingsNavigationGroups(false).flatMap((group) => group.routes)).toContain(
+        routeId,
+      );
+    },
+  );
 
   it("filters admin-only settings while preserving legacy fail-open visibility", () => {
     const nonAdminRoutes = visibleSettingsNavigationGroups(false).flatMap((group) => group.routes);
@@ -190,6 +276,13 @@ describe("sidebar entries", () => {
     expect(serializeSidebarEntry({ type: "plugin", key: "workboard/board-ops" })).toBe(
       "plugin:workboard/board-ops",
     );
+  });
+
+  it("preserves opaque descriptor IDs in plugin positions", () => {
+    const entries = ["plugin:reports/daily/team:summary", "plugin:reports/日报 summary"];
+    expect(normalizeSidebarEntries(entries)).toEqual(entries);
+    expect(parseSidebarEntry("plugin:reports/")).toBeNull();
+    expect(parseSidebarEntry("plugin:/report")).toBeNull();
   });
 
   it("normalizes persisted entries, dropping malformed and duplicate values", () => {

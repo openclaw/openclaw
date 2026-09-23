@@ -35,10 +35,15 @@ describe("discord config schema", () => {
     [null, false],
   ] as const)("preserves supported Discord DM input for baseline %s", (version, legacy) => {
     const step = resolveUpgradeSurvivorConfigStepsForBaseline("base", version).find(
-      (entry) => entry.id === "channels-discord",
+      (entry) => entry.argv[2] === "channels.discord" || entry.argv[2] === "--batch-json",
     );
     expect(step).toBeDefined();
-    const discord = JSON.parse(step?.argv[3] ?? "{}");
+    const payload = JSON.parse(step?.argv[3] ?? "");
+    const discord =
+      step?.argv[2] === "--batch-json"
+        ? payload.find((entry: { path: string }) => entry.path === "channels.discord")?.value
+        : payload;
+    expect(discord).toBeDefined();
     if (legacy) {
       expect(discord.dm).toEqual({ policy: "allowlist", allowFrom: ["111111111111111111"] });
       expect(discord.dmPolicy).toBeUndefined();

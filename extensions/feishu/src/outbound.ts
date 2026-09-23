@@ -1,4 +1,3 @@
-// Feishu plugin module implements outbound behavior.
 import path from "node:path";
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import {
@@ -26,10 +25,8 @@ import {
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import type { ChannelOutboundAdapter } from "../runtime-api.js";
 import { resolveFeishuAccount } from "./accounts.js";
-import { createFeishuClient } from "./client.js";
-import { cleanupAmbientCommentTypingReaction } from "./comment-reaction.js";
+import { sendCommentThreadReply } from "./comment-send.js";
 import { parseFeishuCommentTarget } from "./comment-target.js";
-import { deliverCommentThreadText } from "./drive.js";
 import { resolveFeishuIdentityHeaderTitle } from "./identity-header.js";
 import {
   chunkFeishuMarkdown,
@@ -54,12 +51,14 @@ import {
   renderFeishuPresentationPayload,
   renderFeishuPresentationFallbackText,
   resolveFeishuRichReply,
+  withinCardTableLimit,
 } from "./presentation-card.js";
 import {
   createFeishuPartialReplyDeliveryError,
   createFeishuReplyDeliveryResult,
   type FeishuReplyDeliverySource,
 } from "./reply-delivery-result.js";
+import { withFeishuSendContext } from "./send-context.js";
 import {
   chunkFeishuCardMarkdown,
   sendCardFeishu,
@@ -206,24 +205,6 @@ function readFeishuPropagateMediaUploadFailure(payload: FeishuOutboundPayload): 
   return feishuData?.[FEISHU_PROPAGATE_MEDIA_UPLOAD_FAILURE_MARKER] === true;
 }
 
-// Builds a `channelData.feishu` that carries only the direct-send upload-failure
-// policy marker. The document-comment branch strips native card / interactive
-// channelData before fallback delivery (those cannot render in comments), but
-// it must not drop the propagation marker the direct `send` action stamped —
-// otherwise a media-upload failure on a comment target degrades to a
-// fallback-text `ok:true` receipt again (issue #112244, ClawSweeper P1).
-function buildFeishuPropagationOnlyChannelData(
-  payload: FeishuOutboundPayload,
-): { feishu: Record<string, unknown> } | undefined {
-  const feishuData = isRecord(payload.channelData?.feishu) ? payload.channelData.feishu : undefined;
-  if (feishuData?.[FEISHU_PROPAGATE_MEDIA_UPLOAD_FAILURE_MARKER] !== true) {
-    return undefined;
-  }
-  return {
-    feishu: { [FEISHU_PROPAGATE_MEDIA_UPLOAD_FAILURE_MARKER]: true },
-  };
-}
-
 type FeishuReplyMode =
   | { normalizedReplyToId: string; replyToMessageId: string; replyInThread: false }
   | { normalizedReplyToId: undefined; replyToMessageId: string; replyInThread: true }
@@ -247,47 +228,6 @@ export function resolveFeishuReplyMode(params: {
         replyToMessageId: undefined,
         replyInThread: false,
       };
-}
-
-async function sendCommentThreadReply(params: {
-  cfg: Parameters<typeof sendMessageFeishu>[0]["cfg"];
-  to: string;
-  text: string;
-  replyId?: string;
-  accountId?: string;
-}) {
-  const target = parseFeishuCommentTarget(params.to);
-  if (!target) {
-    return null;
-  }
-  const account = resolveFeishuAccount({ cfg: params.cfg, accountId: params.accountId });
-  const client = createFeishuClient(account);
-  const replyId = params.replyId?.trim();
-  try {
-    const result = await deliverCommentThreadText(client, {
-      file_token: target.fileToken,
-      file_type: target.fileType,
-      comment_id: target.commentId,
-      content: params.text,
-    });
-    return {
-      messageId:
-        (result.delivery_mode === "reply_comment" ? result.reply_id : result.comment_id) ?? "",
-      chatId: target.commentId,
-      result,
-    };
-  } finally {
-    if (replyId) {
-      void cleanupAmbientCommentTypingReaction({
-        client,
-        deliveryContext: {
-          channel: "feishu",
-          to: params.to,
-          threadId: replyId,
-        },
-      });
-    }
-  }
 }
 
 async function sendOutboundText(params: {
@@ -320,7 +260,9 @@ async function sendOutboundText(params: {
   // Decide card routing on the original text so card content is never
   // modified by post-md newline normalization. Only the post path below
   // materializes CommonMark soft breaks for Feishu rendering.
-  const useCard = renderMode === "card" || (renderMode === "auto" && shouldUseCard(text));
+  const useCard =
+    (renderMode === "card" || (renderMode === "auto" && shouldUseCard(text))) &&
+    withinCardTableLimit(text);
 
   // Tables need contiguous source rows, so convert them before the parser
   // materializes prose soft breaks for Feishu post rendering.
@@ -501,6 +443,22 @@ async function sendFeishuTtsSupplementPayload(params: {
   return lastResult ?? { channel: "feishu", messageId: "" };
 }
 
+function withFeishuOutboundSendContext(adapter: ChannelOutboundAdapter): ChannelOutboundAdapter {
+  const { sendText, sendMedia, sendPayload } = adapter;
+  return {
+    ...adapter,
+    ...(sendText
+      ? { sendText: async (ctx) => withFeishuSendContext(ctx, () => sendText(ctx)) }
+      : {}),
+    ...(sendMedia
+      ? { sendMedia: async (ctx) => withFeishuSendContext(ctx, () => sendMedia(ctx)) }
+      : {}),
+    ...(sendPayload
+      ? { sendPayload: async (ctx) => withFeishuSendContext(ctx, () => sendPayload(ctx)) }
+      : {}),
+  };
+}
+
 // `feishuOutbound` keeps the shared `ChannelOutboundAdapter` shape (whose
 // `sendMedia` is optional) so the object literal — which spreads
 // `createAttachedChannelResultAdapter` (returning `sendMedia?: ... | undefined`)
@@ -509,7 +467,7 @@ async function sendFeishuTtsSupplementPayload(params: {
 // optional `sendMedia` to `FeishuOutboundSendMedia` at the use site
 // (channel.ts direct-send branch, sendFeishuFallbackPayload) instead of
 // forcing a required property here (ClawSweeper P1).
-export const feishuOutbound: ChannelOutboundAdapter = {
+export const feishuOutbound: ChannelOutboundAdapter = withFeishuOutboundSendContext({
   deliveryMode: "direct",
   chunker: chunkFeishuMarkdown,
   chunkerMode: "markdown",
@@ -547,12 +505,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
         text,
         interactive: undefined,
         presentation: undefined,
-        // Strip native card / interactive channelData (comments cannot render
-        // them) but preserve the direct-send upload-failure propagation marker
-        // so a media-upload failure on a comment target stays visible instead
-        // of degrading to a fallback-text `ok:true` receipt (issue #112244,
-        // ClawSweeper P1).
-        channelData: buildFeishuPropagationOnlyChannelData(payload),
+        channelData: undefined,
       };
       return await sendFeishuFallbackPayload({
         ctx,
@@ -840,18 +793,8 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       };
       const deliveryOptions = { replyToIdSource, replyToMode, onDeliveryResult };
       if (parseFeishuCommentTarget(to)) {
-        // Feishu document comments cannot host a media attachment; the mediaUrl
-        // is rendered as a fallback text link instead. This visible-link
-        // fallback is the established comment-target behavior on main and is
-        // NOT the silent text-only `ok:true` drop issue #112244 removes — the
-        // recipient sees the media URL as a clickable link, so the attachment
-        // intent is visibly delivered even though the comment cannot render the
-        // media inline. The direct-send upload-failure propagation policy
-        // therefore does not apply here: it targets actual media-upload failures
-        // (the `sendMediaFeishu` catch below), and a comment target never
-        // reaches that upload path. Keep the fallback for both `send` and
-        // thread-reply so comment targets retain their visible media-link
-        // delivery (issue #112244, ClawSweeper fourteenth-review P1).
+        // Document comments deliver media as visible links; they never enter
+        // the upload path or use its failure-propagation policy.
         const commentText = mediaUrl?.trim()
           ? await buildFeishuMediaFallbackText({
               text,
@@ -986,5 +929,5 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       return toFeishuOutboundResult(aggregateFeishuSendResult(mediaResult, results));
     },
   }),
-};
+});
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

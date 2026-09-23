@@ -32,8 +32,8 @@ const getUserProfileDisplay = vi.hoisted(() =>
   }),
 );
 
-vi.mock("../state/user-profiles.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../state/user-profiles.js")>()),
+vi.mock("../state/user-profile-list.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/user-profile-list.js")>()),
   getUserProfileDisplay,
 }));
 
@@ -43,6 +43,84 @@ afterEach(() => {
   vi.restoreAllMocks();
   getUserProfileDisplay.mockClear();
 });
+
+it.each([true, false, undefined])(
+  "filters subagent sessions before pagination and people facets when excludeSubagents is %s",
+  async (excludeSubagents) => {
+    const store: Record<string, SessionEntry> = {
+      "agent:main:dashboard:grouped": {
+        sessionId: "grouped-conversation",
+        updatedAt: 7,
+        spawnedBy: "agent:main:discussion",
+        category: "Research",
+        createdActor: { type: "human", source: "profile", id: "profile-ada" },
+      },
+      "agent:main:subagent:recent": {
+        sessionId: "subagent-recent",
+        updatedAt: 6,
+        category: "Research",
+        createdActor: { type: "human", source: "profile", id: "profile-bob" },
+      },
+      "Subagent:legacy": {
+        sessionId: "subagent-legacy",
+        updatedAt: 5,
+        createdActor: { type: "human", source: "profile", id: "profile-bob" },
+      },
+      "agent:main:legacy-child": {
+        sessionId: "legacy-child",
+        updatedAt: 4,
+        spawnedBy: "agent:main:discussion",
+        createdActor: { type: "human", source: "profile", id: "profile-bob" },
+      },
+      "agent:main:discussion": {
+        sessionId: "discussion",
+        updatedAt: 3,
+        label: "Subagent design discussion",
+        createdActor: { type: "human", source: "profile", id: "profile-ada" },
+      },
+      "agent:main:fork": {
+        sessionId: "fork",
+        updatedAt: 2,
+        parentSessionKey: "agent:main:discussion",
+        createdActor: { type: "human", source: "profile", id: "profile-ada" },
+      },
+      "agent:main:older": {
+        sessionId: "older",
+        updatedAt: 1,
+        createdActor: { type: "human", source: "profile", id: "profile-ada" },
+      },
+    };
+    const result = await listSessionFixture({
+      cfg: { agents: { list: [{ id: "main" }] } },
+      storePath: "/tmp/openclaw-session-activity-subagents",
+      store,
+      opts: { excludeSubagents, includePeople: true, limit: 2 },
+    });
+
+    expect(result.sessions.map((row) => row.key)).toEqual(
+      excludeSubagents
+        ? ["agent:main:dashboard:grouped", "agent:main:discussion"]
+        : ["agent:main:dashboard:grouped", "agent:main:subagent:recent"],
+    );
+    expect(result).toMatchObject({
+      totalCount: excludeSubagents ? 4 : 7,
+      peopleSessionCount: excludeSubagents ? 4 : 7,
+      nextOffset: 2,
+      hasMore: true,
+    });
+    expect(result.people?.map((person) => [person.identity.id, person.sessionCount])).toEqual(
+      excludeSubagents
+        ? [["profile-ada", 4]]
+        : [
+            ["profile-ada", 4],
+            ["profile-bob", 3],
+          ],
+    );
+    expect(result.owners?.map((owner) => owner.id)).toEqual(
+      excludeSubagents ? ["profile-ada"] : ["profile-ada", "profile-bob"],
+    );
+  },
+);
 
 it("lets configured agents win id-only owner facet collisions", async () => {
   const actorOrders = [
@@ -942,7 +1020,7 @@ it("keeps the serialized list response deterministic for the current filter path
   const expectedSerializedResponse = [
     '{"ts":1000000,"path":"/tmp/openclaw-session-byte-parity","count":1,"totalCount":1,"limitApplied":100,"nextOffset":null,"hasMore":false,"owners":[]',
     ',"defaults":{"modelProvider":"openai","model":"gpt-5.4","contextTokens":200000,"agentRuntime":{"id":"codex","cloudPlacementSupported":false,"devicePlacementSupported":false,"source":"implicit"},"thinkingLevels":[{"id":"off","label":"off"},{"id":"minimal","label":"minimal"},{"id":"low","label":"low"},{"id":"medium","label":"medium"},{"id":"high","label":"high"},{"id":"xhigh","label":"xhigh"}],"thinkingOptions":["off","minimal","low","medium","high","xhigh"],"thinkingDefault":"off"}',
-    ',"sessions":[{"key":"global","visibility":"shared","permissionModePending":false,"createdActor":{"type":"system","id":"creator-b","identity":{"type":"legacy","actorType":"system","source":null,"id":"creator-b"}},"kind":"global","classification":"global","agentId":"main","isMain":false,"isBackground":false,"subject":"needle global","updatedAt":999999,"archived":false,"pinned":false,"unread":false,"sessionId":"session-global","thinkingLevels":[{"id":"off","label":"off"},{"id":"minimal","label":"minimal"},{"id":"low","label":"low"},{"id":"medium","label":"medium"},{"id":"high","label":"high"}],"thinkingOptions":["off","minimal","low","medium","high"],"thinkingDefault":"off","effectiveFastMode":false,"effectiveFastModeSource":"default","fastAutoOnSeconds":60,"totalTokens":1,"totalTokensFresh":true,"estimatedCostUsd":0,"effectiveResponseUsage":"off","effectiveQueueMode":"steer","modelProvider":"openai","model":"gpt-5.4","modelOverrideSource":null,"agentRuntime":{"id":"codex","cloudPlacementSupported":false,"devicePlacementSupported":false,"source":"implicit"},"contextTokens":100}]}',
+    ',"sessions":[{"key":"global","visibility":"shared","permissionModePending":false,"createdActor":{"type":"system","id":"creator-b","identity":{"type":"legacy","actorType":"system","source":null,"id":"creator-b"}},"kind":"global","classification":"global","agentId":"main","isMain":false,"isBackground":false,"subject":"needle global","updatedAt":999999,"archived":false,"pinned":false,"unread":false,"sessionId":"session-global","thinkingLevels":[{"id":"off","label":"off"},{"id":"minimal","label":"minimal"},{"id":"low","label":"low"},{"id":"medium","label":"medium"},{"id":"high","label":"high"},{"id":"xhigh","label":"xhigh"}],"thinkingOptions":["off","minimal","low","medium","high","xhigh"],"thinkingDefault":"off","effectiveFastMode":false,"effectiveFastModeSource":"default","fastAutoOnSeconds":60,"totalTokens":1,"totalTokensFresh":true,"estimatedCostUsd":0,"effectiveResponseUsage":"off","effectiveQueueMode":"steer","modelProvider":"openai","model":"gpt-5.4","modelOverrideSource":null,"runtimeSelectionLocked":false,"agentRuntime":{"id":"codex","cloudPlacementSupported":false,"devicePlacementSupported":false,"source":"implicit"},"contextTokens":100,"snapshotAt":1000000}]}',
   ].join("");
 
   expect(JSON.stringify(result)).toBe(expectedSerializedResponse);

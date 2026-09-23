@@ -1,5 +1,4 @@
 // Verifies session thinking levels reach OpenAI and Codex Responses transports.
-import { createServer } from "node:http";
 import { createLlmRuntime } from "@openclaw/ai";
 import { Agent, type StreamFn } from "openclaw/plugin-sdk/agent-core";
 import {
@@ -10,8 +9,15 @@ import {
   type SimpleStreamOptions,
   streamSimple,
 } from "openclaw/plugin-sdk/llm";
+import { withServer } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
+import {
+  resolveSupportedThinkingLevelFromProfile,
+  resolveThinkingProfile,
+} from "../auto-reply/thinking.js";
+import { resolveProviderPolicySurface } from "../plugins/provider-public-artifacts.js";
 import { resolveEmbeddedAgentStream } from "./embedded-agent-runner/stream-resolution.js";
+import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 
 type ResponsesModel = Model<"openai-responses"> | Model<"openai-chatgpt-responses">;
 
@@ -39,6 +45,87 @@ const codexTestToken = [
 ].join(".");
 
 describe("OpenAI thinking contract", () => {
+  it.each([
+    { name: "disabled scalar effort", scalar: { supportsReasoningEffort: false } },
+    { name: "empty scalar efforts", scalar: { supportedReasoningEfforts: [] } },
+  ])("keeps registered binary controls with $name", async ({ scalar }) => {
+    const model: Model<"openai-completions"> = {
+      id: "binary-model",
+      name: "Binary model",
+      provider: "openai",
+      api: "openai-completions",
+      baseUrl: "https://reasoning.example/v1",
+      reasoning: true,
+      input: ["text"],
+      contextWindow: 32000,
+      maxTokens: 1024,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      compat: { thinkingFormat: "qwen-chat-template", ...scalar },
+    };
+    const profile = resolveThinkingProfile({
+      provider: "openai",
+      model: model.id,
+      catalog: [model],
+      agentRuntime: "openclaw",
+      providerPolicySource: openAIThinkingPolicyRegistry(),
+    });
+    const level = resolveSupportedThinkingLevelFromProfile(profile, "high");
+    expect(level).toBe("high");
+    let payload: unknown;
+    const result = await streamSimple(
+      model,
+      { messages: [{ role: "user", content: "Reply briefly.", timestamp: 0 }] },
+      {
+        apiKey: "synthetic-unused-key",
+        reasoning: level === "off" ? "off" : "high",
+        onPayload(value) {
+          payload = value;
+          throw new Error("captured binary payload");
+        },
+      },
+    ).result();
+
+    expect(result.errorMessage).toBe("captured binary payload");
+    expect(payload).toMatchObject({ chat_template_kwargs: { enable_thinking: true } });
+    expect(profile.levels.map(({ id }) => id)).toContain("high");
+  });
+
+  it.each([
+    { agentRuntime: "openclaw", nativeUltra: false },
+    { agentRuntime: "codex", nativeUltra: true },
+  ])("honors Max opt-out with $agentRuntime Ultra provenance", ({ agentRuntime, nativeUltra }) => {
+    const profile = resolveThinkingProfile({
+      provider: "openai",
+      model: "gpt-5.6-sol",
+      agentRuntime,
+      catalog: [
+        {
+          provider: "openai",
+          id: "gpt-5.6-sol",
+          reasoning: true,
+          api: agentRuntime === "codex" ? "openai-chatgpt-responses" : "openai-responses",
+          thinkingLevelMap: { max: null },
+          compat: {
+            supportedReasoningEfforts: [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max",
+              ...(nativeUltra ? ["ultra"] : []),
+            ],
+          },
+        },
+      ],
+      providerPolicySource: openAIThinkingPolicyRegistry(),
+    });
+
+    const levels = profile.levels.map(({ id }) => id);
+    expect(levels).not.toContain("max");
+    expect(levels.includes("ultra")).toBe(nativeUltra);
+    expect(levels).toContain("high");
+  });
+
   it.each(
     (["qwen", "qwen-chat-template"] as const).flatMap((thinkingFormat) =>
       (["managed", "direct"] as const).flatMap((transport) =>
@@ -192,6 +279,14 @@ describe("OpenAI thinking contract", () => {
   );
 });
 
+function openAIThinkingPolicyRegistry() {
+  const policy = resolveProviderPolicySurface("openai")?.resolveThinkingProfile;
+  if (!policy) {
+    throw new Error("OpenAI public thinking policy is unavailable");
+  }
+  return { providers: [{ provider: { id: "openai", resolveThinkingProfile: policy } }] };
+}
+
 async function captureHttpProviderPayload(params: {
   api: "openai-completions" | "openai-responses";
   thinkingFormat?: "qwen" | "qwen-chat-template";
@@ -202,93 +297,83 @@ async function captureHttpProviderPayload(params: {
   mode: "agent" | "standalone";
 }): Promise<Record<string, unknown>> {
   let payload: Record<string, unknown> | undefined;
-  const server = createServer((request, response) => {
-    let body = "";
-    request.setEncoding("utf8");
-    request.on("data", (chunk: string) => {
-      body += chunk;
-    });
-    request.on("end", () => {
-      payload = JSON.parse(body) as Record<string, unknown>;
-      const event =
-        params.api === "openai-completions"
-          ? {
-              id: "chatcmpl_thinking",
-              choices: [
-                { index: 0, delta: { role: "assistant", content: "ok" }, finish_reason: "stop" },
-              ],
-            }
-          : {
-              type: "response.completed",
-              response: { id: "resp_thinking", status: "completed", output: [] },
-            };
-      response.writeHead(200, { "content-type": "text/event-stream" });
-      response.end(`data: ${JSON.stringify(event)}\n\ndata: [DONE]\n\n`);
-    });
-  });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  try {
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("Missing loopback server address");
-    }
-    const model: Model = {
-      id: params.api === "openai-completions" ? "qwen3.6-27b" : "gpt-5.5",
-      name: "Thinking contract model",
-      api: params.api,
-      provider: "local-thinking",
-      baseUrl: `http://127.0.0.1:${address.port}/v1`,
-      reasoning: true,
-      thinkingLevelMap: params.thinkingLevelMap,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 128_000,
-      maxTokens: 4_096,
-      ...(params.thinkingFormat
-        ? { compat: { thinkingFormat: params.thinkingFormat, supportsReasoningEffort: false } }
-        : {}),
-    };
-    const providerStream =
-      params.transport === "direct"
-        ? streamSimple
-        : resolveEmbeddedAgentStream({
-            llmRuntime: createLlmRuntime(),
-            currentStreamFn: undefined,
-            model,
-            sessionId: "thinking-contract",
-            resolvedApiKey: "synthetic-test-key",
-          }).streamFn;
-    const streamFn: StreamFn = (requestModel, context, options) =>
-      providerStream(requestModel, context, {
-        ...options,
-        apiKey: "synthetic-test-key",
-        ...(params.reasoningSummary ? { reasoningSummary: params.reasoningSummary } : {}),
+  await withServer(
+    (request, response) => {
+      let body = "";
+      request.setEncoding("utf8");
+      request.on("data", (chunk: string) => {
+        body += chunk;
       });
-    if (params.mode === "agent") {
-      const agent = new Agent({
-        initialState: { model, thinkingLevel: params.thinkingLevel },
-        streamFn,
+      request.on("end", () => {
+        payload = JSON.parse(body) as Record<string, unknown>;
+        const event =
+          params.api === "openai-completions"
+            ? {
+                id: "chatcmpl_thinking",
+                choices: [
+                  { index: 0, delta: { role: "assistant", content: "ok" }, finish_reason: "stop" },
+                ],
+              }
+            : {
+                type: "response.completed",
+                response: { id: "resp_thinking", status: "completed", output: [] },
+              };
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        response.end(`data: ${JSON.stringify(event)}\n\ndata: [DONE]\n\n`);
       });
-      await agent.prompt("hello");
-      expect(agent.state.errorMessage).toBeUndefined();
-    } else {
-      const stream = await streamFn(model, {
-        messages: [{ role: "user", content: "hello", timestamp: 0 }],
-      });
-      expect((await stream.result()).stopReason).toBe("stop");
-    }
-    if (!payload) {
-      throw new Error("Provider did not receive a request");
-    }
-    return payload;
-  } finally {
-    server.closeAllConnections();
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
+    },
+    async (baseUrl) => {
+      const model: Model = {
+        id: params.api === "openai-completions" ? "qwen3.6-27b" : "gpt-5.5",
+        name: "Thinking contract model",
+        api: params.api,
+        provider: "local-thinking",
+        baseUrl: `${baseUrl}/v1`,
+        reasoning: true,
+        thinkingLevelMap: params.thinkingLevelMap,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128_000,
+        maxTokens: 4_096,
+        ...(params.thinkingFormat
+          ? { compat: { thinkingFormat: params.thinkingFormat, supportsReasoningEffort: false } }
+          : {}),
+      };
+      const providerStream =
+        params.transport === "direct"
+          ? streamSimple
+          : resolveEmbeddedAgentStream({
+              llmRuntime: createLlmRuntime(),
+              currentStreamFn: undefined,
+              model,
+              sessionId: "thinking-contract",
+              resolvedApiKey: "synthetic-test-key",
+            }).streamFn;
+      const streamFn: StreamFn = (requestModel, context, options) =>
+        providerStream(requestModel, context, {
+          ...options,
+          apiKey: "synthetic-test-key",
+          ...(params.reasoningSummary ? { reasoningSummary: params.reasoningSummary } : {}),
+        });
+      if (params.mode === "agent") {
+        const agent = new Agent({
+          initialState: { model, thinkingLevel: params.thinkingLevel },
+          streamFn,
+        });
+        await agent.prompt("hello");
+        expect(agent.state.errorMessage).toBeUndefined();
+      } else {
+        const stream = await streamFn(model, {
+          messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        });
+        expect((await stream.result()).stopReason).toBe("stop");
+      }
+    },
+  );
+  if (!payload) {
+    throw new Error("Provider did not receive a request");
   }
+  return payload;
 }
 
 function createCapturingStreamFn(
@@ -317,14 +402,7 @@ function createAssistantMessage(model: ResponsesModel): AssistantMessage {
     api: model.api,
     provider: model.provider,
     model: model.id,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsageFixture(),
     stopReason: "stop",
     timestamp: 0,
   };

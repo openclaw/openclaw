@@ -4,6 +4,13 @@ import {
   DEFAULT_MEMORY_DEEP_DREAMING_MIN_SCORE,
   DEFAULT_MEMORY_DEEP_DREAMING_MIN_UNIQUE_QUERIES,
 } from "openclaw/plugin-sdk/memory-core-host-status";
+import type {
+  RepairShortTermPromotionArtifactsResult as MemoryRepairShortTermPromotionArtifactsResult,
+  ShortTermAuditIssue as MemoryShortTermAuditIssue,
+  ShortTermAuditSummary as MemoryShortTermAuditSummary,
+  ShortTermDreamingStats,
+  ShortTermDreamingStatsEntry,
+} from "openclaw/plugin-sdk/memory-core-host-status";
 import type { ConceptTagScriptCoverage } from "./concept-vocabulary.js";
 
 export const DEFAULT_PROMOTION_MIN_SCORE = DEFAULT_MEMORY_DEEP_DREAMING_MIN_SCORE;
@@ -33,6 +40,8 @@ export type ShortTermRecallEntry = {
   firstRecalledAt: string;
   lastRecalledAt: string;
   queryHashes: string[];
+  /** Hashes from interactive recalls only. */
+  userQueryHashes?: string[];
   recallDays: string[];
   conceptTags: string[];
   claimHash?: string;
@@ -108,43 +117,13 @@ export type PromotionCandidate = {
   provenance?: MemoryEntryProvenance;
 };
 
-export type ShortTermAuditIssue = {
-  severity: "warn" | "error";
-  code:
-    | "recall-store-unreadable"
-    | "recall-store-empty"
-    | "recall-store-invalid"
-    | "recall-store-dangling"
-    | "recall-store-over-limit"
-    | "recall-lock-stale"
-    | "recall-lock-unreadable";
-  message: string;
-  fixable: boolean;
-};
+export type ShortTermAuditSummary = MemoryShortTermAuditSummary<ConceptTagScriptCoverage>;
+export type ShortTermAuditIssue = MemoryShortTermAuditIssue;
 
-export type ShortTermAuditSummary = {
-  storePath: string;
-  lockPath: string;
-  updatedAt?: string;
-  exists: boolean;
-  entryCount: number;
-  promotedCount: number;
-  spacedEntryCount: number;
-  conceptTaggedEntryCount: number;
-  conceptTagScripts?: ConceptTagScriptCoverage;
-  invalidEntryCount: number;
-  danglingEntryCount?: number;
-  issues: ShortTermAuditIssue[];
-};
-
-export type RepairShortTermPromotionArtifactsResult = {
-  changed: boolean;
-  removedInvalidEntries: number;
-  removedDanglingEntries?: number;
-  removedOverflowEntries: number;
-  rewroteStore: boolean;
-  removedStaleLock: boolean;
-};
+export type RepairShortTermPromotionArtifactsResult = Omit<
+  MemoryRepairShortTermPromotionArtifactsResult,
+  "removedOverflowEntries"
+> & { removedOverflowEntries: number };
 
 export type RankShortTermPromotionOptions = {
   workspaceDir: string;
@@ -174,9 +153,9 @@ export type ApplyShortTermPromotionsOptions = {
   /**
    * Maximum size of MEMORY.md on disk after a promotion write, in
    * characters. When the post-write size would exceed this budget, the
-   * oldest auto-promotion sections are compacted out before write so the
-   * file stays bounded and bootstrap injection keeps reaching new
-   * sessions. Pass `0` to disable compaction. Defaults to
+   * oldest auto-promotion sections may be compacted out, within
+   * `maxPriorEntryLossFraction`, so the file stays bounded and bootstrap
+   * injection keeps reaching new sessions. Pass `0` to disable compaction. Defaults to
    * `DEFAULT_MEMORY_FILE_MAX_CHARS`. See #73691.
    */
   memoryFileMaxChars?: number;
@@ -187,6 +166,7 @@ export type ApplyShortTermPromotionsOptions = {
    * metadata.
    */
   maxPromotedSnippetTokens?: number;
+  /** Maximum fraction of prior entries a promotion write may remove. */
   maxPriorEntryLossFraction?: number;
   consolidation?: {
     subagent?: import("./dreaming-narrative.js").DreamingCompletion;
@@ -198,6 +178,22 @@ export type ApplyShortTermPromotionsOptions = {
   };
 };
 
+/** Fixed diagnostic labels; never include candidate identifiers or threshold values. */
+export type PromotionRejectionCategory =
+  | "origin"
+  | "consolidation origin/session"
+  | "contamination"
+  | "already promoted"
+  | "score threshold"
+  | "signal threshold"
+  | "query threshold"
+  | "age threshold"
+  | "selection limit"
+  | "source rehydration"
+  | "source changed"
+  | "memory budget"
+  | "candidate changed";
+
 export type ApplyShortTermPromotionsResult = {
   memoryPath: string;
   applied: number;
@@ -207,6 +203,7 @@ export type ApplyShortTermPromotionsResult = {
   rejectedCandidates: Array<{
     candidate: PromotionCandidate;
     reason: string;
+    category: PromotionRejectionCategory;
   }>;
   /** Number of older promotion sections compacted out to honor the budget. */
   compactedSections: number;
@@ -214,39 +211,4 @@ export type ApplyShortTermPromotionsResult = {
   compactedDates: string[];
 };
 
-export type ShortTermDreamingStatsEntry = {
-  key: string;
-  path: string;
-  startLine: number;
-  endLine: number;
-  snippet: string;
-  recallCount: number;
-  dailyCount: number;
-  groundedCount: number;
-  totalSignalCount: number;
-  lightHits: number;
-  remHits: number;
-  phaseHitCount: number;
-  promotedAt?: string;
-  lastRecalledAt?: string;
-};
-
-export type ShortTermDreamingStats = {
-  shortTermCount: number;
-  recallSignalCount: number;
-  dailySignalCount: number;
-  groundedSignalCount: number;
-  totalSignalCount: number;
-  phaseSignalCount: number;
-  lightPhaseHitCount: number;
-  remPhaseHitCount: number;
-  promotedTotal: number;
-  promotedToday: number;
-  storePath: string;
-  phaseSignalPath: string;
-  phaseSignalError?: string;
-  lastPromotedAt?: string;
-  shortTermEntries: ShortTermDreamingStatsEntry[];
-  signalEntries: ShortTermDreamingStatsEntry[];
-  promotedEntries: ShortTermDreamingStatsEntry[];
-};
+export type { ShortTermDreamingStats, ShortTermDreamingStatsEntry };

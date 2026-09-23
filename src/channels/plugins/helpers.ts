@@ -6,6 +6,7 @@
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { formatCliCommand } from "../../cli/command-format.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveChannelAccountKey } from "../../routing/account-lookup.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import type { ChannelSecurityDmPolicy } from "./types.core.js";
 import type { ChannelPlugin } from "./types.plugin.js";
@@ -15,8 +16,11 @@ export function resolveChannelDefaultAccountId<ResolvedAccount>(params: {
   cfg: OpenClawConfig;
   accountIds?: string[];
 }): string {
-  const accountIds = params.accountIds ?? params.plugin.config.listAccountIds(params.cfg);
-  return params.plugin.config.defaultAccountId?.(params.cfg) ?? accountIds[0] ?? DEFAULT_ACCOUNT_ID;
+  return (
+    params.plugin.config.defaultAccountId?.(params.cfg) ??
+    (params.accountIds ?? params.plugin.config.listAccountIds(params.cfg))[0] ??
+    DEFAULT_ACCOUNT_ID
+  );
 }
 
 export function formatPairingApproveHint(channelId: string): string {
@@ -53,13 +57,27 @@ export function buildAccountScopedDmSecurityPolicy(params: {
   const channelConfig = (params.cfg.channels as Record<string, unknown> | undefined)?.[
     params.channelKey
   ] as { accounts?: Record<string, Record<string, unknown>> } | undefined;
+  const accountKey = resolveChannelAccountKey(
+    channelConfig?.accounts,
+    resolvedAccountId,
+    params.channelKey,
+    (id) => id,
+  );
+  const defaultAccountKey = resolveChannelAccountKey(
+    channelConfig?.accounts,
+    DEFAULT_ACCOUNT_ID,
+    params.channelKey,
+    (id) => id,
+  );
   const rootBasePath = `channels.${params.channelKey}.`;
-  const accountBasePath = `channels.${params.channelKey}.accounts.${resolvedAccountId}.`;
-  const defaultBasePath = `channels.${params.channelKey}.accounts.${DEFAULT_ACCOUNT_ID}.`;
-  const accountConfig = channelConfig?.accounts?.[resolvedAccountId];
+  const accountBasePath = `channels.${params.channelKey}.accounts.${accountKey ?? resolvedAccountId}.`;
+  const defaultBasePath = `channels.${params.channelKey}.accounts.${defaultAccountKey ?? DEFAULT_ACCOUNT_ID}.`;
+  const accountConfig = accountKey ? channelConfig?.accounts?.[accountKey] : undefined;
   const defaultAccountConfig =
     params.inheritSharedDefaultsFromDefaultAccount && resolvedAccountId !== DEFAULT_ACCOUNT_ID
-      ? channelConfig?.accounts?.[DEFAULT_ACCOUNT_ID]
+      ? defaultAccountKey
+        ? channelConfig?.accounts?.[defaultAccountKey]
+        : undefined
       : undefined;
   const resolveFieldName = (suffix: string | undefined, fallbackField: string): string | null =>
     suffix == null || suffix === ""

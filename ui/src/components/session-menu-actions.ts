@@ -1,16 +1,23 @@
+import { ContextConsumer } from "@lit/context";
 import { html, nothing, type ReactiveControllerHost, type TemplateResult } from "lit";
 import { normalizeSessionIconValue } from "../../../packages/gateway-protocol/src/session-agent-status.js";
+import { applicationContext } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
 import { EDITOR_IDS, type EditorId } from "../lib/editor-links.ts";
+import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { icons } from "./icons.ts";
 import { menuShortcutHint } from "./menu-shortcuts.ts";
-import { renderSessionAppearancePicker } from "./session-icon-picker.ts";
+import { handleAppearanceGridKeydown, renderAppearancePicker } from "./session-icon-picker.ts";
 import {
   renderCompactSessionMenuFrame,
   renderCompactSessionMenuNavigationItem,
   type CompactSessionMenuView,
 } from "./session-menu-compact.ts";
-import { renderSessionEditorOptions, renderSessionGroupOptions } from "./session-menu-options.ts";
+import {
+  renderSessionEditorOptions,
+  renderSessionGroupOptions,
+  sessionArchiveShortcut,
+} from "./session-menu-options.ts";
 import type { SessionCreatedActor, SessionOwnerOption } from "./session-owner-chip.ts";
 import { SessionOwnerMenu } from "./session-owner-menu.ts";
 import "../styles/sidebar-menus.css";
@@ -19,9 +26,12 @@ export type SessionMenuData = {
   label: string;
   sessionId: string | null;
   isChild?: boolean;
+  pinnable?: boolean;
   pinned: boolean;
   unread: boolean;
   archived: boolean;
+  hiddenFromInvolvingMe?: boolean;
+  archiving?: boolean;
   category: string | null;
   icon: string | null;
   color: string | null;
@@ -32,6 +42,7 @@ export type SessionManagementAction =
   | { kind: "open-in"; editor: EditorId; path: string }
   | { kind: "copy-session-id" }
   | { kind: "copy-session-link" }
+  | { kind: "copy-session-preview-link" }
   | { kind: "copy-markdown" }
   | { kind: "open-new-tab" }
   | { kind: "open-new-window" }
@@ -40,6 +51,7 @@ export type SessionManagementAction =
   | { kind: "reset-appearance" }
   | { kind: "toggle-pin" }
   | { kind: "toggle-unread" }
+  | { kind: "toggle-involving-me" }
   | { kind: "rename" }
   | { kind: "set-icon"; icon: string | null }
   | { kind: "set-color"; color: string | null }
@@ -76,6 +88,7 @@ type SessionMenuActionsState = {
   forkDisabled: boolean;
   forkFromLastCompleted: boolean;
   archiveAllowed: boolean;
+  archiveShortcut?: boolean;
   deleteAllowed: boolean;
   groups: readonly string[];
   currentOwner: SessionCreatedActor | null;
@@ -86,10 +99,9 @@ type SessionMenuActionsState = {
   renderOpenInExtra?: (inline: boolean) => TemplateResult;
 };
 
-const SESSION_ICON_GRID_COLUMNS = 6;
-
 /** Canonical single-session actions shared by sidebar and chat-header menus. */
 export class SessionMenuActions {
+  private readonly context;
   private readonly ownerMenu: SessionOwnerMenu;
   private iconPickerMode: "grid" | "custom" = "grid";
   private customIconValue = "";
@@ -100,7 +112,19 @@ export class SessionMenuActions {
     private readonly onAction: (action: SessionManagementAction) => void,
     private readonly onClose: () => void,
   ) {
+    this.context = new ContextConsumer(host, { context: applicationContext, subscribe: true });
+    new SubscriptionsController(host).watch(
+      () => this.context.value?.gateway,
+      (gateway, notify) => gateway.subscribe(notify),
+    );
     this.ownerMenu = new SessionOwnerMenu(host);
+  }
+
+  private get involvementAvailable(): boolean {
+    return (
+      this.context.value?.gateway.snapshot.hello?.policy?.hasMultipleSessionSharingIdentities ===
+      true
+    );
   }
 
   readonly loadOwners = () => {
@@ -126,6 +150,7 @@ export class SessionMenuActions {
       case "open-in":
         return batch || !state.worktreePath;
       case "copy-session-link":
+      case "copy-session-preview-link":
       case "open-new-tab":
       case "open-new-window":
         return batch || !state.navigationAllowed;
@@ -139,7 +164,14 @@ export class SessionMenuActions {
       case "copy-session-id":
         return batch || !session.sessionId;
       case "toggle-pin":
-        return batch || session.isChild === true || session.archived;
+        return batch || session.pinnable === false || session.isChild === true || session.archived;
+      case "toggle-involving-me":
+        return (
+          !this.involvementAvailable ||
+          batch ||
+          session.hiddenFromInvolvingMe === undefined ||
+          !session.sessionId
+        );
       case "rename":
       case "set-icon":
       case "set-color":
@@ -151,7 +183,7 @@ export class SessionMenuActions {
       case "new-group":
         return session.isChild === true;
       case "toggle-archived":
-        return !batch && !session.archived && !state.archiveAllowed;
+        return session.archiving === true || (!batch && !session.archived && !state.archiveAllowed);
       case "delete":
         return !state.deleteAllowed;
       case "toggle-unread":
@@ -184,6 +216,7 @@ export class SessionMenuActions {
     if (
       value === "copy-session-id" ||
       value === "copy-session-link" ||
+      value === "copy-session-preview-link" ||
       value === "copy-markdown" ||
       value === "open-new-tab" ||
       value === "open-new-window" ||
@@ -192,6 +225,7 @@ export class SessionMenuActions {
       value === "reset-appearance" ||
       value === "toggle-pin" ||
       value === "toggle-unread" ||
+      value === "toggle-involving-me" ||
       value === "rename" ||
       value === "fork" ||
       value === "new-group" ||
@@ -247,9 +281,9 @@ export class SessionMenuActions {
     if (event.key === "Tab" && target && appearance && this.host.contains(appearance)) {
       const controls = Array.from(
         appearance.querySelectorAll<HTMLElement>(
-          'button:not(:disabled):not([tabindex="-1"]), input:not(:disabled)',
+          'button:not(:disabled):not([tabindex="-1"]), textarea:not(:disabled)',
         ),
-      );
+      ).filter((control) => !control.closest('[inert], [hidden], [aria-hidden="true"]'));
       const index = controls.indexOf(target);
       const next = index < 0 ? undefined : controls[index + (event.shiftKey ? -1 : 1)];
       if (next) {
@@ -265,24 +299,21 @@ export class SessionMenuActions {
     const input = event
       .composedPath()
       .find(
-        (candidate): candidate is HTMLInputElement =>
-          candidate instanceof HTMLInputElement &&
+        (candidate): candidate is HTMLTextAreaElement =>
+          candidate instanceof HTMLTextAreaElement &&
           candidate.classList.contains("session-menu__icon-custom-input"),
       );
     if (!input) {
       return false;
     }
+    // The shared picker owns Enter, including IME confirmation and disabled input.
+    if (event.key === "Enter") {
+      return true;
+    }
     event.stopPropagation();
     if (event.key === "Escape") {
       event.preventDefault();
       this.showIconGrid();
-    } else if (event.key === "Enter") {
-      const icon = normalizeSessionIconValue(input.value);
-      if (icon) {
-        event.preventDefault();
-        this.customIconValue = input.value;
-        this.applyCustomIcon();
-      }
     }
     return true;
   }
@@ -293,6 +324,8 @@ export class SessionMenuActions {
     icon: TemplateResult,
     options: { shortcut?: string; inline?: boolean; title?: string } = {},
   ) {
+    const state = this.readState();
+    const archiveShortcut = kind === "toggle-archived" ? sessionArchiveShortcut(state) : undefined;
     return html`<wa-dropdown-item
       slot=${options.inline === false ? "submenu" : nothing}
       class=${`session-menu__item${kind === "delete" ? " session-menu__item--destructive" : ""}`}
@@ -302,11 +335,11 @@ export class SessionMenuActions {
       aria-keyshortcuts=${options.shortcut?.toUpperCase() ?? nothing}
       ?data-new-tab-action=${kind === "open-new-tab" || kind === "open-new-window"}
       ?disabled=${this.actionDisabled(kind, this.actionExtraDisabled(kind))}
-      title=${this.readState().actionDisabledReasons[kind] ?? options.title ?? nothing}
+      title=${state.actionDisabledReasons[kind] ?? options.title ?? nothing}
     >
       <span slot="icon" class="session-menu__icon" aria-hidden="true">${icon}</span>
       <span class="session-menu__text">${label}</span>
-      ${options.shortcut ? menuShortcutHint(options.shortcut) : nothing}
+      ${options.shortcut ? menuShortcutHint(options.shortcut, archiveShortcut) : nothing}
     </wa-dropdown-item>`;
   }
 
@@ -347,7 +380,7 @@ export class SessionMenuActions {
     const count = String(selectionCount);
     return html`
       ${
-        batch || session.isChild
+        batch || session.pinnable === false || session.isChild
           ? nothing
           : this.renderItem(
               "toggle-pin",
@@ -378,16 +411,31 @@ export class SessionMenuActions {
         session.unread ? icons.eye : icons.circle,
         { shortcut: "u" },
       )}
+      ${
+        this.involvementAvailable && !batch && session.hiddenFromInvolvingMe !== undefined
+          ? this.renderItem(
+              "toggle-involving-me",
+              t(
+                session.hiddenFromInvolvingMe
+                  ? "sessionsView.showInInvolvingMe"
+                  : "sessionsView.hideFromInvolvingMe",
+              ),
+              session.hiddenFromInvolvingMe ? icons.eye : icons.eyeOff,
+            )
+          : nothing
+      }
       ${this.renderItem(
         "toggle-archived",
         t(
-          batch
-            ? session.archived
-              ? "sessionsView.restoreSessionCount"
-              : "sessionsView.archiveSessionCount"
-            : session.archived
-              ? "sessionsView.restoreSession"
-              : "sessionsView.archiveSession",
+          session.archiving
+            ? "sessionsView.archiving"
+            : batch
+              ? session.archived
+                ? "sessionsView.restoreSessionCount"
+                : "sessionsView.archiveSessionCount"
+              : session.archived
+                ? "sessionsView.restoreSession"
+                : "sessionsView.archiveSession",
           { count },
         ),
         session.archived ? icons.archiveRestore : icons.archive,
@@ -508,9 +556,22 @@ export class SessionMenuActions {
     return html`
       ${
         state.navigationAllowed
-          ? this.renderItem("copy-session-link", t("sessionsView.copySessionLink"), icons.link, {
-              inline,
-            })
+          ? html`
+              ${this.renderItem(
+                "copy-session-link",
+                t("sessionsView.copySessionLink"),
+                icons.link,
+                {
+                  inline,
+                },
+              )}
+              ${this.renderItem(
+                "copy-session-preview-link",
+                t("sessionsView.copySessionPreviewLink"),
+                icons.link,
+                { inline },
+              )}
+            `
           : nothing
       }
       ${this.renderItem("copy-markdown", t("sessionsView.copyMarkdown"), icons.fileText, {
@@ -580,8 +641,9 @@ export class SessionMenuActions {
 
   private renderAppearancePicker(inline = false) {
     const state = this.readState();
-    return renderSessionAppearancePicker({
+    return renderAppearancePicker({
       inline,
+      allowSvg: true,
       mode: this.iconPickerMode,
       currentIcon: state.session.icon,
       currentColor: state.session.color,
@@ -607,7 +669,7 @@ export class SessionMenuActions {
     });
   }
 
-  private readonly selectIcon = (event: MouseEvent, icon: string) => {
+  private readonly selectIcon = (event: MouseEvent, icon: string | null) => {
     event.stopPropagation();
     this.runAction({ kind: "set-icon", icon });
   };
@@ -618,7 +680,7 @@ export class SessionMenuActions {
     this.customIconValue = "";
     this.host.requestUpdate();
     void this.host.updateComplete.then(() => {
-      this.host.querySelector<HTMLInputElement>(".session-menu__icon-custom-input")?.focus();
+      this.host.querySelector<HTMLTextAreaElement>(".session-menu__icon-custom-input")?.focus();
     });
   };
 
@@ -641,7 +703,7 @@ export class SessionMenuActions {
   };
 
   private readonly updateCustomIconValue = (event: InputEvent) => {
-    if (event.currentTarget instanceof HTMLInputElement) {
+    if (event.currentTarget instanceof HTMLTextAreaElement) {
       this.customIconValue = event.currentTarget.value;
       this.host.requestUpdate();
     }
@@ -655,42 +717,7 @@ export class SessionMenuActions {
     }
   };
 
-  private readonly handleIconGridKeydown = (event: KeyboardEvent) => {
-    const choice = event.target;
-    if (!(choice instanceof HTMLButtonElement)) {
-      return;
-    }
-    const offsets: Partial<Record<string, number>> = {
-      ArrowLeft: -1,
-      ArrowRight: 1,
-      ArrowUp: -SESSION_ICON_GRID_COLUMNS,
-      ArrowDown: SESSION_ICON_GRID_COLUMNS,
-    };
-    const offset = offsets[event.key];
-    if (offset === undefined) {
-      return;
-    }
-    const grid = event.currentTarget;
-    if (!(grid instanceof HTMLElement)) {
-      return;
-    }
-    const choices = Array.from(
-      grid.querySelectorAll<HTMLButtonElement>(".session-menu__icon-choice:not(:disabled)"),
-    );
-    const index = choices.indexOf(choice);
-    if (index < 0) {
-      return;
-    }
-    event.preventDefault();
-    event.stopPropagation();
-    const nextIndex = (index + offset + choices.length) % choices.length;
-    choice.tabIndex = -1;
-    const next = choices[nextIndex];
-    if (next) {
-      next.tabIndex = 0;
-      next.focus();
-    }
-  };
+  private readonly handleIconGridKeydown = handleAppearanceGridKeydown;
 
   private readonly focusAppearanceOnOpen = (event: CustomEvent<{ item: HTMLElement }>) => {
     const item = event.currentTarget;

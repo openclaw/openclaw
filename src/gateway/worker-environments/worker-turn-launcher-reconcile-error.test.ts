@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
   WORKER_RPC_SET_VERSION,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
@@ -9,7 +10,11 @@ import { installWorkerPlacementReconcileGuard } from "../server-worker-placement
 import { StaleWorkerBuildError } from "./admission.js";
 import { hashWorkerCredential } from "./credential.js";
 import { createNodeWorkerTunnelManager } from "./node-worker-tunnel.js";
-import { transport, workspaceTransfer } from "./node-worker-tunnel.test-support.js";
+import {
+  transport,
+  withWorkspaceDrain,
+  workspaceTransfer,
+} from "./node-worker-tunnel.test-support.js";
 import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
 import { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
@@ -35,19 +40,23 @@ describe("worker turn recovery after environment reconciliation errors", () => {
   afterEach(cleanupWorkerTurnLauncherTest);
 
   it("settles a stale-build turn when a lost shared node rejects its stop acknowledgement", async () => {
-    const store = createWorkerEnvironmentStore({ database: openOpenClawStateDatabase() });
+    const store = await createWorkerEnvironmentStore({ database: openOpenClawStateDatabase() });
     let installation = {
       ...BUNDLE_ARTIFACT,
-      protocolFeatures: [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
+      protocolFeatures: [
+        WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+        WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
+      ],
     };
     const nodeTransport = transport();
     let rejectStop = true;
-    const stopRequests = vi.spyOn(nodeTransport, "invoke").mockImplementation(async (request) => {
+    const stopRequests = vi.fn<typeof nodeTransport.invoke>(async (request) => {
       expect(request.command).toBe(NODE_WORKER_ENVIRONMENT_STOP_COMMAND);
       return rejectStop
         ? { ok: false, error: { code: "UNAVAILABLE" } }
         : { ok: true, payloadJSON: "null" };
     });
+    vi.spyOn(nodeTransport, "invoke").mockImplementation(withWorkspaceDrain(stopRequests));
     const transfer = workspaceTransfer();
     transfer.closeAll = vi.fn(async () => {});
     const nodeTunnelManager = createNodeWorkerTunnelManager({
@@ -81,16 +90,17 @@ describe("worker turn recovery after environment reconciliation errors", () => {
         runnerAvailability: { read: () => undefined, version: () => 0 },
         workspaceOperations,
         runLocalBarrier: async ({ startDispatch }) => startDispatch(),
-        runRecoveryBarrier: async ({ run }) => await run(root),
+        runRecoveryBarrier: async ({ run }) => await run({ kind: "local", path: root }),
         runActivationBarrier: async ({ activate }) => activate(),
         runMoveBarrier: async ({ begin }) => begin(),
         resolveMoveDestination: async () => undefined,
         runReclaimPreparation: async ({ run, authorize }) => await run(authorize),
-        runReclaimBarrier: async ({ begin, reclaim }) => await reclaim(root, begin()),
+        runReclaimBarrier: async ({ begin, reclaim }) =>
+          await reclaim({ kind: "local", path: root }, begin()),
         runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),
-        resolveWorkspacePath: async () => root,
+        resolveWorkspace: async () => ({ kind: "local" as const, path: root }),
         reportWorkspaceResultConflict: async () => {},
-        resolveWorkspaceResultConflict: async () => undefined,
+        resolveWorkspaceResultConflict: async () => ({ kind: "absent" }),
       }),
       (_request, run) => run(),
     );
@@ -101,15 +111,19 @@ describe("worker turn recovery after environment reconciliation errors", () => {
       isStopping: () => false,
     });
     try {
-      store.createIntent({
+      await store.createIntent({
         environmentId: ENVIRONMENT_ID,
         providerId: provider.id,
         profileId: "development",
         profileSnapshot: { executionMode: "worker-turn", settings: { device: "node-1" } },
         provisionOperationId: "shared-node-recovery",
       });
-      store.transition({ environmentId: ENVIRONMENT_ID, from: "requested", to: "provisioning" });
-      const ready = store.transition({
+      await store.transition({
+        environmentId: ENVIRONMENT_ID,
+        from: "requested",
+        to: "provisioning",
+      });
+      const ready = await store.transition({
         environmentId: ENVIRONMENT_ID,
         from: "provisioning",
         to: "ready",

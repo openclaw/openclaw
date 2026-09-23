@@ -3,10 +3,12 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 // Control UI chat module implements message extract behavior.
 import { stripInternalRuntimeContext } from "../../../../src/agents/internal-runtime-context.js";
 import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
+import { projectChatWorkContextForDisplay } from "../../../../src/chat/work-context.js";
 import { readPersistedMediaFacts } from "../../../../src/media/media-facts.js";
 import { stripEnvelope } from "../../../../src/shared/chat-envelope.js";
 import { extractAssistantPhaseText } from "../../../../src/shared/chat-message-content.js";
 import { stripThinkingTags } from "../strip-thinking-tags.ts";
+import { projectImportedMessageForDisplay } from "./imported-message-display.ts";
 
 const textCache = new WeakMap<object, string | null>();
 const thinkingCache = new WeakMap<object, string | null>();
@@ -36,26 +38,35 @@ export function extractText(message: unknown): string | null {
   if (message == null) {
     return null;
   }
-  const m = message as Record<string, unknown>;
+  const projected = projectChatWorkContextForDisplay(projectImportedMessageForDisplay(message));
+  const m = projected as Record<string, unknown>;
   const role = typeof m.role === "string" ? m.role : "";
-  const raw = role === "assistant" ? extractAssistantPhaseText(message) : extractRawText(message);
+  const raw =
+    role === "assistant" ? extractAssistantPhaseText(projected) : extractRawText(projected);
   if (!raw) {
     return null;
   }
   return processMessageText(raw, role);
 }
 
-export function extractTextCached(message: unknown): string | null {
+function readCachedMessageExtraction(
+  message: unknown,
+  cache: WeakMap<object, string | null>,
+  extract: (message: unknown) => string | null,
+): string | null {
   if (!message || typeof message !== "object") {
-    return extractText(message);
+    return extract(message);
   }
-  const obj = message;
-  if (textCache.has(obj)) {
-    return textCache.get(obj) ?? null;
+  if (cache.has(message)) {
+    return cache.get(message) ?? null;
   }
-  const value = extractText(message);
-  textCache.set(obj, value);
+  const value = extract(message);
+  cache.set(message, value);
   return value;
+}
+
+export function extractTextCached(message: unknown): string | null {
+  return readCachedMessageExtraction(message, textCache, extractText);
 }
 
 function extractThinking(message: unknown): string | null {
@@ -80,16 +91,7 @@ function extractThinking(message: unknown): string | null {
 }
 
 export function extractThinkingCached(message: unknown): string | null {
-  if (!message || typeof message !== "object") {
-    return extractThinking(message);
-  }
-  const obj = message;
-  if (thinkingCache.has(obj)) {
-    return thinkingCache.get(obj) ?? null;
-  }
-  const value = extractThinking(message);
-  thinkingCache.set(obj, value);
-  return value;
+  return readCachedMessageExtraction(message, thinkingCache, extractThinking);
 }
 
 function extractRawText(message: unknown): string | null {
@@ -127,6 +129,7 @@ export function readTranscriptMediaEntries(message: unknown): Array<{
   path: string;
   mediaType: string | undefined;
   fileName: string | undefined;
+  origin?: "paste" | "file";
   sizeBytes?: number;
   durationMs?: number;
   width?: number;
@@ -144,6 +147,7 @@ export function readTranscriptMediaEntries(message: unknown): Array<{
             path,
             mediaType: fact.contentType ?? fact.kind,
             fileName: fact.fileName,
+            ...(fact.origin ? { origin: fact.origin } : {}),
             ...(fact.sizeBytes !== undefined ? { sizeBytes: fact.sizeBytes } : {}),
             ...(fact.durationMs !== undefined ? { durationMs: fact.durationMs } : {}),
             ...(fact.width !== undefined ? { width: fact.width } : {}),
@@ -152,19 +156,6 @@ export function readTranscriptMediaEntries(message: unknown): Array<{
         ]
       : [];
   });
-}
-
-export function formatReasoningMarkdown(text: string): string {
-  const trimmed = text.trim();
-  if (!trimmed) {
-    return "";
-  }
-  const lines = trimmed
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => `_${line}_`);
-  return lines.length ? ["_Reasoning:_", ...lines].join("\n") : "";
 }
 
 function isTextOnlyContent(content: unknown): boolean {

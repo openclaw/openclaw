@@ -7,7 +7,11 @@ import {
 import { findChatChannelMeta } from "../channels/chat-meta.js";
 import { normalizeChatChannelId } from "../channels/ids.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
+import { normalizePluginsConfig } from "../plugins/config-state.js";
+import { findUninspectedPluginDiagnostic } from "../plugins/discovery-availability.js";
+import { hasExplicitManifestOwnerTrust } from "../plugins/manifest-owner-policy.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.types.js";
+import { isNativeSessionCatalogOptOutOnly } from "../plugins/native-session-catalog-config.js";
 import { isOfficialExternalPluginId } from "../plugins/official-external-plugin-catalog.js";
 import { shouldSkipPreferredPluginAutoEnable } from "./plugin-auto-enable.prefer-over.js";
 import type {
@@ -31,6 +35,8 @@ export function resolvePluginAutoEnableCandidateReason(
       return `${candidate.providerId} speech provider selected`;
     case "worker-provider-selected":
       return `${candidate.providerId} worker provider selected`;
+    case "decision-provider-selected":
+      return `${candidate.providerId} decision provider selected`;
     case "agent-harness-runtime-configured":
       return `${candidate.runtime} agent runtime configured`;
     case "web-search-provider-selected":
@@ -90,12 +96,6 @@ function disableImplicitPreferredOverPlugin(params: {
   // Otherwise registry alias normalization can fold the stale channel id back
   // onto the external owner and override its explicit enabled entry.
   if (!params.manifestRegistry.plugins.some((plugin) => plugin.id === params.pluginId)) {
-    return params.config;
-  }
-  if (
-    !normalizeChatChannelId(params.pluginId) &&
-    !isKnownPluginId(params.pluginId, params.manifestRegistry)
-  ) {
     return params.config;
   }
   const existingEntry = params.config.plugins?.entries?.[params.pluginId];
@@ -231,6 +231,7 @@ function materializeConfiguredPluginEntryAllowlist(params: {
   )) {
     const entry = entries[pluginId];
     if (
+      isNativeSessionCatalogOptOutOnly(pluginId, entry) ||
       !hasMaterialPluginEntryConfig(entry) ||
       isPluginDenied(next, pluginId) ||
       isPluginExplicitlyDisabled(next, pluginId) ||
@@ -282,13 +283,34 @@ export function materializePluginAutoEnableCandidatesInternal(params: {
   const changes: string[] = [];
   const autoEnabledReasons = new Map<string, string[]>();
 
-  if (next.plugins?.enabled === false) {
+  if (
+    next.plugins?.enabled === false ||
+    findUninspectedPluginDiagnostic(params.manifestRegistry.diagnostics)
+  ) {
     return { config: next, changes, autoEnabledReasons: {} };
   }
 
   const preferOverCache = new Map<string, string[]>();
+  const workspacePluginIds = new Set(
+    params.manifestRegistry.plugins
+      .filter((plugin) => plugin.origin === "workspace")
+      .map((plugin) => plugin.id),
+  );
+  const normalizedConfig = normalizePluginsConfig(next.plugins);
+  const preferenceCandidates = params.candidates.filter((entry) => {
+    if (!workspacePluginIds.has(entry.pluginId)) {
+      return true;
+    }
+    return hasExplicitManifestOwnerTrust({
+      plugin: { id: entry.pluginId },
+      normalizedConfig,
+    });
+  });
+  const candidates = preferenceCandidates.filter(
+    (entry) => !workspacePluginIds.has(entry.pluginId),
+  );
 
-  for (const entry of params.candidates) {
+  for (const entry of candidates) {
     const builtInChannelId = resolveAutoEnableChannelId({
       entry,
       manifestRegistry: params.manifestRegistry,
@@ -300,7 +322,7 @@ export function materializePluginAutoEnableCandidatesInternal(params: {
       shouldSkipPreferredPluginAutoEnable({
         config: next,
         entry,
-        configured: params.candidates,
+        configured: preferenceCandidates,
         env: params.env,
         registry: params.manifestRegistry,
         isPluginDenied,

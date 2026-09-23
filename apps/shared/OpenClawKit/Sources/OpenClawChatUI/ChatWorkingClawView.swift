@@ -369,10 +369,12 @@ struct ChatWorkingClawView: View {
 
     let stance: ChatWorkingClawStance
     var parked = false
+    var tint: Color?
 
-    init(seed: String, parked: Bool = false) {
+    init(seed: String, parked: Bool = false, tint: Color? = nil) {
         self.stance = ChatWorkingClawStance.seeded(seed, salt: ChatWorkingClawSeed.salt)
         self.parked = parked
+        self.tint = tint
     }
 
     var body: some View {
@@ -411,9 +413,9 @@ struct ChatWorkingClawView: View {
         ZStack {
             ZStack {
                 ChatWorkingClawBodyShape()
-                    .fill(OpenClawChatTheme.accent)
+                    .fill(self.tint ?? OpenClawChatTheme.accent)
                 ChatWorkingClawJawShape()
-                    .fill(OpenClawChatTheme.accent)
+                    .fill(self.tint ?? OpenClawChatTheme.accent)
                     .rotationEffect(
                         .degrees(pose.jawRotation),
                         anchor: UnitPoint(x: 8.6 / 24, y: 11 / 24))
@@ -431,7 +433,7 @@ struct ChatWorkingClawView: View {
             if pose.powOpacity > 0 {
                 Text("✦")
                     .font(OpenClawChatTypography.caption)
-                    .foregroundStyle(OpenClawChatTheme.accent)
+                    .foregroundStyle(self.tint ?? OpenClawChatTheme.accent)
                     .scaleEffect(pose.powScale)
                     .opacity(pose.powOpacity)
                     .offset(x: 14, y: -7)

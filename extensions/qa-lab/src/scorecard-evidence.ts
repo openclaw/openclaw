@@ -1,14 +1,16 @@
 // QA Lab plugin module embeds profile scorecard context into QA evidence.
 import fs from "node:fs/promises";
 import { normalizeSortedUniqueTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveQaEvidenceContainment } from "./evidence-summary-schema.js";
 import {
   attachQaEvidenceScorecard,
+  getEffectiveQaEvidenceEntries,
   validateQaEvidenceSummaryJson,
   type QaEvidenceScorecardJson,
   type QaEvidenceSummaryEntry,
   type QaEvidenceSummaryJson,
 } from "./evidence-summary.js";
-import type { QaProfileEvidencePlan } from "./profile-evidence-plan.js";
+import { qaProfileEvidencePlan, type QaProfileEvidencePlan } from "./profile-evidence-plan.js";
 import type {
   QaScorecardCategoryCoverageReport,
   QaScorecardEvidenceMode,
@@ -82,13 +84,35 @@ function featureCounts(
 
 function buildQaProfileScorecardEvidence(params: {
   evidence: QaEvidenceSummaryJson;
+  profilePlan: QaProfileEvidencePlan;
   filters: QaProfileScorecardFilters;
   categories: readonly QaScorecardCategoryCoverageReport[];
 }): QaEvidenceScorecardJson {
+  const containment =
+    params.evidence.schemaVersion === 3
+      ? resolveQaEvidenceContainment(params.evidence.occurrences, params.evidence.entries)
+      : undefined;
+  // Coverage is a qualifying projection; raw rows keep their captured roles and
+  // object identity for history, binding validation and gallery selection.
+  const entries = getEffectiveQaEvidenceEntries(params.evidence).map((entry) =>
+    containment && "binding" in entry
+      ? Object.assign({}, entry, {
+          coverage: containment.projectCoverage(entry.binding.occurrenceId, entry.coverage),
+        })
+      : entry,
+  );
   // Only passing primary evidence fulfills coverage; secondary evidence remains diagnostic.
-  const passingEntries = params.evidence.entries.filter((entry) => entry.result.status === "pass");
+  const passingEntries = entries.filter((entry) => entry.result.status === "pass");
   const primaryCoverageIds = coverageIdsForRole(passingEntries, "primary");
-  const secondaryCoverageIds = coverageIdsForRole(params.evidence.entries, "secondary");
+  for (const requirement of qaProfileEvidencePlan.evaluateProof(
+    params.profilePlan,
+    params.evidence,
+  )) {
+    if (requirement.obligation === "required" && !requirement.qualified) {
+      primaryCoverageIds.delete(requirement.coverageId);
+    }
+  }
+  const secondaryCoverageIds = coverageIdsForRole(entries, "secondary");
   const categoryInputs = params.categories.map((category) => ({
     category,
     features: category.features,
@@ -148,7 +172,7 @@ function buildQaProfileScorecardEvidence(params: {
       category: nullableFilter(params.filters.category),
     },
     run: {
-      evidenceEntryCount: params.evidence.entries.length,
+      evidenceEntryCount: entries.length,
     },
     categories: {
       total: categoryReports.length,
@@ -181,6 +205,7 @@ export async function attachQaProfileScorecardEvidenceToFile(params: {
   );
   const scorecard = buildQaProfileScorecardEvidence({
     evidence,
+    profilePlan: params.profilePlan,
     filters: params.filters,
     categories: params.categories,
   });

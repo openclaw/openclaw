@@ -12,6 +12,10 @@ import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { parseCronRunScopeSuffix } from "../../sessions/session-key-utils.js";
+import {
+  runInDetachedAsyncContext,
+  runOutsideAsyncWorkScope,
+} from "../../shared/async-work-scope.js";
 import { removeCronRunContinuationSessionIfIdle } from "../../tasks/cron-run-continuation-cleanup.js";
 import {
   completeTaskRunByRunId,
@@ -375,9 +379,13 @@ export function createDefaultMediaGenerateBackgroundScheduler(params: {
   onCrash: (message: string, meta?: Record<string, unknown>) => void;
 }): MediaGenerateBackgroundScheduler {
   return (work) => {
-    queueMicrotask(() => {
-      void work().catch((error: unknown) => {
-        params.onCrash(`Detached ${params.toolName} job crashed`, { error });
+    runInDetachedAsyncContext(() => {
+      runOutsideAsyncWorkScope(() => {
+        queueMicrotask(() => {
+          void work().catch((error: unknown) => {
+            params.onCrash(`Detached ${params.toolName} job crashed`, { error });
+          });
+        });
       });
     });
   };

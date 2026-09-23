@@ -2,14 +2,19 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
+  appendTranscriptEvent,
   appendTranscriptMessage,
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as serverConstants from "../../gateway/server-constants.js";
-import { readChatHistoryMessageId } from "../../gateway/server-methods/chat-history-pages.js";
+import { readChatHistoryMessageId } from "../../gateway/session-history-tail.js";
+import { createSessionRowProjection } from "../../gateway/session-row-projection.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { createEmbeddedCallGateway } from "./embedded-gateway-stub.js";
+import {
+  bindEmbeddedSessionRowProjection,
+  createEmbeddedCallGateway,
+} from "./embedded-gateway-stub.js";
 import { createSessionsHistoryTool } from "./sessions-history-tool.js";
 import { createSessionsSearchTool } from "./sessions-search-tool.js";
 
@@ -44,6 +49,8 @@ async function history(params: Record<string, unknown>) {
 
 describe("embedded session history anchors", () => {
   let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
+  let projection: Awaited<ReturnType<typeof createSessionRowProjection>>;
+  let unbindProjection: () => void;
 
   beforeEach(async () => {
     state = await createOpenClawTestState({ prefix: "embedded-anchor-test-" });
@@ -59,9 +66,13 @@ describe("embedded session history anchors", () => {
         },
       });
     }
+    projection = await createSessionRowProjection({ cfg: config });
+    unbindProjection = bindEmbeddedSessionRowProjection(Promise.resolve(projection));
   });
 
   afterEach(async () => {
+    unbindProjection?.();
+    projection?.dispose();
     vi.restoreAllMocks();
     await state.cleanup();
   });
@@ -94,6 +105,44 @@ describe("embedded session history anchors", () => {
     expect(await history({ ...selector, messageId: "missing", limit: 1 })).toMatchObject({
       messages: [],
     });
+  });
+
+  it("reopens a search hit after a reset of the same physical session", async () => {
+    await appendTranscriptMessage(scope, {
+      eventId: "old-tool",
+      message: { role: "toolResult", content: "synthetic scan result" },
+    });
+    await appendTranscriptEvent(scope, {
+      type: "reset",
+      id: "reset",
+      parentId: "old-tool",
+      timestamp: "2026-09-07T16:00:00.000Z",
+      reason: "new",
+    });
+    await appendTranscriptMessage(scope, {
+      eventId: "fresh",
+      message: { role: "user", content: "fresh after reset", timestamp: 1_700_000_000_400 },
+    });
+
+    const current = await history({ sessionKey: scope.sessionKey, limit: 10 });
+    expect(current.messages.map(readChatHistoryMessageId)).toEqual(["reset", "fresh"]);
+    const search = await toolsFor().search.execute("find", { query: "quasar" });
+    expect((search.details as { results: Array<{ messageId?: string }> }).results).toEqual([
+      expect.objectContaining(selector),
+    ]);
+    const recalled = await history({
+      ...selector,
+      includeTools: true,
+      limit: 10,
+    });
+    expect(recalled.messages.map(readChatHistoryMessageId)).toEqual([
+      "old",
+      "middle",
+      "newest",
+      "old-tool",
+      "reset",
+    ]);
+    expect(recalled.messages.map(readChatHistoryMessageId)).not.toContain("fresh");
   });
 
   it.each(["missing", "wrong-key", "wrong-agent"])(

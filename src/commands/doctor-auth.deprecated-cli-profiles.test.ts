@@ -1,6 +1,10 @@
 // Doctor deprecated CLI profile tests cover legacy auth profile migration and warnings.
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createApiKeyCredential,
+  createAuthProfileStoreFixture,
+} from "../agents/auth-profiles/credential-fixtures.test-support.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ProviderPlugin } from "../plugins/types.js";
@@ -51,7 +55,7 @@ vi.mock("./doctor-auth-legacy-paths.js", () => ({
   listAuthProfileRepairCandidates: () => candidateMocks.candidates,
 }));
 
-vi.mock("../agents/auth-profiles/store.js", () => ({
+vi.mock("../agents/auth-profiles/store-runtime.js", () => ({
   ensureAuthProfileStoreWithoutExternalProfiles: () => authProfileStoreMock.store,
 }));
 
@@ -236,11 +240,7 @@ describe("maybeRepairLegacyOAuthProfileIds", () => {
           refresh: "copied-native-refresh",
           expires: Date.now() + 60_000,
         },
-        "anthropic:managed": {
-          type: "api_key",
-          provider: "anthropic",
-          key: "managed-key",
-        },
+        "anthropic:managed": createApiKeyCredential("anthropic", "managed-key"),
       },
     };
     resolvePluginProvidersMock.mockReturnValue([
@@ -434,19 +434,16 @@ describe("maybeRepairLegacyOAuthProfileIds", () => {
   });
 
   it("strips provider-controlled terminal escapes from repair prompts", async () => {
-    authProfileStoreMock.store = {
-      version: 1,
-      profiles: {
-        "anthropic:user@example.com": {
-          type: "oauth",
-          provider: "anthropic",
-          access: "token-a",
-          refresh: "token-r",
-          expires: Date.now() + 60_000,
-          email: "user@example.com",
-        },
+    authProfileStoreMock.store = createAuthProfileStoreFixture({
+      "anthropic:user@example.com": {
+        type: "oauth",
+        provider: "anthropic",
+        access: "token-a",
+        refresh: "token-r",
+        expires: Date.now() + 60_000,
+        email: "user@example.com",
       },
-    };
+    });
 
     resolvePluginProvidersMock.mockReturnValue([
       {

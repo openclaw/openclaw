@@ -2,11 +2,14 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { activeSessions } from "../agents/tools/transcripts-tool-runtime.js";
 import { createTranscriptsTool } from "../agents/tools/transcripts-tool.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
+import { clearTranscriptCapturesForTest } from "../transcripts/capture.test-support.js";
 import { TranscriptsStore } from "../transcripts/store.js";
 import { MeetingTranscriptDeliveryError } from "./session-transcript-store.js";
 import type { MeetingSessionRecord } from "./session-types.js";
@@ -16,9 +19,10 @@ import { createMeetingDurableTranscriptBridge } from "./transcripts-bridge.runti
 const tempDirs: string[] = [];
 
 afterEach(async () => {
+  await clearTranscriptCapturesForTest();
   vi.useRealTimers();
   vi.restoreAllMocks();
-  activeSessions.clear();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { force: true, recursive: true })));
 });
@@ -494,6 +498,7 @@ describe("MeetingDurableTranscriptBridge", () => {
     await expect(store.readSession(current.id)).resolves.toMatchObject({
       metadata: {
         finalCaptureError: "",
+        sessionIdOrigin: "supplied",
         finalCaptureFailedAt: expect.any(String),
       },
       stoppedAt: expect.any(String),

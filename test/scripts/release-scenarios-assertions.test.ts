@@ -90,27 +90,41 @@ describe("release scenario assertions", () => {
     }
   });
 
-  it("bounds release output text assertion diagnostics", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-scenarios-"));
-    const outputPath = path.join(root, "output.log");
+  it.each(["large output", "missing path", "empty file", "directory"])(
+    "bounds release output text assertion diagnostics for %s",
+    (kind) => {
+      const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-scenarios-"));
+      const outputPath = path.join(root, "output.log");
 
-    try {
-      writeFileSync(
-        outputPath,
-        `DO_NOT_DUMP_OLD_OUTPUT${"x".repeat(70 * 1024)}\nrecent output tail\n`,
-        "utf8",
-      );
+      try {
+        if (kind === "large output") {
+          writeFileSync(
+            outputPath,
+            `DO_NOT_DUMP_OLD_OUTPUT${"x".repeat(70 * 1024)}\nrecent output tail\n`,
+            "utf8",
+          );
+        } else if (kind === "empty file") {
+          writeFileSync(outputPath, "", "utf8");
+        } else if (kind === "directory") {
+          mkdirSync(outputPath);
+        }
 
-      const result = runAssertion(["assert-file-contains", outputPath, "missing"]);
+        const result = runAssertion(["assert-file-contains", outputPath, "missing"]);
+        const message = `${outputPath} did not contain missing. Output tail: `;
 
-      expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain("Output tail:");
-      expect(result.stderr).toContain("recent output tail");
-      expect(result.stderr).not.toContain("DO_NOT_DUMP_OLD_OUTPUT");
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
-  });
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain(message);
+        if (kind === "large output") {
+          expect(result.stderr).toContain("recent output tail");
+          expect(result.stderr).not.toContain("DO_NOT_DUMP_OLD_OUTPUT");
+        } else {
+          expect(result.stderr).toContain(`${message}\n`);
+        }
+      } finally {
+        rmSync(root, { force: true, recursive: true });
+      }
+    },
+  );
 
   it("reports bounded onboarding hook diagnostics without leaking unrelated config", () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-scenarios-"));
@@ -149,6 +163,22 @@ describe("release scenario assertions", () => {
       );
       expect(result.stderr).not.toContain(secretSentinel);
       expect(result.stderr.length).toBeLessThan(4 * 1024);
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("permits a selected interactive-onboarding target without a default session-memory hook", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-scenarios-"));
+    const configPath = path.join(root, "openclaw.json");
+    try {
+      writeJson(configPath, { wizard: { lastRunCommand: "onboard" } });
+      const result = runAssertion(["assert-session-memory-hook-enabled"], {
+        OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_FROZEN_TARGET_ONBOARD_SESSION_MEMORY_HOOK_MODE: "interactive",
+      });
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain("unavailable in selected interactive onboarding");
     } finally {
       rmSync(root, { force: true, recursive: true });
     }

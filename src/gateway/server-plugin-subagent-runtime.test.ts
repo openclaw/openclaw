@@ -14,7 +14,7 @@ import {
 import { markTrustedOtelDiagnosticListener } from "../infra/diagnostic-otel-listener-provenance.js";
 import {
   withPluginRuntimeGatewayRequestScope,
-  withPluginRuntimePluginIdScope,
+  withPluginRuntimePluginScope,
 } from "../plugins/runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import {
@@ -53,7 +53,7 @@ function createRuntime() {
 }
 
 function complete(runtime: PluginRuntime["subagent"], params: Partial<CompleteParams> = {}) {
-  return withPluginRuntimePluginIdScope(PLUGIN_ID, () =>
+  return withPluginRuntimePluginScope({ pluginId: PLUGIN_ID }, () =>
     runtime.complete({ agentId: "research", message: "Review these notes", ...params }),
   );
 }
@@ -235,6 +235,12 @@ describe("plugin background completions", () => {
       name: "model outside allowlist",
       subagent: { allowModelOverride: true, allowedModels: ["test-provider/other"] },
       model: "test-provider/override",
+      allowed: false,
+    },
+    {
+      name: "auth profile outside allowlist",
+      subagent: { allowModelOverride: true, allowedModels: ["test-provider/override"] },
+      model: "test-provider/override@other-profile",
       allowed: false,
     },
     {
@@ -493,7 +499,10 @@ describe("plugin background completions", () => {
       await started.promise;
       const second = complete(runtime);
       await vi.waitFor(() => expect(getBackgroundWorkSnapshot().queuedCount).toBe(1));
-      const rejected = expect(first).rejects.toThrow(/caller cancelled|timeout/u);
+      const rejected =
+        reason === "timeout"
+          ? expect(first).rejects.toMatchObject({ name: "TimeoutError" })
+          : expect(first).rejects.toThrow("caller cancelled");
       if (reason === "caller cancellation") {
         controller.abort(new Error("caller cancelled"));
       }

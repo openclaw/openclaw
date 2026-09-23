@@ -3,11 +3,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { createSolidPngBuffer } from "../helpers/image-fixtures.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const execFileAsync = promisify(execFile);
 const { createTempDir } = createScriptTestHarness();
+const testNodeExecPath = resolveTestNodeExecPath();
 const skillRoot = path.resolve("skills/meme-maker");
 const scriptPath = path.join(skillRoot, "scripts/meme.mjs");
 const template = JSON.parse(
@@ -44,7 +46,7 @@ globalThis.fetch = () => { throw new Error("Unexpected network access"); };
   }
   const out = path.join(root, `meme.${format}`);
   const result = execFileAsync(
-    process.execPath,
+    testNodeExecPath,
     ["--import", hook, script, "render", template.id, "--text", "Fish & chips", "--out", out],
     { env: { ...process.env, XDG_CACHE_HOME: cache }, timeout: 30_000 },
   );

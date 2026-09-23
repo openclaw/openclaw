@@ -3,8 +3,9 @@
  */
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
+import { asOptionalRecord, expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, test, vi } from "vitest";
+import { readGatewayMemory } from "../../scripts/lib/gateway-bench-probes.js";
 import { writeConfigFile } from "../config/config.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { emitHeartbeatEvent } from "../infra/heartbeat-events.js";
@@ -57,22 +58,49 @@ describe("gateway server health/presence", () => {
       const { ws } = await harness.openClient();
 
       const healthP = onceMessage(ws, (o) => o.type === "res" && o.id === "health1");
-      const statusP = onceMessage(ws, (o) => o.type === "res" && o.id === "status1");
+      let statusPayload: Record<string, unknown> | undefined;
+      const statusP = readGatewayMemory(
+        async <T>(method: string, params: unknown, timeoutMs?: number) => {
+          const response = await rpcReq<T & Record<string, unknown>>(ws, method, params, timeoutMs);
+          expect(response.ok).toBe(true);
+          const payload = expectDefined(response.payload, "status response payload");
+          statusPayload = payload;
+          return payload;
+        },
+        performance.now(),
+      );
       const presenceP = onceMessage(ws, (o) => o.type === "res" && o.id === "presence1");
 
       const sendReq = (id: string, method: string) =>
         ws.send(JSON.stringify({ type: "req", id, method }));
       sendReq("health1", "health");
-      sendReq("status1", "status");
       sendReq("presence1", "system-presence");
 
       const health = await healthP;
-      const status = await statusP;
+      const sample = await statusP;
       const presence = await presenceP;
       expect(health.ok).toBe(true);
-      expect(status.ok).toBe(true);
       expect(presence.ok).toBe(true);
       expect(Array.isArray(presence.payload)).toBe(true);
+      const memory = expectDefined(
+        asOptionalRecord(statusPayload?.processMemory),
+        "status process memory",
+      );
+      for (const [field, megabytes] of Object.entries({
+        rssBytes: sample.rssMb,
+        heapUsedBytes: sample.heapUsedMb,
+        heapTotalBytes: sample.heapTotalMb,
+        externalBytes: sample.externalMb,
+        arrayBuffersBytes: sample.arrayBuffersMb,
+      })) {
+        const bytes = memory[field];
+        if (typeof bytes !== "number") {
+          throw new Error(`Expected numeric process memory field: ${field}`);
+        }
+        expect(Number.isFinite(bytes)).toBe(true);
+        expect(bytes).toBeGreaterThanOrEqual(0);
+        expect(megabytes).toBe(bytes / 1048576);
+      }
 
       ws.close();
     },
@@ -317,6 +345,7 @@ describe("gateway server health/presence", () => {
       scopes,
       client: {
         id: GATEWAY_CLIENT_NAMES.FINGERPRINT,
+        displayName: "Custom client display name",
         version: "9.9.9",
         platform: "test",
         deviceFamily: "iPad",
@@ -348,9 +377,10 @@ describe("gateway server health/presence", () => {
         ? ((presencePayload as { presence: Array<Record<string, unknown>> }).presence ?? [])
         : [];
     const clientEntry = entries.find(
-      (e) => e.host === GATEWAY_CLIENT_NAMES.FINGERPRINT && e.version === "9.9.9",
+      (e) => e.host === "Custom client display name" && e.version === "9.9.9",
     );
-    expect(clientEntry?.host).toBe(GATEWAY_CLIENT_NAMES.FINGERPRINT);
+    expect(clientEntry?.host).toBe("Custom client display name");
+    expect(clientEntry?.clientId).toBe(GATEWAY_CLIENT_NAMES.FINGERPRINT);
     expect(clientEntry?.version).toBe("9.9.9");
     expect(clientEntry?.mode).toBe("ui");
     expect(clientEntry?.deviceFamily).toBe("iPad");

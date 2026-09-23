@@ -27,13 +27,13 @@ describe("audit-seams cron seam classification", () => {
 
   it("detects scheduler-state seams in cron service orchestration", () => {
     const source = `
-      import { recomputeNextRuns, computeJobNextRunAtMs } from "./jobs-scheduling.js";
+      import { recomputeNextRunsForMaintenance, computeJobNextRunAtMs } from "./jobs-scheduling.js";
       import { ensureLoaded, persist } from "./store.js";
       import { armTimer, runMissedJobs } from "./timer.js";
 
       export async function start(state) {
         await ensureLoaded(state);
-        recomputeNextRuns(state);
+        recomputeNextRunsForMaintenance(state, { deferredNotifications: [] });
         await persist(state);
         armTimer(state);
         await runMissedJobs(state);

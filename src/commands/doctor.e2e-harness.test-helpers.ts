@@ -22,15 +22,6 @@ export function setDoctorStdinTty(value: boolean | undefined): void {
   }
 }
 
-export function createGatewayUpdateResult() {
-  return {
-    status: "skipped",
-    mode: "unknown",
-    steps: [],
-    durationMs: 0,
-  } as const;
-}
-
 export function createCommandWithTimeoutResult() {
   return {
     stdout: "",
@@ -132,6 +123,7 @@ export async function arrangeLegacyStateMigrationFixture(deps: {
   deps.runLegacyStateMigrations.mockResolvedValueOnce({
     changes: ["migrated"],
     warnings: [],
+    stepReceipts: [],
   });
   deps.confirm.mockClear();
 

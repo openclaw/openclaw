@@ -22,10 +22,16 @@ import {
 import {
   installWithChannelFallback,
   installWithSourceFallback,
+  NpmChannelResolutionError,
   resolvePluginInstallSources,
   resolveClawHubInstallSpecsForUpdateChannel,
   resolveNpmInstallSpecsForUpdateChannel,
 } from "./install-channel-specs.js";
+import {
+  copyPluginInstallTransactionRequest,
+  retainPluginInstallTransaction,
+  withPluginInstallTransactions,
+} from "./install-transaction.js";
 import { isUnavailableNpmTarget } from "./install-types.js";
 import { installPluginFromNpmSpec } from "./install.js";
 import {
@@ -34,6 +40,7 @@ import {
   resolveNpmInstallRecordSpec,
 } from "./installs.js";
 import { ManagedPluginLifecycleError } from "./management-lifecycle-error.js";
+import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
 import { formatClawHubInstallFailure, formatNpmInstallFailure } from "./update-attempt.js";
 import {
   buildLoadPathHelpers,
@@ -70,12 +77,30 @@ export async function syncPluginsForUpdateChannel(params: {
   config: OpenClawConfig;
   channel: UpdateChannel;
   coreVersion?: string;
+  timeoutMs?: number;
+  workTimeoutMs?: number | null;
+  skipIds?: ReadonlySet<string>;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   logger?: PluginUpdateLogger;
   externalizedBundledPluginBridges?: readonly ExternalizedBundledPluginBridge[];
   onCapabilityConsent?: PluginCapabilityConsentHandler;
+  beforePersistentEffect?: () => void;
 }): Promise<PluginChannelSyncResult> {
+  return await withPluginLifecycleLease(
+    { env: params.env, assertCurrent: params.beforePersistentEffect },
+    (lease) =>
+      withPluginInstallTransactions(
+        params,
+        () => lease.assertOwned(),
+        syncPluginsForUpdateChannelWithLease,
+      ),
+  );
+}
+
+async function syncPluginsForUpdateChannelWithLease(
+  params: Parameters<typeof syncPluginsForUpdateChannel>[0],
+): Promise<PluginChannelSyncResult> {
   const env = params.env ?? process.env;
   const logger = params.logger ?? {};
   const consent = capturePluginCapabilityConsentHandlerErrors(params.onCapabilityConsent);
@@ -95,11 +120,31 @@ export async function syncPluginsForUpdateChannel(params: {
   const loadHelpers = buildLoadPathHelpers(next.plugins?.load?.paths ?? [], env);
   let installs = next.plugins?.installs ?? {};
   let changed = false;
+  const retainedLinks = new Set<string>();
+  for (const [pluginId, record] of Object.entries(installs)) {
+    const bundledInfo = bundled.get(pluginId);
+    if (params.skipIds?.has(pluginId) || record.source !== "path" || !bundledInfo) {
+      continue;
+    }
+    const linkedPath = loadHelpers.paths.find(
+      (loadPath) =>
+        !userPathsEqual(loadPath, bundledInfo.localPath, env) &&
+        (userPathsEqual(loadPath, record.sourcePath, env) ||
+          userPathsEqual(loadPath, record.installPath, env)),
+    );
+    if (!linkedPath) {
+      continue;
+    }
+    retainedLinks.add(pluginId);
+    const warning = `Retained linked plugin "${pluginId}" at ${linkedPath}; update this plugin at its source.`;
+    summary.warnings.push(warning);
+    logger.warn?.(warning);
+  }
 
   if (params.channel === "dev") {
     for (const [pluginId, record] of Object.entries(installs)) {
       const bundledInfo = bundled.get(pluginId);
-      if (!bundledInfo) {
+      if (!bundledInfo || retainedLinks.has(pluginId) || params.skipIds?.has(pluginId)) {
         continue;
       }
 
@@ -132,6 +177,13 @@ export async function syncPluginsForUpdateChannel(params: {
       }
       const existing = resolveBridgeInstallRecord({ installs, bridge });
       if (
+        params.skipIds?.has(bridge.bundledPluginId) ||
+        params.skipIds?.has(targetPluginId) ||
+        (existing && params.skipIds?.has(existing.pluginId))
+      ) {
+        continue;
+      }
+      if (
         !isExternalizedBundledPluginEnabled({
           config: next,
           bridge,
@@ -161,15 +213,28 @@ export async function syncPluginsForUpdateChannel(params: {
         targetPluginId,
         npmSpec,
       });
-      const channelNpmSpecs =
-        npmSpec && trustedSourceLinkedOfficialInstall
-          ? resolveNpmInstallSpecsForUpdateChannel({
-              spec: npmSpec,
-              updateChannel: params.channel,
-              officialPackageName: resolveNpmSpecPackageName(npmSpec),
-              coreVersion: params.coreVersion,
-            })
-          : null;
+      let channelNpmSpecs: Awaited<
+        ReturnType<typeof resolveNpmInstallSpecsForUpdateChannel>
+      > | null;
+      try {
+        channelNpmSpecs =
+          npmSpec && trustedSourceLinkedOfficialInstall
+            ? await resolveNpmInstallSpecsForUpdateChannel({
+                spec: npmSpec,
+                timeoutMs: params.timeoutMs,
+                updateChannel: params.channel,
+                officialPackageName: resolveNpmSpecPackageName(npmSpec),
+                coreVersion: params.coreVersion,
+              })
+            : null;
+      } catch (error) {
+        if (!(error instanceof NpmChannelResolutionError)) {
+          throw error;
+        }
+        summary.errors.push({ pluginId: targetPluginId, message: error.message, code: error.code });
+        logger.warn?.(error.message);
+        continue;
+      }
       const effectiveNpmSpec = channelNpmSpecs?.installSpec ?? npmSpec;
       const channelClawHubSpecs = clawhubSpec
         ? resolveClawHubInstallSpecsForUpdateChannel({
@@ -210,15 +275,18 @@ export async function syncPluginsForUpdateChannel(params: {
           previousRecords: installs,
           expectedIntegrity,
           onCapabilityConsent: consent.onCapabilityConsent,
+          beforePersistentEffect: params.beforePersistentEffect,
         });
-        const options = {
+        const options = copyPluginInstallTransactionRequest(params, {
           spec,
           config: next,
           mode: "update" as const,
+          timeoutMs: params.timeoutMs,
+          workTimeoutMs: params.workTimeoutMs,
           expectedPluginId: targetPluginId,
           logger,
           onBeforePluginArtifactCommit: capabilityConsent.onBeforePluginArtifactCommit,
-        };
+        });
         let result:
           | Awaited<ReturnType<typeof installPluginFromNpmSpec>>
           | Awaited<ReturnType<typeof installPluginFromClawHub>>;
@@ -231,7 +299,9 @@ export async function syncPluginsForUpdateChannel(params: {
                   expectedIntegrity,
                   trustedSourceLinkedOfficialInstall,
                 });
+          retainPluginInstallTransaction(params, result);
         } catch (error) {
+          params.beforePersistentEffect?.();
           consent.rethrowCallbackError();
           if (!(error instanceof ManagedPluginLifecycleError)) {
             throw error;
@@ -247,6 +317,7 @@ export async function syncPluginsForUpdateChannel(params: {
           };
         }
         consent.rethrowCallbackError();
+        params.beforePersistentEffect?.();
         return { result, capabilityConsent, installSpec: spec };
       };
       const {
@@ -359,7 +430,7 @@ export async function syncPluginsForUpdateChannel(params: {
 
     for (const [pluginId, record] of Object.entries(installs)) {
       const bundledInfo = bundled.get(pluginId);
-      if (!bundledInfo) {
+      if (!bundledInfo || retainedLinks.has(pluginId) || params.skipIds?.has(pluginId)) {
         continue;
       }
 
@@ -377,11 +448,7 @@ export async function syncPluginsForUpdateChannel(params: {
       // Keep explicit bundled installs on release channels. Replacing them with
       // npm installs can reintroduce duplicate-id shadowing and packaging drift.
       loadHelpers.addPath(bundledInfo.localPath);
-      const alreadyBundled =
-        record.source === "path" &&
-        userPathsEqual(record.sourcePath, bundledInfo.localPath, env) &&
-        userPathsEqual(record.installPath, bundledInfo.localPath, env);
-      if (alreadyBundled) {
+      if (userPathsEqual(record.installPath, bundledInfo.localPath, env)) {
         continue;
       }
 

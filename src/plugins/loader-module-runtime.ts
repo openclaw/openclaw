@@ -1,15 +1,22 @@
-import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { toSafeImportPath } from "../shared/import-specifier.js";
 import { VERSION } from "../version.js";
-import { attachPluginApiFacades } from "./api-facades.js";
-import { isLateCallablePluginApiMethod } from "./api-lifecycle.js";
-import { unwrapDefaultModuleExport } from "./module-export.js";
+import { runPluginRegistration } from "./api-lifecycle.js";
+import { tryNativeRequireModule } from "./native-module-require.js";
 import { getPluginCache, withPluginCache } from "./plugin-cache.js";
+import { bindPluginInstanceModuleLoader } from "./plugin-instance-module-loader.js";
+import { getPluginInstance, getPluginValueInstance } from "./plugin-instance-scope.js";
+import { PluginInstance } from "./plugin-instance.js";
 import { withProfile } from "./plugin-load-profile.js";
 import { getCachedPluginModuleLoader } from "./plugin-module-loader-cache.js";
 import { installOpenClawPluginSdkNativeResolver } from "./plugin-sdk-native-resolver.js";
-import type { PluginRegistry } from "./registry-types.js";
+import { getPluginRegistryInspectionResources } from "./registry-inspection-resources.js";
+import type { PluginRecord, PluginRegistry } from "./registry-types.js";
 import { withPluginRegistrationContext } from "./runtime.js";
+import { prepareGatewayContextBindingOwner } from "./runtime/gateway-context-binding-owner.js";
+import {
+  bindGatewayContextResolver,
+  getGatewayContextResolver,
+} from "./runtime/gateway-request-scope.js";
 import { createRuntimeBase } from "./runtime/runtime-base.js";
 import type {
   CreatePluginRuntimeOptions,
@@ -19,14 +26,16 @@ import type {
 import {
   type PluginRuntimeModuleResolution,
   type PluginSdkResolutionPreference,
+  preparePluginLoaderAliases,
   resolvePluginRuntimeModulePathWithDiagnostics,
 } from "./sdk-alias.js";
-import type { OpenClawPluginApi, OpenClawPluginDefinition } from "./types.js";
+import type { OpenClawPluginDefinition } from "./types.js";
 
 // Preserve the existing enumeration order, appending surfaces added to the runtime contract.
 // Scoped runtime proxies also ask for descriptors after their get trap returns.
 const LAZY_RUNTIME_PROPERTIES = {
   version: true,
+  decisions: true,
   gateway: true,
   config: true,
   agent: true,
@@ -50,55 +59,8 @@ const LAZY_RUNTIME_PROPERTIES = {
   worktrees: true,
   webSearch: true,
   tasks: true,
+  modelConfig: true,
 } satisfies Record<keyof PluginRuntime, true>;
-
-function createGuardedPluginRegistrationApi(api: OpenClawPluginApi): {
-  api: OpenClawPluginApi;
-  close: () => void;
-} {
-  let closed = false;
-  const guardedApi = attachPluginApiFacades(
-    new Proxy(api, {
-      get(target, prop, receiver) {
-        const value = Reflect.get(target, prop, receiver);
-        if (typeof value !== "function") {
-          return value;
-        }
-        if (typeof prop === "string" && isLateCallablePluginApiMethod(prop)) {
-          return (...args: unknown[]) => Reflect.apply(value, target, args);
-        }
-        return (...args: unknown[]) => {
-          if (closed) {
-            return undefined;
-          }
-          return Reflect.apply(value, target, args);
-        };
-      },
-    }),
-  );
-  return {
-    api: guardedApi,
-    close: () => {
-      closed = true;
-    },
-  };
-}
-
-function runPluginRegisterSync(
-  register: NonNullable<OpenClawPluginDefinition["register"]>,
-  api: Parameters<NonNullable<OpenClawPluginDefinition["register"]>>[0],
-): void {
-  const guarded = createGuardedPluginRegistrationApi(api);
-  try {
-    const result = register(guarded.api);
-    if (isPromiseLike(result)) {
-      void Promise.resolve(result).catch(() => {});
-      throw new Error("plugin register must be synchronous");
-    }
-  } finally {
-    guarded.close();
-  }
-}
 
 export function runPluginRegisterSyncInRegistry(
   register: NonNullable<OpenClawPluginDefinition["register"]>,
@@ -106,9 +68,39 @@ export function runPluginRegisterSyncInRegistry(
   registry: PluginRegistry,
   pluginId: string,
 ): void {
-  withPluginRegistrationContext(registry, pluginId, () => runPluginRegisterSync(register, api), {
-    registerMemoryCapability: api.registerMemoryCapability,
-  });
+  const owner = getPluginValueInstance(api);
+  const run = () =>
+    withPluginRegistrationContext(
+      registry,
+      pluginId,
+      () => {
+        const inspection = getPluginRegistryInspectionResources(registry);
+        const registerPlugin = () =>
+          runPluginRegistration(register, api, "reject", (pending) => {
+            inspection?.trackRegistration(pending);
+          });
+        if (inspection) {
+          inspection.runRegistration(
+            pluginId,
+            registerPlugin,
+            owner ? (cleanup) => owner.runCleanup(cleanup) : undefined,
+          );
+        } else {
+          registerPlugin();
+        }
+      },
+      {
+        registerMemoryCapability: api.registerMemoryCapability,
+        instance: owner,
+      },
+    );
+  if (owner) {
+    owner.run(run);
+    owner.toolRegistrationComplete ||=
+      api.registrationMode === "full" || api.registrationMode === "tool-discovery";
+  } else {
+    run();
+  }
 }
 
 export function createPluginModuleLoader(options: {
@@ -117,9 +109,15 @@ export function createPluginModuleLoader(options: {
   tryNative?: boolean;
   loaderFilename?: string;
   installNativeSdkResolver?: boolean;
+  expectedSourceDigests?: Readonly<Record<string, string>>;
 }) {
   const cache = getPluginCache();
-  const captured = { ...options };
+  const captured = {
+    ...options,
+    expectedSourceDigests: options.expectedSourceDigests
+      ? { ...options.expectedSourceDigests }
+      : undefined,
+  };
   const createLoaderForModule = (modulePath: string) => {
     if (captured.installNativeSdkResolver !== false && captured.tryNative !== false) {
       installOpenClawPluginSdkNativeResolver({
@@ -139,8 +137,40 @@ export function createPluginModuleLoader(options: {
       ...(captured.tryNative !== undefined ? { tryNative: captured.tryNative } : {}),
     });
   };
-  return (modulePath: string): unknown =>
-    withPluginCache(cache, () => createLoaderForModule(modulePath)(toSafeImportPath(modulePath)));
+  return (
+    modulePath: string,
+    owner?: {
+      record: PluginRecord;
+      rootDir: string;
+      registry: PluginRegistry;
+      standalone?: boolean;
+    },
+  ): unknown =>
+    withPluginCache(cache, () => {
+      if (!owner) {
+        return createLoaderForModule(modulePath)(toSafeImportPath(modulePath));
+      }
+      let instance = getPluginInstance(owner.record);
+      if (!instance) {
+        instance = new PluginInstance(owner.record.id, owner);
+        bindPluginInstanceModuleLoader({
+          instance,
+          origin: owner.record.origin,
+          source: modulePath,
+          rootDir: owner.rootDir,
+          standalone: owner.standalone,
+          expectedSourceDigest: captured.expectedSourceDigests?.[owner.record.id],
+          devSourceRoot: captured.devSourceRoot,
+          pluginSdkResolution: captured.pluginSdkResolution,
+          createHostModuleLoader: () => createLoaderForModule(modulePath),
+        });
+      }
+      const expected = captured.expectedSourceDigests?.[owner.record.id];
+      if (expected !== undefined && instance.sourceDigest !== expected) {
+        throw new Error(`Plugin ${owner.record.id} captured source changed after installation`);
+      }
+      return instance.loadModule(modulePath);
+    });
 }
 
 function formatPluginRuntimeModuleResolutionError(params: {
@@ -164,15 +194,12 @@ export function createLazyPluginRuntime(params: {
   devSourceRoot?: string | null;
   pluginSdkResolution?: PluginSdkResolutionPreference;
   runtimeOptions?: CreatePluginRuntimeOptions;
-  loadPluginModule: ReturnType<typeof createPluginModuleLoader>;
 }): PluginRuntime {
-  // Avoid loading every channel/runtime dependency tree until a plugin actually
-  // reaches a runtime API surface.
-  let createPluginRuntimeFactory: PluginRuntimeFactory | null = null;
-  const resolveCreatePluginRuntime = (): PluginRuntimeFactory => {
-    if (createPluginRuntimeFactory) {
-      return createPluginRuntimeFactory;
-    }
+  const cache = getPluginCache();
+  type RuntimeModule = {
+    createPluginRuntime?: PluginRuntimeFactory;
+  };
+  const resolveRuntimeModule = (): RuntimeModule => {
     const resolution = resolvePluginRuntimeModulePathWithDiagnostics({
       devSourceRoot: params.devSourceRoot,
       pluginSdkResolution: params.pluginSdkResolution,
@@ -186,34 +213,49 @@ export function createLazyPluginRuntime(params: {
       );
     }
     const resolvedPath = resolution.resolvedPath;
-    const runtimeModule = withProfile(
-      { source: resolvedPath },
-      "runtime-module",
-      () =>
-        params.loadPluginModule(resolvedPath) as {
-          createPluginRuntime?: PluginRuntimeFactory;
-        },
+    return withPluginCache(cache, () =>
+      withProfile({ source: resolvedPath }, "runtime-module", () => {
+        const native = tryNativeRequireModule(resolvedPath, {
+          aliasMap: preparePluginLoaderAliases({
+            modulePath: resolvedPath,
+            moduleUrl: import.meta.url,
+            devSourceRoot: params.devSourceRoot,
+            pluginSdkResolution: params.pluginSdkResolution,
+          }).resolveAlias,
+        });
+        if (!native.ok) {
+          throw new Error(
+            `Unable to load host plugin runtime natively: ${resolvedPath}. Use a supported native TypeScript loader for a source host, or rebuild the host runtime.`,
+          );
+        }
+        return native.moduleExport as RuntimeModule;
+      }),
     );
-    if (typeof runtimeModule.createPluginRuntime !== "function") {
-      throw new Error("Plugin runtime module missing createPluginRuntime export");
-    }
-    createPluginRuntimeFactory = runtimeModule.createPluginRuntime;
-    return createPluginRuntimeFactory;
   };
 
-  const cache = getPluginCache();
   const base = createRuntimeBase();
   let resolvedRuntime: PluginRuntime | null = null;
   const resolveRuntime = (): PluginRuntime => {
-    resolvedRuntime ??= withPluginCache(cache, () =>
-      resolveCreatePluginRuntime()(params.runtimeOptions, base),
-    );
+    resolvedRuntime ??= withPluginCache(cache, () => {
+      const { createPluginRuntime } = resolveRuntimeModule();
+      if (typeof createPluginRuntime !== "function") {
+        throw new Error("Plugin runtime module missing createPluginRuntime export");
+      }
+      return createPluginRuntime(params.runtimeOptions, base);
+    });
     return resolvedRuntime;
   };
   const getRuntimeProperty = (prop: PropertyKey, ...receiver: [] | [unknown]): unknown => {
     // Prepared metadata and host facades must not initialize broad runtime services.
     if (!resolvedRuntime) {
-      if (prop === "gateway" || prop === "nodes" || prop === "subagent") {
+      if (
+        prop === "gateway" ||
+        prop === "hooks" ||
+        prop === "nodes" ||
+        prop === "subagent" ||
+        prop === "modelAuth" ||
+        prop === "modelConfig"
+      ) {
         const value = params.runtimeOptions?.[prop];
         if (value !== undefined) {
           return value;
@@ -235,77 +277,77 @@ export function createLazyPluginRuntime(params: {
     if (resolvedRuntime || !Object.hasOwn(LAZY_RUNTIME_PROPERTIES, prop)) {
       return Reflect.getOwnPropertyDescriptor(resolveRuntime() as object, prop);
     }
-    return {
+    const descriptor: PropertyDescriptor = {
       configurable: true,
       enumerable: true,
       get() {
         return getRuntimeProperty(prop);
       },
-      set(value: unknown) {
-        Reflect.set(resolveRuntime() as object, prop, value);
-      },
     };
+    // Policy facets match defineCachedValue's getter-only contract before loading too.
+    if (prop !== "modelAuth" && prop !== "modelConfig") {
+      descriptor.set = (value: unknown) => {
+        Reflect.set(resolveRuntime() as object, prop, value);
+      };
+    }
+    return descriptor;
   };
-  return new Proxy({} as PluginRuntime, {
-    get: (_target, prop, receiver) => getRuntimeProperty(prop, receiver),
-    set(_target, prop, value, receiver) {
-      return Reflect.set(resolveRuntime(), prop, value, receiver);
+  let preparingOwner = true;
+  const runtime = new Proxy({} as PluginRuntime, {
+    get: (target, prop, receiver) =>
+      Object.hasOwn(target, prop)
+        ? Reflect.get(target, prop, receiver)
+        : getRuntimeProperty(prop, receiver),
+    set(target, prop, value, receiver) {
+      return Reflect.set(
+        Object.hasOwn(target, prop) ? target : resolveRuntime(),
+        prop,
+        value,
+        receiver,
+      );
     },
-    has(_target, prop) {
-      return Object.hasOwn(LAZY_RUNTIME_PROPERTIES, prop) || Reflect.has(resolveRuntime(), prop);
+    has(target, prop) {
+      return (
+        Object.hasOwn(target, prop) ||
+        Object.hasOwn(LAZY_RUNTIME_PROPERTIES, prop) ||
+        Reflect.has(resolveRuntime(), prop)
+      );
     },
-    ownKeys() {
-      return Object.keys(LAZY_RUNTIME_PROPERTIES);
+    ownKeys(target) {
+      return [...Object.keys(LAZY_RUNTIME_PROPERTIES), ...Reflect.ownKeys(target)];
     },
-    getOwnPropertyDescriptor(_target, prop) {
-      return resolveLazyRuntimeDescriptor(prop);
+    getOwnPropertyDescriptor(target, prop) {
+      return (
+        Reflect.getOwnPropertyDescriptor(target, prop) ??
+        (preparingOwner ? undefined : resolveLazyRuntimeDescriptor(prop))
+      );
     },
-    defineProperty(_target, prop, attributes) {
-      return Reflect.defineProperty(resolveRuntime() as object, prop, attributes);
+    defineProperty(target, prop, attributes) {
+      return Reflect.defineProperty(
+        preparingOwner || Object.hasOwn(target, prop) ? target : resolveRuntime(),
+        prop,
+        attributes,
+      );
     },
-    deleteProperty(_target, prop) {
-      return Reflect.deleteProperty(resolveRuntime() as object, prop);
+    deleteProperty(target, prop) {
+      return Reflect.deleteProperty(Object.hasOwn(target, prop) ? target : resolveRuntime(), prop);
     },
     getPrototypeOf() {
       return Reflect.getPrototypeOf(resolveRuntime() as object);
     },
   });
-}
-
-export function resolvePluginModuleExport(moduleExport: unknown): {
-  definition?: OpenClawPluginDefinition;
-  register?: OpenClawPluginDefinition["register"];
-} {
-  const seen = new Set<unknown>();
-  const candidates: unknown[] = [unwrapDefaultModuleExport(moduleExport), moduleExport];
-  for (let index = 0; index < candidates.length && index < 12; index += 1) {
-    const resolved = candidates[index];
-    if (seen.has(resolved)) {
-      continue;
-    }
-    seen.add(resolved);
-    if (typeof resolved === "function") {
-      return { register: resolved as OpenClawPluginDefinition["register"] };
-    }
-    if (resolved && typeof resolved === "object") {
-      const definition = resolved as OpenClawPluginDefinition;
-      const register = definition.register;
-      if (typeof register === "function") {
-        return { definition, register };
-      }
-      for (const key of ["default", "module"]) {
-        if (key in definition) {
-          candidates.push((definition as Record<string, unknown>)[key]);
-        }
-      }
-    }
+  // Reserve this proxy's private owner slot without initializing its broad runtime.
+  prepareGatewayContextBindingOwner(runtime);
+  preparingOwner = false;
+  // Injected accessors remain deferred. A plain host facet can carry its owner
+  // without reading a lazy runtime surface or initializing broad services.
+  const subagent: unknown = params.runtimeOptions
+    ? Object.getOwnPropertyDescriptor(params.runtimeOptions, "subagent")?.value
+    : undefined;
+  if (subagent && typeof subagent === "object") {
+    bindGatewayContextResolver(runtime, getGatewayContextResolver(subagent));
   }
-  const resolved = candidates[0];
-  if (resolved && typeof resolved === "object") {
-    const definition = resolved as OpenClawPluginDefinition;
-    return { definition, register: definition.register };
-  }
-  return {};
+  return runtime;
 }
 
 function kindIncludes(kind: unknown, target: string): boolean {

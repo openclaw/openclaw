@@ -1,3 +1,6 @@
+import { resolveGatewayWebSocketUrl } from "../../lib/gateway-websocket-url.ts";
+import { isApplePlatform } from "../../lib/keyboard-shortcut-contract.ts";
+
 export type DesktopDisconnectDetail = {
   clean: boolean;
   code?: number;
@@ -9,6 +12,8 @@ type DesktopSecurityFailureDetail = {
   status?: number;
 };
 
+export type DesktopSizingMode = "fit" | "actual" | "match";
+
 type DesktopConnectOptions = {
   background?: string;
   credentials?: { username?: string; password?: string };
@@ -17,7 +22,8 @@ type DesktopConnectOptions = {
   onConnect?: () => void;
   onDisconnect?: (detail: DesktopDisconnectDetail) => void;
   onSecurityFailure?: (detail: DesktopSecurityFailureDetail) => void;
-  scaleViewport?: boolean;
+  canResize?: boolean;
+  sizingMode?: DesktopSizingMode;
   target: HTMLElement;
   viewOnly: boolean;
   wsUrl: string;
@@ -26,16 +32,19 @@ type DesktopConnectOptions = {
 export type DesktopConnectionHandle = {
   disconnect(): void;
   disableInput(): void;
+  setPresented(presented: boolean): boolean;
   sendBackspace(): void;
   sendKeyboardEvent(event: KeyboardEvent): void;
   sendText(text: string): void;
-  setScaleViewport(enabled: boolean): void;
+  setSizingMode(mode: DesktopSizingMode): void;
 };
 
 type RfbClient = EventTarget & {
   background: string;
   disconnect(): void;
+  sendKey(keysym: number, code: string | null, down?: boolean): void;
   scaleViewport: boolean;
+  resizeSession: boolean;
   viewOnly: boolean;
 };
 
@@ -55,25 +64,6 @@ const loadDefaultRfb: RfbLoader = async () => {
   return module.default;
 };
 
-function resolveDesktopWebSocketUrl(wsUrl: string, gatewayUrl = globalThis.location?.href): string {
-  const base = new URL(gatewayUrl ?? globalThis.location.href, globalThis.location?.href);
-  if (base.protocol === "http:") {
-    base.protocol = "ws:";
-  } else if (base.protocol === "https:") {
-    base.protocol = "wss:";
-  }
-  const resolved = new URL(wsUrl, base);
-  if (resolved.protocol === "http:") {
-    resolved.protocol = "ws:";
-  } else if (resolved.protocol === "https:") {
-    resolved.protocol = "wss:";
-  }
-  if (resolved.protocol !== "ws:" && resolved.protocol !== "wss:") {
-    throw new Error("Desktop observer URL must use WebSocket transport");
-  }
-  return resolved.toString();
-}
-
 /** Thin owner for one noVNC RFB lifecycle. */
 export class DesktopClient {
   constructor(
@@ -84,7 +74,7 @@ export class DesktopClient {
 
   async connect(options: DesktopConnectOptions): Promise<DesktopConnectionHandle> {
     const Rfb = this.rfbConstructor ?? (await this.loadRfb());
-    const wsUrl = resolveDesktopWebSocketUrl(options.wsUrl, options.gatewayUrl);
+    const wsUrl = resolveGatewayWebSocketUrl(options.wsUrl, options.gatewayUrl);
     // The socket claims control before RFB authentication; canceled lazy loads must not open it.
     if (!options.isCurrent()) {
       throw new DOMException("Desktop connection is no longer current", "AbortError");
@@ -101,28 +91,18 @@ export class DesktopClient {
     );
     rfb.background = options.background ?? getComputedStyle(options.target).backgroundColor;
     rfb.viewOnly = options.viewOnly;
-    rfb.scaleViewport = options.scaleViewport ?? true;
+    rfb.resizeSession = false;
     let retired = false;
-    rfb.addEventListener("connect", () => options.onConnect?.());
-    rfb.addEventListener("disconnect", (event) => {
-      // noVNC's terminal state is permanent; callbacks may synchronously retire this handle.
-      retired = true;
-      // SAFETY: noVNC's public disconnect event carries clean, even before the socket closes.
-      const { clean } = (event as CustomEvent<{ clean: boolean }>).detail;
-      options.onDisconnect?.({ ...closeDetail, clean });
-    });
-    rfb.addEventListener("securityfailure", (event) => {
-      const detail = (event as CustomEvent<DesktopSecurityFailureDetail>).detail ?? {};
-      options.onSecurityFailure?.(detail);
-    });
+    let inputDisabled = false;
+    let presented = true;
+    let connected = false;
+    let sizingMode = options.sizingMode ?? "fit";
     const dispatchKeyboardEvent = (event: KeyboardEvent) => {
-      // noVNC owns keyboard translation and attaches its listeners to the
-      // canvas. Forward the offscreen mobile input's event to that same
-      // boundary so virtual-keyboard input follows the canonical RFB path.
+      // noVNC owns translation for both canvas input and the mobile keyboard bridge.
       options.target.querySelector("canvas")?.dispatchEvent(event);
     };
-    const cloneKeyboardEvent = (event: KeyboardEvent) =>
-      new KeyboardEvent(event.type, {
+    const cloneKeyboardEvent = (event: KeyboardEvent, type = event.type) =>
+      new KeyboardEvent(type, {
         key: event.key,
         code: event.code,
         location: event.location,
@@ -135,18 +115,124 @@ export class DesktopClient {
         bubbles: true,
         cancelable: true,
       });
+    const heldKeys = new Map<string, KeyboardEvent>();
+    const activePointers = new Set<number>();
+    const trackKeyDown = (event: KeyboardEvent) => {
+      const code = event.code || event.key;
+      // noVNC completes virtual presses and macOS CapsLock toggles on keydown.
+      if (
+        !rfb.viewOnly &&
+        !retired &&
+        code !== "Unidentified" &&
+        !(code === "CapsLock" && isApplePlatform())
+      ) {
+        heldKeys.set(code, event);
+      }
+    };
+    const trackKeyUp = (event: KeyboardEvent) => heldKeys.delete(event.code || event.key);
+    const clearHeldKeys = () => heldKeys.clear();
+    const releaseHeldKeys = () => {
+      // noVNC's viewOnly setter suppresses ungrab's keyups. Send them through
+      // its keyboard owner before setting viewOnly, while the socket can still write.
+      for (const event of heldKeys.values()) {
+        dispatchKeyboardEvent(cloneKeyboardEvent(event, "keyup"));
+      }
+      heldKeys.clear();
+    };
+    const trackPointerDown = (event: PointerEvent) => activePointers.add(event.pointerId);
+    const trackPointerUp = (event: PointerEvent) => activePointers.delete(event.pointerId);
+    options.target.addEventListener("keydown", trackKeyDown, true);
+    options.target.addEventListener("keyup", trackKeyUp, true);
+    options.target.addEventListener("pointerdown", trackPointerDown, true);
+    window.addEventListener("pointerup", trackPointerUp, true);
+    window.addEventListener("pointercancel", trackPointerUp, true);
+    window.addEventListener("blur", clearHeldKeys);
+    const stopInputTracking = () => {
+      options.target.removeEventListener("keydown", trackKeyDown, true);
+      options.target.removeEventListener("keyup", trackKeyUp, true);
+      options.target.removeEventListener("pointerdown", trackPointerDown, true);
+      window.removeEventListener("pointerup", trackPointerUp, true);
+      window.removeEventListener("pointercancel", trackPointerUp, true);
+      window.removeEventListener("blur", clearHeldKeys);
+      heldKeys.clear();
+      activePointers.clear();
+    };
+    const disableInput = () => {
+      releaseHeldKeys();
+      inputDisabled = true;
+      rfb.resizeSession = false;
+      rfb.viewOnly = true;
+    };
+    const applySizing = () => {
+      // Provider permission is not negotiated RFB support. noVNC owns negotiation
+      // and resize scheduling, but only the current authenticated controller may opt in.
+      rfb.resizeSession = false;
+      if (retired || !options.isCurrent()) {
+        return;
+      }
+      rfb.scaleViewport = sizingMode !== "actual";
+      rfb.resizeSession =
+        presented &&
+        connected &&
+        !rfb.viewOnly &&
+        options.canResize === true &&
+        sizingMode === "match";
+    };
+    applySizing();
+    rfb.addEventListener("connect", () => {
+      if (retired || !options.isCurrent()) {
+        disableInput();
+        return;
+      }
+      connected = true;
+      options.onConnect?.();
+      applySizing();
+    });
+    rfb.addEventListener("disconnect", (event) => {
+      // noVNC's terminal state is permanent; callbacks may synchronously retire this handle.
+      retired = true;
+      disableInput();
+      stopInputTracking();
+      // SAFETY: noVNC's public disconnect event carries clean, even before the socket closes.
+      const { clean } = (event as CustomEvent<{ clean: boolean }>).detail;
+      options.onDisconnect?.({ ...closeDetail, clean });
+    });
+    rfb.addEventListener("securityfailure", (event) => {
+      disableInput();
+      const detail = (event as CustomEvent<DesktopSecurityFailureDetail>).detail ?? {};
+      options.onSecurityFailure?.(detail);
+    });
     return {
       disconnect: () => {
         if (!retired) {
           retired = true;
+          disableInput();
+          stopInputTracking();
           rfb.disconnect();
         }
       },
-      disableInput: () => {
-        rfb.viewOnly = true;
+      disableInput,
+      setPresented: (value) => {
+        presented = value;
+        if (retired || inputDisabled || !options.isCurrent()) {
+          return false;
+        }
+        // noVNC cannot release a drag through its public API after the canvas is
+        // hidden. Retire that connection instead of retaining pressed remote buttons.
+        if (!presented && activePointers.size > 0) {
+          return false;
+        }
+        if (!presented) {
+          releaseHeldKeys();
+        }
+        rfb.resizeSession = false;
+        rfb.viewOnly = !presented || options.viewOnly;
+        applySizing();
+        return true;
       },
-      setScaleViewport: (enabled) => {
-        rfb.scaleViewport = enabled;
+      setSizingMode: (mode) => {
+        sizingMode = mode;
+        applySizing();
       },
       sendKeyboardEvent: (event) => dispatchKeyboardEvent(cloneKeyboardEvent(event)),
       sendText: (text) => {
@@ -154,10 +240,16 @@ export class DesktopClient {
         // keyboard owner to translate each inserted character and emit a
         // balanced press/release. Line breaks need Enter rather than Unicode LF.
         const normalizedText = text.replace(/\r\n?/g, "\n");
-        for (let index = 0; index < normalizedText.length; index += 1) {
+        for (const character of normalizedText) {
+          // noVNC 1.7's DOM key translator only accepts BMP characters. Its
+          // public RFB sender supports the full Unicode scalar keysym directly.
+          if (character.length === 2) {
+            rfb.sendKey(0x01000000 | character.codePointAt(0)!, null);
+            continue;
+          }
           dispatchKeyboardEvent(
             new KeyboardEvent("keydown", {
-              key: normalizedText.charAt(index) === "\n" ? "Enter" : normalizedText.charAt(index),
+              key: character === "\n" ? "Enter" : character,
               code: "Unidentified",
               bubbles: true,
               cancelable: true,
@@ -165,18 +257,7 @@ export class DesktopClient {
           );
         }
       },
-      sendBackspace: () => {
-        for (const type of ["keydown", "keyup"]) {
-          dispatchKeyboardEvent(
-            new KeyboardEvent(type, {
-              key: "Backspace",
-              code: "Backspace",
-              bubbles: true,
-              cancelable: true,
-            }),
-          );
-        }
-      },
+      sendBackspace: () => rfb.sendKey(0xff08, "Backspace"),
     };
   }
 }

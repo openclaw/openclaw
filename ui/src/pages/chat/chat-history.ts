@@ -10,15 +10,16 @@ import {
 import { loadChatBranches } from "./chat-history-branches.ts";
 import { hydrateChatHistory } from "./chat-history-hydration.ts";
 import { CHAT_HISTORY_REQUEST_LIMIT } from "./chat-history-request.ts";
-import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
+import type { ObservedChatHistoryResult } from "./chat-history-snapshot.ts";
 import {
   chatHistoryRequests,
   getChatHistoryLoadState,
   setChatHistoryLoad,
+  waitForInitialChatSnapshot,
 } from "./chat-history-state.ts";
 import { readChatInputRunIds } from "./chat-pending-inputs.ts";
 import type { ChatRunStartupPhase } from "./chat-run-startup.ts";
-import type { ChatState } from "./chat-state-contract.ts";
+import type { ChatHistoryHost, ChatState } from "./chat-state-contract.ts";
 import { readChatSessionSnapshot } from "./session-message-cache.ts";
 
 type LoadChatHistoryOptions = {
@@ -30,10 +31,10 @@ type LoadChatHistoryOptions = {
 type ChatErrorDetail = Extract<ChatEvent, { state: "error" }>["errorDetail"];
 
 export async function loadChatHistory(
-  state: ChatState,
+  state: ChatHistoryHost,
   opts: LoadChatHistoryOptions = {},
-): Promise<ChatHistoryResult | undefined> {
-  const sessionKey = state.sessionKey;
+): Promise<ObservedChatHistoryResult | undefined> {
+  let sessionKey = state.sessionKey;
   const requestAgentId = isUiSelectedGlobalSessionKey(state, sessionKey)
     ? resolveUiSelectedSessionAgentId(state)
     : undefined;
@@ -47,7 +48,46 @@ export async function loadChatHistory(
   }
   const method = startup ? "chat.startup" : "chat.history";
   const client = state.client;
+  const sessions = state.sessions;
   const connectionEpoch = state.connectionEpoch;
+  const hydration = startup ? waitForInitialChatSnapshot(state) : undefined;
+  if (hydration) {
+    const version = requests.historyVersion;
+    state.chatLoading = true;
+    state.requestUpdate?.();
+    const current = await hydration;
+    if (
+      !current ||
+      !state.connected ||
+      state.client !== client ||
+      state.sessions !== sessions ||
+      state.connectionEpoch !== connectionEpoch ||
+      !areUiSessionKeysEquivalent(state.sessionKey, sessionKey) ||
+      (isUiSelectedGlobalSessionKey(state, sessionKey) &&
+        resolveUiSelectedSessionAgentId(state) !== requestAgentId)
+    ) {
+      return undefined;
+    }
+    sessionKey = state.sessionKey;
+    if (requests.historyVersion !== version) {
+      const active = requests.historyLoad;
+      if (active.phase === "idle") {
+        return undefined;
+      }
+      if (
+        active.phase === "in-flight" &&
+        opts.supersedeInFlight !== true &&
+        active.startup &&
+        active.client === client &&
+        active.sessions === sessions &&
+        active.connectionEpoch === connectionEpoch &&
+        active.sessionKey === sessionKey &&
+        active.requestAgentId === requestAgentId
+      ) {
+        return active.promise;
+      }
+    }
+  }
   const deltaCursor = state.chatMessagesBySession
     ? readChatSessionSnapshot(state.chatMessagesBySession, state, {
         sessionKey,
@@ -66,28 +106,53 @@ export async function loadChatHistory(
   ]);
   const requestKey = `${requestKeyPrefix}${requestModeKey}`;
   const inFlight = requests.historyLoad;
-  // Live events replace the rendered array while their snapshot is pending;
-  // only stable session and connection ownership may start another request.
+  // Retire stale publication immediately, but let its raw read settle before
+  // issuing one fresh snapshot for all changes observed while it was pending.
   if (
-    opts.supersedeInFlight !== true &&
     inFlight.phase === "in-flight" &&
-    inFlight.key === requestKey &&
+    inFlight.sessionKey === sessionKey &&
+    inFlight.requestAgentId === requestAgentId &&
     inFlight.client === client &&
+    inFlight.sessions === sessions &&
     inFlight.connectionEpoch === connectionEpoch
   ) {
-    return inFlight.promise;
-  }
-  if (
-    opts.deferBranches !== true &&
-    (!areUiSessionKeysEquivalent(state.chatBranchesSessionKey, sessionKey) ||
-      state.chatBranchesConnectionEpoch !== connectionEpoch)
-  ) {
-    void loadChatBranches(state);
+    if (inFlight.refresh) {
+      inFlight.refresh.startup ||= startup;
+      inFlight.refresh.deferBranches &&= opts.deferBranches === true;
+      return inFlight.refresh.promise;
+    }
+    if (opts.supersedeInFlight !== true && inFlight.key === requestKey) {
+      return inFlight.promise;
+    }
+    const version = ++requests.historyVersion;
+    const refresh = {
+      startup: startup || inFlight.startup,
+      deferBranches: opts.deferBranches === true,
+      promise: Promise.resolve<ObservedChatHistoryResult | undefined>(undefined),
+    };
+    refresh.promise = inFlight.promise.then(() => {
+      if (
+        requests.historyVersion !== version ||
+        !state.connected ||
+        state.client !== client ||
+        state.sessions !== sessions ||
+        state.connectionEpoch !== connectionEpoch ||
+        state.sessionKey !== sessionKey ||
+        (isUiSelectedGlobalSessionKey(state, sessionKey) &&
+          resolveUiSelectedSessionAgentId(state) !== requestAgentId)
+      ) {
+        return undefined;
+      }
+      return loadChatHistory(state, refresh);
+    });
+    inFlight.refresh = refresh;
+    return refresh.promise;
   }
   const promise = hydrateChatHistory(
     state,
     client,
     connectionEpoch,
+    sessions,
     sessionKey,
     requestAgentId,
     method,
@@ -98,8 +163,18 @@ export async function loadChatHistory(
     const current = requests.historyLoad;
     if (current.phase === "in-flight" && current.promise === promise) {
       if (result) {
+        // Appends can invalidate branch tips while this coalesced history read is pending.
+        // Check freshness on settlement so that invalidation is not lost to its early return.
+        if (
+          opts.deferBranches !== true &&
+          (!areUiSessionKeysEquivalent(state.chatBranchesSessionKey, sessionKey) ||
+            state.chatBranchesConnectionEpoch !== connectionEpoch)
+        ) {
+          void loadChatBranches(state);
+        }
         setChatHistoryLoad(state, {
           phase: "committed",
+          sessions,
           client,
           connectionEpoch,
           sessionKey,
@@ -112,6 +187,7 @@ export async function loadChatHistory(
           resolveUiSelectedSessionAgentId(state) === requestAgentId) &&
         (!state.connected ||
           current.client !== state.client ||
+          current.sessions !== state.sessions ||
           current.connectionEpoch !== state.connectionEpoch)
       ) {
         setChatHistoryLoad(state, {
@@ -131,6 +207,7 @@ export async function loadChatHistory(
   });
   setChatHistoryLoad(state, {
     phase: "in-flight",
+    sessions,
     client,
     connectionEpoch,
     key: requestKey,
@@ -143,25 +220,13 @@ export async function loadChatHistory(
 }
 
 export function resumePendingChatHistoryLoad(
-  state: ChatState,
-): Promise<ChatHistoryResult | undefined> | undefined {
+  state: ChatHistoryHost,
+): Promise<ObservedChatHistoryResult | undefined> | undefined {
   const load = getChatHistoryLoadState(state);
   if (load.phase === "pending-connection" || (load.phase === "failed" && load.retryable)) {
     return loadChatHistory(state, { startup: load.startup, deferBranches: true });
   }
   return undefined;
-}
-
-export function retryChatHistoryLoad(
-  state: ChatState,
-): Promise<ChatHistoryResult | undefined> | undefined {
-  const load = getChatHistoryLoadState(state);
-  if (load.phase !== "failed") {
-    return undefined;
-  }
-  const retry = loadChatHistory(state, { startup: load.startup });
-  state.requestUpdate?.();
-  return retry;
 }
 
 export function applyChatAgentsList(
@@ -194,6 +259,7 @@ export type ChatEventPayload = {
   agentId?: string;
   state: "status" | "delta" | "final" | "aborted" | "error";
   phase?: ChatRunStartupPhase;
+  retry?: NonNullable<Extract<ChatEvent, { state: "status" }>["retry"]>;
   message?: unknown;
   deltaText?: string;
   replace?: boolean;

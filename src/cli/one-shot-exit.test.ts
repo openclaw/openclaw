@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { defaultRuntime, ExitError } from "../runtime.js";
 import {
   exitCliAfterOutput,
@@ -10,6 +11,8 @@ import {
 
 const successfulRun = async () => {};
 const ignoreError = () => {};
+// Fresh proxy children share only temporary source transforms, not module state.
+const proxyChildTempDir = useAutoCleanupTempDirTracker(afterAll).make("openclaw-proxy-child-tmp-");
 
 function spyOnExit(onExit?: (code: number) => void) {
   const exited = createDeferred();
@@ -64,24 +67,53 @@ describe("one-shot CLI exit", () => {
     expect(exit).toHaveBeenCalledExactlyOnceWith(7);
   });
 
-  it("leaves a deferred exit owned by the injected runtime without reporting it again", async () => {
-    const failure = new ExitError(7);
-    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-    const onError = vi.fn();
+  it.each([
+    { outcome: "deferred exit", commandExit: 7, cleanupFails: false },
+    { outcome: "deferred exit with failed cleanup", commandExit: 7, cleanupFails: true },
+    { outcome: "cleanup failure after success", commandExit: undefined, cleanupFails: true },
+    {
+      outcome: "deferred exit with cleanup reporter rethrow",
+      commandExit: 7,
+      cleanupFails: true,
+      reporterRethrows: true,
+    },
+  ])(
+    "leaves $outcome owned by the injected runtime",
+    async ({ commandExit, cleanupFails, reporterRethrows }) => {
+      const commandFailure = commandExit === undefined ? undefined : new ExitError(commandExit);
+      const cleanupFailure = new Error("state cleanup failed");
+      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      const onError = vi.fn((error: unknown) => {
+        if (reporterRethrows) {
+          throw error;
+        }
+      });
 
-    await expect(
-      runCliWithExitFinalization({
-        run: async () => {
-          throw failure;
-        },
-        onError,
-        runtime,
-      }),
-    ).rejects.toBe(failure);
+      await expect(
+        runCliWithExitFinalization({
+          run: async () => {
+            if (commandFailure) {
+              throw commandFailure;
+            }
+          },
+          finalize: async () => {
+            if (cleanupFails) {
+              throw cleanupFailure;
+            }
+          },
+          onError,
+          runtime,
+        }),
+      ).rejects.toBe(commandFailure ?? cleanupFailure);
 
-    expect(onError).not.toHaveBeenCalled();
-    expect(runtime.exit).not.toHaveBeenCalled();
-  });
+      if (cleanupFails) {
+        expect(onError).toHaveBeenCalledExactlyOnceWith(cleanupFailure);
+      } else {
+        expect(onError).not.toHaveBeenCalled();
+      }
+      expect(runtime.exit).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     ["NODE_USE_SYSTEM_CA", { NODE_USE_SYSTEM_CA: "1" }, []],
@@ -156,6 +188,47 @@ describe("one-shot CLI exit", () => {
     await runPromise;
     await waitForExit(0);
   });
+
+  it.each(["requested", "system CA"] as const)(
+    "waits for caller-owned state cleanup before a %s exit",
+    async (mode) => {
+      const closed = createDeferred();
+      const finalizing = createDeferred();
+      const previousExitCode = process.exitCode;
+      const { exit, waitForExit } = spyOnExit();
+      process.exitCode = undefined;
+      const running = runCliWithExitFinalization({
+        run: async () => {
+          if (mode === "requested") {
+            requestExitAfterOneShotOutput(defaultRuntime, 0);
+          }
+        },
+        finalize: async () => {
+          finalizing.resolve();
+          await closed.promise;
+        },
+        onError: ignoreError,
+        env: mode === "system CA" ? { NODE_USE_SYSTEM_CA: "1" } : {},
+        execArgv: [],
+        platform: "darwin",
+        markers: {},
+      });
+      try {
+        await finalizing.promise;
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(exit).not.toHaveBeenCalled();
+        closed.resolve();
+        await running;
+        await waitForExit(0);
+      } finally {
+        closed.resolve();
+        await running;
+        process.exitCode = previousExitCode;
+      }
+    },
+  );
 
   it("reports failures and replaces a pending successful exit before draining", async () => {
     const previousExitCode = process.exitCode;
@@ -489,7 +562,9 @@ describe("one-shot CLI exit", () => {
       ...process.env,
       OPENCLAW_STATE_DIR: "/dev/null",
       OPENCLAW_CONFIG_PATH: "/dev/null",
-      TSX_DISABLE_CACHE: "1",
+      TMPDIR: proxyChildTempDir,
+      TEMP: proxyChildTempDir,
+      TMP: proxyChildTempDir,
       NODE_DISABLE_COMPILE_CACHE: "1",
     };
     delete env.VITEST;

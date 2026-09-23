@@ -3,6 +3,7 @@ import { html, nothing } from "lit";
 import { titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import type { NativeDeviceSettingsSnapshot } from "../../app/native-device-settings.ts";
+import { icons } from "../../components/icons.ts";
 import {
   renderLearnMoreLink,
   renderSettingsEmpty,
@@ -39,56 +40,102 @@ class DevicePermissionsPage extends OpenClawLightDomElement {
   private renderPermissions(snapshot: NativeDeviceSettingsSnapshot) {
     const capability = this.context.nativeDeviceSettings;
     const { permissions } = snapshot;
+    const location = permissions.location;
+    const preciseEditable = location?.preciseEditable ?? snapshot.device.platform === "macos";
     return html`
-      ${renderSettingsSection(
-        { title: t("configPage.deviceSettings.systemAccess") },
-        permissions.entries.map(({ id, status }) =>
-          renderSettingsRow({
-            title: t(`configPage.deviceSettings.permissions.${id}.title`),
-            description: t(`configPage.deviceSettings.permissions.${id}.hint`),
-            stackedOnNarrow: true,
-            control: html`
-              ${renderSettingsStatus({ kind: status === "granted" ? "ok" : status === "denied" ? "danger" : "muted", label: t(`configPage.deviceSettings.permissionStatuses.${status}`) })}
-              ${status === "notDetermined" ? html`<button type="button" class="btn" @click=${() => capability?.requestPermission(id)}>${t("configPage.deviceSettings.grant")}</button>` : status === "denied" ? html`<button type="button" class="btn" @click=${() => capability?.openSystemSettings(id)}>${t("configPage.deviceSettings.openSystemSettings")}</button>` : nothing}
-            `,
-          }),
-        ),
-      )}
-      ${renderSettingsSection(
-        { title: t("configPage.deviceSettings.location") },
-        html`
-          ${renderSettingsRow({
-            title: t("configPage.deviceSettings.locationAccess"),
-            description: t("configPage.deviceSettings.locationHint"),
-            stackedOnNarrow: true,
-            control: renderSettingsSegmented({
-              value: permissions.location.mode,
-              ariaLabel: t("configPage.deviceSettings.locationAccess"),
-              options: ["off", "whileUsing", "always"].map((value) => ({
-                value,
-                label: t(`configPage.deviceSettings.locationModes.${value}`),
-              })),
-              onChange: (value) => capability?.set("permissions.location.mode", value),
-            }),
-          })}
-          ${renderSettingsToggleRow({
-            title: t("configPage.deviceSettings.preciseLocation"),
-            description: t("configPage.deviceSettings.preciseLocationHint"),
-            checked: permissions.location.precise,
-            disabled: permissions.location.mode === "off",
-            onChange: (value) => capability?.set("permissions.location.precise", value),
-          })}
-        `,
-      )}
-      ${renderSettingsSection(
-        { title: t("configPage.deviceSettings.privacy") },
-        renderSettingsToggleRow({
-          title: t("configPage.deviceSettings.activePresence"),
-          description: t("configPage.deviceSettings.activePresenceHint"),
-          checked: snapshot.capabilities.activeComputerPresenceEnabled,
-          onChange: (value) => capability?.set("capabilities.activeComputerPresenceEnabled", value),
-        }),
-      )}
+      ${
+        permissions.entries.length > 0
+          ? renderSettingsSection(
+              { title: t("configPage.deviceSettings.systemAccess") },
+              permissions.entries.map(({ id, status }) => {
+                const requestableBinaryPermission =
+                  snapshot.device.platform === "macos" &&
+                  (id === "screenRecording" || id === "accessibility") &&
+                  status === "notDetermined";
+                return renderSettingsRow({
+                  title: t(`configPage.deviceSettings.permissions.${id}.title`),
+                  description: t(`configPage.deviceSettings.permissions.${id}.hint`),
+                  stackedOnNarrow: true,
+                  control: html`
+                    <div class="settings-permission-control">
+                      ${renderSettingsStatus({
+                        kind: "muted",
+                        dot: false,
+                        label: html`${status === "granted" ? html`<span class="settings-permission-check" aria-hidden="true">${icons.check}</span>` : nothing}${t(`configPage.deviceSettings.permissionStatuses.${requestableBinaryPermission ? "notGranted" : status}`)}`,
+                      })}
+                      ${status === "notDetermined" ? html`<button type="button" class="btn" @click=${() => capability?.requestPermission(id)}>${t("configPage.deviceSettings.grant")}</button>` : status === "denied" ? html`<button type="button" class="btn" @click=${() => capability?.openSystemSettings(id)}>${t("configPage.deviceSettings.openSystemSettings")}</button>` : nothing}
+                      ${requestableBinaryPermission ? html`<button type="button" class="btn settings-permission-recovery" @click=${() => capability?.openSystemSettings(id)}>${t("configPage.deviceSettings.openSystemSettings")}</button>` : nothing}
+                    </div>
+                  `,
+                });
+              }),
+            )
+          : nothing
+      }
+      ${
+        location
+          ? renderSettingsSection(
+              { title: t("configPage.deviceSettings.location") },
+              html`
+                ${renderSettingsRow({
+                  title: t("configPage.deviceSettings.locationAccess"),
+                  description: t("configPage.deviceSettings.locationHint"),
+                  stackedOnNarrow: true,
+                  control: renderSettingsSegmented({
+                    value: location.mode,
+                    ariaLabel: t("configPage.deviceSettings.locationAccess"),
+                    options: ["off", "whileUsing", "always"].map((value) => ({
+                      value,
+                      label: t(`configPage.deviceSettings.locationModes.${value}`),
+                    })),
+                    onChange: (value) => capability?.set("permissions.location.mode", value),
+                  }),
+                })}
+                ${
+                  !preciseEditable
+                    ? renderSettingsRow({
+                        title: t("configPage.deviceSettings.preciseLocation"),
+                        description: t("configPage.deviceSettings.preciseLocationReadOnlyHint"),
+                        stackedOnNarrow: true,
+                        control: html`
+                          <div class="settings-permission-control">
+                            ${renderSettingsStatus({ kind: "muted", dot: false, label: t(location.precise ? "configPage.deviceSettings.preciseLocationStatuses.enabled" : "configPage.deviceSettings.preciseLocationStatuses.disabled") })}
+                            <button
+                              type="button"
+                              class="btn"
+                              @click=${() => capability?.openSystemSettings("location")}
+                            >
+                              ${t("configPage.deviceSettings.openSettings")}
+                            </button>
+                          </div>
+                        `,
+                      })
+                    : renderSettingsToggleRow({
+                        title: t("configPage.deviceSettings.preciseLocation"),
+                        description: t("configPage.deviceSettings.preciseLocationHint"),
+                        checked: location.precise,
+                        disabled: location.mode === "off",
+                        onChange: (value) => capability?.set("permissions.location.precise", value),
+                      })
+                }
+              `,
+            )
+          : nothing
+      }
+      ${
+        snapshot.capabilities?.activeComputerPresenceEnabled !== undefined
+          ? renderSettingsSection(
+              { title: t("configPage.deviceSettings.privacy") },
+              renderSettingsToggleRow({
+                title: t("configPage.deviceSettings.activePresence"),
+                description: t("configPage.deviceSettings.activePresenceHint"),
+                checked: snapshot.capabilities.activeComputerPresenceEnabled,
+                onChange: (value) =>
+                  capability?.set("capabilities.activeComputerPresenceEnabled", value),
+              }),
+            )
+          : nothing
+      }
     `;
   }
 
@@ -103,8 +150,8 @@ class DevicePermissionsPage extends OpenClawLightDomElement {
     return html`
       ${renderSettingsPageHeader({
         title: titleForRoute("device-permissions"),
-        subtitle: html`${t("configPage.deviceSettings.permissionsIntro")}
-        ${renderLearnMoreLink("https://docs.openclaw.ai/platforms/macos")}`,
+        subtitle: html`${t(snapshot?.device.platform === "macos" ? "configPage.deviceSettings.permissionsIntro" : "configPage.deviceSettings.permissionsIntroIos")}
+        ${renderLearnMoreLink(`https://docs.openclaw.ai/platforms/${snapshot?.device.platform ?? "macos"}`)}`,
       })}
       ${renderSettingsWorkspace(renderSettingsPage(body))}
     `;

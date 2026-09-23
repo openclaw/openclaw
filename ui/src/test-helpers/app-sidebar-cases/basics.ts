@@ -1,10 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentsListResult } from "../../api/types.ts";
-import {
-  SIDEBAR_SESSION_NAV_COLLAPSE_QUERY,
-  sessionRefFromPath,
-} from "../../app-session-route-paths.ts";
+import { sessionRefFromPath } from "../../app-session-route-paths.ts";
 import {
   SESSION_FACE_PREFERENCE_PARAM,
   SESSION_NAVIGATION_KEY_PARAM,
@@ -94,12 +91,12 @@ describe("AppSidebar new session navigation", () => {
       Array.from(actions?.querySelectorAll("[aria-label]") ?? [], (action) =>
         action.getAttribute("aria-label"),
       ),
-    ).toEqual(["Collapse sidebar", "Open command palette", "New session"]);
+    ).toEqual(["Collapse sidebar", "Open command palette", "New conversation"]);
     sidebar.querySelector<HTMLButtonElement>(".sidebar-brand__collapse")?.click();
     sidebar.querySelector<HTMLButtonElement>(".sidebar-brand__search")?.click();
     expect(onToggleSidebar).toHaveBeenCalledOnce();
     expect(onOpenPalette).toHaveBeenCalledOnce();
-    expect(brandLink?.getAttribute("aria-label")).toBe("New session");
+    expect(brandLink?.getAttribute("aria-label")).toBe("New conversation");
     expect(brandLink).toBeInstanceOf(HTMLAnchorElement);
     expect(brandLink?.getAttribute("aria-disabled")).toBe("true");
     expect(brandLink?.hasAttribute("href")).toBe(false);
@@ -114,7 +111,7 @@ describe("AppSidebar new session navigation", () => {
       ".sidebar-session-toolbar .sidebar-new-session",
     ]) {
       const link = sidebar.querySelector<HTMLAnchorElement>(selector)!;
-      expect(link.getAttribute("aria-label")).toBe("New session");
+      expect(link.getAttribute("aria-label")).toBe("New conversation");
       expect(link.getAttribute("href")).toBe("/control/new?agent=research");
       expect(link.hasAttribute("aria-disabled")).toBe(false);
       for (const modifiers of [
@@ -162,13 +159,31 @@ describe("AppSidebar new session navigation", () => {
           archive: false,
           startTerminal: true,
         },
-        hosts: [],
+        hosts: [
+          {
+            hostId: "gateway:local",
+            label: "Gateway Mac",
+            kind: "gateway",
+            connected: true,
+            sessions: [
+              {
+                threadId: "local-thread",
+                name: "Local plan",
+                status: "stored",
+                archived: false,
+                canContinue: true,
+                canArchive: false,
+              },
+            ],
+          },
+        ],
       },
     ];
     sidebar.sessionData.requestSessionDataUpdate();
     await sidebar.updateComplete;
 
     const link = sidebar.querySelector<HTMLAnchorElement>(".sidebar-session-catalog-new")!;
+    expect(sidebar.querySelector(".sidebar-session-catalog-new-spacer")).toBeNull();
     expect(link.getAttribute("aria-label")).toBe("New session — Claude Code");
     expect(link.getAttribute("href")).toBe("/new?agent=research&catalog=claude");
     const contextMenu = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
@@ -178,6 +193,40 @@ describe("AppSidebar new session navigation", () => {
     link.click();
 
     expect(onOpenNewSession).toHaveBeenCalledWith("research", { catalogId: "claude" });
+  });
+
+  it("hides a successful empty catalog even when it can start sessions", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(
+      gateway,
+      createSessions("research", ["agent:research:main"]),
+    );
+    sidebar.connected = true;
+    sidebar.sessionData.sessionCatalogs = [
+      {
+        id: "claude",
+        label: "Claude Code",
+        capabilities: { continueSession: true, archive: false, startTerminal: true },
+        hosts: [
+          {
+            hostId: "gateway:local",
+            label: "Gateway Mac",
+            kind: "gateway",
+            connected: true,
+            sessions: [],
+          },
+        ],
+      },
+    ];
+    sidebar.sessionData.requestSessionDataUpdate();
+    await sidebar.updateComplete;
+
+    expect(sidebar.querySelector('[data-session-section="catalog:claude"]')).toBeNull();
+    expect(sidebar.querySelector(".sidebar-session-catalog-new")).toBeNull();
+    // Without a visible peer section the lone Other zone stays headerless.
+    expect(
+      sidebar.querySelector('[data-session-section="ungrouped"] .sidebar-recent-sessions__head'),
+    ).toBeNull();
   });
 });
 
@@ -200,9 +249,7 @@ describe("AppSidebar agent chip", () => {
       ?.getAttribute("href");
     const sessionUrl = new URL(href ?? "", window.location.origin);
     expect(sessionUrl.pathname).toBe("/chat/research/telegram/12345");
-    expect(sessionUrl.searchParams.get(SIDEBAR_SESSION_NAV_COLLAPSE_QUERY.name)).toBe(
-      SIDEBAR_SESSION_NAV_COLLAPSE_QUERY.value,
-    );
+    expect(sessionUrl.search).toBe("");
     expect(sessionRefFromPath(sessionUrl.pathname)).toMatchObject({
       kind: "literal",
       sessionKey: "agent:research:telegram:12345",
@@ -256,9 +303,39 @@ describe("AppSidebar agent chip", () => {
     // createSessionState stamps ascending updatedAt, so the last key is newest.
     expect(setSessionKey).not.toHaveBeenCalled();
     expect(onNavigate).toHaveBeenCalledWith("chat", {
-      pathname: "/chat/main/00000002",
+      pathname: "/chat/main/00000002000040008000000000000000",
       search: `?${SESSION_NAVIGATION_KEY_PARAM}=${encodeURIComponent(taskKey)}`,
     });
+  });
+
+  it("switches the Skills owner without opening an agent conversation", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar, context } = await mountSidebar(
+      gateway,
+      createSessions("main", ["agent:main:main"]),
+      "panel",
+      TWO_AGENTS,
+    );
+    const onNavigate = vi.fn();
+    sidebar.activeRouteId = "skills";
+    sidebar.connected = true;
+    sidebar.onNavigate = onNavigate;
+    await sidebar.updateComplete;
+
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")!.click();
+    await sidebar.updateComplete;
+    sidebar
+      .querySelector<HTMLElement>('.sidebar-agent-menu wa-dropdown-item[value="agent:research"]')!
+      .click();
+    await sidebar.updateComplete;
+
+    expect(context.agentSelection.state).toEqual({
+      selectedId: "research",
+      scopeId: "research",
+    });
+    expect(sidebar.querySelector(".sidebar-agent-card__name")?.textContent).toContain("research");
+    expect(sidebar.querySelector(".sidebar-agent-menu")).toBeNull();
+    expect(onNavigate).not.toHaveBeenCalled();
   });
 
   it("keeps agent ids distinct from utility command values", async () => {
@@ -318,14 +395,16 @@ describe("AppSidebar agent chip", () => {
     ).not.toContain("Online");
 
     sidebar.connected = false;
-    sidebar.offline = true;
+    sidebar.connectionStatus = "reconnecting";
     await sidebar.updateComplete;
     const card = sidebar.querySelector<HTMLButtonElement>(".sidebar-identity-card");
     expect(card?.querySelector(".sidebar-identity-card__name")?.textContent?.trim()).toBe("Owner");
     expect(card?.querySelector(".sidebar-identity-card__subtitle")).toBeNull();
-    const connectionStatus = sidebar.querySelector(".sidebar-footer-bar__status");
-    expect(connectionStatus?.getAttribute("aria-live")).toBe("polite");
-    expect(connectionStatus?.textContent).toContain("Offline");
+    const connectionStatus = sidebar.querySelector(".gateway-status");
+    expect(
+      sidebar.querySelector('.sidebar-footer-bar > [role="status"]')?.getAttribute("aria-live"),
+    ).toBe("polite");
+    expect(connectionStatus?.textContent).not.toContain("Offline");
     expect(connectionStatus?.textContent).toContain("Reconnecting…");
     expect(sidebar.querySelector(".sidebar-agent-card__subtitle-row")).toBeNull();
 
@@ -336,13 +415,13 @@ describe("AppSidebar agent chip", () => {
     menu?.dispatchEvent(new CustomEvent("wa-select", { detail: { item: retry }, bubbles: true }));
     expect(onRetryConnect).toHaveBeenCalledOnce();
 
-    sidebar.offline = false;
+    sidebar.connectionStatus = null;
     await sidebar.updateComplete;
     expect(sidebar.querySelector(".sidebar-identity-card__subtitle")).toBeNull();
-    expect(sidebar.querySelector(".sidebar-footer-bar__status")).toBeNull();
+    expect(sidebar.querySelector(".gateway-status")).toBeNull();
   });
 
-  it("shows the Home spinner without an agent subtitle during an active run", async () => {
+  it("shows the Home ring without an agent subtitle during an active run", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const harness = createSessionsHarness("main", ["agent:main:main"]);
     const { sidebar } = await mountSidebar(gateway, harness.sessions);
@@ -368,15 +447,16 @@ describe("AppSidebar agent chip", () => {
     await sidebar.updateComplete;
 
     expect(sidebar.querySelector(".sidebar-agent-card__subtitle-row")).toBeNull();
-    // Run state uses the session spinner at the row edge without changing the Home icon.
-    const spinner = sidebar.querySelector(".nav-item--home .nav-item__state .session-run-spinner");
+    // Run state wraps the Home icon and suppresses its unread badge.
+    const spinner = sidebar.querySelector(".nav-item--home .session-glyph__ring");
     expect(spinner).not.toBeNull();
     expect(sidebar.querySelector(".nav-item--home .nav-item__icon")).not.toBeNull();
-    expect(sidebar.querySelector(".nav-item--home .session-glyph__ring")).toBeNull();
+    expect(
+      sidebar.querySelector(".nav-item--home .nav-item__state .session-run-spinner"),
+    ).toBeNull();
     expect(sidebar.querySelector(".nav-item--home .session-glyph__badge--unread")).toBeNull();
     expect(spinner?.getAttribute("role")).toBe("img");
     expect(spinner?.getAttribute("aria-label")).toBe("Active run");
-    expect(spinner?.getAttribute("title")).toBe("Active run");
 
     harness.publishList({
       result: {
@@ -389,7 +469,7 @@ describe("AppSidebar agent chip", () => {
       agentId: "main",
     });
     await sidebar.updateComplete;
-    expect(sidebar.querySelector(".nav-item--home .session-run-spinner")).toBeNull();
+    expect(sidebar.querySelector(".nav-item--home .session-glyph__ring")).toBeNull();
     expect(sidebar.querySelector(".nav-item--home .session-glyph__badge--unread")).not.toBeNull();
   });
 
@@ -502,13 +582,20 @@ describe("AppSidebar agent chip", () => {
     expect(sidebar.querySelector(".nav-item--home .session-glyph__badge--unread")).not.toBeNull();
   });
 
-  it("promotes main-session children to top-level threads, including alias parent keys", async () => {
+  it.each([
+    { key: "main", mainKey: "main", pinned: false },
+    { key: "agent:main:main", mainKey: "main", pinned: true },
+    { key: "agent:main:workspace", mainKey: "workspace", pinned: false },
+    { key: "global", mainKey: "main", pinned: true, scope: "global" },
+  ])("shows only Home for $key even with subagents", async ({ key, mainKey, pinned, scope }) => {
     const gateway = createGateway({} as GatewayBrowserClient);
-    // The gateway row uses the unprefixed "main" alias; children index under
-    // that literal key, so promotion must follow the row's key, not only the
-    // synthesized agent:main:main form.
-    const harness = createSessionsHarness("main", ["main"]);
-    const { sidebar } = await mountSidebar(gateway, harness.sessions);
+    const harness = createSessionsHarness("main", [key]);
+    const { sidebar } = await mountSidebar(gateway, harness.sessions, "panel", {
+      defaultId: "main",
+      mainKey,
+      scope: scope === "global" ? "global" : "per-sender",
+      agents: [{ id: "main", identity: { name: "Molty" } }],
+    });
     harness.publishList({
       result: {
         ts: 2,
@@ -517,29 +604,63 @@ describe("AppSidebar agent chip", () => {
         defaults: { modelProvider: null, model: null, contextTokens: null },
         sessions: [
           {
-            key: "main",
-            kind: "direct",
+            key,
+            kind: scope === "global" ? "global" : "direct",
+            label: "[OpenClaw heartbeat poll]",
+            category: "Team",
+            pinned,
             updatedAt: 5,
             childSessions: ["agent:main:subagent:thread-a"],
           },
           {
             key: "agent:main:subagent:thread-a",
-            spawnedBy: "main",
+            spawnedBy: key,
             kind: "direct",
             label: "Spawned thread",
             updatedAt: 4,
+            hasActiveRun: true,
+            status: "running",
           },
         ],
       },
     });
     await sidebar.updateComplete;
 
-    // The main row hides behind the identity card; its child surfaces as a
-    // top-level (non-child) thread row.
-    expect(sidebar.querySelector('[data-session-key="main"]')).toBeNull();
-    const promoted = sidebar.querySelector('[data-session-key="agent:main:subagent:thread-a"]');
-    expect(promoted).not.toBeNull();
-    expect(promoted?.classList.contains("sidebar-recent-session--child")).toBe(false);
-    expect(promoted?.textContent).toContain("Spawned thread");
+    expect(sidebar.querySelectorAll('.nav-item--home[href="/chat/main"]')).toHaveLength(1);
+    expect(sidebar.querySelector(`[data-session-key="${key}"]`)).toBeNull();
+    expect(sidebar.querySelector(`[data-child-session-toggle="${key}"]`)).toBeNull();
+    expect(sidebar.querySelector('[data-session-key="agent:main:subagent:thread-a"]')).toBeNull();
+    expect(
+      sidebar.querySelector('.nav-item--home .session-glyph__ring[aria-label="Subagents working"]'),
+    ).not.toBeNull();
+
+    const result = harness.sessions.state.result!;
+    harness.publishList({
+      result: {
+        ...result,
+        ts: 3,
+        sessions: result.sessions.map((row) =>
+          row.key === "agent:main:subagent:thread-a"
+            ? Object.assign({}, row, {
+                hasActiveRun: false,
+                status: "failed",
+                endedAt: 6,
+                updatedAt: 6,
+                lastRunError: "Review failed",
+              })
+            : row,
+        ),
+      },
+    });
+    await sidebar.updateComplete;
+    expect(sidebar.querySelectorAll(".nav-item--home")).toHaveLength(1);
+    expect(sidebar.querySelector(`[data-session-key="${key}"]`)).toBeNull();
+    expect(sidebar.querySelector(".nav-item--home .session-glyph__ring")).toBeNull();
+    expect(
+      sidebar.querySelector('.nav-item--home [data-session-attention="error"]'),
+    ).not.toBeNull();
+    expect(sidebar.querySelector(".nav-item--home")?.textContent).toContain(
+      "Child session Spawned thread failed: Review failed",
+    );
   });
 });

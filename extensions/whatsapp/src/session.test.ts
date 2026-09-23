@@ -14,6 +14,7 @@ import {
   type MockInstance,
   vi,
 } from "vitest";
+import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import { logWebSelfId } from "./auth-store.js";
 import { enqueueCredsSave } from "./creds-persistence.js";
 import { baileys, getLastSocket, resetBaileysMocks, resetLoadConfigMock } from "./test-helpers.js";
@@ -710,11 +711,7 @@ describe("web session", () => {
       JSON.stringify({ me: { id: "12345@s.whatsapp.net" } }),
       "utf-8",
     );
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
+    const runtime = createRuntimeSpies();
 
     logWebSelfId(authDir, runtime as never, true);
 
@@ -733,11 +730,7 @@ describe("web session", () => {
       }),
       "utf-8",
     );
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
+    const runtime = createRuntimeSpies();
 
     logWebSelfId(authDir, runtime as never, true);
 

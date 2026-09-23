@@ -76,8 +76,8 @@ const invalidConfigRedactionMetadata: SystemAgentConfigRedactionMetadata = {
   ...baseConfigRedactionMetadata,
   channelIds: new Set(),
 };
-// Inventory survives config reloads; owner-specific sensitive hints do not.
-// Bind cached redaction to both snapshots so a new owner cannot inherit stale hints.
+// Inventory survives config reloads; the selected channel schemas do not.
+// Bind cached redaction to both snapshots so path classification follows the current owner.
 const metadataConfigRedaction = new WeakMap<
   PluginMetadataSnapshot,
   WeakMap<object, SystemAgentConfigRedactionMetadata>
@@ -149,6 +149,11 @@ function resolveSystemAgentConfigRedactionMetadata(
     allowWorkspaceScopedSnapshot: true,
   });
   return snapshot ? resolveMetadataConfigRedaction(snapshot, config) : baseConfigRedactionMetadata;
+}
+
+/** The same active schema owns both setting help and sensitive-value classification. */
+export function resolveSystemAgentConfigSchema(): ConfigSchemaResponse {
+  return resolveSystemAgentConfigRedactionMetadata().schema;
 }
 
 function splitConfigHintPath(path: string): string[] {

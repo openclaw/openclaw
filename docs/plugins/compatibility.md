@@ -126,6 +126,17 @@ cleared; the existing `--fail-on-eligible-compat` gate continues to apply only
 to dated `deprecated` records. Reader references are surface-token matches for
 triage; use the published-artifact sweep before authorizing removal.
 
+### Synchronous plugin state
+
+`plugin-state-sync-keyed-store` names the existing synchronous keyed-store adapter.
+Its September 11, 2026 deprecation uses the `next-plugin-sdk-major` removal gate,
+with editor annotations and documentation rather than new runtime warnings.
+Existing synchronous methods, plugin trust eligibility, and transactional callback
+semantics remain unchanged. Migrate to awaited `openKeyedStore` operations using
+the [state-store migration guide](/plugins/sdk-runtime/state-and-system#synchronous-keyed-store-migration).
+Removal still requires a supported external-plugin migration and explicit
+breaking-release approval.
+
 ### Session agent resolution aliases
 
 New plugins should use `resolveSessionAgentIdsStrict` or
@@ -134,7 +145,8 @@ session key, a prepared fallback agent, or a persisted fixed-store owner.
 
 The older `resolveSessionAgentIds` and `resolveSessionAgentId` Plugin SDK
 exports preserve ambient system-agent fallback only when strict resolution
-fails because no owner was supplied. They do not override explicit,
+fails because no owner was supplied. These aliases treat empty or whitespace-only
+agent IDs as omitted; strict resolvers reject supplied blank IDs. They do not override explicit,
 agent-scoped, persisted, conflicting, or retired owner outcomes. These aliases
 are deprecated as of August 29, 2026, and remain available through November 29, 2026. Removal also requires a published-plugin reader sweep and explicit
 breaking-release approval.
@@ -158,13 +170,16 @@ New channel plugins should use `MsgContext.ChannelPromptContext`,
 `SupplementalContextFacts.channelStructuredContext`. The older
 `UntrustedContext`, `UntrustedStructuredContext`,
 `UntrustedStructuredContextEntry`, and supplemental `untrustedContext` names
-remain as deprecated SDK aliases until 2026-09-08 (registry record
-`sdk-untrusted-context-identifier-aliases`). Inbound finalization folds those
+remain as deprecated SDK aliases. Their 2026-09-08 removal review date is
+unchanged, but registry record `sdk-untrusted-context-identifier-aliases` is now
+`removal-pending`: removal still requires verified migration of published plugin
+readers and explicit breaking-release approval. Inbound finalization folds those
 deprecated fields into the channel-named fields and removes the old keys from
 runtime context.
 
 The security runtime similarly exports `buildChannelMetadata`; the deprecated
-`buildUntrustedChannelMetadata` alias remains available on the same schedule.
+`buildUntrustedChannelMetadata` alias remains available under the same pending
+removal conditions.
 
 ### WhatsApp inbound callback retirement
 

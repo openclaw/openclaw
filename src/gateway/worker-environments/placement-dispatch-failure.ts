@@ -1,5 +1,7 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { supportsWorkerExecutionContextLaunch } from "./admission.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { STALE_WORKER_BUILD_REASON, supportsCurrentWorkerLaunch } from "./admission.js";
+import { DevicePlacementUnavailableError } from "./device-placement-eligibility.js";
 import { matchesWorkerPlacementTarget } from "./placement-reclaim-contract.js";
 import {
   FORCED_WORKER_ABANDONMENT_ERROR,
@@ -10,8 +12,12 @@ import type {
   createWorkerSessionPlacementStore,
   WorkerSessionPlacementRecord,
 } from "./placement-store.js";
-import type { WorkerPlacementAuthorization } from "./service-contract.js";
+import type {
+  WorkerEnvironmentServiceContract,
+  WorkerPlacementAuthorization,
+} from "./service-contract.js";
 import type { WorkerEnvironmentService } from "./service.js";
+import { isFailedWorkerPlacementEnvironmentGone } from "./session-placement-lifecycle.js";
 import { boundedWorkerError as boundedError } from "./worker-error.js";
 
 export type WorkerDispatchPlacement = WorkerSessionPlacementRecord;
@@ -19,7 +25,7 @@ export type WorkerActiveDispatchPlacement = Extract<
   WorkerSessionPlacementRecord,
   { state: "active" }
 >;
-export type WorkerFailedDispatchPlacement = Extract<WorkerDispatchPlacement, { state: "failed" }>;
+type WorkerFailedDispatchPlacement = Extract<WorkerDispatchPlacement, { state: "failed" }>;
 export type WorkerProvisioningDispatchPlacement = Extract<
   WorkerDispatchPlacement,
   { state: "provisioning" }
@@ -67,6 +73,7 @@ export type WorkerDispatchPlacementStore = Pick<
   | "abandonWorkspaceResult"
   | "listForReconcile"
   | "releaseTurn"
+  | "bindPreparedEnvironment"
   | "startDispatch"
   | "startDrain"
   | "startWorkspaceResultDrain"
@@ -78,8 +85,12 @@ export type WorkerDispatchPlacementStore = Pick<
 export type WorkerDispatchEnvironmentService = Pick<
   WorkerEnvironmentService,
   | "attachSession"
-  | "create"
-  | "createFromProfileSnapshot"
+  | "bindPreparedWorkspace"
+  | "prepareProjectIntent"
+  | "assertPreparedIntentCurrent"
+  | "getPreparedCandidates"
+  | "schedulePreparedRefill"
+  | "createWithRequest"
   | "destroy"
   | "get"
   | "reconcileEnvironment"
@@ -100,6 +111,37 @@ export type WorkerActivationBarrier = (params: {
 }) => Promise<WorkerActiveDispatchPlacement>;
 
 const RECOVERY_ERROR_LIMIT = 1_024;
+const log = createSubsystemLogger("gateway/worker-placement");
+
+export function canRetryDeviceDispatch(params: {
+  error: unknown;
+  deviceId: string;
+  sessionId: string;
+  sessionKey: string;
+  agentId: string;
+  attempted: WorkerDispatchPlacement | undefined;
+  current: WorkerDispatchPlacement | undefined;
+  environments: Pick<WorkerEnvironmentServiceContract, "get"> | undefined;
+}): boolean {
+  const { error, attempted, current } = params;
+  // Startup alone attests that workspace work never began. Cleanup must settle
+  // for that exact failed generation before Auto selects another host.
+  return (
+    error instanceof DevicePlacementUnavailableError &&
+    error.deviceId === params.deviceId &&
+    current?.state === "failed" &&
+    attempted?.state === "failed" &&
+    current.generation === attempted.generation &&
+    current.environmentId === attempted.environmentId &&
+    current.sessionId === params.sessionId &&
+    current.sessionKey === params.sessionKey &&
+    current.agentId === params.agentId &&
+    isFailedWorkerPlacementEnvironmentGone({
+      environmentService: params.environments,
+      placement: current,
+    })
+  );
+}
 
 export function workerDisappearanceError(
   environment: ReturnType<WorkerEnvironmentService["get"]>,
@@ -155,7 +197,7 @@ export function isCurrentActiveWorkerEnvironment(
     environment?.bootstrapReceipt?.bundleHash === placement.workerBundleHash &&
     // A persisted bundle hash can still match a worker using an older launch shape.
     // Recovery may reuse only the currently admitted execution-context dialect.
-    supportsWorkerExecutionContextLaunch(environment?.bootstrapReceipt)
+    supportsCurrentWorkerLaunch(environment?.bootstrapReceipt)
   );
 }
 
@@ -252,12 +294,22 @@ export function createPlacementFailureActions(deps: {
     // Forced abandonment is a committed decision used by Continue on Gateway. Retrying
     // physical cleanup must not replace that decision or advance its placement generation.
     if (teardownErrors.length > 0 && placement.recoveryError !== FORCED_WORKER_ABANDONMENT_ERROR) {
-      const recoveryError = [placement.recoveryError, ...teardownErrors].filter(Boolean).join("; ");
-      placements.fail({
-        sessionId: placement.sessionId,
-        expectedGeneration: placement.generation,
-        recoveryError: truncateUtf16Safe(recoveryError, RECOVERY_ERROR_LIMIT),
-      });
+      // The terminal cause is immutable; composing from retry output grows a new
+      // cleanup suffix on every sweep and eventually hides the latest diagnosis.
+      const originalError = placement.terminalReason ?? placement.recoveryError;
+      const recoveryError = boundedError(
+        [originalError, ...teardownErrors.filter((detail) => !originalError.includes(detail))]
+          .filter(Boolean)
+          .join("; "),
+        RECOVERY_ERROR_LIMIT,
+      );
+      if (recoveryError !== placement.recoveryError) {
+        placements.fail({
+          sessionId: placement.sessionId,
+          expectedGeneration: placement.generation,
+          recoveryError,
+        });
+      }
     }
     // The persisted failure may intentionally retain an earlier terminal cause.
     return teardownErrors.length > 0 ? boundedError(teardownErrors.join("; ")) : undefined;
@@ -344,6 +396,27 @@ export function createPlacementFailureActions(deps: {
       return;
     }
     const reconciling = startReconcile(draining);
+    if (
+      environment?.state === "failed" &&
+      environment.error === STALE_WORKER_BUILD_REASON &&
+      environment.leaseId === null &&
+      !placements
+        .listPendingWorkspaceResults(placement.sessionId)
+        .some((result) => result.sessionId === placement.sessionId)
+    ) {
+      // Retained conflict reports and staged refs survive redispatch; only pending results
+      // block idle retirement. Reclaim and publication still consult retained conflicts.
+      placements.transition({
+        sessionId: reconciling.sessionId,
+        from: "reconciling",
+        to: "reclaimed",
+        expectedGeneration: reconciling.generation,
+      });
+      log.info(
+        `Reclaimed idle cloud worker sessionId=${boundedError(placement.sessionId, 128)} environmentId=${boundedError(placement.environmentId, 128)}: ${STALE_WORKER_BUILD_REASON}`,
+      );
+      return;
+    }
     if (
       !environment ||
       environment.state === "destroyed" ||

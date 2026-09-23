@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Model } from "../types.js";
 import { buildOpenAICompletionsParams } from "./openai-completions-params.js";
 import { makeCompletionsModel } from "./openai-completions.test-support.js";
+import { buildOpenAIResponsesParams } from "./openai-responses-params-internal.js";
 
 function emptyContext() {
   return { systemPrompt: "system", messages: [], tools: [] } as never;
@@ -40,6 +41,70 @@ function promptCacheModel() {
 }
 
 describe("openai completions params", () => {
+  describe.each(["openai-completions", "openai-responses"] as const)("%s cache policy", (api) => {
+    const build =
+      api === "openai-completions" ? buildOpenAICompletionsParams : buildOpenAIResponsesParams;
+    it.each(["none", "short", "long"] as const)("honors native retention %s", (cacheRetention) => {
+      for (const [id, lifetime] of [
+        ["gpt-5.4", { prompt_cache_retention: "24h" }],
+        ["gpt-5.4-2026-03-05", { prompt_cache_retention: "24h" }],
+        ["gpt-5.6-sol", { prompt_cache_options: { ttl: "30m" } }],
+        ["gpt-5.6-terra", { prompt_cache_options: { ttl: "30m" } }],
+        ["gpt-5.6-luna", { prompt_cache_options: { ttl: "30m" } }],
+        ["gpt-4o", {}],
+      ] as const) {
+        const params = build(
+          {
+            ...makeCompletionsModel({
+              id,
+              provider: "openai",
+              baseUrl: "https://api.openai.com/v1",
+            }),
+            api,
+          },
+          { messages: [] },
+          { sessionId: "session-123", cacheRetention },
+        );
+        expect(params.prompt_cache_key, id).toBe(
+          cacheRetention === "none" ? undefined : "session-123",
+        );
+        expect(params.prompt_cache_retention, id).toBe(
+          cacheRetention === "long" && "prompt_cache_retention" in lifetime
+            ? lifetime.prompt_cache_retention
+            : undefined,
+        );
+        expect(params.prompt_cache_options, id).toEqual(
+          cacheRetention === "long" && "prompt_cache_options" in lifetime
+            ? lifetime.prompt_cache_options
+            : undefined,
+        );
+      }
+    });
+
+    it.each([
+      ["https://api.openai.com/v1", { supportsPromptCacheKey: false }, undefined, undefined],
+      ["https://proxy.example/v1", undefined, undefined, undefined],
+      ["https://proxy.example/api.openai.com/v1", undefined, undefined, undefined],
+      ["https://api.openai.com.proxy.example/v1", undefined, undefined, undefined],
+      ["https://proxy.example/v1", { supportsPromptCacheKey: true }, "session-123", "24h"],
+      [
+        "https://api.openai.com/v1",
+        { supportsLongCacheRetention: false },
+        "session-123",
+        undefined,
+      ],
+    ])("respects endpoint and compat policy: %s %s", (baseUrl, compat, key, lifetime) => {
+      const params = build(
+        { ...makeCompletionsModel({ id: "gpt-5.4", provider: "openai", baseUrl, compat }), api },
+        { messages: [] },
+        { sessionId: "session-123", cacheRetention: "long" },
+      );
+      expect(params.prompt_cache_key).toBe(key);
+      expect(params.prompt_cache_retention).toBe(lifetime);
+      expect(params.prompt_cache_options).toBeUndefined();
+    });
+  });
+
   it("uses system role and streaming usage compat for native Qwen completions providers", () => {
     const params = buildOpenAICompletionsParams(
       makeCompletionsModel({

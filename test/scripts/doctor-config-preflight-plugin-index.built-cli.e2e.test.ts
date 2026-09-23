@@ -122,16 +122,6 @@ describe("Doctor plugin index persistence built CLI proof", () => {
 
     clearPluginMetadataLifecycleCaches();
     closeOpenClawStateDatabaseForTest();
-    const reread = loadPluginMetadataSnapshot({
-      config,
-      env: instance.env,
-      stateDir: instance.stateDir,
-      workspaceDir,
-      allowCurrent: false,
-    });
-    expect(reread.registrySource, instance.logs()).toBe("persisted");
-    expect(reread.registryDiagnostics, instance.logs()).toStrictEqual([]);
-
     const persisted = readPersistedInstalledPluginIndexSync({ env: instance.env });
     const persistedPlugin = persisted?.plugins.find((plugin) => plugin.pluginId === pluginId);
     expect(persistedPlugin, instance.logs()).toMatchObject({
@@ -143,5 +133,20 @@ describe("Doctor plugin index persistence built CLI proof", () => {
       doctorContractHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
       packageBuild: { bundledDist: false },
     });
+
+    // Source readers intentionally select different bundled Doctor contracts.
+    // Observe the repaired index through the same built host as the Gateway.
+    const listed = await instance.cli(["plugins", "list", "--json"]);
+    expect(listed.code, listed.stderr).toBe(0);
+    expect(listed.signal).toBeNull();
+    const reread = JSON.parse(listed.stdout) as {
+      registry: { source: string; diagnostics: unknown[] };
+    };
+    expect(reread.registry.source, instance.logs()).toBe("persisted");
+    expect(reread.registry.diagnostics, instance.logs()).toStrictEqual([]);
+
+    clearPluginMetadataLifecycleCaches();
+    closeOpenClawStateDatabaseForTest();
+    expect(readPersistedInstalledPluginIndexSync({ env: instance.env })).toEqual(persisted);
   }, 120_000);
 });

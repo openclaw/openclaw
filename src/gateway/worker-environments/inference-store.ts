@@ -19,8 +19,11 @@ import {
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 
-type InferenceDb = Pick<StateDatabase, "worker_inference_turns">;
+type InferenceDb = Pick<StateDatabase, "worker_inference_turns"> & {
+  pragma_encoding: { encoding: string };
+};
 type TurnRow = Selectable<WorkerInferenceTurns>;
+type TurnIdentityRow = Pick<TurnRow, "session_id" | "run_epoch" | "run_id" | "turn_id">;
 type TurnInsert = Insertable<WorkerInferenceTurns>;
 
 export type WorkerInferenceTurnInput = {
@@ -180,7 +183,7 @@ function insertPendingTurn(db: DatabaseSync, input: NormalizedTurnInput): void {
   executeSqliteQuerySync(db, query(db).insertInto("worker_inference_turns").values(turn));
 }
 
-function deleteTurn(db: DatabaseSync, row: TurnRow): void {
+function deleteTurn(db: DatabaseSync, row: TurnIdentityRow): void {
   executeSqliteQuerySync(
     db,
     query(db)
@@ -199,19 +202,36 @@ function pruneTerminalTurns(params: {
   policy: WorkerInferenceRetentionPolicy;
   preserve?: WorkerInferenceTurnIdentity;
 }): void {
-  const rows = executeSqliteQuerySync(
-    params.db,
-    query(params.db)
-      .selectFrom("worker_inference_turns")
-      .selectAll()
-      .where("state", "=", "terminal")
-      .orderBy("updated_at_ms", "desc")
-      .orderBy("session_id", "asc")
-      .orderBy("run_epoch", "desc")
-      .orderBy("run_id", "asc")
-      .orderBy("turn_id", "asc"),
-  ).rows;
-  const isPreserved = (row: TurnRow) =>
+  const db = query(params.db);
+  const utf8 =
+    executeSqliteQueryTakeFirstSync(params.db, db.selectFrom("pragma_encoding").select("encoding"))
+      ?.encoding === "UTF-8";
+  const retained = db
+    .selectFrom("worker_inference_turns")
+    .select(["session_id", "run_epoch", "run_id", "turn_id", "updated_at_ms"])
+    .where("state", "=", "terminal")
+    .orderBy("updated_at_ms", "desc")
+    .orderBy("session_id", "asc")
+    .orderBy("run_epoch", "desc")
+    .orderBy("run_id", "asc")
+    .orderBy("turn_id", "asc");
+  // UTF-8 lengths need no payload reads; UTF-16 stores retain the UTF-8 budget.
+  const rows = utf8
+    ? executeSqliteQuerySync(
+        params.db,
+        retained.select((eb) =>
+          eb.fn<number>("octet_length", ["terminal_json"]).as("terminal_bytes"),
+        ),
+      ).rows
+    : executeSqliteQuerySync(params.db, retained.select("terminal_json")).rows.map((row) => ({
+        session_id: row.session_id,
+        run_epoch: row.run_epoch,
+        run_id: row.run_id,
+        turn_id: row.turn_id,
+        updated_at_ms: row.updated_at_ms,
+        terminal_bytes: Buffer.byteLength(row.terminal_json ?? "", "utf8"),
+      }));
+  const isPreserved = (row: TurnIdentityRow) =>
     params.preserve !== undefined &&
     row.session_id === params.preserve.sessionId &&
     row.run_epoch === params.preserve.runEpoch &&
@@ -222,7 +242,7 @@ function pruneTerminalTurns(params: {
   let retainedRows = 0;
   let retainedBytes = 0;
   for (const row of rows) {
-    const terminalBytes = Buffer.byteLength(row.terminal_json ?? "", "utf8");
+    const terminalBytes = row.terminal_bytes;
     const preserve = isPreserved(row);
     const expired = row.updated_at_ms < cutoffMs;
     const exceedsRows = retainedRows >= params.policy.maxRows;

@@ -28,6 +28,65 @@ struct RemotePortTunnelTests {
         #expect(!options.contains { $0.hasPrefix("UpdateHostKeys=") })
     }
 
+    @Test(arguments: ["ws://127.0.0.1:19089", "ws://localhost:19089", "ws://[::1]:19089"])
+    func `tunnel local port comes from the remote URL independently of the local gateway`(url: String) {
+        let root: [String: Any] = ["gateway": ["port": 18789, "remote": ["url": url]]]
+        #expect(RemotePortTunnel.localPort(root: root) == 19089)
+    }
+
+    @Test(arguments: [("", 19789), ("ws://localhost", 18789), ("wss://gateway.example:19089", 19789)])
+    func `legacy fallback preserves explicit loopback URL defaults`(scenario: (String, Int)) {
+        let (url, expectedPort) = scenario
+        let root: [String: Any] = ["gateway": ["port": 19789, "remote": ["url": url]]]
+        #expect(RemotePortTunnel.localPort(root: root, legacyPort: 19789, environment: [:]) == expectedPort)
+    }
+
+    @Test(arguments: [18789, 19789])
+    func `legacy SSH primary keeps both ports before hosting is enabled`(legacyPort: Int) {
+        var remote: [String: Any] = ["transport": "ssh", "sshTarget": "operator@gateway.example"]
+        let root: [String: Any] = ["gateway": ["mode": "remote", "port": legacyPort, "remote": remote]]
+        let ports = RemotePortTunnel.ports(
+            root: root, sshHost: "gateway.example", legacyPort: legacyPort, environment: [:])
+        #expect(ports.local == legacyPort)
+        #expect(ports.remote == legacyPort)
+        remote["remotePort"] = 18800
+        let explicit = RemotePortTunnel.ports(
+            root: ["gateway": ["remote": remote]], sshHost: "gateway.example", legacyPort: legacyPort, environment: [:])
+        #expect(explicit.local == legacyPort)
+        #expect(explicit.remote == 18800)
+    }
+
+    @Test(arguments: [(nil as String?, 19889), ("19989", 19989)])
+    func `legacy SSH keeps a live configured listener separate from the reserved default`(scenario: (String?, Int)) {
+        let (override, expectedLocalPort) = scenario
+        let root: [String: Any] = ["gateway": [
+            "mode": "remote", "port": 19889,
+            "remote": ["transport": "ssh", "sshTarget": "operator@gateway.example"],
+        ]]
+        let ports = RemotePortTunnel.ports(
+            root: root, sshHost: "gateway.example", legacyPort: 19789,
+            environment: override.map { ["OPENCLAW_GATEWAY_PORT": $0] } ?? [:])
+        #expect(ports.local == expectedLocalPort)
+        #expect(ports.remote == 19789)
+    }
+
+    @Test(arguments: [false, true])
+    func `remote port survives removal of the local bind port`(explicitRemotePort: Bool) {
+        var remote: [String: Any] = ["url": "ws://127.0.0.1:19089"]
+        if explicitRemotePort { remote["remotePort"] = 18789 }
+        var gateway: [String: Any] = ["port": 19089, "remote": remote]
+        for hasLocalPort in [true, false] {
+            if !hasLocalPort { gateway.removeValue(forKey: "port") }
+            let root: [String: Any] = ["gateway": gateway]
+            let resolved = RemotePortTunnel.resolveRemotePortOverride(
+                defaultRemotePort: 18789, for: "gateway.example", root: root) ?? 18789
+            #expect(resolved == (explicitRemotePort ? 18789 : 19089))
+            #expect(RemotePortTunnel.localPort(root: root) == 19089)
+        }
+    }
+}
+
+struct RemotePortTunnelSocketTests {
     @Test func `port is free detects I pv4 listener`() {
         var fd = socket(AF_INET, SOCK_STREAM, 0)
         #expect(fd >= 0)
@@ -82,41 +141,6 @@ struct RemotePortTunnelTests {
             usleep(10000) // 10ms
         }
         #expect(free == true)
-    }
-
-    @Test @MainActor func `remote port override prefers explicit remote port`() async {
-        let configPath = TestIsolation.tempConfigPath()
-        await TestIsolation.withIsolatedState(env: ["OPENCLAW_CONFIG_PATH": configPath]) {
-            OpenClawConfigFile.saveDict([
-                "gateway": [
-                    "remote": [
-                        "url": "ws://127.0.0.1:19089",
-                        "remotePort": 18789,
-                    ],
-                ],
-            ])
-
-            #expect(RemotePortTunnel._testResolveRemotePortOverride(
-                defaultRemotePort: 19089,
-                sshHost: "gateway.example") == 18789)
-        }
-    }
-
-    @Test @MainActor func `remote port override can read loopback url port`() async {
-        let configPath = TestIsolation.tempConfigPath()
-        await TestIsolation.withIsolatedState(env: ["OPENCLAW_CONFIG_PATH": configPath]) {
-            OpenClawConfigFile.saveDict([
-                "gateway": [
-                    "remote": [
-                        "url": "ws://127.0.0.1:18789",
-                    ],
-                ],
-            ])
-
-            #expect(RemotePortTunnel._testResolveRemotePortOverride(
-                defaultRemotePort: 19089,
-                sshHost: "gateway.example") == 18789)
-        }
     }
 }
 

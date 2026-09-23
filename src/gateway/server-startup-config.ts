@@ -11,6 +11,11 @@ import { measureDiagnosticsTimelineSpan } from "../infra/diagnostics-timeline.js
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
+  describeSecretResolutionOperatorDiagnostic,
+  describeSecretResolutionOperatorRecovery,
+  isSecretResolutionError,
+} from "../secrets/resolve-errors.js";
+import {
   classifySecretResolutionErrorDegradations,
   isRetryableSecretDegradationReason,
   listSecretResolutionErrorOwners,
@@ -19,7 +24,6 @@ import {
   collectCandidateAgentDirs,
   prepareSecretsRuntimeFastPathSnapshot,
 } from "../secrets/runtime-fast-path.js";
-import { registerProviderAuthRuntimeSnapshotActivationOwner } from "../secrets/runtime-provider-auth-activation.js";
 import {
   listProviderAuthDegradedOwners,
   preparedDegradationSupportsSourceOnlyRecovery,
@@ -34,6 +38,7 @@ import {
   hasActiveSecretsRuntimeSnapshotLineage,
   hasSameSecretReloadContract,
   hasCurrentAuthStoreCredentialsRevision,
+  registerProviderAuthRuntimeSnapshotActivationOwner,
 } from "../secrets/runtime-state.js";
 import { logRuntimeSecretWarnings } from "../secrets/runtime-warning-log.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
@@ -53,6 +58,7 @@ import {
 import { resolveGatewayStartupSourceConfig } from "./server-startup-secret-surfaces.js";
 import { ensureGatewayStartupAuth } from "./startup-auth.js";
 export {
+  applyGatewayAuthOverridesForStartupPreflight,
   loadGatewayStartupConfigSnapshot,
   type GatewayStartupConfigSnapshotLoadResult,
 } from "./server-startup-config-helpers.js";
@@ -93,35 +99,23 @@ export type ActivateRuntimeSecrets = ((
   config: OpenClawConfig,
   params: RuntimeSecretsActivationParams,
 ) => Promise<PreparedRuntimeSecretsSnapshot>) & {
-  activatePreparedSnapshot?: (
+  activatePreparedSnapshot: (
     snapshot: PreparedRuntimeSecretsSnapshot,
     params: RuntimeSecretsActivationParams,
   ) => Promise<PreparedRuntimeSecretsSnapshot>;
-  activatePreparedSnapshotIfCurrent?: (
+  activatePreparedSnapshotIfCurrent: (
     snapshot: PreparedRuntimeSecretsSnapshot,
     expectedRevision: number,
     params: RuntimeSecretsActivationParams,
     onActivated?: () => void | Promise<void>,
     canActivate?: () => boolean,
+    checkpoint?: () => Promise<void>,
   ) => Promise<PreparedRuntimeSecretsSnapshot | null>;
-};
-
-const runtimeSecretsStatePublishers = new WeakMap<
-  ActivateRuntimeSecrets,
-  (
+  publishStateTransition: (
     snapshot: PreparedRuntimeSecretsSnapshot,
     options?: { sourceOnly?: boolean; expectedRevision?: number },
-  ) => void
->();
-
-/** Publishes a deferred degradation or recovery after the prepared snapshot wins its commit CAS. */
-export function publishRuntimeSecretsStateTransition(
-  activateRuntimeSecrets: ActivateRuntimeSecrets,
-  snapshot: PreparedRuntimeSecretsSnapshot,
-  options?: { sourceOnly?: boolean; expectedRevision?: number },
-): void {
-  runtimeSecretsStatePublishers.get(activateRuntimeSecrets)?.(snapshot, options);
-}
+  ) => void;
+};
 
 /** Create the serialized secrets activation function used by startup and reload paths. */
 export function createRuntimeSecretsActivator(params: {
@@ -183,8 +177,7 @@ export function createRuntimeSecretsActivator(params: {
     ) {
       return;
     }
-    const recoveredMessage =
-      "Secret resolution recovered; runtime remained on last-known-good during the outage.";
+    const recoveredMessage = "Secret resolution recovered.";
     params.logSecrets.info(`[SECRETS_RELOADER_RECOVERED] ${recoveredMessage}`);
     params.emitStateEvent("SECRETS_RELOADER_RECOVERED", recoveredMessage, config);
     secretsDegraded = false;
@@ -339,6 +332,12 @@ export function createRuntimeSecretsActivator(params: {
       }
     }
     if (activationParams.reason === "startup") {
+      if (isSecretResolutionError(err) && err.code === "SECRET_REF_REDACTED_VALUE") {
+        throw new Error(
+          `Startup failed: ${describeSecretResolutionOperatorDiagnostic(err)}. ${describeSecretResolutionOperatorRecovery(err)}.`,
+          { cause: err },
+        );
+      }
       if (degradations.length > 0) {
         throw new Error("Startup failed: required secrets are unavailable.");
       }
@@ -349,7 +348,10 @@ export function createRuntimeSecretsActivator(params: {
     throw err;
   };
 
-  const activateRuntimeSecrets = (async (config, activationParams) =>
+  const prepareRuntimeSecrets = async (
+    config: OpenClawConfig,
+    activationParams: RuntimeSecretsActivationParams,
+  ) =>
     await runWithSecretsActivationLock(async () => {
       let activationSourceConfig = config;
       try {
@@ -444,9 +446,12 @@ export function createRuntimeSecretsActivator(params: {
       } catch (err) {
         return handleSecretsActivationError(err, activationParams, activationSourceConfig);
       }
-    })) as ActivateRuntimeSecrets;
+    });
 
-  activateRuntimeSecrets.activatePreparedSnapshot = async (snapshot, activationParams) =>
+  const activatePreparedSnapshot: ActivateRuntimeSecrets["activatePreparedSnapshot"] = async (
+    snapshot,
+    activationParams,
+  ) =>
     await runWithSecretsActivationLock(async () => {
       try {
         return await finishPreparedSnapshot(snapshot, activationParams);
@@ -455,61 +460,59 @@ export function createRuntimeSecretsActivator(params: {
       }
     });
 
-  activateRuntimeSecrets.activatePreparedSnapshotIfCurrent = async (
-    snapshot,
-    expectedRevision,
-    activationParams,
-    onActivated,
-    canActivate,
-  ) => {
-    // Resolve the lazy activator before entering the compare-and-activate
-    // section so no await separates revision ownership from state publication.
-    const runtimeSourceConfig = activationParams.runtimeSourceConfig;
-    const activateRuntimeSecretsSnapshot = activationParams.activate
-      ? runtimeSourceConfig
-        ? (
-            (runtime) => (preparedSnapshot: PreparedRuntimeSecretsSnapshot) =>
-              runtime.activateSecretsRuntimeSnapshotWithSource(
-                preparedSnapshot,
-                runtimeSourceConfig,
-              )
-          )(await loadSecretsRuntime())
-        : await loadActivateRuntimeSecretsSnapshot()
-      : undefined;
-    return await runWithSecretsActivationLock(async () => {
-      if (
-        getActiveSecretsRuntimeSnapshotRevisionState() !== expectedRevision ||
-        !hasCurrentAuthStoreCredentialsRevision(snapshot) ||
-        (canActivate && !canActivate())
-      ) {
-        return null;
-      }
-      let activated: PreparedRuntimeSecretsSnapshot;
-      let publication: Promise<void> | undefined;
-      try {
-        activated = await finishPreparedSnapshot(
-          snapshot,
-          activationParams,
-          activateRuntimeSecretsSnapshot
-            ? {
-                activateRuntimeSecretsSnapshot,
-                ...(onActivated
-                  ? {
-                      onActivated: () => {
-                        publication = Promise.resolve(onActivated());
-                      },
-                    }
-                  : {}),
-              }
-            : undefined,
-        );
-      } catch (err) {
-        return handleSecretsActivationError(err, activationParams, snapshot.sourceConfig);
-      }
-      await publication;
-      return activated;
-    });
-  };
+  const activatePreparedSnapshotIfCurrent: ActivateRuntimeSecrets["activatePreparedSnapshotIfCurrent"] =
+    async (snapshot, expectedRevision, activationParams, onActivated, canActivate, checkpoint) => {
+      // Resolve the lazy activator before entering the compare-and-activate
+      // section so no await separates revision ownership from state publication.
+      const runtimeSourceConfig = activationParams.runtimeSourceConfig;
+      const activateRuntimeSecretsSnapshot = activationParams.activate
+        ? runtimeSourceConfig
+          ? (
+              (runtime) => (preparedSnapshot: PreparedRuntimeSecretsSnapshot) =>
+                runtime.activateSecretsRuntimeSnapshotWithSource(
+                  preparedSnapshot,
+                  runtimeSourceConfig,
+                )
+            )(await loadSecretsRuntime())
+          : await loadActivateRuntimeSecretsSnapshot()
+        : undefined;
+      return await runWithSecretsActivationLock(async () => {
+        // Resolve source observations inside the lock, then recheck every revision.
+        // No await may separate these final guards from activation/publication.
+        await checkpoint?.();
+        if (
+          getActiveSecretsRuntimeSnapshotRevisionState() !== expectedRevision ||
+          !hasCurrentAuthStoreCredentialsRevision(snapshot) ||
+          (canActivate && !canActivate())
+        ) {
+          return null;
+        }
+        let activated: PreparedRuntimeSecretsSnapshot;
+        let publication: Promise<void> | undefined;
+        try {
+          activated = await finishPreparedSnapshot(
+            snapshot,
+            activationParams,
+            activateRuntimeSecretsSnapshot
+              ? {
+                  activateRuntimeSecretsSnapshot,
+                  ...(onActivated
+                    ? {
+                        onActivated: () => {
+                          publication = Promise.resolve(onActivated());
+                        },
+                      }
+                    : {}),
+                }
+              : undefined,
+          );
+        } catch (err) {
+          return handleSecretsActivationError(err, activationParams, snapshot.sourceConfig);
+        }
+        await publication;
+        return activated;
+      });
+    };
 
   const providerAuthActivationParams = { reason: "reload", activate: true } as const;
   registerProviderAuthRuntimeSnapshotActivationOwner({
@@ -535,7 +538,10 @@ export function createRuntimeSecretsActivator(params: {
       handleSecretsActivationError(error, providerAuthActivationParams, snapshot.sourceConfig),
   });
 
-  runtimeSecretsStatePublishers.set(activateRuntimeSecrets, (snapshot, options) => {
+  const publishStateTransition: ActivateRuntimeSecrets["publishStateTransition"] = (
+    snapshot,
+    options,
+  ) => {
     const transition = deferredStateTransitions.get(snapshot);
     deferredStateTransitions.delete(snapshot);
     if (transition && pendingDeferredLineageRevision === transition.activationRevision) {
@@ -593,9 +599,13 @@ export function createRuntimeSecretsActivator(params: {
     const generation =
       transition.kind === "recovered" ? transition.degradationGeneration : undefined;
     publishRecovery(activeSnapshot.config, generation, transition.activationScope);
-  });
+  };
 
-  return activateRuntimeSecrets;
+  return Object.assign(prepareRuntimeSecrets, {
+    activatePreparedSnapshot,
+    activatePreparedSnapshotIfCurrent,
+    publishStateTransition,
+  });
 }
 
 /** Prepare the effective Gateway startup config after auth, overrides, and secrets activation. */
@@ -604,7 +614,6 @@ export async function prepareGatewayStartupConfig(params: {
   authOverride?: GatewayAuthConfig;
   tailscaleOverride?: GatewayTailscaleConfig;
   activateRuntimeSecrets: ActivateRuntimeSecrets;
-  persistStartupAuth?: boolean;
   log?: GatewayStartupLog;
   measure?: GatewayStartupConfigMeasure;
 }): Promise<Awaited<ReturnType<typeof ensureGatewayStartupAuth>>> {
@@ -641,20 +650,17 @@ export async function prepareGatewayStartupConfig(params: {
     },
     { omitErrorMessage: true },
   );
-  const canReusePreflightPreparedSnapshot = (config: OpenClawConfig): boolean =>
-    Boolean(
-      preflightPrepared &&
-      params.activateRuntimeSecrets.activatePreparedSnapshot &&
-      isDeepStrictEqual(
-        resolveGatewayStartupSourceConfig(config, process.env),
-        preflightPrepared.sourceConfig,
-      ),
-    );
   const activateStartupSecrets = async (config: OpenClawConfig) => {
     // Reuse the preflight snapshot only if generated startup auth did not
     // change the secret-relevant source config.
-    if (preflightPrepared && canReusePreflightPreparedSnapshot(config)) {
-      return await params.activateRuntimeSecrets.activatePreparedSnapshot!(preflightPrepared, {
+    if (
+      preflightPrepared &&
+      isDeepStrictEqual(
+        resolveGatewayStartupSourceConfig(config, process.env),
+        preflightPrepared.sourceConfig,
+      )
+    ) {
+      return await params.activateRuntimeSecrets.activatePreparedSnapshot(preflightPrepared, {
         reason: "startup",
         activate: true,
       });
@@ -688,8 +694,6 @@ export async function prepareGatewayStartupConfig(params: {
       authOverride: preflightAuthOverride,
       tailscaleOverride: params.tailscaleOverride,
       warn: params.log?.warn,
-      persist: params.persistStartupAuth ?? false,
-      baseHash: params.configSnapshot.hash,
     }),
   );
   const runtimeStartupConfig = await measure("config.auth.runtime-startup-overrides", () =>

@@ -1,4 +1,3 @@
-// Telegram plugin module implements group access behavior.
 import type {
   ChannelGroupPolicy,
   OpenClawConfig,

@@ -6,6 +6,7 @@ import {
   waitForControlUiRoute,
   type MockGatewayRequest,
 } from "../../test-helpers/control-ui-e2e.ts";
+import type { ChatHistoryResult } from "../chat/chat-history-snapshot.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Skill Workshop revision admission",
@@ -73,7 +74,7 @@ function params(request: MockGatewayRequest): Record<string, unknown> {
 }
 
 async function openRevision(page: Page, instructions: string): Promise<void> {
-  const board = page.locator("#skill-workshop-mode-tab-board");
+  const board = page.locator("#skill-workshop-mode-tab-suggestions");
   await board.waitFor();
   await board.click();
   const revise = page.getByRole("button", { name: "Revise", exact: true });
@@ -85,7 +86,7 @@ async function openRevision(page: Page, instructions: string): Promise<void> {
 }
 
 async function enterWorkshop(page: Page): Promise<void> {
-  await page.locator("#plugins-tab-workshop").click();
+  await page.getByRole("tab", { name: "Skill workshop", exact: true }).click();
   await waitForControlUiRoute(page, {
     pathname: "/skills/workshop",
     routeId: "skill-workshop",
@@ -125,6 +126,7 @@ function gatewayScenario() {
       "skills.proposals.list": {
         proposals: [proposal()],
         schema: "openclaw.skill-workshop.proposals-manifest.v1",
+        installedSkills: [],
         updatedAt: ISO_NOW,
       },
       "skills.proposals.requestRevision": {
@@ -140,7 +142,8 @@ suite.define(() => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1280 } },
       async ({ page }) => {
-        const gateway = await installMockGateway(page, gatewayScenario());
+        const scenario = gatewayScenario();
+        const gateway = await installMockGateway(page, scenario);
         const instructions = "Keep the operator's exact retry steps.";
 
         await page.goto(`${suite.server.baseUrl}skills`);
@@ -153,6 +156,10 @@ suite.define(() => {
           instructions,
           proposalId: "proposal-main",
         });
+        await expect
+          .poll(() => page.locator(".sw-revision-dialog__input").inputValue())
+          .toBe(instructions);
+        await page.locator(".sw-revision-dialog__status").waitFor({ state: "visible" });
 
         await leaveWorkshop(page);
         await gateway.rejectDeferred("skills.proposals.requestRevision", {
@@ -181,11 +188,60 @@ suite.define(() => {
           targetAgentId: "main",
         });
         expect(params(retry).idempotencyKey).toBe(params(first).idempotencyKey);
+        const runId = "revision-retry-admitted";
+        const sessionInfo = {
+          ...sessionList().sessions[0],
+          key: "agent:main:workshop",
+          kind: "direct" as const,
+          updatedAt: Date.now(),
+          status: "running" as const,
+          hasActiveRun: true,
+          activeRunIds: [runId],
+        };
+        // The admitted run remains active while its first persisted message catches up.
+        const activeHistory = {
+          messages: [],
+          sessionId: "session-main-workshop",
+          sessionInfo,
+          inFlightRun: { runId, text: "", startedAt: Date.now() },
+        } satisfies ChatHistoryResult;
+        await gateway.setMethodResponse("sessions.list", {
+          ...sessionList(),
+          sessions: [sessionInfo],
+        });
+        await gateway.setMethodResponse("chat.startup", {
+          ...scenario.methodResponses["chat.startup"],
+          ...activeHistory,
+        });
+        await gateway.setMethodResponse("chat.history", activeHistory);
         await gateway.resolveDeferred("skills.proposals.requestRevision", {
-          runId: "revision-retry-admitted",
+          runId,
           status: "started",
         });
         await page.waitForURL(/\/chat(?:\/|$)/u);
+        const userTurn = page.locator(".chat-thread .chat-group.user", { hasText: instructions });
+        await userTurn.waitFor({ state: "visible" });
+        await page.locator(".chat-working-indicator").waitFor({ state: "visible" });
+        await expect.poll(() => userTurn.count()).toBe(1);
+        await gateway.emitGatewayEvent("session.message", {
+          sessionKey: "agent:main:workshop",
+          sessionId: "session-main-workshop",
+          agentId: "main",
+          clientRunId: runId,
+          messageId: "persisted-workshop-revision",
+          messageSeq: 1,
+          hasActiveRun: true,
+          activeRunIds: [runId],
+          message: {
+            role: "user",
+            content: [{ type: "text", text: instructions }],
+            timestamp: Date.now(),
+          },
+        });
+        await page
+          .locator('.chat-bubble[data-entry-id="persisted-workshop-revision"]')
+          .waitFor({ state: "visible" });
+        await expect.poll(() => userTurn.count()).toBe(1);
       },
     );
   });

@@ -16,6 +16,15 @@ on:
       - apps/.i18n/native/**
       - apps/.i18n/native-source.json
       - scripts/control-ui-i18n.ts
+      - scripts/lib/control-ui-i18n-catalog.ts
+      - scripts/lib/control-ui-i18n-catalog-values.ts
+      - ui/src/i18n/lib/config-hint-translation.ts
+      - ui/src/lib/fnv1a.ts
+      - src/config/schema*.ts
+      - src/config/zod-schema*.ts
+      - src/config/media-audio-field-metadata.ts
+      - src/config/talk-defaults.ts
+      - src/config/channel-config-keys.ts
       - scripts/android-app-i18n.ts
       - scripts/apple-app-i18n.ts
       - scripts/native-app-i18n.ts
@@ -282,6 +291,15 @@ jobs:
             apps/macos/Package.swift
             apps/shared/OpenClawKit/Sources
             scripts/control-ui-i18n.ts
+            scripts/lib/control-ui-i18n-catalog.ts
+            scripts/lib/control-ui-i18n-catalog-values.ts
+            ui/src/i18n/lib/config-hint-translation.ts
+            ui/src/lib/fnv1a.ts
+            src/config/schema*.ts
+            src/config/zod-schema*.ts
+            src/config/media-audio-field-metadata.ts
+            src/config/talk-defaults.ts
+            src/config/channel-config-keys.ts
             scripts/android-app-i18n.ts
             scripts/apple-app-i18n.ts
             scripts/native-app-i18n.ts

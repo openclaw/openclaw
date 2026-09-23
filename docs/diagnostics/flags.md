@@ -48,7 +48,7 @@ Multiple flags:
 ```json
 {
   "diagnostics": {
-    "flags": ["telegram.http", "brave.http", "gateway.*"]
+    "flags": ["telegram.http", "brave.http", "health"]
   }
 }
 ```
@@ -136,6 +136,9 @@ Or enable it in config:
 
 The output path always comes from `OPENCLAW_DIAGNOSTICS_TIMELINE_PATH`, even
 when the flag itself is set in config; there is no config key for the path.
+See [Environment variables](/help/environment) for where OpenClaw reads
+`OPENCLAW_DIAGNOSTICS`, `OPENCLAW_DIAGNOSTICS_TIMELINE_PATH`, and
+`OPENCLAW_DIAGNOSTICS_EVENT_LOOP` from, and in what precedence order.
 When `timeline` is enabled only from config, the earliest config-loading spans
 are missing because OpenClaw has not read config yet; subsequent startup spans
 are captured normally.
@@ -153,6 +156,24 @@ process ids, phase names, span names, durations, plugin ids, dependency
 counts, event-loop delay samples, provider operation names, child-process exit
 state, and startup error names/messages. Treat timeline files as local
 diagnostics artifacts; review before sharing them outside your machine.
+
+Embedded model requests add a `provider.request.started` mark and one terminal
+`provider.request` record, correlated by run and call/span ids. While streaming,
+`provider.request.activity` marks sample observed chunks at most once per 30
+seconds using the existing stream-progress reporter. The terminal
+record keeps the request start in `timestamp` and reports `terminalAtMs`, the
+last observed provider callback/chunk time (`lastProviderActivityAtMs`, when
+observed), and a bounded `terminalReason`. Activity includes bookkeeping chunks;
+it does not prove visible output, and delayed result settlement does not refresh
+an already observed terminal chunk. An unknown reason or absent activity is not
+evidence of a provider, timeout, or CPU failure.
+
+`model.recovery.decision` marks report the existing attempt owner's accepted or
+rejected recovery branch alongside replay-safety and prior tool-settlement
+booleans. `model.retry.decision` marks explain the retry owner's budget, delay,
+and wait outcomes. These marks add no prompt, tool arguments, raw error text,
+model routes, or session identities. They do not change retry or timeout policy
+and are emitted only through the existing opt-in timeline.
 
 Timeline writes batch adjacent events with the same destination into a bounded
 64 KiB buffer, flushed on the next event-loop turn, at capacity, or on normal
@@ -209,8 +230,8 @@ For remote gateways, use `openclaw logs --follow` instead (see
 
 ## Notes
 
-- If `logging.level` is set higher than `warn`, flag-gated logs may be
-  suppressed. Default `info` is fine.
+- If `logging.level` is set to `error`, `fatal`, or `silent`, flag-gated logs
+  may be suppressed. Default `info` is fine.
 - `brave.http` logs Brave Search request URLs/query params, response
   status/timing, and cache hit/miss/write events. It does not log the API key
   (sent as a request header) or response bodies, but search queries can be

@@ -2,7 +2,7 @@ import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
 import { parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveCodexAppServerAuthProfileIdForAgent } from "./app-server/auth-bridge.js";
+import { resolveCodexAppServerAuthProfileIdForAgent } from "./app-server/auth-profile.js";
 import { resolveCodexBindingAppServerConnection } from "./app-server/binding-connection.js";
 import { isJsonObject } from "./app-server/protocol.js";
 import {
@@ -43,11 +43,12 @@ type CodexDiagnosticsCandidate = Omit<
 
 export async function handleCodexDiagnosticsFeedback(
   deps: CodexCommandDeps,
-  ctx: PluginCommandContext,
+  context: PluginCommandContext,
   pluginConfig: unknown,
   args: string,
   commandPrefix: string,
 ): Promise<PluginCommandResult> {
+  const ctx = { ...context };
   if (ctx.senderIsOwner !== true) {
     return { text: "Only an owner can send Codex diagnostics." };
   }
@@ -302,12 +303,22 @@ async function sendCodexDiagnosticsFeedbackForTargets(
   const sent: CodexDiagnosticsTarget[] = [];
   const failed: Array<{ target: CodexDiagnosticsTarget; error: string }> = [];
   for (const target of targets) {
-    let connection: ReturnType<typeof resolveCodexBindingAppServerConnection>;
+    const assertCurrent = () => {
+      ctx.assertOwnerCurrent?.();
+      const current = resolvePendingCodexDiagnosticsTargets(deps, [target], ctx.config);
+      if (!codexDiagnosticsTargetsMatch([target], current)) {
+        throw new Error("The Codex diagnostics session changed before upload; request it again.");
+      }
+    };
+    let connection: Awaited<ReturnType<typeof resolveCodexBindingAppServerConnection>>;
     try {
-      connection = resolveCodexBindingAppServerConnection({
+      connection = await resolveCodexBindingAppServerConnection({
         binding: target,
         authProfileId: target.authProfileId,
         pluginConfig,
+        agentDir: target.agentDir,
+        config: ctx.config,
+        assertCurrent,
       });
     } catch (error) {
       failed.push({
@@ -329,6 +340,7 @@ async function sendCodexDiagnosticsFeedbackForTargets(
       {
         config: ctx.config,
         agentDir: target.agentDir,
+        assertCurrent,
         ...(connection.clientAuthProfileId !== undefined
           ? { authProfileId: connection.clientAuthProfileId }
           : {}),

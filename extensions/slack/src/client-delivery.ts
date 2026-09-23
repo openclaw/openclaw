@@ -1,6 +1,7 @@
 // Slack plugin module owns WebClient-scoped message and file delivery primitives.
 import type { MessageMetadata } from "@slack/types";
 import type { Block, ChatPostMessageResponse, KnownBlock, WebClient } from "@slack/web-api";
+import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
 import {
   extractErrorCode,
   PlatformMessageNotDispatchedError,
@@ -292,6 +293,7 @@ export async function uploadSlackFile(params: {
   threadTs?: string;
   maxBytes?: number;
   onPlatformSendDispatch?: () => Promise<void>;
+  assertDirectAdapterHandoff?: () => void;
   auditContext?: string;
 }): Promise<string> {
   const { buffer, contentType, fileName } = await loadOutboundMediaFromUrl(params.mediaUrl, {
@@ -333,12 +335,13 @@ export async function uploadSlackFile(params: {
         init: {
           method: "POST",
           ...(contentType ? { headers: { "Content-Type": contentType } } : {}),
-          body: new Uint8Array(buffer) as BodyInit,
+          body: new Blob([bufferToBlobPart(buffer)]),
         },
         // The signal bounds the whole transfer; the guarded timeout also applies
         // the same budget to Undici's connect, header, and body phases.
         timeoutMs: SLACK_UPLOAD_POST_TIMEOUT_MS,
         signal: uploadTimeoutSignal,
+        beforeRequest: params.assertDirectAdapterHandoff,
         requireHttps: uploadTransport.requireHttps,
         policy: uploadTransport.policy,
         capture: false,

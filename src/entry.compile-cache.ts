@@ -1,15 +1,17 @@
 // Manages compile-cache respawn behavior for the CLI entrypoint.
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { enableCompileCache, getCompileCacheDir } from "node:module";
+import { getCompileCacheDir } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { isForegroundGatewayRunArgv } from "./cli/gateway-run-argv.js";
 import {
   isForegroundGmailRunArgv,
   isTerminalInteractiveRespawnArgv,
   shouldKeepNativeHookRelayInProcess,
 } from "./cli/respawn-policy.js";
+import { enableOwnedNodeCompileCache } from "./infra/node-compile-cache-env.js";
 import { attachChildProcessBridge } from "./process/child-process-bridge.js";
 import {
   runRespawnChildWithSignalBridge,
@@ -105,17 +107,22 @@ type OpenClawCompileCacheRespawnPlan = {
 };
 
 type OpenClawCompileCacheRespawnRuntime = RespawnChildRuntime & {
-  writeError: (message: string) => void;
+  writeError: (message: string) => void | Promise<void>;
 };
 
 function buildOpenClawCompileCacheRespawnPlan(params: {
   currentFile: string;
   installRoot: string;
   compileCacheDir?: string;
+  env?: NodeJS.ProcessEnv;
 }): OpenClawCompileCacheRespawnPlan | undefined {
-  const env = process.env;
+  const env = params.env ?? process.env;
   const argv = process.argv;
   const platform = process.platform;
+  // A recovered Unix Gateway must not acquire another short-lived stop wrapper.
+  if (platform !== "win32" && isForegroundGatewayRunArgv(argv)) {
+    return undefined;
+  }
   if (isForegroundGmailRunArgv(argv) || shouldKeepNativeHookRelayInProcess(argv, platform)) {
     return undefined;
   }
@@ -145,12 +152,14 @@ function buildOpenClawCompileCacheRespawnPlan(params: {
 export async function respawnWithoutOpenClawCompileCacheIfNeeded(params: {
   currentFile: string;
   installRoot: string;
-  prepareWriteError?: () => Promise<(message: string) => void>;
+  env?: NodeJS.ProcessEnv;
+  prepareWriteError?: () => Promise<(message: string) => void | Promise<void>>;
 }): Promise<boolean> {
   const plan = buildOpenClawCompileCacheRespawnPlan({
     currentFile: params.currentFile,
     installRoot: params.installRoot,
     compileCacheDir: getCompileCacheDir?.(),
+    env: params.env,
   });
   if (!plan) {
     return false;
@@ -176,7 +185,9 @@ function runOpenClawCompileCacheRespawnPlan(
     spawn,
     attachChildProcessBridge,
     exit: process.exit.bind(process) as (code?: number) => never,
-    writeError: (message: string) => process.stderr.write(message),
+    writeError: (message: string) => {
+      process.stderr.write(message);
+    },
   },
 ): ChildProcess {
   return runRespawnChildWithSignalBridge({
@@ -186,7 +197,7 @@ function runOpenClawCompileCacheRespawnPlan(
     detachForProcessTree: plan.detachForProcessTree,
     runtime,
     onError: (error) => {
-      runtime.writeError(
+      return runtime.writeError(
         `[openclaw] Failed to respawn CLI without compile cache: ${
           error instanceof Error ? (error.stack ?? error.message) : String(error)
         }\n`,
@@ -203,7 +214,7 @@ export function enableOpenClawCompileCache(params: {
     return;
   }
   try {
-    enableCompileCache(resolveOpenClawCompileCacheDirectory(params));
+    enableOwnedNodeCompileCache(resolveOpenClawCompileCacheDirectory(params));
   } catch {
     // Best-effort only; never block startup.
   }

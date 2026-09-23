@@ -16,6 +16,7 @@
           "label": "ACPX Runtime"
         },
         "install": {
+          "clawhubSpec": "clawhub:@openclaw/acpx",
           "npmSpec": "@openclaw/acpx",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.4.25"
@@ -37,9 +38,13 @@
             "id": "brave",
             "label": "Brave Search",
             "hint": "Brave Search web results.",
-            "onboardingScopes": ["text-inference"],
+            "onboardingScopes": [
+              "text-inference"
+            ],
             "credentialLabel": "Brave Search API key",
-            "envVars": ["BRAVE_API_KEY"],
+            "envVars": [
+              "BRAVE_API_KEY"
+            ],
             "placeholder": "BSA...",
             "signupUrl": "https://api-dashboard.search.brave.com/app/keys",
             "docsUrl": "https://docs.openclaw.ai/tools/brave-search",
@@ -48,6 +53,7 @@
           }
         ],
         "install": {
+          "clawhubSpec": "clawhub:@openclaw/brave-plugin",
           "npmSpec": "@openclaw/brave-plugin",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.4.10",
@@ -66,12 +72,29 @@
           "label": "Codex"
         },
         "contracts": {
-          "migrationProviders": ["codex"]
+          "migrationProviders": [
+            "codex"
+          ]
         },
         "install": {
+          "clawhubSpec": "clawhub:@openclaw/codex",
           "npmSpec": "@openclaw/codex",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.5.1-beta.1"
+        },
+        "setup": {
+          "nativeSessionCatalog": {
+            "label": "Codex",
+            "legacyDefaultEnabled": true,
+            "description": "Existing native Codex conversations on this Gateway and eligible paired nodes.",
+            "nodeCommands": [
+              "codex.appServer.threads.list.v1",
+              "codex.appServer.thread.turns.list.v1",
+              "codex.sessionCatalog.transcript.read.v1",
+              "codex.terminal.resume.v1",
+              "codex.cli.sessions.list"
+            ]
+          }
         }
       }
     },
@@ -252,6 +275,30 @@
       }
     },
     {
+      "name": "@openclaw/facetime",
+      "description": "Experimental OpenClaw FaceTime realtime voice carrier",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "facetime",
+          "label": "FaceTime"
+        },
+        "contracts": {
+          "tools": [
+            "facetime_call"
+          ]
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/facetime",
+          "npmSpec": "@openclaw/facetime",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.9.4",
+          "allowInvalidConfigRecovery": true
+        }
+      }
+    },
+    {
       "name": "@openclaw/firecrawl-plugin",
       "description": "OpenClaw Firecrawl plugin.",
       "source": "official",
@@ -321,7 +368,9 @@
       "source": "official",
       "kind": "plugin",
       "openclaw": {
-        "legacyPluginIds": ["fish-audio"],
+        "legacyPluginIds": [
+          "fish-audio"
+        ],
         "plugin": {
           "id": "fish-audio-speech",
           "label": "Fish Audio Speech"
@@ -345,6 +394,7 @@
           "label": "Google Meet"
         },
         "install": {
+          "clawhubSpec": "clawhub:@openclaw/google-meet",
           "npmSpec": "@openclaw/google-meet",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.4.20"
@@ -452,9 +502,12 @@
           "label": "llama.cpp Provider"
         },
         "contracts": {
-          "embeddingProviders": ["local"]
+          "embeddingProviders": [
+            "local"
+          ]
         },
         "install": {
+          "clawhubSpec": "clawhub:@openclaw/llama-cpp-provider",
           "npmSpec": "@openclaw/llama-cpp-provider",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.6.2"
@@ -472,9 +525,28 @@
           "label": "MXC Sandbox Execution"
         },
         "install": {
+          "clawhubSpec": "clawhub:@openclaw/mxc-sandbox",
           "npmSpec": "@openclaw/mxc-sandbox",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.6.11"
+        }
+      }
+    },
+    {
+      "name": "@openclaw/onnx",
+      "description": "Local ONNX decision models for OpenClaw",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "onnx",
+          "label": "ONNX"
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/onnx",
+          "npmSpec": "@openclaw/onnx",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.9.6"
         }
       }
     },
@@ -489,6 +561,7 @@
           "label": "OpenShell Sandbox"
         },
         "install": {
+          "clawhubSpec": "clawhub:@openclaw/openshell-sandbox",
           "npmSpec": "@openclaw/openshell-sandbox",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.5.12-beta.1"
@@ -687,6 +760,24 @@
       }
     },
     {
+      "name": "@openclaw/team-reports",
+      "description": "OpenClaw team activity reports plugin (GitHub org + Discord activity with model summaries)",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "team-reports",
+          "label": "Team Reports"
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/team-reports",
+          "npmSpec": "@openclaw/team-reports",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.9.2"
+        }
+      }
+    },
+    {
       "name": "@openclaw/teams-meetings",
       "description": "OpenClaw Microsoft Teams browser meeting participant plugin.",
       "source": "official",
@@ -735,6 +826,24 @@
       }
     },
     {
+      "name": "@openclaw/typesafe",
+      "description": "OpenClaw TypeSafe typed decisions and optional evaluation tool",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "typesafe",
+          "label": "TypeSafe AI"
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/typesafe",
+          "npmSpec": "@openclaw/typesafe",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.9.6"
+        }
+      }
+    },
+    {
       "name": "@openclaw/voice-call",
       "description": "OpenClaw voice-call plugin",
       "source": "official",
@@ -745,6 +854,7 @@
           "label": "Voice Call"
         },
         "install": {
+          "clawhubSpec": "clawhub:@openclaw/voice-call",
           "npmSpec": "@openclaw/voice-call",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.4.10"

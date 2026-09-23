@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -11,11 +12,16 @@ import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-wor
 import { startSqliteConcurrentWriter } from "./sqlite-concurrent-writer.test-support.js";
 import { readMainDatabasePosixLocks } from "./sqlite-posix-locks.test-support.js";
 import {
-  prepareSqliteReadOnlyLocation,
   prepareSqliteReadOnlyLocationInProcess,
-  prepareSqliteReadOnlyLocationSync,
   prepareSqliteReadOnlyLocationSyncInProcess,
+  SqliteSourceChangedError,
 } from "./sqlite-readonly-location.js";
+import { withSqliteReadOnlyWorkerScope } from "./sqlite-readonly-worker.js";
+import {
+  prepareSqliteReadOnlyLocation,
+  prepareSqliteReadOnlyLocationSync,
+} from "./sqlite-snapshot-source.js";
+import { sqliteWorkerPreloadEnv } from "./sqlite-worker-preload.test-support.js";
 
 const writers: Array<ReturnType<typeof startSqliteConcurrentWriter>> = [];
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
@@ -94,6 +100,41 @@ describe("prepareSqliteReadOnlyLocation", () => {
 
   it("prepares a readable WAL snapshot through the sync public entry point", async () => {
     await expectPublicSnapshot(prepareSqliteReadOnlyLocationSync);
+  });
+
+  it("keeps each scoped artifact-preserving inspection byte-neutral across writer commits", async () => {
+    const sqlite = requireNodeSqlite();
+    const databasePath = createTempDatabasePath();
+    const writer = new sqlite.DatabaseSync(databasePath);
+    try {
+      writer.exec(
+        "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE probe(value TEXT)",
+      );
+      await withSqliteReadOnlyWorkerScope(async () => {
+        for (const value of ["first", "second"]) {
+          writer.prepare("INSERT INTO probe VALUES (?)").run(value);
+          const familyBefore = readFamily(databasePath);
+          const prepared = await prepareSqliteReadOnlyLocation(databasePath, {
+            preserveSourceArtifacts: true,
+          });
+          try {
+            expect(readFamily(databasePath)).toEqual(familyBefore);
+            const snapshot = new sqlite.DatabaseSync(prepared.location, { readOnly: true });
+            try {
+              expect(
+                snapshot.prepare("SELECT value FROM probe ORDER BY rowid DESC LIMIT 1").get(),
+              ).toEqual({ value });
+            } finally {
+              snapshot.close();
+            }
+          } finally {
+            expect(prepared.cleanup()).toBe(true);
+          }
+        }
+      });
+    } finally {
+      writer.close();
+    }
   });
 
   it.each([
@@ -183,19 +224,16 @@ describe("prepareSqliteReadOnlyLocation", () => {
         mode: "async backup",
         prepare: prepareSqliteReadOnlyLocationInProcess,
         empty: false,
-        sync: false,
       },
       {
         mode: "async copy",
         prepare: prepareSqliteReadOnlyLocationInProcess,
         empty: true,
-        sync: false,
       },
       {
         mode: "sync copy",
         prepare: prepareSqliteReadOnlyLocationSyncInProcess,
         empty: false,
-        sync: true,
       },
     ].flatMap((scenario) =>
       ["ENOSPC", "EDQUOT", "EACCES", "EPERM", "EROFS"].map((code) =>
@@ -204,7 +242,7 @@ describe("prepareSqliteReadOnlyLocation", () => {
     ),
   )(
     "identifies $mode private cache allocation failure $code before backup or copying",
-    async ({ code, empty, prepare, sync }) => {
+    async ({ code, empty, prepare }) => {
       const cacheRoot = tempDirs.make("openclaw-sqlite-snapshot-allocation-");
       const databasePath = createTempDatabasePath();
       const sqlite = requireNodeSqlite();
@@ -222,13 +260,9 @@ describe("prepareSqliteReadOnlyLocation", () => {
       });
       const backup = vi.spyOn(sqlite, "backup");
       const write = vi.spyOn(fs, "writeSync");
-      if (sync) {
-        vi.spyOn(fs, "mkdtempSync").mockImplementationOnce(() => {
-          throw allocationError;
-        });
-      } else {
-        vi.spyOn(fs.promises, "mkdtemp").mockRejectedValueOnce(allocationError);
-      }
+      vi.spyOn(fs, "mkdtempSync").mockImplementationOnce(() => {
+        throw allocationError;
+      });
 
       await withEnvAsync({ XDG_CACHE_HOME: cacheRoot }, async () => {
         const error = await Promise.resolve()
@@ -248,11 +282,11 @@ describe("prepareSqliteReadOnlyLocation", () => {
   );
 
   it.each([
-    { mode: "async", prepare: prepareSqliteReadOnlyLocationInProcess, sync: false },
-    { mode: "sync", prepare: prepareSqliteReadOnlyLocationSyncInProcess, sync: true },
+    { mode: "async", prepare: prepareSqliteReadOnlyLocationInProcess },
+    { mode: "sync", prepare: prepareSqliteReadOnlyLocationSyncInProcess },
   ])(
     "identifies sanitized $mode Windows allocation failures without losing their causes",
-    async ({ prepare, sync }) => {
+    async ({ prepare }) => {
       const cacheRoot = tempDirs.make("openclaw-sqlite-snapshot-windows-allocation-");
       const databasePath = createTempDatabasePath();
       const sqlite = requireNodeSqlite();
@@ -266,13 +300,9 @@ describe("prepareSqliteReadOnlyLocation", () => {
         `Unable to create private Windows SQLite directory: ${directoryPath}`,
         { cause: allocationError },
       );
-      if (sync) {
-        vi.spyOn(fs, "mkdtempSync").mockImplementationOnce(() => {
-          throw windowsError;
-        });
-      } else {
-        vi.spyOn(fs.promises, "mkdtemp").mockRejectedValueOnce(windowsError);
-      }
+      vi.spyOn(fs, "mkdtempSync").mockImplementationOnce(() => {
+        throw windowsError;
+      });
 
       await withEnvAsync({ XDG_CACHE_HOME: cacheRoot }, async () => {
         const error = await Promise.resolve()
@@ -492,7 +522,7 @@ describe("prepareSqliteReadOnlyLocation", () => {
       database.close();
       const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sqliteReadOnly);
       const extension = workerUrl.pathname.endsWith(".ts") ? ".ts" : ".js";
-      const moduleUrl = new URL(`./sqlite-readonly-location${extension}`, workerUrl).href;
+      const moduleUrl = new URL(`./sqlite-snapshot-source${extension}`, workerUrl).href;
       const script = `
         const { prepareSqliteReadOnlyLocation } = await import(${JSON.stringify(moduleUrl)});
         try {
@@ -536,11 +566,83 @@ describe("prepareSqliteReadOnlyLocation", () => {
     );
   });
 
+  it.each([
+    {
+      boundary: "tail start",
+      stderr: `🤖${"x".repeat(3_999)}`,
+      expectedTail: "x".repeat(3_999),
+    },
+    {
+      boundary: "Node stderr buffer end",
+      stderr: `${"x".repeat(1024 * 1024 - 1)}🤖${"x".repeat(4_096)}`,
+      expectedTail: `${"x".repeat(3_999)}�`,
+    },
+  ])("keeps worker stderr valid at the $boundary", async ({ stderr, expectedTail }) => {
+    const tempDir = tempDirs.make("openclaw-sqlite-readonly-stderr-");
+    const preloadPath = path.join(tempDir, "stderr-preload.cjs");
+    fs.writeFileSync(
+      preloadPath,
+      `process.once("beforeExit", () => process.stderr.write(${JSON.stringify(stderr)}));`,
+    );
+    const missingPath = path.join(tempDir, "missing.db");
+
+    await withEnvAsync(sqliteWorkerPreloadEnv(preloadPath), async () => {
+      let message = "";
+      try {
+        await prepareSqliteReadOnlyLocation(missingPath);
+      } catch (error) {
+        message = error instanceof Error ? error.message : String(error);
+      }
+
+      expect(message.split("stderr (tail): ")[1]).toBe(expectedTail);
+    });
+  });
+
   it("propagates sync public entry point failures", () => {
     const missingPath = path.join(tempDirs.make("openclaw-sqlite-readonly-missing-"), "missing.db");
     expect(() => prepareSqliteReadOnlyLocationSync(missingPath)).toThrow(
       /SQLite read-only worker .*ENOENT.*\(code=ENOENT\)/u,
     );
+  });
+
+  it.each([
+    { mode: "async", prepare: prepareSqliteReadOnlyLocationInProcess },
+    { mode: "sync", prepare: prepareSqliteReadOnlyLocationSyncInProcess },
+  ])("names retry count and guidance when $mode source does not stabilize", async ({ prepare }) => {
+    const databasePath = createTempDatabasePath();
+    const sqlite = requireNodeSqlite();
+    const database = new sqlite.DatabaseSync(databasePath);
+    database.exec(
+      "PRAGMA journal_mode = WAL; CREATE TABLE probe (value TEXT); INSERT INTO probe VALUES ('ok');",
+    );
+    database.close();
+    const canonicalPath = fs.realpathSync.native(databasePath);
+    const openSync = fs.openSync.bind(fs);
+    vi.spyOn(fs, "openSync").mockImplementation((pathname, flags, mode) => {
+      if (path.resolve(String(pathname)) === canonicalPath) {
+        throw Object.assign(new Error("simulated source disappearance"), { code: "ENOENT" });
+      }
+      return openSync(pathname, flags, mode);
+    });
+
+    let error: unknown;
+    try {
+      await prepare(databasePath);
+    } catch (caught) {
+      error = caught;
+    }
+    assert(error instanceof Error);
+    expect.soft(error.message).toContain("after 10 read-only inspection attempts");
+    expect.soft(error.message).toContain("the database may be under concurrent write activity");
+    expect
+      .soft(error.message)
+      .toContain("Wait a moment for write activity to settle, then retry the inspection");
+    expect.soft(error.message).toContain(canonicalPath);
+    expect.soft(error.cause).toBeInstanceOf(SqliteSourceChangedError);
+    expect.soft(error.cause).toMatchObject({
+      message: `SQLite source disappeared: ${canonicalPath}`,
+    });
+    expect.soft(error.message).not.toContain("SQLite source disappeared");
   });
 
   it.runIf(process.platform === "linux")(
@@ -571,6 +673,17 @@ describe("prepareSqliteReadOnlyLocation", () => {
         expect(readMainDatabasePosixLocks(databasePath)).toEqual(locksBefore);
         expect(preparedSync.cleanup()).toBe(true);
 
+        await withSqliteReadOnlyWorkerScope(async () => {
+          for (const preserveSourceArtifacts of [true, false, true]) {
+            const prepared = await prepareSqliteReadOnlyLocation(databasePath, {
+              preserveSourceArtifacts,
+            });
+            cleanups.push(prepared.cleanup);
+            expect(readMainDatabasePosixLocks(databasePath)).toEqual(locksBefore);
+            expect(prepared.cleanup()).toBe(true);
+          }
+        });
+
         const characterized = prepareSqliteReadOnlyLocationSyncInProcess(databasePath);
         cleanups.push(characterized.cleanup);
         expect(readMainDatabasePosixLocks(databasePath)).toEqual([]);
@@ -584,11 +697,16 @@ describe("prepareSqliteReadOnlyLocation", () => {
     },
   );
 
-  it("retries a same-size WAL reset instead of accepting an impossible pair", async () => {
-    const sqlite = requireNodeSqlite();
-    const livePath = createTempDatabasePath();
-    const writer = new sqlite.DatabaseSync(livePath);
-    writer.exec(`
+  it.each([
+    { mode: "async", prepare: prepareSqliteReadOnlyLocationInProcess },
+    { mode: "sync", prepare: prepareSqliteReadOnlyLocationSyncInProcess },
+  ])(
+    "retries a same-size WAL reset instead of accepting an impossible pair ($mode)",
+    async ({ prepare }) => {
+      const sqlite = requireNodeSqlite();
+      const livePath = createTempDatabasePath();
+      const writer = new sqlite.DatabaseSync(livePath);
+      writer.exec(`
       PRAGMA journal_mode = WAL;
       PRAGMA wal_autocheckpoint = 0;
       CREATE TABLE before_reset (value TEXT PRIMARY KEY);
@@ -596,81 +714,42 @@ describe("prepareSqliteReadOnlyLocation", () => {
       PRAGMA wal_checkpoint(TRUNCATE);
       INSERT INTO before_reset VALUES ('A');
     `);
-    const databasePath = createTempDatabasePath();
-    fs.copyFileSync(livePath, databasePath);
-    fs.copyFileSync(`${livePath}-wal`, `${databasePath}-wal`);
-    writer.close();
-    expect(fs.existsSync(`${databasePath}-shm`)).toBe(false);
-    const walSizeBeforeReset = fs.statSync(`${databasePath}-wal`).size;
-    const fsyncSync = fs.fsyncSync.bind(fs);
-    let injected = false;
-    let raceWriter: DatabaseSync | undefined;
-    let sourceAfterReset: Map<string, Buffer> | undefined;
-    vi.spyOn(fs, "fsyncSync").mockImplementation((descriptor) => {
-      fsyncSync(descriptor);
-      if (!injected) {
-        injected = true;
-        raceWriter = new sqlite.DatabaseSync(databasePath);
-        raceWriter.exec(`
+      const databasePath = createTempDatabasePath();
+      fs.copyFileSync(livePath, databasePath);
+      fs.copyFileSync(`${livePath}-wal`, `${databasePath}-wal`);
+      writer.close();
+      expect(fs.existsSync(`${databasePath}-shm`)).toBe(false);
+      const walSizeBeforeReset = fs.statSync(`${databasePath}-wal`).size;
+      const fsyncSync = fs.fsyncSync.bind(fs);
+      let injected = false;
+      let raceWriter: DatabaseSync | undefined;
+      let sourceAfterReset: Map<string, Buffer> | undefined;
+      vi.spyOn(fs, "fsyncSync").mockImplementation((descriptor) => {
+        fsyncSync(descriptor);
+        if (!injected) {
+          injected = true;
+          raceWriter = new sqlite.DatabaseSync(databasePath);
+          raceWriter.exec(`
           PRAGMA wal_checkpoint(TRUNCATE);
           INSERT INTO after_reset VALUES ('B');
         `);
-        sourceAfterReset = readLogicalFamily(databasePath);
-      }
-    });
+          sourceAfterReset = readLogicalFamily(databasePath);
+        }
+      });
 
-    const prepared = await prepareSqliteReadOnlyLocationInProcess(databasePath);
-    expect(injected).toBe(true);
-    expect(fs.statSync(`${databasePath}-wal`).size).toBe(walSizeBeforeReset);
-    const snapshot = new sqlite.DatabaseSync(prepared.location, { readOnly: true });
-    expect(snapshot.prepare("SELECT value FROM before_reset").all()).toEqual([{ value: "A" }]);
-    expect(snapshot.prepare("SELECT value FROM after_reset").all()).toEqual([{ value: "B" }]);
-    expect(snapshot.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-    snapshot.close();
-    expect(readLogicalFamily(databasePath)).toEqual(sourceAfterReset);
-    expect(prepared.cleanup()).toBe(true);
-    raceWriter?.close();
-  });
-
-  it("backs up an active WAL database while another connection keeps writing", async () => {
-    const sqlite = requireNodeSqlite();
-    const databasePath = createTempDatabasePath();
-    const seed = new sqlite.DatabaseSync(databasePath);
-    seed.exec(`
-      PRAGMA journal_mode = WAL;
-      PRAGMA wal_autocheckpoint = 0;
-      CREATE TABLE writes (sequence INTEGER PRIMARY KEY);
-      CREATE TABLE payload (data BLOB NOT NULL);
-      INSERT INTO payload VALUES (zeroblob(16777216));
-      PRAGMA wal_checkpoint(TRUNCATE);
-    `);
-    seed.close();
-    const writer = startSqliteConcurrentWriter(databasePath, "WAL");
-    writers.push(writer);
-    try {
-      const ready = await writer.waitFor("ready");
-      expect(ready.commits).toBeGreaterThan(0);
-      expect(writer.pid).not.toBe(process.pid);
-
-      const prepared = await prepareSqliteReadOnlyLocationInProcess(databasePath);
+      const prepared = await prepare(databasePath);
+      expect(injected).toBe(true);
+      expect(fs.statSync(`${databasePath}-wal`).size).toBe(walSizeBeforeReset);
       const snapshot = new sqlite.DatabaseSync(prepared.location, { readOnly: true });
-      try {
-        expect(snapshot.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-        expect(snapshot.prepare("SELECT COUNT(*) AS count FROM payload").get()).toEqual({
-          count: 1,
-        });
-        expect(
-          snapshot.prepare("SELECT COUNT(*) AS count FROM writes").get()?.count,
-        ).toBeGreaterThan(0);
-      } finally {
-        snapshot.close();
-        expect(prepared.cleanup()).toBe(true);
-      }
-      expect((await writer.progress()).commits).toBeGreaterThan(ready.commits);
-    } finally {
-      await writer.stop();
-    }
-  });
+      expect(snapshot.prepare("SELECT value FROM before_reset").all()).toEqual([{ value: "A" }]);
+      expect(snapshot.prepare("SELECT value FROM after_reset").all()).toEqual([{ value: "B" }]);
+      expect(snapshot.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+      snapshot.close();
+      expect(readLogicalFamily(databasePath)).toEqual(sourceAfterReset);
+      expect(prepared.cleanup()).toBe(true);
+      raceWriter?.close();
+    },
+  );
 
   it("retries when backup fallback inspection sees a replaced source", async () => {
     const sqlite = requireNodeSqlite();

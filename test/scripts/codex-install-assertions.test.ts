@@ -610,7 +610,7 @@ function createCodexInstallFixture(root: string) {
     cpu: [target.cpu],
   });
   writeJson(path.join(stateDir, "openclaw.json"), {
-    agents: { defaults: { model: { primary: "openai/gpt-5.6-sol" } } },
+    agents: { defaults: { model: { primary: "openai/gpt-6-astra" } } },
     models: { providers: { openai: { agentRuntime: { id: "codex" } } } },
   });
   writePluginInstallIndexForE2E(
@@ -997,7 +997,7 @@ describe("Codex install helpers", () => {
     const result = runCodexOnDemandAssertions(root);
 
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("Unexpected non-whitespace character after JSON");
+    expect(result.stderr).toMatch(/SyntaxError:.*JSON/u);
   });
 
   it("accepts SQLite-backed session and Codex binding state in the npm live assertion", () => {
@@ -1022,6 +1022,23 @@ describe("Codex install helpers", () => {
       expect(result.stderr).toBe("");
     },
   );
+
+  it("rejects an extra failed-mutation warning even after both replies and a valid artifact", () => {
+    const root = makeTempDir(tempDirs, "openclaw-codex-npm-followthrough-warning-");
+    const fixture = createCodexNpmPluginLiveFollowthroughFixture({
+      root,
+      replyTexts: [
+        "OPENCLAW-CODEX-NPM-PLUGIN-LIVE-OK-FOLLOWTHROUGH-PROGRESS",
+        "OPENCLAW-CODEX-NPM-PLUGIN-LIVE-OK-FOLLOWTHROUGH-COMPLETE",
+        "⚠️ 🛠️ Bash failed: `run python inline script (heredoc)` (agent)",
+      ],
+    });
+
+    const result = runCodexNpmPluginLiveFollowthroughAssertions(fixture);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("expected exact progress and completion replies");
+  });
 
   it("accepts settled failed work before a later successful artifact write", () => {
     const root = makeTempDir(tempDirs, "openclaw-codex-npm-followthrough-recovered-work-");

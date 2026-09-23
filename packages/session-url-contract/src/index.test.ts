@@ -163,6 +163,16 @@ describe("buildControlUiCatalogSharePath", () => {
 
 describe("buildControlUiSessionPath", () => {
   it.each([
+    [
+      "case-sensitive literal",
+      { sessionKey: "Agent:Ops:Matrix:Channel:!Room:Org:Thread:$Event", exactKey: true },
+      "/chat/ops/Matrix/Channel/!Room/Org/Thread/%24Event",
+    ],
+    [
+      "opaque catalog",
+      { sessionKey: "agent:ops:catalog:fixture:Host:Thread" },
+      "/chat/ops/catalog/fixture/Host/Thread",
+    ],
     ["scoped main", { sessionKey: "agent:main:main" }, "/chat/main"],
     ["unscoped main", { sessionKey: "main", fallbackAgentId: "research" }, "/chat/research"],
     [
@@ -226,6 +236,16 @@ describe("buildControlUiSessionPath", () => {
       "/chat/main/~key/release-deadbeef",
     ],
     ["UUID", { sessionKey: UUID_KEY }, "/chat/main/12345678"],
+    ...(["dashboard", "subagent", "internal-session-effects"] as const).map(
+      (surface): [string, ChatParams, string] => [
+        `Incognito ${surface}`,
+        {
+          sessionKey: `agent:main:${surface}:incognito-12345678-90ab-cdef-1234-567890abcdef`,
+          displayName: "Private task",
+        },
+        `/chat/main/${surface}/incognito-12345678-90ab-cdef-1234-567890abcdef`,
+      ],
+    ),
     [
       "UUID slug",
       { sessionKey: UUID_KEY, displayName: "Deploy Monitor" },
@@ -282,6 +302,9 @@ describe("buildControlUiSessionPath", () => {
     { sessionKey: "agent::control-link" },
     { sessionKey: "agent:main:" },
     { sessionKey: "agent:main:telegram::12345" },
+    { sessionKey: "agent:ops:room::part" },
+    { sessionKey: "agent:ops::main" },
+    { sessionKey: "agent:ops:cron:" },
   ] satisfies readonly ChatParams[])("rejects invalid input %#", (params) => {
     expect(buildChatPath(params)).toBeNull();
   });

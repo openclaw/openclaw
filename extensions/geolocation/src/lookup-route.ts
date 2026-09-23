@@ -1,6 +1,7 @@
 /** HTTP surface: `GET /plugins/geolocation/lookup?ip=<address>`. */
 import type { IncomingMessage, ServerResponse } from "node:http";
 import net from "node:net";
+import { getPluginRuntimeGatewayRequestScope } from "openclaw/plugin-sdk/plugin-runtime";
 import { isPrivateOrLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { GeolocationSettings } from "./config.js";
 import type { GeolocationDatabase } from "./database-store.js";
@@ -39,6 +40,7 @@ export function createGeolocationLookupHandler(deps: RouteDeps) {
       sendJson(res, 200, { found: false, attribution: deps.settings.attribution });
       return true;
     }
+    await getPluginRuntimeGatewayRequestScope()?.revalidate?.();
     try {
       const database = await deps.loadDatabase();
       const location = projectGeolocationRecord(database.lookup(ip));

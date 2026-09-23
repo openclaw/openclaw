@@ -1197,7 +1197,7 @@ describe("qa-lab server", () => {
                   model: { name: "mock-openai/gpt-5.6-luna", ref: "mock-openai/gpt-5.6-luna" },
                 },
                 packageSource: { kind: "source-checkout" },
-                artifacts: [{ kind: "log", path: "artifact.log", source: "vitest" }],
+                artifacts: [{ kind: "gif-log", path: "artifact.log", source: "vitest" }],
               },
               result: { status: "pass" },
             },
@@ -1227,7 +1227,12 @@ describe("qa-lab server", () => {
         counts: {
           pass: 1,
         },
-        entries: [{ id: "qa-lab.server-artifact" }],
+        entries: [
+          {
+            id: "qa-lab.server-artifact",
+            artifacts: [{ kind: "gif-log", mediaKind: "text", preview: "streamed body\n" }],
+          },
+        ],
       },
     });
 

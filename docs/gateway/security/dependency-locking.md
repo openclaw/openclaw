@@ -7,6 +7,8 @@ read_when:
 title: "Dependency locking"
 ---
 
+Read this page as a dependency reviewer or a release engineer: it covers reviewing dependency changes for supply-chain risk, and validating root and plugin npm packages before publishing.
+
 OpenClaw uses `pnpm-lock.yaml` as its committed product dependency review boundary. It records the resolved dependency graph used by source checkouts and CI, so transitive changes remain visible in code review.
 
 OpenClaw does not commit npm-format locks for product packages or publish them in package tarballs. [npm 12 removed shrinkwrap support](https://github.com/npm/cli/releases/tag/v12.0.0), including the `npm shrinkwrap` command and loading `npm-shrinkwrap.json` from package roots or dependency tarballs.
@@ -19,9 +21,9 @@ These projects do not inherit root pnpm overrides. The Vercel project uses appro
 
 The production audit pre-commit hook and ordinary CI's `security-fast` job remain zero-install, npm-only checks of the product production graph. They query npm bulk advisory data, not upstream repository advisories. A passing result is limited to that source and graph; it does not establish that dependencies are unaffected by all known vulnerabilities.
 
-`pnpm deps:vuln:gate`, used by release dependency evidence, audits the product pnpm lock and both release-tool locks independently. It checks npm advisory data and adds published security advisories from verified public GitHub repositories. Repository mappings come from the manifests for exact locked npm package versions, not a package's latest manifest. The gate verifies that each repository is public before requesting advisories with the explicit `state=published` filter. It does not scan private repositories or unpublished advisories.
+`pnpm deps:vuln:gate`, used by release dependency evidence, audits the target's product pnpm lock plus each release-tool lock whose package is present in that target. It checks npm advisory data and adds published security advisories from verified public GitHub repositories. Repository mappings come from the manifests for exact locked npm package versions, not a package's latest manifest. The gate verifies that each repository is public before requesting advisories with the explicit `state=published` filter. It does not scan private repositories or unpublished advisories.
 
-Within each lockfile, known malware and critical advisories block anywhere, and high advisories block in the production/runtime graph. Dev-only high advisories and moderate or lower non-malware advisories are reported without blocking. GitHub's `medium` severity maps to `moderate` in this policy. Upstream findings match the npm package identity and affected-version range against exact locked versions; only matches absent from the npm result for the corresponding lockfile and graph are added. Reports retain the source lockfile, so a release-tool finding does not imply product runtime exposure. Missing or invalid expected locks fail the gate.
+Within each lockfile, known malware and critical advisories block anywhere, and high advisories block in the production/runtime graph. Dev-only high advisories and moderate or lower non-malware advisories are reported without blocking. GitHub's `medium` severity maps to `moderate` in this policy. Upstream findings match the npm package identity and affected-version range against exact locked versions; only matches absent from the npm result for the corresponding lockfile and graph are added. Reports retain the source lockfile, so a release-tool finding does not imply product runtime exposure. Missing or invalid locks for declared dependency graphs fail the gate.
 
 Release automation reuses its existing standard `GH_TOKEN` only for GitHub API requests, never for npm registry requests. Local runs without that token use anonymous GitHub requests and their rate limits. No new OpenClaw configuration or operator credential setup is required.
 
@@ -30,6 +32,8 @@ Release automation reuses its existing standard `GH_TOKEN` only for GitHub API r
 Release artifacts and the GitHub Actions step summary show npm coverage as `checked`, upstream coverage as `checked` or `partial`, mapped package-version counts, checked repository counts, coverage issues, and upstream-only findings. Findings identify their source as `npm-bulk` or `github-repository`; upstream findings also record matched locked versions. Even `checked` coverage is limited to these advisory sources, not comprehensive vulnerability clearance.
 
 The upstream scan has fixed bounds: 2,500 exact package versions, 4,000 HTTP requests, and five minutes per run. It uses four concurrent requests, up to five pages of 100 advisories per repository, and at most 10,000 advisories per run. Each response is limited to 2 MiB and each request to 15 seconds. It does not retry or reuse stale cached results.
+
+Matching findings from each repository page reserve request capacity across all workers and are checked against GitHub's reviewed advisory ranges before that task continues discovery. This prevents later repository scans from consuming the budget needed to reconcile already-discovered findings. Missing reviewed evidence preserves the publisher's finding and records partial coverage.
 
 Missing or unsupported repository metadata, malformed affected-version ranges, exhausted request or pagination budgets, and request or rate-limit failures produce `partial` upstream coverage, not an unaffected result. Confirmed findings remain in the report and enter the same severity policy. Inspect the coverage issue subjects and reasons before interpreting a zero-finding result.
 
@@ -68,3 +72,7 @@ tar -tf /tmp/openclaw-plugin-pack/openclaw-discord-<version>.tgz | grep -E '^pac
 ```
 
 The `node_modules` entries prove that the plugin carries its bundled runtime payload. The final check proves that neither npm lockfile format ships in the tarball.
+
+## Related
+
+- [Release performance sweep](/reference/release-performance-sweep) - the May 2026 package-size, dependency, and shrinkwrap audit this policy came out of

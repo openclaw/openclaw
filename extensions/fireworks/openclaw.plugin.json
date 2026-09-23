@@ -1,5 +1,6 @@
 {
   "id": "fireworks",
+  "categories": ["models"],
   "activation": {
     "onStartup": false
   },
@@ -30,6 +31,12 @@
     }
   ],
   "modelCatalog": {
+    "aliases": {
+      "fireworks-ai": {
+        "provider": "fireworks",
+        "api": "openai-completions"
+      }
+    },
     "modelsDev": {
       "fireworks": "fireworks-ai"
     },

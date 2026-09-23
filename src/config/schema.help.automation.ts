@@ -8,6 +8,8 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
     'DM session scoping: "main" keeps continuity, while "per-peer", "per-channel-peer", and "per-account-channel-peer" increase isolation. Use isolated modes for shared inboxes or multi-account deployments.',
   "session.groupScope":
     'Group/channel session scoping: "per-group" keeps rooms separate while the agent main session ambiently watches them, independently of dmScope; "main" merges room context into main and needs no watch. Use "main" only for trusted rooms.',
+  "session.notifyOnCreate":
+    "Queue a system notice in the owning agent's Home session when a session is created (default: true). Notices include available title and creator metadata and are read on the next Home turn or heartbeat. Set false to disable; drafts, incognito, internal sessions, and scheduled cron runs are excluded.",
   "session.identityLinks":
     "Maps canonical identities to provider-prefixed peer IDs so equivalent users resolve to one DM thread (example: telegram:123456). Use this when the same human appears across multiple channels or accounts.",
   "session.resetTriggers":
@@ -75,19 +77,25 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
   "session.maintenance":
     "Automatic session-store maintenance controls for dashboard archiving, pruning age, entry caps, reset archive retention, and disk budget cleanup. Start in warn mode to observe impact, then enforce once thresholds are tuned.",
   "session.maintenance.mode":
-    'Determines whether maintenance policies are only reported ("warn") or actively applied ("enforce"). Keep "warn" during rollout and switch to "enforce" after validating safe thresholds.',
+    'Determines whether pruning and disk-budget policies are only reported ("warn") or actively applied ("enforce"). Keep "warn" during rollout and switch to "enforce" after validating safe thresholds. Cold storage has its own explicit enabled setting.',
+  "session.maintenance.coldStorage":
+    "Moves inactive transcripts into compressed JSONL archives while retaining session metadata. Archive files become required history and must be included in backups. Changes apply without restarting the Gateway.",
+  "session.maintenance.coldStorage.enabled":
+    "Enables background transcript archival (default false). A worker checks for eligible transcripts every minute. This explicit archive policy is separate from deletion and disk-budget cleanup.",
+  "session.maintenance.coldStorage.afterDays":
+    "Archive transcripts after this many inactive days (positive integer, default 30). Active work is protected; changing the cutoff takes effect on the next worker pass without a Gateway restart.",
   "session.maintenance.pruneAfter":
-    "Removes entries older than this duration (for example `30d` or `12h`) during maintenance passes. Use this as the primary age-retention control and align it with data retention policy.",
+    "Archives eligible durable conversations and removes disposable automation entries older than this duration (default `30d`; for example `12h`). Archived conversations retain their history and can be restored; protected or routable conversations remain active.",
   "session.maintenance.archiveDashboardAfter":
     "Archives inactive dashboard sessions after this duration (for example `7d`) so they remain available without crowding the active session list. Set `false` or `0` to disable automatic dashboard archiving.",
   "session.maintenance.maxEntries":
-    "Caps total session entry count retained in the store to prevent unbounded growth over time. Protected entries count toward the limit but are never automatically removed, so the store can remain above the cap when protection alone exceeds it. Use lower limits for constrained environments, or higher limits when longer history is required.",
+    "Caps unarchived session entries (default 5000). Eligible durable overflow conversations are archived with their history; disposable automation entries are removed. Existing archives do not consume the cap. Protected active entries still count and can keep the store above the limit.",
   "session.maintenance.preserveRecent":
     "Protects interactive sessions active within this duration (for example `7d`) from automatic age, count, and disk-budget history eviction. Unset or `false` keeps the normal oldest-first policy. Synthetic model-run, cron, hook, heartbeat, ACP, and sub-agent rows remain eligible for bounded cleanup.",
   "session.maintenance.resetArchiveRetention":
     "Age-based retention for archived transcripts (`*.reset.<timestamp>` and `*.deleted.<timestamp>`). Defaults to keeping archives until the disk budget evicts them oldest-first; set a duration (for example `30d`) to opt into wall-clock deletion, or `false` to disable it explicitly.",
   "session.maintenance.maxDiskBytes":
-    'Per-agent sessions-directory disk budget (for example `500mb`). Defaults to `10gb`; when exceeded, warn mode reports pressure and enforce mode performs oldest-first cleanup (archived transcripts before live sessions). Set `false`, `0`, or `"0"` to disable.',
+    'Per-agent physical disk budget covering SQLite main/WAL and counted session-directory artifacts (for example `500mb`). Defaults to `10gb`; protected data can keep usage above the target. When exceeded, warn mode reports pressure and enforce mode removes old reset/delete artifacts, unreferenced history, then cap-created archives. Manual, age-retention, dashboard, recovery, and legacy archives remain protected. Set `false`, `0`, or `"0"` to disable.',
   "session.maintenance.highWaterBytes":
     "Target size after disk-budget cleanup (high-water mark). Defaults to 80% of maxDiskBytes; set explicitly for tighter reclaim behavior on constrained disks. A value that resolves to zero falls back to the default; negative values are invalid. Disable the budget with maxDiskBytes instead.",
   cron: "Global scheduler settings for stored automations, run concurrency, delivery fallback, and run-session retention. Keep defaults unless you are scaling automation volume or integrating external webhook receivers.",
@@ -124,7 +132,7 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
   "transcripts.autoStart[].whenOccupied":
     "Start a fresh transcript session each time humans are present in the source and stop it (generating notes) after the last human leaves. Requires a provider that reports occupancy, such as discord-voice. Default: false (capture continuously from gateway start).",
   "transcripts.autoStart[].title":
-    "Optional human-readable title stored with the transcript session and shown in transcript listings. Use concise meeting names that help operators identify the captured source.",
+    "Optional title for future transcript captures. Changing only titles keeps current captures running and does not rename their admitted title or saved notes. Other source changes retain their normal restart handling.",
   "transcripts.autoStart[].accountId":
     "Optional provider account or workspace identifier for transcript sources that need account disambiguation. Use the provider's documented account id format.",
   "transcripts.autoStart[].guildId":
@@ -266,7 +274,7 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
   "messages.groupChat.mentionPatterns":
     "Safe case-insensitive regex patterns used to detect explicit mentions/trigger phrases in group chats. Use precise patterns to reduce false positives in high-volume channels; invalid or unsafe nested-repetition patterns are ignored.",
   "messages.groupChat.historyLimit":
-    "Maximum number of prior group messages loaded as context per turn for group sessions. Use higher values for richer continuity, or lower values for faster and cheaper responses.",
+    "Maximum number of prior group messages loaded as context per turn for group sessions. Use higher values for richer continuity, or lower values for faster and cheaper responses. Automatic prompt history is capped at 200 messages. The JSON integer maximum selects the channel default window (50 for shared group history), not an unlimited window.",
   "messages.groupChat.unmentionedInbound":
     'Controls how unmentioned always-on group chatter is submitted. "user_request" treats it as a user request; "room_event" submits it as quiet context where visible output requires the message tool.',
   "messages.groupChat.visibleReplies":
@@ -354,5 +362,5 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
   "messages.statusReactions.enabled":
     "Enable lifecycle status reactions on supported channels. Discord treats unset as enabled when ack reactions are active; Slack, Signal, Telegram, and WhatsApp require this to be true before lifecycle reactions are used. Slack uses native assistant thread status for progress by default.",
   "messages.inbound.debounceMs":
-    "Debounce window (ms) for batching rapid inbound messages from the same sender (0 to disable).",
+    "Quiet window (ms) for batching rapid inbound messages from the same sender. Telegram defaults to 300ms when neither a global nor channel override is set; other channels default to 0. Zero disables ordinary burst batching, but Telegram still reassembles near-limit long-message chunks.",
 };

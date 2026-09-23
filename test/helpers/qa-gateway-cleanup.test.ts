@@ -461,6 +461,7 @@ describe("QA gateway fixture error composition", () => {
       const finalizationError = new Error("fixture finalization failed");
       const cleaned: string[] = [];
       const bodies: Array<() => Promise<void>> = [];
+      const cleanups: Array<() => Promise<void>> = [];
       const registry = {
         exitCode: null as number | null,
         kill() {
@@ -471,6 +472,7 @@ describe("QA gateway fixture error composition", () => {
       };
       let receiverCount = 0;
       vi.doMock("vitest", () => ({
+        afterAll: (cleanup: () => Promise<void>) => cleanups.push(cleanup),
         describe: (_name: string, body: () => void) => body(),
         test: (_name: string, body: () => Promise<void>) => bodies.push(body),
         expect,
@@ -485,14 +487,18 @@ describe("QA gateway fixture error composition", () => {
         spawn: () => registry,
       }));
       vi.doMock("node:fs/promises", () => ({
+        copyFile: async () => {},
         cp: async () => {},
         mkdir: async () => {},
-        mkdtemp: async () => "/qa-fixture/scratch",
+        mkdtemp: vi
+          .fn()
+          .mockResolvedValueOnce("/qa-fixture/scratch")
+          .mockResolvedValueOnce("/qa-fixture/seed"),
         readdir: async () => ["diagnostics-otel.tgz"],
         readFile: async (file: string) =>
           file.endsWith("registry-port") ? "43210" : JSON.stringify({ version: "1.0.0" }),
-        rm: async () => {
-          cleaned.push("scratch");
+        rm: async (target: string) => {
+          cleaned.push(target);
         },
         symlink: async () => {},
         writeFile: async () => {},
@@ -531,14 +537,23 @@ describe("QA gateway fixture error composition", () => {
 
       await import("../e2e/qa-lab/runtime/diagnostics-otel-install-runtime.e2e.test.js");
       expect(bodies).toHaveLength(2);
-      const failure: unknown = await bodies[0]!().catch((error: unknown) => error);
+      expect(cleanups).toHaveLength(1);
+      let failure: unknown;
+      try {
+        failure = await bodies[0]!().catch((error: unknown) => error);
+      } finally {
+        for (const cleanup of cleanups) {
+          await cleanup();
+        }
+      }
       expect(cleaned).toEqual([
         "gateway",
         "provider",
         "registry",
         "receiver-0",
         "receiver-1",
-        "scratch",
+        "/qa-fixture/scratch",
+        "/qa-fixture/seed",
       ]);
       expect(errorTree(failure)).toContain(startupError);
       expect(errorTree(failure)).toContain(finalizationError);

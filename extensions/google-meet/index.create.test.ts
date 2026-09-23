@@ -1,7 +1,8 @@
 import { runInNewContext } from "node:vm";
 import { Command } from "commander";
 // Google Meet tests cover index.create plugin behavior.
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
+import { createRequireRecord, useMeetingTestState } from "openclaw/plugin-sdk/test-fixtures";
+import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
 import { registerGoogleMeetCli } from "./src/cli.js";
@@ -13,6 +14,23 @@ import {
   setupGoogleMeetPlugin,
 } from "./src/test-support/plugin-harness.js";
 import { testing as googleMeetPluginTesting } from "./test-api.js";
+
+let meetingTestState: ReturnType<typeof useMeetingTestState>;
+
+vi.mock("./src/runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./src/runtime.js")>();
+  return {
+    ...actual,
+    GoogleMeetRuntime: class extends actual.GoogleMeetRuntime {
+      constructor(...args: ConstructorParameters<typeof actual.GoogleMeetRuntime>) {
+        super(...args);
+        meetingTestState.track(this, {
+          readWarnings: () => vi.mocked(args[0].logger.warn).mock.calls,
+        });
+      }
+    },
+  };
+});
 
 const voiceCallMocks = vi.hoisted(() => ({
   createVoiceCallGateway: vi.fn(
@@ -311,6 +329,8 @@ describe("google-meet create flow", () => {
     vi.doUnmock("./src/voice-call-gateway.js");
     vi.resetModules();
   });
+
+  meetingTestState = useMeetingTestState(createOpenClawTestState);
 
   it("CLI create can configure API-created space access", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {

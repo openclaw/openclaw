@@ -14,7 +14,10 @@ const repoRoot = path.resolve(import.meta.dirname, "../../..");
 const helperPath = path.join(repoRoot, "ui/src/e2e/control-ui-e2e-suite.test-support.ts");
 
 type FixtureMode =
+  | "tracked-close-success"
+  | "tracked-close-failure"
   | "concurrent-close"
+  | "held-route-drain"
   | "close-failure"
   | "late-context"
   | "late-setup"
@@ -37,6 +40,11 @@ type FixtureJournal = {
   serverClosed: boolean;
   events: string[];
   nativeAbortObserved: boolean;
+  firstCleanupEvent: string;
+  pendingCloseCalls: number;
+  fulfilledBeforeFetchRelease: string[];
+  heldBodyErrorRetained: boolean;
+  callbackOutcomes: { label: string; status: string; disposed: boolean }[];
 };
 
 function fixtureSource(mode: FixtureMode, root: string): string {
@@ -45,6 +53,7 @@ function fixtureSource(mode: FixtureMode, root: string): string {
       ? `import { createOpenClawTestState } from ${JSON.stringify(path.join(repoRoot, "src/test-utils/openclaw-test-state.ts"))};`
       : "";
   return `
+import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterAll, expect, it, vi } from "vitest";
@@ -52,9 +61,18 @@ ${stateImport}
 const state = vi.hoisted(() => {
   let release;
   const gate = new Promise(resolve => { release = resolve; });
+  const deferred = () => {
+    let resolve;
+    const promise = new Promise(done => { resolve = done; });
+    return { promise, resolve };
+  };
   return { closeCalls: 0, arrived: false, published: false, gate, release,
     browserAcquired: false, browserClosed: false, serverAcquired: false, serverClosed: false,
     events: [], nativeAbortObserved: false,
+    cleanupStarted: deferred(), laterFetch: deferred(), laterFetchStarted: deferred(),
+    requestDisposed: deferred(), disposalFault: new Error("synthetic request context disposed"),
+    firstCleanupEvent: "", pendingCloseCalls: -1, fulfilledBeforeFetchRelease: [],
+    heldBodyErrorRetained: false, callbackOutcomes: [],
     closeFault: new Error("synthetic context close failure") };
 });
 vi.mock("playwright", () => ({ chromium: { launch: async () => {
@@ -65,19 +83,86 @@ vi.mock("playwright", () => ({ chromium: { launch: async () => {
       if (${JSON.stringify(mode)} === "late-context") await new Promise(resolve => setTimeout(resolve, 40));
       state.arrived = true;
       const rejectClosedPage = async () => { throw new Error("synthetic page closed"); };
-      const closedPage = {
+      const closedPage = Object.assign(new EventEmitter(), {
         evaluate: rejectClosedPage,
         screenshot: rejectClosedPage,
         isClosed: () => true,
         url: () => "about:blank",
-      };
+      });
+      if (${JSON.stringify(mode)} === "held-route-drain") {
+        const handlers = [];
+        const pending = new Set();
+        let pageClosed = false;
+        let context;
+        const page = Object.assign(new EventEmitter(), {
+          ...closedPage,
+          isClosed: () => pageClosed,
+          context: () => context,
+          route: async (pattern, handler) => { handlers.push({ pattern, handler }); },
+          unrouteAll: async (options) => {
+            expect(options).toEqual({ behavior: "wait" });
+            handlers.length = 0;
+            state.events.push("drain");
+            state.cleanupStarted.resolve("drain");
+            await Promise.all([...pending]);
+          },
+          dispatchModule: (name, label) => {
+            const url = "https://fixture.invalid/" + name + ".js";
+            const registration = handlers.find(({ pattern }) => pattern.test(url));
+            if (!registration) throw new Error("missing held-module route: " + name);
+            const route = {
+              request: () => ({ url: () => url }),
+              fetch: async () => {
+                if (pageClosed) throw state.disposalFault;
+                if (label === "later") {
+                  state.laterFetchStarted.resolve();
+                  await Promise.race([
+                    state.laterFetch.promise,
+                    state.requestDisposed.promise.then(() => { throw state.disposalFault; }),
+                  ]);
+                }
+                if (pageClosed) throw state.disposalFault;
+                state.events.push("fetched " + label);
+                return { status: () => 200 };
+              },
+              fulfill: async () => {
+                if (pageClosed) throw state.disposalFault;
+                state.events.push("fulfilled " + label);
+              },
+            };
+            // Observe rejection immediately; teardown joins outcomes without hiding unknown faults.
+            const settled = registration.handler(route).then(
+              () => ({ label, status: "fulfilled" }),
+              error => ({ label, status: "rejected", error }),
+            );
+            pending.add(settled);
+            void settled.then(() => pending.delete(settled));
+            return settled;
+          },
+        });
+        context = {
+          setDefaultTimeout() {},
+          pages: () => [page],
+          newPage: async () => page,
+          close: async () => {
+            pageClosed = true;
+            state.requestDisposed.resolve();
+            state.closeCalls++;
+            state.events.push("close");
+            state.cleanupStarted.resolve("close");
+            record();
+          },
+        };
+        return context;
+      }
       return {
         setDefaultTimeout() {},
         pages: () => [],
         newPage: async () => closedPage,
         close: () => {
           state.closeCalls++;
-          if (${JSON.stringify(mode)} === "close-failure") return Promise.reject(state.closeFault);
+          record();
+          if (["close-failure", "tracked-close-failure"].includes(${JSON.stringify(mode)})) return Promise.reject(state.closeFault);
           return ${JSON.stringify(mode)} === "concurrent-close" && state.closeCalls === 1
             ? state.gate : Promise.resolve();
         }
@@ -86,17 +171,22 @@ vi.mock("playwright", () => ({ chromium: { launch: async () => {
     close: async () => { state.browserClosed = true; record(); },
   };
 } } }));
-import { createControlUiE2eSuite } from ${JSON.stringify(helperPath)};
+import { createControlUiE2eSuite, holdModuleResponse } from ${JSON.stringify(helperPath)};
 const record = () => fs.writeFileSync(${JSON.stringify(path.join(root, "journal.json"))}, JSON.stringify({
   closeCalls: state.closeCalls, arrived: state.arrived, published: state.published,
   browserAcquired: state.browserAcquired, browserClosed: state.browserClosed,
   serverAcquired: state.serverAcquired, serverClosed: state.serverClosed,
   events: state.events, nativeAbortObserved: state.nativeAbortObserved,
+  firstCleanupEvent: state.firstCleanupEvent, pendingCloseCalls: state.pendingCloseCalls,
+  fulfilledBeforeFetchRelease: state.fulfilledBeforeFetchRelease,
+  heldBodyErrorRetained: state.heldBodyErrorRetained,
+  callbackOutcomes: state.callbackOutcomes,
 }));
 fs.writeFileSync(${JSON.stringify(path.join(root, "worker.pid"))}, String(process.pid));
 record();
 let sharedFixture;
 const suite = createControlUiE2eSuite({ name: "owned context fixture",
+  trackBrowserContexts: ${mode.startsWith("tracked-")},
   ...(${JSON.stringify(mode)}.startsWith("resources-") ? {
     resources: {
       retainedState: () => sharedFixture?.root,
@@ -136,6 +226,57 @@ suite.define(() => {
         expect(process.env.OPENCLAW_STATE_DIR).toBe(sharedFixture.stateDir);
         state.events.push(name); record();
       } });
+    });
+  } else if (${JSON.stringify(mode)}.startsWith("tracked-")) {
+    it("first ordinary case acquires a context", async () => {
+      await suite.newBrowserContext({});
+    });
+    it("next ordinary case starts only after context cleanup", async () => {
+      fs.writeFileSync(${JSON.stringify(path.join(root, "successor.txt"))}, "started");
+      await suite.newBrowserContext({});
+    });
+  } else if (${JSON.stringify(mode)} === "held-route-drain") {
+    it("records held-module cleanup after an early body failure", async () => {
+      const bodyFault = new Error("synthetic held-module body failure");
+      const callbacks = [];
+      let firstHold;
+      let otherHold;
+      const outcome = suite.withPage({}, async ({ page }) => {
+        firstHold = await holdModuleResponse(page, /module-a/u);
+        otherHold = await holdModuleResponse(page, /module-b/u);
+        callbacks.push(page.dispatchModule("module-a", "first"));
+        await firstHold.request;
+        callbacks.push(page.dispatchModule("module-b", "other"));
+        await otherHold.request;
+        // The first request promise has settled, but a later matching fetch is still owned.
+        callbacks.push(page.dispatchModule("module-a", "later"));
+        await state.laterFetchStarted.promise;
+        throw bodyFault;
+      }).then(() => undefined, error => error);
+      let failure;
+      let callbackOutcomes;
+      try {
+        // The old helper closes immediately; waiting only for drain would turn red into a timeout.
+        state.firstCleanupEvent = await state.cleanupStarted.promise;
+        state.pendingCloseCalls = state.closeCalls;
+        state.fulfilledBeforeFetchRelease = state.events.filter(event => event.startsWith("fulfilled "));
+        record();
+      } finally {
+        firstHold?.release();
+        otherHold?.release();
+        state.laterFetch.resolve();
+        callbackOutcomes = await Promise.all(callbacks);
+        failure = await outcome;
+      }
+      state.callbackOutcomes = callbackOutcomes.map(({ label, status, error }) => ({
+        label, status, disposed: status === "rejected" && error === state.disposalFault,
+      }));
+      state.heldBodyErrorRetained = failure === bodyFault;
+      record();
+      for (const result of callbackOutcomes) {
+        if (result.status === "rejected") expect(result.error).toBe(state.disposalFault);
+      }
+      expect(failure).toBe(bodyFault);
     });
   } else if (${JSON.stringify(mode)} === "concurrent-close") {
     it("joins the first context close", async () => {
@@ -346,6 +487,38 @@ function runJoinedShutdownTest(context: TestContext, body: () => Promise<void>) 
   return run;
 }
 
+it("drains held-module callbacks before closing the context after a body failure", (context) =>
+  runJoinedShutdownTest(context, async () => {
+    const result = await runFixture("held-route-drain", context.signal);
+    expect(result.code, result.output).toBe(0);
+    expect(result.report.numPassedTests, result.output).toBe(1);
+    expect(result.report.numFailedTests, result.output).toBe(0);
+    expect(
+      result.journal.firstCleanupEvent,
+      "held-module callbacks must drain before context close",
+    ).toBe("drain");
+    expect(result.journal.callbackOutcomes).toEqual([
+      { label: "first", status: "fulfilled", disposed: false },
+      { label: "other", status: "fulfilled", disposed: false },
+      { label: "later", status: "fulfilled", disposed: false },
+    ]);
+    expect(result.journal.pendingCloseCalls).toBe(0);
+    expect(result.journal.fulfilledBeforeFetchRelease).toEqual([
+      "fulfilled first",
+      "fulfilled other",
+    ]);
+    expect(result.journal.events).toContain("fulfilled later");
+    expect(result.journal.events.indexOf("fulfilled later")).toBeLessThan(
+      result.journal.events.indexOf("close"),
+    );
+    expect(result.journal).toMatchObject({
+      closeCalls: 1,
+      heldBodyErrorRetained: true,
+      browserClosed: true,
+      serverClosed: true,
+    });
+  }));
+
 it.for(["concurrent-close", "close-failure", "late-context"] as const)(
   "preserves native browser resource ownership: %s",
   (mode, context) =>
@@ -446,6 +619,26 @@ it.for(["resources-success", "resources-close-failure", "resources-late-setup"] 
       }
       if (mode === "resources-close-failure") {
         expect(result.output).toContain("synthetic shared resource close failure");
+      }
+    }),
+);
+
+it.for(["tracked-close-success", "tracked-close-failure"] as const)(
+  "fences ordinary cases after failed per-test cleanup: %s",
+  (mode, context) =>
+    runJoinedShutdownTest(context, async () => {
+      const result = await runFixture(mode, context.signal);
+      const success = mode === "tracked-close-success";
+      expect(result.code, result.output).toBe(success ? 0 : 1);
+      expect(result.successorStarted, result.output).toBe(success);
+      expect(result.journal).toMatchObject({
+        closeCalls: success ? 2 : 1,
+        browserClosed: success,
+        serverClosed: success,
+      });
+      if (!success) {
+        expect(result.output).toContain("synthetic context close failure");
+        expect(result.output).toContain("retiring owned fork");
       }
     }),
 );

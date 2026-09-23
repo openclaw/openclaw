@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Writable } from "node:stream";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as processExec from "../process/exec.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
@@ -22,6 +22,7 @@ import {
   isSystemctlMissingDetail,
   isSystemdUserBusUnavailableDetail,
 } from "./systemd-unavailable.js";
+import { resolveSystemdUserTransport } from "./systemd-user-transport.js";
 
 describe("classifySystemdUnavailableDetail", () => {
   it("classifies missing systemctl details", () => {
@@ -62,6 +63,18 @@ describe("classifySystemdUnavailableDetail", () => {
 });
 
 describe.skipIf(process.platform === "win32")("systemd process availability", () => {
+  beforeEach(() => vi.spyOn(process, "platform", "get").mockReturnValue("linux"));
+  afterEach(() => vi.restoreAllMocks());
+  async function managerProbe(dir: string) {
+    await fs.writeFile(
+      path.join(dir, "busctl"),
+      `#!/bin/sh
+[ "$*" = "--user --auto-start=no get-property org.freedesktop.systemd1 /org/freedesktop/systemd1 org.freedesktop.systemd1.Manager Version" ] || exit 91
+printf 's "252.39"\\n'
+`,
+      { mode: 0o700 },
+    );
+  }
   function systemctlEnv(dir: string) {
     return {
       HOME: dir,
@@ -78,8 +91,13 @@ describe.skipIf(process.platform === "win32")("systemd process availability", ()
       }
       const env = systemctlEnv(dir);
       await expect(isSystemctlAvailable(env)).resolves.toBe(false);
+      await managerProbe(dir);
       await expect(isSystemdUserServiceAvailable(env)).resolves.toBe(false);
-      await expect(assertSystemdAvailable(env)).rejects.toThrow("systemctl not available");
+      await expect(assertSystemdAvailable(env)).rejects.toThrow(
+        errorCode === "EACCES"
+          ? "service-manager probe could not start"
+          : "systemctl not available",
+      );
 
       const result = await execFileUtf8("systemctl", ["private-argument"], { env });
       expect(result).toMatchObject({ stdout: "", code: 1, errorCode });
@@ -100,6 +118,7 @@ describe.skipIf(process.platform === "win32")("systemd process availability", ()
         { mode: 0o700 },
       );
       const env = systemctlEnv(dir);
+      await managerProbe(dir);
       await expect(execFileUtf8("systemctl", ["--user", "status"], { env })).resolves.toEqual({
         stdout: `${output}\n`,
         stderr: "",
@@ -111,7 +130,9 @@ describe.skipIf(process.platform === "win32")("systemd process availability", ()
       if (available) {
         await expect(assertSystemdAvailable(env)).resolves.toBeUndefined();
       } else {
-        await expect(assertSystemdAvailable(env)).rejects.toThrow("systemctl --user unavailable");
+        await expect(assertSystemdAvailable(env)).rejects.toMatchObject({
+          reason: "systemd-user-bus-unavailable",
+        });
       }
     });
   });
@@ -124,7 +145,9 @@ describe.skipIf(process.platform === "win32")("systemd process availability", ()
         { mode: 0o700 },
       );
       const env = systemctlEnv(dir);
+      await managerProbe(dir);
       const timeout = termination === "timeout" ? 500 : undefined;
+      await resolveSystemdUserTransport(env);
       const runAfterOutput = async <T>(run: () => Promise<T>): Promise<T> => {
         if (termination !== "timeout") {
           return await run();
@@ -137,7 +160,7 @@ describe.skipIf(process.platform === "win32")("systemd process availability", ()
             runCommand(argv, {
               ...(typeof options === "number" ? { timeoutMs: options } : options),
               onOutputChunk: (_chunk, stream) => {
-                if (stream === "stdout") {
+                if (stream === "stdout" && argv[0] === "systemctl") {
                   ready.resolve();
                 }
               },
@@ -160,7 +183,9 @@ describe.skipIf(process.platform === "win32")("systemd process availability", ()
       };
       await runAfterOutput(async () => {
         await expect(assertSystemdAvailable(env, timeout)).rejects.toThrow(
-          "systemctl --user unavailable",
+          termination === "timeout"
+            ? "systemd manager inspection deadline expired"
+            : "systemctl --user unavailable",
         );
       });
       const result = await runAfterOutput(() =>
@@ -196,6 +221,7 @@ describe.skipIf(process.platform === "win32")("systemd process availability", ()
       async ({ availability, disableFails }) => {
         await withTempDir("openclaw-systemctl-cleanup-", async (dir) => {
           const env = systemctlEnv(dir);
+          await managerProbe(dir);
           const unitPath = path.join(dir, ".config/systemd/user", unitName);
           const definition = "[Unit]\nDescription=Gateway cleanup fixture\n";
           await fs.mkdir(path.dirname(unitPath), { recursive: true });
@@ -207,7 +233,7 @@ describe.skipIf(process.platform === "win32")("systemd process availability", ()
                 "#!/bin/sh",
                 'printf "%s\\n" "$*" >> "$HOME/systemctl.calls"',
                 'case " $* " in',
-                '*" status "*) kill -TERM $$ ;;',
+                '*" status "*|*" --version "*) kill -TERM $$ ;;',
                 '*" is-enabled "*) printf "enabled\\n" ;;',
                 '*" disable "*)',
                 `  test -f "$HOME/.config/systemd/user/${unitName}" || exit 98`,

@@ -291,10 +291,7 @@ describe("startNodePairingSshVerify", () => {
   test("shares an in-flight probe with reconnects instead of starting another", async () => {
     const identity = makeIdentity();
     let probeRuns = 0;
-    let release: (result: NodeIdentityProbeResult) => void = () => {};
-    const gate = new Promise<NodeIdentityProbeResult>((resolve) => {
-      release = resolve;
-    });
+    const { promise: gate, resolve: release } = createDeferred<NodeIdentityProbeResult>();
     const probe = () => {
       probeRuns += 1;
       return gate;

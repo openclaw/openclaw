@@ -1,4 +1,5 @@
 import { vi } from "vitest";
+import { createRequireRecord } from "../../../../test/helpers/record.js";
 import type { ModelCatalogEntry } from "../../api/types.ts";
 import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { UiSettings } from "../../app/settings.ts";
@@ -8,6 +9,7 @@ import {
   createGatewayRequestMock,
   createTestGatewayClient,
   type GatewayRequestMock,
+  type GatewayRequestHandler,
 } from "../../test-helpers/gateway-client.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
@@ -21,7 +23,7 @@ export function makeRequestMock(handlers: RequestHandlers = {}): GatewayRequestM
   return createGatewayRequestMock((method: string, params?: unknown) => {
     if (!Object.hasOwn(handlers, method)) {
       // Keep unrelated Gateway traffic inert so each test declares only the responses it observes.
-      return Promise.resolve({});
+      return Promise.resolve(method === "models.list" ? { models: [] } : {});
     }
     try {
       const handler = handlers[method];
@@ -34,6 +36,29 @@ export function makeRequestMock(handlers: RequestHandlers = {}): GatewayRequestM
 }
 
 type RequestMock = ReturnType<typeof makeRequestMock>;
+
+type MockCallSource<Call extends ReadonlyArray<unknown> = ReadonlyArray<unknown>> = {
+  mock: {
+    calls: ArrayLike<Call>;
+  };
+};
+
+export function requestCalls<Call extends ReadonlyArray<unknown>>(
+  source: MockCallSource<Call>,
+  method: string,
+): Call[] {
+  return Array.from(source.mock.calls).filter(([calledMethod]) => calledMethod === method);
+}
+
+export const requireRecord = createRequireRecord("object", "expected-label");
+
+export function findRequestPayload(source: MockCallSource, method: string, label: string) {
+  const call = Array.from(source.mock.calls).find((candidate) => candidate[0] === method);
+  if (!call) {
+    throw new Error(`expected request call: ${label}`);
+  }
+  return requireRecord(call[1], label);
+}
 
 export function createBrowserAnnotationAttachment(
   id: string,
@@ -54,7 +79,7 @@ export function createBrowserAnnotationAttachment(
 }
 
 export function findChatSendPayload(host: {
-  request: { mock: { calls: ReadonlyArray<readonly [string, unknown?]> } };
+  request: { mock: { calls: ReadonlyArray<Readonly<Parameters<GatewayRequestHandler>>> } };
 }): Record<string, unknown> {
   const call = host.request.mock.calls.find(([method]) => method === "chat.send");
   if (!call?.[1] || typeof call[1] !== "object") {
@@ -228,6 +253,7 @@ export function makeChatHost(
     chatHasAutoScrolled: false,
     chatUserNearBottom: true,
     chatFollowLocked: false,
+    chatReadingHistory: false,
     chatNewMessagesBelow: false,
     applySettings: vi.fn((patch: Partial<UiSettings>) => {
       // Chat pages own display/layout settings; active-session persistence belongs to pane bindings.

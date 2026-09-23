@@ -55,7 +55,12 @@ const components = new Map([
 ]);
 const inlineComponents = new Set(["Badge", "Tooltip"]);
 const gridComponents = new Set(["CardGroup", "Columns"]);
-const componentTag = /<(\/)?([A-Z][A-Za-z0-9_.-]*)\b([^>]*)>/g;
+// Quoted values can contain placeholders such as <section>; only unquoted > closes a tag.
+const componentAttrsPattern = String.raw`(?:"[^"]*"|'[^']*'|[^'">])*`;
+const componentTag = new RegExp(
+  String.raw`<(\/)?([A-Z][A-Za-z0-9_.-]*)\b(${componentAttrsPattern})>`,
+  "g",
+);
 
 // Track source lines through the existing rewrites; inserted snippet content has
 // no location in the including file. This metadata never enters rendered tokens.
@@ -119,24 +124,26 @@ class DocsSource {
   }
 }
 
-function preprocess(input) {
+function preprocess(input, restore) {
   let out = input.replace(/\r\n/g, "\n").replace(/^import\s+.+?;?\s*$/gm, "");
   out = out.replace(
-    /<Mermaid\b[^>]*>([\s\S]*?)<\/Mermaid>/g,
-    (_, body) => `\n${marker("mermaidBlock", body)}\n`,
+    new RegExp(String.raw`<Mermaid\b${componentAttrsPattern}>([\s\S]*?)<\/Mermaid>`, "g"),
+    (_, body) => `\n${marker("mermaidBlock", restore(body))}\n`,
   );
   out = out.replace(
-    /<Chart\b([^>]*)\/>/g,
-    (_, attrs) => `\n${marker("chart", JSON.stringify({ attrs, body: "" }))}\n`,
+    new RegExp(String.raw`<Chart\b(${componentAttrsPattern})\/>`, "g"),
+    (_, attrs) => `\n${marker("chart", JSON.stringify({ attrs: restore(attrs), body: "" }))}\n`,
   );
   out = out.replace(
-    /<Chart\b([^>]*)>([\s\S]*?)<\/Chart>/g,
-    (_, attrs, body) => `\n${marker("chart", JSON.stringify({ attrs, body }))}\n`,
+    new RegExp(String.raw`<Chart\b(${componentAttrsPattern})>([\s\S]*?)<\/Chart>`, "g"),
+    (_, attrs, body) =>
+      `\n${marker("chart", JSON.stringify({ attrs: restore(attrs), body: restore(body) }))}\n`,
   );
   out = out.replace(/<br\s*\/?>/gi, "\n");
   return out.replace(componentTag, (tag, closing, name, attrs) => {
     let kind;
-    let value = closing ? "" : attrs;
+    // Restore literal attributes before encoding hides their placeholders.
+    let value = closing ? "" : restore(attrs);
     if (gridComponents.has(name) || knownBlocks.has(name)) {
       kind = closing ? "blockClose" : "blockOpen";
       value = gridComponents.has(name) ? cardGridClass(attrs) : knownBlocks.get(name)[0];
@@ -239,79 +246,154 @@ function prepareDocument(input, { sourceFile, root, seen = new Set() }, firstLin
     saved.push(restore(value));
     return key;
   };
-  const jsxComments = new Set();
+  const jsxComments = new Map();
+  const literalContinuationLines = new Set();
+  const literals =
+    /(`+)(?:(?!\n(?:[ \t]*\r?\n|[ \t]*<(?:pre|script|style|textarea)\b))[^])*?\1|<!--[^]*?-->|\{\/\*[^]*?\*\/\}|<(pre|code|script|style|textarea)\b[^>]*>[^]*?<\/\2\s*>/g;
+  let literalEnd = 0;
+  let nextLiteral;
+  let inlineCode = false;
+  let jsxComment = false;
+  let literalLine = 0;
+  let depth = 0;
+  let fenceEndLine = 0;
+  const projectionLines = [];
+  const recordLine = (line, projection = line) => {
+    projectionLines.push(projection);
+    return line;
+  };
+  // Keep split("\n") semantics: CRLF must not create extra code-line entries.
   let text = new DocsSource(input, firstLine).replace(
-    /<!--[^]*?-->|\{\/\*[^]*?\*\/\}|<(pre|code|script|style|textarea)\b[^>]*>[^]*?<\/\1\s*>/g,
-    (value) => {
-      if (value.startsWith("{/*")) {
-        jsxComments.add(saved.length);
+    /(?<=^|\n)[^\n]*/g,
+    (line, offset, source) => {
+      const insideLiteral = offset < literalEnd;
+      let normalized =
+        depth && (!insideLiteral || inlineCode)
+          ? line.replace(new RegExp(`^ {1,${depth * 2}}`), "")
+          : line;
+      const lineIndex = projectionLines.length;
+      if (insideLiteral && !inlineCode) {
+        literalContinuationLines.add(lineIndex);
       }
-      return hold(value);
+      if (lineIndex < fenceEndLine) {
+        return recordLine(normalized);
+      }
+      if (!insideLiteral && /`{3,}|~{3,}/.test(normalized)) {
+        const suffix = source.slice(offset + line.length);
+        // Keep the processed prefix for list/quote context. Component depth is
+        // fixed inside this fence; CommonMark owns its closing/container boundary.
+        const projection = [
+          ...projectionLines,
+          normalized +
+            (depth ? suffix.replace(new RegExp(`^ {1,${depth * 2}}`, "gm"), "") : suffix),
+        ].join("\n");
+        const token = codeParser
+          .parse(projection, {})
+          .find((entry) => entry.type === "fence" && entry.map[0] === lineIndex);
+        if (token) {
+          fenceEndLine = token.map[1];
+          return recordLine(normalized);
+        }
+      }
+      // The first opener owns its span: fenced examples cannot open raw HTML,
+      // and raw HTML cannot open fences. Keep each held piece on its source line.
+      let cursor = offset + line.length - normalized.length;
+      const end = offset + line.length;
+      const pieces = [];
+      const projectedPieces = [];
+      while (cursor < end) {
+        if (cursor < literalEnd) {
+          const value = source.slice(cursor, Math.min(literalEnd, end));
+          if (jsxComment) {
+            jsxComments.set(saved.length, { openerLine: literalLine, line: lineIndex });
+          }
+          const held = inlineCode ? value : hold(value);
+          pieces.push(held);
+          const structuralPrefix = inlineCode ? "" : value.match(/^[ \t]*(?:>[ \t]*)*/)[0];
+          projectedPieces.push(
+            (depth
+              ? structuralPrefix.replace(new RegExp(`^ {1,${depth * 2}}`), "")
+              : structuralPrefix) + (structuralPrefix.length < value.length ? held : ""),
+          );
+          cursor += value.length;
+          continue;
+        }
+        if (nextLiteral === undefined || (nextLiteral && nextLiteral.index < cursor)) {
+          literals.lastIndex = cursor;
+          nextLiteral = literals.exec(source);
+        }
+        const literal = nextLiteral;
+        if (!literal || literal.index >= end) {
+          pieces.push(source.slice(cursor, end));
+          projectedPieces.push(source.slice(cursor, end));
+          break;
+        }
+        pieces.push(source.slice(cursor, literal.index));
+        projectedPieces.push(source.slice(cursor, literal.index));
+        cursor = literal.index;
+        literalEnd = cursor + literal[0].length;
+        inlineCode = literal[0].startsWith("`");
+        jsxComment = literal[0].startsWith("{/*");
+        literalLine = lineIndex;
+      }
+      normalized = pieces.join("");
+      for (const [, closing, name, attrs] of normalized
+        .replace(/(`+)[^\n]*?\1/g, "")
+        .matchAll(componentTag)) {
+        if (
+          inlineComponents.has(name) ||
+          !(
+            components.has(name) ||
+            knownBlocks.has(name) ||
+            callouts.has(name) ||
+            gridComponents.has(name)
+          )
+        ) {
+          continue;
+        }
+        if (closing) {
+          depth = Math.max(0, depth - 1);
+        } else if (!attrs.endsWith("/")) {
+          depth++;
+        }
+      }
+      return recordLine(normalized, projectedPieces.join(""));
     },
   );
-  let depth = 0;
-  let fence;
-  // Keep split("\n") semantics: CRLF must not create extra code-line entries.
-  text = text.replace(/(?<=^|\n)[^\n]*/g, (line) => {
-    const normalized = depth ? line.replace(new RegExp(`^ {1,${depth * 2}}`), "") : line;
-    const match = normalized.match(/^\s*(?:[-*+] |\d+[.)] )?(`{3,}|~{3,})(.*)$/);
-    if (fence) {
-      if (
-        match &&
-        match[1][0] === fence[0] &&
-        match[1].length >= fence.length &&
-        !match[2].trim()
-      ) {
-        fence = undefined;
-      }
-      return normalized;
-    }
-    if (match) {
-      fence = match[1];
-      return normalized;
-    }
-    for (const [, closing, name, attrs] of normalized
-      .replace(/(`+)[^\n]*?\1/g, "")
-      .matchAll(componentTag)) {
-      if (
-        inlineComponents.has(name) ||
-        !(
-          components.has(name) ||
-          knownBlocks.has(name) ||
-          callouts.has(name) ||
-          gridComponents.has(name)
-        )
-      ) {
-        continue;
-      }
-      if (closing) {
-        depth = Math.max(0, depth - 1);
-      } else if (!attrs.endsWith("/")) {
-        depth++;
-      }
-    }
-    return normalized;
-  });
   const codeLines = new Set();
-  for (const token of codeParser.parse(text.text, {})) {
+  const quoteRanges = [];
+  for (const token of codeParser.parse(projectionLines.join("\n"), {})) {
+    // Quote markers inside raw literals cannot establish a later comment's container.
+    if (token.type === "blockquote_open" && !literalContinuationLines.has(token.map[0])) {
+      quoteRanges.push(token.map);
+    }
     if ((token.type === "fence" || token.type === "code_block") && token.map) {
       for (let i = token.map[0]; i < token.map[1]; i++) {
         codeLines.add(i);
       }
     }
   }
+  // A comment's opener owns whether its bytes are code. Remove ordinary JSX
+  // comments before code holding can preserve their indented continuation lines.
+  text = text.replace(placeholder, (key, index) => {
+    const comment = jsxComments.get(Number(index));
+    if (!comment || codeLines.has(comment.openerLine)) {
+      return key;
+    }
+    const value = saved[Number(index)];
+    const quoteDepth = quoteRanges.filter(
+      ([start, end]) => start <= comment.openerLine && comment.line < end,
+    ).length;
+    const quotePrefix = value.match(new RegExp(`^(?:[ \\t]*>){0,${quoteDepth}}`))[0];
+    return quotePrefix + value.slice(quotePrefix.length).replace(/[^\n]/g, " ");
+  });
   let sourceLine = 0;
   text = text
     .replace(/(?<=^|\n)[^\n]*/g, (line) => (codeLines.has(sourceLine++) ? hold(line) : line))
     .replace(/(`+)([^]*?)\1/g, hold);
-  // Code captures have already restored their inner comment bytes. Remove only
-  // standalone JSX comments, never comment syntax inside a protected literal.
-  text = text.replace(placeholder, (key, index) =>
-    jsxComments.has(Number(index)) ? saved[Number(index)].replace(/[^\n]/g, " ") : key,
-  );
   if (sourceFile) {
     text = text.replace(
-      /<Snippet\b([^>]*)\/>/g,
+      new RegExp(String.raw`<Snippet\b(${componentAttrsPattern})\/>`, "g"),
       (_, rawAttrs) => {
         const attrs = parseAttrs(rawAttrs);
         const ref = attrs.file ?? attrs.src;
@@ -334,20 +416,26 @@ function prepareDocument(input, { sourceFile, root, seen = new Set() }, firstLin
       false,
     );
   }
-  text = preprocess(text);
+  text = preprocess(text, restore);
   return text.replace(placeholder, (_, index) => saved[Number(index)], false);
 }
 
-// mint@4.2.808 -> common@1.0.1096: slugify.js and remarkComponentIds.js.
-// Keep its package slugger, including percent-byte and numbered-title behavior.
+// mint@4.2.808/common@1.0.1096 published these suffixes before counting.
+// Keep apostrophes as separators so slugify 2.2.1 cannot join them early
+// and change existing heading or component links.
+function mintBaseSlug(title, options) {
+  return slugify(title, { ...options, customReplacements: [["'", "-"]] }).replace(
+    /([a-zA-Z\d]+)-([ts])(-|$)/g,
+    "$1$2$3",
+  );
+}
 function mintSlug(title, counter = slugifyWithCounter()) {
   const encoded = anchor.defaults.slugify(title);
-  return counter(
-    encoded,
-    /%[0-9A-F]{2}/.test(encoded)
-      ? { decamelize: false, preserveCharacters: ["%", "_"], lowercase: false }
-      : { decamelize: false, preserveCharacters: ["_"] },
-  );
+  const options = /%[0-9A-F]{2}/.test(encoded)
+    ? { decamelize: false, preserveCharacters: ["%", "_"], lowercase: false }
+    : { decamelize: false, preserveCharacters: ["_"] };
+  const base = mintBaseSlug(encoded, options);
+  return counter(base, options);
 }
 function cleanMintId(id) {
   return decodeURIComponent(id.replace(/%(?![0-9A-Fa-f]{2})/g, "%25"))
@@ -537,11 +625,11 @@ export function parseDocsDocument(markdown, md = createDocsMarkdown(), options =
               ? deduplicateMintId(mintSlug(title), toc)
               : mintSlug(title);
           } else if (kind === "accordionOpen" && title) {
-            component.alias = slugify(title.replace(":", "-"), { decamelize: false });
+            component.alias = mintBaseSlug(title.replace(":", "-"), { decamelize: false });
           } else if (kind === "paramOpen") {
             const name = attrs.query ?? attrs.path ?? attrs.body ?? attrs.header ?? attrs.name;
             if (name) {
-              component.alias = slugify(`param-${name}`, { decamelize: true });
+              component.alias = mintBaseSlug(`param-${name}`, { decamelize: true });
             }
           }
         }

@@ -8,6 +8,7 @@ import {
   type ControlUiEnvironment,
   type ControlUiPluginFrameGrantAck,
 } from "../../../src/gateway/control-ui-bootstrap-contract.js";
+import { uiDevGatewayResourceUrl } from "../dev-gateway.ts";
 import { normalizeAssistantIdentity } from "../lib/assistant-identity.ts";
 import { resolveControlUiAuthCandidates } from "./control-ui-auth.ts";
 import { canReloadControlUiDocument } from "./document-reload-guard.ts";
@@ -31,7 +32,6 @@ type ApplicationConfig = {
   serverBuildId?: string | null;
   devGitBranch: string | null;
   environment: ControlUiEnvironment | null;
-  localMediaPreviewRoots: string[];
   embedSandboxMode: ControlUiEmbedSandboxMode;
   allowExternalEmbedUrls: boolean;
   automaticallyFetchFavicons: boolean;
@@ -65,7 +65,6 @@ const DEFAULT_APPLICATION_CONFIG: ApplicationConfig = {
   serverBuildId: null,
   devGitBranch: null,
   environment: null,
-  localMediaPreviewRoots: [],
   embedSandboxMode: "strict",
   allowExternalEmbedUrls: false,
   automaticallyFetchFavicons: false,
@@ -112,7 +111,6 @@ function normalizeApplicationConfig(parsed: ControlUiBootstrapConfig): Applicati
     serverBuildId: parsed.serverBuildId ?? null,
     devGitBranch: parsed.devGitBranch?.trim() || null,
     environment: parsed.environment ?? null,
-    localMediaPreviewRoots: parsed.localMediaPreviewRoots ?? [],
     embedSandboxMode: parsed.embedSandbox ?? "scripts",
     allowExternalEmbedUrls: Boolean(parsed.allowExternalEmbedUrls),
     automaticallyFetchFavicons: Boolean(parsed.automaticallyFetchFavicons),
@@ -120,12 +118,18 @@ function normalizeApplicationConfig(parsed: ControlUiBootstrapConfig): Applicati
     terminalEnabled: Boolean(parsed.terminalEnabled),
     cliAgentsEnabled: Boolean(parsed.cliAgentsEnabled),
     pluginAssetsRequireAuth: parsed.pluginAssetsRequireAuth !== false,
-    pluginFrameGrants: (parsed.pluginFrameGrants ?? []).filter(
-      (grant): grant is ControlUiPluginFrameGrantAck =>
-        typeof grant?.pluginId === "string" &&
-        typeof grant.path === "string" &&
-        (grant.match === "exact" || grant.match === "prefix"),
-    ),
+    pluginFrameGrants: (parsed.pluginFrameGrants ?? [])
+      .filter(
+        (grant): grant is ControlUiPluginFrameGrantAck =>
+          typeof grant?.pluginId === "string" &&
+          typeof grant.path === "string" &&
+          (grant.match === "exact" || grant.match === "prefix"),
+      )
+      .map((grant) => ({
+        pluginId: grant.pluginId,
+        path: uiDevGatewayResourceUrl(grant.path),
+        match: grant.match,
+      })),
   };
 }
 

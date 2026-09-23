@@ -30,11 +30,16 @@ import {
 import { resolveTranscriptAppendRefusal } from "./session-accessor.sqlite-transcript-write-guard.js";
 import {
   assertCurrentSessionTranscriptHeader,
-  classifySessionFileEntry,
   findSessionTranscriptHeader,
 } from "./session-entry-codec.js";
 import { SessionEntryNavigation, type SessionNavigationEntry } from "./session-entry-navigation.js";
+import {
+  decodeSessionTranscriptReportFacts,
+  projectSessionTranscriptReportFacts,
+  type SessionTranscriptReportFacts,
+} from "./session-transcript-report-facts.js";
 import { applyAssistantDeliveryDirectives } from "./transcript-assistant-delivery.js";
+import { transcriptEventJsonSql } from "./transcript-payload.js";
 import {
   assertOwnedTranscriptWriteCommit,
   SessionTranscriptWriterClaimReboundError,
@@ -53,6 +58,7 @@ type TranscriptReport =
   | {
       kind: "custom";
       customTypes: readonly string[];
+      suppressWhenAssistantRun?: string;
       selectReport: (
         latest: CustomMessageReport | undefined,
       ) => CustomMessageReportAppend | undefined;
@@ -62,37 +68,29 @@ type ReportNavigationEntry = SessionNavigationEntry & {
   seq: number;
   customType?: string;
   assistantResponseId?: string;
+  assistantRunId?: string;
 };
 
 class TranscriptReportNavigation extends SessionEntryNavigation<ReportNavigationEntry> {
-  constructor(rows: Iterable<{ seq: number; entry: unknown }>, sourceVersion: number) {
+  constructor(rows: Iterable<{ seq: number; facts: SessionTranscriptReportFacts }>) {
     super();
-    for (const { seq, entry: raw } of rows) {
-      const { entry, recognized } = classifySessionFileEntry(raw, sourceVersion);
-      if (!recognized || entry.type === "session") {
-        this.appendOpaqueNavigationRecord(raw);
-        continue;
+    for (const { seq, facts } of rows) {
+      switch (facts.kind) {
+        case "canonical":
+          this.appendCanonicalNavigationEntry(
+            { ...facts.entry, parentId: facts.entry.parentId ?? null, seq },
+            facts.hasParentId,
+          );
+          break;
+        case "leaf":
+          this.appendOpaqueNavigationRecord({ ...facts.entry, type: "leaf" });
+          break;
+        case "link":
+          this.appendOpaqueNavigationRecord(facts);
+          break;
+        case "ignored":
+          break;
       }
-      // Classification consumes the original row. Retain only navigation/report
-      // facts so large message and provider bodies die with this iteration.
-      const common = {
-        id: entry.id,
-        parentId: entry.parentId,
-        timestamp: entry.timestamp,
-        appendMode: entry.appendMode,
-        seq,
-        ...(entry.type === "custom_message" ? { customType: entry.customType } : {}),
-        ...(entry.type === "message" &&
-        entry.message.role === "assistant" &&
-        typeof entry.message.responseId === "string"
-          ? { assistantResponseId: entry.message.responseId }
-          : {}),
-      };
-      const navigation: ReportNavigationEntry =
-        entry.type === "label"
-          ? { ...common, type: entry.type, targetId: entry.targetId, label: entry.label }
-          : { ...common, type: entry.type };
-      this.appendCanonicalNavigationEntry(navigation, Object.hasOwn(entry, "parentId"));
     }
     this.finishNavigation();
   }
@@ -103,31 +101,59 @@ class TranscriptReportNavigation extends SessionEntryNavigation<ReportNavigation
 }
 
 function readReportBranch(database: OpenClawAgentDatabase, sessionId: string) {
-  function* rows() {
-    for (const row of iterateSqliteQuerySync(
+  function rows() {
+    return iterateSqliteQuerySync(
       database.db,
       getSessionKysely(database.db)
         .selectFrom("transcript_events")
-        .select(["seq", "event_json"])
+        .select((eb) => [
+          "seq",
+          "event_json",
+          eb
+            .fn<string | null>("json_extract", [eb.ref("navigation_json"), eb.val("$.report")])
+            .as("report_json"),
+        ])
         .where("session_id", "=", sessionId)
         .orderBy("seq", "asc"),
-    )) {
-      yield { seq: row.seq, entry: JSON.parse(row.event_json) as unknown };
+    );
+  }
+  function compressedFacts(reportJson: string | null): SessionTranscriptReportFacts {
+    const facts =
+      reportJson === null ? undefined : decodeSessionTranscriptReportFacts(JSON.parse(reportJson));
+    if (!facts) {
+      throw new Error("Invalid compressed transcript report facts");
     }
+    return facts;
   }
   let hasRows = false;
   const header = findSessionTranscriptHeader(
     (function* () {
       for (const row of rows()) {
         hasRows = true;
-        yield row.entry;
+        if (row.event_json !== null) {
+          yield JSON.parse(row.event_json) as unknown;
+        } else {
+          compressedFacts(row.report_json);
+        }
       }
     })(),
   );
   if (hasRows) {
     assertCurrentSessionTranscriptHeader(header);
   }
-  return new TranscriptReportNavigation(rows(), header?.version ?? 1).facts();
+  return new TranscriptReportNavigation(
+    (function* () {
+      for (const row of rows()) {
+        yield {
+          seq: row.seq,
+          facts:
+            row.event_json === null
+              ? compressedFacts(row.report_json)
+              : projectSessionTranscriptReportFacts(JSON.parse(row.event_json)),
+        };
+      }
+    })(),
+  ).facts();
 }
 
 function latestCustomReport(
@@ -148,7 +174,7 @@ function latestCustomReport(
       database.db,
       getSessionKysely(database.db)
         .selectFrom("transcript_events")
-        .select("event_json")
+        .select(transcriptEventJsonSql(database.db).as("event_json"))
         .where("session_id", "=", sessionId)
         .where("seq", "=", entry.seq),
     );
@@ -168,36 +194,39 @@ async function withCurrentTranscript<T>(
   // or inherited writer fences would stop matching after the queue wait.
   const fenced = withOwnedSessionTranscriptWriterFence(scope);
   const resolved = resolveSqliteTranscriptScope(fenced);
-  return runExclusiveSqliteSessionWrite(resolved, async () =>
-    runOpenClawAgentWriteTransaction(
-      (database) => {
-        assertOwnedTranscriptWriteCommit(fenced);
-        const refusal = resolveTranscriptAppendRefusal(
-          readSessionEntryRow(database, resolved.sessionKey)?.entry,
-          resolved,
-          fenced,
-        );
-        if (refusal) {
-          if (fenced.expectedWriterRunId !== undefined) {
-            throw new SessionTranscriptWriterClaimReboundError(refusal);
+  return runExclusiveSqliteSessionWrite(
+    resolved,
+    async () =>
+      runOpenClawAgentWriteTransaction(
+        (database) => {
+          assertOwnedTranscriptWriteCommit(fenced);
+          const refusal = resolveTranscriptAppendRefusal(
+            readSessionEntryRow(database, resolved.sessionKey)?.entry,
+            resolved,
+            fenced,
+          );
+          if (refusal) {
+            if (fenced.expectedWriterRunId !== undefined) {
+              throw new SessionTranscriptWriterClaimReboundError(refusal);
+            }
+            return err(refusal);
           }
-          return err(refusal);
-        }
-        const result = run(database, resolved);
-        assertOwnedTranscriptWriteCommit(fenced);
-        const rebound = resolveTranscriptAppendRefusal(
-          readSessionEntryRow(database, resolved.sessionKey)?.entry,
-          resolved,
-          fenced,
-        );
-        if (rebound) {
-          throw new SessionTranscriptWriterClaimReboundError(rebound);
-        }
-        return ok(result);
-      },
-      toDatabaseOptions(resolved),
-      { operationLabel: "session.transcript.report" },
-    ),
+          const result = run(database, resolved);
+          assertOwnedTranscriptWriteCommit(fenced);
+          const rebound = resolveTranscriptAppendRefusal(
+            readSessionEntryRow(database, resolved.sessionKey)?.entry,
+            resolved,
+            fenced,
+          );
+          if (rebound) {
+            throw new SessionTranscriptWriterClaimReboundError(rebound);
+          }
+          return ok(result);
+        },
+        toDatabaseOptions(resolved),
+        { operationLabel: "session.transcript.report" },
+      ),
+    "session.transcript.report",
   );
 }
 
@@ -234,6 +263,12 @@ export async function appendSessionTranscriptReport(
         message: applyAssistantDeliveryDirectives(report.message),
         parentId: branch.appendParentId,
       });
+      return;
+    }
+    if (
+      report.suppressWhenAssistantRun !== undefined &&
+      branch.path.some((entry) => entry.assistantRunId === report.suppressWhenAssistantRun)
+    ) {
       return;
     }
     const selected = report.selectReport(

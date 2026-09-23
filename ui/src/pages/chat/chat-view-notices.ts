@@ -5,11 +5,15 @@ import { renderCopyButton } from "../../components/copy-button.ts";
 import { formatWebUiIconErrorText } from "../../components/error-presentation.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
+import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { formatBytes } from "../../lib/agents/display.ts";
 import { findChatSubmissionMessage } from "../../lib/chat/history-message-identity.ts";
 import { clampText } from "../../lib/format.ts";
 import { renderWorkspaceConflictNotice } from "./components/chat-workspace-conflict.ts";
+import type { ProviderPolicyNotice } from "./tool-stream-contract.ts";
 import type { WorkspaceResultConflict } from "./workspace-conflict.ts";
+
+registerNewSessionSetupEnglish();
 
 export type ChatPlacementStartupNoticeProps = {
   placementStartup?: ApplicationPlacementStartupStatus | null;
@@ -27,8 +31,12 @@ type ChatViewNoticesProps = ChatPlacementStartupNoticeProps & {
 };
 
 type ChatComposerNoticesProps = ChatPlacementStartupNoticeProps & {
+  connected?: boolean;
   messages: readonly unknown[];
+  providerPolicyNotice?: ProviderPolicyNotice | null;
+  providerReviewNotice?: TemplateResult | typeof nothing;
   runError?: { summary: string } | null;
+  onRefresh?: () => void;
   onDismissWorkspaceConflict?: () => void;
   workspaceConflict?: WorkspaceResultConflict | null;
 };
@@ -79,7 +87,7 @@ function renderErrorNotice(
   const [firstLine = ""] = lines;
   const summary = clampText(firstLine);
   const hasDetails = lines.some((line) => line !== "" && line !== summary);
-  // Plain summaries wrap fully; only expandable previews may clip at narrow widths.
+  // Keep the bounded summary readable without opening the technical details.
   return html`
     <div
       class="chat-composer-neighbor-card chat-composer-neighbor-card--danger chat-error"
@@ -149,8 +157,20 @@ export function renderChatTopbarNotices(props: ChatViewNoticesProps) {
 }
 
 export function renderChatComposerNotices(props: ChatComposerNoticesProps) {
+  const refresh = props.onRefresh
+    ? html`<button
+        class="btn btn--sm chat-error__refresh"
+        type="button"
+        ?disabled=${!props.connected}
+        @click=${props.onRefresh}
+      >
+        ${t("common.refresh")}
+      </button>`
+    : nothing;
   return html`
-    ${props.runError ? renderErrorNotice(props.runError.summary) : nothing}
+    ${props.providerReviewNotice ?? nothing}
+    ${renderProviderPolicyNotice(props.providerPolicyNotice)}
+    ${props.runError ? renderErrorNotice(props.runError.summary, refresh) : nothing}
     ${renderWorkspaceConflictNotice({
       conflict: props.workspaceConflict ?? undefined,
       onDismiss: props.onDismissWorkspaceConflict,
@@ -160,6 +180,33 @@ export function renderChatComposerNotices(props: ChatComposerNoticesProps) {
       props.messages,
       props.onRetrySessionPlacementStartup,
     )}
+  `;
+}
+
+function renderProviderPolicyNotice(notice: ProviderPolicyNotice | null | undefined) {
+  if (!notice) {
+    return nothing;
+  }
+  const blocked = notice.state === "blocked" || notice.state === "unavailable";
+  const model = notice.fallbackModel ?? notice.model;
+  const namesModel = notice.state !== "buffering" && notice.state !== "blocked";
+  const body =
+    namesModel && !model
+      ? t("chat.providerPolicy.fallbackUnknownBody")
+      : t(`chat.providerPolicy.${notice.state}Body`, { model: model ?? "" });
+  return html`
+    <div
+      class="chat-composer-neighbor-card chat-composer-neighbor-card--${blocked ? "danger" : "warn"} chat-provider-policy-notice"
+      role=${blocked ? "alert" : "status"}
+    >
+      <span class="chat-composer-neighbor-card__icon" aria-hidden="true"
+        >${icons.alertTriangle}</span
+      >
+      <div class="chat-composer-neighbor-card__copy">
+        <strong>${t(`chat.providerPolicy.${notice.state}Title`)}</strong>
+        <span>${body}</span>
+      </div>
+    </div>
   `;
 }
 

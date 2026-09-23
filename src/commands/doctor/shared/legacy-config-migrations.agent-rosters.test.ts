@@ -5,14 +5,15 @@ import { LEGACY_CONFIG_MIGRATIONS } from "./legacy-config-migrations.js";
 
 describe("per-agent legacy migrations after roster normalization", () => {
   it("does not create global model settings from a discarded legacy roster", () => {
-    const result = applyLegacyDoctorMigrations({
+    const raw = {
       agents: {
         entries: { main: { name: "canonical" } },
         list: [
           { id: "old", model: "vllm/qwen-test", params: { qwenThinkingFormat: "chat-template" } },
         ],
       },
-    });
+    };
+    const result = applyLegacyDoctorMigrations(raw, { sourceConfigBeforeMigrations: raw });
     expect(result.next).toEqual({ agents: { entries: { main: { name: "canonical" } } } });
   });
 

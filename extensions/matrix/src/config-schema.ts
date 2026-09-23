@@ -56,7 +56,7 @@ const botLoopProtectionSchema = z
   .strict()
   .optional();
 
-const matrixRoomSchema = buildGroupEntrySchema({
+export const matrixRoomSchema = buildGroupEntrySchema({
   account: z.string().optional(),
   allowBots: z.union([z.boolean(), z.literal("mentions")]).optional(),
   botLoopProtection: botLoopProtectionSchema,
@@ -74,7 +74,7 @@ const matrixNetworkSchema = z
   .strict()
   .optional();
 
-const matrixStreamingSchema = z
+export const matrixStreamingSchema = z
   .object({
     mode: z.enum(["partial", "quiet", "progress", "off"]).optional(),
     chunkMode: z.enum(["length", "newline"]).optional(),
@@ -127,19 +127,23 @@ function hasCanonicalMatrixAccountStreaming(account: unknown): boolean {
   return typeof streaming === "object" && streaming !== null && !Array.isArray(streaming);
 }
 
-const MatrixConfigSchema = z.object({
+export const MatrixConfigSchema = z.object({
   name: z.string().optional(),
   enabled: z.boolean().optional(),
   configWrites: z.boolean().optional(),
   joinIntro: z.boolean().optional(),
   defaultAccount: z.string().optional(),
-  // Accounts stay schema-open, but retired scalar streaming must fail loudly
-  // instead of silently resolving to "off"; doctor migrates the old spelling.
+  // Accounts stay schema-open for most fields, but credential leaves must use
+  // SecretInput so Control UI redaction keeps source/provider and only masks id.
   accounts: z
     .record(
       z.string(),
       z
-        .object({ joinIntro: z.boolean().optional() })
+        .object({
+          joinIntro: z.boolean().optional(),
+          accessToken: buildSecretInputSchema().optional(),
+          password: buildSecretInputSchema().optional(),
+        })
         .passthrough()
         .refine(hasCanonicalMatrixAccountStreaming, {
           message:

@@ -19,7 +19,11 @@ import {
   setBrowserControlServerSsrFPolicy,
   setBrowserControlServerTabUrl,
 } from "./server.control-server.test-harness.js";
-import { getBrowserTestFetch, type BrowserTestFetch } from "./test-support/fetch.js";
+import {
+  createBrowserTestClient,
+  getBrowserTestFetch,
+  type BrowserTestFetch,
+} from "./test-support/fetch.js";
 
 const state = getBrowserControlServerTestState();
 const pwMocks = getPwMocks();
@@ -39,6 +43,7 @@ type GuardedCurrentTabRouteCase = {
   body?: Record<string, unknown>;
   mockName:
     | "cookiesGetViaPlaywright"
+    | "downloadCurrentDocumentViaPlaywright"
     | "downloadViaPlaywright"
     | "executeActViaPlaywright"
     | "highlightViaPlaywright"
@@ -99,6 +104,12 @@ const guardedCurrentTabRouteCases: readonly GuardedCurrentTabRouteCase[] = [
     path: "/download",
     body: { targetId: "abcd1234", ref: "e12", path: "report.pdf" },
     mockName: "downloadViaPlaywright",
+  },
+  {
+    method: "POST",
+    path: "/download",
+    body: { targetId: "abcd1234", currentDocument: true, expectedUrl: "https://example.com" },
+    mockName: "downloadCurrentDocumentViaPlaywright",
   },
   {
     method: "POST",
@@ -861,6 +872,7 @@ describe("browser control server", () => {
     expect(typeof waitCall.cdpUrl).toBe("string");
     expectRecordFields(waitCall, "wait download call", {
       targetId: "abcd1234",
+      ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
     });
     expect(waitCall.signal).toBeInstanceOf(AbortSignal);
     expect(String(waitCall.path)).toContain("safe-wait.pdf");
@@ -873,38 +885,52 @@ describe("browser control server", () => {
       body: { path: "cancelled-wait.pdf" },
     },
     { route: "/response/body", mockName: "responseBodyViaPlaywright", body: { url: "**/api" } },
+    {
+      route: "/download",
+      mockName: "downloadCurrentDocumentViaPlaywright",
+      body: { currentDocument: true, expectedUrl: "https://example.com" },
+    },
   ] as const)(
     "cancels $route when its HTTP caller disconnects",
     async ({ route, mockName, body }) => {
-      const base = await startServerAndBase();
-      let operationSignal: AbortSignal | undefined;
-      requirePwMock(mockName).mockImplementationOnce(async (value) => {
-        const options = value as { signal?: AbortSignal };
-        operationSignal = options.signal;
-        await new Promise<void>((_resolve, reject) => {
-          options.signal?.addEventListener(
-            "abort",
-            () => {
-              const reason = options.signal?.reason;
-              reject(reason instanceof Error ? reason : new Error("request aborted"));
-            },
-            { once: true },
-          );
-        });
-        throw new Error("unreachable");
-      });
+      const client = createBrowserTestClient();
       const controller = new AbortController();
-      const response = realFetch(`${base}${route}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-        signal: controller.signal,
-      });
+      let response: ReturnType<typeof client.fetch> | undefined;
+      try {
+        const base = await startServerAndBase(client.fetch);
+        let operationSignal: AbortSignal | undefined;
+        requirePwMock(mockName).mockImplementationOnce(async (value) => {
+          const options = value as { signal?: AbortSignal };
+          operationSignal = options.signal;
+          await new Promise<void>((_resolve, reject) => {
+            options.signal?.addEventListener(
+              "abort",
+              () => {
+                const reason = options.signal?.reason;
+                reject(reason instanceof Error ? reason : new Error("request aborted"));
+              },
+              { once: true },
+            );
+          });
+          throw new Error("unreachable");
+        });
+        response = client.fetch(`${base}${route}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        });
 
-      await vi.waitFor(() => expect(operationSignal).toBeInstanceOf(AbortSignal));
-      controller.abort(new Error("caller disconnected"));
-      await expect(response).rejects.toThrow();
-      await vi.waitFor(() => expect(operationSignal?.aborted).toBe(true));
+        await vi.waitFor(() => expect(operationSignal).toBeInstanceOf(AbortSignal));
+        controller.abort(new Error("caller disconnected"));
+        await expect(response).rejects.toThrow();
+        await vi.waitFor(() => expect(operationSignal?.aborted).toBe(true));
+      } finally {
+        controller.abort();
+        await response?.catch(() => {});
+        // Aborting a request can leave an unused replacement connection in the pool.
+        await client.close();
+      }
     },
   );
 
@@ -920,8 +946,51 @@ describe("browser control server", () => {
     expectRecordFields(downloadCall, "download call", {
       targetId: "abcd1234",
       ref: "e12",
+      ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
     });
     expect(downloadCall.signal).toBeInstanceOf(AbortSignal);
     expect(String(downloadCall.path)).toContain("safe-download.pdf");
+  });
+
+  it("downloads the current document into managed storage with navigation policy and request ownership", async () => {
+    const base = await startServerAndBase();
+    const res = await postJson<{ ok?: boolean; download?: { path?: string } }>(`${base}/download`, {
+      targetId: "abcd1234",
+      currentDocument: true,
+      expectedUrl: "https://example.com/inline.png",
+      timeoutMs: 120_000,
+    });
+    expect(res).toMatchObject({ ok: true, download: { path: "/tmp/managed-inline.png" } });
+    const call = requireMockArg(requirePwMock("downloadCurrentDocumentViaPlaywright"));
+    expectRecordFields(call, "current-document download call", {
+      targetId: "abcd1234",
+      expectedUrl: "https://example.com/inline.png",
+      timeoutMs: 120_000,
+      rootDir: DEFAULT_DOWNLOAD_DIR,
+      ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
+    });
+    expect(call.signal).toBeInstanceOf(AbortSignal);
+    expect(call).not.toHaveProperty("path");
+    expect(call).not.toHaveProperty("ref");
+    expect(requirePwMock("downloadViaPlaywright")).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { currentDocument: true },
+    { currentDocument: true, expectedUrl: 42 },
+    { currentDocument: true, expectedUrl: "https://example.com", path: "chosen.png" },
+    { currentDocument: true, expectedUrl: "https://example.com", ref: "e1" },
+    { currentDocument: "true", expectedUrl: "https://example.com" },
+    { expectedUrl: "https://example.com", ref: "e1", path: "chosen.png" },
+  ])("rejects ambiguous or incomplete current-document download input %j", async (body) => {
+    const base = await startServerAndBase();
+    const response = await realFetch(`${base}/download`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    expect(response.status).toBe(400);
+    expect(requirePwMock("downloadCurrentDocumentViaPlaywright")).not.toHaveBeenCalled();
+    expect(requirePwMock("downloadViaPlaywright")).not.toHaveBeenCalled();
   });
 });

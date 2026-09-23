@@ -1,12 +1,12 @@
 // Memory Core tests cover hybrid plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
-  bm25RankToScore,
   buildFtsQuery,
   mergeHybridResults,
   scoreExactPathTieForTemporalDecay,
   selectHybridSearchResults,
 } from "./hybrid.js";
+import { bm25RankToScore } from "./keyword-query.js";
 
 describe("memory hybrid helpers", () => {
   it("buildFtsQuery tokenizes and AND-joins", () => {

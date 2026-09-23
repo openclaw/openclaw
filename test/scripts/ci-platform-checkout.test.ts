@@ -38,6 +38,21 @@ beforeAll(() => {
   return () => vi.resetConfig();
 });
 
+function expectedHarnessSparseCheckoutArgs(linux: boolean) {
+  return [
+    "sparse-checkout",
+    "set",
+    "--no-cone",
+    "/.github/actions/",
+    "/scripts/lib/pnpm-lockfile-documents.mjs",
+    "/scripts/ios-screenshot-evidence.mjs",
+    "/scripts/lib/direct-run.mjs",
+    ...(linux
+      ? ["/scripts/lib/release-upgrade-baseline.mjs", "/scripts/lib/release-version.mjs"]
+      : ["/scripts/lib/swift-toolchain.sh"]),
+  ];
+}
+
 // Execute both workflow policies against the same owned tree fixture. A leader's
 // exit must not authorize workspace deletion, Git reuse, or final success.
 const platformCases = [
@@ -89,8 +104,8 @@ it.concurrent.each([
       policyScenario,
       (root) => {
         const workspace = path.join(root, "workspace");
-        if (scenario.startsWith("cancel-")) {
-          // Inject slow startup before fetch, beyond the former cancellation readiness deadline.
+        if (scenario === "cancel-SIGTERM") {
+          // One slow-start proof per policy; all signals share the same readiness path.
           writeFileSync(
             path.join(root, "fixture-config.json"),
             JSON.stringify({ initDelayMs: 4_100 }),
@@ -232,13 +247,9 @@ it.concurrent.each([
           expect(fetches.at(-1)?.args).toContain(
             `+${"b".repeat(40)}:refs/remotes/origin/ci-harness`,
           );
-          expect(
-            report.commands.some(
-              ({ args }) =>
-                args.join(" ") ===
-                "sparse-checkout set --no-cone /.github/actions/ /scripts/ios-screenshot-evidence.mjs /scripts/lib/direct-run.mjs",
-            ),
-          ).toBe(true);
+          expect(report.commands.find(({ args }) => args[0] === "sparse-checkout")?.args).toEqual(
+            expectedHarnessSparseCheckoutArgs(linux),
+          );
           expect(report.commands.at(-1)?.args).toEqual([
             "checkout",
             "--force",
@@ -322,6 +333,10 @@ it.concurrent.each([
     const link = ".github/actions/tool/link";
     const files = {
       [action]: "name: trusted $Format:%H$\n",
+      ".github/actions/setup-node-env/dependency-fingerprint.mjs": readFileSync(
+        ".github/actions/setup-node-env/dependency-fingerprint.mjs",
+        "utf8",
+      ),
       ".github/actions/tool/with space.txt": "literal action bytes\n",
       ...(posix ? { [executable]: "#!/bin/sh\nexit 0\n" } : {}),
     };
@@ -329,14 +344,26 @@ it.concurrent.each([
       "scripts/ios-screenshot-evidence.mjs": "workflow evidence script\n",
       "scripts/lib/direct-run.mjs": "workflow direct-run script\n",
     };
+    const nodeSetupScripts = {
+      "scripts/lib/pnpm-lockfile-documents.mjs": readFileSync(
+        "scripts/lib/pnpm-lockfile-documents.mjs",
+        "utf8",
+      ),
+    };
+    const platformScripts = {
+      "scripts/lib/swift-toolchain.sh": "workflow Swift toolchain helper\n",
+    };
     const releasePolicy = Object.fromEntries(
-      ["scripts/lib/release-context.mjs", "scripts/lib/release-version.mjs"].map((name) => [
-        name,
-        readFileSync(name, "utf8"),
-      ]),
+      [
+        "scripts/lib/release-context.mjs",
+        "scripts/lib/release-version.mjs",
+        "scripts/lib/release-upgrade-baseline.mjs",
+      ].map((name) => [name, readFileSync(name, "utf8")]),
     );
     const candidateFiles = {
       "candidate-only.txt": "candidate stays intact\n",
+      "package.json": '{"name":"checkout-fixture"}\n',
+      "pnpm-lock.yaml": "---\nlockfileVersion: '9.0'\n---\nimporters:\n  .: {}\n",
       "extensions/browser/icon.png": "complete binary path\0\xff",
       "ui/src/i18n/.i18n/de-DE.tm.jsonl": '{"fixture":"complete inventory"}\n',
       "scripts/lib/candidate-only.mjs": "export const candidate = true;\n",
@@ -345,6 +372,7 @@ it.concurrent.each([
     let workflowRevision = "";
     let candidateAction = files[action];
     let candidateEvidenceScripts: Record<string, string> = evidenceScripts;
+    let candidatePlatformScripts: Record<string, string> = platformScripts;
     const existingExcludes = retained
       ? "/saved-artifact/\n/.ci-harness/\n"
       : "# Existing local excludes\r\n/saved-artifact/";
@@ -394,6 +422,8 @@ it.concurrent.each([
         for (const [name, contents] of Object.entries({
           ...files,
           ...evidenceScripts,
+          ...nodeSetupScripts,
+          ...platformScripts,
           ...releasePolicy,
           ...candidateFiles,
         })) {
@@ -425,7 +455,26 @@ it.concurrent.each([
           for (const [name, contents] of Object.entries(candidateEvidenceScripts)) {
             writeFileSync(path.join(source, name), contents);
           }
-          run("add", action, ...Object.keys(evidenceScripts));
+          candidatePlatformScripts = Object.fromEntries(
+            Object.keys(platformScripts).map((name) => [
+              name,
+              "candidate Swift toolchain helper\n",
+            ]),
+          );
+          for (const [name, contents] of Object.entries(candidatePlatformScripts)) {
+            writeFileSync(path.join(source, name), contents);
+          }
+          for (const name of [...Object.keys(releasePolicy), ...Object.keys(nodeSetupScripts)]) {
+            writeFileSync(path.join(source, name), "throw new Error('candidate policy');\n");
+          }
+          run(
+            "add",
+            action,
+            ...Object.keys(evidenceScripts),
+            ...Object.keys(nodeSetupScripts),
+            ...Object.keys(platformScripts),
+            ...Object.keys(releasePolicy),
+          );
           run("commit", "--no-gpg-sign", "-m", "selected candidate");
           revision = run("rev-parse", "HEAD");
         } else if (workflow === "missing") {
@@ -506,6 +555,11 @@ it.concurrent.each([
             candidateEvidenceScripts[name],
           );
         }
+        for (const name of Object.keys(platformScripts)) {
+          expect(readFileSync(path.join(workspace, name), "utf8")).toBe(
+            candidatePlatformScripts[name],
+          );
+        }
         if (workflow === "missing-action") {
           expect(existsSync(path.join(workspace, action))).toBe(false);
           expect(existsSync(path.join(harness, action))).toBe(false);
@@ -528,19 +582,58 @@ it.concurrent.each([
         for (const [name, contents] of Object.entries(files)) {
           expect(readFileSync(path.join(harness, name), "utf8")).toBe(contents);
         }
+        const fingerprint = spawnSync(
+          process.execPath,
+          [
+            path.join(harness, ".github/actions/setup-node-env/dependency-fingerprint.mjs"),
+            "--workspace",
+            workspace,
+            "--frozen-lockfile",
+            "true",
+          ],
+          { cwd: workspace, encoding: "utf8" },
+        );
+        expect(fingerprint.status, fingerprint.stderr).toBe(0);
+        expect(fingerprint.stdout.trim()).toMatch(/^v2-[a-f0-9]{64}$/u);
         for (const [name, contents] of Object.entries(evidenceScripts)) {
           expect(existsSync(path.join(harness, name))).toBe(workflowOwnsEvidence);
           if (workflowOwnsEvidence) {
             expect(readFileSync(path.join(harness, name), "utf8")).toBe(contents);
           }
         }
+        for (const [name, contents] of Object.entries(platformScripts)) {
+          expect(existsSync(path.join(harness, name)), name).toBe(kind === "platform");
+          if (kind === "platform") {
+            expect(readFileSync(path.join(harness, name), "utf8")).toBe(contents);
+          }
+        }
         for (const [name, contents] of Object.entries(releasePolicy)) {
-          expect(existsSync(path.join(harness, name))).toBe(preflight);
-          if (preflight) {
+          const ownsPolicy = preflight
+            ? name !== "scripts/lib/release-upgrade-baseline.mjs"
+            : kind === "linux-node" && name !== "scripts/lib/release-context.mjs";
+          expect(existsSync(path.join(harness, name))).toBe(ownsPolicy);
+          if (ownsPolicy) {
             expect(readFileSync(path.join(harness, name), "utf8")).toBe(contents);
             writeFileSync(path.join(workspace, name), "throw new Error('candidate policy');\n");
             expect(readFileSync(path.join(harness, name), "utf8")).toBe(contents);
           }
+        }
+        if (kind === "linux-node") {
+          const versions = path.join(root, "published-versions.json");
+          writeFileSync(versions, JSON.stringify(["2026.9.1", "2026.9.2", "2026.9.3"]));
+          const resolved = spawnSync(
+            process.execPath,
+            [
+              path.join(harness, "scripts/lib/release-upgrade-baseline.mjs"),
+              "--candidate-version",
+              "2026.9.3",
+              "--versions-json",
+              versions,
+            ],
+            { cwd: workspace, encoding: "utf8" },
+          );
+          expect(resolved.status, resolved.stderr).toBe(0);
+          expect(resolved.stdout.trim()).toBe("openclaw@2026.9.2");
         }
         if (posix) {
           // Git tracks only executable state; checkout materialization applies the process umask.
@@ -548,14 +641,9 @@ it.concurrent.each([
           expect(readlinkSync(path.join(harness, link))).toBe("line\nbreak.sh");
         }
         if (workflow !== "same" && workflowOwnsEvidence) {
-          expect(report.commands.find(({ args }) => args[0] === "sparse-checkout")?.args).toEqual([
-            "sparse-checkout",
-            "set",
-            "--no-cone",
-            "/.github/actions/",
-            "/scripts/ios-screenshot-evidence.mjs",
-            "/scripts/lib/direct-run.mjs",
-          ]);
+          expect(report.commands.find(({ args }) => args[0] === "sparse-checkout")?.args).toEqual(
+            expectedHarnessSparseCheckoutArgs(linux),
+          );
         }
         writeFileSync(path.join(workspace, action), "later candidate edit\n");
         expect(readFileSync(path.join(harness, action), "utf8")).toBe(files[action]);
@@ -611,7 +699,7 @@ it.skipIf(process.platform === "win32").each(["census", "corrupt-report", "timeo
     const preload = String.raw`
 import cp from "node:child_process";
 import fs from "node:fs";
-import { syncBuiltinESMExports } from "node:module";
+import { syncFixtureBuiltinExports } from ${JSON.stringify(new URL("./fixtures/ci-fixture-runtime.cjs", import.meta.url).href)};
 import path from "node:path";
 if (process.argv[2] === "sentinel" && fault === "timeout") {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
@@ -651,7 +739,7 @@ if (process.argv[2] === "supervise") {
     }
     return result;
   };
-  syncBuiltinESMExports();
+  syncFixtureBuiltinExports();
 }
 `;
     // Use the actual outer namespace owner, including its cleanup on exit code 1.
@@ -664,11 +752,10 @@ if (process.argv[2] === "supervise") {
 import assert from "node:assert/strict";
 import cp from "node:child_process";
 import fs from "node:fs";
-import { syncBuiltinESMExports } from "node:module";
+import { fixturePreloadEnv, syncFixtureBuiltinExports } from ${JSON.stringify(new URL("./fixtures/ci-fixture-runtime.cjs", import.meta.url).href)};
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { mock } from "node:test";
-import { pathToFileURL } from "node:url";
 const timeoutFault = process.argv[2] === "timeout";
 let root, failure;
 let supervisor, ready, onReady;
@@ -684,7 +771,7 @@ if (timeoutFault) {
     supervisor.on("message", onReady);
     return supervisor;
   };
-  syncBuiltinESMExports();
+  syncFixtureBuiltinExports();
 }
 try {
   const { withCiCheckoutFixture } = await import(process.argv[1]);
@@ -694,7 +781,7 @@ try {
     fs.writeFileSync(path.join(root, "checkout.sh"), "exit 0\n");
     const preload = path.join(root, "fault.mjs");
     fs.writeFileSync(preload, "const fault = " + JSON.stringify(process.argv[2]) + ";\n" + process.argv[3]);
-    return { NODE_OPTIONS: "--import=" + pathToFileURL(preload).href };
+    return fixturePreloadEnv(preload);
   }, (report, result, stderr) => {
     throw new Error("unexpected completed report: " + JSON.stringify({ report, result, stderr }));
   }).catch(error => {
@@ -731,7 +818,7 @@ try {
     mock.timers.reset();
     supervisor?.off("message", onReady);
     cp.fork = fork;
-    syncBuiltinESMExports();
+    syncFixtureBuiltinExports();
   }
 }
 console.log(JSON.stringify({ root, outerRoot: tmpdir(), failure,
@@ -761,7 +848,7 @@ process.exitCode = 1;
     };
     try {
       console.log(`${fault}: ${JSON.stringify({ result, ...evidence, stderr })}`);
-      expect(result, stderr).toEqual({ code: 1, signal: null });
+      expect(result, stderr).toEqual({ code: 1, signal: null, groupJoined: true });
       expect(existsSync(evidence.outerRoot), "outer runner did not remove its own namespace").toBe(
         false,
       );
@@ -874,8 +961,7 @@ cp.spawnSync = (command, args, options) => {
   }
   return spawnSync(command, args, options);
 };
-require("node:module").syncBuiltinESMExports();
-''')
+''' + "\nrequire(" + json.dumps(sys.argv[5]) + ").syncFixtureBuiltinExports();\n")
     with subprocess.Popen([sys.executable, "-I", "-S", "-c", "import sys; sys.stdin.read()"],
                           stdin=subprocess.PIPE) as child, contextlib.ExitStack() as cleanup:
         if os.name == "nt":
@@ -932,6 +1018,7 @@ print("fixture lifetime contract passed")
       ciCheckoutFixture,
       fileURLToPath(new URL("./fixtures/ci-windows-process-census.py", import.meta.url)),
       new URL("./fixtures/ci-windows-process-census.mjs", import.meta.url).href,
+      fileURLToPath(new URL("./fixtures/ci-fixture-runtime.cjs", import.meta.url)),
     ],
     { encoding: "utf8", timeout: 15_000, killSignal: "SIGKILL" },
   );
@@ -954,9 +1041,9 @@ import ast, contextlib, errno, io, json, os, pathlib, re, signal, subprocess, sy
 
 # Load only the actual boundary functions; never execute checkout or real Git.
 functions = [node for node in ast.parse(sys.stdin.read()).body
-             if isinstance(node, ast.FunctionDef) and node.name in ("group_alive", "group_signal")]
-assert len(functions) == 2
+             if isinstance(node, ast.FunctionDef) and node.name in ("group_alive", "group_signal", "group_states", "drain")]
 exec(compile(ast.Module(body=functions, type_ignores=[]), "checkout-owner.py", "exec"))
+cleanup_seconds = 10
 
 # Retain the Popen handle without polling, so the owned zombie cannot be reaped or reused.
 with subprocess.Popen([sys.executable, "-I", "-S", "-c", "pass"], start_new_session=True) as child:
@@ -1093,6 +1180,48 @@ with subprocess.Popen([sys.executable, "-I", "-S", "-c",
         assert not group_alive(child.pid, time.monotonic() + 2)
     finally:
         subprocess.run = actual_run
+if sys.platform == "darwin":
+    # Replay the native EPERM + ?E exit window while retaining a real owned child.
+    # Exiting is still pending: only the subsequent native census permits drain to return.
+    with subprocess.Popen([sys.executable, "-I", "-S", "-c",
+                           "import sys; print('ready', flush=True); sys.stdin.read()"],
+                          start_new_session=True, stdin=subprocess.PIPE,
+                          stdout=subprocess.PIPE, text=True) as child:
+        assert child.stdout.readline().strip() == "ready"
+        exiting = False
+        observed_exiting = 0
+        native_probes = 0
+        actual_killpg = os.killpg
+        actual_run = subprocess.run
+        def terminating_signal(pgid, signum):
+            global exiting, native_probes
+            assert pgid == child.pid
+            if signum == signal.SIGTERM:
+                actual_killpg(pgid, signal.SIGKILL)
+                exiting = True
+            if exiting:
+                raise PermissionError(errno.EPERM, "owned group is exiting")
+            if signum == 0:
+                native_probes += 1
+            return actual_killpg(pgid, signum)
+        def exiting_census(command, **options):
+            global exiting, observed_exiting
+            if exiting:
+                observed_exiting += 1
+                exiting = observed_exiting < 2
+                return subprocess.CompletedProcess(command, 0, f"{child.pid} ?E  \n", "")
+            return actual_run(command, **options)
+        try:
+            os.killpg = terminating_signal
+            subprocess.run = exiting_census
+            drain(child, None)
+            assert observed_exiting == 2, "drain did not wait through the exiting process window"
+            assert native_probes, "drain accepted exiting as proof of termination"
+            assert child.returncode is not None, "drain returned before the owned child settled"
+            assert not group_alive(child.pid, time.monotonic() + 2)
+        finally:
+            os.killpg = actual_killpg
+            subprocess.run = actual_run
 print("group contract passed")
 `,
         process.execPath,
@@ -1333,9 +1462,19 @@ owner.run_git(directory, "-c", "alias.diagnostic=" + alias, "diagnostic", timeou
     expect(denial.owner_frames.some((frame) => frame.function === "drain")).toBe(
       process.platform === "win32" && site === "timeout-drain",
     );
+    const windowsDrain = process.platform === "win32" && site === "timeout-drain";
+    expect(denial.owner_frames.some((frame) => frame.function === "job_members")).toBe(
+      windowsDrain,
+    );
     for (const frame of chain.flatMap((record) => record.owner_frames)) {
       expect(Number.isInteger(frame.line) && frame.line > 0).toBe(true);
-      expect(["<module>", "main", "run_git", "drain"]).toContain(frame.function);
+      expect([
+        "<module>",
+        "main",
+        "run_git",
+        "drain",
+        ...(windowsDrain ? ["job_members"] : []),
+      ]).toContain(frame.function);
     }
   },
 );

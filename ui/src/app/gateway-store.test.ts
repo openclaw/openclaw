@@ -142,7 +142,14 @@ describe("createApplicationGateway connection phase", () => {
       vi.stubGlobal("fetch", fetchMock);
       const replace = vi.fn();
       const location = Object.assign(new URL("http://127.0.0.1:18789/chat/main"), { replace });
-      vi.stubGlobal("window", { location });
+      vi.stubGlobal("window", Object.assign(new EventTarget(), { location }));
+      vi.stubGlobal(
+        "document",
+        Object.assign(new EventTarget(), {
+          documentElement: { getAttribute: () => null },
+          querySelector: () => null,
+        }),
+      );
       const { gateway, current } = createStore({
         clientOptions: { clientName: "openclaw-ios", mode: "ui" },
       });
@@ -350,14 +357,27 @@ describe("createApplicationGateway connection phase", () => {
     expect(gateway.snapshot.lastError).not.toContain("sk-1234567890abcdef");
   });
 
-  it("uses translated fallback copy for an empty WebSocket close reason", () => {
-    const { gateway, current } = createStore();
-    gateway.start();
+  it.each([
+    { reason: "", willRetry: true },
+    { reason: "   ", willRetry: true },
+    { reason: "", willRetry: false },
+  ])(
+    "explains a reasonless close with retry=$willRetry and reason='$reason'",
+    ({ reason, willRetry }) => {
+      const { gateway, current } = createStore();
+      gateway.start();
+      current().opts.onHello?.(HELLO);
 
-    current().opts.onClose?.({ code: 1006, reason: "", willRetry: true });
+      current().opts.onClose?.({ code: 1006, reason, willRetry });
 
-    expect(gateway.snapshot.lastError).toBe("disconnected (1006): Unknown");
-  });
+      expect(gateway.snapshot.phase).toBe(willRetry ? "reconnecting" : "offline");
+      expect(gateway.snapshot.lastError).toBe(
+        willRetry
+          ? "Connection to the Gateway was interrupted. Reconnecting automatically. (WebSocket 1006)"
+          : "Connection to the Gateway was interrupted. Check your connection and try again. (WebSocket 1006)",
+      );
+    },
+  );
 
   it("starts a newly selected Gateway as a fresh connection", () => {
     const { gateway, clients, current } = createStore();

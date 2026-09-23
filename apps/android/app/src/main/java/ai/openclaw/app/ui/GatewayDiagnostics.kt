@@ -3,7 +3,6 @@ package ai.openclaw.app.ui
 import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.GatewayConnectionDisplay
 import ai.openclaw.app.GatewayConnectionProblem
-import ai.openclaw.app.GatewayNodeApprovalState
 import ai.openclaw.app.GatewayNodeCapabilityApproval
 import ai.openclaw.app.gateway.normalizeGatewayApprovalRequestId
 import ai.openclaw.app.gatewayConnectionStatusForDisplay
@@ -35,18 +34,61 @@ internal fun gatewayStatusLabel(
 ): String {
   val status = statusText.trim().lowercase()
   return when {
-    status == "connected (node offline)" -> nativeString("Connected (node offline)")
-    status == "connected (operator offline)" -> nativeString("Connected (operator offline)")
-    isConnected -> nativeString("Ready")
-    status == "offline" -> nativeString("Offline")
-    status.contains("connecting") || status.contains("reconnecting") -> nativeString("Connecting...")
-    status.contains("pair") -> nativeString("Pairing needed")
-    status.contains("auth") || status.contains("device identity") -> gatewayAuthRecoveryLabel(gatewayConnectionProblem) ?: nativeString("Authentication needed")
-    status.contains("fingerprint verification timed out") -> nativeString("TLS timed out")
-    status.contains("no tls endpoint") -> nativeString("No TLS endpoint")
-    status.contains("certificate") || status.contains("tls") -> nativeString("Certificate review needed")
-    status.contains("failed") || status.contains("error") || status.contains("offline") || status.contains("not connected") -> nativeString("Cannot reach gateway")
-    else -> nativeString("Not connected")
+    status == "connected (node offline)" -> {
+      nativeString("Connected (node offline)")
+    }
+
+    status == "connected (operator offline)" -> {
+      nativeString("Connected (operator offline)")
+    }
+
+    isConnected -> {
+      nativeString("Ready")
+    }
+
+    status == "offline" -> {
+      nativeString("Offline")
+    }
+
+    gatewayConnectionProblem?.isNetworkFailure == true && gatewayConnectionProblem.reason == "transport-cleanup" -> {
+      nativeString("Stopping previous connection")
+    }
+
+    gatewayConnectionProblem?.isNetworkFailure == true -> {
+      nativeString("Cannot reach gateway")
+    }
+
+    status.contains("connecting") || status.contains("reconnecting") -> {
+      nativeString("Connecting...")
+    }
+
+    status.contains("pair") -> {
+      nativeString("Pairing needed")
+    }
+
+    status.contains("auth") || status.contains("device identity") -> {
+      gatewayAuthRecoveryLabel(gatewayConnectionProblem) ?: nativeString("Authentication needed")
+    }
+
+    status.contains("fingerprint verification timed out") -> {
+      nativeString("TLS timed out")
+    }
+
+    status.contains("no tls endpoint") -> {
+      nativeString("No TLS endpoint")
+    }
+
+    status.contains("certificate") || status.contains("tls") -> {
+      nativeString("Certificate review needed")
+    }
+
+    status.contains("failed") || status.contains("error") || status.contains("offline") || status.contains("not connected") -> {
+      nativeString("Cannot reach gateway")
+    }
+
+    else -> {
+      nativeString("Not connected")
+    }
   }
 }
 
@@ -126,44 +168,22 @@ private fun gatewayAuthRecoveryLabel(kind: GatewayAuthRecoveryLabelKind): String
   }
 
 /** Returns the exact host command for one node's approval state when available. */
-internal fun gatewayNodeApprovalCommand(
-  state: GatewayNodeApprovalState,
-  requestId: String?,
-): String? =
-  when (state) {
-    GatewayNodeApprovalState.PendingApproval,
-    GatewayNodeApprovalState.PendingReapproval,
-    -> normalizeGatewayApprovalRequestId(requestId)?.let { "openclaw nodes approve $it" } ?: "openclaw nodes status"
+internal fun gatewayNodeApprovalCommand(approval: GatewayNodeCapabilityApproval): String? {
+  val requestId =
+    when (approval) {
+      is GatewayNodeCapabilityApproval.PendingApproval -> approval.requestId
 
-    GatewayNodeApprovalState.Unapproved -> "openclaw nodes status"
+      is GatewayNodeCapabilityApproval.PendingReapproval -> approval.requestId
 
-    GatewayNodeApprovalState.Loading,
-    GatewayNodeApprovalState.Unsupported,
-    GatewayNodeApprovalState.Approved,
-    -> null
-  }
+      GatewayNodeCapabilityApproval.Unapproved -> null
 
-internal fun gatewayNodeApprovalCommand(approval: GatewayNodeCapabilityApproval): String? =
-  when (approval) {
-    is GatewayNodeCapabilityApproval.PendingApproval -> {
-      gatewayNodeApprovalCommand(GatewayNodeApprovalState.PendingApproval, approval.requestId)
+      GatewayNodeCapabilityApproval.Loading,
+      GatewayNodeCapabilityApproval.Unsupported,
+      GatewayNodeCapabilityApproval.Approved,
+      -> return null
     }
-
-    is GatewayNodeCapabilityApproval.PendingReapproval -> {
-      gatewayNodeApprovalCommand(GatewayNodeApprovalState.PendingReapproval, approval.requestId)
-    }
-
-    GatewayNodeCapabilityApproval.Unapproved -> {
-      gatewayNodeApprovalCommand(GatewayNodeApprovalState.Unapproved, requestId = null)
-    }
-
-    GatewayNodeCapabilityApproval.Loading,
-    GatewayNodeCapabilityApproval.Unsupported,
-    GatewayNodeCapabilityApproval.Approved,
-    -> {
-      null
-    }
-  }
+  return normalizeGatewayApprovalRequestId(requestId)?.let { "openclaw nodes approve $it" } ?: "openclaw nodes status"
+}
 
 /** Builds the copyable support prompt with device, endpoint, and exact status context. */
 internal fun buildGatewayDiagnosticsReport(

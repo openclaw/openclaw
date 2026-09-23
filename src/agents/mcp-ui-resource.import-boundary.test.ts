@@ -38,6 +38,9 @@ console.log("mcp-app-import-boundary-ok");
 `,
     );
     const result = await runCliProcessChild({
+      // Removal: use the Bun executable after oven-sh/bun#35690 supports the
+      // synchronous module hooks this import-boundary probe installs.
+      nodeExecutable: process.versions.bun ? "node" : undefined,
       nodeArgs: ["--import", "tsx", entry],
       env: {
         PATH: process.env.PATH,

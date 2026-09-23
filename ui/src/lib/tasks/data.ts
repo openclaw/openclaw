@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as optionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Value } from "typebox/value";
 import {
   TasksCancelResultSchema,
@@ -12,6 +13,7 @@ import type {
   TasksRecoveryResult,
 } from "../../../../packages/gateway-protocol/src/schema/tasks.js";
 import { t } from "../../i18n/index.ts";
+import { formatDurationCompact } from "../format-duration.ts";
 import { normalizeTaskSummary, type TaskStatus, type TaskSummary } from "./task-summary.ts";
 
 type TaskTimestamp = NonNullable<TaskSummary["updatedAt"]>;
@@ -20,6 +22,10 @@ type TaskEventPayload =
   | { action: "upserted"; task: TaskSummary }
   | { action: "deleted"; taskId: string }
   | { action: "restored" };
+
+export type CoalescedTaskEvent =
+  | { action: "deleted" }
+  | { action: "upserted"; task: TaskSummary; afterDelete: boolean };
 
 const STATUS_LABEL_KEYS = {
   queued: "tasksPage.status.queued",
@@ -53,6 +59,27 @@ export function taskTitle(task: TaskSummary): string {
   return (
     task.title ?? task.kind ?? (task.runtime ? taskRuntimeLabel(task) : t("tasksPage.untitled"))
   );
+}
+
+export function taskDisplayTitle(task: TaskSummary, detail?: TaskSummary): string {
+  if (task.title != null || task.kind != null) {
+    return taskTitle(task);
+  }
+  const prompt = (detail?.prompt ?? task.prompt)?.split(/\r?\n/).find((line) => line.trim());
+  const title = prompt?.trim() || task.progressSummary?.trim();
+  return title
+    ? title.length > 120
+      ? `${truncateUtf16Safe(title, 119)}…`
+      : title
+    : taskTitle(task);
+}
+
+export function taskFinishedDuration(task: TaskSummary): string | undefined {
+  const startedMs = taskTimestampMs(task.startedAt ?? task.createdAt);
+  const endedMs = taskTimestampMs(task.endedAt);
+  return !isActiveTask(task) && endedMs > startedMs && startedMs > 0
+    ? formatDurationCompact(endedMs - startedMs)
+    : undefined;
 }
 
 export function taskDetail(task: TaskSummary): string | null {
@@ -123,6 +150,16 @@ export function newestTaskSnapshot(
   if (current.status === "queued" && lookup.status === "running") {
     return preserveTaskPrompt(lookup, current, lookup);
   }
+  // Execution observations can advance while the durable lifecycle clock stays fixed.
+  const currentActivityAt = taskTimestampMs(current.execution?.lastActivityAt);
+  const lookupActivityAt = taskTimestampMs(lookup.execution?.lastActivityAt);
+  if (lookupActivityAt !== currentActivityAt) {
+    return preserveTaskPrompt(
+      lookupActivityAt > currentActivityAt ? lookup : current,
+      current,
+      lookup,
+    );
+  }
   const currentToolCount = current.toolUseCount ?? 0;
   const lookupToolCount = lookup.toolUseCount ?? 0;
   if (currentToolCount > lookupToolCount) {
@@ -136,7 +173,16 @@ export function newestTaskSnapshot(
 
 export function sortTasks(tasks: readonly TaskSummary[]): TaskSummary[] {
   return tasks.toSorted((left, right) => {
-    const timeDelta = taskTimestampMs(right.updatedAt) - taskTimestampMs(left.updatedAt);
+    // Activity keeps live work visible without changing snapshot lifecycle authority.
+    const leftAt = Math.max(
+      taskTimestampMs(left.updatedAt),
+      isActiveTask(left) ? taskTimestampMs(left.execution?.lastActivityAt) : 0,
+    );
+    const rightAt = Math.max(
+      taskTimestampMs(right.updatedAt),
+      isActiveTask(right) ? taskTimestampMs(right.execution?.lastActivityAt) : 0,
+    );
+    const timeDelta = rightAt - leftAt;
     if (timeDelta !== 0) {
       return timeDelta;
     }
@@ -276,4 +322,42 @@ export function applyTaskEvent(
     tasks: sortTasks([next, ...tasks.filter((task) => task.id !== event.task.id)]),
     refetch: false,
   };
+}
+
+/** Task events omit detail-only prompts; repeated snapshots share the event freshness rules. */
+export function coalesceTaskEvent(
+  pending: Map<string, CoalescedTaskEvent>,
+  event: Exclude<TaskEventPayload, { action: "restored" }>,
+): void {
+  if (event.action === "deleted") {
+    pending.set(event.taskId, { action: "deleted" });
+    return;
+  }
+  const previous = pending.get(event.task.id);
+  pending.set(event.task.id, {
+    action: "upserted",
+    task:
+      previous?.action === "upserted"
+        ? newestTaskSnapshot(previous.task, event.task, "event")
+        : event.task,
+    afterDelete:
+      previous?.action === "deleted" || (previous?.action === "upserted" && previous.afterDelete),
+  });
+}
+
+export function replayTaskEvents(
+  tasks: readonly TaskSummary[],
+  pending: ReadonlyMap<string, CoalescedTaskEvent>,
+): TaskSummary[] {
+  let result = [...tasks];
+  for (const [taskId, event] of pending) {
+    // A recreated task must replace even a newer row from the pre-delete snapshot.
+    if (event.action === "deleted" || event.afterDelete) {
+      result = applyTaskEvent(result, { action: "deleted", taskId }).tasks;
+    }
+    if (event.action === "upserted") {
+      result = applyTaskEvent(result, { action: "upserted", task: event.task }).tasks;
+    }
+  }
+  return result;
 }

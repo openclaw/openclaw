@@ -405,20 +405,60 @@ run_update_smoke() {
   print_install_audit "baseline install"
   verify_installed_cli "$PACKAGE_NAME" "$UPDATE_BASELINE_VERSION"
 
-  # The shipped baseline cannot distinguish absent service managers from failed inspection.
-  # Its documented manual path is safe only in this verified idle container; the candidate
-  # then repeats the update with default restart policy so regressions remain visible.
   assert_update_smoke_offline
-  run_update_candidate "$UPDATE_BASELINE_VERSION" --no-restart
-  echo "==> Verify candidate default update without a Gateway service"
-  run_update_candidate "$UPDATE_EXPECT_VERSION"
+  # The idle container owns no Gateway service; exercise the baseline updater
+  # before checking the candidate's already-current idle behavior independently.
+  run_update_candidate "$UPDATE_BASELINE_VERSION" applied --no-restart
+  echo "==> Verify candidate already-current no-op without a Gateway service"
+  run_update_candidate "$UPDATE_EXPECT_VERSION" already-current
+  assert_update_smoke_offline
   verify_candidate_ai_runtime
   echo "OK"
 }
 
+
+# Published 9.4 continues in its old process after a successful package swap.
+# Accept only the observed 9.4 -> 9.5 warning, after JSON and fresh CLI checks;
+# another executable on PATH or a fresh process warning is still real skew.
+verify_historical_self_update_warning() {
+  local stderr="$1" outcome="$2" updater_status="$3"
+  [[ "$PACKAGE_NAME" == "openclaw" && "$UPDATE_BASELINE_VERSION" == "2026.9.4" &&
+     "$UPDATE_EXPECT_VERSION" == "2026.9.5" &&
+     "$outcome" == "applied" && "$updater_status" == "0" ]] || return 1
+  local line warning_count=0
+  while IFS= read -r line; do
+    [[ "$line" == *"config was written by version"* ]] || continue
+    [[ "$line" == "Your OpenClaw config was written by version 2026.9.5, but this command is running 2026.9.4." ]] || return 1
+    warning_count=$((warning_count + 1))
+  done <<<"$stderr"
+  [[ "$warning_count" == "1" ]] || return 1
+
+  local cmd_path npm_root fresh_output fresh_version
+  cmd_path="$(bash --noprofile --norc -c 'hash -r; command -v "$1"' _ "$PACKAGE_NAME")" || return 1
+  npm_root="$(quiet_npm root -g)" || return 1
+  # Bind the fresh PATH entry to the global package actually updated, not a
+  # different installation that happens to print the expected version.
+  node - "$cmd_path" "$npm_root/$PACKAGE_NAME" "$UPDATE_EXPECT_VERSION" <<'NODE' || return 1
+const fs = require("node:fs");
+const path = require("node:path");
+const assert = require("node:assert/strict");
+const [command, root, expected] = process.argv.slice(2);
+const manifest = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+const bin = typeof manifest.bin === "string" ? manifest.bin : manifest.bin?.[manifest.name];
+assert.equal(manifest.version, expected);
+assert.equal(typeof bin, "string");
+assert.equal(fs.realpathSync(command), fs.realpathSync(path.join(root, bin)));
+NODE
+  fresh_output="$("$cmd_path" --version 2>&1)" || return 1
+  [[ "$fresh_output" != *"config was written by version"* ]] || return 1
+  fresh_version="$(extract_openclaw_semver "$fresh_output")" || return 1
+  [[ "$fresh_version" == "$UPDATE_EXPECT_VERSION" ]]
+}
+
 run_update_candidate() {
   local UPDATE_BASELINE_VERSION="$1"
-  shift
+  local expected_outcome="$2"
+  shift 2
   echo "==> Run openclaw update from host-served tgz (from $UPDATE_BASELINE_VERSION)"
   local update_status
   local update_stderr_file
@@ -447,12 +487,6 @@ run_update_candidate() {
   if [[ -n "$update_stderr" ]]; then
     printf "%s\n" "$update_stderr" >&2
   fi
-  if [[ "$update_stderr" == *"config was written by version"* ]] && allow_legacy_update_warning; then
-    echo "WARN: legacy baseline emitted a self-update version-skew warning; fixed baselines must not" >&2
-  elif [[ "$update_stderr" == *"config was written by version"* ]]; then
-    echo "ERROR: openclaw update emitted a self-update version-skew warning" >&2
-    return 1
-  fi
   if [[ "$update_status" -ne 0 ]]; then
     if is_self_swapped_package_process_exit "$update_stderr"; then
       echo "WARN: legacy updater process exited after self-swap; validating update JSON and installed CLI" >&2
@@ -465,6 +499,7 @@ run_update_candidate() {
   UPDATE_JSON="$UPDATE_JSON" \
     UPDATE_EXPECT_VERSION="$UPDATE_EXPECT_VERSION" \
     UPDATE_BASELINE_VERSION="$UPDATE_BASELINE_VERSION" \
+    UPDATE_EXPECT_OUTCOME="$expected_outcome" \
     UPDATE_TAG_URL="$UPDATE_TAG_URL" \
     node - <<'NODE'
 function parseFirstJsonObject(raw) {
@@ -505,8 +540,17 @@ const payload = parseFirstJsonObject(process.env.UPDATE_JSON || "{}");
 const expectedVersion = String(process.env.UPDATE_EXPECT_VERSION || "");
 const baselineVersion = String(process.env.UPDATE_BASELINE_VERSION || "");
 const expectedUrl = String(process.env.UPDATE_TAG_URL || "");
-if (payload.status !== "ok") {
-  throw new Error(`expected update status ok, got ${JSON.stringify(payload.status)}`);
+const expectedOutcome = process.env.UPDATE_EXPECT_OUTCOME || "applied";
+const allowLegacySameVersionApply =
+  process.env.OPENCLAW_INSTALL_ALLOW_LEGACY_SAME_VERSION_APPLY === "1";
+if (!["applied", "already-current"].includes(expectedOutcome)) {
+  throw new Error(`unknown expected update outcome ${expectedOutcome}`);
+}
+const noOp = expectedOutcome === "already-current";
+const legacySameVersionApply = noOp && allowLegacySameVersionApply && payload.status === "ok";
+const expectedStatus = noOp && !legacySameVersionApply ? "skipped" : "ok";
+if (payload.status !== expectedStatus) {
+  throw new Error(`expected update status ${expectedStatus}, got ${JSON.stringify(payload.status)}`);
 }
 if ((payload.before?.version ?? null) !== baselineVersion) {
   throw new Error(
@@ -518,19 +562,36 @@ if ((payload.after?.version ?? null) !== expectedVersion) {
     `expected after.version ${expectedVersion}, got ${JSON.stringify(payload.after?.version)}`,
   );
 }
-if (payload.reason != null) {
-  throw new Error(`expected no failure reason, got ${JSON.stringify(payload.reason)}`);
+if (noOp && !legacySameVersionApply ? payload.reason !== "already-current" : payload.reason != null) {
+  throw new Error(`unexpected update reason ${JSON.stringify(payload.reason)}`);
 }
 const steps = Array.isArray(payload.steps) ? payload.steps : [];
-const updateStep = steps.find((step) => step?.name === "global update");
+// Published drivers use the display label; current candidates use the stable step ID.
+const updateStep = steps.find((step) =>
+  step?.name === "package-install" || step?.name === "global update",
+);
 if (!updateStep) {
-  throw new Error("missing global update step in update JSON");
+  throw new Error("missing package install step in update JSON");
 }
 if (Number(updateStep.exitCode ?? 1) !== 0) {
-  throw new Error(`global update step failed: ${JSON.stringify(updateStep)}`);
+  throw new Error(`package install step failed: ${JSON.stringify(updateStep)}`);
 }
 if (typeof updateStep.command !== "string" || !updateStep.command.includes(expectedUrl)) {
-  throw new Error(`global update step missing expected tgz URL: ${JSON.stringify(updateStep)}`);
+  throw new Error(`package install step missing expected tgz URL: ${JSON.stringify(updateStep)}`);
+}
+if (noOp && !legacySameVersionApply) {
+  if (baselineVersion !== expectedVersion || typeof payload.before?.buildId !== "string" ||
+      !payload.before.buildId || payload.after?.buildId !== payload.before.buildId) {
+    throw new Error("already-current update changed or omitted installed build identity");
+  }
+  if (steps.length !== 1) {
+    throw new Error("already-current update performed unexpected activation or maintenance steps");
+  }
+  console.log("Verified already-current no-op: package staged, installed build unchanged, no activation");
+  process.exit(0);
+}
+if (legacySameVersionApply && baselineVersion !== expectedVersion) {
+  throw new Error("legacy same-version update changed the installed version");
 }
 const doctorStep = steps.find((step) => step?.name === "openclaw doctor");
 // Every baseline that passes verify_installed_cli implements this contract;
@@ -551,6 +612,17 @@ NODE
   echo "==> Verify updated version"
   print_install_audit "updated install"
   verify_installed_cli "$PACKAGE_NAME" "$UPDATE_EXPECT_VERSION"
+
+  if [[ "$update_stderr" == *"config was written by version"* ]] && allow_legacy_update_warning; then
+    echo "WARN: legacy baseline emitted a self-update version-skew warning; fixed baselines must not" >&2
+  elif [[ "$update_stderr" == *"config was written by version"* ]]; then
+    if verify_historical_self_update_warning "$update_stderr" "$expected_outcome" "$update_status"; then
+      echo "WARN: published 2026.9.4 updater emitted its old-process warning; fresh PATH and global install verified as 2026.9.5" >&2
+    else
+      echo "ERROR: openclaw update emitted a self-update version-skew warning" >&2
+      return 1
+    fi
+  fi
 }
 
 run_npm_global_smoke() {

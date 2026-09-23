@@ -1,9 +1,13 @@
-import { Buffer } from "node:buffer";
+import { toUSVString } from "node:util";
 import type { AgentMessage } from "../../../packages/agent-core/src/types.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
+import {
+  assertSqliteJsonlReadBudget,
+  SqliteJsonlReadBudgetExceededError,
+} from "../../infra/sqlite-jsonl-budget.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import {
@@ -12,6 +16,7 @@ import {
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import type { TranscriptEntryAnchor, TranscriptTurnBoundary } from "./transcript-entry-anchor.js";
+import { transcriptEventJsonSql, transcriptEventNavigationSql } from "./transcript-payload.js";
 
 export type ClosedTranscriptTurnReadResult =
   | {
@@ -65,32 +70,70 @@ function validateTerminalAncestry(params: {
   if (params.terminalEntryId === params.admissionEntryId) {
     return "descendant";
   }
-  const db = getSessionKysely(params.database);
-  const seen = new Set([params.terminalEntryId]);
-  let parentId = params.terminalParentId;
-  for (let depth = 0; depth < params.maxDepth; depth += 1) {
-    if (parentId === params.admissionEntryId) {
-      return "descendant";
-    }
-    if (parentId === null || seen.has(parentId)) {
-      return "non-descendant";
-    }
-    seen.add(parentId);
-    const row = executeSqliteQueryTakeFirstSync(
-      params.database,
-      db
-        .selectFrom("transcript_event_identities")
-        .select("parent_id")
-        .where("session_id", "=", params.sessionId)
-        .where("event_id", "=", parentId)
-        .limit(1),
-    );
-    if (!row) {
-      return "non-descendant";
-    }
-    parentId = row.parent_id;
+  if (!(params.maxDepth > 0)) {
+    return "too-large";
   }
-  return "too-large";
+  if (params.terminalParentId === params.admissionEntryId) {
+    return "descendant";
+  }
+  if (params.terminalParentId === null || params.terminalParentId === params.terminalEntryId) {
+    return "non-descendant";
+  }
+  const db = getSessionKysely(params.database);
+  const depthLimit = Math.ceil(params.maxDepth);
+  // Bound anchor IDs must not normalize lone surrogates into a different stored ID.
+  const admissionIsSqlText = toUSVString(params.admissionEntryId) === params.admissionEntryId;
+  const terminalIsSqlText = toUSVString(params.terminalEntryId) === params.terminalEntryId;
+  const ancestry = executeSqliteQueryTakeFirstSync(
+    params.database,
+    db
+      .withRecursive("turn_ancestors", (query) =>
+        query
+          .selectFrom("transcript_event_identities")
+          .select(["event_id", "parent_id"])
+          .where("session_id", "=", params.sessionId)
+          .where("event_id", "=", params.terminalParentId)
+          // UNION deduplicates identities so cycles terminate within the existing depth budget.
+          .union(
+            query
+              .selectFrom("transcript_event_identities as identity")
+              .innerJoin("turn_ancestors as previous", "identity.event_id", "previous.parent_id")
+              .select(["identity.event_id", "identity.parent_id"])
+              .where("identity.session_id", "=", params.sessionId)
+              .$if(admissionIsSqlText, (ancestors) =>
+                ancestors.where("previous.parent_id", "!=", params.admissionEntryId),
+              )
+              .$if(terminalIsSqlText, (ancestors) =>
+                ancestors.where("identity.event_id", "!=", params.terminalEntryId),
+              ),
+          )
+          .limit(Number.isSafeInteger(depthLimit) ? depthLimit : -1),
+      )
+      .selectFrom("turn_ancestors")
+      .select((eb) => [
+        eb.fn.countAll<number>().as("depth"),
+        eb.fn
+          .max(
+            eb
+              .case()
+              .when(
+                eb.and([
+                  eb.val(admissionIsSqlText ? 1 : 0),
+                  eb("parent_id", "=", params.admissionEntryId),
+                ]),
+              )
+              .then(1)
+              .else(0)
+              .end(),
+          )
+          .as("found"),
+      ]),
+  )!;
+  // The original walk checks a fetched parent at the start of its next iteration.
+  if (ancestry.depth >= depthLimit) {
+    return "too-large";
+  }
+  return ancestry.found === 1 ? "descendant" : "non-descendant";
 }
 
 /** Reads one bounded accepted transcript range from a single SQLite snapshot. */
@@ -173,7 +216,7 @@ export function readClosedTranscriptTurn(params: {
               "identity.parent_id",
               "active.message_position",
               "rewrite.generation",
-              "event.event_json",
+              transcriptEventNavigationSql("event").as("event_json"),
             ])
             .where("identity.session_id", "=", target.sessionId)
             .where("identity.event_id", "=", anchor.entryId)
@@ -205,32 +248,40 @@ export function readClosedTranscriptTurn(params: {
       if (ancestry !== "descendant") {
         return { kind: ancestry } as const;
       }
+      const selected = db
+        .selectFrom("session_transcript_active_events as active")
+        .innerJoin("transcript_events as event", (join) =>
+          join
+            .onRef("event.session_id", "=", "active.session_id")
+            .onRef("event.seq", "=", "active.event_seq"),
+        )
+        .where("active.session_id", "=", target.sessionId)
+        .where("active.message_position", "is not", null)
+        .where("active.message_position", ">=", params.boundary.admission.activeMessagePosition)
+        .where("active.message_position", "<=", params.boundary.terminal.activeMessagePosition)
+        .orderBy("active.message_position", "asc");
+      // Admit count and bytes in this snapshot before acquiring any selected body.
+      try {
+        assertSqliteJsonlReadBudget(
+          database.db,
+          selected
+            .clearOrderBy()
+            .select(["event.event_json", "event.event_utf8_bytes"])
+            .as("events"),
+          params.maxBytes,
+          "Closed transcript turn",
+          { hasExactUtf8Bytes: true, separatorBytes: 0, maxRows: params.maxEvents },
+        );
+      } catch (error) {
+        if (error instanceof SqliteJsonlReadBudgetExceededError) {
+          return { kind: "too-large" } as const;
+        }
+        throw error;
+      }
       const rows = executeSqliteQuerySync(
         database.db,
-        db
-          .selectFrom("session_transcript_active_events as active")
-          .innerJoin("transcript_events as event", (join) =>
-            join
-              .onRef("event.session_id", "=", "active.session_id")
-              .onRef("event.seq", "=", "active.event_seq"),
-          )
-          .select("event.event_json")
-          .where("active.session_id", "=", target.sessionId)
-          .where("active.message_position", "is not", null)
-          .where("active.message_position", ">=", params.boundary.admission.activeMessagePosition)
-          .where("active.message_position", "<=", params.boundary.terminal.activeMessagePosition)
-          .orderBy("active.message_position", "asc")
-          // Read one sentinel row so an oversized turn is rejected without
-          // materializing the rest of its transcript payload.
-          .limit(params.maxEvents + 1),
+        selected.select(transcriptEventJsonSql(database.db, "event").as("event_json")),
       ).rows;
-      if (
-        rows.length > params.maxEvents ||
-        rows.reduce((total, row) => total + Buffer.byteLength(row.event_json, "utf8"), 0) >
-          params.maxBytes
-      ) {
-        return { kind: "too-large" } as const;
-      }
       const messages = rows.flatMap((row) => {
         const event = JSON.parse(row.event_json) as { message?: unknown; type?: unknown };
         return event.type === "message" && event.message ? [event.message as AgentMessage] : [];

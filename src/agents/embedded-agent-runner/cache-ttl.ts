@@ -10,6 +10,7 @@ import {
   isAnthropicModelRef,
 } from "../../llm/providers/stream-wrappers/anthropic-family-cache-semantics.js";
 import { resolveProviderCacheTtlEligibility } from "../../plugins/provider-runtime.js";
+import type { ProviderCacheTtlEligibilityContext } from "../../plugins/provider-transport.types.js";
 import { isGooglePromptCacheEligible } from "./prompt-cache-retention.js";
 
 type CustomEntryLike = { type?: unknown; customType?: unknown; data?: unknown };
@@ -32,6 +33,7 @@ export function isCacheTtlEligibleProvider(
   provider: string,
   modelId: string,
   modelApi?: string,
+  route?: Pick<ProviderCacheTtlEligibilityContext, "baseUrl" | "supportsPromptCacheKey">,
 ): boolean {
   const normalizedProvider = normalizeLowercaseStringOrEmpty(provider);
   const normalizedModelId = normalizeLowercaseStringOrEmpty(modelId);
@@ -41,6 +43,8 @@ export function isCacheTtlEligibleProvider(
       provider: normalizedProvider,
       modelId: normalizedModelId,
       modelApi,
+      baseUrl: route?.baseUrl,
+      supportsPromptCacheKey: route?.supportsPromptCacheKey,
     },
   });
   if (pluginEligibility !== undefined) {
@@ -80,7 +84,7 @@ function matchesCacheTtlContext(
 }
 
 /** Transcript entries visible to cache-TTL marker readers; stores without entries read as empty. */
-export function readCacheTtlEntries(sessionManager: unknown): CustomEntryLike[] {
+function readCacheTtlEntries(sessionManager: unknown): CustomEntryLike[] {
   const sm = sessionManager as { getEntries?: () => CustomEntryLike[] };
   return sm?.getEntries ? sm.getEntries() : [];
 }

@@ -11,8 +11,8 @@ type ControlUiPublicAsset =
   | `fonts/${string}.css`
   | `themes/${string}.css`
   | `provider-icons/ProviderIcon-${string}.svg`
+  | `cloud-provider-icons/${string}.svg`
   | `file-icons/${string}.svg`
-  | `plugin-art/${string}.webp`
   | `app-art/${string}.webp`
   | `community-art/${string}.webp`;
 

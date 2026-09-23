@@ -568,14 +568,17 @@ struct ChatStreamReplayTests {
         }
     }
 
-    @Test(arguments: [false, true])
-    func `intermediate tool rows cannot consume a final from the same run`(finalFirst: Bool) async throws {
+    @Test(arguments: [false, true], [false, true])
+    func `intermediate work cannot consume a final from the same run`(
+        finalFirst: Bool,
+        isCommentarySegment: Bool) async throws
+    {
         let now = Date().timeIntervalSince1970 * 1000
         let text = "Final answer after the tool call."
         let harness = try await StreamReplayHarness.bootstrapped()
         let runId = try await harness.send("use a tool")
         let final = replayFinalEvent(runId: runId, text: text, timestamp: now + 1000)
-        let toolMessage: OpenClawChatMessage = try ChatPayloadDecoding.decode(AnyCodable([
+        var workPayload: [String: Any] = [
             "role": "assistant",
             "content": [
                 ["type": "text", "text": "Checking a tool."],
@@ -584,7 +587,13 @@ struct ChatStreamReplayTests {
             "timestamp": now + 2000,
             "stopReason": "toolUse",
             "__openclaw": ["runId": runId],
-        ] as [String: Any]))
+        ]
+        if isCommentarySegment {
+            workPayload["content"] = [["type": "text", "text": "Checking a tool."]]
+            workPayload.removeValue(forKey: "stopReason")
+            workPayload["openclawStreamFallback"] = ["source": "segment", "itemId": "progress-1"]
+        }
+        let toolMessage: OpenClawChatMessage = try ChatPayloadDecoding.decode(AnyCodable(workPayload))
         let toolEvent = OpenClawChatTransportEvent.sessionMessage(OpenClawSessionMessageEventPayload(
             sessionKey: "main",
             message: toolMessage,

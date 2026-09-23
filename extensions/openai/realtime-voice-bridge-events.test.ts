@@ -67,7 +67,7 @@ describe("OpenAI realtime voice bridge events", () => {
     expect(
       parseSent(socket).filter((event) => event.type === "conversation.item.truncate"),
     ).toEqual([]);
-    bridge.close();
+    await bridge.close();
   });
 
   it("does not acknowledge replacement playback through a retained old connection callback", async () => {
@@ -77,7 +77,7 @@ describe("OpenAI realtime voice bridge events", () => {
     emitAssistantPlayback(firstSocket, { itemId: "old-audio", audio: Buffer.alloc(8000) });
     const oldAck = onMark.mock.calls[0]?.[1];
     expect(oldAck).toBeTypeOf("function");
-    bridge.close();
+    await bridge.close();
     const secondSocket = await connectReadyBridge(bridge, 1);
     bridge.setMediaTimestamp(1000);
     emitAssistantPlayback(secondSocket, { itemId: "replacement-audio", audio: Buffer.alloc(8000) });
@@ -98,7 +98,7 @@ describe("OpenAI realtime voice bridge events", () => {
       },
     ]);
     currentAck(); // The cleared mark is harmless too.
-    bridge.close();
+    await bridge.close();
   });
 
   beforeEach(() => {
@@ -166,7 +166,7 @@ describe("OpenAI realtime voice bridge events", () => {
       expect(
         parseSent(socket).filter((event) => event.type === "conversation.item.truncate"),
       ).toHaveLength(2);
-      bridge.close();
+      await bridge.close();
     },
   );
 
@@ -220,7 +220,7 @@ describe("OpenAI realtime voice bridge events", () => {
             ]
           : [],
       );
-      bridge.close();
+      await bridge.close();
     },
   );
 
@@ -251,7 +251,7 @@ describe("OpenAI realtime voice bridge events", () => {
       expect(
         parseSent(socket).filter((event) => event.type === "conversation.item.truncate"),
       ).toEqual([]);
-      bridge.close();
+      await bridge.close();
     },
   );
 
@@ -277,7 +277,7 @@ describe("OpenAI realtime voice bridge events", () => {
       });
       expect(onAudio).not.toHaveBeenCalled();
       expect(parseSent(socket).filter((event) => event.type === "response.cancel")).toHaveLength(1);
-      bridge.close();
+      await bridge.close();
     },
   );
 
@@ -286,7 +286,7 @@ describe("OpenAI realtime voice bridge events", () => {
       getPlaybackState: () => [{ itemId: "interrupted", audioEndMs: 500 }],
       onEvent: (event) => {
         if (event.direction === "client" && event.type === "response.cancel") {
-          bridge.close();
+          void bridge.close();
         }
       },
     });
@@ -341,7 +341,7 @@ describe("OpenAI realtime voice bridge events", () => {
         },
       ]);
       expect(onClearAudio).toHaveBeenCalledOnce();
-      bridge.close();
+      await bridge.close();
     },
   );
 
@@ -350,11 +350,13 @@ describe("OpenAI realtime voice bridge events", () => {
     async (action) => {
       let playback = [{ itemId: "current", audioEndMs: 0 }];
       const onMark = vi.fn();
-      const onAudio = vi.fn(() =>
-        action === "close"
-          ? bridge.close()
-          : bridge.handleBargeIn?.({ audioPlaybackActive: true, force: true }),
-      );
+      const onAudio = vi.fn(() => {
+        if (action === "close") {
+          void bridge.close();
+        } else {
+          bridge.handleBargeIn?.({ audioPlaybackActive: true, force: true });
+        }
+      });
       const bridge = createNativeBridge({
         onAudio,
         onMark,
@@ -374,7 +376,7 @@ describe("OpenAI realtime voice bridge events", () => {
       emitServerEvent(socket, audio);
       expect(onAudio).toHaveBeenCalledOnce();
       expect(onMark).not.toHaveBeenCalled();
-      bridge.close();
+      await bridge.close();
     },
   );
 
@@ -523,7 +525,7 @@ describe("OpenAI realtime voice bridge events", () => {
     expect(
       parseSent(socket).filter((event) => event.type === "conversation.item.truncate"),
     ).toHaveLength(1);
-    bridge.close();
+    await bridge.close();
   });
 
   it("treats a later named mark as cumulative playback progress", async () => {
@@ -551,7 +553,7 @@ describe("OpenAI realtime voice bridge events", () => {
     expect(
       parseSent(socket).filter((event) => event.type === "conversation.item.truncate"),
     ).toHaveLength(0);
-    bridge.close();
+    await bridge.close();
   });
 
   it("forwards current realtime output audio events", async () => {

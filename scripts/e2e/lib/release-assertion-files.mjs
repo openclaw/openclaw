@@ -4,7 +4,7 @@ import { readTextFileTail } from "./text-file-utils.mjs";
 
 const SCAN_CHUNK_BYTES = 64 * 1024;
 const SCAN_CARRY_CHARS = 256;
-export const ERROR_DETAIL_TAIL_BYTES = 16 * 1024;
+const ERROR_DETAIL_TAIL_BYTES = 16 * 1024;
 const JSON_ARTIFACT_MAX_BYTES = 2 * 1024 * 1024;
 
 export function readJson(file, maxBytes = JSON_ARTIFACT_MAX_BYTES) {
@@ -66,4 +66,11 @@ export function fileContainsText(file, needle) {
   } finally {
     fs.closeSync(fd);
   }
+}
+
+export function assertFileContainsText(file, needle, callerAssert) {
+  callerAssert(
+    fileContainsText(file, needle),
+    `${file} did not contain ${needle}. Output tail: ${readTextFileTail(file, ERROR_DETAIL_TAIL_BYTES)}`,
+  );
 }

@@ -1,8 +1,8 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
-import { createRequire } from "node:module";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { replaceFileAtomic } from "../infra/replace-file.js";
 import {
   CONTROL_UI_PLUGIN_MAX_ASSET_BYTES,
   CONTROL_UI_PLUGIN_MAX_BUILD_BYTES,
@@ -16,13 +16,19 @@ export async function writePluginBuildManifest(
   rootDir: string,
   manifest: Record<string, unknown>,
 ): Promise<void> {
-  const temporary = path.join(rootDir, `.${PLUGIN_MANIFEST_FILENAME}.${randomUUID()}.tmp`);
-  try {
-    await fs.writeFile(temporary, `${JSON.stringify(manifest, null, 2)}\n`);
-    await fs.rename(temporary, path.join(rootDir, PLUGIN_MANIFEST_FILENAME));
-  } finally {
-    await fs.rm(temporary, { force: true });
-  }
+  const realRootDir = await fs.realpath(rootDir);
+  // Keep package directory permissions intact and retain ordinary umask-based
+  // creation for new manifests while preserving existing manifest permissions.
+  await replaceFileAtomic({
+    filePath: path.join(realRootDir, PLUGIN_MANIFEST_FILENAME),
+    content: `${JSON.stringify(manifest, null, 2)}\n`,
+    mode: 0o666 & ~process.umask(),
+    preserveExistingMode: true,
+    dirMode: (await fs.stat(realRootDir)).mode & 0o7777,
+    syncTempFile: true,
+    syncParentDir: true,
+    throwOnCleanupError: true,
+  });
 }
 
 export async function buildPluginControlUi(params: {
@@ -36,18 +42,7 @@ export async function buildPluginControlUi(params: {
   if (relative.startsWith(`..${path.sep}`) || relative === ".." || path.isAbsolute(relative)) {
     throw new Error("Control UI source must stay inside the plugin package.");
   }
-  const require = createRequire(path.join(rootDir, "package.json"));
-  let builder: typeof import("esbuild");
-  try {
-    // SAFETY: Node resolves the plugin's installed esbuild package with this public API.
-    builder = require("esbuild") as typeof import("esbuild");
-  } catch (cause) {
-    throw new Error(
-      "Install esbuild in this plugin's devDependencies, then run plugins build again.",
-      { cause },
-    );
-  }
-  const outputFiles = await buildPluginBundle(builder, {
+  const files = await buildPluginBundle({
     absWorkingDir: rootDir,
     entryPoints: { index: entry },
     outdir: path.join(rootDir, "dist/control-ui/build"),
@@ -59,9 +54,12 @@ export async function buildPluginControlUi(params: {
     tsconfigRaw: {
       compilerOptions: { experimentalDecorators: true, useDefineForClassFields: false },
     },
-    alias: buildPluginLoaderAliasMap(entry, process.argv[1], import.meta.url),
+    // Browser bundles embed the host SDK and workspace packages, so resolve them
+    // from source whenever a source checkout is present. NODE_ENV=production would
+    // otherwise prefer compiled dist left behind by an earlier build, and stale
+    // bytes change the content hash that openclaw.plugin.json commits.
+    alias: buildPluginLoaderAliasMap(entry, process.argv[1], import.meta.url, "src"),
   });
-  const files = outputFiles.toSorted((left, right) => left.path.localeCompare(right.path));
   if (
     files.some((file) => file.contents.length > CONTROL_UI_PLUGIN_MAX_ASSET_BYTES) ||
     files.reduce((total, file) => total + file.contents.length, 0) >
@@ -105,12 +103,17 @@ export async function buildPluginControlUi(params: {
 
   // Publish an immutable directory before its manifest pointer. A failed build
   // cannot change the previous activation or expose a mixed JS/CSS generation.
-  await fs.mkdir(path.dirname(outputDir), { recursive: true });
-  const staging = await fs.mkdtemp(path.join(path.dirname(outputDir), ".build-"));
+  const generations = path.dirname(outputDir);
+  await fs.mkdir(generations, { recursive: true });
+  // The builder owns this parent too; a restrictive umask would otherwise leave
+  // it owner-only and block traversal before the generation is ever reached.
+  await fs.chmod(generations, 0o755);
+  const staging = await fs.mkdtemp(path.join(generations, ".build-"));
   try {
     for (const file of files) {
       await fs.writeFile(path.join(staging, path.basename(file.path)), file.contents);
     }
+    await normalizeGenerationPermissions(staging, files);
     try {
       await fs.rename(staging, outputDir);
     } catch (error) {
@@ -130,9 +133,20 @@ export async function buildPluginControlUi(params: {
           );
         }
       }
+      // A generation published by an earlier build may still carry owner-only modes.
+      await normalizeGenerationPermissions(outputDir, files);
     }
   } finally {
     await fs.rm(staging, { recursive: true, force: true });
   }
   return declaration;
+}
+
+// mkdtemp is owner-only and file creation follows umask. Normalize generated
+// asset modes before publication or after validating a reused generation.
+async function normalizeGenerationPermissions(directory: string, files: Array<{ path: string }>) {
+  await fs.chmod(directory, 0o755);
+  for (const file of files) {
+    await fs.chmod(path.join(directory, path.basename(file.path)), 0o644);
+  }
 }

@@ -3,6 +3,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isInstalledPluginEnabled } from "./installed-plugin-index.js";
 import { resolvePluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
+import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import { getActivePluginRegistryWorkspaceDirFromState } from "./runtime-state.js";
 
 type SetupCliBackendDescriptorEntry = {
@@ -17,11 +18,15 @@ type SetupCliBackendDescriptorLookupParams = {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  metadataSnapshot?: PluginMetadataSnapshot;
 };
 
 function resolveSetupCliBackendSnapshot(
   params: Omit<SetupCliBackendDescriptorLookupParams, "backend"> = {},
 ) {
+  if (params.metadataSnapshot) {
+    return params.metadataSnapshot;
+  }
   const env = params.env ?? process.env;
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
   return resolvePluginMetadataSnapshot({

@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements scenario flow runner behavior.
 import { isRecord as isPlainObject } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { QaEvidenceRttMeasurement } from "./evidence-summary.js";
 import type { QaTransportState } from "./qa-transport.js";
@@ -24,6 +23,7 @@ const qaFlowImportLoaders: Record<string, QaFlowImportLoader> = {
   "./auth-profile.fixture.js": () => import("./auth-profile.fixture.js"),
   "./codex-plugin.fixture.js": () => import("./codex-plugin.fixture.js"),
   "./errors.js": () => import("./errors.js"),
+  "./gateway-log-redaction.js": () => import("./gateway-log-redaction.js"),
   "./live-transports/matrix/scenarios/scenario-runtime-allowbots.js": () =>
     import("./live-transports/matrix/scenarios/scenario-runtime-allowbots.js"),
   "./live-transports/matrix/scenarios/scenario-runtime-approval.js": () =>
@@ -52,6 +52,8 @@ const qaFlowImportLoaders: Record<string, QaFlowImportLoader> = {
     import("./live-transports/matrix/scenarios/scenario-runtime-edit.js"),
   "./live-transports/matrix/scenarios/scenario-runtime-media.js": () =>
     import("./live-transports/matrix/scenarios/scenario-runtime-media.js"),
+  "./live-transports/matrix/scenarios/scenario-runtime-message-actions.js": () =>
+    import("./live-transports/matrix/scenarios/scenario-runtime-message-actions.js"),
   "./voice-preflight.fixture.js": () => import("./voice-preflight.fixture.js"),
   "./live-transports/matrix/scenarios/scenario-runtime-policy.js": () =>
     import("./live-transports/matrix/scenarios/scenario-runtime-policy.js"),
@@ -67,6 +69,7 @@ const qaFlowImportLoaders: Record<string, QaFlowImportLoader> = {
     import("./live-transports/slack/scenario-runtime.js"),
   "./live-transports/whatsapp/scenario-runtime.js": () =>
     import("./live-transports/whatsapp/scenario-runtime.js"),
+  "./suite-artifacts.js": () => import("./suite-artifacts.js"),
   "./tool-search-gateway.fixture.js": () => import("./tool-search-gateway.fixture.js"),
 };
 
@@ -227,7 +230,7 @@ function resolveCallable(path: string, api: QaFlowApi, vars: QaFlowVars) {
   return parent ? value.bind(parent) : value;
 }
 
-type QaFlowActionOptions = { allowAfterAbort?: boolean };
+type QaFlowActionOptions = { allowAfterAbort?: boolean; cleanupApi?: QaFlowApi };
 
 function throwIfFlowAborted(api: QaFlowApi, options: QaFlowActionOptions = {}) {
   if (!options.allowAfterAbort) {
@@ -403,7 +406,11 @@ async function runFlowActionBody(
     } finally {
       if (tryAction.finally) {
         for (const nested of tryAction.finally) {
-          await runFlowAction(nested, api, vars, { allowAfterAbort: true });
+          // Keep this view local to finally; normal actions retain their scenario signal.
+          await runFlowAction(nested, options.cleanupApi ?? api, vars, {
+            ...options,
+            allowAfterAbort: true,
+          });
         }
       }
     }
@@ -414,6 +421,7 @@ async function runFlowActionBody(
 
 export async function runScenarioFlow(params: {
   api: QaFlowApi;
+  cleanupApi?: QaFlowApi;
   flow: QaScenarioFlow;
   scenarioTitle: string;
   vars?: QaFlowVars;
@@ -423,7 +431,7 @@ export async function runScenarioFlow(params: {
     name: step.name,
     run: async () => {
       for (const action of step.actions) {
-        await runFlowAction(action, params.api, vars);
+        await runFlowAction(action, params.api, vars, { cleanupApi: params.cleanupApi });
       }
       if (!step.detailsExpr && !step.resultExpr) {
         return undefined;

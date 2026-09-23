@@ -23,7 +23,7 @@ vi.mock("../agents/prepared-model-catalog.js", () => ({
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
   // These tests exercise the TUI boundary, not filesystem-backed catalog discovery.
   getPreparedModelCatalogSnapshot: vi.fn(() => undefined),
-  loadPreparedModelCatalog: vi.fn(async () => []),
+  readPreparedModelCatalog: vi.fn(async () => []),
 }));
 
 vi.mock("./verified-inference.js", async (importOriginal) => {
@@ -166,6 +166,18 @@ describe("runSystemAgentTui", () => {
       async (opts: Parameters<NonNullable<SystemAgentTuiOptions["runTui"]>>[0]) => {
         runTuiCalls += 1;
         runTuiOptions = opts;
+        if (!opts.backend) {
+          throw new Error("Expected the system-agent TUI backend");
+        }
+        for (const sessionKey of ["agent:openclaw:main", "main"]) {
+          await expect(opts.backend.describeSession({ sessionKey })).resolves.toMatchObject({
+            session: { key: "agent:openclaw:main", model: "gpt-5.5", modelProvider: "openai" },
+            defaults: { model: "gpt-5.5", modelProvider: "openai" },
+          });
+        }
+        await expect(
+          opts.backend.describeSession({ sessionKey: "agent:openclaw:missing" }),
+        ).resolves.toMatchObject({ session: null });
         return { exitReason: "exit" as const };
       },
     );
@@ -256,7 +268,7 @@ describe("runSystemAgentTui", () => {
 
   it("opens the verified setup shell without preparing an unpublished model catalog", async () => {
     const verified = await createVerifiedTuiOptions({ loadOverview: async () => overview });
-    const catalogPreparation = vi.mocked(preparedModelCatalog.loadPreparedModelCatalog);
+    const catalogPreparation = vi.mocked(preparedModelCatalog.readPreparedModelCatalog);
     const publishedSnapshot = vi
       .spyOn(preparedModelCatalog, "getPreparedModelCatalogSnapshot")
       .mockReturnValue(undefined);

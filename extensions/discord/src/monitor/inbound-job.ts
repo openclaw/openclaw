@@ -1,4 +1,3 @@
-// Discord plugin module implements inbound job behavior.
 import {
   resolveDiscordChannelIdSafe,
   resolveDiscordChannelInfoSafe,
@@ -9,7 +8,9 @@ import type { DiscordMessagePreflightContext } from "./message-handler.preflight
 
 type DiscordInboundJobRuntimeField =
   | "runtime"
+  | "buildContext"
   | "abortSignal"
+  | "isPolicyCurrent"
   | "guildHistories"
   | "client"
   | "turnAdoptionLifecycle"
@@ -36,7 +37,9 @@ export function buildDiscordInboundJob(
 ): DiscordInboundJob {
   const {
     runtime,
+    buildContext,
     abortSignal,
+    isPolicyCurrent,
     guildHistories,
     client,
     turnAdoptionLifecycle,
@@ -61,7 +64,9 @@ export function buildDiscordInboundJob(
     },
     runtime: {
       runtime,
+      buildContext,
       abortSignal,
+      isPolicyCurrent,
       guildHistories,
       client,
       turnAdoptionLifecycle,

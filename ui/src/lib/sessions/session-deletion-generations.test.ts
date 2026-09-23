@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { SessionsListResult } from "../../api/types.ts";
+import { createConnectionBootstrapCoordinator } from "../../app/connection-bootstrap.ts";
 import { sessionsResult } from "./session-capability.test-support.ts";
 import { createSessionDeletionHarness } from "./session-deletion.test-support.ts";
 
@@ -27,7 +28,7 @@ describe("session deletion generation ownership", () => {
         if (source === "history") {
           h.sessions.reconcile(h.alpha);
         } else if (source === "changed") {
-          h.sessions.reconcileChanged(payload);
+          h.emitEvent({ type: "event", event: "sessions.changed", payload });
         } else {
           h.emitEvent({ type: "event", event: "session.message", payload });
         }
@@ -39,27 +40,36 @@ describe("session deletion generation ownership", () => {
     },
   );
 
-  it("uses the actual bootstrap fallback request to establish a fresh replacement", async () => {
-    const h = createSessionDeletionHarness();
-    const subscribe = createDeferred<{ subscribed: boolean }>();
+  it("uses the admitted bootstrap list to establish a fresh replacement", async () => {
+    const coordinator = createConnectionBootstrapCoordinator();
+    const h = createSessionDeletionHarness(coordinator);
+    const synchronize = () =>
+      coordinator.synchronize({
+        client: h.gateway.snapshot.client,
+        connected: h.gateway.snapshot.phase === "connected",
+      });
+    synchronize();
+    const stop = h.gateway.subscribe(synchronize);
     try {
       await h.sessions.refresh({ force: true });
       h.publish(false);
-      h.request.mockImplementationOnce(() => subscribe.promise);
+      coordinator.setForegroundRoute(undefined);
       h.publish(true);
       const operation = h.sessions.delete(h.alpha.key, { expectedSessionId: h.alpha.sessionId });
-      const replacement = { ...h.alpha, sessionId: "replacement-after-subscribe" };
+      await vi.waitFor(() => expect(h.responses.has(h.alpha.key)).toBe(true));
+      const replacement = { ...h.alpha, sessionId: "replacement-after-admission" };
       h.setRows([replacement, h.sibling]);
-      subscribe.resolve({ subscribed: true });
+      coordinator.setForegroundRoute(null);
       await vi.waitFor(() => expect(h.sessions.state.result?.sessions).toContainEqual(replacement));
       expect(h.sessions.deletionState(h.alpha.key)).toBeUndefined();
       h.responses.get(h.alpha.key)!.resolve({ deleted: true });
       await operation;
       expect(h.sessions.state.result?.sessions).toContainEqual(replacement);
     } finally {
-      subscribe.resolve({ subscribed: true });
+      stop();
       h.responses.get(h.alpha.key)?.resolve({ deleted: false });
       h.sessions.dispose();
+      coordinator.reset();
     }
   });
 
@@ -210,7 +220,11 @@ describe("session deletion generation ownership", () => {
         await h.sessions.refreshList({ ...currentScope, force: true });
         const operation = h.sessions.delete(current.key, { expectedSessionId: current.sessionId });
         h.sessions.reconcile(h.alpha);
-        h.sessions.reconcileChanged({ ...h.alpha, sessionKey: h.alpha.key, reason: "send" });
+        h.emitEvent({
+          type: "event",
+          event: "sessions.changed",
+          payload: { ...h.alpha, sessionKey: h.alpha.key, reason: "send" },
+        });
         h.emitEvent({
           type: "event",
           event: "session.message",

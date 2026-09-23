@@ -63,7 +63,7 @@ it("renders one participant behind the owner with combined accessibility", async
 });
 
 it.each(["row", "header"] as const)(
-  "renders the configured agent picture in a %s owner chip",
+  "renders the agent picture and generated fallback in a %s owner chip",
   async (size) => {
     const chip = await mount({});
     chip.owner = {
@@ -78,6 +78,19 @@ it.each(["row", "header"] as const)(
     expect(chip.querySelector(".session-owner-chip img")?.getAttribute("src")).toBe(
       "/avatar/research",
     );
+    chip.querySelector("img")?.dispatchEvent(new Event("error"));
+    await vi.waitFor(() =>
+      expect(chip.querySelector(".identity-avatar__agent-face")).not.toBeNull(),
+    );
+    expect(chip.querySelector(".identity-avatar--agent")?.classList.contains("is-fallback")).toBe(
+      true,
+    );
+    chip.owner = { ...chip.owner, avatarUrl: undefined };
+    await waitForChipUpdate(chip);
+    await vi.waitFor(() =>
+      expect(chip.querySelector(".identity-avatar__agent-face")).not.toBeNull(),
+    );
+    expect(chip.querySelector("openclaw-viewer-avatar")).toBeNull();
   },
 );
 

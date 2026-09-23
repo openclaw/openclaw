@@ -2,11 +2,25 @@ import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.js";
+import {
+  detectAndLoadPromptImages,
+  materializeProviderContext,
+} from "../../agents/embedded-agent-runner/run/images.js";
+import { createHostSandboxFsBridge } from "../../agents/test-helpers/host-sandbox-fs-bridge.js";
+import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
+import type { OpenClawConfig } from "../../config/types.js";
 import * as globals from "../../globals.js";
 import * as mediaRoots from "../../media/channel-inbound-roots.js";
 import * as mediaReference from "../../media/media-reference.js";
+import { getMediaDir } from "../../media/store.js";
+import { setCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata.test-support.js";
+import { resolveInstalledPluginIndexPolicyHash } from "../../plugins/installed-plugin-index-policy.js";
+import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import * as execSpawn from "../../process/exec-spawn.js";
 import * as processExec from "../../process/exec.js";
+import { buildPersistedUserTurnMessage } from "../../sessions/user-turn-transcript.js";
 import { isPidAlive } from "../../shared/pid-alive.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import {
@@ -19,6 +33,7 @@ import {
   waitForPidFile,
   waitForPidToExit,
 } from "../../test-utils/process-tree.js";
+import { pinConfigDir } from "../../utils.js";
 import type { RuntimeMsgContext, TemplateContext } from "../templating.js";
 import { stageSandboxMedia } from "./stage-sandbox-media.js";
 
@@ -71,9 +86,216 @@ function remoteStageParams(state: OpenClawTestState, abortSignal?: AbortSignal) 
   };
 }
 
+const INSTALLED_REMOTE_PATH = "/installed/attachments/report.txt";
+const INSTALLED_OWNER_PLUGIN_ID = "imessage";
+
+/**
+ * Builds a staging request whose only channel media contract is an official
+ * plugin installed outside the bundled tree.
+ */
+async function installedOwnerStageParams(params: {
+  state: OpenClawTestState;
+  plugins?: OpenClawConfig["plugins"];
+  artifactBody?: string;
+}) {
+  const pluginDir = params.state.path("installed-plugins", INSTALLED_OWNER_PLUGIN_ID);
+  await fs.mkdir(pluginDir, { recursive: true });
+  await fs.writeFile(path.join(pluginDir, "package.json"), '{"type":"commonjs"}\n');
+  await fs.writeFile(
+    path.join(pluginDir, "media-contract-api.js"),
+    params.artifactBody ??
+      'module.exports.resolveRemoteInboundAttachmentRoots = () => ["/installed/attachments"];\n',
+  );
+  const cfg: OpenClawConfig = {
+    channels: { imessage: { enabled: true } },
+    ...(params.plugins ? { plugins: params.plugins } : {}),
+    agents: {
+      ownership: "explicit",
+      entries: { main: {} },
+      defaults: {
+        skipBootstrap: true,
+        sandbox: {
+          mode: "all",
+          scope: "agent",
+          workspaceRoot: params.state.path("sandbox"),
+          workspaceAccess: "none",
+        },
+      },
+    },
+  };
+  const ctx: RuntimeMsgContext = {
+    Body: "synthetic attachment",
+    Provider: INSTALLED_OWNER_PLUGIN_ID,
+    MediaRemoteHost: "user@gateway-host",
+    media: [
+      {
+        path: INSTALLED_REMOTE_PATH,
+        url: INSTALLED_REMOTE_PATH,
+        contentType: "text/plain",
+      },
+    ],
+  };
+  return {
+    ctx,
+    sessionCtx: structuredClone(ctx),
+    cfg,
+    agentId: "main",
+    sessionKey: "agent:main:installed-owner-fixture",
+    workspaceDir: params.state.workspaceDir,
+    pluginDir,
+  };
+}
+
+/**
+ * Runs a scenario against an empty bundled plugin tree so the installed owner is
+ * the only place a channel media contract can come from.
+ */
+async function withEmptyBundledPlugins(
+  state: OpenClawTestState,
+  run: () => Promise<void>,
+): Promise<void> {
+  const bundledPluginsDir = state.path("bundled-plugins");
+  await fs.mkdir(bundledPluginsDir, { recursive: true });
+  await withEnvAsync(
+    {
+      OPENCLAW_BUNDLED_PLUGINS_DIR: bundledPluginsDir,
+      OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+    },
+    run,
+  );
+}
+
+/** Publishes the installed official owner that the staging path reads from. */
+function publishInstalledOwnerSnapshot(cfg: OpenClawConfig, pluginDir: string): void {
+  const snapshot = createPluginMetadataSnapshotFixture({
+    plugins: [
+      {
+        id: INSTALLED_OWNER_PLUGIN_ID,
+        origin: "global",
+        channels: [INSTALLED_OWNER_PLUGIN_ID],
+        trustedOfficialInstall: true,
+        rootDir: pluginDir,
+      },
+    ],
+  });
+  snapshot.policyHash = resolveInstalledPluginIndexPolicyHash(cfg, process.env);
+  setCurrentPluginMetadataSnapshot(snapshot, { config: cfg });
+}
+
+function releaseInstalledOwnerSnapshot(): void {
+  setCurrentPluginMetadataSnapshot(undefined);
+  clearPluginMetadataLifecycleCaches();
+}
+
 afterEach(() => vi.restoreAllMocks());
 
 describe("stageSandboxMedia SCP", () => {
+  it.each(["transfer", "document-only", "stopped-document-only"])(
+    "stages and hydrates channel attachments: %s",
+    async (mode) => {
+      const canTransfer = mode === "transfer";
+      const previousEnv = { ...process.env };
+      try {
+        await withOpenClawTestState({ label: "scp-remote-workspace" }, async (state) => {
+          pinConfigDir();
+          const params = remoteStageParams(state);
+          const image = createSolidPngBuffer(1, 1, { r: 255, g: 255, b: 255 });
+          const video = Buffer.from(
+            "0000001c6674797069736f6d0000000069736f6d0000000000000000",
+            "hex",
+          );
+          params.ctx.media!.push(
+            { path: "/synthetic/attachments/photo.png", contentType: "image/png" },
+            { path: "/synthetic/attachments/clip.mp4", contentType: "video/mp4" },
+          );
+          params.sessionCtx.media = structuredClone(params.ctx.media);
+          const release = registerAgentWorkspaceAccess(state.workspaceDir, {
+            ...(canTransfer ? { prepareTurnAttachments: vi.fn(async () => undefined) } : {}),
+            bridge: {
+              readFile: async () => {
+                throw new Error("unexpected workspace read");
+              },
+              writeFile: async () => {
+                throw new Error("unexpected workspace write");
+              },
+              stat: async () => {
+                throw new Error("unexpected workspace stat");
+              },
+            },
+          });
+          if (mode === "stopped-document-only") {
+            release();
+          }
+          vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation(async (argv) => {
+            const target = argv.at(-1)!;
+            const source = argv.at(-2)!;
+            await fs.writeFile(
+              target,
+              source.endsWith(".png") ? image : source.endsWith(".mp4") ? video : "cached input",
+            );
+            return SUCCESS;
+          });
+          try {
+            const result = await stageSandboxMedia(params);
+            const cached = result.staged.get(0)!;
+            if (canTransfer) {
+              expect(cached.startsWith(path.join(getMediaDir(), "remote-cache") + path.sep)).toBe(
+                true,
+              );
+              expect(await fs.readFile(cached, "utf8")).toBe("cached input");
+            } else {
+              const fact = params.ctx.media![0]!;
+              expect(fact.workspaceDir?.startsWith(state.path("sandbox"))).toBe(true);
+              expect(await fs.readFile(path.join(fact.workspaceDir!, cached), "utf8")).toBe(
+                "cached input",
+              );
+            }
+            expect(params.ctx.media?.[0]?.path).toBe(cached);
+            expect(params.sessionCtx.media).toEqual(params.ctx.media);
+            expect(existsSync(state.path("sandbox"))).toBe(!canTransfer);
+            const root = params.ctx.media![0]!.workspaceDir!;
+            const sandbox = canTransfer
+              ? undefined
+              : { root, bridge: createHostSandboxFsBridge(root) };
+            const options = {
+              workspaceDir: state.workspaceDir,
+              agentWorkspaceDir: state.workspaceDir,
+              sandbox,
+            };
+            const hydrated = await detectAndLoadPromptImages({
+              ...options,
+              prompt: "",
+              media: params.ctx.media,
+              model: { input: ["text", "image"] },
+            });
+            expect(hydrated.images).toEqual([
+              { type: "image", data: image.toString("base64"), mimeType: "image/png" },
+            ]);
+            const persisted = buildPersistedUserTurnMessage({
+              text: "inspect attachments",
+              media: params.ctx.media,
+            });
+            const replay = await materializeProviderContext({
+              ...options,
+              context: { systemPrompt: "system", tools: [], messages: [persisted] },
+            });
+            expect(replay.messages[0]?.content).toEqual(
+              expect.arrayContaining([
+                { type: "image", data: image.toString("base64"), mimeType: "image/png" },
+                { type: "video", data: video.toString("base64"), mimeType: "video/mp4" },
+              ]),
+            );
+          } finally {
+            release();
+          }
+        });
+      } finally {
+        pinConfigDir(previousEnv);
+      }
+    },
+  );
+
   it("stages bytes and both contexts through the strict bounded SCP command", async () => {
     await withOpenClawTestState({ label: "scp-stage" }, async (state) => {
       const params = remoteStageParams(state);
@@ -113,6 +335,127 @@ describe("stageSandboxMedia SCP", () => {
         "synthetic attachment bytes",
       );
       await expect(fs.stat(path.dirname(download))).rejects.toMatchObject({ code: "ENOENT" });
+    });
+  });
+
+  it("stages a remote attachment whose roots resolve from a trusted installed channel plugin", async () => {
+    await withOpenClawTestState({ label: "scp-installed-owner" }, async (state) => {
+      const params = await installedOwnerStageParams({ state });
+      await withEmptyBundledPlugins(state, async () => {
+        publishInstalledOwnerSnapshot(params.cfg, params.pluginDir);
+        try {
+          let download = "";
+          const runScp = vi
+            .spyOn(processExec, "runCommandWithTimeout")
+            .mockImplementation(async (argv) => {
+              download = argv.at(-1)!;
+              await fs.writeFile(download, "installed channel bytes");
+              return SUCCESS;
+            });
+
+          const result = await stageSandboxMedia(params);
+
+          expect(runScp).toHaveBeenCalledExactlyOnceWith(
+            [
+              "scp",
+              "-o",
+              "BatchMode=yes",
+              "-o",
+              "StrictHostKeyChecking=yes",
+              "--",
+              `user@gateway-host:${INSTALLED_REMOTE_PATH}`,
+              download,
+            ],
+            expect.objectContaining({
+              maxOutputBytes: { stdout: 1, stderr: SCP_STDERR_TAIL_CHARS * 4 },
+            }),
+          );
+          expect(result.staged.size).toBe(1);
+          const fact = params.ctx.media?.[0];
+          expect(fact).toMatchObject({ staged: true, contentType: "text/plain" });
+          expect(await fs.readFile(path.join(fact!.workspaceDir!, fact!.path!), "utf8")).toBe(
+            "installed channel bytes",
+          );
+        } finally {
+          releaseInstalledOwnerSnapshot();
+        }
+      });
+    });
+  });
+
+  it("skips a denied installed owner before its media contract executes", async () => {
+    await withOpenClawTestState({ label: "scp-installed-owner-denied" }, async (state) => {
+      const canary = path.join(
+        state.path("installed-plugins", INSTALLED_OWNER_PLUGIN_ID),
+        "artifact-executed-canary",
+      );
+      const params = await installedOwnerStageParams({
+        state,
+        plugins: { deny: [INSTALLED_OWNER_PLUGIN_ID] },
+        artifactBody: [
+          `require("node:fs").writeFileSync(${JSON.stringify(canary)}, "executed");`,
+          'module.exports.resolveRemoteInboundAttachmentRoots = () => ["/installed/attachments"];',
+          "",
+        ].join("\n"),
+      });
+      await withEmptyBundledPlugins(state, async () => {
+        publishInstalledOwnerSnapshot(params.cfg, params.pluginDir);
+        try {
+          const log = vi.spyOn(globals, "logVerbose").mockImplementation(() => {});
+          const runScp = vi
+            .spyOn(processExec, "runCommandWithTimeout")
+            .mockResolvedValue({ ...SUCCESS, code: 1, stderr: "unexpected transfer" });
+
+          const result = await stageSandboxMedia(params);
+
+          expect(result.staged.size).toBe(0);
+          expect(runScp).not.toHaveBeenCalled();
+          expect(existsSync(canary)).toBe(false);
+          expect(log).toHaveBeenCalledWith(
+            `Blocking remote media staging from disallowed attachment path: ${INSTALLED_REMOTE_PATH}`,
+          );
+          expect(params.ctx.media?.[0]).not.toMatchObject({ staged: true });
+        } finally {
+          releaseInstalledOwnerSnapshot();
+        }
+      });
+    });
+  });
+
+  it("stops staging after an earlier transfer once the installed owner is denied", async () => {
+    await withOpenClawTestState({ label: "scp-installed-owner-reload" }, async (state) => {
+      const enabled = await installedOwnerStageParams({ state });
+      await withEmptyBundledPlugins(state, async () => {
+        publishInstalledOwnerSnapshot(enabled.cfg, enabled.pluginDir);
+        try {
+          const runScp = vi
+            .spyOn(processExec, "runCommandWithTimeout")
+            .mockImplementation(async (argv) => {
+              await fs.writeFile(argv.at(-1)!, "first transfer");
+              return SUCCESS;
+            });
+
+          expect((await stageSandboxMedia(enabled)).staged.size).toBe(1);
+          expect(runScp).toHaveBeenCalledTimes(1);
+
+          releaseInstalledOwnerSnapshot();
+          const denied = await installedOwnerStageParams({
+            state,
+            plugins: { deny: [INSTALLED_OWNER_PLUGIN_ID] },
+          });
+          publishInstalledOwnerSnapshot(denied.cfg, denied.pluginDir);
+          const log = vi.spyOn(globals, "logVerbose").mockImplementation(() => {});
+
+          expect((await stageSandboxMedia(denied)).staged.size).toBe(0);
+          expect(runScp).toHaveBeenCalledTimes(1);
+          expect(log).toHaveBeenCalledWith(
+            `Blocking remote media staging from disallowed attachment path: ${INSTALLED_REMOTE_PATH}`,
+          );
+          expect(denied.ctx.media?.[0]).not.toMatchObject({ staged: true });
+        } finally {
+          releaseInstalledOwnerSnapshot();
+        }
+      });
     });
   });
 

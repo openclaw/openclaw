@@ -1,10 +1,11 @@
 import type { AgentMessage } from "@openclaw/agent-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect } from "vitest";
-import type { readSkillReviewOutcomes } from "./collection-review-state.js";
+import type { readSkillCuratorReviewStatus } from "./collection-review-state.js";
 import { readExperienceReviewMessageText } from "./experience-review-message-text.test-support.js";
 import type { observeExperienceReview } from "./experience-review-observation.test-support.js";
-import type { getSkillProposalRunProgress, listSkillProposals } from "./service.js";
+import type { getSkillProposalRunProgress } from "./proposal-run-progress.test-support.js";
+import type { listSkillProposals } from "./service.js";
 
 export function assertExperienceReviewDecision(params: {
   observation: Awaited<ReturnType<typeof observeExperienceReview>>;
@@ -14,7 +15,7 @@ export function assertExperienceReviewDecision(params: {
     Awaited<ReturnType<typeof listSkillProposals>>["proposals"][number],
     "id" | "status"
   >[];
-  outcome: ReturnType<typeof readSkillReviewOutcomes>["experienceReviews"][string] | undefined;
+  outcome: ReturnType<typeof readSkillCuratorReviewStatus>["experienceReviews"][string] | undefined;
   startedAt: number;
 }): "proposed" | "abstained" {
   const { observation, progress, proposals, outcome } = params;

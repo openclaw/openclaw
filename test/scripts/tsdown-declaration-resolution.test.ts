@@ -1,11 +1,15 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { resolveRepoToolBinPath } from "../../scripts/lib/local-check-runtime.mts";
 import {
   TSDOWN_NON_SDK_DTS_CONFIG_GROUPS,
   TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
 } from "../../scripts/lib/tsdown-config-groups.mts";
+import { prepareTsgoCommand } from "../../scripts/run-tsgo.mts";
+import { materializeNativeCompiler } from "./native-boundary-fixture.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 import {
   createFixture,
@@ -78,6 +82,38 @@ function nestedFixture(groups: readonly string[] = TSDOWN_PLUGIN_SDK_DTS_CONFIG_
 }
 
 describe("tsdown checkout declaration resolution", () => {
+  it.runIf(process.platform === "win32")(
+    "starts the checkout compiler when its Windows executable uses an extended-length path",
+    () => {
+      const root = path.join(
+        fs.realpathSync.native(createTempDir("openclaw-native-long-path-")),
+        "nested-checkout-".repeat(5),
+        "nested-install-".repeat(5),
+      );
+      fs.mkdirSync(root, { recursive: true });
+      const native = materializeNativeCompiler(root);
+      expect(native.length).toBeGreaterThanOrEqual(248);
+      const require = createRequire(path.join(root, "package.json"));
+      const getExePath: { default: () => string } = require(
+        path.join(root, "node_modules/typescript-native/lib/getExePath.js"),
+      );
+      expect(getExePath.default()).toBe(path.toNamespacedPath(native));
+      const command = prepareTsgoCommand(["--version"], process.env, root);
+      expect(command?.bin).toBe(getExePath.default());
+      const result = spawnSync(resolveRepoToolBinPath("tsgo", { cwd: root }), ["--version"], {
+        cwd: root,
+        encoding: "utf8",
+        timeout: 10_000,
+      });
+      const manifest: { version: string } = JSON.parse(
+        fs.readFileSync(require.resolve("typescript-native/package.json"), "utf8"),
+      );
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout.trim()).toBe(`Version ${manifest.version}`);
+    },
+  );
+
   for (const kind of [
     "directory alias",
     "Windows 8.3 alias",
@@ -126,9 +162,10 @@ describe("tsdown checkout declaration resolution", () => {
           fs.symlinkSync(target, alias, "junction");
         }
         if (kind.startsWith("directory alias targeting")) {
-          // Keep all three spellings distinct so native fixture roots cannot mask the bug.
-          expect(fs.realpathSync(alias)).not.toBe(alias);
-          expect(fs.realpathSync(alias)).not.toBe(root);
+          // Keep all three inputs distinct even when the runtime canonicalizes the
+          // case-only target before realpath returns it.
+          expect(alias).not.toBe(target);
+          expect(target).not.toBe(root);
         }
         const result = runFixtureModule(
           root,
@@ -146,7 +183,7 @@ const canonical = fs.realpathSync.native(cwd);
 const stage = createDeclarationStage(cwd);
 const outDir = path.join(cwd, path.relative(canonical, fs.realpathSync.native(stage)), "dist");
 requestDeclarationInputs(outDir, "alias", [path.join(cwd, "src/shared.ts")]);
-const bundles = await build({
+const { bundles } = await build({
   config: false, cwd, entry: path.join(cwd, "src/shared.ts"), outDir,
   dts: true, clean: false, logLevel: "silent",
   hooks: createDeclarationBoundaryHooks({ "build:done": createDeclarationInputCapture("alias") }),
@@ -223,7 +260,7 @@ for (const registration of [false, true]) {
     ? async hooks => { hooks.addHooks(existing); }
     : existing);
   const outDir = ".artifacts/hook-composition-" + registration;
-  const bundles = await build({ config: false, entry: "src/shared.ts", dts: { newContext: true }, outDir, clean: false, logLevel: "silent", hooks });
+  const { bundles } = await build({ config: false, entry: "src/shared.ts", dts: { newContext: true }, outDir, clean: false, logLevel: "silent", hooks });
   try {
     assert.deepEqual(calls, ["prepare", "done"]);
     assert.match(fs.readFileSync(outDir + "/shared.d.mts", "utf8"), /inferredOrigin: "local"/);
@@ -269,9 +306,9 @@ for (const key of Object.keys(original)) assert.equal(ts.sys[key], original[key]
 process.chdir(path.dirname(root));
 let finishedRuntime;
 const runtimeDone = new Promise(resolve => { finishedRuntime = resolve; });
-const bundles = await build({
+const { bundles } = await build({
   ...config, config: false, cwd: root, clean: false, logLevel: "silent",
-  dts: ${dts ? '{ enabled: true, entry: ["src/shared.ts"], cjsReexport: false, newContext: true }' : owner === "AI" ? "{ enabled: false }" : "false"}, format: ["esm", "cjs"], concurrency: 1,
+  dts: ${dts ? '{ enabled: true, entry: ["src/shared.ts"], newContext: true }' : owner === "AI" ? "{ enabled: false }" : "false"}, format: ["esm", "cjs"], concurrency: 1,
   entry: ${JSON.stringify(dts ? "src/shared.ts" : outside)},
   outDir: "override-output", outExtensions: undefined, fixedExtension: true,
   inputOptions: async (input, format, context) => {
@@ -307,7 +344,7 @@ try {
   }
   if (${dts && owner === "AI"}) {
     let starts = 0;
-    const objectOptions = await build({
+    const { bundles: objectOptions } = await build({
       ...config, config: false, cwd: root, clean: false, logLevel: "silent",
       dts: { cwd: path.join(root, "src"), entry: ["shared.ts"] }, format: "cjs", entry: "src/shared.ts", outDir: "object-options-output",
       inputOptions: { plugins: [{ name: "fixture-object-options", buildStart() { starts++; } }] },

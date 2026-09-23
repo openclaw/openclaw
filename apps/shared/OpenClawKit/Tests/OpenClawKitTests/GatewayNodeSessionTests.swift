@@ -36,13 +36,17 @@ private actor StringCapture {
     }
 }
 
-/// Delivers a pong asynchronously, well before the deadline, so a cancelled deadline
-/// task racing the gate would surface as a spurious timeout.
-private final class DelayedPongWebSocketTask: WebSocketTasking, @unchecked Sendable {
-    private let delay: Duration
+private final class PingWebSocketTask: WebSocketTasking, @unchecked Sendable {
+    enum Behavior {
+        case delayed(Duration)
+        case omitted
+        case callbacks([Error?])
+    }
 
-    init(delay: Duration) {
-        self.delay = delay
+    private let behavior: Behavior
+
+    init(_ behavior: Behavior) {
+        self.behavior = behavior
     }
 
     var state: URLSessionTask.State {
@@ -60,80 +64,18 @@ private final class DelayedPongWebSocketTask: WebSocketTasking, @unchecked Senda
     }
 
     func sendPing(pongReceiveHandler: @escaping @Sendable (Error?) -> Void) {
-        let delay = self.delay
-        Task {
-            try? await Task.sleep(for: delay)
-            pongReceiveHandler(nil)
-        }
-    }
-
-    func receive() async throws -> URLSessionWebSocketTask.Message {
-        throw URLError(.badServerResponse)
-    }
-
-    func receive(
-        completionHandler: @escaping @Sendable (Result<URLSessionWebSocketTask.Message, Error>) -> Void)
-    {
-        completionHandler(.failure(URLError(.badServerResponse)))
-    }
-}
-
-/// Mirrors URLSession dropping a pong handler outright when the task is cancelled or
-/// closed mid-flight: the ping is accepted and no callback ever arrives.
-private final class SilentPingWebSocketTask: WebSocketTasking, @unchecked Sendable {
-    var state: URLSessionTask.State {
-        .running
-    }
-
-    func resume() {}
-
-    func cancel(with closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
-        _ = (closeCode, reason)
-    }
-
-    func send(_ message: URLSessionWebSocketTask.Message) async throws {
-        _ = message
-    }
-
-    func sendPing(pongReceiveHandler: @escaping @Sendable (Error?) -> Void) {
-        _ = pongReceiveHandler
-    }
-
-    func receive() async throws -> URLSessionWebSocketTask.Message {
-        throw URLError(.badServerResponse)
-    }
-
-    func receive(
-        completionHandler: @escaping @Sendable (Result<URLSessionWebSocketTask.Message, Error>) -> Void)
-    {
-        completionHandler(.failure(URLError(.badServerResponse)))
-    }
-}
-
-private final class DoubleCallbackPingWebSocketTask: WebSocketTasking, @unchecked Sendable {
-    private let callbacks: [Error?]
-
-    init(callbacks: [Error?]) {
-        self.callbacks = callbacks
-    }
-
-    var state: URLSessionTask.State {
-        .running
-    }
-
-    func resume() {}
-
-    func cancel(with closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
-        _ = (closeCode, reason)
-    }
-
-    func send(_ message: URLSessionWebSocketTask.Message) async throws {
-        _ = message
-    }
-
-    func sendPing(pongReceiveHandler: @escaping @Sendable (Error?) -> Void) {
-        for callback in self.callbacks {
-            pongReceiveHandler(callback)
+        switch self.behavior {
+        case let .delayed(delay):
+            Task {
+                try? await Task.sleep(for: delay)
+                pongReceiveHandler(nil)
+            }
+        case .omitted:
+            _ = pongReceiveHandler
+        case let .callbacks(callbacks):
+            for callback in callbacks {
+                pongReceiveHandler(callback)
+            }
         }
     }
 
@@ -193,6 +135,7 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
     private let helloSessionDefaults: [String: Any]?
     private let helloDelayNanoseconds: UInt64
     private let challenge: (delayNanoseconds: UInt64, nonce: String)
+    private let challengeCapabilities: [String]
     private let connectError: [String: Any]?
     private let cancelGate: FirstCancelGate?
     private var _state: URLSessionTask.State = .suspended
@@ -212,6 +155,7 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
         helloSessionDefaults: [String: Any]? = nil,
         helloDelayNanoseconds: UInt64 = 0,
         challenge: (delayNanoseconds: UInt64, nonce: String) = (0, "nonce-1"),
+        challengeCapabilities: [String] = [],
         connectError: [String: Any]? = nil,
         cancelGate: FirstCancelGate? = nil)
     {
@@ -221,6 +165,7 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
         self.helloSessionDefaults = helloSessionDefaults
         self.helloDelayNanoseconds = helloDelayNanoseconds
         self.challenge = challenge
+        self.challengeCapabilities = challengeCapabilities
         self.connectError = connectError
         self.cancelGate = cancelGate
     }
@@ -311,7 +256,9 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
             if self.challenge.delayNanoseconds > 0 {
                 try await Task.sleep(nanoseconds: self.challenge.delayNanoseconds)
             }
-            return .data(Self.connectChallengeData(nonce: self.challenge.nonce))
+            return .data(Self.connectChallengeData(
+                nonce: self.challenge.nonce,
+                capabilities: self.challengeCapabilities))
         }
         if self.helloDelayNanoseconds > 0 {
             try await Task.sleep(nanoseconds: self.helloDelayNanoseconds)
@@ -422,11 +369,15 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
         handler?(result)
     }
 
-    private static func connectChallengeData(nonce: String) -> Data {
+    private static func connectChallengeData(nonce: String, capabilities: [String]) -> Data {
+        var payload: [String: Any] = ["nonce": nonce, "ts": 1_800_000_000_000]
+        if !capabilities.isEmpty {
+            payload["capabilities"] = capabilities
+        }
         let frame: [String: Any] = [
             "type": "event",
             "event": "connect.challenge",
-            "payload": ["nonce": nonce, "ts": 1_800_000_000_000],
+            "payload": payload,
         ]
         return (try? JSONSerialization.data(withJSONObject: frame)) ?? Data()
     }
@@ -534,6 +485,7 @@ private final class FakeGatewayWebSocketSession: WebSocketSessioning, GatewayTLS
     private let helloSessionDefaults: [String: Any]?
     private let helloDelayNanoseconds: UInt64
     private let challenge: (delayNanoseconds: UInt64, nonce: String)
+    private let challengeCapabilities: [String]
     private let connectError: [String: Any]?
     private let cancelGate: FirstCancelGate?
     let effectiveTLSFingerprintSHA256: String?
@@ -548,6 +500,7 @@ private final class FakeGatewayWebSocketSession: WebSocketSessioning, GatewayTLS
         helloSessionDefaults: [String: Any]? = nil,
         helloDelayNanoseconds: UInt64 = 0,
         challenge: (delayNanoseconds: UInt64, nonce: String) = (0, "nonce-1"),
+        challengeCapabilities: [String] = [],
         connectError: [String: Any]? = nil,
         cancelGate: FirstCancelGate? = nil,
         effectiveTLSFingerprintSHA256: String? = nil)
@@ -558,6 +511,7 @@ private final class FakeGatewayWebSocketSession: WebSocketSessioning, GatewayTLS
         self.helloSessionDefaults = helloSessionDefaults
         self.helloDelayNanoseconds = helloDelayNanoseconds
         self.challenge = challenge
+        self.challengeCapabilities = challengeCapabilities
         self.connectError = connectError
         self.cancelGate = cancelGate
         self.effectiveTLSFingerprintSHA256 = effectiveTLSFingerprintSHA256
@@ -590,6 +544,7 @@ private final class FakeGatewayWebSocketSession: WebSocketSessioning, GatewayTLS
                 helloSessionDefaults: self.helloSessionDefaults,
                 helloDelayNanoseconds: self.helloDelayNanoseconds,
                 challenge: self.challenge,
+                challengeCapabilities: self.challengeCapabilities,
                 connectError: self.connectError,
                 cancelGate: self.cancelGate)
             self.tasks.append(task)
@@ -928,12 +883,14 @@ struct GatewayNodeSessionTests {
 
         try await gateway.connectForTest(testURL("wss://gateway.example.invalid"), options: options, session: session)
 
-        async let first = gateway.refreshCanvasHostUrl(replacing: nil)
-        async let second = gateway.refreshCanvasHostUrl(timeoutSeconds: 1)
-        async let third = gateway.refreshPluginSurfaceUrl(surface: "canvas", timeoutSeconds: 2)
+        async let first = gateway.refreshCanvasHostUrl(timeoutSeconds: 1)
         try await waitUntil("single surface refresh sent") {
             session.latestTask()?.sentRequestCount(method: "node.pluginSurface.refresh") == 1
         }
+        // Followers may start after the response; retain their original observation
+        // so they reuse that rotation instead of requesting another one.
+        async let second = gateway.refreshCanvasHostUrl(replacing: nil)
+        async let third = gateway.refreshPluginSurfaceUrl(surface: "canvas", replacing: nil)
         let task = try #require(session.latestTask())
         let request = try #require(task.sentRequests(method: "node.pluginSurface.refresh").first)
         let requestID = try #require(request["id"] as? String)
@@ -972,7 +929,6 @@ struct GatewayNodeSessionTests {
         let shortValue = await shortWait
         #expect(shortValue == nil)
 
-        async let joinedWait = gateway.refreshPluginSurfaceUrl(surface: "canvas", timeoutSeconds: 8)
         let task = try #require(session.latestTask())
         #expect(task.sentRequestCount(method: "node.pluginSurface.refresh") == 1)
         let request = try #require(task.sentRequests(method: "node.pluginSurface.refresh").first)
@@ -985,9 +941,7 @@ struct GatewayNodeSessionTests {
                 ],
             ])
 
-        let values = await (longWait, joinedWait)
-        #expect(values.0 == values.1)
-        #expect(values.0?.hasSuffix("/new-token") == true)
+        #expect(await longWait?.hasSuffix("/new-token") == true)
         #expect(task.sentRequestCount(method: "node.pluginSurface.refresh") == 1)
         await gateway.disconnect()
     }
@@ -1242,7 +1196,7 @@ struct GatewayNodeSessionTests {
     func `websocket ping times out when no pong callback ever arrives`() async throws {
         // Without the deadline this await never returns: the checked continuation is
         // orphaned, Swift logs CONTINUATION MISUSE, and the keepalive loop wedges forever.
-        let task = SilentPingWebSocketTask()
+        let task = PingWebSocketTask(.omitted)
 
         do {
             try await WebSocketTaskBox(task: task).sendPing(timeout: .milliseconds(50))
@@ -1257,7 +1211,7 @@ struct GatewayNodeSessionTests {
         // Cancelling the deadline makes Task.sleep throw; if that cancellation were
         // swallowed the deadline task would fall through and race the pong callback,
         // reporting a healthy ping as timed out.
-        let task = DelayedPongWebSocketTask(delay: .milliseconds(20))
+        let task = PingWebSocketTask(.delayed(.milliseconds(20)))
 
         for _ in 0..<20 {
             try await WebSocketTaskBox(task: task).sendPing(timeout: .seconds(5))
@@ -1266,14 +1220,14 @@ struct GatewayNodeSessionTests {
 
     @Test
     func `websocket ping ignores duplicate success callbacks`() async throws {
-        let task = DoubleCallbackPingWebSocketTask(callbacks: [nil, nil])
+        let task = PingWebSocketTask(.callbacks([nil, nil]))
         try await WebSocketTaskBox(task: task).sendPing()
     }
 
     @Test
     func `websocket ping ignores duplicate callbacks after first error`() async throws {
         let firstError = URLError(.networkConnectionLost)
-        let task = DoubleCallbackPingWebSocketTask(callbacks: [firstError, nil])
+        let task = PingWebSocketTask(.callbacks([firstError, nil]))
 
         do {
             try await WebSocketTaskBox(task: task).sendPing()
@@ -2421,6 +2375,7 @@ struct GatewayNodeSessionTests {
         let replacementTask = try #require(session.latestTask())
         #expect(replacementTask.sentRequestCount(method: "node.event") == 0)
         #expect(replacementTask.sentRequestCount(method: "approval.get") == 0)
+        await gateway.disconnect()
     }
 
     @Test
@@ -2653,8 +2608,10 @@ struct GatewayNodeSessionTests {
             command: "computer.act",
             paramsJSON: paramsJSON,
             idempotencyKey: idempotencyKey)
-        for _ in 0..<20 {
-            await Task.yield()
+        try await waitUntil("duplicate joins the in-flight receipt") {
+            await gateway.computerReceiptJoinCountForTesting(
+                idempotencyKey: idempotencyKey,
+                receiptScope: "url:ws://example.invalid") == 1
         }
         #expect(await probe.count() == 1)
 
@@ -3060,25 +3017,23 @@ struct GatewayNodeSessionTests {
         await gateway.disconnect()
     }
 
-    @Test(arguments: [false, true])
-    func `gateway handshake deadlines are transport timeouts`(waitingForChallenge: Bool) async throws {
-        let session = FakeGatewayWebSocketSession(
-            helloDelayNanoseconds: waitingForChallenge ? 0 : 60_000_000_000,
-            challenge: (waitingForChallenge ? 60_000_000_000 : 0, "nonce-1"))
+    @Test(arguments: [[], ["model-catalog-snapshot", "future-capability"]])
+    func `unknown challenge capabilities preserve native connect without catalog opt in`(
+        capabilities: [String]) async throws
+    {
+        let session = FakeGatewayWebSocketSession(challengeCapabilities: capabilities)
         let gateway = GatewayNodeSession()
-        do {
-            try await gateway.connectForTest(
-                testURL("wss://gateway.example.invalid"),
-                options: operatorConnectOptions(),
-                session: session)
-            Issue.record("A stalled handshake unexpectedly connected")
-        } catch {
-            let failure = error as NSError
-            #expect(failure.domain == NSURLErrorDomain)
-            #expect(failure.code == URLError.timedOut.rawValue)
-        }
+        try await gateway.connectForTest(
+            testURL("wss://gateway.example.invalid"),
+            options: operatorConnectOptions(),
+            session: session)
+        #expect(await gateway.currentRoute() != nil)
+        let task = try #require(session.latestTask())
+        let request = try #require(task.sentRequests(method: "connect").first)
+        let params = try #require(request["params"] as? [String: Any])
+        #expect(params["modelCatalog"] == nil)
+        #expect(params["caps"] as? [String] == [])
         await gateway.disconnect()
-        #expect(session.latestTask()?.state != .running)
     }
 
     @Test(arguments: [false, true])
@@ -3801,5 +3756,28 @@ struct GatewayNodeSessionTests {
 
         listenTask.cancel()
         await gateway.disconnect()
+    }
+}
+
+struct GatewayNodeSessionDeadlineTests {
+    @Test(arguments: [false, true])
+    func `gateway handshake deadlines are transport timeouts`(waitingForChallenge: Bool) async throws {
+        let session = FakeGatewayWebSocketSession(
+            helloDelayNanoseconds: waitingForChallenge ? 0 : 60_000_000_000,
+            challenge: (waitingForChallenge ? 60_000_000_000 : 0, "nonce-1"))
+        let gateway = GatewayNodeSession()
+        do {
+            try await gateway.connectForTest(
+                testURL("wss://gateway.example.invalid"),
+                options: operatorConnectOptions(),
+                session: session)
+            Issue.record("A stalled handshake unexpectedly connected")
+        } catch {
+            let failure = error as NSError
+            #expect(failure.domain == NSURLErrorDomain)
+            #expect(failure.code == URLError.timedOut.rawValue)
+        }
+        await gateway.disconnect()
+        #expect(session.latestTask()?.state != .running)
     }
 }

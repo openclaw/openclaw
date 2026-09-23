@@ -71,7 +71,7 @@ actor MacGatewayProfileStore {
             self.liveness.value
         }
 
-        fileprivate func revoke() {
+        func revoke() {
             self.liveness.withValue { $0 = false }
         }
 
@@ -143,6 +143,8 @@ actor MacGatewayProfileStore {
     }
 
     func beginBrowserSignIn(url: URL) throws -> BrowserSignInAttempt {
+        // Cancelled callers must not migrate state or revoke another sign-in.
+        try Task.checkCancellation()
         let url = try Self.canonicalURL(url)
         // Finish legacy import before capturing ownership; a late callback may
         // replace only this attempt, never a subsequently edited or forgotten profile.
@@ -335,10 +337,24 @@ actor MacGatewayProfileStore {
         return Self.sortedProfiles(stored.map(\.profile)).compactMap { profile in
             guard let item = stored.first(where: { $0.profile.id == profile.id }) else { return nil }
             let token = item.credentials.token?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let password = item.credentials.password?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let browserSession = item.credentials.browserSession
+            let authKind: MacGatewayCatalogProfile.AuthKind? = if browserSession != nil {
+                .browser
+            } else if token?.isEmpty == false {
+                .token
+            } else if password?.isEmpty == false {
+                .password
+            } else {
+                nil
+            }
             return MacGatewayCatalogProfile(
                 profile: profile,
                 canPromote: token?.isEmpty == false,
-                usesBrowserIdentity: item.credentials.browserSession != nil)
+                usesBrowserIdentity: browserSession != nil,
+                browserSessionExpiresAt: browserSession?.expiresAt,
+                authKind: authKind,
+                browserSessionSubject: browserSession?.subject)
         }
     }
 
@@ -361,6 +377,27 @@ actor MacGatewayProfileStore {
                 Self.removedProfileKey: removed,
                 Self.changeIDKey: changeID,
             ])
+    }
+
+    struct BrowserSignInRequired: LocalizedError, Sendable {
+        let profile: MacGatewayProfile
+        let expiresAt: Date
+
+        var errorDescription: String? {
+            GatewayBrowserSessionError.expired.errorDescription
+        }
+    }
+
+    func dashboardEndpoint(profileID: String) throws -> GatewayConnection.EndpointSnapshot {
+        do {
+            return try self.endpoint(profileID: profileID)
+        } catch GatewayBrowserSessionError.expired {
+            // endpoint already loaded this registry. Keep its credential-free failure
+            // context within the same actor turn and injectable endpoint operation.
+            guard let stored = try self.loadRegistry().profiles.first(where: { $0.profile.id == profileID }),
+                  let session = stored.credentials.browserSession else { throw GatewayBrowserSessionError.expired }
+            throw BrowserSignInRequired(profile: stored.profile, expiresAt: session.expiresAt)
+        }
     }
 
     func endpoint(profileID: String) throws -> GatewayConnection.EndpointSnapshot {
@@ -562,6 +599,63 @@ actor MacGatewayConnectionFleet {
         let chatStoreID: String
     }
 
+    func existingConnection(profileID: String) -> GatewayConnection? {
+        self.connections["profile:\(profileID)"]?.connection
+    }
+
+    func existingLocalConnection() -> GatewayConnection? {
+        self.connections["local"]?.connection
+    }
+
+    func localConnection() -> GatewayConnection {
+        self.localBinding().connection
+    }
+
+    func localBinding() -> Binding {
+        if let owner = self.connections["local"] {
+            return Binding(connection: owner.connection, chatStoreID: owner.chatStoreID)
+        }
+        let chatStoreID = MacChatTranscriptCache.gatewayID(
+            mode: .local,
+            localStateDir: OpenClawConfigFile.stateDirURL(),
+            remoteTransport: .ssh,
+            directURL: nil,
+            sshTarget: "",
+            sshRemotePort: 0)!
+        let active = LockIsolated(true)
+        let connection = GatewayConnection(
+            endpointProvider: {
+                let generation = await MainActor.run { () -> UInt64? in
+                    let state = AppStateStore.shared
+                    guard active.value, state.connectionMode == .remote,
+                          state.hostsLocalGatewayWithRemotePrimary,
+                          state.gatewayConfigIsCurrentForRouting
+                    else { return nil }
+                    return state.gatewayRoutingGeneration
+                }
+                guard let generation else { throw URLError(.notConnectedToInternet) }
+                let root = OpenClawConfigFile.loadDict()
+                guard ConnectionModeResolver.resolve(root: root).mode == .remote else { throw CancellationError() }
+                let endpoint = try GatewayEndpointStore.localEndpoint(hostingBesideRemotePrimary: true, root: root)
+                let isCurrent = await MainActor.run {
+                    let state = AppStateStore.shared
+                    return active.value && state.connectionMode == .remote &&
+                        state.hostsLocalGatewayWithRemotePrimary && state.gatewayConfigIsCurrentForRouting &&
+                        state.gatewayRoutingGeneration == generation
+                }
+                guard isCurrent else { throw CancellationError() }
+                return endpoint
+            },
+            supportsSharedEndpointRecovery: false)
+        self.connections["local"] = Owner(chatStoreID: chatStoreID, active: active, connection: connection)
+        self.ownerRevision &+= 1
+        return Binding(connection: connection, chatStoreID: chatStoreID)
+    }
+
+    func disconnectLocal(ifCurrent: @Sendable () -> Bool = { true }) async {
+        await self.connections["local"]?.connection.shutdown(ifCurrent: ifCurrent)
+    }
+
     func connection(profileID: String) async -> GatewayConnection {
         do {
             return try await self.binding(profileID: profileID).connection
@@ -577,7 +671,7 @@ actor MacGatewayConnectionFleet {
             // A delayed lookup cannot retire an owner admitted after it began,
             // including remove/re-add cycles with the same principal.
             guard revision == self.ownerRevision else { continue }
-            if let owner = self.connections[profileID] {
+            if let owner = self.connections["profile:\(profileID)"] {
                 if owner.chatStoreID == chatStoreID {
                     return Binding(connection: owner.connection, chatStoreID: chatStoreID)
                 }
@@ -594,7 +688,10 @@ actor MacGatewayConnectionFleet {
                     return endpoint
                 },
                 supportsSharedEndpointRecovery: false)
-            self.connections[profileID] = Owner(chatStoreID: chatStoreID, active: active, connection: connection)
+            self.connections["profile:\(profileID)"] = Owner(
+                chatStoreID: chatStoreID,
+                active: active,
+                connection: connection)
             self.ownerRevision &+= 1
             return Binding(connection: connection, chatStoreID: chatStoreID)
         }
@@ -603,7 +700,7 @@ actor MacGatewayConnectionFleet {
     func remove(profileID: String, ifCurrent: @Sendable () -> Bool = { true }) async -> GatewayConnection? {
         guard ifCurrent() else { return nil }
         self.ownerRevision &+= 1
-        guard let owner = self.connections.removeValue(forKey: profileID) else { return nil }
+        guard let owner = self.connections.removeValue(forKey: "profile:\(profileID)") else { return nil }
         // Revocation is permanent: signing back into the same account must not
         // revive a retained transport from a closed window or deleted profile.
         owner.active.withValue { $0 = false }
@@ -613,7 +710,7 @@ actor MacGatewayConnectionFleet {
 
     func disconnect(profileID: String, ifCurrent: @Sendable () -> Bool = { true }) async {
         // Renewals retain observers; changing principal retires the owner instead.
-        await self.connections[profileID]?.connection.shutdown(ifCurrent: ifCurrent)
+        await self.connections["profile:\(profileID)"]?.connection.shutdown(ifCurrent: ifCurrent)
     }
 
     func shutdown() async -> [GatewayConnection] {

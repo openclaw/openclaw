@@ -2,11 +2,13 @@ import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import { ref } from "lit/directives/ref.js";
 import { t } from "../i18n/index.ts";
+import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
 import {
   SIDEBAR_SESSION_SORT_OPTIONS,
   SIDEBAR_SESSION_STATUS_OPTIONS,
+  type SidebarEmptyGroupsMode,
   type SidebarSessionGroupMenuState,
   type SidebarSessionSortMode,
   type SidebarSessionStatusFilter,
@@ -140,7 +142,7 @@ function renderSidebarOwnerFilter(params: {
               accessibleLabel,
             })
           : html`<wa-dropdown-item
-              class="sidebar-session-sort-menu__item sidebar-session-owner-submenu"
+              class="sidebar-session-sort-menu__item sidebar-session-owner-submenu sidebar-session-choice-submenu"
               aria-label=${accessibleLabel}
             >
               <span class="session-menu__text">${t("sessionsView.specificOwner")}</span>
@@ -157,6 +159,47 @@ function renderSidebarOwnerFilter(params: {
   `;
 }
 
+const EMPTY_GROUPS_OPTIONS = [
+  { mode: "filtering", labelKey: "sessionsView.emptyGroupsWhenFiltering" },
+  { mode: "always", labelKey: "sessionsView.emptyGroupsAlways" },
+  { mode: "never", labelKey: "sessionsView.emptyGroupsNever" },
+] as const;
+
+function renderSidebarEmptyGroupsOptions(mode: SidebarEmptyGroupsMode, submenu: boolean) {
+  return EMPTY_GROUPS_OPTIONS.map((option) =>
+    renderSidebarMenuRadioItem({
+      value: `empty-groups:${option.mode}`,
+      checked: mode === option.mode,
+      label: t(option.labelKey),
+      submenu,
+    }),
+  );
+}
+
+function renderSidebarEmptyGroupsMenu(mode: SidebarEmptyGroupsMode, compact: boolean) {
+  const selected = EMPTY_GROUPS_OPTIONS.find((option) => option.mode === mode)!;
+  const label = t("sessionsView.hideEmptyGroups");
+  const modeLabel = t(selected.labelKey);
+  const accessibleLabel = t("sessionsView.hideEmptyGroupsSelected", { mode: modeLabel });
+  const details = html`<span class="sidebar-session-empty-groups-value">${modeLabel}</span>`;
+  return compact
+    ? renderCompactSessionMenuNavigationItem({
+        value: "compact:open-empty-groups",
+        label,
+        icon: icons.listFilter,
+        details,
+        accessibleLabel,
+      })
+    : html`<wa-dropdown-item
+        class="sidebar-session-sort-menu__item sidebar-session-empty-groups-submenu sidebar-session-choice-submenu"
+        aria-label=${accessibleLabel}
+      >
+        <span class="session-menu__text">${label}</span>
+        <span slot="details">${details}</span>
+        ${renderSidebarEmptyGroupsOptions(mode, true)}
+      </wa-dropdown-item>`;
+}
+
 function renderCompactSidebarOwnerFilter(params: {
   owners: readonly SessionOwnerOption[];
   ownerFilterId: string | null;
@@ -170,6 +213,9 @@ function renderCompactSidebarOwnerFilter(params: {
 function sidebarFilterMenuViewForValue(value: string | undefined): SidebarFilterMenuView | null {
   if (value === "compact:open-specific-owner") {
     return "specific-owner";
+  }
+  if (value === "compact:open-empty-groups") {
+    return "empty-groups";
   }
   return value === "compact:back" ? "root" : null;
 }
@@ -339,14 +385,16 @@ export function renderSidebarCatalogViewMenu(params: {
 export function renderSidebarSessionSortMenu(params: {
   position: { x: number; y: number };
   trigger: HTMLElement | null;
+  sessionSourcesHref: string;
   grouping: SidebarSessionsGrouping;
+  rosterMode: boolean;
   sortMode: SidebarSessionSortMode;
   peopleSortAvailable: boolean;
   statusFilter: SidebarSessionStatusFilter;
   showCron: boolean;
   showPreview: boolean;
   showSystem: boolean;
-  hideEmptyGroups: boolean;
+  emptyGroupsMode: SidebarEmptyGroupsMode;
   owners: readonly SessionOwnerOption[];
   ownerFilterId: string | null;
   involvingMe: boolean;
@@ -361,7 +409,8 @@ export function renderSidebarSessionSortMenu(params: {
   onShowCronChange: (show: boolean) => void;
   onShowPreviewChange: (show: boolean) => void;
   onShowSystemChange: (show: boolean) => void;
-  onHideEmptyGroupsChange: (hide: boolean) => void;
+  onEmptyGroupsModeChange: (mode: SidebarEmptyGroupsMode) => void;
+  onOpenSessionSources: () => void;
   onClose: (restoreFocus: boolean) => void;
 }) {
   const position = params.position;
@@ -375,7 +424,7 @@ export function renderSidebarSessionSortMenu(params: {
     `${position.x}:${position.y}`,
     html`
       <wa-dropdown
-        class=${`sidebar-session-sort-menu${params.compact ? " session-menu--compact" : ""}`}
+        class=${`sidebar-session-sort-menu${params.rosterMode || params.compact ? "" : " sidebar-session-sort-menu--preferences"}${params.compact ? " session-menu--compact" : ""}`}
         .open=${true}
         placement="bottom-start"
         .distance=${0}
@@ -386,6 +435,8 @@ export function renderSidebarSessionSortMenu(params: {
           const view = sidebarFilterMenuViewForValue(value);
           if (view) {
             params.onViewChange(view);
+          } else if (value === "session-sources") {
+            params.onOpenSessionSources();
           } else if (value?.startsWith("grouping:")) {
             params.onGroupingChange(value.slice("grouping:".length) as SidebarSessionsGrouping);
           } else if (value?.startsWith("sort:")) {
@@ -404,8 +455,13 @@ export function renderSidebarSessionSortMenu(params: {
             params.onShowCronChange(!params.showCron);
           } else if (value === "show-system") {
             params.onShowSystemChange(!params.showSystem);
-          } else if (value === "hide-empty-groups") {
-            params.onHideEmptyGroupsChange(!params.hideEmptyGroups);
+          } else {
+            const option = EMPTY_GROUPS_OPTIONS.find(
+              (candidate) => value === `empty-groups:${candidate.mode}`,
+            );
+            if (option) {
+              params.onEmptyGroupsModeChange(option.mode);
+            }
           }
         }}
         @keydown=${(event: KeyboardEvent) =>
@@ -414,19 +470,48 @@ export function renderSidebarSessionSortMenu(params: {
       >
         ${renderSidebarMenuTrigger(position, t("chat.sidebar.sortSessions"))}
         ${
-          params.compact && params.view === "specific-owner"
-            ? renderCompactSidebarOwnerFilter(params)
-            : html`<div class="sidebar-session-sort-menu__title">${t("sessionsView.groupBy")}</div>
-                ${groupingOptions
-                  .filter((option) => option.grouping !== "person" || params.peopleSortAvailable)
-                  .map((option) =>
-                    renderSidebarMenuRadioItem({
-                      value: `grouping:${option.grouping}`,
-                      checked: params.grouping === option.grouping,
-                      label: option.label,
-                    }),
-                  )}
+          params.compact && params.view !== "root"
+            ? params.view === "specific-owner"
+              ? renderCompactSidebarOwnerFilter(params)
+              : renderCompactSessionMenuFrame(
+                  renderSidebarEmptyGroupsOptions(params.emptyGroupsMode, false),
+                )
+            : html`<wa-dropdown-item
+                  class="sidebar-session-sort-menu__item"
+                  value="session-sources"
+                  @click=${(event: MouseEvent) => {
+                    if (shouldHandleNavigationClick(event)) {
+                      event.preventDefault();
+                    } else {
+                      event.stopPropagation();
+                    }
+                  }}
+                >
+                  <a href=${params.sessionSourcesHref} tabindex="-1">
+                    <span class="session-menu__icon" aria-hidden="true">${icons.settings}</span>
+                    <span class="session-menu__text">${t("chat.sidebar.sessionSources")}</span>
+                  </a>
+                </wa-dropdown-item>
                 <div class="session-menu__separator" role="separator"></div>
+                ${
+                  params.rosterMode
+                    ? nothing
+                    : html`<div class="sidebar-session-sort-menu__title">
+                          ${t("sessionsView.groupBy")}
+                        </div>
+                        ${groupingOptions
+                          .filter(
+                            (option) => option.grouping !== "person" || params.peopleSortAvailable,
+                          )
+                          .map((option) =>
+                            renderSidebarMenuRadioItem({
+                              value: `grouping:${option.grouping}`,
+                              checked: params.grouping === option.grouping,
+                              label: option.label,
+                            }),
+                          )}
+                        <div class="session-menu__separator" role="separator"></div> `
+                }
                 <div class="sidebar-session-sort-menu__title">${t("chat.sidebar.sortBy")}</div>
                 ${SIDEBAR_SESSION_SORT_OPTIONS.filter(
                   (option) => option.mode !== "people" || params.peopleSortAvailable,
@@ -486,17 +571,11 @@ export function renderSidebarSessionSortMenu(params: {
                     >${params.showSystem ? icons.check : nothing}</span
                   >
                 </wa-dropdown-item>
-                <wa-dropdown-item
-                  class="sidebar-session-sort-menu__item"
-                  type="checkbox"
-                  value="hide-empty-groups"
-                  .checked=${params.hideEmptyGroups}
-                >
-                  <span class="session-menu__text">${t("sessionsView.hideEmptyGroups")}</span>
-                  <span slot="details" class="session-menu__check" aria-hidden="true"
-                    >${params.hideEmptyGroups ? icons.check : nothing}</span
-                  >
-                </wa-dropdown-item>`
+                ${
+                  params.rosterMode
+                    ? nothing
+                    : renderSidebarEmptyGroupsMenu(params.emptyGroupsMode, params.compact)
+                }`
         }
       </wa-dropdown>
     `,

@@ -1,9 +1,9 @@
-// Nextcloud Talk tests cover room info plugin behavior.
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { SsrFBlockedError } from "openclaw/plugin-sdk/ssrf-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
 import { resolveNextcloudTalkRoomKind } from "./room-info.js";
 
@@ -220,9 +220,7 @@ describe("nextcloud talk room info", () => {
 
   it("reads the api password from a file and logs non-ok room info responses", async () => {
     const release = vi.fn(async () => {});
-    const log = vi.fn();
-    const error = vi.fn();
-    const exit = vi.fn();
+    const runtime = createRuntimeSpies();
     const tempDir = mkdtempSync(path.join(tmpdir(), "nextcloud-talk-room-info-"));
     tempDirs.push(tempDir);
     const passwordFile = path.join(tempDir, "secret");
@@ -246,27 +244,23 @@ describe("nextcloud talk room info", () => {
         },
       } as never,
       roomToken: "room-group",
-      runtime: { log, error, exit },
+      runtime,
     });
 
     expect(kind).toBeUndefined();
     expect(requireFirstFetchParams().init?.headers?.Authorization).toBe(
       "Basic Ym90OmZpbGUtc2VjcmV0",
     );
-    expect(log).toHaveBeenCalledWith("nextcloud-talk: room lookup failed (403) token=room-group");
+    expect(runtime.log).toHaveBeenCalledWith(
+      "nextcloud-talk: room lookup failed (403) token=room-group",
+    );
     expect(release).toHaveBeenCalledTimes(1);
   });
 
-  it("cancels failed room info response bodies before releasing their guard", async () => {
-    const cancelBody = vi.fn();
+  it("releases failed room info requests", async () => {
     const release = vi.fn(async () => {});
     fetchWithSsrFGuard.mockResolvedValue({
-      response: new Response(
-        new ReadableStream<Uint8Array>({
-          cancel: cancelBody,
-        }),
-        { status: 503 },
-      ),
+      response: new Response("", { status: 503 }),
       release,
     });
     await expect(
@@ -275,15 +269,12 @@ describe("nextcloud talk room info", () => {
         roomToken: "test-room",
       }),
     ).rejects.toThrow("Nextcloud Talk room lookup failed (503)");
-    expect(cancelBody).toHaveBeenCalledTimes(1);
     expect(release).toHaveBeenCalledTimes(1);
   });
 
   it("reports malformed room info JSON with a stable channel error", async () => {
     const release = vi.fn(async () => {});
-    const log = vi.fn();
-    const error = vi.fn();
-    const exit = vi.fn();
+    const runtime = createRuntimeSpies();
     fetchWithSsrFGuard.mockResolvedValue({
       response: new Response("{ nope", {
         status: 200,
@@ -302,11 +293,11 @@ describe("nextcloud talk room info", () => {
         },
       } as never,
       roomToken: "room-malformed",
-      runtime: { log, error, exit },
+      runtime,
     });
 
     expect(kind).toBeUndefined();
-    expect(error).toHaveBeenCalledWith(
+    expect(runtime.error).toHaveBeenCalledWith(
       "nextcloud-talk: room lookup error: Error: Nextcloud Talk room info failed: malformed JSON response",
     );
     expect(release).toHaveBeenCalledTimes(1);

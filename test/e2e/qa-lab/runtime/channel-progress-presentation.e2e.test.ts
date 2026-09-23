@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { createHmac } from "node:crypto";
 import fs from "node:fs/promises";
 import { createServer, type RequestListener, type ServerResponse } from "node:http";
@@ -26,12 +26,15 @@ import {
   disconnectGatewayClient,
 } from "../../../../src/gateway/test-helpers.e2e.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import { stopChildProcess } from "../../../helpers/stop-child-process.js";
 
 const MODEL = "mock-openai/progress-fixture";
 const FINAL_MARKER = "TOOL-PROGRESS-FINAL";
 const HEADLINE = "Checking the requested work";
-// The exec tool renders as a compact tool row on every progress surface.
+// Draft progress uses compact tool rows; native Slack uses task_update chunks.
 const toolRow = /🛠️ (?:Exec|Bash)\b/u;
+const nativeToolTitle = /^(?:Exec|Bash)\b/u;
+const failedToolRow = /🛠️ (?:Exec|Bash): failed\b/u;
 type WireWrite = {
   at: number;
   method: string;
@@ -42,6 +45,34 @@ type WireWrite = {
   identityOmitted?: true;
 };
 type CrablineAdapter = Awaited<ReturnType<typeof startOpenClawCrablineAdapter>>;
+
+function createGroupOnlyGatewayConfig(adapter: CrablineAdapter): OpenClawConfig {
+  const config = adapter.createGatewayConfig() as OpenClawConfig;
+  return {
+    ...config,
+    channels: {
+      ...config.channels,
+      ...(config.channels?.discord
+        ? {
+            discord: {
+              ...config.channels.discord,
+              dm: { ...config.channels.discord.dm, enabled: false },
+              dmPolicy: "disabled" as const,
+            },
+          }
+        : {}),
+      ...(config.channels?.slack
+        ? {
+            slack: {
+              ...config.channels.slack,
+              allowFrom: [],
+              dmPolicy: "disabled" as const,
+            },
+          }
+        : {}),
+    },
+  };
+}
 
 function parseBody(text: string): Record<string, unknown> {
   try {
@@ -414,13 +445,14 @@ function progressConfig(
   channel: "discord" | "slack",
   native: boolean,
   toolProgress: boolean,
+  compact = false,
 ): OpenClawConfig {
   const streaming = {
     mode: "progress" as const,
     progress: {
       label: HEADLINE,
       toolProgress,
-      ...(channel === "slack" ? { style: "card" as const } : {}),
+      ...(channel === "slack" ? { style: compact ? ("compact" as const) : ("card" as const) } : {}),
     },
   };
   return {
@@ -497,6 +529,177 @@ describe("channel progress presentation through an isolated Gateway", () => {
     }
   });
 
+  it("retires unphased Slack previews across tool-only assistant messages", async () => {
+    const directory = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "slack-preview-"));
+    cleanups.push(() => fs.rm(directory, { recursive: true, force: true }));
+    const writes: WireWrite[] = [];
+    const adapter = await startOpenClawCrablineAdapter({
+      channel: "slack",
+      recorderPath: path.join(directory, "provider.jsonl"),
+    });
+    cleanups.push(() => adapter.close());
+    const api = await startPresentationApi(adapter, writes, directory);
+    cleanups.push(() => api.stop());
+    const requestLog = path.join(directory, "model-requests.jsonl");
+    const provider = spawn(
+      process.execPath,
+      [".agents/skills/telegram-e2e-userbot/scripts/triage-mock-openai.mjs"],
+      {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          MOCK_PORT: "0",
+          MOCK_REQUEST_LOG: requestLog,
+          E2E_TRIAGE_SCENARIO: "preview-tool-boundaries",
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+    cleanups.push(() => stopChildProcess(provider, 5_000));
+    let providerOutput = "";
+    let providerError: Error | undefined;
+    provider.on("error", (error) => {
+      providerError = error;
+    });
+    provider.stdout.on("data", (chunk: Buffer) => {
+      providerOutput += chunk.toString();
+    });
+    provider.stderr.on("data", (chunk: Buffer) => {
+      providerOutput += chunk.toString();
+    });
+    await waitForFact(() => {
+      if (providerError) {
+        throw providerError;
+      }
+      if (provider.exitCode !== null) {
+        throw new Error(`preview provider exited: ${providerOutput}`);
+      }
+      return /mock-openai listening on \d+/.test(providerOutput);
+    }, "preview provider listener");
+    const providerPort = /mock-openai listening on (\d+)/.exec(providerOutput)![1];
+    const owner = createQaGatewayChild();
+    cleanups.push(() => stopQaGatewayFixture(owner));
+    const gateway = await owner.start({
+      repoRoot: process.cwd(),
+      command: {
+        executablePath: process.execPath,
+        argsPrefix: [path.join(process.cwd(), "openclaw.mjs")],
+        cwd: process.cwd(),
+        usePackagedPlugins: true,
+      },
+      providerBaseUrl: `http://127.0.0.1:${providerPort}/v1`,
+      providerMode: "mock-openai",
+      primaryModel: MODEL,
+      alternateModel: MODEL,
+      controlUiEnabled: false,
+      transportBaseUrl: api.baseUrl,
+      transport: {
+        requiredPluginIds: adapter.requiredPluginIds,
+        createGatewayConfig: () => adapter.createGatewayConfig() as OpenClawConfig,
+      },
+      runtimeEnvPatch: {
+        ...adapter.createProviderReadinessEnv({}),
+        SLACK_API_URL: `${api.baseUrl}/api/`,
+      },
+      mutateConfig: (config) => {
+        const configured = progressConfig(config, "slack", false, true);
+        configured.channels!.slack!.streaming = { mode: "partial", nativeTransport: false };
+        const modelProvider = configured.models!.providers!["mock-openai"]!;
+        modelProvider.api = "openai-completions";
+        for (const model of modelProvider.models) {
+          model.api = "openai-completions";
+          model.reasoning = false;
+        }
+        return configured;
+      },
+    });
+    await waitForFact(async () => {
+      const status = asRecord(await gateway.call("channels.status", { probe: false }));
+      const accounts = asRecord(status.channelAccounts).slack;
+      return (
+        Array.isArray(accounts) && accounts.some((account) => asRecord(account).running === true)
+      );
+    }, "Slack preview ready");
+    const inbound = adapter.createInbound({
+      input: {
+        conversation: { id: "C12345678", kind: "group" },
+        senderId: "U12345678",
+        text: "Inspect the workspace with two exec calls, then report the result.",
+      },
+    });
+    const injected = await fetch(inbound.providerUrl, {
+      method: "POST",
+      headers: inbound.providerHeaders,
+      body: JSON.stringify(inbound.providerBody),
+    });
+    expect(injected.ok).toBe(true);
+    if (adapter.manifest.provider !== "slack") {
+      throw new Error("expected Slack fixture");
+    }
+    const body = JSON.stringify(asRecord(await injected.json()).event);
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    const signature = createHmac("sha256", adapter.manifest.signingSecret)
+      .update(`v0:${timestamp}:${body}`)
+      .digest("hex");
+    const delivered = await fetch(`${gateway.baseUrl}/slack/events`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-slack-request-timestamp": timestamp,
+        "x-slack-signature": `v0=${signature}`,
+      },
+      body,
+    });
+    expect(delivered.ok, await delivered.text()).toBe(true);
+    const finalText = "PREVIEW_FINAL_25592";
+    await waitForFact(
+      () => [...api.messages.values()].some((message) => message.text === finalText),
+      "Slack final answer",
+    );
+    await waitForFact(async () => {
+      const listing = asRecord(await gateway.call("sessions.list", { agentId: "qa", limit: 20 }));
+      const sessions = Array.isArray(listing.sessions) ? listing.sessions.map(asRecord) : [];
+      return sessions.some(
+        (session) => String(session.key).includes(":slack:") && session.hasActiveRun === false,
+      );
+    }, "Slack turn settlement");
+    const previewWasVisible = writes.some((write) =>
+      write.accepted?.text.includes("PREVIEW_PREAMBLE_25592"),
+    );
+    expect(previewWasVisible).toBe(true);
+    const remainingMessages = [...api.messages.values()].map((message) => message.text);
+    expect(remainingMessages).toEqual([finalText]);
+    const modelRequests = (await fs.readFile(requestLog, "utf8")).trim().split("\n").map(parseBody);
+    const toolResultCounts = modelRequests.map(
+      (request) =>
+        (Array.isArray(request.messages) ? request.messages : [])
+          .map(asRecord)
+          .filter((message) => message.role === "tool").length,
+    );
+    expect(toolResultCounts).toEqual([0, 1, 2]);
+    const evidenceDir = path.join(process.cwd(), ".artifacts", "channel-progress-presentation");
+    await fs.mkdir(evidenceDir, { recursive: true });
+    await fs.writeFile(
+      path.join(evidenceDir, "slack-preview-retirement.json"),
+      JSON.stringify(
+        {
+          kind: "mock-gateway",
+          channel: "slack",
+          status: "pass",
+          providerApi: "openai-completions",
+          previewWasVisible,
+          toolResultCounts,
+          remainingMessages,
+          writes: writes
+            .filter((write) => write.accepted)
+            .map(({ route, accepted }) => ({ route, accepted })),
+        },
+        null,
+        2,
+      ),
+    );
+  }, 120_000);
+
   it("records suppressed Slack announcements without claiming delivery", async () => {
     const directory = await fs.mkdtemp(
       path.join(await fs.realpath(os.tmpdir()), "slack-announce-"),
@@ -539,45 +742,40 @@ describe("channel progress presentation through an isolated Gateway", () => {
     const completions: string[] = [];
     const tasks: Array<Record<string, unknown>> = [];
     const inboundMessages: Array<Record<string, unknown>> = [];
-    const providerRequests: Array<{ model: unknown; requester: boolean; completion: boolean }> = [];
+    const providerRequests: Array<{
+      model: unknown;
+      requester: boolean;
+      completion: boolean;
+      requestText: string;
+    }> = [];
     let observerRequests = 0;
     let releaseRequester: (() => void) | undefined;
     let requesterHeld = false;
     const slowRequesterCases = new Set<string>();
     const caseNames = ["visible", "restart"] as const;
     const settledRequesterCases: string[] = [];
-    const observerFailures = () => {
-      let attempts = 0;
-      return gateway
+    const observerFailures = () =>
+      gateway
         .logs()
         .split("\n")
         .flatMap((line) => {
           try {
             const value = asRecord(JSON.parse(line));
             const message = readStringValue(value.message) ?? "";
-            if (
-              value.subsystem === "provider-transport-fetch" &&
-              message.startsWith("[model-fetch] start ") &&
-              message.includes("model=observer-failure-fixture ")
-            ) {
-              attempts += 1;
-            }
-            if (message === "session observer disabled after consecutive failures") {
-              const failure = {
-                message,
-                error: value.error,
-                runId: value.runId,
-                attempts,
-              };
-              attempts = 0;
-              return [failure];
-            }
-            return [];
+            return message === "session observer disabled after consecutive failures"
+              ? [
+                  {
+                    message,
+                    error: value.error,
+                    runId: value.runId,
+                    attempts: value.consecutiveFailures,
+                  },
+                ]
+              : [];
           } catch {
             return [];
           }
         });
-    };
     // The shared terminal fixture intentionally requests a direct fallback.
     // Supply a visible model final over HTTP to exercise automatic-final receipts.
     const proxy = createServer((request, response) => {
@@ -594,6 +792,7 @@ describe("channel progress presentation through an isolated Gateway", () => {
           model: body.model,
           requester: currentText.includes("Subagent terminal reply QA check:"),
           completion,
+          requestText: currentText.slice(0, 1_000),
         });
         if (String(parseBody(raw).model).endsWith("observer-failure-fixture")) {
           observerRequests += 1;
@@ -684,7 +883,7 @@ describe("channel progress presentation through an isolated Gateway", () => {
       transportBaseUrl: api.baseUrl,
       transport: {
         requiredPluginIds: adapter.requiredPluginIds,
-        createGatewayConfig: () => adapter.createGatewayConfig() as OpenClawConfig,
+        createGatewayConfig: () => createGroupOnlyGatewayConfig(adapter),
       },
       runtimeEnvPatch: {
         ...adapter.createProviderReadinessEnv({}),
@@ -893,8 +1092,8 @@ describe("channel progress presentation through an isolated Gateway", () => {
         String(failure.error).includes("Isolated completion failed with stop reason error"),
       ),
     ).toBe(true);
-    // A failed connection can precede the proxy's HTTP receipt. Count starts at
-    // the transport owner so those failures cannot hide an unbounded retry.
+    // The observer warning carries its run-owned consecutive-failure count;
+    // provider transport starts from overlapping runs cannot be partitioned by warning order.
     expect(observerFailures().every((failure) => failure.attempts === 2)).toBe(true);
     expect(new Set(observerEvents.map((event) => event.runId)).size).toBeGreaterThanOrEqual(2);
     const evidenceDir = path.join(process.cwd(), ".artifacts", "channel-progress-presentation");
@@ -1077,7 +1276,7 @@ describe("channel progress presentation through an isolated Gateway", () => {
       transportBaseUrl: api.baseUrl,
       transport: {
         requiredPluginIds: adapter.requiredPluginIds,
-        createGatewayConfig: () => adapter.createGatewayConfig() as OpenClawConfig,
+        createGatewayConfig: () => createGroupOnlyGatewayConfig(adapter),
       },
       runtimeEnvPatch: {
         ...adapter.createProviderReadinessEnv({}),
@@ -1176,8 +1375,10 @@ describe("channel progress presentation through an isolated Gateway", () => {
     if (!stateDir) {
       throw new Error("isolated Gateway state directory missing");
     }
-    const { openOpenClawStateDatabase, closeOpenClawStateDatabaseByPath } =
+    const { openOpenClawStateDatabase } =
       await import("../../../../src/state/openclaw-state-db.js");
+    const { closeOpenClawStateDatabaseByPath } =
+      await import("../../../../src/state/openclaw-state-db-cache.js");
     const { readSubagentRun } =
       await import("../../../../src/agents/subagents/registry/subagent-registry.store.sqlite.js");
     const database = openOpenClawStateDatabase({ env: gateway.runtimeEnv });
@@ -1283,9 +1484,41 @@ describe("channel progress presentation through an isolated Gateway", () => {
     { channel: "slack" as const, native: true, thread: "root", rejectStop: true, tools: true },
     { channel: "slack" as const, native: false, thread: "reply", rejectStop: false, tools: true },
     { channel: "slack" as const, native: false, thread: "current", rejectStop: false, tools: true },
+    {
+      channel: "slack" as const,
+      native: false,
+      thread: "root",
+      rejectStop: false,
+      tools: false,
+      compact: true,
+    },
+    {
+      channel: "slack" as const,
+      native: false,
+      thread: "root",
+      rejectStop: false,
+      tools: true,
+      compact: true,
+    },
+    {
+      channel: "discord" as const,
+      native: false,
+      thread: "root",
+      rejectStop: false,
+      tools: false,
+      failTool: true,
+    },
+    {
+      channel: "discord" as const,
+      native: false,
+      thread: "root",
+      rejectStop: false,
+      tools: true,
+      failTool: true,
+    },
   ])(
-    "renders $channel progress (native=$native, thread=$thread, rejectStop=$rejectStop, toolProgress=$tools)",
-    async ({ channel, native, thread, rejectStop, tools }) => {
+    "renders $channel progress (native=$native, thread=$thread, rejectStop=$rejectStop, toolProgress=$tools, compact=$compact, failTool=$failTool)",
+    async ({ channel, native, thread, rejectStop, tools, compact = false, failTool = false }) => {
       const directory = await fs.mkdtemp(
         path.join(await fs.realpath(os.tmpdir()), "channel-progress-"),
       );
@@ -1308,7 +1541,16 @@ describe("channel progress presentation through an isolated Gateway", () => {
       const provider = await startQaMockOpenAiServer({ modelRefs: [MODEL] });
       cleanups.push(() => provider.stop());
       const owner = createQaGatewayChild();
-      cleanups.push(() => stopQaGatewayFixture(owner));
+      cleanups.push(() =>
+        stopQaGatewayFixture(owner, {
+          preserveToDir: path.join(
+            process.cwd(),
+            ".artifacts",
+            "channel-progress-presentation",
+            path.basename(directory),
+          ),
+        }),
+      );
       const environment = adapter.createProviderReadinessEnv({});
       if (channel === "slack") {
         environment.SLACK_API_URL = `${api.baseUrl}/api/`;
@@ -1333,11 +1575,11 @@ describe("channel progress presentation through an isolated Gateway", () => {
         transportBaseUrl: api.baseUrl,
         transport: {
           requiredPluginIds: adapter.requiredPluginIds,
-          createGatewayConfig: () => adapter.createGatewayConfig() as OpenClawConfig,
+          createGatewayConfig: () => createGroupOnlyGatewayConfig(adapter),
         },
         runtimeEnvPatch: environment,
         mutateConfig: (config) => {
-          const configured = progressConfig(config, channel, native, tools);
+          const configured = progressConfig(config, channel, native, tools, compact);
           if (channel === "discord") {
             configured.channels!.discord!.proxy = api.proxyUrl;
             const qa = configured.agents!.entries!.qa!;
@@ -1416,7 +1658,7 @@ describe("channel progress presentation through an isolated Gateway", () => {
       }
       const finalText = `${thread === "current" ? "[[reply_to_current]] " : ""}${FINAL_MARKER}`;
       const injected = await injectProviderMessage(
-        `Tool progress QA check: call the exec tool exactly once with this exact command before answering: \`sleep 3\`. After that command completes, reply exactly \`${finalText}\`.`,
+        `Tool progress QA check: call the exec tool exactly once with this exact command before answering: \`${failTool ? "sleep 3; exit 1" : "sleep 3"}\`. After that command completes or fails, reply exactly \`${finalText}\`.`,
         threadId,
       );
       if (adapter.manifest.provider === "slack") {
@@ -1467,7 +1709,9 @@ describe("channel progress presentation through an isolated Gateway", () => {
               )
             : native
               ? writes.some((write) => write.route.endsWith("chat.stopStream"))
-              : writes.some((write) => write.route.endsWith("chat.update")),
+              : writes.some((write) =>
+                  write.route.endsWith(compact ? "chat.delete" : "chat.update"),
+                ),
         "progress finalization",
       );
 
@@ -1493,10 +1737,18 @@ describe("channel progress presentation through an isolated Gateway", () => {
         )
         .join("\n");
       expect(progressText).toContain(HEADLINE);
-      if (tools) {
-        expect(progressText).toMatch(toolRow);
-      } else {
+      if (!tools) {
         expect(progressText).not.toMatch(toolRow);
+      } else if (channel !== "slack" || !native) {
+        expect(progressText).toMatch(toolRow);
+      }
+      if (failTool) {
+        if (tools) {
+          expect(progressText).toMatch(failedToolRow);
+        } else {
+          expect(progressText).not.toMatch(failedToolRow);
+          expect(progressText).not.toContain("exit 1");
+        }
       }
       const reactionAdds = writes.filter((write) =>
         channel === "discord"
@@ -1512,7 +1764,7 @@ describe("channel progress presentation through an isolated Gateway", () => {
       );
       expect([...reactionNames]).toEqual([channel === "discord" ? "👀" : "eyes"]);
       const evidenceDir = path.join(process.cwd(), ".artifacts", "channel-progress-presentation");
-      const evidenceName = `${channel}-${native ? "native" : "draft"}-${thread}${rejectStop ? "-stop-failure" : ""}${tools ? "" : "-quiet"}`;
+      const evidenceName = `${channel}-${native ? "native" : "draft"}-${thread}${rejectStop ? "-stop-failure" : ""}${tools ? "" : "-quiet"}${compact ? "-compact" : ""}${failTool ? "-failed-tool" : ""}`;
       await fs.mkdir(evidenceDir, { recursive: true });
       await fs.writeFile(
         path.join(evidenceDir, `${evidenceName}-diagnostic.json`),
@@ -1566,12 +1818,28 @@ describe("channel progress presentation through an isolated Gateway", () => {
       const tasks = writes
         .flatMap((write) => readChunks(write.body.chunks))
         .filter((chunk) => chunk.type === "task_update");
-      if (native) {
+      if (channel === "slack" && native) {
         // Detailed cards give the exec call its own task row; quiet cards keep
         // one stable summary row. Both complete with the turn.
-        expect(tasks.some((task) => toolRow.test(String(task.title)))).toBe(tools);
-        if (!tools) {
+        expect(tasks.some((task) => nativeToolTitle.test(readStringValue(task.title) ?? ""))).toBe(
+          tools,
+        );
+        if (tools) {
+          const startedTaskIndex = tasks.findIndex(
+            (task) =>
+              task.status === "in_progress" &&
+              nativeToolTitle.test(readStringValue(task.title) ?? ""),
+          );
+          expect(startedTaskIndex).toBeGreaterThanOrEqual(0);
+          const startedTask = tasks[startedTaskIndex];
+          expect(startedTask?.id).toEqual(expect.stringMatching(/\S/u));
+          const completedTaskIndex = tasks.findIndex(
+            (task) => task.id === startedTask?.id && task.status === "complete",
+          );
+          expect(completedTaskIndex).toBeGreaterThan(startedTaskIndex);
+        } else {
           expect(new Set(tasks.map((task) => task.id)).size).toBe(1);
+          expect(tasks[0]?.id).toEqual(expect.stringMatching(/\S/u));
         }
         expect(tasks.at(-1)?.status).toBe("complete");
       }

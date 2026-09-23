@@ -223,7 +223,7 @@ describe("refreshQueuedFollowupSession", () => {
       stored: "high",
       model: "gpt-5.6-sol",
       reasoning: true,
-      expected: "off",
+      expected: "low",
     },
     {
       source: "default",
@@ -300,7 +300,7 @@ describe("refreshQueuedFollowupSession", () => {
 
   it.each([
     { requested: "high", stored: "low", expected: ["high", "off", "high"] },
-    { requested: "off", stored: "high", expected: ["off", "off", "off"] },
+    { requested: "off", stored: "high", expected: ["low", "off", "low"] },
     { requested: "default", stored: "off", expected: ["high", "off", "low"] },
     { requested: undefined, stored: "low", expected: ["low", "off", "low"] },
   ] as const)(
@@ -349,6 +349,22 @@ describe("refreshQueuedFollowupSession", () => {
             entries: { main: { thinkingDefault: "low" } },
             defaults: {
               thinkingDefault: "off",
+              models: { "openai/gpt-5.6-sol": { params: { thinking: "high" } } },
+            },
+          },
+        },
+        expected: "low",
+      },
+      {
+        name: "agent model",
+        config: {
+          agents: {
+            entries: {
+              main: {
+                models: { "openai/gpt-5.6-sol": { params: { thinking: "low" } } },
+              },
+            },
+            defaults: {
               models: { "openai/gpt-5.6-sol": { params: { thinking: "high" } } },
             },
           },

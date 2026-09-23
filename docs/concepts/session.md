@@ -66,7 +66,7 @@ visible to Bob.
 Slack Agent View and Assistant View DMs are the exception: each visible root gets
 its own `:thread:<rootTs>` session on top of the base that `dmScope` selects, so
 those conversations stay isolated even under `main`. See
-[Agent View DMs](/channels/slack#agent-view-dms).
+[Agent View DMs](/channels/slack/threads-and-sessions#agent-view-dms).
 
 <Tip>
 If the same person contacts you from multiple channels, use
@@ -208,6 +208,15 @@ Accepting, queueing, or preparing a resume request alone does not refresh it.
 CLI backends that do not report turn acceptance refresh the budget only after
 observed assistant output or tool activity; silent startup does not refresh it.
 
+When replaying an interrupted turn, recovery preserves its recorded tool calls
+and results, including nested tool activity, and reuses the original user message.
+A completed reply or a later user message closes that turn to replay.
+
+Messages sent while restart recovery is waiting to start stay pending. Once
+recovery starts, they follow the session's normal message queue policy. You do
+not need to resend a message just because recovery is waiting for capacity.
+Stopping or replacing the session still cancels pending work.
+
 If automatic recovery is exhausted, the transcript remains available. Use
 **Resume in new session** in WebChat, or `/new` or `/reset` in other channels,
 to start a replacement session.
@@ -250,9 +259,9 @@ shown:
     maintenance: {
       mode: "enforce", // "enforce" applies cleanup; "warn" only reports
       pruneAfter: "30d",
-      archiveDashboardAfter: "7d", // false or 0 disables
-      maxEntries: 500,
-      preserveRecent: "7d", // optional; false or omitted disables
+      archiveDashboardAfter: "7d", // false or 0 disables this dashboard trigger
+      maxEntries: 5000,
+      preserveRecent: false, // opt in with a duration such as "7d"
     },
   },
 }
@@ -264,13 +273,25 @@ Session store reads do not prune or cap entries during Gateway startup, so
 startup and isolated cron sessions do not pay for a full store cleanup.
 `openclaw sessions cleanup --enforce` applies the cap immediately.
 
-`maxEntries` caps unarchived session rows. Archived rows do not consume the cap.
+Ordinary entry writes also arm background maintenance at the next age boundary,
+with a periodic recheck every 30 minutes while the store remains open. This lets
+eligible sessions age out without further traffic. Writes that cannot change
+age or count maintenance outcomes skip candidate scans.
+
+`maxEntries` defaults to 5000 unarchived session rows. Archived rows do not consume
+the cap. Existing explicit limits remain unchanged.
 When pressure exceeds the cap, cleanup archives the oldest eligible ordinary
 sessions instead of deleting their transcripts. Synthetic runtime sessions such
 as cron, hooks, heartbeat, ACP, and sub-agents remain disposable and may be
-removed. Pinned sessions, active or admitted work, model-locked sessions, and
+removed. Pinned root sessions, active or admitted work, model-locked sessions, and
 durable external conversation pointers are protected; the unarchived total can
 therefore remain above the cap when protected rows alone exceed it.
+
+Root sessions and sessions auto-parented to the agent's Home root can be pinned;
+genuine child sessions and subagent runs reject pin requests. Persistent child
+sessions retain their sidebar nesting; subagent runs appear in transcript activity
+and Tasks views. Existing child pins disappear and no longer protect the session
+from maintenance.
 
 Gateway model-run probe sessions are short-lived by default. Rows matching
 `agent:*:explicit:model-run-<uuid>` use fixed `24h` retention, but cleanup is
@@ -279,9 +300,9 @@ maintenance/cap pressure is reached, and runs before the broader stale-entry
 age cutoff and entry cap. Normal direct, group, thread, cron, hook, heartbeat,
 ACP, and sub-agent sessions do not inherit this 24h retention.
 
-Maintenance preserves durable external conversation pointers, including group
-sessions and thread-scoped chat sessions, while still allowing synthetic cron,
-hook, heartbeat, ACP, and sub-agent entries to age out.
+Maintenance preserves durable external conversation pointers, including direct,
+group, and thread-scoped chat sessions, while still allowing synthetic cron, hook,
+heartbeat, ACP, and sub-agent entries to age out.
 
 Shared or high-volume installations can set `preserveRecent` to protect
 recently active interactive sessions and every SQLite history generation owned
@@ -293,14 +314,46 @@ or disk target; it expires after the configured inactivity window.
 
 Recent-session protection does not change managed-worktree garbage collection;
 durable dashboard sessions auto-archive after 7 days of inactivity by default,
-while other session types still require an explicit archive action.
+and `pruneAfter` archives other eligible durable sessions in place after 30 days
+by default, preserving their session ids and transcript generations. Disposable
+automation rows still delete at their age cutoff.
 
-Pinned sessions and manual, legacy, stale-dashboard, or recovery archives are
-user-protected and exempt from automatic maintenance. Sessions archived because
+Pinned sessions and manual, legacy, age-retention, stale-dashboard, or recovery
+archives are user-protected and exempt from automatic maintenance. Sessions archived because
 `maxEntries` was reached record that reason and remain searchable/restorable
 until physical usage exceeds `maxDiskBytes`; disk-budget cleanup may then delete
 the oldest cap archives after cheaper artifacts and unreferenced history are
 exhausted. Sessions without a recorded archive reason remain protected.
+
+After skipping a history generation or archived session, disk-budget cleanup
+rechecks physical usage before considering another deletion. A measurement
+failure stops the sweep.
+
+Background disk-budget checks run at most every 30 minutes on entry writes.
+Delete and reset operations can request a check sooner, but repeated requests
+coalesce to at most one forced check per minute per store. If cleanup exhausts
+eligible history and the store remains over budget, automatic checks back off
+for 30 minutes and log one warning until the pressure clears or the budget changes.
+The warning recommends raising `session.maintenance.maxDiskBytes` or exporting
+and deleting unneeded sessions. Checks resume on subsequent activity;
+`openclaw sessions cleanup --enforce` remains available immediately.
+
+An incomplete SQLite WAL checkpoint is a separate deferral. Cleanup preserves
+archives and history instead of deleting more data behind the blocked checkpoint.
+The result records `deferredReason: "checkpoint-incomplete"`, WAL bytes before and
+after, and the checkpoint outcome. Automatic and manual budget passes remain
+deferred until the checkpoint owner observes a completed checkpoint; elapsed time
+or a budget change alone does not retry pruning. Normal periodic checkpointing
+continues, and subsequent activity can resume cleanup after recovery, including
+after a system clock correction.
+
+Look for `session history disk budget deferred until a completed WAL checkpoint is observed`
+in the Gateway log. Its checkpoint fields include bounded operation names for
+explicitly tracked readers, connection and thread IDs, and open-transaction flags.
+Collecting these facts does not keep connections open or change worker retirement.
+They do not prove which connection holds the blocking SQLite read mark. Raw native
+statements outside explicit reader tracking, other workers, and other processes
+can remain unidentified. No transcript contents, SQL text, or bound values are included.
 
 If you previously used DM isolation and later returned `session.dmScope` to
 `main`, preview stale peer-keyed DM rows with
@@ -319,7 +372,9 @@ Preview any maintenance run with `openclaw sessions cleanup --dry-run`.
 | `/status` in chat          | Context usage, model, and toggles               |
 | `/context list`            | What is in the system prompt                    |
 
-## Further reading
+<a id="further-reading" />
+
+## Related
 
 - [Session search](/concepts/session-search) - full-text recall across past transcripts
 - [Session Pruning](/concepts/session-pruning) - trimming tool results
@@ -328,11 +383,8 @@ Preview any maintenance run with `openclaw sessions cleanup --dry-run`.
 - [Session Management Deep Dive](/reference/session-management-compaction) -
   store schema, transcripts, send policy, origin metadata, and advanced config
 - [Multi-Agent](/concepts/multi-agent) - routing and session isolation across agents
-- [Background Tasks](/automation/tasks) - how detached work creates task records with session references
-- [Channel Routing](/channels/channel-routing) - how inbound messages are routed to sessions
-
-## Related
-
-- [Session pruning](/concepts/session-pruning)
-- [Session tools](/concepts/session-tool)
+- [Multi-agent sandbox and tools](/tools/multi-agent-sandbox-tools) - per-agent sandbox and tool restrictions, including session visibility
+- [Transcript hygiene](/reference/transcript-hygiene) - in-memory, provider-specific transcript sanitization applied before a run
 - [Command queue](/concepts/queue)
+- [Background Tasks](/automation/tasks) - how detached work creates task records with session references
+- [Channel routing](/channels/channel-routing) - how inbound messages are routed to sessions

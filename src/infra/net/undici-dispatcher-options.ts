@@ -7,6 +7,7 @@ import { resolveUndiciAutoSelectFamilyConnectOptions } from "./undici-family-pol
 
 const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
 const requireUndici = createRequire(import.meta.url);
+let undiciModule: typeof import("undici") | undefined;
 
 type UndiciAgentOptions = ConstructorParameters<typeof import("undici").Agent>[0];
 type UndiciProxyAgentOptions = ConstructorParameters<typeof import("undici").ProxyAgent>[0];
@@ -27,7 +28,8 @@ export function loadUndiciModule(
   ) {
     return override as typeof import("undici");
   }
-  return requireUndici("undici") as typeof import("undici");
+  // Bun substitutes a partial built-in for bare undici; require the installed API.
+  return (undiciModule ??= requireUndici("undici/index.js") as typeof import("undici"));
 }
 
 function createHttp1ProxyClient(origin: URL, poolOptions: object): import("undici").Dispatcher {

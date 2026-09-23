@@ -8,7 +8,7 @@ import {
   readAuthProfilesForAgent,
   setupAuthTestEnv,
 } from "../../test/helpers/auth-wizard.js";
-import { ensureAuthProfileStore } from "../agents/auth-profiles/store.js";
+import { ensureAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
 import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { OAuthCredentials } from "../llm/utils/oauth/types.js";
@@ -45,7 +45,7 @@ vi.mock("../agents/provider-auth-aliases.js", () => ({
 }));
 
 vi.mock("../secrets/provider-env-vars.js", () => ({
-  getProviderEnvVars: vi.fn((provider: string) => providerEnvVarsById[provider] ?? []),
+  getProviderEnvVarsCore: vi.fn((provider: string) => providerEnvVarsById[provider] ?? []),
   resolveProviderAuthLookupMaps: () => ({
     aliasMap: {},
     envCandidateMap: {},

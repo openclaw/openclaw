@@ -1,19 +1,14 @@
 import { fork } from "node:child_process";
-import { randomUUID } from "node:crypto";
-import fs from "node:fs";
-import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { UPDATE_RUN_PHASES } from "../../packages/gateway-protocol/src/update-run-vocabulary.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { assertSqliteSchemaContains } from "./sqlite-schema-contract.js";
 import {
   createUpdateRun,
-  findActiveUpdateRun,
   finishUpdateRun,
   getUpdateRun,
   listUpdateRuns,
@@ -23,7 +18,10 @@ import {
   recordUpdateRunVerification,
 } from "./update-run-ledger.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
+import { renderUpdateRunReport } from "./update-run-report.js";
 import { UpdateRunRecordSchema } from "./update-run-schema.js";
+import { updateRunStepsFromResultStep } from "./update-run-step.js";
+import type { UpdateStepResult } from "./update-runner-types.js";
 
 const tempDirs = createTempDirTracker();
 
@@ -31,56 +29,212 @@ function isolatedOptions() {
   return { env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-update-ledger-") } };
 }
 
-afterEach(() => {
+afterEach(async () => {
   vi.restoreAllMocks();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   tempDirs.cleanup();
 });
 
 describe("update run ledger", () => {
-  it("keeps reads non-creating and adds the table on first write without changing the older schema", () => {
+  it.each(["selected", "refused", "unavailable"] as const)(
+    "retains and reports snapshot capacity evidence (%s)",
+    (outcome) => {
+      const options = isolatedOptions();
+      const run = createUpdateRun({ trigger: "cli" }, options);
+      const directory = `${options.env.OPENCLAW_STATE_DIR}.update-captures`;
+      const snapshotCapacity = {
+        reason:
+          outcome === "unavailable"
+            ? ("snapshot-location-unavailable" as const)
+            : outcome === "selected"
+              ? ("state-volume" as const)
+              : ("snapshot-capacity-insufficient" as const),
+        sqliteBytes: 1_048_576,
+        pluginBytes: 2_097_152,
+        requiredBytes: 8_388_608,
+        candidates: [
+          {
+            kind: "explicit-tmpdir" as const,
+            directory: "/synthetic/tmp",
+            availableBytes: outcome === "refused" ? 1024 : 16_777_216,
+            ...(outcome !== "refused" ? { allocationError: "not a directory" } : {}),
+          },
+          {
+            kind: "state-volume" as const,
+            directory,
+            availableBytes: outcome === "refused" ? 2048 : 16_777_216,
+            ...(outcome === "unavailable" ? { allocationError: "permission denied" } : {}),
+          },
+        ],
+        selection: outcome === "selected" ? { kind: "state-volume" as const, directory } : null,
+      };
+      const step = {
+        name: "candidate snapshot",
+        exitCode: outcome === "selected" ? 0 : 1,
+        snapshotCapacity,
+      };
+      for (const entry of updateRunStepsFromResultStep(step)) {
+        recordUpdateRunStep(run.runId, entry, options);
+      }
+      finishUpdateRun(
+        run.runId,
+        { status: outcome === "selected" ? "succeeded" : "failed" },
+        options,
+      );
+      const retained = getUpdateRun(run.runId, options);
+      expect(retained).toBeDefined();
+      if (!retained) {
+        throw new Error("Missing retained update run");
+      }
+      const redactedDirectory = "$OPENCLAW_STATE_DIR.update-captures";
+      expect(retained.steps.find((entry) => entry.step === step.name)?.snapshotCapacity).toEqual({
+        ...snapshotCapacity,
+        candidates: [
+          snapshotCapacity.candidates[0],
+          { ...snapshotCapacity.candidates[1], directory: redactedDirectory },
+        ],
+        selection:
+          outcome === "selected" ? { kind: "state-volume", directory: redactedDirectory } : null,
+      });
+      const report = renderUpdateRunReport(retained).markdown;
+      expect(report).toContain(redactedDirectory);
+      expect(report).toContain("8 MiB");
+      expect(report).toContain("1 MiB SQLite");
+      expect(report).toContain("2 MiB plugin files");
+      expect(report).not.toContain(options.env.OPENCLAW_STATE_DIR);
+      if (outcome !== "selected") {
+        expect(report).toContain("TMPDIR");
+      }
+      expect(snapshotCapacity.candidates[1]?.directory).toBe(directory);
+    },
+  );
+
+  it("bounds Doctor evidence before ledger validation without changing full messages", () => {
     const options = isolatedOptions();
-    const runId = randomUUID();
-    const filename = resolveOpenClawStateSqlitePath(options.env);
-    expect(getUpdateRun(runId, options)).toBeUndefined();
-    expect(listUpdateRuns({}, options)).toEqual([]);
-    expect(findActiveUpdateRun(options)).toBeUndefined();
-    expect(fs.existsSync(filename)).toBe(false);
-
-    const initial = openOpenClawStateDatabase(options);
-    const hasLedger = () =>
-      initial.db.prepare("SELECT 1 FROM sqlite_schema WHERE name = 'update_runs'").get();
-    expect(hasLedger()).toBeUndefined();
-    const version = initial.db.prepare("PRAGMA user_version").get();
-    const metadata = initial.db.prepare("SELECT * FROM schema_meta").all();
-    const previousSchema = initial.db
-      .prepare(
-        "SELECT sql FROM sqlite_schema WHERE sql IS NOT NULL AND name NOT GLOB 'sqlite_*' ORDER BY rowid",
-      )
-      .all()
-      .map((row) => row.sql)
-      .join(";\n");
-    expect(listUpdateRuns({}, options)).toEqual([]);
-    expect(hasLedger()).toBeUndefined();
-    expect(() => recordUpdateRunPhase(runId, "staging", {}, options)).toThrow("Unknown update run");
-    expect(hasLedger()).toBeUndefined();
-
-    const created = createUpdateRun({ runId, trigger: "cli" }, options);
-    expect(created).toMatchObject({ runId, phase: "requested", status: "running" });
-    closeOpenClawStateDatabaseForTest();
-    const olderReader = new DatabaseSync(filename);
-    try {
-      assertSqliteSchemaContains(olderReader, filename, previousSchema);
-      olderReader.prepare("UPDATE schema_meta SET updated_at = updated_at").run();
-      expect(olderReader.prepare("PRAGMA user_version").get()).toEqual(version);
-      expect(olderReader.prepare("SELECT * FROM schema_meta").all()).toEqual(metadata);
-    } finally {
-      olderReader.close();
+    const run = createUpdateRun({ trigger: "cli" }, options);
+    const changes: NonNullable<UpdateStepResult["configChanges"]> = [
+      { kind: "key", key: "k".repeat(2048) },
+      ...Array.from({ length: 40 }, (_, index) => ({
+        kind: "migration" as const,
+        message: `${index}: ${"🤖".repeat(2000)}`,
+      })),
+    ];
+    const original = structuredClone(changes);
+    const steps = updateRunStepsFromResultStep({
+      name: "openclaw doctor",
+      exitCode: 1,
+      configChanges: changes,
+      configWriteRefusal: {
+        reason: "r".repeat(2048),
+        message: "m".repeat(2048),
+        keys: Array.from({ length: 40 }, (_, index) => `${index}:${"k".repeat(2048)}`),
+      },
+    });
+    expect(steps.filter((step) => step.configChange)).toHaveLength(32);
+    for (const step of steps) {
+      expect(step.detail?.length ?? 0).toBeLessThanOrEqual(1024);
+      if (step.configChange) {
+        expect(
+          (step.configChange.kind === "key" ? step.configChange.key : step.configChange.message)
+            .length,
+        ).toBeLessThanOrEqual(1024);
+      }
+      if (step.configWriteRefusal) {
+        expect(step.configWriteRefusal.keys).toHaveLength(32);
+        expect(step.configWriteRefusal.message.length).toBeLessThanOrEqual(1024);
+        expect(step.configWriteRefusal.reason.length).toBeLessThanOrEqual(1024);
+        expect(step.configWriteRefusal.keys.every((key) => key.length <= 1024)).toBe(true);
+      }
+      expect(() => recordUpdateRunStep(run.runId, step, options)).not.toThrow();
     }
-    expect(getUpdateRun(runId, options)).toEqual(created);
-    expect(createUpdateRun({ runId, trigger: "api" }, options)).toEqual(created);
-    expect(listUpdateRuns({}, options)).toEqual([created]);
+    expect(changes).toEqual(original);
   });
+  it.each(["committed", "refused"] as const)(
+    "retains typed Doctor config evidence in the terminal summary (%s)",
+    (outcome) => {
+      const options = isolatedOptions();
+      const run = createUpdateRun({ trigger: "cli" }, options);
+      const keys = ["meta", "plugins", "wizard"];
+      recordUpdateRunRepairAttempt(
+        run.runId,
+        { attempt: 1, status: "succeeded", startedAtMs: 1, reason: "Candidate validation passed." },
+        options,
+      );
+      const migration = "Enabled the configured provider plugin.";
+      const step: UpdateStepResult = {
+        name: "openclaw doctor",
+        command: "doctor --fix",
+        cwd: "/synthetic",
+        durationMs: 1,
+        exitCode: outcome === "committed" ? 0 : 1,
+        ...(outcome === "committed"
+          ? {
+              configChanges: [
+                ...keys.map((key) => ({ kind: "key" as const, key })),
+                { kind: "migration" as const, message: migration },
+              ],
+            }
+          : {
+              configWriteRefusal: {
+                keys,
+                reason: "config-input-changed",
+                message: "An operator saved the config before publication.",
+              },
+            }),
+      };
+      for (const entry of updateRunStepsFromResultStep(step)) {
+        recordUpdateRunStep(run.runId, entry, options);
+      }
+      finishUpdateRun(
+        run.runId,
+        {
+          status: outcome === "committed" ? "succeeded" : "failed",
+          ...(outcome === "refused" ? { reason: "repair-requires-config-change" } : {}),
+        },
+        options,
+      );
+      const retained = getUpdateRun(run.runId, options);
+      expect(retained).toBeDefined();
+      if (!retained) {
+        throw new Error("Missing retained update run");
+      }
+      const report = renderUpdateRunReport(retained).markdown;
+      expect(report).toContain(keys.join(", "));
+      if (outcome === "committed") {
+        expect(
+          retained.steps.flatMap((entry) => (entry.configChange ? [entry.configChange] : [])),
+        ).toEqual(step.configChanges);
+        expect(report).toContain(migration);
+        expect(report).not.toContain("repair-requires-config-change");
+      } else {
+        expect(
+          retained.steps.find((entry) => entry.step === step.name)?.configWriteRefusal,
+        ).toEqual(step.configWriteRefusal);
+        expect(report).toContain("config-input-changed");
+        expect(report).toContain("An operator saved the config before publication.");
+        expect(report).toContain("Doctor could not promote config changes.");
+      }
+    },
+  );
+  it.each(["failed", "succeeded", "rolled-back", "skipped"] as const)(
+    "keeps a terminal %s result unchanged for running-only boot observations",
+    (status) => {
+      const options = isolatedOptions();
+      const run = createUpdateRun({ trigger: "cli" }, options);
+      const terminal = finishUpdateRun(run.runId, { status, reason: "original-result" }, options);
+      const actual = recordUpdateRunVerification(
+        run.runId,
+        { booted: true, serviceRunning: true, pid: 111, doctorHint: "unrelated later boot" },
+        { ...options, onlyIfRunning: true },
+      );
+      expect(actual).toEqual(terminal);
+      expect(getUpdateRun(run.runId, options)).toEqual(terminal);
+      const notice = recordUpdateRunVerification(run.runId, { noticeDelivered: true }, options);
+      expect(notice.verification).toEqual({ ...terminal.verification, noticeDelivered: true });
+      expect(notice.finishedAtMs).toBe(terminal.finishedAtMs);
+    },
+  );
 
   it("keeps phase order and merges repeated steps while preserving terminal outcomes and later boot facts", () => {
     const options = isolatedOptions();
@@ -100,6 +254,17 @@ describe("update run ledger", () => {
       { step: "fetch", status: "in_progress", startedAtMs: 2_100 },
       options,
     );
+    for (const exitCode of [1, 0]) {
+      for (const receipt of updateRunStepsFromResultStep({
+        name: "fetch",
+        exitCode,
+        ...(exitCode
+          ? { failureFacts: [{ check: "fetch", code: "EACCES", message: "Permission denied" }] }
+          : {}),
+      })) {
+        recordUpdateRunStep(run.runId, receipt, options);
+      }
+    }
     clock.mockReturnValue(3_000);
     recordUpdateRunPhase(
       run.runId,
@@ -119,7 +284,7 @@ describe("update run ledger", () => {
     expect(current?.steps).toEqual([
       { step: "requested", status: "completed", startedAtMs: 1_000, endedAtMs: 2_000 },
       { step: "staging", status: "completed", startedAtMs: 2_000, endedAtMs: 3_000 },
-      { step: "fetch", status: "completed", startedAtMs: 2_100, endedAtMs: 2_900 },
+      { step: "fetch", status: "completed", exitCode: 0, startedAtMs: 2_100, endedAtMs: 2_900 },
       { step: "validating", status: "in_progress", startedAtMs: 3_000 },
     ]);
     clock.mockReturnValue(4_000);
@@ -160,7 +325,18 @@ describe("update run ledger", () => {
       { booted: true, versionMatch: true },
       options,
     );
-    expect(booted).toMatchObject({
+    expect(booted.confirmedAtMs).toBeNull();
+    const verified = recordUpdateRunVerification(
+      run.runId,
+      {
+        readyz: true,
+        settled: true,
+        channelsReady: true,
+        pluginErrors: [],
+      },
+      options,
+    );
+    expect(verified).toMatchObject({
       status: "failed",
       reason: "doctor-failed",
       finishedAtMs: 4_000,
@@ -224,26 +400,26 @@ describe("update run ledger", () => {
     },
   );
 
-  it("lists newest runs deterministically and excludes terminal runs from active discovery", () => {
+  it("records post-activation repair without reopening activation or retaining completed repair timestamps", () => {
     const options = isolatedOptions();
-    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
-    const oldest = createUpdateRun({ trigger: "cli" }, options);
-    clock.mockReturnValue(2_000);
-    const tied = [
-      createUpdateRun({ trigger: "api" }, options),
-      createUpdateRun({ trigger: "campaign" }, options),
-    ].toSorted((left, right) => right.runId.localeCompare(left.runId));
-    expect(listUpdateRuns({ limit: 2 }, options).map((run) => run.runId)).toEqual(
-      tied.map((run) => run.runId),
-    );
-    expect(findActiveUpdateRun(options)).toEqual(tied[0]);
-    for (const run of tied) {
-      finishUpdateRun(run.runId, { status: "skipped", reason: "dry-run" }, options);
+    const run = createUpdateRun({ trigger: "cli" }, options);
+    const clock = vi.spyOn(Date, "now").mockReturnValue(run.createdAtMs + 100);
+    recordUpdateRunPhase(run.runId, "validating", {}, options);
+    recordUpdateRunPhase(run.runId, "repairing", {}, options);
+    recordUpdateRunPhase(run.runId, "activating", {}, options);
+    recordUpdateRunPhase(run.runId, "verifying", {}, options);
+    clock.mockReturnValue(run.createdAtMs + 200);
+    const repairing = recordUpdateRunPhase(run.runId, "repairing", {}, options);
+    expect(repairing.phase).toBe("repairing");
+    expect(repairing.steps.find((step) => step.step === "repairing")).toEqual({
+      step: "repairing",
+      status: "in_progress",
+      startedAtMs: run.createdAtMs + 200,
+    });
+    for (const phase of ["activating", "restarting", "validating"] as const) {
+      expect(recordUpdateRunPhase(run.runId, phase, {}, options).phase).toBe("repairing");
     }
-    expect(listUpdateRuns({ active: true }, options)).toEqual([oldest]);
-    finishUpdateRun(oldest.runId, { status: "succeeded" }, options);
-    expect(findActiveUpdateRun(options)).toBeUndefined();
-    expect(listUpdateRuns({}, options)).toHaveLength(3);
+    expect(recordUpdateRunPhase(run.runId, "verifying", {}, options).phase).toBe("verifying");
   });
 
   it.each([
@@ -251,11 +427,19 @@ describe("update run ledger", () => {
     { name: "diagnostic bytes", count: 30, detail: "diagnostic ".repeat(80) },
     { name: "retained phase bytes", count: 0, detail: "🦞".repeat(512) },
   ])(
-    "retains notice custody and phases across the $name bound and database reopen",
+    "retains notice custody, restoration proof, and finalization history across the $name bound and database reopen",
     ({ count, detail }) => {
       const options = isolatedOptions();
       const run = createUpdateRun({ trigger: "chat" }, options);
-      const notices = ["notice:ack", "notice:activating", "notice:verifying"];
+      const notices = [
+        "notice:ack",
+        "notice:activating",
+        "notice:verifying",
+        "previous generation restoration",
+        "finalize:doctor",
+        "finalize:future-phase",
+        "post-update verification",
+      ];
       for (const step of [...UPDATE_RUN_PHASES, ...notices]) {
         recordUpdateRunStep(run.runId, { step, status: "completed", detail }, options);
       }
@@ -274,6 +458,27 @@ describe("update run ledger", () => {
       expect(persisted.steps.every((step) => step.status === "completed")).toBe(true);
       expect(persisted.steps.length).toBeLessThanOrEqual(128);
       expect(Buffer.byteLength(JSON.stringify(persisted.steps))).toBeLessThanOrEqual(16 * 1024);
+    },
+  );
+
+  it.each(["bytes", "count"] as const)(
+    "rejects oversized retained step %s without changing the row",
+    (bound) => {
+      const options = isolatedOptions();
+      let saved = createUpdateRun({ trigger: "cli" }, options);
+      expect(() => {
+        for (let index = 0; index < 130; index++) {
+          saved = recordUpdateRunStep(
+            saved.runId,
+            {
+              step: `finalize:${index}${bound === "bytes" ? "界".repeat(330) : ""}`,
+              status: "completed",
+            },
+            options,
+          );
+        }
+      }).toThrow(/retained step.*limit/);
+      expect(getUpdateRun(saved.runId, options)).toEqual(saved);
     },
   );
 
@@ -496,7 +701,21 @@ describe("update run ledger", () => {
           code === 0 ? resolve() : reject(new Error(`${role} exited ${code}: ${output}`)),
         );
       });
-      return { child, ready, exited };
+      const written = ready.then(() =>
+        Promise.race([
+          new Promise<void>((resolve, reject) => {
+            child.once("message", (message) =>
+              message === "written"
+                ? resolve()
+                : reject(new Error(`Unexpected ${role} write message`)),
+            );
+          }),
+          exited.then(() => {
+            throw new Error(`${role} exited before acknowledging writes: ${output}`);
+          }),
+        ]),
+      );
+      return { child, ready, written, exited };
     });
     const deadline = setTimeout(() => {
       for (const { child } of children) {
@@ -504,11 +723,17 @@ describe("update run ledger", () => {
       }
     }, 20_000);
     try {
-      await Promise.all(children.map(({ ready }) => ready));
+      const allWritten = Promise.all(children.map(({ written }) => written));
+      await Promise.race([Promise.all(children.map(({ ready }) => ready)), allWritten]);
       for (const { child } of children) {
         child.send("start");
       }
-      await Promise.all(children.map(({ exited }) => exited));
+      await allWritten;
+      // Writes stay concurrent; handle retirement must not race another lifecycle writer.
+      for (const { child, exited } of children) {
+        child.send("close");
+        await exited;
+      }
       const persisted = getUpdateRun(run.runId, options);
       const expected = ["cli", "gateway"].flatMap((role) =>
         Array.from({ length: 16 }, (_, index) => `${role}-${index}`),
@@ -527,6 +752,9 @@ describe("update run ledger", () => {
           serviceRunning: true,
           versionMatch: true,
           channelsReady: true,
+          settled: true,
+          readyz: true,
+          pluginErrors: [],
         },
       } satisfies Partial<UpdateRunRecord>);
       expect(persisted?.confirmedAtMs).toEqual(expect.any(Number));
@@ -537,7 +765,7 @@ describe("update run ledger", () => {
           child.kill();
         }
       }
-      await Promise.allSettled(children.map(({ exited }) => exited));
+      await Promise.allSettled(children.flatMap(({ written, exited }) => [written, exited]));
     }
   }, 30_000);
 });

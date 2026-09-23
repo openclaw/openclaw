@@ -1,5 +1,8 @@
 // TTS directive number helpers parse strict numeric directive values.
-import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import {
+  asFiniteNumberInRange,
+  parseStrictFiniteNumber,
+} from "@openclaw/normalization-core/number-coercion";
 import type {
   SpeechDirectiveTokenParseContext,
   SpeechDirectiveTokenParseResult,
@@ -14,16 +17,6 @@ type DirectiveNumberRange = {
   maxExclusive?: boolean;
 };
 
-function isInDirectiveNumberRange(value: number, range: DirectiveNumberRange): boolean {
-  if (range.min !== undefined && (range.minExclusive ? value <= range.min : value < range.min)) {
-    return false;
-  }
-  if (range.max !== undefined && (range.maxExclusive ? value >= range.max : value > range.max)) {
-    return false;
-  }
-  return true;
-}
-
 /** Parse a numeric speech directive token and return provider overrides when policy allows it. */
 export function parseSpeechDirectiveNumberOverride(params: {
   ctx: SpeechDirectiveTokenParseContext;
@@ -37,7 +30,7 @@ export function parseSpeechDirectiveNumberOverride(params: {
   }
 
   const value = parseStrictFiniteNumber(params.ctx.value);
-  if (value === undefined || !isInDirectiveNumberRange(value, params.range)) {
+  if (value === undefined || asFiniteNumberInRange(value, params.range) === undefined) {
     return { handled: true, warnings: [params.warning(params.ctx.value)] };
   }
 

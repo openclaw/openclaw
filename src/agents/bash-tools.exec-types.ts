@@ -13,7 +13,7 @@ import type {
   ExecSecurity,
   ExecTarget,
 } from "../infra/exec-approvals.js";
-import type { ExecAutoReviewer } from "../infra/exec-auto-review.js";
+import type { ExecAutoReviewer, ExecAutoReviewTranscript } from "../infra/exec-auto-review.js";
 import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
 import type { PluginHookChannelContext } from "../plugins/hook-types.js";
 import type { TerminationReason } from "../process/supervisor/types.js";
@@ -46,8 +46,11 @@ export type ExecToolDefaults = {
   /** Host-prepared non-secret environment and store projection exclusions. */
   preparedRunEnvironment?: PreparedGitHubToolEnvironment;
   autoReviewer?: ExecAutoReviewer;
+  /** Reads current attempt context only when a command needs review. */
+  reviewTranscript?: () => ExecAutoReviewTranscript | undefined;
   agentId?: string;
   backgroundMs?: number;
+  cleanupMs?: number;
   timeoutSec?: number;
   approvalWarningText?: string;
   approvalFollowupText?: string;
@@ -63,6 +66,8 @@ export type ExecToolDefaults = {
   processToolAvailabilityRef?: { value?: boolean };
   scopeKey?: string;
   sessionKey?: string;
+  /** Executing session when tool policy is borrowed from a different session. */
+  runSessionKey?: string;
   /** Stable agent run that owns any approval created by this tool. */
   runId?: string;
   /** Exact admitted execution instance that owns secret-egress proxy access. */

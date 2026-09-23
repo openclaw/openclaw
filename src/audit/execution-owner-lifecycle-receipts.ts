@@ -10,10 +10,8 @@ import {
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
-import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateDatabase } from "../state/openclaw-state-db.generated.js";
-import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { EXECUTION_OWNER_LIFECYCLE_BINDING_TABLE } from "./execution-owner-lifecycle-binding-store.js";
 
 type WithSqliteRowId<Row> = Row & { rowid: number };
@@ -375,62 +373,54 @@ function projectReceipt(
   };
 }
 
-export function summarizeOwnerLifecycleReceipts(params: {
-  stage: OwnerLifecycleStage;
-  context: ExecutionIdentityContextV1;
-  options: OpenClawStateDatabaseOptions;
-}): { count: number; coverageState?: "attribution-only" | "unknown"; missingEvidence: string[] } {
-  return (
-    withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
-      const count = countRows({ db, stage: params.stage, contextId: params.context.contextId });
-      const exactCount = countRows({
+export function summarizeOwnerLifecycleReceiptsInDatabase(
+  db: DatabaseSync,
+  params: {
+    stage: OwnerLifecycleStage;
+    context: ExecutionIdentityContextV1;
+  },
+): { count: number; coverageState?: "attribution-only" | "unknown"; missingEvidence: string[] } {
+  const count = countRows({ db, stage: params.stage, contextId: params.context.contextId });
+  const exactCount = countRows({
+    db,
+    stage: params.stage,
+    contextId: params.context.contextId,
+    executionId: params.context.executionId,
+  });
+  const mismatch = count !== exactCount;
+  return {
+    count,
+    ...(count > 0
+      ? { coverageState: mismatch ? ("unknown" as const) : ("attribution-only" as const) }
+      : {}),
+    missingEvidence: mismatch ? ["decision.execution_link"] : [],
+  };
+}
+
+export function pageOwnerLifecycleReceiptsInDatabase(
+  db: DatabaseSync,
+  params: {
+    stage: OwnerLifecycleStage;
+    context: ExecutionIdentityContextV1;
+    after?: OwnerLifecycleCursor;
+    offset?: number;
+    limit: number;
+  },
+): { entries: OwnerLifecycleReceiptEntry[]; nextCursor?: OwnerLifecycleCursor } {
+  const rows = runSqliteDeferredTransactionSync(
+    db,
+    () =>
+      readRows({
         db,
         stage: params.stage,
         contextId: params.context.contextId,
         executionId: params.context.executionId,
-      });
-      const mismatch = count !== exactCount;
-      return {
-        count,
-        ...(count > 0
-          ? { coverageState: mismatch ? ("unknown" as const) : ("attribution-only" as const) }
-          : {}),
-        missingEvidence: mismatch ? ["decision.execution_link"] : [],
-      };
-    }, params.options) ?? { count: 0, missingEvidence: [] }
+        after: params.after,
+        offset: params.offset,
+        limit: params.limit + 1,
+      }),
+    { operationLabel: "owner lifecycle receipt page" },
   );
-}
-
-export function pageOwnerLifecycleReceipts(params: {
-  stage: OwnerLifecycleStage;
-  context: ExecutionIdentityContextV1;
-  after?: OwnerLifecycleCursor;
-  offset?: number;
-  limit: number;
-  options: OpenClawStateDatabaseOptions;
-}): { entries: OwnerLifecycleReceiptEntry[]; nextCursor?: OwnerLifecycleCursor } {
-  const retainedRows = withExistingOpenClawStateDatabaseReadOnly(
-    ({ db }) =>
-      runSqliteDeferredTransactionSync(
-        db,
-        () =>
-          readRows({
-            db,
-            stage: params.stage,
-            contextId: params.context.contextId,
-            executionId: params.context.executionId,
-            after: params.after,
-            offset: params.offset,
-            limit: params.limit + 1,
-          }),
-        { operationLabel: "owner lifecycle receipt page" },
-      ),
-    params.options,
-  );
-  if (!retainedRows && params.after) {
-    throw new Error(OWNER_LIFECYCLE_CURSOR_RETAINED_ERROR);
-  }
-  const rows = retainedRows ?? [];
   const hasMore = rows.length > params.limit;
   const page = hasMore ? rows.slice(0, params.limit) : rows;
   const last = page.at(-1);

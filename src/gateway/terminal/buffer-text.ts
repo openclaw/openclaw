@@ -20,13 +20,9 @@ const CONTROL_BYTES_REGEX = new RegExp(`[${C0_EXCEPT_TAB_CR_LF}${C1}]`, "g");
  */
 export function renderTerminalBufferText(raw: string): string {
   const stripped = stripAnsiSequences(raw);
-  return stripped
-    .split("\n")
-    .map((line) => {
-      // A final CR has not overwritten anything yet. Exclude only that CR;
-      // an earlier CR still starts the last write, even when it is empty.
-      const end = line.endsWith("\r") ? line.length - 1 : line.length;
-      return line.slice(line.lastIndexOf("\r", end - 1) + 1, end).replace(CONTROL_BYTES_REGEX, "");
-    })
-    .join("\n");
+  // A final CR has not overwritten anything; earlier CRs select the last write on each line.
+  const text = stripped.includes("\r")
+    ? stripped.replace(/\r(?=\n|$)/g, "").replace(/(^|\n)[^\n]*\r/g, "$1")
+    : stripped;
+  return text.replace(CONTROL_BYTES_REGEX, "");
 }

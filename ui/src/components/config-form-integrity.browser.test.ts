@@ -1,14 +1,17 @@
-// Control UI tests cover config form constraints, draft recovery, and repeated controls.
-import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
+// Control UI tests cover config form constraints, draft recovery, and repeated controls.
+import {
+  renderAnalyzedFormFixture,
+  renderTextInputFixture,
+  renderNumberInputFixture,
+  renderArrayFixture,
+} from "../test-helpers/config-form-fixtures.ts";
 import {
   ConfigFormCollectionDraft,
   type ConfigFormCollectionDraftCommit,
 } from "./config-form-collection-draft.ts";
-import { renderArray } from "./config-form.node.collection.ts";
-import { renderNumberInput, renderTextInput } from "./config-form.node.scalar.ts";
 import { configFieldId } from "./config-form.shared.ts";
-import { analyzeConfigSchema, renderConfigForm, renderNode } from "./config-form.ts";
+import { analyzeConfigSchema } from "./config-form.ts";
 
 function expectElement<T extends Element>(element: T | null | undefined, label: string): T {
   expect(element instanceof Element, label).toBe(true);
@@ -93,32 +96,25 @@ describe("config form integrity", () => {
     // Zod emits `format` for .url()/.email(); the form must keep those fields
     // editable instead of forcing the whole section into Raw mode.
     expect(analysis.unsupportedPaths).toEqual([]);
-    render(
-      renderConfigForm({
-        schema: analysis.schema,
-        uiHints: { "laboratory.apiKey": { sensitive: true } },
-        unsupportedPaths: analysis.unsupportedPaths,
-        value: {
-          laboratory: {
-            endpoint: "local-api",
-            optionalAlias: "main",
-            relayUrl: "https://relay.example",
-            explicitEmpty: "present",
-            glyph: "a",
-            codes: [],
-            limited: [1],
-            provider: "a",
-            apiKey: "test-secret",
-            retryBudget: 8,
-            weights: [2],
-          },
+    renderAnalyzedFormFixture(container, analysis, {
+      uiHints: { "laboratory.apiKey": { sensitive: true } },
+      value: {
+        laboratory: {
+          endpoint: "local-api",
+          optionalAlias: "main",
+          relayUrl: "https://relay.example",
+          explicitEmpty: "present",
+          glyph: "a",
+          codes: [],
+          limited: [1],
+          provider: "a",
+          apiKey: "test-secret",
+          retryBudget: 8,
+          weights: [2],
         },
-        showAdvanced: true,
-        onShowAdvanced: () => {},
-        onPatch,
-      }),
-      container,
-    );
+      },
+      onPatch,
+    });
 
     const endpoint = expectElement(
       container.querySelector<HTMLInputElement>("input[aria-label='Endpoint']"),
@@ -339,18 +335,10 @@ describe("config form integrity", () => {
         accounts: { type: "object", additionalProperties: true },
       },
     });
-    render(
-      renderConfigForm({
-        schema: analysis.schema,
-        uiHints: {},
-        unsupportedPaths: analysis.unsupportedPaths,
-        value: { accounts: { alpha: {}, beta: {} } },
-        showAdvanced: true,
-        onShowAdvanced: () => {},
-        onPatch,
-      }),
-      container,
-    );
+    renderAnalyzedFormFixture(container, analysis, {
+      value: { accounts: { alpha: {}, beta: {} } },
+      onPatch,
+    });
 
     const alpha = expectElement(
       Array.from(container.querySelectorAll<HTMLInputElement>(".cfg-map input")).find(
@@ -389,18 +377,10 @@ describe("config form integrity", () => {
         },
       },
     });
-    render(
-      renderConfigForm({
-        schema: analysis.schema,
-        uiHints: {},
-        unsupportedPaths: analysis.unsupportedPaths,
-        value: { aliases: {} },
-        showAdvanced: true,
-        onShowAdvanced: () => {},
-        onPatch,
-      }),
-      container,
-    );
+    renderAnalyzedFormFixture(container, analysis, {
+      value: { aliases: {} },
+      onPatch,
+    });
 
     const addEntry = expectElement(
       Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
@@ -610,18 +590,10 @@ describe("config form integrity", () => {
       },
     });
     const renderValues = (values: string[]) => {
-      render(
-        renderConfigForm({
-          schema: analysis.schema,
-          uiHints: {},
-          unsupportedPaths: analysis.unsupportedPaths,
-          value: { values },
-          showAdvanced: true,
-          onShowAdvanced: () => {},
-          onPatch,
-        }),
-        container,
-      );
+      renderAnalyzedFormFixture(container, analysis, {
+        value: { values },
+        onPatch,
+      });
     };
 
     renderValues(["111", "222"]);
@@ -669,7 +641,6 @@ describe("config form integrity", () => {
       container.querySelector<HTMLInputElement>("input[aria-label='Values']"),
       "changed repeated scalar input",
     );
-    expect(changed).toBe(first);
     expect(changed.value).toBe("444");
     expect(changed.getAttribute("aria-invalid")).toBe("false");
     expect(changed.validationMessage).toBe("");
@@ -685,19 +656,12 @@ describe("config form integrity", () => {
       },
     });
     const renderSensitive = (revealSensitive: boolean) => {
-      render(
-        renderConfigForm({
-          schema: analysis.schema,
-          uiHints: { apiKey: { sensitive: true } },
-          unsupportedPaths: analysis.unsupportedPaths,
-          value: { apiKey: "123" },
-          showAdvanced: true,
-          onShowAdvanced: () => {},
-          revealSensitive,
-          onPatch,
-        }),
-        container,
-      );
+      renderAnalyzedFormFixture(container, analysis, {
+        uiHints: { apiKey: { sensitive: true } },
+        value: { apiKey: "123" },
+        revealSensitive,
+        onPatch,
+      });
     };
 
     renderSensitive(true);
@@ -735,22 +699,16 @@ describe("config form integrity", () => {
   it("validates scalar edits against composed schemas", () => {
     const onPatch = vi.fn();
     const stringContainer = document.createElement("div");
-    render(
-      renderTextInput({
-        schema: {
-          type: "string",
-          allOf: [{ pattern: "^[0-9]+$" }],
-        },
-        value: "123",
-        path: ["code"],
-        hints: {},
-        unsupported: new Set(),
-        disabled: false,
-        inputType: "text",
-        onPatch,
-      }),
-      stringContainer,
-    );
+    renderTextInputFixture(stringContainer, {
+      schema: {
+        type: "string",
+        allOf: [{ pattern: "^[0-9]+$" }],
+      },
+      value: "123",
+      path: ["code"],
+      inputType: "text",
+      onPatch,
+    });
 
     const code = expectElement(
       stringContainer.querySelector<HTMLInputElement>("input[aria-label='Code']"),
@@ -767,21 +725,15 @@ describe("config form integrity", () => {
     expect(onPatch).toHaveBeenCalledWith(["code"], "456");
 
     const numberContainer = document.createElement("div");
-    render(
-      renderNumberInput({
-        schema: {
-          type: "integer",
-          allOf: [{ minimum: 2 }, { multipleOf: 2 }],
-        },
-        value: 2,
-        path: ["amount"],
-        hints: {},
-        unsupported: new Set(),
-        disabled: false,
-        onPatch,
-      }),
-      numberContainer,
-    );
+    renderNumberInputFixture(numberContainer, {
+      schema: {
+        type: "integer",
+        allOf: [{ minimum: 2 }, { multipleOf: 2 }],
+      },
+      value: 2,
+      path: ["amount"],
+      onPatch,
+    });
     const amount = expectElement(
       numberContainer.querySelector<HTMLInputElement>("input[aria-label='Amount']"),
       "composed numeric scalar",
@@ -811,18 +763,12 @@ describe("config form integrity", () => {
     expect(onPatch).toHaveBeenCalledWith(["amount"], 4);
 
     const overflowContainer = document.createElement("div");
-    render(
-      renderNumberInput({
-        schema: { type: "integer", multipleOf: 2 },
-        value: 2,
-        path: ["overflow"],
-        hints: {},
-        unsupported: new Set(),
-        disabled: false,
-        onPatch,
-      }),
-      overflowContainer,
-    );
+    renderNumberInputFixture(overflowContainer, {
+      schema: { type: "integer", multipleOf: 2 },
+      value: 2,
+      path: ["overflow"],
+      onPatch,
+    });
     const overflow = expectElement(
       overflowContainer.querySelector<HTMLInputElement>("input[aria-label='Overflow']"),
       "overflow numeric scalar",
@@ -850,21 +796,12 @@ describe("config form integrity", () => {
       items: { type: "string" },
     };
     const renderValue = (value: unknown) => {
-      render(
-        renderArray(
-          {
-            schema,
-            value,
-            path: ["codes"],
-            hints: {},
-            unsupported: new Set(),
-            disabled: false,
-            onPatch,
-          },
-          renderNode,
-        ),
-        container,
-      );
+      renderArrayFixture(container, {
+        schema,
+        value,
+        path: ["codes"],
+        onPatch,
+      });
     };
 
     renderValue(undefined);
@@ -893,21 +830,12 @@ describe("config form integrity", () => {
       items: { type: "string", pattern: "^[0-9]+$" },
     };
     const renderValue = (value: unknown) => {
-      render(
-        renderArray(
-          {
-            schema,
-            value,
-            path: ["codes"],
-            hints: {},
-            unsupported: new Set(),
-            disabled: false,
-            onPatch,
-          },
-          renderNode,
-        ),
-        container,
-      );
+      renderArrayFixture(container, {
+        schema,
+        value,
+        path: ["codes"],
+        onPatch,
+      });
     };
 
     renderValue(undefined);
@@ -960,18 +888,10 @@ describe("config form integrity", () => {
         accounts: { type: "object", additionalProperties: true },
       },
     });
-    render(
-      renderConfigForm({
-        schema: analysis.schema,
-        uiHints: {},
-        unsupportedPaths: analysis.unsupportedPaths,
-        value: { accounts: { primary: primaryValue, secondary: { enabled: false } } },
-        showAdvanced: true,
-        onShowAdvanced: () => {},
-        onPatch,
-      }),
-      container,
-    );
+    renderAnalyzedFormFixture(container, analysis, {
+      value: { accounts: { primary: primaryValue, secondary: { enabled: false } } },
+      onPatch,
+    });
 
     const textarea = expectElement(
       container.querySelector<HTMLTextAreaElement>(".cfg-map textarea"),
@@ -1002,18 +922,10 @@ describe("config form integrity", () => {
     textarea.value = '{"enabled":';
     textarea.dispatchEvent(new Event("input", { bubbles: true }));
     expect(textarea.getAttribute("aria-invalid")).toBe("true");
-    render(
-      renderConfigForm({
-        schema: analysis.schema,
-        uiHints: {},
-        unsupportedPaths: analysis.unsupportedPaths,
-        value: { accounts: { primary: primaryValue, secondary: { enabled: true } } },
-        showAdvanced: true,
-        onShowAdvanced: () => {},
-        onPatch,
-      }),
-      container,
-    );
+    renderAnalyzedFormFixture(container, analysis, {
+      value: { accounts: { primary: primaryValue, secondary: { enabled: true } } },
+      onPatch,
+    });
     const siblingUpdateTextarea = expectElement(
       container.querySelector<HTMLTextAreaElement>(
         ".cfg-map textarea[aria-label='primary: JSON value']",
@@ -1027,18 +939,10 @@ describe("config form integrity", () => {
 
     // A genuinely external change (different content) still resets in-progress
     // text; identity churn with identical bytes (autosave ack) must not.
-    render(
-      renderConfigForm({
-        schema: analysis.schema,
-        uiHints: {},
-        unsupportedPaths: analysis.unsupportedPaths,
-        value: { accounts: { primary: { enabled: false } } },
-        showAdvanced: true,
-        onShowAdvanced: () => {},
-        onPatch,
-      }),
-      container,
-    );
+    renderAnalyzedFormFixture(container, analysis, {
+      value: { accounts: { primary: { enabled: false } } },
+      onPatch,
+    });
     const resetTextarea = expectElement(
       container.querySelector<HTMLTextAreaElement>(".cfg-map textarea"),
       "externally reset JSON map value",

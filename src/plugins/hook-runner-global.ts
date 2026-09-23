@@ -1,26 +1,13 @@
-/**
- * Global Plugin Hook Runner
- *
- * Singleton hook runner that's initialized when plugins are loaded
- * and can be called from anywhere in the codebase.
- *
- * The runner is created once and resolves hooks live on every dispatch from the
- * current request-scoped registry or process root. This also preserves the
- * contract that hooks pushed after initialization dispatch immediately.
- */
-
+// The singleton resolves the current request registry or process root on every dispatch,
+// so registry replacement and hooks added after initialization take effect immediately.
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import type { PluginHookGatewayContext, PluginHookGatewayStopEvent } from "./hook-gateway.types.js";
 import type { GlobalHookRunnerRegistry } from "./hook-registry.types.js";
 import {
   createLiveHookRegistryFacade,
   hookRunnerGlobalState as state,
 } from "./hook-runner-global-state.js";
-import type {
-  PluginHookGatewayContext,
-  PluginHookGatewayStopEvent,
-  PluginHookHandlerMap,
-  PluginHookName,
-} from "./hook-types.js";
+import type { PluginHookHandlerMap, PluginHookName } from "./hook-types.js";
 import { createHookRunner, type HookRunner } from "./hooks.js";
 
 const getLog = () => createSubsystemLogger("plugins");
@@ -82,12 +69,15 @@ export function hasGlobalHooks<K extends PluginHookName>(
 }
 
 export async function runGlobalGatewayStopSafely(params: {
+  registry?: GlobalHookRunnerRegistry;
   event: PluginHookGatewayStopEvent;
   ctx: PluginHookGatewayContext;
   onError?: (err: unknown) => void;
 }): Promise<void> {
   const log = getLog();
-  const hookRunner = getGlobalHookRunner();
+  const hookRunner = params.registry
+    ? createHookRunner(params.registry, { logger: log })
+    : getGlobalHookRunner();
   if (!hookRunner?.hasHooks("gateway_stop")) {
     return;
   }

@@ -6,7 +6,6 @@ import {
   type EmbeddedAgentCompactResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
-import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { createDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -157,16 +156,9 @@ function watchCodexNativeCompactionCompletion(params: {
         { timeoutMs: Math.max(1, params.interruptGraceMs) },
       )
       .catch((error: unknown) => {
-        // Compaction derives its target from a native start/item receipt, never
-        // a start ACK, so an absent active target follows its terminal state.
         if (isCodexNoActiveTurnInterruptError(error)) {
-          if (compactionItemCompleted) {
-            complete();
-            return;
-          }
-          fail(
-            "codex app-server compaction reached terminal state without a completed compaction item",
-          );
+          // Native records terminal state before sending its notification; only
+          // the terminal status or retirement can settle this compaction.
           return;
         }
         embeddedAgentLog.warn("codex app-server compaction interrupt request failed", {
@@ -384,44 +376,11 @@ function warnIfIgnoringOpenClawCompactionOverrides(
 }
 
 function readIgnoredCompactionOverridePaths(params: CompactEmbeddedAgentSessionParams): string[] {
-  const ignored = new Set<string>();
-  for (const entry of readCompactionOverrideEntries(params)) {
-    const localProvider =
-      typeof entry.record.provider === "string" ? entry.record.provider.trim() : "";
-    if (typeof entry.record.model === "string" && entry.record.model.trim()) {
-      ignored.add(`${entry.path}.compaction.model`);
-    }
-    if (typeof entry.record.thinkingLevel === "string" && entry.record.thinkingLevel.trim()) {
-      ignored.add(`${entry.path}.compaction.thinkingLevel`);
-    }
-    if (localProvider) {
-      ignored.add(`${entry.path}.compaction.provider`);
-    }
-  }
-  return [...ignored];
-}
-
-function readCompactionOverrideEntries(params: CompactEmbeddedAgentSessionParams): Array<{
-  path: string;
-  record: Record<string, unknown>;
-}> {
-  const entries: Array<{
-    path: string;
-    record: Record<string, unknown>;
-  }> = [];
-  const defaultRecord = asOptionalRecord(params.config?.agents?.defaults?.compaction);
-  if (defaultRecord) {
-    entries.push({ path: "agents.defaults", record: defaultRecord });
-  }
-  return entries;
-}
-
-function readAgentIdFromSessionKey(sessionKey: string | undefined): string | undefined {
-  const parts = sessionKey?.trim().toLowerCase().split(":").filter(Boolean) ?? [];
-  if (parts.length < 3 || parts[0] !== "agent") {
-    return undefined;
-  }
-  return parts[1]?.trim() || undefined;
+  const compaction = asOptionalRecord(params.config?.agents?.defaults?.compaction);
+  return ["model", "thinkingLevel", "provider"].flatMap((field) => {
+    const value = compaction?.[field];
+    return typeof value === "string" && value.trim() ? [`agents.defaults.compaction.${field}`] : [];
+  });
 }
 
 async function compactCodexNativeThread(
@@ -518,19 +477,16 @@ async function compactCodexNativeThread(
   }
   let binding = initialBinding;
   const requestedAuthProfileId = params.authProfileId?.trim() || undefined;
-  let connection: ReturnType<typeof resolveCodexBindingAppServerConnection>;
+  let connection: Awaited<ReturnType<typeof resolveCodexBindingAppServerConnection>>;
   try {
     const config = params.config ?? {};
-    const agentId =
-      params.agentId ??
-      readAgentIdFromSessionKey(params.sessionKey) ??
-      resolveDefaultAgentId(config);
-    connection = resolveCodexBindingAppServerConnection({
+    connection = await resolveCodexBindingAppServerConnection({
       binding,
       authProfileId: requestedAuthProfileId ?? binding.authProfileId,
       pluginConfig: options.pluginConfig,
       config,
-      agentDir: resolveAgentDir(config, agentId),
+      assertCurrent,
+      agentDir: resolveAgentDir(config, bindingIdentity.agentId),
     });
   } catch (error) {
     return {
@@ -615,7 +571,7 @@ async function compactCodexNativeThread(
               forceKillDelayMs: 250,
             });
             if (appServer.start.transport === "stdio") {
-              if (transportStopped) {
+              if (transportStopped.exited) {
                 return;
               }
               // A local thread remains runnable with its stdio process. Keep
@@ -1047,8 +1003,7 @@ function isCodexThreadNotFoundError(error: unknown): boolean {
   // app-server's own contract/test asserts the "thread not found" MESSAGE as
   // the discriminator (thread_processor.rs load_thread → invalid_request;
   // compaction.rs asserts message.contains("thread not found")). So the message
-  // is the authoritative positive signal here, not the generic code. This is a
-  // self-heal recovery gate, not user-facing classification.
+  // gates recovery, not user-facing classification; the generic code is ambiguous.
   return coerceErrorMessage(error).toLowerCase().includes("thread not found");
 }
 

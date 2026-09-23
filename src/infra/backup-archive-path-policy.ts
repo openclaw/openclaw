@@ -20,16 +20,16 @@ function stripTrailingSlashes(value: string): string {
 }
 
 export function normalizeArchivePath(entryPath: string, label: string): string {
-  const trimmed = stripTrailingSlashes(entryPath.trim());
-  if (!trimmed) {
+  const filename = stripTrailingSlashes(entryPath);
+  if (!filename) {
     throw new Error(`${label} is empty.`);
   }
-  assertPortableRelativePathSyntax(trimmed, label, entryPath);
-  if (trimmed.split("/").some((segment) => segment === "." || segment === "..")) {
+  assertPortableRelativePathSyntax(filename, label, entryPath);
+  if (filename.split("/").some((segment) => segment === "." || segment === "..")) {
     throw new Error(`${label} contains path traversal segments: ${entryPath}`);
   }
 
-  const normalized = stripTrailingSlashes(path.posix.normalize(trimmed));
+  const normalized = stripTrailingSlashes(path.posix.normalize(filename));
   if (!normalized || normalized === "." || normalized === ".." || normalized.startsWith("../")) {
     throw new Error(`${label} resolves outside the archive root: ${entryPath}`);
   }
@@ -49,36 +49,57 @@ export function isArchivePathWithin(child: string, parent: string): boolean {
   return relative === "" || (!relative.startsWith("../") && relative !== "..");
 }
 
-export function assertArchiveSymbolicLinkTarget(params: {
+export type BackupSymbolicLink = { entryPath: string; linkpath: string };
+
+export function recordArchiveSymbolicLink(params: {
   archiveRoot: string;
   entryPath: string;
   linkpath?: string;
-  assets: readonly { archivePath: string }[];
-}): void {
-  if (!params.linkpath) {
+  platform: string;
+  state?: { sourcePath: string; archivePath: string };
+  hasExternalLinkReport: boolean;
+  assets: readonly { archivePath: string; sourcePath: string }[];
+}): BackupSymbolicLink & { external: boolean | undefined } {
+  if (!params.linkpath || params.linkpath.includes("\0")) {
     throw new Error(`Archive symbolic link is missing its target: ${params.entryPath}`);
   }
-  assertPortableRelativePathSyntax(
-    params.linkpath,
-    "Archive symbolic link target",
-    `${params.entryPath} -> ${params.linkpath}`,
-  );
   const entryPath = normalizeArchivePath(params.entryPath, "Archive symbolic link path");
-  const targetPath = path.posix.normalize(
-    path.posix.join(path.posix.dirname(entryPath), params.linkpath),
+  const asset = params.assets.find(({ archivePath }) =>
+    isArchivePathWithin(entryPath, archivePath),
   );
-  if (!isArchivePathWithin(targetPath, normalizeArchiveRoot(params.archiveRoot))) {
-    throw new Error(
-      `Archive symbolic link target is outside the declared archive root: ${params.entryPath} -> ${params.linkpath}`,
-    );
-  }
-  const insideDeclaredAsset = (linkPath: string) =>
-    params.assets.some(({ archivePath: assetPath }) =>
-      isArchivePathWithin(linkPath, normalizeArchivePath(assetPath, "Backup manifest asset path")),
-    );
-  if (!insideDeclaredAsset(entryPath) || !insideDeclaredAsset(targetPath)) {
+  if (!asset || !isArchivePathWithin(entryPath, normalizeArchiveRoot(params.archiveRoot))) {
     throw new Error(
       `Archive symbolic link is outside the declared backup assets: ${params.entryPath} -> ${params.linkpath}`,
     );
   }
+  // Archives predating link reports only stored portable links to declared assets.
+  if (!params.hasExternalLinkReport) {
+    assertPortableRelativePathSyntax(params.linkpath, "Archive symbolic link target");
+    const target = path.posix.join(path.posix.dirname(entryPath), params.linkpath);
+    if (!params.assets.some(({ archivePath }) => isArchivePathWithin(target, archivePath))) {
+      throw new Error("Backup manifest external symbolic links do not match archive entries.");
+    }
+  } else if (!params.state) {
+    throw new Error("Backup manifest is missing the symbolic-link state boundary.");
+  }
+  // Classify the recorded first hop without opening its target or collapsing a chain.
+  const sourcePaths = params.platform === "win32" ? path.win32 : path.posix;
+  const absolute = sourcePaths.isAbsolute(params.linkpath);
+  const targetPaths = absolute ? sourcePaths : path.posix;
+  const target = absolute
+    ? sourcePaths.normalize(params.linkpath)
+    : path.posix.join(
+        path.posix.dirname(entryPath),
+        params.platform === "win32" ? params.linkpath.replaceAll("\\", "/") : params.linkpath,
+      );
+  const relative = params.state
+    ? targetPaths.relative(absolute ? params.state.sourcePath : params.state.archivePath, target)
+    : undefined;
+  const external =
+    relative === undefined
+      ? undefined
+      : targetPaths.isAbsolute(relative) ||
+        relative === ".." ||
+        relative.startsWith(`..${targetPaths.sep}`);
+  return { entryPath: params.entryPath, linkpath: params.linkpath, external };
 }

@@ -3,6 +3,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { loadPluginRegistrySnapshotWithMetadata } from "./plugin-registry.js";
 import type { LoadPluginRegistryParams, PluginRegistrySnapshot } from "./plugin-registry.js";
 import { getPluginRegistryState } from "./runtime-state.js";
+import { getPluginRuntimeGenerationRegistry } from "./runtime/generation-state.js";
 
 function uniqueProviderRefs(values: readonly string[]): string[] {
   const seen = new Set<string>();
@@ -56,7 +57,7 @@ export function resolveRuntimeSyntheticAuthProviderRefs(
 export function resolveRuntimeSyntheticAuthProviderRefState(
   params: SyntheticAuthProviderRefParams = {},
 ): { refs: string[]; complete: boolean } {
-  const registry = getPluginRegistryState()?.activeRegistry;
+  const registry = getPluginRuntimeGenerationRegistry() ?? getPluginRegistryState()?.activeRegistry;
   if (registry) {
     return {
       refs: uniqueProviderRefs([

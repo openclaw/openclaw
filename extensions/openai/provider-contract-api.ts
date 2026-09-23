@@ -18,6 +18,16 @@ const OPENAI_ACCOUNT_WIZARD_GROUP = {
   groupLabel: "OpenAI",
   groupHint: "ChatGPT/Codex sign-in or API key",
 } as const;
+const CODEX_CHATGPT_IMPORT = {
+  migrationProviderId: "codex",
+  itemId: "auth:openai",
+  credentialKind: "oauth",
+} as const;
+const CODEX_API_KEY_IMPORT = {
+  migrationProviderId: "codex",
+  itemId: "auth:openai:api-key",
+  credentialKind: "api_key",
+} as const;
 
 function accountSubject(access: string): { accountId: string; userId: string } | undefined {
   const claims = asNonArrayRecord(
@@ -64,12 +74,12 @@ export function createOpenAIProvider(): ProviderPlugin {
         hint: OPENAI_CHATGPT_LOGIN_HINT,
         run: noopAuth,
         matchesPersonalAccount,
+        credentialImport: CODEX_CHATGPT_IMPORT,
         wizard: {
           choiceId: "openai",
           choiceLabel: OPENAI_CHATGPT_LOGIN_LABEL,
           choiceHint: OPENAI_CHATGPT_LOGIN_HINT,
-          assistantPriority: -40,
-          onboardingFeatured: true,
+          assistantPriority: -10,
           ...OPENAI_ACCOUNT_WIZARD_GROUP,
         },
       },
@@ -80,11 +90,13 @@ export function createOpenAIProvider(): ProviderPlugin {
         hint: OPENAI_CHATGPT_DEVICE_PAIRING_HINT,
         run: noopAuth,
         matchesPersonalAccount,
+        credentialImport: CODEX_CHATGPT_IMPORT,
         wizard: {
           choiceId: "openai-device-code",
           choiceLabel: OPENAI_CHATGPT_DEVICE_PAIRING_LABEL,
           choiceHint: OPENAI_CHATGPT_DEVICE_PAIRING_HINT,
-          assistantPriority: -10,
+          assistantPriority: -40,
+          onboardingFeatured: true,
           ...OPENAI_ACCOUNT_WIZARD_GROUP,
         },
       },
@@ -94,6 +106,7 @@ export function createOpenAIProvider(): ProviderPlugin {
         label: OPENAI_API_KEY_LABEL,
         hint: "Use your OpenAI API key directly",
         run: noopAuth,
+        credentialImport: CODEX_API_KEY_IMPORT,
         wizard: {
           choiceId: "openai-api-key",
           choiceLabel: OPENAI_API_KEY_LABEL,

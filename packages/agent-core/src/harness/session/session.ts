@@ -1,7 +1,6 @@
 import { stripCompactionReplayCheckpoint } from "@openclaw/ai/transports";
 import type { AgentMessage } from "../../types.js";
 import {
-  asAgentMessage,
   createBranchSummaryMessage,
   createCompactionSummaryMessage,
   createCustomMessage,
@@ -37,23 +36,17 @@ export function projectSessionEntryMessage(entry: SessionTreeEntry): AgentMessag
         ? undefined
         : entry.message;
     case "custom_message":
-      return asAgentMessage(
-        createCustomMessage(
-          entry.customType,
-          entry.content,
-          entry.display,
-          entry.details,
-          entry.timestamp,
-        ),
+      return createCustomMessage(
+        entry.customType,
+        entry.content,
+        entry.display,
+        entry.details,
+        entry.timestamp,
       );
     case "branch_summary":
-      return asAgentMessage(
-        createBranchSummaryMessage(entry.summary, entry.fromId, entry.timestamp),
-      );
+      return createBranchSummaryMessage(entry.summary, entry.fromId, entry.timestamp);
     case "compaction":
-      return asAgentMessage(
-        createCompactionSummaryMessage(entry.summary, entry.tokensBefore, entry.timestamp),
-      );
+      return createCompactionSummaryMessage(entry.summary, entry.tokensBefore, entry.timestamp);
     default:
       return undefined;
   }
@@ -72,7 +65,9 @@ export function* iterateSessionContextEntries<T extends SessionTreeEntry>(
   if (boundary) {
     yield { entry: boundary, context: "current" };
   }
-  for (const [index, entry] of pathEntries.entries()) {
+  let index = -1;
+  for (const entry of pathEntries) {
+    index += 1;
     const retained = index < boundaryIndex;
     if (
       index === boundaryIndex ||

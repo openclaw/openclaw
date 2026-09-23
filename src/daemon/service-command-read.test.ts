@@ -7,9 +7,10 @@ import {
   LAUNCH_AGENT_ENV_WRAPPER_SHELL,
   quoteLaunchAgentEnvironmentValue,
 } from "./launchd-plist.js";
+import { decodeLaunchAgentPlistFixture } from "./launchd-plist.test-support.js";
 import { readLaunchAgentProgramArguments } from "./launchd-runtime.js";
 import {
-  resolveLaunchAgentEnvFilePath,
+  resolveLaunchAgentEnvironmentReadOptions,
   resolveLaunchAgentEnvWrapperPath,
   resolveLaunchAgentPlistPath,
 } from "./launchd-service-files.js";
@@ -29,7 +30,7 @@ const native = vi.hoisted(() => ({
   launchctl: vi.fn(),
   scheduler: vi.fn(),
   plutil: vi.fn(),
-  plistRecords: new Map<string, unknown>(),
+  plists: new Set<string>(),
 }));
 vi.mock("./exec-file.js", () => ({ execFileUtf8: native.launchctl }));
 vi.mock("../process/exec.js", async (importOriginal) => ({
@@ -52,7 +53,7 @@ const renderPlist = (args: string[]) => {
     stderrPath: "/service-stderr.log",
     environment,
   });
-  native.plistRecords.set(contents, { ProgramArguments: args, EnvironmentVariables: environment });
+  native.plists.add(contents);
   return contents;
 };
 const readers: Array<{
@@ -92,13 +93,13 @@ describe("native service command inspection", () => {
       stderr: "Could not find service",
     });
     native.scheduler.mockReset().mockReturnValue({ status: 1, stdout: "-2147024894" });
-    native.plistRecords.clear();
-    native.plutil.mockReset().mockImplementation(async (_command, _args, options) => {
+    native.plists.clear();
+    native.plutil.mockReset().mockImplementation(async (_command, args, options) => {
       const captured = Buffer.from(options.input).toString("utf8");
-      if (!native.plistRecords.has(captured)) {
+      if (!native.plists.has(captured)) {
         throw new Error("native-plist-inspection-secret-canary");
       }
-      return { stdout: JSON.stringify(native.plistRecords.get(captured)), stderr: "" };
+      return decodeLaunchAgentPlistFixture(options.input, args[1]);
     });
   });
   afterEach(async () => {
@@ -124,15 +125,17 @@ describe("native service command inspection", () => {
     it.each(["registered", "unavailable"])(
       "does not infer absence from a missing file when native inspection is %s",
       async (condition) => {
-        native.launchctl.mockResolvedValue(
-          condition === "registered"
-            ? { code: 0, termination: "exit", stdout: "state = waiting", stderr: "" }
-            : {
-                code: 1,
-                termination: "error",
-                stdout: "",
-                stderr: "native-inspection-secret-canary",
-              },
+        native.launchctl.mockImplementation(async (_command: string, args: string[]) =>
+          args[1]?.startsWith("system/")
+            ? { code: 113, termination: "exit", stdout: "", stderr: "Could not find service" }
+            : condition === "registered"
+              ? { code: 0, termination: "exit", stdout: "state = waiting", stderr: "" }
+              : {
+                  code: 1,
+                  termination: "error",
+                  stdout: "",
+                  stderr: "native-inspection-secret-canary",
+                },
         );
         native.scheduler.mockReturnValue(
           condition === "registered"
@@ -256,13 +259,24 @@ describe("native service command inspection", () => {
     { decoded: { ProgramArguments: programArguments, EnvironmentVariables: { HOME: 42 } } },
   ])("rejects unsupported native plist field types: $decoded", async ({ decoded }) => {
     await writeFile(resolveLaunchAgentPlistPath(env), renderPlist(programArguments));
-    native.plutil.mockResolvedValue({ stdout: JSON.stringify(decoded), stderr: "" });
+    native.plutil.mockImplementation(async (_command, args, options) =>
+      args[1] === "json"
+        ? {
+            stdout: JSON.stringify(Array.isArray(decoded) ? decoded : { Label: label, ...decoded }),
+            stderr: "",
+          }
+        : decodeLaunchAgentPlistFixture(options.input, args[1]),
+    );
     await expect(readLaunchAgentProgramArguments(env, { requireEffective: true })).rejects.toThrow(
       "Effective LaunchAgent service command could not be inspected.",
     );
   });
 
-  it("preserves the native command without trimming or dropping arguments", async () => {
+  it("preserves the native command without trimming or dropping arguments", async ({
+    onTestFinished,
+  }) => {
+    const clock = vi.spyOn(performance, "now").mockReturnValue(1_000);
+    onTestFinished(() => clock.mockRestore());
     const recordedArguments = ["node", "  spaced argument  ", ""];
     const contents = renderPlist(recordedArguments);
     await writeFile(resolveLaunchAgentPlistPath(env), contents);
@@ -271,17 +285,27 @@ describe("native service command inspection", () => {
         readLaunchAgentProgramArguments(env, { requireEffective, timeoutMs: 750 }),
       ).resolves.toMatchObject({ programArguments: recordedArguments });
     }
-    expect(native.plutil).toHaveBeenCalledWith(
+    expect(native.plutil).toHaveBeenNthCalledWith(
+      1,
+      "/usr/bin/plutil",
+      ["-convert", "xml1", "-o", "-", "--", "-"],
+      expect.objectContaining({ input: Buffer.from(contents), timeoutMs: 750, logOutput: false }),
+    );
+    expect(native.plutil).toHaveBeenNthCalledWith(
+      2,
       "/usr/bin/plutil",
       ["-convert", "json", "-o", "-", "--", "-"],
-      expect.objectContaining({ input: Buffer.from(contents), timeoutMs: 750, logOutput: false }),
+      expect.objectContaining({ input: contents, timeoutMs: 750, logOutput: false }),
     );
   });
 
   it.each(["missing", "unreadable"])(
     "keeps %s generated environment recovery out of strict inspection",
     async (failure) => {
-      const expectedEnvFile = resolveLaunchAgentEnvFilePath(env, label);
+      const expectedEnvFile = resolveLaunchAgentEnvironmentReadOptions(
+        env,
+        label,
+      ).expectedEnvironmentFilePath;
       const recordedEnvFile = path.join(root, "other", "service-env", `${label}.env`);
       const recordedWrapper = path.join(root, "other", "service-env", `${label}-env-wrapper.sh`);
       await writeFile(expectedEnvFile, "export OPENCLAW_STATE_DIR='/recovered-state'\n");
@@ -310,7 +334,10 @@ describe("native service command inspection", () => {
   it.each(["o'brien\\cash$", "first line\r\n  second line\nthird 'quoted' \\cash$"])(
     "reads the recorded generated literal in strict mode: %j",
     async (literal) => {
-      const envFile = resolveLaunchAgentEnvFilePath(env, label);
+      const envFile = resolveLaunchAgentEnvironmentReadOptions(
+        env,
+        label,
+      ).expectedEnvironmentFilePath;
       await writeFile(
         envFile,
         `export OPENCLAW_STATE_DIR='/recorded-state'\nexport NODE_OPTIONS=''\nexport QUOTE=${quoteLaunchAgentEnvironmentValue(literal)}\n`,
@@ -339,7 +366,10 @@ describe("native service command inspection", () => {
     "export OPENCLAW_STATE_DIR=$(printf unsupported)",
     "export OPENCLAW_STATE_DIR='/partial'; echo unsupported-command",
   ])("rejects unsupported generated environment syntax: %s", async (line) => {
-    const envFile = resolveLaunchAgentEnvFilePath(env, label);
+    const envFile = resolveLaunchAgentEnvironmentReadOptions(
+      env,
+      label,
+    ).expectedEnvironmentFilePath;
     await writeFile(envFile, `export HOME='/partial-home'\n${line}\n`);
     await writeFile(
       resolveLaunchAgentPlistPath(env),

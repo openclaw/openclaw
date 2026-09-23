@@ -1,4 +1,12 @@
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import type {
@@ -61,6 +69,7 @@ import {
 } from "./installed.ts";
 import { installLaneCompanions } from "./lane-companions.ts";
 import { maybeRunDiscordRoundtrip } from "./network-smokes.ts";
+import { runPackagedSelfUpdateTransition } from "./packaged-self-update.ts";
 import {
   reserveGatewayPortForLane,
   runCleanup,
@@ -143,6 +152,20 @@ export async function runFreshLane(params: LaneBaseParams & { build: CandidateBu
       });
     });
 
+    const authoredConfigPath = join(lane.stateDir, "openclaw.json");
+    const nestedPluginPath = "~/.openclaw/wiki";
+    await runTimedLanePhase(lane, "seed-nested-plugin-path", async () => {
+      const config = JSON.parse(readFileSync(authoredConfigPath, "utf8"));
+      config.plugins ??= {};
+      config.plugins.entries ??= {};
+      // A disabled entry exercises generic path expansion without changing provider setup.
+      config.plugins.entries.wiki = {
+        enabled: false,
+        config: { store: { path: nestedPluginPath } },
+      };
+      writeFileSync(authoredConfigPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+    });
+
     const gateway = await runTimedLanePhase(lane, "start-gateway", async () => {
       await gatewayPortReservation.release();
       return startGateway({
@@ -162,6 +185,13 @@ export async function runFreshLane(params: LaneBaseParams & { build: CandidateBu
         gatewayLogPath: join(params.logsDir, "fresh-gateway.log"),
         logPath: join(params.logsDir, "fresh-gateway-status.log"),
       });
+    });
+
+    await runTimedLanePhase(lane, "verify-nested-plugin-path", async () => {
+      const config = JSON.parse(readFileSync(authoredConfigPath, "utf8"));
+      if (config.plugins?.entries?.wiki?.config?.store?.path !== nestedPluginPath) {
+        throw new Error("Fresh Gateway startup changed the authored nested plugin path.");
+      }
     });
 
     await runTimedLanePhase(lane, "dashboard", async () => {
@@ -250,6 +280,15 @@ export async function runUpgradeLane(
     const baseline = {
       version: readInstalledVersion(lane.prefixDir),
     };
+
+    if (baseline.version === "2026.9.2" && params.build.candidateVersion === "2026.9.3") {
+      return await runPackagedSelfUpdateTransition({
+        ...params,
+        lane,
+        env,
+        baselineVersion: baseline.version,
+      });
+    }
 
     const updateEnv = buildRealUpdateEnv(env);
     const updateArgs = buildPackagedUpgradeUpdateArgs(params.candidateUrl);

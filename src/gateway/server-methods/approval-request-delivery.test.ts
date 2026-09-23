@@ -187,10 +187,7 @@ describe("runApprovalRequestDeliveries", () => {
     const manager = createTestApprovalManager(testContext);
     const record = manager.create({ command: "echo ok" }, 60_000, "approval-late-push-failure");
     const error = vi.fn();
-    let rejectPush: ((reason: Error) => void) | undefined;
-    const pendingPush = new Promise<boolean>((_resolve, reject) => {
-      rejectPush = reject;
-    });
+    const { promise: pendingPush, reject: rejectPush } = createDeferredCore<boolean>();
 
     const delivery = runApprovalRequestDeliveries({
       context: deliveryContext(error),
@@ -223,10 +220,7 @@ describe("runApprovalRequestDeliveries", () => {
       const record = manager.create({ command: "echo ok" }, 60_000, "approval-deliveries");
       const started: string[] = [];
       const error = vi.fn();
-      let finishDelivery: ((delivered: boolean) => void) | undefined;
-      const successfulResult = new Promise<boolean>((resolve) => {
-        finishDelivery = resolve;
-      });
+      const { promise: successfulResult, resolve: finishDelivery } = createDeferredCore<boolean>();
 
       const delivery = runApprovalRequestDeliveries({
         context: deliveryContext(error),

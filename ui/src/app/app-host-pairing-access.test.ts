@@ -3,6 +3,7 @@
 import { render, type TemplateResult } from "lit";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { visibleSettingsNavigationGroups } from "../app-navigation.ts";
 import "../components/app-sidebar.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
@@ -13,7 +14,6 @@ import "./app-host.ts";
 type PairingShell = HTMLElement & {
   runtime?: ApplicationRuntime;
   render: () => TemplateResult;
-  refreshControlUi: () => Promise<boolean>;
   routeState: {
     routeId?: string;
     location?: { pathname: string; search: string; hash: string };
@@ -270,7 +270,20 @@ describe("application shell pairing access", () => {
       '.settings-sidebar__loading[role="status"][aria-busy="true"]',
     );
     expect(loadingSkeleton?.getAttribute("aria-label")).toBe("Loading…");
-    expect(loadingSkeleton?.querySelectorAll(".settings-sidebar__loading-row")).toHaveLength(7);
+    // Legacy operator auth (no scopes) resolves to admin access, so the skeleton
+    // must draw the full admin navigation.
+    const expectedItems = visibleSettingsNavigationGroups(true).reduce(
+      (count, group) => count + group.routes.length,
+      0,
+    );
+    expect(loadingSkeleton?.querySelectorAll(".settings-sidebar__loading-item")).toHaveLength(
+      expectedItems,
+    );
+    expect(
+      loadingSkeleton?.querySelectorAll(
+        ".settings-sidebar__loading-item .settings-sidebar__loading-icon",
+      ),
+    ).toHaveLength(expectedItems);
     expect(loadRenderer).toHaveBeenCalledOnce();
   });
 
@@ -295,27 +308,6 @@ describe("application shell pairing access", () => {
     );
     retry?.click();
     expect(retryRenderer).toHaveBeenCalledOnce();
-  });
-
-  it("preserves the settings refresh result for stale-client recovery", () => {
-    const { shell, container } = createPairingShell({ auth: { role: "operator" } });
-    const refreshResult = new Promise<boolean>(() => {
-      // Keep the probe pending so the callback must preserve its lifecycle.
-    });
-    const refreshControlUi = vi.fn(() => refreshResult);
-    const settingsSidebarRenderer = vi.fn((_props: { onRefresh: () => Promise<boolean> }) => null);
-    shell.routeState = {
-      routeId: "profile",
-      location: { pathname: "/settings/profile", search: "", hash: "" },
-    };
-    shell.refreshControlUi = refreshControlUi;
-    shell.settingsSidebarRenderer = settingsSidebarRenderer;
-
-    render(shell.render(), container);
-
-    const onRefresh = settingsSidebarRenderer.mock.calls[0]?.[0].onRefresh;
-    expect(onRefresh?.()).toBe(refreshResult);
-    expect(refreshControlUi).toHaveBeenCalledOnce();
   });
 
   it("shows a visible accessible error when a mobile setup code cannot be copied", async () => {

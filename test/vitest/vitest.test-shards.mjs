@@ -21,6 +21,7 @@ export const tuiPtyTestFiles = [
   "src/tui/tui-error-pty.e2e.test.ts",
   "src/tui/tui-hyperlinks-pty.e2e.test.ts",
   "src/tui/tui-picker-cancel-pty.e2e.test.ts",
+  "src/tui/tui-text-wrap-pty.e2e.test.ts",
   "src/tui/tui-pty-local.e2e.test.ts",
 ];
 
@@ -98,6 +99,7 @@ export const fullSuiteVitestShards = [
       "test/vitest/vitest.tui.config.ts",
       "test/vitest/vitest.tui-pty.config.ts",
       "test/vitest/vitest.ui.config.ts",
+      "test/vitest/vitest.ui-timing.config.ts",
       "test/vitest/vitest.ui-browser.config.ts",
       "test/vitest/vitest.ui-isolated.config.ts",
       "test/vitest/vitest.utils.config.ts",
@@ -109,6 +111,7 @@ export const fullSuiteVitestShards = [
     name: "agentic",
     projects: [
       "test/vitest/vitest.gateway-core.config.ts",
+      "test/vitest/vitest.gateway-database-workers.config.ts",
       "test/vitest/vitest.gateway-client.config.ts",
       "test/vitest/vitest.gateway-methods.config.ts",
       "test/vitest/vitest.gateway-methods-isolated.config.ts",
@@ -141,8 +144,6 @@ export const fullSuiteVitestShards = [
     projects: [
       "test/vitest/vitest.extension-active-memory.config.ts",
       "test/vitest/vitest.extension-acpx.config.ts",
-      "test/vitest/vitest.extension-codex-app-server-attempt.config.ts",
-      "test/vitest/vitest.extension-codex-app-server-attempt-extra.config.ts",
       "test/vitest/vitest.extension-codex-app-server-attempt-light.config.ts",
       "test/vitest/vitest.extension-codex-app-server-attempt-support.config.ts",
       "test/vitest/vitest.extension-codex-app-server-runtime.config.ts",
@@ -164,6 +165,7 @@ export const fullSuiteVitestShards = [
       "test/vitest/vitest.extension-providers.config.ts",
       "test/vitest/vitest.extension-signal.config.ts",
       "test/vitest/vitest.extension-slack.config.ts",
+      "test/vitest/vitest.extension-database-workers.config.ts",
       "test/vitest/vitest.extension-telegram.config.ts",
       "test/vitest/vitest.extension-voice-call.config.ts",
       "test/vitest/vitest.extension-whatsapp.config.ts",

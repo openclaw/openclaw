@@ -119,6 +119,8 @@ type ActiveRecallParams = {
   messageProvider?: string;
   channelId?: string;
   query: string;
+  /** Undefined uses legacy query identity; null disables request-local reuse. */
+  requestKey?: string | null;
   searchQuery: string;
   currentModelProviderId?: string;
   currentModelId?: string;
@@ -447,7 +449,7 @@ async function resolveActiveRecall(
 
 async function maybeResolveActiveRecall(params: ActiveRecallParams): Promise<ActiveRecallResult> {
   const { runId, ...recallParams } = params;
-  if (!runId) {
+  if (!runId || params.requestKey === null) {
     return await resolveActiveRecall(recallParams);
   }
   const model = getModelRef(params.runtimeConfig, params.agentId, params.config, {
@@ -458,7 +460,8 @@ async function maybeResolveActiveRecall(params: ActiveRecallParams): Promise<Act
     agentId: params.agentId,
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
-    query: params.query,
+    // Run-local reuse follows request identity; the cross-turn content cache stays query-based.
+    query: params.requestKey ?? params.query,
     authorityFingerprint: params.authorityFingerprint,
     memorySlot: params.memorySlot,
     activeProjectKeys: params.activeProjectKeys,

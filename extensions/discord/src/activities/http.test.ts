@@ -582,6 +582,9 @@ describe("Discord Activity widget routes", () => {
     const firstCsp = firstDocument.headers.get("content-security-policy");
     expect(firstCsp).toContain("sandbox allow-scripts");
     expect(firstCsp).toContain("connect-src 'none'");
+    expect(firstCsp).toContain("https://cdn.jsdelivr.net");
+    expect(firstCsp).toContain("https://fonts.googleapis.com");
+    expect(firstCsp).toContain("https://fonts.gstatic.com");
     expect(await firstDocument.text()).toContain("document.body.dataset.ready");
     const secondDocument = await fetch(documentUrl);
     expect(secondDocument.status).toBe(404);

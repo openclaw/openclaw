@@ -257,11 +257,13 @@ export function resolveGoogleGeminiForwardCompatModel(params: {
     patch: { provider: params.providerId },
     cases: GOOGLE_FORWARD_COMPAT_CASES.map(({ family, match, patch }) => ({
       match,
-      templateSources: buildGoogleTemplateSources({
-        providerId: params.providerId,
-        templateProviderId: params.templateProviderId,
-        family,
-      }),
+      get templateSources() {
+        return buildGoogleTemplateSources({
+          providerId: params.providerId,
+          templateProviderId: params.templateProviderId,
+          family,
+        });
+      },
       patch,
     })),
   });

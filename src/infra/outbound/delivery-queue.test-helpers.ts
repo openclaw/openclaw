@@ -4,14 +4,42 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import {
+  claimDeliveryQueueEntryPlatformSendInDatabase,
+  renewDeliveryQueueEntryPlatformSendLeaseInDatabase,
+} from "../delivery-queue-sqlite-claim.kernel.js";
 import { loadDeliveryQueueEntries } from "../delivery-queue-sqlite.js";
 import { resolvePreferredOpenClawTmpDir } from "../tmp-openclaw-dir.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-media-staging.js";
 import type { DeliverFn, RecoveryLogger } from "./delivery-queue-recovery.js";
 import type { QueuedDelivery } from "./delivery-queue-types.js";
+
+// Clock-controlled kernel cases stay in one realm; facade tests exercise real worker leases.
+export function claimDeliveryQueueEntryForTest(
+  params: Parameters<typeof claimDeliveryQueueEntryPlatformSendInDatabase>[1] & {
+    stateDir: string;
+  },
+) {
+  return claimDeliveryQueueEntryPlatformSendInDatabase(
+    openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } }),
+    params,
+  );
+}
+
+export function renewDeliveryQueueEntryLeaseForTest(
+  params: Parameters<typeof renewDeliveryQueueEntryPlatformSendLeaseInDatabase>[1] & {
+    stateDir: string;
+  },
+) {
+  return renewDeliveryQueueEntryPlatformSendLeaseInDatabase(
+    openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } }),
+    params,
+  );
+}
 
 export async function loadPendingDeliveries(stateDir?: string): Promise<QueuedDelivery[]> {
   return loadDeliveryQueueEntries(OUTBOUND_DELIVERY_QUEUE_NAME, stateDir) as QueuedDelivery[];
@@ -32,7 +60,8 @@ export function installDeliveryQueueTmpDirHooks(): { readonly tmpDir: () => stri
     fs.mkdirSync(tmpDir, { recursive: true });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     if (tmpDir) {
       fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -40,7 +69,8 @@ export function installDeliveryQueueTmpDirHooks(): { readonly tmpDir: () => stri
     }
   });
 
-  afterAll(() => {
+  afterAll(async () => {
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     if (!fixtureRoot) {
       return;

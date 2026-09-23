@@ -123,7 +123,7 @@ export function formatAccount(
   limits: SafeValue<JsonValue | undefined>,
   authOverview?: CodexAccountAuthOverview,
 ): string {
-  if (authOverview) {
+  if (authOverview?.rows.some((row) => row.active)) {
     return formatAccountAuthOverview(authOverview);
   }
   const formattedLimits = limits.ok
@@ -137,6 +137,7 @@ export function formatAccount(
   return [
     `Account: ${account.ok ? formatCodexAccountSummary(account.value) : formatCodexDisplayText(account.error)}`,
     rateLimitBlock,
+    ...(authOverview ? [formatAccountAuthOverview(authOverview)] : []),
   ].join("\n\n");
 }
 
@@ -338,7 +339,7 @@ function escapeCodexChatTextPreservingAt(value: string): string {
   return escapeCodexChatText(value).replaceAll("\uff20", "@");
 }
 
-function formatCodexAccountLine(value: string): string {
+export function formatCodexAccountLine(value: string): string {
   if (value === "") {
     return "";
   }
@@ -403,6 +404,7 @@ export function buildHelp(): string {
     "- /codex diagnostics [note]",
     "- /codex computer-use [status|install]",
     "- /codex account",
+    "- /codex plugins refresh                   refresh hosted inventory for the current Codex account/runtime",
     "- /codex mcp",
     "- /codex skills",
     "- /codex plugins [list|enable|disable]",

@@ -85,24 +85,30 @@ describe("readSessionMethodAccess", () => {
     ).toEqual({ allowed: true, requiredScope: "operator.admin" });
   });
 
-  it("keeps model and effort patch access independent", () => {
-    const writeOnly = snapshot({ methods: ["sessions.patch"], scopes: ["operator.write"] });
+  it.each(["model", "thinkingLevel", "fastMode"])(
+    "allows write-scoped %s changes while keeping read-only clients read-only",
+    (field) => {
+      for (const scope of ["operator.read", "operator.write", "operator.admin"]) {
+        expect(
+          readSessionMethodAccess(snapshot({ methods: ["sessions.patch"], scopes: [scope] }), {
+            method: "sessions.patch",
+            params: { key: "agent:main:main", [field]: null },
+          }),
+        ).toMatchObject({ allowed: scope !== "operator.read", requiredScope: "operator.write" });
+      }
+    },
+  );
+
+  it("keeps context-window changes separate from write-scoped effort access", () => {
     expect(
-      readSessionMethodAccess(writeOnly, {
-        method: "sessions.patch",
-        params: { key: "agent:main:main", model: null },
-      }),
-    ).toEqual({ allowed: true, requiredScope: "operator.write" });
-    expect(
-      readSessionMethodAccess(writeOnly, {
-        method: "sessions.patch",
-        params: { key: "agent:main:main", thinkingLevel: null },
-      }),
-    ).toMatchObject({
-      allowed: false,
-      cause: "missing-scope",
-      requiredScope: "operator.admin",
-    });
+      readSessionMethodAccess(
+        snapshot({ methods: ["sessions.patch"], scopes: ["operator.write"] }),
+        {
+          method: "sessions.patch",
+          params: { key: "agent:main:main", contextWindow: null },
+        },
+      ),
+    ).toMatchObject({ allowed: false, cause: "missing-scope", requiredScope: "operator.admin" });
   });
 
   it("allows admin to satisfy write-scoped actions", () => {

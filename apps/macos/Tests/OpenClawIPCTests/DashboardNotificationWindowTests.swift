@@ -5,23 +5,6 @@ import Testing
 import WebKit
 @testable import OpenClaw
 
-@MainActor
-private final class DashboardNotificationAlertCapture: NSObject {
-    private(set) var textValues: [String] = []
-
-    @objc func captureAndAbortModal() {
-        if let contentView = NSApp.modalWindow?.contentView {
-            self.textValues = Self.textValues(in: contentView)
-        }
-        NSApp.abortModal()
-    }
-
-    private static func textValues(in view: NSView) -> [String] {
-        let current = (view as? NSTextField).map { [$0.stringValue] } ?? []
-        return current + view.subviews.flatMap { self.textValues(in: $0) }
-    }
-}
-
 private struct DashboardNotificationEndpointFailure: Error {}
 
 @MainActor
@@ -34,24 +17,23 @@ extension DashboardWindowOwnershipTests {
             let bundlePathIndex = arguments.index(after: bundleFlagIndex)
             let testBundlePath = try #require(
                 arguments.indices.contains(bundlePathIndex) ? arguments[bundlePathIndex] : nil)
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: arguments[0])
-            process.arguments = [
-                "--test-bundle-path", testBundlePath,
-                "--testing-library", "swift-testing",
-                "--filter", "localized background session failure title",
-            ]
-            var environment = ProcessInfo.processInfo.environment
-            environment[probeKey] = "1"
-            process.environment = environment
-            let output = Pipe()
-            process.standardOutput = output
-            process.standardError = output
-            try process.run()
-            process.waitUntilExit()
-            let text = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-            #expect(process.terminationStatus == 0, Comment(rawValue: text))
-            #expect(text.contains("\(probeKey)=ok"), Comment(rawValue: text))
+            // Keep inherited fixture state alive while the child initializes AppState.
+            try await TestIsolation.withIsolatedState {
+                var environment = ProcessInfo.processInfo.environment
+                environment[probeKey] = "1"
+                let result = try await BoundedProcess.run(
+                    path: arguments[0],
+                    arguments: [
+                        "--test-bundle-path", testBundlePath,
+                        "--testing-library", "swift-testing",
+                        "--filter", "localized background session failure title",
+                    ],
+                    environment: environment,
+                    timeout: 120)
+                let text = String(decoding: result.output, as: UTF8.self)
+                #expect(result.terminationStatus == 0, Comment(rawValue: text))
+                #expect(text.contains("\(probeKey)=ok"), Comment(rawValue: text))
+            }
             return
         }
 
@@ -69,20 +51,13 @@ extension DashboardWindowOwnershipTests {
         let manager = DashboardManager._testMake(
             primaryEndpointProvider: { _ in throw DashboardNotificationEndpointFailure() })
         defer { manager.close() }
-        let capture = DashboardNotificationAlertCapture()
-        let timer = Timer(
-            timeInterval: 0.01,
-            target: capture,
-            selector: #selector(DashboardNotificationAlertCapture.captureAndAbortModal),
-            userInfo: nil,
-            repeats: false)
-        RunLoop.main.add(timer, forMode: .modalPanel)
 
         let sourceURL = try #require(URL(string: "https://gateway.example"))
         try await manager.openBackgroundSession(
             self.completion(), target: .primary, sourceURL: sourceURL)
 
-        #expect(capture.textValues.contains(expectedTitle))
+        // The failure is presented without a modal loop; read the pending alert directly.
+        #expect(manager._testPendingGatewayAlerts().map(\.messageText).contains(expectedTitle))
         print("\(probeKey)=ok")
     }
 

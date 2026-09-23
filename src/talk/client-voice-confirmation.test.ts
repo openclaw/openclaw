@@ -1,14 +1,18 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   authorizeClientVoiceConfirmation as authorizeClientVoiceConfirmationForTest,
+  authorizeObservedClientVoiceConfirmation,
   bindAuthorizedClientVoiceConfirmation,
   checkClientVoiceToolConfirmationPolicy as checkClientVoiceToolConfirmationPolicyForTest,
   consumeClientVoiceToolConfirmationPolicy as consumeClientVoiceToolConfirmationPolicyForTest,
   deactivateClientVoiceConfirmationSession,
-  noteClientVoiceConfirmationUtterance as noteClientVoiceConfirmationUtteranceForTest,
+  invalidateClientVoiceConfirmationUtterance,
+  observeClientVoiceConfirmationRun,
+  readClientVoiceConfirmationReadiness,
   releaseClientVoiceConfirmationRun,
 } from "./client-voice-confirmation.js";
 import {
+  noteClientVoiceConfirmationUtteranceForTest,
   resetClientVoiceConfirmationStateForTest,
   snapshotClientVoiceConfirmationStateForTest,
 } from "./client-voice-confirmation.test-support.js";
@@ -70,6 +74,120 @@ describe("client voice confirmation", () => {
   afterEach(() => {
     resetClientVoiceConfirmationStateForTest();
     vi.useRealTimers();
+  });
+
+  it("keeps observed confirmation bound to the exact agent and call", () => {
+    block({ voiceSessionId: "voice-1", runId: "original", now: 100 });
+    noteClientVoiceConfirmationUtterance({
+      voiceSessionId: "voice-1",
+      text: "yes",
+      timestamp: 101,
+    });
+    expect(
+      authorizeObservedClientVoiceConfirmation({
+        agentId: "other",
+        voiceSessionId: "voice-1",
+        now: 102,
+      }),
+    ).toBeUndefined();
+    expect(
+      authorizeObservedClientVoiceConfirmation({
+        agentId: "main",
+        voiceSessionId: "other",
+        now: 102,
+      }),
+    ).toBeUndefined();
+    expect(
+      authorizeObservedClientVoiceConfirmation({
+        agentId: "main",
+        voiceSessionId: "voice-1",
+        now: 102,
+      }),
+    ).toMatchObject({ agentId: "main", voiceSessionId: "voice-1" });
+    expect(snapshotClientVoiceConfirmationStateForTest().approvedGrants).toBe(0);
+  });
+
+  it("wakes readiness for finalized speech, invalidation, and the existing challenge expiry", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(100);
+    block({ voiceSessionId: "voice-1", runId: "original", now: 100 });
+    const waiting = readClientVoiceConfirmationReadiness("main", "voice-1")!;
+    expect(waiting.needsUserUtterance).toBe(true);
+    noteClientVoiceConfirmationUtterance({
+      voiceSessionId: "voice-1",
+      text: "maybe",
+      timestamp: 101,
+    });
+    await waiting.changed;
+    const finalized = readClientVoiceConfirmationReadiness("main", "voice-1")!;
+    expect(finalized.needsUserUtterance).toBe(false);
+    expect(
+      authorizeObservedClientVoiceConfirmation({
+        agentId: "main",
+        voiceSessionId: "voice-1",
+        now: 102,
+      }),
+    ).toBeUndefined();
+    invalidateClientVoiceConfirmationUtterance("main", "voice-1");
+    await finalized.changed;
+    const invalidated = readClientVoiceConfirmationReadiness("main", "voice-1")!;
+    expect(invalidated.needsUserUtterance).toBe(true);
+    await vi.advanceTimersByTimeAsync(120_001);
+    await invalidated.changed;
+    expect(readClientVoiceConfirmationReadiness("main", "voice-1")).toBeUndefined();
+    expect(snapshotClientVoiceConfirmationStateForTest().approvedGrants).toBe(0);
+  });
+
+  it("retains a run's veto report after call cleanup without reporting unrelated runs", () => {
+    const blocked = observeClientVoiceConfirmationRun({
+      agentId: "main",
+      voiceSessionId: "voice-1",
+      runId: "blocked",
+    });
+    const unrelated = observeClientVoiceConfirmationRun({
+      agentId: "main",
+      voiceSessionId: "voice-1",
+      runId: "read-only",
+    });
+    block({ voiceSessionId: "voice-1", runId: "blocked" });
+    expect(blocked.readReply()).toContain('Say "yes"');
+    expect(unrelated.readReply()).toBeUndefined();
+    deactivateClientVoiceConfirmationSession("main", "voice-1", ["blocked"]);
+    expect(blocked.readReply()).toContain("new request");
+    releaseClientVoiceConfirmationRun("main", "voice-1", "blocked");
+    expect(snapshotClientVoiceConfirmationStateForTest().scopeOwners).toBe(0);
+    expect(blocked.readReply()).toContain("new request");
+    expect(unrelated.readReply()).toBeUndefined();
+  });
+
+  it("does not bind a prepared grant after a newer user utterance invalidates its yes", () => {
+    const confirmationId = block({ voiceSessionId: "voice-1", runId: "original", now: 100 });
+    noteClientVoiceConfirmationUtterance({
+      voiceSessionId: "voice-1",
+      text: "yes",
+      timestamp: 101,
+    });
+    const grant = authorizeClientVoiceConfirmation({
+      voiceSessionId: "voice-1",
+      confirmationId,
+      now: 102,
+    });
+    invalidateClientVoiceConfirmationUtterance("main", "voice-1");
+    expect(bindAuthorizedClientVoiceConfirmation({ grant, runId: "retry", now: 103 })).toBe(false);
+    expect(snapshotClientVoiceConfirmationStateForTest().approvedGrants).toBe(0);
+  });
+
+  it("stops observing new vetoes after the exact run observation is released", () => {
+    const observation = observeClientVoiceConfirmationRun({
+      agentId: "main",
+      voiceSessionId: "voice-1",
+      runId: "released",
+    });
+    observation.release();
+    expect(snapshotClientVoiceConfirmationStateForTest().scopeOwners).toBe(0);
+    block({ voiceSessionId: "voice-1", runId: "released" });
+    expect(observation.readReply()).toBeUndefined();
+    expect(snapshotClientVoiceConfirmationStateForTest().approvedGrants).toBe(0);
   });
 
   it("does not pause a concurrent non-voice run sharing the session key", () => {

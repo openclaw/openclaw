@@ -1,16 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OutputRuntimeEnv } from "../../runtime.js";
+import { createNonExitingRuntimeEnv } from "../../test-utils/plugin-runtime-env.js";
 import { runGatewayResume, runGatewaySuspend } from "./suspend-cli.js";
-
-function createRuntime(): OutputRuntimeEnv {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    writeStdout: vi.fn(),
-    writeJson: vi.fn(),
-    exit: vi.fn(),
-  };
-}
 
 const readyResult = {
   status: "ready" as const,
@@ -36,7 +26,7 @@ describe("gateway suspend CLI", () => {
     "prints a ready lease for wait %j",
     async (waitSeconds) => {
       const callGateway = vi.fn(async () => readyResult);
-      const runtime = createRuntime();
+      const runtime = createNonExitingRuntimeEnv();
 
       await runGatewaySuspend({ rpcOpts: {}, waitSeconds }, { callGateway, runtime });
 
@@ -61,7 +51,10 @@ describe("gateway suspend CLI", () => {
       const callGateway = vi.fn(async () => readyResult);
 
       await expect(
-        runGatewaySuspend({ rpcOpts: {}, waitSeconds }, { callGateway, runtime: createRuntime() }),
+        runGatewaySuspend(
+          { rpcOpts: {}, waitSeconds },
+          { callGateway, runtime: createNonExitingRuntimeEnv() },
+        ),
       ).rejects.toThrow("--wait must be a non-negative number of seconds");
       expect(callGateway).not.toHaveBeenCalled();
     },
@@ -123,7 +116,7 @@ describe("gateway suspend CLI", () => {
     async ({ rpcOpts, profile, container, command }) => {
       vi.stubEnv("OPENCLAW_PROFILE", profile);
       vi.stubEnv("OPENCLAW_CONTAINER_HINT", container);
-      const runtime = createRuntime();
+      const runtime = createNonExitingRuntimeEnv();
 
       await runGatewaySuspend(
         { rpcOpts },
@@ -140,7 +133,7 @@ describe("gateway suspend CLI", () => {
     await expect(
       runGatewaySuspend(
         { rpcOpts: {}, requestId: "host-operation" },
-        { callGateway, runtime: createRuntime() },
+        { callGateway, runtime: createNonExitingRuntimeEnv() },
       ),
     ).rejects.toThrow(
       "Gateway suspension is busy (active-work; 1 active).\nBlockers:\n- 1 active request\nRetry later or use --wait <seconds>.",
@@ -160,7 +153,7 @@ describe("gateway suspend CLI", () => {
 
     await runGatewaySuspend(
       { rpcOpts: {}, requestId: "host-operation", waitSeconds: "2" },
-      { callGateway, runtime: createRuntime(), nowMs: () => now, sleep },
+      { callGateway, runtime: createNonExitingRuntimeEnv(), nowMs: () => now, sleep },
     );
 
     expect(sleep).toHaveBeenCalledExactlyOnceWith(200);
@@ -172,7 +165,7 @@ describe("gateway suspend CLI", () => {
   });
 
   it("emits the latest busy result and exits nonzero in JSON mode", async () => {
-    const runtime = createRuntime();
+    const runtime = createNonExitingRuntimeEnv();
 
     await runGatewaySuspend(
       { rpcOpts: { json: true }, requestId: "host-operation", json: true },
@@ -195,7 +188,7 @@ describe("gateway suspend CLI", () => {
         { rpcOpts: {}, requestId: "host-operation", waitSeconds: "0.2" },
         {
           callGateway,
-          runtime: createRuntime(),
+          runtime: createNonExitingRuntimeEnv(),
           nowMs: () => now,
           sleep: async () => {
             // A lagging clock can wake far past the advertised --wait window.
@@ -215,7 +208,7 @@ describe("gateway suspend CLI", () => {
         { rpcOpts: {}, requestId: "host-operation", waitSeconds: "0.1" },
         {
           callGateway: vi.fn(async () => busyResult),
-          runtime: createRuntime(),
+          runtime: createNonExitingRuntimeEnv(),
           nowMs: () => now,
           sleep: async (delayMs) => {
             now += delayMs;
@@ -237,7 +230,7 @@ describe("gateway resume CLI", () => {
         "No matching suspension was held (lease already expired or resumed); gateway is running.",
     },
   ])("prints the resumed=$resumed outcome", async ({ resumed, message }) => {
-    const runtime = createRuntime();
+    const runtime = createNonExitingRuntimeEnv();
     const callGateway = vi.fn(async () => ({ ok: true, status: "running", resumed }));
 
     await runGatewayResume({ rpcOpts: {}, suspensionId: "suspension-1" }, { callGateway, runtime });

@@ -11,6 +11,28 @@ export type RatchetCountDelta = { allowed: number; current: number; entry: strin
 const GIT_MAX_BUFFER = 256 * 1024 * 1024;
 const compareEntries = (left: string, right: string) => (left < right ? -1 : left > right ? 1 : 0);
 
+export function parseRatchetArgs(argv: string[]) {
+  const args: { base?: string; prune: boolean; staged: boolean } = { prune: false, staged: false };
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === "--prune") {
+      args.prune = true;
+      continue;
+    }
+    if (arg === "--staged") {
+      args.staged = true;
+      continue;
+    }
+    if (arg === "--base" && argv[index + 1]) {
+      args.base = argv[index + 1];
+      index += 1;
+      continue;
+    }
+    throw new Error("Unknown or incomplete argument: " + arg);
+  }
+  return args;
+}
+
 function readGitText(root: string, args: string[]) {
   return execFileSync("git", args, {
     cwd: root,
@@ -72,13 +94,13 @@ export function loadRatchetReference<T>(
     : null;
 }
 
-export function loadRatchetSources(root: string, filePaths: string[]) {
+export function loadRatchetSources(root: string, filePaths: string[], ref = "") {
   if (filePaths.length === 0) {
     return new Map<string, string>();
   }
   const output = execFileSync("git", ["cat-file", "--batch", "-z"], {
     cwd: root,
-    input: filePaths.map((filePath) => ":" + filePath).join("\0") + "\0",
+    input: filePaths.map((filePath) => ref + ":" + filePath).join("\0") + "\0",
     maxBuffer: GIT_MAX_BUFFER,
   });
   const sources = new Map<string, string>();
@@ -94,7 +116,7 @@ export function loadRatchetSources(root: string, filePaths: string[]) {
     const header = output.subarray(offset, headerEnd).toString("utf8");
     const size = Number(/^[0-9a-f]+ (?:blob|tree|commit|tag) (\d+)$/u.exec(header)?.[1]);
     if (!Number.isSafeInteger(size)) {
-      throw new Error("Could not read staged source " + filePath);
+      throw new Error("Could not read " + (ref || "staged") + " source " + filePath);
     }
     const sourceStart = headerEnd + 1;
     const sourceEnd = sourceStart + size;

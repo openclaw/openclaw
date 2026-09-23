@@ -15,12 +15,15 @@ import type { CommandQueueEnqueueFn } from "../../process/command-queue.types.js
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { SkillSnapshot } from "../../skills/types.js";
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../bash-tools.exec-types.js";
-import type { AgentRunSessionTarget } from "../run-session-target.js";
+import type { AgentRunSessionTarget } from "../run-session-target.types.js";
 import type { AgentRuntimeAuthPlan, AgentRuntimePlan } from "../runtime-plan/types.js";
 import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
 import type { TrustedSubagentCompletionHandoff } from "../subagents/announce/subagent-announce-handoff.js";
 
-export type CompactEmbeddedAgentSessionParams = {
+export type CompactEmbeddedAgentSessionParams = Pick<
+  import("./run/params.js").RunEmbeddedAgentParams,
+  "requireWorkspaceOnly" | "requireWritableSandbox"
+> & {
   /** Explicit session owner captured before fallback agent resolution. */
   contextEngineAgentId?: string;
   sessionId: string;
@@ -38,6 +41,8 @@ export type CompactEmbeddedAgentSessionParams = {
   messageProvider?: string;
   /** Capabilities declared by the gateway client that originated this run. */
   clientCaps?: string[];
+  /** Dashboard authoring retained only within the admitted recovery run. */
+  pinnedWidgetAuthoring?: boolean;
   chatType?: ChatType;
   agentAccountId?: string;
   /** Raw peer observed by the inbound routing owner, before identity linking. */

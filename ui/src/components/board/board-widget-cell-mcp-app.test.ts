@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { BoardWidget } from "../../lib/board/types.ts";
 import type { BoardWidgetAppViewState } from "../../lib/board/view-types.ts";
 import type { BoardWidgetCellCallbacks } from "./board-widget-cell.ts";
@@ -7,8 +8,7 @@ import "./board-widget-cell.ts";
 class TestMcpAppView extends HTMLElement {
   sessionKey = "";
   viewId = "";
-  height = 0;
-  fixedHeight = false;
+  fillContainer = false;
   override title = "";
 }
 
@@ -87,14 +87,6 @@ async function settle(cell: BoardWidgetCell): Promise<void> {
   await cell.updateComplete;
 }
 
-function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
-  let resolve: (value: T) => void = () => undefined;
-  const promise = new Promise<T>((promiseResolve) => {
-    resolve = promiseResolve;
-  });
-  return { promise, resolve };
-}
-
 function stubVisibility(visible: (index: number) => boolean): {
   disconnect: ReturnType<typeof vi.fn>;
   observed: () => number;
@@ -151,7 +143,7 @@ describe("board MCP App cell lifecycle", () => {
     expect(cell.querySelector("mcp-app-view")).not.toBeNull();
   });
 
-  it("uses the board height as fixed AppBridge host context", async () => {
+  it("shows pending access notices above container-sized apps", async () => {
     const cell = await mount(
       widget({ grantState: "pending" }),
       callbacks({
@@ -165,8 +157,7 @@ describe("board MCP App cell lifecycle", () => {
     await vi.waitFor(() => expect(cell.querySelector("mcp-app-view")).not.toBeNull());
 
     expect(cell.querySelector("mcp-app-view") as TestMcpAppView).toMatchObject({
-      fixedHeight: true,
-      height: 160,
+      fillContainer: true,
       sessionKey: "agent:main:test",
       viewId: "fixed-view",
     });
@@ -174,9 +165,7 @@ describe("board MCP App cell lifecycle", () => {
 
     cell.widget = widget({ grantState: "granted" });
     await settle(cell);
-    await vi.waitFor(() =>
-      expect((cell.querySelector("mcp-app-view") as TestMcpAppView | null)?.height).toBe(222),
-    );
+    expect(cell.querySelector("mcp-app-view")).not.toBeNull();
     expect(cell.querySelector('[data-test-id="board-pending"]')).toBeNull();
   });
 

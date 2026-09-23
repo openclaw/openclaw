@@ -1,5 +1,5 @@
 // Session permissions and hooks tests protect gateway access control around
-// patch/delete/compact/restore APIs plus emitted internal hook payloads.
+// patch/delete/compact/fork APIs plus emitted internal hook payloads.
 import path from "node:path";
 import { afterAll, expect, test, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
@@ -25,7 +25,6 @@ import {
   setupGatewaySessionsTestHarness,
   sessionHookMocks,
   sessionStoreEntry,
-  createCheckpointFixture,
   isInternalHookEvent,
 } from "./test/server-sessions.test-helpers.js";
 
@@ -55,42 +54,11 @@ function requireFirstCallArg(mock: { mock: { calls: readonly (readonly unknown[]
   return call[0];
 }
 
-async function createPermissionCheckpointStore() {
-  const { dir, storePath } = await createSessionStoreDir();
-  const fixture = await createCheckpointFixture(dir);
-  if (!fixture.preCompactionSession || !fixture.preCompactionSessionFile) {
-    throw new Error("expected legacy checkpoint fixture");
-  }
-
+async function createPermissionSessionStore() {
+  const { storePath } = await createSessionStoreDir();
   await upsertSessionEntryCore(
     { sessionKey: "agent:main:main", storePath },
-    sessionStoreEntry(fixture.sessionId, {
-      sessionFile: fixture.sessionFile,
-      compactionCheckpoints: [
-        {
-          checkpointId: "checkpoint-1",
-          sessionKey: "agent:main:main",
-          sessionId: fixture.sessionId,
-          createdAt: Date.now(),
-          reason: "manual",
-          tokensBefore: 123,
-          tokensAfter: 45,
-          summary: "checkpoint summary",
-          firstKeptEntryId: fixture.preCompactionLeafId,
-          preCompaction: {
-            sessionId: fixture.preCompactionSession.getSessionId(),
-            sessionFile: fixture.preCompactionSessionFile,
-            leafId: fixture.preCompactionLeafId,
-          },
-          postCompaction: {
-            sessionId: fixture.sessionId,
-            sessionFile: fixture.sessionFile,
-            leafId: fixture.postCompactionLeafId,
-            entryId: fixture.postCompactionLeafId,
-          },
-        },
-      ],
-    }),
+    sessionStoreEntry("main-session"),
   );
   await upsertSessionEntryCore(
     { sessionKey: "agent:main:discord:group:dev", storePath },
@@ -100,7 +68,7 @@ async function createPermissionCheckpointStore() {
 }
 
 test("webchat session mutations follow operator scope policy", async () => {
-  const { storePath } = await createPermissionCheckpointStore();
+  const { storePath } = await createPermissionSessionStore();
 
   const ws = await openPermissionClient({
     id: GATEWAY_CLIENT_IDS.WEBCHAT_UI,
@@ -122,16 +90,6 @@ test("webchat session mutations follow operator scope policy", async () => {
     {
       method: "sessions.compact",
       params: { key: "main", maxLines: 3 },
-      missingScope: "operator.admin",
-    },
-    {
-      method: "sessions.compaction.branch",
-      params: { key: "main", checkpointId: "checkpoint-1" },
-      missingScope: "operator.write",
-    },
-    {
-      method: "sessions.compaction.restore",
-      params: { key: "main", checkpointId: "checkpoint-1" },
       missingScope: "operator.admin",
     },
     {
@@ -383,7 +341,8 @@ test("session:patch hook mutations cannot change the response path", async () =>
   expect(patched.payload?.resolved).toEqual({
     modelProvider: "anthropic",
     model: "claude-opus-4-6",
-    agentRuntime: { id: "auto", source: "implicit" },
+    agentRuntime: { id: "openclaw", source: "implicit" },
+    runtimeSelectionLocked: false,
   });
   expect(patched.payload?.entry.label).toBe("cfg-isolation");
 
@@ -391,23 +350,12 @@ test("session:patch hook mutations cannot change the response path", async () =>
 });
 
 test("admin-scoped webchat client can mutate sessions", async () => {
-  const { storePath } = await createPermissionCheckpointStore();
+  const { storePath } = await createPermissionSessionStore();
   const ws = await openPermissionClient({
     id: GATEWAY_CLIENT_IDS.WEBCHAT_UI,
     mode: GATEWAY_CLIENT_MODES.WEBCHAT,
     scopes: ["operator.admin"],
   });
-
-  const branched = await rpcReq<{
-    sourceKey: string;
-    entry: { parentSessionKey?: string };
-  }>(ws, "sessions.compaction.branch", {
-    key: "main",
-    checkpointId: "checkpoint-1",
-  });
-  expect(branched.ok).toBe(true);
-  expect(branched.payload?.sourceKey).toBe("agent:main:main");
-  expect(branched.payload?.entry.parentSessionKey).toBe("agent:main:main");
 
   const deleted = await rpcReq<{ ok: true; deleted: boolean }>(ws, "sessions.delete", {
     key: "agent:main:discord:group:dev",

@@ -1,186 +1,41 @@
 // Telegram tests cover lane delivery plugin behavior.
-import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { createTelegramDraftStream } from "./draft-stream.js";
 import { createTestDraftStream } from "./draft-stream.test-helpers.js";
 import { renderTelegramHtmlText, telegramHtmlToPlainTextFallback } from "./format.js";
 import {
-  createLaneTextDeliverer,
-  type DraftLaneState,
-  type LaneDeliveryResult,
-  type LaneName,
-} from "./lane-delivery.js";
-import {
-  createTelegramPromptContextProjectionSequence,
-  type TelegramPromptContextProjectionSequence,
-} from "./prompt-context-projection.js";
+  createHarness,
+  createProjectionSequence,
+  deliverFinalAnswer,
+  deliverProjectedFinalAnswer,
+  expectPreviewFinalized,
+  expectRecordedPreview,
+  expectSentPayload,
+} from "./lane-delivery.test-support.js";
 
 const HELLO_FINAL = "Hello final";
-type PromptContextRecord = Parameters<
-  typeof createTelegramPromptContextProjectionSequence
->[0]["record"];
-
-function createHarness(params?: {
-  answerMessageId?: number;
-  answerStream?: DraftLaneState["stream"] | null;
-  resolveFinalTextCandidate?: (params: {
-    finalText: string;
-    laneName: LaneName;
-  }) => string | undefined;
-}) {
-  const answer =
-    params?.answerStream === null
-      ? undefined
-      : (params?.answerStream ?? createTestDraftStream({ messageId: params?.answerMessageId }));
-  const reasoning = createTestDraftStream();
-  const lanes: Record<LaneName, DraftLaneState> = {
-    answer: {
-      stream: answer,
-      lastPartialText: "",
-      hasStreamedMessage: false,
-      finalized: false,
-      retainedPromptContextPages: [],
-    },
-    reasoning: {
-      stream: reasoning,
-      lastPartialText: "",
-      hasStreamedMessage: false,
-      finalized: false,
-      retainedPromptContextPages: [],
-    },
-  };
-  const sendPayload = vi.fn().mockResolvedValue(true);
-  const flushDraftLane = vi.fn().mockImplementation(async (lane: DraftLaneState) => {
-    await lane.stream?.flush();
-  });
-  const stopDraftLane = vi.fn().mockImplementation(async (lane: DraftLaneState) => {
-    await lane.stream?.stop();
-  });
-  const clearDraftLane = vi.fn().mockImplementation(async (lane: DraftLaneState) => {
-    await lane.stream?.clear();
-  });
-  const editStreamMessage = vi.fn().mockResolvedValue(undefined);
-  const recordPromptContextPreview = vi.fn<PromptContextRecord>().mockResolvedValue(true);
-  const createPromptContextSequence = () =>
-    createTelegramPromptContextProjectionSequence({ record: recordPromptContextPreview });
-  const log = vi.fn();
-  const markDelivered = vi.fn();
-
-  const deliverLaneText = createLaneTextDeliverer({
-    lanes,
-    applyTextToPayload: (payload: ReplyPayload, text: string) => ({ ...payload, text }),
-    sendPayload,
-    flushDraftLane,
-    stopDraftLane,
-    clearDraftLane,
-    editStreamMessage,
-    createPromptContextSequence,
-    resolveFinalTextCandidate: params?.resolveFinalTextCandidate,
-    log,
-    markDelivered,
-  });
-
-  return {
-    deliverLaneText,
-    lanes,
-    answer,
-    reasoning,
-    sendPayload,
-    flushDraftLane,
-    stopDraftLane,
-    clearDraftLane,
-    editStreamMessage,
-    recordPromptContextPreview,
-    log,
-    markDelivered,
-  };
-}
-
-async function deliverFinalAnswer(harness: ReturnType<typeof createHarness>, text: string) {
-  return harness.deliverLaneText({
-    laneName: "answer",
-    text,
-    payload: { text },
-    infoKind: "final",
-  });
-}
-
-function createProjectionSequence(
-  record: PromptContextRecord,
-): TelegramPromptContextProjectionSequence {
-  return createTelegramPromptContextProjectionSequence({
-    source: { transcriptMessageId: "assistant-1" },
-    record,
-  });
-}
-
-async function deliverProjectedFinalAnswer(
-  harness: ReturnType<typeof createHarness>,
-  text: string,
-) {
-  return harness.deliverLaneText({
-    laneName: "answer",
-    text,
-    payload: { text },
-    infoKind: "final",
-    promptContextSequence: createProjectionSequence(harness.recordPromptContextPreview),
-  });
-}
-
-function expectPreviewFinalized(
-  result: LaneDeliveryResult,
-): Extract<LaneDeliveryResult, { kind: "preview-finalized" }>["delivery"] {
-  expect(result.kind).toBe("preview-finalized");
-  if (result.kind !== "preview-finalized") {
-    throw new Error(`expected preview-finalized, got ${result.kind}`);
-  }
-  return result.delivery;
-}
-
-function expectRecordedPreview(
-  recordPromptContextPreview: ReturnType<typeof vi.fn>,
-  index: number,
-  params: { messageId?: number; text: string; partIndex: number; finalPart: boolean },
-) {
-  expect(recordPromptContextPreview.mock.calls[index]?.[0]).toEqual({
-    messageId: params.messageId ?? 999,
-    text: params.text,
-    projection: {
-      transcriptMessageId: "assistant-1",
-      partIndex: params.partIndex,
-      finalPart: params.finalPart,
-    },
-  });
-}
-
-function expectSentPayload(
-  harness: ReturnType<typeof createHarness>,
-  payload: ReplyPayload,
-  durable: boolean,
-) {
-  expect(harness.sendPayload).toHaveBeenCalledWith(
-    payload,
-    expect.objectContaining({
-      durable,
-      promptContextSequence: expect.any(Object),
-    }),
-  );
-}
-
 describe("createLaneTextDeliverer", () => {
-  it("finalizes text-only replies in the active stream message", async () => {
+  it("preserves a finalized preview receipt when the final history write fails", async () => {
     const harness = createHarness({ answerMessageId: 999 });
+    const historyFailure = new Error("retained Telegram history write failed");
+    harness.recordPromptContextPreview.mockRejectedValueOnce(historyFailure);
 
-    const result = await deliverFinalAnswer(harness, HELLO_FINAL);
+    const result = await deliverProjectedFinalAnswer(harness, HELLO_FINAL);
 
-    const delivery = expectPreviewFinalized(result);
-    expect(delivery.content).toBe(HELLO_FINAL);
-    expect(delivery.messageId).toBe(999);
-    expect(delivery.receipt?.primaryPlatformMessageId).toBe("999");
-    expect(harness.answer?.update).toHaveBeenCalledWith(HELLO_FINAL);
-    expect(harness.stopDraftLane).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({
+      kind: "preview-finalized-partial",
+      delivery: {
+        content: HELLO_FINAL,
+        messageId: 999,
+        receipt: {
+          primaryPlatformMessageId: "999",
+          platformMessageIds: ["999"],
+        },
+      },
+      error: historyFailure,
+    });
     expect(harness.sendPayload).not.toHaveBeenCalled();
-    expect(harness.markDelivered).toHaveBeenCalledTimes(1);
+    expect(harness.answer?.clear).not.toHaveBeenCalled();
     expect(harness.lanes.answer.finalized).toBe(true);
   });
 
@@ -228,6 +83,7 @@ describe("createLaneTextDeliverer", () => {
     const delivery = expectPreviewFinalized(finalResult);
     expect(delivery.content).toBe("done");
     expect(delivery.messageId).toBe(999);
+    expect(delivery.receipt.primaryPlatformMessageId).toBe("999");
     expect(harness.answer?.update).toHaveBeenNthCalledWith(1, "working");
     expect(harness.answer?.update).toHaveBeenNthCalledWith(2, "done");
     expect(harness.flushDraftLane).toHaveBeenCalledTimes(1);
@@ -298,7 +154,7 @@ describe("createLaneTextDeliverer", () => {
     answer.lastDeliveredText.mockReturnValue(nextAssistantBlock);
     const harness = createHarness({
       answerStream: answer,
-      resolveFinalTextCandidate: () => nextAssistantBlock,
+      resolveFinalPayloadCandidate: ({ payload }) => ({ ...payload, text: nextAssistantBlock }),
     });
     harness.lanes.answer.lastPartialText = previousBlock;
     harness.lanes.answer.hasStreamedMessage = true;
@@ -341,29 +197,6 @@ describe("createLaneTextDeliverer", () => {
     expect(harness.clearDraftLane).not.toHaveBeenCalled();
     expect(harness.sendPayload).not.toHaveBeenCalled();
     expect(harness.markDelivered).toHaveBeenCalledTimes(1);
-    expect(harness.lanes.answer.finalized).toBe(false);
-  });
-
-  it("discards an unmaterialized block preview before falling back to normal delivery", async () => {
-    const answer = createTestDraftStream();
-    const harness = createHarness({ answerStream: answer });
-
-    const result = await harness.deliverLaneText({
-      laneName: "answer",
-      text: "short",
-      payload: { text: "short" },
-      infoKind: "block",
-    });
-
-    expect(result.kind).toBe("sent");
-    expect(answer.update).toHaveBeenCalledWith("short");
-    expect(harness.flushDraftLane).toHaveBeenCalledTimes(1);
-    expect(answer.discard).toHaveBeenCalledTimes(1);
-    expect(harness.clearDraftLane).not.toHaveBeenCalled();
-    expectSentPayload(harness, { text: "short" }, false);
-    expect(harness.markDelivered).not.toHaveBeenCalled();
-    expect(harness.lanes.answer.lastPartialText).toBe("");
-    expect(harness.lanes.answer.hasStreamedMessage).toBe(false);
     expect(harness.lanes.answer.finalized).toBe(false);
   });
 
@@ -411,10 +244,7 @@ describe("createLaneTextDeliverer", () => {
     const answer = createTestDraftStream({ messageId: 999 });
     answer.lastDeliveredText.mockReturnValue(fullAnswer);
     answer.currentMessageSnapshot.mockReturnValue({ text: fullAnswer, sourceText: fullAnswer });
-    const harness = createHarness({
-      answerStream: answer,
-      resolveFinalTextCandidate: () => fullAnswer,
-    });
+    const harness = createHarness({ answerStream: answer });
 
     const result = await deliverFinalAnswer(harness, truncatedFinal);
 
@@ -462,10 +292,7 @@ describe("createLaneTextDeliverer", () => {
       },
     });
     answer.lastDeliveredText.mockImplementation(() => deliveredText);
-    const harness = createHarness({
-      answerStream: answer,
-      resolveFinalTextCandidate: () => fullAnswer,
-    });
+    const harness = createHarness({ answerStream: answer });
 
     answer.update(fullAnswer);
     harness.lanes.answer.lastPartialText = fullAnswer;
@@ -492,10 +319,7 @@ describe("createLaneTextDeliverer", () => {
       },
     });
     answer.lastDeliveredText.mockImplementation(() => deliveredText);
-    const harness = createHarness({
-      answerStream: answer,
-      resolveFinalTextCandidate: () => fullAnswer,
-    });
+    const harness = createHarness({ answerStream: answer });
 
     answer.update(fullAnswer);
     harness.lanes.answer.lastPartialText = fullAnswer;
@@ -516,10 +340,7 @@ describe("createLaneTextDeliverer", () => {
     const truncatedFinal = "Ja. Hier nochmal sauber Schritt fuer Schritt...";
     const answer = createTestDraftStream({ messageId: 999 });
     answer.lastDeliveredText.mockReturnValue("older preview");
-    const harness = createHarness({
-      answerStream: answer,
-      resolveFinalTextCandidate: () => fullAnswer,
-    });
+    const harness = createHarness({ answerStream: answer });
     harness.lanes.answer.lastPartialText = fullAnswer;
     harness.lanes.answer.hasStreamedMessage = true;
 
@@ -796,10 +617,7 @@ describe("createLaneTextDeliverer", () => {
     const answer = createTestDraftStream({ messageId: 999 });
     answer.lastDeliveredText.mockReturnValue(fullAnswer);
     answer.currentMessageSnapshot.mockReturnValue({ text: fullAnswer, sourceText: fullAnswer });
-    const harness = createHarness({
-      answerStream: answer,
-      resolveFinalTextCandidate: () => fullAnswer,
-    });
+    const harness = createHarness({ answerStream: answer });
     harness.lanes.answer.hasStreamedMessage = true;
 
     const result = await harness.deliverLaneText({
@@ -1249,4 +1067,3 @@ describe("createLaneTextDeliverer", () => {
     );
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

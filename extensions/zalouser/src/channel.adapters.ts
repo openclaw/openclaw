@@ -8,6 +8,7 @@ import type {
 import {
   defineChannelMessageAdapter,
   type ChannelMessageSendResult,
+  type ChannelMessageSendTextContext,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import {
@@ -56,15 +57,7 @@ const loadZalouserChannelRuntime = createLazyRuntimeModule(() => import("./chann
 
 const ZALOUSER_TEXT_CHUNK_LIMIT = 2000;
 
-type ZalouserSendTextContext = {
-  to: string;
-  text: string;
-  accountId?: string | null;
-  cfg: OpenClawConfig;
-  onDeliveryResult?: (result: ChannelMessageSendResult) => Promise<void> | void;
-};
-
-type ZalouserSendMediaContext = ZalouserSendTextContext & {
+type ZalouserSendMediaContext = ChannelMessageSendTextContext & {
   mediaUrl?: string;
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
@@ -126,13 +119,19 @@ async function sendZalouserTextFromContext({
   text,
   accountId,
   cfg,
+  signal,
+  assertDirectAdapterHandoff,
+  onPlatformSendDispatch,
   onDeliveryResult,
-}: ZalouserSendTextContext) {
+}: ChannelMessageSendTextContext) {
   const { sendMessageZalouser } = await loadZalouserChannelRuntime();
   const account = resolveZalouserAccountSync({ cfg, accountId });
   const target = parseZalouserOutboundTarget(to);
   const result = await sendMessageZalouser(target.threadId, text, {
     profile: account.profile,
+    signal,
+    assertDirectAdapterHandoff,
+    onPlatformSendDispatch,
     isGroup: target.isGroup,
     textMode: "markdown",
     textChunkMode: resolveZalouserOutboundChunkMode(cfg, account.accountId),
@@ -152,6 +151,9 @@ async function sendZalouserMediaFromContext({
   cfg,
   mediaLocalRoots,
   mediaReadFile,
+  signal,
+  assertDirectAdapterHandoff,
+  onPlatformSendDispatch,
   onDeliveryResult,
 }: ZalouserSendMediaContext) {
   const { sendMessageZalouser } = await loadZalouserChannelRuntime();
@@ -159,6 +161,9 @@ async function sendZalouserMediaFromContext({
   const target = parseZalouserOutboundTarget(to);
   const result = await sendMessageZalouser(target.threadId, text, {
     profile: account.profile,
+    signal,
+    assertDirectAdapterHandoff,
+    onPlatformSendDispatch,
     isGroup: target.isGroup,
     mediaUrl,
     mediaLocalRoots,
@@ -456,9 +461,19 @@ export const zalouserPairingTextAdapter = {
   idLabel: "zalouserUserId",
   message: "Your pairing request has been approved.",
   normalizeAllowEntry: createPairingPrefixStripper(/^(zalouser|zlu):/i),
-  notify: async ({ cfg, id, message }: { cfg: OpenClawConfig; id: string; message: string }) => {
+  notify: async ({
+    cfg,
+    id,
+    message,
+    accountId,
+  }: {
+    cfg: OpenClawConfig;
+    id: string;
+    message: string;
+    accountId?: string;
+  }) => {
     const { sendMessageZalouser } = await loadZalouserChannelRuntime();
-    const account = resolveZalouserAccountSync({ cfg });
+    const account = resolveZalouserAccountSync({ cfg, accountId });
     const authenticated = await checkZcaAuthenticated(account.profile);
     if (!authenticated) {
       throw new Error("Zalouser not authenticated");

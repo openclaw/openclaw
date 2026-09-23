@@ -1,24 +1,28 @@
 // Console capture tests cover intercepting and restoring console output.
 import { Console } from "node:console";
 import fs from "node:fs";
+import { Writable } from "node:stream";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  registerActiveProgressLine,
+  unregisterActiveProgressLine,
+} from "../../packages/terminal-core/src/progress-line.js";
 import { setVerbose } from "../global-state.js";
 import { logError, logInfo, logWarn } from "../logger.js";
-import {
-  createSubsystemLogger,
-  enableConsoleCapture,
-  resetLogger,
-  routeLogsToStderr,
-  setConsoleTimestampPrefix,
-  setLoggerOverride,
-} from "../logging.js";
 import { defaultRuntime } from "../runtime.js";
 import { withEnv } from "../test-utils/env.js";
 import { mockCall } from "../test-utils/mock-call-assertions.js";
+import {
+  enableConsoleCapture,
+  routeLogsToStderr,
+  setConsoleTimestampPrefix,
+  writeRootConsoleLine,
+} from "./console.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
-import { applyLoggingConfig } from "./logger.js";
+import { applyLoggingConfig, resetLogger, setLoggerOverride } from "./logger.js";
 import { testApi } from "./logger.test-support.js";
 import { loggingState } from "./state.js";
+import { createSubsystemLogger } from "./subsystem.js";
 import {
   captureConsoleSnapshot,
   type ConsoleSnapshot,
@@ -61,6 +65,49 @@ afterAll(async () => {
 
 describe("enableConsoleCapture", () => {
   const secret = "sk-testsecret1234567890abcd";
+
+  it.each([
+    { source: "captured", active: true, suppressed: false },
+    { source: "root", active: true, suppressed: false },
+    { source: "captured", active: false, suppressed: false },
+    { source: "root", active: true, suppressed: true },
+  ] as const)(
+    "keeps $source diagnostics separate from progress (active: $active, suppressed: $suppressed)",
+    ({ source, active, suppressed }) => {
+      const writes: string[] = [];
+      const stream = Object.assign(
+        new Writable({
+          write(chunk: Buffer, _encoding, callback) {
+            writes.push(chunk.toString());
+            callback();
+          },
+        }),
+        { isTTY: active },
+      );
+      setLoggerOverride({ level: "silent", consoleStyle: "pretty" });
+      vi.stubGlobal("console", new Console({ stdout: stream, stderr: stream }));
+      try {
+        enableConsoleCapture();
+        registerActiveProgressLine(stream as NodeJS.WriteStream);
+        if (active) {
+          stream.write("PROGRESS");
+        }
+        const message = suppressed ? "Closing session: synthetic" : "DIAGNOSTIC";
+        if (source === "captured") {
+          console.error(message);
+        } else {
+          writeRootConsoleLine("error", message);
+        }
+        expect(writes.join("")).toBe(
+          suppressed ? "PROGRESS" : `${active ? "PROGRESS\r\x1b[2K" : ""}DIAGNOSTIC\n`,
+        );
+      } finally {
+        unregisterActiveProgressLine(stream as NodeJS.WriteStream);
+        vi.unstubAllGlobals();
+        stream.destroy();
+      }
+    },
+  );
 
   it("swallows EIO from stderr writes", () => {
     setLoggerOverride({ level: "info", file: tempLogPath() });

@@ -4,7 +4,9 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import {
+  hasRegisteredNodeHostCommandActiveWork,
   invokeRegisteredNodeHostCommand,
+  isRegisteredNodeHostCommandDuplex,
   listRegisteredNodeHostCapsAndCommands,
   notifyRegisteredNodeHostCommandDisconnect,
   watchRegisteredNodeHostCommandAvailability,
@@ -17,6 +19,30 @@ afterEach(() => {
 });
 
 describe("plugin node-host registry", () => {
+  it("advertises optional duplex to unary nodes and forwards IO only when available", async () => {
+    const handle = vi.fn(async () => "{}");
+    const registry = createEmptyPluginRegistry();
+    registry.nodeHostCommands.push({
+      pluginId: "files",
+      source: "test",
+      command: { command: "file.fetch", cap: "file", duplex: "optional", handle },
+    });
+    setActivePluginRegistry(registry);
+    expect(
+      listRegisteredNodeHostCapsAndCommands(availabilityContext, { includeDuplex: false }).commands,
+    ).toEqual(["file.fetch"]);
+    expect(isRegisteredNodeHostCommandDuplex("file.fetch")).toBe(true);
+    await expect(invokeRegisteredNodeHostCommand("file.fetch", "{}")).resolves.toBe("{}");
+    expect(handle).toHaveBeenLastCalledWith("{}", undefined);
+    const io = {
+      signal: new AbortController().signal,
+      emitChunk: async () => {},
+      onInput: () => {},
+    };
+    await invokeRegisteredNodeHostCommand("file.fetch", "{}", io);
+    expect(handle).toHaveBeenLastCalledWith("{}", io);
+  });
+
   it("lists plugin-declared caps and commands", () => {
     const registry = createEmptyPluginRegistry();
     registry.nodeHostCommands = [
@@ -256,6 +282,64 @@ describe("plugin node-host registry", () => {
     await notifyRegisteredNodeHostCommandDisconnect();
 
     expect(onDisconnect).toHaveBeenCalledOnce();
+  });
+
+  it("retains plugin work after invocation and availability end until its owner cleans up", async () => {
+    let busy = false;
+    let available = true;
+    const registry = createEmptyPluginRegistry();
+    registry.nodeHostCommands = [
+      {
+        pluginId: "meeting",
+        pluginName: "Meeting",
+        source: "test",
+        command: {
+          command: "meeting.start",
+          isAvailable: () => available,
+          handle: async () => {
+            busy = true;
+            return "{}";
+          },
+          hasActiveWork: () => {
+            expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(registry);
+            return busy;
+          },
+          onDisconnect: () => {
+            busy = false;
+          },
+        },
+      },
+    ];
+    setActivePluginRegistry(registry);
+
+    expect(hasRegisteredNodeHostCommandActiveWork()).toBe(false);
+    await invokeRegisteredNodeHostCommand("meeting.start");
+    available = false;
+    expect(listRegisteredNodeHostCapsAndCommands(availabilityContext).commands).toEqual([]);
+    expect(hasRegisteredNodeHostCommandActiveWork()).toBe(true);
+    await notifyRegisteredNodeHostCommandDisconnect();
+    expect(hasRegisteredNodeHostCommandActiveWork()).toBe(false);
+  });
+
+  it("keeps uncertain plugin work busy when its owner query throws", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.nodeHostCommands = [
+      {
+        pluginId: "meeting",
+        pluginName: "Meeting",
+        source: "test",
+        command: {
+          command: "meeting.start",
+          handle: async () => "{}",
+          hasActiveWork: () => {
+            throw new Error("work state unavailable");
+          },
+        },
+      },
+    ];
+    setActivePluginRegistry(registry);
+
+    expect(hasRegisteredNodeHostCommandActiveWork()).toBe(true);
   });
 
   it("dispatches plugin-declared node-host commands", async () => {

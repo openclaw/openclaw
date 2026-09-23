@@ -4,8 +4,8 @@ import path from "node:path";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
 import { collectModuleReferencesFromSource } from "../../scripts/lib/guard-inventory-utils.mjs";
-import { resolvePluginDoctorContractArtifactPath } from "./doctor-contract-artifact.js";
-import { loadBundledPluginManifestRegistry } from "./manifest-registry.js";
+import { resolvePluginDoctorContractArtifact } from "./doctor-contract-artifact.js";
+import { loadBundledPluginManifestRegistry } from "./manifest-registry-build.js";
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "../..");
 const SOURCE_MODULE_EXTENSIONS = [".ts", ".mts", ".cts", ".js", ".mjs", ".cjs"] as const;
@@ -149,6 +149,15 @@ const FORBIDDEN_SPECIFIER_RULES = new Map<string, { reason: string; kinds: Set<C
       reason:
         "the channel-outbound barrel makes doctor enumeration cold-load the reply-pipeline/channel-registry graph; " +
         "use openclaw/plugin-sdk/channel-streaming-config for streaming config helpers",
+      kinds: new Set(["doctor-contract"]),
+    },
+  ],
+  [
+    "openclaw/plugin-sdk/memory-core-host-engine-schema",
+    {
+      reason:
+        "the memory schema barrel loads SQLite/FTS migration helpers during doctor enumeration; " +
+        "defer sidecar writers behind a dynamic import after legacy state is found",
       kinds: new Set(["doctor-contract"]),
     },
   ],
@@ -302,7 +311,11 @@ function collectClosureEntries(): ClosureEntry[] {
   };
   for (const record of loadBundledPluginManifestRegistry({ env }).plugins) {
     const pluginRoot = path.resolve(record.rootDir);
-    const doctorContractPath = resolvePluginDoctorContractArtifactPath(pluginRoot);
+    const doctorContractPath = resolvePluginDoctorContractArtifact({
+      ...record,
+      rootDir: pluginRoot,
+      sourcePreferred: true,
+    })?.modulePath;
     // A declaration listing no surface gates the artifact off every enumeration
     // path, exactly as `resolvePluginDoctorContracts` does, so its closure cost
     // is never paid. Absent declarations still load eagerly and are enforced.

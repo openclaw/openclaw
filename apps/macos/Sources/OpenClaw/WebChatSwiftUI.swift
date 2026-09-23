@@ -42,7 +42,7 @@ enum WebChatTracePreferences {
 
 /// SwiftUI's native toolbar bridge may restore visible title chrome while it
 /// installs toolbar items. Keep the full-window chat's titlebar merged.
-private final class WebChatWindow: NSWindow {
+private final class WebChatWindow: ExperienceWindow {
     var pinnedTitle: String?
 
     override var title: String {
@@ -64,7 +64,15 @@ private final class WebChatWindow: NSWindow {
     }
 }
 
-struct MacGatewayChatTransport: OpenClawChatTransport {
+struct MacGatewayChatTransport: OpenClawChatGatewayTransport {
+    var chatGatewayAgentID: String? {
+        self.fixedAgentID ?? self.routingIdentity.currentAgentID()
+    }
+
+    func requestChatGateway(_ request: OpenClawChatGatewayRequest) async throws -> Data {
+        try await self.connection.request(request)
+    }
+
     /// Shared across transport value copies so the live view model and its
     /// snapshot observer cannot diverge on the owner of the bare global alias.
     private final class RoutingIdentity: @unchecked Sendable {
@@ -96,19 +104,30 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
     let connection: GatewayConnection
     let outboxGatewayID: String?
     private let routingIdentity: RoutingIdentity
+    private let fixedAgentID: String?
 
     init(
         connection: GatewayConnection = .shared,
         outboxGatewayID: String? = nil,
-        defaultGlobalAgentID: String? = nil)
+        defaultGlobalAgentID: String? = nil,
+        fixedAgentID: String? = nil)
     {
         self.connection = connection
         self.outboxGatewayID = outboxGatewayID
         self.routingIdentity = RoutingIdentity(defaultGlobalAgentID: defaultGlobalAgentID)
+        let fixed = fixedAgentID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        self.fixedAgentID = fixed?.isEmpty == false ? fixed : nil
     }
 
     func updateDefaultGlobalAgentID(_ agentID: String?) {
         self.routingIdentity.update(defaultGlobalAgentID: agentID)
+    }
+
+    func scoped(toAgentID agentID: String) -> (any OpenClawChatTransport)? {
+        MacGatewayChatTransport(
+            connection: self.connection,
+            outboxGatewayID: self.outboxGatewayID,
+            fixedAgentID: agentID)
     }
 
     func currentOutboxGatewayMatchesConnection() async -> Bool {
@@ -128,8 +147,9 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
     func sessionTarget(for sessionKey: String, overrideAgentID: String? = nil) -> SessionTarget {
         OpenClawChatSessionTarget.resolve(
             sessionKey,
-            selectedAgentID: self.routingIdentity.currentAgentID(),
-            overrideAgentID: overrideAgentID,
+            selectedAgentID: self.chatGatewayAgentID,
+            overrideAgentID: overrideAgentID ??
+                (OpenClawChatSessionKey.agentID(from: sessionKey) == nil ? self.fixedAgentID : nil),
             policy: .preserveBareKeys)
     }
 
@@ -238,6 +258,40 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
         }
     }
 
+    func acquireModelSignInContext(agentID: String?) async -> OpenClawChatModelSignInContext? {
+        guard let lease = await self.connection.captureServerLease(),
+              await self.connection.supportsServerMethod("models.authLogin", ifCurrentServerLease: lease) == true,
+              let agentID = agentID ?? self.chatGatewayAgentID
+        else { return nil }
+        let connection = self.connection
+        return OpenClawChatModelSignInContext(
+            agentID: agentID,
+            request: { method, params in
+                try await connection.request(
+                    method: method, params: params, timeoutMs: 26 * 60 * 1000, ifCurrentServerLease: lease)
+            },
+            isCurrent: { await connection.isCurrentServerLease(lease) })
+    }
+
+    func loadModelCatalog(
+        sessionKey: String,
+        agentID: String?) async throws -> OpenClawChatModelCatalogSnapshot
+    {
+        let lease = try await self.connection.acquireServerLease()
+        guard await self.connection.supportsServerCapability(
+            .publishedModelCatalog, ifCurrentServerLease: lease) == true
+        else {
+            return OpenClawChatModelCatalogSnapshot(choices: [], availabilityIsSessionScoped: false)
+        }
+        let request = OpenClawChatGatewayRequests.modelsList(agentID: agentID, sessionKey: sessionKey)
+        let data = try await self.connection.request(
+            method: request.method,
+            params: request.params,
+            timeoutMs: request.timeoutMs,
+            ifCurrentServerLease: lease)
+        return try OpenClawChatGatewayPayloadCodec.decodeModelCatalog(data)
+    }
+
     func acquireSwarmRouteLease() async -> OpenClawChatSwarmRouteLease? {
         guard let lease = await self.connection.captureServerLease() else { return nil }
         let transport = self
@@ -260,7 +314,7 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
     {
         let request = OpenClawChatGatewayRequests.chatMetadata(
             sessionKey: sessionKey,
-            fallbackAgentID: self.routingIdentity.currentAgentID())
+            fallbackAgentID: self.chatGatewayAgentID)
         let data: Data = if let serverLease {
             try await self.connection.request(
                 method: request.method,
@@ -273,26 +327,32 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
         return try JSONDecoder().decode(OpenClawChatMetadataCapabilities.self, from: data).swarmEnabled
     }
 
-    func abortRun(sessionKey: String, runId: String) async throws {
-        let target = self.sessionTarget(for: sessionKey)
-        let request = OpenClawChatGatewayRequests.abortRun(
-            sessionKey: target.sessionKey,
-            agentID: target.agentID,
-            runID: runId)
-        _ = try await self.connection.request(request)
-    }
-
     func listSessions(
         limit: Int?,
         search: String?,
         archived: Bool) async throws -> OpenClawChatSessionsListResponse
     {
+        try await self.listSessions(
+            limit: limit,
+            search: search,
+            archived: archived,
+            agentID: self.chatGatewayAgentID)
+    }
+
+    func listSessions(
+        limit: Int?,
+        search: String?,
+        archived: Bool,
+        agentID: String?) async throws -> OpenClawChatSessionsListResponse
+    {
         let request = self.sessionsListRequest(
             limit: limit,
             search: search,
-            archived: archived)
+            archived: archived,
+            agentID: agentID)
         let data = try await connection.request(request)
-        let decoded = try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: data)
+        let decoded = try OpenClawChatGatewayPayloadCodec.decodeSessionsList(
+            data, agentID: request.params["agentId"]?.value as? String)
         let mainSessionKey = await connection.cachedMainSessionKey()
         let defaults = decoded.defaults.map {
             OpenClawChatSessionsDefaults(
@@ -322,13 +382,14 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
     func sessionsListRequest(
         limit: Int?,
         search: String?,
-        archived: Bool) -> OpenClawChatGatewayRequest
+        archived: Bool,
+        agentID: String? = nil) -> OpenClawChatGatewayRequest
     {
         OpenClawChatGatewayRequests.sessionsList(
             limit: limit,
             search: search,
             archived: archived,
-            agentID: self.routingIdentity.currentAgentID())
+            agentID: agentID ?? self.chatGatewayAgentID)
     }
 
     func listChildSessions(parentKey: String) async throws -> [OpenClawChatSessionEntry] {
@@ -363,15 +424,7 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
 
     func listAgents() async throws -> OpenClawChatAgentsListResponse? {
         let data = try await connection.request(OpenClawChatGatewayRequests.agentsList())
-        let result = try JSONDecoder().decode(AgentsListResult.self, from: data)
-        return OpenClawChatAgentsListResponse(
-            defaultId: result.defaultid,
-            agents: result.agents.filter(\.isSelectableAgent).map {
-                OpenClawChatAgentChoice(
-                    id: $0.id,
-                    name: $0.name,
-                    workspaceGit: $0.workspacegit)
-            })
+        return try OpenClawChatGatewayPayloadCodec.decodeAgentsList(data)
     }
 
     func listSessionGroups() async throws -> OpenClawChatSessionGroupsResponse? {
@@ -408,17 +461,6 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
             model: model)
     }
 
-    func patchSessionModel(
-        sessionKey: String,
-        agentID: String?,
-        model: String?) async throws -> OpenClawChatModelPatchResult?
-    {
-        try await self.patchSessionSettings(
-            sessionKey: sessionKey,
-            agentID: agentID,
-            patch: OpenClawChatSessionSettingsPatch(model: .some(model)))
-    }
-
     func patchSessionSettings(
         sessionKey: String,
         agentID: String?,
@@ -437,11 +479,7 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
         patch: OpenClawChatSessionSettingsPatch,
         serverLease: GatewayConnection.ServerLease?) async throws -> OpenClawChatModelPatchResult?
     {
-        let target = OpenClawChatSessionTarget.resolve(
-            sessionKey,
-            selectedAgentID: self.routingIdentity.currentAgentID(),
-            overrideAgentID: agentID,
-            policy: .preserveBareKeys)
+        let target = self.sessionTarget(for: sessionKey, overrideAgentID: agentID)
         let request = Self.sessionSettingsRequest(
             sessionKey: target.sessionKey,
             agentID: target.agentID,
@@ -484,14 +522,6 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
                 patch: patch,
                 serverLease: serverLease)
         }
-    }
-
-    func setSessionThinking(sessionKey: String, thinkingLevel: String) async throws {
-        let target = self.sessionTarget(for: sessionKey)
-        _ = try await self.patchSessionSettings(
-            sessionKey: target.sessionKey,
-            agentID: target.agentID,
-            patch: OpenClawChatSessionSettingsPatch(thinkingLevel: .some(thinkingLevel)))
     }
 
     func sendMessage(
@@ -606,6 +636,16 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
             connection: self.connection)
     }
 
+    func loadSourceContext() async -> OpenClawChatSourceContext? {
+        guard await self.currentOutboxGatewayMatchesConnection() else { return nil }
+        return await self.connection.loadSourceContext()
+    }
+
+    func loadSourceFavicon(host: String) async -> Data? {
+        guard await self.currentOutboxGatewayMatchesConnection() else { return nil }
+        return await self.connection.loadSourceFavicon(host: host)
+    }
+
     func loadMediaArtifact(
         sessionKey: String,
         artifactId: String,
@@ -629,30 +669,6 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
         true
     }
 
-    func listCommands(sessionKey: String) async throws -> [OpenClawChatCommandChoice] {
-        let request = OpenClawChatGatewayRequests.commandsList(
-            sessionKey: sessionKey,
-            fallbackAgentID: self.routingIdentity.currentAgentID())
-        let data = try await connection.request(request)
-        let decoded = try JSONDecoder().decode(CommandsListResult.self, from: data)
-        return decoded.commands.map(OpenClawChatGatewayPayloadCodec.commandChoice)
-    }
-
-    func createSession(
-        key: String,
-        label: String?,
-        parentSessionKey: String?,
-        worktree: Bool?) async throws -> OpenClawChatCreateSessionResponse
-    {
-        try await self.createSession(
-            key: key,
-            label: label,
-            agentID: nil,
-            parentSessionKey: parentSessionKey,
-            worktree: worktree,
-            worktreeBaseRef: nil)
-    }
-
     func createSession(
         key: String,
         label: String?,
@@ -664,7 +680,7 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
         let agentID = explicitAgentID
             ?? OpenClawChatSessionKey.agentID(from: key)
             ?? parentSessionKey.flatMap { OpenClawChatSessionKey.agentID(from: $0) }
-            ?? self.routingIdentity.currentAgentID()
+            ?? self.chatGatewayAgentID
         let request = OpenClawChatGatewayRequests.createSession(
             key: key,
             agentID: agentID,
@@ -701,50 +717,8 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
         throw OpenClawChatTransportSendError.notDispatched
     }
 
-    func deleteSession(key: String) async throws {
-        let target = self.sessionTarget(for: key)
-        let request = OpenClawChatGatewayRequests.deleteSession(
-            sessionKey: target.sessionKey,
-            agentID: target.agentID)
-        _ = try await self.connection.request(request)
-    }
-
     func requestHealth(timeoutMs: Int) async throws -> Bool {
         try await self.connection.healthOK(timeoutMs: timeoutMs)
-    }
-
-    func listQuestions() async throws -> [QuestionRecord] {
-        let data = try await connection.request(OpenClawChatGatewayRequests.questionList())
-        return try JSONDecoder().decode(QuestionListResult.self, from: data).questions
-    }
-
-    func listTasks(sessionKey: String, agentID: String?) async throws -> [TaskSummary] {
-        let data = try await connection.request(OpenClawChatGatewayRequests.tasksList(
-            sessionKey: sessionKey,
-            agentID: agentID))
-        return try JSONDecoder().decode(TasksListResult.self, from: data).tasks
-    }
-
-    func getQuestion(id: String) async throws -> QuestionRecord {
-        let data = try await connection.request(OpenClawChatGatewayRequests.questionGet(id: id))
-        return try JSONDecoder().decode(QuestionGetResult.self, from: data).question
-    }
-
-    func resolveQuestion(
-        id: String,
-        answers: [String: [String]],
-        secretStoreAllowedHosts: [String]?) async throws -> QuestionAnswers
-    {
-        let data = try await self.connection.request(OpenClawChatGatewayRequests.resolveQuestion(
-            id: id,
-            answers: answers,
-            secretStoreAllowedHosts: secretStoreAllowedHosts))
-        return try OpenClawChatGatewayPayloadCodec.decodeQuestionAnswer(data)
-    }
-
-    func cancelQuestion(id: String) async throws {
-        _ = try await self.connection.request(
-            OpenClawChatGatewayRequests.cancelQuestion(id: id))
     }
 
     func waitForRunCompletion(
@@ -769,14 +743,6 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
         }
     }
 
-    func resetSession(sessionKey: String) async throws {
-        let target = self.sessionTarget(for: sessionKey)
-        let request = OpenClawChatGatewayRequests.resetSession(
-            sessionKey: target.sessionKey,
-            agentID: target.agentID)
-        _ = try await self.connection.request(request)
-    }
-
     func compactSession(sessionKey: String) async throws {
         let target = self.sessionTarget(for: sessionKey)
         let request = OpenClawChatGatewayRequests.compactSession(
@@ -784,14 +750,6 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
             agentID: target.agentID)
         let response = try await connection.request(request, retryTransportFailures: false)
         try OpenClawSessionsCompactResponse.requireSuccess(from: response)
-    }
-
-    func setActiveSessionKey(_ sessionKey: String) async throws {
-        let target = self.sessionTarget(for: sessionKey)
-        let request = OpenClawChatGatewayRequests.subscribeSessionMessages(
-            sessionKey: target.sessionKey,
-            agentID: target.agentID)
-        _ = try await self.connection.request(request)
     }
 
     func events() -> AsyncStream<OpenClawChatTransportEvent> {
@@ -904,6 +862,7 @@ private struct MacChatSurface: View {
     @AppStorage(OpenClawChatWindowShell.assistantToolActivityDefaultsKey, store: AppDefaults.standard)
     private var showsToolActivity = WebChatTracePreferences.displayOptions().contains(.toolActivity)
 
+    private let approvalQueue: ExecApprovalQueueStore?
     private let usesPrimaryAppRuntime: Bool
     private let speech: OpenClawChatSpeechController
     private let voiceNoteRecorder: OpenClawVoiceNoteRecorder
@@ -911,11 +870,13 @@ private struct MacChatSurface: View {
     init(
         viewModel: OpenClawChatViewModel,
         usesPrimaryAppRuntime: Bool,
+        approvalQueue: ExecApprovalQueueStore?,
         speech: OpenClawChatSpeechController,
         voiceNoteRecorder: OpenClawVoiceNoteRecorder)
     {
         _viewModel = State(initialValue: viewModel)
         self.usesPrimaryAppRuntime = usesPrimaryAppRuntime
+        self.approvalQueue = approvalQueue
         self.speech = speech
         self.voiceNoteRecorder = voiceNoteRecorder
     }
@@ -924,6 +885,7 @@ private struct MacChatSurface: View {
         OpenClawChatWindowShell(
             viewModel: self.viewModel,
             userAccent: ColorHexSupport.color(fromHex: self.appState.effectiveAccentHex),
+            attentionRequests: self.approvalQueue?.attentionRequests ?? [],
             displayOptions: self.displayOptions,
             emptyAssistantIntro: Self.emptyAssistantIntro,
             emptyAssistantPrompts: Self.emptyAssistantPrompts,
@@ -934,12 +896,18 @@ private struct MacChatSurface: View {
                 !AppStateStore.shared.talkEnabled &&
                     !self.voiceNoteRecorder.ownsPendingChatAttachment
             })
+            .defaultAppStorage(AppDefaults.standard)
             .onAppear { self.audioInputCatalog.start() }
+            .task {
+                self.approvalQueue?.start()
+                await self.approvalQueue?.refresh()
+            }
             .onDisappear { self.audioInputCatalog.stop() }
     }
 
-    private var talkControl: OpenClawChatTalkControl {
-        OpenClawChatTalkControl(
+    private var talkControl: OpenClawChatTalkControl? {
+        guard self.usesPrimaryAppRuntime else { return nil }
+        return OpenClawChatTalkControl(
             isEnabled: self.usesPrimaryAppRuntime && self.appState.talkEnabled,
             isListening: self.usesPrimaryAppRuntime &&
                 !self.talkController.isPaused && self.talkController.phase == .listening,
@@ -1036,12 +1004,19 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
     private let speech: OpenClawChatSpeechController
     private let voiceNoteRecorder: OpenClawVoiceNoteRecorder
     private var routingIdentityTask: Task<Void, Never>?
-    private var window: NSWindow?
+    private var window: ExperienceWindow?
+    var onBecameKey: (() -> Void)?
+
+    var isWindowOpen: Bool {
+        guard let window, !window.isHiddenForExperience else { return false }
+        return window.isVisible || window.isMiniaturized
+    }
+
     var onClosed: (() -> Void)?
     var onVisibilityChanged: ((Bool) -> Void)?
     /// Fires when the hosted chat switches sessions in place (sidebar,
     /// composer picker, /new) so the owner can track what this surface shows.
-    var onSessionKeyChanged: ((String) -> Void)?
+    var onSessionTargetChanged: ((OpenClawChatSessionTarget) -> Void)?
 
     convenience init(
         sessionKey: String,
@@ -1138,6 +1113,7 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
             attachmentOwnerIsActive: { voiceNoteRecorder.ownsPendingChatAttachment },
             transcriptCache: transcriptCache,
             outbox: outbox,
+            modelPickerStore: ChatModelPickerStore(defaults: AppDefaults.standard),
             initialThinkingLevel: Self.persistedThinkingLevel(),
             initialVerboseLevel: Self.persistedVerboseLevel(),
             onSessionChanged: { key in
@@ -1202,6 +1178,7 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
         let hosting = NSHostingController(rootView: MacChatSurface(
             viewModel: vm,
             usesPrimaryAppRuntime: usesPrimaryAppRuntime,
+            approvalQueue: gatewayTransport?.connection.approvalQueue,
             speech: speech,
             voiceNoteRecorder: voiceNoteRecorder))
         self.contentController = hosting
@@ -1211,8 +1188,9 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
             title: windowTitle,
             autosaveName: windowAutosaveName)
         self.window?.delegate = self
-        sessionKeyRelay.onChange = { [weak self] key in
-            self?.onSessionKeyChanged?(key)
+        sessionKeyRelay.onChange = { [weak self, weak vm] _ in
+            guard let vm else { return }
+            self?.onSessionTargetChanged?(vm.currentSessionTarget)
         }
     }
 
@@ -1227,9 +1205,27 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
     func show() {
         guard let window else { return }
         self.ensureWindowSize()
+        window.isHiddenForExperience = false
+        window.isExcludedFromWindowsMenu = false
+        if window.isMiniaturized { window.deminiaturize(nil) }
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        self.onBecameKey?()
         self.onVisibilityChanged?(true)
+    }
+
+    func hide() {
+        guard let window else { return }
+        window.isHiddenForExperience = true
+        window.isExcludedFromWindowsMenu = true
+        if window.isMiniaturized { window.deminiaturize(nil) }
+        window.orderOut(nil)
+        self.onVisibilityChanged?(false)
+    }
+
+    func windowDidBecomeKey(_ notification: Notification) {
+        guard let window, notification.object as? NSWindow === window, !window.isHiddenForExperience else { return }
+        self.onBecameKey?()
     }
 
     func cascade(from source: WebChatSwiftUIWindowController?) {
@@ -1252,10 +1248,10 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
         self.routingIdentityTask?.cancel()
         self.routingIdentityTask = nil
         self.viewModel.detachTransport()
+        self.window = nil
         self.onVisibilityChanged?(false)
         let onClosed = self.onClosed
         self.onClosed = nil
-        self.window = nil
         onClosed?()
     }
 
@@ -1297,7 +1293,7 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
     private static func makeWindow(
         contentViewController: NSViewController,
         title: String,
-        autosaveName: String) -> NSWindow
+        autosaveName: String) -> ExperienceWindow
     {
         let window = WebChatWindow(
             contentRect: NSRect(origin: .zero, size: WebChatSwiftUILayout.windowSize),

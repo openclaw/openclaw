@@ -3,7 +3,12 @@ import { vi } from "vitest";
 import type { GatewayBrowserClient, GatewayEventListener } from "../../api/gateway.ts";
 import type { CronJob, CronJobsListResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
-import type { CronState } from "../../lib/cron/index.ts";
+import {
+  createGatewayMetadataObserver,
+  notifyGatewayObservers,
+} from "../../app/gateway-observers.ts";
+import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
+import type { CronState } from "../../lib/cron/types.ts";
 
 type CronTestPage = HTMLElement & {
   context: ApplicationContext;
@@ -25,7 +30,8 @@ type TestGateway = ApplicationContext["gateway"] & {
 };
 
 export function createGateway(client: GatewayBrowserClient, connected: boolean): TestGateway {
-  const snapshot: ApplicationGatewaySnapshot = {
+  invalidateChatMetadataStore(client);
+  let snapshot: ApplicationGatewaySnapshot = {
     client,
     phase: connected ? "connected" : "stopped",
     offlineStable: false,
@@ -36,11 +42,14 @@ export function createGateway(client: GatewayBrowserClient, connected: boolean):
     lastError: null,
     lastErrorCode: null,
   };
+  const metadataObserver = createGatewayMetadataObserver((current) => current === snapshot);
   const snapshotListeners = new Set<(next: ApplicationGatewaySnapshot) => void>();
   const eventListeners = new Set<GatewayEventListener>();
   const allEventListeners: GatewayEventListener[] = [];
   return {
-    snapshot,
+    get snapshot() {
+      return snapshot;
+    },
     connection: { gatewayUrl: "", token: "", password: "" },
     subscribe(listener: (next: ApplicationGatewaySnapshot) => void) {
       snapshotListeners.add(listener);
@@ -52,12 +61,24 @@ export function createGateway(client: GatewayBrowserClient, connected: boolean):
       return () => eventListeners.delete(listener);
     },
     emitSnapshot(patch: Partial<ApplicationGatewaySnapshot>) {
-      Object.assign(snapshot, patch);
-      for (const listener of snapshotListeners) {
-        listener(snapshot);
+      const previous = snapshot;
+      snapshot = { ...previous, ...patch };
+      if (metadataObserver.synchronize(previous, snapshot)) {
+        notifyGatewayObservers(
+          snapshotListeners,
+          snapshot,
+          "snapshot",
+          (current) => current === snapshot,
+        );
       }
     },
     emitRetiredEvent(event: Parameters<GatewayEventListener>[0]) {
+      if (
+        eventListeners.size > 0 &&
+        (event.event === "config.changed" || event.event === "chat.metadata.changed")
+      ) {
+        invalidateChatMetadataStore(client);
+      }
       for (const listener of allEventListeners) {
         listener(event);
       }

@@ -6,6 +6,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BUNDLED_PLUGIN_ROOT_DIR } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
+import { resolveTestNodeExecPath } from "./test-utils/node-process.js";
 
 const repoRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
 const dockerfilePath = join(repoRoot, "Dockerfile");
@@ -347,7 +348,7 @@ describe("Dockerfile", () => {
           expect
             .soft(
               () =>
-                execFileSync(process.execPath, [scriptPath], {
+                execFileSync(resolveTestNodeExecPath(), [scriptPath], {
                   cwd: fixture,
                   env: {
                     HOME: home,

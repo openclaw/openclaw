@@ -1,4 +1,3 @@
-// Feishu plugin module implements session conversation behavior.
 import { buildFeishuConversationId, parseFeishuConversationId } from "./conversation-id.js";
 
 function resolveFeishuParentConversationCandidates(rawId: string): string[] {

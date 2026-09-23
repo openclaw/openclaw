@@ -1,19 +1,18 @@
 /* @vitest-environment jsdom */
-import {
-  GATEWAY_SERVER_CAPS,
-  type ProgressCard,
-  type ProgressCardChangedEvent,
-} from "@openclaw/gateway-protocol";
+import type { ProgressCard, ProgressCardChangedEvent } from "@openclaw/gateway-protocol";
 import { html, render } from "lit";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
 import { t } from "../../i18n/index.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { setChatHistoryLoad } from "./chat-history-state.ts";
 import { ChatPaneBase } from "./chat-pane-base.ts";
+import { consumePaneSessionHandoff } from "./chat-pane-shared.ts";
 import {
   createGatewayBrowserClientFixture,
   createInitializationContext,
@@ -31,7 +30,10 @@ import { projectSessionApprovalReplay } from "./session-approval-projection.ts";
 describe("chat pane assistant identity snapshots", () => {
   it("keeps an explicitly owned global Home pane on its agent across work selection", () => {
     const client = { request: vi.fn(async () => ({})) } as unknown as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const { pane, state } = createTestChatPane({
+      client,
+      sessions: createSessionCapabilityFixture(),
+    });
     (pane as TestChatPane & { agentId: string }).agentId = "personal";
     pane.sessionKey = "global";
     state.sessionKey = "global";
@@ -126,7 +128,6 @@ describe("chat pane assistant identity snapshots", () => {
     Object.assign(context.config.current, {
       allowExternalEmbedUrls: false,
       embedSandboxMode: "strict",
-      localMediaPreviewRoots: [],
       serverVersion: null,
     });
     Object.assign(context.config, { subscribe: () => () => undefined });
@@ -201,8 +202,8 @@ describe("chat pane assistant identity snapshots", () => {
   });
 
   it("keeps a session-specific assistant identity across ordinary gateway snapshots", () => {
-    const client = {} as GatewayBrowserClient;
-    const { pane } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const client = createGatewayBrowserClientFixture();
+    const { pane } = createTestChatPane({ client, sessions: createSessionCapabilityFixture() });
     const state = (pane as unknown as { state: ChatPageHost }).state;
     state.client = client;
     state.connected = true;
@@ -217,9 +218,12 @@ describe("chat pane assistant identity snapshots", () => {
   });
 
   it("resets a session-specific identity when the logical connection changes", () => {
-    const client = {} as GatewayBrowserClient;
-    const nextClient = {} as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const client = createGatewayBrowserClientFixture();
+    const nextClient = createGatewayBrowserClientFixture();
+    const { pane, state } = createTestChatPane({
+      client,
+      sessions: createSessionCapabilityFixture(),
+    });
     state.assistantName = "Session Agent";
 
     pane.applyGatewaySnapshot({
@@ -244,7 +248,7 @@ describe("chat pane approval requester identity", () => {
       derivedTitle: "Presentation session derived title",
     } satisfies GatewaySessionRow;
     const source = {
-      key: "agent:main:dashboard:11111111-2222-4333-8444-555555555555",
+      key: "agent:research:dashboard:11111111-2222-4333-8444-555555555555",
       kind: "direct",
       updatedAt: 1,
     } satisfies GatewaySessionRow;
@@ -300,7 +304,7 @@ describe("chat pane approval requester identity", () => {
               severity: "warning",
               pluginId: "test-plugin",
               toolName: null,
-              agentId: "main",
+              agentId: "research",
               allowedDecisions: ["allow-once", "deny"],
             },
           },
@@ -370,7 +374,6 @@ describe("chat pane approval requester identity", () => {
 function createGlobalFeaturePane(
   request: (method: string, params?: unknown) => unknown,
   methods: string[],
-  supportsOwner = true,
 ) {
   const client = createGatewayBrowserClientFixture({
     request: (method, params) =>
@@ -389,10 +392,6 @@ function createGlobalFeaturePane(
     config: { ...initial.config, current: { ...initial.config.current, ...live.config.current } },
   };
   context.gateway.snapshot.hello = gatewayHelloForMethods(methods);
-  context.gateway.snapshot.hello.features = {
-    ...context.gateway.snapshot.hello.features,
-    capabilities: supportsOwner ? [GATEWAY_SERVER_CAPS.PROGRESS_CARD_AGENT_SCOPE] : [],
-  };
   const pane = createRenderTestChatPane();
   const state = pane.initialize(context);
   Object.defineProperty(pane, "isConnected", { configurable: true, value: true });
@@ -407,6 +406,21 @@ function createGlobalFeaturePane(
   const select = (agentId: string) => {
     context.agentSelection.set(agentId);
     state.assistantAgentId = agentId;
+    state.currentSessionId = `${agentId}-parent`;
+    setChatHistoryLoad(state, {
+      phase: "committed",
+      sessions: state.sessions,
+      client,
+      connectionEpoch: state.connectionEpoch,
+      sessionKey: state.sessionKey,
+      requestAgentId: agentId,
+      sessionInfo: {
+        key: state.sessionKey,
+        sessionId: state.currentSessionId,
+        agentId,
+        kind: "global",
+      },
+    });
     state.sessionsResultAgentId = agentId;
     state.sessionsResult = {
       ts: 1,
@@ -432,7 +446,7 @@ function createGlobalFeaturePane(
     };
     gateway.emitTestEvent({ type: "event", event: "progressCard.changed", payload, seq: 1 });
   };
-  return { pane, select, emit };
+  return { pane, select, emit, context };
 }
 
 function globalProgressCard(agentId: string, revision = 1): ProgressCard {
@@ -446,25 +460,168 @@ function globalProgressCard(agentId: string, revision = 1): ProgressCard {
 }
 
 describe("global chat pane feature ownership", () => {
-  it("explains an unavailable global owner without requesting another session", async () => {
-    const request = vi.fn(async () => ({}));
-    const { pane } = createGlobalFeaturePane(request, ["progressCard.get"], false);
+  it.each([
+    ["global", "research"],
+    ["main", "research"],
+    ["agent:research:main", undefined],
+  ] as const)(
+    "scopes question cards, terminal summaries and inline approvals for %s/%s",
+    async (sessionKey, agentId) => {
+      const { pane, select, context } = createGlobalFeaturePane(() => ({}), []);
+      const now = Date.now();
+      const approval = (
+        id: string,
+        target: { sessionKey?: string; agentId?: string },
+      ): ExecApprovalRequest => ({
+        id,
+        kind: "exec",
+        request: { command: id, ...target },
+        createdAtMs: now,
+        expiresAtMs: now + 60_000,
+      });
+      Object.assign(context, {
+        overlays: {
+          snapshot: {
+            approvalQueue: [
+              approval("unscoped", {}),
+              approval("research-oldest", { sessionKey, agentId }),
+              approval("research-newest", { sessionKey, agentId }),
+              approval("other-session", { sessionKey: "agent:research:other" }),
+            ],
+            approvalCanGrant: true,
+            approvalBusy: false,
+            approvalErrors: new Map(),
+          },
+          decideApproval: vi.fn(),
+          subscribe: () => () => undefined,
+        },
+      });
+      for (const [id, target] of [
+        ["research-question", { sessionKey, agentId }],
+        ["unscoped-question", {}],
+        ["other-session-question", { sessionKey: "agent:research:other" }],
+      ] as const) {
+        pane.receiveQuestionEvent({
+          event: "question.requested",
+          payload: {
+            id,
+            ...target,
+            createdAtMs: now,
+            expiresAtMs: now + 60_000,
+            status: "pending",
+            questions: [{ questionId: "review", header: "Research", question: id, options: [] }],
+          },
+        });
+      }
+      const container = document.body.appendChild(document.createElement("div"));
+      const draw = async () => {
+        await pane.updateComplete;
+        render(renderChat(pane.chatProps!), container);
+        await (
+          container.querySelector("openclaw-chat-question-panel") as
+            | (HTMLElement & {
+                updateComplete?: Promise<unknown>;
+              })
+            | null
+        )?.updateComplete;
+      };
+      const expectStableQuestions = async () => {
+        const previous = pane.chatProps?.gatewayQuestionPrompts;
+        pane.requestUpdate();
+        await draw();
+        expect(pane.chatProps?.gatewayQuestionPrompts).toBe(previous);
+      };
+      try {
+        select("main");
+        await draw();
+        expect(pane.chatProps?.gatewayQuestionPrompts).toEqual([]);
+        expect(container.querySelector(".chat-question-panel, .chat-inline-approval")).toBeNull();
+        await expectStableQuestions();
+
+        select("research");
+        await draw();
+        expect(pane.chatProps?.gatewayQuestionPrompts?.map((prompt) => prompt.id)).toEqual([
+          "research-question",
+        ]);
+        expect(container.querySelector(".chat-question-panel")?.textContent).toContain(
+          "research-question",
+        );
+        expect(
+          container
+            .querySelector(".chat-inline-approval [data-approval-id]")
+            ?.getAttribute("data-approval-id"),
+        ).toBe("research-oldest");
+        await expectStableQuestions();
+        const pendingQuestions = pane.chatProps?.gatewayQuestionPrompts;
+        pane.receiveQuestionEvent({
+          event: "question.resolved",
+          payload: { id: "other-session-question", status: "expired" },
+        });
+        await draw();
+        expect(pane.chatProps?.gatewayQuestionPrompts).toBe(pendingQuestions);
+        pane.receiveQuestionEvent({
+          event: "question.resolved",
+          payload: { id: "research-question", status: "cancelled" },
+        });
+        await draw();
+        expect(pane.chatProps?.gatewayQuestionPrompts).not.toBe(pendingQuestions);
+        expect(container.querySelector(".chat-question-panel")).toBeNull();
+        expect(container.querySelector(".chat-question-summary")?.textContent).toContain("Skipped");
+        await expectStableQuestions();
+
+        select("main");
+        await draw();
+        expect(container.querySelector(".chat-question-summary, .chat-inline-approval")).toBeNull();
+      } finally {
+        render(html``, container);
+        container.remove();
+      }
+    },
+  );
+
+  it("refreshes the captured global card without chat effects and ignores stale actions", async () => {
+    let revision = 1;
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "progressCard.refresh") {
+        return { runId: "quiet-refresh", status: "accepted", revision: 1 };
+      }
+      const agentId = (params as { agentId?: string } | undefined)?.agentId ?? "research";
+      return { card: globalProgressCard(agentId, revision) };
+    });
+    const { pane, select, emit } = createGlobalFeaturePane(request, [
+      "progressCard.get",
+      "progressCard.refresh",
+    ]);
+    await vi.waitFor(() => expect(pane.chatProps?.progressCardRefresh).toBeDefined());
+    const original = pane.chatProps!.progressCard!;
+    const action = pane.chatProps!.progressCardRefresh!;
+    const messages = pane.chatProps!.messages;
+    const queue = pane.chatProps!.queue;
+    action.onRefresh(original);
+    expect(request).toHaveBeenLastCalledWith("progressCard.refresh", {
+      sessionKey: "global",
+      agentId: "research",
+      idempotencyKey: expect.any(String),
+    });
+    await vi.waitFor(() => expect(pane.chatProps?.progressCardRefresh?.state).toBe("pending"));
+    expect(pane.chatProps!.progressCard).toBe(original);
+    expect(pane.chatProps!.messages).toBe(messages);
+    expect(pane.chatProps!.queue).toBe(queue);
+    revision = 2;
+    emit({ sessionKey: "agent:research:global", revision });
+    await vi.waitFor(() => expect(pane.chatProps?.progressCardRefresh?.state).toBe("updated"));
+    select("main");
+    action.onRefresh(original);
     await vi.waitFor(() =>
-      expect(pane.chatProps?.progressCardError).toBe(t("sessionProgressCard.ownerUnsupported")),
+      expect(pane.chatProps?.progressCard?.sessionKey).toBe("agent:main:global"),
     );
-    expect(pane.chatProps?.progressCard).toBeNull();
-    expect(request).not.toHaveBeenCalled();
-    const container = document.createElement("div");
-    try {
-      render(renderChat(pane.chatProps!), container);
-      expect(
-        container.querySelector('.agent-chat__progress-float [role="status"]')?.textContent,
-      ).toBe(t("sessionProgressCard.ownerUnsupported"));
-      expect(request).toHaveBeenCalledExactlyOnceWith("talk.catalog", {});
-    } finally {
-      render(html``, container);
-    }
+    expect(pane.chatProps?.progressCardRefresh?.state).toBeUndefined();
+    expect(request.mock.calls.filter(([method]) => method === "progressCard.refresh")).toHaveLength(
+      1,
+    );
+    expect(request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
   });
+
   it("loads, refreshes and dismisses the selected agent's global progress card", async () => {
     let card: ProgressCard | null = globalProgressCard("research");
     const request = vi.fn(async (method: string) => {
@@ -529,5 +686,159 @@ describe("global chat pane feature ownership", () => {
     await pane.updateComplete;
     expect(pane.chatProps?.progressCard).toEqual(main);
     expect(reads).toBe(2);
+  });
+});
+
+describe("chat pane message cuts", () => {
+  it("restores forked prompt attachments into the new session composer", async () => {
+    const sessions = {
+      forkAtMessage: vi.fn().mockResolvedValue({
+        sessionKey: "agent:main:forked",
+        editorText: "edit me",
+        editorAttachments: [{ mimeType: "image/png", data: "aW1hZ2U=" }],
+      }),
+    } as unknown as SessionCapability;
+    const client = {} as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({ client, sessions });
+    state.chatAttachments = [{ id: "old", mimeType: "image/jpeg", dataUrl: "data:old" }];
+
+    await pane.forkFromMessage("user-entry");
+
+    expect(state.sessionKey).toBe("agent:main:current");
+    expect(state.chatAttachments).toEqual([
+      { id: "old", mimeType: "image/jpeg", dataUrl: "data:old" },
+    ]);
+    expect(consumePaneSessionHandoff(pane.context, pane.paneId, "agent:main:forked")).toEqual({
+      attachments: [
+        {
+          id: expect.stringMatching(/^att-/),
+          mimeType: "image/png",
+          dataUrl: "data:image/png;base64,aW1hZ2U=",
+        },
+      ],
+      draft: "edit me",
+    });
+  });
+
+  it("keeps a newer global agent selection when a message fork finishes late", async () => {
+    const forked = createDeferred<{ sessionKey: string; editorText?: string }>();
+    const sessions = {
+      forkAtMessage: vi.fn(() => forked.promise),
+    } as unknown as SessionCapability;
+    const client = {} as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({ client, sessions });
+    const navigate = vi.fn();
+    pane.onPaneSessionChange = navigate;
+    state.sessionKey = "global";
+    state.assistantAgentId = "main";
+
+    const pending = pane.forkFromMessage("user-entry");
+    state.assistantAgentId = "work";
+    forked.resolve({ sessionKey: "agent:main:forked", editorText: "edit me" });
+
+    await pending;
+    expect(navigate).not.toHaveBeenCalled();
+    expect(state.sessionKey).toBe("global");
+    expect(state.assistantAgentId).toBe("work");
+  });
+
+  it("does not navigate to a fork that finishes after a same-client reconnect", async () => {
+    const forked = createDeferred<{ sessionKey: string; editorText?: string }>();
+    const sessions = {
+      forkAtMessage: vi.fn(() => forked.promise),
+    } as unknown as SessionCapability;
+    const client = {} as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({ client, sessions });
+    const navigate = vi.fn();
+    pane.onPaneSessionChange = navigate;
+
+    const pending = pane.forkFromMessage("user-entry");
+    pane.connectionGeneration += 1;
+    state.connectionEpoch = pane.connectionGeneration;
+    forked.resolve({ sessionKey: "agent:main:forked", editorText: "stale draft" });
+
+    await pending;
+    expect(navigate).not.toHaveBeenCalled();
+    expect(consumePaneSessionHandoff(pane.context, pane.paneId, "agent:main:forked")).toBeNull();
+  });
+
+  it("does not navigate or seed a draft after leaving and returning to the retained source", async () => {
+    const forked = createDeferred<{ sessionKey: string; editorText: string }>();
+    const sessions = {
+      forkAtMessage: vi.fn(() => forked.promise),
+    } as unknown as SessionCapability;
+    const client = {} as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({ client, sessions });
+    pane.sessionKey = state.sessionKey;
+    const navigate = vi.fn();
+    pane.onPaneSessionChange = navigate;
+
+    try {
+      const pending = pane.forkFromMessage("user-entry");
+      // A -> B -> A retains A's component, session key, and connection.
+      pane.presented = false;
+      pane.presented = true;
+      state.chatMessage = "newer source draft";
+      forked.resolve({ sessionKey: "agent:main:forked-after-return", editorText: "stale draft" });
+
+      await pending;
+      expect(navigate).not.toHaveBeenCalled();
+      expect(
+        consumePaneSessionHandoff(pane.context, pane.paneId, "agent:main:forked-after-return"),
+      ).toBeNull();
+      expect(state.sessionKey).toBe("agent:main:current");
+      expect(state.chatMessage).toBe("newer source draft");
+    } finally {
+      pane.presented = false;
+    }
+  });
+
+  it.each([
+    { presentation: "hidden", returnToSource: false },
+    { presentation: "shown again", returnToSource: true },
+  ])(
+    "does not paint a stale fork error in a retained source that is $presentation",
+    async ({ returnToSource }) => {
+      const forked = createDeferred<never>();
+      const sessions = {
+        forkAtMessage: vi.fn(() => forked.promise),
+      } as unknown as SessionCapability;
+      const { pane, state } = createTestChatPane({ client: {} as GatewayBrowserClient, sessions });
+      pane.sessionKey = state.sessionKey;
+
+      try {
+        const pending = pane.forkFromMessage("user-entry");
+        pane.presented = false;
+        if (returnToSource) {
+          pane.presented = true;
+        }
+        forked.reject(new Error("stale fork failed"));
+
+        await pending;
+        expect(state.lastError).toBeNull();
+        expect(state.chatError).toBeNull();
+      } finally {
+        pane.presented = false;
+      }
+    },
+  );
+
+  it("shows a current fork error after the retained source is presented again", async () => {
+    const sessions = {
+      forkAtMessage: vi.fn().mockRejectedValue(new Error("current fork failed")),
+    } as unknown as SessionCapability;
+    const { pane, state } = createTestChatPane({ client: {} as GatewayBrowserClient, sessions });
+    pane.sessionKey = state.sessionKey;
+
+    try {
+      pane.presented = false;
+      pane.presented = true;
+      await pane.forkFromMessage("user-entry");
+
+      expect(state.lastError).toBe("current fork failed");
+      expect(state.chatError).toBe("current fork failed");
+    } finally {
+      pane.presented = false;
+    }
   });
 });

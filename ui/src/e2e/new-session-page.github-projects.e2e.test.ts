@@ -87,7 +87,7 @@ suite.define(() => {
         await pollLocatorText(checkout.locator(".new-session-page__trigger-label")).toBe(
           "New worktree",
         );
-        const baseRef = checkoutPopover.getByLabel("From");
+        const baseRef = checkoutPopover.getByLabel("From", { exact: true });
         expect(await baseRef.getAttribute("placeholder")).toBe("From");
         expect(await baseRef.inputValue()).toBe("");
         expect(await checkoutPopover.locator("datalist option").count()).toBe(0);
@@ -145,6 +145,7 @@ suite.define(() => {
     });
     const page = await context.newPage();
     const sessionKey = "agent:main:cloned-project-e2e";
+    const sessionId = "cloned-project-session";
     const runId = "run-cloned-project-e2e";
     const message = "inspect the cloned project";
     let releaseChatModule!: () => void;
@@ -152,7 +153,7 @@ suite.define(() => {
     const chatModuleBlocked = new Promise<void>((resolve) => {
       releaseChatModule = resolve;
     });
-    await page.route("**/assets/chat-page-*.js*", async (route) => {
+    await page.route("**/assets/route-entry-*.js*", async (route) => {
       chatModuleRequested = true;
       await chatModuleBlocked;
       await route.continue();
@@ -199,9 +200,11 @@ suite.define(() => {
     };
     const history = {
       messages: [],
-      sessionId: "cloned-project-session",
+      sessionId,
       sessionInfo: {
         key: sessionKey,
+        sessionId,
+        kind: "direct",
         hasActiveRun: true,
         activeRunIds: [runId],
         status: "running",
@@ -246,6 +249,8 @@ suite.define(() => {
         hasActiveRun: true,
         activeRunIds: [runId],
         key: sessionKey,
+        sessionId,
+        kind: "direct",
         status: "running",
       },
       featureMethods: [
@@ -267,7 +272,7 @@ suite.define(() => {
           defaultBranch: "main",
           repositoryStatus: "git",
         },
-        "sessions.create": { key: sessionKey, runStarted: true, runId },
+        "sessions.create": { key: sessionKey, sessionId, runStarted: true, runId },
         "chat.startup": history,
         "chat.history": history,
       },
@@ -335,7 +340,9 @@ suite.define(() => {
       expect(await gateway.getRequests("projects.add")).toHaveLength(0);
 
       await expect.poll(() => chatModuleRequested).toBe(true);
-      expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionKey));
+      // The blocked preview module has not rendered; only confirmed navigation
+      // may publish the accepted URL once that preview load settles.
+      expect(new URL(page.url()).pathname).toBe("/new");
       expect(await gateway.getRequests("chat.startup")).toHaveLength(0);
       await gateway.emitGatewayEvent("chat", {
         runId,
@@ -381,9 +388,9 @@ suite.define(() => {
       });
       await gateway.resolveDeferred("chat.startup");
       await expect.poll(() => metadataRequested).toBe(true);
-      expect(await page.locator(".chat-notice").count()).toBe(0);
       const working = page.locator('.chat-working-indicator[role="status"]');
       await pollLocatorText(working).toContain("Preparing workspace…");
+      expect(await page.locator(".chat-notice").count()).toBe(0);
       if (artifactDir) {
         await writeFile(
           path.join(artifactDir, "preparing.png"),

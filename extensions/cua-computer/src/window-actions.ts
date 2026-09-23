@@ -302,7 +302,7 @@ export async function handleWindowAct(
         {
           pid: window.pid,
           window_id: window.windowId,
-          include_screenshot: true,
+          include_screenshot: input.includeScreenshot ?? true,
           max_elements: input.maxElements ?? 2_000,
           ...(input.depth !== undefined ? { max_depth: Math.max(1, input.depth) } : {}),
           ...(input.query ? { query: input.query } : {}),
@@ -322,7 +322,7 @@ export async function handleWindowAct(
         driver,
         state,
         "launch_app",
-        app.launchPath
+        platform !== "darwin" && app.launchPath
           ? { launch_path: app.launchPath }
           : app.bundleId
             ? { bundle_id: app.bundleId }

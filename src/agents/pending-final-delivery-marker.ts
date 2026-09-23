@@ -1,6 +1,10 @@
 /** Persists restart-recoverable final delivery markers for agent runs. */
 import { randomUUID } from "node:crypto";
-import { setReplyPayloadMetadata, type ReplyPayload } from "../auto-reply/reply-payload.js";
+import {
+  getReplyPayloadMetadata,
+  setReplyPayloadMetadata,
+  type ReplyPayload,
+} from "../auto-reply/reply-payload.js";
 import {
   buildRecoverablePendingFinalDeliveryText,
   normalizePendingFinalDeliveryPayloads,
@@ -12,6 +16,7 @@ import type { DeliveryContext } from "../utils/delivery-context.shared.js";
 import { persistAgentSession } from "./command/attempt-execution.shared.js";
 
 type PersistPendingFinalDeliveryMarkerParams = {
+  agentId: string;
   deliver: boolean;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
@@ -74,6 +79,7 @@ export async function persistPendingFinalDeliveryMarker(
   const intentId = randomUUID();
   const deliveryId = randomUUID();
   const persisted = await persistAgentSession({
+    agentId: params.agentId,
     sessionStore: params.sessionStore,
     sessionKey: params.sessionKey,
     storePath: params.storePath,
@@ -99,7 +105,23 @@ export async function persistPendingFinalDeliveryMarker(
   if (markerPersisted) {
     for (const payload of sendablePayloads) {
       setReplyPayloadMetadata(payload, {
+        ...(entry.restartRecoveryHarnessCompletion
+          ? {
+              sessionWriterDeliveryAuthority: {
+                ...getReplyPayloadMetadata(payload)?.sessionWriterDeliveryAuthority,
+                agentId: entry.restartRecoveryHarnessCompletion.requesterAgentId,
+                expectedSessionId: params.runOwnedSessionId,
+                ...(entry.lifecycleRevision
+                  ? { expectedLifecycleRevision: entry.lifecycleRevision }
+                  : {}),
+                sessionKey: params.sessionKey,
+                storePath: params.storePath,
+                harnessCompletion: structuredClone(entry.restartRecoveryHarnessCompletion),
+              },
+            }
+          : {}),
         pendingFinalDeliveryCompletion: {
+          agentId: params.agentId,
           deliveryId,
           intentId,
           ...(entry.restartRecoveryDeliveryRunId

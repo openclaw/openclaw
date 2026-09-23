@@ -1,4 +1,3 @@
-// Codex tests cover outcome fallback runtime contract plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -159,7 +158,20 @@ describe("Outcome/fallback runtime contract - Codex app-server adapter", () => {
           turn: {
             id: TURN_ID,
             status: "completed",
-            items: [{ type: "reasoning", id: "reasoning-1" }],
+            items: [
+              {
+                type: "reasoning",
+                id: "reasoning-1",
+                summary:
+                  method === "item/reasoning/summaryTextDelta"
+                    ? [OUTCOME_FALLBACK_RUNTIME_CONTRACT.reasoningOnlyText]
+                    : [],
+                content:
+                  method === "item/reasoning/textDelta"
+                    ? [OUTCOME_FALLBACK_RUNTIME_CONTRACT.reasoningOnlyText]
+                    : [],
+              },
+            ],
           },
         }),
       );
@@ -287,7 +299,14 @@ describe("Outcome/fallback runtime contract - Codex app-server adapter", () => {
             turn: {
               id: TURN_ID,
               status: "completed",
-              items: [{ type: "reasoning", id: "reasoning-1" }],
+              items: [
+                {
+                  type: "reasoning",
+                  id: "reasoning-1",
+                  summary: [],
+                  content: [OUTCOME_FALLBACK_RUNTIME_CONTRACT.reasoningOnlyText],
+                },
+              ],
             },
           }),
         );

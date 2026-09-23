@@ -156,7 +156,7 @@ Requirements and failure behavior:
 - The bot needs the Discord Developer Portal **Server Members Intent**.
 - The access group fails closed when Discord returns `Missing Access`, the sender cannot be resolved as a guild member, or the channel belongs to another guild.
 
-More Discord-specific examples: [Discord access control](/channels/discord#access-control-and-routing)
+More Discord-specific examples: [Discord access control](/channels/discord/access-control#access-control-and-routing)
 
 ## Plugin diagnostics
 
@@ -195,3 +195,9 @@ If a sender should match but is blocked:
 5. For Discord channel audiences, confirm the bot can see the guild channel and has Server Members Intent enabled.
 
 Run `openclaw doctor` after editing access-control config. It catches many invalid allowlist and policy combinations before runtime.
+
+## Related
+
+- [Groups](/channels/groups) — group chat behavior and mention gating
+- [Pairing](/channels/pairing) — the separate DM pairing flow for channel senders
+- [Channels overview](/channels) — the channels these groups apply to

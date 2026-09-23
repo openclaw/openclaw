@@ -35,7 +35,7 @@ type ChannelGateway = {
   subscribe: (listener: (snapshot: ChannelGatewaySnapshot) => void) => () => void;
 };
 
-type ChannelsState = {
+export type ChannelsState = {
   client: ChannelGatewayClient | null;
   connected: boolean;
   channelsLoading: boolean;
@@ -57,13 +57,9 @@ type ChannelsState = {
   whatsappBusy: boolean;
 };
 
-type LoadChannelsOptions = {
-  softTimeoutMs?: number;
-};
-
 export type ChannelCapability = {
   readonly state: ChannelsState;
-  refresh: (probe?: boolean, options?: LoadChannelsOptions) => Promise<void>;
+  refresh: (probe?: boolean) => Promise<void>;
   refreshPairing: () => Promise<void>;
   approvePairing: (params: {
     channel: string;
@@ -213,12 +209,6 @@ function createInitialChannelsState(snapshot: Partial<ChannelGatewaySnapshot> = 
   };
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
 function isCurrentChannelRefresh(
   state: ChannelsState,
   client: ChannelGatewayClient,
@@ -227,11 +217,7 @@ function isCurrentChannelRefresh(
   return state.client === client && state.channelsRefreshSeq === refreshSeq;
 }
 
-async function loadChannels(
-  state: ChannelsState,
-  probe: boolean,
-  options: LoadChannelsOptions = {},
-) {
+async function loadChannels(state: ChannelsState, probe: boolean) {
   const client = state.client;
   if (!client || !state.connected) {
     return;
@@ -243,40 +229,33 @@ async function loadChannels(
   state.channelsRefreshSeq = refreshSeq;
   state.channelsLoading = true;
   state.channelsLoadingProbe = probe;
-  const refresh = (async () => {
-    try {
-      const res = await client.request<ChannelsStatusSnapshot | null>("channels.status", {
-        probe,
-        timeoutMs: 8000,
-      });
-      if (!isCurrentChannelRefresh(state, client, refreshSeq)) {
-        return;
-      }
-      state.channelsSnapshot = res;
-      state.channelsError = null;
-      state.channelsLastSuccess = Date.now();
-    } catch (err) {
-      if (!isCurrentChannelRefresh(state, client, refreshSeq)) {
-        return;
-      }
-      if (isMissingOperatorReadScopeError(err)) {
-        state.channelsSnapshot = null;
-        state.channelsError = formatMissingOperatorReadScopeMessage("channel status");
-      } else {
-        state.channelsError = formatUiError(err);
-      }
-    } finally {
-      if (isCurrentChannelRefresh(state, client, refreshSeq)) {
-        state.channelsLoading = false;
-        state.channelsLoadingProbe = null;
-      }
+  try {
+    const res = await client.request<ChannelsStatusSnapshot | null>("channels.status", {
+      probe,
+      timeoutMs: 8000,
+    });
+    if (!isCurrentChannelRefresh(state, client, refreshSeq)) {
+      return;
     }
-  })();
-
-  const softTimeoutMs = options.softTimeoutMs;
-  await (typeof softTimeoutMs === "number" && softTimeoutMs > 0
-    ? Promise.race([refresh, delay(softTimeoutMs)])
-    : refresh);
+    state.channelsSnapshot = res;
+    state.channelsError = null;
+    state.channelsLastSuccess = Date.now();
+  } catch (err) {
+    if (!isCurrentChannelRefresh(state, client, refreshSeq)) {
+      return;
+    }
+    if (isMissingOperatorReadScopeError(err)) {
+      state.channelsSnapshot = null;
+      state.channelsError = formatMissingOperatorReadScopeMessage("channel status");
+    } else {
+      state.channelsError = formatUiError(err);
+    }
+  } finally {
+    if (isCurrentChannelRefresh(state, client, refreshSeq)) {
+      state.channelsLoading = false;
+      state.channelsLoadingProbe = null;
+    }
+  }
 }
 
 function isCurrentPairingRefresh(
@@ -688,7 +667,7 @@ export function createChannelCapability(gateway: ChannelGateway): ChannelCapabil
     get state() {
       return state;
     },
-    refresh: (probe, options) => run(() => loadChannels(state, probe ?? false, options)),
+    refresh: (probe) => run(() => loadChannels(state, probe ?? false)),
     refreshPairing: () => run(() => loadChannelPairing(state)),
     approvePairing: async (params) => {
       let result: ChannelsPairingApproveResult | null = null;

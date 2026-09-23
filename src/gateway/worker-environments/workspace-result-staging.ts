@@ -1,32 +1,33 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { runBestEffortCleanup } from "../../infra/non-fatal-cleanup.js";
+import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { runCommandBuffered, runCommandWithTimeout } from "../../process/exec.js";
-import type { WorkerWorkspaceReconcileRequest } from "./tunnel-contract.js";
+import { runCommandWithTimeout, runExec } from "../../process/exec.js";
+import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
+import type { WorkerLocalWorkspaceReconcileRequest } from "./tunnel-contract.js";
 import { boundedWorkerError } from "./worker-error.js";
 import {
   activeWorkspaceHashContext,
   withWorkspaceHashContext,
   withWorkspaceHashMemo,
 } from "./workspace-hash-memo.js";
+import { parseChangedWorkspaceResult } from "./workspace-manifest-comparison.js";
 import {
-  MAX_RECONCILIATION_ENTRIES,
-  MAX_RECONCILIATION_FILE_BYTES,
-  MAX_RECONCILIATION_TOTAL_BYTES,
-  parseWorkerWorkspaceManifest,
-  type WorkerWorkspaceManifest,
-  type WorkerWorkspaceManifestEntry,
-  type WorkerWorkspaceReconciliationJournalAdapter,
+  prepareWorkspaceStageInput,
+  loadStagedWorkspaceManifest,
+  readStagedWorkspaceManifestEntries,
+} from "./workspace-manifest-worker.js";
+import type {
+  WorkerWorkspaceManifest,
+  WorkerWorkspaceManifestEntry,
+  WorkerWorkspaceReconciliationJournalAdapter,
 } from "./workspace-manifest.js";
-import { reconciliationEntries } from "./workspace-reconcile-derived-paths.js";
-import { absoluteEntryMatches, localPath } from "./workspace-reconcile-fs.js";
+import { localPath } from "./workspace-reconcile-fs.js";
 import {
   applyStagedWorkerWorkspace,
+  assertWorkspaceMatchesManifest,
   inspectAcceptedWorkerWorkspace,
-  manifestNodes,
   type WorkerWorkspaceApplyResult,
 } from "./workspace-reconcile.js";
 import {
@@ -36,72 +37,24 @@ import {
   workspaceResultGitCommand as gitCommand,
   WORKSPACE_RESULT_GIT_TIMEOUT_MS as PATCH_TIMEOUT_MS,
 } from "./workspace-result-git.js";
+import {
+  requireWorkerResultStorageRef,
+  WORKER_RESULT_CANDIDATE_REF_PREFIX,
+  WORKER_RESULT_CLEANUP_REF_PREFIX,
+  WORKER_RESULT_REF_PREFIX,
+} from "./workspace-result-inventory.js";
 
-// Match managed-worktree refs/openclaw/snapshots: deleting the owning ref is
-// sufficient; unreachable objects may remain until normal Git GC.
-const WORKER_RESULT_REF_PREFIX = "refs/openclaw/worker-results";
-const WORKER_RESULT_CANDIDATE_REF_PREFIX = "refs/openclaw/worker-result-candidates";
-const WORKER_RESULT_CLEANUP_REF_PREFIX = "refs/openclaw/worker-result-cleanup";
 const WORKER_RESULT_CLAIM_ID_PATTERN = /^[A-Za-z0-9-]+$/u;
-const STAGED_RESULT_MESSAGE = "OpenClaw worker workspace result";
-const STAGED_RESULT_METADATA_LIMIT = 128 * 1024 * 1024 + 4_096;
 const workspaceLog = createSubsystemLogger("gateway/worker-workspace");
 
 export function workerWorkspaceTransferPaths(
   current: WorkerWorkspaceManifest,
   base: WorkerWorkspaceManifest,
+  signal?: AbortSignal,
 ): string[] {
   // Staging is directory-agnostic because it transfers file and symlink bytes only.
+  signal?.throwIfAborted();
   return parseChangedWorkspaceResult(base, current).entries.map((entry) => entry.path);
-}
-
-function parseChangedWorkspaceResult(
-  base: WorkerWorkspaceManifest,
-  current: WorkerWorkspaceManifest,
-  enforceRecordLimit = true,
-): { changed: boolean; entries: WorkerWorkspaceManifestEntry[] } {
-  const baseNodes = manifestNodes(base);
-  const currentNodes = manifestNodes(current);
-  const changed = new Set(
-    [...new Set([...baseNodes.keys(), ...currentNodes.keys()])].filter(
-      (entryPath) =>
-        JSON.stringify(baseNodes.get(entryPath)) !== JSON.stringify(currentNodes.get(entryPath)),
-    ),
-  );
-  const recordCount = [...changed].reduce(
-    (count, entryPath) =>
-      count + Number(baseNodes.has(entryPath)) + Number(currentNodes.has(entryPath)),
-    0,
-  );
-  if (enforceRecordLimit && recordCount > MAX_RECONCILIATION_ENTRIES) {
-    throw new Error(
-      `Cloud workspace reconciliation exceeds the ${MAX_RECONCILIATION_ENTRIES} entry limit`,
-    );
-  }
-  let totalBytes = 0;
-  const entries = reconciliationEntries(current.entries).filter((entry) => changed.has(entry.path));
-  for (const entry of entries) {
-    if (entry.type === "file" && entry.size > MAX_RECONCILIATION_FILE_BYTES) {
-      throw new Error(`Cloud workspace result is too large: ${entry.path}`);
-    }
-    totalBytes += entry.type === "file" ? entry.size : Buffer.byteLength(entry.target);
-    if (totalBytes > MAX_RECONCILIATION_TOTAL_BYTES) {
-      throw new Error("Cloud workspace staged result exceeds its byte limit");
-    }
-  }
-  return { changed: recordCount > 0, entries };
-}
-
-function requireWorkerResultStorageRef(ref: string): string {
-  if (
-    !new RegExp(
-      `^(?:${WORKER_RESULT_REF_PREFIX}|${WORKER_RESULT_CANDIDATE_REF_PREFIX}|${WORKER_RESULT_CLEANUP_REF_PREFIX})/[A-Za-z0-9-]+$`,
-      "u",
-    ).test(ref)
-  ) {
-    throw new Error("Cloud workspace staged result reference is invalid");
-  }
-  return ref;
 }
 
 function requireWorkerResultRef(ref: string): string {
@@ -178,7 +131,16 @@ export async function hasWorkerWorkspaceResultRef(params: {
     throw error;
   }
   if (!(await hasGitAdminPath(root))) {
-    return false;
+    const bare = await runCommandWithTimeout(
+      gitCommand(root, ["rev-parse", "--is-bare-repository"]),
+      {
+        timeoutMs: PATCH_TIMEOUT_MS,
+        maxOutputBytes: 1024,
+      },
+    );
+    if (bare.termination !== "exit" || bare.code !== 0 || bare.stdout.trim() !== "true") {
+      return false;
+    }
   }
   const result = await runCommandWithTimeout(
     gitCommand(root, [
@@ -198,56 +160,6 @@ export async function hasWorkerWorkspaceResultRef(params: {
   throw new Error((result.stderr || result.stdout || "git show-ref failed").trim());
 }
 
-function stagedResultMessage(params: {
-  baseManifestRef: string;
-  currentManifestRef: string;
-  baseManifestRaw: string;
-  currentManifestRaw: string;
-}): Buffer {
-  const base = Buffer.from(params.baseManifestRaw);
-  const current = Buffer.from(params.currentManifestRaw);
-  const header = Buffer.from(
-    `${STAGED_RESULT_MESSAGE}\nversion 2\nbase-ref ${params.baseManifestRef}\ncurrent-ref ${params.currentManifestRef}\nbase-bytes ${base.byteLength}\ncurrent-bytes ${current.byteLength}\n\n`,
-  );
-  return Buffer.concat([header, base, current]);
-}
-
-function quoteFastImportPath(entryPath: string): string {
-  const bytes = Buffer.from(entryPath);
-  let quoted = '"';
-  for (const byte of bytes) {
-    if (byte === 0) {
-      throw new Error("Cloud workspace staged result path contains a null byte");
-    }
-    if (byte === 0x22 || byte === 0x5c) {
-      quoted += `\\${String.fromCharCode(byte)}`;
-    } else if (byte >= 0x20 && byte < 0x7f) {
-      quoted += String.fromCharCode(byte);
-    } else {
-      quoted += `\\${byte.toString(8).padStart(3, "0")}`;
-    }
-  }
-  return `${quoted}"`;
-}
-
-async function readGitBlob(params: {
-  root: string;
-  objectId: string;
-  maxBytes: number;
-}): Promise<Buffer> {
-  const result = await runCommandBuffered(
-    gitCommand(params.root, ["cat-file", "blob", params.objectId]),
-    { timeoutMs: PATCH_TIMEOUT_MS, maxOutputBytes: params.maxBytes + 1 },
-  );
-  if (result.termination !== "exit" || result.code !== 0) {
-    throw new Error(result.stderr.toString("utf8").trim() || "git cat-file failed");
-  }
-  if (result.stdout.byteLength > params.maxBytes) {
-    throw new Error("Cloud workspace staged result exceeds its byte limit");
-  }
-  return result.stdout;
-}
-
 async function stageWorkerWorkspaceResult(params: {
   root: string;
   stagingRoot: string;
@@ -256,178 +168,32 @@ async function stageWorkerWorkspaceResult(params: {
   currentManifestRef: string;
   baseManifestRaw: string;
   currentManifestRaw: string;
-}): Promise<void> {
+}): Promise<string> {
   const root = await ensureWorkerWorkspaceResultRepository(params.root);
   const stagedResultRef = requireWorkerResultStorageRef(params.stagedResultRef);
-  const base = parseWorkerWorkspaceManifest(params.baseManifestRaw, params.baseManifestRef);
-  const current = parseWorkerWorkspaceManifest(
-    params.currentManifestRaw,
-    params.currentManifestRef,
+  const temporary = await fs.mkdtemp(
+    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-workspace-import-"),
   );
-  // The authenticated manifests define the complete result. The durable tree
-  // stores only changed resulting blobs; deletions intentionally have no blob.
-  const entries = parseChangedWorkspaceResult(base, current).entries.toSorted((left, right) =>
-    left.path.localeCompare(right.path),
-  );
-  const blobs: Array<{ entry: WorkerWorkspaceManifestEntry; mark: number; content: Buffer }> = [];
-  for (const [index, entry] of entries.entries()) {
-    const source = localPath(params.stagingRoot, entry.path);
-    if (!(await absoluteEntryMatches(source, entry))) {
-      throw new Error(`Cloud workspace staged payload is invalid: ${entry.path}`);
+  try {
+    const inputPath = path.join(temporary, "fast-import");
+    await prepareWorkspaceStageInput({ ...params, inputPath });
+    const input = await fs.open(inputPath, "r");
+    try {
+      await withWorkspaceResultRefMutation(root, (baseEnv) =>
+        runExec("git", gitCommand(root, ["fast-import", "--quiet"]).slice(1), {
+          baseEnv,
+          stdinFileDescriptor: input.fd,
+          timeoutMs: PATCH_TIMEOUT_MS,
+          maxBuffer: 1024 * 1024,
+        }),
+      );
+    } finally {
+      await input.close();
     }
-    const content =
-      entry.type === "symlink" ? Buffer.from(entry.target) : await fs.readFile(source);
-    if (
-      entry.type === "file" &&
-      (content.byteLength !== entry.size ||
-        createHash("sha256").update(content).digest("hex") !== entry.sha256)
-    ) {
-      throw new Error(`Cloud workspace staged payload changed while reading: ${entry.path}`);
-    }
-    blobs.push({ entry, mark: index + 1, content });
+    return await requireGit(root, ["rev-parse", `${stagedResultRef}^{commit}`]);
+  } finally {
+    await fs.rm(temporary, { recursive: true, force: true });
   }
-  const message = stagedResultMessage(params);
-  const chunks: Uint8Array[] = [];
-  for (const blob of blobs) {
-    chunks.push(Buffer.from(`blob\nmark :${blob.mark}\ndata ${blob.content.byteLength}\n`));
-    chunks.push(blob.content, Buffer.from("\n"));
-  }
-  chunks.push(
-    Buffer.from(
-      `commit ${stagedResultRef}\nauthor OpenClaw <openclaw@localhost> 0 +0000\ncommitter OpenClaw <openclaw@localhost> 0 +0000\ndata ${message.byteLength}\n`,
-    ),
-    message,
-    Buffer.from("\ndeleteall\n"),
-  );
-  for (const blob of blobs) {
-    const mode =
-      blob.entry.type === "symlink"
-        ? "120000"
-        : (blob.entry.mode & 0o111) !== 0
-          ? "100755"
-          : "100644";
-    chunks.push(Buffer.from(`M ${mode} :${blob.mark} ${quoteFastImportPath(blob.entry.path)}\n`));
-  }
-  chunks.push(Buffer.from("done\n"));
-  const imported = await withWorkspaceResultRefMutation(root, () =>
-    runCommandBuffered(gitCommand(root, ["fast-import", "--quiet"]), {
-      input: Buffer.concat(chunks),
-      timeoutMs: PATCH_TIMEOUT_MS,
-      maxOutputBytes: { stdout: 1024 * 1024, stderr: 1024 * 1024 },
-    }),
-  );
-  if (imported.termination !== "exit" || imported.code !== 0) {
-    throw new Error(imported.stderr.toString("utf8").trim() || "git fast-import failed");
-  }
-  await requireGit(root, ["rev-parse", `${stagedResultRef}^{commit}`]);
-}
-
-type LoadedStagedWorkerWorkspace = {
-  baseManifestRef: string;
-  currentManifestRef: string;
-  base: WorkerWorkspaceManifest;
-  current: WorkerWorkspaceManifest;
-  changed: boolean;
-  changedEntries: WorkerWorkspaceManifestEntry[];
-  objectsByPath: Map<string, { mode: string; objectId: string }>;
-};
-
-async function loadStagedWorkerWorkspace(
-  root: string,
-  stagedResultRef: string,
-): Promise<LoadedStagedWorkerWorkspace> {
-  const ref = requireWorkerResultStorageRef(stagedResultRef);
-  const rawCommit = await runCommandBuffered(gitCommand(root, ["cat-file", "commit", ref]), {
-    timeoutMs: PATCH_TIMEOUT_MS,
-    maxOutputBytes: STAGED_RESULT_METADATA_LIMIT,
-  });
-  if (rawCommit.termination !== "exit" || rawCommit.code !== 0) {
-    throw new Error(rawCommit.stderr.toString("utf8").trim() || "git cat-file failed");
-  }
-  const commitHeaderEnd = rawCommit.stdout.indexOf("\n\n");
-  if (commitHeaderEnd < 0) {
-    throw new Error("Cloud workspace staged result metadata is invalid");
-  }
-  const message = rawCommit.stdout.subarray(commitHeaderEnd + 2);
-  const metadataEnd = message.indexOf("\n\n");
-  if (metadataEnd < 0) {
-    throw new Error("Cloud workspace staged result metadata is invalid");
-  }
-  const lines = message.subarray(0, metadataEnd).toString("utf8").split("\n");
-  const version = lines[1] === "version 1" ? 1 : lines[1] === "version 2" ? 2 : undefined;
-  const match = /^sha256:[a-f0-9]{64}$/u;
-  const baseManifestRef = lines[2]?.slice("base-ref ".length) ?? "";
-  const currentManifestRef = lines[3]?.slice("current-ref ".length) ?? "";
-  const baseBytes = Number(lines[4]?.slice("base-bytes ".length));
-  const currentBytes = Number(lines[5]?.slice("current-bytes ".length));
-  if (
-    lines[0] !== STAGED_RESULT_MESSAGE ||
-    version === undefined ||
-    !lines[2]?.startsWith("base-ref ") ||
-    !lines[3]?.startsWith("current-ref ") ||
-    !lines[4]?.startsWith("base-bytes ") ||
-    !lines[5]?.startsWith("current-bytes ") ||
-    lines.length !== 6 ||
-    !match.test(baseManifestRef) ||
-    !match.test(currentManifestRef) ||
-    !Number.isSafeInteger(baseBytes) ||
-    baseBytes < 0 ||
-    !Number.isSafeInteger(currentBytes) ||
-    currentBytes < 0
-  ) {
-    throw new Error("Cloud workspace staged result metadata is invalid");
-  }
-  const manifests = message.subarray(metadataEnd + 2);
-  if (manifests.byteLength !== baseBytes + currentBytes) {
-    throw new Error("Cloud workspace staged result metadata is truncated");
-  }
-  const baseRaw = manifests.subarray(0, baseBytes).toString("utf8");
-  const currentRaw = manifests.subarray(baseBytes).toString("utf8");
-  const base = parseWorkerWorkspaceManifest(baseRaw, baseManifestRef);
-  const current = parseWorkerWorkspaceManifest(currentRaw, currentManifestRef);
-  // Shipped v1 refs carry a complete current tree and predate the conservative
-  // manifest worst-case record gate. Recovery still validates their manifests,
-  // tree shape, and changed payload bytes; the apply owner caps actual records.
-  const changedResult = parseChangedWorkspaceResult(base, current, version !== 1);
-  const changedEntries = changedResult.entries;
-  const treeEntries = version === 1 ? reconciliationEntries(current.entries) : changedEntries;
-  const tree = await runCommandBuffered(
-    gitCommand(root, ["ls-tree", "-r", "-z", "--full-tree", ref]),
-    { timeoutMs: PATCH_TIMEOUT_MS, maxOutputBytes: 2 * MAX_RECONCILIATION_FILE_BYTES },
-  );
-  if (tree.termination !== "exit" || tree.code !== 0) {
-    throw new Error(tree.stderr.toString("utf8").trim() || "git ls-tree failed");
-  }
-  const objectsByPath = new Map<string, { mode: string; objectId: string }>();
-  for (const record of tree.stdout.toString("utf8").split("\0").filter(Boolean)) {
-    const parsed = /^(100644|100755|120000) blob ([a-f0-9]{40}|[a-f0-9]{64})\t([\s\S]+)$/u.exec(
-      record,
-    );
-    if (!parsed) {
-      throw new Error("Cloud workspace staged result tree is invalid");
-    }
-    objectsByPath.set(parsed[3]!, { mode: parsed[1]!, objectId: parsed[2]! });
-  }
-  if (objectsByPath.size !== treeEntries.length) {
-    throw new Error("Cloud workspace staged result tree does not match its manifest");
-  }
-  for (const entry of treeEntries) {
-    const object = objectsByPath.get(entry.path);
-    const expectedMode =
-      entry.type === "symlink" ? "120000" : (entry.mode & 0o111) !== 0 ? "100755" : "100644";
-    if (!object || object.mode !== expectedMode) {
-      throw new Error(`Cloud workspace staged result tree is invalid: ${entry.path}`);
-    }
-  }
-  return {
-    baseManifestRef,
-    currentManifestRef,
-    base,
-    current,
-    changed: changedResult.changed,
-    changedEntries,
-    objectsByPath,
-  };
 }
 
 async function materializeStagedEntry(params: {
@@ -446,8 +212,62 @@ async function materializeStagedEntry(params: {
   }
   await fs.writeFile(target, params.content, { mode: params.entry.mode, flag: "wx" });
   await fs.chmod(target, params.entry.mode);
-  if (!(await absoluteEntryMatches(target, params.entry))) {
-    throw new Error(`Cloud workspace staged payload is invalid: ${params.entry.path}`);
+}
+
+export async function readStagedWorkerWorkspaceResult(root: string, stagedResultRef: string) {
+  const { objectsByPath, ...snapshot } = await loadStagedWorkspaceManifest(root, stagedResultRef);
+  const readEntries = () =>
+    readStagedWorkspaceManifestEntries({ root, objectsByPath, entries: snapshot.changedEntries });
+  return { ...snapshot, readEntries };
+}
+
+export async function withStagedWorkerWorkspaceResult<T>(
+  params: { root: string; stagedResultRef: string },
+  use: (
+    snapshot: Awaited<ReturnType<typeof readStagedWorkerWorkspaceResult>> & { stagingRoot: string },
+  ) => Promise<T>,
+): Promise<T> {
+  const snapshot = await readStagedWorkerWorkspaceResult(params.root, params.stagedResultRef);
+  return await withMaterializedWorkerWorkspaceResult(snapshot, use);
+}
+
+async function withMaterializedWorkerWorkspaceResult<T>(
+  snapshot: Awaited<ReturnType<typeof readStagedWorkerWorkspaceResult>>,
+  use: (
+    snapshot: Awaited<ReturnType<typeof readStagedWorkerWorkspaceResult>> & { stagingRoot: string },
+  ) => Promise<T>,
+): Promise<T> {
+  const stagingRoot = await fs.mkdtemp(
+    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-checkpoint-payload-"),
+  );
+  try {
+    let writes: Array<() => Promise<void>> = [];
+    const flush = async () => {
+      const result = await runTasksWithConcurrency({ tasks: writes, limit: 4, errorMode: "stop" });
+      writes = [];
+      if (result.hasError) {
+        throw result.firstError;
+      }
+    };
+    for await (const { entry, content } of snapshot.readEntries()) {
+      writes.push(() => materializeStagedEntry({ root: stagingRoot, entry, content }));
+      if (writes.length === 4) {
+        await flush();
+      }
+    }
+    await flush();
+    await assertWorkspaceMatchesManifest({
+      root: stagingRoot,
+      manifest: snapshot.current,
+      entries: snapshot.changedEntries,
+    });
+    return await use({ ...snapshot, stagingRoot });
+  } finally {
+    await runBestEffortCleanup({
+      cleanup: () => fs.rm(stagingRoot, { recursive: true, force: true }),
+      onError: (error) =>
+        workspaceLog.warn(`worker workspace staging cleanup failed: ${boundedWorkerError(error)}`),
+    });
   }
 }
 
@@ -472,7 +292,7 @@ async function applyStagedWorkerWorkspaceResultWithMemo(
   params: Parameters<typeof applyStagedWorkerWorkspaceResult>[0],
 ): Promise<WorkerWorkspaceApplyResult & { changed: boolean }> {
   const root = await fs.realpath(params.root);
-  const staged = await loadStagedWorkerWorkspace(root, params.stagedResultRef);
+  const staged = await readStagedWorkerWorkspaceResult(root, params.stagedResultRef);
   if (params.alreadyAccepted || staged.baseManifestRef !== params.expectedBaseManifestRef) {
     // An acceptance marker proves the mutations already ran even when omitted
     // local nodes left the manifest ref unchanged. Re-snapshot; never replay.
@@ -493,24 +313,7 @@ async function applyStagedWorkerWorkspaceResultWithMemo(
       changed: staged.changed,
     };
   }
-  const stagingRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-staged-result-"));
-  try {
-    for (const entry of staged.changedEntries) {
-      const object = staged.objectsByPath.get(entry.path)!;
-      const content = await readGitBlob({
-        root,
-        objectId: object.objectId,
-        maxBytes: MAX_RECONCILIATION_FILE_BYTES,
-      });
-      if (entry.type === "symlink") {
-        if (content.toString("utf8") !== entry.target) {
-          throw new Error(`Cloud workspace staged result tree is invalid: ${entry.path}`);
-        }
-        await materializeStagedEntry({ root: stagingRoot, entry });
-      } else {
-        await materializeStagedEntry({ root: stagingRoot, entry, content });
-      }
-    }
+  return await withMaterializedWorkerWorkspaceResult(staged, async ({ stagingRoot }) => {
     const applied = await applyStagedWorkerWorkspace({
       root,
       stagingRoot,
@@ -519,20 +322,14 @@ async function applyStagedWorkerWorkspaceResultWithMemo(
       base: staged.base,
       current: staged.current,
       journal: params.journal,
-      publishAcceptedManifest: params.publishAcceptedManifest,
+      acceptance: { kind: "reconcile", publish: params.publishAcceptedManifest },
     });
     return { ...applied, changed: staged.changed };
-  } finally {
-    await runBestEffortCleanup({
-      cleanup: () => fs.rm(stagingRoot, { recursive: true, force: true }),
-      onError: (error) =>
-        workspaceLog.warn(`worker workspace staging cleanup failed: ${boundedWorkerError(error)}`),
-    });
-  }
+  });
 }
 
 async function prepareRequestedWorkerWorkspaceResult(params: {
-  request: WorkerWorkspaceReconcileRequest;
+  request: WorkerLocalWorkspaceReconcileRequest;
   stagingRoot: string;
   currentManifestRef: string;
   baseManifestRaw: string;

@@ -25,24 +25,21 @@ export async function runMemorySessionBackfill(
     commandName: "memory session-backfill",
     agent: opts.agent,
     diagnosticsToStderr: Boolean(opts.json),
+    onUnavailable: opts.json ? defaultRuntime.writeJson : undefined,
     purpose: "status",
     ...hostOptions,
     run: async ({ manager, cfg, agentId }) => {
       const workspaceDir = manager.status().workspaceDir?.trim();
       if (!workspaceDir) {
-        defaultRuntime.error("Memory session-backfill requires a resolvable workspace directory.");
-        process.exitCode = 1;
-        return;
+        throw new Error("Memory session-backfill requires a resolvable workspace directory.");
       }
       if (
         opts.rollback &&
         (opts.apply || opts.rem || opts.from || opts.to || opts.archiveFiles?.length)
       ) {
-        defaultRuntime.error(
+        throw new Error(
           "Memory session-backfill --rollback cannot be combined with input, range, --rem, or --apply options.",
         );
-        process.exitCode = 1;
-        return;
       }
       const pluginConfig = resolveMemoryPluginConfig(cfg);
       const remConfig = resolveMemoryRemDreamingConfig({
@@ -65,9 +62,7 @@ export async function runMemorySessionBackfill(
           ...(remConfig.timezone !== undefined ? { timezone: remConfig.timezone } : {}),
         });
       } catch (error) {
-        defaultRuntime.error(error instanceof Error ? error.message : String(error));
-        process.exitCode = 1;
-        return;
+        throw new Error(error instanceof Error ? error.message : String(error), { cause: error });
       }
       if (opts.json) {
         defaultRuntime.writeJson(result);
@@ -121,160 +116,137 @@ export async function runMemoryRemHarness(
     commandName: "memory rem-harness",
     agent: opts.agent,
     diagnosticsToStderr: Boolean(opts.json),
+    onUnavailable: opts.json ? defaultRuntime.writeJson : undefined,
     purpose: "status",
     ...hostOptions,
     run: async ({ manager, cfg, agentId }) => {
-      const status = manager.status();
-      const managerWorkspaceDir = status.workspaceDir?.trim();
+      const managerWorkspaceDir = manager.status().workspaceDir?.trim();
       const pluginConfig = resolveMemoryPluginConfig(cfg);
-      if (!managerWorkspaceDir && !opts.path) {
-        defaultRuntime.error("Memory rem-harness requires a resolvable workspace directory.");
-        process.exitCode = 1;
-        return;
-      }
-      const remConfig = resolveMemoryRemDreamingConfig({
-        pluginConfig,
-        cfg,
-      });
+      const remConfig = resolveMemoryRemDreamingConfig({ pluginConfig, cfg });
       const nowMs = Date.now();
-      let workspaceDir = managerWorkspaceDir ?? "";
-      let sourceFiles: string[] = [];
-      let groundedInputPaths: string[] = [];
-      let importedFileCount = 0;
-      let importedSignalCount = 0;
-      let skippedPaths: string[] = [];
-      let cleanupWorkspaceDir: string | null = null;
-      if (opts.path) {
-        const historical = await createHistoricalRemHarnessWorkspace({
-          inputPath: opts.path,
-          remLimit: remConfig.limit,
-          nowMs,
-          timezone: remConfig.timezone,
-        });
-        workspaceDir = historical.workspaceDir;
-        cleanupWorkspaceDir = historical.workspaceDir;
-        sourceFiles = historical.sourceFiles;
-        groundedInputPaths = historical.workspaceSourceFiles;
-        importedFileCount = historical.importedFileCount;
-        importedSignalCount = historical.importedSignalCount;
-        skippedPaths = historical.skippedPaths;
-        if (sourceFiles.length === 0) {
-          await fs.rm(historical.workspaceDir, { recursive: true, force: true });
-          defaultRuntime.error(
-            `Memory rem-harness found no YYYY-MM-DD.md files at ${shortenHomePath(path.resolve(opts.path))}.`,
-          );
-          process.exitCode = 1;
-          return;
+      const previewWorkspace = async (
+        workspaceDir: string,
+        historical?: HistoricalMemoryWorkspace,
+      ) => {
+        if (!workspaceDir) {
+          throw new Error("Memory rem-harness requires a resolvable workspace directory.");
         }
-      }
-      if (!workspaceDir) {
-        defaultRuntime.error("Memory rem-harness requires a resolvable workspace directory.");
-        process.exitCode = 1;
-        return;
-      }
-      try {
+        const seeded = historical
+          ? await seedHistoricalDailyMemorySignals({
+              workspaceDir,
+              filePaths: historical.workspaceSourceFiles,
+              limit: remConfig.limit,
+              nowMs,
+              timezone: remConfig.timezone,
+            })
+          : undefined;
         const preview = await previewRemHarness({
           workspaceDir,
           cfg,
           pluginConfig,
           grounded: Boolean(opts.grounded),
-          groundedInputPaths,
+          groundedInputPaths: historical?.workspaceSourceFiles ?? [],
           includePromoted: Boolean(opts.includePromoted),
           nowMs,
         });
-        groundedInputPaths = preview.groundedInputPaths;
-        const remPreview = preview.rem;
-        const groundedPreview = preview.grounded;
-        const deepCandidates = preview.deep.candidates;
-        if (opts.json) {
-          defaultRuntime.writeJson({
-            workspaceDir,
-            sourcePath: opts.path ? path.resolve(opts.path) : null,
-            sourceFiles,
-            historicalImport: opts.path
-              ? {
-                  importedFileCount,
-                  importedSignalCount,
-                  skippedPaths,
-                }
-              : null,
-            remConfig: preview.remConfig,
-            deepConfig: {
-              minScore: preview.deepConfig.minScore,
-              minRecallCount: preview.deepConfig.minRecallCount,
-              minUniqueQueries: preview.deepConfig.minUniqueQueries,
-              recencyHalfLifeDays: preview.deepConfig.recencyHalfLifeDays,
-              maxAgeDays: preview.deepConfig.maxAgeDays ?? null,
-              maxPromotedSnippetTokens: preview.deepConfig.maxPromotedSnippetTokens,
-            },
-            rem: { skipped: preview.remSkipped, ...remPreview },
-            grounded: groundedPreview,
-            deep: {
-              candidateCount: preview.deep.candidateCount,
-              candidates: deepCandidates,
-            },
-          });
-          return;
-        }
-        const lines = [
-          `${heading("REM Harness")} ${muted(`(${agentId})`)}`,
-          muted(`workspace=${shortenHomePath(workspaceDir)}`),
-          ...(opts.path
-            ? [
-                muted(`sourcePath=${shortenHomePath(path.resolve(opts.path))}`),
-                muted(
-                  `historicalFiles=${sourceFiles.length} importedFiles=${importedFileCount} importedSignals=${importedSignalCount}`,
-                ),
-                ...(skippedPaths.length > 0
-                  ? [
-                      warn(
-                        `skipped=${skippedPaths.map((entry) => shortenHomePath(entry)).join(", ")}`,
-                      ),
-                    ]
-                  : []),
-              ]
-            : []),
-          ...(opts.grounded
-            ? [
-                muted(
-                  `groundedInputs=${groundedInputPaths.length > 0 ? groundedInputPaths.map((entry) => shortenHomePath(entry)).join(", ") : "none"}`,
-                ),
-              ]
-            : []),
-          muted(
-            `recentRecallEntries=${preview.recallEntryCount} deepCandidates=${deepCandidates.length}`,
-          ),
-          "",
-          heading("REM Preview"),
-          ...remPreview.bodyLines,
-          ...(groundedPreview
-            ? [
-                "",
-                heading("Grounded REM"),
-                ...groundedPreview.files.flatMap((file) => [
-                  muted(file.path),
-                  file.renderedMarkdown,
-                  "",
-                ]),
-              ]
-            : []),
-          "",
-          heading("Deep Candidates"),
-          ...(deepCandidates.length > 0
-            ? deepCandidates
-                .slice(0, 10)
-                .map(
-                  (candidate) =>
-                    `${candidate.score.toFixed(3)} ${candidate.snippet} [${shortenHomePath(candidate.path)}:${candidate.startLine}-${candidate.endLine}]`,
-                )
-            : ["- No deep candidates."]),
-        ];
-        defaultRuntime.log(lines.join("\n"));
-      } finally {
-        if (cleanupWorkspaceDir) {
-          await fs.rm(cleanupWorkspaceDir, { recursive: true, force: true });
-        }
+        return { workspaceDir, sourceFiles: historical?.sourceFiles ?? [], seeded, preview };
+      };
+      const { workspaceDir, sourceFiles, seeded, preview } = opts.path
+        ? await withHistoricalMemoryWorkspace("rem-harness", opts.path, (historical) =>
+            previewWorkspace(historical.workspaceDir, historical),
+          )
+        : await previewWorkspace(managerWorkspaceDir ?? "");
+      const importedFileCount = seeded?.importedFileCount ?? 0;
+      const importedSignalCount = seeded?.importedSignalCount ?? 0;
+      const skippedPaths = seeded?.skippedPaths ?? [];
+      const groundedInputPaths = preview.groundedInputPaths;
+      const remPreview = preview.rem;
+      const groundedPreview = preview.grounded;
+      const deepCandidates = preview.deep.candidates;
+      if (opts.json) {
+        defaultRuntime.writeJson({
+          workspaceDir,
+          sourcePath: opts.path ? path.resolve(opts.path) : null,
+          sourceFiles,
+          historicalImport: opts.path
+            ? {
+                importedFileCount,
+                importedSignalCount,
+                skippedPaths,
+              }
+            : null,
+          remConfig: preview.remConfig,
+          deepConfig: {
+            minScore: preview.deepConfig.minScore,
+            minRecallCount: preview.deepConfig.minRecallCount,
+            minUniqueQueries: preview.deepConfig.minUniqueQueries,
+            recencyHalfLifeDays: preview.deepConfig.recencyHalfLifeDays,
+            maxAgeDays: preview.deepConfig.maxAgeDays ?? null,
+            maxPromotedSnippetTokens: preview.deepConfig.maxPromotedSnippetTokens,
+          },
+          rem: { skipped: preview.remSkipped, ...remPreview },
+          grounded: groundedPreview,
+          deep: {
+            candidateCount: preview.deep.candidateCount,
+            candidates: deepCandidates,
+          },
+        });
+        return;
       }
+      const lines = [
+        `${heading("REM Harness")} ${muted(`(${agentId})`)}`,
+        muted(`workspace=${shortenHomePath(workspaceDir)}`),
+        ...(opts.path
+          ? [
+              muted(`sourcePath=${shortenHomePath(path.resolve(opts.path))}`),
+              muted(
+                `historicalFiles=${sourceFiles.length} importedFiles=${importedFileCount} importedSignals=${importedSignalCount}`,
+              ),
+              ...(skippedPaths.length > 0
+                ? [
+                    warn(
+                      `skipped=${skippedPaths.map((entry) => shortenHomePath(entry)).join(", ")}`,
+                    ),
+                  ]
+                : []),
+            ]
+          : []),
+        ...(opts.grounded
+          ? [
+              muted(
+                `groundedInputs=${groundedInputPaths.length > 0 ? groundedInputPaths.map((entry) => shortenHomePath(entry)).join(", ") : "none"}`,
+              ),
+            ]
+          : []),
+        muted(
+          `recentRecallEntries=${preview.recallEntryCount} deepCandidates=${deepCandidates.length}`,
+        ),
+        "",
+        heading("REM Preview"),
+        ...remPreview.bodyLines,
+        ...(groundedPreview
+          ? [
+              "",
+              heading("Grounded REM"),
+              ...groundedPreview.files.flatMap((file) => [
+                muted(file.path),
+                file.renderedMarkdown,
+                "",
+              ]),
+            ]
+          : []),
+        "",
+        heading("Deep Candidates"),
+        ...(deepCandidates.length > 0
+          ? deepCandidates
+              .slice(0, 10)
+              .map(
+                (candidate) =>
+                  `${candidate.score.toFixed(3)} ${candidate.snippet} [${shortenHomePath(candidate.path)}:${candidate.startLine}-${candidate.endLine}]`,
+              )
+          : ["- No deep candidates."]),
+      ];
+      defaultRuntime.log(lines.join("\n"));
     },
   });
 }
@@ -286,6 +258,7 @@ export async function runMemoryRemBackfill(
     commandName: "memory rem-backfill",
     agent: opts.agent,
     diagnosticsToStderr: Boolean(opts.json),
+    onUnavailable: opts.json ? defaultRuntime.writeJson : undefined,
     purpose: "status",
     ...hostOptions,
     run: async ({ manager, cfg, agentId }) => {
@@ -297,9 +270,7 @@ export async function runMemoryRemBackfill(
         cfg,
       });
       if (!workspaceDir) {
-        defaultRuntime.error("Memory rem-backfill requires a resolvable workspace directory.");
-        process.exitCode = 1;
-        return;
+        throw new Error("Memory rem-backfill requires a resolvable workspace directory.");
       }
       if (opts.rollback || opts.rollbackShortTerm) {
         const diaryRollback = opts.rollback
@@ -349,120 +320,115 @@ export async function runMemoryRemBackfill(
         return;
       }
       if (!opts.path) {
-        defaultRuntime.error(
+        throw new Error(
           "Memory rem-backfill requires --path <file-or-dir> unless using --rollback.",
         );
-        process.exitCode = 1;
-        return;
       }
-      const scratchDir = await fs.mkdtemp(
-        path.join(resolvePreferredOpenClawTmpDir(), "openclaw-rem-backfill-"),
-      );
-      try {
-        const sourceFiles = await listHistoricalDailyFiles(opts.path);
-        if (sourceFiles.length === 0) {
-          defaultRuntime.error(
-            `Memory rem-backfill found no YYYY-MM-DD.md files at ${shortenHomePath(path.resolve(opts.path))}.`,
+      const result = await withHistoricalMemoryWorkspace(
+        "rem-backfill",
+        opts.path,
+        async ({ workspaceDir: scratchDir, sourceFiles, workspaceSourceFiles }) => {
+          const grounded = await previewGroundedRemMarkdown({
+            workspaceDir: scratchDir,
+            inputPaths: workspaceSourceFiles,
+          });
+          const sourcePathByScratchRelativePath = new Map(
+            workspaceSourceFiles.map(
+              (scratchPath, index) =>
+                [
+                  normalizeRelativePath(scratchDir, scratchPath),
+                  sourceFiles[index] ?? scratchPath,
+                ] as const,
+            ),
           );
-          process.exitCode = 1;
-          return;
-        }
-        const scratchMemoryDir = path.join(scratchDir, "memory");
-        await fs.mkdir(scratchMemoryDir, { recursive: true });
-        const workspaceSourceFiles: string[] = [];
-        for (const filePath of sourceFiles) {
-          const dst = path.join(scratchMemoryDir, path.basename(filePath));
-          await fs.copyFile(filePath, dst);
-          workspaceSourceFiles.push(dst);
-        }
-        const grounded = await previewGroundedRemMarkdown({
-          workspaceDir: scratchDir,
-          inputPaths: workspaceSourceFiles,
-        });
-        const sourcePathByScratchRelativePath = new Map(
-          workspaceSourceFiles.map(
-            (scratchPath, index) =>
-              [
-                normalizeRelativePath(scratchDir, scratchPath),
-                sourceFiles[index] ?? scratchPath,
-              ] as const,
-          ),
-        );
-        const entries = grounded.files
-          .map((file) => {
-            const isoDay = extractIsoDayFromPath(file.path);
-            if (!isoDay) {
-              return null;
-            }
-            return {
-              isoDay,
-              sourcePath: sourcePathByScratchRelativePath.get(file.path) ?? file.path,
-              bodyLines: groundedMarkdownToDiaryLines(file.renderedMarkdown),
-            };
-          })
-          .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
-        const written = await writeBackfillDiaryEntries({
-          workspaceDir,
-          entries,
-          timezone: remConfig.timezone,
-        });
-        let stagedShortTermEntries = 0;
-        let replacedShortTermEntries = 0;
-        if (opts.stageShortTerm) {
-          const cleared = await removeGroundedShortTermCandidates({ workspaceDir });
-          replacedShortTermEntries = cleared.removed;
-          const shortTermSeedItems = collectGroundedShortTermSeedItems(grounded.files);
-          if (shortTermSeedItems.length > 0) {
-            await recordGroundedShortTermCandidates({
-              workspaceDir,
-              query: "__dreaming_grounded_backfill__",
-              items: shortTermSeedItems,
-              dedupeByQueryPerDay: true,
-              nowMs: Date.now(),
-              timezone: remConfig.timezone,
-            });
-          }
-          stagedShortTermEntries = shortTermSeedItems.length;
-        }
-        if (opts.json) {
-          defaultRuntime.writeJson({
+          const entries = grounded.files
+            .map((file) => {
+              const isoDay = extractIsoDayFromPath(file.path);
+              if (!isoDay) {
+                return null;
+              }
+              return {
+                isoDay,
+                sourcePath: sourcePathByScratchRelativePath.get(file.path) ?? file.path,
+                bodyLines: groundedMarkdownToDiaryLines(file.renderedMarkdown),
+              };
+            })
+            .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
+          const written = await writeBackfillDiaryEntries({
             workspaceDir,
-            sourcePath: path.resolve(opts.path),
+            entries,
+            timezone: remConfig.timezone,
+          });
+          let stagedShortTermEntries = 0;
+          let replacedShortTermEntries = 0;
+          if (opts.stageShortTerm) {
+            const cleared = await removeGroundedShortTermCandidates({ workspaceDir });
+            replacedShortTermEntries = cleared.removed;
+            const shortTermSeedItems = collectGroundedShortTermSeedItems(grounded.files);
+            if (shortTermSeedItems.length > 0) {
+              await recordGroundedShortTermCandidates({
+                workspaceDir,
+                query: "__dreaming_grounded_backfill__",
+                items: shortTermSeedItems,
+                dedupeByQueryPerDay: true,
+                nowMs: Date.now(),
+                timezone: remConfig.timezone,
+              });
+            }
+            stagedShortTermEntries = shortTermSeedItems.length;
+          }
+          return {
             sourceFiles,
             groundedFiles: grounded.scannedFiles,
-            writtenEntries: written.written,
-            replacedEntries: written.replaced,
-            dreamsPath: written.dreamsPath,
-            ...(opts.stageShortTerm
-              ? {
-                  stagedShortTermEntries,
-                  replacedShortTermEntries,
-                }
-              : {}),
-          });
-          return;
-        }
-        defaultRuntime.log(
-          [
-            `${heading("REM Backfill")} ${muted(`(${agentId})`)}`,
-            muted(`workspace=${shortenHomePath(workspaceDir)}`),
-            muted(`sourcePath=${shortenHomePath(path.resolve(opts.path))}`),
-            muted(
-              `historicalFiles=${sourceFiles.length} writtenEntries=${written.written} replacedEntries=${written.replaced}`,
-            ),
-            ...(opts.stageShortTerm
-              ? [
-                  muted(
-                    `stagedShortTermEntries=${stagedShortTermEntries} replacedShortTermEntries=${replacedShortTermEntries}`,
-                  ),
-                ]
-              : []),
-            muted(`dreamsPath=${shortenHomePath(written.dreamsPath)}`),
-          ].join("\n"),
-        );
-      } finally {
-        await fs.rm(scratchDir, { recursive: true, force: true });
+            written,
+            stagedShortTermEntries,
+            replacedShortTermEntries,
+          };
+        },
+      );
+      const {
+        sourceFiles,
+        groundedFiles,
+        written,
+        stagedShortTermEntries,
+        replacedShortTermEntries,
+      } = result;
+      if (opts.json) {
+        defaultRuntime.writeJson({
+          workspaceDir,
+          sourcePath: path.resolve(opts.path),
+          sourceFiles,
+          groundedFiles,
+          writtenEntries: written.written,
+          replacedEntries: written.replaced,
+          dreamsPath: written.dreamsPath,
+          ...(opts.stageShortTerm
+            ? {
+                stagedShortTermEntries,
+                replacedShortTermEntries,
+              }
+            : {}),
+        });
+        return;
       }
+      defaultRuntime.log(
+        [
+          `${heading("REM Backfill")} ${muted(`(${agentId})`)}`,
+          muted(`workspace=${shortenHomePath(workspaceDir)}`),
+          muted(`sourcePath=${shortenHomePath(path.resolve(opts.path))}`),
+          muted(
+            `historicalFiles=${sourceFiles.length} writtenEntries=${written.written} replacedEntries=${written.replaced}`,
+          ),
+          ...(opts.stageShortTerm
+            ? [
+                muted(
+                  `stagedShortTermEntries=${stagedShortTermEntries} replacedShortTermEntries=${replacedShortTermEntries}`,
+                ),
+              ]
+            : []),
+          muted(`dreamsPath=${shortenHomePath(written.dreamsPath)}`),
+        ].join("\n"),
+      );
     },
   });
 }
@@ -490,46 +456,41 @@ async function listHistoricalDailyFiles(inputPath: string): Promise<string[]> {
     .map((entry) => path.join(resolvedPath, entry.name))
     .toSorted((a, b) => path.basename(a).localeCompare(path.basename(b)));
 }
-async function createHistoricalRemHarnessWorkspace(params: {
-  inputPath: string;
-  remLimit: number;
-  nowMs: number;
-  timezone?: string;
-}): Promise<{
+type HistoricalMemoryWorkspace = {
   workspaceDir: string;
   sourceFiles: string[];
   workspaceSourceFiles: string[];
-  importedFileCount: number;
-  importedSignalCount: number;
-  skippedPaths: string[];
-}> {
-  const sourceFiles = await listHistoricalDailyFiles(params.inputPath);
-  const workspaceDir = await fs.mkdtemp(
-    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-rem-harness-"),
-  );
-  const memoryDir = path.join(workspaceDir, "memory");
-  await fs.mkdir(memoryDir, { recursive: true });
-  for (const filePath of sourceFiles) {
-    await fs.copyFile(filePath, path.join(memoryDir, path.basename(filePath)));
+};
+
+async function withHistoricalMemoryWorkspace<T>(
+  command: "rem-harness" | "rem-backfill",
+  inputPath: string,
+  run: (workspace: HistoricalMemoryWorkspace) => Promise<T>,
+): Promise<T> {
+  const sourceFiles = await listHistoricalDailyFiles(inputPath);
+  if (sourceFiles.length === 0) {
+    throw new Error(
+      `Memory ${command} found no YYYY-MM-DD.md files at ${shortenHomePath(path.resolve(inputPath))}.`,
+    );
   }
-  const workspaceSourceFiles = sourceFiles.map((entry) =>
-    path.join(memoryDir, path.basename(entry)),
+  const workspaceDir = await fs.mkdtemp(
+    path.join(resolvePreferredOpenClawTmpDir(), `openclaw-${command}-`),
   );
-  const seeded = await seedHistoricalDailyMemorySignals({
-    workspaceDir,
-    filePaths: workspaceSourceFiles,
-    limit: params.remLimit,
-    nowMs: params.nowMs,
-    timezone: params.timezone,
-  });
-  return {
-    workspaceDir,
-    sourceFiles,
-    workspaceSourceFiles,
-    importedFileCount: seeded.importedFileCount,
-    importedSignalCount: seeded.importedSignalCount,
-    skippedPaths: seeded.skippedPaths,
-  };
+  // Own the scratch directory through report preparation. Fallible cleanup must
+  // finish before callers publish success, or the root can emit a second result.
+  try {
+    const memoryDir = path.join(workspaceDir, "memory");
+    await fs.mkdir(memoryDir, { recursive: true });
+    const workspaceSourceFiles: string[] = [];
+    for (const filePath of sourceFiles) {
+      const destination = path.join(memoryDir, path.basename(filePath));
+      await fs.copyFile(filePath, destination);
+      workspaceSourceFiles.push(destination);
+    }
+    return await run({ workspaceDir, sourceFiles, workspaceSourceFiles });
+  } finally {
+    await fs.rm(workspaceDir, { recursive: true, force: true });
+  }
 }
 function extractIsoDayFromPath(filePath: string): string | null {
   const match = path.basename(filePath).match(DAILY_MEMORY_FILE_NAME_RE);

@@ -3,6 +3,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   readAcpSessionMeta,
   writeAcpSessionMetaForMigration,
@@ -18,7 +19,7 @@ import {
   beginSessionWorkAdmission,
   runExclusiveSessionLifecycleMutation,
 } from "../sessions/session-lifecycle-admission.js";
-import { embeddedRunMock, rpcReq, writeSessionStore } from "./test-helpers.js";
+import { embeddedRunMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
   sessionLifecycleHookMocks,
@@ -95,6 +96,26 @@ function expectThreadBindingsUnbound(targetSessionKey: string) {
     reason: "session-delete",
   });
 }
+
+test("sessions.delete protects the sole explicit agent's global session before cleanup", async () => {
+  const { storePath } = await createSessionStoreDir();
+  testState.agentsConfig = { ownership: "explicit", entries: { ops: {} } };
+  testState.sessionConfig = { scope: "global" };
+  const target = { agentId: "ops", sessionKey: "global", storePath };
+  await replaceSessionEntry(target, sessionStoreEntry("sole-global"));
+  const before = loadSessionEntry(target);
+  embeddedRunMock.activeIds.add("sole-global");
+  embeddedRunMock.waitResults.set("sole-global", true);
+
+  const result = await directSessionReq("sessions.delete", { key: "global", agentId: "ops" });
+
+  expect(result.ok).toBe(false);
+  expect(result.error?.message).toBe("Cannot delete the main session (global).");
+  expect(loadSessionEntry(target)).toEqual(before);
+  expect(embeddedRunMock.abortCalls).not.toContain("sole-global");
+  expect(bundleMcpRuntimeMocks.disposeSessionMcpRuntime).not.toHaveBeenCalled();
+  expect(browserSessionTabMocks.closeTrackedBrowserTabsForSessions).not.toHaveBeenCalled();
+});
 
 test("sessions.delete rejects main and aborts active runs", async () => {
   const { dir } = await createSessionStoreDir();
@@ -325,10 +346,8 @@ test.each(["session id", "updated at"] as const)(
       },
     });
     let releaseBlockingMutation = () => {};
-    let markBlockingMutationStarted = () => {};
-    const blockingMutationStarted = new Promise<void>((resolve) => {
-      markBlockingMutationStarted = resolve;
-    });
+    const { promise: blockingMutationStarted, resolve: markBlockingMutationStarted } =
+      createDeferred();
     const blockingMutation = runExclusiveSessionLifecycleMutation({
       scope: storePath,
       identities: [sessionKey],
@@ -501,10 +520,7 @@ test("sessions.delete serializes a patch behind asynchronous runtime cleanup", a
   });
   await runtimeCleanupStarted;
   let patchSettled = false;
-  let markPatchPreflight = () => {};
-  const patchPreflight = new Promise<void>((resolve) => {
-    markPatchPreflight = resolve;
-  });
+  const { promise: patchPreflight, resolve: markPatchPreflight } = createDeferred();
   const patch = directSessionReq(
     "sessions.patch",
     {
@@ -548,10 +564,7 @@ test("sessions.patch waits for an in-flight session lifecycle mutation", async (
     },
   });
   let releaseMutation = () => {};
-  let markMutationStarted = () => {};
-  const mutationStarted = new Promise<void>((resolve) => {
-    markMutationStarted = resolve;
-  });
+  const { promise: mutationStarted, resolve: markMutationStarted } = createDeferred();
   const mutation = runExclusiveSessionLifecycleMutation({
     scope: storePath,
     identities: [sessionKey, sessionId],

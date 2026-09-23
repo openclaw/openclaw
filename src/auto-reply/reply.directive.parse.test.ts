@@ -1,5 +1,6 @@
 /** Tests parsing of inline reply directives and command tags. */
 import { describe, expect, it } from "vitest";
+import { parseInlineDirectives } from "../utils/directive-tags.js";
 import { parseInlineSessionDirectives } from "./reply/directive-handling.parse.js";
 import {
   extractElevatedDirective,
@@ -12,7 +13,6 @@ import {
 } from "./reply/directives.js";
 import { extractExecDirective } from "./reply/exec/directive.js";
 import { extractQueueDirective } from "./reply/queue/directive.js";
-import { extractReplyToTag } from "./reply/reply-tags.js";
 
 describe("directive parsing", () => {
   it.each([
@@ -454,33 +454,48 @@ describe("directive parsing", () => {
   });
 
   it("extracts reply_to_current tag", () => {
-    const res = extractReplyToTag("ok [[reply_to_current]]", "msg-1");
+    const res = parseInlineDirectives("ok [[reply_to_current]]", {
+      currentMessageId: "msg-1",
+      stripAudioTag: false,
+    });
     expect(res.replyToId).toBe("msg-1");
-    expect(res.cleaned).toBe("ok");
+    expect(res.text).toBe("ok");
   });
 
   it("extracts reply_to_current tag with whitespace", () => {
-    const res = extractReplyToTag("ok [[ reply_to_current ]]", "msg-1");
+    const res = parseInlineDirectives("ok [[ reply_to_current ]]", {
+      currentMessageId: "msg-1",
+      stripAudioTag: false,
+    });
     expect(res.replyToId).toBe("msg-1");
-    expect(res.cleaned).toBe("ok");
+    expect(res.text).toBe("ok");
   });
 
   it("extracts reply_to id tag", () => {
-    const res = extractReplyToTag("see [[reply_to:12345]] now", "msg-1");
+    const res = parseInlineDirectives("see [[reply_to:12345]] now", {
+      currentMessageId: "msg-1",
+      stripAudioTag: false,
+    });
     expect(res.replyToId).toBe("12345");
-    expect(res.cleaned).toBe("see now");
+    expect(res.text).toBe("see now");
   });
 
   it("extracts reply_to id tag with whitespace", () => {
-    const res = extractReplyToTag("see [[ reply_to : 12345 ]] now", "msg-1");
+    const res = parseInlineDirectives("see [[ reply_to : 12345 ]] now", {
+      currentMessageId: "msg-1",
+      stripAudioTag: false,
+    });
     expect(res.replyToId).toBe("12345");
-    expect(res.cleaned).toBe("see now");
+    expect(res.text).toBe("see now");
   });
 
   it("preserves newlines when stripping reply tags", () => {
-    const res = extractReplyToTag("line 1\nline 2 [[reply_to_current]]\n\nline 3", "msg-2");
+    const res = parseInlineDirectives("line 1\nline 2 [[reply_to_current]]\n\nline 3", {
+      currentMessageId: "msg-2",
+      stripAudioTag: false,
+    });
     expect(res.replyToId).toBe("msg-2");
-    expect(res.cleaned).toBe("line 1\nline 2\n\nline 3");
+    expect(res.text).toBe("line 1\nline 2\n\nline 3");
   });
 });
 
@@ -531,51 +546,39 @@ describe("level directive preserves message text after an invalid level", () => 
 
 describe("native directive commands own their complete argument boundary", () => {
   it.each([
-    {
-      command: "think" as const,
-      body: "/think about my deployment plan",
-      rawKey: "rawThinkLevel" as const,
-      invalidArgument: "about",
-      trailingArguments: "my deployment plan",
-    },
-    {
-      command: "verbose" as const,
-      body: "/verbose explain quantum computing",
-      rawKey: "rawVerboseLevel" as const,
-      invalidArgument: "explain",
-      trailingArguments: "quantum computing",
-    },
-    {
-      command: "trace" as const,
-      body: "/trace banana please",
-      rawKey: "rawTraceLevel" as const,
-      invalidArgument: "banana",
-      trailingArguments: "please",
-    },
-    {
-      command: "fast" as const,
-      body: "/fast bananas please",
-      rawKey: "rawFastMode" as const,
-      invalidArgument: "bananas",
-      trailingArguments: "please",
-    },
-    {
-      command: "reasoning" as const,
-      body: "/reasoning nonsense please",
-      rawKey: "rawReasoningLevel" as const,
-      invalidArgument: "nonsense",
-      trailingArguments: "please",
-    },
-    {
-      command: "elevated" as const,
-      body: "/elevated perhaps explain",
-      rawKey: "rawElevatedLevel" as const,
-      invalidArgument: "perhaps",
-      trailingArguments: "explain",
-    },
+    [
+      "think" as const,
+      "/think about my deployment plan",
+      "rawThinkLevel" as const,
+      "about",
+      "my deployment plan",
+    ],
+    [
+      "verbose" as const,
+      "/verbose explain quantum computing",
+      "rawVerboseLevel" as const,
+      "explain",
+      "quantum computing",
+    ],
+    ["trace" as const, "/trace banana please", "rawTraceLevel" as const, "banana", "please"],
+    ["fast" as const, "/fast bananas please", "rawFastMode" as const, "bananas", "please"],
+    [
+      "reasoning" as const,
+      "/reasoning nonsense please",
+      "rawReasoningLevel" as const,
+      "nonsense",
+      "please",
+    ],
+    [
+      "elevated" as const,
+      "/elevated perhaps explain",
+      "rawElevatedLevel" as const,
+      "perhaps",
+      "explain",
+    ],
   ])(
-    "preserves the invalid first argument for native /$command",
-    ({ body, command, invalidArgument, rawKey, trailingArguments }) => {
+    "preserves the invalid first argument for native /%s",
+    (command, body, rawKey, invalidArgument, trailingArguments) => {
       const parsed = parseInlineSessionDirectives(body, {
         command: { kind: "native", name: command },
       });

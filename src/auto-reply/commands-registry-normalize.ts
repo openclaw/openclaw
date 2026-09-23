@@ -27,6 +27,9 @@ type CommandRegistryLookup = {
 
 let cachedRegistryLookup: CommandRegistryLookup | undefined;
 
+// Commands whose free-text argument becomes agent input keep every line and its spacing.
+const ARGUMENT_PRESERVING_COMMAND_KEYS = new Set(["goal", "steer"]);
+
 const TARGETED_COMMAND_BODY_RE =
   /^\/([^\s@]+)@([A-Za-z0-9_]+)(?=$|\s|[.!?！？…,，。;；:：'"’”)\]}])([\s\S]*)$/u;
 
@@ -90,7 +93,14 @@ export function normalizeCommandBody(raw: string, options?: CommandNormalizeOpti
     return trimmed;
   }
 
-  const newline = options?.preserveArguments ? -1 : trimmed.indexOf("\n");
+  const commandAlias = trimmed.match(/^\/[^\s@:]+/u)?.[0]?.toLowerCase();
+  const commandSpec = commandAlias
+    ? getCommandRegistryLookup().aliases.get(commandAlias)
+    : undefined;
+  const preserveArguments =
+    options?.preserveArguments ||
+    (commandSpec !== undefined && ARGUMENT_PRESERVING_COMMAND_KEYS.has(commandSpec.command.key));
+  const newline = preserveArguments ? -1 : trimmed.indexOf("\n");
   const singleLine = newline === -1 ? trimmed : trimmed.slice(0, newline).trim();
   const multilineTail = newline === -1 ? undefined : trimmed.slice(newline + 1).trimStart();
 
@@ -100,7 +110,7 @@ export function normalizeCommandBody(raw: string, options?: CommandNormalizeOpti
     ? (() => {
         const [, command, rest] = colonMatch;
         const commandRest = expectDefined(rest, "commands registry normalize rest");
-        const normalizedRest = options?.preserveArguments ? commandRest : commandRest.trimStart();
+        const normalizedRest = preserveArguments ? commandRest : commandRest.trimStart();
         return normalizedRest
           ? `/${command}${/^\s/.test(normalizedRest) ? "" : " "}${normalizedRest}`
           : `/${command}`;
@@ -140,7 +150,7 @@ export function normalizeCommandBody(raw: string, options?: CommandNormalizeOpti
     return commandBody;
   }
   const normalizedRest = rest?.trimStart();
-  const normalizedHead = options?.preserveArguments
+  const normalizedHead = preserveArguments
     ? `${tokenSpec.canonical}${commandBody.slice(tokenKey.length)}`
     : normalizedRest
       ? `${tokenSpec.canonical} ${normalizedRest}`

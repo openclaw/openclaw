@@ -85,6 +85,8 @@ openclaw gateway
 Named accounts must use a configured token or token file; the shared env
 variable is intentionally limited to the default account.
 
+## Configuration
+
 ### JSON5 reference
 
 The equivalent config shape is:
@@ -157,6 +159,8 @@ uses the loopback endpoint for REST requests, setup verification, and the
 realtime WebSocket, while discussion `embedUrl` and `openUrl` links continue to
 use the public `baseUrl`. If `apiBaseUrl` is omitted, all traffic uses
 `baseUrl`, preserving existing behavior.
+
+### Plugin allowlist behavior
 
 If `plugins.allow` is a non-empty restrictive list, explicitly selecting
 ClickClack in channel setup or running `openclaw plugins enable clickclack`
@@ -568,3 +572,10 @@ OpenClaw only needs current `bot:write` for normal agent chat and command-menu s
 - No inbound replies: confirm the token has realtime read access. The bot always ignores its own messages; other bot messages are denied by default, and when `allowBots` is enabled the sender bot ID must also be listed explicitly in `allowFrom`.
 - Channel sends fail: verify the bot is a member of the workspace and has `bot:write`.
 - No command menu: confirm `commandMenu` is not `false`, the ClickClack server supports `PUT /api/bots/self/commands`, and the token has `commands:write`.
+
+## Related
+
+- [Pairing](/channels/pairing)
+- [Groups](/channels/groups)
+- [Bot loop protection](/channels/bot-loop-protection)
+- [Access groups](/channels/access-groups)

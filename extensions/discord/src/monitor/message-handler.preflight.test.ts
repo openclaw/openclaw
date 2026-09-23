@@ -1,3 +1,6 @@
+import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtime.js";
+
+installDiscordIngressTestRuntime();
 // Discord tests cover message handler.preflight plugin behavior.
 import { ComponentType, MessageReferenceType } from "discord-api-types/v10";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -46,10 +49,12 @@ import {
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { saveRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
 import {
+  createThreadBinding,
   createDiscordMessage,
   createDiscordPreflightArgs,
   createGuildEvent,
   createGuildTextClient,
+  createThreadClient,
   DEFAULT_PREFLIGHT_CFG,
   type DiscordClient,
   type DiscordConfig,
@@ -60,6 +65,8 @@ vi.mock("openclaw/plugin-sdk/media-runtime", { spy: true });
 let preflightDiscordMessage: typeof import("./message-handler.preflight.js").preflightDiscordMessage;
 let resolvePreflightMentionRequirement: typeof import("./message-handler.preflight.js").resolvePreflightMentionRequirement;
 let shouldIgnoreBoundThreadWebhookMessage: typeof import("./message-handler.preflight.js").shouldIgnoreBoundThreadWebhookMessage;
+let defaultThreadBindings: import("./thread-bindings.js").ThreadBindingManager;
+let createNoopThreadBindingManager: typeof import("./thread-bindings.js").createNoopThreadBindingManager;
 let createThreadBindingManager: typeof import("./thread-bindings.js").createThreadBindingManager;
 let createDiscordMessageDispatcher: typeof import("./message-dispatcher.js").createDiscordMessageDispatcher;
 
@@ -69,11 +76,14 @@ beforeAll(async () => {
     resolvePreflightMentionRequirement,
     shouldIgnoreBoundThreadWebhookMessage,
   } = await import("./message-handler.preflight.js"));
-  ({ createThreadBindingManager } = await import("./thread-bindings.js"));
+  ({ createThreadBindingManager, createNoopThreadBindingManager } =
+    await import("./thread-bindings.js"));
   ({ createDiscordMessageDispatcher } = await import("./message-dispatcher.js"));
 });
 
 beforeEach(() => {
+  sessionBindingTesting.resetSessionBindingAdaptersForTests();
+  defaultThreadBindings = createNoopThreadBindingManager("default");
   fetchPluralKitMessageInfoMock.mockReset();
   saveRemoteMediaMock.mockReset();
   saveRemoteMediaMock.mockImplementation(
@@ -87,38 +97,19 @@ beforeEach(() => {
   vi.mocked(saveRemoteMedia).mockImplementation((...args) => saveRemoteMediaMock(...args));
 });
 
-function createThreadBinding(
-  overrides?: Partial<import("openclaw/plugin-sdk/conversation-runtime").SessionBindingRecord>,
-) {
-  return {
-    bindingId: "default:thread-1",
-    targetSessionKey: "agent:main:subagent:child-1",
-    targetKind: "subagent",
-    conversation: {
-      channel: "discord",
-      accountId: "default",
-      conversationId: "thread-1",
-      parentConversationId: "parent-1",
-    },
-    status: "active",
-    boundAt: 1,
-    metadata: {
-      agentId: "main",
-      boundBy: "test",
-      webhookId: "wh-1",
-      webhookToken: "tok-1",
-    },
-    ...overrides,
-  } satisfies import("openclaw/plugin-sdk/conversation-runtime").SessionBindingRecord;
-}
+afterEach(() => {
+  defaultThreadBindings.stop();
+  sessionBindingTesting.resetSessionBindingAdaptersForTests();
+});
 
 function createPreflightArgs(params: {
   cfg: import("openclaw/plugin-sdk/config-contracts").OpenClawConfig;
   discordConfig: DiscordConfig;
   data: DiscordMessageEvent;
   client: DiscordClient;
+  threadBindings?: import("./thread-bindings.js").ThreadBindingManager;
 }): Parameters<typeof preflightDiscordMessage>[0] {
-  return createDiscordPreflightArgs(params);
+  return createDiscordPreflightArgs({ threadBindings: defaultThreadBindings, ...params });
 }
 
 type DiscordPreflightResult = NonNullable<Awaited<ReturnType<typeof preflightDiscordMessage>>>;
@@ -140,30 +131,6 @@ function firstMockArg(mock: MockWithCalls, label: string) {
     throw new Error(`expected ${label} call`);
   }
   return call[0];
-}
-
-function createThreadClient(params: { threadId: string; parentId: string }): DiscordClient {
-  return {
-    fetchChannel: async (channelId: string) => {
-      if (channelId === params.threadId) {
-        return {
-          id: params.threadId,
-          type: ChannelType.PublicThread,
-          name: "focus",
-          parentId: params.parentId,
-          ownerId: "owner-1",
-        };
-      }
-      if (channelId === params.parentId) {
-        return {
-          id: params.parentId,
-          type: ChannelType.GuildText,
-          name: "general",
-        };
-      }
-      return null;
-    },
-  } as unknown as DiscordClient;
 }
 
 function createDmClient(channelId: string): DiscordClient {
@@ -365,7 +332,6 @@ describe("resolvePreflightMentionRequirement", () => {
 
 describe("preflightDiscordMessage", () => {
   beforeEach(() => {
-    sessionBindingTesting.resetSessionBindingAdaptersForTests();
     transcribeFirstAudioMock.mockReset();
     resolveDiscordDmCommandAccessMock.mockReset();
     resolveDiscordDmCommandAccessMock.mockResolvedValue({
@@ -380,6 +346,33 @@ describe("preflightDiscordMessage", () => {
     });
     handleDiscordDmCommandDecisionMock.mockReset();
     handleDiscordDmCommandDecisionMock.mockResolvedValue(undefined);
+  });
+
+  it("carries the host channel context builder into the preflight context", async () => {
+    const buildContext = vi.fn();
+    const channelId = "dm-channel-host-builder";
+    const message = createDiscordMessage({
+      id: "m-host-builder",
+      channelId,
+      content: "hello",
+      author: { id: "user-1", bot: false, username: "alice" },
+    });
+
+    const result = await preflightDiscordMessage({
+      ...createPreflightArgs({
+        cfg: DEFAULT_PREFLIGHT_CFG,
+        discordConfig: { dmPolicy: "open" } as DiscordConfig,
+        data: {
+          channel_id: channelId,
+          author: message.author,
+          message,
+        } as DiscordMessageEvent,
+        client: createDmClient(channelId),
+      }),
+      buildContext,
+    });
+
+    expect(expectPreflightResult(result).buildContext).toBe(buildContext);
   });
 
   it("admits embed-only messages when their text appears after a textless first embed", async () => {
@@ -969,8 +962,8 @@ describe("preflightDiscordMessage", () => {
           message,
         }),
         client: createGuildTextClient(channelId),
+        threadBindings: manager,
       }),
-      threadBindings: manager,
     });
 
     expect(expectPreflightResult(result).message.id).toBe(message.id);
@@ -986,7 +979,7 @@ describe("preflightDiscordMessage", () => {
     const threadId = "thread-webhook-hydrated-1";
     const parentId = "channel-parent-webhook-hydrated-1";
     const message = createDiscordMessage({
-      id: "m-webhook-hydrated-1",
+      id: "1001",
       channelId: threadId,
       content: "",
       author: {
@@ -1851,7 +1844,7 @@ describe("preflightDiscordMessage", () => {
     const guildId = "guild-bot-mentions-authoritative";
     const botId = "123456789012345678";
     const message = createDiscordMessage({
-      id: "m-bot-mentions-authoritative",
+      id: "1002",
       channelId,
       content: `hi <@${botId}>`,
       author: {
@@ -2200,6 +2193,63 @@ describe("preflightDiscordMessage", () => {
     expect(preflight.channelConfig?.allowed).toBe(true);
     expect(preflight.shouldRequireMention).toBe(false);
   });
+
+  it.each([
+    { threadAgents: undefined, peerId: "parent-1", mentionedAgentIds: ["analyst"] },
+    { threadAgents: ["writer"], peerId: "thread-1", mentionedAgentIds: ["writer"] },
+    { threadAgents: [], peerId: undefined, mentionedAgentIds: [] },
+  ])(
+    "resolves group thread admission with exact entry $threadAgents",
+    async ({ threadAgents, peerId, mentionedAgentIds }) => {
+      const threadId = "thread-1";
+      const parentId = "parent-1";
+      const message = createDiscordMessage({
+        id: "group-thread-admission",
+        channelId: threadId,
+        content: "@Analyst @Writer please review",
+        author: { id: "user-1", bot: false, username: "Pat" },
+      });
+      const result = await preflightDiscordMessage({
+        ...createPreflightArgs({
+          cfg: {
+            ...DEFAULT_PREFLIGHT_CFG,
+            agents: {
+              entries: {
+                primary: { identity: { name: "Primary" } },
+                analyst: { identity: { name: "Analyst" } },
+                writer: { identity: { name: "Writer" } },
+              },
+            },
+            bindings: [{ agentId: "primary", match: { channel: "discord" } }],
+            broadcast: {
+              [`discord:${parentId}`]: ["analyst"],
+              ...(threadAgents ? { [`discord:${threadId}`]: threadAgents } : {}),
+            },
+          },
+          discordConfig: {},
+          data: createGuildEvent({
+            channelId: threadId,
+            guildId: "guild-1",
+            author: message.author,
+            message,
+          }),
+          client: createThreadClient({ threadId, parentId }),
+        }),
+        guildEntries: {
+          "guild-1": { channels: { [parentId]: { enabled: true, requireMention: true } } },
+        },
+      });
+      if (!peerId) {
+        expect(result).toBeNull();
+        return;
+      }
+      const preflight = expectPreflightResult(result);
+      expect(preflight.groupThread?.peerId).toBe(peerId);
+      expect(preflight.groupThread?.mentionedAgentIds).toEqual(mentionedAgentIds);
+      expect(preflight.messageChannelId).toBe(threadId);
+      expect(preflight.wasMentioned).toBe(true);
+    },
+  );
 
   it("inherits parent thread allowlist when guild object is missing", async () => {
     const threadId = "thread-1";
@@ -3100,10 +3150,6 @@ describe("preflightDiscordMessage", () => {
 });
 
 describe("shouldIgnoreBoundThreadWebhookMessage", () => {
-  beforeEach(() => {
-    sessionBindingTesting.resetSessionBindingAdaptersForTests();
-  });
-
   afterEach(() => {
     vi.restoreAllMocks();
   });
@@ -3218,10 +3264,10 @@ describe("shouldIgnoreBoundThreadWebhookMessage", () => {
           message,
         }),
         client: createThreadClient({ threadId: "thread-1", parentId: "parent-1" }),
+        threadBindings: manager,
       }),
       guildHistories,
       historyLimit: 4,
-      threadBindings: manager,
       guildEntries: {
         "guild-1": {
           channels: {

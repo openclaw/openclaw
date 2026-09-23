@@ -3,6 +3,35 @@ import { describe, expect, it } from "vitest";
 import { classifySessionAttention } from "./diagnostic-session-attention.js";
 
 describe("classifySessionAttention", () => {
+  it.each([false, true])(
+    "classifies provider retry waiting until its deadline (expired=%s)",
+    (expired) => {
+      const classification = classifySessionAttention({
+        state: "processing",
+        queueDepth: 1,
+        activity: {
+          activeWorkKind: "embedded_run",
+          hasActiveEmbeddedRun: true,
+          lastProgressAgeMs: 660_000,
+          activeRetryWaitDeadlineAtMs: Date.now() + (expired ? -1000 : 60_000),
+        },
+        staleMs: 120_000,
+        stuckSessionAbortMs: 360_000,
+      });
+      expect(classification).toMatchObject(
+        expired
+          ? {
+              eventType: "session.stalled",
+              reason: "active_work_without_progress",
+            }
+          : {
+              eventType: "session.long_running",
+              reason: "provider_retry_wait",
+              recoveryEligible: false,
+            },
+      );
+    },
+  );
   it.each([
     {
       name: "stale state without queued work",

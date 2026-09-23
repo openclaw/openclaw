@@ -28,7 +28,6 @@ import {
   supportBundleContents,
   textSupportBundleFile,
   writeSupportBundleDirectory,
-  type DiagnosticSupportBundleContent,
   type DiagnosticSupportBundleFile,
 } from "../logging/diagnostic-support-bundle.js";
 import {
@@ -230,6 +229,7 @@ async function readSessionEntries(params: {
       sessionId: completeTarget.sessionId,
       sessionKey: completeTarget.sessionKey,
       storePath: completeTarget.storePath,
+      maxEventBytes: MAX_TRAJECTORY_SESSION_FILE_BYTES,
     });
     return collectSessionEntries(events.map((value, index) => ({ row: index + 1, value })));
   }
@@ -311,6 +311,7 @@ async function readSessionEntries(params: {
         sessionId: marker.sessionId,
         ...(markerSessionKey ? { sessionKey: markerSessionKey } : {}),
         storePath: marker.storePath,
+        maxEventBytes: MAX_TRAJECTORY_SESSION_FILE_BYTES,
       })
     ).map((value, index) => ({ row: index + 1, value })),
   );
@@ -483,12 +484,9 @@ async function readRuntimeTrajectoryEvents(params: {
       agentId: marker.agentId,
       sessionId: marker.sessionId,
       storePath: marker.storePath,
+      maxEventBytes: TRAJECTORY_RUNTIME_FILE_MAX_BYTES,
+      maxEventCount: MAX_TRAJECTORY_RUNTIME_EVENTS,
     });
-    if (events.length > MAX_TRAJECTORY_RUNTIME_EVENTS) {
-      throw new Error(
-        `Trajectory runtime store has too many events to export (limit ${MAX_TRAJECTORY_RUNTIME_EVENTS})`,
-      );
-    }
     return { events, warnings: [] };
   }
 
@@ -1224,6 +1222,7 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
   header: SessionHeader | null;
   runtimeFile?: string;
   supplementalFiles: string[];
+  files: string[];
 }> {
   const redaction = buildTrajectoryExportRedaction({
     workspaceDir: params.workspaceDir,
@@ -1237,6 +1236,7 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
       );
     }
   }
+
   const {
     header,
     leafId,
@@ -1379,8 +1379,7 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
   }
 
   const redactedFiles = files.map(redactTrajectoryBundleFileContent);
-  const contents: DiagnosticSupportBundleContent[] = [...supportBundleContents(redactedFiles)];
-  manifest.contents = contents;
+  manifest.contents = supportBundleContents(redactedFiles);
   const redactedManifest = redactTrajectoryExportValue(
     manifest,
     redaction,
@@ -1389,7 +1388,7 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
     jsonSupportBundleFile("manifest.json", redactedManifest),
   );
 
-  await writeSupportBundleDirectory({
+  const writtenFiles = await writeSupportBundleDirectory({
     outputDir: params.outputDir,
     files: [manifestFile, ...redactedFiles],
   });
@@ -1402,6 +1401,7 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
     runtimeFile:
       runtimeFile && (await isRegularNonSymlinkFile(runtimeFile)) ? runtimeFile : undefined,
     supplementalFiles,
+    files: writtenFiles.map((file) => file.path),
   };
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

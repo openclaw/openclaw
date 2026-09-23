@@ -388,6 +388,19 @@ async function runCronRunAndCaptureExit(params: {
 }
 
 describe("cron cli", () => {
+  it.each(["", "   "])(
+    "rejects blank payload --script %j on add before Gateway access",
+    async (value) => {
+      await expectCronCommandExit([
+        "cron",
+        "add",
+        ...namedCronAddArgs("Replace script", "--message", "Other payload", "--script", value),
+      ]);
+      expectRuntimeErrorContaining("--script must not be blank");
+      expect(callGatewayFromCli).not.toHaveBeenCalled();
+    },
+  );
+
   it.each(CRON_GATEWAY_COMMANDS)(
     "inherits parent Gateway options for cron $name",
     async ({ name, args }) => {
@@ -640,11 +653,21 @@ describe("cron cli", () => {
       args: ["cron", "runs", "job-1", "--id", "job-2"],
       message: 'Conflicting job ids: positional "job-1" and --id "job-2".',
     },
+    ...(["rm", "enable", "disable", "get", "show", "run", "scratch"] as const).map((command) => ({
+      name: `blank ${command} id`,
+      args: ["cron", command, "   "],
+      message: "Missing job id",
+    })),
+    {
+      name: "blank edit id",
+      args: ["cron", "edit", "   ", "--enable"],
+      message: "Missing job id",
+    },
   ])("rejects $name before calling the Gateway", async ({ args, message }) => {
     await expectCronCommandExit(args);
 
     expectRuntimeErrorContaining(message);
-    expect(callGatewayFromCli.mock.calls.some((call) => call[0] === "cron.runs")).toBe(false);
+    expect(callGatewayFromCli).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -989,7 +1012,7 @@ describe("cron cli", () => {
     expect(params?.payload?.kind).toBe("agentTurn");
   });
 
-  it("creates command cron payloads without an agent-turn message", async () => {
+  it.each(["0", "30"])("creates command cron payloads with timeout %s", async (timeout) => {
     const params = await runCronAddAndGetParams([
       "--name",
       "Shell probe",
@@ -1002,7 +1025,7 @@ describe("cron cli", () => {
       "--command-env",
       "FOO=bar",
       "--timeout-seconds",
-      "30",
+      timeout,
       "--no-output-timeout-seconds",
       "5",
       "--output-max-bytes",
@@ -1016,7 +1039,7 @@ describe("cron cli", () => {
       argv: ["sh", "-lc", "echo ok"],
       cwd: "/srv/app",
       env: { FOO: "bar" },
-      timeoutSeconds: 30,
+      timeoutSeconds: Number(timeout),
       noOutputTimeoutSeconds: 5,
       outputMaxBytes: 4096,
     });
@@ -1058,24 +1081,90 @@ describe("cron cli", () => {
     });
   });
 
-  it.each(["", "0", "-1", "1.5", "1000ms"])(
-    "rejects invalid cron add --timeout-seconds value %j",
-    async (timeoutSeconds) => {
-      await expectCronCommandExit([
-        "cron",
-        "add",
-        "--name",
-        "Invalid timeout",
-        "--cron",
-        "* * * * *",
-        "--message",
-        "hello",
-        "--timeout-seconds",
-        timeoutSeconds,
-      ]);
+  describe.each(["add", "create"])("automations %s timeout", (command) => {
+    it.each([undefined, "0", "120"])(
+      "preserves timeout %j in the outgoing payload",
+      async (value) => {
+        await runCronCommand([
+          "automations",
+          command,
+          ...namedCronAddArgs("Timeout", "--message", "hello"),
+          ...(value === undefined ? [] : ["--timeout-seconds", value]),
+        ]);
 
-      expectRuntimeErrorContaining("Invalid --timeout-seconds (must be a positive integer).");
+        const payload = getGatewayCallParams<CronAddParams>("cron.add")?.payload;
+        expect(payload).toMatchObject({ kind: "agentTurn", message: "hello" });
+        expect(payload?.timeoutSeconds).toBe(value === undefined ? undefined : Number(value));
+      },
+    );
+
+    it.each([
+      "",
+      " ",
+      "-1",
+      "1.5",
+      "1000ms",
+      "NaN",
+      "Infinity",
+      "-Infinity",
+      "1e3",
+      "0x10",
+      "9007199254740992",
+    ])("rejects invalid --timeout-seconds value %j", async (value) => {
+      await expectCronCommandExit([
+        "automations",
+        command,
+        ...namedCronAddArgs("Invalid timeout", "--message", "hello"),
+        "--timeout-seconds",
+        value,
+      ]);
+      expectRuntimeErrorContaining("Invalid --timeout-seconds (must be a non-negative integer).");
       expect(callGatewayFromCli.mock.calls.some((call) => call[0] === "cron.add")).toBe(false);
+    });
+  });
+
+  it.each([
+    "",
+    " ",
+    "-1",
+    "1.5",
+    "1000ms",
+    "NaN",
+    "Infinity",
+    "-Infinity",
+    "1e3",
+    "0x10",
+    "9007199254740992",
+  ])("rejects invalid timeout-only edit %j before accessing the Gateway", async (value) => {
+    await expectCronCommandExit(["automations", "edit", "job-1", "--timeout-seconds", value]);
+    expectRuntimeErrorContaining("Invalid --timeout-seconds (must be a non-negative integer).");
+    expect(callGatewayFromCli).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "--no-output-timeout-seconds",
+    "--output-max-bytes",
+    "--script-timeout-seconds",
+    "--script-tool-budget",
+  ])("keeps edit %s positive-only", async (flag) => {
+    await expectCronCommandExit(["automations", "edit", "job-1", flag, "0"]);
+    expectRuntimeErrorContaining(`Invalid ${flag} (must be a positive integer).`);
+    expect(callGatewayFromCli).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, "0", "120"])(
+    "preserves edit timeout %j with an agent message",
+    async (value) => {
+      const { patch } = await runCronEditAndGetPatch([
+        "--message",
+        "updated",
+        ...(value === undefined ? [] : ["--timeout-seconds", value]),
+      ]);
+      expect(patch?.payload).toEqual({
+        kind: "agentTurn",
+        message: "updated",
+        ...(value === undefined ? {} : { timeoutSeconds: Number(value) }),
+      });
     },
   );
 
@@ -1517,6 +1606,11 @@ describe("cron cli", () => {
       args: ["--message", "hello"],
       tools: "read write",
     },
+    {
+      kind: "agentTurn",
+      args: ["--message", "hello"],
+      tools: "",
+    },
   ])(
     "preserves the requested tool allowlist for $kind cron jobs",
     async ({ kind, args, tools }) => {
@@ -1526,7 +1620,7 @@ describe("cron cli", () => {
 
       expect(params?.payload).toMatchObject({
         kind,
-        toolsAllow: ["read", "write"],
+        toolsAllow: tools ? ["read", "write"] : [],
       });
     },
   );

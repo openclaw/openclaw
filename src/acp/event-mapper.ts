@@ -66,37 +66,11 @@ const INLINE_CONTROL_ESCAPE_MAP: Readonly<Record<string, string>> = {
 };
 
 function escapeInlineControlChars(value: string): string {
-  let escaped = "";
-  for (const char of value) {
-    const codePoint = char.codePointAt(0);
-    if (codePoint === undefined) {
-      escaped += char;
-      continue;
-    }
-
-    const isInlineControl =
-      codePoint <= 0x1f ||
-      (codePoint >= 0x7f && codePoint <= 0x9f) ||
-      codePoint === 0x2028 ||
-      codePoint === 0x2029;
-    if (!isInlineControl) {
-      escaped += char;
-      continue;
-    }
-
-    const mapped = INLINE_CONTROL_ESCAPE_MAP[char];
-    if (mapped) {
-      escaped += mapped;
-      continue;
-    }
-
-    // Keep escaped control bytes readable and stable in logs/prompts.
-    escaped +=
-      codePoint <= 0xff
-        ? `\\x${codePoint.toString(16).padStart(2, "0")}`
-        : `\\u${codePoint.toString(16).padStart(4, "0")}`;
-  }
-  return escaped;
+  return value.replace(
+    /[\p{Cc}\u2028\u2029]/gu,
+    (char) =>
+      INLINE_CONTROL_ESCAPE_MAP[char] || `\\x${char.charCodeAt(0).toString(16).padStart(2, "0")}`,
+  );
 }
 
 function escapeResourceTitle(value: string): string {

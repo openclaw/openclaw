@@ -1,21 +1,24 @@
 // Memory Core plugin module implements memory tool manager mock behavior.
 import type {
   MemoryReadResult,
+  MemorySearchDeadlineControlOptions,
   MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import type { MemorySearchRuntimeDebug } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { vi } from "vitest";
 import type { getMemorySearchManager } from "./tools.runtime.js";
 
-type SearchImpl = (opts?: {
-  maxResults?: number;
-  minScore?: number;
-  sessionKey?: string;
-  activeProjectKeys?: string[];
-  onDebug?: (debug: MemorySearchRuntimeDebug) => void;
-  signal?: AbortSignal;
-  sources?: MemorySource[];
-}) => Promise<unknown[]>;
+type SearchImpl = (
+  opts?: {
+    maxResults?: number;
+    minScore?: number;
+    sessionKey?: string;
+    activeProjectKeys?: string[];
+    onDebug?: (debug: MemorySearchRuntimeDebug) => void;
+    signal?: AbortSignal;
+    sources?: MemorySource[];
+  } & MemorySearchDeadlineControlOptions,
+) => Promise<unknown[]>;
 export type MemoryReadParams = { relPath: string; from?: number; lines?: number };
 type MemoryManagerDebug = Awaited<ReturnType<typeof getMemorySearchManager>>["debug"];
 type MemoryManagerParams = {

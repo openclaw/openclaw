@@ -1,6 +1,9 @@
 // Exercises built-in session tools through the real in-process router and SQLite store.
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { SessionsCreateResult } from "../../packages/gateway-protocol/src/index.js";
+import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import * as modelRuntimeChoice from "../agents/model-runtime-choice.js";
+import "../agents/subagents/spawn/subagent-spawn-model.mocks.shared.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import {
   callAgentToolGatewayRequest,
@@ -13,8 +16,15 @@ import { maybeSpawnVisibleSession } from "../agents/tools/sessions-spawn-visible
 import { createSessionsTool } from "../agents/tools/sessions-tool.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
-import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import {
+  appendTranscriptMessage,
+  listSessionEntriesCore,
+  loadSessionEntry,
+  loadTranscriptEvents,
+  upsertSessionEntryCore,
+} from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
@@ -30,7 +40,7 @@ import {
   withOperatorToolGatewayAuthority,
 } from "./server-plugin-in-process-dispatch.js";
 import { dispatchGatewayMethodInProcess } from "./server-plugins.js";
-import { roleClient, rolePolicyConfig, sharingPolicyClient } from "./session-sharing.test-utils.js";
+import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
 
 // This authority fixture creates no browser tabs; lifecycle cleanup and tab
 // ownership have dedicated coverage without cold-loading Browser's source graph here.
@@ -76,9 +86,16 @@ function withSessionToolsFixture(run: (cfg: OpenClawConfig) => Promise<void>) {
         },
       );
     }
-    await withLocalGatewayRequestScope({ deps: {} as CliDeps, getRuntimeConfig: () => cfg }, () =>
-      run(cfg),
-    );
+    const resources = new LegacyPluginSdkResourceHost();
+    try {
+      await resources.run(() =>
+        withLocalGatewayRequestScope({ deps: {} as CliDeps, getRuntimeConfig: () => cfg }, () =>
+          run(cfg),
+        ),
+      );
+    } finally {
+      await resources.close();
+    }
   }));
 }
 
@@ -105,6 +122,181 @@ describe("built-in session tool role authority", () => {
     await fixtureRun?.catch(() => {});
     fixtureRun = undefined;
   });
+
+  it.each(["live", "missing", "retired"] as const)(
+    "visible forks preserve an active first turn only with live requester authority (%s)",
+    async (lifetime) => {
+      const runtimeChoice = vi
+        .spyOn(modelRuntimeChoice, "preparePublishedModelRuntimeChoice")
+        .mockImplementation(async ({ runtimeId, preferredRuntimeId }) => ({
+          kind: "ready",
+          runtimeId: runtimeId ?? preferredRuntimeId ?? "codex",
+          validate: () => undefined,
+        }));
+      onTestFinished(() => runtimeChoice.mockRestore());
+      await withSessionToolsFixture(async (cfg) => {
+        const context = getPluginRuntimeGatewayRequestScope()?.context;
+        if (!context) {
+          throw new Error("expected local Gateway context");
+        }
+        let current = true;
+        context.loadGatewayModelCatalogSnapshot = async () => {
+          if (lifetime === "retired") {
+            current = false;
+          }
+          const entries = [
+            { id: "gpt-5.6-luna", name: "Test model", provider: "openai", contextWindow: 200_000 },
+          ];
+          return {
+            entries,
+            routeVariants: entries,
+            agentId: "main",
+            agentDir: resolveAgentDir(cfg, "main"),
+            workspaceDir: resolveAgentWorkspaceDir(cfg, "main"),
+            config: cfg,
+            catalogComplete: true,
+          };
+        };
+        const sessionId = "session-tools-requester-id";
+        const scope = { agentId: "main", sessionKey: REQUESTER, sessionId };
+        const messages = [
+          {
+            role: "user",
+            content: "Reproduce the attached fixture",
+            __openclaw: { media: [{ url: "media://inbound/repro.txt", fileName: "repro.txt" }] },
+          },
+          {
+            role: "assistant",
+            stopReason: "toolUse",
+            content: [{ type: "toolCall", id: "read-fixture", name: "read", arguments: {} }],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "read-fixture",
+            toolName: "read",
+            content: [{ type: "text", text: "fixture contents" }],
+          },
+          {
+            role: "assistant",
+            stopReason: "toolUse",
+            content: [
+              {
+                type: "toolCall",
+                id: "spawn-child",
+                name: "sessions_spawn",
+                arguments: { context: "fork", visible: true },
+              },
+            ],
+          },
+        ];
+        for (const message of messages) {
+          await appendTranscriptMessage(scope, {
+            message,
+            cwd: cfg.agents?.entries?.main?.workspace,
+          });
+        }
+        const admission = await beginSessionWorkAdmission({
+          scope: resolveSessionStorePathCore(cfg.session?.store, { agentId: "main" }),
+          identities: [REQUESTER, sessionId],
+          assertAllowed: () => {},
+        });
+        const chatSendOwner = await import("./server-methods/chat-send-external-entry.js");
+        const startChild = vi
+          .spyOn(chatSendOwner, "handleDirectExternalChatSend")
+          .mockImplementation(async ({ respond }) => {
+            respond(true, { status: "started", runId: "fork-child-run" });
+          });
+        const registerRun = vi.fn();
+        const beforeKeys = listSessionEntriesCore({ agentId: "main" }).map(
+          (entry) => entry.sessionKey,
+        );
+        try {
+          const spawn = () =>
+            withGatewayToolCallerIdentity(
+              {
+                agentId: "main",
+                sessionKey: REQUESTER,
+                gatewayContextResolver: () => context,
+                ...(lifetime !== "missing"
+                  ? {
+                      operationalRunInstance: {
+                        instanceId: "fork-instance",
+                        runId: "fork-parent-run",
+                      },
+                      receiptAuthority: () => current,
+                    }
+                  : {}),
+              },
+              () =>
+                maybeSpawnVisibleSession({
+                  raw: { visible: true, context: "fork", model: "openai/gpt-5.6-luna" },
+                  task: "Continue from the inherited reproduction",
+                  label: "Forked work",
+                  runtime: "subagent",
+                  sandbox: "inherit",
+                  expectsCompletionMessage: false,
+                  options: {
+                    config: cfg,
+                    agentSessionKey: REQUESTER,
+                    registerRun,
+                    countActiveRuns: () => 0,
+                  },
+                }),
+            );
+          if (lifetime !== "live") {
+            await expect(spawn()).rejects.toThrow(
+              lifetime === "missing"
+                ? /Parent session .* is still active/
+                : /authority is no longer active/,
+            );
+            expect(startChild).not.toHaveBeenCalled();
+            expect(registerRun).not.toHaveBeenCalled();
+            expect(
+              listSessionEntriesCore({ agentId: "main" }).map((entry) => entry.sessionKey),
+            ).toEqual(beforeKeys);
+            return;
+          }
+          const result = await spawn();
+          expect(result).toMatchObject({ status: "accepted" });
+          const childKey = result?.childSessionKey;
+          if (typeof childKey !== "string") {
+            throw new Error("expected created child session key");
+          }
+          const child = loadSessionEntry({ agentId: "main", sessionKey: childKey });
+          if (!child) {
+            throw new Error("expected persisted child session");
+          }
+          expect(child.parentSessionId).toBe(sessionId);
+          const transcript = await loadTranscriptEvents({
+            agentId: "main",
+            sessionKey: childKey,
+            sessionId: child.sessionId,
+          });
+          expect(transcript).toEqual(
+            expect.arrayContaining(
+              messages.map((message) =>
+                expect.objectContaining({
+                  type: "message",
+                  message: expect.objectContaining(message),
+                }),
+              ),
+            ),
+          );
+          expect(startChild).toHaveBeenCalledOnce();
+          const childMessage = startChild.mock.calls[0]?.[0].params.message;
+          expect(childMessage).toContain("inherited conversation is background context");
+          expect(childMessage).toContain(
+            "[Subagent Task]\n\nContinue from the inherited reproduction",
+          );
+          expect(registerRun).toHaveBeenCalledOnce();
+          expect(loadSessionEntry(scope)?.sessionId).toBe(sessionId);
+        } finally {
+          startChild.mockRestore();
+          admission.release();
+        }
+      });
+    },
+  );
 
   it.each(["unchanged", "active", "replaced", "reset"] as const)(
     "visible-spawn rollback protects the admitted child generation (%s)",
@@ -493,10 +685,12 @@ describe("built-in session tool role authority", () => {
       if (!scope) {
         throw new Error("expected local Gateway scope");
       }
+      const reader = roleClient("view", "reader-profile");
+      reader.connect.scopes = ["operator.read"];
       await withPluginRuntimeGatewayRequestScope(
         {
           ...scope,
-          client: sharingPolicyClient({ user: "reader-profile", scopes: ["operator.read"] }),
+          client: reader,
         },
         async () => {
           await expect(

@@ -3,12 +3,16 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { openNodeSqliteDatabase, tryAcquireExclusiveSqliteCoordinator } from "./node-sqlite.js";
-import { ensurePrivateSqliteCoordinatorDirectory } from "./sqlite-coordinator.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import {
+  ensurePrivateSqliteCoordinatorDirectory,
+  tryAcquireExclusiveSqliteCoordinator,
+} from "./sqlite-coordinator.js";
+import { captureCoordinatorDatabase } from "./sqlite-coordinator.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const loader = new URL("../../scripts/tsx.mjs", import.meta.url).href;
-const moduleUrl = new URL("./node-sqlite.ts", import.meta.url).href;
+const moduleUrl = new URL("./sqlite-coordinator.ts", import.meta.url).href;
 
 function observeDirectory(directory: string) {
   // Stat only: opening and closing the coordinator in this process could drop
@@ -43,6 +47,42 @@ const acquirePeer = `
 `;
 
 describe("data-free SQLite coordinator", () => {
+  it.each([false, true])(
+    "retries only unfinished native cleanup after a close error (physically closed: %s)",
+    (physicallyClosed) => {
+      const pathname = path.join(tempDirs.make("openclaw-coordinator-close-retry-"), "lock.sqlite");
+      const { result: coordinator, database } = captureCoordinatorDatabase(() =>
+        tryAcquireExclusiveSqliteCoordinator(pathname),
+      );
+      if (!coordinator) {
+        throw new Error("Fixture coordinator was not acquired");
+      }
+      const closeNative = database.close.bind(database);
+      const close = vi.spyOn(database, "close").mockImplementationOnce(() => {
+        if (physicallyClosed) {
+          closeNative();
+        }
+        throw new Error("Fixture native close failed");
+      });
+      const exec = vi.spyOn(database, "exec");
+      try {
+        expect(() => coordinator.release()).toThrow("Fixture native close failed");
+        expect(coordinator.closed).toBe(physicallyClosed);
+        expect(database.isOpen).toBe(!physicallyClosed);
+        expect(() => coordinator.release()).not.toThrow();
+        expect(coordinator.closed).toBe(true);
+        expect(close).toHaveBeenCalledTimes(physicallyClosed ? 1 : 2);
+        expect(exec).toHaveBeenCalledExactlyOnceWith("ROLLBACK");
+        coordinator.release();
+        expect(close).toHaveBeenCalledTimes(physicallyClosed ? 1 : 2);
+      } finally {
+        close.mockRestore();
+        exec.mockRestore();
+        coordinator.release();
+      }
+    },
+  );
+
   it("leaves an existing coordinator unchanged while excluding current and default-journal peers", () => {
     const directory = tempDirs.make("openclaw-sqlite-coordinator-");
     const pathname = path.join(directory, "coordinator.sqlite");

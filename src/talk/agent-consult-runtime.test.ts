@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";
+import { setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import {
   emitTrustedDiagnosticEvent,
@@ -11,12 +12,8 @@ import {
 } from "../infra/diagnostic-events.js";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../sessions/model-overrides.js";
 import { runExclusiveSessionLifecycleMutation } from "../sessions/session-lifecycle-admission.js";
-import {
-  closeOpenClawAgentDatabaseByPath,
-  closeOpenClawAgentDatabasesForTest,
-} from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import {
   consultRealtimeVoiceAgent,
@@ -197,10 +194,8 @@ describe("realtime voice agent consult runtime", () => {
     const tempDir = testTempDir;
     testTempDir = undefined;
     if (tempDir) {
-      closeOpenClawAgentDatabaseByPath(path.join(tempDir, "openclaw-agent.sqlite"));
       clientVoiceSessionTesting.reset();
-      closeOpenClawAgentDatabasesForTest();
-      closeOpenClawStateDatabaseForTest();
+      await cleanupSessionStateForTest({ stateDir: tempDir });
       envSnapshot.restore();
       await fs.rm(tempDir, { recursive: true, force: true });
     }
@@ -324,7 +319,11 @@ describe("realtime voice agent consult runtime", () => {
   });
 
   it("runs an embedded agent using the shared session and prompt contract", async () => {
-    const { runtime, runEmbeddedAgent, sessionStore } = createAgentRuntime();
+    const { runtime, runEmbeddedAgent, sessionStore } = createAgentRuntime([
+      setReplyPayloadMetadata({ text: "Earlier answer." }, { precedingInputAnswer: true }),
+      { text: "Speak this." },
+      { text: "Then this." },
+    ]);
 
     const result = await consultRealtimeVoiceAgent({
       cfg: { agents: { list: [{ id: "operator", default: true }] } } as never,
@@ -349,7 +348,7 @@ describe("realtime voice agent consult runtime", () => {
       timeoutMs: 10_000,
     });
 
-    expect(result).toEqual({ text: "Speak this." });
+    expect(result).toEqual({ text: "Speak this.\n\nThen this." });
     const voiceSession = sessionStore["voice:15550001234"];
     if (!voiceSession) {
       throw new Error("Expected voice consult session entry");
@@ -561,6 +560,37 @@ describe("realtime voice agent consult runtime", () => {
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
+  it("allows an independent consult when only the requester session is locked", async () => {
+    const { runtime, runEmbeddedAgent, sessionStore } = createAgentRuntime();
+    sessionStore["agent:main:main"] = {
+      sessionId: "locked-requester",
+      updatedAt: 1,
+      agentHarnessId: "codex",
+      modelSelectionLocked: true,
+    };
+
+    await expect(
+      consultRealtimeVoiceAgent({
+        cfg: {} as never,
+        agentRuntime: runtime as never,
+        logger: { warn: vi.fn() },
+        agentId: "meet-consult",
+        sessionKey: "agent:meet-consult:subagent:google-meet:meet-independent",
+        spawnedBy: "agent:main:main",
+        contextMode: "fork",
+        messageProvider: "google-meet",
+        lane: "google-meet",
+        runIdPrefix: "google-meet:meet-independent",
+        args: { question: "Check the meeting." },
+        transcript: [],
+        surface: "a private Google Meet",
+        userLabel: "Participant",
+      }),
+    ).resolves.toEqual({ text: "Speak this." });
+    expect(sessionForkMocks.forkSessionEntryFromParent).not.toHaveBeenCalled();
+    expect(requireEmbeddedAgentCall(runEmbeddedAgent).agentId).toBe("meet-consult");
+  });
+
   it("fresh-checks archive state after a queued lifecycle mutation", async () => {
     const { runtime, runEmbeddedAgent, sessionStore } = createAgentRuntime();
     const sessionKey = "voice:archive-race";
@@ -672,7 +702,10 @@ describe("realtime voice agent consult runtime", () => {
 
   it("returns a speakable fallback when the embedded agent has no visible text", async () => {
     const warn = vi.fn();
-    const { runtime } = createAgentRuntime([{ text: "hidden", isReasoning: true }]);
+    const { runtime } = createAgentRuntime([
+      setReplyPayloadMetadata({ text: "Earlier answer." }, { precedingInputAnswer: true }),
+      { text: "hidden", isReasoning: true },
+    ]);
 
     const result = await consultRealtimeVoiceAgent({
       cfg: {} as never,
@@ -693,6 +726,38 @@ describe("realtime voice agent consult runtime", () => {
     expect(warn).toHaveBeenCalledWith(
       "[talk] agent consult produced no answer: agent returned no speakable text",
     );
+  });
+
+  it("returns a yielded acknowledgement immediately without waiting for a visible final", async () => {
+    const warn = vi.fn();
+    const { runtime, runEmbeddedAgent } = createAgentRuntime();
+    runEmbeddedAgent.mockResolvedValueOnce({
+      payloads: [],
+      meta: {
+        yielded: true,
+        yieldAcknowledgment: "  Working on it.   I will report back.  ",
+      },
+    });
+
+    const result = await consultRealtimeVoiceAgent({
+      cfg: {} as never,
+      agentRuntime: runtime as never,
+      logger: { warn },
+      sessionKey: "voice:yielded",
+      messageProvider: "voice",
+      lane: "voice",
+      runIdPrefix: "voice:yielded",
+      args: { question: "Investigate this" },
+      transcript: [],
+      surface: "a live voice session",
+      userLabel: "Caller",
+    });
+
+    expect(result).toEqual({
+      text: "Working on it. I will report back.",
+      yielded: true,
+    });
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it("forks requester context and inherits its required creator isolation", async () => {

@@ -207,6 +207,33 @@ async function assertOutput(logPath) {
   }
 }
 
+function assertCorruptTargetUnavailable(updateJsonPath, pluginId) {
+  const result = readJson(updateJsonPath);
+  const plugins = result.postUpdate?.plugins;
+  const hasRepairNotice = (plugins?.warnings ?? []).some(
+    (warning) =>
+      warning?.pluginId === pluginId &&
+      typeof warning.message === "string" &&
+      warning.message.includes(pluginId) &&
+      (warning.guidance ?? []).some(
+        (command) =>
+          typeof command === "string" &&
+          command.startsWith("openclaw ") &&
+          warning.message.includes(command),
+      ),
+  );
+  if (
+    result.status !== "ok" ||
+    result.recovery?.serviceRestartSafe === false ||
+    plugins?.status !== "warning" ||
+    !hasRepairNotice
+  ) {
+    throw new Error(
+      `expected successful core update with a named plugin repair notice: ${JSON.stringify(result)}`,
+    );
+  }
+}
+
 function assertCorruptUpdate(updateJsonPath, pluginId) {
   const payload = readJson(updateJsonPath);
   if (payload.status !== "ok") {
@@ -216,95 +243,27 @@ function assertCorruptUpdate(updateJsonPath, pluginId) {
   if (!plugins) {
     throw new Error(`missing postUpdate.plugins in update output: ${JSON.stringify(payload)}`);
   }
-  assertCorruptPluginTolerated(plugins, pluginId);
+  assertCorruptPluginRestored(plugins, pluginId);
 }
 
 function assertCorruptPluginResult(pluginJsonPath, pluginId) {
   const plugins = readJson(pluginJsonPath);
-  assertCorruptPluginTolerated(plugins, pluginId);
+  assertCorruptPluginRestored(plugins, pluginId);
 }
 
-function assertCorruptPluginTolerated(plugins, pluginId) {
-  const evidence = collectPluginEvidence(plugins, pluginId);
-  if (plugins.status === "ok") {
-    assertCorruptPluginCleanOrRepaired(evidence);
-    return;
-  }
-  if (plugins.status !== "warning") {
-    throw new Error(
-      `expected post-update plugin status warning, got ${JSON.stringify(plugins.status)}`,
-    );
-  }
-  assertCorruptPluginDetails(plugins, pluginId);
-}
-
-function isCorruptPluginDisabledAfterUpdate(evidence, pluginId) {
-  const outcome = evidence.outcome;
-  const message = typeof outcome?.message === "string" ? outcome.message : "";
-  return (
-    outcome?.status === "skipped" &&
-    message.includes(`Disabled "${pluginId}" after plugin update failure`) &&
-    message.includes("OpenClaw will continue without it")
-  );
-}
-
-function assertCorruptPluginCleanOrRepaired(evidence) {
-  if (evidence.outcome) {
-    throw new Error(
-      `expected clean or repaired corrupt plugin state, got ${JSON.stringify(evidence)}`,
-    );
-  }
-  if (evidence.warning || evidence.integrityDrift || evidence.syncMessages.length > 0) {
-    throw new Error(
-      `expected warning post-update status for corrupt plugin evidence, got ok: ${JSON.stringify(
-        evidence,
-      )}`,
-    );
-  }
-}
-
-function assertCorruptPluginDetails(plugins, pluginId) {
+function assertCorruptPluginRestored(plugins, pluginId) {
   const evidence = collectPluginEvidence(plugins, pluginId);
   const outcome = evidence.outcome;
-  const disabledAfterFailure = isCorruptPluginDisabledAfterUpdate(evidence, pluginId);
-  const quarantinedAfterFailure = outcome?.status === "error";
-  if (!disabledAfterFailure && !quarantinedAfterFailure) {
+  if (
+    !["ok", "warning"].includes(plugins.status) ||
+    (outcome && !["updated", "unchanged"].includes(outcome.status)) ||
+    evidence.warning ||
+    evidence.integrityDrift ||
+    evidence.syncErrors.length > 0
+  ) {
     throw new Error(
-      `expected quarantined or disabled-after-failure outcome for ${pluginId}, got ${JSON.stringify(
-        {
-          outcomes: plugins.npm?.outcomes ?? [],
-          warnings: plugins.warnings ?? [],
-          sync: plugins.sync,
-          integrityDrifts: plugins.integrityDrifts ?? [],
-        },
-      )}`,
+      `expected ${pluginId} restored without unresolved plugin errors or warnings: ${JSON.stringify(evidence)}`,
     );
-  }
-  const warning = evidence.warning;
-  if (!warning) {
-    throw new Error(
-      `expected warning for ${pluginId}, got ${JSON.stringify(plugins.warnings ?? [])}`,
-    );
-  }
-  const text = [outcome.message, warning.reason, warning.message, ...(warning.guidance ?? [])]
-    .filter(Boolean)
-    .join(" ");
-  const expectedFragments = disabledAfterFailure
-    ? [
-        `Disabled "${pluginId}" after plugin update failure`,
-        "OpenClaw will continue without it",
-        "Run openclaw update repair to retry post-update plugin repair.",
-        `Run openclaw plugins inspect ${pluginId} --runtime --json for details.`,
-      ]
-    : [
-        "package.json is missing",
-        "Run openclaw update repair to retry post-update plugin repair.",
-        `Run openclaw plugins inspect ${pluginId} --runtime --json for details.`,
-      ];
-  for (const expected of expectedFragments) {
-    if (!text.includes(expected)) {
-      throw new Error(`expected update output to include ${expected}: ${text}`);
-    }
   }
 }
 
@@ -312,30 +271,15 @@ function collectPluginEvidence(plugins, pluginId) {
   const outcomes = plugins.npm?.outcomes ?? [];
   const warnings = plugins.warnings ?? [];
   const integrityDrifts = plugins.integrityDrifts ?? [];
-  const syncMessages = [...(plugins.sync?.warnings ?? []), ...(plugins.sync?.errors ?? [])].filter(
-    (message) => String(message).includes(pluginId),
+  const syncErrors = (plugins.sync?.errors ?? []).filter((message) =>
+    String(message).includes(pluginId),
   );
   return {
-    outcome: outcomes.find((entry) => entry?.pluginId === pluginId),
+    outcome: outcomes.findLast((entry) => entry?.pluginId === pluginId),
     warning: warnings.find((entry) => entry?.pluginId === pluginId),
     integrityDrift: integrityDrifts.find((entry) => entry?.pluginId === pluginId),
-    syncMessages,
+    syncErrors,
   };
-}
-
-function assertLegacyPostUpdatePluginFailure(updateJsonPath) {
-  const payload = readJson(updateJsonPath);
-  if (payload.status !== "error" || payload.reason !== "post-update-plugins") {
-    throw new Error(
-      `expected legacy post-update plugin failure, got ${JSON.stringify({
-        status: payload.status,
-        reason: payload.reason,
-      })}`,
-    );
-  }
-  if (!payload.after?.version) {
-    throw new Error(`expected core update to install a new version: ${JSON.stringify(payload)}`);
-  }
 }
 
 function assertCorruptPluginPolicyPreserved(configPath, pluginId) {
@@ -368,9 +312,9 @@ const commands = {
   snapshot: () => process.stdout.write(JSON.stringify(pluginRecordSnapshot(), null, 2)),
   "assert-snapshot": () => assertSnapshot(arg),
   "assert-output": () => assertOutput(arg),
+  "assert-corrupt-unavailable": () => assertCorruptTargetUnavailable(arg, arg2),
   "assert-corrupt-update": () => assertCorruptUpdate(arg, arg2),
   "assert-corrupt-plugin-result": () => assertCorruptPluginResult(arg, arg2),
-  "assert-legacy-post-update-plugin-failure": () => assertLegacyPostUpdatePluginFailure(arg),
   "assert-corrupt-policy-preserved": () => assertCorruptPluginPolicyPreserved(arg, arg2),
 };
 const run = commands[command];

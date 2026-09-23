@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { hostname as readHostName } from "node:os";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
+import { isLoopbackHost } from "openclaw/plugin-sdk/request-url";
 import type {
   CodexAppServerConnectionClass,
   CodexAppServerDefaultPolicy,
@@ -108,11 +108,11 @@ function fingerprintCodexAppServerNetworkProxyConfigPatch(configPatch: JsonObjec
   return createHash("sha256").update(stableStringifyJson(configPatch)).digest("hex");
 }
 
-function normalizeNetworkProxyPermissionMap<TPermission extends string>(
-  value: Record<string, TPermission> | undefined,
-): Record<string, TPermission> | undefined {
+function normalizeNetworkProxyPermissionMap(
+  value: Record<string, "allow" | "deny" | "none"> | undefined,
+): Record<string, "allow" | "deny"> | undefined {
   const entries = Object.entries(value ?? {})
-    .map(([key, permission]) => [key.trim(), permission] as const)
+    .map(([key, permission]) => [key.trim(), permission === "none" ? "deny" : permission] as const)
     .filter(([key]) => key.length > 0);
   return entries.length > 0 ? Object.fromEntries(entries) : undefined;
 }

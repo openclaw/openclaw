@@ -178,10 +178,7 @@ describe("buildXiaomiSpeechProvider", () => {
       const audio = Buffer.from("fake-mp3-audio").toString("base64");
       const mockFetch = vi.mocked(globalThis.fetch);
       mockFetch.mockResolvedValueOnce(
-        new Response(JSON.stringify({ choices: [{ message: { audio: { data: audio } } }] }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }),
+        Response.json({ choices: [{ message: { audio: { data: audio } } }] }),
       );
 
       const result = await provider.synthesize({
@@ -221,10 +218,7 @@ describe("buildXiaomiSpeechProvider", () => {
 
     it("rejects malformed base64 audio", async () => {
       vi.mocked(globalThis.fetch).mockResolvedValueOnce(
-        new Response(JSON.stringify({ choices: [{ message: { audio: { data: "ZE==" } } }] }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }),
+        Response.json({ choices: [{ message: { audio: { data: "ZE==" } } }] }),
       );
 
       await expect(
@@ -242,10 +236,7 @@ describe("buildXiaomiSpeechProvider", () => {
       const audio = Buffer.from("fake-wav-audio").toString("base64");
       const mockFetch = vi.mocked(globalThis.fetch);
       mockFetch.mockResolvedValueOnce(
-        new Response(JSON.stringify({ choices: [{ message: { audio: { data: audio } } }] }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }),
+        Response.json({ choices: [{ message: { audio: { data: audio } } }] }),
       );
 
       const result = await provider.synthesize({
@@ -282,10 +273,7 @@ describe("buildXiaomiSpeechProvider", () => {
       const audio = Buffer.from("fake-mp3-audio").toString("base64");
       const mockFetch = vi.mocked(globalThis.fetch);
       mockFetch.mockResolvedValueOnce(
-        new Response(JSON.stringify({ choices: [{ message: { audio: { data: audio } } }] }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }),
+        Response.json({ choices: [{ message: { audio: { data: audio } } }] }),
       );
 
       await provider.synthesize({
@@ -315,10 +303,7 @@ describe("buildXiaomiSpeechProvider", () => {
     it("transcodes Xiaomi output to Opus for voice-note targets", async () => {
       const audio = Buffer.from("fake-mp3-audio").toString("base64");
       vi.mocked(globalThis.fetch).mockResolvedValueOnce(
-        new Response(JSON.stringify({ choices: [{ message: { audio: { data: audio } } }] }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }),
+        Response.json({ choices: [{ message: { audio: { data: audio } } }] }),
       );
       transcodeAudioBufferToOpusMock.mockResolvedValueOnce(Buffer.from("fake-opus-audio"));
 
@@ -345,10 +330,7 @@ describe("buildXiaomiSpeechProvider", () => {
     it("transcodes Xiaomi voice design output to Opus for voice-note targets", async () => {
       const audio = Buffer.from("fake-wav-audio").toString("base64");
       vi.mocked(globalThis.fetch).mockResolvedValueOnce(
-        new Response(JSON.stringify({ choices: [{ message: { audio: { data: audio } } }] }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }),
+        Response.json({ choices: [{ message: { audio: { data: audio } } }] }),
       );
       transcodeAudioBufferToOpusMock.mockResolvedValueOnce(Buffer.from("fake-opus-audio"));
 
@@ -383,10 +365,7 @@ describe("buildXiaomiSpeechProvider", () => {
       const audio = Buffer.from("fake-mp3-audio").toString("base64");
       const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
       vi.mocked(globalThis.fetch).mockResolvedValueOnce(
-        new Response(JSON.stringify({ choices: [{ message: { audio: { data: audio } } }] }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }),
+        Response.json({ choices: [{ message: { audio: { data: audio } } }] }),
       );
 
       try {
@@ -461,10 +440,7 @@ describe("buildXiaomiSpeechProvider", () => {
       const audio = Buffer.from("fake-mp3-audio").toString("base64");
       const mockFetch = vi.mocked(globalThis.fetch);
       mockFetch.mockResolvedValueOnce(
-        new Response(JSON.stringify({ choices: [{ message: { audio: { data: audio } } }] }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }),
+        Response.json({ choices: [{ message: { audio: { data: audio } } }] }),
       );
       try {
         await provider.synthesize({
@@ -488,10 +464,7 @@ describe("buildXiaomiSpeechProvider", () => {
 
     it("throws when the API response has no audio data", async () => {
       vi.mocked(globalThis.fetch).mockResolvedValueOnce(
-        new Response(JSON.stringify({ choices: [{ message: {} }] }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }),
+        Response.json({ choices: [{ message: {} }] }),
       );
       await expect(
         provider.synthesize({

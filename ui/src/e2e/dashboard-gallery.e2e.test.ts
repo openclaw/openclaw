@@ -17,6 +17,7 @@ const selectedResolution = {
   agentId: "main",
   displayName: "Release health",
   boardFace: "dashboard",
+  boardPresentation: "expanded",
 } satisfies SessionsResolveResult;
 const dashboardRows = (
   [
@@ -37,6 +38,7 @@ const dashboardRows = (
   key,
   kind: "direct",
   boardFace: "dashboard",
+  boardPresentation: "expanded",
   displayName,
   updatedAt: now - age,
   status,
@@ -100,7 +102,7 @@ suite.define(() => {
             "sessions.resolve": {
               cases: [
                 {
-                  match: { shortId: "12345678", agentId: "main" },
+                  match: { shortId: "1234567890abcdef1234567890abcdef", agentId: "main" },
                   response: selectedResolution,
                 },
               ],
@@ -119,7 +121,7 @@ suite.define(() => {
             "chat.startup": {
               cases: [
                 {
-                  match: { shortId: "12345678", agentId: "main" },
+                  match: { shortId: "1234567890abcdef1234567890abcdef", agentId: "main" },
                   response: {
                     resolution: selectedResolution,
                     messages: [],
@@ -163,14 +165,16 @@ suite.define(() => {
           .getByText("All systems nominal", { exact: true })
           .waitFor();
         expect(await releaseCard.locator("a").getAttribute("href")).toBe(
-          "/chat/main/release-health-12345678?dashboard=expanded",
+          "/dashboard/main/release-health-1234567890abcdef1234567890abcdef",
         );
         if (proofDir) {
           await page.screenshot({ path: path.join(proofDir, "01-gallery.png") });
         }
 
         await releaseCard.locator("a").click();
-        await page.waitForURL(/\/chat\/main\/release-health-12345678\?dashboard=expanded$/u);
+        await page.waitForURL(
+          /\/dashboard\/main\/release-health-1234567890abcdef1234567890abcdef$/u,
+        );
         await page.locator(".board-session-surface").waitFor();
         await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(1);
         await expect.poll(() => page.locator(".chat-thread").isHidden()).toBe(true);

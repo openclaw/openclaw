@@ -8,7 +8,9 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -52,12 +54,14 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
@@ -137,7 +141,7 @@ internal fun ClawPrimaryButton(
       Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(16.dp))
       Spacer(modifier = Modifier.width(6.dp))
     }
-    Text(text = text, style = ClawTheme.type.label, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    Text(text = text, style = ClawTheme.type.label)
   }
 }
 
@@ -168,7 +172,7 @@ internal fun ClawSecondaryButton(
         Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(16.dp))
         Spacer(modifier = Modifier.width(6.dp))
       }
-      Text(text = text, style = ClawTheme.type.label, maxLines = 1, overflow = TextOverflow.Ellipsis)
+      Text(text = text, style = ClawTheme.type.label)
     }
   }
 }
@@ -244,7 +248,7 @@ private fun ClawIconTouchTarget(
   )
 }
 
-/** Compact label/value row for health and readiness summaries. */
+/** Health and readiness labels flow above their status when both cannot fit beside each other. */
 @Composable
 internal fun ClawStatusRow(
   title: String,
@@ -252,17 +256,17 @@ internal fun ClawStatusRow(
   healthy: Boolean,
   modifier: Modifier = Modifier,
 ) {
-  Row(
+  FlowRow(
     modifier = modifier.fillMaxWidth().heightIn(min = ClawTheme.spacing.touchTarget).padding(vertical = 6.dp),
-    verticalAlignment = Alignment.CenterVertically,
-    horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs),
+    horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs, Alignment.End),
+    verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs),
+    itemVerticalAlignment = Alignment.CenterVertically,
   ) {
     Text(
       text = title,
       style = ClawTheme.type.body,
       color = ClawTheme.colors.text,
       modifier = Modifier.weight(1f),
-      maxLines = 1,
     )
     ClawStatusPill(
       text = value,
@@ -305,7 +309,7 @@ internal fun ClawStatusPill(
             .clip(CircleShape)
             .background(accentColor),
       )
-      Text(text = text, style = ClawTheme.type.caption, color = colors.text, maxLines = 1)
+      Text(text = text, style = ClawTheme.type.caption, color = colors.text)
     }
   }
 }
@@ -371,33 +375,6 @@ internal fun <T> ClawSeparatedColumn(
   }
 }
 
-/** Two-line settings/detail row with caller-provided leading and trailing slots. */
-@Composable
-internal fun ClawDetailRow(
-  title: String,
-  subtitle: String,
-  modifier: Modifier = Modifier,
-  leading: @Composable () -> Unit,
-  trailing: @Composable () -> Unit,
-) {
-  Row(
-    modifier =
-      modifier
-        .fillMaxWidth()
-        .heightIn(min = ClawTheme.spacing.row)
-        .padding(vertical = 6.dp),
-    verticalAlignment = Alignment.CenterVertically,
-    horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs),
-  ) {
-    leading()
-    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-      Text(text = title, style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-      Text(text = subtitle, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
-    }
-    trailing()
-  }
-}
-
 /** Circular text badge used for compact numeric or initials-style row marks. */
 @Composable
 internal fun ClawTextBadge(
@@ -436,7 +413,7 @@ internal fun ClawIconBadge(
   }
 }
 
-/** Reusable one-line list row with optional subtitle, metadata, slots, and click handling. */
+/** Keeps labels together and flows controls below when their intrinsic widths cannot fit. */
 @Composable
 internal fun ClawListItem(
   title: String,
@@ -454,47 +431,47 @@ internal fun ClawListItem(
       modifier.clickable(onClick = onClick)
     }
 
-  Row(
+  FlowRow(
     modifier =
       rowModifier
         .fillMaxWidth()
         .heightIn(min = ClawTheme.spacing.touchTarget)
         .clip(RoundedCornerShape(ClawTheme.radii.row))
         .padding(vertical = 6.dp),
-    verticalAlignment = Alignment.CenterVertically,
-    horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs),
+    horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs, Alignment.End),
+    verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs),
+    itemVerticalAlignment = Alignment.CenterVertically,
   ) {
-    leading?.invoke()
-    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-      Text(
-        text = title,
-        style = ClawTheme.type.body,
-        color = ClawTheme.colors.text,
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
-      )
-      if (subtitle != null) {
+    Row(
+      modifier = Modifier.weight(1f),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs),
+    ) {
+      leading?.invoke()
+      Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Text(
-          text = subtitle,
-          style = ClawTheme.type.caption,
-          color = ClawTheme.colors.textSubtle,
-          maxLines = 1,
-          overflow = TextOverflow.Ellipsis,
+          text = title,
+          style = ClawTheme.type.body,
+          color = ClawTheme.colors.text,
         )
+        listOfNotNull(subtitle, metadata).forEach { detail ->
+          Text(
+            text = detail,
+            style = ClawTheme.type.caption,
+            color = ClawTheme.colors.textMuted,
+          )
+        }
       }
-    }
-    if (metadata != null) {
-      Text(text = metadata, style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle, maxLines = 1)
     }
     trailing?.invoke()
   }
 }
 
 /** Keeps segmented options on one row unless a caller explicitly opts into wrapping. */
-internal fun segmentedControlRows(
-  options: List<String>,
+internal fun <T> segmentedControlRows(
+  options: List<T>,
   maxOptionsPerRow: Int? = null,
-): List<List<String>> {
+): List<List<T>> {
   if (options.isEmpty()) return emptyList()
   if (maxOptionsPerRow == null || options.size <= maxOptionsPerRow) return listOf(options)
   require(maxOptionsPerRow > 0) { "maxOptionsPerRow must be positive" }
@@ -513,55 +490,66 @@ internal fun segmentedControlRows(
 
 /** Equal-width segmented control with caller-controlled wrapping. */
 @Composable
-internal fun ClawSegmentedControl(
-  options: List<String>,
-  selected: String,
-  onSelect: (String) -> Unit,
+internal fun <T> ClawSegmentedControl(
+  options: List<T>,
+  selected: T,
+  onSelect: (T) -> Unit,
   modifier: Modifier = Modifier,
-  enabledOptions: Set<String> = options.toSet(),
+  enabledOptions: Set<T> = options.toSet(),
   maxOptionsPerRow: Int? = null,
+  optionLabel: (T) -> String = { it.toString() },
 ) {
-  Column(
-    modifier =
-      modifier
-        .selectableGroup()
-        .clip(RoundedCornerShape(ClawTheme.radii.control))
-        .background(ClawTheme.colors.surface)
-        .border(1.dp, ClawTheme.colors.border, RoundedCornerShape(ClawTheme.radii.control))
-        .padding(2.dp),
-    verticalArrangement = Arrangement.spacedBy(2.dp),
-  ) {
-    segmentedControlRows(options, maxOptionsPerRow).forEach { rowOptions ->
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(2.dp),
-      ) {
-        rowOptions.forEach { option ->
-          val active = option == selected
-          val enabled = option in enabledOptions
-          Box(
-            modifier =
-              Modifier
-                .weight(1f)
-                .heightIn(min = ClawTheme.spacing.control)
-                .clip(RoundedCornerShape(ClawTheme.radii.row))
-                .background(if (active) ClawTheme.colors.surfacePressed else Color.Transparent)
-                .selectable(selected = active, enabled = enabled, role = Role.RadioButton) { onSelect(option) }
-                .padding(horizontal = 8.dp, vertical = 6.dp),
-            contentAlignment = Alignment.Center,
-          ) {
-            Text(
-              text = option,
-              style = ClawTheme.type.caption,
-              color =
-                when {
-                  active -> ClawTheme.colors.text
-                  enabled -> ClawTheme.colors.textMuted
-                  else -> ClawTheme.colors.textSubtle
-                },
-              maxLines = 1,
-              overflow = TextOverflow.Ellipsis,
-            )
+  val textMeasurer = rememberTextMeasurer()
+  val density = LocalDensity.current
+  BoxWithConstraints(modifier = modifier) {
+    val rowLimit =
+      maxOptionsPerRow?.let { limit ->
+        val labelWidth = options.maxOfOrNull { textMeasurer.measure(optionLabel(it), ClawTheme.type.caption, softWrap = false).size.width } ?: 0
+        // Include the control inset, label padding, and gap before choosing equal-width rows.
+        val available = constraints.maxWidth - with(density) { 2.dp.roundToPx() }
+        val optionWidth = labelWidth + with(density) { 18.dp.roundToPx() }
+        minOf(limit, (available / optionWidth).coerceAtLeast(1))
+      }
+    Column(
+      modifier =
+        Modifier
+          .selectableGroup()
+          .clip(RoundedCornerShape(ClawTheme.radii.control))
+          .background(ClawTheme.colors.surface)
+          .border(1.dp, ClawTheme.colors.border, RoundedCornerShape(ClawTheme.radii.control))
+          .padding(2.dp),
+      verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+      segmentedControlRows(options, rowLimit).forEach { rowOptions ->
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+          rowOptions.forEach { option ->
+            val active = option == selected
+            val enabled = option in enabledOptions
+            Box(
+              modifier =
+                Modifier
+                  .weight(1f)
+                  .heightIn(min = ClawTheme.spacing.control)
+                  .clip(RoundedCornerShape(ClawTheme.radii.row))
+                  .background(if (active) ClawTheme.colors.surfacePressed else Color.Transparent)
+                  .selectable(selected = active, enabled = enabled, role = Role.RadioButton) { onSelect(option) }
+                  .padding(horizontal = 8.dp, vertical = 6.dp),
+              contentAlignment = Alignment.Center,
+            ) {
+              Text(
+                text = optionLabel(option),
+                style = ClawTheme.type.caption,
+                color =
+                  when {
+                    active -> ClawTheme.colors.text
+                    enabled -> ClawTheme.colors.textMuted
+                    else -> ClawTheme.colors.textSubtle
+                  },
+              )
+            }
           }
         }
       }

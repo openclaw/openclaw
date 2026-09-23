@@ -99,6 +99,67 @@ describe("resolveAvatar profile URL origin restriction", () => {
 });
 
 describe("resolveAvatar gateway origin trust", () => {
+  it.each(["", "/openclaw"])(
+    "preserves development avatar mounts and origin trust at %s",
+    (basePath) => {
+      const gatewayUrl = `wss://gateway.example${basePath}`;
+      const proxyPath = `/__openclaw_dev_gateway__/${encodeURIComponent(gatewayUrl)}`;
+      const resourceBasePath = `${proxyPath}${basePath}`;
+      const uiOrigin = "http://localhost:5173";
+      vi.stubGlobal("location", new URL(uiOrigin));
+      vi.stubGlobal("OPENCLAW_UI_DEV_GATEWAY", { gatewayUrl, proxyPath });
+      setAvatarGatewayOrigin(gatewayUrl, [], resourceBasePath);
+
+      for (const profileAvatarUrl of new Set([
+        "/api/users/p1/avatar?v=2#fragment",
+        `${basePath}/api/users/p1/avatar?v=2#fragment`,
+        `${resourceBasePath}/api/users/p1/avatar?v=2#fragment`,
+        "https://gateway.example/api/users/p1/avatar?v=2#fragment",
+        `https://gateway.example${basePath}/api/users/p1/avatar?v=2#fragment`,
+        `${uiOrigin}${resourceBasePath}/api/users/p1/avatar?v=2#fragment`,
+      ])) {
+        expect(resolveAvatar({ id: "p1", profileAvatarUrl }), profileAvatarUrl).toEqual({
+          kind: "profile",
+          url: `${uiOrigin}${resourceBasePath}/api/users/p1/avatar?v=2`,
+        });
+      }
+      expect(resolveAvatar({ id: "p1", identity: { type: "profile", id: "p1" } })).toEqual({
+        kind: "profile",
+        url: `${uiOrigin}${resourceBasePath}/api/users/p1/avatar`,
+      });
+      for (const profileAvatarUrl of [
+        `${basePath}/avatar/research?v=3`,
+        `${resourceBasePath}/avatar/research?v=3`,
+        `https://gateway.example${basePath}/avatar/research?v=3`,
+      ]) {
+        expect(
+          resolveAvatar({
+            id: "research",
+            identity: { type: "agent", id: "research" },
+            profileAvatarUrl,
+          }),
+        ).toEqual({ kind: "profile", url: `${uiOrigin}${resourceBasePath}/avatar/research?v=3` });
+      }
+      for (const profileAvatarUrl of [
+        "https://other.example/api/users/p1/avatar",
+        `https://other.example${basePath}/api/users/p1/avatar`,
+        `https://other.example${resourceBasePath}/api/users/p1/avatar`,
+        `${basePath}/api/users/p1/avatar/extra`,
+      ]) {
+        expect(resolveAvatar({ id: "p1", profileAvatarUrl }), profileAvatarUrl).toMatchObject({
+          kind: "initials",
+        });
+      }
+      if (basePath) {
+        expect(
+          resolveAvatar({ id: "research", profileAvatarUrl: "/avatar/research" }),
+        ).toMatchObject({
+          kind: "initials",
+        });
+      }
+    },
+  );
+
   it.each([
     ["https://gw.example.com", "", "/avatar/research", "/avatar/research"],
     [

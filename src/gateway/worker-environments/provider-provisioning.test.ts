@@ -4,10 +4,17 @@ import {
   WorkerProviderError,
   type WorkerExecutionMode,
   type WorkerLease,
+  type WorkerMachineOption,
   type WorkerProfile,
+  type WorkerProvider,
 } from "../../plugins/types.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { hashWorkerCredential } from "./credential.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
+import {
+  readWorkerPlacementIdentity,
+  projectWorkerSessionPlacement,
+} from "./placement-projector.js";
 import * as support from "./service.test-support.js";
 
 type WorkerEnvironmentServiceError = support.WorkerEnvironmentServiceError;
@@ -15,7 +22,102 @@ type WorkerEnvironmentServiceError = support.WorkerEnvironmentServiceError;
 describe("worker environment service", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
-  it("persists intent and an immutable profile snapshot before provisioning", async () => {
+  it("passes the configured profile id to preparation before persisting allocation possibility", async () => {
+    const provision = vi.fn();
+    const allocate = vi.fn(async () => {
+      expect(support.testState.store.list()[0]).toMatchObject({ state: "provisioning" });
+      return { leaseId: "lease-prepared", ssh: support.SSH_ENDPOINT };
+    });
+    const prepareProvision = vi.fn<NonNullable<WorkerProvider["prepareProvision"]>>(
+      async (profile, operationId, options) => {
+        expect(support.testState.store.list()[0]).toMatchObject({
+          state: "requested",
+          provisionOperationId: operationId,
+        });
+        expect(profile).toEqual({ region: "test" });
+        expect(options).toEqual({
+          profileId: "development",
+          machineClass: "large",
+          os: "os-a",
+          assertCurrent: expect.any(Function),
+        });
+        return allocate;
+      },
+    );
+    const service = support.createService(support.createProvider({ provision, prepareProvision }));
+    await expect(
+      service.createWithRequest({
+        profileId: "development",
+        idempotencyKey: "prepared-request",
+        machineClass: "large",
+        os: "os-a",
+      }),
+    ).resolves.toMatchObject({ state: "ready", leaseId: "lease-prepared" });
+    expect(prepareProvision).toHaveBeenCalledOnce();
+    expect(allocate).toHaveBeenCalledOnce();
+    expect(provision).not.toHaveBeenCalled();
+  });
+
+  it.each(["abort", "timeout"])(
+    "never allocates from preparation closed by %s",
+    async (closure) => {
+      if (closure === "timeout") {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      }
+      const entered = createDeferredCore();
+      const settled = createDeferredCore();
+      const allocate = vi.fn(async () => ({ leaseId: "lease-late", ssh: support.SSH_ENDPOINT }));
+      const destroy = vi.fn();
+      const controller = new AbortController();
+      const service = support.createService(
+        support.createProvider({
+          prepareProvision: async () => {
+            entered.resolve();
+            await settled.promise;
+            return allocate;
+          },
+          destroy,
+        }),
+        closure === "timeout" ? { providerCallTimeoutMs: 25 } : {},
+      );
+      const creation = service
+        .createWithRequest({
+          profileId: "development",
+          idempotencyKey: "closed-preparation",
+          signal: controller.signal,
+        })
+        .catch((error: unknown) => error);
+      try {
+        await Promise.race([
+          entered.promise,
+          creation.then((result) => {
+            throw new Error("Creation ended before provider preparation", { cause: result });
+          }),
+        ]);
+        if (closure === "abort") {
+          controller.abort(new Error("Stop before allocation"));
+          settled.resolve();
+        } else {
+          await vi.advanceTimersByTimeAsync(25);
+        }
+        await creation;
+      } finally {
+        settled.resolve();
+        await creation;
+      }
+      const environment = support.testState.store.list()[0]!;
+      await service.destroy(environment.environmentId);
+      await service.stop();
+      expect(support.testState.store.get(environment.environmentId)).toMatchObject({
+        state: "failed",
+        leaseId: null,
+      });
+      expect(allocate).not.toHaveBeenCalled();
+      expect(destroy).not.toHaveBeenCalled();
+    },
+  );
+
+  it("persists intent and passes the configured profile id and immutable settings to provisioning", async () => {
     const operationIds: string[] = [];
     const provider = support.createProvider({
       provision: async (profile, operationId, options) => {
@@ -26,19 +128,32 @@ describe("worker environment service", () => {
           profileSnapshot: {
             install: "bundle",
             machineClass: "beast",
+            os: "os-a",
             settings: { region: "test" },
           },
         });
         support.getDevelopmentProfile().settings = { region: "mutated" };
         expect(profile).toEqual({ region: "test" });
-        expect(options).toEqual({ machineClass: "beast" });
+        expect(options).toEqual({
+          profileId: "development",
+          machineClass: "beast",
+          os: "os-a",
+          assertCurrent: expect.any(Function),
+        });
         return { leaseId: "lease-1", ssh: support.SSH_ENDPOINT };
       },
     });
 
     const workerService = support.createService(provider);
-    const result = await workerService.create("development", "request-1", "beast");
-    const repeated = await workerService.create("development", "request-1", "beast");
+    const create = (machineClass = "beast", os: string | undefined = "os-a") =>
+      workerService.createWithRequest({
+        profileId: "development",
+        idempotencyKey: "request-1",
+        machineClass,
+        os,
+      });
+    const result = await create();
+    const repeated = await create();
 
     expect(result).toMatchObject({ state: "ready", leaseId: "lease-1", ownerEpoch: 1 });
     expect(repeated.environmentId).toBe(result.environmentId);
@@ -64,14 +179,26 @@ describe("worker environment service", () => {
       ownerEpoch: 1,
       sessionId: null,
     });
-    expect(workerService.acknowledgeCredentialDelivery(grant!)).toBe(true);
+    expect(await workerService.acknowledgeCredentialDelivery(grant!)).toBe(true);
     expect(support.testState.store.getCredential(result.environmentId)).toMatchObject({
       deliveredAtMs: support.testState.nowMs,
     });
     expect(workerService.takeMintedCredential(binding)).toBeUndefined();
-    await expect(workerService.create("development", "request-1", "fast")).rejects.toMatchObject({
-      code: "invalid_profile",
-    });
+    for (const [machineClass, os] of [
+      ["fast", "os-a"],
+      ["beast", "os-b"],
+      ["beast", undefined],
+    ]) {
+      await expect(
+        workerService.createWithRequest({
+          profileId: "development",
+          idempotencyKey: "request-1",
+          machineClass,
+          os,
+        }),
+      ).rejects.toMatchObject({ code: "invalid_profile" });
+    }
+    expect(operationIds).toHaveLength(1);
   });
 
   it("requires explicit placement modes before provider allocation", async () => {
@@ -80,31 +207,39 @@ describe("worker environment service", () => {
     const workerService = support.createService(provider);
 
     await expect(
-      workerService.create("development", "mode-configured", undefined, "remote-exec"),
+      workerService.createWithRequest({
+        profileId: "development",
+        idempotencyKey: "mode-configured",
+        executionMode: "remote-exec",
+      }),
     ).rejects.toMatchObject({ code: "invalid_profile" });
     await expect(
-      workerService.createFromProfileSnapshot(
-        {
-          profileId: "development",
+      workerService.createWithRequest({
+        profileId: "development",
+        inheritedProfile: {
           providerId: provider.id,
           profileSnapshot: { install: "bundle", settings: { region: "test" } },
         },
-        "mode-inherited",
-        undefined,
-        "worker-turn",
-      ),
+        idempotencyKey: "mode-inherited",
+        executionMode: "worker-turn",
+      }),
     ).rejects.toMatchObject({ code: "invalid_profile" });
     expect(provision).not.toHaveBeenCalled();
     expect(support.testState.store.list()).toEqual([]);
 
-    await expect(workerService.create("development", "lifecycle-only")).resolves.toMatchObject({
+    await expect(
+      workerService.createWithRequest({
+        profileId: "development",
+        idempotencyKey: "lifecycle-only",
+      }),
+    ).resolves.toMatchObject({
       state: "ready",
     });
     expect(provision).toHaveBeenCalledOnce();
     expect(provision).toHaveBeenCalledWith(
       { region: "test" },
       expect.stringMatching(/^provision:v2:[a-f0-9]{64}$/u),
-      undefined,
+      { profileId: "development", assertCurrent: expect.any(Function) },
     );
   });
 
@@ -121,7 +256,10 @@ describe("worker environment service", () => {
       { ensureNodeWorkerBundle: async () => structuredClone(support.BOOTSTRAP_RECEIPT) },
     );
 
-    const environment = await workerService.create("development", "request-direct-default-node");
+    const environment = await workerService.createWithRequest({
+      profileId: "development",
+      idempotencyKey: "request-direct-default-node",
+    });
 
     expect(environment).toMatchObject({
       state: "ready",
@@ -131,7 +269,7 @@ describe("worker environment service", () => {
     expect(provision).toHaveBeenCalledWith(
       { region: "test" },
       expect.stringMatching(/^provision:v2:[a-f0-9]{64}$/u),
-      undefined,
+      { profileId: "development", assertCurrent: expect.any(Function) },
     );
   });
 
@@ -176,17 +314,20 @@ describe("worker environment service", () => {
       const idempotencyKey = `transport-${mode}-${transport}-${inherited ? "inherited" : "profile"}`;
 
       const result = inherited
-        ? await workerService.createFromProfileSnapshot(
-            {
-              profileId: "development",
+        ? await workerService.createWithRequest({
+            profileId: "development",
+            inheritedProfile: {
               providerId: provider.id,
               profileSnapshot: { install: "bundle", settings: { region: "test" } },
             },
             idempotencyKey,
-            undefined,
-            mode,
-          )
-        : await workerService.create("development", idempotencyKey, undefined, mode);
+            executionMode: mode,
+          })
+        : await workerService.createWithRequest({
+            profileId: "development",
+            idempotencyKey,
+            executionMode: mode,
+          });
 
       expect(result).toMatchObject({
         state: "ready",
@@ -197,7 +338,7 @@ describe("worker environment service", () => {
       expect(provision).toHaveBeenCalledWith(
         { region: "test" },
         expect.stringMatching(/^provision:v2:[a-f0-9]{64}$/u),
-        { executionMode: mode },
+        { profileId: "development", executionMode: mode, assertCurrent: expect.any(Function) },
       );
       expect(support.testState.bootstrapWorker).toHaveBeenCalledTimes(transport === "SSH" ? 1 : 0);
     },
@@ -214,7 +355,11 @@ describe("worker environment service", () => {
     const workerService = support.createService(provider);
 
     await expect(
-      workerService.create("development", "transport-worker-turn-ssh", undefined, "worker-turn"),
+      workerService.createWithRequest({
+        profileId: "development",
+        idempotencyKey: "transport-worker-turn-ssh",
+        executionMode: "worker-turn",
+      }),
     ).rejects.toMatchObject({
       code: "invalid_profile",
       message: expect.stringContaining("worker-turn providers must return a node lease"),
@@ -246,27 +391,24 @@ describe("worker environment service", () => {
       { ensureNodeWorkerBundle: async () => structuredClone(support.BOOTSTRAP_RECEIPT) },
     );
 
-    const original = await workerService.create(
-      "development",
-      "request-stable-operation-mode",
-      undefined,
-      "worker-turn",
-    );
+    const original = await workerService.createWithRequest({
+      profileId: "development",
+      idempotencyKey: "request-stable-operation-mode",
+      executionMode: "worker-turn",
+    });
     await expect(
-      workerService.create(
-        "development",
-        "request-stable-operation-mode",
-        undefined,
-        "worker-turn",
-      ),
+      workerService.createWithRequest({
+        profileId: "development",
+        idempotencyKey: "request-stable-operation-mode",
+        executionMode: "worker-turn",
+      }),
     ).resolves.toMatchObject({ environmentId: original.environmentId });
     await expect(
-      workerService.create(
-        "development",
-        "request-stable-operation-mode",
-        undefined,
-        "remote-exec",
-      ),
+      workerService.createWithRequest({
+        profileId: "development",
+        idempotencyKey: "request-stable-operation-mode",
+        executionMode: "remote-exec",
+      }),
     ).rejects.toMatchObject({ code: "invalid_profile" });
 
     expect(provision).toHaveBeenCalledOnce();
@@ -276,16 +418,181 @@ describe("worker environment service", () => {
     });
   });
 
-  it("delegates configured machine options to the profile provider", async () => {
-    const listMachineOptions = vi.fn(async () => [
-      { id: "standard", label: "Standard", cpu: 32, memoryGb: 64, default: true },
-    ]);
-    const workerService = support.createService(support.createProvider({ listMachineOptions }));
+  it("preserves per-OS machine identities and defaults from the profile provider", async () => {
+    const machines = [
+      { id: "standard", label: "Standard", cpu: 32, memoryGb: 64, default: true, os: "os-a" },
+      { id: "standard", label: "Standard", default: true, os: "os-b" },
+      { id: "shared", label: "Shared" },
+    ];
+    const systems = [
+      { id: "os-a", label: "OS A", default: true },
+      { id: "os-b", label: "OS B", disabledReason: "Upgrade the worker provider." },
+    ];
+    const listMachineOptions = vi.fn(async () => machines).mockResolvedValueOnce([machines[0]!]);
+    const listOperatingSystems = vi.fn(async () => systems);
+    const workerService = support.createService(
+      support.createProvider({ listMachineOptions, listOperatingSystems }),
+    );
 
-    await expect(workerService.listMachineOptions("development")).resolves.toEqual([
-      { id: "standard", label: "Standard", cpu: 32, memoryGb: 64, default: true },
-    ]);
+    const cases: Array<{ id: string; overrides: WorkerProfile }> = [
+      { id: "default", overrides: {} },
+      { id: "override", overrides: { machineClass: "standard", os: "os-b" } },
+      { id: "unknown", overrides: { machineClass: "custom", os: "other" } },
+    ];
+    const records = await Promise.all(
+      cases.map(({ id, overrides }) =>
+        support.testState.store.createIntent({
+          environmentId: id,
+          providerId: "fake",
+          profileId: "development",
+          profileSnapshot: { settings: { region: "test" }, ...overrides },
+          provisionOperationId: `provision:${id}`,
+        }),
+      ),
+    );
+    const project = (record: (typeof records)[number]) => {
+      const placement = {
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        agentId: "main",
+        executionMode: "worker-turn" as const,
+        state: "provisioning" as const,
+        environmentId: record.environmentId,
+        activeOwnerEpoch: null,
+        generation: 1,
+        createdAtMs: 1,
+        updatedAtMs: 1,
+        stateChangedAtMs: 1,
+        workspaceBaseManifestRef: null,
+        remoteWorkspaceDir: null,
+        workerBundleHash: null,
+        lastTranscriptAckCursor: null,
+        lastLiveEventAckCursor: null,
+        recoveryError: null,
+        terminalReason: null,
+        terminalAtMs: null,
+        turnClaim: null,
+      };
+      return projectWorkerSessionPlacement(
+        placement,
+        undefined,
+        undefined,
+        readWorkerPlacementIdentity(placement, workerService),
+      );
+    };
+    expect(project(records[0]!)).not.toHaveProperty("machine");
+    expect(project(records[1]!)).toMatchObject({ machine: { class: "standard", os: "os-b" } });
+    const coldVersion = workerService.machineShapeVersion();
+    await workerService.listMachineOptions("development");
+    expect(project(records[0]!)).toMatchObject({
+      machine: { class: "standard", cpu: 32, memoryGb: 64 },
+    });
+    expect(project(records[0]!)).not.toHaveProperty("machine.os");
+    await expect(workerService.listMachineOptions("development")).resolves.toEqual(machines);
+    expect(project(records[0]!)).not.toHaveProperty("machine");
+    await expect(workerService.listOperatingSystems("development")).resolves.toEqual(systems);
     expect(listMachineOptions).toHaveBeenCalledWith({ region: "test" });
+    expect(listOperatingSystems).toHaveBeenCalledWith({ region: "test" });
+    expect(project(records[0]!)).toMatchObject({
+      machine: {
+        class: "standard",
+        os: "os-a",
+        osLabel: "OS A",
+        cpu: 32,
+        memoryGb: 64,
+      },
+    });
+    expect(project(records[1]!)).toMatchObject({
+      machine: { class: "standard", os: "os-b", osLabel: "OS B" },
+    });
+    expect(project(records[1]!)).not.toHaveProperty("machine.cpu");
+    expect(project(records[2]!)).toMatchObject({ machine: { class: "custom", os: "other" } });
+    expect(workerService.machineShapeVersion()).toBeGreaterThan(coldVersion);
+    const warmVersion = workerService.machineShapeVersion();
+    await workerService.listMachineOptions("development");
+    await workerService.listOperatingSystems("development");
+    expect(workerService.machineShapeVersion()).toBe(warmVersion);
+
+    support.getDevelopmentProfile().settings = { region: "changed" };
+    await workerService.listMachineOptions("development");
+    expect(project(records[0]!)).not.toHaveProperty("machine");
+    expect(project(records[1]!)).toMatchObject({ machine: { class: "standard", os: "os-b" } });
+  });
+
+  it("warms the current profile while an earlier configuration catalog is still pending", async () => {
+    const previousCatalog = createDeferredCore<readonly WorkerMachineOption[]>();
+    const service = support.createService(
+      support.createProvider({
+        listMachineOptions: async (settings) =>
+          settings.region === "test"
+            ? previousCatalog.promise
+            : [{ id: "large", label: "Large", cpu: 8, default: true }],
+        listOperatingSystems: async () => [{ id: "linux", label: "Linux", default: true }],
+      }),
+    );
+    await service.prepareProjectIntent("development");
+    support.getDevelopmentProfile().settings = { region: "replacement" };
+    const intent = await service.prepareProjectIntent("development");
+    const environment = await support.testState.store.createIntent({
+      environmentId: "replacement-worker",
+      providerId: intent.providerId,
+      profileId: "development",
+      profileSnapshot: intent.profileSnapshot,
+      provisionOperationId: "provision:replacement",
+    });
+    try {
+      await support.waitForFast(() =>
+        expect(service.readMachineShape(environment.environmentId)).toEqual({
+          class: "large",
+          cpu: 8,
+          os: "linux",
+          osLabel: "Linux",
+        }),
+      );
+    } finally {
+      previousCatalog.resolve([{ id: "small", label: "Small", cpu: 2, default: true }]);
+    }
+    await previousCatalog.promise;
+    expect(service.readMachineShape(environment.environmentId)).toEqual({
+      class: "large",
+      cpu: 8,
+      os: "linux",
+      osLabel: "Linux",
+    });
+  });
+
+  it("keeps allocation and available OS metadata when machine discovery fails", async () => {
+    const warn = vi.fn();
+    const service = support.createService(
+      support.createProvider({
+        listMachineOptions: async () => {
+          throw new Error("catalog unavailable");
+        },
+        listOperatingSystems: async () => [{ id: "linux", label: "Linux", default: true }],
+      }),
+      { logger: { warn } },
+    );
+    service.subscribeMachineShapeChanged(() => {
+      throw new Error("observer unavailable");
+    });
+    const environment = await service.createWithRequest({
+      profileId: "development",
+      idempotencyKey: "catalog-failure",
+    });
+    expect(environment.state).toBe("ready");
+    await support.waitForFast(() =>
+      expect(warn).toHaveBeenCalledWith(
+        "Worker machine catalog warmup failed for profile development",
+      ),
+    );
+    expect(service.readMachineShape(environment.environmentId)).toEqual({
+      os: "linux",
+      osLabel: "Linux",
+    });
+    await expect(service.listOperatingSystems("development")).resolves.toEqual([
+      { id: "linux", label: "Linux", default: true },
+    ]);
+    expect(warn).toHaveBeenCalledWith("Worker machine metadata change reporting failed");
   });
 
   it.each([
@@ -297,6 +604,21 @@ describe("worker environment service", () => {
       ],
     ],
     ["blank ids", [{ id: " ", label: "Fast" }]],
+    ["untrimmed OS ids", [{ id: "fast", label: "Fast", os: " os-a" }]],
+    [
+      "duplicate per-OS ids",
+      [
+        { id: "fast", label: "Fast", os: "os-a" },
+        { id: "fast", label: "Faster", os: "os-a" },
+      ],
+    ],
+    [
+      "multiple defaults for one OS",
+      [
+        { id: "standard", label: "Standard", default: true, os: "os-a" },
+        { id: "fast", label: "Fast", default: true, os: "os-a" },
+      ],
+    ],
     ["malformed labels", [{ id: "fast", label: 16 }]],
     ["non-positive CPU counts", [{ id: "fast", label: "Fast", cpu: 0 }]],
     ["non-integer memory sizes", [{ id: "fast", label: "Fast", memoryGb: 63.5 }]],
@@ -310,7 +632,7 @@ describe("worker environment service", () => {
     ],
     [
       "over-limit catalogs",
-      Array.from({ length: 33 }, (_, index) => ({ id: `machine-${index}`, label: "Machine" })),
+      Array.from({ length: 65 }, (_, index) => ({ id: `machine-${index}`, label: "Machine" })),
     ],
   ])("omits %s returned by a worker provider", async (_name, options) => {
     const provider = support.createProvider();
@@ -320,14 +642,42 @@ describe("worker environment service", () => {
     await expect(workerService.listMachineOptions("development")).resolves.toBeUndefined();
   });
 
+  it.each(
+    [
+      [],
+      [
+        { id: "os-a", label: "OS A" },
+        { id: "os-a", label: "Duplicate" },
+      ],
+      [
+        { id: "os-a", label: "OS A", default: true },
+        { id: "os-b", label: "OS B", default: true },
+      ],
+      [{ id: " os-a", label: "OS A" }],
+      [{ id: "os-a", label: " OS A" }],
+      [{ id: "os-a", label: "OS A", disabledReason: "" }],
+      [{ id: "os-a", label: "OS A", disabledReason: " " }],
+      [{ id: "os-a", label: "OS A", disabledReason: "x".repeat(257) }],
+      [{ id: "os-a", label: "OS A", settings: {} }],
+      Array.from({ length: 9 }, (_, index) => ({ id: `os-${index}`, label: "OS" })),
+    ].map((systems) => ({ systems })),
+  )("omits malformed operating-system catalog %#", async ({ systems }) => {
+    const provider = support.createProvider();
+    Object.defineProperty(provider, "listOperatingSystems", { value: async () => systems });
+    const workerService = support.createService(provider);
+    await expect(workerService.listOperatingSystems("development")).resolves.toBeUndefined();
+  });
+
   it("creates a nested environment from its parent's snapshot after config drift", async () => {
     const provisionedProfiles: WorkerProfile[] = [];
+    const operatingSystems: Array<string | undefined> = [];
     let lease = 0;
     let credential = 0;
     const workerService = support.createService(
       support.createProvider({
-        provision: async (profile) => {
+        provision: async (profile, _operationId, options) => {
           provisionedProfiles.push(structuredClone(profile));
+          operatingSystems.push(options?.os);
           lease += 1;
           return { leaseId: `lease-${lease}`, ssh: support.SSH_ENDPOINT };
         },
@@ -336,25 +686,57 @@ describe("worker environment service", () => {
         generateWorkerCredential: () => `nested-worker-credential-${(credential += 1)}`,
       },
     );
-    const parent = await workerService.create("development", "parent-profile-snapshot");
+    const parent = await workerService.createWithRequest({
+      profileId: "development",
+      idempotencyKey: "parent-profile-snapshot",
+      os: "os-a",
+    });
     support.getDevelopmentProfile().settings = { region: "mutated" };
     support.getDevelopmentProfile().provider = "FaKe";
 
-    const child = await workerService.createFromProfileSnapshot(
-      {
-        profileId: parent.profileId,
-        providerId: parent.providerId,
-        profileSnapshot: parent.profileSnapshot,
+    const inherited = {
+      profileId: parent.profileId,
+      providerId: parent.providerId,
+      profileSnapshot: parent.profileSnapshot,
+    };
+    const child = await workerService.createWithRequest({
+      profileId: inherited.profileId,
+      inheritedProfile: {
+        providerId: inherited.providerId,
+        profileSnapshot: inherited.profileSnapshot,
       },
-      "child-profile-snapshot",
-    );
+      idempotencyKey: "child-profile-snapshot",
+    });
 
     expect(provisionedProfiles).toEqual([{ region: "test" }, { region: "test" }]);
+    expect(operatingSystems).toEqual(["os-a", "os-a"]);
     expect(child).toMatchObject({
       profileId: parent.profileId,
       providerId: parent.providerId,
       profileSnapshot: parent.profileSnapshot,
     });
+    await expect(
+      workerService.createWithRequest({
+        profileId: inherited.profileId,
+        inheritedProfile: {
+          providerId: inherited.providerId,
+          profileSnapshot: inherited.profileSnapshot,
+        },
+        idempotencyKey: "child-profile-snapshot",
+      }),
+    ).resolves.toMatchObject({ environmentId: child.environmentId });
+    await expect(
+      workerService.createWithRequest({
+        profileId: inherited.profileId,
+        inheritedProfile: {
+          providerId: inherited.providerId,
+          profileSnapshot: inherited.profileSnapshot,
+        },
+        idempotencyKey: "child-profile-snapshot",
+        os: "os-b",
+      }),
+    ).rejects.toMatchObject({ code: "invalid_profile" });
+    expect(operatingSystems).toHaveLength(2);
   });
 
   it.each([
@@ -382,7 +764,10 @@ describe("worker environment service", () => {
     const workerService = support.createService(support.createProvider({ provision }), {
       generateWorkerCredential: () => `inherited-worker-credential-${(credential += 1)}`,
     });
-    const parent = await workerService.create("development", "parent-inherited-profile");
+    const parent = await workerService.createWithRequest({
+      profileId: "development",
+      idempotencyKey: "parent-inherited-profile",
+    });
     const inherited = {
       profileId: parent.profileId,
       providerId: parent.providerId,
@@ -391,13 +776,27 @@ describe("worker environment service", () => {
     testCase.mutate();
 
     await expect(
-      workerService.createFromProfileSnapshot(inherited, "fresh-inherited-profile"),
+      workerService.createWithRequest({
+        profileId: inherited.profileId,
+        inheritedProfile: {
+          providerId: inherited.providerId,
+          profileSnapshot: inherited.profileSnapshot,
+        },
+        idempotencyKey: "fresh-inherited-profile",
+      }),
     ).rejects.toMatchObject({ code: testCase.code });
     expect(provision).toHaveBeenCalledOnce();
     expect(support.testState.store.list()).toHaveLength(1);
 
     await expect(
-      workerService.createFromProfileSnapshot(inherited, "parent-inherited-profile"),
+      workerService.createWithRequest({
+        profileId: inherited.profileId,
+        inheritedProfile: {
+          providerId: inherited.providerId,
+          profileSnapshot: inherited.profileSnapshot,
+        },
+        idempotencyKey: "parent-inherited-profile",
+      }),
     ).resolves.toMatchObject({ environmentId: parent.environmentId });
     expect(provision).toHaveBeenCalledOnce();
   });
@@ -418,16 +817,15 @@ describe("worker environment service", () => {
     );
 
     await expect(
-      workerService.createFromProfileSnapshot(
-        {
-          profileId: "device:device-1",
+      workerService.createWithRequest({
+        profileId: "device:device-1",
+        inheritedProfile: {
           providerId: DEVICE_WORKER_PROVIDER_ID,
           profileSnapshot: { install: "bundle", settings: { device: "device-1" } },
         },
-        "paired-profileless",
-        undefined,
-        "worker-turn",
-      ),
+        idempotencyKey: "paired-profileless",
+        executionMode: "worker-turn",
+      }),
     ).resolves.toMatchObject({ state: "ready", nodeDeviceId: "device-1" });
     expect(provision).toHaveBeenCalledOnce();
   });
@@ -453,25 +851,23 @@ describe("worker environment service", () => {
         generateWorkerCredential: () => `named-device-credential-${(credential += 1)}`,
       },
     );
-    const parent = await workerService.create(
-      "development",
-      "named-device-parent",
-      undefined,
-      "worker-turn",
-    );
+    const parent = await workerService.createWithRequest({
+      profileId: "development",
+      idempotencyKey: "named-device-parent",
+      executionMode: "worker-turn",
+    });
     support.testState.config.cloudWorkers = { profiles: {} };
 
     await expect(
-      workerService.createFromProfileSnapshot(
-        {
-          profileId: parent.profileId,
+      workerService.createWithRequest({
+        profileId: parent.profileId,
+        inheritedProfile: {
           providerId: parent.providerId,
           profileSnapshot: parent.profileSnapshot,
         },
-        "named-device-child",
-        undefined,
-        "worker-turn",
-      ),
+        idempotencyKey: "named-device-child",
+        executionMode: "worker-turn",
+      }),
     ).rejects.toMatchObject({ code: "profile_not_found" });
     expect(provision).toHaveBeenCalledOnce();
   });
@@ -485,7 +881,7 @@ describe("worker environment service", () => {
     await expect(
       support
         .createService(support.createProvider({ provision }))
-        .create("development", "request-secret"),
+        .createWithRequest({ profileId: "development", idempotencyKey: "request-secret" }),
     ).rejects.toMatchObject({ code: "invalid_profile" });
     expect(provision).not.toHaveBeenCalled();
     expect(support.testState.store.list()).toEqual([]);
@@ -501,7 +897,12 @@ describe("worker environment service", () => {
     });
     const workerService = support.createService(provider);
 
-    await expect(workerService.create("development", "request-invalid")).rejects.toMatchObject({
+    await expect(
+      workerService.createWithRequest({
+        profileId: "development",
+        idempotencyKey: "request-invalid",
+      }),
+    ).rejects.toMatchObject({
       code: "invalid_profile",
       message: expect.stringContaining("region is required"),
     } satisfies Partial<WorkerEnvironmentServiceError>);
@@ -521,7 +922,12 @@ describe("worker environment service", () => {
   it("rejects non-canonical profile ids before persistence", async () => {
     const workerService = support.createService(support.createProvider());
 
-    await expect(workerService.create(" development ", "request-spaced")).rejects.toMatchObject({
+    await expect(
+      workerService.createWithRequest({
+        profileId: " development ",
+        idempotencyKey: "request-spaced",
+      }),
+    ).rejects.toMatchObject({
       code: "invalid_profile",
     } satisfies Partial<WorkerEnvironmentServiceError>);
     expect(support.testState.store.list()).toEqual([]);
@@ -530,7 +936,7 @@ describe("worker environment service", () => {
   it.each(["direct destroy", "restart reconcile"] as const)(
     "cancels a requested intent without allocating on %s",
     async (mode) => {
-      const intent = support.testState.store.createIntent({
+      const intent = await support.testState.store.createIntent({
         environmentId: `worker-cancel-${mode}`,
         providerId: "fake",
         profileId: "development",
@@ -543,7 +949,7 @@ describe("worker environment service", () => {
       if (mode === "direct destroy") {
         await workerService.destroy(intent.environmentId);
       } else {
-        support.testState.store.requestDestroy({
+        await support.testState.store.requestDestroy({
           environmentId: intent.environmentId,
           state: "requested",
         });

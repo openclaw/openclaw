@@ -1,14 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ControlUiBootstrapConfig } from "../../../src/gateway/control-ui-contract.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { createApplicationConfigCapability } from "./config.ts";
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
-}
 
 function bootstrapResponse(
   serverVersion: string,
@@ -40,6 +33,43 @@ afterEach(() => {
 });
 
 describe("createApplicationConfigCapability", () => {
+  it("keeps capabilities available when development plugin grants contain invalid URLs", async () => {
+    vi.stubGlobal("OPENCLAW_UI_DEV_GATEWAY", {
+      gatewayUrl: "ws://gateway.example/mount",
+      proxyPath: "/dev-gateway",
+    });
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      Response.json({
+        terminalEnabled: true,
+        cliAgentsEnabled: true,
+        pluginFrameGrants: [
+          {
+            pluginId: "fixture",
+            path: "/mount/plugins/fixture/",
+            match: "prefix",
+            unrecognized: "discard",
+          },
+          { pluginId: "malformed", path: "http://[", match: "prefix" },
+          { pluginId: "foreign", path: "https://other.example/panel", match: "exact" },
+          { path: "/missing-owner", match: "prefix" },
+        ],
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const config = createApplicationConfigCapability({ resourceBasePath: "/dev-gateway/mount" });
+    await expect(config.refresh()).resolves.toMatchObject({
+      terminalEnabled: true,
+      cliAgentsEnabled: true,
+      pluginFrameGrants: [
+        { pluginId: "fixture", path: "/dev-gateway/mount/plugins/fixture/", match: "prefix" },
+        { pluginId: "malformed", path: "http://[", match: "prefix" },
+        { pluginId: "foreign", path: "https://other.example/panel", match: "exact" },
+      ],
+    });
+    expect(config.current.pluginFrameGrants[0]).not.toHaveProperty("unrecognized");
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
   it("keeps invitations hidden until bootstrap enables them and accepts later opt-outs", async () => {
     const fetchMock = vi
       .fn<typeof fetch>()
@@ -99,7 +129,7 @@ describe("createApplicationConfigCapability", () => {
   );
 
   it("does not discard an in-flight bootstrap when an auth-only refresh skips", async () => {
-    const response = deferred<Response>();
+    const response = createDeferred<Response>();
     vi.stubGlobal(
       "fetch",
       vi.fn<typeof fetch>(() => response.promise),
@@ -115,7 +145,7 @@ describe("createApplicationConfigCapability", () => {
   });
 
   it("shares concurrent bootstrap loads with equivalent credentials", async () => {
-    const response = deferred<Response>();
+    const response = createDeferred<Response>();
     const fetchMock = vi.fn<typeof fetch>(() => response.promise);
     vi.stubGlobal("fetch", fetchMock);
     let token = "fixture-token";
@@ -135,7 +165,7 @@ describe("createApplicationConfigCapability", () => {
   });
 
   it("rejects an authenticated response after credentials are cleared by a skipped refresh", async () => {
-    const response = deferred<Response>();
+    const response = createDeferred<Response>();
     vi.stubGlobal(
       "fetch",
       vi.fn<typeof fetch>(() => response.promise),
@@ -158,7 +188,7 @@ describe("createApplicationConfigCapability", () => {
   it.each(["", "replacement-fixture-token"])(
     "rejects an authenticated response when live credentials change without another refresh: %s",
     async (nextToken) => {
-      const response = deferred<Response>();
+      const response = createDeferred<Response>();
       const fetchMock = vi.fn<typeof fetch>(() => response.promise);
       vi.stubGlobal("fetch", fetchMock);
       let token = "fixture-token";
@@ -180,8 +210,8 @@ describe("createApplicationConfigCapability", () => {
   it.each([false, true])(
     "keeps independent callers valid and publishes the newest successful response (aborted: %s)",
     async (aborted) => {
-      const firstResponse = deferred<Response>();
-      const secondResponse = deferred<Response>();
+      const firstResponse = createDeferred<Response>();
+      const secondResponse = createDeferred<Response>();
       vi.stubGlobal(
         "fetch",
         vi
@@ -208,8 +238,8 @@ describe("createApplicationConfigCapability", () => {
   );
 
   it("returns null for a bootstrap response superseded by different credentials", async () => {
-    const firstResponse = deferred<Response>();
-    const secondResponse = deferred<Response>();
+    const firstResponse = createDeferred<Response>();
+    const secondResponse = createDeferred<Response>();
     const fetchMock = vi
       .fn<typeof fetch>()
       .mockImplementationOnce(() => firstResponse.promise)

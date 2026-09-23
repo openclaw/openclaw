@@ -15,6 +15,14 @@ import {
   type CodexAppServerClient,
 } from "./client.js";
 import { resolveCodexManagedBundledMarketplacePath } from "./computer-use-marketplace.js";
+import {
+  createComputerUseRequest,
+  runCodexComputerUseLiveTest,
+  skippedLiveTestStatus,
+  type CodexComputerUseLiveTestStatus,
+  type CodexComputerUseRepairStatus,
+  type CodexComputerUseRequest,
+} from "./computer-use-readiness.js";
 import { assertNotSymlink } from "./computer-use-service-path.js";
 import {
   resolveCodexAppServerRuntimeOptions,
@@ -29,34 +37,28 @@ import {
 import { isManagedCodexDesktopCommand } from "./managed-binary.js";
 import { acquireCodexNativeConfigFence } from "./native-config-fence.js";
 import type {
-  CodexListMcpServerStatusResponse,
+  CodexAppServerRequestResult,
   CodexConfigReadResponse,
+  CodexListMcpServerStatusResponse,
   CodexMcpServerStatus,
   CodexPluginDetail,
   CodexPluginListResponse,
   CodexPluginReadResponse,
   CodexRequestObject,
-  CodexThreadStartResponse,
   JsonValue,
 } from "./protocol.js";
-import { requestCodexAppServerJson } from "./request.js";
+import { requestCodexAppServerClientJson } from "./request.js";
 import {
   assertCodexAppServerClientStartSelectionCurrent,
   getLeasedSharedCodexAppServerClient,
-  isCodexAppServerStartSelectionChangedError,
   readCodexAppServerClientDesktopGeneration,
   readCodexAppServerClientProcessIdentity,
   releaseLeasedSharedCodexAppServerClient,
   resolveCodexNativeConfigFenceKey,
   waitForCodexAppServerClientDesktopGenerationDrain,
+  withLeasedCodexAppServerClientStartSelectionRetry,
+  type CodexAppServerClientLease,
 } from "./shared-client.js";
-
-/** Minimal app-server request function needed by Computer Use setup. */
-type CodexComputerUseRequest = <T = JsonValue | undefined>(
-  method: string,
-  params?: unknown,
-  options?: { timeoutMs?: number },
-) => Promise<T>;
 
 type CodexComputerUseStatusReason =
   | "disabled"
@@ -78,32 +80,10 @@ type CodexComputerUseInstallationStatus =
 
 type CodexComputerUseExposureStatus = "skipped" | "missing" | "available";
 
-type CodexComputerUseLiveTestState = "skipped" | "passed" | "failed";
-
-type CodexComputerUseRepairStatus = {
-  attempted: boolean;
-  killedPids: number[];
-  message: string;
-  warnings: string[];
-};
-
 type CodexComputerUseStatusSection = {
   status: string;
   ok: boolean;
   message: string;
-};
-
-type CodexComputerUseLiveTestStatus = {
-  status: CodexComputerUseLiveTestState;
-  ok: boolean;
-  attempted: boolean;
-  attempts: number;
-  timeoutMs: number;
-  retried: boolean;
-  repaired: boolean;
-  message: string;
-  error?: string;
-  durationMs?: number;
 };
 
 /** Readiness status for Codex Computer Use plugin and MCP server wiring. */
@@ -144,7 +124,7 @@ class CodexComputerUseSetupError extends Error {
 /** Inputs for checking, ensuring, or installing Codex Computer Use support. */
 export type CodexComputerUseSetupParams = {
   pluginConfig?: unknown;
-  config?: Parameters<typeof requestCodexAppServerJson>[0]["config"];
+  config?: Parameters<typeof requestCodexAppServerClientJson>[0]["config"];
   agentDir?: string;
   overrides?: Partial<CodexComputerUseConfig>;
   /** Caller-owned injection seam for tests; production mutation safety requires `client`. */
@@ -152,6 +132,7 @@ export type CodexComputerUseSetupParams = {
   client?: CodexAppServerClient;
   timeoutMs?: number;
   signal?: AbortSignal;
+  assertCurrent?: () => void;
   forceEnable?: boolean;
   defaultBundledMarketplacePath?: string;
   defaultBundledMarketplacePathCandidates?: readonly string[];
@@ -166,7 +147,9 @@ type CodexComputerUseInspectionParams = {
   client?: CodexAppServerClient;
   timeoutMs?: number;
   signal?: AbortSignal;
+  assertCurrent?: () => void;
   computerUseConfig: ResolvedCodexComputerUseConfig;
+  runLiveTest: boolean;
   installPlugin: boolean;
   defaultBundledMarketplacePath?: string;
   defaultBundledMarketplacePathCandidates?: readonly string[];
@@ -219,9 +202,6 @@ const COMPUTER_USE_MARKETPLACE_NAME_PRIORITY = [
   "openai-curated-remote",
   "local",
 ];
-const COMPUTER_USE_LIVE_TEST_RETRY_COUNT = 1;
-const COMPUTER_USE_LIVE_TEST_THREAD_NAME = "OpenClaw Computer Use readiness probe";
-
 /** Reads Computer Use readiness without installing or mutating app-server state. */
 export async function readCodexComputerUseStatus(
   params: CodexComputerUseSetupParams = {},
@@ -234,6 +214,7 @@ export async function readCodexComputerUseStatus(
     return await inspectCodexComputerUse({
       ...params,
       computerUseConfig: config,
+      runLiveTest: true,
       installPlugin: false,
     });
   } catch (error) {
@@ -246,8 +227,8 @@ export async function readCodexComputerUseStatus(
 }
 
 /**
- * Ensures Computer Use is ready when enabled, optionally installing when config
- * allows safe auto-install.
+ * Ensures installation and MCP exposure before a turn, optionally installing when
+ * config allows safe auto-install. Only strict startup waits for a live probe.
  */
 export async function ensureCodexComputerUse(
   params: CodexComputerUseSetupParams = {},
@@ -259,12 +240,10 @@ export async function ensureCodexComputerUse(
   const status = await inspectCodexComputerUse({
     ...params,
     computerUseConfig: config,
+    runLiveTest: config.strictReadiness,
     installPlugin: false,
   });
   if (status.ready) {
-    return status;
-  }
-  if (isNonStrictLiveTestStartupAllowed(status, config)) {
     return status;
   }
   if (config.autoInstall) {
@@ -275,11 +254,9 @@ export async function ensureCodexComputerUse(
     const installedStatus = await inspectCodexComputerUse({
       ...params,
       computerUseConfig: config,
+      runLiveTest: config.strictReadiness,
       installPlugin: true,
     });
-    if (isNonStrictLiveTestStartupAllowed(installedStatus, config)) {
-      return installedStatus;
-    }
     if (!installedStatus.ready) {
       throw new CodexComputerUseSetupError(installedStatus);
     }
@@ -303,6 +280,7 @@ export async function installCodexComputerUse(
   const status = await inspectCodexComputerUse({
     ...params,
     computerUseConfig: config,
+    runLiveTest: true,
     installPlugin: true,
   });
   if (!status.ready) {
@@ -314,9 +292,6 @@ export async function installCodexComputerUse(
 async function inspectCodexComputerUse(
   params: CodexComputerUseInspectionParams,
 ): Promise<CodexComputerUseStatus> {
-  if (!params.installPlugin) {
-    return await inspectCodexComputerUseWithoutFence(params);
-  }
   const resolvedRuntime = resolveCodexAppServerRuntimeOptions({
     pluginConfig: params.pluginConfig,
     managedCommandOrder: "desktop-first",
@@ -325,19 +300,67 @@ async function inspectCodexComputerUse(
   const deadline = operationTimeoutMs > 0 ? Date.now() + operationTimeoutMs : undefined;
   const remainingTimeoutMs = () =>
     deadline === undefined ? operationTimeoutMs : Math.max(1, deadline - Date.now());
-  let leasedClient: CodexAppServerClient | undefined;
+  const clientOptions = {
+    startOptions: resolvedRuntime.start,
+    pluginConfig: params.pluginConfig,
+    config: params.config,
+    agentDir: params.agentDir,
+    abandonSignal: params.signal,
+    assertCurrent: params.assertCurrent,
+  };
+  const lease: CodexAppServerClientLease = {};
   try {
     let client = params.client;
     if (!client && !params.request) {
       client = await getLeasedSharedCodexAppServerClient({
-        startOptions: resolvedRuntime.start,
-        pluginConfig: params.pluginConfig,
+        ...clientOptions,
         timeoutMs: remainingTimeoutMs(),
-        config: params.config,
-        agentDir: params.agentDir,
-        abandonSignal: params.signal,
       });
-      leasedClient = client;
+      lease.client = client;
+    }
+    if (!params.installPlugin) {
+      if (!lease.client) {
+        return await inspectCodexComputerUseWithoutFence(params);
+      }
+      return await withLeasedCodexAppServerClientStartSelectionRetry({
+        lease,
+        options: { ...clientOptions, timeoutMs: remainingTimeoutMs() },
+        signal: params.signal,
+        run: async (readClient, requestOptions) => {
+          const { assertCurrent } = requestOptions();
+          return await inspectCodexComputerUseWithoutFence({
+            ...params,
+            client: readClient,
+            request: async <T>(
+              method: string,
+              requestParams?: unknown,
+              options?: { timeoutMs?: number; signal?: AbortSignal },
+            ) => {
+              // Cleanup keeps its own deadline after the operation expires or is aborted.
+              const scopedOptions =
+                method === "thread/unsubscribe"
+                  ? {
+                      timeoutMs: options?.timeoutMs ?? operationTimeoutMs,
+                      signal: options?.signal,
+                      assertCurrent,
+                    }
+                  : requestOptions();
+              return await requestCodexAppServerClientJson<T>({
+                client: readClient,
+                method,
+                requestParams,
+                config: params.config,
+                timeoutMs: Math.min(
+                  options?.timeoutMs ?? operationTimeoutMs,
+                  scopedOptions.timeoutMs,
+                ),
+                signal: scopedOptions.signal,
+                assertCurrent: scopedOptions.assertCurrent,
+              });
+            },
+          });
+        },
+      });
     }
     const explicitManagedInstall =
       client && !resolveCodexComputerUseConfig({ pluginConfig: params.pluginConfig }).autoInstall
@@ -399,8 +422,8 @@ async function inspectCodexComputerUse(
       }
     }
   } finally {
-    if (leasedClient) {
-      releaseLeasedSharedCodexAppServerClient(leasedClient);
+    if (lease.client) {
+      releaseLeasedSharedCodexAppServerClient(lease.client);
     }
   }
 }
@@ -458,8 +481,11 @@ async function inspectCodexComputerUseWithoutFence(
 
   return await readComputerUseTools({
     request,
+    client: params.client,
+    signal: params.signal,
     config: params.computerUseConfig,
     plugin: pluginInspection.plugin,
+    runLiveTest: params.runLiveTest,
     installPlugin: params.installPlugin,
     releaseNativeConfigFence: params.releaseNativeConfigFence,
   });
@@ -486,8 +512,10 @@ async function prepareExplicitManagedComputerUseInstall(
     ownsIsolatedCodexHome: true,
     desktopGeneration: context.desktopGeneration,
     forceCacheRefresh: true,
-    assertCurrent: () =>
-      assertCodexAppServerClientStartSelectionCurrent({ client: context.client }),
+    assertCurrent: () => {
+      params.assertCurrent?.();
+      assertCodexAppServerClientStartSelectionCurrent({ client: context.client });
+    },
   });
 }
 
@@ -601,8 +629,11 @@ async function ensureComputerUsePlugin(params: {
 
 async function readComputerUseTools(params: {
   request: CodexComputerUseRequest;
+  client?: CodexAppServerClient;
+  signal?: AbortSignal;
   config: ResolvedCodexComputerUseConfig;
   plugin: CodexPluginDetail;
+  runLiveTest: boolean;
   installPlugin: boolean;
   releaseNativeConfigFence?: () => void;
 }): Promise<CodexComputerUseStatus> {
@@ -639,11 +670,19 @@ async function readComputerUseTools(params: {
     reason: "ready",
     message: "Computer Use is ready.",
   });
+  // Non-strict turns need installation and exposure, not a desktop round trip.
+  // Explicit diagnostics and the client-owned health monitor still probe live use.
+  if (!params.runLiveTest) {
+    return status;
+  }
   // The readiness thread reacquires this fence before loading native config.
   params.releaseNativeConfigFence?.();
   const { liveTest, repair } = await runCodexComputerUseLiveTest({
     request: params.request,
+    client: params.client,
+    signal: params.signal,
     config: params.config,
+    tools,
   });
   const compatibilityStartupAllowed = !liveTest.ok && !params.config.strictReadiness;
   return {
@@ -667,131 +706,6 @@ async function readComputerUseTools(params: {
         ? `${liveTest.message} Startup is allowed because computerUse.strictReadiness is false.`
         : liveTest.message,
   };
-}
-
-function isNonStrictLiveTestStartupAllowed(
-  status: CodexComputerUseStatus,
-  config: ResolvedCodexComputerUseConfig,
-): boolean {
-  return (
-    !config.strictReadiness &&
-    status.reason === "live_test_failed" &&
-    status.installed &&
-    status.pluginEnabled &&
-    status.mcpServerAvailable &&
-    status.installation.ok &&
-    status.exposure.ok
-  );
-}
-
-export async function runCodexComputerUseLiveTest(params: {
-  request: CodexComputerUseRequest;
-  config: ResolvedCodexComputerUseConfig;
-}): Promise<{ liveTest: CodexComputerUseLiveTestStatus; repair?: CodexComputerUseRepairStatus }> {
-  const startedAt = Date.now();
-  let lastError: unknown;
-  let repair: CodexComputerUseRepairStatus | undefined;
-  for (let attempt = 0; attempt <= COMPUTER_USE_LIVE_TEST_RETRY_COUNT; attempt += 1) {
-    let threadId: string | undefined;
-    try {
-      const thread = await params.request<CodexThreadStartResponse>(
-        "thread/start",
-        {
-          input: [],
-          developerInstructions: COMPUTER_USE_LIVE_TEST_THREAD_NAME,
-          ephemeral: true,
-        },
-        {
-          timeoutMs: params.config.liveTestTimeoutMs,
-        },
-      );
-      threadId = thread.thread.id;
-      await params.request(
-        "mcpServer/tool/call",
-        {
-          threadId,
-          server: params.config.mcpServerName,
-          tool: "list_apps",
-          arguments: {},
-        },
-        {
-          timeoutMs: params.config.toolCallTimeoutMs,
-        },
-      );
-      return {
-        liveTest: {
-          status: "passed",
-          ok: true,
-          attempted: true,
-          attempts: attempt + 1,
-          timeoutMs: params.config.liveTestTimeoutMs,
-          retried: attempt > 0,
-          repaired: Boolean(repair?.attempted && repair.warnings.length === 0),
-          durationMs: Math.max(0, Date.now() - startedAt),
-          message: "Computer Use live test passed.",
-        },
-        ...(repair ? { repair } : {}),
-      };
-    } catch (error) {
-      if (isCodexAppServerStartSelectionChangedError(error)) {
-        throw error;
-      }
-      lastError = error;
-    } finally {
-      if (threadId) {
-        await cleanupComputerUseProbeThread(params.request, threadId, params.config);
-      }
-    }
-    if (attempt < COMPUTER_USE_LIVE_TEST_RETRY_COUNT && params.config.autoRepair) {
-      repair = await repairComputerUseMcpRuntime(params.request, params.config);
-    }
-  }
-  const errorMessage = describeControlFailure(lastError);
-  return {
-    liveTest: {
-      status: "failed",
-      ok: false,
-      attempted: true,
-      attempts: COMPUTER_USE_LIVE_TEST_RETRY_COUNT + 1,
-      timeoutMs: params.config.liveTestTimeoutMs,
-      retried: COMPUTER_USE_LIVE_TEST_RETRY_COUNT > 0,
-      repaired: Boolean(repair?.attempted && repair.warnings.length === 0),
-      durationMs: Math.max(0, Date.now() - startedAt),
-      message: `Computer Use live test failed after ${COMPUTER_USE_LIVE_TEST_RETRY_COUNT + 1} attempts: ${errorMessage}`,
-      error: errorMessage,
-    },
-    ...(repair ? { repair } : {}),
-  };
-}
-
-async function repairComputerUseMcpRuntime(
-  request: CodexComputerUseRequest,
-  config: ResolvedCodexComputerUseConfig,
-): Promise<CodexComputerUseRepairStatus> {
-  try {
-    // Codex owns MCP process lifetimes; signaling descendants can kill an active sibling.
-    await request("config/mcpServer/reload", undefined, { timeoutMs: config.liveTestTimeoutMs });
-    return {
-      attempted: true,
-      killedPids: [],
-      warnings: [],
-      message: "Reloaded Computer Use MCP servers through Codex app-server.",
-    };
-  } catch (error) {
-    const message = `Could not reload Computer Use MCP servers: ${describeControlFailure(error)}`;
-    return { attempted: true, killedPids: [], warnings: [message], message };
-  }
-}
-
-async function cleanupComputerUseProbeThread(
-  request: CodexComputerUseRequest,
-  threadId: string,
-  config: ResolvedCodexComputerUseConfig,
-): Promise<void> {
-  await Promise.allSettled([
-    request("thread/unsubscribe", { threadId }, { timeoutMs: config.liveTestTimeoutMs }),
-    request("thread/archive", { threadId }, { timeoutMs: config.liveTestTimeoutMs }),
-  ]);
 }
 
 async function resolveMarketplaceRef(params: {
@@ -841,6 +755,16 @@ async function resolveMarketplaceRef(params: {
   }
 
   const waitUntil = marketplaceDiscoveryWaitUntil(params);
+  if (
+    candidates.length === 0 &&
+    waitUntil > Date.now() &&
+    (await codexNativePluginsDisabled(params.request))
+  ) {
+    return {
+      message:
+        "Codex native plugin support is disabled (features.plugins = false). Enable it in the Codex config, then run /codex computer-use install.",
+    };
+  }
   while (candidates.length === 0) {
     if (Date.now() >= waitUntil) {
       break;
@@ -925,6 +849,15 @@ async function listComputerUseMarketplaceCandidates(
     cwds: [],
   } satisfies CodexRequestObject);
   return findComputerUseMarketplaces(listed, config.pluginName);
+}
+
+async function codexNativePluginsDisabled(request: CodexComputerUseRequest): Promise<boolean> {
+  const response = await request<CodexAppServerRequestResult<"experimentalFeature/list">>(
+    "experimentalFeature/list",
+    {},
+  );
+  // Codex returns the full catalog when limit is omitted; absent plugins remains unknown so polling continues.
+  return response.data.find(({ name }) => name === "plugins")?.enabled === false;
 }
 
 function blockUnsafeAutoInstallStatus(
@@ -1251,22 +1184,6 @@ function exposureStatusFromTools(
   };
 }
 
-function skippedLiveTestStatus(
-  config: ResolvedCodexComputerUseConfig,
-  message: string,
-): CodexComputerUseLiveTestStatus {
-  return {
-    status: "skipped",
-    ok: false,
-    attempted: false,
-    attempts: 0,
-    timeoutMs: config.liveTestTimeoutMs,
-    retried: false,
-    repaired: false,
-    message,
-  };
-}
-
 function pluginWarnings(plugin: CodexPluginDetail): string[] {
   const warnings: string[] = [];
   const source = plugin.summary.source;
@@ -1276,51 +1193,6 @@ function pluginWarnings(plugin: CodexPluginDetail): string[] {
     );
   }
   return warnings;
-}
-
-function createComputerUseRequest(params: {
-  pluginConfig?: unknown;
-  config?: CodexComputerUseSetupParams["config"];
-  agentDir?: string;
-  request?: CodexComputerUseRequest;
-  client?: CodexAppServerClient;
-  timeoutMs?: number;
-  signal?: AbortSignal;
-}): CodexComputerUseRequest {
-  if (params.request) {
-    return params.request;
-  }
-  if (params.client) {
-    return async <T = JsonValue | undefined>(
-      method: string,
-      requestParams?: unknown,
-      options?: { timeoutMs?: number },
-    ) =>
-      await params.client!.request<T>(method, requestParams, {
-        timeoutMs: options?.timeoutMs ?? params.timeoutMs,
-        signal: params.signal,
-      });
-  }
-  // One-off install/status overrides may enable Computer Use without persisting
-  // config first, so keep the desktop app entitlement owner for this client.
-  const runtime = resolveCodexAppServerRuntimeOptions({
-    pluginConfig: params.pluginConfig,
-    managedCommandOrder: "desktop-first",
-  });
-  return async <T = JsonValue | undefined>(
-    method: string,
-    requestParams?: unknown,
-    options?: { timeoutMs?: number },
-  ) =>
-    await requestCodexAppServerJson<T>({
-      method,
-      requestParams,
-      timeoutMs: options?.timeoutMs ?? params.timeoutMs ?? runtime.requestTimeoutMs,
-      pluginConfig: params.pluginConfig,
-      startOptions: runtime.start,
-      config: params.config,
-      agentDir: params.agentDir,
-    });
 }
 
 function resolveComputerUseConfig(

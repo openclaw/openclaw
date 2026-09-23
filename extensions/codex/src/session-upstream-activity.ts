@@ -7,11 +7,9 @@ import type {
 } from "openclaw/plugin-sdk/session-catalog";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexTurn, CodexUserInput } from "./app-server/protocol.js";
-import { isCodexThreadReadMissingError } from "./app-server/rpc-error.js";
-import {
-  sessionBindingIdentity,
-  type CodexAppServerBindingStore,
-} from "./app-server/session-binding.js";
+import { CodexAppServerRpcError, isCodexThreadReadMissingError } from "./app-server/rpc-error.js";
+import { sessionBindingIdentity } from "./app-server/session-binding-record.js";
+import type { CodexAppServerBindingStore } from "./app-server/session-binding.js";
 import type {
   CodexSessionCatalogControl,
   CodexSessionCatalogControlFactory,
@@ -148,18 +146,22 @@ async function checkCodexUpstreamActivity(
       }
       try {
         const threadId = resolveThreadId(probe);
-        const page = await pinned.listTurnPage({
-          threadId,
-          limit: CODEX_UPSTREAM_TURN_LIMIT,
-          sortDirection: "desc",
-          itemsView: "full",
-        });
-        const marker = readMarker(probe);
-        if (page.data.length === 0 && marker) {
-          // Deleted threads do NOT reject turns/list: codex-rs load_thread_turns_list_history
-          // swallows ThreadNotFound/no-rollout and returns an empty page, and rollback can
-          // empty a live thread too. thread/read is the existence oracle: it still succeeds
-          // after rollback and rejects "thread not loaded" only once the rollout is gone.
+        const page = await pinned
+          .listTurnPage({
+            threadId,
+            limit: CODEX_UPSTREAM_TURN_LIMIT,
+            sortDirection: "desc",
+            itemsView: "full",
+          })
+          .catch((error: unknown) => {
+            if (error instanceof CodexAppServerRpcError && error.code === -32_600) {
+              return undefined;
+            }
+            throw error;
+          });
+        if (!page?.data.length && readMarker(probe)) {
+          // Both missing and rolled-back threads can lack readable turns.
+          // Only the exact native metadata read establishes that the thread is gone.
           try {
             await pinned.readThread(threadId, false);
           } catch (error) {
@@ -169,7 +171,7 @@ async function checkCodexUpstreamActivity(
           }
           continue;
         }
-        const activity = classifyCodexUpstreamTurns({ probe, turns: page.data });
+        const activity = page && classifyCodexUpstreamTurns({ probe, turns: page.data });
         if (activity) {
           activities.push(activity);
         }
@@ -216,7 +218,7 @@ export function createChecker(params: {
       if (!fingerprint) {
         continue;
       }
-      const control = params.control.forUpstream(probe.agentId, fingerprint);
+      const control = await params.control.forUpstream(probe.agentId, fingerprint);
       if (!control) {
         continue;
       }

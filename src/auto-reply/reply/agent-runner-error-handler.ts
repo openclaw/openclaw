@@ -7,19 +7,16 @@ import {
   isCompactionFailureError,
   isLikelyContextOverflowError,
 } from "../../agents/embedded-agent-helpers.js";
-import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 import { findCliTimeoutError, isFailoverError } from "../../agents/failover-error.js";
 import {
   GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
   HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
-  renderBillingReplyCopy,
   renderControlUiAgentFailureCopy,
   renderFailoverCodeUserCopy,
-  renderRateLimitOrOverloadedCopy,
-  renderRateLimitReplyCopy,
 } from "../../agents/failover/user-copy.js";
 import { isAgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
+import { resolveReplyExpectation } from "../../agents/reply-completion.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -33,7 +30,8 @@ import {
   isNonDirectConversationContext,
   isVerboseFailureDetailEnabled,
   markAgentRunFailureReplyPayload,
-  resolveExternalRunFailureTextForConversation,
+  resolveAgentRunFailureText,
+  resolveReplyFailureSummary,
   resolveReplyFailoverFacts,
 } from "./agent-runner-failure-reply.js";
 import type { AgentFallbackCycleState } from "./agent-runner-fallback-cycle.js";
@@ -60,6 +58,7 @@ export async function handleAgentExecutionError(params: {
   liveModelSwitchRetries: number;
   shouldSurfaceToControlUi: boolean;
   timing: AgentTurnTimingTracker;
+  resolveVisibleReplyDelivery: () => Promise<boolean>;
   modelPatch: { fail: (error: unknown) => Promise<void> };
 }): Promise<ErrorAction> {
   const turn = params.turn;
@@ -89,11 +88,22 @@ export async function handleAgentExecutionError(params: {
     return terminal;
   };
   const settleFailure = async (
-    payload: ReplyPayload,
+    payload: ReplyPayload & { text: string },
+    isGenericRunnerFailure = false,
   ): Promise<Extract<AgentTurnInternalResult, { kind: "final" }>> => {
     takePendingLifecycleTerminal().emit("error", err);
     turn.replyOperation?.fail("run_failed", err);
     await params.modelPatch.fail(err);
+    const replyExpectation = resolveReplyExpectation(turn.followupRun.run);
+    payload.text = resolveAgentRunFailureText({
+      text: payload.text,
+      replyExpectation,
+      isGenericRunnerFailure,
+      visibleReplyDelivered:
+        replyExpectation === "optional" && isGenericRunnerFailure
+          ? await params.resolveVisibleReplyDelivery()
+          : false,
+    });
     return {
       kind: "final",
       payload: markAgentRunFailureReplyPayload(payload),
@@ -101,7 +111,11 @@ export async function handleAgentExecutionError(params: {
     };
   };
   const resolveReplyOperationAbortAction = (abortError: unknown): ErrorAction | undefined => {
-    const reason = resolveReplyOperationAbortReason(turn.replyOperation, abortError);
+    const reason = resolveReplyOperationAbortReason(
+      turn.replyOperation,
+      abortError,
+      turn.replyOperation?.abortSignal ?? turn.opts?.abortSignal,
+    );
     if (!reason) {
       return undefined;
     }
@@ -123,7 +137,6 @@ export async function handleAgentExecutionError(params: {
       params.state.pendingLifecycleTerminal = undefined;
       return { kind: "retry", liveModelSwitchError: err };
     }
-    const visibleReplyDelivered = await turn.resolveVisibleReplyDelivery?.();
     defaultRuntime.error(
       `Live model switch failed after ${MAX_LIVE_SWITCH_RETRIES} retries ` +
         `(${sanitizeForLog(err.provider)}/${sanitizeForLog(err.model)}). The requested model may be unavailable.`,
@@ -142,13 +155,7 @@ export async function handleAgentExecutionError(params: {
     return {
       kind: "final",
       payload: markAgentRunFailureReplyPayload({
-        text: resolveExternalRunFailureTextForConversation({
-          text: switchErrorText,
-          visibleReplyDelivered,
-          sessionCtx: turn.sessionCtx,
-          isGenericRunnerFailure: !params.shouldSurfaceToControlUi,
-          cfg: turn.followupRun.run.config,
-        }),
+        text: switchErrorText,
       }),
     };
   }
@@ -170,29 +177,21 @@ export async function handleAgentExecutionError(params: {
         isHeartbeat: turn.isHeartbeat,
       },
     );
-    const text = resolveExternalRunFailureTextForConversation({
-      text: params.shouldSurfaceToControlUi
+    const text =
+      params.shouldSurfaceToControlUi && err.userMessage === undefined
         ? renderControlUiAgentFailureCopy(message)
-        : externalReply.text,
-      visibleReplyDelivered: await turn.resolveVisibleReplyDelivery?.(),
-      sessionCtx: turn.sessionCtx,
-      isGenericRunnerFailure: externalReply.isGenericRunnerFailure,
-      cfg: turn.followupRun.run.config,
-    });
-    return await settleFailure({ text });
+        : externalReply.text;
+    return await settleFailure({ text }, externalReply.isGenericRunnerFailure);
   }
   const failoverFacts = resolveReplyFailoverFacts(err, message);
-  const fallbackAttempts = isFailoverError(err) ? err.attempts : undefined;
-  const hasFallbackAttempts = Boolean(fallbackAttempts?.length);
-  const isPureOverloadSummary =
-    hasFallbackAttempts && fallbackAttempts?.every((attempt) => attempt.reason === "overloaded");
+  const failureSummary = resolveReplyFailureSummary({
+    error: err,
+    message,
+    reason: failoverFacts.reason,
+    attempts: isFailoverError(err) ? err.attempts : undefined,
+  });
   const failoverReason = failoverFacts.reason;
-  const isOverloaded = hasFallbackAttempts
-    ? isPureOverloadSummary
-    : failoverReason === "overloaded";
-  const isBilling = hasFallbackAttempts
-    ? fallbackAttempts?.some((attempt) => attempt.reason === "billing")
-    : failoverReason === "billing";
+  const isBilling = failureSummary?.kind === "billing";
   const isContextOverflow =
     !isBilling && (failoverReason === "context_overflow" || isLikelyContextOverflowError(message));
   const isCompactionFailure = !isBilling && isCompactionFailureError(message);
@@ -255,30 +254,8 @@ export async function handleAgentExecutionError(params: {
     });
   }
   defaultRuntime.error(`Embedded agent failed before reply: ${message}`);
-  const isPureTransientSummary = Boolean(
-    hasFallbackAttempts &&
-    fallbackAttempts?.every(
-      (attempt) => attempt.reason === "rate_limit" || attempt.reason === "overloaded",
-    ),
-  );
-  const isRateLimit = hasFallbackAttempts
-    ? isPureTransientSummary
-    : failoverReason === "rate_limit" || failoverReason === "overloaded";
-  const rateLimitOrOverloadedCopy =
-    (!hasFallbackAttempts &&
-      (failoverReason === "rate_limit" || failoverReason === "overloaded")) ||
-    isPureTransientSummary
-      ? renderRateLimitOrOverloadedCopy({
-          reason: isOverloaded ? "overloaded" : "rate_limit",
-          raw: message,
-        })
-      : undefined;
-  const userFacingMessage = message;
   const externalRunFailureCandidate =
-    !isBilling &&
-    !(isRateLimit && !isOverloaded) &&
-    !rateLimitOrOverloadedCopy &&
-    !isContextOverflow
+    !failureSummary && !isContextOverflow
       ? buildExternalRunFailureReply(
           { message, error: err },
           {
@@ -296,43 +273,25 @@ export async function handleAgentExecutionError(params: {
     renderFailoverCodeUserCopy(failoverFacts.code)
       ? externalRunFailureCandidate
       : undefined;
-  const fallbackText = isBilling
-    ? renderBillingReplyCopy({
-        attempts: fallbackAttempts,
-        ...(isFailoverError(err)
-          ? { provider: err.provider, model: err.model, authMode: err.authMode }
-          : {}),
-      })
-    : isRateLimit && !isOverloaded
-      ? renderRateLimitReplyCopy({
-          message,
-          reason: failoverReason,
-          attempts: fallbackAttempts,
-          provider: isFailoverError(err) ? err.provider : undefined,
-          cooldownExpiry: isFailoverError(err) ? err.soonestCooldownExpiry : undefined,
-          sanitizeText: (text) => sanitizeUserFacingText(text, { errorContext: true }),
-        })
-      : rateLimitOrOverloadedCopy
-        ? rateLimitOrOverloadedCopy
-        : isContextOverflow
-          ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
-          : (externalRunFailureReply?.text ??
-            (params.shouldSurfaceToControlUi
-              ? renderControlUiAgentFailureCopy(userFacingMessage)
-              : turn.isHeartbeat
-                ? HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT
-                : GENERIC_EXTERNAL_RUN_FAILURE_TEXT));
-  const userVisibleFallbackText = resolveExternalRunFailureTextForConversation({
-    text: fallbackText,
-    visibleReplyDelivered: await turn.resolveVisibleReplyDelivery?.(),
-    sessionCtx: turn.sessionCtx,
-    isGenericRunnerFailure: externalRunFailureReply?.isGenericRunnerFailure ?? false,
-    cfg: turn.followupRun.run.config,
-  });
-  return await settleFailure({
-    text: userVisibleFallbackText,
-    ...(externalRunFailureReply?.presentation
-      ? { presentation: externalRunFailureReply.presentation }
-      : {}),
-  });
+  const fallbackText =
+    failureSummary?.text ??
+    (isContextOverflow
+      ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
+      : (externalRunFailureReply?.text ??
+        (params.shouldSurfaceToControlUi
+          ? renderControlUiAgentFailureCopy(message)
+          : turn.isHeartbeat
+            ? HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT
+            : GENERIC_EXTERNAL_RUN_FAILURE_TEXT)));
+  return await settleFailure(
+    {
+      text: fallbackText,
+      ...(externalRunFailureReply?.presentation
+        ? { presentation: externalRunFailureReply.presentation }
+        : {}),
+    },
+    !failureSummary &&
+      !isContextOverflow &&
+      (externalRunFailureCandidate?.isGenericRunnerFailure ?? !turn.isHeartbeat),
+  );
 }

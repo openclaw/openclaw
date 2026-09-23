@@ -27,6 +27,17 @@ export type TaskRuntime = (typeof TASK_RUNTIMES)[number];
 export type TaskStatus = (typeof TASK_STATUSES)[number];
 export type TaskStatusFilter = (typeof TASK_STATUS_FILTERS)[number];
 
+/** Returns whether a task status is terminal for delivery and retention policy. */
+export function isTerminalTaskStatus(status: TaskStatus): boolean {
+  return (
+    status === "succeeded" ||
+    status === "failed" ||
+    status === "timed_out" ||
+    status === "cancelled" ||
+    status === "lost"
+  );
+}
+
 export type TaskDeliveryStatus =
   | "pending"
   | "delivered"
@@ -133,6 +144,21 @@ export type TaskDeliveryState = {
   lastNotifiedEventAt?: number;
 };
 
+export type TaskExecutionOwner = {
+  host: string;
+  pid: number;
+  startIdentity: number;
+};
+
+/** A persisted identity narrows a retained owner's operation; it never grants authority. */
+export type TaskPersistenceReceipt = Readonly<
+  Pick<TaskRecord, "taskId" | "runtime" | "ownerKey" | "scopeKind" | "createdAt"> & {
+    runId: string;
+    childSessionKey?: string;
+    taskKind?: string;
+  }
+>;
+
 export type TaskRecord = {
   taskId: string;
   runtime: TaskRuntime;
@@ -149,6 +175,7 @@ export type TaskRecord = {
    * Task authorization remains keyed by ownerKey. */
   requesterAgentId?: string;
   runId?: string;
+  executionOwner?: TaskExecutionOwner;
   label?: string;
   task: string;
   status: TaskStatus;

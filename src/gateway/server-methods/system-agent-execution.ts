@@ -2,10 +2,6 @@ import {
   getRuntimeConfigAppliedHash,
   hashRuntimeConfigValue,
 } from "../../config/runtime-snapshot.js";
-import type {
-  createRuntimeConfigWriteApplication,
-  RuntimeConfigWriteApplicationStatus,
-} from "../../config/runtime-write-application.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { enqueueCommandInLane, setCommandLaneConcurrency } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
@@ -34,6 +30,7 @@ export async function runSystemAgentGatewayTask<T>(task: () => Promise<T>): Prom
 
 export async function verifyGatewaySetupInference(params: {
   agentId?: string;
+  modelTarget?: "utility";
   runtime: RuntimeEnv;
   context: Pick<GatewayRequestContext, "getRuntimeConfig" | "isConfigReloadSettled">;
 }): Promise<VerifySetupInferenceResult> {
@@ -73,45 +70,31 @@ export async function verifyGatewaySetupInference(params: {
   }
   const verification = await verifySetupInference({
     runtime: params.runtime,
+    ...(params.modelTarget ? { modelTarget: params.modelTarget } : {}),
     ...(params.agentId ? { agentId: params.agentId } : {}),
   });
   return (await isApplied()) ? verification : unavailable;
 }
 
 export async function activateGatewaySetupInference(
-  params: Omit<ActivateSetupInferenceParams, "onRuntimeApplication">,
+  params: Omit<ActivateSetupInferenceParams, "onActivationCompletion">,
 ): Promise<ActivateSetupInferenceResult> {
-  let application: ReturnType<typeof createRuntimeConfigWriteApplication> | undefined;
-  let applied: RuntimeConfigWriteApplicationStatus | undefined;
+  let complete: (() => Promise<boolean>) | undefined;
+  let restartRequired: boolean | undefined;
   let result: ActivateSetupInferenceResult;
   try {
     result = await runSystemAgentGatewayTask(async () => {
       const { activateSetupInference } = await import("../../system-agent/setup-inference.js");
       return activateSetupInference({
         ...params,
-        onRuntimeApplication: (receipt) => {
-          application = receipt;
+        onActivationCompletion: (completion) => {
+          complete = completion;
         },
       });
     });
   } finally {
-    // Release setup's queue and command lane before waiting: reload drains those lanes.
-    // The admitted RPC (or retained wizard) keeps its root alive through publication.
-    if (application) {
-      applied = application.claimed ? await application.result : "unclaimed";
-    }
+    // Reload drains setup's queue. Keep the admitted request through application and recovery.
+    restartRequired = await complete?.();
   }
-  if (!result.ok || applied === undefined || applied === "applied") {
-    return result;
-  }
-  if (applied === "applied-restart-required" || applied === "restart-pending") {
-    return { ...result, gatewayRestartRequired: true };
-  }
-  const error =
-    applied === "superseded"
-      ? "AI access was saved, but newer settings replaced it before activation finished. Review Model Setup and try again."
-      : "AI access was saved, but the Gateway could not apply it. Restart the Gateway before chatting.";
-  // Structured probe rejections permit automatic setup to try another candidate.
-  // A saved choice must stop that fallback when its application is incomplete.
-  throw new Error(error);
+  return result.ok && restartRequired ? { ...result, gatewayRestartRequired: true } : result;
 }

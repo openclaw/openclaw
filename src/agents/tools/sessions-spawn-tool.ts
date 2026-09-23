@@ -5,15 +5,17 @@
  */
 import { Type } from "typebox";
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
-import {
-  resolveThreadBindingSpawnPolicy,
-  supportsAutomaticThreadBindingSpawn,
-} from "../../channels/thread-bindings-policy.js";
+import { supportsThreadBindingSpawn } from "../../channels/conversation-resolution.js";
+import { resolveThreadBindingSpawnPolicy } from "../../channels/thread-bindings-policy.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSnakeCaseParamKey } from "../../param-key.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import {
+  mergeAcceptedSessionSpawnsForRun,
+  normalizeAcceptedSessionSpawnResult,
+} from "../accepted-session-spawn.js";
 import { captureAgentToolSourceExecutionGuard } from "../agent-tool-source-execution-guard.js";
 import {
   findAcpUnsupportedInheritedToolAllow,
@@ -23,7 +25,6 @@ import {
 } from "../inherited-tool-deny.js";
 import { optionalStringEnum } from "../schema/typebox.js";
 import type { SpawnedToolContext } from "../spawned-context.js";
-import { getSubagentDeliveryBacklogPressure } from "../subagents/registry/subagent-registry.js";
 import { withParentExecutionIdentity } from "../subagents/spawn/execution-identity-spawn-context.js";
 import { resolveAcpSessionsSpawnImageAttachments } from "../subagents/spawn/subagent-attachments.js";
 import {
@@ -107,6 +108,11 @@ function recordAcceptedSessionSpawn(
   result: Record<string, unknown>,
   context: "fork" | "isolated" | undefined,
 ): void {
+  const instance = getGatewayToolCallerIdentity()?.operationalRunInstance;
+  const accepted = normalizeAcceptedSessionSpawnResult({ details: result });
+  if (instance && accepted) {
+    mergeAcceptedSessionSpawnsForRun(instance, [accepted]);
+  }
   const childSessionKey =
     typeof result.childSessionKey === "string" ? result.childSessionKey.trim() : "";
   const targetAgentId = childSessionKey
@@ -139,7 +145,7 @@ function resolveSessionsSpawnThreadAvailability(opts?: {
 }): SessionsSpawnThreadAvailability {
   const channel = opts?.agentChannel;
   const cfg = opts?.config;
-  if (!channel || !cfg || !supportsAutomaticThreadBindingSpawn(channel)) {
+  if (!channel || !cfg || !supportsThreadBindingSpawn(channel)) {
     return { subagent: false, acp: false };
   }
   const resolve = (kind: "subagent" | "acp") => {
@@ -196,7 +202,7 @@ function createSessionsSpawnToolSchema(params: {
     cwd: Type.Optional(
       Type.String({
         description:
-          "Child working directory. Visible paths outside configured agent workspaces require operator.admin. Omitted with worktree=true: inherit the same-agent parent managed repository; otherwise use the target agent workspace.",
+          "Child working directory. Visible paths outside configured agent workspaces require operator.admin. Mutually exclusive with projectId/projectGitUrl. With no source selector and worktree=true: inherit the same-agent parent managed repository; otherwise use the target agent workspace.",
       }),
     ),
     ...(params.threadAvailable
@@ -204,7 +210,7 @@ function createSessionsSpawnToolSchema(params: {
           thread: Type.Optional(
             Type.Boolean({
               description:
-                'Bind new chat thread when supported; true defaults mode="session"; unavailable with visible=true.',
+                'Bind to the current conversation or a new thread, as supported by the channel; true defaults mode="session"; unavailable with visible=true.',
             }),
           ),
         }
@@ -223,6 +229,10 @@ function createSessionsSpawnToolSchema(params: {
           "false: fire-and-forget; requester gets no completion handoff when the child finishes.",
       }),
     ),
+    completionTarget: optionalStringEnum(["parent"] as const, {
+      description:
+        "parent: return results in a private requester turn; no automatic channel delivery. Native hidden run only; unavailable with ACP, collect, visible, thread, session mode, or expectsCompletionMessage=false.",
+    }),
     sandbox: optionalStringEnum(SESSIONS_SPAWN_SANDBOX_MODES, {
       description: '"inherit" parent sandbox policy; "require" fails unless child is sandboxed.',
     }),
@@ -239,7 +249,7 @@ function createSessionsSpawnToolSchema(params: {
           collect: Type.Optional(
             Type.Boolean({
               description:
-                "Swarm collector child for parallel fan-out; no completion notification.",
+                "Swarm collector child for large parallel fan-out, not one or a few children; no completion notification.",
             }),
           ),
           outputSchema: Type.Optional(
@@ -337,22 +347,25 @@ export function createSessionsSpawnTool(
   } & VisibleSessionsSpawnDeps &
     SpawnedToolContext,
 ): AnyAgentTool {
+  const effectiveConfig = opts?.config ?? getRuntimeConfig();
   const acpAvailable = isAcpRuntimeSpawnAvailable({
-    config: opts?.config,
+    config: effectiveConfig,
     sandboxed: opts?.sandboxed,
   });
-  const threadAvailability = resolveSessionsSpawnThreadAvailability(opts);
+  const threadAvailability = resolveSessionsSpawnThreadAvailability({
+    ...opts,
+    config: effectiveConfig,
+  });
   const threadAvailable = hasAnyThreadAvailability(threadAvailability);
   const requesterAgentId =
     opts?.requesterAgentIdOverride ?? parseAgentSessionKey(opts?.agentSessionKey)?.agentId;
-  const swarmConfig = resolveSwarmConfig(opts?.config, requesterAgentId);
-  const visibilityCfg = opts?.config ?? getRuntimeConfig();
+  const swarmConfig = resolveSwarmConfig(effectiveConfig, requesterAgentId);
   const sessionToolsVisibility = resolveEffectiveSessionToolsVisibility({
-    cfg: visibilityCfg,
+    cfg: effectiveConfig,
     sandboxed: opts?.sandboxed === true,
   });
   const { restrictToSpawned } = resolveSandboxedSessionToolContext({
-    cfg: visibilityCfg,
+    cfg: effectiveConfig,
     agentSessionKey: opts?.agentSessionKey,
     requesterAgentId,
     sandboxed: opts?.sandboxed,
@@ -380,11 +393,11 @@ export function createSessionsSpawnTool(
     parameters,
     execute: async (_toolCallId, args, signal) =>
       withToolEffectBoundary(async (onSpawnEffectsStart) => {
-        const assertSourceActive = captureAgentToolSourceExecutionGuard(
+        const executionSignal =
           signal && opts?.signal
             ? AbortSignal.any([signal, opts.signal])
-            : (signal ?? opts?.signal),
-        );
+            : (signal ?? opts?.signal);
+        const assertSourceActive = captureAgentToolSourceExecutionGuard(executionSignal);
         const params = args as Record<PropertyKey, unknown>;
         if (opts?.swarmCollector && params.collect !== true) {
           throw new ToolInputError(
@@ -445,6 +458,15 @@ export function createSessionsSpawnTool(
         const taskName = taskNameResult.taskName;
         const label = readToolStringParam(params, "label") ?? "";
         const runtime = params.runtime === "acp" ? "acp" : "subagent";
+        const completionTarget = params.completionTarget;
+        if (completionTarget !== undefined && completionTarget !== "parent") {
+          throw new ToolInputError('sessions_spawn completionTarget must be "parent" or omitted.');
+        }
+        if (completionTarget === "parent" && (runtime === "acp" || params.visible === true)) {
+          throw new ToolInputError(
+            'sessions_spawn completionTarget="parent" requires a hidden native subagent run.',
+          );
+        }
         if (collect && runtime === "acp") {
           throw new ToolInputError('sessions_spawn collect=true supports runtime="subagent" only.');
         }
@@ -465,14 +487,6 @@ export function createSessionsSpawnTool(
         const streamTo = runtime === "acp" && params.streamTo === "parent" ? "parent" : undefined;
         const lightContext = params.lightContext === true;
         const roleContext = requestedAgentId ? { role: requestedAgentId } : {};
-        const deliveryPressure = getSubagentDeliveryBacklogPressure();
-        if (deliveryPressure.blocked) {
-          return jsonResult({
-            status: "forbidden",
-            error: `sessions_spawn is paused because ${deliveryPressure.suspended} completed tasks have blocked delivery. Run openclaw tasks list, then retry or dismiss blocked deliveries.`,
-            ...roleContext,
-          });
-        }
         const expectedParentSessionKey = opts?.agentSessionKey?.trim();
         if (opts?.expectedParentSessionId && !expectedParentSessionKey) {
           throw new Error("Exact parent session access requires a session key");
@@ -488,11 +502,16 @@ export function createSessionsSpawnTool(
             runTimeoutSeconds,
             sandbox,
             expectsCompletionMessage,
-            options: { ...opts, onSpawnEffectsStart },
+            options: {
+              ...opts,
+              onSpawnEffectsStart,
+              assertActive,
+              signal: executionSignal,
+            },
           });
         const visibleResult = opts?.expectedParentSessionId
           ? await runWithScopedSessionAccess({
-              cfg: visibilityCfg,
+              cfg: effectiveConfig,
               expectedSessionId: opts.expectedParentSessionId,
               ...(opts.signal ? { signal: opts.signal } : {}),
               targetSessionKey: expectedParentSessionKey!,
@@ -508,7 +527,10 @@ export function createSessionsSpawnTool(
         if (runtime === "acp" && !acpAvailable) {
           return jsonResult({
             status: "error",
-            error: resolveAcpUnavailableMessage(opts),
+            error: resolveAcpUnavailableMessage({
+              config: effectiveConfig,
+              sandboxed: opts?.sandboxed,
+            }),
             ...roleContext,
           });
         }
@@ -647,6 +669,7 @@ export function createSessionsSpawnTool(
             context,
             lightContext,
             expectsCompletionMessage,
+            completionTarget,
             attachments,
             attachMountPath:
               params.attachAs && typeof params.attachAs === "object"
@@ -658,6 +681,7 @@ export function createSessionsSpawnTool(
               agentSessionKey: opts?.agentSessionKey,
               requesterTurnRunId: opts?.requesterTurnRunId,
               requesterThinkingLevel: opts?.requesterThinkingLevel,
+              requesterModel: opts?.requesterModel,
               completionOwnerKey: opts?.completionOwnerKey,
               agentChannel: opts?.agentChannel,
               agentAccountId: opts?.agentAccountId,
@@ -676,6 +700,7 @@ export function createSessionsSpawnTool(
               inheritedToolAllowlist: opts?.inheritedToolAllowlist,
               inheritedToolDenylist: opts?.inheritedToolDenylist,
               requesterRunId: opts?.requesterRunId,
+              sandboxed: opts?.sandboxed,
               assertActive,
               onSpawnEffectsStart,
             },

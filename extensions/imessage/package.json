@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/imessage",
-  "version": "2026.9.1",
+  "version": "2026.9.5",
   "description": "OpenClaw iMessage channel plugin using imsg on a signed-in Mac",
   "repository": {
     "type": "git",
@@ -8,15 +8,15 @@
   },
   "type": "module",
   "dependencies": {
-    "typebox": "1.3.18",
-    "zod": "4.4.3"
+    "typebox": "1.3.30",
+    "zod": "4.6.5"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.9.1"
+    "openclaw": ">=2026.9.5"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -96,11 +96,14 @@
       "allowInvalidConfigRecovery": true
     },
     "compat": {
-      "pluginApi": ">=2026.9.1"
+      "pluginApi": ">=2026.9.5"
     },
     "build": {
-      "openclawVersion": "2026.9.1",
-      "bundledDist": false
+      "openclawVersion": "2026.9.5",
+      "bundledDist": false,
+      "workerEntries": [
+        "./src/chat-db.worker.ts"
+      ]
     },
     "release": {
       "publishToClawHub": true,

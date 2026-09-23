@@ -1,6 +1,7 @@
 // Input provenance helpers normalize source metadata for session messages.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
+import type { RuntimeContextFragment } from "../agents/internal-runtime-context.js";
 import { isStringOption } from "../utils/string-readers.js";
 
 // Input provenance marks whether a user-role message actually came from an
@@ -15,9 +16,37 @@ export type InputProvenance = {
   sourceSessionKey?: string;
   sourceChannel?: string;
   sourceTool?: string;
+  sourceRole?: "subagent";
+  sourcePromptPrefix?: string;
+  jobId?: string;
+  runId?: string;
 };
 
 export const MAIN_SESSION_RESTART_RECOVERY_SOURCE_TOOL = "main_session_restart_recovery" as const;
+
+export const PROGRESS_CARD_REFRESH_SOURCE_TOOL = "progress_card_refresh" as const;
+
+/** The card is the only visible result of this Gateway-authored status request. */
+export function isProgressCardRefreshInputProvenance(
+  provenance: InputProvenance | undefined,
+): boolean {
+  return (
+    provenance?.kind === "internal_system" &&
+    provenance.sourceTool === PROGRESS_CARD_REFRESH_SOURCE_TOOL
+  );
+}
+
+/** Shared projection policy for the refresh run, never for its active steering target. */
+export function progressCardRefreshRunProjection(provenance: InputProvenance | undefined) {
+  return isProgressCardRefreshInputProvenance(provenance)
+    ? {
+        isControlUiVisible: false,
+        projectSessionMessages: false,
+        projectSessionActive: false,
+        projectSessionLifecycle: false,
+      }
+    : undefined;
+}
 
 // Internal completion provenance is distinct from the webchat routing sentinel.
 // Reusing that sentinel here makes internal work look like browser input.
@@ -45,21 +74,34 @@ export function normalizeInputProvenance(value: unknown): InputProvenance | unde
   if (!isInputProvenanceKind(record.kind)) {
     return undefined;
   }
-  return {
-    kind: record.kind,
-    originSessionId: normalizeOptionalString(record.originSessionId),
-    sourceSessionKey: normalizeOptionalString(record.sourceSessionKey),
-    sourceChannel: normalizeOptionalString(record.sourceChannel),
-    sourceTool: normalizeOptionalString(record.sourceTool),
-  };
+  const provenance: InputProvenance = { kind: record.kind };
+  if (record.sourceRole === "subagent") {
+    provenance.sourceRole = "subagent";
+  }
+  // Admission snapshots must match their persisted JSON without undefined properties.
+  for (const key of [
+    "originSessionId",
+    "sourceSessionKey",
+    "sourceChannel",
+    "sourceTool",
+    "sourcePromptPrefix",
+    "jobId",
+    "runId",
+  ] as const) {
+    const normalized = normalizeOptionalString(record[key]);
+    if (normalized) {
+      provenance[key] = normalized;
+    }
+  }
+  return provenance;
 }
 
 // Only attach provenance to user messages that do not already carry it. Existing
 // provenance is preserved because upstream channel/runtime code owns that fact.
-export function applyInputProvenanceToUserMessage(
-  message: AgentMessage,
+export function applyInputProvenanceToUserMessage<T extends AgentMessage>(
+  message: T,
   inputProvenance: InputProvenance | undefined,
-): AgentMessage {
+): T {
   if (!inputProvenance) {
     return message;
   }
@@ -77,6 +119,17 @@ export function applyInputProvenanceToUserMessage(
 
 export function isInterSessionInputProvenance(value: unknown): boolean {
   return normalizeInputProvenance(value)?.kind === "inter_session";
+}
+
+/** Child coordination stays available to the model without becoming a chat reply. */
+export function isSubagentCoordinationInputProvenance(
+  provenance: InputProvenance | undefined,
+): boolean {
+  return (
+    provenance?.kind === "inter_session" &&
+    normalizeOptionalString(provenance.sourceTool) === "sessions_send" &&
+    provenance.sourceRole === "subagent"
+  );
 }
 
 export function isMainSessionRestartRecoveryInputProvenance(value: unknown): boolean {
@@ -103,18 +156,26 @@ export function isCompletionReportInputProvenance(value: unknown): boolean {
     return false;
   }
   const sourceTool = normalizeOptionalString(provenance.sourceTool)?.toLowerCase();
-  return sourceTool === "subagent_announce" || isAgentMediatedCompletionSourceTool(sourceTool);
+  return (
+    sourceTool === "subagent_announce" ||
+    sourceTool === "subagent_settle" ||
+    isAgentMediatedCompletionSourceTool(sourceTool)
+  );
 }
 
 const USER_FACING_SESSION_STATE_PRESERVING_SOURCE_TOOLS: ReadonlySet<string> = new Set([
   ...AGENT_MEDIATED_COMPLETION_SOURCE_TOOLS,
   "exec_approval_followup",
   "subagent_announce",
+  "subagent_settle",
   "subagent_interrupted_resume",
 ]);
 
 export function shouldPreserveUserFacingSessionStateForInputProvenance(value: unknown): boolean {
   const provenance = normalizeInputProvenance(value);
+  if (isProgressCardRefreshInputProvenance(provenance)) {
+    return true;
+  }
   if (provenance?.kind !== "inter_session") {
     return false;
   }
@@ -134,7 +195,7 @@ export function hasInterSessionUserProvenance(
 // Prefix text is model-facing safety context for inter-session handoffs. It
 // states source metadata and explicitly prevents treating the payload as direct
 // end-user instruction.
-function buildInterSessionPromptPrefix(inputProvenance: InputProvenance | undefined): string {
+export function buildInterSessionPromptContext(inputProvenance: InputProvenance | undefined) {
   const provenance = inputProvenance?.kind === "inter_session" ? inputProvenance : undefined;
   const details = [
     provenance?.sourceSessionKey ? `sourceSession=${provenance.sourceSessionKey}` : undefined,
@@ -142,38 +203,30 @@ function buildInterSessionPromptPrefix(inputProvenance: InputProvenance | undefi
     provenance?.sourceTool ? `sourceTool=${provenance.sourceTool}` : undefined,
     "isUser=false",
   ].filter(Boolean);
-  const header =
-    details.length > 0
-      ? `${INTER_SESSION_PROMPT_PREFIX_BASE} ${details.join(" ")}`
-      : INTER_SESSION_PROMPT_PREFIX_BASE;
-  return [header, INTER_SESSION_PROMPT_EXPLANATION].join("\n");
+  const header = `${INTER_SESSION_PROMPT_PREFIX_BASE} ${details.join(" ")}`;
+  return {
+    text: [header, INTER_SESSION_PROMPT_EXPLANATION].join("\n"),
+    fragments: [
+      { kind: "conversation-data", text: header },
+      { kind: "runtime-instruction", text: INTER_SESSION_PROMPT_EXPLANATION },
+    ] satisfies RuntimeContextFragment[],
+  };
 }
 
-function removeFirstInterSessionPromptPrefix(text: string): string {
+export function stripInterSessionPromptPrefixForDisplay(text: string): string {
   const index = text.indexOf(INTER_SESSION_PROMPT_PREFIX_BASE);
   if (index === -1) {
     return text;
   }
   const headerEnd = text.indexOf("\n", index);
-  if (headerEnd === -1) {
-    return [
-      text.slice(0, index).trimEnd(),
-      text.slice(index + INTER_SESSION_PROMPT_PREFIX_BASE.length).trimStart(),
-    ]
-      .filter(Boolean)
-      .join("\n");
+  const bodyStart =
+    headerEnd === -1 ? index + INTER_SESSION_PROMPT_PREFIX_BASE.length : headerEnd + 1;
+  let body = text.slice(bodyStart);
+  if (headerEnd !== -1 && body.startsWith(INTER_SESSION_PROMPT_EXPLANATION)) {
+    // Only the generated explanation owns a following separator newline.
+    body = body.slice(INTER_SESSION_PROMPT_EXPLANATION.length).replace(/^\r?\n/u, "");
   }
-  const explanationStart = headerEnd + 1;
-  const explanationEnd = text.startsWith(INTER_SESSION_PROMPT_EXPLANATION, explanationStart)
-    ? explanationStart + INTER_SESSION_PROMPT_EXPLANATION.length
-    : explanationStart;
-  return [text.slice(0, index).trimEnd(), text.slice(explanationEnd).trimStart()]
-    .filter(Boolean)
-    .join("\n");
-}
-
-export function stripInterSessionPromptPrefixForDisplay(text: string): string {
-  return removeFirstInterSessionPromptPrefix(text);
+  return [text.slice(0, index).trimEnd(), body].filter(Boolean).join("\n");
 }
 
 // Idempotently moves the generated provenance envelope to the top of prompt
@@ -188,10 +241,10 @@ export function annotateInterSessionPromptText(
   if (!text.trim()) {
     return text;
   }
-  const prefix = buildInterSessionPromptPrefix(inputProvenance);
+  const prefix = buildInterSessionPromptContext(inputProvenance).text;
   if (text === prefix || text.startsWith(`${prefix}\n`)) {
     return text;
   }
-  const body = removeFirstInterSessionPromptPrefix(text);
+  const body = stripInterSessionPromptPrefixForDisplay(text);
   return `${prefix}\n${body}`;
 }

@@ -1,8 +1,9 @@
 // Install Ps1 tests cover install ps1 script behavior.
 import { spawn, spawnSync } from "node:child_process";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import http from "node:http";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, parse } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import { isSupportedOpenClawNodeVersion } from "../../node-version.mjs";
 import { NODE_RELEASE_VERSION_CASES } from "../helpers/node-version-cases.js";
@@ -20,13 +21,29 @@ function extractEntrypointLines(source: string): string[] {
 }
 
 function extractFunctionBody(source: string, name: string): string {
-  const match = source.match(
-    new RegExp(`^function ${name} \\{\\r?\\n([\\s\\S]*?)^\\}\\r?\\n`, "m"),
-  );
-  if (match?.[1] === undefined) {
+  const lines = source.split(/\r?\n/u);
+  const start = lines.indexOf(`function ${name} {`);
+  if (start < 0) {
     throw new Error(`Missing PowerShell function body ${name}`);
   }
-  return match[1];
+  const body: string[] = [];
+  let hereStringEnd: string | undefined;
+  for (const line of lines.slice(start + 1)) {
+    if (hereStringEnd) {
+      if (line.startsWith(hereStringEnd)) {
+        hereStringEnd = undefined;
+      }
+    } else if (line === "}") {
+      return `${body.join("\n")}\n`;
+    } else {
+      const hereStringStart = /(?:^|[\s=])@(['"])\s*$/u.exec(line);
+      if (hereStringStart) {
+        hereStringEnd = `${hereStringStart[1]}@`;
+      }
+    }
+    body.push(line);
+  }
+  throw new Error(`Missing PowerShell function body ${name}`);
 }
 
 function findPowerShell(candidates = ["pwsh", "powershell"]): string | undefined {
@@ -149,6 +166,95 @@ describe("install.ps1 failure handling", () => {
     const scriptWithoutEntryPoint = source.replace(ENTRYPOINT_RE, "");
     const entrypointLines = extractEntrypointLines(source);
     const cases = [
+      {
+        name: "private-node-update",
+        source: [
+          scriptWithoutEntryPoint,
+          String.raw`
+$root = Join-Path $script:InstallerTempDirectory ('openclaw-private-node-test-' + [guid]::NewGuid().ToString('N'))
+$NodeOnly = $true
+$NodePrefix = Join-Path $root 'private tools/node'
+$originalTemp = $script:InstallerTempDirectory
+$beforePath = $env:PATH
+$beforeUserPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+$beforeMachinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+$script:InstallerTempDirectory = Join-Path $root 'temp'
+$script:Scenario = ''
+$script:Extractions = 0
+function Check-ExistingOpenClaw { throw 'unexpected OpenClaw lookup' }
+function Install-Node { throw 'unexpected package-manager install' }
+function Install-OpenClaw { throw 'unexpected OpenClaw install' }
+function Ensure-OpenClawOnPath { throw 'unexpected OpenClaw PATH update' }
+function Add-ToProcessPath { throw 'unexpected process PATH update' }
+function Add-ToUserPath { throw 'unexpected user PATH update' }
+function Refresh-GatewayServiceIfLoaded { throw 'unexpected Gateway update' }
+function Invoke-NpmCommand { throw 'unexpected npm invocation' }
+function Invoke-RestMethod {
+    param([string]$Uri, [int]$TimeoutSec)
+    if ($Uri -ne 'https://nodejs.org/dist/index.json') { throw "unexpected metadata URL: $Uri" }
+    return @([pscustomobject]@{ version = 'v26.1.0'; files = @('win-x64-zip', 'win-arm64-zip') })
+}
+function Save-InstallerDownload {
+    param([string]$Uri, [string]$OutFile)
+    if ($script:Scenario -eq 'download') { throw 'fixture download failure' }
+    if ($Uri -eq 'https://nodejs.org/dist/v26.1.0/SHASUMS256.txt') {
+        $archive = Get-ChildItem -LiteralPath (Split-Path -Parent $OutFile) -Filter '*.zip' | Select-Object -First 1
+        $hash = (Get-FileHash -LiteralPath $archive.FullName -Algorithm SHA256).Hash
+        if ($script:Scenario -eq 'checksum') { $hash = '0' * 64 }
+        $name = if ($script:Scenario -eq 'missing-checksum') { 'another-node.zip' } else { $archive.Name }
+        [IO.File]::WriteAllText($OutFile, "$hash  $name")
+        return
+    }
+    if ($Uri -notmatch '^https://nodejs\.org/dist/v26\.1\.0/node-v26\.1\.0-win-(x64|arm64)\.zip$') { throw "unexpected archive URL: $Uri" }
+    [IO.File]::WriteAllText($OutFile, 'downloaded archive bytes')
+}
+function Expand-PortableNodeArchive {
+    param([string]$ZipPath, [string]$DestinationPath)
+    $script:Extractions++
+    New-Item -ItemType Directory -Path $DestinationPath | Out-Null
+    [IO.File]::WriteAllText((Join-Path $DestinationPath 'node.exe'), 'new node')
+    [IO.File]::WriteAllText((Join-Path $DestinationPath 'npm.cmd'), 'matching npm')
+    [IO.File]::WriteAllText((Join-Path $DestinationPath 'npx.cmd'), 'matching npx')
+    if ($script:Scenario -eq 'archive') { throw 'fixture extraction failure' }
+}
+function Check-Node {
+    param([string]$NodePath)
+    if (-not $NodePath -or -not (Test-Path -LiteralPath $NodePath -PathType Leaf)) { throw 'runtime was not checked by its explicit path' }
+    if ([IO.File]::ReadAllText($NodePath) -ne 'new node') { throw 'the downloaded runtime was not checked' }
+    return ($script:Scenario -ne 'runtime')
+}
+try {
+    New-Item -ItemType Directory -Force -Path $script:InstallerTempDirectory, $NodePrefix | Out-Null
+    foreach ($scenario in @('download', 'checksum', 'missing-checksum', 'archive', 'runtime', 'success', 'fresh')) {
+        $script:Scenario = $scenario
+        $script:Extractions = 0
+        $script:InstallExitCode = 0
+        [IO.File]::WriteAllText((Join-Path $NodePrefix 'node.exe'), 'previous node')
+        if ($scenario -eq 'fresh') { Remove-Item -LiteralPath $NodePrefix -Recurse -Force }
+        $output = @(Main *>&1 | ForEach-Object { $_.ToString() })
+        $success = $scenario -in @('success', 'fresh')
+        if (($script:InstallExitCode -eq 0) -ne $success) { throw "incorrect result for $($scenario): $output" }
+        $expectedExtractions = if ($scenario -in @('download', 'checksum', 'missing-checksum')) { 0 } else { 1 }
+        if ($script:Extractions -ne $expectedExtractions) { throw "extraction boundary violated for $scenario" }
+        $expectedNode = if ($success) { 'new node' } else { 'previous node' }
+        if ([IO.File]::ReadAllText((Join-Path $NodePrefix 'node.exe')) -ne $expectedNode) { throw "previous runtime not preserved for $scenario" }
+        if ($success) {
+            if ([IO.File]::ReadAllText((Join-Path $NodePrefix 'npm.cmd')) -ne 'matching npm') { throw 'matching npm missing' }
+            if ([IO.File]::ReadAllText((Join-Path $NodePrefix 'npx.cmd')) -ne 'matching npx') { throw 'matching npx missing' }
+        }
+        if (@(Get-ChildItem -LiteralPath $script:InstallerTempDirectory -Force).Count -ne 0) { throw 'download temporary files remain' }
+        if (@(Get-ChildItem -LiteralPath (Split-Path -Parent $NodePrefix) -Force).Count -ne 1) { throw 'publication temporary directories remain' }
+        if ($env:PATH -cne $beforePath) { throw 'process PATH changed' }
+        if ([Environment]::GetEnvironmentVariable('Path', 'User') -cne $beforeUserPath) { throw 'user PATH changed' }
+        if ([Environment]::GetEnvironmentVariable('Path', 'Machine') -cne $beforeMachinePath) { throw 'machine PATH changed' }
+    }
+} finally {
+    $script:InstallerTempDirectory = $originalTemp
+    Remove-Item -LiteralPath $root -Recurse -Force
+}
+`,
+        ].join("\n"),
+      },
       {
         name: "native-npm-stderr",
         source: [
@@ -400,6 +506,32 @@ try {
         ].join("\n"),
       },
       {
+        name: "node-capabilities",
+        source: [
+          scriptWithoutEntryPoint,
+          "function Get-Command { [pscustomobject]@{ Source = 'Invoke-FixtureNode' } }",
+          "function Invoke-FixtureNode {",
+          "  $global:LASTEXITCODE = 0",
+          "  if ($args[0] -eq '-v') { return $script:FixtureVersion }",
+          "  $input | Out-Null",
+          "  return $script:FixtureSqlite",
+          "}",
+          "foreach ($case in @(",
+          "  @{ version = 'v24.19.0'; text = $true; expected = $true },",
+          "  @{ version = 'v24.19.0'; text = $false; expected = $false },",
+          "  @{ version = 'v24.15.0+vendor.1'; text = $true; expected = $false },",
+          "  @{ version = 'v26.0.0+vendor.1'; text = $true; expected = $false },",
+          "  @{ version = 'v24.15.0'; text = $false; expected = $false },",
+          "  @{ version = 'v22.23.2'; text = $true; expected = $false }",
+          ")) {",
+          "  $script:FixtureVersion = $case.version",
+          "  $script:FixtureSqlite = @{ available = $true; version = '3.51.3'; text = $case.text; blob = $true; json = $true } | ConvertTo-Json -Compress",
+          "  $actual = Check-Node",
+          '  if ($actual -ne $case.expected) { throw "Version=$($case.version) Text=$($case.text) Actual=$actual" }',
+          "}",
+        ].join("\n"),
+      },
+      {
         name: "same-prefix-shim-transaction",
         source: [
           scriptWithoutEntryPoint,
@@ -490,10 +622,8 @@ try {
           "  function Resolve-PortableGitDownload { return @{ Tag = 'test'; Name = 'MinGit.zip'; Url = 'https://example.test/MinGit.zip' } }",
           "  function Ensure-PortableGitOnUserPath { }",
           "  function Use-PortableGitIfPresent { return (Test-Path -LiteralPath (Join-Path $portableRoot 'cmd/git.exe')) }",
-          "  $script:usedBasicParsing = $false",
-          "  function Invoke-WebRequest {",
-          "    param($Uri, $OutFile, [switch]$UseBasicParsing)",
-          "    $script:usedBasicParsing = $UseBasicParsing.IsPresent",
+          "  function Save-InstallerDownload {",
+          "    param($Uri, $OutFile)",
           "    New-Item -ItemType File -Force -Path $OutFile | Out-Null",
           "  }",
           "  function Expand-Archive {",
@@ -504,7 +634,6 @@ try {
           "    New-Item -ItemType File -Force -Path (Join-Path $DestinationPath 'etc/gitconfig') | Out-Null",
           "  }",
           "  Install-PortableGit",
-          "  if (-not $script:usedBasicParsing) { throw 'MinGit download must use basic parsing' }",
           "  if (-not (Test-Path -LiteralPath (Join-Path $portableRoot 'cmd/git.exe'))) { throw 'missing cmd/git.exe' }",
           "  if (-not (Test-Path -LiteralPath (Join-Path $portableRoot 'etc/gitconfig'))) { throw 'missing etc/gitconfig' }",
           "  if (@(Get-ChildItem -LiteralPath $sandbox -Filter 'openclaw-portable-git-*').Count -ne 0) { throw 'temporary Git files remain' }",
@@ -519,6 +648,13 @@ try {
         source: [
           scriptWithoutEntryPoint,
           "",
+          "function private-node-fixture {",
+          "  $global:LASTEXITCODE = 0",
+          "  if ($args[0] -eq '-v') { return 'v26.1.0' }",
+          "  $input | Out-Null",
+          "  return (@{ available = $true; version = $script:FixtureSqliteVersion; text = $true; blob = $true; json = $true } | ConvertTo-Json -Compress)",
+          "}",
+          "function Get-Command { throw 'unexpected ambient runtime lookup' }",
           "$cases = @{",
           "  '3.44.5' = $false",
           "  '3.44.6' = $true",
@@ -533,6 +669,9 @@ try {
           "foreach ($entry in $cases.GetEnumerator()) {",
           "  $actual = Test-NodeSqliteSupported -Version $entry.Key",
           '  if ($actual -ne $entry.Value) { throw "Version=$($entry.Key) Actual=$actual" }',
+          "  $script:FixtureSqliteVersion = $entry.Key",
+          "  $actual = Check-Node -NodePath 'private-node-fixture'",
+          '  if ($actual -ne $entry.Value) { throw "Explicit runtime SQLite=$($entry.Key) Actual=$actual" }',
           "}",
           "",
         ].join("\n"),
@@ -546,7 +685,7 @@ try {
           "$env:PROCESSOR_ARCHITECTURE = 'ARM64'",
           "function Invoke-RestMethod {",
           "  param([string]$Uri, [object]$Headers, [int]$TimeoutSec)",
-          '  if ($TimeoutSec -ne 30) { throw "TimeoutSec=$TimeoutSec" }',
+          '  if ($TimeoutSec -ne 300) { throw "TimeoutSec=$TimeoutSec" }',
           "  [pscustomobject]@{",
           "    tag_name = 'v2.54.0.windows.1'",
           "    assets = @(",
@@ -578,7 +717,7 @@ try {
           "}",
           "function Invoke-RestMethod {",
           "  param([string]$Uri, [object]$Headers, [int]$OperationTimeoutSeconds)",
-          '  if ($OperationTimeoutSeconds -ne 30) { throw "OperationTimeoutSeconds=$OperationTimeoutSeconds" }',
+          '  if ($OperationTimeoutSeconds -ne 300) { throw "OperationTimeoutSeconds=$OperationTimeoutSeconds" }',
           "  if ($Uri -eq 'https://nodejs.org/dist/index.json') {",
           "    return @(",
           "      [pscustomobject]@{ version = 'v26.5.0'; files = @('win-arm64-zip', 'win-x64-zip') },",
@@ -595,6 +734,8 @@ try {
           "}",
           "$nodeDownload = Resolve-PortableNodeDownload",
           "if ($nodeDownload.Name -ne 'node-v26.5.0-win-arm64.zip') { throw \"NodeName=$($nodeDownload.Name)\" }",
+          "$exactNode = Resolve-PortableNodeDownload -Version 24.17.0",
+          "if ($exactNode.Name -ne 'node-v24.17.0-win-arm64.zip') { throw \"ExactNode=$($exactNode.Name)\" }",
           "$gitDownload = Resolve-PortableGitDownload",
           "if ($gitDownload.Name -ne 'MinGit-2.54.0-arm64.zip') { throw \"GitName=$($gitDownload.Name)\" }",
           "",
@@ -620,9 +761,13 @@ try {
       },
       {
         name: "winget-node-delayed-path",
+        // Refresh-ProcessPath reads machine PATH, which may already contain the real Node install.
         source: [
           scriptWithoutEntryPoint,
           "",
+          "$env:ProgramW6432 = 'C:\\openclaw-winget-test-' + [guid]::NewGuid().ToString('N')",
+          '$env:ProgramFiles = "$env:ProgramW6432 (x86)"',
+          '$script:wingetNodeDir = "$env:ProgramW6432\\nodejs"',
           "function Get-Command {",
           "  [CmdletBinding()]",
           "  param([string]$Name)",
@@ -635,22 +780,20 @@ try {
           "}",
           "function Test-Path {",
           "  param([string]$Path)",
-          "  return ($Path -eq 'C:\\Program Files\\nodejs\\node.exe')",
+          '  return ($Path -eq "$script:wingetNodeDir\\node.exe")',
           "}",
           "filter Out-Host { }",
-          "$env:ProgramW6432 = 'C:\\Program Files'",
-          "$env:ProgramFiles = 'C:\\Program Files (x86)'",
           "$env:Path = 'C:\\Windows\\System32'",
           "function winget {",
           "  $global:LASTEXITCODE = 0",
           "  Write-Output 'winget output'",
           "}",
           "function Check-Node {",
-          "  return (($env:Path -split ';') -contains 'C:\\Program Files\\nodejs')",
+          "  return (($env:Path -split ';') -contains $script:wingetNodeDir)",
           "}",
           "$result = @(Install-Node)",
           'if ($result.Count -ne 1 -or $result[0] -ne $true) { throw "Install-Node returned $result" }',
-          "if (($env:Path -split ';')[0] -ne 'C:\\Program Files\\nodejs') { throw \"Path=$env:Path\" }",
+          "if (($env:Path -split ';')[0] -ne $script:wingetNodeDir) { throw \"Path=$env:Path\" }",
           "",
         ].join("\n"),
       },
@@ -725,10 +868,136 @@ try {
           "  $global:LASTEXITCODE = 0",
           "  Write-Output 'Chocolatey output'",
           "}",
-          "function Check-Node { return $false }",
+          "$script:portableCalled = $false",
+          "function Install-PortableNode { $script:portableCalled = $true }",
+          "function Check-Node { return $script:portableCalled }",
           "$result = @(Install-Node)",
-          'if ($result.Count -ne 1 -or $result[0] -ne $false) { throw "Install-Node returned $result" }',
+          'if ($result.Count -ne 1 -or $result[0] -ne $true) { throw "Install-Node returned $result" }',
+          "if (-not $script:portableCalled) { throw 'Portable Node fallback was not attempted' }",
           "",
+        ].join("\n"),
+      },
+      {
+        name: "package-manager-node-command-failures",
+        source: [
+          scriptWithoutEntryPoint,
+          String.raw`
+function Get-Command {
+    [CmdletBinding()]
+    param([string]$Name)
+    if ($Name -eq $script:manager) { return $true }
+    return $null
+}
+filter Out-Host { }
+function Invoke-FixtureManager {
+    $script:attempts += 1
+    Write-Output 'package-manager output must not become a success result'
+    if ($script:failure -eq 'throw') { throw 'fixture package-manager failure' }
+    $global:LASTEXITCODE = if ($script:failure -eq 'exit') { 17 } else { 0 }
+}
+function winget { Invoke-FixtureManager }
+function choco { Invoke-FixtureManager }
+function scoop { Invoke-FixtureManager }
+function Refresh-ProcessPath { $script:refreshes += 1 }
+function Add-InstalledNodeToProcessPath { $script:discoveries += 1; return $true }
+function Check-Node { return $script:portableReady }
+function Install-PortableNode { $script:portableCalls += 1; $script:portableReady = $true }
+foreach ($script:manager in @('winget', 'choco', 'scoop')) {
+    foreach ($script:failure in @('exit', 'throw', 'unsupported')) {
+        $script:attempts = 0
+        $script:refreshes = 0
+        $script:discoveries = 0
+        $script:portableCalls = 0
+        $script:portableReady = $false
+        $global:LASTEXITCODE = 0
+        $result = @(Install-Node)
+        if ($result.Count -ne 1 -or $result[0] -isnot [bool] -or -not $result[0]) {
+            throw "manager=$script:manager failure=$script:failure result=$result"
+        }
+        $expectedAttempts = if ($script:manager -eq 'scoop' -and $script:failure -eq 'unsupported') { 3 } else { 1 }
+        $expectedDiscoveries = if ($script:manager -eq 'winget') { 1 } else { 0 }
+        if ($script:attempts -ne $expectedAttempts -or $script:refreshes -ne 1 -or $script:discoveries -ne $expectedDiscoveries -or $script:portableCalls -ne 1) {
+            throw "unexpected recovery order/count: $script:manager $script:failure"
+        }
+        if ($ErrorActionPreference -ne 'Stop') { throw 'caller error policy changed' }
+    }
+}
+`,
+        ].join("\n"),
+      },
+      {
+        name: "package-manager-node-next-manager-success",
+        source: [
+          scriptWithoutEntryPoint,
+          String.raw`
+$script:events = New-Object System.Collections.Generic.List[string]
+$script:ready = $false
+function Get-Command {
+    [CmdletBinding()]
+    param([string]$Name)
+    if ($Name -in @('winget', 'choco', 'scoop')) { return $true }
+    return $null
+}
+filter Out-Host { }
+function winget { $script:events.Add('winget'); $global:LASTEXITCODE = 17; Write-Output 'winget failed' }
+function choco { $script:events.Add('choco'); $global:LASTEXITCODE = 0; $script:ready = $true; Write-Output 'choco success' }
+function scoop { throw 'Scoop must not run after supported Node is found' }
+function Refresh-ProcessPath { $script:events.Add('refresh') }
+function Add-InstalledNodeToProcessPath { $script:events.Add('discover'); return $false }
+function Check-Node { $script:events.Add('check'); return $script:ready }
+function Install-PortableNode { throw 'portable fallback must not run after supported Node is found' }
+$result = @(Install-Node)
+if ($result.Count -ne 1 -or $result[0] -isnot [bool] -or -not $result[0]) { throw "result=$result" }
+if (($script:events -join '|') -ne 'winget|refresh|discover|check|choco|refresh|check') {
+    throw "events=$($script:events -join '|')"
+}
+`,
+        ].join("\n"),
+      },
+      {
+        name: "package-manager-node-entrypoint-refusal",
+        source: [
+          scriptWithoutEntryPoint,
+          String.raw`
+$NodeOnly = $false
+$NodePrefix = ''
+$DryRun = $false
+$InstallMethod = 'npm'
+$NoOnboard = $true
+function Check-ExistingOpenClaw { return $false }
+function Get-Command {
+    [CmdletBinding()]
+    param([string]$Name)
+    if ($Name -eq 'choco') { return $true }
+    return $null
+}
+filter Out-Host { }
+function choco { $global:LASTEXITCODE = 17; Write-Output 'fixture choco failure' }
+function Refresh-ProcessPath { }
+function Check-Node { return $false }
+function Install-PortableNode {
+    $script:portableCalls += 1
+    if ($script:portableFailure -eq 'throw') { throw 'fixture portable failure' }
+}
+function Install-OpenClaw { throw 'package install must not run without a supported Node' }
+foreach ($script:portableFailure in @('throw', 'unsupported')) {
+    $script:InstallExitCode = 0
+    $script:portableCalls = 0
+    $caught = $false
+    try {
+`,
+          ...entrypointLines.map((line) => `        ${line}`),
+          String.raw`
+    } catch {
+        if ($_.Exception.Message -ne 'OpenClaw installation failed with exit code 1.') { throw }
+        $caught = $true
+    }
+    if (-not $caught -or $script:InstallExitCode -ne 1 -or $script:portableCalls -ne 1) {
+        throw 'failed recovery did not preserve the installer refusal contract'
+    }
+    if ($ErrorActionPreference -ne 'Stop') { throw 'caller error policy changed' }
+}
+`,
         ].join("\n"),
       },
       {
@@ -1220,6 +1489,9 @@ try {
         "pnpm-source-bootstrap-lifecycle",
         "portable-git-layout",
         "portable-node-tar-fallback",
+        "package-manager-node-command-failures",
+        "package-manager-node-next-manager-success",
+        "package-manager-node-entrypoint-refusal",
       ]) {
         const fixture = fixtures.find((entry) => entry.name === name);
         if (!fixture) {
@@ -1243,6 +1515,77 @@ try {
   function expectBatchedPowerShellCase(name: string): void {
     expect(batchedPowerShellResults.get(name)).toEqual({ error: "", ok: true });
   }
+
+  runIfPowerShell(
+    "renews legacy download watchdogs while bytes arrive and aborts stalled bodies",
+    async () => {
+      const server = http.createServer((request, response) => {
+        if (request.url === "/redirect") {
+          response.writeHead(302, { location: "/stream" });
+          response.end();
+          return;
+        }
+        response.writeHead(200, { "content-type": "application/octet-stream" });
+        response.write("start");
+        if (request.url === "/stall") {
+          const timer = setTimeout(() => response.end("late"), 3000);
+          response.once("close", () => clearTimeout(timer));
+          return;
+        }
+        let chunks = 0;
+        const timer = setInterval(() => {
+          response.write(".");
+          if (++chunks === 4) {
+            response.end();
+          }
+        }, 400);
+        response.once("close", () => clearInterval(timer));
+      });
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", resolve);
+      });
+      try {
+        const address = server.address();
+        if (!address || typeof address === "string") {
+          throw new Error("Download fixture did not bind a TCP port");
+        }
+        const directory = harness.createTempDir("openclaw-installer-network-");
+        const output = join(directory, "download.bin");
+        const scriptPath = join(directory, "download.ps1");
+        writeFileSync(
+          scriptPath,
+          [
+            "$ErrorActionPreference = 'Stop'",
+            "$script:UpdateNetworkTimeoutSeconds = 1",
+            ...["Get-WebRequestTimeoutParameters", "Save-InstallerDownload"].map(
+              (name) => `function ${name} {\n${extractFunctionBody(source, name)}}`,
+            ),
+            "function Invoke-WebRequest { throw 'Legacy downloads must stream directly' }",
+            `$output = ${toPowerShellSingleQuotedLiteral(output)}`,
+            `$base = 'http://127.0.0.1:${address.port}'`,
+            'Save-InstallerDownload -Uri "$base/redirect" -OutFile $output',
+            "if ([IO.File]::ReadAllText($output) -ne 'start....') { throw 'Incomplete slow download' }",
+            "$failed = $false",
+            'try { Save-InstallerDownload -Uri "$base/stall" -OutFile $output } catch { $failed = $true }',
+            "if (-not $failed) { throw 'Stalled download was accepted' }",
+            "$exclusive = [IO.File]::Open($output, 'Open', 'ReadWrite', 'None')",
+            "$exclusive.Dispose()",
+            "Write-Output 'slow-download-complete; stalled-download-aborted; file-released'",
+          ].join("\n"),
+        );
+        const result = await runPowerShellAsync(["-NoLogo", "-NoProfile", "-File", scriptPath]);
+        expect(result.status, result.stdout + result.stderr).toBe(0);
+        expect(result.stdout).toContain(
+          "slow-download-complete; stalled-download-aborted; file-released",
+        );
+      } finally {
+        server.closeAllConnections();
+        await new Promise<void>((resolve) => {
+          server.close(() => resolve());
+        });
+      }
+    },
+  );
 
   runIfPowerShell("rejects unknown and positional options before starting the installer", () => {
     const cases = [
@@ -1311,6 +1654,36 @@ try {
     expect(result.stdout).toContain("[OK] Onboard: skipped");
   });
 
+  runIfPowerShell("requires an explicit absolute private prefix for Node-only updates", () => {
+    const root = harness.createTempDir("openclaw-node-only-options-");
+    for (const args of [
+      ["-NodeOnly"],
+      ["-NodeOnly", "-NodePrefix", "relative/node"],
+      ["-NodeOnly", "-NodePrefix", parse(root).root],
+      ["-NodePrefix", join(root, "private-node")],
+    ]) {
+      const result = runInstallerFile([...args, "-DryRun"]);
+      expect(result.status, args.join(" ")).toBe(2);
+      expect(result.stdout).toContain("Error:");
+    }
+    const result = runInstallerFile([
+      "-NodeOnly",
+      "-NodePrefix",
+      join(root, "private node"),
+      "-DryRun",
+    ]);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("PATH unchanged");
+    expect(result.stdout).not.toContain("Install method:");
+  });
+
+  runIfPowerShell(
+    "updates only the private runtime after checksum and compatibility checks",
+    () => {
+      expectBatchedPowerShellCase("private-node-update");
+    },
+  );
+
   it("does not exit directly from inside Main", () => {
     const mainBody = extractFunctionBody(source, "Main");
     expect(mainBody).not.toMatch(/\bexit\b/i);
@@ -1331,13 +1704,11 @@ try {
     const versionBody = extractFunctionBody(source, "Test-NodeVersionSupported");
     const sqliteBody = extractFunctionBody(source, "Test-NodeSqliteSupported");
     const checkNodeBody = extractFunctionBody(source, "Check-Node");
-    expect(versionBody).toContain("$major -eq 22");
-    expect(versionBody).toContain("$patch -ge 3");
     expect(versionBody).toContain("$major -eq 24");
-    expect(versionBody).toContain("$minor -ge 15");
-    expect(versionBody).toContain("$major -eq 25");
-    expect(versionBody).toContain("$minor -ge 9");
-    expect(versionBody).toContain("$major -gt 25");
+    expect(versionBody).toContain("$minor -ge 16");
+    expect(versionBody).toContain("$major -eq 26");
+    expect(versionBody).toContain("$minor -ge 1");
+    expect(versionBody).toContain("$major -gt 26");
     expect(sqliteBody).toContain("$minor -eq 51 -and $patch -ge 3");
     expect(checkNodeBody).toContain("Test-NodeVersionSupported -Version $nodeVersion");
     expect(checkNodeBody).toContain("Get-Command node -CommandType Application");
@@ -1354,6 +1725,10 @@ try {
   runIfPowerShell("accepts only supported Node versions", () => {
     expectBatchedPowerShellCase("node-versions");
     expectBatchedPowerShellCase("sqlite-versions");
+  });
+
+  runIfPowerShell("requires the numeric floor and SQLite round trips before reusing Node", () => {
+    expectBatchedPowerShellCase("node-capabilities");
   });
 
   runIfPowerShell("normalizes and exports one installer temp root", () => {
@@ -1436,10 +1811,30 @@ try {
     expectBatchedPowerShellCase("package-manager-node-validation-failure");
   });
 
+  runIfPowerShell("recovers from package-manager failures and preserves installer refusal", () => {
+    if (process.platform === "win32") {
+      expect(bootstrapShells).toContain("powershell");
+    }
+    for (const name of [
+      "package-manager-node-command-failures",
+      "package-manager-node-next-manager-success",
+      "package-manager-node-entrypoint-refusal",
+    ]) {
+      expectBatchedPowerShellCase(name);
+      for (const engine of bootstrapShells) {
+        if (engine !== powershell) {
+          expectBatchedPowerShellCase(`${name}:${engine}`);
+        }
+      }
+    }
+  });
+
   it("discovers a winget Node install before the machine PATH refreshes", () => {
     const installNodeBody = extractFunctionBody(source, "Install-Node");
+    const packageManagerBody = extractFunctionBody(source, "Invoke-NodePackageManagerInstall");
     const addInstalledNodeBody = extractFunctionBody(source, "Add-InstalledNodeToProcessPath");
-    expect(installNodeBody).toContain("Add-InstalledNodeToProcessPath | Out-Null");
+    expect(installNodeBody).toContain("-DiscoverProgramFilesNode");
+    expect(packageManagerBody).toContain("Add-InstalledNodeToProcessPath | Out-Null");
     expect(addInstalledNodeBody).toContain("$env:ProgramW6432");
     expect(addInstalledNodeBody).toContain("$env:ProgramFiles");
     expect(addInstalledNodeBody).toContain('Join-Path $nodeDir "node.exe"');
@@ -1617,7 +2012,6 @@ try {
     const depsRootBody = extractFunctionBody(source, "Get-OpenClawDepsRoot");
     const resolveNodeBody = extractFunctionBody(source, "Resolve-PortableNodeDownload");
     const expandNodeBody = extractFunctionBody(source, "Expand-PortableNodeArchive");
-    const timeoutParametersBody = extractFunctionBody(source, "Get-WebRequestTimeoutParameters");
 
     expect(installNodeBody).toContain("Install-PortableNode");
     expect(installNodeBody).toContain("Portable Node.js bootstrap failed");
@@ -1625,6 +2019,7 @@ try {
     expect(depsRootBody).toContain("OpenClaw\\deps");
     expect(portableNodeRootBody).toContain("portable-node");
     expect(portableNodeBody).toContain("Ensure-PortableNodeOnUserPath");
+    expect(portableNodeBody).toContain("Bootstrapping user-local portable Node.js");
     expect(portableNodeBody).toContain(
       "Expand-PortableNodeArchive -ZipPath $tmpZip -DestinationPath $portableRoot",
     );
@@ -1634,11 +2029,9 @@ try {
     expect(userPathBody).toContain(
       '[Environment]::SetEnvironmentVariable("Path", $newUserPath, "User")',
     );
-    expect(portableNodeBody).toContain("Invoke-WebRequest -UseBasicParsing");
     expect(portableNodeBody).toContain(
-      'Get-WebRequestTimeoutParameters -CommandName "Invoke-WebRequest" -LegacyTimeoutSec 600',
+      "Save-InstallerDownload -Uri $download.Url -OutFile $tmpZip",
     );
-    expect(portableNodeBody).toContain("@downloadTimeouts");
     expect(portableNodeBody).toContain("Expand-PortableNodeArchive");
     expect(portableNodeBody).not.toContain("Expand-Archive");
     expect(portableNodeBody).not.toContain("New-Item -ItemType Directory -Force -Path $tmpExtract");
@@ -1649,14 +2042,11 @@ try {
     expect(expandNodeBody).toContain("System.IO.Compression.ZipFile");
     expect(resolveNodeBody).toContain("https://nodejs.org/dist/index.json");
     expect(resolveNodeBody).toContain(
-      'Get-WebRequestTimeoutParameters -CommandName "Invoke-RestMethod" -LegacyTimeoutSec 30',
+      'Get-WebRequestTimeoutParameters -CommandName "Invoke-RestMethod"',
     );
     expect(resolveNodeBody).toContain("@requestTimeouts");
     expect(resolveNodeBody).toContain("win-$architecture-zip");
     expect(resolveNodeBody).toContain("node-$($release.version)-win-$architecture.zip");
-    expect(timeoutParametersBody).toContain('ContainsKey("OperationTimeoutSeconds")');
-    expect(timeoutParametersBody).toContain("OperationTimeoutSeconds = 30");
-    expect(timeoutParametersBody).toContain("TimeoutSec = $LegacyTimeoutSec");
   });
 
   it("persists user-local portable Git for future git-backed updates", () => {
@@ -1685,13 +2075,10 @@ try {
     expect(portableArchitectureBody).toContain("PROCESSOR_ARCHITECTURE");
     expect(portableGitDownloadBody).toContain("Get-WindowsPortableArchitecture");
     expect(portableGitDownloadBody).toContain(
-      'Get-WebRequestTimeoutParameters -CommandName "Invoke-RestMethod" -LegacyTimeoutSec 30',
+      'Get-WebRequestTimeoutParameters -CommandName "Invoke-RestMethod"',
     );
     expect(portableGitDownloadBody).toContain("@requestTimeouts");
-    expect(portableGitBody).toContain(
-      'Get-WebRequestTimeoutParameters -CommandName "Invoke-WebRequest" -LegacyTimeoutSec 600',
-    );
-    expect(portableGitBody).toContain("@downloadTimeouts");
+    expect(portableGitBody).toContain("Save-InstallerDownload -Uri $download.Url -OutFile $tmpZip");
     expect(portableGitDownloadBody).toContain("'^MinGit-.*-arm64\\.zip$'");
     expect(portableGitDownloadBody).toContain("'^MinGit-.*-64-bit\\.zip$'");
     expect(portableGitBody).toContain(
@@ -1961,5 +2348,315 @@ try {
 
   runIfPowerShell("uses the terminal exit code when helper output precedes success", () => {
     expectBatchedPowerShellCase("terminal-code-success");
+  });
+});
+
+describe("install.ps1 stale Winget repair", () => {
+  const { createTempDir } = createScriptTestHarness();
+  const source = readFileSync(SCRIPT_PATH, "utf8");
+  const powershell = findPowerShell();
+  const runIfPowerShell = powershell ? it : it.skip;
+  const cases = [
+    {
+      name: "repairs stale registration after a probe overwrites LASTEXITCODE",
+      afterInstall: "text",
+      afterRepair: "healthy",
+      repair: true,
+      success: true,
+    },
+    {
+      name: "discovers Node after repairing a missing runtime",
+      afterInstall: "missing",
+      afterRepair: "healthy",
+      repair: true,
+      success: true,
+    },
+    {
+      name: "accepts a normal successful install without repair",
+      installExit: 0,
+      afterInstall: "healthy",
+      success: true,
+    },
+    {
+      name: "accepts a healthy no-upgrade result without repair",
+      afterInstall: "healthy",
+      success: true,
+    },
+    { name: "does not repair generic Winget failure", installExit: 1 },
+    { name: "does not repair another HRESULT", installExit: -1978335188 },
+    { name: "does not repair successful install with missing Node", installExit: 0 },
+    {
+      name: "recovers unsupported repair through Chocolatey",
+      repairExit: -1978335174,
+      repair: true,
+      fallback: "choco",
+      success: true,
+    },
+    {
+      name: "recovers failed repair through Scoop",
+      repairExit: 1,
+      repair: true,
+      fallback: "scoop",
+      success: true,
+    },
+    {
+      name: "recovers unusable repair through portable Node",
+      afterRepair: "old-sqlite",
+      repair: true,
+      fallback: "portable",
+      success: true,
+    },
+    {
+      name: "rejects unusable Chocolatey fallback after failed repair",
+      repairExit: 1,
+      repair: true,
+      fallback: "choco",
+      afterFallback: "old-sqlite",
+    },
+    {
+      name: "rejects unusable portable fallback after failed repair",
+      repairExit: 1,
+      repair: true,
+      fallback: "portable",
+      afterFallback: "text",
+    },
+    {
+      name: "recovers a generic Winget failure through portable Node",
+      installExit: 1,
+      fallback: "portable",
+      success: true,
+    },
+    {
+      name: "recovers a thrown Winget invocation through portable Node",
+      installThrows: true,
+      fallback: "portable",
+      success: true,
+    },
+    {
+      name: "recovers a generic Winget failure through the next package manager",
+      installExit: 1,
+      fallback: "choco",
+      success: true,
+    },
+    {
+      name: "rejects failed repair even if Node becomes healthy",
+      repairExit: 1,
+      afterRepair: "healthy",
+      repair: true,
+    },
+    { name: "rejects repair that leaves Node missing", repair: true },
+    { name: "rejects old Node after repair", afterRepair: "old-node", repair: true },
+    { name: "rejects old SQLite after repair", afterRepair: "old-sqlite", repair: true },
+    ...["text", "blob", "json", "probe-error"].map((capability) => ({
+      name: `rejects broken SQLite ${capability} after repair`,
+      afterRepair: capability,
+      repair: true,
+    })),
+  ];
+
+  runIfPowerShell.each(cases)("$name", (testCase) => {
+    if (!powershell) {
+      throw new Error("PowerShell is not available");
+    }
+    const fixtureNode = join(createTempDir("openclaw-winget-node-"), "node.ps1");
+    writeFileSync(fixtureNode, "$input | Invoke-FixtureNode @args\n");
+    const options = {
+      installExit: -1978335189,
+      repairExit: 0,
+      afterInstall: "missing",
+      afterRepair: "missing",
+      repair: false,
+      success: false,
+      installThrows: false,
+      fallback: "none",
+      afterFallback: "healthy",
+      ...testCase,
+    };
+    const functions = [
+      "Fail-Install",
+      "Test-BooleanSuccessResult",
+      "Test-NodeVersionSupported",
+      "Test-NodeSqliteSupported",
+      "Check-Node",
+      "Invoke-NodePackageManagerInstall",
+      "Install-Node",
+      "Main",
+    ]
+      .map((name) => `function ${name} {\n${extractFunctionBody(source, name)}}`)
+      .join("\n");
+    const fixture = [
+      "$ErrorActionPreference = 'Stop'",
+      `$fixtureNode = ${toPowerShellSingleQuotedLiteral(fixtureNode)}`,
+      functions,
+      `$case = ${toPowerShellSingleQuotedLiteral(JSON.stringify(options))} | ConvertFrom-Json`,
+      String.raw`
+function Reset-Fixture {
+    $global:State = 'missing'
+    $global:PendingState = 'missing'
+    $global:Events = New-Object 'System.Collections.Generic.List[string]'
+    $global:WingetCalls = New-Object 'System.Collections.Generic.List[object]'
+    $global:Fallbacks = New-Object 'System.Collections.Generic.List[string]'
+    $global:Messages = New-Object 'System.Collections.Generic.List[string]'
+    $global:InstallExitCode = 0
+    $global:Advanced = 0
+    $global:ProbeCount = 0
+    $global:LASTEXITCODE = 0
+}
+function Get-Command {
+    [CmdletBinding()]
+    param([string]$Name, [string]$CommandType)
+    if ($Name -eq 'winget') { return $true }
+    if ($Name -eq 'choco') { return ($case.fallback -eq 'choco') }
+    if ($Name -eq 'scoop') { return ($case.fallback -eq 'scoop') }
+    if ($Name -eq 'node') {
+        $global:Events.Add("check:$global:State")
+        if ($global:State -eq 'missing') { throw 'fixture Node is missing' }
+        return [pscustomobject]@{ Source = $fixtureNode }
+    }
+    throw "unexpected command lookup: $Name"
+}
+function Invoke-FixtureNode {
+    $global:LASTEXITCODE = 0
+    if ($args[0] -eq '-v') {
+        if ($global:State -eq 'old-node') { return 'v22.15.0' }
+        return 'v26.1.0'
+    }
+    $probe = @($input) -join [Environment]::NewLine
+    if (-not $probe.Contains('CREATE TABLE probe') -or -not $probe.Contains('a\u0000b\u0000')) {
+        throw 'current SQLite capability probe was not executed'
+    }
+    $global:ProbeCount++
+    if ($global:State -eq 'probe-error') { $global:LASTEXITCODE = 1; return }
+    $version = if ($global:State -eq 'old-sqlite') { '3.50.6' } else { '3.51.3' }
+    return (@{ available = $true; version = $version; text = ($global:State -ne 'text'); blob = ($global:State -ne 'blob'); json = ($global:State -ne 'json') } | ConvertTo-Json -Compress)
+}
+function winget {
+    $global:Events.Add($args[0])
+    $global:WingetCalls.Add(@($args))
+    if ($args[0] -eq 'install') {
+        if ($case.installThrows) { throw 'fixture Winget invocation failed' }
+        $global:LASTEXITCODE = $case.installExit
+        $global:PendingState = $case.afterInstall
+    } elseif ($args[0] -eq 'repair') {
+        $global:LASTEXITCODE = $case.repairExit
+        $global:PendingState = $case.afterRepair
+    } else { throw "unexpected Winget command: $args" }
+    Write-Output 'native command output must not become a Boolean result'
+}
+function Refresh-ProcessPath { $global:Events.Add('refresh') }
+function Add-InstalledNodeToProcessPath {
+    $global:Events.Add('discover')
+    $global:State = $global:PendingState
+    return $true
+}
+function choco {
+    $global:Fallbacks.Add('choco')
+    $global:State = $case.afterFallback
+    $global:LASTEXITCODE = 0
+    Write-Output 'Chocolatey output must not become a Boolean result'
+}
+function scoop {
+    $global:Fallbacks.Add("scoop:$($args -join ' ')")
+    $global:State = $case.afterFallback
+    $global:LASTEXITCODE = 0
+    Write-Output 'Scoop output must not become a Boolean result'
+}
+function Write-Host { $global:Messages.Add(($args -join ' ')) }
+function Install-PortableNode {
+    $global:Fallbacks.Add('portable')
+    if ($case.fallback -eq 'portable') { $global:State = $case.afterFallback; return }
+    throw 'fixture portable recovery unavailable'
+}
+function Check-ExistingOpenClaw { return $false }
+function Test-PreviousGitWrapper { return $false }
+function Get-NpmCommandPath { return 'fixture-npm' }
+function Get-WindowsCommandSafeDirectory { return $env:USERPROFILE }
+function Invoke-NpmCommand { return $env:USERPROFILE }
+function Install-OpenClaw { $global:Advanced++; return $true }
+function Ensure-OpenClawOnPath { return $false }
+function Refresh-GatewayServiceIfLoaded { throw 'unexpected service mutation' }
+$env:USERPROFILE = [System.IO.Path]::GetTempPath()
+$InstallMethod = 'npm'
+Reset-Fixture
+$result = @(Install-Node)
+if ($result.Count -ne 1 -or $result[0] -isnot [bool]) { throw "Install-Node output leaked: $result" }
+$direct = @{ success = $result[0]; events = $global:Events.ToArray(); calls = $global:WingetCalls.ToArray(); probes = $global:ProbeCount; fallbacks = $global:Fallbacks.ToArray(); messages = $global:Messages.ToArray() }
+Reset-Fixture
+$null = Main
+$main = @{ advanced = $global:Advanced; exit = $global:InstallExitCode; events = $global:Events.ToArray(); calls = $global:WingetCalls.ToArray(); probes = $global:ProbeCount; fallbacks = $global:Fallbacks.ToArray(); messages = $global:Messages.ToArray() }
+Reset-Fixture
+$global:State = 'healthy'
+$null = Main
+$healthy = @{ advanced = $global:Advanced; calls = $global:WingetCalls.Count }
+Write-Output ('RESULT:' + (@{ direct = $direct; main = $main; healthy = $healthy } | ConvertTo-Json -Depth 8 -Compress))
+`,
+    ].join("\n");
+    const result = spawnSync(
+      powershell,
+      ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", fixture],
+      { encoding: "utf8" },
+    );
+    expect(result.status, result.stderr || result.stdout).toBe(0);
+    const line = result.stdout.split(/\r?\n/u).find((value) => value.startsWith("RESULT:"));
+    expect(line, result.stdout).toBeDefined();
+    const proof = JSON.parse(line!.slice("RESULT:".length));
+    expect(proof.direct.success).toBe(options.success);
+    expect(proof.main.advanced).toBe(options.success ? 1 : 0);
+    expect(proof.main.exit).toBe(options.success ? 0 : 1);
+    expect(proof.healthy).toEqual({ advanced: 1, calls: 0 });
+    const installArgs = [
+      "install",
+      "OpenJS.NodeJS.LTS",
+      "--source",
+      "winget",
+      "--accept-package-agreements",
+      "--accept-source-agreements",
+    ];
+    const repairArgs = [
+      "repair",
+      "--id",
+      "OpenJS.NodeJS.LTS",
+      "--exact",
+      "--source",
+      "winget",
+      "--accept-package-agreements",
+      "--accept-source-agreements",
+    ];
+    for (const run of [proof.direct, proof.main]) {
+      expect(run.calls).toEqual(options.repair ? [installArgs, repairArgs] : [installArgs]);
+      const repaired =
+        options.repair && options.repairExit === 0 && options.afterRepair === "healthy";
+      const fallbackExpected =
+        !repaired && (options.installThrows || options.afterInstall !== "healthy");
+      const fallbacks: string[] = [];
+      if (fallbackExpected) {
+        if (options.fallback === "choco") {
+          fallbacks.push("choco");
+        } else if (options.fallback === "scoop") {
+          fallbacks.push("scoop:update", "scoop:install nodejs-lts", "scoop:update nodejs-lts");
+        }
+        if (!["choco", "scoop"].includes(options.fallback) || options.afterFallback !== "healthy") {
+          fallbacks.push("portable");
+        }
+      }
+      expect(run.fallbacks).toEqual(fallbacks);
+      expect(
+        run.messages.filter((message: string) => message.includes("Node.js repaired via winget")),
+      ).toHaveLength(repaired ? 1 : 0);
+      const events = run === proof.main ? run.events.slice(1) : run.events;
+      expect(events.slice(0, 4)).toEqual([
+        "install",
+        "refresh",
+        "discover",
+        `check:${options.afterInstall}`,
+      ]);
+      if (options.repair) {
+        expect(events.slice(4, 7)).toEqual(["repair", "refresh", "discover"]);
+      }
+      if (options.success) {
+        expect(events.at(-1)).toBe("check:healthy");
+        expect(run.probes).toBeGreaterThan(0);
+      }
+    }
   });
 });

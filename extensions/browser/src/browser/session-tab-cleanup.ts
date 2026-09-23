@@ -63,14 +63,13 @@ export function startTrackedBrowserTabCleanupTimer(params: {
     }
     running = (async () => {
       const cleanup = resolveBrowserTabCleanupRuntimeConfig();
-      if (cleanup.enabled) {
-        await sweepTrackedBrowserTabs({
-          idleMs: minutesToMs(cleanup.idleMinutes),
-          maxTabsPerSession: cleanup.maxTabsPerSession,
-          sessionFilter: isPrimaryTrackedBrowserSessionKey,
-          ...params,
-        });
-      }
+      await sweepTrackedBrowserTabs({
+        idleMs: cleanup.enabled ? minutesToMs(cleanup.idleMinutes) : undefined,
+        maxTabsPerSession: cleanup.enabled ? cleanup.maxTabsPerSession : undefined,
+        ordinaryCleanup: cleanup.enabled,
+        sessionFilter: isPrimaryTrackedBrowserSessionKey,
+        ...params,
+      });
     })()
       .catch((error: unknown) => {
         params.onWarn(`failed to sweep tracked browser tabs: ${String(error)}`);

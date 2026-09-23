@@ -23,6 +23,12 @@ public struct GatewayNodeSessionRoute: Sendable, Equatable {
     fileprivate let channelGeneration: UInt64
     fileprivate let admissionGeneration: UInt64
     fileprivate let socketGeneration: UInt64
+
+    /// Compare routes from the same GatewayNodeSession. Socket reconnects retain this context;
+    /// replacing its endpoint, credentials, or connection options creates a different context.
+    public func hasSameConnectionContext(as other: GatewayNodeSessionRoute) -> Bool {
+        self.channelGeneration == other.channelGeneration
+    }
 }
 
 /// Owns a server-event stream until its caller is finished or canceled.
@@ -104,8 +110,7 @@ public actor GatewayNodeSession {
     private var activeTLSRouteMetadataProvider: GatewayTLSRouteMetadataProviding?
     // A delayed push keeps its physical socket epoch. Once disconnect cleanup
     // retires that epoch, it cannot adopt the replacement route's admission.
-    private var activeSocketGeneration: UInt64?
-    private var lastRetiredSocketGeneration: UInt64?
+    private var socketGenerationState = GatewaySocketGenerationState()
     private var routeTeardownBarrier: Task<Void, Never>?
     private var lifecycleCallbackBarrier: LifecycleCallbackBarrier?
     private var executingLifecycleCallbackIDs: Set<UUID> = []
@@ -406,8 +411,7 @@ public actor GatewayNodeSession {
         self.onInvokeInput = nil
         self.onInvokeCancel = nil
         self.onRouteInvalidated = nil
-        self.activeSocketGeneration = nil
-        self.lastRetiredSocketGeneration = nil
+        self.socketGenerationState = GatewaySocketGenerationState()
     }
 
     private func enqueueRouteTeardown(
@@ -704,6 +708,17 @@ public actor GatewayNodeSession {
         return try? JSONSerialization.data(withJSONObject: connection)
     }
 
+    /// HTTP readers reuse only credentials accepted by this physical socket.
+    /// Bootstrap enrollment credentials never authorize resource downloads.
+    public func httpResourceAuthorization(ifCurrentRoute route: GatewayNodeSessionRoute) async -> (
+        url: URL, bearer: String?, tlsFingerprint: String?)?
+    {
+        guard self.isCurrentRoute(route), let channel, let url = self.activeURL else { return nil }
+        let bearer = await channel.httpResourceBearer(ifCurrentConnectionGeneration: route.socketGeneration)
+        guard self.isCurrentRoute(route), self.channel === channel else { return nil }
+        return (url, bearer, self.activeTLSRouteMetadataProvider?.effectiveTLSFingerprintSHA256)
+    }
+
     public func currentGatewayID(ifCurrentRoute route: GatewayNodeSessionRoute) -> String? {
         guard self.isCurrentRoute(route), self.channel != nil else { return nil }
         // iOS operator routes normalize this to the effective stable ID before connect.
@@ -895,7 +910,7 @@ extension GatewayNodeSession {
         socketGeneration: UInt64) async
     {
         guard self.channelGeneration == channelGeneration,
-              self.admitSocketGeneration(socketGeneration)
+              self.socketGenerationState.admit(socketGeneration)
         else { return }
         switch push {
         case let .snapshot(ok):
@@ -951,7 +966,7 @@ extension GatewayNodeSession {
         socketGeneration: UInt64) async
     {
         guard self.channelGeneration == channelGeneration,
-              self.retireSocketGeneration(socketGeneration)
+              self.socketGenerationState.retire(socketGeneration)
         else { return }
         // The channel actor reconnects in place, so channelGeneration alone cannot
         // distinguish delayed work decoded before this socket loss. Revoke those
@@ -1288,35 +1303,6 @@ extension GatewayNodeSession {
     private func isCurrentRoute(_ route: GatewayNodeSessionRoute) -> Bool {
         route.channelGeneration == self.channelGeneration &&
             route.admissionGeneration == self.admissionGeneration
-    }
-
-    private func admitSocketGeneration(_ socketGeneration: UInt64) -> Bool {
-        if let lastRetiredSocketGeneration,
-           socketGeneration <= lastRetiredSocketGeneration
-        {
-            return false
-        }
-        if let activeSocketGeneration {
-            return socketGeneration == activeSocketGeneration
-        }
-        self.activeSocketGeneration = socketGeneration
-        return true
-    }
-
-    private func retireSocketGeneration(_ socketGeneration: UInt64) -> Bool {
-        if let lastRetiredSocketGeneration,
-           socketGeneration <= lastRetiredSocketGeneration
-        {
-            return false
-        }
-        if let activeSocketGeneration,
-           socketGeneration != activeSocketGeneration
-        {
-            return false
-        }
-        self.activeSocketGeneration = nil
-        self.lastRetiredSocketGeneration = socketGeneration
-        return true
     }
 
     #if DEBUG

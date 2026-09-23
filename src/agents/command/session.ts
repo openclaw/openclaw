@@ -34,10 +34,12 @@ import {
   type SessionEntrySummary,
 } from "../../config/sessions/session-accessor.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
+import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import {
   resolvePersistedSessionStoreOwner,
   resolvePersistedSessionStoreOwnerForKey,
 } from "../../config/sessions/session-store-owner.js";
+import { normalizeStoreSessionKey } from "../../config/sessions/store-entry.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -49,7 +51,7 @@ import {
 } from "../../routing/session-key.js";
 import { isModelSelectionLocked } from "../../sessions/model-overrides.js";
 import { resolveSessionIdMatchSelection } from "../../sessions/session-id-resolution.js";
-import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
+import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import {
   AgentSelectionRequiredError,
   listAgentIds,
@@ -61,6 +63,7 @@ import { transitionMainSessionRecovery } from "../main-session-recovery/main-ses
 
 /** Resolved command session identity plus backing store metadata. */
 type SessionResolution = {
+  sessionAgentId: string;
   sessionId: string;
   sessionKey?: string;
   sessionEntry?: InternalSessionEntry;
@@ -203,6 +206,9 @@ function collectSessionIdMatchesForRequest(opts: {
     candidateAgentId: string | undefined,
     options?: { primary?: boolean },
   ): void => {
+    // The successful listing already validated a partition's scoped owner; do not inspect it again.
+    const candidateStoreTarget =
+      resolveUnsuffixedSqliteTargetFromSessionStorePath(candidateStorePath);
     for (const { sessionKey: candidateKey, entry: candidateEntry } of candidateEntries) {
       if (candidateEntry?.sessionId !== opts.sessionId) {
         continue;
@@ -230,7 +236,8 @@ function collectSessionIdMatchesForRequest(opts: {
           ? persistedStoreOwner.agentId
           : persistedStoreOwner.kind === "retired"
             ? undefined
-            : (pathOwnedAgentId ??
+            : ((!candidateStoreTarget.shared ? scopedCandidateAgentId : undefined) ??
+              pathOwnedAgentId ??
               (opts.searchOtherAgentStores ? undefined : scopedCandidateAgentId) ??
               compatibilityAgentId)
         : undefined;
@@ -485,9 +492,15 @@ function resolveSessionKeyForRequestInternal(opts: {
 
   // Command preparation needs one owned entry. Exact reads preserve the SQLite target and
   // Doctor guards without enumerating the agent store or exposing hidden run-owned rows.
+  // Exclusion and lookup share the persisted locator; routing keeps the request key.
+  const storeSessionKey = sessionKey ? normalizeStoreSessionKey(sessionKey) : undefined;
   const sessionEntry =
-    sessionKey && !isInternalSessionEffectsKey(sessionKey)
-      ? loadExactSessionEntryReadOnly({ agentId: storeAgentId, storePath, sessionKey })?.entry
+    storeSessionKey && !isInternalSessionEffectsKey(storeSessionKey)
+      ? loadExactSessionEntryReadOnly({
+          agentId: storeAgentId,
+          storePath,
+          sessionKey: storeSessionKey,
+        })?.entry
       : undefined;
 
   // If a session id was provided, prefer to re-use its existing entry (by id) even when no key was
@@ -671,6 +684,7 @@ export function resolveSession(opts: {
     : undefined;
 
   return {
+    sessionAgentId,
     sessionId,
     sessionKey,
     sessionEntry: resolvedSessionEntry,

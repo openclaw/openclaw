@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import "../../styles/tasks.css";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { renderAgentRowChip } from "../../components/agent-row-chip.ts";
 import {
   renderSettingsEmpty,
   renderSettingsPage,
@@ -9,7 +10,7 @@ import {
   renderSettingsStatus,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
-import { formatMs, formatRelativeTimestamp } from "../../lib/format.ts";
+import { createMsFormatter, formatRelativeTimestamp } from "../../lib/format.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import {
   resolveSessionPreferredFace,
@@ -42,6 +43,7 @@ type TasksProps = {
   onRetry: (taskId: string) => void;
   onDismiss: (taskId: string) => void;
   onCopyResult: (taskId: string) => void;
+  onViewTranscript: (taskId: string) => void;
   onNavigateToChat: (sessionKey: string) => void;
 };
 
@@ -74,7 +76,11 @@ function renderSessionLink(task: TaskSummary, props: TasksProps) {
   >`;
 }
 
-function renderTask(task: TaskSummary, props: TasksProps) {
+function renderTask(
+  task: TaskSummary,
+  props: TasksProps,
+  formatTimestamp: ReturnType<typeof createMsFormatter>,
+) {
   const active = task.status === "queued" || task.status === "running";
   const timestamp = taskTimestampMs(task.updatedAt ?? task.createdAt);
   const detail = taskDetail(task);
@@ -99,11 +105,7 @@ function renderTask(task: TaskSummary, props: TasksProps) {
             })}</span
           >
           <span>${taskRuntimeLabel(task)}</span>
-          ${
-            task.agentId
-              ? html`<span>${t("tasksPage.agent", { agent: task.agentId })}</span>`
-              : nothing
-          }
+          ${task.agentId ? renderAgentRowChip(task.agentId) : nothing}
         </div>
         ${detail ? html`<div class="settings-row__desc">${detail}</div>` : nothing}
         ${
@@ -127,11 +129,12 @@ function renderTask(task: TaskSummary, props: TasksProps) {
         <div class="task-row__links">
           ${
             timestamp > 0
-              ? html`<span title=${formatMs(timestamp)}
+              ? html`<span title=${formatTimestamp(timestamp)}
                   >${formatRelativeTimestamp(timestamp)}</span
                 >`
               : html`<span>${t("common.na")}</span>`
           }
+          ${task.hasTranscript && props.canCopy ? html`<button class="btn btn--sm" type="button" ?disabled=${!props.connected} @click=${() => props.onViewTranscript(task.id)}>${t("tasksPage.viewTranscript")}</button>` : nothing}
           ${renderSessionLink(task, props)}
         </div>
         ${
@@ -239,6 +242,7 @@ function renderSection(
   tasks: readonly TaskSummary[],
   emptyText: string,
   props: TasksProps,
+  formatTimestamp: ReturnType<typeof createMsFormatter>,
 ) {
   const rows =
     tasks.length === 0
@@ -246,7 +250,7 @@ function renderSection(
       : repeat(
           tasks,
           (task) => task.id,
-          (task) => renderTask(task, props),
+          (task) => renderTask(task, props, formatTimestamp),
         );
   return html`<div data-task-section=${id}>
     ${renderSettingsSection({ title: html`${title}${renderHeadingFacts(id, tasks)}` }, rows)}
@@ -254,6 +258,7 @@ function renderSection(
 }
 
 export function renderTasks(props: TasksProps) {
+  const formatTimestamp = createMsFormatter();
   const { active, recent } = partitionTasks(props.tasks);
   return renderSettingsPage(
     html`<div class="tasks-page-list">
@@ -278,8 +283,8 @@ export function renderTasks(props: TasksProps) {
           ? renderSettingsEmpty(t("tasksPage.empty"))
           : nothing
       }
-      ${renderSection("active", t("tasksPage.active"), active, t("tasksPage.emptyActive"), props)}
-      ${renderSection("recent", t("tasksPage.recent"), recent, t("tasksPage.emptyRecent"), props)}
+      ${renderSection("active", t("tasksPage.active"), active, t("tasksPage.emptyActive"), props, formatTimestamp)}
+      ${renderSection("recent", t("tasksPage.recent"), recent, t("tasksPage.emptyRecent"), props, formatTimestamp)}
     </div>`,
     { wide: true },
   );

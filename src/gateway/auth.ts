@@ -1,10 +1,10 @@
-// Gateway connection authorization.
-// Authorizes HTTP/websocket gateway requests across shared-secret, Tailscale, and proxy modes.
+// Gateway authorization checks.
 import type { IncomingMessage } from "node:http";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { isRedactedSecretValue } from "../config/redact-sentinel.js";
 import type { GatewayAuthConfig, GatewayTrustedProxyConfig } from "../config/types.gateway.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import {
@@ -19,6 +19,10 @@ import {
   type GatewayIngressAttribution,
   type VerifiedTailscaleIngressIdentity,
 } from "./ingress-attribution.js";
+import {
+  assertGatewayAuthNotKnownWeak,
+  isInvalidGatewaySecret,
+} from "./known-weak-gateway-secrets.js";
 import {
   isLocalDirectRequest,
   isLoopbackAddress,
@@ -142,6 +146,14 @@ function hasExplicitSharedSecretAuth(connectAuth?: ConnectAuth | null): boolean 
   );
 }
 
+function resolveConnectSecret(
+  mode: "token" | "password",
+  connectAuth?: ConnectAuth | null,
+): string | undefined {
+  // Either client field may carry the secret; the mode alone selects the configured value.
+  return connectAuth?.[mode] ?? connectAuth?.[mode === "token" ? "password" : "token"];
+}
+
 function headerValue(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
 }
@@ -151,6 +163,17 @@ export function assertGatewayAuthConfigured(
   auth: ResolvedGatewayAuth,
   rawAuthConfig?: GatewayAuthConfig | null,
 ): void {
+  if (
+    (auth.mode === "token" || auth.mode === "password") &&
+    isRedactedSecretValue(auth[auth.mode])
+  ) {
+    assertGatewayAuthNotKnownWeak(auth);
+  }
+  if (auth.mode === "token" && isInvalidGatewaySecret(auth.token)) {
+    throw new Error(
+      "Gateway token must not be blank or the literal string undefined/null. Run `openclaw doctor --fix --generate-gateway-token` for an inline token, or rotate its external secret source.",
+    );
+  }
   if (auth.mode === "token" && !auth.token) {
     if (auth.allowTailscale) {
       return;
@@ -311,7 +334,7 @@ async function authorizeTokenAuth(params: {
   deferRateLimitFailure?: boolean;
   resetOnSuccess?: boolean;
 }): Promise<GatewayAuthResult> {
-  if (!params.authToken) {
+  if (!params.authToken || isInvalidGatewaySecret(params.authToken)) {
     return { ok: false, reason: "token_missing_config" };
   }
   if (!params.connectToken) {
@@ -341,6 +364,9 @@ async function authorizePasswordAuth(params: {
   deferRateLimitFailure?: boolean;
   resetOnSuccess?: boolean;
 }): Promise<GatewayAuthResult> {
+  if (isRedactedSecretValue(params.authPassword)) {
+    return { ok: false, reason: "password_redacted_config" };
+  }
   if (!params.authPassword) {
     return { ok: false, reason: "password_missing_config" };
   }
@@ -385,6 +411,12 @@ async function authorizeGatewayConnect(
   params: AuthorizeGatewayConnectParams,
 ): Promise<GatewayAuthResult> {
   const { auth } = params;
+  if (
+    (auth.mode === "token" || auth.mode === "password") &&
+    isRedactedSecretValue(auth[auth.mode])
+  ) {
+    return { ok: false, reason: `${auth.mode}_redacted_config` };
+  }
   if (auth.mode === "trusted-proxy") {
     if (!auth.trustedProxy) {
       return { ok: false, reason: "trusted_proxy_config_missing" };
@@ -553,7 +585,7 @@ async function authorizeGatewayConnectCore(
   if (auth.mode === "token") {
     return await authorizeTokenAuth({
       authToken: auth.token,
-      connectToken: connectAuth?.token,
+      connectToken: resolveConnectSecret(auth.mode, connectAuth),
       limiter,
       ip: subject,
       rateLimitScope,
@@ -565,7 +597,7 @@ async function authorizeGatewayConnectCore(
   if (auth.mode === "password") {
     return await authorizePasswordAuth({
       authPassword: auth.password,
-      connectPassword: connectAuth?.password,
+      connectPassword: resolveConnectSecret(auth.mode, connectAuth),
       limiter,
       ip: subject,
       rateLimitScope,

@@ -11,6 +11,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { pathExists } from "../infra/fs-safe.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import { isPathStrictlyInside } from "../infra/path-guards.js";
+import { isUpdateRehearsalReadOnlyPath } from "../infra/update-rehearsal-paths.js";
 import { resolveSkillManifestMetadata } from "../skills/loading/frontmatter.js";
 import { readSkillFrontmatterSafe } from "../skills/loading/local-loader.js";
 import { resolveSkillDiscoveryLimits } from "../skills/loading/skill-root-discovery.js";
@@ -25,45 +26,103 @@ import { resolveSkillProposalTarget } from "../skills/workshop/store.js";
 const LEGACY_COLLECTION_BACKUP_SCHEMA = "openclaw.skill-collection-backup.v1";
 const MAX_BACKUP_MANIFEST_BYTES = 1024 * 1024;
 
-type LegacyCollectionBackupRoot =
+export type LegacyCollectionBackupRoot =
   | {
       legacyRoot: string;
       backups: LegacyCollectionBackup[];
       ownerAgentId: string;
       destinationRoot: string;
     }
-  | { legacyRoot: string; warning: string };
+  | { legacyRoot: string; warning: string; recoverable?: true };
+
+async function listLegacyCollectionBackupRoots(env: NodeJS.ProcessEnv): Promise<string[]> {
+  const backupRoot = path.join(resolveStateDir(env), "skill-workshop", "collection-backups");
+  if (!(await pathExists(backupRoot))) {
+    return [];
+  }
+  return (await fs.readdir(backupRoot, { withFileTypes: true }))
+    .filter((entry) => entry.isDirectory() && /^[a-f0-9]{16}$/u.test(entry.name))
+    .map((entry) => path.join(backupRoot, entry.name));
+}
+
+export async function listLegacyCollectionBackupWorkspaceDirs(
+  env: NodeJS.ProcessEnv,
+): Promise<string[]> {
+  const workspaces = new Set<string>();
+  for (const legacyRoot of await listLegacyCollectionBackupRoots(env)) {
+    try {
+      for (const backup of await readLegacyCollectionBackups(legacyRoot)) {
+        workspaces.add(backup.workspaceDir);
+      }
+    } catch {
+      // The migration reports invalid manifests; they cannot establish a workspace.
+    }
+  }
+  return [...workspaces];
+}
 
 export async function listPendingLegacyCollectionBackupRoots(
   config: OpenClawConfig,
   env: NodeJS.ProcessEnv,
 ): Promise<LegacyCollectionBackupRoot[]> {
-  const backupRoot = path.join(resolveStateDir(env), "skill-workshop", "collection-backups");
-  if (!(await pathExists(backupRoot))) {
-    return [];
-  }
-  const names = (await fs.readdir(backupRoot, { withFileTypes: true }))
-    .filter((entry) => entry.isDirectory() && /^[a-f0-9]{16}$/u.test(entry.name))
-    .map((entry) => entry.name);
   const roots: LegacyCollectionBackupRoot[] = [];
-  for (const name of names) {
-    const legacyRoot = path.join(backupRoot, name);
+  for (const legacyRoot of await listLegacyCollectionBackupRoots(env)) {
+    if (isUpdateRehearsalReadOnlyPath(legacyRoot, env)) {
+      continue;
+    }
     try {
       const backups = await readLegacyCollectionBackups(legacyRoot);
-      if (backups.length === 0) {
+      if (
+        backups.length === 0 ||
+        backups.some((backup) => isReadOnlyRehearsalBackup(backup, env))
+      ) {
         continue;
       }
       const workspaceDirs = new Set(backups.map((backup) => backup.workspaceDir));
       const workspaceDir = [...workspaceDirs][0];
-      const ownerAgentId =
-        workspaceDirs.size === 1 && workspaceDir
-          ? inferWorkspaceOwnerAgentId(config, env, workspaceDir)
+      const candidateAgentIds = [
+        ...new Set(
+          [...workspaceDirs].flatMap((directory) =>
+            listWorkspaceOwnerAgentIds(config, env, directory),
+          ),
+        ),
+      ].toSorted();
+      let ownerAgentId =
+        workspaceDirs.size === 1 && workspaceDir && candidateAgentIds.length === 1
+          ? candidateAgentIds[0]
           : undefined;
-      if (!ownerAgentId) {
-        throw new Error("workspace does not map to exactly one configured agent");
+      // Keep workspace admission for existing archive and same-pass relocation recovery.
+      if (workspaceDirs.size === 1 && candidateAgentIds.length === 0) {
+        const verifiedAgents = await verifyLegacyCollectionBackupOwners(backups, config, env);
+        const candidates = verifiedAgents.filter((agent) => agent.verified);
+        if (candidates.length === 1) {
+          ownerAgentId = candidates[0]?.agentId;
+        } else {
+          roots.push({
+            legacyRoot,
+            warning: `Preserved legacy collection backup root ${legacyRoot}: ${candidates.length === 0 ? "no verified owner" : "multiple verified owners"} after workspace move (candidate agents: ${candidates.map((agent) => agent.agentId).join(", ") || "none"}). ${verifiedAgents.map((agent) => agent.detail).join("; ")}. Pause Workshop writes and compare copies of the retained backup and current skills using https://docs.openclaw.ai/tools/skill-workshop/collection-review#when-an-older-backup-cannot-be-restored-automatically; keep the original manifest unchanged. Retry Doctor after resolving the ownership evidence.`,
+            recoverable: true,
+          });
+          continue;
+        }
       }
-      assertWorkspaceStateMigrationReady({ workspaceDirs: [...workspaceDirs], env });
+      if (!ownerAgentId) {
+        roots.push({
+          legacyRoot,
+          warning: `Preserved legacy collection backup root ${legacyRoot} for manual review: workspace ${[...workspaceDirs].join(", ")} does not map to exactly one configured agent (candidate agents: ${candidateAgentIds.join(", ") || "none"}). Review the workspace ownership and retained backup manifests before retrying Doctor.`,
+          recoverable: true,
+        });
+        continue;
+      }
+      assertWorkspaceStateMigrationReady({
+        workspaceDirs: [...workspaceDirs],
+        env,
+        operation: "doctor",
+      });
       const destinationRoot = resolveSkillCollectionBackupRoot(config, ownerAgentId, env);
+      if (isUpdateRehearsalReadOnlyPath(destinationRoot, env)) {
+        continue;
+      }
       const alreadyArchived = await Promise.all(
         backups.map((backup) =>
           isHistoryOnlyBackup(path.join(destinationRoot, backup.manifest.id)),
@@ -92,17 +151,39 @@ type LegacyCollectionBackup = {
   sourceDirs: ReadonlyMap<string, string>;
 };
 
+function isReadOnlyRehearsalBackup(
+  backup: LegacyCollectionBackup,
+  env: NodeJS.ProcessEnv,
+): boolean {
+  return [
+    backup.backupDir,
+    backup.workspaceDir,
+    ...[...backup.sourceDirs.values()].flatMap((relativeDir) => [
+      path.join(backup.workspaceDir, relativeDir),
+      path.join(backup.backupDir, "workspace", relativeDir),
+    ]),
+  ].some((filePath) => isUpdateRehearsalReadOnlyPath(filePath, env));
+}
+
 export function inferWorkspaceOwnerAgentId(
   config: OpenClawConfig,
   env: NodeJS.ProcessEnv,
   workspaceDir: string,
 ): string | undefined {
-  const workspaceMatches = listAgentIds(config).filter(
+  const workspaceMatches = listWorkspaceOwnerAgentIds(config, env, workspaceDir);
+  return workspaceMatches.length === 1 ? workspaceMatches[0] : undefined;
+}
+
+export function listWorkspaceOwnerAgentIds(
+  config: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+  workspaceDir: string,
+): string[] {
+  return listAgentIds(config).filter(
     (agentId) =>
       resolveCanonicalWorkspacePath(resolveAgentWorkspaceDir(config, agentId, env)) ===
       resolveCanonicalWorkspacePath(workspaceDir),
   );
-  return workspaceMatches.length === 1 ? workspaceMatches[0] : undefined;
 }
 
 function legacyCollectionSkillPath(workspaceDir: string, relativeDir: string): string {
@@ -276,6 +357,69 @@ async function readLegacyBackupSkillKey(
   return (resolveSkillManifestMetadata(frontmatter)?.skillKey ?? frontmatter.name)?.trim();
 }
 
+async function verifyLegacyCollectionBackupOwners(
+  backups: readonly LegacyCollectionBackup[],
+  config: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+): Promise<{ agentId: string; verified: boolean; detail: string }[]> {
+  const maxSkillFileBytes = resolveSkillDiscoveryLimits(config).maxSkillFileBytes;
+  const results = await Promise.all(
+    backups.flatMap((backup) =>
+      backup.manifest.resultSkillDirs.map(async (relativeDir) => ({
+        label: `${backup.manifest.id}/${relativeDir}`,
+        hash: backup.manifest.resultSkillHashes[relativeDir],
+        skillKey: await readLegacyBackupSkillKey(
+          backup,
+          relativeDir,
+          backup.manifest.skillDirs.includes(relativeDir) ? undefined : path.basename(relativeDir),
+          maxSkillFileBytes,
+        ),
+      })),
+    ),
+  );
+  const emptyBackups = backups.filter((backup) => backup.manifest.resultSkillDirs.length === 0);
+  return Promise.all(
+    listAgentIds(config)
+      .toSorted()
+      .map(async (agentId) => {
+        let matches = 0;
+        const failures = emptyBackups.map(
+          (backup) => `${backup.manifest.id}: no recorded result hashes`,
+        );
+        for (const result of results) {
+          try {
+            if (!result.skillKey) {
+              throw new Error("saved skill identity unavailable");
+            }
+            const target = resolveSkillProposalTarget({
+              skillName: result.skillKey,
+              config,
+              agentId,
+              env,
+            });
+            if (isUpdateRehearsalReadOnlyPath(target.skillDir, env)) {
+              throw new Error("Workshop target is outside the update rehearsal");
+            }
+            if (!(await pathExists(target.skillDir))) {
+              throw new Error("Workshop skill missing");
+            }
+            if ((await readSkillProposalTargetTreeSha256(target.skillDir)) !== result.hash) {
+              throw new Error("result hash differs");
+            }
+            matches += 1;
+          } catch (error) {
+            failures.push(`${result.label}: ${String(error)}`);
+          }
+        }
+        return {
+          agentId,
+          verified: results.length > 0 && failures.length === 0,
+          detail: `agent ${agentId}: ${matches}/${results.length} skills match${failures.length > 0 ? ` (${failures.join(", ")})` : ""}`,
+        };
+      }),
+  );
+}
+
 async function findUnownedLegacyCollectionBackupDirs(
   backup: LegacyCollectionBackup,
   config: OpenClawConfig,
@@ -444,16 +588,28 @@ async function publishLegacyCollectionBackup(
 export async function migrateLegacyCollectionBackups(
   config: OpenClawConfig,
   env: NodeJS.ProcessEnv,
-): Promise<{ migrated: number; warnings: string[] }> {
-  const roots = await listPendingLegacyCollectionBackupRoots(config, env);
+  roots: readonly LegacyCollectionBackupRoot[],
+): Promise<{ migrated: number; warnings: string[]; recoverableWarningCount: number }> {
   let migrated = 0;
+  let recoverableWarningCount = 0;
   const warnings: string[] = [];
   for (const root of roots) {
     if ("warning" in root) {
       warnings.push(root.warning);
+      if (root.recoverable) {
+        recoverableWarningCount += 1;
+      }
       continue;
     }
     const { legacyRoot, backups, ownerAgentId, destinationRoot } = root;
+    if (
+      [legacyRoot, destinationRoot].some((filePath) =>
+        isUpdateRehearsalReadOnlyPath(filePath, env),
+      ) ||
+      backups.some((backup) => isReadOnlyRehearsalBackup(backup, env))
+    ) {
+      continue;
+    }
     try {
       const newerBackupExists = await hasNewerUnrelatedCollectionBackup(destinationRoot, backups);
       const restorable: LegacyCollectionBackup[] = [];
@@ -479,6 +635,9 @@ export async function migrateLegacyCollectionBackups(
         );
       }
       for (const backup of restorable) {
+        if (isReadOnlyRehearsalBackup(backup, env)) {
+          continue;
+        }
         await fs.rm(backup.backupDir, { recursive: true, force: false });
       }
       if ((await fs.readdir(legacyRoot)).length === 0) {
@@ -489,5 +648,5 @@ export async function migrateLegacyCollectionBackups(
       warnings.push(`Preserved legacy collection backup root ${legacyRoot}: ${String(error)}`);
     }
   }
-  return { migrated, warnings };
+  return { migrated, warnings, recoverableWarningCount };
 }

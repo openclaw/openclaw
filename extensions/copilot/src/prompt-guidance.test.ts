@@ -28,6 +28,25 @@ function buildGuidance(
 }
 
 describe("buildCopilotPromptGuidance", () => {
+  it.each([
+    { tools: [], disableTools: false, terminalSetup: true },
+    { tools: ["openclaw"], disableTools: false, terminalSetup: false },
+    { tools: ["gateway"], disableTools: false, terminalSetup: false },
+    { tools: ["openclaw", "gateway"], disableTools: false, terminalSetup: false },
+    { tools: ["openclaw", "gateway"], disableTools: true, terminalSetup: true },
+    { tools: [" gateway "], disableTools: false, terminalSetup: false },
+  ])(
+    "routes credential setup with $tools (disabled=$disableTools)",
+    ({ tools, disableTools, terminalSetup }) => {
+      const guidance = buildGuidance({ disableTools }, tools);
+
+      expect(guidance?.includes("openclaw channels add <channel>")).toBe(terminalSetup);
+      expect(guidance?.includes("openclaw configure")).toBe(terminalSetup);
+      expect(guidance).toContain("only to the requesting user in private");
+      expect(guidance).toContain("then acknowledge in the group without them");
+    },
+  );
+
   it("composes ordered OpenClaw policy from the final callable capabilities", () => {
     const guidance = buildGuidance();
 
@@ -82,10 +101,40 @@ describe("buildCopilotPromptGuidance", () => {
         "sessions_spawn",
       ]),
     ).toContain("Visible source replies are not automatically delivered");
-    expect(
-      buildGuidance({ sourceReplyDeliveryMode: "message_tool_only" }, ["sessions_spawn"]),
-    ).toContain("reply normally in your final assistant message");
+    const unavailable = buildGuidance({ sourceReplyDeliveryMode: "message_tool_only" }, [
+      "sessions_spawn",
+    ]);
+    expect(unavailable).toContain("remains private");
+    expect(unavailable).not.toContain("Use `message`");
+    expect(unavailable).not.toContain("OpenClaw delivers your final response automatically");
   });
+
+  it.each([false, true])(
+    "teaches the prepared target requirement (%s) only with message",
+    (required) => {
+      const attempt = {
+        agentId: "main",
+        config: {},
+        sessionKey: "agent:main:main",
+        sourceReplyDeliveryMode: "message_tool_only" as const,
+      } as AttemptParamsLike;
+      const guidance = buildCopilotPromptGuidance({
+        attempt,
+        callableToolNames: ["message"],
+        requireExplicitMessageTarget: required,
+      });
+      expect(guidance).toContain(
+        required ? "target required this turn" : "current source is default target",
+      );
+      const unavailable = buildCopilotPromptGuidance({
+        attempt,
+        callableToolNames: [],
+        requireExplicitMessageTarget: required,
+      });
+      expect(unavailable).toContain("remains private");
+      expect(unavailable).not.toContain("`target`");
+    },
+  );
 
   it("renders only the delegation operations present in the callable inventory", () => {
     const guidance = buildGuidance({}, [" sessions_spawn ", "sessions_spawn"]);
@@ -97,16 +146,6 @@ describe("buildCopilotPromptGuidance", () => {
     expect(guidance).not.toContain("sessions_yield");
     expect(guidance).not.toContain("subagents(action=list)");
     expect(buildGuidance({}, ["sessions_yield", "subagents"])).not.toContain("## Delegation");
-  });
-
-  it.each([
-    { name: "callable", tools: ["secrets"], disabled: false, discoverable: true },
-    { name: "absent", tools: [], disabled: false, discoverable: false },
-    { name: "disabled", tools: ["secrets"], disabled: true, discoverable: false },
-  ])("gates credential guidance on the $name tool surface", ({ tools, disabled, discoverable }) => {
-    const guidance = buildGuidance({ disableTools: disabled }, tools);
-    expect(guidance?.includes("`secrets`: list metadata first")).toBe(discoverable);
-    expect(guidance).toContain("host-owned masked credential entry");
   });
 
   it("wraps conversation and subagent context without adding workspace prompt sections", () => {

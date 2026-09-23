@@ -1,30 +1,29 @@
 ---
-summary: "What OpenClaw sends: a daily update check by default, optional anonymous feature statistics, and every privacy control"
+summary: "Daily update requests, approximate location, optional anonymous feature statistics, and privacy controls"
 title: "Usage telemetry and update checks"
 read_when:
-  - Checking what information OpenClaw sends and what it never collects
+  - Checking what OpenClaw sends and what the receiver stores
   - Deciding whether to share anonymous feature statistics
   - Enabling or disabling anonymous feature statistics
   - Disabling all automatic update-check requests
 ---
 
-**The only thing OpenClaw sends on its own is a daily update check.** It asks
-whether a newer version exists, and the request carries nothing but the version,
-operating system, and CPU architecture already visible to any package registry.
-Everything else on this page is opt-in.
+**Automatic update checks send a daily request by default.** It asks whether a
+newer version exists and includes the OpenClaw version, operating system, Node.js
+version, CPU architecture, and request surface.
+Anonymous feature statistics are opt-in.
+This page describes update-check telemetry, not requests made by configured
+providers, channels, or other services.
 
-Anonymous feature statistics — which channels and providers you have configured
-— are **off by default** and never turn themselves on. When you do enable them,
-they ride along with that same daily update check instead of adding a second
-request.
+Anonymous feature statistics describe configured channels and providers, plugin
+inventory, and a retained session-creation count. They are **off by default**.
+When you enable them, they ride along with that same daily update check instead
+of adding a second request.
 
-If you turn them on: thank you. Feature statistics are the only way we learn
-which channels, providers, and plugins people actually use, and they decide what
-gets improved, what gets fixed first, and what can safely be retired. A handful
-of Discord anecdotes is otherwise the entire evidence base. We publish what we
-learn back to everyone at
-[telemetry.openclaw.ai](https://telemetry.openclaw.ai), so the data you
-contribute stays visible to you.
+These reports help inform maintenance priorities. They do not measure individual
+plugin invocations, messages, model requests, or active users. Anonymous usage aggregates
+are available at
+[telemetry.openclaw.ai](https://telemetry.openclaw.ai).
 
 Declining is a completely normal choice and changes nothing about how OpenClaw
 works for you.
@@ -40,13 +39,16 @@ openclaw telemetry show
 Add `--json` to get the same state and payload as one machine-readable
 document.
 
-The output shows whether feature statistics are enabled, why they are enabled
-or disabled, the request endpoint, and the last successful check. When feature
-statistics are enabled, it prints the exact JSON payload the next request would
-send. When only feature statistics are disabled, it shows the update-only request
+The output shows whether anonymous feature statistics are enabled, why they are
+enabled or disabled, the request endpoint, and the last successful check. When
+anonymous feature statistics are enabled, it prints a JSON payload preview built
+in the CLI process. It does not retrieve a payload from the running Gateway.
+When only anonymous feature statistics are disabled, it shows the update-only request
 and its `User-Agent` header instead. When automation or update-check policy
 disables all requests, it shows `Request: none` with the reason (`request: null`
 in JSON).
+The preview describes the client request only. It cannot show server-derived
+location information.
 
 ## Daily update check
 
@@ -76,15 +78,39 @@ For testing or self-hosting, set `OPENCLAW_TELEMETRY_ENDPOINT` to your complete
 replacement endpoint URL. The public server source is available at
 [openclaw/telemetry](https://github.com/openclaw/telemetry).
 
+<a id="cloudflare-derived-request-geography" />
+
+## Approximate location
+
+Cloudflare provides approximate location: country, region code, city, and timezone.
+We store no raw IP addresses or precise coordinates in analytics.
+
+Recorded update checks include these fields even when anonymous feature statistics
+are off or `DO_NOT_TRACK` is set. Missing or invalid fields stay empty.
+No additional client payload or prompt is needed.
+
+Analytics Engine retains records for **three months**. Public aggregates exclude
+location information. Disabling requests does not erase existing records.
+
+This section describes the hosted service at
+[telemetry.openclaw.ai](https://telemetry.openclaw.ai). A replacement endpoint
+configured with `OPENCLAW_TELEMETRY_ENDPOINT` can use different infrastructure
+and processing or storage policies.
+
+<a id="optional-feature-statistics" />
+
 ## Optional anonymous feature statistics
 
-Feature statistics are **off by default**. Interactive setup offers a one-time
-opt-in with **No thanks** selected by default. Non-interactive and scripted
-installations never opt in automatically. OpenClaw records when you accepted or
-declined so it does not ask again.
+Anonymous feature statistics are **off by default**. Interactive setup can offer a one-time
+opt-in with **No thanks** selected by default; guided Quick Start skips that
+prompt. OpenClaw records a prompt response so setup does not ask again.
+Non-interactive and scripted installations do not opt in automatically, but
+operators can explicitly enable anonymous feature statistics with `openclaw telemetry on` or
+`telemetry.enabled: true`. The enabled setting, not the presence of a prompt
+response, controls whether anonymous feature statistics are included.
 
-When you explicitly enable feature statistics, the same daily request becomes a
-`POST` with this complete JSON payload:
+When you explicitly enable anonymous feature statistics, the same daily request becomes a
+`POST` with a JSON payload in this shape (values are illustrative):
 
 ```json
 {
@@ -103,47 +129,65 @@ When you explicitly enable feature statistics, the same daily request becomes a
 }
 ```
 
-| Field                       | Meaning                                                                   |
-| --------------------------- | ------------------------------------------------------------------------- |
-| `schema`                    | Payload format version, currently `1`.                                    |
-| `version`                   | Installed OpenClaw version.                                               |
-| `platform`                  | Operating system and CPU architecture.                                    |
-| `node`                      | Running Node.js version.                                                  |
-| `surface`                   | Request origin: `gateway` or `cli`.                                       |
-| `features.channels`         | Publicly known enabled channel plugin names, sorted alphabetically.       |
-| `features.providerFamilies` | Publicly known configured provider names; never model names.              |
-| `features.plugins`          | Publicly known enabled plugin names, sorted alphabetically.               |
-| `features.pluginsEnabled`   | Total enabled plugins, including privately developed plugins never named. |
-| `features.sessionsLast24h`  | Number of sessions observed during the preceding 24 hours.                |
+| Field                       | Meaning                                                                                           |
+| --------------------------- | ------------------------------------------------------------------------------------------------- |
+| `schema`                    | Payload format version, currently `1`.                                                            |
+| `version`                   | Installed OpenClaw version.                                                                       |
+| `platform`                  | Operating system and CPU architecture.                                                            |
+| `node`                      | Running Node.js version.                                                                          |
+| `surface`                   | Request surface: `gateway` or `cli`; the CLI preview uses `gateway`.                              |
+| `features.channels`         | Configured, not explicitly disabled channel IDs backed by public plugins in the inventory.        |
+| `features.providerFamilies` | Public provider IDs from configuration, auth profiles, and configured model references.           |
+| `features.plugins`          | Public plugin IDs from the enabled inventory, sorted alphabetically.                              |
+| `features.pluginsEnabled`   | Total plugins in that inventory, including plugins not named in `features.plugins`.               |
+| `features.sessionsLast24h`  | Retained session-creation events timestamped within the preceding 24 hours, not session activity. |
 
-OpenClaw names only plugins and channels that are bundled with OpenClaw or
-already appear in its official plugin catalog. Privately developed plugins are
-counted but never named because a private plugin name could identify its
-organization. Subtract `features.plugins.length` from `features.pluginsEnabled`
-to find the number of unnamed private plugins.
+With an active plugin registry, the inventory includes enabled, loaded plugins
+whose code was imported, plus loaded bundle-format plugins. Without that
+registry, it falls back to configured manifest enablement. Neither path records
+whether a plugin was invoked or a configured channel or provider handled work.
 
-The sender and `openclaw telemetry show` use the same payload builder, so the
-JSON displayed by the CLI is the same payload the sender would use at that
-moment.
+Named plugins must be bundled, trusted official installs, or match the official
+plugin catalog. Private plugin identities are not named. Names are also filtered
+and deduplicated, and the service validates them independently. The difference
+between `features.pluginsEnabled` and the number of reported names is therefore
+not a reliable count of private plugins.
 
-Reports carry no identifier of any kind, which means they cannot be linked to
-each other. We can see that some install runs Telegram with Anthropic models; we
-cannot see that it is the same install as yesterday, and we cannot build a
-history of any single machine. That costs us retention analysis, and we consider
-it worth paying.
+The session count depends on locally recorded creation events that remain in
+the bounded event store. Missing or unreadable state produces zero. It is not
+a count of active sessions, messages, or all sessions that existed that day.
 
-### What is never collected
+The sender and `openclaw telemetry show` use the same payload builder, but their
+plugin registry, configuration, and collection time can differ. The CLI preview
+is not a guarantee of the exact next Gateway payload.
 
-Neither request tier includes message content, prompts, model names, API keys,
-credentials, secret references, file paths, hostnames, account identifiers,
-user identifiers, or installation and machine identifiers. OpenClaw does not
-create a random UUID or other persistent request identifier, so daily requests
-cannot be linked through an OpenClaw-issued identifier.
+Reports contain no user, account, install, or device identifier. Repeated reports
+are not unique installations or users. The service does not maintain a per-install
+history or retention measure.
+
+<a id="what-is-never-collected" />
+
+### What is not sent or stored
+
+Neither the update-check `User-Agent` nor the body containing anonymous feature
+statistics includes message content, prompts, model names, API keys, credentials, secret references,
+file paths, hostnames, account identifiers, user identifiers, or installation
+and machine identifiers. OpenClaw does not create a random UUID or other
+persistent client identifier for these requests.
+
+The hosted service's Analytics Engine rows exclude those direct identifiers and raw
+client IP addresses, coordinates, postal codes, and physical-device hardware
+details. Cloudflare processes connection IP addresses, and the Worker uses them
+transiently for rate limiting without storing them in Analytics Engine. Worker
+logs are disabled; Cloudflare's separate infrastructure processing is outside
+those settings.
 
 Anonymous feature statistics are separate from optional, operator-configured
 [OpenTelemetry export](/gateway/opentelemetry).
 
-## Turn feature statistics on or off
+<a id="turn-feature-statistics-on-or-off" />
+
+## Turn anonymous feature statistics on or off
 
 Enable or disable anonymous feature statistics at any time:
 
@@ -162,10 +206,10 @@ You can also configure the same preference directly:
 }
 ```
 
-Set `DO_NOT_TRACK=1` or `DO_NOT_TRACK=true` to force feature statistics off,
+Set `DO_NOT_TRACK=1` or `DO_NOT_TRACK=true` to force anonymous feature statistics off,
 even when `telemetry.enabled` is `true`. `DO_NOT_TRACK` does not disable the
 daily update check: OpenClaw sends the update-only `GET` request without a
-feature-statistics body.
+body containing anonymous feature statistics.
 
 ## Automated environments
 
@@ -175,8 +219,8 @@ are not installations: they would outnumber real operators by orders of
 magnitude and make version and platform counts meaningless, and your pipeline
 should not report to us on every job.
 
-This applies to both tiers, so a CI job sends no update check and no feature
-statistics. Setting `OPENCLAW_TELEMETRY_ENDPOINT` overrides the suppression,
+This applies to both tiers, so a CI job sends no update check and no anonymous
+feature statistics. Setting `OPENCLAW_TELEMETRY_ENDPOINT` overrides the suppression,
 because a configured endpoint means the run is deliberately exercising this
 path.
 
@@ -192,13 +236,12 @@ To go fully dark, disable the existing startup update check:
 }
 ```
 
-This stops both tiers and every automatic update request: no update request, no
-feature statistics, and no update notice, even when `update.auto.enabled` is
-`true`. Setting `OPENCLAW_NO_AUTO_UPDATE=1` also prevents automatic update
-requests and applies. Explicit update commands remain available when you choose
-to run them.
+This stops both tiers and every automatic update request: no update request,
+anonymous feature statistics, or update notice, even when `update.auto.enabled` is `true`.
+Setting `OPENCLAW_NO_AUTO_UPDATE=1` also prevents automatic update requests.
+Explicit update commands remain available when you choose to run them.
 
-See [Configuration reference](/gateway/configuration-reference#telemetry) for
+See [Configuration reference](/gateway/config-observability#telemetry) for
 the full `telemetry` configuration and
-[Update configuration](/gateway/configuration-reference#update) for the
+[Update configuration](/gateway/config-runtime#update) for the
 automatic update-check controls.

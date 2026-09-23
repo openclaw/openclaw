@@ -299,7 +299,7 @@ suite.define(() => {
       await previewButton.press("Enter");
       await dialog.waitFor({ state: "visible" });
       await page.keyboard.press("Escape");
-      await page.getByRole("button", { name: "Remove attachment" }).click();
+      await page.getByRole("button", { name: "Remove favicon-32.png" }).click();
       await expect.poll(() => attachment.count()).toBe(0);
       await captureUiProof(suite, page, "new-session-picked-image-removed.png");
     });
@@ -454,7 +454,7 @@ suite.define(() => {
     });
   });
 
-  it("reconciles an image-bearing initial prompt into one user row", async () => {
+  it("keeps an initial image visible through worktree hydration and canonical history", async () => {
     await withNewSessionPage(async (page) => {
       const sessionKey = "agent:main:single-image-prompt";
       const runId = "initial-image-send";
@@ -502,6 +502,7 @@ suite.define(() => {
           "sessions.create": {
             key: sessionKey,
             runId,
+            entry: { sessionId: "single-image-prompt" },
             runStarted: true,
             messageSeq: 1,
           },
@@ -579,6 +580,43 @@ suite.define(() => {
         expect(await userRow.locator('[aria-busy="true"]').count()).toBe(0);
         await captureUiProof(suite, page, "initial-image-metadata-loading.png");
 
+        const worktreeSession = {
+          key: sessionKey,
+          sessionId: "single-image-prompt",
+          displayName: "Image handoff worktree",
+          kind: "direct",
+          updatedAt: Date.now(),
+          activeRunIds: [runId],
+          hasActiveRun: true,
+          status: "running",
+          permissionMode: "workspace",
+          sessionRoot: "/workspace/image-handoff",
+          spawnedCwd: "/workspace/image-handoff",
+          worktree: {
+            id: "image-handoff-worktree",
+            branch: "image-handoff",
+            repoRoot: "/workspace/project",
+          },
+        };
+        await gateway.setMethodResponse("sessions.list", {
+          ...createdSessionListResult(sessionKey),
+          sessions: [worktreeSession],
+        });
+        await gateway.emitGatewayEvent("sessions.changed", {
+          sessionKey,
+          sessionId: worktreeSession.sessionId,
+          reason: "project",
+          session: worktreeSession,
+        });
+        await pollLocatorText(page.locator(".chat-pane__session-title-text")).toBe(
+          worktreeSession.displayName,
+        );
+        await captureUiProof(suite, page, "initial-image-worktree-metadata-loading.png");
+        expect(await userImage.getAttribute("data-initial-image-node")).toBe("true");
+        expect(await userImage.getAttribute("src")).toBe(initialImageSrc);
+        expect((await captureThumbnail()).equals(initialPixels)).toBe(true);
+        expect(await userRow.locator('[aria-busy="true"]').count()).toBe(0);
+
         await gateway.resolveDeferred("chat.startup");
 
         await expect.poll(() => userRow.count()).toBe(1);
@@ -644,7 +682,7 @@ suite.define(() => {
     });
   });
 
-  it("releases a completed file when the rest of its pasted batch is aborted", async () => {
+  it("retains a completed file when the rest of its pasted batch is aborted", async () => {
     type PasteProof = {
       reads: number;
       loaded: number;
@@ -674,6 +712,9 @@ suite.define(() => {
               { once: true },
             );
             readAsDataUrl.call(this, blob);
+          } else {
+            // Hold only the second pasted file; draft restoration keeps native reads.
+            FileReader.prototype.readAsDataURL = readAsDataUrl;
           }
         };
         FileReader.prototype.abort = function () {
@@ -699,18 +740,36 @@ suite.define(() => {
       await pastePng(composer, 2);
       await expect
         .poll(readProof)
-        .toEqual({ reads: 2, loaded: 1, aborts: 0, created: 0, revoked: 0 });
-      expect(await page.locator(".chat-attachment-thumb").count()).toBe(0);
+        .toEqual({ reads: 2, loaded: 1, aborts: 0, created: 1, revoked: 0 });
+      expect(await page.locator(".chat-attachment-thumb").count()).toBe(2);
+      expect(await page.locator('.chat-attachment-thumb[aria-busy="true"]').count()).toBe(1);
+      await page.getByRole("img", { name: "pixel-1.png", exact: true }).waitFor();
+      await waitForCommittedNewSessionDraft(page, "", ["pixel-1.png"]);
 
       await navigateInApp(page, "chat");
       await waitForCommittedChatRoute(page);
       await expect
         .poll(readProof)
-        .toEqual({ reads: 2, loaded: 1, aborts: 1, created: 0, revoked: 0 });
+        .toEqual({ reads: 2, loaded: 1, aborts: 1, created: 1, revoked: 0 });
       await navigateInApp(page, "new-session");
       await composer.waitFor();
-      expect(await page.locator(".chat-attachment-thumb").count()).toBe(0);
+      await page.getByRole("img", { name: "pixel-1.png", exact: true }).waitFor();
+      expect(await page.locator(".chat-attachment-thumb").count()).toBe(1);
+      expect(await page.locator('.chat-attachment-thumb[aria-busy="true"]').count()).toBe(0);
       expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+      await page.getByRole("button", { name: "Remove pixel-1.png", exact: true }).click();
+      await waitForCommittedNewSessionDraft(page, "", []);
+      await expect
+        .poll(async () => {
+          const proof = await readProof();
+          return {
+            reads: proof.reads,
+            aborts: proof.aborts,
+            previews: proof.created - proof.revoked,
+          };
+        })
+        .toEqual({ reads: 2, aborts: 1, previews: 0 });
+      expect(await page.locator(".chat-attachment-thumb").count()).toBe(0);
     });
   });
 

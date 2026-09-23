@@ -429,6 +429,8 @@ describe("collectGatewayHealthSnapshot", () => {
   });
 
   beforeEach(() => {
+    // Snapshot contents must not depend on host scheduling; deadline tests advance time explicitly.
+    vi.useFakeTimers({ toFake: ["Date"] });
     // Session rows are mocked, but the collector still resolves their physical store.
     sessionStorePath = path.join(
       tempDirs.make("openclaw-health-snapshot-sessions-"),
@@ -447,6 +449,7 @@ describe("collectGatewayHealthSnapshot", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
     tempDirs.cleanup();

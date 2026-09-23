@@ -1,3 +1,4 @@
+import { createAgentHarnessAttemptCancellation } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import {
   isActiveHarnessContextEngine,
   resolveSandboxContext,
@@ -13,11 +14,11 @@ import {
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import { resolveCodexAppServerForModelProvider } from "./app-server-policy.js";
+import { resolveCodexAppServerPreparedAuthHandoff } from "./auth-bridge.js";
 import {
   resolveCodexAppServerAuthProfileId,
   resolveCodexAppServerAuthProfileIdForAgent,
-  resolveCodexAppServerPreparedAuthHandoff,
-} from "./auth-bridge.js";
+} from "./auth-profile.js";
 import {
   assertCodexSessionRuntimeOwnership,
   resolveCodexBindingAppServerConnection,
@@ -39,11 +40,11 @@ import { resolveCodexNativeHookRelayEvents } from "./native-hook-relay.js";
 import { isCodexAppServerProfilerEnabled } from "./profiler-flag.js";
 import { ensureCodexWorkspaceDirOnce } from "./run-attempt-lifecycle.js";
 import type { CodexRunAttemptInput } from "./run-attempt-types.js";
+import { scopeCodexRunBindingStore } from "./session-binding-scope.js";
 import {
   createCodexSessionGenerationSupersededError,
   resolveCodexSessionBinding,
   resolveCodexRunSessionBindingAuthority,
-  scopeCodexRunBindingStore,
   sessionBindingIdentity,
   type CodexAppServerBindingIdentity,
   type CodexAppServerThreadBinding,
@@ -130,7 +131,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
   const assertLocalTargetSupported = (unsupported: boolean) => {
     if (preparedEnvironment?.localProcessEnv && unsupported) {
       throw new Error(
-        "This runtime cannot target the diagnosed local installation. Use the saved prompt with a suggested external or manual handoff on this machine.",
+        "This runtime cannot target the diagnosed local installation. Use an owned local Codex stdio process, or use the saved prompt with a suggested external or manual handoff on this machine.",
       );
     }
   };
@@ -155,9 +156,9 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     (preparedEnvironment !== undefined &&
       Object.keys(preparedEnvironment.credentialScrubEnv).length > 0);
   const withPreparedProcessEnv = <T extends CodexAppServerRuntimeOptions>(appServer: T) => {
-    // Loopback WebSockets can forward to another host; their URL does not attest peer locality.
+    // Peer locality is not process ownership: disconnected socket turns can outlive recovery.
     assertLocalTargetSupported(
-      appServer.start.transport === "websocket" || Boolean(appServer.remoteWorkspaceRoot),
+      appServer.start.transport !== "stdio" || Boolean(appServer.remoteWorkspaceRoot),
     );
     return shellEnvironment
       ? {
@@ -231,22 +232,25 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       "Codex supervision is disabled; refusing to open a native user-home supervised session",
     );
   }
-  const resolveRuntimeOptionsForBinding = (
+  const resolveRuntimeOptionsForBinding = async (
     binding: CodexAppServerThreadBinding | undefined,
     selection: { modelProvider?: string; model?: string },
   ) =>
-    resolveCodexBindingAppServerConnection({
-      binding,
-      pluginConfig,
-      execPolicy,
-      modelProvider: selection.modelProvider,
-      model: selection.model,
-      config: params.config,
-      agentDir,
-      requirementsToml,
-      openClawSandboxActive: sandbox?.enabled === true,
-      sessionPermissionMode: params.permissionMode,
-    }).appServer;
+    (
+      await resolveCodexBindingAppServerConnection({
+        binding,
+        pluginConfig,
+        execPolicy,
+        modelProvider: selection.modelProvider,
+        model: selection.model,
+        config: params.config,
+        agentDir,
+        requirementsToml,
+        openClawSandboxActive: sandbox?.enabled === true,
+        sessionPermissionMode: params.permissionMode,
+        assertCurrent,
+      })
+    ).appServer;
   const initialStartupBindingHadInactiveThreadBootstrap =
     isInactiveThreadBootstrapBinding(startupBinding);
   const appServerHomeScope = resolveCodexAppServerHomeScope({
@@ -315,7 +319,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
   };
   let reviewerPolicyContext = resolveReviewerPolicyContext(startupBinding);
   preDynamicStartupStages.mark("auth-profile");
-  let configuredAppServer = resolveRuntimeOptionsForBinding(startupBinding, {
+  let configuredAppServer = await resolveRuntimeOptionsForBinding(startupBinding, {
     modelProvider: reviewerPolicyContext.modelProvider,
     model: reviewerPolicyContext.model,
   });
@@ -385,41 +389,19 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
   preDynamicStartupStages.mark("app-server-policy");
   preDynamicStartupStages.mark("native-hook-relay");
   const terminalState = {
-    turnSucceeded: false,
+    // SAFETY: Finalization records a settled status only after native completion and local outcome checks.
+    settledTurnStatus: undefined as "completed" | "failed" | undefined,
     explicitCancellationObserved: false,
     explicitCancellationReason: undefined as unknown,
     terminalOutcomeFrozen: false,
     sharedAbortAllowedAfterTerminalOutcome: false,
   };
-  const runAbortController = new AbortController();
-  let attemptAbortNotified = false;
-  const notifyAttemptAbort = () => {
-    if (attemptAbortNotified) {
-      return;
-    }
-    attemptAbortNotified = true;
-    params.onAttemptAbort?.();
-  };
-  const abortExplicitly = (reason: unknown) => {
-    if (terminalState.terminalOutcomeFrozen) {
-      if (terminalState.sharedAbortAllowedAfterTerminalOutcome) {
-        notifyAttemptAbort();
-      }
-      return;
-    }
-    notifyAttemptAbort();
-    terminalState.explicitCancellationObserved = true;
-    terminalState.explicitCancellationReason ??= reason;
-    runAbortController.abort(reason);
-  };
-  const abortFromUpstream = () => {
-    abortExplicitly(params.abortSignal?.reason ?? "upstream_abort");
-  };
-  if (params.abortSignal?.aborted) {
-    abortFromUpstream();
-  } else {
-    params.abortSignal?.addEventListener("abort", abortFromUpstream, { once: true });
-  }
+  const cancellation = createAgentHarnessAttemptCancellation({
+    upstreamSignal: params.abortSignal,
+    onAttemptAbort: () => params.onAttemptAbort?.(),
+    state: terminalState,
+  });
+  const { controller: runAbortController, abortExplicitly } = cancellation;
   try {
     const startupBindingBeforeRotation = startupBinding;
     const startupBindingResolution = await rotateOversizedCodexAppServerStartupBinding({
@@ -427,9 +409,8 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       binding: startupBinding,
       bindingStore,
       identity: bindingIdentity,
-      sessionFile: params.sessionFile,
       agentDir,
-      codexHome: appServer.start.env?.CODEX_HOME,
+      codexHome: appServer.start.codexHome ?? appServer.start.env?.CODEX_HOME,
       config: params.config,
       contextEngineActive: Boolean(activeContextEngine),
       expectedSessionRuntimeOwnership: params.expectedSessionRuntimeOwnership,
@@ -442,7 +423,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     // cleared or replaced native thread changes its model, policy, or connection.
     if (startupBinding !== startupBindingBeforeRotation) {
       reviewerPolicyContext = resolveReviewerPolicyContext(startupBinding);
-      configuredAppServer = resolveRuntimeOptionsForBinding(startupBinding, {
+      configuredAppServer = await resolveRuntimeOptionsForBinding(startupBinding, {
         modelProvider: reviewerPolicyContext.modelProvider,
         model: reviewerPolicyContext.model,
       });
@@ -472,12 +453,12 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       // best available sample for sizing the fresh thread's continuity projection.
       continuityCalibration: startupBindingBeforeRotation?.continuityCalibration,
     };
-    const resolveRuntimeOptionsForCurrentBinding = (selection: {
+    const resolveRuntimeOptionsForCurrentBinding = async (selection: {
       modelProvider?: string;
       model?: string;
     }) =>
       resolveFinalAppServer(
-        resolveRuntimeOptionsForBinding(mutable.startupBinding, selection),
+        await resolveRuntimeOptionsForBinding(mutable.startupBinding, selection),
         selection,
       ).appServer;
     assertCurrent();
@@ -524,7 +505,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       runAbortController,
       terminalState,
       abortExplicitly,
-      abortFromUpstream,
+      cancellation,
       resolveReviewerPolicyContext,
       resolveRuntimeOptionsForCurrentBinding,
       mutable,
@@ -533,7 +514,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     };
   } catch (error) {
     // The attempt owns this listener only after connection preparation returns.
-    params.abortSignal?.removeEventListener("abort", abortFromUpstream);
+    cancellation.dispose();
     throw error;
   }
 }

@@ -6,10 +6,8 @@ import { readdirSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { resolvePluginRootPublicSurfacePath } from "../src/plugins/public-surface-runtime.js";
-import {
-  collectBundledPluginBuildEntries,
-  NON_PACKAGED_BUNDLED_PLUGIN_DIRS,
-} from "./lib/bundled-plugin-build-entries.mjs";
+import { NON_PACKAGED_BUNDLED_PLUGIN_DIRS } from "../src/shared/non-packaged-plugin-dirs.js";
+import { collectBundledPluginBuildEntries } from "./lib/bundled-plugin-build-entries.mjs";
 import { readPositiveEnvInt } from "./lib/numeric-options.mjs";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 const repoRoot = resolveRepoRoot(import.meta.url);

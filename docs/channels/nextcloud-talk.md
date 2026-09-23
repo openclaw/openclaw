@@ -21,7 +21,7 @@ From a local checkout (dev workflows):
 openclaw plugins install ./path/to/local/nextcloud-talk-plugin
 ```
 
-Restart the gateway after installing. Details: [Plugins](/tools/plugin)
+Check the [application result](/plugins/manage-plugins#apply-changes-and-inspect) after installing.
 
 ## Quick setup (beginner)
 
@@ -63,7 +63,7 @@ Restart the gateway after installing. Details: [Plugins](/tools/plugin)
      --secret-file /path/to/nextcloud-talk-secret
    ```
 
-5. Restart the gateway (or finish setup).
+5. Check `openclaw channels status --probe`; start the Gateway if it is offline. Config changes follow [hot reload](/gateway/configuration/hot-reload). If you changed the service environment, restart the Gateway to load it.
 
 Minimal config:
 
@@ -85,6 +85,7 @@ Minimal config:
 - Bots cannot initiate DMs. The user must message the bot first.
 - The webhook URL must be reachable from the Nextcloud server; set `webhookPublicUrl` when the gateway sits behind a proxy. Webhook requests are HMAC-SHA256 signed with the bot secret; invalid signatures are rejected and rate limited.
 - Message webhooks return HTTP 200 only after the raw event is durably stored; storage failures return HTTP 500. The durable `200` carries `x-openclaw-delivery-accepted: durable`, so reverse proxies can require the marker to distinguish OpenClaw acceptance from a generic `200`. Unsupported non-message events return HTTP 200 without the marker and are logged as ignored.
+- The webhook listener admits at most 64 concurrent unauthenticated body reads; overflow requests receive `HTTP/1.1 429` with `Connection: close`. Requests on one keep-alive connection are answered in order, so a queued delivery's `200` acknowledgement always flushes before any overflow rejection closes the socket. The 64-read budget is fixed and not configurable. Deployments that regularly saturate it should reduce or buffer upstream concurrency (for example, cap reverse-proxy fan-in toward the listener) and accept that deliveries refused during saturation may be lost.
 - Media uploads are not supported by the bot API; outbound media is appended as an `Attachment: <url>` line.
 - The webhook payload does not distinguish DMs from rooms; set `apiUser` + `apiPassword` to enable room-type lookups (cached about 5 minutes). Without them, every conversation is treated as a room.
 - Outbound requests go through the SSRF guard. For a Nextcloud host on a trusted private/internal network, opt in with `channels.nextcloud-talk.network.dangerouslyAllowPrivateNetwork: true`.
@@ -171,5 +172,6 @@ Provider options:
 - [Channels Overview](/channels) — all supported channels
 - [Pairing](/channels/pairing) — DM authentication and pairing flow
 - [Groups](/channels/groups) — group chat behavior and mention gating
-- [Channel Routing](/channels/channel-routing) — session routing for messages
+- [Channel routing](/channels/channel-routing) — session routing for messages
+- [Reactions](/tools/reactions) — emoji reaction semantics for the `message` tool
 - [Security](/gateway/security) — access model and hardening

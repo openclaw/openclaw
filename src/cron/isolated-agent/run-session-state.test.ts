@@ -2,6 +2,7 @@
 import crypto from "node:crypto";
 import path from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
@@ -11,6 +12,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { readTranscriptEventRows } from "../../config/sessions/session-accessor.sqlite-read.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
+import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -352,7 +354,7 @@ describe("createPersistCronSessionEntry", () => {
         (row) => JSON.parse(row.eventJson) as { type?: unknown; version?: unknown; cwd?: unknown },
       );
       expect(events[0]?.type).toBe("session");
-      expect(events[0]?.version).toBe(3);
+      expect(events[0]?.version).toBe(CURRENT_SESSION_VERSION);
       expect(events[0]?.cwd).toBe("/tmp/cron-stale-workspace");
       expect(events[1]?.type).toBe("reset");
       expect(events).toHaveLength(2);
@@ -655,7 +657,22 @@ describe("createPersistCronSessionEntry", () => {
       persistSessionEntry: vi.fn(async () => {}),
     });
 
-    await persist();
+    const target = resolveSqliteTargetFromSessionStorePath(storePath);
+    if (!target.path) {
+      throw new Error("expected SQLite database path");
+    }
+    const database = openOpenClawAgentDatabase({ agentId: "main", path: target.path });
+    const reads = trackSqliteStatementExecutions(database.db, ["aggregate"], (query) =>
+      query.includes('"transcript_events"') && /(?:count|sum)\s*\(/iu.test(query)
+        ? "aggregate"
+        : null,
+    );
+    try {
+      await persist();
+      expect(reads.counts.aggregate).toBe(0);
+    } finally {
+      reads.restore();
+    }
 
     expect(cronSession.store["agent:main:cron:completed"]).toEqual({
       sessionId: "run-session-id",

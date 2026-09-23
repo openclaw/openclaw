@@ -29,6 +29,7 @@ async function loadHumanListModules() {
 
   return {
     formatPluginLine: listFormat.formatPluginLine,
+    formatPluginStatus: listFormat.formatPluginStatus,
     formatPluginSourceForTable: sourceDisplay.formatPluginSourceForTable,
     formatCliCommand: commandFormat.formatCliCommand,
     getTerminalTableWidth: table.getTerminalTableWidth,
@@ -70,6 +71,7 @@ export async function runPluginsListCommand(
   const {
     formatCliCommand,
     formatPluginLine,
+    formatPluginStatus,
     formatPluginSourceForTable,
     getTerminalTableWidth,
     renderTable,
@@ -104,7 +106,7 @@ export async function runPluginsListCommand(
     return;
   }
 
-  const enabled = list.filter((p) => p.enabled).length;
+  const enabled = list.reduce((count, plugin) => count + (plugin.enabled ? 1 : 0), 0);
   runtime.log(`${theme.heading("Plugins")} ${theme.muted(`(${enabled}/${list.length} enabled)`)}`);
 
   if (!opts.verbose) {
@@ -124,12 +126,7 @@ export async function runPluginsListCommand(
         Name: plugin.name || plugin.id,
         ID: plugin.name && plugin.name !== plugin.id ? plugin.id : "",
         Format: plugin.format ?? "openclaw",
-        Status:
-          plugin.status === "error"
-            ? theme.error("error")
-            : plugin.enabled
-              ? theme.success("enabled")
-              : theme.warn("disabled"),
+        Status: formatPluginStatus(plugin),
         Source: desc ? `${formattedSource.value}\n${desc}` : formattedSource.value,
         Version: plugin.version ?? "",
       };

@@ -68,27 +68,17 @@ export function resolveModelAuthMode(
       provider: resolved,
     });
   const profiles = listProfilesForProvider(authStore, resolved);
-  if (profiles.length > 0) {
-    const modes = new Set(
-      profiles
-        .map((id) => authStore.profiles[id]?.type)
-        .filter((mode): mode is "api_key" | "oauth" | "token" => Boolean(mode)),
-    );
-    const distinct = ["oauth", "token", "api_key"].filter((k) =>
-      modes.has(k as "oauth" | "token" | "api_key"),
-    );
-    if (distinct.length >= 2) {
-      return "mixed";
-    }
-    if (modes.has("oauth")) {
-      return "oauth";
-    }
-    if (modes.has("token")) {
-      return "token";
-    }
-    if (modes.has("api_key")) {
-      return "api-key";
-    }
+  const modes = new Set(
+    profiles
+      .map((id) => authStore.profiles[id]?.type)
+      .filter((mode) => mode === "oauth" || mode === "token" || mode === "api_key"),
+  );
+  if (modes.size >= 2) {
+    return "mixed";
+  }
+  const [mode] = modes;
+  if (mode) {
+    return authConfig.profileTypeToAuthMode(mode);
   }
 
   const envKey = authConfig.resolveConfigAwareEnvApiKey(cfg, resolved, options?.workspaceDir);
@@ -188,6 +178,7 @@ export async function hasAvailableAuthForProvider(params: {
     provider,
     preferredProfile,
     forModel: params.modelId,
+    includePendingOAuthRefresh: true,
   });
   for (const candidate of order) {
     try {
@@ -264,6 +255,7 @@ export async function getApiKeyForModelCore(params: {
     skipSetupProviderFallback: params.skipSetupProviderFallback,
     modelId: params.model.id,
     modelApi: params.model.api,
+    modelBaseUrl: params.model.baseUrl,
     secretSentinels: params.secretSentinels,
   });
 }
@@ -328,22 +320,18 @@ export function applySecretRefHeaderSentinels<T extends Model>(
         replacement ?? mintSecretSentinel(value, { label: `model-auth:${model.provider}` }),
     });
   };
-  for (const [name, sourceValue] of Object.entries(sourceProvider?.headers ?? {})) {
-    if (!isManagedSecret(sourceValue)) {
-      continue;
-    }
-    const value = normalizeOptionalSecretInput(runtimeProvider?.headers?.[name]);
-    if (value) {
-      addReplacement(name, value);
-    }
-  }
-  for (const [name, sourceValue] of Object.entries(sourceProvider?.request?.headers ?? {})) {
-    if (!isManagedSecret(sourceValue)) {
-      continue;
-    }
-    const value = normalizeOptionalSecretInput(runtimeProvider?.request?.headers?.[name]);
-    if (value) {
-      addReplacement(name, value);
+  for (const [sourceHeaders, runtimeHeaders] of [
+    [sourceProvider?.headers, runtimeProvider?.headers],
+    [sourceProvider?.request?.headers, runtimeProvider?.request?.headers],
+  ] as const) {
+    for (const [name, sourceValue] of Object.entries(sourceHeaders ?? {})) {
+      if (!isManagedSecret(sourceValue)) {
+        continue;
+      }
+      const value = normalizeOptionalSecretInput(runtimeHeaders?.[name]);
+      if (value) {
+        addReplacement(name, value);
+      }
     }
   }
   const sourceAuth = sourceProvider?.request?.auth;

@@ -13,6 +13,10 @@ import {
   renderStandalonePersonLink,
   type PersonActivityRouting,
 } from "../../../components/person-activity-link.ts";
+import {
+  handlePeopleMenuKeydown,
+  searchablePeopleMenu,
+} from "../../../components/searchable-people-menu.ts";
 import { renderSessionOwnerChip } from "../../../components/session-owner-chip.ts";
 import { syncDropdownItemRadio } from "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
@@ -32,6 +36,9 @@ export type ChatSessionSharingProps = {
   visibilityDisabledReason?: string;
   memberAddDisabledReason?: string;
   memberRemoveDisabledReason?: string;
+  publicShareDisabledReason?: string;
+  onPublicShareChange?: (enabled: boolean) => void;
+  onCopyPublicLink?: () => void;
   ownerViewing?: boolean;
   personActivity?: PersonActivityRouting;
   showOwner?: boolean;
@@ -79,6 +86,26 @@ export function selectChatSessionSharingItem(
   props: ChatSessionSharingProps,
   value: string | undefined,
 ): void {
+  if (value?.startsWith("public:")) {
+    if (
+      !props.session ||
+      !canManageChatSessionSharing(props.session) ||
+      props.state?.loading ||
+      !props.state?.result
+    ) {
+      return;
+    }
+    if (value === "public:copy" && props.state.result.publicShare) {
+      props.onCopyPublicLink?.();
+    } else if (!props.publicShareDisabledReason) {
+      if (value === "public:enable") {
+        props.onPublicShareChange?.(true);
+      } else if (value === "public:disable") {
+        props.onPublicShareChange?.(false);
+      }
+    }
+    return;
+  }
   const members = new Set(props.state?.result?.members.map((member) => member.identityId) ?? []);
   if (value?.startsWith("visibility:")) {
     const visibility = value.slice("visibility:".length) as SessionVisibility;
@@ -104,6 +131,22 @@ export function canManageChatSessionSharing(
   return session.sharingRole === "admin" || session.sharingRole === "owner";
 }
 
+export function renderChatSessionPublicIndicator(props: ChatSessionSharingProps) {
+  if (!props.state?.result?.publicShare) {
+    return nothing;
+  }
+  const description = t("chat.sessionSharing.worldReadable");
+  return html`<span
+    class="chat-pane__public-share-indicator"
+    role="status"
+    aria-label=${description}
+    title=${description}
+  >
+    <span aria-hidden="true">${icons.globe}</span>
+    <span>${t("chat.sessionSharing.publicIndicator")}</span>
+  </span>`;
+}
+
 export function renderChatSessionSharing(props: ChatSessionSharingProps, inline = false) {
   const session = props.session;
   if (!session) {
@@ -112,6 +155,7 @@ export function renderChatSessionSharing(props: ChatSessionSharingProps, inline 
   const visibility = session.visibility ?? "shared";
   const canManage = canManageChatSessionSharing(session);
   const result = props.state?.result;
+  const publicShare = result?.publicShare;
   const owner = result?.owner ?? session.owner?.actor;
   const ownerActivity = personActivityLink(
     owner?.identity?.type === "profile" ? owner.identity.id : undefined,
@@ -188,6 +232,45 @@ export function renderChatSessionSharing(props: ChatSessionSharingProps, inline 
       `;
     })}
     ${
+      props.onPublicShareChange
+        ? html`
+            <div class="session-menu__separator" role="separator"></div>
+            <div class="chat-pane__sharing-title">${t("chat.sessionSharing.publicAccess")}</div>
+            <div class="chat-pane__sharing-status">
+              ${t(
+                props.state?.loading || !result
+                  ? "common.loading"
+                  : publicShare
+                    ? "chat.sessionSharing.worldReadable"
+                    : "chat.sessionSharing.notPublic",
+              )}
+            </div>
+            ${
+              publicShare
+                ? html`<wa-dropdown-item
+                    class="session-menu__item"
+                    value="public:copy"
+                    ?disabled=${Boolean(props.state?.loading)}
+                    >${t("chat.sessionSharing.copyPublicLink")}</wa-dropdown-item
+                  >`
+                : nothing
+            }
+            <wa-dropdown-item
+              class="session-menu__item"
+              value=${publicShare ? "public:disable" : "public:enable"}
+              ?disabled=${Boolean(props.publicShareDisabledReason || props.state?.loading || !result)}
+              title=${props.publicShareDisabledReason ?? nothing}
+            >
+              ${t(
+                publicShare
+                  ? "chat.sessionSharing.disablePublicAccess"
+                  : "chat.sessionSharing.enablePublicAccess",
+              )}
+            </wa-dropdown-item>
+          `
+        : nothing
+    }
+    ${
       owner
         ? html`
             <div class="chat-pane__sharing-title chat-pane__sharing-owner-title">
@@ -223,46 +306,52 @@ export function renderChatSessionSharing(props: ChatSessionSharingProps, inline 
               props.state?.loading
                 ? renderMemberSkeletons()
                 : identities.length > 0
-                  ? identities.map((identity) => {
-                      const disabledReason = members.has(identity.id)
-                        ? props.memberRemoveDisabledReason
-                        : props.memberAddDisabledReason;
-                      return html`
-                        <wa-dropdown-item
-                          class="session-menu__item chat-pane__sharing-member"
-                          value=${`member:${identity.id}`}
-                          ?disabled=${Boolean(disabledReason)}
-                          title=${disabledReason ?? nothing}
-                        >
-                          <span
-                            slot="icon"
-                            class="chat-pane__sharing-member-icon"
-                            aria-hidden="true"
-                          >
-                            ${
-                              identity.type === "human"
-                                ? renderSessionOwnerChip(identity, "header")
-                                : icons.bot
-                            }
-                          </span>
-                          <span
-                            class="session-menu__text chat-pane__sharing-member-label"
-                            title=${disabledReason ? nothing : (identity.label ?? identity.id)}
-                            >${identity.label ?? identity.id}</span
-                          >
-                          ${
-                            members.has(identity.id)
-                              ? html`<span
-                                  slot="details"
-                                  class="session-menu__check"
-                                  aria-label=${t("chat.sessionSharing.selected")}
-                                  >${icons.check}</span
-                                >`
-                              : nothing
-                          }
-                        </wa-dropdown-item>
-                      `;
-                    })
+                  ? searchablePeopleMenu(
+                      identities.map((identity) => ({
+                        text: [identity.label, identity.id, identity.type].join(" "),
+                        render: () => {
+                          const disabledReason = members.has(identity.id)
+                            ? props.memberRemoveDisabledReason
+                            : props.memberAddDisabledReason;
+                          return html`
+                            <wa-dropdown-item
+                              class="session-menu__item chat-pane__sharing-member"
+                              value=${`member:${identity.id}`}
+                              ?disabled=${Boolean(disabledReason)}
+                              title=${disabledReason ?? nothing}
+                            >
+                              <span
+                                slot="icon"
+                                class="chat-pane__sharing-member-icon"
+                                aria-hidden="true"
+                              >
+                                ${
+                                  identity.type === "human"
+                                    ? renderSessionOwnerChip(identity, "header")
+                                    : icons.bot
+                                }
+                              </span>
+                              <span
+                                class="session-menu__text chat-pane__sharing-member-label"
+                                title=${disabledReason ? nothing : (identity.label ?? identity.id)}
+                                >${identity.label ?? identity.id}</span
+                              >
+                              ${
+                                members.has(identity.id)
+                                  ? html`<span
+                                      slot="details"
+                                      class="session-menu__check"
+                                      aria-label=${t("chat.sessionSharing.selected")}
+                                      >${icons.check}</span
+                                    >`
+                                  : nothing
+                              }
+                            </wa-dropdown-item>
+                          `;
+                        },
+                      })),
+                      result,
+                    )
                   : html`<div class="chat-pane__sharing-status">
                       ${t("chat.sessionSharing.noPeople")}
                     </div>`
@@ -282,9 +371,11 @@ export function renderChatSessionSharing(props: ChatSessionSharingProps, inline 
     return content;
   }
   return html`
+    ${renderChatSessionPublicIndicator(props)}
     <wa-dropdown
       class="chat-pane__sharing-menu ${shouldCapMembers ? "chat-pane__sharing-menu--capped" : ""}"
       placement="bottom-end"
+      @keydown=${handlePeopleMenuKeydown}
       @wa-show=${() => {
         if (!props.openDisabledReason) {
           props.onOpen();

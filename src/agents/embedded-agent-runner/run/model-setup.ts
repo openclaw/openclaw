@@ -4,17 +4,24 @@ import { requireActivePluginRegistry } from "../../../plugins/runtime.js";
 import { resolveSessionPinnedHarnessId } from "../../../sessions/agent-harness-session-key.js";
 import { FailoverError } from "../../failover-error.js";
 import { AgentHarnessPreflightError } from "../../harness/errors.js";
+import {
+  assertAgentHarnessExecutionEnvironment,
+  resolveAgentHarnessNativeToolPolicyRestricted,
+} from "../../harness/execution-environment.js";
 import { getRegisteredAgentHarness } from "../../harness/registry.js";
 import { ensureSelectedAgentHarnessPlugin } from "../../harness/runtime-plugin.js";
 import { selectAgentHarness } from "../../harness/selection.js";
 import { readSessionRuntimeOwnership } from "../../harness/session-runtime-ownership.js";
+import { assertPluginHarnessConversationToolPolicySupport } from "../../harness/support.js";
 import type { AgentHarness } from "../../harness/types.js";
+import type { ModelCatalogEntry } from "../../model-catalog.types.js";
 import type { ModelRef } from "../../model-selection.js";
 import { resolveSelectedOpenAIRuntimeProvider } from "../../openai-routing.js";
+import { assertPreparedModelRuntimeInputCurrent } from "../../prepared-model-runtime.errors.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
 import { resolveTieredModel } from "../model-resolution.js";
 import { createEmptyAgentDiscoveryStores } from "../model.js";
-import type { RunEmbeddedAgentParams } from "./params.js";
+import type { RunEmbeddedAgentInternalParams } from "./internal-params.js";
 import { resolveRequestStreamTransportOverrides } from "./runtime-resolution.js";
 import type { assertAgentHarnessRunAdmission } from "./session-bootstrap.js";
 import {
@@ -29,7 +36,7 @@ export type PreparedNativeSessionRuntime = {
 } & ({ auth: "native" } | { auth: "host"; modelRef: ModelRef });
 
 function prepareNativeSessionRuntime(
-  runParams: RunEmbeddedAgentParams,
+  runParams: RunEmbeddedAgentInternalParams,
   harness: AgentHarness,
   admission: ReturnType<typeof assertAgentHarnessRunAdmission>,
 ): PreparedNativeSessionRuntime | undefined {
@@ -100,7 +107,8 @@ function prepareNativeSessionRuntime(
 }
 
 export async function resolveEmbeddedRunModelSetup(params: {
-  runParams: RunEmbeddedAgentParams;
+  assertCurrent: () => void;
+  runParams: RunEmbeddedAgentInternalParams;
   sessionAdmission?: ReturnType<typeof assertAgentHarnessRunAdmission>;
   provider: string;
   modelId: string;
@@ -179,6 +187,19 @@ export async function resolveEmbeddedRunModelSetup(params: {
           agentHarnessId: runParams.agentHarnessId,
           agentHarnessRuntimeOverride: runParams.agentHarnessRuntimeOverride,
         });
+  const nativePermissionsConsented = assertAgentHarnessExecutionEnvironment(
+    agentHarness,
+    runParams,
+  );
+  if (agentHarness.executionEnvironment === "host-only" && !nativePermissionsConsented) {
+    assertPluginHarnessConversationToolPolicySupport(
+      agentHarness,
+      resolveAgentHarnessNativeToolPolicyRestricted(
+        { ...runParams, provider, modelId },
+        agentHarness,
+      ),
+    );
+  }
   const pluginHarnessOwnsTransport = agentHarness.id !== "openclaw";
   const expectedHarnessArtifact = runParams.expectedAgentHarnessRuntimeArtifact;
   if (expectedHarnessArtifact && expectedHarnessArtifact.harnessId !== agentHarness.id) {
@@ -192,7 +213,38 @@ export async function resolveEmbeddedRunModelSetup(params: {
     );
   }
 
-  const nativeModelOwned = nativeSessionRuntime !== undefined;
+  let catalog = params.preparedModelRuntime?.modelCatalog;
+  let nativeCatalogFailure: { error: unknown } | undefined;
+  const ownsSelectedNativeModel = (entry: ModelCatalogEntry) =>
+    entry.provider === provider && entry.id === modelId && entry.nativeRuntime === agentHarness.id;
+  if (
+    !nativeSessionRuntime &&
+    pluginHarnessOwnsTransport &&
+    agentHarness.loadModelCatalog &&
+    params.preparedModelRuntime?.loadNativeModelCatalog &&
+    !catalog?.entries.some(ownsSelectedNativeModel) &&
+    !catalog?.routeVariants.some(ownsSelectedNativeModel)
+  ) {
+    try {
+      catalog = await params.preparedModelRuntime.loadNativeModelCatalog({
+        provider,
+        modelId,
+        runtime: agentHarness.id,
+      });
+    } catch (error) {
+      nativeCatalogFailure = { error };
+    }
+    runParams.abortSignal?.throwIfAborted();
+    assertPreparedModelRuntimeInputCurrent(
+      params.preparedModelRuntime,
+      params.preparedModelRuntime.isCurrent,
+    );
+  }
+  const nativeModelOwned =
+    nativeSessionRuntime !== undefined ||
+    (pluginHarnessOwnsTransport &&
+      (catalog?.entries.some(ownsSelectedNativeModel) === true ||
+        catalog?.routeVariants.some(ownsSelectedNativeModel) === true));
   const modelConfigProvider = provider;
   let resolvedModelProvider = provider;
   let modelResolution;
@@ -212,10 +264,15 @@ export async function resolveEmbeddedRunModelSetup(params: {
       workspaceDir: params.workspaceDir,
     });
     const tieredResolution = await resolveTieredModel({
+      abortSignal: runParams.abortSignal,
+      assertCurrent: params.assertCurrent,
       provider: selectedRuntimeProvider,
       ...(selectedRuntimeProvider !== provider ? { fallbackProvider: provider } : {}),
       modelId,
       agentDir: params.agentDir,
+      requestedRouteResolution: modelSelectionChangedByHook
+        ? "raw"
+        : runParams.requestedRouteResolution,
       config: runParams.config,
       workspaceDir: params.workspaceDir,
       authProfileId: runParams.authProfileId,
@@ -224,20 +281,16 @@ export async function resolveEmbeddedRunModelSetup(params: {
     });
     resolvedModelProvider = tieredResolution.provider;
     modelResolution = tieredResolution.resolution;
-  }
-  if (!modelResolution) {
-    throw new FailoverError(`Unknown model: ${provider}/${modelId}`, {
-      reason: "model_not_found",
-      provider,
-      model: modelId,
-      sessionId: runParams.sessionId,
-      lane: params.globalLane,
-    });
+    if (modelResolution.model) {
+      modelId = modelResolution.logicalRef.model;
+    }
   }
   provider = resolvedModelProvider;
-  const { model, error, authStorage, modelRegistry } = modelResolution;
-  if (!model) {
-    throw new FailoverError(error ?? `Unknown model: ${provider}/${modelId}`, {
+  if (!modelResolution.model) {
+    if (nativeCatalogFailure) {
+      throw nativeCatalogFailure.error;
+    }
+    throw new FailoverError(modelResolution.error ?? `Unknown model: ${provider}/${modelId}`, {
       reason: "model_not_found",
       provider,
       model: modelId,
@@ -245,6 +298,7 @@ export async function resolveEmbeddedRunModelSetup(params: {
       lane: params.globalLane,
     });
   }
+  const { model, authStorage, modelRegistry } = modelResolution;
 
   return {
     provider,

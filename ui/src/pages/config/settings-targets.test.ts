@@ -28,8 +28,18 @@ describe("settings search target manifest", () => {
         target.hash,
       ]),
     ).toEqual([
+      ["webSearch", "/settings/search", "", ""],
+      ["sessionStorage", "/settings/ai-agents", "?section=session", "#settings-session-storage"],
+      [
+        "meetingCapture",
+        "/settings/communications",
+        "?section=transcripts",
+        "#settings-communications-meeting-capture",
+      ],
+      ["meetings", "/meetings", "", ""],
       ["device", "/settings/device", "", ""],
       ["devicePermissions", "/settings/device/permissions", "", ""],
+      ["deviceTalk", "/settings/talk", "", ""],
       ["updates", "/settings/updates", "", "#config-section-update"],
       ["channels", "/settings/channels", "", ""],
       ["security", "/settings/security", "", ""],
@@ -57,6 +67,12 @@ describe("settings search target manifest", () => {
         "#settings-appearance-accent",
       ],
       [
+        "appearanceTypography",
+        "/settings/appearance",
+        "?section=__appearance__",
+        "#settings-appearance-typography",
+      ],
+      [
         "appearanceTextSize",
         "/settings/appearance",
         "?section=__appearance__",
@@ -67,6 +83,12 @@ describe("settings search target manifest", () => {
         "/settings/appearance",
         "?section=__appearance__",
         "#settings-appearance-sidebar",
+      ],
+      [
+        "sessionSources",
+        "/settings/appearance",
+        "?section=__appearance__",
+        "#settings-session-sources",
       ],
       [
         "appearanceChat",
@@ -98,7 +120,11 @@ describe("settings search target manifest", () => {
   it("indexes only translation keys present in the English source catalog", () => {
     const source = flattenTranslations(loadControlUiSourceCatalog());
     for (const target of targets) {
-      for (const key of [target.labelKey, ...target.searchKeys]) {
+      for (const key of [
+        target.labelKey,
+        ...target.searchKeys,
+        ...Object.keys(target.nativeSearchKeys ?? {}),
+      ]) {
         expect(source.has(key), `Missing settings search translation: ${key}`).toBe(true);
       }
     }
@@ -122,11 +148,11 @@ describe("settings search target manifest", () => {
 
 describe("settings config section ownership", () => {
   const pages: ReadonlyArray<readonly [ConfigPageId, readonly string[]]> = [
-    ["communications", ["messages", "tts"]],
+    ["communications", ["messages", "tts", "transcripts"]],
     ["appearance", ["__appearance__", "ui"]],
     ["notifications", ["__notifications__"]],
     ["security", ["security", "approvals"]],
-    ["automation", ["commands", "hooks", "bindings", "cron", "plugins"]],
+    ["automation", ["commands", "hooks", "bindings", "cron"]],
     ["mcp", ["mcp"]],
     ["memory", ["memory"]],
     ["talk", ["talk"]],
@@ -147,7 +173,7 @@ describe("settings config section ownership", () => {
     const sections = pages.flatMap(([, pageSections]) => pageSections);
 
     expect(new Set(sections).size).toBe(sections.length);
-    expect([...SCOPED_CONFIG_SECTION_KEYS].toSorted()).toEqual(sections.toSorted());
+    expect([...SCOPED_CONFIG_SECTION_KEYS].toSorted()).toEqual([...sections, "plugins"].toSorted());
   });
 
   it("keeps uncurated sections on Advanced", () => {
@@ -155,6 +181,11 @@ describe("settings config section ownership", () => {
     expect(configPageForSection("secrets")).toBe("advanced");
     expect(configPageForSection("broadcast")).toBe("advanced");
     expect(configPageForSection("models")).toBe("advanced");
+  });
+
+  it("routes plugin policy to the dedicated plugin settings page", () => {
+    expect(configPageForSection("plugins")).toBe("plugin-settings");
+    expect(SCOPED_CONFIG_SECTION_KEYS.has("plugins")).toBe(true);
   });
 
   it("keeps Advanced free of a curated include list", () => {

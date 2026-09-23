@@ -3,7 +3,7 @@ import os from "node:os";
 import type { OpenClawConfig } from "./types.js";
 
 const MIN_AGENT_MAX_CONCURRENT = 8;
-const MAX_AGENT_MAX_CONCURRENT = 16;
+const AGENT_RUNS_PER_CPU = 4;
 let defaultAgentMaxConcurrent: number | undefined;
 
 function resolveDefaultAgentMaxConcurrent(): number {
@@ -12,9 +12,9 @@ function resolveDefaultAgentMaxConcurrent(): number {
     // for runtimes where availableParallelism is absent.
     const availableParallelism =
       typeof os.availableParallelism === "function" ? os.availableParallelism() : os.cpus().length;
-    defaultAgentMaxConcurrent = Math.min(
-      MAX_AGENT_MAX_CONCURRENT,
-      Math.max(MIN_AGENT_MAX_CONCURRENT, availableParallelism),
+    defaultAgentMaxConcurrent = Math.max(
+      MIN_AGENT_MAX_CONCURRENT,
+      availableParallelism * AGENT_RUNS_PER_CPU,
     );
   }
   return defaultAgentMaxConcurrent;

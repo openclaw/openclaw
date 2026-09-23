@@ -3,10 +3,10 @@ import {
   defineLegacyConfigMigration,
   ensureRecord,
   getRecord,
-  mergeMissing,
   type LegacyConfigMigrationSpec,
   type LegacyConfigRule,
 } from "../../../config/legacy.shared.js";
+import { mergeMissing } from "../../../config/merge-missing.js";
 import {
   hasConfigTrancheLegacyKeys,
   migrateConfigTranche,
@@ -609,11 +609,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec
         (_value, root) => stripRetiredTuningKnobs(structuredClone(root)),
       ),
     ],
-    apply: (raw, changes) => {
-      if (stripRetiredTuningKnobs(raw)) {
-        changes.push("Removed retired runtime tuning knobs; built-in defaults now apply.");
-      }
-    },
+    apply: stripRetiredTuningKnobs,
   }),
   defineLegacyConfigMigration({
     id: "runtime.ui-assistant-identity",

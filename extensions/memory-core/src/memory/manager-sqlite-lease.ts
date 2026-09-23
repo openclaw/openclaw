@@ -5,7 +5,7 @@ import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 
 export type MemorySqliteLeaseHandle = {
-  release: () => void;
+  release: () => Promise<void>;
 };
 
 const MEMORY_SQLITE_LEASE_RETRY_DELAY_MS = 25;
@@ -35,7 +35,7 @@ function createMemorySqliteLeaseHandle(
   transactionActive: boolean,
 ): MemorySqliteLeaseHandle {
   return {
-    release: () => {
+    release: async () => {
       let releaseError: unknown;
       if (transactionActive) {
         try {
@@ -56,10 +56,10 @@ function createMemorySqliteLeaseHandle(
   };
 }
 
-export function tryAcquireMemorySqliteLease(
+export async function tryAcquireMemorySqliteLease(
   location: string,
   mode: "shared" | "exclusive",
-): MemorySqliteLeaseHandle | undefined {
+): Promise<MemorySqliteLeaseHandle | undefined> {
   const database = openMemoryLeaseDatabase(location);
   try {
     if (mode === "exclusive") {
@@ -109,13 +109,13 @@ export async function acquireMemorySqliteWriterLease(
         return createMemorySqliteLeaseHandle(database, false);
       } catch (err) {
         if (!isSqliteBusyError(err)) {
-          createMemorySqliteLeaseHandle(database, true).release();
+          await createMemorySqliteLeaseHandle(database, true).release();
           throw err;
         }
         try {
           await sleepWithAbort(MEMORY_SQLITE_LEASE_RETRY_DELAY_MS, signal);
         } catch (sleepError) {
-          createMemorySqliteLeaseHandle(database, true).release();
+          await createMemorySqliteLeaseHandle(database, true).release();
           throw sleepError;
         }
       }

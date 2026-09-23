@@ -2,10 +2,8 @@
 import { resolveCliBackendConfig } from "../../agents/cli-backends.js";
 import { detectNodeClaudePlacement } from "../../agents/cli-runner/prepare-claude.js";
 import { resolveConversationCapabilityProfile } from "../../agents/conversation-capability-profile.js";
-import {
-  agentHarnessExposesOpenClawTools,
-  selectAgentHarness,
-} from "../../agents/harness/selection.js";
+import { selectAgentHarness } from "../../agents/harness/selection.js";
+import { agentHarnessExposesOpenClawTools } from "../../agents/harness/tool-surface.js";
 import {
   isCliRuntimeAliasForProvider,
   resolveCliRuntimeExecutionProvider,

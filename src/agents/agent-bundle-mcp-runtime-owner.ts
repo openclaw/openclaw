@@ -3,9 +3,11 @@ import type { CreateSessionMcpRuntime } from "./agent-bundle-mcp-runtime-shared.
 import type { SessionMcpConfigReload, SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 
 type SessionMcpRuntimeOwner = {
+  hasServers: () => boolean;
   isCurrent: () => boolean;
   replace: (params: Parameters<CreateSessionMcpRuntime>[0]) => SessionMcpRuntime;
   reload: (params: SessionMcpConfigReload) => Promise<void>;
+  retireUnusedServers: (retainedServerNames: ReadonlySet<string>) => Promise<void>;
 };
 
 // SDK facades and the Gateway can load separate bundles of this module.

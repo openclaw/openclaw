@@ -66,62 +66,133 @@ describe("combineIMessagePayloads", () => {
     expect(merged.attachments).toEqual([{ original_path: "/tmp/a.jpg", mime_type: "image/jpeg" }]);
   });
 
-  it("dedupes identical text appearing in both rows (URL in text and balloon)", () => {
-    const a = makePayload({ text: "https://example.com", guid: "row-1" });
-    const b = makePayload({ text: "https://example.com", guid: "row-2" });
-    const merged = combineIMessagePayloads([a, b]);
+  it.each([
+    {
+      label: "identical URL text and balloon",
+      texts: ["https://example.com", "https://example.com"],
+      expected: "https://example.com",
+    },
+    {
+      label: "trimmed case variants and distinct suffixes",
+      texts: ["  MIXED ", "mixed", "Mixed suffix", "mIxEd"],
+      expected: "MIXED Mixed suffix",
+    },
+    {
+      label: "Unicode lowercase expansion",
+      texts: ["\u0130", "i\u0307", "tail"],
+      expected: "\u0130 tail",
+    },
+  ])("dedupes full message text: $label", ({ texts, expected }) => {
+    const merged = combineIMessagePayloads(
+      texts.map((text, index) => makePayload({ text, guid: `row-${index}` })),
+    );
 
-    expect(merged.text).toBe("https://example.com");
-    expect(merged.coalescedMessageGuids).toEqual(["row-1", "row-2"]);
+    expect(merged.text).toBe(expected);
+    expect(merged.coalescedMessageGuids).toEqual(texts.map((_, index) => `row-${index}`));
   });
 
-  it("caps merged text length and appends the truncated marker", () => {
-    const longA = makePayload({ text: "A".repeat(3000), guid: "row-1" });
-    const longB = makePayload({ text: "B".repeat(3000), guid: "row-2" });
-    const merged = combineIMessagePayloads([longA, longB]);
+  it.each([
+    {
+      label: "part of a later distinct message",
+      texts: ["A".repeat(3000), "B".repeat(3000)],
+      expected: `${"A".repeat(3000)} ${"B".repeat(999)}…[truncated]`,
+    },
+    {
+      label: "exactly full text followed only by blanks and duplicates",
+      texts: ["A".repeat(4000), " \t\n", "a".repeat(4000)],
+      expected: "A".repeat(4000),
+    },
+    {
+      label: "a distinct message after an exactly full prefix and its duplicate",
+      texts: ["A".repeat(4000), "a".repeat(4000), "later"],
+      expected: `${"A".repeat(4000)}…[truncated]`,
+    },
+    {
+      label: "a surrogate pair crossing the limit",
+      texts: [`${"A".repeat(3999)}😀`, "tail"],
+      expected: `${"A".repeat(3999)}…[truncated]`,
+    },
+    {
+      label: "a separator at the limit",
+      texts: ["A".repeat(3999), "tail"],
+      expected: `${"A".repeat(3999)} …[truncated]`,
+    },
+  ])("preserves the exact bounded text for $label", ({ texts, expected }) => {
+    const guids = texts.map((_, index) => `row-${index}`);
+    const merged = combineIMessagePayloads(
+      texts.map((text, index) => makePayload({ text, guid: guids[index] })),
+    );
 
-    expect(merged.text?.endsWith("…[truncated]")).toBe(true);
-    expect(merged.text?.length).toBeLessThanOrEqual(4000 + "…[truncated]".length);
+    expect(merged.text).toBe(expected);
+    expect(merged.coalescedMessageGuids).toEqual(guids);
   });
 
-  it("caps the attachment count", () => {
-    // 5 attachments per row × 6 rows = 30 attachments offered, capped at 20.
-    // Stays under the entry cap so the merge isn't pruned for that reason.
-    const payloads = Array.from({ length: 6 }, (_, i) =>
+  it("keeps the first 20 attachments from the first nine and final entries", () => {
+    const firstAttachment = { original_path: "/tmp/first.jpg", mime_type: "image/jpeg" };
+    const latestAttachments = Array.from({ length: 25 }, (_, index) => ({
+      original_path: `/tmp/latest-${index}.jpg`,
+      mime_type: "image/jpeg",
+    }));
+    const attachmentsByRow: Record<number, IMessagePayload["attachments"]> = {
+      8: [firstAttachment],
+      9: [{ original_path: "/tmp/dropped.jpg", mime_type: "image/jpeg" }],
+      11: latestAttachments,
+    };
+    const payloads = Array.from({ length: 12 }, (_, i) =>
       makePayload({
         guid: `row-${i}`,
-        attachments: Array.from({ length: 5 }, (_Local, j) => ({
-          original_path: `/tmp/${i}-${j}.jpg`,
-          mime_type: "image/jpeg",
-        })),
+        attachments: attachmentsByRow[i] ?? null,
       }),
     );
     const merged = combineIMessagePayloads(payloads);
 
-    expect(merged.attachments?.length).toBe(20);
+    expect(merged.attachments).toEqual([firstAttachment, ...latestAttachments.slice(0, 19)]);
   });
 
-  it("keeps first + most recent when entry count exceeds the cap, but tracks every GUID", () => {
+  it("keeps first nine plus last content while preserving metadata from dropped entries", () => {
+    const metadataByRow: Record<number, Partial<IMessagePayload>> = {
+      9: {
+        created_at: "2025-01-02T02:00:00+14:00",
+        thread_originator_guid: "first-thread-parent",
+        reply_to_guid: "first-reply-parent",
+        reply_to_text: "first parent quote",
+        reply_to_sender: "+15555550199",
+      },
+      10: {
+        created_at: "2025-01-02T01:00:00Z",
+        reply_to_guid: "later-parent",
+        reply_to_text: "later parent quote",
+      },
+      11: { id: 999, guid: " row-0 " },
+      12: { guid: " row-12 " },
+    };
     const payloads = Array.from({ length: 25 }, (_, i) =>
       makePayload({
         id: i,
         text: `msg ${i}`,
         guid: `row-${i}`,
         created_at: new Date(Date.UTC(2025, 0, 1, 0, 0, i)).toISOString(),
+        ...metadataByRow[i],
       }),
     );
     const merged = combineIMessagePayloads(payloads);
 
-    // First payload's GUID anchors the merged shape.
-    expect(merged.guid).toBe("row-0");
-    // Every source GUID is tracked, even those whose text was dropped by the cap.
-    expect(merged.coalescedMessageGuids?.length).toBe(25);
-    expect(merged.coalescedMessageGuids?.[0]).toBe("row-0");
-    expect(merged.coalescedMessageGuids?.[24]).toBe("row-24");
-    // Merged text contains only the bounded first entries plus the latest.
-    expect(merged.text).toContain("msg 0");
-    expect(merged.text).toContain("msg 24");
-    expect(merged.text).not.toContain("msg 10"); // dropped by cap
+    expect(merged).toMatchObject({
+      guid: "row-0",
+      text: "msg 0 msg 1 msg 2 msg 3 msg 4 msg 5 msg 6 msg 7 msg 8 msg 24",
+      created_at: "2025-01-02T02:00:00+14:00",
+      thread_originator_guid: "first-thread-parent",
+      reply_to_guid: "first-reply-parent",
+      reply_to_text: "first parent quote",
+      reply_to_sender: "+15555550199",
+      coalescedCatchupCursor: {
+        lastSeenMs: Date.parse("2025-01-02T01:00:00Z"),
+        lastSeenRowid: 999,
+      },
+    });
+    expect(merged.coalescedMessageGuids).toEqual(
+      Array.from({ length: 25 }, (_, i) => `row-${i}`).filter((guid) => guid !== "row-11"),
+    );
   });
 
   it("preserves reply context from any entry that carries one", () => {

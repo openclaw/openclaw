@@ -120,19 +120,21 @@ function controllerFor(panel: Panel): BrowserPanelController {
 describe("browser panel route handoff", () => {
   it("follows session results once on presentation, keeps card choices, and clears session/gateway ownership", async () => {
     const gateway = browserGateway();
+    const focusCount = () =>
+      gateway.request.mock.calls.filter(
+        ([, value]) => (value as BrowserRequestEnvelope).path === "/tabs/focus",
+      ).length;
     const panel = await mountPanel(gateway.client, false);
     expect(gateway.request).not.toHaveBeenCalled();
     panel.presented = true;
     await waitForFast(() => expect(pageTitle(panel)).toBe("managed"));
     expect(panel.shadowRoot?.querySelector(".bp-profile")?.textContent).toBe("managed");
+    expect(focusCount()).toBe(0);
 
     chooseCard(panel, nodeTab);
     await waitForFast(() => expect(pageTitle(panel)).toBe("work"));
-    const focusCount = () =>
-      gateway.request.mock.calls.filter(
-        ([, value]) => (value as BrowserRequestEnvelope).path === "/tabs/focus",
-      ).length;
     const afterClick = focusCount();
+    expect(afterClick).toBe(1);
     panel.preferredTab = { tab: { ...hostTab }, revision: "first" };
     panel.requestUpdate();
     await panel.updateComplete;
@@ -141,6 +143,7 @@ describe("browser panel route handoff", () => {
 
     panel.preferredTab = { tab: hostTab, revision: "second" };
     await waitForFast(() => expect(pageTitle(panel)).toBe("managed"));
+    expect(focusCount()).toBe(afterClick);
     await controllerFor(panel).selectTab("t2");
     panel.preferredTab = { tab: { ...hostTab }, revision: "second" };
     await panel.updateComplete;
@@ -277,6 +280,72 @@ describe("browser panel route handoff", () => {
     expect(paths()).toEqual(expect.arrayContaining(["/start", "/screenshot"]));
     expect(paths()).not.toContain("/tabs/focus");
   });
+
+  it.each([false, true])(
+    "rejects a missing historical tab before capture and preserves the prior view (prior=%s)",
+    async (hasPriorView) => {
+      const missingTarget = "missing-history-target";
+      const gateway = createBrowserClient(
+        async (request) => {
+          if (request.path === "/tabs") {
+            return {
+              running: true,
+              tabs: [createBrowserPanelTestTab("t1", "https://managed.example/", "managed")],
+            };
+          }
+          if (request.body?.targetId === missingTarget) {
+            throw new GatewayRequestError({
+              code: "INVALID_REQUEST",
+              message: "tab not found",
+            });
+          }
+          if (request.path === "/screencast") {
+            throw new GatewayRequestError({
+              code: "INVALID_REQUEST",
+              message: "Screencast unavailable",
+              details: { code: "SCREENCAST_UNSUPPORTED", reason: "node" },
+            });
+          }
+          if (request.path === "/screenshot") {
+            return { path: "/fresh.png", targetId: "raw-t1", url: "https://managed.example/" };
+          }
+          if (request.path === "/act") {
+            return createBrowserPanelTestMetrics("https://managed.example/", "managed");
+          }
+          return { ok: true };
+        },
+        { screencast: true },
+      );
+      const panel = await mountPanel(gateway.client, hasPriorView);
+      if (hasPriorView) {
+        await waitForFast(() => expect(pageTitle(panel)).toBe("managed"));
+      }
+      const controller = controllerFor(panel);
+      const previousView = controller.view;
+      vi.useFakeTimers();
+      panel.preferredTab = {
+        tab: { ...hostTab, targetId: missingTarget },
+        revision: "missing-history",
+      };
+      panel.presented = true;
+      await waitForFast(() => expect(controller.errorText).toBeTruthy());
+
+      const missingCaptures = () =>
+        gateway.request.mock.calls
+          .map(([, value]) => value as BrowserRequestEnvelope)
+          .filter(
+            (request) =>
+              request.body?.targetId === missingTarget &&
+              (request.path === "/screencast" || request.path === "/screenshot"),
+          );
+      expect.soft(controller.activeTargetId).toBe(hasPriorView ? "t1" : null);
+      expect.soft(controller.view).toBe(previousView);
+      expect.soft(controller.loading).toBe(false);
+      expect.soft(missingCaptures()).toEqual([]);
+      await vi.advanceTimersByTimeAsync(21_000);
+      expect(missingCaptures()).toEqual([]);
+    },
+  );
 
   it("keeps a raw target selection when its stable tab alias is not the first tab", async () => {
     const gateway = browserGateway();

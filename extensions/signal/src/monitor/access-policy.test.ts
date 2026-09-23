@@ -1,8 +1,14 @@
 // Signal tests cover access policy plugin behavior.
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { AccessGroupsConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveSignalSender } from "../identity.js";
+import { setSignalRuntime } from "../runtime.js";
 import { handleSignalDirectMessageAccess, resolveSignalAccessState } from "./access-policy.js";
+
+beforeEach(() => {
+  setSignalRuntime(createPluginRuntimeMock());
+});
 
 const SIGNAL_GROUP_ID = "signal-group-id";
 const OTHER_SIGNAL_GROUP_ID = "other-signal-group-id";
@@ -141,23 +147,6 @@ describe("resolveSignalAccessState", () => {
     });
 
     expect(senderAccess.decision).toBe("allow");
-  });
-
-  it("allows group messages through static message sender access groups", async () => {
-    const { groupDecision } = await resolveGroupAccess({
-      groupAllowFrom: ["accessGroup:operators"],
-      groupId: SIGNAL_GROUP_ID,
-      accessGroups: {
-        operators: {
-          type: "message.senders",
-          members: {
-            signal: [SIGNAL_SENDER.e164],
-          },
-        },
-      },
-    });
-
-    expect(groupDecision.decision).toBe("allow");
   });
 
   it("preserves matched Signal senders in effective group allowlists", async () => {

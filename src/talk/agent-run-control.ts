@@ -12,6 +12,8 @@ import type { ReplyToolAuthorityOverlay } from "../auto-reply/reply/reply-run-re
 import { isAbortError } from "../infra/abort-signal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { getDiagnosticSessionActivitySnapshot } from "../logging/diagnostic-run-activity.js";
+import type { UserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.types.js";
+import { captureRealtimeVoiceRunOwner } from "./agent-run-control-owner.js";
 import {
   buildRealtimeVoiceAgentCancelProviderResult,
   buildRealtimeVoiceAgentFollowupSteeringText,
@@ -64,6 +66,7 @@ type RealtimeVoiceAgentControlDeps = {
       isInboundUserMessage?: boolean;
       taskSuggestionDeliveryMode?: undefined;
       toolAuthorityOverlay?: ReplyToolAuthorityOverlay;
+      userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
     },
   ) => Promise<EmbeddedAgentQueueMessageOutcome>;
   getDiagnosticSessionActivitySnapshot: (params: {
@@ -89,6 +92,9 @@ export async function controlRealtimeVoiceAgentRun(
     } | null;
     text: string;
     getToolAuthorityOverlay?: () => ReplyToolAuthorityOverlay;
+    /** Host context prepared by the validated authority callback, never provider text. */
+    getSteeringContext?: () => string | undefined;
+    createUserTurnTranscriptRecorder?: (text: string) => UserTurnTranscriptRecorder;
     mode?: unknown;
     recentEvents?: readonly TalkEvent[];
   },
@@ -127,6 +133,15 @@ export async function controlRealtimeVoiceAgentRun(
     return { sessionId, exactOwner };
   };
   let current = resolveCurrentRun();
+  // Custom dependency adapters own their state; the built-in selector pins its registry owner.
+  const legacyOwner =
+    target === undefined && !providedDeps && current.sessionId
+      ? captureRealtimeVoiceRunOwner(current.sessionId, sessionKey)
+      : undefined;
+  const legacySessionId = current.sessionId;
+  const isLegacyCurrent = () =>
+    providedDeps !== undefined ||
+    (current.sessionId === legacySessionId && legacyOwner?.isCurrent() === true);
   const readActivity =
     providedDeps?.getDiagnosticSessionActivitySnapshot ?? getDiagnosticSessionActivitySnapshot;
   // Global keys are shared across agents. Exact selectors never consult another
@@ -167,7 +182,7 @@ export async function controlRealtimeVoiceAgentRun(
     message: `There is no active OpenClaw run to ${mode === "cancel" ? "cancel" : "steer"}.`,
     ...controlResultPresentation,
   });
-  if (!current.sessionId) {
+  if (!current.sessionId || (target === undefined && !isLegacyCurrent())) {
     return noActiveRun();
   }
   if (!commands) {
@@ -177,7 +192,15 @@ export async function controlRealtimeVoiceAgentRun(
     current = resolveCurrentRun();
   }
   const { sessionId, exactOwner } = current;
-  if (!sessionId) {
+  if (!sessionId || (target === undefined && !isLegacyCurrent())) {
+    return noActiveRun();
+  }
+  const toolAuthorityOverlay = params.getToolAuthorityOverlay?.();
+  const preparedOwner = resolveCurrentRun();
+  if (
+    preparedOwner.sessionId !== sessionId ||
+    (target ? !target.isCurrent(sessionId) : !isLegacyCurrent())
+  ) {
     return noActiveRun();
   }
   if (mode === "cancel") {
@@ -203,37 +226,44 @@ export async function controlRealtimeVoiceAgentRun(
 
   // Steering and follow-up both enqueue to the active run; follow-up is wrapped
   // so the runner treats it as deferred context instead of an immediate pivot.
-  const toolAuthorityOverlay = params.getToolAuthorityOverlay?.();
-  // Caller preparation can synchronously run host hooks; never retarget a successor.
-  const preparedOwner = resolveCurrentRun();
-  if (preparedOwner.sessionId !== sessionId || (target && !target.isCurrent(sessionId))) {
-    return noActiveRun();
-  }
-  const steerText = mode === "followup" ? buildRealtimeVoiceAgentFollowupSteeringText(text) : text;
+  const steeringText = [params.getSteeringContext?.(), text].filter(Boolean).join("\n\n");
+  const steerText =
+    mode === "followup" ? buildRealtimeVoiceAgentFollowupSteeringText(steeringText) : steeringText;
   const options = {
     steeringMode: "all" as const,
     debounceMs: 0,
     isInboundUserMessage: true,
     toolAuthorityOverlay,
+    userTurnTranscriptRecorder: params.createUserTurnTranscriptRecorder?.(steerText),
     // Talk cannot present task suggestions, so spoken user input must not inherit
     // a capable TUI run's model-facing task tools.
     taskSuggestionDeliveryMode: undefined,
   };
-  const outcome: EmbeddedAgentQueueMessageOutcome = target
-    ? commands.queueGuardedEmbeddedAgentMessageWithOutcomeAsync
-      ? await commands.queueGuardedEmbeddedAgentMessageWithOutcomeAsync(
-          sessionId,
-          steerText,
-          options,
-          () => !target.signal.aborted && target.isCurrent(sessionId),
-        )
-      : {
-          queued: false,
-          sessionId,
-          gatewayHealth: "live",
-          reason: "guarded_injection_unsupported",
-        }
-    : await commands.queueEmbeddedAgentMessageWithOutcomeAsync(sessionId, steerText, options);
+  const outcome: EmbeddedAgentQueueMessageOutcome =
+    target || legacyOwner
+      ? commands.queueGuardedEmbeddedAgentMessageWithOutcomeAsync
+        ? await commands.queueGuardedEmbeddedAgentMessageWithOutcomeAsync(
+            sessionId,
+            steerText,
+            options,
+            () => {
+              if (target) {
+                return !target.signal.aborted && target.isCurrent(sessionId);
+              }
+              const currentOverlay = params.getToolAuthorityOverlay?.();
+              return Boolean(
+                legacyOwner?.isCurrent() &&
+                (!currentOverlay || legacyOwner.matchesCaller(currentOverlay)),
+              );
+            },
+          )
+        : {
+            queued: false,
+            sessionId,
+            gatewayHealth: "live",
+            reason: "guarded_injection_unsupported",
+          }
+      : await commands.queueEmbeddedAgentMessageWithOutcomeAsync(sessionId, steerText, options);
   if (!outcome.queued) {
     return {
       ok: false,

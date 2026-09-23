@@ -29,7 +29,7 @@ function buildSenderLabel(params: {
 function buildFromPrepared(
   params: EmbeddedRunAttemptParams,
   preparedUserMessage: MirroredUserMessage | undefined,
-): AgentMessage {
+): MirroredUserMessage {
   const senderId = normalizeOptionalString(params.senderId);
   const senderName = normalizeOptionalString(params.senderName);
   const senderUsername = normalizeOptionalString(params.senderUsername);
@@ -52,10 +52,10 @@ function buildFromPrepared(
     role: "user",
     ...metadata,
     ...(preparedUserMessage ?? { content: params.transcriptPrompt ?? params.prompt }),
-  } as AgentMessage;
+  };
 }
 
-export function buildCodexUserPromptMessage(params: EmbeddedRunAttemptParams): AgentMessage {
+export function buildCodexUserPromptMessage(params: EmbeddedRunAttemptParams): MirroredUserMessage {
   return buildFromPrepared(params, params.userTurnTranscriptRecorder?.message);
 }
 
@@ -80,7 +80,7 @@ export function promptSnapshot(
 
 export async function buildResolvedCodexUserPromptMessage(
   params: EmbeddedRunAttemptParams,
-): Promise<AgentMessage> {
+): Promise<MirroredUserMessage> {
   const resolvedMessage = await params.userTurnTranscriptRecorder?.resolveMessage();
   return buildFromPrepared(params, resolvedMessage ?? params.userTurnTranscriptRecorder?.message);
 }

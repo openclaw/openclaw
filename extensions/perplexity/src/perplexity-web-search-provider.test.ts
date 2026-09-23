@@ -1,5 +1,5 @@
 // Perplexity tests cover perplexity web search provider plugin behavior.
-import { withEnv, withEnvAsync } from "openclaw/plugin-sdk/test-env";
+import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const withTrustedWebSearchEndpointMock = vi.hoisted(() => vi.fn());
@@ -13,7 +13,6 @@ vi.mock("openclaw/plugin-sdk/provider-web-search", async (importOriginal) => {
 });
 
 import { createPerplexityWebSearchProvider } from "./perplexity-web-search-provider.js";
-import { testing } from "./perplexity-web-search-provider.runtime.js";
 
 const openRouterApiKeyEnv = ["OPENROUTER_API", "KEY"].join("_");
 const perplexityApiKeyEnv = ["PERPLEXITY_API", "KEY"].join("_");
@@ -330,6 +329,32 @@ describe("perplexity web search provider", () => {
     expect(withTrustedWebSearchEndpointMock).toHaveBeenCalledTimes(2);
   });
 
+  it("caps returned and cached results when the Perplexity Search API exceeds the requested count", async () => {
+    mockPerplexityResponseOnce({
+      results: [
+        { url: "https://example.com/first", title: "First", snippet: "first" },
+        { url: "https://example.com/second", title: "Second", snippet: "second" },
+        { url: "https://example.com/third", title: "Third", snippet: "third" },
+      ],
+    });
+    const tool = createConfiguredPerplexityTool(true);
+    const args = { query: "perplexity result count owner", count: 1 };
+
+    const first = await tool.execute(args);
+    const cached = await tool.execute(args);
+
+    expect(withTrustedWebSearchEndpointMock).toHaveBeenCalledOnce();
+    const [request] = withTrustedWebSearchEndpointMock.mock.calls[0] as [{ init: RequestInit }];
+    expect(JSON.parse(request.init.body as string)).toMatchObject({ max_results: 1 });
+    expect(first).toMatchObject({
+      provider: "perplexity",
+      count: 1,
+      results: [{ url: "https://example.com/first" }],
+    });
+    expect(first.results).toHaveLength(1);
+    expect(cached).toEqual({ ...first, cached: true });
+  });
+
   it.each([
     { name: "chat completions", structured: false, expectedRequests: 1 },
     { name: "native Search API", structured: true, expectedRequests: 2 },
@@ -415,27 +440,6 @@ describe("perplexity web search provider", () => {
 
     await expect(result).rejects.toThrow("Perplexity request canceled in flight");
     expect(withTrustedWebSearchEndpointMock.mock.calls[0]?.[0]?.signal).toBe(controller.signal);
-  });
-
-  it("strips the provider prefix only for direct chat request models", () => {
-    expect(
-      testing.resolvePerplexityRequestModel("https://api.perplexity.ai", "perplexity/sonar-pro"),
-    ).toBe("sonar-pro");
-    expect(
-      testing.resolvePerplexityRequestModel("https://openrouter.ai/api/v1", "perplexity/sonar-pro"),
-    ).toBe("perplexity/sonar-pro");
-  });
-
-  it.each([
-    { env: perplexityApiKeyEnv, key: directPerplexityApiKey, source: "perplexity_env" },
-    { env: openRouterApiKeyEnv, key: openRouterPerplexityApiKey, source: "openrouter_env" },
-  ])("retains the $source credential origin", ({ env, key, source }) => {
-    withEnv(
-      { [perplexityApiKeyEnv]: undefined, [openRouterApiKeyEnv]: undefined, [env]: key },
-      () => {
-        expect(testing.resolvePerplexityApiKey()).toEqual({ apiKey: key, source });
-      },
-    );
   });
 
   it.each([

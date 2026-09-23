@@ -426,13 +426,12 @@ describe("legacy file install scan compatibility", () => {
     expect(runInstallPolicyMock).toHaveBeenCalledTimes(2);
   });
 
-  it("keeps the deprecated unsafe flag inert when policy warns", async () => {
+  it("blocks policy warnings without acknowledgement", async () => {
     runInstallPolicyMock.mockResolvedValue({
       warning: { reason: "review this plugin", fingerprint: "warning-a" },
     });
 
     const result = await scanFileInstallSourceRuntime({
-      dangerouslyForceUnsafeInstall: true,
       filePath: "/tmp/payload.js",
       logger: {},
       pluginId: "payload",
@@ -708,18 +707,20 @@ describe("legacy file install scan compatibility", () => {
   it.each(["security_scan_blocked", "security_scan_failed"] as const)(
     "does not let acknowledgement override %s",
     async (code) => {
+      const onInstallPolicyWarning = vi.fn(async () => ({ status: "approved" as const }));
       runInstallPolicyMock.mockResolvedValueOnce({
         blocked: { code, reason: "blocked by operator policy" },
       });
 
       const result = await scanFileInstallSourceRuntime({
-        dangerouslyForceUnsafeInstall: true,
+        onInstallPolicyWarning,
         filePath: "/tmp/payload.js",
         logger: {},
         pluginId: "payload",
       });
 
       expect(result?.blocked?.reason).toBe("blocked by operator policy");
+      expect(onInstallPolicyWarning).not.toHaveBeenCalled();
     },
   );
 

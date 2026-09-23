@@ -2,6 +2,8 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { sha256File } from "@openclaw/fs-safe/durability";
+import { walkDirectory } from "@openclaw/fs-safe/walk";
 import type { AnyAgentTool } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   ARCHIVE_LIMIT_ERROR_CODE,
@@ -11,14 +13,14 @@ import {
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import { wrapExternalContent } from "openclaw/plugin-sdk/security-runtime";
 import { appendFileTransferAudit } from "../shared/audit.js";
-import { IMAGE_MIME_INLINE_SET, mimeFromExtension } from "../shared/mime.js";
-import { readClampedInt } from "../shared/params.js";
+import { DIR_FETCH_ARCHIVE_POLICY } from "../shared/dir-fetch-archive.js";
 import {
   DIR_FETCH_DEFAULT_MAX_BYTES,
   DIR_FETCH_HARD_MAX_BYTES,
-  DIR_FETCH_TOOL_DESCRIPTOR,
-  FILE_TRANSFER_SUBDIR,
-} from "./descriptors.js";
+} from "../shared/dir-fetch-limits.js";
+import { IMAGE_MIME_INLINE_SET, mimeFromExtension } from "../shared/mime.js";
+import { readClampedInt } from "../shared/params.js";
+import { DIR_FETCH_TOOL_DESCRIPTOR, FILE_TRANSFER_SUBDIR } from "./descriptors.js";
 import { invokeNodeToolPayload, readRequiredNodePath } from "./node-tool-invoke.js";
 
 // Cap how many local file paths we surface in details.media.mediaUrls.
@@ -29,18 +31,6 @@ const DIRECTORY_TEXT_MAX_BYTES = 8192;
 
 // Hard timeout for gateway-side archive extraction.
 const TAR_UNPACK_TIMEOUT_MS = 60_000;
-
-// Cap on number of entries pre-validated. The compressed tar is already
-// capped at DIR_FETCH_HARD_MAX_BYTES upstream, and we walk the unpacked
-// tree to compute hashes — TAR_UNPACK_MAX_ENTRIES bounds how much work
-// that walk can do.
-const TAR_UNPACK_MAX_ENTRIES = 5000;
-
-// Hard caps on uncompressed extraction. Defends against decompression-bomb
-// archives that compress to <16MB but expand to gigabytes. Both caps are
-// enforced by fs-safe while extracting.
-const DIR_FETCH_MAX_UNCOMPRESSED_BYTES = 64 * 1024 * 1024;
-const DIR_FETCH_MAX_SINGLE_FILE_BYTES = 16 * 1024 * 1024;
 
 function classifyArchiveFailure(error: unknown): {
   auditCode: "TREE_TOO_LARGE" | "UNSAFE_ARCHIVE";
@@ -57,28 +47,6 @@ function classifyArchiveFailure(error: unknown): {
   return { auditCode: "UNSAFE_ARCHIVE", publicCode: "UNSAFE_ARCHIVE", reason };
 }
 
-async function computeFileSha256(filePath: string): Promise<string> {
-  // Stream the hash so we never pull a whole large file into memory.
-  // file_fetch caps single files at 16MB, but unpacked dir_fetch entries
-  // share the 64MB uncompressed budget — better to stream regardless.
-  const hash = crypto.createHash("sha256");
-  const handle = await fs.open(filePath, "r");
-  try {
-    const chunkSize = 64 * 1024;
-    const buf = Buffer.allocUnsafe(chunkSize);
-    while (true) {
-      const { bytesRead } = await handle.read(buf, 0, chunkSize, null);
-      if (bytesRead === 0) {
-        break;
-      }
-      hash.update(buf.subarray(0, bytesRead));
-    }
-  } finally {
-    await handle.close();
-  }
-  return hash.digest("hex");
-}
-
 type UnpackedFileEntry = {
   relPath: string;
   size: number;
@@ -88,14 +56,10 @@ type UnpackedFileEntry = {
 };
 
 function savedDirectoryText(rootDir: string, files: UnpackedFileEntry[]): string {
-  const visible: Array<{ relPath: string; size: number }> = [];
+  const header = JSON.stringify({ rootDir, fileCount: files.length }).slice(0, -1);
+  const visible: string[] = [];
   const render = () => {
-    const manifest = JSON.stringify({
-      rootDir,
-      fileCount: files.length,
-      displayedCount: visible.length,
-      files: visible,
-    });
+    const manifest = `${header},"displayedCount":${visible.length},"files":[${visible.join(",")}]}`;
     const omitted = files.length - visible.length;
     // A stable footer lets each additional complete record consume more bytes,
     // including the last one; omission guidance must not crowd out a full manifest.
@@ -115,7 +79,7 @@ function savedDirectoryText(rootDir: string, files: UnpackedFileEntry[]): string
   for (const { relPath, size } of files.toSorted((a, b) =>
     a.relPath < b.relPath ? -1 : a.relPath > b.relPath ? 1 : 0,
   )) {
-    visible.push({ relPath, size });
+    visible.push(JSON.stringify({ relPath, size }));
     const candidate = render();
     if (!candidate) {
       break;
@@ -129,31 +93,6 @@ function savedDirectoryText(rootDir: string, files: UnpackedFileEntry[]): string
       { source: "unknown" },
     )
   );
-}
-
-/**
- * Walk a directory recursively, collecting file entries (skips directories).
- * Skips symlinks — we don't want to follow links the archive might have
- * carried in. Files only.
- */
-async function walkDir(
-  dir: string,
-  rootDir: string,
-): Promise<{ relPath: string; absPath: string }[]> {
-  const entries = await fs.readdir(dir, { withFileTypes: true });
-  const results: { relPath: string; absPath: string }[] = [];
-  for (const entry of entries) {
-    const absPath = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      const nested = await walkDir(absPath, rootDir);
-      results.push(...nested);
-    } else if (entry.isFile()) {
-      const relPath = path.relative(rootDir, absPath);
-      results.push({ relPath, absPath });
-    }
-    // Symlinks are intentionally ignored: don't follow them out of destDir.
-  }
-  return results;
 }
 
 export function createDirFetchTool(): AnyAgentTool {
@@ -223,15 +162,7 @@ export function createDirFetchTool(): AnyAgentTool {
           tarGzip: true,
           timeoutMs: TAR_UNPACK_TIMEOUT_MS,
           entryModes: "clamp",
-          // fs-safe validates raw paths before supplying canonical pre-strip names.
-          entryFilter: ({ kind }) => (kind === "file" || kind === "directory" ? "extract" : "skip"),
-          onFiltered: "reject-archive",
-          limits: {
-            maxArchiveBytes: DIR_FETCH_HARD_MAX_BYTES,
-            maxEntries: TAR_UNPACK_MAX_ENTRIES,
-            maxExtractedBytes: DIR_FETCH_MAX_UNCOMPRESSED_BYTES,
-            maxEntryBytes: DIR_FETCH_MAX_SINGLE_FILE_BYTES,
-          },
+          ...DIR_FETCH_ARCHIVE_POLICY,
         });
       } catch (error) {
         await Promise.all([
@@ -255,9 +186,15 @@ export function createDirFetchTool(): AnyAgentTool {
         throw new Error(`dir.fetch ${failure.publicCode}: ${failure.reason}`, { cause: error });
       }
 
-      const walked = await walkDir(rootDir, rootDir);
+      const walked = await walkDirectory(rootDir, {
+        symlinks: "skip",
+        include: ({ kind }) => kind === "file",
+      });
+      if (walked.failedDirs.length > 0) {
+        throw walked.failedDirs[0]!.error;
+      }
       const files: UnpackedFileEntry[] = [];
-      for (const { relPath, absPath } of walked) {
+      for (const { relativePath: relPath, path: absPath } of walked.entries) {
         let size;
         try {
           const st = await fs.stat(absPath);
@@ -266,7 +203,7 @@ export function createDirFetchTool(): AnyAgentTool {
           continue;
         }
         const mimeType = mimeFromExtension(relPath);
-        const fileSha256 = await computeFileSha256(absPath);
+        const fileSha256 = (await sha256File(absPath)).digest;
         files.push({ relPath, size, mimeType, sha256: fileSha256, localPath: absPath });
       }
       const fileCount = files.length;

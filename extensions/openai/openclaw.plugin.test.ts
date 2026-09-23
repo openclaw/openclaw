@@ -99,7 +99,7 @@ describe("OpenAI plugin manifest", () => {
   it("keeps OpenAI media-understanding manifest metadata aligned with runtime audio support", () => {
     const metadata = manifest.mediaUnderstandingProviderMetadata?.openai;
     expect(metadata?.capabilities).toEqual(["image", "audio"]);
-    expect(metadata?.defaultModels?.image).toBe("gpt-5.6-sol");
+    expect(metadata?.defaultModels?.image).toBe("gpt-6-astra");
     expect(metadata?.defaultModels?.audio).toBe("gpt-4o-transcribe");
     expect(metadata?.autoPriority?.image).toBe(20);
     expect(metadata?.autoPriority?.audio).toBe(20);
@@ -148,7 +148,8 @@ describe("OpenAI plugin manifest", () => {
       "Pair your ChatGPT account in browser with a device code",
     );
     expect(openAiDeviceCode && "assistantVisibility" in openAiDeviceCode).toBe(false);
-    expect(openAiDeviceCode?.onboardingFeatured).not.toBe(true);
+    expect(openAiDeviceCode?.onboardingFeatured).toBe(true);
+    expect(openAiLogin?.onboardingFeatured).not.toBe(true);
     expect(openAiDeviceCode?.groupId).toBe("openai");
     expect(openAiDeviceCode?.groupLabel).toBe("OpenAI");
     expect(openAiDeviceCode?.groupHint).toBe("ChatGPT/Codex sign-in or API key");

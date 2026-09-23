@@ -2,8 +2,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { readExecApprovalsSnapshot, saveExecApprovals } from "../infra/exec-approvals.js";
+import type { ExecAutoReviewer, ExecAutoReviewTranscript } from "../infra/exec-auto-review.js";
 import { handleInvoke } from "../node-host/invoke.js";
 import {
   captureActivePluginRegistrySnapshot,
@@ -20,9 +23,13 @@ import {
 import { executeNodeHostCommand } from "./bash-tools.exec-host-node.js";
 import type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
 import { resolvePreparedExecEnvironment } from "./bash-tools.exec-request-preparation.js";
+import { createExecTool } from "./bash-tools.exec-run.js";
 
 const rpc = vi.hoisted(() => vi.fn());
-vi.mock("./tools/gateway.js", () => ({ callGatewayTool: rpc }));
+vi.mock("./tools/gateway.js", () => ({
+  callGatewayTool: rpc,
+  readGatewayCallOptions: vi.fn(() => ({})),
+}));
 vi.mock("./tools/nodes-utils.js", () => ({
   listNodes: async () => [
     {
@@ -43,7 +50,9 @@ let resolveDecision: (result: { decision: string }) => void;
 let decisionEntered: Deferred;
 beforeEach(async ({ onTestFinished }) => {
   const previousRegistry = captureActivePluginRegistrySnapshot();
-  onTestFinished(() => rollbackStagedPluginRegistry(previousRegistry));
+  onTestFinished(() => {
+    rollbackStagedPluginRegistry(previousRegistry);
+  });
   // A real Gateway already loaded its ingress channel before executing a tool.
   // Keep this node-policy fixture from cold-loading the whole A2A plugin graph.
   stageActivePluginRegistry(
@@ -81,6 +90,9 @@ beforeEach(async ({ onTestFinished }) => {
     }
     if (method === "exec.approval.request") {
       return { id: params.id, expiresAtMs: Date.now() + 60000 };
+    }
+    if (method === "exec.approval.resolve") {
+      return { ok: true };
     }
     if (method === "exec.approval.waitDecision") {
       decisionEntered.resolve();
@@ -126,6 +138,45 @@ beforeEach(async ({ onTestFinished }) => {
 afterEach(async () => {
   await state.cleanup();
 });
+
+it.each(
+  (["gateway", "node"] as const).flatMap((host) =>
+    (["subagent", "dashboard"] as const).map((surface) => ({ host, surface })),
+  ),
+)(
+  "preserves child context through $host exec from a $surface session",
+  async ({ host, surface }) => {
+    const childSessionKey = `agent:main:${surface}:exec-child`;
+    const storePath = state.statePath("agents", "main", "sessions", "sessions.json");
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey: childSessionKey, storePath },
+      {
+        sessionId: "exec-child-instance",
+        updatedAt: Date.now(),
+        spawnDepth: 1,
+        spawnedBy: "agent:main:main",
+      },
+    );
+    const tool = createExecTool({
+      host,
+      node: "node-1",
+      security: "full",
+      ask: "off",
+      notifyOnExit: false,
+      allowBackground: false,
+      config: { session: { store: storePath } },
+      sessionKey: "agent:main:main",
+      runSessionKey: childSessionKey,
+      notifySessionKey: childSessionKey,
+    });
+    const result = await tool.execute("child-exec-context", {
+      command: `${quoteCliArg(process.execPath)} -e ${quoteCliArg("process.stdout.write(process.env.OPENCLAW_SUBAGENT_EXEC || 'missing')")}`,
+      env: { OPENCLAW_SUBAGENT_EXEC: "0" },
+      workdir: state.root,
+    });
+    expect(result.details).toMatchObject({ status: "completed", aggregated: "1" });
+  },
+);
 
 it("prepares managed GitHub exec with the node's own sanitized environment", async () => {
   const environment = withEnv(
@@ -207,6 +258,110 @@ it.each(["GH_TOKEN", "GITHUB_TOKEN"])(
     }
   },
 );
+
+it("auto-reviews an absolute direct command through real node preparation and execution", async () => {
+  resolveDecision({ decision: "deny" });
+  saveExecApprovals({ version: 1, defaults: { security: "allowlist", ask: "on-miss" } });
+  const autoReviewer = vi.fn(async () => ({
+    decision: "allow-once" as const,
+    risk: "low" as const,
+    rationale: "prints fixture output",
+  }));
+  const result = await executeNodeHostCommand({
+    ...request,
+    security: "allowlist",
+    ask: "on-miss",
+    autoReview: true,
+    autoReviewer,
+  });
+
+  expect(autoReviewer).toHaveBeenCalledOnce();
+  expect(autoReviewer).toHaveBeenCalledWith(
+    expect.objectContaining({
+      argv: ["/usr/bin/printf", "node-policy-proof"],
+      host: "node",
+    }),
+  );
+  expect(rpc.mock.calls.some(([method]) => method === "exec.approval.waitDecision")).toBe(false);
+  expect(result.details).toMatchObject({ status: "completed", aggregated: "node-policy-proof" });
+  expect(invokeCount).toBe(1);
+});
+
+it.each([
+  "printf node-policy-proof",
+  "/usr/bin/printf *.txt",
+  "/usr/bin/env /usr/bin/printf node-policy-proof",
+  "FOO=bar /usr/bin/printf node-policy-proof",
+  "/bin/sh -c '/usr/bin/printf node-policy-proof'",
+])("keeps remote unpinned or wrapped %s on the human path", async (command) => {
+  saveExecApprovals({ version: 1, defaults: { security: "allowlist", ask: "on-miss" } });
+  const autoReviewer = vi.fn(async () => ({
+    decision: "allow-once" as const,
+    risk: "low" as const,
+    rationale: "would allow if called",
+  }));
+  const warnings: string[] = [];
+  const execution = executeNodeHostCommand({
+    ...request,
+    command,
+    security: "allowlist",
+    ask: "on-miss",
+    autoReview: true,
+    autoReviewer,
+    warnings,
+  });
+  const drained = execution.catch(() => undefined);
+  try {
+    await Promise.race([decisionEntered.promise, execution]);
+    expect(autoReviewer).not.toHaveBeenCalled();
+    expect(invokeCount).toBe(0);
+    expect(warnings).toContain("Exec auto-review skipped: dispatch chain cannot be bound");
+    resolveDecision({ decision: "deny" });
+    await expect(execution).rejects.toThrow("exec denied: user-denied");
+  } finally {
+    resolveDecision({ decision: "deny" });
+    await drained;
+  }
+});
+
+it("collects live conversation context only when the node exec tool reaches review", async () => {
+  let currentTranscript: ExecAutoReviewTranscript | undefined;
+  const reviewTranscript = vi.fn(() => currentTranscript);
+  const autoReviewer = vi.fn<ExecAutoReviewer>(async () => ({
+    decision: "deny",
+    risk: "low",
+    rationale: "The operator requested a different action.",
+  }));
+  const tool = createExecTool({
+    host: "node",
+    node: "node-1",
+    mode: "auto",
+    nodeCwd: request.workdir,
+    agentId: request.agentId,
+    sessionKey: request.sessionKey,
+    safeBins: [],
+    autoReviewer,
+    reviewTranscript,
+  });
+  expect(reviewTranscript).not.toHaveBeenCalled();
+  afterPrepare = async () => {
+    expect(reviewTranscript).not.toHaveBeenCalled();
+    currentTranscript = {
+      entries: [{ kind: "user", origin: "operator", text: "Inspect the node configuration." }],
+      omittedEntries: 0,
+      truncated: false,
+    };
+  };
+
+  const result = await tool.execute("node-live-review-context", { command: request.command });
+
+  expect(reviewTranscript).toHaveBeenCalledTimes(1);
+  expect(autoReviewer).toHaveBeenCalledWith(
+    expect.objectContaining({ host: "node", transcript: currentTranscript }),
+  );
+  expect(result.details).toMatchObject({ status: "failed", approvalReviewOutcome: "denied" });
+  expect(invokeCount).toBe(0);
+});
 
 it("denies caller allowlist/off misses before dispatch to a permissive node", async () => {
   await expect(executeNodeHostCommand({ ...request, security: "allowlist" })).rejects.toThrow(

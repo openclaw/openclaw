@@ -17,13 +17,6 @@ let setMattermostRuntime: typeof import("../runtime.js").setMattermostRuntime;
 let hasMattermostThreadParticipationWithPersistence: typeof import("./thread-participation.js").hasMattermostThreadParticipationWithPersistence;
 let recordMattermostThreadParticipation: typeof import("./thread-participation.js").recordMattermostThreadParticipation;
 
-// Drain microtasks + the immediate queue so the fire-and-forget persistent write
-// in recordMattermostThreadParticipation has settled before we assert on it.
-const flush = (): Promise<void> =>
-  new Promise((resolve) => {
-    setImmediate(resolve);
-  });
-
 function setRuntime(openKeyedStore: (options: OpenKeyedStoreOptions) => unknown): void {
   setMattermostRuntime({
     state: { openKeyedStore },
@@ -53,7 +46,7 @@ describe("mattermost thread participation", () => {
   });
 
   it("remembers a thread the bot replied in", async () => {
-    recordMattermostThreadParticipation("acct", "chan", "root-1");
+    await recordMattermostThreadParticipation("acct", "chan", "root-1");
     await expect(
       hasMattermostThreadParticipationWithPersistence({
         accountId: "acct",
@@ -64,8 +57,7 @@ describe("mattermost thread participation", () => {
   });
 
   it("isolates participation by account, channel, and thread", async () => {
-    recordMattermostThreadParticipation("acct", "chan", "root-1");
-    await flush();
+    await recordMattermostThreadParticipation("acct", "chan", "root-1");
     for (const probe of [
       { accountId: "other", channelId: "chan", threadRootId: "root-1" },
       { accountId: "acct", channelId: "other", threadRootId: "root-1" },
@@ -76,7 +68,7 @@ describe("mattermost thread participation", () => {
   });
 
   it("ignores empty identifiers", async () => {
-    recordMattermostThreadParticipation("", "chan", "root-1");
+    await recordMattermostThreadParticipation("", "chan", "root-1");
     await expect(
       hasMattermostThreadParticipationWithPersistence({
         accountId: "",
@@ -89,8 +81,7 @@ describe("mattermost thread participation", () => {
   it("restores participation after a restart without extending its original expiry", async () => {
     const repliedAt = 1_711_406_400_000;
     const now = vi.spyOn(Date, "now").mockReturnValue(repliedAt);
-    recordMattermostThreadParticipation("acct", "chan", "root-1");
-    await flush();
+    await recordMattermostThreadParticipation("acct", "chan", "root-1");
     now.mockReturnValue(repliedAt + 7 * 24 * 60 * 60 * 1000 - 1000);
     // Simulate a restart near expiry: memory is lost, but the SQLite row is still valid.
     threadParticipationMemory.clear();
@@ -117,7 +108,7 @@ describe("mattermost thread participation", () => {
       throw new Error("sqlite unavailable");
     });
     // record + read must not throw; the in-memory cache still answers.
-    recordMattermostThreadParticipation("acct", "chan", "root-1");
+    await recordMattermostThreadParticipation("acct", "chan", "root-1");
     await expect(
       hasMattermostThreadParticipationWithPersistence({
         accountId: "acct",

@@ -1,3 +1,8 @@
+import { setTimeout as delay } from "node:timers/promises";
+import {
+  normalizeAgentRunTimeoutPhase,
+  normalizeProviderStarted,
+} from "@openclaw/normalization-core/agent-run-terminal-outcome";
 /**
  * Gateway-backed agent run wait helpers.
  * Normalizes run wait responses, reads the latest assistant reply, and drains
@@ -11,10 +16,12 @@ import {
   resolveDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
-import { callGateway } from "../gateway/call.js";
+import type { callGateway } from "../gateway/call.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { hasRetryableConnectionErrorCode } from "../infra/retryable-network-errors.js";
+import { getGatewayRestartDrainSignal } from "../process/gateway-work-admission.js";
 import { normalizeBlockedLivenessWaitStatus } from "../shared/agent-liveness.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import {
   isOpenClawMessageToolMirrorAssistantMessage,
   isTranscriptOnlyOpenClawAssistantMessage,
@@ -25,16 +32,15 @@ import {
 } from "./agent-run-terminal-outcome.js";
 import { normalizeAgentRunTerminalReceipt } from "./agent-run-terminal-receipt.js";
 import { normalizeAgentRunTerminalReplySnapshot } from "./agent-run-terminal-reply.js";
-import {
-  normalizeAgentRunTimeoutPhase,
-  normalizeProviderStarted,
-} from "./run-timeout-attribution.js";
 import type { AgentWaitResult } from "./run-wait.types.js";
 import { extractStoredAssistantText, stripToolMessages } from "./tools/chat-history-text.js";
+import { bindAgentToolGatewayRequest } from "./tools/in-process-gateway.js";
 
 export type { AgentWaitResult };
 
 type GatewayCaller = typeof callGateway;
+
+const AGENT_RUN_WAIT_RETRY_DELAY_MS = 100;
 
 function resolveRunWaitTimeoutMs(value: number | undefined): number {
   return clampTimerTimeoutMs(parseFiniteNumber(value) ?? 1) ?? 1;
@@ -178,7 +184,9 @@ export async function readLatestAssistantReply(params: {
   limit?: number;
   callGateway?: GatewayCaller;
 }): Promise<string | undefined> {
-  const history = await (params.callGateway ?? callGateway)<{ messages: unknown[] }>({
+  const history = await (params.callGateway ?? bindAgentToolGatewayRequest({ hostedOnly: true }))<{
+    messages: unknown[];
+  }>({
     method: "chat.history",
     params: {
       sessionKey: params.sessionKey,
@@ -205,16 +213,18 @@ export async function waitForAgentRun(params: {
   runId: string;
   timeoutMs: number;
   callGateway?: GatewayCaller;
+  signal?: AbortSignal;
 }): Promise<AgentWaitResult> {
   const timeoutMs = resolveRunWaitTimeoutMs(params.timeoutMs);
   try {
-    const wait = await (params.callGateway ?? callGateway)({
+    const wait = await (params.callGateway ?? bindAgentToolGatewayRequest({ hostedOnly: true }))({
       method: "agent.wait",
       params: {
         runId: params.runId,
         timeoutMs,
       },
       timeoutMs: addTimerTimeoutGraceMs(timeoutMs, 2_000),
+      ...(params.signal ? { signal: params.signal } : {}),
     });
     if (wait?.status === "timeout") {
       return normalizeAgentWaitResult("timeout", params.runId, wait);
@@ -239,13 +249,49 @@ export async function waitForAgentRun(params: {
   }
 }
 
+/** Retry-grace and observation timeouts do not settle the accepted run. */
+export function isTerminalAgentWaitTimeout(wait: AgentWaitResult): boolean {
+  return (
+    wait.status === "timeout" &&
+    wait.pendingError !== true &&
+    (wait.endedAt !== undefined ||
+      Boolean(wait.stopReason || wait.livenessState) ||
+      buildAgentRunTerminalOutcomeFromWaitResult(wait)?.reason === "hard_timeout")
+  );
+}
+
 /** Read the completed run's reply without inferring delivery from display history. */
 export async function waitForAgentRunReply(params: {
   runId: string;
   timeoutMs: number;
   callGateway?: GatewayCaller;
+  untilTerminal?: true;
 }): Promise<AgentWaitResult & { replyText?: string }> {
-  const wait = await waitForAgentRun(params);
+  const scopeSignal = getAsyncWorkSignal();
+  const signal = params.untilTerminal
+    ? AbortSignal.any([getGatewayRestartDrainSignal(), ...(scopeSignal ? [scopeSignal] : [])])
+    : undefined;
+  let wait: AgentWaitResult;
+  for (;;) {
+    signal?.throwIfAborted();
+    wait = await waitForAgentRun({ ...params, signal });
+    signal?.throwIfAborted();
+    if (
+      !params.untilTerminal ||
+      !(
+        wait.status === "pending" ||
+        (wait.status === "timeout" &&
+          wait.timeoutPhase !== "gateway_draining" &&
+          !isTerminalAgentWaitTimeout(wait) &&
+          (wait.pendingError === true || !wait.error))
+      )
+    ) {
+      break;
+    }
+    // Queued and retry-grace snapshots can return immediately. Retain the
+    // accepted run's observation without spinning or extending its execution.
+    await delay(AGENT_RUN_WAIT_RETRY_DELAY_MS, undefined, { signal, ref: false });
+  }
   return wait.status === "ok" && wait.terminalReply?.disposition === "visible"
     ? { ...wait, replyText: wait.terminalReply.text }
     : wait;
@@ -260,6 +306,7 @@ export async function waitForAgentRunsToDrain(params: {
   callGateway?: GatewayCaller;
 }): Promise<AgentRunsDrainResult> {
   const deadlineAtMs = resolveRunWaitDeadlineAtMs(params);
+  const callGateway = params.callGateway ?? bindAgentToolGatewayRequest({ hostedOnly: true });
 
   // Runs may finish and spawn more runs, so refresh until no pending IDs remain.
   let pendingRunIds = new Set<string>(
@@ -273,11 +320,26 @@ export async function waitForAgentRunsToDrain(params: {
         waitForAgentRun({
           runId,
           timeoutMs: remainingMs,
-          callGateway: params.callGateway,
+          callGateway,
         }),
       ),
     );
+    const previousRunIds = pendingRunIds;
     pendingRunIds = new Set<string>(normalizePendingRunIds(params.getPendingRunIds()));
+    const retryDelayMs = Math.min(AGENT_RUN_WAIT_RETRY_DELAY_MS, deadlineAtMs - Date.now());
+    if (
+      retryDelayMs > 0 &&
+      pendingRunIds.size > 0 &&
+      pendingRunIds.size === previousRunIds.size &&
+      [...pendingRunIds].every((runId) => previousRunIds.has(runId))
+    ) {
+      // Queued or cached waits can resolve immediately. Let completion callbacks
+      // run instead of repeatedly scanning an unchanged registry in microtasks.
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, retryDelayMs);
+      });
+      pendingRunIds = new Set<string>(normalizePendingRunIds(params.getPendingRunIds()));
+    }
   }
 
   return {

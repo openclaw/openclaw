@@ -7,6 +7,7 @@ import { root as openLockRoot } from "@openclaw/fs-safe/root";
 import { isDirectRunUrl } from "./direct-run.mjs";
 import { hasUnjoinedWork } from "./managed-child-process.mts";
 import { findRepoRoot } from "./repo-root.mjs";
+import type { WithDistArtifactOwnership } from "./runtime-artifact-contract.js";
 
 const DIST_ARTIFACT_LOCK_PATH = ".artifacts/dist-artifacts.lock";
 const LOCK_POLL_MS = 500;
@@ -44,7 +45,7 @@ async function runOwnedDistArtifactEntry(script: string, args: string[]) {
 }
 
 /** The callback must join every writer/reader before returning, including on failure. */
-export async function withDistArtifactOwnership<T>(rootDir: string, run: () => Promise<T>) {
+export const withDistArtifactOwnership: WithDistArtifactOwnership = async (rootDir, run) => {
   const directory = resolveDistArtifactLockPath(fs.realpathSync(rootDir));
   // Only the private child entry can inherit its parent's checkout ownership;
   // the same standalone CLI flow runs without reacquiring that parent's lock.
@@ -112,16 +113,19 @@ export async function withDistArtifactOwnership<T>(rootDir: string, run: () => P
       await lock.release();
     }
   }
-}
+};
 
 /**
  * An owning orchestrator calls the same implementation in a separately sized Node
  * process. It joins that child without re-entering the standalone CLI's lock.
  */
-export function distArtifactEntryArgs(script: string, args: string[] = []) {
+export function distArtifactEntryArgs(
+  script: string,
+  args: string[] = [],
+  { native = false }: { native?: boolean } = {},
+) {
   return [
-    "--import",
-    new URL("../tsx.mjs", import.meta.url).href,
+    ...(native ? [] : ["--import", new URL("../tsx.mjs", import.meta.url).href]),
     fileURLToPath(import.meta.url),
     pathToFileURL(path.resolve(script)).href,
     ...args,

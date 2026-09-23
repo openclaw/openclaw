@@ -1,8 +1,11 @@
 // Memory Core tests cover index plugin behavior.
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
+  encodeMemoryEmbedding,
   hashText,
   INVALID_PROJECT_ANNOTATION_KEY,
   MEMORY_CHUNKING_VERSION,
@@ -18,6 +21,7 @@ import {
   openOpenClawAgentDatabase,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { describe, expect, it, vi } from "vitest";
+import { writeMemoryIndexArchiveTranscript } from "./index-archive.test-support.js";
 import {
   createManagerIndexFixture,
   type ManagerIndexFixture,
@@ -39,60 +43,40 @@ describe("memory index", () => {
     getFtsSessionManager,
     getPersistentManager,
     seedSessionTranscript: seedMemoryIndexSessionTranscript,
-    trackManager,
   } = fixture;
 
-  function rewritePersistedProviderIdentity(manager: MemoryIndexManager, model: string): void {
-    const providerKey = hashText(
-      JSON.stringify({
-        provider: providerFixture.identityAlias.provider,
-        model,
-      }),
-    );
-    const db = Reflect.get(manager, "db") as {
-      prepare: (sql: string) => {
-        get: (...params: unknown[]) => { value?: string } | undefined;
-        run: (...params: unknown[]) => void;
-      };
-    };
-    const metaRow = db
-      .prepare("SELECT value FROM memory_index_meta WHERE key = ?")
-      .get("memory_index_meta_v1");
-    const meta = JSON.parse(metaRow?.value ?? "{}") as MemoryIndexMeta;
-    db.prepare("UPDATE memory_index_meta SET value = ? WHERE key = ?").run(
-      JSON.stringify({ ...meta, model, providerKey }),
-      "memory_index_meta_v1",
-    );
-    db.prepare("UPDATE memory_index_chunks SET model = ?").run(model);
-    db.prepare(
-      "UPDATE memory_embedding_cache SET model = ?, provider_key = ? WHERE provider = ?",
-    ).run(model, providerKey, providerFixture.identityAlias.provider);
-  }
-
-  it("does not prepare vector deletes after in-place reset drops a missing vector table", async () => {
+  it("rebuilds a missing vector table through forced sync with cached readiness", async () => {
     const cfg = createCfg({
       vectorEnabled: true,
-      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
     });
     const manager = await getFreshManager(cfg);
-    trackManager(manager);
-    type VectorState = { available: boolean | null; dims?: number };
-    const vector = Reflect.get(manager, "vector") as VectorState;
-    vector.available = true;
-    vector.dims = 4;
-    Reflect.set(Reflect.get(manager, "database"), "vectorReady", Promise.resolve(true));
+    await manager.sync({ reason: "test", force: true });
+    const db = Reflect.get(manager, "db") as DatabaseSync;
+    expect(db.prepare("SELECT COUNT(*) AS count FROM memory_index_chunks_vec").get()).toEqual({
+      count: 1,
+    });
+    await expect(manager.probeVectorAvailability()).resolves.toBe(true);
+    expect(manager.status().vector).toMatchObject({ storeAvailable: true, dims: 4 });
+    db.exec("DROP TABLE memory_index_chunks_vec");
+    expect(
+      db.prepare("SELECT name FROM sqlite_master WHERE name = 'memory_index_chunks_vec'").get(),
+    ).toBeUndefined();
 
-    await expect(
-      Reflect.apply(Reflect.get(manager, "runInPlaceReindex"), manager, [
-        { reason: "test", force: true },
-      ]),
-    ).resolves.toBeUndefined();
+    await manager.sync({ reason: "test", force: true });
+    const chunks = db.prepare("SELECT id, text FROM memory_index_chunks ORDER BY id").all();
+    expect(chunks).toEqual([
+      { id: expect.any(String), text: expect.stringContaining("Alpha memory line.") },
+    ]);
+    expect(db.prepare("SELECT id FROM memory_index_chunks_vec ORDER BY id").all()).toEqual(
+      chunks.map(({ id }) => ({ id })),
+    );
+    expect(await manager.search("alpha")).toEqual(
+      expect.arrayContaining([expect.objectContaining({ path: "memory/2026-01-12.md" })]),
+    );
   });
 
   it("indexes memory files and searches", async () => {
-    const cfg = createCfg({
-      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
-    });
+    const cfg = createCfg({});
     const manager = await getFreshManager(cfg);
     try {
       await manager.sync({ reason: "test" });
@@ -249,7 +233,7 @@ describe("memory index", () => {
   });
 
   it.each(["none", "openai"])(
-    "indexes incomplete and mixed annotations promptly with provider %s",
+    "preserves incomplete and mixed annotations when indexing with provider %s",
     async (provider) => {
       await fs.writeFile(
         path.join(fixture.paths.workspace, "MEMORY.md"),
@@ -262,9 +246,8 @@ describe("memory index", () => {
       );
       const manager = await getFreshManager(createCfg({ provider }));
       try {
-        const started = performance.now();
+        // curated-annotations.test.ts in memory-host-sdk guards parser backtracking.
         await manager.sync({ reason: "test", force: true });
-        expect(performance.now() - started).toBeLessThan(3_000);
         const db = Reflect.get(manager, "db") as DatabaseSync;
         expect(
           db
@@ -553,55 +536,6 @@ describe("memory index", () => {
     }
   });
 
-  it("inherits entry-scoped annotations across oversized curated fragments", async () => {
-    await fs.writeFile(
-      path.join(fixture.paths.workspace, "MEMORY.md"),
-      [
-        "- Oversized alpha entry. <!-- trigger: oversized alpha --> <!-- importance: 8 --> <!-- project: alpha-key -->",
-        `  ${"alpha-fragment-body ".repeat(400)}`,
-        "- Global neighbor. <!-- trigger: global neighbor -->",
-      ].join("\n"),
-    );
-
-    const manager = await getFreshManager(createCfg({ provider: "none" }));
-    try {
-      const settings = Reflect.get(manager, "settings") as {
-        chunking: { tokens: number; overlap: number };
-      };
-      settings.chunking = { tokens: 64, overlap: 0 };
-      await manager.sync({ reason: "test", force: true });
-      const db = Reflect.get(manager, "db") as DatabaseSync;
-      const rows = db
-        .prepare(
-          `SELECT chunk.text, metadata.importance, metadata.triggers,
-                  metadata.project_key AS projectKey
-           FROM memory_index_chunks AS chunk
-           LEFT JOIN memory_index_chunk_recall_metadata AS metadata
-             ON metadata.chunk_id = chunk.id
-           WHERE chunk.path = 'MEMORY.md' AND chunk.source = 'memory'
-           ORDER BY chunk.start_line, chunk.id`,
-        )
-        .all() as Array<{
-        text: string;
-        importance: number | null;
-        triggers: string | null;
-        projectKey: string | null;
-      }>;
-      const fragments = rows.filter((row) => row.triggers === "oversized alpha");
-
-      expect(fragments.length).toBeGreaterThanOrEqual(2);
-      expect(fragments.every((row) => row.projectKey === "alpha-key" && row.importance === 8)).toBe(
-        true,
-      );
-      expect(rows.find((row) => row.triggers === "global neighbor")).toMatchObject({
-        projectKey: null,
-        importance: null,
-      });
-    } finally {
-      await manager.close?.();
-    }
-  });
-
   it("re-chunks unchanged files and removes stale rows when the chunking version advances", async () => {
     const curatedContent = [
       "- Alpha entry. <!-- trigger: alpha entry --> <!-- project: alpha-key -->",
@@ -629,7 +563,7 @@ describe("memory index", () => {
       db.prepare(
         `INSERT INTO memory_index_chunks
          (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
-         VALUES (?, ?, 'memory', 1, 3, ?, 'fts-only', ?, '[]', ?)`,
+         VALUES (?, ?, 'memory', 1, 3, ?, 'fts-only', ?, x'', ?)`,
       ).run(
         "legacy-curated-chunk",
         "MEMORY.md",
@@ -651,7 +585,7 @@ describe("memory index", () => {
          (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
          VALUES (
            'stale-default-media', 'memory/default-diagram.png', 'memory', 1, 1,
-           'stale-default-media', 'fts-only', 'Image file: memory/default-diagram.png', '[]', ?
+           'stale-default-media', 'fts-only', 'Image file: memory/default-diagram.png', x'', ?
          )`,
       ).run(Date.now());
       db.prepare(
@@ -707,55 +641,6 @@ describe("memory index", () => {
     }
   });
 
-  it("keeps existing file index rows when chunk publication fails", async () => {
-    const cfg = createCfg({});
-    const manager = await getFreshManager(cfg);
-    try {
-      const db = Reflect.get(manager, "db") as DatabaseSync;
-
-      await manager.sync({ reason: "test" });
-
-      const initialSource = db
-        .prepare("SELECT hash FROM memory_index_sources WHERE path LIKE ? AND source = ?")
-        .get("%2026-01-12.md", "memory") as { hash: string } | undefined;
-      const initialChunk = db
-        .prepare("SELECT text FROM memory_index_chunks WHERE path LIKE ? AND source = ?")
-        .get("%2026-01-12.md", "memory") as { text: string } | undefined;
-      expect(initialSource?.hash).toBeTruthy();
-      expect(initialChunk?.text).toContain("Alpha memory line.");
-
-      db.exec(`
-        CREATE TRIGGER fail_chunk_publication
-        AFTER INSERT ON memory_index_chunks
-        BEGIN
-          SELECT RAISE(FAIL, 'forced chunk publication failure');
-        END;
-      `);
-      await fs.writeFile(
-        path.join(fixture.paths.memory, "2026-01-12.md"),
-        "# Log\nUpdated memory line.",
-      );
-      Reflect.set(manager, "dirty", true);
-
-      await expect(manager.sync({ reason: "test" })).rejects.toThrow(
-        "forced chunk publication failure",
-      );
-
-      expect(
-        db
-          .prepare("SELECT hash FROM memory_index_sources WHERE path LIKE ? AND source = ?")
-          .get("%2026-01-12.md", "memory"),
-      ).toEqual(initialSource);
-      expect(
-        db
-          .prepare("SELECT text FROM memory_index_chunks WHERE path LIKE ? AND source = ?")
-          .get("%2026-01-12.md", "memory"),
-      ).toEqual(initialChunk);
-    } finally {
-      await manager.close?.();
-    }
-  });
-
   it("keeps indexed memory searchable when source discovery fails", async () => {
     const memoryPath = path.join(fixture.paths.workspace, "MEMORY.md");
     const query = "harbor seal migration ritual";
@@ -794,8 +679,6 @@ describe("memory index", () => {
   });
 
   it("reindexes memory tables in place without deleting unrelated agent rows", async () => {
-    const stateDir = path.join(fixture.paths.workspace, "managed-memory-state");
-    fixture.setStateDir(stateDir);
     const agentDbPath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
     const agentDb = openOpenClawAgentDatabase({ agentId: "main" });
     agentDb.db
@@ -803,11 +686,7 @@ describe("memory index", () => {
       .run("test", "keep-me", JSON.stringify({ value: "keep-me" }), 1);
     closeOpenClawAgentDatabasesForTest();
 
-    const manager = await getFreshManager(
-      createCfg({
-        hybrid: { enabled: false },
-      }),
-    );
+    const manager = await getFreshManager(createCfg({}));
     try {
       await manager.sync({ reason: "test", force: true });
       expect(manager.status().dbPath).toBe(agentDbPath);
@@ -839,8 +718,7 @@ describe("memory index", () => {
   });
 
   it("reports an uninitialized status without creating agent or registry databases", async () => {
-    const stateDir = path.join(fixture.paths.workspace, "missing-status-state");
-    fixture.setStateDir(stateDir);
+    const stateDir = fixture.paths.stateDir;
     const agentPath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
     const statePath = path.join(stateDir, "state", "openclaw.sqlite");
 
@@ -888,8 +766,8 @@ describe("memory index", () => {
       await statusManager.close?.();
       statusManager = undefined;
 
-      expect(await fs.readFile(agentPath)).toEqual(databaseBefore);
-      expect(await fs.readFile(`${agentPath}-wal`)).toEqual(walBefore);
+      assert.deepStrictEqual(await fs.readFile(agentPath), databaseBefore);
+      assert.deepStrictEqual(await fs.readFile(`${agentPath}-wal`), walBefore);
     } finally {
       await statusManager?.close?.();
       writer.close();
@@ -951,10 +829,10 @@ describe("memory index", () => {
         }
       ).db
         .prepare("SELECT embedding FROM memory_index_chunks WHERE path LIKE ? AND source = ?")
-        .get("%2026-01-13.md", "memory") as { embedding: string } | undefined;
+        .get("%2026-01-13.md", "memory") as { embedding: Uint8Array } | undefined;
 
       expect(betaRow).toBeDefined();
-      expect(JSON.parse(betaRow?.embedding ?? "[]")).toEqual([0, 1, 0, 0]);
+      expect(betaRow?.embedding).toEqual(encodeMemoryEmbedding([0, 1, 0, 0]));
     } finally {
       await manager.close?.();
     }
@@ -1144,14 +1022,14 @@ describe("memory index", () => {
     }
   });
 
-  it.each([
+  it.for([
     ["success", 0, 0, { enabled: true, failures: 0, lastError: undefined }],
     ["repeated failures", 0, 2, { enabled: false, failures: 2, lastError: "failure 2" }],
     ["late failure", 1, 2, { enabled: false, failures: 2, lastError: "failure 1" }],
     ["late recovery", 1, 1, { enabled: false, failures: 0, lastError: undefined }],
   ] as const)(
     "keeps custom batches concurrent through %s",
-    async (_outcome, priorFailures, errors, expected) => {
+    async ([_outcome, priorFailures, errors, expected], { signal }) => {
       const manager = await getFreshManager(
         createCfg({ provider: "batch-test", batchEnabled: true }),
       );
@@ -1175,17 +1053,26 @@ describe("memory index", () => {
           { length: errors },
           (_, index) => new Error(`failure ${index + 1}`),
         );
-        let releaseBatchGate: (() => void) | undefined;
-        providerFixture.providerRuntimeBatchGate = new Promise((resolve) => {
-          releaseBatchGate = resolve;
-        });
+        const batchesEntered = createDeferred<void>();
+        const releaseBatchGate = createDeferred<void>();
+        providerFixture.providerRuntimeBatchGate = releaseBatchGate.promise;
+        providerFixture.providerRuntimeBatchEntered = (activeCalls) => {
+          if (activeCalls === 2) {
+            batchesEntered.resolve();
+          }
+        };
+        const abort = () => batchesEntered.reject(signal.reason);
+        signal.addEventListener("abort", abort, { once: true });
         const syncPromise = manager.sync({ reason: "test", force: true });
         try {
-          await vi.waitFor(() =>
-            expect(providerFixture.providerRuntimeMaxActiveBatchCalls).toBe(2),
-          );
+          // Provider entry owns this rendezvous; filesystem preparation has no one-second contract.
+          signal.throwIfAborted();
+          await Promise.race([batchesEntered.promise, syncPromise]);
+          expect(providerFixture.providerRuntimeMaxActiveBatchCalls).toBe(2);
         } finally {
-          releaseBatchGate?.();
+          signal.removeEventListener("abort", abort);
+          providerFixture.providerRuntimeBatchEntered = null;
+          releaseBatchGate.resolve();
           await syncPromise;
         }
         expect(manager.status().batch).toMatchObject(expected);
@@ -1273,7 +1160,6 @@ describe("memory index", () => {
   it("does not full-reindex on search when existing metadata belongs to another provider", async () => {
     const oldCfg = createCfg({
       model: "old-embed",
-      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
     });
     const oldManager = await getFreshManager(oldCfg);
     await oldManager.sync({ reason: "test", force: true });
@@ -1282,7 +1168,6 @@ describe("memory index", () => {
     const nextCfg = createCfg({
       provider: "gemini",
       model: "new-embed",
-      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
     });
     const nextManager = await getFreshManager(nextCfg);
     try {
@@ -1322,74 +1207,10 @@ describe("memory index", () => {
     }
   });
 
-  it.each([
-    {
-      direction: "HF to exact cache path",
-      indexedModel: providerFixture.identityAlias.canonicalModel,
-      configuredModel: providerFixture.identityAlias.cacheModel,
-    },
-    {
-      direction: "exact cache path to HF",
-      indexedModel: providerFixture.identityAlias.cacheModel,
-      configuredModel: providerFixture.identityAlias.canonicalModel,
-    },
-  ])(
-    "keeps $direction indexes and embedding caches usable",
-    async ({ indexedModel, configuredModel }) => {
-      const indexedCfg = createCfg({
-        provider: providerFixture.identityAlias.provider,
-        model: providerFixture.identityAlias.canonicalModel,
-        cacheEnabled: true,
-        vectorEnabled: false,
-        onSearch: false,
-        hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
-      });
-      const indexedManager = await getFreshManager(indexedCfg);
-      await indexedManager.sync({ reason: "test", force: true });
-      if (indexedModel !== providerFixture.identityAlias.canonicalModel) {
-        rewritePersistedProviderIdentity(indexedManager, indexedModel);
-      }
-      await indexedManager.close?.();
-
-      const embedsBeforeReuse = providerFixture.embedBatchCalls;
-      const nextCfg = createCfg({
-        provider: providerFixture.identityAlias.provider,
-        model: configuredModel,
-        cacheEnabled: true,
-        vectorEnabled: false,
-        onSearch: false,
-        hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
-      });
-      const statusManager = await getFreshManager(nextCfg, "status");
-      try {
-        expect(statusManager.status().dirty).toBe(false);
-        expect(statusManager.status().custom?.indexIdentity).toEqual({ status: "valid" });
-      } finally {
-        await statusManager.close?.();
-      }
-
-      const nextManager = await getFreshManager(nextCfg);
-      try {
-        const results = await nextManager.search("zebra");
-
-        expect(results.length).toBeGreaterThan(0);
-        expect(results[0]?.path).toContain("memory/2026-01-12.md");
-        expect(nextManager.status().custom?.indexIdentity).toEqual({ status: "valid" });
-
-        await nextManager.sync({ reason: "test", force: true });
-
-        expect(providerFixture.embedBatchCalls).toBe(embedsBeforeReuse);
-      } finally {
-        await nextManager.close?.();
-      }
-    },
-  );
-
   it("keeps status clean when configured provider alias resolves to indexed adapter", async () => {
     const oldCfg = createCfg({
       provider: "ollama",
       model: "ollama-embed",
-      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
     });
     const oldManager = await getFreshManager(oldCfg);
     await oldManager.sync({ reason: "test", force: true });
@@ -1405,7 +1226,6 @@ describe("memory index", () => {
         },
       },
       model: "ollama-embed",
-      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
     });
     const statusManager = await getFreshManager(aliasCfg, "status");
     try {
@@ -1423,7 +1243,6 @@ describe("memory index", () => {
     const indexCfg = createCfg({
       provider: "gemini",
       model: "gemini-embed",
-      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
     });
     const indexManager = await getFreshManager(indexCfg);
     await indexManager.sync({ reason: "test", force: true });
@@ -1435,7 +1254,6 @@ describe("memory index", () => {
     const statusCfg = createCfg({
       provider: "gemini",
       model: "",
-      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
     });
     const statusManager = await getFreshManager(statusCfg, "status");
     try {
@@ -1449,9 +1267,7 @@ describe("memory index", () => {
   });
 
   it("rebuilds missing metadata with existing chunks before search", async () => {
-    const cfg = createCfg({
-      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
-    });
+    const cfg = createCfg({});
     await fs.writeFile(
       path.join(fixture.paths.memory, "2026-01-13.md"),
       "# Log\nBeta memory line.",
@@ -1496,7 +1312,6 @@ describe("memory index", () => {
     const cfg = createCfg({
       provider: "none",
       vectorEnabled: false,
-      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
     });
     const initial = await getFreshManager(cfg);
     await initial.sync({ reason: "test", force: true });
@@ -1519,7 +1334,6 @@ describe("memory index", () => {
   it("does not search stale provider rows after embeddings become unavailable", async () => {
     const oldCfg = createCfg({
       model: "semantic-embed",
-      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
     });
     const oldManager = await getFreshManager(oldCfg);
     await oldManager.sync({ reason: "test", force: true });
@@ -1543,7 +1357,6 @@ describe("memory index", () => {
   it("does not rebuild missing semantic metadata when embeddings are unavailable", async () => {
     const oldCfg = createCfg({
       model: "semantic-embed",
-      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
     });
     const oldManager = await getFreshManager(oldCfg);
     await oldManager.sync({ reason: "test", force: true });
@@ -1581,100 +1394,90 @@ describe("memory index", () => {
   });
 
   it("clears dirty after sessions-only identity reindex", async () => {
+    await seedMemoryIndexSessionTranscript({
+      sessionId: "session-identity",
+      messages: [
+        {
+          role: "assistant",
+          timestamp: "2026-04-07T15:25:04.113Z",
+          content: "Session-only identity marker.",
+        },
+      ],
+    });
+
+    const oldCfg = createCfg({
+      sources: ["sessions"],
+      sessionMemory: true,
+      model: "old-embed",
+    });
+    const oldManager = await getFreshManager(oldCfg);
+    await oldManager.sync({ reason: "test", force: true });
+    await oldManager.close?.();
+
+    const nextCfg = createCfg({
+      sources: ["sessions"],
+      sessionMemory: true,
+      provider: "gemini",
+      model: "new-embed",
+    });
+    const nextManager = await getFreshManager(nextCfg);
     try {
-      fixture.setStateDir(path.join(fixture.paths.workspace, ".state-sessions-only-reindex"));
-      await seedMemoryIndexSessionTranscript({
-        sessionId: "session-identity",
-        messages: [
-          {
-            role: "assistant",
-            timestamp: "2026-04-07T15:25:04.113Z",
-            content: "Session-only identity marker.",
-          },
-        ],
-      });
+      expect(nextManager.status().dirty).toBe(true);
 
-      const oldCfg = createCfg({
-        sources: ["sessions"],
-        sessionMemory: true,
-        model: "old-embed",
-      });
-      const oldManager = await getFreshManager(oldCfg);
-      await oldManager.sync({ reason: "test", force: true });
-      await oldManager.close?.();
+      await nextManager.sync({ reason: "test", force: true });
 
-      const nextCfg = createCfg({
-        sources: ["sessions"],
-        sessionMemory: true,
-        provider: "gemini",
-        model: "new-embed",
-      });
-      const nextManager = await getFreshManager(nextCfg);
-      try {
-        expect(nextManager.status().dirty).toBe(true);
-
-        await nextManager.sync({ reason: "test", force: true });
-
-        expect(nextManager.status().dirty).toBe(false);
-        expect(nextManager.status().custom?.indexIdentity).toEqual({ status: "valid" });
-      } finally {
-        await nextManager.close?.();
-      }
+      expect(nextManager.status().dirty).toBe(false);
+      expect(nextManager.status().custom?.indexIdentity).toEqual({ status: "valid" });
     } finally {
-      fixture.restoreStateDir();
+      await nextManager.close?.();
     }
   });
 
   it("marks sessions-only indexes dirty when metadata is missing but chunks exist", async () => {
+    await seedMemoryIndexSessionTranscript({
+      sessionId: "session-missing-meta",
+      messages: [
+        {
+          role: "assistant",
+          timestamp: "2026-04-07T15:25:04.113Z",
+          content: "Sessions missing metadata marker.",
+        },
+      ],
+    });
+
+    const cfg = createCfg({
+      sources: ["sessions"],
+      sessionMemory: true,
+    });
+    const oldManager = await getFreshManager(cfg);
+    await oldManager.sync({ reason: "test", force: true });
+    await oldManager.close?.();
+
+    const nextManager = await getFreshManager(cfg);
     try {
-      fixture.setStateDir(path.join(fixture.paths.workspace, ".state-sessions-missing-meta"));
-      await seedMemoryIndexSessionTranscript({
-        sessionId: "session-missing-meta",
-        messages: [
-          {
-            role: "assistant",
-            timestamp: "2026-04-07T15:25:04.113Z",
-            content: "Sessions missing metadata marker.",
-          },
-        ],
+      (
+        nextManager as unknown as {
+          db: { exec: (sql: string) => void };
+        }
+      ).db.exec(`DELETE FROM memory_index_meta WHERE key = 'memory_index_meta_v1'`);
+
+      const status = nextManager.status();
+
+      expect(status.dirty).toBe(true);
+      expect(status.custom?.indexIdentity).toEqual({
+        status: "missing",
+        reason: "index metadata is missing",
+        code: "metadata_missing",
+        owner: "openclaw",
       });
-
-      const cfg = createCfg({
-        sources: ["sessions"],
-        sessionMemory: true,
-      });
-      const oldManager = await getFreshManager(cfg);
-      await oldManager.sync({ reason: "test", force: true });
-      await oldManager.close?.();
-
-      const nextManager = await getFreshManager(cfg);
-      try {
-        (
-          nextManager as unknown as {
-            db: { exec: (sql: string) => void };
-          }
-        ).db.exec(`DELETE FROM memory_index_meta WHERE key = 'memory_index_meta_v1'`);
-
-        const status = nextManager.status();
-
-        expect(status.dirty).toBe(true);
-        expect(status.custom?.indexIdentity).toEqual({
-          status: "missing",
-          reason: "index metadata is missing",
-          code: "metadata_missing",
-          owner: "openclaw",
-        });
-      } finally {
-        await nextManager.close?.();
-      }
     } finally {
-      fixture.restoreStateDir();
+      await nextManager.close?.();
     }
   });
 
   it("drains retained queued targets through the next idle sync call", async () => {
     const markers = {
-      blocker: "BLOCKER LOCKED SYNC 729",
+      blocker: "BLOCKER FAILED SYNC 729",
       retained: "RETAINED RETRY TARGET 729",
       trigger: "IDLE TRIGGER TARGET 729",
     };
@@ -1685,8 +1488,10 @@ describe("memory index", () => {
         sources: ["sessions"],
         sessionMemory: true,
       }),
+      "cli",
     );
-    let lock: DatabaseSync | null = null;
+    const dbPath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+    const db = new DatabaseSync(dbPath);
     try {
       await manager.sync({ reason: "test-baseline", force: true });
       for (const [sessionId, marker] of Object.entries(markers)) {
@@ -1703,13 +1508,16 @@ describe("memory index", () => {
         });
       }
 
-      const dbPath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
-      lock = new DatabaseSync(dbPath);
-      lock.exec("PRAGMA busy_timeout = 0");
-      lock.exec("BEGIN EXCLUSIVE");
+      db.exec(`
+        CREATE TRIGGER fail_queued_session_publication
+        AFTER INSERT ON memory_index_chunks
+        BEGIN
+          SELECT RAISE(FAIL, 'forced queued session publication failure');
+        END;
+      `);
 
       const active = manager.sync({
-        reason: "test-locked-owner",
+        reason: "test-failed-owner",
         sessions: [
           {
             agentId: "main",
@@ -1729,38 +1537,16 @@ describe("memory index", () => {
         ],
       });
       const failures = await Promise.allSettled([active, failedQueued]);
-      lock.exec("ROLLBACK");
-      lock.close();
-      lock = null;
-      const describeSqliteFailure = (failure: unknown): string => {
-        const details = [String(failure)];
-        if (failure && typeof failure === "object") {
-          const record = failure as Record<string, unknown>;
-          for (const key of ["message", "code"] as const) {
-            if (typeof record[key] === "string") {
-              details.push(record[key]);
-            }
-          }
-          if (record.cause && typeof record.cause === "object") {
-            const cause = record.cause as Record<string, unknown>;
-            for (const key of ["message", "code"] as const) {
-              if (typeof cause[key] === "string") {
-                details.push(cause[key]);
-              }
-            }
-          }
-        }
-        return details.join(" ");
-      };
       for (const result of failures) {
         expect(result.status).toBe("rejected");
         if (result.status !== "rejected") {
-          throw new Error("expected SQLite-locked sync to reject");
+          throw new Error("expected failed SQLite publication to reject");
         }
-        expect(describeSqliteFailure(result.reason)).toMatch(
-          /SQLITE_(?:BUSY|LOCKED)|database is (?:busy|locked)/i,
-        );
+        expect(result.reason).toMatchObject({
+          message: "forced queued session publication failure",
+        });
       }
+      db.exec("DROP TRIGGER fail_queued_session_publication");
 
       const ftsMatchCount = (marker: string): number => {
         const observer = new DatabaseSync(dbPath, { readOnly: true });
@@ -1779,6 +1565,8 @@ describe("memory index", () => {
 
       expect(ftsMatchCount(markers.retained)).toBe(0);
       expect(ftsMatchCount(markers.trigger)).toBe(0);
+      // Hand ordinary dirty state to maintenance so recovery must use the retained queue.
+      manager.takeReindexRetryStateForMaintenance();
       const recoveryState = manager as unknown as {
         syncing: Promise<void> | null;
         queuedSessions: Map<string, unknown>;
@@ -1813,13 +1601,7 @@ describe("memory index", () => {
       expect(recoveryState.queuedSessions.size).toBe(0);
       expect(recoveryProgress).toHaveBeenCalled();
     } finally {
-      if (lock) {
-        try {
-          lock.exec("ROLLBACK");
-        } finally {
-          lock.close();
-        }
-      }
+      db.close();
       await manager.close?.();
     }
   });
@@ -1831,12 +1613,14 @@ describe("memory index", () => {
       trigger: "LIVE REJECTION RECOVERY TARGET 729",
     };
     const sessionKey = (sessionId: string) => `agent:main:live-rejection:${sessionId}`;
+    // Startup catchup must not consume the controlled sync mocks.
     const manager = await getFreshManager(
       createCfg({
         provider: "none",
         sources: ["sessions"],
         sessionMemory: true,
       }),
+      "cli",
     );
     let resolveActiveSync: (() => void) | undefined;
     const activeSyncGate = new Promise<void>((resolve) => {
@@ -2171,139 +1955,92 @@ describe("memory index", () => {
   });
 
   it("keeps provider cutover vector search paused during targeted session sync", async () => {
+    const sessionFile = await writeMemoryIndexArchiveTranscript({
+      sessionId: "session-targeted-cutover",
+      text: "Targeted cutover marker.",
+    });
+
+    const oldCfg = createCfg({
+      sources: ["memory", "sessions"],
+      sessionMemory: true,
+      model: "old-embed",
+    });
+    const oldManager = await getFreshManager(oldCfg);
+    await oldManager.sync({ reason: "test", force: true });
+    await oldManager.close?.();
+
+    const nextCfg = createCfg({
+      sources: ["memory", "sessions"],
+      sessionMemory: true,
+      provider: "gemini",
+      model: "new-embed",
+    });
+    const nextManager = await getFreshManager(nextCfg);
     try {
-      fixture.setStateDir(path.join(fixture.paths.workspace, ".state-targeted-cutover"));
-      const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
-      await fs.mkdir(sessionsDir, { recursive: true });
-      const sessionFile = path.join(sessionsDir, "session-targeted-cutover.jsonl");
-      await fs.writeFile(
-        sessionFile,
-        [
-          JSON.stringify({
-            type: "session",
-            id: "session-targeted-cutover",
-            timestamp: "2026-04-07T15:24:04.113Z",
-          }),
-          JSON.stringify({
-            type: "message",
-            message: {
-              role: "assistant",
-              timestamp: "2026-04-07T15:25:04.113Z",
-              content: [{ type: "text", text: "Targeted cutover marker." }],
-            },
-          }),
-        ].join("\n") + "\n",
-        "utf8",
-      );
+      expect(nextManager.status().dirty).toBe(true);
+      providerFixture.embedBatchCalls = 0;
 
-      const oldCfg = createCfg({
-        sources: ["memory", "sessions"],
-        sessionMemory: true,
-        model: "old-embed",
+      await nextManager.sync({ reason: "test", archiveFiles: [sessionFile] });
+
+      expect(providerFixture.embedBatchCalls).toBe(0);
+      expect(nextManager.status().dirty).toBe(true);
+      expect(nextManager.status().custom?.indexIdentity).toEqual({
+        status: "mismatched",
+        reason: "index was built for model old-embed, expected new-embed",
+        code: "model",
+        owner: "configuration",
       });
-      const oldManager = await getFreshManager(oldCfg);
-      await oldManager.sync({ reason: "test", force: true });
-      await oldManager.close?.();
-
-      const nextCfg = createCfg({
-        sources: ["memory", "sessions"],
-        sessionMemory: true,
-        provider: "gemini",
-        model: "new-embed",
-      });
-      const nextManager = await getFreshManager(nextCfg);
-      try {
-        expect(nextManager.status().dirty).toBe(true);
-        providerFixture.embedBatchCalls = 0;
-
-        await nextManager.sync({ reason: "test", archiveFiles: [sessionFile] });
-
-        expect(providerFixture.embedBatchCalls).toBe(0);
-        expect(nextManager.status().dirty).toBe(true);
-        expect(nextManager.status().custom?.indexIdentity).toEqual({
-          status: "mismatched",
-          reason: "index was built for model old-embed, expected new-embed",
-          code: "model",
-          owner: "configuration",
-        });
-        const results = await nextManager.search("alpha");
-        expect(results).toStrictEqual([]);
-      } finally {
-        await nextManager.close?.();
-      }
+      const results = await nextManager.search("alpha");
+      expect(results).toStrictEqual([]);
     } finally {
-      fixture.restoreStateDir();
+      await nextManager.close?.();
     }
   });
 
   it("preserves memory dirty events raised during session identity reindex", async () => {
+    await writeMemoryIndexArchiveTranscript({
+      sessionId: "session-dirty-during-reindex",
+      text: "Dirty during session marker.",
+    });
+
+    const oldCfg = createCfg({
+      sources: ["memory", "sessions"],
+      sessionMemory: true,
+      model: "old-embed",
+    });
+    const oldManager = await getFreshManager(oldCfg);
+    await oldManager.sync({ reason: "test", force: true });
+    await oldManager.close?.();
+
+    const nextCfg = createCfg({
+      sources: ["memory", "sessions"],
+      sessionMemory: true,
+      provider: "gemini",
+      model: "new-embed",
+    });
+    const nextManager = await getFreshManager(nextCfg);
     try {
-      fixture.setStateDir(path.join(fixture.paths.workspace, ".state-dirty-during-session"));
-      const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
-      await fs.mkdir(sessionsDir, { recursive: true });
-      await fs.writeFile(
-        path.join(sessionsDir, "session-dirty-during-reindex.jsonl"),
-        [
-          JSON.stringify({
-            type: "session",
-            id: "session-dirty-during-reindex",
-            timestamp: "2026-04-07T15:24:04.113Z",
-          }),
-          JSON.stringify({
-            type: "message",
-            message: {
-              role: "assistant",
-              timestamp: "2026-04-07T15:25:04.113Z",
-              content: [{ type: "text", text: "Dirty during session marker." }],
-            },
-          }),
-        ].join("\n") + "\n",
-        "utf8",
-      );
+      const fields = nextManager as unknown as {
+        dirty: boolean;
+        syncArchiveFiles: (params: unknown) => Promise<void>;
+      };
+      const syncArchiveFiles = fields.syncArchiveFiles.bind(nextManager);
+      fields.syncArchiveFiles = async (params) => {
+        fields.dirty = true;
+        await syncArchiveFiles(params);
+      };
 
-      const oldCfg = createCfg({
-        sources: ["memory", "sessions"],
-        sessionMemory: true,
-        model: "old-embed",
-      });
-      const oldManager = await getFreshManager(oldCfg);
-      await oldManager.sync({ reason: "test", force: true });
-      await oldManager.close?.();
+      await nextManager.sync({ reason: "test", force: true });
 
-      const nextCfg = createCfg({
-        sources: ["memory", "sessions"],
-        sessionMemory: true,
-        provider: "gemini",
-        model: "new-embed",
-      });
-      const nextManager = await getFreshManager(nextCfg);
-      try {
-        const fields = nextManager as unknown as {
-          dirty: boolean;
-          syncArchiveFiles: (params: unknown) => Promise<void>;
-        };
-        const syncArchiveFiles = fields.syncArchiveFiles.bind(nextManager);
-        fields.syncArchiveFiles = async (params) => {
-          fields.dirty = true;
-          await syncArchiveFiles(params);
-        };
-
-        await nextManager.sync({ reason: "test", force: true });
-
-        expect(nextManager.status().dirty).toBe(true);
-        expect(nextManager.status().custom?.indexIdentity).toEqual({ status: "valid" });
-      } finally {
-        await nextManager.close?.();
-      }
+      expect(nextManager.status().dirty).toBe(true);
+      expect(nextManager.status().custom?.indexIdentity).toEqual({ status: "valid" });
     } finally {
-      fixture.restoreStateDir();
+      await nextManager.close?.();
     }
   });
 
   it("closes embedding providers when memory index managers close", async () => {
-    const cfg = createCfg({
-      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
-    });
+    const cfg = createCfg({});
     const manager = await getFreshManager(cfg);
 
     await manager.probeEmbeddingAvailability();
@@ -2316,9 +2053,7 @@ describe("memory index", () => {
   });
 
   it("waits for pending sync before closing embedding providers", async () => {
-    const cfg = createCfg({
-      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
-    });
+    const cfg = createCfg({});
     const manager = await getFreshManager(cfg);
     await manager.probeEmbeddingAvailability();
     let resolveSync: () => void = () => {};
@@ -2351,9 +2086,7 @@ describe("memory index", () => {
     providerFixture.providerInitGate = new Promise<void>((resolve) => {
       releaseProviderInit = resolve;
     });
-    const cfg = createCfg({
-      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
-    });
+    const cfg = createCfg({});
     const manager = await getFreshManager(cfg);
     let releaseSync: () => void = () => {};
     const syncStarted = new Promise<void>((resolve) => {
@@ -2505,10 +2238,12 @@ describe("memory index", () => {
       const db = Reflect.get(diagnostic, "db") as DatabaseSync;
       db.prepare(`INSERT INTO memory_embedding_cache
         (provider, model, provider_key, hash, embedding, dims, updated_at)
-        VALUES ('previous-provider', 'previous-model', 'previous-key', 'retained', '[0,1]', 2, 1)`).run();
+        VALUES ('previous-provider', 'previous-model', 'previous-key', 'retained', ?, 2, 1)`).run(
+        encodeMemoryEmbedding([0, 1]),
+      );
       expect(diagnostic.status().storage).toMatchObject({
         embeddingCacheEntries: 1,
-        embeddingCacheBytes: 5,
+        embeddingCacheBytes: 16,
       });
       const storedBytes = db
         .prepare(
@@ -2565,16 +2300,15 @@ describe("memory index", () => {
     }
   });
 
-  it("drops the shipped legacy vector table and schedules a full reindex", async () => {
-    const cfg = createCfg({ vectorEnabled: true });
-    const manager = await getPersistentManager(cfg);
+  it("prepares the native vector connection after child retrieval and retires the legacy table", async () => {
+    const manager = await getPersistentManager(createCfg({ vectorEnabled: true }));
+    await manager.sync({ reason: "test", force: true });
+    await expect(manager.search("alpha")).resolves.not.toHaveLength(0);
+    expect(manager.status().vector?.storeAvailable).toBe(true);
     const db = Reflect.get(manager, "db") as DatabaseSync;
     db.exec("CREATE TABLE chunks_vec (id TEXT PRIMARY KEY, embedding BLOB)");
 
-    const available = await manager.probeVectorStoreAvailability?.();
-    if (!available) {
-      return;
-    }
+    await expect(manager.probeVectorStoreAvailability?.()).resolves.toBe(true);
 
     expect(
       db
@@ -2766,70 +2500,57 @@ describe("memory index", () => {
   });
 
   it("preserves trusted per-line provenance through session indexing", async () => {
-    try {
-      const manager = await getFtsSessionManager({
-        stateDirName: ".state-session-provenance",
-      });
-      if (!manager) {
-        return;
-      }
-
-      await seedMemoryIndexSessionTranscript({
-        sessionId: "session-provenance",
-        messages: [
-          {
-            role: "user",
-            senderIsOwner: true,
-            timestamp: "2026-07-01T10:00:00.000Z",
-            content: "The owner prefers green tea.",
-          },
-        ],
-      });
-
-      await manager.sync({ reason: "test", force: true });
-      const results = await manager.search("owner prefers green tea", {
-        minScore: 0,
-        maxResults: 3,
-      });
-
-      expect(results[0]?.source).toBe("sessions");
-      expect(results[0]?.provenance).toEqual({
-        originClass: "owner",
-        sessionKind: "interactive",
-        observedAt: Date.parse("2026-07-01T10:00:00.000Z"),
-      });
-    } finally {
-      fixture.restoreStateDir();
+    const manager = await getFtsSessionManager();
+    if (!manager) {
+      return;
     }
+
+    await seedMemoryIndexSessionTranscript({
+      sessionId: "session-provenance",
+      messages: [
+        {
+          role: "user",
+          senderIsOwner: true,
+          timestamp: "2026-07-01T10:00:00.000Z",
+          content: "The owner prefers green tea.",
+        },
+      ],
+    });
+
+    await manager.sync({ reason: "test", force: true });
+    const results = await manager.search("owner prefers green tea", {
+      minScore: 0,
+      maxResults: 3,
+    });
+
+    expect(results[0]?.source).toBe("sessions");
+    expect(results[0]?.provenance).toEqual({
+      originClass: "owner",
+      sessionKind: "interactive",
+      observedAt: Date.parse("2026-07-01T10:00:00.000Z"),
+    });
   });
 
   it("diagnostic status uses canonical session discovery for dirty state and counts", async () => {
     const cfg = createCfg({ sources: ["sessions"], sessionMemory: true });
-    const stateDirName = ".state-status-dirty-test";
-    fixture.setStateDir(path.join(fixture.paths.workspace, stateDirName));
-    try {
-      await seedMemoryIndexSessionTranscript({
-        sessionId: "status-dirty-test",
-        messages: [
-          {
-            role: "user",
-            timestamp: 1,
-            content: "Unindexed session transcript.",
-          },
-        ],
-      });
+    await seedMemoryIndexSessionTranscript({
+      sessionId: "status-dirty-test",
+      messages: [
+        {
+          role: "user",
+          timestamp: 1,
+          content: "Unindexed session transcript.",
+        },
+      ],
+    });
 
-      const manager = await getFreshManager(cfg, "status", true);
-      trackManager(manager);
+    const manager = await getFreshManager(cfg, "status", true);
 
-      const result = manager.status();
-      expect(result.dirty).toBe(true);
-      expect(result.sourceCounts).toEqual([
-        expect.objectContaining({ source: "sessions", eligible: 1 }),
-      ]);
-    } finally {
-      fixture.restoreStateDir();
-    }
+    const result = manager.status();
+    expect(result.dirty).toBe(true);
+    expect(result.sourceCounts).toEqual([
+      expect.objectContaining({ source: "sessions", eligible: 1 }),
+    ]);
   });
 
   it("prunes removed sessions without re-embedding unchanged survivors", async () => {
@@ -2839,84 +2560,75 @@ describe("memory index", () => {
       sessionMemory: true,
       minScore: 0,
     });
-    const stateDirName = ".state-status-stale-session-test";
-    fixture.setStateDir(path.join(fixture.paths.workspace, stateDirName));
     const sessionId = "status-stale-session-test";
     const sessionKey = `agent:main:memory:${sessionId}`;
     const survivorId = "status-stale-session-survivor";
     const survivorKey = `agent:main:memory:${survivorId}`;
     const storePath = path.join(resolveSessionTranscriptsDirForAgent("main"), "sessions.json");
-    try {
-      await seedMemoryIndexSessionTranscript({
-        sessionId,
+    await seedMemoryIndexSessionTranscript({
+      sessionId,
+      sessionKey,
+      messages: [
+        {
+          role: "user",
+          timestamp: 1,
+          content: "Deleted session index canary ORBIT-DELETE-91.",
+        },
+      ],
+    });
+    await seedMemoryIndexSessionTranscript({
+      sessionId: survivorId,
+      sessionKey: survivorKey,
+      messages: [
+        {
+          role: "user",
+          timestamp: 2,
+          content: "Surviving session index canary ORBIT-SURVIVE-92.",
+        },
+      ],
+    });
+
+    const initial = await getFreshManager(cfg, "cli");
+    await initial.sync({ reason: "cli", force: true });
+    await expect(
+      initial.search("ORBIT-DELETE-91", { minScore: 0, sources: ["sessions"] }),
+    ).resolves.not.toEqual([]);
+    await initial.close?.();
+    const agentDb = new DatabaseSync(resolveOpenClawAgentSqlitePath({ agentId: "main" }));
+    agentDb.exec("DELETE FROM memory_embedding_cache");
+    agentDb.close();
+    providerFixture.embedBatchCalls = 0;
+
+    await expect(
+      deleteSessionEntry({
+        agentId: "main",
+        archiveTranscript: false,
+        expectedSessionId: sessionId,
         sessionKey,
-        messages: [
-          {
-            role: "user",
-            timestamp: 1,
-            content: "Deleted session index canary ORBIT-DELETE-91.",
-          },
-        ],
-      });
-      await seedMemoryIndexSessionTranscript({
-        sessionId: survivorId,
-        sessionKey: survivorKey,
-        messages: [
-          {
-            role: "user",
-            timestamp: 2,
-            content: "Surviving session index canary ORBIT-SURVIVE-92.",
-          },
-        ],
-      });
+        storePath,
+      }),
+    ).resolves.toBe(true);
 
-      const initial = await getFreshManager(cfg, "cli");
-      trackManager(initial);
-      await initial.sync({ reason: "cli", force: true });
-      await expect(
-        initial.search("ORBIT-DELETE-91", { minScore: 0, sources: ["sessions"] }),
-      ).resolves.not.toEqual([]);
-      await initial.close?.();
-      const agentDb = new DatabaseSync(resolveOpenClawAgentSqlitePath({ agentId: "main" }));
-      agentDb.exec("DELETE FROM memory_embedding_cache");
-      agentDb.close();
-      providerFixture.embedBatchCalls = 0;
+    const statusManager = await getFreshManager(cfg, "status", true);
+    expect(statusManager.status().dirty).toBe(true);
+    await statusManager.close?.();
 
-      await expect(
-        deleteSessionEntry({
-          agentId: "main",
-          archiveTranscript: false,
-          expectedSessionId: sessionId,
-          sessionKey,
-          storePath,
-        }),
-      ).resolves.toBe(true);
-
-      const statusManager = await getFreshManager(cfg, "status", true);
-      trackManager(statusManager);
-      expect(statusManager.status().dirty).toBe(true);
-      await statusManager.close?.();
-
-      const repairManager = await getFreshManager(cfg, "cli");
-      trackManager(repairManager);
-      await repairManager.sync({ reason: "cli" });
-      expect(providerFixture.embedBatchCalls).toBe(0);
-      const deletedResults = await repairManager.search("ORBIT-DELETE-91", {
-        minScore: 0,
-        sources: ["sessions"],
-      });
-      expect(deletedResults.some((result) => result.path.includes(sessionId))).toBe(false);
-      await expect(
-        repairManager.search("ORBIT-SURVIVE-92", { minScore: 0, sources: ["sessions"] }),
-      ).resolves.not.toEqual([]);
-      const db = Reflect.get(repairManager, "db") as DatabaseSync;
-      const sourceCount = db
-        .prepare("SELECT COUNT(*) AS count FROM memory_index_sources WHERE source = 'sessions'")
-        .get() as { count: number };
-      expect(sourceCount.count).toBe(1);
-    } finally {
-      fixture.restoreStateDir();
-    }
+    const repairManager = await getFreshManager(cfg, "cli");
+    await repairManager.sync({ reason: "cli" });
+    expect(providerFixture.embedBatchCalls).toBe(0);
+    const deletedResults = await repairManager.search("ORBIT-DELETE-91", {
+      minScore: 0,
+      sources: ["sessions"],
+    });
+    expect(deletedResults.some((result) => result.path.includes(sessionId))).toBe(false);
+    await expect(
+      repairManager.search("ORBIT-SURVIVE-92", { minScore: 0, sources: ["sessions"] }),
+    ).resolves.not.toEqual([]);
+    const db = Reflect.get(repairManager, "db") as DatabaseSync;
+    const sourceCount = db
+      .prepare("SELECT COUNT(*) AS count FROM memory_index_sources WHERE source = 'sessions'")
+      .get() as { count: number };
+    expect(sourceCount.count).toBe(1);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

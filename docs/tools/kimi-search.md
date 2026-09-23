@@ -12,7 +12,18 @@ grounded-response providers, rather than returning a ranked result list.
 
 ## Setup
 
+The `moonshot` plugin does not ship with OpenClaw; install it first.
+
 <Steps>
+  <Step title="Install the plugin">
+    ```bash
+    openclaw plugins install @openclaw/moonshot-provider
+    ```
+
+    Installation applies to a running Gateway automatically; otherwise it takes effect
+    on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
+
+  </Step>
   <Step title="Create a key">
     Get an API key from [Moonshot AI](https://platform.moonshot.cn/).
   </Step>

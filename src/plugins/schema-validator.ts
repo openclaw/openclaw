@@ -1,4 +1,8 @@
-import { normalizeJsonSchemaForTypeBox } from "@openclaw/normalization-core/json-schema";
+import {
+  normalizeJsonSchemaForTypeBox,
+  normalizeTypeBoxValidationErrors,
+  type TypeBoxValidationError,
+} from "@openclaw/normalization-core/json-schema";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 // Compiles plugin manifest schemas for validation without runtime loading.
 import { Format } from "typebox/format";
@@ -12,16 +16,8 @@ import {
 } from "../shared/json-schema-defaults.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
-import { PluginLruCache } from "./plugin-cache-primitives.js";
+import { PluginLruCache } from "./plugin-lru-cache.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
-
-type TypeBoxValidationError = {
-  keyword?: string;
-  instancePath?: string;
-  schemaPath?: string;
-  params?: Record<string, unknown>;
-  message?: string;
-};
 
 type CachedValidator = {
   hasDefaults: boolean;
@@ -160,11 +156,12 @@ function checkSchemaWithCurrentFormats(
     return null;
   }
   // The schema-only compiler returns [valid, errors], without loading value codecs.
-  return validate.Errors(value)[1];
+  return normalizeTypeBoxValidationErrors(validate.Errors(value)[1]);
 }
 
 function isDefaultActivatedConditionalFailure(params: {
   schema: JsonSchemaValue;
+  validate: TypeBoxValidator;
   originalValue: unknown;
   defaultedValue: unknown;
 }): boolean {
@@ -174,8 +171,7 @@ function isDefaultActivatedConditionalFailure(params: {
   if (checkSchemaWithCurrentFormats(relaxedConditionalValidator, params.defaultedValue)) {
     return false;
   }
-  const originalValidator = compileSchema(params.schema);
-  return checkSchemaWithCurrentFormats(originalValidator, params.originalValue) === null;
+  return checkSchemaWithCurrentFormats(params.validate, params.originalValue) === null;
 }
 
 /**
@@ -392,24 +388,26 @@ export function validatePluginSchemaValue(
 
 /**
  * Validate a plugin-owned value against a JSON Schema, optionally hydrating schema defaults.
- * The cache key is caller-owned so repeated plugin/schema validations can reuse compiled TypeBox validators.
+ * Callers can supply a stable cache key; otherwise the schema fingerprint owns cache identity.
  */
 export function validateJsonSchemaValue(params: {
   schema: JsonSchemaValue;
-  cacheKey: string;
+  cacheKey?: string;
   value: unknown;
   /** Persisted input paired with this runtime value, before secret resolution. */
   sourceValue?: unknown;
   applyDefaults?: boolean;
   cache?: boolean;
 }): { ok: true; value: unknown } | { ok: false; errors: JsonSchemaValidationError[] } {
-  const schemaError = findJsonSchemaShapeError(params.schema);
-  if (schemaError) {
-    throw new Error(sanitizeTerminalText(`invalid schema: ${schemaError}`));
-  }
-
-  const cacheKey = params.applyDefaults ? `${params.cacheKey}::defaults` : params.cacheKey;
+  const schemaKey = params.cacheKey ?? fingerprintSchema(params.schema);
+  const cacheKey = params.applyDefaults ? `${schemaKey}::defaults` : schemaKey;
   let cached = params.cache === false ? undefined : schemaCache.get(cacheKey);
+  if (!cached || cached.schema !== params.schema) {
+    const schemaError = findJsonSchemaShapeError(params.schema);
+    if (schemaError) {
+      throw new Error(sanitizeTerminalText(`invalid schema: ${schemaError}`));
+    }
+  }
   const schemaFingerprint =
     !cached || cached.schema !== params.schema ? fingerprintSchema(params.schema) : undefined;
   if (
@@ -445,6 +443,7 @@ export function validateJsonSchemaValue(params: {
         value !== originalValue &&
         isDefaultActivatedConditionalFailure({
           schema: params.schema,
+          validate: cached.validate,
           originalValue,
           defaultedValue: value,
         })

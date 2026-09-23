@@ -69,7 +69,9 @@ export function createSlackDraftProgressCardRuntime(params: {
       seed: params.progressSeed,
       formatLine: formatSlackProgressDraftLine,
       narration: snapshot.statusHeadline,
+      narrationFormat: snapshot.statusHeadlineFormat,
       plan: snapshot.plan,
+      diffStat: snapshot.diffStat,
     });
 
   const resolvePresentation = (
@@ -77,16 +79,30 @@ export function createSlackDraftProgressCardRuntime(params: {
     state: DraftProgressCardState,
   ) => {
     const title = params.explicitTitle ?? snapshot.statusHeadline ?? "Working";
+    const titleFormat = params.explicitTitle ? undefined : snapshot.statusHeadlineFormat;
     const narration = params.explicitTitle
-      ? combineProgressHeadlineAndExplanation(snapshot.statusHeadline, snapshot.planExplanation)
-      : snapshot.planExplanation && snapshot.planExplanation !== title
-        ? snapshot.planExplanation
+      ? snapshot.statusHeadlineFormat === "plain" || snapshot.planExplanationFormat === "plain"
+        ? [
+            ...(snapshot.statusHeadline &&
+            (snapshot.statusHeadline !== snapshot.planExplanation ||
+              snapshot.statusHeadlineFormat !== snapshot.planExplanationFormat)
+              ? [{ text: snapshot.statusHeadline, format: snapshot.statusHeadlineFormat }]
+              : []),
+            ...(snapshot.planExplanation
+              ? [{ text: snapshot.planExplanation, format: snapshot.planExplanationFormat }]
+              : []),
+          ]
+        : combineProgressHeadlineAndExplanation(snapshot.statusHeadline, snapshot.planExplanation)
+      : snapshot.planExplanation &&
+          (snapshot.planExplanation !== title || snapshot.planExplanationFormat !== titleFormat)
+        ? [{ text: snapshot.planExplanation, format: snapshot.planExplanationFormat }]
         : undefined;
     const workCounter = state === "working" ? params.progressWorkCounter : undefined;
     const sessionUrl = state === "working" ? undefined : resolveSessionUrl();
     return buildSlackProgressCardBlocks({
       state,
       title,
+      titleFormat,
       narration,
       plan: snapshot.plan,
       lines: resolveStructuredProgressLines(snapshot.lines),

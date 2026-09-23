@@ -366,32 +366,9 @@ enum ExecApprovalNotificationBridge {
             configuration: self.configuration)
     }
 
-    static func parsePrompt(
-        actionIdentifier: String,
-        userInfo: [AnyHashable: Any]) -> ApprovalNotificationPrompt?
-    {
-        ApprovalNotificationBridge.parsePrompt(
-            actionIdentifier: actionIdentifier,
-            userInfo: userInfo,
-            configuration: self.configuration)
-    }
-
     static func parseRequestedPush(userInfo: [AnyHashable: Any]) -> ApprovalNotificationPrompt? {
         ApprovalNotificationBridge.parseRequestedPush(
             userInfo: userInfo,
-            configuration: self.configuration)
-    }
-
-    @MainActor
-    static func removeNotifications(
-        for push: ApprovalNotificationPrompt,
-        notificationCenter: NotificationCentering,
-        includingLegacyOwnerless: Bool = false) async
-    {
-        await ApprovalNotificationBridge.removeNotifications(
-            for: push,
-            notificationCenter: notificationCenter,
-            includingLegacyOwnerless: includingLegacyOwnerless,
             configuration: self.configuration)
     }
 }
@@ -417,16 +394,6 @@ enum PluginApprovalNotificationBridge {
             configuration: self.configuration)
     }
 
-    static func parsePrompt(
-        actionIdentifier: String,
-        userInfo: [AnyHashable: Any]) -> ApprovalNotificationPrompt?
-    {
-        ApprovalNotificationBridge.parsePrompt(
-            actionIdentifier: actionIdentifier,
-            userInfo: userInfo,
-            configuration: self.configuration)
-    }
-
     static func parseRequestedPush(userInfo: [AnyHashable: Any]) -> ApprovalNotificationPrompt? {
         ApprovalNotificationBridge.parseRequestedPush(
             userInfo: userInfo,
@@ -436,19 +403,6 @@ enum PluginApprovalNotificationBridge {
     static func parseResolvedPush(userInfo: [AnyHashable: Any]) -> ApprovalNotificationPrompt? {
         ApprovalNotificationBridge.parseResolvedPush(
             userInfo: userInfo,
-            configuration: self.configuration)
-    }
-
-    @MainActor
-    static func removeNotifications(
-        for push: ApprovalNotificationPrompt,
-        notificationCenter: NotificationCentering,
-        includingLegacyOwnerless: Bool = false) async
-    {
-        await ApprovalNotificationBridge.removeNotifications(
-            for: push,
-            notificationCenter: notificationCenter,
-            includingLegacyOwnerless: includingLegacyOwnerless,
             configuration: self.configuration)
     }
 }

@@ -2,6 +2,33 @@ import { asRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 // Feishu helper module supports card test helpers behavior.
 import { expect } from "vitest";
 
+export function mergeStreamingText(
+  previousText: string | undefined,
+  nextText: string | undefined,
+): string {
+  const previous = typeof previousText === "string" ? previousText : "";
+  const next = typeof nextText === "string" ? nextText : "";
+  if (!next) {
+    return previous;
+  }
+  if (!previous || next === previous) {
+    return next;
+  }
+  if (next.startsWith(previous) || next.includes(previous)) {
+    return next;
+  }
+  if (previous.startsWith(next) || previous.includes(next)) {
+    return previous;
+  }
+  const maxOverlap = Math.min(previous.length, next.length);
+  for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
+    if (previous.slice(-overlap) === next.slice(0, overlap)) {
+      return `${previous}${next.slice(overlap)}`;
+    }
+  }
+  return `${previous}${next}`;
+}
+
 type MockCalls = {
   mock: { calls: unknown[][] };
 };

@@ -34,15 +34,6 @@ type HandshakeBrowserSecurityContext = {
   authRateLimiter?: AuthRateLimiter;
 };
 
-type HandshakeConnectAuth = {
-  token?: string;
-  bootstrapToken?: string;
-  deviceToken?: string;
-  password?: string;
-  approvalRuntimeToken?: string;
-  agentRuntimeIdentityToken?: string;
-};
-
 export function isNativeAppUiClient(client: ConnectParams["client"]): boolean {
   return (
     client.mode === GATEWAY_CLIENT_MODES.UI &&
@@ -333,9 +324,7 @@ export function resolveDeviceSignaturePayloadVersion(params: {
   return null;
 }
 
-function resolveAuthProvidedKind(
-  connectAuth: HandshakeConnectAuth | null | undefined,
-): AuthProvidedKind {
+function resolveAuthProvidedKind(connectAuth: ConnectParams["auth"] | null): AuthProvidedKind {
   return connectAuth?.password
     ? "password"
     : connectAuth?.token
@@ -348,7 +337,7 @@ function resolveAuthProvidedKind(
 }
 
 export function resolveUnauthorizedHandshakeContext(params: {
-  connectAuth: HandshakeConnectAuth | null | undefined;
+  connectAuth: ConnectParams["auth"] | null;
   failedAuth: GatewayAuthResult;
   hasDeviceIdentity: boolean;
 }): {
@@ -377,6 +366,8 @@ export function resolveUnauthorizedHandshakeContext(params: {
   switch (params.failedAuth.reason) {
     case "token_missing":
     case "token_missing_config":
+    case "token_redacted_config":
+    case "password_redacted_config":
     case "password_missing":
     case "password_missing_config":
       return buildUnauthorizedHandshakeContext({

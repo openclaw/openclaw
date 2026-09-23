@@ -36,6 +36,23 @@ describe("OpenAI runtime routing policy", () => {
     ).toBe(true);
   });
 
+  it("does not require Codex for API-key-only Completions configuration", () => {
+    const config: OpenClawConfig = {
+      auth: { profiles: { "openai:api": { provider: "openai", mode: "api_key" } } },
+      models: {
+        providers: {
+          openai: {
+            api: "openai-completions",
+            baseUrl: "https://api.openai.com/v1",
+            apiKey: "fixture-api-key",
+            models: [],
+          },
+        },
+      },
+    };
+    expect(modelSelectionShouldEnsureCodexPlugin({ model: "openai/gpt-5.5", config })).toBe(false);
+  });
+
   it.each([
     ["thinking", { thinking: "xhigh" }],
     ["fastMode", { fastMode: true }],
@@ -390,24 +407,6 @@ describe("OpenAI runtime routing policy", () => {
         config,
       }),
     ).toBe("openai");
-  });
-
-  it("checks legacy Codex auth before canonical OpenAI for pre-doctor state", () => {
-    const config = {
-      auth: {
-        order: {
-          openai: ["openai:work", "openai:backup"],
-        },
-      },
-    } satisfies OpenClawConfig;
-
-    expect(
-      listOpenAIAuthProfileProvidersForAgentRuntime({
-        provider: "openai",
-        harnessRuntime: "openclaw",
-        config,
-      }),
-    ).toEqual(["openai"]);
   });
 
   it("keeps explicit OpenAI OpenClaw API-key auth order ahead of Codex backups", () => {

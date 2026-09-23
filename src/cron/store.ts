@@ -1,50 +1,49 @@
 /** Public cron store load/save API backed entirely by shared SQLite state. */
-import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { isDeepStrictEqual } from "node:util";
-import { expandHomePrefix } from "../infra/home-dir.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
-import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
+import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
+import type { SqliteWorkerStore } from "../infra/sqlite-worker-store.js";
+import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { resolveConfigDir } from "../utils.js";
-import { resolveCronJobConfigRevision } from "./config-revision.js";
-import { readCronStoreStatePath } from "./store/config-state.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
 import { cronStoreKey } from "./store/key.js";
+import { restoreCronLoadError } from "./store/load-error.js";
+import { loadCronStoreFromDatabase } from "./store/load.kernel.js";
+import { resolveCronJobsStorePath } from "./store/paths.js";
 import {
   deleteCronQuarantinedJobsFromDatabase,
   saveCronQuarantinedJobs,
 } from "./store/quarantine.js";
 import {
   assertCronStoreCanPersist,
-  deleteCronJobRowInDatabase,
   deleteStaleCronJobFamilyRows,
-  fingerprintCronJobRows,
-  loadedCronStoreFromRows,
-  loadCronRows,
   readCronJobsFingerprint,
-  replaceCronRows,
-  upsertCronJobRow,
-  updateCronRuntimeRows,
 } from "./store/row-codec.js";
 import type { CronJobFamilyIdentity } from "./store/row-codec.js";
-import {
-  loadCronRuntimeAuthorities,
-  repairCronRuntimeAuthorityRows,
-  replaceCronRuntimeAuthorityRows,
-} from "./store/runtime-authority-store.js";
-import type { CronStoreTransactionHooks } from "./store/transaction-hooks.types.js";
+import { CronJobsStoreChangedError, restoreCronSaveError } from "./store/save-error.js";
 import type {
-  CronQuarantinedJob,
-  LoadedCronStore,
-  QuarantinedCronConfigJob,
-} from "./store/types.js";
-import type { CronJobState, CronStoredJob, CronStoreFile } from "./types.js";
+  CronStoreSaveWorkerOperations,
+  CronStoreWriteResult,
+} from "./store/save-worker.types.js";
+import {
+  isCronRuntimeOnlySave,
+  prepareCronStoreChanges,
+  replaceCronStoreRowsInDatabase,
+  saveCronStoreChangesInDatabase,
+  saveCronStoreInDatabase,
+} from "./store/save.kernel.js";
+import type { CronStoreChangesOptions, CronStoreSaveOptions } from "./store/save.types.js";
+import type { CronStoreTransactionHooks } from "./store/transaction-hooks.types.js";
+import type { LoadedCronStore } from "./store/types.js";
+import type { CronStoreFile } from "./types.js";
+export { resolveCronJobsStorePath, resolveCronJobsStorePathFromConfig } from "./store/paths.js";
+export { loadCronJobsStoreWithConfigJobsReadOnly } from "./store/read-only.js";
+export { CronJobsStoreChangedError } from "./store/save-error.js";
 export type {
   CronConfigJobRuntimeEntry,
   CronQuarantinedJob,
@@ -54,12 +53,15 @@ export type {
 export { loadCronQuarantinedJobs, saveCronQuarantinedJobs } from "./store/quarantine.js";
 
 const MAX_TRACKED_CRON_STORE_REVISIONS = 64;
+// Stale receipts must never equal a nonnegative publication fact, even after eviction.
+const STALE_CRON_STORE_REVISION = -1;
 const cronStoreRevisions = new Map<string, number>();
 let nextCronStoreRevision = 0;
 
 /** Reads the process-local committed revision for one canonical SQLite partition. */
 export function getCronJobsStoreRevision(storePath: string): number {
-  return cronStoreRevisions.get(cronStoreKey(storePath)) ?? 0;
+  // Eviction must not resurrect a snapshot's earlier revision.
+  return cronStoreRevisions.get(cronStoreKey(storePath)) ?? nextCronStoreRevision;
 }
 
 export function noteCronJobsStoreCommit(storeKey: string): void {
@@ -70,71 +72,44 @@ export function noteCronJobsStoreCommit(storeKey: string): void {
   pruneMapToMaxSize(cronStoreRevisions, MAX_TRACKED_CRON_STORE_REVISIONS);
 }
 
-function resolveDefaultCronDir(env: NodeJS.ProcessEnv): string {
-  return path.join(resolveConfigDir(env), "cron");
-}
-
-function resolveDefaultCronStorePath(env: NodeJS.ProcessEnv): string {
-  return path.join(resolveDefaultCronDir(env), "jobs.json");
-}
-
-/** Resolves the cron jobs store path, expanding home-relative user input. */
-export function resolveCronJobsStorePath(storePath?: string, env: NodeJS.ProcessEnv = process.env) {
-  const selected = storePath?.trim() || readCronStoreStatePath(env);
-  if (selected) {
-    const raw = selected.trim();
-    if (raw.startsWith("~")) {
-      return path.resolve(expandHomePrefix(raw, { env }));
-    }
-    return path.resolve(raw);
-  }
-  return resolveDefaultCronStorePath(env);
-}
-
-/** Resolves the active cron partition from runtime config and environment. */
-export function resolveCronJobsStorePathFromConfig(
-  cfg: { cron?: unknown },
-  env: NodeJS.ProcessEnv = process.env,
-): string {
-  const store = (cfg.cron as { store?: unknown } | undefined)?.store;
-  return resolveCronJobsStorePath(typeof store === "string" ? store : undefined, env);
-}
-
 /** Loads cron jobs plus config/runtime sidecars from the SQLite-backed store. */
 export async function loadCronJobsStoreWithConfigJobs(storePath: string): Promise<LoadedCronStore> {
-  const resolvedStorePath = path.resolve(storePath);
-  const storeKey = cronStoreKey(resolvedStorePath);
-  const database = openOpenClawStateDatabase().db;
-  const rows = loadCronRows(database, storeKey);
-  const jobsFingerprint = fingerprintCronJobRows(rows);
-  if (rows.length > 0) {
-    const loaded = loadedCronStoreFromRows(rows);
-    const authority = loadCronRuntimeAuthorities({
-      db: database,
-      storeKey,
-      jobs: loaded.store.jobs,
+  const storeKey = cronStoreKey(storePath);
+  const context = captureOpenClawStateWorkerContext();
+  let received = false;
+  try {
+    return await runOpenClawStateWorkerOperation(context, async (scope) => {
+      const result = await scope.execute({ type: "cron.loadMutable", input: { storeKey } });
+      received = true;
+      for (let index = 0; index < result.repairCommits; index += 1) {
+        noteCronJobsStoreCommit(storeKey);
+      }
+      if (!result.ok) {
+        // Coordinator cleanup can fail after COMMIT but before a repair is reported.
+        if (result.repairCommits === 0) {
+          noteCronJobsStoreCommit(storeKey);
+        }
+        throw restoreCronLoadError(result.error);
+      }
+      return result.loaded;
     });
-    repairLoadedCronRuntimeAuthority({
-      storeKey,
-      jobIds: authority.repairJobIds,
-    });
-    return { ...loaded, jobsFingerprint };
+  } catch (error) {
+    // An unavailable result cannot certify that no repair committed.
+    if (!received) {
+      noteCronJobsStoreCommit(storeKey);
+    }
+    throw error;
   }
-  return {
-    store: { version: 1, jobs: [] },
-    configJobs: [],
-    configJobIndexes: [],
-    configJobRuntimeEntries: [],
-    invalidConfigRows: [],
-    jobsFingerprint,
-  };
 }
 
-export class CronJobsStoreChangedError extends Error {
-  constructor(storePath: string) {
-    super(`Cron store at ${storePath} changed after it was read; reload it before writing`);
-    this.name = "CronJobsStoreChangedError";
-  }
+function loadMutableCronStore(storePath: string): LoadedCronStore {
+  const database = openOpenClawStateDatabase();
+  const storeKey = cronStoreKey(path.resolve(storePath));
+  return loadCronStoreFromDatabase(database.db, storeKey, {
+    write: (operation, operationLabel) =>
+      runOpenClawStateWriteTransaction(({ db }) => operation(db), { database }, { operationLabel }),
+    committed: () => noteCronJobsStoreCommit(storeKey),
+  });
 }
 
 export function assertCronJobsStoreUnchanged(
@@ -145,35 +120,6 @@ export function assertCronJobsStoreUnchanged(
   const resolvedStorePath = path.resolve(storePath);
   if (readCronJobsFingerprint(db, cronStoreKey(resolvedStorePath)) !== expectedJobsFingerprint) {
     throw new CronJobsStoreChangedError(resolvedStorePath);
-  }
-}
-
-function repairLoadedCronRuntimeAuthority(params: {
-  storeKey: string;
-  jobIds: readonly string[];
-}): void {
-  if (params.jobIds.length === 0) {
-    return;
-  }
-  const repaired = runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      const rows = loadCronRows(db, params.storeKey, new Set(params.jobIds));
-      if (rows.length === 0) {
-        return false;
-      }
-      const loaded = loadedCronStoreFromRows(rows);
-      return repairCronRuntimeAuthorityRows({
-        db,
-        storeKey: params.storeKey,
-        jobs: loaded.store.jobs,
-        jobIds: params.jobIds,
-      });
-    },
-    {},
-    { operationLabel: "cron.runtime-authority-repair" },
-  );
-  if (repaired) {
-    noteCronJobsStoreCommit(params.storeKey);
   }
 }
 
@@ -190,44 +136,6 @@ export function removeStaleCronJobFamilyRows(
   );
 }
 
-function emptyLoadedCronStore(): LoadedCronStore {
-  return {
-    store: { version: 1, jobs: [] },
-    configJobs: [],
-    configJobIndexes: [],
-    configJobRuntimeEntries: [],
-    invalidConfigRows: [],
-  };
-}
-
-/** Loads cron jobs from an existing SQLite store without creating or migrating state. */
-export async function loadCronJobsStoreWithConfigJobsReadOnly(
-  storePath: string,
-  env: NodeJS.ProcessEnv = process.env,
-): Promise<LoadedCronStore> {
-  const statePath = resolveOpenClawStateSqlitePath(env);
-  if (!fs.existsSync(statePath)) {
-    return emptyLoadedCronStore();
-  }
-  const resolvedStorePath = path.resolve(storePath);
-  const storeKey = cronStoreKey(resolvedStorePath);
-  const db = openNodeSqliteDatabase(statePath, { readOnly: true });
-  try {
-    if (!tableExists(db, "cron_jobs")) {
-      return emptyLoadedCronStore();
-    }
-    const rows = loadCronRows(db, storeKey);
-    if (rows.length > 0) {
-      const loaded = loadedCronStoreFromRows(rows);
-      loadCronRuntimeAuthorities({ db, storeKey, jobs: loaded.store.jobs });
-      return loaded;
-    }
-    return emptyLoadedCronStore();
-  } finally {
-    db.close();
-  }
-}
-
 /** Loads only the persisted cron job store payload. */
 export async function loadCronJobsStore(storePath: string): Promise<CronStoreFile> {
   return (await loadCronJobsStoreWithConfigJobs(storePath)).store;
@@ -235,38 +143,15 @@ export async function loadCronJobsStore(storePath: string): Promise<CronStoreFil
 
 /** Synchronously loads only the persisted cron job store payload. */
 export function loadCronJobsStoreSync(storePath: string): CronStoreFile {
-  const resolvedStorePath = path.resolve(storePath);
-  const storeKey = cronStoreKey(resolvedStorePath);
-  const database = openOpenClawStateDatabase().db;
-  const rows = loadCronRows(database, storeKey);
-  if (rows.length > 0) {
-    const loaded = loadedCronStoreFromRows(rows);
-    const authority = loadCronRuntimeAuthorities({
-      db: database,
-      storeKey,
-      jobs: loaded.store.jobs,
-    });
-    repairLoadedCronRuntimeAuthority({
-      storeKey,
-      jobIds: authority.repairJobIds,
-    });
-    return loaded.store;
-  }
-  return { version: 1, jobs: [] };
+  return loadMutableCronStore(storePath).store;
 }
 
 type SaveCronStoreOptions = {
   stateOnly?: boolean;
 };
 
-type SaveCronJobsStoreOptions = SaveCronStoreOptions & {
+type SaveCronJobsStoreOptions = CronStoreSaveOptions & {
   transactionHooks?: CronStoreTransactionHooks;
-  quarantine?: {
-    entries: readonly (QuarantinedCronConfigJob | CronQuarantinedJob)[];
-    nowMs: number;
-  };
-  preserveRuntimeState?: boolean;
-  deleteQuarantineEntries?: readonly (QuarantinedCronConfigJob | CronQuarantinedJob)[];
 };
 
 type CronStoreReplacementOptions = Pick<
@@ -274,47 +159,120 @@ type CronStoreReplacementOptions = Pick<
   "deleteQuarantineEntries" | "preserveRuntimeState" | "quarantine"
 >;
 
-function mergeCronRuntimeChanges(
-  previous: CronJobState,
-  next: CronJobState,
-  current: CronJobState,
-): CronJobState {
-  const merged = structuredClone(current);
-  for (const key of new Set([...Object.keys(previous), ...Object.keys(next)])) {
-    if (isDeepStrictEqual(Reflect.get(previous, key), Reflect.get(next, key))) {
-      continue;
-    }
-    if (Object.hasOwn(next, key)) {
-      Reflect.set(merged, key, structuredClone(Reflect.get(next, key)));
-    } else {
-      Reflect.deleteProperty(merged, key);
-    }
-  }
-  return merged;
+type CronStoreCommit<Value> = { value: Value; revision: number };
+
+function publishCronStoreSaveRevision(storeKey: string, observedRevision: number): number {
+  const unchanged = getCronJobsStoreRevision(storeKey) === observedRevision;
+  noteCronJobsStoreCommit(storeKey);
+  // A host write across worker admission leaves the returned snapshot conservatively stale.
+  return unchanged ? nextCronStoreRevision : STALE_CRON_STORE_REVISION;
 }
 
-function mergeCronRuntimeAuthority(
-  previous: CronStoredJob,
-  next: CronStoredJob,
-  current: CronStoredJob,
-): CronStoredJob {
-  const merged = { ...next };
-  const source =
-    !isDeepStrictEqual(previous.runtimeAuthority, next.runtimeAuthority) ||
-    previous.runtimeAuthorityRecoveryRequired !== next.runtimeAuthorityRecoveryRequired
-      ? next
-      : current;
-  if (source.runtimeAuthority) {
-    merged.runtimeAuthority = source.runtimeAuthority;
-  } else {
-    delete merged.runtimeAuthority;
+function commitCronStoreNative<Value>(
+  storeKey: string,
+  operation: (database: OpenClawStateDatabase) => Value,
+  hooks: CronStoreTransactionHooks | undefined,
+  operationLabel?: string,
+): CronStoreCommit<Value> {
+  const observedRevision = getCronJobsStoreRevision(storeKey);
+  let committed = false;
+  try {
+    const value = runOpenClawStateWriteTransaction(
+      (database) => {
+        const result = operation(database);
+        deferSqlitePostCommitPublication(database.db, () => {
+          committed = true;
+        });
+        return result;
+      },
+      {},
+      operationLabel ? { operationLabel } : undefined,
+    );
+    hooks?.afterCommit?.();
+    return { value, revision: publishCronStoreSaveRevision(storeKey, observedRevision) };
+  } catch (error) {
+    if (committed) {
+      noteCronJobsStoreCommit(storeKey);
+    }
+    throw error;
   }
-  if (source.runtimeAuthorityRecoveryRequired === true) {
-    merged.runtimeAuthorityRecoveryRequired = true;
-  } else {
-    delete merged.runtimeAuthorityRecoveryRequired;
+}
+
+async function saveCronStoreWithWorker<Value>(
+  storeKey: string,
+  operation: (
+    scope: Pick<SqliteWorkerStore<CronStoreSaveWorkerOperations>, "execute">,
+  ) => Promise<CronStoreWriteResult<Value>>,
+): Promise<CronStoreCommit<Value>> {
+  const observedRevision = getCronJobsStoreRevision(storeKey);
+  const context = captureOpenClawStateWorkerContext();
+  let received = false;
+  try {
+    return await runOpenClawStateWorkerOperation(context, async (scope) => {
+      const result = await operation(scope);
+      received = true;
+      const revision =
+        result.committed || !result.ok
+          ? publishCronStoreSaveRevision(storeKey, observedRevision)
+          : observedRevision;
+      if (!result.ok) {
+        throw restoreCronSaveError(result.error);
+      }
+      return { value: result.value, revision };
+    });
+  } catch (error) {
+    if (!received) {
+      // A missing result cannot certify that no write committed. Never replay the mutation.
+      noteCronJobsStoreCommit(storeKey);
+    }
+    throw error;
   }
-  return merged;
+}
+
+/** Internal synchronous entry for callers whose authority callbacks must not yield before commit. */
+export function saveCronJobsStoreChangesWithRevisionNative(
+  storePath: string,
+  previous: CronStoreFile,
+  next: CronStoreFile,
+  opts?: CronStoreChangesOptions & { transactionHooks?: CronStoreTransactionHooks },
+): CronStoreCommit<CronStoreFile> {
+  assertCronStoreCanPersist(next);
+  const storeKey = cronStoreKey(path.resolve(storePath));
+  const prepared = prepareCronStoreChanges(previous, next);
+  if (prepared.changedIds.size === 0) {
+    return { value: previous, revision: getCronJobsStoreRevision(storeKey) };
+  }
+  const { transactionHooks, ...options } = opts ?? {};
+  return commitCronStoreNative(
+    storeKey,
+    ({ db }) =>
+      saveCronStoreChangesInDatabase(db, storeKey, storeKey, prepared, options, transactionHooks),
+    transactionHooks,
+    "cron.config-mutation",
+  );
+}
+
+/** Commits scheduler-disabled CRUD rows and retains this operation's revision fact. */
+export async function saveCronJobsStoreChangesWithRevision(
+  storePath: string,
+  previous: CronStoreFile,
+  next: CronStoreFile,
+  opts?: CronStoreChangesOptions & { transactionHooks?: CronStoreTransactionHooks },
+): Promise<CronStoreCommit<CronStoreFile>> {
+  if (opts?.transactionHooks) {
+    return saveCronJobsStoreChangesWithRevisionNative(storePath, previous, next, opts);
+  }
+  assertCronStoreCanPersist(next);
+  const storeKey = cronStoreKey(path.resolve(storePath));
+  const prepared = prepareCronStoreChanges(previous, next);
+  if (prepared.changedIds.size === 0) {
+    return { value: previous, revision: getCronJobsStoreRevision(storeKey) };
+  }
+  const { transactionHooks: _hooks, ...options } = opts ?? {};
+  const input = structuredClone({ storeKey, changes: prepared, options });
+  return await saveCronStoreWithWorker(storeKey, (scope) =>
+    scope.execute({ type: "cron.saveChanges", input }),
+  );
 }
 
 /** Commits only scheduler-disabled CRUD rows against authoritative SQLite state. */
@@ -322,109 +280,50 @@ export async function saveCronJobsStoreChanges(
   storePath: string,
   previous: CronStoreFile,
   next: CronStoreFile,
-  opts?: {
-    preserveConcurrentAdds?: boolean;
-    transactionHooks?: CronStoreTransactionHooks;
-  },
+  opts?: CronStoreChangesOptions & { transactionHooks?: CronStoreTransactionHooks },
 ): Promise<CronStoreFile> {
-  assertCronStoreCanPersist(next);
-  const resolvedStorePath = path.resolve(storePath);
-  const storeKey = cronStoreKey(resolvedStorePath);
-  const previousById = new Map(previous.jobs.map((job) => [job.id, job] as const));
-  const nextById = new Map(next.jobs.map((job) => [job.id, job] as const));
-  const changedIds = new Set(
-    [...new Set([...previousById.keys(), ...nextById.keys()])].filter(
-      (jobId) => !isDeepStrictEqual(previousById.get(jobId), nextById.get(jobId)),
-    ),
-  );
-  if (changedIds.size === 0) {
-    return previous;
-  }
-  const committed = runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      const rows = loadCronRows(db, storeKey);
-      const rowsById = new Map(rows.map((row) => [row.job_id, row] as const));
-      const currentJobs = loadedCronStoreFromRows(rows).store.jobs;
-      const authority = loadCronRuntimeAuthorities({ db, storeKey, jobs: currentJobs });
-      if (authority.repairJobIds.length > 0) {
-        repairCronRuntimeAuthorityRows({
-          db,
-          storeKey,
-          jobs: currentJobs,
-          jobIds: authority.repairJobIds,
-        });
-      }
-      const currentById = new Map(currentJobs.map((job) => [job.id, job] as const));
-      opts?.transactionHooks?.beforeWrite?.(db);
-      let nextSortOrder = rows.reduce((max, row) => Math.max(max, row.sort_order), -1) + 1;
-      for (const jobId of changedIds) {
-        const before = previousById.get(jobId);
-        const after = nextById.get(jobId);
-        const current = currentById.get(jobId);
-        if (
-          before &&
-          current &&
-          resolveCronJobConfigRevision(current) !== resolveCronJobConfigRevision(before)
-        ) {
-          throw new CronJobsStoreChangedError(resolvedStorePath);
-        }
-        if (!after) {
-          if (current) {
-            deleteCronJobRowInDatabase(db, storeKey, jobId);
-          }
-          currentById.delete(jobId);
-          continue;
-        }
-        if (before) {
-          if (!current) {
-            throw new CronJobsStoreChangedError(resolvedStorePath);
-          }
-        } else if (current && opts?.preserveConcurrentAdds) {
-          continue;
-        } else if (current) {
-          throw new CronJobsStoreChangedError(resolvedStorePath);
-        }
-        const merged: CronStoredJob = current
-          ? {
-              ...mergeCronRuntimeAuthority(before ?? after, after, current),
-              state: mergeCronRuntimeChanges(before?.state ?? {}, after.state, current.state),
-              updatedAtMs: Math.max(after.updatedAtMs, current.updatedAtMs),
-            }
-          : after;
-        const persisted = upsertCronJobRow(
-          db,
-          storeKey,
-          merged,
-          rowsById.get(jobId)?.sort_order ?? nextSortOrder++,
-        );
-        replaceCronRuntimeAuthorityRows({ db, storeKey, jobs: [persisted] });
-        currentById.set(jobId, persisted);
-      }
-      opts?.transactionHooks?.afterWrite?.(db);
-      return { version: 1, jobs: [...currentById.values()] } satisfies CronStoreFile;
-    },
-    {},
-    { operationLabel: "cron.config-mutation" },
-  );
-  opts?.transactionHooks?.afterCommit?.();
-  noteCronJobsStoreCommit(storeKey);
-  return committed;
+  return (await saveCronJobsStoreChangesWithRevision(storePath, previous, next, opts)).value;
 }
 
-function replaceCronStoreRows(
-  db: DatabaseSync,
-  storeKey: string,
+/** Internal synchronous entry preserving the caller's consumed guard/capture window. */
+export function saveCronJobsStoreWithRevisionNative(
+  storePath: string,
   store: CronStoreFile,
-  preserveRuntimeState: boolean,
-): void {
-  const replaced = replaceCronRows(db, storeKey, store, { preserveRuntimeState });
-  replaceCronRuntimeAuthorityRows({
-    db,
+  opts?: SaveCronJobsStoreOptions,
+): CronStoreCommit<undefined> {
+  const storeKey = cronStoreKey(path.resolve(storePath));
+  if (!isCronRuntimeOnlySave(opts)) {
+    assertCronStoreCanPersist(store);
+  }
+  const { transactionHooks, ...options } = opts ?? {};
+  return commitCronStoreNative(
     storeKey,
-    jobs: replaced.jobs,
-    preserveExistingForJobIds: preserveRuntimeState ? replaced.existingJobIds : undefined,
-    writeMissingForJobIds: preserveRuntimeState ? replaced.legacyAuthorityJobIds : undefined,
-  });
+    (database) => {
+      saveCronStoreInDatabase(database, storeKey, store, options, transactionHooks);
+      return undefined;
+    },
+    transactionHooks,
+  );
+}
+
+/** Persist cron data and return only this operation's publication revision. */
+export async function saveCronJobsStoreWithRevision(
+  storePath: string,
+  store: CronStoreFile,
+  opts?: SaveCronJobsStoreOptions,
+): Promise<CronStoreCommit<undefined>> {
+  if (opts?.transactionHooks) {
+    return saveCronJobsStoreWithRevisionNative(storePath, store, opts);
+  }
+  const storeKey = cronStoreKey(path.resolve(storePath));
+  if (!isCronRuntimeOnlySave(opts)) {
+    assertCronStoreCanPersist(store);
+  }
+  const { transactionHooks: _hooks, ...options } = opts ?? {};
+  const input = structuredClone({ storeKey, store, options });
+  return await saveCronStoreWithWorker(storeKey, (scope) =>
+    scope.execute({ type: "cron.save", input }),
+  );
 }
 
 /** Persists cron jobs, or only mutable runtime state when stateOnly is set. */
@@ -433,46 +332,7 @@ export async function saveCronJobsStore(
   store: CronStoreFile,
   opts?: SaveCronJobsStoreOptions,
 ): Promise<void> {
-  const resolvedStorePath = path.resolve(storePath);
-  const storeKey = cronStoreKey(resolvedStorePath);
-  const stateOnly =
-    opts?.stateOnly === true &&
-    !opts.quarantine?.entries.length &&
-    !opts.deleteQuarantineEntries?.length;
-  if (!stateOnly) {
-    assertCronStoreCanPersist(store);
-  }
-  runOpenClawStateWriteTransaction((database) => {
-    opts?.transactionHooks?.beforeWrite?.(database.db);
-    if (opts?.quarantine?.entries.length) {
-      saveCronQuarantinedJobs({
-        storePath: resolvedStorePath,
-        entries: opts.quarantine.entries,
-        nowMs: opts.quarantine.nowMs,
-        database,
-      });
-    }
-    if (opts?.deleteQuarantineEntries?.length) {
-      deleteCronQuarantinedJobsFromDatabase({
-        database: database.db,
-        storePath: resolvedStorePath,
-        entries: opts.deleteQuarantineEntries,
-      });
-    }
-    // Hot-path timer updates mutate runtime columns only; malformed-row
-    // quarantine and full replacement commit together or roll back together.
-    if (stateOnly) {
-      updateCronRuntimeRows(database.db, storeKey, store);
-      opts?.transactionHooks?.afterWrite?.(database.db);
-      return;
-    }
-    replaceCronStoreRows(database.db, storeKey, store, opts?.preserveRuntimeState === true);
-    opts?.transactionHooks?.afterWrite?.(database.db);
-  });
-  // Timeout outcomes may commit before their runner settles. Only after this
-  // commit may a deferred receipt terminal request become externally visible.
-  opts?.transactionHooks?.afterCommit?.();
-  noteCronJobsStoreCommit(storeKey);
+  await saveCronJobsStoreWithRevision(storePath, store, opts);
 }
 
 /** Atomically acquire doctor migration metadata and replace cron rows only for the winner. */
@@ -504,7 +364,12 @@ export async function saveCronJobsStoreWithMetadata(
         entries: opts.deleteQuarantineEntries,
       });
     }
-    replaceCronStoreRows(database.db, storeKey, store, opts?.preserveRuntimeState === true);
+    replaceCronStoreRowsInDatabase(
+      database.db,
+      storeKey,
+      store,
+      opts?.preserveRuntimeState === true,
+    );
     return true;
   });
   if (committed) {

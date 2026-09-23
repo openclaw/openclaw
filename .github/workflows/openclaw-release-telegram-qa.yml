@@ -74,6 +74,12 @@ jobs:
       workflow_repository: ${{ steps.identity.outputs.workflow_repository }}
       workflow_sha: ${{ steps.identity.outputs.workflow_sha }}
     steps:
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
       - name: Verify dispatched workflow identity
         id: identity
         env:
@@ -253,6 +259,7 @@ jobs:
       candidate_tree: ${{ steps.archive.outputs.candidate_tree }}
       candidate_version: ${{ steps.archive.outputs.candidate_version }}
       manifest_sha256: ${{ steps.archive.outputs.manifest_sha256 }}
+      run_attempt: ${{ steps.archive.outputs.run_attempt }}
       status: ${{ steps.record_status.outputs.status }}
     steps:
       - name: Require trusted dispatched workflow identity
@@ -472,6 +479,7 @@ jobs:
             echo "candidate_tree=$CANDIDATE_TREE"
             echo "candidate_version=$candidate_version"
             echo "manifest_sha256=$(sha256sum "$manifest_path" | awk '{print $1}')"
+            echo "run_attempt=$GITHUB_RUN_ATTEMPT"
           } >>"$GITHUB_OUTPUT"
 
       - name: Upload raw candidate archive
@@ -648,6 +656,12 @@ jobs:
           fetch-depth: 1
           path: .candidate-source
           persist-credentials: false
+
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
 
       - name: Compare candidate tracked source and tree
         id: compare_source
@@ -1476,7 +1490,7 @@ jobs:
             signal_name="${1:?}"
             requested_identity="${2:?}"
             case "$signal_name" in
-              SIGCONT|SIGUSR1|SIGUSR2) ;;
+              SIGCONT|SIGUSR2|SIGQUIT) ;;
               *) echo "Unsupported Telegram SUT signal: ${signal_name}" >&2; exit 1 ;;
             esac
             load_process_identity "$requested_identity"
@@ -1624,6 +1638,48 @@ jobs:
           if [[ -n "${OPENCLAW_BUNDLED_PLUGINS_DIR:-}" ]]; then
             chown -R root:root "$OPENCLAW_BUNDLED_PLUGINS_DIR"
             chmod -R a+rX,go-w "$OPENCLAW_BUNDLED_PLUGINS_DIR"
+          fi
+
+          if [[ "$requested_config_path" == "$config_path" ]]; then
+            # Doctor owns a writable runtime copy; the scenario's source stays immutable.
+            # Keep generation receipts outside SUT state so a canonical mutation always
+            # refreshes the copy, while an unchanged source preserves Doctor repairs.
+            projection_dir="${OPENCLAW_STATE_DIR}/qa-runtime-config"
+            generation_dir="${RUNTIME_ROOT}/config-generations"
+            install -d -o root -g root -m 0700 "$generation_dir"
+            generation_key="$(printf %s "$config_path" | sha256sum | cut -d ' ' -f1)"
+            generation_path="${generation_dir}/${generation_key}"
+            config_generation="$(sha256sum "$config_path" | cut -d ' ' -f1)"
+            previous_generation=""
+            if [[ -e "$generation_path" ]]; then
+              [[ "$(stat -c '%F:%a:%u:%g' "$generation_path")" == "regular file:600:0:0" ]]
+              previous_generation="$(<"$generation_path")"
+            fi
+            if [[ "$previous_generation" != "$config_generation" || ! -e "$projection_dir/openclaw.json" ]]; then
+              # Only the unprivileged SUT writes below its private state root.
+              /usr/bin/setpriv --reuid="$SUT_UID" --regid="$SUT_GID" \
+                --clear-groups --no-new-privs --inh-caps=-all --ambient-caps=-all --bounding-set=-all \
+                /usr/bin/env -i PATH=/usr/bin:/bin /bin/bash -ceu '
+                  umask 077
+                  source_config="$1"
+                  projection_dir="$2"
+                  expected_generation="$3"
+                  mkdir -p "$projection_dir"
+                  [[ -d "$projection_dir" && ! -L "$projection_dir" &&
+                        "$(realpath -e "$projection_dir")" == "$projection_dir" ]]
+                  projection_tmp="$(mktemp "$projection_dir/.seed.XXXXXX")"
+                  trap '\''rm -f "$projection_tmp"'\'' EXIT
+                  cat "$source_config" >"$projection_tmp"
+                  [[ "$(sha256sum "$projection_tmp" | cut -d " " -f1)" == "$expected_generation" ]]
+                  mv -T "$projection_tmp" "$projection_dir/openclaw.json"
+                ' openclaw-config-projection "$config_path" "$projection_dir" "$config_generation"
+              [[ "$(sha256sum "$config_path" | cut -d ' ' -f1)" == "$config_generation" ]]
+              generation_tmp="$(mktemp "$generation_dir/.generation.XXXXXX")"
+              printf %s "$config_generation" >"$generation_tmp"
+              chmod 0600 "$generation_tmp"
+              mv -T "$generation_tmp" "$generation_path"
+            fi
+            export OPENCLAW_CONFIG_PATH="$projection_dir/openclaw.json"
           fi
 
           boundary_mode=false
@@ -1851,8 +1907,14 @@ jobs:
                           -r "${CANONICAL_CONFIG_PATH:?}" &&
                           ! -w "$CANONICAL_CONFIG_PATH" ]]
                     if [[ "$OPENCLAW_CONFIG_PATH" != "$CANONICAL_CONFIG_PATH" ]]; then
-                      [[ "${1:-}" == "models" && "${2:-}" == "auth" &&
-                            -r "$OPENCLAW_CONFIG_PATH" && -w "$OPENCLAW_CONFIG_PATH" ]]
+                      [[ -r "$OPENCLAW_CONFIG_PATH" && -w "$OPENCLAW_CONFIG_PATH" &&
+                            ! -L "$OPENCLAW_CONFIG_PATH" ]]
+                      case "$OPENCLAW_CONFIG_PATH" in
+                        "${OPENCLAW_STATE_DIR}/qa-runtime-config/openclaw.json") ;;
+                        "${OPENCLAW_STATE_DIR}/qa-auth-bootstrap/openclaw.json")
+                          [[ "${1:-}" == "models" && "${2:-}" == "auth" ]] ;;
+                        *) exit 1 ;;
+                      esac
                     fi
                     [[ -d "${CANDIDATE_ARTIFACTS_DIR:?}" && -r "$CANDIDATE_ARTIFACTS_DIR" && -x "$CANDIDATE_ARTIFACTS_DIR" && ! -w "$CANDIDATE_ARTIFACTS_DIR" ]]
                     for writable_path in \
@@ -1983,6 +2045,7 @@ jobs:
       - name: Run Telegram live lane
         id: run_lane
         env:
+          TELEGRAM_E2E_SKILL_DIR: ${{ github.workspace }}/.agents/skills/telegram-e2e-userbot
           CANDIDATE_ROOT: ${{ steps.create_sut.outputs.candidate_root }}
           EVIDENCE_RELATIVE: ${{ steps.create_sut.outputs.evidence_relative }}
           EVIDENCE_ROOT: ${{ steps.create_sut.outputs.evidence_root }}
@@ -2607,6 +2670,12 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
       - name: Record advisory status
         id: record_status
         env:
@@ -2617,6 +2686,7 @@ jobs:
           BUILD_STATUS: ${{ needs.build_candidate.outputs.status }}
           CANDIDATE_ARTIFACT_DIGEST: ${{ needs.build_candidate.outputs.artifact_digest }}
           CANDIDATE_ARTIFACT_ID: ${{ needs.build_candidate.outputs.artifact_id }}
+          CANDIDATE_RUN_ATTEMPT: ${{ needs.build_candidate.outputs.run_attempt }}
           CANDIDATE_VERSION: ${{ needs.build_candidate.outputs.candidate_version }}
           EVIDENCE_ARTIFACT_DIGEST: ${{ needs.run_telegram.outputs.evidence_artifact_digest }}
           EVIDENCE_ARTIFACT_ID: ${{ needs.run_telegram.outputs.evidence_artifact_id }}

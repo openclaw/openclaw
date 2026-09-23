@@ -1,15 +1,11 @@
-// Gateway config reload planner.
-// Maps changed config paths to hot-reload actions, no-ops, or full restarts.
 import {
   type ChannelId,
   type ChannelPlugin,
   listChannelPlugins,
 } from "../channels/plugins/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  getActivePluginHttpRouteRegistry,
-  getActivePluginHttpRouteRegistryVersion,
-} from "../plugins/runtime.js";
+import type { PluginLifecycleReason } from "../plugins/lifecycle.js";
+import { getActivePluginRegistry, getActivePluginRegistryVersion } from "../plugins/runtime.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/account-id.js";
 import { isPlainObject } from "../utils.js";
 import { canHotReloadGatewayAuthCredentials } from "./auth-resolve.js";
@@ -30,6 +26,15 @@ export type GatewayReloadPlan = {
   restartHeartbeat: boolean;
   reconcileSystemJobs?: boolean;
   reloadPlugins: boolean;
+  /** Plugin owners whose undeclared channel settings require fresh registration. */
+  reloadPluginIds?: Set<string>;
+  pluginLifecycle?: {
+    pluginIds: readonly string[];
+    reason: PluginLifecycleReason;
+    operationId: string;
+    expectedSourceDigests?: Readonly<Record<string, string>>;
+    expectedInstallHashes?: Readonly<Record<string, string>>;
+  };
   restartChannels: Set<ChannelKind>;
   restartServices?: Set<string>;
   disposeMcpRuntimes: boolean;
@@ -68,13 +73,10 @@ type ReloadPolicy = {
   actions?: readonly ReloadAction[];
   channels?: readonly ChannelPlugin[];
   services?: readonly string[];
+  replaceChannelPlugins?: boolean;
   accountScoped?: boolean;
 };
 type ReloadRule = Omit<ReloadPolicy, "prefixes"> & { prefix: string };
-
-type ConfigReloadMetadata = {
-  kind: ReloadRule["kind"];
-};
 
 type GatewayReloadPlanOptions = {
   noopPaths?: Iterable<string>;
@@ -101,25 +103,45 @@ const SHARED_CHANNEL_PREFIXES = [
 ];
 
 function matchesReloadPrefix(path: string, prefix: string): boolean {
+  if (prefix.includes("*")) {
+    const segments = path.split(".");
+    return prefix
+      .split(".")
+      .every((segment, index) =>
+        segment === "*" ? Boolean(segments[index]) : segment === segments[index],
+      );
+  }
   return path === prefix || path.startsWith(`${prefix}.`);
+}
+
+function compareReloadRules(left: ReloadRule, right: ReloadRule): number {
+  const leftSegments = left.prefix.split(".");
+  const rightSegments = right.prefix.split(".");
+  // A long record key must not outrank a deeper wildcard policy boundary.
+  return (
+    rightSegments.length - leftSegments.length ||
+    leftSegments.filter((segment) => segment === "*").length -
+      rightSegments.filter((segment) => segment === "*").length
+  );
 }
 
 function expandReloadPolicies(policies: ReloadPolicy[]): ReloadRule[] {
   return policies
     .flatMap(({ prefixes, ...policy }) => prefixes.map((prefix) => ({ ...policy, prefix })))
-    .toSorted((a, b) => b.prefix.length - a.prefix.length);
+    .toSorted(compareReloadRules);
 }
+
+const AGENT_ROSTER_RELOAD_ACTIONS: readonly ReloadAction[] = [
+  "restartHeartbeat",
+  "reconcileSystemJobs",
+  "refreshHooksPolicy",
+  "reloadInternalHooks",
+];
 
 const CORE_RELOAD_POLICIES: ReloadPolicy[] = [
   { prefixes: ["gateway.remote", "gateway.reload"], kind: "none" },
   {
-    prefixes: [
-      ...AUTH_CREDENTIAL_PATHS,
-      "mcp.apps",
-      "secrets.egressProxy",
-      "plugins.load",
-      "plugins.installs",
-    ],
+    prefixes: [...AUTH_CREDENTIAL_PATHS, "mcp.apps", "secrets.egressProxy", "gateway.portals"],
     kind: "restart",
   },
   {
@@ -138,6 +160,7 @@ const CORE_RELOAD_POLICIES: ReloadPolicy[] = [
       "gateway.controlUi.embedSandbox",
       "gateway.controlUi.allowExternalEmbedUrls",
       "gateway.controlUi.automaticallyFetchFavicons",
+      "gateway.controlUi.experimental.customPlugins",
       "gateway.controlUi.allowedOrigins",
       "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback",
       "gateway.nodes.browser",
@@ -148,10 +171,18 @@ const CORE_RELOAD_POLICIES: ReloadPolicy[] = [
       "gateway.push.apns.relay",
       "gateway.terminal",
       "gateway.auth.rateLimit",
+      "gateway.roles",
+      "gateway.trustedProxies",
+      "gateway.allowRealIpFallback",
+      "gateway.auth.allowTailscale",
+      "gateway.auth.identityScopes",
+      "gateway.auth.trustedProxy",
       "diagnostics.enabled",
       "discovery.mdns.mode",
       "mcp.apps.sandboxOrigin",
       "agents.defaults",
+      "desktop.host",
+      "cloudWorkers",
     ],
     kind: "hot",
   },
@@ -177,12 +208,12 @@ const CORE_RELOAD_POLICIES: ReloadPolicy[] = [
   {
     prefixes: ["agents.entries"],
     kind: "hot",
-    actions: [
-      "restartHeartbeat",
-      "reconcileSystemJobs",
-      "refreshHooksPolicy",
-      "reloadInternalHooks",
-    ],
+    actions: AGENT_ROSTER_RELOAD_ACTIONS,
+  },
+  {
+    prefixes: ["agents.entries.*.decisionModel"],
+    kind: "hot",
+    actions: [...AGENT_ROSTER_RELOAD_ACTIONS, "reloadPlugins"],
   },
   {
     prefixes: ["agents.defaults.sessionStore", "agents.ownership"],
@@ -194,7 +225,14 @@ const CORE_RELOAD_POLICIES: ReloadPolicy[] = [
     kind: "hot",
     actions: ["reconcileSystemJobs"],
   },
+  {
+    prefixes: ["agents.defaults.decisionModel"],
+    kind: "hot",
+    actions: ["reloadPlugins"],
+  },
+  { prefixes: ["plugins.load", "plugins.installs"], kind: "hot", actions: ["reloadPlugins"] },
   { prefixes: ["cron"], kind: "hot", actions: ["restartCron"] },
+  { prefixes: ["transcripts", "cloudWorkers.profiles"], kind: "hot", actions: ["reloadPlugins"] },
   { prefixes: ["mcp", "gateway.publicOrigin"], kind: "hot", actions: ["disposeMcpRuntimes"] },
   // Capability ownership changes replace the plugin generation that owns its routes.
   {
@@ -238,11 +276,11 @@ const DEFAULT_RELOAD_POLICIES: ReloadPolicy[] = [
       "broadcast",
       "memory.citations",
       "worktreeRoot",
-      "cloudWorkers.projectProfiles",
+      "worktreeAcceleration",
       "security.audit.suppressions",
       "security.installPolicy",
       "diagnostics.cacheTrace.enabled",
-      "acp.runtime.installCommand",
+      "acp",
       "attachments.ttlHours",
       "update.checkOnStart",
       "update.channel",
@@ -253,12 +291,18 @@ const DEFAULT_RELOAD_POLICIES: ReloadPolicy[] = [
     kind: "hot",
   },
   { prefixes: ["plugins"], kind: "hot", actions: ["reloadPlugins", "disposeMcpRuntimes"] },
+  {
+    prefixes: ["channels"],
+    kind: "hot",
+    actions: ["reloadPlugins"],
+    replaceChannelPlugins: true,
+  },
   { prefixes: ["gateway", "discovery"], kind: "restart" },
 ];
 
 let cachedCatalog:
   | {
-      registry: ReturnType<typeof getActivePluginHttpRouteRegistry>;
+      registry: ReturnType<typeof getActivePluginRegistry>;
       version: number;
       rules: ReloadRule[];
       refinementPrefixes: string[];
@@ -266,16 +310,16 @@ let cachedCatalog:
   | undefined;
 
 function getReloadPolicyCatalog() {
-  const registry = getActivePluginHttpRouteRegistry();
-  const version = getActivePluginHttpRouteRegistryVersion();
+  const registry = getActivePluginRegistry();
+  const version = getActivePluginRegistryVersion();
   // Only process-root registry publication changes plugin/channel policy.
   if (cachedCatalog?.registry === registry && cachedCatalog.version === version) {
     return cachedCatalog;
   }
   const channelPlugins = listChannelPlugins();
-  const servicePolicies = (registry?.services ?? []).map(({ service }) => ({
+  const servicePolicies = (registry?.services ?? []).map(({ id, service }) => ({
     prefixes: service.reload?.configPrefixes ?? [],
-    services: [service.id],
+    services: [id],
   }));
   const channelPolicies = channelPlugins.flatMap((plugin): ReloadPolicy[] => [
     {
@@ -352,7 +396,7 @@ function getReloadPolicyCatalog() {
   }
   // Narrow config contracts must override broad owner fallbacks. Sort once per
   // registry snapshot so the hot path can retain first-match semantics.
-  rules.sort((a, b) => b.prefix.length - a.prefix.length);
+  rules.sort(compareReloadRules);
   cachedCatalog = {
     registry,
     version,
@@ -370,7 +414,7 @@ function matchRule(path: string): ReloadRule | undefined {
   return getReloadPolicyCatalog().rules.find(({ prefix }) => matchesReloadPrefix(path, prefix));
 }
 
-export function resolveConfigReloadMetadata(path: string): ConfigReloadMetadata {
+export function resolveConfigReloadMetadata(path: string): Pick<ReloadRule, "kind"> {
   if (isPluginInstallTimestampPath(path)) {
     return { kind: "none" };
   }
@@ -397,61 +441,29 @@ function getPluginInstallRecords(config: unknown): Record<string, unknown> {
   return isPlainObject(installs) ? installs : {};
 }
 
-function listPluginInstallRecordDiffPaths(
-  prevConfig: unknown,
-  nextConfig: unknown,
-  visit: (record: {
-    id: string;
-    prevRecord: unknown;
-    nextRecord: unknown;
-    paths: string[];
-  }) => void,
-): string[] {
+export function resolvePluginInstallReloadMetadata(prevConfig: unknown, nextConfig: unknown) {
   const prevInstalls = getPluginInstallRecords(prevConfig);
   const nextInstalls = getPluginInstallRecords(nextConfig);
   const ids = new Set([...Object.keys(prevInstalls), ...Object.keys(nextInstalls)]);
-  const paths: string[] = [];
+  const noopPaths: string[] = [];
+  const forceChangedPaths: string[] = [];
 
   for (const id of ids) {
-    visit({ id, prevRecord: prevInstalls[id], nextRecord: nextInstalls[id], paths });
+    const prevRecord = prevInstalls[id];
+    const nextRecord = nextInstalls[id];
+    if (!isPlainObject(prevRecord) || !isPlainObject(nextRecord)) {
+      // A dotted install id can collide with a timestamp path; whole records must still reload.
+      forceChangedPaths.push(`plugins.installs.${id}`);
+      continue;
+    }
+    for (const key of PLUGIN_INSTALL_TIMESTAMP_KEYS) {
+      if (prevRecord[key] !== nextRecord[key]) {
+        noopPaths.push(`plugins.installs.${id}.${key}`);
+      }
+    }
   }
 
-  return paths;
-}
-
-export function listPluginInstallTimestampMetadataPaths(
-  prevConfig: unknown,
-  nextConfig: unknown,
-): string[] {
-  return listPluginInstallRecordDiffPaths(
-    prevConfig,
-    nextConfig,
-    ({ id, prevRecord, nextRecord, paths }) => {
-      if (!isPlainObject(prevRecord) || !isPlainObject(nextRecord)) {
-        return;
-      }
-      for (const key of PLUGIN_INSTALL_TIMESTAMP_KEYS) {
-        if (prevRecord[key] !== nextRecord[key]) {
-          paths.push(`plugins.installs.${id}.${key}`);
-        }
-      }
-    },
-  );
-}
-
-export function listPluginInstallWholeRecordPaths(
-  prevConfig: unknown,
-  nextConfig: unknown,
-): string[] {
-  return listPluginInstallRecordDiffPaths(
-    prevConfig,
-    nextConfig,
-    ({ id, prevRecord, nextRecord, paths }) => {
-      if (!isPlainObject(prevRecord) || !isPlainObject(nextRecord)) {
-        paths.push(`plugins.installs.${id}`);
-      }
-    },
-  );
+  return { noopPaths, forceChangedPaths };
 }
 
 function extractAccountIdFromPath(channel: ChannelId, path: string): string | null {
@@ -461,7 +473,7 @@ function extractAccountIdFromPath(channel: ChannelId, path: string): string | nu
   return id && id !== DEFAULT_ACCOUNT_ID ? id : null;
 }
 
-function isResolvableChannelAccount(params: {
+function isInspectableChannelAccount(params: {
   plugin: ChannelPlugin;
   accountId: string;
   config: OpenClawConfig;
@@ -470,7 +482,9 @@ function isResolvableChannelAccount(params: {
     if (!params.plugin.config.listAccountIds(params.config).includes(params.accountId)) {
       return false;
     }
-    params.plugin.config.resolveAccount(params.config, params.accountId);
+    const inspectAccount =
+      params.plugin.config.inspectAccount ?? params.plugin.config.resolveAccount;
+    inspectAccount(params.config, params.accountId);
     return true;
   } catch {
     return false;
@@ -530,6 +544,18 @@ export function buildGatewayReloadPlan(
     for (const action of rule?.actions ?? []) {
       plan[action] = true;
     }
+    if (rule?.replaceChannelPlugins) {
+      // Manifest channel IDs survive even when registration has no active channel.
+      for (const record of getReloadPolicyCatalog().registry?.plugins ?? []) {
+        if (
+          record.channelIds.some(
+            (id) => path === "channels" || matchesReloadPrefix(path, `channels.${id}`),
+          )
+        ) {
+          (plan.reloadPluginIds ??= new Set()).add(record.id);
+        }
+      }
+    }
     for (const service of rule?.services ?? []) {
       plan.restartServices?.add(service);
     }
@@ -538,7 +564,7 @@ export function buildGatewayReloadPlan(
       if (
         accountId === null ||
         (options.candidateConfig &&
-          !isResolvableChannelAccount({ plugin, accountId, config: options.candidateConfig }))
+          !isInspectableChannelAccount({ plugin, accountId, config: options.candidateConfig }))
       ) {
         plan.restartChannels.add(plugin.id);
         continue;

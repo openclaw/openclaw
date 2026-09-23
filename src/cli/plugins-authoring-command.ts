@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { jsonSchemaValuesEqual } from "@openclaw/normalization-core/json-schema";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { replaceFileAtomic } from "../infra/replace-file.js";
 import { formatCwdRelativePathOrAbsolute as formatOutputPath } from "../infra/safe-cwd.js";
 import { getToolPluginMetadata, type ToolPluginMetadata } from "../plugin-sdk/tool-plugin.js";
 import {
@@ -18,6 +19,7 @@ import { defaultRuntime } from "../runtime.js";
 import { toSafeImportPath } from "../shared/import-specifier.js";
 import { isRecord, shortenHomeInString } from "../utils.js";
 import { VERSION } from "../version.js";
+import { formatCliOperatorError } from "./failure-output.js";
 import { buildPluginControlUi, writePluginBuildManifest } from "./plugins-control-ui-build.js";
 import { writeFeaturePluginScaffold } from "./plugins-feature-scaffold.js";
 
@@ -114,10 +116,9 @@ function readPackageManifest(rootDir: string): JsonObject {
   return readJsonFile(packagePath);
 }
 
-async function importToolPluginEntry(entryPath: string, rootDir: string): Promise<unknown> {
+async function importToolPluginEntry(entryPath: string): Promise<unknown> {
   const loader = getCachedPluginModuleLoader({
     modulePath: entryPath,
-    rootDir,
     importerUrl: import.meta.url,
     loaderFilename: entryPath,
     aliasMap: buildPluginLoaderAliasMap(entryPath, process.argv[1], import.meta.url),
@@ -143,7 +144,7 @@ export async function loadToolPlugin(params: {
       `plugin entry not found: ${normalizeRelativePath(params.rootDir, params.entryPath)}`,
     );
   }
-  const entry = await importToolPluginEntry(params.entryPath, params.rootDir);
+  const entry = await importToolPluginEntry(params.entryPath);
   const metadata = getToolPluginMetadata(entry);
   if (!metadata) {
     throw new Error(
@@ -328,8 +329,16 @@ export async function runPluginsBuildCommand(opts: PluginsBuildOptions): Promise
     return;
   }
 
-  writeJsonFile(packagePath, nextPackageManifest);
-  await writePluginBuildManifest(rootDir, manifest);
+  const realRootDir = fs.realpathSync(rootDir);
+  await replaceFileAtomic({
+    filePath: path.join(realRootDir, "package.json"),
+    content: `${JSON.stringify(nextPackageManifest, null, 2)}\n`,
+    preserveExistingMode: true,
+    dirMode: (await fs.promises.stat(realRootDir)).mode & 0o7777,
+    syncTempFile: true,
+    syncParentDir: true,
+  });
+  await writePluginBuildManifest(realRootDir, manifest);
   defaultRuntime.log(`Wrote ${formatOutputPath(manifestPath, PLUGIN_MANIFEST_FILENAME)}`);
   defaultRuntime.log(`Updated ${formatOutputPath(packagePath, "package.json")}`);
 }
@@ -375,10 +384,8 @@ export async function runPluginsValidateCommand(opts: PluginsValidateOptions): P
     if (!opts.json) {
       throw err;
     }
-    result = {
-      valid: false,
-      errors: [err instanceof Error ? err.message : String(err)],
-    };
+    const failure = err instanceof Error ? err : String(err);
+    result = { valid: false, errors: [formatCliOperatorError(failure)] };
   }
 
   if (!result.valid) {
@@ -481,7 +488,7 @@ function buildScaffoldTsconfig(type: PluginScaffoldType): JsonObject {
       outDir: "dist",
       skipLibCheck: true,
     },
-    include: type === "provider" ? ["src/index.ts"] : ["src/**/*.ts"],
+    include: type === "feature" ? ["src/**/*.ts"] : ["src/index.ts"],
   };
 }
 

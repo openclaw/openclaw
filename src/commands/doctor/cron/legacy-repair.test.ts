@@ -3,7 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
+import { replaceSessionEntrySync } from "../../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { resolveCronDeliveryPreview } from "../../../cron/delivery-preview.js";
 import {
   loadCronQuarantinedJobs,
   loadCronStore,
@@ -12,7 +14,11 @@ import {
 } from "../../../cron/store.js";
 import { cronStoreKey } from "../../../cron/store/key.js";
 import type { CronJob } from "../../../cron/types.js";
-import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  openOpenClawStateDatabase,
+} from "../../../state/openclaw-state-db.js";
 import {
   applyLegacyCronStoreRepair,
   loadLegacyCronRepairState,
@@ -22,11 +28,15 @@ import {
 let tempRoot: string | undefined;
 
 afterEach(async () => {
-  vi.unstubAllEnvs();
+  if (tempRoot) {
+    await closeOpenClawAgentDatabasesAsync(tempRoot);
+  }
+  await closeOpenClawStateDatabaseAsync();
   if (tempRoot) {
     await fs.rm(tempRoot, { recursive: true, force: true });
     tempRoot = undefined;
   }
+  vi.unstubAllEnvs();
 });
 
 it.each<{
@@ -117,6 +127,53 @@ async function loadRepairStateForStore(storePath: string) {
   );
   return { cfg, state };
 }
+
+it.each(["legacy JSON", "SQLite"])(
+  "preserves current-session delivery through %s repair and reload",
+  async (source) => {
+    tempRoot = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-current-repair-")),
+    );
+    vi.stubEnv("OPENCLAW_STATE_DIR", tempRoot);
+    const storePath = path.join(tempRoot, "cron", "jobs.json");
+    const current: CronJob = {
+      ...job("current-source"),
+      agentId: "main",
+      enabled: false,
+      sessionTarget: "current",
+      sessionKey: "agent:main:dashboard:source",
+      delivery: { mode: "announce" },
+      state: { consecutiveErrors: 2 },
+    };
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: current.sessionKey! },
+      { sessionId: "current-source", updatedAt: 1 },
+    );
+    const store = { version: 1 as const, jobs: [current] };
+    if (source === "legacy JSON") {
+      await fs.mkdir(path.dirname(storePath), { recursive: true });
+      await fs.writeFile(storePath, JSON.stringify(store));
+    } else {
+      await saveCronStore(storePath, store);
+    }
+    const { cfg, state } = await loadRepairStateForStore(storePath);
+
+    const repaired = await applyLegacyCronStoreRepair({ cfg, state });
+    const reloaded = (await loadCronStore(storePath)).jobs[0]!;
+
+    expect(repaired.warnings).toEqual([]);
+    expect(repaired.changes).not.toEqual([]);
+    // Adding the missing anchor forces a real write even when the target is canonical.
+    expect(reloaded).toMatchObject({
+      ...current,
+      schedule: { ...current.schedule, anchorMs: current.createdAtMs },
+    });
+    await expect(resolveCronDeliveryPreview({ cfg, job: reloaded })).resolves.toEqual({
+      label: "announce -> current session",
+      detail: "commits to this conversation (no external channel route)",
+    });
+  },
+);
 
 it("refuses to rewrite a row a writer outside this branch's code committed after the snapshot", async () => {
   tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-repair-mixed-version-"));

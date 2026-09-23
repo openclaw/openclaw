@@ -20,8 +20,8 @@ import { buildTestCtx } from "./test-ctx.js";
 
 const selectAgentHarnessMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../../agents/harness/selection.js", () => ({
-  selectAgentHarness: (...args: unknown[]) => selectAgentHarnessMock(...args),
+vi.mock("../../agents/harness/selection-decision.js", () => ({
+  resolveAgentHarnessDeliveryDefaults: (...args: unknown[]) => selectAgentHarnessMock(...args),
 }));
 
 const { resolveVisibleRepliesPolicy } = await import("./dispatch-from-config.harness-defaults.js");
@@ -89,7 +89,7 @@ describe("turn model selection harness-path differential", () => {
   beforeEach(() => {
     resetPluginRuntimeStateForTest();
     setActivePluginRegistry(createSessionConversationTestRegistry());
-    selectAgentHarnessMock.mockImplementation(() => recorderHarness);
+    selectAgentHarnessMock.mockImplementation(() => recorderHarness.deliveryDefaults);
   });
 
   afterEach(() => {

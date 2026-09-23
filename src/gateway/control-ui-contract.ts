@@ -13,39 +13,12 @@ export const CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT =
 /** Maximum session keys retained by one Control UI PR subscription. */
 export const CONTROL_UI_SESSION_PULL_REQUESTS_MAX_KEYS = 200;
 
-/** Public GitHub metadata rendered by Control UI link hover cards. */
-/**
- * One co-author resolved from a `Co-authored-by` trailer. Only trailers using
- * GitHub's `<id>+<login>@users.noreply.github.com` form resolve, because the id
- * yields both the login and the avatar without a per-person API lookup.
- */
-type ControlUiGitHubPreviewCoAuthor = {
-  login: string;
-  avatarDataUrl?: string;
-};
-
-export type ControlUiGitHubPreview = {
-  additions?: number;
-  avatarDataUrl?: string;
-  /** Bounded to the faces the card renders; `coAuthorCount` carries the true total. */
-  coAuthors?: ControlUiGitHubPreviewCoAuthor[];
-  coAuthorCount?: number;
-  changedFiles?: number;
-  closedAt?: string;
-  comments?: number;
-  createdAt: string;
-  deletions?: number;
-  draft?: boolean;
-  kind: "issue" | "pull";
-  login: string;
-  mergedAt?: string;
-  number: number;
-  owner: string;
-  repo: string;
-  state: string;
-  stateReason?: string;
-  title: string;
-  updatedAt: string;
+/** Anonymous public-page presentation; remote URLs never cross into the renderer. */
+export type ControlUiLinkPreview = {
+  title?: string;
+  description?: string;
+  imageDataUrl?: string;
+  faviconDataUrl?: string;
 };
 
 /** Bounded session metadata rendered by Control UI session-link hover cards. */
@@ -76,7 +49,44 @@ type ControlUiSessionPullRequestChecks = {
   running: number;
 };
 
-/** One GitHub pull request whose head is the session's working branch. */
+/** Ordered GitHub Actions step facts; timestamps let the client render live duration. */
+export type ControlUiSessionPullRequestCheckStep = {
+  number: number;
+  name: string;
+  status: string;
+  conclusion?: string;
+  startedAt?: string;
+  completedAt?: string;
+};
+
+export type ControlUiSessionPullRequestCheck = {
+  id: number;
+  name: string;
+  state: "failed" | "running" | "passed" | "skipped";
+  status: string;
+  conclusion?: string;
+  startedAt?: string;
+  completedAt?: string;
+  detailsUrl?: string;
+  source: "actions" | "check";
+  /** Absent for non-Actions checks or when Actions details could not be loaded. */
+  steps?: ControlUiSessionPullRequestCheckStep[];
+};
+
+/** On-demand details bound to one session PR head, never part of background polling. */
+export type ControlUiSessionPullRequestCheckDetails = {
+  owner: string;
+  repo: string;
+  number: number;
+  headSha: string;
+  checks: ControlUiSessionPullRequestCheck[];
+  status: "ready" | "stale" | "unavailable";
+  rateLimited: boolean;
+  error?: string;
+  retryAfterMs?: number;
+};
+
+/** A working-branch PR or a same-repository PR linked in recent assistant replies. */
 export type ControlUiSessionPullRequest = {
   number: number;
   /**
@@ -99,6 +109,8 @@ export type ControlUiSessionPullRequest = {
   /** Latest check-run rollup for the head commit; absent when no checks ran. */
   checks?: ControlUiSessionPullRequestChecks;
   checksUrl?: string;
+  /** Head binding for on-demand CI details; not a client-selected repository revision. */
+  headSha?: string;
 };
 
 /**
@@ -125,17 +137,24 @@ export type ControlUiSessionBranch = {
 export type ControlUiSessionPullRequests = {
   pullRequests: ControlUiSessionPullRequest[];
   /**
+   * Present whenever the session's checkout resolves to a GitHub remote,
+   * independent of whether a PR or branch row exists.
+   */
+  repository?: { owner: string; repo: string };
+  /**
    * Present when the session's non-default GitHub branch has a creatable PR
    * on origin or local changed files in the working tree.
    */
   branch?: ControlUiSessionBranch;
   /** GitHub quota exhausted; entries may be stale until the limit resets. */
   rateLimited: boolean;
+  /** A failed PR lookup may still carry independently resolved repository facts. */
+  status?: "ready" | "rate-limited" | "unavailable";
 };
 
 /** Per-session pushed state; unavailable snapshots preserve prior UI state. */
 export type ControlUiSessionPullRequestSnapshot = ControlUiSessionPullRequests & {
-  status: "ready" | "rate-limited" | "unavailable";
+  status: NonNullable<ControlUiSessionPullRequests["status"]>;
 };
 
 /** Targeted delta event for sessions watched by one Control UI connection. */

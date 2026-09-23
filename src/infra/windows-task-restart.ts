@@ -3,16 +3,20 @@ import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { formatCliCommand } from "../cli/command-format.js";
 import { quoteCmdScriptArg } from "../daemon/cmd-argv.js";
 import { resolveGatewayWindowsTaskName } from "../daemon/constants.js";
 import { renderCmdRestartLogSetup } from "../daemon/restart-logs.js";
 import { resolveTaskScriptPath } from "../daemon/schtasks.js";
 import { formatErrorMessage } from "./errors.js";
 import type { RestartAttempt } from "./restart.types.js";
+import { parseTcpPort, parseTcpPortFromArgs } from "./tcp-port.js";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 import { getWindowsCmdExePath } from "./windows-install-roots.js";
 import { encodeWindowsLauncherScript } from "./windows-launcher-encoding.js";
 
+// Match the Windows CLI restart budget, including slow cold starts.
+const TASK_RESTART_WAIT_SECONDS = 180;
 const TASK_RESTART_RETRY_LIMIT = 12;
 const TASK_RESTART_RETRY_DELAY_SEC = 1;
 
@@ -33,31 +37,54 @@ function buildScheduledTaskRestartScript(params: {
   setupLines: string[];
   taskName: string;
   taskScriptPath?: string;
+  port: number;
+  entryPath: string;
+  recoveryCommand: string;
 }): string {
-  const { quotedLogPath, setupLines, taskName, taskScriptPath } = params;
+  const { quotedLogPath, setupLines, taskName, taskScriptPath, port } = params;
   const quotedTaskName = quoteCmdScriptArg(taskName);
-  const queryTaskStateCommand = [
-    `$task = Get-ScheduledTask -TaskName ${quotePowerShellSingleQuotedLiteral(taskName)} -ErrorAction SilentlyContinue`,
-    "if ($null -ne $task -and $task.State -eq 'Running') { exit 0 }",
+  const waitForExitCommand = [
+    "$ErrorActionPreference = 'Stop'",
+    `$old = Get-Process -Id ${process.pid} -ErrorAction SilentlyContinue`,
+    `if ($null -ne $old -and -not $old.WaitForExit(${TASK_RESTART_WAIT_SECONDS * 1000})) { Write-Output 'Outgoing Gateway did not exit within ${TASK_RESTART_WAIT_SECONDS}s'; exit 1 }`,
+    "exit 0",
+  ].join("; ");
+  const observeReplacementCommand = [
+    "$ErrorActionPreference = 'Stop'",
+    `$deadline = [DateTime]::UtcNow.AddSeconds(${TASK_RESTART_WAIT_SECONDS})`,
+    `$entry = [regex]::Escape(${quotePowerShellSingleQuotedLiteral(params.entryPath)})`,
+    "$boundary = '[\\s' + [char]34 + ']'",
+    "do {",
+    `$listeners = @(Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue)`,
+    "foreach ($listener in $listeners) {",
+    `if ($listener.OwningProcess -eq ${process.pid}) { continue }`,
+    "$candidate = Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $listener.OwningProcess)",
+    `if ($candidate.ExecutablePath -eq ${quotePowerShellSingleQuotedLiteral(process.execPath)} -and $candidate.CommandLine -match ($boundary + $entry + $boundary) -and $candidate.CommandLine -match '(?:^|\\s)gateway(?:\\s|$)') {`,
+    `Write-Output ('openclaw restart observed source=windows-task-handoff port=${port} pid=' + $listener.OwningProcess)`,
+    "exit 0",
+    "}",
+    "}",
+    "Start-Sleep -Seconds 1",
+    "} while ([DateTime]::UtcNow -lt $deadline)",
+    `Write-Output 'No matching replacement Gateway listener appeared within ${TASK_RESTART_WAIT_SECONDS}s'`,
     "exit 1",
   ].join("; ");
-  const quotedQueryTaskStateCommand = quoteCmdScriptArg(queryTaskStateCommand);
   const lines = [
     "@echo off",
     "setlocal",
     ...setupLines,
-    `>> ${quotedLogPath} 2>&1 echo [%DATE% %TIME%] openclaw restart attempt source=windows-task-handoff target=${quotedTaskName}`,
+    `>> ${quotedLogPath} 2>&1 echo [%DATE% %TIME%] openclaw restart attempt source=windows-task-handoff target=${quotedTaskName} previousPid=${process.pid} port=${port}`,
+    // Running can still describe the outgoing task. Never accept it as recovery.
+    `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ${quoteCmdScriptArg(waitForExitCommand)} >> ${quotedLogPath} 2>&1`,
+    "if errorlevel 1 goto failed",
     `schtasks /Query /TN ${quotedTaskName} >> ${quotedLogPath} 2>&1`,
     "if errorlevel 1 goto fallback",
     "set /a attempts=0",
     ":retry",
     `timeout /t ${TASK_RESTART_RETRY_DELAY_SEC} /nobreak >nul`,
     "set /a attempts+=1",
-    // Avoid racing with another restart path that already started the scheduled task.
-    `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ${quotedQueryTaskStateCommand} >nul 2>&1`,
-    "if not errorlevel 1 goto cleanup",
     `schtasks /Run /TN ${quotedTaskName} >> ${quotedLogPath} 2>&1`,
-    "if not errorlevel 1 goto cleanup",
+    "if not errorlevel 1 goto verify",
     `if %attempts% GEQ ${TASK_RESTART_RETRY_LIMIT} goto fallback`,
     "goto retry",
     ":fallback",
@@ -73,8 +100,15 @@ function buildScheduledTaskRestartScript(params: {
     );
   }
   lines.push(
-    ":cleanup",
+    ":verify",
+    `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ${quoteCmdScriptArg(observeReplacementCommand)} >> ${quotedLogPath} 2>&1`,
+    "if errorlevel 1 goto failed",
     `>> ${quotedLogPath} 2>&1 echo [%DATE% %TIME%] openclaw restart finished source=windows-task-handoff`,
+    "goto cleanup",
+    ":failed",
+    // /End here could kill this observer inside the task's non-breakaway Job.
+    `>> ${quotedLogPath} 2>&1 echo [%DATE% %TIME%] openclaw restart failed source=windows-task-handoff target=${quotedTaskName} previousPid=${process.pid} port=${port}. No replacement listener verified. Run from an external terminal: ${quoteCmdScriptArg(params.recoveryCommand)}`,
+    ":cleanup",
     'del "%~f0" >nul 2>&1',
   );
   return lines.join("\r\n");
@@ -90,6 +124,11 @@ export function relaunchGatewayScheduledTask(env: NodeJS.ProcessEnv = process.en
   const quotedScriptPath = quoteCmdScriptArg(scriptPath);
   const restartLog = renderCmdRestartLogSetup({ ...process.env, ...env });
   try {
+    const port = parseTcpPortFromArgs(process.argv) ?? parseTcpPort(env.OPENCLAW_GATEWAY_PORT);
+    const entryPath = process.argv[1];
+    if (!port || !entryPath) {
+      throw new Error("Cannot identify the Gateway entrypoint and port for restart observation");
+    }
     // The script embeds host paths and the task name; cmd.exe decodes it with
     // the console code page, so plain UTF-8 garbles CJK content (#107416).
     fs.writeFileSync(
@@ -101,6 +140,9 @@ export function relaunchGatewayScheduledTask(env: NodeJS.ProcessEnv = process.en
           setupLines: restartLog.lines,
           taskName,
           taskScriptPath,
+          port,
+          entryPath,
+          recoveryCommand: formatCliCommand("openclaw gateway restart --force", env),
         })}\r\n`,
       }),
     );

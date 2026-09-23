@@ -8,6 +8,7 @@ import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { assertSandboxPath } from "../../agents/sandbox-paths.js";
 import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox.js";
 import { slugifySessionKey } from "../../agents/sandbox/shared.js";
+import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { root as fsRoot, FsSafeError, readLocalFileSafely } from "../../infra/fs-safe.js";
@@ -19,6 +20,7 @@ import { resolveChannelRemoteInboundAttachmentRoots } from "../../media/channel-
 import { normalizeMediaFacts } from "../../media/media-facts.js";
 import { resolveInboundMediaReference } from "../../media/media-reference.js";
 import {
+  STAGED_INPUT_MAX_BYTES,
   ensureStagedInputDirectory,
   stagedInputDirectory,
   stagedInputFileName,
@@ -29,7 +31,7 @@ import { CONFIG_DIR } from "../../utils.js";
 import type { RuntimeMsgContext as MsgContext, TemplateContext } from "../templating.js";
 
 /** Maximum size of one file copied into an agent sandbox or staging workspace. */
-export const SANDBOX_MEDIA_MAX_BYTES = 50 * 1024 * 1024;
+export const SANDBOX_MEDIA_MAX_BYTES = STAGED_INPUT_MAX_BYTES;
 const SCP_STDERR_TAIL_CHARS = 16_384;
 
 // Attachment indexes are the staging identity. Callers use this map to detect
@@ -61,7 +63,14 @@ export async function stageSandboxMedia(params: {
     return EMPTY_STAGE_RESULT;
   }
 
-  const forceRemoteCache = ctx.MediaRemoteHost && params.remoteMediaMode === "cache";
+  const remoteWorkspace = getAgentWorkspaceAccess(workspaceDir, "prepareTurnAttachments");
+  if (remoteWorkspace?.prepareTurnAttachments && !ctx.MediaRemoteHost) {
+    // Keep managed originals on Gateway; the admitted turn transfers them to the Harness.
+    return EMPTY_STAGE_RESULT;
+  }
+  const forceRemoteCache =
+    ctx.MediaRemoteHost &&
+    (remoteWorkspace?.prepareTurnAttachments || params.remoteMediaMode === "cache");
   const sandbox = forceRemoteCache
     ? null
     : await ensureSandboxWorkspaceForSession({
@@ -92,6 +101,13 @@ export async function stageSandboxMedia(params: {
   const stagedUrlAliases = new Set<number>();
   const inputDirectory = stagedInputDirectory(crypto.randomUUID());
   let stagingReady = false;
+  const prepareDestination = async () => {
+    if (!stagingReady) {
+      // Keep the privacy marker ahead of file publication, after source validation.
+      await ensureStagedInputDirectory(effectiveWorkspaceDir, inputDirectory, abortSignal);
+      stagingReady = true;
+    }
+  };
 
   for (const entry of pathEntries) {
     abortSignal?.throwIfAborted();
@@ -113,10 +129,6 @@ export async function stageSandboxMedia(params: {
     const dest = path.join(effectiveWorkspaceDir, relativeDest);
 
     try {
-      if (!stagingReady) {
-        await ensureStagedInputDirectory(effectiveWorkspaceDir, inputDirectory, abortSignal);
-        stagingReady = true;
-      }
       if (ctx.MediaRemoteHost) {
         await stageRemoteFileIntoRoot({
           remoteHost: ctx.MediaRemoteHost,
@@ -124,6 +136,7 @@ export async function stageSandboxMedia(params: {
           rootDir: effectiveWorkspaceDir,
           relativeDestPath: relativeDest,
           abortSignal,
+          prepareDestination,
         });
       } else {
         const copySource = await fs.realpath(source).catch(() => source);
@@ -132,6 +145,7 @@ export async function stageSandboxMedia(params: {
           rootDir: effectiveWorkspaceDir,
           relativeDestPath: relativeDest,
           abortSignal,
+          prepareDestination,
         });
       }
     } catch (err) {
@@ -245,6 +259,7 @@ async function stageLocalFileIntoRoot(params: {
   rootDir: string;
   relativeDestPath: string;
   abortSignal?: AbortSignal;
+  prepareDestination: () => Promise<void>;
 }): Promise<void> {
   const root = await fsRoot(params.rootDir);
   const source = await readLocalFileSafely({
@@ -252,6 +267,8 @@ async function stageLocalFileIntoRoot(params: {
     maxBytes: SANDBOX_MEDIA_MAX_BYTES,
   });
   // A completed read must not start a new copy after cancellation.
+  params.abortSignal?.throwIfAborted();
+  await params.prepareDestination();
   params.abortSignal?.throwIfAborted();
   await root.create(params.relativeDestPath, source.buffer);
 }
@@ -262,6 +279,7 @@ async function stageRemoteFileIntoRoot(params: {
   rootDir: string;
   relativeDestPath: string;
   abortSignal?: AbortSignal;
+  prepareDestination: () => Promise<void>;
 }): Promise<void> {
   const { abortSignal } = params;
   const safeRemoteHost = normalizeScpRemoteHost(params.remoteHost);

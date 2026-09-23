@@ -1,9 +1,14 @@
 import type { Locator, Page } from "playwright";
 import { expect as expectBrowser } from "playwright/test";
 import { afterEach, expect, it } from "vitest";
-import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiSessionUrl,
+  installMockGateway,
+  pauseVirtualClock,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite, tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 import { openNewSessionPlusMenu, replaceGatewayClient } from "./new-session-page.test-support.ts";
+import { sessionsList } from "./session-ownership-fixtures.test-support.ts";
 import {
   avatarLabelCenterDelta,
   captureSessionOwnerPageProof,
@@ -30,53 +35,6 @@ async function selectMenuValue(menu: Locator, value: string) {
       }),
     );
   }, value);
-}
-
-function sessionsList(owners: [string, string], withAvatars = false) {
-  const ada = {
-    type: "human" as const,
-    id: owners[0],
-    identity: { type: "profile" as const, id: owners[0] },
-    label: "Ada",
-  };
-  const bob = {
-    type: "human" as const,
-    id: owners[1],
-    identity: { type: "profile" as const, id: owners[1] },
-    label: owners[1] === owners[0] ? "Ada" : "Bob",
-  };
-  const ownerFacet = owners[1] === owners[0] ? [ada] : [ada, bob];
-  return {
-    count: 2,
-    owners: ownerFacet.map((actor) =>
-      withAvatars
-        ? Object.assign({}, actor, { avatarUrl: `/api/users/${actor.id}/avatar?v=1` })
-        : actor,
-    ),
-    defaults: { contextTokens: null, model: null, modelProvider: null },
-    path: "",
-    sessions: [
-      {
-        key: "agent:main:ada",
-        kind: "direct",
-        label: "Ada research",
-        category: "Research",
-        createdActor: ada,
-        owner: { actor: ada },
-        updatedAt: 2,
-      },
-      {
-        key: "agent:main:bob",
-        kind: "direct",
-        label: "Bob operations",
-        category: "Operations",
-        createdActor: bob,
-        owner: { actor: bob },
-        updatedAt: 1,
-      },
-    ],
-    ts: 1,
-  };
 }
 
 function draftSessionsList() {
@@ -466,6 +424,55 @@ suite.define(() => {
     await captureSessionOwnerProof(suite, currentPage, "03-involving-me-after-active-event.png");
   });
 
+  it("hides owner avatars with one human and agents, then reveals them for another human", async () => {
+    const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
+    const currentPage = await context.newPage();
+    page = currentPage;
+    const solo = sessionsList(["profile-ada", "profile-ada"]);
+    const agent = {
+      type: "agent" as const,
+      id: "research",
+      identity: { type: "agent" as const, id: "research" },
+      label: "Research",
+    };
+    const result = {
+      ...solo,
+      owners: [...solo.owners, agent],
+      sessions: solo.sessions.map((session) =>
+        Object.assign({}, session, {
+          participants: [{ identity: agent.identity, label: agent.label }],
+          participantCount: 5,
+        }),
+      ),
+    };
+    const gateway = await installMockGateway(currentPage, {
+      sessionKey: "agent:main:ada",
+      presenceUsers: [{ self: true, id: "profile-ada", name: "Ada" }],
+      historyMessages: [{ role: "assistant", content: [{ type: "text", text: "Ready." }] }],
+      methodResponses: { "sessions.list": result },
+    });
+    await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
+    const row = currentPage.locator('[data-session-key="agent:main:ada"]');
+    await expectBrowser(row).toBeVisible();
+    await currentPage.getByText("Ready.", { exact: true }).waitFor();
+    await captureSessionOwnerProof(suite, currentPage, "one-human-with-agents.png");
+    await expectBrowser(row.locator("openclaw-session-owner-chip")).toHaveCount(0);
+
+    await currentPage.clock.install();
+    await pauseVirtualClock(currentPage);
+    const initialRequests = (await gateway.getRequests("sessions.list")).length;
+    await gateway.setMethodResponse("sessions.list", sessionsList(["profile-ada", "profile-bob"]));
+    await gateway.emitGatewayEvent("sessions.changed", {});
+    await currentPage.clock.runFor(4_999);
+    expect(await gateway.getRequests("sessions.list")).toHaveLength(initialRequests);
+    await expectBrowser(row.locator("openclaw-session-owner-chip")).toHaveCount(0);
+    // Cross the event window and deliver the nested mock response timer.
+    await currentPage.clock.runFor(2);
+    await expectBrowser(row.locator("openclaw-session-owner-chip")).toHaveCount(1);
+    await currentPage.clock.resume();
+    await captureSessionOwnerProof(suite, currentPage, "multiple-humans.png");
+  });
+
   it("renders zero ownership chrome for a single owner", async () => {
     const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
     const currentPage = await context.newPage();
@@ -524,7 +531,7 @@ suite.define(() => {
 
     const newThread = currentPage
       .locator(".sidebar-session-toolbar")
-      .getByRole("link", { name: "New session" });
+      .getByRole("link", { name: "New conversation" });
     await newThread.focus();
     await currentPage.keyboard.press("Enter");
     await expect.poll(() => new URL(currentPage.url()).pathname).toBe("/new");
@@ -688,7 +695,7 @@ suite.define(() => {
     await currentPage.getByRole("button", { name: "Session sharing" }).click();
     const dropdown = currentPage.locator(".chat-pane__sharing-menu");
     await expect.poll(() => dropdown.getAttribute("open")).not.toBeNull();
-    await expectBrowser(dropdown.locator(".chat-pane__sharing-title")).toHaveCount(2);
+    await expectBrowser(dropdown.locator(".chat-pane__sharing-title")).toHaveCount(3);
     await currentPage.getByText("Publish draft", { exact: true }).click();
     await gateway.waitForRequest("session.visibility.set");
     await expect.poll(() => dropdown.getAttribute("open")).toBeNull();
@@ -766,7 +773,7 @@ suite.define(() => {
     expect(await gateway.getRequests("session.members.add")).toHaveLength(0);
   });
 
-  it("scrolls high-volume sharing through one compact menu", async () => {
+  it("scrolls and pages high-volume sharing through one compact menu", async () => {
     const context = await suite.browser.newContext({ viewport: { height: 800, width: 1280 } });
     const currentPage = await context.newPage();
     page = currentPage;
@@ -814,36 +821,7 @@ suite.define(() => {
         "session.visibility.set",
       ],
       operatorScopes: ["operator.read", "operator.write"],
-      historyMessages: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text: "Share the launch review with the design and operations groups, then summarize the open decisions.",
-            },
-          ],
-        },
-        {
-          role: "assistant",
-          content: [
-            {
-              type: "text",
-              text: "I prepared the rollout summary, linked the review notes, and kept the workspace visible to collaborators.",
-            },
-          ],
-        },
-        {
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text: "Add the remaining members and confirm the sharing policy before the handoff.",
-            },
-          ],
-        },
-        { role: "assistant", content: [{ type: "text", text: "Ready." }] },
-      ],
+      historyMessages: [{ role: "assistant", content: [{ type: "text", text: "Ready." }] }],
       methodResponses: {
         "sessions.list": sessions,
         "session.members.listEvidence": {
@@ -981,10 +959,7 @@ suite.define(() => {
     expect(afterScroll.firstMemberTop).toBeLessThan(beforeScroll.firstMemberTop);
     await expectBrowser(
       dropdown.locator(".chat-pane__sharing-member openclaw-session-owner-chip"),
-    ).toHaveCount(30);
-    // Agent and system identities render the non-human icon from identity.type,
-    // not from an ID-string heuristic; owner-chip presentation is human-only.
-    await expectBrowser(dropdown.locator(".chat-pane__sharing-member-icon > svg")).toHaveCount(2);
+    ).toHaveCount(20);
     await expect
       .poll(() => tooltipTitleText(longNameItem.locator(".chat-pane__sharing-member-label")))
       .toBe(longMemberLabel);
@@ -993,6 +968,13 @@ suite.define(() => {
       .toBe(longMemberId);
     await expectBrowser(selectedIndicator).toHaveCount(1);
     expect(await selectedIndicator.getAttribute("aria-label")).not.toBeNull();
+    await dropdown.getByRole("button", { name: "Next", exact: true }).click();
+    await expectBrowser(
+      dropdown.locator(".chat-pane__sharing-member openclaw-session-owner-chip"),
+    ).toHaveCount(10);
+    // The final page retains both non-human icons; owner-chip presentation is human-only.
+    await expectBrowser(dropdown.locator(".chat-pane__sharing-member-icon > svg")).toHaveCount(2);
+    await expectBrowser(dropdown.getByRole("button", { name: "Next", exact: true })).toBeDisabled();
   });
 
   it("clears a selected draft mode when sharing policy becomes unavailable", async () => {

@@ -9,7 +9,6 @@ import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { recordSessionParticipantBestEffort } from "../../sessions/session-participant-recording.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
-import { retireSessionMcpRuntimeForSessionKey } from "../agent-bundle-mcp-tools.js";
 import { resolveNestedAgentLaneForSession } from "../lanes.js";
 import { waitForAgentRunReply } from "../run-wait.js";
 import {
@@ -19,17 +18,6 @@ import {
 
 type GatewayCaller = AgentToolGatewayRequestCaller;
 type AgentCommandRunner = typeof import("../../commands/agent.js").agentCommandFromIngress;
-
-const defaultAgentStepDeps = {
-  agentCommandFromIngress: (async (...args) => {
-    const { agentCommandFromIngress } = await import("../../commands/agent.js");
-    return await agentCommandFromIngress(...args);
-  }) as AgentCommandRunner,
-};
-
-let agentStepDeps: {
-  agentCommandFromIngress: AgentCommandRunner;
-} = defaultAgentStepDeps;
 
 function extractAgentCommandReply(
   result: Awaited<ReturnType<AgentCommandRunner>>,
@@ -59,6 +47,7 @@ export async function runAgentStep(params: {
   sourceSessionKey?: string;
   sourceChannel?: string;
   sourceTool?: string;
+  sourceRole?: "subagent";
   callGateway?: GatewayCaller;
 }): Promise<string | undefined> {
   const promptedAt = Date.now();
@@ -68,6 +57,7 @@ export async function runAgentStep(params: {
     sourceSessionKey: params.sourceSessionKey,
     sourceChannel: params.sourceChannel,
     sourceTool: params.sourceTool ?? "sessions_send",
+    ...(params.sourceRole ? { sourceRole: params.sourceRole } : {}),
   };
   // Mark inter-session prompts so downstream transcripts can distinguish tool-routed text.
   const message = annotateInterSessionPromptText(params.message, inputProvenance);
@@ -77,7 +67,7 @@ export async function runAgentStep(params: {
   if (params.transcriptMessage !== undefined) {
     // Intentional direct in-process exception: the public agent schema rejects transcriptMessage.
     // Keep announce bookkeeping off the wire without expanding the model-authored RPC surface.
-    const result = await agentStepDeps.agentCommandFromIngress({
+    const ingress: Parameters<AgentCommandRunner>[0] = {
       message,
       ...(params.agentId ? { agentId: params.agentId } : {}),
       transcriptMessage: params.transcriptMessage,
@@ -90,11 +80,9 @@ export async function runAgentStep(params: {
       extraSystemPrompt: params.extraSystemPrompt,
       inputProvenance,
       allowModelOverride: false,
-    });
-    await retireSessionMcpRuntimeForSessionKey({
-      sessionKey: params.sessionKey,
-      reason: "nested-agent-step-complete",
-    });
+    };
+    const { agentCommandFromIngress } = await import("../../commands/agent.js");
+    const result = await agentCommandFromIngress(ingress);
     return extractAgentCommandReply(result);
   }
   const response = await gatewayCall({
@@ -132,37 +120,10 @@ export async function runAgentStep(params: {
     runId: resolvedRunId,
     timeoutMs: Math.min(params.timeoutMs, 60_000),
     callGateway: gatewayCall,
+    untilTerminal: true,
   });
-  if (result.status === "ok" || result.status === "error") {
-    await retireSessionMcpRuntimeForSessionKey({
-      sessionKey: params.sessionKey,
-      reason: "nested-agent-step-complete",
-    });
-  }
   if (result.status !== "ok") {
     return undefined;
   }
   return result.replyText;
-}
-
-/** Test-only dependency overrides for gateway and in-process command execution. */
-const testing = {
-  setDepsForTest(
-    overrides?: Partial<{
-      agentCommandFromIngress: AgentCommandRunner;
-    }>,
-  ) {
-    agentStepDeps = overrides
-      ? {
-          ...defaultAgentStepDeps,
-          ...overrides,
-        }
-      : defaultAgentStepDeps;
-  },
-};
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.agentStepTestApi")] = {
-    testing,
-  };
 }

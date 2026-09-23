@@ -27,6 +27,7 @@ type GatewayChatRun = {
   runId?: unknown;
   status?: unknown;
   stopReason?: unknown;
+  endedAt?: unknown;
 };
 
 type GatewayChatMessage = {
@@ -41,12 +42,16 @@ type GatewayChatHistory = {
 type MockRequestSnapshot = {
   cursor?: unknown;
   prompt?: unknown;
+  allInputText?: unknown;
+  model?: unknown;
   outcome?: unknown;
   errorCode?: unknown;
 };
 
 type ClassifiedMockRequest = {
   cursor: unknown;
+  model: unknown;
+  continuation: boolean;
   prompt: "recovery" | "queued" | "other" | "missing";
   outcome: unknown;
   errorCode: unknown;
@@ -58,9 +63,13 @@ const QUEUED_PROMPT =
   "Repeated request queued reply Gateway QA check. Reply with the fixture marker.";
 const QUEUED_REPLY_MARKER = "GATEWAY_REPEATED_REQUEST_QUEUED_OK";
 const RECOVERY_REASON = "repeated_model_requests_without_progress";
-const PRODUCTION_RECOVERY_BOUND_MS = 360_000;
-const MODEL_REQUEST_ALLOWANCE_SECONDS = 90;
-const RECOVERY_PROGRESS_INTERVAL_MS = 60_000;
+// The opt-in product proof owns the full 360-second production-floor assertion.
+// This always-on state-machine proof uses the same heartbeat path with QA timings.
+const QA_RECOVERY_BOUND_MS = 30_000;
+const MODEL_REQUEST_ALLOWANCE_SECONDS = 45;
+const ORDINARY_RESPONSE_PAUSE_MS = 8_000;
+const STALLED_RESPONSE_PAUSE_MS = 90_000;
+const RECOVERY_PROGRESS_INTERVAL_MS = 30_000;
 const HISTORY_RETRY_TIMEOUT_MS = 60_000;
 const HISTORY_RETRY_INTERVAL_MS = 250;
 
@@ -228,13 +237,20 @@ async function readClassifiedMockRequests(mockBaseUrl: string): Promise<Classifi
   return fetch(`${mockBaseUrl}/debug/requests`)
     .then((response) => response.json() as Promise<MockRequestSnapshot[]>)
     .then((records) =>
-      records.map(({ cursor, prompt, outcome, errorCode }) => ({
+      records.map(({ cursor, prompt, allInputText, model, outcome, errorCode }) => ({
         cursor,
+        model,
+        continuation:
+          typeof prompt === "string" &&
+          !prompt.includes(RECOVERY_PROMPT) &&
+          !prompt.includes(QUEUED_PROMPT) &&
+          typeof allInputText === "string" &&
+          allInputText.includes(RECOVERY_PROMPT),
         prompt:
           typeof prompt === "string"
             ? prompt.includes(QUEUED_PROMPT)
               ? "queued"
-              : prompt.includes(RECOVERY_PROMPT)
+              : typeof allInputText === "string" && allInputText.includes(RECOVERY_PROMPT)
                 ? "recovery"
                 : "other"
             : "missing",
@@ -286,8 +302,8 @@ async function readFailureEvidence(params: {
 
 describe("Gateway repeated-request provider timeout", () => {
   it(
-    "lets the provider timeout terminate the stalled attempt before draining one queued followup",
-    { timeout: 510_000 },
+    "continues after a provider timeout and settles failure before draining one queued followup",
+    { timeout: 330_000 },
     async () => {
       gatewayOwner = createQaLiveLaneGateway();
       harness = await gatewayOwner.start({
@@ -303,6 +319,13 @@ describe("Gateway repeated-request provider timeout", () => {
         },
         transportBaseUrl: "http://127.0.0.1",
         controlUiEnabled: false,
+        mockProviderOptions: {
+          repeatedRequestResponsePauseMs: ORDINARY_RESPONSE_PAUSE_MS,
+          repeatedRequestStalledResponsePauseMs: STALLED_RESPONSE_PAUSE_MS,
+        },
+        runtimeEnvPatch: {
+          QA_DIAGNOSTIC_STUCK_SESSION_ABORT_MS: String(QA_RECOVERY_BOUND_MS),
+        },
         mutateConfig: (config) => {
           const models = config.models;
           const provider = models?.providers?.["mock-openai"];
@@ -326,6 +349,10 @@ describe("Gateway repeated-request provider timeout", () => {
         },
       });
       const { gateway } = harness;
+      expect(gateway.runtimeEnv.QA_DIAGNOSTIC_STUCK_SESSION_ABORT_MS).toBe(
+        String(QA_RECOVERY_BOUND_MS),
+      );
+      expect(gateway.runtimeEnv.OPENCLAW_QA_PARENT_PID).toBeTruthy();
 
       const baseline = await readStability(gateway);
       const baselineSeq = typeof baseline.lastSeq === "number" ? baseline.lastSeq : 0;
@@ -347,7 +374,7 @@ describe("Gateway repeated-request provider timeout", () => {
         gateway,
         baselineSeq,
         (events) => events.filter((event) => event.type === "model.call.started").length >= 2,
-        150_000,
+        100_000,
       );
 
       const queued = (await gateway.call(
@@ -364,18 +391,16 @@ describe("Gateway repeated-request provider timeout", () => {
       expect(queued).toMatchObject({ status: "started" });
       expect(typeof queued.runId).toBe("string");
 
+      // The provider deadline starts before model-call observation, so its diagnostic
+      // duration can be shorter than timeoutSeconds. The failure kind owns timeout evidence.
       const events = await waitForStability(
         gateway,
         baselineSeq,
         (records) =>
           records.some(
-            (event) =>
-              event.type === "model.call.error" &&
-              event.failureKind === "timeout" &&
-              typeof event.durationMs === "number" &&
-              event.durationMs >= MODEL_REQUEST_ALLOWANCE_SECONDS * 1_000,
+            (event) => event.type === "model.call.error" && event.failureKind === "timeout",
           ),
-        350_000,
+        250_000,
       );
       const stalled = events.filter(
         (event) => event.type === "session.stalled" && event.reason === RECOVERY_REASON,
@@ -385,9 +410,13 @@ describe("Gateway repeated-request provider timeout", () => {
       );
       const completed = events.filter((event) => event.type === "session.recovery.completed");
 
-      expect(stalled).toHaveLength(1);
-      expect(stalled[0]?.ageMs).toEqual(expect.any(Number));
-      expect(stalled[0]?.ageMs as number).toBeGreaterThanOrEqual(PRODUCTION_RECOVERY_BOUND_MS);
+      // The heartbeat can report the same stall again while the provider owns its
+      // request deadline. Every report must still respect the no-progress bound.
+      expect(stalled.length).toBeGreaterThan(0);
+      for (const event of stalled) {
+        expect(event.ageMs).toEqual(expect.any(Number));
+        expect(event.ageMs as number).toBeGreaterThanOrEqual(QA_RECOVERY_BOUND_MS);
+      }
       expect(requested).toEqual([]);
       expect(completed).toEqual([]);
       expect(
@@ -399,7 +428,10 @@ describe("Gateway repeated-request provider timeout", () => {
         { runId: active.runId, timeoutMs: 30_000 },
         { timeoutMs: 35_000 },
       )) as GatewayChatRun;
-      expect(activeTerminal.status).not.toBe("ok");
+      expect(activeTerminal).toMatchObject({
+        status: "error",
+        endedAt: expect.any(Number),
+      });
 
       const history = await waitForQueuedReply(gateway, sessionKey).catch(
         async (error: unknown) => {
@@ -423,9 +455,19 @@ describe("Gateway repeated-request provider timeout", () => {
         throw new Error("mock provider request evidence unavailable");
       }
       const requests = await readClassifiedMockRequests(mockBaseUrl);
-      expect(
-        requests.filter((request) => request.prompt === "recovery").length,
-      ).toBeGreaterThanOrEqual(5);
+      const recoveryRequests = requests.filter((request) => request.prompt === "recovery");
+      expect(recoveryRequests.length).toBeGreaterThanOrEqual(5);
+      expect(recoveryRequests[0]?.model).toBe("gpt-5.6-luna");
+      expect(recoveryRequests[1]?.model).toBe(recoveryRequests[0]?.model);
+      expect(recoveryRequests).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            continuation: true,
+            outcome: "error",
+            errorCode: "response_failed_no_details",
+          }),
+        ]),
+      );
       expect(requests.filter((request) => request.prompt === "queued")).toEqual([
         expect.objectContaining({ outcome: "success" }),
       ]);

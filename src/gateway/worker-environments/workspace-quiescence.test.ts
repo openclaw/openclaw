@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { createWorkerWorkspaceQuiescence } from "./workspace-quiescence.js";
 
 describe("worker workspace quiescence", () => {
@@ -52,10 +53,7 @@ describe("worker workspace quiescence", () => {
     async (closes) => {
       const owner = new AbortController();
       const nonce = "c".repeat(32);
-      let finishRenewal!: () => void;
-      const renewalBlocked = new Promise<void>((resolve) => {
-        finishRenewal = resolve;
-      });
+      const { promise: renewalBlocked, resolve: finishRenewal } = createDeferred();
       const runWorkspaceCommand = vi.fn(async (command: { argv: readonly string[] }) => {
         if (command.argv.includes("final")) {
           await renewalBlocked;

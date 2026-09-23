@@ -2,7 +2,7 @@
 
 import { describe, expect, test, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
-import { DEVICE_CODE_PHISHING_WARNING } from "./prompts.js";
+import { DEVICE_CODE_PHISHING_WARNING, type WizardPrompter } from "./prompts.js";
 import { WizardSession, wizardStepAwaitsInput, type WizardStep } from "./session.js";
 
 function noteRunner() {
@@ -100,7 +100,7 @@ describe("WizardSession", () => {
     expect(done.done).toBe(true);
   });
 
-  test.each(["prepared", "activated"] as const)(
+  test.each(["prepared", "activated", "utility"] as const)(
     "returns the exact %s model only on the successful terminal result",
     async (kind) => {
       const modelRef = "ollama/qwen3:0.6b";
@@ -108,7 +108,10 @@ describe("WizardSession", () => {
         if (kind === "prepared") {
           owner.setPreparedModelRef(modelRef);
         } else {
-          owner.setModelActivation({ modelRef });
+          owner.setModelActivation({
+            modelRef,
+            ...(kind === "utility" ? { modelTarget: "utility" } : {}),
+          });
         }
         await prompter.note("Finishing setup");
       });
@@ -124,7 +127,12 @@ describe("WizardSession", () => {
         status: "done",
         ...(kind === "prepared"
           ? { preparedModelRef: modelRef }
-          : { modelActivation: { modelRef } }),
+          : {
+              modelActivation: {
+                modelRef,
+                ...(kind === "utility" ? { modelTarget: "utility" } : {}),
+              },
+            }),
       });
     },
   );
@@ -139,7 +147,11 @@ describe("WizardSession", () => {
       const session = new WizardSession(async (_prompter, _signal, owner) => {
         await gate;
         owner.setPreparedModelRef("ollama/qwen3:0.6b");
-        owner.setModelActivation({ modelRef: "ollama/qwen3:0.6b", gatewayRestartRequired: true });
+        owner.setModelActivation({
+          modelRef: "ollama/qwen3:0.6b",
+          modelTarget: "utility",
+          gatewayRestartRequired: true,
+        });
         if (status === "error") {
           throw new Error("activation setup failed");
         }
@@ -175,6 +187,73 @@ describe("WizardSession", () => {
     expect((await session.next()).status).toBe("done");
   });
 
+  test.each(["done", "cancelled"] as const)(
+    "keeps a browser waiting link through progress until %s without an answer",
+    async (status) => {
+      const callback = createDeferredCore();
+      const ready = createDeferredCore<WizardPrompter>();
+      const destination = "https://provider.example/oauth?state=state-1";
+      const session = new WizardSession(async (prompter) => {
+        await prompter.openUrl?.(destination);
+        ready.resolve(prompter);
+        await callback.promise;
+      });
+      const next = session.next();
+      const delivered = vi.fn();
+      void next.then(delivered);
+
+      try {
+        await vi.waitFor(() => expect(delivered).toHaveBeenCalledOnce());
+        const first = await next;
+        expect(first).toMatchObject({
+          done: false,
+          status: "running",
+          step: {
+            type: "progress",
+            executor: "gateway",
+            externalUrl: destination,
+          },
+        });
+        if (!first.step) {
+          throw new Error("expected browser sign-in progress");
+        }
+        expect(wizardStepAwaitsInput(first.step)).toBe(false);
+
+        const prompter = await ready.promise;
+        const progress = prompter.progress("Waiting for approval");
+        const approval = await session.next();
+        expect(approval.step).toMatchObject({
+          type: "progress",
+          executor: "gateway",
+          message: "Waiting for approval",
+          externalUrl: destination,
+        });
+        for (const message of ["Approval received", "Finishing sign-in"]) {
+          progress.update(message);
+          const update = await session.next();
+          expect(update.step).toMatchObject({
+            type: "progress",
+            executor: "gateway",
+            message,
+            externalUrl: destination,
+          });
+        }
+
+        if (status === "cancelled") {
+          session.cancel();
+        }
+        callback.resolve();
+        await session.whenSettled();
+        expect(await session.next()).toMatchObject({ done: true, status });
+      } finally {
+        session.cancel();
+        callback.resolve();
+        await session.whenSettled();
+        await next;
+      }
+    },
+  );
+
   test("carries device-code presentation without parsing provider prose", async () => {
     const session = new WizardSession(async (prompter) => {
       await prompter.openUrl?.("https://provider.example/device");
@@ -188,10 +267,12 @@ describe("WizardSession", () => {
 
     const first = await session.next();
     expect(first.step).toMatchObject({
-      type: "note",
+      type: "progress",
+      executor: "gateway",
       title: "Provider sign-in",
       message: [
         "Enter this one-time code in your browser.",
+        "https://provider.example/device",
         "Code: ABCD-1234",
         "Code expires in 15 minutes.",
         DEVICE_CODE_PHISHING_WARNING,
@@ -203,6 +284,8 @@ describe("WizardSession", () => {
         message: "Enter this one-time code in your browser.",
       },
     });
+    await session.whenSettled();
+    expect(await session.next()).toMatchObject({ done: true, status: "done" });
   });
 
   test("invalid answers throw", async () => {

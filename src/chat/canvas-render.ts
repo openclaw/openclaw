@@ -2,7 +2,7 @@
 import { expectDefined, safeParseJsonRecord } from "@openclaw/normalization-core";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { parseFenceSpans } from "../../packages/markdown-core/src/fences.js";
+import { findCodeRegions, isInsideCode } from "../shared/text/code-regions.js";
 
 // Extracts assistant-message canvas previews from tool JSON or markdown embed
 // shortcodes. The returned text strips consumed shortcodes for channel delivery.
@@ -266,7 +266,7 @@ export function extractCanvasFromText(
   return coerceCanvasPreview(parsed);
 }
 
-/** Extracts [embed ...] shortcodes outside code fences and returns stripped text. */
+/** Extracts [embed ...] shortcodes outside Markdown code and returns stripped text. */
 export function extractCanvasShortcodes(text: string | undefined): {
   text: string;
   previews: CanvasPreview[];
@@ -274,7 +274,7 @@ export function extractCanvasShortcodes(text: string | undefined): {
   if (!text?.trim() || !text.toLowerCase().includes("[embed")) {
     return { text: text ?? "", previews: [] };
   }
-  const fenceSpans = parseFenceSpans(text);
+  const codeRegions = findCodeRegions(text);
   const matches: Array<{
     start: number;
     end: number;
@@ -287,18 +287,11 @@ export function extractCanvasShortcodes(text: string | undefined): {
   const blockRe = /\[embed\s+([^\]]*?[^\]/]|)\]([\s\S]*?)\[\/embed\]/gi;
   const selfClosingRe = /\[embed\s+([^\]]*?)\/\]/gi;
   for (const re of [blockRe, selfClosingRe]) {
-    // Each regex starts a new ascending pass over the ordered fence spans.
-    let fenceIndex = 0;
     let match: RegExpExecArray | null;
     while ((match = re.exec(text))) {
       const start = match.index ?? 0;
-      let fence = fenceSpans[fenceIndex];
-      while (fence && start >= fence.end) {
-        fenceIndex += 1;
-        fence = fenceSpans[fenceIndex];
-      }
-      if (fence && start >= fence.start) {
-        // Literal embed examples in code blocks must remain visible text.
+      if (isInsideCode(start, codeRegions)) {
+        // Literal embed examples in code must remain visible text.
         continue;
       }
       matches.push({
@@ -333,7 +326,7 @@ export function extractCanvasShortcodes(text: string | undefined): {
   }
   stripped += text.slice(cursor);
   return {
-    text: stripped.replace(/\n{3,}/g, "\n\n").trim(),
+    text: stripped,
     previews,
   };
 }

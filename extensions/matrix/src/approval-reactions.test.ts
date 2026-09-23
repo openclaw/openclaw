@@ -27,12 +27,12 @@ function rememberTargetRef(params: UnregisterTargetParams): void {
   touchedTargetRefs.set(JSON.stringify(params), params);
 }
 
-function registerMatrixApprovalReactionTarget(
+async function registerMatrixApprovalReactionTarget(
   params: Omit<RegisterTargetParams, "accountId"> & { accountId?: string },
-): void {
+): Promise<void> {
   const { accountId = "default", ...target } = params;
   rememberTargetRef({ accountId, roomId: target.roomId, eventId: target.eventId });
-  registerMatrixApprovalReactionTargetRaw({ ...target, accountId });
+  await registerMatrixApprovalReactionTargetRaw({ ...target, accountId });
 }
 
 function resolveMatrixApprovalReactionTargetWithPersistence(
@@ -46,11 +46,11 @@ function resolveMatrixApprovalReactionTargetWithPersistence(
   });
 }
 
-function unregisterMatrixApprovalReactionTarget(
+async function unregisterMatrixApprovalReactionTarget(
   params: Omit<UnregisterTargetParams, "accountId"> & { accountId?: string },
-): void {
+): Promise<void> {
   const { accountId = "default", ...target } = params;
-  unregisterMatrixApprovalReactionTargetRaw({
+  await unregisterMatrixApprovalReactionTargetRaw({
     ...target,
     accountId,
   });
@@ -70,9 +70,9 @@ beforeEach(() => {
   clearMatrixRuntime();
 });
 
-afterEach(() => {
+afterEach(async () => {
   for (const target of touchedTargetRefs.values()) {
-    unregisterMatrixApprovalReactionTargetRaw(target);
+    await unregisterMatrixApprovalReactionTargetRaw(target);
   }
   touchedTargetRefs.clear();
   clearMatrixRuntime();
@@ -95,7 +95,7 @@ describe("matrix approval reactions", () => {
   });
 
   it("resolves a registered approval anchor event back to an approval decision", async () => {
-    registerMatrixApprovalReactionTarget({
+    await registerMatrixApprovalReactionTarget({
       roomId: "!ops:example.org",
       eventId: "$approval-msg",
       approvalId: "req-123",
@@ -139,7 +139,7 @@ describe("matrix approval reactions", () => {
   });
 
   it("ignores reactions that are not allowed on the registered approval anchor event", async () => {
-    registerMatrixApprovalReactionTarget({
+    await registerMatrixApprovalReactionTarget({
       roomId: "!ops:example.org",
       eventId: "$approval-msg",
       approvalId: "req-123",
@@ -157,7 +157,7 @@ describe("matrix approval reactions", () => {
   });
 
   it("does not expose an approval reaction target to another Matrix account", async () => {
-    registerMatrixApprovalReactionTarget({
+    await registerMatrixApprovalReactionTarget({
       accountId: "account-a",
       roomId: "!shared:example.org",
       eventId: "$approval-msg",
@@ -189,7 +189,7 @@ describe("matrix approval reactions", () => {
   });
 
   it("rejects reaction targets without a valid approval kind", async () => {
-    registerMatrixApprovalReactionTarget({
+    await registerMatrixApprovalReactionTarget({
       roomId: "!ops:example.org",
       eventId: "$approval-msg",
       approvalId: "req-123",
@@ -207,14 +207,14 @@ describe("matrix approval reactions", () => {
   });
 
   it("stops resolving reactions after the approval anchor event is unregistered", async () => {
-    registerMatrixApprovalReactionTarget({
+    await registerMatrixApprovalReactionTarget({
       roomId: "!ops:example.org",
       eventId: "$approval-msg",
       approvalId: "req-123",
       approvalKind: "exec",
       allowedDecisions: ["allow-once", "allow-always", "deny"],
     });
-    unregisterMatrixApprovalReactionTarget({
+    await unregisterMatrixApprovalReactionTarget({
       roomId: "!ops:example.org",
       eventId: "$approval-msg",
     });
@@ -255,7 +255,7 @@ describe("matrix approval reactions", () => {
       logging: { getChildLogger: () => createRuntimeLogger({ warn }) },
     } as never);
 
-    registerMatrixApprovalReactionTarget({
+    await registerMatrixApprovalReactionTarget({
       roomId: "!ops:example.org",
       eventId: "$approval-msg-2",
       approvalId: "req-123",
@@ -295,7 +295,7 @@ describe("matrix approval reactions", () => {
     expect(lookup).toHaveBeenCalledWith('["default","!ops:example.org","$approval-msg-2"]');
 
     register.mockRejectedValueOnce(new Error("sqlite unavailable"));
-    registerMatrixApprovalReactionTarget({
+    await registerMatrixApprovalReactionTarget({
       roomId: "!ops:example.org",
       eventId: "$approval-msg-3",
       approvalId: "req-fallback",

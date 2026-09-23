@@ -1,18 +1,22 @@
 import path from "node:path";
 import type { RuntimeMsgContext as MsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { MediaFact } from "../../media/media-facts.js";
+import { readPersistedMediaFacts, type MediaFact } from "../../media/media-facts.js";
+import { isProgressCardRefreshInputProvenance } from "../../sessions/input-provenance.js";
 import { prepareSessionParticipantInput } from "../../sessions/session-participant-input.js";
 import type { UserTurnInput } from "../../sessions/user-turn-transcript.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import {
   type ChatImageContent,
   type OffloadedRef,
   INLINE_IMAGE_DURABLE_OMISSION_MARKER,
+  discardPreparedInboundMedia,
   persistInboundImagesForTranscript,
 } from "../chat-attachments.js";
 import { resolveCreatorSandbox } from "../operator-role-policy.js";
 import { resolveGatewayInputParticipant } from "../session-input-participant.js";
 import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
+import { captureGatewayUiCommandTarget } from "../ui-command-target.js";
 import { isAcpBridgeClient } from "./chat-origin-routing.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
 import type { prepareChatSendAttachments } from "./chat-send-attachments.js";
@@ -57,16 +61,40 @@ async function persistChatSendImages(params: {
   });
 }
 
-function resolveChatSendManagedMedia(entries: PersistedChatSendMedia): MediaFact[] {
+function resolveChatSendManagedMedia(
+  entries: PersistedChatSendMedia,
+  suppressInlineHydration = false,
+): MediaFact[] {
   return entries.map((entry) => ({
     path: entry.path,
     contentType: entry.fact.contentType ?? "application/octet-stream",
+    ...(suppressInlineHydration && entry.imageKind === "inline"
+      ? { hydrationSuppressed: true }
+      : {}),
   }));
 }
 
-export function applyChatSendManagedMedia(ctx: MsgContext, media: MediaFact[]): void {
-  if ((!ctx.media || ctx.media.length === 0) && media.length > 0) {
-    ctx.media = media;
+type ChatSendManagedMediaApplyMode = "replace-empty" | "append-missing";
+
+export function applyChatSendManagedMedia(
+  ctx: MsgContext,
+  media: MediaFact[],
+  mode: ChatSendManagedMediaApplyMode = "replace-empty",
+): void {
+  if (media.length === 0) {
+    return;
+  }
+  if (mode === "replace-empty") {
+    if (!ctx.media || ctx.media.length === 0) {
+      ctx.media = media;
+    }
+    return;
+  }
+  const existing = ctx.media ?? [];
+  const existingPaths = new Set(existing.flatMap((fact) => (fact.path ? [fact.path] : [])));
+  const missing = media.filter((fact) => !fact.path || !existingPaths.has(fact.path));
+  if (missing.length > 0) {
+    ctx.media = [...existing, ...missing];
   }
 }
 
@@ -130,10 +158,13 @@ export function prepareChatSendUserTurn(params: {
     }),
   );
   const pluginBoundMediaPromise =
-    attachments.explicitOriginTargetsPlugin && attachments.parsedImages.length > 0
-      ? persistedMediaForTranscriptPromise.then((result) =>
-          resolveChatSendManagedMedia(result.entries),
-        )
+    attachments.parsedImages.length > 0
+      ? persistedMediaForTranscriptPromise.then((result) => {
+          const entries = attachments.explicitOriginTargetsPlugin
+            ? result.entries
+            : result.entries.filter((entry) => entry.imageKind === "inline");
+          return resolveChatSendManagedMedia(entries, !attachments.explicitOriginTargetsPlugin);
+        })
       : Promise.resolve([]);
   void pluginBoundMediaPromise.catch(() => undefined);
   // Generated media hints belong to the prompt and reset payload, not command arguments.
@@ -142,11 +173,26 @@ export function prepareChatSendUserTurn(params: {
     !request.suppressCommandInterpretation && commandBody.trim().startsWith("/")
       ? "text"
       : undefined;
-  const messageForAgent = request.systemProvenanceReceipt
-    ? [request.systemProvenanceReceipt, attachments.parsedMessage].filter(Boolean).join("\n\n")
-    : attachments.parsedMessage;
+  const buildTextContext = (text: string) => {
+    // The attachment parser appends managed-media hints after the original input.
+    const parsedMessage =
+      text === request.inboundMessage
+        ? attachments.parsedMessage
+        : `${text}${attachments.parsedMessage.slice(request.inboundMessage.length)}`;
+    const body = request.systemProvenanceReceipt
+      ? [request.systemProvenanceReceipt, parsedMessage].filter(Boolean).join("\n\n")
+      : parsedMessage;
+    return {
+      Body: body,
+      BodyForAgent: body,
+      BodyForCommands: text,
+      RawBody: parsedMessage,
+      CommandBody: text,
+    };
+  };
   const queuedFollowupOwnerDeviceId = normalizeOptionalChatText(client?.connect?.device?.id);
   const queuedFollowupOwnerConnId = normalizeOptionalChatText(client?.connId);
+  const gatewayUiCommandTarget = captureGatewayUiCommandTarget(client);
   const queuedFollowupOwnerKey = queuedFollowupOwnerDeviceId
     ? `device:${queuedFollowupOwnerDeviceId}`
     : queuedFollowupOwnerConnId
@@ -165,12 +211,11 @@ export function prepareChatSendUserTurn(params: {
   // Current and historical turns must reach the single LLM timestamp boundary
   // with identical bare text. Stamping this live turn would bust the prompt cache.
   const ctx: MsgContext = {
-    Body: messageForAgent,
-    BodyForAgent: messageForAgent,
-    BodyForCommands: commandBody,
-    RawBody: attachments.parsedMessage,
-    CommandBody: commandBody,
+    ...buildTextContext(commandBody),
     InputProvenance: request.systemInputProvenance,
+    ...(isProgressCardRefreshInputProvenance(request.systemInputProvenance)
+      ? { InternalTurnSource: "progress-card-refresh" as const }
+      : {}),
     SessionKey: session.sessionKey,
     AgentId: session.agentId,
     OriginatingTo: originatingTo,
@@ -197,6 +242,7 @@ export function prepareChatSendUserTurn(params: {
     SessionCreation: { ...creation, ...(sandbox ? { sandbox } : {}) },
     ...resolveChatSendCallerContext(client, request.clientInfo, originatingChannel),
     GatewayRunToolBindings: request.toolBindings,
+    GatewayUiCommandTarget: gatewayUiCommandTarget,
   };
   if (attachments.mediaPathOffloadPaths.length > 0) {
     // Pre-staged offloads must use structured facts and marker text so the
@@ -215,11 +261,40 @@ export function prepareChatSendUserTurn(params: {
     prepareSessionParticipantInput(ctx, participant, userTurn.baseInput.timestamp);
   }
   return {
+    applyApprovedText: (text: string) => {
+      if (text === request.inboundMessage.trim()) {
+        return;
+      }
+      Object.assign(ctx, buildTextContext(text));
+      if (ctx.CommandTurn) {
+        ctx.CommandTurn = { ...ctx.CommandTurn, body: text };
+      }
+    },
+    discardUnreferencedMedia: async (approved: PersistedUserTurnMessage | undefined) => {
+      if (!approved) {
+        return;
+      }
+      const retained = new Set(
+        (readPersistedMediaFacts(approved) ?? []).flatMap((fact) => [fact.url, fact.path]),
+      );
+      const prepared = await persistedMediaForTranscriptPromise;
+      // Re-admission retains the original approved files. Dispose only copies
+      // prepared by this request, after its live input consumer releases custody.
+      await discardPreparedInboundMedia(
+        prepared.entries.filter(
+          (entry) => !retained.has(entry.fact.url) && !retained.has(entry.path),
+        ),
+        logGateway,
+      );
+    },
     accountId,
     ctx,
     isInternalTextSlashCommandTurn: commandSource === "text",
     queuedFollowupOwnerKey,
     pluginBoundMediaPromise,
+    managedMediaApplyMode: attachments.explicitOriginTargetsPlugin
+      ? ("replace-empty" as const)
+      : ("append-missing" as const),
     replyOptionImages: mediaPathOffloadsIncludeImages
       ? undefined
       : attachments.parsedImages.length > 0

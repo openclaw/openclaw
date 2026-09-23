@@ -567,6 +567,18 @@ extension OpenClawChatWidgetResource {
 }
 
 #if canImport(WebKit) && (os(iOS) || os(macOS))
+enum ChatInlineWidgetResourcePolicy {
+    static func allowsStaticResources(contentSecurityPolicy: String?) -> Bool {
+        guard let contentSecurityPolicy else { return false }
+        let directives = contentSecurityPolicy.split(separator: ";").map { directive in
+            directive.split(whereSeparator: \.isWhitespace).map { $0.lowercased() }
+        }
+        let defaultSource = directives.first { $0.first == "default-src" }?.dropFirst()
+        let sandbox = directives.first { $0.first == "sandbox" }?.dropFirst()
+        return defaultSource == ["'none'"] && sandbox == ["allow-scripts"]
+    }
+}
+
 enum ChatInlineWidgetTLSPin {
     static func normalize(_ raw: String) -> String? {
         let stripped = raw.replacingOccurrences(
@@ -614,6 +626,7 @@ private final class ChatInlineWidgetNavigationDelegate: NSObject, WKNavigationDe
     var resource: OpenClawChatWidgetResource {
         didSet {
             if self.resource != oldValue {
+                self.allowsStaticResources = false
                 self.contentProcessRecovery.reset()
                 self.snapshotCapture.invalidate()
             }
@@ -623,6 +636,7 @@ private final class ChatInlineWidgetNavigationDelegate: NSObject, WKNavigationDe
     let onFailure: @MainActor @Sendable () -> Void
     var onSnapshot: @MainActor @Sendable (ChatInlineWidgetSnapshotOutcome) -> Void
     private var contentProcessRecovery = ChatInlineWidgetContentProcessRecovery()
+    private var allowsStaticResources = false
     let snapshotCapture = ChatInlineWidgetSnapshotCapture()
 
     init(
@@ -659,6 +673,11 @@ private final class ChatInlineWidgetNavigationDelegate: NSObject, WKNavigationDe
         decidePolicyFor navigationResponse: WKNavigationResponse,
         decisionHandler: @escaping @MainActor @Sendable (WKNavigationResponsePolicy) -> Void)
     {
+        if navigationResponse.isForMainFrame {
+            let response = navigationResponse.response as? HTTPURLResponse
+            self.allowsStaticResources = ChatInlineWidgetResourcePolicy.allowsStaticResources(
+                contentSecurityPolicy: response?.value(forHTTPHeaderField: "Content-Security-Policy"))
+        }
         if navigationResponse.isForMainFrame,
            let response = navigationResponse.response as? HTTPURLResponse,
            response.statusCode >= 400
@@ -688,6 +707,11 @@ private final class ChatInlineWidgetNavigationDelegate: NSObject, WKNavigationDe
         guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
               let expectedFingerprint = resource.tlsFingerprintSHA256
         else {
+            completionHandler(.performDefaultHandling, nil)
+            return
+        }
+        if !self.matchesExpectedProtectionSpace(challenge.protectionSpace), self.allowsStaticResources {
+            // The Gateway's response CSP owns static origins; its certificate pin does not cover CDN hosts.
             completionHandler(.performDefaultHandling, nil)
             return
         }

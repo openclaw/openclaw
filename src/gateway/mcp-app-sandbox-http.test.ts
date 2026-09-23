@@ -3,6 +3,7 @@ import type { AddressInfo } from "node:net";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { buildMcpAppSandboxPath } from "../agents/mcp-app-sandbox.js";
+import { SANDBOX_HOST_PATH } from "../agents/sandbox-host.js";
 import { createPluginBoardWidgetContentKindRegistrar } from "../plugins/board-widget-content-kinds.js";
 import { createPluginRecord } from "../plugins/loader-records.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -73,6 +74,49 @@ function publicResourceRegistry(
 }
 
 describe("MCP App sandbox HTTP origin", () => {
+  it("caches only the exact versioned public shell and separates effective policies", async () => {
+    const paths = [
+      buildMcpAppSandboxPath(),
+      buildMcpAppSandboxPath({ connectDomains: ["https://api.example.com"] }),
+      buildMcpAppSandboxPath({ blockDescendantFrames: true }),
+    ] as const;
+    await withSandboxHost(async (origin) => {
+      const versions = new Set<string>();
+      for (const path of paths) {
+        const url = new URL(path, origin);
+        const version = url.searchParams.get("v");
+        expect(version).toMatch(/^[a-f0-9]{64}$/);
+        versions.add(version!);
+        const get = await fetch(url);
+        expect(get.headers.get("cache-control")).toBe("public, max-age=31536000, immutable");
+        expect(get.headers.get("set-cookie")).toBeNull();
+        const body = await get.text();
+        const head = await fetch(url, { method: "HEAD" });
+        expect(head.headers.get("cache-control")).toBe(get.headers.get("cache-control"));
+        expect(head.headers.get("content-length")).toBe(String(Buffer.byteLength(body)));
+        expect(await head.text()).toBe("");
+
+        url.searchParams.set("v", "stale-version");
+        const stale = await fetch(url);
+        expect(stale.headers.get("cache-control")).toBe("no-store");
+        expect(await stale.text()).toBe(body);
+        url.searchParams.delete("v");
+        const unversioned = await fetch(url);
+        expect(unversioned.headers.get("cache-control")).toBe("no-store");
+        expect(await unversioned.text()).toBe(body);
+      }
+      expect(versions.size).toBe(paths.length);
+
+      const altered = new URL(paths[1], origin);
+      altered.searchParams.delete("csp");
+      const response = await fetch(altered);
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(response.headers.get("content-security-policy")).toContain("connect-src 'none'");
+      await response.text();
+      expect(buildMcpAppSandboxPath({ connectDomains: ["invalid"] })).toBe(paths[0]);
+    });
+  });
+
   it("serves only explicitly public registered assets without Gateway credentials", async () => {
     const read = vi.fn(async () => ({
       body: Buffer.from("window.rendererReady=true"),
@@ -209,18 +253,16 @@ describe("MCP App sandbox HTTP origin", () => {
 
     expect(request("/", "GET").res.statusCode).toBe(404);
     expect(request(buildMcpAppSandboxPath(), "POST").res.statusCode).toBe(404);
-    expect(request(`${buildMcpAppSandboxPath()}?csp=not-json`).res.statusCode).toBe(400);
+    expect(request(`${SANDBOX_HOST_PATH}?csp=not-json`).res.statusCode).toBe(400);
     const jsonButNotCsp = Buffer.from("null", "utf8").toString("base64url");
-    expect(request(`${buildMcpAppSandboxPath()}?csp=${jsonButNotCsp}`).res.statusCode).toBe(400);
-    expect(request(`${buildMcpAppSandboxPath()}?csp=`).res.statusCode).toBe(400);
+    expect(request(`${SANDBOX_HOST_PATH}?csp=${jsonButNotCsp}`).res.statusCode).toBe(400);
+    expect(request(`${SANDBOX_HOST_PATH}?csp=`).res.statusCode).toBe(400);
     expect(request("http://[", "GET").res.statusCode).toBe(400);
     const unsafeHeaderPolicy = Buffer.from(
       JSON.stringify({ connectDomains: ["https://api.\nexample.com"] }),
       "utf8",
     ).toString("base64url");
-    expect(request(`${buildMcpAppSandboxPath()}?csp=${unsafeHeaderPolicy}`).res.statusCode).toBe(
-      400,
-    );
+    expect(request(`${SANDBOX_HOST_PATH}?csp=${unsafeHeaderPolicy}`).res.statusCode).toBe(400);
   });
 
   it("emits canonical ASCII origins for validated CSP domains", () => {
@@ -247,7 +289,7 @@ describe("MCP App sandbox HTTP origin", () => {
     },
     {
       label: "malformed policy",
-      path: `${buildMcpAppSandboxPath()}?csp=not-json`,
+      path: `${SANDBOX_HOST_PATH}?csp=not-json`,
       statusCode: 400,
     },
   ])(

@@ -7,18 +7,12 @@ import {
   GATEWAY_EVENT_UPDATE_AVAILABLE,
   GATEWAY_EVENT_UPDATE_RUN_CHANGED,
 } from "./events.js";
-import { listCoreAdvertisedGatewayMethodNames } from "./methods/core-descriptors.js";
-import { GATEWAY_AUX_METHODS } from "./server-aux-methods.js";
+import { listCoreAdvertisedGatewayMethodNames } from "./methods/core-method-policy.js";
 
 type GatewayMethodChannelPlugin = {
   gatewayMethods?: readonly string[];
   gatewayMethodDescriptors?: readonly { name: string }[];
 };
-
-/** Lists core methods intentionally advertised to gateway clients. */
-function listCoreGatewayMethods(): string[] {
-  return listCoreAdvertisedGatewayMethodNames();
-}
 
 function listChannelGatewayMethods(): string[] {
   const methods: string[] = [];
@@ -36,7 +30,7 @@ function listChannelGatewayMethods(): string[] {
 /** Returns the de-duplicated gateway method catalog advertised through method-list APIs. */
 export function listGatewayMethods(): string[] {
   return Array.from(
-    new Set([...listCoreGatewayMethods(), ...GATEWAY_AUX_METHODS, ...listChannelGatewayMethods()]),
+    new Set([...listCoreAdvertisedGatewayMethodNames(), ...listChannelGatewayMethods()]),
   );
 }
 
@@ -46,6 +40,7 @@ export const GATEWAY_EVENTS = [
   "agent",
   "chat",
   "chat.metadata.changed",
+  "models.snapshot",
   "ui.command",
   "session.approval",
   "session.message",
@@ -63,6 +58,7 @@ export const GATEWAY_EVENTS = [
   "tick",
   "talk.mode",
   "talk.event",
+  "talk.voice.change",
   "shutdown",
   "gateway.suspension",
   "health",
@@ -85,6 +81,8 @@ export const GATEWAY_EVENTS = [
   "device.pair.setup.deliveryUncertain",
   "users.prefs.changed",
   "skills.changed",
+  "plugins.changed",
+  "plugins.install.progress",
   "voicewake.changed",
   "voicewake.routing.changed",
   "exec.approval.requested",

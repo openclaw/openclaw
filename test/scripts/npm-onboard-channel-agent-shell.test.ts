@@ -3,12 +3,14 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { delimiter, dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const runnerPath = "scripts/e2e/npm-onboard-channel-agent-docker.sh";
 const version = "2026.8.1";
 const sourceSha = "a".repeat(40);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const testNodeExecPath = resolveTestNodeExecPath();
 
 type Scenario = {
   consent?: boolean;
@@ -163,7 +165,7 @@ openclaw_e2e_wait_mock_openai() { :; }
   if (scenario.corruptRegistry) {
     registryEnv.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256 = "0".repeat(64);
   }
-  const commandPath = [bin, dirname(process.execPath), process.env.PATH]
+  const commandPath = [bin, dirname(testNodeExecPath), process.env.PATH]
     .filter(Boolean)
     .join(delimiter);
   const result = spawnSync("bash", ["-s"], {
@@ -175,7 +177,7 @@ openclaw_e2e_wait_mock_openai() { :; }
       OPENCLAW_HOME: home,
       PATH: commandPath,
       TMPDIR: root,
-      REAL_NODE: process.execPath,
+      REAL_NODE: testNodeExecPath,
       FIXTURE_CLI: cli,
       PACKAGE_ROOT: packageRoot,
       EVENTS: eventsPath,

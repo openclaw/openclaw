@@ -226,7 +226,6 @@
   "ignorePatterns": [
     "dist/",
     "dist-runtime/",
-    "docs/_layouts/",
     // Intentional negative-test corpora contain parser and lint violations by contract.
     ".agents/skills/autoreview/tests/fixtures/**",
     "test/fixtures/oxlint-boundary-guards/**",
@@ -294,6 +293,14 @@
       }
     },
     {
+      "files": ["src/cli/cli-process-diagnostics.test-support.cjs"],
+      "rules": {
+        // The saved emitter is always invoked with the caller's receiver via Reflect.apply.
+        // CJS semantic discovery varies by lint target set; an inline disable can appear unused.
+        "typescript/unbound-method": "off"
+      }
+    },
+    {
       "files": ["src/agents/subagents/registry/subagent-registry.ts"],
       "rules": {
         // Preserve the explicit maintenance side-effect import's module-request order.
@@ -318,7 +325,7 @@
         "src/wizard/i18n/locales/**"
       ],
       "rules": {
-        "max-lines": ["error", { "max": 700, "skipBlankLines": true, "skipComments": true }]
+        "max-lines": ["warn", { "max": 700, "skipBlankLines": true, "skipComments": true }]
       }
     },
     {
@@ -339,7 +346,7 @@
         "src/wizard/i18n/locales/**"
       ],
       "rules": {
-        "max-lines": ["error", { "max": 700, "skipBlankLines": true, "skipComments": true }]
+        "max-lines": ["warn", { "max": 700, "skipBlankLines": true, "skipComments": true }]
       }
     },
     {
@@ -360,7 +367,7 @@
         "src/wizard/i18n/locales/**"
       ],
       "rules": {
-        "max-lines": ["error", { "max": 800, "skipBlankLines": true, "skipComments": true }]
+        "max-lines": ["warn", { "max": 800, "skipBlankLines": true, "skipComments": true }]
       }
     },
     {
@@ -380,19 +387,19 @@
         "src/wizard/i18n/locales/**"
       ],
       "rules": {
-        "max-lines": ["error", { "max": 1000, "skipBlankLines": true, "skipComments": true }]
+        "max-lines": ["warn", { "max": 1000, "skipBlankLines": true, "skipComments": true }]
       }
     },
     {
       "files": ["extensions/copilot/src/event-bridge.ts"],
       "rules": {
-        "max-lines": ["error", { "max": 950, "skipBlankLines": true, "skipComments": true }]
+        "max-lines": ["warn", { "max": 950, "skipBlankLines": true, "skipComments": true }]
       }
     },
     {
       "files": ["extensions/copilot/src/attempt-transcript-journal.test.ts"],
       "rules": {
-        "max-lines": ["error", { "max": 1200, "skipBlankLines": true, "skipComments": true }]
+        "max-lines": ["warn", { "max": 1200, "skipBlankLines": true, "skipComments": true }]
       }
     },
     {

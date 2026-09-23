@@ -51,6 +51,59 @@ function failedPlacement(
 }
 
 describe("DraftSubmissionFlow background completion", () => {
+  it.each([
+    { status: "idle" as const },
+    { status: "started" as const },
+    { status: "rejected" as const, error: "The first turn was rejected" },
+  ])("never turns an accepted $status background creation into navigation", async (initialRun) => {
+    const { context, flow } = createDraftFixture();
+    vi.mocked(context.sessions.createResult).mockResolvedValue({
+      key: "agent:main:dashboard:accepted",
+      initialRun,
+    });
+    flow.setMessage("Create without moving my current session");
+    await flow.submit(undefined, true);
+    expect(context.sessions.createResult).toHaveBeenCalledOnce();
+    expect(context.navigateAndWait).not.toHaveBeenCalled();
+    expect(context.gateway.setSessionKey).not.toHaveBeenCalled();
+    expect(context.agentSelection.set).not.toHaveBeenCalled();
+    expect(flow.message).toBe("");
+    expect(flow.completedSubmission?.key).toBe("agent:main:dashboard:accepted");
+    expect(flow.pendingMessage?.content).toContainEqual({
+      type: "text",
+      text: "Create without moving my current session",
+    });
+  });
+
+  it("resumes a background create with its exact request and no navigation", async () => {
+    const { context, flow } = createDraftFixture();
+    let finishOriginal!: (value: { key: string; initialRun: { status: "idle" } }) => void;
+    const result = {
+      key: "agent:main:dashboard:resumed-background",
+      initialRun: { status: "idle" as const },
+    };
+    vi.mocked(context.sessions.createResult)
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finishOriginal = resolve;
+          }),
+      )
+      .mockResolvedValueOnce(result);
+    flow.setMessage("Keep this task in the background through reconnect");
+    const first = flow.submit(undefined, true);
+    const original = vi.mocked(context.sessions.createResult).mock.calls[0]?.[0];
+    flow.invalidate("gateway-changed");
+    flow.resumeInterruptedSubmission();
+    await vi.waitFor(() => expect(context.sessions.createResult).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(context.sessions.createResult).mock.calls[1]?.[0]).toEqual(original);
+    finishOriginal(result);
+    await first;
+    await vi.waitFor(() => expect(flow.submitting).toBe(false));
+    expect(context.navigateAndWait).not.toHaveBeenCalled();
+    expect(context.gateway.setSessionKey).not.toHaveBeenCalled();
+  });
+
   it("delivers an accepted background completion before the first native status reply", async () => {
     const { context, flow, postMessage, dispose } = nativeBackgroundFixture({
       request: async (method) => (method === "agent.wait" ? { status: "ok", endedAt: 1 } : {}),

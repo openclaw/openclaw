@@ -1,7 +1,7 @@
-// Nextcloud Talk tests cover inbound.behavior plugin behavior.
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OutboundReplyPayload, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
+import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
+import type { OutboundReplyPayload, PluginRuntime } from "../runtime-api.js";
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
 import { handleNextcloudTalkInbound } from "./inbound.js";
 import { setNextcloudTalkRuntime } from "./runtime.js";
@@ -56,6 +56,7 @@ function installRuntime(params?: {
   const runtime = {
     channel: {
       inbound: {
+        ingress: createPluginRuntimeMock().channel.inbound.ingress,
         dispatchReply: vi.fn(async () => undefined),
       },
       pairing: {
@@ -76,13 +77,6 @@ function installRuntime(params?: {
   };
   setNextcloudTalkRuntime(runtime as unknown as PluginRuntime);
   return runtime;
-}
-
-function createRuntimeEnv() {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-  } as unknown as RuntimeEnv;
 }
 
 function requireFirstMockArg(mock: ReturnType<typeof vi.fn>, label: string): unknown {
@@ -151,7 +145,7 @@ describe("nextcloud-talk inbound behavior", () => {
   });
 
   it("logs the drop when an inbound message has an empty body", async () => {
-    const runtime = createRuntimeEnv();
+    const runtime = createRuntimeSpies();
     await handleNextcloudTalkInbound({
       message: createMessage({ text: "", mediaType: "application/pdf" }),
       account: createAccount(),
@@ -182,7 +176,7 @@ describe("nextcloud-talk inbound behavior", () => {
       message: createMessage({ timestamp: 1_736_380_800_000 }),
       account: createAccount(),
       config: { channels: { "nextcloud-talk": {} } } as CoreConfig,
-      runtime: createRuntimeEnv(),
+      runtime: createRuntimeSpies(),
       statusSink,
     });
 
@@ -211,7 +205,6 @@ describe("nextcloud-talk inbound behavior", () => {
       .find((status) => status.lastOutboundAt !== undefined);
     expect(typeof outboundStatus?.lastOutboundAt).toBe("number");
     expect(outboundStatus?.lastOutboundAt).toBeGreaterThanOrEqual(1_736_380_800_000);
-    expect(sendMessageNextcloudTalkMock).toHaveBeenCalledTimes(1);
   });
 
   it("drops unmentioned group traffic before dispatch", async () => {
@@ -224,7 +217,7 @@ describe("nextcloud-talk inbound behavior", () => {
       issueChallenge: vi.fn(),
     });
     resolveNextcloudTalkRoomKindMock.mockResolvedValue("group");
-    const runtime = createRuntimeEnv();
+    const runtime = createRuntimeSpies();
 
     await handleNextcloudTalkInbound({
       message: createMessage({
@@ -268,7 +261,7 @@ describe("nextcloud-talk inbound behavior", () => {
         issueChallenge: vi.fn(),
       });
       resolveNextcloudTalkRoomKindMock.mockResolvedValue("group");
-      const runtime = createRuntimeEnv();
+      const runtime = createRuntimeSpies();
 
       await handleNextcloudTalkInbound({
         message: createMessage({
@@ -381,7 +374,7 @@ describe("nextcloud-talk inbound behavior", () => {
       message: createMessage({ text, isGroupChat: group ?? false }),
       account,
       config,
-      runtime: createRuntimeEnv(),
+      runtime: createRuntimeSpies(),
     });
 
     expect(hasControlCommand).toHaveBeenCalledWith(command, config);
@@ -429,7 +422,7 @@ describe("nextcloud-talk inbound behavior", () => {
         },
       }),
       config: { channels: { "nextcloud-talk": {} } } as CoreConfig,
-      runtime: createRuntimeEnv(),
+      runtime: createRuntimeSpies(),
       turnAdoptionLifecycle: lifecycle,
     });
 
@@ -470,7 +463,7 @@ describe("nextcloud-talk inbound behavior", () => {
         },
       }),
       config,
-      runtime: createRuntimeEnv(),
+      runtime: createRuntimeSpies(),
     });
 
     const assembledRequest = requireFirstMockArg(

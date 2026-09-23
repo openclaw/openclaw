@@ -1,13 +1,16 @@
 // ACP binding tests cover channel plugin ACP target binding and stateful driver behavior.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildConfiguredAcpSessionKey } from "../../acp/persistent-bindings.types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry.js";
+import { clearActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
 import { ensureConfiguredBindingBuiltinsRegistered } from "./configured-binding-builtins.js";
 import * as bindingRegistry from "./configured-binding-registry.js";
 
 const resolveAgentConfigMock = vi.hoisted(() => vi.fn());
 const resolveDefaultAgentIdMock = vi.hoisted(() => vi.fn());
 const resolveAgentWorkspaceDirMock = vi.hoisted(() => vi.fn());
-const getLoadedChannelPluginMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../agents/agent-scope.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../agents/agent-scope.js")>()),
@@ -16,14 +19,10 @@ vi.mock("../../agents/agent-scope.js", async (importOriginal) => ({
   resolveAgentWorkspaceDir: resolveAgentWorkspaceDirMock,
 }));
 
-vi.mock("./index.js", () => ({
-  getLoadedChannelPlugin: getLoadedChannelPluginMock,
-}));
-
-function createConfig(options?: { bindingAgentId?: string; accountId?: string }) {
+function createConfig(options?: { bindingAgentId?: string; accountId?: string }): OpenClawConfig {
   return {
     agents: {
-      list: [{ id: "main" }, { id: "codex" }],
+      entries: { main: {}, codex: {} },
     },
     bindings: [
       {
@@ -45,38 +44,31 @@ function createConfig(options?: { bindingAgentId?: string; accountId?: string })
   };
 }
 
-function createDiscordAcpPlugin(overrides?: {
-  compileConfiguredBinding?: ReturnType<typeof vi.fn>;
-  matchInboundConversation?: ReturnType<typeof vi.fn>;
-}) {
-  const compileConfiguredBinding =
-    overrides?.compileConfiguredBinding ??
-    vi.fn(({ conversationId }: { conversationId: string }) => ({
+function createDiscordAcpPlugin() {
+  const compileConfiguredBinding = vi.fn(({ conversationId }: { conversationId: string }) => ({
+    conversationId,
+  }));
+  const matchInboundConversation = vi.fn(
+    ({
+      compiledBinding,
       conversationId,
-    }));
-  const matchInboundConversation =
-    overrides?.matchInboundConversation ??
-    vi.fn(
-      ({
-        compiledBinding,
-        conversationId,
-        parentConversationId,
-      }: {
-        compiledBinding: { conversationId: string };
-        conversationId: string;
-        parentConversationId?: string;
-      }) => {
-        if (compiledBinding.conversationId === conversationId) {
-          return { conversationId, matchPriority: 2 };
-        }
-        if (parentConversationId && compiledBinding.conversationId === parentConversationId) {
-          return { conversationId: parentConversationId, matchPriority: 1 };
-        }
-        return null;
-      },
-    );
+      parentConversationId,
+    }: {
+      compiledBinding: { conversationId: string };
+      conversationId: string;
+      parentConversationId?: string;
+    }) => {
+      if (compiledBinding.conversationId === conversationId) {
+        return { conversationId, matchPriority: 2 };
+      }
+      if (parentConversationId && compiledBinding.conversationId === parentConversationId) {
+        return { conversationId: parentConversationId, matchPriority: 1 };
+      }
+      return null;
+    },
+  );
   return {
-    id: "discord",
+    ...createChannelTestPluginBase({ id: "discord" }),
     bindings: {
       compileConfiguredBinding,
       matchInboundConversation,
@@ -84,21 +76,33 @@ function createDiscordAcpPlugin(overrides?: {
   };
 }
 
+function publishPlugin(plugin?: ReturnType<typeof createDiscordAcpPlugin>) {
+  const registry = createEmptyPluginRegistry();
+  if (plugin) {
+    registry.channels.push({ pluginId: "binding-fixture", plugin, source: import.meta.url });
+  }
+  setActivePluginRegistry(registry);
+}
+
 describe("configured binding registry", () => {
   beforeEach(() => {
     resolveAgentConfigMock.mockReset().mockReturnValue(undefined);
     resolveDefaultAgentIdMock.mockReset().mockReturnValue("main");
     resolveAgentWorkspaceDirMock.mockReset().mockReturnValue("/tmp/workspace");
-    getLoadedChannelPluginMock.mockReset();
+    publishPlugin();
     ensureConfiguredBindingBuiltinsRegistered();
+  });
+
+  afterEach(async () => {
+    await clearActivePluginRegistry();
   });
 
   it("resolves configured ACP bindings from an already loaded channel plugin", () => {
     const plugin = createDiscordAcpPlugin();
-    getLoadedChannelPluginMock.mockReturnValue(plugin);
+    publishPlugin(plugin);
 
     const resolved = bindingRegistry.resolveConfiguredBindingRecord({
-      cfg: createConfig() as never,
+      cfg: createConfig(),
       channel: "discord",
       accountId: "default",
       conversationId: "1479098716916023408",
@@ -111,10 +115,10 @@ describe("configured binding registry", () => {
 
   it("resolves configured ACP bindings from canonical conversation refs", () => {
     const plugin = createDiscordAcpPlugin();
-    getLoadedChannelPluginMock.mockReturnValue(plugin);
+    publishPlugin(plugin);
 
     const resolved = bindingRegistry.resolveConfiguredBinding({
-      cfg: createConfig() as never,
+      cfg: createConfig(),
       conversation: {
         channel: "discord",
         accountId: "default",
@@ -137,40 +141,12 @@ describe("configured binding registry", () => {
     });
   });
 
-  it("primes compiled ACP bindings from the already loaded channel registry", () => {
-    const plugin = createDiscordAcpPlugin();
-    const cfg = createConfig({ bindingAgentId: "codex" });
-    getLoadedChannelPluginMock.mockReturnValue(plugin);
-
-    const primed = bindingRegistry.primeConfiguredBindingRegistry({
-      cfg: cfg as never,
-    });
-    const resolved = bindingRegistry.resolveConfiguredBindingRecord({
-      cfg: cfg as never,
-      channel: "discord",
-      accountId: "default",
-      conversationId: "1479098716916023408",
-    });
-
-    expect(primed).toEqual({ bindingCount: 1, channelCount: 1 });
-    expect(resolved?.statefulTarget.agentId).toBe("codex");
-
-    const second = bindingRegistry.resolveConfiguredBindingRecord({
-      cfg: cfg as never,
-      channel: "discord",
-      accountId: "default",
-      conversationId: "1479098716916023408",
-    });
-
-    expect(second?.statefulTarget.agentId).toBe("codex");
-  });
-
   it("resolves wildcard binding session keys from the compiled registry", () => {
     const plugin = createDiscordAcpPlugin();
-    getLoadedChannelPluginMock.mockReturnValue(plugin);
+    publishPlugin(plugin);
 
     const resolved = bindingRegistry.resolveConfiguredBindingRecordBySessionKey({
-      cfg: createConfig({ accountId: "*" }) as never,
+      cfg: createConfig({ accountId: "*" }),
       sessionKey: buildConfiguredAcpSessionKey({
         channel: "discord",
         accountId: "work",
@@ -188,7 +164,7 @@ describe("configured binding registry", () => {
 
   it("does not perform late plugin discovery when a channel plugin is unavailable", () => {
     const resolved = bindingRegistry.resolveConfiguredBindingRecord({
-      cfg: createConfig() as never,
+      cfg: createConfig(),
       channel: "discord",
       accountId: "default",
       conversationId: "1479098716916023408",
@@ -197,8 +173,10 @@ describe("configured binding registry", () => {
     expect(resolved).toBeNull();
   });
 
-  it("skips ordinary route bindings before reading the loaded channel registry", () => {
-    const cfg = {
+  it("skips ordinary route bindings without invoking a configured binding provider", () => {
+    const plugin = createDiscordAcpPlugin();
+    publishPlugin(plugin);
+    const cfg: OpenClawConfig = {
       ...createConfig(),
       bindings: [
         {
@@ -217,30 +195,31 @@ describe("configured binding registry", () => {
 
     expect(
       bindingRegistry.resolveConfiguredBindingRecord({
-        cfg: cfg as never,
+        cfg,
         channel: "discord",
         accountId: "default",
         conversationId: "1479098716916023408",
       }),
     ).toBeNull();
-    expect(getLoadedChannelPluginMock).not.toHaveBeenCalled();
+    expect(plugin.bindings.compileConfiguredBinding).not.toHaveBeenCalled();
   });
 
   it("uses the current loaded channel plugin on each resolve", () => {
     const firstPlugin = createDiscordAcpPlugin();
     const secondPlugin = createDiscordAcpPlugin();
-    getLoadedChannelPluginMock.mockReturnValueOnce(firstPlugin).mockReturnValueOnce(secondPlugin);
+    publishPlugin(firstPlugin);
     const cfg = createConfig();
 
     bindingRegistry.resolveConfiguredBindingRecord({
-      cfg: cfg as never,
+      cfg,
       channel: "discord",
       accountId: "default",
       conversationId: "1479098716916023408",
     });
 
+    publishPlugin(secondPlugin);
     bindingRegistry.resolveConfiguredBindingRecord({
-      cfg: cfg as never,
+      cfg,
       channel: "discord",
       accountId: "default",
       conversationId: "1479098716916023408",

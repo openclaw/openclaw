@@ -26,93 +26,31 @@ describe("renderSkills", () => {
     await i18n.setLocale("en");
   });
 
-  it("hides the agent selector when only one agent is configured", () => {
+  it("keeps settings focused on installed skills when remote results are available", () => {
     const container = document.createElement("div");
     render(
       renderSkills(
         createProps({
-          agentsList: {
-            defaultId: "main",
-            mainKey: "main",
-            scope: "per-sender",
-            agents: [{ id: "main", name: "Main" }],
-          },
-          selectedAgentId: "main",
+          surface: "settings",
+          clawhubResults: [
+            {
+              score: 1,
+              slug: "remote-skill",
+              registry: "https://clawhub.ai",
+              displayName: "Remote Skill",
+            },
+          ],
         }),
       ),
       container,
     );
 
-    expect(container.querySelector('openclaw-agent-select[name="skills-agent"]')).toBeNull();
-    expect(container.querySelector('input[name="skills-filter"]')).toBeInstanceOf(HTMLInputElement);
-  });
-
-  it("renders the agent selector and routes agent changes", async () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    dialogRestores.push(() => container.remove());
-    const onAgentChange = vi.fn();
-
-    render(
-      renderSkills(
-        createProps({
-          selectedAgentId: "research",
-          onAgentChange,
-        }),
-      ),
-      container,
-    );
-    await Promise.resolve();
-
-    const selector = container.querySelector<
-      HTMLElement & {
-        options: Array<{ value: string; label: string; badge?: string }>;
-        value: string;
-        onSelect: (value: string) => void;
-        updateComplete: Promise<boolean>;
-      }
-    >('openclaw-agent-select[name="skills-agent"]');
-    const filter = container.querySelector<HTMLInputElement>('input[name="skills-filter"]');
-    expect(selector).toBeInstanceOf(HTMLElement);
-    expect(filter).toBeInstanceOf(HTMLInputElement);
-    await selector?.updateComplete;
-    expect(normalizeText(selector!.closest(".plugins-field")!)).toContain("Agent");
-    expect(normalizeText(filter!.closest("label")!)).toContain("Search");
-    expect(selector?.value).toBe("research");
-    expect(selector?.options.map((option) => [option.label, option.badge])).toEqual([
-      ["Main (default)", undefined],
-      ["Research", undefined],
-    ]);
-    expect(
-      selector?.querySelector(".agent-select__avatar--text")?.getAttribute("data-avatar"),
-    ).toBe("R");
-
-    selector?.onSelect("main");
-
-    expect(onAgentChange).toHaveBeenCalledWith("main");
-  });
-
-  it("localizes the default-agent label", async () => {
-    await i18n.setLocale("de");
-    const container = document.createElement("div");
-    document.body.append(container);
-    dialogRestores.push(() => container.remove());
-
-    render(renderSkills(createProps()), container);
-    const selector = container.querySelector<
-      HTMLElement & {
-        options: Array<{ value: string; label: string }>;
-        updateComplete: Promise<boolean>;
-      }
-    >('openclaw-agent-select[name="skills-agent"]');
-    await selector?.updateComplete;
-
-    expect(selector?.options.find((option) => option.value === "main")?.label).toBe(
-      "Main (Standard)",
-    );
-    expect(selector?.querySelector(".agent-select__trigger")?.getAttribute("aria-label")).toContain(
-      "Standard",
-    );
+    expect(container.querySelector('input[name="skills-filter"]')).not.toBeNull();
+    expect(container.querySelector("openclaw-agent-select")).toBeNull();
+    expect(container.querySelector(".skills-group")?.textContent).toContain("Repo Skill");
+    expect(container.querySelector('input[name="clawhub-search"]')).toBeNull();
+    expect(container.textContent).not.toContain("Remote Skill");
+    expect(container.querySelector(".plugin-catalog-card")).toBeNull();
   });
 
   it.each([
@@ -176,6 +114,259 @@ describe("renderSkills", () => {
     );
   });
 
+  it.each([true, false])(
+    "preserves retained group open=%s when an earlier group is filtered away",
+    async (retainedOpen) => {
+      const container = document.createElement("div");
+      document.body.append(container);
+      dialogRestores.push(() => container.remove());
+
+      const workspaceSkill = createSkill({
+        skillKey: "ws-skill",
+        name: "Workspace Skill",
+        source: "openclaw-workspace",
+      });
+      const builtInSkill = createSkill({
+        skillKey: "bi-skill",
+        name: "Weather",
+        bundled: true,
+      });
+      const report: SkillStatusReport = {
+        workspaceDir: "/tmp/workspace",
+        managedSkillsDir: "/tmp/skills",
+        skills: [workspaceSkill, builtInSkill],
+      };
+
+      const onDetailOpen = vi.fn();
+      render(renderSkills(createProps({ report, onDetailOpen })), container);
+      await Promise.resolve();
+
+      const groups = container.querySelectorAll<HTMLDetailsElement>("details.skills-group");
+      expect(groups).toHaveLength(2);
+      expect(groups[0]!.open).toBe(true);
+      expect(groups[1]!.open).toBe(true);
+
+      groups[0]!.open = false;
+      groups[1]!.open = retainedOpen;
+      const row = groups[1]!.querySelector(".settings-row");
+
+      render(renderSkills(createProps({ report, filter: "weather", onDetailOpen })), container);
+      await Promise.resolve();
+
+      const remaining = container.querySelectorAll<HTMLDetailsElement>("details.skills-group");
+      expect(remaining).toHaveLength(1);
+      expect(remaining[0]!.querySelector(".settings-row")?.textContent).toContain("Weather");
+      expect(remaining[0]).toBe(groups[1]);
+      expect(remaining[0]!.open).toBe(retainedOpen);
+      expect(remaining[0]!.querySelector(".settings-row")).toBe(row);
+      remaining[0]!.querySelector<HTMLButtonElement>(".plugins-item__detail-button")!.click();
+      expect(onDetailOpen).toHaveBeenCalledExactlyOnceWith("bi-skill");
+    },
+  );
+
+  it("preserves retained group expansion when a middle group is filtered away", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    dialogRestores.push(() => container.remove());
+
+    const workspaceSkill = createSkill({
+      skillKey: "ws-skill",
+      name: "Keep Workspace",
+      source: "openclaw-workspace",
+    });
+    const builtInSkill = createSkill({
+      skillKey: "bi-skill",
+      name: "Weather",
+      bundled: true,
+    });
+    const installedSkill = createSkill({
+      skillKey: "inst-skill",
+      name: "Keep Installed",
+      source: "openclaw-managed",
+    });
+    const report: SkillStatusReport = {
+      workspaceDir: "/tmp/workspace",
+      managedSkillsDir: "/tmp/skills",
+      skills: [workspaceSkill, builtInSkill, installedSkill],
+    };
+
+    render(renderSkills(createProps({ report })), container);
+    await Promise.resolve();
+
+    const groups = container.querySelectorAll<HTMLDetailsElement>("details.skills-group");
+    expect(groups).toHaveLength(3);
+    groups[1]!.open = false;
+
+    render(renderSkills(createProps({ report, filter: "keep" })), container);
+    await Promise.resolve();
+
+    const remaining = container.querySelectorAll<HTMLDetailsElement>("details.skills-group");
+    expect(remaining).toHaveLength(2);
+    expect(remaining[0]!.querySelector(".settings-row")?.textContent).toContain("Keep Workspace");
+    expect(remaining[0]).toBe(groups[0]);
+    expect(remaining[1]).toBe(groups[2]);
+    expect(remaining[0]!.open).toBe(true);
+    expect(remaining[1]!.open).toBe(true);
+    expect(remaining[1]!.textContent).toContain("Keep Installed");
+  });
+
+  it("restores a removed group as initially open after filter is cleared", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    dialogRestores.push(() => container.remove());
+
+    const workspaceSkill = createSkill({
+      skillKey: "ws-skill",
+      name: "Workspace Skill",
+      source: "openclaw-workspace",
+    });
+    const builtInSkill = createSkill({
+      skillKey: "bi-skill",
+      name: "Weather",
+      bundled: true,
+    });
+    const report: SkillStatusReport = {
+      workspaceDir: "/tmp/workspace",
+      managedSkillsDir: "/tmp/skills",
+      skills: [workspaceSkill, builtInSkill],
+    };
+
+    render(renderSkills(createProps({ report })), container);
+    await Promise.resolve();
+
+    const groups = container.querySelectorAll<HTMLDetailsElement>("details.skills-group");
+    groups[0]!.open = false;
+
+    render(renderSkills(createProps({ report, filter: "weather" })), container);
+    await Promise.resolve();
+
+    expect(container.querySelectorAll("details.skills-group")).toHaveLength(1);
+
+    render(renderSkills(createProps({ report })), container);
+    await Promise.resolve();
+
+    const restored = container.querySelectorAll<HTMLDetailsElement>("details.skills-group");
+    expect(restored).toHaveLength(2);
+    expect(restored[0]!.open).toBe(true);
+    expect(restored[1]!.open).toBe(true);
+  });
+
+  it("preserves built-in group expansion when status filtering removes the workspace group", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    dialogRestores.push(() => container.remove());
+
+    const workspaceSkill = createSkill({
+      skillKey: "ws-skill",
+      name: "Workspace Skill",
+      source: "openclaw-workspace",
+      blockedByAgentFilter: true,
+    });
+    const builtInSkill = createSkill({
+      skillKey: "bi-skill",
+      name: "Weather",
+      bundled: true,
+    });
+    const report: SkillStatusReport = {
+      workspaceDir: "/tmp/workspace",
+      managedSkillsDir: "/tmp/skills",
+      skills: [workspaceSkill, builtInSkill],
+    };
+
+    render(renderSkills(createProps({ report })), container);
+    await Promise.resolve();
+
+    const groups = container.querySelectorAll<HTMLDetailsElement>("details.skills-group");
+    expect(groups).toHaveLength(2);
+    groups[0]!.open = false;
+
+    render(renderSkills(createProps({ report, statusFilter: "ready" })), container);
+    await Promise.resolve();
+
+    const remaining = container.querySelectorAll<HTMLDetailsElement>("details.skills-group");
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0]!.querySelector(".settings-row")?.textContent).toContain("Weather");
+    expect(remaining[0]!.open).toBe(true);
+  });
+
+  it("recovers from empty filter results and restores groups as initially open", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    dialogRestores.push(() => container.remove());
+
+    const workspaceSkill = createSkill({
+      skillKey: "ws-skill",
+      name: "Workspace Skill",
+      source: "openclaw-workspace",
+    });
+    const builtInSkill = createSkill({
+      skillKey: "bi-skill",
+      name: "Weather",
+      bundled: true,
+    });
+    const report: SkillStatusReport = {
+      workspaceDir: "/tmp/workspace",
+      managedSkillsDir: "/tmp/skills",
+      skills: [workspaceSkill, builtInSkill],
+    };
+
+    render(renderSkills(createProps({ report })), container);
+    await Promise.resolve();
+
+    const groups = container.querySelectorAll<HTMLDetailsElement>("details.skills-group");
+    groups[0]!.open = false;
+
+    render(renderSkills(createProps({ report, filter: "zzzz-no-match" })), container);
+    await Promise.resolve();
+
+    expect(container.querySelectorAll("details.skills-group")).toHaveLength(0);
+
+    render(renderSkills(createProps({ report })), container);
+    await Promise.resolve();
+
+    const restored = container.querySelectorAll<HTMLDetailsElement>("details.skills-group");
+    expect(restored).toHaveLength(2);
+    expect(restored[0]!.open).toBe(true);
+    expect(restored[1]!.open).toBe(true);
+  });
+
+  it("preserves built-in group expansion when an earlier group is filtered away with retained query", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    dialogRestores.push(() => container.remove());
+
+    const workspaceSkill = createSkill({
+      skillKey: "ws-skill",
+      name: "Workspace Skill",
+      source: "openclaw-workspace",
+    });
+    const builtInSkill = createSkill({
+      skillKey: "bi-skill",
+      name: "Weather",
+      bundled: true,
+    });
+    const report: SkillStatusReport = {
+      workspaceDir: "/tmp/workspace",
+      managedSkillsDir: "/tmp/skills",
+      skills: [workspaceSkill, builtInSkill],
+    };
+
+    render(renderSkills(createProps({ report, filter: "skill" })), container);
+    await Promise.resolve();
+
+    const groups = container.querySelectorAll<HTMLDetailsElement>("details.skills-group");
+    expect(groups).toHaveLength(2);
+    groups[0]!.open = false;
+
+    render(renderSkills(createProps({ report, filter: "weather" })), container);
+    await Promise.resolve();
+
+    const remaining = container.querySelectorAll<HTMLDetailsElement>("details.skills-group");
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0]!.querySelector(".settings-row")?.textContent).toContain("Weather");
+    expect(remaining[0]!.open).toBe(true);
+  });
+
   it("renders alternative missing binaries and exposes their installer", async () => {
     const container = document.createElement("div");
     document.body.append(container);
@@ -229,7 +420,7 @@ describe("renderSkills", () => {
     );
     await Promise.resolve();
 
-    const warning = container.querySelector(".md-preview-dialog__body .callout");
+    const warning = container.querySelector(".skill-reader-dialog__body .callout");
     expect(normalizeText(expectDefined(warning, "alternative binary requirement"))).toContain(
       "bin:any of (claude, codex, opencode)",
     );
@@ -407,29 +598,28 @@ describe("renderSkills", () => {
     const onInstall = vi.fn();
     const onClawHubInstall = vi.fn();
 
-    render(
-      renderSkills(
-        createProps({
-          report,
-          detailKey: "calendar",
-          operation: { kind: "skill", skillKey: "repo-skill" },
-          clawhubResults: [{ score: 1, slug: "github", displayName: "GitHub", version: "1.0.0" }],
-          onRefresh,
-          onToggle,
-          onSaveKey,
-          onInstall,
-          onClawHubInstall,
-        }),
-      ),
-      container,
-    );
+    const props = createProps({
+      report,
+      detailKey: "calendar",
+      operation: { kind: "skill", skillKey: "repo-skill" },
+      clawhubResults: [
+        {
+          score: 1,
+          slug: "github",
+          registry: "https://clawhub.ai",
+          displayName: "GitHub",
+          version: "1.0.0",
+        },
+      ],
+      onRefresh,
+      onToggle,
+      onSaveKey,
+      onInstall,
+      onClawHubInstall,
+    });
+    render(renderSkills(props), container);
     await Promise.resolve();
 
-    expect(
-      container.querySelector<HTMLElement & { disabled: boolean }>(
-        'openclaw-agent-select[name="skills-agent"]',
-      )?.disabled,
-    ).toBe(true);
     const refresh = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
       (button) => button.textContent?.trim() === "Refresh",
     );
@@ -441,18 +631,14 @@ describe("renderSkills", () => {
         ),
       ).every((toggle) => toggle.hasAttribute("disabled")),
     ).toBe(true);
-    expect(
-      Array.from(container.querySelectorAll("wa-switch.settings-toggle")).find(
-        (toggle) => normalizeText(toggle) === "Repo Skill enabled",
-      ),
-    ).toBeInstanceOf(HTMLElement);
+    expect(container.querySelectorAll(".plugins-item wa-switch")).toHaveLength(0);
     expect(container.querySelector<HTMLInputElement>('input[type="password"]')?.disabled).toBe(
       true,
     );
     const mutationButtons = Array.from(
       container.querySelectorAll<HTMLButtonElement>("button"),
     ).filter((button) => /^(Install|Save key)/.test(normalizeText(button)));
-    expect(mutationButtons.length).toBeGreaterThanOrEqual(3);
+    expect(mutationButtons).toHaveLength(2);
     expect(mutationButtons.every((button) => button.disabled)).toBe(true);
 
     refresh?.click();
@@ -466,10 +652,17 @@ describe("renderSkills", () => {
     expect(onToggle).not.toHaveBeenCalled();
     expect(onSaveKey).not.toHaveBeenCalled();
     expect(onInstall).not.toHaveBeenCalled();
+
+    render(renderSkills({ ...props, surface: "discovery" }), container);
+    const remoteInstall = container.querySelector<HTMLButtonElement>(
+      ".plugin-catalog-card__install",
+    );
+    expect(remoteInstall?.disabled).toBe(true);
+    remoteInstall?.click();
     expect(onClawHubInstall).not.toHaveBeenCalled();
   });
 
-  it("does not transfer toggle state when a skill leaves the disabled tab", async () => {
+  it("keeps the remaining skill's status and details target when a skill leaves the disabled tab", async () => {
     const container = document.createElement("div");
     document.body.append(container);
     dialogRestores.push(() => container.remove());
@@ -489,19 +682,7 @@ describe("renderSkills", () => {
     render(renderSkills(createProps({ report, statusFilter: "disabled" })), container);
     await Promise.resolve();
 
-    const toggles = container.querySelectorAll<HTMLElement & { checked: boolean }>(
-      "wa-switch.settings-toggle",
-    );
-    expect(toggles).toHaveLength(2);
-    const passwordToggle = expectDefined(toggles[0], "password skill toggle");
-    const appleNotesToggle = expectDefined(toggles[1], "apple notes skill toggle");
-    expect(passwordToggle.checked).toBe(false);
-    expect(appleNotesToggle.checked).toBe(false);
-
-    // Simulate the user clicking the 1password toggle before the re-render propagates.
-    // Without repeat(), Lit's dirty-check skips re-setting `.checked = false` on the reused
-    // DOM node, so apple-notes inherits this stale user-driven state.
-    passwordToggle.checked = true;
+    expect(container.querySelectorAll(".plugins-item [role=img]")).toHaveLength(2);
 
     const updatedReport: SkillStatusReport = {
       workspaceDir: "/tmp/workspace",
@@ -509,19 +690,19 @@ describe("renderSkills", () => {
       skills: [{ ...passwordSkill, disabled: false }, appleNotesSkill],
     };
 
+    const onDetailOpen = vi.fn();
     render(
-      renderSkills(createProps({ report: updatedReport, statusFilter: "disabled" })),
+      renderSkills(createProps({ report: updatedReport, statusFilter: "disabled", onDetailOpen })),
       container,
     );
     await Promise.resolve();
 
-    const updatedToggles = container.querySelectorAll<HTMLElement & { checked: boolean }>(
-      "wa-switch.settings-toggle",
-    );
-    expect(updatedToggles).toHaveLength(1);
-    expect(expectDefined(updatedToggles[0], "updated apple notes skill toggle").checked).toBe(
-      false,
-    );
+    const row = container.querySelector(".plugins-item")!;
+    expect(container.querySelectorAll(".plugins-item")).toHaveLength(1);
+    expect(row.textContent).toContain("Apple Notes");
+    expect(row.querySelector("[role=img]")?.getAttribute("title")).toContain("Disabled");
+    row.querySelector<HTMLButtonElement>(".plugins-item__detail-button")!.click();
+    expect(onDetailOpen).toHaveBeenCalledWith("apple-notes");
   });
 
   it("treats skills blocked by the selected agent filter as needing setup", async () => {

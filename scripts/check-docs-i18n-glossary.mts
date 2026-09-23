@@ -13,6 +13,8 @@ const LIST_ITEM_LINK_RE = /^\s*(?:[-*]|\d+\.)\s+\[([^\]]+)\]\((\/[^)]+)\)/;
 const MAX_TITLE_WORDS = 8;
 const MAX_LABEL_WORDS = 6;
 const MAX_TERM_LENGTH = 80;
+const VERSION_LABEL_RE =
+  /^v?\d+\.\d+\.\d+(?:-[\dA-Za-z-]+(?:\.[\dA-Za-z-]+)*)?(?:\+[\dA-Za-z-]+(?:\.[\dA-Za-z-]+)*)?$/;
 
 type TermMatch = {
   file: string;
@@ -115,6 +117,10 @@ function unquoteScalar(raw: string) {
 
 function isGlossaryCandidate(term: string, maxWords: number) {
   if (!term) {
+    return false;
+  }
+  // Bare versions are language-neutral identifiers, not translation terminology.
+  if (VERSION_LABEL_RE.test(term)) {
     return false;
   }
   if (!containsLatin(term)) {

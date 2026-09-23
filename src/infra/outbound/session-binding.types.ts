@@ -58,6 +58,8 @@ export type SessionBindingBindInput = {
   placement?: SessionBindingPlacement;
   metadata?: Record<string, unknown>;
   ttlMs?: number;
+  /** Host admission authority; current-placement adapters recheck before committing a binding. */
+  assertCurrent?: () => void;
 };
 
 /**

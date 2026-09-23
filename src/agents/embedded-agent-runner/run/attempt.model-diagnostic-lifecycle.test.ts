@@ -1,9 +1,10 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 // Coverage for model-call diagnostic events around attempt stream functions.
 import { notifyProviderStreamOpened } from "@openclaw/ai/transports";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../../test/helpers/temp-dir.js";
@@ -25,6 +26,7 @@ import {
 } from "../../../plugins/hook-runner-global.js";
 import { createHookRunnerWithRegistry } from "../../../plugins/hooks.test-fixtures.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
+import { makeZeroUsageSnapshot } from "../../usage.js";
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "./attempt.model-diagnostic-events.js";
 
 const tempDirs = createTempDirTracker();
@@ -84,12 +86,16 @@ function requireMockRecordArg(
   return requireRecord(mock.mock.calls[callIndex]?.[argIndex], label);
 }
 
-async function collectProviderTimelineEvents(run: () => Promise<void>) {
+async function collectProviderTimelineEvents(
+  run: () => Promise<void>,
+  includeMarks = false,
+  flag: string | null = "1",
+) {
   const root = tempDirs.make("openclaw-provider-timeline-");
   const timelinePath = join(root, "timeline.jsonl");
   await withEnvAsync(
     {
-      OPENCLAW_DIAGNOSTICS: "1",
+      OPENCLAW_DIAGNOSTICS: flag ?? undefined,
       OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: timelinePath,
     },
     run,
@@ -100,7 +106,13 @@ async function collectProviderTimelineEvents(run: () => Promise<void>) {
     .split("\n")
     .filter(Boolean)
     .map((line) => requireRecord(JSON.parse(line), "provider timeline event"))
-    .filter((event) => event.type === "provider.request");
+    .filter(
+      (event) =>
+        event.type === "provider.request" ||
+        (includeMarks &&
+          (event.name === "provider.request.started" ||
+            event.name === "provider.request.activity")),
+    );
 }
 
 describe("wrapStreamFnWithDiagnosticModelCallEvents lifecycle", () => {
@@ -120,6 +132,51 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents lifecycle", () => {
     vi.restoreAllMocks();
     vi.useRealTimers();
   });
+
+  it.each(["stop", "error"] as const)(
+    "notifies terminal %s once when an explicit result follows iterator exhaustion",
+    async (stopReason) => {
+      const onTerminal = vi.fn();
+      const onSucceeded = vi.fn();
+      const originalStream = createAssistantMessageEventStream();
+      originalStream.end({
+        role: "assistant",
+        content: [{ type: "text", text: "Done." }],
+        api: "openai-responses",
+        provider: "openai",
+        model: "gpt-5.4",
+        stopReason,
+        usage: makeZeroUsageSnapshot(),
+        timestamp: 0,
+      });
+      const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(() => originalStream, {
+        runId: "run-explicit-result",
+        provider: "openai",
+        model: "gpt-5.4",
+        trace: createDiagnosticTraceContext(),
+        nextCallId: () => "call-explicit-result",
+        onTerminal,
+        onSucceeded,
+      });
+      const events = await collectModelCallEvents(async () => {
+        const response = await wrapped({} as never, { messages: [] });
+        await drain(response);
+        expect(onTerminal).not.toHaveBeenCalled();
+        expect(onSucceeded).not.toHaveBeenCalled();
+        await response.result();
+        await response.result();
+        await drain(response);
+      });
+      expect(onTerminal).toHaveBeenCalledOnce();
+      expect(onSucceeded).toHaveBeenCalledTimes(stopReason === "stop" ? 1 : 0);
+      // Deferred terminal classification reports model.call.error for an explicit
+      // error result instead of the superseded model.call.completed; both stop
+      // reasons still produce exactly one terminal event.
+      const expectedTerminalType =
+        stopReason === "error" ? "model.call.error" : "model.call.completed";
+      expect(events.filter((event) => event.type === expectedTerminalType)).toHaveLength(1);
+    },
+  );
 
   it.each(["stop", "error"])(
     "emits one %s provider timeline event for result and iterator completion",
@@ -180,6 +237,218 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents lifecycle", () => {
         },
       });
       expect(events[0]?.status).toBeUndefined();
+    },
+  );
+
+  it.each(["environment", "config"] as const)(
+    "separates last observed provider activity from delayed terminal settlement without content (%s)",
+    async (activation) => {
+      const startedAt = Date.parse("2026-07-09T18:30:00.000Z");
+      let now = startedAt;
+      vi.spyOn(Date, "now").mockImplementation(() => now);
+      const assistant = {
+        role: "assistant",
+        stopReason: "stop",
+        content: [{ type: "text", text: "private-answer" }],
+      };
+      async function* stream() {
+        now += 10;
+        yield { type: "start", partial: { private: "private-payload" } };
+        now += 20;
+        yield { type: "done", message: assistant };
+      }
+      const original = Object.assign(stream(), {
+        result: async () => {
+          now += 100;
+          return assistant;
+        },
+      });
+      const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+        (() => original) as unknown as StreamFn,
+        {
+          config: activation === "config" ? { diagnostics: { flags: ["timeline"] } } : undefined,
+          runId: "run-timing",
+          provider: "synthetic",
+          model: "synthetic-model",
+          trace: createDiagnosticTraceContext(),
+          nextCallId: () => "call-timing",
+        },
+      );
+      const events = await collectProviderTimelineEvents(
+        async () => {
+          const response = await wrapped(
+            {} as never,
+            { messages: [{ role: "user", content: "private-prompt" }] } as never,
+          );
+          await drain(response);
+          await response.result();
+          await response.result();
+        },
+        true,
+        activation === "config" ? null : "1",
+      );
+      expect(events).toHaveLength(3);
+      expect(events[0]).toMatchObject({
+        type: "mark",
+        name: "provider.request.started",
+        runId: "run-timing",
+        spanId: "call-timing",
+        timestamp: new Date(startedAt).toISOString(),
+      });
+      expect(events[1]).toMatchObject({
+        type: "mark",
+        name: "provider.request.activity",
+        runId: "run-timing",
+        spanId: "call-timing",
+        timestamp: new Date(startedAt + 10).toISOString(),
+      });
+      expect(events[2]).toMatchObject({
+        type: "provider.request",
+        runId: "run-timing",
+        spanId: "call-timing",
+        durationMs: 130,
+        ok: true,
+        attributes: {
+          terminalAtMs: startedAt + 130,
+          lastProviderActivityAtMs: startedAt + 30,
+          terminalReason: "stop",
+        },
+      });
+      expect(JSON.stringify(events)).not.toMatch(/private-(?:answer|payload|prompt)/);
+    },
+  );
+
+  it.each([
+    { stopReason: "stop", terminalReason: "stop", ok: true },
+    { stopReason: "length", terminalReason: "length", ok: true },
+    { stopReason: "toolUse", terminalReason: "toolUse", ok: true },
+    { stopReason: "error", terminalReason: "error", ok: false },
+    { stopReason: "aborted", terminalReason: "aborted", ok: false },
+    { stopReason: "private-reason-".repeat(100), terminalReason: "unknown", ok: true },
+  ])(
+    "records bounded terminal reason $terminalReason coherently with the lifecycle",
+    async ({ stopReason, terminalReason, ok }) => {
+      const original = Object.assign((async function* () {})(), {
+        result: async () => ({ role: "assistant", stopReason, errorMessage: "private-error" }),
+      });
+      const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+        (() => original) as unknown as StreamFn,
+        {
+          runId: "run-reason",
+          provider: "synthetic",
+          model: "synthetic-model",
+          trace: createDiagnosticTraceContext(),
+          nextCallId: () => "call-reason",
+        },
+      );
+      let lifecycleEvents: DiagnosticEventPayload[] = [];
+      const events = await collectProviderTimelineEvents(async () => {
+        lifecycleEvents = await collectModelCallEvents(async () => {
+          const response = await wrapped({} as never, { messages: [] });
+          await response.result();
+          await response.result();
+          await drain(response);
+        });
+      });
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({ ok, attributes: { terminalReason } });
+      expect(lifecycleEvents.map((event) => event.type)).toEqual([
+        "model.call.started",
+        ok ? "model.call.completed" : "model.call.error",
+      ]);
+      expect(JSON.stringify(events)).not.toMatch(/private-(?:error|reason)/);
+    },
+  );
+
+  it("bounds in-flight activity marks with the existing stream-progress interval", async () => {
+    const startedAt = Date.parse("2026-07-09T18:30:00.000Z");
+    let now = startedAt;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const readFlags = vi.fn(() => []);
+    const assistant = { role: "assistant", stopReason: "stop", content: [] };
+    async function* stream() {
+      for (const offset of [0, 1, 29_999, 30_000, 30_001]) {
+        now = startedAt + offset;
+        for (let index = 0; index < 1000; index += 1) {
+          yield { type: "thinking_delta", delta: "", partial: {} };
+        }
+      }
+      yield { type: "done", message: assistant };
+    }
+    const original = Object.assign(stream(), { result: async () => assistant });
+    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+      (() => original) as unknown as StreamFn,
+      {
+        config: {
+          diagnostics: {
+            get flags() {
+              return readFlags();
+            },
+          },
+        },
+        runId: "run-activity",
+        provider: "synthetic",
+        model: "synthetic-model",
+        trace: createDiagnosticTraceContext(),
+        nextCallId: () => "call-activity",
+      },
+    );
+    const events = await collectProviderTimelineEvents(async () => {
+      const response = await wrapped({} as never, { messages: [] });
+      await drain(response);
+      await response.result();
+    }, true);
+    expect(events.map((event) => event.name)).toEqual([
+      "provider.request.started",
+      "provider.request.activity",
+      "provider.request.activity",
+      "provider.request",
+    ]);
+    expect(
+      events
+        .filter((event) => event.name === "provider.request.activity")
+        .map((event) => event.timestamp),
+    ).toEqual([new Date(startedAt).toISOString(), new Date(startedAt + 30_000).toISOString()]);
+    expect(events.at(-1)).toMatchObject({
+      attributes: { lastProviderActivityAtMs: startedAt + 30_001 },
+    });
+    expect(
+      events.every((event) => event.runId === "run-activity" && event.spanId === "call-activity"),
+    ).toBe(true);
+    // Configuration resolution scales with heartbeats, not the 5,000 chunks.
+    expect(readFlags.mock.calls.length).toBeLessThan(100);
+  });
+
+  it.each(["unset", "override"] as const)(
+    "does not create a timeline when diagnostic collection is disabled (%s)",
+    async (activation) => {
+      const timelinePath = join(
+        tempDirs.make("openclaw-disabled-model-timeline-"),
+        "timeline.jsonl",
+      );
+      await withEnvAsync(
+        {
+          OPENCLAW_DIAGNOSTICS: activation === "override" ? "0" : undefined,
+          OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: timelinePath,
+        },
+        async () => {
+          const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+            (() => undefined) as unknown as StreamFn,
+            {
+              config:
+                activation === "override" ? { diagnostics: { flags: ["timeline"] } } : undefined,
+              runId: "run-disabled",
+              provider: "synthetic",
+              model: "synthetic-model",
+              trace: createDiagnosticTraceContext(),
+              nextCallId: () => "call-disabled",
+            },
+          );
+          await wrapped({} as never, { messages: [] });
+          flushDiagnosticsTimeline();
+          expect(existsSync(timelinePath)).toBe(false);
+        },
+      );
     },
   );
 

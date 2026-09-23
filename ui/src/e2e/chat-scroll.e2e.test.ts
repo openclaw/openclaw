@@ -13,20 +13,160 @@ import {
   scrollChatThreadToTop,
   waitForChatScrollIdle,
 } from "./chat-flow.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
+  it("scrolls the transcript over the pinned composer while preserving nested scrolling", async () => {
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const baseTs = Date.now() - 100_000;
+      const runId = "composer-scroll-run";
+      const gateway = await installMockGateway(page, {
+        historyMessages: Array.from({ length: 50 }, (_, index) => ({
+          role: index % 2 === 0 ? "assistant" : "user",
+          content: `Composer wheel history ${index}\n${"Transcript detail\n".repeat(4)}`,
+          timestamp: baseTs + index,
+        })),
+        featureMethods: ["chat.metadata", "chat.startup", "progressCard.get"],
+        inFlightRun: { runId, text: "Reviewing the workspace." },
+        sessionInfo: { key: "agent:main:main", activeRunIds: [runId], hasActiveRun: true },
+        methodResponses: {
+          "progressCard.get": {
+            card: {
+              revision: 1,
+              sessionKey: "agent:main:main",
+              updatedAt: baseTs,
+              steps: Array.from({ length: 30 }, (_, index) => ({
+                step: `Review item ${index + 1}`,
+                status: index === 0 ? "in_progress" : "pending",
+              })),
+            },
+          },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.getByText("Composer wheel history 49").waitFor();
+      await waitForChatScrollIdle(page);
+      const thread = page.locator(".chat-thread");
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      const input = page.locator(".agent-chat__input");
+      const originalTop = await thread.evaluate((element) => element.scrollTop);
+      const composerBounds = await input.boundingBox();
+
+      // Chromium's blocked-input warning must not crash while resolving the
+      // conversation's listener. Age trusted input instead of stalling the UI.
+      const devtools = await page.context().newCDPSession(page);
+      await devtools.send("Log.enable");
+      await devtools.send("Log.startViolationsReport", {
+        config: [{ name: "blockedEvent", threshold: 1 }],
+      });
+      const threadBounds = await thread.boundingBox();
+      if (!threadBounds) {
+        throw new Error("Expected a visible transcript");
+      }
+      const crash = Promise.withResolvers<never>();
+      let rendererCrashed = false;
+      const onCrash = () => {
+        rendererCrashed = true;
+        crash.reject(new Error("Renderer crashed on delayed transcript wheel"));
+      };
+      page.on("crash", onCrash);
+      try {
+        await Promise.race([
+          devtools.send("Input.dispatchMouseEvent", {
+            type: "mouseWheel",
+            x: threadBounds.x + threadBounds.width / 2,
+            y: threadBounds.y + threadBounds.height / 2,
+            deltaX: 0,
+            deltaY: -1,
+            timestamp: Date.now() / 1_000 - 2,
+          }),
+          crash.promise,
+        ]);
+        expect(await thread.evaluate((element) => element.isConnected)).toBe(true);
+      } finally {
+        page.off("crash", onCrash);
+        if (!rendererCrashed) {
+          await devtools.detach();
+        }
+      }
+
+      await composer.hover();
+      await page.mouse.wheel(0, -300);
+      await expect
+        .poll(() => thread.evaluate((element) => element.scrollTop))
+        .toBeLessThan(originalTop - 100);
+      await waitForChatScrollIdle(page);
+      expect(await input.boundingBox()).toEqual(composerBounds);
+      await page.getByRole("button", { name: "Scroll to latest" }).waitFor();
+
+      const beforeFooter = await thread.evaluate((element) => element.scrollTop);
+      await gateway.emitGatewayEvent("chat", {
+        sessionKey: "agent:main:main",
+        runId,
+        state: "delta",
+        message: { role: "assistant", content: "Reviewing the workspace.\n\nAnother finding." },
+      });
+      await expect.poll(() => thread.textContent()).toContain("Another finding.");
+      await waitForChatScrollIdle(page);
+      expect(await thread.evaluate((element) => element.scrollTop)).toBe(beforeFooter);
+      await page.locator(".agent-chat__composer-footer").hover();
+      await page.mouse.wheel(200, 0);
+      await waitForChatScrollIdle(page);
+      expect(await thread.evaluate((element) => element.scrollTop)).toBe(beforeFooter);
+      await page.waitForTimeout(201); // Start a second gesture beyond the 200 ms burst window.
+      await page.mouse.wheel(0, -200);
+      await expect
+        .poll(() => thread.evaluate((element) => element.scrollTop))
+        .toBeLessThan(beforeFooter - 100);
+      await waitForChatScrollIdle(page);
+
+      const progress = page.locator(
+        ".session-progress-card--composer .session-progress-card__body",
+      );
+      await expect
+        .poll(() => page.locator(".session-progress-card--composer").getAttribute("open"))
+        .toBeNull();
+      await page.locator(".session-progress-card--composer > summary").click();
+      await progress.waitFor();
+      await waitForChatScrollIdle(page);
+      const beforeProgress = await thread.evaluate((element) => element.scrollTop);
+      await progress.hover();
+      await page.mouse.wheel(0, 250);
+      await expect.poll(() => progress.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+      expect(await thread.evaluate((element) => element.scrollTop)).toBe(beforeProgress);
+
+      await composer.fill(
+        Array.from({ length: 30 }, (_, index) => `Draft line ${index}`).join("\n"),
+      );
+      await composer.evaluate((element) => {
+        element.scrollTop = element.scrollHeight;
+      });
+      await waitForChatScrollIdle(page);
+      const beforeDraft = await thread.evaluate((element) => element.scrollTop);
+      const draftTop = await composer.evaluate((element) => element.scrollTop);
+      await composer.hover();
+      await page.mouse.wheel(0, -200);
+      await expect
+        .poll(() => composer.evaluate((element) => element.scrollTop))
+        .toBeLessThan(draftTop);
+      expect(await thread.evaluate((element) => element.scrollTop)).toBe(beforeDraft);
+      await composer.evaluate((element) => {
+        element.scrollTop = 0;
+      });
+      await page.mouse.wheel(0, -200);
+      await waitForChatScrollIdle(page);
+      expect(await thread.evaluate((element) => element.scrollTop)).toBe(beforeDraft);
+    });
+  });
+
   it("keeps a bottom-anchored transcript pinned while the composer grows", async () => {
     const artifactDirParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const artifactDir = artifactDirParent
       ? createControlUiE2eArtifactDir("chat-flow.streaming", artifactDirParent)
       : undefined;
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const baseTs = Date.now() - 100_000;
     const historyMessages = Array.from({ length: 50 }, (_, index) => ({
@@ -210,11 +350,7 @@ suite.define(() => {
   });
 
   it("overlays the scroll-to-bottom affordance without shrinking the transcript", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const baseTs = Date.now() - 100_000;
     const historyMessages = Array.from({ length: 50 }, (_, index) => ({
@@ -253,10 +389,14 @@ suite.define(() => {
         });
 
       const before = await readLayout();
-      expect(before.buttonBottom).toBeNull();
+      const button = page.locator(".chat-scroll-to-bottom");
+      expect(await button.isVisible()).toBe(false);
+      expect(await button.getAttribute("aria-hidden")).toBe("true");
+      expect(await button.evaluate((element: HTMLButtonElement) => element.inert)).toBe(true);
 
       await scrollChatThreadToTop(page);
       await page.getByRole("button", { name: "Scroll to latest" }).waitFor({ timeout: 10_000 });
+      expect(await button.evaluate((element: HTMLButtonElement) => element.inert)).toBe(false);
       const after = await readLayout();
 
       expect(after.threadBottom).toBe(before.threadBottom);

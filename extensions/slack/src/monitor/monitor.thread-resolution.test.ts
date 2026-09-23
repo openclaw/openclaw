@@ -8,7 +8,7 @@ import {
 } from "@slack/web-api";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SlackMessageEvent } from "../types.js";
-import type { SlackIngressTurnLifecycle } from "./ingress.js";
+import type { SlackIngressTurnLifecycle } from "./ingress.types.js";
 import {
   createSlackThreadTsResolver,
   isTransientSlackThreadLookupError,
@@ -116,10 +116,7 @@ describe("createSlackThreadTsResolver", () => {
     "classifies a real WebClient %s platform response as transient",
     async (code) => {
       const fetch = vi.fn(async () => {
-        return new Response(JSON.stringify({ ok: false, error: code }), {
-          headers: { "content-type": "application/json" },
-          status: 200,
-        });
+        return Response.json({ ok: false, error: code });
       });
       const client = new WebClient("xoxb-test", {
         fetch,

@@ -8,8 +8,11 @@ import {
   sendQaBusMessage,
   type QaBusMessage,
 } from "./bus-client.js";
-import { handleQaInbound } from "./inbound.js";
-import { createQaInboundParams, firstRunAssembledParams } from "./inbound.test-harness.js";
+import {
+  createQaInboundParams,
+  firstRunAssembledParams,
+  startQaInbound,
+} from "./inbound.test-harness.js";
 
 vi.mock("./bus-client.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./bus-client.js")>()),
@@ -72,7 +75,7 @@ describe("QA reply preview lifecycle", () => {
 
       const runtime = createPluginRuntimeMock();
       setQaChannelRuntime(runtime);
-      await handleQaInbound(createQaInboundParams());
+      await startQaInbound(runtime, createQaInboundParams());
       const assembled = firstRunAssembledParams(runtime);
       await assembled.replyOptions?.onPartialReply?.({ text: "preview" });
       await assembled.replyOptions?.onToolStart?.({ phase: "start", name: "read" });

@@ -12,7 +12,11 @@ import type {
   ComputerToolAction,
   ScreenshotCapture,
 } from "./computer-tool-shared.js";
-import { COMPUTER_REF_WIDTH, MODEL_OBSERVATION_MAX_ELEMENTS } from "./computer-tool-shared.js";
+import {
+  COMPUTER_REF_WIDTH,
+  MODEL_OBSERVATION_MAX_ELEMENTS,
+  computerTargetDetails,
+} from "./computer-tool-shared.js";
 
 type ModelObservationProjection = NonNullable<ComputerActResult["observation"]> & {
   truncatedElements?: number;
@@ -86,7 +90,7 @@ export function invalidateComputerFrameIfMissing(params: {
   imagesBlocked?: boolean;
 }): boolean {
   const frameToolCallId = params.contextEpoch.frameToolCallId;
-  if (frameToolCallId === undefined) {
+  if (frameToolCallId === undefined || params.imagesBlocked) {
     return invalidateComputerFrame(params.contextEpoch);
   }
 
@@ -105,7 +109,6 @@ export function invalidateComputerFrameIfMissing(params: {
   }
 
   if (
-    !params.imagesBlocked &&
     frameImageIdentity !== undefined &&
     frameImageIdentity === params.contextEpoch.frameImageIdentity
   ) {
@@ -174,7 +177,7 @@ export async function projectScreenshotResult(params: {
   const result = {
     content: [{ type: "text" as const, text }, ...content],
     details: {
-      node: target.nodeId,
+      ...computerTargetDetails(target),
       action: params.action,
       width: dimensions?.width,
       height: dimensions?.height,
@@ -189,6 +192,7 @@ export async function projectScreenshotResult(params: {
 
 export async function projectComputerActResult(params: {
   result: ComputerActResult;
+  precedingAction?: { action: ComputerToolAction; result: ComputerActResult };
   target: ComputerTarget;
   action: ComputerToolAction;
   referenceWidth: number;
@@ -230,14 +234,29 @@ export async function projectComputerActResult(params: {
   return {
     result: {
       content: [
+        ...(params.precedingAction
+          ? [
+              {
+                type: "text" as const,
+                text: computerActResultText(
+                  params.precedingAction.action,
+                  params.precedingAction.result,
+                ),
+              },
+            ]
+          : []),
         { type: "text", text: JSON.stringify({ action: params.action, ...result }) },
         ...content,
       ],
       details: {
-        node: params.target.nodeId,
-        action: params.action,
+        ...computerTargetDetails(params.target),
+        action: params.precedingAction?.action ?? params.action,
         screenIndex: params.target.screenIndex,
-        result,
+        // Keep mutation evidence separate from the read's coordinate space and other metadata.
+        result: params.precedingAction
+          ? projectComputerActResultMetadata(params.precedingAction.result)
+          : result,
+        ...(params.precedingAction ? { followUpObservation: result } : {}),
         media: { outbound: false },
       },
     },

@@ -88,6 +88,35 @@ describe("resolveSlackChannelAllowlist", () => {
     expect(res[0]?.id).toBe("C2");
   });
 
+  it.each([
+    { input: "TEAM:%5411111111:CHANNEL:%4301234567", resolved: true },
+    { input: "team:T11111111:user:U01234567", resolved: false },
+    { input: "team:T11111111:channel:%ZZ", resolved: false },
+    { input: " team:T11111111:channel:C01234567", resolved: false },
+  ])(
+    "keeps qualified target ordering and lookup boundaries for $input",
+    async ({ input, resolved }) => {
+      slackClientMocks.conversationsList.mockResolvedValue({ channels: [] });
+      const first = "team:T22222222:channel:C01234567";
+      const last = "team:T33333333:channel:C01234567";
+
+      const result = await resolveSlackChannelAllowlist({
+        token: "lookup-fixture",
+        entries: [first, input, last],
+      });
+
+      expect(result).toEqual([
+        { input: first, resolved: true, id: first },
+        resolved
+          ? { input, resolved: true, id: "team:T11111111:channel:C01234567" }
+          : { input, resolved: false },
+        { input: last, resolved: true, id: last },
+      ]);
+      expect(slackClientMocks.createSlackLookupClient).toHaveBeenCalledTimes(resolved ? 0 : 1);
+      expect(slackClientMocks.conversationsList).toHaveBeenCalledTimes(resolved ? 0 : 1);
+    },
+  );
+
   it("keeps unresolved entries", async () => {
     const client = {
       conversations: {

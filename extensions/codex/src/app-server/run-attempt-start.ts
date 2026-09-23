@@ -14,25 +14,18 @@ import {
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
 import { joinPresentSections } from "./run-attempt-state.js";
 import { CodexThreadPolicyHandoffError } from "./thread-policy.js";
-import { recordCodexTrajectoryContext } from "./trajectory.js";
 
 export async function startCodexAttemptRuntime(resources: CodexAttemptResources) {
   const {
     prompt,
     state,
     trajectoryRecorder,
-    activateNativePreToolUseFailureFallback,
-    releaseSandboxExecEnvironment,
-    releaseSharedClientLeaseAndRetireOneShotClient,
-    releaseCurrentRoute,
-    runCleanupStep,
     startupTimeoutMs,
     buildNativeHookRelayFinalConfigPatch,
   } = resources;
   const {
     context,
     turnState,
-    buildRenderedCodexDeveloperInstructions,
     rebuildCodexTurnPromptTextFromCurrentProjection,
     applyNoContextEngineContinuityProjection,
   } = prompt;
@@ -122,13 +115,14 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       agentWorkspaceDeveloperInstructions: context.agentWorkspaceDeveloperInstructions,
       buildFinalConfigPatch: buildNativeHookRelayFinalConfigPatch,
       nativeHookRelayRequired:
-        connection.options.nativeHookRelay?.enabled !== false &&
-        params.pluginHarnessToolPolicyRestricted !== true &&
-        connection.nativeHookRelayEvents.includes("pre_tool_use") &&
-        (hasBeforeToolCallPolicy() ||
-          (appServer.loopDetectionPreToolUseRelay &&
-            Boolean(connection.sandboxSessionKey) &&
-            loopDetectionEnabled)),
+        Boolean(resources.nativeProcessAuthority && nativeToolSurfaceEnabled) ||
+        (connection.options.nativeHookRelay?.enabled !== false &&
+          params.pluginHarnessToolPolicyRestricted !== true &&
+          connection.nativeHookRelayEvents.includes("pre_tool_use") &&
+          (hasBeforeToolCallPolicy() ||
+            (appServer.loopDetectionPreToolUseRelay &&
+              Boolean(connection.sandboxSessionKey) &&
+              loopDetectionEnabled))),
       bundleMcpThreadConfig,
       configuredMcpDynamicSurface: attemptTools.configuredMcp !== undefined,
       configuredMcpOwnershipVersion: attemptTools.configuredMcpOwnershipVersion,
@@ -181,10 +175,11 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
     }
     if (state.thread.lifecycle.action === "started" || state.thread.lifecycle.action === "forked") {
       const activePolicy = resolveReviewerPolicyContext(state.thread);
-      const activeConfig = resolveRuntimeOptionsForCurrentBinding({
+      const activeConfig = await resolveRuntimeOptionsForCurrentBinding({
         modelProvider: activePolicy.modelProvider,
         model: activePolicy.model,
       });
+      connection.assertCurrent();
       const activeAppServer = resolveCodexAppServerForModelProvider({
         appServer: activeConfig,
         provider: activePolicy.modelProvider,
@@ -221,7 +216,9 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
         clientId: state.client.getInstanceId(),
       },
     });
-    if (applyNoContextEngineContinuityProjection(state.thread.lifecycle.action, state.thread)) {
+    if (
+      await applyNoContextEngineContinuityProjection(state.thread.lifecycle.action, state.thread)
+    ) {
       await rebuildCodexTurnPromptTextFromCurrentProjection();
     }
     trajectoryRecorder?.recordEvent("session.started", {
@@ -231,33 +228,10 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       workspaceDir: effectiveWorkspace,
       toolCount: flattenCodexDynamicToolFunctions(toolBridge.specs).length,
     });
-    recordCodexTrajectoryContext(trajectoryRecorder, {
-      attempt: params,
-      cwd: effectiveCwd,
-      developerInstructions: joinPresentSections(
-        buildRenderedCodexDeveloperInstructions(),
-        attemptTools.configuredMcp?.diagnosticNotice,
-      ),
-      prompt: turnState.codexTurnPromptText,
-      tools: toolBridge.availableSpecs,
-    });
     connection.mutable.pluginAppServer = pluginAppServer;
+    // Monitor setup still belongs to startup's resource cleanup boundary.
+    await resources.registerNativeSubagentMonitor(state.thread.threadId);
   } catch (error) {
-    await runCleanupStep(
-      "codex-start-failure-hook-fallback",
-      activateNativePreToolUseFailureFallback,
-    );
-    await runCleanupStep("codex-start-failure-route-release", releaseCurrentRoute);
-    const nativeHookRelay = state.nativeHookRelay;
-    state.nativeHookRelay = undefined;
-    await runCleanupStep("codex-start-failure-native-hook-relay", () =>
-      nativeHookRelay?.unregister(),
-    );
-    await runCleanupStep("codex-start-failure-sandbox-release", releaseSandboxExecEnvironment);
-    await runCleanupStep(
-      "codex-start-failure-shared-client-release",
-      releaseSharedClientLeaseAndRetireOneShotClient,
-    );
     throw error instanceof CodexThreadPolicyHandoffError
       ? error
       : (state.executionDisconnectError ?? error);

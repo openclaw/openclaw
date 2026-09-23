@@ -1,6 +1,8 @@
 // Google tests cover video generation provider plugin behavior.
+import type { Video } from "@google/genai";
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { oversizedJsonResponse } from "openclaw/plugin-sdk/test-fixtures";
+import type { VideoGenerationRequest } from "openclaw/plugin-sdk/video-generation";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { createGoogleGenAIMock, downloadMock, generateVideosMock, getVideosOperationMock } =
@@ -36,6 +38,28 @@ vi.mock("./google-genai-runtime.js", () => ({
 import * as providerAuthRuntime from "openclaw/plugin-sdk/provider-auth-runtime";
 import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
 import { buildGoogleVideoGenerationProvider } from "./video-generation-provider.js";
+
+function mockGoogleApiKeyAuth() {
+  vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
+    apiKey: "google-key",
+    source: "env",
+    mode: "api-key",
+  });
+}
+
+function generateVideo(overrides: Partial<VideoGenerationRequest> = {}) {
+  return buildGoogleVideoGenerationProvider().generateVideo({
+    provider: "google",
+    model: "veo-3.1-fast-generate-preview",
+    prompt: "A tiny robot watering a windowsill garden",
+    cfg: {},
+    ...overrides,
+  });
+}
+
+function completedVideo(video: Video, fields: { name?: string } = {}) {
+  return { done: true, ...fields, response: { generatedVideos: [{ video }] } };
+}
 
 type MockWithCalls = {
   mock: { calls: unknown[][] };
@@ -146,32 +170,17 @@ describe("google video generation provider", () => {
   });
 
   it("submits generation and returns inline video bytes", async () => {
-    vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "google-key",
-      source: "env",
-      mode: "api-key",
-    });
-    generateVideosMock.mockResolvedValue({
-      done: true,
-      name: "operations/123",
-      response: {
-        generatedVideos: [
-          {
-            video: {
-              videoBytes: Buffer.from("mp4-bytes").toString("base64"),
-              mimeType: "video/mp4",
-            },
-          },
-        ],
-      },
-    });
-
-    const provider = buildGoogleVideoGenerationProvider();
-    const result = await provider.generateVideo({
-      provider: "google",
-      model: "veo-3.1-fast-generate-preview",
-      prompt: "A tiny robot watering a windowsill garden",
-      cfg: {},
+    mockGoogleApiKeyAuth();
+    generateVideosMock.mockResolvedValue(
+      completedVideo(
+        {
+          videoBytes: Buffer.from("mp4-bytes").toString("base64"),
+          mimeType: "video/mp4",
+        },
+        { name: "operations/123" },
+      ),
+    );
+    const result = await generateVideo({
       aspectRatio: "16:9",
       resolution: "720P",
       durationSeconds: 3,
@@ -198,35 +207,22 @@ describe("google video generation provider", () => {
   });
 
   it("returns inline video bytes encoded with URL-safe base64", async () => {
-    vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "google-key",
-      source: "env",
-      mode: "api-key",
-    });
+    mockGoogleApiKeyAuth();
     const videoBytes = Buffer.from([0xfb, 0xff, 0x6d, 0x70, 0x34]);
     const videoBase64url = videoBytes.toString("base64url");
     expect(videoBase64url).toMatch(/[-_]/);
     expect(videoBase64url).not.toMatch(/[+/]/);
-    generateVideosMock.mockResolvedValue({
-      done: true,
-      name: "operations/123",
-      response: {
-        generatedVideos: [
-          {
-            video: {
-              videoBytes: videoBase64url,
-              mimeType: "video/mp4",
-            },
-          },
-        ],
-      },
-    });
+    generateVideosMock.mockResolvedValue(
+      completedVideo(
+        {
+          videoBytes: videoBase64url,
+          mimeType: "video/mp4",
+        },
+        { name: "operations/123" },
+      ),
+    );
 
-    const result = await buildGoogleVideoGenerationProvider().generateVideo({
-      provider: "google",
-      model: "veo-3.1-fast-generate-preview",
-      prompt: "A tiny robot watering a windowsill garden",
-      cfg: {},
+    const result = await generateVideo({
       durationSeconds: 3,
     });
 
@@ -239,55 +235,26 @@ describe("google video generation provider", () => {
     ["non-canonical pad bits", "ZE=="],
     ["mixed alphabet", "aGVsbG8+_"],
   ])("rejects %s in inline video bytes", async (_scenario, videoBytes) => {
-    vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "google-key",
-      source: "env",
-      mode: "api-key",
-    });
-    generateVideosMock.mockResolvedValue({
-      done: true,
-      response: {
-        generatedVideos: [{ video: { videoBytes, mimeType: "video/mp4" } }],
-      },
-    });
+    mockGoogleApiKeyAuth();
+    generateVideosMock.mockResolvedValue(completedVideo({ videoBytes, mimeType: "video/mp4" }));
 
     await expect(
-      buildGoogleVideoGenerationProvider().generateVideo({
-        provider: "google",
-        model: "veo-3.1-fast-generate-preview",
-        prompt: "A tiny robot watering a windowsill garden",
-        cfg: {},
+      generateVideo({
         durationSeconds: 3,
       }),
     ).rejects.toThrow("Google video generation returned malformed base64 video data");
   });
 
   it("rejects inline video bytes that exceed the configured media cap", async () => {
-    vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "google-key",
-      source: "env",
-      mode: "api-key",
-    });
-    generateVideosMock.mockResolvedValue({
-      done: true,
-      response: {
-        generatedVideos: [
-          {
-            video: {
-              videoBytes: Buffer.from("too-large").toString("base64"),
-              mimeType: "video/mp4",
-            },
-          },
-        ],
-      },
-    });
-
-    const provider = buildGoogleVideoGenerationProvider();
+    mockGoogleApiKeyAuth();
+    generateVideosMock.mockResolvedValue(
+      completedVideo({
+        videoBytes: Buffer.from("too-large").toString("base64"),
+        mimeType: "video/mp4",
+      }),
+    );
     await expect(
-      provider.generateVideo({
-        provider: "google",
-        model: "veo-3.1-fast-generate-preview",
-        prompt: "A tiny robot watering a windowsill garden",
+      generateVideo({
         cfg: { agents: { defaults: { mediaMaxMb: 0.000001 } } },
         durationSeconds: 3,
       }),
@@ -314,23 +281,12 @@ describe("google video generation provider", () => {
       prompt: "test",
     },
   ])("$name", async ({ baseUrl, expectedBaseUrl, prompt }) => {
-    vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "google-key",
-      source: "env",
-      mode: "api-key",
-    });
-    generateVideosMock.mockResolvedValue({
-      done: true,
-      response: {
-        generatedVideos: [
-          { video: { videoBytes: Buffer.from("mp4").toString("base64"), mimeType: "video/mp4" } },
-        ],
-      },
-    });
+    mockGoogleApiKeyAuth();
+    generateVideosMock.mockResolvedValue(
+      completedVideo({ videoBytes: Buffer.from("mp4").toString("base64"), mimeType: "video/mp4" }),
+    );
 
-    await buildGoogleVideoGenerationProvider().generateVideo({
-      provider: "google",
-      model: "veo-3.1-fast-generate-preview",
+    await generateVideo({
       prompt,
       cfg: { models: { providers: { google: { baseUrl, models: [] } } } },
       durationSeconds: 3,
@@ -340,24 +296,13 @@ describe("google video generation provider", () => {
   });
 
   it("downloads MLDev direct video uri responses without routing through the Files API", async () => {
-    vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "google-key",
-      source: "env",
-      mode: "api-key",
-    });
-    generateVideosMock.mockResolvedValue({
-      done: true,
-      response: {
-        generatedVideos: [
-          {
-            video: {
-              uri: "https://generativelanguage.googleapis.com/v1beta/files/generated-video:download?alt=media",
-              mimeType: "video/mp4",
-            },
-          },
-        ],
-      },
-    });
+    mockGoogleApiKeyAuth();
+    generateVideosMock.mockResolvedValue(
+      completedVideo({
+        uri: "https://generativelanguage.googleapis.com/v1beta/files/generated-video:download?alt=media",
+        mimeType: "video/mp4",
+      }),
+    );
     const fetchMock = vi.fn(async () => {
       return new Response("direct-mp4", {
         status: 200,
@@ -366,13 +311,7 @@ describe("google video generation provider", () => {
       });
     });
     vi.stubGlobal("fetch", fetchMock);
-
-    const provider = buildGoogleVideoGenerationProvider();
-    const result = await provider.generateVideo({
-      provider: "google",
-      model: "veo-3.1-fast-generate-preview",
-      prompt: "A tiny robot watering a windowsill garden",
-      cfg: {},
+    const result = await generateVideo({
       durationSeconds: 3,
     });
 
@@ -387,24 +326,13 @@ describe("google video generation provider", () => {
   });
 
   it("rejects direct video uri downloads that exceed the configured media cap", async () => {
-    vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "google-key",
-      source: "env",
-      mode: "api-key",
-    });
-    generateVideosMock.mockResolvedValue({
-      done: true,
-      response: {
-        generatedVideos: [
-          {
-            video: {
-              uri: "https://generativelanguage.googleapis.com/v1beta/files/generated-video:download?alt=media",
-              mimeType: "video/mp4",
-            },
-          },
-        ],
-      },
-    });
+    mockGoogleApiKeyAuth();
+    generateVideosMock.mockResolvedValue(
+      completedVideo({
+        uri: "https://generativelanguage.googleapis.com/v1beta/files/generated-video:download?alt=media",
+        mimeType: "video/mp4",
+      }),
+    );
     vi.stubGlobal(
       "fetch",
       vi.fn(
@@ -416,13 +344,8 @@ describe("google video generation provider", () => {
           }),
       ),
     );
-
-    const provider = buildGoogleVideoGenerationProvider();
     await expect(
-      provider.generateVideo({
-        provider: "google",
-        model: "veo-3.1-fast-generate-preview",
-        prompt: "A tiny robot watering a windowsill garden",
+      generateVideo({
         cfg: { agents: { defaults: { mediaMaxMb: 0.000001 } } },
         durationSeconds: 3,
       }),
@@ -435,24 +358,13 @@ describe("google video generation provider", () => {
     { name: "HTML", contentType: "text/html; charset=utf-8", body: "<html>sign in</html>" },
     { name: "empty video", contentType: "video/mp4", body: "" },
   ])("rejects a successful $name direct video uri response", async ({ contentType, body }) => {
-    vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "google-key",
-      source: "env",
-      mode: "api-key",
-    });
-    generateVideosMock.mockResolvedValue({
-      done: true,
-      response: {
-        generatedVideos: [
-          {
-            video: {
-              uri: "https://generativelanguage.googleapis.com/v1beta/files/generated-video:download?alt=media",
-              mimeType: "video/mp4",
-            },
-          },
-        ],
-      },
-    });
+    mockGoogleApiKeyAuth();
+    generateVideosMock.mockResolvedValue(
+      completedVideo({
+        uri: "https://generativelanguage.googleapis.com/v1beta/files/generated-video:download?alt=media",
+        mimeType: "video/mp4",
+      }),
+    );
     const fetchMock = vi.fn(async () => {
       return new Response(body, {
         status: 200,
@@ -463,35 +375,20 @@ describe("google video generation provider", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(
-      buildGoogleVideoGenerationProvider().generateVideo({
-        provider: "google",
-        model: "veo-3.1-fast-generate-preview",
-        prompt: "A tiny robot watering a windowsill garden",
-        cfg: {},
+      generateVideo({
         durationSeconds: 3,
       }),
     ).rejects.toThrow("Google generated video download: malformed video response");
   });
 
   it("cancels each captured failed video download without waiting for its cloned stream", async () => {
-    vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "google-key",
-      source: "env",
-      mode: "api-key",
-    });
-    generateVideosMock.mockResolvedValue({
-      done: true,
-      response: {
-        generatedVideos: [
-          {
-            video: {
-              uri: "https://generativelanguage.googleapis.com/v1beta/files/generated-video:download?alt=media",
-              mimeType: "video/mp4",
-            },
-          },
-        ],
-      },
-    });
+    mockGoogleApiKeyAuth();
+    generateVideosMock.mockResolvedValue(
+      completedVideo({
+        uri: "https://generativelanguage.googleapis.com/v1beta/files/generated-video:download?alt=media",
+        mimeType: "video/mp4",
+      }),
+    );
 
     const capturedResponses: Response[] = [];
     const canceledBodies: ReadableStream<Uint8Array>[] = [];
@@ -521,11 +418,7 @@ describe("google video generation provider", () => {
 
     try {
       await expect(
-        buildGoogleVideoGenerationProvider().generateVideo({
-          provider: "google",
-          model: "veo-3.1-fast-generate-preview",
-          prompt: "A tiny robot watering a windowsill garden",
-          cfg: {},
+        generateVideo({
           durationSeconds: 3,
         }),
       ).rejects.toThrow("Failed to download Google generated video: 503 Service Unavailable");
@@ -543,35 +436,20 @@ describe("google video generation provider", () => {
   });
 
   it("preserves the video download error when a failed response has no body", async () => {
-    vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "google-key",
-      source: "env",
-      mode: "api-key",
-    });
-    generateVideosMock.mockResolvedValue({
-      done: true,
-      response: {
-        generatedVideos: [
-          {
-            video: {
-              uri: "https://generativelanguage.googleapis.com/v1beta/files/generated-video:download?alt=media",
-              mimeType: "video/mp4",
-            },
-          },
-        ],
-      },
-    });
+    mockGoogleApiKeyAuth();
+    generateVideosMock.mockResolvedValue(
+      completedVideo({
+        uri: "https://generativelanguage.googleapis.com/v1beta/files/generated-video:download?alt=media",
+        mimeType: "video/mp4",
+      }),
+    );
     const fetchMock = vi.fn(
       async () => new Response(null, { status: 503, statusText: "Service Unavailable" }),
     );
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(
-      buildGoogleVideoGenerationProvider().generateVideo({
-        provider: "google",
-        model: "veo-3.1-fast-generate-preview",
-        prompt: "A tiny robot watering a windowsill garden",
-        cfg: {},
+      generateVideo({
         durationSeconds: 3,
       }),
     ).rejects.toThrow("Failed to download Google generated video: 503 Service Unavailable");
@@ -579,24 +457,13 @@ describe("google video generation provider", () => {
   });
 
   it("downloads SDK file handles through the bounded REST media endpoint", async () => {
-    vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "google-key",
-      source: "env",
-      mode: "api-key",
-    });
-    generateVideosMock.mockResolvedValue({
-      done: true,
-      response: {
-        generatedVideos: [
-          {
-            video: {
-              uri: "files/generated-video",
-              mimeType: "video/mp4",
-            },
-          },
-        ],
-      },
-    });
+    mockGoogleApiKeyAuth();
+    generateVideosMock.mockResolvedValue(
+      completedVideo({
+        uri: "files/generated-video",
+        mimeType: "video/mp4",
+      }),
+    );
     const fetchMock = vi.fn(async () => {
       return new Response("sdk-video", {
         status: 200,
@@ -605,13 +472,7 @@ describe("google video generation provider", () => {
       });
     });
     vi.stubGlobal("fetch", fetchMock);
-
-    const provider = buildGoogleVideoGenerationProvider();
-    const result = await provider.generateVideo({
-      provider: "google",
-      model: "veo-3.1-fast-generate-preview",
-      prompt: "A tiny robot watering a windowsill garden",
-      cfg: {},
+    const result = await generateVideo({
       durationSeconds: 3,
     });
 
@@ -624,24 +485,13 @@ describe("google video generation provider", () => {
   });
 
   it("rejects SDK file-handle downloads that exceed the configured media cap", async () => {
-    vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "google-key",
-      source: "env",
-      mode: "api-key",
-    });
-    generateVideosMock.mockResolvedValue({
-      done: true,
-      response: {
-        generatedVideos: [
-          {
-            video: {
-              uri: "files/generated-video",
-              mimeType: "video/mp4",
-            },
-          },
-        ],
-      },
-    });
+    mockGoogleApiKeyAuth();
+    generateVideosMock.mockResolvedValue(
+      completedVideo({
+        uri: "files/generated-video",
+        mimeType: "video/mp4",
+      }),
+    );
     vi.stubGlobal(
       "fetch",
       vi.fn(
@@ -653,13 +503,8 @@ describe("google video generation provider", () => {
           }),
       ),
     );
-
-    const provider = buildGoogleVideoGenerationProvider();
     await expect(
-      provider.generateVideo({
-        provider: "google",
-        model: "veo-3.1-fast-generate-preview",
-        prompt: "A tiny robot watering a windowsill garden",
+      generateVideo({
         cfg: { agents: { defaults: { mediaMaxMb: 0.000001 } } },
         durationSeconds: 3,
       }),
@@ -668,11 +513,7 @@ describe("google video generation provider", () => {
   });
 
   it("falls back to REST predictLongRunning when text-only SDK video generation returns 404", async () => {
-    vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "google-key",
-      source: "env",
-      mode: "api-key",
-    });
+    mockGoogleApiKeyAuth();
     generateVideosMock.mockRejectedValue(Object.assign(new Error("sdk 404"), { status: 404 }));
     const fetchMock = vi
       .fn()
@@ -704,13 +545,8 @@ describe("google video generation provider", () => {
         }),
       );
     vi.stubGlobal("fetch", fetchMock);
-
-    const provider = buildGoogleVideoGenerationProvider();
-    const result = await provider.generateVideo({
-      provider: "google",
+    const result = await generateVideo({
       model: "google/models/veo-3.1-fast-generate-preview",
-      prompt: "A tiny robot watering a windowsill garden",
-      cfg: {},
       durationSeconds: 3,
     });
 
@@ -730,23 +566,13 @@ describe("google video generation provider", () => {
   });
 
   it("bounds successful Google REST operation JSON bodies instead of buffering the whole response", async () => {
-    vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "google-key",
-      source: "env",
-      mode: "api-key",
-    });
+    mockGoogleApiKeyAuth();
     generateVideosMock.mockRejectedValue(Object.assign(new Error("sdk 404"), { status: 404 }));
     const streamed = oversizedJsonResponse({ chunkCount: 64, chunkSize: 1024 * 1024 });
     const fetchMock = vi.fn(async () => streamed.response);
     vi.stubGlobal("fetch", fetchMock);
-
-    const provider = buildGoogleVideoGenerationProvider();
     await expect(
-      provider.generateVideo({
-        provider: "google",
-        model: "veo-3.1-fast-generate-preview",
-        prompt: "A tiny robot watering a windowsill garden",
-        cfg: {},
+      generateVideo({
         durationSeconds: 3,
       }),
     ).rejects.toThrow("Google video operation response: JSON response exceeds 16777216 bytes");
@@ -757,31 +583,19 @@ describe("google video generation provider", () => {
   });
 
   it("reports malformed Google REST operation JSON with a stable provider error", async () => {
-    vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "google-key",
-      source: "env",
-      mode: "api-key",
-    });
+    mockGoogleApiKeyAuth();
     generateVideosMock.mockRejectedValue(Object.assign(new Error("sdk 404"), { status: 404 }));
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("{ nope", { status: 200 })));
 
     await expect(
-      buildGoogleVideoGenerationProvider().generateVideo({
-        provider: "google",
-        model: "veo-3.1-fast-generate-preview",
-        prompt: "A tiny robot watering a windowsill garden",
-        cfg: {},
+      generateVideo({
         durationSeconds: 3,
       }),
     ).rejects.toThrow("Google video operation response: malformed JSON response");
   });
 
   it("rejects invalid UTF-8 in Google REST operation JSON before parsing", async () => {
-    vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "google-key",
-      source: "env",
-      mode: "api-key",
-    });
+    mockGoogleApiKeyAuth();
     generateVideosMock.mockRejectedValue(Object.assign(new Error("sdk 404"), { status: 404 }));
     const invalidUtf8Json = new Uint8Array([
       ...Buffer.from('{"done":true,"name":"operations/'),
@@ -791,11 +605,7 @@ describe("google video generation provider", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(invalidUtf8Json)));
 
     await expect(
-      buildGoogleVideoGenerationProvider().generateVideo({
-        provider: "google",
-        model: "veo-3.1-fast-generate-preview",
-        prompt: "A tiny robot watering a windowsill garden",
-        cfg: {},
+      generateVideo({
         durationSeconds: 3,
       }),
     ).rejects.toThrow("Google video operation response: malformed JSON response");
@@ -803,11 +613,7 @@ describe("google video generation provider", () => {
 
   it("retries transient Google REST poll failures with empty bodies", async () => {
     vi.useFakeTimers();
-    vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "google-key",
-      source: "env",
-      mode: "api-key",
-    });
+    mockGoogleApiKeyAuth();
     generateVideosMock.mockRejectedValue(Object.assign(new Error("sdk 404"), { status: 404 }));
     const fetchMock = vi
       .fn()
@@ -848,13 +654,7 @@ describe("google video generation provider", () => {
         }),
       );
     vi.stubGlobal("fetch", fetchMock);
-
-    const provider = buildGoogleVideoGenerationProvider();
-    const resultPromise = provider.generateVideo({
-      provider: "google",
-      model: "veo-3.1-fast-generate-preview",
-      prompt: "A tiny robot watering a windowsill garden",
-      cfg: {},
+    const resultPromise = generateVideo({
       durationSeconds: 3,
     });
     await vi.advanceTimersByTimeAsync(10_250);
@@ -871,22 +671,13 @@ describe("google video generation provider", () => {
   });
 
   it("does not fall back to REST when SDK video generation with reference inputs returns 404", async () => {
-    vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "google-key",
-      source: "env",
-      mode: "api-key",
-    });
+    mockGoogleApiKeyAuth();
     generateVideosMock.mockRejectedValue(Object.assign(new Error("sdk 404"), { status: 404 }));
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
-
-    const provider = buildGoogleVideoGenerationProvider();
     await expect(
-      provider.generateVideo({
-        provider: "google",
-        model: "veo-3.1-fast-generate-preview",
+      generateVideo({
         prompt: "Animate this sketch",
-        cfg: {},
         inputImages: [{ buffer: Buffer.from("img"), mimeType: "image/png" }],
       }),
     ).rejects.toThrow("sdk 404");
@@ -895,19 +686,11 @@ describe("google video generation provider", () => {
   });
 
   it("rejects mixed image and video inputs", async () => {
-    vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "google-key",
-      source: "env",
-      mode: "api-key",
-    });
-    const provider = buildGoogleVideoGenerationProvider();
+    mockGoogleApiKeyAuth();
 
     await expect(
-      provider.generateVideo({
-        provider: "google",
-        model: "veo-3.1-fast-generate-preview",
+      generateVideo({
         prompt: "Animate",
-        cfg: {},
         inputImages: [{ buffer: Buffer.from("img"), mimeType: "image/png" }],
         inputVideos: [{ buffer: Buffer.from("vid"), mimeType: "video/mp4" }],
       }),
@@ -915,31 +698,14 @@ describe("google video generation provider", () => {
   });
 
   it("rounds unsupported durations to the nearest Veo value", async () => {
-    vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "google-key",
-      source: "env",
-      mode: "api-key",
-    });
-    generateVideosMock.mockResolvedValue({
-      done: true,
-      response: {
-        generatedVideos: [
-          {
-            video: {
-              videoBytes: Buffer.from("mp4-bytes").toString("base64"),
-              mimeType: "video/mp4",
-            },
-          },
-        ],
-      },
-    });
-
-    const provider = buildGoogleVideoGenerationProvider();
-    await provider.generateVideo({
-      provider: "google",
-      model: "veo-3.1-fast-generate-preview",
-      prompt: "A tiny robot watering a windowsill garden",
-      cfg: {},
+    mockGoogleApiKeyAuth();
+    generateVideosMock.mockResolvedValue(
+      completedVideo({
+        videoBytes: Buffer.from("mp4-bytes").toString("base64"),
+        mimeType: "video/mp4",
+      }),
+    );
+    await generateVideo({
       durationSeconds: 5,
     });
 

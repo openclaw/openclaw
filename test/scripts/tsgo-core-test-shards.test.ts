@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 import ts from "typescript";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  findOversizedTsgoCoreTestShards,
   findTsgoCoreTestShardViolations,
   selectChangedTsgoCoreTestShards,
   TSGO_CORE_GRAPHS,
@@ -14,9 +15,88 @@ import {
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import { isProcessAlive, waitForPidFile } from "../helpers/process-wait.js";
 import { runNodeScript } from "../helpers/run-node-script.js";
-import { materializeNativeCompiler } from "./native-boundary-fixture.js";
+import {
+  materializeNativeCompiler,
+  overrideNativeFixtureExecutable,
+} from "./native-boundary-fixture.js";
 
 describe("tsgo core test shards", () => {
+  it("covers the repository test roots exactly once", () => {
+    const roots = (config: string) => {
+      const parsed = ts.getParsedCommandLineOfConfigFile(
+        path.resolve(config),
+        {},
+        {
+          ...ts.sys,
+          onUnRecoverableConfigFileDiagnostic: (diagnostic) => {
+            throw new Error(ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n"));
+          },
+        },
+      );
+      if (!parsed) {
+        throw new Error(`Could not parse ${config}`);
+      }
+      expect(parsed.errors, config).toEqual([]);
+      expect(parsed.projectReferences ?? [], config).toEqual([]);
+      return parsed.fileNames
+        .filter((file) => /\.test\.tsx?$/u.test(file))
+        .map((file) => path.relative(process.cwd(), file).replaceAll(path.sep, "/"));
+    };
+
+    const shards = TSGO_CORE_TEST_SHARDS.map((shard) => ({
+      name: shard.name,
+      roots: roots(shard.config),
+    }));
+    expect(
+      findTsgoCoreTestShardViolations({
+        canonicalRoots: roots("test/tsconfig/tsconfig.core.test.json"),
+        shards,
+      }),
+    ).toEqual([]);
+    // Shard size is advisory: warn so a rebalance gets scheduled, never block a PR on it.
+    for (const warning of findOversizedTsgoCoreTestShards({ shards })) {
+      console.warn(`[tsgo-core-test-shards] warning: ${warning}`);
+    }
+    for (const [file, owner] of [
+      ["src/agents/sessions/settings-storage.test.ts", "agents-sessions"],
+      ["ui/src/pages/chat/chat-send-submit.test.ts", "ui-chat"],
+      ["ui/src/pages/config/config-page.test.ts", "ui-pages"],
+      ["src/gateway/server-methods/update-owner.test.ts", "gateway-methods"],
+      ["src/gateway/talk/client-authority.test.ts", "gateway-other"],
+      ["src/gateway/worker-environments/service.plugin-create.test.ts", "gateway-other"],
+      ["src/gateway/server-methods/environments.test.ts", "gateway-methods"],
+      ["src/commands/doctor-session-worktree-workspace.test.ts", "commands-doctor"],
+      ["src/commands/doctor/repair-sequencing.test.ts", "commands-doctor"],
+      ["src/commands/oauth-tls-preflight.doctor.test.ts", "commands-doctor"],
+      ["src/commands/onboard-agent.test.ts", "commands"],
+      ["src/agents/command/session-store.test.ts", "commands"],
+      ["src/cli/program/build-program.test.ts", "commands"],
+      ["src/cli/program/register.agent.test.ts", "commands"],
+      ["src/tui/tui-plugin-approvals.test.ts", "commands"],
+      ["src/wizard/setup.test.ts", "commands"],
+      ["src/cli/cron-cli.test.ts", "services-cron"],
+      ["src/cli/cron-output.process.test.ts", "services-cron"],
+      ["src/cli/cron-cli/register.cron-edit.test.ts", "services-cron"],
+      ["src/cron/service/run-recovery.observation.test.ts", "services-cron"],
+      ["src/cli/program/command-registry.test.ts", "commands"],
+      ["src/cli/update-cli.test.ts", "cli-update"],
+      ["src/cli/update-cli/update-command-config-fence.test.ts", "cli-update"],
+      ["src/gateway/worker-environments/admission.test.ts", "gateway-other"],
+      ["src/gateway/worker-environments/computer-transport.test.ts", "gateway-other"],
+      ["src/gateway/server-plugin-reload.recovery.test.ts", "gateway-server"],
+      ["src/gateway/server-methods/plugins.decisions.test.ts", "gateway-methods"],
+      ["src/plugins/loader.native-module-loader.test.ts", "plugins-platform"],
+      ["src/acp/session-new-ordering.test.ts", "plugins-platform"],
+      ["src/system-agent/operations.test.ts", "services"],
+      ["src/system-agent/operations.gateway-lifecycle.test.ts", "services"],
+    ] as const) {
+      expect(
+        shards.filter((shard) => shard.roots.includes(file)).map((shard) => shard.name),
+        file,
+      ).toEqual([owner]);
+    }
+  });
+
   it("stripes partition the full shard list exactly once", () => {
     for (const stripeCount of [1, 2, 3, 5]) {
       const striped = Array.from(
@@ -36,13 +116,25 @@ describe("tsgo core test shards", () => {
     expect(selectTsgoCoreTestStripe("0/2")).toBeUndefined();
     expect(selectTsgoCoreTestStripe("3/2")).toBeUndefined();
     expect(selectTsgoCoreTestStripe("src")).toBeUndefined();
+    expect(selectTsgoCoreTestStripe("2-1/5")).toBeUndefined();
+    expect(selectTsgoCoreTestStripe("1-6/5")).toBeUndefined();
+    const paired = ["1-2/5", "3-4/5", "5/5"].flatMap(
+      (stripe) => selectTsgoCoreTestStripe(stripe) ?? [],
+    );
+    expect(paired.map((shard) => shard.name).toSorted()).toEqual(
+      TSGO_CORE_TEST_SHARDS.map((shard) => shard.name).toSorted(),
+    );
+    expect(selectTsgoCoreTestStripe("1-2/5")).toEqual(
+      TSGO_CORE_TEST_SHARDS.filter((shard) =>
+        ["1/5", "2/5"].some((stripe) => selectTsgoCoreTestStripe(stripe)?.includes(shard)),
+      ),
+    );
   });
 
-  it("accepts an exact once-only partition within the root budget", () => {
+  it("accepts an exact once-only partition", () => {
     expect(
       findTsgoCoreTestShardViolations({
         canonicalRoots: ["src/a.test.ts", "src/b.test.ts"],
-        maxRoots: 1,
         shards: [
           { name: "a", roots: ["src/a.test.ts"] },
           { name: "b", roots: ["src/b.test.ts"] },
@@ -51,19 +143,32 @@ describe("tsgo core test shards", () => {
     ).toEqual([]);
   });
 
-  it("reports missing, duplicate, extra, and oversized shard roots", () => {
+  it("warns about oversized shards without treating them as violations", () => {
+    const shards = [
+      { name: "big", roots: ["src/a.test.ts", "src/b.test.ts"] },
+      { name: "small", roots: ["src/c.test.ts"] },
+    ];
+    expect(findOversizedTsgoCoreTestShards({ maxRoots: 1, shards })).toEqual([
+      "big: 2 test roots exceeds the advisory 1 limit; rebalance when convenient",
+    ]);
+    expect(
+      findTsgoCoreTestShardViolations({
+        canonicalRoots: ["src/a.test.ts", "src/b.test.ts", "src/c.test.ts"],
+        shards,
+      }),
+    ).toEqual([]);
+  });
+
+  it("reports missing, duplicate, and extra shard roots", () => {
     expect(
       findTsgoCoreTestShardViolations({
         canonicalRoots: ["src/a.test.ts", "src/b.test.ts", "src/missing.test.ts"],
-        maxRoots: 1,
         shards: [
           { name: "first", roots: ["src/a.test.ts", "src/b.test.ts"] },
           { name: "second", roots: ["src/b.test.ts", "src/extra.test.ts"] },
         ],
       }),
     ).toEqual([
-      "first: 2 test roots exceeds the 1 limit",
-      "second: 2 test roots exceeds the 1 limit",
       "assigned 2 times (first, second): src/b.test.ts",
       "unassigned: src/missing.test.ts",
       "not in the canonical core-test graph (second): src/extra.test.ts",
@@ -279,6 +384,7 @@ it.runIf(process.platform !== "win32")(
               noEmit: true,
               strict: true,
               types: [],
+              lib: ["es5"],
               module: "nodenext",
               target: "es2022",
               incremental: true,
@@ -300,6 +406,7 @@ process.exit(result.status??1);
 `,
       );
       fs.chmodSync(compiler, 0o755);
+      overrideNativeFixtureExecutable(root, compiler);
       const driver = path.join(root, "scripts/run-tsgo-core-test-shards.mts");
       const changedArgs = (paths: string[]) => ["--changed-paths-json", JSON.stringify(paths)];
       const check = async (paths = [leaf]) => {
@@ -325,9 +432,10 @@ process.exit(result.status??1);
         expect(calls.filter((args) => args.includes("--listFilesOnly"))).toHaveLength(
           TSGO_CORE_GRAPHS.length,
         );
+        // Discovery and diagnostic checks both use project mode.
         const builds = calls
-          .filter((args) => args.includes("-b"))
-          .map((args) => args[args.indexOf("-b") + 1]);
+          .filter((args) => !args.includes("--listFilesOnly") && !args.includes("--showConfig"))
+          .map((args) => args[args.indexOf("-p") + 1]);
         return { result, builds };
       };
       const initial = await check();

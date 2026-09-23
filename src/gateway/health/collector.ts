@@ -4,7 +4,10 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { listAgentEntries } from "../../agents/agent-scope.js";
 import { redactChannelStatusSummaryBaseUrl } from "../../channels/account-snapshot-fields.js";
-import { buildChannelAccountSnapshotFromInspection } from "../../channels/account-summary.js";
+import {
+  buildChannelAccountSnapshotFromInspection,
+  buildChannelAccountSnapshotFromRuntime,
+} from "../../channels/account-summary.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
 import { buildChannelAccountSnapshotFromAccount } from "../../channels/plugins/status.js";
@@ -30,6 +33,7 @@ import { listPluginServiceHealthFailures } from "../../plugins/service-health.js
 import { buildChannelAccountBindings, resolvePreferredAccountId } from "../../routing/bindings.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
+import { createPermitPool } from "../../shared/permit-pool.js";
 import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../../utils/absolute-deadline.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import {
@@ -39,9 +43,13 @@ import {
 } from "../channel-health-policy.js";
 import type { GatewayHotReloadStatus } from "../config-reload-status.types.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
+import type { SessionRowProjection } from "../session-row-projection.js";
 import { buildNonSensitiveProbeFailure, resolveHealthAccountContext } from "./account-context.js";
 import { buildContextEngineHealthSummary } from "./context-engine.js";
-import { buildDeliveryQueueHealthSummary } from "./delivery-queue.js";
+import {
+  buildDeliveryQueueHealthSummary,
+  captureDeliveryQueueHealthContext,
+} from "./delivery-queue.js";
 import type {
   AgentHealthSummary,
   ChannelAccountHealthSummary,
@@ -97,21 +105,24 @@ export function resolveHealthAgentOrder(cfg: OpenClawConfig) {
   return { defaultAgentId, ordered };
 }
 
-async function createHealthSessionStoreReader(agentIds: readonly string[]) {
+async function createHealthSessionStoreReader(
+  agentIds: readonly string[],
+  projection?: SessionRowProjection,
+) {
   const { createStatusSessionStoreReader } = await import("../../status/session-stores.js");
   const { readSessionStoreSummaryReadOnly } =
     await import("../../config/sessions/session-accessor.js");
   const { isTransientSqliteError } = await import("../../infra/unhandled-rejections.js");
-  return createStatusSessionStoreReader(agentIds, HEALTH_RECENT_SESSION_LIMIT, (scope, options) => {
-    try {
-      return readSessionStoreSummaryReadOnly(scope, options);
-    } catch (error) {
+  return createStatusSessionStoreReader(agentIds, HEALTH_RECENT_SESSION_LIMIT, {
+    projection,
+    readSummary: readSessionStoreSummaryReadOnly,
+    recoverReadError(error) {
       if (!isTransientSqliteError(error)) {
         throw error;
       }
       // Health is best-effort: one empty snapshot beats repeated transient lock failures.
       return { count: 0, recent: [], byAgent: new Map() };
-    }
+    },
   });
 }
 
@@ -131,9 +142,13 @@ function projectHealthSessions(
   } satisfies HealthSummary["sessions"];
 }
 
-async function buildHealthSessionSummary(storePath: string, agentId?: string) {
-  const reader = await createHealthSessionStoreReader(agentId ? [agentId] : []);
-  const store = reader.read(storePath, agentId);
+async function buildHealthSessionSummary(
+  storePath: string,
+  agentId?: string,
+  projection?: SessionRowProjection,
+) {
+  const reader = await createHealthSessionStoreReader(agentId ? [agentId] : [], projection);
+  const store = await reader.read(storePath, agentId);
   return projectHealthSessions(store.path, store);
 }
 
@@ -141,25 +156,28 @@ async function buildHealthSessionSummary(storePath: string, agentId?: string) {
 export async function buildHealthAgentSummaries(
   cfg: OpenClawConfig,
   { defaultAgentId, ordered }: ReturnType<typeof resolveHealthAgentOrder>,
+  projection?: SessionRowProjection,
 ): Promise<AgentHealthSummary[]> {
   const agentIds = ordered.map((entry) => entry.id);
-  const reader = await createHealthSessionStoreReader(agentIds);
+  const reader = await createHealthSessionStoreReader(agentIds, projection);
   // One roster pass for every agent: per-agent resolution re-walks the roster
   // and froze large fleets for tens of seconds each refresh (#137570).
   const heartbeats = resolveHeartbeatSummariesForAgents(cfg, agentIds);
-  return ordered.map((entry, index) => {
-    const store = reader.read(
+  const agents: AgentHealthSummary[] = [];
+  for (const [index, entry] of ordered.entries()) {
+    const store = await reader.read(
       resolveSessionStorePathCore(cfg.session?.store, { agentId: entry.id }),
       entry.id,
     );
-    return {
+    agents.push({
       agentId: entry.id,
       name: entry.name,
       isDefault: entry.id === defaultAgentId,
       heartbeat: expectDefined(heartbeats[index], "heartbeat summary"),
       sessions: projectHealthSessions(store.path, store),
-    };
-  });
+    });
+  }
+  return agents;
 }
 
 function buildPluginHealthSummary(cfg: OpenClawConfig): PluginHealthSummary | undefined {
@@ -239,94 +257,13 @@ type HealthChannelPlan = {
   defaultAccountId: string;
   preferredAccountId: string;
   accountIds: string[];
+  configuredAccountIds: ReadonlySet<string>;
   accountSummaries: Record<string, ChannelAccountHealthSummary>;
-};
-
-type HealthOperationRelease = () => void;
-type HealthOperationWaiter = {
-  deadlineAtMs: number;
-  resolve: (release: HealthOperationRelease | null) => void;
-  timer: ReturnType<typeof setTimeout>;
-  settled: boolean;
 };
 
 // Permits outlive response deadlines so an unfinished plugin hook cannot be
 // replaced by later health refreshes and amplify process-wide probe work.
-let activeHealthOperations = 0;
-const healthOperationWaiters: HealthOperationWaiter[] = [];
-
-function settleHealthOperationWaiter(
-  waiter: HealthOperationWaiter,
-  release: HealthOperationRelease | null,
-): void {
-  if (waiter.settled) {
-    return;
-  }
-  waiter.settled = true;
-  clearTimeout(waiter.timer);
-  waiter.resolve(release);
-}
-
-function releaseNextHealthOperationWaiter(): void {
-  while (healthOperationWaiters.length > 0) {
-    const waiter = healthOperationWaiters.shift();
-    if (!waiter || waiter.settled) {
-      continue;
-    }
-    if (Date.now() >= waiter.deadlineAtMs) {
-      settleHealthOperationWaiter(waiter, null);
-      continue;
-    }
-    settleHealthOperationWaiter(waiter, createHealthOperationRelease());
-    return;
-  }
-}
-
-function createHealthOperationRelease(): HealthOperationRelease {
-  activeHealthOperations += 1;
-  let released = false;
-  return () => {
-    if (released) {
-      return;
-    }
-    released = true;
-    activeHealthOperations -= 1;
-    releaseNextHealthOperationWaiter();
-  };
-}
-
-async function acquireHealthOperationPermit(
-  deadlineAtMs: number,
-): Promise<HealthOperationRelease | null> {
-  if (Date.now() >= deadlineAtMs) {
-    return null;
-  }
-  if (activeHealthOperations < HEALTH_PROBE_CONCURRENCY) {
-    return createHealthOperationRelease();
-  }
-
-  return await new Promise<HealthOperationRelease | null>((resolve) => {
-    const waiter: HealthOperationWaiter = {
-      deadlineAtMs,
-      resolve,
-      timer: setTimeout(
-        () => {
-          const index = healthOperationWaiters.indexOf(waiter);
-          if (index >= 0) {
-            healthOperationWaiters.splice(index, 1);
-          }
-          settleHealthOperationWaiter(waiter, null);
-        },
-        Math.max(1, deadlineAtMs - Date.now()),
-      ),
-      settled: false,
-    };
-    if (typeof waiter.timer === "object" && "unref" in waiter.timer) {
-      waiter.timer.unref();
-    }
-    healthOperationWaiters.push(waiter);
-  });
-}
+const healthOperationPermits = createPermitPool(HEALTH_PROBE_CONCURRENCY);
 
 function buildHealthTimeoutRecord(
   accountId: string,
@@ -354,13 +291,34 @@ async function buildHealthAccountRecord(params: {
   deadlineAtMs: number;
   timeoutMs: number;
   runtimeSnapshot?: ChannelRuntimeSnapshot;
+  runtimeOnly: boolean;
 }): Promise<ChannelAccountHealthSummary> {
   const timedOut = () => buildHealthTimeoutRecord(params.accountId, params.timeoutMs);
+  const runtimeAccount =
+    params.runtimeSnapshot?.channelAccounts[params.plugin.id]?.[params.accountId];
   const runtimeSnapshot =
-    params.runtimeSnapshot?.channelAccounts[params.plugin.id]?.[params.accountId] ??
+    runtimeAccount ??
     (params.accountId === params.defaultAccountId
       ? params.runtimeSnapshot?.channels[params.plugin.id]
       : undefined);
+  if (params.runtimeOnly && runtimeAccount) {
+    const snapshot = buildChannelAccountSnapshotFromRuntime(runtimeAccount);
+    const unavailable = resolveUnavailableChannelAccountSnapshot(params.cfg, {
+      channelId: params.plugin.id,
+      accountId: params.accountId,
+      runtime: snapshot,
+    });
+    if (unavailable) {
+      return unavailable;
+    }
+    const healthState = resolveChannelHealthState(snapshot, {
+      channelId: params.plugin.id,
+      now: Date.now(),
+      staleEventThresholdMs: DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
+      channelConnectGraceMs: DEFAULT_CHANNEL_CONNECT_GRACE_MS,
+    });
+    return { ...snapshot, ...(healthState !== undefined ? { healthState } : {}) };
+  }
   const unavailable = resolveUnavailableChannelAccountSnapshot(params.cfg, {
     channelId: params.plugin.id,
     accountId: params.accountId,
@@ -509,7 +467,7 @@ async function runHealthAccountWithinDeadline(
 ): Promise<ChannelAccountHealthSummary> {
   // Own permit admission and release too: neither a deadline nor shutdown may orphan a hook.
   const operation = trackAsyncWork(async () => {
-    const release = await acquireHealthOperationPermit(params.deadlineAtMs);
+    const release = await healthOperationPermits.acquire({ deadlineAtMs: params.deadlineAtMs });
     if (!release) {
       return buildHealthTimeoutRecord(params.accountId, params.timeoutMs);
     }
@@ -533,7 +491,9 @@ export async function collectGatewayHealthSnapshot(params: {
   runtimeSnapshot?: ChannelRuntimeSnapshot;
   eventLoop?: HealthSummary["eventLoop"];
   configReloadHotReloadStatus?: GatewayHotReloadStatus;
+  sessionRowProjection?: SessionRowProjection;
 }): Promise<HealthSummary> {
+  const stateContext = captureDeliveryQueueHealthContext();
   const start = Date.now();
   const timeoutMs = Math.min(
     resolveTimerTimeoutMs(params.timeoutMs, HEALTH_COLLECTION_TIMEOUT_MS, 50),
@@ -543,7 +503,11 @@ export async function collectGatewayHealthSnapshot(params: {
   const cfg = await readRuntimeHealthConfig();
   const { defaultAgentId, ordered } = resolveHealthAgentOrder(cfg);
   const channelBindings = buildChannelAccountBindings(cfg);
-  const agents = await buildHealthAgentSummaries(cfg, { defaultAgentId, ordered });
+  const agents = await buildHealthAgentSummaries(
+    cfg,
+    { defaultAgentId, ordered },
+    params.sessionRowProjection,
+  );
   const summaryAgent = agents.find((agent) => agent.isDefault) ?? agents[0];
   const configuredHeartbeatAgentId = normalizeOptionalString(
     cfg.agents?.defaults?.heartbeat?.agentId,
@@ -566,6 +530,7 @@ export async function collectGatewayHealthSnapshot(params: {
     (await buildHealthSessionSummary(
       resolveSessionStorePathCore(cfg.session?.store, { agentId: summaryAgent?.agentId }),
       summaryAgent?.agentId,
+      params.sessionRowProjection,
     ));
 
   const includeSensitive = params.audience === "admin";
@@ -599,9 +564,13 @@ export async function collectGatewayHealthSnapshot(params: {
     );
     const accountIdsToProbe = Array.from(
       new Set(
-        [preferredAccountId, defaultAccountId, ...accountIds, ...boundAccountIdsAll].filter(
-          (value) => value && value.trim(),
-        ),
+        [
+          preferredAccountId,
+          defaultAccountId,
+          ...accountIds,
+          ...boundAccountIdsAll,
+          ...Object.keys(params.runtimeSnapshot?.channelAccounts[plugin.id] ?? {}),
+        ].filter((value) => value && value.trim()),
       ),
     );
     // Probe preferred/default/bound accounts first, but include all configured
@@ -619,6 +588,7 @@ export async function collectGatewayHealthSnapshot(params: {
       defaultAccountId,
       preferredAccountId,
       accountIds: accountIdsToProbe,
+      configuredAccountIds: new Set(accountIds),
       accountSummaries: {},
     };
   });
@@ -639,6 +609,7 @@ export async function collectGatewayHealthSnapshot(params: {
         deadlineAtMs,
         timeoutMs,
         runtimeSnapshot: params.runtimeSnapshot,
+        runtimeOnly: !plan.configuredAccountIds.has(accountId),
       }),
     })),
     limit: params.probe ? HEALTH_PROBE_CONCURRENCY : 1,
@@ -673,7 +644,7 @@ export async function collectGatewayHealthSnapshot(params: {
 
   const pluginHealth = buildPluginHealthSummary(cfg);
   const contextEngineHealth = buildContextEngineHealthSummary();
-  const deliveryQueueHealth = buildDeliveryQueueHealthSummary();
+  const deliveryQueueHealth = await buildDeliveryQueueHealthSummary(undefined, stateContext);
   return {
     ok: true,
     ts: Date.now(),

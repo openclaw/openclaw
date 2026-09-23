@@ -189,7 +189,7 @@ async function readNativeConfig(startOptions: CodexAppServerStartOptions, env: N
     });
   } finally {
     lines.close();
-    expect(await closeCodexAppServerTransportAndWait(child)).toBe(true);
+    expect(await closeCodexAppServerTransportAndWait(child)).toMatchObject({ exited: true });
     await closed;
   }
 }
@@ -202,6 +202,10 @@ describe("Codex stdio effective configuration", () => {
     await withTempDir("openclaw-codex-config-", async (dir) => {
       const root = await fs.realpath(dir);
       const { command, launcher, cwd, codexHome, env } = await createCodexNativeTestState(root);
+      if (testCase.managed) {
+        // Exercise the real package launcher without any alternate Node on PATH.
+        env.PATH = path.join(root, "no-path-executables");
+      }
       // No auth, inference, model discovery, or operator-home access is needed.
       await fs.writeFile(
         path.join(codexHome, "config.toml"),

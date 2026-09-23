@@ -562,9 +562,11 @@ describe("external plugin local dist build", () => {
         `
         import { pathToFileURL } from "node:url";
         const { default: configs } = await import(pathToFileURL(process.argv[1]).href);
-        const entry = configs.find((config) => config.name === "openclaw-unified").entry;
+        const entries = configs
+          .filter((config) => config.name === "openclaw-unified")
+          .flatMap((config) => Object.keys(config.entry));
         const ids = new Set(JSON.parse(process.argv[2]));
-        console.log(JSON.stringify(Object.keys(entry).filter((key) =>
+        console.log(JSON.stringify(entries.filter((key) =>
           key.startsWith("extensions/") && ids.has(key.split("/")[1])).sort()));
       `,
         path.resolve("tsdown.config.ts"),

@@ -136,6 +136,8 @@ function retargetBrowserHandoffUrl(
   const visible = new URL(links.httpUrl);
   const fragment = new URLSearchParams(issued.hash.slice(1));
   fragment.set("gatewayUrl", links.wsUrl);
+  visible.pathname = issued.pathname;
+  visible.search = issued.search;
   visible.hash = fragment.toString();
   return visible.toString();
 }
@@ -225,6 +227,7 @@ export async function runBrowserHatchHandoff(
     config: OpenClawConfig;
     prompter: WizardPrompter;
     suppressTokenOutput?: boolean;
+    agentId?: string;
   },
   deps: BrowserHatchHandoffDeps = {},
 ): Promise<BrowserHatchHandoffResult> {
@@ -274,7 +277,24 @@ export async function runBrowserHatchHandoff(
     const browserHandoff = await (deps.issueBrowserHandoff ?? issueControlUiBrowserHandoff)(
       target.links,
     );
-    browserUrl = browserHandoff.browserUrl;
+    const url = new URL(browserHandoff.browserUrl);
+    const [{ resolveConfiguredSetupModelForAgent }, { resolveSystemAgentOnboardingTarget }] =
+      await Promise.all([
+        import("../agents/utility-model.js"),
+        import("./onboard-agent-target.js"),
+      ]);
+    const setupOnly =
+      resolveConfiguredSetupModelForAgent({
+        cfg: params.config,
+        agentId: params.agentId ?? resolveSystemAgentOnboardingTarget(params.config).agentId,
+      })?.modelTarget === "utility";
+    if (setupOnly) {
+      url.pathname = `${url.pathname.replace(/\/$/, "")}/custodian`;
+      url.searchParams.set("onboarding", "1");
+    } else if (params.agentId) {
+      url.searchParams.set("session", `agent:${params.agentId}:main`);
+    }
+    browserUrl = url.toString();
   } catch {
     return { handedOff: false, reason: "target-unavailable" };
   }

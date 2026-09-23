@@ -2,6 +2,7 @@ import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "ope
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { isSilentReplyPayloadText } from "openclaw/plugin-sdk/reply-chunking";
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { readCodexAsyncQuestions, type CodexAsyncQuestion } from "./async-questions.js";
 import {
   createAssistantAsyncMessage as buildAssistantAsyncMessage,
   createAssistantCommentaryMessage as buildAssistantCommentaryMessage,
@@ -22,6 +23,7 @@ export class CodexAssistantProjection {
   private readonly assistantTimestampByItem = new Map<string, number>();
   private readonly assistantPhaseByItem = new Map<string, string>();
   private readonly assistantDeliveryByItem = new Map<string, string>();
+  private readonly assistantQuestionsByItem = new Map<string, CodexAsyncQuestion[]>();
   private latestTerminalAssistantCandidateItemId: string | undefined;
   private latestTerminalAssistantCandidateSuperseded = false;
   private terminalAssistantCandidateEarlierActiveItemIds = new Set<string>();
@@ -139,7 +141,10 @@ export class CodexAssistantProjection {
     }
   }
 
-  recordItemStarted(item: CodexThreadItem | undefined, itemId: string | undefined): void {
+  async recordItemStarted(
+    item: CodexThreadItem | undefined,
+    itemId: string | undefined,
+  ): Promise<void> {
     this.noteNativeWorkBarrier(item);
     this.rememberAssistantPhase(item);
     if (
@@ -164,6 +169,15 @@ export class CodexAssistantProjection {
       if (this.latestTerminalAssistantCandidateSuperseded) {
         this.pendingRawTerminalAssistantEchoItemId = undefined;
       }
+    }
+    if (
+      item?.type === "agentMessage" &&
+      itemId &&
+      item.text &&
+      !this.assistantTextByItem.has(itemId)
+    ) {
+      // Codex may seed visible text in item/started before sending further deltas.
+      await this.handleAssistantDelta({ itemId, delta: item.text });
     }
   }
 
@@ -199,7 +213,7 @@ export class CodexAssistantProjection {
     if (item?.type === "agentMessage" && typeof item.text === "string") {
       this.rememberAssistantItem(item.id);
       this.assistantTextByItem.set(item.id, item.text);
-      if (item.text && this.isCommentaryAssistantItem(item.id)) {
+      if (this.isCommentaryAssistantItem(item.id)) {
         this.emitCommentaryProgress({ itemId: item.id, text: item.text, phase: "end" });
         this.pendingRawCommentaryEchoes += 1;
       } else if (
@@ -253,18 +267,12 @@ export class CodexAssistantProjection {
       this.pendingRawCommentaryEchoes -= 1;
       return;
     }
-    const text = extractRawAssistantText(item);
     if (isPendingTerminalAssistantEcho) {
-      const typedItemId = pendingTerminalAssistantEchoItemId;
       this.pendingRawTerminalAssistantEchoItemId = undefined;
-      // Contributors may rewrite the typed completion without rewriting its raw echo.
-      if (this.assistantTextByItem.get(typedItemId)?.trim() || !text) {
-        return;
-      }
-      this.rememberAssistantItem(typedItemId);
-      this.assistantTextByItem.set(typedItemId, text);
+      // Contributors may rewrite or erase typed text without changing its raw echo.
       return;
     }
+    const text = extractRawAssistantText(item);
     if (
       text === undefined ||
       (!text &&
@@ -348,20 +356,8 @@ export class CodexAssistantProjection {
 
   collectAsyncMessages(): Array<{ itemId: string; message: AssistantMessage }> {
     return this.assistantItemOrder.flatMap((itemId) => {
-      if (!this.isAsyncAssistantItem(itemId)) {
-        return [];
-      }
-      const text = this.assistantTextByItem.get(itemId)?.trim();
-      const timestamp = this.assistantTimestampByItem.get(itemId);
-      if (!text || timestamp === undefined) {
-        return [];
-      }
-      return [
-        {
-          itemId,
-          message: buildAssistantAsyncMessage(this.params, text, itemId, timestamp),
-        },
-      ];
+      const delivery = this.createAsyncDelivery(itemId);
+      return delivery ? [{ itemId, message: delivery.message }] : [];
     });
   }
 
@@ -489,6 +485,14 @@ export class CodexAssistantProjection {
     const delivery = readItemString(item, "delivery");
     if (delivery) {
       this.assistantDeliveryByItem.set(item.id, delivery);
+    }
+    if (item.questions !== undefined) {
+      const questions = readCodexAsyncQuestions(item.questions);
+      if (questions && delivery === "async") {
+        this.assistantQuestionsByItem.set(item.id, questions);
+      } else {
+        this.assistantQuestionsByItem.delete(item.id);
+      }
     }
   }
 
@@ -695,7 +699,13 @@ export class CodexAssistantProjection {
     }
     return {
       itemId,
-      message: buildAssistantAsyncMessage(this.params, text, itemId, timestamp),
+      message: buildAssistantAsyncMessage(
+        this.params,
+        text,
+        itemId,
+        timestamp,
+        this.assistantQuestionsByItem.get(itemId),
+      ),
       text,
     };
   }

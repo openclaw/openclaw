@@ -1,7 +1,9 @@
 import {
-  executeSqliteQueryTakeFirstSync,
+  executeSqliteQuerySync,
   iterateSqliteQuerySync,
+  sqliteStringSet,
 } from "../../infra/kysely-sync.js";
+import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
@@ -10,7 +12,7 @@ import type {
   SessionAccessScope,
   SessionEntrySummary,
 } from "./session-accessor.sqlite-contract.js";
-import { projectSqliteSessionParticipants } from "./session-accessor.sqlite-participant-projection.js";
+import { projectSqliteSessionParticipantsBatch } from "./session-accessor.sqlite-participant-projection.js";
 import {
   getSessionKysely,
   resolveSqliteScope,
@@ -22,6 +24,12 @@ import {
   canonicalSessionKeyMigrationRequiredError,
 } from "./session-canonical-key.js";
 import { resolveDeliveryProvenCanonicalSessionKey } from "./store-entry.js";
+
+type SummaryCandidate = {
+  sessionKey: string;
+  entryValid: number | null;
+  agent?: SessionStoreSummary;
+};
 
 type SessionStoreSummary = { count: number; recent: SessionEntrySummary[] };
 
@@ -43,74 +51,125 @@ export function readSessionStoreSummaryReadOnly(
   };
   const result = withOpenClawAgentDatabaseReadOnly(
     (database) =>
-      runSqliteDeferredTransactionSync(database.db, () => {
-        assertCanonicalSqliteSessionKeysCurrent(database);
-        const db = getSessionKysely(database.db);
-        // The read transaction keeps count, ordering, and selected payloads on one
-        // generation. Existing keys/indexes bound JSON work, not the cold canonical check.
-        for (const row of iterateSqliteQuerySync(
-          database.db,
-          db
-            .selectFrom("session_nodes")
-            .select(["session_key", "entry_valid"])
-            .orderBy("updated_at", "desc")
-            .orderBy("session_key", "asc"),
-        )) {
-          const owner = parseAgentSessionKey(row.session_key)?.agentId;
-          if (!owner || isInternalSessionEffectsKey(row.session_key)) {
-            continue;
-          }
-          const agent = summary.byAgent.get(owner);
-          const needsRecent =
-            summary.recent.length < options.recentLimit ||
-            (agent !== undefined && agent.recent.length < options.recentLimit);
-          if (row.entry_valid === 1 && !needsRecent) {
-            summary.count += 1;
-            if (agent) {
-              agent.count += 1;
+      withSqlitePostCommitPublications(database.db, () =>
+        runSqliteDeferredTransactionSync(database.db, () => {
+          assertCanonicalSqliteSessionKeysCurrent(database);
+          const db = getSessionKysely(database.db);
+          // The read transaction keeps count, ordering, and selected payloads on one
+          // generation. Existing keys/indexes bound JSON work, not the cold canonical check.
+          // Small stores keep their bounded recent payloads; shared stores amortize
+          // hydration without retaining every pending row or assuming entry_valid can parse.
+          const batchSize = Math.min(
+            128,
+            Math.max(1, Math.ceil(options.recentLimit) || 1) * Math.max(1, summary.byAgent.size),
+          );
+          let candidates: SummaryCandidate[] = [];
+          const readCandidates = () => {
+            if (candidates.length === 0) {
+              return;
             }
-            continue;
-          }
-          // Raw updates clear entry_valid. Preserve listing's warm-row semantics:
-          // skip unreadable JSON/retained placeholders, but include readable pending rows.
-          const stored = executeSqliteQueryTakeFirstSync(
-            database.db,
-            db.selectFrom("session_nodes").selectAll().where("session_key", "=", row.session_key),
-          );
-          if (!stored) {
-            continue;
-          }
-          const { current_session_id: _currentSessionId, ...listRow } = stored;
-          const parsed = parseSessionEntryJson(listRow);
-          if (!parsed) {
-            continue;
-          }
-          const entry = projectSqliteSessionParticipants(database.db, row.session_key, parsed);
-          const deliveryCanonicalKey = resolveDeliveryProvenCanonicalSessionKey(
-            row.session_key,
-            entry,
-          );
-          if (deliveryCanonicalKey !== row.session_key) {
-            throw canonicalSessionKeyMigrationRequiredError(
-              `non-canonical persisted row resolves to session key ${deliveryCanonicalKey}`,
+            const rows = candidates;
+            candidates = [];
+            const storedRows = new Map(
+              executeSqliteQuerySync(
+                database.db,
+                db
+                  .selectFrom("session_nodes")
+                  .selectAll()
+                  .where("session_key", "in", sqliteStringSet(rows.map((row) => row.sessionKey))),
+              ).rows.map((row) => [row.session_key, row]),
             );
-          }
-          summary.count += 1;
-          const selected = { sessionKey: row.session_key, entry };
-          if (summary.recent.length < options.recentLimit) {
-            summary.recent.push(selected);
-          }
-          if (agent) {
-            agent.count += 1;
-            // The global newest rows may all belong to another agent. Select each
-            // requested owner's window in this scan, sharing each parsed payload.
-            if (agent.recent.length < options.recentLimit) {
-              agent.recent.push(selected);
+            const selectedEntries: SessionEntrySummary[] = [];
+            for (const { sessionKey, entryValid, agent } of rows) {
+              const needsRecent =
+                summary.recent.length < options.recentLimit ||
+                (agent !== undefined && agent.recent.length < options.recentLimit);
+              if (entryValid === 1 && !needsRecent) {
+                summary.count += 1;
+                if (agent) {
+                  agent.count += 1;
+                }
+                continue;
+              }
+              // Raw updates clear entry_valid. Preserve listing's warm-row semantics:
+              // skip unreadable JSON/retained placeholders, but include readable pending rows.
+              const stored = storedRows.get(sessionKey);
+              if (!stored) {
+                continue;
+              }
+              const { current_session_id: _currentSessionId, ...listRow } = stored;
+              const entry = parseSessionEntryJson(listRow);
+              if (!entry) {
+                continue;
+              }
+              summary.count += 1;
+              const selected = { sessionKey, entry };
+              selectedEntries.push(selected);
+              if (summary.recent.length < options.recentLimit) {
+                summary.recent.push(selected);
+              }
+              if (agent) {
+                agent.count += 1;
+                // The global newest rows may all belong to another agent. Select each
+                // requested owner's window in this scan, sharing each parsed payload.
+                if (agent.recent.length < options.recentLimit) {
+                  agent.recent.push(selected);
+                }
+              }
+            }
+            if (selectedEntries.length === 0) {
+              return;
+            }
+            const projected = projectSqliteSessionParticipantsBatch(
+              database.db,
+              new Map(selectedEntries.map(({ sessionKey, entry }) => [sessionKey, entry])),
+            );
+            for (const { sessionKey, entry } of selectedEntries) {
+              Object.assign(entry, projected.get(sessionKey));
+              const deliveryCanonicalKey = resolveDeliveryProvenCanonicalSessionKey(
+                sessionKey,
+                entry,
+              );
+              if (deliveryCanonicalKey !== sessionKey) {
+                throw canonicalSessionKeyMigrationRequiredError(
+                  `non-canonical persisted row resolves to session key ${deliveryCanonicalKey}`,
+                );
+              }
+            }
+          };
+          for (const row of iterateSqliteQuerySync(
+            database.db,
+            db
+              .selectFrom("session_nodes")
+              .select(["session_key", "entry_valid"])
+              .orderBy("updated_at", "desc")
+              .orderBy("session_key", "asc"),
+          )) {
+            const owner = parseAgentSessionKey(row.session_key)?.agentId;
+            if (!owner || isInternalSessionEffectsKey(row.session_key)) {
+              continue;
+            }
+            const agent = summary.byAgent.get(owner);
+            if (
+              row.entry_valid === 1 &&
+              summary.recent.length >= options.recentLimit &&
+              (!agent || agent.recent.length >= options.recentLimit)
+            ) {
+              summary.count += 1;
+              if (agent) {
+                agent.count += 1;
+              }
+              continue;
+            }
+            candidates.push({ sessionKey: row.session_key, entryValid: row.entry_valid, agent });
+            if (candidates.length >= batchSize) {
+              readCandidates();
             }
           }
-        }
-        return summary;
-      }),
+          readCandidates();
+          return summary;
+        }),
+      ),
     toDatabaseOptions(resolved),
   );
   return result.found ? result.value : summary;

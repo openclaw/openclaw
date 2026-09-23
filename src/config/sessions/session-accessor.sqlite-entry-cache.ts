@@ -1,37 +1,59 @@
 import type { DatabaseSync } from "node:sqlite";
-import { executeSqliteQuerySync, iterateSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { toUSVString } from "node:util";
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
+import {
+  executeSqliteQuerySync,
+  getNodeSqliteKysely,
+  iterateSqliteQuerySync,
+  sqliteStringSet,
+} from "../../infra/kysely-sync.js";
 import { readSqliteDataVersion } from "../../infra/node-sqlite.js";
+import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import {
-  deferOpenClawAgentPostCommitPublication,
-  type OpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
-import { hasSqliteSessionOwnerColumns } from "./session-accessor.sqlite-owner-projection.js";
+  sessionChanges,
+  type SessionRowChange,
+  type SessionRowFacts,
+} from "../../sessions/session-row-changes.js";
+import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { findOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
+import { readOpenClawAgentDatabase } from "../../state/openclaw-agent-db-readonly-open.js";
+import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
+import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
+import type { ExactSessionEntry } from "./session-accessor.sqlite-contract.js";
+import type {
+  SessionEntryCacheSnapshot,
+  SessionSharingEntry,
+} from "./session-accessor.sqlite-entry-cache.types.js";
 import {
-  projectSqliteSessionParticipants,
+  prepareExactSessionEntryRowReads,
+  readExactSessionEntryRow,
+  validateDeliveryCanonicalSessionEntry,
+} from "./session-accessor.sqlite-entry-read.js";
+import type { SqliteSessionEntryRevision } from "./session-accessor.sqlite-entry-revision.js";
+import {
+  hasSqliteSessionOwnerColumns,
+  readSqliteSessionOwner,
+} from "./session-accessor.sqlite-owner-projection.js";
+import {
   projectSqliteSessionParticipantsBatch,
+  readSqliteSessionParticipantProjection,
 } from "./session-accessor.sqlite-participant-projection.js";
-import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { parseSessionEntryJson, selectSessionEntryRows } from "./session-accessor.sqlite-status.js";
+import type { SessionEntryReadScope } from "./session-accessor.types.js";
 import {
   assertCanonicalSqliteSessionKeysCurrent,
   type ValidatedSessionMetadata,
 } from "./session-canonical-key.js";
-import type { SessionEntry } from "./types.js";
+import { listSessionMembersInDatabase } from "./session-sharing-store.kernel.js";
+import type { InternalSessionEntry, SessionEntry } from "./types.js";
+
+type SessionEntryCacheTables = Pick<OpenClawAgentKyselyDatabase, "session_nodes">;
 
 type SessionEntryCacheDatabase = Pick<OpenClawAgentDatabase, "agentId" | "db">;
 
-export type SessionEntryCacheSnapshot = {
-  entries: Map<string, SessionEntry>;
-  keys: string[];
-};
-
 type SqliteSessionEntryCache = SessionEntryCacheSnapshot & {
-  validityToken: SqliteSessionEntryCacheValidityToken;
-};
-
-type SqliteSessionEntryCacheValidityToken = {
-  dataVersion: number;
-  sessionNodesGeneration: number;
+  validityToken: SqliteSessionEntryRevision;
 };
 
 type SqliteSessionEntryCacheWriteGeneration = {
@@ -46,6 +68,148 @@ type SqliteSessionEntryCacheWriteGeneration = {
 // structural/unknown writes invalidate. Without both, every read would re-query and re-parse
 // every entry_json document.
 const sessionEntryCaches = new WeakMap<DatabaseSync, SqliteSessionEntryCache>();
+
+type CommittedSessionSharingFacts = { entry: SessionSharingEntry; membership: ReadonlySet<string> };
+type PreparedSessionSharingRead = {
+  facts: { entry: SessionSharingEntry | undefined; membership: ReadonlySet<string> } | undefined;
+};
+const preparedSharingReads = resolveGlobalSingleton(
+  Symbol.for("openclaw.preparedSessionSharingReads"),
+  () => new Map<string, Set<PreparedSessionSharingRead>>(),
+);
+const preparedSharingChanges = resolveGlobalSingleton(
+  Symbol.for("openclaw.preparedSessionSharingChanges"),
+  () => new WeakSet<SessionRowChange>(),
+);
+
+/** Private owner metadata follows the original event object without changing its public fields. */
+export function isPreparedSessionSharingChange(change: SessionRowChange): boolean {
+  return preparedSharingChanges.has(change);
+}
+
+function emitPreparedSessionSharingChange(
+  database: SessionEntryCacheDatabase & { path: string },
+  sessionKey: string,
+  agentId = database.agentId,
+  facts?: SessionRowFacts,
+): void {
+  const change: SessionRowChange = {
+    agentId,
+    storePath: database.path,
+    sessionKey,
+    ...(facts ? { facts } : { factsInvalidated: true }),
+  };
+  preparedSharingChanges.add(change);
+  sessionChanges.emit(change, database.db);
+}
+
+export function projectSessionSharingEntry(entry: SessionEntry): SessionSharingEntry {
+  return {
+    sessionId: entry.sessionId,
+    updatedAt: entry.updatedAt,
+    lifecycleRevision: entry.lifecycleRevision,
+    visibility: entry.visibility,
+    incognito: entry.incognito,
+    createdActor: entry.createdActor ? { ...entry.createdActor } : undefined,
+    sandbox: entry.sandbox,
+  };
+}
+
+/** The existing entry writer advances retained facts before any commit observer can reenter. */
+export function retainPreparedSessionSharingFacts(params: {
+  databaseIdentity: string;
+  sessionKey: string;
+  entry: SessionSharingEntry | undefined;
+  membership: ReadonlySet<string>;
+}) {
+  const key = `${params.databaseIdentity}\0${params.sessionKey}`;
+  const read: PreparedSessionSharingRead = {
+    facts: { entry: params.entry, membership: params.membership },
+  };
+  const reads = preparedSharingReads.get(key) ?? new Set<PreparedSessionSharingRead>();
+  reads.add(read);
+  preparedSharingReads.set(key, reads);
+  let active = true;
+  return {
+    readCurrent: () => read.facts,
+    release: () => {
+      if (!active) {
+        return;
+      }
+      active = false;
+      read.facts = undefined;
+      reads.delete(read);
+      if (reads.size === 0 && preparedSharingReads.get(key) === reads) {
+        preparedSharingReads.delete(key);
+      }
+    },
+  };
+}
+
+function retainedSharingReads(database: SessionEntryCacheDatabase, sessionKey: string) {
+  const identity = findOpenClawAgentDatabaseIdentity(database)?.identity;
+  return typeof identity === "string"
+    ? preparedSharingReads.get(`file:${identity}\0${sessionKey}`)
+    : undefined;
+}
+// Process-held stores cannot be reopened in a worker. Their existing writer publishes
+// only sharing fields, bounded by live entries and the native database's lifetime.
+const incognitoSharingEntries = resolveGlobalSingleton(
+  Symbol.for("openclaw.incognitoSessionSharingEntries"),
+  () => new WeakMap<DatabaseSync, Map<string, CommittedSessionSharingFacts>>(),
+);
+
+export function readCommittedIncognitoSessionSharing(database: DatabaseSync, sessionKey: string) {
+  return incognitoSharingEntries.get(database)?.get(sessionKey);
+}
+
+export function publishSessionSharingMemberChange(
+  database: SessionEntryCacheDatabase & { path: string },
+  sessionKey: string,
+  member: Extract<SessionRowFacts, { kind: "member" }>,
+  agentId = database.agentId,
+): void {
+  publishTrackedCacheUpdate(database, () => {
+    const update = <
+      T extends { entry: SessionSharingEntry | undefined; membership: ReadonlySet<string> },
+    >(
+      facts: T,
+    ): T => {
+      // A legacy synchronous replacement can commit before a worker reply reaches this owner.
+      if (facts.entry?.sessionId !== member.sessionId) {
+        return facts;
+      }
+      const membership = new Set(facts.membership);
+      if (member.present) {
+        membership.add(member.identityId);
+      } else {
+        membership.delete(member.identityId);
+      }
+      return { ...facts, membership };
+    };
+    for (const read of retainedSharingReads(database, sessionKey) ?? []) {
+      if (read.facts) {
+        read.facts = update(read.facts);
+      }
+    }
+    if (!database.db.location()) {
+      const current = incognitoSharingEntries.get(database.db)?.get(sessionKey);
+      if (current) {
+        incognitoSharingEntries.get(database.db)?.set(sessionKey, update(current));
+      }
+    }
+  });
+  emitPreparedSessionSharingChange(database, sessionKey, agentId, member);
+}
+/** Commit-driven projections borrow owner memory; ordinary reads still validate SQLite. */
+export function readCommittedSessionEntryCache(database: DatabaseSync) {
+  return sessionEntryCaches.get(database)?.entries;
+}
+
+/** A settled worker with an unknown write outcome cannot publish a trustworthy field patch. */
+export function discardCommittedSessionEntryCache(database: DatabaseSync): void {
+  sessionEntryCaches.delete(database);
+}
 const sessionNodesGenerationTrackerSchemaVersions = new WeakMap<DatabaseSync, number>();
 
 function ensureSessionNodesGenerationTracker(database: DatabaseSync): void {
@@ -59,6 +223,7 @@ function ensureSessionNodesGenerationTracker(database: DatabaseSync): void {
   if (trackedSchemaVersion === schemaRow.schema_version) {
     return;
   }
+  const hasParticipants = tableExists(database, "session_participants");
   // sqlite-allow-raw -- TEMP triggers are the connection-local ownership boundary: they
   // observe unpublished raw DML. A main-schema change bumps the generation before reinstalling
   // them, so dropping/recreating session_nodes cannot make an old snapshot look current.
@@ -75,8 +240,33 @@ function ensureSessionNodesGenerationTracker(database: DatabaseSync): void {
       AFTER UPDATE ON main.session_nodes BEGIN UPDATE openclaw_session_nodes_cache_generation SET generation = generation + 1 WHERE id = 1; END;
     CREATE TEMP TRIGGER openclaw_session_nodes_cache_generation_delete
       AFTER DELETE ON main.session_nodes BEGIN UPDATE openclaw_session_nodes_cache_generation SET generation = generation + 1 WHERE id = 1; END;
+    DROP TRIGGER IF EXISTS openclaw_session_participants_cache_generation_insert;
+    DROP TRIGGER IF EXISTS openclaw_session_participants_cache_generation_update;
+    DROP TRIGGER IF EXISTS openclaw_session_participants_cache_generation_delete;
+    ${
+      hasParticipants
+        ? `
+    CREATE TEMP TRIGGER openclaw_session_participants_cache_generation_insert
+      AFTER INSERT ON main.session_participants BEGIN UPDATE openclaw_session_nodes_cache_generation SET generation = generation + 1 WHERE id = 1; END;
+    CREATE TEMP TRIGGER openclaw_session_participants_cache_generation_update
+      AFTER UPDATE ON main.session_participants BEGIN UPDATE openclaw_session_nodes_cache_generation SET generation = generation + 1 WHERE id = 1; END;
+    CREATE TEMP TRIGGER openclaw_session_participants_cache_generation_delete
+      AFTER DELETE ON main.session_participants BEGIN UPDATE openclaw_session_nodes_cache_generation SET generation = generation + 1 WHERE id = 1; END;
+    `
+        : ""
+    }
   `);
-  sessionNodesGenerationTrackerSchemaVersions.set(database, schemaRow.schema_version);
+  // A rolled-back schema change can reuse its version on retry after SQLite removes the triggers.
+  if (!database.isTransaction) {
+    sessionNodesGenerationTrackerSchemaVersions.set(database, schemaRow.schema_version);
+  } else {
+    const version = schemaRow.schema_version;
+    stageSqliteTransactionState(database, {
+      stage: () => sessionNodesGenerationTrackerSchemaVersions.set(database, version),
+      rollback: () => sessionNodesGenerationTrackerSchemaVersions.delete(database),
+      commit: () => {},
+    });
+  }
 }
 
 function readSessionNodesGeneration(database: DatabaseSync): number {
@@ -90,7 +280,7 @@ function readSessionNodesGeneration(database: DatabaseSync): number {
   return row.generation;
 }
 
-function readCacheValidityToken(database: DatabaseSync): SqliteSessionEntryCacheValidityToken {
+function readSessionEntryCacheValidityToken(database: DatabaseSync): SqliteSessionEntryRevision {
   return {
     dataVersion: readSqliteDataVersion(database),
     sessionNodesGeneration: readSessionNodesGeneration(database),
@@ -98,13 +288,118 @@ function readCacheValidityToken(database: DatabaseSync): SqliteSessionEntryCache
 }
 
 function cacheValidityTokensEqual(
-  left: SqliteSessionEntryCacheValidityToken,
-  right: SqliteSessionEntryCacheValidityToken,
+  left: SqliteSessionEntryRevision,
+  right: SqliteSessionEntryRevision,
 ): boolean {
   return (
     left.dataVersion === right.dataVersion &&
     left.sessionNodesGeneration === right.sessionNodesGeneration
   );
+}
+
+/** Reuse only complete, current metadata; exact reads still own misses and invalid rows. */
+function readCachedExactSessionEntries(
+  database: SessionEntryCacheDatabase,
+  sessionKeys: readonly string[],
+): Map<string, SessionEntry> | undefined {
+  const cached = sessionEntryCaches.get(database.db);
+  if (!cached || database.db.isTransaction) {
+    return undefined;
+  }
+  const keys = [...new Set(sessionKeys.map(toUSVString))];
+  if (keys.some((key) => !cached.entries.has(key))) {
+    return undefined;
+  }
+  const validityToken = cached.validityToken;
+  try {
+    if (!cacheValidityTokensEqual(validityToken, readSessionEntryCacheValidityToken(database.db))) {
+      return undefined;
+    }
+    // List snapshots do not retain these columns; matching generations alone
+    // cannot prove exact identity after a raw edit followed by a list reload.
+    const rows = executeSqliteQuerySync(
+      database.db,
+      getNodeSqliteKysely<SessionEntryCacheTables>(database.db)
+        .selectFrom("session_nodes")
+        .select(["session_key", "current_session_id", "updated_at"])
+        .where("session_key", "in", sqliteStringSet(keys)),
+    ).rows;
+    if (rows.length !== keys.length) {
+      return undefined;
+    }
+    const rowsByKey = new Map(rows.map((row) => [row.session_key, row]));
+    const entries = new Map<string, SessionEntry>();
+    for (const sessionKey of new Set(sessionKeys)) {
+      const key = toUSVString(sessionKey);
+      const row = rowsByKey.get(key);
+      const entry = cached.entries.get(key);
+      if (
+        !row ||
+        !entry ||
+        entry.sessionId !== row.current_session_id ||
+        entry.updatedAt !== row.updated_at
+      ) {
+        return undefined;
+      }
+      // Distinct raw strings may bind to the same native key, but exact batches
+      // give each raw request its own entry while sharing repeated identical keys.
+      entries.set(sessionKey, validateDeliveryCanonicalSessionEntry(key, structuredClone(entry)));
+    }
+    return sessionEntryCaches.get(database.db) === cached &&
+      cacheValidityTokensEqual(validityToken, readSessionEntryCacheValidityToken(database.db))
+      ? entries
+      : undefined;
+  } catch {
+    // Cohort conversion/validation failures retain the exact reader's per-key errors.
+    return undefined;
+  }
+}
+
+/** Decode one admitted physical store without changing exact per-request error isolation. */
+export function readExactSessionEntryCandidatesInDatabase(
+  database: Pick<OpenClawAgentDatabase, "agentId" | "db" | "path">,
+  requests: readonly (readonly string[])[],
+  projection: SessionEntryReadScope["projection"],
+): Array<Result<ExactSessionEntry[], unknown>> {
+  const entries = new Map<string, Result<ExactSessionEntry | undefined, unknown>>();
+  const keys = [...new Set(requests.flat())];
+  const cachedEntries =
+    projection === "list" ? readCachedExactSessionEntries(database, keys) : undefined;
+  let readPrepared: (sessionKey: string) => InternalSessionEntry | undefined;
+  if (cachedEntries) {
+    readPrepared = (sessionKey) => cachedEntries.get(sessionKey);
+  } else {
+    const readRows = prepareExactSessionEntryRowReads(database, keys, projection);
+    readPrepared = (sessionKey) => readRows(sessionKey)?.entry;
+  }
+  const readEntry = (sessionKey: string): Result<ExactSessionEntry | undefined, unknown> => {
+    const cached = entries.get(sessionKey);
+    if (cached) {
+      return cached;
+    }
+    let result: Result<ExactSessionEntry | undefined, unknown>;
+    try {
+      const entry = readOpenClawAgentDatabase(database, () => readPrepared(sessionKey)).value;
+      result = ok(entry ? { sessionKey, entry } : undefined);
+    } catch (error) {
+      result = err(error);
+    }
+    entries.set(sessionKey, result);
+    return result;
+  };
+  return requests.map((sessionKeys) => {
+    const matches: ExactSessionEntry[] = [];
+    for (const sessionKey of sessionKeys) {
+      const entry = readEntry(sessionKey);
+      if (!entry.ok) {
+        return err(entry.error);
+      }
+      if (entry.value) {
+        matches.push(entry.value);
+      }
+    }
+    return ok(matches);
+  });
 }
 
 /** Bracket one accessor-owned row write so its publication cannot hide earlier raw DML. */
@@ -116,36 +411,54 @@ export function trackSessionEntryCacheWrite(
     ? readSessionNodesGeneration(database.db)
     : undefined;
   write();
-  return before === undefined
-    ? undefined
-    : { before, after: readSessionNodesGeneration(database.db) };
+  if (before === undefined) {
+    return undefined;
+  }
+  const generation = { before, after: readSessionNodesGeneration(database.db) };
+  return generation;
 }
 
 function loadSessionEntrySnapshot(
   database: SessionEntryCacheDatabase,
   projection: "full" | "list" = "list",
   prepared?: ValidatedSessionMetadata,
+  fullEntryKeys?: ReadonlySet<string>,
+  retainFullEntry?: (sessionKey: string, entry: SessionEntry) => boolean,
+  deferParticipants = false,
 ): SessionEntryCacheSnapshot {
   // Validation lends complete parsed facts only within this read. A concurrent external commit
   // requires the ordinary fresh SELECT, never a stale snapshot stamped with its newer version.
   const metadata =
-    prepared && prepared.dataVersion === readSqliteDataVersion(database.db) ? prepared : undefined;
+    !fullEntryKeys && prepared && prepared.dataVersion === readSqliteDataVersion(database.db)
+      ? prepared
+      : undefined;
   const parsedEntries = metadata?.entries ?? new Map<string, SessionEntry>();
   const keys = metadata?.keys ?? [];
   // Stream raw JSON so a full read never holds both serialized and parsed store-wide payloads.
   if (!metadata) {
     for (const row of iterateSqliteQuerySync(
       database.db,
-      selectSessionEntryRows(database, projection).select("updated_at").orderBy("session_key"),
+      selectSessionEntryRows(database, projection, fullEntryKeys ? [...fullEntryKeys] : [])
+        .select("updated_at")
+        .orderBy("session_key"),
     )) {
       keys.push(row.session_key);
-      const entry = parseSessionEntryJson(row, projection);
+      const entry = parseSessionEntryJson(
+        row,
+        fullEntryKeys?.has(row.session_key) ? "full" : projection,
+      );
       if (entry) {
+        if (retainFullEntry && !retainFullEntry(row.session_key, entry)) {
+          delete entry.skillsSnapshot;
+          delete entry.systemPromptReport;
+        }
         parsedEntries.set(row.session_key, entry);
       }
     }
   }
-  const entries = projectSqliteSessionParticipantsBatch(database.db, parsedEntries);
+  const entries = deferParticipants
+    ? parsedEntries
+    : projectSqliteSessionParticipantsBatch(database.db, parsedEntries);
   return {
     entries,
     keys,
@@ -154,22 +467,42 @@ function loadSessionEntrySnapshot(
 
 export function readSessionEntryCache(
   database: SessionEntryCacheDatabase,
-  options: { cache: boolean; latest?: boolean; projection?: "full" | "list" },
+  options: {
+    cache: boolean;
+    latest?: boolean;
+    projection?: "full" | "list";
+    /** Uncached mixed snapshot: retain complete selected rows beside sibling metadata. */
+    fullEntryKeys?: readonly string[];
+    /** Stream full JSON once, retaining prompt snapshots only for selected rows. Never cached. */
+    retainFullEntry?: (sessionKey: string, entry: SessionEntry) => boolean;
+    /** Topology admits metadata first; its worker owns participant hydration. Never cache this view. */
+    deferParticipants?: true;
+  },
 ): SessionEntryCacheSnapshot {
+  const projection = options.retainFullEntry ? "full" : options.projection;
   const prepared = assertCanonicalSqliteSessionKeysCurrent(
     database,
-    undefined,
-    options.projection !== "full",
+    projection !== "full" && !options.fullEntryKeys,
   );
   if (
     !options.cache ||
+    options.deferParticipants ||
+    options.fullEntryKeys ||
+    options.retainFullEntry ||
     options.latest ||
-    options.projection === "full" ||
+    projection === "full" ||
     database.db.isTransaction
   ) {
-    return loadSessionEntrySnapshot(database, options.projection, prepared);
+    return loadSessionEntrySnapshot(
+      database,
+      projection,
+      prepared,
+      options.fullEntryKeys ? new Set(options.fullEntryKeys) : undefined,
+      options.retainFullEntry,
+      options.deferParticipants,
+    );
   }
-  const validityToken = readCacheValidityToken(database.db);
+  const validityToken = readSessionEntryCacheValidityToken(database.db);
   const cached = sessionEntryCaches.get(database.db);
   if (cached && cacheValidityTokensEqual(cached.validityToken, validityToken)) {
     return cached;
@@ -182,8 +515,15 @@ export function readSessionEntryCache(
   return next;
 }
 
-function publishTrackedCacheUpdate(database: OpenClawAgentDatabase, publish: () => void): void {
-  if (deferOpenClawAgentPostCommitPublication(database, publish)) {
+function publishTrackedCacheUpdate(database: SessionEntryCacheDatabase, publish: () => void): void {
+  // Committed cache state must settle before observers can reenter with newer writes.
+  if (
+    stageSqliteTransactionState(database.db, {
+      stage: () => {},
+      rollback: () => {},
+      commit: publish,
+    })
+  ) {
     return;
   }
   if (database.db.isTransaction) {
@@ -194,19 +534,16 @@ function publishTrackedCacheUpdate(database: OpenClawAgentDatabase, publish: () 
   publish();
 }
 
-function publishSqliteSessionEntryCacheUpsert(
-  database: OpenClawAgentDatabase,
-  update: { sessionKey: string; entry: SessionEntry },
-  writeGeneration: SqliteSessionEntryCacheWriteGeneration,
-): void {
-  const { sessionKey } = update;
-  // Carry the writer's canonical metadata forward, but own detached nested values.
-  // Saved prompts are caller-owned and must never be serialized into the listing cache.
-  const { skillsSnapshot: _skills, systemPromptReport: _report, ...metadata } = update.entry;
+type SessionEntrySideMetadata = Pick<SessionEntry, "owner" | "participants" | "participantCount">;
+
+function readSessionEntrySideMetadata(
+  database: SessionEntryCacheDatabase,
+  sessionKey: string,
+): SessionEntrySideMetadata {
   const ownerRow = hasSqliteSessionOwnerColumns(database.db)
     ? executeSqliteQuerySync(
         database.db,
-        getSessionKysely(database.db)
+        getNodeSqliteKysely<SessionEntryCacheTables>(database.db)
           .selectFrom("session_nodes")
           .select([
             "owner_actor_type",
@@ -219,45 +556,218 @@ function publishSqliteSessionEntryCacheUpsert(
           .limit(1),
       ).rows[0]
     : undefined;
-  const parsedEntry = parseSessionEntryJson({ entry_json: JSON.stringify(metadata), ...ownerRow });
-  if (!parsedEntry) {
-    publishTrackedCacheUpdate(database, () => sessionEntryCaches.delete(database.db));
-    return;
+  const owner = ownerRow ? readSqliteSessionOwner(ownerRow) : undefined;
+  return {
+    ...(owner ? { owner } : {}),
+    ...readSqliteSessionParticipantProjection(database.db, sessionKey),
+  };
+}
+
+function projectSessionEntryCacheUpdate(
+  sourceEntry: SessionEntry,
+  sideMetadata: SessionEntrySideMetadata | undefined,
+): SessionEntry | undefined {
+  // Saved prompts are caller-owned and must never be serialized into the listing cache.
+  const { skillsSnapshot: _skills, systemPromptReport: _report, ...metadata } = sourceEntry;
+  const parsedEntry = parseSessionEntryJson({ entry_json: JSON.stringify(metadata) });
+  return parsedEntry ? { ...parsedEntry, ...sideMetadata } : undefined;
+}
+
+function advanceSessionEntryCacheGeneration(
+  cached: SqliteSessionEntryCache,
+  writeGeneration: SqliteSessionEntryCacheWriteGeneration,
+): void {
+  // Advance only across the bracketed row write. A raw write before/after this bracket leaves
+  // a generation gap, while the retained data_version still exposes external commits.
+  if (cached.validityToken.sessionNodesGeneration === writeGeneration.before) {
+    cached.validityToken = {
+      ...cached.validityToken,
+      sessionNodesGeneration: writeGeneration.after,
+    };
   }
-  const entry = projectSqliteSessionParticipants(database.db, sessionKey, parsedEntry);
+}
+
+function publishSqliteSessionEntryCacheUpsert(
+  database: SessionEntryCacheDatabase,
+  update: { sessionKey: string; entry?: SessionEntry },
+  writeGeneration: SqliteSessionEntryCacheWriteGeneration,
+): SessionEntrySideMetadata | undefined {
+  const owner = sessionEntryCaches.get(database.db);
+  if (!owner) {
+    return undefined;
+  }
+  const { sessionKey } = update;
+  let sideMetadata: SessionEntrySideMetadata | undefined;
+  let entry: SessionEntry | undefined;
+  try {
+    sideMetadata = readSessionEntrySideMetadata(database, sessionKey);
+    entry = update.entry ? projectSessionEntryCacheUpdate(update.entry, sideMetadata) : undefined;
+  } catch {
+    // A failed derived projection must not roll back an authoritative write.
+    publishTrackedCacheUpdate(database, () => sessionEntryCaches.delete(database.db));
+    return undefined;
+  }
   publishTrackedCacheUpdate(database, () => {
     const cached = sessionEntryCaches.get(database.db);
     if (!cached) {
       return;
     }
-    const generationIsContinuous =
-      cached.validityToken.sessionNodesGeneration === writeGeneration.before;
     // Borrowed cache views are synchronous, so the commit owner can update one
     // row in place without cloning every session map on each active-run write.
+    let publishedEntry = entry;
+    const currentEntry = cached.entries.get(sessionKey);
+    if (!update.entry && currentEntry && sideMetadata) {
+      // Earlier publications in this transaction may have replaced the entry itself.
+      const {
+        owner: _owner,
+        participants: _participants,
+        participantCount: _count,
+        ...metadata
+      } = currentEntry;
+      publishedEntry = { ...metadata, ...sideMetadata };
+    }
+    if (!publishedEntry) {
+      sessionEntryCaches.delete(database.db);
+      return;
+    }
     if (!cached.entries.has(sessionKey) && !cached.keys.includes(sessionKey)) {
       cached.keys = [...cached.keys, sessionKey].toSorted();
     }
-    cached.entries.set(sessionKey, entry);
-    // Advance only across the bracketed row write. A raw write before/after this bracket leaves
-    // a generation gap, while the retained data_version still exposes external commits.
-    if (generationIsContinuous) {
-      cached.validityToken = {
-        ...cached.validityToken,
-        sessionNodesGeneration: writeGeneration.after,
+    cached.entries.set(sessionKey, publishedEntry);
+    advanceSessionEntryCacheGeneration(cached, writeGeneration);
+  });
+  return sideMetadata;
+}
+
+export function publishSessionEntryCacheInvalidation(
+  database: SessionEntryCacheDatabase & { path: string },
+  update: { sessionKey: string; entry?: SessionEntry; facts?: SessionRowFacts },
+  writeGeneration?: SqliteSessionEntryCacheWriteGeneration,
+): void {
+  let facts = update.facts;
+  const sharingUnchanged =
+    facts?.kind === "unchanged" || facts?.kind === "participants" || facts?.kind === "category";
+  const incognito = !database.db.location();
+  const sharingEntry = update.entry ? projectSessionSharingEntry(update.entry) : undefined;
+  if (!sharingUnchanged) {
+    publishTrackedCacheUpdate(database, () => {
+      for (const read of retainedSharingReads(database, update.sessionKey) ?? []) {
+        const previous = read.facts;
+        read.facts =
+          sharingEntry &&
+          previous?.entry &&
+          previous.entry.sessionId === sharingEntry.sessionId &&
+          previous.entry.lifecycleRevision === sharingEntry.lifecycleRevision
+            ? { entry: sharingEntry, membership: previous.membership }
+            : undefined;
+      }
+    });
+  }
+  if (incognito && !sharingUnchanged) {
+    let current: CommittedSessionSharingFacts | undefined;
+    try {
+      const entry =
+        update.entry ?? readExactSessionEntryRow(database, update.sessionKey, "list")?.entry;
+      current = entry
+        ? {
+            entry: projectSessionSharingEntry(entry),
+            membership: new Set(
+              listSessionMembersInDatabase(database, update.sessionKey).map(
+                (member) => member.identityId,
+              ),
+            ),
+          }
+        : undefined;
+    } catch {
+      // Failed projection cannot undo its writer; prepared authorization remains unavailable.
+    }
+    publishTrackedCacheUpdate(database, () => {
+      let entries = incognitoSharingEntries.get(database.db);
+      if (!entries && current) {
+        entries = new Map();
+        incognitoSharingEntries.set(database.db, entries);
+      }
+      if (current) {
+        entries?.set(update.sessionKey, current);
+      } else {
+        entries?.delete(update.sessionKey);
+      }
+    });
+  }
+  if (writeGeneration) {
+    const metadata = publishSqliteSessionEntryCacheUpsert(database, update, writeGeneration);
+    if (facts?.kind === "participants" && metadata) {
+      facts = {
+        kind: "participants",
+        projection: {
+          participants: metadata.participants,
+          participantCount: metadata.participantCount,
+        },
       };
+    }
+  } else {
+    // A cold write has no snapshot to patch; do not hydrate owner/participants or prompt JSON.
+    publishTrackedCacheUpdate(database, () => sessionEntryCaches.delete(database.db));
+  }
+  emitPreparedSessionSharingChange(database, update.sessionKey, database.agentId, facts);
+}
+
+/** The category worker publishes only its changed field; native freshness tokens still expose other commits. */
+export function publishSessionEntryCacheCategoryUpdate(
+  database: SessionEntryCacheDatabase,
+  rows: ReadonlyArray<{ sessionKey: string; sessionId: string }>,
+  category: string | undefined,
+): void {
+  publishTrackedCacheUpdate(database, () => {
+    const cached = sessionEntryCaches.get(database.db);
+    for (const { sessionKey, sessionId } of rows) {
+      const current = cached?.entries.get(sessionKey);
+      if (!current || current.sessionId !== sessionId) {
+        continue;
+      }
+      const next = { ...current };
+      if (category === undefined) {
+        delete next.category;
+      } else {
+        next.category = category;
+      }
+      cached?.entries.set(sessionKey, next);
     }
   });
 }
 
-export function publishSessionEntryCacheInvalidation(
+/** Refresh participant projections without reloading unchanged session-entry JSON. */
+export function publishSessionEntryCacheParticipantUpdate(
   database: OpenClawAgentDatabase,
-  update?: { sessionKey: string; entry: SessionEntry },
-  writeGeneration?: SqliteSessionEntryCacheWriteGeneration,
+  sessionKey: string,
+  params: {
+    writeGeneration: SqliteSessionEntryCacheWriteGeneration | undefined;
+    projectionChanged: boolean;
+  },
 ): void {
-  if (update && writeGeneration) {
-    publishSqliteSessionEntryCacheUpsert(database, update, writeGeneration);
+  const { writeGeneration, projectionChanged } = params;
+  if (!projectionChanged) {
+    // Count-only contributions do not change list facts, including when the cache is cold.
+    if (writeGeneration) {
+      publishTrackedCacheUpdate(database, () => {
+        const cached = sessionEntryCaches.get(database.db);
+        if (cached) {
+          advanceSessionEntryCacheGeneration(cached, writeGeneration);
+        }
+      });
+    }
     return;
   }
-  // A cold write has no snapshot to patch; do not hydrate owner/participants or prompt JSON.
-  publishTrackedCacheUpdate(database, () => sessionEntryCaches.delete(database.db));
+  let facts: SessionRowFacts = { kind: "participants" };
+  if (!writeGeneration) {
+    try {
+      facts = {
+        kind: "participants",
+        projection: readSqliteSessionParticipantProjection(database.db, sessionKey),
+      };
+    } catch {
+      // Invalid derived facts require reconciliation without rolling back the recorded write.
+    }
+  }
+  publishSessionEntryCacheInvalidation(database, { sessionKey, facts }, writeGeneration);
 }

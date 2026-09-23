@@ -5,14 +5,16 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import {
+  buildAgentMainSessionKey,
+  DEFAULT_MAIN_KEY,
+  normalizeMainKey,
+  parseAgentSessionKeyParts,
+  type ParsedAgentSessionKey,
+} from "@openclaw/session-url-contract";
 
-type ParsedAgentSessionKey = {
-  agentId: string;
-  rest: string;
-};
-
+export { buildAgentMainSessionKey, DEFAULT_MAIN_KEY };
 export const DEFAULT_AGENT_ID = "main";
-export const DEFAULT_MAIN_KEY = "main";
 
 export type UiSessionDefaultsHost = {
   assistantAgentId?: string | null;
@@ -29,15 +31,24 @@ type UiSessionDefaults = {
 
 export { normalizeAgentId };
 
+export function resolveUiSessionRowAgentId(
+  row: { key: string; agentId?: string },
+  fallbackAgentId: string,
+): string {
+  return parseAgentSessionKey(row.key)?.agentId ?? row.agentId ?? fallbackAgentId;
+}
+
 export function parseAgentSessionKey(
   sessionKey: string | undefined | null,
 ): ParsedAgentSessionKey | null {
-  const parts = normalizeLowercaseStringOrEmpty(sessionKey).split(":").filter(Boolean);
-  if (parts.length < 3 || parts[0] !== "agent") {
-    return null;
-  }
-  const agentId = normalizeOptionalString(parts[1]);
-  return agentId ? { agentId, rest: parts.slice(2).join(":") } : null;
+  // Display ownership historically tolerates empty segments and folds the tail.
+  // Store identities and URL literals apply their own stricter policies.
+  const normalized = normalizeLowercaseStringOrEmpty(sessionKey);
+  return parseAgentSessionKeyParts(
+    normalized.startsWith(":") || normalized.endsWith(":") || normalized.includes("::")
+      ? normalized.split(":").filter(Boolean).join(":")
+      : normalized,
+  );
 }
 
 export function parseSessionKeyParts(
@@ -55,8 +66,26 @@ export function resolveUiSessionNavigationParentKey(
   return normalizeOptionalString(row?.parentSessionKey) ?? normalizeOptionalString(row?.spawnedBy);
 }
 
-function normalizeMainKey(value: string | undefined | null): string {
-  return normalizeOptionalLowercaseString(value) ?? DEFAULT_MAIN_KEY;
+// Mirrors the Gateway policy in src/config/sessions/session-pin-policy.ts.
+// Durable dashboard sessions auto-parent to the agent main root for flow-up
+// notices and sidebar threads; that lineage does not make them nested children.
+export function isPinnableUiSessionRow(row: {
+  key: string;
+  parentSessionKey?: string | null;
+  spawnedBy?: string | null;
+}): boolean {
+  if (isSubagentSessionKey(row.key) || normalizeOptionalString(row.spawnedBy)) {
+    return false;
+  }
+  const parentSessionKey = normalizeOptionalString(row.parentSessionKey);
+  if (!parentSessionKey) {
+    return true;
+  }
+  const parsed = parseAgentSessionKey(row.key);
+  if (!parsed?.agentId) {
+    return false;
+  }
+  return parentSessionKey === buildAgentMainSessionKey({ agentId: parsed.agentId });
 }
 
 export function normalizeSessionKeyForUiComparison(sessionKey: string | undefined | null): string {
@@ -248,19 +277,22 @@ export function uiConversationMatches(
   selectedKey: string | undefined | null,
   candidateKey: string | undefined | null,
   candidateAgentId?: string | null,
+  selectedAgentId?: string | null,
 ): boolean {
   const selected = normalizeOptionalString(selectedKey);
   const candidate = normalizeOptionalString(candidateKey);
   if (!selected || !candidate) {
     return false;
   }
-  const current = resolveUiConversationIdentity(host, selected);
+  const explicitSelectedAgent = normalizeOptionalString(selectedAgentId);
+  const current = resolveUiConversationIdentity(host, selected, explicitSelectedAgent);
   const explicitAgent = normalizeOptionalString(candidateAgentId);
   const defaultAgent = resolveUiDefaultAgentId(host);
   const other = resolveUiConversationIdentity(host, candidate, explicitAgent ?? defaultAgent);
   const currentAgent = current.agentId ?? defaultAgent;
   const otherAgent = other.agentId ?? defaultAgent;
   return (
+    (!explicitSelectedAgent || normalizeAgentId(explicitSelectedAgent) === currentAgent) &&
     (!explicitAgent || normalizeAgentId(explicitAgent) === otherAgent) &&
     current.sessionKey === other.sessionKey &&
     currentAgent === otherAgent
@@ -311,15 +343,6 @@ export function uiSessionRowMatchesSelectedChat(
     rowKey,
     rowAgentId ?? (isUiGlobalSessionKey(rowKey) ? selected?.agentId : undefined),
   );
-}
-
-export function buildAgentMainSessionKey(params: {
-  agentId: string;
-  mainKey?: string | undefined;
-}): string {
-  const agentId = normalizeAgentId(params.agentId);
-  const mainKey = normalizeMainKey(params.mainKey);
-  return `agent:${agentId}:${mainKey}`;
 }
 
 export function normalizeDefaultMainSessionAliasForUi(

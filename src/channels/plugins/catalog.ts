@@ -57,6 +57,8 @@ export type ChannelPluginCatalogEntry = {
   trustedSourceLinkedOfficialInstall?: boolean;
   channel?: PluginPackageChannel;
   meta: ChannelMeta;
+  /** Validated docs from the official metadata owner, never a local plugin URL. */
+  officialDocsPath?: string;
   install: ChannelPluginCatalogInstall;
   installSource?: PluginInstallSourceInfo;
 };
@@ -305,6 +307,49 @@ function buildExternalCatalogEntry(
   });
 }
 
+function resolveOfficialCatalogDocsPath(
+  entry: ChannelPluginCatalogEntry,
+  officialEntries: ChannelPluginCatalogEntry[],
+  trustedOfficialPackageName?: string,
+): string | undefined {
+  let official: ChannelPluginCatalogEntry | undefined;
+  if (
+    entry.origin === "bundled" ||
+    (entry.origin === undefined && entry.trustedSourceLinkedOfficialInstall)
+  ) {
+    official = entry;
+  } else if (
+    (entry.origin === "global" || entry.origin === "config") &&
+    trustedOfficialPackageName
+  ) {
+    const packageName = trustedOfficialPackageName;
+    // Installed packages shadow the fallback row. Bind its official guide to both
+    // declared channel/plugin identity and the package verified by the install owner.
+    official = packageName
+      ? officialEntries.find(
+          (candidate) =>
+            candidate.id === entry.id &&
+            (candidate.pluginId ?? candidate.id) === entry.pluginId &&
+            [
+              candidate.installSource?.npm?.expectedPackageName,
+              candidate.installSource?.npm?.packageName,
+              candidate.installSource?.clawhub?.packageName,
+            ].includes(packageName),
+        )
+      : undefined;
+  }
+  const value = official?.meta.docsPath.trim();
+  if (!value || !value.startsWith("/") || value.startsWith("//") || value.includes("\\")) {
+    return undefined;
+  }
+  const origin = "https://docs.openclaw.ai";
+  const url = new URL(value, origin);
+  // Dot-segment normalization can turn a single-slash path into a network-path reference.
+  return url.origin === origin && !url.pathname.startsWith("//")
+    ? `${url.pathname}${url.search}${url.hash}`
+    : undefined;
+}
+
 export function buildChannelUiCatalog(
   plugins: Array<{ id: string; meta: ChannelMeta }>,
 ): ChannelUiCatalog {
@@ -352,11 +397,27 @@ export function listRawChannelPluginCatalogEntries(
     installRecords: options.installRecords,
     discovery: options.discovery,
   });
+  const officialFileEntries = loadCatalogEntriesFromPaths(resolveOfficialCatalogPaths(options));
+  const officialEntries = [...listOfficialExternalChannelCatalogEntries(), ...officialFileEntries]
+    .map((entry) => buildExternalCatalogEntry(entry, true))
+    .filter((entry): entry is ChannelPluginCatalogEntry => entry !== null);
   const resolved = new Map<string, { entry: ChannelPluginCatalogEntry; priority: number }>();
-  const rememberCatalogEntry = (entry: ChannelPluginCatalogEntry, priority: number) => {
+  const rememberCatalogEntry = (
+    entry: ChannelPluginCatalogEntry,
+    priority: number,
+    trustedOfficialPackageName?: string,
+  ) => {
     const existing = resolved.get(entry.id);
     if (!existing || priority < existing.priority) {
-      resolved.set(entry.id, { entry, priority });
+      const officialDocsPath = resolveOfficialCatalogDocsPath(
+        entry,
+        officialEntries,
+        trustedOfficialPackageName,
+      );
+      resolved.set(entry.id, {
+        entry: officialDocsPath ? { ...entry, officialDocsPath } : entry,
+        priority,
+      });
     }
   };
 
@@ -376,7 +437,11 @@ export function listRawChannelPluginCatalogEntries(
     if (!entry) {
       continue;
     }
-    rememberCatalogEntry(entry, ORIGIN_PRIORITY[candidate.origin] ?? 99);
+    rememberCatalogEntry(
+      entry,
+      ORIGIN_PRIORITY[candidate.origin] ?? 99,
+      candidate.trustedOfficialInstall ? candidate.packageName : undefined,
+    );
   }
 
   const rememberExternalCatalogEntries = (
@@ -391,12 +456,10 @@ export function listRawChannelPluginCatalogEntries(
       }
     }
   };
-  const officialFileEntries = loadCatalogEntriesFromPaths(resolveOfficialCatalogPaths(options));
-  rememberExternalCatalogEntries(
-    [...listOfficialExternalChannelCatalogEntries(), ...officialFileEntries],
-    FALLBACK_CATALOG_PRIORITY,
-    true,
-  );
+
+  for (const entry of officialEntries) {
+    rememberCatalogEntry(entry, FALLBACK_CATALOG_PRIORITY);
+  }
 
   const externalCatalogPaths = resolveExternalCatalogPaths(options).map((rawPath) =>
     resolveUserPath(rawPath, options.env ?? process.env),

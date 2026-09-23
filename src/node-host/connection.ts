@@ -9,6 +9,7 @@ import {
   NODE_WORKER_BUNDLE_STATUS_VERSION,
   NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
   NODE_WORKER_PORTAL_STREAM_VERSION,
+  NODE_WORKER_PREPARED_WORKSPACE_VERSION,
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
   type NodeWorkerCapacitySnapshot,
 } from "../infra/node-runner-inventory.js";
@@ -32,45 +33,23 @@ const NODE_SKILLS_UPDATE_METHOD = "node.skills.update";
 const NODE_OPTIONAL_PUBLICATION_RETRY_INITIAL_MS = 250;
 const NODE_OPTIONAL_PUBLICATION_RETRY_MAX_MS = 5_000;
 
-function isExactUnknownMethodError(error: unknown, method: string): boolean {
-  return (
-    error instanceof GatewayClientRequestError &&
-    error.gatewayCode === "INVALID_REQUEST" &&
-    error.message === `unknown method: ${method}`
-  );
-}
-
-function isExactLegacyNodeAuthorizationError(
-  error: unknown,
-  method: string,
-  gatewayProtocol: number,
-): boolean {
-  const legacyUnknownMethodShape =
-    gatewayProtocol === 3 ||
-    (gatewayProtocol === 4 && method === NODE_RUNNER_INVENTORY_UPDATE_METHOD);
-  return (
-    legacyUnknownMethodShape &&
-    error instanceof GatewayClientRequestError &&
-    error.gatewayCode === "INVALID_REQUEST" &&
-    error.message === "unauthorized role: node"
-  );
-}
-
 function classifyNodeMethodFailure(
   error: unknown,
   method: string,
   gatewayProtocol: number,
 ): "legacy-unsupported" | "rejected" | "transient" {
+  if (!(error instanceof GatewayClientRequestError) || error.gatewayCode !== "INVALID_REQUEST") {
+    return "transient";
+  }
   if (
-    isExactUnknownMethodError(error, method) ||
-    isExactLegacyNodeAuthorizationError(error, method, gatewayProtocol)
+    error.message === `unknown method: ${method}` ||
+    (error.message === "unauthorized role: node" &&
+      (gatewayProtocol === 3 ||
+        (gatewayProtocol === 4 && method === NODE_RUNNER_INVENTORY_UPDATE_METHOD)))
   ) {
     return "legacy-unsupported";
   }
-  if (error instanceof GatewayClientRequestError && error.gatewayCode === "INVALID_REQUEST") {
-    return "rejected";
-  }
-  return "transient";
+  return "rejected";
 }
 
 type NodeOptionalPublicationMethod =
@@ -79,18 +58,14 @@ type NodeOptionalPublicationMethod =
   | typeof NODE_SKILLS_UPDATE_METHOD;
 
 type NodeOptionalPublicationState = {
-  status: "unknown" | "supported" | "unsupported";
-  hasPending: boolean;
-  pendingParams?: unknown;
-  hasPublishedParams: boolean;
-  publishedParams?: unknown;
-  hasRejectedParams: boolean;
-  rejectedParams?: unknown;
+  unsupported: boolean;
+  pendingParams?: Record<string, unknown>;
+  publishedParams?: Record<string, unknown>;
+  rejectedParams?: Record<string, unknown>;
   retryDelayMs: number;
   retryPending: boolean;
   retryTimer?: NodeJS.Timeout;
-  hasInFlightParams: boolean;
-  inFlightParams?: unknown;
+  inFlightParams?: Record<string, unknown>;
   inFlight?: Promise<void>;
 };
 
@@ -98,17 +73,20 @@ export function startNodeHostConnection({
   prepared,
   client,
   onManifestChanged,
+  onWorkerHostingChanged,
   writeStderrLine,
 }: {
   prepared: PreparedRuntime;
   client: NodeHostClient;
   onManifestChanged: NonNullable<Parameters<PreparedRuntime["start"]>[0]["onManifestChanged"]>;
+  onWorkerHostingChanged?: (enabled: boolean) => void;
   writeStderrLine: (message: string) => void;
 }) {
   let publicationClient = client;
   let workerHostingEnabled = prepared.workerHostingEnabled;
   let inventory: NodeHostInventory = prepared.initialInventory;
   let workerCapacity: NodeWorkerCapacitySnapshot | undefined;
+  let reportedWorkerHostingEnabled = false;
   let gatewayHelloReceived = false;
   let gatewayConnectionGeneration = 0;
   let connectedGatewayProtocol = 0;
@@ -165,45 +143,41 @@ export function startNodeHostConnection({
 
   const queueOptionalPublication = (
     method: NodeOptionalPublicationMethod,
-    params: unknown,
+    params: Record<string, unknown>,
     label: string,
     isRetry = false,
   ): void => {
-    if (!gatewayHelloReceived) {
+    if (!gatewayHelloReceived || prepared.restrictedSurface) {
       return;
     }
     const connectionGeneration = gatewayConnectionGeneration;
     const gatewayProtocol = connectedGatewayProtocol;
     const connectionClient = publicationClient;
-    const connectionIsCurrent = () => connectionGeneration === gatewayConnectionGeneration;
     let state = optionalPublicationStates.get(method);
     if (!state) {
       state = {
-        status: "unknown",
-        hasPending: false,
-        hasPublishedParams: false,
-        hasRejectedParams: false,
+        unsupported: false,
         retryDelayMs: NODE_OPTIONAL_PUBLICATION_RETRY_INITIAL_MS,
         retryPending: false,
-        hasInFlightParams: false,
       };
       optionalPublicationStates.set(method, state);
     }
-    if (state.hasInFlightParams && isDeepStrictEqual(state.inFlightParams, params)) {
+    const connectionIsCurrent = () =>
+      connectionGeneration === gatewayConnectionGeneration &&
+      optionalPublicationStates.get(method) === state;
+    if (isDeepStrictEqual(state.inFlightParams, params)) {
       // The latest desired value remains authoritative even when it matches the
       // active request. Replace a newer pending value so A -> B -> A cannot publish B.
-      if (state.hasPending) {
+      if (state.pendingParams) {
         state.pendingParams = params;
       }
       return;
     }
     if (
-      state.status === "unsupported" ||
-      (state.hasRejectedParams && isDeepStrictEqual(state.rejectedParams, params)) ||
-      (state.hasPending && isDeepStrictEqual(state.pendingParams, params)) ||
-      (!state.inFlight &&
-        state.hasPublishedParams &&
-        isDeepStrictEqual(state.publishedParams, params))
+      state.unsupported ||
+      isDeepStrictEqual(state.rejectedParams, params) ||
+      isDeepStrictEqual(state.pendingParams, params) ||
+      (!state.inFlight && isDeepStrictEqual(state.publishedParams, params))
     ) {
       return;
     }
@@ -214,32 +188,27 @@ export function startNodeHostConnection({
     if (!isRetry) {
       state.retryDelayMs = NODE_OPTIONAL_PUBLICATION_RETRY_INITIAL_MS;
     }
-    state.hasRejectedParams = false;
     state.rejectedParams = undefined;
     state.pendingParams = params;
-    state.hasPending = true;
     if (state.inFlight) {
       return;
     }
     const publish = async () => {
-      while (state.hasPending && state.status !== "unsupported") {
+      while (state.pendingParams && !state.unsupported) {
         if (!connectionIsCurrent()) {
           return;
         }
         const nextParams = state.pendingParams;
         state.pendingParams = undefined;
-        state.hasPending = false;
-        if (state.hasPublishedParams && isDeepStrictEqual(state.publishedParams, nextParams)) {
+        if (isDeepStrictEqual(state.publishedParams, nextParams)) {
           continue;
         }
-        if (state.hasRejectedParams && !isDeepStrictEqual(state.rejectedParams, nextParams)) {
+        if (state.rejectedParams && !isDeepStrictEqual(state.rejectedParams, nextParams)) {
           // A different value reopens publication. Keeping the old rejection
           // would drop a later return to that value while this request is in flight.
-          state.hasRejectedParams = false;
           state.rejectedParams = undefined;
         }
         state.inFlightParams = nextParams;
-        state.hasInFlightParams = true;
         try {
           await connectionClient.request(method, nextParams);
           // Request settlement races reconnect teardown. Stale completions must
@@ -247,10 +216,7 @@ export function startNodeHostConnection({
           if (!connectionIsCurrent()) {
             return;
           }
-          state.status = "supported";
           state.publishedParams = nextParams;
-          state.hasPublishedParams = true;
-          state.hasRejectedParams = false;
           state.rejectedParams = undefined;
           state.retryDelayMs = NODE_OPTIONAL_PUBLICATION_RETRY_INITIAL_MS;
           state.retryPending = false;
@@ -260,29 +226,24 @@ export function startNodeHostConnection({
           }
           const failure = classifyNodeMethodFailure(error, method, gatewayProtocol);
           if (failure === "legacy-unsupported") {
-            state.status = "unsupported";
+            state.unsupported = true;
             state.pendingParams = undefined;
-            state.hasPending = false;
             state.retryPending = false;
           } else {
             writeStderrLine(`node host ${label} publish failed: ${String(error)}`);
             if (failure === "rejected") {
-              state.hasRejectedParams = true;
               state.rejectedParams = nextParams;
               state.retryPending = false;
-              if (state.hasPending && isDeepStrictEqual(state.pendingParams, nextParams)) {
+              if (isDeepStrictEqual(state.pendingParams, nextParams)) {
                 state.pendingParams = undefined;
-                state.hasPending = false;
               }
             } else {
               // A timeout or transport failure can occur after the Gateway applied
               // the update. Forget the acknowledged baseline so the next desired
               // value is never skipped against an uncertain remote state.
-              state.hasPublishedParams = false;
               state.publishedParams = undefined;
-              if (!state.hasPending || isDeepStrictEqual(state.pendingParams, nextParams)) {
+              if (!state.pendingParams || isDeepStrictEqual(state.pendingParams, nextParams)) {
                 state.pendingParams = nextParams;
-                state.hasPending = true;
                 state.retryPending = true;
                 break;
               }
@@ -290,7 +251,6 @@ export function startNodeHostConnection({
           }
         } finally {
           state.inFlightParams = undefined;
-          state.hasInFlightParams = false;
         }
       }
     };
@@ -298,8 +258,8 @@ export function startNodeHostConnection({
       if (state.inFlight === inFlight) {
         state.inFlight = undefined;
         if (
-          state.hasPending &&
-          state.status !== "unsupported" &&
+          state.pendingParams &&
+          !state.unsupported &&
           gatewayHelloReceived &&
           connectionIsCurrent()
         ) {
@@ -312,20 +272,18 @@ export function startNodeHostConnection({
             state.retryTimer = setTimeout(() => {
               state.retryTimer = undefined;
               if (
-                state.hasPending &&
+                state.pendingParams &&
                 isDeepStrictEqual(state.pendingParams, pendingParams) &&
                 gatewayHelloReceived &&
                 connectionIsCurrent()
               ) {
                 state.pendingParams = undefined;
-                state.hasPending = false;
                 queueOptionalPublication(method, pendingParams, label, true);
               }
             }, retryDelayMs);
             state.retryTimer.unref?.();
           } else {
             state.pendingParams = undefined;
-            state.hasPending = false;
             queueOptionalPublication(method, pendingParams, label);
           }
         }
@@ -349,31 +307,42 @@ export function startNodeHostConnection({
   };
 
   const publishRunnerInventory = () => {
+    const hostingCapacity = workerHostingEnabled ? workerCapacity : undefined;
+    const hostingEnabled = hostingCapacity !== undefined;
+    if (hostingEnabled !== reportedWorkerHostingEnabled) {
+      reportedWorkerHostingEnabled = hostingEnabled;
+      onWorkerHostingChanged?.(hostingEnabled);
+    }
     queueOptionalPublication(
       NODE_RUNNER_INVENTORY_UPDATE_METHOD,
       {
         protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-        workerHost:
-          workerHostingEnabled && workerCapacity
-            ? {
-                enabled: true,
-                capacity: workerCapacity,
-                bundlePrewarm: WORKER_BUNDLE_PREWARM_VERSION,
-                ...(gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_RETENTION)
-                  ? { bundleRetention: NODE_WORKER_BUNDLE_RETENTION_VERSION }
-                  : {}),
-                ...(gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_RETENTION) &&
-                gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_STATUS)
-                  ? { bundleStatus: NODE_WORKER_BUNDLE_STATUS_VERSION }
-                  : {}),
-                ...(gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_PORTAL_STREAM)
-                  ? { portalStream: NODE_WORKER_PORTAL_STREAM_VERSION }
-                  : {}),
-                ...(gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_ENVIRONMENT_SESSION)
-                  ? { environmentSession: NODE_WORKER_ENVIRONMENT_SESSION_VERSION }
-                  : {}),
-              }
-            : { enabled: false },
+        workerHost: hostingCapacity
+          ? {
+              enabled: true,
+              capacity: hostingCapacity,
+              ...(prepared.preparedWorkspacesEnabled
+                ? { preparedWorkspace: NODE_WORKER_PREPARED_WORKSPACE_VERSION }
+                : {}),
+              bundlePrewarm: WORKER_BUNDLE_PREWARM_VERSION,
+              ...(gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_RETENTION)
+                ? { bundleRetention: NODE_WORKER_BUNDLE_RETENTION_VERSION }
+                : {}),
+              ...(gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_RETENTION) &&
+              gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_STATUS)
+                ? { bundleStatus: NODE_WORKER_BUNDLE_STATUS_VERSION }
+                : {}),
+              ...(gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_PORTAL_STREAM)
+                ? { portalStream: NODE_WORKER_PORTAL_STREAM_VERSION }
+                : {}),
+              ...(gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_ENVIRONMENT_SESSION)
+                ? { environmentSession: NODE_WORKER_ENVIRONMENT_SESSION_VERSION }
+                : {}),
+              ...(gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_CAPTURED_EXEC_POLICY)
+                ? { capturedExecPolicy: true }
+                : {}),
+            }
+          : { enabled: false },
       },
       "runner inventory",
     );
@@ -411,6 +380,19 @@ export function startNodeHostConnection({
   });
   return {
     ...runtime,
+    refreshRunnerInventory() {
+      if (!gatewayHelloReceived) {
+        return;
+      }
+      const previous = optionalPublicationStates.get(NODE_RUNNER_INVENTORY_UPDATE_METHOD);
+      if (previous?.retryTimer) {
+        clearTimeout(previous.retryTimer);
+      }
+      // Approval retires the Gateway's declaration without replacing this transport.
+      // Retire its acknowledgment too, including requests still settling in flight.
+      optionalPublicationStates.delete(NODE_RUNNER_INVENTORY_UPDATE_METHOD);
+      publishRunnerInventory();
+    },
     connect(connection: NodeHostGatewayConnection, connectionClient: NodeHostClient = client) {
       retireGatewayConnection();
       publicationClient = connectionClient;
@@ -420,7 +402,9 @@ export function startNodeHostConnection({
         ...(connection.cloudflareAccess ? { cloudflareAccess: connection.cloudflareAccess } : {}),
       });
       gatewayHelloReceived = true;
-      startHostStatsPublication();
+      if (!prepared.restrictedSurface) {
+        startHostStatsPublication();
+      }
       connectedGatewayProtocol = connection.protocol;
       gatewayCapabilities = new Set(connection.capabilities);
       publishRunnerInventory();
@@ -429,6 +413,8 @@ export function startNodeHostConnection({
     disconnect,
     close() {
       retireGatewayConnection();
+      workerHostingEnabled = false;
+      publishRunnerInventory();
       runtime.updateGatewayConnection();
       return runtime.close();
     },

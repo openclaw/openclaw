@@ -132,10 +132,6 @@ export function buildCompactionDividerItem(
     ...(phase === "complete" && marker.kind === "compaction"
       ? {
           description: t("chat.compaction.description"),
-          action: {
-            kind: "session-checkpoints" as const,
-            label: t("chat.compaction.openCheckpoints"),
-          },
         }
       : {}),
     timestamp,
@@ -161,7 +157,11 @@ export function buildResetDividerItem(
 }
 
 function queuedSendStarted(item: ChatQueueItem): boolean {
-  return typeof item.sendSubmittedAtMs === "number" || (item.sendAttempts ?? 0) > 0;
+  // Submitting offline records timing without attempting delivery.
+  return (
+    (item.sendAttempts ?? 0) > 0 ||
+    (item.sendState !== "waiting-reconnect" && typeof item.sendSubmittedAtMs === "number")
+  );
 }
 
 export function isQueuedSendInlineState(item: ChatQueueItem): boolean {
@@ -170,6 +170,8 @@ export function isQueuedSendInlineState(item: ChatQueueItem): boolean {
     !item.localCommandName &&
     (item.sendState === "failed" ||
       item.sendState === "unconfirmed" ||
+      item.sendState === "held" ||
+      item.sendState === "waiting-reconnect" ||
       (item.sendState === "waiting-idle" && Boolean(item.sendError)))
   );
 }
@@ -179,8 +181,8 @@ export function shouldRenderQueuedSendInThread(item: ChatQueueItem): boolean {
   return (
     queuedSendStarted(item) &&
     (item.sendState === "waiting-model" ||
+      item.sendState === "submitting" ||
       item.sendState === "sending" ||
-      item.sendState === "waiting-reconnect" ||
       isQueuedSendInlineState(item))
   );
 }
@@ -193,40 +195,51 @@ export function resolveWorkingProgress(
   streamSegments: Array<{ ts: number; runId?: string }>,
   toolMessages: unknown[],
 ): WorkingProgress {
+  const visibleSends = queue.filter(shouldRenderQueuedSendInThread);
+  const pendingSends = visibleSends.filter((item) => !isQueuedSendInlineState(item));
   const queuedProgress =
-    queue.find((item) => item.sendState === "sending" && shouldRenderQueuedSendInThread(item)) ??
-    queue.find(shouldRenderQueuedSendInThread);
+    pendingSends.find((item) => item.sendState === "submitting" || item.sendState === "sending") ??
+    pendingSends[0];
   const queuedRunId = queuedProgress?.sendRunId ?? queuedProgress?.pendingRunId;
   const segmentRunId = streamSegments
     .map((segment) => segment.runId)
     .findLast(
       (candidate): candidate is string => typeof candidate === "string" && candidate.length > 0,
     );
-  const toolRunId = toolMessages
-    .map((message) => (message as Record<string, unknown> | null)?.runId)
+  const toolProgress = toolMessages.map(asRecord);
+  const toolRunId = toolProgress
+    .map((message) => message?.runId)
     .findLast(
       (candidate): candidate is string => typeof candidate === "string" && candidate.length > 0,
     );
-  // Stream and tool facts describe work already observed in this row. Queue
-  // identity is only a pre-run fallback and must not claim an active tail.
-  const explicitRunId = runId ?? segmentRunId ?? toolRunId ?? queuedRunId;
+  // A submitted send owns the acknowledgment gap; delayed activity from an
+  // earlier run must not claim it. Future queued sends remain a fallback.
+  const submittedRunId =
+    queuedProgress?.sendState === "submitting" || queuedProgress?.sendState === "sending"
+      ? queuedRunId
+      : undefined;
+  const explicitRunId = runId ?? submittedRunId ?? segmentRunId ?? toolRunId ?? queuedRunId;
   const cached = workingProgressBySession.get(sessionKey);
   const compatibleCached =
     cached && (!explicitRunId || !cached.runId || cached.runId === explicitRunId) ? cached : null;
   const candidates = [
     compatibleCached?.startedAt,
     streamStartedAt,
-    ...queue
-      .filter(shouldRenderQueuedSendInThread)
+    // Recovery rows cannot identify work, but matching durable timing survives reconnects.
+    ...visibleSends
+      .filter((item) =>
+        explicitRunId
+          ? (item.sendRunId ?? item.pendingRunId) === explicitRunId
+          : item === queuedProgress,
+      )
       // Send performance fields use performance.now(); the elapsed timer renders against Date.now().
       .map((item) => item.createdAt),
-    ...streamSegments.map((segment) => segment.ts),
-    ...toolMessages.map((message) => {
-      const receivedAt = (message as Record<string, unknown> | null)?.[
-        "__openclawToolStreamReceivedAt"
-      ];
-      return typeof receivedAt === "number" ? receivedAt : null;
-    }),
+    ...streamSegments
+      .filter((segment) => !explicitRunId || segment.runId === explicitRunId)
+      .map((segment) => segment.ts),
+    ...toolProgress
+      .filter((message) => !explicitRunId || message?.runId === explicitRunId)
+      .map((message) => message?.["__openclawToolStreamReceivedAt"]),
   ].filter((value): value is number => typeof value === "number" && Number.isFinite(value));
   const startedAt = candidates.length > 0 ? Math.min(...candidates) : Date.now();
   const key =

@@ -23,15 +23,25 @@ import {
   stopSlackMonitor,
 } from "./monitor.test-helpers.js";
 
+const mediaFetchMock = vi.hoisted(() =>
+  vi.fn<typeof import("./monitor/media.runtime.js").fetchWithRuntimeDispatcher>(),
+);
+
+vi.mock("./monitor/media.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./monitor/media.runtime.js")>()),
+  fetchWithRuntimeDispatcher: mediaFetchMock,
+}));
+
 const { monitorSlackProvider } = await import("./monitor/provider.js");
 
 const slackTestState = getSlackTestState();
 const { sendMock, replyMock, reactMock, reactionAddMock, upsertPairingRequestMock } =
   slackTestState;
 
-beforeEach(() => {
+beforeEach(async () => {
+  mediaFetchMock.mockReset().mockRejectedValue(new Error("Unexpected Slack media test request"));
   resetInboundDedupe();
-  resetSlackTestState(defaultSlackTestConfig());
+  await resetSlackTestState(defaultSlackTestConfig());
 });
 
 describe("monitorSlackProvider tool results", () => {
@@ -388,23 +398,78 @@ describe("monitorSlackProvider tool results", () => {
 
   it("includes recent channel history in Body when requireMention is false", async () => {
     setHistoryCaptureConfig({ "*": { requireMention: false } });
+    const firstTs = String(Date.now() / 1_000 + 1);
+    const secondTs = String(Number(firstTs) + 1);
     const capturedCtx = captureReplyContexts<{
       Body?: string;
       RawBody?: string;
       CommandBody?: string;
     }>();
+    getSlackClient()
+      .conversations.history.mockResolvedValueOnce({ messages: [] })
+      .mockResolvedValueOnce({ messages: [{ user: "U1", text: "first", ts: firstTs }] });
     await runMonitoredSlackMessages([
-      makeSlackMessageEvent({ user: "U1", text: "first", ts: "123", channel_type: "channel" }),
-      makeSlackMessageEvent({ user: "U2", text: "second", ts: "124", channel_type: "channel" }),
+      makeSlackMessageEvent({ user: "U1", text: "first", ts: firstTs, channel_type: "channel" }),
+      makeSlackMessageEvent({ user: "U2", text: "second", ts: secondTs, channel_type: "channel" }),
     ]);
 
     expect(replyMock).toHaveBeenCalledTimes(2);
     const latestCtx = capturedCtx.at(-1) ?? {};
-    expect(latestCtx.Body).toContain(HISTORY_CONTEXT_MARKER);
+    expect(latestCtx.Body).not.toContain(HISTORY_CONTEXT_MARKER);
     expect(latestCtx.Body).toContain("first");
     expect(latestCtx.Body).toContain(CURRENT_MESSAGE_MARKER);
     expect(latestCtx.RawBody).toBe("second");
     expect(latestCtx.CommandBody).toBe("second");
+  });
+
+  it("recovers platform edits and offline discussion after monitor restart without waking on quiet ingress", async () => {
+    setHistoryCaptureConfig({ C1: { allow: true, requireMention: true } });
+    const captured = captureReplyContexts<{
+      Body?: string;
+      RawBody?: string;
+      InboundHistory?: Array<{ body: string }>;
+    }>();
+    const client = getSlackClient();
+    await runSlackMessageOnce(
+      monitorSlackProvider,
+      {
+        event: makeSlackMessageEvent({
+          text: "old text before editing",
+          ts: "100",
+          channel_type: "channel",
+        }),
+      },
+      { awaitDispatch: true },
+    );
+    expect(replyMock).not.toHaveBeenCalled();
+    expect(client.conversations.history).not.toHaveBeenCalled();
+    expect(client.conversations.replies).not.toHaveBeenCalled();
+    client.conversations.history.mockResolvedValue({
+      messages: [
+        { user: "U2", text: "discussion while offline", ts: "102" },
+        { user: "U1", text: "edited platform text", ts: "100" },
+      ],
+    });
+    await runSlackMessageOnce(
+      monitorSlackProvider,
+      {
+        event: makeSlackMessageEvent({
+          text: "<@bot-user> recover the discussion",
+          ts: "103",
+          channel_type: "channel",
+        }),
+      },
+      { awaitDispatch: true },
+    );
+    expect(captured).toHaveLength(1);
+    expect(captured[0]?.InboundHistory?.map((entry) => entry.body)).toEqual([
+      "edited platform text",
+      "discussion while offline",
+    ]);
+    expect(captured[0]?.Body).toContain("edited platform text");
+    expect(captured[0]?.Body).toContain("discussion while offline");
+    expect(captured[0]?.Body).not.toContain("old text before editing");
+    expect(captured[0]?.RawBody).toContain("recover the discussion");
   });
 
   it("surfaces forwarded image download failures through the monitor dispatch boundary", async () => {
@@ -413,24 +478,20 @@ describe("monitorSlackProvider tool results", () => {
       latestCtx = (ctx ?? {}) as { RawBody?: string };
       return { text: "ack" };
     });
-    const originalFetch = globalThis.fetch;
-    const mockFetch = vi.fn(async () => new Response("Not Found", { status: 404 }));
-    globalThis.fetch = mockFetch as typeof fetch;
+    const mockFetch = mediaFetchMock.mockImplementation(
+      async () => new Response("Not Found", { status: 404 }),
+    );
 
-    try {
-      await runSlackMessageOnce(
-        monitorSlackProvider,
-        {
-          event: makeSlackMessageEvent({
-            text: "caption",
-            attachments: [{ is_share: true, image_url: "https://files.slack.com/forwarded.jpg" }],
-          }),
-        },
-        { awaitDispatch: true },
-      );
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
+    await runSlackMessageOnce(
+      monitorSlackProvider,
+      {
+        event: makeSlackMessageEvent({
+          text: "caption",
+          attachments: [{ is_share: true, image_url: "https://files.slack.com/forwarded.jpg" }],
+        }),
+      },
+      { awaitDispatch: true },
+    );
 
     expect(replyMock).toHaveBeenCalledTimes(1);
     expect(latestCtx?.RawBody).toBe("caption\n\n[slack attachment unavailable]");
@@ -451,7 +512,16 @@ describe("monitorSlackProvider tool results", () => {
 
   it("scopes thread history to the thread by default", async () => {
     setHistoryCaptureConfig({ C1: { allow: true, requireMention: true } });
-    const capturedCtx = captureReplyContexts<{ Body?: string }>();
+    const capturedCtx = captureReplyContexts<{ Body?: string; ThreadHistoryBody?: string }>();
+    getSlackClient().conversations.replies.mockImplementation(async (...args: unknown[]) => {
+      const request = args[0] as { ts: string };
+      return {
+        messages:
+          request.ts === "100"
+            ? [{ user: "U1", text: "thread-a-one", ts: "200" }]
+            : [{ user: "U2", text: "thread-b-root", ts: "300" }],
+      };
+    });
     await runMonitoredSlackMessages([
       makeSlackMessageEvent({
         user: "U1",
@@ -477,9 +547,10 @@ describe("monitorSlackProvider tool results", () => {
     ]);
 
     expect(replyMock).toHaveBeenCalledTimes(2);
-    expect(capturedCtx[0]?.Body).toContain("thread-a-one");
+    expect(capturedCtx[0]?.ThreadHistoryBody).toContain("thread-a-one");
+    expect(capturedCtx[1]?.ThreadHistoryBody).not.toContain("thread-a-one");
+    expect(capturedCtx[1]?.ThreadHistoryBody).not.toContain("thread-a-two");
     expect(capturedCtx[1]?.Body).not.toContain("thread-a-one");
-    expect(capturedCtx[1]?.Body).not.toContain("thread-a-two");
   });
 
   it("updates session status when replies start", async () => {
@@ -775,7 +846,7 @@ describe("monitorSlackProvider tool results", () => {
 
     expect(sendMock).toHaveBeenCalledTimes(1);
     expect(firstMockArg(sendMock, "send", 1)).toBe(
-      "PFX No reply was generated for this message. This is usually a temporary model failure - please try again.",
+      "PFX ⚠️ OpenClaw couldn't produce or deliver a reply. Please try again. If this keeps happening, ask the operator to check the gateway logs.",
     );
     await vi.waitFor(
       () =>
@@ -796,7 +867,7 @@ describe("monitorSlackProvider tool results", () => {
 
     expect(sendMock).toHaveBeenCalledTimes(1);
     expect(firstMockArg(sendMock, "send", 1)).toBe(
-      "PFX No reply was generated for this message. This is usually a temporary model failure - please try again.",
+      "PFX ⚠️ OpenClaw couldn't produce or deliver a reply. Please try again. If this keeps happening, ask the operator to check the gateway logs.",
     );
     await vi.waitFor(
       () =>

@@ -1,7 +1,7 @@
-// Nextcloud Talk monitor shutdown tests cover composite abort ownership.
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import { describe, expect, it, vi } from "vitest";
+import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import { monitorNextcloudTalkProvider } from "./monitor-runtime.js";
 import { setNextcloudTalkRuntime } from "./runtime.js";
 
@@ -36,7 +36,7 @@ describe("Nextcloud Talk monitor abort", () => {
           },
         },
       },
-      runtime: { error: vi.fn(), log: vi.fn(), exit: vi.fn() as never },
+      runtime: createRuntimeSpies(),
       abortSignal: abortController.signal,
       statusSink,
       createSpool,
@@ -84,7 +84,7 @@ describe("Nextcloud Talk monitor abort", () => {
           },
         },
       },
-      runtime: { error: vi.fn(), log: vi.fn(), exit: vi.fn() as never },
+      runtime: createRuntimeSpies(),
       abortSignal: abortController.signal,
       statusSink,
       createSpool: () => ({

@@ -1,11 +1,14 @@
 // Telegram tests cover state migrations plugin behavior.
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { Message } from "grammy/types";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import {
+  createPluginStateKeyedStoreForTests,
+  resetPluginStateStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { buildLegacyMigrationPreview } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -262,7 +265,7 @@ describe("telegram state migrations", () => {
     }
   });
 
-  it("detects legacy bot-info cache import", async () => {
+  it("imports legacy bot-info through the doctor contract and archives the sidecar", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-state-migration-"));
     const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
     const persistedPath = resolveTelegramBotInfoCachePath("ops", env);
@@ -325,7 +328,41 @@ describe("telegram state migrations", () => {
           },
         },
       });
+      const migration = stateMigrations[0];
+      if (!migration) {
+        throw new Error("expected Telegram migration");
+      }
+      const input = {
+        config: cfg,
+        env,
+        stateDir: dir,
+        oauthDir: path.join(dir, "credentials"),
+        context: {
+          openPluginStateKeyedStore: <T>(
+            options: Parameters<typeof createPluginStateKeyedStoreForTests>[1],
+          ) => createPluginStateKeyedStoreForTests<T>("telegram", { ...options, env }),
+        },
+      };
+      const migrated = await migration.migrateLegacyState(input);
+      expect(migrated.warnings).toEqual([]);
+      expect(migrated.changes).toContain(
+        "Migrated 1 Telegram startup bot info cache entry → plugin state",
+      );
+      const store = createPluginStateKeyedStoreForTests("telegram", {
+        namespace: botInfoPlan.namespace,
+        maxEntries: botInfoPlan.maxEntries,
+        env,
+      });
+      expect(await store.lookup("ops")).toMatchObject({
+        tokenFingerprint: "token:fingerprint",
+        botInfo: { id: 123456, username: "openclaw_bot" },
+      });
+      await expect(access(persistedPath)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(access(`${persistedPath}.migrated`)).resolves.toBeUndefined();
+      expect(await migration.detectLegacyState(input)).toBeNull();
+      expect(await migration.migrateLegacyState(input)).toEqual({ changes: [], warnings: [] });
     } finally {
+      resetPluginStateStoreForTests();
       await rm(dir, { recursive: true, force: true });
     }
   });

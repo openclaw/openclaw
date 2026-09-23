@@ -208,11 +208,11 @@ function mockGoogleTextResponse(text = "ok"): void {
 }
 
 function buildRateLimitResponse(): Response {
-  return new Response(
-    JSON.stringify({
+  return Response.json(
+    {
       error: { message: "quota exceeded", status: "RESOURCE_EXHAUSTED" },
-    }),
-    { status: 429, headers: { "content-type": "application/json" } },
+    },
+    { status: 429 },
   );
 }
 
@@ -1783,42 +1783,44 @@ describe("google transport stream", () => {
     expect(cancelCalled).toBe(true);
   });
 
-  it.each(["request headers", "response body"] as const)(
-    "retries Gemini 3 requests with lean thinking when the first %s stalls",
-    async (stalledPhase) => {
+  it.each(
+    [
+      { modelId: "gemini-3.1-pro-preview", retryThinkingLevel: "LOW" },
+      { modelId: "gemini-3.6-flash", retryThinkingLevel: "MINIMAL" },
+      { modelId: "gemini-3.7-flash", retryThinkingLevel: "LOW" },
+    ].flatMap(({ modelId, retryThinkingLevel }) =>
+      ["request headers", "response body"].map((stalledPhase) => ({
+        modelId,
+        retryThinkingLevel,
+        stalledPhase,
+      })),
+    ),
+  )(
+    "retries $modelId with $retryThinkingLevel thinking when the first $stalledPhase stalls",
+    async ({ modelId, retryThinkingLevel, stalledPhase }) => {
       vi.stubEnv("OPENCLAW_GOOGLE_GEMINI_FIRST_RESPONSE_RETRY_MS", "10");
-      guardedFetchMock
-        .mockImplementationOnce((_url: string, init?: RequestInit) =>
-          stalledPhase === "response body"
-            ? Promise.resolve(
-                new Response(new ReadableStream<Uint8Array>(), {
-                  headers: { "content-type": "text/event-stream" },
-                }),
-              )
-            : new Promise<Response>((_resolve, reject) => {
-                init?.signal?.addEventListener("abort", () => {
-                  reject(
-                    toLintErrorObject(
-                      init.signal?.reason ?? new Error("aborted"),
-                      "Non-Error rejection",
-                    ),
-                  );
-                });
+      guardedFetchMock.mockImplementationOnce((_url: string, init?: RequestInit) =>
+        stalledPhase === "response body"
+          ? Promise.resolve(
+              new Response(new ReadableStream<Uint8Array>(), {
+                headers: { "content-type": "text/event-stream" },
               }),
-        )
-        .mockResolvedValueOnce(
-          buildSseResponse([
-            {
-              candidates: [{ content: { parts: [{ text: "recovered" }] }, finishReason: "STOP" }],
-            },
-          ]),
-        );
+            )
+          : new Promise<Response>((_resolve, reject) => {
+              init?.signal?.addEventListener("abort", () => {
+                reject(
+                  toLintErrorObject(
+                    init.signal?.reason ?? new Error("aborted"),
+                    "Non-Error rejection",
+                  ),
+                );
+              });
+            }),
+      );
+      mockGoogleTextResponse("recovered");
 
       const result = await runGeminiStreamResult({
-        model: buildGeminiModel({
-          id: "gemini-3.1-pro-preview",
-          name: "Gemini 3.1 Pro Preview",
-        }),
+        model: buildGeminiModel({ id: modelId }),
         context: {
           messages: [{ role: "user", content: "hello", timestamp: 0 }],
           tools: [
@@ -1847,7 +1849,7 @@ describe("google transport stream", () => {
         thinkingLevel: "HIGH",
       });
       expect(retryGenerationConfig.thinkingConfig).toEqual({
-        thinkingLevel: "LOW",
+        thinkingLevel: retryThinkingLevel,
       });
       expect(retryBody.tools).toEqual(firstBody.tools);
     },
@@ -1926,66 +1928,52 @@ describe("google transport stream", () => {
   });
 
   it("retries when a pending response callback reaches the Gemini first-response deadline", async () => {
+    vi.useFakeTimers();
     vi.stubEnv("OPENCLAW_GOOGLE_GEMINI_FIRST_RESPONSE_RETRY_MS", "10");
-    const controller = new AbortController();
     const cancel = vi.fn();
-    guardedFetchMock
-      .mockResolvedValueOnce(
-        buildOpenRawSseResponse({
-          sse: 'data: {"candidates":[{"finishReason":"STOP"}]}\n\n',
-          onCancel: cancel,
-        }),
-      )
-      .mockResolvedValueOnce(
-        buildSseResponse([
-          {
-            candidates: [{ content: { parts: [{ text: "recovered" }] }, finishReason: "STOP" }],
-          },
-        ]),
-      );
-    let responseCount = 0;
-    const onResponse = vi.fn(() => {
-      responseCount += 1;
-      return responseCount === 1 ? new Promise<void>(() => {}) : undefined;
+    guardedFetchMock.mockResolvedValueOnce(
+      buildOpenRawSseResponse({
+        sse: 'data: {"candidates":[{"finishReason":"STOP"}]}\n\n',
+        onCancel: cancel,
+      }),
+    );
+    mockGoogleTextResponse("recovered");
+    let markHookStarted!: () => void;
+    const hookStarted = new Promise<void>((resolve) => {
+      markHookStarted = resolve;
     });
-    const safetyTimeout = setTimeout(() => {
-      controller.abort(new Error("test safety deadline reached"));
-    }, 5000);
+    const onResponse = vi.fn<() => void | Promise<void>>().mockImplementationOnce(() => {
+      markHookStarted();
+      return new Promise<void>(() => {});
+    });
+    const resultPromise = runGeminiStreamResult({
+      model: buildGeminiModel({ id: "gemini-3.1-pro-preview" }),
+      options: { reasoning: "high", onResponse },
+    });
 
-    try {
-      const result = await runGeminiStreamResult({
-        model: buildGeminiModel({ id: "gemini-3.1-pro-preview" }),
-        options: {
-          reasoning: "high",
-          signal: controller.signal,
-          onResponse,
-        },
-      });
+    // Advance only after callback entry so host load cannot race recovery.
+    await hookStarted;
+    await vi.advanceTimersByTimeAsync(9);
+    expect(guardedFetchMock).toHaveBeenCalledOnce();
+    expect(cancel).not.toHaveBeenCalled();
 
-      expect(result.content).toEqual([{ type: "text", text: "recovered" }]);
-      expect(onResponse).toHaveBeenCalledTimes(2);
-      expect(guardedFetchMock).toHaveBeenCalledTimes(2);
-      expect(cancel).toHaveBeenCalledOnce();
-    } finally {
-      clearTimeout(safetyTimeout);
-    }
+    await vi.advanceTimersByTimeAsync(1);
+    expect(guardedFetchMock).toHaveBeenCalledTimes(2);
+    expect(onResponse).toHaveBeenCalledTimes(2);
+    expect(cancel).toHaveBeenCalledOnce();
+    const result = await resultPromise;
+    expect(result.stopReason).toBe("stop");
+    expect(result.content).toEqual([{ type: "text", text: "recovered" }]);
   });
 
   it("keeps oversized-video shedding in the Gemini 3 retry payload", async () => {
     vi.stubEnv("OPENCLAW_GOOGLE_GEMINI_FIRST_RESPONSE_RETRY_MS", "10");
-    guardedFetchMock
-      .mockResolvedValueOnce(
-        new Response(new ReadableStream<Uint8Array>(), {
-          headers: { "content-type": "text/event-stream" },
-        }),
-      )
-      .mockResolvedValueOnce(
-        buildSseResponse([
-          {
-            candidates: [{ content: { parts: [{ text: "recovered" }] }, finishReason: "STOP" }],
-          },
-        ]),
-      );
+    guardedFetchMock.mockResolvedValueOnce(
+      new Response(new ReadableStream<Uint8Array>(), {
+        headers: { "content-type": "text/event-stream" },
+      }),
+    );
+    mockGoogleTextResponse("recovered");
 
     const result = await runGeminiStreamResult({
       model: buildGeminiModel({
@@ -2357,10 +2345,7 @@ describe("google transport stream", () => {
           credentialQuotaProject,
         );
         tokenFetchMock.mockResolvedValueOnce(
-          new Response(JSON.stringify({ access_token: "fixture-vertex-token", expires_in: 3600 }), {
-            status: 200,
-            headers: { "content-type": "application/json" },
-          }),
+          Response.json({ access_token: "fixture-vertex-token", expires_in: 3600 }),
         );
       } else if (credentialType === "service_account") {
         const tempDir = await mkdtemp(
@@ -2430,12 +2415,9 @@ describe("google transport stream", () => {
     await useGoogleAuthorizedUserCredentials("adc", "refresh-token");
     vi.stubEnv("GOOGLE_CLOUD_PROJECT", "vertex-project");
     vi.stubEnv("GOOGLE_CLOUD_LOCATION", "global");
-    const tokenFetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ access_token: "ya29.vertex-token", expires_in: 3600 }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      }),
-    );
+    const tokenFetchMock = vi
+      .fn()
+      .mockResolvedValue(Response.json({ access_token: "ya29.vertex-token", expires_in: 3600 }));
     mockGoogleTextResponse();
 
     const result = await runGoogleVertexStreamResult({ fetch: tokenFetchMock });
@@ -2556,20 +2538,12 @@ describe("google transport stream", () => {
     const tokenFetchMock = vi
       .fn()
       .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({
-            access_token: "ya29.unsafe-token",
-            expires_in: Number.MAX_SAFE_INTEGER,
-          }),
-          { status: 200, headers: { "content-type": "application/json" } },
-        ),
-      )
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify({ access_token: "ya29.fresh-token", expires_in: 3600 }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
+        Response.json({
+          access_token: "ya29.unsafe-token",
+          expires_in: Number.MAX_SAFE_INTEGER,
         }),
-      );
+      )
+      .mockResolvedValueOnce(Response.json({ access_token: "ya29.fresh-token", expires_in: 3600 }));
 
     await expect(resolveGoogleVertexAuthorizedUserHeaders(tokenFetchMock)).resolves.toEqual({
       Authorization: "Bearer ya29.unsafe-token",
@@ -2603,12 +2577,9 @@ describe("google transport stream", () => {
     vi.stubEnv("APPDATA", appDataDir);
     vi.stubEnv("GOOGLE_CLOUD_PROJECT", "vertex-project");
     vi.stubEnv("GOOGLE_CLOUD_LOCATION", "global");
-    const tokenFetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ access_token: "ya29.appdata-token", expires_in: 3600 }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      }),
-    );
+    const tokenFetchMock = vi
+      .fn()
+      .mockResolvedValue(Response.json({ access_token: "ya29.appdata-token", expires_in: 3600 }));
     mockGoogleTextResponse();
 
     await runGoogleVertexStreamResult({ fetch: tokenFetchMock });
@@ -3166,6 +3137,8 @@ describe("google transport stream", () => {
     ["gemini-pro-latest", "LOW"],
     ["gemini-flash-latest", "MINIMAL"],
     ["gemini-flash-lite-latest", "MINIMAL"],
+    ["gemini-3.6-flash", "MINIMAL"],
+    ["gemini-3.7-flash", "LOW"],
   ] as const)(
     "uses thinkingLevel instead of disabled thinkingBudget for %s defaults",
     (id, level) => {

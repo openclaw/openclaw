@@ -1,11 +1,12 @@
 // Signal setup owns transport discovery and canonical account writes.
-import { normalizeAccountId, resolveAccountEntry } from "openclaw/plugin-sdk/account-resolution";
+import { normalizeAccountId } from "openclaw/plugin-sdk/account-resolution";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   DEFAULT_ACCOUNT_ID,
   patchChannelConfigForAccount,
 } from "openclaw/plugin-sdk/setup-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveSignalAccountEntry } from "./account-selection.js";
 import type { SignalTransportConfig } from "./account-types.js";
 import {
   listSignalAccountIds,
@@ -26,7 +27,11 @@ import {
   isSignalManagedNativeConnectionUrlForBind,
   resolveLocalSignalTransportPort,
 } from "./transport-policy.js";
-import { normalizeSignalTransportHost, normalizeSignalTransportUrl } from "./transport-url.js";
+import {
+  assertSignalSocketTransport,
+  normalizeSignalTransportHost,
+  normalizeSignalTransportUrl,
+} from "./transport-url.js";
 
 export { detectSignalTransport, type SignalTransportProbeResult } from "./transport-detection.js";
 
@@ -44,6 +49,7 @@ function managedTransportOptions(
 
 function normalizeTransport(transport: SignalTransportConfig): SignalTransportConfig {
   if (transport.kind === "managed-native") {
+    assertSignalSocketTransport(transport);
     return {
       ...transport,
       ...(transport.url ? { url: normalizeSignalTransportUrl(transport.url) } : {}),
@@ -85,7 +91,10 @@ function assertSignalLocalEndpointDoesNotConflictWithManagedSibling(params: {
     if (normalizeAccountId(accountId) === targetAccountId) {
       continue;
     }
-    const accountEntry = resolveAccountEntry(params.cfg.channels?.signal?.accounts, accountId);
+    const accountEntry = resolveSignalAccountEntry(
+      params.cfg.channels?.signal?.accounts,
+      accountId,
+    );
     if (accountEntry?.enabled === false) {
       continue;
     }
@@ -99,7 +108,11 @@ function assertSignalLocalEndpointDoesNotConflictWithManagedSibling(params: {
       continue;
     }
     const siblingTransport = siblingAccount.transport;
-    if (siblingTransport?.kind !== "managed-native" || siblingTransport.httpPort !== localPort) {
+    if (
+      siblingTransport?.kind !== "managed-native" ||
+      siblingTransport.socketPath !== undefined ||
+      siblingTransport.httpPort !== localPort
+    ) {
       continue;
     }
     throw new Error(
@@ -115,8 +128,9 @@ export function resolveConfiguredSignalTransport(
   const signal = cfg.channels?.signal;
   const normalizedAccountId = normalizeAccountId(accountId);
   return normalizedAccountId === DEFAULT_ACCOUNT_ID
-    ? (signal?.transport ?? resolveAccountEntry(signal?.accounts, normalizedAccountId)?.transport)
-    : resolveAccountEntry(signal?.accounts, normalizedAccountId)?.transport;
+    ? (signal?.transport ??
+        resolveSignalAccountEntry(signal?.accounts, normalizedAccountId)?.transport)
+    : resolveSignalAccountEntry(signal?.accounts, normalizedAccountId)?.transport;
 }
 
 function alignManagedConnectionUrlAfterBindChange(params: {
@@ -158,6 +172,15 @@ export function prepareSignalManagedNativeTransport(params: {
 }): SignalManagedNativeTransport {
   const existing = resolveConfiguredSignalTransport(params.cfg, params.accountId);
   const existingManaged = existing?.kind === "managed-native" ? existing : undefined;
+  const socketCandidate = {
+    kind: "managed-native" as const,
+    ...existingManaged,
+    ...params.overrides,
+  };
+  if (socketCandidate.socketPath !== undefined) {
+    assertSignalSocketTransport(socketCandidate);
+    return socketCandidate;
+  }
   const preferredPort = params.overrides?.httpPort ?? existingManaged?.httpPort;
   const prepared: SignalManagedNativeTransport = {
     kind: "managed-native",
@@ -180,6 +203,9 @@ export function prepareSignalManagedNativeTransport(params: {
     portsByAccountId.set(normalizedAccountId, accountPorts);
     const transport = accountConfig.transport;
     if (transport?.kind === "managed-native") {
+      if (transport.socketPath !== undefined) {
+        continue;
+      }
       if (transport.httpPort !== undefined) {
         accountPorts.add(transport.httpPort);
       } else {

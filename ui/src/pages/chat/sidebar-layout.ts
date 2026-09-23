@@ -1,3 +1,13 @@
+import {
+  cloneLayout,
+  clampWidth,
+  clampHeight,
+  sidebarDock,
+  sidebarMainPanel,
+  sidebarSidePanels,
+  sidebarActivePanel,
+  isSidebarSlotVisible,
+} from "./sidebar-layout-geometry.ts";
 import type {
   SidebarColumn,
   SidebarDock,
@@ -14,20 +24,23 @@ export type {
   SidebarSlotId,
 } from "./sidebar-layout-types.ts";
 
+export {
+  sidebarDock,
+  sidebarMainPanel,
+  sidebarSidePanels,
+  sidebarActivePanel,
+  isSidebarSlotVisible,
+  fitSidebarLayout,
+  initializeBrowserSidebarWidth,
+  isSidebarRegionCollapsed,
+  SIDEBAR_MIN_WIDTH_PX,
+  SIDEBAR_MIN_HEIGHT_PX,
+  SIDEBAR_NARROW_BREAKPOINT_PX,
+} from "./sidebar-layout-geometry.ts";
+
 const SIDEBAR_DEFAULT_WIDTH_PX = 480;
 const SIDEBAR_DEFAULT_HEIGHT_PX = 360;
 export const SIDEBAR_GEOMETRY_COMMIT_EVENT = "openclaw-sidebar-geometry-commit";
-export const SIDEBAR_MIN_WIDTH_PX = 260;
-export const SIDEBAR_MIN_HEIGHT_PX = 220;
-const SIDEBAR_MAX_WIDTH_PX = 1_200;
-const SIDEBAR_MAX_HEIGHT_PX = 800;
-const SIDEBAR_MAIN_MIN_WIDTH_PX = 312;
-export const SIDEBAR_NARROW_BREAKPOINT_PX = 680;
-const SIDEBAR_DIVIDER_WIDTH_PX = 4;
-
-function cloneLayout(layout: SidebarLayout): SidebarLayout {
-  return structuredClone(layout);
-}
 
 function createSidebarColumn(): SidebarColumn {
   return {
@@ -37,38 +50,35 @@ function createSidebarColumn(): SidebarColumn {
     activePanelId: "",
     height: SIDEBAR_DEFAULT_HEIGHT_PX,
     width: SIDEBAR_DEFAULT_WIDTH_PX,
+    browserWidthPending: true,
   };
 }
 
-function clampWidth(width: number): number {
-  return Math.min(SIDEBAR_MAX_WIDTH_PX, Math.max(SIDEBAR_MIN_WIDTH_PX, width));
-}
-
-function clampHeight(height: number): number {
-  return Math.min(SIDEBAR_MAX_HEIGHT_PX, Math.max(SIDEBAR_MIN_HEIGHT_PX, height));
-}
-
-export function sidebarDock(layout: SidebarLayout): SidebarDock {
-  return layout.dock === "bottom" || layout.dock === "left" ? layout.dock : "right";
-}
-
-export function sidebarMainPanel(layout: SidebarLayout): SidebarPanel | undefined {
-  return layout.columns[0]?.panels.find((panel) => panel.id === layout.mainPanelId);
-}
-
-export function sidebarSidePanels(layout: SidebarLayout): SidebarPanel[] {
-  return layout.columns[0]?.panels.filter((panel) => panel.id !== layout.mainPanelId) ?? [];
-}
-
-export function sidebarActivePanel(layout: SidebarLayout): SidebarPanel | undefined {
-  return sidebarSidePanels(layout).find((panel) => panel.id === layout.columns[0]?.activePanelId);
-}
-
-export function isSidebarSlotVisible(layout: SidebarLayout, slot: SidebarSlotId): boolean {
-  if ((sidebarMainPanel(layout)?.slot ?? "conversation") === slot) {
-    return true;
+/** Logical presentation, independent of responsive/narrow viewport projection. */
+export function sidebarDashboardPresentation(
+  layout: SidebarLayout,
+): "split" | "expanded" | undefined {
+  if (!isSidebarSlotVisible(layout, "dashboard")) {
+    return undefined;
   }
-  return layout.open === true && !layout.expanded && sidebarActivePanel(layout)?.slot === slot;
+  return layout.expanded || layout.open !== true ? "expanded" : "split";
+}
+
+/** Open without changing panel identities, docking, dimensions, or other panel state. */
+export function openDashboardPresentation(
+  layout: SidebarLayout,
+  presentation: "split" | "expanded",
+): SidebarLayout {
+  let next = openSlot(layout, "dashboard");
+  if (presentation === "expanded") {
+    const dashboard = next.columns[0]?.panels.find((panel) => panel.slot === "dashboard");
+    if (dashboard) {
+      next = promoteSidebarPanel(next, dashboard.id);
+    }
+  } else if (sidebarMainPanel(next)?.slot === "dashboard") {
+    next = openSlot(next, "conversation");
+  }
+  return setSidebarExpanded(next, presentation === "expanded");
 }
 
 function nextPanelId(layout: SidebarLayout, slot: SidebarSlotId): string {
@@ -128,13 +138,14 @@ export function promoteSidebarPanel(layout: SidebarLayout, panelId: string): Sid
   next.columns[0]!.activePanelId = previousMainId;
   next.open = true;
   next.expanded = false;
+  delete next.expandedSide;
   return next;
 }
 
 export function openSlot(layout: SidebarLayout, slot: SidebarSlotId): SidebarLayout {
   const next = cloneLayout(layout);
   if ((sidebarMainPanel(next)?.slot ?? "conversation") === slot) {
-    return next;
+    return next.expandedSide ? setSidebarExpanded(next, false) : next;
   }
   const existing = next.columns
     .flatMap((column) => column.panels)
@@ -143,6 +154,7 @@ export function openSlot(layout: SidebarLayout, slot: SidebarSlotId): SidebarLay
     next.open = true;
     if (next.expanded) {
       next.expanded = false;
+      delete next.expandedSide;
     }
     const column = next.columns.find((entry) => entry.panels.includes(existing));
     if (column) {
@@ -157,6 +169,7 @@ export function openSlot(layout: SidebarLayout, slot: SidebarSlotId): SidebarLay
   next.open = true;
   if (next.expanded) {
     next.expanded = false;
+    delete next.expandedSide;
   }
   return next;
 }
@@ -167,6 +180,9 @@ export function closeSlot(layout: SidebarLayout, slot: SidebarSlotId): SidebarLa
     .flatMap((column) => column.panels)
     .find((entry) => entry.slot === slot);
   if (panel) {
+    if (next.expandedSide && panel.id === sidebarActivePanel(next)?.id) {
+      next = setSidebarExpanded(next, false);
+    }
     if (slot === "conversation") {
       if (panel.id !== next.mainPanelId) {
         next.open = false;
@@ -200,6 +216,7 @@ export function activatePanel(layout: SidebarLayout, panelId: string): SidebarLa
     next.open = true;
     if (next.expanded) {
       next.expanded = false;
+      delete next.expandedSide;
     }
   }
   return next;
@@ -233,15 +250,36 @@ export function setSidebarOpen(layout: SidebarLayout, open: boolean): SidebarLay
     next.columns[0] ??= createSidebarColumn();
     if (next.expanded) {
       next.expanded = false;
+      delete next.expandedSide;
     }
   }
   next.open = open;
+  if (!open && next.expandedSide) {
+    next.expanded = false;
+    delete next.expandedSide;
+  }
   return next;
 }
 
 export function setSidebarExpanded(layout: SidebarLayout, expanded: boolean): SidebarLayout {
   // Restore split must reveal the side even when focus began with that panel closed.
-  return { ...cloneLayout(layout), expanded, ...(expanded ? { open: true } : {}) };
+  const next = cloneLayout(layout);
+  delete next.expandedSide;
+  return { ...next, expanded, ...(expanded ? { open: true } : {}) };
+}
+
+/** Focus in place: restoring must not leave the main and side views swapped. */
+export function toggleSidebarPanelExpanded(layout: SidebarLayout, panelId: string): SidebarLayout {
+  if (!sidebarSidePanels(layout).some((panel) => panel.id === panelId)) {
+    return cloneLayout(layout);
+  }
+  if (layout.expanded && layout.expandedSide && sidebarActivePanel(layout)?.id === panelId) {
+    return setSidebarExpanded(layout, false);
+  }
+  const next = activatePanel(ensureSidebarConversation(layout), panelId);
+  next.expanded = true;
+  next.expandedSide = true;
+  return next;
 }
 
 export function setSidebarDock(layout: SidebarLayout, dock: SidebarDock): SidebarLayout {
@@ -260,42 +298,10 @@ export function resizeSidebarPanel(
       column.height = clampHeight(size);
     } else {
       column.width = clampWidth(size);
+      delete column.browserWidthPending;
     }
   }
   return next;
-}
-
-export function fitSidebarLayout(
-  layout: SidebarLayout,
-  availableWidth: number,
-): SidebarLayout | null {
-  const next = cloneLayout(layout);
-  if (!Number.isFinite(availableWidth) || availableWidth <= 0) {
-    return next;
-  }
-  const column = next.columns[0];
-  if (!column) {
-    return next;
-  }
-  next.columns = [column];
-  if (sidebarDock(next) === "bottom") {
-    column.height = clampHeight(column.height);
-    return next;
-  }
-  const maxColumnWidth = Math.max(
-    SIDEBAR_MIN_WIDTH_PX,
-    Math.min(SIDEBAR_MAX_WIDTH_PX, availableWidth * 0.6),
-  );
-  const budget = Math.max(0, availableWidth - SIDEBAR_MAIN_MIN_WIDTH_PX - SIDEBAR_DIVIDER_WIDTH_PX);
-  if (SIDEBAR_MIN_WIDTH_PX > budget) {
-    return null;
-  }
-  column.width = Math.min(maxColumnWidth, budget, clampWidth(column.width));
-  return next;
-}
-
-export function isSidebarRegionCollapsed(_layout: SidebarLayout, availableWidth: number): boolean {
-  return availableWidth < SIDEBAR_NARROW_BREAKPOINT_PX;
 }
 
 export { normalizeSidebarLayout } from "./sidebar-layout-normalize.ts";

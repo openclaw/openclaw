@@ -65,60 +65,72 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-basics", () => {
       streamMode: "off",
       telegramDeps: {
         ...telegramDepsForTest,
-        deliverInboundReplyWithMessageSendContext: undefined,
+        deliverStructuredInboundReplyWithMessageSendContext: undefined,
       },
     });
 
     expectDeliverRepliesParams({ cfg });
   });
 
-  it("queues final Telegram replies through outbound delivery when available", async () => {
-    deliverInboundReplyWithMessageSendContext.mockResolvedValue({
-      status: "handled_visible",
-      delivery: {
-        messageIds: ["1001"],
-        visibleReplySent: true,
-      },
-    });
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
-      await dispatcherOptions.deliver({ text: "Hello queued" }, { kind: "final" });
-      return { queuedFinal: true };
-    });
+  it.each([
+    { participant: undefined, expectedText: "Hello queued" },
+    {
+      participant: { agentId: "analyst", name: "Analyst" },
+      expectedText: "**Analyst**\nHello queued",
+    },
+  ])(
+    "queues final Telegram replies with participant $participant",
+    async ({ participant, expectedText }) => {
+      deliverInboundReplyWithMessageSendContext.mockResolvedValue({
+        status: "handled_visible",
+        delivery: {
+          messageIds: ["1001"],
+          visibleReplySent: true,
+        },
+      });
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+        await dispatcherOptions.deliver(
+          { text: "Hello queued" },
+          { kind: "final", ...(participant ? { participant } : {}) },
+        );
+        return { queuedFinal: true };
+      });
 
-    await dispatchWithContext({
-      context: createContext({
-        ctxPayload: {
-          SessionKey: "s1",
-          ChatType: "direct",
-          SenderId: "42",
-          SenderName: "Alice",
-          SenderUsername: "alice",
-        } as unknown as TelegramMessageContext["ctxPayload"],
-      }),
-      streamMode: "off",
-      telegramDeps: telegramDepsForTest,
-    });
+      await dispatchWithContext({
+        context: createContext({
+          ctxPayload: {
+            SessionKey: "s1",
+            ChatType: "direct",
+            SenderId: "42",
+            SenderName: "Alice",
+            SenderUsername: "alice",
+          } as unknown as TelegramMessageContext["ctxPayload"],
+        }),
+        streamMode: "off",
+        telegramDeps: telegramDepsForTest,
+      });
 
-    const outbound = expectRecordFields(mockCallArg(deliverInboundReplyWithMessageSendContext), {
-      channel: "telegram",
-      to: "telegram:123",
-      accountId: "default",
-      info: { kind: "final" },
-      replyToMode: "first",
-      threadId: 777,
-      agentId: "default",
-    });
-    expectRecordFields(outbound.payload, { text: "Hello queued" });
-    expectRecordFields(outbound.formatting, { textLimit: 4096, tableMode: "preserve" });
-    expectRecordFields(outbound.ctxPayload, {
-      SessionKey: "s1",
-      ChatType: "direct",
-      SenderId: "42",
-      SenderName: "Alice",
-      SenderUsername: "alice",
-    });
-    expect(deliverReplies).not.toHaveBeenCalled();
-  });
+      const outbound = expectRecordFields(mockCallArg(deliverInboundReplyWithMessageSendContext), {
+        channel: "telegram",
+        to: "telegram:123",
+        accountId: "default",
+        info: { kind: "final" },
+        replyToMode: "first",
+        threadId: 777,
+        agentId: "default",
+      });
+      expectRecordFields(outbound.payload, { text: expectedText });
+      expectRecordFields(outbound.formatting, { textLimit: 4096, tableMode: "preserve" });
+      expectRecordFields(outbound.ctxPayload, {
+        SessionKey: "s1",
+        ChatType: "direct",
+        SenderId: "42",
+        SenderName: "Alice",
+        SenderUsername: "alice",
+      });
+      expect(deliverReplies).not.toHaveBeenCalled();
+    },
+  );
 
   it("canonicalizes mixed presentation finals before durable stream-off delivery", async () => {
     deliverInboundReplyWithMessageSendContext.mockResolvedValue({
@@ -538,6 +550,7 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-basics", () => {
     "uses reply mode $replyToMode after retained pagination falls back to its suffix",
     async ({ replyToMode, expectedFallbackMode, keepsReply }) => {
       const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+      answerDraftStream.lastDeliveredText.mockReturnValue("visible prefix");
       answerDraftStream.remainingFinalContent.mockReturnValue({
         text: "unsent suffix",
         sourceText: "unsent suffix",

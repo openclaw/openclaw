@@ -4,7 +4,11 @@ import {
   type AgentHarnessAttemptParamsV2,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AssistantMessage, Usage } from "openclaw/plugin-sdk/llm";
-import type { CodexProviderRefusal } from "./event-projector-values.js";
+import type { CodexAsyncQuestion } from "./async-questions.js";
+import {
+  codexProviderRefusalDetails,
+  type CodexProviderRefusal,
+} from "./event-projector-values.js";
 import {
   resolveCodexLocalRuntimeAttribution,
   type CodexLocalRuntimeAttributionParams,
@@ -31,7 +35,7 @@ export type AssistantMessageOptions = {
 };
 
 export type CodexAsyncAssistantMessage = AssistantMessage & {
-  openclawAsyncDelivery: { itemId: string };
+  openclawAsyncDelivery: { itemId: string; questions?: CodexAsyncQuestion[] };
 };
 
 const ZERO_USAGE: Usage = {
@@ -107,7 +111,7 @@ export function createAttributedCodexAssistantMessage(
             {
               type: "provider_refusal",
               timestamp: Date.now(),
-              details: { provider: "openai", category: refusal.category },
+              details: codexProviderRefusalDetails(refusal),
             },
           ],
         }
@@ -122,18 +126,10 @@ export function createAssistantCommentaryMessage(
   itemId: string,
   timestamp: number,
 ): AssistantMessage {
-  const attribution = resolveCodexLocalRuntimeAttribution(params);
   const message: AssistantMessage & {
     openclawStreamFallback: { replacementText: string; source: "segment"; itemId: string };
   } = {
-    role: "assistant",
-    content: [{ type: "text", text }],
-    api: attribution.api ?? "openai-chatgpt-responses",
-    provider: attribution.provider,
-    model: params.modelId,
-    usage: ZERO_USAGE,
-    stopReason: "stop",
-    timestamp,
+    ...createNonterminalAssistantMessage(params, [{ type: "text", text }], timestamp),
     // Keep this unphased: gateway history hides commentary-phase assistant rows.
     // The keyed fallback persists Control UI narration without channel delivery.
     openclawStreamFallback: {
@@ -150,18 +146,11 @@ export function createAssistantAsyncMessage(
   text: string,
   itemId: string,
   timestamp: number,
+  questions?: CodexAsyncQuestion[],
 ): CodexAsyncAssistantMessage {
-  const attribution = resolveCodexLocalRuntimeAttribution(params);
   return {
-    role: "assistant",
-    content: [{ type: "text", text }],
-    api: attribution.api ?? "openai-chatgpt-responses",
-    provider: attribution.provider,
-    model: params.modelId,
-    usage: ZERO_USAGE,
-    stopReason: "stop",
-    timestamp,
-    openclawAsyncDelivery: { itemId },
+    ...createNonterminalAssistantMessage(params, [{ type: "text", text }], timestamp),
+    openclawAsyncDelivery: { itemId, ...(questions ? { questions } : {}) },
   };
 }
 
@@ -169,16 +158,24 @@ export function createAssistantReasoningMessage(
   params: CodexAssistantMessageParams,
   text: string,
 ): AssistantMessage {
+  // Shared history and visibility controls need reasoning, not final-answer text.
+  return createNonterminalAssistantMessage(params, [{ type: "thinking", thinking: text }]);
+}
+
+function createNonterminalAssistantMessage(
+  params: CodexAssistantMessageParams,
+  content: AssistantMessage["content"],
+  timestamp?: number,
+): AssistantMessage {
   const attribution = resolveCodexLocalRuntimeAttribution(params);
   return {
     role: "assistant",
-    // Shared history and visibility controls need reasoning, not final-answer text.
-    content: [{ type: "thinking", thinking: text }],
+    content,
     api: attribution.api ?? "openai-chatgpt-responses",
     provider: attribution.provider,
     model: params.modelId,
     usage: ZERO_USAGE,
     stopReason: "stop",
-    timestamp: Date.now(),
+    timestamp: timestamp ?? Date.now(),
   };
 }

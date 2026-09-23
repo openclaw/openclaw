@@ -13,7 +13,7 @@ import {
   createDiagnosticTraceContext,
   runWithDiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
-import { getChildLogger, resetLogger, setLoggerOverride } from "./logger.js";
+import { getChildLogger, resetLogger, setLoggerOverride, toPinoLikeLogger } from "./logger.js";
 
 const TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736";
 const SPAN_ID = "00f067aa0ba902b7";
@@ -123,7 +123,7 @@ describe("diagnostic log events", () => {
       subsystem: "diagnostic",
       trace: { traceId: TRACE_ID, spanId: SPAN_ID },
     });
-    logger.info(
+    toPinoLikeLogger(logger, "info").info(
       {
         token: secret,
         longValue: "x".repeat(5000),

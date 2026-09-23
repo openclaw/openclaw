@@ -6,6 +6,7 @@ import {
 } from "openclaw/plugin-sdk/file-access-runtime";
 import {
   createWritableRenameTargetResolver,
+  type DirectoryEntry,
   type SandboxBackendHandle,
   type SandboxFsBridge,
   type SandboxFsStat,
@@ -70,6 +71,10 @@ class MxcFsBridge implements SandboxFsBridge {
     };
   }
 
+  get pathMappings(): NonNullable<SandboxFsBridge["pathMappings"]> {
+    return [...this.protectedSkillMounts, ...this.workspaceMounts];
+  }
+
   async readFile(params: { filePath: string; cwd?: string; maxBytes?: number }): Promise<Buffer> {
     const target = this.resolveTarget(params);
     return (await (
@@ -78,6 +83,15 @@ class MxcFsBridge implements SandboxFsBridge {
       hardlinks: "reject",
       ...(params.maxBytes === undefined ? {} : { maxBytes: params.maxBytes }),
     })) as Buffer;
+  }
+
+  async readDirectory(
+    params: Parameters<NonNullable<SandboxFsBridge["readDirectory"]>>[0],
+  ): Promise<DirectoryEntry[]> {
+    const target = this.resolveTarget(params);
+    const root = await fsRoot(target.mount.hostRoot);
+    const entries = await root.list(target.mountRelativePath, { withFileTypes: true });
+    return entries.map(({ name, isDirectory }) => ({ name, isDirectory }));
   }
 
   async writeFile(params: {

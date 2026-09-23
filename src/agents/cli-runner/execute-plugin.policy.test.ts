@@ -1,37 +1,29 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type {
-  CliBackendExecute,
-  CliBackendExecuteContext,
-  CliBackendToolPermissionResult,
-} from "../../plugins/cli-backend.types.js";
+import type { CliBackendToolPermissionResult } from "../../plugins/cli-backend.types.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../../plugins/hook-runner-global.js";
 import type { PluginHookHandlerMap } from "../../plugins/hook-types.js";
 import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
-import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import * as beforeToolCall from "../agent-tools.before-tool-call.js";
-import { buildPreparedCliRunContext } from "../cli-runner.test-helpers.js";
+import { createCliJsonlStreamingParser } from "../cli-output-stream.js";
 import { callGatewayTool } from "../tools/gateway.js";
-import { executePluginOwnedProcess } from "./execute-plugin.js";
-import type { PreparedCliRunContext } from "./types.js";
+import { createCliEventHandlers } from "./execute-events.js";
+import {
+  closePluginTestAdmissions,
+  createExecution,
+  requestNativeTool,
+  runPlugin,
+  SUCCESS_RESULT,
+} from "./execute-plugin.test-support.js";
+import { createCliToolTracking } from "./execute-tool-tracking.js";
 
 vi.mock("../tools/gateway.js", () => ({
   callGatewayTool: vi.fn(),
 }));
 
 const mockCallGatewayTool = vi.mocked(callGatewayTool);
-const activeAdmissions: Array<ReturnType<typeof prepareSystemAgentRunAdmission>> = [];
-let nextRunId = 0;
-
-const SUCCESS_RESULT = {
-  type: "result",
-  subtype: "success",
-  is_error: false,
-  result: "completed",
-  session_id: "sdk-session",
-};
 
 function installBeforeToolCallHook(
   handler: PluginHookHandlerMap["before_tool_call"],
@@ -48,81 +40,55 @@ function installBeforeToolCallHook(
   );
 }
 
-async function createExecution(
-  options: { nativeTools?: string[]; abortSignal?: AbortSignal } = {},
-) {
-  const runId = "plugin-policy-" + ++nextRunId;
-  const config = { tools: { exec: { security: "full" as const, ask: "off" as const } } };
-  const admission = prepareSystemAgentRunAdmission(config, runId, "main", "plugin-test");
-  activeAdmissions.push(admission);
-  const context = buildPreparedCliRunContext({
-    provider: "claude-cli",
-    model: "claude-sonnet-4-6",
-    agentId: "main",
-    runId,
-    sessionId: "sdk-session",
-    sessionKey: "agent:main:main",
-    prompt: "hello",
-    config,
-    executionMode: "agent",
-    timeoutMs: 5_000,
-    ...(options.nativeTools
-      ? { cliToolAvailability: { native: options.nativeTools, openClaw: [] } }
-      : {}),
-    systemPrompt: "Follow host policy.",
-    backend: { command: "/bin/sh", args: [] },
-  });
-  context.params.admittedRunContext = await admission.admit("plugin-harness");
-  if (options.abortSignal) {
-    context.params.abortSignal = options.abortSignal;
-  }
-  return { admission, context };
-}
-
-function runPlugin(context: PreparedCliRunContext, execute: CliBackendExecute) {
-  return executePluginOwnedProcess({
-    context,
-    execute,
-    executionCommand: "/bin/sh",
-    executionArgs: ["-p", "--permission-mode", "bypassPermissions"],
-    env: { PATH: "/bin:/usr/bin" },
-    prompt: context.params.prompt,
-    useResume: false,
-    sessionId: "sdk-session",
-    noOutputTimeoutMs: 2_000,
-    consumeStdout: () => {},
-  });
-}
-
-function requestNativeTool(
-  execution: CliBackendExecuteContext,
-  toolName = "Bash",
-  toolInput: Record<string, unknown> = { command: "echo approved" },
-) {
-  return execution.requestToolPermission({
-    toolName,
-    toolInput,
-    toolCallId: "native-" + toolName,
-    ...(execution.abortSignal ? { abortSignal: execution.abortSignal } : {}),
-  });
-}
-
 afterEach(() => {
   resetGlobalHookRunner();
-  for (const admission of activeAdmissions.splice(0)) {
-    admission.close();
-  }
+  closePluginTestAdmissions();
   mockCallGatewayTool.mockReset();
   vi.restoreAllMocks();
 });
 
 describe("plugin-owned CLI native tool policy", () => {
+  it("denies native tools when caller authority expires during policy or before a retained call", async () => {
+    const { context } = await createExecution({ nativeTools: ["WebFetch"] });
+    let callerCurrent = true;
+    context.params.assertCurrent = () => {
+      if (!callerCurrent) {
+        throw new Error("caller revoked");
+      }
+    };
+    const hook = vi.fn(async () => {
+      callerCurrent = false;
+    });
+    installBeforeToolCallHook(hook);
+    await runPlugin(context, async function* (execution) {
+      await expect(
+        requestNativeTool(execution, "WebFetch", { url: "https://example.com" }),
+      ).resolves.toMatchObject({ behavior: "deny" });
+      await expect(
+        requestNativeTool(execution, "WebFetch", { url: "https://example.com/retained" }),
+      ).resolves.toMatchObject({ behavior: "deny" });
+      expect(execution.abortSignal?.aborted).toBe(false);
+      yield SUCCESS_RESULT;
+    });
+    expect(hook).toHaveBeenCalledOnce();
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+  });
+
   it("runs canonical policy before native approval and carries rewritten params plus run context", async () => {
-    const policy = vi.spyOn(beforeToolCall, "runBeforeToolCallHook");
     const hook = vi.fn(async (_event: unknown, _context: unknown) => ({
       params: { url: "https://example.com/rewritten" },
     }));
-    installBeforeToolCallHook(hook);
+    const completions: unknown[] = [];
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        { hookName: "before_tool_call", handler: hook },
+        {
+          hookName: "after_tool_call",
+          matcher: ["web_fetch"],
+          handler: (event) => completions.push(event),
+        },
+      ]),
+    );
     const { context } = await createExecution({ nativeTools: ["WebFetch"] });
     Object.assign(context.params, {
       messageChannel: "telegram",
@@ -136,12 +102,39 @@ describe("plugin-owned CLI native tool policy", () => {
     });
     let decision: CliBackendToolPermissionResult | undefined;
 
-    await runPlugin(context, async function* (execution) {
-      decision = await requestNativeTool(execution, "WebFetch", {
-        url: "https://example.com/original",
-      });
-      yield SUCCESS_RESULT;
+    const handlers = createCliEventHandlers({
+      context,
+      toolTracking: createCliToolTracking(context),
+      getRunState: () => ({ failed: false, error: undefined }),
     });
+    const parser = createCliJsonlStreamingParser({
+      backend: { ...context.preparedBackend.backend, jsonlDialect: "claude-stream-json" },
+      providerId: context.backendResolved.id,
+      onAssistantDelta: () => {},
+      onToolUseStart: handlers.emitParsedToolUseStart,
+      onToolResult: handlers.emitParsedToolResult,
+    });
+    await runPlugin(
+      context,
+      async function* (execution) {
+        const input = { url: "https://example.com/original" };
+        yield {
+          type: "assistant",
+          message: {
+            content: [{ type: "tool_use", id: "native-WebFetch", name: "WebFetch", input }],
+          },
+        };
+        decision = await requestNativeTool(execution, "WebFetch", input);
+        yield {
+          type: "user",
+          message: {
+            content: [{ type: "tool_result", tool_use_id: "native-WebFetch", content: "fetched" }],
+          },
+        };
+        yield SUCCESS_RESULT;
+      },
+      { consumeStdout: (chunk) => parser.push(chunk) },
+    );
 
     expect(decision).toEqual({
       behavior: "allow",
@@ -167,18 +160,17 @@ describe("plugin-owned CLI native tool policy", () => {
         senderIsOwner: true,
       },
     });
-    expect(policy.mock.calls[0]?.[0]).toMatchObject({
-      ctx: {
-        config: context.params.config,
-        cwd: "/tmp",
-        workspaceDir: "/tmp",
-        turnSourceChannel: "telegram",
-        turnSourceTo: "chat-1",
-        turnSourceAccountId: "bot-1",
-        turnSourceThreadId: "thread-1",
-        loopDetection: undefined,
-      },
-    });
+    await vi.waitFor(() =>
+      expect(completions).toMatchObject([
+        {
+          toolName: "web_fetch",
+          toolCallId: "native-WebFetch",
+          runId: context.params.runId,
+          params: { url: "https://example.com/rewritten" },
+          result: "fetched",
+        },
+      ]),
+    );
     expect(mockCallGatewayTool).not.toHaveBeenCalled();
   });
 

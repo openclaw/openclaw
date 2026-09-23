@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements cli behavior.
 import type { Command } from "commander";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
@@ -22,7 +21,7 @@ import {
   QA_FRONTIER_PARITY_BASELINE_LABEL,
   QA_FRONTIER_PARITY_CANDIDATE_LABEL,
 } from "./providers/live-frontier/parity.js";
-import type { QaProviderMode, QaProviderModeInput } from "./run-config.js";
+import type { QaProviderModeInput } from "./run-config.js";
 import { hasQaScenarioPack } from "./scenario-catalog.js";
 
 type QaScenarioRunCliOptions = {
@@ -162,206 +161,6 @@ function validateQaScenarioSelection(opts: QaScenarioRunCliOptions, command: Com
   }
 }
 
-async function runQaSelfCheck(opts: QaLabSelfCheckCommandOptions) {
-  const runtime = await loadQaLabCliRuntime();
-  await runtime.runQaLabSelfCheckCommand(opts);
-}
-
-async function runQaParityReport(opts: {
-  repoRoot?: string;
-  candidateSummary?: string;
-  baselineSummary?: string;
-  candidateLabel?: string;
-  baselineLabel?: string;
-  outputDir?: string;
-  runtimeAxis?: boolean;
-  summary?: string;
-  tokenEfficiency?: boolean;
-}) {
-  const runtime = await loadQaLabCliRuntime();
-  await runtime.runQaParityReportCommand(opts);
-}
-
-async function runQaConfidenceReport(opts: {
-  repoRoot?: string;
-  manifest: string;
-  artifactRoot?: string;
-  outputDir?: string;
-  strictZeroUnknowns?: boolean;
-  strictGlobalPass?: boolean;
-}) {
-  const runtime = await loadQaLabCliRuntime();
-  await runtime.runQaConfidenceReportCommand(opts);
-}
-
-async function runQaConfidenceSelfTest(opts: { repoRoot?: string; outputDir?: string }) {
-  const runtime = await loadQaLabCliRuntime();
-  await runtime.runQaConfidenceSelfTestCommand(opts);
-}
-
-async function runQaCoverageReport(opts: {
-  repoRoot?: string;
-  output?: string;
-  json?: boolean;
-  tools?: boolean;
-  summary?: string;
-  match?: string[];
-}) {
-  const runtime = await loadQaLabCliRuntime();
-  await runtime.runQaCoverageReportCommand(opts);
-}
-
-async function runQaJsonlReplay(opts: {
-  repoRoot?: string;
-  transcripts?: string;
-  outputDir?: string;
-  runtimePair?: string;
-  providerMode?: QaProviderModeInput;
-}) {
-  const runtime = await loadQaLabCliRuntime();
-  await runtime.runQaJsonlReplayCommand(opts);
-}
-
-async function runQaCharacterEval(opts: {
-  repoRoot?: string;
-  outputDir?: string;
-  model?: string[];
-  scenario?: string;
-  fast?: boolean;
-  thinking?: string;
-  modelThinking?: string[];
-  judgeModel?: string[];
-  judgeTimeoutMs?: number;
-  blindJudgeModels?: boolean;
-  concurrency?: number;
-  judgeConcurrency?: number;
-}) {
-  const runtime = await loadQaLabCliRuntime();
-  await runtime.runQaCharacterEvalCommand(opts);
-}
-
-async function runQaManualLane(opts: {
-  repoRoot?: string;
-  transportId?: string;
-  providerMode?: QaProviderModeInput;
-  primaryModel?: string;
-  alternateModel?: string;
-  fastMode?: boolean;
-  message: string;
-  timeoutMs?: number;
-}) {
-  const runtime = await loadQaLabCliRuntime();
-  await runtime.runQaManualLaneCommand(opts);
-}
-
-async function runQaCredentialsAdd(opts: {
-  actorId?: string;
-  endpointPrefix?: string;
-  json?: boolean;
-  kind: string;
-  note?: string;
-  payloadFile: string;
-  repoRoot?: string;
-  siteUrl?: string;
-}) {
-  const runtime = await loadQaLabCliRuntime();
-  await runtime.runQaCredentialsAddCommand(opts);
-}
-
-async function runQaCredentialsRemove(opts: {
-  actorId?: string;
-  credentialId: string;
-  endpointPrefix?: string;
-  json?: boolean;
-  siteUrl?: string;
-}) {
-  const runtime = await loadQaLabCliRuntime();
-  await runtime.runQaCredentialsRemoveCommand(opts);
-}
-
-async function runQaCredentialsList(opts: {
-  actorId?: string;
-  endpointPrefix?: string;
-  json?: boolean;
-  kind?: string;
-  limit?: number;
-  showSecrets?: boolean;
-  siteUrl?: string;
-  status?: string;
-}) {
-  const runtime = await loadQaLabCliRuntime();
-  await runtime.runQaCredentialsListCommand(opts);
-}
-
-async function runQaCredentialsDoctor(opts: {
-  actorId?: string;
-  endpointPrefix?: string;
-  json?: boolean;
-  siteUrl?: string;
-}) {
-  const runtime = await loadQaLabCliRuntime();
-  await runtime.runQaCredentialsDoctorCommand(opts);
-}
-
-async function runQaUi(opts: {
-  repoRoot?: string;
-  host?: string;
-  port?: number;
-  advertiseHost?: string;
-  advertisePort?: number;
-  controlUiUrl?: string;
-  controlUiProxyTarget?: string;
-  uiDistDir?: string;
-  autoKickoffTarget?: string;
-  embeddedGateway?: string;
-  sendKickoffOnStart?: boolean;
-}) {
-  const runtime = await loadQaLabCliRuntime();
-  await runtime.runQaLabUiCommand(opts);
-}
-
-async function runQaDockerScaffold(opts: {
-  repoRoot?: string;
-  outputDir: string;
-  gatewayPort?: number;
-  qaLabPort?: number;
-  providerBaseUrl?: string;
-  image?: string;
-  usePrebuiltImage?: boolean;
-  bindUiDist?: boolean;
-}) {
-  const runtime = await loadQaLabCliRuntime();
-  await runtime.runQaDockerScaffoldCommand(opts);
-}
-
-async function runQaDockerBuildImage(opts: { repoRoot?: string; image?: string }) {
-  const runtime = await loadQaLabCliRuntime();
-  await runtime.runQaDockerBuildImageCommand(opts);
-}
-
-async function runQaDockerUp(opts: {
-  repoRoot?: string;
-  outputDir?: string;
-  gatewayPort?: number;
-  qaLabPort?: number;
-  providerBaseUrl?: string;
-  image?: string;
-  usePrebuiltImage?: boolean;
-  bindUiDist?: boolean;
-  skipUiBuild?: boolean;
-}) {
-  const runtime = await loadQaLabCliRuntime();
-  await runtime.runQaDockerUpCommand(opts);
-}
-
-async function runQaProviderServer(
-  providerMode: QaProviderMode,
-  opts: { host?: string; port?: number },
-) {
-  const runtime = await loadQaLabCliRuntime();
-  await runtime.runQaProviderServerCommand(providerMode, opts);
-}
-
 export function isQaLabCliAvailable(): boolean {
   return hasQaScenarioPack();
 }
@@ -444,10 +243,12 @@ export function registerQaLabCli(program: Command) {
       });
       return;
     }
-    await runQaSelfCheck({
+    const selfCheckOptions = {
       repoRoot: opts.repoRoot,
       output: opts.output,
-    });
+    };
+    const runtime = await loadQaLabCliRuntime();
+    await runtime.runQaLabSelfCheckCommand(selfCheckOptions);
   });
 
   qa.command("suite")
@@ -552,21 +353,7 @@ export function registerQaLabCli(program: Command) {
     )
     .option("--baseline-label <label>", "Baseline display label", QA_FRONTIER_PARITY_BASELINE_LABEL)
     .option("--output-dir <path>", "Artifact directory for the parity report")
-    .action(
-      async (opts: {
-        repoRoot?: string;
-        candidateSummary?: string;
-        baselineSummary?: string;
-        candidateLabel?: string;
-        baselineLabel?: string;
-        outputDir?: string;
-        runtimeAxis?: boolean;
-        summary?: string;
-        tokenEfficiency?: boolean;
-      }) => {
-        await runQaParityReport(opts);
-      },
-    );
+    .action(async (opts) => (await loadQaLabCliRuntime()).runQaParityReportCommand(opts));
 
   qa.command("coverage")
     .description("Print the YAML QA coverage inventory")
@@ -581,18 +368,7 @@ export function registerQaLabCli(program: Command) {
       collectString,
       [],
     )
-    .action(
-      async (opts: {
-        repoRoot?: string;
-        output?: string;
-        json?: boolean;
-        tools?: boolean;
-        summary?: string;
-        match?: string[];
-      }) => {
-        await runQaCoverageReport(opts);
-      },
-    );
+    .action(async (opts) => (await loadQaLabCliRuntime()).runQaCoverageReportCommand(opts));
 
   qa.command("confidence-report")
     .description("Classify QA proof artifacts into a zero-unknown confidence report")
@@ -610,26 +386,13 @@ export function registerQaLabCli(program: Command) {
       "Fail unless every lane passes with no blocked, missing, unknown, classified-fail, or unbackfilled skipped rows",
       false,
     )
-    .action(
-      async (opts: {
-        repoRoot?: string;
-        manifest: string;
-        artifactRoot?: string;
-        outputDir?: string;
-        strictZeroUnknowns?: boolean;
-        strictGlobalPass?: boolean;
-      }) => {
-        await runQaConfidenceReport(opts);
-      },
-    );
+    .action(async (opts) => (await loadQaLabCliRuntime()).runQaConfidenceReportCommand(opts));
 
   qa.command("confidence-self-test")
     .description("Write seeded negative-control canaries proving the confidence gate detects drift")
     .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
     .option("--output-dir <path>", "Artifact directory for the confidence self-test")
-    .action(async (opts: { repoRoot?: string; outputDir?: string }) => {
-      await runQaConfidenceSelfTest(opts);
-    });
+    .action(async (opts) => (await loadQaLabCliRuntime()).runQaConfidenceSelfTestCommand(opts));
 
   qa.command("jsonl-replay")
     .description("Replay curated JSONL transcripts through the runtime parity replay harness")
@@ -646,17 +409,7 @@ export function registerQaLabCli(program: Command) {
       "mock-openai",
     )
     .option("--output-dir <path>", "Artifact directory for the JSONL replay report")
-    .action(
-      async (opts: {
-        repoRoot?: string;
-        transcripts?: string;
-        runtimePair?: string;
-        providerMode?: QaProviderModeInput;
-        outputDir?: string;
-      }) => {
-        await runQaJsonlReplay(opts);
-      },
-    );
+    .action(async (opts) => (await loadQaLabCliRuntime()).runQaJsonlReplayCommand(opts));
 
   qa.command("character-eval")
     .description("Run the character QA scenario across live models and write a judged report")
@@ -699,24 +452,7 @@ export function registerQaLabCli(program: Command) {
     .option("--judge-concurrency <count>", "Judge model run concurrency", (value: string) =>
       parseQaCliPositiveIntegerOption(value, "--judge-concurrency"),
     )
-    .action(
-      async (opts: {
-        repoRoot?: string;
-        outputDir?: string;
-        model?: string[];
-        scenario?: string;
-        fast?: boolean;
-        thinking?: string;
-        modelThinking?: string[];
-        judgeModel?: string[];
-        judgeTimeoutMs?: number;
-        blindJudgeModels?: boolean;
-        concurrency?: number;
-        judgeConcurrency?: number;
-      }) => {
-        await runQaCharacterEval(opts);
-      },
-    );
+    .action(async (opts) => (await loadQaLabCliRuntime()).runQaCharacterEvalCommand(opts));
 
   qa.command("manual")
     .description("Run a one-off QA agent prompt against the selected provider/model lane")
@@ -741,7 +477,7 @@ export function registerQaLabCli(program: Command) {
         fast?: boolean;
         timeoutMs?: number;
       }) => {
-        await runQaManualLane({
+        const manualOptions = {
           repoRoot: opts.repoRoot,
           transportId: opts.transport,
           providerMode: opts.providerMode,
@@ -750,7 +486,9 @@ export function registerQaLabCli(program: Command) {
           fastMode: opts.fast,
           message: opts.message,
           timeoutMs: opts.timeoutMs,
-        });
+        };
+        const runtime = await loadQaLabCliRuntime();
+        await runtime.runQaManualLaneCommand(manualOptions);
       },
     );
 
@@ -765,16 +503,7 @@ export function registerQaLabCli(program: Command) {
     .option("--endpoint-prefix <path>", "Override OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX")
     .option("--actor-id <id>", "Optional admin actor id to include in broker audit events")
     .option("--json", "Emit machine-readable JSON output", false)
-    .action(
-      async (opts: {
-        siteUrl?: string;
-        endpointPrefix?: string;
-        actorId?: string;
-        json?: boolean;
-      }) => {
-        await runQaCredentialsDoctor(opts);
-      },
-    );
+    .action(async (opts) => (await loadQaLabCliRuntime()).runQaCredentialsDoctorCommand(opts));
 
   credentials
     .command("add")
@@ -787,20 +516,7 @@ export function registerQaLabCli(program: Command) {
     .option("--endpoint-prefix <path>", "Override OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX")
     .option("--actor-id <id>", "Optional admin actor id to include in broker audit events")
     .option("--json", "Emit machine-readable JSON output", false)
-    .action(
-      async (opts: {
-        kind: string;
-        payloadFile: string;
-        repoRoot?: string;
-        note?: string;
-        siteUrl?: string;
-        endpointPrefix?: string;
-        actorId?: string;
-        json?: boolean;
-      }) => {
-        await runQaCredentialsAdd(opts);
-      },
-    );
+    .action(async (opts) => (await loadQaLabCliRuntime()).runQaCredentialsAddCommand(opts));
 
   credentials
     .command("remove")
@@ -810,17 +526,7 @@ export function registerQaLabCli(program: Command) {
     .option("--endpoint-prefix <path>", "Override OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX")
     .option("--actor-id <id>", "Optional admin actor id to include in broker audit events")
     .option("--json", "Emit machine-readable JSON output", false)
-    .action(
-      async (opts: {
-        credentialId: string;
-        siteUrl?: string;
-        endpointPrefix?: string;
-        actorId?: string;
-        json?: boolean;
-      }) => {
-        await runQaCredentialsRemove(opts);
-      },
-    );
+    .action(async (opts) => (await loadQaLabCliRuntime()).runQaCredentialsRemoveCommand(opts));
 
   credentials
     .command("list")
@@ -835,20 +541,7 @@ export function registerQaLabCli(program: Command) {
     .option("--endpoint-prefix <path>", "Override OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX")
     .option("--actor-id <id>", "Optional admin actor id to include in broker audit events")
     .option("--json", "Emit machine-readable JSON output", false)
-    .action(
-      async (opts: {
-        kind?: string;
-        status?: string;
-        limit?: number;
-        showSecrets?: boolean;
-        siteUrl?: string;
-        endpointPrefix?: string;
-        actorId?: string;
-        json?: boolean;
-      }) => {
-        await runQaCredentialsList(opts);
-      },
-    );
+    .action(async (opts) => (await loadQaLabCliRuntime()).runQaCredentialsListCommand(opts));
 
   qa.command("ui")
     .description("Start the private QA debugger UI and local QA bus")
@@ -874,23 +567,7 @@ export function registerQaLabCli(program: Command) {
       "Inject the repo-backed kickoff task when the UI starts",
       false,
     )
-    .action(
-      async (opts: {
-        repoRoot?: string;
-        host?: string;
-        port?: number;
-        advertiseHost?: string;
-        advertisePort?: number;
-        controlUiUrl?: string;
-        controlUiProxyTarget?: string;
-        uiDistDir?: string;
-        autoKickoffTarget?: string;
-        embeddedGateway?: string;
-        sendKickoffOnStart?: boolean;
-      }) => {
-        await runQaUi(opts);
-      },
-    );
+    .action(async (opts) => (await loadQaLabCliRuntime()).runQaLabUiCommand(opts));
 
   qa.command("docker-scaffold")
     .description("Write a prebaked Docker scaffold for the QA dashboard + gateway lane")
@@ -910,28 +587,13 @@ export function registerQaLabCli(program: Command) {
       "Bind-mount extensions/qa-lab/web/dist into the qa-lab container for faster UI refresh",
       false,
     )
-    .action(
-      async (opts: {
-        repoRoot?: string;
-        outputDir: string;
-        gatewayPort?: number;
-        qaLabPort?: number;
-        providerBaseUrl?: string;
-        image?: string;
-        usePrebuiltImage?: boolean;
-        bindUiDist?: boolean;
-      }) => {
-        await runQaDockerScaffold(opts);
-      },
-    );
+    .action(async (opts) => (await loadQaLabCliRuntime()).runQaDockerScaffoldCommand(opts));
 
   qa.command("docker-build-image")
     .description("Build the prebaked QA Docker image with qa-channel + qa-lab bundled")
     .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
     .option("--image <name>", "Image tag", "openclaw:qa-local-prebaked")
-    .action(async (opts: { repoRoot?: string; image?: string }) => {
-      await runQaDockerBuildImage(opts);
-    });
+    .action(async (opts) => (await loadQaLabCliRuntime()).runQaDockerBuildImageCommand(opts));
 
   qa.command("up")
     .description("Build the QA site, start the Docker-backed QA stack, and print the QA Lab URL")
@@ -952,21 +614,7 @@ export function registerQaLabCli(program: Command) {
       false,
     )
     .option("--skip-ui-build", "Skip pnpm qa:lab:build before starting Docker", false)
-    .action(
-      async (opts: {
-        repoRoot?: string;
-        outputDir?: string;
-        gatewayPort?: number;
-        qaLabPort?: number;
-        providerBaseUrl?: string;
-        image?: string;
-        usePrebuiltImage?: boolean;
-        bindUiDist?: boolean;
-        skipUiBuild?: boolean;
-      }) => {
-        await runQaDockerUp(opts);
-      },
-    );
+    .action(async (opts) => (await loadQaLabCliRuntime()).runQaDockerUpCommand(opts));
 
   for (const providerCommand of listQaStandaloneProviderCommands()) {
     qa.command(providerCommand.name)
@@ -976,7 +624,9 @@ export function registerQaLabCli(program: Command) {
         parseQaCliTcpPortOption(value, "--port"),
       )
       .action(async (opts: { host?: string; port?: number }) => {
-        await runQaProviderServer(providerCommand.providerMode, opts);
+        const providerMode = providerCommand.providerMode;
+        const runtime = await loadQaLabCliRuntime();
+        await runtime.runQaProviderServerCommand(providerMode, opts);
       });
   }
 
@@ -985,4 +635,3 @@ export function registerQaLabCli(program: Command) {
     lane.register(qa);
   }
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

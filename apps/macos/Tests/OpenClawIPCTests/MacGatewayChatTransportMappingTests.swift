@@ -6,21 +6,21 @@ import Testing
 @testable import OpenClaw
 
 struct MacGatewayChatTransportMappingTests {
-    private actor ProgressRequestRecorder {
-        var params: [Data] = []
+    private actor RequestRecorder {
+        var payloads: [Data] = []
 
         func append(_ data: Data) {
-            self.params.append(data)
+            self.payloads.append(data)
         }
 
         func snapshot() -> [Data] {
-            self.params
+            self.payloads
         }
     }
 
     @Test(arguments: [false, true, nil] as [Bool?])
     func `progress requests negotiate owner scope on the connected server`(supportsOwner: Bool?) async throws {
-        let recorder = ProgressRequestRecorder()
+        let recorder = RequestRecorder()
         let socketSession = GatewayTestWebSocketSession(taskFactory: {
             GatewayTestWebSocketTask(sendHook: { socket, message, sendIndex in
                 guard sendIndex > 0 else { return }
@@ -95,10 +95,122 @@ struct MacGatewayChatTransportMappingTests {
         }
     }
 
+    private func withSessionTransport(
+        _ run: (MacGatewayChatTransport, RequestRecorder) async throws -> Void) async throws
+    {
+        let recorder = RequestRecorder()
+        let session = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(sendHook: { socket, message, sendIndex in
+                guard sendIndex > 0 else { return }
+                let id = try #require(GatewayWebSocketTestSupport.requestID(from: message))
+                let method = try #require(GatewayWebSocketTestSupport.requestMethod(from: message))
+                if method != "health" {
+                    let data: Data = switch message {
+                    case let .data(value): value
+                    case let .string(value): Data(value.utf8)
+                    @unknown default: throw URLError(.cannotParseResponse)
+                    }
+                    await recorder.append(data)
+                }
+                let payload = switch method {
+                case "agents.list": GatewayWebSocketTestSupport.agentCatalogPayload
+                case "sessions.rewind": #"{"editorText":"rewound draft"}"#
+                case "sessions.fork": #"{"sessionKey":"forked","editorText":"continued draft"}"#
+                default: #"{"ok":true}"#
+                }
+                socket.emitReceiveSuccess(.data(Data(
+                    #"{"type":"res","id":"\#(id)","ok":true,"payload":\#(payload)}"#.utf8)))
+            }, receiveHook: { socket, receiveIndex in
+                if receiveIndex == 0 { return .data(GatewayWebSocketTestSupport.connectChallengeData()) }
+                return .data(GatewayWebSocketTestSupport.connectOkData(
+                    id: socket.snapshotConnectRequestID() ?? "connect",
+                    methods: ["agents.list", "sessions.patch", "sessions.delete", "sessions.rewind", "sessions.fork"],
+                    capabilities: ["session-unread-ack-contract"]))
+            })
+        })
+        let gateway = GatewayConnection(
+            configProvider: { (url: URL(string: "ws://127.0.0.1:1")!, token: nil, password: nil) },
+            sessionBox: WebSocketSessionBox(session: session))
+        do {
+            _ = try await gateway.request(method: "health", params: nil)
+            let transport = MacGatewayChatTransport(connection: gateway, defaultGlobalAgentID: "agent-a")
+            try await run(transport, recorder)
+            await gateway.shutdown()
+        } catch {
+            await gateway.shutdown()
+            throw error
+        }
+    }
+
+    @Test func `new session rosters preserve selectable choices on their captured connection`() async throws {
+        try await self.withSessionTransport { transport, recorder in
+            let expected = OpenClawChatAgentsListResponse(
+                defaultId: "system",
+                agents: [
+                    OpenClawChatAgentChoice(id: "zeta", name: " Zeta ", workspaceGit: true),
+                    OpenClawChatAgentChoice(id: "legacy"),
+                    OpenClawChatAgentChoice(id: "alpha", workspaceGit: false),
+                ],
+                sessionRoutingContract: "per-sender|main|system")
+            #expect(try await transport.listAgents() == expected)
+            let lease = try #require(await transport.acquireNewSessionRouteLease())
+            #expect(try await lease.listAgents() == expected)
+            await transport.connection.shutdown()
+            await #expect(throws: Error.self) {
+                _ = try await lease.listAgents()
+            }
+            let frames = try await recorder.snapshot().map {
+                try #require(JSONSerialization.jsonObject(with: $0) as? [String: Any])
+            }
+            #expect(frames.map { $0["method"] as? String } == ["agents.list", "agents.list"])
+            #expect(frames.allSatisfy { ($0["params"] as? [String: Any])?.isEmpty == true })
+        }
+    }
+
+    @Test func `mutation lease resolves the current global agent for each request`() async throws {
+        try await self.withSessionTransport { transport, recorder in
+            let lease = try #require(await transport.acquireSessionMutationRouteLease())
+            try await lease.patchSession(
+                key: "global",
+                label: nil,
+                category: nil,
+                pinned: true,
+                archived: nil,
+                unread: nil)
+            let observerTransport = transport
+            observerTransport.updateDefaultGlobalAgentID(" Agent-B ")
+            try await lease.patchSession(
+                key: "global",
+                label: nil,
+                category: nil,
+                color: .some(nil),
+                pinned: nil,
+                archived: nil,
+                unread: nil)
+            try await lease.deleteSession(key: "agent:agent-b:work")
+
+            let frames = try await recorder.snapshot().map {
+                try #require(JSONSerialization.jsonObject(with: $0) as? [String: Any])
+            }
+            let methods = frames.map { $0["method"] as? String }
+            try #require(methods == ["sessions.patch", "sessions.patch", "sessions.delete"])
+            let params = try frames.map { try #require($0["params"] as? [String: Any]) }
+            #expect(params[0]["key"] as? String == "global")
+            #expect(params[0]["agentId"] as? String == "agent-a")
+            #expect(params[1]["key"] as? String == "global")
+            #expect(params[1]["agentId"] as? String == "agent-b")
+            #expect(params[1]["color"] is NSNull)
+            #expect(params[2]["key"] as? String == "agent:agent-b:work")
+            #expect(params[2]["agentId"] == nil)
+            #expect(params[2]["deleteTranscript"] as? Bool == true)
+        }
+    }
+
     @Test func `mac chat advertises typed agent rosters and inline widgets`() {
         #expect(GatewayConnection.operatorClientCaps == [
             OpenClawGatewayClientCapability.agentKind,
             OpenClawGatewayClientCapability.inlineWidgets,
+            OpenClawGatewayClientCapability.modelSelectionPolicy,
             OpenClawGatewayClientCapability.usageRefreshing,
         ])
     }
@@ -141,9 +253,46 @@ struct MacGatewayChatTransportMappingTests {
         let second = transport.sessionsListRequest(limit: nil, search: "recent", archived: true)
         #expect(second.params["agentId"]?.value as? String == "agent-b")
 
+        let selected = transport.sessionsListRequest(
+            limit: 50, search: "older", archived: true, agentID: "research")
+        #expect(selected.params["agentId"]?.value as? String == "research")
+        #expect(transport.sessionTarget(for: "global").agentID == "agent-b")
+
         let unowned = MacGatewayChatTransport()
             .sessionsListRequest(limit: nil, search: nil, archived: false)
         #expect(unowned.params["agentId"] == nil)
+    }
+
+    @Test func `scoped global routes and captured mutations ignore later default changes`() async throws {
+        let base = MacGatewayChatTransport(defaultGlobalAgentID: "main")
+        let selected = try #require(base.scoped(toAgentID: "research") as? MacGatewayChatTransport)
+        let recorder = RequestRecorder()
+        let lease = OpenClawChatSessionMutationRouteLease(
+            sessionTarget: { base.sessionTarget(for: $0) },
+            unreadAckContract: true,
+            request: { request in
+                let params = request.params.mapValues(\.value)
+                try await recorder.append(JSONSerialization.data(withJSONObject: params))
+                return Data("{}".utf8)
+            })
+
+        base.updateDefaultGlobalAgentID("replacement")
+        #expect(selected.sessionTarget(for: "global") == .init(sessionKey: "global", agentID: "research"))
+        #expect(selected.sessionTarget(for: "main") == .init(sessionKey: "main", agentID: "research"))
+        #expect(selected.sessionTarget(for: "custom") == .init(sessionKey: "custom", agentID: "research"))
+        #expect(selected.sessionTarget(for: "agent:research:global") == .init(
+            sessionKey: "agent:research:global", agentID: nil))
+        try await lease.patchSession(
+            key: "global", agentID: "research", label: "Research notes", category: nil,
+            pinned: true, archived: nil, unread: nil)
+        try await lease.deleteSession(key: "global", agentID: "research")
+
+        let requests = try await recorder.snapshot().map {
+            try #require(JSONSerialization.jsonObject(with: $0) as? [String: Any])
+        }
+        #expect(requests.count == 2)
+        #expect(requests.allSatisfy { $0["key"] as? String == "global" })
+        #expect(requests.allSatisfy { $0["agentId"] as? String == "research" })
     }
 
     @Test func `fixed connection does not inherit app wide cache routing`() async throws {
@@ -164,7 +313,7 @@ struct MacGatewayChatTransportMappingTests {
             sessionKey: "global",
             agentID: "reviewer",
             patch: OpenClawChatSessionSettingsPatch(
-                model: .some("openai/gpt-5.6-sol"),
+                model: .some("openai/gpt-5.6-luna"),
                 thinkingLevel: .some(nil),
                 fastMode: .some(.on),
                 verboseLevel: .some("full")))
@@ -172,10 +321,59 @@ struct MacGatewayChatTransportMappingTests {
         #expect(request.method == "sessions.patch")
         #expect(request.params["key"]?.value as? String == "global")
         #expect(request.params["agentId"]?.value as? String == "reviewer")
-        #expect(request.params["model"]?.value as? String == "openai/gpt-5.6-sol")
+        #expect(request.params["model"]?.value as? String == "openai/gpt-5.6-luna")
         #expect(request.params["thinkingLevel"]?.value is NSNull)
         #expect(request.params["fastMode"]?.value as? Bool == true)
         #expect(request.params["verboseLevel"]?.value as? String == "full")
+    }
+
+    @Test func `scoped settings mutations keep the fixed owner for bare keys`() async throws {
+        let recorder = RequestRecorder()
+        let socketSession = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(sendHook: { socket, message, sendIndex in
+                guard sendIndex > 0, let id = GatewayWebSocketTestSupport.requestID(from: message) else { return }
+                var payload = "{}"
+                if GatewayWebSocketTestSupport.requestMethod(from: message) == "sessions.patch" {
+                    let data: Data = switch message {
+                    case let .data(value): value
+                    case let .string(value): Data(value.utf8)
+                    @unknown default: throw URLError(.cannotParseResponse)
+                    }
+                    let frame = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+                    let params = try #require(frame["params"] as? [String: Any])
+                    try await recorder.append(JSONSerialization.data(withJSONObject: params))
+                    payload = #"{"entry":{}}"#
+                }
+                socket.emitReceiveSuccess(.data(Data(
+                    #"{"type":"res","id":"\#(id)","ok":true,"payload":\#(payload)}"#.utf8)))
+            }, receiveHook: { socket, receiveIndex in
+                if receiveIndex == 0 { return .data(GatewayWebSocketTestSupport.connectChallengeData()) }
+                return .data(GatewayWebSocketTestSupport.connectOkData(
+                    id: socket.snapshotConnectRequestID() ?? "connect", methods: ["sessions.patch"]))
+            })
+        })
+        let gateway = GatewayConnection(
+            configProvider: { (url: URL(string: "ws://127.0.0.1:1")!, token: nil, password: nil) },
+            sessionBox: WebSocketSessionBox(session: socketSession))
+        do {
+            _ = try await gateway.request(method: "health", params: nil)
+            let base = MacGatewayChatTransport(connection: gateway, defaultGlobalAgentID: "main")
+            let scoped = try #require(base.scoped(toAgentID: "research") as? MacGatewayChatTransport)
+            base.updateDefaultGlobalAgentID("replacement")
+            for key in ["main", "custom", "agent:other:main"] {
+                _ = try await scoped.patchSessionSettings(
+                    sessionKey: key, agentID: nil, patch: .init(verboseLevel: .some("full")))
+            }
+            let requests = try await recorder.snapshot().map {
+                try #require(JSONSerialization.jsonObject(with: $0) as? [String: Any])
+            }
+            #expect(requests.map { $0["key"] as? String } == ["main", "custom", "agent:other:main"])
+            #expect(requests.map { $0["agentId"] as? String } == ["research", "research", nil])
+            await gateway.shutdown()
+        } catch {
+            await gateway.shutdown()
+            throw error
+        }
     }
 
     @Test func `full message request uses generated gateway field names`() throws {
@@ -191,24 +389,24 @@ struct MacGatewayChatTransportMappingTests {
         #expect(request.params["maxChars"]?.value as? Int == 500_000)
     }
 
-    @Test func `message rewind and fork requests map session targets`() {
-        let rewind = MacGatewayChatTransport.rewindSessionRequest(
-            sessionKey: "global",
-            agentID: "reviewer",
-            entryId: "msg-42")
-        let fork = MacGatewayChatTransport.forkSessionAtMessageRequest(
-            sessionKey: "agent:reviewer:main",
-            agentID: nil,
-            entryId: "msg-43")
+    @Test func `message rewind and fork dispatch resolved session targets`() async throws {
+        try await self.withSessionTransport { transport, recorder in
+            transport.updateDefaultGlobalAgentID(" Reviewer ")
+            let rewind = try await transport.rewindSession(sessionKey: "global", entryId: " msg-42 ")
+            let fork = try await transport.forkSessionAtMessage(sessionKey: "agent:reviewer:main", entryId: "msg-43")
 
-        #expect(rewind.method == "sessions.rewind")
-        #expect(rewind.params["sessionKey"]?.value as? String == "global")
-        #expect(rewind.params["agentId"]?.value as? String == "reviewer")
-        #expect(rewind.params["entryId"]?.value as? String == "msg-42")
-        #expect(fork.method == "sessions.fork")
-        #expect(fork.params["sessionKey"]?.value as? String == "agent:reviewer:main")
-        #expect(fork.params["agentId"] == nil)
-        #expect(fork.params["entryId"]?.value as? String == "msg-43")
+            #expect(rewind.editorText == "rewound draft")
+            #expect(fork.sessionKey == "forked")
+            #expect(fork.editorText == "continued draft")
+            let frames = try await recorder.snapshot().map {
+                try #require(JSONSerialization.jsonObject(with: $0) as? [String: Any])
+            }
+            #expect(frames.map { $0["method"] as? String } == ["sessions.rewind", "sessions.fork"])
+            #expect(frames.map { $0["params"] as? [String: String] } == [
+                ["sessionKey": "global", "agentId": "reviewer", "entryId": "msg-42"],
+                ["sessionKey": "agent:reviewer:main", "entryId": "msg-43"],
+            ])
+        }
     }
 
     @Test func `legacy trace preference migrates to independent defaults once`() throws {

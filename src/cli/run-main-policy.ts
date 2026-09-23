@@ -5,12 +5,9 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { consumeRootOptionToken, FLAG_TERMINATOR } from "../infra/cli-root-options.js";
-import {
-  resolveManifestCommandAliasOwnerInRegistry,
-  resolveManifestToolOwnerInRegistry,
-  type PluginManifestCommandAliasRecord,
-  type PluginManifestCommandAliasRegistry,
-  type PluginManifestToolOwnerRecord,
+import type {
+  PluginManifestCommandAliasRecord,
+  PluginManifestToolOwnerRecord,
 } from "../plugins/manifest-command-aliases.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
 import { isSimpleCommandHelpInvocation } from "./argv.js";
@@ -129,21 +126,17 @@ export function resolveMissingPluginCommandMessage(
   pluginId: string,
   config?: OpenClawConfig,
   options?: {
-    registry?: PluginManifestCommandAliasRegistry;
     resolveCommandAliasOwner?: (params: {
       command: string | undefined;
       config?: OpenClawConfig;
-      registry?: PluginManifestCommandAliasRegistry;
     }) => PluginManifestCommandAliasRecord | undefined;
     resolveToolOwner?: (params: {
       toolName: string | undefined;
       config?: OpenClawConfig;
-      registry?: PluginManifestCommandAliasRegistry;
     }) => PluginManifestToolOwnerRecord | undefined;
     resolveCliCommandSurfaceOwner?: (params: {
       command: string | undefined;
       config?: OpenClawConfig;
-      registry?: PluginManifestCommandAliasRegistry;
     }) => string | undefined;
   },
 ): string | null {
@@ -158,16 +151,10 @@ export function resolveMissingPluginCommandMessage(
           .map((entry) => normalizeOptionalLowercaseString(entry))
           .filter(Boolean)
       : [];
-  const commandAlias = options?.registry
-    ? resolveManifestCommandAliasOwnerInRegistry({
-        command: normalizedPluginId,
-        registry: options.registry,
-      })
-    : options?.resolveCommandAliasOwner?.({
-        command: normalizedPluginId,
-        config,
-        ...(options?.registry ? { registry: options.registry } : {}),
-      });
+  const commandAlias = options?.resolveCommandAliasOwner?.({
+    command: normalizedPluginId,
+    config,
+  });
   const parentPluginId = commandAlias?.pluginId;
   if (parentPluginId) {
     if (allow.length > 0 && !allow.includes(parentPluginId)) {
@@ -218,22 +205,12 @@ export function resolveMissingPluginCommandMessage(
     return null;
   }
 
-  const toolOwner = options?.registry
-    ? resolveManifestToolOwnerInRegistry({
-        toolName: normalizedPluginId,
-        registry: options.registry,
-      })
-    : options?.resolveToolOwner?.({
-        toolName: normalizedPluginId,
-        config,
-        ...(options?.registry ? { registry: options.registry } : {}),
-      });
+  const toolOwner = options?.resolveToolOwner?.({
+    toolName: normalizedPluginId,
+    config,
+  });
   if (toolOwner) {
-    // Apply plugins.allow / plugins.entries[X].enabled to the owning plugin so
-    // a disabled/denied plugin's manifest-declared tool name does not get a
-    // false attribution. The runtime resolver
-    // (resolveManifestToolOwner) already filters by control-plane availability,
-    // but pure-registry callers and any future ones still need this guard.
+    // Availability metadata does not override the owning plugin's allowlist or disablement.
     const ownerEnabled =
       config?.plugins?.entries?.[toolOwner.pluginId]?.enabled !== false &&
       (allow.length === 0 || allow.includes(toolOwner.pluginId));
@@ -263,18 +240,10 @@ export function resolveMissingPluginCommandMessage(
     if (parentPluginId && allow.includes(parentPluginId)) {
       return null;
     }
-    const cliCommandSurfaceOwner = options?.resolveCliCommandSurfaceOwner
-      ? options.resolveCliCommandSurfaceOwner({
-          command: normalizedPluginId,
-          config,
-          ...(options?.registry ? { registry: options.registry } : {}),
-        })
-      : options?.registry
-        ? resolveManifestCommandAliasOwnerInRegistry({
-            command: normalizedPluginId,
-            registry: options.registry,
-          })?.pluginId
-        : undefined;
+    const cliCommandSurfaceOwner = options?.resolveCliCommandSurfaceOwner?.({
+      command: normalizedPluginId,
+      config,
+    });
     const normalizedCliCommandSurfaceOwner =
       normalizeOptionalLowercaseString(cliCommandSurfaceOwner);
     if (!normalizedCliCommandSurfaceOwner) {

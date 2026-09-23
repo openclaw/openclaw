@@ -332,7 +332,7 @@ describeControlUiE2e("Board split transcript restore", () => {
       await page.waitForTimeout(500);
     };
     await sidePanel.locator('[data-region-header="side"]').waitFor();
-    const expectedTabLabels = ["Dashboard", "Browser", "Terminal"];
+    const expectedTabLabels = ["Dashboard", "Browser", "zsh"];
     await expectSidePanelTabs(page, expectedTabLabels);
     await sidePanel
       .locator(".side-panel-type-menu wa-dropdown-item")

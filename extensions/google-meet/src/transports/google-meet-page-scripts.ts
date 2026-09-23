@@ -1,8 +1,26 @@
 // Google Meet owns its DOM selectors and in-page automation scripts.
+import {
+  createMeetingBrowserAudioCaptureSource,
+  type MeetingBrowserAudioCaptureRequest,
+} from "openclaw/plugin-sdk/meeting-page-script-runtime";
 import { normalizeMeetUrlForReuse } from "./google-meet-urls.js";
 import { GOOGLE_MEET_TRANSCRIPT_MAX_LINES } from "./types.js";
 
 const GOOGLE_MEET_CAPTION_SETTLE_MS = 1_000;
+
+export function meetAudioCaptureScript(params: MeetingBrowserAudioCaptureRequest): string {
+  return createMeetingBrowserAudioCaptureSource({
+    ...params,
+    ownershipSource: `
+      const expectedUrl = ${JSON.stringify(normalizeMeetUrlForReuse(params.meetingUrl))};
+      const currentUrl = new URL(location.href);
+      return Boolean(expectedUrl && window.__openclawMeetAudioSession === sessionId &&
+        currentUrl.origin + currentUrl.pathname.toLowerCase().replace(/[/]$/, "") === expectedUrl &&
+        [...document.querySelectorAll("button")].some((button) =>
+          /leave call/i.test(button.getAttribute("aria-label") || button.textContent || "")));
+    `,
+  });
+}
 
 export function meetStatusScript(params: {
   allowMicrophone: boolean;
@@ -258,7 +276,21 @@ export function meetStatusScript(params: {
     : null;
   if (join) join.click();
   const inCall = buttons().some((button) => /leave call/i.test(button.getAttribute('aria-label') || text(button)));
+  if (!readOnly && inCall && captionSessionId) {
+    const activeCapture = window.__openclawMeetingRemoteAudio;
+    if (activeCapture && activeCapture.sessionId !== captionSessionId) {
+      return JSON.stringify({ inCall: false, manualAction: manualActionFor("meet-session-conflict", "This Meet tab belongs to another active audio session."), url: location.href, notes });
+    }
+    window.__openclawMeetAudioSession = captionSessionId;
+  }
   const routeMeetAudioOutput = async () => {
+    const remoteCapture = window.__openclawMeetingRemoteAudio;
+    if (remoteCapture && remoteCapture.sessionId === captionSessionId && remoteCapture.isCurrent()) {
+      if (!readOnly) remoteCapture.scan();
+      audioOutputRouted = remoteCapture.isCurrent();
+      audioOutputDeviceLabel = "Isolated browser playback";
+      return;
+    }
     if (
       !allowMicrophone ||
       typeof navigator === 'undefined' ||

@@ -311,6 +311,7 @@ suite.define(() => {
               expect.objectContaining({
                 attachments: files.map((file) => ({
                   type: "image",
+                  origin: "file",
                   mimeType: file.mimeType,
                   fileName: file.name,
                   content: file.buffer.toString("base64"),
@@ -340,10 +341,7 @@ suite.define(() => {
             await expectRequestCountStable(gateway, "chat.send", 1);
             const sent = sends[0];
             assert(sent, "Expected the observed chat.send before emitting its terminal");
-            await gateway.resolveDeferred("chat.send", {
-              runId: sent.runId,
-              status: "started",
-            });
+            await gateway.resolveDeferred("chat.send");
             await pane.getByRole("button", { name: "Stop generating" }).waitFor();
             await gateway.deferNext("chat.history");
             await gateway.emitChatFinal({

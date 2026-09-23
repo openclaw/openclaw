@@ -89,7 +89,9 @@ function registerBaseMemoryEmbeddingProviders(options?: { includeGemini?: boolea
 describe("memory search config", () => {
   beforeEach(({ onTestFinished }) => {
     const previous = captureActivePluginRegistrySnapshot();
-    onTestFinished(() => rollbackStagedPluginRegistry(previous));
+    onTestFinished(() => {
+      rollbackStagedPluginRegistry(previous);
+    });
     stageActivePluginRegistry(createEmptyPluginRegistry(), null, "default");
     registerBaseMemoryEmbeddingProviders();
   });

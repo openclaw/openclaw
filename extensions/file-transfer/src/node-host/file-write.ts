@@ -2,6 +2,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { overwriteFileHandle } from "@openclaw/fs-safe/advanced";
 import {
   canonicalPathFromExistingAncestor,
   FsSafeError,
@@ -16,6 +17,15 @@ import {
   type FileIdentity,
   type PathBinding,
 } from "../shared/path-binding.js";
+import {
+  canonicalTargetForSymlinkError,
+  captureWriteBinding,
+  fileWriteError as err,
+  openBoundWriteRoot,
+  symlinkRedirectError,
+  writeFsSafeError,
+  type FileWriteError,
+} from "./file-write-path.js";
 import { rejectCanonicalPathChange } from "./path-errors.js";
 
 const MAX_CONTENT_BYTES = 16 * 1024 * 1024; // 16 MB
@@ -27,6 +37,7 @@ type FileWriteParams = {
   createParents: boolean;
   expectedSha256?: string;
   followSymlinks?: boolean;
+  rejectHardlinks?: boolean;
   preflightOnly?: boolean;
   expectedCanonicalPath?: unknown;
   expectedBinding?: unknown;
@@ -39,13 +50,7 @@ type FileWriteSuccess = {
   sha256: string;
   overwritten: boolean;
   binding: PathBinding;
-};
-
-type FileWriteError = {
-  ok: false;
-  code: string;
-  message: string;
-  canonicalPath?: string;
+  rejectHardlinks?: true;
 };
 
 type FileWriteResult = FileWriteSuccess | FileWriteError;
@@ -54,97 +59,11 @@ function sha256Hex(buf: Buffer): string {
   return crypto.createHash("sha256").update(buf).digest("hex");
 }
 
-function err(code: string, message: string, canonicalPath?: string): FileWriteError {
-  return { ok: false, code, message, ...(canonicalPath ? { canonicalPath } : {}) };
-}
-
-async function canonicalTargetForSymlinkError(
-  error: FsSafeError,
-  targetPath: string,
-): Promise<string | undefined> {
-  // fs-safe may attach the canonical target to the error cause; when it does
-  // not, resolve it here: realpath covers a final-component symlink, and the
-  // existing-ancestor walk covers a symlinked parent of a missing leaf.
-  const causeCanonical =
-    error.cause &&
-    typeof error.cause === "object" &&
-    "canonicalPath" in error.cause &&
-    typeof error.cause.canonicalPath === "string"
-      ? error.cause.canonicalPath
-      : undefined;
-  if (causeCanonical) {
-    return causeCanonical;
-  }
-  try {
-    return await fs.realpath(targetPath);
-  } catch {
-    return await canonicalPathFromExistingAncestor(targetPath).catch(() => undefined);
-  }
-}
-
-function symlinkRedirectError(code: string, canonicalPath?: string): FileWriteError {
-  return err(
-    code,
-    "path traverses a symlink; refusing because followSymlinks=false (set plugins.entries.file-transfer.config.nodes.<node>.followSymlinks=true to allow, or update allowWritePaths to the canonical path)",
-    canonicalPath,
-  );
-}
-
-function writeFsSafeError(error: FsSafeError, targetPath: string): FileWriteError {
-  if (error.code === "symlink") {
-    return err(
-      "SYMLINK_TARGET_DENIED",
-      `path is a symlink; refusing to write through it: ${targetPath}`,
-    );
-  }
-  if (error.code === "not-file") {
-    return err("IS_DIRECTORY", `path resolves to a directory: ${targetPath}`);
-  }
-  if (error.code === "already-exists") {
-    return err("EXISTS_NO_OVERWRITE", `file already exists and overwrite is false: ${targetPath}`);
-  }
-  return err("WRITE_ERROR", error.message, targetPath);
-}
-
-async function captureWriteBinding(
-  canonicalTargetPath: string,
-  targetIdentity?: FileIdentity,
-): Promise<Extract<PathBinding, { kind: "write" }>> {
-  let anchorPath = path.dirname(canonicalTargetPath);
-  for (;;) {
-    try {
-      const stats = await fs.stat(anchorPath, { bigint: true });
-      if (!stats.isDirectory()) {
-        throw new Error(`write anchor is not a directory: ${anchorPath}`);
-      }
-      const anchor = fileIdentity(stats);
-      return {
-        kind: "write",
-        anchorPath,
-        anchorDevice: anchor.device,
-        anchorInode: anchor.inode,
-        ...(targetIdentity
-          ? { targetDevice: targetIdentity.device, targetInode: targetIdentity.inode }
-          : {}),
-      };
-    } catch (error) {
-      const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
-      if (code !== "ENOENT") {
-        throw error;
-      }
-      const parent = path.dirname(anchorPath);
-      if (parent === anchorPath) {
-        throw error;
-      }
-      anchorPath = parent;
-    }
-  }
-}
-
 async function writeBoundTarget(input: {
   binding: Extract<PathBinding, { kind: "write" }>;
   buffer: Buffer;
   canonicalTargetPath: string;
+  rejectHardlinks: boolean;
 }): Promise<
   { ok: true; path: string; overwritten: boolean; identity: FileIdentity } | FileWriteError
 > {
@@ -172,8 +91,13 @@ async function writeBoundTarget(input: {
           input.canonicalTargetPath,
         );
       }
-      await handle.truncate(0);
-      await handle.writeFile(input.buffer);
+      // Workspace document writes must not modify aliases outside their allowed path.
+      // Ordinary file.write retains its existing inode-preserving behavior.
+      if (input.rejectHardlinks && stats.nlink > 1n) {
+        return err("HARDLINK_TARGET_DENIED", "refusing to overwrite a file with hard links");
+      }
+      // Preserve the inode authorized by the binding while fs-safe owns write rollback.
+      await overwriteFileHandle(handle, input.buffer);
       await handle.sync();
       return {
         ok: true,
@@ -186,34 +110,11 @@ async function writeBoundTarget(input: {
     }
   }
 
-  let anchorRoot: Awaited<ReturnType<typeof root>>;
-  try {
-    anchorRoot = await root(input.binding.anchorPath);
-    const anchorStats = await fs.stat(anchorRoot.rootReal, { bigint: true });
-    if (
-      !matchesFileIdentity(anchorStats, {
-        device: input.binding.anchorDevice,
-        inode: input.binding.anchorInode,
-      })
-    ) {
-      throw new Error("write anchor changed");
-    }
-  } catch {
-    return err(
-      "CANONICAL_PATH_CHANGED",
-      "filesystem identity differs from the authorized target",
-      input.canonicalTargetPath,
-    );
+  const anchor = await openBoundWriteRoot(input);
+  if (!anchor.ok) {
+    return anchor;
   }
-  const relativeTarget = path.relative(anchorRoot.rootReal, input.canonicalTargetPath);
-  if (
-    !relativeTarget ||
-    path.isAbsolute(relativeTarget) ||
-    relativeTarget === ".." ||
-    relativeTarget.startsWith(`..${path.sep}`)
-  ) {
-    return err("WRITE_ERROR", "write target is outside the authorized anchor");
-  }
+  const { anchorRoot, relativeTarget } = anchor;
   try {
     await anchorRoot.create(relativeTarget, input.buffer, { mkdir: true });
     const opened = await anchorRoot.open(relativeTarget);
@@ -255,6 +156,7 @@ export async function handleFileWrite(
     typeof params?.expectedSha256 === "string" ? params.expectedSha256 : undefined;
   const followSymlinks = params?.followSymlinks === true;
   const preflightOnly = params?.preflightOnly === true;
+  const rejectHardlinks = params?.rejectHardlinks === true;
 
   // 1. Validate path: must be absolute, non-empty, no NUL byte
   if (!rawPath) {
@@ -356,6 +258,7 @@ export async function handleFileWrite(
         sha256: computedSha256,
         overwritten: false,
         binding: await captureWriteBinding(canonicalTargetPath),
+        ...(rejectHardlinks ? { rejectHardlinks: true as const } : {}),
       };
     }
     if (!expectedBinding) {
@@ -402,6 +305,9 @@ export async function handleFileWrite(
         `file already exists and overwrite is false: ${targetPath}`,
       );
     }
+    if (rejectHardlinks && existingLStat.nlink > 1n) {
+      return err("HARDLINK_TARGET_DENIED", "refusing to overwrite a file with hard links");
+    }
     overwritten = true;
     existingIdentity = fileIdentity(existingLStat);
   } catch (statErr: unknown) {
@@ -438,6 +344,7 @@ export async function handleFileWrite(
       sha256: computedSha256,
       overwritten,
       binding: await captureWriteBinding(canonicalTargetPath, existingIdentity),
+      ...(rejectHardlinks ? { rejectHardlinks: true as const } : {}),
     };
   }
 
@@ -446,6 +353,7 @@ export async function handleFileWrite(
       binding: expectedBinding,
       buffer: buf,
       canonicalTargetPath,
+      rejectHardlinks,
     });
     if (!writeResult.ok) {
       return writeResult;

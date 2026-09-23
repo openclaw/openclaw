@@ -6,6 +6,7 @@ import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { createMSTeamsConversationStoreState } from "./conversation-store-state.js";
@@ -14,7 +15,8 @@ import { setMSTeamsRuntime } from "./runtime.js";
 import { msteamsRuntimeStub } from "./test-support/runtime.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterAll(() => {
+  afterAll(async () => {
+    await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     cleanup();
   }),
@@ -83,9 +85,7 @@ describe("msteams conversation store (plugin state)", () => {
       "19:legacy@thread.tacv2",
       "19:new@thread.tacv2",
     ]);
-    await expect(
-      fs.promises.access(path.join(stateDir, "state", "openclaw.sqlite")),
-    ).resolves.toBeUndefined();
+    await fs.promises.access(path.join(stateDir, "state", "openclaw.sqlite"));
   });
 
   it("ignores a stale legacy JSON file at runtime", async () => {
@@ -126,7 +126,7 @@ describe("msteams conversation store (plugin state)", () => {
 
     const store = createMSTeamsConversationStoreState({ env });
     await expect(store.get("conv-current")).resolves.toEqual(ref);
-    await expect(fs.promises.access(filePath)).resolves.toBeUndefined();
+    await fs.promises.access(filePath);
   });
 
   it("hashes external conversation ids before using plugin-state keys", async () => {

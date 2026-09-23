@@ -3,7 +3,8 @@ import { formatInternationalPhoneNumberForDisplay } from "@openclaw/normalizatio
 import { html, nothing } from "lit";
 import type { WhatsAppStatus } from "../../api/types.ts";
 import { i18n, t } from "../../i18n/index.ts";
-import { formatRelativeTimestamp, formatDurationHuman } from "../../lib/format.ts";
+import { formatDurationHuman } from "../../lib/format-duration.ts";
+import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { renderChannelConfigSection } from "./view.config.ts";
 import {
   boolStatusKind,

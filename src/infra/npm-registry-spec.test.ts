@@ -32,160 +32,114 @@ describe("npm registry spec validation", () => {
   });
 
   it.each([
-    {
-      spec: "@openclaw/voice-call@^1.2.3",
-      expected: "exact version or dist-tag",
-    },
-    {
-      spec: "@openclaw/voice-call@~1.2.3",
-      expected: "exact version or dist-tag",
-    },
-    {
-      spec: "https://npmjs.org/pkg.tgz",
-      expected: "URLs are not allowed",
-    },
-    {
-      spec: "git+ssh://github.com/openclaw/openclaw",
-      expected: "URLs are not allowed",
-    },
-    {
-      spec: "@openclaw/voice-call@",
-      expected: "missing version/tag after @",
-    },
-    {
-      spec: "@openclaw/voice-call@../beta",
-      expected: "invalid version/tag",
-    },
-  ])("rejects %s", ({ spec, expected }) => {
+    ["@openclaw/voice-call@^1.2.3", "exact version or dist-tag"],
+    ["@openclaw/voice-call@~1.2.3", "exact version or dist-tag"],
+    ["https://npmjs.org/pkg.tgz", "URLs are not allowed"],
+    ["git+ssh://github.com/openclaw/openclaw", "URLs are not allowed"],
+    ["@openclaw/voice-call@", "missing version/tag after @"],
+    ["@openclaw/voice-call@../beta", "invalid version/tag"],
+  ])("rejects %s", (spec, expected) => {
     expect(validateRegistryNpmSpec(spec)).toContain(expected);
   });
 });
 
 describe("npm registry spec parsing helpers", () => {
   it.each([
-    {
-      spec: "@openclaw/voice-call",
-      expected: {
+    [
+      "@openclaw/voice-call",
+      {
         name: "@openclaw/voice-call",
         raw: "@openclaw/voice-call",
         selectorKind: "none",
         selectorIsPrerelease: false,
       },
-    },
-    {
-      spec: "@openclaw/voice-call@beta",
-      expected: {
+    ],
+    [
+      "@openclaw/voice-call@beta",
+      {
         name: "@openclaw/voice-call",
         raw: "@openclaw/voice-call@beta",
         selector: "beta",
         selectorKind: "tag",
         selectorIsPrerelease: false,
       },
-    },
-    {
-      spec: "@openclaw/voice-call@2026.5.3-1",
-      expected: {
+    ],
+    [
+      "@openclaw/voice-call@2026.5.3-1",
+      {
         name: "@openclaw/voice-call",
         raw: "@openclaw/voice-call@2026.5.3-1",
         selector: "2026.5.3-1",
         selectorKind: "exact-version",
         selectorIsPrerelease: false,
       },
-    },
-    {
-      spec: "@openclaw/voice-call@1.2.3-beta.1",
-      expected: {
+    ],
+    [
+      "@openclaw/voice-call@1.2.3-beta.1",
+      {
         name: "@openclaw/voice-call",
         raw: "@openclaw/voice-call@1.2.3-beta.1",
         selector: "1.2.3-beta.1",
         selectorKind: "exact-version",
         selectorIsPrerelease: true,
       },
-    },
-  ])("parses %s", ({ spec, expected }) => {
+    ],
+  ])("parses %s", (spec, expected) => {
     expect(parseRegistryNpmSpec(spec)).toEqual(expected);
   });
 
   it.each([
-    { value: "v1.2.3", expected: true },
-    { value: "1.2", expected: false },
-  ])("detects exact semver versions for %s", ({ value, expected }) => {
+    ["v1.2.3", true],
+    ["1.2", false],
+  ])("detects exact semver versions for %s", (value, expected) => {
     expect(isExactSemverVersion(value)).toBe(expected);
   });
 
   it.each([
-    { value: "1.2.3-beta.1", expected: true },
-    { value: "1.2.3-1", expected: true },
-    { value: "2026.5.3-beta.1", expected: true },
-    { value: "2026.5.3-1", expected: false },
-    { value: "2026.2.30-1", expected: false },
-    { value: "1.2.3", expected: false },
-  ])("detects prerelease semver versions for %s", ({ value, expected }) => {
+    ["1.2.3-beta.1", true],
+    ["1.2.3-1", true],
+    ["2026.5.3-beta.1", true],
+    ["2026.5.3-1", false],
+    ["2026.2.30-1", false],
+    ["1.2.3", false],
+  ])("detects prerelease semver versions for %s", (value, expected) => {
     expect(isPrereleaseSemverVersion(value)).toBe(expected);
   });
 
   it.each([
-    { left: "2026.5.3-1", right: "2026.5.3", expected: 1 },
-    { left: "2026.5.3-2", right: "2026.5.3-1", expected: 1 },
-    { left: "2026.5.3", right: "2026.5.3-beta.3", expected: 1 },
-    { left: "2026.5.3-beta.3", right: "2026.5.3-alpha.9", expected: 1 },
-    { left: "2026.5.3-alpha.10", right: "2026.5.3-alpha.2", expected: 1 },
-    { left: "2026.5.3-0", right: "2026.5.3", expected: null },
-    { left: "2026.5.3+build", right: "2026.5.3", expected: null },
-    { left: "1.2.3-1", right: "1.2.3", expected: null },
-  ])("compares OpenClaw release versions for %s and %s", ({ left, right, expected }) => {
+    ["2026.5.3-1", "2026.5.3", 1],
+    ["2026.5.3-2", "2026.5.3-1", 1],
+    ["2026.5.3", "2026.5.3-beta.3", 1],
+    ["2026.5.3-beta.3", "2026.5.3-alpha.9", 1],
+    ["2026.5.3-alpha.10", "2026.5.3-alpha.2", 1],
+    ["2026.5.3-0", "2026.5.3", null],
+    ["2026.5.3+build", "2026.5.3", null],
+    ["1.2.3-1", "1.2.3", null],
+  ])("compares OpenClaw release versions for %s and %s", (left, right, expected) => {
     expect(compareOpenClawReleaseVersions(left, right)).toBe(expected);
   });
 
   it.each([
-    { version: "2026.7.1-2", expected: "2026.7.1" },
-    { version: " 2026.7.1-1 ", expected: "2026.7.1" },
-    { version: "2026.7.1", expected: "2026.7.1" },
-    { version: "2026.7.1-beta.3", expected: "2026.7.1-beta.3" },
-    { version: "1.2.3-1", expected: "1.2.3-1" },
-  ])("resolves the OpenClaw release cohort for $version", ({ version, expected }) => {
+    ["2026.7.1-2", "2026.7.1"],
+    [" 2026.7.1-1 ", "2026.7.1"],
+    ["2026.7.1", "2026.7.1"],
+    ["2026.7.1-beta.3", "2026.7.1-beta.3"],
+    ["1.2.3-1", "1.2.3-1"],
+  ])("resolves the OpenClaw release cohort for %s", (version, expected) => {
     expect(resolveOpenClawReleaseCohortVersion(version)).toBe(expected);
   });
 });
 
 describe("npm prerelease resolution policy", () => {
   it.each([
-    {
-      spec: "@openclaw/voice-call",
-      resolvedVersion: "1.2.3-beta.1",
-      expected: false,
-    },
-    {
-      spec: "@openclaw/voice-call@latest",
-      resolvedVersion: "1.2.3-rc.1",
-      expected: false,
-    },
-    {
-      spec: "@openclaw/voice-call@latest",
-      resolvedVersion: "2026.5.3-1",
-      expected: true,
-    },
-    {
-      spec: "@openclaw/voice-call@beta",
-      resolvedVersion: "1.2.3-beta.4",
-      expected: true,
-    },
-    {
-      spec: "@openclaw/voice-call@1.2.3-beta.1",
-      resolvedVersion: "1.2.3-beta.1",
-      expected: true,
-    },
-    {
-      spec: "@openclaw/voice-call",
-      resolvedVersion: "1.2.3",
-      expected: true,
-    },
-    {
-      spec: "@openclaw/voice-call@latest",
-      resolvedVersion: undefined,
-      expected: true,
-    },
-  ])("decides prerelease resolution for %s -> %s", ({ spec, resolvedVersion, expected }) => {
+    ["@openclaw/voice-call", "1.2.3-beta.1", false],
+    ["@openclaw/voice-call@latest", "1.2.3-rc.1", false],
+    ["@openclaw/voice-call@latest", "2026.5.3-1", true],
+    ["@openclaw/voice-call@beta", "1.2.3-beta.4", true],
+    ["@openclaw/voice-call@1.2.3-beta.1", "1.2.3-beta.1", true],
+    ["@openclaw/voice-call", "1.2.3", true],
+    ["@openclaw/voice-call@latest", undefined, true],
+  ])("decides prerelease resolution for %s -> %s", (spec, resolvedVersion, expected) => {
     expect(
       isPrereleaseResolutionAllowed({
         spec: parseSpecOrThrow(spec),
@@ -195,17 +149,13 @@ describe("npm prerelease resolution policy", () => {
   });
 
   it.each([
-    {
-      spec: "@openclaw/voice-call",
-      resolvedVersion: "1.2.3-beta.1",
-      expected: `Use "@openclaw/voice-call@beta"`,
-    },
-    {
-      spec: "@openclaw/voice-call@beta",
-      resolvedVersion: "1.2.3-rc.1",
-      expected: "Use an explicit prerelease tag or exact prerelease version",
-    },
-  ])("formats prerelease guidance for %s", ({ spec, resolvedVersion, expected }) => {
+    ["@openclaw/voice-call", "1.2.3-beta.1", `Use "@openclaw/voice-call@beta"`],
+    [
+      "@openclaw/voice-call@beta",
+      "1.2.3-rc.1",
+      "Use an explicit prerelease tag or exact prerelease version",
+    ],
+  ])("formats prerelease guidance for %s", (spec, resolvedVersion, expected) => {
     expect(
       formatPrereleaseResolutionError({
         spec: parseSpecOrThrow(spec),

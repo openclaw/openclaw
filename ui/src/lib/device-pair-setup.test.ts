@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import {
   closeDevicePairSetup,
   completeDevicePairSetup,
@@ -19,14 +20,6 @@ import {
 type DevicePairSetupState = ReturnType<typeof createDevicePairSetupState>;
 type DevicePairSetup = Extract<DevicePairSetupLifecycle, { phase: "waiting" }>["setup"];
 type DevicePairSetupCompletion = NonNullable<ReturnType<typeof parseDevicePairSetupCompletion>>;
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
-}
 
 function setupResult(
   setupId: string,

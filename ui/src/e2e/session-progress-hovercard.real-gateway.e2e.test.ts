@@ -2,7 +2,11 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import type { GatewayServer } from "../../../src/gateway/server-public.ts";
-import { getActivePluginRegistry } from "../../../src/plugins/runtime.ts";
+import { createEmptyPluginRegistry } from "../../../src/plugins/registry.ts";
+import {
+  clearActivePluginRegistry,
+  setActivePluginRegistry,
+} from "../../../src/plugins/runtime.ts";
 import type { SessionCatalogProvider } from "../../../src/plugins/session-catalog.ts";
 import { createOpenClawTestState } from "../../../src/test-utils/openclaw-test-state.ts";
 import { getFreePort } from "../../../src/test-utils/ports.ts";
@@ -44,7 +48,7 @@ suite.define(() => {
       },
     });
     let gateway: GatewayServer | undefined;
-    let removeCatalogRegistration: (() => void) | undefined;
+    const registry = createEmptyPluginRegistry();
     try {
       const mainWorkspace = state.path("workspace-main");
       const writerWorkspace = state.path("workspace-writer");
@@ -71,13 +75,6 @@ suite.define(() => {
         },
       });
       state.applyEnv();
-      const { startGatewayServer } = await import("../../../src/gateway/server.js");
-      gateway = await startGatewayServer(port, {
-        auth: { mode: "none" },
-        bind: "loopback",
-        controlUiEnabled: false,
-        sidecarStartup: "start",
-      });
       const provider: SessionCatalogProvider = {
         id: "codex",
         label: "Codex",
@@ -106,19 +103,16 @@ suite.define(() => {
           items: [],
         }),
       };
-      const activeRegistry = getActivePluginRegistry();
-      if (!activeRegistry) {
-        throw new Error("Gateway plugin registry is unavailable");
-      }
-      // The real Gateway advertises catalog methods from this startup-owned registry object.
-      const registration = { pluginId: "codex", provider, source: import.meta.url };
-      activeRegistry.sessionCatalogs.push(registration);
-      removeCatalogRegistration = () => {
-        const index = activeRegistry.sessionCatalogs.indexOf(registration);
-        if (index >= 0) {
-          activeRegistry.sessionCatalogs.splice(index, 1);
-        }
-      };
+      // Minimal startup adopts the explicit fixture registry before requests can observe it.
+      registry.sessionCatalogs.push({ pluginId: "codex", provider, source: import.meta.url });
+      setActivePluginRegistry(registry);
+      const { startGatewayServer } = await import("../../../src/gateway/server.js");
+      gateway = await startGatewayServer(port, {
+        auth: { mode: "none" },
+        bind: "loopback",
+        controlUiEnabled: false,
+        sidecarStartup: "start",
+      });
 
       const artifactDir = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1" ? suite.artifactDir : null;
       await suite.withPage(
@@ -134,7 +128,9 @@ suite.define(() => {
           await page.goto(url.toString());
           const confirmation = page.locator("openclaw-gateway-url-confirmation");
           await confirmation.waitFor();
-          await confirmation.getByRole("button", { name: "Confirm", exact: true }).click();
+          await confirmation
+            .getByRole("button", { name: `Switch to 127.0.0.1:${port}`, exact: true })
+            .click();
 
           const row = page.locator(
             '[data-session-section="catalog:codex"] .sidebar-recent-session',
@@ -196,12 +192,9 @@ suite.define(() => {
         },
       );
     } finally {
-      removeCatalogRegistration?.();
-      try {
-        await gateway?.close({ reason: "catalog progress hovercard e2e cleanup" });
-      } finally {
-        await state.cleanup();
-      }
+      await gateway?.close({ reason: "catalog progress hovercard e2e cleanup" });
+      await clearActivePluginRegistry(registry);
+      await state.cleanup();
     }
   });
 });

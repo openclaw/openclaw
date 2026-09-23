@@ -1,6 +1,7 @@
 /** Security warnings for gateway exposure, exec policy drift, channel DMs, and plaintext secrets. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
+import { listAgentEntriesWithSource } from "../agents/agent-scope-config.js";
 import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig, GatewayBindMode } from "../config/config.js";
@@ -20,6 +21,7 @@ import {
   type ExecMode,
   type ExecSecurity,
 } from "../infra/exec-approvals.js";
+import { findSecretStoreRedactedValueFindings } from "../secrets/audit-store.js";
 import { isLikelySensitiveModelProviderHeaderName } from "../secrets/model-provider-header-policy.js";
 import { hasConfiguredPlaintextSecretValue } from "../secrets/secret-value.js";
 import { discoverConfigSecretTargets } from "../secrets/target-registry.js";
@@ -58,12 +60,14 @@ function collectImplicitHeartbeatDirectPolicyWarnings(cfg: OpenClawConfig): Secu
     pathHint: "agents.defaults.heartbeat.directPolicy",
   });
 
-  const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
-  for (const agent of agents) {
+  for (const { entry: agent, source } of listAgentEntriesWithSource(cfg)) {
     maybeWarn({
       label: `Heartbeat agent "${agent.id}"`,
       heartbeat: agent.heartbeat,
-      pathHint: `heartbeat.directPolicy for agent "${agent.id}"`,
+      pathHint:
+        source.kind === "entries"
+          ? `agents.entries.${source.key}.heartbeat.directPolicy`
+          : `heartbeat.directPolicy for agent "${agent.id}"`,
     });
   }
 
@@ -277,9 +281,9 @@ function collectPlaintextConfigSecretWarnings(cfg: OpenClawConfig): SecurityAudi
       title: "WARNING",
       detail: "openclaw.json contains plaintext secret-bearing config fields.",
       remediation: [
+        `Migrate them to SecretRefs with ${formatCliCommand("openclaw secrets configure")} or ${formatCliCommand("openclaw secrets apply")}, then verify with ${formatCliCommand("openclaw secrets audit --check")}.`,
         `Paths: ${pathLine}`,
         "Agents or workspace tools that can read config files may see these API keys/tokens.",
-        `Migrate them to SecretRefs with ${formatCliCommand("openclaw secrets configure")} or ${formatCliCommand("openclaw secrets apply")}, then verify with ${formatCliCommand("openclaw secrets audit --check")}.`,
       ].join("\n"),
     },
   ];
@@ -321,6 +325,24 @@ export async function collectSecurityWarnings(
   }
   findings.push(...collectExecFilesystemPolicyWarnings(cfg));
   findings.push(...collectPlaintextConfigSecretWarnings(cfg));
+  const gatewayTokenRef = resolveSecretInputRef({
+    value: cfg.gateway?.auth?.token,
+    defaults: cfg.secrets?.defaults,
+  }).ref;
+  findings.push(
+    ...findSecretStoreRedactedValueFindings({ database: { env } }).map(
+      (finding): SecurityAuditFinding => ({
+        checkId: "doctor.secret_store_redacted_value",
+        severity: "warn",
+        title: "Unavailable credential",
+        detail: finding.message,
+        remediation:
+          gatewayTokenRef?.source === "store" && gatewayTokenRef.id === finding.name
+            ? "Run `openclaw doctor --fix` to regenerate the Gateway token, then restart and reconnect or re-pair devices."
+            : `This credential remains unavailable until replaced. Run \`openclaw secrets store set ${finding.name}\` with the real credential, then \`openclaw secrets reload\`.`,
+      }),
+    ),
+  );
   if (approvals) {
     findings.push(...collectDurableExecApprovalWarnings(approvals));
   }
@@ -362,7 +384,7 @@ export async function collectSecurityWarnings(
   ];
 
   if (isExposed) {
-    if (!hasSharedSecret) {
+    if (!hasSharedSecret && resolvedAuth.mode !== "trusted-proxy") {
       const authFixLines =
         resolvedAuth.mode === "password"
           ? [
@@ -446,4 +468,5 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
     lines.push(`- Run: ${formatCliCommand("openclaw security audit --deep")}`);
     note(lines.join("\n"), "Security");
   }
+  return findings;
 }

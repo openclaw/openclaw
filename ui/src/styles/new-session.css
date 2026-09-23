@@ -68,8 +68,8 @@ openclaw-new-session-page {
   color: var(--accent);
 }
 
-html.openclaw-native-macos .new-session-page__incognito-rail {
-  top: 52px;
+html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__incognito-rail {
+  top: var(--openclaw-native-titlebar-height, 52px);
 }
 
 @media (max-width: 560px) {
@@ -144,6 +144,11 @@ html.openclaw-native-macos .new-session-page__incognito-rail {
   text-align: left;
 }
 
+.new-session-page__scroll > .new-session-page__draft {
+  max-width: var(--chat-thread-max-width, 48rem);
+  margin-inline: auto;
+}
+
 .new-session-page__incognito-notice {
   display: flex;
   align-items: center;
@@ -200,11 +205,6 @@ html.openclaw-native-macos .new-session-page__incognito-rail {
 .new-session-page--incognito .agent-chat__input {
   border-color: color-mix(in srgb, var(--text-strong) 22%, transparent);
   border-style: dashed;
-}
-
-/* Image and emoji fallbacks carry the same welcome-avatar silhouette. */
-.new-session-page .agent-chat__avatar--text {
-  border-radius: 50%;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -323,34 +323,6 @@ html.openclaw-native-macos .new-session-page__incognito-rail {
   max-width: min(40vw, 260px);
 }
 
-.agent-select--compact .agent-select__trigger,
-:root[data-theme-mode="light"] .agent-select--compact .agent-select__trigger {
-  width: auto;
-  height: 26px;
-  padding: 0 10px;
-  border: 0;
-  border-radius: var(--radius-full);
-  background: transparent;
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 500;
-}
-
-.agent-select--compact .agent-select__trigger:hover:not(:disabled),
-.agent-select--compact .agent-select__trigger[aria-expanded="true"] {
-  color: var(--text);
-  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
-}
-
-.agent-select--compact .agent-select__avatar {
-  width: 18px;
-  height: 18px;
-}
-
-.agent-select--compact .agent-select__label {
-  max-width: min(32vw, 220px);
-}
-
 .new-session-page__trigger {
   display: inline-flex;
   align-items: center;
@@ -412,9 +384,27 @@ html.openclaw-native-macos .new-session-page__incognito-rail {
   white-space: nowrap;
 }
 
+.new-session-page__select--where,
+.new-session-page__select--where > .new-session-page__trigger {
+  max-width: 100%;
+}
+
+.new-session-page__trigger-summary {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .new-session-page__trigger-chevron {
   display: inline-flex;
-  color: inherit;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-inline-start: 2px;
+  color: var(--muted);
+  opacity: 0.8;
 }
 
 .new-session-page__trigger-chevron--mobile {
@@ -436,8 +426,34 @@ html.openclaw-native-macos .new-session-page__incognito-rail {
 }
 
 .new-session-page__trigger-chevron svg {
-  width: 12px;
-  height: 12px;
+  width: 10px;
+  height: 10px;
+  stroke-width: 1.5px;
+}
+
+.new-session-page__trigger > .new-session-page__target-icon {
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 14px;
+  width: 14px;
+  height: 14px;
+}
+
+.new-session-page__trigger > .new-session-page__target-icon svg {
+  stroke-width: 1.5px;
+}
+
+.new-session-page__trigger .cloud-profile-icon {
+  align-items: center;
+  justify-content: center;
+}
+
+/* The wide AWS wordmark has generous vertical whitespace in its source art.
+   Scale its paint, not the shared leading column or the compact menu icons. */
+.new-session-page__trigger .cloud-provider-icon[data-provider-icon="aws"] {
+  width: 18px;
+  height: 18px;
+  flex-basis: 18px;
 }
 
 .session-group-defaults .exec-approval-header {
@@ -612,7 +628,6 @@ wa-popover.new-session-page__select::part(body) {
   box-shadow: var(--overlay-shadow);
 }
 
-.agent-select--compact .agent-select__menu-title,
 .new-session-page__menu-title {
   padding: 4px 8px 2px;
   color: var(--muted);
@@ -695,6 +710,33 @@ wa-popover.new-session-page__picker-popover
   border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
 }
 
+.new-session-page__branch-field {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.new-session-page__branch-field > input {
+  width: 100%;
+}
+
+.new-session-page__branch-popup::part(popup) {
+  padding: var(--menu-padding);
+  border: 1px solid var(--overlay-border);
+  border-radius: var(--menu-radius);
+  background: var(--bg-elevated);
+  box-shadow: var(--overlay-shadow);
+}
+
+.new-session-page__branch-suggestions {
+  display: grid;
+  gap: 2px;
+}
+
+.new-session-page__branch-suggestions [aria-selected="true"] {
+  background: var(--bg-hover);
+  color: var(--text-strong);
+}
+
 /* Context line inside a picker menu, e.g. which repo syncs to a cloud worker. */
 .new-session-page__menu-note {
   padding: 4px 8px 6px;
@@ -756,6 +798,114 @@ wa-popover.new-session-page__project-popover::part(body) {
   overflow-y: auto;
 }
 
+/* Destination search and mode controls stay visible while the flat inventory scrolls. */
+wa-popover.new-session-page__where-popover {
+  --max-width: min(360px, calc(100vw - 24px));
+}
+
+wa-popover.new-session-page__where-popover::part(body) {
+  width: min(360px, calc(100vw - 24px));
+  max-width: none;
+  padding: 0;
+  overflow: hidden;
+}
+
+.new-session-page__environment-picker {
+  display: flex;
+  flex-direction: column;
+  max-height: min(360px, calc(var(--auto-size-available-height, 70vh) - 2px));
+  overflow: hidden;
+}
+
+.new-session-page__environment-search {
+  background: var(--bg-hover);
+  margin-bottom: var(--space-1);
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  color: var(--muted);
+  border-radius: var(--menu-item-radius);
+}
+
+.new-session-page__environment-search:focus-within {
+  background: var(--bg-hover);
+}
+
+.new-session-page__environment-search svg {
+  display: block;
+  width: 14px;
+  height: 14px;
+}
+
+.new-session-page__environment-search input {
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--control-ui-text-sm);
+  outline: none;
+}
+
+.new-session-page__environment-search input::placeholder {
+  color: var(--muted);
+}
+
+.new-session-page__environment-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overscroll-behavior: contain;
+  overflow-y: auto;
+}
+
+.new-session-page__environment-option {
+  min-height: 28px;
+  gap: 8px;
+  padding: 3px 8px;
+}
+
+/* Reserve the selection column even when empty so labels never move. */
+.new-session-page__environment-option > .session-menu__check {
+  flex: 0 0 20px;
+  width: 20px;
+}
+
+.new-session-page__environment-list--automatic .new-session-page__environment-option {
+  opacity: 0.5;
+}
+
+.new-session-page__device-icon {
+  display: inline-flex;
+}
+
+.new-session-page__environment-option .session-menu__icon,
+.new-session-page__environment-option .session-menu__icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.new-session-page__environment-empty {
+  padding: 24px 12px;
+  color: var(--muted);
+  text-align: center;
+  font-size: var(--control-ui-text-sm);
+}
+
+.new-session-page__environment-skeletons {
+  display: grid;
+  gap: 8px;
+  padding: 6px 12px;
+}
+
+.new-session-page__environment-skeleton-row {
+  display: block;
+  height: 14px;
+}
+
 .new-session-page__menu-chevron {
   display: inline-flex;
   margin-left: auto;
@@ -770,10 +920,6 @@ wa-popover.new-session-page__project-popover::part(body) {
   stroke-width: 1.7px;
   stroke-linecap: round;
   stroke-linejoin: round;
-}
-
-.new-session-page__connect-machine .session-menu__icon {
-  color: var(--muted);
 }
 
 .connect-machine-dialog {
@@ -981,6 +1127,10 @@ wa-popover.new-session-page__project-popover::part(body) {
   background: var(--bg-hover);
 }
 
+.new-session-page__browser-entry--active {
+  background: var(--bg-hover);
+}
+
 .new-session-page__browser-entry:disabled {
   color: var(--muted);
   cursor: not-allowed;
@@ -1159,9 +1309,11 @@ wa-popover.new-session-page__project-popover::part(body) {
   }
 
   .new-session-page__triggers {
-    flex-direction: column;
-    align-items: stretch;
-    gap: 0;
+    display: grid;
+    /* Keep placement controls stacked while leaving breathing room on phones. */
+    grid-template-columns: minmax(0, 1fr);
+    align-items: center;
+    gap: 2px 4px;
     width: calc(100% - 8px);
     margin-inline: 4px;
     margin-block-end: 8px;
@@ -1171,9 +1323,13 @@ wa-popover.new-session-page__project-popover::part(body) {
   }
 
   .new-session-page__trigger,
-  .agent-select--compact .agent-select__trigger,
-  :root[data-theme-mode="light"] .agent-select--compact .agent-select__trigger {
-    height: 32px;
+  .new-session-page__select--agent .agent-select--compact .agent-select__trigger,
+  :root[data-theme-mode="light"]
+    .new-session-page__select--agent
+    .agent-select--compact
+    .agent-select__trigger {
+    height: 44px;
+    max-width: 100%;
     padding-inline: 6px;
     color: var(--text);
     font-size: 14px;
@@ -1182,41 +1338,102 @@ wa-popover.new-session-page__project-popover::part(body) {
   }
 
   .new-session-page__triggers > span.new-session-page__select {
+    min-width: 0;
     width: 100%;
+  }
+
+  .new-session-page__select--agent openclaw-agent-select {
+    max-width: 100%;
   }
 
   .new-session-page__triggers > span.new-session-page__select > .new-session-page__trigger {
     width: fit-content;
-    max-width: 100%;
+    max-width: 90%;
   }
 
-  .new-session-page__triggers > span.new-session-page__select ~ span.new-session-page__select {
-    margin-block-start: 6px;
+  .new-session-page__catalog-unavailable,
+  .new-session-page__runtime,
+  .new-session-page__triggers > .new-session-page__menu-field {
+    grid-column: 1 / -1;
+  }
+
+  .new-session-page__triggers > .new-session-page__menu-field {
+    min-width: 0;
+    flex-wrap: wrap;
   }
 
   .new-session-page__trigger-label {
     flex: 0 1 auto;
     min-width: 0;
+    max-width: 100%;
+  }
+
+  .new-session-page__trigger-label,
+  .new-session-page__trigger-summary {
+    /* Padding keeps fitting text out of the fade; only overflow reaches the tail. */
+    padding-inline-end: 8px;
+    white-space: nowrap;
+    text-overflow: clip;
+    mask-image: linear-gradient(to right, black calc(100% - 8px), transparent);
+  }
+
+  .new-session-page__trigger-label:dir(rtl),
+  .new-session-page__trigger-summary:dir(rtl) {
+    mask-image: linear-gradient(to left, black calc(100% - 8px), transparent);
   }
 
   .new-session-page__trigger {
     gap: 0;
+    min-height: 44px;
+    height: auto;
+    padding-block: 8px;
+    text-align: start;
+  }
+
+  .new-session-page__select--where
+    > .new-session-page__trigger:has(.new-session-page__trigger-summary) {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+
+  .new-session-page__trigger-summary {
+    grid-column: 2;
+    grid-row: 2;
+  }
+
+  .new-session-page__select--where .new-session-page__target-icon {
+    grid-column: 1;
+    grid-row: 1 / 3;
+  }
+
+  .new-session-page__select--where .new-session-page__trigger-chevron {
+    grid-column: 3;
+    grid-row: 1 / 3;
   }
 
   .new-session-page__trigger > .new-session-page__target-icon {
+    flex-basis: 20px;
+    width: 20px;
+    height: 20px;
     margin-inline-end: 8px;
   }
 
-  .new-session-page__triggers
-    :is(.new-session-page__target-icon, .new-session-page__trigger-chevron) {
-    color: var(--muted);
-  }
-
-  .new-session-page__triggers
-    :is(.new-session-page__target-icon, .new-session-page__trigger-chevron)
-    svg {
+  .new-session-page__trigger > .new-session-page__target-icon svg {
+    flex: 0 0 16px;
     width: 16px;
     height: 16px;
+  }
+
+  .new-session-page__trigger .cloud-profile-icon {
+    flex-basis: 20px;
+    width: 20px;
+    height: 20px;
+  }
+
+  .new-session-page__trigger .cloud-provider-icon[data-provider-icon="aws"] {
+    flex-basis: 22px;
+    width: 22px;
+    height: 22px;
   }
 
   .new-session-page__trigger-chevron--desktop {
@@ -1251,4 +1468,221 @@ wa-popover.new-session-page__project-popover::part(body) {
   .new-session-page__incognito-notice--visible {
     max-height: 48px;
   }
+}
+
+.new-session-page__environment-details {
+  --openclaw-tooltip-popup-hide-duration: 0ms;
+  --openclaw-tooltip-popup-show-duration: 0ms;
+  --openclaw-tooltip-padding: 12px;
+  --openclaw-tooltip-max-width: min(280px, calc(100vw - 24px));
+}
+
+.new-session-page__environment-card {
+  display: grid;
+  gap: 6px;
+  min-width: 180px;
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+.new-session-page__environment-card strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.new-session-page__card-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.new-session-page__card-icon {
+  display: inline-flex;
+  flex: 0 0 14px;
+}
+
+.new-session-page__card-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.new-session-page__environment-card code {
+  font-family: var(--mono);
+  font-size: inherit;
+  overflow-wrap: anywhere;
+}
+
+.new-session-page__environment-card .new-session-page__command {
+  display: block;
+  margin-block: 6px;
+}
+
+.new-session-page__environment-option[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.new-session-page__environment-heading {
+  margin: 12px 8px 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.new-session-page__cloud-configuration {
+  width: min(300px, calc(100vw - 48px));
+  padding: 0;
+  overflow-y: auto;
+  max-height: min(560px, calc(var(--auto-size-available-height, 70vh) - 2px));
+}
+
+.new-session-page__cloud-choice-list {
+  display: grid;
+  gap: 2px;
+}
+
+.new-session-page__cloud-choice-list .session-menu__text {
+  flex: 0 1 auto;
+}
+
+.new-session-page__cloud-choice-list .session-menu__sub {
+  flex: 0 1 auto;
+}
+
+.new-session-page__cloud-choice-list .session-menu__check {
+  margin-left: auto;
+}
+
+.new-session-page__selected-summary {
+  display: block;
+  min-width: 0;
+  font-size: 11px;
+  margin-left: 8px;
+  color: var(--muted);
+  font-weight: 400;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.new-session-page__environment-option .session-menu__text:has(.new-session-page__selected-summary) {
+  display: flex;
+  align-items: baseline;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.new-session-page__cloud-config-card {
+  --openclaw-tooltip-background-color: var(--bg-elevated);
+  --openclaw-tooltip-max-width: min(510px, calc(100vw - 24px));
+}
+
+.new-session-page__cloud-configuration .new-session-page__environment-heading:first-child {
+  margin-top: 0;
+}
+
+.new-session-page__submenu-chevron {
+  display: flex;
+  flex: 0 0 14px;
+  color: var(--muted);
+}
+
+.new-session-page__submenu-chevron svg {
+  width: 14px;
+  height: 14px;
+}
+
+.new-session-page__devices-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.new-session-page__connect-device {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 20px;
+  width: 20px;
+  height: 20px;
+  margin-right: -4px;
+  padding: 2px;
+  border: 0;
+  border-radius: 50%;
+  color: inherit;
+  background: transparent;
+  opacity: 0.6;
+}
+
+.new-session-page__connect-device:hover {
+  background: var(--bg-hover);
+}
+
+.new-session-page__connect-device svg {
+  display: block;
+  width: 14px;
+  height: 14px;
+}
+
+.new-session-page__cloud-choice-list + .new-session-page__environment-heading {
+  margin-top: 20px;
+}
+
+.new-session-page__environment-detail-trigger {
+  display: flex;
+  align-items: center;
+}
+
+.new-session-page__environment-detail-trigger > .session-menu__item {
+  flex: 1;
+  min-width: 0;
+}
+
+.new-session-page__touch-details {
+  display: none;
+}
+
+@media (any-pointer: coarse) {
+  .new-session-page__touch-details {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 32px;
+    min-height: 32px;
+    padding: 6px;
+    border: 0;
+    border-radius: var(--radius-sm);
+    color: var(--muted);
+    background: transparent;
+  }
+
+  .new-session-page__touch-details svg {
+    width: 16px;
+    height: 16px;
+  }
+}
+
+.new-session-page__fixed-os,
+.new-session-page__fixed-machine {
+  padding: 7px 8px;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.new-session-page__fixed-machine {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.new-session-page__fixed-machine span {
+  white-space: nowrap;
+}
+
+.new-session-page__fixed-machine span:last-child {
+  color: var(--muted);
 }

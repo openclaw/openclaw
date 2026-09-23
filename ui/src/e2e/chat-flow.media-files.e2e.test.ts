@@ -1,6 +1,7 @@
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { waitForControlUiProofSurface } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   captureUiProofEnabled,
   copiedViaExec,
@@ -11,16 +12,82 @@ import {
   waitForChatScrollIdle,
 } from "./chat-flow.test-support.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
-  it("exposes an assistant document download with its Unicode filename and ticketed URL", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
+  it("renders relative assistant media through the session-scoped ticket route", async () => {
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
+    const page = await context.newPage();
+    const source = "openclaw/tmp/github-panel/v2-proof/github-pr-diff-light.png";
+    const caption = "Browser proof from this task's workspace.";
+    const imageBytes = await readFile(path.join(process.cwd(), "ui/public/apple-touch-icon.png"));
+    const requests: URL[] = [];
+    await page.route("**/__openclaw__/assistant-media?**", async (route) => {
+      const url = new URL(route.request().url());
+      requests.push(url);
+      expect(url.searchParams.get("sessionKey")).toBe("agent:main:main");
+      expect(url.searchParams.get("agentId")).toBe("main");
+      if (url.searchParams.get("meta") === "1") {
+        expect(route.request().headers().authorization).toBe("Bearer e2e-device-token");
+        await route.fulfill({
+          contentType: "application/json",
+          body: JSON.stringify(
+            url.searchParams.get("source") === source
+              ? {
+                  available: true,
+                  mediaTicket: "ticket-relative-image",
+                  mediaTicketExpiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
+                }
+              : { available: false, code: "file-not-found", reason: "File not found" },
+          ),
+        });
+        return;
+      }
+      expect(url.searchParams.get("source")).toBe(source);
+      expect(url.searchParams.get("mediaTicket")).toBe("ticket-relative-image");
+      expect(route.request().headers().authorization).toBeUndefined();
+      await route.fulfill({ contentType: "image/png", body: imageBytes });
     });
+    await installMockGateway(page, {
+      historyMessages: [
+        {
+          role: "assistant",
+          content: `${caption}\n\nMEDIA:${source}\n\nMEDIA:missing.png`,
+          timestamp: Date.now(),
+        },
+      ],
+    });
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.getByText(caption, { exact: false }).first().waitFor();
+      if (captureUiProofEnabled) {
+        await page.screenshot({ path: path.join(suite.artifactDir, "relative-media-initial.png") });
+      }
+      const image = page.locator('img.chat-message-image[src*="github-pr-diff-light.png"]');
+      await expect
+        .poll(async () =>
+          (await image.count()) === 1
+            ? image.evaluate((element) =>
+                element instanceof HTMLImageElement ? element.naturalWidth : 0,
+              )
+            : 0,
+        )
+        .toBeGreaterThan(0);
+      await page.getByText("File not found", { exact: true }).waitFor();
+      expect((await page.locator("body").textContent()) ?? "").not.toContain("MEDIA:");
+      expect(requests.some((url) => url.searchParams.get("source") === "missing.png")).toBe(true);
+      if (captureUiProofEnabled) {
+        await page.screenshot({ path: path.join(suite.artifactDir, "relative-media-ready.png") });
+      }
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
+  it("exposes an assistant document download with its Unicode filename and ticketed URL", async () => {
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const source = "/tmp/openclaw/测试 report.pdf";
     const mediaUrl = `/__openclaw__/assistant-media?source=${encodeURIComponent(source)}&mediaTicket=ticket-download`;
@@ -64,11 +131,7 @@ suite.define(() => {
   });
 
   it("renders a direct tool-result image from Gateway history", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const imageData =
       "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAF/gL+X3q8AAAAAElFTkSuQmCC";
@@ -100,11 +163,7 @@ suite.define(() => {
   });
 
   it("renders a managed image through an artifact-scoped ticket", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const attachmentId = crypto.randomUUID();
     const artifactId = `artifact_managed_image_${attachmentId}`;
@@ -177,11 +236,7 @@ suite.define(() => {
   });
 
   it("moves a managed document batch from skeletons directly to final cards", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const proofDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim()
       ? suite.artifactDir
@@ -275,19 +330,20 @@ suite.define(() => {
         const rect = element.getBoundingClientRect();
         return { height: rect.height, width: rect.width };
       });
-      expect(metadataSize.height).toBe(14);
+      expect(metadataSize.height).toBeCloseTo(14, 3);
       expect(metadataSize.width).toBeGreaterThanOrEqual(112);
       expect(metadataSize.width).toBeLessThanOrEqual(144);
       const actionSkeletons = checkingCards.locator(
         ".chat-assistant-attachment-card__action-skeleton.skeleton",
       );
       expect(await actionSkeletons.count()).toBe(4);
+      // Ancestor entrance animations must settle before comparing viewport rectangles.
+      await waitForControlUiProofSurface(checkingCards.first(), [actionSkeletons.first()]);
       const actionSkeletonSize = await actionSkeletons.first().evaluate((element) => {
         const rect = element.getBoundingClientRect();
-        return { height: rect.height, width: rect.width };
+        return { x: rect.x, y: rect.y, height: rect.height, width: rect.width };
       });
       expect(actionSkeletonSize.height).toBeCloseTo(30, 3);
-      expect(actionSkeletonSize.width).toBeCloseTo(64, 3);
       expect(
         await actionSkeletons
           .first()
@@ -310,6 +366,16 @@ suite.define(() => {
         .toBe(4);
       expect(await checkingCards.count()).toBe(0);
       expect(await page.locator(".chat-assistant-attachment-card .skeleton").count()).toBe(0);
+      const openButtonSize = await page
+        .locator(".chat-assistant-attachment-card__expand")
+        .first()
+        .evaluate((element) => {
+          const rect = element.getBoundingClientRect();
+          return { x: rect.x, y: rect.y, height: rect.height, width: rect.width };
+        });
+      for (const axis of ["x", "y", "width", "height"] as const) {
+        expect(Math.abs(actionSkeletonSize[axis] - openButtonSize[axis])).toBeLessThanOrEqual(0.5);
+      }
       const finalActionWidths = await page
         .locator(
           ".chat-assistant-attachment-card--compact .chat-assistant-attachment-card__actions",
@@ -357,11 +423,7 @@ suite.define(() => {
       const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim()
         ? suite.artifactDir
         : undefined;
-      const context = await suite.newBrowserContext({
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1280 },
-      });
+      const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
       const page = await context.newPage();
       const requestedMediaUrls: URL[] = [];
       await page.route("**/__openclaw__/assistant-media?**", async (route) => {
@@ -436,11 +498,7 @@ suite.define(() => {
   );
 
   it("evicts and refetches managed image Blob URLs after the cache reaches capacity", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     await page.addInitScript(() => {
       const originalCreateObjectURL = URL.createObjectURL.bind(URL);
@@ -672,11 +730,7 @@ suite.define(() => {
   });
 
   it("copies a code block over a non-secure context via the execCommand fallback", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     // Simulate a plain-HTTP deployment where navigator.clipboard is unavailable.
     await installPlainHttpClipboardCapture(page);
@@ -747,11 +801,7 @@ suite.define(() => {
   });
 
   it("copies a workspace file path over a non-secure context via the execCommand fallback", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     await installPlainHttpClipboardCapture(page);
     const gateway = await installMockGateway(page, {

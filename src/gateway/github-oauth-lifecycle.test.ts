@@ -1,8 +1,8 @@
+import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ToolsGitHubStatusResult } from "../../packages/gateway-protocol/src/index.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { beginAgentDeletion } from "../agents/agent-lifecycle-registry.js";
 import {
   inspectGitHubOAuthRecord,
   listGitHubDeviceAuthorizationRecords,
@@ -21,6 +21,10 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GitHubToolIdentityConfig } from "../config/types.tools.js";
 import { writeHiddenGitHubSecretRecord } from "../secrets/store/secret-store.js";
+import {
+  beginAgentDeletionJournal,
+  removeAgentDeletionJournal,
+} from "../state/agent-deletion-journal.js";
 import { recordAgentProvenance } from "../state/agent-provenance.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 
@@ -80,6 +84,7 @@ vi.mock("./github-cli-preflight.js", async (importOriginal) => {
 });
 
 import { GitHubCliUnavailableError } from "./github-cli-preflight.js";
+import { configuredOAuthIdentities } from "./github-oauth-lifecycle-helpers.js";
 import {
   createGitHubOAuthLifecycle,
   installActiveGitHubOAuthLifecycle,
@@ -715,21 +720,26 @@ describe("GitHub OAuth authorization lifecycle", () => {
     currentConfig = configForScope("agent");
     const lifecycle = createLifecycle();
     const started = await startAuthorization(lifecycle, "agent");
-    const deletion = beginAgentDeletion({
+    const deletion = beginAgentDeletionJournal({
       agentId: "main",
+      operationId: randomUUID(),
       agentDir: "/agents/main",
       workspaceDir: "/workspaces/main",
       sessionsDir: "/sessions/main",
+      deleteFiles: true,
     });
-    await advanceToPoll(started.requestId);
+    try {
+      await advanceToPoll(started.requestId);
 
-    await expect(lifecycle.pollAuthorization(started.requestId)).resolves.toEqual({
-      status: "failed",
-      reason: "identity_changed",
-    });
-    expect(mocks.pollDeviceToken).not.toHaveBeenCalled();
-    expect(mocks.installProfile).not.toHaveBeenCalled();
-    deletion.rollback();
+      await expect(lifecycle.pollAuthorization(started.requestId)).resolves.toEqual({
+        status: "failed",
+        reason: "identity_changed",
+      });
+      expect(mocks.pollDeviceToken).not.toHaveBeenCalled();
+      expect(mocks.installProfile).not.toHaveBeenCalled();
+    } finally {
+      removeAgentDeletionJournal(deletion.agentId, deletion.operationId);
+    }
   });
 
   it("rejects an agent authorization after same-id recreation gets fresh provenance", async () => {
@@ -767,6 +777,44 @@ describe("GitHub OAuth authorization lifecycle", () => {
 });
 
 describe("GitHub OAuth refresh and maintenance", () => {
+  it("bounds roster reads while preserving ordered identities and fresh configuration", () => {
+    const count = 128;
+    const entries: Record<string, { tools: { github?: GitHubToolIdentityConfig } }> = {};
+    for (let index = count; index > 0; index -= 1) {
+      entries[`agent-${String(index).padStart(3, "0")}`] = { tools: {} };
+    }
+    let reads = 0;
+    const observed = new Proxy(entries, {
+      get(target, key, receiver) {
+        reads += typeof key === "string" && Object.hasOwn(target, key) ? 1 : 0;
+        return Reflect.get(target, key, receiver);
+      },
+    });
+    const config: OpenClawConfig = { agents: { entries: observed } };
+    expect(configuredOAuthIdentities(config)).toEqual([]);
+    // Idle maintenance should traverse a large roster a bounded number of times.
+    expect(reads).toBeLessThanOrEqual(count * 4);
+
+    const system = identity(OLD_PROFILE, { oauth: true, author: true });
+    const agent = identity(NEW_PROFILE, { oauth: true, author: true });
+    config.tools = { github: system };
+    entries["agent-128"] = { tools: { github: agent } };
+    entries["agent-064"] = { tools: { github: system } };
+    entries["agent-001"] = { tools: { github: identity(OTHER_PROFILE) } };
+    expect(configuredOAuthIdentities(config)).toEqual([
+      { scope: "system", agentId: "system", identity: system },
+      { scope: "agent", agentId: "agent-064", identity: system },
+      { scope: "agent", agentId: "agent-128", identity: agent },
+    ]);
+    entries["agent-001"] = { tools: { github: agent } };
+    delete entries["agent-128"];
+    expect(configuredOAuthIdentities(config)).toEqual([
+      { scope: "system", agentId: "system", identity: system },
+      { scope: "agent", agentId: "agent-001", identity: agent },
+      { scope: "agent", agentId: "agent-064", identity: system },
+    ]);
+  });
+
   it("respects refresh skew and marks transient and terminal refresh failures", async () => {
     const configured = identity(OLD_PROFILE, { oauth: true, author: true });
     currentConfig = configForScope("system", configured);

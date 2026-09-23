@@ -5,9 +5,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cliCommandCatalog } from "../command-catalog.js";
 import { isReservedNonPluginCommandRoot } from "../command-registration-policy.js";
 import { collectShellCompletionCommandTree } from "../completion-command-tree.js";
-import { getCoreCliCommandNames, registerCoreCliByName } from "./command-registry-core.js";
+import { registerCoreCliByName } from "./command-registry-core.js";
 import { createProgramContext } from "./context.js";
-import { getCoreCliCommandDescriptors } from "./core-command-descriptors.js";
+import {
+  getCoreCliCommandDescriptors,
+  getCoreCliCommandNamesCore,
+} from "./core-command-descriptors.js";
 import { registerSubCliByName, registerSubCliCommands } from "./register.subclis.js";
 import { getSubCliEntriesCore } from "./subcli-descriptors.js";
 
@@ -17,6 +20,7 @@ const RESERVED_CATALOG_ROOTS = {
 } as const;
 
 const PLUGIN_CATALOG_PATHS = {
+  "browser extension": "registered and covered by the browser plugin",
   "browser extension native-host": "registered and covered by the browser plugin",
   memory: "registered and covered by the memory-core plugin",
   "memory search": "registered and covered by the memory-core plugin",
@@ -27,6 +31,7 @@ const JSON_NOT_APPLICABLE = {
   namespaces: {
     reason: "command group only; reporting subcommands declare JSON output individually",
     commands: [
+      "agents team",
       "backup",
       "backup git",
       "backup sqlite",
@@ -172,6 +177,7 @@ const JSON_NOT_APPLICABLE = {
       "models image-fallbacks add",
       "models image-fallbacks remove",
       "models image-fallbacks clear",
+      "models auth activate",
       "models auth logout",
       "models auth order set",
       "models auth order clear",
@@ -224,8 +230,8 @@ async function registerAllBuiltInCommands(): Promise<Command> {
   const ctx = createProgramContext();
   const argv = ["node", "openclaw", "completion"];
 
-  for (const name of getCoreCliCommandNames()) {
-    await registerCoreCliByName(program, ctx, name, argv);
+  for (const name of getCoreCliCommandNamesCore()) {
+    await registerCoreCliByName(program, ctx, name);
   }
   for (const entry of getSubCliEntriesCore()) {
     await registerSubCliByName(program, entry.name, argv, { purpose: "completion" });

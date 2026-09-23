@@ -6,13 +6,16 @@ import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
 import * as payloadStore from "../../lib/chat/outbox-payload-store.runtime.ts";
+import * as videoPosters from "../../lib/media/video-poster.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
   cloneChatAttachmentsForIndependentOwner,
   getChatAttachmentDataUrl,
   getChatAttachmentPreviewUrl,
+  getChatAttachmentVideoPosterUrl,
   registerChatAttachmentPayload,
   releaseChatAttachmentPayloads,
+  replaceChatAttachmentsFromEditor,
 } from "./attachment-payload-store.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { renderAssistantAttachments } from "./components/chat-message-attachments.ts";
@@ -258,3 +261,47 @@ it("retains inline previews when object URLs are unavailable", () => {
   releaseChatAttachmentPayloads([attachment]);
   expect(revoked).toEqual([]);
 });
+
+it("retains a pending video poster when a local message projects the same payload", async () => {
+  const ready = createDeferred<Blob | null>();
+  vi.spyOn(videoPosters, "requestVideoPoster").mockReturnValue(ready.promise);
+  const file = new File(["synthetic video"], "demo.mp4", { type: "video/mp4" });
+  const attachment = registerChatAttachmentPayload({
+    attachment: { id: "pending-video", fileName: file.name, mimeType: file.type },
+    dataUrl: "data:video/mp4;base64,c3ludGhldGljIHZpZGVv",
+    file,
+  });
+  owned.push(attachment);
+  const pending = getChatAttachmentVideoPosterUrl(attachment);
+  buildLocalUserMessage({ attachments: [attachment], createdAt: 1, text: "Inspect the video" });
+  const poster = new Blob(["synthetic poster"], { type: "image/jpeg" });
+  ready.resolve(poster);
+  const url = await pending;
+  expect(url).not.toBeNull();
+  expect(created.get(url!)).toBe(poster);
+  releaseChatAttachmentPayloads([attachment]);
+  expect(new Set(revoked)).toEqual(new Set(created.keys()));
+});
+
+it.each([64, 1024 * 1024, 5 * 1024 * 1024 - 1, 5 * 1024 * 1024])(
+  "restores supported inline images of %i bytes",
+  (bytes) => {
+    const data = Buffer.alloc(bytes, 0xab).toString("base64");
+    const restored = replaceChatAttachmentsFromEditor([], [{ mimeType: "image/png", data }]);
+    owned.push(...restored);
+    expect(restored).toHaveLength(1);
+    expect(getChatAttachmentDataUrl(restored[0]!)).toBe(`data:image/png;base64,${data}`);
+  },
+);
+
+it("rejects a restored image one decoded byte over the cap without throwing", () => {
+  const data = Buffer.alloc(5 * 1024 * 1024 + 1).toString("base64");
+  expect(replaceChatAttachmentsFromEditor([], [{ mimeType: "image/png", data }])).toEqual([]);
+});
+
+it.each(["", "AAA", "AB=A", "A===", "====", "YWJ$", "aW1h Z2U=", "QQ==QQ=="])(
+  "skips malformed restored image bytes %j",
+  (data) => {
+    expect(replaceChatAttachmentsFromEditor([], [{ mimeType: "image/png", data }])).toEqual([]);
+  },
+);

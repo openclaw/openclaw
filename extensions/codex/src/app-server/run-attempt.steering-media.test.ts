@@ -6,14 +6,20 @@ import {
   resolveActiveEmbeddedRunSessionId,
   runAgentHarnessGatewayQuestion,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  registerAgentWorkspaceAccess,
+  type AgentWorkspaceAccess,
+} from "openclaw/plugin-sdk/agent-workspace-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { getMediaDir } from "openclaw/plugin-sdk/media-runtime";
+import { createRemoteShellSandboxFsBridge } from "openclaw/plugin-sdk/sandbox";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   appendSessionTranscriptMessageByIdentity,
   readVisibleSessionTranscriptMessageEntries,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { createSolidPngBuffer } from "openclaw/plugin-sdk/test-fixtures";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CodexUserInput } from "./protocol.js";
 import {
   createParams,
@@ -37,8 +43,14 @@ type SteerRequest = {
 };
 
 setupRunAttemptTestHooks();
+const managedFixtures: string[] = [];
+afterEach(async () => {
+  await Promise.all(
+    managedFixtures.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
+  );
+});
 
-async function createMediaFixture(scenario: Scenario) {
+async function createMediaFixture(scenario: Scenario, managed = false) {
   const root = await fs.realpath(tempDir);
   const params = createParams(path.join(root, "session.jsonl"), path.join(root, "workspace"));
   params.modelId = "gpt-5.6-luna";
@@ -50,17 +62,24 @@ async function createMediaFixture(scenario: Scenario) {
   };
   params.toolAuthorityFingerprint = "steering-media-authority";
   await fs.mkdir(params.workspaceDir, { recursive: true });
+  let mediaDir = params.workspaceDir;
+  if (managed) {
+    const inbound = path.join(getMediaDir(), "inbound");
+    await fs.mkdir(inbound, { recursive: true });
+    mediaDir = await fs.mkdtemp(path.join(inbound, "steering-"));
+    managedFixtures.push(mediaDir);
+  }
   const blueBytes = createSolidPngBuffer(1, 1, { r: 0, g: 0, b: 255 });
   const greenBytes = createSolidPngBuffer(1, 1, { r: 0, g: 255, b: 0 });
   const redBytes = createSolidPngBuffer(1, 1, { r: 255, g: 0, b: 0 });
-  const blue = { path: path.join(params.workspaceDir, "blue.png"), contentType: "image/png" };
-  const green = { path: path.join(params.workspaceDir, "green.png"), contentType: "image/png" };
+  const blue = { path: path.join(mediaDir, "blue.png"), contentType: "image/png" };
+  const green = { path: path.join(mediaDir, "green.png"), contentType: "image/png" };
   const document = {
-    path: path.join(params.workspaceDir, "document.png"),
+    path: path.join(mediaDir, "document.png"),
     kind: "document" as const,
   };
   const described = {
-    path: path.join(params.workspaceDir, "described.png"),
+    path: path.join(mediaDir, "described.png"),
     contentType: "image/png",
   };
   await Promise.all([
@@ -165,7 +184,15 @@ async function createMediaFixture(scenario: Scenario) {
     (await readVisibleSessionTranscriptMessageEntries(target))
       .map((entry) => entry.message)
       .filter((entry) => entry.role === "user" && entry.timestamp === message.timestamp);
-  return { params, options, message, recorder, expectedImages, readSteeredMessages };
+  return {
+    params,
+    options,
+    message,
+    recorder,
+    canonicalMedia: media,
+    expectedImages,
+    readSteeredMessages,
+  };
 }
 
 type MediaFixture = Awaited<ReturnType<typeof createMediaFixture>>;
@@ -176,15 +203,27 @@ async function withActiveMediaTurn(
   harness: StartedHarness,
   exercise: (controller: AbortController) => Promise<void>,
 ) {
+  // Drive media/closure ordering without charging filesystem setup to the run budget.
+  vi.useFakeTimers();
   const controller = new AbortController();
-  const run = runCodexAppServerAttempt({ ...fixture.params, abortSignal: controller.signal });
+  const started = createDeferred<void>();
+  const run = runCodexAppServerAttempt({
+    ...fixture.params,
+    abortSignal: controller.signal,
+    onAgentEvent: (event) => {
+      if (event.stream === "lifecycle" && event.data.phase === "start") {
+        started.resolve();
+      }
+      return fixture.params.onAgentEvent?.(event);
+    },
+  });
   try {
-    await harness.waitForMethod("turn/start");
-    await vi.waitFor(() => {
-      expect(resolveActiveEmbeddedRunSessionId(fixture.params.sessionKey!)).toBe(
-        fixture.params.sessionId,
-      );
-    }, fastWait);
+    // Polling waitFor advances fake time while cold runtime preparation is still loading.
+    await started.promise;
+    expect(harness.requests.some((entry) => entry.method === "turn/start")).toBe(true);
+    expect(resolveActiveEmbeddedRunSessionId(fixture.params.sessionKey!)).toBe(
+      fixture.params.sessionId,
+    );
     await exercise(controller);
   } finally {
     // Assertions may fail while a steer awaits consumption; always retire its owner.
@@ -204,9 +243,230 @@ async function notifyConsumed(harness: StartedHarness, clientId: string, turnId 
   });
 }
 
+function registerSteeringWorkspace(
+  fixture: MediaFixture,
+  prepareTurnAttachments?: AgentWorkspaceAccess["prepareTurnAttachments"],
+) {
+  return registerAgentWorkspaceAccess(fixture.params.workspaceDir, {
+    bridge: {
+      readFileWithSource: async () => {
+        throw Object.assign(new Error("No bootstrap file in remote fixture"), { code: "ENOENT" });
+      },
+      readFile: async () => Buffer.alloc(0),
+      writeFile: async () => {},
+      stat: async () => null,
+    },
+    prepareTurnAttachments,
+  });
+}
+
 describe("Codex active-run steering media", () => {
+  it.each(["off", "ro", "none"] as const)(
+    "prepares remote attachments with sandbox access %s without changing images or transcript",
+    async (workspaceAccess) => {
+      const fixture = await createMediaFixture("resolved", true);
+      if (workspaceAccess !== "off") {
+        const sandboxRoot = path.join(tempDir, "sandbox");
+        await fs.mkdir(sandboxRoot);
+        const docker = {
+          image: "fixture",
+          containerPrefix: "fixture",
+          workdir: "/workspace",
+          readOnlyRoot: true,
+          tmpfs: [],
+          network: "none",
+          capDrop: [],
+        };
+        fixture.params.sandbox = {
+          enabled: true,
+          backendId: "docker",
+          sessionKey: fixture.params.sessionKey!,
+          workspaceDir: sandboxRoot,
+          agentWorkspaceDir: fixture.params.workspaceDir,
+          workspaceAccess,
+          runtimeId: "fixture",
+          runtimeLabel: "fixture",
+          containerName: "fixture",
+          containerWorkdir: "/workspace",
+          docker,
+          tools: { allow: [], deny: [] },
+          browserAllowHostControl: false,
+          fsBridge: createRemoteShellSandboxFsBridge({
+            sandbox: {
+              workspaceDir: sandboxRoot,
+              agentWorkspaceDir: fixture.params.workspaceDir,
+              workspaceAccess,
+              containerName: "fixture",
+              containerWorkdir: "/workspace",
+              docker,
+            },
+            runtime: {
+              remoteWorkspaceDir: "/workspace",
+              remoteAgentWorkspaceDir: "/agent",
+              runRemoteShellScript: async () => {
+                throw new Error("Gateway originals are not in the sandbox");
+              },
+            },
+          }),
+        };
+      }
+      // Deferred originals must be resolved even when the initial snapshot has no file paths.
+      fixture.recorder.message = { ...fixture.message, __openclaw: { media: [{ kind: "image" }] } };
+      fixture.options.media = [];
+      const note = "Attachments are available in /remote/workspace/.inputs/steered-turn.";
+      const prepare = vi.fn<NonNullable<AgentWorkspaceAccess["prepareTurnAttachments"]>>(
+        async (_turn, assertCurrent) => {
+          assertCurrent();
+          return note;
+        },
+      );
+      const release = registerSteeringWorkspace(fixture, prepare);
+      const harness = createStartedThreadHarness();
+      try {
+        await withActiveMediaTurn(fixture, harness, async () => {
+          const accepted = vi.fn();
+          expect(
+            queueAgentHarnessMessage(fixture.params.sessionId, fixture.message.content, {
+              ...fixture.options,
+              onQueueAccepted: accepted,
+            }),
+          ).toBe(true);
+          await vi.waitFor(() => expect(accepted).toHaveBeenCalledExactlyOnceWith(true), fastWait);
+          const steer = harness.requests.find((entry) => entry.method === "turn/steer")
+            ?.params as SteerRequest;
+          expect(steer.input).toEqual([
+            { type: "text", text: `${fixture.message.content}\n\n${note}`, text_elements: [] },
+            ...fixture.expectedImages,
+          ]);
+          expect(prepare).toHaveBeenCalledExactlyOnceWith(
+            expect.objectContaining({
+              media: fixture.canonicalMedia.map((fact) => expect.objectContaining(fact)),
+              config: fixture.params.config,
+              abortSignal: expect.any(AbortSignal),
+            }),
+            expect.any(Function),
+          );
+          await notifyConsumed(harness, steer.clientUserMessageId);
+          expect(await fixture.readSteeredMessages()).toEqual([fixture.message]);
+        });
+      } finally {
+        release();
+      }
+    },
+  );
+
+  it("keeps image steering working for a bridge-only workspace provider", async () => {
+    const fixture = await createMediaFixture("resolved", true);
+    const release = registerSteeringWorkspace(fixture);
+    const harness = createStartedThreadHarness();
+    try {
+      await withActiveMediaTurn(fixture, harness, async () => {
+        const accepted = vi.fn();
+        expect(
+          queueAgentHarnessMessage(fixture.params.sessionId, fixture.message.content, {
+            ...fixture.options,
+            onQueueAccepted: accepted,
+          }),
+        ).toBe(true);
+        await vi.waitFor(() => expect(accepted).toHaveBeenCalledExactlyOnceWith(true), fastWait);
+        const steer = harness.requests.find((entry) => entry.method === "turn/steer")
+          ?.params as SteerRequest;
+        expect(steer.input).toEqual([
+          { type: "text", text: fixture.message.content, text_elements: [] },
+          ...fixture.expectedImages,
+        ]);
+        await notifyConsumed(harness, steer.clientUserMessageId);
+        expect(await fixture.readSteeredMessages()).toEqual([fixture.message]);
+      });
+    } finally {
+      release();
+    }
+  });
+
+  it("accepts plain steering without a workspace attachment provider", async () => {
+    const fixture = await createMediaFixture("resolved");
+    const release = registerSteeringWorkspace(fixture);
+    const harness = createStartedThreadHarness();
+    try {
+      await withActiveMediaTurn(fixture, harness, async () => {
+        const accepted = vi.fn();
+        expect(
+          queueAgentHarnessMessage(fixture.params.sessionId, "continue", {
+            debounceMs: 0,
+            toolAuthorityFingerprint: fixture.params.toolAuthorityFingerprint,
+            onQueueAccepted: accepted,
+          }),
+        ).toBe(true);
+        await vi.waitFor(() => expect(accepted).toHaveBeenCalledExactlyOnceWith(true), fastWait);
+        const steer = harness.requests.find((entry) => entry.method === "turn/steer")
+          ?.params as SteerRequest;
+        expect(steer.input).toEqual([{ type: "text", text: "continue", text_elements: [] }]);
+        await notifyConsumed(harness, steer.clientUserMessageId);
+      });
+    } finally {
+      release();
+    }
+  });
+
+  it.each(["failed", "revoked", "replaced", "host-closed", "aborted"] as const)(
+    "rejects %s workspace attachment preparation before native steering",
+    async (failure) => {
+      const fixture = await createMediaFixture("resolved");
+      const closeHost = await bindProductionHarnessHostCapabilitiesForTest(fixture.params);
+      const prepared = createDeferred<string>();
+      const prepare = vi.fn<NonNullable<AgentWorkspaceAccess["prepareTurnAttachments"]>>(
+        async () => {
+          if (failure === "failed") {
+            throw new Error("Workspace attachment transfer failed");
+          }
+          return await prepared.promise;
+        },
+      );
+      const release = registerSteeringWorkspace(fixture, prepare);
+      let releaseReplacement: (() => void) | undefined;
+      const harness = createStartedThreadHarness();
+      try {
+        await withActiveMediaTurn(fixture, harness, async (controller) => {
+          const accepted = vi.fn();
+          expect(
+            queueAgentHarnessMessage(fixture.params.sessionId, fixture.message.content, {
+              ...fixture.options,
+              onQueueAccepted: accepted,
+            }),
+          ).toBe(true);
+          if (failure !== "failed") {
+            await vi.waitFor(() => expect(prepare).toHaveBeenCalledOnce(), fastWait);
+            expect(harness.requests.filter((entry) => entry.method === "turn/steer")).toEqual([]);
+            if (failure === "revoked" || failure === "replaced") {
+              release();
+              if (failure === "replaced") {
+                releaseReplacement = registerSteeringWorkspace(fixture, prepare);
+              }
+            } else if (failure === "host-closed") {
+              closeHost();
+            } else {
+              controller.abort();
+            }
+            prepared.resolve("Attachments prepared.");
+          }
+          await vi.waitFor(() => expect(accepted).toHaveBeenCalledExactlyOnceWith(false), fastWait);
+          expect(harness.requests.filter((entry) => entry.method === "turn/steer")).toEqual([]);
+          expect(fixture.recorder.persistApproved).not.toHaveBeenCalled();
+          expect(await fixture.readSteeredMessages()).toEqual([]);
+        });
+      } finally {
+        prepared.resolve("Attachments prepared.");
+        closeHost();
+        release();
+        releaseReplacement?.();
+      }
+    },
+  );
+
   it("keeps consumed question answers accepted when their host closes during the response", async () => {
     const fixture = await createMediaFixture("offloaded");
+    const onAttemptTimeout = vi.fn();
+    fixture.params.onAttemptTimeout = onAttemptTimeout;
     const closeHost = await bindProductionHarnessHostCapabilitiesForTest(fixture.params);
     const harness = createStartedThreadHarness();
     await withActiveMediaTurn(fixture, harness, async (controller) => {
@@ -239,6 +499,7 @@ describe("Codex active-run steering media", () => {
       });
       try {
         await vi.waitFor(() => expect(onBlockReply).toHaveBeenCalledOnce(), fastWait);
+        expect(onAttemptTimeout).not.toHaveBeenCalled();
         const accepted = vi.fn();
         expect(
           queueAgentHarnessMessage(fixture.params.sessionId, "yes", {
@@ -250,6 +511,7 @@ describe("Codex active-run steering media", () => {
         ).toBe(true);
         await expect(question).resolves.toEqual(result);
         await vi.waitFor(() => expect(accepted).toHaveBeenCalledExactlyOnceWith(true), fastWait);
+        expect(onAttemptTimeout).not.toHaveBeenCalled();
         expect(harness.requests.filter((entry) => entry.method === "turn/steer")).toEqual([]);
       } finally {
         closeHost();
@@ -379,7 +641,8 @@ describe("Codex active-run steering media", () => {
         expect(steer.input).toEqual([
           { type: "text", text: fixture.message.content, text_elements: [] },
         ]);
-        expect(fixture.recorder.persistApproved).not.toHaveBeenCalled();
+        expect(fixture.recorder.persistApproved).toHaveBeenCalledOnce();
+        expect(await fixture.readSteeredMessages()).toEqual([fixture.message]);
         await notifyConsumed(harness, steer.clientUserMessageId);
         expect(await fixture.readSteeredMessages()).toEqual([fixture.message]);
       });
@@ -425,7 +688,7 @@ describe("Codex active-run steering media", () => {
           [{ type: "text", text: "first image", text_elements: [] }, ...fixture.expectedImages],
           [{ type: "text", text: "later text", text_elements: [] }],
         ]);
-        expect(fixture.recorder.persistApproved).not.toHaveBeenCalled();
+        expect(fixture.recorder.persistApproved).toHaveBeenCalledOnce();
         for (const steer of steers) {
           await notifyConsumed(harness, steer.clientUserMessageId);
         }
@@ -441,7 +704,7 @@ describe("Codex active-run steering media", () => {
     { scenario: "mixed", name: "mixed offloaded/inline ingress order" },
     { scenario: "message", name: "recorder.message facts and layout over ingress hints" },
     { scenario: "resolved", name: "recorder.resolveMessage facts and layout over stale metadata" },
-  ] as const)("delivers $name without treating ACK as consumption", async ({ scenario }) => {
+  ] as const)("persists source custody before delivering $name", async ({ scenario }) => {
     const fixture = await createMediaFixture(scenario);
     const harness = createStartedThreadHarness();
     await withActiveMediaTurn(fixture, harness, async () => {
@@ -461,12 +724,13 @@ describe("Codex active-run steering media", () => {
         clientUserMessageId: expect.any(String),
       });
       const clientId = steer.clientUserMessageId;
-      expect(fixture.recorder.persistApproved).not.toHaveBeenCalled();
-      expect(await fixture.readSteeredMessages()).toEqual([]);
+      const expectedMessages = fixture.options.userTurnTranscriptRecorder ? [fixture.message] : [];
+      expect(fixture.recorder.persistApproved).toHaveBeenCalledTimes(expectedMessages.length);
+      expect(await fixture.readSteeredMessages()).toEqual(expectedMessages);
       await notifyConsumed(harness, "unrelated-client");
       await notifyConsumed(harness, clientId, "other-turn");
-      expect(fixture.recorder.persistApproved).not.toHaveBeenCalled();
-      expect(await fixture.readSteeredMessages()).toEqual([]);
+      expect(fixture.recorder.persistApproved).toHaveBeenCalledTimes(expectedMessages.length);
+      expect(await fixture.readSteeredMessages()).toEqual(expectedMessages);
       await notifyConsumed(harness, clientId);
       await notifyConsumed(harness, clientId);
       if (fixture.options.userTurnTranscriptRecorder) {
@@ -544,8 +808,8 @@ describe("Codex active-run steering media", () => {
       const steer = harness.requests.find((entry) => entry.method === "turn/steer")
         ?.params as SteerRequest;
       await notifyConsumed(harness, steer.clientUserMessageId);
-      expect(fixture.recorder.persistApproved).not.toHaveBeenCalled();
-      expect(await fixture.readSteeredMessages()).toEqual([]);
+      expect(fixture.recorder.persistApproved).toHaveBeenCalledOnce();
+      expect(await fixture.readSteeredMessages()).toEqual([fixture.message]);
       await result?.recorder?.persistApproved();
       expect(await fixture.readSteeredMessages()).toEqual([fixture.message]);
     });

@@ -135,9 +135,22 @@ describe("resolveAuthHintKind", () => {
     ).toBe("required");
   });
 
+  it("returns required when only a remembered device token was rejected", () => {
+    expect(
+      resolveAuthHintKind({
+        connected: false,
+        lastError: "disconnected (4008): connect failed",
+        lastErrorCode: ConnectErrorDetailCodes.AUTH_DEVICE_TOKEN_MISMATCH,
+        hasToken: false,
+        hasPassword: false,
+      }),
+    ).toBe("required");
+  });
+
   it.each([
     { lastErrorCode: ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH, hasToken: true },
     { lastErrorCode: ConnectErrorDetailCodes.AUTH_BOOTSTRAP_TOKEN_INVALID, hasToken: false },
+    { lastErrorCode: ConnectErrorDetailCodes.AUTH_DEVICE_TOKEN_MISMATCH, hasToken: true },
   ])("returns failed for structured auth code $lastErrorCode", ({ lastErrorCode, hasToken }) => {
     expect(
       resolveAuthHintKind({

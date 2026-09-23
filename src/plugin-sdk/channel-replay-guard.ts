@@ -62,6 +62,16 @@ function normalizeReplayKeys(value: ReplayKeys): string[] {
   ];
 }
 
+async function settleReplayWrites(pending: Promise<boolean>[]): Promise<boolean> {
+  try {
+    return (await Promise.all(pending)).some(Boolean);
+  } catch (error) {
+    // Callers may begin rollback or shutdown as soon as the aggregate rejects.
+    await Promise.allSettled(pending);
+    throw error;
+  }
+}
+
 export function createChannelReplayGuardWithDedupe<TEvent>(
   params: Omit<ChannelReplayGuardParams<TEvent>, "dedupe">,
   dedupe: ClaimableDedupe & Required<Pick<ClaimableDedupe, "forget">>,
@@ -93,8 +103,7 @@ export function createChannelReplayGuardWithDedupe<TEvent>(
     keys: readonly string[],
     options?: PersistentDedupeCheckOptions,
   ): Promise<boolean> => {
-    const results = await Promise.all(keys.map((key) => dedupe.commit(key, options)));
-    return results.some(Boolean);
+    return settleReplayWrites(keys.map((key) => dedupe.commit(key, options)));
   };
 
   const createClaimHandle = (
@@ -266,8 +275,7 @@ export function createChannelReplayGuardWithDedupe<TEvent>(
       if (keys.length === 0) {
         return false;
       }
-      const results = await Promise.all(keys.map((key) => dedupe.forget(key, dedupeOptions)));
-      return results.some(Boolean);
+      return settleReplayWrites(keys.map((key) => dedupe.forget(key, dedupeOptions)));
     },
     warmup: dedupe.warmup,
     clearMemory: dedupe.clearMemory,

@@ -1,133 +1,168 @@
+import fs from "node:fs";
+import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
+import type { SkillBinTrustEntry } from "../infra/exec-approvals.js";
 import { NODE_DEVICE_APPS_COMMAND } from "../infra/node-commands.js";
 import type { OpenClawPluginNodeHostCommandIo } from "../plugins/types.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
-import type { NodeHostClient } from "./client.js";
-import { listRegisteredNodeHostCapsAndCommands } from "./plugin-node-host.js";
-import { prepareNodeHostRuntime } from "./runtime.js";
+import { withEnvAsync } from "../test-utils/env.js";
+import type { SkillBinsProvider } from "./invoke.js";
+import {
+  createNodeHostClient,
+  frame,
+  holdInvoke,
+  listRegisteredNodeHostCapsAndCommands,
+  mocks,
+  prepareNodeHostRuntime,
+  startRuntime,
+} from "./runtime.test-support.js";
 
-const mocks = vi.hoisted(() => {
-  const closeMcp = vi.fn(async () => undefined);
-  return {
-    closeMcp,
-    closeWorkerSupervisor: vi.fn(async () => undefined),
-    initializeWorkerSupervisor: vi.fn(async () => undefined),
-    handleInvoke: vi.fn(async () => undefined),
-    progressStartHeartbeats: vi.fn(),
-    progressWrite: vi.fn(async (_chunk: string) => undefined),
-    startMcp: vi.fn(async (_servers: unknown, _deps?: { signal?: AbortSignal }) => ({
-      descriptors: [],
-      callMcpTool: vi.fn(),
-      close: closeMcp,
-    })),
-  };
-});
-
-vi.mock("../infra/path-env.js", () => ({
-  ensureOpenClawCliOnPath: vi.fn(),
-}));
-
-vi.mock("./invoke.js", () => ({
-  handleInvoke: mocks.handleInvoke,
-}));
-
-vi.mock("./mcp.js", () => ({
-  startNodeHostMcpManager: mocks.startMcp,
-}));
-
-vi.mock("./node-invoke-progress.js", () => ({
-  createNodeInvokeProgressWriter: vi.fn(() => ({
-    startHeartbeats: mocks.progressStartHeartbeats,
-    write: mocks.progressWrite,
-    stop: vi.fn(),
-    flush: vi.fn(async () => undefined),
-  })),
-}));
-
-vi.mock("./node-worker-supervisor.js", () => ({
-  createNodeWorkerSupervisor: vi.fn(() => ({
-    initialize: mocks.initializeWorkerSupervisor,
-    close: mocks.closeWorkerSupervisor,
-  })),
-}));
-
-vi.mock("./node-worker-workspace.js", () => ({
-  NodeWorkerWorkspaceRuntime: class {
-    readonly exec = vi.fn();
-  },
-}));
-
-vi.mock("./plugin-node-host.js", () => ({
-  ensureNodeHostPluginRegistry: vi.fn(async () => undefined),
-  isRegisteredNodeHostCommandDuplex: vi.fn((command: string) => command === "test.duplex"),
-  listRegisteredNodeHostCapsAndCommands: vi.fn(() => ({
-    caps: ["terminal"],
-    commands: ["test.duplex"],
-    nodePluginTools: [],
-  })),
-}));
-
-vi.mock("./skills.js", () => ({
-  scanNodeHostedSkills: vi.fn(() => []),
-}));
-
-const frame = {
-  id: "invoke-1",
-  nodeId: "node-1",
-  command: "test.duplex",
-  paramsJSON: null,
-  timeoutMs: 0,
-  idempotencyKey: null,
+type SkillBinsResponse = { bins: string[] };
+type SkillBinsFixture = {
+  requests: Array<ReturnType<typeof createDeferred<SkillBinsResponse>>>;
+  observed: Map<string, SkillBinTrustEntry[]>;
+  expected: SkillBinTrustEntry[];
+  response: SkillBinsResponse;
+  invoke: (id: string) => Promise<void>;
+  expire: () => void;
+  disconnect: () => void;
 };
 
-beforeEach(() => {
-  vi.clearAllMocks();
-  mocks.closeMcp.mockResolvedValue(undefined);
-  mocks.closeWorkerSupervisor.mockResolvedValue(undefined);
-  mocks.initializeWorkerSupervisor.mockResolvedValue(undefined);
-});
-
-async function startRuntime() {
-  const prepared = await prepareNodeHostRuntime({
-    config: { nodeHost: { skills: { enabled: false }, workerRuns: { enabled: true } } },
-    env: { PATH: "/usr/bin" },
-    enableAgentRuns: true,
-    enableWorkerRuns: true,
-  });
-  return prepared.start({
-    client: { request: vi.fn(async () => ({ bins: [] })) } as unknown as NodeHostClient,
-  });
-}
-
-function holdInvoke(onCommand?: (io: OpenClawPluginNodeHostCommandIo) => void) {
-  let io: OpenClawPluginNodeHostCommandIo | undefined;
-  let signal: AbortSignal | undefined;
-  let release: (() => void) | undefined;
-  const held = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  mocks.handleInvoke.mockImplementationOnce(async (...args: unknown[]) => {
-    const runtime = args[4] as {
-      pluginCommandIo?: OpenClawPluginNodeHostCommandIo;
-      signal?: AbortSignal;
-    };
-    io = runtime.pluginCommandIo;
-    signal = runtime.signal;
-    if (io) {
-      onCommand?.(io);
+async function withSkillBinsRuntime(run: (fixture: SkillBinsFixture) => Promise<void>) {
+  await withEnvAsync({ PATH: path.dirname(process.execPath) }, async () => {
+    const requests: SkillBinsFixture["requests"] = [];
+    const observed = new Map<string, SkillBinTrustEntry[]>();
+    const invokes: Promise<void>[] = [];
+    const name = path.basename(process.execPath);
+    const response = { bins: [name] };
+    const now = Date.now;
+    let elapsed = 0;
+    const runtime = await startRuntime(
+      createNodeHostClient(() => {
+        const request = createDeferred<SkillBinsResponse>();
+        requests.push(request);
+        return request.promise;
+      }),
+    );
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now() + elapsed);
+    mocks.handleInvoke.mockImplementation(async (...args: unknown[]) => {
+      const request = args[0] as typeof frame;
+      const provider = args[2] as SkillBinsProvider;
+      observed.set(request.id, await provider.current());
+    });
+    try {
+      await run({
+        requests,
+        observed,
+        expected: [{ name, resolvedPath: fs.realpathSync(process.execPath) }],
+        response,
+        invoke: (id) => {
+          const pending = runtime.invoke({ ...frame, id, command: "system.run" });
+          invokes.push(pending);
+          return pending;
+        },
+        expire: () => {
+          elapsed += 90_001;
+        },
+        disconnect: () => runtime.cancelAll(),
+      });
+    } finally {
+      runtime.cancelAll();
+      for (const request of requests) {
+        request.resolve({ bins: [] });
+      }
+      await Promise.allSettled(invokes);
+      try {
+        await runtime.close();
+      } finally {
+        mocks.handleInvoke.mockReset();
+        clock.mockRestore();
+      }
     }
-    await held;
   });
-  return {
-    get io() {
-      return io;
-    },
-    get signal() {
-      return signal;
-    },
-    release: () => release?.(),
-  };
 }
+
+async function primeSkillBins(fixture: SkillBinsFixture) {
+  const pending = fixture.invoke("prime");
+  await vi.waitFor(() => expect(fixture.requests).toHaveLength(1));
+  expectDefined(fixture.requests[0], "initial skill refresh").resolve(fixture.response);
+  await pending;
+  expect(fixture.observed.get("prime")).toEqual(fixture.expected);
+  fixture.expire();
+}
+
+describe("node-host skill-bin cache", () => {
+  it.each(["cold", "expired"])(
+    "shares a %s refresh and returns resolved binaries",
+    async (phase) => {
+      await withSkillBinsRuntime(async (fixture) => {
+        if (phase === "expired") {
+          await primeSkillBins(fixture);
+        }
+        const requestCount = fixture.requests.length + 1;
+        const first = fixture.invoke("first");
+        const second = fixture.invoke("second");
+        await vi.waitFor(() => expect(fixture.requests).toHaveLength(requestCount));
+        expectDefined(fixture.requests[requestCount - 1], "shared skill refresh").resolve(
+          fixture.response,
+        );
+        await Promise.all([first, second]);
+        await fixture.invoke("warm");
+        for (const id of ["first", "second", "warm"]) {
+          expect(fixture.observed.get(id)).toEqual(fixture.expected);
+        }
+        expect(fixture.requests).toHaveLength(requestCount);
+      });
+    },
+  );
+
+  it.each(["cold", "expired"])("shares a failed %s refresh and permits retry", async (phase) => {
+    await withSkillBinsRuntime(async (fixture) => {
+      if (phase === "expired") {
+        await primeSkillBins(fixture);
+      }
+      const requestCount = fixture.requests.length + 1;
+      const first = fixture.invoke("first");
+      const second = fixture.invoke("second");
+      await vi.waitFor(() => expect(fixture.requests).toHaveLength(requestCount));
+      expectDefined(fixture.requests[requestCount - 1], "failed skill refresh").reject(
+        new Error("Gateway unavailable"),
+      );
+      await Promise.all([first, second]);
+      for (const id of ["first", "second"]) {
+        expect(fixture.observed.get(id)).toEqual(phase === "expired" ? fixture.expected : []);
+      }
+      const retry = fixture.invoke("retry");
+      await vi.waitFor(() => expect(fixture.requests).toHaveLength(requestCount + 1));
+      expectDefined(fixture.requests[requestCount], "retried skill refresh").resolve(
+        fixture.response,
+      );
+      await retry;
+      expect(fixture.observed.get("retry")).toEqual(fixture.expected);
+    });
+  });
+
+  it("keeps pending old-connection results out of the replacement cache", async () => {
+    await withSkillBinsRuntime(async (fixture) => {
+      const old = fixture.invoke("old");
+      await vi.waitFor(() => expect(fixture.requests).toHaveLength(1));
+      fixture.disconnect();
+      const replacement = fixture.invoke("replacement");
+      await vi.waitFor(() => expect(fixture.requests).toHaveLength(2));
+      expectDefined(fixture.requests[0], "retired connection refresh").resolve(fixture.response);
+      await old;
+      expect(fixture.observed.has("replacement")).toBe(false);
+      expectDefined(fixture.requests[1], "replacement connection refresh").resolve({ bins: [] });
+      await replacement;
+      await fixture.invoke("replacement-warm");
+      expect(fixture.observed.get("replacement")).toEqual([]);
+      expect(fixture.observed.get("replacement-warm")).toEqual([]);
+      expect(fixture.requests).toHaveLength(2);
+    });
+  });
+});
 
 describe("node-host invocation cancellation", () => {
   it("does not admit a queued invocation after its connection is retired", async () => {
@@ -275,21 +310,63 @@ describe("node-host invocation cancellation", () => {
 });
 
 describe("node-host desktop manifest", () => {
-  it("advertises desktop.stream only when the node-local desktop is enabled", async () => {
-    const disabled = await prepareNodeHostRuntime({
-      config: {},
-      env: { PATH: "/usr/bin" },
-      platform: "linux",
-    });
-    expect(disabled.manifest.commands).not.toContain(NODE_DESKTOP_STREAM_COMMAND);
+  it.each(["darwin", "linux", "win32"] as const)(
+    "enables the same desktop stream for advertisement and invocation on %s by default",
+    async (platform) => {
+      const prepared = await prepareNodeHostRuntime({
+        config: {},
+        env: { PATH: "/usr/bin" },
+        platform,
+      });
+      expect(prepared.manifest.commands).toContain(NODE_DESKTOP_STREAM_COMMAND);
+      const runtime = prepared.start({ client: createNodeHostClient(async () => ({ bins: [] })) });
+      try {
+        await runtime.invoke({ ...frame, command: NODE_DESKTOP_STREAM_COMMAND });
+        expect(mocks.handleInvoke).toHaveBeenLastCalledWith(
+          expect.anything(),
+          expect.anything(),
+          expect.anything(),
+          expect.anything(),
+          expect.objectContaining({ desktopHostConfig: { enabled: true } }),
+        );
+      } finally {
+        await runtime.close();
+      }
+    },
+  );
 
-    const enabled = await prepareNodeHostRuntime({
-      config: { desktop: { host: { enabled: true } } },
-      env: { PATH: "/usr/bin" },
-      platform: "linux",
-    });
-    expect(enabled.manifest.commands).toContain(NODE_DESKTOP_STREAM_COMMAND);
-  });
+  it.each([
+    { configEnabled: false, nativeEnabled: undefined, ephemeral: false, enabled: false },
+    { configEnabled: true, nativeEnabled: undefined, ephemeral: false, enabled: true },
+    { configEnabled: true, nativeEnabled: false, ephemeral: false, enabled: false },
+    { configEnabled: false, nativeEnabled: true, ephemeral: false, enabled: true },
+    { configEnabled: true, nativeEnabled: true, ephemeral: true, enabled: false },
+  ])(
+    "preserves node desktop preference precedence and disposable worker isolation: $configEnabled/$nativeEnabled/$ephemeral",
+    async ({ configEnabled, nativeEnabled, ephemeral, enabled }) => {
+      const prepared = await prepareNodeHostRuntime({
+        config: { desktop: { host: { enabled: configEnabled, port: 5901 } } },
+        env: { PATH: "/usr/bin" },
+        desktopSharingEnabled: nativeEnabled,
+        platform: "darwin",
+        ephemeral,
+      });
+      expect(prepared.manifest.commands.includes(NODE_DESKTOP_STREAM_COMMAND)).toBe(enabled);
+      const runtime = prepared.start({ client: createNodeHostClient(async () => ({ bins: [] })) });
+      try {
+        await runtime.invoke({ ...frame, command: NODE_DESKTOP_STREAM_COMMAND });
+        expect(mocks.handleInvoke).toHaveBeenLastCalledWith(
+          expect.anything(),
+          expect.anything(),
+          expect.anything(),
+          expect.anything(),
+          expect.objectContaining({ desktopHostConfig: { enabled, port: 5901 } }),
+        );
+      } finally {
+        await runtime.close();
+      }
+    },
+  );
 
   it("emits desktop statuses without control-channel heartbeats", async () => {
     const runtime = await startRuntime();
@@ -389,14 +466,9 @@ describe("node-host invoke input dispatch", () => {
 
       await vi.waitFor(() => expect(mocks.progressWrite).toHaveBeenCalledTimes(2));
       expect(received).toHaveBeenCalledWith(Uint8Array.from([0, 255, 1]));
-      expect(JSON.parse(mocks.progressWrite.mock.calls[1]?.[0] ?? "null")).toMatchObject({
-        v: 1,
-        kind: "data",
-        message: 0,
-        index: 0,
-        last: true,
-        data: "AP8B",
-      });
+      expect(mocks.progressWrite.mock.calls[1]?.[0]).toBe(
+        '{"v":1,"kind":"data","message":0,"index":0,"last":true,"data":"AP8B"}',
+      );
     } finally {
       held.release();
       await invoking;

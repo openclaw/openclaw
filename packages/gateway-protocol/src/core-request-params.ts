@@ -1,18 +1,31 @@
 import type { Static } from "typebox";
 import type * as AgentSchema from "./schema/agent.js";
 import type * as BoardSchema from "./schema/board.js";
-import type { CanvasDocumentViewParams } from "./schema/canvas.js";
+import type { CanvasDocumentPreviewParams, CanvasDocumentViewParams } from "./schema/canvas.js";
 import type { CommandsListParams } from "./schema/commands.js";
+import type {
+  EnvironmentsSessionCreateParams,
+  EnvironmentsSessionStatusParams,
+  EnvironmentsSessionDestroyParams,
+  EnvironmentsSessionExecParams,
+} from "./schema/environments.js";
 import type * as HumanMentionsSchema from "./schema/human-mentions.js";
 import type { LogsTailParams } from "./schema/logs-chat.js";
 import type { PortalCloseParams, PortalListParams, PortalOpenParams } from "./schema/portals.js";
 import type * as GitHubSchema from "./schema/session-github-publication.js";
+import type {
+  ThemesListParams,
+  ThemesGetParams,
+  ThemesSetParams,
+  ThemesImportParams,
+} from "./schema/themes.js";
 import type { UiCommandParams } from "./schema/ui-command.js";
 import type { UpdateRunsGetParams, UpdateRunsListParams } from "./schema/update-runs.js";
 import type * as UsersSchema from "./schema/users.js";
 
 /** Schema-derived payload ownership for statically validated core Gateway methods. */
 export type GatewayCoreRequestParams = {
+  "canvas.document.preview": CanvasDocumentPreviewParams;
   "canvas.document.view": CanvasDocumentViewParams;
   "board.action": BoardSchema.BoardActionParams;
   "board.data.read": BoardSchema.BoardDataReadParams;
@@ -24,6 +37,10 @@ export type GatewayCoreRequestParams = {
   "board.widget.grant": BoardSchema.BoardWidgetGrantParams;
   "board.widget.put": BoardSchema.BoardWidgetPutParams;
   "commands.list": CommandsListParams;
+  "environments.session.create": EnvironmentsSessionCreateParams;
+  "environments.session.status": EnvironmentsSessionStatusParams;
+  "environments.session.destroy": EnvironmentsSessionDestroyParams;
+  "environments.session.exec": EnvironmentsSessionExecParams;
   "conversations.list": AgentSchema.ConversationListParams;
   "conversations.send": AgentSchema.ConversationSendParams;
   "conversations.turn": AgentSchema.ConversationTurnParams;
@@ -49,6 +66,9 @@ export type GatewayCoreRequestParams = {
   "users.listModelAccounts": UsersSchema.UsersListModelAccountsParams;
   "users.selectModelAccount": UsersSchema.UsersSelectModelAccountParams;
   "users.linkAuthProfile": UsersSchema.UsersLinkAuthProfileParams;
+  "users.linkChannelIdentity": UsersSchema.UsersLinkChannelIdentityParams;
+  "users.unlinkChannelIdentity": UsersSchema.UsersUnlinkChannelIdentityParams;
+  "users.listChannelIdentities": UsersSchema.UsersListChannelIdentitiesParams;
   "users.unlinkAuthProfile": UsersSchema.UsersUnlinkAuthProfileParams;
   "users.github.status": Static<typeof UsersSchema.UsersGitHubStatusParamsSchema>;
   "users.github.authorize.start": Static<typeof UsersSchema.UsersGitHubAuthorizeStartParamsSchema>;
@@ -59,4 +79,8 @@ export type GatewayCoreRequestParams = {
   "users.github.disconnect": Static<typeof UsersSchema.UsersGitHubDisconnectParamsSchema>;
   "users.mentionable": HumanMentionsSchema.UsersMentionableParams;
   "ui.command": UiCommandParams;
+  "themes.list": ThemesListParams;
+  "themes.get": ThemesGetParams;
+  "themes.set": ThemesSetParams;
+  "themes.import": ThemesImportParams;
 };

@@ -3,6 +3,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { Static } from "typebox";
 import { Type } from "typebox";
+import { CHAT_WORK_CONTEXT_LIMITS } from "../chat-work-context.js";
 import {
   CHAT_HISTORY_MAX_ENTRIES,
   CHAT_INPUT_RECEIPT_MAX_RUN_IDS,
@@ -108,6 +109,40 @@ export const ChatInputConsumptionsSchema = Type.Array(
 );
 export type ChatInputConsumptions = Static<typeof ChatInputConsumptionsSchema>;
 
+export const AgentActivityItemSchema = closedObject({
+  itemId: NonEmptyString,
+  phase: Type.Union([Type.Literal("start"), Type.Literal("update"), Type.Literal("end")]),
+  kind: Type.String(),
+  title: Type.String(),
+  status: Type.Optional(
+    Type.Union([
+      Type.Literal("running"),
+      Type.Literal("completed"),
+      Type.Literal("failed"),
+      Type.Literal("blocked"),
+    ]),
+  ),
+  name: Type.Optional(Type.String()),
+  meta: Type.Optional(Type.String()),
+  commandBearing: Type.Optional(Type.Boolean()),
+  toolCallId: Type.Optional(Type.String()),
+  startedAt: Type.Optional(Type.Number()),
+  endedAt: Type.Optional(Type.Number()),
+  error: Type.Optional(Type.String()),
+  summary: Type.Optional(Type.String()),
+  progressText: Type.Optional(Type.String()),
+  suppressChannelProgress: Type.Optional(Type.Boolean()),
+  hideFromChannelProgress: Type.Optional(Type.Boolean()),
+  approvalId: Type.Optional(Type.String()),
+  approvalSlug: Type.Optional(Type.String()),
+});
+export type AgentActivityItem = Static<typeof AgentActivityItemSchema>;
+export const ChatHistoryActivitySchema = closedObject({
+  messageId: NonEmptyString,
+  items: Type.Array(AgentActivityItemSchema),
+});
+export type ChatHistoryActivity = Static<typeof ChatHistoryActivitySchema>;
+
 /**
  * Bounded forward catch-up response. Clients replay `messages` as `session.message`
  * payloads. There is no continuation loop: more than 200 raw events or the byte
@@ -116,6 +151,7 @@ export type ChatInputConsumptions = Static<typeof ChatInputConsumptionsSchema>;
 export const ChatHistoryDeltaResultSchema = closedObject({
   kind: Type.Literal("delta"),
   messages: Type.Array(Type.Unknown()),
+  activity: Type.Optional(Type.Array(ChatHistoryActivitySchema)),
   deltaCursor: Type.String(),
   sessionInfo: Type.Unknown(),
   agentsList: Type.Optional(Type.Unknown()),
@@ -211,6 +247,7 @@ export const ChatAttachmentSchema = Type.Object(
     type: Type.Optional(Type.String()),
     mimeType: Type.Optional(Type.String()),
     fileName: Type.Optional(Type.String()),
+    origin: Type.Optional(Type.Union([Type.Literal("paste"), Type.Literal("file")])),
     // Runtime normalization also accepts ArrayBuffer views from native/browser callers.
     content: Type.Optional(Type.Unknown()),
     sizeBytes: Type.Optional(Type.Number()),
@@ -241,6 +278,17 @@ export const ChatSendIntentSchema = closedObject({
 });
 export type ChatSendIntent = Static<typeof ChatSendIntentSchema>;
 
+const ChatWorkContextSchema = closedObject({
+  page: Type.String({ minLength: 1, maxLength: CHAT_WORK_CONTEXT_LIMITS.page }),
+  title: Type.Optional(Type.String({ maxLength: CHAT_WORK_CONTEXT_LIMITS.title })),
+  sessionKey: Type.Optional(Type.String({ maxLength: CHAT_WORK_CONTEXT_LIMITS.sessionKey })),
+  sessionId: Type.Optional(Type.String({ maxLength: CHAT_WORK_CONTEXT_LIMITS.sessionId })),
+  agentId: Type.Optional(Type.String({ maxLength: CHAT_WORK_CONTEXT_LIMITS.agentId })),
+  workspace: Type.Optional(Type.String({ maxLength: CHAT_WORK_CONTEXT_LIMITS.workspace })),
+  file: Type.Optional(Type.String({ maxLength: CHAT_WORK_CONTEXT_LIMITS.file })),
+  selection: Type.Optional(Type.String({ maxLength: CHAT_WORK_CONTEXT_LIMITS.selection })),
+});
+
 /** User-to-agent send request; idempotency key lets clients safely retry transport failures. */
 export const ChatSendParamsSchema = closedObject({
   sessionKey: ChatSendSessionKeyString,
@@ -248,6 +296,7 @@ export const ChatSendParamsSchema = closedObject({
   sessionId: Type.Optional(NonEmptyString),
   message: Type.String(),
   mentions: Type.Optional(HumanMentionsSchema),
+  workContext: Type.Optional(ChatWorkContextSchema),
   intent: Type.Optional(ChatSendIntentSchema),
   thinking: Type.Optional(Type.String()),
   fastMode: Type.Optional(Type.Union([Type.Boolean(), Type.Literal("auto")])),
@@ -321,14 +370,22 @@ export const ChatRunStartupPhaseSchema = Type.Union([
   Type.Literal("running_setup"),
   Type.Literal("provisioning_environment"),
   Type.Literal("preparing_context"),
+  Type.Literal("memory_flushing"),
   Type.Literal("starting_model"),
 ]);
 
-/** Non-terminal run status emitted before assistant or tool activity becomes visible. */
+/** Transient working status; only the run owner publishes terminal failures. */
 export const ChatStatusEventSchema = closedObject({
   ...ChatEventBaseSchema,
   state: Type.Literal("status"),
   phase: ChatRunStartupPhaseSchema,
+  retry: Type.Optional(
+    closedObject({
+      attempt: Type.Integer({ minimum: 1, maximum: 10 }),
+      maxAttempts: Type.Integer({ minimum: 1, maximum: 10 }),
+      reason: Type.Literal("rate_limit"),
+    }),
+  ),
 });
 
 /** Incremental assistant output event; `replace` marks full-content refresh deltas. */

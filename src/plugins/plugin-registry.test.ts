@@ -11,6 +11,7 @@ import { recordPluginCandidateInstallOwner } from "./candidate-install-owner.js"
 import type { PluginCandidate } from "./discovery.js";
 import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import {
+  isInstalledPluginEnabled,
   resolveInstalledPluginIndexPolicyHash,
   type InstalledPluginIndex,
 } from "./installed-plugin-index.js";
@@ -18,8 +19,6 @@ import { loadPluginLookUpTable } from "./plugin-lookup-table.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import {
   createPluginRegistryIdNormalizer,
-  getPluginRecord,
-  isPluginEnabled,
   listPluginContributionIds,
   loadPluginRegistrySnapshot,
   loadPluginRegistrySnapshotWithMetadata,
@@ -68,6 +67,9 @@ function makeTempDir() {
 function hermeticEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   return {
     OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+    OPENCLAW_DISABLE_BUNDLED_PLUGINS: overrides.OPENCLAW_BUNDLED_PLUGINS_DIR?.trim()
+      ? undefined
+      : "1",
     OPENCLAW_VERSION: "2026.4.25",
     VITEST: "true",
     ...overrides,
@@ -82,6 +84,7 @@ function createCandidate(
   rootDir: string,
   pluginId = "demo",
   installOwner?: string,
+  manifestOverrides: Record<string, unknown> = {},
 ): PluginCandidate {
   fs.writeFileSync(
     path.join(rootDir, "index.ts"),
@@ -126,6 +129,7 @@ function createCandidate(
       configContracts: {
         compatibilityRuntimePaths: [`legacyProvider.${pluginId}-search.webhook`],
       },
+      ...manifestOverrides,
     }),
     "utf8",
   );
@@ -225,52 +229,31 @@ describe("plugin registry facade", () => {
     });
 
     expect(listPluginRecords({ index }).map((plugin) => plugin.pluginId)).toEqual(["demo"]);
-    expectPluginRecordFields(getPluginRecord({ index, pluginId: "demo" }), {
-      pluginId: "demo",
-      enabled: true,
-    });
-    expect(isPluginEnabled({ index, pluginId: "demo" })).toBe(true);
+    expectPluginRecordFields(
+      index.plugins.find((plugin) => plugin.pluginId === "demo"),
+      {
+        pluginId: "demo",
+        enabled: true,
+      },
+    );
+    expect(isInstalledPluginEnabled(index, "demo")).toBe(true);
     expect(listPluginContributionIds({ index, contribution: "providers" })).toEqual(["demo"]);
     expect(listPluginContributionIds({ index, contribution: "modelCatalogProviders" })).toEqual([
       "demo",
       "demo-alias",
     ]);
     expect(resolveProviderOwners({ index, providerId: "demo" })).toEqual(["demo"]);
-    expect(
-      resolvePluginContributionOwners({
-        index,
-        contribution: "modelCatalogProviders",
-        matches: "demo-alias",
-      }),
-    ).toEqual(["demo"]);
-    expect(
-      resolvePluginContributionOwners({
-        index,
-        contribution: "channels",
-        matches: "demo-chat",
-      }),
-    ).toEqual(["demo"]);
-    expect(
-      resolvePluginContributionOwners({
-        index,
-        contribution: "cliBackends",
-        matches: "demo-cli",
-      }),
-    ).toEqual(["demo"]);
-    expect(
-      resolvePluginContributionOwners({
-        index,
-        contribution: "cliBackends",
-        matches: (contributionId) => contributionId === "demo-cli",
-      }),
-    ).toEqual(["demo"]);
-    expect(
-      resolvePluginContributionOwners({
-        index,
-        contribution: "setupProviders",
-        matches: "demo-setup",
-      }),
-    ).toEqual(["demo"]);
+    for (const [contribution, id] of [
+      ["modelCatalogProviders", "demo-alias"],
+      ["channels", "demo-chat"],
+      ["cliBackends", "demo-cli"],
+      ["setupProviders", "demo-setup"],
+      ["contracts", "tools"],
+    ] as const) {
+      for (const matches of [id, (contributionId: string) => contributionId === id]) {
+        expect(resolvePluginContributionOwners({ index, contribution, matches })).toEqual(["demo"]);
+      }
+    }
     expect(resolveManifestContractPluginIds({ index, contract: "webSearchProviders" })).toEqual([
       "demo",
     ]);
@@ -301,10 +284,13 @@ describe("plugin registry facade", () => {
       preferPersisted: false,
     });
 
-    expectPluginRecordFields(getPluginRecord({ index, pluginId: "demo" }), {
-      pluginId: "demo",
-      enabled: false,
-    });
+    expectPluginRecordFields(
+      index.plugins.find((plugin) => plugin.pluginId === "demo"),
+      {
+        pluginId: "demo",
+        enabled: false,
+      },
+    );
     const config = {
       plugins: {
         entries: {
@@ -314,7 +300,7 @@ describe("plugin registry facade", () => {
         },
       },
     };
-    expect(isPluginEnabled({ index, pluginId: "demo", config })).toBe(false);
+    expect(isInstalledPluginEnabled(index, "demo", config)).toBe(false);
     expect(resolveProviderOwners({ index, providerId: "demo", config })).toStrictEqual([]);
     expect(
       resolveProviderOwners({ index, providerId: "demo", config, includeDisabled: true }),
@@ -338,48 +324,74 @@ describe("plugin registry facade", () => {
     const result = loadPluginRegistrySnapshotWithMetadata({ stateDir, config, env });
 
     expect(result.source).toBe("persisted");
-    expectPluginRecordFields(getPluginRecord({ index: result.snapshot, pluginId: "demo" }), {
-      pluginId: "demo",
-      enabled: false,
-    });
+    expectPluginRecordFields(
+      result.snapshot.plugins.find((plugin) => plugin.pluginId === "demo"),
+      {
+        pluginId: "demo",
+        enabled: false,
+      },
+    );
   });
 
-  it("resolves contribution owners from a plugin lookup table without rereading manifests", () => {
+  it("preserves raw declarations and indexed owners without rereading manifests", () => {
     const rootDir = makeTempDir();
-    const candidate = createCandidate(rootDir);
+    const candidate = createCandidate(rootDir, "demo", undefined, {
+      providers: [" Demo "],
+      cliBackends: [" DEMO-CLI ", "DEMO-CLI"],
+      setup: {
+        providers: [{ id: "demo-setup" }],
+        cliBackends: ["DEMO-CLI", "Other-CLI"],
+      },
+      providerAuthAliases: { " ALIAS ": " dEmO ", BAD: "absent" },
+      contracts: { tools: [], webSearchProviders: ["demo-search"] },
+    });
     const env = hermeticEnv();
     const index = loadPluginRegistrySnapshot({
       candidates: [candidate],
       env,
       preferPersisted: false,
     });
-    const lookUpTable = loadPluginLookUpTable({
-      config: {},
-      env,
-      index,
-    });
-    fs.unlinkSync(path.join(rootDir, "openclaw.plugin.json"));
-
-    expect(listPluginContributionIds({ lookUpTable, contribution: "providers" })).toEqual(["demo"]);
-    expect(resolveProviderOwners({ lookUpTable, providerId: "DEMO" })).toEqual(["demo"]);
-    for (const [contribution, matches] of [
-      ["providers", "demo"],
-      ["channels", "demo-chat"],
-      ["channelConfigs", "demo-chat"],
-      ["cliBackends", "demo-cli"],
-      ["cliBackends", "demo-setup-cli"],
-      ["setupProviders", "demo-setup"],
-      ["modelCatalogProviders", "demo-alias"],
-      ["commandAliases", "demo-command"],
-      ["contracts", "tools"],
-    ] as const) {
-      const query = { lookUpTable, contribution, matches };
-      expect(resolvePluginContributionOwners(query), contribution).toEqual(["demo"]);
-      expect(
-        resolvePluginContributionOwners({ ...query, matches: "missing" }),
-        contribution,
-      ).toEqual([]);
+    const lookUpTable = loadPluginLookUpTable({ config: {}, env, index });
+    for (const indexed of [false, true]) {
+      if (indexed) {
+        fs.unlinkSync(path.join(rootDir, "openclaw.plugin.json"));
+      }
+      const source = indexed ? { lookUpTable } : { index };
+      for (const [contribution, ids] of [
+        ["providers", ["Demo"]],
+        ["cliBackends", ["DEMO-CLI", "Other-CLI"]],
+        ["contracts", ["webSearchProviders"]],
+      ] as const) {
+        expect(listPluginContributionIds({ ...source, contribution })).toEqual(ids);
+      }
+      for (const [contribution, id, indexedOwner, rawOwner] of [
+        ["providers", "Demo", true, true],
+        ["providers", "demo", false, false],
+        ["providers", "alias", true, false],
+        ["providers", "ALIAS", false, false],
+        ["providers", "bad", false, false],
+        ["channels", "demo-chat", true, true],
+        ["channelConfigs", "demo-chat", true, true],
+        ["cliBackends", "demo-cli", true, false],
+        ["cliBackends", "DEMO-CLI", false, true],
+        ["cliBackends", "other-cli", true, false],
+        ["setupProviders", "demo-setup", true, true],
+        ["modelCatalogProviders", "demo-alias", true, true],
+        ["commandAliases", "demo-command", true, true],
+        ["contracts", "tools", false, false],
+        ["contracts", "webSearchProviders", true, true],
+      ] as const) {
+        const query = { ...source, contribution };
+        expect(resolvePluginContributionOwners({ ...query, matches: id })).toEqual(
+          (indexed ? indexedOwner : rawOwner) ? ["demo"] : [],
+        );
+        expect(
+          resolvePluginContributionOwners({ ...query, matches: (value) => value === id }),
+        ).toEqual(rawOwner ? ["demo"] : []);
+        expect(resolvePluginContributionOwners({ ...query, matches: "missing" })).toEqual([]);
+      }
     }
+    expect(resolveProviderOwners({ lookUpTable, providerId: "DEMO" })).toEqual(["demo"]);
 
     const policies: Array<[OpenClawConfig["plugins"], boolean]> = [
       [undefined, true],

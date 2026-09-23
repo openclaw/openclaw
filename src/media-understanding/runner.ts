@@ -1,7 +1,5 @@
 // Media-understanding runner resolves providers/models, local roots, auth, and
 // per-capability execution decisions for message attachments.
-import path from "node:path";
-import { mergeInboundPathRoots } from "@openclaw/media-core/inbound-path-policy";
 import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
 import { ok } from "@openclaw/normalization-core/result";
 import {
@@ -37,17 +35,11 @@ import type {
 } from "../config/types.tools.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { logWarn } from "../logger.js";
-import { resolveChannelInboundAttachmentRoots } from "../media/channel-inbound-roots.js";
-import { getDefaultMediaLocalRoots } from "../media/local-roots.js";
-import { normalizeMediaFacts } from "../media/media-facts.js";
 import { classifyMediaReferenceSource } from "../media/media-reference.js";
 import { createLazyRuntimeModule, createLazyRuntimeNamedExport } from "../shared/lazy-runtime.js";
 import { MediaAttachmentCache, selectAttachments } from "./attachments.js";
 import { matchesMediaEntryCapability } from "./entry-capabilities.js";
-import {
-  clearLocalAudioInspectionCacheForTests,
-  inspectLocalAudioSelection,
-} from "./local-audio.js";
+import { inspectLocalAudioSelection } from "./local-audio.js";
 import { resolveOpenAiAudioAuthModelApi } from "./openai-audio-api.js";
 import {
   resolveAutoMediaKeyProvidersFromRegistry,
@@ -67,10 +59,12 @@ import {
   formatDecisionSummary,
   runCliEntry,
   runProviderEntry,
+  type MediaRequestOverrides,
 } from "./runner.entries.js";
 import type {
   MediaAttachment,
   MediaAttachmentDisposition,
+  MediaAttachmentProcessing,
   MediaUnderstandingCapability,
   MediaUnderstandingDecision,
   MediaUnderstandingModelDecision,
@@ -78,12 +72,16 @@ import type {
   MediaUnderstandingProvider,
 } from "./types.js";
 
-export { createMediaAttachmentCache, normalizeMediaAttachments } from "./runner.attachments.js";
+export {
+  createMediaAttachmentCache,
+  normalizeMediaAttachments,
+  resolveMediaAttachmentLocalRoots,
+} from "./runner.attachments.js";
 
 type ProviderRegistry = Map<string, MediaUnderstandingProvider>;
 type ModelCatalogApi = typeof import("../agents/model-catalog.js") &
   typeof import("../agents/prepared-model-catalog.js");
-type ModelCatalog = Awaited<ReturnType<ModelCatalogApi["loadPreparedModelCatalog"]>>;
+type ModelCatalog = Awaited<ReturnType<ModelCatalogApi["readPreparedModelCatalog"]>>;
 
 type RunCapabilityResult = {
   outputs: MediaUnderstandingOutput[];
@@ -219,9 +217,9 @@ async function explicitImageModelVisionStatus(params: {
   if (configured?.id?.trim() === params.model && configured.input?.includes("image")) {
     return "supported";
   }
-  const { findModelInCatalog, loadPreparedModelCatalog, modelSupportsVision } =
+  const { findModelInCatalog, readPreparedModelCatalog, modelSupportsVision } =
     await loadPreparedModelCatalogApi();
-  const catalog = await loadPreparedModelCatalog({
+  const catalog = await readPreparedModelCatalog({
     config: params.cfg,
     ...(params.agentId ? { agentId: params.agentId } : {}),
     ...(params.agentDir ? { agentDir: params.agentDir } : {}),
@@ -282,8 +280,8 @@ async function resolveAutoImageModelId(params: {
   if (bundledDefaultModel) {
     return bundledDefaultModel;
   }
-  const { loadPreparedModelCatalog, modelSupportsVision } = await loadPreparedModelCatalogApi();
-  const catalog = await loadPreparedModelCatalog({
+  const { readPreparedModelCatalog, modelSupportsVision } = await loadPreparedModelCatalogApi();
+  const catalog = await readPreparedModelCatalog({
     config: params.cfg,
     ...(params.agentId ? { agentId: params.agentId } : {}),
     ...(params.agentDir ? { agentDir: params.agentDir } : {}),
@@ -301,32 +299,6 @@ export function buildProviderRegistry(
   cfg?: OpenClawConfig,
 ): ProviderRegistry {
   return buildMediaUnderstandingRegistry(overrides, cfg);
-}
-
-export function resolveMediaAttachmentLocalRoots(params: {
-  cfg: OpenClawConfig;
-  ctx: MsgContext;
-  workspaceDir?: string;
-}): readonly string[] {
-  const workspaceDirs = normalizeMediaFacts(params.ctx.media).flatMap((fact) =>
-    fact.workspaceDir ? [path.resolve(fact.workspaceDir)] : [],
-  );
-  return mergeInboundPathRoots(
-    getDefaultMediaLocalRoots(),
-    workspaceDirs,
-    params.workspaceDir ? [path.resolve(params.workspaceDir)] : undefined,
-    resolveChannelInboundAttachmentRoots(params),
-  );
-}
-
-function clearMediaUnderstandingBinaryCacheForTests(): void {
-  clearLocalAudioInspectionCacheForTests();
-}
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[
-    Symbol.for("openclaw.mediaUnderstandingRunnerTestApi")
-  ] = { clearMediaUnderstandingBinaryCacheForTests };
 }
 
 async function resolveKeyEntry(params: {
@@ -430,7 +402,6 @@ function hasExplicitImageUnderstandingConfig(params: {
   return (params.cfg.tools?.media?.models ?? []).some((entry) =>
     matchesMediaEntryCapability({
       entry,
-      source: "shared",
       capability: "image",
       providerRegistry: params.providerRegistry,
     }),
@@ -466,9 +437,9 @@ async function activeModelSupportsNativeVision(params: {
   ) {
     return false;
   }
-  const { findModelInCatalog, loadPreparedModelCatalog, modelSupportsVision } =
+  const { findModelInCatalog, readPreparedModelCatalog, modelSupportsVision } =
     await loadPreparedModelCatalogApi();
-  const catalog = await loadPreparedModelCatalog({
+  const catalog = await readPreparedModelCatalog({
     config: params.cfg,
     ...(params.agentId ? { agentId: params.agentId } : {}),
     ...(params.agentDir ? { agentDir: params.agentDir } : {}),
@@ -662,42 +633,27 @@ async function runAttachmentEntries(params: {
   entries: Iterable<ResolvedMediaModelEntry> | AsyncIterable<ResolvedMediaModelEntry>;
   automaticAudio: boolean;
   config?: MediaUnderstandingConfig;
+  request?: MediaRequestOverrides;
 }): Promise<{
   output: MediaUnderstandingOutput | null;
   attempts: MediaUnderstandingModelDecision[];
+  processing: MediaAttachmentProcessing;
 }> {
   const { entries, capability } = params;
   const attachmentIndex = params.attachment.index;
   const attempts: MediaUnderstandingModelDecision[] = [];
+  let processing: MediaAttachmentProcessing = "omitted";
   for await (const candidate of entries) {
     const { entry } = candidate;
     const entryType = entry.type ?? (entry.command ? "cli" : "provider");
     try {
       const attempt =
         entryType === "cli"
-          ? ok(
-              await runCliEntry({
-                capability,
-                entry,
-                cfg: params.cfg,
-                ctx: params.ctx,
-                attachment: params.attachment,
-                cache: params.cache,
-                config: params.config,
-              }),
-            )
+          ? ok(await runCliEntry({ ...params, entry }))
           : await runProviderEntry({
-              capability,
+              ...params,
               entry,
-              cfg: params.cfg,
-              ctx: params.ctx,
               attachmentIndex,
-              cache: params.cache,
-              agentId: params.agentId,
-              agentDir: params.agentDir,
-              workspaceDir: params.workspaceDir,
-              providerRegistry: params.providerRegistry,
-              config: params.config,
               secretOwnerId: candidate.secretOwnerId,
             });
       if (!attempt.ok) {
@@ -716,6 +672,8 @@ async function runAttachmentEntries(params: {
         continue;
       }
       const result = attempt.value;
+      // Successful empty CLI/API output was processed; unavailable auth was not.
+      processing = "completed";
       if (result?.text) {
         const decision = buildModelDecision({ entry, entryType, outcome: "success" });
         if (result.provider) {
@@ -729,7 +687,7 @@ async function runAttachmentEntries(params: {
           decision.observedBackend = result.observedBackend;
         }
         attempts.push(decision);
-        return { output: result, attempts };
+        return { output: result, attempts, processing };
       }
       attempts.push(
         buildModelDecision({ entry, entryType, outcome: "skipped", reason: "empty output" }),
@@ -766,7 +724,7 @@ async function runAttachmentEntries(params: {
     }
   }
 
-  return { output: null, attempts };
+  return { output: null, attempts, processing };
 }
 
 function hasFailedMediaAttempt(attachments: MediaUnderstandingDecision["attachments"]): boolean {
@@ -794,6 +752,7 @@ export async function runCapability(params: {
   providerRegistry: ProviderRegistry;
   config?: MediaUnderstandingConfig;
   activeModel?: ActiveMediaModel;
+  request?: MediaRequestOverrides;
 }): Promise<RunCapabilityResult> {
   const { capability, cfg, ctx } = params;
   const config: MediaUnderstandingConfig = params.config ?? cfg.tools?.media?.[capability] ?? {};
@@ -803,6 +762,12 @@ export async function runCapability(params: {
     policy: config.attachments,
   });
   const selectedAttachmentIndexes = selection.selected.map((attachment) => attachment.index);
+  const attachmentProcessing: Record<number, MediaAttachmentProcessing> = Object.fromEntries(
+    [...selectedAttachmentIndexes, ...selection.droppedAttachmentIndexes].map((index) => [
+      index,
+      "omitted",
+    ]),
+  );
   const activeProvider = params.activeModel?.provider?.trim();
   // One memoized owner for the native-vision fact. Probed lazily — only when
   // the skip branch must decide, or an image decision carries a renderable
@@ -854,6 +819,7 @@ export async function runCapability(params: {
       outcome,
       attachments,
       attachmentDispositions,
+      attachmentProcessing,
       ...(nativeVisionActive !== undefined ? { nativeVisionActive } : {}),
     };
   };
@@ -982,7 +948,7 @@ export async function runCapability(params: {
   const attachmentDecisions: MediaUnderstandingDecision["attachments"] = [];
   const attachmentDispositions = buildDispositions({ kind: "failed" }, { kind: "not-selected" });
   for (const attachment of selection.selected) {
-    const { output, attempts } = await runAttachmentEntries({
+    const { output, attempts, processing } = await runAttachmentEntries({
       capability,
       cfg,
       ctx,
@@ -1006,10 +972,12 @@ export async function runCapability(params: {
         : resolvedEntries,
       automaticAudio,
       config,
+      request: params.request,
     });
     if (output) {
       outputs.push(output);
     }
+    attachmentProcessing[attachment.index] = processing;
     attachmentDispositions[attachment.index] = output
       ? { kind: "handled" }
       : attempts.length > 0

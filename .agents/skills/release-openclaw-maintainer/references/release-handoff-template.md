@@ -17,9 +17,11 @@ operator steering. Do not preserve superseded scope.
 - cut SHA: `<full sha>`
 - Code SHA: `<regular release full sha | not applicable>`
 - Tooling SHA: `<trusted workflow full sha>`
-- Release SHA: `<regular release full sha | exact extended-stable branch tip>`
+- Release SHA: `<same as Code SHA | notes-only descendant | exact extended-stable branch tip>`
 - tag: `v<version>`
-- workflow ref: `<release-ci ref | canonical branch>`
+- validation workflow ref: `<release-ci ref | canonical branch>`
+- publication tooling ref: `<release-publish/tooling-sha12-epoch | track-specific ref>`
+- publication selection: `<normal/prepared route, npm dist-tag, package roster>`
 - publication inventory: `<exact surfaces>`
 - approved backports: `<none or exact PRs/commits>`
 - approved main changes: `<none or exact blocker>`
@@ -30,11 +32,41 @@ operator steering. Do not preserve superseded scope.
 
 - Full Release Validation parent: `<run id / attempt / URL or none>`
 - npm preflight: `<run id / URL or none>`
+- qualified npm/OCI descriptors: `<exact producer run/attempt and artifact identities>`
+- candidate acceptance: `<green untagged-SHA evidence | pending>`
 - Plugin NPM Release: `<run id / URL or none>`
 - publish parent: `<run id / URL or none>`
 - Docker release/repair: `<run ids / tag / aliases or none>`
+- GitHub Release: `<public URL / non-Latest readback or none>`
 - immutable successful children: `<run ids / artifacts or none>`
 - registry/provenance readback: `<artifact or command result>`
+
+## Publication surfaces
+
+Keep one row per selected surface, with its exact run/attempt or immutable
+receipt, current state, and next action. Remove unselected rows rather than
+reporting them as passed. Stable/full includes macOS unless explicitly scoped
+out; extended-stable carries non-Latest GitHub Release evidence but does not inherit
+ClawHub or native apps.
+
+| Surface                   | Evidence and state                                                       | Next action or blocker |
+| ------------------------- | ------------------------------------------------------------------------ | ---------------------- |
+| Core and plugin npm       | `<version, selectors, parent/child receipts>`                            | `<action>`             |
+| Docker                    | `<digests, aliases, run/attempt>`                                        | `<action>`             |
+| ClawHub                   | `<child and postpublish verification receipts>`                          | `<action>`             |
+| GitHub Release / Latest   | `<release URL, draft/prerelease/latest readback>`                        | `<action>`             |
+| macOS                     | `<handoff, validation, notarized preflight, promotion run/attempts>`     | `<action>`             |
+| Stable appcast            | `<signed artifact, main commit/PR, public feed readback>`                | `<action>`             |
+| Other selected apps       | `<platform, exact source, publication proof>`                            | `<action>`             |
+| Stable main closeout      | `<PR, shipped metadata, immutable closeout manifest>`                    | `<action>`             |
+| Approved docs publication | `<source PR/merge SHA, ordered sources and digest, verified deployment>` | `<action>`             |
+| Post-docs release body    | `<approved bundle, release ID, fresh body read and verified update>`     | `<action>`             |
+
+A successful publish parent does not complete detached ClawHub verification or
+macOS. Preserve their exact identities and advance ready independent work while
+another surface waits. Staging is not public ClawHub byte verification; npm
+`latest` is not GitHub Latest verification. Use the owning platform/recovery
+reference for commands rather than redispatching the release parent.
 
 ## Phase
 
@@ -50,8 +82,11 @@ operator steering. Do not preserve superseded scope.
 
 - confirmed product/code failure: fix the release branch, freeze a new Code
   SHA, and invalidate downstream product evidence
-- regular changelog-only failure: change only `CHANGELOG.md`, freeze a new
-  Release SHA, and reuse green Code SHA evidence after delta proof
+- regular changelog-only failure before tagging: change the selected release entry and only
+  its permitted record/index paths, freeze a new Release SHA, and reuse green
+  Code SHA evidence after `split-changelog-release-v1` delta proof
+- source fix after a pushed beta tag: use the next beta number; never move the
+  old tag or rerun fresh candidate acceptance against it
 - extended-stable branch change: land the approved product/changelog change or
   smallest frozen-target repair by PR, record its source/invariant, and replace
   all exact-head evidence
@@ -64,8 +99,9 @@ operator steering. Do not preserve superseded scope.
   cancels them explicitly
 - postpublish-confidence failure: do not retroactively unpublish the beta;
   admit a confirmed product fix to the next beta
-- external approval or permission blocker: stop with the exact job, URL,
-  missing permission, and required operator action
+- external approval or permission blocker: pause that surface with the exact
+  job, URL, enforced rule, and required owner action; continue independent
+  authorized work. Do not invent another consent step for an approved release.
 
 Do not scan moving `main`, add optional backports, dispatch a replacement
 validation parent, automatically rerun `all`, or repeat completed phases unless

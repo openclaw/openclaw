@@ -4,16 +4,20 @@ import { createExecutionIdentityAdmissionToken } from "../../audit/execution-ide
 import { withAgentRuntimeExecutionLineage } from "../../gateway/agent-runtime-execution-lineage.js";
 import {
   createAgentRuntimeApprovalAuthorityValidator,
+  mintAgentRuntimeIdentityToken,
   verifyAgentRuntimeIdentityToken,
 } from "../../gateway/agent-runtime-identity-token.js";
 import { resolveExecutionIdentitySpawnFacts } from "../../gateway/agent-turn/agent-run-execution-lineage.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
-import { createTestApprovalManager } from "../../gateway/exec-approval-manager.test-support.js";
+import { createPreparedTestApprovalManager } from "../../gateway/exec-approval-manager.test-support.js";
 import {
   mintMessageActionTurnCapability,
   revokeMessageActionTurnCapability,
 } from "../../gateway/message-action-turn-capability.js";
-import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
+import type {
+  GatewayRequestContext,
+  GatewayRequestOptions,
+} from "../../gateway/server-methods/types.js";
 import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
@@ -21,6 +25,7 @@ import {
 } from "../../infra/agent-run-registry.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { createOperationalRunInstanceRef } from "../admitted-run-context.js";
+import { resolveSkillWorkshopApprovalForFinalParams } from "../agent-tools.before-tool-call.approval.js";
 import {
   withGatewayToolApprovalOwner,
   withGatewayToolCallerIdentity,
@@ -31,6 +36,7 @@ import { callGatewayTool, resolveMessageActionAgentRuntimeIdentityToken } from "
 
 const mocks = vi.hoisted(() => ({
   callGateway: vi.fn(),
+  handleGatewayRequest: vi.fn<(options: GatewayRequestOptions) => Promise<void>>(),
 }));
 
 vi.mock("../../config/config.js", () => ({
@@ -40,6 +46,9 @@ vi.mock("../../config/config.js", () => ({
 
 vi.mock("../../gateway/call.js", () => ({
   callGateway: (...args: unknown[]) => mocks.callGateway(...args),
+}));
+vi.mock("../../gateway/server-methods.js", () => ({
+  handleGatewayRequest: mocks.handleGatewayRequest,
 }));
 
 function capturedGatewayCall(): CallGatewayOptions {
@@ -58,7 +67,13 @@ async function withActiveGatewayToolCallerIdentity<T>(
   const authority = claimAgentRunDelegatedAuthority(identity.operationalRunInstance);
   expect(validateAgentRunDelegatedAuthority(authority)).toBe(true);
   try {
-    return await withGatewayToolCallerIdentity(identity, run);
+    return await withGatewayToolCallerIdentity(
+      {
+        receiptAuthority: () => validateAgentRunDelegatedAuthority(authority),
+        ...identity,
+      },
+      run,
+    );
   } finally {
     expect(releaseAgentRunDelegatedAuthority(authority)).toBe(true);
     expect(validateAgentRunDelegatedAuthority(authority)).toBe(false);
@@ -70,6 +85,9 @@ describe("gateway tool runtime identity", () => {
 
   beforeEach(() => {
     mocks.callGateway.mockReset();
+    mocks.handleGatewayRequest.mockReset().mockImplementation(async ({ respond }) => {
+      respond(true, { ok: true });
+    });
   });
 
   afterEach(() => {
@@ -90,25 +108,79 @@ describe("gateway tool runtime identity", () => {
     ["cron.remove", { id: "job-1" }, { id: "job-1" }],
     ["wake", { mode: "now", text: "ping" }, { ok: true }],
     ["question.request", { questions: [] }, { id: "question-1" }],
+    [
+      "ui.command",
+      { command: { kind: "navigate", sessionKey: "agent:ops:dashboard:selected" } },
+      { ok: true },
+    ],
   ] as const)(
-    "marks trusted local %s calls with runtime identity",
+    "dispatches hosted %s calls with trusted runtime identity and no socket",
     async (method, params, result) => {
-      mocks.callGateway.mockResolvedValueOnce(result);
-      const context = {} as GatewayRequestContext;
+      mocks.handleGatewayRequest.mockImplementationOnce(async ({ respond }) => {
+        respond(true, result);
+      });
+      const context = {
+        trackExecution: (run: () => Promise<void>) => run(),
+      } as GatewayRequestContext;
+      const operationalRunInstance = createOperationalRunInstanceRef("run-1");
+      const gatewayUiCommandTarget = { connId: "requesting-ui", profileId: "requester" };
 
-      await withActiveGatewayToolCallerIdentity(
-        {
-          agentId: "ops",
-          sessionKey: "agent:ops:telegram:direct:alice",
-          operationalRunInstance: createOperationalRunInstanceRef("run-1"),
-          gatewayContextResolver: () => context,
-        },
-        async () => await callGatewayTool(method, {}, params),
-      );
+      await expect(
+        withActiveGatewayToolCallerIdentity(
+          {
+            agentId: "ops",
+            sessionKey: "agent:ops:telegram:direct:alice",
+            operationalRunInstance,
+            gatewayUiCommandTarget,
+            gatewayContextResolver: () => context,
+          },
+          async () => await callGatewayTool(method, {}, params),
+        ),
+      ).resolves.toEqual(result);
 
-      expect(capturedGatewayCall().agentRuntimeIdentityToken).toEqual(expect.any(String));
+      expect(mocks.callGateway).not.toHaveBeenCalled();
+      expect(mocks.handleGatewayRequest).toHaveBeenCalledTimes(1);
+      const call = mocks.handleGatewayRequest.mock.calls[0]?.[0];
+      expect(call?.context).toBe(context);
+      expect(call?.req).toMatchObject({ method, params });
+      expect(call?.req.params).toEqual(params);
+      expect(call?.client?.internal?.agentRuntimeIdentity).toMatchObject({
+        kind: "agentRuntime",
+        agentId: "ops",
+        sessionKey: "agent:ops:telegram:direct:alice",
+        operationalRunInstance,
+        gatewayUiCommandTarget,
+      });
     },
   );
+
+  it("uses the host-signed requesting UI for worker screen commands", async () => {
+    mocks.callGateway.mockResolvedValueOnce({ ok: true });
+    const operationalRunInstance = createOperationalRunInstanceRef("worker-ui-run");
+    const caller = { agentId: "ops", sessionKey: "agent:ops:main", operationalRunInstance };
+    const gatewayUiCommandTarget = { connId: "requesting-ui", profileId: "requester" };
+    const params = { command: { kind: "navigate", sessionKey: "agent:ops:dashboard:selected" } };
+
+    await withActiveGatewayToolCallerIdentity(caller, async () => {
+      const token = await mintAgentRuntimeIdentityToken({ ...caller, gatewayUiCommandTarget });
+      await withGatewayToolCallerIdentity(
+        {
+          ...caller,
+          signedAgentRuntimeIdentityToken: token,
+          gatewayUiCommandTarget: { connId: "other-ui", profileId: "other-profile" },
+        },
+        () => callGatewayTool("ui.command", {}, params),
+      );
+      const call = capturedGatewayCall();
+      expect(call.params).toEqual(params);
+      expect(call.agentRuntimeIdentityToken).toBe(token);
+      await expect(
+        verifyAgentRuntimeIdentityToken(call.agentRuntimeIdentityToken),
+      ).resolves.toMatchObject({
+        gatewayUiCommandTarget,
+      });
+    });
+  });
 
   it.each([{}, { gatewayToken: "synthetic-remote-override" }])(
     "keeps ordinary questions available without local authority: %j",
@@ -121,7 +193,7 @@ describe("gateway tool runtime identity", () => {
     },
   );
 
-  it.each(["question.request", "node.invoke"])(
+  it.each(["question.request", "node.invoke", "ui.command"])(
     "omits optional %s identity for independently admitted callers with only ambient context",
     async (method) => {
       mocks.callGateway.mockResolvedValueOnce({ ok: true });
@@ -141,11 +213,15 @@ describe("gateway tool runtime identity", () => {
     },
   );
 
-  it.each(["before call", "during mint", "replacement", "before retry"])(
+  it.each(["before call", "during preparation", "replacement", "before wire retry"])(
     "rejects a retired Gateway binding without dropping identity (%s)",
     async (closure) => {
       mocks.callGateway.mockResolvedValueOnce({ id: "question-1" });
-      let context: GatewayRequestContext | undefined = {} as GatewayRequestContext;
+      const wireRetry = closure === "before wire retry";
+      let context: GatewayRequestContext | undefined = {
+        ...(wireRetry ? { localEmbedded: true } : {}),
+        trackExecution: (run: () => Promise<void>) => run(),
+      } as GatewayRequestContext;
       await withActiveGatewayToolCallerIdentity(
         {
           agentId: "ops",
@@ -156,7 +232,7 @@ describe("gateway tool runtime identity", () => {
         async () => {
           if (closure === "before call") {
             context = undefined;
-          } else if (closure === "before retry") {
+          } else if (wireRetry) {
             mocks.callGateway.mockReset().mockImplementationOnce(async () => {
               context = undefined;
               throw Object.assign(
@@ -173,13 +249,16 @@ describe("gateway tool runtime identity", () => {
               context = closure === "replacement" ? ({} as GatewayRequestContext) : undefined;
             });
           }
-          const method = closure === "before retry" ? "node.invoke" : "question.request";
+          const method = wireRetry ? "node.invoke" : "question.request";
           await expect(callGatewayTool(method, {}, {})).rejects.toThrow(
-            "admitting Gateway is no longer available",
+            wireRetry
+              ? "admitting Gateway is no longer available"
+              : /Gateway instance unavailable|admitting Gateway is no longer available/,
           );
         },
       );
-      expect(mocks.callGateway).toHaveBeenCalledTimes(closure === "before retry" ? 1 : 0);
+      expect(mocks.callGateway).toHaveBeenCalledTimes(wireRetry ? 1 : 0);
+      expect(mocks.handleGatewayRequest).not.toHaveBeenCalled();
     },
   );
 
@@ -599,6 +678,42 @@ describe("gateway tool runtime identity", () => {
     },
   );
 
+  it.each([
+    ["apply", "allow-once"],
+    ["reject", "deny"],
+    ["quarantine", "allow-once"],
+    ["restore_collection", "deny"],
+  ] as const)("signs the Skill Workshop %s approval owner (%s)", async (action, decision) => {
+    mocks.callGateway.mockResolvedValueOnce({ id: "workshop-approval", decision });
+    const operationalRunInstance = createOperationalRunInstanceRef("workshop-run");
+    const caller = {
+      agentId: "ops",
+      sessionKey: "agent:ops:telegram:group:-1001234567890",
+      operationalRunInstance,
+      turnSourceChannel: "telegram",
+      turnSourceTo: "-1001234567890",
+      turnSourceAccountId: "default",
+    };
+    const result = await withActiveGatewayToolCallerIdentity(caller, () =>
+      resolveSkillWorkshopApprovalForFinalParams({
+        toolName: "skill_workshop",
+        params: { action },
+        ctx: { config: { skills: { workshop: { approvalPolicy: "pending" } } } },
+      }),
+    );
+
+    expect(result?.blocked).toBe(decision === "deny");
+    const call = capturedGatewayCall();
+    expect(call.method).toBe("plugin.approval.request");
+    expect(call.params).not.toHaveProperty("pluginId");
+    await expect(
+      verifyAgentRuntimeIdentityToken(call.agentRuntimeIdentityToken),
+    ).resolves.toMatchObject({
+      ...caller,
+      approvalOwnerPluginId: "workspace-skills",
+    });
+  });
+
   it.for(
     ["exec.approval.request", "plugin.approval.request"].flatMap((method) =>
       [false, true].map((ambient) => ({ method, ambient })),
@@ -607,7 +722,7 @@ describe("gateway tool runtime identity", () => {
     "rejects late $method registration after permission change (ambient lifetime: $ambient)",
     async ({ method, ambient }, testContext) => {
       mocks.callGateway.mockResolvedValue({ id: "approval" });
-      const manager = createTestApprovalManager<{
+      const { manager } = await createPreparedTestApprovalManager<{
         command: string;
         title: string;
         description: string;
@@ -643,8 +758,8 @@ describe("gateway tool runtime identity", () => {
             oldRecord.agentRuntimeDelegatedAuthority = oldIdentity.delegatedAuthority;
             // The request is already dispatched, but has not registered its pending card.
             oldGeneration.abort(new Error("Permission change"));
-            expect(() => manager.register(oldRecord, 2_000)).toThrow("no longer active");
-            expect(manager.listPendingRecords()).toHaveLength(0);
+            await expect(manager.register(oldRecord, 2_000)).rejects.toThrow("no longer active");
+            expect(await manager.listPendingRecords()).toHaveLength(0);
 
             await callGatewayTool(method, {}, {}, { signal: nextGeneration.signal });
             const nextCall = mocks.callGateway.mock.calls.at(-1)?.[0] as CallGatewayOptions;
@@ -660,10 +775,10 @@ describe("gateway tool runtime identity", () => {
               "next-generation",
             );
             nextRecord.agentRuntimeDelegatedAuthority = nextIdentity.delegatedAuthority;
-            const decision = manager.register(nextRecord, 2_000);
+            const decision = (await manager.register(nextRecord, 2_000)).decision;
             const waiter = manager.awaitDecision(nextRecord.id);
-            expect(manager.listPendingRecords()).toHaveLength(1);
-            manager.resolve(nextRecord.id, "allow-once");
+            expect(await manager.listPendingRecords()).toHaveLength(1);
+            await manager.resolve(nextRecord.id, "allow-once");
             await expect(decision).resolves.toBe("allow-once");
             expect(manager.projectDecisionIfActive(nextRecord.id, await waiter)).toBe("allow-once");
           },
@@ -672,8 +787,8 @@ describe("gateway tool runtime identity", () => {
         outerLifetime.abort();
         oldGeneration.abort();
         nextGeneration.abort();
-        for (const record of manager.listPendingRecords()) {
-          manager.resolve(record.id, "deny");
+        for (const record of await manager.listPendingRecords()) {
+          await manager.resolve(record.id, "deny");
         }
       }
     },

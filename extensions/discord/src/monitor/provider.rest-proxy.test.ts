@@ -1,8 +1,8 @@
-// Discord tests cover provider.rest proxy plugin behavior.
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createRuntimeSpies } from "../../../test-support/runtime-spies.js";
 
 const {
   undiciFetchMock,
@@ -186,11 +186,7 @@ describe("resolveDiscordRestFetch", () => {
   }
 
   it("uses undici proxy fetch when a proxy URL is configured", async () => {
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    } as const;
+    const runtime = createRuntimeSpies();
     undiciFetchMock.mockClear().mockResolvedValue(new Response("ok", { status: 200 }));
     proxyAgentSpy.mockClear();
     const fetcher = resolveDiscordRestFetch("http://127.0.0.1:8080", runtime);
@@ -212,11 +208,7 @@ describe("resolveDiscordRestFetch", () => {
   });
 
   it("uses undici proxy fetch when the configured proxy is a DNS host", async () => {
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    } as const;
+    const runtime = createRuntimeSpies();
     undiciFetchMock.mockClear().mockResolvedValue(new Response("ok", { status: 200 }));
     proxyAgentSpy.mockClear();
     const fetcher = resolveDiscordRestFetch("http://mitm-proxy:8080", runtime);
@@ -231,11 +223,7 @@ describe("resolveDiscordRestFetch", () => {
   });
 
   it("uses undici proxy fetch when proxy URL is arbitrary DNS", async () => {
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    } as const;
+    const runtime = createRuntimeSpies();
     undiciFetchMock.mockClear().mockResolvedValue(new Response("ok", { status: 200 }));
 
     const fetcher = resolveDiscordRestFetch("http://proxy.test:8080", runtime);
@@ -254,11 +242,7 @@ describe("resolveDiscordRestFetch", () => {
     vi.stubEnv("https_proxy", "https://127.0.0.1:8443");
     vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "1");
     vi.stubEnv("OPENCLAW_PROXY_CA_FILE", caFile);
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    } as const;
+    const runtime = createRuntimeSpies();
     undiciFetchMock.mockResolvedValue(new Response("ok", { status: 200 }));
 
     const fetcher = resolveDiscordRestFetch("https://127.0.0.1:8443", runtime);
@@ -274,11 +258,7 @@ describe("resolveDiscordRestFetch", () => {
   });
 
   it("falls back to global fetch when proxy URL is invalid", () => {
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    } as const;
+    const runtime = createRuntimeSpies();
     const fetcher = resolveDiscordRestFetch("bad-proxy", runtime);
 
     expect(fetcher).toBe(fetch);
@@ -287,11 +267,7 @@ describe("resolveDiscordRestFetch", () => {
   });
 
   it("uses undici proxy fetch when proxy URL is a non-loopback IP", async () => {
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    } as const;
+    const runtime = createRuntimeSpies();
     undiciFetchMock.mockResolvedValue(new Response("ok", { status: 200 }));
 
     const fetcher = resolveDiscordRestFetch("http://10.0.0.10:8080", runtime);
@@ -305,11 +281,7 @@ describe("resolveDiscordRestFetch", () => {
   });
 
   it("uses undici proxy fetch when the proxy URL is IPv6 loopback", async () => {
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    } as const;
+    const runtime = createRuntimeSpies();
     undiciFetchMock.mockResolvedValue(new Response("ok", { status: 200 }));
 
     const fetcher = resolveDiscordRestFetch("http://[::1]:8080", runtime);
@@ -323,11 +295,7 @@ describe("resolveDiscordRestFetch", () => {
   });
 
   it("uses undici Agent with IPv4-first lookup when no discord proxy URL is configured", async () => {
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    } as const;
+    const runtime = createRuntimeSpies();
     undiciFetchMock.mockResolvedValue(new Response("ok", { status: 200 }));
 
     const fetcher = resolveDiscordRestFetch(undefined, runtime);
@@ -357,11 +325,7 @@ describe("resolveDiscordRestFetch", () => {
     vi.stubEnv("https_proxy", "https://proxy.example:8443");
     vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "1");
     vi.stubEnv("OPENCLAW_PROXY_CA_FILE", caFile);
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    } as const;
+    const runtime = createRuntimeSpies();
     undiciFetchMock.mockResolvedValue(new Response("ok", { status: 200 }));
 
     const fetcher = resolveDiscordRestFetch(undefined, runtime);
@@ -399,11 +363,7 @@ describe("resolveDiscordRestFetch", () => {
 
   it("falls back to direct REST fetch when env proxy options are invalid", async () => {
     vi.stubEnv("https_proxy", "bad-proxy");
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    } as const;
+    const runtime = createRuntimeSpies();
     undiciFetchMock.mockResolvedValue(new Response("ok", { status: 200 }));
 
     const fetcher = resolveDiscordRestFetch(undefined, runtime);
@@ -429,11 +389,7 @@ describe("resolveDiscordRestFetch", () => {
   it("uses debug proxy env when no discord proxy URL is configured", async () => {
     vi.stubEnv("OPENCLAW_DEBUG_PROXY_ENABLED", "1");
     vi.stubEnv("OPENCLAW_DEBUG_PROXY_URL", "http://127.0.0.1:7777");
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    } as const;
+    const runtime = createRuntimeSpies();
     undiciFetchMock.mockResolvedValue(new Response("ok", { status: 200 }));
 
     const fetcher = resolveDiscordRestFetch(undefined, runtime);

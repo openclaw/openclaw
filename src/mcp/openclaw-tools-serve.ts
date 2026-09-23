@@ -6,6 +6,8 @@
  */
 import { pathToFileURL } from "node:url";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { resolveRequesterToolPolicies } from "../agents/requester-tool-policy.js";
+import { isToolAllowedByPolicies } from "../agents/tool-policy-match.js";
 import { AUTOMATIONS_TOOL_NAME } from "../agents/tools/automations-tool-name.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { createCronTool } from "../agents/tools/cron-tool.js";
@@ -51,7 +53,10 @@ export function resolveOpenClawToolsForMcp(
   } = {},
 ): AnyAgentTool[] {
   const selection = params.tools ?? resolveOpenClawToolsMcpToolSelection();
-  return selection.map((tool) => {
+  const agentSessionKey = (
+    params.agentSessionKey ?? resolveOpenClawToolsMcpAgentSessionKey()
+  )?.trim();
+  const tools = selection.map((tool) => {
     if (tool === "openclaw") {
       return createSystemAgentTool({
         agentId: params.agentId,
@@ -59,9 +64,6 @@ export function resolveOpenClawToolsForMcp(
         ...resolveOpenClawToolsMcpSystemAgentApproval(),
       });
     }
-    const agentSessionKey = (
-      params.agentSessionKey ?? resolveOpenClawToolsMcpAgentSessionKey()
-    )?.trim();
     if (!agentSessionKey) {
       throw new Error(`${OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY_ENV} is required`);
     }
@@ -75,6 +77,23 @@ export function resolveOpenClawToolsForMcp(
       creatorToolAllowlist: [{ name: AUTOMATIONS_TOOL_NAME }],
     });
   });
+  if (!agentSessionKey) {
+    return tools;
+  }
+  const requesterPolicies = resolveRequesterToolPolicies({
+    config: params.config ?? getRuntimeConfig(),
+    agentId: params.agentId,
+    sessionKey: agentSessionKey,
+    senderPolicyMode: "never",
+  });
+  return tools.filter((tool) =>
+    isToolAllowedByPolicies(tool.name, [
+      requesterPolicies.groupPolicy,
+      requesterPolicies.senderPolicy,
+      requesterPolicies.subagentPolicy,
+      requesterPolicies.inheritedToolPolicy,
+    ]),
+  );
 }
 
 function createOpenClawToolsMcpServer(

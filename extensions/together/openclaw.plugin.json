@@ -1,5 +1,6 @@
 {
   "id": "together",
+  "categories": ["models"],
   "activation": {
     "onStartup": false
   },

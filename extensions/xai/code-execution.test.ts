@@ -41,7 +41,7 @@ function installCodeExecutionFetch(payload?: Record<string, unknown>) {
       ),
     ),
   );
-  global.fetch = withFetchPreconnect(mockFetch);
+  vi.stubGlobal("fetch", withFetchPreconnect(mockFetch));
   return mockFetch;
 }
 
@@ -151,7 +151,7 @@ describe("xai code_execution tool", () => {
     expect(mockFetch).toHaveBeenCalled();
     expect(firstFetchUrl(mockFetch)).toContain("api.x.ai/v1/responses");
     const body = parseFirstRequestBody(mockFetch);
-    expect(body.model).toBe("grok-4.3");
+    expect(body.model).toBe("grok-4.7");
     expect(body.store).toBe(false);
     expect(body.reasoning).toEqual({ effort: "low" });
     expect(body.max_turns).toBe(2);
@@ -253,7 +253,7 @@ describe("xai code_execution tool", () => {
     const mockFetch = vi.fn((_input?: unknown, _init?: unknown) =>
       Promise.resolve(malformedJsonResponse()),
     );
-    global.fetch = withFetchPreconnect(mockFetch);
+    vi.stubGlobal("fetch", withFetchPreconnect(mockFetch));
     const tool = createCodeExecutionTool({
       config: {
         plugins: {
@@ -283,7 +283,7 @@ describe("xai code_execution tool", () => {
         jsonResponse({ status: "incomplete", output: [{ type: "code_interpreter_call" }] }),
       ),
     );
-    global.fetch = withFetchPreconnect(mockFetch);
+    vi.stubGlobal("fetch", withFetchPreconnect(mockFetch));
     const tool = createCodeExecutionTool({
       config: {
         plugins: {

@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements auto reply.impl behavior.
 export { HEARTBEAT_PROMPT, stripHeartbeatToken } from "openclaw/plugin-sdk/reply-runtime";
 export { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "openclaw/plugin-sdk/reply-runtime";
 

@@ -1,49 +1,21 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { TranscriptDisplayPosition } from "../chat/transcript-display-position.js";
-import { isVisibleTranscriptRecord } from "../sessions/transcript-visible-record.js";
+import type { SubagentCoordinationDisplayResolver } from "./chat-display-projection.history.js";
 import {
   createCurrentUserProfileMessageProjector,
   projectChatDisplayMessage,
   projectChatDisplayMessagesWithState,
 } from "./chat-display-projection.js";
 import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
+import {
+  attachOpenClawTranscriptMeta,
+  readTranscriptMessageIdempotencyKey,
+} from "./session-transcript-entry-message.js";
 
 export type SessionMessageProjectionState = {
-  streamErrorFallbackPending: boolean;
+  assistantErrorPending: boolean;
   turnBoundaryPending: boolean;
 };
-
-/** Attach OpenClaw metadata to a transcript message without dropping existing metadata. */
-export function attachOpenClawTranscriptMeta(
-  message: unknown,
-  meta: Record<string, unknown>,
-): unknown {
-  if (!message || typeof message !== "object" || Array.isArray(message)) {
-    return message;
-  }
-  const record = message as Record<string, unknown>;
-  const existing =
-    record["__openclaw"] &&
-    typeof record["__openclaw"] === "object" &&
-    !Array.isArray(record["__openclaw"])
-      ? (record["__openclaw"] as Record<string, unknown>)
-      : {};
-  return {
-    ...record,
-    __openclaw: {
-      ...existing,
-      ...meta,
-    },
-  };
-}
-
-function readTranscriptMessageIdempotencyKey(message: unknown): string | undefined {
-  if (!message || typeof message !== "object" || Array.isArray(message)) {
-    return undefined;
-  }
-  const value = (message as Record<string, unknown>).idempotencyKey;
-  return typeof value === "string" && value.trim() ? value : undefined;
-}
 
 function readTranscriptMessageSenderIsOwner(message: unknown): boolean | undefined {
   const openclaw = asOptionalRecord(asOptionalRecord(message)?.["__openclaw"]);
@@ -54,6 +26,7 @@ function readTranscriptMessageSenderIsOwner(message: unknown): boolean | undefin
 /** Project one transcript message into the exact payload emitted as session.message. */
 export function projectSessionMessagePayload(params: {
   agentId?: string;
+  historyDelta?: boolean;
   message: unknown;
   messageId?: string;
   messageSeq?: number;
@@ -63,7 +36,12 @@ export function projectSessionMessagePayload(params: {
   runId?: string;
   sessionKey: string;
   sessionSnapshot?: Record<string, unknown>;
-}): { payload?: Record<string, unknown>; projectionState: SessionMessageProjectionState } {
+  subagentCoordination?: SubagentCoordinationDisplayResolver;
+}): {
+  payload?: Record<string, unknown>;
+  projectionState: SessionMessageProjectionState;
+  requiresHistoryReset?: true;
+} {
   const idempotencyKey = readTranscriptMessageIdempotencyKey(params.message);
   const senderIsOwner = readTranscriptMessageSenderIsOwner(params.message);
   const rawMessage = attachOpenClawTranscriptMeta(params.message, {
@@ -73,18 +51,52 @@ export function projectSessionMessagePayload(params: {
     ...(idempotencyKey ? { idempotencyKey } : {}),
     ...(params.messageSeq !== undefined ? { seq: params.messageSeq } : {}),
   });
-  const projected = params.projectionState
+  const historyProjection = params.historyDelta
     ? projectChatDisplayMessagesWithState([rawMessage], {
-        streamErrorFallbackPending: params.projectionState.streamErrorFallbackPending,
-        turnBoundaryPending: params.projectionState.turnBoundaryPending,
+        ...params.projectionState,
+        subagentCoordination: params.subagentCoordination,
+        includeCommentaryFallbacks: true,
+        activity: false,
       })
-    : {
-        messages: [projectChatDisplayMessage(rawMessage)],
-        streamErrorFallbackPending: false,
-        turnBoundaryPending: false,
-      };
+    : undefined;
+  if (
+    historyProjection?.messages.some(
+      (message) => asOptionalRecord(message.openclawStreamFallback)?.source === "segment",
+    )
+  ) {
+    // A single-message envelope cannot carry a commentary/tool split; let full history
+    // reconcile both rows.
+    return {
+      projectionState: {
+        assistantErrorPending: historyProjection.assistantErrorPending,
+        turnBoundaryPending: historyProjection.turnBoundaryPending,
+      },
+      requiresHistoryReset: true,
+    };
+  }
+  // A fallback can consume a pending turn boundary before final sanitation removes it.
+  // Reproject those rows from the incoming state, even when no segment remains visible.
+  const projected =
+    historyProjection && !historyProjection.commentaryFallbacksObserved
+      ? historyProjection
+      : params.projectionState
+        ? projectChatDisplayMessagesWithState([rawMessage], {
+            assistantErrorPending: params.projectionState.assistantErrorPending,
+            turnBoundaryPending: params.projectionState.turnBoundaryPending,
+            activity: false,
+            subagentCoordination: params.subagentCoordination,
+          })
+        : {
+            messages: [
+              projectChatDisplayMessage(rawMessage, {
+                subagentCoordination: params.subagentCoordination,
+              }),
+            ],
+            assistantErrorPending: false,
+            turnBoundaryPending: false,
+          };
   const projectionState = {
-    streamErrorFallbackPending: projected.streamErrorFallbackPending,
+    assistantErrorPending: projected.assistantErrorPending,
     turnBoundaryPending: projected.turnBoundaryPending,
   };
   const message = projected.messages[0];
@@ -94,68 +106,19 @@ export function projectSessionMessagePayload(params: {
   const projectCurrentUserProfile =
     params.projectCurrentUserProfile ??
     createCurrentUserProfileMessageProjector(resolveCurrentUserProfileDisplay);
+  const projectedMessage = projectCurrentUserProfile(message);
+  params.subagentCoordination?.assertCurrent?.();
   return {
     payload: {
       sessionKey: params.sessionKey,
       ...(senderIsOwner === undefined ? {} : { senderIsOwner }),
       ...(params.agentId ? { agentId: params.agentId } : {}),
-      message: projectCurrentUserProfile(message),
+      message: projectedMessage,
       ...(params.messageId ? { messageId: params.messageId } : {}),
       ...(params.messageSeq !== undefined ? { messageSeq: params.messageSeq } : {}),
       ...params.sessionSnapshot,
       ...(params.runId ? { runId: params.runId } : {}),
     },
     projectionState,
-  };
-}
-
-/** Project one stored transcript entry onto the client-visible chat history shape. */
-export function projectTranscriptEntryMessage(
-  entry: unknown,
-  seq: number,
-  transcriptPosition?: TranscriptDisplayPosition,
-): unknown {
-  if (!isVisibleTranscriptRecord(entry)) {
-    return null;
-  }
-  const record = entry;
-  if (record.message) {
-    const recordTimestampMs =
-      typeof record.timestamp === "string"
-        ? Date.parse(record.timestamp)
-        : typeof record.timestamp === "number"
-          ? record.timestamp
-          : Number.NaN;
-    const idempotencyKey = readTranscriptMessageIdempotencyKey(record.message);
-    return attachOpenClawTranscriptMeta(record.message, {
-      ...(typeof record.id === "string" ? { id: record.id } : {}),
-      ...(idempotencyKey ? { idempotencyKey } : {}),
-      ...(Number.isFinite(recordTimestampMs) ? { recordTimestampMs } : {}),
-      transcriptPosition,
-      seq,
-    });
-  }
-  if (record.type !== "compaction" && record.type !== "reset") {
-    return null;
-  }
-  const kind = record.type;
-  const compactionIdentity =
-    kind === "compaction" ? asOptionalRecord(record["__openclaw"]) : undefined;
-  const parsedTimestamp =
-    typeof record.timestamp === "string" ? Date.parse(record.timestamp) : Number.NaN;
-  return {
-    role: "system",
-    content: [{ type: "text", text: kind === "compaction" ? "Compaction" : "Reset" }],
-    timestamp: Number.isFinite(parsedTimestamp) ? parsedTimestamp : Date.now(),
-    __openclaw: {
-      kind,
-      id: typeof record.id === "string" ? record.id : undefined,
-      ...(typeof compactionIdentity?.runId === "string" ? { runId: compactionIdentity.runId } : {}),
-      ...(typeof compactionIdentity?.itemId === "string"
-        ? { itemId: compactionIdentity.itemId }
-        : {}),
-      transcriptPosition,
-      seq,
-    },
   };
 }

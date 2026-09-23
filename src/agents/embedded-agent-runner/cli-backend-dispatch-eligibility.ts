@@ -40,7 +40,10 @@ export function resolveEmbeddedCliBackendDispatchEligibility(
   // provider id directly, so resolve the configured execution runtime before
   // gating.
   const backends = new Map(
-    resolveRuntimeCliBackends().map((backend) => [normalizeProviderId(backend.id), backend]),
+    resolveRuntimeCliBackends("metadata").map((backend) => [
+      normalizeProviderId(backend.id),
+      backend,
+    ]),
   );
   const requestedProvider = normalizeProviderId(params.provider ?? "");
   const provider = backends.has(requestedProvider)

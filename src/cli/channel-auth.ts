@@ -9,8 +9,9 @@ import {
   normalizeChannelId,
 } from "../channels/plugins/index.js";
 import { resolveInstallableChannelPlugin } from "../commands/channel-setup/channel-plugin-resolution.js";
-import { assertAccountSelectorForMutation } from "../commands/channels/account-selector.js";
-import { requireValidConfigFileSnapshot } from "../commands/config-validation.js";
+import { parseAccountSelector } from "../commands/channels/account-selector.js";
+import { parseChannelSelector } from "../commands/channels/channel-selector.js";
+import { requireValidConfigForWrite } from "../commands/config-validation.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { callGateway } from "../gateway/call.js";
@@ -104,13 +105,17 @@ async function resolveChannelPluginForMode(
   channelId: string;
   plugin: ChannelPlugin;
 } | null> {
-  assertAccountSelectorForMutation(opts.account);
-  const snapshot = await requireValidConfigFileSnapshot(runtime);
-  if (!snapshot) {
+  parseAccountSelector(opts.account);
+  parseChannelSelector(opts.channel);
+  const writeSnapshot = await requireValidConfigForWrite(runtime);
+  if (!writeSnapshot) {
     return null;
   }
   // Runtime defaults are not authored plugin enablement intent.
-  const autoEnabled = applyPluginAutoEnable({ config: snapshot.sourceConfig, env: process.env });
+  const autoEnabled = applyPluginAutoEnable({
+    config: writeSnapshot.snapshot.sourceConfig,
+    env: process.env,
+  });
   const cfg = autoEnabled.config;
   const explicitChannel = opts.channel?.trim();
   const channelInput = explicitChannel || resolveConfiguredAuthChannelInput(mode);
@@ -143,8 +148,9 @@ async function resolveChannelPluginForMode(
   }
   if (autoEnabled.changes.length > 0 || resolved.configChanged) {
     await commitConfigWithPendingPluginInstalls({
-      nextConfig: resolved.cfg,
-      baseHash: snapshot.hash,
+      sourceConfig: resolved.cfg,
+      baseHash: writeSnapshot.snapshot.hash,
+      writeOptions: writeSnapshot.writeOptions,
     });
   }
   return {

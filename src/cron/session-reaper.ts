@@ -1,19 +1,20 @@
 /** Prunes expired per-run cron sessions and archives unreferenced transcripts. */
 import path from "node:path";
+import { hasDescendantRunAwaitingSettle } from "../agents/subagents/registry/subagent-registry-read.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import {
   applySessionEntryLifecycleMutation,
-  listSessionEntriesCore,
   loadExactSessionEntryReadOnly,
   type SessionEntryLifecycleRemoval,
 } from "../config/sessions/session-accessor.js";
+import { readExpiredCronRunEntriesInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { resolveMaintenanceConfig } from "../config/sessions/store-maintenance-runtime.js";
 import type { CronConfig } from "../config/types.cron.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
-import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { isCompetingSessionWorkAdmissionActive } from "../sessions/session-lifecycle-admission.js";
 import { buildPendingGeneratedMediaSessionKeySet } from "../tasks/task-status-access.js";
+import { deleteCronSessionViaGateway } from "./isolated-agent/session-cleanup.js";
 import { resolveCronAgentSessionKey } from "./isolated-agent/session-key.js";
 import type { Logger } from "./service/state.js";
 
@@ -74,6 +75,15 @@ export async function removeCronJobBaseSession(params: {
   if (!existing) {
     return false;
   }
+  const sessionId = existing.sessionId.trim();
+  if (sessionId) {
+    return await deleteCronSessionViaGateway({
+      agentSessionKey: sessionKey,
+      sessionId,
+      lifecycleRevision: existing.lifecycleRevision,
+      sessionUpdatedAt: existing.updatedAt,
+    });
+  }
   const result = await applySessionEntryLifecycleMutation({
     agentId: params.agentId,
     storePath: params.sessionStorePath,
@@ -93,6 +103,7 @@ export async function sweepCronRunSessions(params: {
   agentId: string;
   /** Resolved session-store target, interpreted by the SQLite accessor. */
   sessionStorePath: string;
+  isAgentAvailable?: (agentId: string) => boolean;
   nowMs?: number;
   log: Logger;
 }): Promise<ReaperResult> {
@@ -121,32 +132,25 @@ export async function sweepCronRunSessions(params: {
   let pruned = 0;
   let transcriptCleanupError: unknown;
   try {
+    if (params.isAgentAvailable?.(params.agentId) === false) {
+      params.log.debug({ agentId: params.agentId }, "cron-reaper: skipped unavailable agent");
+      return { swept: false, pruned: 0 };
+    }
     const cutoff = now - retentionMs;
-    const requestedOwner = normalizeAgentId(params.agentId);
     let pendingMediaSessionKeys: Set<string> | undefined;
     const removals: SessionEntryLifecycleRemoval[] = [];
-    // The accessor keeps agentId logical for admission checks and resolves a shared
-    // store's physical database owner internally through its SQLite scope.
-    for (const { sessionKey, entry } of listSessionEntriesCore({
+    // Discovery validates the physical store in its reader worker and returns only full
+    // expired candidates. Live continuation/admission checks remain with this owner.
+    for (const { sessionKey, entry } of await readExpiredCronRunEntriesInWorker({
       agentId: params.agentId,
       storePath,
+      updatedBefore: cutoff,
     })) {
-      if (!isCronRunSessionKey(sessionKey)) {
-        continue;
-      }
-      const scopedOwner = parseAgentSessionKey(sessionKey)?.agentId;
-      if (!scopedOwner || normalizeAgentId(scopedOwner) !== requestedOwner) {
-        continue;
-      }
-      const updatedAt = entry.updatedAt ?? 0;
-      if (updatedAt >= cutoff) {
-        continue;
-      }
       if (entry.cronRunContinuation) {
         // Build one unordered snapshot only when an expired continuation needs it.
         // Fresh rows and stores without continuations never touch the task registry.
         pendingMediaSessionKeys ??= buildPendingGeneratedMediaSessionKeySet();
-        if (pendingMediaSessionKeys.has(sessionKey)) {
+        if (pendingMediaSessionKeys.has(sessionKey) || hasDescendantRunAwaitingSettle(sessionKey)) {
           continue;
         }
       }
@@ -176,6 +180,19 @@ export async function sweepCronRunSessions(params: {
         agentId: params.agentId,
         storePath,
         removals,
+        beforeCommitInTransaction: () => {
+          // Descendants can acquire the continuation while deletion preparation awaits.
+          for (const removal of removals) {
+            if (
+              removal.expectedEntry?.cronRunContinuation &&
+              hasDescendantRunAwaitingSettle(removal.sessionKey)
+            ) {
+              throw new Error(
+                `Cannot prune cron run continuation while subagents await settlement for ${removal.sessionKey}`,
+              );
+            }
+          }
+        },
         ...(archiveRetentionMs == null
           ? {}
           : {

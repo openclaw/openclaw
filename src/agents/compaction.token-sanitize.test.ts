@@ -1,12 +1,14 @@
 // Verifies compaction token planning strips private/non-model fields first.
 import { serializeConversation, type AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it } from "vitest";
+import { makeUserMessage } from "../../test/helpers/user-message.js";
 import {
   buildOversizedFallbackPlan,
   estimateMessagesTokens,
   projectCompactionMessagesForPlanning,
 } from "./compaction-planning.js";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
+import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 
 describe("compaction token accounting sanitization", () => {
   it("projects worker inputs to planning-safe messages before cloning", () => {
@@ -28,11 +30,7 @@ describe("compaction token accounting sanitization", () => {
         content: "internal",
         timestamp: 2,
       } as AgentMessage,
-      {
-        role: "user",
-        content: "next",
-        timestamp: 3,
-      },
+      makeUserMessage("next", 3),
     ];
 
     const sanitized = projectCompactionMessagesForPlanning(messages);
@@ -130,14 +128,7 @@ describe("compaction token accounting sanitization", () => {
             },
           },
         ],
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
+        usage: createZeroUsageFixture(),
         stopReason: "toolUse",
         timestamp: 1,
       },
@@ -215,14 +206,7 @@ describe("compaction token accounting sanitization", () => {
         provider: "openai",
         model: "gpt-5.6-luna",
         content: [{ type: "toolCall", id: "call_late", name: "read", arguments: { path: "x" } }],
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
+        usage: createZeroUsageFixture(),
         stopReason: "toolUse",
         timestamp: 9,
       } satisfies AgentMessage,

@@ -5,7 +5,6 @@ import type { ControlUiAction } from "../../../src/plugin-sdk/control-ui.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
-import type { RouteId } from "../app-route-paths.ts";
 import { createAgentSelectionCapability } from "../app/agent-selection.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
@@ -51,7 +50,7 @@ it("opens customization once and retains reload state across close and reopen", 
     errors: diagnostics,
     canReload: true,
     registrations: () => [replacement],
-    selectedReplacement: () => selected,
+    selectedReplacement: (surface: string) => (surface === "composer" ? selected : undefined),
     selectReplacement: vi.fn((_surface: string, key: string | null) => {
       selected = key ? replacement : undefined;
       listeners.forEach((listener) => listener());
@@ -215,7 +214,7 @@ async function mountActions(
     sessions,
     plugins,
     navigate,
-  } as unknown as ApplicationContext<RouteId>;
+  } as unknown as ApplicationContext;
   const owner = {
     abort,
     client,
@@ -281,7 +280,7 @@ describe("native plugin session actions", () => {
           2,
         ),
       );
-      await sessions.refreshReplacement("writer");
+      await sessions.refresh({ agentId: "writer", force: true });
       await element.updateComplete;
       expect(button()?.textContent?.trim()).toBe("Review Writer");
       button()?.click();

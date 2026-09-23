@@ -92,6 +92,7 @@ export function driver(
     session: "openclaw-test",
     captureScope: 2,
     effectiveScope: 1,
+    desktopCaptureAuthorized: true,
     desktopUnlocked: true,
   }));
   const dispose = vi.fn(async () => {});

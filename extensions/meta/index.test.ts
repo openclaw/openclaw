@@ -1,4 +1,3 @@
-// Meta tests cover plugin registration and catalog shape.
 import {
   configureAiTransportHost,
   createApiRegistry,
@@ -11,6 +10,8 @@ import {
   type StreamFunction,
 } from "@openclaw/ai";
 import { prepareModelForSimpleCompletion } from "@openclaw/ai/transports";
+// Meta tests cover plugin registration and catalog shape.
+import { expectDefined } from "@openclaw/normalization-core";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { streamSimple, type Context, type Model } from "openclaw/plugin-sdk/llm";
 import { capturePluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -67,15 +68,6 @@ function requireSynchronousStream(
     throw new Error("Expected synchronous assistant event stream");
   }
   return stream as AssistantMessageEventStreamContract;
-}
-
-function requireThinkingProfileResolver(
-  provider: ReturnType<typeof capturePluginRegistration>["providers"][number],
-) {
-  if (!provider.resolveThinkingProfile) {
-    throw new Error("Expected resolveThinkingProfile on Meta provider");
-  }
-  return provider.resolveThinkingProfile;
 }
 
 describe("meta provider", () => {
@@ -501,7 +493,10 @@ describe("meta provider", () => {
     if (!provider) {
       throw new Error("Expected Meta provider");
     }
-    const resolveThinkingProfile = requireThinkingProfileResolver(provider);
+    const resolveThinkingProfile = expectDefined(
+      provider.resolveThinkingProfile,
+      "Meta thinking profile resolver",
+    );
     const reasoningModels = buildMetaProvider().models.filter((model) => model.reasoning);
     expect(reasoningModels.map((model) => model.id)).toEqual([
       "muse-spark-1.3",
@@ -540,7 +535,10 @@ describe("meta provider", () => {
     if (!provider) {
       throw new Error("Expected Meta provider");
     }
-    const resolveThinkingProfile = requireThinkingProfileResolver(provider);
+    const resolveThinkingProfile = expectDefined(
+      provider.resolveThinkingProfile,
+      "Meta thinking profile resolver",
+    );
     expect(
       resolveThinkingProfile({
         provider: "meta",

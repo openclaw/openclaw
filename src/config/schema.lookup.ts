@@ -77,11 +77,12 @@ function splitLookupPath(path: string): string[] {
 function resolveUiHintMatch(
   uiHints: ConfigUiHints,
   path: string,
+  splitPath: (path: string) => string[],
 ): { path: string; hint: ConfigUiHint } | null {
   return findWildcardHintMatch({
     uiHints,
     path,
-    splitPath: splitLookupPath,
+    splitPath,
   });
 }
 
@@ -349,6 +350,7 @@ function buildLookupChildren(
   schema: JsonSchemaObject,
   path: string,
   uiHints: ConfigUiHints,
+  splitPath: (path: string) => string[],
   resolveReloadMetadata?: ConfigSchemaReloadMetadataResolver,
 ): ConfigSchemaLookupChild[] {
   const children: ConfigSchemaLookupChild[] = [];
@@ -356,7 +358,7 @@ function buildLookupChildren(
 
   const pushChild = (key: string, childSchema: JsonSchemaObject, isRequired: boolean) => {
     const childPath = path ? `${path}.${key}` : key;
-    const resolvedHint = resolveUiHintMatch(uiHints, childPath);
+    const resolvedHint = resolveUiHintMatch(uiHints, childPath, splitPath);
     const reloadMetadata = resolveReloadMetadata?.(childPath);
     children.push({
       key,
@@ -414,7 +416,19 @@ export function lookupConfigSchema(
     current = next;
   }
 
-  const resolvedHint = resolveUiHintMatch(response.uiHints, normalizedPath);
+  // Parent and child lookups share path parsing only for this response.
+  const hintParts = new Map<string, string[]>();
+  const splitHintPath = schemaHasChildren(current)
+    ? (hintPath: string): string[] => {
+        let cachedParts = hintParts.get(hintPath);
+        if (!cachedParts) {
+          cachedParts = splitLookupPath(hintPath);
+          hintParts.set(hintPath, cachedParts);
+        }
+        return cachedParts;
+      }
+    : splitLookupPath;
+  const resolvedHint = resolveUiHintMatch(response.uiHints, normalizedPath, splitHintPath);
   const reloadMetadata = resolveReloadMetadata?.(normalizedPath);
   return {
     path: wantsRoot ? "." : normalizedPath,
@@ -426,6 +440,7 @@ export function lookupConfigSchema(
       current,
       wantsRoot ? "" : normalizedPath,
       response.uiHints,
+      splitHintPath,
       resolveReloadMetadata,
     ),
   };

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import type { Model } from "../types.js";
 import { buildOpenAICompletionsParams } from "./openai-completions-params.js";
 import {
@@ -97,14 +98,7 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
               },
             ],
           },
-          {
-            role: "toolResult",
-            toolCallId: "call_1",
-            toolName: "read_file",
-            content: [{ type: "text", text: "{ }" }],
-            isError: false,
-            timestamp: 1,
-          },
+          makeTextToolResult("call_1", "read_file", "{ }", false, 1),
           { role: "user", content: "continue" },
         ],
         tools: [],
@@ -167,8 +161,18 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
       assertSanitizedFields: true,
     },
     {
-      label: "preserves reasoning_content replay for custom MiMo V2.6 proxy routes",
+      label: "preserves reasoning_content replay for custom MiMo V2.6 Pro proxy routes",
       model: { ...customMiMoProxyModel, id: "xiaomi/mimo-v2.6-pro" },
+      assertSanitizedFields: true,
+    },
+    {
+      label: "preserves reasoning_content replay for custom MiMo V2.6 Flash proxy routes",
+      model: { ...customMiMoProxyModel, id: "xiaomi/mimo-v2.6-flash" },
+      assertSanitizedFields: true,
+    },
+    {
+      label: "preserves reasoning_content replay for custom MiMo V2.6 UltraSpeed proxy routes",
+      model: { ...customMiMoProxyModel, id: "xiaomi/mimo-v2.6-pro-ultraspeed" },
       assertSanitizedFields: true,
     },
     {
@@ -291,14 +295,7 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
               },
             ],
           },
-          {
-            role: "toolResult",
-            toolCallId: "call_1",
-            toolName: "lookup",
-            content: [{ type: "text", text: "sunny" }],
-            isError: false,
-            timestamp: 1,
-          },
+          makeTextToolResult("call_1", "lookup", "sunny", false, 1),
           { role: "user", content: "answer" },
         ],
         tools: [],

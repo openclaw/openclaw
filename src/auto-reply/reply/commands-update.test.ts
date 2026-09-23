@@ -18,12 +18,10 @@ vi.mock("../../agents/tools/gateway.js", () => ({ callGatewayTool }));
 vi.mock("../../channels/message-access/admission-evidence.js", () => ({
   readChannelContextGatewayContextResolver,
 }));
-vi.mock("../../gateway/server-plugins.js", () => ({
+vi.mock("../../gateway/server-plugin-in-process-dispatch.js", () => ({
   dispatchGatewayMethodInProcess: dispatch,
   getInProcessGatewayRequestContext: (resolve?: () => GatewayRequestContext | undefined) =>
     resolve ? resolve() : host.context,
-  hasInProcessGatewayContext: (resolve?: () => GatewayRequestContext | undefined) =>
-    Boolean(resolve ? resolve() : host.context),
 }));
 vi.mock("../../globals.js", () => ({ logVerbose: vi.fn() }));
 
@@ -165,7 +163,7 @@ describe("handleUpdateCommand", () => {
     expect(dispatch).not.toHaveBeenCalled();
   });
 
-  it("hands off an owner update with session routing and a 20-minute timeout", async () => {
+  it("hands off an owner update with session routing and only a request watchdog", async () => {
     const params = updateCommandParams();
     const order: string[] = [];
     const onAdopted = vi.fn(async () => {
@@ -195,7 +193,6 @@ describe("handleUpdateCommand", () => {
       {
         sessionKey: params.sessionKey,
         note: "/update",
-        timeoutMs: 1_200_000,
         requester: { channel: "telegram", senderId: "owner", accountId: undefined },
       },
       {
@@ -204,6 +201,7 @@ describe("handleUpdateCommand", () => {
         forceSyntheticClient: true,
         operatorRoleActor: { kind: "system" },
         syntheticScopes: ["operator.admin"],
+        syntheticScopeMode: "minimum",
       },
     );
     expect(order).toEqual(["adopt", "update"]);

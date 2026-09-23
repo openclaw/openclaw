@@ -2,9 +2,19 @@ import type { SlackShortcutMiddlewareArgs } from "@slack/bolt";
 // Slack tests cover interactions plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { encodeSlackApprovalAction } from "../../approval-actions.js";
+import { installSlackTestRuntime } from "../../test-runtime.test-support.js";
+import {
+  approvalButtonBlocks,
+  approvalContextOptions,
+  singleButtonBlocks,
+} from "./interactions.test-support.js";
 
 const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
 const requestHeartbeatMock = vi.hoisted(() => vi.fn());
+const readSlackMessagesMock = vi.hoisted(() =>
+  vi.fn<typeof import("../../actions.js").readSlackMessages>(),
+);
 type DispatchPluginInteractiveHandlerResult = {
   matched: boolean;
   handled: boolean;
@@ -51,15 +61,16 @@ const resolvePluginConversationBindingApprovalMock = vi.hoisted(() => vi.fn());
 const buildPluginBindingResolvedTextMock = vi.hoisted(() => vi.fn(() => "Binding updated."));
 type ApprovalResolveMockResult = {
   applied: boolean;
-  approval:
+  approval: { presentation: { kind: "exec" | "plugin" | "system-agent" } } & (
     | { status: "allowed"; decision: "allow-once" | "allow-always" }
     | { status: "denied"; decision: "deny" }
-    | { status: "expired" | "cancelled" };
+    | { status: "expired" | "cancelled" }
+  );
 };
 const resolveApprovalOverGatewayMock = vi.hoisted(() =>
   vi.fn<(arg: unknown) => Promise<ApprovalResolveMockResult>>(async (_arg: unknown) => ({
     applied: true,
-    approval: { status: "allowed", decision: "allow-once" },
+    approval: { status: "allowed", decision: "allow-once", presentation: { kind: "exec" } },
   })),
 );
 const resolveQuestionOverGatewayMock = vi.hoisted(() =>
@@ -95,6 +106,8 @@ vi.mock("openclaw/plugin-sdk/heartbeat-runtime", async (importOriginal) => {
 vi.mock("openclaw/plugin-sdk/approval-gateway-runtime", () => ({
   resolveApprovalOverGateway: (arg: unknown) => resolveApprovalOverGatewayMock(arg),
 }));
+
+vi.mock("../../actions.js", () => ({ readSlackMessages: readSlackMessagesMock }));
 
 vi.mock("openclaw/plugin-sdk/question-gateway-runtime", () => ({
   questionGatewayRuntime: {
@@ -295,6 +308,7 @@ function createContext(overrides?: {
     type?: "im" | "mpim" | "channel" | "group";
   }>;
 }) {
+  installSlackTestRuntime();
   let handler: RegisteredHandler | null = null;
   let actionMatcher: RegExp | null = null;
   let viewHandler: RegisteredViewHandler | null = null;
@@ -415,6 +429,7 @@ function createContext(overrides?: {
     resolveChannelName,
     resolveSlackSystemEventRoute: resolveSessionKey,
   };
+  Object.assign(ctx, { readRuntimeContext: async () => ctx, isRuntimePolicyCurrent: () => true });
   return {
     ctx,
     app,
@@ -572,6 +587,8 @@ describe("registerSlackInteractionEvents", () => {
   });
 
   beforeEach(() => {
+    readSlackMessagesMock.mockReset();
+    readSlackMessagesMock.mockResolvedValue({ messages: [], hasMore: false });
     enqueueSystemEventMock.mockReset();
     enqueueSystemEventMock.mockReturnValue(true);
     requestHeartbeatMock.mockClear();
@@ -585,7 +602,7 @@ describe("registerSlackInteractionEvents", () => {
     resolveApprovalOverGatewayMock.mockClear();
     resolveApprovalOverGatewayMock.mockResolvedValue({
       applied: true,
-      approval: { status: "allowed", decision: "allow-once" },
+      approval: { status: "allowed", decision: "allow-once", presentation: { kind: "exec" } },
     });
     resolveQuestionOverGatewayMock.mockClear();
     resolveQuestionOverGatewayMock.mockResolvedValue({
@@ -933,13 +950,7 @@ describe("registerSlackInteractionEvents", () => {
         message: {
           ts: "100.200",
           text: "fallback",
-          blocks: [
-            {
-              type: "actions",
-              block_id: "codex_actions",
-              elements: [{ type: "button", action_id: "codex" }],
-            },
-          ],
+          blocks: singleButtonBlocks("codex_actions", "codex"),
         },
       },
       action: {
@@ -1122,13 +1133,7 @@ describe("registerSlackInteractionEvents", () => {
         message: {
           ts: "100.200",
           text: "fallback",
-          blocks: [
-            {
-              type: "actions",
-              block_id: "codex_actions",
-              elements: [{ type: "button", action_id: "codex" }],
-            },
-          ],
+          blocks: singleButtonBlocks("codex_actions", "codex"),
         },
       },
       action: {
@@ -1205,13 +1210,7 @@ describe("registerSlackInteractionEvents", () => {
         message: {
           ts: "100.200",
           text: "fallback",
-          blocks: [
-            {
-              type: "actions",
-              block_id: "codex_actions",
-              elements: [{ type: "button", action_id: "codex" }],
-            },
-          ],
+          blocks: singleButtonBlocks("codex_actions", "codex"),
         },
       },
       action: {
@@ -1265,13 +1264,7 @@ describe("registerSlackInteractionEvents", () => {
         message: {
           ts: "100.200",
           text: "fallback",
-          blocks: [
-            {
-              type: "actions",
-              block_id: "reply_actions",
-              elements: [{ type: "button", action_id: "openclaw:reply_button" }],
-            },
-          ],
+          blocks: singleButtonBlocks("reply_actions", "openclaw:reply_button"),
         },
       },
       action: {
@@ -1379,13 +1372,7 @@ describe("registerSlackInteractionEvents", () => {
         message: {
           ts: "100.200",
           text: "fallback",
-          blocks: [
-            {
-              type: "actions",
-              block_id: "codex_actions",
-              elements: [{ type: "button", action_id: "codex" }],
-            },
-          ],
+          blocks: singleButtonBlocks("codex_actions", "codex"),
         },
       },
       action: {
@@ -1406,13 +1393,7 @@ describe("registerSlackInteractionEvents", () => {
         message: {
           ts: "100.200",
           text: "fallback",
-          blocks: [
-            {
-              type: "actions",
-              block_id: "codex_actions",
-              elements: [{ type: "button", action_id: "codex" }],
-            },
-          ],
+          blocks: singleButtonBlocks("codex_actions", "codex"),
         },
       },
       action: {
@@ -1468,13 +1449,7 @@ describe("registerSlackInteractionEvents", () => {
         message: {
           ts: "100.200",
           text: "Approve this bind?",
-          blocks: [
-            {
-              type: "actions",
-              block_id: "bind_actions",
-              elements: [{ type: "button", action_id: "openclaw:reply_button" }],
-            },
-          ],
+          blocks: singleButtonBlocks("bind_actions", "openclaw:reply_button"),
         },
       },
       action: {
@@ -1507,6 +1482,29 @@ describe("registerSlackInteractionEvents", () => {
   });
 
   it("resolves typed exec approvals from Slack-private action data", async () => {
+    readSlackMessagesMock.mockResolvedValueOnce({
+      messages: [
+        {
+          ts: "100.200",
+          blocks: [
+            {
+              type: "actions",
+              block_id: "exec_actions",
+              elements: [
+                {
+                  type: "button",
+                  action_id: "openclaw:approval_button:1:1",
+                  value:
+                    'openclaw:approval:v1:{"approvalId":"plugin:looks-plugin","approvalKind":"exec","decision":"allow-once"}',
+                },
+                { type: "button", action_id: "openclaw:reply_button" },
+              ],
+            },
+          ],
+        },
+      ],
+      hasMore: false,
+    });
     const { ctx, app, getHandler } = createContext({
       allowFrom: ["U999"],
       cfg: {
@@ -1591,7 +1589,259 @@ describe("registerSlackInteractionEvents", () => {
     expect(respond).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      name: "current generic controls",
+      current: "pending",
+      applied: true,
+      requestKind: "system-agent",
+      updates: true,
+    },
+    {
+      name: "current pending controls with a native header",
+      current: "header-pending",
+      applied: true,
+      requestKind: "system-agent",
+      updates: true,
+    },
+    {
+      name: "current pending controls after a prior decision",
+      current: "header-pending",
+      applied: false,
+      requestKind: "system-agent",
+      updates: true,
+    },
+    {
+      name: "current Applied card",
+      current: "applied",
+      applied: true,
+      requestKind: "system-agent",
+      updates: false,
+    },
+    {
+      name: "current Not applied card",
+      current: "not-applied",
+      applied: true,
+      requestKind: "system-agent",
+      updates: false,
+    },
+    {
+      name: "another approval's current controls",
+      current: "replacement",
+      applied: true,
+      requestKind: "system-agent",
+      updates: false,
+    },
+    {
+      name: "a missing current message",
+      current: "missing",
+      applied: true,
+      requestKind: "system-agent",
+      updates: false,
+    },
+    {
+      name: "current message without blocks",
+      current: "no-blocks",
+      applied: true,
+      requestKind: "system-agent",
+      updates: false,
+    },
+    {
+      name: "a failed current-message read",
+      current: "read-failure",
+      applied: true,
+      requestKind: "system-agent",
+      updates: false,
+    },
+    {
+      name: "current controls that do not match the stale request kind",
+      current: "pending",
+      applied: false,
+      requestKind: "exec",
+      updates: false,
+    },
+  ] as const)(
+    "registered approval handler reads $name after mocked resolution",
+    async ({ current, applied, requestKind, updates }) => {
+      const approvalId = "system-agent:0d939e63-1c97-4b53-9c6f-6caae6d95bd0";
+      resolveApprovalOverGatewayMock.mockResolvedValueOnce({
+        applied,
+        approval: {
+          status: "allowed",
+          decision: "allow-once",
+          presentation: { kind: "system-agent" },
+        },
+      });
+      const header = {
+        type: "section",
+        block_id: "openclaw_approval_header",
+        text: { type: "mrkdwn", text: "OpenClaw change approval required" },
+      };
+      const currentBlocks =
+        current === "no-blocks"
+          ? undefined
+          : current === "applied" || current === "not-applied"
+            ? [
+                {
+                  type: "section",
+                  text: { type: "mrkdwn", text: current === "applied" ? "Applied" : "Not applied" },
+                },
+              ]
+            : [
+                ...(current === "header-pending" ? [header] : []),
+                ...approvalButtonBlocks(
+                  current === "replacement" ? "replacement" : approvalId,
+                  "system-agent",
+                  "allow-once",
+                ),
+              ];
+      if (current === "read-failure") {
+        readSlackMessagesMock.mockRejectedValueOnce(new Error("current message unavailable"));
+      } else {
+        readSlackMessagesMock.mockResolvedValueOnce({
+          messages: current === "missing" ? [] : [{ ts: "100.200", blocks: currentBlocks }],
+          hasMore: false,
+        });
+      }
+      const { ctx, app, getHandler } = createContext({
+        allowFrom: ["U999"],
+        cfg: {
+          channels: {
+            slack: {
+              execApprovals: { enabled: true, approvers: ["u123"], target: "both" },
+            },
+          },
+        },
+      });
+      registerSlackInteractionEvents({ ctx: ctx as never });
+      const respond = vi.fn().mockResolvedValue(undefined);
+      await getHandler()({
+        ack: vi.fn().mockResolvedValue(undefined),
+        respond,
+        body: {
+          user: { id: "U123" },
+          channel: { id: "C1" },
+          container: { channel_id: "C1", message_ts: "100.200", thread_ts: "100.100" },
+          message: {
+            ts: "100.200",
+            text: "Incoming snapshot is still pending",
+            blocks: [header, ...approvalButtonBlocks(approvalId, requestKind, "allow-once")],
+          },
+        },
+        action: {
+          type: "button",
+          action_id: "openclaw:approval_button:1:1",
+          block_id: "exec_actions",
+          value: encodeSlackApprovalAction({
+            type: "approval",
+            approvalId,
+            approvalKind: requestKind,
+            decision: "allow-once",
+          }),
+          text: { type: "plain_text", text: "Allow once" },
+        },
+      });
+      expect(resolveApprovalOverGatewayMock).toHaveBeenCalledWith({
+        cfg: ctx.cfg,
+        approvalId,
+        approvalKind: requestKind,
+        decision: "allow-once",
+        senderId: "U123",
+        channel: "slack",
+        accountId: "default",
+      });
+      expect(readSlackMessagesMock).toHaveBeenCalledExactlyOnceWith("C1", {
+        client: app.client,
+        messageId: "100.200",
+        threadId: "100.100",
+      });
+      if (updates) {
+        const prefix = applied ? "Resolved" : "Already resolved";
+        expectRecordFields(chatUpdateCall(app), {
+          channel: "C1",
+          ts: "100.200",
+          text: prefix + ": Allowed once",
+          blocks: [
+            { type: "section", text: { type: "mrkdwn", text: "*" + prefix + ": Allowed once*" } },
+          ],
+        });
+      } else {
+        expect(app.client.chat.update).not.toHaveBeenCalled();
+      }
+      if (!updates || !applied) {
+        expect(respond).toHaveBeenCalledWith({
+          text: applied
+            ? "Approval resolved: Allowed once."
+            : "This approval was already resolved: Allowed once.",
+          response_type: "ephemeral",
+        });
+      } else {
+        expect(respond).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it("blocks non-approvers from resolving system-agent approvals before resolution", async () => {
+    const { ctx, getHandler } = createContext({
+      allowFrom: ["U999"],
+      cfg: {
+        channels: {
+          slack: {
+            execApprovals: {
+              enabled: true,
+              approvers: ["u123"],
+              target: "both",
+            },
+          },
+        },
+      },
+    });
+    registerSlackInteractionEvents({ ctx: ctx as never });
+
+    const respond = vi.fn().mockResolvedValue(undefined);
+    await getHandler()({
+      ack: vi.fn().mockResolvedValue(undefined),
+      respond,
+      body: {
+        user: { id: "U999" },
+        channel: { id: "C1" },
+        container: { channel_id: "C1", message_ts: "100.200", thread_ts: "100.100" },
+        message: {
+          ts: "100.200",
+          text: "OpenClaw change approval required",
+          blocks: [
+            {
+              type: "actions",
+              block_id: "exec_actions",
+              elements: [{ type: "button", action_id: "openclaw:approval_button:1:1" }],
+            },
+          ],
+        },
+      },
+      action: {
+        type: "button",
+        action_id: "openclaw:approval_button:1:1",
+        block_id: "exec_actions",
+        value:
+          'openclaw:approval:v1:{"approvalId":"system-agent:0d939e63-1c97-4b53-9c6f-6caae6d95bd0","approvalKind":"system-agent","decision":"deny"}',
+        text: { type: "plain_text", text: "Deny" },
+      },
+    });
+
+    expect(resolveApprovalOverGatewayMock).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith({
+      text: "You are not authorized to approve this request.",
+      response_type: "ephemeral",
+    });
+  });
+
   it("authorizes plugin approval buttons only in the configured Grid workspace", async () => {
+    readSlackMessagesMock.mockResolvedValueOnce({
+      messages: [
+        { ts: "100.200", blocks: approvalButtonBlocks("req-123", "plugin", "allow-once") },
+      ],
+      hasMore: false,
+    });
     const { ctx, getHandler } = createContext({
       installationIdentity: { kind: "enterprise", enterpriseId: "E1" },
       cfg: {
@@ -1635,6 +1885,7 @@ describe("registerSlackInteractionEvents", () => {
     await invoke("T11111111");
     await invoke("T22222222");
 
+    expect(readSlackMessagesMock).toHaveBeenCalledOnce();
     expect(resolveApprovalOverGatewayMock).toHaveBeenCalledOnce();
     expect(resolveApprovalOverGatewayMock).toHaveBeenCalledWith({
       cfg: ctx.cfg,
@@ -1692,23 +1943,29 @@ describe("registerSlackInteractionEvents", () => {
   });
 
   it("cleans stale typed buttons and shows the canonical first-answer winner", async () => {
+    readSlackMessagesMock.mockResolvedValueOnce({
+      messages: [
+        {
+          ts: "100.200",
+          blocks: [
+            {
+              type: "section",
+              block_id: "openclaw_approval_header",
+              text: { type: "mrkdwn", text: "Current approval header" },
+            },
+            { type: "section", text: { type: "mrkdwn", text: "Command preview" } },
+            ...approvalButtonBlocks("req-123", "exec", "allow-once"),
+            ...approvalButtonBlocks("req-123", "exec", "deny"),
+          ],
+        },
+      ],
+      hasMore: false,
+    });
     resolveApprovalOverGatewayMock.mockResolvedValueOnce({
       applied: false,
-      approval: { status: "denied", decision: "deny" },
+      approval: { status: "denied", decision: "deny", presentation: { kind: "exec" } },
     });
-    const { ctx, app, getHandler } = createContext({
-      cfg: {
-        channels: {
-          slack: {
-            execApprovals: {
-              enabled: true,
-              approvers: ["U123"],
-              target: "both",
-            },
-          },
-        },
-      },
-    });
+    const { ctx, app, getHandler } = createContext();
     registerSlackInteractionEvents({ ctx: ctx as never });
 
     const respond = vi.fn().mockResolvedValue(undefined);
@@ -1779,19 +2036,11 @@ describe("registerSlackInteractionEvents", () => {
   });
 
   it("shows canonical typed approval truth when the clicked message update fails", async () => {
-    const { ctx, app, getHandler } = createContext({
-      cfg: {
-        channels: {
-          slack: {
-            execApprovals: {
-              enabled: true,
-              approvers: ["U123"],
-              target: "both",
-            },
-          },
-        },
-      },
+    readSlackMessagesMock.mockResolvedValueOnce({
+      messages: [{ ts: "100.200", blocks: approvalButtonBlocks("req-123", "exec", "allow-once") }],
+      hasMore: false,
     });
+    const { ctx, app, getHandler } = createContext();
     app.client.chat.update.mockRejectedValueOnce(new Error("message update failed"));
     registerSlackInteractionEvents({ ctx: ctx as never });
     const respond = vi.fn().mockResolvedValue(undefined);
@@ -1815,6 +2064,7 @@ describe("registerSlackInteractionEvents", () => {
       },
     });
 
+    expect(app.client.chat.update).toHaveBeenCalledOnce();
     expect(respond).toHaveBeenCalledWith({
       text: "Approval resolved: Allowed once.",
       response_type: "ephemeral",
@@ -1822,19 +2072,7 @@ describe("registerSlackInteractionEvents", () => {
   });
 
   it("tells the clicker when a typed approval is no longer pending", async () => {
-    const { ctx, app, getHandler } = createContext({
-      cfg: {
-        channels: {
-          slack: {
-            execApprovals: {
-              enabled: true,
-              approvers: ["U123"],
-              target: "both",
-            },
-          },
-        },
-      },
-    });
+    const { ctx, app, getHandler } = createContext();
     resolveApprovalOverGatewayMock.mockRejectedValueOnce(
       new Error("unknown or expired approval id"),
     );
@@ -1900,24 +2138,13 @@ describe("registerSlackInteractionEvents", () => {
   });
 
   it("uses the typed plugin kind for unprefixed approval ids", async () => {
-    const { ctx, app, getHandler } = createContext({
-      cfg: {
-        channels: {
-          slack: {
-            accounts: {
-              default: {
-                allowFrom: ["u123owner"],
-                execApprovals: {
-                  enabled: true,
-                  approvers: ["U999EXEC"],
-                  target: "both",
-                },
-              },
-            },
-          },
-        },
-      },
+    readSlackMessagesMock.mockResolvedValueOnce({
+      messages: [
+        { ts: "100.200", blocks: approvalButtonBlocks("req-123", "plugin", "allow-always") },
+      ],
+      hasMore: false,
     });
+    const { ctx, app, getHandler } = createContext(approvalContextOptions("u123owner", "U999EXEC"));
     registerSlackInteractionEvents({ ctx: ctx as never });
 
     const handler = getHandler();
@@ -1934,13 +2161,7 @@ describe("registerSlackInteractionEvents", () => {
         message: {
           ts: "100.200",
           text: "Plugin approval required",
-          blocks: [
-            {
-              type: "actions",
-              block_id: "plugin_actions",
-              elements: [{ type: "button", action_id: "openclaw:approval_button:1:1" }],
-            },
-          ],
+          blocks: singleButtonBlocks("plugin_actions", "openclaw:approval_button:1:1"),
         },
       },
       action: {
@@ -1981,24 +2202,7 @@ describe("registerSlackInteractionEvents", () => {
   });
 
   it("routes opaque legacy ids through the authorized plugin adapter", async () => {
-    const { ctx, app, getHandler } = createContext({
-      cfg: {
-        channels: {
-          slack: {
-            accounts: {
-              default: {
-                allowFrom: ["u123owner"],
-                execApprovals: {
-                  enabled: true,
-                  approvers: ["U999EXEC"],
-                  target: "both",
-                },
-              },
-            },
-          },
-        },
-      },
-    });
+    const { ctx, app, getHandler } = createContext(approvalContextOptions("u123owner", "U999EXEC"));
     registerSlackInteractionEvents({ ctx: ctx as never });
 
     const handler = getHandler();
@@ -2015,13 +2219,7 @@ describe("registerSlackInteractionEvents", () => {
         message: {
           ts: "100.200",
           text: "Plugin approval required",
-          blocks: [
-            {
-              type: "actions",
-              block_id: "plugin_actions",
-              elements: [{ type: "button", action_id: "openclaw:reply_button" }],
-            },
-          ],
+          blocks: singleButtonBlocks("plugin_actions", "openclaw:reply_button"),
         },
       },
       action: {
@@ -2060,26 +2258,11 @@ describe("registerSlackInteractionEvents", () => {
       .mockRejectedValueOnce(new Error("unknown or expired approval id"))
       .mockResolvedValueOnce({
         applied: true,
-        approval: { status: "allowed", decision: "allow-once" },
+        approval: { status: "allowed", decision: "allow-once", presentation: { kind: "exec" } },
       });
-    const { ctx, app, getHandler } = createContext({
-      cfg: {
-        channels: {
-          slack: {
-            accounts: {
-              default: {
-                allowFrom: ["U123OWNER"],
-                execApprovals: {
-                  enabled: true,
-                  approvers: ["U123OWNER"],
-                  target: "both",
-                },
-              },
-            },
-          },
-        },
-      },
-    });
+    const { ctx, app, getHandler } = createContext(
+      approvalContextOptions("U123OWNER", "U123OWNER"),
+    );
     registerSlackInteractionEvents({ ctx: ctx as never });
 
     await getHandler()({
@@ -2091,13 +2274,7 @@ describe("registerSlackInteractionEvents", () => {
         message: {
           ts: "100.200",
           text: "Plugin approval required",
-          blocks: [
-            {
-              type: "actions",
-              block_id: "plugin_actions",
-              elements: [{ type: "button", action_id: "openclaw:reply_button" }],
-            },
-          ],
+          blocks: singleButtonBlocks("plugin_actions", "openclaw:reply_button"),
         },
       },
       action: {
@@ -2135,24 +2312,7 @@ describe("registerSlackInteractionEvents", () => {
   });
 
   it("does not treat a plugin-looking legacy id as an owner signal", async () => {
-    const { ctx, app, getHandler } = createContext({
-      cfg: {
-        channels: {
-          slack: {
-            accounts: {
-              default: {
-                allowFrom: ["U123OWNER"],
-                execApprovals: {
-                  enabled: true,
-                  approvers: ["U999EXEC"],
-                  target: "both",
-                },
-              },
-            },
-          },
-        },
-      },
-    });
+    const { ctx, app, getHandler } = createContext(approvalContextOptions("U123OWNER", "U999EXEC"));
     registerSlackInteractionEvents({ ctx: ctx as never });
 
     const handler = getHandler();
@@ -2169,13 +2329,7 @@ describe("registerSlackInteractionEvents", () => {
         message: {
           ts: "100.200",
           text: "Plugin approval required",
-          blocks: [
-            {
-              type: "actions",
-              block_id: "plugin_actions",
-              elements: [{ type: "button", action_id: "openclaw:reply_button" }],
-            },
-          ],
+          blocks: singleButtonBlocks("plugin_actions", "openclaw:reply_button"),
         },
       },
       action: {
@@ -2275,13 +2429,7 @@ describe("registerSlackInteractionEvents", () => {
           message: {
             ts: "100.200",
             text: "Exec approval required",
-            blocks: [
-              {
-                type: "actions",
-                block_id: "exec_actions",
-                elements: [{ type: "button", action_id: "openclaw:reply_button" }],
-              },
-            ],
+            blocks: singleButtonBlocks("exec_actions", "openclaw:reply_button"),
           },
         },
         action: {
@@ -2330,13 +2478,7 @@ describe("registerSlackInteractionEvents", () => {
         message: {
           ts: "100.200",
           text: "Exec approval required",
-          blocks: [
-            {
-              type: "actions",
-              block_id: "exec_actions",
-              elements: [{ type: "button", action_id: "openclaw:reply_button" }],
-            },
-          ],
+          blocks: singleButtonBlocks("exec_actions", "openclaw:reply_button"),
         },
       },
       action: {
@@ -2645,13 +2787,7 @@ describe("registerSlackInteractionEvents", () => {
         message: {
           ts: "777.888",
           text: "fallback",
-          blocks: [
-            {
-              type: "actions",
-              block_id: "verify_block",
-              elements: [{ type: "button", action_id: "openclaw:verify" }],
-            },
-          ],
+          blocks: singleButtonBlocks("verify_block", "openclaw:verify"),
         },
       },
       action: "not-an-action-object" as unknown as Record<string, unknown>,

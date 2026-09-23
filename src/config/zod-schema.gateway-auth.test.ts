@@ -1,6 +1,45 @@
 import { describe, expect, test } from "vitest";
 import { OpenClawSchema } from "./zod-schema.js";
 
+describe("Cloudflare Access OIDC GitHub identity config", () => {
+  const trusted = {
+    issuer: "https://example.cloudflareaccess.com",
+    providerId: "verified-provider",
+    githubAccountIdClaim: "https://openclaw.ai/github-account-id",
+  };
+
+  test.each([
+    { name: "explicit mapping", mapping: trusted, success: true },
+    {
+      name: "non-Access issuer",
+      mapping: { ...trusted, issuer: "https://example.test" },
+      success: false,
+    },
+    {
+      name: "HTTP issuer",
+      mapping: { ...trusted, issuer: "http://example.cloudflareaccess.com" },
+      success: false,
+    },
+    { name: "blank provider", mapping: { ...trusted, providerId: " " }, success: false },
+    { name: "blank claim", mapping: { ...trusted, githubAccountIdClaim: " " }, success: false },
+    { name: "incomplete mapping", mapping: { issuer: trusted.issuer }, success: false },
+  ])("validates $name", ({ mapping, success }) => {
+    expect(
+      OpenClawSchema.safeParse({
+        gateway: {
+          auth: {
+            mode: "trusted-proxy",
+            trustedProxy: {
+              userHeader: "cf-access-authenticated-user-email",
+              cloudflareAccessOidc: mapping,
+            },
+          },
+        },
+      }).success,
+    ).toBe(success);
+  });
+});
+
 describe("gateway trusted-proxy device auto-approval config", () => {
   test("accepts bounded non-admin scopes", () => {
     const result = OpenClawSchema.safeParse({
@@ -109,6 +148,24 @@ describe("gateway operator role config", () => {
     expect(result.success).toBe(true);
   });
 
+  test("accepts an access-policy plugin reference without plugin configuration", () => {
+    const result = OpenClawSchema.parse({
+      gateway: {
+        roles: {
+          default: "guest",
+          definitions: {
+            guest: { ...validRole, accessPolicyPlugin: " unavailable-access-policy " },
+          },
+        },
+      },
+    });
+
+    expect(result.gateway?.roles?.definitions.guest).toEqual({
+      ...validRole,
+      accessPolicyPlugin: "unavailable-access-policy",
+    });
+  });
+
   test.each([
     { name: "unknown session permission", role: { ...validRole, sessions: { others: "edit" } } },
     { name: "unknown sandbox policy", role: { ...validRole, sandbox: "optional" } },
@@ -116,6 +173,15 @@ describe("gateway operator role config", () => {
     { name: "resource wildcard expression", role: { ...validRole, agents: "agent:*" } },
     { name: "wildcard in an agent allowlist", role: { ...validRole, agents: ["*"] } },
     { name: "blank allowed agent", role: { ...validRole, agents: [" "] } },
+    { name: "blank access-policy plugin", role: { ...validRole, accessPolicyPlugin: " " } },
+    {
+      name: "multiple access-policy plugins",
+      role: { ...validRole, accessPolicyPlugin: ["first-policy", "second-policy"] },
+    },
+    {
+      name: "overlong access-policy plugin",
+      role: { ...validRole, accessPolicyPlugin: "a".repeat(129) },
+    },
     { name: "missing session policy", role: { agents: "*", scopes: ["operator.read"] } },
     { name: "freeform capability", role: { ...validRole, capability: "sessions.delete" } },
   ])("rejects $name", ({ role }) => {

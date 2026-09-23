@@ -3,10 +3,13 @@ import { property } from "lit/decorators.js";
 import { OpenClawLitElement } from "../lit/openclaw-element.ts";
 
 export type PanelLoadingSkeletonVariant =
+  | "board"
   | "browser"
   | "chat"
   | "desktop"
   | "discussion"
+  | "document"
+  | "file-list"
   | "files"
   | "review"
   | "tasks"
@@ -19,6 +22,8 @@ class PanelLoadingSkeleton extends OpenClawLitElement {
   @property({ type: Boolean, reflect: true }) compact = false;
 
   @property({ type: Boolean, reflect: true }) overlay = false;
+
+  @property() label = "";
 
   static override styles = css`
     :host {
@@ -33,6 +38,32 @@ class PanelLoadingSkeleton extends OpenClawLitElement {
     :host([compact]) {
       min-height: 0;
       padding: 8px;
+    }
+
+    :host([data-panel-skeleton="desktop"]) {
+      display: flex;
+      flex: 1;
+      min-height: 0;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .desktop-loading {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+      text-align: center;
+      font-size: 13px;
+    }
+
+    .desktop-spinner {
+      width: 24px;
+      height: 24px;
+      border: 2px solid var(--border);
+      border-top-color: var(--muted);
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
     }
 
     :host([overlay]) {
@@ -98,7 +129,6 @@ class PanelLoadingSkeleton extends OpenClawLitElement {
     .row,
     .toolbar,
     .bubble,
-    .card,
     .summary {
       display: flex;
       gap: 10px;
@@ -153,13 +183,6 @@ class PanelLoadingSkeleton extends OpenClawLitElement {
       flex: 0 0 auto;
     }
 
-    .card {
-      min-height: 58px;
-      padding: 10px;
-      border: 1px solid var(--border);
-      border-radius: 8px;
-    }
-
     .summary {
       margin-bottom: 16px;
     }
@@ -211,6 +234,63 @@ class PanelLoadingSkeleton extends OpenClawLitElement {
       border-radius: 8px;
     }
 
+    /* Mirrors board.css: a 38px tab strip over a 12-column grid with 56px rows,
+       so the placeholder occupies the same footprint as the widgets it precedes. */
+    .board-tabs {
+      display: flex;
+      gap: 14px;
+      align-items: center;
+      min-height: 38px;
+      margin-bottom: 12px;
+      padding: 0 13px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .tab {
+      width: 64px;
+      height: 10px;
+      border-radius: 5px;
+    }
+
+    .board-grid {
+      container-type: inline-size;
+      display: grid;
+      gap: 12px;
+      grid-auto-rows: 56px;
+      grid-template-columns: repeat(12, minmax(0, 1fr));
+    }
+
+    .widget {
+      display: grid;
+      grid-template-rows: 38px minmax(0, 1fr);
+      min-height: 0;
+      min-width: 0;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+    }
+
+    @container (max-width: 560px) {
+      .widget {
+        grid-column: 1 / -1 !important;
+      }
+    }
+
+    .widget-bar {
+      display: flex;
+      gap: 7px;
+      align-items: center;
+      padding: 0 12px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .widget-body {
+      display: grid;
+      gap: 10px;
+      align-content: start;
+      padding: 12px;
+    }
+
     @keyframes shimmer {
       from {
         transform: translateX(-100%);
@@ -220,10 +300,16 @@ class PanelLoadingSkeleton extends OpenClawLitElement {
       }
     }
 
+    @keyframes spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+
     @media (prefers-reduced-motion: reduce) {
+      .desktop-spinner,
       .skeleton::after {
-        animation-duration: 0.01ms;
-        animation-iteration-count: 1;
+        animation: none;
       }
     }
   `;
@@ -247,8 +333,32 @@ class PanelLoadingSkeleton extends OpenClawLitElement {
     );
   }
 
+  private widget(columns: number, rows: number, lines: Array<"short" | "medium" | "long">) {
+    return html`
+      <div class="widget" style=${`grid-column: span ${columns}; grid-row: span ${rows}`}>
+        <div class="widget-bar">
+          <div class="skeleton icon"></div>
+          ${this.line("short")}
+        </div>
+        <div class="widget-body">${lines.map((width) => this.line(width))}</div>
+      </div>
+    `;
+  }
+
   private renderContent() {
     switch (this.variant) {
+      case "board":
+        return html`
+          <div class="board-tabs">
+            <div class="skeleton tab"></div>
+            <div class="skeleton tab"></div>
+          </div>
+          <div class="board-grid">
+            ${this.widget(6, 4, ["long", "medium", "short"])}
+            ${this.widget(6, 4, ["medium", "long"])} ${this.widget(4, 3, ["medium", "short"])}
+            ${this.widget(8, 3, ["long", "medium", "long"])}
+          </div>
+        `;
       case "browser":
         return html`
           <div class="toolbar">
@@ -268,8 +378,10 @@ class PanelLoadingSkeleton extends OpenClawLitElement {
         `;
       case "desktop":
         return html`
-          <div class="toolbar">${this.line("medium")}</div>
-          <div class="rows">${this.rows(3).map((row) => html`<div class="card">${row}</div>`)}</div>
+          <div class="desktop-loading">
+            <span class="desktop-spinner" aria-hidden="true"></span>
+            <span>${this.label}</span>
+          </div>
         `;
       case "discussion":
         return html`
@@ -277,6 +389,16 @@ class PanelLoadingSkeleton extends OpenClawLitElement {
             <div class="conversation">
               ${this.line("medium")} ${this.line()} ${this.line("long")} ${this.line("short")}
             </div>
+          </div>
+        `;
+      case "file-list":
+        return html`<div class="rows">${this.rows(5)}</div>`;
+      case "document":
+        return html`
+          <div class="skeleton file-heading medium"></div>
+          <div class="code">
+            ${this.line()} ${this.line()} ${this.line("medium")} ${this.line()}
+            ${this.line("short")}
           </div>
         `;
       case "review":
@@ -331,6 +453,7 @@ export function renderPanelLoadingSkeleton(
   return html`
     <openclaw-panel-loading-skeleton
       .variant=${variant}
+      .label=${label}
       ?compact=${compact}
       ?overlay=${overlay}
       role="status"

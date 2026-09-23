@@ -10,6 +10,7 @@ import type {
   AgentToolResultMiddlewareOptions,
 } from "./agent-tool-result-middleware-types.js";
 import type { PluginBoardWidgetContentKind } from "./board-widget-content-kind.types.js";
+import type { PluginCapabilityCatalogContext } from "./capability-catalog-context.types.js";
 import type {
   ImageGenerationProviderPlugin,
   MediaUnderstandingProviderPlugin,
@@ -24,6 +25,7 @@ import type {
 import type { CliBackendPlugin, PluginTextTransforms } from "./cli-backend.types.js";
 import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
 import type { PluginConversationBindingResolvedEvent } from "./conversation-binding.types.js";
+import type { PluginGatewayAccessPolicy } from "./gateway-access-policy.types.js";
 import type {
   PluginHookHandlerMap,
   PluginHookName,
@@ -166,7 +168,9 @@ type OpenClawPluginRunContextApi = {
   clearRunContext: (params: { runId: string; namespace?: string }) => void;
 };
 
-type OpenClawPluginLifecycleApi = {
+type OpenClawPluginLifecycleApi = Partial<
+  import("./plugin-instance.types.js").PluginInstanceLifecycle
+> & {
   /** Register cleanup hooks for plugin-owned host state and background work. */
   registerRuntimeLifecycle: (lifecycle: PluginRuntimeLifecycleRegistration) => void;
 };
@@ -182,6 +186,8 @@ export type OpenClawPluginApi = {
   version?: string;
   description?: string;
   source: string;
+  /** Selected runtime entrypoint, independent of setup; absent without runtime artifact selection. */
+  readonly runtimeSource?: string;
   rootDir?: string;
   registrationMode: PluginRegistrationMode;
   config: OpenClawConfig;
@@ -206,7 +212,7 @@ export type OpenClawPluginApi = {
   /** Grouped facade for plugin-owned lifecycle cleanup hooks. */
   lifecycle: OpenClawPluginLifecycleApi;
   registerTool: (
-    tool: AnyAgentTool | OpenClawPluginToolFactory,
+    tool: AnyAgentTool | OpenClawPluginToolFactory | OpenClawPluginToolFactory<2>,
     opts?: OpenClawPluginToolOptions,
   ) => void;
   registerHook: (
@@ -239,6 +245,8 @@ export type OpenClawPluginApi = {
       profileAccess?: "independent" | "required";
     },
   ) => void;
+  /** Add a plugin-owned lifetime requirement to authenticated person admission. */
+  registerGatewayAccessPolicy: (policy: PluginGatewayAccessPolicy) => void;
   /** Register a sandboxed board widget source kind owned by this plugin. */
   registerBoardWidgetContentKind: (definition: PluginBoardWidgetContentKind) => void;
   /** Register a read-only external-session catalog with optional native adoption actions. */
@@ -284,12 +292,24 @@ export type OpenClawPluginApi = {
   registerEmbeddingProvider: (
     adapter: import("./embedding-providers.js").EmbeddingProviderAdapter,
   ) => void;
-  /** Register a speech synthesis provider (speech capability). */
-  registerSpeechProvider: (provider: SpeechProviderPlugin) => void;
-  /** Register a realtime transcription provider (streaming STT capability). */
-  registerRealtimeTranscriptionProvider: (provider: RealtimeTranscriptionProviderPlugin) => void;
-  /** Register a realtime voice provider (duplex voice capability). */
-  registerRealtimeVoiceProvider: (provider: RealtimeVoiceProviderPlugin) => void;
+  /** Register a speech descriptor or synchronous factory bound to native host operations. */
+  registerSpeechProvider: (
+    provider:
+      | SpeechProviderPlugin
+      | ((context: PluginCapabilityCatalogContext) => SpeechProviderPlugin),
+  ) => void;
+  /** Register a transcription descriptor or synchronous factory bound to native host operations. */
+  registerRealtimeTranscriptionProvider: (
+    provider:
+      | RealtimeTranscriptionProviderPlugin
+      | ((context: PluginCapabilityCatalogContext) => RealtimeTranscriptionProviderPlugin),
+  ) => void;
+  /** Register a voice descriptor or synchronous factory bound to native host operations. */
+  registerRealtimeVoiceProvider: (
+    provider:
+      | RealtimeVoiceProviderPlugin
+      | ((context: PluginCapabilityCatalogContext) => RealtimeVoiceProviderPlugin),
+  ) => void;
   /** Register a media understanding provider (media understanding capability). */
   registerMediaUnderstandingProvider: (provider: MediaUnderstandingProviderPlugin) => void;
   /** Register a transcripts source provider (live or imported meeting transcript capability). */
@@ -316,6 +336,8 @@ export type OpenClawPluginApi = {
   registerCommand: (command: OpenClawPluginCommandDefinition) => void;
   /** Register a context engine implementation (exclusive slot - only one active at a time). */
   registerContextEngine: (id: string, factory: ContextEngineFactory) => void;
+  /** Register one version 1 typed decision provider declared in the manifest. */
+  registerDecisionProvider: (provider: import("../decisions/types.js").DecisionProviderV1) => void;
   /** Register a compaction provider (pluggable summarization backend). */
   registerCompactionProvider: (
     provider: import("./compaction-provider.js").CompactionProvider,

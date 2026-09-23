@@ -2,6 +2,7 @@ import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
   type AdmittedRunContext,
+  type AdmittedRunOperatorAuthority,
   type PreparedAgentRunAdmission,
 } from "../../agents/admitted-run-context.js";
 import type { ExecutionIdentityAdmissionFacts } from "../../audit/execution-identity-admission.js";
@@ -40,7 +41,7 @@ export function consumeChannelRunAdmission(evidence: ChannelAdmissionEvidence | 
     onAdmitted: (context) => {
       const token = context.executionIdentityToken;
       if (token && admission.decisionCoverage && admission.identifierAuthentication) {
-        recordChannelAdmissionDecision({
+        recordChannelAdmissionDecision(evidence, {
           contextId: token.contextId,
           executionId: token.executionId,
           runId: token.runId,
@@ -61,13 +62,31 @@ export function prepareChannelRunAdmission(params: {
   ingressKind: ExecutionIdentityAdmissionFacts["ingress"]["kind"];
   boundary: string;
   evidence?: ChannelAdmissionEvidence;
+  assertSourceCurrent?: () => void;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
   onAdmitted?: (context: AdmittedRunContext) => void;
 }): PreparedAgentRunAdmission {
   const operationalRunInstance = createOperationalRunInstanceRef(params.runId);
   let prepared: PreparedAgentRunAdmission | undefined;
   let closed = false;
+  const assertSourceCurrent = () => {
+    if (prepared) {
+      prepared.assertSourceCurrent();
+      return;
+    }
+    params.assertSourceCurrent?.();
+    params.operatorAuthority?.assertCurrent();
+  };
   return Object.freeze({
     operationalRunInstance,
+    assertSourceCurrent,
+    readOperatorAuthority: () => {
+      if (closed && params.operatorAuthority) {
+        throw new Error("prepared operator authority is no longer active");
+      }
+      assertSourceCurrent();
+      return params.operatorAuthority;
+    },
     admit: (runtimeKind, runtimeInstanceId) => {
       if (closed) {
         return Promise.reject(new Error("prepared execution context is already closed"));
@@ -76,7 +95,9 @@ export function prepareChannelRunAdmission(params: {
         const channelAdmission = consumeChannelRunAdmission(params.evidence);
         prepared = prepareAgentRunAdmission({
           cfg: params.cfg,
+          assertSourceCurrent: params.assertSourceCurrent,
           operationalRunInstance,
+          operatorAuthority: params.operatorAuthority,
           facts: {
             runId: params.runId,
             agentId: params.agentId,

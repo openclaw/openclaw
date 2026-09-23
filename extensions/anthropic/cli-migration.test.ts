@@ -4,6 +4,7 @@ import type {
   ProviderAuthMethodNonInteractiveContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createRuntimeSpies } from "../test-support/runtime-spies.js";
 
 const { probeClaudeCliAuthStatus } = vi.hoisted(() => ({
   probeClaudeCliAuthStatus: vi.fn(),
@@ -126,11 +127,7 @@ function createProviderAuthContext(
     agentDir: "/tmp/openclaw/agents/main",
     workspaceDir: "/tmp/openclaw/workspace",
     prompter: createTestWizardPrompter(),
-    runtime: {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    },
+    runtime: createRuntimeSpies(),
     allowSecretRefPrompt: false,
     isRemote: false,
     openUrl: vi.fn(),
@@ -148,11 +145,7 @@ function createProviderAuthMethodNonInteractiveContext(
     config,
     baseConfig: config,
     opts: {},
-    runtime: {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    },
+    runtime: createRuntimeSpies(),
     agentDir: "/tmp/openclaw/agents/main",
     workspaceDir: "/tmp/openclaw/workspace",
     resolveApiKey: vi.fn(async () => null),
@@ -197,6 +190,7 @@ describe("anthropic cli migration", () => {
               agentRuntime: { id: "claude-cli" },
             },
             "openai/gpt-5.2": {},
+            "anthropic/claude-opus-5-5": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-opus-5": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-opus-4-8": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-sonnet-5": { agentRuntime: { id: "claude-cli" } },
@@ -288,6 +282,7 @@ describe("anthropic cli migration", () => {
         defaults: {
           models: {
             "openai/gpt-5.2": {},
+            "anthropic/claude-opus-5-5": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-opus-5": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-opus-4-8": { agentRuntime: { id: "claude-cli" } },
@@ -336,6 +331,7 @@ describe("anthropic cli migration", () => {
         defaults: {
           model: { primary: "anthropic/claude-opus-4-7" },
           models: {
+            "anthropic/claude-opus-5-5": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-opus-5": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-opus-4-8": { agentRuntime: { id: "claude-cli" } },

@@ -1,95 +1,160 @@
-import path from "node:path";
 import {
   ErrorCodes,
   errorShape,
-  validateTranscriptsGetParams,
   validateTranscriptsListParams,
+  validateTranscriptsGetParams,
+  validateTranscriptsSummarizeParams,
+  validateTranscriptsExportParams,
+  validateTranscriptsStatusParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
-import {
-  isTranscriptSessionActive,
-  resolveSourceProvider,
-} from "../../agents/tools/transcripts-tool-runtime.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createTranscriptsStore } from "../../transcripts/capture-operations.js";
+import { ensureTranscriptSummary } from "../../transcripts/capture-summary.js";
+import { resolveSourceProvider } from "../../transcripts/capture.js";
 import { resolveTranscriptsConfig } from "../../transcripts/config.js";
-import { projectTranscriptSession, readTranscriptNotes } from "../../transcripts/read.js";
-import type { TranscriptReadEntry } from "../../transcripts/store-read.js";
-import { TranscriptsStore } from "../../transcripts/store.js";
-import { truncateUtf16Safe } from "../../utils.js";
-import type { GatewayRequestHandlers } from "./types.js";
-import { assertValidParams } from "./validation.js";
+import {
+  exportTranscriptLibrary,
+  getTranscriptLibrary,
+  listTranscriptLibrary,
+} from "../../transcripts/library.js";
+import { readTranscriptLibraryStatus } from "../../transcripts/status.js";
+import { TranscriptLibraryError } from "../../transcripts/store-read.js";
+import type { TranscriptsStore } from "../../transcripts/store.js";
+import { operatorSessionCap } from "../operator-role-policy.js";
+import { isGatewayAdmin } from "../session-sharing.js";
+import { formatForLog } from "../ws-log.js";
+import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
+import type { GatewayRequestHandler, GatewayRequestHandlers } from "./types.js";
+import { assertValidParams, type Validator } from "./validation.js";
 
-function createStore() {
-  const stateDir = resolveStateDir();
-  return new TranscriptsStore(path.join(stateDir, "transcripts"), {
-    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-  });
-}
-
-function projectSessions(entries: TranscriptReadEntry[], config: OpenClawConfig) {
-  const names = new Map<string, string | undefined>();
-  return entries.map((entry) => {
-    const providerId = entry.session.source.providerId;
-    if (!names.has(providerId)) {
-      names.set(
-        providerId,
-        resolveSourceProvider(providerId, { config, stateDir: resolveStateDir(), logger: console })
-          ?.name,
-      );
-    }
-    return projectTranscriptSession(
-      entry,
-      isTranscriptSessionActive(entry.session),
-      names.get(providerId),
-    );
-  });
-}
-
-export const transcriptsHandlers: GatewayRequestHandlers = {
-  "transcripts.list": async ({ params, respond, context }) => {
-    if (!assertValidParams(params, validateTranscriptsListParams, "transcripts.list", respond)) {
+function transcriptMethod<T>(
+  method: string,
+  validate: Validator<T>,
+  read: (
+    store: TranscriptsStore,
+    params: T,
+    cfg: OpenClawConfig,
+    assertCurrent: () => void,
+  ) => Promise<unknown>,
+): GatewayRequestHandler {
+  return async (options) => {
+    const { params, context, client, respond } = options;
+    if (!assertValidParams(params, validate, method, respond)) {
       return;
     }
-    const entries = createStore().listReadEntries({
-      limit: params.limit ?? 50,
-      providerId: params.providerId,
-    });
-    respond(true, { sessions: projectSessions(entries, context.getRuntimeConfig()) });
-  },
-  "transcripts.get": async ({ params, respond, context }) => {
-    if (!assertValidParams(params, validateTranscriptsGetParams, "transcripts.get", respond)) {
-      return;
-    }
-    const store = createStore();
-    const session = await store.readSession(params.selector);
-    if (!session) {
+    const cfg = context.getRuntimeConfig();
+    // Meeting rows have agent attribution but no person owner. Mirror global
+    // aggregate visibility; an agent filter cannot make hidden archive data readable.
+    if (!isGatewayAdmin(client) && operatorSessionCap(client, cfg) === "none") {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "transcripts session not found", {
-          details: { type: "transcript_session_not_found", selector: params.selector },
-        }),
+        errorShape(
+          ErrorCodes.FORBIDDEN,
+          "The transcript archive includes sessions hidden by your operator role; ask a Gateway administrator for archive access.",
+        ),
       );
       return;
     }
-    const config = context.getRuntimeConfig();
-    const entries = store.listReadEntries({ limit: 1, session });
-    const summary = await readTranscriptNotes(store, session);
-    const utterances = params.includeUtterances
-      ? store
-          .readUtteranceEntries(session, resolveTranscriptsConfig(config.transcripts).maxUtterances)
-          .map((row) => ({
-            sequence: row.sequence,
-            startedAt: row.started_at ?? undefined,
-            endedAt: row.ended_at ?? undefined,
-            speakerId: row.speaker_id ?? undefined,
-            speakerLabel:
-              row.speaker_label === null ? undefined : sanitizeTerminalText(row.speaker_label),
-            text: truncateUtf16Safe(sanitizeTerminalText(row.text), 4000),
-            final: row.final === null ? undefined : row.final === 1,
-          }))
-      : undefined;
-    respond(true, { session: projectSessions(entries, config)[0], summary, utterances });
-  },
+    try {
+      const store = createTranscriptsStore({
+        stateDir: resolveStateDir(),
+        config: cfg,
+        logger: console,
+      });
+      const authority = readGatewayRequestMutationAuthority(options);
+      const assertCurrent = () => {
+        authority.assertCurrent();
+        if (
+          !isGatewayAdmin(client) &&
+          operatorSessionCap(client, context.getRuntimeConfig()) === "none"
+        ) {
+          throw new Error("Transcript archive access changed");
+        }
+      };
+      respond(true, await read(store, params, cfg, assertCurrent));
+    } catch (error) {
+      if (!(error instanceof TranscriptLibraryError)) {
+        context.logGateway.warn(`${method} failed: ${formatForLog(error)}`);
+      }
+      respond(
+        false,
+        undefined,
+        error instanceof TranscriptLibraryError
+          ? errorShape(ErrorCodes.INVALID_REQUEST, error.message, {
+              details: {
+                type: error.type,
+                ...(error.maxBytes !== undefined ? { maxBytes: error.maxBytes } : {}),
+              },
+            })
+          : errorShape(
+              ErrorCodes.UNAVAILABLE,
+              `${method === "transcripts.summarize" ? "The meeting summary could not be generated" : "The transcript archive could not be read"}. Check Gateway diagnostics and retry.`,
+            ),
+      );
+    }
+  };
+}
+
+export const transcriptsHandlers: GatewayRequestHandlers = {
+  "transcripts.list": transcriptMethod(
+    "transcripts.list",
+    validateTranscriptsListParams,
+    (store, params, cfg) => listTranscriptLibrary(store, params, providerNames(cfg)),
+  ),
+  "transcripts.get": transcriptMethod(
+    "transcripts.get",
+    validateTranscriptsGetParams,
+    (store, params, cfg) => getTranscriptLibrary(store, params, providerNames(cfg)),
+  ),
+  "transcripts.summarize": transcriptMethod(
+    "transcripts.summarize",
+    validateTranscriptsSummarizeParams,
+    async (store, params, cfg, assertCurrent) => {
+      const { entry } = await store.readLibraryEntry(params);
+      assertCurrent();
+      if (!entry.hasSummary && entry.utteranceCount > 0) {
+        await ensureTranscriptSummary({
+          store,
+          session: entry.session,
+          config: resolveTranscriptsConfig(cfg.transcripts),
+          cfg,
+          allowAppends: entry.session.stoppedAt === undefined,
+          assertCurrent,
+        });
+      }
+      assertCurrent();
+      const result = await getTranscriptLibrary(store, params, providerNames(cfg));
+      assertCurrent();
+      return result;
+    },
+  ),
+  "transcripts.export": transcriptMethod(
+    "transcripts.export",
+    validateTranscriptsExportParams,
+    exportTranscriptLibrary,
+  ),
+  "transcripts.status": transcriptMethod(
+    "transcripts.status",
+    validateTranscriptsStatusParams,
+    (store, _params, cfg) => readTranscriptLibraryStatus(store, cfg),
+  ),
 };
+
+function providerNames(config: OpenClawConfig) {
+  const names = new Map<string, string | undefined>();
+  return (providerId: string) => {
+    if (!names.has(providerId)) {
+      names.set(
+        providerId,
+        resolveSourceProvider(providerId, {
+          config,
+          stateDir: resolveStateDir(),
+          logger: console,
+        })?.name,
+      );
+    }
+    return names.get(providerId);
+  };
+}

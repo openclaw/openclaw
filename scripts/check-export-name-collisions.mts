@@ -627,27 +627,25 @@ export function resolveExportModulePath(
   return candidates.find((candidate) => modulesByPath.has(candidate)) ?? null;
 }
 
-function collectTransitiveExportNames(
-  modulePath: string,
-  modulesByPath: ReadonlyMap<string, ModuleExports>,
-  visiting = new Set<string>(),
-): Set<string> {
-  if (visiting.has(modulePath)) {
-    return new Set();
-  }
-  const moduleExports = modulesByPath.get(modulePath);
-  if (!moduleExports) {
-    return new Set();
-  }
-  const nextVisiting = new Set(visiting).add(modulePath);
-  const names = new Set(moduleExports.exportedNames);
-  for (const specifier of moduleExports.starExportSpecifiers) {
-    const targetPath = resolveExportModulePath(modulePath, specifier, modulesByPath);
-    if (!targetPath) {
+function collectSdkExportNames(modulesByPath: ReadonlyMap<string, ModuleExports>): Set<string> {
+  const names = new Set<string>();
+  const reachablePaths = new Set(
+    [...modulesByPath.keys()].filter((modulePath) => modulePath.startsWith("src/plugin-sdk/")),
+  );
+  // Set iteration visits newly added targets once, including shared and cyclic barrels.
+  for (const modulePath of reachablePaths) {
+    const moduleExports = modulesByPath.get(modulePath);
+    if (!moduleExports) {
       continue;
     }
-    for (const name of collectTransitiveExportNames(targetPath, modulesByPath, nextVisiting)) {
+    for (const name of moduleExports.exportedNames) {
       names.add(name);
+    }
+    for (const specifier of moduleExports.starExportSpecifiers) {
+      const targetPath = resolveExportModulePath(modulePath, specifier, modulesByPath);
+      if (targetPath) {
+        reachablePaths.add(targetPath);
+      }
     }
   }
   return names;
@@ -657,11 +655,34 @@ function collectTransitiveExportNames(
 // exports its own `testing`/`testApi` object and tests import it qualified from that
 // exact module. Flagging them would push burn-down work to "fix" a deliberate idiom.
 const intentionalSameNameFamilies = new Set(["testing", "testApi"]);
+// The handoff build substitutes this exact module pair, so both loaders must
+// implement the same export. A third implementation is still a collision.
+const managedHandoffNativeLoaderModules = [
+  "src/infra/update-managed-service-handoff-native-loader.ts",
+  "src/shared/freebsd-process-identity-native.ts",
+];
+// These module owners implement fixed names required by the worker loaders.
+// Other modules remain collisions, including while these consumers land separately.
+const sqliteWorkerProtocolModules = new Map<string, ReadonlySet<string>>([
+  [
+    "openExistingSqliteWorkerBackend",
+    new Set(["src/state/openclaw-state.worker.ts", "src/state/openclaw-agent-execution.worker.ts"]),
+  ],
+  [
+    "bindSqliteWorkerBackend",
+    new Set([
+      "src/agents/auth-profiles/inline-usage.worker.ts",
+      "src/boards/sqlite-board-store.worker.ts",
+      "src/agents/sessions/session-manager-metadata.worker.ts",
+      "src/config/sessions/session-sharing-store.worker.ts",
+      "src/infra/heartbeat-outcome-store.worker.ts",
+    ]),
+  ],
+]);
 
 function analyzeExportNames(modules: SourceModule[]) {
   const aliasingReExports: AliasingReExport[] = [];
   const filesByName = new Map<string, Set<string>>();
-  const sdkExportNames = new Set<string>();
   const modulesByPath = new Map<string, ModuleExports>();
   for (const sourceModule of modules.toSorted((left, right) =>
     left.path.localeCompare(right.path),
@@ -685,18 +706,19 @@ function analyzeExportNames(modules: SourceModule[]) {
       }
     }
   }
-  for (const modulePath of modulesByPath.keys()) {
-    if (!modulePath.startsWith("src/plugin-sdk/")) {
-      continue;
-    }
-    for (const name of collectTransitiveExportNames(modulePath, modulesByPath)) {
-      sdkExportNames.add(name);
-    }
-  }
+  const sdkExportNames = collectSdkExportNames(modulesByPath);
 
   const collisions: ExportNameCollision[] = [];
   for (const [name, fileSet] of filesByName) {
-    if (fileSet.size < 2 || intentionalSameNameFamilies.has(name)) {
+    const protocolModules = sqliteWorkerProtocolModules.get(name);
+    if (
+      fileSet.size < 2 ||
+      intentionalSameNameFamilies.has(name) ||
+      (name === "loadFreeBsdProcessIdentityNative" &&
+        fileSet.size === managedHandoffNativeLoaderModules.length &&
+        managedHandoffNativeLoaderModules.every((file) => fileSet.has(file))) ||
+      (protocolModules !== undefined && [...fileSet].every((file) => protocolModules.has(file)))
+    ) {
       continue;
     }
     const collision: ExportNameCollision = {

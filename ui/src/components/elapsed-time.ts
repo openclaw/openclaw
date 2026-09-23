@@ -1,7 +1,7 @@
 // Live elapsed-time label that ticks once per second while the work runs.
 import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
-import { formatDurationCompact, formatDurationHuman } from "../lib/format.ts";
+import { formatDurationCompact, formatDurationHuman } from "../lib/format-duration.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { PollController } from "../lit/poll-controller.ts";
 

@@ -1,7 +1,9 @@
 import { settleProgressVisibilityCallbackResult } from "../../channels/progress-visibility.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
+import { sessionPersonalProfileId } from "../../config/sessions/session-entry-provenance.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { isFastModeAutoProgressPayload } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
@@ -16,6 +18,8 @@ import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
 import { recordReplyOperationAgentTurn } from "./reply-operation-run-state.js";
 import { hasReplyOperationExecutionStarted } from "./reply-run-registry.js";
+import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
+import { resolveSourceReplyExpectation } from "./source-reply-delivery-mode.js";
 import { createTypingSignaler, type TypingSignaler } from "./typing-mode.js";
 
 export type FollowupExecutionResult = {
@@ -76,6 +80,18 @@ export async function executeFollowupTurn(params: {
 }): Promise<FollowupExecutionResult> {
   const { turn, defaults } = params;
   const sourceOpts = defaults.opts;
+  const terminalReplyExpectation =
+    turn.queued.run.terminalReplyExpectation ??
+    resolveSourceReplyExpectation({
+      ctx: {
+        InboundEventKind: turn.queued.currentInboundEventKind,
+        InputProvenance: turn.queued.run.inputProvenance,
+      },
+      cfg: turn.config,
+    });
+  turn.queued.run.terminalReplyExpectation = terminalReplyExpectation;
+  // Heartbeats can refresh a drain callback but never enter its queue.
+  const isHeartbeat = false;
   const roomEvent = turn.queued.currentInboundEventKind === "room_event";
   const progressAllowed = () => turn.sendPolicy === "allow" && !roomEvent;
   const currentVerboseLevel = (): VerboseLevel => {
@@ -118,9 +134,13 @@ export async function executeFollowupTurn(params: {
   const shouldEmitToolResult = () =>
     progressAllowed() && (forceToolResultProgress || shouldEmitVerboseToolResult());
   const shouldEmitToolOutput = () => progressAllowed() && currentVerboseLevel() === "full";
+  // Quiet channel drafts consume typed activity without enabling formatted result text.
+  const shouldEmitStructuredProgress = () =>
+    progressAllowed() &&
+    (sourceOpts?.suppressDefaultToolProgressMessages === true || shouldEmitToolResult());
   const shouldEmitToolLifecycle = () =>
     progressAllowed() &&
-    (shouldEmitToolResult() || defaults.opts?.allowToolLifecycleWhenProgressHidden === true);
+    (shouldEmitStructuredProgress() || sourceOpts?.allowToolLifecycleWhenProgressHidden === true);
   const { commentaryPayloadsEnabled, draftOwnsCommentaryProgress } =
     resolveTurnCommentaryProgressOwner({
       commentaryPayloadsEnabled: sourceOpts?.commentaryPayloadsEnabled === true,
@@ -128,6 +148,7 @@ export async function executeFollowupTurn(params: {
       resolveVerboseProgressVisibility: () => progressAllowed() && shouldEmitVerboseToolResult(),
     });
   let progressChain: Promise<void> = Promise.resolve();
+  let visibleReplyDelivered = false;
   let pendingProgressTaskFailure: unknown;
   const pendingWorkTasks = new Set<Promise<void>>();
   const enqueueProgress = (deliver: () => Promise<void> | void): Promise<void> => {
@@ -149,6 +170,7 @@ export async function executeFollowupTurn(params: {
     let result: boolean | void = false;
     await enqueueProgress(async () => {
       result = await deliver();
+      visibleReplyDelivered ||= result !== false;
       completed = true;
     });
     return completed ? result : false;
@@ -178,7 +200,7 @@ export async function executeFollowupTurn(params: {
   const baseTypingSignals = createTypingSignaler({
     typing: defaults.typing,
     mode: progressAllowed() ? defaults.typingMode : "never",
-    isHeartbeat: defaults.opts?.isHeartbeat === true,
+    isHeartbeat,
   });
   const typingSignals: TypingSignaler = {
     ...baseTypingSignals,
@@ -194,28 +216,20 @@ export async function executeFollowupTurn(params: {
   };
   const progressOpts: InternalGetReplyOptions = {
     ...sourceOpts,
+    isHeartbeat,
     // Queue callbacks are refreshed per session, but authority belongs to the
     // queued turn. Never let a later callback widen or narrow an older item.
+    operatorAuthority: turn.queued.operatorAuthority,
     toolsAllow: turn.queued.toolsAllow,
     disableTools: turn.queued.disableTools,
     commentaryPayloadsEnabled,
     runId: turn.runId,
     onBlockReply: undefined,
+    onPreparedBlockReply: undefined,
     onPartialReply: undefined,
     onAssistantMessageStart: undefined,
     onToolStart: wrapVisibility(sourceOpts?.onToolStart, shouldEmitToolLifecycle),
-    onCommandOutput: sourceOpts?.onCommandOutput
-      ? (output) =>
-          enqueueProgressResult(async () => {
-            if (!shouldEmitToolResult()) {
-              return false;
-            }
-            const visible = (
-              await settleProgressVisibilityCallbackResult(sourceOpts.onCommandOutput!(output))
-            ).visible;
-            return visible;
-          })
-      : undefined,
+    onCommandOutput: wrapVisibility(sourceOpts?.onCommandOutput, shouldEmitStructuredProgress),
     onItemEvent: sourceOpts?.onItemEvent
       ? (item) =>
           enqueueProgressResult(async () => {
@@ -223,7 +237,7 @@ export async function executeFollowupTurn(params: {
             // tool-progress filtering for queued preambles.
             const draftOwnsPreamble =
               progressAllowed() && item.kind === "preamble" && draftOwnsCommentaryProgress;
-            if (!draftOwnsPreamble && !shouldEmitToolResult()) {
+            if (!draftOwnsPreamble && !shouldEmitStructuredProgress()) {
               return false;
             }
             const visible = (
@@ -234,8 +248,8 @@ export async function executeFollowupTurn(params: {
       : undefined,
     onNarrationUpdate: wrap(sourceOpts?.onNarrationUpdate),
     onPlanUpdate: wrapVisibility(sourceOpts?.onPlanUpdate),
-    onApprovalEvent: wrapVisibility(sourceOpts?.onApprovalEvent, shouldEmitToolResult),
-    onPatchSummary: wrapVisibility(sourceOpts?.onPatchSummary, shouldEmitToolResult),
+    onApprovalEvent: wrapVisibility(sourceOpts?.onApprovalEvent, shouldEmitStructuredProgress),
+    onPatchSummary: wrapVisibility(sourceOpts?.onPatchSummary, shouldEmitStructuredProgress),
     onCompactionStart: sourceOpts?.onCompactionStart
       ? () =>
           enqueueProgressResult(async () =>
@@ -270,6 +284,38 @@ export async function executeFollowupTurn(params: {
           return false;
         }
         const requiresDurableToolResult = requiresDurableToolResultDelivery(payload);
+        if (sourceOpts?.suppressToolProgressMessages && !requiresDurableToolResult) {
+          return false;
+        }
+        const fastModeAutoProgress = isFastModeAutoProgressPayload(payload);
+        if (fastModeAutoProgress && !requiresDurableToolResult) {
+          const verboseToolResult = shouldEmitVerboseToolResult();
+          const lifecycleToolResult = sourceOpts?.allowToolLifecycleWhenProgressHidden === true;
+          const sourceDeliverySuppressed =
+            turn.queued.run.sourceReplyDeliveryMode === "message_tool_only";
+          const callbackAllowedBySource =
+            !sourceDeliverySuppressed ||
+            sourceOpts?.allowProgressCallbacksWhenSourceDeliverySuppressed === true;
+          const callbackAllowed =
+            callbackAllowedBySource &&
+            (forceToolResultProgress || verboseToolResult || lifecycleToolResult);
+          const callback = callbackAllowed ? sourceOpts?.onToolResult : undefined;
+          if (callback) {
+            const visible = (await settleProgressVisibilityCallbackResult(callback(payload)))
+              .visible;
+            if (visible) {
+              return true;
+            }
+            if (!forceToolResultProgress && !verboseToolResult) {
+              return false;
+            }
+          }
+          if (!forceToolResultProgress && !verboseToolResult) {
+            return false;
+          }
+          await params.onToolResult(payload, { runId: turn.runId });
+          return true;
+        }
         const verboseToolResult = !requiresDurableToolResult && shouldEmitVerboseToolResult();
         const transientToolResultProgress = requiresDurableToolResult
           ? undefined
@@ -329,14 +375,32 @@ export async function executeFollowupTurn(params: {
     };
   } else {
     try {
+      turn.queued.run.bootstrapUserProfileId = turn.queued.personalBootstrapEligible
+        ? sessionPersonalProfileId(turn.session.current())
+        : undefined;
+      turn.operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(turn.queued));
+      turn.operation.setPhase("running");
+      const gatewayOwnsCompletion =
+        turn.queued.queuedFollowupReplyDisposition?.kind === "deliver" &&
+        turn.queued.queuedFollowupReplyDisposition.deliver.ownsCompletion?.(
+          turn.queued.originatingChannel,
+        ) === true;
+      if (gatewayOwnsCompletion) {
+        turn.queued.run.mediaNormalizationOwner = "gateway";
+      }
       const execute = () =>
         executeAgentTurn({
+          completionSource: gatewayOwnsCompletion ? "reply-dispatch" : undefined,
           commandBody: turn.queued.prompt,
           transcriptCommandBody: turn.queued.transcriptPrompt,
           followupRun: turn.queued,
           sessionCtx,
           replyOperation: turn.operation,
           opts: progressOpts,
+          resolveVisibleReplyDelivery: async () => {
+            await drainPendingWork();
+            return visibleReplyDelivered;
+          },
           typingSignals,
           blockReplyPipeline: null,
           blockStreamingEnabled: false,
@@ -370,7 +434,7 @@ export async function executeFollowupTurn(params: {
               onNewSession: () => undefined,
             });
           },
-          isHeartbeat: sourceOpts?.isHeartbeat === true,
+          isHeartbeat,
           sessionKey: turn.session.kind === "session" ? turn.session.key : undefined,
           runtimePolicySessionKey: turn.queued.run.runtimePolicySessionKey,
           getActiveSessionEntry: turn.session.current,
@@ -378,12 +442,15 @@ export async function executeFollowupTurn(params: {
           storePath: turn.session.kind === "session" ? turn.session.storePath : undefined,
           resolvedVerboseLevel: currentVerboseLevel() ?? "off",
           toolProgressDetail: defaults.toolProgressDetail,
-          onCompactionNoticePayload: (payload) =>
-            enqueueProgress(() =>
-              progressAllowed()
-                ? params.onCompactionNoticePayload(payload, { runId: turn.runId })
-                : undefined,
-            ),
+          onCompactionNoticePayload: async (payload) => {
+            await enqueueProgressResult(async () => {
+              if (!progressAllowed()) {
+                return false;
+              }
+              await params.onCompactionNoticePayload(payload, { runId: turn.runId });
+              return true;
+            });
+          },
         });
       const recorder = turn.queued.userTurnTranscriptRecorder;
       // Queued execution outlives its ingress scope. Re-enter the exact source
@@ -404,10 +471,9 @@ export async function executeFollowupTurn(params: {
         outcome: {
           kind: "rejected",
           payload: buildTerminalAgentRunFailureReplyPayload({
-            isHeartbeat: sourceOpts?.isHeartbeat,
-            visibleReplyDelivered: false,
-            sessionCtx,
-            cfg: turn.config,
+            isHeartbeat,
+            replyExpectation: terminalReplyExpectation,
+            visibleReplyDelivered,
           }),
         },
       };

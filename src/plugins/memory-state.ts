@@ -1,9 +1,9 @@
-/** Registry state for plugin memory runtimes, prompt supplements, and flush planning. */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizePluginsConfig, resolveEffectivePluginActivationState } from "./config-state.js";
+import { wrapCurrentPluginInstance } from "./plugin-instance-scope.js";
 import type {
   MemoryCorpusSupplement,
   MemoryCorpusSupplementRegistration,
@@ -21,6 +21,7 @@ import type {
 } from "./registry-contribution-types.js";
 import type { PluginRegistry } from "./registry-types.js";
 import {
+  getPluginRegistryForContext,
   getPluginRegistrationContext,
   requireActivePluginRegistry,
   resolveDirectPluginRegistrationOwner,
@@ -87,8 +88,9 @@ export function resolveMemoryCapabilityRegistration(
   return effective;
 }
 
+// Cleanup reads must not recreate the process registry after its owner has cleared it.
 const getMemoryCapability = () =>
-  resolveMemoryCapabilityRegistration(requireActivePluginRegistry().memoryCapabilities);
+  resolveMemoryCapabilityRegistration(getPluginRegistryForContext()?.memoryCapabilities ?? []);
 
 const preparedMemoryPromptSections = new WeakSet<PreparedMemoryPromptSection>();
 const activePreparedMemoryPromptSection = new AsyncLocalStorage<PreparedMemoryPromptSection>();
@@ -101,7 +103,7 @@ export function registerMemoryCorpusSupplement(
   const registry = requireActivePluginRegistry();
   registry.memoryCorpusSupplements = registry.memoryCorpusSupplements
     .filter((registration) => registration.pluginId !== pluginId)
-    .concat({ pluginId, supplement });
+    .concat({ pluginId, supplement: wrapCurrentPluginInstance(supplement) });
 }
 
 export function registerMemoryCapability(
@@ -115,7 +117,7 @@ export function registerMemoryCapability(
   }
   const pluginId = resolveDirectPluginRegistrationOwner(requestedPluginId) ?? requestedPluginId;
   const registry = requireActivePluginRegistry();
-  registry.memoryCapabilities.push({ pluginId, capability });
+  registry.memoryCapabilities.push({ pluginId, capability: wrapCurrentPluginInstance(capability) });
 }
 
 export function getMemoryCapabilityRegistration(): MemoryPluginCapabilityRegistration | undefined {
@@ -212,7 +214,7 @@ export function registerMemoryPromptSupplement(
   const registry = requireActivePluginRegistry();
   registry.memoryPromptSupplements = registry.memoryPromptSupplements
     .filter((registration) => registration.pluginId !== pluginId)
-    .concat({ pluginId, builder });
+    .concat({ pluginId, builder: wrapCurrentPluginInstance(builder) });
 }
 
 export function registerMemoryPromptPreparation(
@@ -223,7 +225,7 @@ export function registerMemoryPromptPreparation(
   const registry = requireActivePluginRegistry();
   registry.memoryPromptPreparations = registry.memoryPromptPreparations
     .filter((registration) => registration.pluginId !== pluginId)
-    .concat({ pluginId, prepare });
+    .concat({ pluginId, prepare: wrapCurrentPluginInstance(prepare) });
 }
 
 function buildSynchronousMemoryPromptSection(params: MemoryPromptSectionParams): {

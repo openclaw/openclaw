@@ -1,18 +1,16 @@
 import { clearActiveEmbeddedRun } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isIncognitoSessionKey } from "../incognito-session.js";
-import {
-  CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
-  closeCodexStartupClientBestEffort,
-  unsubscribeCodexThreadBestEffort,
-} from "./attempt-client-cleanup.js";
-import { resolveCodexAppServerClientInstanceId } from "./client.js";
+import { terminateCodexBackgroundTerminals } from "./attempt-client-cleanup.js";
 import { scheduleCodexNativeHookRelayUnregister } from "./native-hook-relay.js";
 import type { CodexAttemptActiveTurn } from "./run-attempt-active-turn.js";
 import type { CodexAttemptLifecycleController } from "./run-attempt-lifecycle-controller.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
 import type { prepareCodexAttemptTurnRequest } from "./run-attempt-turn-request.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
-import { retainCodexAppServerBindingSubscription } from "./thread-ownership.js";
+import {
+  isSameCodexAppServerThreadOwner,
+  withExclusiveCodexAppServerThread,
+} from "./thread-ownership.js";
 
 export async function cleanupCodexAttempt(
   resources: CodexAttemptResources,
@@ -28,6 +26,9 @@ export async function cleanupCodexAttempt(
     releaseCurrentRoute,
     releaseSharedClientLeaseAndRetireOneShotClient,
     releaseSandboxExecEnvironment,
+    releaseNativeProcessAuthority,
+    retainThreadSubscription,
+    releaseThreadSubscription,
     runCleanupStep,
   } = resources;
   const { connection } = prompt.context.runtime;
@@ -41,6 +42,8 @@ export async function cleanupCodexAttempt(
   } = lifecycle;
   const { codexModelCallDiagnostics } = requestRuntime;
   const { activeTurnId, abortListener, handle, freezeRunTerminalOutcome } = activeTurn;
+  resourceState.releaseInferenceContext?.();
+  resourceState.releaseInferenceContext = undefined;
   // Exact-thread cron authority exists only while this creator turn owns the
   // live client/thread. Retained model callbacks must fail after cleanup begins.
   prompt.context.attemptTools.scheduledAppAuthoritySourceRef.current = undefined;
@@ -58,8 +61,18 @@ export async function cleanupCodexAttempt(
     : undefined;
   // Join late cancellation before releasing the subscription, but do not let a
   // failed terminal RPC skip resource cleanup. Surface that failure below.
-  await state.abortCleanup.catch(() => undefined);
+  if (params.oneShotCliRun) {
+    await runCleanupStep("codex-abort-cleanup", () => state.abortCleanup);
+  } else {
+    await state.abortCleanup?.catch(() => {});
+  }
+  if (params.oneShotCliRun) {
+    await runCleanupStep("codex-one-shot-terminals", () =>
+      terminateCodexBackgroundTerminals(resourceState.client, resourceState.thread.threadId, true),
+    );
+  }
   try {
+    await state.pluginRuntimeRefreshStop;
     steeringQueueRef.current?.cancel();
     if (params.isFinalFallbackAttempt !== false) {
       await maybeEmitFastModeAutoResetBestEffort();
@@ -88,85 +101,111 @@ export async function cleanupCodexAttempt(
       });
     }
     await runCleanupStep("codex-trajectory-flush", () => trajectoryRecorder?.flush());
+    const pluginRuntimeRefreshing =
+      state.pluginRuntimeRefreshStop !== undefined &&
+      !runAbortController.signal.aborted &&
+      terminalState.settledTurnStatus === "completed";
     const retainLiveIncognitoThread =
-      (terminalState.turnSucceeded ||
+      !pluginRuntimeRefreshing &&
+      (terminalState.settledTurnStatus === "completed" ||
         (state.permissionChangeRestart === "confirmed" && !params.abortSignal?.aborted)) &&
       isIncognitoSessionKey(params.sessionKey);
-    // Incognito uses the same generation owner but retains its creation policy
-    // without idle eviction. Native-preserved and supervised lifetimes stay separate.
+    // Incognito retains its creation policy without idle eviction.
+    // Ordinary failed turns keep loaded configuration too: native unsubscribe delays unload.
+    // Retain that configuration owner so later input can reuse the same thread.
     const retainedOrdinaryThread =
+      !pluginRuntimeRefreshing &&
       ((retainLiveIncognitoThread &&
         resourceState.thread.liveThreadEphemeralPolicy !== undefined) ||
-        (terminalState.turnSucceeded &&
+        (terminalState.settledTurnStatus !== undefined &&
           !isIncognitoSessionKey(params.sessionKey) &&
           params.cleanupBundleMcpOnRunEnd !== true &&
           resourceState.thread.liveThreadConfigFingerprint !== undefined &&
-          resourceState.thread.preserveNativeModel !== true &&
-          resourceState.thread.connectionScope !== "supervision" &&
           !resourceState.thread.ringZeroConfigFingerprint)) &&
-      resourceState.thread.clientId === resolveCodexAppServerClientInstanceId(resourceState.client)
-        ? bindingStore.read(bindingIdentity)?.threadId === resourceState.thread.threadId &&
-          (await bindingStore.withLease(bindingIdentity, async () => {
-            // Reset/end uses this same generation lease. Never publish an old
-            // active turn after its session binding has already been retired.
-            if (bindingStore.read(bindingIdentity)?.threadId !== resourceState.thread.threadId) {
-              return false;
-            }
-            return await retainCodexAppServerBindingSubscription(
-              resourceState.client,
-              resourceState.thread.threadId,
-              {
-                release: resourceState.thread.liveThreadOwnership?.release,
-                configFingerprint: resourceState.thread.liveThreadConfigFingerprint,
-                serviceTier: connection.mutable.pluginAppServer.serviceTier,
-                ephemeralPolicy: resourceState.thread.liveThreadEphemeralPolicy,
-              },
-            );
-          }))
-        : false;
+      (await retainThreadSubscription());
     // Nonordinary incognito lifetimes retain their previous live-only ownership.
     const retainLiveThread =
       retainedOrdinaryThread ||
       (retainLiveIncognitoThread && resourceState.thread.liveThreadEphemeralPolicy === undefined);
-    // Codex keeps approvals in its native session; independent conversations
-    // must retain their own subscriptions instead of evicting one another.
-    const bindingReleased =
-      isIncognitoSessionKey(params.sessionKey) && !retainLiveThread
-        ? await bindingStore.mutate(bindingIdentity, {
-            kind: "clear",
-            threadId: resourceState.thread.threadId,
-          })
-        : true;
-    // Only explicitly retained live threads may skip the next thread/resume.
-    if (!retainLiveThread) {
-      // Clear first: if a newer owner won the binding, its live subscription must remain intact.
-      if (bindingReleased) {
-        const released = await unsubscribeCodexThreadBestEffort(resourceState.client, {
-          threadId: resourceState.thread.threadId,
-          timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
-        });
-        if (!released) {
-          // Never reuse a client whose previous thread may still publish notifications.
-          await closeCodexStartupClientBestEffort(resourceState.client);
+    if (pluginRuntimeRefreshing) {
+      // Keep the exact binding authoritative until unsubscribe succeeds; a failed
+      // stop or a replacement owner must never become a fresh-thread handoff.
+      await withExclusiveCodexAppServerThread({
+        bindingStore,
+        identity: bindingIdentity,
+        threadId: resourceState.thread.threadId,
+        run: () =>
+          bindingStore.withLease(bindingIdentity, async () => {
+            if (
+              !isSameCodexAppServerThreadOwner(
+                bindingStore.read(bindingIdentity),
+                resourceState.thread,
+              )
+            ) {
+              throw new Error("Codex plugin refresh lost its managed thread binding.");
+            }
+            if (!(await releaseThreadSubscription(connection.assertCurrent))) {
+              throw new Error("Plugin reload could not release the previous Codex thread.");
+            }
+            if (
+              !(await bindingStore.mutate(
+                bindingIdentity,
+                {
+                  kind: "clear",
+                  threadId: resourceState.thread.threadId,
+                },
+                connection.assertCurrent,
+              ))
+            ) {
+              throw new Error("Codex plugin refresh lost its managed thread binding.");
+            }
+          }),
+      });
+    } else {
+      // Codex keeps approvals in its native session; independent conversations
+      // must retain their own subscriptions instead of evicting one another.
+      const bindingReleased =
+        isIncognitoSessionKey(params.sessionKey) && !retainLiveThread
+          ? await bindingStore.mutate(bindingIdentity, {
+              kind: "clear",
+              threadId: resourceState.thread.threadId,
+            })
+          : true;
+      // Only explicitly retained live threads may skip the next thread/resume.
+      if (!retainLiveThread) {
+        // Clear first: if a newer owner won the binding, its live subscription must remain intact.
+        if (bindingReleased) {
+          if (!(await releaseThreadSubscription())) {
+            if (params.oneShotCliRun) {
+              await runCleanupStep("codex-one-shot-unsubscribe", async () => {
+                throw new Error("Codex one-shot thread unsubscribe was not confirmed");
+              });
+            }
+          }
         }
       }
     }
   } finally {
+    if (resourceState.thread.liveThreadOwnership) {
+      // A failed retention/finalization still owes settlement of its warm claim.
+      // Already-retained or released subscriptions are no-ops at the resource owner.
+      await runCleanupStep("codex-unsettled-subscription", async () => {
+        await releaseThreadSubscription();
+      });
+    }
     await runCleanupStep("codex-user-input-cancel", () =>
       userInputBridgeRef.current?.cancelPending(),
     );
     await runCleanupStep("codex-turn-deadline-clear", () => deadlines.dispose());
-    await runCleanupStep("codex-dynamic-tool-cleanup", async () => {
-      const cleanupReason = terminalState.turnSucceeded
+    await prompt.context.attemptTools.disposeTools(
+      terminalState.settledTurnStatus === "completed"
         ? "completion"
         : state.timeout
           ? "timeout"
           : runAbortController.signal.aborted
             ? "cancel"
-            : "error";
-      const cleanups = prompt.context.attemptTools.runCleanups.splice(0);
-      await Promise.allSettled(cleanups.map(async (cleanup) => await cleanup(cleanupReason)));
-    });
+            : "error",
+    );
     await runCleanupStep("codex-route-release", releaseCurrentRoute);
     await checkpointCleanup;
     await runCleanupStep(
@@ -175,11 +214,11 @@ export async function cleanupCodexAttempt(
     );
     const nativeHookRelay = resourceState.nativeHookRelay;
     resourceState.nativeHookRelay = undefined;
-    await runCleanupStep("codex-native-hook-relay-release", () => {
+    await runCleanupStep("codex-native-hook-relay-release", async () => {
       if (!nativeHookRelay) {
         return;
       }
-      if (state.shouldDelayNativeHookRelayUnregister) {
+      if (state.shouldDelayNativeHookRelayUnregister && !params.oneShotCliRun) {
         // Native hook subprocesses can finish shortly after turn completion.
         scheduleCodexNativeHookRelayUnregister({
           relay: nativeHookRelay,
@@ -188,8 +227,10 @@ export async function cleanupCodexAttempt(
       } else {
         nativeHookRelay.unregister();
       }
+      await nativeHookRelay.drain();
     });
     await runCleanupStep("codex-sandbox-release", releaseSandboxExecEnvironment);
+    await runCleanupStep("codex-native-process-source-release", releaseNativeProcessAuthority);
     await runCleanupStep("codex-abort-listener-remove", () => {
       runAbortController.signal.removeEventListener("abort", abortListener);
     });

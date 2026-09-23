@@ -150,9 +150,9 @@ describe("iOS Fastlane release upload gates", () => {
     const lockfile = readFileSync(gemfileLockPath, "utf8");
 
     expect(readFileSync(rubyVersionPath, "utf8")).toBe("3.4.10\n");
-    expect(gemfile).toContain('gem "fastlane", "2.238.0"');
+    expect(gemfile).toContain('gem "fastlane", "2.239.0"');
     expect(gemfile).toContain('ruby "3.4.10"');
-    expect(lockfile).toContain("fastlane (2.238.0)");
+    expect(lockfile).toContain("fastlane (2.239.0)");
     expect(lockfile).toContain("arm64-darwin");
     expect(lockfile).toContain("x86_64-darwin");
     expect(lockfile).toContain("CHECKSUMS");
@@ -598,6 +598,186 @@ end
     ]);
   });
 
+  it.each([
+    {
+      name: "existing access disappears at final readback",
+      automatic: true,
+      assigned: ["group-id"],
+      writes: 0,
+      disappear: true,
+      error: "not assigned",
+    },
+    {
+      name: "other access appears at final readback",
+      automatic: true,
+      assigned: ["group-id"],
+      writes: 0,
+      finalBroaden: true,
+      error: "outside",
+    },
+    {
+      name: "automatic access already verified",
+      automatic: true,
+      assigned: ["group-id"],
+      writes: 0,
+    },
+    { name: "manual access already verified", automatic: false, assigned: ["group-id"], writes: 0 },
+    {
+      name: "automatic flag is not access proof",
+      automatic: true,
+      assigned: [],
+      writes: 0,
+      error: "not assigned",
+    },
+    {
+      name: "unknown automatic flag fails closed",
+      automatic: null,
+      assigned: [],
+      writes: 0,
+      error: "not assigned",
+    },
+    {
+      name: "existing other access blocks mutation",
+      automatic: false,
+      assigned: ["other-id"],
+      writes: 0,
+      error: "outside",
+    },
+    { name: "manual missing access assigns once", automatic: false, assigned: [], writes: 1 },
+    {
+      name: "readback failure propagates",
+      automatic: false,
+      assigned: [],
+      writes: 0,
+      readError: true,
+      error: "read failed",
+    },
+    {
+      name: "assignment failure propagates",
+      automatic: false,
+      assigned: [],
+      writes: 1,
+      writeError: true,
+      error: "write failed",
+    },
+    {
+      name: "target changes before assignment",
+      automatic: false,
+      assigned: [],
+      writes: 0,
+      flip: true,
+      error: "must be internal",
+    },
+    {
+      name: "other access appears after assignment",
+      automatic: false,
+      assigned: [],
+      writes: 1,
+      broaden: true,
+      error: "outside",
+    },
+    {
+      name: "other automatic access appears after assignment",
+      automatic: false,
+      assigned: [],
+      writes: 1,
+      otherAutomatic: true,
+      error: "disable automatic",
+    },
+  ])("reconciles TestFlight access: $name", (scenario) => {
+    const selector = functionDefinition(
+      readFastfile(),
+      "select_ci_testflight_internal_group_by_id!",
+    );
+    const verifier = functionDefinition(
+      readFastfile(),
+      "assign_and_verify_ci_testflight_internal_group!",
+    );
+    const source = `
+require "json"
+module UI
+  def self.user_error!(message)
+    raise message
+  end
+end
+module Spaceship
+  class ConnectAPI
+    module Platform
+      IOS = "IOS"
+    end
+  end
+end
+$scenario = JSON.parse(ARGV.fetch(0))
+$writes = 0
+$reads = 0
+Group = Struct.new(:id, :name, :is_internal_group, :has_access_to_all_builds, :builds) do
+  def fetch_builds
+    raise "read failed" if $scenario["readError"]
+    builds
+  end
+end
+Build = Struct.new(:id, :app_version, :version, :platform) do
+  def add_beta_groups(beta_groups:)
+    $writes += 1
+    raise "write failed" if $scenario["writeError"]
+    raise "duplicate assignment rejected" if beta_groups.any? { |group| group.builds.include?(self) }
+    raise "automatic assignment rejected" if beta_groups.any? { |group| group.has_access_to_all_builds != false }
+    raise "wrong immutable group" unless beta_groups.map(&:id) == ["group-id"]
+    beta_groups.each { |group| group.builds << self }
+    $groups.last.builds << self if $scenario["broaden"]
+    $groups.last.has_access_to_all_builds = true if $scenario["otherAutomatic"]
+  end
+end
+App = Struct.new(:build) do
+  def get_beta_groups
+    $reads += 1
+    $groups.first.is_internal_group = false if $scenario["flip"] && $reads >= 3
+    $groups.first.builds.clear if $scenario["disappear"] && $reads >= 3
+    $groups.last.builds << build if $scenario["finalBroaden"] && $reads >= 3
+    $groups
+  end
+  def get_builds(filter:, includes:)
+    raise "wrong build query" unless filter == { "preReleaseVersion.version" => "2026.9.20", version: "1" } && includes == "preReleaseVersion"
+    [build]
+  end
+end
+def env_present?(value)
+  !value.nil? && !value.strip.empty?
+end
+def resolve_app_store_connect_app(app_identifier:, app_id:)
+  $app
+end
+${selector}
+${functionDefinition(readFastfile(), "resolve_ci_testflight_build!")}
+${functionDefinition(readFastfile(), "ci_testflight_build_group_ids")}
+${verifier}
+build = Build.new("build-id", "2026.9.20", "1", "IOS")
+$groups = [
+  Group.new("group-id", "Internal", true, $scenario["automatic"], []),
+  Group.new("other-id", "Other", true, false, [])
+]
+$groups.each { |group| group.builds << build if $scenario.fetch("assigned").include?(group.id) }
+$app = App.new(build)
+begin
+  result = assign_and_verify_ci_testflight_internal_group!(group_id: "group-id", app_store_version: "2026.9.20", build_number: "1")
+  puts JSON.generate({ group: result.fetch(:group).id, writes: $writes })
+rescue => error
+  puts JSON.generate({ error: error.message, writes: $writes })
+end
+`;
+    const result = spawnSync("ruby", ["-e", source, JSON.stringify(scenario)], {
+      encoding: "utf8",
+    });
+    expect(result.status, result.stderr).toBe(0);
+    const output = JSON.parse(result.stdout) as { group?: string; error?: string; writes: number };
+    expect(output.writes).toBe(scenario.writes);
+    if (scenario.error) {
+      expect(output.error).toContain(scenario.error);
+    } else {
+      expect(output).toEqual({ group: "group-id", writes: scenario.writes });
+    }
+  });
+
   it("freshly resolves and directly assigns the exact internal group to the uploaded build", () => {
     const selector = functionDefinition(
       readFastfile(),
@@ -647,6 +827,8 @@ def resolve_app_store_connect_app(app_identifier:, app_id:)
   $fresh_app
 end
 ${selector}
+${functionDefinition(readFastfile(), "resolve_ci_testflight_build!")}
+${functionDefinition(readFastfile(), "ci_testflight_build_group_ids")}
 ${verifier}
 
 def run_case(label, post_groups:, app_builds:)
@@ -886,7 +1068,7 @@ end
     expect(snapshotUITest).not.toContain("selectReleaseScreenshotDestination");
     expect(navigationTest).toContain("self.launchApp(for: Self.agentScreenshotTarget)");
     expect(navigationTest).toContain('self.selectSidebarDestination("Settings")');
-    expect(navigationTest).toContain('"settings-system-agent-row"');
+    expect(navigationTest).toContain('"SettingsHub.Fallback"');
     expect(navigationTest).not.toContain("XCTExpectFailure");
     expect(navigationTest).not.toContain("XCTExpectedFailure");
     expect(rootTabs).toContain("self.scenePhase == .active");
@@ -915,9 +1097,193 @@ end
       screenshots.indexOf("RELEASE_IOS_SCREENSHOT_TESTS.each"),
     );
     expect(screenshots.indexOf("verify_release_ios_screenshot_manifest!")).toBeLessThan(
-      screenshots.indexOf("watch_screenshot("),
+      screenshots.indexOf("capture_watch_screenshot"),
     );
     expect(screenshots).toContain('ENV["OPENCLAW_SNAPSHOT_SKIP_WATCH"] == "1"');
+  });
+
+  it("reuses only the current screenshot build for Watch while standalone capture builds fresh", () => {
+    const source = `
+require "json"
+require "tmpdir"
+module UI
+  def self.user_error!(message)
+    raise message
+  end
+  def self.success(message); end
+end
+def default_platform(*); end
+def desc(*); end
+def platform(*)
+  yield
+end
+def lane(name, &body)
+  define_singleton_method(name, &body)
+end
+alias private_lane lane
+load ARGV.fetch(0)
+
+def repo_root
+  @root
+end
+def ios_root
+  File.join(@root, "apps", "ios")
+end
+def snapshot_devices
+  ["iPad Pro 13-inch"]
+end
+def resolve_simulator_device(_name)
+  { "name" => "Apple Watch Ultra 3 (49mm)", "udid" => "watch-simulator" }
+end
+def write_watch_screenshot_mode_defaults(*); end
+def clear_watch_screenshot_mode_defaults(*); end
+def set_watch_status_bar_override(*)
+  false
+end
+def normalize_watch_screenshot_status_bar(*); end
+def sleep(*); end
+
+def make_product(derived_data_path)
+  app = File.join(derived_data_path, "Build", "Products", "Debug-watchsimulator", "OpenClawWatchApp.app")
+  raise "stale product survived clean build" if File.exist?(File.join(app, "stale"))
+  return if @scenario == "missing"
+  FileUtils.mkdir_p(app)
+  File.write(File.join(app, "Info.plist"), "fixture.watch") unless @scenario == "invalid-plist"
+end
+module Open3
+  def self.capture3(command, *args)
+    raise "unexpected external command: #{command}" unless command == "/usr/libexec/PlistBuddy"
+    [File.read(args.last), "", Struct.new(:success?).new(true)]
+  end
+end
+def run_tests(**options)
+  raise "snapshot build is not fresh" unless options[:clean] && options[:build_for_testing]
+  @builds << "snapshot"
+  raise "snapshot build failed" if @scenario == "build-failure"
+  make_product(options.fetch(:derived_data_path))
+end
+def capture_release_ios_screenshot!(**options)
+  raise "capture before successful build" unless @builds == ["snapshot"]
+  name = options.fetch(:screenshot).fetch(:name)
+  output = File.join(options.fetch(:output_directory), "en-US", "#{options.fetch(:device)}-#{name}.png")
+  FileUtils.mkdir_p(File.dirname(output))
+  File.binwrite(output, PNG_SIGNATURE + "fixture")
+  FileUtils.mkdir_p(File.join(options.fetch(:result_bundle_archive_directory), "#{name}.xcresult"))
+  options.fetch(:capture_attempts) << { name: name, outcome: "passed" }
+  write_release_ios_screenshot_attempts!(
+    attempts: options.fetch(:capture_attempts), output_path: options.fetch(:capture_attempts_path)
+  )
+end
+def sh(command)
+  args = Shellwords.split(command)
+  @commands << args
+  if args.include?("xcodebuild") && args.include?("build")
+    @builds << "watch"
+    raise "Watch build failed" if @scenario == "standalone-build-failure"
+    make_product(args.fetch(args.index("-derivedDataPath") + 1))
+  elsif args[0, 3] == ["xcrun", "simctl", "install"]
+    @installed = args.last.sub(@root, "")
+    raise "simulator rejected Watch product" if @scenario == "invalid-install"
+  elsif args[0, 3] == ["xcrun", "simctl", "io"]
+    File.binwrite(args.last, PNG_SIGNATURE + "watch")
+  end
+end
+
+results = %w[combined iphone standalone standalone-build-failure missing invalid-plist invalid-install build-failure].map do |scenario|
+  Dir.mktmpdir("openclaw-watch-build-") do |root|
+    @root, @scenario, @builds, @commands, @installed = root, scenario, [], [], nil
+    %w[SnapshotDerivedData WatchScreenshotDerivedData].each do |directory|
+      app = File.join(ios_root, "build", directory, "Build", "Products", "Debug-watchsimulator", "OpenClawWatchApp.app")
+      FileUtils.mkdir_p(app)
+      File.write(File.join(app, "stale"), "previous invocation")
+    end
+    if scenario.start_with?("standalone")
+      output = File.join(ios_root, "fastlane", "screenshots", "en-US")
+      FileUtils.mkdir_p(output)
+      File.write(File.join(output, "Apple Watch Ultra 3 (49mm)-01-now-face.png"), "previous screenshot")
+    end
+    ENV["OPENCLAW_SNAPSHOT_SKIP_WATCH"] = scenario == "iphone" ? "1" : "0"
+    error = nil
+    begin
+      options = { release_version: "2026.9.1", app_store_revision: "2", build_number: "123" }
+      scenario.start_with?("standalone") ? watch_screenshot(options) : screenshots(options)
+    rescue => failure
+      error = failure.message.sub(root, "")
+    end
+    {
+      scenario: scenario, builds: @builds, error: error, installed: @installed,
+      pngs: Dir[File.join(ios_root, "fastlane", "screenshots", "en-US", "*.png")].length,
+      xcresults: Dir[File.join(ios_root, "build", "SnapshotTestResults", "*.xcresult")].length,
+      attempts: File.exist?(File.join(ios_root, "build", "SnapshotTestResults", "capture-attempts.json")),
+      versions: @commands.select { |args| args.any? { |arg| arg.end_with?("/ios-write-version-xcconfig.sh") } }
+        .map { |args| args.drop(2) }
+    }
+  end
+end
+puts JSON.generate(results)
+`;
+    const result = spawnSync("ruby", ["-e", source, fastfilePath], { encoding: "utf8" });
+    expect(result.status, result.stderr).toBe(0);
+    const rows = JSON.parse(result.stdout) as {
+      scenario: string;
+      builds: string[];
+      error: string | null;
+      installed: string | null;
+      pngs: number;
+      xcresults: number;
+      attempts: boolean;
+      versions: string[][];
+    }[];
+    const row = (scenario: string) => rows.find((entry) => entry.scenario === scenario)!;
+    const versionArgs = ["--version", "2026.9.1", "--revision", "2", "--build-number", "123"];
+    expect(row("combined")).toMatchObject({
+      builds: ["snapshot"],
+      error: null,
+      installed:
+        "/apps/ios/build/SnapshotDerivedData/Build/Products/Debug-watchsimulator/OpenClawWatchApp.app",
+      pngs: 5,
+      xcresults: 4,
+      attempts: true,
+      versions: [versionArgs],
+    });
+    expect(row("iphone")).toMatchObject({
+      builds: ["snapshot"],
+      error: null,
+      installed: null,
+      pngs: 4,
+    });
+    expect(row("standalone")).toMatchObject({
+      builds: ["watch"],
+      error: null,
+      installed:
+        "/apps/ios/build/WatchScreenshotDerivedData/Build/Products/Debug-watchsimulator/OpenClawWatchApp.app",
+      pngs: 1,
+      versions: [versionArgs],
+    });
+    expect(row("standalone-build-failure")).toMatchObject({
+      builds: ["watch"],
+      error: "Watch build failed",
+      installed: null,
+      pngs: 0,
+    });
+    for (const scenario of ["missing", "invalid-plist", "invalid-install"]) {
+      expect(row(scenario), scenario).toMatchObject({
+        builds: ["snapshot"],
+        pngs: 4,
+        xcresults: 4,
+        attempts: true,
+      });
+    }
+    expect(row("missing").error).toContain("Watch screenshot build did not produce");
+    expect(row("invalid-plist").error).toContain("Expected Info.plist");
+    expect(row("invalid-install").error).toBe("simulator rejected Watch product");
+    expect(row("build-failure")).toMatchObject({
+      builds: ["snapshot"],
+      error: "snapshot build failed",
+      installed: null,
+      pngs: 0,
+      xcresults: 0,
+    });
   });
 
   it("runs screenshot shards alongside builds without changing runner authorization", () => {
@@ -933,15 +1299,16 @@ end
     const reducerJob = workflow.slice(reducerJobStart, reducerJobEnd);
 
     expect(workflow).toContain('IOS_SCREENSHOT_NODE_VERSION: "24.16.0"');
-    expect(workflow).toContain('IOS_SCREENSHOT_XCODE_VERSION: "Xcode 26.6 Build version 17F113"');
+    expect(workflow).toContain('IOS_SCREENSHOT_XCODE_VERSION: "Xcode 27.0 Build version 27A266a"');
     expect(iosJob).toContain("timeout-minutes: 150");
     expect(iosJob).not.toContain("Capture iOS release screenshots");
     expect(shardJob).toContain("needs: [preflight]");
     expect(shardJob).toContain("max-parallel: 2");
     expect(shardJob).toContain("device_family: [iphone, ipad-13]");
-    expect(shardJob).toContain('OPENCLAW_SNAPSHOT_SKIP_WATCH: "1"');
-    expect(shardJob).toContain("if: matrix.device_family == 'ipad-13'");
-    expect(shardJob).toContain("run_ios_fastlane ios watch_screenshot");
+    expect(shardJob).toContain(
+      "OPENCLAW_SNAPSHOT_SKIP_WATCH: ${{ matrix.device_family == 'iphone' && '1' || '0' }}",
+    );
+    expect(shardJob).not.toContain("run_ios_fastlane ios watch_screenshot");
     expect(shardJob).toContain("run: pnpm ios:screenshots");
     expect(shardJob).toContain("id: package_screenshot_evidence");
     expect(shardJob).toContain('if [[ "$DEVICE_FAMILY" == "ipad-13" ]]; then');
@@ -950,6 +1317,7 @@ end
     ).toHaveLength(2);
     expect(shardJob).not.toContain("node scripts/ios-screenshot-evidence.mjs");
     expect(shardJob).toContain("steps.package_screenshot_evidence.outcome == 'failure'");
+    expect(shardJob).toContain("steps.device_screenshots.outcome == 'failure'");
     expect(shardJob).toContain("apps/ios/build/SnapshotTestResults/capture-attempts.json");
     expect(shardJob).not.toContain("IOS_SCREENSHOT_FASTLANE_VERSION");
     expect(shardJob).toContain("IOS_SCREENSHOT_NODE_VERSION");

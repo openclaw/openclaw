@@ -92,7 +92,6 @@ const sessionMocks = vi.hoisted(() => ({
     }
     return currentRefLocator;
   }),
-  rememberRoleRefsForTarget: vi.fn(() => {}),
   wasBrowserNavigationSourcePreservedAfterPolicyDenial: vi.fn(() => false),
   withPageNavigationRequestGuard: vi.fn(
     async ({
@@ -167,6 +166,7 @@ export function setPwToolsCoreCurrentPage(page: Record<string, unknown> | null) 
     page.on ??= vi.fn();
     page.off ??= vi.fn();
     page.url ??= vi.fn(() => "about:blank");
+    page.viewportSize ??= vi.fn(() => null);
   }
   currentPage = page;
 }

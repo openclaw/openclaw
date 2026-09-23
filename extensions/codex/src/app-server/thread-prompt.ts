@@ -1,7 +1,7 @@
 import {
   buildCredentialSafetyPrompt,
   buildDelegationGuidanceSection,
-  buildHarnessVisibleReplyGuidance,
+  buildUiPresentationPrompt,
   buildSkillWorkshopPromptSection,
   resolveMainSessionDelegationMode,
   SKILL_WORKSHOP_TOOL_NAME,
@@ -31,6 +31,7 @@ export type CodexThreadPromptContext = Pick<
   | "sourceReplyDeliveryMode"
   | "promptMode"
   | "extraSystemPrompt"
+  | "gitCoauthorPrompt"
 >;
 
 export function buildDeveloperInstructions(
@@ -38,17 +39,18 @@ export function buildDeveloperInstructions(
   options: { dynamicTools?: readonly CodexDynamicToolSpec[] } = {},
 ): string {
   const deferredToolNames = new Set<string>();
-  let secretsToolName: string | undefined;
+  let screenToolName: string | undefined;
   let showWidgetToolName: string | undefined;
   let dashboardToolName: string | undefined;
   let portalToolName: string | undefined;
+  let messageTool: Parameters<typeof buildUiPresentationPrompt>[0]["messageTool"];
   let hasSkillWorkshop = false;
   let hasSessionsSpawn = false;
   let hasSessionsYield = false;
   let hasSubagentsList = false;
   let hasSessionsSend = false;
+  let hasControlTools = false;
   let hasSeenDirectNamespace = false;
-  let messageToolAvailable = options.dynamicTools ? false : params.disableMessageTool !== true;
   for (const spec of options.dynamicTools ?? []) {
     const isDirectNamespace =
       spec.type === "namespace" &&
@@ -63,8 +65,8 @@ export function buildDeveloperInstructions(
       if (tool.deferLoading === true && name) {
         deferredToolNames.add(name);
       }
-      if (name === "secrets" && params.disableTools !== true) {
-        secretsToolName ??= qualifiedName;
+      if (name === "screen") {
+        screenToolName ??= qualifiedName;
       }
       if (name === "show_widget") {
         showWidgetToolName ??= qualifiedName;
@@ -75,12 +77,15 @@ export function buildDeveloperInstructions(
       if (name === "portal") {
         portalToolName ??= qualifiedName;
       }
+      if (name === "message") {
+        messageTool ??= { name: qualifiedName, parameters: tool.inputSchema };
+      }
       hasSkillWorkshop ||= name === SKILL_WORKSHOP_TOOL_NAME;
       hasSessionsSpawn ||= name === "sessions_spawn";
       hasSessionsYield ||= isDirectNamespace && name === "sessions_yield";
       hasSubagentsList ||= name === "subagents";
       hasSessionsSend ||= name === "sessions_send";
-      messageToolAvailable ||= name === "message";
+      hasControlTools ||= name === "openclaw" || name === "gateway";
     }
   }
   const nativeCommandGuidance = listRegisteredPluginAgentPromptGuidance({
@@ -112,7 +117,7 @@ export function buildDeveloperInstructions(
     // models (codex-rs spec_plan add_collaboration_tools). Without this hint
     // models cannot see spawn_agent and grab the always-direct sessions_spawn.
     nativeDelegationAvailable
-      ? `Use Codex native \`spawn_agent\` for Codex subagents. \`spawn_agent\` and the other native collaboration tools may be deferred.${hasSessionsSpawn ? " Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent` on internal legwork." : ""}`
+      ? `Use Codex native \`spawn_agent\` for Codex subagents. \`spawn_agent\` and the other native collaboration tools may be deferred. For follow-up work on an existing native child, use the native collaboration tool that starts or queues a new turn.${hasSessionsSpawn ? " Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent` on internal legwork." : ""}`
       : undefined,
     hasSessionsYield && nativeDelegationAvailable
       ? "When a native child's result belongs in a later turn, end the current turn with `openclaw_direct.sessions_yield`; the completion arrives as the next model-visible input. Use native `wait_agent` only for an intentional same-turn wait when the immediate next step is blocked on the child. Never loop-poll for native child completion."
@@ -137,18 +142,20 @@ export function buildDeveloperInstructions(
           hasSessionsSend,
         }).join("\n")
       : undefined,
-    buildHarnessVisibleReplyGuidance({
-      sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-      messageToolAvailable,
-      uiPresentation:
-        params.disableTools !== true &&
-        params.promptMode !== "minimal" &&
-        params.promptMode !== "none"
-          ? { showWidgetToolName, dashboardToolName, portalToolName }
-          : undefined,
+    params.disableTools !== true && params.promptMode !== "minimal" && params.promptMode !== "none"
+      ? buildUiPresentationPrompt({
+          screenToolName,
+          showWidgetToolName,
+          dashboardToolName,
+          portalToolName,
+          messageTool,
+        })
+      : undefined,
+    buildCredentialSafetyPrompt({
+      controlToolsAvailable: params.disableTools !== true && hasControlTools,
     }),
-    buildCredentialSafetyPrompt(secretsToolName),
     nativeCommandGuidance,
+    params.gitCoauthorPrompt,
     params.extraSystemPrompt,
   ];
   return sections.filter((section) => typeof section === "string" && section.trim()).join("\n\n");

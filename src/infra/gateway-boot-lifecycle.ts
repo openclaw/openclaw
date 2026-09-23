@@ -1,23 +1,27 @@
 // Persists gateway boot outcomes for supervisor crash-loop decisions.
 import { randomUUID } from "node:crypto";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatCliCommand } from "../cli/command-format.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
-import {
-  formatLegacyAgentMediaMigrationRequiredMessage,
-  GATEWAY_AGENT_MEDIA_MIGRATION_REQUIRED_REASON,
-} from "../state/openclaw-agent-db-migration-required.js";
+import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import { pathMayExistSync } from "./path-existence.js";
+import { GATEWAY_STARTUP_MAINTENANCE_REQUIRED_REASON } from "./startup-maintenance-required.js";
+
+// Retain the released media-only tag while its bounded boot history expires.
+const maintenanceStartupReasons = [
+  GATEWAY_STARTUP_MAINTENANCE_REQUIRED_REASON,
+  "gateway.agent_media_migration_required",
+];
 
 // Supervisors usually restart immediately. Three unclean boots in this window
 // means the gateway should come up without auto-start sidecars so operators
@@ -30,6 +34,15 @@ const GATEWAY_BOOT_LIFECYCLE_RETENTION_MS = 24 * 60 * 60_000;
 export const GATEWAY_BOOT_REASON_MAX_UTF16_CODE_UNITS = 500;
 export const GATEWAY_CRASH_LOOP_BREAKER_REASON = "gateway.crash_loop_breaker";
 export const GATEWAY_CRASH_LOOP_RECOVERED_REASON = "gateway.crash_loop_recovered";
+export const GATEWAY_SIGNAL_REPEAT_WINDOW_MS = 5 * 60_000;
+
+export function formatGatewayRepeatedSignalHint(
+  signal: NodeJS.Signals,
+  count: number,
+  observation: "received" | "stopped after" = "received",
+): string {
+  return `${observation} ${signal} ${count} times in 5 min: another supervisor may be managing this Gateway — see \`openclaw gateway status --deep\``;
+}
 /**
  * The breaker only self-clears after the full window drains. Operator surfaces name the manual
  * override command, not the internal RPC. Account hints carry accountId to avoid starting a
@@ -73,6 +86,41 @@ export type GatewayCrashLoopBreakerDecision = {
   recovered: boolean;
 };
 
+export function readGatewayLastShutdown(
+  env: NodeJS.ProcessEnv = process.env,
+): { reason: string | null; completedAtMs: number } | undefined {
+  try {
+    return withExistingOpenClawStateDatabaseReadOnly(
+      ({ db }) => {
+        const row = executeSqliteQueryTakeFirstSync(
+          db,
+          getNodeSqliteKysely<GatewayBootLifecycleDatabase>(db)
+            .selectFrom("gateway_boot_lifecycle")
+            .select(["reason", "completed_at_ms as completedAtMs"])
+            .where("outcome", "in", ["clean_stop", "planned_restart", "forced_stop"])
+            .where("completed_at_ms", "is not", null)
+            .orderBy("completed_at_ms", "desc")
+            .limit(1),
+        );
+        return row?.completedAtMs == null
+          ? undefined
+          : { ...row, completedAtMs: row.completedAtMs };
+      },
+      { env },
+    );
+  } catch {
+    return undefined;
+  }
+}
+
+export function readGatewayLastInstallationReplacement(env: NodeJS.ProcessEnv = process.env) {
+  const lastShutdown = readGatewayLastShutdown(env);
+  if (!lastShutdown?.reason?.startsWith("gateway.installation_replaced:")) {
+    return undefined;
+  }
+  return { reason: lastShutdown.reason, completedAtMs: lastShutdown.completedAtMs };
+}
+
 function buildGatewayCrashLoopBreakerDecision(params: {
   uncleanBoots: number;
   windowMs?: number;
@@ -112,6 +160,12 @@ export function inspectGatewayCrashLoopBreaker(
       kysely
         .selectFrom("gateway_boot_lifecycle")
         .select((eb) => eb.fn.countAll<number>().as("count"))
+        .where((eb) =>
+          eb.or([
+            eb("startup_reason", "is", null),
+            eb("startup_reason", "not in", maintenanceStartupReasons),
+          ]),
+        )
         .where((eb) =>
           eb.or([
             eb.and([eb("completed_at_ms", "is", null), eb("started_at_ms", ">=", windowStartMs)]),
@@ -250,8 +304,16 @@ export function completeGatewayBootLifecycle(
   if (!bootId) {
     return;
   }
+  const signal =
+    completion.outcome !== "clean_stop"
+      ? undefined
+      : completion.reason === "stop (SIGTERM)"
+        ? "SIGTERM"
+        : completion.reason === "stop (SIGINT)"
+          ? "SIGINT"
+          : undefined;
   try {
-    runOpenClawStateWriteTransaction(
+    const recentStops = runOpenClawStateWriteTransaction(
       ({ db }) => {
         const kysely = getNodeSqliteKysely<GatewayBootLifecycleDatabase>(db);
         executeSqliteQuerySync(
@@ -266,61 +328,55 @@ export function completeGatewayBootLifecycle(
             })
             .where("boot_id", "=", bootId),
         );
+        return signal
+          ? executeSqliteQueryTakeFirstSync(
+              db,
+              kysely
+                .selectFrom("gateway_boot_lifecycle")
+                .select((eb) => eb.fn.countAll<number>().as("count"))
+                .where("outcome", "=", "clean_stop")
+                .where("reason", "=", completion.reason ?? null)
+                .where("completed_at_ms", ">=", nowMs - GATEWAY_SIGNAL_REPEAT_WINDOW_MS),
+            )?.count
+          : undefined;
       },
       { env },
     );
+    if (signal && recentStops !== undefined && recentStops >= 3) {
+      gatewayLifecycleLog.warn(
+        formatGatewayRepeatedSignalHint(signal, recentStops, "stopped after"),
+      );
+    }
   } catch (err) {
     gatewayLifecycleLog.warn(`failed to persist gateway boot outcome; fail-open: ${String(err)}`);
   }
 }
 
-export function repairGatewayAgentMediaMigrationStartupFailures(params: {
-  databasePaths: readonly string[];
-  env?: NodeJS.ProcessEnv;
-}): number {
-  if (params.databasePaths.length === 0) {
+export function repairGatewayMaintenanceStartupFailures(
+  env: NodeJS.ProcessEnv = process.env,
+): number {
+  if (!pathMayExistSync(resolveOpenClawStateSqlitePath(env))) {
     return 0;
   }
   try {
     return runOpenClawStateWriteTransaction(
       ({ db }) => {
         const kysely = getNodeSqliteKysely<GatewayBootLifecycleDatabase>(db);
-        const legacyMessages = [
-          ...new Set(
-            params.databasePaths.flatMap((pathname) =>
-              Array.from({ length: OPENCLAW_AGENT_SCHEMA_VERSION }, (_, schemaVersion) => {
-                const message = formatLegacyAgentMediaMigrationRequiredMessage(
-                  pathname,
-                  schemaVersion,
-                );
-                return [
-                  message,
-                  truncateUtf16Safe(message, GATEWAY_BOOT_REASON_MAX_UTF16_CODE_UNITS),
-                ];
-              }).flat(),
-            ),
-          ),
-        ];
         const result = executeSqliteQuerySync(
           db,
           kysely
             .updateTable("gateway_boot_lifecycle")
             .set({ outcome: "startup_failure_repaired" })
             .where("outcome", "=", "startup_failed")
-            .where((eb) =>
-              eb.or([
-                eb("startup_reason", "=", GATEWAY_AGENT_MEDIA_MIGRATION_REQUIRED_REASON),
-                eb("reason", "in", legacyMessages),
-              ]),
-            ),
+            .where("startup_reason", "in", maintenanceStartupReasons),
         );
         return Number(result.numAffectedRows ?? 0);
       },
-      { env: params.env ?? process.env },
+      { env },
     );
   } catch (err) {
     gatewayLifecycleLog.warn(
-      `failed to repair media-migration startup history; fail-open: ${String(err)}`,
+      `failed to repair maintenance startup history; fail-open: ${String(err)}`,
     );
     return 0;
   }

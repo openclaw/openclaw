@@ -2,6 +2,7 @@ import type { SessionEvent } from "@github/copilot-sdk";
 import {
   createAgentHarnessTaskRuntime,
   type AgentHarnessTaskRuntime,
+  type AgentHarnessScopedFinalizeTaskRunParams,
   type AgentHarnessTaskRuntimeScope,
 } from "openclaw/plugin-sdk/agent-harness-task-runtime";
 
@@ -15,7 +16,7 @@ type CopilotNativeSubagentEvent = Extract<
 
 type TaskLifecycleRuntime = Pick<
   AgentHarnessTaskRuntime,
-  "tryCreateRunningTaskRun" | "recordTaskRunProgressByRunId" | "finalizeTaskRunByRunId"
+  "tryCreateRunningTaskRun" | "finalizeTaskRunByRunId" | "listTaskRecords"
 >;
 
 export function createCopilotNativeSubagentTaskMirror(params: {
@@ -43,8 +44,10 @@ export function createCopilotNativeSubagentTaskMirror(params: {
 class CopilotNativeSubagentTaskMirror {
   private readonly runIdByAgentId = new Map<string, string>();
   private readonly runIdByToolCallId = new Map<string, string>();
-  private readonly terminalRunIds = new Set<string>();
-  private readonly activeRunIds = new Set<string>();
+  private readonly activeRuns = new Map<
+    string,
+    { taskId: string; terminal?: AgentHarnessScopedFinalizeTaskRunParams }
+  >();
   private readonly now: () => number;
 
   constructor(
@@ -73,19 +76,25 @@ class CopilotNativeSubagentTaskMirror {
 
   finalizeActiveRuns(): void {
     const eventAt = this.now();
-    for (const runId of this.activeRunIds) {
-      this.terminalRunIds.add(runId);
-      this.runtime.finalizeTaskRunByRunId({
-        runId,
-        status: "cancelled",
-        endedAt: eventAt,
-        lastEventAt: eventAt,
-        error: "Copilot native subagent ended with its parent attempt.",
-        progressSummary: "Copilot native subagent cancelled with its parent attempt.",
-        terminalSummary: "Copilot native subagent cancelled.",
-      });
+    let failure: { error: unknown } | undefined;
+    for (const runId of this.activeRuns.keys()) {
+      try {
+        this.finalizeRun({
+          runId,
+          status: "cancelled",
+          endedAt: eventAt,
+          lastEventAt: eventAt,
+          error: "Subagent ended with its parent attempt.",
+          progressSummary: "Subagent cancelled with its parent attempt.",
+          terminalSummary: "Subagent cancelled.",
+        });
+      } catch (error) {
+        failure ??= { error };
+      }
     }
-    this.activeRunIds.clear();
+    if (failure) {
+      throw failure.error;
+    }
   }
 
   private handleStarted(
@@ -102,19 +111,19 @@ class CopilotNativeSubagentTaskMirror {
     }
     const eventAt = this.now();
     const label = event.data.agentDisplayName.trim() || event.data.agentName.trim();
-    const task = event.data.agentDescription.trim() || `Copilot native subagent ${label}`;
+    const task = event.data.agentDescription.trim() || `Subagent ${label}`;
     const taskRecord = this.runtime.tryCreateRunningTaskRun({
       sourceId: toolCallId,
       agentId: this.params.agentId,
       runId,
-      label: label || "Copilot subagent",
+      label: label || "Subagent",
       task,
       notifyPolicy: "silent",
       deliveryStatus: "not_applicable",
       preferMetadata: true,
       startedAt: eventAt,
       lastEventAt: eventAt,
-      progressSummary: "Copilot native subagent started.",
+      progressSummary: "Subagent started.",
     });
     if (!taskRecord) {
       return;
@@ -124,26 +133,20 @@ class CopilotNativeSubagentTaskMirror {
     } else {
       this.runIdByToolCallId.set(toolCallId, runId);
     }
-    this.terminalRunIds.delete(runId);
-    this.activeRunIds.add(runId);
+    this.activeRuns.set(runId, { taskId: taskRecord.taskId });
   }
 
   private handleCompleted(
     event: Extract<CopilotNativeSubagentEvent, { type: "subagent.completed" }>,
     runId: string,
   ): void {
-    if (this.terminalRunIds.has(runId)) {
-      return;
-    }
     const eventAt = this.now();
-    this.terminalRunIds.add(runId);
-    this.activeRunIds.delete(runId);
-    this.runtime.finalizeTaskRunByRunId({
+    this.finalizeRun({
       runId,
       status: "succeeded",
       endedAt: eventAt,
       lastEventAt: eventAt,
-      progressSummary: "Copilot native subagent completed.",
+      progressSummary: "Subagent completed.",
       terminalSummary: buildCompletionSummary(event),
     });
   }
@@ -152,21 +155,39 @@ class CopilotNativeSubagentTaskMirror {
     event: Extract<CopilotNativeSubagentEvent, { type: "subagent.failed" }>,
     runId: string,
   ): void {
-    if (this.terminalRunIds.has(runId)) {
-      return;
-    }
     const eventAt = this.now();
-    this.terminalRunIds.add(runId);
-    this.activeRunIds.delete(runId);
-    this.runtime.finalizeTaskRunByRunId({
+    this.finalizeRun({
       runId,
       status: "failed",
       endedAt: eventAt,
       lastEventAt: eventAt,
       error: event.data.error,
-      progressSummary: "Copilot native subagent failed.",
-      terminalSummary: "Copilot native subagent failed.",
+      progressSummary: "Subagent failed.",
+      terminalSummary: "Subagent failed.",
     });
+  }
+
+  private finalizeRun(params: AgentHarnessScopedFinalizeTaskRunParams): void {
+    const run = this.activeRuns.get(params.runId);
+    if (!run) {
+      return;
+    }
+    // A failed projection keeps its observed result; teardown must not replace it with cancellation.
+    run.terminal ??= params;
+    const matchesRun = (task: { taskId: string; runId?: string }) =>
+      task.taskId === run.taskId && task.runId === params.runId;
+    const before = this.runtime.listTaskRecords().find(matchesRun);
+    if (!before || (before.status !== "queued" && before.status !== "running")) {
+      this.activeRuns.delete(params.runId);
+      return;
+    }
+    const updated = this.runtime.finalizeTaskRunByRunId(run.terminal);
+    const current = updated.find(matchesRun) ?? this.runtime.listTaskRecords().find(matchesRun);
+    // An empty result can mean failed persistence or an authoritative retirement/status fence.
+    if (current?.status === "queued" || current?.status === "running") {
+      throw new Error(`Native subagent task finalization did not persist: ${params.runId}`);
+    }
+    this.activeRuns.delete(params.runId);
   }
 
   private resolveRunId(event: CopilotNativeSubagentEvent): string {
@@ -193,7 +214,5 @@ function buildCompletionSummary(
     event.data.totalToolCalls !== undefined ? `${event.data.totalToolCalls} tool calls` : undefined,
     event.data.totalTokens !== undefined ? `${event.data.totalTokens} tokens` : undefined,
   ].filter((value): value is string => value !== undefined);
-  return details.length > 0
-    ? `Copilot native subagent completed (${details.join(", ")}).`
-    : "Copilot native subagent completed.";
+  return details.length > 0 ? `Subagent completed (${details.join(", ")}).` : "Subagent completed.";
 }

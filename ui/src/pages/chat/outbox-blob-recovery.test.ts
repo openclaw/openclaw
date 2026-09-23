@@ -2,7 +2,11 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import type {
+  ChatAttachment,
+  ChatQueueItem,
+  ChatSelectionAnnotation,
+} from "../../lib/chat/chat-types.ts";
 import * as payloadStore from "../../lib/chat/outbox-payload-store.runtime.ts";
 import {
   captureChatOutboxRecoveryDestination,
@@ -39,7 +43,13 @@ function hostFor(recoveryScope = "principal-a") {
   ).mockReturnValue(recoveryScope);
   return host;
 }
-async function prepare(host: ReturnType<typeof hostFor>, id: string, sessionKey = "global") {
+async function prepare(
+  host: ReturnType<typeof hostFor>,
+  id: string,
+  sessionKey = "global",
+  selectionAnnotation?: ChatSelectionAnnotation,
+  attachmentOrigin?: "paste" | "file",
+) {
   const item: ChatQueueItem = {
     id,
     text: id,
@@ -51,7 +61,15 @@ async function prepare(host: ReturnType<typeof hostFor>, id: string, sessionKey 
     sendAttempts: 1,
     sendState: "unconfirmed",
     attachments: [
-      { id: `${id}-file`, mimeType: "text/plain", fileName: "source.txt", sizeBytes: 21, dataUrl },
+      {
+        id: `${id}-file`,
+        mimeType: "text/plain",
+        fileName: "source.txt",
+        sizeBytes: 21,
+        ...(attachmentOrigin ? { origin: attachmentOrigin } : {}),
+        dataUrl,
+        ...(selectionAnnotation ? { selectionAnnotation } : {}),
+      },
     ],
   };
   const result = await prepareOutboxPayload(host, item);
@@ -62,18 +80,22 @@ async function prepare(host: ReturnType<typeof hostFor>, id: string, sessionKey 
   const { attachmentStorageError: _, ...stored } = { ...item, ...result.update };
   return {
     ...stored,
-    attachments: item.attachments?.map(({ id: attachmentId, mimeType, fileName, sizeBytes }) => ({
-      id: attachmentId,
-      mimeType,
-      fileName,
-      sizeBytes,
-    })),
+    attachments: item.attachments?.map(
+      ({ id: attachmentId, mimeType, fileName, sizeBytes, origin }) => {
+        const metadata: ChatAttachment = { id: attachmentId, mimeType, fileName, sizeBytes };
+        if (origin) {
+          metadata.origin = origin;
+        }
+        return metadata;
+      },
+    ),
   };
 }
 function seed(items: ChatQueueItem[], sessionKey = "global", version = 3) {
   const key = `openclaw.control.chatComposer.v${version}:${encodeURIComponent(gatewayUrl)}`;
   const raw = JSON.stringify({
     version,
+    ...(version === 4 ? { recovery: {} } : {}),
     gatewayOwner: gatewayUrl,
     sessions: {
       [storedChatOutboxScopeKey({ sessionKey, agentId: "main" })]: {
@@ -89,9 +111,21 @@ function seed(items: ChatQueueItem[], sessionKey = "global", version = 3) {
 async function expectBytes(host: ReturnType<typeof hostFor>, item: ChatQueueItem) {
   const result = await prepareOutboxPayload(host, item, "handoff");
   expect(result.status).toBe("ready");
-  expect(
-    result.status === "ready" ? result.update.attachments?.map(getChatAttachmentDataUrl) : [],
-  ).toEqual([dataUrl]);
+  const attachments = result.status === "ready" ? result.update.attachments : [];
+  expect(attachments).toHaveLength(1);
+  const restoredUrl = expectDefined(
+    getChatAttachmentDataUrl(expectDefined(attachments?.[0], "restored attachment")),
+    "restored attachment data URL",
+  );
+  const comma = restoredUrl.indexOf(",");
+  expect(comma).toBeGreaterThan(0);
+  const metadata = restoredUrl.slice(0, comma).split(";");
+  expect(metadata[0]).toBe("data:text/plain");
+  expect(metadata.at(-1)).toBe("base64");
+  expect(Buffer.from(restoredUrl.slice(comma + 1), "base64")).toEqual(
+    Buffer.from("complete source bytes"),
+  );
+  return attachments?.[0];
 }
 
 beforeEach(() => {
@@ -120,6 +154,22 @@ describe("Blob-preserving metadata migration", () => {
     expect(sessionStorage.getItem("openclaw.control.outboxTab.v1")).toBe(
       "07070707-0707-4707-8707-070707070707",
     );
+  });
+
+  it("recovers a selected-text annotation with its queued file payload", async () => {
+    const annotation: ChatSelectionAnnotation = {
+      text: "complete source bytes",
+      comment: "Keep this context. 🦞",
+      sessionKey: "agent:main:review",
+      messageId: "assistant-1",
+      entryId: "entry-1",
+      start: 5,
+      end: 26,
+    };
+    const host = hostFor();
+    const item = await prepare(host, "selection", "global", annotation);
+    const restored = await expectBytes(host, item);
+    expect(restored?.selectionAnnotation).toEqual(annotation);
   });
 
   it("does not settle payload preparation under a pending connected recovery owner", async () => {
@@ -323,6 +373,18 @@ describe("Blob-preserving metadata migration", () => {
       }
       expect(cleanup).not.toHaveBeenCalled();
       await expectBytes(host, item);
+    },
+  );
+  it.each(["paste", "file", undefined] as const)(
+    "preserves %s origin and bytes after durable queue reload",
+    async (origin) => {
+      const host = hostFor();
+      const item = await prepare(host, `origin-${origin}`, "agent:main:review", undefined, origin);
+      seed([item], "agent:main:review", 4);
+      const store = readStoredOutboxStore(sessionStorage, target);
+      const restoredItem = Object.values(store.sessions)[0]?.queue?.[0];
+      const restored = await expectBytes(host, expectDefined(restoredItem, "stored queue item"));
+      expect(restored?.origin).toBe(origin);
     },
   );
 });

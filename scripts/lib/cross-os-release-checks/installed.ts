@@ -1,13 +1,7 @@
 import { spawn } from "node:child_process";
 import { appendFileSync, createWriteStream, existsSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
-import {
-  agentOutputHasExpectedOkMarker,
-  buildCrossOsReleaseAgentSessionId,
-  buildReleaseAgentTurnArgs,
-  maybeBuildOptionalAgentTurnSkipResult,
-  shouldRetryCrossOsAgentTurnError,
-} from "./agent.ts";
+import { runReleaseAgentTurn } from "./agent.ts";
 import type {
   AgentTurnResult,
   CommandOptions,
@@ -16,13 +10,9 @@ import type {
   ProviderConfig,
 } from "./config.ts";
 import {
-  CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS,
   CROSS_OS_GATEWAY_STATUS_COMMAND_TIMEOUT_MS,
   CROSS_OS_GATEWAY_STATUS_RPC_TIMEOUT_MS,
-  CROSS_OS_RELEASE_SMOKE_TOOLS_PROFILE,
-  buildCrossOsReleaseSmokeMemorySlotConfigArgs,
-  buildCrossOsReleaseSmokePluginAllowlist,
-  buildReleaseProviderConfigOverride,
+  buildReleaseModelConfigCommands,
   gatewayReadyDeadlineMs,
   installTimeoutMs,
   looksLikeCommitSha,
@@ -36,7 +26,7 @@ import {
   npmCommand,
   resolveInstalledPrefixDirFromCliPath,
 } from "./install.ts";
-import { readLogFileSize, readLogTextSince } from "./logs.ts";
+import { readLogFileSize } from "./logs.ts";
 import {
   canConnectToLoopbackPort,
   hasChildExited,
@@ -748,70 +738,16 @@ export async function runInstalledModelsSet(params: {
   providerConfig: ProviderConfig;
   logPath: string;
 }) {
-  await runInstalledCli({
-    cliPath: params.cliPath,
-    args: ["models", "set", params.providerConfig.model],
-    cwd: params.cwd,
-    env: params.env,
-    logPath: params.logPath,
-    timeoutMs: 2 * 60 * 1000,
-  });
-  const providerConfigOverride = buildReleaseProviderConfigOverride(params.providerConfig);
-  if (providerConfigOverride) {
+  for (const args of buildReleaseModelConfigCommands(params.providerConfig)) {
     await runInstalledCli({
       cliPath: params.cliPath,
-      args: [
-        "config",
-        "set",
-        `models.providers.${params.providerConfig.extensionId}`,
-        JSON.stringify(providerConfigOverride),
-        "--strict-json",
-        "--merge",
-      ],
+      args,
       cwd: params.cwd,
       env: params.env,
       logPath: params.logPath,
       timeoutMs: 2 * 60 * 1000,
     });
   }
-  await runInstalledCli({
-    cliPath: params.cliPath,
-    args: [
-      "config",
-      "set",
-      "plugins.allow",
-      JSON.stringify(buildCrossOsReleaseSmokePluginAllowlist(params.providerConfig)),
-      "--strict-json",
-    ],
-    cwd: params.cwd,
-    env: params.env,
-    logPath: params.logPath,
-    timeoutMs: 2 * 60 * 1000,
-  });
-  await runInstalledCli({
-    cliPath: params.cliPath,
-    args: buildCrossOsReleaseSmokeMemorySlotConfigArgs(),
-    cwd: params.cwd,
-    env: params.env,
-    logPath: params.logPath,
-    timeoutMs: 2 * 60 * 1000,
-  });
-  await runInstalledCli({
-    cliPath: params.cliPath,
-    args: ["config", "set", "agents.defaults.skipBootstrap", "true", "--strict-json"],
-    cwd: params.cwd,
-    env: params.env,
-    logPath: params.logPath,
-    timeoutMs: 2 * 60 * 1000,
-  });
-  await runInstalledCli({
-    cliPath: params.cliPath,
-    args: ["config", "set", "tools.profile", CROSS_OS_RELEASE_SMOKE_TOOLS_PROFILE],
-    cwd: params.cwd,
-    env: params.env,
-    logPath: params.logPath,
-    timeoutMs: 2 * 60 * 1000,
-  });
 }
 
 export async function runInstalledAgentTurn(params: {
@@ -821,45 +757,19 @@ export async function runInstalledAgentTurn(params: {
   label: string;
   logPath: string;
 }): Promise<AgentTurnResult> {
-  let lastError;
-  for (let attempt = 1; attempt <= 2; attempt += 1) {
-    const sessionId = buildCrossOsReleaseAgentSessionId(params.label, attempt);
-    try {
-      const logOffset = readLogFileSize(params.logPath);
-      const result = await runInstalledCli({
+  return runReleaseAgentTurn(
+    params,
+    (args, timeoutMs) =>
+      runInstalledCli({
         cliPath: params.cliPath,
-        args: buildReleaseAgentTurnArgs(sessionId),
+        args,
         cwd: params.cwd,
         env: params.env,
         logPath: params.logPath,
-        timeoutMs: (CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS + 60) * 1000,
-      });
-      const logText = readLogTextSince(params.logPath, logOffset);
-      if (!agentOutputHasExpectedOkMarker(result.stdout, { logText })) {
-        throw new Error("Agent output did not contain the expected OK marker.");
-      }
-      return result;
-    } catch (error) {
-      lastError = error;
-      const skipped = maybeBuildOptionalAgentTurnSkipResult(error, params.logPath, {
-        attempt,
-        maxAttempts: 2,
-      });
-      if (skipped) {
-        return skipped;
-      }
-      if (attempt >= 2 || !shouldRetryCrossOsAgentTurnError(error)) {
-        throw error;
-      }
-      appendFileSync(
-        params.logPath,
-        `\n[release-checks] retrying installed agent turn after retryable live failure: ${
-          error instanceof Error ? error.message : String(error)
-        }\n`,
-      );
-    }
-  }
-  throw lastError;
+        timeoutMs,
+      }),
+    "installed agent turn",
+  );
 }
 
 export function verifyDevUpdateStatus(stdout: string, options: { ref?: string } = {}) {

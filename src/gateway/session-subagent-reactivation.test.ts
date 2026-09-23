@@ -15,8 +15,12 @@ vi.mock("../agents/subagents/registry/subagent-registry-read.js", async () => {
     ...actual,
     getLatestSubagentRunByChildSessionKey: (...args: unknown[]) =>
       getLatestSubagentRunByChildSessionKeyMock(...args),
-    getLatestLiveSubagentRunByChildSessionKey: (...args: unknown[]) =>
-      getLatestLiveSubagentRunByChildSessionKeyMock(...args),
+    getLatestLiveSubagentRunByChildSessionKey: (
+      ...args: Parameters<typeof actual.getLatestLiveSubagentRunByChildSessionKey>
+    ) => {
+      const run = getLatestLiveSubagentRunByChildSessionKeyMock(...args);
+      return run && (!args[1] || args[1](run)) ? run : undefined;
+    },
   };
 });
 
@@ -184,7 +188,9 @@ describe("reactivateCompletedSubagentSession", () => {
       createdAt: 40,
       execution: { status: "terminal", startedAt: 41, endedAt: 42 },
     });
-    replaceSubagentRunAfterSteerMock.mockRejectedValueOnce(new Error("database unavailable"));
+    replaceSubagentRunAfterSteerMock.mockImplementationOnce(() => {
+      throw new Error("database unavailable");
+    });
 
     await expect(
       reactivateCompletedSubagentSession({

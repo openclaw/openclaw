@@ -99,6 +99,7 @@ async function invoke(
   params: Record<string, unknown>,
   mcpAppsEnabled = true,
   config: Record<string, unknown> = {},
+  scopes: string[] = ["operator.write"],
 ) {
   const respond = vi.fn();
   await expectDefined(
@@ -107,6 +108,7 @@ async function invoke(
   )({
     respond,
     params,
+    client: { connect: { scopes } },
     context: {
       getMcpAppSandboxPort: () => 18790,
       getRuntimeConfig: () => ({
@@ -193,12 +195,25 @@ describe("MCP App gateway bridge", () => {
     expect(mocks.getMcpAppViewLease).toHaveBeenCalledWith("cv_app", expect.any(Object));
     expect(mocks.createMcpAppStandaloneTicket).toHaveBeenCalledWith({
       sessionKey: "agent:main:main",
+      toolOperationsAuthorized: true,
       view,
     });
     const activeRuntime = mocks.peekSessionMcpRuntime.mock.results[0]?.value;
     expect(activeRuntime.acquireLease).toHaveBeenCalledOnce();
     expect(activeRuntime.acquireLease.mock.results[0]?.value).toHaveBeenCalledOnce();
     expect(mocks.completeDeferredSessionMcpRuntimeRetirement).toHaveBeenCalledWith(activeRuntime);
+  });
+
+  it("mints a view-only standalone ticket for a read-scoped caller", async () => {
+    await invoke("mcp.app.view", { sessionKey: "agent:main:main", viewId: "cv_app" }, true, {}, [
+      "operator.read",
+    ]);
+
+    expect(mocks.createMcpAppStandaloneTicket).toHaveBeenCalledWith({
+      sessionKey: "agent:main:main",
+      toolOperationsAuthorized: false,
+      view,
+    });
   });
 
   it("resolves a harness-native view through its originating session", async () => {

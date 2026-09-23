@@ -51,11 +51,12 @@ export async function* parseOpenAIChatGptResponsesSse(
         const searchable = deferTrailingCr ? buffer.slice(0, -1) : buffer;
         // A CRLF is one line ending: never backtrack its CR into a false blank line.
         const boundary = /(?:\r\n|\r(?!\n)|\n)(?:\r\n|\r(?!\n)|\n)/.exec(searchable);
-        if (!boundary) {
+        if (!boundary && (!done || buffer.length === 0)) {
           break;
         }
-        const chunk = buffer.slice(0, boundary.index);
-        buffer = buffer.slice(boundary.index + boundary[0].length);
+        // EOF completes the remaining frame even without a blank-line delimiter.
+        const chunk = boundary ? buffer.slice(0, boundary.index) : buffer;
+        buffer = boundary ? buffer.slice(boundary.index + boundary[0].length) : "";
 
         const dataLines = chunk
           .split(/\r\n|\r|\n/)

@@ -1,32 +1,46 @@
-// Maintains plugin setup entries discovered from manifests and light exports.
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { types } from "node:util";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   normalizeStringEntries,
   normalizeUniqueStringEntries,
 } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { buildPluginApi, createUnavailableRuntime } from "./api-builder.js";
+import { instrumentPluginInstanceApi } from "./api-facades.js";
+import { runPluginRegistration } from "./api-lifecycle.js";
 import { hasPluginConfigMigrationSource } from "./config-contract-matches.js";
+import { findUninspectedPluginDiagnostic } from "./discovery-availability.js";
+import { discoverConfiguredPluginLoadPaths } from "./discovery.js";
 import {
   loadPluginManifestRegistryForInstalledIndex,
   selectInstalledPluginManifestRecords,
 } from "./manifest-registry-installed.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
-import { createPluginCacheKey, PluginLruCache } from "./plugin-cache-primitives.js";
-import { getPluginCache, getPluginCacheRoot } from "./plugin-cache.js";
+import { resolvePluginModuleExport } from "./module-export.js";
+import {
+  getPluginCache,
+  getPluginCacheRoot,
+  getProcessPluginCache,
+  withPluginCache,
+  type PluginCache,
+} from "./plugin-cache.js";
 import { resolvePluginControlPlaneFingerprint } from "./plugin-control-plane-context.js";
+import { getPluginValueInstance, type PluginInstanceHandle } from "./plugin-instance-scope.js";
 import { tracePluginLifecyclePhase } from "./plugin-lifecycle-trace.js";
-import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
+import { PluginLruCache } from "./plugin-lru-cache.js";
 import { resolvePluginMetadataEnvFingerprint } from "./plugin-metadata-snapshot.js";
-import { getCachedPluginModuleLoader } from "./plugin-module-loader-cache.js";
 import { loadPluginRegistrySnapshotWithMetadata } from "./plugin-registry.js";
-import { resolvePreferredBundledRootArtifact } from "./plugin-runtime-artifact-selection.js";
+import {
+  resolvePluginRuntimeExecutionArtifact,
+  resolvePreferredBundledRootArtifact,
+} from "./plugin-runtime-artifact-selection.js";
+import { getPluginSetupModuleLoader } from "./plugin-setup-module.js";
 import { resolvePluginRootArtifactPath } from "./root-artifact-path.js";
 import { listSetupCliBackendIds, listSetupProviderIds } from "./setup-descriptors.js";
-import { pluginSetupRegistryLoaderState } from "./setup-registry-loader-state.js";
 import type {
   CliBackendPlugin,
   OpenClawPluginModule,
@@ -101,30 +115,22 @@ const NOOP_LOGGER: PluginLogger = {
   error() {},
 };
 
-const MAX_SETUP_REGISTRY_CACHE_ENTRIES = 16;
-let setupRegistryGenerationIdSeq = 0;
-let setupRegistryGenerations = new WeakMap<object, { snapshot: unknown; id: string }>();
-const pluginSetupRegistryCache = new PluginLruCache<PluginSetupRegistry>(
-  MAX_SETUP_REGISTRY_CACHE_ENTRIES,
-);
+// Setup results cannot outlive their module owner or keep a retired graph alive.
+const setupRegistries = new WeakMap<
+  PluginCache,
+  { snapshot: unknown; results: PluginLruCache<PluginSetupRegistry> }
+>();
 
-function clearPluginSetupRegistryCache(): void {
-  setupRegistryGenerations = new WeakMap();
-  pluginSetupRegistryCache.clear();
+function getSetupRegistryCache() {
+  const owner = getPluginCache();
+  const { snapshot } = owner.metadata.current;
+  let cached = setupRegistries.get(owner);
+  if (!cached || cached.snapshot !== snapshot) {
+    cached = { snapshot, results: new PluginLruCache<PluginSetupRegistry>(16) };
+    setupRegistries.set(owner, cached);
+  }
+  return cached.results;
 }
-
-registerPluginMetadataProcessMemoLifecycleClear(clearPluginSetupRegistryCache);
-function getModuleLoader(modulePath: string, rootDir: string) {
-  return getCachedPluginModuleLoader({
-    modulePath,
-    rootDir,
-    importerUrl: import.meta.url,
-    ...(pluginSetupRegistryLoaderState.moduleLoaderFactory
-      ? { createLoader: pluginSetupRegistryLoaderState.moduleLoaderFactory }
-      : {}),
-  });
-}
-
 function resolveSetupApiPath(
   rootDir: string,
   options?: { includeBundledSourceFallback?: boolean },
@@ -168,20 +174,15 @@ function resolveSetupApiPathUncached(
     : resolvePluginRootArtifactPath(sourceExtensionRoot, artifactPaths);
 }
 
-function collectConfiguredPluginEntryIds(config: OpenClawConfig): string[] {
-  const entries = config.plugins?.entries;
-  if (!entries || typeof entries !== "object") {
-    return [];
-  }
-  return normalizeStringEntries(Object.keys(entries)).toSorted();
-}
-
 function resolveRelevantSetupMigrationPluginIds(params: {
   config: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): string[] {
-  const ids = new Set<string>(collectConfiguredPluginEntryIds(params.config));
+  const entries = params.config.plugins?.entries;
+  const ids = new Set<string>(
+    entries && typeof entries === "object" ? normalizeStringEntries(Object.keys(entries)) : [],
+  );
   const plugins = loadSetupManifestRecords({
     config: params.config,
     workspaceDir: params.workspaceDir,
@@ -200,22 +201,6 @@ function resolveRelevantSetupMigrationPluginIds(params: {
   return [...ids].toSorted();
 }
 
-function resolveRegister(mod: OpenClawPluginModule): {
-  definition?: { id?: string };
-  register?: (api: ReturnType<typeof buildPluginApi>) => void | Promise<void>;
-} {
-  if (typeof mod === "function") {
-    return { register: mod };
-  }
-  if (mod && typeof mod === "object" && typeof mod.register === "function") {
-    return {
-      definition: mod as { id?: string },
-      register: mod.register.bind(mod),
-    };
-  }
-  return {};
-}
-
 function resolveLoadableSetupRuntimeSource(
   record: PluginManifestRecord,
 ): { source: string; rootDir: string } | null {
@@ -226,11 +211,13 @@ function resolveLoadableSetupRuntimeSource(
   if (record.origin !== "bundled" || record.sourcePreferred) {
     return { source, rootDir: record.rootDir };
   }
-  return resolvePreferredBundledRootArtifact({
-    source,
-    rootDir: record.rootDir,
-    packageManifest: record.packageManifest,
-  });
+  return resolvePluginRuntimeExecutionArtifact(
+    resolvePreferredBundledRootArtifact({
+      source,
+      rootDir: record.rootDir,
+      packageManifest: record.packageManifest,
+    }),
+  );
 }
 
 function resolveDeclaredSetupRuntimeSource(record: PluginManifestRecord): string | null {
@@ -247,7 +234,9 @@ function resolveSetupRegistration(
   diagnostics: PluginSetupRegistryDiagnostic[],
 ): {
   setupSource: string;
-  register: (api: ReturnType<typeof buildPluginApi>) => void | Promise<void>;
+  instance?: PluginInstanceHandle;
+  register: (api: Parameters<typeof runPluginRegistration>[1]) => boolean;
+  initialize: ReturnType<typeof getPluginSetupModuleLoader>["initialize"];
 } | null {
   if (record.setup?.requiresRuntime === false) {
     return null;
@@ -259,29 +248,34 @@ function resolveSetupRegistration(
   const setupSource = setupArtifact.source;
 
   let mod: OpenClawPluginModule;
+  let moduleLoader: ReturnType<typeof getPluginSetupModuleLoader>;
   try {
-    mod = getModuleLoader(setupSource, setupArtifact.rootDir)(setupSource) as OpenClawPluginModule;
+    moduleLoader = getPluginSetupModuleLoader(record, setupSource, setupArtifact.rootDir);
+    mod = moduleLoader(setupSource) as OpenClawPluginModule;
   } catch (error) {
     // A broken setup entry silently removes the plugin's providers/CLI
     // backends/migrations from onboarding; record why instead of vanishing.
     diagnostics.push({
       pluginId: record.id,
       code: "setup-entry-load-failed",
-      message: `setup entry failed to load from ${setupSource}: ${String(error)}`,
+      message: `setup entry failed to load from ${setupSource}: ${formatErrorMessage(error)}`,
     });
     return null;
   }
 
-  const resolved = resolveRegister((mod as { default?: OpenClawPluginModule }).default ?? mod);
-  if (!resolved.register) {
-    return null;
-  }
-  if (resolved.definition?.id && resolved.definition.id !== record.id) {
-    return null;
-  }
   return {
     setupSource,
-    register: resolved.register,
+    instance: getPluginValueInstance(mod as object),
+    register(api) {
+      const resolved = resolvePluginModuleExport(mod);
+      if (!resolved.register || (resolved.definition?.id && resolved.definition.id !== record.id)) {
+        return false;
+      }
+      // Setup keeps a legacy async entry's synchronous prefix; later registration stays closed.
+      runPluginRegistration(resolved.register.bind(resolved.definition), api, "ignore");
+      return true;
+    },
+    initialize: moduleLoader.initialize,
   };
 }
 
@@ -306,29 +300,6 @@ function buildSetupPluginApi(params: {
   });
 }
 
-function ignoreAsyncSetupRegisterResult(result: void | Promise<void>): void {
-  if (!result || typeof result.then !== "function") {
-    return;
-  }
-  // Setup-only registration is sync-only. Swallow async rejections so they do
-  // not trip the global unhandledRejection fatal path.
-  void Promise.resolve(result).catch(() => undefined);
-}
-
-function runSetupRegistration(
-  register: (api: ReturnType<typeof buildPluginApi>) => void | Promise<void>,
-  api: ReturnType<typeof buildPluginApi>,
-  onError: (error: unknown) => void,
-): boolean {
-  try {
-    ignoreAsyncSetupRegisterResult(register(api));
-    return true;
-  } catch (error) {
-    onError(error);
-    return false;
-  }
-}
-
 function matchesProvider(provider: ProviderPlugin, providerId: string): boolean {
   const normalized = normalizeProviderId(providerId);
   if (normalizeProviderId(provider.id) === normalized) {
@@ -349,7 +320,7 @@ function resolveSetupRegistryCacheKey(params?: {
   if (env !== process.env) {
     return null;
   }
-  return createPluginCacheKey([
+  return JSON.stringify([
     "setup-registry",
     resolvePluginControlPlaneFingerprint({
       config: params?.config,
@@ -357,23 +328,9 @@ function resolveSetupRegistryCacheKey(params?: {
       workspaceDir: params?.workspaceDir,
     }),
     resolvePluginMetadataEnvFingerprint(env),
-    resolveSetupRuntimeGenerationId(),
     process.cwd(),
     params?.pluginIds ? [...params.pluginIds].toSorted() : null,
   ]);
-}
-
-function resolveSetupRuntimeGenerationId(): string {
-  // Management can share the Gateway's config and roots, but its registrations
-  // must come from its own inventory and module generation.
-  const owner = getPluginCache();
-  const { snapshot } = owner.metadata.current;
-  let generation = setupRegistryGenerations.get(owner);
-  if (!generation || generation.snapshot !== snapshot) {
-    generation = { snapshot, id: `s${++setupRegistryGenerationIdSeq}` };
-    setupRegistryGenerations.set(owner, generation);
-  }
-  return generation.id;
 }
 
 function cloneSetupRegistryValue<T>(value: T, seen = new WeakMap<object, unknown>()): T {
@@ -384,12 +341,12 @@ function cloneSetupRegistryValue<T>(value: T, seen = new WeakMap<object, unknown
   if (cached !== undefined) {
     return cached as T;
   }
-  if (value instanceof Date) {
+  if (types.isDate(value)) {
     const clone = new Date(value);
     seen.set(value, clone);
     return clone as T;
   }
-  if (value instanceof RegExp) {
+  if (types.isRegExp(value)) {
     const clone = new RegExp(value.source, value.flags);
     clone.lastIndex = value.lastIndex;
     seen.set(value, clone);
@@ -401,7 +358,7 @@ function cloneSetupRegistryValue<T>(value: T, seen = new WeakMap<object, unknown
     clone.push(...value.map((entry) => cloneSetupRegistryValue(entry, seen)));
     return clone as T;
   }
-  if (value instanceof Map) {
+  if (types.isMap(value)) {
     const clone = new Map<unknown, unknown>();
     seen.set(value, clone);
     for (const [key, entry] of value.entries()) {
@@ -409,7 +366,7 @@ function cloneSetupRegistryValue<T>(value: T, seen = new WeakMap<object, unknown
     }
     return clone as T;
   }
-  if (value instanceof Set) {
+  if (types.isSet(value)) {
     const clone = new Set<unknown>();
     seen.set(value, clone);
     for (const entry of value.values()) {
@@ -418,7 +375,7 @@ function cloneSetupRegistryValue<T>(value: T, seen = new WeakMap<object, unknown
     return clone as T;
   }
   const prototype = Object.getPrototypeOf(value);
-  if (prototype !== Object.prototype && prototype !== null) {
+  if (prototype !== null && Object.getPrototypeOf(prototype) !== null) {
     // Class-prototyped values are shared by reference: setup registrations must
     // treat them as immutable, or a caller mutation corrupts later cache hits.
     return value;
@@ -570,7 +527,20 @@ function pushSetupDescriptorDriftDiagnostics(params: {
   }
 }
 
-export function resolvePluginSetupRegistry(params?: {
+function withPluginSetupCache<TArgs extends unknown[], TResult>(
+  query: (...args: TArgs) => TResult,
+) {
+  return (...args: TArgs): TResult => {
+    const ambient = getPluginCache();
+    // Retained runtime callbacks keep captured package facts, but new setup
+    // queries belong to the published inventory. Candidate operations stay isolated.
+    return withPluginCache(ambient.kind === "process" ? getProcessPluginCache() : ambient, () =>
+      query(...args),
+    );
+  };
+}
+
+export const resolvePluginSetupRegistry = withPluginSetupCache(function (params?: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
@@ -594,8 +564,9 @@ export function resolvePluginSetupRegistry(params?: {
 
   // Caller-supplied manifests own their registration; only implicit inventory requests reuse it.
   const resultCacheKey = params?.manifestRegistry ? null : resolveSetupRegistryCacheKey(params);
+  const resultCache = getSetupRegistryCache();
   if (resultCacheKey !== null) {
-    const cached = pluginSetupRegistryCache.get(resultCacheKey);
+    const cached = resultCache.get(resultCacheKey);
     if (cached) {
       return cloneSetupRegistry(cached);
     }
@@ -606,8 +577,8 @@ export function resolvePluginSetupRegistry(params?: {
   const configMigrations: SetupConfigMigrationEntry[] = [];
   const autoEnableProbes: SetupAutoEnableProbeEntry[] = [];
   const diagnostics: PluginSetupRegistryDiagnostic[] = [];
-  let providerKeys = new Set<string>();
-  let cliBackendKeys = new Set<string>();
+  const providerKeys = new Set<string>();
+  const cliBackendKeys = new Set<string>();
 
   const plugins =
     params?.manifestRegistry == null
@@ -639,16 +610,15 @@ export function resolvePluginSetupRegistry(params?: {
     const recordCliBackends: SetupCliBackendEntry[] = [];
     const recordConfigMigrations: SetupConfigMigrationEntry[] = [];
     const recordAutoEnableProbes: SetupAutoEnableProbeEntry[] = [];
-    const recordProviderKeys = new Set(providerKeys);
-    const recordCliBackendKeys = new Set(cliBackendKeys);
-    let acceptingRegistrations = true;
+    const recordProviderKeys = new Set<string>();
+    const recordCliBackendKeys = new Set<string>();
     const api = buildSetupPluginApi({
       record,
       setupSource: setupRegistration.setupSource,
       handlers: {
         registerProvider(provider) {
           const key = `${record.id}:${normalizeProviderId(provider.id)}`;
-          if (!acceptingRegistrations || recordProviderKeys.has(key)) {
+          if (providerKeys.has(key) || recordProviderKeys.has(key)) {
             return;
           }
           recordProviderKeys.add(key);
@@ -659,7 +629,7 @@ export function resolvePluginSetupRegistry(params?: {
         },
         registerCliBackend(backend) {
           const key = `${record.id}:${normalizeProviderId(backend.id)}`;
-          if (!acceptingRegistrations || recordCliBackendKeys.has(key)) {
+          if (cliBackendKeys.has(key) || recordCliBackendKeys.has(key)) {
             return;
           }
           recordCliBackendKeys.add(key);
@@ -669,18 +639,12 @@ export function resolvePluginSetupRegistry(params?: {
           });
         },
         registerConfigMigration(migrate) {
-          if (!acceptingRegistrations) {
-            return;
-          }
           recordConfigMigrations.push({
             pluginId: record.id,
             migrate,
           });
         },
         registerAutoEnableProbe(probe) {
-          if (!acceptingRegistrations) {
-            return;
-          }
           recordAutoEnableProbes.push({
             pluginId: record.id,
             probe,
@@ -689,23 +653,32 @@ export function resolvePluginSetupRegistry(params?: {
       },
     });
 
-    const registered = runSetupRegistration(setupRegistration.register, api, (error) => {
+    try {
+      if (
+        !setupRegistration.initialize(() =>
+          setupRegistration.register(instrumentPluginInstanceApi(api, setupRegistration.instance)),
+        )
+      ) {
+        continue;
+      }
+    } catch (error) {
       diagnostics.push({
         pluginId: record.id,
         code: "setup-registration-failed",
-        message: `setup registration threw: ${String(error)}`,
+        message: `setup registration threw: ${formatErrorMessage(error)}`,
       });
-    });
-    acceptingRegistrations = false;
-    if (!registered) {
       continue;
     }
     providers.push(...recordProviders);
     cliBackends.push(...recordCliBackends);
     configMigrations.push(...recordConfigMigrations);
     autoEnableProbes.push(...recordAutoEnableProbes);
-    providerKeys = recordProviderKeys;
-    cliBackendKeys = recordCliBackendKeys;
+    for (const key of recordProviderKeys) {
+      providerKeys.add(key);
+    }
+    for (const key of recordCliBackendKeys) {
+      cliBackendKeys.add(key);
+    }
     pushSetupDescriptorDriftDiagnostics({
       record,
       providers: recordProviders.map((entry) => entry.provider),
@@ -730,11 +703,11 @@ export function resolvePluginSetupRegistry(params?: {
   if (resultCacheKey === null) {
     return registry;
   }
-  pluginSetupRegistryCache.set(resultCacheKey, cloneSetupRegistry(registry));
+  resultCache.set(resultCacheKey, cloneSetupRegistry(registry));
   return registry;
-}
+});
 
-export function resolvePluginSetupProviderCore(params: {
+export const resolvePluginSetupProviderCore = withPluginSetupCache(function (params: {
   provider: string;
   config?: OpenClawConfig;
   workspaceDir?: string;
@@ -760,9 +733,9 @@ export function resolvePluginSetupProviderCore(params: {
   return resolveSetupRegistryForManifestOwner(record).providers.findLast((entry) =>
     matchesProvider(entry.provider, normalizedProvider),
   )?.provider;
-}
+});
 
-export function resolvePluginSetupCliBackend(params: {
+export const resolvePluginSetupCliBackend = withPluginSetupCache(function (params: {
   backend: string;
   config?: OpenClawConfig;
   workspaceDir?: string;
@@ -790,9 +763,9 @@ export function resolvePluginSetupCliBackend(params: {
   return resolveSetupRegistryForManifestOwner(record).cliBackends.find(
     (entry) => normalizeProviderId(entry.backend.id) === normalized,
   );
-}
+});
 
-export function runPluginSetupConfigMigrations(params: {
+export const runPluginSetupConfigMigrations = withPluginSetupCache(function (params: {
   config: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
@@ -800,31 +773,29 @@ export function runPluginSetupConfigMigrations(params: {
   config: OpenClawConfig;
   changes: string[];
 } {
+  const loadPaths = params.config.plugins?.load?.paths ?? [];
+  const warning = findUninspectedPluginDiagnostic(
+    discoverConfiguredPluginLoadPaths({ loadPaths, env: params.env }).diagnostics,
+  );
+  if (warning) {
+    log.warn(warning.message);
+    return { config: params.config, changes: [] };
+  }
   let next = params.config;
   const changes: string[] = [];
   const pluginIds = resolveRelevantSetupMigrationPluginIds(params);
-  if (pluginIds.length === 0) {
-    return { config: next, changes };
-  }
-
-  for (const entry of resolvePluginSetupRegistry({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-    pluginIds,
-  }).configMigrations) {
+  for (const entry of resolvePluginSetupRegistry({ ...params, pluginIds }).configMigrations) {
     const migration = entry.migrate(next);
-    if (!migration || migration.changes.length === 0) {
-      continue;
+    if (migration?.changes.length) {
+      next = migration.config;
+      changes.push(...migration.changes);
     }
-    next = migration.config;
-    changes.push(...migration.changes);
   }
 
   return { config: next, changes };
-}
+});
 
-export function resolvePluginSetupAutoEnableReasons(params: {
+export const resolvePluginSetupAutoEnableReasons = withPluginSetupCache(function (params: {
   config: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
@@ -865,5 +836,5 @@ export function resolvePluginSetupAutoEnableReasons(params: {
   }
 
   return reasons;
-}
+});
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

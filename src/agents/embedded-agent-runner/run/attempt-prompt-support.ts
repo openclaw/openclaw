@@ -63,6 +63,7 @@ export function createPromptBuildToolPolicy<
   let toolsAllow: string[] | undefined;
   const current = {
     activeToolNames: [...baseline.activeToolNames],
+    callableToolNames: [...baseline.activeToolNames],
     effectiveTools: params.effectiveTools,
     uncompactedEffectiveTools: params.uncompactedEffectiveTools,
     tools: params.tools,
@@ -126,6 +127,7 @@ export function applyPromptBuildToolsAllow<
   forceToolNames?: readonly string[];
 }): {
   activeToolNames: string[];
+  callableToolNames: string[];
   effectiveTools: TEffectiveTool[];
   uncompactedEffectiveTools: TUncompactedTool[];
   tools: TTool[];
@@ -169,6 +171,7 @@ export function applyPromptBuildToolsAllow<
 
   return {
     activeToolNames,
+    callableToolNames: promptPolicy.callableToolNames,
     effectiveTools: promptPolicy.tools,
     uncompactedEffectiveTools: allowedUncompactedTools,
     tools: allowedTools,
@@ -246,21 +249,24 @@ export function observeEmbeddedAttemptPrompt(input: {
       messages: input.sessionMessages,
       note: `images: prompt=${input.imageCount}`,
     });
-    const providerVisibleTools = toTrajectoryToolDefinitions(input.effectiveTools);
-    const trajectoryTools = input.toolSearchCompacted
-      ? toTrajectoryToolDefinitions(input.uncompactedEffectiveTools)
-      : providerVisibleTools;
-    input.trajectoryRecorder?.recordEvent("context.compiled", {
-      systemPrompt: input.systemPromptForHook,
-      prompt: input.promptForModel,
-      messages: input.sessionMessages,
-      tools: trajectoryTools,
-      ...(input.toolSearchCompacted ? { providerVisibleTools } : {}),
-      imagesCount: input.imageCount,
-      streamStrategy: input.streamStrategy,
-      transport: input.transport,
-      transcriptLeafId: input.transcriptLeafId,
-    });
+    const trajectoryRecorder = input.trajectoryRecorder;
+    if (trajectoryRecorder) {
+      const providerVisibleTools = toTrajectoryToolDefinitions(input.effectiveTools);
+      const trajectoryTools = input.toolSearchCompacted
+        ? toTrajectoryToolDefinitions(input.uncompactedEffectiveTools)
+        : providerVisibleTools;
+      trajectoryRecorder.recordEvent("context.compiled", {
+        systemPrompt: input.systemPromptForHook,
+        prompt: input.promptForModel,
+        messages: input.sessionMessages,
+        tools: trajectoryTools,
+        ...(input.toolSearchCompacted ? { providerVisibleTools } : {}),
+        imagesCount: input.imageCount,
+        streamStrategy: input.streamStrategy,
+        transport: input.transport,
+        transcriptLeafId: input.transcriptLeafId,
+      });
+    }
   }
 
   const promptSkipReason = skipPromptSubmission

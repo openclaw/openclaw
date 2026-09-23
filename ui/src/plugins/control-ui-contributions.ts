@@ -37,7 +37,12 @@ class ControlUiPluginManager extends OpenClawLightDomContentsElement {
 
   private get available(): boolean {
     const runtime = this.context?.plugins;
-    return Boolean(runtime && (runtime.hasPlugins || runtime.errors.length));
+    return Boolean(
+      runtime &&
+      (runtime.registrations("replacements").length ||
+        runtime.errors.length ||
+        (runtime.hasPlugins && runtime.canReload)),
+    );
   }
 
   override willUpdate() {
@@ -58,7 +63,7 @@ class ControlUiPluginManager extends OpenClawLightDomContentsElement {
     return html`${
       this.available
         ? html`<button
-              class="btn btn--sm plugin-ui-recovery"
+              class="btn btn--sm"
               type="button"
               @click=${() => {
                 this.open = true;

@@ -116,7 +116,7 @@ async function captureRealtimeOutcome(
       outcome.callbackOrder.push("tool");
       outcome.tools.push(tool);
       if (options.closeOnToolCall) {
-        bridge.close();
+        void bridge.close();
       }
     },
     onEvent: (observed) => {
@@ -154,7 +154,7 @@ async function captureRealtimeOutcome(
     }
     return outcome;
   } finally {
-    bridge.close();
+    await bridge.close();
     for (const socket of sockets) {
       socket.terminate();
     }

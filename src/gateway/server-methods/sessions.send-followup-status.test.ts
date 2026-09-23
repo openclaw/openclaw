@@ -1,17 +1,15 @@
+import { expectDefined } from "@openclaw/normalization-core";
 /**
  * Tests follow-up session send status transitions and broadcasts.
  */
-
-import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { expectSubagentFollowupReactivation } from "./subagent-followup.test-helpers.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
 const loadSessionEntryMock = vi.fn();
 const loadGatewaySessionEntryReadOnlyMock = vi.fn();
-const loadGatewaySessionRowMock =
-  vi.fn<typeof import("../session-utils.js").loadGatewaySessionRow>();
 const resolveDeletedAgentIdFromSessionKeyMock = vi.fn();
 const getLatestSubagentRunByChildSessionKeyMock = vi.fn();
 const replaceSubagentRunAfterSteerMock = vi.fn();
@@ -23,8 +21,6 @@ vi.mock("../session-utils.js", () => ({
   loadSessionEntry: (...args: unknown[]) => loadSessionEntryMock(...args),
   loadGatewaySessionEntryReadOnly: (...args: unknown[]) =>
     loadGatewaySessionEntryReadOnlyMock(...args),
-  loadGatewaySessionRow: (...args: Parameters<typeof loadGatewaySessionRowMock>) =>
-    loadGatewaySessionRowMock(...args),
   resolveDeletedAgentIdFromSessionKey: (...args: unknown[]) =>
     resolveDeletedAgentIdFromSessionKeyMock(...args),
 }));
@@ -48,16 +44,11 @@ vi.mock("../../agents/subagents/spawn/subagent-spawn-cleanup.js", () => ({
   terminateAcceptedCollectorRun: (...args: unknown[]) => terminateAcceptedCollectorRunMock(...args),
 }));
 
-vi.mock("./chat.js", () => ({
-  chatHandlers: {
-    "chat.send": (...args: unknown[]) => chatSendMock(...args),
-  },
-}));
-
 vi.mock("./chat-send-external-entry.js", () => ({
   handleDirectExternalChatSend: (...args: unknown[]) => chatSendWithAdmissionOwnedMock(...args),
 }));
 
+import { createSessionRowProjectionFixture } from "../session-row-projection.test-support.js";
 import { flushPendingSessionsChangedEvents } from "./session-change-event.js";
 import { sessionMessagingHandlers } from "./sessions-messaging.js";
 
@@ -80,7 +71,6 @@ describe("sessions.send completed subagent follow-up status", () => {
   beforeEach(() => {
     loadSessionEntryMock.mockReset();
     loadGatewaySessionEntryReadOnlyMock.mockReset();
-    loadGatewaySessionRowMock.mockReset();
     resolveDeletedAgentIdFromSessionKeyMock.mockReset().mockReturnValue(null);
     getLatestSubagentRunByChildSessionKeyMock.mockReset();
     replaceSubagentRunAfterSteerMock.mockReset();
@@ -155,16 +145,6 @@ describe("sessions.send completed subagent follow-up status", () => {
     });
     getLatestSubagentRunByChildSessionKeyMock.mockReturnValue(completedRun);
     replaceSubagentRunAfterSteerMock.mockReturnValue(true);
-    loadGatewaySessionRowMock.mockReturnValue({
-      key: childSessionKey,
-      kind: "direct",
-      updatedAt: 123,
-      sessionId: "sess-followup",
-      status: "running",
-      startedAt: 123,
-      endedAt: undefined,
-      runtimeMs: 10,
-    });
     chatSendMock.mockImplementation(async ({ respond }: { respond: RespondFn }) => {
       respond(true, { runId: "run-new", status: "started" }, undefined, undefined);
     });
@@ -172,9 +152,25 @@ describe("sessions.send completed subagent follow-up status", () => {
     const broadcastToConnIds = vi.fn();
     const respondMock = vi.fn();
     const respond = respondMock as unknown as RespondFn;
+    const projection = createSessionRowProjectionFixture({
+      cfg: {},
+      agentId: "main",
+      storePath: "/tmp/sessions.json",
+      store: {
+        [childSessionKey]: {
+          sessionId: "sess-followup",
+          updatedAt: 123,
+          status: "running",
+          startedAt: 123,
+          runtimeMs: 10,
+        },
+      },
+    });
+    onTestFinished(() => projection.dispose());
     const context = createRequestContext({
       broadcastToConnIds,
       getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
+      ...bindSessionRowProjection({}, () => projection),
     });
 
     await expectDefined(
@@ -193,6 +189,7 @@ describe("sessions.send completed subagent follow-up status", () => {
       isWebchatConnect: () => false,
     });
 
+    await flushPendingSessionsChangedEvents(context);
     const call = respondMock.mock.calls.at(0) as
       | [boolean, { runId?: string; status?: string; messageSeq?: number }, unknown?, unknown?]
       | undefined;
@@ -228,7 +225,9 @@ describe("sessions.send completed subagent follow-up status", () => {
       createdAt: 1,
       execution: { status: "terminal", startedAt: 2, endedAt: 3 },
     });
-    replaceSubagentRunAfterSteerMock.mockRejectedValueOnce(new Error("database unavailable"));
+    replaceSubagentRunAfterSteerMock.mockImplementationOnce(() => {
+      throw new Error("database unavailable");
+    });
     terminateAcceptedCollectorRunMock.mockResolvedValueOnce(undefined);
     chatSendMock.mockImplementation(async ({ respond }: { respond: RespondFn }) => {
       respond(true, { runId: "run-new", status: "started" }, undefined, undefined);
@@ -301,9 +300,7 @@ describe("sessions.send completed subagent follow-up status", () => {
         });
         expect(respond).toHaveBeenCalledWith(true, payload, undefined, undefined);
       }
-      expect(chatSendWithAdmissionOwnedMock).toHaveBeenCalledTimes(
-        method === "sessions.steer" ? 2 : 0,
-      );
+      expect(chatSendWithAdmissionOwnedMock).toHaveBeenCalledTimes(2);
     },
   );
 
@@ -445,7 +442,6 @@ describe("sessions.send completed subagent follow-up status", () => {
         storePath: "/tmp/work/sessions.json",
         entry: { sessionId: "sess-work-global" },
       });
-      loadGatewaySessionRowMock.mockReturnValue(null);
       chatSendMock.mockImplementation(async ({ respond }: { respond: RespondFn }) => {
         respond(true, { runId: "run-work", status: "started" }, undefined, undefined);
       });

@@ -18,7 +18,14 @@ type EmbeddedMessageDeliveryFact = {
 const NON_DELIVERY_IDS = new Set(["skipped", "suppressed"]);
 const NON_DELIVERY_STATUSES = new Set(["failed", ...NON_DELIVERY_IDS]);
 const STATUSES = new Set(["settled", "suppressed", "dryRun", "failed"]);
-const PLUGIN_ENVELOPE_KEYS = ["details", "payload", "result", "results", "toolResult"];
+const PLUGIN_ENVELOPE_KEYS = [
+  "details",
+  "payload",
+  "result",
+  "results",
+  "sendResult",
+  "toolResult",
+];
 
 const EMPTY_DELIVERY_FACT: Pick<
   EmbeddedMessageDeliveryFact,
@@ -103,7 +110,24 @@ function visitPluginEnvelope(
 
 const PLUGIN_SIGNALS = {
   dryRun: (record: Record<string, unknown>, status: string | undefined) =>
-    record.dryRun === true || status === "dry_run",
+    record.dryRun === true || status === "dry_run" || normalizeStatus(record.status) === "dry_run",
+  failure: (record: Record<string, unknown>) =>
+    record.ok === false ||
+    record.success === false ||
+    record.isError === true ||
+    record.delivered === false ||
+    record.complete === false ||
+    Boolean(record.error) ||
+    [record.status, record.deliveryStatus].some((value) => {
+      const status = normalizeStatus(value);
+      return (
+        status === "error" ||
+        status === "incomplete" ||
+        status === "partial_failed" ||
+        status === "dry_run" ||
+        (status !== undefined && NON_DELIVERY_STATUSES.has(status))
+      );
+    }),
   partial: (record: Record<string, unknown>, status: string | undefined) =>
     record.sentBeforeError === true ||
     record.visibleReplySent === true ||
@@ -174,7 +198,9 @@ function readPluginDeliveryId(value: unknown): string | undefined {
   return found;
 }
 
-function projectPluginPayload(value: unknown): EmbeddedMessageDeliveryFact | undefined {
+export function projectPluginMessageDeliveryFact(
+  value: unknown,
+): EmbeddedMessageDeliveryFact | undefined {
   if (pluginEnvelopeHas(value, "dryRun")) {
     return { status: "dryRun", ...EMPTY_DELIVERY_FACT };
   }
@@ -184,7 +210,7 @@ function projectPluginPayload(value: unknown): EmbeddedMessageDeliveryFact | und
   if (pluginEnvelopeHas(value, "nonDelivery")) {
     return { status: "suppressed", ...EMPTY_DELIVERY_FACT };
   }
-  if (pluginEnvelopeHas(value, "noOp")) {
+  if (pluginEnvelopeHas(value, "noOp") || pluginEnvelopeHas(value, "failure")) {
     return { status: "failed", ...EMPTY_DELIVERY_FACT };
   }
   if (!pluginEnvelopeHas(value, "delivery") && !pluginEnvelopeHas(value, "ok")) {
@@ -209,7 +235,7 @@ export function pluginBroadcastHasDelivery(value: unknown): boolean {
           return false;
         }
         return [entry.payload, entry.toolResult].some(
-          (payload) => projectPluginPayload(payload)?.status === "settled",
+          (payload) => projectPluginMessageDeliveryFact(payload)?.status === "settled",
         );
       }),
   );
@@ -254,10 +280,14 @@ export function projectEmbeddedMessageDeliveryFact(
   result: MessageActionResult,
   currentSourceReply = false,
 ): EmbeddedMessageDeliveryFact | undefined {
+  const payloadDelivery = result.dryRun
+    ? undefined
+    : projectPluginMessageDeliveryFact(result.payload);
+  const partialDelivery = payloadDelivery?.partialDelivery ? payloadDelivery : undefined;
   if (currentSourceReply && result.handledBy === "plugin") {
     return result.dryRun
       ? { status: "dryRun", ...EMPTY_DELIVERY_FACT }
-      : projectPluginPayload(result.payload);
+      : projectPluginMessageDeliveryFact(result.payload);
   }
   if (result.kind === "send") {
     return result.handledBy === "core" && result.sendResult
@@ -268,15 +298,15 @@ export function projectEmbeddedMessageDeliveryFact(
             partialDelivery: false,
             createdThreadIds: [],
           }
-        : undefined;
+        : partialDelivery;
   }
   if (result.kind === "poll") {
     return result.handledBy === "core" && result.pollResult
       ? projectPoll(result.pollResult)
-      : undefined;
+      : partialDelivery;
   }
   if (result.kind !== "broadcast") {
-    return undefined;
+    return partialDelivery;
   }
   const entries = result.payload.results.map((entry) => ({
     entry,
@@ -287,13 +317,18 @@ export function projectEmbeddedMessageDeliveryFact(
       : entry.sentBeforeError
         ? { status: "settled" as const, partialDelivery: true, createdThreadIds: [] }
         : entry.ok
-          ? projectPluginPayload(entry.payload)
+          ? projectPluginMessageDeliveryFact(entry.payload)
           : undefined,
   }));
   const facts = entries.flatMap(({ fact }) => (fact ? [fact] : []));
   const settled = facts.find((fact) => fact.status === "settled");
-  if (settled || entries.some(({ entry, fact }) => entry.ok && !entry.result && !fact)) {
-    return settled;
+  if (settled) {
+    return entries.some(({ entry }) => !entry.ok) && !settled.partialDelivery
+      ? { ...settled, partialDelivery: true }
+      : settled;
+  }
+  if (entries.some(({ entry, fact }) => entry.ok && !entry.result && !fact)) {
+    return undefined;
   }
   return (
     facts.find((fact) => fact.status === "suppressed") ??
@@ -302,6 +337,14 @@ export function projectEmbeddedMessageDeliveryFact(
       partialDelivery: false,
       createdThreadIds: [],
     }
+  );
+}
+
+export function hasAcceptedBroadcastDelivery(result: MessageActionResult): boolean {
+  return (
+    !result.dryRun &&
+    result.kind === "broadcast" &&
+    result.payload.results.some((entry) => entry.ok || entry.sentBeforeError)
   );
 }
 

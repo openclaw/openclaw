@@ -1,5 +1,36 @@
 #!/usr/bin/env bash
+
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  if (return 0 2>/dev/null); then
+    printf '%s\n' 'Run this installer with /bin/bash on macOS instead of sourcing it.' >&2
+    return 1
+  fi
+  case "${BASH_SOURCE[0]:-}" in
+    ""|bash|-bash|/dev/stdin)
+      # Bash reads piped scripts unbuffered; stdin now starts after this guard.
+      OPENCLAW_INSTALLER_REEXEC_FILE="$(mktemp "${TMPDIR:-/tmp}/openclaw-installer.XXXXXX")" || exit 1
+      export OPENCLAW_INSTALLER_REEXEC_FILE
+      trap 'rm -f -- "$OPENCLAW_INSTALLER_REEXEC_FILE"' EXIT
+      { printf '#!/bin/bash\n'; cat; } > "$OPENCLAW_INSTALLER_REEXEC_FILE" || exit 1
+      exec /bin/bash "$OPENCLAW_INSTALLER_REEXEC_FILE" "$@"
+      ;;
+    *) exec /bin/bash "$0" "$@" ;;
+  esac
+fi
+
 set -euo pipefail
+
+# BEGIN GENERATED UPDATE NETWORK BUDGET
+# Source: src/infra/update-network-budget.ts; regenerate: node scripts/generate-update-network-budget.mjs
+UPDATE_NETWORK_TIMEOUT_SECONDS=300
+# END GENERATED UPDATE NETWORK BUDGET
+
+# The re-executed shell has the script open, so unlink its private copy now.
+if [[ -n "${OPENCLAW_INSTALLER_REEXEC_FILE:-}" && "${BASH_SOURCE[0]:-}" == "$OPENCLAW_INSTALLER_REEXEC_FILE" ]]; then
+  rm -f -- "$OPENCLAW_INSTALLER_REEXEC_FILE"
+fi
+unset OPENCLAW_INSTALLER_REEXEC_FILE
 
 # OpenClaw CLI installer (non-interactive, no onboarding)
 # Usage: curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install-cli.sh | bash -s -- [--json] [--prefix <path>] [--version <ver>] [--node-version <ver>] [--onboard]
@@ -72,16 +103,14 @@ PREFIX="${OPENCLAW_PREFIX:-${HOME}/.openclaw}"
 OPENCLAW_VERSION="${OPENCLAW_VERSION:-latest}"
 REQUIRED_COMPATIBLE_VERSION=""
 DEFAULT_NODE_VERSION="24.19.0"
-ARMV7_DEFAULT_NODE_VERSION="22.23.2"
 NODE_VERSION="${OPENCLAW_NODE_VERSION:-${DEFAULT_NODE_VERSION}}"
 NODE_VERSION_REQUESTED=0
 if [[ -n "${OPENCLAW_NODE_VERSION:-}" ]]; then
   NODE_VERSION_REQUESTED=1
 fi
-MIN_NODE_22_VERSION="22.22.3"
-MIN_NODE_24_VERSION="24.15.0"
-MIN_NODE_25_VERSION="25.9.0"
-SUPPORTED_NODE_VERSION_LABEL="Node 22.22.3+, Node 24.15.0+, or Node 25.9.0+"
+MIN_NODE_24_VERSION="24.16.0"
+MIN_NODE_26_VERSION="26.1.0"
+SUPPORTED_NODE_VERSION_LABEL="Node 24.16.0+ or Node 26.1.0+"
 NODE_RELEASE_VERSION_CORE=""
 APK_NODE_BIN_DIR="/usr/bin"
 NPM_LOGLEVEL="${OPENCLAW_NPM_LOGLEVEL:-error}"
@@ -90,6 +119,8 @@ GIT_DIR="${OPENCLAW_GIT_DIR:-${OPENCLAW_EFFECTIVE_HOME}/openclaw}"
 GIT_UPDATE="${OPENCLAW_GIT_UPDATE:-1}"
 JSON=0
 RUN_ONBOARD=0
+NODE_ONLY=0
+RUNTIME_ONLY=0
 SET_NPM_PREFIX=0
 PNPM_CMD=()
 GIT_REF_KIND=""
@@ -106,7 +137,9 @@ Usage: install-cli.sh [options]
   --git-dir, --dir <path>             Checkout directory (default: ~/openclaw, or \$OPENCLAW_HOME/openclaw)
   --version <ver>                     OpenClaw version (default: latest)
   --compatible-with <ver>             Refuse a CLI that cannot modify config written by <ver>
-  --node-version <ver>                Node version (default: 24.19.0; 22.23.2 on Linux ARMv7)
+  --node-version <ver>                Node version (default: 24.19.0)
+  --node-only                         Install only a private Node runtime (no system package changes)
+  --runtime-only                      Install CLI runtime without Gateway probes, service changes, or onboarding
   --onboard                           Run "openclaw onboard" after install
   --no-onboard                        Skip onboarding (default)
   --set-npm-prefix                    Force npm prefix to ~/.npm-global if current prefix is not writable (Linux)
@@ -148,14 +181,15 @@ download_file() {
     detect_downloader
   fi
   if [[ "$DOWNLOADER" == "curl" ]]; then
-    # Bound post-connect stalls without imposing a total download duration.
+    # Bound connection and transfer stalls without a total download duration.
     curl -fsSL --proto '=https' --tlsv1.2 \
-      --speed-limit 1 --speed-time 30 \
+      --connect-timeout "$UPDATE_NETWORK_TIMEOUT_SECONDS" \
+      --speed-limit 1 --speed-time "$UPDATE_NETWORK_TIMEOUT_SECONDS" \
       --retry 3 --retry-delay 1 --retry-connrefused \
       -o "$output" "$url"
     return
   fi
-  wget -q --https-only --secure-protocol=TLSv1_2 --tries=3 --timeout=20 -O "$output" "$url"
+  wget -q --https-only --secure-protocol=TLSv1_2 --tries=3 --timeout="$UPDATE_NETWORK_TIMEOUT_SECONDS" -O "$output" "$url"
 }
 
 cleanup_legacy_submodules() {
@@ -246,6 +280,27 @@ fail() {
   emit_json error message "$msg"
   log "ERROR: $msg"
   exit 1
+}
+
+fail_freebsd_source_install() {
+  fail "Source/git installation is unsupported on FreeBSD. Use --install-method npm with a published version or compatible built .tgz package and the same --prefix. Keep pkg/Ports-managed installations with pkg or Ports."
+}
+
+prepare_tmpdir() {
+  local base tmp fallback=0
+  base="$(resolve_installer_path "${TMPDIR:-/tmp}")"
+  if ! tmp="$(mktemp -d "${base%/}/openclaw-install.XXXXXX" 2>/dev/null)"; then
+    if ! tmp="$(mktemp -d /tmp/openclaw-install.XXXXXX 2>/dev/null)"; then
+      fail "Cannot create a temporary directory. Check permissions for TMPDIR and /tmp, then retry setup."
+    fi
+    fallback=1
+  fi
+  TMPFILES+=("$tmp")
+  export TMPDIR="$tmp"
+  if [[ "$fallback" -eq 1 ]]; then
+    emit_json step name temporary-directory status warn reason using-fallback
+    log "Using a private directory under /tmp because TMPDIR is unavailable."
+  fi
 }
 
 require_bin() {
@@ -353,6 +408,9 @@ ensure_git() {
         fail "Git missing and package manager not found. Install git and retry."
       fi
       ;;
+    freebsd)
+      fail "Git missing. Ask the system administrator to install it with pkg install git, then retry."
+      ;;
     darwin)
       if command -v brew >/dev/null 2>&1; then
         brew install git
@@ -404,6 +462,14 @@ parse_args() {
         NODE_VERSION="$2"
         NODE_VERSION_REQUESTED=1
         shift 2
+        ;;
+      --runtime-only)
+        RUNTIME_ONLY=1
+        shift
+        ;;
+      --node-only)
+        NODE_ONLY=1
+        shift
         ;;
       --install-method|--method)
         if [[ $# -lt 2 || "${2:-}" == --* ]]; then
@@ -460,6 +526,7 @@ os_detect() {
   case "$os" in
     Darwin) echo "darwin" ;;
     Linux) echo "linux" ;;
+    FreeBSD) echo "freebsd" ;;
     *) fail "Unsupported OS: $os" ;;
   esac
 }
@@ -478,11 +545,8 @@ arch_detect() {
 select_node_version_for_platform() {
   local os="$1"
   local arch="$2"
-  if [[ "$NODE_VERSION_REQUESTED" == "0" && "$os" == "linux" && "$arch" == "armv7l" ]]; then
-    NODE_VERSION="$ARMV7_DEFAULT_NODE_VERSION"
-  fi
-  if [[ "$os" == "linux" && "$arch" == "armv7l" && "${NODE_VERSION%%.*}" != "22" ]]; then
-    fail "Linux ARMv7 requires Node 22.22.3+ because official Node 24+ binaries are unavailable; use --node-version 22.23.2."
+  if [[ "$os" == "linux" && "$arch" == "armv7l" ]]; then
+    fail "Linux ARMv7 is unsupported: official Node 24+ binaries are unavailable. Use a 64-bit OS on compatible hardware or another supported host."
   fi
 }
 
@@ -498,8 +562,13 @@ npm_bin() {
   echo "$(node_dir)/bin/npm"
 }
 
+is_installer_node_bin() {
+  [[ "$1" -ef "$(node_dir)/bin" || "$1" -ef "${PREFIX}/tools/node/bin" ]]
+}
+
 command_path_without_node_prefix() {
   local name="$1"
+  local exclude_active_runtime="${2:-0}"
   local path_entry
   local prefix_bin
   local filtered_path=""
@@ -507,15 +576,18 @@ command_path_without_node_prefix() {
   local -a path_entries=()
 
   prefix_bin="$(node_dir)/bin"
-  IFS=: read -r -a path_entries <<<"$PATH"
+  # The extra delimiter preserves a trailing (or sole) empty cwd entry.
+  IFS=: read -r -a path_entries <<<"${PATH}:"
   for path_entry in "${path_entries[@]}"; do
-    if [[ "$path_entry" == "$prefix_bin" ]]; then
+    if [[ "$path_entry" == "$prefix_bin" ]] ||
+      { [[ "$exclude_active_runtime" == "1" ]] && is_installer_node_bin "${path_entry:-.}"; }; then
       continue
     fi
     filtered_path="${filtered_path}${separator}${path_entry}"
     separator=":"
   done
 
+  [[ -n "$separator" ]] || return 1
   PATH="$filtered_path" command -v "$name" 2>/dev/null
 }
 
@@ -535,6 +607,9 @@ link_node_runtime_paths() {
   local dir
   local runtime_bin
   local resolved
+  # PATH entries resolve from this cwd; published links must work from any cwd.
+  [[ "$node_path" == /* ]] || node_path="$PWD/$node_path"
+  [[ "$npm_path" == /* ]] || npm_path="$PWD/$npm_path"
   dir="$(node_dir)"
   runtime_bin="${node_path%/*}"
 
@@ -546,8 +621,10 @@ link_node_runtime_paths() {
       ln -sfn "${runtime_bin}/${name}" "${dir}/bin/${name}"
       continue
     fi
-    resolved="$(command_path_without_node_prefix "$name" || true)"
+    # These optional tools cannot point through the alias we republish below.
+    resolved="$(command_path_without_node_prefix "$name" 1 || true)"
     if [[ -n "$resolved" && "$resolved" != "${dir}/bin/${name}" ]]; then
+      [[ "$resolved" == /* ]] || resolved="$PWD/$resolved"
       ln -sfn "$resolved" "${dir}/bin/${name}"
     fi
   done
@@ -555,15 +632,17 @@ link_node_runtime_paths() {
 }
 
 linked_node_is_usable() {
+  local candidate_node="${1-$(node_bin)}"
+  local candidate_npm="${2-$(npm_bin)}"
   local candidate_bin
   local current_version
   local required_version
 
-  if [[ ! -x "$(node_bin)" || ! -x "$(npm_bin)" ]]; then
+  if [[ ! -x "$candidate_node" || ! -x "$candidate_npm" ]]; then
     return 1
   fi
 
-  current_version="$("$(node_bin)" -v 2>/dev/null || echo "")"
+  current_version="$("$candidate_node" -v 2>/dev/null || echo "")"
   required_version="$(required_node_version)"
   if ! node_release_version_is_supported "$current_version"; then
     return 1
@@ -571,12 +650,12 @@ linked_node_is_usable() {
   if ! semver_at_least "$NODE_RELEASE_VERSION_CORE" "$required_version"; then
     return 1
   fi
-  candidate_bin="$(node_dir)/bin"
-  if ! PATH="${candidate_bin}:${PATH}" "$(npm_bin)" --version >/dev/null 2>&1; then
+  candidate_bin="${candidate_node%/*}"
+  if ! PATH="${candidate_bin}:${PATH}" "$candidate_npm" --version >/dev/null 2>&1; then
     return 1
   fi
 
-  "$(node_bin)" -e '
+  "$candidate_node" -e '
     const { DatabaseSync } = require("node:sqlite");
     const db = new DatabaseSync(":memory:");
     try {
@@ -592,20 +671,37 @@ linked_node_is_usable() {
             (minor === 51 && patch >= 3) ||
             (minor === 50 && patch >= 7) ||
             (minor === 44 && patch >= 6)));
-      if (!safe) process.exitCode = 1;
+      const text = "a\u0000b\u0000";
+      const bytes = Buffer.from(text, "utf8");
+      const json = JSON.stringify({ value: text });
+      db.exec("CREATE TABLE probe (text_value TEXT, blob_value BLOB, json_value TEXT)");
+      db.prepare("INSERT INTO probe VALUES (?, ?, ?)").run(text, bytes, json);
+      const row = db.prepare("SELECT text_value, blob_value, json_value FROM probe").get();
+      const textSafe = typeof row?.text_value === "string" && row.text_value.length === text.length && Buffer.from(row.text_value, "utf8").equals(bytes);
+      const blobSafe = row?.blob_value instanceof Uint8Array && Buffer.from(row.blob_value).equals(bytes);
+      const jsonSafe = row?.json_value === json && JSON.parse(row.json_value).value === text;
+      if (!textSafe) {
+        console.error("Node " + process.versions.node + ": node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954); use 24.16+/26.1+ or a build with the fix");
+      } else if (!blobSafe || !jsonSafe) {
+        console.error("Node " + process.versions.node + ": node:sqlite NUL round-trip capability probe failed; use 24.16+/26.1+ or a build with the fix");
+      } else if (!safe) {
+        console.error("Node " + process.versions.node + ": SQLite " + value + " is not WAL-reset-safe");
+      }
+      if (!safe || !textSafe || !blobSafe || !jsonSafe) process.exitCode = 1;
     } finally {
       db.close();
     }
-  ' >/dev/null 2>&1
+  ' --no-warnings >/dev/null
 }
 
 linked_node_sqlite_version() {
-  if [[ ! -x "$(node_bin)" ]]; then
+  local candidate_node="${1-$(node_bin)}"
+  if [[ ! -x "$candidate_node" ]]; then
     printf 'unavailable\n'
     return
   fi
   local version
-  version="$("$(node_bin)" -e '
+  version="$("$candidate_node" -e '
     const { DatabaseSync } = require("node:sqlite");
     const db = new DatabaseSync(":memory:");
     try {
@@ -647,7 +743,7 @@ semver_at_least() {
   ((version_patch >= required_patch))
 }
 
-node_release_version_is_supported() {
+parse_node_release_version() {
   local version="$1"
   local major minor patch
 
@@ -667,6 +763,10 @@ node_release_version_is_supported() {
   done
 
   NODE_RELEASE_VERSION_CORE="${major}.${minor}.${patch}"
+}
+
+node_release_version_is_supported() {
+  parse_node_release_version "$1" || return 1
   node_version_is_supported "$NODE_RELEASE_VERSION_CORE"
 }
 
@@ -686,19 +786,15 @@ node_version_is_supported() {
     fi
   done
 
-  if ((major == 22)); then
-    semver_at_least "$version" "$MIN_NODE_22_VERSION"
-    return
-  fi
   if ((major == 24)); then
     semver_at_least "$version" "$MIN_NODE_24_VERSION"
     return
   fi
-  if ((major == 25)); then
-    semver_at_least "$version" "$MIN_NODE_25_VERSION"
+  if ((major == 26)); then
+    semver_at_least "$version" "$MIN_NODE_26_VERSION"
     return
   fi
-  ((major > 25))
+  ((major > 26))
 }
 
 required_node_version() {
@@ -706,28 +802,26 @@ required_node_version() {
     printf '%s\n' "$NODE_VERSION"
     return
   fi
-  printf '%s\n' "$MIN_NODE_22_VERSION"
+  printf '%s\n' "$MIN_NODE_24_VERSION"
 }
 
 try_link_usable_node_runtime_from_path() {
   local path_entry
-  local prefix_bin
   local -a path_entries=()
 
-  prefix_bin="$(node_dir)/bin"
-  IFS=: read -r -a path_entries <<<"$PATH"
+  # The extra delimiter preserves a trailing (or sole) empty cwd entry.
+  IFS=: read -r -a path_entries <<<"${PATH}:"
   for path_entry in "${path_entries[@]}"; do
     if [[ -z "$path_entry" ]]; then
       path_entry="."
     fi
-    if [[ "$path_entry" == "$prefix_bin" ]]; then
+    # Never publish links back into the runtime prefix being replaced.
+    if is_installer_node_bin "$path_entry"; then
       continue
     fi
-    if [[ -x "${path_entry}/node" && -x "${path_entry}/npm" ]]; then
+    if linked_node_is_usable "${path_entry}/node" "${path_entry}/npm"; then
       link_node_runtime_paths "${path_entry}/node" "${path_entry}/npm"
-      if linked_node_is_usable; then
-        return 0
-      fi
+      return 0
     fi
   done
   return 1
@@ -755,16 +849,16 @@ install_alpine_node() {
   fi
 
   if [[ -x "${APK_NODE_BIN_DIR}/node" && -x "${APK_NODE_BIN_DIR}/npm" ]]; then
+    # Failed package prerequisites must leave the prefix's existing runtime intact.
+    if ! linked_node_is_usable "${APK_NODE_BIN_DIR}/node" "${APK_NODE_BIN_DIR}/npm"; then
+      installed_version="$("${APK_NODE_BIN_DIR}/node" -v 2>/dev/null || echo unknown)"
+      required_version="$(required_node_version)"
+      sqlite_version="$(linked_node_sqlite_version "${APK_NODE_BIN_DIR}/node")"
+      fail "Alpine Node package must provide Node >= ${required_version} with WAL-reset-safe SQLite 3.51.3+, 3.50.7+ within 3.50.x, or 3.44.6+ within 3.44.x; found Node ${installed_version}, SQLite ${sqlite_version}."
+    fi
     link_node_runtime_paths "${APK_NODE_BIN_DIR}/node" "${APK_NODE_BIN_DIR}/npm"
   elif ! try_link_usable_node_runtime_from_path; then
     fail "apk Node install failed. Install nodejs and npm manually, then retry."
-  fi
-
-  if ! linked_node_is_usable; then
-    installed_version="$("$(node_bin)" -v 2>/dev/null || echo unknown)"
-    required_version="$(required_node_version)"
-    sqlite_version="$(linked_node_sqlite_version)"
-    fail "Alpine Node package must provide Node >= ${required_version} with WAL-reset-safe SQLite 3.51.3+, 3.50.7+ within 3.50.x, or 3.44.6+ within 3.44.x; found Node ${installed_version}, SQLite ${sqlite_version}."
   fi
 
   installed_version="$("$(node_bin)" -v 2>/dev/null || echo unknown)"
@@ -1111,12 +1205,34 @@ install_node() {
   fi
   dir="$(node_dir)"
 
+  if [[ "$os" == "freebsd" ]]; then
+    if [[ "$NODE_ONLY" -eq 1 ]]; then
+      fail "Private Node.js recovery is unavailable on FreeBSD. Update Node.js and npm with pkg, then retry."
+    fi
+    local system_node system_npm installed_version
+    system_node="$(command_path_without_node_prefix node || true)"
+    system_npm="$(command_path_without_node_prefix npm || true)"
+    emit_json step name node status start method system
+    # FreeBSD has no official Node binary archive. Validate the package-owned
+    # runtime before publishing links so a failed prerequisite leaves the CLI intact.
+    if ! linked_node_is_usable "$system_node" "$system_npm"; then
+      fail "FreeBSD requires ${SUPPORTED_NODE_VERSION_LABEL}, working npm, and WAL-reset-safe SQLite. Ask the system administrator to install or update node24 and npm-node24 with pkg, then retry with node and npm on PATH."
+    fi
+    system_node="$("$system_node" -p 'process.execPath')"
+    system_npm="$("$system_node" -p 'require("node:fs").realpathSync(process.argv[1])' "$system_npm")"
+    link_node_runtime_paths "$system_node" "$system_npm"
+    installed_version="$("$(node_bin)" -v)"
+    emit_json step name node status ok method system version "$installed_version"
+    return
+  fi
+
   if [[ "$os" == "linux" ]] && command -v apk >/dev/null 2>&1 && is_musl_linux; then
     install_alpine_node
     return
   fi
 
   if linked_node_is_usable; then
+    ln -sfn "$dir" "${PREFIX}/tools/node"
     emit_json step name node status skip path "$dir"
     return
   fi
@@ -1125,7 +1241,8 @@ install_node() {
   log "Installing Node ${NODE_VERSION} (user-space)..."
 
   mkdir -p "${PREFIX}/tools"
-  tmp="$(mktemp -d)"
+  # Darwin's default mktemp location can ignore TMPDIR; use the prepared path explicitly.
+  tmp="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-node.XXXXXX")"
   TMPFILES+=("$tmp")
   base_url="https://nodejs.org/dist/v${NODE_VERSION}"
   tarball="node-v${NODE_VERSION}-${os}-${arch}.tar.gz"
@@ -1151,8 +1268,6 @@ install_node() {
   tar -xzf "$tmp/node.tgz" -C "$dir" --strip-components=1
   rm -rf "$tmp"
 
-  ln -sfn "$dir" "${PREFIX}/tools/node"
-
   if ! linked_node_is_usable; then
     local installed_version
     local required_version
@@ -1162,6 +1277,8 @@ install_node() {
     sqlite_version="$(linked_node_sqlite_version)"
     fail "Installed Node ${NODE_VERSION} must provide Node >= ${required_version} with WAL-reset-safe SQLite; found Node ${installed_version}, SQLite ${sqlite_version}. Re-run with --node-version 24.19.0 (or newer)"
   fi
+  # Existing CLI wrappers use this alias; activate only a runtime that can start.
+  ln -sfn "$dir" "${PREFIX}/tools/node"
   emit_json step name node status ok version "$NODE_VERSION"
 }
 
@@ -1169,7 +1286,7 @@ ensure_pnpm() {
   local repo_dir="${1:-$PWD}"
   local spec version pnpm_dir corepack_cmd="" npm_cmd lifecycle_arg selected_version
   spec="$(repo_pnpm_spec "$repo_dir" || true)"
-  [[ "$spec" == pnpm@* ]] || spec="pnpm@12.3.4"
+  [[ "$spec" == pnpm@* ]] || spec="pnpm@12.4.0"
   version="${spec#pnpm@}"
   version="${version%%+*}"
   pnpm_dir="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-pnpm.XXXXXX")" || return 1
@@ -1399,6 +1516,9 @@ commit_wrapper_backup() {
 install_openclaw() {
   local requested="${OPENCLAW_VERSION:-latest}"
   if is_openclaw_source_package_install_spec "$requested"; then
+    if [[ "$(os_detect)" == "freebsd" ]]; then
+      fail_freebsd_source_install
+    fi
     fail "npm installs do not support OpenClaw GitHub source targets like '${requested}'. Use --install-method git --version main, latest, beta, an exact version, or a built .tgz package."
   fi
   local freshness_flag="--min-release-age=0"
@@ -1475,7 +1595,7 @@ ensure_pnpm_git_prepare_allowlist() {
   local tmp
 
   if [[ -f "$workspace_file" ]] && ! grep -Fq "\"${dep}\"" "$workspace_file" && ! grep -Fq "${dep}:" "$workspace_file" && ! grep -Fq -- "- ${dep}" "$workspace_file"; then
-    tmp="$(mktemp)"
+    tmp="$(mktemp "${TMPDIR:-/tmp}/openclaw-workspace.XXXXXX")"
     TMPFILES+=("$tmp")
     if grep -q '^allowBuilds:[[:space:]]*$' "$workspace_file"; then
       awk -v dep="$dep" '
@@ -1671,7 +1791,7 @@ install_openclaw_from_git() {
     pnpm_prefer_offline_args=(--prefer-offline)
   fi
   emit_json step name dependencies status start
-  CI="${CI:-true}" run_pnpm -C "$repo_dir" install "${pnpm_prefer_offline_args[@]}" "$install_lockfile_flag"
+  CI="${CI:-true}" run_pnpm -C "$repo_dir" install ${pnpm_prefer_offline_args[@]+"${pnpm_prefer_offline_args[@]}"} "$install_lockfile_flag"
   emit_json step name dependencies status ok
 
   emit_json step name control-ui status start
@@ -1746,7 +1866,8 @@ refresh_gateway_service_if_loaded() {
   emit_json step name gateway-service status start
   log "Refreshing loaded gateway service..."
 
-  if ! refresh_output="$({ set +x; "$claw" gateway install --force; } 2>&1 | sed -n -e 's/.*SERVICE_DEFINITION_SEALED:.*/ask the privileged deployment owner to manually repair it/p' -e 's/.*SERVICE_DEFINITION_UNKNOWN:.*/inspect service-definition access and manually repair it/p')"; then
+  if ! refresh_output="$({ set +x; "$claw" gateway install --force; } 2>&1 | sed -n -e 's/^Replacing unsupported Gateway service Node .*; refreshing the install\.$/node-runtime-replaced/p' -e 's/^Replacing missing Gateway service Node .*; refreshing the install\.$/node-runtime-replaced/p' -e 's/.*SERVICE_DEFINITION_SEALED:.*/ask the privileged deployment owner to manually repair it/p' -e 's/.*SERVICE_DEFINITION_UNKNOWN:.*/inspect service-definition access and manually repair it/p')"; then
+    refresh_output="$(printf '%s\n' "$refresh_output" | sed '/^node-runtime-replaced$/d')"
     if [[ -n "$refresh_output" ]]; then
       emit_json step name gateway-service status warn reason definition-mutation-denied
       printf '%s\n' "Code installed; gateway service definition left unchanged; ${refresh_output}." >&2
@@ -1757,6 +1878,9 @@ refresh_gateway_service_if_loaded() {
     log "Warning: gateway service refresh failed; continuing."
     return 0
   fi
+  if [[ "$refresh_output" == *node-runtime-replaced* ]]; then
+    printf '%s\n' "Gateway service Node runtime replaced." >&2
+  fi
 
   # `gateway install --force` activates the replacement service. A second
   # restart can kill startup migrations and strand their lock until expiry.
@@ -1766,7 +1890,22 @@ refresh_gateway_service_if_loaded() {
 
 main() {
   parse_args "$@"
+  # Reject unsupported source installs before changing runtime links or checkouts.
+  # Node-only recovery owns its separate platform refusal and ignores the method.
+  if [[ "$NODE_ONLY" -eq 0 && "$INSTALL_METHOD" == "git" && "$(os_detect)" == "freebsd" ]]; then
+    fail_freebsd_source_install
+  fi
   PREFIX="$(resolve_installer_path "$PREFIX")"
+  local original_tmpdir="${TMPDIR-}" original_tmpdir_set="${TMPDIR+x}"
+  local TMPDIR="$original_tmpdir"
+  prepare_tmpdir
+  if [[ "$NODE_ONLY" -eq 1 ]]; then
+    if is_musl_linux; then
+      fail "Private Node.js recovery is unavailable on musl Linux; update Node.js with your system package manager."
+    fi
+    install_node "$(os_detect)" "$(arch_detect)"
+    return
+  fi
   GIT_DIR="$(resolve_installer_path "$GIT_DIR")"
 
   if [[ "${OPENCLAW_NO_ONBOARD:-0}" == "1" ]]; then
@@ -1785,7 +1924,9 @@ main() {
   if [[ "$INSTALL_METHOD" == "git" ]]; then
     install_openclaw_from_git "$GIT_DIR"
   elif [[ "$INSTALL_METHOD" == "npm" ]]; then
-    ensure_git
+    if [[ "$RUNTIME_ONLY" -eq 0 ]]; then
+      ensure_git
+    fi
     if [[ "$SET_NPM_PREFIX" -eq 1 ]]; then
       fix_npm_prefix_if_needed
     fi
@@ -1801,11 +1942,21 @@ main() {
   fi
   commit_wrapper_backup
 
-  refresh_gateway_service_if_loaded
+  # Services and onboarding outlive staging; never persist its temporary path.
+  if [[ "$original_tmpdir_set" == x ]]; then
+    export TMPDIR="$original_tmpdir"
+  else
+    unset TMPDIR
+  fi
+  if [[ "$RUNTIME_ONLY" -eq 1 ]]; then
+    emit_json step name gateway-service status skip reason runtime-only
+  else
+    refresh_gateway_service_if_loaded
+  fi
   emit_json "done" version "$installed_version"
   log "OpenClaw installed (${installed_version})."
 
-  if [[ "$RUN_ONBOARD" -eq 1 ]]; then
+  if [[ "$RUN_ONBOARD" -eq 1 && "$RUNTIME_ONLY" -eq 0 ]]; then
     "${PREFIX}/bin/openclaw" onboard
   fi
 }

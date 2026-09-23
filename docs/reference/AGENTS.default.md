@@ -102,7 +102,7 @@ git commit -m "Add workspace"
 
 ## Core skills (enable in Settings → Skills)
 
-Example roster for a personal-assistant workspace; swap in whichever skills fit your setup.
+Example roster for a personal-assistant workspace, last reviewed for 2026.9.3; swap in whichever skills fit your setup. These are third-party skills, so availability changes independently of OpenClaw releases.
 
 - **mcporter** - tool server runtime/CLI for managing external skill backends.
 - **Peekaboo** - fast macOS screenshots with optional AI vision analysis.

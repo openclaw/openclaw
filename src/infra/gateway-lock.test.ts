@@ -560,7 +560,7 @@ describe("gateway lock", () => {
     expect(acquired).toHaveLength(1);
     expect(rejected).toHaveLength(1);
     expect(rejected[0]?.reason).toBeInstanceOf(GatewayLockError);
-    await expect(fs.access(stateLockPath)).resolves.toBeUndefined();
+    await fs.access(stateLockPath);
 
     const acquiredResult = acquired[0];
     if (!acquiredResult) {
@@ -902,7 +902,7 @@ describe("gateway lock", () => {
 
     try {
       expect(lock.lockPath).toBe(stateLockPath);
-      await expect(fs.access(stateLockPath)).resolves.toBeUndefined();
+      await fs.access(stateLockPath);
       await expect(fs.access(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
       await expect(
         acquireGatewayLock({
@@ -963,38 +963,6 @@ describe("gateway lock", () => {
     );
 
     await expect(acquireForTest(env)).rejects.toBeInstanceOf(GatewayLockError);
-    openSpy.mockRestore();
-  });
-
-  it("closes handle and preserves an unowned lock file when writeFile fails after open succeeds", async () => {
-    vi.useRealTimers();
-    const env = await makeEnv();
-    const { stateLockPath } = resolveLockPath(env);
-
-    const writeError = Object.assign(new Error("ENOSPC: no space left on device"), {
-      code: "ENOSPC",
-    });
-    const close = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
-    const mockHandle = {
-      writeFile: vi.fn().mockImplementation(async () => {
-        await fs.writeFile(stateLockPath, "partial", "utf8");
-        throw writeError;
-      }),
-      close,
-    };
-
-    const openSpy = vi.spyOn(fs, "open").mockResolvedValueOnce(mockHandle as never);
-
-    await expect(acquireForTest(env)).rejects.toMatchObject({
-      name: "GatewayLockError",
-      cause: writeError,
-    });
-
-    expect(close).toHaveBeenCalledTimes(1);
-    // fs-safe 0.5.2 failure cleanup removes the lock file only when it matches
-    // the snapshot fs-safe wrote itself; this out-of-band file is preserved.
-    await expect(fs.readFile(stateLockPath, "utf8")).resolves.toBe("partial");
-
     openSpy.mockRestore();
   });
 

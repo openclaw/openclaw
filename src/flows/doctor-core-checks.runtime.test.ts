@@ -2,11 +2,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/index.js";
 import { retainGatewayResponsePayload } from "../../packages/gateway-client/src/protocol-request.js";
-import { testing as mcpResolverTesting } from "../agents/mcp-connection-resolver.js";
+import { createMcpProofPluginRegistry } from "../agents/mcp-connection-resolver.test-fixtures.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import { collectGatewayHealthFindings } from "../commands/doctor-gateway-health.js";
 import { GATEWAY_HEALTH_RATE_LIMITED_MESSAGE } from "../commands/gateway-health-auth-diagnostic.js";
+import { collectNodeRuntimeFindings } from "../commands/node-runtime-diagnostics.js";
 import { GatewaySecretRefUnavailableError } from "../gateway/credentials.js";
+import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
+import { createCoreHealthChecks } from "./doctor-core-checks.js";
+import { exitCodeFromFindings } from "./doctor-lint-flow.js";
 
 const mocks = vi.hoisted(() => ({
   createBundleMcpToolRuntime: vi.fn(),
@@ -19,6 +24,9 @@ const mocks = vi.hoisted(() => ({
   isGatewayCredentialsRequiredError: vi.fn(),
   isContainerEnvironment: vi.fn(() => false),
   readGatewayServiceState: vi.fn(),
+  resolveNodeRuntimeInfo:
+    vi.fn<typeof import("../daemon/runtime-paths.js").resolveNodeRuntimeInfo>(),
+  detectRuntime: vi.fn<typeof import("../infra/runtime-guard.js").detectRuntime>(),
   resolveGatewayService: vi.fn(() => ({ label: "openclaw-gateway" })),
   resolvePluginProvidersCore: vi.fn((): Array<Record<string, unknown>> => []),
   resolveDefaultModelForAgent: vi.fn(() => ({ provider: "openai", model: "gpt-5.5" })),
@@ -34,7 +42,7 @@ vi.mock("../agents/model-catalog.js", () => ({
 
 vi.mock("../agents/prepared-model-catalog.js", () => ({
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
-  loadPreparedModelCatalog: mocks.loadModelCatalog,
+  readPreparedModelCatalog: mocks.loadModelCatalog,
 }));
 
 vi.mock("../agents/model-selection.js", async (importOriginal) => ({
@@ -61,6 +69,16 @@ vi.mock("../daemon/service.js", () => ({
   resolveGatewayService: mocks.resolveGatewayService,
 }));
 
+vi.mock("../daemon/runtime-paths.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/runtime-paths.js")>()),
+  resolveNodeRuntimeInfo: mocks.resolveNodeRuntimeInfo,
+}));
+
+vi.mock("../infra/runtime-guard.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/runtime-guard.js")>()),
+  detectRuntime: mocks.detectRuntime,
+}));
+
 vi.mock("../infra/container-environment.js", () => ({
   isContainerEnvironment: mocks.isContainerEnvironment,
 }));
@@ -76,20 +94,13 @@ vi.mock("../plugins/provider-runtime.js", () => ({
   normalizeProviderToolSchemasWithPlugin: mocks.normalizeProviderToolSchemasWithPlugin,
 }));
 
-vi.mock("../plugins/provider-discovery.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../plugins/provider-discovery.js")>()),
-}));
-
 vi.mock("../plugins/providers.runtime.js", () => ({
   resolvePluginProvidersCore: mocks.resolvePluginProvidersCore,
 }));
 
-const {
-  collectGatewayDaemonFindings,
-  collectGatewayHealthFindings,
-  collectProviderCatalogProjectionFindings,
-  collectRuntimeToolSchemaFindings,
-} = await import("./doctor-core-checks.runtime.js");
+const { collectGatewayDaemonFindings, collectProviderCatalogProjectionFindings } =
+  await import("./doctor-core-checks.runtime.js");
+const { collectRuntimeToolSchemaFindings } = await import("./doctor-tool-schema-runtime.js");
 
 function tool(name: string, parameters: unknown): AnyAgentTool {
   return {
@@ -109,7 +120,6 @@ function bundleMcpTool(name: string, parameters: unknown): AnyAgentTool {
 
 describe("doctor runtime tool schema checks", () => {
   beforeEach(() => {
-    mcpResolverTesting.setMcpServerConnectionResolversForTest(undefined);
     mocks.createOpenClawCodingTools.mockReset().mockReturnValue([]);
     mocks.createBundleMcpToolRuntime.mockReset().mockReturnValue({
       tools: [],
@@ -166,6 +176,52 @@ describe("doctor runtime tool schema checks", () => {
     });
     expect(mocks.disposeBundleRuntime).toHaveBeenCalledTimes(1);
   });
+
+  it.each(["1", "0"])(
+    "defers MCP connections with the published updater's IN_PROGRESS=%s markers",
+    async (inProgress) => {
+      const check = createCoreHealthChecks().find(
+        (candidate) => candidate.id === "core/doctor/runtime-tool-schemas",
+      );
+      expect(check).toBeDefined();
+      const findings = await check!.detect({
+        mode: inProgress === "1" ? "doctor" : "lint",
+        runtime: { log() {}, error() {}, exit() {} },
+        // 2026.9.3 clears IN_PROGRESS for lint but retains its writable-parent marker.
+        env: {
+          ...process.env,
+          OPENCLAW_UPDATE_IN_PROGRESS: inProgress,
+          OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
+        },
+        cfg: {
+          agents: { entries: { alpha: {}, beta: {} } },
+          mcp: {
+            servers: {
+              local: { command: "npx", args: ["-y", "fixture-mcp"] },
+              remote: { transport: "streamable-http", url: "https://mcp.example.test" },
+              disabled: { command: "fixture-disabled", enabled: false },
+            },
+          },
+        },
+      });
+
+      expect(mocks.createBundleMcpToolRuntime).not.toHaveBeenCalled();
+      expect(mocks.createOpenClawCodingTools).toHaveBeenCalledTimes(2);
+      expect(findings).toEqual(
+        ["local", "remote"].map((serverName) =>
+          expect.objectContaining({
+            checkId: "core/doctor/runtime-tool-schemas",
+            severity: "warning",
+            path: `mcp.servers.${serverName}`,
+            message: expect.stringContaining(
+              "openclaw doctor --lint --only core/doctor/runtime-tool-schemas",
+            ),
+          }),
+        ),
+      );
+      expect(exitCodeFromFindings(findings, "error")).toBe(0);
+    },
+  );
 
   it("preserves direct OpenAI catalog transport while building doctor runtime models", async () => {
     mocks.loadModelCatalog.mockResolvedValueOnce([
@@ -227,40 +283,57 @@ describe("doctor runtime tool schema checks", () => {
     );
   });
 
-  it("reports bundle MCP runtime diagnostics when tool listing fails schema validation", async () => {
-    mocks.createBundleMcpToolRuntime.mockReturnValueOnce({
-      tools: [],
-      diagnostics: [
-        {
-          serverName: "fuzzplugin",
-          safeServerName: "fuzzplugin",
-          launchSummary: "node fuzzplugin-mcp.mjs",
-          message: 'tools[0].inputSchema.type: Invalid input: expected "object"',
-        },
-      ],
-      dispose: mocks.disposeBundleRuntime,
-    });
+  it.each([false, true])(
+    "preserves MCP schema diagnostics with cleanup failure=%s",
+    async (cleanupFails) => {
+      if (cleanupFails) {
+        mocks.disposeBundleRuntime.mockRejectedValueOnce(
+          new Error("MCP runtime cleanup could not confirm closure"),
+        );
+      }
+      mocks.createBundleMcpToolRuntime.mockReturnValueOnce({
+        tools: [],
+        diagnostics: [
+          {
+            serverName: "fuzzplugin",
+            safeServerName: "fuzzplugin",
+            launchSummary: "node fuzzplugin-mcp.mjs",
+            message: 'tools[0].inputSchema.type: Invalid input: expected "object"',
+          },
+        ],
+        dispose: mocks.disposeBundleRuntime,
+      });
 
-    await expect(
-      collectRuntimeToolSchemaFindings({
+      const findings = await collectRuntimeToolSchemaFindings({
         mcp: {
           servers: {
             fuzzplugin: { command: "node", args: ["fuzzplugin-mcp.mjs"] },
           },
         },
-      }),
-    ).resolves.toContainEqual({
-      checkId: "core/doctor/runtime-tool-schemas",
-      severity: "error",
-      message:
-        'Configured MCP server "fuzzplugin" could not expose runtime tools for schema validation.',
-      path: "mcp.servers.fuzzplugin",
-      requirement: 'tools[0].inputSchema.type: Invalid input: expected "object"',
-      fixHint:
-        "Fix or disable the offending MCP server, then rerun doctor before relying on assistant tool startup.",
-    });
-    expect(mocks.disposeBundleRuntime).toHaveBeenCalledTimes(1);
-  });
+      });
+      expect(findings).toContainEqual({
+        checkId: "core/doctor/runtime-tool-schemas",
+        severity: "error",
+        message:
+          'Configured MCP server "fuzzplugin" could not expose runtime tools for schema validation.',
+        path: "mcp.servers.fuzzplugin",
+        requirement: 'tools[0].inputSchema.type: Invalid input: expected "object"',
+        fixHint:
+          "Fix or disable the offending MCP server, then rerun doctor before relying on assistant tool startup.",
+      });
+      if (cleanupFails) {
+        expect(findings).toContainEqual(
+          expect.objectContaining({
+            checkId: "core/doctor/runtime-tool-schemas",
+            path: "mcp.servers",
+            requirement: "MCP runtime cleanup could not confirm closure",
+            fixHint: "Inspect or stop the configured MCP server processes, then rerun doctor.",
+          }),
+        );
+      }
+      expect(mocks.disposeBundleRuntime).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("reports bundle MCP runtime diagnostics for exact MCP tool allowlists", async () => {
     mocks.createBundleMcpToolRuntime.mockReturnValueOnce({
@@ -497,43 +570,83 @@ describe("doctor runtime tool schema checks", () => {
   });
 
   it("does not probe requester-scoped MCP servers without a requester", async () => {
-    const resolveConnection = vi.fn();
-    mcpResolverTesting.setMcpServerConnectionResolversForTest([
-      {
-        pluginId: "fuzzplugin",
+    const resolverRegistry = createMcpProofPluginRegistry();
+    await withPluginRuntimeRegistryScope(resolverRegistry.registry, async () => {
+      const resolveConnection = vi.fn();
+      const resolverApi = resolverRegistry.apiFor("fuzzplugin");
+      resolverApi.registerMcpServerConnectionResolver({
         serverName: "fuzzplugin",
         resolve: resolveConnection,
-      },
-    ]);
+      });
 
-    await expect(
-      collectRuntimeToolSchemaFindings({
-        mcp: {
-          servers: {
-            fuzzplugin: {
-              url: "https://placeholder.invalid/mcp",
-              transport: "streamable-http",
-              auth: "oauth",
+      await expect(
+        collectRuntimeToolSchemaFindings({
+          mcp: {
+            servers: {
+              fuzzplugin: {
+                url: "https://placeholder.invalid/mcp",
+                transport: "streamable-http",
+                auth: "oauth",
+              },
             },
           },
-        },
-      }),
-    ).resolves.toContainEqual({
-      checkId: "core/doctor/runtime-tool-schemas",
-      severity: "info",
-      message:
-        'Configured requester-scoped MCP server "fuzzplugin" was not probed without an authenticated requester.',
-      path: "mcp.servers.fuzzplugin",
-      requirement: "authenticated requester context",
-      fixHint: "Verify this server from an authenticated agent turn.",
+        }),
+      ).resolves.toContainEqual({
+        checkId: "core/doctor/runtime-tool-schemas",
+        severity: "info",
+        message:
+          'Configured requester-scoped MCP server "fuzzplugin" was not probed without an authenticated requester.',
+        path: "mcp.servers.fuzzplugin",
+        requirement: "authenticated requester context",
+        fixHint: "Verify this server from an authenticated agent turn.",
+      });
+      expect(resolveConnection).not.toHaveBeenCalled();
+      expect(mocks.createBundleMcpToolRuntime).toHaveBeenCalledWith(
+        expect.objectContaining({
+          excludeServerNames: new Set(["fuzzplugin"]),
+        }),
+      );
     });
-    expect(resolveConnection).not.toHaveBeenCalled();
-    expect(mocks.createBundleMcpToolRuntime).toHaveBeenCalledWith(
-      expect.objectContaining({
-        excludeServerNames: new Set(["fuzzplugin"]),
-      }),
-    );
   });
+
+  it.each([undefined, "provider:default"])(
+    "defers shared OAuth without suppressing non-OAuth probes (auth profile=%s)",
+    async (authProfileId) => {
+      const findings = await collectRuntimeToolSchemaFindings({
+        agents: {
+          entries: {
+            main: { default: true, workspace: "/tmp/main-workspace" },
+            worker: { workspace: "/tmp/worker-workspace" },
+          },
+        },
+        mcp: {
+          servers: {
+            authenticated: {
+              url: "https://oauth.example.test/mcp",
+              transport: "streamable-http",
+              auth: "oauth",
+              ...(authProfileId ? { oauth: { authProfileId } } : {}),
+            },
+            public: { url: "https://public.example.test/mcp", transport: "sse" },
+            local: { command: "fixture-mcp" },
+          },
+        },
+      });
+      expect(findings).toEqual([
+        expect.objectContaining({
+          severity: "info",
+          path: "mcp.servers.authenticated",
+          message: expect.stringContaining("OAuth may rotate external credentials"),
+          fixHint: expect.stringContaining("openclaw mcp probe"),
+        }),
+      ]);
+      expect(mocks.createBundleMcpToolRuntime).toHaveBeenCalledTimes(1);
+      expect(mocks.createBundleMcpToolRuntime).toHaveBeenCalledWith(
+        expect.objectContaining({ excludeServerNames: new Set(["authenticated"]) }),
+      );
+      expect(mocks.disposeBundleRuntime).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("does not report bundle MCP schemas filtered out by the final runtime tool policy", async () => {
     mocks.createBundleMcpToolRuntime.mockReturnValueOnce({
@@ -613,6 +726,14 @@ describe("doctor runtime tool schema checks", () => {
 
 describe("doctor gateway runtime checks", () => {
   beforeEach(() => {
+    mocks.resolveNodeRuntimeInfo.mockReset().mockResolvedValue({
+      status: "supported",
+      version: "26.8.1",
+      sqliteVersion: "3.53.4",
+      sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
+      nodeSharedSqlite: false,
+    });
+    mocks.detectRuntime.mockReset();
     mocks.isContainerEnvironment.mockReset().mockReturnValue(false);
     mocks.buildGatewayProbeConnectionDetails.mockReset().mockResolvedValue({
       url: "http://127.0.0.1:5829",
@@ -630,7 +751,7 @@ describe("doctor gateway runtime checks", () => {
     mocks.resolveGatewayService.mockReset().mockReturnValue({ label: "openclaw-gateway" });
   });
 
-  it("projects every degraded SecretRef owner from exactly one authenticated read-only status RPC", async () => {
+  it("projects SecretRef and SQLite warnings from one authenticated read-only status RPC", async () => {
     const cfg = { gateway: { mode: "local" as const } };
     const privateToken = "SYNTHETIC_PRIVATE_URL_TOKEN";
     mocks.buildGatewayProbeConnectionDetails.mockResolvedValueOnce({
@@ -668,6 +789,17 @@ describe("doctor gateway runtime checks", () => {
         },
       ],
       degradedPlugins: [{ pluginId: "not-this-check" }],
+      sqliteWal: {
+        state: "blocked",
+        observedAtMs: 1_800_000,
+        walBytes: 128 * 1024 * 1024,
+        databaseBytes: 32 * 1024 * 1024,
+        logFrames: 4000,
+        checkpointedFrames: 100,
+        lastCompletedAtMs: null,
+        consecutiveBlocked: 2,
+        warning: true,
+      },
     });
 
     const findings = await collectGatewayHealthFindings({
@@ -708,6 +840,12 @@ describe("doctor gateway runtime checks", () => {
         message: expect.stringContaining("provider:vault"),
         path: expect.stringContaining("providers.example.0"),
         target: expect.stringContaining("provider:vault"),
+      }),
+      expect.objectContaining({
+        checkId: "core/doctor/gateway-health",
+        severity: "warning",
+        message: expect.stringContaining("SQLite WAL: checkpoint blocked"),
+        fixHint: expect.stringContaining("openclaw status --deep"),
       }),
     ]);
     expect(findings[1]?.message).toContain("tts.providers.elevenlabs.voiceId");
@@ -924,6 +1062,82 @@ describe("doctor gateway runtime checks", () => {
 
     expect(mocks.readGatewayServiceState).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { version: "26.8.1", text: false, severity: "error", message: "truncates TEXT" },
+    {
+      version: "24.15.0",
+      text: true,
+      severity: "info",
+      message: "unsupported version, capability probe passed",
+    },
+  ])(
+    "reports current Node $version probe outcome as $severity",
+    async ({ version, text, severity, message }) => {
+      mocks.detectRuntime.mockResolvedValue({
+        kind: "node",
+        version,
+        execPath: "/opt/runtime/bin/node",
+        pathEnv: "/opt/runtime/bin",
+        hasNodeSqlite: true,
+        sqliteVersion: "3.53.4",
+        sqliteProbe: { available: true, version: "3.53.4", text, blob: true, json: true },
+      });
+
+      expect(await collectNodeRuntimeFindings({ OPENCLAW_PROFILE: "diagnostic-fixture" })).toEqual([
+        expect.objectContaining({
+          checkId: "core/doctor/node-runtime",
+          severity,
+          message: expect.stringContaining(message),
+          target: "/opt/runtime/bin/node",
+          ...(severity === "error" ? { fixHint: expect.stringContaining("nvm install 26") } : {}),
+        }),
+      ]);
+    },
+  );
+
+  it.each([
+    { version: "26.8.1", text: false, status: "unsupported" as const, severity: "warning" },
+    { version: "24.15.0", text: true, status: "supported" as const, severity: "info" },
+  ])(
+    "reports recorded Node $version capabilities as $severity",
+    async ({ version, text, status, severity }) => {
+      const message = text
+        ? `Node ${version}: unsupported version, capability probe passed.`
+        : `Node ${version}: node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954)`;
+      mocks.readGatewayServiceState.mockResolvedValueOnce({
+        installed: true,
+        loadState: { status: "loaded" },
+        running: true,
+        env: {},
+        command: {
+          programArguments: ["/opt/runtime/bin/node", "gateway"],
+          sourcePath: "/tmp/gateway.service",
+        },
+        runtime: { status: "running" },
+      });
+      mocks.resolveNodeRuntimeInfo.mockResolvedValue({
+        status,
+        version,
+        sqliteVersion: "3.53.4",
+        sqliteProbe: { available: true, version: "3.53.4", text, blob: true, json: true },
+        nodeSharedSqlite: false,
+        ...(text ? { note: message } : { capabilityError: message }),
+      });
+
+      await expect(
+        collectGatewayDaemonFindings({ cfg: { gateway: { mode: "local" } } }),
+      ).resolves.toEqual([
+        expect.objectContaining({
+          checkId: "core/doctor/gateway-daemon",
+          severity,
+          message,
+          target: "/opt/runtime/bin/node",
+          ...(severity === "warning" ? { fixHint: expect.stringContaining("nvm install 26") } : {}),
+        }),
+      ]);
+    },
+  );
 
   it("skips host-service findings for a container without an OpenClaw service", async () => {
     mocks.isContainerEnvironment.mockReturnValue(true);
@@ -1427,7 +1641,7 @@ describe("doctor provider catalog projection checks", () => {
         path: "plugins.entries.mockplugin",
         target: "mockplugin",
         message: "Provider catalog mockplugin failed during doctor validation.",
-        requirement: "Cannot perform 'get' on a proxy that has been revoked",
+        requirement: expect.stringMatching(/proxy.*revoked/iu),
       }),
     );
   });

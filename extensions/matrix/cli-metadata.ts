@@ -1,4 +1,3 @@
-// Matrix plugin module implements cli metadata behavior.
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { registerMatrixCliMetadata } from "./src/cli-metadata.js";
 

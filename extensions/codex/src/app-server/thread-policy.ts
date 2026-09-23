@@ -4,12 +4,18 @@ import {
   isCodexAppServerPrewriteRequestCancellationError,
   type CodexAppServerClient,
 } from "./client.js";
+import { assertCodexThreadAcceptsDirectInput } from "./protocol-validators.js";
 import type { CodexThread } from "./protocol.js";
 import {
   CodexAppServerScopedRequestRejectedError,
   requestCodexAppServerClientJson,
 } from "./request.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
+import { CodexAdoptedThreadActiveError } from "./thread-lifecycle-errors.js";
+import type {
+  CodexStartOrResumeThreadParams,
+  CodexThreadRequestContext,
+} from "./thread-lifecycle-types.js";
 
 /** A refusal, not a failed native write: the ephemeral conversation must stay alive. */
 export class CodexIncognitoPolicyChangeError extends AgentHarnessPreflightError {
@@ -45,7 +51,7 @@ export async function refreshCodexThreadPolicy(params: {
   assertCurrent: () => void;
 }): Promise<void> {
   const notice =
-    "The following is the complete current OpenClaw-supplied generic instruction policy. It replaces earlier OpenClaw-supplied generic policy, including OpenClaw-carried workspace text and sections now absent. Independently supplied native managed, guardian, security, collaboration, and project instructions retain their authority. User requests retain their own authority.\n\n";
+    "The following is the complete current OpenClaw-supplied generic instruction policy. It replaces earlier OpenClaw-supplied generic policy, including sections removed from that generic policy. Parent-local instructions supplied for the current inference request are outside this policy replacement. Independently supplied native managed, guardian, security, collaboration, and project instructions retain their authority. User requests retain their own authority.\n\n";
   const text =
     notice +
     (params.developerInstructions === ""
@@ -97,4 +103,29 @@ export function assertCodexSupervisionThreadLineage(
       "Codex supervision lineage could not be verified; reconnect before continuing.",
     );
   }
+}
+
+/** Passive refusal must precede releasing or acquiring any native subscription. */
+export async function assertAdoptedCodexThreadResumeAllowed(
+  params: CodexStartOrResumeThreadParams,
+  threadId: string,
+  context: Pick<CodexThreadRequestContext, "lifecycleTiming" | "throwIfAborted">,
+  assertCurrent: () => void,
+): Promise<CodexThread> {
+  const { thread } = await context.lifecycleTiming.measure("thread-read-adoption-status", () =>
+    params.client.request(
+      "thread/read",
+      { threadId, includeTurns: false },
+      { signal: params.signal, assertCurrent },
+    ),
+  );
+  context.throwIfAborted();
+  if (thread.id !== threadId) {
+    throw new Error("Codex returned another thread during adoption status read");
+  }
+  assertCodexThreadAcceptsDirectInput(thread);
+  if (thread.status?.type === "active") {
+    throw new CodexAdoptedThreadActiveError();
+  }
+  return thread;
 }

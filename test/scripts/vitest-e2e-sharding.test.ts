@@ -17,9 +17,10 @@ vi.mock("../../scripts/lib/ci-test-timings.mts", () => ({
 const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
 const directories: string[] = [];
 
-it("collects browser suites only in their Control UI projects", () => {
+it("keeps host E2Es and browser suites in their own projects", () => {
   const ui = createUiE2eVitestConfig({}, []).test!;
   const gateway = createE2EVitestConfig({}).test!;
+  expect(gateway.pool).toBe("forks");
   const browserFiles = new Set(globSync(ui.include!, { cwd: repoRoot, exclude: ui.exclude }));
   expect(browserFiles.size).toBeGreaterThan(0);
   const gatewayFiles = globSync(gateway.include!, { cwd: repoRoot, exclude: gateway.exclude });

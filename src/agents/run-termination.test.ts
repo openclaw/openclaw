@@ -256,7 +256,10 @@ describe("resolveAgentRunErrorLifecycleFields", () => {
         status: 500,
         message: "500 Fixture request needs a task header",
       });
-      expect(failure).toMatchObject({ reason: "timeout", status: 500 });
+      // An untyped 500 is a provider server error, not a timing failure. The
+      // guard below is what this test protects: neither reason may surface as a
+      // provider timeout in the lifecycle fields.
+      expect(failure).toMatchObject({ reason: "server_error", status: 500 });
       const error =
         wrapper === "direct"
           ? failure
@@ -294,6 +297,30 @@ describe("resolveAgentRunErrorLifecycleFields", () => {
       stopReason: "aborted",
     });
   });
+
+  it.each([false, true])("preserves restart cancellation before caller abort=%s", (hasSignal) => {
+    const signal = hasSignal ? new AbortController().signal : undefined;
+    expect(resolveAgentRunErrorLifecycleFields(createAgentRunRestartAbortError(), signal)).toEqual({
+      aborted: true,
+      stopReason: "restart",
+    });
+  });
+
+  it.each(["user", "timeout"] as const)(
+    "keeps prior %s cancellation over a restart error",
+    (reason) => {
+      const controller = new AbortController();
+      controller.abort(
+        reason === "timeout" ? new DOMException("deadline elapsed", "TimeoutError") : undefined,
+      );
+      expect(
+        resolveAgentRunErrorLifecycleFields(createAgentRunRestartAbortError(), controller.signal),
+      ).toEqual({
+        aborted: true,
+        stopReason: reason === "timeout" ? "timeout" : "aborted",
+      });
+    },
+  );
 
   it("attributes structured provider watchdog timeouts", () => {
     const error = createCliWatchdogError();

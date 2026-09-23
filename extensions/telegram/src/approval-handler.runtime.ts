@@ -1,4 +1,3 @@
-// Telegram plugin module implements approval handler behavior.
 import type {
   ChannelApprovalCapabilityHandlerContext,
   ChannelApprovalKind,

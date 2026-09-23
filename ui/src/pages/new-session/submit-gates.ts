@@ -31,6 +31,7 @@ registerNewSessionSetupEnglish();
 // silently eat an Enter press again.
 type SilentSubmitGate = "submitting" | "empty-draft";
 type ReasonedSubmitGate =
+  | "initial-turn-rejected"
   | "preference-restore"
   | "model-setup"
   | "route-pending"
@@ -55,26 +56,13 @@ export type NewSessionSubmitBlock =
   | { gate: SilentSubmitGate; reason?: undefined }
   | { gate: ReasonedSubmitGate; reason: string };
 
-// These gates already render a persistent callout on the page; a blocked
+// These gates already render a persistent callout or status on the page; a blocked
 // submit attempt must not duplicate that text as a second notice.
 export const PAGE_RENDERED_GATES: ReadonlySet<string> = new Set([
+  "attachment-reads",
   "outcome-unknown",
   "worktree-name",
 ]);
-
-export function resolveCloudPlacementDisabledReason(place: DraftPlaceState): string | undefined {
-  const runtimeReason = place.modelControl.cloudRuntimeUnsupportedReason();
-  if (runtimeReason) {
-    return runtimeReason;
-  }
-  if (place.repository.kind === "checking") {
-    return t("newSession.checkingGit");
-  }
-  if (place.repository.kind === "unavailable") {
-    return t("newSession.gitCheckUnavailable");
-  }
-  return place.worktreeAvailable() ? undefined : t("newSession.cloudRequiresWorktree");
-}
 
 export function readNewSessionSubmissionAccess(options: {
   gateway: Parameters<typeof readSessionMethodAccess>[0];
@@ -86,7 +74,7 @@ export function readNewSessionSubmissionAccess(options: {
   const { gateway, place, pendingPlacement, hasInitialTurn, createParams } = options;
   const pendingPlacementActive = Boolean(pendingPlacement.sessionKey);
   const target = resolveDraftSessionPlacement(pendingPlacement, place).target;
-  const remoteProject = target || !hasInitialTurn ? place.browser.remoteProject : null;
+  const remoteProject = !target && !hasInitialTurn ? place.browser.remoteProject : null;
   if (!pendingPlacementActive && remoteProject && !remoteProject.projectId) {
     const projectAccess = readSessionMethodAccess(gateway, {
       method: "projects.add",
@@ -153,7 +141,6 @@ type SubmitGateHost = {
   requiresModelSetup(): boolean;
   submissionAccess(): SessionMethodAccess;
   placementTargetForSubmission(): SessionPlacementTarget | null;
-  cloudDisabledReason(): string | undefined;
   cloudRuntimeUnsupportedReason(): string | undefined;
 };
 
@@ -295,26 +282,24 @@ export function resolveNewSessionSubmitBlock(
   if (
     cloudProfileId &&
     (!gateway.cloudProfilesReady ||
-      !place.worktree ||
       !gateway.cloudProfiles.some((profile) => profile.id === cloudProfileId) ||
       Boolean(host.cloudRuntimeUnsupportedReason()))
   ) {
-    const reason =
-      host.cloudDisabledReason() ??
-      (place.worktree ? t("newSession.placementNotReady") : t("newSession.cloudRequiresWorktree"));
+    const reason = host.cloudRuntimeUnsupportedReason() ?? t("newSession.placementNotReady");
     return { gate: "cloud", reason };
   }
-  // Remote placements force a managed worktree; this gate owns repository readiness for both.
-  if (place.worktree && !place.worktreeAvailable()) {
+  if (place.worktree && !place.freshWorkspace && !place.worktreeAvailable()) {
     return {
       gate: "worktree-unavailable",
       reason:
         place.repository.kind === "checking"
           ? t("newSession.checkingGit")
-          : t("newSession.worktreeUnavailable"),
+          : place.remotePlacement
+            ? t("newSession.remoteSourceUnavailable")
+            : t("newSession.worktreeUnavailable"),
     };
   }
-  if (place.worktree && !isWorktreeNameValid(place.worktreeName)) {
+  if (place.worktree && !place.freshWorkspace && !isWorktreeNameValid(place.worktreeName)) {
     return { gate: "worktree-name", reason: t("newSession.worktreeNameInvalid") };
   }
   if (

@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   prepareGithubIssue,
   reconcileGithubIssue,
@@ -389,10 +390,7 @@ describe("GitHub issue transport", () => {
 
   it("deduplicates concurrent submissions with the same marker", async () => {
     const issue = prepare("concurrent");
-    let releaseAuth: ((value: ReturnType<typeof cliResult>) => void) | undefined;
-    const auth = new Promise<ReturnType<typeof cliResult>>((resolve) => {
-      releaseAuth = resolve;
-    });
+    const { promise: auth, resolve: releaseAuth } = createDeferred<ReturnType<typeof cliResult>>();
     const runGh = vi
       .fn<RunGithubCli>()
       .mockReturnValueOnce(auth)
@@ -449,4 +447,73 @@ describe("GitHub issue transport", () => {
     expect(child.stdin.destroy).toHaveBeenCalledOnce();
     expect(child.stdout.destroy).toHaveBeenCalledOnce();
   });
+
+  it.each([false, true])(
+    "checks live authority and claims synchronously at the default child boundary, retired=%s",
+    async (retire) => {
+      // The actual child-process dependency is mocked; no executable can run in this test.
+      vi.stubEnv("VITEST", undefined);
+      vi.stubEnv("NODE_ENV", "production");
+      let current = true;
+      let claimed = false;
+      let authorityAtCreate: boolean | undefined;
+      spawnMock.mockImplementation((_command, args: string[]) => {
+        if (args[0] === "api") {
+          authorityAtCreate = current;
+          expect(claimed).toBe(true);
+        }
+        const child = Object.assign(new EventEmitter(), {
+          stdin: Object.assign(new EventEmitter(), { destroy: vi.fn(), end: vi.fn() }),
+          stdout: Object.assign(new EventEmitter(), { destroy: vi.fn() }),
+          kill: vi.fn(),
+          unref: vi.fn(),
+        });
+        child.stdin.end.mockImplementation(() =>
+          queueMicrotask(() => {
+            child.emit("spawn");
+            if (args[0] === "api") {
+              child.stdout.emit(
+                "data",
+                Buffer.from("https://github.com/openclaw/openclaw/issues/123\n"),
+              );
+            }
+            child.emit("close", 0);
+          }),
+        );
+        return child;
+      });
+      const submission = submitGithubIssue(prepare(`final-child-${retire}`), undefined, {
+        beforeIssueCreate: async () => {
+          if (retire) {
+            queueMicrotask(() => {
+              current = false;
+            });
+          }
+          return (): undefined => {
+            if (!current) {
+              throw new Error("authority retired");
+            }
+            claimed = true;
+            queueMicrotask(() => {
+              current = false;
+            });
+          };
+        },
+      });
+      if (retire) {
+        await expect(submission).rejects.toThrow("authority retired");
+        expect(claimed).toBe(false);
+        expect(authorityAtCreate).toBeUndefined();
+      } else {
+        await expect(submission).resolves.toEqual({
+          status: "created",
+          url: "https://github.com/openclaw/openclaw/issues/123",
+        });
+        expect(authorityAtCreate).toBe(true);
+      }
+      expect(spawnMock.mock.calls.map(([, args]) => args[0])).toEqual(
+        retire ? ["auth"] : ["auth", "api"],
+      );
+    },
+  );
 });

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { captureClawInstallSchemaVersionFacts } from "../claws/provenance-runtime-read.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   buildModelsListResult,
@@ -9,6 +10,10 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import {
+  createApiKeyCredential,
+  createAuthProfileStoreFixture,
+} from "./auth-profiles/credential-fixtures.test-support.js";
 import { createPreparedModelCatalogWorkerInput } from "./prepared-model-catalog-worker.js";
 import { runPreparedModelCatalogWorkerRequest } from "./prepared-model-catalog.worker.js";
 import { prepareWorkspaceBuildGroup } from "./prepared-model-runtime.facts.js";
@@ -151,27 +156,29 @@ describe("ClawRouter cold prepared catalog", () => {
       // without a configured model preloading its provider into the startup scope.
       expect(value.providerIds).not.toContain("clawrouter");
       await state.writeAuthProfiles(
-        {
-          version: 1,
-          profiles: {
-            "clawrouter:default": {
-              type: "api_key",
-              provider: "clawrouter",
-              key: "catalog-test-key",
-            },
-          },
-        },
+        createAuthProfileStoreFixture({
+          "clawrouter:default": createApiKeyCredential("clawrouter", "catalog-test-key"),
+        }),
         agentId,
       );
     }
     const result = await runPreparedModelCatalogWorkerRequest(value, {
       kind: "catalog",
       syntheticAuth: [],
+      clawInstallSchemaVersions: captureClawInstallSchemaVersionFacts({ env: state.env }),
     });
     expect(result.status).toBe("ok");
     if (result.status !== "ok" || result.kind !== "catalog") {
       throw new Error("catalog worker did not publish a catalog");
     }
+    expect(result.runtimeModels.get("clawrouter")).toContainEqual(
+      expect.objectContaining({
+        provider: "clawrouter",
+        id: "codex-latest",
+        api: "openai-responses",
+        baseUrl: `${baseUrl}/v1`,
+      }),
+    );
     const projector = createGatewayAgentModelCatalogProjector({
       cfg: config,
       agentId,
@@ -181,7 +188,10 @@ describe("ClawRouter cold prepared catalog", () => {
       preparedRuntimeAuthModes: result.authModes,
     });
     const catalog = await buildModelsListResult({
-      context: { getRuntimeConfig: () => config } as GatewayRequestContext,
+      source: {
+        kind: "gateway",
+        context: { getRuntimeConfig: () => config } as GatewayRequestContext,
+      },
       agentId,
       params: { view: refreshedAuth ? "all" : "configured", preparedOnly: true },
       preloadedCatalog: { agentId, config, snapshot: result.snapshot },

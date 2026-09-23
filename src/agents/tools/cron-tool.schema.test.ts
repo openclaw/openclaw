@@ -1,7 +1,7 @@
 import {
   findLlamacppGbnfSchemaViolations,
   normalizeToolParameterSchema,
-} from "@openclaw/ai/internal/openai";
+} from "@openclaw/ai/internal/tool-schema";
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 // Cron tool schema tests cover the provider-facing parameter shape and runtime
 // validation compatibility for cron jobs.
@@ -59,6 +59,25 @@ describe("createCronToolSchema", () => {
 
   // Regression: models like GPT-5.4 rely on these fields to populate job/patch.
   // If a field is removed from this list the test must be updated intentionally.
+
+  it("advertises timeout clears while retaining numeric bounds", () => {
+    for (const [timeoutSeconds, accepted] of [
+      [null, true],
+      [0, true],
+      [0.03, true],
+      [30, true],
+      [-1, false],
+      ["30", false],
+    ] as const) {
+      expect(
+        Value.Check(schema, {
+          action: "update",
+          id: "timeout-job",
+          job: { payload: { timeoutSeconds } },
+        }),
+      ).toBe(accepted);
+    }
+  });
 
   it("job exposes the expected top-level fields", () => {
     expect(keysAt(schemaRecord, "job")).toEqual(
@@ -235,8 +254,7 @@ describe("createCronToolSchema", () => {
       minimum: 1,
     });
     expect(propertyAt(schemaRecord, "job.payload.timeoutSeconds")).toMatchObject({
-      type: "number",
-      minimum: 0,
+      anyOf: [{ type: "number", minimum: 0 }, { type: "null" }],
     });
   });
 

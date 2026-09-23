@@ -6,6 +6,61 @@ import {
 } from "./server-chat-state.js";
 
 describe("createChatRunState", () => {
+  it("replays complete prepared items and evicts raw and item siblings together", () => {
+    const state = createChatRunState();
+    let seq = 0;
+    const send = (stream: string, data: Record<string, unknown>) => {
+      state.recordProgressEvent("run", { runId: "run", stream, data, seq: ++seq, ts: seq });
+    };
+    send("item", {
+      itemId: "preamble",
+      kind: "preamble",
+      phase: "end",
+      status: "completed",
+      title: "Status",
+      progressText: "Ready",
+    });
+    send("item", {
+      itemId: "preamble",
+      kind: "preamble",
+      phase: "update",
+      status: "running",
+      title: "Status",
+      progressText: "Checking",
+    });
+    expect(state.runs.get("run")?.progressSnapshot?.events).toMatchObject([
+      { data: { phase: "end", progressText: "Ready", title: "Status", status: "completed" } },
+    ]);
+    send("item", { itemId: "preamble", kind: "preamble", phase: "start", progressText: "" });
+    expect(state.runs.get("run")?.progressSnapshot?.events).toEqual([]);
+    for (let index = 0; index < 30; index += 1) {
+      const toolCallId = `call-${index}`;
+      send("tool", { toolCallId, name: "read", phase: "start", args: { path: "README.md" } });
+      send("item", {
+        itemId: `tool:${toolCallId}`,
+        toolCallId,
+        name: "read",
+        kind: "tool",
+        phase: "end",
+        title: "Read file",
+        status: "completed",
+        extraTypedFact: "retained",
+      });
+    }
+    const events = state.runs.get("run")?.progressSnapshot?.events ?? [];
+    expect(events).toHaveLength(50);
+    expect(
+      events.filter((event) => event.stream === "item").map((event) => event.data.toolCallId),
+    ).toEqual(
+      events.filter((event) => event.stream === "tool").map((event) => event.data.toolCallId),
+    );
+    expect(events.at(-1)?.data).toMatchObject({
+      title: "Read file",
+      status: "completed",
+      extraTypedFact: "retained",
+    });
+  });
+
   it.each([false, true])(
     "stops returning finalized recipients at expiry (other state: %s)",
     (keepState) => {
@@ -26,6 +81,52 @@ describe("createChatRunState", () => {
         expect(state.toolEventRecipients.get("finished")).toBeUndefined();
         expect(state.toolEventRecipients.get("active")).toEqual(new Set(["conn-active"]));
         expect(state.runs.has("finished")).toBe(keepState);
+      } finally {
+        clock.mockRestore();
+      }
+    },
+  );
+
+  it("expires idle recipients while activity extends another run's lifetime", () => {
+    let now = 1_000;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      const state = createChatRunState();
+      state.toolEventRecipients.add("idle", "conn-idle");
+      state.toolEventRecipients.add("active", "conn-active");
+      now = 301_000;
+      expect(state.toolEventRecipients.get("active")).toEqual(new Set(["conn-active"]));
+      now = 600_999;
+      state.toolEventRecipients.get("active");
+      expect(state.runs.has("idle")).toBe(true);
+      now += 1;
+      state.toolEventRecipients.get("active");
+      expect(state.runs.has("idle")).toBe(false);
+      expect(state.toolEventRecipients.get("active")).toEqual(new Set(["conn-active"]));
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it.each([false, true])(
+    "expires new recipients after clock rollback (clear previous state: %s)",
+    (clear) => {
+      let now = 1_000_000;
+      const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+      try {
+        const state = createChatRunState();
+        state.toolEventRecipients.add("previous", "conn-previous");
+        if (clear) {
+          state.clear();
+        }
+        now = 1_000;
+        state.toolEventRecipients.add("early", "conn-early");
+        now = 500_000;
+        state.toolEventRecipients.add("active", "conn-active");
+        now = 601_000;
+        expect(state.toolEventRecipients.get("active")).toEqual(new Set(["conn-active"]));
+        expect(state.runs.has("early")).toBe(false);
+        expect(state.runs.has("previous")).toBe(!clear);
       } finally {
         clock.mockRestore();
       }
@@ -108,7 +209,13 @@ describe("createChatRunState", () => {
     },
   );
 
-  it.each(["naming_worktree", "creating_worktree", "running_setup", "preparing_context"])(
+  it.each([
+    "naming_worktree",
+    "creating_worktree",
+    "running_setup",
+    "preparing_context",
+    "memory_flushing",
+  ])(
     "retains only the latest startup status (%s) until observable run activity begins",
     (phase) => {
       const state = createChatRunState();
@@ -133,6 +240,63 @@ describe("createChatRunState", () => {
       expect(state.runs.get("run-1")?.progressSnapshot?.events).toMatchObject([
         { seq: 3, stream: "tool", data: { phase: "start", toolCallId: "read-1" } },
       ]);
+    },
+  );
+
+  it.each(["full", "summary"] as const)(
+    "retains retry waits after completed work and clears them on resumed %s activity",
+    (mode) => {
+      const state = createChatRunState();
+      let seq = 0;
+      const event = (stream: string, data: Record<string, unknown>) =>
+        state.recordProgressEvent(
+          "run-1",
+          { runId: "run-1", seq: ++seq, stream, ts: seq, data },
+          mode,
+        );
+      event("tool", { phase: "result", toolCallId: "read-1", name: "read", result: "done" });
+      for (const stream of ["assistant", "tool", "item"]) {
+        const retry = {
+          phase: "retrying",
+          message: "Rate limited. Retrying in 2 seconds (attempt 2/8).",
+          retryAttempt: 2,
+          maxRetries: 8,
+          delayMs: 2_000,
+        };
+        event("run_status", retry);
+        event("usage", { outputTokens: 100 });
+        expect(state.runs.get("run-1")?.progressSnapshot?.events).toContainEqual(
+          expect.objectContaining({ stream: "run_status", data: retry }),
+        );
+        event(
+          stream,
+          stream === "assistant"
+            ? { text: "Continuing" }
+            : stream === "tool"
+              ? { phase: "start", toolCallId: "read-2", name: "read" }
+              : { kind: "preamble", itemId: "resumed", progressText: "Continuing" },
+        );
+        expect(
+          state.runs
+            .get("run-1")
+            ?.progressSnapshot?.events.some((entry) => entry.stream === "run_status"),
+        ).toBe(false);
+        if (stream === "assistant") {
+          expect(state.runs.get("run-1")?.progressSnapshot?.events).toContainEqual({
+            runId: "run-1",
+            seq,
+            stream: "assistant",
+            ts: seq,
+            data: {},
+          });
+        }
+        expect(state.runs.get("run-1")?.progressSnapshot?.events).toContainEqual(
+          expect.objectContaining({
+            stream: "tool",
+            data: expect.objectContaining({ toolCallId: "read-1", phase: "result" }),
+          }),
+        );
+      }
     },
   );
 
@@ -283,6 +447,124 @@ describe("createChatRunState", () => {
       name: "read",
       toolCallId: "tool-78",
     });
+  });
+
+  it.each(["tool", "notice"])(
+    "isolates captured payloads from producer mutation before %s activity",
+    (stream) => {
+      const state = createChatRunState();
+      const args = { text: "x".repeat(1_024) };
+      for (let seq = 1; seq <= 50; seq += 1) {
+        state.recordProgressEvent("run-1", {
+          runId: "run-1",
+          seq,
+          stream: "tool",
+          ts: seq,
+          data: { phase: "start", toolCallId: `tool-${seq}`, args },
+        });
+      }
+      // Tool producers can retain and update nested payload objects between events.
+      args.text = "é".repeat(2_048);
+      state.recordProgressEvent("run-1", {
+        runId: "run-1",
+        seq: 51,
+        stream,
+        ts: 51,
+        data:
+          stream === "tool"
+            ? { phase: "start", toolCallId: "latest" }
+            : { phase: "warning", message: "Still running" },
+      });
+      const snapshot = state.runs.get("run-1")?.progressSnapshot;
+      expect(snapshot?.events.at(-1)?.seq).toBe(51);
+      expect(snapshot?.events).toHaveLength(50);
+      expect(snapshot?.events[0]?.data.args).toEqual({ text: "x".repeat(1_024) });
+      expect(snapshot?.byteLength).toBe(
+        snapshot?.events.reduce(
+          (total, event) => total + Buffer.byteLength(JSON.stringify(event)),
+          0,
+        ),
+      );
+      expect(snapshot?.byteLength).toBeLessThanOrEqual(128 * 1024);
+    },
+  );
+
+  it("captures nested tool JSON once with the same values reconnect transport sends", () => {
+    const state = createChatRunState();
+    let serializations = 0;
+    const details = {
+      toJSON: () => {
+        serializations += 1;
+        return { text: "é", omitted: undefined, values: [undefined, Number.NaN] };
+      },
+    };
+    state.recordProgressEvent("run-1", {
+      runId: "run-1",
+      seq: 1,
+      stream: "tool",
+      ts: 1,
+      data: { phase: "result", toolCallId: "done", result: { details } },
+    });
+    state.recordProgressEvent("run-1", {
+      runId: "run-1",
+      seq: 2,
+      stream: "tool",
+      ts: 2,
+      data: { phase: "input_delta", toolCallId: "active", diff: { added: 1, removed: 0 } },
+    });
+    expect(serializations).toBe(1);
+    const snapshot = state.runs.get("run-1")?.progressSnapshot;
+    expect(snapshot?.events[0]?.data.result).toEqual({
+      details: { text: "é", values: [null, null] },
+    });
+    const captured = snapshot!.events[0]!.data.result as {
+      details: { text: string; values: null[] };
+    };
+    expect(Reflect.set(captured, "details", {})).toBe(false);
+    expect(Reflect.set(captured.details, "text", "changed")).toBe(false);
+    expect(Reflect.set(captured.details.values, "0", "changed")).toBe(false);
+    expect(snapshot?.byteLength).toBe(
+      snapshot?.events.reduce(
+        (total, event) => total + Buffer.byteLength(JSON.stringify(event)),
+        0,
+      ),
+    );
+  });
+
+  it.each([
+    [
+      "cyclic",
+      (): unknown => {
+        const result: { self?: unknown } = {};
+        result.self = result;
+        return result;
+      },
+    ],
+    ["bigint", (): unknown => 1n],
+    [
+      "throwing toJSON",
+      (): unknown => ({
+        toJSON: () => {
+          throw new Error("unserializable tool result");
+        },
+      }),
+    ],
+  ] as const)("retains tool metadata when a %s result cannot be replayed", (_label, result) => {
+    const state = createChatRunState();
+    state.recordProgressEvent("run-1", {
+      runId: "run-1",
+      seq: 1,
+      stream: "tool",
+      ts: 1,
+      data: { phase: "result", toolCallId: "done", name: "read", result: result() },
+    });
+    const snapshot = state.runs.get("run-1")?.progressSnapshot;
+    expect(snapshot?.events[0]?.data).toEqual({
+      phase: "result",
+      toolCallId: "done",
+      name: "read",
+    });
+    expect(snapshot?.byteLength).toBe(Buffer.byteLength(JSON.stringify(snapshot?.events[0])));
   });
 
   it("keeps a review-heavy reconnect bounded, adverse, and attached to its owner", () => {

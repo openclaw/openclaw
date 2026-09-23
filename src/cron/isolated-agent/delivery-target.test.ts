@@ -28,6 +28,12 @@ vi.mock("../../config/sessions/main-session.js", () => ({
 
 vi.mock("../../config/sessions/delivery-info.js", () => ({
   extractDeliveryInfo: extractDeliveryInfoMock,
+  extractDeliveryInfoBatch: (keys: Array<string | undefined>, options: unknown) =>
+    keys.map((key) =>
+      key
+        ? extractDeliveryInfoMock(key, options)
+        : { deliveryContext: undefined, threadId: undefined },
+    ),
 }));
 
 vi.mock("../../config/sessions/paths.js", () => ({
@@ -39,6 +45,22 @@ vi.mock("../../config/sessions/session-accessor.js", () => {
   return {
     loadSessionEntry,
     loadSessionEntryReadOnly: loadSessionEntry,
+    loadExactSessionEntryCandidatesReadOnlyBatch: (
+      scopes: Array<{ agentId: string; storePath: string; sessionKeys: string[] }>,
+    ) =>
+      scopes.map(({ agentId, storePath, sessionKeys }) => {
+        try {
+          return {
+            ok: true,
+            value: sessionKeys.flatMap((sessionKey) => {
+              const entry = loadSessionEntry({ agentId, storePath, sessionKey });
+              return entry ? [{ sessionKey, entry }] : [];
+            }),
+          };
+        } catch (error) {
+          return { ok: false, error };
+        }
+      }),
   };
 });
 

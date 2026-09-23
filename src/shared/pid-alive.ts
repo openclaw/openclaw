@@ -3,6 +3,7 @@ import childProcess from "node:child_process";
 import fsSync from "node:fs";
 import { resolveDiagnosticProcessEnv } from "../infra/process-env.ts";
 import { readWindowsProcessStartTimeSync } from "../infra/windows-process-start.ts";
+import { readFreeBsdProcessStartTime } from "./freebsd-process-identity.ts";
 
 const PROCESS_START_TIMEOUT_MS = 1000;
 // Cache only a successful self read: this identity lasts for the process.
@@ -14,7 +15,7 @@ function isValidPid(pid: number): boolean {
 }
 
 /**
- * Check if a process is a zombie on Linux by reading /proc/<pid>/status.
+ * Check if every thread has exited by reading Linux /proc/<pid>/status.
  * Returns false on non-Linux platforms or if the proc file can't be read.
  */
 function isZombieProcess(pid: number): boolean {
@@ -24,7 +25,9 @@ function isZombieProcess(pid: number): boolean {
   try {
     const status = fsSync.readFileSync(`/proc/${pid}/status`, "utf8");
     const stateMatch = status.match(/^State:\s+(\S)/m);
-    return stateMatch?.[1] === "Z";
+    // pthread_exit can leave a zombie leader with live workers; missing thread
+    // evidence must not revoke a live process's locks or cleanup obligations.
+    return stateMatch?.[1] === "Z" && /^Threads:[ \t]+1[ \t]*$/m.test(status);
   } catch {
     return false;
   }
@@ -61,12 +64,12 @@ export function isPidDefinitelyDead(pid: number): boolean {
   return isZombieProcess(pid);
 }
 
-function getDarwinProcessStartTime(pid: number): number | null {
+function getDarwinProcessStartTime(pid: number, env: NodeJS.ProcessEnv): number | null {
   try {
     const startedAt = childProcess
       .execFileSync("/bin/ps", ["-o", "lstart=", "-p", String(pid)], {
         encoding: "utf8",
-        env: { ...resolveDiagnosticProcessEnv(), LC_ALL: "C", TZ: "UTC" },
+        env: { ...resolveDiagnosticProcessEnv(env), LC_ALL: "C", TZ: "UTC" },
         stdio: ["ignore", "pipe", "ignore"],
         timeout: PROCESS_START_TIMEOUT_MS,
         killSignal: "SIGKILL",
@@ -105,7 +108,11 @@ export function getProcessStartTime(pid: number): number | null {
 }
 
 /** Read a cross-platform process identity for filesystem lock ownership. */
-export function getFileLockProcessStartTime(pid: number): number | null {
+export function getFileLockProcessStartTime(
+  pid: number,
+  env: NodeJS.ProcessEnv = process.env,
+  windowsTimeoutMs?: number,
+): number | null {
   if (!isValidPid(pid)) {
     return null;
   }
@@ -115,10 +122,12 @@ export function getFileLockProcessStartTime(pid: number): number | null {
   }
   const startTime =
     process.platform === "darwin"
-      ? getDarwinProcessStartTime(pid)
+      ? getDarwinProcessStartTime(pid, env)
       : process.platform === "win32"
-        ? readWindowsProcessStartTimeSync(pid)
-        : getProcessStartTime(pid);
+        ? readWindowsProcessStartTimeSync(pid, windowsTimeoutMs, env)
+        : process.platform === "freebsd"
+          ? readFreeBsdProcessStartTime(pid)
+          : getProcessStartTime(pid);
   if (isSelf && startTime !== null) {
     selfStartTime = startTime;
   }

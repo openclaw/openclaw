@@ -1,8 +1,9 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import type { Locator, Page } from "playwright";
 import { expect } from "vitest";
+import { createRequireRecord } from "../../../test/helpers/record.js";
+import type { SessionCapability } from "../lib/sessions/session-capability.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionPath,
@@ -26,6 +27,45 @@ export function createSessionManagementE2eSuite(source = false) {
     ...(source ? { startServer: () => startControlUiE2eServer(undefined, { source: true }) } : {}),
     unavailableMessage: (executablePath) =>
       `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
+  });
+}
+
+/** Drawer visibility precedes the transform settling, which affects measured target bounds. */
+export async function waitForMobileSidebarDrawerOpen(page: Page): Promise<void> {
+  const drawer = page.locator(".shell--mobile-nav.shell--nav-drawer-open > .shell-nav");
+  await drawer.waitFor({ state: "visible" });
+  await drawer.evaluate(async (element) => {
+    await Promise.all(element.getAnimations().map((animation) => animation.finished));
+  });
+}
+
+/** Foreground chat startup admits the canonical roster after document load. */
+export async function waitForSessionRosterHydration(page: Page): Promise<void> {
+  await page.evaluate(async () => {
+    await customElements.whenDefined("openclaw-app");
+    const app = document.querySelector("openclaw-app") as HTMLElement & {
+      runtime: { context: { sessions: SessionCapability } };
+    };
+    const sessions = app.runtime.context.sessions;
+    const ready = () =>
+      sessions.canonicalListRevision > 0 &&
+      sessions.presentation.result !== null &&
+      !sessions.presentation.resultCached;
+    if (ready()) {
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      const unsubscribe = sessions.subscribe(() => {
+        if (ready()) {
+          unsubscribe();
+          resolve();
+        }
+      });
+      if (ready()) {
+        unsubscribe();
+        resolve();
+      }
+    });
   });
 }
 

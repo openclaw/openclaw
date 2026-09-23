@@ -241,6 +241,7 @@ describe("doctor Workshop relocation reservations", () => {
       externalProposalCount: 0,
       externalProposalCountsByAgent: {},
       legacyBackupRootCount: 0,
+      preservedLegacyBackupRootCount: 0,
     });
     await expectWorkshopMigrationConverged({ env: testState.env });
   });
@@ -330,6 +331,10 @@ describe("doctor Workshop relocation reservations", () => {
       ? [ancestor, secondClaim, connected, childSource, child, untouchedCreate]
       : [ancestor, childSource, child, untouchedCreate];
     await seedSources([...blocked, healthy, draftOnly]);
+    await testState.writeText(
+      `skill-workshop/proposals/${draftOnly.record.id}/${draftOnly.record.draftFile}`,
+      "# Proposed update\n",
+    );
     const proposalDir = path.join(
       testState.stateDir,
       "skill-workshop",
@@ -355,8 +360,10 @@ describe("doctor Workshop relocation reservations", () => {
     expect(result.warnings.join("\n")).toContain(child.record.id);
     if (legacyState) {
       expect(result.warnings.join("\n")).toContain(
-        `Legacy workspace setup state requires migration for ${formerWorkspace}`,
+        `Legacy workspace setup state requires migration at ${attestationPath}`,
       );
+      expect(result.warnings.join("\n")).toContain("restore the retained setup file or claim");
+      expect(result.warnings.join("\n")).not.toContain("doctor --fix");
       await expect(fs.readFile(attestationPath, "utf8")).resolves.toBe(attestationContent);
     }
     await expect(

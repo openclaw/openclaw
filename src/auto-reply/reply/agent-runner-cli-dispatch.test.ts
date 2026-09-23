@@ -392,9 +392,15 @@ describe("runCliAgentWithLifecycle", () => {
         stream: "assistant",
         data: { text: "Silent answer", delta: "Silent answer" },
       });
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "assistant",
+        data: { completedText: "Silent answer", assistantMessageIndex: 0 },
+      });
       return { payloads: [], meta: { durationMs: 1 } };
     });
     const onActivity = vi.fn();
+    const onCompletedReply = vi.fn(async (_text: string) => {});
     const onAssistantText = vi.fn<(text: string) => Promise<void>>(async () => undefined);
     const onReasoningProgress = vi.fn<(payload: ReasoningProgressPayload) => Promise<void>>(
       async () => undefined,
@@ -406,6 +412,7 @@ describe("runCliAgentWithLifecycle", () => {
       suppressAssistantBridge: true,
       onActivity,
       onAssistantText,
+      onCompletedReply,
       onReasoningProgress,
       runParams: {
         sessionId: "session-1",
@@ -424,8 +431,9 @@ describe("runCliAgentWithLifecycle", () => {
     // liveness evidence — without these stamps a healthy silent run would be
     // reclaimed as run_stalled at the takeover window.
     expect(onAssistantText).not.toHaveBeenCalled();
+    expect(onCompletedReply).not.toHaveBeenCalled();
     expect(onReasoningProgress).not.toHaveBeenCalled();
-    expect(onActivity).toHaveBeenCalledTimes(2);
+    expect(onActivity).toHaveBeenCalledTimes(3);
   });
 
   it("stamps onActivity for assistant text without caller callbacks for that stream", async () => {
@@ -750,6 +758,7 @@ describe("clearCliSessionInStore", () => {
 
       let open = true;
       const clear = clearCliSessionInStore({
+        agentId: "main",
         provider: "claude-cli",
         expectedCliSessionId: "stale-session",
         expectedSessionId: activeEntry.sessionId,
@@ -800,6 +809,7 @@ describe("clearCliSessionInStore", () => {
     };
 
     await clearCliSessionInStore({
+      agentId: "main",
       provider: "claude-cli",
       expectedCliSessionId: "stale-session",
       activeSessionEntry: entry,
@@ -896,6 +906,71 @@ describe("createCliToolSummaryTracker", () => {
     await tracker.noteToolEvent(resultEvent);
     expect(deliver).not.toHaveBeenCalled();
   });
+
+  it.each([
+    "progress_card",
+    "mcp__openclaw__progress_card",
+    "update_plan",
+    "mcp__openclaw__update_plan",
+  ])("leaves %s to the authoritative plan event instead of summarizing arguments", async (name) => {
+    const deliver = vi.fn();
+    const tracker = createCliToolSummaryTracker({
+      commandDetailsVisible: true,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => true,
+      deliver,
+    });
+    await tracker.noteToolEvent({
+      name,
+      phase: "start",
+      args: {
+        markdown: '<progress aria-label="CI · 2/3" value="2" max="3"></progress>',
+      },
+      toolCallId: "plan-1",
+    });
+    await tracker.noteToolEvent({
+      name,
+      phase: "result",
+      args: undefined,
+      toolCallId: "plan-1",
+      isError: false,
+      result: { content: [{ type: "text", text: "Progress card updated" }] },
+    });
+
+    expect(deliver).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])(
+    "keeps card errors visible without arguments (full output: %s)",
+    async (fullOutput) => {
+      const deliver = vi.fn();
+      const tracker = createCliToolSummaryTracker({
+        commandDetailsVisible: false,
+        shouldEmitToolResult: () => true,
+        shouldEmitToolOutput: () => fullOutput,
+        deliver,
+      });
+      await tracker.noteToolEvent({
+        name: "progress_card",
+        phase: "start",
+        args: { markdown: '<progress aria-label="private" value="1" max="2"></progress>' },
+        toolCallId: "plan-error",
+      });
+      await tracker.noteToolEvent({
+        name: undefined,
+        phase: "result",
+        args: undefined,
+        toolCallId: "plan-error",
+        isError: true,
+        result: { content: [{ type: "text", text: "write failed" }] },
+      });
+
+      expect(deliver).toHaveBeenCalledWith({
+        text: fullOutput ? "🗺️ Progress Card\n```txt\nwrite failed\n```" : "🗺️ Progress Card",
+        isError: true,
+      });
+    },
+  );
 
   it("propagates tool errors on the summary payload", async () => {
     const deliver = vi.fn();

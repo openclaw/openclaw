@@ -55,6 +55,7 @@ export function listCanonicalSessionStores(params: {
   return projectExistingAgentDatabaseTargets(
     resolveAllAgentSessionStoreTargetsSync(params.cfg, { env: params.env }),
     params.env,
+    params.cfg,
   );
 }
 
@@ -72,6 +73,7 @@ function collectCanonicalSessionCandidateFacts(
         cfg: params.cfg,
         agentId: target.agentId,
         sessionKey,
+        preserveQualifiedAddress: true,
       });
       return {
         canonicalKey: storedKey
@@ -100,6 +102,7 @@ function collectCanonicalSessionCandidateFacts(
           cfg: params.cfg,
           agentId: canonicalAgentId,
           sessionKey: value,
+          preserveQualifiedAddress: true,
         });
         const ownerAgentId = parseAgentSessionKey(storedKey)?.agentId ?? canonicalAgentId;
         for (const key of [value, storedKey]) {

@@ -107,13 +107,19 @@ final class StatusMenuRenderer: NSObject {
 
     private let menu: NSMenu
     private let state: AppState
+    private let approvalQueue: ExecApprovalQueueStore
     private var testNotificationPending = false
     var isSleeping = false
     var onInstallUpdate: (@MainActor () -> Void)?
 
-    init(menu: NSMenu, state: AppState = AppStateStore.shared) {
+    init(
+        menu: NSMenu,
+        state: AppState = AppStateStore.shared,
+        approvalQueue: ExecApprovalQueueStore = .shared)
+    {
         self.menu = menu
         self.state = state
+        self.approvalQueue = approvalQueue
         super.init()
         menu.autoenablesItems = false
         menu.minimumWidth = StatusMenuMetrics.width
@@ -204,7 +210,8 @@ final class StatusMenuRenderer: NSObject {
         case let .session(row):
             StatusMenuSessions.shared.configureSessionItem(item, row: row)
         case let .approval(request):
-            StatusMenuSessions.shared.configureApprovalItem(item, request: request)
+            StatusMenuSessions.shared.configureApprovalItem(
+                item, request: request, approvalQueue: self.approvalQueue)
         case let .placeholder(title):
             item.title = StatusMenuMetrics.fittedTitle(title)
             item.isEnabled = false
@@ -277,6 +284,9 @@ final class StatusMenuRenderer: NSObject {
         case .settings:
             title = String(localized: "Settings…")
             symbol = "gearshape"
+        case .connection:
+            title = String(localized: "Connection…")
+            symbol = "point.3.connected.trianglepath.dotted"
         case .debug:
             title = String(localized: "Debug")
             symbol = "ladybug"
@@ -334,11 +344,13 @@ final class StatusMenuRenderer: NSObject {
         case .talkMode:
             Task { await self.state.setTalkEnabled(!self.state.talkEnabled) }
         case .allSessions:
-            Task { await DashboardManager.shared.show(atPath: DashboardRouteMap.sessionsPagePath) }
+            AppNavigationActions.openPrimaryWebRoute(DashboardRouteMap.sessionsPagePath)
         case .settings:
             AppNavigationActions.openSettings()
+        case .connection:
+            AppNavigationActions.openConnection()
         case .about:
-            AppNavigationActions.openSettings(tab: .about)
+            AppNavigationActions.openAbout()
         case .quit:
             AppDelegate.requestTermination()
         case .debug:
@@ -368,7 +380,7 @@ final class StatusMenuRenderer: NSObject {
             "checkmark.shield"))
         #endif
 
-        if self.state.connectionMode == .remote {
+        if self.state.connectionMode == .remote, self.state.remoteTransport == .ssh {
             entries.append(self.debugItem(
                 "tunnel",
                 String(localized: "Reset Remote Tunnel"),

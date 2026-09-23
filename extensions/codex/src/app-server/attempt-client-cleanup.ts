@@ -1,11 +1,25 @@
 /**
  * Best-effort cleanup helpers for Codex app-server startup attempts and turns.
  */
-import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  AgentHarnessPreflightError,
+  embeddedAgentLog,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { isCodexAppServerStartupError } from "./attempt-timeouts.js";
 import { unsubscribeCodexAppServerLiveThread } from "./client-runtime.js";
-import { CodexAppServerRpcError, type CodexAppServerClient } from "./client.js";
-import { retireSharedCodexAppServerClientIfCurrent } from "./shared-client.js";
+import {
+  CodexAppServerRpcError,
+  isCodexAppServerBrokenPipeError,
+  isCodexAppServerOverloadError,
+  isCodexAppServerRequestTimeoutError,
+  type CodexAppServerClient,
+} from "./client.js";
+import {
+  isCodexAppServerStartSelectionChangedError,
+  retireSharedCodexAppServerClientIfCurrent,
+} from "./shared-client.js";
 import { getCodexAppServerTurnRouter } from "./turn-router.js";
 
 /** Timeout for best-effort app-server turn interruption during cleanup. */
@@ -166,6 +180,8 @@ export async function interruptCodexTurnAndWaitBestEffort(
 export async function terminateCodexBackgroundTerminals(
   client: CodexAppServerClient,
   threadId: string,
+  oneShotCliRun = false,
+  waitForNativeItems?: (signal: AbortSignal) => Promise<void>,
 ): Promise<void> {
   const options = {
     timeoutMs: CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS,
@@ -193,7 +209,14 @@ export async function terminateCodexBackgroundTerminals(
       if (remaining.data.length > 0) {
         throw new Error("native background terminals remain running");
       }
+      // Codex drops terminal entries before OS exit and supplies no process
+      // identity. A later ancestry snapshot can miss a reparented survivor.
+      if (oneShotCliRun) {
+        throw new Error("native terminal termination did not confirm process cleanup");
+      }
     }
+    // Native process termination does not join its asynchronous final item event.
+    await waitForNativeItems?.(options.signal);
   } catch (cause) {
     throw new Error(
       "Codex background-terminal cleanup failed; inspect the thread's running terminals before starting more work.",
@@ -227,4 +250,26 @@ export async function unsubscribeCodexThreadBestEffort(
     });
     return false;
   }
+}
+
+export function shouldRetireCodexStartupClient(
+  error: unknown,
+  spawnedBy: EmbeddedRunAttemptParams["spawnedBy"],
+  signal: AbortSignal,
+): boolean {
+  if (
+    signal.aborted ||
+    isCodexAppServerStartupError(error) ||
+    isCodexAppServerRequestTimeoutError(error)
+  ) {
+    return true;
+  }
+  // Model-independent preflights preserve healthy conversations. A handoff with
+  // an uncertain native write owns its retirement at the resume boundary.
+  return (
+    !isCodexAppServerStartSelectionChangedError(error) &&
+    !isCodexAppServerOverloadError(error) &&
+    !(error instanceof AgentHarnessPreflightError && error.scope === undefined) &&
+    (isCodexAppServerBrokenPipeError(error) || !spawnedBy)
+  );
 }

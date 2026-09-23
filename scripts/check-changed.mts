@@ -84,6 +84,7 @@ type TargetedOxlintCommandOptions = TargetedLintOptions & {
   neutralPathRe: RegExp;
   paths: string[];
   tsconfig: string;
+  maxPaths?: number;
 };
 
 type NpmLockPackageDirsResolver = (changedPaths: string[]) => string[];
@@ -121,6 +122,7 @@ const EXTENSIONS_OXLINT_TS_CONFIG = "extensions/tsconfig.json";
 const SCRIPTS_OXLINT_TS_CONFIG = "config/tsconfig/oxlint.scripts.json";
 const ROOT_TEST_TS_CONFIG = "test/tsconfig/tsconfig.test.root.json";
 const TARGETED_LINT_PATH_LIMIT = 8;
+const CORE_LINT_ARGV_BYTES = 24 * 1024;
 const LINTABLE_CORE_PATH_RE = /^(?:src|ui|packages)\/.+\.[cm]?[jt]sx?$/u;
 const LINTABLE_EXTENSION_PATH_RE = /^extensions\/[^/]+\/.+\.[cm]?[jt]sx?$/u;
 const LINTABLE_SCRIPT_PATH_RE = /^scripts\/.+\.[cm]?[jt]sx?$/u;
@@ -164,19 +166,16 @@ function createChangedCheckChildEnv(baseEnv: NodeJS.ProcessEnv = process.env) {
 }
 
 function hasAndroidVersionSyncPath(paths: string[]) {
-  return paths.some((changedPath) =>
-    ANDROID_VERSION_SYNC_PATHS.has(normalizeChangedPath(changedPath)),
-  );
+  return paths.some((changedPath) => ANDROID_VERSION_SYNC_PATHS.has(changedPath));
 }
 
 function hasMacosAppCiPath(paths: string[]) {
   // The metadata test has its own command; production edits still need native app proof.
   // Swift test-target sources do not feed the packaged app; native CI still covers them.
   return paths.some((changedPath) => {
-    const normalized = normalizeChangedPath(changedPath);
     return (
-      normalized !== SWIFT_BUILD_CACHE_METADATA_TEST_PATH &&
-      (MACOS_APP_CI_PATH_RE.test(normalized) || isMacosToolingPath(normalized))
+      changedPath !== SWIFT_BUILD_CACHE_METADATA_TEST_PATH &&
+      (MACOS_APP_CI_PATH_RE.test(changedPath) || isMacosToolingPath(changedPath))
     );
   });
 }
@@ -294,12 +293,21 @@ function buildDelegatedChangedCheckArgv(argv: string[], options: { cwd?: string 
   if (!args.staged || args.paths.length > 0) {
     return argv;
   }
-  const stagedPaths = listStagedChangedPaths(options.cwd);
+  const stagedPaths = listStagedChangedPaths(options.cwd, args.base);
   const timedArgs = args.timed ? ["--timed"] : [];
   if (stagedPaths.length === 0) {
     return [...timedArgs, "--no-changes"];
   }
-  return [...timedArgs, "--base", "HEAD", "--head", "HEAD", "--", ...stagedPaths];
+  return [
+    ...timedArgs,
+    "--paths-from-git",
+    "--base",
+    args.base ?? "HEAD",
+    "--head",
+    "HEAD",
+    "--",
+    ...stagedPaths,
+  ];
 }
 
 export function shouldRunNpmLockGuard(paths: string[]) {
@@ -315,9 +323,7 @@ export function shouldRunPromptSnapshotOwnerTest(paths: string[]) {
 }
 
 export function shouldRunControlUiI18nVerify(paths: string[]) {
-  return paths.some((changedPath) =>
-    CONTROL_UI_I18N_VERIFY_PATH_RE.test(normalizeChangedPath(changedPath)),
-  );
+  return paths.some((changedPath) => CONTROL_UI_I18N_VERIFY_PATH_RE.test(changedPath));
 }
 
 export function shouldRunRuntimeSidecarBaselineCheck(paths: string[]) {
@@ -326,47 +332,35 @@ export function shouldRunRuntimeSidecarBaselineCheck(paths: string[]) {
 
 /** Returns whether changed files can drift bundled doctor-contract declarations or closures. */
 export function shouldRunDoctorContractOwnerTests(paths: string[]) {
-  return paths.some((changedPath) =>
-    DOCTOR_CONTRACT_OWNER_TEST_PATH_RE.test(normalizeChangedPath(changedPath)),
-  );
+  return paths.some((changedPath) => DOCTOR_CONTRACT_OWNER_TEST_PATH_RE.test(changedPath));
 }
 
 /** Returns whether changed files can affect the sessions/transcripts SQLite schema baseline. */
 export function shouldRunSqliteSessionSchemaBaselineCheck(paths: string[]) {
-  return paths.some((changedPath) =>
-    SQLITE_SESSION_SCHEMA_BASELINE_PATH_RE.test(normalizeChangedPath(changedPath)),
-  );
+  return paths.some((changedPath) => SQLITE_SESSION_SCHEMA_BASELINE_PATH_RE.test(changedPath));
 }
 
 /** Returns whether changed files can alter Plugin SDK exports or surface budgets. */
 export function shouldRunPluginSdkSurfaceChecks(paths: string[]) {
-  return paths.some((changedPath) =>
-    PLUGIN_SDK_SURFACE_PATH_RE.test(normalizeChangedPath(changedPath)),
-  );
+  return paths.some((changedPath) => PLUGIN_SDK_SURFACE_PATH_RE.test(changedPath));
 }
 
 /** Returns whether changed files can alter deprecated API or plugin-boundary results. */
 export function shouldRunDeprecationHygieneChecks(paths: string[]) {
-  return paths.some((changedPath) =>
-    DEPRECATION_HYGIENE_PATH_RE.test(normalizeChangedPath(changedPath)),
-  );
+  return paths.some((changedPath) => DEPRECATION_HYGIENE_PATH_RE.test(changedPath));
 }
 
 /** Returns whether changed files can alter wrapper-shadowing results. */
 export function shouldRunWrapperShadowingCheck(paths: string[]) {
-  return paths.some((changedPath) =>
-    WRAPPER_SHADOWING_PATH_RE.test(normalizeChangedPath(changedPath)),
-  );
+  return paths.some((changedPath) => WRAPPER_SHADOWING_PATH_RE.test(changedPath));
 }
 
 export function shouldRunAppcastOwnerTest(paths: string[]) {
-  return paths.some((changedPath) => normalizeChangedPath(changedPath) === "appcast.xml");
+  return paths.some((changedPath) => /^appcast(?:-(?:arm64|x86_64))?\.xml$/u.test(changedPath));
 }
 
 export function shouldRunTestTempCreationReport(paths: string[]) {
-  return paths.some(
-    (changedPath) => getChangedPathFacts(normalizeChangedPath(changedPath)).isChangedLaneTest,
-  );
+  return paths.some((changedPath) => getChangedPathFacts(changedPath).isChangedLaneTest);
 }
 
 export function createNpmLockGuardCommand(paths: string[]) {
@@ -604,7 +598,7 @@ export function createChangedCheckPlan(
       [
         "scripts/report-test-temp-creations.mjs",
         ...(options.staged
-          ? ["--staged"]
+          ? ["--staged", ...(options.base ? ["--base", options.base] : [])]
           : ["--base", options.base ?? "origin/main", "--head", options.head ?? "HEAD"]),
       ],
       baseEnv,
@@ -621,6 +615,16 @@ export function createChangedCheckPlan(
   }
   add("conflict markers", ["check:no-conflict-markers"]);
   if (
+    result.paths.some((file) => /\.(?:ts|tsx|mts|mjs)$/u.test(file) || file === ".oxlintrc.json")
+  ) {
+    add("line-cap growth ratchet", [
+      "check:line-cap-ratchet",
+      ...(options.staged ? ["--staged"] : []),
+      "--base",
+      options.base ?? (options.staged ? "HEAD" : "origin/main"),
+    ]);
+  }
+  if (
     result.paths.some(
       (filePath) =>
         filePath === SHRINK_RATCHET_OWNER_PATH ||
@@ -633,7 +637,7 @@ export function createChangedCheckPlan(
       "check:max-lines-ratchet",
       ...(options.staged ? ["--staged"] : []),
       "--base",
-      options.staged ? "HEAD" : (options.base ?? "origin/main"),
+      options.base ?? (options.staged ? "HEAD" : "origin/main"),
     ]);
   }
   if (
@@ -649,7 +653,7 @@ export function createChangedCheckPlan(
       "check:assertion-safety",
       ...(options.staged ? ["--staged"] : []),
       "--base",
-      options.staged ? "HEAD" : (options.base ?? "origin/main"),
+      options.base ?? (options.staged ? "HEAD" : "origin/main"),
     ]);
   }
   add("changelog attributions", ["check:changelog-attributions"]);
@@ -809,9 +813,11 @@ export function createChangedCheckPlan(
     add("release metadata guard", [
       "release-metadata:check",
       ...(options.staged
-        ? ["--staged"]
+        ? ["--staged", ...(options.base ? ["--base", options.base] : [])]
         : ["--base", options.base ?? "origin/main", "--head", options.head ?? "HEAD"]),
     ]);
+    // Metadata selectors bind Git/index bytes; artifact checks inspect the working tree.
+    add("release changelog artifacts", ["changelog:check"]);
     add("Android version sync", ["android:version:check"]);
     add("config schema baseline", ["config:schema:check"]);
     add("root dependency ownership", ["deps:root-ownership:check"]);
@@ -871,14 +877,16 @@ export function createChangedCheckPlan(
         !LINT_OPTIMIZATION_NEUTRAL_PATH_RE.test(changedPath)
       );
     });
-    addTargetedLint(
-      createTargetedCoreLintCommand,
-      LINTABLE_CORE_PATH_RE,
-      "lint core",
-      ["lint:core"],
-      undefined,
-      fallbackWithoutTargets,
-    );
+    const coreLint = createTargetedCoreLintCommands(result.paths, baseEnv, {
+      platform: options.platform,
+    });
+    if (coreLint) {
+      for (const command of coreLint) {
+        addCommand(command.name, command.bin, command.args, command.env);
+      }
+    } else if (fallbackWithoutTargets) {
+      addLint("lint core", ["lint:core"]);
+    }
   }
   if (lanes.ui) {
     const targets = result.paths
@@ -1004,13 +1012,13 @@ export function createChangedCheckPlan(
   );
 }
 
-export function createTargetedCoreLintCommand(
+export function createTargetedCoreLintCommands(
   paths: string[],
   env: NodeJS.ProcessEnv = process.env,
-  options: TargetedLintOptions = {},
+  options: TargetedLintOptions & { platform?: NodeJS.Platform } = {},
 ) {
-  return createTargetedOxlintCommand({
-    env,
+  const command = createTargetedOxlintCommand({
+    env: createChangedCheckChildEnv(env),
     label: "core",
     lintablePathRe: LINTABLE_CORE_PATH_RE,
     neutralPathRe: CORE_LINT_OPTIMIZATION_NEUTRAL_PATH_RE,
@@ -1018,6 +1026,44 @@ export function createTargetedCoreLintCommand(
     tsconfig: CORE_OXLINT_TS_CONFIG,
     ...options,
   });
+  return command ? batchCoreLintCommand(command, options.platform ?? process.platform) : null;
+}
+
+function batchCoreLintCommand(command: TargetedLintCommand, platform: NodeJS.Platform) {
+  const prefix = command.args.slice(0, 3);
+  const windows = platform === "win32";
+  // POSIX uses the formatter's conservative argv budget. Keep Windows batches
+  // unchanged until the installed cmd/pnpm shim chain has its own budget.
+  const maxBytes = windows ? Infinity : CORE_LINT_ARGV_BYTES;
+  const maxPaths = windows ? TARGETED_LINT_PATH_LIMIT : Infinity;
+  const argumentBytes = (args: string[]) =>
+    args.reduce((bytes, arg) => bytes + Buffer.byteLength(arg, "utf8") + 1, 0);
+  const prefixBytes = argumentBytes([command.bin, ...prefix]);
+  const batches: string[][] = [];
+  let batch: string[] = [];
+  let bytes = prefixBytes;
+  for (const file of command.args.slice(3)) {
+    const fileBytes = argumentBytes([file]);
+    if (prefixBytes + fileBytes > maxBytes) {
+      throw new Error(`Core lint target exceeds the command-line budget: ${file}`);
+    }
+    if (batch.length === maxPaths || bytes + fileBytes > maxBytes) {
+      batches.push(batch);
+      batch = [];
+      bytes = prefixBytes;
+    }
+    batch.push(file);
+    bytes += fileBytes;
+  }
+  if (batch.length) {
+    batches.push(batch);
+  }
+  return batches.map((files) => ({
+    name: files.length === 1 ? "lint core changed file" : "lint core changed files",
+    bin: command.bin,
+    args: [...prefix, ...files],
+    env: command.env,
+  }));
 }
 
 export function createTargetedExtensionLintCommand(
@@ -1032,6 +1078,7 @@ export function createTargetedExtensionLintCommand(
     neutralPathRe: TOOLING_LINT_OPTIMIZATION_NEUTRAL_PATH_RE,
     paths,
     tsconfig: EXTENSIONS_OXLINT_TS_CONFIG,
+    maxPaths: TARGETED_LINT_PATH_LIMIT,
     ...options,
   });
 }
@@ -1048,6 +1095,7 @@ export function createTargetedScriptLintCommand(
     neutralPathRe: TOOLING_LINT_OPTIMIZATION_NEUTRAL_PATH_RE,
     paths,
     tsconfig: SCRIPTS_OXLINT_TS_CONFIG,
+    maxPaths: TARGETED_LINT_PATH_LIMIT,
     ...options,
   });
 }
@@ -1060,6 +1108,7 @@ function createTargetedOxlintCommand({
   neutralPathRe,
   paths,
   tsconfig,
+  maxPaths,
 }: TargetedOxlintCommandOptions) {
   if (
     paths.some(
@@ -1078,7 +1127,7 @@ function createTargetedOxlintCommand({
   const targets = paths
     .filter((changedPath) => lintablePathRe.test(changedPath))
     .toSorted((left, right) => left.localeCompare(right));
-  if (targets.length === 0 || targets.length > TARGETED_LINT_PATH_LIMIT) {
+  if (targets.length === 0 || (maxPaths !== undefined && targets.length > maxPaths)) {
     return null;
   }
   if (!targets.every((target) => fileExists(target))) {
@@ -1276,10 +1325,18 @@ function printSummary(timings: ChangedCheckTiming[], options: ChangedCheckRunOpt
 function parseArgs(argv: string[]) {
   const separatorIndex = argv.indexOf("--");
   const flagArgv = separatorIndex === -1 ? argv : argv.slice(0, separatorIndex);
-  const explicitPaths =
-    separatorIndex === -1 ? [] : argv.slice(separatorIndex + 1).map(normalizeChangedPath);
-  const args = {
-    base: "origin/main",
+  const explicitPaths = separatorIndex === -1 ? [] : argv.slice(separatorIndex + 1);
+  const preservePathTokens = flagArgv.includes("--paths-from-git");
+  const args: {
+    base?: string;
+    head: string;
+    staged: boolean;
+    dryRun: boolean;
+    timed: boolean;
+    noChanges: boolean;
+    help: boolean;
+    paths: string[];
+  } = {
     head: "HEAD",
     staged: false,
     dryRun: false,
@@ -1289,7 +1346,7 @@ function parseArgs(argv: string[]) {
     paths: new Array<string>(),
   };
   const parsed = parseFlagArgs(
-    flagArgv,
+    flagArgv.filter((arg) => arg !== "--paths-from-git"),
     args,
     [
       stringFlag("--base", "base"),
@@ -1306,12 +1363,15 @@ function parseArgs(argv: string[]) {
         if (arg.startsWith("-")) {
           throw new Error(`Unknown option: ${arg}`);
         }
-        target.paths.push(normalizeChangedPath(arg));
+        target.paths.push(arg);
         return "handled";
       },
     },
   );
   parsed.paths.push(...explicitPaths);
+  if (!preservePathTokens) {
+    parsed.paths = parsed.paths.map((changedPath) => normalizeChangedPath(changedPath));
+  }
   return parsed;
 }
 
@@ -1321,7 +1381,7 @@ function printUsage() {
       "Usage: node scripts/check-changed.mjs [options] [-- <paths...>]",
       "",
       "Options:",
-      "  --base <ref>     Base ref for changed paths (default: origin/main)",
+      "  --base <ref>     Base ref (default: HEAD with --staged, otherwise origin/main)",
       "  --head <ref>     Head ref for changed paths (default: HEAD)",
       "  --staged         Check staged paths instead of git diff paths",
       "  --dry-run        Print the planned checks without running them",
@@ -1358,8 +1418,8 @@ async function main() {
         : args.paths.length > 0
           ? args.paths
           : args.staged
-            ? listStagedChangedPaths()
-            : listChangedPathsFromGit({ base: args.base, head: args.head });
+            ? listStagedChangedPaths(undefined, args.base)
+            : listChangedPathsFromGit({ base: args.base ?? "origin/main", head: args.head });
     } catch (error) {
       // A sparse/fresh checkout may not have the requested base ref yet. The remote
       // workflow fetches it, so preserve explicit/default delegation instead of dying locally.
@@ -1377,7 +1437,7 @@ async function main() {
     if (paths) {
       const result = detectChangedLanesForPaths({
         paths,
-        base: args.base,
+        base: args.base ?? (args.staged ? "HEAD" : "origin/main"),
         head: args.head,
         staged: args.staged,
       });
@@ -1387,7 +1447,7 @@ async function main() {
           diffRefsReady: result.lanes.releaseMetadata
             ? args.staged ||
               changedCheckDiffRefsReady({
-                base: args.base,
+                base: args.base ?? "origin/main",
                 head: args.head,
               })
             : undefined,

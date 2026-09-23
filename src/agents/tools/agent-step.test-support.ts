@@ -1,21 +1,23 @@
-import "./agent-step.js";
+import { vi } from "vitest";
 
 type AgentCommandRunner = typeof import("../../commands/agent.js").agentCommandFromIngress;
-type AgentStepTesting = {
-  setDepsForTest(
+let restoreIngress: (() => void) | undefined;
+
+export const testing = {
+  async setDepsForTest(
     overrides?: Partial<{
       agentCommandFromIngress: AgentCommandRunner;
     }>,
-  ): void;
+  ): Promise<void> {
+    restoreIngress?.();
+    restoreIngress = undefined;
+    if (!overrides?.agentCommandFromIngress) {
+      return;
+    }
+    const command = await import("../../commands/agent.js");
+    const spy = vi
+      .spyOn(command, "agentCommandFromIngress")
+      .mockImplementation(overrides.agentCommandFromIngress);
+    restoreIngress = () => spy.mockRestore();
+  },
 };
-type AgentStepTestApi = {
-  testing: AgentStepTesting;
-};
-
-function getTestApi(): AgentStepTestApi {
-  return (globalThis as Record<PropertyKey, unknown>)[
-    Symbol.for("openclaw.agentStepTestApi")
-  ] as AgentStepTestApi;
-}
-
-export const testing = getTestApi().testing;

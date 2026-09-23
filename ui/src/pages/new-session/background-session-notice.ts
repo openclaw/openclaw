@@ -1,7 +1,13 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import {
+  autoPromptNotificationsOnSend,
+  hasActiveNotificationPromptGesture,
+  shouldAutoPromptNotificationsOnSend,
+} from "../../app/notifications-auto-prompt.ts";
 import { t } from "../../i18n/index.ts";
+import { parseSlashCommand } from "../../lib/chat/commands.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import {
@@ -138,14 +144,16 @@ export function prepareBackgroundSessionCompletion(params: {
   agentId: string;
   client: GatewayBrowserClient;
   context: ApplicationContext;
-  clearDraft: () => void;
 }): (key: string, runId?: string) => boolean {
   return (key, runId) => {
     const normalizedRunId = runId?.trim();
-    if (!params.enabled || !normalizedRunId) {
+    if (!params.enabled) {
       return false;
     }
-    params.clearDraft();
+    // Creation disposition is independent of whether the Gateway returned a watchable run.
+    if (!normalizedRunId) {
+      return true;
+    }
     void notifyWhenBackgroundSessionEnds({
       agentId: params.agentId,
       client: params.client,
@@ -155,4 +163,24 @@ export function prepareBackgroundSessionCompletion(params: {
     });
     return true;
   };
+}
+
+/** Keep notification permission on the original input event, before startup awaits. */
+export function promptNewSessionNotifications(
+  context: ApplicationContext,
+  message: string,
+  hasAttachments: boolean,
+  direct: boolean,
+) {
+  if (
+    shouldAutoPromptNotificationsOnSend({
+      connected: context.gateway.snapshot.phase === "connected",
+      directComposerSend: direct && hasActiveNotificationPromptGesture(),
+      message,
+      hasAttachments,
+      isCommand: parseSlashCommand(message) !== null,
+    })
+  ) {
+    autoPromptNotificationsOnSend(context);
+  }
 }

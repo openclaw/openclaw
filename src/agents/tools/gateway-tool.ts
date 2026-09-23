@@ -1,4 +1,4 @@
-/** Gateway config reads and owner-requested self-updates. */
+/** Gateway config reads and operator-authorized self-updates. */
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import { formatCommandOwnerHint } from "../../commands/doctor-command-owner.js";
@@ -8,6 +8,7 @@ import {
   summarizeUpdateRunResponse,
 } from "../../gateway/update-run-summary.js";
 import { parseConfigPathArrayIndex } from "../../shared/path-array-index.js";
+import { getAdmittedRunSource } from "../admitted-run-context.js";
 import { stringEnum } from "../schema/typebox.js";
 import {
   type AnyAgentTool,
@@ -87,13 +88,14 @@ function selectGatewayConfigGetResult(snapshot: unknown, path: string | undefine
 }
 
 function createGatewayConfigGetToolResult(result: unknown) {
-  const text = JSON.stringify({ ok: true, result }, null, 2);
+  const payload = { ok: true, result };
+  const text = JSON.stringify(payload, null, 2);
   if (text.length > MAX_GATEWAY_CONFIG_GET_TEXT_CHARS) {
     throw new ToolInputError(
       "config.get response is too large; use path to request a narrower config subtree",
     );
   }
-  return textResult(text, { ok: true });
+  return textResult(text, payload);
 }
 
 function isConfigSchemaPathNotFoundError(error: unknown): boolean {
@@ -119,22 +121,33 @@ const GatewayToolSchema = Type.Object({
   ),
 });
 
+const GatewayUpdateToolSchema = Type.Object({
+  action: stringEnum(["update.run"]),
+  note: GatewayToolSchema.properties.note,
+});
+
 export function createGatewayTool(options?: {
+  allowConfigReads?: boolean;
   senderIsOwner?: boolean;
   requesterSenderId?: string | null;
 }): AnyAgentTool {
+  const allowConfigReads = options?.allowConfigReads !== false;
   return {
     label: "Gateway",
     name: "gateway",
-    description:
-      "Read gateway config/schema. update.run: owner-only update on explicit user request; restart + completion notice automatic. Never via shell.",
-    parameters: GatewayToolSchema,
+    description: allowConfigReads
+      ? "Read gateway config/schema. update.run: owner request or operator schedule; automatic restart + completion notice. Never via shell."
+      : "Update OpenClaw with update.run on an explicit owner request or an operator-scheduled automation. Restart and completion notice are automatic. Never via shell.",
+    parameters: allowConfigReads ? GatewayToolSchema : GatewayUpdateToolSchema,
     execute: async (_toolCallId, args, signal) => {
       const params = args as Record<string, unknown>;
       const action = readToolStringParam(params, "action", { required: true });
       if (action === "update.run") {
         const caller = getGatewayToolCallerIdentity();
-        if (options?.senderIsOwner !== true) {
+        const operatorSchedule =
+          !options?.requesterSenderId &&
+          getAdmittedRunSource(caller?.approvalAuthority) === "operator-schedule";
+        if (options?.senderIsOwner !== true && !operatorSchedule) {
           const hint = formatCommandOwnerHint({
             channel: caller?.turnSourceChannel,
             id: options?.requesterSenderId,
@@ -142,7 +155,8 @@ export function createGatewayTool(options?: {
           return jsonResult({
             ok: false,
             code: "owner_required",
-            message: `Only the OpenClaw owner can start an update from chat. ${hint}`,
+            reason: "owner_required",
+            message: `No authenticated owner chat principal or operator-scheduled admission authorizes this update. ${hint}`,
           });
         }
         // Routing comes from the admitted caller, never model-authored destinations or credentials.
@@ -157,15 +171,17 @@ export function createGatewayTool(options?: {
         const result = await callInProcessGatewayTool(
           "update.run",
           {
-            requester: {
-              channel: caller?.turnSourceChannel,
-              accountId: caller?.turnSourceAccountId,
-              senderId: options?.requesterSenderId ?? undefined,
-            },
+            // Scheduled delivery can target a chat without making it the update requester.
+            requester: operatorSchedule
+              ? undefined
+              : {
+                  channel: caller?.turnSourceChannel,
+                  accountId: caller?.turnSourceAccountId,
+                  senderId: options?.requesterSenderId ?? undefined,
+                },
             sessionKey: caller?.sessionKey,
             deliveryContext,
             note: readToolStringParam(params, "note"),
-            timeoutMs: DEFAULT_UPDATE_TIMEOUT_MS,
           },
           {
             // An explicit binding prevents the standalone client's remote fallback.
@@ -176,11 +192,16 @@ export function createGatewayTool(options?: {
         );
         return jsonResult(summarizeUpdateRunResponse(result));
       }
+      if (!allowConfigReads) {
+        throw new ToolInputError(`Action not available: ${action}`);
+      }
       const gatewayOpts = readGatewayCallOptions(params);
+      const callConfigGateway = (method: string, requestParams: Record<string, unknown>) =>
+        callGatewayTool(method, gatewayOpts, requestParams, { signal });
 
       if (action === "config.get") {
         const path = readToolStringParam(params, "path");
-        const snapshot = await callGatewayTool("config.get", gatewayOpts, {}, { signal });
+        const snapshot = await callConfigGateway("config.get", {});
         const result = selectGatewayConfigGetResult(snapshot, path);
         return createGatewayConfigGetToolResult(result);
       }
@@ -190,12 +211,7 @@ export function createGatewayTool(options?: {
           label: "path",
         });
         try {
-          const result = await callGatewayTool(
-            "config.schema.lookup",
-            gatewayOpts,
-            { path },
-            { signal },
-          );
+          const result = await callConfigGateway("config.schema.lookup", { path });
           return jsonResult({ ok: true, result });
         } catch (error) {
           if (isConfigSchemaPathNotFoundError(error)) {

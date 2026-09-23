@@ -1,6 +1,8 @@
 import type { messagingApi, webhook } from "@line/bot-sdk";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { setLineRuntime } from "./runtime.js";
 import type { LineAccountConfig } from "./types.js";
 
 type ReportChannelRoomJoin =
@@ -92,6 +94,7 @@ describe("LINE group join introductions", () => {
   });
 
   beforeEach(() => {
+    setLineRuntime(createPluginRuntimeMock());
     reportJoin.mockClear();
     createClient.mockClear();
     getGroupSummary.mockReset();

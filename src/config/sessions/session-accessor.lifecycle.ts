@@ -7,32 +7,11 @@ import {
   shouldSkipPluginHostCleanupStore,
   type PluginHostSessionCleanupStoreParams,
 } from "./plugin-host-cleanup.js";
-import {
-  loadSessionEntry,
-  listSessionEntriesCore,
-  replaceSessionEntry,
-  patchSessionEntryCore,
-} from "./session-accessor.entry.js";
+import { listSessionEntriesCore, patchSessionEntryCore } from "./session-accessor.entry.js";
 import { applySessionEntryBatchProjection } from "./session-accessor.sqlite-batch-projection.js";
-import {
-  cleanupSessionLifecycleArtifactsCore,
-  deleteSessionEntryLifecycle,
-  rollbackAgentHarnessSessionEntryLifecycle,
-  rollbackPluginOwnedSessionEntryLifecycle,
-  resetSessionEntryLifecycle,
-} from "./session-accessor.sqlite-lifecycle.js";
-import {
-  applySessionEntryLifecycleMutation,
-  applySessionEntryReplacements,
-  applySessionStoreProjection,
-  purgeDeletedAgentSessionEntries,
-} from "./session-accessor.sqlite-projection.js";
+import "./session-accessor.sqlite-lifecycle.js";
+import "./session-accessor.sqlite-projection.js";
 import type {
-  SessionCompactionCheckpointMutationResult,
-  SessionCompactionCheckpointTranscriptForker,
-  SessionCompactionCheckpointEntryBuilder,
-  BranchSessionFromCompactionCheckpointParams,
-  RestoreSessionFromCompactionCheckpointParams,
   SessionPatchProjectionSnapshot,
   SessionPatchProjectionTarget,
   SessionPatchProjectionContext,
@@ -44,128 +23,20 @@ import {
   resolveProjectionExistingEntry,
   SessionLabelOwnerIndex,
 } from "./session-entry-selection.js";
-import type { InternalSessionEntry as SessionEntry, SessionCompactionCheckpoint } from "./types.js";
-
-// Session lifecycle storage is canonical SQLite; direct exports keep reset,
-// rollback, cleanup, and bulk projections on their actual transaction owner.
+import type { InternalSessionEntry as SessionEntry } from "./types.js";
+export {
+  cleanupSessionLifecycleArtifactsCore,
+  deleteSessionEntryLifecycle,
+  rollbackAgentHarnessSessionEntryLifecycle,
+  rollbackPluginOwnedSessionEntryLifecycle,
+  resetSessionEntryLifecycle,
+} from "./session-accessor.sqlite-lifecycle.js";
 export {
   applySessionEntryLifecycleMutation,
   applySessionEntryReplacements,
   applySessionStoreProjection,
-  cleanupSessionLifecycleArtifactsCore,
-  deleteSessionEntryLifecycle,
   purgeDeletedAgentSessionEntries,
-  resetSessionEntryLifecycle,
-  rollbackAgentHarnessSessionEntryLifecycle,
-  rollbackPluginOwnedSessionEntryLifecycle,
-};
-
-function findSessionCompactionCheckpoint(params: {
-  checkpointId: string;
-  entry: SessionEntry;
-}): SessionCompactionCheckpoint | undefined {
-  const checkpointId = params.checkpointId.trim();
-  if (!checkpointId || !Array.isArray(params.entry.compactionCheckpoints)) {
-    return undefined;
-  }
-  let newest: SessionCompactionCheckpoint | undefined;
-  for (const checkpoint of params.entry.compactionCheckpoints) {
-    if (checkpoint.checkpointId !== checkpointId) {
-      continue;
-    }
-    if (!newest || checkpoint.createdAt > newest.createdAt) {
-      newest = checkpoint;
-    }
-  }
-  return newest;
-}
-
-type ApplySessionCompactionCheckpointMutationParams = {
-  buildEntry: SessionCompactionCheckpointEntryBuilder;
-  checkpointId: string;
-  forkTranscriptFromCheckpoint: SessionCompactionCheckpointTranscriptForker;
-  readKey: string;
-  storePath: string;
-  writeKey: string;
-};
-
-async function applySessionCompactionCheckpointMutation(
-  params: ApplySessionCompactionCheckpointMutationParams,
-): Promise<SessionCompactionCheckpointMutationResult> {
-  const currentEntry = loadSessionEntry({
-    sessionKey: params.readKey,
-    storePath: params.storePath,
-  });
-  if (!currentEntry?.sessionId) {
-    return { status: "missing-session" };
-  }
-  if (currentEntry.modelSelectionLocked === true) {
-    return { status: "model-selection-locked" };
-  }
-  const checkpoint = findSessionCompactionCheckpoint({
-    entry: currentEntry,
-    checkpointId: params.checkpointId,
-  });
-  if (!checkpoint) {
-    return { status: "missing-checkpoint" };
-  }
-  const forkedSession = await params.forkTranscriptFromCheckpoint(checkpoint);
-  if (forkedSession.status !== "created") {
-    return forkedSession;
-  }
-
-  const nextEntry = await params.buildEntry({
-    checkpoint,
-    currentEntry,
-    forkedTranscript: forkedSession.transcript,
-  });
-  await replaceSessionEntry(
-    { sessionKey: params.writeKey, storePath: params.storePath },
-    nextEntry,
-  );
-  return {
-    status: "created",
-    key: params.writeKey,
-    checkpoint,
-    entry: nextEntry,
-  };
-}
-
-/**
- * Forks checkpoint transcript content and persists a new branch entry in one
- * storage-sized mutation. SQLite adapters implement the transcript row copy
- * and `session_nodes.entry_json` insert inside the same write transaction.
- */
-export async function branchSessionFromCompactionCheckpoint(
-  params: BranchSessionFromCompactionCheckpointParams,
-): Promise<SessionCompactionCheckpointMutationResult> {
-  return await applySessionCompactionCheckpointMutation({
-    buildEntry: params.buildEntry,
-    checkpointId: params.checkpointId,
-    forkTranscriptFromCheckpoint: params.forkTranscriptFromCheckpoint,
-    readKey: params.sourceStoreKey ?? params.sourceKey,
-    storePath: params.storePath,
-    writeKey: params.nextKey,
-  });
-}
-
-/**
- * Forks checkpoint transcript content and replaces the current entry in one
- * storage-sized mutation. SQLite adapters implement the transcript row copy
- * and `session_nodes.entry_json` update inside the same write transaction.
- */
-export async function restoreSessionFromCompactionCheckpoint(
-  params: RestoreSessionFromCompactionCheckpointParams,
-): Promise<SessionCompactionCheckpointMutationResult> {
-  return await applySessionCompactionCheckpointMutation({
-    buildEntry: params.buildEntry,
-    checkpointId: params.checkpointId,
-    forkTranscriptFromCheckpoint: params.forkTranscriptFromCheckpoint,
-    readKey: params.sessionStoreKey ?? params.sessionKey,
-    storePath: params.storePath,
-    writeKey: params.sessionKey,
-  });
-}
+} from "./session-accessor.sqlite-projection.js";
 
 /** Projects ordered session patches against one store snapshot and commits once. */
 export async function applySessionPatchProjections<
@@ -294,16 +165,13 @@ export async function cleanupPluginHostSessionStore(
   }
   const now = Date.now();
   let cleared = 0;
-  // Cleanup selectors use metadata; saved prompts are reserved from plugin slots.
-  // The patch owner rereads each selected full entry before changing it.
+  // Select metadata without yielding; saved prompts are reserved from plugin slots.
+  // Check only selected writes; the patch rereads full entries and rechecks authority at commit.
   for (const { entry, sessionKey } of listSessionEntriesCore({
     agentId: params.agentId,
     storePath: params.storePath,
     projection: "list",
   })) {
-    if (params.shouldCleanup && !params.shouldCleanup()) {
-      break;
-    }
     if (isLockedHarnessSessionOwnedByPlugin(entry, params.preserveLockedHarnessIds)) {
       continue;
     }
@@ -312,6 +180,9 @@ export async function cleanupPluginHostSessionStore(
       !hasPluginHostCleanupTarget(entry, params)
     ) {
       continue;
+    }
+    if (params.shouldCleanup && !params.shouldCleanup()) {
+      break;
     }
     await patchSessionEntryCore(
       { agentId: params.agentId, sessionKey, storePath: params.storePath },

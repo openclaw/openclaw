@@ -2,6 +2,7 @@ import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import {
   isProcessAlive,
@@ -15,6 +16,7 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "../..");
 const posixDescribe = process.platform === "win32" ? describe.skip : describe;
+const testNodeExecPath = resolveTestNodeExecPath();
 
 const entrypoints = [
   { script: "run-vitest.mjs", direct: true, tool: "test" },
@@ -236,7 +238,7 @@ syncBuiltinESMExports();
         env.OPENCLAW_E2E_SKIP_BUILD = "1";
       }
       const child = spawn(
-        process.execPath,
+        testNodeExecPath,
         [
           "--import",
           preload,
@@ -360,7 +362,7 @@ it("case ${index}", () => {
         }
       }
       const result = spawnSync(
-        process.execPath,
+        testNodeExecPath,
         [path.join(repoRoot, "scripts/run-vitest.mjs"), "run", "--config", configPath],
         {
           cwd: repoRoot,

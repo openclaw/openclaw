@@ -13,7 +13,7 @@ const COHERE_NORTH_MINI_CODE_MODEL_ID = "north-mini-code-1-0";
 
 describe("Cohere onboarding", () => {
   it("registers the manifest catalog through the onboarding preset", () => {
-    const result = applyCohereConfig({});
+    const result = applyCohereConfig({ models: { mode: "replace" } });
     const provider = result.models?.providers?.cohere;
 
     expect(provider).toMatchObject({
@@ -27,9 +27,6 @@ describe("Cohere onboarding", () => {
       COHERE_COMMAND_A_VISION_MODEL_ID,
       COHERE_NORTH_MINI_CODE_MODEL_ID,
     ]);
-    expect(buildCohereCatalogModels()).toHaveLength(
-      manifest.modelCatalog.providers.cohere.models.length,
-    );
   });
 
   it("sets Cohere only when there is no primary model", () => {
@@ -52,8 +49,23 @@ describe("Cohere onboarding", () => {
   it("uses Cohere as the first configured primary model", () => {
     const result = applyCohereConfig({});
 
+    expect(result.models?.providers?.cohere?.models).toEqual([]);
     expect(resolveAgentModelPrimaryValue(result.agents?.defaults?.model)).toBe(
       COHERE_DEFAULT_MODEL_REF,
     );
+  });
+
+  it.each([undefined, "merge"] as const)("preserves authored rows in %s mode", (mode) => {
+    const authored = buildCohereCatalogModels().map((model) =>
+      Object.assign({}, model, { id: `operator-${model.id}`, name: "My model" }),
+    );
+    const result = applyCohereConfig({
+      models: {
+        mode,
+        providers: { cohere: { baseUrl: COHERE_BASE_URL, models: authored } },
+      },
+    });
+
+    expect(result.models?.providers?.cohere?.models).toEqual(authored);
   });
 });

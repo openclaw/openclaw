@@ -6,7 +6,7 @@ import ai.openclaw.app.GatewayChannelSummary
 import ai.openclaw.app.GatewayChannelsSummary
 import ai.openclaw.app.GatewayConnectionDisplay
 import ai.openclaw.app.GatewayConnectionProblem
-import ai.openclaw.app.GatewayNodeApprovalState
+import ai.openclaw.app.GatewayNodeCapabilityApproval
 import ai.openclaw.app.GatewayNodeSummary
 import ai.openclaw.app.GatewayNodesDevicesSummary
 import ai.openclaw.app.GatewayPendingDeviceSummary
@@ -423,8 +423,7 @@ class ShellScreenLogicTest {
                   deviceFamily = "Android",
                   paired = true,
                   connected = true,
-                  approvalState = GatewayNodeApprovalState.PendingApproval,
-                  pendingRequestId = null,
+                  approvalState = GatewayNodeCapabilityApproval.PendingApproval(null),
                   capabilities = emptyList(),
                   commands = emptyList(),
                 ),
@@ -478,8 +477,7 @@ class ShellScreenLogicTest {
                   deviceFamily = "Android",
                   paired = true,
                   connected = true,
-                  approvalState = GatewayNodeApprovalState.PendingReapproval,
-                  pendingRequestId = "node-request",
+                  approvalState = GatewayNodeCapabilityApproval.PendingReapproval("node-request"),
                   capabilities = emptyList(),
                   commands = emptyList(),
                 ),
@@ -633,8 +631,7 @@ class ShellScreenLogicTest {
                   deviceFamily = null,
                   paired = true,
                   connected = index <= 2,
-                  approvalState = GatewayNodeApprovalState.Approved,
-                  pendingRequestId = null,
+                  approvalState = GatewayNodeCapabilityApproval.Approved,
                   capabilities = emptyList(),
                   commands = emptyList(),
                 )
@@ -653,19 +650,28 @@ class ShellScreenLogicTest {
   }
 
   @Test
-  fun overviewGatewayCardOnlyClaimsNominalWhenNoAttentionExists() {
+  fun overviewGatewayCardDoesNotClaimHealthWhenProviderAvailabilityIsUnknown() {
+    val attentionRows =
+      homeAttentionRows(
+        isConnected = true,
+        pendingApprovals = 0,
+        channelsSummary = emptyChannels(),
+        nodesDevicesSummary = emptyNodesDevices(),
+        readyProviderCount = 0,
+        unknownProviderCount = 1,
+      )
     val cards =
       overviewMetricCardSpecs(
         isConnected = true,
-        hasAttention = false,
+        hasAttention = attentionRows.isNotEmpty(),
         nodesDevicesSummary = emptyNodesDevices(),
         pendingApprovals = 0,
         sessionCount = 0,
       )
 
     val gateway = cards.single { it.title == "Gateway" }
-    assertEquals("Healthy", gateway.value)
-    assertEquals("All systems nominal", gateway.subtitle)
+    assertEquals("Online", gateway.value)
+    assertEquals("No highlighted items", gateway.subtitle)
     assertEquals(ClawStatus.Success, gateway.status)
   }
 

@@ -24,6 +24,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
 
+import { cancelTrackedTextResponse } from "../test-support/streaming-error-response.js";
 import { githubCopilotMemoryEmbeddingProviderAdapter } from "./embeddings.js";
 
 afterAll(() => {
@@ -46,28 +47,6 @@ function shouldContinueAutoSelection(error: Error): boolean {
 
 function buildModelsResponse(models: Array<{ id: string; supported_endpoints?: unknown }>) {
   return { data: models };
-}
-
-function cancelTrackedResponse(
-  text: string,
-  init: ResponseInit,
-): {
-  response: Response;
-  wasCanceled: () => boolean;
-} {
-  let canceled = false;
-  const stream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(new TextEncoder().encode(text));
-    },
-    cancel() {
-      canceled = true;
-    },
-  });
-  return {
-    response: new Response(stream, init),
-    wasCanceled: () => canceled,
-  };
 }
 
 function mockDiscoveryResponse(spec: {
@@ -302,7 +281,7 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
   });
 
   it("bounds model discovery error bodies", async () => {
-    const tracked = cancelTrackedResponse(`${"discovery denied ".repeat(1024)}tail`, {
+    const tracked = cancelTrackedTextResponse(`${"discovery denied ".repeat(1024)}tail`, {
       status: 503,
       headers: { "content-type": "text/plain" },
     });
@@ -335,7 +314,7 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
         { id: "text-embedding-3-small", supported_endpoints: ["/v1/embeddings"] },
       ]),
     });
-    const tracked = cancelTrackedResponse(`${"embedding denied ".repeat(1024)}tail`, {
+    const tracked = cancelTrackedTextResponse(`${"embedding denied ".repeat(1024)}tail`, {
       status: 429,
       headers: { "content-type": "text/plain" },
     });

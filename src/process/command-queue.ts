@@ -12,10 +12,8 @@ import {
   canAdmitInGroup,
   type CommandLaneGroupSpec,
   drainCommandLaneGroup,
-  getGroupRegistry,
   getLaneGroup,
   installCommandLaneGroup,
-  type LaneGroupState,
   validateCommandLaneGroupSpec,
 } from "./command-queue.capacity-groups.js";
 import {
@@ -24,6 +22,7 @@ import {
   enqueueLaneQueue,
   type CommandLaneTaskMarker,
   getQueueState,
+  type LaneGroupState,
   type LaneState,
   normalizeLane,
   removeLaneQueueEntry,
@@ -37,6 +36,7 @@ import type {
 } from "./command-queue.types.js";
 import {
   GatewayDrainingError,
+  type GatewayDrainReason,
   isGatewaySubordinateWorkAdmissionClosed,
   isGatewayWorkAdmissionClosed,
   markGatewayRestartDraining,
@@ -448,8 +448,8 @@ function drainReadyCommandLane(lane: string, completedState?: LaneState): void {
  * Mark gateway as draining for restart so new enqueues fail fast with
  * `GatewayDrainingError` instead of being silently killed on shutdown.
  */
-export function markGatewayDraining(): void {
-  markGatewayRestartDraining();
+export function markGatewayDraining(reason?: GatewayDrainReason): void {
+  markGatewayRestartDraining(reason);
 }
 
 export function isGatewayDraining(): boolean {
@@ -494,7 +494,7 @@ export function publishLaneConfiguration(config: {
     touched.add(lane);
   }
   for (const group of config.clearGroups ?? []) {
-    const { groups, groupByLane } = getGroupRegistry();
+    const { laneGroups: groups, laneGroupByLane: groupByLane } = getQueueState();
     const existing = groups.get(group);
     if (existing) {
       for (const member of existing.members) {
@@ -505,7 +505,7 @@ export function publishLaneConfiguration(config: {
     }
   }
   for (const next of validated) {
-    const { groups, groupByLane } = getGroupRegistry();
+    const { laneGroups: groups, laneGroupByLane: groupByLane } = getQueueState();
     const previous = groups.get(next.group);
     for (const member of previous?.members ?? []) {
       touched.add(member);
@@ -581,6 +581,9 @@ export function enqueueCommandInLane<T>(
     const signal = opts?.abortSignal;
     if (signal) {
       const onAbort = () => {
+        // The once-listener is already detached. Searching for it again scans
+        // the remaining listeners when many entries share one abort signal.
+        entry.releaseQueuedAbort = undefined;
         if (removeLaneQueueEntry(state.queue, entry)) {
           entry.reject(toErrorObject(signal.reason, "Queued command aborted"));
           retireIdleScopedCommandLane(state);
@@ -702,7 +705,7 @@ export function resetCommandLane(lane: string = CommandLane.Main): number {
 }
 
 /**
- * Reset all lane runtime state to idle. Used after SIGUSR1 in-process
+ * Reset all lane runtime state to idle. Used after SIGUSR2 in-process
  * restarts where interrupted tasks' finally blocks may not run, leaving
  * stale active task IDs that permanently block new work from draining.
  *

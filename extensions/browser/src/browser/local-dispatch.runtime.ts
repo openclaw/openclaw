@@ -4,6 +4,7 @@
  * Starts the browser control service when needed and dispatches requests
  * through the in-process route dispatcher for local Browser tool calls.
  */
+import { describeBrowserControlUnavailable } from "../plugin-enabled.js";
 import {
   createBrowserControlContext,
   startBrowserControlServiceFromConfig,
@@ -20,8 +21,9 @@ export async function dispatchBrowserControlRequest(
 ): Promise<BrowserDispatchResponse> {
   const started = await startBrowserControlServiceFromConfig();
   if (!started) {
-    throw new Error("browser control disabled");
+    return { status: 503, body: { error: await describeBrowserControlUnavailable() } };
   }
   const dispatcher = createBrowserRouteDispatcher(createBrowserControlContext());
+  await req.assertCurrent?.();
   return await dispatcher.dispatch(req);
 }

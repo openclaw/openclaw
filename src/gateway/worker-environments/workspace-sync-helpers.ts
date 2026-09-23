@@ -12,7 +12,8 @@ import {
   workerSshOptions,
   workerSshRemoteCommand,
 } from "./ssh.js";
-import type { WorkerWorkspaceCommand, WorkerWorkspaceSyncRequest } from "./tunnel-contract.js";
+import type { WorkerWorkspaceCommand, WorkerLocalWorkspaceSyncRequest } from "./tunnel-contract.js";
+import { boundedWorkerError } from "./worker-error.js";
 import {
   parseRemoteWorkspaceManifestEnvelope,
   recordRemoteWorkspaceHashMetrics,
@@ -21,7 +22,10 @@ import {
   type WorkspaceHashMemo,
   type WorkspaceReconcileMetrics,
 } from "./workspace-hash-memo.js";
-import { REMOTE_WORKSPACE_MANIFEST_JS } from "./workspace-sync-scripts.js";
+import {
+  createRemoteWorkspaceManifestScript,
+  REMOTE_WORKSPACE_MANIFEST_JS,
+} from "./workspace-sync-scripts.js";
 
 const MANIFEST_REF_PATTERN = /^sha256:[a-f0-9]{64}$/u;
 const INBOUND_QUOTA_INITIAL_POLL_MS = 25;
@@ -172,7 +176,7 @@ export function workerWorkspaceSshArgv(
   ];
 }
 
-async function resolveRemoteWorkspaceBaseManifest(
+export async function resolveRemoteWorkspaceManifest(
   runWorkspaceCommand: (command: WorkerWorkspaceCommand) => Promise<SpawnResult>,
   remoteWorkspaceDir: string,
   expectedRef: string,
@@ -202,18 +206,6 @@ async function resolveRemoteWorkspaceBaseManifest(
   return baseDigest;
 }
 
-export async function resolveRemoteWorkspaceManifest(
-  runWorkspaceCommand: (command: WorkerWorkspaceCommand) => Promise<SpawnResult>,
-  remoteWorkspaceDir: string,
-  expectedRef: string,
-) {
-  return await resolveRemoteWorkspaceBaseManifest(
-    runWorkspaceCommand,
-    remoteWorkspaceDir,
-    expectedRef,
-  );
-}
-
 export async function captureRemoteWorkspaceManifest(params: {
   runWorkspaceCommand: (command: WorkerWorkspaceCommand) => Promise<SpawnResult>;
   remoteWorkspaceDir: string;
@@ -221,6 +213,7 @@ export async function captureRemoteWorkspaceManifest(params: {
   priorManifestDigests: readonly string[];
   hashMemo: WorkspaceHashMemo;
   metrics: WorkspaceReconcileMetrics;
+  maxHashMemoBytes?: number;
 }): Promise<string> {
   params.metrics.remoteManifestCalls += 1;
   const startedAt = performance.now();
@@ -230,20 +223,27 @@ export async function captureRemoteWorkspaceManifest(params: {
       argv: [
         "node",
         "-e",
-        REMOTE_WORKSPACE_MANIFEST_JS,
+        params.maxHashMemoBytes === undefined
+          ? REMOTE_WORKSPACE_MANIFEST_JS
+          : createRemoteWorkspaceManifestScript(params.maxHashMemoBytes),
         params.remoteWorkspaceDir,
         params.baseCommit ?? "",
-        ...(params.baseCommit ? ["eligible"] : []),
+        params.baseCommit ? "eligible" : "all",
         ...params.priorManifestDigests,
         "memo-v1",
       ],
-      input: serializeRemoteWorkspaceHashMemo(params.hashMemo),
+      input: serializeRemoteWorkspaceHashMemo(params.hashMemo, params.maxHashMemoBytes),
     })
     .finally(() => {
       params.metrics.remoteManifestWallDurationMs += performance.now() - startedAt;
     });
   if (!workerWorkspaceCommandSucceeded(captured)) {
-    throw workspaceSyncError(captured);
+    throw new Error(
+      `Worker workspace manifest capture failed: ${boundedWorkerError(
+        captured.stderr.trim() ||
+          `${captured.termination} (exit code ${captured.code}, signal ${captured.signal})`,
+      )}`,
+    );
   }
   let response;
   try {
@@ -299,7 +299,7 @@ export async function probeWorkspaceGitMode(params: {
 }
 
 export async function resolveWorkerWorkspaceGitAuthor(
-  request: Pick<WorkerWorkspaceSyncRequest, "localPath" | "gitAuthor">,
+  request: Pick<WorkerLocalWorkspaceSyncRequest, "localPath" | "gitAuthor">,
   runTask: (argv: string[]) => Promise<SpawnResult>,
 ): Promise<{ name: string; email: string }> {
   const git = ["git", "-C", request.localPath, "config", "--get"];
@@ -307,18 +307,18 @@ export async function resolveWorkerWorkspaceGitAuthor(
     const result = await runTask([...git, `user.${key}`]);
     return workerWorkspaceCommandSucceeded(result) ? result.stdout.trim() : "";
   };
-  const [name, email] = await Promise.all([read("name"), read("email")]);
-  return {
-    name: request.gitAuthor?.name ?? name,
-    email: request.gitAuthor?.email ?? email,
-  };
+  const [name, email] = await Promise.all([
+    request.gitAuthor?.name ?? read("name"),
+    request.gitAuthor?.email ?? read("email"),
+  ]);
+  return { name, email };
 }
 
 export function stableWorkerPathComponent(value: string, length: number): string {
   return createHash("sha256").update(value).digest("hex").slice(0, length);
 }
 
-export function validateWorkspaceSyncRequest(request: WorkerWorkspaceSyncRequest): void {
+export function validateWorkspaceSyncRequest(request: WorkerLocalWorkspaceSyncRequest): void {
   if (!request.sessionId.trim()) {
     throw new Error("Worker workspace session id must be non-empty");
   }

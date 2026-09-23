@@ -1,9 +1,17 @@
 /** In-memory spoken confirmation binding for high-impact Talk actions. */
-import { createHash, randomUUID } from "node:crypto";
-import { buildToolMutationState } from "../agents/tool-mutation.js";
-import { AUTOMATIONS_TOOL_NAME } from "../agents/tools/automations-tool-name.js";
+import { randomUUID } from "node:crypto";
+import { createDeferredCore, type Deferred } from "../shared/deferred.js";
+import {
+  requiresHighImpactVoiceConfirmation,
+  stableToolFingerprint,
+} from "./client-voice-confirmation-policy.js";
 
 const CONFIRMATION_TTL_MS = 2 * 60_000;
+const utteranceContextBrand = Symbol("voice-confirmation-utterance");
+
+export type ClientVoiceConfirmationUtteranceContext = {
+  readonly [utteranceContextBrand]: true;
+};
 
 type PendingVoiceConfirmation = {
   confirmationId: string;
@@ -11,6 +19,10 @@ type PendingVoiceConfirmation = {
   fingerprint: string;
   createdAt: number;
   expiresAt: number;
+  blockedCall?: { runId: string; toolCallId: string; toolName: string };
+  changed: Deferred;
+  utterance?: ClientVoiceConfirmationUtteranceContext;
+  utteranceRejected?: true;
 };
 
 type RecentVoiceUserUtterance = {
@@ -24,16 +36,29 @@ export type ClientVoiceConfirmationGrant = {
   confirmationId: string;
   fingerprint: string;
   expiresAt: number;
+  retryContext?: string;
 };
 
 type ConfirmationScopeState = {
   pending?: PendingVoiceConfirmation;
   recentUtterance?: RecentVoiceUserUtterance;
   approvedByRun: Map<string, Map<string, number>>;
+  observationsByRun: Map<string, Map<string, string>>;
   pendingExpiryTimer?: ReturnType<typeof setTimeout>;
 };
 
 const confirmationScopes = new Map<string, ConfirmationScopeState>();
+const utteranceContexts = new WeakMap<
+  ClientVoiceConfirmationUtteranceContext,
+  {
+    agentId: string;
+    voiceSessionId: string;
+    pending?: PendingVoiceConfirmation;
+    timestamp: number;
+    entryId?: string;
+    persistedText?: string;
+  }
+>();
 
 function confirmationScopeKey(agentId: string, voiceSessionId: string): string {
   return `${agentId}\0${voiceSessionId}`;
@@ -49,12 +74,24 @@ function clearPendingExpiryTimer(state: ConfirmationScopeState): void {
 
 function clearPendingConfirmation(state: ConfirmationScopeState): void {
   clearPendingExpiryTimer(state);
+  state.pending?.changed.resolve();
   delete state.pending;
   delete state.recentUtterance;
 }
 
+function notifyPendingConfirmationChanged(pending: PendingVoiceConfirmation): void {
+  const changed = pending.changed;
+  pending.changed = createDeferredCore();
+  changed.resolve();
+}
+
 function cleanupConfirmationScope(scopeKey: string, state: ConfirmationScopeState): void {
-  if (state.pending || state.recentUtterance || state.approvedByRun.size > 0) {
+  if (
+    state.pending ||
+    state.recentUtterance ||
+    state.approvedByRun.size > 0 ||
+    state.observationsByRun.size > 0
+  ) {
     return;
   }
   if (confirmationScopes.get(scopeKey) === state) {
@@ -123,60 +160,12 @@ function getOrCreateConfirmationScope(scopeKey: string): ConfirmationScopeState 
   if (existing) {
     return existing;
   }
-  const state: ConfirmationScopeState = { approvedByRun: new Map() };
+  const state: ConfirmationScopeState = {
+    approvedByRun: new Map(),
+    observationsByRun: new Map(),
+  };
   confirmationScopes.set(scopeKey, state);
   return state;
-}
-
-function stableToolFingerprint(toolName: string, params: unknown): string {
-  const normalize = (value: unknown): unknown => {
-    if (Array.isArray(value)) {
-      return value.map(normalize);
-    }
-    if (!value || typeof value !== "object") {
-      return value;
-    }
-    return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>)
-        .toSorted(([left], [right]) => left.localeCompare(right))
-        .map(([key, entry]) => [key, normalize(entry)]),
-    );
-  };
-  return createHash("sha256")
-    .update(`${toolName}\0${JSON.stringify(normalize(params))}`)
-    .digest("hex");
-}
-
-function requiresHighImpactVoiceConfirmation(toolName: string, params: unknown): boolean {
-  const normalizedTool = toolName.trim().toLowerCase();
-  if (!buildToolMutationState(normalizedTool, params).mutatingAction) {
-    return false;
-  }
-  if (
-    [
-      "message",
-      "gateway",
-      "nodes",
-      "browser",
-      "computer",
-      "mobile_ui",
-      "canvas",
-      AUTOMATIONS_TOOL_NAME,
-      "process",
-    ].includes(normalizedTool)
-  ) {
-    return true;
-  }
-  // Workspace-local edits stay bound to this run. Session delegation is gated because
-  // delegated runs leave the voice binding and otherwise bypass spoken confirmation.
-  if (
-    ["write", "edit", "apply_patch", "create_goal", "update_goal", "get_goal"].includes(
-      normalizedTool,
-    )
-  ) {
-    return false;
-  }
-  return true;
 }
 
 function resolveApprovedFingerprint(
@@ -204,6 +193,7 @@ function resolveApprovedFingerprint(
   }
   if (consume) {
     approved?.delete(fingerprint);
+    state?.observationsByRun.get(runId)?.delete(fingerprint);
     if (approved?.size === 0) {
       state?.approvedByRun.delete(runId);
     }
@@ -214,29 +204,125 @@ function resolveApprovedFingerprint(
   return true;
 }
 
-/** Record a finalized user utterance after the durable transcript append succeeds. */
+/** Capture host-observed speech before any finalization or persistence can change its challenge. */
+export function captureClientVoiceConfirmationUtterance(params: {
+  agentId: string;
+  voiceSessionId: string;
+  now?: number;
+}): ClientVoiceConfirmationUtteranceContext {
+  const timestamp = params.now ?? Date.now();
+  const state = getPrunedConfirmationScope(
+    confirmationScopeKey(params.agentId, params.voiceSessionId),
+    timestamp,
+  );
+  const context: ClientVoiceConfirmationUtteranceContext = Object.freeze({
+    [utteranceContextBrand]: true,
+  });
+  utteranceContexts.set(context, {
+    agentId: params.agentId,
+    voiceSessionId: params.voiceSessionId,
+    pending: state?.pending,
+    timestamp,
+  });
+  if (state?.pending) {
+    delete state.recentUtterance;
+    delete state.pending.utteranceRejected;
+    state.pending.utterance = context;
+    notifyPendingConfirmationChanged(state.pending);
+  }
+  return context;
+}
+
+/** Bind one transcript entry before queue admission; retries retain its original observation. */
+export function prepareClientVoiceConfirmationTranscript(params: {
+  agentId: string;
+  voiceSessionId: string;
+  entryId: string;
+  confirmation?: ClientVoiceConfirmationUtteranceContext | null;
+  now?: number;
+}): ClientVoiceConfirmationUtteranceContext | null {
+  if (params.confirmation === null) {
+    return null;
+  }
+  const state = getPrunedConfirmationScope(
+    confirmationScopeKey(params.agentId, params.voiceSessionId),
+    params.now ?? Date.now(),
+  );
+  const current = state?.pending?.utterance;
+  const context =
+    params.confirmation ??
+    (current && utteranceContexts.get(current)?.entryId === params.entryId
+      ? current
+      : captureClientVoiceConfirmationUtterance(params));
+  const observed = utteranceContexts.get(context);
+  if (
+    !observed ||
+    observed.agentId !== params.agentId ||
+    observed.voiceSessionId !== params.voiceSessionId ||
+    (observed.entryId !== undefined && observed.entryId !== params.entryId)
+  ) {
+    return null;
+  }
+  observed.entryId = params.entryId;
+  return context;
+}
+
+/** A deduplicated write can reuse its original receipt, never manufacture a new one. */
+export function recordClientVoiceConfirmationTranscriptAppend(params: {
+  confirmation: ClientVoiceConfirmationUtteranceContext;
+  entryId: string;
+  text: string;
+  appended: boolean;
+}): void {
+  const observed = utteranceContexts.get(params.confirmation);
+  if (observed?.entryId === params.entryId && params.appended) {
+    observed.persistedText = params.text;
+  }
+}
+
+/** Record persisted speech only for the challenge and utterance observed before its write. */
 export function noteClientVoiceConfirmationUtterance(params: {
   agentId: string;
   voiceSessionId: string;
-  text: string;
   timestamp: number;
+  confirmation: ClientVoiceConfirmationUtteranceContext;
 }): void {
   const scopeKey = confirmationScopeKey(params.agentId, params.voiceSessionId);
   const state = getPrunedConfirmationScope(scopeKey, params.timestamp);
-  if (!state?.pending) {
+  const observed = utteranceContexts.get(params.confirmation);
+  if (
+    !state?.pending ||
+    !observed ||
+    observed.agentId !== params.agentId ||
+    observed.voiceSessionId !== params.voiceSessionId
+  ) {
     return;
   }
-  // A spoken refusal kills the outstanding challenge: a later unrelated "yes"
-  // must not resurrect an action the user already declined.
+  // Persisted refusal cancels its still-current challenge even when a later
+  // utterance was observed while this write waited.
   if (
-    REFUSAL_PATTERN.test(normalizeUtterance(params.text)) &&
-    state.pending.createdAt < params.timestamp
+    observed.pending === state.pending &&
+    observed.persistedText !== undefined &&
+    REFUSAL_PATTERN.test(normalizeUtterance(observed.persistedText)) &&
+    state.pending.createdAt < observed.timestamp
   ) {
     clearPendingConfirmation(state);
     cleanupConfirmationScope(scopeKey, state);
     return;
   }
-  state.recentUtterance = { text: params.text, timestamp: params.timestamp };
+  if (
+    observed.pending !== state.pending ||
+    state.pending.utterance !== params.confirmation ||
+    observed.persistedText === undefined
+  ) {
+    if (!state.pending.utterance || state.pending.utterance === params.confirmation) {
+      state.pending.utteranceRejected = true;
+      notifyPendingConfirmationChanged(state.pending);
+    }
+    return;
+  }
+  state.recentUtterance = { text: observed.persistedText, timestamp: observed.timestamp };
+  notifyPendingConfirmationChanged(state.pending);
 }
 
 type ClientVoiceToolConfirmationPolicyParams = {
@@ -244,6 +330,7 @@ type ClientVoiceToolConfirmationPolicyParams = {
   voiceSessionId?: string;
   runId?: string;
   toolName: string;
+  toolCallId?: string;
   toolParams: unknown;
   isConfirmable?: () => boolean;
   now?: number;
@@ -293,15 +380,35 @@ function resolveClientVoiceToolConfirmationPolicy(
       fingerprint,
       createdAt: now,
       expiresAt: now + CONFIRMATION_TTL_MS,
+      changed: createDeferredCore(),
+      ...(params.runId &&
+      params.toolCallId &&
+      params.runId.length <= 256 &&
+      params.toolCallId.length <= 256 &&
+      params.toolName.length <= 128
+        ? {
+            blockedCall: {
+              runId: params.runId,
+              toolCallId: params.toolCallId,
+              toolName: params.toolName,
+            },
+          }
+        : {}),
     } satisfies PendingVoiceConfirmation);
   state.pending = confirmation;
+  const observation = params.runId ? state.observationsByRun.get(params.runId) : undefined;
+  if (observation) {
+    observation.set(fingerprint, confirmation.confirmationId);
+  }
   schedulePendingConfirmationExpiry(scopeKey, state, now);
   return {
     allowed: false,
     reason:
       `VOICE_CONFIRMATION_REQUIRED:${confirmation.confirmationId} ` +
       `The high-impact voice action "${params.toolName}" was not executed. ` +
-      "Ask the user for explicit spoken confirmation, then call openclaw_agent_consult again with this confirmationId.",
+      (observation
+        ? 'Ask the user to say "yes" to confirm this action or "no" to cancel it. A later native delegation carries the confirmation; do not add confirmationId to action tool arguments.'
+        : "Ask the user for explicit spoken confirmation, then call openclaw_agent_consult again with this confirmationId."),
   };
 }
 
@@ -317,6 +424,85 @@ export function consumeClientVoiceToolConfirmationPolicy(
   params: ClientVoiceToolConfirmationPolicyParams,
 ): ClientVoiceToolConfirmationPolicyResult {
   return resolveClientVoiceToolConfirmationPolicy(params, true);
+}
+
+/** Read transcript readiness without granting or extending the current challenge. */
+export function readClientVoiceConfirmationReadiness(
+  agentId: string,
+  voiceSessionId: string,
+):
+  | {
+      confirmationId: string;
+      needsUserUtterance: boolean;
+      utteranceRejected: boolean;
+      changed: Promise<void>;
+    }
+  | undefined {
+  const state = getPrunedConfirmationScope(
+    confirmationScopeKey(agentId, voiceSessionId),
+    Date.now(),
+  );
+  if (!state?.pending) {
+    return undefined;
+  }
+  return {
+    confirmationId: state.pending.confirmationId,
+    needsUserUtterance: !hasLaterUserUtterance(state),
+    utteranceRejected: state.pending.utteranceRejected === true,
+    changed: state.pending.changed.promise,
+  };
+}
+
+/** A newly observed user utterance cannot reuse an older final affirmation. */
+export function invalidateClientVoiceConfirmationUtterance(
+  agentId: string,
+  voiceSessionId: string,
+): void {
+  const scopeKey = confirmationScopeKey(agentId, voiceSessionId);
+  const state = confirmationScopes.get(scopeKey);
+  if (state) {
+    delete state.recentUtterance;
+    if (state.pending) {
+      delete state.pending.utterance;
+      notifyPendingConfirmationChanged(state.pending);
+    }
+    cleanupConfirmationScope(scopeKey, state);
+  }
+}
+
+/** Retain this run's veto outcome for speech; this observation never authorizes an action. */
+export function observeClientVoiceConfirmationRun(params: {
+  agentId: string;
+  voiceSessionId: string;
+  runId: string;
+}) {
+  const scopeKey = confirmationScopeKey(params.agentId, params.voiceSessionId);
+  const state = getOrCreateConfirmationScope(scopeKey);
+  const observation = new Map<string, string>();
+  state.observationsByRun.set(params.runId, observation);
+  return {
+    readReply(): string | undefined {
+      if (observation.size === 0) {
+        return undefined;
+      }
+      const pending = confirmationScopes.get(scopeKey)?.pending;
+      if (
+        pending &&
+        observation.get(pending.fingerprint) === pending.confirmationId &&
+        pending.expiresAt >= Date.now()
+      ) {
+        return 'One pending action has not run. Say "yes" to confirm that action or "no" to cancel it.';
+      }
+      return "An action in that request was not run because its spoken confirmation is no longer current. Make a new request if you still want it.";
+    },
+    release(): void {
+      const current = confirmationScopes.get(scopeKey);
+      if (current?.observationsByRun.get(params.runId) === observation) {
+        current.observationsByRun.delete(params.runId);
+        cleanupConfirmationScope(scopeKey, current);
+      }
+    },
+  };
 }
 
 const REFUSAL_PATTERN = /\b(no|don't|do not|cancel|stop|never mind)\b/;
@@ -345,6 +531,43 @@ function isExplicitAffirmation(text: string): boolean {
   );
 }
 
+function hasLaterUserUtterance(state: ConfirmationScopeState): boolean {
+  return Boolean(
+    state.pending &&
+    state.recentUtterance &&
+    state.recentUtterance.timestamp > state.pending.createdAt,
+  );
+}
+
+function hasLaterExplicitAffirmation(state: ConfirmationScopeState): boolean {
+  return Boolean(
+    state.recentUtterance &&
+    hasLaterUserUtterance(state) &&
+    isExplicitAffirmation(state.recentUtterance.text),
+  );
+}
+
+/** Native delegation has no tool arguments; only the call's persisted speech can confirm it. */
+export function authorizeObservedClientVoiceConfirmation(params: {
+  agentId: string;
+  voiceSessionId: string;
+  now?: number;
+}): ClientVoiceConfirmationGrant | undefined {
+  const now = params.now ?? Date.now();
+  const state = getPrunedConfirmationScope(
+    confirmationScopeKey(params.agentId, params.voiceSessionId),
+    now,
+  );
+  if (!state?.pending || !hasLaterExplicitAffirmation(state)) {
+    return undefined;
+  }
+  return authorizeClientVoiceConfirmation({
+    ...params,
+    now,
+    confirmationId: state.pending.confirmationId,
+  });
+}
+
 /** Bind a later affirmative utterance to one exact paused action. */
 export function authorizeClientVoiceConfirmation(params: {
   agentId: string;
@@ -364,12 +587,7 @@ export function authorizeClientVoiceConfirmation(params: {
   if (confirmation.confirmationId !== params.confirmationId) {
     throw new Error("a newer confirmation request supersedes this one; ask again");
   }
-  const affirmation = state.recentUtterance;
-  if (
-    !affirmation ||
-    affirmation.timestamp <= confirmation.createdAt ||
-    !isExplicitAffirmation(affirmation.text)
-  ) {
+  if (!hasLaterExplicitAffirmation(state)) {
     throw new Error("explicit spoken confirmation was not found after the action request");
   }
   // Validate only; the challenge and affirmation are consumed at bind time, once the
@@ -381,6 +599,13 @@ export function authorizeClientVoiceConfirmation(params: {
     confirmationId: params.confirmationId,
     fingerprint: confirmation.fingerprint,
     expiresAt: confirmation.expiresAt,
+    ...(confirmation.blockedCall
+      ? {
+          retryContext:
+            `The user's persisted spoken confirmation is bound to this previously blocked tool call: ${JSON.stringify(confirmation.blockedCall)}. ` +
+            "Retry only that call with its unchanged arguments. Do not add confirmationId or other confirmation metadata to the action tool's arguments. This confirmation authorizes one exact action; other actions still require their own confirmation.",
+        }
+      : {}),
   };
 }
 
@@ -404,7 +629,8 @@ export function bindAuthorizedClientVoiceConfirmation(params: {
     pending.expiresAt < now ||
     pending.confirmationId !== params.grant.confirmationId ||
     pending.fingerprint !== params.grant.fingerprint ||
-    pending.expiresAt !== params.grant.expiresAt
+    pending.expiresAt !== params.grant.expiresAt ||
+    !hasLaterExplicitAffirmation(state)
   ) {
     return false;
   }
@@ -439,6 +665,11 @@ export function deactivateClientVoiceConfirmationSession(
       state.approvedByRun.delete(runId);
     }
   }
+  for (const runId of state.observationsByRun.keys()) {
+    if (!live.has(runId)) {
+      state.observationsByRun.delete(runId);
+    }
+  }
   cleanupConfirmationScope(scopeKey, state);
 }
 
@@ -454,6 +685,7 @@ export function releaseClientVoiceConfirmationRun(
     return;
   }
   state.approvedByRun.delete(runId);
+  state.observationsByRun.delete(runId);
   cleanupConfirmationScope(scopeKey, state);
 }
 

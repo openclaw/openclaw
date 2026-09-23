@@ -125,6 +125,7 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
   const messageTs = message.ts ?? message.event_ts;
   const incomingThreadTs = message.thread_ts;
   let didSetStatus = false;
+  let statusWasSet = false;
   let didAddTypingReaction = false;
   const statusReactionsEnabled =
     prepared.ctxPayload.InboundEventKind !== "room_event" &&
@@ -190,7 +191,7 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
       start: async () => {
         if (!didSetStatus && !threadStatusGate.hasVisibleOutput()) {
           didSetStatus = true;
-          await ctx.setSlackSessionStatus({
+          statusWasSet = await ctx.setSlackSessionStatus({
             channelId: message.channel,
             threadTs: statusThreadTs,
             status: "processing",
@@ -212,12 +213,24 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
       stop: async () => {
         if (didSetStatus) {
           didSetStatus = false;
-          await ctx.setSlackSessionStatus({
+          const reportFailure = statusWasSet;
+          statusWasSet = false;
+          const restored = await ctx.setSlackSessionStatus({
             channelId: message.channel,
             threadTs: statusThreadTs,
             status: "active",
             eventScope: prepared.eventScope,
           });
+          if (reportFailure && !restored) {
+            try {
+              runtime.error?.(
+                "Slack session status could not return to active after processing. " +
+                  "Enable verbose logging to inspect the Slack API failure.",
+              );
+            } catch {
+              // Diagnostics must not prevent the remaining typing-reaction cleanup.
+            }
+          }
         }
         // Tracked apart from the status write: a suppressed status refresh
         // still adds the reaction, and that reaction must still be removed.
@@ -267,13 +280,15 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
     (hookRunner?.hasHooks("message_sending") ?? false);
   // Portable previews and native progress cards exist before outbound modifiers accept the
   // payload. Native answer streaming stays enabled because it begins after both hook gates.
-  const allowPreHookProviderStreaming = !modifyingHooksRegistered;
+  const allowPreHookProviderStreaming =
+    !prepared.ctxPayload.GroupThread && !modifyingHooksRegistered;
   const previewStreamingEnabled =
     allowPreHookProviderStreaming && !sourceRepliesAreToolOnly && slackStreaming.mode !== "off";
   const hasSlackCustomIdentity = Boolean(
     slackIdentity?.username || slackIdentity?.iconUrl || slackIdentity?.iconEmoji,
   );
   const streamingEnabled =
+    !prepared.ctxPayload.GroupThread &&
     !sourceRepliesAreToolOnly &&
     (allowPreHookProviderStreaming || slackStreaming.mode !== "progress") &&
     isSlackStreamingEnabled({

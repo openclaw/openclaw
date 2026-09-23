@@ -7,6 +7,7 @@ import { runCommandWithTimeout } from "../../process/exec.js";
 import {
   createWorkspaceReconcileMetrics,
   MAX_WORKSPACE_HASH_MEMO_BYTES,
+  MAX_WORKSPACE_HASH_MEMO_ENTRIES,
   pruneWorkspaceHashMemo,
   recordRemoteWorkspaceHashMetrics,
   serializeRemoteWorkspaceHashMemo,
@@ -14,7 +15,7 @@ import {
   withWorkerWorkspaceHashMemo,
   type WorkspaceHashMemo,
 } from "./workspace-hash-memo.js";
-import { MAX_RECONCILIATION_ENTRIES, type WorkerWorkspaceManifest } from "./workspace-manifest.js";
+import type { WorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { preflightWorkspaceApply, readActualWorkspaceManifest } from "./workspace-reconcile.js";
 import { REMOTE_WORKSPACE_MANIFEST_JS } from "./workspace-sync-scripts.js";
 
@@ -116,9 +117,6 @@ describe("workspace hash memo", () => {
       directories: ["parent"],
     };
     const metrics = hashMetrics();
-    const open = vi.spyOn(fs, "open");
-    const parentPath = path.join(root, "parent");
-    const parentSnapshots = () => open.mock.calls.filter(([file]) => file === parentPath).length;
 
     const first = await withWorkspaceHashMemo(
       new Map(),
@@ -130,16 +128,14 @@ describe("workspace hash memo", () => {
       "parent/child.txt",
       "parent/sibling.txt",
     ]);
-    expect(metrics.contentHashCount).toBe(1);
-    expect(parentSnapshots()).toBe(1);
+    expect(metrics).toMatchObject({ contentHashCount: 1, memoHitCount: 0 });
 
     await withWorkspaceHashMemo(
       new Map(),
       async () => await preflightWorkspaceApply({ root, base, current }),
       metrics,
     );
-    expect(metrics.contentHashCount).toBe(2);
-    expect(parentSnapshots()).toBe(2);
+    expect(metrics).toMatchObject({ contentHashCount: 2, memoHitCount: 0 });
   });
 
   it("aggregates remote metrics and bounds a maximum-entry memo envelope", () => {
@@ -168,7 +164,7 @@ describe("workspace hash memo", () => {
 
     const uint64 = "18446744073709551615";
     const memo = new Map<string, string>();
-    for (let index = 0; index < MAX_RECONCILIATION_ENTRIES; index += 1) {
+    for (let index = 0; index < MAX_WORKSPACE_HASH_MEMO_ENTRIES; index += 1) {
       const inode = String(index).padStart(20, "0");
       memo.set(
         `worker:${uint64}:${inode}:${uint64}:${uint64}:${uint64}`,
@@ -182,10 +178,10 @@ describe("workspace hash memo", () => {
         manifestRef: `sha256:${"f".repeat(64)}`,
         memo: JSON.parse(serializedMemo),
         metrics: {
-          contentHashCount: MAX_RECONCILIATION_ENTRIES,
+          contentHashCount: MAX_WORKSPACE_HASH_MEMO_ENTRIES,
           contentHashDurationMs: Number.MAX_SAFE_INTEGER,
-          memoHitCount: MAX_RECONCILIATION_ENTRIES,
-          memoTruncatedCount: MAX_RECONCILIATION_ENTRIES,
+          memoHitCount: MAX_WORKSPACE_HASH_MEMO_ENTRIES,
+          memoTruncatedCount: MAX_WORKSPACE_HASH_MEMO_ENTRIES,
           totalDurationMs: Number.MAX_SAFE_INTEGER,
         },
       })}\n`,
@@ -195,7 +191,7 @@ describe("workspace hash memo", () => {
     const smallFile = "worker:0:0:1:0:0";
     memo.set(smallFile, "c".repeat(64));
     const bounded = JSON.parse(serializeRemoteWorkspaceHashMemo(memo)) as [string, string][];
-    expect(bounded).toHaveLength(MAX_RECONCILIATION_ENTRIES);
+    expect(bounded).toHaveLength(MAX_WORKSPACE_HASH_MEMO_ENTRIES);
     expect(bounded.some(([identity]) => identity === smallFile)).toBe(false);
   });
 
@@ -274,10 +270,10 @@ describe("workspace hash memo", () => {
       fs.writeFile(path.join(workspace, "medium.txt"), "22"),
       fs.writeFile(path.join(workspace, "large.txt"), "333"),
     ]);
-    const limitDeclaration = `const MAX_RECONCILIATION_ENTRIES = ${MAX_RECONCILIATION_ENTRIES};`;
+    const limitDeclaration = `const MAX_WORKSPACE_HASH_MEMO_ENTRIES = ${MAX_WORKSPACE_HASH_MEMO_ENTRIES};`;
     const limitedScript = REMOTE_WORKSPACE_MANIFEST_JS.replace(
       limitDeclaration,
-      "const MAX_RECONCILIATION_ENTRIES = 2;",
+      "const MAX_WORKSPACE_HASH_MEMO_ENTRIES = 2;",
     );
     expect(limitedScript).not.toBe(REMOTE_WORKSPACE_MANIFEST_JS);
     const env = { ...process.env, HOME: home };

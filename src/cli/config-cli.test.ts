@@ -11,6 +11,15 @@ import {
   createPluginManifestRecordFixture as createPluginManifestRecord,
   createPluginMetadataSnapshotFixture as createPluginMetadataSnapshot,
 } from "../plugins/plugin-metadata.test-support.js";
+import {
+  registerConfigSetModelReferenceTests,
+  registerConfigUnsetModelReferenceTest,
+} from "./config-cli.model-reference.test-support.js";
+import {
+  readConfigCliSnapshotWithMetadata,
+  type ConfigCliSnapshotReader,
+  type ConfigCliWriter,
+} from "./config-cli.snapshot.test-support.js";
 import type { ConfigSetDryRunResult } from "./config-set-dryrun.js";
 import { applyCliProfileEnv } from "./profile.js";
 
@@ -29,18 +38,8 @@ const { defaultRuntime, resetRuntimeCapture, mockRuntimeModule } = await vi.hois
  * but before runtime defaults), so runtime defaults don't leak into the written config.
  */
 
-const mockReadConfigFileSnapshot =
-  vi.fn<(options?: { observe?: boolean }) => Promise<ConfigFileSnapshot>>();
-const mockWriteConfigFile = vi.fn<
-  (
-    cfg: OpenClawConfig,
-    options?: {
-      auditOrigin?: "cli";
-      unsetPaths?: string[][];
-      explicitSetPaths?: string[][];
-    },
-  ) => Promise<void>
->(async () => {});
+const mockReadConfigFileSnapshot = vi.fn<ConfigCliSnapshotReader>();
+const mockWriteConfigFile = vi.fn<ConfigCliWriter>(async () => {});
 const mockResolveSecretRefValue = vi.fn();
 const mockCheckTouchedTextModelRefs = vi.fn();
 const mockReadBestEffortRuntimeConfigSchema = vi.fn();
@@ -96,24 +95,14 @@ vi.mock("../config/config.js", () => ({
     mockReadConfigFileSnapshot(...args),
   readConfigFileSnapshotWithPluginMetadata: async (
     ...args: Parameters<typeof mockReadConfigFileSnapshot>
-  ) => ({
-    snapshot: await mockReadConfigFileSnapshot(...args),
-    pluginMetadataSnapshot: createPluginMetadataSnapshot(),
-  }),
+  ) => readConfigCliSnapshotWithMetadata(mockReadConfigFileSnapshot, ...args),
   readConfigFileSnapshotForWrite: async () => ({
     snapshot: await mockReadConfigFileSnapshot(),
     writeOptions: {},
   }),
-  writeConfigFile: (
-    cfg: OpenClawConfig,
-    options?: {
-      auditOrigin?: "cli";
-      unsetPaths?: string[][];
-      explicitSetPaths?: string[][];
-    },
-  ) => mockWriteConfigFile(cfg, options),
+  writeConfigFile: (...args: Parameters<ConfigCliWriter>) => mockWriteConfigFile(...args),
   replaceConfigFile: (params: {
-    nextConfig: OpenClawConfig;
+    sourceConfig: OpenClawConfig;
     writeOptions?: {
       auditOrigin?: "cli";
       unsetPaths?: string[][];
@@ -122,7 +111,7 @@ vi.mock("../config/config.js", () => ({
     };
   }) => {
     params.writeOptions?.assertConfigPathForWrite?.();
-    return mockWriteConfigFile(params.nextConfig, params.writeOptions);
+    return mockWriteConfigFile(params.sourceConfig, params.writeOptions);
   },
 }));
 
@@ -177,22 +166,15 @@ vi.mock("./config-model-validation.js", () => ({
 
 vi.mock("../gateway/config-reload-plan.js", () => ({
   buildGatewayReloadPlan: (changedPaths: string[]) => {
-    const restartReasons = changedPaths.filter((changedPath) =>
-      changedPath.startsWith("plugins.load."),
-    );
     const hotReasons = changedPaths.filter(
       (changedPath) =>
-        !restartReasons.includes(changedPath) &&
-        (changedPath.startsWith("agents.entries.") ||
-          changedPath.startsWith("agents.defaults.models.") ||
-          changedPath.startsWith("models.") ||
-          changedPath.startsWith("plugins.")),
+        changedPath.startsWith("agents.entries.") ||
+        changedPath.startsWith("agents.defaults.models.") ||
+        changedPath.startsWith("models.") ||
+        changedPath === "plugins" ||
+        changedPath.startsWith("plugins."),
     );
-    restartReasons.push(
-      ...changedPaths.filter(
-        (changedPath) => !hotReasons.includes(changedPath) && !restartReasons.includes(changedPath),
-      ),
-    );
+    const restartReasons = changedPaths.filter((changedPath) => !hotReasons.includes(changedPath));
     return {
       changedPaths,
       restartGateway: restartReasons.length > 0,
@@ -470,17 +452,11 @@ function firstWrittenConfig(): OpenClawConfig {
   return written as OpenClawConfig;
 }
 
-function firstWriteConfigOptions():
-  | { auditOrigin?: "cli"; unsetPaths?: string[][]; explicitSetPaths?: string[][] }
-  | undefined {
+function firstWriteConfigOptions(): Parameters<ConfigCliWriter>[1] {
   return mockWriteConfigFile.mock.calls[0]?.[1];
 }
 
-function requireWriteOptions(): {
-  auditOrigin?: "cli";
-  unsetPaths?: string[][];
-  explicitSetPaths?: string[][];
-} {
+function requireWriteOptions(): NonNullable<Parameters<ConfigCliWriter>[1]> {
   const options = firstWriteConfigOptions();
   if (!options) {
     throw new Error("expected write options");
@@ -726,94 +702,16 @@ describe("config cli", () => {
       });
     });
 
-    it("normalizes retired Google Gemini model refs before writing config mutations", async () => {
-      const resolved: OpenClawConfig = {
-        agents: {
-          defaults: {
-            model: {
-              fallbacks: ["google/gemini-3-pro-preview"],
-            },
-            models: {
-              "google/gemini-3-pro-preview": { alias: "gemini" },
-            },
-          },
-        },
-      };
-      setSnapshot(resolved, resolved);
-
-      await runConfigCommand([
-        "config",
-        "set",
-        "agents.defaults.model.primary",
-        "google/gemini-3-pro-preview",
-      ]);
-
-      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
-      const written = firstWrittenConfig();
-      expect(written.agents?.defaults?.model).toEqual({
-        primary: "google/gemini-3.1-pro-preview",
-        fallbacks: ["google/gemini-3.1-pro-preview"],
-      });
-      expect(written.agents?.defaults?.models).toEqual({
-        "google/gemini-3.1-pro-preview": { alias: "gemini" },
-      });
-      expect(mockCheckTouchedTextModelRefs).toHaveBeenCalledWith({
-        config: written,
-        previousConfig: expect.any(Object),
-        touchedPaths: [["agents", "defaults", "model", "primary"]],
-        redactDependencyValues: true,
-      });
-    });
-
-    it("rejects an unresolved primary model before writing config", async () => {
-      const resolved: OpenClawConfig = {
-        agents: { defaults: { model: { primary: "openai/gpt-5.4-mini" } } },
-      };
-      setSnapshot(resolved, resolved);
-      mockCheckTouchedTextModelRefs.mockResolvedValueOnce({
-        refsChecked: 1,
-        refsTotal: 1,
-        errors: [
-          'Cannot set model reference "missing/nope" at agents.defaults.model.primary: Unknown model: missing/nope. Run openclaw models list to list available models.',
-        ],
-      });
-
-      await expect(runConfigSet("agents.defaults.model.primary", "missing/nope")).rejects.toThrow(
-        ExitError,
-      );
-
-      expect(mockWriteConfigFile).not.toHaveBeenCalled();
-      expectErrorIncludes('Cannot set model reference "missing/nope"');
-      expectErrorIncludes("openclaw models list");
-    });
-
-    it("preserves an authored env placeholder after model validation", async () => {
-      const resolved: OpenClawConfig = {
-        agents: { defaults: { model: { primary: "openai/gpt-5.4-mini" } } },
-      };
-      setSnapshot(resolved, resolved);
-      mockCheckTouchedTextModelRefs.mockResolvedValueOnce({
-        refsChecked: 1,
-        refsTotal: 1,
-        errors: [],
-      });
-
-      await runConfigSet("agents.defaults.model.primary", "${MODEL_REF}");
-
-      expect(firstWrittenConfig().agents?.defaults?.model).toEqual({
-        primary: "${MODEL_REF}",
-      });
-      expect(mockCheckTouchedTextModelRefs).toHaveBeenCalledWith({
-        config: expect.objectContaining({
-          agents: expect.objectContaining({
-            defaults: expect.objectContaining({ model: { primary: "${MODEL_REF}" } }),
-          }),
-        }),
-        previousConfig: resolved,
-        touchedPaths: [["agents", "defaults", "model", "primary"]],
-        redactDependencyValues: true,
-      });
-    });
+    registerConfigSetModelReferenceTests(() => ({
+      setSnapshot,
+      runConfigCommand,
+      runConfigSet,
+      firstWrittenConfig,
+      mockWriteConfigFile,
+      mockCheckTouchedTextModelRefs,
+      expectErrorIncludes,
+      ExitError,
+    }));
 
     it("reports an unresolved primary model in dry-run JSON without writing config", async () => {
       const resolved: OpenClawConfig = {
@@ -1452,6 +1350,17 @@ describe("config cli", () => {
   });
 
   describe("config get", () => {
+    it.each([
+      { args: ["gateway.port", ""], code: "commander.excessArguments" },
+      { args: ["gateway.port", "", "--json"], code: "commander.excessArguments" },
+      { args: ["gateway.port", "", "--unknown"], code: "commander.unknownOption" },
+    ])("rejects malformed getter argv $args before reading config", async ({ args, code }) => {
+      await expect(runConfigCommand(["config", "get", ...args])).rejects.toMatchObject({ code });
+      expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expect(mockLog).not.toHaveBeenCalled();
+    });
+
     it("reads the valid configuration without observing persistent health state", async () => {
       setGatewaySnapshot();
 
@@ -1642,7 +1551,10 @@ describe("config cli", () => {
 
       await runConfigCommand(["config", "validate"]);
 
-      expect(mockReadConfigFileSnapshot).toHaveBeenCalledWith({ observe: false });
+      expect(mockReadConfigFileSnapshot).toHaveBeenCalledWith({
+        observe: false,
+        prepareValidation: "strict",
+      });
     });
 
     it("prints success and exits 0 when config is valid", async () => {
@@ -4794,41 +4706,16 @@ describe("config cli", () => {
       expect(mockReadConfigFileSnapshot).toHaveBeenCalledTimes(1);
     });
 
-    it("rejects an unset that makes a dependent model reference unresolved", async () => {
-      const resolved: OpenClawConfig = {
-        agents: {
-          defaults: {
-            model: {
-              primary: "provider-a/main",
-              fallbacks: ["backup"],
-            },
-          },
-        },
-      };
-      setSnapshot(resolved, resolved);
-      mockCheckTouchedTextModelRefs.mockResolvedValueOnce({
-        refsChecked: 1,
-        refsTotal: 1,
-        errors: [
-          'Cannot set model reference "backup" at agents.defaults.model.fallbacks.0: Unknown model: openai/backup. Run openclaw models list to list available models.',
-        ],
-      });
-
-      await expect(
-        runConfigCommand(["config", "unset", "agents.defaults.model.primary"]),
-      ).rejects.toThrow(ExitError);
-
-      expect(mockWriteConfigFile).not.toHaveBeenCalled();
-      expect(mockCheckTouchedTextModelRefs).toHaveBeenCalledWith({
-        config: {
-          agents: { defaults: { model: { fallbacks: ["backup"] } } },
-        },
-        previousConfig: resolved,
-        touchedPaths: [["agents", "defaults", "model", "primary"]],
-        redactDependencyValues: true,
-      });
-      expectErrorIncludes('Cannot set model reference "backup"');
-    });
+    registerConfigUnsetModelReferenceTest(() => ({
+      setSnapshot,
+      runConfigCommand,
+      runConfigSet,
+      firstWrittenConfig,
+      mockWriteConfigFile,
+      mockCheckTouchedTextModelRefs,
+      expectErrorIncludes,
+      ExitError,
+    }));
 
     it("reports an unset model failure through dry-run JSON", async () => {
       const resolved: OpenClawConfig = {
@@ -5174,7 +5061,10 @@ describe("config cli", () => {
       expectLogExcludes("Restart the gateway to apply.");
     });
 
-    it("keeps the restart hint for hot-path edits when reload mode is off", async () => {
+    it.each([
+      ["agents.list[0].model.primary", '"openai/gpt-5.5"'],
+      ["plugins.entries.canvas.enabled", "false"],
+    ])("keeps the restart hint for %s when reload mode is off", async (configPath, value) => {
       const resolved: OpenClawConfig = {
         agents: {
           entries: { main: { model: { primary: "openai/gpt-5.4" } } },
@@ -5182,18 +5072,13 @@ describe("config cli", () => {
         gateway: {
           reload: { mode: "off" },
         },
+        plugins: { entries: { canvas: { enabled: true } } },
       };
       setSnapshot(resolved, withRuntimeDefaults(resolved));
 
-      await runConfigCommand([
-        "config",
-        "set",
-        "agents.list[0].model.primary",
-        '"openai/gpt-5.5"',
-        "--strict-json",
-      ]);
+      await runConfigCommand(["config", "set", configPath, value, "--strict-json"]);
 
-      expectLogIncludes("Updated agents.list[0].model.primary");
+      expectLogIncludes(`Updated ${configPath}`);
       expectLogIncludes("Restart the gateway to apply.");
       expectLogExcludes("Change will apply without restarting the gateway.");
     });
@@ -5264,7 +5149,7 @@ describe("config cli", () => {
       expectLogExcludes("Restart the gateway to apply.");
     });
 
-    it("keeps the restart hint for broad plugins writes that change load paths", async () => {
+    it("prints a hot-reload hint for broad plugins writes that change load paths", async () => {
       const resolved: OpenClawConfig = {
         plugins: {
           load: {
@@ -5286,11 +5171,11 @@ describe("config cli", () => {
         "--replace",
       ]);
 
-      expectLogIncludes("Updated plugins. Restart the gateway to apply.");
-      expectLogExcludes("Change will apply without restarting the gateway.");
+      expectLogIncludes("Updated plugins. Change will apply without restarting the gateway.");
+      expectLogExcludes("Restart the gateway to apply.");
     });
 
-    it("keeps the restart hint for broad plugins unsets that remove load paths", async () => {
+    it("prints a hot-reload hint for broad plugins unsets that remove load paths", async () => {
       const resolved: OpenClawConfig = {
         plugins: {
           load: {
@@ -5305,8 +5190,8 @@ describe("config cli", () => {
 
       await runConfigCommand(["config", "unset", "plugins"]);
 
-      expectLogIncludes("Removed plugins. Restart the gateway to apply.");
-      expectLogExcludes("Change will apply without restarting the gateway.");
+      expectLogIncludes("Removed plugins. Change will apply without restarting the gateway.");
+      expectLogExcludes("Restart the gateway to apply.");
     });
 
     it("keeps the restart hint for restart-required config paths", async () => {
@@ -5326,26 +5211,23 @@ describe("config cli", () => {
       ["canvas", "plugins.entries.canvas.enabled"],
       ["canvas.internal", 'plugins.entries["canvas.internal"].enabled'],
       ["canvas", "plugins.entries.canvas.config.accounts[0].enabled"],
-    ])(
-      "keeps plugin entry %s writes unambiguous and restart-backed",
-      async (pluginId, configPath) => {
-        const resolved = {
-          plugins: {
-            entries: {
-              [pluginId]: { enabled: true, config: { accounts: [{ enabled: true }] } },
-            },
+    ])("prints a hot-reload hint for plugin entry %s writes", async (pluginId, configPath) => {
+      const resolved = {
+        plugins: {
+          entries: {
+            [pluginId]: { enabled: true, config: { accounts: [{ enabled: true }] } },
           },
-        } as unknown as OpenClawConfig;
-        setSnapshot(resolved, resolved);
+        },
+      } as unknown as OpenClawConfig;
+      setSnapshot(resolved, resolved);
 
-        await runConfigSet(configPath, "false");
+      await runConfigSet(configPath, "false");
 
-        expectLogIncludes(`Updated ${configPath}`);
-        expectLogIncludes("Restart the gateway to apply.");
-        expectLogExcludes("Change will apply without restarting the gateway.");
-        expectLogExcludes("No gateway restart needed.");
-      },
-    );
+      expectLogIncludes(`Updated ${configPath}`);
+      expectLogIncludes("Change will apply without restarting the gateway.");
+      expectLogExcludes("Restart the gateway to apply.");
+      expectLogExcludes("No gateway restart needed.");
+    });
 
     it("keeps the restart hint for mixed hot and restart batch updates", async () => {
       const resolved: OpenClawConfig = {

@@ -203,6 +203,23 @@ describe("handleSteerCommand", () => {
     }
   });
 
+  it.each([
+    "/steer stop the deploy\nand revert the migration first",
+    "/tell stop the deploy\nand revert the migration first",
+    "/steer\nstop the deploy\nand revert the migration first",
+  ])("steers with every line of %j", async (commandBody) => {
+    beginActiveOperation("agent:main:main");
+    const params = buildParams(commandBody);
+
+    const result = await handleSteerCommand(params, true);
+
+    const message = "stop the deploy\nand revert the migration first";
+    expect(result).toEqual({ shouldContinue: true, queueModeOverride: "steer" });
+    expect(params.ctx.Body).toBe(message);
+    expect(params.ctx.BodyForAgent).toBe(message);
+    expect(params.command.commandBodyNormalized).toBe(message);
+  });
+
   it("returns usage for an empty steer command", async () => {
     const result = await handleSteerCommand(buildParams("/steer"), true);
 

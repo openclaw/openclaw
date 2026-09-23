@@ -9,8 +9,13 @@ import {
   writeBuildStamp,
   writeRuntimePostBuildStamp,
 } from "../scripts/lib/local-build-metadata.mts";
+import { writeUpdateCompatibilityChunks } from "../scripts/lib/update-compat-chunks.mts";
 import { listCoreRuntimePostBuildOutputs } from "../scripts/runtime-postbuild.mts";
 import { spawnNodeEvalSync } from "../src/test-utils/node-process.ts";
+import {
+  previousReleaseInventory,
+  writeUpdateCompatibilityBuildFixture,
+} from "./scripts/update-compat-chunks.test-support.js";
 import { assertPrebuiltUiE2eRuntime } from "./vitest/vitest.ui-e2e-prebuilt.global-setup.ts";
 
 let root: string;
@@ -48,13 +53,21 @@ beforeEach(() => {
     "-m",
     "fixture",
   );
+  writeUpdateCompatibilityBuildFixture(root);
+  writeUpdateCompatibilityChunks({
+    distDir: path.join(root, "dist"),
+    sourceDir: root,
+    inventory: previousReleaseInventory,
+  });
   for (const file of [
     "dist/entry.js",
     "dist/plugin-sdk/qa-lab.js",
     "dist/plugin-sdk/qa-runtime.js",
     ...listCoreRuntimePostBuildOutputs({ rootDir: root }),
   ]) {
-    write(file);
+    if (!fs.existsSync(path.join(root, file))) {
+      write(file);
+    }
   }
   write("dist/control-ui/index.html", '<script src="./assets/entry.js"></script>');
   write("dist/control-ui/assets/entry.js");

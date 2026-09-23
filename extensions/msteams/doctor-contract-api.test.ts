@@ -3,6 +3,8 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
@@ -12,6 +14,7 @@ import type {
   PluginDoctorStateMigrationContext,
   PluginStateKeyedStore,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   legacyConfigRules,
@@ -32,6 +35,7 @@ import {
 import type { MSTeamsDelegatedTokens } from "./src/oauth.shared.js";
 import {
   buildMSTeamsPollStateKey,
+  createMSTeamsPollStoreState,
   buildMSTeamsPollVoteBucketKey,
   MSTEAMS_POLL_VOTE_BUCKETS_NAMESPACE,
   MSTEAMS_POLLS_NAMESPACE,
@@ -40,12 +44,14 @@ import {
   type StoredMSTeamsPoll,
   type StoredMSTeamsPollVoteBucket,
 } from "./src/polls.js";
+import { setMSTeamsRuntime } from "./src/runtime.js";
 import {
   makeMSTeamsSsoTokenStoreKey,
   MSTEAMS_MAX_SSO_TOKENS,
   MSTEAMS_SSO_TOKENS_NAMESPACE,
   type MSTeamsSsoStoredToken,
 } from "./src/sso-token-store.js";
+import { msteamsRuntimeStub } from "./src/test-support/runtime.js";
 
 function createDoctorContext(env: NodeJS.ProcessEnv): PluginDoctorStateMigrationContext {
   return {
@@ -85,6 +91,7 @@ describe("msteams doctor state migration", () => {
   });
 
   afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     await fs.rm(stateDir, { recursive: true, force: true });
   });
@@ -135,7 +142,7 @@ describe("msteams doctor state migration", () => {
       expect.stringContaining("Archived Microsoft Teams conversation legacy source"),
     ]);
     await expect(fs.access(filePath)).rejects.toThrow();
-    await expect(fs.access(`${filePath}.migrated`)).resolves.toBeUndefined();
+    await fs.access(`${filePath}.migrated`);
     const store = context.openPluginStateKeyedStore<StoredConversationReference>({
       namespace: MSTEAMS_CONVERSATIONS_NAMESPACE,
       maxEntries: 2000,
@@ -148,7 +155,7 @@ describe("msteams doctor state migration", () => {
     });
   });
 
-  it("imports legacy polls and vote buckets into plugin state", async () => {
+  it("serializes poll import and archiving with runtime voting and pruning", async () => {
     const filePath = path.join(stateDir, "msteams-polls.json");
     const legacyBucket = selectMSTeamsPollVoteBucket("poll-legacy", "user-legacy");
     const sameBucketVoter = Array.from({ length: 1000 }, (_, index) => `collision-${index}`).find(
@@ -175,6 +182,7 @@ describe("msteams doctor state migration", () => {
         },
       })}\n`,
     );
+    const originalSource = await fs.readFile(filePath, "utf8");
     const context = createDoctorContext(env);
     const voteBucketStore = context.openPluginStateKeyedStore<StoredMSTeamsPollVoteBucket>({
       namespace: MSTEAMS_POLL_VOTE_BUCKETS_NAMESPACE,
@@ -187,15 +195,77 @@ describe("msteams doctor state migration", () => {
       updatedAt: poll.createdAt,
     });
 
+    const expiredPoll = {
+      ...poll,
+      id: "poll-expired",
+      createdAt: new Date(Date.now() - 31 * 86400000).toISOString(),
+    };
+    const metadataStore = context.openPluginStateKeyedStore<StoredMSTeamsPoll>({
+      namespace: MSTEAMS_POLLS_NAMESPACE,
+      maxEntries: 2000,
+    });
+    const { votes: _expiredVotes, ...expiredMetadata } = expiredPoll;
+    await metadataStore.register(buildMSTeamsPollStateKey(expiredPoll.id), expiredMetadata);
+    const expiredBucketKey = buildMSTeamsPollVoteBucketKey(expiredPoll.id, "0000");
+    await voteBucketStore.register(expiredBucketKey, {
+      pollId: expiredPoll.id,
+      bucket: "0000",
+      votes: { expiredVoter: ["0"] },
+      updatedAt: expiredPoll.createdAt,
+    });
+    const importRead = createDeferred<void>();
+    const resumeImport = createDeferred<void>();
+    let paused = false;
     const migration = migrationById("msteams-polls-json-to-plugin-state");
     const params = {
       config: {},
       env,
       stateDir,
       oauthDir: path.join(stateDir, "oauth"),
-      context,
+      context: {
+        openPluginStateKeyedStore<T>(options: OpenKeyedStoreOptions): PluginStateKeyedStore<T> {
+          const target = context.openPluginStateKeyedStore<T>(options);
+          return {
+            ...target,
+            lookup: async (key) => {
+              const current = await target.lookup(key);
+              if (
+                !paused &&
+                options.namespace === MSTEAMS_POLL_VOTE_BUCKETS_NAMESPACE &&
+                key === buildMSTeamsPollVoteBucketKey(poll.id, legacyBucket)
+              ) {
+                paused = true;
+                importRead.resolve();
+                await resumeImport.promise;
+              }
+              return current;
+            },
+          };
+        },
+      },
     };
-    const result = await migration.migrateLegacyState(params);
+    setMSTeamsRuntime(msteamsRuntimeStub);
+    const runtimeStore = createMSTeamsPollStoreState({ stateDir });
+    const importing = migration.migrateLegacyState(params);
+    await importRead.promise;
+    const voting = runtimeStore.recordVote({
+      pollId: poll.id,
+      voterId: sameBucketVoter,
+      selections: ["1"],
+    });
+    try {
+      expect(await Promise.race([voting.then(() => "completed"), delay(250, "pending")])).toBe(
+        "pending",
+      );
+    } finally {
+      resumeImport.resolve();
+      await Promise.all([importing, voting]);
+    }
+    const result = await importing;
+    await expect(
+      metadataStore.lookup(buildMSTeamsPollStateKey(expiredPoll.id)),
+    ).resolves.toBeUndefined();
+    await expect(voteBucketStore.lookup(expiredBucketKey)).resolves.toBeUndefined();
 
     expect(result.warnings).toEqual([]);
     expect(result.changes).toEqual([
@@ -214,15 +284,16 @@ describe("msteams doctor state migration", () => {
     await expect(
       voteBucketStore.lookup(buildMSTeamsPollVoteBucketKey("poll-legacy", legacyBucket)),
     ).resolves.toMatchObject({
-      votes: { "user-legacy": ["1"], [sameBucketVoter]: ["0"] },
+      votes: { "user-legacy": ["1"], [sameBucketVoter]: ["1"] },
     });
     await expect(
       voteBucketStore.lookup(buildMSTeamsPollVoteBucketKey("poll-legacy", newBucket)),
     ).resolves.toMatchObject({
       votes: { "user-new": ["1"] },
     });
-    await expect(fs.access(`${filePath}.migrated`)).resolves.toBeUndefined();
+    await fs.access(`${filePath}.migrated`);
     const source = await fs.readFile(`${filePath}.migrated`, "utf8");
+    expect(source).toBe(originalSource);
     const beforeRerun = await voteBucketStore.entries();
     await fs.writeFile(filePath, source);
     const rerun = await migration.migrateLegacyState(params);
@@ -230,8 +301,10 @@ describe("msteams doctor state migration", () => {
     expect(rerun.changes).toContainEqual(
       expect.stringContaining("Removed already-archived Microsoft Teams poll legacy source"),
     );
-    expect((await voteBucketStore.entries()).map(({ key, value }) => ({ key, value }))).toEqual(
-      beforeRerun.map(({ key, value }) => ({ key, value })),
+    expect(
+      new Map((await voteBucketStore.entries()).map(({ key, value }) => [key, value])),
+    ).toEqual(
+      new Map(beforeRerun.map(({ key, value }) => [key, { ...value, updatedAt: poll.createdAt }])),
     );
     await expect(fs.readFile(`${filePath}.migrated`, "utf8")).resolves.toBe(source);
     await expect(migration.detectLegacyState(params)).resolves.toBeNull();
@@ -279,7 +352,7 @@ describe("msteams doctor state migration", () => {
     ).resolves.toEqual(token);
     expect(result.changes.join("\n")).not.toContain(token.token);
     expect(result.warnings.join("\n")).not.toContain(token.token);
-    await expect(fs.access(`${filePath}.migrated`)).resolves.toBeUndefined();
+    await fs.access(`${filePath}.migrated`);
   });
 
   it.each([
@@ -419,7 +492,7 @@ describe("msteams doctor state migration", () => {
       overflowPolicy: "reject-new",
     });
     await expect(store.lookup(MSTEAMS_DELEGATED_TOKEN_KEY)).resolves.toEqual(token);
-    await expect(fs.access(`${filePath}.migrated`)).resolves.toBeUndefined();
+    await fs.access(`${filePath}.migrated`);
   });
 
   it("does not register a doctor migration for pending-upload cache files", () => {
@@ -498,8 +571,8 @@ describe("msteams doctor state migration", () => {
     expect(result.warnings).toEqual([]);
     await expect(fs.access(encodedSourcePath)).rejects.toThrow();
     await expect(fs.access(sanitizedSourcePath)).rejects.toThrow();
-    await expect(fs.access(`${encodedSourcePath}.migrated`)).resolves.toBeUndefined();
-    await expect(fs.access(`${sanitizedSourcePath}.migrated`)).resolves.toBeUndefined();
+    await fs.access(`${encodedSourcePath}.migrated`);
+    await fs.access(`${sanitizedSourcePath}.migrated`);
 
     const store = context.openPluginStateKeyedStore({
       namespace: "feedback-learnings",

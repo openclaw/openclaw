@@ -1,12 +1,15 @@
 import { spawnSync } from "node:child_process";
 import {
+  chmodSync,
   copyFileSync,
   cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -32,6 +35,18 @@ function writeFixtureFile(packageRoot: string, relativePath: string, content: st
   const filePath = join(packageRoot, relativePath);
   mkdirSync(dirname(filePath), { recursive: true });
   writeFileSync(filePath, content);
+}
+
+function chmodTreeWorldReadable(dir: string): void {
+  chmodSync(dir, 0o755);
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const entryPath = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      chmodTreeWorldReadable(entryPath);
+    } else {
+      chmodSync(entryPath, statSync(entryPath).mode & 0o111 ? 0o755 : 0o644);
+    }
+  }
 }
 
 function withPackedPackage(
@@ -87,6 +102,8 @@ function withPackedPackage(
     }
     for (const relativePath of [
       "scripts/postinstall-bundled-plugins.mjs",
+      "scripts/lib/fs-safe-prebuild.mjs",
+      "scripts/windows-cmd-helpers.mjs",
       "scripts/lib/guard-inventory-utils.mjs",
       "scripts/lib/package-dist-imports.mjs",
       "scripts/lib/package-lifecycle-marker.mjs",
@@ -97,11 +114,14 @@ function withPackedPackage(
     }
     if (options.postinstall !== false) {
       // Offline npm must exercise the same bundled TypeScript AST dependency
-      // that the real postinstall uses to preserve its complete import graph.
+      // that the real postinstall uses. Dereference pnpm's package-root link so
+      // mode normalization stays inside the fixture instead of touching the source.
       cpSync(typescriptRoot, join(packageRoot, "node_modules/typescript"), {
+        dereference: true,
         recursive: true,
       });
     }
+    chmodTreeWorldReadable(packageRoot);
 
     const packed = spawnSync(
       "npm",

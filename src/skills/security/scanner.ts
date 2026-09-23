@@ -1,9 +1,12 @@
 // Skill security scanner inspects skill files and manifests for unsafe patterns.
+import type { Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { hasErrnoCode } from "../../infra/errors.js";
+import { readFileHandleBounded } from "../../infra/fs-safe-advanced.js";
+import { FsSafeError, openLocalFileSafely } from "../../infra/fs-safe.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { isPathInside } from "../../security/scan-paths.js";
 import { formatScanEvidence, LITERAL_SECRET_SKILL_CONTENT_RULE } from "./scan-evidence.js";
@@ -66,9 +69,10 @@ const DIR_ENTRY_CACHE_MAX = 5000;
 const TEST_DIRECTORY_NAMES = new Set(["__fixtures__", "__mocks__", "__tests__", "test", "tests"]);
 const TEST_FILE_NAME_PATTERN = /\.(?:mock|spec|test|test-helper|test-support)\.[^.]+$/i;
 
+type FileScanIdentity = Pick<Stats, "dev" | "ino" | "size" | "mtimeMs" | "ctimeMs">;
+
 type FileScanCacheEntry = {
-  size: number;
-  mtimeMs: number;
+  identity: FileScanIdentity;
   maxFileBytes: number;
   scanned: boolean;
   findings: SkillScanFinding[];
@@ -95,8 +99,7 @@ export function isScannable(filePath: string): boolean {
 
 function getCachedFileScanResult(params: {
   filePath: string;
-  size: number;
-  mtimeMs: number;
+  identity: FileScanIdentity;
   maxFileBytes: number;
 }): FileScanCacheEntry | undefined {
   const cached = FILE_SCAN_CACHE.get(params.filePath);
@@ -104,14 +107,27 @@ function getCachedFileScanResult(params: {
     return undefined;
   }
   if (
-    cached.size !== params.size ||
-    cached.mtimeMs !== params.mtimeMs ||
+    !sameFileScanIdentity(cached.identity, params.identity) ||
     cached.maxFileBytes !== params.maxFileBytes
   ) {
     FILE_SCAN_CACHE.delete(params.filePath);
     return undefined;
   }
   return cached;
+}
+
+function fileScanIdentity({ dev, ino, size, mtimeMs, ctimeMs }: Stats): FileScanIdentity {
+  return { dev, ino, size, mtimeMs, ctimeMs };
+}
+
+function sameFileScanIdentity(left: FileScanIdentity, right: FileScanIdentity): boolean {
+  return (
+    left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.size === right.size &&
+    left.mtimeMs === right.mtimeMs &&
+    left.ctimeMs === right.ctimeMs
+  );
 }
 
 function setCachedFileScanResult(filePath: string, entry: FileScanCacheEntry): void {
@@ -219,25 +235,6 @@ const SOURCE_RULES: SourceRule[] = [
 
 const SKILL_CONTENT_RULES: SourceRule[] = [
   LITERAL_SECRET_SKILL_CONTENT_RULE,
-  {
-    ruleId: "prompt-injection-ignore-instructions",
-    severity: "critical",
-    message: "Prompt-injection wording attempts to override higher-priority instructions",
-    pattern: /\bignore\s+(?:(?:all|any)\s+)?(?:previous|above|prior|all|any)\s+instructions\b/i,
-  },
-  {
-    ruleId: "prompt-injection-system",
-    severity: "critical",
-    message: "Skill text references hidden prompt layers",
-    pattern: /\b(?:system\s+prompt|developer\s+message|hidden\s+instructions)\b/i,
-  },
-  {
-    ruleId: "prompt-injection-tool",
-    severity: "critical",
-    message: "Skill text encourages bypassing tool approval",
-    pattern:
-      /\b(run|execute|invoke|call)\b[\s\S]{0,50}\btool\b[\s\S]{0,50}\bwithout\b[\s\S]{0,30}\b(permission|approval)/i,
-  },
   {
     ruleId: "shell-pipe-to-shell",
     severity: "critical",
@@ -950,8 +947,7 @@ async function scanFileWithCache(params: {
   }
   const cached = getCachedFileScanResult({
     filePath,
-    size: st.size,
-    mtimeMs: st.mtimeMs,
+    identity: st,
     maxFileBytes,
   });
   if (cached) {
@@ -963,8 +959,7 @@ async function scanFileWithCache(params: {
 
   if (st.size > maxFileBytes) {
     const skippedEntry: FileScanCacheEntry = {
-      size: st.size,
-      mtimeMs: st.mtimeMs,
+      identity: fileScanIdentity(st),
       maxFileBytes,
       scanned: false,
       findings: [],
@@ -973,24 +968,36 @@ async function scanFileWithCache(params: {
     return { scanned: false, findings: [] };
   }
 
-  let source: string;
   try {
-    source = await fs.readFile(filePath, "utf-8");
+    // Explicitly included entrypoints may be symlinked outside the scan directory.
+    const opened = await openLocalFileSafely({ filePath: await fs.realpath(filePath) });
+    try {
+      const content = await readFileHandleBounded(opened.handle, maxFileBytes);
+      const after = await opened.handle.stat();
+      if (!sameFileScanIdentity(opened.stat, after) || content.byteLength !== after.size) {
+        throw new Error(`File changed while scanning: ${filePath}`);
+      }
+      const findings = scanSource(content.toString("utf8"), filePath);
+      setCachedFileScanResult(filePath, {
+        identity: fileScanIdentity(after),
+        maxFileBytes,
+        scanned: true,
+        findings,
+      });
+      return { scanned: true, findings };
+    } finally {
+      await opened.handle.close();
+    }
   } catch (err) {
-    if (hasErrnoCode(err, "ENOENT")) {
+    if (
+      hasErrnoCode(err, "ENOENT") ||
+      (err instanceof FsSafeError &&
+        (err.code === "not-found" || err.code === "not-file" || err.code === "too-large"))
+    ) {
       return { scanned: false, findings: [] };
     }
     throw err;
   }
-  const findings = scanSource(source, filePath);
-  setCachedFileScanResult(filePath, {
-    size: st.size,
-    mtimeMs: st.mtimeMs,
-    maxFileBytes,
-    scanned: true,
-    findings,
-  });
-  return { scanned: true, findings };
 }
 
 export async function scanDirectoryWithSummary(

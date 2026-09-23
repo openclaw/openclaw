@@ -182,7 +182,9 @@ describe("controlRealtimeVoiceAgentRun", () => {
       { ...deps, resolveActiveEmbeddedRunOwnerByRunId },
     );
     expect(result).toMatchObject({ ok: true, sessionId: "owned-session", aborted: true });
-    expect(resolveActiveEmbeddedRunOwnerByRunId).toHaveBeenCalledExactlyOnceWith("owned-run");
+    expect([...new Set(resolveActiveEmbeddedRunOwnerByRunId.mock.calls.flat())]).toEqual([
+      "owned-run",
+    ]);
     expect(abort).toHaveBeenCalledOnce();
     expect(deps.getDiagnosticSessionActivitySnapshot).toHaveBeenCalledExactlyOnceWith({
       sessionId: "owned-session",

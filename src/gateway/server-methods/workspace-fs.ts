@@ -132,7 +132,7 @@ export type WorkspaceFileUpdateResult =
   | { status: "conflict"; currentHash: string }
   | { status: "unsafe" };
 
-function enqueueWorkspaceFileUpdate<T>(update: () => Promise<T>): Promise<T> {
+export function enqueueWorkspaceFileUpdate<T>(update: () => Promise<T>): Promise<T> {
   const result = workspaceFileUpdateQueue.then(update, update);
   workspaceFileUpdateQueue = result.then(
     () => undefined,
@@ -146,6 +146,7 @@ export async function updateWorkspaceFile(
   browserPath: string,
   content: string,
   expectedHash: string,
+  assertCurrent?: () => void,
 ): Promise<WorkspaceFileUpdateResult> {
   const workspaceRoot = await openWorkspaceRoot(rootDir);
   if (!workspaceRoot) {
@@ -173,12 +174,13 @@ export async function updateWorkspaceFile(
     if (currentHash !== expectedHash) {
       return { status: "conflict", currentHash };
     }
+    assertCurrent?.();
     await workspaceRoot.write(browserPath, content, {
       encoding: "utf8",
       renameIdentity: "strict",
     });
     const stat = await workspaceRoot.stat(browserPath);
-    if (workspaceStatKind(stat) !== "file") {
+    if (!stat.isFile) {
       return { status: "unsafe" };
     }
     return {
@@ -232,34 +234,6 @@ export function resolveWorkspacePath(
   }
   const resolved = path.resolve(root, filePath);
   return isPathInside(root, resolved) ? resolved : undefined;
-}
-
-export function workspaceStatKind(
-  stat: WorkspacePathStat,
-): "file" | "directory" | "symlink" | undefined {
-  const kind = (stat as { kind?: unknown }).kind;
-  if (kind === "file" || kind === "directory" || kind === "symlink") {
-    return kind;
-  }
-  const nodeStat = stat as {
-    isDirectory?: boolean | (() => boolean);
-    isFile?: boolean | (() => boolean);
-    isSymbolicLink?: boolean | (() => boolean);
-  };
-  const isFile = typeof nodeStat.isFile === "function" ? nodeStat.isFile() : nodeStat.isFile;
-  if (isFile) {
-    return "file";
-  }
-  const isDirectory =
-    typeof nodeStat.isDirectory === "function" ? nodeStat.isDirectory() : nodeStat.isDirectory;
-  if (isDirectory) {
-    return "directory";
-  }
-  const isSymbolicLink =
-    typeof nodeStat.isSymbolicLink === "function"
-      ? nodeStat.isSymbolicLink()
-      : nodeStat.isSymbolicLink;
-  return isSymbolicLink ? "symlink" : undefined;
 }
 
 /** Protocol timestamps are integer milliseconds. */

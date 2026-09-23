@@ -10,8 +10,10 @@ import {
 } from "./sqlite-reliability-contract.js";
 import {
   waitForReliabilityWorkerExit,
+  waitForReliabilityWorkerMessage,
   type ReliabilityWorkerExit,
 } from "./sqlite-reliability-process.js";
+import { resolveForwardedNodeCompilerArgs } from "./tsx-cli-shim.mjs";
 
 type WriterReadyMessage = {
   kind: "ready";
@@ -71,7 +73,7 @@ export function startWriter(databasePath: string, profile: ProfileConfig): Write
       String(profile.writerPauseMs),
     ],
     {
-      execArgv: ["--import", "tsx"],
+      execArgv: [...resolveForwardedNodeCompilerArgs(), "--import", "tsx"],
       serialization: "json",
       stdio: ["ignore", "ignore", "pipe", "ipc"],
     },
@@ -89,50 +91,22 @@ export async function waitForWriterMessage<T extends WriterMessage["kind"]>(
   kind: T,
   action?: () => void,
 ): Promise<Extract<WriterMessage, { kind: T }>> {
-  return await new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      cleanup();
-      reject(
-        new Error(
-          `SQLite reliability writer timed out waiting for ${kind}.${formatReliabilityStderr(writer.stderr.join(""))}`,
-        ),
-      );
-    }, WRITER_MESSAGE_TIMEOUT_MS);
-    const onMessage = (message: WriterMessage) => {
+  const result = await waitForReliabilityWorkerMessage({
+    action,
+    child: writer.child,
+    matches: (message: WriterMessage) => {
       if (message.kind === "error") {
-        cleanup();
-        reject(new Error(`SQLite reliability writer failed: ${message.error}`));
-        return;
+        throw new Error(`SQLite reliability writer failed: ${message.error}`);
       }
-      if (message.kind !== kind) {
-        return;
-      }
-      cleanup();
-      resolve(message as Extract<WriterMessage, { kind: T }>);
-    };
-    const onError = (error: Error) => {
-      cleanup();
-      reject(error);
-    };
-    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
-      cleanup();
-      reject(
-        new Error(
-          `SQLite reliability writer exited before ${kind}: code=${String(code)} signal=${String(signal)}.${formatReliabilityStderr(writer.stderr.join(""))}`,
-        ),
-      );
-    };
-    const cleanup = () => {
-      clearTimeout(timeout);
-      writer.child.off("message", onMessage);
-      writer.child.off("error", onError);
-      writer.child.off("exit", onExit);
-    };
-    writer.child.on("message", onMessage);
-    writer.child.on("error", onError);
-    writer.child.on("exit", onExit);
-    action?.();
+      return message.kind === kind;
+    },
+    timeoutMs: WRITER_MESSAGE_TIMEOUT_MS,
+    timeoutMessage: () =>
+      `SQLite reliability writer timed out waiting for ${kind}.${formatReliabilityStderr(writer.stderr.join(""))}`,
+    exitMessage: (code, signal) =>
+      `SQLite reliability writer exited before ${kind}: code=${String(code)} signal=${String(signal)}.${formatReliabilityStderr(writer.stderr.join(""))}`,
   });
+  return result as Extract<WriterMessage, { kind: T }>;
 }
 
 export async function stopWriter(writer: WriterHandle): Promise<WriterResultMessage> {

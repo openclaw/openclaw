@@ -65,9 +65,9 @@ export function createWorkerLiveTrajectoryRecorder(params: {
 export function recordWorkerLiveTrajectoryEvent(
   recorder: WorkerLiveTrajectoryRecorder,
   event: WorkerLiveEventParams["event"],
-): void {
+): Promise<void> | undefined {
   if (!recorder) {
-    return;
+    return undefined;
   }
   // Live listeners can mutate their copy; prepare independent diagnostics only
   // for phases that the trajectory records.
@@ -80,7 +80,7 @@ export function recordWorkerLiveTrajectoryEvent(
         success: !event.payload.isError,
       });
     } else {
-      return;
+      return undefined;
     }
   } else if (event.kind === "approval") {
     recorder.recordEvent(`approval.${event.payload.phase}`, prepareWorkerLiveEventData(event));
@@ -110,12 +110,12 @@ export function recordWorkerLiveTrajectoryEvent(
         status: interrupted ? "interrupted" : failed ? "error" : "success",
       });
     } else {
-      return;
+      return undefined;
     }
   } else {
-    return;
+    return undefined;
   }
   // Live delivery is authoritative; trajectory diagnostics must never reject a
-  // worker event. SQLite flushing begins synchronously and failures stay isolated.
-  void recorder.flush().catch(() => undefined);
+  // worker event, but its acknowledgment still owns the accepted write through settlement.
+  return recorder.flush().catch(() => undefined);
 }

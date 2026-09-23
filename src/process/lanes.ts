@@ -2,6 +2,7 @@
 export const enum CommandLane {
   Main = "main",
   SystemAgent = "system-agent",
+  SystemAgentInference = "system-agent-inference",
   Cron = "cron",
   CronNested = "cron-nested",
   /**
@@ -12,6 +13,7 @@ export const enum CommandLane {
   HookDispatch = "hook-dispatch",
   Background = "background",
   Subagent = "subagent",
+  ActiveMemory = "active-memory",
   Nested = "nested",
 }
 
@@ -20,10 +22,12 @@ export const enum CommandLane {
 export const STATIC_COMMAND_LANES = [
   CommandLane.Main,
   CommandLane.SystemAgent,
+  CommandLane.SystemAgentInference,
   CommandLane.Cron,
   CommandLane.CronNested,
   CommandLane.HookDispatch,
   CommandLane.Background,
   CommandLane.Subagent,
+  CommandLane.ActiveMemory,
   CommandLane.Nested,
 ] as const;

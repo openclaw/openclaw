@@ -18,7 +18,9 @@ import {
 import {
   assertReliabilityForcedExit,
   waitForReliabilityWorkerExit,
+  waitForReliabilityWorkerMessage,
 } from "./sqlite-reliability-process.js";
+import { resolveForwardedNodeCompilerArgs } from "./tsx-cli-shim.mjs";
 
 type IndexRepairProof = ReliabilityReport["indexRepairInterruptionProof"]["rollbackJournal"];
 
@@ -122,48 +124,18 @@ async function waitForWorkerMessage(params: {
   kind: "crash-point" | "ready";
   readStderr: () => string;
 }): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      cleanup();
-      reject(
-        new Error(
-          `SQLite index repair worker did not report ${params.kind}.${formatReliabilityStderr(params.readStderr())}`,
-        ),
-      );
-    }, INDEX_REPAIR_TIMEOUT_MS);
-    const onMessage = (message: unknown) => {
-      if (
-        !message ||
-        typeof message !== "object" ||
-        (message as { kind?: unknown }).kind !== params.kind
-      ) {
-        return;
-      }
-      cleanup();
-      resolve();
-    };
-    const onError = (error: Error) => {
-      cleanup();
-      reject(error);
-    };
-    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
-      cleanup();
-      reject(
-        new Error(
-          `SQLite index repair worker exited before ${params.kind}: code=${String(code)} signal=${String(signal)}.${formatReliabilityStderr(params.readStderr())}`,
-        ),
-      );
-    };
-    const cleanup = () => {
-      clearTimeout(timeout);
-      params.child.off("message", onMessage);
-      params.child.off("error", onError);
-      params.child.off("exit", onExit);
-    };
-    params.child.on("message", onMessage);
-    params.child.on("error", onError);
-    params.child.on("exit", onExit);
-    params.action?.();
+  await waitForReliabilityWorkerMessage({
+    action: params.action,
+    child: params.child,
+    matches: (message) =>
+      message !== null &&
+      typeof message === "object" &&
+      (message as { kind?: unknown }).kind === params.kind,
+    timeoutMs: INDEX_REPAIR_TIMEOUT_MS,
+    timeoutMessage: () =>
+      `SQLite index repair worker did not report ${params.kind}.${formatReliabilityStderr(params.readStderr())}`,
+    exitMessage: (code, signal) =>
+      `SQLite index repair worker exited before ${params.kind}: code=${String(code)} signal=${String(signal)}.${formatReliabilityStderr(params.readStderr())}`,
   });
 }
 
@@ -237,7 +209,7 @@ async function runJournalModeProof(params: {
   const expectedState = prepareIndexRepairDatabase(params.databasePath, params.journalMode);
   let stderr = "";
   const child = fork(INDEX_REPAIR_WORKER_PATH, [params.databasePath, params.journalMode], {
-    execArgv: ["--import", "tsx"],
+    execArgv: [...resolveForwardedNodeCompilerArgs(), "--import", "tsx"],
     serialization: "json",
     stdio: ["ignore", "ignore", "pipe", "ipc"],
   });

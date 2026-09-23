@@ -1,13 +1,23 @@
-// Control UI chat domain owns pure slash command rules.
-
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+// Control UI chat domain owns pure slash command rules.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { CommandEntry } from "../../../../packages/gateway-protocol/src/index.js";
 import type { CommandArgValues } from "../../../../src/auto-reply/commands-args.types.js";
-import { buildBuiltinChatCommands } from "../../../../src/auto-reply/commands-registry.shared.js";
+import {
+  buildBuiltinChatCommands,
+  shouldForwardModelCommandToServer,
+} from "../../../../src/auto-reply/commands-registry.shared.js";
+import type { ChatCommandDefinition } from "../../../../src/auto-reply/commands-registry.types.js";
+import {
+  isModelIndependentDirectiveCommand,
+  resolveReplyDirectiveCommand,
+} from "../../../../src/auto-reply/reply/directive-handling.parse.js";
 import type { IconName } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
+import { registerCommandPaletteEnglish } from "../../i18n/locales/en-command-palette.ts";
+
+registerCommandPaletteEnglish();
 
 export type SlashCommandCategory = "session" | "model" | "agents" | "tools";
 
@@ -24,6 +34,7 @@ export type SlashCommandDef = {
   category?: SlashCommandCategory;
   /** When true, the command is executed client-side via RPC instead of sent to the agent. */
   executeLocal?: boolean;
+  modelIndependent?: ChatCommandDefinition["modelIndependent"];
   /** Fixed argument choices for inline hints. */
   argOptions?: string[];
   /** Whether a multi-word argument may execute from an inline prose position. */
@@ -45,6 +56,7 @@ type CommandLike = {
   name: string;
   aliases?: string[];
   description: string;
+  modelIndependent?: ChatCommandDefinition["modelIndependent"];
   args?: Array<{
     name: string;
     required?: boolean;
@@ -101,6 +113,7 @@ const COMMAND_ICON_OVERRIDES: Partial<Record<string, IconName>> = {
 const INLINE_MULTI_WORD_COMMANDS = new Set(["dashboard"]);
 
 const LOCAL_COMMANDS = new Set([
+  "btw",
   "help",
   "new",
   "reset",
@@ -126,6 +139,7 @@ const UI_ONLY_COMMANDS: SlashCommandDef[] = [
     icon: "trash",
     category: "session",
     executeLocal: true,
+    modelIndependent: "always",
     tier: "standard",
   },
   {
@@ -137,6 +151,7 @@ const UI_ONLY_COMMANDS: SlashCommandDef[] = [
     icon: "refresh",
     category: "agents",
     executeLocal: true,
+    modelIndependent: "no-args",
     tier: "power",
   },
 ];
@@ -171,14 +186,17 @@ const CATEGORY_OVERRIDES: Partial<Record<string, SlashCommandCategory>> = {
 
 const COMMAND_DESCRIPTION_KEYS: Partial<Record<string, string>> = {
   steer: "chat.commands.steerDescription",
+  "export-session": "chat.commands.exportDescription",
 };
 
 const COMMAND_DESCRIPTION_OVERRIDES: Partial<Record<string, string>> = {
   steer: "Inject a message into the active run",
+  "export-session": "Download this conversation as Markdown",
 };
 
 const COMMAND_ARGS_OVERRIDES: Partial<Record<string, string>> = {
   steer: "<message>",
+  "export-session": undefined,
 };
 
 function normalizeUiKey(command: CommandLike): string {
@@ -270,10 +288,13 @@ function toSlashCommand(
     ...(COMMAND_DESCRIPTION_KEYS[command.key]
       ? { descriptionKey: COMMAND_DESCRIPTION_KEYS[command.key] }
       : {}),
-    args: COMMAND_ARGS_OVERRIDES[command.key] ?? formatArgs(command),
+    args: Object.hasOwn(COMMAND_ARGS_OVERRIDES, command.key)
+      ? COMMAND_ARGS_OVERRIDES[command.key]
+      : formatArgs(command),
     icon: mapIcon(command),
     category: mapCategory(command),
     executeLocal: source === "local" && LOCAL_COMMANDS.has(command.key),
+    modelIndependent: command.modelIndependent,
     argOptions: getArgOptions(command),
     allowsInlineMultiWordArgs: INLINE_MULTI_WORD_COMMANDS.has(command.key),
     tier: source === "local" ? mapTier(command) : "standard",
@@ -374,6 +395,7 @@ function buildLocalSlashCommands(): SlashCommandDef[] {
       name: command.textAliases[0]?.replace(/^\//u, "") ?? command.key,
       aliases: command.textAliases,
       description: command.description,
+      modelIndependent: command.modelIndependent,
       args: command.args?.map((arg) => ({
         name: arg.name,
         required: arg.required,
@@ -684,4 +706,36 @@ export function parseSlashCommand(text: string): ParsedSlashCommand | null {
   }
 
   return { command, args };
+}
+
+/** Stop and approval controls must remain usable while transcript admission is held. */
+export function isChatControlCommand(text: string): boolean {
+  const key = parseSlashCommand(text)?.command.key;
+  return normalizeLowercaseStringOrEmpty(text.trim()) === "/stop" || key === "approve";
+}
+
+export function canSubmitBeforeChatHistory(text: string): boolean {
+  return !text.trimStart().startsWith("/") || isChatControlCommand(text);
+}
+
+export function isModelIndependentChatCommand(text: string): boolean {
+  const parsed = parseSlashCommand(text);
+  if (!parsed) {
+    return false;
+  }
+  const policy = parsed.command.modelIndependent;
+  if (policy === "directive") {
+    const name = resolveReplyDirectiveCommand(parsed.command.key);
+    return (
+      name !== undefined &&
+      ((name === "model" && !shouldForwardModelCommandToServer(parsed.args)) ||
+        isModelIndependentDirectiveCommand(name, parsed.args))
+    );
+  }
+  return (
+    policy === "always" ||
+    (policy === "no-args"
+      ? parsed.args === ""
+      : typeof policy === "function" && policy(parsed.args))
+  );
 }

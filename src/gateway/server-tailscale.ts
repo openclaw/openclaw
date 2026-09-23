@@ -43,7 +43,7 @@ export async function startGatewayTailscaleExposure(params: {
         `external Tailscale Funnel for port ${params.port} remains active only for plugin-authenticated webhook routes; Gateway-authenticated routes reject its unattributable ingress. ` +
           "First configure a durable gateway password (gateway.auth.password or OPENCLAW_GATEWAY_PASSWORD) and set gateway.auth.mode=password, " +
           "then run `openclaw config set gateway.tailscale.mode funnel` and `openclaw config unset gateway.tailscale.preserveFunnel`; " +
-          "see https://docs.openclaw.ai/gateway/tailscale#public-internet-funnel--shared-password",
+          "see https://docs.openclaw.ai/gateway/tailscale#public-internet-funnel-%2B-shared-password",
       );
       return null;
     }

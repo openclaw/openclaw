@@ -27,9 +27,16 @@ import { waitForGatewayHealthyRestart } from "./restart-health.js";
 // Exercise the real client over a socket and apply the Gateway's actual identity
 // predicates, so a diagnostic client cannot accidentally stand in for local control.
 describe("restart verifier local control identity", () => {
-  it.each(["token", "password", "none"] as const)(
-    "reads health and served identity with %s auth without creating device state",
-    async (mode) => {
+  it.each([
+    { mode: "token", requirePluginHealth: true, host: "127.0.0.1" },
+    { mode: "password", requirePluginHealth: true, host: "127.0.0.1" },
+    { mode: "none", requirePluginHealth: true, host: "127.0.0.1" },
+    { mode: "token", requirePluginHealth: false, host: "127.0.0.1" },
+    { mode: "trusted-proxy", requirePluginHealth: false, host: "127.0.0.1" },
+    { mode: "token", requirePluginHealth: false, host: "0.0.0.0" },
+  ] as const)(
+    "reads health on $host with $mode auth without creating device state (requirePluginHealth=$requirePluginHealth)",
+    async ({ mode, requirePluginHealth, host }) => {
       await withOpenClawTestState(
         {
           env: {
@@ -39,9 +46,16 @@ describe("restart verifier local control identity", () => {
           },
         },
         async (state) => {
+          const credential = mode === "trusted-proxy" ? "password" : mode;
           const auth: GatewayAuthConfig =
-            mode === "none" ? { mode } : { mode, [mode]: "fixture-restart-secret" };
-          const gateway = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+            mode === "none"
+              ? { mode }
+              : {
+                  mode,
+                  [credential]: "fixture-restart-secret",
+                  ...(mode === "trusted-proxy" ? { trustedProxy: { userHeader: "x-user" } } : {}),
+                };
+          const gateway = new WebSocketServer({ host, port: 0 });
           await once(gateway, "listening");
           const port = (gateway.address() as AddressInfo).port;
           const requests: string[] = [];
@@ -71,13 +85,13 @@ describe("restart verifier local control identity", () => {
                 const connect = request.params as ConnectParams;
                 connections.push(connect);
                 const sharedAuthOk =
-                  mode !== "none" && connect.auth?.[mode] === "fixture-restart-secret";
+                  credential !== "none" && connect.auth?.[credential] === "fixture-restart-secret";
                 const policy = {
                   connectParams: connect,
                   locality: "direct_local" as const,
                   hasBrowserOriginHeader: false,
                   sharedAuthOk,
-                  authMethod: mode,
+                  authMethod: credential,
                 };
                 const backend = shouldSkipLocalBackendSelfPairing(policy);
                 const decision = evaluateMissingDeviceIdentity({
@@ -98,7 +112,10 @@ describe("restart verifier local control identity", () => {
                 const clearScopes =
                   !backend &&
                   !shouldPreserveLocalCliSharedAuthScopes(policy) &&
-                  shouldClearUnboundScopesForMissingDeviceIdentity({ decision, authMethod: mode });
+                  shouldClearUnboundScopesForMissingDeviceIdentity({
+                    decision,
+                    authMethod: credential,
+                  });
                 scopes = clearScopes ? [] : (connect.scopes ?? []);
                 const hello = buildMinimalGatewayHelloOkPayload({
                   auth: { role: "operator", scopes },
@@ -124,8 +141,21 @@ describe("restart verifier local control identity", () => {
                       error: "fixture load failure",
                     },
                   ],
+                  unavailable: [
+                    {
+                      id: "unavailable-plugin",
+                      state: "configured-unavailable",
+                      diagnostic: {
+                        kind: "plugin-verification",
+                        reason: "missing-extension-entry",
+                        detail: "Fixture entry missing",
+                      },
+                    },
+                  ],
                 },
-                channels: { fixture: { probe: { ok: false, error: "fixture channel failure" } } },
+                channels: requirePluginHealth
+                  ? { fixture: { probe: { ok: false, error: "fixture channel failure" } } }
+                  : {},
               });
             });
           });
@@ -152,23 +182,33 @@ describe("restart verifier local control identity", () => {
               probeHosts: ["127.0.0.1"],
               expectedVersion: "2026.8.1",
               expectedBuildId: "fixture-build",
+              requirePluginHealth,
               attempts: 0,
               delayMs: 1,
             });
             expect(result).toMatchObject({
-              healthy: false,
-              waitOutcome: "plugin-errors",
+              healthy: !requirePluginHealth,
+              waitOutcome: requirePluginHealth ? "plugin-errors" : "healthy",
               gatewayVersion: "2026.8.1",
               gatewayBuildId: "fixture-build",
               activatedPluginErrors: [{ id: "fixture-plugin", error: "fixture load failure" }],
-              channelProbeErrors: [{ id: "fixture", error: "fixture channel failure" }],
+              unavailablePlugins: [
+                {
+                  id: "unavailable-plugin",
+                  reason: "missing-extension-entry",
+                  detail: "Fixture entry missing",
+                },
+              ],
+              ...(requirePluginHealth
+                ? { channelProbeErrors: [{ id: "fixture", error: "fixture channel failure" }] }
+                : {}),
             });
             expect(failures).toEqual([]);
             expect(requests).toEqual(["connect", "health"]);
             expect(connections).toHaveLength(1);
             expect(connections[0]?.device).toBeUndefined();
             expect(connections[0]?.auth).toEqual(
-              mode === "none" ? undefined : { [mode]: "fixture-restart-secret" },
+              credential === "none" ? undefined : { [credential]: "fixture-restart-secret" },
             );
             expect(connections[0]?.client).toMatchObject(
               mode === "none"

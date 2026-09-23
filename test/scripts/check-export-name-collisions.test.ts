@@ -70,6 +70,72 @@ describe("export name collision guard", () => {
     expect([...result.exportedNames]).toEqual(["importedValue", "remoteValue"]);
   });
 
+  it("exempts only the exact handoff loader substitution", () => {
+    const name = "loadFreeBsdProcessIdentityNative";
+    const paths = [
+      "src/infra/update-managed-service-handoff-native-loader.ts",
+      "src/shared/freebsd-process-identity-native.ts",
+    ];
+    const modules = paths.map((id) => ({ path: id, content: `export function ${name}() {}` }));
+    expect(findExportNameCollisions(modules)).toEqual([]);
+    const extra = { path: "src/extra.ts", content: `export function ${name}() {}` };
+    expect(findExportNameCollisions([...modules, extra])).toEqual([
+      { name, files: [...paths, extra.path].toSorted() },
+    ]);
+    expect(findExportNameCollisions([modules[0]!, extra])).toEqual([
+      { name, files: [paths[0]!, extra.path].toSorted() },
+    ]);
+    expect(
+      findExportNameCollisions(
+        paths.map((id) => ({ path: id, content: "export function otherBehavior() {}" })),
+      ),
+    ).toEqual([{ name: "otherBehavior", files: paths }]);
+  });
+
+  it.each([
+    {
+      name: "openExistingSqliteWorkerBackend",
+      paths: ["src/state/openclaw-state.worker.ts", "src/state/openclaw-agent-execution.worker.ts"],
+    },
+    {
+      name: "bindSqliteWorkerBackend",
+      paths: [
+        "src/agents/auth-profiles/inline-usage.worker.ts",
+        "src/boards/sqlite-board-store.worker.ts",
+        "src/agents/sessions/session-manager-metadata.worker.ts",
+        "src/config/sessions/session-sharing-store.worker.ts",
+        "src/infra/heartbeat-outcome-store.worker.ts",
+      ],
+    },
+  ])("limits $name to its approved worker modules", ({ name, paths }) => {
+    const content = `export function ${name}() {}`;
+    const modules = paths.map((modulePath) => ({ path: modulePath, content }));
+    expect(findExportNameCollisions(modules)).toEqual([]);
+    for (const [index, module] of modules.entries()) {
+      for (const sibling of modules.slice(index + 1)) {
+        expect(findExportNameCollisions([module, sibling])).toEqual([]);
+      }
+    }
+
+    const extra = { path: "src/unrelated/extra.worker.ts", content };
+    expect(findExportNameCollisions([...modules, extra])).toEqual([
+      { name, files: [...paths, extra.path].toSorted() },
+    ]);
+    for (const module of modules) {
+      expect(findExportNameCollisions([module, extra])).toEqual([
+        { name, files: [module.path, extra.path].toSorted() },
+      ]);
+    }
+    expect(
+      findExportNameCollisions(
+        paths.map((modulePath) => ({
+          path: modulePath,
+          content: "export function createSqliteWorkerBackend() {}",
+        })),
+      ),
+    ).toEqual([{ name: "createSqliteWorkerBackend", files: paths.toSorted() }]);
+  });
+
   it("reports direct aliasing re-exports only outside the Plugin SDK", () => {
     expect(
       findAliasingReExports([
@@ -298,6 +364,43 @@ describe("export name collision guard", () => {
         },
       ]);
     });
+  });
+
+  it("marks only collisions reachable through shared and cyclic SDK barrels", () => {
+    const definitions = "export const cycleOnly = 1, extraOnly = 1, privateOnly = 1;";
+    expect(
+      findExportNameCollisions([
+        { path: "src/one.ts", content: definitions },
+        { path: "src/two.ts", content: definitions },
+        {
+          path: "src/plugin-sdk/first.ts",
+          content:
+            'export * from "../../packages/left.js"; export * from "../../packages/right.js";',
+        },
+        {
+          path: "src/plugin-sdk/second.ts",
+          content:
+            'export * from "../../packages/right.js"; export * from "../../packages/extra.js";',
+        },
+        ...(
+          [
+            ["packages/left.ts", 'export * from "./shared.js";'],
+            ["packages/right.ts", 'export * from "./shared.js";'],
+            ["packages/shared.ts", 'export * from "./left.js"; export const cycleOnly = 1;'],
+            ["packages/extra.ts", "export const extraOnly = 1;"],
+            ["packages/unreachable.ts", "export const privateOnly = 1;"],
+          ] as const
+        ).map(([modulePath, content]) => ({
+          path: modulePath,
+          content,
+          includeDefinitions: false,
+        })),
+      ]),
+    ).toEqual([
+      { name: "cycleOnly", files: ["src/one.ts", "src/two.ts"], sdk: true },
+      { name: "extraOnly", files: ["src/one.ts", "src/two.ts"], sdk: true },
+      { name: "privateOnly", files: ["src/one.ts", "src/two.ts"] },
+    ]);
   });
 
   it("rejects debt-baseline updates with the collision trailer", () => {

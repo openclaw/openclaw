@@ -245,6 +245,7 @@ export function createPiSessionCatalogRuntime(api: OpenClawPluginApi) {
       },
       terminal: {
         executable: "pi",
+        uploadPathStyle: "native",
         args: (threadId) => ["--session", threadId],
         title: (threadId) => `pi --session ${threadId.slice(0, 12)}…`,
         requireLocalSession: requireLocalPiSession,

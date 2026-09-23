@@ -185,12 +185,14 @@ function hasTerminalUnavailableMemoryResultInSessionRecord(
 type ActiveMemoryHookDeadline = {
   arm: (timeoutMs: number, onTimeout: () => void) => void;
   promise: Promise<symbol>;
+  remainingMs: () => number;
   stop: () => void;
 };
 
 function createActiveMemoryHookDeadline(): ActiveMemoryHookDeadline {
   const timeoutSentinel = Symbol("active-memory-hook-timeout");
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  let deadlineAt = 0;
   let resolveTimeout: (value: symbol) => void = () => {};
   const promise = new Promise<symbol>((resolve) => {
     resolveTimeout = resolve;
@@ -203,13 +205,18 @@ function createActiveMemoryHookDeadline(): ActiveMemoryHookDeadline {
   };
   const arm = (timeoutMs: number, onTimeout: () => void) => {
     stop();
+    deadlineAt = performance.now() + timeoutMs;
     timeoutId = setTimeout(() => {
       onTimeout();
       resolveTimeout(timeoutSentinel);
     }, timeoutMs);
     timeoutId.unref?.();
   };
-  return { arm, promise, stop };
+  // Remaining budget of the armed phase, so optional sub-steps can bound
+  // themselves inside the same deadline instead of racing a fresh timer.
+  const remainingMs = () =>
+    timeoutId ? Math.max(0, Math.floor(deadlineAt - performance.now())) : 0;
+  return { arm, promise, remainingMs, stop };
 }
 
 function hasUsableMemoryResultInSessionRecord(

@@ -1,5 +1,4 @@
 // PTY adapter wraps pseudo-terminal processes for the process supervisor.
-import type { IDisposable } from "@lydell/node-pty";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { signalPtySessionTree } from "../../kill-tree.js";
 import { prepareOomScoreAdjustedSpawn } from "../../linux-oom-score.js";
@@ -8,6 +7,7 @@ import {
   resolvePtyTerminalName,
   setPtyTerminalName,
 } from "../../pty-terminal-name.js";
+import type { TerminalPtySubscription } from "../../terminal-pty.js";
 import type { ManagedRunStdin, ProcessAdapterConstruction, SpawnProcessAdapter } from "../types.js";
 import { toStringEnv } from "./env.js";
 
@@ -32,7 +32,7 @@ export async function createPtyAdapter(
   if (typeof WORKER_DEPLOY_BUILD === "boolean" && WORKER_DEPLOY_BUILD) {
     throw new Error("PTY is unavailable in the portable worker runtime");
   }
-  const { spawn } = await import("@lydell/node-pty");
+  const { spawnTerminalPty } = await import("../../terminal-pty.js");
   const baseEnv = params.env ? toStringEnv(params.env) : undefined;
   const preparedSpawn = prepareOomScoreAdjustedSpawn(params.shell, params.args, { env: baseEnv });
   const terminalName = resolvePtyTerminalName(
@@ -50,22 +50,45 @@ export async function createPtyAdapter(
     setPtyTerminalName({ env: spawnEnv, name: terminalName, platform: process.platform });
   }
   params.assertCurrent?.();
-  // Construction can be cancelled while the native module loads.
   if (params.abortSignal?.aborted) {
     throw new Error("PTY construction aborted");
   }
-  const pty = spawn(preparedSpawn.command, preparedSpawn.args, {
-    cwd: params.cwd,
-    env: spawnEnv,
-    name: terminalName,
-    cols: params.cols ?? 120,
-    rows: params.rows ?? 30,
-  });
+  const pty = await spawnTerminalPty(
+    {
+      file: preparedSpawn.command,
+      args: preparedSpawn.args,
+      cwd: params.cwd,
+      env: spawnEnv,
+      name: terminalName,
+      cols: params.cols ?? 120,
+      rows: params.rows ?? 30,
+    },
+    {
+      abortSignal: params.abortSignal,
+      assertCurrent: () => {
+        params.assertCurrent?.();
+        params.beforeSpawn?.();
+      },
+    },
+  );
+  try {
+    params.assertCurrent?.();
+    if (params.abortSignal?.aborted) {
+      throw new Error("PTY construction aborted");
+    }
+  } catch (error) {
+    try {
+      pty.kill();
+    } catch {
+      // The stale PTY may already have exited while the ownership check ran.
+    }
+    throw error;
+  }
   const cleanup = createDeferredCore();
   void cleanup.promise.catch(() => {});
   params.onSpawnCleanup?.(cleanup.promise);
-  let dataListener: IDisposable | null = null;
-  let exitListener: IDisposable | null = null;
+  let dataListener: TerminalPtySubscription | null = null;
+  let exitListener: TerminalPtySubscription | null = null;
   const completion = createDeferredCore<{
     code: number | null;
     signal: NodeJS.Signals | number | null;
@@ -105,11 +128,12 @@ export async function createPtyAdapter(
     forceKillWaitFallbackTimer.unref();
   };
 
-  exitListener = pty.onExit((event) => {
-    cleanup.resolve();
-    const signal = event.signal && event.signal !== 0 ? event.signal : null;
-    settleWait({ code: event.exitCode ?? null, signal });
-  });
+  exitListener =
+    pty.onExit((event) => {
+      cleanup.resolve();
+      const signal = event.signal && event.signal !== 0 ? event.signal : null;
+      settleWait({ code: event.exitCode ?? null, signal });
+    }) ?? null;
 
   const stdin: ManagedRunStdin = {
     get destroyed() {
@@ -148,9 +172,10 @@ export async function createPtyAdapter(
   };
 
   const onStdout = (listener: (chunk: string) => void) => {
-    dataListener = pty.onData((chunk) => {
-      listener(chunk);
-    });
+    dataListener =
+      pty.onData((chunk) => {
+        listener(chunk);
+      }) ?? null;
   };
 
   const onStderr = (_listener: (chunk: string) => void) => {
@@ -167,8 +192,6 @@ export async function createPtyAdapter(
         pty.pid > 0
       ) {
         signalPtySessionTree(pty.pid, signal);
-      } else if (process.platform === "win32") {
-        pty.kill();
       } else {
         pty.kill(signal);
       }

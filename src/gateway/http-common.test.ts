@@ -422,6 +422,21 @@ describe("watchClientDisconnect", () => {
     expect(res.listenerCount("error")).toBe(0);
   });
 
+  it("aborts when the response closes before the socket close is observable", () => {
+    const socket = new EventEmitter();
+    const { req, res } = makeMockHttpReqRes(socket, socket);
+    const controller = new AbortController();
+    const onDisconnect = vi.fn();
+    watchClientDisconnect(req, res, controller, onDisconnect);
+
+    res.emit("close");
+
+    expect(controller.signal.aborted).toBe(true);
+    expect(onDisconnect).toHaveBeenCalledTimes(1);
+    expect(socket.listenerCount("close")).toBe(0);
+    expect(res.listenerCount("error")).toBe(0);
+  });
+
   it("keeps real response errors handled after cleanup until the response closes", async () => {
     const socket = new EventEmitter();
     const req = { socket } as IncomingMessage;
@@ -515,13 +530,23 @@ describe("watchClientDisconnect", () => {
     expect(typeof resOnCall[1]).toBe("function");
   });
 
-  it("cleanup detaches the close listener from each socket", () => {
-    const socket = new EventEmitter();
-    const { req, res } = makeMockHttpReqRes(socket, null);
-    const controller = new AbortController();
-    const cleanup = watchClientDisconnect(req, res, controller);
-    expect(socket.listenerCount("close")).toBe(1);
-    cleanup();
-    expect(socket.listenerCount("close")).toBe(0);
-  });
+  it.each(["cleanup", "response completion"])(
+    "keeps completed work un-aborted after %s",
+    (phase) => {
+      const socket = new EventEmitter();
+      const { req, res } = makeMockHttpReqRes(socket, null);
+      const controller = new AbortController();
+      const cleanup = watchClientDisconnect(req, res, controller);
+      expect(socket.listenerCount("close")).toBe(1);
+      if (phase === "cleanup") {
+        cleanup();
+      } else {
+        res.emit("finish");
+      }
+      expect(socket.listenerCount("close")).toBe(0);
+      socket.emit("close");
+      expect(controller.signal.aborted).toBe(false);
+      res.emit("close");
+    },
+  );
 });

@@ -20,7 +20,7 @@ function setGroups(groups: Array<[string, Mode, number]>) {
     mode === "private-qa"
       ? "test/vitest/vitest.extension-qa.config.ts"
       : mode === "runtime"
-        ? "test/vitest/vitest.gateway-core.config.ts"
+        ? "test/vitest/vitest.gateway-server.config.ts"
         : "test/vitest/vitest.unit-support.config.ts";
   fixture.shards.splice(
     0,
@@ -31,7 +31,12 @@ function setGroups(groups: Array<[string, Mode, number]>) {
       projects: [config(mode)],
     })),
   );
-  fixture.timings = Object.fromEntries(groups.map(([name, , seconds]) => [name, seconds]));
+  fixture.timings = Object.fromEntries(
+    groups.map(([name, mode, seconds]) => [
+      mode === "runtime" ? `${name}-parallel` : name,
+      seconds,
+    ]),
+  );
 }
 function plan(runnerBackend = "blacksmith") {
   return createNodeTestShardBundles({
@@ -160,7 +165,7 @@ describe("compact node prerequisite admission", () => {
     ({ profile, expected, changed }) => {
       setGroups([["runtime", "runtime", 10]]);
       expect(plan(profile)[0]?.predictedSeconds).toBe(expected);
-      fixture.timings.runtime = 14;
+      fixture.timings["runtime-parallel"] = 14;
       expect(plan(profile)[0]?.predictedSeconds).toBe(changed);
     },
   );

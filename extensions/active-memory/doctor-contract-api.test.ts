@@ -11,6 +11,7 @@ import type {
   OpenKeyedStoreOptions,
   PluginDoctorStateMigrationContext,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   legacyConfigRules,
@@ -65,6 +66,7 @@ describe("active-memory doctor state migration", () => {
 
   afterEach(async () => {
     vi.useRealTimers();
+    await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     await fs.rm(stateDir, { recursive: true, force: true });
   });
@@ -148,7 +150,7 @@ describe("active-memory doctor state migration", () => {
       expect.stringContaining("Archived Active Memory session toggles legacy source"),
     ]);
     await expect(fs.access(sourcePath)).rejects.toThrow();
-    await expect(fs.access(`${sourcePath}.migrated`)).resolves.toBeUndefined();
+    await fs.access(`${sourcePath}.migrated`);
 
     const entries = await createDoctorContext(env)
       .openPluginStateKeyedStore({

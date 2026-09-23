@@ -4,16 +4,24 @@
 import fs from "node:fs/promises";
 import type { Command } from "commander";
 import { FsSafeError, readRegularFile } from "openclaw/plugin-sdk/security-runtime";
+import { asRecord, readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveBrowserActRequestTimeoutMs } from "../../browser/act-policy.js";
+import type { browserAct } from "../../browser/client-actions-core.js";
 import type { BrowserActRequest, BrowserFormField } from "../../browser/client-actions.types.js";
 import { normalizeBrowserFormFields } from "../../browser/form-fields.js";
-import { callBrowserRequest, type BrowserParentOpts } from "../browser-cli-shared.js";
+import {
+  callBrowserRequest,
+  printBrowserJsonResult,
+  type BrowserParentOpts,
+} from "../browser-cli-shared.js";
 import { danger, defaultRuntime } from "../core-api.js";
 
 type BrowserActionContext = {
   parent: BrowserParentOpts;
   profile: string | undefined;
 };
+
+type BrowserActionResult = Awaited<ReturnType<typeof browserAct>>;
 
 /** Resolves inherited Browser action context from a commander command. */
 export function resolveBrowserActionContext(
@@ -25,13 +33,14 @@ export function resolveBrowserActionContext(
   return { parent, profile };
 }
 
-/** Calls the Browser /act route for one CLI action body. */
-export async function callBrowserAct<T = unknown>(params: {
+/** Execute and present an action, preserving recorded interruptions and child failures. */
+export async function runBrowserAction(params: {
   parent: BrowserParentOpts;
   profile?: string;
   body: BrowserActRequest;
-}): Promise<T> {
-  return await callBrowserRequest<T>(
+  successMessage?: string | ((result: BrowserActionResult) => string);
+}): Promise<void> {
+  const result = await callBrowserRequest<BrowserActionResult>(
     params.parent,
     {
       method: "POST",
@@ -41,19 +50,43 @@ export async function callBrowserAct<T = unknown>(params: {
     },
     { timeoutMs: resolveBrowserActRequestTimeoutMs(params.body) },
   );
-}
-
-/** Writes Browser action output as JSON or a terse success message. */
-export function logBrowserActionResult(
-  parent: BrowserParentOpts,
-  result: unknown,
-  successMessage: string,
-) {
-  if (parent?.json) {
-    defaultRuntime.writeJson(result);
-    return;
+  const { parent, successMessage } = params;
+  const failures = (result.results ?? []).flatMap((entry, index) =>
+    entry.ok ? [] : [`action ${index + 1}: ${entry.error ?? "failed"}`],
+  );
+  if (!printBrowserJsonResult(parent, result)) {
+    if (failures.length) {
+      defaultRuntime.error(danger(`batch failed: ${failures.join("; ")}`));
+    }
+    if (result.blockedByDialog) {
+      const pending = asRecord(asRecord(result.browserState).dialogs).pending;
+      const ids = Array.isArray(pending)
+        ? pending.flatMap((dialog) => {
+            const id = readStringField(asRecord(dialog), "id");
+            return id ? [JSON.stringify(id)] : [];
+          })
+        : [];
+      defaultRuntime.log(
+        `Action blocked by a modal dialog${ids.length ? ` (${ids.join(", ")})` : ""}. Use openclaw browser dialog --accept or --dismiss${ids.length ? " --dialog-id <id>" : ""} to continue.`,
+      );
+    } else if (result.aborted) {
+      const { reason, afterAction, skipped } = result.aborted;
+      defaultRuntime.log(
+        `Batch stopped after action ${afterAction}: page ${reason === "navigation" ? "navigated" : "closed"}; ${skipped} action(s) skipped. Take a fresh snapshot before continuing.`,
+      );
+    } else if (!failures.length) {
+      if (successMessage !== undefined) {
+        defaultRuntime.log(
+          typeof successMessage === "function" ? successMessage(result) : successMessage,
+        );
+      } else {
+        defaultRuntime.writeJson(result.result ?? null);
+      }
+    }
   }
-  defaultRuntime.log(successMessage);
+  if (failures.length) {
+    defaultRuntime.exit(1);
+  }
 }
 
 /** Requires and trims an element ref, exiting through the CLI runtime on failure. */

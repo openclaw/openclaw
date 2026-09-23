@@ -8,6 +8,7 @@ import {
 import { withTestDir } from "../../src/test-helpers/temp-dir.js";
 import { captureEnv, setTestEnvValue } from "../../src/test-utils/env.js";
 import { installInMemoryTaskRegistryRuntime } from "../../src/test-utils/task-registry-runtime.js";
+import { createInMemoryTaskFlowRegistryStore } from "../../src/test-utils/task-registry-store.js";
 
 // Shared ACP manager task registry setup for tests.
 
@@ -27,15 +28,7 @@ export async function withAcpManagerTaskStateDir(
     resetAcpManagerTaskStateForTests();
     installInMemoryTaskRegistryRuntime();
     configureTaskFlowRegistryRuntime({
-      store: {
-        loadSnapshot: () => ({
-          flows: new Map(),
-        }),
-        saveSnapshot: () => {},
-        upsertFlow: () => {},
-        deleteFlow: () => {},
-        close: () => {},
-      },
+      store: createInMemoryTaskFlowRegistryStore(),
     });
     try {
       await run(root);

@@ -549,12 +549,6 @@ private func assertConfigLookupCannotRecreateRoute(
         let url = try #require(URL(string: "wss://gateway.example.ts.net"))
         let storeKey = "autoqa-185-tls-recovery"
         GatewayTLSStore.saveFingerprint("old", stableID: storeKey)
-        let route = try #require(GatewayTLSRoute.resolve(
-            url: url,
-            connectionMode: .remote,
-            configuredFingerprint: nil,
-            storedFingerprint: "old",
-            storeKey: storeKey))
         let failure = GatewayTLSValidationFailure(
             kind: .pinMismatch,
             host: "gateway.example.ts.net",
@@ -577,7 +571,12 @@ private func assertConfigLookupCannotRecreateRoute(
         })
         let connection = GatewayConnection(
             testEndpointProvider: {
-                GatewayConnection.EndpointSnapshot(
+                let route = try #require(GatewayTLSRoute.resolve(
+                    url: url,
+                    connectionMode: .remote,
+                    configuredFingerprint: nil,
+                    storeKey: storeKey))
+                return GatewayConnection.EndpointSnapshot(
                     config: (url: url, token: nil, password: nil),
                     tls: route,
                     routeAuthority: nil)
@@ -988,22 +987,31 @@ extension GatewayConnectionControlTests {
             routeB: (urlB, ownerB))
     }
 
-    @Test func `SSH endpoint never receives another route device token`() async throws {
-        let tunnelURL = try #require(URL(string: "ws://127.0.0.1:18789"))
-        let ownerA = try #require(GatewayDiscoveryPreferences.deviceAuthGatewayID(
-            connectionMode: .remote,
-            remoteTransport: .ssh,
-            remoteURL: "",
-            remoteTarget: "operator@gateway-a.example"))
-        let ownerB = try #require(GatewayDiscoveryPreferences.deviceAuthGatewayID(
-            connectionMode: .remote,
-            remoteTransport: .ssh,
-            remoteURL: "",
-            remoteTarget: "operator@gateway-b.example"))
+    @Test(arguments: [false, true])
+    func `SSH endpoint never receives another route device token`(sameHostDifferentPort: Bool) async throws {
+        try await TestIsolation.withEnvValues([
+            "OPENCLAW_CONFIG_PATH": TestIsolation.tempConfigPath(),
+            "OPENCLAW_GATEWAY_PORT": nil,
+        ]) {
+            let tunnelURL = try #require(URL(string: "ws://127.0.0.1:18789"))
+            let rootA: [String: Any] = ["gateway": [
+                "mode": "remote", "port": 19789,
+                "remote": ["transport": "ssh", "sshTarget": "operator@gateway-a.example"],
+            ]]
+            let rootB: [String: Any] = ["gateway": [
+                "mode": "remote", "port": sameHostDifferentPort ? 19889 : 19789,
+                "remote": [
+                    "transport": "ssh",
+                    "sshTarget": sameHostDifferentPort ? "operator@gateway-a.example" : "operator@gateway-b.example",
+                ],
+            ]]
+            let ownerA = try #require(GatewayDiscoveryPreferences.deviceAuthGatewayID(root: rootA))
+            let ownerB = try #require(GatewayDiscoveryPreferences.deviceAuthGatewayID(root: rootB))
 
-        try await self.assertDeviceTokenIsolation(
-            routeA: (tunnelURL, ownerA),
-            routeB: (tunnelURL, ownerB))
+            try await self.assertDeviceTokenIsolation(
+                routeA: (tunnelURL, ownerA),
+                routeB: (tunnelURL, ownerB))
+        }
     }
 
     @Test func `retired socket callbacks cannot mutate cache or subscribers`() async throws {
@@ -1312,12 +1320,36 @@ extension GatewayConnectionControlTests {
             [{"id":"main","model":{"primary":"   "}}]}
             """#,
             nil),
+        (
+            #"""
+            {"defaultId":"main","mainKey":"main","scope":"per-sender","agents":
+            [{"id":"main","utilityModel":" apple-fm/on-device "}]}
+            """#,
+            "apple-fm/on-device"),
+        (
+            #"""
+            {"defaultId":"main","mainKey":"main","scope":"per-sender","agents":
+            [{"id":"main","model":{"primary":"openai/gpt-5.5"},"utilityModel":"apple-fm/on-device"}]}
+            """#,
+            "openai/gpt-5.5"),
+        (
+            #"""
+            {"defaultId":"main","mainKey":"main","scope":"per-sender","agents":
+            [{"id":"main"},{"id":"other","utilityModel":"apple-fm/on-device"}]}
+            """#,
+            nil),
+        (
+            #"""
+            {"defaultId":"main","mainKey":"main","scope":"per-sender","agents":
+            [{"id":"main","model":{"primary":"   "},"utilityModel":"   "}]}
+            """#,
+            nil),
     ])
     func `configured inference model follows the default agent`(
         json: String,
         expected: String?) throws
     {
-        #expect(try GatewayConnection.decodeConfiguredInferenceModel(Data(json.utf8)) == expected)
+        #expect(try GatewayConnection.decodeConfiguredInferenceModels(Data(json.utf8)).setupModel == expected)
     }
 
     static func messageData(_ message: URLSessionWebSocketTask.Message) -> Data? {

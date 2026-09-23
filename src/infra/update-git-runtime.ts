@@ -42,6 +42,16 @@ export async function collectGitRuntimeErrors(params: GitRuntimeIdentity): Promi
       ];
 }
 
+/**
+ * Commit the checkout's dist was built from, or null when no build exists.
+ * Comparing it to HEAD is how callers detect a checkout that pulled but never
+ * rebuilt, which otherwise runs old code while reporting the new source version.
+ */
+export async function readBuiltRuntimeCommit(root: string): Promise<string | null> {
+  const buildInfo = await tryReadJson(path.join(root, "dist", "build-info.json"));
+  return normalizeNullableString(asNullableRecord(buildInfo)?.commit);
+}
+
 export async function readBuiltGatewayBuildId(root: string): Promise<string | null> {
   const buildInfo = await tryReadJson(path.join(root, "dist", "build-info.json"));
   const buildId = normalizeNullableString(asNullableRecord(buildInfo)?.buildId);

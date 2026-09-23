@@ -25,22 +25,23 @@ Presence entries are structured objects with fields like:
 
 - `instanceId` (optional but strongly recommended): stable client identity (usually `connect.client.instanceId`)
 - `host`: human-friendly host name
-- `ip`: best-effort IP address; the [geolocation plugin](/plugins/geolocation) resolves it to a coarse city where one is available
+- `clientId`: client type from the accepted connection, separate from its display name; the people card uses this to distinguish **Terminal** from a native **App**
+- `ip`: best-effort IP address. The [geolocation plugin](/plugins/geolocation) resolves it to a coarse city where one is available
 - `version`: client version string
 - `deviceFamily` / `modelIdentifier`: hardware hints
-- `timeZone`: self-reported IANA zone (for example `Europe/Vienna`); browsers report it during connect, and it stays useful when the connecting IP is loopback, tunneled, or CGNAT
+- `timeZone`: self-reported IANA zone, for example `Europe/Vienna`. Browsers report it during connect. It stays useful when the connecting IP is loopback, tunneled, or CGNAT
 - `mode`: `ui`, `webchat`, `cli`, `backend`, `node`, `probe`, `test`
 - `lastInputSeconds`: seconds since last user input, if known
-- `reason`: free-form client-supplied string; the Gateway itself only emits `self`, `connect`, and `disconnect`
+- `reason`: free-form client-supplied string. The Gateway itself only emits `self`, `connect`, and `disconnect`
 - `deviceId`, `roles`, `scopes`: device identity and role/scope hints from the connect handshake
-- `ts`: last presence update timestamp (ms since epoch), including heartbeat updates; not a user-activity timestamp
+- `ts`: last presence update timestamp (ms since epoch), including heartbeat updates. This is not a user-activity timestamp
 - `onlineSince`: start of an authenticated person's current continuous online period, shared across overlapping connections
-- `lastActivityAt`: latest observed accepted interaction during that online period; absent until activity is observed
+- `lastActivityAt`: latest observed accepted interaction during that online period. It is absent until activity is observed
 - `watchedSessions`: session keys the client explicitly declares it is viewing, filtered for the recipient
 
 ## Who can see presence
 
-The presence roster is shared with operators who have `operator.read` access;
+The presence roster is shared with operators who have `operator.read` access.
 `operator.write` and `operator.admin` also grant read access. Readers can see other
 people's online and activity timing and reported `timeZone`, including people who
 are not watching a session. Node connections, pairing-only operators, and other
@@ -51,14 +52,14 @@ operator read access.
 Watched-session references are filtered separately for each recipient using the
 same visibility rules as `sessions.list`. Hidden or missing sessions are omitted
 entirely, without counts or placeholders. This filtering applies to connect
-snapshots, `system-presence` responses, and presence events; the person being
+snapshots, `system-presence` responses, and presence events. The person being
 viewed does not grant the recipient access to their sessions.
 
 Drafts, incognito sessions, and operator role restrictions follow those list
 rules. Missing or deleted references are omitted even for admins. Keys retain
 their agent scope, including agent-qualified `global` and `unknown` references.
 Non-admin readers awaiting authenticated profile verification receive person
-metadata but no watched references; established admin grants retain admin list
+metadata but no watched references. Established admin grants retain admin list
 visibility. When no references are visible, `watchedSessions` is omitted.
 Message subscriptions alone do not declare viewer presence.
 
@@ -90,10 +91,10 @@ stay tracked because test suites use them as stand-ins for real clients.
 ### 3) `system-event` beacons
 
 Clients can send richer periodic beacons via the `system-event` method. The mac
-app uses this to report host name, IP, version, and liveness metadata. Physical
-input activity is not part of this generic beacon; the purpose-specific native
+app uses this to report host name, IP, version, and liveness metadata. Computer
+input activity is not part of this generic beacon. The purpose-specific native
 node event described in [Active computer presence](/nodes/presence) owns it. The
-Mac tags these beacons with `system-presence-clear-last-input`; current Gateways
+Mac tags these beacons with `system-presence-clear-last-input`. Current Gateways
 use that backward-compatible marker to remove any input recency retained from an
 older app. The beacon also carries a fixed 30-day value so older Gateways that
 ignore the tag overwrite exact recency instead of retaining it. No new activity
@@ -113,21 +114,29 @@ then `connect.client.instanceId`, then the connection id.
 
 `system-event` beacons merge by device id or instance id when supplied, otherwise
 by parsed host or other beacon metadata. A stable `instanceId` helps consumers
-associate rows with the same client; it does not merge separate user WebSocket
+associate rows with the same client. It does not merge separate user WebSocket
 connections. Ephemeral control-plane clients are excluded from tracking entirely.
 
 The Control UI groups connection rows by their recorded identity namespace when
 displaying people. Connections with the same qualified profile identity share one
-person; unqualified connections with the same raw ID form a separate group. A raw
+person. Unqualified connections with the same raw ID form a separate group. A raw
 ID matching a profile ID never combines their watched sessions, connection facts,
 or viewer counts. The Gateway uses the same namespace boundary for online/activity
 timing and collaborative typing counts. Overlapping tabs share timing facts only
-within their namespace; later activity stays separate if a raw tab gains profile
+within their namespace. Later activity stays separate if a raw tab gains profile
 qualification. Self exclusion follows the authenticated user's recorded
 qualification, using the current connection only when that user is unavailable.
 Only a displayed owner with the exact qualified profile identity is deduplicated
 from a session's live viewers. The [people card](/concepts/multi-user#people-cards) keeps online duration
 and observed activity separate from each entry's heartbeat freshness.
+
+Accepted interactions, including typing, update the exact activity timestamp on
+every live connection for that person. Activity-only presence events are coalesced
+to at most one every 30 seconds per identity. The first observed activity and
+activity after that window publish immediately; connection, disconnection,
+profile, and watched-session changes still publish immediately. The people card's
+activity age can therefore lag the latest interaction by less than 30 seconds.
+Fresh snapshots and `system-presence` reads include the latest stored timestamp.
 
 ## TTL and bounded size
 
@@ -165,7 +174,7 @@ indicator (Active/Idle/Stale) based on the age of the last update.
 - If you see duplicates:
   - confirm clients send a stable `client.instanceId` in the handshake
   - confirm periodic beacons use the same `instanceId`
-  - check for multiple tabs or reconnects; separate user connections have separate rows, and old rows expire after the TTL
+  - check for multiple tabs or reconnects. Separate user connections have separate rows, and old rows expire after the TTL
 
 ## Related
 

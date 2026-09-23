@@ -3,23 +3,9 @@ import { describe, expect, it } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createChatChannelPlugin } from "../plugin-sdk/channel-core.js";
-import { createPluginRegistry } from "./registry.js";
-import type { PluginRuntime } from "./runtime/types.js";
+import { createTestPluginRegistry as createTestRegistry } from "./registry-runtime.test-helpers.js";
 import { createPluginRecord } from "./status.test-fixtures.js";
 import type { OpenClawPluginChannelRegistration } from "./types.js";
-
-function createTestRegistry() {
-  return createPluginRegistry({
-    logger: {
-      info() {},
-      warn() {},
-      error() {},
-      debug() {},
-    },
-    runtime: {} as PluginRuntime,
-    activateGlobalSideEffects: false,
-  });
-}
 
 function createChannelPlugin(id: string, label: string): ChannelPlugin {
   return {

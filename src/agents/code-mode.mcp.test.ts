@@ -1,6 +1,6 @@
 /** Tests Code Mode MCP namespace. */
 
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { GetPromptResultSchema, type CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { materializeBundleMcpToolsForRun } from "./agent-bundle-mcp-materialize.js";
@@ -35,12 +35,12 @@ describe("Code Mode MCP namespace", () => {
     vi.useRealTimers();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.useRealTimers();
-    resetCodeModeTestState();
+    await resetCodeModeTestState();
   });
 
-  it("exposes MCP tools only through the MCP namespace", async () => {
+  it("discovers MCP tools while retaining namespaced invocation", async () => {
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     const githubCreate = materializedMcpTool({
       name: "github__create_issue",
@@ -123,7 +123,14 @@ describe("Code Mode MCP namespace", () => {
         },
       },
       leakedInternalDetails: false,
-      searchHits: [],
+      searchHits: [
+        expect.objectContaining({
+          source: "mcp",
+          callableName: "MCP.github.createIssue",
+          toolName: "create_issue",
+          apiPath: "mcp/github.d.ts",
+        }),
+      ],
       catalogSize: 0,
       hasMcp: true,
       apiSchemaTitle: "object",
@@ -150,6 +157,7 @@ describe("Code Mode MCP namespace", () => {
     expect(value.apiHeader).toContain("@param title Issue title Shown in tracker");
     expect(value.apiHeader).not.toContain("@param title Issue title\n");
     expect(value.apiHeader).toContain("title: string;");
+    expect(value.apiHeader).toContain('@param body? Default: "".');
     expect(value.apiHeader).toContain('labels?: Array<"red" | "blue">;');
     expect(value.serverFileContent).toContain('labels?: Array<"red" | "blue">;');
     expect(githubCreate.execute).toHaveBeenCalledTimes(1);
@@ -263,7 +271,7 @@ describe("Code Mode MCP namespace", () => {
       listResources: async () => privateUtilityResults.resources_list,
       readResource: async () => privateUtilityResults.resources_read,
       listPrompts: async () => privateUtilityResults.prompts_list,
-      getPrompt: async () => privateUtilityResults.prompts_get,
+      getPrompt: async () => GetPromptResultSchema.parse(privateUtilityResults.prompts_get),
       dispose: async () => {},
     };
     const materialized = await materializeBundleMcpToolsForRun({ runtime: sessionRuntime });
@@ -284,7 +292,7 @@ describe("Code Mode MCP namespace", () => {
         const api = await MCP.docs.$api();
         return {
           success: await MCP.docs.structuredResult(),
-          failure: await MCP.docs.resolvedFailure(),
+          failure: await (await catalog.search("MCP.docs.resolvedFailure", { limit: 1 }))[0](),
           resources: await MCP.docs.resources.list(),
           resource: await MCP.docs.resources.read({ uri: "memo://one" }),
           prompts: await MCP.docs.prompts.list(),
@@ -298,7 +306,7 @@ describe("Code Mode MCP namespace", () => {
             "McpPromptsGetResult",
           ].map((name) => ({
             name,
-            declared: api.header.includes("type " + name + " ="),
+            declared: api.header.includes("interface " + name + " {"),
             returned: api.header.includes("Promise<" + name + ">"),
           })),
         };
@@ -404,40 +412,66 @@ describe("Code Mode MCP namespace", () => {
     });
   });
 
-  it("renames MCP namespace identifiers that would be unsafe path segments", async () => {
-    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
-    const dangerous = materializedMcpTool({
-      name: "constructor__prototype",
+  it.each([
+    {
       serverName: "constructor",
       toolName: "prototype",
-      parameters: {
-        type: "object",
-        properties: { value: { type: "string" } },
-        required: ["value"],
-      },
-    });
-    applyCodeModeCatalog({
-      tools: [...codeModeTools, dangerous],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
+      serverIdentifier: "constructor2",
+      toolIdentifier: "prototype2",
+    },
+    {
+      serverName: "service",
+      toolName: "results",
+      serverIdentifier: "service",
+      toolIdentifier: "results",
+    },
+    {
+      serverName: "results",
+      toolName: "read",
+      serverIdentifier: "results",
+      toolIdentifier: "read",
+    },
+  ])(
+    "preserves safe MCP paths and escapes unsafe paths for server $serverName and tool $toolName",
+    async ({ serverName, toolName, serverIdentifier, toolIdentifier }) => {
+      const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+      const target = materializedMcpTool({
+        name: `${serverName}__${toolName}`,
+        serverName,
+        toolName,
+        parameters: {
+          type: "object",
+          properties: { value: { type: "string" } },
+          required: ["value"],
+        },
+      });
+      applyCodeModeCatalog({
+        tools: [...codeModeTools, target],
+        config,
+        sessionId: "session-code-mode",
+        sessionKey: "agent:main:main",
+        runId: "run-code-mode",
+        catalogRef,
+      });
 
-    const details = await runUntilCompleted({
-      execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
-      waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
-      code: 'return JSON.parse((await MCP.constructor2.prototype2({ value: "safe" })).content[0].text);',
-    });
+      const details = await runUntilCompleted({
+        execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
+        waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
+        code: `const result = await MCP.${serverIdentifier}.${toolIdentifier}({ value: "safe" });
+        return {
+          payload: JSON.parse(result.content[0].text),
+          declaration: (await API.read("mcp/${serverIdentifier}.d.ts")).content,
+        };`,
+      });
 
-    expect(details.status).toBe("completed");
-    expect(details.value).toEqual({
-      serverName: "constructor",
-      toolName: "prototype",
-      input: { value: "safe" },
-    });
-  });
+      expect(details, JSON.stringify(details)).toMatchObject({ status: "completed" });
+      expect(details.value).toEqual({
+        payload: { serverName, toolName, input: { value: "safe" } },
+        declaration: expect.stringContaining(`function ${toolIdentifier}(`),
+      });
+      expect(target.execute).toHaveBeenCalledOnce();
+    },
+  );
 
   describe("reserved MCP tool names", () => {
     const toolNames = ["delete", "default", "return", "enum", "class"] as const;

@@ -159,6 +159,13 @@ describe("OpenClaw interactive activation protocol", () => {
 });
 
 describe("OpenClaw setup detection protocol", () => {
+  it.each([
+    ["saved-auth:openai%3Adefault", true],
+    ["saved-auth:", false],
+  ])("validates saved sign-in choice %s", (kind, valid) => {
+    expect(validateSystemAgentSetupActivateParams({ kind })).toBe(valid);
+  });
+
   it("accepts an explicit owner across the structured setup family", () => {
     expect(validateSystemAgentSetupDetectParams({ agentId: "research" })).toBe(true);
     expect(validateSystemAgentSetupVerifyParams({ agentId: "research" })).toBe(true);
@@ -166,6 +173,7 @@ describe("OpenClaw setup detection protocol", () => {
       validateSystemAgentSetupActivateParams({
         agentId: "research",
         kind: "existing-model",
+        nativeSessionCatalogsEnabled: false,
       }),
     ).toBe(true);
     expect(
@@ -173,6 +181,7 @@ describe("OpenClaw setup detection protocol", () => {
         sessionId: "setup-1",
         agentId: "research",
         authChoice: "openai-api-key",
+        nativeSessionCatalogsEnabled: false,
       }),
     ).toBe(true);
     expect(validateSystemAgentSetupDetectParams({ agentId: "research", unknown: true })).toBe(
@@ -215,7 +224,22 @@ describe("OpenClaw setup detection protocol", () => {
           website: "https://ollama.com/download",
         },
       ],
-      authOptions: [],
+      authOptions: [
+        {
+          id: "meta-api-key",
+          brandId: "meta",
+          label: "Meta API key",
+          kind: "install",
+          featured: false,
+        },
+        {
+          id: "custom-api-key",
+          brandId: "custom",
+          label: "Custom OpenAI/Anthropic-compatible endpoint",
+          kind: "custom",
+          featured: false,
+        },
+      ],
       prepareOptions: [
         {
           id: "lmstudio",
@@ -237,6 +261,14 @@ describe("OpenClaw setup detection protocol", () => {
           icon: "https://cdn.simpleicons.org/ollama",
         },
       ],
+      nativeSessionCatalogs: [
+        {
+          pluginId: "codex",
+          label: "Discover Codex Sessions",
+          detail: "List existing Codex conversations without copying them.",
+        },
+      ],
+      nativeSessionCatalogPreferenceRequired: true,
       workspace: "/tmp/work",
       setupComplete: false,
     };

@@ -82,11 +82,8 @@ vi.mock("../../config/config-paths.js", () => ({
   unsetConfigValueAtPath: unsetConfigValueAtPathMock,
 }));
 
-vi.mock("../../config/config.js", () => ({
-  readConfigFileSnapshot: readConfigFileSnapshotMock,
-  validateConfigObjectWithPlugins: validateConfigObjectWithPluginsMock,
-  replaceConfigFile: replaceConfigFileMock,
-  transformConfigFileWithRetry: async (params: {
+vi.mock("../../config/config.js", () => {
+  const transformConfigFileWithRetry = async (params: {
     afterWrite?: unknown;
     transform: (
       currentConfig: OpenClawConfig,
@@ -121,8 +118,26 @@ vi.mock("../../config/config.js", () => ({
       afterWrite,
       followUp: { action: "none" },
     };
-  },
-}));
+  };
+  return {
+    readConfigFileSnapshot: readConfigFileSnapshotMock,
+    validateConfigObjectWithPlugins: validateConfigObjectWithPluginsMock,
+    replaceConfigFile: replaceConfigFileMock,
+    transformConfigFileWithRetry,
+    mutateConfigFileWithRetry: (params: {
+      afterWrite?: unknown;
+      mutate: (draft: OpenClawConfig) => unknown;
+    }) =>
+      transformConfigFileWithRetry({
+        afterWrite: params.afterWrite,
+        transform: async (currentConfig) => {
+          const nextConfig = structuredClone(currentConfig);
+          await params.mutate(nextConfig);
+          return { nextConfig };
+        },
+      }),
+  };
+});
 
 vi.mock("../../config/runtime-overrides.js", () => ({
   getConfigOverrides: getConfigOverridesMock,
@@ -318,6 +333,18 @@ describe("command gating", () => {
       },
     });
     expect(result.text).toContain("elevated is not available");
+  });
+
+  it("blocks a stale owner snapshot before reading or writing config", async () => {
+    const params = buildParams("/config show", { commands: { config: true, text: true } });
+    params.command.senderIsOwner = true;
+    params.command.assertOwnerCurrent = () => {
+      throw new Error("requester revoked during dispatch");
+    };
+    const result = await handleConfigCommand(params, true);
+    expect(result?.reply?.text).toContain("owner authority changed");
+    expect(readConfigFileSnapshotMock).not.toHaveBeenCalled();
+    expect(replaceConfigFileMock).not.toHaveBeenCalled();
   });
 
   it("blocks disabled config", async () => {
@@ -848,7 +875,7 @@ describe("command gating", () => {
     expect(setResult?.reply?.text).toContain("Config updated");
     expect(replaceConfigFileMock).toHaveBeenCalledTimes(1);
     expect(replaceConfigFileMock).toHaveBeenCalledWith({
-      nextConfig: {},
+      nextConfig: { messages: { ackReaction: ":D" } },
       afterWrite: { mode: "auto" },
     });
   });

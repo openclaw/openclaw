@@ -5,6 +5,69 @@ import Testing
 @testable import OpenClaw
 
 struct BoundedProcessTests {
+    @Test func `timeout terminates the helper before joining a suspended observer`() async throws {
+        let held = AsyncStream.makeStream(of: (ChildProcessExit, CheckedContinuation<Void, Never>).self)
+        let operation = Task {
+            defer { held.continuation.finish() }
+            return try await BoundedProcess.run(
+                path: "/bin/sleep", arguments: ["30"],
+                whileRunning: { process in
+                    await withCheckedContinuation { release in held.continuation.yield((process, release)) }
+                }, timeout: 1)
+        }
+        defer { operation.cancel() }
+        var iterator = held.stream.makeAsyncIterator()
+        let (process, release) = try #require(await iterator.next())
+        let deadline = ContinuousClock.now + .seconds(10)
+        while !process.hasExited(), ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        let terminatedBeforeJoin = process.hasExited()
+        release.resume()
+        await #expect(throws: BoundedProcessError.self) { try await operation.value }
+        #expect(terminatedBeforeJoin)
+    }
+
+    @Test(arguments: ["exit", "timeout", "cancel"])
+    func `retained browser actions stop with their exact helper`(_ terminal: String) async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-handoff-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let release = directory.appendingPathComponent("release")
+        let observed = AsyncStream.makeStream(of: GatewayBrowserHandoff.self)
+        let url = try #require(URL(string: "https://gateway.example.invalid/synthetic"))
+        let operation = Task {
+            defer { observed.continuation.finish() }
+            return try await BoundedProcess.run(
+                path: "/bin/sh",
+                arguments: ["-c", "while [ ! -e \"$RELEASE\" ]; do /bin/sleep 0.02; done; printf complete"],
+                environment: ["RELEASE": release.path],
+                whileRunning: { process in
+                    observed.continuation.yield(GatewayBrowserHandoff(url: url) { process.isRunning })
+                    observed.continuation.finish()
+                },
+                timeout: terminal == "timeout" ? 1 : 15)
+        }
+        defer { operation.cancel() }
+        var iterator = observed.stream.makeAsyncIterator()
+        let action = try #require(await iterator.next())
+        var opened = 0
+        try action.perform { _ in opened += 1 }
+        if terminal == "cancel" { operation.cancel() }
+        if terminal == "exit" { try Data().write(to: release) }
+        do {
+            let result = try await operation.value
+            #expect(terminal == "exit")
+            #expect(result.terminationStatus == 0)
+        } catch {
+            #expect(terminal == "cancel" ? error is CancellationError : error is BoundedProcessError)
+        }
+        #expect(!action.isAvailable)
+        #expect(throws: CancellationError.self) { try action.perform { _ in opened += 1 } }
+        #expect(opened == 1)
+    }
+
     /// The two fan-out tests below assert that no exit notification is *lost* when a
     /// child exits while its monitor is being registered. They are not latency
     /// assertions, so their timeout must not double as one.

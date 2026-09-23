@@ -5,8 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { decodeResumeHandoff } from "../../../../src/shared/resume-handoff.js";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import type { SessionCapability } from "../../lib/sessions/index.ts";
-import { createTestChatPane } from "./chat-pane.test-support.ts";
+import { createSessionCapabilityFixture, createTestChatPane } from "./chat-pane.test-support.ts";
 import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
 import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
 import { openSlot } from "./sidebar-layout.ts";
@@ -25,7 +24,10 @@ describe("chat pane terminal action", () => {
     "closes terminal continuation after a %s ownership change",
     async (change) => {
       const client = { gatewayUrl: "wss://gateway.example/control" } as GatewayBrowserClient;
-      const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+      const { pane, state } = createTestChatPane({
+        client,
+        sessions: createSessionCapabilityFixture(),
+      });
       const row = {
         key: "bare-session",
         agentId: "row-agent",
@@ -90,7 +92,10 @@ describe("chat pane terminal action", () => {
     const client = {
       gatewayUrl: "wss://gateway.example/control?route=alpha",
     } as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const { pane, state } = createTestChatPane({
+      client,
+      sessions: createSessionCapabilityFixture(),
+    });
     const row = {
       key: "main",
       agentId: "alpha",
@@ -124,7 +129,10 @@ describe("chat pane terminal action", () => {
 
   it("exposes the terminal as a side-panel tab only when available", () => {
     const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const { pane, state } = createTestChatPane({
+      client,
+      sessions: createSessionCapabilityFixture(),
+    });
     const session = {
       key: state.sessionKey,
       kind: "direct",
@@ -169,7 +177,10 @@ describe("chat pane terminal action", () => {
 
   it("exposes Desktop as a side-panel action only for observable session targets", () => {
     const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const { pane, state } = createTestChatPane({
+      client,
+      sessions: createSessionCapabilityFixture(),
+    });
     const localSession = {
       key: state.sessionKey,
       kind: "direct",
@@ -276,7 +287,10 @@ describe("chat pane terminal action", () => {
 
   it("keeps Browser and Tasks reachable in the topbar", () => {
     const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const { pane, state } = createTestChatPane({
+      client,
+      sessions: createSessionCapabilityFixture(),
+    });
     const session = {
       key: state.sessionKey,
       kind: "direct",

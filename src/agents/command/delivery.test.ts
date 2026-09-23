@@ -11,6 +11,7 @@ import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { buildRestartRecoveryTerminalDeliveryEvidence } from "../agent-command-restart-recovery.js";
+import { hasVisibleAgentPayload } from "../embedded-agent-runner/message-visibility.js";
 import { createAgentRunRestartAbortError } from "../run-termination.js";
 import { deliverAgentCommandResult } from "./delivery.js";
 import type { AgentCommandOpts } from "./types.js";
@@ -281,6 +282,35 @@ describe("deliverAgentCommandResult payload normalization", () => {
 
   afterEach(() => {
     setActivePluginRegistry(emptyRegistry);
+  });
+
+  it.each([
+    {
+      name: "only a tool failure",
+      payloads: [{ text: "Yield failed", isError: true }],
+      visible: false,
+    },
+    {
+      name: "a final reply after a tool failure",
+      payloads: [
+        { text: "Yield failed", isError: true },
+        { text: "Both child results are ready." },
+      ],
+      visible: true,
+    },
+  ])("preserves completion visibility for $name", async ({ payloads, visible }) => {
+    const delivered = await deliverAgentCommandResultForTest({
+      payloads,
+      opts: { deliver: false },
+      omitReplyTarget: true,
+    });
+    expect(
+      hasVisibleAgentPayload(delivered, {
+        includeErrorPayloads: false,
+        includeReasoningPayloads: false,
+        requireTerminalContent: true,
+      }),
+    ).toBe(visible);
   });
 
   it("rechecks delivery ownership after asynchronous payload preparation", async () => {
@@ -824,42 +854,14 @@ describe("deliverAgentCommandResult payload normalization", () => {
     );
   });
 
-  it("preserves committed message-tool delivery evidence when automatic delivery is disabled", async () => {
-    const runtime = { log: vi.fn(), error: vi.fn() };
-
+  it("preserves settled continuation through empty command output normalization", async () => {
     const delivered = await deliverAgentCommandResultForTest({
-      runtime: runtime as never,
       omitReplyTarget: true,
       opts: { deliver: false },
       payloads: [],
-      result: {
-        didSendViaMessagingTool: true,
-        messagingToolSentTexts: ["The image is ready."],
-        messagingToolSentMediaUrls: ["/tmp/generated-image.png"],
-      },
-      sentTarget: {
-        provider: "telegram",
-        to: "telegram:-100123",
-        threadId: "22",
-        text: "The image is ready.",
-        mediaUrls: ["/tmp/generated-image.png"],
-      },
+      result: { requesterContinuationSettled: true },
     });
-
-    expect(delivered.didSendViaMessagingTool).toBe(true);
-    expect(delivered.messagingToolSentTexts).toEqual(["The image is ready."]);
-    expect(delivered.messagingToolSentMediaUrls).toEqual(["/tmp/generated-image.png"]);
-    expect(delivered.messagingToolSentTargets).toEqual([
-      {
-        tool: "message",
-        provider: "telegram",
-        to: "telegram:-100123",
-        threadId: "22",
-        text: "The image is ready.",
-        mediaUrls: ["/tmp/generated-image.png"],
-      },
-    ]);
-    expect(deliverOutboundPayloadsMock).not.toHaveBeenCalled();
+    expect(delivered.requesterContinuationSettled).toBe(true);
   });
 
   it.each([

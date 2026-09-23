@@ -3,7 +3,7 @@ summary: "CLI reference for `openclaw dashboard` (securely open the Control UI)"
 read_when:
   - You want to open or re-pair the Control UI from the Gateway host
   - You want to print the URL without launching a browser
-title: "Dashboard"
+title: "Dashboard CLI"
 ---
 
 # `openclaw dashboard`
@@ -53,6 +53,9 @@ should open `browserUrl`; native RPC clients that need the shared Gateway creden
 use `url`. If the Gateway is not ready or a browser handoff cannot be issued, the command returns
 `{"ok":false,"reason":"..."}` and exits non-zero. SecretRef-managed shared tokens are never included
 in `url`.
+
+For terminal HTTP failures, an unreadable repair diagnostic leaves the observed HTTP status
+in `reason` (for example, `HTTP 503`).
 
 Notes:
 

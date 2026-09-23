@@ -1,12 +1,11 @@
 // Starts and monitors SSH tunnels for remote gateway access.
 import { spawn } from "node:child_process";
-import net from "node:net";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { createAbortError, isAbortError, racePromiseWithAbortSignal } from "./abort-signal.js";
 import { sleepWithAbort } from "./backoff.js";
 import { formatErrorMessage, isErrno } from "./errors.js";
-import { tryListenOnPort } from "./ports-probe.js";
+import { probeTcpListener, tryListenOnPort } from "./ports-probe.js";
 import { ensurePortAvailable, PortInUseError } from "./ports.js";
 import { resolveSshClient } from "./ssh-client.js";
 
@@ -17,11 +16,8 @@ export type SshParsedTarget = {
 };
 
 export type SshTunnel = {
-  parsedTarget: SshParsedTarget;
   localPort: number;
-  remotePort: number;
   pid: number | null;
-  stderr: string[];
   stop: () => Promise<void>;
 };
 
@@ -96,27 +92,6 @@ export function parseSshTarget(raw: string): SshParsedTarget | null {
   return { user: userPart, host: hostPart, port: 22 };
 }
 
-async function canConnectLocal(port: number, signal: AbortSignal): Promise<boolean> {
-  signal.throwIfAborted();
-  return await new Promise<boolean>((resolve) => {
-    const socket = net.connect({ host: "127.0.0.1", port });
-    let connected = false;
-    const destroy = () => socket.destroy();
-    signal.addEventListener("abort", destroy, { once: true });
-    socket.once("connect", () => {
-      connected = true;
-      destroy();
-    });
-    socket.once("error", destroy);
-    socket.setTimeout(250, destroy);
-    // Closing, not just requesting destruction, releases the probe's I/O and timer.
-    socket.once("close", () => {
-      signal.removeEventListener("abort", destroy);
-      resolve(connected);
-    });
-  });
-}
-
 async function waitForLocalListener(
   port: number,
   timeoutMs: number,
@@ -124,7 +99,7 @@ async function waitForLocalListener(
 ): Promise<void> {
   const startedAt = performance.now(); // Clock adjustments must not change the polling budget.
   while (performance.now() - startedAt < timeoutMs) {
-    if (await canConnectLocal(port, signal)) {
+    if ((await probeTcpListener(port, "127.0.0.1", signal)) === "busy") {
       return;
     }
     await sleepWithAbort(50, signal);
@@ -202,10 +177,7 @@ export async function startSshPortForward(opts: {
   // stream error cannot become an uncaught exception during active use or teardown.
   stderrStream?.on("error", () => {});
   stderrStream?.setEncoding("utf8");
-  stderrStream?.on("data", (chunk) => {
-    const lines = normalizeStringEntries(String(chunk).split("\n"));
-    stderr.push(...lines);
-  });
+  stderrStream?.on("data", (chunk: string) => stderr.push(chunk));
 
   const exited = new Promise<void>((resolve) => {
     child.once("exit", () => resolve());
@@ -263,7 +235,9 @@ export async function startSshPortForward(opts: {
     if (isAbortError(err)) {
       throw err;
     }
-    const suffix = stderr.length > 0 ? `\n${stderr.join("\n")}` : "";
+    // Pipe chunks can split diagnostic lines; normalize only after joining them.
+    const lines = normalizeStringEntries(stderr.join("").split("\n"));
+    const suffix = lines.length > 0 ? `\n${lines.join("\n")}` : "";
     throw new Error(`${formatErrorMessage(err)}${suffix}`, { cause: err });
   }
 
@@ -281,11 +255,8 @@ export async function startSshPortForward(opts: {
   void exited.then(detachAbort);
 
   return {
-    parsedTarget: parsed,
     localPort,
-    remotePort: opts.remotePort,
     pid: typeof child.pid === "number" ? child.pid : null,
-    stderr,
     stop,
   };
 }

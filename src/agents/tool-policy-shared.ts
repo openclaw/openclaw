@@ -24,7 +24,7 @@ const TOOL_NAME_ALIASES = new Map<string, string>([
 ]);
 
 const TOOL_ALLOWLIST_INTERSECTION = Symbol.for("openclaw.toolAllowlistIntersection");
-type ToolAllowlistWithIntersection = string[] & {
+type ToolAllowlistWithIntersection = readonly string[] & {
   [TOOL_ALLOWLIST_INTERSECTION]?: readonly string[][];
 };
 
@@ -49,18 +49,25 @@ export function attachToolAllowlistIntersection(
 
 /** Reads independent restrictions attached by a modifying-hook merger. */
 export function readToolAllowlistIntersection(
-  toolsAllow: string[],
+  toolsAllow: readonly string[],
 ): readonly string[][] | undefined {
   return (toolsAllow as ToolAllowlistWithIntersection)[TOOL_ALLOWLIST_INTERSECTION];
 }
 
 /** Refusal for a tool that keeps its schema but sits outside the run's execution allowlist. */
 export const TOOL_EXECUTION_GATED_MESSAGE =
-  "Unavailable during skill review. Do not retry this tool. Continue with skill_workshop under the review instructions.";
+  "Unavailable in this run. Continue with the tools permitted by the run's instructions.";
 
 export function isToolExecutionAllowed(allowNames: readonly string[], toolName: string): boolean {
   const target = normalizeToolPolicyName(toolName);
   return allowNames.some((name) => normalizeToolPolicyName(name) === target);
+}
+
+/** Snapshot exact names for one synchronous batch; never retain this matcher across awaits. */
+export function createToolExecutionMatcher(allowNames: readonly string[]) {
+  const allowed = new Set<string>();
+  allowNames.forEach((name) => allowed.add(normalizeToolPolicyName(name)));
+  return (toolName: string) => allowed.has(normalizeToolPolicyName(toolName));
 }
 
 /** Normalizes a tool name or alias to the policy id used for matching. */

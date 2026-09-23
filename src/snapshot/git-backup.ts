@@ -3,13 +3,18 @@ import os from "node:os";
 import path from "node:path";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { formatErrorMessage } from "../infra/errors.js";
 import { canonicalPathFromExistingAncestor, isPathInside } from "../infra/fs-safe.js";
 import {
+  GIT_TIMEOUT_MS,
   executeGitCommand as runGit,
+  normalizeGitPathForFilesystem,
   requireGitCommand as requireGit,
-  requireGitCommandBuffer as requireGitBuffer,
+  requireGitCommandOutput,
 } from "../infra/git-exec.js";
+import { assertNotUpdateCapturePath } from "../infra/update-capture-paths.js";
 import { formatCommandOutput, formatCommandResult } from "../process/command-error.js";
+import { spawnCommand } from "../process/exec-spawn.js";
 import { BACKUP_RUN_ERROR_MAX_LENGTH } from "../state/backup-run-records.contract.js";
 import {
   GIT_BACKUP_MANIFEST,
@@ -27,7 +32,6 @@ import { ensurePrivateSnapshotRepositoryRoot } from "./local-repository.js";
 import { createOpenClawSnapshotCopy } from "./openclaw-snapshot-copy.js";
 import type { SnapshotDatabaseRef } from "./snapshot-provider.js";
 
-const GIT_BACKUP_MATERIALIZE_MAX_BYTES = 1024 * 1024 * 1024;
 const GIT_BACKUP_DIAGNOSTIC_MAX_LENGTH = 500;
 const GIT_BACKUP_NON_BACKUP_HISTORY_WARNING =
   "repository history contains non-backup commits; use a dedicated backup repository";
@@ -39,6 +43,7 @@ type GitBackupCreateResult = {
   pushed: boolean;
   pushWarning?: string;
   manifests: GitBackupManifest[];
+  warnings: string[];
 };
 
 function redactGitBackupText(value: string): string {
@@ -113,7 +118,7 @@ function gitBackupRepositoryPrivacyRemediation(repositoryPath: string, cause: un
 async function assertGitRepository(repositoryPath: string, env?: NodeJS.ProcessEnv): Promise<void> {
   const topLevel = await requireGit(repositoryPath, ["rev-parse", "--show-toplevel"], { env });
   const [canonicalTopLevel, canonicalRepository] = await Promise.all([
-    fs.realpath(topLevel),
+    fs.realpath(normalizeGitPathForFilesystem(topLevel)),
     fs.realpath(repositoryPath),
   ]);
   if (canonicalTopLevel !== canonicalRepository) {
@@ -211,7 +216,10 @@ async function assertBackupOwnedScope(scopePath: string): Promise<void> {
   }
 }
 
-async function removeStaleAgentScopes(repositoryPath: string): Promise<void> {
+async function removeStaleAgentScopes(
+  repositoryPath: string,
+  retainedScopes: Set<string>,
+): Promise<void> {
   const agentsPath = path.join(repositoryPath, "agents");
   let entries: string[];
   try {
@@ -224,7 +232,11 @@ async function removeStaleAgentScopes(repositoryPath: string): Promise<void> {
   }
   const scopes = entries.map((entry) => path.join(agentsPath, entry));
   await Promise.all(scopes.map(async (scope) => await assertBackupOwnedScope(scope)));
-  await Promise.all(scopes.map(async (scope) => await fs.rm(scope, { recursive: true })));
+  await Promise.all(
+    scopes
+      .filter((scope) => !retainedScopes.has(path.relative(repositoryPath, scope)))
+      .map(async (scope) => await fs.rm(scope, { recursive: true })),
+  );
 }
 
 async function copyStagedScope(
@@ -273,6 +285,9 @@ export async function createGitBackup(params: {
   now?: Date;
   gitEnv?: NodeJS.ProcessEnv;
 }): Promise<GitBackupCreateResult> {
+  for (const database of params.databases) {
+    assertNotUpdateCapturePath(database.path, params.stateDir);
+  }
   const repositoryPath = path.resolve(params.repositoryPath);
   await initializeGitBackupRepository({
     repositoryPath,
@@ -282,15 +297,26 @@ export async function createGitBackup(params: {
   const stagingRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-git-backup-"));
   await fs.chmod(stagingRoot, 0o700);
   const manifests: GitBackupManifest[] = [];
+  const warnings: string[] = [];
   try {
-    for (const database of params.databases) {
+    for (const [index, database] of params.databases.entries()) {
       const outputPath = path.join(stagingRoot, gitBackupScopePath(database.identity));
       await fs.mkdir(path.dirname(outputPath), { recursive: true, mode: 0o700 });
-      const copyPath = path.join(
-        stagingRoot,
-        `${database.identity.role}-${manifests.length}.sqlite`,
-      );
-      await createOpenClawSnapshotCopy({ database, targetPath: copyPath });
+      const copyPath = path.join(stagingRoot, `${database.identity.role}-${index}.sqlite`);
+      try {
+        await createOpenClawSnapshotCopy({
+          database: { ...database, path: await fs.realpath(database.path) },
+          targetPath: copyPath,
+        });
+      } catch (error) {
+        if (!params.all || database.identity.role !== "agent") {
+          throw error;
+        }
+        warnings.push(
+          `Agent ${database.identity.agentId} degraded; keeping previous backup scope if present: ${sanitizeGitBackupDiagnostic(formatErrorMessage(error))}`,
+        );
+        continue;
+      }
       manifests.push(
         await dumpGitBackupDatabase({
           snapshotPath: copyPath,
@@ -301,11 +327,18 @@ export async function createGitBackup(params: {
       );
       await fs.rm(copyPath, { force: true });
     }
-    if (params.all) {
-      await removeStaleAgentScopes(repositoryPath);
+    if (manifests.length === 0) {
+      throw new Error("No Git backup databases were found for the selected scope.");
     }
-    for (const database of params.databases) {
-      await copyStagedScope(stagingRoot, repositoryPath, database.identity);
+    if (params.all) {
+      // Selection is the configured roster, including agents whose snapshot failed.
+      await removeStaleAgentScopes(
+        repositoryPath,
+        new Set(params.databases.map(({ identity }) => gitBackupScopePath(identity))),
+      );
+    }
+    for (const { identity } of manifests) {
+      await copyStagedScope(stagingRoot, repositoryPath, identity);
     }
   } finally {
     await fs.rm(stagingRoot, { recursive: true, force: true }).catch(() => undefined);
@@ -378,6 +411,7 @@ export async function createGitBackup(params: {
     pushed,
     ...(pushWarning ? { pushWarning } : {}),
     manifests,
+    warnings,
   };
 }
 
@@ -423,15 +457,16 @@ async function materializeGitBackupRef(params: {
       const relative = file.slice(scope.length + 1);
       const destination = path.join(outputPath, relative);
       await fs.mkdir(path.dirname(destination), { recursive: true, mode: 0o700 });
-      // Table dumps can be tens of megabytes on real agent databases; the
-      // 1MB exec default would truncate them into a hash-mismatch failure.
-      await fs.writeFile(
-        destination,
-        await requireGitBuffer(repositoryPath, ["show", `${commit}:${file}`], {
-          maxOutputBytes: GIT_BACKUP_MATERIALIZE_MAX_BYTES,
-        }),
-        { mode: 0o600 },
-      );
+      await fs.writeFile(destination, "", { flag: "wx", mode: 0o600 });
+      // Git owns decoding the blob; pipe its bytes into private staging rather
+      // than collecting another complete table in the parent process.
+      await spawnCommand(["git", "-C", repositoryPath, "show", `${commit}:${file}`], {
+        stdin: "ignore",
+        stdout: { file: destination },
+        buffer: { stdout: false },
+        maxBuffer: { stderr: 1024 * 1024 },
+        timeout: GIT_TIMEOUT_MS,
+      });
     }
     return {
       commit,
@@ -513,10 +548,11 @@ export async function readGitBackupLog(params: {
     `--max-count=${params.limit}`,
     "--pretty=format:%H%x09%cI%x09%s",
   ]);
-  if (result.code !== 0) {
-    throw new Error(formatGitBackupCommandResult("git log", result));
-  }
-  return result.stdout
+  return requireGitCommandOutput(
+    "git log",
+    result,
+    (command, failure) => new Error(formatGitBackupCommandResult(command, failure)),
+  )
     .split("\n")
     .filter(Boolean)
     .map((line) => {

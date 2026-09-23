@@ -20,10 +20,8 @@ import { MissingProviderAuthError } from "../model-auth.js";
 import { projectModelThinkingCompat } from "../model-catalog-lookup.js";
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.js";
 import { applyPreparedRuntimeAuthToModel } from "../provider-request-config.js";
-import {
-  protectPreparedProviderRuntimeAuth,
-  unwrapSecretSentinelsForProviderEgress,
-} from "../provider-secret-egress.js";
+import { protectPreparedProviderRuntimeAuth } from "../provider-runtime-auth-protection.js";
+import { unwrapSecretSentinelsForProviderEgress } from "../provider-secret-egress.js";
 import { materializePreparedRuntimeModel } from "../runtime-plan/materialize-model.js";
 import {
   resolvePreparedRuntimeAuthAttempts,
@@ -52,6 +50,7 @@ import type { EmbeddedAgentCompactResult } from "./types.js";
 export type PreparedCompactEmbeddedAgentSessionParams = CompactEmbeddedAgentSessionRuntimeParams & {
   sessionFile: string;
   preparedModelRuntime: PreparedModelRuntimeSnapshot;
+  requestedRouteResolution?: "resolved";
   transcriptBytePreflightAuthority?: true;
   transcriptByteCompactionPersistence?: TranscriptByteCompactionPersistence;
 };
@@ -142,8 +141,10 @@ export async function prepareDirectCompactionAttempt(
   };
   const preparedModelRuntime = params.preparedModelRuntime;
   const { resolution: modelResolution } = await resolveTieredModel({
+    abortSignal: params.abortSignal,
     provider: runtimeProvider,
     modelId,
+    requestedRouteResolution: params.requestedRouteResolution,
     agentDir,
     config: params.config,
     workspaceDir: resolvedWorkspace,
@@ -164,12 +165,7 @@ export async function prepareDirectCompactionAttempt(
   // Overrides stay unset when no bound/planned/explicit harness resolved so auth-aware
   // selection can pick the credential-owning harness (codex for ChatGPT OAuth); native
   // transcript compaction stays gated on the selected prepared harness.
-  const {
-    runtimeAuthProfileStore,
-    runtimeAuthPreparation,
-    selectedPreparedHarness,
-    providerUsesProfileScopedModelMetadata,
-  } = await prepareCompactionHarnessAuth({
+  const harnessAuth = await prepareCompactionHarnessAuth({
     ...params,
     provider,
     metadataProvider: runtimeProvider,
@@ -184,6 +180,19 @@ export async function prepareDirectCompactionAttempt(
     agentHarnessId: boundHarnessRuntime,
     agentHarnessRuntimeOverride: selectedHarnessRuntimeOverride,
   });
+  if (!harnessAuth.ok) {
+    params.abortSignal?.throwIfAborted();
+    return {
+      ok: false as const,
+      result: fail(formatErrorMessage(harnessAuth.error), harnessAuth.error),
+    };
+  }
+  const {
+    runtimeAuthProfileStore,
+    runtimeAuthPreparation,
+    selectedPreparedHarness,
+    providerUsesProfileScopedModelMetadata,
+  } = harnessAuth;
   const preparedHarnessRuntime = selectedPreparedHarness.id;
   const resolvePreparedModel = ({
     config,
@@ -193,10 +202,11 @@ export async function prepareDirectCompactionAttempt(
     Parameters<typeof materializePreparedRuntimeModel<ProviderRuntimeModel>>[0]["resolveModel"]
   >[0]) =>
     resolveModelAsync(runtimeProvider, modelId, agentDir, config, {
+      abortSignal: params.abortSignal,
       ...modelResolutionOptions,
+      modelIdSource: params.requestedRouteResolution === "resolved" ? "selected" : "input",
       skipAgentDiscovery: true,
       allowBundledStaticCatalogFallback: true,
-      preferBundledStaticCatalogTransport: true,
       authProfileId: profileId,
       authProfileMode: resolvedAuthProfileMode,
     });
@@ -210,6 +220,8 @@ export async function prepareDirectCompactionAttempt(
       provider,
       modelId,
       config: params.config,
+      workspaceDir: resolvedWorkspace,
+      metadataSnapshot: preparedModelRuntime.metadataSnapshot,
       model: materializeParams.model,
       forceResolve: materializeParams.forceResolve,
       resolveModel: resolvePreparedModel,
@@ -240,6 +252,7 @@ export async function prepareDirectCompactionAttempt(
   let resolvedAuthAttempt: Awaited<ReturnType<typeof resolveRuntimeAuthAttempt>>;
   try {
     resolvedAuthAttempt = await resolveRuntimeAuthAttempt();
+    params.abortSignal?.throwIfAborted();
   } catch (err) {
     return { ok: false as const, result: fail(formatErrorMessage(err), err) };
   }
@@ -253,29 +266,31 @@ export async function prepareDirectCompactionAttempt(
         throw new MissingProviderAuthError(runtimeModel.provider, apiKeyInfo);
       }
     } else {
-      const preparedAuth = protectPreparedProviderRuntimeAuth({
+      const runtimeAuth = await prepareProviderRuntimeAuth({
         provider: runtimeModel.provider,
-        preparedAuth: await prepareProviderRuntimeAuth({
-          provider: runtimeModel.provider,
+        config: params.config,
+        workspaceDir: resolvedWorkspace,
+        env: process.env,
+        context: {
           config: params.config,
+          agentDir,
           workspaceDir: resolvedWorkspace,
           env: process.env,
-          context: {
-            config: params.config,
-            agentDir,
-            workspaceDir: resolvedWorkspace,
-            env: process.env,
-            provider: runtimeModel.provider,
-            modelId,
-            model: runtimeModel,
-            apiKey: unwrapSecretSentinelsForProviderEgress(
-              apiKeyInfo.apiKey,
-              "provider runtime auth exchange",
-            ),
-            authMode: apiKeyInfo.mode,
-            profileId: apiKeyInfo.profileId,
-          },
-        }),
+          provider: runtimeModel.provider,
+          modelId,
+          model: runtimeModel,
+          apiKey: unwrapSecretSentinelsForProviderEgress(
+            apiKeyInfo.apiKey,
+            "provider runtime auth exchange",
+          ),
+          authMode: apiKeyInfo.mode,
+          profileId: apiKeyInfo.profileId,
+        },
+      });
+      params.abortSignal?.throwIfAborted();
+      const preparedAuth = protectPreparedProviderRuntimeAuth({
+        provider: runtimeModel.provider,
+        preparedAuth: runtimeAuth,
       });
       runtimeModel = applyPreparedRuntimeAuthToModel(runtimeModel, preparedAuth);
       const runtimeApiKey = preparedAuth?.apiKey ?? apiKeyInfo.apiKey;
@@ -328,6 +343,9 @@ export async function prepareDirectCompactionAttempt(
           workspaceDir: resolvedWorkspace,
         })
       : placementParams.sandbox;
+  if (params.requireWritableSandbox && sandbox?.enabled && sandbox.workspaceAccess !== "rw") {
+    throw new Error("sandbox workspace is not read-write; collection review skipped");
+  }
   const effectiveWorkspace = sandbox?.enabled
     ? sandbox.workspaceAccess === "rw"
       ? resolvedWorkspace

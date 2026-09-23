@@ -1,25 +1,24 @@
 import { describe, expect, it, vi } from "vitest";
 import { createChannelParticipantAdmissionEvidence } from "../../../test/helpers/channel-admission-evidence.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import type { SessionMcpRuntime } from "../../agents/agent-bundle-mcp-types.js";
-import type { CompactionAccountingFact } from "../../agents/embedded-agent-runner/run/internal-params.js";
+import type {
+  CompactionAccountingFact,
+  RunEmbeddedAgentInternalParams,
+} from "../../agents/embedded-agent-runner/run/internal-params.js";
 import {
   clearActiveEmbeddedRun,
   isEmbeddedAgentRunActive,
   setActiveEmbeddedRun,
   type EmbeddedAgentQueueHandle,
 } from "../../agents/embedded-agent-runner/runs.js";
-import { updateMcpAppModelContext } from "../../agents/mcp-app-model-context.js";
 import {
   createAgentRunDirectAbortError,
   createAgentRunRestartAbortError,
 } from "../../agents/run-termination.js";
 import { configureExecutionIdentityAdmissionSink } from "../../audit/execution-identity-admission.js";
-import {
-  configureChannelAdmissionDecisionSink,
-  configureChannelAdmissionEvidenceCollection,
-} from "../../channels/message-access/admission-evidence.js";
+import { createChannelAdmissionAudit } from "../../channels/message-access/admission-evidence.js";
 import { getDiagnosticSessionActivitySnapshot } from "../../logging/diagnostic-run-activity.js";
+import { useBundledProviderPolicyArtifactsForTest } from "../../plugin-sdk/test-helpers/provider-policy-artifacts.test-support.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions } from "../types.js";
 import {
@@ -39,6 +38,7 @@ import type {
   FallbackRunnerParams,
   EmbeddedAgentParams,
 } from "./agent-runner-execution.test-support.js";
+import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import {
   createReplyOperation,
   hasReplyOperationExecutionStarted,
@@ -46,6 +46,7 @@ import {
   type ReplyOperation,
 } from "./reply-run-registry.js";
 
+useBundledProviderPolicyArtifactsForTest(["openai", "anthropic"]);
 const state = await setupAgentRunnerExecutionTestState();
 const execution = await import("./agent-runner-execution.js");
 const { emitAgentEvent } = await import("../../infra/agent-events.js");
@@ -59,6 +60,20 @@ const compactionTarget = {
 };
 
 describe("executeAgentTurn: run lifecycle and ownership", () => {
+  it("classifies cancellation raised by the real deferred lifecycle owner", async () => {
+    state.runEmbeddedAgentMock.mockImplementationOnce(
+      async (params: RunEmbeddedAgentInternalParams) => {
+        params.onDeferredLifecycleAbort?.();
+        params.abortSignal?.throwIfAborted();
+        throw new Error("The deferred abort must stop the current attempt");
+      },
+    );
+
+    const result = await execution.executeAgentTurn(createMinimalRunAgentTurnParams());
+
+    expect(result.outcome).toMatchObject({ kind: "aborted", reason: "user" });
+  });
+
   it.each([
     {
       kind: "restart",
@@ -96,6 +111,7 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
       setActiveEmbeddedRun(sessionId, handle, sessionKey);
       state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
         params.onDeferredLifecycleOwner?.({
+          beginRetryWait: () => undefined,
           complete: async () => clearActiveEmbeddedRun(sessionId, handle, sessionKey),
           discard: () => clearActiveEmbeddedRun(sessionId, handle, sessionKey),
         });
@@ -141,21 +157,24 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     const order: string[] = [];
     const identityWork: unknown[] = [];
     const decisionReceipts: unknown[] = [];
-    const clearCollection = configureChannelAdmissionEvidenceCollection(true);
+    const audit = createChannelAdmissionAudit({
+      enabled: true,
+      decisionSink: (receipt) => {
+        order.push("decision");
+        decisionReceipts.push(receipt);
+        return true;
+      },
+    });
     const clearIdentitySink = configureExecutionIdentityAdmissionSink((work) => {
       order.push("identity");
       identityWork.push(work);
-      return true;
-    });
-    const clearDecisionSink = configureChannelAdmissionDecisionSink((receipt) => {
-      order.push("decision");
-      decisionReceipts.push(receipt);
       return true;
     });
     try {
       const followupRun = createFollowupRun();
       followupRun.run.config = { logging: { audit: { executionIdentity: true } } };
       followupRun.channelAdmissionEvidence = createChannelParticipantAdmissionEvidence({
+        audit,
         channelId: "whatsapp",
         accountId: "default",
         participantId: "person-42",
@@ -196,9 +215,8 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
         },
       ]);
     } finally {
-      clearDecisionSink();
       clearIdentitySink();
-      clearCollection();
+      audit.close();
     }
   });
 
@@ -254,7 +272,8 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     });
 
     const executeAgentTurn = await getExecuteAgentTurnForTest();
-    await executeAgentTurn(createMinimalRunAgentTurnParams({ followupRun }));
+    const result = await executeAgentTurn(createMinimalRunAgentTurnParams({ followupRun }));
+    expect(result.kind, result.kind === "final" ? result.payload.text : undefined).toBe("success");
 
     expect(
       state.runEmbeddedAgentMock.mock.calls.map(
@@ -742,65 +761,6 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     }
   });
 
-  it("injects pending MCP App context exactly once without changing transcript text", async () => {
-    const runtime = { sessionId: "session" } as SessionMcpRuntime;
-    state.peekSessionMcpRuntimeMock.mockReturnValue(runtime);
-    updateMcpAppModelContext(
-      runtime,
-      {},
-      {
-        content: [{ type: "text", text: "selected item 42" }],
-      },
-    );
-    state.runEmbeddedAgentMock.mockImplementation(async (params: EmbeddedAgentParams) => {
-      params.onExecutionPhase?.({ phase: "model_call_started" });
-      return { payloads: [{ text: "ok" }], meta: {} };
-    });
-
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    await executeAgentTurn({
-      ...createMinimalRunAgentTurnParams(),
-      commandBody: "show details",
-      transcriptCommandBody: "show details",
-    });
-    await executeAgentTurn({
-      ...createMinimalRunAgentTurnParams(),
-      commandBody: "next question",
-      transcriptCommandBody: "next question",
-    });
-
-    expect(state.runEmbeddedAgentMock.mock.calls[0]?.[0]?.prompt).toContain("selected item 42");
-    expect(state.runEmbeddedAgentMock.mock.calls[0]?.[0]?.transcriptPrompt).toBe("show details");
-    expect(state.runEmbeddedAgentMock.mock.calls[1]?.[0]?.prompt).toBe("next question");
-    expect(state.runEmbeddedAgentMock.mock.calls[1]?.[0]?.transcriptPrompt).toBe("next question");
-  });
-
-  it("does not consume pending MCP App context when pre-start validation fails", async () => {
-    const runtime = { sessionId: "session" } as SessionMcpRuntime;
-    state.peekSessionMcpRuntimeMock.mockReturnValue(runtime);
-    updateMcpAppModelContext(
-      runtime,
-      {},
-      {
-        content: [{ type: "text", text: "still pending" }],
-      },
-    );
-    state.resolveCurrentTurnImagesMock.mockRejectedValueOnce(new Error("invalid image"));
-
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    await expect(executeAgentTurn(createMinimalRunAgentTurnParams())).rejects.toThrow(
-      "invalid image",
-    );
-    state.resolveCurrentTurnImagesMock.mockResolvedValueOnce({});
-    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
-      params.onExecutionPhase?.({ phase: "model_call_started" });
-      return { payloads: [{ text: "ok" }], meta: {} };
-    });
-    await executeAgentTurn(createMinimalRunAgentTurnParams());
-
-    expect(state.runEmbeddedAgentMock.mock.calls[0]?.[0]?.prompt).toContain("still pending");
-  });
-
   it("forwards CLI harness execution phases into typing signals", async () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
@@ -841,43 +801,6 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
       clientCaps: ["tool-events", "inline-widgets"],
       media: followupRun.media,
     });
-  });
-
-  it("consumes pending MCP App context when a CLI process receives the turn", async () => {
-    state.isCliProviderMock.mockReturnValue(true);
-    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      result: await params.run("codex-cli", "gpt-5.4", initialFallbackAttemptOptions(params)),
-      provider: "codex-cli",
-      model: "gpt-5.4",
-      attempts: [],
-    }));
-    const runtime = { sessionId: "session" } as SessionMcpRuntime;
-    state.peekSessionMcpRuntimeMock.mockReturnValue(runtime);
-    updateMcpAppModelContext(
-      runtime,
-      {},
-      {
-        content: [{ type: "text", text: "CLI selection" }],
-      },
-    );
-    state.runCliAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
-      params.onExecutionPhase?.({ phase: "process_spawned" });
-      return { payloads: [{ text: "final" }], meta: {} };
-    });
-    const followupRun = createFollowupRun();
-    followupRun.run.provider = "codex-cli";
-    followupRun.run.model = "gpt-5.4";
-
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    await executeAgentTurn(
-      createMinimalRunAgentTurnParams({
-        followupRun,
-      }),
-    );
-
-    expect(state.runCliAgentMock.mock.calls[0]?.[0]?.prompt).toContain("CLI selection");
-    expect(state.runCliAgentMock.mock.calls[0]?.[0]?.transcriptPrompt).toBe("fix it");
-    expect(runtime.pendingMcpAppModelContext).toBeUndefined();
   });
 
   it("requires explicit message targets on heartbeat CLI runs", async () => {
@@ -937,6 +860,64 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     });
   });
 
+  it("forwards bundle MCP retirement to isolated heartbeat embedded runs", async () => {
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("anthropic", "claude", initialFallbackAttemptOptions(params)),
+      provider: "anthropic",
+      model: "claude",
+      attempts: [],
+    }));
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "HEARTBEAT_OK" }],
+      meta: {},
+    });
+
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const opts: InternalGetReplyOptions = { isHeartbeat: true, cleanupBundleMcpOnRunEnd: true };
+    const params = createMinimalRunAgentTurnParams({ opts });
+    params.isHeartbeat = true;
+
+    await executeAgentTurn(params);
+
+    expectMockCallArgFields(
+      state.runEmbeddedAgentMock,
+      0,
+      "isolated heartbeat embedded run params",
+      {
+        trigger: "heartbeat",
+        cleanupBundleMcpOnRunEnd: true,
+      },
+    );
+  });
+
+  it("forwards bundle MCP retirement to isolated heartbeat CLI runs", async () => {
+    state.isCliProviderMock.mockReturnValue(true);
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("claude-cli", "sonnet-4.6", initialFallbackAttemptOptions(params)),
+      provider: "claude-cli",
+      model: "sonnet-4.6",
+      attempts: [],
+    }));
+    state.runCliAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "final" }],
+      meta: {},
+    });
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "claude-cli";
+    followupRun.run.model = "sonnet-4.6";
+    const opts: InternalGetReplyOptions = { isHeartbeat: true, cleanupBundleMcpOnRunEnd: true };
+    const params = createMinimalRunAgentTurnParams({ followupRun, opts });
+    params.isHeartbeat = true;
+
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    await executeAgentTurn(params);
+
+    expectMockCallArgFields(state.runCliAgentMock, 0, "isolated heartbeat CLI run params", {
+      trigger: "heartbeat",
+      cleanupBundleMcpOnRunEnd: true,
+    });
+  });
+
   it("omits requireExplicitMessageTarget on ordinary embedded runs", async () => {
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
       result: await params.run("anthropic", "claude", initialFallbackAttemptOptions(params)),
@@ -993,7 +974,7 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
 
   it("does not consume channel evidence until a retry reaches runtime admission", async () => {
     const captured: unknown[] = [];
-    const clearCollection = configureChannelAdmissionEvidenceCollection(true);
+    const audit = createChannelAdmissionAudit({ enabled: true });
     const clearSink = configureExecutionIdentityAdmissionSink((work) => {
       captured.push(work);
       return true;
@@ -1002,6 +983,7 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
       const followupRun = createFollowupRun();
       followupRun.run.config = { logging: { audit: { executionIdentity: true } } };
       followupRun.channelAdmissionEvidence = createChannelParticipantAdmissionEvidence({
+        audit,
         channelId: "whatsapp",
         participantId: "person-1",
       });
@@ -1043,7 +1025,7 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
       ]);
     } finally {
       clearSink();
-      clearCollection();
+      audit.close();
     }
   });
 

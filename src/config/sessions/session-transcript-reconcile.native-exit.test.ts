@@ -1,6 +1,6 @@
 import { setImmediate as checkpoint } from "node:timers/promises";
-import { Worker, type WorkerOptions } from "node:worker_threads";
-import { afterEach, expect, it } from "vitest";
+import type { Worker } from "node:worker_threads";
+import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { assertNoOpenClawAgentDatabaseLeases } from "../../state/openclaw-agent-db-lease.js";
@@ -24,11 +24,17 @@ import {
   waitForSessionTranscriptIndexReconcile,
   waitForSessionTranscriptIndexReconcilesInStateDir,
 } from "./session-transcript-reconcile.js";
+import { useReconcileWorkerObserver } from "./session-transcript-reconcile.test-support.js";
 import type {
   SessionTranscriptReconcileWorkerInput,
   SessionTranscriptReconcileWorkerMessage,
 } from "./session-transcript-reconcile.worker.js";
 
+vi.mock("node:worker_threads", async () =>
+  (await import("./session-transcript-reconcile.test-support.js")).createObservedWorkerThreads(),
+);
+
+const observer = useReconcileWorkerObserver();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const databaseOptions = { agentId: "main" };
 const scope = {
@@ -46,34 +52,40 @@ function createQueuedProjectionFence(stage: ProjectionStage, beforeRelease: () =
   let blocker: Promise<void> | undefined;
   let fenced = false;
   const modes: SessionTranscriptReconcileWorkerInput["mode"][] = [];
+  observer.onTask = ({ input, worker: created, port, observeMessage }) => {
+    modes.push(input.mode);
+    if (input.mode === "disk") {
+      worker = created;
+    }
+    const post = port.postMessage.bind(port);
+    port.postMessage = (message: unknown, transferList) => {
+      const options = Array.isArray(transferList) ? { transfer: transferList } : transferList;
+      post(message, options);
+      if (fenced) {
+        acknowledged.resolve();
+      }
+    };
+    // Runs before the owner listener: its accepted message uses the same real FIFO.
+    observeMessage((message: SessionTranscriptReconcileWorkerMessage) => {
+      if (message.type === stage && !fenced) {
+        fenced = true;
+        blocker = runExclusiveSqliteSessionWrite(
+          databaseOptions,
+          async () => {
+            blocked.resolve();
+            await release.promise;
+            beforeRelease();
+          },
+          "sessions.transcript-index.preflight",
+        );
+      }
+    });
+  };
+
   return {
     modes,
     blocked: blocked.promise,
     release: release.resolve,
-    createWorker(this: void, filename: string | URL, options: WorkerOptions): Worker {
-      modes.push((options.workerData as SessionTranscriptReconcileWorkerInput).mode);
-      const created = new Worker(filename, options);
-      worker = created;
-      const post = created.postMessage.bind(created);
-      created.postMessage = (message: unknown, transferList) => {
-        post(message, transferList);
-        if (fenced) {
-          acknowledged.resolve();
-        }
-      };
-      // Registered before the owner listener: its accepted message uses the same real FIFO.
-      created.on("message", (message: SessionTranscriptReconcileWorkerMessage) => {
-        if (message.type === stage && !fenced) {
-          fenced = true;
-          blocker = runExclusiveSqliteSessionWrite(databaseOptions, async () => {
-            blocked.resolve();
-            await release.promise;
-            beforeRelease();
-          });
-        }
-      });
-      return created;
-    },
     async terminate(): Promise<void> {
       if (!worker) {
         throw new Error("projection worker has not started");
@@ -87,7 +99,11 @@ function createQueuedProjectionFence(stage: ProjectionStage, beforeRelease: () =
       // On baseline failure, settlement can beat this handler; join it before fixture disposal.
       if (fenced) {
         if (stage === "done") {
-          await runExclusiveSqliteSessionWrite(databaseOptions, async () => undefined);
+          await runExclusiveSqliteSessionWrite(
+            databaseOptions,
+            async () => undefined,
+            "sessions.transcript-index.preflight",
+          );
         } else {
           await withTestTimeout(acknowledged.promise, 5_000, "queued projection did not finish");
         }
@@ -163,7 +179,7 @@ it.each(cases)(
             .all(scope.sessionId),
         });
         const originalSource = sourceRows();
-        const params = { ...databaseOptions, createWorker: fence.createWorker };
+        const params = databaseOptions;
         let settled = false;
         if (scheduled) {
           startSessionTranscriptIndexReconcile(params);
@@ -203,7 +219,11 @@ it.each(cases)(
         }
         expect(isSessionTranscriptIndexReconcileRunning(databaseOptions)).toBe(false);
         const atSettlement = snapshot();
-        await runExclusiveSqliteSessionWrite(databaseOptions, async () => undefined);
+        await runExclusiveSqliteSessionWrite(
+          databaseOptions,
+          async () => undefined,
+          "sessions.transcript-index.preflight",
+        );
         await checkpoint();
         expect(snapshot()).toEqual(atSettlement);
         if (!replace) {

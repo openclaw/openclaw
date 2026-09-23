@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.ts";
+import { createAuthProfileStoreFixture } from "../agents/auth-profiles/credential-fixtures.test-support.js";
 import { prepareRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/runtime-snapshots.js";
 import type { SecretRef } from "../config/types.secrets.js";
 import { resolveAuthProfileSecretOwnerId } from "./runtime-auth-profile-owner.js";
@@ -65,17 +66,14 @@ function attachAuthOwner(params: {
   params.snapshot.authStores = prepareRuntimeAuthProfileStoreSnapshots([
     {
       agentDir: params.agentDir,
-      store: {
-        version: 1,
-        profiles: {
-          [params.profileId]: {
-            type: "api_key",
-            provider: "openai",
-            key: "dummy",
-            keyRef: params.ref,
-          },
+      store: createAuthProfileStoreFixture({
+        [params.profileId]: {
+          type: "api_key",
+          provider: "openai",
+          key: "dummy",
+          keyRef: params.ref,
         },
-      },
+      }),
     },
   ]);
   const owner = {

@@ -570,12 +570,6 @@ function sanitizeWebFetchUrl(raw: string): string {
   return repaired.replace(/^(https?:\/\/[^/?#\s]+)\s+$/i, "$1");
 }
 
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.webFetchTestApi")] = {
-    sanitizeWebFetchUrl,
-  };
-}
-
 async function buildWebFetchPayload(params: {
   providerId?: string;
   payload: unknown;

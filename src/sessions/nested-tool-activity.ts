@@ -30,6 +30,12 @@ const activitySchema = z.object({
   details: activityDetails,
   timestamp: z.number().finite(),
 });
+let compiledActivitySchema: typeof activitySchema | undefined;
+
+function getActivitySchema() {
+  // Ordinary transcript rows never pay the one-time compilation cost.
+  return (compiledActivitySchema ??= z.compile(activitySchema));
+}
 
 export type NestedToolActivity = z.infer<typeof activitySchema>;
 
@@ -38,7 +44,7 @@ export function readNestedToolActivity(value: unknown): NestedToolActivity | und
   if (asOptionalRecord(value)?.customType !== NESTED_TOOL_ACTIVITY_CUSTOM_TYPE) {
     return undefined;
   }
-  const parsed = activitySchema.safeParse(value);
+  const parsed = getActivitySchema().safeParse(value);
   return parsed.success ? parsed.data : undefined;
 }
 
@@ -52,7 +58,7 @@ export function createNestedToolActivity(
   const result = boundedJsonUtf8Bytes(details.result, 32_768).complete
     ? details.result
     : { content: [{ type: "text", text: "[Nested tool output omitted: exceeds display limit]" }] };
-  return activitySchema.parse({
+  return getActivitySchema().parse({
     role: "custom",
     customType: NESTED_TOOL_ACTIVITY_CUSTOM_TYPE,
     display: true,

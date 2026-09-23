@@ -2,14 +2,21 @@ import type { DatabaseSync } from "node:sqlite";
 import { safeParseJsonRecord } from "@openclaw/normalization-core";
 import { asFiniteNumber, asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { estimateAcpEventRowBytes, estimateAcpSessionRowBytes } from "../acp/event-ledger-bytes.js";
 import { normalizeAgentRunTerminalReplySnapshot } from "../agents/agent-run-terminal-reply.js";
 import { selectDeliverableSessionsReply } from "../agents/tools/sessions-send-tokens.js";
 import { buildApprovalResolutionRef } from "../infra/approval-resolution-ref.js";
+import { getNodeSqliteKysely, iterateSqliteQuerySync } from "../infra/kysely-sync.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { compactLegacyDeliveryQueueFailures } from "./openclaw-state-db-delivery-queue-backfill.js";
 import * as operatorApprovalMigration from "./openclaw-state-db-operator-approval-migration.js";
 import { ensureColumn, tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
+import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
+
+// SQLite's default trim removes only spaces; task records use ECMAScript String.trim.
+const taskIdentifierWhitespace =
+  "\u0009\u000a\u000b\u000c\u000d \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff";
 
 export function ensureOperatorApprovalResolutionRefs(db: DatabaseSync): void {
   if (!tableExists(db, "operator_approvals")) {
@@ -141,9 +148,9 @@ export function repairLegacySubagentTaskBindings(db: DatabaseSync): void {
   // v2026.6.34 replaced runId/createdAt but retained sessionStartedAt. A reused
   // child session is not an owner: require one task/run, matching requester and
   // timing, and no competing binding. Running replacements need repair too.
-  db.exec(`
+  db.prepare(`
     WITH runs AS MATERIALIZED (
-      SELECT run_id, child_session_key, requester_session_key, created_at,
+      SELECT run_id, trim(child_session_key, ?) AS child_session_key, requester_session_key, created_at,
         CASE WHEN json_valid(payload_json) THEN payload_json ELSE 'null' END AS payload
       FROM subagent_runs
     ), bindings AS MATERIALIZED (
@@ -169,14 +176,14 @@ export function repairLegacySubagentTaskBindings(db: DatabaseSync): void {
         AND NOT EXISTS (SELECT 1 FROM runs AS sibling
           WHERE json_type(sibling.payload) <> 'object' OR coalesce(
             CASE WHEN json_type(sibling.payload, '$.taskRunId') = 'text'
-              THEN nullif(trim(json_extract(sibling.payload, '$.taskRunId')), '') END,
+              THEN nullif(trim(json_extract(sibling.payload, '$.taskRunId'), ?), '') END,
             sibling.run_id
           ) = task.run_id)
     )
     UPDATE subagent_runs SET payload_json = json_set(payload_json, '$.taskRunId',
       (SELECT task_run_id FROM bindings WHERE bindings.run_id = subagent_runs.run_id))
     WHERE run_id IN (SELECT run_id FROM bindings);
-  `);
+  `).run(taskIdentifierWhitespace, taskIdentifierWhitespace);
 }
 
 function nullableTextValue(record: Record<string, unknown> | null, key: string) {
@@ -278,7 +285,7 @@ export function repairLegacySubagentRetainedResults(db: DatabaseSync): void {
       const primary = nullableTextValue(completion, "resultText");
       const fallback = nullableTextValue(completion, "fallbackResultText");
       updateRun.run(JSON.stringify(payload), row.run_id);
-      const taskRunId = textField(payload, "taskRunId") ?? row.run_id;
+      const taskRunId = textField(payload, "taskRunId")?.trim() ?? row.run_id;
       const terminalReply = normalizeAgentRunTerminalReplySnapshot(completion.terminalReply);
       const taskResult = selectLegacyRetainedTaskResult(completion, primary, fallback);
       if (updateTask && (taskResult || terminalReply)) {
@@ -354,26 +361,61 @@ export function backfillAcpReplayEstimatedBytes(db: DatabaseSync): void {
   ) {
     return;
   }
-  const pendingEvent = db
-    .prepare("SELECT 1 FROM acp_replay_events WHERE estimated_bytes = 0 LIMIT 1")
-    .get();
-  const pendingSession = db
-    .prepare("SELECT 1 FROM acp_replay_sessions WHERE estimated_bytes = 0 LIMIT 1")
-    .get();
-  if (!pendingEvent && !pendingSession) {
-    return;
+  // The schema/Doctor owner holds the transaction. Stream canonical text in Node
+  // so UTF-16 databases, NUL and existing JSON formatting use the writer's units.
+  const replayDb =
+    getNodeSqliteKysely<
+      Pick<OpenClawStateKyselyDatabase, "acp_replay_events" | "acp_replay_sessions">
+    >(db);
+  const updateEvent = db.prepare(
+    "UPDATE acp_replay_events SET estimated_bytes = ? WHERE session_id = ? AND seq = ?",
+  );
+  for (const row of iterateSqliteQuerySync(
+    db,
+    replayDb
+      .selectFrom("acp_replay_events")
+      .select(["session_id", "seq", "session_key", "run_id", "update_json", "estimated_bytes"]),
+  )) {
+    const expected = estimateAcpEventRowBytes({
+      sessionId: row.session_id,
+      sessionKey: row.session_key,
+      runId: row.run_id,
+      updateJson: row.update_json,
+    });
+    if (sqliteNumber(row.estimated_bytes) !== expected) {
+      updateEvent.run(expected, row.session_id, row.seq);
+    }
   }
-  db.exec(`
-    UPDATE acp_replay_events
-       SET estimated_bytes = length(session_id) + length(session_key) + length(update_json)
-             + COALESCE(length(run_id), 0) + 32
-     WHERE estimated_bytes = 0;
-    UPDATE acp_replay_sessions
-       SET estimated_bytes = length(session_id) + length(session_key) + length(cwd) + 32
-             + COALESCE((SELECT SUM(e.estimated_bytes) FROM acp_replay_events e
-                          WHERE e.session_id = acp_replay_sessions.session_id), 0)
-     WHERE estimated_bytes = 0;
-  `);
+  const updateSession = db.prepare(
+    "UPDATE acp_replay_sessions SET estimated_bytes = ? WHERE session_id = ?",
+  );
+  for (const row of iterateSqliteQuerySync(
+    db,
+    replayDb
+      .selectFrom("acp_replay_sessions as s")
+      .select(["s.session_id", "s.session_key", "s.cwd", "s.estimated_bytes"])
+      .select((eb) =>
+        eb.fn
+          .coalesce(
+            eb
+              .selectFrom("acp_replay_events as e")
+              .select((events) => events.fn.sum<number>("e.estimated_bytes").as("total"))
+              .whereRef("e.session_id", "=", "s.session_id"),
+            eb.val(0),
+          )
+          .as("event_bytes"),
+      ),
+  )) {
+    const expected =
+      estimateAcpSessionRowBytes({
+        sessionId: row.session_id,
+        sessionKey: row.session_key,
+        cwd: row.cwd,
+      }) + sqliteNumber(row.event_bytes);
+    if (sqliteNumber(row.estimated_bytes) !== expected) {
+      updateSession.run(expected, row.session_id);
+    }
+  }
 }
 
 export function backfillCronRunLogEntryJson(db: DatabaseSync): void {

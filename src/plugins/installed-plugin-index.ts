@@ -104,6 +104,7 @@ function buildInstalledPluginIndex(
     env,
     pluginIds: registry.plugins.filter(isBundledProviderCompatPlugin).map((plugin) => plugin.id),
     activation: "defaults",
+    artifactPreservingReadOnly: params.artifactPreservingReadOnly,
   });
   const plugins = buildInstalledPluginIndexRecords({
     candidates: discovery.candidates,
@@ -121,7 +122,9 @@ function buildInstalledPluginIndex(
       hostContractVersion: resolveCompatibilityHostVersion(env),
       compatRegistryVersion: resolveCompatRegistryVersion(),
       migrationVersion: INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION,
-      policyHash: resolveInstalledPluginIndexPolicyHash(params.config, env),
+      policyHash: resolveInstalledPluginIndexPolicyHash(params.config, env, {
+        artifactPreservingReadOnly: params.artifactPreservingReadOnly,
+      }),
       generatedAtMs,
       ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
       ...(params.refreshReason ? { refreshReason: params.refreshReason } : {}),
@@ -170,20 +173,13 @@ export function refreshInstalledPluginIndex(
   return buildInstalledPluginIndex({ ...params, refreshReason: params.reason }).index;
 }
 
-export function getInstalledPluginRecord(
-  index: InstalledPluginIndex,
-  pluginId: string,
-): InstalledPluginIndexRecord | undefined {
-  return index.plugins.find((plugin) => plugin.pluginId === pluginId);
-}
-
 export function isInstalledPluginEnabled(
   index: InstalledPluginIndex,
   pluginId: string,
   config?: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
 ): boolean {
-  const record = getInstalledPluginRecord(index, pluginId);
+  const record = index.plugins.find((plugin) => plugin.pluginId === pluginId);
   if (!record || !config) {
     return record?.enabled ?? false;
   }

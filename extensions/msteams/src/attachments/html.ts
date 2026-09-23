@@ -1,8 +1,7 @@
-// Msteams plugin module implements html behavior.
 import {
   ATTACHMENT_TAG_RE,
   extractHtmlFromAttachment,
-  extractInlineImageCandidates,
+  extractInlineImageReferences,
   IMG_SRC_RE,
   isAdvertisedFileAttachment,
   isLikelyImageAttachment,
@@ -111,7 +110,9 @@ export function summarizeMSTeamsHtmlAttachments(
   };
 }
 
-function resolveUnrepresentedHtmlAttachmentIds(attachments: MSTeamsAttachmentLike[]): string[] {
+export function resolveUnrepresentedHtmlAttachmentIds(
+  attachments: MSTeamsAttachmentLike[],
+): string[] {
   const representedIds = new Set<string>();
   for (const attachment of attachments) {
     const contentType = normalizeContentType(attachment.contentType) ?? "";
@@ -139,14 +140,13 @@ function createAdvertisedMediaFact(
 
 export function resolveMSTeamsAdvertisedMedia(
   attachments: MSTeamsAttachmentLike[] | undefined,
-  limits?: { maxInlineBytes?: number; maxInlineTotalBytes?: number },
 ): MSTeamsInboundMedia[] {
   const list = Array.isArray(attachments) ? attachments : [];
   if (list.length === 0) {
     return [];
   }
   const fileAttachments = list.filter(isAdvertisedFileAttachment);
-  const inlineMedia = extractInlineImageCandidates(list, limits).map((candidate) =>
+  const inlineMedia = extractInlineImageReferences(list).map((candidate) =>
     createAdvertisedMediaFact("image", candidate.sourceId),
   );
   // Teams HTML uses <attachment> tags as references. A matching attachment

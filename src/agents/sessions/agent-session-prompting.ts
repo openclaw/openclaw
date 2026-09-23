@@ -9,24 +9,24 @@ import type {
   PersistedUserTurnMessage,
   UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.types.js";
-import { isOpenClawRuntimeContextCustomMessage } from "../internal-runtime-context.js";
+import { resolvePendingRuntimeContextReplay } from "../internal-runtime-context.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { stripFrontmatter } from "../utils/frontmatter.js";
 import { AgentSessionBase } from "./agent-session-base.js";
 import type { PromptOptions } from "./agent-session-types.js";
 import { formatNoApiKeyFoundMessage, formatNoModelSelectedMessage } from "./auth-guidance.js";
+import {
+  createCompactionRequestBudget,
+  takePromptCompactionRequestBudget,
+  withCompactionQueuedContext,
+} from "./compaction/request-budget.js";
 import type { CustomMessage } from "./messages.js";
 import { expandPromptTemplate } from "./prompt-templates.js";
 import type { ResourceLoader } from "./resource-loader.js";
+import { withSessionManagerWrite } from "./session-manager-write-admission.js";
 import { setSteeringMessageIdentity } from "./steering-message-identity.js";
 
 type PostAgentRunAction = "continue" | "settled" | "handoff";
-
-function rethrowPromptFinalizationFailure(failed: boolean, error: unknown): void {
-  if (failed) {
-    throw error;
-  }
-}
 
 /** @internal Host preparation runs after SDK prompt hooks and owns its run cancellation. */
 export const agentSessionSetPromptPreparation: unique symbol = Symbol.for(
@@ -89,34 +89,17 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
       }
     } finally {
       this.systemPromptOverride = undefined;
-      let flushFailed = false;
-      let flushError: unknown;
-      try {
-        this.flushPendingBashMessages();
-      } catch (error) {
-        flushFailed = true;
-        flushError = error;
-      }
       this.logicalPromptActive = false;
-      let terminalFailed = false;
-      let terminalError: unknown;
-      try {
-        // Consume handoff state before callbacks can start a nested run and set it again.
-        endedForTurnHandoff ||= this.lastRunEndedForTurnHandoff;
-        this.lastRunEndedForTurnHandoff = false;
-        // Failed or aborted runs can still be idle; only handoff leaves external delivery pending.
-        if (endedForTurnHandoff) {
-          this.emit({ type: "agent_handoff" });
-        } else {
-          this.emit({ type: "agent_settled" });
-          await this.currentExtensionRunner.emit({ type: "agent_settled" });
-        }
-      } catch (error) {
-        terminalFailed = true;
-        terminalError = error;
+      // Consume handoff state before callbacks can start a nested run and set it again.
+      endedForTurnHandoff ||= this.lastRunEndedForTurnHandoff;
+      this.lastRunEndedForTurnHandoff = false;
+      // Failed or aborted runs can still be idle; only handoff leaves external delivery pending.
+      if (endedForTurnHandoff) {
+        this.emit({ type: "agent_handoff" });
+      } else {
+        this.emit({ type: "agent_settled" });
+        await this.currentExtensionRunner.emit({ type: "agent_settled" });
       }
-      rethrowPromptFinalizationFailure(flushFailed, flushError);
-      rethrowPromptFinalizationFailure(terminalFailed, terminalError);
     }
   }
 
@@ -206,6 +189,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
    * @throws Error if no model selected or no API key available (when not streaming)
    */
   async prompt(text: string, options?: PromptOptions): Promise<void> {
+    const preparedCompactionBudget = takePromptCompactionRequestBudget(options);
     const expandPromptTemplates = options?.expandPromptTemplates ?? true;
     const preflightResult = options?.preflightResult;
     let messages: AgentMessage[] | undefined;
@@ -264,9 +248,6 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
         return;
       }
 
-      // Flush any pending bash messages before the new prompt
-      this.flushPendingBashMessages();
-
       // Validate model
       if (!this.model) {
         throw new Error(formatNoModelSelectedMessage());
@@ -286,26 +267,45 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
 
       // Check if we need to compact before sending (catches aborted responses).
       // The pending user prompt below starts the next run; no intermediate continuation is needed.
+      const persistedUserIdempotencyKey = options?.persistedUserIdempotencyKey;
+      const contextWindow = this.model.contextWindow;
       const lastAssistant = this.findLastAssistantMessage();
       if (lastAssistant) {
-        await this.checkCompaction(lastAssistant, false);
+        const pendingQueuedContextMessages = resolvePendingRuntimeContextReplay({
+          messages: this.agent.state.messages,
+          pendingContextMessages: this.pendingNextTurnMessages,
+          persistedUserIdempotencyKey,
+        }).pendingContextMessages;
+        await this.checkCompaction(
+          lastAssistant,
+          false,
+          preparedCompactionBudget
+            ? withCompactionQueuedContext(preparedCompactionBudget, pendingQueuedContextMessages)
+            : typeof contextWindow === "number" &&
+                Number.isFinite(contextWindow) &&
+                contextWindow > 0
+              ? createCompactionRequestBudget({
+                  contextWindow,
+                  reserveTokens: this.settingsManager.getCompactionSettings().reserveTokens,
+                  systemPrompt: this.agent.state.systemPrompt,
+                  tools: this.agent.state.tools,
+                  pendingPrompt: expandedText,
+                  pendingImageCount: currentImages?.length,
+                  pendingQueuedContextMessages,
+                  pendingUserIdempotencyKey: persistedUserIdempotencyKey,
+                })
+              : undefined,
+        );
       }
 
-      const persistedUserIdempotencyKey = options?.persistedUserIdempotencyKey;
-      const persistedUserIndex = persistedUserIdempotencyKey
-        ? this.agent.state.messages.findLastIndex(
-            (message) =>
-              message.role === "user" &&
-              "idempotencyKey" in message &&
-              message.idempotencyKey === persistedUserIdempotencyKey,
-          )
-        : -1;
-      // A recorded user is reused with either persisted or transient context.
-      // Preserve an existing carrier's prefix, but do not require one to dedupe the user.
+      // Re-read after compaction: indices and queued context may have changed.
+      const { persistedUserIndex, replayPersistedCarrier, pendingContextMessages } =
+        resolvePendingRuntimeContextReplay({
+          messages: this.agent.state.messages,
+          pendingContextMessages: this.pendingNextTurnMessages,
+          persistedUserIdempotencyKey,
+        });
       const replayPersistedTurn = persistedUserIndex >= 0;
-      const replayPersistedCarrier =
-        replayPersistedTurn &&
-        isOpenClawRuntimeContextCustomMessage(this.agent.state.messages[persistedUserIndex + 1]);
       const persistedUser = this.agent.state.messages[persistedUserIndex];
       if (!replayPersistedCarrier && persistedUser?.role === "user") {
         // Transient replay still consumes freshly resolved text/images. Preserve
@@ -323,12 +323,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
         });
       }
 
-      // Inject any pending "nextTurn" messages as context alongside the user message
-      for (const msg of this.pendingNextTurnMessages) {
-        if (!replayPersistedCarrier || !isOpenClawRuntimeContextCustomMessage(msg)) {
-          messages.push(msg);
-        }
-      }
+      messages.push(...pendingContextMessages);
       this.pendingNextTurnMessages = [];
 
       // Emit before_agent_start extension event
@@ -590,13 +585,15 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     } else if (options?.triggerTurn) {
       await this.runAgentPrompt(appMessage);
     } else {
-      this.agent.state.messages.push(appMessage);
-      this.sessionManager.appendCustomMessageEntry(
-        message.customType,
-        message.content,
-        message.display,
-        message.details,
-      );
+      await withSessionManagerWrite(this.sessionManager, () => {
+        this.sessionManager.appendCustomMessageEntry(
+          appMessage.customType,
+          appMessage.content,
+          appMessage.display,
+          appMessage.details,
+        );
+        this.agent.state.messages.push(appMessage);
+      });
       this.emit({ type: "message_start", message: appMessage });
       this.emit({ type: "message_end", message: appMessage });
     }

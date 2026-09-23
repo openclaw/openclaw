@@ -1,5 +1,7 @@
 import type { PluginDiagnostic } from "./manifest-types.js";
 import { createModelCatalogRegistrationHandlers } from "./model-catalog-registration.js";
+import { createNativeSessionCatalogGate } from "./native-session-catalog-registration.js";
+import { getPluginInstance } from "./plugin-instance-scope.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { bindPluginRegistryRuntime } from "./registry-runtime-binding.js";
 import type { PluginRecord, PluginRegistryParams } from "./registry-types.js";
@@ -10,10 +12,6 @@ export type PluginTypedHookPolicy = {
   allowConversationAccess?: boolean;
   timeoutMs?: number;
   timeouts?: Record<string, number>;
-};
-
-export type PluginSideEffectGuard = {
-  active: boolean;
 };
 
 type PluginRegistrationCapabilities = {
@@ -56,8 +54,47 @@ export function resolveTypedHookTimeoutMs(params: {
   );
 }
 
+function createRegistration<T extends object>(record: PluginRecord, contribution: T) {
+  return {
+    pluginId: record.id,
+    pluginName: record.name,
+    // Normalizers and host gates create new callables after API argument wrapping.
+    ...(getPluginInstance(record)?.wrap(contribution) ?? contribution),
+    source: record.source,
+    rootDir: record.rootDir,
+  };
+}
+
+function createIdentityRegistration<T extends object>(record: PluginRecord, contribution: T) {
+  return {
+    pluginId: record.id,
+    pluginName: record.name,
+    ...(getPluginInstance(record)?.adopt(contribution) ?? contribution),
+    source: record.source,
+    rootDir: record.rootDir,
+  };
+}
+
 export function createPluginRegistryState(registryParams: PluginRegistryParams) {
   const registry = createEmptyPluginRegistry();
+  const nativeCatalogGates = new WeakMap<
+    PluginRecord,
+    ReturnType<typeof createNativeSessionCatalogGate>
+  >();
+  const getNativeCatalogGate = (record: PluginRecord) => {
+    if (!record.nativeSessionCatalog) {
+      return undefined;
+    }
+    let gate = nativeCatalogGates.get(record);
+    if (!gate) {
+      gate = createNativeSessionCatalogGate({
+        pluginId: record.id,
+        getConfig: () => registryParams.runtime.config.current(),
+      });
+      nativeCatalogGates.set(record, gate);
+    }
+    return gate;
+  };
   bindPluginRegistryRuntime(registry, registryParams.runtime);
   const coreGatewayMethods = new Set(registryParams.coreGatewayMethodNames);
   for (const name of Object.keys(registryParams.coreGatewayHandlers ?? {})) {
@@ -83,11 +120,13 @@ export function createPluginRegistryState(registryParams: PluginRegistryParams) 
   return {
     registry,
     registryParams,
+    getNativeCatalogGate,
     allowProcessHomeSessionCatalogs: registryParams.allowProcessHomeSessionCatalogs ?? true,
     coreGatewayMethods,
     getHostCronService: () => registryParams.hostServices?.cron,
     pluginsWithChannelRegistrationConflict: new Set<string>(),
-    pluginSideEffectGuards: new Map<string, Set<PluginSideEffectGuard>>(),
+    createRegistration,
+    createIdentityRegistration,
     pushDiagnostic,
     reportRegistrationError,
     reportRegistrationWarning,

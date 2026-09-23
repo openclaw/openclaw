@@ -512,18 +512,17 @@ export class MemoryRecallEmbeddingError extends Error {
   }
 }
 
-export const testing = {
-  isEmbeddingDimensionsRejectedError,
-  isMemoryRecallTimeoutError,
-  runWithTimeout,
-  truncateEmbeddingVector,
-} as const;
-
-export function createEmbeddings(api: OpenClawPluginApi): Embeddings {
-  const provider = new ProviderAdapterEmbeddings(api);
+export function createEmbeddings(api: OpenClawPluginApi): Embeddings & { start(): void } {
+  let provider = new ProviderAdapterEmbeddings(api);
   let direct: { fingerprint: string; client: OpenAiCompatibleEmbeddings } | undefined;
   let closed = false;
   return {
+    start() {
+      if (closed) {
+        provider = new ProviderAdapterEmbeddings(api);
+        closed = false;
+      }
+    },
     async embed(agentId, text, embeddingConfig, timeoutMs) {
       if (closed) {
         throw new Error("memory-lancedb embeddings are closed");

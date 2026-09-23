@@ -10,6 +10,7 @@ import {
   BOARD_GRID_GAP,
   BOARD_GRID_ROW_HEIGHT,
   boardChromeRowPx,
+  boardWidgetGridItems,
   effectiveBoardWidgetRows,
   FINE_POINTER_QUERY,
   layout,
@@ -29,7 +30,7 @@ import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import "../../styles/board.css";
 import "../web-awesome-tabs.ts";
 import "../web-awesome.ts";
-import { renderBoardTabs } from "./board-tabs.ts";
+import { orderedBoardTabs, renderBoardTabs } from "./board-tabs.ts";
 import type { BoardWidgetCellCallbacks } from "./board-widget-cell.ts";
 import "./board-widget-cell.ts";
 
@@ -45,37 +46,12 @@ type BoardPointerGesture = {
   items: BoardGridItem[];
 };
 
-function orderedTabs(snapshot: BoardSnapshot): BoardTab[] {
-  return snapshot.tabs.toSorted(
-    (left, right) => left.position - right.position || left.tabId.localeCompare(right.tabId),
-  );
-}
-
 function orderedWidgets(snapshot: BoardSnapshot, tabId: string): BoardWidget[] {
   return snapshot.widgets
     .filter((widget) => widget.tabId === tabId)
     .toSorted(
       (left, right) => left.position - right.position || left.name.localeCompare(right.name),
     );
-}
-
-function itemsForWidgets(
-  widgets: readonly BoardWidget[],
-  contentHeights: ReadonlyMap<string, number>,
-  fitAutoContent = false,
-): BoardGridItem[] {
-  const chromeRowPx = boardChromeRowPx();
-  return widgets.map((widget) => ({
-    name: widget.name,
-    w: widget.sizeW,
-    h: effectiveBoardWidgetRows(
-      widget,
-      contentHeights.get(widget.name),
-      chromeRowPx,
-      fitAutoContent ? BOARD_DOCUMENT_AUTO_MAX_ROWS : undefined,
-    ),
-    order: widget.position,
-  }));
 }
 
 class OpenClawBoardView extends OpenClawLightDomElement {
@@ -90,6 +66,7 @@ class OpenClawBoardView extends OpenClawLightDomElement {
   @property({ type: Boolean }) canMutate = true;
   @property({ type: Boolean }) canGrant = true;
   @property({ type: Boolean }) fitAutoContent = false;
+  @property({ attribute: false }) pageWidgetName = "";
 
   @state() private previewItems: BoardGridItem[] | null = null;
   @state() private gestureName = "";
@@ -104,6 +81,7 @@ class OpenClawBoardView extends OpenClawLightDomElement {
   private mutationRequestId = 0;
   private stableCellOrder = new Map<string, number>();
   private stableCellOrderSequence = 0;
+  private readonly visitedTabs = new Set<string>();
   private readonly contentHeights = new Map<string, number>();
   // Hybrid devices flip pointer capability live (mouse dock/undock); CSS moves
   // the bar between overlay and in-flow, so auto-height rows must re-layout.
@@ -117,6 +95,19 @@ class OpenClawBoardView extends OpenClawLightDomElement {
   }
 
   override willUpdate(changed: PropertyValues<this>): void {
+    const previousSession = changed.get("session");
+    const ownerChanged =
+      (changed.has("session") &&
+        (previousSession?.agentId !== this.session.agentId ||
+          previousSession?.sessionKey !== this.session.sessionKey)) ||
+      (changed.has("snapshot") &&
+        changed.get("snapshot")?.sessionKey !== this.snapshot?.sessionKey);
+    if (ownerChanged) {
+      this.visitedTabs.clear();
+      this.stableCellOrder.clear();
+      this.stableCellOrderSequence = 0;
+      this.contentHeights.clear();
+    }
     if (changed.has("snapshot")) {
       this.actionError = "";
       const previousSnapshot = changed.get("snapshot");
@@ -124,9 +115,6 @@ class OpenClawBoardView extends OpenClawLightDomElement {
         this.mutationRequestId += 1;
         this.mutationPending = false;
         this.focusName = "";
-        this.stableCellOrder.clear();
-        this.stableCellOrderSequence = 0;
-        this.contentHeights.clear();
       } else if (previousSnapshot && this.snapshot) {
         const previousByName = new Map(
           previousSnapshot.widgets.map((widget) => [widget.name, widget]),
@@ -143,6 +131,18 @@ class OpenClawBoardView extends OpenClawLightDomElement {
           }
         }
       }
+      const tabIds = new Set(this.snapshot?.tabs.map((tab) => tab.tabId));
+      for (const tabId of this.visitedTabs) {
+        if (!tabIds.has(tabId)) {
+          this.visitedTabs.delete(tabId);
+        }
+      }
+      const widgetNames = new Set(this.snapshot?.widgets.map((widget) => widget.name));
+      for (const name of this.stableCellOrder.keys()) {
+        if (!widgetNames.has(name)) {
+          this.stableCellOrder.delete(name);
+        }
+      }
     }
     if (changed.has("activeTabId")) {
       this.focusName = "";
@@ -151,6 +151,7 @@ class OpenClawBoardView extends OpenClawLightDomElement {
       this.gesture &&
       (changed.has("snapshot") ||
         changed.has("activeTabId") ||
+        changed.has("pageWidgetName") ||
         (changed.has("active") && !this.active))
     ) {
       this.cancelGesture();
@@ -252,7 +253,7 @@ class OpenClawBoardView extends OpenClawLightDomElement {
           ? effectiveBoardWidgetRows(
               widget,
               this.contentHeights.get(widget.name),
-              boardChromeRowPx(),
+              widget.name === this.pageWidgetName ? 0 : boardChromeRowPx(),
             )
           : widget.sizeH;
       await this.applyOps(
@@ -303,6 +304,23 @@ class OpenClawBoardView extends OpenClawLightDomElement {
       },
   };
 
+  selectPageWidgetMenuItem(name: string, revision: number, value: string): void {
+    const widget = this.snapshot?.widgets.find((entry) => entry.name === name);
+    if (
+      !this.active ||
+      !this.canMutate ||
+      this.pageWidgetName !== name ||
+      widget?.revision !== revision ||
+      widget.tabId !== this.activeTabId
+    ) {
+      return;
+    }
+    const cell = [...this.querySelectorAll("openclaw-board-widget-cell")].find(
+      (entry) => entry.pageChrome && entry.widget === widget,
+    );
+    cell?.selectMenuItem(value);
+  }
+
   private beginGesture(
     mode: BoardPointerGesture["mode"],
     widget: BoardWidget,
@@ -318,7 +336,7 @@ class OpenClawBoardView extends OpenClawLightDomElement {
       return;
     }
     const snapshot = this.snapshot;
-    const tabs = snapshot ? orderedTabs(snapshot) : [];
+    const tabs = snapshot ? orderedBoardTabs(snapshot.tabs) : [];
     const tab = this.activeTab(tabs);
     if (!snapshot || !tab) {
       return;
@@ -330,7 +348,7 @@ class OpenClawBoardView extends OpenClawLightDomElement {
     } catch {
       // Synthetic pointers and detached test targets cannot be captured.
     }
-    const items = itemsForWidgets(orderedWidgets(snapshot, tab.tabId), this.contentHeights);
+    const items = boardWidgetGridItems(orderedWidgets(snapshot, tab.tabId), this.contentHeights);
     this.gesture = {
       dropValid: false,
       mode,
@@ -370,7 +388,7 @@ class OpenClawBoardView extends OpenClawLightDomElement {
         candidateTabId !== "" &&
         (this.snapshot?.tabs.some((tab) => tab.tabId === candidateTabId) ?? false);
       const currentTabId = this.snapshot
-        ? this.activeTab(orderedTabs(this.snapshot))?.tabId
+        ? this.activeTab(orderedBoardTabs(this.snapshot.tabs))?.tabId
         : this.activeTabId;
       this.hoverTabId = candidateIsValid && candidateTabId !== currentTabId ? candidateTabId : "";
       if (tabTarget) {
@@ -398,11 +416,11 @@ class OpenClawBoardView extends OpenClawLightDomElement {
       const targetName = pointerElement?.closest<
         HTMLElementTagNameMap["openclaw-board-widget-cell"]
       >("openclaw-board-widget-cell")?.widget?.name;
-      const targetCell = layout(items).find((rect) => rect.name === targetName) ?? {
+      this.previewItems = previewDrag(items, gesture.name, {
+        name: targetName,
         x: Math.floor((event.clientX - bounds.left) / (columnWidth + BOARD_GRID_GAP)),
         y: Math.floor((event.clientY - bounds.top) / (BOARD_GRID_ROW_HEIGHT + BOARD_GRID_GAP)),
-      };
-      this.previewItems = previewDrag(items, gesture.name, targetCell).items;
+      });
       return;
     }
 
@@ -499,7 +517,7 @@ class OpenClawBoardView extends OpenClawLightDomElement {
     if (!snapshot) {
       return;
     }
-    const items = itemsForWidgets(orderedWidgets(snapshot, widget.tabId), this.contentHeights);
+    const items = boardWidgetGridItems(orderedWidgets(snapshot, widget.tabId), this.contentHeights);
     const moved = nudge(items, widget.name, direction).find((item) => item.name === widget.name);
     if (!moved || moved.order === widget.position) {
       return;
@@ -535,7 +553,7 @@ class OpenClawBoardView extends OpenClawLightDomElement {
   }
 
   private readonly handleTabShow = (event: CustomEvent<{ name: string }>): void => {
-    const tabs = this.snapshot ? orderedTabs(this.snapshot) : [];
+    const tabs = this.snapshot ? orderedBoardTabs(this.snapshot.tabs) : [];
     const currentTabId = this.activeTab(tabs)?.tabId ?? this.activeTabId;
     if (event.detail.name !== currentTabId && tabs.some((tab) => tab.tabId === event.detail.name)) {
       this.callbacks?.selectTab(event.detail.name);
@@ -555,19 +573,24 @@ class OpenClawBoardView extends OpenClawLightDomElement {
     widgets: readonly BoardWidget[],
     tabs: readonly BoardTab[],
     sessionKey: string,
+    activeTabId: string,
   ): TemplateResult {
-    if (widgets.length === 0) {
-      return html`
-        <div class="board-empty" data-test-id="board-empty">
-          <span class="board-empty__mark" aria-hidden="true">＋</span>
-          <strong>${t("board.emptyTitle")}</strong>
-          <span>${t("board.emptyHint")}</span>
-        </div>
-      `;
-    }
-    const items =
-      this.previewItems ?? itemsForWidgets(widgets, this.contentHeights, this.fitAutoContent);
-    const rects = layout(items, this.fitAutoContent ? BOARD_DOCUMENT_AUTO_MAX_ROWS : undefined);
+    const rects = tabs.flatMap((tab) => {
+      const tabWidgets = widgets.filter((widget) => widget.tabId === tab.tabId);
+      const items =
+        (tab.tabId === activeTabId ? this.previewItems : null) ??
+        boardWidgetGridItems(
+          tabWidgets,
+          this.contentHeights,
+          this.fitAutoContent,
+          this.pageWidgetName,
+        );
+      return layout(items, this.fitAutoContent ? BOARD_DOCUMENT_AUTO_MAX_ROWS : undefined);
+    });
+    const activeNames = new Set(
+      widgets.filter((widget) => widget.tabId === activeTabId).map((widget) => widget.name),
+    );
+    const activeRects = rects.filter((rect) => activeNames.has(rect.name));
     for (const rect of rects) {
       if (!this.stableCellOrder.has(rect.name)) {
         this.stableCellOrder.set(rect.name, this.stableCellOrderSequence);
@@ -579,16 +602,22 @@ class OpenClawBoardView extends OpenClawLightDomElement {
         (this.stableCellOrder.get(left.name) ?? 0) - (this.stableCellOrder.get(right.name) ?? 0) ||
         left.name.localeCompare(right.name),
     );
-    const logicalPosition = new Map(rects.map((rect, index) => [rect.name, index]));
-    const focusName = rects.some((rect) => rect.name === this.focusName)
+    const logicalPosition = new Map(activeRects.map((rect, index) => [rect.name, index]));
+    const focusName = activeRects.some((rect) => rect.name === this.focusName)
       ? this.focusName
-      : (rects[0]?.name ?? "");
+      : (activeRects[0]?.name ?? "");
     const widgetByName = new Map(widgets.map((widget) => [widget.name, widget]));
     return html`
-      <div class="board-grid" role="list" aria-label=${t("board.gridLabel")}>
+      <div
+        class="board-grid"
+        role="list"
+        aria-label=${t("board.gridLabel")}
+        ?hidden=${activeRects.length === 0}
+      >
         ${repeat(
           stableRects,
-          (rect) => `${sessionKey}\u0000${rect.name}`,
+          (rect) =>
+            JSON.stringify([this.session.agentId, this.session.sessionKey, sessionKey, rect.name]),
           (rect) => {
             const widget = widgetByName.get(rect.name);
             if (!widget) {
@@ -596,21 +625,24 @@ class OpenClawBoardView extends OpenClawLightDomElement {
             }
             return html`
               <openclaw-board-widget-cell
+                ?hidden=${!activeNames.has(widget.name)}
+                ?inert=${!activeNames.has(widget.name)}
                 .widget=${widget}
                 .rect=${rect}
                 .contentHeightPx=${this.contentHeights.get(widget.name)}
                 .fitAutoContent=${this.fitAutoContent}
+                .pageChrome=${widget.name === this.pageWidgetName}
                 .tabs=${tabs}
                 .session=${this.session}
                 .sessionKey=${sessionKey}
                 .widgetFrameUrl=${this.widgetFrameUrl}
                 .callbacks=${this.cellCallbacks}
-                .active=${this.active}
+                .active=${this.active && activeNames.has(widget.name)}
                 .bridgeEnabled=${this.bridgeEnabled}
                 .dragging=${widget.name === this.gestureName}
                 .focusTabIndex=${widget.name === focusName ? 0 : -1}
                 .positionInSet=${(logicalPosition.get(widget.name) ?? 0) + 1}
-                .setSize=${rects.length}
+                .setSize=${activeRects.length}
                 .busy=${this.mutationPending}
                 .canMutate=${this.canMutate}
                 .canGrant=${this.canGrant}
@@ -624,6 +656,17 @@ class OpenClawBoardView extends OpenClawLightDomElement {
             : nothing
         }
       </div>
+      ${
+        activeRects.length === 0
+          ? html`
+              <div class="board-empty" data-test-id="board-empty">
+                <span class="board-empty__mark" aria-hidden="true">＋</span>
+                <strong>${t("board.emptyTitle")}</strong>
+                <span>${t("board.emptyHint")}</span>
+              </div>
+            `
+          : nothing
+      }
     `;
   }
 
@@ -632,12 +675,28 @@ class OpenClawBoardView extends OpenClawLightDomElement {
     if (!snapshot) {
       return nothing;
     }
-    const tabs = orderedTabs(snapshot);
+    const tabs = orderedBoardTabs(snapshot.tabs);
     const activeTab = this.activeTab(tabs);
     const activeTabId = activeTab?.tabId ?? this.activeTabId;
     const widgets = activeTab ? orderedWidgets(snapshot, activeTab.tabId) : [];
+    if (activeTab) {
+      this.visitedTabs.add(activeTabId);
+    }
+    // Moving a mounted widget to an unvisited tab must not reload its document.
+    const retainedWidgets = snapshot.widgets.filter(
+      (widget) => this.visitedTabs.has(widget.tabId) || this.stableCellOrder.has(widget.name),
+    );
+    const fullWidth = widgets.length === 1 && widgets[0]?.sizeW === BOARD_GRID_COLUMNS;
+    const page =
+      fullWidth &&
+      (widgets[0]?.name === this.pageWidgetName ||
+        widgets[0]?.pluginKind === "session:website" ||
+        widgets[0]?.pluginKind === "browser:dashboard");
     return html`
-      <section class="board-view" aria-label=${t("board.label")}>
+      <section
+        class=${`board-view ${fullWidth ? "board-view--single-full-width" : ""} ${page ? "board-view--page" : ""}`}
+        aria-label=${t("board.label")}
+      >
         ${renderBoardTabs({
           tabs,
           activeTabId,
@@ -645,7 +704,7 @@ class OpenClawBoardView extends OpenClawLightDomElement {
           onTabShow: this.handleTabShow,
           onOverflowSelect: this.handleOverflowSelect,
         })}
-        ${this.renderGrid(widgets, tabs, snapshot.sessionKey)}
+        ${this.renderGrid(retainedWidgets, tabs, snapshot.sessionKey, activeTabId)}
         ${
           this.actionError
             ? html`<div class="board-view__error" role="alert">${this.actionError}</div>`

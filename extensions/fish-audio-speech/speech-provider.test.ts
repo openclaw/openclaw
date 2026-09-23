@@ -188,4 +188,31 @@ describe("Fish Audio speech provider", () => {
     ).rejects.toThrow("Fish Audio API key missing");
     expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { key: "temperature", value: "0", overrides: { temperature: 0 } },
+    { key: "fish_temperature", value: "-0", overrides: { temperature: -0 } },
+    { key: "top_p", value: "0", overrides: { topP: 0 } },
+    { key: "topp", value: "1", overrides: { topP: 1 } },
+    { key: "speed", value: "0.5", overrides: { speed: 0.5 } },
+    { key: "fish_speed", value: "2", overrides: { speed: 2 } },
+  ])("accepts the $key=$value directive boundary", ({ key, value, overrides }) => {
+    const provider = buildFishAudioSpeechProvider();
+    expect(
+      provider.parseDirectiveToken?.({
+        key,
+        value,
+        policy: {
+          enabled: true,
+          allowText: true,
+          allowProvider: true,
+          allowVoice: true,
+          allowModelId: true,
+          allowVoiceSettings: true,
+          allowNormalization: true,
+          allowSeed: true,
+        },
+      }),
+    ).toEqual({ handled: true, overrides });
+  });
 });

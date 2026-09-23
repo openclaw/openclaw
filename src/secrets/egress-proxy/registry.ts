@@ -30,14 +30,16 @@ export function isSecretEgressProxyActive(): boolean {
   return getSecretEgressProxyRegistry().activeProxy !== undefined;
 }
 
-/** Returns the trusted subprocess environment for one exact admitted agent run. */
-export function registerSecretEgressProxyRun(
-  run: Readonly<{ instanceId: string; runId: string }>,
-  bindings: readonly SecretEgressSentinelBinding[],
-): Record<string, string> {
+/** Reads current certificate health without reloading trust files or starting a proxy. */
+export function getSecretEgressCertificateStatus() {
+  return getSecretEgressProxyRegistry().activeProxy?.getCertificateStatus();
+}
+
+/** The exec supervisor owns this grant until cancellation or process exit. */
+export function registerSecretEgressProxyProcess(bindings: readonly SecretEgressSentinelBinding[]) {
   const proxy = getSecretEgressProxyRegistry().activeProxy;
   if (!proxy) {
     throw new Error("Secret egress proxy is not active in this Gateway process");
   }
-  return proxy.registerRun(run, bindings);
+  return proxy.registerProcess(bindings);
 }

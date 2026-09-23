@@ -8,6 +8,36 @@ afterEach(async () => {
 });
 
 describe("findSettingsSearchBlocks", () => {
+  it("finds the meeting library separately from its Communications capture settings", () => {
+    const search = (query: string) =>
+      findSettingsSearchBlocks({ query, schema: null, value: {}, uiHints: {} });
+    expect(search("meeting notes")).toContainEqual(
+      expect.objectContaining({ routeId: "meetings" }),
+    );
+    expect(search("meeting capture")).toContainEqual(
+      expect.objectContaining({
+        routeId: "communications",
+        search: "?section=transcripts",
+        hash: "#settings-communications-meeting-capture",
+      }),
+    );
+    const matches = findSettingsSearchBlocks({
+      query: "autoStart",
+      schema: {
+        type: "object",
+        properties: {
+          transcripts: {
+            type: "object",
+            properties: { autoStart: { type: "array", title: "autoStart" } },
+          },
+        },
+      },
+      value: {},
+      uiHints: {},
+    });
+    expect(matches.some((entry) => entry.routeId === "advanced")).toBe(false);
+    expect(matches.some((entry) => entry.routeId === "communications")).toBe(true);
+  });
   it("loads Settings English only when cold search opens, before the config page", async () => {
     // The ordinary imports above exercise warm search. This module graph starts
     // at the runtime barrel, without importing a page or priming its catalogs.
@@ -258,6 +288,60 @@ describe("findSettingsSearchBlocks", () => {
     ]);
   });
 
+  it("refreshes prepared schema tiers while searching current draft keys and access", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        mcp: {
+          type: "object",
+          properties: {
+            servers: {
+              type: "object",
+              additionalProperties: {
+                type: "object",
+                properties: { command: { type: "string" } },
+              },
+            },
+          },
+        },
+      },
+    };
+    const servers: Record<string, { command: string }> = {};
+    const params = {
+      query: "zephyr",
+      schema,
+      value: { mcp: { servers } },
+      uiHints: { "mcp.servers.*.command": { advanced: false } },
+    };
+    expect(findSettingsSearchBlocks(params)).toEqual([]);
+    servers.zephyr = { command: "node" };
+    const common = {
+      routeId: "mcp",
+      label: "MCP",
+      search: "?section=mcp",
+      hash: "#config-section-mcp",
+    };
+    expect(findSettingsSearchBlocks(params)).toEqual([common]);
+    expect(findSettingsSearchBlocks({ ...params, canAdmin: false })).toEqual([]);
+    expect(findSettingsSearchBlocks(params)).toEqual([common]);
+    expect(findSettingsSearchBlocks({ ...params, uiHints: {} })).toEqual([
+      { ...common, search: "?section=mcp&advanced=1" },
+    ]);
+    expect(findSettingsSearchBlocks(params)).toEqual([common]);
+    expect(
+      findSettingsSearchBlocks({
+        ...params,
+        schema: {
+          type: "object",
+          properties: { mcp: { type: "object", properties: { endpoint: { type: "string" } } } },
+        },
+      }),
+    ).toEqual([]);
+    expect(findSettingsSearchBlocks(params)).toEqual([common]);
+    delete servers.zephyr;
+    expect(findSettingsSearchBlocks(params)).toEqual([]);
+  });
+
   it("finds existing update checks and channel controls on the curated Updates page", () => {
     const updateSchema = {
       type: "object",
@@ -368,6 +452,36 @@ describe("findSettingsSearchBlocks", () => {
     ]);
   });
 
+  it("routes global plugin policy to Plugin Settings without indexing plugin entries", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        plugins: {
+          type: "object",
+          title: "Plugin policy",
+          properties: {
+            enabled: { type: "boolean", title: "Enable plugins" },
+            entries: { type: "object", title: "Plugin entries" },
+          },
+        },
+      },
+    };
+    const common = {
+      schema,
+      value: { plugins: { enabled: true, entries: { workboard: {} } } },
+      uiHints: {},
+    };
+
+    expect(findSettingsSearchBlocks({ query: "Enable plugins", ...common })).toEqual([
+      expect.objectContaining({
+        routeId: "plugin-settings",
+        search: "?tab=advanced",
+        hash: "#plugin-settings-advanced",
+      }),
+    ]);
+    expect(findSettingsSearchBlocks({ query: "Plugin entries", ...common })).toEqual([]);
+  });
+
   it("maps a nested schema field to its owning settings page", () => {
     const matches = findSettingsSearchBlocks({
       query: "sandbox access",
@@ -423,6 +537,19 @@ describe("findSettingsSearchBlocks", () => {
 
     expect(matches).toEqual([
       {
+        routeId: "communications",
+        label: "Meeting capture",
+        search: "?section=transcripts",
+        hash: "#settings-communications-meeting-capture",
+        searchText:
+          "Meeting capture Choose which sources can save meeting notes on this Gateway. Auto-start sources recording transcription meetings autoStart",
+      },
+      expect.objectContaining({
+        routeId: "appearance",
+        label: "Chat",
+        hash: "#settings-appearance-chat",
+      }),
+      {
         routeId: "ai-agents",
         label: "Tools",
         search: "?section=tools",
@@ -473,12 +600,18 @@ describe("findSettingsSearchBlocks", () => {
   it.each([
     ["language", "Language", "#settings-language"],
     ["locale", "Language", "#settings-language"],
+    ["typography", "Typography", "#settings-appearance-typography"],
+    ["font", "Typography", "#settings-appearance-typography"],
+    ["typeface", "Typography", "#settings-appearance-typography"],
+    ["interface", "Typography", "#settings-appearance-typography"],
+    ["chat prose", "Typography", "#settings-appearance-typography"],
     ["sidebar", "Sidebar", "#settings-appearance-sidebar"],
     ["live agent activity", "Sidebar", "#settings-appearance-sidebar"],
     ["session observer", "Sidebar", "#settings-appearance-sidebar"],
     ["small model", "Sidebar", "#settings-appearance-sidebar"],
     ["camera", "Chat", "#settings-appearance-chat"],
     ["message width", "Chat", "#settings-appearance-chat"],
+    ["show task progress cards", "Chat", "#settings-appearance-chat"],
     ["centered transcript", "Chat", "#settings-appearance-chat"],
     ["hold microphone", "Chat", "#settings-appearance-chat"],
     ["dictate", "Chat", "#settings-appearance-chat"],

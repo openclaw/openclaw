@@ -8,6 +8,11 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { sha256HexPrefixCore } from "../infra/crypto-digest.js";
 import { pathExists } from "../infra/fs-safe.js";
+import { acquireGitSource } from "../infra/git-source.js";
+import {
+  resolveInstallWorkTimeoutMs,
+  resolveTimedInstallModeOptions,
+} from "../infra/install-mode-options.js";
 import {
   installPackageDir,
   requestDeferredPackageDirInstall,
@@ -265,7 +270,7 @@ async function withGitStagingDir<T>(
   }
   const targetParent = path.dirname(persistentRepoDir);
   try {
-    await fs.mkdir(targetParent, { recursive: true });
+    await fs.mkdir(targetParent, { recursive: true, mode: 0o700 });
   } catch {
     return await withInstallWorkspace("openclaw-git-plugin-", fn);
   }
@@ -344,18 +349,6 @@ async function replaceManagedGitRepo(params: {
   }
 }
 
-function formatGitCommandFailure(params: {
-  action: string;
-  source: ParsedGitPluginSpec;
-  stdout: string;
-  stderr: string;
-}): string {
-  const detail = sanitizeForLog(
-    redactSensitiveUrlLikeString(params.stderr.trim() || params.stdout.trim() || "git failed"),
-  );
-  return `failed to ${params.action} ${sanitizeForLog(redactSensitiveUrlLikeString(params.source.label))}: ${detail}`;
-}
-
 function buildBlockedGitInstallResult(params: {
   blocked: NonNullable<NonNullable<InstallSecurityScanResult>["blocked"]>;
 }): Extract<InstallPluginResult, { ok: false }> {
@@ -370,38 +363,13 @@ function buildBlockedGitInstallResult(params: {
   };
 }
 
-async function runGitCommand(params: {
-  argv: string[];
-  action: string;
-  source: ParsedGitPluginSpec;
-  cwd?: string;
-  timeoutMs?: number;
-}): Promise<{ ok: true; stdout: string } | { ok: false; error: string }> {
-  const result = await runCommandWithTimeout(params.argv, {
-    cwd: params.cwd,
-    timeoutMs: params.timeoutMs ?? DEFAULT_GIT_TIMEOUT_MS,
-    env: createGitCommandEnv(),
-  });
-  if (result.code !== 0) {
-    return {
-      ok: false,
-      error: formatGitCommandFailure({
-        action: params.action,
-        source: params.source,
-        stdout: result.stdout,
-        stderr: result.stderr,
-      }),
-    };
-  }
-  return { ok: true, stdout: result.stdout };
-}
-
 export async function installPluginFromGitSpec(
   params: InstallSafetyOverrides & {
     spec: string;
     extensionsDir?: string;
     gitDir?: string;
     timeoutMs?: number;
+    workTimeoutMs?: number | null;
     logger?: PluginInstallLogger;
     mode?: "install" | "update";
     dryRun?: boolean;
@@ -418,6 +386,7 @@ export async function installPluginFromGitSpec(
     };
   }
 
+  const { workTimeoutMs } = resolveTimedInstallModeOptions(params, {});
   const persistentRepoDir = resolveGitInstallRepoDir({ gitDir: params.gitDir, source: parsed });
   const effectiveMode =
     params.mode === "update" && (await pathExists(persistentRepoDir)) ? "update" : "install";
@@ -435,41 +404,16 @@ export async function installPluginFromGitSpec(
     params.logger?.info?.(
       `Cloning ${sanitizeForLog(redactSensitiveUrlLikeString(parsed.label))}...`,
     );
-    const cloneArgs = parsed.ref
-      ? ["git", "clone", "--", parsed.url, repoDir]
-      : ["git", "clone", "--depth", "1", "--", parsed.url, repoDir];
-    const clone = await runGitCommand({
-      argv: cloneArgs,
-      action: "clone",
-      source: parsed,
+    const acquired = await acquireGitSource({
+      ...parsed,
+      repoDir,
+      refMode: "resolve-remote",
       timeoutMs: params.timeoutMs,
+      workTimeoutMs,
+      commandEnv: () => ({ env: createGitCommandEnv() }),
     });
-    if (!clone.ok) {
-      return clone;
-    }
-
-    if (parsed.ref) {
-      const checkout = await runGitCommand({
-        argv: ["git", "switch", "--detach", "--", parsed.ref],
-        action: `checkout ${parsed.ref}`,
-        source: parsed,
-        cwd: repoDir,
-        timeoutMs: params.timeoutMs,
-      });
-      if (!checkout.ok) {
-        return checkout;
-      }
-    }
-
-    const rev = await runGitCommand({
-      argv: ["git", "rev-parse", "HEAD"],
-      action: "resolve commit for",
-      source: parsed,
-      cwd: repoDir,
-      timeoutMs: params.timeoutMs,
-    });
-    if (!rev.ok) {
-      return rev;
+    if (!acquired.ok) {
+      return acquired;
     }
 
     const installPolicyRequest = {
@@ -484,7 +428,6 @@ export async function installPluginFromGitSpec(
     };
     const preflight = await preflightPluginGitInstallPolicy({
       config: params.config,
-      dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
       onInstallPolicyWarning: params.onInstallPolicyWarning,
       logger: params.logger ?? {},
       mode: effectiveMode,
@@ -522,7 +465,10 @@ export async function installPluginFromGitSpec(
         ],
         {
           cwd: repoDir,
-          timeoutMs: Math.max(params.timeoutMs ?? DEFAULT_GIT_TIMEOUT_MS, 300_000),
+          timeoutMs: resolveInstallWorkTimeoutMs(
+            workTimeoutMs,
+            Math.max(params.timeoutMs ?? DEFAULT_GIT_TIMEOUT_MS, 300_000),
+          ),
           env: createSafeNpmInstallEnv(process.env, {
             npmConfigCwd: repoDir,
             packageLock: true,
@@ -539,7 +485,6 @@ export async function installPluginFromGitSpec(
     }
 
     const result = await installPluginFromInstalledPackageDir({
-      dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
       onInstallPolicyWarning: params.onInstallPolicyWarning,
       config: params.config,
       packageDir: repoDir,
@@ -591,7 +536,7 @@ export async function installPluginFromGitSpec(
       git: {
         url: parsed.url,
         ref: parsed.ref,
-        commit: normalizeOptionalString(rev.stdout),
+        commit: acquired.commit,
         resolvedAt: new Date().toISOString(),
       },
     };

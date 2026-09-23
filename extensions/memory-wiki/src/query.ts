@@ -1,5 +1,5 @@
 import path from "node:path";
-import { filterMemorySearchHitsBySessionVisibility } from "@openclaw/memory-core/api.js";
+import { filterMemorySearchHitsBySessionVisibility } from "@openclaw/memory-core/session-search-visibility-api.js";
 import { resolveSessionAgentIdStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
@@ -22,8 +22,8 @@ import {
 } from "./compiled-cache.js";
 import type { ResolvedMemoryWikiConfig, WikiSearchBackend, WikiSearchCorpus } from "./config.js";
 import {
-  parseWikiMarkdown,
-  toWikiPageSummary,
+  type parseWikiMarkdown,
+  scanWikiPageSummary,
   type WikiClaim,
   type WikiPageSummary,
 } from "./markdown.js";
@@ -160,6 +160,7 @@ type WikiGetResult = {
 
 export type QueryableWikiPage = WikiPageSummary & {
   raw: string;
+  parsed: ReturnType<typeof parseWikiMarkdown>;
 };
 
 type QuerySearchOverrides = {
@@ -245,8 +246,8 @@ async function readQueryableWikiPagesByPaths(
       const absolutePath = path.join(rootDir, relativePath);
       try {
         const raw = await vault.readText(relativePath);
-        const summary = toWikiPageSummary({ absolutePath, relativePath, raw });
-        return summary ? { ...summary, raw } : null;
+        const scan = scanWikiPageSummary({ absolutePath, relativePath, raw });
+        return scan.status === "valid" ? { ...scan.page, raw, parsed: scan.parsed } : null;
       } catch (error) {
         // Compiled candidates and directory listings can outlive a page. Only absence
         // may fall through to discovery; boundary refusals must remain terminal.
@@ -278,18 +279,25 @@ function buildSnippet(raw: string, query: string): string {
   const queryTokens = buildQueryTokens(queryLower);
   const searchable = buildSearchableBody(raw);
   const lines = searchable.split(/\r?\n/).filter((line) => line.trim().length > 0);
-  const matchingLine =
-    lines.find((line) =>
-      lineMatchesQuery(normalizeLowercaseStringOrEmpty(line), queryLower, queryTokens),
-    ) ??
-    lines
-      .map((line) => ({
-        line,
-        hits: queryTokens.filter((token) => normalizeLowercaseStringOrEmpty(line).includes(token))
-          .length,
-      }))
-      .toSorted((left, right) => right.hits - left.hits)
-      .find((candidate) => candidate.hits > 0)?.line;
+  let matchingLine = lines.find((line) =>
+    lineMatchesQuery(normalizeLowercaseStringOrEmpty(line), queryLower, queryTokens),
+  );
+  if (matchingLine === undefined && queryTokens.length > 0) {
+    let bestHits = 0;
+    for (const line of lines) {
+      const lineLower = normalizeLowercaseStringOrEmpty(line);
+      let hits = 0;
+      for (const token of queryTokens) {
+        if (lineLower.includes(token)) {
+          hits += 1;
+        }
+      }
+      if (hits > bestHits) {
+        bestHits = hits;
+        matchingLine = line;
+      }
+    }
+  }
   return matchingLine?.trim() || lines.find((line) => line.trim() !== "---")?.trim() || "";
 }
 
@@ -336,7 +344,7 @@ function buildPageSearchText(page: QueryableWikiPage): string {
     page.title,
     page.relativePath,
     page.id ?? "",
-    JSON.stringify(parseWikiMarkdown(page.raw).frontmatter),
+    JSON.stringify(page.parsed.frontmatter),
     ...buildPageSearchFields(page, page.relationships),
     page.claims.map((claim) => claim.text).join(" "),
     page.claims.map((claim) => claim.id ?? "").join(" "),
@@ -1282,8 +1290,7 @@ export async function getMemoryWikiPage(input: {
         : (await readQueryableWikiPages(effectiveConfig.vault.path)).filter(canReadPage);
     const page = digestLookupPage ?? resolveQueryableWikiPageByLookup(pages, params.lookup);
     if (page) {
-      const parsed = parseWikiMarkdown(page.raw);
-      const lines = parsed.body.split(/\r?\n/);
+      const lines = page.parsed.body.split(/\r?\n/);
       const totalLines = lines.length;
       const slice = lines.slice(fromLine - 1, fromLine - 1 + lineCount).join("\n");
       const truncated = fromLine - 1 + lineCount < totalLines;

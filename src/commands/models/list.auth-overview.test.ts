@@ -1,11 +1,15 @@
 // Model auth overview tests cover provider auth overview rows for model listings.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { NON_ENV_SECRETREF_MARKER } from "../../agents/model-auth-markers.js";
+import {
+  createApiKeyCredential,
+  createAuthProfileStoreFixture,
+} from "../../agents/auth-profiles/credential-fixtures.test-support.js";
 import { resolveEnvApiKey } from "../../agents/model-auth.js";
 import {
   createConfigResolutionFacts,
   setConfigResolutionFacts,
 } from "../../config/resolution-facts.js";
+import { NON_ENV_SECRETREF_MARKER } from "../../secrets/provider-credential-values.js";
 import { withEnv } from "../../test-utils/env.js";
 import {
   formatProviderAuthProfileCounts,
@@ -158,16 +162,13 @@ describe("resolveProviderAuthOverview", () => {
     const overview = resolveProviderAuthOverview({
       provider: "github-copilot",
       cfg: {},
-      store: {
-        version: 1,
-        profiles: {
-          "github-copilot:default": {
-            type: "token",
-            provider: "github-copilot",
-            tokenRef: { source: "env", provider: "default", id: "GITHUB_TOKEN" },
-          },
+      store: createAuthProfileStoreFixture({
+        "github-copilot:default": {
+          type: "token",
+          provider: "github-copilot",
+          tokenRef: { source: "env", provider: "default", id: "GITHUB_TOKEN" },
         },
-      } as never,
+      }) as never,
       modelsPath: "/tmp/models.json",
     });
 
@@ -183,18 +184,15 @@ describe("resolveProviderAuthOverview", () => {
     const overview = resolveProviderAuthOverview({
       provider: "openai",
       cfg: {},
-      store: {
-        version: 1,
-        profiles: {
-          "openai:peter@example.test": {
-            type: "oauth",
-            provider: "openai",
-            access: "access-token",
-            refresh: "refresh-token",
-            expires: Date.now() + 60_000,
-          },
+      store: createAuthProfileStoreFixture({
+        "openai:peter@example.test": {
+          type: "oauth",
+          provider: "openai",
+          access: "access-token",
+          refresh: "refresh-token",
+          expires: Date.now() + 60_000,
         },
-      } as never,
+      }) as never,
       modelsPath: "/tmp/openclaw-agent-custom/models.json",
       agentDir: "/tmp/openclaw-agent-custom",
     });
@@ -230,16 +228,9 @@ describe("resolveProviderAuthOverview", () => {
       resolveProviderAuthOverview({
         provider: "custom",
         cfg: cfg as never,
-        store: {
-          version: 1,
-          profiles: {
-            "custom:models-json": {
-              type: "api_key",
-              provider: "custom",
-              key: "stale-provider-key",
-            },
-          },
-        } as never,
+        store: createAuthProfileStoreFixture({
+          "custom:models-json": createApiKeyCredential("custom", "stale-provider-key"),
+        }) as never,
         modelsPath: "/tmp/models.json",
       }),
     );
@@ -260,18 +251,15 @@ describe("resolveProviderAuthOverview", () => {
     const overview = resolveProviderAuthOverview({
       provider: "openai",
       cfg: {},
-      store: {
-        version: 1,
-        profiles: {
-          "openai:peter@example.test": {
-            type: "oauth",
-            provider: "openai",
-            access: "access-token",
-            refresh: "refresh-token",
-            expires: Date.now() + 60_000,
-          },
+      store: createAuthProfileStoreFixture({
+        "openai:peter@example.test": {
+          type: "oauth",
+          provider: "openai",
+          access: "access-token",
+          refresh: "refresh-token",
+          expires: Date.now() + 60_000,
         },
-      } as never,
+      }) as never,
       modelsPath: "/tmp/openclaw-agent-custom/models.json",
       agentDir: "/tmp/openclaw-agent-custom",
     });

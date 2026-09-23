@@ -5,14 +5,22 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { resolveWorkshopSkillsDir } from "../../skills/workshop/skills-root.js";
 import { readSkillProposalEvents } from "../../skills/workshop/store-evaluation.js";
-import { writeConfigMachineState } from "../../state/config-machine-state.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
+import { registerSkillCuratorHandlerSuite } from "./skills.curator.test-support.js";
 import { callGatewayHandler } from "./skills.test-helpers.js";
 
 const tempDirs = createTrackedTempDirs();
@@ -44,10 +52,7 @@ vi.mock("../../agents/agent-scope.js", () => ({
 
 vi.mock("../../skills/lifecycle/clawhub.js", () => ({
   installSkillFromClawHub: vi.fn(),
-  readClawHubSkillsLockfileStatusSync: vi.fn(() => ({ kind: "missing" })),
   readLocalSkillCardContentSync: vi.fn(),
-  resolveClawHubSkillStatusLinkSync: vi.fn(),
-  resolveLocalSkillCardStatusSync: vi.fn(),
   searchSkillsFromClawHub: vi.fn(),
   updateSkillsFromClawHub: vi.fn(),
 }));
@@ -87,12 +92,6 @@ vi.mock("../../skills/workshop/service.js", async (importOriginal) => {
   };
 });
 
-vi.mock("./chat.js", () => ({
-  chatHandlers: {
-    "chat.send": mocks.chatSend,
-  },
-}));
-
 vi.mock("./chat-send-handler.js", () => ({
   handleChatSend: mocks.chatSend,
   handleChatSendWithSkillWorkshopProposalRevision: mocks.chatSend,
@@ -106,6 +105,21 @@ function callHandler(
   options?: Parameters<typeof callGatewayHandler>[3],
 ) {
   return callGatewayHandler(skillsHandlers, method, params, options);
+}
+
+function observeEventReadSql() {
+  const sql = observeMainThreadSql();
+  const close = vi.spyOn(requireNodeSqlite().DatabaseSync.prototype, "close");
+  return {
+    expectIdle() {
+      sql.expectIdle();
+      expect(close).not.toHaveBeenCalled();
+    },
+    restore() {
+      close.mockRestore();
+      sql.restore();
+    },
+  };
 }
 
 describe("skills proposal gateway handlers", () => {
@@ -151,6 +165,101 @@ describe("skills proposal gateway handlers", () => {
     await tempDirs.cleanup();
   });
 
+  registerSkillCuratorHandlerSuite({
+    callHandler,
+    getTestState: () => testState,
+    getWorkspaceDir: () => mocks.workspaceDir,
+  });
+
+  it("lists persisted proposal events without caller-thread SQLite", async () => {
+    const actual = await vi.importActual<typeof import("../../skills/workshop/service.js")>(
+      "../../skills/workshop/service.js",
+    );
+    mocks.listSkillProposalEvents.mockImplementation(actual.listSkillProposalEvents);
+    const proposal = await actual.proposeCreateSkill({
+      workspaceDir: mocks.workspaceDir,
+      config: {},
+      agentId: "main",
+      name: "Event Read Worker",
+      description: "Read durable proposal events through the registered handler",
+      content: "# Event Read Worker\n",
+    });
+    await closeOpenClawStateDatabaseAsync();
+    const sql = observeEventReadSql();
+    try {
+      await expect(
+        callHandler("skills.proposals.events.list", {
+          proposalId: proposal.record.id,
+          afterSequence: 0,
+          limit: 1,
+        }),
+      ).resolves.toMatchObject({
+        ok: true,
+        response: {
+          events: [{ proposalId: proposal.record.id, type: "created" }],
+        },
+      });
+      await closeOpenClawStateDatabaseAsync();
+      sql.expectIdle();
+    } finally {
+      sql.restore();
+    }
+  });
+
+  it.each(["absent database", "absent feature tables"])(
+    "initializes the event reader from %s without caller-thread SQLite",
+    async (initialState) => {
+      const actual = await vi.importActual<typeof import("../../skills/workshop/service.js")>(
+        "../../skills/workshop/service.js",
+      );
+      mocks.listSkillProposalEvents.mockImplementation(actual.listSkillProposalEvents);
+      const databasePath = resolveOpenClawStateSqlitePath(testState.env);
+      if (initialState === "absent feature tables") {
+        openOpenClawStateDatabase({ env: testState.env }).db.exec(`
+          DROP TABLE skill_workshop_proposal_events;
+          DROP TABLE skill_workshop_proposal_rollbacks;
+          DROP TABLE skill_workshop_proposals;
+          DROP TABLE skill_workshop_collection_reviews;
+        `);
+        await closeOpenClawStateDatabaseAsync();
+      } else {
+        await expect(fs.access(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
+      }
+      const sql = observeEventReadSql();
+      try {
+        await expect(callHandler("skills.proposals.events.list", {})).resolves.toMatchObject({
+          ok: true,
+          response: { events: [] },
+        });
+        await closeOpenClawStateDatabaseAsync();
+        sql.expectIdle();
+      } finally {
+        sql.restore();
+      }
+      const { DatabaseSync } = requireNodeSqlite();
+      const observer = new DatabaseSync(databasePath, { readOnly: true });
+      try {
+        expect(observer.prepare("PRAGMA user_version").get()).toMatchObject({
+          user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+        });
+        expect(
+          observer
+            .prepare(
+              "SELECT name FROM sqlite_schema WHERE type = 'table' AND name LIKE 'skill_workshop_%' ORDER BY name",
+            )
+            .all(),
+        ).toMatchObject([
+          { name: "skill_workshop_collection_reviews" },
+          { name: "skill_workshop_proposal_events" },
+          { name: "skill_workshop_proposal_rollbacks" },
+          { name: "skill_workshop_proposals" },
+        ]);
+      } finally {
+        observer.close();
+      }
+    },
+  );
+
   it("creates, lists, inspects, and applies a proposal", async () => {
     const create = await callHandler("skills.proposals.create", {
       name: "Weather Planner",
@@ -171,11 +280,13 @@ describe("skills proposal gateway handlers", () => {
     expect(created.record.draftFile).toBe("PROPOSAL.md");
     expect(created.record.supportFiles?.[0]?.path).toBe("references/weather.md");
     expect(
-      readSkillProposalEvents({ config: {}, proposalId: created.record.id }).events[0]?.actor,
+      (await readSkillProposalEvents({ config: {}, proposalId: created.record.id })).events[0]
+        ?.actor,
     ).toEqual({ type: "gateway" });
 
     const list = await callHandler("skills.proposals.list", {});
     expect(list.ok).toBe(true);
+    expect(list.response).toMatchObject({ installedSkills: [] });
     expect((list.response as { proposals: Array<{ id: string }> }).proposals[0]?.id).toBe(
       created.record.id,
     );
@@ -261,6 +372,49 @@ describe("skills proposal gateway handlers", () => {
     expect((update.response as { record: { draftFile: string } }).record.draftFile).toBe(
       "PROPOSAL.md",
     );
+
+    const installed = {
+      name: "weather-planner",
+      skillKey: "weather-planner",
+      description: "Plan with current weather",
+    };
+    const appliedList = await callHandler("skills.proposals.list", {});
+    expect(appliedList.response).toMatchObject({ installedSkills: [installed] });
+    const skillFile = path.join(
+      resolveWorkshopSkillsDir({}, "main", testState.env),
+      "weather-planner",
+      "SKILL.md",
+    );
+    await fs.appendFile(skillFile, "\nCollection review added the latest local procedure.\n");
+    const currentContent = await fs.readFile(skillFile, "utf8");
+    await expect(
+      callHandler("skills.workshop.read", { name: "weather-planner" }),
+    ).resolves.toMatchObject({
+      ok: true,
+      response: { ...installed, content: currentContent },
+    });
+
+    // Removing an installed file must not turn its retained draft back into a skill.
+    await fs.unlink(skillFile);
+    const historyOnly = await callHandler("skills.proposals.list", {});
+    expect(historyOnly.response).toMatchObject({
+      installedSkills: [],
+      proposals: expect.arrayContaining([
+        expect.objectContaining({ id: created.record.id, status: "applied" }),
+      ]),
+    });
+    await expect(
+      callHandler("skills.workshop.read", { name: "weather-planner" }),
+    ).resolves.toMatchObject({ ok: false });
+    await expect(
+      callHandler("skills.proposals.inspect", { proposalId: created.record.id }),
+    ).resolves.toMatchObject({
+      ok: true,
+      response: {
+        record: { status: "applied" },
+        content: expect.stringContaining("Use current weather and alerts."),
+      },
+    });
   });
 
   it("inspects and applies proposals in a configured agent directory", async () => {
@@ -307,48 +461,32 @@ describe("skills proposal gateway handlers", () => {
         "utf8",
       ),
     ).resolves.toContain("Use the configured directory.");
-  });
-
-  it("returns the stored review outcomes from curator status", async () => {
-    writeConfigMachineState(
-      "skills.curatorState",
-      {
-        lastAttemptAtMs: 100,
-        lastSuccessAtMs: 100,
-        lastError: null,
-        lastResult: {
-          collectionReviews: { workspace: { attemptedAtMs: 100, succeededAtMs: 101 } },
-          experienceReviews: { workspace: { attemptedAtMs: 102, outcome: "nothing" } },
-        },
-      },
-      { env: testState.env },
-    );
-
-    await expect(callHandler("skills.curator.status", {})).resolves.toMatchObject({
+    await expect(
+      callHandler("skills.proposals.list", { agentId: "main" }, { context }),
+    ).resolves.toMatchObject({
       ok: true,
       response: {
-        collectionReview: { workspace: { attemptedAtMs: 100, succeededAtMs: 101 } },
-        experienceReview: { workspace: { attemptedAtMs: 102, outcome: "nothing" } },
+        installedSkills: [expect.objectContaining({ name: "configured-gateway-skill" })],
       },
     });
+    await expect(
+      callHandler(
+        "skills.workshop.read",
+        { agentId: "main", name: "configured-gateway-skill" },
+        { context },
+      ),
+    ).resolves.toMatchObject({
+      ok: true,
+      response: { content: expect.stringContaining("Use the configured directory.") },
+    });
+    await expect(
+      callHandler(
+        "skills.workshop.read",
+        { agentId: "unknown", name: "configured-gateway-skill" },
+        { context },
+      ),
+    ).resolves.toMatchObject({ ok: false });
   });
-
-  it.each(["pin", "unpin", "restore"])(
-    "returns an explicit retirement error for the registered curator %s method",
-    async (action) => {
-      await expect(
-        callHandler(`skills.curator.${action}`, { skill: "daily-brief" }),
-      ).resolves.toEqual(
-        expect.objectContaining({
-          ok: false,
-          error: expect.objectContaining({
-            code: "INVALID_REQUEST",
-            message: expect.stringContaining("Skill lifecycle curation is retired"),
-          }),
-        }),
-      );
-    },
-  );
 
   it("marks manually created create targets stale before list and inspect responses", async () => {
     const create = await callHandler("skills.proposals.create", {
@@ -583,23 +721,36 @@ describe("skills proposal gateway handlers", () => {
     );
   });
 
-  it("reports empty historical scan coverage and validates scan direction", async () => {
-    const status = await callHandler("skills.proposals.historyStatus", {});
-    expect(status).toMatchObject({
-      ok: true,
-      response: {
-        schema: "openclaw.skill-workshop.history-scan.v1",
-        hasScanned: false,
-        reviewedSessions: 0,
-        ideasFound: 0,
-      },
-    });
+  it.each([
+    ["skills.proposals.historyStatus", {}],
+    ["skills.proposals.historyScan", {}],
+    ["skills.proposals.historyScan", { agentId: "main", direction: "older" }],
+    ["skills.proposals.historyScan", { agentId: "main", direction: "newer" }],
+  ] as const)(
+    "%s directs historical scan clients to a normal Workshop session",
+    async (method, params) => {
+      await expect(callHandler(method, params)).resolves.toMatchObject({
+        ok: false,
+        error: {
+          code: "INVALID_REQUEST",
+          message:
+            "Historical batch scans are retired. Start a learning session from Workshop to review past conversations.",
+        },
+      });
+    },
+  );
 
+  it("preserves historical scan direction validation", async () => {
     const invalid = await callHandler("skills.proposals.historyScan", {
       direction: "all-time",
     });
-    expect(invalid.ok).toBe(false);
-    expect((invalid.error as { code?: string }).code).toBe("INVALID_REQUEST");
+    expect(invalid).toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("invalid skills.proposals.historyScan params"),
+      },
+    });
   });
 
   it.each(["create", "update"])(

@@ -8,7 +8,7 @@ title: "Streaming and chunking"
 ---
 
 OpenClaw has two independent streaming layers, and there is **no true
-token-delta streaming** to channel messages today:
+token-delta streaming** to channel messages:
 
 - **Block streaming (channels):** emit completed **blocks** as the assistant
   writes. These are normal channel messages, not token deltas.
@@ -80,6 +80,16 @@ single-file config meets the [startup migration conditions](/gateway/doctor#deta
   can emit multiple chunks at the end.
 
 ### Media delivery with block streaming
+
+When a plugin uses `before_agent_finalize` to validate the built-in runtime's
+answer, assistant replies stay deferred until that decision completes. A later
+answer supersedes deferred text from earlier tool turns, including when the
+final answer is `NO_REPLY`. This applies to both reply blocks and preview
+updates; it does not retract replies that were already sent. Commentary remains
+live, and media, reasoning, and completed answers to earlier user inputs are
+preserved. Each steered user input gets its own delivered answer, even when its
+pending tools were skipped. Media from a superseded answer is delivered without
+its old caption.
 
 With block streaming off, media-bearing assistant messages can still be sent at
 message boundaries, with their captions attached. Preview updates do not count
@@ -244,6 +254,9 @@ Slack-only:
   the status label when answer streaming is active but no tool line is
   available yet, clears the draft at completion, and sends the final answer
   through normal delivery.
+- Plan previews use native checkboxes when `channels.telegram.richMessages`
+  is `true`; otherwise they use readable HTML checklists. Completed steps are
+  checked, and the active step is marked "in progress".
 - If the final edit fails before the completed text is confirmed, OpenClaw uses
   normal final delivery and cleans up the stale preview.
 - Preview streaming is skipped when Telegram block streaming is explicitly
@@ -264,17 +277,31 @@ Slack-only:
 - Preview streaming is skipped when Discord block streaming is explicitly
   enabled.
 - `progress` is quiet by default: headline, authored commentary and reasoning,
-  plan milestones, and approval or failure lines. The same default applies on
-  every progress-draft channel; `streaming.progress.toolProgress: true` adds
+  plan milestones, and approval requests. Intermediate tool failures and nonzero
+  command exits are hidden. The same default applies on
+  other shared progress-card renderers; `streaming.progress.toolProgress: true` adds
   the rolling tool log with its icons.
-- `progress` mode deletes the status draft once the final answer is delivered,
-  so busy channels keep no orphaned tool log above the reply. Error finals keep
-  the draft as the record of the failed turn.
+- When a parent yields to accepted subagents, `progress` mode can transfer its
+  confirmed card to core. The same message keeps its checklist and receives
+  child activity and terminal updates; the final answer is separate. See
+  [Subagent yield handoff](/concepts/subagent-yield-handoff#progress-after-yield).
+- Without that handoff, `progress` mode deletes the status draft once the final
+  answer is delivered, so busy channels keep no orphaned tool log above the
+  reply. Error finals keep the draft as the record of the failed turn.
 - Final media, error, and explicit-reply payloads cancel pending previews
   without flushing a new draft, then use normal delivery.
 
 ### Slack
 
+- Compact progress with `streaming.progress.toolProgress: false` preserves
+  the latest model preamble. With `commentary: true`, `label: false`, and
+  `maxLines: 1`, it is one italicized, temporary message without reasoning,
+  tool icons, command failures, plans, or file-edit counters. The first post
+  waits for a complete preamble so its Slack notification is readable; later
+  preambles edit that message. Actionable approval requests remain visible.
+  The final answer is a new reply, and only after Slack confirms delivery is
+  the preview deleted. Successful silent turns also remove their preview;
+  explicit message-tool posts remain durable.
 - `partial` can use Slack native streaming (`chat.startStream`/`append`/`stop`)
   when available.
 - `block` uses append-style draft previews.
@@ -366,8 +393,17 @@ Supported surfaces:
 
 ## Progress draft rendering
 
-Progress-mode drafts (`streaming.progress.*`) are bounded and configurable per
-channel:
+[Progress cards](/tools/progress-card) replace the complete plan state in
+`partial`, `block`, and `progress` previews where plan updates are enabled.
+Visible steps follow the channel's line limits. Clearing a card removes its
+checklist and status while preserving other activity; an otherwise empty draft
+is deleted where the channel supports deletion. Microsoft Teams replaces a cleared
+interim preview with its progress label. With `streaming.progress.label: false`,
+Teams retains the interim preview until the next update or final reply. Failed or
+blocked writes leave the previous plan in place. Active previews retain a safe
+failure notice.
+
+Progress-mode drafts (`streaming.progress.*`) have these per-channel settings:
 
 | Key                               | Default       | Behavior                                                       |
 | --------------------------------- | ------------- | -------------------------------------------------------------- |
@@ -442,8 +478,10 @@ the same policy under `streaming.progress`:
 
 ## Related
 
+- [Agent loop](/concepts/agent-loop) - the turn lifecycle that emits these stream events
 - [Channel outbound API](/plugins/sdk-channel-outbound) - shared preview, durable send, and finalization APIs
 - [Progress drafts](/concepts/progress-drafts) - visible work-in-progress messages that update during long turns
 - [Messages](/concepts/messages) - message lifecycle and delivery
 - [Retry](/concepts/retry) - retry behavior on delivery failure
+- [Typing indicators](/concepts/typing-indicators) - typing state shown while a turn is in flight
 - [Channels](/channels) - per-channel streaming support

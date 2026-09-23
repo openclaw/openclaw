@@ -10,6 +10,8 @@ type WizardViewProps = {
   mode: "auth" | "prepare" | "activate";
   state: ModelSetupWizardState;
   refreshWarning: string | null;
+  doneMessage?: string;
+  cancellationNotice?: string | null;
   value: unknown;
   onValueChange: (value: unknown) => void;
   onAnswer: (value: unknown, includeValue?: boolean) => void;
@@ -21,10 +23,7 @@ export function renderModelSetupWizard(props: WizardViewProps): TemplateResult |
   if (props.state.phase === "idle") {
     return nothing;
   }
-  const canCancel =
-    props.state.phase === "starting" ||
-    props.state.phase === "step" ||
-    props.state.phase === "done";
+  const canCancel = props.state.phase === "starting" || props.state.phase === "step";
   return html`
     <openclaw-modal-dialog
       label=${t(
@@ -40,24 +39,24 @@ export function renderModelSetupWizard(props: WizardViewProps): TemplateResult |
         <div class="model-setup-wizard__header">
           <h2>
             ${
-              props.state.phase === "step" && props.state.step.title
-                ? props.state.step.title
-                : t(
-                    props.mode === "prepare"
-                      ? "modelSetup.wizard.prepareTitle"
-                      : props.mode === "activate"
-                        ? "modelSetup.heading"
-                        : "modelSetup.wizard.title",
-                  )
+              props.state.authLabel
+                ? props.state.authLabel
+                : props.state.phase === "step" && props.state.step.title
+                  ? props.state.step.title
+                  : t(
+                      props.mode === "prepare"
+                        ? "modelSetup.wizard.prepareTitle"
+                        : props.mode === "activate"
+                          ? "modelSetup.heading"
+                          : "modelSetup.wizard.title",
+                    )
             }
           </h2>
         </div>
         <div class="model-setup-wizard__body">
-          ${
-            props.refreshWarning
-              ? html`<div class="callout warning" role="alert">${props.refreshWarning}</div>`
-              : nothing
-          }
+          ${[props.refreshWarning, props.cancellationNotice].map((warning) =>
+            warning ? html`<div class="callout warning" role="alert">${warning}</div>` : nothing,
+          )}
           ${
             props.state.phase === "starting"
               ? html`<div role="status">
@@ -70,9 +69,25 @@ export function renderModelSetupWizard(props: WizardViewProps): TemplateResult |
                   )}
                 </div>`
               : props.state.phase === "done"
-                ? html`<div role="status">${t("modelSetup.wizard.checking")}</div>`
+                ? html`<div role="status">
+                    ${props.doneMessage ?? t(props.mode === "auth" ? "modelSetup.wizard.connected" : "modelSetup.wizard.checking")}
+                  </div>`
                 : props.state.phase === "error" || props.state.phase === "cancelled"
-                  ? html`<div class="callout danger" role="alert">${props.state.message}</div>`
+                  ? html`<div class="callout danger" role="alert">
+                        ${
+                          props.state.phase === "cancelled" || props.mode !== "auth"
+                            ? props.state.message
+                            : t("modelSetup.wizard.failed")
+                        }
+                      </div>
+                      ${
+                        props.state.phase === "error" && props.mode === "auth"
+                          ? html`<details>
+                              <summary>${t("modelSetup.wizard.details")}</summary>
+                              <p>${props.state.message}</p>
+                            </details>`
+                          : nothing
+                      }`
                   : html`
                       ${
                         props.state.validationError
@@ -83,6 +98,7 @@ export function renderModelSetupWizard(props: WizardViewProps): TemplateResult |
                       }
                       ${renderWizardStepControls({
                         step: props.state.step,
+                        externalAuthInput: props.state.externalAuthInput,
                         value: props.value,
                         busy: props.state.busy,
                         inputId: WIZARD_TEXT_INPUT_ID,
@@ -101,7 +117,9 @@ export function renderModelSetupWizard(props: WizardViewProps): TemplateResult |
                         onAnswer: props.onAnswer,
                       })}
                       ${
-                        props.state.busy
+                        props.state.busy &&
+                        !props.state.step.externalUrl &&
+                        !props.state.step.deviceCode
                           ? html`<div role="status">${t("modelSetup.wizard.working")}</div>`
                           : nothing
                       }

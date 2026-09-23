@@ -292,9 +292,9 @@ describe("assertSandboxPath", () => {
         const escaped = `${parent}/jump/../workspace/proof.txt`;
         await expect(fs.readFile(escaped, "utf8")).resolves.toBe("outside");
         expect(path.resolve(escaped)).toBe(path.join(root, "proof.txt"));
-        await expect(assertSandboxPath({ filePath: escaped, cwd: root, root })).rejects.toThrow(
-          /(?:resolves outside|escapes) sandbox root/i,
-        );
+        await expect(
+          assertSandboxPath({ filePath: escaped, cwd: root, root }),
+        ).rejects.toMatchObject({ code: "outside-workspace", category: "policy" });
         await expect(
           assertSandboxPath({
             filePath: `${parent}/plain/../workspace/proof.txt`,

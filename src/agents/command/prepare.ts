@@ -1,7 +1,6 @@
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionStableReplyMode } from "../../auto-reply/reply/session-stable-reply-mode.js";
-import { isSyntheticSourceReplyTurn } from "../../auto-reply/reply/source-reply-delivery-mode.js";
 import {
   formatThinkingLevels,
   normalizeThinkLevel,
@@ -24,6 +23,12 @@ import {
   AGENT_HARNESS_MODEL_RUN_FORBIDDEN_MESSAGE,
   resolveAgentHarnessSessionContextError,
 } from "../../sessions/agent-harness-session-key.js";
+import {
+  assertAgentDatabaseAdmitted,
+  evaluateAgentDatabaseAdmissions,
+  hasAgentDatabaseAdmissions,
+  recordAgentDatabaseAdmissions,
+} from "../../state/agent-database-admission.js";
 import { resolveUserPath } from "../../utils.js";
 import { isDeliverableMessageChannel, resolveMessageChannel } from "../../utils/message-channel.js";
 import { resolveAgentRuntimeConfig } from "../agent-runtime-config.js";
@@ -35,20 +40,21 @@ import {
   resolveAgentWorkspaceDir,
 } from "../agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
+import {
+  resolveAcpPromptBody,
+  prependInternalEventContext,
+  resolveInternalEventTranscriptBody,
+} from "../internal-events.js";
 import { AGENT_LANE_SUBAGENT } from "../lanes.js";
 import type { ModelManifestNormalizationContext } from "../model-ref-shared.js";
 import { buildConfiguredModelCatalog, resolveConfiguredModelRef } from "../model-selection.js";
 import type { PreparedModelRuntimePluginGeneration } from "../prepared-model-runtime.types.js";
+import { isSyntheticSourceReplyTurn } from "../reply-completion.js";
 import { normalizeSpawnedRunMetadata } from "../spawned-context.js";
 import { resolveEffectiveAgentRuntime } from "../thinking-runtime.js";
 import { resolveAgentTimeoutMs } from "../timeout.js";
 import { ensureAgentWorkspace } from "../workspace.js";
 import { acquireWorktreeRunLease, resolveWorktreeIdForPath } from "../worktrees/run-lease.js";
-import {
-  resolveAcpPromptBody,
-  prependInternalEventContext,
-  resolveInternalEventTranscriptBody,
-} from "./attempt-execution.shared.js";
 import { resolveExplicitAgentCommandSessionKey } from "./explicit-session-key.js";
 import { loadAcpManagerRuntime } from "./runtime-loaders.js";
 import { resolveSession } from "./session.js";
@@ -177,6 +183,14 @@ export async function prepareAgentCommandExecution(
       );
     }
   }
+  if (agentIdOverride || explicitSessionKey) {
+    if (!hasAgentDatabaseAdmissions()) {
+      recordAgentDatabaseAdmissions(await evaluateAgentDatabaseAdmissions(cfg));
+    }
+    assertAgentDatabaseAdmitted(
+      agentIdOverride ?? resolveSessionAgentId({ sessionKey: explicitSessionKey, config: cfg }),
+    );
+  }
   const agentCfg = cfg.agents?.defaults;
 
   const verboseOverride = normalizeVerboseLevel(opts.verbose);
@@ -239,6 +253,7 @@ export async function prepareAgentCommandExecution(
     sessionId,
     sessionKey,
     sessionEntry: sessionEntryRaw,
+    sessionAgentId,
     storePath,
     isNewSession,
     previousSessionId,
@@ -257,9 +272,7 @@ export async function prepareAgentCommandExecution(
   }
   const sessionStore: Record<string, InternalSessionEntry> =
     sessionKey && sessionEntryRaw ? { [sessionKey]: sessionEntryRaw } : {};
-  const sessionAgentId =
-    agentIdOverride ??
-    resolveSessionAgentId({ sessionKey: sessionKey ?? explicitSessionKey, config: cfg });
+  assertAgentDatabaseAdmitted(sessionAgentId);
   const outboundSession = buildOutboundSessionContext({
     cfg,
     agentId: sessionAgentId,
@@ -377,7 +390,7 @@ export async function prepareAgentCommandExecution(
       const {
         expandExplicitSkillReferences,
         hasSkillReferenceCandidate,
-        listSkillCommandsForWorkspace,
+        prepareSkillCommandsForWorkspace,
         resolveEffectiveAgentSkillFilter,
       } = await import("../../skills/discovery/chat-commands.runtime.js");
       const hasExplicitSkillCandidate =
@@ -393,9 +406,12 @@ export async function prepareAgentCommandExecution(
           ...(preparedMetadataSnapshot ? { pluginMetadataSnapshot: preparedMetadataSnapshot } : {}),
           ...(skillFilter ? { skillFilter } : {}),
         };
-        const skillCommands = listSkillCommandsForWorkspace(commandParams);
+        const skillCommands = await prepareSkillCommandsForWorkspace(commandParams);
         const allSkillCommands = skillFilter
-          ? listSkillCommandsForWorkspace({ ...commandParams, includeAllowlistHidden: true })
+          ? await prepareSkillCommandsForWorkspace({
+              ...commandParams,
+              includeAllowlistHidden: true,
+            })
           : skillCommands;
         const expansion = expandExplicitSkillReferences({
           text: message,
@@ -410,10 +426,11 @@ export async function prepareAgentCommandExecution(
     }
     const body =
       !isRawModelRun && acpResolution?.kind === "ready"
-        ? resolveAcpPromptBody(promptMessage, opts.internalEvents)
-        : prependInternalEventContext(promptMessage, opts.internalEvents);
+        ? resolveAcpPromptBody(promptMessage, opts.internalEvents, opts.inputProvenance)
+        : prependInternalEventContext(promptMessage, opts.internalEvents, opts.inputProvenance);
     const transcriptBody =
-      opts.transcriptMessage ?? resolveInternalEventTranscriptBody(message, opts.internalEvents);
+      opts.transcriptMessage ??
+      resolveInternalEventTranscriptBody(message, opts.internalEvents, opts.inputProvenance);
 
     const prepared = {
       opts: commandOpts,

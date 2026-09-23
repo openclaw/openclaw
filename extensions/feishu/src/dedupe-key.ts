@@ -1,4 +1,3 @@
-// Feishu plugin module implements dedupe key behavior.
 import { createHash } from "node:crypto";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { asNullableRecord as readRecord } from "openclaw/plugin-sdk/string-coerce-runtime";

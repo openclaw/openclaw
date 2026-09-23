@@ -5,6 +5,7 @@ import {
 } from "openclaw/plugin-sdk/meeting-runtime";
 import type { TeamsMeetingsMode } from "../config.js";
 import {
+  teamsMeetingAudioCaptureScript,
   teamsMeetingLeaveScript,
   teamsMeetingStatusScript,
   teamsMeetingTranscriptScript,
@@ -92,6 +93,7 @@ export const TEAMS_MEETINGS_PLATFORM_ADAPTER = MeetingPlatformAdapter.create<
     localeAction: () => undefined,
   },
   browser: {
+    buildAudioCaptureScript: teamsMeetingAudioCaptureScript,
     allowsMicrophone: MeetingPlatformAdapter.isTalkBackMode,
     buildStatusJoinScript: (params) =>
       teamsMeetingStatusScript({

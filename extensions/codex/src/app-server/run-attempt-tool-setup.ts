@@ -97,6 +97,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
   }
   const toolState: {
     yieldDetected: boolean;
+    yieldMessage?: string;
     yieldAcknowledgment?: string;
     persistentWebSearchAllowed?: boolean;
     webSearchAllowed: boolean;
@@ -233,8 +234,9 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
           cronCreatorAuthorityUnavailableReason: "queued-local-operator-configured-mcp" as const,
         }
       : {}),
-    onYieldDetected: (acknowledgment: string | undefined) => {
+    onYieldDetected: (message: string, acknowledgment: string | undefined) => {
       toolState.yieldDetected = true;
+      toolState.yieldMessage = message;
       toolState.yieldAcknowledgment = acknowledgment;
     },
     claimYieldCompletion: () => runtimeYieldCompletionClaim.current?.() ?? false,
@@ -296,147 +298,200 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       releaseLeasedSharedCodexAppServerClient(client);
     }
   }
-  const tools = await buildDynamicTools({
-    ...commonToolParams,
-    registerRunCleanup: (cleanup) => runCleanups.push(cleanup),
-    cronCreatorToolAllowlistRef: cronCreatorToolAllowlist,
-    cronCreatorToolAllowlistCaptureRef,
-    onPersistentWebSearchPolicyResolved: (allowed) => {
-      toolState.persistentWebSearchAllowed = allowed;
-    },
-    onWebSearchPolicyResolved: (allowed) => {
-      toolState.webSearchAllowed = allowed;
-    },
-  });
-  const registeredTools = nativeSpecs
-    ? []
-    : await buildDynamicTools({
-        ...commonToolParams,
-        forceHeartbeatTool: true,
-        ignoreDisableMessageTool: true,
-        ignoreRuntimePlan: true,
-      });
-  const policyContext = {
-    config: params.config,
-    sessionKey: sandboxSessionKey,
-    runSessionKey:
-      params.sessionKey && params.sessionKey !== sandboxSessionKey ? params.sessionKey : undefined,
-    sessionId: params.sessionId,
-    runId: params.runId,
-    agentId: policyAgentId,
-    agentDir: agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId),
-    agentAccountId: params.agentAccountId,
-    messageProvider: params.messageProvider ?? params.messageChannel,
-    messageChannel: params.messageChannel,
-    chatType: params.chatType,
-    messageTo: params.messageTo,
-    messageThreadId: params.messageThreadId,
-    currentChannelId: params.currentChannelId,
-    currentMessagingTarget: params.currentMessagingTarget,
-    currentThreadTs: params.currentThreadTs,
-    currentMessageId: params.currentMessageId,
-    groupId: params.groupId,
-    groupChannel: params.groupChannel,
-    groupSpace: params.groupSpace,
-    memberRoleIds: params.memberRoleIds,
-    spawnedBy: params.spawnedBy,
-    senderId: params.senderId,
-    senderName: params.senderName,
-    senderUsername: params.senderUsername,
-    senderE164: params.senderE164,
-    senderIsOwner: params.senderIsOwner,
-    modelProvider: params.provider,
-    modelId: params.modelId,
-    modelApi: params.model.api,
-    modelContextWindowTokens: params.model.contextWindow,
-    modelHasVision: params.model.input?.includes("image") ?? false,
-    workspaceDir: effectiveWorkspace,
-    cwd: effectiveCwd ?? effectiveWorkspace,
-    sandboxToolPolicy: sandbox?.tools,
-    conversationToolPolicy: params.conversationToolPolicy,
-    inputProvenance: params.inputProvenance,
-    trustedInternalHandoff: params.trustedInternalHandoff,
-    scheduledToolPolicy: params.scheduledToolPolicy,
-  };
-  const reservedToolNames = [
-    ...tools.map((tool) => tool.name),
-    ...registeredTools.map((tool) => tool.name),
-  ];
-  const turnSourceChannel = params.messageChannel ?? params.messageProvider;
-  const turnSourceTo = params.currentMessagingTarget ?? params.currentChannelId;
-  const requester = {
-    ...(turnSourceChannel ? { channel: turnSourceChannel } : {}),
-    ...(params.agentAccountId ? { accountId: params.agentAccountId } : {}),
-    ...(params.senderId ? { senderId: params.senderId } : {}),
-    ...(params.senderIsOwner !== undefined ? { senderIsOwner: params.senderIsOwner } : {}),
-    ...(params.memberRoleIds?.length ? { roleIds: [...params.memberRoleIds] } : {}),
-  };
-  const hasRequester = Object.keys(requester).length > 0;
-  const configuredMcp = configuredMcpSurface
-    ? await materializeStaticMcpToolsForHarnessRun({
-        sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
-        agentId: sessionAgentId,
-        workspaceDir: effectiveWorkspace,
-        agentDir: policyContext.agentDir,
-        cfg: params.config,
-        manifestRegistry: bundleManifestRegistry,
-        reservedToolNames,
-        toolsAllow: params.toolsAllow,
-        toolOverrides: codexMcpToolOverrides,
-        autoApproveCodexAppServerApprovals: shouldAutoApproveCodexAppServerApprovals(
-          connection.appServer,
-        ),
-        projectedMcpServers: bundleMcpThreadConfig.configPatch?.mcp_servers,
-        ...(configuredMcpSurface === "transient"
-          ? {
-              requestInteractiveCodexApproval: async (approval) => {
-                const allowedDecisions: ExecApprovalDecision[] =
-                  approval.mode === "prompt"
-                    ? ["allow-once", "deny"]
-                    : ["allow-once", "allow-always", "deny"];
-                const outcome = await requestPluginApprovalOutcome({
-                  hostCapabilities: params.hostCapabilities,
-                  signal: approval.signal,
-                  title: `Run MCP tool ${approval.serverName}/${approval.toolName}`,
-                  description: `Codex approval mode "${approval.mode}" requires an operator decision before this MCP tool runs. ${formatMcpCodexApprovalRemedy(approval.serverName)}`,
-                  allowedDecisions,
-                  toolName: approval.safeToolName,
-                  toolCallId: approval.toolCallId,
-                  mcpTool: { server: approval.serverName, tool: approval.toolName },
-                  isMcpToolApprovalActive: approval.isActive,
-                });
-                if (outcome !== "approved-once" && outcome !== "approved-session") {
-                  throw new Error(
-                    `${approval.serverName}/${approval.toolName}: interactive Codex approval (${approval.mode}) was not granted: ${outcome}`,
-                  );
-                }
-              },
-            }
-          : {}),
-        policyContext,
-        warn: (message) => embeddedAgentLog.warn(message),
-      })
-    : undefined;
-  // Requester-scoped MCP: dynamic tools on a shared thread (never harness-native MCP).
-  // Specs come from the session advertised-catalog cache so fingerprints stay stable.
-  let scopedMcpTools: Awaited<ReturnType<typeof materializeRequesterScopedMcpToolsForHarnessRun>> =
-    undefined;
-  const disposeMcpTools = async () => {
-    for (const [step, materialized] of [
-      ["codex-scoped-mcp-dispose", scopedMcpTools],
-      ["codex-configured-mcp-dispose", configuredMcp],
-    ] as const) {
+  let requireExplicitMessageTarget: boolean | undefined;
+  let configuredMcp: Awaited<ReturnType<typeof materializeStaticMcpToolsForHarnessRun>> | undefined;
+  let scopedMcpTools: Awaited<ReturnType<typeof materializeRequesterScopedMcpToolsForHarnessRun>>;
+  let toolDisposal: Promise<void> | undefined;
+  const disposeTools = (reason: string): Promise<void> =>
+    (toolDisposal ??= (async () => {
       await runAgentCleanupStep({
         runId: params.runId,
         sessionId: params.sessionId,
-        step,
+        step: "codex-dynamic-tool-cleanup",
         log: embeddedAgentLog,
-        cleanup: async () => materialized?.dispose(),
+        cleanup: async () => {
+          const settled = await Promise.allSettled(
+            runCleanups.splice(0).map(async (cleanup) => await cleanup(reason)),
+          );
+          const errors = settled.flatMap((result) =>
+            result.status === "rejected" ? [result.reason] : [],
+          );
+          if (params.oneShotCliRun && errors.length) {
+            throw new AggregateError(errors, "Codex tool cleanup failed");
+          }
+        },
       });
-    }
-  };
+      for (const [step, materialized] of [
+        ["codex-scoped-mcp-dispose", scopedMcpTools],
+        ["codex-configured-mcp-dispose", configuredMcp],
+      ] as const) {
+        await runAgentCleanupStep({
+          runId: params.runId,
+          sessionId: params.sessionId,
+          step,
+          log: embeddedAgentLog,
+          cleanup: async () => materialized?.dispose(),
+        });
+      }
+    })());
   try {
+    const tools = await buildDynamicTools({
+      ...commonToolParams,
+      registerRunCleanup: (cleanup) => runCleanups.push(cleanup),
+      onMessageToolTargetResolved: (required) => {
+        requireExplicitMessageTarget = required;
+      },
+      cronCreatorToolAllowlistRef: cronCreatorToolAllowlist,
+      cronCreatorToolAllowlistCaptureRef,
+      onPersistentWebSearchPolicyResolved: (allowed) => {
+        toolState.persistentWebSearchAllowed = allowed;
+      },
+      onWebSearchPolicyResolved: (allowed) => {
+        toolState.webSearchAllowed = allowed;
+      },
+    });
+    const registeredTools = nativeSpecs
+      ? []
+      : await buildDynamicTools({
+          ...commonToolParams,
+          forceHeartbeatTool: true,
+          ignoreDisableMessageTool: true,
+          ignoreRuntimePlan: true,
+        });
+    const policyContext = {
+      config: params.config,
+      sessionKey: sandboxSessionKey,
+      runSessionKey:
+        params.sessionKey && params.sessionKey !== sandboxSessionKey
+          ? params.sessionKey
+          : undefined,
+      sessionId: params.sessionId,
+      runId: params.runId,
+      agentId: policyAgentId,
+      agentDir: agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId),
+      agentAccountId: params.agentAccountId,
+      messageProvider: params.messageProvider ?? params.messageChannel,
+      messageChannel: params.messageChannel,
+      chatType: params.chatType,
+      messageTo: params.messageTo,
+      messageThreadId: params.messageThreadId,
+      currentChannelId: params.currentChannelId,
+      currentMessagingTarget: params.currentMessagingTarget,
+      currentThreadTs: params.currentThreadTs,
+      currentMessageId: params.currentMessageId,
+      groupId: params.groupId,
+      groupChannel: params.groupChannel,
+      groupSpace: params.groupSpace,
+      memberRoleIds: params.memberRoleIds,
+      spawnedBy: params.spawnedBy,
+      senderId: params.senderId,
+      senderName: params.senderName,
+      senderUsername: params.senderUsername,
+      senderE164: params.senderE164,
+      senderIsOwner: params.senderIsOwner,
+      modelProvider: params.provider,
+      modelId: params.modelId,
+      modelApi: params.model.api,
+      modelContextWindowTokens: params.model.contextWindow,
+      modelHasVision: params.model.input?.includes("image") ?? false,
+      workspaceDir: effectiveWorkspace,
+      cwd: effectiveCwd ?? effectiveWorkspace,
+      sandboxToolPolicy: sandbox?.tools,
+      conversationToolPolicy: params.conversationToolPolicy,
+      inputProvenance: params.inputProvenance,
+      trustedInternalHandoff: params.trustedInternalHandoff,
+      scheduledToolPolicy: params.scheduledToolPolicy,
+    };
+    const reservedToolNames = [
+      ...tools.map((tool) => tool.name),
+      ...registeredTools.map((tool) => tool.name),
+    ];
+    const turnSourceChannel = params.messageChannel ?? params.messageProvider;
+    const turnSourceTo = params.currentMessagingTarget ?? params.currentChannelId;
+    const requester = {
+      ...(turnSourceChannel ? { channel: turnSourceChannel } : {}),
+      ...(params.agentAccountId ? { accountId: params.agentAccountId } : {}),
+      ...(params.senderId ? { senderId: params.senderId } : {}),
+      ...(params.senderIsOwner !== undefined ? { senderIsOwner: params.senderIsOwner } : {}),
+      ...(params.memberRoleIds?.length ? { roleIds: [...params.memberRoleIds] } : {}),
+    };
+    const hasRequester = Object.keys(requester).length > 0;
+    type HarnessMcpInteractiveApproval = NonNullable<
+      Parameters<
+        typeof materializeRequesterScopedMcpToolsForHarnessRun
+      >[0]["requestInteractiveCodexApproval"]
+    >;
+    // Shared per-call MCP approval callback for dynamic (bridge) tools. Requester-scoped
+    // tools must enter the same approval boundary as the configured path before any
+    // executor dispatch.
+    const requestInteractiveMcpApproval: HarnessMcpInteractiveApproval = async (approval) => {
+      const allowedDecisions: ExecApprovalDecision[] =
+        approval.mode === "prompt"
+          ? ["allow-once", "deny"]
+          : ["allow-once", "allow-always", "deny"];
+      const outcome = await requestPluginApprovalOutcome({
+        hostCapabilities: params.hostCapabilities,
+        signal: approval.signal,
+        title: `Run MCP tool ${approval.serverName}/${approval.toolName}`,
+        description: `Codex approval mode "${approval.mode}" requires an operator decision before this MCP tool runs. ${formatMcpCodexApprovalRemedy(approval.serverName)}`,
+        allowedDecisions,
+        toolName: approval.safeToolName,
+        toolCallId: approval.toolCallId,
+        mcpTool: { server: approval.serverName, tool: approval.toolName },
+        isMcpToolApprovalActive: approval.isActive,
+      });
+      if (outcome !== "approved-once" && outcome !== "approved-session") {
+        throw new Error(
+          `${approval.serverName}/${approval.toolName}: interactive Codex approval (${approval.mode}) was not granted: ${outcome}`,
+        );
+      }
+    };
+    // Requester-scoped tools never consume stored approval grants (requester servers are
+    // excluded from the native grant projection), so offer only effective decisions:
+    // allow-once or deny. Allow Always would re-prompt on every subsequent call.
+    const requestRequesterMcpApproval: HarnessMcpInteractiveApproval = async (approval) => {
+      const outcome = await requestPluginApprovalOutcome({
+        hostCapabilities: params.hostCapabilities,
+        signal: approval.signal,
+        title: `Run MCP tool ${approval.serverName}/${approval.toolName}`,
+        description: `Codex approval mode "${approval.mode}" requires an operator decision before this MCP tool runs. ${formatMcpCodexApprovalRemedy(approval.serverName)}`,
+        allowedDecisions: ["allow-once", "deny"],
+        toolName: approval.safeToolName,
+        toolCallId: approval.toolCallId,
+        mcpTool: { server: approval.serverName, tool: approval.toolName },
+        isMcpToolApprovalActive: approval.isActive,
+      });
+      if (outcome !== "approved-once" && outcome !== "approved-session") {
+        throw new Error(
+          `${approval.serverName}/${approval.toolName}: interactive Codex approval (${approval.mode}) was not granted: ${outcome}`,
+        );
+      }
+    };
+    configuredMcp = configuredMcpSurface
+      ? await materializeStaticMcpToolsForHarnessRun({
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+          agentId: sessionAgentId,
+          workspaceDir: effectiveWorkspace,
+          agentDir: policyContext.agentDir,
+          cfg: params.config,
+          manifestRegistry: bundleManifestRegistry,
+          reservedToolNames,
+          toolsAllow: params.toolsAllow,
+          toolOverrides: codexMcpToolOverrides,
+          autoApproveCodexAppServerApprovals: shouldAutoApproveCodexAppServerApprovals(
+            connection.appServer,
+          ),
+          projectedMcpServers: bundleMcpThreadConfig.configPatch?.mcp_servers,
+          ...(configuredMcpSurface === "transient"
+            ? { requestInteractiveCodexApproval: requestInteractiveMcpApproval }
+            : {}),
+          policyContext,
+          warn: (message) => embeddedAgentLog.warn(message),
+        })
+      : undefined;
+    // Requester-scoped MCP: dynamic tools on a shared thread (never harness-native MCP).
+    // Specs come from the session advertised-catalog cache so fingerprints stay stable.
     scopedMcpTools = authenticatedScheduledMode
       ? undefined
       : await materializeRequesterScopedMcpToolsForHarnessRun({
@@ -447,6 +502,10 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
           cfg: params.config,
           manifestRegistry: bundleManifestRegistry,
           toolOverrides: codexMcpToolOverrides,
+          autoApproveCodexAppServerApprovals: shouldAutoApproveCodexAppServerApprovals(
+            connection.appServer,
+          ),
+          requestInteractiveCodexApproval: requestRequesterMcpApproval,
           requesterSenderId: params.senderId,
           agentAccountId: params.agentAccountId,
           messageChannel: params.messageChannel ?? params.messageProvider,
@@ -515,6 +574,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       }),
       directToolNames: resolveCodexDynamicToolDirectNames(
         params,
+        registeredWithScopedMcp,
         isHostScopedAgentToolActive("openclaw"),
       ),
       hookContext,
@@ -575,7 +635,9 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
                 agentDir: policyContext.agentDir,
                 cfg: params.config,
                 manifestRegistry: bundleManifestRegistry,
-                reservedToolNames: toolBridge.availableTools.map((tool) => tool.name),
+                reservedToolNames: configuredMcp
+                  ? reservedToolNames
+                  : toolBridge.availableTools.map((tool) => tool.name),
                 toolsAllow: params.toolsAllow,
                 toolOverrides: codexMcpToolOverrides,
                 autoApproveCodexAppServerApprovals: shouldAutoApproveCodexAppServerApprovals(
@@ -632,9 +694,10 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     return {
       tools: toolsWithScopedMcp,
       registeredTools: registeredWithScopedMcp,
+      requireExplicitMessageTarget,
       scopedMcpTools,
       configuredMcp,
-      disposeMcpTools,
+      disposeTools,
       configuredMcpOwnershipVersion:
         configuredMcpSurface === "scheduled" ? (1 as const) : undefined,
       captureCronCreatorToolAllowlist,
@@ -642,7 +705,6 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       dynamicToolParams,
       compactionPlanState,
       computerContextEpoch,
-      runCleanups,
       toolBridge,
       toolState,
       toolOutcomeOrdinals,
@@ -652,9 +714,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       runtimeYieldCompletionClaim,
     };
   } catch (error) {
-    // Materialized runtimes are attempt-owned only after this function returns.
-    // Dispose here when filtering, schema projection, or bridge setup fails first.
-    await disposeMcpTools();
+    await disposeTools("error");
     throw error;
   }
 }

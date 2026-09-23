@@ -2,10 +2,9 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { BundledPluginSource } from "./bundled-sources.js";
-import {
-  persistPluginInstall,
-  type ConfigSnapshotForInstallPersist,
-} from "./install-persistence.js";
+import { prepareConfigForDisabledInstall } from "./enable.js";
+import type { ConfigSnapshotForInstallPersist } from "./install-config-mutation.js";
+import { persistPluginInstall } from "./install-persistence.js";
 import { validateJsonSchemaValue } from "./schema-validator.js";
 
 type BundledPluginConfigEnablement =
@@ -41,34 +40,17 @@ function resolveBundledPluginConfigEnablement(params: {
     : { mode: "invalid", error: result.errors[0]?.text ?? "invalid plugin config" };
 }
 
-function prepareConfigForDisabledBundledInstall(
-  config: OpenClawConfig,
-  pluginId: string,
-): OpenClawConfig {
-  const entry = config.plugins?.entries?.[pluginId];
-  const policy = isRecord(entry) ? { ...entry } : {};
-  delete policy.config;
-  return {
-    ...config,
-    plugins: {
-      ...config.plugins,
-      entries: {
-        ...config.plugins?.entries,
-        [pluginId]: { ...policy, enabled: false },
-      },
-    },
-  };
-}
-
 export async function installBundledPluginSource(params: {
   snapshot: ConfigSnapshotForInstallPersist;
   rawSpec: string;
   bundledSource: BundledPluginSource;
   warning?: string;
   invalidateRuntimeCache?: boolean;
-  runtime?: RuntimeEnv;
+  runtime?: Pick<RuntimeEnv, "log">;
   beforePersistentApply?: () => void;
-}): Promise<{ pluginId: string; warnings: string[] }> {
+  applyRuntime?: Parameters<typeof persistPluginInstall>[0]["applyRuntime"];
+  beforePersistentEffect?: Parameters<typeof persistPluginInstall>[0]["beforePersistentEffect"];
+}): Promise<{ pluginId: string; warnings: string[]; config: OpenClawConfig }> {
   // Bundled plugins with required config are recorded but not enabled until config validates.
   const existingEntry = params.snapshot.config.plugins?.entries?.[params.bundledSource.pluginId];
   const configEnablement = resolveBundledPluginConfigEnablement({
@@ -83,14 +65,14 @@ export async function installBundledPluginSource(params: {
   const shouldEnable = configEnablement.mode === "ready";
   const configBase = shouldEnable
     ? params.snapshot.config
-    : prepareConfigForDisabledBundledInstall(params.snapshot.config, params.bundledSource.pluginId);
+    : prepareConfigForDisabledInstall(params.snapshot.config, params.bundledSource.pluginId);
   const configWarning = shouldEnable
     ? undefined
     : `Installed bundled plugin "${params.bundledSource.pluginId}" without enabling it because it requires configuration first. Configure it, then run \`openclaw plugins enable ${params.bundledSource.pluginId}\`.`;
   const warnings = [params.warning, configWarning].filter((warning): warning is string =>
     Boolean(warning),
   );
-  await persistPluginInstall({
+  const config = await persistPluginInstall({
     ...params,
     snapshot: {
       ...params.snapshot,
@@ -106,5 +88,5 @@ export async function installBundledPluginSource(params: {
     enable: shouldEnable,
     ...(warnings.length > 0 ? { warningMessage: warnings.join("\n") } : {}),
   });
-  return { pluginId: params.bundledSource.pluginId, warnings };
+  return { pluginId: params.bundledSource.pluginId, warnings, config };
 }

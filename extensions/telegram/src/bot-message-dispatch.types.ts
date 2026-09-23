@@ -1,8 +1,7 @@
 import type { Bot } from "grammy";
 import type { Message } from "grammy/types";
 import type {
-  AgentPlanStep,
-  ChannelProgressDraftLine,
+  createChannelProgressDraftCompositor,
   TextChunkMode,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type {
@@ -11,19 +10,21 @@ import type {
   TelegramAccountConfig,
 } from "openclaw/plugin-sdk/config-contracts";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
+import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import type { readLatestAssistantTextByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
 import type { TelegramBotOptions } from "./bot.types.js";
 import type { TelegramNativeQuoteCandidateByMessageId } from "./bot/native-quote.js";
 import type { TelegramStreamMode } from "./bot/types.js";
+import type { LaneDeliveryStateTracker } from "./lane-delivery-state.js";
 import type {
   DraftLaneState,
-  LaneDeliveryStateTracker,
   LaneName,
   LaneTextDeliverer,
-} from "./lane-delivery.js";
+} from "./lane-delivery-text-deliverer.js";
 
 export type DispatchTelegramMessageParams = {
   context: TelegramMessageContext;
@@ -45,14 +46,7 @@ export type DispatchTelegramMessageParams = {
    * Canonical turn ownership lifecycle from the durable ingress drain
    * (or a test double). Pre-adoption abort + adopt/defer/abandon.
    */
-  turnAdoptionLifecycle?: {
-    admission?: "exclusive" | "cancel-only";
-    onAdopted: () => void | Promise<void>;
-    onDeferred?: () => void;
-    onDeferredHeartbeat?: () => void;
-    onAbandoned?: () => void;
-    abortSignal?: AbortSignal;
-  };
+  turnAdoptionLifecycle?: GetReplyOptions["turnAdoptionLifecycle"];
 };
 
 export type TelegramDispatchResult =
@@ -61,7 +55,10 @@ export type TelegramDispatchResult =
 
 export type TelegramReasoningLevel = "off" | "on" | "stream";
 export type TelegramTranscriptMirrorPayload = { text?: string; mediaUrls?: string[] };
-export type CurrentTurnTranscriptFinal = { messageId?: string; text: string };
+export type CurrentTurnTranscriptFinal = Pick<
+  NonNullable<Awaited<ReturnType<typeof readLatestAssistantTextByIdentity>>>,
+  "text" | "openclawDelivery"
+> & { messageId?: string };
 export type TelegramScopedTranscriptSession = { sessionId: string; storePath: string };
 
 export type FreshTelegramSessionEntryLoader = ((
@@ -129,41 +126,7 @@ export type TelegramBufferedFinalSettlement = {
   reject: (error: unknown) => void;
 };
 
-type BufferedDispatchParams = Parameters<
-  TelegramBotDeps["dispatchReplyWithBufferedBlockDispatcher"]
->[0];
-type ReplyOptions = NonNullable<BufferedDispatchParams["replyOptions"]>;
-type CallbackPayload<K extends keyof ReplyOptions> =
-  NonNullable<ReplyOptions[K]> extends (...args: infer Args) => unknown ? Args[0] : never;
-
-type TelegramProgressCompositor = {
-  readonly commentaryProgressEnabled: boolean;
-  readonly hasStatusHeadline: boolean;
-  readonly hasPlanProgress: boolean;
-  getSnapshot: () => { lines: ReadonlyArray<string | ChannelProgressDraftLine> };
-  markFinalReplyStarted: () => void;
-  markFinalReplyDelivered: () => void;
-  beginNewTurn: (options?: { force?: boolean }) => boolean;
-  reset: () => void;
-  suppress: () => void;
-  cancel: () => void;
-  pushToolProgress: (
-    line?: string | ChannelProgressDraftLine,
-    options?: { toolName?: string; startImmediately?: boolean; flush?: boolean },
-  ) => Promise<boolean>;
-  pushReasoningProgress: (text?: string, options?: { snapshot?: boolean }) => Promise<boolean>;
-  pushCommentaryProgress: (text?: string, options?: { itemId?: string }) => Promise<boolean>;
-  pushPlanProgress: (
-    steps?: AgentPlanStep[],
-    options?: { explanation?: string },
-  ) => Promise<boolean>;
-  pushPreambleHeadline: (text?: string, options?: { itemId?: string }) => Promise<boolean>;
-  pushToolEvent: (payload: CallbackPayload<"onToolStart">) => Promise<boolean>;
-  pushItemEvent: (payload: CallbackPayload<"onItemEvent">) => Promise<boolean>;
-  pushApprovalEvent: (payload: CallbackPayload<"onApprovalEvent">) => Promise<boolean>;
-  pushCommandOutputEvent: (payload: CallbackPayload<"onCommandOutput">) => Promise<boolean>;
-  pushPatchEvent: (payload: CallbackPayload<"onPatchSummary">) => Promise<boolean>;
-};
+type TelegramProgressCompositor = ReturnType<typeof createChannelProgressDraftCompositor>;
 
 export type TelegramReasoningStepState = {
   noteReasoningHint: () => void;
@@ -227,8 +190,11 @@ export type TelegramDispatchTurn = TelegramDispatchTurnConfig &
   TelegramReplyStateSlice & {
     queuedFinal: boolean;
     agentRunFailed?: boolean;
+    sendPolicyDenied?: boolean;
     noVisibleReplyFallbackEligible: boolean;
     suppressSilentReplyFallback: boolean;
     hadErrorReplyFailureOrSkip: boolean;
+    progressContinuationAdopted?: boolean;
+    finalReplyOutcome?: "failed" | "suppressed";
     dispatchError?: unknown;
   };

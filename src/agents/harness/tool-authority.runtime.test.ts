@@ -16,6 +16,7 @@ import {
 import {
   clearActiveEmbeddedRun,
   queueEmbeddedAgentMessageWithOutcomeAsync,
+  resolveEmbeddedAgentSessionProgressState,
   setActiveEmbeddedRun,
 } from "../embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle, testing } from "../embedded-agent-runner/runs.test-support.js";
@@ -139,6 +140,54 @@ afterEach(() => {
 });
 
 describe("host-prepared embedded tool authority", () => {
+  it("captures only a matching admitted owner for legacy active-run registration", async () => {
+    const params = {
+      ...attempt,
+      agentId: "ops",
+      sessionKey: "global",
+      sandboxSessionKey: "global",
+    };
+    const handle = createEmbeddedRunHandle({ runId: params.runId });
+    const state = (agentId: string) =>
+      resolveEmbeddedAgentSessionProgressState(params.sessionId, {
+        agentId,
+        defaultAgentId: "main",
+      });
+    const admission = prepareAgentRunAdmission({
+      cfg: { agents: { list: [{ id: "main", default: true }, { id: "ops" }] } },
+      operationalRunInstance: createOperationalRunInstanceRef(params.runId),
+      facts: {
+        agentId: params.agentId,
+        runId: params.runId,
+        ingress: { kind: "system", state: "present", boundary: "tool-authority-test" },
+      },
+    });
+    try {
+      await withGatewayToolCallerIdentity({ agentId: "ops", sessionKey: "global" }, () => {
+        setActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile);
+        expect(state("ops")).toBeUndefined();
+      });
+      clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey);
+      const admittedRunContext = await admission.admit("embedded", "authority-test");
+      await withPreparedEmbeddedRunToolAuthority(
+        { admittedRunContext },
+        params,
+        undefined,
+        async (prepared) => {
+          handle.toolAuthorityFingerprint = prepared.toolAuthorityFingerprint;
+          setActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile);
+          expect(state("ops")).toBe("running");
+          expect(state("main")).toBeUndefined();
+        },
+      );
+      expect(state("ops")).toBe("running");
+      expect(state("main")).toBeUndefined();
+    } finally {
+      clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey);
+      admission.close();
+    }
+  });
+
   it.each(["claim", "wrapper", "lifecycle", "persistence"] as const)(
     "refuses early native-question answers after creator %s closure",
     async (closure) => {
@@ -300,8 +349,77 @@ describe("host-prepared embedded tool authority", () => {
     );
   });
 
+  it("preserves authorized room cancellation across differing voice tool surfaces", async () => {
+    await published(async ({ handle }) => {
+      const abort = vi.spyOn(handle, "abort");
+      const validateAdmission = vi.fn(() => ({ ...own, messageProvider: "discord-voice" }));
+      await expect(
+        controlRealtimeVoiceAgentRun({
+          sessionKey,
+          text: "cancel",
+          getToolAuthorityOverlay: validateAdmission,
+        }),
+      ).resolves.toMatchObject({ ok: true, aborted: true });
+      expect(validateAdmission).toHaveBeenCalledOnce();
+      expect(abort).toHaveBeenCalledOnce();
+    });
+  });
+
+  it("revalidates voice admission before cancelling the active run", async () => {
+    await published(async ({ handle }) => {
+      const abort = vi.spyOn(handle, "abort");
+      await expect(
+        controlRealtimeVoiceAgentRun({
+          sessionKey,
+          text: "cancel",
+          getToolAuthorityOverlay: () => {
+            throw new Error("Voice admission was revoked");
+          },
+        }),
+      ).rejects.toThrow("Voice admission was revoked");
+      expect(abort).not.toHaveBeenCalled();
+    });
+  });
+
+  it("does not retarget voice steering when caller preparation replaces the registered run", async () => {
+    await published(async ({ handle, queue }) => {
+      const replacementQueue = vi.fn(async () => {});
+      let replacement: ReturnType<typeof createEmbeddedRunHandle> | undefined;
+      try {
+        await expect(
+          controlRealtimeVoiceAgentRun({
+            sessionKey,
+            text: "Use the release branch",
+            getToolAuthorityOverlay: () => {
+              clearActiveEmbeddedRun(sessionId, handle, sessionKey);
+              replacement = publishPreparedHandle(
+                handle.toolAuthorityFingerprint,
+                replacementQueue,
+              );
+              return own;
+            },
+          }),
+        ).resolves.toMatchObject({ ok: false, queued: false, reason: "no_active_run" });
+        expect(queue).not.toHaveBeenCalled();
+        expect(replacementQueue).not.toHaveBeenCalled();
+      } finally {
+        if (replacement) {
+          clearActiveEmbeddedRun(sessionId, replacement, sessionKey);
+        }
+      }
+    });
+  });
+
   it("requires voice caller evidence without audit identity and strips host evidence", async () => {
     await published(async ({ handle, queue }) => {
+      handle.messageInjectionV2 = {
+        version: 2,
+        isAvailable: () => true,
+        queueMessage: async (text, options, assertCurrent) => {
+          assertCurrent();
+          return queue(text, options);
+        },
+      };
       expect(getGatewayToolCallerIdentity()?.executionIdentityToken).toBeUndefined();
       expect(handle.toolAuthorityFingerprint).toMatch(/^[a-f0-9]{64}$/);
       const input = { sessionKey, text: "Use the release branch" };

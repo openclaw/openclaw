@@ -1,7 +1,7 @@
 // Media store persists loaded media files and metadata for later references.
 import "../infra/fs-safe-defaults.js";
 import crypto from "node:crypto";
-import fs from "node:fs/promises";
+import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import {
   basenameFromAnyPath,
@@ -18,12 +18,11 @@ import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { fileStore } from "../infra/file-store.js";
 import { sanitizeUntrustedFileName } from "../infra/fs-safe-advanced.js";
-import { isPathInside } from "../infra/fs-safe.js";
-import type { resolvePinnedHostname } from "../infra/net/ssrf.js";
+import { FsSafeError, isPathInside, readLocalFileSafely } from "../infra/fs-safe.js";
 import { retryAsync } from "../infra/retry.js";
 import { writeSiblingTempFile } from "../infra/sibling-temp-file.js";
+import { captureChannelReadScope } from "../shared/channel-read-authority.js";
 import { resolveConfigDir } from "../utils.js";
-import { isFsSafeError, readLocalFileSafely, type FsSafeLikeError } from "./store.runtime.js";
 import { MEDIA_FILE_MODE, SaveMediaSourceError } from "./store.shared.js";
 
 const resolveMediaDir = () => path.join(resolveConfigDir(), "media");
@@ -47,27 +46,10 @@ const PLAYBACK_TRANSCODE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_BYTES = MEDIA_MAX_BYTES;
 const DEFAULT_TTL_MS = 2 * 60 * 1000; // 2 minutes
 let playbackCacheOperationTail = Promise.resolve();
-let resolvePinnedHostnameForTest: typeof resolvePinnedHostname | undefined;
 type CleanOldMediaOptions = {
   recursive?: boolean;
   pruneEmptyDirs?: boolean;
 };
-
-/** Overrides the canonical remote resolver for loopback integration tests. */
-function setMediaStoreNetworkDepsForTest(deps?: {
-  resolvePinnedHostname?: typeof resolvePinnedHostname;
-}): void {
-  resolvePinnedHostnameForTest = deps?.resolvePinnedHostname;
-}
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.mediaStoreTestApi")] = {
-    enforcePlaybackTranscodeCacheLimit,
-    PLAYBACK_TRANSCODE_MAX_CACHE_BYTES,
-    PLAYBACK_TRANSCODE_TTL_MS,
-    setMediaStoreNetworkDepsForTest,
-  };
-}
 
 function resolveMediaSubdir(subdir: string, caller: string): string {
   if (typeof subdir !== "string") {
@@ -124,12 +106,10 @@ function openMediaStore(maxBytes = MAX_BYTES, rootDir = resolveMediaDir()) {
  * Keeps: alphanumeric, dots, hyphens, underscores, Unicode letters/numbers.
  */
 function sanitizeFilename(name: string): string {
-  const base = sanitizeUntrustedFileName(name, "");
-  if (!base) {
-    return "";
-  }
+  // Store keys require NFC; source filesystem paths keep their original spelling.
+  // The nonempty fallback collapses to an empty prefix below for UUID-only keys.
+  const base = sanitizeUntrustedFileName(name, "_").normalize("NFC");
   const sanitized = base.replace(/[^\p{L}\p{N}._-]+/gu, "_");
-  // Collapse multiple underscores, trim leading/trailing, limit length
   return truncateUtf16Safe(sanitized.replace(/_+/g, "_").replace(/^_|_$/g, ""), 60);
 }
 
@@ -305,11 +285,6 @@ export async function writePlaybackTranscodeCache(params: {
   });
 }
 
-/** Serializes maintenance quota scans with cache insertions. */
-async function enforcePlaybackTranscodeCacheLimit(): Promise<void> {
-  await queuePlaybackCacheOperation(prunePlaybackTranscodeCacheToSize);
-}
-
 /** Prunes expired playback renditions and reapplies the fixed cache size budget. */
 export async function prunePlaybackTranscodeCache(): Promise<void> {
   await queuePlaybackCacheOperation(async () => {
@@ -442,63 +417,76 @@ async function writeSavedMediaBuffer(params: {
   id: string;
   buffer: Buffer;
 }): Promise<string> {
+  const readScope = captureChannelReadScope();
+  readScope?.assertCurrent();
   const dir = resolveMediaScopedDir(params.subdir, "writeSavedMediaBuffer");
   const relativePath = resolveMediaRelativePath(params.id, params.subdir, "writeSavedMediaBuffer");
-  return await retryAfterRecreatingDir(
-    dir,
-    async () =>
-      await openMediaStore(params.buffer.byteLength).write(relativePath, params.buffer, {
+  return await retryAfterRecreatingDir(dir, async () => {
+    if (readScope) {
+      const { writeReadScopeMedia } = await import("./store.read-scope.js");
+      await writeReadScopeMedia({
+        dir,
         tempPrefix: `.${params.id}`,
-      }),
-  );
+        scope: readScope,
+        durable: true,
+        write: async (handle) => {
+          readScope.assertCurrent();
+          await handle.writeFile(params.buffer);
+          return { id: params.id };
+        },
+      });
+      return path.join(dir, params.id);
+    }
+    return await openMediaStore(params.buffer.byteLength).write(relativePath, params.buffer, {
+      tempPrefix: `.${params.id}`,
+    });
+  });
 }
 
 async function writeMediaStreamToFile(params: {
   stream: AsyncIterable<unknown>;
-  tempPath: string;
+  handle: FileHandle;
   maxBytes: number;
+  assertCurrent?: () => void;
 }): Promise<{ sniffBuffer: Buffer; size: number }> {
-  const handle = await fs.open(params.tempPath, "wx", MEDIA_FILE_MODE);
   const sniffBuffer = Buffer.allocUnsafe(16384);
   let sniffLen = 0;
   let total = 0;
-  try {
-    for await (const chunk of params.stream) {
-      const buffer = Buffer.isBuffer(chunk)
-        ? chunk
-        : typeof chunk === "string"
+  for await (const chunk of params.stream) {
+    params.assertCurrent?.();
+    const buffer = Buffer.isBuffer(chunk)
+      ? chunk
+      : typeof chunk === "string"
+        ? Buffer.from(chunk)
+        : chunk instanceof ArrayBuffer
           ? Buffer.from(chunk)
-          : chunk instanceof ArrayBuffer
-            ? Buffer.from(chunk)
-            : ArrayBuffer.isView(chunk)
-              ? Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength)
-              : undefined;
-      if (!buffer) {
-        throw new TypeError(`Unsupported media stream chunk: ${typeof chunk}`);
-      }
-      if (buffer.byteLength === 0) {
-        continue;
-      }
-      total += buffer.byteLength;
-      if (total > params.maxBytes) {
-        throw SaveMediaSourceError.tooLarge(params.maxBytes);
-      }
-      if (sniffLen < sniffBuffer.length) {
-        // The next pull may reuse the chunk; retain only the prefix we own.
-        sniffLen += buffer.copy(sniffBuffer, sniffLen);
-      }
-      await handle.writeFile(buffer);
+          : ArrayBuffer.isView(chunk)
+            ? Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength)
+            : undefined;
+    if (!buffer) {
+      throw new TypeError(`Unsupported media stream chunk: ${typeof chunk}`);
     }
-    return {
-      sniffBuffer: sniffBuffer.subarray(0, sniffLen),
-      size: total,
-    };
-  } finally {
-    await handle.close().catch(() => undefined);
+    if (buffer.byteLength === 0) {
+      continue;
+    }
+    total += buffer.byteLength;
+    if (total > params.maxBytes) {
+      throw SaveMediaSourceError.tooLarge(params.maxBytes);
+    }
+    if (sniffLen < sniffBuffer.length) {
+      // The next pull may reuse the chunk; retain only the prefix we own.
+      sniffLen += buffer.copy(sniffBuffer, sniffLen);
+    }
+    await params.handle.writeFile(buffer);
   }
+  params.assertCurrent?.();
+  return {
+    sniffBuffer: sniffBuffer.subarray(0, sniffLen),
+    size: total,
+  };
 }
 
-function toSaveMediaSourceError(err: FsSafeLikeError, maxBytes = MAX_BYTES): SaveMediaSourceError {
+function toSaveMediaSourceError(err: FsSafeError, maxBytes = MAX_BYTES): SaveMediaSourceError {
   switch (err.code) {
     case "symlink":
       return new SaveMediaSourceError("invalid-path", "Media path must not be a symlink", {
@@ -541,19 +529,24 @@ export async function saveMediaSource(
       headers,
       subdir,
       maxBytes,
-      resolvePinnedHostnameForTest,
     });
   }
   const baseId = crypto.randomUUID();
   try {
-    const { buffer, stat } = await readLocalFileSafely({ filePath: source, maxBytes });
+    let buffer: Buffer;
+    if (captureChannelReadScope()) {
+      const { readLocalMediaFile } = await import("./local-media-access.js");
+      buffer = await readLocalMediaFile(source, "any", { maxBytes });
+    } else {
+      buffer = (await readLocalFileSafely({ filePath: source, maxBytes })).buffer;
+    }
     const mime = await detectMime({ buffer, filePath: source });
     const ext = extensionForMime(mime) ?? path.extname(source);
     const id = buildSavedMediaId({ baseId, ext });
     await writeSavedMediaBuffer({ subdir, id, buffer });
-    return buildSavedMediaResult({ dir, id, size: stat.size, contentType: mime });
+    return buildSavedMediaResult({ dir, id, size: buffer.byteLength, contentType: mime });
   } catch (err) {
-    if (isFsSafeError(err)) {
+    if (err instanceof FsSafeError) {
       throw toSaveMediaSourceError(err, maxBytes);
     }
     throw err;
@@ -602,6 +595,8 @@ export async function saveMediaStream(
   originalFilename?: string,
   detectionFilePathHint?: string,
 ): Promise<SavedMedia> {
+  const readScope = captureChannelReadScope();
+  readScope?.assertCurrent();
   const dir = resolveMediaScopedDir(subdir, "saveMediaStream");
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
   const baseId = crypto.randomUUID();
@@ -613,36 +608,57 @@ export async function saveMediaStream(
     consumptionStarted = true;
     yield* stream;
   })();
-  const { result } = await retryAfterRecreatingDir(
+  const write = async (handle: FileHandle): Promise<Omit<SavedMedia, "path">> => {
+    readScope?.assertCurrent();
+    const { sniffBuffer, size } = await writeMediaStreamToFile({
+      stream: mediaStream,
+      handle,
+      maxBytes,
+      assertCurrent: readScope?.assertCurrent,
+    });
+    const mime = await detectMime({
+      buffer: sniffBuffer,
+      headerMime: contentType,
+      filePath: originalFilename ?? detectionFilePathHint,
+    });
+    const ext = resolveSavedMediaExtension({
+      detectedMime: mime,
+      headerExt,
+      contentType,
+      originalFilename,
+      detectionFilePathHint,
+    });
+    const id = buildSavedMediaId({ baseId, ext, originalFilename });
+    return { id, size, contentType: mime };
+  };
+  const result = await retryAfterRecreatingDir(
     dir,
-    () =>
-      writeSiblingTempFile<Omit<SavedMedia, "path">>({
+    async () => {
+      if (readScope) {
+        const { writeReadScopeMedia } = await import("./store.read-scope.js");
+        return await writeReadScopeMedia({
+          dir,
+          tempPrefix: `.${baseId}`,
+          scope: readScope,
+          write,
+        });
+      }
+      const saved = await writeSiblingTempFile({
         dir,
         mode: MEDIA_FILE_MODE,
         tempPrefix: `.${baseId}`,
         writeTemp: async (tempPath) => {
-          const { sniffBuffer, size } = await writeMediaStreamToFile({
-            stream: mediaStream,
-            tempPath,
-            maxBytes,
-          });
-          const mime = await detectMime({
-            buffer: sniffBuffer,
-            headerMime: contentType,
-            filePath: originalFilename ?? detectionFilePathHint,
-          });
-          const ext = resolveSavedMediaExtension({
-            detectedMime: mime,
-            headerExt,
-            contentType,
-            originalFilename,
-            detectionFilePathHint,
-          });
-          const id = buildSavedMediaId({ baseId, ext, originalFilename });
-          return { id, size, contentType: mime };
+          const handle = await fs.open(tempPath, "wx", MEDIA_FILE_MODE);
+          try {
+            return await write(handle);
+          } finally {
+            await handle.close().catch(() => undefined);
+          }
         },
         resolveFinalPath: (resultLocal) => path.join(dir, resultLocal.id),
-      }),
+      });
+      return saved.result;
+    },
     () => !consumptionStarted,
   );
   return buildSavedMediaResult({ dir, ...result });

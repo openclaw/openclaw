@@ -1,4 +1,3 @@
-// Slack plugin module implements actions behavior.
 import type { Block, KnownBlock, WebClient } from "@slack/web-api";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-resolution";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -8,11 +7,12 @@ import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
 import { resolveDefaultSlackAccountId, resolveSlackAccount } from "./accounts.js";
+import type { SlackActionClientOpts } from "./action-context.js";
 import { SLACK_PRIVATE_ACTION_DELIVERY_RESULT } from "./action-threading.js";
 import type { SlackAuthoredTextPlacement } from "./authored-text.js";
 import { buildSlackBlocksFallbackText } from "./blocks-fallback.js";
 import { validateSlackBlocksArray } from "./blocks-input.js";
-import { createSlackLookupClient, getSlackWriteClient } from "./client.js";
+import { createSlackLookupClient, createSlackWriteClient, getSlackWriteClient } from "./client.js";
 import {
   openSlackConversationWithClient,
   parseSlackConversationOpenInput,
@@ -37,13 +37,7 @@ import { resolveSlackBotToken } from "./token.js";
 import { countSlackTextUtf8Bytes, truncateSlackTextByUtf8Bytes } from "./truncate.js";
 import type { SlackAttachment } from "./types.js";
 
-export type SlackActionClientOpts = {
-  cfg?: OpenClawConfig;
-  accountId?: string;
-  token?: string;
-  teamId?: string;
-  client?: WebClient;
-};
+export type { SlackActionClientOpts } from "./action-context.js";
 
 export type SlackMessageSummary = {
   ts?: string;
@@ -120,39 +114,39 @@ const SLACK_EMOJI_SKIN_TONE_BY_MODIFIER = new Map([
 // Unicode glyph. Models keep passing the glyph because the `emoji` param
 // reads as "an emoji"; map the common ones so the reaction is not silently
 // dropped. Unknown glyphs still pass through unchanged (no regression).
-const SLACK_EMOJI_SHORTNAME_BY_GLYPH: Record<string, string> = {
-  "✅": "white_check_mark",
-  "❌": "x",
-  "👍": "thumbsup",
-  "👎": "thumbsdown",
-  "🎉": "tada",
-  "❤": "heart",
-  "😄": "smile",
-  "😂": "joy",
-  "🚀": "rocket",
-  "👀": "eyes",
-  "🙏": "pray",
-  "🔥": "fire",
-  "💯": "100",
-  "⚠": "warning",
-  "➕": "heavy_plus_sign",
-  "➖": "heavy_minus_sign",
-  "🤔": "thinking_face",
-  "👨‍💻": "male-technologist",
-  "👨💻": "male-technologist",
-  "👩‍💻": "female-technologist",
-  "⚡": "zap",
-  "🌐": "globe_with_meridians",
-  "😱": "scream",
-  "🥱": "yawning_face",
-  "😨": "fearful",
-  "⏳": "hourglass_flowing_sand",
-  "✍": "writing_hand",
-  "🗜": "compression",
-  "🧠": "brain",
-  "🛠": "hammer_and_wrench",
-  "💻": "computer",
-};
+const SLACK_EMOJI_SHORTNAME_BY_GLYPH = new Map([
+  ["✅", "white_check_mark"],
+  ["❌", "x"],
+  ["👍", "thumbsup"],
+  ["👎", "thumbsdown"],
+  ["🎉", "tada"],
+  ["❤", "heart"],
+  ["😄", "smile"],
+  ["😂", "joy"],
+  ["🚀", "rocket"],
+  ["👀", "eyes"],
+  ["🙏", "pray"],
+  ["🔥", "fire"],
+  ["💯", "100"],
+  ["⚠", "warning"],
+  ["➕", "heavy_plus_sign"],
+  ["➖", "heavy_minus_sign"],
+  ["🤔", "thinking_face"],
+  ["👨‍💻", "male-technologist"],
+  ["👨💻", "male-technologist"],
+  ["👩‍💻", "female-technologist"],
+  ["⚡", "zap"],
+  ["🌐", "globe_with_meridians"],
+  ["😱", "scream"],
+  ["🥱", "yawning_face"],
+  ["😨", "fearful"],
+  ["⏳", "hourglass_flowing_sand"],
+  ["✍", "writing_hand"],
+  ["🗜", "compression"],
+  ["🧠", "brain"],
+  ["🛠", "hammer_and_wrench"],
+  ["💻", "computer"],
+]);
 
 function normalizeSlackEmojiName(raw: string): string {
   const trimmed = raw.trim();
@@ -164,7 +158,7 @@ function normalizeSlackEmojiName(raw: string): string {
   const glyphKey = withoutColons
     .replace(SLACK_EMOJI_SKIN_TONE_MODIFIER_RE, "")
     .replace(SLACK_EMOJI_VARIATION_SELECTOR_RE, "");
-  const shortname = SLACK_EMOJI_SHORTNAME_BY_GLYPH[glyphKey];
+  const shortname = SLACK_EMOJI_SHORTNAME_BY_GLYPH.get(glyphKey);
   const skinTone = modifier ? SLACK_EMOJI_SKIN_TONE_BY_MODIFIER.get(modifier) : undefined;
   if (!shortname || !skinTone) {
     return shortname ?? withoutColons;
@@ -220,7 +214,7 @@ function hasSlackPlatformError(err: unknown, code: string): boolean {
 }
 
 async function getClient(opts: SlackActionClientOpts = {}, mode: "read" | "write" = "read") {
-  if (opts.client) {
+  if (opts.client && !opts.assertDirectAdapterHandoff) {
     return opts.client;
   }
   const accountId = opts.cfg
@@ -232,9 +226,18 @@ async function getClient(opts: SlackActionClientOpts = {}, mode: "read" | "write
   assertSlackDetachedTargetAllowed(accountId, opts.teamId);
   const token = resolveToken(opts.token, opts.accountId, opts.cfg);
   if (mode === "write") {
+    if (opts.assertDirectAdapterHandoff) {
+      return createSlackWriteClient(
+        token,
+        { teamId: opts.teamId },
+        opts.assertDirectAdapterHandoff,
+      );
+    }
     return getSlackWriteClient(token, { teamId: opts.teamId });
   }
-  return createSlackLookupClient(token, { teamId: opts.teamId });
+  return opts.assertDirectAdapterHandoff
+    ? createSlackLookupClient(token, { teamId: opts.teamId }, opts.assertDirectAdapterHandoff)
+    : createSlackLookupClient(token, { teamId: opts.teamId });
 }
 
 async function resolveBotUserId(client: WebClient) {
@@ -310,12 +313,7 @@ export async function removeOwnSlackReactions(
     return [];
   }
   await Promise.all(
-    Array.from(toRemove, (name) =>
-      removeSlackReaction(channelId, messageId, name, {
-        ...opts,
-        client,
-      }),
-    ),
+    Array.from(toRemove, (name) => removeSlackReaction(channelId, messageId, name, { client })),
   );
   return Array.from(toRemove);
 }
@@ -373,6 +371,7 @@ export async function sendSlackMessage(
     mediaLocalRoots: opts.mediaLocalRoots,
     mediaReadFile: opts.mediaReadFile,
     client: opts.client,
+    assertDirectAdapterHandoff: opts.assertDirectAdapterHandoff,
     threadTs: opts.threadTs,
     replyBroadcast: opts.replyBroadcast,
     ...(opts.textIsSlackMrkdwn ? { textIsSlackMrkdwn: true } : {}),

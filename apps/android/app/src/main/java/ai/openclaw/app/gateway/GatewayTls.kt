@@ -1,8 +1,16 @@
 package ai.openclaw.app.gateway
 
 import android.annotation.SuppressLint
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.EOFException
 import java.net.ConnectException
 import java.net.InetSocketAddress
@@ -86,6 +94,52 @@ internal const val GATEWAY_TLS_PROBE_CONNECT_TIMEOUT_MS = 3_000
 internal const val GATEWAY_TLS_PROBE_HANDSHAKE_TIMEOUT_MS = 10_000
 private const val GATEWAY_TLS_FALLBACK_TIMEOUT_FLOOR_MS = 250
 
+/** Bounds the caller's wait without accumulating workers when native DNS ignores cancellation. */
+internal class GatewayTlsProbeRunner(
+  private val scope: CoroutineScope,
+  private val probe: suspend (String, Int) -> GatewayTlsProbeResult,
+  private val timeoutMs: Long =
+    GATEWAY_TLS_PROBE_CONNECT_TIMEOUT_MS.toLong() + GATEWAY_TLS_PROBE_HANDSHAKE_TIMEOUT_MS,
+) {
+  private val worker = AtomicReference<Deferred<GatewayTlsProbeResult>?>(null)
+
+  fun cancel() {
+    worker.get()?.cancel()
+  }
+
+  suspend fun probe(
+    host: String,
+    port: Int,
+    onStarted: () -> Unit = {},
+  ): GatewayTlsProbeResult {
+    while (true) {
+      currentCoroutineContext().ensureActive()
+      val previous = worker.get()
+      if (previous != null) {
+        // Occupancy says nothing about this endpoint. Wait cancellably for the physical
+        // worker to exit; superseded requests must never start another native DNS call.
+        previous.join()
+        continue
+      }
+      val task = scope.async(Dispatchers.IO, start = CoroutineStart.LAZY) { probe.invoke(host, port) }
+      if (!worker.compareAndSet(null, task)) {
+        task.cancel()
+        continue
+      }
+      // Cancellation cannot free the slot until blocking DNS actually returns.
+      task.invokeOnCompletion { worker.compareAndSet(task, null) }
+      return try {
+        currentCoroutineContext().ensureActive()
+        onStarted()
+        withTimeoutOrNull(timeoutMs) { task.await() }
+          ?: GatewayTlsProbeResult(failure = GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE)
+      } finally {
+        task.cancel()
+      }
+    }
+  }
+}
+
 internal data class GatewayTlsProbeTimeouts(
   val connectTimeoutMs: Int,
   val handshakeTimeoutMs: Int,
@@ -153,6 +207,9 @@ internal fun decideGatewayTlsTrust(
     }
   }
   if (stored != null) return GatewayTlsTrustDecision.PinnedTrust(stored)
+  if (probeResult.failure == GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE) {
+    return GatewayTlsTrustDecision.Failed(GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE)
+  }
   return GatewayTlsTrustDecision.PromptRequired(
     fingerprintSha256 = null,
     previousFingerprintSha256 = null,
@@ -324,6 +381,7 @@ internal suspend fun probeGatewayTlsFingerprint(
   if (connectTimeoutMs <= 0 || handshakeTimeoutMs <= 0) return GatewayTlsProbeResult(failure = GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE)
 
   return withContext(Dispatchers.IO) {
+    val probeContext = currentCoroutineContext()
     val probeDeadlineNanos =
       System.nanoTime() +
         (connectTimeoutMs.toLong() + handshakeTimeoutMs.toLong()) * 1_000_000L
@@ -335,6 +393,7 @@ internal suspend fun probeGatewayTlsFingerprint(
           port = port,
           connectTimeoutMs = connectTimeoutMs,
           handshakeTimeoutMs = handshakeTimeoutMs,
+          checkActive = { probeContext.ensureActive() },
         )
       if (fingerprintSha256 != null) {
         return@withContext GatewayTlsProbeResult(fingerprintSha256 = fingerprintSha256, systemTrusted = true)
@@ -406,8 +465,12 @@ internal suspend fun probeGatewayTlsFingerprint(
       // tailnets; keep the budgets separate so a reachable-but-slow secure
       // endpoint does not collapse into generic gateway unreachable guidance.
       socket.soTimeout = fallbackTimeouts.handshakeTimeoutMs
-      socket.connect(InetSocketAddress(trimmedHost, port), fallbackTimeouts.connectTimeoutMs)
+      val address = InetSocketAddress(trimmedHost, port)
+      // Native DNS can outlive cancellation; never open a socket for a retired attempt afterward.
+      probeContext.ensureActive()
+      socket.connect(address, fallbackTimeouts.connectTimeoutMs)
       connected = true
+      probeContext.ensureActive()
 
       // Best-effort SNI for hostnames (avoid crashing on IP literals).
       try {
@@ -426,6 +489,8 @@ internal suspend fun probeGatewayTlsFingerprint(
         socket.session.peerCertificates.firstOrNull() as? X509Certificate
           ?: return@withContext GatewayTlsProbeResult(failure = GatewayTlsProbeFailure.TLS_UNAVAILABLE)
       GatewayTlsProbeResult(fingerprintSha256 = sha256Hex(cert.encoded))
+    } catch (err: CancellationException) {
+      throw err
     } catch (err: Throwable) {
       fingerprintRef.get()?.let { return@withContext GatewayTlsProbeResult(fingerprintSha256 = it) }
       val failure =
@@ -478,6 +543,7 @@ private fun probeGatewayTlsSystemTrust(
   port: Int,
   connectTimeoutMs: Int,
   handshakeTimeoutMs: Int,
+  checkActive: () -> Unit,
 ): String? {
   val dnsHost = normalizedGatewayTlsDnsHost(host) ?: return null
   val context = SSLContext.getInstance("TLS")
@@ -489,10 +555,15 @@ private fun probeGatewayTlsSystemTrust(
     parameters.endpointIdentificationAlgorithm = "HTTPS"
     parameters.serverNames = listOf(SNIHostName(dnsHost))
     socket.sslParameters = parameters
-    socket.connect(InetSocketAddress(dnsHost, port), connectTimeoutMs)
+    val address = InetSocketAddress(dnsHost, port)
+    checkActive()
+    socket.connect(address, connectTimeoutMs)
+    checkActive()
     socket.startHandshake()
     val certificate = socket.session.peerCertificates.firstOrNull() as? X509Certificate ?: return null
     sha256Hex(certificate.encoded)
+  } catch (err: CancellationException) {
+    throw err
   } catch (_: Exception) {
     null
   } finally {

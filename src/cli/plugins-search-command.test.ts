@@ -141,6 +141,42 @@ describe("plugins search command", () => {
     expect(mocks.runtime.writeJson).toHaveBeenCalledWith({ results: [] }, 2);
   });
 
+  it("formats catalog version labels while preserving raw JSON values", async () => {
+    const results = ["1.2.3", "v1.2.3", "V1.2.3", "canary", "  v1.2.3  ", undefined].map(
+      (latestVersion, index) => ({
+        score: 1,
+        package: {
+          name: `plugin-${index}`,
+          displayName: "Plugin",
+          family: "bundle-plugin",
+          channel: "community",
+          isOfficial: false,
+          createdAt: 1,
+          updatedAt: 1,
+          latestVersion,
+        },
+      }),
+    );
+    mocks.searchClawHubPackages.mockResolvedValue(results);
+
+    const program = new Command();
+    registerPluginsCli(program);
+    await program.parseAsync(["plugins", "search", "version"], { from: "user" });
+    const output = mocks.logs.join("\n");
+    for (const line of [
+      "plugin-0  bundle-plugin | community | v1.2.3\n",
+      "plugin-1  bundle-plugin | community | v1.2.3\n",
+      "plugin-2  bundle-plugin | community | V1.2.3\n",
+      "plugin-3  bundle-plugin | community | canary\n",
+      "plugin-4  bundle-plugin | community | v1.2.3\n",
+      "plugin-5  bundle-plugin | community\n",
+    ]) {
+      expect(output).toContain(line);
+    }
+    await program.parseAsync(["plugins", "search", "version", "--json"], { from: "user" });
+    expect(mocks.runtime.writeJson).toHaveBeenCalledExactlyOnceWith({ results }, 2);
+  });
+
   it("leaves missing-query JSON failures to the root renderer", async () => {
     await expect(runPluginsSearchCommand([], { json: true }, mocks.runtime)).rejects.toThrow(
       "Usage: openclaw plugins search <query>",

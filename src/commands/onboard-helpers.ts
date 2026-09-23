@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { inspect } from "node:util";
-import { cancel, isCancel } from "@clack/prompts";
+import { cancel, type CANCEL_SYMBOL } from "@clack/prompts";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -16,34 +16,38 @@ import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
 import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  resolveAdvertisedControlUiLinks,
-  resolveControlUiLinks,
-  resolveLocalControlUiProbeLinks,
-} from "../gateway/control-ui-links.js";
+import "../gateway/control-ui-links.js";
 import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
+import { isInvalidGatewaySecret } from "../gateway/known-weak-gateway-secrets.js";
 import { probeGateway, type GatewayProbeResult } from "../gateway/probe.js";
-import {
-  detectBrowserOpenSupport,
-  openUrl,
-  resolveBrowserOpenCommand,
-} from "../infra/browser-open.js";
-import { detectBinary } from "../infra/detect-binary.js";
+import "../infra/browser-open.js";
+import "../infra/detect-binary.js";
 import { canonicalPathFromExistingAncestor, isPathInside } from "../infra/fs-safe.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveConfigDir, shortenHomeInString, shortenHomePath, sleep } from "../utils.js";
 import { VERSION } from "../version.js";
 import { listAgentSessionDirs, moveToTrash, removeWorkspaceDirs } from "./cleanup-utils.js";
 import type { OnboardMode, ResetScope } from "./onboard-types.js";
+export {
+  resolveAdvertisedControlUiLinks,
+  resolveControlUiLinks,
+  resolveLocalControlUiProbeLinks,
+} from "../gateway/control-ui-links.js";
+export {
+  detectBrowserOpenSupport,
+  openUrl,
+  resolveBrowserOpenCommand,
+} from "../infra/browser-open.js";
+export { detectBinary } from "../infra/detect-binary.js";
 export { randomToken } from "./random-token.js";
 
-export { detectBinary };
-export { detectBrowserOpenSupport, openUrl, resolveBrowserOpenCommand };
-export { resolveAdvertisedControlUiLinks, resolveControlUiLinks, resolveLocalControlUiProbeLinks };
-
 /** Handles Clack cancellation by exiting through the runtime. */
-export function guardCancel<T>(value: T | symbol, runtime: RuntimeEnv, exitCode = 0): T {
-  if (isCancel(value)) {
+export function guardCancel<T>(
+  value: T | typeof CANCEL_SYMBOL,
+  runtime: RuntimeEnv,
+  exitCode = 0,
+): T {
+  if (typeof value === "symbol") {
     cancel(stylePromptTitle("Setup cancelled.") ?? "Setup cancelled.");
     runtime.exit(exitCode);
     throw new Error("unreachable");
@@ -136,7 +140,7 @@ export function normalizeGatewayTokenInput(value: unknown): string {
   const trimmed = value.trim();
   // Reject the literal string "undefined" — a common bug when JS undefined
   // gets coerced to a string via template literals or String(undefined).
-  if (trimmed === "undefined" || trimmed === "null") {
+  if (isInvalidGatewaySecret(trimmed)) {
     return "";
   }
   return trimmed;

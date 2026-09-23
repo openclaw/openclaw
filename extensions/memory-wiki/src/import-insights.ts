@@ -200,19 +200,11 @@ function deriveCandidateSignals(params: {
   preferenceSignals: string[];
   correctionSignals: string[];
 }): string[] {
-  const output: string[] = [];
-  for (const signal of params.preferenceSignals) {
-    if (!output.includes(signal)) {
-      output.push(signal);
-    }
-  }
+  const output = new Set(params.preferenceSignals);
   for (const correction of params.correctionSignals) {
-    const summary = `Correction detected: ${correction}`;
-    if (!output.includes(summary)) {
-      output.push(summary);
-    }
+    output.add(`Correction detected: ${correction}`);
   }
-  return output.slice(0, 4);
+  return [...output].slice(0, 4);
 }
 
 function deriveSummary(params: {

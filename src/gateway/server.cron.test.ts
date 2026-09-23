@@ -7,8 +7,10 @@ import { setImmediate as setImmediatePromise } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import type WebSocket from "ws";
+import { createInfoWarnErrorLogger } from "../../test/helpers/mock-logger.js";
 import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import { resetConfigRuntimeState } from "../config/config.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { loadCronStore, saveCronStore } from "../cron/store.js";
 import type { GuardedFetchOptions } from "../infra/net/fetch-guard.js";
 import { peekSystemEvents } from "../infra/system-events.js";
@@ -173,14 +175,7 @@ async function setupCronTestRun(params: {
   testState.sessionConfig = params.sessionConfig;
   testState.cronEnabled = params.cronEnabled;
   testState.cronTriggersEnabled = params.cronTriggersEnabled;
-  if (params.jobs) {
-    await saveCronStore(testState.cronStorePath, {
-      version: 1,
-      jobs: params.jobs as never,
-    });
-  } else {
-    await saveCronStore(testState.cronStorePath, { version: 1, jobs: [] });
-  }
+  await saveCronStore(storePath, { version: 1, jobs: (params.jobs ?? []) as never });
   return { prevSkipCron, dir };
 }
 
@@ -296,11 +291,7 @@ async function directCronReq(
       context: {
         cron: cronState.cron,
         cronStorePath: cronState.storePath,
-        logGateway: {
-          info: vi.fn(),
-          warn: vi.fn(),
-          error: vi.fn(),
-        },
+        logGateway: createInfoWarnErrorLogger(),
         getRuntimeConfig: cronState.getRuntimeConfig,
       } as never,
       client: options.client ?? null,
@@ -523,6 +514,10 @@ describe("gateway server cron", () => {
       tempPrefix: "openclaw-gw-cron-agent-turn-default-",
       cronEnabled: false,
     });
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey: "agent:main:webchat:loop" },
+      { sessionId: "loop", updatedAt: 1 },
+    );
     const cronState = await createDirectCronState();
 
     try {
@@ -751,30 +746,21 @@ describe("gateway server cron", () => {
         compactListRes.payload as { jobs?: Array<Record<string, unknown>> } | null
       )?.jobs;
       expect(compactJobs).toHaveLength(1);
-      expect(compactJobs?.[0]).toMatchObject({
+      expect(compactJobs?.[0]).toStrictEqual({
         id: dailyJobId,
+        effectiveAgentId: "main",
         name: "daily",
         enabled: true,
+        updatedAtMs: expect.any(Number),
         scheduleKind: "every",
-        schedule: { kind: "every", everyMs: 60_000 },
+        schedule: expect.objectContaining({ kind: "every", everyMs: 60_000 }),
+        nextRunAt: expect.any(String),
+        nextRunAtMs: expect.any(Number),
         lastRunAt: null,
+        lastRunAtMs: null,
+        lastRunError: null,
         lastRunStatus: null,
       });
-      expect(Object.keys(compactJobs?.[0] ?? {}).toSorted()).toEqual(
-        [
-          "enabled",
-          "id",
-          "lastRunAtMs",
-          "lastRunAt",
-          "lastRunError",
-          "lastRunStatus",
-          "name",
-          "nextRunAtMs",
-          "nextRunAt",
-          "scheduleKind",
-          "schedule",
-        ].toSorted(),
-      );
       expect(Date.parse(String(compactJobs?.[0]?.nextRunAt))).toBe(compactJobs?.[0]?.nextRunAtMs);
       expect(
         (compactListRes.payload as { deliveryPreviews?: unknown } | null)?.deliveryPreviews,
@@ -1533,6 +1519,7 @@ describe("gateway server cron", () => {
       const agentIds = Object.keys(cronState.getRuntimeConfig().agents?.entries ?? {});
       expect(agentIds).toContain("main");
       expect(agentIds).toContain("ops");
+      expect(cronState.cron.getDefaultAgentId()).toBe("main");
 
       const before = await directCronReq(cronState, "cron.get", { id: jobId });
       const updateRes = await directCronReq(cronState, "cron.update", {
@@ -1556,6 +1543,21 @@ describe("gateway server cron", () => {
         name: "renamed after default drift",
         agentId: "ops",
       });
+
+      const afterRename = await directCronReq(cronState, "cron.get", { id: jobId });
+      for (const bindingPatch of [
+        { agentId: "ops" },
+        { sessionTarget: "main" },
+        { payload: { kind: "systemEvent", text: "new work" } },
+      ]) {
+        const retargeted = await directCronReq(cronState, "cron.update", {
+          id: jobId,
+          patch: { name: "must not persist binding", ...bindingPatch },
+        });
+        expect(retargeted.ok).toBe(false);
+        expect(retargeted.error?.message).toContain('sessionTarget "main" is only valid');
+        expect(await directCronReq(cronState, "cron.get", { id: jobId })).toEqual(afterRename);
+      }
     } finally {
       await cleanupCronTestRun({ cronState, prevSkipCron });
     }

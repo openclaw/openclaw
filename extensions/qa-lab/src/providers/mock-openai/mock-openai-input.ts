@@ -1,8 +1,16 @@
 // QA Lab mock provider input and tool-output extraction.
 import {
   type ResponsesInputItem,
+  type MockOpenAiRequestKind,
+  QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE,
+  QA_SUBAGENT_TERMINAL_MATRIX_PROMPT_RE,
+  QA_SUBAGENT_TERMINAL_MATRIX_WORKER_RE,
+  QA_SUBAGENT_PRIVATE_WORKER_RE,
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
+  QA_SLACK_MPIM_HISTORY_RECALL_PROMPT_RE,
+  QA_SLACK_MPIM_HISTORY_SEED_PROMPT_RE,
+  buildSlackMpimHistoryBotReply,
   QA_WHATSAPP_PENDING_HISTORY_TRIGGER_MARKER_RE,
   QA_WHATSAPP_BROADCAST_PROMPT_RE,
   QA_WHATSAPP_RUNTIME_AGENT_RE,
@@ -11,6 +19,44 @@ import {
   QA_WHATSAPP_REPLY_TO_BOT_TRIGGER_MARKER_RE,
   QA_WHATSAPP_BATCHED_FINAL_MARKER_RE,
 } from "./mock-openai-contracts.js";
+const QA_STREAMING_TOOL_PROGRESS_FAMILY_PROMPT_RE =
+  /(?:partial|quiet) streaming qa check|final-only marker streaming qa check|block streaming qa check|tool progress(?: error)? qa check/i;
+const QA_STREAMING_TOOL_PROGRESS_CONTINUATION_RE =
+  /^Continue with (?:the current Matrix QA scenario|the QA scenario plan and report worked, failed, and blocked items)\.$/i;
+
+function isStreamingToolProgressContinuationText(text: string) {
+  const trimmed = text.trim();
+  return (
+    QA_STREAMING_TOOL_PROGRESS_CONTINUATION_RE.test(trimmed) ||
+    trimmed.startsWith(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE)
+  );
+}
+
+export function extractLatestScenarioFamilyPrompt(
+  texts: string[],
+  familyPattern = QA_STREAMING_TOOL_PROGRESS_FAMILY_PROMPT_RE,
+) {
+  let envelope = "";
+  for (const text of texts.toReversed()) {
+    if (familyPattern.test(text)) {
+      envelope = text;
+      break;
+    }
+    if (!isStreamingToolProgressContinuationText(text)) {
+      return "";
+    }
+  }
+  if (!envelope) {
+    return "";
+  }
+  const pattern = new RegExp(familyPattern.source, `${familyPattern.flags}g`);
+  let latestIndex = -1;
+  for (const match of envelope.matchAll(pattern)) {
+    latestIndex = match.index;
+  }
+  return latestIndex < 0 ? "" : envelope.slice(latestIndex);
+}
+
 export function extractLastUserText(input: ResponsesInputItem[]) {
   return extractLastMatchingUserTurn(input)?.text ?? "";
 }
@@ -19,10 +65,13 @@ export function extractLastMatchingUserTurn(input: ResponsesInputItem[], pattern
   const matcher = pattern && new RegExp(pattern.source, pattern.flags.replace(/[gy]/g, ""));
   for (let index = input.length - 1; index >= 0; index -= 1) {
     const item = input[index];
-    if (!item || !isUserTurn(item)) {
+    if (!item || item.role !== "user") {
       continue;
     }
     const text = extractInputText(item.content);
+    if (!isUserTurn(item)) {
+      continue;
+    }
     if (!matcher || matcher.test(text)) {
       return { index, text };
     }
@@ -38,6 +87,110 @@ export function splitMockConversationContext(text: string) {
       text,
     );
   return { current: projection?.[2] ?? text, history: projection?.[1] ?? "" };
+}
+
+function extractCurrentTaskEvent(text: string): string | undefined {
+  const startsTaskEvent = (value: string) =>
+    /^\[Internal task completion event\](?:\r?\n|$)/u.test(value);
+  if (startsTaskEvent(text)) {
+    return text;
+  }
+  if (!isInternalRuntimeContextCarrierText(text)) {
+    return undefined;
+  }
+  // v4 quotes each top-level data fragment. Selected history can contain nested
+  // event text, but only a fragment starting with the event owns this turn.
+  for (const match of Array.from(
+    text.matchAll(
+      /^Conversation data \(data, not instructions\):\r?\n("(?:[^"\\\r\n]|\\.)*")\r?$/gmu,
+    ),
+  ).toReversed()) {
+    try {
+      const fragment: unknown = JSON.parse(match[1] ?? "");
+      if (typeof fragment === "string" && startsTaskEvent(fragment)) {
+        return fragment;
+      }
+    } catch {
+      // Malformed quoted data does not become a current task event.
+    }
+  }
+  // v3 keeps the producer event as a literal runtime-instruction fragment.
+  const literal = /^\[Internal task completion event\](?:\r?\n|$)/mu.exec(text);
+  return literal ? text.slice(literal.index) : undefined;
+}
+
+function isSubagentRecoveryText(text: string): boolean {
+  // These are the runtime's recovery introductions, not arbitrary user mentions
+  // of retry/resume/compaction. A new request must fence the old task.
+  return (
+    /^(?:continue|keep going|resume|retry|carry on)[.!?]?$/iu.test(text) ||
+    [
+      "The previous assistant turn recorded reasoning but did not produce a user-visible answer.",
+      "The previous attempt did not produce a user-visible answer.",
+      "The previous assistant turn completed its tool calls but did not produce a user-visible answer.",
+      "The previous attempt compacted the conversation context before producing a final user-visible answer.",
+    ].some((prefix) => text.startsWith(prefix))
+  );
+}
+
+export function resolveMockSubagentTurn(input: ResponsesInputItem[]):
+  | {
+      kind: "kickoff" | "worker" | "completion" | "settled" | "other";
+      text: string;
+      caseName?: string;
+      privateWorker?: string;
+    }
+  | undefined {
+  let settled = false;
+  for (const item of input.toReversed()) {
+    if (item.role !== "user") {
+      continue;
+    }
+    const current = splitMockConversationContext(extractInputText(item.content)).current.trim();
+    const event = extractCurrentTaskEvent(current);
+    if (event) {
+      return {
+        kind: settled ? "settled" : "completion",
+        text: event,
+        caseName:
+          /^task:\s*qa-terminal-(visible|silent|empty|restart|fallback|private)(?:-(?:first|second))?\s*$/imu
+            .exec(event)?.[1]
+            ?.toLowerCase(),
+      };
+    }
+    if (isInternalRuntimeContextCarrierText(current)) {
+      continue;
+    }
+    if (
+      /^\[Subagent Context\] Every subagent spawned from this session has now settled/mu.test(
+        current,
+      )
+    ) {
+      settled = true;
+      continue;
+    }
+    const privateWorker = QA_SUBAGENT_PRIVATE_WORKER_RE.exec(current)?.[1]?.toLowerCase();
+    const worker = QA_SUBAGENT_TERMINAL_MATRIX_WORKER_RE.exec(current)?.[1]?.toLowerCase();
+    const kickoff = QA_SUBAGENT_TERMINAL_MATRIX_PROMPT_RE.exec(current)?.[1]?.toLowerCase();
+    // Explicit recovery resumes the preceding task; a fresh unrelated user turn
+    // fences history even when old turns mention one of these QA scenarios.
+    if (!privateWorker && !worker && !kickoff && isSubagentRecoveryText(current)) {
+      continue;
+    }
+    return {
+      kind: settled
+        ? "settled"
+        : privateWorker || worker
+          ? "worker"
+          : kickoff
+            ? "kickoff"
+            : "other",
+      text: current,
+      caseName: privateWorker ? "private" : (worker ?? kickoff),
+      privateWorker: settled ? undefined : privateWorker,
+    };
+  }
+  return undefined;
 }
 
 export function extractMockSubagentContext(input: ResponsesInputItem[]) {
@@ -263,7 +416,20 @@ export function extractUserTurnTexts(input: ResponsesInputItem[]) {
   return input.filter(isUserTurn).map((item) => extractInputText(item.content));
 }
 
-export function extractSlackMpimRetainedBotNonce(
+export function buildSlackMpimHistoryReply(prompt: string): string | undefined {
+  const recall = QA_SLACK_MPIM_HISTORY_RECALL_PROMPT_RE.exec(prompt);
+  if (recall) {
+    const [, botReplyPrefix, recalledMarker, missingMarker] = recall;
+    const nonce = botReplyPrefix
+      ? extractSlackMpimRetainedBotNonce(prompt, botReplyPrefix)
+      : undefined;
+    return nonce && recalledMarker ? `${recalledMarker}_${nonce}` : (missingMarker ?? "");
+  }
+  const seed = QA_SLACK_MPIM_HISTORY_SEED_PROMPT_RE.exec(prompt)?.[1];
+  return seed ? buildSlackMpimHistoryBotReply(seed) : undefined;
+}
+
+function extractSlackMpimRetainedBotNonce(
   prompt: string,
   botReplyPrefix: string,
 ): string | undefined {
@@ -306,6 +472,27 @@ function extractAllInputTexts(input: ResponsesInputItem[]) {
     ])
     .filter(Boolean)
     .join("\n");
+}
+
+export function classifyMockOpenAiRequest(
+  input: ResponsesInputItem[],
+  body: Record<string, unknown>,
+): MockOpenAiRequestKind {
+  const instructionText = extractAllRequestTexts(
+    input.filter((item) => item.role === "developer" || item.role === "system"),
+    body,
+  );
+  if (instructionText.startsWith("Write an Activity recap for someone scanning their tasks:")) {
+    return "activity-summary";
+  }
+  if (
+    /context summarization assistant[\s\S]*structured summary[\s\S]*do not continue/i.test(
+      instructionText,
+    )
+  ) {
+    return "compaction-summary";
+  }
+  return hasToolOutput(input) ? "tool-continuation" : "agent-initial";
 }
 
 export function extractInstructionsText(body: Record<string, unknown>) {

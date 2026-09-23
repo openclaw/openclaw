@@ -105,7 +105,7 @@ describe("CronService startup catch-up repair scoping", () => {
         runIsolatedAgentJob,
       });
 
-      await runMissedJobs(state, { deferAgentTurnJobs: true });
+      await runMissedJobs(state, { deferAgentWork: true });
 
       const persisted = await loadCronStore(store.storePath);
       for (const job of persisted.jobs.filter((candidate) => candidate.id !== "one-shot")) {

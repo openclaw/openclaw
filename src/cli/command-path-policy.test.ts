@@ -413,7 +413,15 @@ describe("command-path-policy", () => {
       ownsProtocolStdout: true,
       networkProxy: "bypass",
     });
+    for (const action of ["install", "status", "pair", "setup"]) {
+      expectResolvedPolicy(["browser", "extension", action], {
+        configGuard: "validate",
+        networkProxy: "bypass",
+      });
+    }
     expectResolvedPolicy(["browser", "extension", "native-host"], {
+      configGuard: "skip",
+      ensureCliPath: false,
       hideBanner: true,
       ownsProtocolStdout: true,
       networkProxy: "bypass",
@@ -635,6 +643,44 @@ describe("command-path-policy", () => {
     expect(
       resolveCliNetworkProxyPolicy(["node", "openclaw", "skills", "verify", "@demo-owner/weather"]),
     ).toBe("default");
+  });
+
+  it.each(["refresh", "set", "set-image", "aliases", "fallbacks", "image-fallbacks", "scan"])(
+    "preserves default startup and proxy policy for models %s",
+    (subcommand) => {
+      expectResolvedPolicy(["models", subcommand], {});
+      for (const parentOptions of [[], ["--agent", "main"]]) {
+        expect(
+          resolveCliNetworkProxyPolicy([
+            "node",
+            "openclaw",
+            "models",
+            ...parentOptions,
+            subcommand,
+          ]),
+        ).toBe("default");
+      }
+    },
+  );
+
+  it.each([
+    { childPath: ["workshop", "list"] },
+    { childPath: ["library", "list"] },
+    { childPath: ["curator", "status"] },
+    { childPath: ["workshop"] },
+    { childPath: ["unknown"] },
+  ])("preserves the skills catalog proxy policy for $childPath", ({ childPath }) => {
+    for (const parentOptions of [[], ["--agent", "main"], ["--agent=main"]]) {
+      expect(
+        resolveCliNetworkProxyPolicy([
+          "node",
+          "openclaw",
+          "skills",
+          ...parentOptions,
+          ...childPath,
+        ]),
+      ).toBe("bypass");
+    }
   });
 
   it("uses the longest catalog command path for deep network proxy overrides", async () => {

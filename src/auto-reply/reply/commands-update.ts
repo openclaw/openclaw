@@ -22,7 +22,6 @@ export const handleUpdateCommand: CommandHandler = defineGatewayControlCommand(
         {
           sessionKey: params.sessionKey,
           note: "/update",
-          timeoutMs: DEFAULT_UPDATE_TIMEOUT_MS,
           requester: {
             channel: params.command.channel ?? params.ctx.Provider,
             accountId: params.ctx.AccountId,

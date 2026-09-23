@@ -1,4 +1,5 @@
-// LLM Core module implements diagnostics behavior.
+export { readProviderRefusalReview, type ProviderRefusalReview } from "./provider-refusal.js";
+
 export interface DiagnosticErrorInfo {
   name?: string;
   message: string;

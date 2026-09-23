@@ -14,6 +14,7 @@ vi.mock("openclaw/plugin-sdk/question-gateway-runtime", async (importOriginal) =
 beforeEach(() => registerChannelDelivery.mockReset());
 import {
   describeTelegramDispatch,
+  emitToolStart,
   appendAssistantMirrorMessageByIdentity,
   createContext,
   createDraftStream,
@@ -70,9 +71,108 @@ describeTelegramDispatch("dispatchTelegramMessage progress-rendering", () => {
     expect(draftStream.updatePreview).toHaveBeenLastCalledWith(
       telegramProgressPreview(
         "Implementing the change.\n\n✅ Inspect\n▸ Patch\n▢ Test",
-        "<b>Implementing the change.</b><br>✅ Inspect<br>▸ Patch<br>▢ Test",
+        "<b>Implementing the change.</b><br>[x] Inspect<br>[ ] <b>Patch (in progress)</b><br>[ ] Test",
       ),
     );
+  });
+
+  it("renders a progress-card summary and checklist without raw markup or code styling", async () => {
+    const draftStream = createSequencedDraftStream(2001);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await emitToolStart(replyOptions, {
+        name: "progress_card",
+        toolCallId: "plan-1",
+        phase: "start",
+        args: {
+          markdown: '<progress aria-label="Browser Use Setup, 2/3" value="2" max="3"></progress>',
+          plan: [{ step: "Search the skills registry", status: "completed" }],
+        },
+      });
+      await replyOptions?.onPlanUpdate?.({
+        phase: "update",
+        explanation: "1/2 complete",
+        steps: [
+          { step: "Search the skills registry", status: "completed" },
+          { step: "Configure Browser Use", status: "in_progress" },
+        ],
+      });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: {
+        streaming: { mode: "progress", progress: { toolProgress: true, label: false } },
+      },
+    });
+
+    const preview = draftStream.updatePreview.mock.calls.at(-1)?.[0];
+    expect(preview).toEqual(
+      telegramProgressPreview(
+        "1/2 complete\n\n✅ Search the skills registry\n▸ Configure Browser Use",
+        "<b>1/2 complete</b><br>[x] Search the skills registry<br>[ ] <b>Configure Browser Use (in progress)</b>",
+      ),
+    );
+    expect(preview?.text).not.toContain("<progress");
+    expect(preview?.text).not.toContain("<code>");
+  });
+
+  it.each(["partial", "block"] as const)(
+    "renders the full card in %s previews without raw markup",
+    async (streamMode) => {
+      const draftStream = createSequencedDraftStream(2001);
+      createTelegramDraftStream.mockReturnValue(draftStream);
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+        await replyOptions?.onPlanUpdate?.({
+          phase: "update",
+          explanation: "0/1 complete",
+          steps: [{ step: "Configure Browser Use", status: "in_progress" }],
+        });
+        return { queuedFinal: false };
+      });
+
+      await dispatchWithContext({
+        context: createContext(),
+        streamMode,
+        telegramCfg: { streaming: { mode: streamMode, preview: { toolProgress: true } } },
+      });
+
+      expect(draftStream.updatePreview).toHaveBeenLastCalledWith(
+        telegramProgressPreview(
+          "0/1 complete\nConfigure Browser Use",
+          "<b>0/1 complete</b><br>[ ] <b>Configure Browser Use (in progress)</b>",
+        ),
+      );
+    },
+  );
+
+  it("renders opt-in failed progress-card diagnostics without raw arguments", async () => {
+    const draftStream = createSequencedDraftStream(2001);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onItemEvent?.({
+        itemId: "plan-failed",
+        kind: "tool",
+        name: "progress_card",
+        status: "failed",
+        meta: '<progress aria-label="private" value="1" max="2"></progress>',
+      });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: { streaming: { mode: "progress", progress: { toolProgress: true } } },
+    });
+
+    const preview = draftStream.updatePreview.mock.calls.at(-1)?.[0];
+    expect(preview?.text).toContain("Progress Card");
+    expect(preview?.text).toContain("failed");
+    expect(preview?.text).not.toContain("<progress");
+    expect(preview?.text).not.toContain("private");
   });
 
   it("renders plan checklists when the explanation is omitted", async () => {
@@ -98,7 +198,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-rendering", () => {
     });
 
     expect(draftStream.updatePreview).toHaveBeenLastCalledWith(
-      telegramProgressPreview("▸ Patch\n▢ Test", "<b>▸ Patch</b><br>▢ Test"),
+      telegramProgressPreview("Patch\nTest", "[ ] <b>Patch (in progress)</b><br>[ ] Test"),
     );
   });
 
@@ -107,7 +207,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-rendering", () => {
     createTelegramDraftStream.mockReturnValue(draftStream);
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
       await replyOptions?.onReplyStart?.();
-      await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await emitToolStart(replyOptions, { name: "exec", phase: "start", toolCallId: "exec-1" });
       // The first valid preamble after the draft opened must render as the
       // status headline in the same push, not wait for another progress event.
       await replyOptions?.onItemEvent?.({
@@ -129,7 +229,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-rendering", () => {
     expect(draftStream.updatePreview).toHaveBeenLastCalledWith(
       telegramProgressPreview(
         "Shelling\n\nChecking recent context\n🛠️ Exec",
-        "<b>Shelling</b>\nChecking recent context\n<b>🛠️ Exec</b>",
+        "<b>Shelling</b>\nChecking recent context\n<b>🛠️ Exec</b> <i>running</i>",
       ),
     );
   });
@@ -144,7 +244,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-rendering", () => {
         itemId: "preamble-1",
         progressText: "Checking memory",
       });
-      await replyOptions?.onToolStart?.({
+      await emitToolStart(replyOptions, {
         name: "memory_search",
         phase: "start",
         toolCallId: "memory-search-1",
@@ -170,7 +270,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-rendering", () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
       await replyOptions?.onReplyStart?.();
       await replyOptions?.onAssistantMessageStart?.();
-      await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await emitToolStart(replyOptions, { name: "exec", phase: "start", toolCallId: "exec-1" });
       return { queuedFinal: false };
     });
 
@@ -197,7 +297,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-rendering", () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
       await replyOptions?.onReplyStart?.();
       await replyOptions?.onAssistantMessageStart?.();
-      await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await emitToolStart(replyOptions, { name: "exec", phase: "start", toolCallId: "exec-1" });
       await replyOptions?.onReasoningStream?.({ text: "<think>Checking files</think>" });
       return { queuedFinal: false };
     });
@@ -229,7 +329,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-rendering", () => {
       dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
         await replyOptions?.onReplyStart?.();
         await replyOptions?.onAssistantMessageStart?.();
-        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await emitToolStart(replyOptions, { name: "exec", phase: "start", toolCallId: "exec-1" });
         return { queuedFinal: false };
       });
 
@@ -245,7 +345,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-rendering", () => {
       });
 
       expect(draftStream.updatePreview).toHaveBeenCalledWith(
-        telegramProgressPreview("🛠️ Exec", "<b>🛠️ Exec</b>"),
+        telegramProgressPreview("🛠️ Exec", "<b>🛠️ Exec</b> <i>running</i>"),
       );
     },
   );
@@ -257,7 +357,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-rendering", () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
       await replyOptions?.onReplyStart?.();
       await replyOptions?.onAssistantMessageStart?.();
-      await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await emitToolStart(replyOptions, { name: "exec", phase: "start", toolCallId: "exec-1" });
       await new Promise<void>((resolve) => {
         finishRun = resolve;
       });
@@ -299,13 +399,22 @@ describeTelegramDispatch("dispatchTelegramMessage progress-rendering", () => {
         }),
     );
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onItemEvent?.({
+        itemId: "tool:exec-1",
+        toolCallId: "exec-1",
+        name: "exec",
+        title: "Exec",
+        kind: "tool",
+        phase: "start",
+        status: "running",
+      });
       const pendingToolStart = replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
       await Promise.resolve();
       await Promise.resolve();
       const updateBeforeStatusReaction = draftStream.updatePreview.mock.calls.at(-1)?.[0]?.text;
       releaseSetTool?.();
       await pendingToolStart;
-      expect(updateBeforeStatusReaction).toBe("<b>Shelling</b><br><b>🛠️ Exec</b>");
+      expect(updateBeforeStatusReaction).toBe("<b>Shelling</b><br><b>🛠️ Exec</b> <i>running</i>");
       return { queuedFinal: false };
     });
 
@@ -351,7 +460,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-rendering", () => {
       expect(draftStream.updatePreview).toHaveBeenCalledWith(
         telegramProgressPreview(
           "Shelling\n\n🔎 Web Search: docs lookup\n• tests passed",
-          "<b>Shelling</b>\n<b>🔎 Web Search</b> <code>docs lookup</code>\n<b>Update</b> <code>tests passed</code>",
+          "<b>Shelling</b>\n<b>🔎 Web Search</b> docs lookup\n<b>Update</b> tests passed",
         ),
       );
       // Retire a tool-progress-only window by repositioning, with its delete deferred.
@@ -460,7 +569,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-rendering", () => {
           },
           { kind: "tool" },
         );
-        await replyOptions?.onToolStart?.({ name: "wait", phase: "start" });
+        await emitToolStart(replyOptions, { name: "wait", toolCallId: "wait-1", phase: "start" });
         return { queuedFinal: true };
       },
     );

@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements approval handler behavior.
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import {
   buildChannelApprovalExpiredText,
@@ -140,8 +139,8 @@ export const whatsappApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
     },
   },
   interactions: {
-    bindPending: ({ entry, request, view, pendingPayload }) =>
-      registerWhatsAppApprovalReactionTarget({
+    bindPending: async ({ entry, request, view, pendingPayload }) =>
+      (await registerWhatsAppApprovalReactionTarget({
         accountId: entry.accountId,
         remoteJid: entry.remoteJid,
         messageId: entry.messageId,
@@ -149,18 +148,18 @@ export const whatsappApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
         approvalKind: view.approvalKind,
         allowedDecisions: pendingPayload.reactionPayload.allowedDecisions,
         ttlMs: Math.max(1, view.expiresAtMs - Date.now()),
-      })
+      }))
         ? true
         : null,
-    unbindPending: ({ entry }) => {
-      unregisterWhatsAppApprovalReactionTarget({
+    unbindPending: async ({ entry }) => {
+      await unregisterWhatsAppApprovalReactionTarget({
         accountId: entry.accountId,
         remoteJid: entry.remoteJid,
         messageId: entry.messageId,
       });
     },
-    cancelDelivered: ({ entry }) => {
-      unregisterWhatsAppApprovalReactionTarget({
+    cancelDelivered: async ({ entry }) => {
+      await unregisterWhatsAppApprovalReactionTarget({
         accountId: entry.accountId,
         remoteJid: entry.remoteJid,
         messageId: entry.messageId,

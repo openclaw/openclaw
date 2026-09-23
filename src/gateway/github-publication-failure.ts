@@ -60,11 +60,65 @@ export class GitHubPublicationWorkspaceChangedError extends GitHubPublicationKno
   }
 }
 
+export class GitHubPublicationBranchChangedError extends GitHubPublicationKnownFailure {
+  constructor() {
+    super("GitHub publication cannot safely extend the published branch.", {
+      code: "push_rejected",
+      nextAction:
+        "Preserve your local work and inspect the published head. To refresh the existing PR, apply the intended changes on top of that head without rewriting its history; otherwise publish from a new session branch and open a replacement PR. Repository-only checkpoints cannot adopt external branch changes; use a new session branch for those. Do not merge old history merely to make a rebased branch pushable. The broker never rewrites published history.",
+    });
+  }
+}
+
+export class GitHubPublicationSessionChangedError extends GitHubPublicationKnownFailure {
+  constructor() {
+    super("GitHub publication session lifecycle changed.", {
+      code: "session_changed",
+      nextAction:
+        "Review any recorded GitHub effects, then request publication from the current session.",
+    });
+  }
+}
+
+export class GitHubPublicationRequesterUnavailableError extends GitHubPublicationKnownFailure {
+  constructor() {
+    super("The original GitHub publication requester is no longer authorized.", {
+      code: "identity_changed",
+      nextAction:
+        "Review any recorded or unconfirmed GitHub effects, then request publication again from an authorized session. Saved work and existing pull requests are retained.",
+    });
+  }
+}
+
+export class GitHubPublicationWorkflowChangesError extends GitHubPublicationKnownFailure {
+  constructor() {
+    super("Publishing GitHub workflow changes requires full operator write permission.", {
+      code: "github_rejected",
+      nextAction:
+        "Your saved changes are intact. Ask a maintainer with full write access to publish the GitHub workflow changes, or restore the workflow definitions and request publication again.",
+    });
+  }
+}
+
 export function resolveGitHubPublicationFailure(error: unknown): PublicationFailure {
   if (error instanceof GitHubPublicationKnownFailure) {
     return error.failure;
   }
   const message = error instanceof Error ? error.message : "";
+  if (message.includes("publication workspace base")) {
+    return {
+      code: "unavailable",
+      nextAction:
+        "The pull request base or its Git history could not be verified. Check repository read access, connectivity, and local Git objects before retrying publication.",
+    };
+  }
+  if (message.includes("publication remote branch could not be verified")) {
+    return {
+      code: "unavailable",
+      nextAction:
+        "Restore repository read access or connectivity, then verify the published branch before retrying. An unavailable observation does not prove the branch is absent or safe to overwrite.",
+    };
+  }
   if (message.includes("identity")) {
     return {
       code: message.includes("changed") ? "identity_changed" : "identity_unavailable",

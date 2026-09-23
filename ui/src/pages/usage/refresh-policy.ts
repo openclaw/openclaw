@@ -38,7 +38,7 @@ function decideUsageRefresh(params: {
 
 type UsageRefreshPolicyOptions = {
   isLoading: () => boolean;
-  reload: () => void | Promise<void>;
+  reload: (reason: UsageRefreshReason) => void | Promise<void>;
   onIncompleteUsageExhausted?: () => void;
 };
 
@@ -49,6 +49,8 @@ export class UsageRefreshPolicy {
   private reloadPending = false;
   private readonly incompleteUsageRetry = new IncompleteUsageRetry({
     retry: () => this.requestAndWait("poll"),
+    // Let the Gateway's 30s aggregate cache expire without increasing request volume.
+    retryMs: (attempt) => 5_000 * 2 ** (attempt - 1),
     onExhausted: () => this.options.onIncompleteUsageExhausted?.(),
   });
 
@@ -107,11 +109,6 @@ export class UsageRefreshPolicy {
     this.reloadPending = false;
   }
 
-  private async reloadAndWait(): Promise<void> {
-    this.pendingAutomaticRefresh = false;
-    await this.options.reload();
-  }
-
   request(reason: UsageRefreshReason): void {
     void this.requestAndWait(reason);
   }
@@ -133,7 +130,7 @@ export class UsageRefreshPolicy {
       if (reason !== "poll") {
         this.incompleteUsageRetry.startCycle();
       }
-      await this.reloadAndWait();
+      await this.options.reload(reason);
     }
   }
 

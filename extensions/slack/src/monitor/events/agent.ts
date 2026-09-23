@@ -122,17 +122,27 @@ export function registerSlackAgentEvents(params: {
   });
 
   slackApp.event("agent_session_title_changed", async ({ event, body, context, client }) => {
-    if (ctx.shouldDropMismatchedSlackEvent(body)) {
+    const runtimeContext = await params.ctx.readRuntimeContext();
+    const runtimeAccount = resolveSlackAccount({
+      cfg: runtimeContext.cfg,
+      accountId: runtimeContext.accountId,
+    });
+    if (runtimeContext.shouldDropMismatchedSlackEvent(body)) {
       return;
     }
-    const eventScope = resolveSlackListenerEventScope({ ctx, body, context, client });
+    const eventScope = resolveSlackListenerEventScope({
+      ctx: runtimeContext,
+      body,
+      context,
+      client,
+    });
     if (eventScope === null) {
       return;
     }
     trackEvent?.();
     try {
       const auth = await authorizeSlackSystemEventSender({
-        ctx,
+        ctx: runtimeContext,
         senderId: event.user,
         channelId: event.channel,
         eventScope,
@@ -145,8 +155,8 @@ export function registerSlackAgentEvents(params: {
       const isRoom = auth.channelType === "channel" || auth.channelType === "group";
       const routing = await resolveSlackSessionEventRoutingContext({
         intent: "title",
-        ctx,
-        account,
+        ctx: runtimeContext,
+        account: runtimeAccount,
         message: {
           type: "message",
           channel: event.channel,
@@ -162,7 +172,9 @@ export function registerSlackAgentEvents(params: {
       });
       const updated = await getSlackRuntime().agent.session.patchSessionEntry({
         agentId: routing.route.agentId,
-        storePath: resolveStorePath(ctx.cfg.session?.store, { agentId: routing.route.agentId }),
+        storePath: resolveStorePath(runtimeContext.cfg.session?.store, {
+          agentId: routing.route.agentId,
+        }),
         sessionKey: routing.sessionKey,
         preserveActivity: true,
         assertCommitAllowed: () => {
@@ -175,14 +187,16 @@ export function registerSlackAgentEvents(params: {
       if (!updated) {
         throw new Error("Slack conversation session disappeared before the title update");
       }
-      ctx.recordSlackSessionTitle({
+      runtimeContext.recordSlackSessionTitle({
         channelId: event.channel,
         threadTs: event.thread_ts,
         title: event.title,
         eventScope,
       });
     } catch (error) {
-      ctx.runtime.error?.(`slack session title update failed: ${formatErrorMessage(error)}`);
+      runtimeContext.runtime.error?.(
+        `slack session title update failed: ${formatErrorMessage(error)}`,
+      );
     }
   });
 }

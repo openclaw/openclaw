@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs/promises";
-import { createServer, request, type IncomingMessage } from "node:http";
+import { createServer, request } from "node:http";
 import os from "node:os";
 import nodePath from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -11,10 +11,12 @@ import {
   createChannelIngressQueueForTests as createChannelIngressQueue,
 } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import { DEFAULT_INGRESS_ADOPTION_STALL_MS } from "openclaw/plugin-sdk/channel-outbound";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import {
   onDiagnosticEvent,
   waitForDiagnosticEventsDrained,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   logWebhookReceived,
   startDiagnosticHeartbeat,
@@ -35,6 +37,9 @@ import {
   type TelegramSpooledReplayDeferredParticipant,
   type TelegramSpooledReplaySettlementHold,
 } from "./bot-processing-outcome.js";
+import { commitTelegramMessageDispatchReplay } from "./message-dispatch-dedupe.js";
+import { monitorTelegramProvider } from "./monitor.js";
+import { installTelegramIngressQueueRuntime } from "./runtime-state.test-support.js";
 import { setTelegramRuntime } from "./runtime.js";
 import { clearTelegramRuntimeForTest as clearTelegramRuntime } from "./runtime.test-support.js";
 import type { TelegramRuntime } from "./runtime.types.js";
@@ -44,6 +49,14 @@ import {
   listTelegramSpooledUpdateClaims,
   listTelegramSpooledUpdates,
 } from "./telegram-ingress-spool.test-support.js";
+import {
+  collectResponseBody,
+  fetchWithTimeout,
+  postWebhookHeadersOnly,
+  postWebhookJson,
+  postWebhookPayloadWithChunkPlan,
+  yieldWebhookTask,
+} from "./test-support/webhook-http.js";
 
 const telegramSpooledRetryDeadLetterMinAgeMs = 24 * 60 * 60 * 1000;
 
@@ -90,7 +103,6 @@ const WEBHOOK_POST_TIMEOUT_MS = process.platform === "win32" ? 20_000 : 8_000;
 const TELEGRAM_TOKEN = "tok";
 const TELEGRAM_SECRET = "secret";
 const TELEGRAM_WEBHOOK_PATH = "/hook";
-const WEBHOOK_DRAIN_GUARD_MS = 5;
 const TELEGRAM_WEBHOOK_RATE_LIMIT_BURST = WEBHOOK_RATE_LIMIT_DEFAULTS.maxRequests + 10;
 
 type TestTelegramMessageUpdate = Update & {
@@ -115,57 +127,6 @@ async function waitForWebhookState<T>(
   options: { timeout?: number; interval?: number } = {},
 ): Promise<T> {
   return await vi.waitFor(assertion, { interval: 1, ...options });
-}
-
-async function yieldWebhookTask(): Promise<void> {
-  await new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
-}
-
-function collectResponseBody(
-  res: IncomingMessage,
-  onDone: (payload: { statusCode: number; body: string }) => void,
-): void {
-  const chunks: Buffer[] = [];
-  res.on("data", (chunk: Buffer | string) => {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  });
-  res.on("end", () => {
-    onDone({
-      statusCode: res.statusCode ?? 0,
-      body: Buffer.concat(chunks).toString("utf-8"),
-    });
-  });
-}
-
-function createSingleSettlement<T>(params: {
-  resolve: (value: T) => void;
-  reject: (error: unknown) => void;
-  clear: () => void;
-}) {
-  let settled = false;
-  return {
-    isSettled() {
-      return settled;
-    },
-    resolve(value: T) {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      params.clear();
-      params.resolve(value);
-    },
-    reject(error: unknown) {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      params.clear();
-      params.reject(error);
-    },
-  };
 }
 
 vi.mock("grammy", async () => {
@@ -200,25 +161,6 @@ vi.mock("./fetch.js", () => ({
 let startTelegramWebhook: typeof import("./webhook.js").startTelegramWebhook;
 let webhookStateDir: string | undefined;
 let webhookSpoolDir: string | undefined;
-
-function installTelegramIngressQueueRuntime(
-  resolveStateDir: () => string,
-  queueOpenError?: Error,
-): void {
-  setTelegramRuntime({
-    state: {
-      resolveStateDir,
-      openChannelIngressQueue: (
-        options?: Omit<Parameters<typeof createChannelIngressQueue>[0], "channelId">,
-      ) => {
-        if (queueOpenError) {
-          throw queueOpenError;
-        }
-        return createChannelIngressQueue({ ...options, channelId: "telegram" });
-      },
-    },
-  } as TelegramRuntime);
-}
 
 function requireWebhookSpoolDir(): string {
   if (!webhookSpoolDir) {
@@ -344,186 +286,6 @@ afterEach(async () => {
     await fs.rm(stateDir, { recursive: true, force: true });
   }
 });
-
-async function fetchWithTimeout(
-  input: string,
-  init: Omit<RequestInit, "signal">,
-  timeoutMs: number,
-): Promise<Response> {
-  const abort = new AbortController();
-  const timer = setTimeout(() => {
-    abort.abort();
-  }, timeoutMs);
-  try {
-    return await fetch(input, { ...init, signal: abort.signal });
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-async function postWebhookJson(params: {
-  url: string;
-  payload: string;
-  secret?: string;
-  timeoutMs?: number;
-}): Promise<Response> {
-  return await fetchWithTimeout(
-    params.url,
-    {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        ...(params.secret ? { "x-telegram-bot-api-secret-token": params.secret } : {}),
-      },
-      body: params.payload,
-    },
-    params.timeoutMs ?? 5_000,
-  );
-}
-
-async function postWebhookHeadersOnly(params: {
-  port: number;
-  path: string;
-  declaredLength: number;
-  secret?: string;
-  timeoutMs?: number;
-}): Promise<{ statusCode: number; body: string }> {
-  return await new Promise((resolve, reject) => {
-    const settle = createSingleSettlement({
-      resolve,
-      reject,
-      clear: () => clearTimeout(timeout),
-    });
-
-    const req = request(
-      {
-        hostname: "127.0.0.1",
-        port: params.port,
-        path: params.path,
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "content-length": String(params.declaredLength),
-          ...(params.secret ? { "x-telegram-bot-api-secret-token": params.secret } : {}),
-        },
-      },
-      (res) => {
-        collectResponseBody(res, (payload) => {
-          settle.resolve(payload);
-          req.destroy();
-        });
-      },
-    );
-
-    const timeout = setTimeout(() => {
-      req.destroy(
-        new Error(`webhook header-only post timed out after ${params.timeoutMs ?? 5_000}ms`),
-      );
-      settle.reject(new Error("timed out waiting for webhook response"));
-    }, params.timeoutMs ?? 5_000);
-
-    req.on("error", (error) => {
-      if (settle.isSettled() && (error as NodeJS.ErrnoException).code === "ECONNRESET") {
-        return;
-      }
-      settle.reject(error);
-    });
-
-    req.flushHeaders();
-  });
-}
-
-function createDeterministicRng(seed: number): () => number {
-  let state = seed >>> 0;
-  return () => {
-    state = (state * 1_664_525 + 1_013_904_223) >>> 0;
-    return state / 4_294_967_296;
-  };
-}
-
-async function postWebhookPayloadWithChunkPlan(params: {
-  port: number;
-  path: string;
-  payload: string;
-  secret: string;
-  mode: "single" | "random-chunked";
-  timeoutMs?: number;
-}): Promise<{ statusCode: number; body: string }> {
-  const payloadBuffer = Buffer.from(params.payload, "utf-8");
-  return await new Promise((resolve, reject) => {
-    let bytesQueued = 0;
-    let chunksQueued = 0;
-    let phase: "writing" | "awaiting-response" = "writing";
-    const settle = createSingleSettlement({
-      resolve,
-      reject,
-      clear: () => clearTimeout(timeout),
-    });
-
-    const req = request(
-      {
-        hostname: "127.0.0.1",
-        port: params.port,
-        path: params.path,
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "content-length": String(payloadBuffer.length),
-          "x-telegram-bot-api-secret-token": params.secret,
-        },
-      },
-      (res) => {
-        collectResponseBody(res, settle["resolve"]);
-      },
-    );
-
-    const timeout = setTimeout(() => {
-      settle.reject(
-        new Error(
-          `webhook post timed out after ${params.timeoutMs ?? 15_000}ms (phase=${phase}, bytesQueued=${bytesQueued}, chunksQueued=${chunksQueued}, totalBytes=${payloadBuffer.length})`,
-        ),
-      );
-      req.destroy();
-    }, params.timeoutMs ?? 15_000);
-
-    req.on("error", (error) => {
-      settle.reject(error);
-    });
-
-    const writeAll = async () => {
-      if (params.mode === "single") {
-        req.end(payloadBuffer);
-        return;
-      }
-
-      const rng = createDeterministicRng(26156);
-      let offset = 0;
-      while (offset < payloadBuffer.length) {
-        const remaining = payloadBuffer.length - offset;
-        const nextSize = Math.max(1, Math.min(remaining, 1 + Math.floor(rng() * 8_192)));
-        const chunk = payloadBuffer.subarray(offset, offset + nextSize);
-        const canContinue = req.write(chunk);
-        offset += nextSize;
-        bytesQueued = offset;
-        chunksQueued += 1;
-        if (chunksQueued % 10 === 0) {
-          await yieldWebhookTask();
-        }
-        if (!canContinue) {
-          // Windows CI occasionally stalls on waiting for drain indefinitely.
-          // Bound the wait, then continue queuing this small (~1MB) payload.
-          await Promise.race([once(req, "drain"), sleep(WEBHOOK_DRAIN_GUARD_MS)]);
-        }
-      }
-      phase = "awaiting-response";
-      req.end();
-    };
-
-    void writeAll().catch((error: unknown) => {
-      settle.reject(error);
-    });
-  });
-}
 
 function createNearLimitTelegramPayload(): { payload: string; sizeBytes: number } {
   const maxBytes = 1_024 * 1_024;
@@ -1328,6 +1090,190 @@ describe("startTelegramWebhook", () => {
     expectMockMessageContains(runtimeError, "telegram webhook bot stop failed");
   });
 
+  it("joins concurrent stops with abort-driven webhook cleanup", async () => {
+    const finishStop = createDeferred<void>();
+    stopSpy.mockImplementationOnce(() => finishStop.promise);
+    const abort = new AbortController();
+    const started = await startTelegramWebhook({
+      token: TELEGRAM_TOKEN,
+      port: 0,
+      secret: TELEGRAM_SECRET,
+      path: TELEGRAM_WEBHOOK_PATH,
+      spoolDir: requireWebhookSpoolDir(),
+      abortSignal: abort.signal,
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    });
+    abort.abort();
+    let stopped = false;
+    const stopping = Promise.all([started.stop(), started.stop()]).then(() => {
+      stopped = true;
+    });
+    try {
+      await waitForWebhookState(() => expect(stopSpy).toHaveBeenCalledOnce());
+      await yieldWebhookTask();
+      expect(stopped).toBe(false);
+      expect(transportCloseSpies[0]).not.toHaveBeenCalled();
+    } finally {
+      finishStop.resolve();
+      await stopping;
+      await waitForWebhookState(() => expect(transportCloseSpies[0]).toHaveBeenCalledOnce());
+    }
+  });
+
+  it("does not dispatch queued work when the webhook provider starts aborted", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", webhookStateDir);
+    await writeTelegramSpooledUpdate({
+      spoolDir: requireWebhookSpoolDir(),
+      update: telegramMessageUpdate(62, "not accepted"),
+    });
+    await monitorTelegramProvider({
+      token: TELEGRAM_TOKEN,
+      accountId: "test",
+      config: {},
+      useWebhook: true,
+      webhookPort: 0,
+      webhookPath: TELEGRAM_WEBHOOK_PATH,
+      webhookSecret: TELEGRAM_SECRET,
+      abortSignal: AbortSignal.abort(new Error("account stopped")),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    });
+
+    expect(handleUpdateSpy).not.toHaveBeenCalled();
+    expect(setWebhookSpy).not.toHaveBeenCalled();
+    expect(stopSpy).toHaveBeenCalledOnce();
+    expect(transportCloseSpies[0]).toHaveBeenCalledOnce();
+    expect(
+      (await listTelegramSpooledUpdates({ spoolDir: requireWebhookSpoolDir() })).map(
+        (entry) => entry.updateId,
+      ),
+    ).toEqual([62]);
+  });
+
+  it.each(["commit", "rollback", "introduction"] as const)(
+    "joins accepted %s beyond webhook provider shutdown grace",
+    async (operation) => {
+      vi.stubEnv("OPENCLAW_STATE_DIR", webhookStateDir);
+      const abort = new AbortController();
+      const operationStarted = createDeferred<void>();
+      const releaseOperation = createDeferred<void>();
+      const recorded = new Set<string>();
+      const setStatus = vi.fn();
+      let settlement: Promise<void> | undefined;
+      handleUpdateSpy.mockImplementationOnce(async () => {
+        const participant = createTelegramSpooledReplayDeferredParticipant("held-webhook-work");
+        const hold = participant?.beginSettlementHold();
+        if (!participant || !hold) {
+          throw new Error("Expected accepted webhook settlement ownership");
+        }
+        settlement = (async () => {
+          try {
+            if (operation === "introduction") {
+              operationStarted.resolve();
+              await releaseOperation.promise;
+              recorded.add("introduction");
+            } else {
+              await commitTelegramMessageDispatchReplay({
+                requirePersistent: true,
+                guard: {
+                  claim: async () => ({ kind: "invalid" }),
+                  warmup: async () => 0,
+                  forget: async (event) => {
+                    operationStarted.resolve();
+                    await releaseOperation.promise;
+                    for (const key of "keys" in event ? (event.keys ?? []) : []) {
+                      recorded.delete(key);
+                    }
+                    return true;
+                  },
+                },
+                claims: ["first", "second"].map((key) => ({
+                  keys: [key],
+                  commit: async (options) => {
+                    if (operation === "commit" && key === "first") {
+                      operationStarted.resolve();
+                      await releaseOperation.promise;
+                    }
+                    recorded.add(key);
+                    if (operation === "rollback" && key === "second") {
+                      options?.onDiskError?.(new Error("synthetic commit failure"));
+                    }
+                    return true;
+                  },
+                  release: () => undefined,
+                })),
+              });
+            }
+            hold.release("discard-pending");
+            participant.settle({ kind: "completed" });
+          } catch (error) {
+            hold.release("replay-pending");
+            participant.settle({ kind: "failed-retryable", error });
+          }
+        })();
+        await settlement;
+      });
+      let stopped = false;
+      const provider = monitorTelegramProvider({
+        token: TELEGRAM_TOKEN,
+        accountId: "test",
+        config: {},
+        useWebhook: true,
+        webhookPort: 0,
+        webhookPath: TELEGRAM_WEBHOOK_PATH,
+        webhookSecret: TELEGRAM_SECRET,
+        abortSignal: abort.signal,
+        setStatus,
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      }).then(() => {
+        stopped = true;
+      });
+      try {
+        await waitForWebhookState(() => expect(setWebhookSpy).toHaveBeenCalledOnce());
+        const url = requireMockCall(setWebhookSpy, 0, "setWebhook")[0];
+        if (typeof url !== "string") {
+          throw new Error("Expected the isolated webhook listener URL");
+        }
+        const response = await postWebhookJson({
+          url,
+          payload: JSON.stringify(telegramMessageUpdate(61, "held webhook work")),
+          secret: TELEGRAM_SECRET,
+        });
+        expect(response.status).toBe(200);
+        await operationStarted.promise;
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        abort.abort();
+        await vi.advanceTimersByTimeAsync(16_000);
+        expect(stopped).toBe(false);
+        expect(stopSpy).toHaveBeenCalledOnce();
+        expect(transportCloseSpies[0]).toHaveBeenCalledOnce();
+      } finally {
+        releaseOperation.resolve();
+        await settlement;
+        abort.abort();
+        await provider;
+        vi.useRealTimers();
+        await waitForWebhookState(async () =>
+          expect(
+            await listTelegramSpooledUpdateClaims({ spoolDir: requireWebhookSpoolDir() }),
+          ).toEqual([]),
+        );
+      }
+      expect([...recorded]).toEqual(
+        operation === "rollback"
+          ? []
+          : operation === "introduction"
+            ? ["introduction"]
+            : ["first", "second"],
+      );
+      expect(
+        (await listTelegramSpooledUpdates({ spoolDir: requireWebhookSpoolDir() })).map(
+          (entry) => entry.updateId,
+        ),
+      ).toEqual(operation === "rollback" ? [61] : []);
+      expect(setStatus).toHaveBeenLastCalledWith({ mode: "webhook", connected: false });
+    },
+  );
+
   it("marks delivery accepted only after the durable enqueue commits", async () => {
     let releaseEnqueue: (() => void) | undefined;
     let markEnqueueStarted: (() => void) | undefined;
@@ -1338,6 +1284,7 @@ describe("startTelegramWebhook", () => {
       markEnqueueStarted = resolve;
     });
     setTelegramRuntime({
+      channel: { inbound: { ingress: createPluginRuntimeMock().channel.inbound.ingress } },
       state: {
         resolveStateDir: () => webhookStateDir ?? os.tmpdir(),
         openChannelIngressQueue: (
@@ -2339,6 +2286,7 @@ describe("startTelegramWebhook", () => {
       markCompletionRetryStarted = resolve;
     });
     setTelegramRuntime({
+      channel: { inbound: { ingress: createPluginRuntimeMock().channel.inbound.ingress } },
       state: {
         resolveStateDir: () => webhookStateDir ?? os.tmpdir(),
         openChannelIngressQueue: (
@@ -2423,6 +2371,7 @@ describe("startTelegramWebhook", () => {
     vi.useFakeTimers();
     let completeAttempts = 0;
     setTelegramRuntime({
+      channel: { inbound: { ingress: createPluginRuntimeMock().channel.inbound.ingress } },
       state: {
         resolveStateDir: () => webhookStateDir ?? os.tmpdir(),
         openChannelIngressQueue: (

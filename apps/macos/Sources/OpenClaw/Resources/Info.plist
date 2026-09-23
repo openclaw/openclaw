@@ -15,9 +15,9 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>2026.9.1</string>
+    <string>2026.9.5</string>
     <key>CFBundleVersion</key>
-    <string>2026090100</string>
+    <string>2026090500</string>
     <key>CFBundleIconFile</key>
     <string>OpenClaw</string>
     <key>CFBundleIconName</key>
@@ -66,7 +66,7 @@
     <key>NSSpeechRecognitionUsageDescription</key>
     <string>OpenClaw uses Apple Speech for Voice Wake, push-to-talk, Talk Mode, and Quick Chat dictation. Voice Wake stays on-device.</string>
     <key>NSAppleEventsUsageDescription</key>
-    <string>OpenClaw needs Automation (AppleScript) permission to drive Terminal and other apps for agent actions.</string>
+    <string>OpenClaw needs Automation permission when an agent action controls another app.</string>
     <key>NSRemindersUsageDescription</key>
     <string>OpenClaw can access Reminders when requested by the agent for the apple-reminders skill.</string>
 

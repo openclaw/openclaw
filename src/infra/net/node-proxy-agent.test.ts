@@ -1,7 +1,8 @@
 // Node proxy agent tests cover shared Node HTTP(S) proxy agent construction.
+import { inspect } from "node:util";
 import { describe, expect, it } from "vitest";
 import { withEnv } from "../../test-utils/env.js";
-import { createNodeProxyAgent } from "./node-proxy-agent.js";
+import { createNodeProxyAgent, resolveEnvNodeProxyUrlForTarget } from "./node-proxy-agent.js";
 
 const PROXY_ENV_KEYS = [
   "http_proxy",
@@ -25,7 +26,60 @@ function withProxyEnv<T>(
   return withEnv({ ...clearedEnv, ...env }, fn);
 }
 
+describe("resolveEnvNodeProxyUrlForTarget", () => {
+  it("rereads proxy and bypass settings for each request", () => {
+    const target = new URL("https://api.example.test/v1");
+    const env: NodeJS.ProcessEnv = { HTTPS_PROXY: "http://proxy.example:8080" };
+
+    expect(resolveEnvNodeProxyUrlForTarget(target, env)?.href).toBe("http://proxy.example:8080/");
+    env.NO_PROXY = "example.test";
+    expect(resolveEnvNodeProxyUrlForTarget(target, env)).toBeUndefined();
+    env.no_proxy = "";
+    expect(resolveEnvNodeProxyUrlForTarget(target, env)?.href).toBe("http://proxy.example:8080/");
+    env.https_proxy = "";
+    expect(resolveEnvNodeProxyUrlForTarget(target, env)).toBeUndefined();
+  });
+
+  it("snapshots a URL target before reading bypass settings", () => {
+    const target = new URL("wss://original.example/ws");
+    const env = {
+      HTTPS_PROXY: "http://proxy.example:8080",
+      get no_proxy() {
+        target.hostname = "changed.example";
+        return "original.example:443";
+      },
+    };
+
+    expect(resolveEnvNodeProxyUrlForTarget(target, env)).toBeUndefined();
+    expect(resolveEnvNodeProxyUrlForTarget(target, env)?.href).toBe("http://proxy.example:8080/");
+    expect(target.protocol).toBe("wss:");
+  });
+});
+
 describe("createNodeProxyAgent", () => {
+  it.each(["env", "explicit"] as const)(
+    "keeps malformed %s proxy credentials out of errors",
+    (mode) => {
+      const proxyUrl = "https://qa-user:qa-password@[invalid";
+      withProxyEnv({ HTTPS_PROXY: proxyUrl }, () => {
+        let error: unknown;
+        try {
+          if (mode === "env") {
+            createNodeProxyAgent({ mode, targetUrl: "https://collector.example.test" });
+          } else {
+            createNodeProxyAgent({ mode, proxyUrl });
+          }
+        } catch (cause) {
+          error = cause;
+        }
+        expect(error).toMatchObject({ message: expect.stringContaining("Invalid proxy URL") });
+        const rendered = inspect(error, { depth: null });
+        expect(rendered).not.toContain("qa-user");
+        expect(rendered).not.toContain("qa-password");
+      });
+    },
+  );
+
   it("preserves caller Node agent options on env proxy agents", () => {
     withProxyEnv({ HTTPS_PROXY: "http://proxy.example:8080" }, () => {
       const agent = createNodeProxyAgent({

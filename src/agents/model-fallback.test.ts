@@ -18,7 +18,18 @@ import { GatewayDrainingError } from "../process/gateway-work-admission.js";
 import { AgentRunTerminalOutcomeError } from "./agent-run-terminal-error.js";
 import { resolveEffectiveModelFallbacks } from "./agent-scope.js";
 import { AUTH_STORE_VERSION, MINIMAX_CLI_PROFILE_ID } from "./auth-profiles/constants.js";
+import { createApiKeyCredential } from "./auth-profiles/credential-fixtures.test-support.js";
+import {
+  createOAuthRefreshFence,
+  isOAuthRefreshFence,
+  isPendingOAuthRefreshFence,
+} from "./auth-profiles/oauth-refresh-marker.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+import {
+  getSoonestCooldownExpiry,
+  isProfileInCooldown,
+  resolveProfilesUnavailableReason,
+} from "./auth-profiles/usage-state.js";
 import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 import { createCliTimeoutError } from "./cli-runner/no-output-timeout-policy.js";
 import { classifyEmbeddedAgentRunResultForModelFallback } from "./embedded-agent-runner/result-fallback-classifier.js";
@@ -47,7 +58,10 @@ import {
 } from "./run-termination.js";
 import { toSandboxProvisioningError } from "./sandbox/provisioning-error.js";
 import { resolveSessionSuspensionReason } from "./session-suspension.js";
-import { makeModelFallbackCfg } from "./test-helpers/model-fallback-config-fixture.js";
+import {
+  makeModelFallbackCfg,
+  createModelFallbackConfig,
+} from "./test-helpers/model-fallback-config-fixture.js";
 
 const emptyManifestPlugins = [] as const;
 
@@ -100,13 +114,10 @@ const authSourceCheckMock = vi.hoisted(() => ({
 vi.mock("./auth-profiles/source-check.js", () => authSourceCheckMock);
 
 const authRuntimeMock = vi.hoisted(() => {
-  // In-memory auth runtime mirrors cooldown/disabled semantics without writing
-  // real profile stores during fallback unit tests.
+  // Keep stores in memory while using the canonical cooldown and reason policy.
   const stores = new Map<string, AuthProfileStore>();
   const keyFor = (agentDir?: string) => agentDir ?? "__main__";
   const now = () => Date.now();
-  const isActive = (value: unknown, ts = now()) =>
-    typeof value === "number" && Number.isFinite(value) && value > ts;
   const getStore = (agentDir?: string): AuthProfileStore =>
     stores.get(keyFor(agentDir)) ?? { version: 1, profiles: {} };
   const getProfileIds = (store: AuthProfileStore, provider: string) =>
@@ -117,6 +128,7 @@ const authRuntimeMock = vi.hoisted(() => {
     store: AuthProfileStore;
     provider: string;
     profileId: string;
+    includePendingOAuthRefresh?: boolean;
   }) => {
     const credential = params.store.profiles[params.profileId];
     if (!credential) {
@@ -139,58 +151,14 @@ const authRuntimeMock = vi.hoisted(() => {
       }
       return { eligible: true, reasonCode: "ok" as const };
     }
+    if (isOAuthRefreshFence(credential)) {
+      return params.includePendingOAuthRefresh && isPendingOAuthRefreshFence(credential)
+        ? { eligible: true, reasonCode: "ok" as const }
+        : { eligible: false, reasonCode: "expired" as const };
+    }
     return credential.access || credential.refresh
       ? { eligible: true, reasonCode: "ok" as const }
       : { eligible: false, reasonCode: "missing_credential" as const };
-  };
-  const isProfileInCooldown = (
-    store: AuthProfileStore,
-    profileId: string,
-    tsOrOptions?: number | { now?: number; forModel?: string },
-    forModel?: string,
-  ) => {
-    const stats = store.usageStats?.[profileId];
-    if (!stats || store.profiles[profileId]?.provider === "openrouter") {
-      return false;
-    }
-    const ts = typeof tsOrOptions === "number" ? tsOrOptions : (tsOrOptions?.now ?? now());
-    const model = typeof tsOrOptions === "object" ? tsOrOptions.forModel : forModel;
-    if (isActive(stats.disabledUntil, ts)) {
-      return true;
-    }
-    if (!isActive(stats.cooldownUntil, ts)) {
-      return false;
-    }
-    return !stats.cooldownModel || !model || stats.cooldownModel === model;
-  };
-  const resolveReason = (store: AuthProfileStore, profileIds: string[], ts = now()) => {
-    for (const profileId of profileIds) {
-      const stats = store.usageStats?.[profileId];
-      if (!stats) {
-        continue;
-      }
-      if (isActive(stats.disabledUntil, ts)) {
-        return stats.disabledReason ?? "auth";
-      }
-      if (!isActive(stats.cooldownUntil, ts)) {
-        continue;
-      }
-      if (stats.cooldownReason) {
-        return stats.cooldownReason;
-      }
-      const counts = stats.failureCounts ?? {};
-      if ((counts.rate_limit ?? 0) > 0) {
-        return "rate_limit";
-      }
-      if ((counts.overloaded ?? 0) > 0) {
-        return "overloaded";
-      }
-      if ((counts.timeout ?? 0) > 0) {
-        return "timeout";
-      }
-      return "unknown";
-    }
-    return null;
   };
   return {
     clear: () => stores.clear(),
@@ -200,47 +168,33 @@ const authRuntimeMock = vi.hoisted(() => {
     runtime: {
       ensureAuthProfileStore: vi.fn((agentDir?: string, _options?: unknown) => getStore(agentDir)),
       loadAuthProfileStoreForRuntime: vi.fn((agentDir?: string) => getStore(agentDir)),
-      resolveAuthProfileOrder: (params: { store: AuthProfileStore; provider: string }) =>
-        params.store.order?.[params.provider] ?? getProfileIds(params.store, params.provider),
+      resolveAuthProfileOrder: vi.fn(
+        (params: {
+          store: AuthProfileStore;
+          provider: string;
+          includePendingOAuthRefresh?: boolean;
+        }) =>
+          (
+            params.store.order?.[params.provider] ?? getProfileIds(params.store, params.provider)
+          ).filter((profileId) => {
+            const credential = params.store.profiles[profileId];
+            if (credential?.type !== "oauth" || !isOAuthRefreshFence(credential)) {
+              return true;
+            }
+            return (
+              params.includePendingOAuthRefresh === true && isPendingOAuthRefreshFence(credential)
+            );
+          }),
+      ),
       resolveAuthProfileEligibility,
       maybeReprobeWhamBlockedProfiles: vi.fn(),
-      isProfileInCooldown,
-      resolveProfilesUnavailableReason: (params: {
-        store: AuthProfileStore;
-        profileIds: string[];
-        now?: number;
-      }) => resolveReason(params.store, params.profileIds, params.now),
-      getSoonestCooldownExpiry: (
-        store: AuthProfileStore,
-        profileIds: string[],
-        options?: { now?: number; forModel?: string },
-      ) => {
-        const ts = options?.now ?? now();
-        let soonest: number | null = null;
-        for (const profileId of profileIds) {
-          if (!isProfileInCooldown(store, profileId, { now: ts, forModel: options?.forModel })) {
-            continue;
-          }
-          const stats = store.usageStats?.[profileId];
-          const cooldownUntil = stats?.cooldownUntil;
-          const disabledUntil = stats?.disabledUntil;
-          let expiry: number | undefined;
-          if (isActive(cooldownUntil, ts)) {
-            expiry = cooldownUntil;
-          }
-          if (
-            disabledUntil !== undefined &&
-            isActive(disabledUntil, ts) &&
-            (expiry === undefined || disabledUntil < expiry)
-          ) {
-            expiry = disabledUntil;
-          }
-          if (expiry !== undefined && (soonest === null || expiry < soonest)) {
-            soonest = expiry;
-          }
-        }
-        return soonest;
-      },
+      isProfileInCooldown: (...args: Parameters<typeof isProfileInCooldown>) =>
+        isProfileInCooldown(...args),
+      resolveProfilesUnavailableReason: (
+        ...args: Parameters<typeof resolveProfilesUnavailableReason>
+      ) => resolveProfilesUnavailableReason(...args),
+      getSoonestCooldownExpiry: (...args: Parameters<typeof getSoonestCooldownExpiry>) =>
+        getSoonestCooldownExpiry(...args),
     },
   };
 });
@@ -284,6 +238,8 @@ function resetModelFallbackTestState(): void {
   authRuntimeMock.clear();
   authRuntimeMock.runtime.ensureAuthProfileStore.mockClear();
   authRuntimeMock.runtime.loadAuthProfileStoreForRuntime.mockClear();
+  authRuntimeMock.runtime.resolveAuthProfileOrder.mockClear();
+  authRuntimeMock.runtime.maybeReprobeWhamBlockedProfiles.mockClear();
   authSourceCheckMock.hasAnyAuthProfileStoreSource.mockReset().mockReturnValue(false);
   providerModelNormalizationMock.normalizeProviderModelIdWithRuntime
     .mockReset()
@@ -548,11 +504,7 @@ async function expectSkippedUnavailableProvider(params: {
     ...primaryStore,
     profiles: {
       ...primaryStore.profiles,
-      "fallback:default": {
-        type: "api_key",
-        provider: "fallback",
-        key: "test-key",
-      },
+      "fallback:default": createApiKeyCredential("fallback", "test-key"),
     },
   };
   const run = createFallbackOnlyRun();
@@ -806,58 +758,49 @@ describe("runWithModelFallback", () => {
     ]);
   });
 
-  it("preserves selected-profile identity in exhausted fallback summaries", async () => {
-    const code = "selected_auth_profile_unavailable";
-    const run = vi
-      .fn()
-      .mockRejectedValueOnce(
-        new FailoverError("primary selected profile missing", {
-          provider: "openai",
-          model: "gpt-5.5",
-          reason: "auth",
-          status: 401,
-          code,
-        }),
-      )
-      .mockRejectedValueOnce(
-        new FailoverError("fallback selected profile missing", {
-          provider: "anthropic",
-          model: "claude-opus-4-6",
-          reason: "auth",
-          status: 401,
-          code,
-        }),
+  it.each([undefined, 401])(
+    "preserves local profile absence through model fallback without provider reauthentication (status=%s)",
+    async (status) => {
+      const code = "selected_auth_profile_unavailable";
+      const run = vi
+        .fn()
+        .mockRejectedValueOnce(
+          Object.assign(new Error("primary selected profile missing"), { code, status }),
+        )
+        .mockRejectedValueOnce(
+          Object.assign(new Error("fallback selected profile missing"), { code, status }),
+        );
+
+      const error = requireFallbackSummaryError(
+        await captureRejection(
+          runWithModelFallback({
+            cfg: makeDiagnosticFallbackConfig(["anthropic/claude-opus-4-6"]),
+            provider: "openai",
+            model: "gpt-5.5",
+            run,
+          }),
+        ),
       );
 
-    const error = requireFallbackSummaryError(
-      await captureRejection(
-        runWithModelFallback({
-          cfg: makeDiagnosticFallbackConfig(["anthropic/claude-opus-4-6"]),
-          provider: "openai",
-          model: "gpt-5.5",
-          run,
-        }),
-      ),
-    );
-
-    expect(error).toMatchObject({ reason: "auth", status: 401, code });
-    expect(error.attempts).toMatchObject([{ code }, { code }]);
-  });
+      expect(run).toHaveBeenCalledTimes(2);
+      expect(error).toMatchObject({ reason: "auth", code });
+      expect(error.status).toBeUndefined();
+      expect(error.attempts).toMatchObject([
+        { code, error: "primary selected profile missing", status: undefined },
+        { code, error: "fallback selected profile missing", status: undefined },
+      ]);
+      expect(error.message).not.toMatch(/HTTP 401|re-authenticate|Authentication failed/i);
+    },
+  );
 
   it("uses the opt-in auth skip cache on the second turn for the same session", async () => {
     const previous = process.env.OPENCLAW_FALLBACK_SKIP_TTL_MS;
     process.env.OPENCLAW_FALLBACK_SKIP_TTL_MS = "60000";
     try {
-      const cfg = makeCfg({
-        agents: {
-          defaults: {
-            model: {
-              primary: "openai/gpt-5.4",
-              fallbacks: ["anthropic/claude-opus-4-7", "google/gemini-3.1-pro-preview"],
-            },
-          },
-        },
-      });
+      const cfg = createModelFallbackConfig("openai/gpt-5.4", [
+        "anthropic/claude-opus-4-7",
+        "google/gemini-3.1-pro-preview",
+      ]);
       const run = vi.fn(async (provider: string, model: string) => {
         if (provider === "openai") {
           throw new FailoverError("primary rate limited", {
@@ -928,16 +871,7 @@ describe("runWithModelFallback", () => {
         }
         const profileA = `${provider}:a`;
         const profileB = `${provider}:b`;
-        const cfg = makeCfg({
-          agents: {
-            defaults: {
-              model: {
-                primary: "openai/m1",
-                fallbacks: [`${provider}/m1`, "fallback/ok-model"],
-              },
-            },
-          },
-        });
+        const cfg = createModelFallbackConfig("openai/m1", [`${provider}/m1`, "fallback/ok-model"]);
         const store: AuthProfileStore = {
           version: AUTH_STORE_VERSION,
           profiles: {
@@ -1014,16 +948,7 @@ describe("runWithModelFallback", () => {
       const profileA = `${provider}:a`;
       const profileB = `${provider}:b`;
       let selectedProfile = profileA;
-      const cfg = makeCfg({
-        agents: {
-          defaults: {
-            model: {
-              primary: "openai/m1",
-              fallbacks: [`${provider}/m1`, "fallback/ok-model"],
-            },
-          },
-        },
-      });
+      const cfg = createModelFallbackConfig("openai/m1", [`${provider}/m1`, "fallback/ok-model"]);
       const store: AuthProfileStore = {
         version: AUTH_STORE_VERSION,
         profiles: {
@@ -1256,16 +1181,7 @@ describe("runWithModelFallback", () => {
   });
 
   it("carries the route origin for every fallback candidate", () => {
-    const cfg = makeCfg({
-      agents: {
-        defaults: {
-          model: {
-            primary: "openai/gpt-4.1-mini",
-            fallbacks: ["anthropic/claude-haiku-3-5"],
-          },
-        },
-      },
-    });
+    const cfg = createModelFallbackConfig("openai/gpt-4.1-mini", ["anthropic/claude-haiku-3-5"]);
 
     expect(
       testing.resolveFallbackCandidateRoutes({
@@ -1278,7 +1194,7 @@ describe("runWithModelFallback", () => {
         provider: "google",
         model: "gemini-2.5-flash-lite",
         routeOrigin: "requested",
-        routeResolution: "raw",
+        routeResolution: "resolved",
       },
       {
         provider: "anthropic",
@@ -1391,16 +1307,7 @@ describe("runWithModelFallback", () => {
   });
 
   it("does not treat Codex missing tool-result failures as model fallback candidates", async () => {
-    const cfg = makeCfg({
-      agents: {
-        defaults: {
-          model: {
-            primary: "openai/gpt-5.4",
-            fallbacks: ["anthropic/claude-sonnet-4-6"],
-          },
-        },
-      },
-    });
+    const cfg = createModelFallbackConfig("openai/gpt-5.4", ["anthropic/claude-sonnet-4-6"]);
     const missingToolResultError = new Error(
       "OpenClaw recorded a native Codex tool.call without a matching tool.result before the turn completed.",
     );
@@ -1418,16 +1325,7 @@ describe("runWithModelFallback", () => {
   });
 
   it("still falls back on unstructured provider text that merely mentions missing_tool_result", async () => {
-    const cfg = makeCfg({
-      agents: {
-        defaults: {
-          model: {
-            primary: "openai/gpt-5.4",
-            fallbacks: ["anthropic/claude-sonnet-4-6"],
-          },
-        },
-      },
-    });
+    const cfg = createModelFallbackConfig("openai/gpt-5.4", ["anthropic/claude-sonnet-4-6"]);
     const run = vi
       .fn()
       .mockRejectedValueOnce(new Error("provider diagnostic reason=missing_tool_result"))
@@ -1524,16 +1422,7 @@ describe("runWithModelFallback", () => {
   });
 
   it("fails closed when a strict plugin harness is missing", async () => {
-    const cfg = makeCfg({
-      agents: {
-        defaults: {
-          model: {
-            primary: "openai/gpt-5.5",
-            fallbacks: ["anthropic/claude-sonnet-4-6"],
-          },
-        },
-      },
-    });
+    const cfg = createModelFallbackConfig("openai/gpt-5.5", ["anthropic/claude-sonnet-4-6"]);
     const run = vi
       .fn()
       .mockRejectedValueOnce(new MissingAgentHarnessError("codex"))
@@ -1650,16 +1539,7 @@ describe("runWithModelFallback", () => {
   });
 
   it("uses session runtime overrides before auth cooldown skips", async () => {
-    const cfg = makeCfg({
-      agents: {
-        defaults: {
-          model: {
-            primary: "openai/gpt-5.5",
-            fallbacks: ["anthropic/claude-sonnet-4-6"],
-          },
-        },
-      },
-    });
+    const cfg = createModelFallbackConfig("openai/gpt-5.5", ["anthropic/claude-sonnet-4-6"]);
     const tempDir = await makeAuthTempDir();
     setAuthRuntimeStore(tempDir, {
       version: AUTH_STORE_VERSION,
@@ -1909,11 +1789,7 @@ describe("runWithModelFallback", () => {
     setAuthRuntimeStore(tempDir, {
       version: AUTH_STORE_VERSION,
       profiles: {
-        "claude-cli:default": {
-          type: "api_key",
-          provider: "claude-cli",
-          key: "test-key",
-        },
+        "claude-cli:default": createApiKeyCredential("claude-cli", "test-key"),
         "openai:default": { type: "api_key", provider: "openai", key: "test-key" },
       },
       usageStats: {
@@ -1961,16 +1837,7 @@ describe("runWithModelFallback", () => {
   });
 
   it("does not run a second candidate after a canonical hard run timeout", async () => {
-    const cfg = makeCfg({
-      agents: {
-        defaults: {
-          model: {
-            primary: "openai/gpt-5.4",
-            fallbacks: ["anthropic/claude-sonnet-4-6"],
-          },
-        },
-      },
-    });
+    const cfg = createModelFallbackConfig("openai/gpt-5.4", ["anthropic/claude-sonnet-4-6"]);
     const timeoutError = new AgentRunTerminalOutcomeError(
       new Error("attempt aborted before prompt submission"),
       {
@@ -1994,16 +1861,10 @@ describe("runWithModelFallback", () => {
   });
 
   it("aborts the fallback chain when the transcript writer claim rebounds", async () => {
-    const cfg = makeCfg({
-      agents: {
-        defaults: {
-          model: {
-            primary: "openai/gpt-5.4",
-            fallbacks: ["anthropic/claude-sonnet-4-6", "openai/gpt-4.1-mini"],
-          },
-        },
-      },
-    });
+    const cfg = createModelFallbackConfig("openai/gpt-5.4", [
+      "anthropic/claude-sonnet-4-6",
+      "openai/gpt-4.1-mini",
+    ]);
     const reboundError = new Error("session writer claim changed before transcript persistence");
     reboundError.name = "SessionTranscriptWriterClaimReboundError";
     const run = vi.fn().mockRejectedValue(reboundError);
@@ -2020,16 +1881,10 @@ describe("runWithModelFallback", () => {
   });
 
   it("does not retry a superseded harness session generation on fallback models", async () => {
-    const cfg = makeCfg({
-      agents: {
-        defaults: {
-          model: {
-            primary: "openai/gpt-5.4",
-            fallbacks: ["anthropic/claude-sonnet-4-6", "openai/gpt-4.1-mini"],
-          },
-        },
-      },
-    });
+    const cfg = createModelFallbackConfig("openai/gpt-5.4", [
+      "anthropic/claude-sonnet-4-6",
+      "openai/gpt-4.1-mini",
+    ]);
     const supersededError = new AgentHarnessSessionSupersededError(
       "Codex session generation is no longer current: session-old",
     );
@@ -2047,16 +1902,10 @@ describe("runWithModelFallback", () => {
   });
 
   it("does not repeat model-independent harness preflight on fallback models", async () => {
-    const cfg = makeCfg({
-      agents: {
-        defaults: {
-          model: {
-            primary: "openai/gpt-5.4",
-            fallbacks: ["anthropic/claude-sonnet-4-6", "openai/gpt-4.1-mini"],
-          },
-        },
-      },
-    });
+    const cfg = createModelFallbackConfig("openai/gpt-5.4", [
+      "anthropic/claude-sonnet-4-6",
+      "openai/gpt-4.1-mini",
+    ]);
     const preflightError = new AgentHarnessPreflightError(
       "Computer Use live test failed after 2 attempts: thread/start timed out",
     );
@@ -2174,16 +2023,10 @@ describe("runWithModelFallback", () => {
   });
 
   it("does not spend model fallbacks on sandbox provisioning failures", async () => {
-    const cfg = makeCfg({
-      agents: {
-        defaults: {
-          model: {
-            primary: "openai/gpt-5.4",
-            fallbacks: ["anthropic/claude-sonnet-4-6", "openai/gpt-4.1-mini"],
-          },
-        },
-      },
-    });
+    const cfg = createModelFallbackConfig("openai/gpt-5.4", [
+      "anthropic/claude-sonnet-4-6",
+      "openai/gpt-4.1-mini",
+    ]);
     const provisioningError = toSandboxProvisioningError(
       new Error("Sandbox image not found: openclaw-sandbox:analyst. Build or pull it first."),
       "docker",
@@ -2208,16 +2051,10 @@ describe("runWithModelFallback", () => {
   });
 
   it("aborts fallback when a provider-looking wrapper carries writer claim rebound", async () => {
-    const cfg = makeCfg({
-      agents: {
-        defaults: {
-          model: {
-            primary: "openai/gpt-5.4",
-            fallbacks: ["anthropic/claude-sonnet-4-6", "openai/gpt-4.1-mini"],
-          },
-        },
-      },
-    });
+    const cfg = createModelFallbackConfig("openai/gpt-5.4", [
+      "anthropic/claude-sonnet-4-6",
+      "openai/gpt-4.1-mini",
+    ]);
     const writerClaimRebound = new Error(
       "session writer claim changed before transcript persistence",
     );
@@ -2239,16 +2076,7 @@ describe("runWithModelFallback", () => {
   });
 
   it("aborts the fallback chain on stale gateway lifecycle errors (#116418)", async () => {
-    const cfg = makeCfg({
-      agents: {
-        defaults: {
-          model: {
-            primary: "ollama/qwen3:0.6b",
-            fallbacks: ["minimax/MiniMax-M3"],
-          },
-        },
-      },
-    });
+    const cfg = createModelFallbackConfig("ollama/qwen3:0.6b", ["minimax/MiniMax-M3"]);
     const lifecycleError = createAgentRunStaleLifecycleError();
     const wrappedLifecycleError = new Error("request was aborted", { cause: lifecycleError });
     wrappedLifecycleError.name = "AbortError";
@@ -2271,49 +2099,28 @@ describe("runWithModelFallback", () => {
   });
 
   it.each([
-    ["direct", () => new GatewayDrainingError()],
-    ["cause", () => new Error("session send failed", { cause: new GatewayDrainingError() })],
+    ["aborts fallback on direct gateway drain failures", () => new GatewayDrainingError()],
     [
-      "aggregate",
+      "aborts fallback on cause gateway drain failures",
+      () => new Error("session send failed", { cause: new GatewayDrainingError() }),
+    ],
+    [
+      "aborts fallback on aggregate gateway drain failures",
       () =>
         new AggregateError(
           [new Error("cleanup failed"), new GatewayDrainingError()],
           "agent run failed",
         ),
     ],
-  ])("aborts fallback on %s gateway drain failures", async (_label, makeError) => {
-    const error = makeError();
-    const run = vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce("too late");
-    const onError = vi.fn();
-    const onFallbackStep = vi.fn();
-
-    await expect(
-      runWithModelFallback({
-        cfg: undefined,
-        provider: "openai",
-        model: "gpt-5.6-sol",
-        fallbacksOverride: ["openai/gpt-5.4-mini"],
-        skipAuthProfileRuntime: true,
-        run,
-        onError,
-        onFallbackStep,
-      }),
-    ).rejects.toBe(error);
-    expect(run).toHaveBeenCalledTimes(1);
-    expect(onError).not.toHaveBeenCalled();
-    expect(onFallbackStep).not.toHaveBeenCalled();
-  });
-
-  it.each([
     [
-      "direct",
+      "aborts fallback on direct worker coordination failures",
       () =>
         Object.assign(new Error("device worker capacity remained full"), {
           name: "WorkerRunnerCapacityError",
         }),
     ],
     [
-      "wrapped",
+      "aborts fallback on wrapped worker coordination failures",
       () =>
         new Error("worker turn failed", {
           cause: Object.assign(new Error("device worker capacity remained full"), {
@@ -2322,14 +2129,14 @@ describe("runWithModelFallback", () => {
         }),
     ],
     [
-      "workspace reconciliation",
+      "aborts fallback on workspace reconciliation worker coordination failures",
       () =>
         Object.assign(new Error("cloud worker workspace result could not be reconciled"), {
           name: "WorkerWorkspaceReconciliationError",
         }),
     ],
     [
-      "wrapped workspace reconciliation",
+      "aborts fallback on wrapped workspace reconciliation worker coordination failures",
       () =>
         new Error("worker turn failed", {
           cause: Object.assign(new Error("cloud worker workspace result could not be reconciled"), {
@@ -2338,14 +2145,14 @@ describe("runWithModelFallback", () => {
         }),
     ],
     [
-      "active turn claim",
+      "aborts fallback on active turn claim worker coordination failures",
       () =>
         Object.assign(new Error("session already has an active turn claim"), {
           name: "ActiveTurnClaimError",
         }),
     ],
     [
-      "wrapped active turn claim",
+      "aborts fallback on wrapped active turn claim worker coordination failures",
       () =>
         new Error("worker turn failed", {
           cause: Object.assign(new Error("session already has an active turn claim"), {
@@ -2353,7 +2160,7 @@ describe("runWithModelFallback", () => {
           }),
         }),
     ],
-  ])("aborts fallback on %s worker coordination failures", async (_label, makeError) => {
+  ])("%s", async (_label, makeError) => {
     const error = makeError();
     const run = vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce("too late");
     const onError = vi.fn();
@@ -2397,16 +2204,7 @@ describe("runWithModelFallback", () => {
   });
 
   it("aborts the fallback chain on transcript continuation failures without candidate_failed attribution", async () => {
-    const cfg = makeCfg({
-      agents: {
-        defaults: {
-          model: {
-            primary: "openai/gpt-5.4",
-            fallbacks: ["anthropic/claude-sonnet-4-6"],
-          },
-        },
-      },
-    });
+    const cfg = createModelFallbackConfig("openai/gpt-5.4", ["anthropic/claude-sonnet-4-6"]);
     const continuationError = new TranscriptNotContinuableError("assistant");
     const run = vi.fn().mockRejectedValue(continuationError);
     const onFallbackStep = vi.fn();
@@ -2427,16 +2225,7 @@ describe("runWithModelFallback", () => {
   });
 
   it("still continues fallback on genuine timeout-shaped errors (#99943)", async () => {
-    const cfg = makeCfg({
-      agents: {
-        defaults: {
-          model: {
-            primary: "openai/gpt-5.4",
-            fallbacks: ["anthropic/claude-sonnet-4-6"],
-          },
-        },
-      },
-    });
+    const cfg = createModelFallbackConfig("openai/gpt-5.4", ["anthropic/claude-sonnet-4-6"]);
     const timeoutError = Object.assign(new Error("request timed out"), { name: "TimeoutError" });
     const run = vi.fn().mockRejectedValueOnce(timeoutError).mockResolvedValueOnce("ok");
 
@@ -2453,16 +2242,9 @@ describe("runWithModelFallback", () => {
   });
 
   it("continues to the next model after a Google invalid-key response (#114784)", async () => {
-    const cfg = makeCfg({
-      agents: {
-        defaults: {
-          model: {
-            primary: "google/gemini-3.1-pro-preview",
-            fallbacks: ["anthropic/claude-sonnet-4-6"],
-          },
-        },
-      },
-    });
+    const cfg = createModelFallbackConfig("google/gemini-3.1-pro-preview", [
+      "anthropic/claude-sonnet-4-6",
+    ]);
     const googleInvalidKey = new Error(
       "Google Generative AI API error (400): API key not valid. Please pass a valid API key. [code=INVALID_ARGUMENT]",
     );
@@ -2489,16 +2271,7 @@ describe("runWithModelFallback", () => {
   });
 
   it("keeps raw provider schema errors in fallback summaries", async () => {
-    const cfg = makeCfg({
-      agents: {
-        defaults: {
-          model: {
-            primary: "openai/gpt-5.4",
-            fallbacks: ["openai/gpt-5.4-mini"],
-          },
-        },
-      },
-    });
+    const cfg = createModelFallbackConfig("openai/gpt-5.4", ["openai/gpt-5.4-mini"]);
     const rawError =
       "400 The following tools cannot be used with reasoning.effort 'minimal': web_search.";
     const run = vi.fn().mockRejectedValue(
@@ -2532,16 +2305,9 @@ describe("runWithModelFallback", () => {
   });
 
   it("uses the candidate message instead of mismatched provider raw errors", async () => {
-    const cfg = makeCfg({
-      agents: {
-        defaults: {
-          model: {
-            primary: "anthropic/claude-opus-4-7",
-            fallbacks: ["google/gemini-3-pro-preview"],
-          },
-        },
-      },
-    });
+    const cfg = createModelFallbackConfig("anthropic/claude-opus-4-7", [
+      "google/gemini-3-pro-preview",
+    ]);
     const rawError = "You exceeded your current OpenAI quota.";
     const run = vi.fn().mockRejectedValue(
       new FailoverError("LLM request timed out.", {
@@ -2570,16 +2336,9 @@ describe("runWithModelFallback", () => {
   it.each([false, true])(
     "attributes the final failed candidate after fallback (watchdog=%s)",
     async (watchdog) => {
-      const cfg = makeCfg({
-        agents: {
-          defaults: {
-            model: {
-              primary: "anthropic/claude-opus-4-7",
-              fallbacks: ["google/gemini-3-pro-preview"],
-            },
-          },
-        },
-      });
+      const cfg = createModelFallbackConfig("anthropic/claude-opus-4-7", [
+        "google/gemini-3-pro-preview",
+      ]);
       const timeout = createCliTimeoutError(
         {},
         {
@@ -2617,16 +2376,7 @@ describe("runWithModelFallback", () => {
   );
 
   it("carries request attribution through exhausted fallback summaries", async () => {
-    const cfg = makeCfg({
-      agents: {
-        defaults: {
-          model: {
-            primary: "openai/gpt-5.4",
-            fallbacks: ["anthropic/claude-opus-4-6"],
-          },
-        },
-      },
-    });
+    const cfg = createModelFallbackConfig("openai/gpt-5.4", ["anthropic/claude-opus-4-6"]);
     const run = vi
       .fn()
       .mockRejectedValueOnce(Object.assign(new Error("rate limit exceeded"), { status: 429 }))
@@ -2654,16 +2404,7 @@ describe("runWithModelFallback", () => {
   });
 
   it("uses optional result classification to continue to configured fallbacks", async () => {
-    const cfg = makeCfg({
-      agents: {
-        defaults: {
-          model: {
-            primary: "openai/gpt-5.4",
-            fallbacks: ["anthropic/claude-haiku-3-5"],
-          },
-        },
-      },
-    });
+    const cfg = createModelFallbackConfig("openai/gpt-5.4", ["anthropic/claude-haiku-3-5"]);
     const run = vi
       .fn()
       .mockResolvedValueOnce({ payloads: [] })
@@ -2702,16 +2443,7 @@ describe("runWithModelFallback", () => {
   });
 
   it("continues fallback after embedded provider business-denial payloads", async () => {
-    const cfg = makeCfg({
-      agents: {
-        defaults: {
-          model: {
-            primary: "zai/glm-5.1",
-            fallbacks: ["openai/gpt-5.5"],
-          },
-        },
-      },
-    });
+    const cfg = createModelFallbackConfig("zai/glm-5.1", ["openai/gpt-5.5"]);
     const rawError =
       '{"success":false,"code":"CE-011","message":"当前ak因违规请求被禁止访问该模型"}';
     const run = vi
@@ -2755,16 +2487,7 @@ describe("runWithModelFallback", () => {
   });
 
   it("surfaces classified terminal results when no fallback remains", async () => {
-    const cfg = makeCfg({
-      agents: {
-        defaults: {
-          model: {
-            primary: "openai/gpt-5.4",
-            fallbacks: [],
-          },
-        },
-      },
-    });
+    const cfg = createModelFallbackConfig("openai/gpt-5.4", []);
     const run = vi.fn().mockResolvedValueOnce({ payloads: [] });
 
     const error = requireFailoverError(
@@ -3024,16 +2747,10 @@ describe("runWithModelFallback", () => {
   });
 
   it("continues fallback past a stale switch to an earlier candidate (#58496 family)", async () => {
-    const cfg = makeCfg({
-      agents: {
-        defaults: {
-          model: {
-            primary: "openai/gpt-4.1-mini",
-            fallbacks: ["anthropic/claude-haiku-3-5", "deepseek/deepseek-chat"],
-          },
-        },
-      },
-    });
+    const cfg = createModelFallbackConfig("openai/gpt-4.1-mini", [
+      "anthropic/claude-haiku-3-5",
+      "deepseek/deepseek-chat",
+    ]);
     const switchError = new LiveSessionModelSwitchError({
       provider: "openai",
       model: "gpt-4.1-mini",
@@ -3063,20 +2780,11 @@ describe("runWithModelFallback", () => {
   });
 
   it("jumps directly to a later live-session model switch candidate (#57471)", async () => {
-    const cfg = makeCfg({
-      agents: {
-        defaults: {
-          model: {
-            primary: "openai/gpt-4.1-mini",
-            fallbacks: [
-              "anthropic/claude-haiku-3-5",
-              "anthropic/claude-sonnet-4-6",
-              "openrouter/deepseek-chat",
-            ],
-          },
-        },
-      },
-    });
+    const cfg = createModelFallbackConfig("openai/gpt-4.1-mini", [
+      "anthropic/claude-haiku-3-5",
+      "anthropic/claude-sonnet-4-6",
+      "openrouter/deepseek-chat",
+    ]);
     const switchError = new LiveSessionModelSwitchError({
       provider: "anthropic",
       model: "claude-sonnet-4-6",
@@ -3112,16 +2820,7 @@ describe("runWithModelFallback", () => {
   });
 
   it("returns runtime-changing live switches to the retry owner before redirecting", async () => {
-    const cfg = makeCfg({
-      agents: {
-        defaults: {
-          model: {
-            primary: "anthropic/claude-haiku-3-5",
-            fallbacks: ["openai/gpt-5.6-luna"],
-          },
-        },
-      },
-    });
+    const cfg = createModelFallbackConfig("anthropic/claude-haiku-3-5", ["openai/gpt-5.6-luna"]);
     const switchError = new LiveSessionModelSwitchError({
       provider: "openai",
       model: "gpt-5.6-luna",
@@ -3285,16 +2984,9 @@ describe("runWithModelFallback", () => {
   });
 
   it("keeps configured fallbacks before configured primary for duplicate provider model ids", () => {
-    const cfg = makeCfg({
-      agents: {
-        defaults: {
-          model: {
-            primary: "deepseek/deepseek-v4-flash",
-            fallbacks: ["minimax-portal/MiniMax-M2.7"],
-          },
-        },
-      },
-    });
+    const cfg = createModelFallbackConfig("deepseek/deepseek-v4-flash", [
+      "minimax-portal/MiniMax-M2.7",
+    ]);
 
     expect(
       testing.resolveFallbackCandidates({
@@ -3310,16 +3002,10 @@ describe("runWithModelFallback", () => {
   });
 
   it("keeps configured fallback chain when current model is a configured fallback", () => {
-    const cfg = makeCfg({
-      agents: {
-        defaults: {
-          model: {
-            primary: "openai/gpt-4.1-mini",
-            fallbacks: ["anthropic/claude-haiku-3-5", "openrouter/deepseek-chat"],
-          },
-        },
-      },
-    });
+    const cfg = createModelFallbackConfig("openai/gpt-4.1-mini", [
+      "anthropic/claude-haiku-3-5",
+      "openrouter/deepseek-chat",
+    ]);
 
     expect(
       testing.resolveFallbackCandidates({
@@ -3334,17 +3020,35 @@ describe("runWithModelFallback", () => {
     ]);
   });
 
-  it("treats normalized default refs as primary and keeps configured fallback chain", () => {
-    const cfg = makeCfg({
-      agents: {
-        defaults: {
-          model: {
-            primary: "openai/gpt-4.1-mini",
-            fallbacks: ["anthropic/claude-haiku-3-5"],
-          },
-        },
-      },
+  it("plans requested and fallback routes without provider runtime hooks when normalization is disabled", () => {
+    const normalize = providerModelNormalizationMock.normalizeProviderModelIdWithRuntime;
+    normalize.mockImplementation(() => {
+      throw new Error("runtime hook entered pure planning");
     });
+    expect(
+      testing.resolveFallbackCandidates({
+        cfg: makeCfg({
+          agents: {
+            defaults: {
+              model: { primary: "custom/primary", fallbacks: ["custom/fallback"] },
+              models: { "custom/fallback": { alias: "other" } },
+            },
+          },
+        }),
+        provider: "custom",
+        model: "primary",
+        requestedRouteResolution: "resolved",
+        allowPluginNormalization: false,
+      }),
+    ).toEqual([
+      { provider: "custom", model: "primary" },
+      { provider: "custom", model: "fallback" },
+    ]);
+    expect(normalize).not.toHaveBeenCalled();
+  });
+
+  it("treats normalized default refs as primary and keeps configured fallback chain", () => {
+    const cfg = createModelFallbackConfig("openai/gpt-4.1-mini", ["anthropic/claude-haiku-3-5"]);
 
     expect(
       testing.resolveFallbackCandidates({
@@ -3531,16 +3235,7 @@ describe("runWithModelFallback", () => {
   });
 
   it("preserves auth mode metadata after fallback exhaustion", async () => {
-    const cfg = makeCfg({
-      agents: {
-        defaults: {
-          model: {
-            primary: "openai/gpt-5.6-sol",
-            fallbacks: ["openai/gpt-5.6-terra"],
-          },
-        },
-      },
-    });
+    const cfg = createModelFallbackConfig("openai/gpt-5.6-sol", ["openai/gpt-5.6-terra"]);
     const run = vi.fn().mockRejectedValue(
       new FailoverError("OpenAI OAuth unavailable", {
         reason: "auth_permanent",
@@ -3735,6 +3430,49 @@ describe("runWithModelFallback", () => {
     expect(store.order?.[provider]).toEqual(orderedProfileIds);
   });
 
+  it("keeps a pending OAuth user lock in the fallback auth scope", async () => {
+    const provider = `pending-lock-${crypto.randomUUID()}`;
+    const pendingProfileId = `${provider}:pending`;
+    const backupProfileId = `${provider}:backup`;
+    const pending = createOAuthRefreshFence({
+      profileId: pendingProfileId,
+      credential: {
+        type: "oauth",
+        provider,
+        access: "expired-access",
+        refresh: "refresh-token",
+        expires: 1,
+      },
+    });
+    const store: AuthProfileStore = {
+      version: AUTH_STORE_VERSION,
+      profiles: {
+        [pendingProfileId]: pending,
+        [backupProfileId]: { type: "api_key", provider, key: "backup-key" },
+        "fallback:default": { type: "api_key", provider: "fallback", key: "fallback-key" },
+      },
+      order: { [provider]: [backupProfileId] },
+      usageStats: {
+        [backupProfileId]: { cooldownUntil: Date.now() + 60_000 },
+      },
+    };
+    const run = vi.fn().mockResolvedValue("ok");
+
+    const result = await runWithStoredAuth({
+      cfg: makeProviderFallbackCfg(provider),
+      store,
+      provider,
+      run,
+      userLockedAuthProfileId: pendingProfileId,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(run.mock.calls).toMatchObject([[provider, "m1", { isFinalFallbackAttempt: false }]]);
+    expect(authRuntimeMock.runtime.maybeReprobeWhamBlockedProfiles).toHaveBeenCalledWith(
+      expect.objectContaining({ profileIds: [pendingProfileId, backupProfileId] }),
+    );
+  });
+
   it("does not skip a provider when only its user-pinned profile is cooling down", async () => {
     const provider = `pinned-cooldown-${crypto.randomUUID()}`;
     const pinnedProfileId = `${provider}:pinned`;
@@ -3894,11 +3632,7 @@ describe("runWithModelFallback", () => {
         },
       };
       if (kind === "cross-provider") {
-        store.profiles[userLockedAuthProfileId] = {
-          type: "api_key",
-          provider: "other",
-          key: "other-key",
-        };
+        store.profiles[userLockedAuthProfileId] = createApiKeyCredential("other", "other-key");
       } else if (kind === "ineligible") {
         store.profiles[userLockedAuthProfileId] = {
           type: "token",
@@ -4043,16 +3777,7 @@ describe("runWithModelFallback", () => {
   });
 
   it("keeps the configured-primary tail when inherited fallbacks stay unset", () => {
-    const cfg = makeCfg({
-      agents: {
-        defaults: {
-          model: {
-            primary: "openai/gpt-4.1-mini",
-            fallbacks: ["anthropic/claude-haiku-3-5"],
-          },
-        },
-      },
-    });
+    const cfg = createModelFallbackConfig("openai/gpt-4.1-mini", ["anthropic/claude-haiku-3-5"]);
 
     // Reply/command preparation must project inherited fallbacks to `undefined`
     // so the candidate resolver owns the ladder and appends the configured
@@ -4080,16 +3805,7 @@ describe("runWithModelFallback", () => {
 
   it("refreshes cooldown expiry from persisted auth state before fallback summary", async () => {
     const expiry = Date.now() + 120_000;
-    const cfg = makeCfg({
-      agents: {
-        defaults: {
-          model: {
-            primary: "anthropic/claude-opus-4-5",
-            fallbacks: ["openai/gpt-5.2"],
-          },
-        },
-      },
-    });
+    const cfg = createModelFallbackConfig("anthropic/claude-opus-4-5", ["openai/gpt-5.2"]);
     const store: AuthProfileStore = {
       version: AUTH_STORE_VERSION,
       profiles: {
@@ -4137,16 +3853,7 @@ describe("runWithModelFallback", () => {
     const now = Date.now();
     const unrelatedExpiry = now + 15_000;
     const relevantExpiry = now + 90_000;
-    const cfg = makeCfg({
-      agents: {
-        defaults: {
-          model: {
-            primary: "anthropic/claude-opus-4-5",
-            fallbacks: ["openai/gpt-5.2"],
-          },
-        },
-      },
-    });
+    const cfg = createModelFallbackConfig("anthropic/claude-opus-4-5", ["openai/gpt-5.2"]);
     const store: AuthProfileStore = {
       version: AUTH_STORE_VERSION,
       profiles: {
@@ -4275,16 +3982,7 @@ describe("runWithModelFallback", () => {
   });
 
   it("defaults provider/model when missing (regression #946)", () => {
-    const cfg = makeCfg({
-      agents: {
-        defaults: {
-          model: {
-            primary: "openai/gpt-4.1-mini",
-            fallbacks: [],
-          },
-        },
-      },
-    });
+    const cfg = createModelFallbackConfig("openai/gpt-4.1-mini", []);
 
     const candidates = testing.resolveFallbackCandidates({
       cfg,
@@ -4561,16 +4259,7 @@ describe("runWithModelFallback", () => {
   });
 
   it("appends the configured primary as a last fallback", async () => {
-    const cfg = makeCfg({
-      agents: {
-        defaults: {
-          model: {
-            primary: "openai/gpt-4.1-mini",
-            fallbacks: [],
-          },
-        },
-      },
-    });
+    const cfg = createModelFallbackConfig("openai/gpt-4.1-mini", []);
     const run = vi
       .fn()
       .mockRejectedValueOnce(Object.assign(new Error("timeout"), { code: "ETIMEDOUT" }))
@@ -4595,16 +4284,10 @@ describe("runWithModelFallback", () => {
       const cases = [
         {
           name: "same provider versioned session model",
-          cfg: makeCfg({
-            agents: {
-              defaults: {
-                model: {
-                  primary: "anthropic/claude-opus-4-6",
-                  fallbacks: ["anthropic/claude-sonnet-4-5", "google/gemini-2.5-flash"],
-                },
-              },
-            },
-          }),
+          cfg: createModelFallbackConfig("anthropic/claude-opus-4-6", [
+            "anthropic/claude-sonnet-4-5",
+            "google/gemini-2.5-flash",
+          ]),
           provider: "anthropic",
           model: "claude-sonnet-4-20250514",
           calls: [
@@ -4614,16 +4297,9 @@ describe("runWithModelFallback", () => {
         },
         {
           name: "same provider model version difference",
-          cfg: makeCfg({
-            agents: {
-              defaults: {
-                model: {
-                  primary: "anthropic/claude-opus-4-6",
-                  fallbacks: ["groq/llama-3.3-70b-versatile"],
-                },
-              },
-            },
-          }),
+          cfg: createModelFallbackConfig("anthropic/claude-opus-4-6", [
+            "groq/llama-3.3-70b-versatile",
+          ]),
           provider: "anthropic",
           model: "claude-opus-4-5",
           calls: [
@@ -4633,16 +4309,7 @@ describe("runWithModelFallback", () => {
         },
         {
           name: "different provider uses configured primary when no fallbacks exist",
-          cfg: makeCfg({
-            agents: {
-              defaults: {
-                model: {
-                  primary: "anthropic/claude-opus-4-6",
-                  fallbacks: [],
-                },
-              },
-            },
-          }),
+          cfg: createModelFallbackConfig("anthropic/claude-opus-4-6", []),
           provider: "openai",
           model: "gpt-4.1-mini",
           calls: [
@@ -4652,16 +4319,9 @@ describe("runWithModelFallback", () => {
         },
         {
           name: "exact primary uses fallbacks",
-          cfg: makeCfg({
-            agents: {
-              defaults: {
-                model: {
-                  primary: "anthropic/claude-opus-4-6",
-                  fallbacks: ["groq/llama-3.3-70b-versatile"],
-                },
-              },
-            },
-          }),
+          cfg: createModelFallbackConfig("anthropic/claude-opus-4-6", [
+            "groq/llama-3.3-70b-versatile",
+          ]),
           provider: "anthropic",
           model: "claude-opus-4-6",
           calls: [
@@ -4729,16 +4389,10 @@ describe("runWithModelFallback", () => {
 
     it("attempts same-provider fallbacks during transient cooldowns", async () => {
       const { dir } = await makeAuthStoreWithCooldown("anthropic", "timeout");
-      const cfg = makeCfg({
-        agents: {
-          defaults: {
-            model: {
-              primary: "anthropic/claude-opus-4-6",
-              fallbacks: ["anthropic/claude-sonnet-4-5", "groq/llama-3.3-70b-versatile"],
-            },
-          },
-        },
-      });
+      const cfg = createModelFallbackConfig("anthropic/claude-opus-4-6", [
+        "anthropic/claude-sonnet-4-5",
+        "groq/llama-3.3-70b-versatile",
+      ]);
 
       const run = vi.fn().mockResolvedValueOnce("sonnet success");
 
@@ -4796,16 +4450,10 @@ describe("runWithModelFallback", () => {
 
     it("skips same-provider models on persistent auth cooldowns", async () => {
       const { dir } = await makeAuthStoreWithCooldown("anthropic", "auth");
-      const cfg = makeCfg({
-        agents: {
-          defaults: {
-            model: {
-              primary: "anthropic/claude-opus-4-6",
-              fallbacks: ["anthropic/claude-sonnet-4-5", "groq/llama-3.3-70b-versatile"],
-            },
-          },
-        },
-      });
+      const cfg = createModelFallbackConfig("anthropic/claude-opus-4-6", [
+        "anthropic/claude-sonnet-4-5",
+        "groq/llama-3.3-70b-versatile",
+      ]);
 
       const run = vi.fn().mockResolvedValueOnce("groq success");
 
@@ -4843,16 +4491,10 @@ describe("runWithModelFallback", () => {
       };
       setAuthRuntimeStore(tmpDir, store);
 
-      const cfg = makeCfg({
-        agents: {
-          defaults: {
-            model: {
-              primary: "anthropic/claude-opus-4-6",
-              fallbacks: ["anthropic/claude-sonnet-4-5", "groq/llama-3.3-70b-versatile"],
-            },
-          },
-        },
-      });
+      const cfg = createModelFallbackConfig("anthropic/claude-opus-4-6", [
+        "anthropic/claude-sonnet-4-5",
+        "groq/llama-3.3-70b-versatile",
+      ]);
 
       const run = vi
         .fn()
@@ -4881,20 +4523,11 @@ describe("runWithModelFallback", () => {
 
     it("limits cooldown probes to one per provider before moving to cross-provider fallback", async () => {
       const { dir } = await makeAuthStoreWithCooldown("anthropic", "rate_limit");
-      const cfg = makeCfg({
-        agents: {
-          defaults: {
-            model: {
-              primary: "anthropic/claude-opus-4-6",
-              fallbacks: [
-                "anthropic/claude-sonnet-4-5",
-                "anthropic/claude-haiku-3-5",
-                "groq/llama-3.3-70b-versatile",
-              ],
-            },
-          },
-        },
-      });
+      const cfg = createModelFallbackConfig("anthropic/claude-opus-4-6", [
+        "anthropic/claude-sonnet-4-5",
+        "anthropic/claude-haiku-3-5",
+        "groq/llama-3.3-70b-versatile",
+      ]);
 
       const run = vi
         .fn()
@@ -4923,20 +4556,11 @@ describe("runWithModelFallback", () => {
 
     it("does not consume transient probe slot when first same-provider probe fails with model_not_found", async () => {
       const { dir } = await makeAuthStoreWithCooldown("anthropic", "rate_limit");
-      const cfg = makeCfg({
-        agents: {
-          defaults: {
-            model: {
-              primary: "anthropic/claude-opus-4-6",
-              fallbacks: [
-                "anthropic/claude-sonnet-4-5",
-                "anthropic/claude-haiku-3-5",
-                "groq/llama-3.3-70b-versatile",
-              ],
-            },
-          },
-        },
-      });
+      const cfg = createModelFallbackConfig("anthropic/claude-opus-4-6", [
+        "anthropic/claude-sonnet-4-5",
+        "anthropic/claude-haiku-3-5",
+        "groq/llama-3.3-70b-versatile",
+      ]);
 
       const run = vi
         .fn()

@@ -1,23 +1,33 @@
-import { html, nothing } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import { t } from "../i18n/index.ts";
-import type { SidebarRecentSession, SidebarSessionAttention } from "./app-sidebar-session-types.ts";
+import {
+  summarizeSidebarSessionAttention,
+  type SidebarRecentSession,
+  type SidebarSessionAttention,
+} from "./app-sidebar-session-types.ts";
 import { formatWebUiIconErrorText } from "./error-presentation.ts";
 import { icons } from "./icons.ts";
 import { resolveSessionAttentionIcon } from "./session-attention-icon-registry.ts";
+import { renderSessionGlyph } from "./session-glyph.ts";
 
-function keepQuestionFocusOnTooltip(event: FocusEvent) {
-  // The hand is its own tooltip target; bubbling would also open the row hovercard.
+function keepAttentionFocusOnTooltip(event: FocusEvent) {
+  // Attention is its own tooltip target; bubbling would also open the row hovercard.
+  event.stopPropagation();
+}
+
+function revealAttentionWithoutNavigation(event: MouseEvent) {
+  event.preventDefault();
   event.stopPropagation();
 }
 
 export function renderSessionAttentionIcon(
   attention: SidebarSessionAttention,
-  showQuestionTooltip = false,
+  showTooltip = false,
 ) {
   if (attention.kind === "none") {
     return nothing;
   }
-  const questionLabel = attention.kind === "question" ? sessionAttentionSubtitle(attention) : null;
+  const label = showTooltip ? sessionAttentionTooltipLabel(attention) : undefined;
   const icon =
     attention.kind === "question"
       ? icons.hand
@@ -29,16 +39,15 @@ export function renderSessionAttentionIcon(
   const content = html`<span
     class="sidebar-session-attention__icon sidebar-session-attention__icon--${attention.kind}"
     data-session-attention=${attention.kind}
-    role=${questionLabel ? "img" : nothing}
-    aria-label=${questionLabel ?? nothing}
-    aria-hidden=${questionLabel ? nothing : "true"}
-    tabindex=${questionLabel ? "0" : nothing}
-    @focusin=${questionLabel ? keepQuestionFocusOnTooltip : nothing}
+    role=${label ? "img" : nothing}
+    aria-label=${label ?? nothing}
+    aria-hidden=${label ? nothing : "true"}
+    tabindex=${label ? "0" : nothing}
+    @focusin=${label ? keepAttentionFocusOnTooltip : nothing}
+    @click=${label ? revealAttentionWithoutNavigation : nothing}
     >${icon}</span
   >`;
-  return showQuestionTooltip && questionLabel
-    ? html`<openclaw-tooltip .content=${questionLabel}>${content}</openclaw-tooltip>`
-    : content;
+  return showTooltip && label ? renderSessionAttentionTooltip(attention, content) : content;
 }
 
 export function sessionAttentionSubtitle(attention: SidebarSessionAttention): string | undefined {
@@ -48,9 +57,15 @@ export function sessionAttentionSubtitle(attention: SidebarSessionAttention): st
     case "approval":
       return t("sessionsView.waitingForApproval");
     case "error":
-      return t("sessionsView.runFailedReason", {
-        reason: formatWebUiIconErrorText(attention.reason),
-      });
+      return t(
+        attention.childLabel === undefined
+          ? "sessionsView.runFailedReason"
+          : "sessionsView.childRunFailedReason",
+        {
+          label: attention.childLabel ?? "",
+          reason: formatWebUiIconErrorText(attention.reason),
+        },
+      );
     case "agent":
       return attention.note;
     case "none":
@@ -60,30 +75,59 @@ export function sessionAttentionSubtitle(attention: SidebarSessionAttention): st
   }
 }
 
-export function renderSessionRunSpinner(showTitle = true, queued = false) {
-  const label = t(queued ? "sessionsView.statusQueued" : "sessionsView.activeRun");
-  return html`<span
-    class="session-run-spinner sidebar-recent-session__state${
-      queued ? " session-run-spinner--queued" : ""
-    }"
-    role="img"
-    aria-label=${label}
-    title=${showTitle ? label : nothing}
-  ></span>`;
-}
-
-export function sessionHasRunningWork(session: SidebarRecentSession): boolean {
-  return session.hasActiveRun || session.runningChildCount > 0;
-}
-
-export function renderSessionState(session: SidebarRecentSession, showTitle = true) {
-  if (sessionHasRunningWork(session)) {
-    return renderSessionRunSpinner(showTitle, session.hasActiveRun && session.status === "queued");
+function sessionAttentionTooltipParts(attention: SidebarSessionAttention) {
+  const subtitle = sessionAttentionSubtitle(attention);
+  if (attention.kind !== "question" && attention.kind !== "approval") {
+    return { status: subtitle };
   }
+  const requests = attention.requests.filter((request) => request.kind === attention.kind);
+  const count = requests.reduce((total, request) => total + request.count, 0);
+  return {
+    status:
+      count > 1
+        ? t(
+            attention.kind === "question"
+              ? "sessionsView.questionsNeedAnswer"
+              : "sessionsView.approvalsNeedApproval",
+            { count: String(count) },
+          )
+        : subtitle,
+    preview: requests[0]?.preview,
+    more: count > 1 ? t("sessionsView.attentionMore", { count: String(count - 1) }) : undefined,
+  };
+}
+
+export function sessionAttentionTooltipLabel(
+  attention: SidebarSessionAttention,
+): string | undefined {
+  const { status, preview, more } = sessionAttentionTooltipParts(attention);
+  return [status, preview, more].filter(Boolean).join("\n") || undefined;
+}
+
+function renderSessionAttentionTooltip(
+  attention: SidebarSessionAttention,
+  trigger: TemplateResult,
+) {
+  const { status, preview, more } = sessionAttentionTooltipParts(attention);
+  return html`<openclaw-tooltip .content=${preview ? "" : status} open-on-click>
+    ${trigger}
+    ${
+      preview
+        ? html`<span slot="content" class="sidebar-session-attention-tooltip">
+            <strong>${status}</strong>
+            <span class="sidebar-session-attention-tooltip__preview">${preview}</span>
+            ${more ? html`<span>${more}</span>` : nothing}
+          </span>`
+        : nothing
+    }
+  </openclaw-tooltip>`;
+}
+
+export function renderSessionIdleState(session: SidebarRecentSession) {
   if (!session.isChild) {
     return session.unread
       ? html`<span
-          class="session-unread-dot sidebar-recent-session__unread"
+          class="session-unread-dot"
           role="img"
           aria-label=${t("sessionsView.unread")}
         ></span>`
@@ -112,4 +156,85 @@ export function renderSessionState(session: SidebarRecentSession, showTitle = tr
         >${statusBadge.icon}</span
       >`
     : nothing;
+}
+
+/** Share compact indicators between rows and collapsed groups; attention outranks activity. */
+export function renderTeamSessionSlots(
+  rows: readonly SidebarRecentSession[],
+  includeChildren: boolean,
+  childCount: number,
+  groupConflicts = 0,
+) {
+  const attention = summarizeSidebarSessionAttention(
+    rows.flatMap((row) =>
+      includeChildren
+        ? [row.attention]
+        : [
+            row.ownAttention ?? row.attention,
+            ...(row.subagentSummary ? [row.subagentSummary.attention] : []),
+          ],
+    ),
+  );
+  const active = rows.reduce(
+    (n, row) =>
+      n +
+      Number(row.hasActiveRun) +
+      ((includeChildren ? row : row.subagentSummary)?.runningChildCount ?? 0),
+    0,
+  );
+  const queued = rows.reduce(
+    (n, row) =>
+      n +
+      Number(row.hasActiveRun && row.status === "queued") +
+      ((includeChildren ? row : row.subagentSummary)?.queuedChildCount ?? 0),
+    0,
+  );
+  const unread = rows.reduce(
+    (n, row) =>
+      n +
+      Number(row.unread) +
+      ((includeChildren ? row : row.subagentSummary)?.unreadChildCount ?? 0),
+    0,
+  );
+  const failed = rows.some(
+    (row) =>
+      row.status === "failed" ||
+      row.status === "timeout" ||
+      ((includeChildren ? row : row.subagentSummary)?.failedChildCount ?? 0) > 0,
+  );
+  const state =
+    attention && attention.kind !== "none"
+      ? renderSessionAttentionIcon(attention, true)
+      : failed
+        ? html`<span
+            class="sidebar-child-session__status--failed"
+            role="img"
+            aria-label=${t("sessionsView.statusFailed")}
+            >${icons.alertTriangle}</span
+          >`
+        : groupConflicts
+          ? html`<span
+              role="img"
+              aria-label=${t("sessionsView.cloudWorkerDescendantConflicts", { count: String(groupConflicts) })}
+              >${icons.globe}</span
+            >`
+          : active
+            ? renderSessionGlyph({ content: nothing, running: true, queued: active === queued })
+            : rows.length === 1 && rows[0]?.isChild
+              ? renderSessionIdleState(rows[0])
+              : nothing;
+  if ((!includeChildren || childCount === 0) && unread === 0 && state === nothing) {
+    return nothing;
+  }
+  return html`<span class="sidebar-session-team-state">
+    ${
+      (includeChildren && childCount > 0) || unread > 0
+        ? html`<span class="sidebar-session-team-state__counts">
+            ${includeChildren && childCount > 0 ? html`<span class="sidebar-child-session-toggle__count" role="img" aria-label=${`${t("sessionsView.childSessions")}: ${childCount}`}>${childCount}</span>` : nothing}
+            ${unread > 0 ? html`<span class=${unread === 1 ? "session-unread-dot" : "sidebar-agent-roster__unread"} role="img" aria-label=${t("sessionsView.unread")} title=${t("sessionsView.unread")}>${unread > 1 ? unread : nothing}</span>` : nothing}
+          </span>`
+        : nothing
+    }
+    ${state === nothing ? nothing : html`<span class="sidebar-session-team-state__status">${state}</span>`}
+  </span>`;
 }

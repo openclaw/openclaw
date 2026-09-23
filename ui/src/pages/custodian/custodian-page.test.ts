@@ -2,6 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import * as uuid from "../../lib/uuid.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { createContext, mountPage } from "./custodian-page.test-harness.ts";
 
@@ -10,7 +11,7 @@ describe("custodian page", () => {
     // A persisted companion id would turn every mount into a rejoin candidate;
     // tests exercising the rejoin path seed the key explicitly instead.
     localStorage.clear();
-    vi.spyOn(crypto, "randomUUID").mockReturnValue("00000000-0000-4000-8000-000000000001");
+    vi.spyOn(uuid, "generateUUID").mockReturnValue("00000000-0000-4000-8000-000000000001");
     window.history.replaceState({}, "", "/");
   });
 
@@ -140,16 +141,22 @@ describe("custodian page", () => {
     const { context } = createContext(request);
     const { page } = await mountPage(context);
 
-    await waitForFast(() =>
-      expect(page.querySelectorAll('.custodian__wizard-step input[type="radio"]')).toHaveLength(5),
-    );
+    const trigger = await waitForFast(() => {
+      const button = page.querySelector<HTMLButtonElement>(
+        ".custodian__wizard-step .picker-select__trigger",
+      );
+      expect(button).not.toBeNull();
+      return button!;
+    });
     expect(page.querySelector("openclaw-option-card")).toBeNull();
     expect(page.querySelector(".agent-chat__composer-shell")).toBeNull();
-    page
-      .querySelectorAll<HTMLInputElement>('.custodian__wizard-step input[type="radio"]')[4]!
+    trigger.click();
+    await waitForFast(() =>
+      expect(page.querySelectorAll('.custodian__wizard-step [role="option"]')).toHaveLength(5),
+    );
+    [...page.querySelectorAll<HTMLElement>('.custodian__wizard-step [role="option"]')]
+      .find((option) => option.textContent?.includes("Twitch"))!
       .click();
-    await page.updateComplete;
-    page.querySelector<HTMLButtonElement>(".custodian__wizard-step .btn.primary")!.click();
 
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
     await waitForFast(() =>

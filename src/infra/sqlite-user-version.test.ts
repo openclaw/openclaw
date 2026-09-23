@@ -71,6 +71,9 @@ describe("createNewerSqliteSchemaVersionError", () => {
     expect(error.message).toContain("this build supports 11");
     expect(error.message).toContain(describeRunningOpenClawBuild());
     expect(error.message).toContain("supports schema 12 or newer");
+    expect(error.message).toContain(
+      "restore your pre-update backup created with openclaw backup create.",
+    );
   });
 
   it("does not assert a downgrade the operator never performed", () => {

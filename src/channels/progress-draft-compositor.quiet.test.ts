@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { projectAgentToolActivity } from "../infra/agent-activity-events.js";
 import { createChannelProgressDraftCompositor } from "./progress-draft-compositor.js";
 
 function createTestProgressDraftCompositor(
@@ -24,7 +25,9 @@ describe("createChannelProgressDraftCompositor quiet drafts", () => {
       update,
     });
     try {
-      await progress.pushToolEvent({ name: "exec", toolCallId: "call-1", phase: "start" });
+      await progress.pushItemEvent(
+        projectAgentToolActivity({ name: "exec", toolCallId: "call-1", phase: "start" }),
+      );
       await progress.noteActivity({ startImmediately: true });
       expect(update.mock.lastCall?.[0]).toBe("Working");
       await progress.pushReasoningProgress("Checking the result");
@@ -81,7 +84,9 @@ describe("createChannelProgressDraftCompositor quiet drafts", () => {
       entry: { streaming: { mode: "progress", progress: { toolProgress: true } } },
       update,
     });
-    await progress.pushToolEvent({ name: "exec", toolCallId: "call-1", phase: "start" });
+    await progress.pushItemEvent(
+      projectAgentToolActivity({ name: "exec", toolCallId: "call-1", phase: "start" }),
+    );
     await progress.noteActivity({ startImmediately: true });
     expect(update.mock.lastCall?.[0]).toContain("🛠️ Exec");
     progress.cancel();
@@ -172,22 +177,207 @@ describe("createChannelProgressDraftCompositor quiet drafts", () => {
         );
         await progress.pushApprovalEvent({ phase: "resolved", approvalId: "approval-1" });
         expect(update.mock.lastCall?.[0]).not.toContain("Run checks");
-        await progress.pushCommandOutputEvent({
-          phase: "end",
-          toolCallId: "failed-command",
-          exitCode: 1,
-        });
-        expect(update.mock.lastCall?.[0]).toContain("exit 1");
-        expect(update.mock.lastCall?.[1]).toMatchObject({ flush: true });
-        await progress.pushCommandOutputEvent({
-          phase: "end",
-          toolCallId: "failed-command",
-          exitCode: 0,
-        });
-        expect(update.mock.lastCall?.[0]).not.toContain("exit 1");
       } finally {
         progress.cancel();
       }
     },
   );
+
+  it.each([undefined, false, true])(
+    "only starts a failed-command draft with tool progress enabled (%s)",
+    async (toolProgress) => {
+      const update = vi.fn();
+      const progress = createTestProgressDraftCompositor({
+        entry: {
+          streaming: {
+            mode: "progress",
+            progress: { toolProgress, maxLines: 3, label: false },
+          },
+        },
+        update,
+      });
+      try {
+        await progress.pushItemEvent(
+          projectAgentToolActivity({
+            name: "exec",
+            phase: "result",
+            toolCallId: "failed-command",
+            status: "failed",
+          }),
+        );
+        expect(progress.hasStarted).toBe(toolProgress === true);
+        if (toolProgress) {
+          expect(update.mock.lastCall?.[0]).toContain("failed");
+          expect(update.mock.lastCall?.[1]).toMatchObject({ flush: true });
+        } else {
+          expect(update).not.toHaveBeenCalled();
+          expect(progress.getSnapshot().lines).toEqual([]);
+        }
+      } finally {
+        progress.cancel();
+      }
+    },
+  );
+
+  it.each([
+    { presentation: undefined, toolProgress: false, maxLines: 1 },
+    { presentation: undefined, toolProgress: false, maxLines: 3 },
+    { presentation: "summary" as const, toolProgress: false, maxLines: 1 },
+    { presentation: "summary" as const, toolProgress: true, maxLines: 3 },
+  ])(
+    "keeps failed commands out of quiet plans through reasoning and commentary ($presentation, $toolProgress, $maxLines)",
+    async ({ presentation, toolProgress, maxLines }) => {
+      const update = vi.fn();
+      const progress = createTestProgressDraftCompositor({
+        presentation,
+        entry: {
+          streaming: {
+            mode: "progress",
+            progress: { toolProgress, maxLines, commentary: true, label: false },
+          },
+        },
+        update,
+      });
+      try {
+        await progress.pushPlanProgress([
+          { step: "Inspect", status: "completed" },
+          { step: "Repair", status: "in_progress" },
+          { step: "Verify", status: "pending" },
+        ]);
+        const planText = update.mock.lastCall?.[0];
+        await progress.pushItemEvent(
+          projectAgentToolActivity({
+            name: "exec",
+            phase: "result",
+            toolCallId: "failed-command",
+            status: "failed",
+          }),
+        );
+        expect(update.mock.lastCall?.[0]).toBe(planText);
+        expect(progress.getSnapshot().lines).toEqual([]);
+        for (let index = 0; index < 5; index++) {
+          await progress.pushToolEvent({
+            name: "read",
+            toolCallId: `read-${index}`,
+            phase: "start",
+          });
+          await progress.pushReasoningProgress(`Thinking ${index}`, { snapshot: true });
+          expect(update.mock.lastCall?.[0]).not.toContain("failed");
+          await progress.pushCommentaryProgress(`Inspecting file ${index}`, {
+            itemId: `comment-${index}`,
+          });
+          expect(update.mock.lastCall?.[0]).not.toContain("failed");
+        }
+        expect(update.mock.lastCall?.[0].split("\n").filter(Boolean).length).toBeLessThanOrEqual(
+          maxLines,
+        );
+        await progress.pushItemEvent(
+          projectAgentToolActivity({
+            name: "exec",
+            phase: "result",
+            toolCallId: "failed-command",
+            status: "completed",
+          }),
+        );
+        expect(update.mock.lastCall?.[0]).not.toContain("failed");
+      } finally {
+        progress.cancel();
+      }
+    },
+  );
+
+  it.each(["failed", "error", "blocked"])(
+    "flushes and retains explicit %s status while tool progress is enabled",
+    async (status) => {
+      const update = vi.fn();
+      const progress = createTestProgressDraftCompositor({
+        entry: {
+          streaming: {
+            mode: "progress",
+            progress: { toolProgress: true, maxLines: 3, commentary: true, label: false },
+          },
+        },
+        update,
+      });
+      try {
+        await progress.pushPlanProgress([
+          { step: "Inspect", status: "completed" },
+          { step: "Repair", status: "in_progress" },
+          { step: "Verify", status: "pending" },
+        ]);
+        await progress.pushItemEvent({
+          itemId: "attention-item",
+          kind: "tool",
+          name: "read",
+          status,
+          progressText: "Check access",
+        });
+        expect(update.mock.lastCall?.[0]).toContain("Check access");
+        expect(update.mock.lastCall?.[1]).toMatchObject({ flush: true });
+        for (let index = 0; index < 5; index++) {
+          await progress.pushToolEvent({
+            name: "read",
+            toolCallId: `read-${index}`,
+            phase: "start",
+          });
+          await progress.pushCommentaryProgress(`Inspecting file ${index}`, {
+            itemId: `comment-${index}`,
+          });
+        }
+        expect(update.mock.lastCall?.[0]).toContain("Check access");
+        expect(update.mock.lastCall?.[0].split("\n").filter(Boolean).length).toBeLessThanOrEqual(3);
+      } finally {
+        progress.cancel();
+      }
+    },
+  );
+
+  it("lets new activity replace completed work without collapsing the plan", async () => {
+    const update = vi.fn();
+    const progress = createTestProgressDraftCompositor({
+      entry: {
+        streaming: {
+          mode: "progress",
+          progress: { toolProgress: true, maxLines: 8, commentary: true, label: false },
+        },
+      },
+      update,
+    });
+    try {
+      await progress.pushPlanProgress([
+        { step: "Inspect", status: "completed" },
+        { step: "Repair", status: "in_progress" },
+        { step: "Verify", status: "pending" },
+        { step: "Audit", status: "pending" },
+        { step: "Ship", status: "pending" },
+      ]);
+      for (let index = 1; index <= 8; index++) {
+        await progress.pushItemEvent(
+          projectAgentToolActivity({
+            name: "exec",
+            phase: "result",
+            toolCallId: `completed-${index}`,
+            status: "completed",
+          }),
+        );
+      }
+      await progress.pushItemEvent(
+        projectAgentToolActivity({ name: "read", toolCallId: "new-work", phase: "start" }),
+      );
+
+      const rendered = update.mock.lastCall?.[0] ?? "";
+      for (const step of ["Inspect", "Repair", "Verify", "Audit", "Ship"]) {
+        expect(rendered).toContain(step);
+      }
+      expect(rendered).toContain("Read");
+      expect(
+        progress
+          .getSnapshot()
+          .lines.some((line) => typeof line !== "string" && line.id === "tool:completed-1"),
+      ).toBe(false);
+      expect(progress.getSnapshot().lines).toHaveLength(8);
+    } finally {
+      progress.cancel();
+    }
+  });
 });

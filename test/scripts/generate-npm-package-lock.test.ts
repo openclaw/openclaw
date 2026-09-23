@@ -54,6 +54,23 @@ describe("generate-npm-package-lock", () => {
     expect(normalized.peerDependencies).toEqual({});
   });
 
+  it("omits package platform constraints from the portable lock-generation manifest", () => {
+    const normalized = packageJsonForNpmLock(
+      {
+        os: ["darwin"],
+        cpu: ["arm64"],
+        libc: ["glibc"],
+        dependencies: { chalk: "5.6.2" },
+      },
+      {},
+    );
+
+    expect(normalized).not.toHaveProperty("os");
+    expect(normalized).not.toHaveProperty("cpu");
+    expect(normalized).not.toHaveProperty("libc");
+    expect(normalized.dependencies).toEqual({ chalk: "5.6.2" });
+  });
+
   it("runs npm package-lock generation through cmd.exe for Windows npm shims", () => {
     const execPath = "C:\\nodejs\\node.exe";
     const npmCmdPath = path.win32.resolve(path.win32.dirname(execPath), "npm.cmd");
@@ -110,6 +127,31 @@ describe("generate-npm-package-lock", () => {
     });
   });
 
+  it("preserves range selectors containing comparison operators", () => {
+    expect(
+      normalizeOverrides({
+        "undici@>=7.0.0 <8.0.0": "7.29.1",
+        "undici@>=8.0.0 <8.9.0": "8.10.2",
+      }),
+    ).toEqual({
+      "undici@>=7.0.0 <8.0.0": "7.29.1",
+      "undici@>=8.0.0 <8.9.0": "8.10.2",
+    });
+  });
+
+  it("preserves version selectors on both sides of parent-child overrides", () => {
+    expect(
+      normalizeOverrides({
+        "bar>foo@1": "2",
+        "bar@>=1 <2>@scope/unused": "-",
+        "bar@>=1 <2>@scope/foo@>=3 <4": "4",
+      }),
+    ).toEqual({
+      bar: { "foo@1": "2" },
+      "bar@>=1 <2": { "@scope/foo@>=3 <4": "4" },
+    });
+  });
+
   it.each([false, true])(
     "retains parent and child overrides during normalization (childrenFirst=%s)",
     (childrenFirst) => {
@@ -147,6 +189,50 @@ describe("generate-npm-package-lock", () => {
     expect(() => resolveNpmLockJobs("0", {})).toThrow("invalid OPENCLAW_NPM_LOCK_JOBS: 0");
     expect(() => resolveNpmLockJobs("17", {})).toThrow("maximum is 16");
   });
+
+  it.each([1, 2])(
+    "loads source policy in workers independently of tooling policy (jobs=%s)",
+    (jobs) => {
+      const root = tempDirs.make("openclaw-npm-source-lock-");
+      const invalidRoot = path.join(root, "invalid-tooling-policy");
+      mkdirSync(invalidRoot);
+      writeFileSync(path.join(invalidRoot, "pnpm-lock.yaml"), "invalid: [");
+      writeFileSync(
+        path.join(root, "pnpm-lock.yaml"),
+        JSON.stringify({
+          packages: { "fixture-dep@1.0.0": { resolution: { integrity: "sha512-fixture" } } },
+        }),
+      );
+      writeFileSync(path.join(root, "pnpm-workspace.yaml"), "{}\n");
+      writeFileSync(
+        path.join(root, "package.json"),
+        JSON.stringify({ name: "source-fixture", version: "1.0.0" }),
+      );
+      const script = `import { generateNpmPackageLocks } from ${JSON.stringify(new URL("../../scripts/generate-npm-package-lock.mts", import.meta.url).href)};
+      console.log(JSON.stringify(await generateNpmPackageLocks({ rootDir: ${JSON.stringify(root)}, packageDirs: [${JSON.stringify(root)}], jobs: ${jobs} })));`;
+      const scriptPath = path.join(root, "generate.mjs");
+      writeFileSync(scriptPath, script);
+      const result = spawnSync(
+        process.execPath,
+        ["--import", import.meta.resolve("tsx"), scriptPath],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            OPENCLAW_NPM_PACKAGE_LOCK_REPO_ROOT: invalidRoot,
+            npm_config_offline: "true",
+          },
+        },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      const [text] = JSON.parse(result.stdout);
+      expect(JSON.parse(text)).toMatchObject({
+        name: "source-fixture",
+        version: "1.0.0",
+        lockfileVersion: 3,
+      });
+    },
+  );
 
   it("accepts strict npm-lock command timeout and buffer overrides", () => {
     expect(
@@ -703,6 +789,16 @@ describe("generate-npm-package-lock", () => {
         "extensions/acpx/deps/local-runtime/package.json",
       ]).map(repoRelativePath),
     ).toEqual(["extensions/acpx"]);
+  });
+
+  it("does not normalize raw Git filename boundaries into package manifests", () => {
+    expect(
+      npmLockPackageDirsForChangedPaths([
+        " extensions/acpx/package.json",
+        "extensions/acpx/package.json ",
+        String.raw`extensions\acpx\package.json`,
+      ]),
+    ).toEqual([]);
   });
 
   it("targets the changed publishable gateway protocol manifest", () => {

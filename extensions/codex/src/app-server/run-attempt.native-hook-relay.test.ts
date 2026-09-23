@@ -12,11 +12,10 @@ import {
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import {
-  createEmptyPluginRegistry,
   createMockPluginRegistry,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import * as approvalBridge from "./approval-bridge.js";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { CodexAppServerRpcError } from "./client.js";
@@ -38,10 +37,6 @@ import {
 } from "./session-binding.test-helpers.js";
 
 setupRunAttemptTestHooks();
-
-afterEach(() => {
-  setActivePluginRegistry(createEmptyPluginRegistry());
-});
 
 const DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT = JSON.stringify({
   "features.standalone_web_search": false,
@@ -246,7 +241,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     expect(preToolUseState?.trusted_hash).toMatch(/^sha256:[a-f0-9]{64}$/);
     const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeDefined();
-    nativeHookRelayUnregisterQueue.flush();
+    await nativeHookRelayUnregisterQueue.flush();
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
   });
 
@@ -347,11 +342,11 @@ describe("runCodexAppServerAttempt native hook relay", () => {
 
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
-    nativeHookRelayUnregisterQueue.flush();
+    await nativeHookRelayUnregisterQueue.flush();
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
   });
 
-  it("auto-answers defensive yolo command and workspace file approvals at their safe scopes", async () => {
+  it("auto-answers defensive yolo command and workspace file approvals once", async () => {
     const approvalSpy = vi.spyOn(approvalBridge, "handleCodexAppServerApprovalRequest");
     const beforeToolCall = vi.fn(() => undefined);
     initializeGlobalHookRunner(
@@ -408,7 +403,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
           grantRoot: workspaceDir,
         },
       }),
-    ).resolves.toEqual({ decision: "acceptForSession" });
+    ).resolves.toEqual({ decision: "accept" });
 
     expect(beforeToolCall).toHaveBeenCalledWith(
       expect.objectContaining({ toolName: "apply_patch" }),
@@ -417,7 +412,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
     closeHostCapabilities();
-    nativeHookRelayUnregisterQueue.flush();
+    await nativeHookRelayUnregisterQueue.flush();
   });
 
   it("fails a defensive unattended yolo approval immediately when the hook requires review", async () => {
@@ -456,7 +451,8 @@ describe("runCodexAppServerAttempt native hook relay", () => {
         threadId: "thread-1",
         turnId: "turn-1",
         itemId: "cmd-policy-unattended",
-        command: "gh run view 1",
+        // Executable binding must reach the hook without requiring an unrelated CLI installation.
+        command: "node --version",
         cwd: workspaceDir,
       },
     });
@@ -478,7 +474,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
     closeHostCapabilities();
-    nativeHookRelayUnregisterQueue.flush();
+    await nativeHookRelayUnregisterQueue.flush();
   });
 
   it.each([
@@ -518,7 +514,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
 
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
-    nativeHookRelayUnregisterQueue.flush();
+    await nativeHookRelayUnregisterQueue.flush();
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
   });
 
@@ -581,7 +577,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
 
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
-    nativeHookRelayUnregisterQueue.flush();
+    await nativeHookRelayUnregisterQueue.flush();
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
   });
 
@@ -614,7 +610,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
 
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
-    nativeHookRelayUnregisterQueue.flush();
+    await nativeHookRelayUnregisterQueue.flush();
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
   });
 
@@ -648,7 +644,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
 
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
-    nativeHookRelayUnregisterQueue.flush();
+    await nativeHookRelayUnregisterQueue.flush();
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
   });
 
@@ -690,7 +686,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
       await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
       completed = true;
       await run;
-      nativeHookRelayUnregisterQueue.flush();
+      await nativeHookRelayUnregisterQueue.flush();
       expect(
         nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId),
       ).toBeUndefined();
@@ -785,7 +781,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
         nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(firstRelayId)?.runId,
       ).toBe(sameExecutionSession ? "run-2" : "run-1");
 
-      nativeHookRelayUnregisterQueue.flush();
+      await nativeHookRelayUnregisterQueue.flush();
       expect(
         nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(secondRelayId)?.runId,
       ).toBe("run-2");
@@ -795,7 +791,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
       expect(
         nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(secondRelayId)?.runId,
       ).toBe("run-2");
-      nativeHookRelayUnregisterQueue.flush();
+      await nativeHookRelayUnregisterQueue.flush();
       expect(
         nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(secondRelayId),
       ).toBeUndefined();
@@ -862,7 +858,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     expect((await readCodexAppServerBinding(sessionFile))?.nativeHookRelayGeneration).toBe(
       currentGeneration,
     );
-    nativeHookRelayUnregisterQueue.flush();
+    await nativeHookRelayUnregisterQueue.flush();
   });
 
   it("rotates native hook relay generations when an existing binding starts a fresh thread", async () => {
@@ -911,7 +907,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     expect((await readCodexAppServerBinding(sessionFile))?.nativeHookRelayGeneration).toBe(
       currentGeneration,
     );
-    nativeHookRelayUnregisterQueue.flush();
+    await nativeHookRelayUnregisterQueue.flush();
   });
 
   it("rotates native hook relay generations when resume fails over to a fresh thread", async () => {
@@ -970,7 +966,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     expect((await readCodexAppServerBinding(sessionFile))?.nativeHookRelayGeneration).toBe(
       currentGeneration,
     );
-    nativeHookRelayUnregisterQueue.flush();
+    await nativeHookRelayUnregisterQueue.flush();
   });
 
   it("sends clearing Codex native hook config when the relay is disabled", async () => {
@@ -1080,7 +1076,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
         },
       }),
     ).rejects.toThrow("native hook relay not found");
-    nativeHookRelayUnregisterQueue.flush();
+    await nativeHookRelayUnregisterQueue.flush();
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
   });
 });

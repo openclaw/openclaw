@@ -8,7 +8,7 @@ import { captureEnv } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEEPINFRA_BASE_URL } from "./media-models.js";
 import { applyDeepInfraConfig } from "./onboard.js";
-import { DEEPINFRA_DEFAULT_MODEL_REF, DEEPINFRA_MODEL_CATALOG } from "./provider-models.js";
+import { DEEPINFRA_DEFAULT_MODEL_REF, DEEPINFRA_MODEL_CATALOG } from "./provider-static-catalog.js";
 
 const { resolveEnvApiKey } = providerAuth;
 

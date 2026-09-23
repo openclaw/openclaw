@@ -1,4 +1,3 @@
-// Slack plugin module implements reactions behavior.
 import type { AllMiddlewareArgs, SlackEventMiddlewareArgs } from "@slack/bolt";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
@@ -56,20 +55,24 @@ export function registerSlackReactionEvents(params: {
     eventId: string,
   ) => {
     try {
+      const runtimeContext = await params.ctx.readRuntimeContext();
       const item = event.item;
       if (!item || item.type !== "message") {
         return;
       }
-      if (ctx.reactionMode === "off") {
+      if (runtimeContext.reactionMode === "off") {
         return;
       }
-      if (ctx.reactionMode === "own" && (!ctx.botUserId || event.item_user !== ctx.botUserId)) {
+      if (
+        runtimeContext.reactionMode === "own" &&
+        (!runtimeContext.botUserId || event.item_user !== runtimeContext.botUserId)
+      ) {
         return;
       }
       trackEvent?.();
 
       const ingressContext = await authorizeAndResolveSlackSystemEventContext({
-        ctx,
+        ctx: runtimeContext,
         senderId: event.user,
         channelId: item.channel,
         eventKind: "reaction",
@@ -88,7 +91,7 @@ export function registerSlackReactionEvents(params: {
       const [actorInfo, authorInfo] = await Promise.all([actorInfoPromise, authorInfoPromise]);
       if (
         !shouldEmitSlackReactionNotification({
-          ctx,
+          ctx: runtimeContext,
           event,
           eventScope,
           actorName: actorInfo?.name,

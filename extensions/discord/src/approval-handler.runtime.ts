@@ -1,12 +1,12 @@
-// Discord plugin module implements approval handler behavior.
 import { ButtonStyle } from "discord-api-types/v10";
-import type {
-  ApprovalViewModel,
-  ChannelApprovalCapabilityHandlerContext,
-  PendingApprovalView,
+import {
+  createChannelApprovalNativeRuntimeAdapter,
+  type ApprovalViewModel,
+  type ChannelApprovalCapabilityHandlerContext,
+  type PendingApprovalView,
 } from "openclaw/plugin-sdk/approval-handler-runtime";
-import { createChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
 import type { ExecApprovalActionDescriptor } from "openclaw/plugin-sdk/approval-reply-runtime";
+import { formatChannelApprovalResolvedLabel } from "openclaw/plugin-sdk/approval-runtime";
 import type {
   DiscordExecApprovalConfig,
   OpenClawConfig,
@@ -18,6 +18,7 @@ import {
   DISCORD_APPROVAL_ALLOWED_MENTIONS,
   formatDiscordApprovalDisplayValue,
 } from "./approval-message-safety.js";
+import { discordApprovalMessageUpdates } from "./approval-message-updates.js";
 import { shouldHandleDiscordApprovalRequest } from "./approval-shared.js";
 import { isDiscordExecApprovalClientEnabled } from "./exec-approvals.js";
 import {
@@ -266,19 +267,15 @@ function createApprovalContainer(params: {
         pending ? 500 : 300,
       );
   const decisionLabel =
-    view.phase !== "resolved"
-      ? undefined
-      : systemAgent && view.terminalStatus === "cancelled"
-        ? "Cancelled"
-        : systemAgent && view.applicationStatus === "applied"
-          ? "Applied"
-          : systemAgent && view.applicationStatus === "not-applied"
-            ? "Not applied"
-            : view.decision === "allow-once"
-              ? "Allowed (once)"
-              : view.decision === "allow-always"
-                ? "Allowed (always)"
-                : "Denied";
+    view.phase === "resolved"
+      ? formatChannelApprovalResolvedLabel(view, (decision) =>
+          decision === "allow-once"
+            ? "Allowed (once)"
+            : decision === "allow-always"
+              ? "Allowed (always)"
+              : "Denied",
+        )
+      : undefined;
   const title = pending
     ? `${approvalLabel} Approval Required`
     : `${approvalLabel} Approval: ${view.phase === "expired" ? "Expired" : decisionLabel}`;
@@ -344,12 +341,14 @@ async function updateMessage(params: {
       accountId: params.accountId,
     });
     const payload = buildExecApprovalPayload(params.container);
-    await discordRequest(
-      () =>
-        editChannelMessage(rest, params.channelId, params.messageId, {
-          body: stripUndefinedFields(serializePayload(payload)),
-        }),
-      "update-approval",
+    await discordApprovalMessageUpdates.enqueue(params.messageId, () =>
+      discordRequest(
+        () =>
+          editChannelMessage(rest, params.channelId, params.messageId, {
+            body: stripUndefinedFields(serializePayload(payload)),
+          }),
+        "update-approval",
+      ),
     );
   } catch (err) {
     logError(`discord approvals: failed to update message: ${String(err)}`);
@@ -375,9 +374,11 @@ async function finalizeMessage(params: {
       token: params.token,
       accountId: params.accountId,
     });
-    await discordRequest(
-      () => deleteChannelMessage(rest, params.channelId, params.messageId),
-      "delete-approval",
+    await discordApprovalMessageUpdates.enqueue(params.messageId, () =>
+      discordRequest(
+        () => deleteChannelMessage(rest, params.channelId, params.messageId),
+        "delete-approval",
+      ),
     );
   } catch (err) {
     logError(`discord approvals: failed to delete message: ${String(err)}`);

@@ -64,8 +64,11 @@ export type TerminalUploadParams = Static<typeof TerminalUploadParamsSchema>;
 export const TerminalUploadResultSchema = closedObject({
   path: NonEmptyString,
   size: Type.Integer({ minimum: 0, maximum: MAX_TERMINAL_UPLOAD_BYTES }),
+  /** Explicit path insertion contract for a native CLI rather than a shell. */
+  uploadPathStyle: Type.Optional(Type.Literal("native")),
 });
 export type TerminalUploadResult = Static<typeof TerminalUploadResultSchema>;
+export type TerminalUploadPathStyle = NonNullable<TerminalUploadResult["uploadPathStyle"]>;
 
 /** Resizes the PTY grid after the client viewport changes. */
 export const TerminalResizeParamsSchema = closedObject({

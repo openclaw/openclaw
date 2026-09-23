@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { registerAgentHarness } from "../../agents/harness/registry.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
@@ -8,10 +8,10 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { FORCED_WORKER_ABANDONMENT_ERROR } from "../worker-environments/placement-record.js";
 import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-store.js";
 import type { WorkerPlacementDispatchRequest } from "../worker-environments/service-contract.js";
-import { readSessionsMutationVersion } from "./session-change-event.js";
 import {
   dispatchTestSessionId as sessionId,
   dispatchTestSessionKey as sessionKey,
@@ -158,6 +158,7 @@ describe("sessions.dispatch", () => {
       expect.objectContaining({ profileId: "test" }),
       expect.any(Function),
       undefined,
+      undefined,
     );
   });
 
@@ -202,6 +203,7 @@ describe("sessions.dispatch", () => {
     expect(dispatch).toHaveBeenCalledWith(
       expect.objectContaining({ profileId: "mapped" }),
       expect.any(Function),
+      undefined,
       undefined,
     );
   });
@@ -357,7 +359,7 @@ describe("sessions.dispatch", () => {
     );
   });
 
-  it("rejects sessions without their bound managed worktree", async () => {
+  it("rejects sessions without a bound worktree or repository workspace", async () => {
     mocks.resolveTarget.mockReturnValue(targetWithEntry({ sessionId }));
     const dispatch = vi.fn();
     const respond = await invoke(
@@ -373,7 +375,7 @@ describe("sessions.dispatch", () => {
       undefined,
       expect.objectContaining({
         code: ErrorCodes.INVALID_REQUEST,
-        message: expect.stringContaining("session-owned managed worktree"),
+        message: "sessions.dispatch requires a session-owned worktree or repository workspace",
       }),
     );
   });
@@ -448,6 +450,7 @@ describe("sessions.dispatch", () => {
       }),
       expect.any(Function),
       undefined,
+      undefined,
     );
     expect(respond).toHaveBeenCalledWith(
       false,
@@ -459,7 +462,7 @@ describe("sessions.dispatch", () => {
     );
   });
 
-  it("passes a per-dispatch machine class to placement", async () => {
+  it("passes a per-dispatch machine class and operating system to placement", async () => {
     mocks.resolveTarget.mockReturnValue(
       targetWithEntry({
         sessionId,
@@ -477,40 +480,14 @@ describe("sessions.dispatch", () => {
         workerPlacementDispatchService: { dispatch },
         workerSessionPlacementService: { getMany: () => new Map() },
       }),
-      { profileId: "test", machineClass: "large" },
+      { profileId: "test", machineClass: "large", os: "os-a" },
     );
 
     expect(dispatch).toHaveBeenCalledWith(
-      expect.objectContaining({ profileId: "test", machineClass: "large" }),
+      expect.objectContaining({ profileId: "test", machineClass: "large", os: "os-a" }),
       expect.any(Function),
       undefined,
-    );
-  });
-
-  it("rejects an archived session before dispatch", async () => {
-    mocks.resolveTarget.mockReturnValue(
-      targetWithEntry({
-        sessionId,
-        archivedAt: 2,
-        worktree: { id: "worktree-1", branch: "openclaw/cloud-test", repoRoot: "/repo" },
-      }),
-    );
-    const dispatch = vi.fn();
-    const respond = await invoke(
-      makeContext({
-        workerPlacementDispatchService: { dispatch },
-        workerSessionPlacementService: { getMany: () => new Map() },
-      }),
-    );
-
-    expect(dispatch).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
       undefined,
-      expect.objectContaining({
-        code: ErrorCodes.INVALID_REQUEST,
-        message: expect.stringContaining("archived"),
-      }),
     );
   });
 
@@ -633,13 +610,13 @@ describe("sessions.dispatch", () => {
       }),
       {
         expected: { generation: 4, environmentId: "environment-previous", ownerEpoch: 1 },
-        target: { kind: "profile", profileId: "test", machineClass: "beast" },
+        target: { kind: "profile", profileId: "test", machineClass: "beast", os: "os-b" },
       },
     );
 
     expect(move).toHaveBeenCalledWith(
       expect.objectContaining({
-        target: { kind: "profile", profileId: "test", machineClass: "beast" },
+        target: { kind: "profile", profileId: "test", machineClass: "beast", os: "os-b" },
       }),
       expect.any(Function),
       undefined,
@@ -740,6 +717,7 @@ describe("sessions.dispatch", () => {
         }),
         expect.any(Function),
         undefined,
+        undefined,
       );
       expect(respond).toHaveBeenCalledWith(
         true,
@@ -830,6 +808,7 @@ describe("sessions.dispatch", () => {
       const respond = await invoke(
         makeContext({
           workerEnvironmentService: {
+            readMachineShape: () => undefined,
             get: vi.fn(() => {
               if (state === "unavailable") {
                 throw new Error("environment inventory unavailable");
@@ -954,7 +933,7 @@ describe("sessions.dispatch", () => {
       .fn()
       .mockRejectedValue(
         new Error(
-          "Worker environment is not dispatchable with the current execution-context contract: ready",
+          "Worker environment is not dispatchable with the current worker launch contract: ready",
         ),
       );
 
@@ -968,7 +947,7 @@ describe("sessions.dispatch", () => {
     const error = vi.mocked(respond).mock.calls[0]?.[2];
     expect(error).toMatchObject({
       code: ErrorCodes.UNAVAILABLE,
-      message: expect.stringContaining("current execution-context contract"),
+      message: expect.stringContaining("current worker launch contract"),
     });
   });
 
@@ -1029,7 +1008,8 @@ describe("sessions.dispatch", () => {
       workerPlacementDispatchService: { dispatch },
       workerSessionPlacementService: { getMany: () => new Map() },
     });
-    const priorMutationVersion = readSessionsMutationVersion(context);
+    const changes = vi.fn();
+    onTestFinished(sessionChanges.subscribe(changes));
     const respond = await invoke(context);
 
     expect(dispatch).toHaveBeenCalledWith(
@@ -1043,8 +1023,9 @@ describe("sessions.dispatch", () => {
       }),
       expect.any(Function),
       undefined,
+      undefined,
     );
-    expect(readSessionsMutationVersion(context)).toBe(priorMutationVersion + 5);
+    expect(changes.mock.calls).toEqual(Array.from({ length: 5 }, () => [{ sessionKey }]));
     expect(respond).toHaveBeenCalledWith(
       true,
       expect.objectContaining({

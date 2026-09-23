@@ -1,16 +1,21 @@
-import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import {
+  createMeetingNodeBrowserFixture,
+  useMeetingTestState,
+} from "openclaw/plugin-sdk/test-fixtures";
+import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { describe, expect, it, vi } from "vitest";
 import { teamsMeetingsConfig } from "./config.js";
 
 const resolveTeamsMeetingsConfig = teamsMeetingsConfig.resolveConfig;
+const testState = useMeetingTestState(createOpenClawTestState);
 
 const realtimeMocks = vi.hoisted(() => ({
   speak: vi.fn(),
-  startAgent: vi.fn(async () => ({
+  startAgent: vi.fn(async ({ transport }: { transport: { stop(): Promise<void> } }) => ({
     getHealth: () => ({}),
     providerId: "test",
     speak: realtimeMocks.speak,
-    stop: vi.fn(async () => {}),
+    stop: vi.fn(() => transport.stop()),
   })),
 }));
 
@@ -44,96 +49,41 @@ const URL = "https://teams.microsoft.com/l/meetup-join/19%3ameeting_node_resume%
 
 describe("Microsoft Teams meetings node realtime recovery", () => {
   it("starts the node bridge after manual admission becomes route-ready", async () => {
-    let routeReady = false;
-    let tabOpen = false;
-    const invoke = vi.fn(async (request: Record<string, unknown>) => {
-      const params = (request.params as Record<string, unknown>) ?? {};
-      if (request.command === "browser.proxy") {
-        if (params.path === "/tabs") {
-          return {
-            payload: {
-              result: {
-                tabs: tabOpen ? [{ targetId: "teams-tab", title: "Teams", url: URL }] : [],
+    const harness = createMeetingNodeBrowserFixture({
+      url: URL,
+      tabId: "teams-tab",
+      title: "Teams",
+      nodeCommand: "teamsmeetings.chrome",
+      status: (state) =>
+        state.inCall
+          ? {
+              audioInputRouted: true,
+              audioOutputRouted: true,
+              inCall: true,
+              micMuted: false,
+              url: state.tabUrl,
+            }
+          : {
+              inCall: false,
+              manualAction: {
+                reason: "teams-admission-required",
+                message: "Waiting for admission",
               },
+              url: state.tabUrl,
             },
-          };
-        }
-        if (params.path === "/tabs/open") {
-          tabOpen = true;
-          return { payload: { result: { targetId: "teams-tab", title: "Teams", url: URL } } };
-        }
-        if (params.path === "/tabs/focus") {
-          return { payload: { result: { ok: true } } };
-        }
-        if (params.path === "/act") {
-          const scriptValue = (params.body as { fn?: unknown } | undefined)?.fn;
-          const script = typeof scriptValue === "string" ? scriptValue : "";
-          if (script.includes("leaveAction")) {
-            return {
-              payload: {
-                result: { result: JSON.stringify({ departed: true, urlMatched: true }) },
-              },
-            };
-          }
-          return {
-            payload: {
-              result: {
-                result: JSON.stringify(
-                  routeReady
-                    ? {
-                        audioInputRouted: true,
-                        audioOutputRouted: true,
-                        inCall: true,
-                        micMuted: false,
-                        url: URL,
-                      }
-                    : {
-                        inCall: false,
-                        manualAction: {
-                          reason: "teams-admission-required",
-                          message: "Waiting for admission",
-                        },
-                        url: URL,
-                      },
-                ),
-              },
-            },
-          };
-        }
-      }
-      if (params.action === "start") {
-        return {
-          payload: {
-            audioBridge: { type: "node-command-pair" },
-            bridgeId: "bridge-1",
-          },
-        };
-      }
-      return { payload: { ok: true } };
     });
+    harness.state.inCall = false;
+    const logger = { debug: vi.fn(), error: vi.fn(), info: vi.fn(), warn: vi.fn() };
     const runtime = new TeamsMeetingsRuntime({
       config: resolveTeamsMeetingsConfig({
         chrome: { waitForInCallMs: 1 },
         chromeNode: { node: "node-1" },
       }),
       fullConfig: {},
-      logger: { debug: vi.fn(), error: vi.fn(), info: vi.fn(), warn: vi.fn() },
-      runtime: {
-        nodes: {
-          invoke,
-          list: vi.fn(async () => ({
-            nodes: [
-              {
-                caps: ["browser"],
-                commands: ["browser.proxy", "teamsmeetings.chrome"],
-                connected: true,
-                nodeId: "node-1",
-              },
-            ],
-          })),
-        },
-      } as unknown as PluginRuntime,
+      logger,
+      runtime: harness.runtime,
     });
+    testState.track(runtime, { readWarnings: () => logger.warn.mock.calls });
 
     const joined = await runtime.join({
       message: undefined,
@@ -143,7 +93,7 @@ describe("Microsoft Teams meetings node realtime recovery", () => {
       url: URL,
     });
     expect(joined.session.chrome?.audioBridge).toBeUndefined();
-    routeReady = true;
+    harness.state.inCall = true;
 
     const spoken = await runtime.speak(joined.session.id, "hello");
 
@@ -154,5 +104,8 @@ describe("Microsoft Teams meetings node realtime recovery", () => {
     );
     expect(realtimeMocks.speak).toHaveBeenCalledWith("hello");
     expect(joined.session.chrome?.audioBridge).toMatchObject({ type: "node-command-pair" });
+    expect(harness.state.audioCaptureId).toEqual(expect.any(String));
+    await runtime.leave(joined.session.id);
+    expect(harness.state.audioCaptureId).toBeUndefined();
   });
 });

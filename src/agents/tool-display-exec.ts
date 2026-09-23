@@ -26,6 +26,14 @@ import {
   unwrapShellWrapper,
 } from "./tool-display-exec-shell.js";
 
+const FILE_COMMAND_LABELS = new Map<string, readonly [prefix: string, fallback: string]>([
+  ["ls", ["list files in", "list files"]],
+  ["cat", ["show", "show output"]],
+  ["rm", ["remove", "remove files"]],
+  ["mkdir", ["create folder", "create folder"]],
+  ["touch", ["create file", "create file"]],
+]);
+
 function summarizeKnownExec(words: string[], hereInput?: ShellWords["hereInput"]): string {
   if (words.length === 0) {
     return "run command";
@@ -193,9 +201,11 @@ function summarizeKnownExec(words: string[], hereInput?: ShellWords["hereInput"]
     return name ? `find files named "${name}" in ${path}` : `find files in ${path}`;
   }
 
-  if (bin === "ls") {
+  const fileCommand = FILE_COMMAND_LABELS.get(bin);
+  if (fileCommand) {
+    const [prefix, fallback] = fileCommand;
     const target = firstPositional(words, 1);
-    return target ? `list files in ${target}` : "list files";
+    return target ? `${prefix} ${target}` : fallback;
   }
 
   if (bin === "head" || bin === "tail") {
@@ -222,11 +232,6 @@ function summarizeKnownExec(words: string[], hereInput?: ShellWords["hereInput"]
       return `show ${target}`;
     }
     return `show ${bin} output`;
-  }
-
-  if (bin === "cat") {
-    const target = firstPositional(words, 1);
-    return target ? `show ${target}` : "show output";
   }
 
   if (bin === "sed") {
@@ -268,21 +273,6 @@ function summarizeKnownExec(words: string[], hereInput?: ShellWords["hereInput"]
       return `${action} ${src}`;
     }
     return `${action} files`;
-  }
-
-  if (bin === "rm") {
-    const target = firstPositional(words, 1);
-    return target ? `remove ${target}` : "remove files";
-  }
-
-  if (bin === "mkdir") {
-    const target = firstPositional(words, 1);
-    return target ? `create folder ${target}` : "create folder";
-  }
-
-  if (bin === "touch") {
-    const target = firstPositional(words, 1);
-    return target ? `create file ${target}` : "create file";
   }
 
   if (bin === "curl" || bin === "wget") {
@@ -677,6 +667,17 @@ export function resolveExecTitle(args: unknown): string | undefined {
   return sliceUtf16Safe(redactToolPayloadText(text), 0, 120) || undefined;
 }
 
+/** Native Codex cells retain their freeform source under input. */
+export function resolveExecCode(args: unknown): string | undefined {
+  const record = asRecord(args);
+  for (const value of [record?.code, record?.input]) {
+    if (typeof value === "string" && value.trim()) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
 export function resolveExecDetail(
   args: unknown,
   options?: { detailMode?: ToolDetailMode },
@@ -690,9 +691,10 @@ export function resolveExecDetail(
   if (title) {
     return title;
   }
-  if (typeof record.code === "string" && record.code.trim()) {
+  const code = resolveExecCode(record);
+  if (code) {
     return options?.detailMode === "raw"
-      ? compactRawCommand(record.code)
+      ? compactRawCommand(code)
       : record.language === "typescript"
         ? "run TypeScript"
         : "run JavaScript";
@@ -716,7 +718,7 @@ export function resolveExecDetail(
       : typeof record.cwd === "string"
         ? record.cwd
         : undefined;
-  const nodeFragment = nodeName ? ` · node: ${nodeName}` : "";
+  const nodeFragment = nodeName ? `, node: ${nodeName}` : "";
   if (hasShellCompoundCommand(unwrapped)) {
     const cwdSuffix = cwdRaw?.trim() ? formatCwdSuffix(cwdRaw.trim()) : undefined;
     return `${cwdSuffix ? `${compact} ${cwdSuffix}` : compact}${nodeFragment}`;
@@ -741,7 +743,7 @@ export function resolveExecDetail(
     compact !== displaySummary &&
     compact !== summary
   ) {
-    return `${displaySummary}${nodeFragment} · ${formatInlineCodeSpan(compact)}`;
+    return `${displaySummary}${nodeFragment}, ${formatInlineCodeSpan(compact)}`;
   }
 
   return `${displaySummary}${nodeFragment}`;

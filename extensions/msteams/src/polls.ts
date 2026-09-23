@@ -1,9 +1,9 @@
-// Msteams plugin module implements polls behavior.
 import crypto from "node:crypto";
 import {
   parseStrictNonNegativeInteger,
   parseDateStringTimestampMs,
 } from "openclaw/plugin-sdk/number-runtime";
+import type { PluginStateEntry } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   isRecord,
   normalizeOptionalString,
@@ -72,12 +72,10 @@ export const MSTEAMS_POLLS_NAMESPACE = "polls";
 export const MSTEAMS_POLL_VOTE_BUCKETS_NAMESPACE = "poll-vote-buckets";
 const MSTEAMS_MAX_POLLS = 1000;
 export const MSTEAMS_SQLITE_MAX_POLL_ROWS = MSTEAMS_MAX_POLLS + 1000;
-// Keep worst-case retained vote buckets below plugin-state's per-plugin live row cap.
 const MSTEAMS_POLL_VOTE_BUCKET_COUNT = 32;
 export const MSTEAMS_MAX_POLL_VOTE_BUCKET_ROWS =
   (MSTEAMS_MAX_POLLS + 1) * MSTEAMS_POLL_VOTE_BUCKET_COUNT;
 const MSTEAMS_POLL_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-const POLL_MUTATION_KEY = "polls";
 
 function normalizeChoiceValue(value: unknown): string | null {
   if (typeof value === "string") {
@@ -343,10 +341,14 @@ export function createMSTeamsPollStoreState(
     return votes;
   };
 
-  const deletePollVotes = async (pollId: string): Promise<void> => {
-    for (const row of await voteBucketStore.entries()) {
+  const deletePollVotes = async (
+    pollId: string,
+    cachedRows?: Map<string, PluginStateEntry<StoredMSTeamsPollVoteBucket>>,
+  ): Promise<void> => {
+    for (const row of cachedRows?.values() ?? (await voteBucketStore.entries())) {
       if (row.value.pollId === pollId) {
         await voteBucketStore.delete(row.key);
+        cachedRows?.delete(row.key);
       }
     }
   };
@@ -403,11 +405,17 @@ export function createMSTeamsPollStoreState(
   };
 
   const prunePollStoreToLimit = async (): Promise<void> => {
+    let voteRows: Map<string, PluginStateEntry<StoredMSTeamsPollVoteBucket>> | undefined;
+    const deletePrunedPollVotes = async (pollId: string) => {
+      // Poll mutations hold the same lock, and vote buckets have no store TTL.
+      voteRows ??= new Map((await voteBucketStore.entries()).map((row) => [row.key, row]));
+      await deletePollVotes(pollId, voteRows);
+    };
     const rows = [];
     for (const row of await pollStore.entries()) {
       if (!pruneExpired({ [row.key]: row.value })[row.key]) {
         await pollStore.delete(row.key);
-        await deletePollVotes(row.value.id);
+        await deletePrunedPollVotes(row.value.id);
         continue;
       }
       rows.push(row);
@@ -422,12 +430,12 @@ export function createMSTeamsPollStoreState(
     });
     for (const row of sorted.slice(0, rows.length - MSTEAMS_MAX_POLLS)) {
       await pollStore.delete(row.key);
-      await deletePollVotes(row.value.id);
+      await deletePrunedPollVotes(row.value.id);
     }
   };
 
   const createPoll = async (poll: MSTeamsPoll) => {
-    await withMSTeamsSqliteMutationLock(params, POLL_MUTATION_KEY, async () => {
+    await withMSTeamsSqliteMutationLock(params, MSTEAMS_POLLS_NAMESPACE, async () => {
       const { metadata, votes } = splitMSTeamsPoll(poll);
       await pollStore.register(buildMSTeamsPollStateKey(poll.id), toPluginJsonValue(metadata));
       await deletePollVotes(poll.id);
@@ -448,7 +456,7 @@ export function createMSTeamsPollStoreState(
   };
 
   const recordVote = async (vote: { pollId: string; voterId: string; selections: string[] }) => {
-    return await withMSTeamsSqliteMutationLock(params, POLL_MUTATION_KEY, async () => {
+    return await withMSTeamsSqliteMutationLock(params, MSTEAMS_POLLS_NAMESPACE, async () => {
       const pollKey = buildMSTeamsPollStateKey(vote.pollId);
       const poll = await pollStore.lookup(pollKey);
       if (!poll) {

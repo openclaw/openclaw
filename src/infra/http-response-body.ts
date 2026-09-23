@@ -1,5 +1,5 @@
 // Response readers do not depend on inbound request lifecycle or logging policy.
-import { decodeTextPrefix } from "@openclaw/normalization-core";
+import { consumeResponseBytes, decodeTextPrefix } from "@openclaw/normalization-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   withResponseBodyIdleTimeout,
@@ -21,6 +21,7 @@ type ReadResponsePrefixResult = {
 };
 
 export type ReadResponseTextPrefixOptions = {
+  signal?: AbortSignal;
   chunkTimeoutMs?: number;
   onIdleTimeout?: (params: { chunkTimeoutMs: number }) => Error;
   /** Static timeout or lazy resolver evaluated immediately before body consumption. */
@@ -38,50 +39,31 @@ async function readResponsePrefixFromReader(
   options?: ReadResponsePrefixOptions,
 ): Promise<ReadResponsePrefixResult> {
   const chunks: Uint8Array[] = [];
-  let size = 0;
-  let truncated = false;
-  try {
-    await withResponseBodyIdleTimeout(
-      reader,
-      options?.chunkTimeoutMs || undefined,
-      options?.onIdleTimeout,
-      async (refreshTimeout) => {
-        while (true) {
+  const result = await withResponseBodyIdleTimeout(
+    reader,
+    options?.chunkTimeoutMs || undefined,
+    options?.onIdleTimeout,
+    (refreshTimeout) =>
+      consumeResponseBytes({
+        maxBytes,
+        stopAtLimit: options?.stopAtLimit,
+        read: () => {
           refreshTimeout?.();
-          const { done, value } = await reader.read();
-          if (done) {
-            break;
-          }
-          if (!value?.length) {
-            continue;
-          }
-          const remaining = maxBytes - size;
-          size += value.length;
-          if (size > maxBytes || (options?.stopAtLimit && size === maxBytes)) {
-            if (remaining > 0) {
-              chunks.push(value.subarray(0, remaining));
-            }
-            truncated = true;
-            // A capture tee can retain cancellation until the caller releases its request.
-            void reader.cancel().catch(() => undefined);
-            break;
-          }
-          chunks.push(value);
-        }
-      },
-    );
-  } finally {
-    try {
-      reader.releaseLock();
-    } catch {}
-  }
+          return reader.read();
+        },
+        onChunk: (chunk) => chunks.push(chunk),
+        onLimit: () => {
+          // Capture tees must not delay bounded dispatcher release.
+          void reader.cancel().catch(() => undefined);
+        },
+      }),
+  );
 
   return {
     // Full-body readers reject overflow before allocating a contiguous copy.
     // MiB limits can yield fractional bytes; retained slices contain only whole bytes.
-    materializeBuffer: () => Buffer.concat(chunks, Math.floor(Math.min(size, maxBytes))),
-    size,
-    truncated,
+    materializeBuffer: () => Buffer.concat(chunks, Math.floor(Math.min(result.size, maxBytes))),
+    ...result,
   };
 }
 
@@ -105,6 +87,7 @@ async function readResponsePrefix(
     return await withResponseBodyTimeout({
       timeoutMs,
       onTimeout: options?.onTimeout,
+      signal: options?.signal,
       cancel: async (error) => await body?.cancel(error),
       read: async () => {
         const fallback = Buffer.from(await response.arrayBuffer());
@@ -119,12 +102,17 @@ async function readResponsePrefix(
   }
 
   const reader = body.getReader();
-  return await withResponseBodyTimeout({
-    timeoutMs,
-    onTimeout: options?.onTimeout,
-    cancel: async (error) => await reader.cancel(error),
-    read: async () => await readResponsePrefixFromReader(reader, maxBytes, options),
-  });
+  try {
+    return await withResponseBodyTimeout({
+      timeoutMs,
+      onTimeout: options?.onTimeout,
+      signal: options?.signal,
+      cancel: async (error) => await reader.cancel(error),
+      read: async () => await readResponsePrefixFromReader(reader, maxBytes, options),
+    });
+  } finally {
+    reader.releaseLock();
+  }
 }
 
 export type ReadResponseTextPrefixResult = {
@@ -160,6 +148,7 @@ export async function readResponseWithLimit(
 ): Promise<Buffer> {
   const onOverflow = options?.onOverflow;
   const prefix = await readResponsePrefix(response, maxBytes, {
+    signal: options?.signal,
     chunkTimeoutMs: options?.chunkTimeoutMs,
     onIdleTimeout: options?.onIdleTimeout,
     timeoutMs: options?.timeoutMs,
@@ -184,6 +173,7 @@ export async function readResponseTextSnippet(
   const maxBytes = options?.maxBytes ?? 8 * 1024;
   const maxChars = options?.maxChars ?? 200;
   const prefix = await readResponseTextPrefix(response, maxBytes, {
+    signal: options?.signal,
     chunkTimeoutMs: options?.chunkTimeoutMs,
     onIdleTimeout: options?.onIdleTimeout,
     timeoutMs: options?.timeoutMs,

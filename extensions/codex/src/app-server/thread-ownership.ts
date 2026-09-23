@@ -1,5 +1,3 @@
-import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
-import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import {
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
   closeCodexStartupClientBestEffort,
@@ -19,21 +17,12 @@ import type {
   CodexAppServerThreadBinding,
 } from "./session-binding.js";
 import { retainSharedCodexAppServerClientByInstanceId } from "./shared-client.js";
+import { withCodexAppServerThreadMutation } from "./thread-ownership-queue.js";
 
-// Dist and source copies share physical clients, so their lifecycle queues must
-// share ownership too. Settled entries drain naturally; never clear active tails.
-const nativeThreadOwners = resolveGlobalSingleton(
-  Symbol.for("openclaw.codexNativeThreadOwners"),
-  () => new KeyedAsyncQueue(),
-);
-
-/** Serialize OpenClaw-owned lifecycle changes, not native-internal thread controllers. */
-export async function withCodexAppServerThreadMutation<T>(
-  threadId: string,
-  run: () => Promise<T>,
-): Promise<T> {
-  return await nativeThreadOwners.enqueue(`thread:${threadId}`, run);
-}
+export {
+  withCodexAppServerThreadMutation,
+  withCodexConversationThreadActivity,
+} from "./thread-ownership-queue.js";
 
 /** Codex subscriptions belong to a physical connection, not the native thread ID alone. */
 export function isSameCodexAppServerThreadOwner(
@@ -63,14 +52,6 @@ export async function withExclusiveCodexAppServerThread<T>(params: {
     }
     return await params.run();
   });
-}
-
-/** Serializes bound turns and retirement so detach cannot unsubscribe an active turn. */
-export async function withCodexConversationThreadActivity<T>(
-  bindingId: string,
-  run: () => Promise<T>,
-): Promise<T> {
-  return await nativeThreadOwners.enqueue(`conversation:${bindingId}`, run);
 }
 
 /** Publishes one owned subscription with its persistent or ephemeral retention lifetime. */
@@ -183,8 +164,10 @@ export async function retireCodexConversationThreadBinding(params: {
   expectedThreadId?: string;
   expectedStartId?: string;
   allowUntracked?: boolean;
+  assertCurrent?: () => void;
   afterClear?: () => Promise<void>;
 }): Promise<boolean> {
+  const assertCurrent = params.assertCurrent;
   const expected = params.bindingStore.read(params.identity);
   if (!expected || (params.expectedThreadId && expected.threadId !== params.expectedThreadId)) {
     return false;
@@ -201,6 +184,8 @@ export async function retireCodexConversationThreadBinding(params: {
       }
       // Keep the old row authoritative through unsubscribe; Codex has one
       // subscription per physical client, so clearing first races a new owner.
+      // Admission happens under both owner locks; release and public detach must settle together.
+      assertCurrent?.();
       await releaseCodexAppServerBindingSubscription(current, {
         allowUntracked: params.allowUntracked,
       });

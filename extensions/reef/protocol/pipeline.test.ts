@@ -2,13 +2,15 @@ import { gcm } from "@noble/ciphers/aes.js";
 import { ed25519, x25519 } from "@noble/curves/ed25519.js";
 import { hkdf } from "@noble/hashes/hkdf.js";
 import { sha256 } from "@noble/hashes/sha2.js";
-import { describe, expect, it } from "vitest";
-import { MemoryAuditStore, type AuditEntry, type AuditStore } from "./audit.js";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { describe, expect, it, vi } from "vitest";
+import type { AuditEntry, AuditStore } from "./audit.js";
 import { canonicalBytes } from "./canonical.js";
 import { base64, fromBase64url, utf8 } from "./encoding.js";
 import { seal, type Envelope } from "./envelope.js";
 import type { GuardAdapter, Verdict } from "./guard.js";
 import { generateIdentity } from "./identity.js";
+import { MemoryAuditStore, MemoryReplayStore } from "./memory-stores.test-support.js";
 import {
   composeInbound,
   composeOutbound,
@@ -18,7 +20,6 @@ import {
   type ReviewGate,
   type ReviewRequest,
 } from "./pipeline.js";
-import { MemoryReplayStore } from "./replay.js";
 
 const now = 1_752_300_000;
 const auditKey = Uint8Array.from({ length: 32 }, (_, index) => index + 1);
@@ -170,6 +171,80 @@ class FailOnceAuditStore implements AuditStore {
 }
 
 describe("pipeline", () => {
+  it.each(["accepted", "failed"] as const)(
+    "joins an admitted heartbeat before %s inbound work settles",
+    async (outcome) => {
+      vi.useFakeTimers();
+      const guardEntered = createDeferred<void>();
+      const finishGuard = createDeferred<void>();
+      const finishRefresh = createDeferred<void>();
+      const finalized = createDeferred<void>();
+      try {
+        const { alice, bob } = identities();
+        const envelope = sealedEnvelope(alice, bob, "01JZ0000000000000000000000", {
+          text: "ordinary text",
+        });
+        const replay = new MemoryReplayStore();
+        const refresh = vi
+          .spyOn(replay, "refresh")
+          .mockImplementationOnce(() => finishRefresh.promise);
+        const complete = replay.complete.bind(replay);
+        vi.spyOn(replay, "complete").mockImplementation(async (...args) => {
+          await complete(...args);
+          finalized.resolve();
+        });
+        const release = replay.release.bind(replay);
+        vi.spyOn(replay, "release").mockImplementation(async (...args) => {
+          await release(...args);
+          finalized.resolve();
+        });
+        const guard = mockGuard(allow);
+        vi.spyOn(guard, "classify").mockImplementation(async () => {
+          guardEntered.resolve();
+          await finishGuard.promise;
+          if (outcome === "failed") {
+            throw new Error("synthetic guard interruption");
+          }
+          return allow;
+        });
+        let settled = false;
+        const pending = composeInbound(
+          inboundOptions(envelope, alice, bob, { replayStore: replay, guard }),
+        ).then(
+          (value) => {
+            settled = true;
+            return { value };
+          },
+          (error: unknown) => {
+            settled = true;
+            return { error };
+          },
+        );
+        await guardEntered.promise;
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(refresh).toHaveBeenCalledTimes(1);
+        finishGuard.resolve();
+        await finalized.promise;
+        await vi.advanceTimersByTimeAsync(0);
+        expect(settled).toBe(false);
+        finishRefresh.resolve();
+        const result = await pending;
+        expect(settled).toBe(true);
+        if (outcome === "accepted") {
+          expect(result).toMatchObject({ value: { disposition: "accepted" } });
+        } else {
+          expect(result).toHaveProperty("error");
+        }
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        finishGuard.resolve();
+        finishRefresh.resolve();
+        vi.useRealTimers();
+        vi.restoreAllMocks();
+      }
+    },
+  );
+
   it("runs an allowed outbound and inbound exchange end to end", async () => {
     const { alice, bob } = identities();
     const outboundAudit = audit();

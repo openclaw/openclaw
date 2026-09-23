@@ -10,8 +10,8 @@ function location(url: string): RouteLocation {
 
 describe("Agents route location", () => {
   it.each([
-    ["/settings/agents", null, "files"],
-    ["/settings/agents/research", "research", "files"],
+    ["/settings/agents", null, "overview"],
+    ["/settings/agents/research", "research", "overview"],
     ["/settings/agents/research/overview", "research", "overview"],
     ["/settings/agents/research/files", "research", "files"],
     ["/settings/agents/research/tools", "research", "tools"],
@@ -34,7 +34,7 @@ describe("Agents route location", () => {
     ).toEqual({
       location: location("/settings/agents?agent=team.writer&probe=1#catalog"),
       requestedAgentId: "team.writer",
-      panel: "files",
+      panel: "overview",
       canonicalLocation: location("/settings/agents/team%2Ewriter?probe=1#catalog"),
     });
   });
@@ -59,7 +59,7 @@ describe("Agents route location", () => {
     ).toEqual({
       location: location("/ui/settings/agents/research/unknown?probe=1#files"),
       requestedAgentId: "research",
-      panel: "files",
+      panel: "overview",
       canonicalLocation: location("/ui/settings/agents/research?probe=1#files"),
     });
   });
@@ -68,7 +68,7 @@ describe("Agents route location", () => {
     expect(resolveAgentsRouteLocation(location("/settings/agents?agent=team%2Fwriter"))).toEqual({
       location: location("/settings/agents?agent=team%2Fwriter"),
       requestedAgentId: null,
-      panel: "files",
+      panel: "overview",
       canonicalLocation: location("/settings/agents"),
     });
   });
@@ -79,7 +79,7 @@ describe("Agents route location", () => {
     ).toEqual({
       location: location(`/settings/agents?agent=${encodeURIComponent(agentId)}`),
       requestedAgentId: null,
-      panel: "files",
+      panel: "overview",
       canonicalLocation: location("/settings/agents"),
     });
   });

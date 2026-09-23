@@ -1,6 +1,7 @@
 // Tests bounded HTTP response reads and cleanup behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import {
   cancelUnreadResponseBody,
   readResponseTextPrefix,
@@ -132,6 +133,58 @@ describe("cancelUnreadResponseBody", () => {
 describe("readResponseWithLimit", () => {
   beforeEach(() => {
     vi.useRealTimers();
+  });
+
+  it.each([undefined, 1_000])(
+    "aborts prefix reads without awaiting cancellation (deadline %s)",
+    async (timeoutMs) => {
+      const readStarted = createDeferred();
+      const cancel = vi.fn(async () => await new Promise<void>(() => {}));
+      const body = new ReadableStream<Uint8Array>(
+        {
+          pull() {
+            readStarted.resolve();
+          },
+          cancel,
+        },
+        { highWaterMark: 0 },
+      );
+      const controller = new AbortController();
+      const reason = new Error("index request cancelled");
+      const result = readResponseTextPrefix(new Response(body), 8, {
+        signal: controller.signal,
+        timeoutMs,
+      }).catch((error: unknown) => error);
+
+      try {
+        await withTestTimeout(readStarted.promise, 1_000, "response read did not start");
+        controller.abort(reason);
+
+        await expect(withTestTimeout(result, 1_000, "response abort did not settle")).resolves.toBe(
+          reason,
+        );
+        expect(cancel).toHaveBeenCalledOnce();
+        expect(cancel).toHaveBeenCalledWith(reason);
+        expect(body.locked).toBe(false);
+      } finally {
+        controller.abort(reason);
+      }
+    },
+  );
+
+  it("cancels a pre-aborted full-body read without pulling or retaining the reader", async () => {
+    const pull = vi.fn();
+    const cancel = vi.fn();
+    const body = new ReadableStream<Uint8Array>({ pull, cancel }, { highWaterMark: 0 });
+    const reason = new Error("request already cancelled");
+
+    await expect(
+      readResponseWithLimit(new Response(body), 8, { signal: AbortSignal.abort(reason) }),
+    ).rejects.toBe(reason);
+
+    expect(pull).not.toHaveBeenCalled();
+    expect(cancel).toHaveBeenCalledWith(reason);
+    expect(body.locked).toBe(false);
   });
 
   it.each(["prefix", "overflow", "deadline"] as const)(

@@ -1,5 +1,4 @@
 import { html, nothing } from "lit";
-import type { NavigationRouteId } from "../app-navigation.ts";
 import { isCommandPaletteShortcut } from "../components/command-palette-contract.ts";
 import { isTerminalPanelShortcut } from "../components/panel-toggle-contract.ts";
 import {
@@ -90,7 +89,7 @@ export function moveToastToNavDrawer(host: HTMLElement): void {
   const drawer = host.querySelector<HTMLElement>(".shell-nav");
   const toastHost = host.querySelector<HTMLElement>("openclaw-toast-host");
   if (drawer && toastHost && toastHost.parentElement !== drawer) {
-    drawer.moveBefore(toastHost, null);
+    drawer.append(toastHost);
   }
 }
 
@@ -98,7 +97,7 @@ export function restoreToastFromNavDrawer(host: HTMLElement): void {
   const shell = host.querySelector<HTMLElement>(".shell");
   const toastHost = host.querySelector<HTMLElement>("openclaw-toast-host");
   if (shell && toastHost?.parentElement?.classList.contains("shell-nav")) {
-    shell.moveBefore(toastHost, null);
+    shell.append(toastHost);
   }
 }
 
@@ -143,7 +142,7 @@ export function renderFloatingUpdateCard(params: {
   updateRunAcknowledged?: boolean;
   connected?: boolean;
   onAcknowledge?: () => void;
-  onCheckStatus?: () => Promise<void>;
+  onCheckStatus?: () => Promise<boolean>;
   statusBanner?: ApplicationContext["overlays"]["snapshot"]["updateStatusBanner"];
   watchUpdateProgress?: (listener: (progress: UpdateProgress) => void) => () => void;
   canUpdate?: boolean;
@@ -153,7 +152,7 @@ export function renderFloatingUpdateCard(params: {
   onRefresh: () => Promise<boolean>;
   onHoldUpdate?: () => Promise<boolean>;
   onReviewUpdate?: () => void;
-  onNavigate?: (routeId: NavigationRouteId) => void;
+  onNavigate?: ApplicationContext["navigate"];
   onOpenApprovals?: () => void;
 }) {
   const showAttention = floatingSidebarAttentionVisible(params);

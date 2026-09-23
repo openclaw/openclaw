@@ -6,7 +6,8 @@ import { icons } from "../../components/icons.ts";
 import { renderSettingsStatus, renderSettingsToggle } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { registerActivityEnglish } from "../../i18n/locales/en-activity.ts";
-import { formatDurationCompact, formatTimeMs } from "../../lib/format.ts";
+import { formatDurationCompact } from "../../lib/format-duration.ts";
+import { formatTimeMs } from "../../lib/format.ts";
 import "../../styles/activity.css";
 import { activityRunInspectorHref } from "./run-inspector-model.ts";
 import type { ActivityEntry, ActivityStatus } from "./tool-activity.ts";
@@ -17,7 +18,7 @@ const STATUS_ORDER: ActivityStatus[] = ["running", "done", "error"];
 
 type ActivityProps = {
   basePath: string;
-  entries: ActivityEntry[];
+  entries: readonly ActivityEntry[];
   filterText: string;
   statusFilters: Record<ActivityStatus, boolean>;
   toolFilter: string;
@@ -100,7 +101,7 @@ function matchesEntry(entry: ActivityEntry, needle: string): boolean {
   return haystack.includes(needle);
 }
 
-function resolveToolNames(entries: ActivityEntry[]): string[] {
+function resolveToolNames(entries: readonly ActivityEntry[]): string[] {
   return sortUniqueStrings(entries.map((entry) => entry.toolName));
 }
 

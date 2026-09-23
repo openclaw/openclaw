@@ -6,9 +6,10 @@ import { createPluginRuntime } from "../plugins/runtime/index.js";
 import { buildPluginRuntimeLoadOptions } from "../plugins/runtime/load-context.js";
 import { resolvePluginRuntimeLoadContext } from "../plugins/runtime/load-context.resolve.js";
 import { resolvePluginTools } from "../plugins/tools.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getTaskFlowByIdForOwner, listTaskFlowsForOwner } from "./task-flow-owner-access.js";
-import { reloadTaskFlowRegistryFromStore } from "./task-flow-registry.js";
+import { reloadTaskFlowRegistryFromStoreAsync } from "./task-flow-registry.js";
 import { resetTaskFlowRegistryForTests } from "./task-runtime.test-helpers.js";
 
 const PLUGIN_ID = "a09-managed-flow-fixture";
@@ -172,7 +173,7 @@ describe("plugin-managed TaskFlows", () => {
           throw new Error("fixture tool did not return a TaskFlow id");
         }
 
-        reloadTaskFlowRegistryFromStore();
+        await reloadTaskFlowRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
         expect(getTaskFlowByIdForOwner({ flowId, callerOwnerKey: OWNER_KEY })).toMatchObject({
           flowId,
           syncMode: "managed",

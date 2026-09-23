@@ -15,11 +15,16 @@ import {
 import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbox-http.js";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import {
+  clickBoardWidgetControl,
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
   defaultControlUiFeatureMethods,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
+import {
+  installWidgetPromptDiagnostics,
+  retainWidgetPromptFailure,
+} from "./chat-widget-sandbox.diagnostics.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -52,11 +57,24 @@ function widgetDocument(): string {
     <label>Local note<input aria-label="Local note" placeholder="State stays in this widget"></label>
     <button id="refresh">Refresh via chat</button><button id="details">Toggle details</button>
     <button id="data">Try dashboard data</button><button id="record">Record state</button>
+    <button id="popup">Try native popup</button>
+    <output id="popup-result" aria-label="Popup result"></output>
     <output id="result" aria-label="Widget result">Ready</output>
     <div id="extra" class="details" hidden>Additional community details</div>
     <script>
+      (()=>{
+        const nativeOpen=window.open;
+        document.querySelector('#popup').onclick=()=>{
+          document.querySelector('#popup-result').textContent=
+            !navigator.userActivation.isActive?'No user activation':
+              nativeOpen.call(window,'about:blank','_blank')===null?'Popup blocked':'Popup opened';
+        };
+      })();
+    </script>
+    <script>
+      function open(){const extra=document.querySelector('#extra');extra.hidden=!extra.hidden;}
       document.querySelector('#refresh').onclick=()=>window.openclaw.prompt.send('Refresh the synthetic dashboard');
-      document.querySelector('#details').onclick=()=>{const extra=document.querySelector('#extra');extra.hidden=!extra.hidden;};
+      document.querySelector('#details').onclick=open;
       document.querySelector('#data').onclick=async()=>{try{await window.openclaw.data.read('private-dashboard');
         document.querySelector('#result').textContent='Unexpected data access';}
         catch{document.querySelector('#result').textContent='Dashboard data is unavailable in chat';}};
@@ -204,6 +222,7 @@ suite.define(() => {
       });
       expect(await authenticated.text()).toBe(html);
 
+      let completed = false;
       await suite.withPage(
         {
           viewport: { width: 1600, height: 1000 },
@@ -211,7 +230,8 @@ suite.define(() => {
           permissions: ["local-network-access"],
           recordVideo: { dir: suite.artifactDir, size: { width: 1600, height: 1000 } },
         },
-        async ({ page }) => {
+        async ({ page, context }) => {
+          await installWidgetPromptDiagnostics(context);
           const storageKey = controlUiBundledSettingsStorageKey(proxy.baseUrl);
           await page.addInitScript(
             ({ key, session }) => {
@@ -294,6 +314,23 @@ suite.define(() => {
             docId: documentId,
           });
           expect(proxy.boardRequests).toEqual(["ticket"]);
+          for (const widget of [inline, board]) {
+            await clickBoardWidgetControl(
+              page,
+              widget.getByRole("button", { name: "Toggle details" }),
+            );
+            await widget.getByText("Additional community details").waitFor();
+            await clickBoardWidgetControl(
+              page,
+              widget.getByRole("button", { name: "Toggle details" }),
+            );
+            await widget.getByText("Additional community details").waitFor({ state: "hidden" });
+            await clickBoardWidgetControl(
+              page,
+              widget.getByRole("button", { name: "Try native popup" }),
+            );
+            await widget.getByText("Popup blocked", { exact: true }).waitFor();
+          }
           await page.screenshot({
             path: path.join(suite.artifactDir, "02-inline-and-sidebar.png"),
           });
@@ -341,15 +378,24 @@ suite.define(() => {
             expect(await boardNote.inputValue()).toBe("Dashboard state survives swaps");
           }
           const originalHeight = (await outer.boundingBox())?.height ?? 0;
-          await inline.getByRole("button", { name: "Toggle details" }).click();
+          await clickBoardWidgetControl(
+            page,
+            inline.getByRole("button", { name: "Toggle details" }),
+          );
           await expect
             .poll(async () => (await outer.boundingBox())?.height ?? 0)
             .toBeGreaterThan(originalHeight + 400);
           expect(await retainedFrame?.evaluate((frame) => frame.isConnected)).toBe(true);
           expect(await note.inputValue()).toBe("State survives rerenders");
-          await inline.getByRole("button", { name: "Toggle details" }).click();
+          await clickBoardWidgetControl(
+            page,
+            inline.getByRole("button", { name: "Toggle details" }),
+          );
 
-          await inline.getByRole("button", { name: "Refresh via chat" }).click();
+          await clickBoardWidgetControl(
+            page,
+            inline.getByRole("button", { name: "Refresh via chat" }),
+          );
           const sent = asRecord((await gateway.waitForRequest("chat.send")).params);
           expect(sent).toMatchObject({
             sessionKey,
@@ -384,7 +430,7 @@ suite.define(() => {
           expect(await note.inputValue()).toBe("State survives rerenders");
           expect(await gateway.getRequests("canvas.document.view")).toHaveLength(1);
 
-          await board.getByRole("button", { name: "Record state" }).click();
+          await clickBoardWidgetControl(page, board.getByRole("button", { name: "Record state" }));
           await board.getByText("State recorded", { exact: true }).waitFor();
           expect((await gateway.getRequests("board.event"))[0]?.params).toEqual({
             ticket: "ticket",
@@ -426,6 +472,12 @@ suite.define(() => {
               2,
             ),
           );
+          completed = true;
+        },
+        async ({ page }) => {
+          if (!completed) {
+            await retainWidgetPromptFailure(page, suite.artifactDir);
+          }
         },
       );
     } finally {

@@ -1,55 +1,39 @@
-import { nothing, type ReactiveController, type ReactiveControllerHost } from "lit";
-import type { ControlUiNavigationItem } from "../../../src/plugin-sdk/control-ui.js";
-import type { AgentIdentityResult } from "../api/types.ts";
+import { nothing, type ReactiveController } from "lit";
 import {
   cancelRoutePreload,
   scheduleRoutePreload,
   type NavigationRouteId,
-  type SidebarZoneEntry,
 } from "../app-navigation.ts";
-import { isSessionRouteId, pathForRoute, type RouteId } from "../app-route-paths.ts";
-import type { ApplicationContext, ApplicationNavigationOptions } from "../app/context.ts";
-import type { ThemeMode } from "../app/theme.ts";
+import { isSessionRouteId, pathForRoute } from "../app-route-paths.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
+import { IdentityAvatarController } from "../lib/identity-avatar-loader.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
 import {
   SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
   sessionPullRequestsForGateway,
 } from "../lib/session-pull-requests.ts";
-import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
-import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { parseAgentSessionKey, scopedSessionArtifactKey } from "../lib/sessions/session-key.ts";
-import type { ControlUiRegistration } from "../plugins/control-ui-capability.ts";
-import { SidebarCatalogMenuController } from "./app-sidebar-catalog-menu.ts";
+import {
+  createSidebarCatalogMenuController,
+  type SidebarCatalogMenuController,
+} from "./app-sidebar-catalog-menu.ts";
 import { isSidebarRouteActive, renderSidebarNavRoute } from "./app-sidebar-nav-menus.ts";
 import type {
   SidebarRecentSession,
   SidebarSessionGroupMenuState,
   SidebarSessionMenuState,
-  SidebarSessionSortMode,
 } from "./app-sidebar-session-types.ts";
-import type { SessionDataController } from "./session-data-controller.ts";
 import { fetchSessionMenuWork } from "./session-menu-work.ts";
 import type { SessionMenuWork } from "./session-menu.ts";
-import type {
-  SessionOrganizerController,
-  SessionOrganizerControllerHost,
-} from "./session-organizer-controller.ts";
-import type { SessionOwnerOption } from "./session-owner-chip.ts";
 import { SESSION_MENU_OPEN_EVENT } from "./session-progress-hovercard-target.ts";
+import type { SidebarMenusControllerHost } from "./sidebar-menus-controller-types.ts";
 
 const AGENT_MENU_HOVER_OPEN_DELAY_MS = 300;
 const AGENT_MENU_HOVER_CLOSE_DELAY_MS = 200;
 const AGENT_MENU_WIDTH_PX = 264;
 
 type AgentMenuInteractionState = "closed" | "hover-pending" | "open-hover" | "open-click";
-
-type SidebarMenuAgent = {
-  id: string;
-  name?: string;
-  identity?: { name?: string; emoji?: string; avatar?: string; avatarUrl?: string };
-};
 
 type MenuPosition = { x: number; y: number };
 type CatalogMenuPosition = MenuPosition & { catalogId: string };
@@ -67,93 +51,9 @@ interface SidebarMenusControllerState {
   identityMenuPosition: { x: number; bottom: number; width: number } | null;
 }
 
-export type SidebarFilterMenuView = "root" | "specific-owner";
+export type SidebarFilterMenuView = "root" | "specific-owner" | "empty-groups";
 
-type SidebarMenusRenderer = {
-  renderSidebarAgentMenuForController(controller: SidebarMenusController): unknown;
-  renderSidebarCatalogViewMenuForController(controller: SidebarMenusController): unknown;
-  renderSidebarCustomizeMenuForController(controller: SidebarMenusController): unknown;
-  renderSidebarIdentityMenuForController(controller: SidebarMenusController): unknown;
-  renderSidebarMoreMenuForController(controller: SidebarMenusController): unknown;
-  renderSidebarSessionGroupMenuForController(controller: SidebarMenusController): unknown;
-  renderSidebarSessionMenuForController(controller: SidebarMenusController): unknown;
-  renderSidebarSessionSortMenuForController(controller: SidebarMenusController): unknown;
-};
-
-interface SidebarMenusControllerHost
-  extends ReactiveControllerHost, SessionOrganizerControllerHost {
-  readonly activeRouteId?: NavigationRouteId;
-  readonly basePath: string;
-  readonly canPairDevice: boolean;
-  readonly connected: boolean;
-  readonly offline: boolean;
-  readonly enabledRouteIds?: readonly NavigationRouteId[];
-  readonly gatewayVersion: string | null;
-  readonly onNavigate?: (
-    routeId: NavigationRouteId,
-    options?: ApplicationNavigationOptions,
-  ) => void;
-  readonly onPairMobile?: () => void;
-  readonly onRetryConnect?: () => void;
-  readonly onUpdateSidebarEntries?: (entries: string[]) => void;
-  readonly onPreloadRoute?: (routeId: NavigationRouteId) => Promise<void>;
-  readonly pinnedAgentIds: readonly string[];
-  readonly preferencesBrowserOnly: boolean;
-  readonly selectedSessionKeys: ReadonlySet<string>;
-  readonly sessionData: SessionOrganizerControllerHost["sessionData"] &
-    Pick<
-      SessionDataController,
-      | "approvalBadgeSnapshot"
-      | "presenceInstanceId"
-      | "presencePayload"
-      | "sessionResultsByAgent"
-      | "sessionsLoading"
-      | "sessionsResult"
-    >;
-  readonly sessionDataContext: ApplicationContext<RouteId> | undefined;
-  readonly sessionOrganizer: SessionOrganizerController;
-  readonly sessionOwnerFilterActive: boolean;
-  readonly sessionOwnerFilterId: string | null;
-  readonly sessionInvolvingMeFilterActive: boolean;
-  readonly sessionOwnerOptions: readonly SessionOwnerOption[];
-  readonly sessionOwnershipVisible: boolean;
-  readSessionMutationAccess(request: {
-    method: string;
-    params?: unknown;
-    requiredScope?: "operator.write" | "operator.admin";
-  }): import("../lib/session-method-access.ts").SessionMethodAccess;
-  readonly sidebarEntries: readonly string[];
-  readonly catalogProjectGrouping: CatalogProjectGrouping;
-  setCatalogProjectGrouping(grouping: CatalogProjectGrouping): void;
-  hideSessionCatalog(catalogId: string): void;
-  sessionSortMode: SidebarSessionSortMode;
-  effectiveSessionSortMode(): SidebarSessionSortMode;
-  effectiveSessionsGrouping(): SidebarSessionsGrouping;
-  sessionPeopleSortAvailable(): boolean;
-  setSessionSortMode(mode: SidebarSessionSortMode): void;
-  setSessionOwnerFilter(ownerId: string | null, involvingMe?: boolean): void;
-  readonly terminalAvailable: boolean;
-  readonly themeMode: ThemeMode;
-  pluginNavigation(): ControlUiRegistration<ControlUiNavigationItem>[];
-  activeChipAgent(): {
-    activeId: string;
-    agent: SidebarMenuAgent | undefined;
-    agents: readonly SidebarMenuAgent[];
-    identity: AgentIdentityResult | null;
-    identities: ReadonlyMap<string, AgentIdentityResult>;
-  };
-  ensureAgentIdentities(agentIds: readonly string[]): void;
-  agentUnreadCount(agentId: string): number;
-  askAgentCapabilities(agentId: string): void;
-  getRouteSessionKey(): string;
-  getSessionNavigationState(): { selectedAgentId: string };
-  reconciledSidebarZone(): {
-    entries: readonly SidebarZoneEntry[];
-    sidebarEntries: readonly string[];
-  };
-  selectedVisibleSessions(): SidebarRecentSession[];
-  switchChipAgent(agentId: string): void;
-}
+type SidebarMenusRenderer = typeof import("./sidebar-menus-render.ts");
 
 /** Popup ownership and stateless menu-renderer wiring. */
 export class SidebarMenusController implements ReactiveController, SidebarMenusControllerState {
@@ -197,16 +97,14 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
     },
   );
   readonly catalogMenu: SidebarCatalogMenuController;
+  readonly agentMenuAvatars: IdentityAvatarController;
   pluginActionLifetime = new AbortController();
 
   constructor(readonly host: SidebarMenusControllerHost) {
     host.addController(this);
-    this.catalogMenu = new SidebarCatalogMenuController({
-      // Closing every transient menu keeps one popover at a time.
-      beforeOpen: () => void this.dismissTransientMenus(),
-      requestUpdate: () => host.requestUpdate(),
-      terminalAvailable: () => host.terminalAvailable,
-      navigate: ({ routeId, navigation }) => host.onNavigate?.(routeId, navigation),
+    this.agentMenuAvatars = new IdentityAvatarController(host);
+    this.catalogMenu = createSidebarCatalogMenuController(host, () => {
+      this.dismissTransientMenus();
     });
   }
 
@@ -696,7 +594,9 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
   }
 
   renderAgentMenu() {
-    return this.menuRenderer?.renderSidebarAgentMenuForController(this) ?? nothing;
+    return this.agentMenuAvatars.withActiveRoutes(
+      () => this.menuRenderer?.renderSidebarAgentMenuForController(this) ?? nothing,
+    );
   }
 
   renderIdentityMenu() {

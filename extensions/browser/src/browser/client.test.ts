@@ -447,12 +447,18 @@ describe("browser client", () => {
     const urls = calls.map((call) => call.url);
     expect(urls.some((url) => url.endsWith("/tabs"))).toBe(true);
     expect(urls.some((url) => url.endsWith("/doctor"))).toBe(true);
-    expect(urls.some((url) => url.endsWith("/doctor?profile=openclaw&deep=true"))).toBe(true);
     const status = calls.find((c) => c.url.endsWith("/"));
     expect(status?.init?.timeoutMs).toBe(7_500);
     const doctor = calls.find((c) => c.url.endsWith("/doctor"));
     expect(doctor?.init?.timeoutMs).toBe(7_500);
-    const deepDoctor = calls.find((c) => c.url.endsWith("/doctor?profile=openclaw&deep=true"));
+    const deepDoctor = calls.find(({ url }) => {
+      const parsed = new URL(url);
+      return parsed.pathname === "/doctor" && parsed.searchParams.get("deep") === "true";
+    });
+    expect(Object.fromEntries(new URL(deepDoctor!.url).searchParams)).toEqual({
+      profile: "openclaw",
+      deep: "true",
+    });
     expect(deepDoctor?.init?.timeoutMs).toBe(10_000);
     const open = calls.find((c) => c.url.endsWith("/tabs/open"));
     expect(open?.init?.method).toBe("POST");
@@ -535,7 +541,7 @@ describe("browser client", () => {
     );
 
     expect(calls.map((call) => call.init?.timeoutMs)).toEqual([
-      65_000, 35_000, 50_000, 95_000, 12_345,
+      126_250, 56_250, 96_250, 95_000, 12_345,
     ]);
   });
 
@@ -564,7 +570,7 @@ describe("browser client", () => {
     });
 
     const actCalls = calls.filter((call) => call.url.endsWith("/act"));
-    expect(actCalls[0]?.init?.timeoutMs).toBe(125_000);
+    expect(actCalls[0]?.init?.timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
     expect(actCalls[1]?.init?.timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
     const screenshot = calls.find((call) => call.url.endsWith("/screenshot"));
     expect(screenshot?.init?.timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);

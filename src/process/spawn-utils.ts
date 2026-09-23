@@ -1,45 +1,41 @@
-// Spawn utilities configure child processes and normalize spawned process handles.
 import type { ChildProcess, SpawnOptions } from "node:child_process";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { expectDefined } from "@openclaw/normalization-core";
 import { toErrorObject } from "../infra/errors.js";
+import { getSpawnBroker } from "./spawn-broker/context.js";
+import { brokerSpawnOptions } from "./spawn-broker/host.js";
+import { recordChildProcessSpawn } from "./spawn-diagnostics.js";
 
-type SpawnFallback = {
-  label: string;
-  options: SpawnOptions;
-};
+/** Select the process-scoped native spawn transport without changing launch options. */
+export function spawnProcess(command: string, args: string[], options: SpawnOptions): ChildProcess {
+  const broker = getSpawnBroker();
+  // Anonymous secret pipes and inherited numeric descriptors belong to this process.
+  const child =
+    broker && brokerSpawnOptions(options)
+      ? broker.spawn(command, args, options)
+      : spawn(command, args, options);
+  recordChildProcessSpawn(command, child);
+  return child;
+}
 
 type SpawnWithFallbackResult = {
   child: ChildProcess;
   usedFallback: boolean;
-  fallbackLabel?: string;
 };
 
 type SpawnWithFallbackParams = {
   assertCurrent?: () => void;
   argv: string[];
   options: SpawnOptions;
-  fallbacks?: SpawnFallback[];
+  fallbacks?: SpawnOptions[];
   spawnImpl?: (command: string, args: string[], options: SpawnOptions) => ChildProcess;
-  retryCodes?: string[];
-  onFallback?: (err: unknown, fallback: SpawnFallback) => void;
 };
 
-const DEFAULT_RETRY_CODES = ["EBADF"];
-
-export function resolveCommandStdio(params: {
-  hasInput: boolean;
-  preferInherit: boolean;
-}): ["pipe" | "inherit" | "ignore", "pipe", "pipe"] {
-  const stdin = params.hasInput ? "pipe" : params.preferInherit ? "inherit" : "pipe";
-  return [stdin, "pipe", "pipe"];
-}
-
-function shouldRetry(err: unknown, codes: string[]): boolean {
+function shouldRetry(err: unknown): boolean {
   const code =
     err && typeof err === "object" && "code" in err ? String((err as { code?: unknown }).code) : "";
-  return code.length > 0 && codes.includes(code);
+  return code === "EBADF";
 }
 
 async function spawnAndWaitForSpawn(
@@ -60,36 +56,27 @@ async function spawnAndWaitForSpawn(
 export async function spawnWithFallback(
   params: SpawnWithFallbackParams,
 ): Promise<SpawnWithFallbackResult> {
-  const spawnImpl = params.spawnImpl ?? spawn;
-  const retryCodes = params.retryCodes ?? DEFAULT_RETRY_CODES;
+  const spawnImpl = params.spawnImpl ?? spawnProcess;
   const baseOptions = { ...params.options };
   const fallbacks = params.fallbacks ?? [];
-  const attempts: Array<{ label?: string; options: SpawnOptions }> = [
-    { options: baseOptions },
-    ...fallbacks.map((fallback) => ({
-      label: fallback.label,
-      options: { ...baseOptions, ...fallback.options },
-    })),
-  ];
+  const attempts = [baseOptions, ...fallbacks.map((options) => ({ ...baseOptions, ...options }))];
 
   let lastError: unknown;
   for (const [index, attempt] of attempts.entries()) {
     // Caller revocation is not a spawn failure and cannot select a fallback.
     params.assertCurrent?.();
     try {
-      const child = await spawnAndWaitForSpawn(spawnImpl, params.argv, attempt.options);
+      const child = await spawnAndWaitForSpawn(spawnImpl, params.argv, attempt);
       return {
         child,
         usedFallback: index > 0,
-        fallbackLabel: attempt.label,
       };
     } catch (err) {
       lastError = err;
       const nextFallback = fallbacks[index];
-      if (!nextFallback || !shouldRetry(err, retryCodes)) {
+      if (!nextFallback || !shouldRetry(err)) {
         throw err;
       }
-      params.onFallback?.(err, nextFallback);
     }
   }
 

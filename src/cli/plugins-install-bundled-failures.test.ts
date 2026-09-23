@@ -49,7 +49,8 @@ describe("plugin install bundled failure propagation", () => {
   it("fails when an npm package-not-found bundled fallback fails", async () => {
     findBundledPluginSourceMock.mockImplementation((...args: unknown[]) => {
       const { lookup } = args[0] as { lookup: { kind: string; value: string } };
-      return lookup.kind === "npmSpec" && lookup.value === "fallback-demo"
+      return (lookup.kind === "npmSpec" && lookup.value === "registry-name") ||
+        (lookup.kind === "pluginId" && lookup.value === "fallback-demo")
         ? {
             pluginId: "fallback-demo",
             localPath: "/app/dist/extensions/fallback-demo",
@@ -71,7 +72,7 @@ describe("plugin install bundled failure propagation", () => {
     );
 
     await expect(
-      runPluginsCommand(["plugins", "install", "fallback-demo", "--force"]),
+      runPluginsCommand(["plugins", "install", "registry-name", "--force"]),
     ).rejects.toThrow("__exit__:1");
 
     expect(installManagedPluginSourceMock).toHaveBeenNthCalledWith(

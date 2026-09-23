@@ -6,6 +6,7 @@ import {
 } from "../lib/sessions/grouping.ts";
 import {
   SIDEBAR_SESSION_PAGE_SIZE,
+  type SidebarEmptyGroupsMode,
   type SidebarRecentSession,
   type SidebarSessionSortMode,
   type SidebarSessionStatusFilter,
@@ -25,13 +26,15 @@ type SidebarSubtitleValue = ReturnType<typeof resolveSidebarSessionSubtitle>;
 
 type SidebarProjectionInput = {
   rows: SidebarRecentSession[];
+  sections?: SidebarSessionSection<SidebarRecentSession>[];
   grouping: SidebarSessionsGrouping;
   knownGroups: string[] | undefined;
   selfOwnerId?: string | null;
   catalogIds?: readonly string[];
   sectionOrder?: readonly string[];
   collapsedSections: ReadonlySet<string>;
-  hideEmptyGroups: boolean;
+  emptyGroupsMode: SidebarEmptyGroupsMode;
+  ownerFiltered: boolean;
   visibleSessionLimits: ReadonlyMap<string, number>;
   sortMode: SidebarSessionSortMode;
   statusFilter: SidebarSessionStatusFilter;
@@ -192,17 +195,23 @@ export class SidebarSessionProjection {
     }
 
     const { grouping, knownGroups, selfOwnerId, sectionOrder, catalogIds } = input;
-    const sections = groupSidebarSessionRows(input.rows, {
-      grouping,
-      knownGroups,
-      selfOwnerId,
-      sectionOrder,
-      catalogIds,
-    }).filter(
-      (section) =>
-        section.id !== "pinned" &&
-        !(input.hideEmptyGroups && section.category && section.rows.length === 0),
-    );
+    const hideEmptyGroups =
+      input.emptyGroupsMode === "always" ||
+      (input.emptyGroupsMode === "filtering" && input.ownerFiltered);
+    const sections =
+      input.sections ??
+      groupSidebarSessionRows(input.rows, {
+        grouping,
+        knownGroups,
+        selfOwnerId,
+        sectionOrder,
+        catalogIds,
+      }).filter(
+        (section) =>
+          section.id !== "pinned" &&
+          // Catalog rows have their own projection; these sections are placeholders.
+          !(hideEmptyGroups && !section.id.startsWith("catalog:") && section.rows.length === 0),
+      );
     const sectionIds = new Set<string>(sections.map((section) => section.id));
     for (const sectionId of this.stickySections.keys()) {
       if (!sectionIds.has(sectionId)) {
@@ -228,8 +237,11 @@ export class SidebarSessionProjection {
       // totalRowCount is the pre-pagination size: headers and empty-zone
       // checks must not mistake a page-filtered section for an empty one.
       const totalRowCount = section.rows.length;
-      const renderHeader = section.id !== "ungrouped" || ungroupedHasPeerHeader;
-      const collapsed = renderHeader && input.collapsedSections.has(section.id);
+      const renderHeader =
+        !section.id.startsWith("agent:") && (section.id !== "ungrouped" || ungroupedHasPeerHeader);
+      const collapsed =
+        (renderHeader || section.id.startsWith("agent:")) &&
+        input.collapsedSections.has(section.id);
       const visibleLimit = input.visibleSessionLimits.get(section.id) ?? SIDEBAR_SESSION_PAGE_SIZE;
       const requiredRowCount = section.rows.reduce(
         (count, row) => count + Number(row.active || row.pinned),

@@ -12,26 +12,19 @@ const mocks = vi.hoisted(() => ({
   catalog: vi.fn(),
 }));
 
-vi.mock("../agents/auth-profiles/store.js", () => ({
-  loadAuthProfileStoreForRuntime: () => ({ version: 1, profiles: {} }),
-}));
-vi.mock("../agents/model-auth-availability.js", () => ({
-  createModelAuthAvailabilityResolver: () => ({
-    evaluateModelAuth: (_provider: string, ref: { modelId: string }) => ({
-      availability: mocks.hasAuth(ref),
-    }),
-  }),
-}));
-vi.mock("../agents/model-auth.js", () => ({ hasAvailableAuthForProvider: vi.fn() }));
-vi.mock("../agents/model-catalog.js", () => ({ loadManifestModelCatalog: mocks.catalog }));
-vi.mock("../system-agent/setup-inference.js", () => ({ verifySetupInference: vi.fn() }));
-vi.mock("../system-agent/setup-inference-test.js", () => ({ runSetupInferenceTest: mocks.probe }));
-vi.mock("../system-agent/setup-inference-persist.js", () => ({
-  cleanupSetupInferenceTempDir: async ({ tempDir }: { tempDir: string }) => {
-    const fs = await import("node:fs/promises");
-    await fs.rm(tempDir, { recursive: true, force: true });
+vi.mock("../agents/model-auth.js", () => ({
+  hasAvailableAuthForProvider: mocks.hasAuth,
+  resolveApiKeyForProviderCore: async (params: unknown) => {
+    if (!mocks.hasAuth(params)) {
+      throw new Error("Profile unavailable");
+    }
+    return { apiKey: "synthetic-credential" };
   },
 }));
+vi.mock("../agents/model-catalog.js", () => ({ loadManifestModelCatalog: mocks.catalog }));
+vi.mock("../system-agent/setup-inference.js", () => ({ verifySetupInference: vi.fn() }));
+vi.mock("../system-agent/setup-inference-turn.js", () => ({ runSetupInferenceTurn: mocks.probe }));
+
 vi.mock("../system-agent/inference-route.js", () => ({
   resolveSystemAgentConfiguredRouteFromConfig: async (
     config: OpenClawConfig,
@@ -51,6 +44,7 @@ vi.mock("../system-agent/inference-route.js", () => ({
       model: split.model.slice(slash + 1),
       modelLabel: split.model,
       runConfig: config,
+      sourceConfig: config,
       agentId,
       agentDir: `/isolated/${agentId}`,
       ...(split.profile ? { authProfileId: split.profile } : {}),
@@ -97,17 +91,19 @@ describe("update repair inference", () => {
     mocks.probe.mockResolvedValueOnce({ ok: false, status: "format", error: "bad model" });
     const result = await select();
 
-    expect(mocks.probe.mock.calls.map(([params]) => params.plan.modelRef)).toEqual([
+    expect(mocks.probe.mock.calls.map(([params]) => params.route.modelLabel)).toEqual([
       "zeta/primary",
       "zeta/backup",
     ]);
-    expect(mocks.probe.mock.calls[0]?.[0].plan).toMatchObject({
+    expect(mocks.probe.mock.calls[0]?.[0].route).toMatchObject({
       authProfileId: "owner-profile",
       agentDir: "/isolated/owner",
     });
     expect(mocks.hasAuth.mock.calls[0]?.[0]).toMatchObject({
       modelId: "primary",
-      pinnedProfileId: "owner-profile",
+      profileId: "owner-profile",
+      lockedProfile: true,
+      allowAuthProfileFallback: false,
     });
     expect(result).toMatchObject({
       ok: true,
@@ -117,14 +113,14 @@ describe("update repair inference", () => {
   });
 
   it("exhausts owner models before another authenticated agent, including same-provider failures", async () => {
-    mocks.probe.mockImplementation(async ({ plan }) =>
-      plan.routeAgentId === "owner"
+    mocks.probe.mockImplementation(async ({ route }) =>
+      route.agentId === "owner"
         ? { ok: false, status: "unavailable", error: "route unavailable" }
         : { ok: true, latencyMs: 1, text: "OK", auth: {} },
     );
     const result = await select();
 
-    expect(mocks.probe.mock.calls.map(([params]) => params.plan.modelRef)).toEqual([
+    expect(mocks.probe.mock.calls.map(([params]) => params.route.modelLabel)).toEqual([
       "zeta/primary",
       "zeta/backup",
       "zeta/spare",
@@ -176,7 +172,9 @@ describe("update repair inference", () => {
     const result = await select(cfg);
 
     expect(result).toMatchObject({ ok: true, route: { model: "tools" } });
-    expect(mocks.probe.mock.calls.map(([params]) => params.plan.modelRef)).toEqual(["zeta/tools"]);
+    expect(mocks.probe.mock.calls.map(([params]) => params.route.modelLabel)).toEqual([
+      "zeta/tools",
+    ]);
     expect(mocks.hasAuth.mock.calls.map(([params]) => params.modelId)).toEqual([
       "no-auth",
       "tools",

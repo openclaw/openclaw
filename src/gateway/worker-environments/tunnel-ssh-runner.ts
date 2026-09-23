@@ -41,7 +41,7 @@ function workerSshStderrTail(stderr: string): string | undefined {
   return redacted ? sliceUtf16Safe(redacted, -STDERR_LIMIT) : undefined;
 }
 
-/** Production runner that treats the remote post-forward marker as connection readiness. */
+/** Production runner that treats the post-forward marker as connection readiness. */
 export function createWorkerSshRunner(): WorkerSshRunner {
   return {
     run: runCommandWithTimeout,
@@ -183,7 +183,10 @@ export function createWorkerSshRunner(): WorkerSshRunner {
                 );
               }
             }
-          })());
+          })().catch((error: unknown) => {
+            stopPromise = undefined;
+            throw error;
+          }));
         },
       };
     },

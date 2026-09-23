@@ -7,7 +7,8 @@ import { gzipSync } from "node:zlib";
 import type { AnyAgentTool } from "openclaw/plugin-sdk/plugin-entry";
 import * as tar from "tar";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { DIR_FETCH_HARD_MAX_BYTES, FILE_TRANSFER_SUBDIR } from "./descriptors.js";
+import { DIR_FETCH_HARD_MAX_BYTES } from "../shared/dir-fetch-limits.js";
+import { FILE_TRANSFER_SUBDIR } from "./descriptors.js";
 
 const appendFileTransferAudit = vi.fn(async () => undefined);
 const saveMediaBuffer = vi.fn<() => Promise<{ path: string }>>();
@@ -50,17 +51,13 @@ afterAll(() => {
 
 async function createTarBuffer(params: {
   entries: string[];
-  noPax?: boolean;
   setup: (sourceDir: string) => Promise<void>;
 }): Promise<Buffer> {
   const sourceDir = path.join(tmpRoot, `source-${randomUUID()}`);
   await fs.mkdir(sourceDir, { recursive: true });
   await params.setup(sourceDir);
   const chunks: Buffer[] = [];
-  for await (const chunk of tar.c(
-    { cwd: sourceDir, gzip: true, portable: true, noPax: params.noPax },
-    params.entries,
-  )) {
+  for await (const chunk of tar.c({ cwd: sourceDir, gzip: true, portable: true }, params.entries)) {
     chunks.push(Buffer.from(chunk));
   }
   return Buffer.concat(chunks);
@@ -181,8 +178,9 @@ async function expectUnsafeArchive(
 
 describe("dir.fetch archive extraction", () => {
   it("extracts a bounded tar and returns the plugin-side manifest", async () => {
+    const largeContent = "a".repeat(300_017);
     const tarBuffer = await createTarBuffer({
-      entries: ["ok.txt", "nested", ".root-note", ".hidden"],
+      entries: ["ok.txt", "nested", ".root-note", ".hidden", "empty.bin", "large.bin"],
       setup: async (sourceDir) => {
         await fs.writeFile(path.join(sourceDir, "ok.txt"), "ok");
         await fs.mkdir(path.join(sourceDir, "nested"));
@@ -190,6 +188,8 @@ describe("dir.fetch archive extraction", () => {
         await fs.writeFile(path.join(sourceDir, ".root-note"), "hidden root");
         await fs.mkdir(path.join(sourceDir, ".hidden"));
         await fs.writeFile(path.join(sourceDir, ".hidden", "note.txt"), "hidden member");
+        await fs.writeFile(path.join(sourceDir, "empty.bin"), "");
+        await fs.writeFile(path.join(sourceDir, "large.bin"), largeContent);
       },
     });
     prepareArchive(tarBuffer);
@@ -203,15 +203,16 @@ describe("dir.fetch archive extraction", () => {
     expect.soft(modelText).toContain(".root-note");
 
     expect(result).toMatchObject({
-      content: [{ type: "text", text: expect.stringContaining("Fetched 4 files") }],
+      content: [{ type: "text", text: expect.stringContaining("Fetched 6 files") }],
       details: {
         path: "/tmp/project",
-        fileCount: 4,
+        fileCount: 6,
       },
     });
-    const files = (result.details as { files: Array<{ relPath: string; localPath: string }> })
-      .files;
-    expect(files).toHaveLength(4);
+    const files = (
+      result.details as { files: Array<{ relPath: string; localPath: string; sha256: string }> }
+    ).files;
+    expect(files).toHaveLength(6);
     expect(files).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -227,14 +228,21 @@ describe("dir.fetch archive extraction", () => {
       ]),
     );
     const visible = readSavedContent(result.content);
-    expect(visible.fileCount).toBe(4);
-    expect(visible.files).toHaveLength(4);
+    expect(visible.fileCount).toBe(6);
+    expect(visible.files).toHaveLength(6);
     const expectedContents = new Map([
       ["ok.txt", "ok"],
       [path.join("nested", "also-ok.txt"), "also ok"],
       [".root-note", "hidden root"],
       [path.join(".hidden", "note.txt"), "hidden member"],
+      ["empty.bin", ""],
+      ["large.bin", largeContent],
     ]);
+    for (const file of files) {
+      expect(file.sha256).toBe(
+        crypto.createHash("sha256").update(expectedContents.get(file.relPath)!).digest("hex"),
+      );
+    }
     for (const file of visible.files) {
       const bytes = await fs.readFile(path.join(visible.rootDir, file.relPath));
       expect(bytes.toString()).toBe(expectedContents.get(file.relPath));
@@ -262,9 +270,6 @@ describe("dir.fetch archive extraction", () => {
     const relPaths = [...names, "z-image.png", "z-image.jpg"];
     const tarBuffer = await createTarBuffer({
       entries: ["."],
-      // These UTF-8 names fit USTAR's 100-byte field. fs-safe rejects non-ASCII
-      // PAX paths; use the supported raw-name format, then verify every saved name.
-      noPax: true,
       setup: async (sourceDir) => {
         await Promise.all(
           relPaths.map((relPath) => fs.writeFile(path.join(sourceDir, relPath), relPath)),
@@ -273,7 +278,26 @@ describe("dir.fetch archive extraction", () => {
     });
     // Remote metadata need not fit in text; the exact local root identifies the saved tree.
     const { archivePath } = prepareArchive(tarBuffer, "media", "/" + "雪".repeat(10000));
-    const result = await executeDirFetch();
+    const stringify = JSON.stringify;
+    let encodedRecords = 0;
+    const encoding = vi
+      .spyOn(JSON, "stringify")
+      .mockImplementation((value: unknown, replacer, space) => {
+        if (typeof value === "object" && value !== null) {
+          if ("files" in value && Array.isArray(value.files)) {
+            encodedRecords += value.files.length;
+          } else if ("relPath" in value && "size" in value && Object.keys(value).length === 2) {
+            encodedRecords += 1;
+          }
+        }
+        return stringify(value, replacer, space);
+      });
+    let result: Awaited<ReturnType<AnyAgentTool["execute"]>>;
+    try {
+      result = await executeDirFetch();
+    } finally {
+      encoding.mockRestore();
+    }
     const visible = readSavedContent(result.content);
     expect(visible.fileCount).toBe(relPaths.length);
     expect(visible.displayedCount).toBeGreaterThan(0);
@@ -341,6 +365,16 @@ describe("dir.fetch archive extraction", () => {
       files: expectedFiles,
       media: { mediaUrls: [...images, ...others].slice(0, 25).map((file) => file.localPath) },
     });
+    expect(visible.text.split("\n").find((line) => line.startsWith("{"))).toBe(
+      JSON.stringify({
+        rootDir,
+        fileCount: relPaths.length,
+        displayedCount: visible.displayedCount,
+        files: visible.files,
+      }),
+    );
+    expect(encodedRecords).toBeGreaterThan(0);
+    expect(encodedRecords).toBeLessThanOrEqual(visible.displayedCount + 1);
   });
 
   it.each(["empty", "long paths", "reserved name", "reserved root"] as const)(

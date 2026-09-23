@@ -1,12 +1,58 @@
+import { spawnSync } from "node:child_process";
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { intersectIncludePatterns } from "./vitest.include-patterns.ts";
 import {
   collectVitestExcludePatterns,
-  intersectIncludePatterns,
   matchesVitestCliSelection,
+  matchesVitestGlob,
   narrowIncludePatternsForCli,
 } from "./vitest.pattern-file.ts";
 
 describe("native CLI selection", () => {
+  it("plans Node CI test ownership before dependencies are installed", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-selection-preflight-"));
+    try {
+      for (const relative of [
+        "test/vitest/vitest.pattern-file.ts",
+        "test/vitest/vitest.include-patterns.ts",
+        "scripts/lib/vitest-cli-mode.mts",
+      ]) {
+        const target = path.join(root, relative);
+        mkdirSync(path.dirname(target), { recursive: true });
+        copyFileSync(path.resolve(import.meta.dirname, "../..", relative), target);
+      }
+      writeFileSync(path.join(root, "package.json"), '{"type":"module"}');
+      const result = spawnSync(
+        process.versions.bun ? "node" : process.execPath,
+        [
+          "--input-type=module",
+          "--eval",
+          `import { matchesVitestGlob } from './test/vitest/vitest.pattern-file.ts';
+           console.log(matchesVitestGlob('ui/src/example.test.ts', 'ui/src/**/!(*.browser).test.ts'));`,
+        ],
+        { cwd: root, encoding: "utf8", env: { ...process.env, NODE_OPTIONS: "", NODE_PATH: "" } },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout.trim()).toBe("true");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    { file: "ui/src/pages/devices/capability-chips.test.ts", selected: true },
+    { file: "ui/src/pages/devices/capability-chips.browser.test.ts", selected: false },
+  ])("preserves UI extglob ownership for $file", ({ file, selected }) => {
+    const include = ["ui/src/**/!(*.browser).test.ts"];
+    const expected = selected ? [file] : [];
+    expect(narrowIncludePatternsForCli(include, ["node", "vitest", "run", file])).toEqual(expected);
+    expect(intersectIncludePatterns(include, [file], matchesVitestGlob)).toEqual(expected);
+    expect(matchesVitestCliSelection(file, include, ["run", file], "", {})).toBe(selected);
+  });
+
   const file = "extensions/qa-lab/src/suite-process-lifecycle.test.ts";
   it.each([
     { args: ["--configLoader", "runner"], selected: true },
@@ -48,21 +94,25 @@ describe("intersectIncludePatterns", () => {
       "ui/src/pages/workboard/workboard.e2e.test.ts",
     ];
 
-    expect(intersectIncludePatterns(owner, ["ui/src/e2e/*.e2e.test.ts"])).toEqual([
-      "ui/src/e2e/chat.e2e.test.ts",
-      "ui/src/e2e/chat.capture.e2e.test.ts",
-    ]);
     expect(
-      intersectIncludePatterns(owner, [
-        "ui/src/e2e/chat*.e2e.test.ts",
-        "ui/src/e2e/chat.e2e.test.ts",
-      ]),
+      intersectIncludePatterns(owner, ["ui/src/e2e/*.e2e.test.ts"], matchesVitestGlob),
+    ).toEqual(["ui/src/e2e/chat.e2e.test.ts", "ui/src/e2e/chat.capture.e2e.test.ts"]);
+    expect(
+      intersectIncludePatterns(
+        owner,
+        ["ui/src/e2e/chat*.e2e.test.ts", "ui/src/e2e/chat.e2e.test.ts"],
+        matchesVitestGlob,
+      ),
     ).toEqual(["ui/src/e2e/chat.e2e.test.ts", "ui/src/e2e/chat.capture.e2e.test.ts"]);
   });
 
   it("retains the ambiguity guard for glob-owned inventories", () => {
     expect(() =>
-      intersectIncludePatterns(["ui/src/**/*.e2e.test.ts"], ["ui/src/e2e/*.e2e.test.ts"]),
+      intersectIncludePatterns(
+        ["ui/src/**/*.e2e.test.ts"],
+        ["ui/src/e2e/*.e2e.test.ts"],
+        matchesVitestGlob,
+      ),
     ).toThrow("cannot safely intersect non-literal include path");
   });
 });

@@ -11,9 +11,21 @@ import type { ReplyToMode } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MessagePresentation, ReplyPayloadDeliveryPin } from "../../interactive/payload.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
-import type { DeliveryQueueCompletionRetention } from "../delivery-queue-sqlite.js";
-import type { OutboundDeliveryResult, OutboundPayloadDeliveryOutcome } from "./deliver-types.js";
-import type { DurableDeliveryCompletion } from "./delivery-completion.js";
+import type {
+  DeliveryQueueCompletionRetention,
+  DeliveryQueueStateContext,
+} from "../delivery-queue-sqlite.js";
+import type { QueuedDeliveryOwner } from "./deliver-queue-state.js";
+import type {
+  OutboundDeliveryQueuePolicy,
+  OutboundDeliveryResult,
+  OutboundPayloadDeliveryOutcome,
+  PlatformSendRoute,
+} from "./deliver-types.js";
+import type {
+  ConversationDeliveryTarget,
+  DurableDeliveryCompletion,
+} from "./delivery-completion.js";
 import type {
   QueuedReplyPayloadSendingHook,
   QueuedRenderedMessageBatchPlan,
@@ -33,7 +45,7 @@ type ConversationDeliveryAttemptAuthority = Omit<
   "kind"
 >;
 
-export type OutboundDeliveryQueuePolicy = "required" | "best_effort";
+export type { OutboundDeliveryQueuePolicy, PlatformSendRoute } from "./deliver-types.js";
 
 export type OutboundDeliveryIntent = {
   id: string;
@@ -69,8 +81,10 @@ export type ChannelHandler = {
   chunkerMode?: "text" | "markdown";
   chunkedTextFormatting?: OutboundDeliveryFormattingOptions;
   textChunkLimit?: number;
+  extractMarkdownImages?: boolean;
   preserveMarkdownDetails?: boolean;
   supportsMedia: boolean;
+  supportsMediaPayload?: boolean;
   sanitizeText?: (payload: ReplyPayload) => string;
   normalizePayload?: (payload: ReplyPayload) => ReplyPayload | null;
   normalizePayloadBatch?: (
@@ -88,6 +102,7 @@ export type ChannelHandler = {
     messageId: string;
     pin: ReplyPayloadDeliveryPin;
     gatewayClientScopes?: readonly string[];
+    assertDirectAdapterHandoff?: () => void;
   }) => Promise<void>;
   afterDeliverPayload?: (params: {
     target: ChannelOutboundTargetRef;
@@ -126,11 +141,6 @@ export type ChannelHandler = {
     mediaUrl: string,
     overrides?: OutboundMessageSendOverrides,
   ) => Promise<OutboundDeliveryResult>;
-};
-
-export type PlatformSendRoute = {
-  replyToId?: string | null;
-  threadId?: string | number | null;
 };
 
 export type ChannelHandlerParams = {
@@ -250,6 +260,7 @@ export type DeliverOutboundPayloadsParams = DeliverOutboundPayloadsCoreParams & 
   skipQueue?: boolean;
   /** @internal Fence recovery ownership at the same provider boundary as live sends. */
   deliveryProducerClaimId?: string;
+  deliveryQueueOwner?: QueuedDeliveryOwner;
   /** @internal Keep the exact live producer claim alive during platform preparation. */
   deliveryProducerLeaseRequired?: boolean;
   /** @internal Recovery already ran provider admission after its pending-row re-read. */
@@ -261,4 +272,10 @@ export type DeliverOutboundPayloadsParams = DeliverOutboundPayloadsCoreParams & 
   queuePolicy?: OutboundDeliveryQueuePolicy;
   renderedBatchPlan?: QueuedRenderedMessageBatchPlan;
   onDeliveryIntent?: (intent: OutboundDeliveryIntent) => void;
+};
+
+/** Private owner facts excluded from SDK delivery parameters and stored payloads. */
+export type InternalDeliverOutboundPayloadsParams = DeliverOutboundPayloadsParams & {
+  conversationDeliveryTarget?: ConversationDeliveryTarget;
+  deliveryQueueStateContext?: DeliveryQueueStateContext;
 };
