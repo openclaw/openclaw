@@ -103,7 +103,11 @@ function shouldInspectFile(filePath: string): boolean {
 
 function shouldInspectManualHelperUsage(filePath: string): boolean {
   const normalizedPath = normalizePath(filePath);
-  return normalizedPath !== TEMP_DIR_HELPER_TEST_PATH && shouldInspectFile(normalizedPath);
+  return (
+    /\.(?:[cm]?[jt]s|[jt]sx)$/u.test(normalizedPath) &&
+    normalizedPath !== TEMP_DIR_HELPER_TEST_PATH &&
+    shouldInspectFile(normalizedPath)
+  );
 }
 
 function escapeGithubCommandValue(value: unknown): string {
