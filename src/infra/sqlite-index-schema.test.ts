@@ -1,5 +1,7 @@
+import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   repairCanonicalSqliteIndexes,
   verifyAndRepairCanonicalSqliteIndexes,
@@ -22,13 +24,18 @@ const CANONICAL_SCHEMA = `
     ON records(active, tenant_id);
 `;
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
 function createDatabase(): DatabaseSync {
   const db = new DatabaseSync(":memory:");
   db.exec(CANONICAL_SCHEMA);
   return db;
 }
 
-function tracePreparedSql(database: DatabaseSync): {
+function tracePreparedSql(
+  database: DatabaseSync,
+  onIndexSql?: (sql: string) => void,
+): {
   database: DatabaseSync;
   statements: string[];
   readonly materializedIndexSqlBytes: number;
@@ -44,6 +51,7 @@ function tracePreparedSql(database: DatabaseSync): {
       /^CREATE (?:UNIQUE )?INDEX\b/iu.test(row.sql)
     ) {
       materializedIndexSqlBytes += Buffer.byteLength(row.sql, "utf8");
+      onIndexSql?.(row.sql);
     }
   }
   return {
@@ -85,6 +93,37 @@ function tracePreparedSql(database: DatabaseSync): {
 }
 
 describe("repairCanonicalSqliteIndexes", () => {
+  it("inspects one committed index snapshot and releases it before later repair writes", () => {
+    const filename = path.join(tempDirs.make("openclaw-index-snapshot-"), "state.sqlite");
+    const writer = new DatabaseSync(filename);
+    writer.exec(`PRAGMA journal_mode=WAL; ${CANONICAL_SCHEMA}`);
+    const reader = new DatabaseSync(filename);
+    let droppedIndex: string | undefined;
+    const traced = tracePreparedSql(reader, (sql) => {
+      if (droppedIndex) {
+        return;
+      }
+      droppedIndex = sql.includes("idx_records_identity")
+        ? "idx_records_active_lookup"
+        : "idx_records_identity";
+      writer.exec(`DROP INDEX ${droppedIndex}`);
+    });
+    try {
+      expect(
+        repairCanonicalSqliteIndexes(traced.database, "test database", CANONICAL_SCHEMA),
+      ).toEqual([]);
+      expect(droppedIndex).toBeDefined();
+      expect(repairCanonicalSqliteIndexes(reader, "test database", CANONICAL_SCHEMA)).toEqual([
+        droppedIndex,
+      ]);
+      expect(reader.isTransaction).toBe(false);
+      expect(reader.prepare("PRAGMA integrity_check").all()).toEqual([{ integrity_check: "ok" }]);
+    } finally {
+      reader.close();
+      writer.close();
+    }
+  });
+
   it("runs one whole-file integrity check for healthy indexes", () => {
     const db = createDatabase();
     try {

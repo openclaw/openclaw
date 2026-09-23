@@ -473,11 +473,11 @@ export function runSqlitePinnedReadSnapshotSync<T>(db: DatabaseSync, operation: 
   return executeWithCachedStatement(db, "PRAGMA schema_version", [], (statement) => {
     // sqlite-allow-raw: Stepping this pragma pins the connection's implicit read transaction.
     const snapshot = statement.iterate();
-    const first = snapshot.next();
-    if (first.done) {
-      throw new Error("SQLite schema version query returned no row");
-    }
     try {
+      const first = snapshot.next();
+      if (first.done) {
+        throw new Error("SQLite schema version query returned no row");
+      }
       return operation();
     } finally {
       snapshot.return?.();
