@@ -1,9 +1,9 @@
+import fs from "node:fs";
+import path from "node:path";
 /**
  * Gateway post-attach startup task tests.
  */
 import "./server-worker-free.test-support.js";
-import fs from "node:fs";
-import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -11,6 +11,11 @@ import {
   createInfoWarnErrorLogger,
 } from "../../test/helpers/mock-logger.js";
 import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  lookupCachedContextTokens,
+  replaceDiscoveredContextTokenCache,
+} from "../agents/context-cache.js";
+import { notifyPreparedModelRuntimePublication } from "../agents/prepared-model-runtime.publication-events.js";
 import * as configPaths from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasRestartSentinel, writeRestartSentinel } from "../infra/restart-sentinel.js";
@@ -1779,6 +1784,48 @@ describe("startGatewayPostAttachRuntime", () => {
       });
     } finally {
       admission.release();
+      await stopTrackedSidecar(sidecar);
+    }
+  });
+
+  it("refreshes the context projection on committed catalog changes and unregisters on stop", async () => {
+    vi.useFakeTimers();
+    const config = {};
+    const sidecar = scheduleContextCachePrewarm({
+      getConfig: () => config,
+      log: { warn: vi.fn() },
+    });
+    try {
+      replaceDiscoveredContextTokenCache(new Map([["account-model", 872_000]]));
+      notifyPreparedModelRuntimePublication({ phase: "invalidated" });
+      expect(lookupCachedContextTokens("account-model")).toBeUndefined();
+      notifyPreparedModelRuntimePublication({
+        phase: "failed",
+        error: new Error("replacement failed"),
+      });
+      expect(lookupCachedContextTokens("account-model")).toBeUndefined();
+      notifyPreparedModelRuntimePublication({
+        phase: "catalog-published",
+        modelFactsChanged: false,
+      });
+      await vi.dynamicImportSettled();
+      expect(hoisted.prewarmContextWindowCacheAfterReady).not.toHaveBeenCalled();
+      notifyPreparedModelRuntimePublication({
+        phase: "catalog-published",
+        modelFactsChanged: true,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.dynamicImportSettled();
+      expect(hoisted.prewarmContextWindowCacheAfterReady).toHaveBeenCalledOnce();
+      await stopTrackedSidecar(sidecar);
+      notifyPreparedModelRuntimePublication({
+        phase: "catalog-published",
+        modelFactsChanged: true,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.dynamicImportSettled();
+      expect(hoisted.prewarmContextWindowCacheAfterReady).toHaveBeenCalledOnce();
+    } finally {
       await stopTrackedSidecar(sidecar);
     }
   });

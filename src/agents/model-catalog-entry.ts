@@ -19,6 +19,7 @@ export function modelCatalogRowToEntry(
     ...(isCatalogModelApi(row.api) ? { api: row.api } : {}),
     ...(row.baseUrl ? { baseUrl: row.baseUrl } : {}),
     ...(contextWindow !== undefined ? { contextWindow } : {}),
+    ...(row.contextWindowSource ? { contextWindowSource: row.contextWindowSource } : {}),
     ...(row.contextWindows
       ? { contextWindows: row.contextWindows.map((option) => ({ ...option })) }
       : {}),

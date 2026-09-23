@@ -34,6 +34,8 @@ export type ModelCatalogEntry = {
   contextWindows?: ModelContextWindowOption[];
   contextWindowDefault?: string;
   contextTokens?: number;
+  /** Provider-declared unknown-model estimate; not an authored or curated static limit. */
+  contextWindowSource?: "synthetic";
   reasoning?: boolean;
   /** Config-authored reasoning override; internal provenance, never project to clients. */
   configuredReasoning?: boolean;

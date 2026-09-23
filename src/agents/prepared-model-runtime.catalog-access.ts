@@ -81,8 +81,13 @@ export function createFullModelCatalogAccess(
     runtimeModels:
       | PreparedModelCatalogInventory["runtimeModels"]
       | undefined = inventory?.runtimeModels,
+    discoveryOrigins = inventory?.discoveryOrigins ?? [],
   ) => {
-    const projected = projectInventory(catalog, currentConfiguredRuntimeModels);
+    const projected = projectInventory(
+      catalog,
+      currentConfiguredRuntimeModels,
+      new Set(discoveryOrigins.map(({ provider }) => normalizeProvider(provider))),
+    );
     publishedRuntimeModels = runtimeModels;
     return attempt.withRefreshStatus(projected);
   };
@@ -450,7 +455,11 @@ export function createFullModelCatalogAccess(
           }
           setCatalogAuth(publication.catalog, auth);
           currentConfiguredRuntimeModels = configuredRuntimeModels;
-          const catalog = project(publication.catalog, publication.runtimeModels);
+          const catalog = project(
+            publication.catalog,
+            publication.runtimeModels,
+            publication.discoveryOrigins,
+          );
           setCatalogAuth(catalog, auth);
           assertCurrent();
           const completedProviders = new Map(providerIds ? inventory?.providers : undefined);

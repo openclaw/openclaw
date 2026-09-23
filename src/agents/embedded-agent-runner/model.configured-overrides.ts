@@ -591,6 +591,14 @@ export function applyConfiguredProviderOverrides(params: {
     return undefined;
   }
   const contextWindow = metadataOverrideModel?.contextWindow ?? discoveredModel.contextWindow;
+  // An authored size is not a provider unknown-model estimate; drop that marker with it.
+  const { contextWindowSource: _syntheticContextWindowSource, ...discoveredWithoutSizeSource } =
+    discoveredModel;
+  const discoveredSizing =
+    metadataOverrideModel?.contextWindow !== undefined ||
+    metadataOverrideModel?.contextTokens !== undefined
+      ? discoveredWithoutSizeSource
+      : discoveredModel;
   const configuredMaxTokens = metadataOverrideModel?.maxTokens ?? providerConfig.maxTokens;
   const resolvedMaxTokens = configuredMaxTokens ?? discoveredModel.maxTokens;
   const normalizedResolvedMaxTokens = clampModelMaxTokensToContextWindow(
@@ -651,7 +659,7 @@ export function applyConfiguredProviderOverrides(params: {
     attachModelProviderLocalService(
       attachModelProviderRequestTransport(
         {
-          ...discoveredModel,
+          ...discoveredSizing,
           provider: params.provider,
           api: requestConfig.api ?? "openai-responses",
           baseUrl: requestConfig.baseUrl ?? discoveredModel.baseUrl,
