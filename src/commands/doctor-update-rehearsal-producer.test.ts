@@ -157,7 +157,7 @@ it.each(["pending", "applied"] as const)(
       };
       await fs.mkdir(skillDir, { recursive: true });
       await fs.writeFile(record.target.skillFile, content);
-      importLegacySkillProposal({ record, ownerAgentId: "main", store: { env: source.env } });
+      await importLegacySkillProposal({ record, ownerAgentId: "main", store: { env: source.env } });
       const config: OpenClawConfig = {
         agents: { entries: { main: { workspace: source.workspaceDir } } },
       };
