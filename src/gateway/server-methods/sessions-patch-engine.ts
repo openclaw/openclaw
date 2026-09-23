@@ -42,7 +42,7 @@ import {
   type SessionPatchCatalogResult,
 } from "./sessions-patch-catalog-preparation.js";
 import type { SessionPatchDiagnostics } from "./sessions-patch-diagnostics.js";
-import { publishSessionPatchEffects } from "./sessions-patch-effects.js";
+import * as patchEffects from "./sessions-patch-effects.js";
 import {
   assertSessionPatchCommitAllowed,
   invalidSessionPatchOutcome,
@@ -565,6 +565,7 @@ export async function executeSessionPatchMutations(params: {
                     };
                   };
                   const groupStore = {
+                    afterCommitted: patchEffects.createSessionPatchCategoryRegistration(params),
                     assertCommitAllowed,
                     agentId: first.targetAgentId,
                     sessionKeys: selectedSessionKeys,
@@ -700,12 +701,11 @@ export async function executeSessionPatchMutations(params: {
   }
 
   timing?.mark("effects");
-  await publishSessionPatchEffects({
+  await patchEffects.publishSessionPatchEffects({
     cfg,
     context: params.context,
     callerScopes,
     callerCanManageCron: callerIsAdmin,
-    category: params.patch.category,
     targets: prepared.flatMap((target) => {
       const outcome = outcomes[target.index];
       return outcome?.ok && outcome.applied

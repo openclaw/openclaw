@@ -1,8 +1,8 @@
 // Elevenlabs tests cover tts plugin behavior.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
-import { MAX_AUDIO_BYTES } from "openclaw/plugin-sdk/media-runtime";
 import { synthesizeElevenLabsLiveSpeech } from "openclaw/plugin-sdk/provider-test-contracts";
 import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
+import { MAX_AUDIO_BYTES } from "openclaw/plugin-sdk/speech-provider";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createStreamingErrorResponse } from "../test-support/streaming-error-response.js";
 import { elevenLabsTTS, elevenLabsTTSStream } from "./tts.js";

@@ -174,12 +174,13 @@ describe("transcript export digest worker", () => {
       };
       // oxlint-disable-next-line typescript/unbound-method -- Preserve the intercepted native receiver.
       const prepare = DatabaseSync.prototype.prepare;
-      const prepareSpy = vi
-        .spyOn(DatabaseSync.prototype, "prepare")
-        .mockImplementation(function (this: DatabaseSync, sql) {
-          observe(sql);
-          return prepare.call(this, sql);
-        });
+      const prepareSpy = vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (
+        this: DatabaseSync,
+        sql,
+      ) {
+        observe(sql);
+        return prepare.call(this, sql);
+      });
       // Catch execution even when a preceding export has cached the native statement.
       // oxlint-disable-next-line typescript/unbound-method -- Preserve the intercepted statement receiver.
       const iterate = StatementSync.prototype.iterate;

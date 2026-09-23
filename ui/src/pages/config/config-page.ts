@@ -52,6 +52,7 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
+import { readSystemInfo, SYSTEM_INFO_POLL_INTERVAL_MS } from "../../lib/system-info.ts";
 import {
   GatewayPageController,
   type GatewayPageChange,
@@ -110,7 +111,6 @@ type SessionObserverModelsResult = {
   agentId: string;
   models: ModelCatalogEntry[];
 };
-const SESSION_OBSERVER_STATUS_POLL_INTERVAL_MS = 10_000;
 const EMPTY_SESSION_CATALOG_LABELS: ReadonlyMap<string, string> = new Map();
 
 function defaultConfigSelection(pageId: ConfigPageId): ConfigSelection {
@@ -288,13 +288,14 @@ export class ConfigPage extends OpenClawLightDomElement {
   private updateStatusClient: GatewayBrowserClient | null = null;
   private readonly systemInfoPolling = new PollController(
     this,
-    SESSION_OBSERVER_STATUS_POLL_INTERVAL_MS,
+    SYSTEM_INFO_POLL_INTERVAL_MS,
     () => {
       if (this.systemInfoTask.status !== TaskStatus.PENDING) {
         void this.systemInfoTask.run();
       }
     },
     false,
+    "visible",
   );
   private readonly updateCountdownPolling = new PollController(
     this,
@@ -308,10 +309,12 @@ export class ConfigPage extends OpenClawLightDomElement {
     args: () => [this.gateway.gateway, this.systemInfoRequestClient()] as const,
     task: ([gateway, client], { signal }) =>
       gateway && client
-        ? client.request<SystemInfoResult>("system.info", {}, { signal })
+        ? readSystemInfo(gateway, signal).then((sample) => sample.value)
         : initialState,
     onComplete: (systemInfo) => {
       this.systemInfo = systemInfo;
+      this.systemInfoPolling.stop();
+      this.systemInfoPolling.start();
       // Status polling must not restart a slow catalog read. Changed owners
       // still replace pending work through the model task's reactive args.
       if (this.sessionObserverModelsTask.status !== TaskStatus.PENDING) {
@@ -422,6 +425,7 @@ export class ConfigPage extends OpenClawLightDomElement {
     getGateway: () => this.context?.gateway,
     invalidateRequests: () => this.invalidateSystemInfoRequest(),
     onSnapshot: (change) => this.handleGatewaySnapshot(change),
+    onPageActivation: () => this.syncSystemInfoPolling(),
   });
   private readonly subscriptions = new SubscriptionsController(this)
     .watch(
@@ -702,16 +706,11 @@ export class ConfigPage extends OpenClawLightDomElement {
   }
 
   private syncSystemInfoPolling(forceRefresh = false) {
-    const gateway = this.context.gateway.snapshot;
-    const shouldPoll =
-      this.isConnected &&
-      this.isSystemInfoVisible() &&
-      !this.systemInfoUnavailable &&
-      gateway.phase === "connected" &&
-      supportsSystemInfo(gateway.hello) &&
-      gateway.client != null;
-    if (!shouldPoll) {
+    if (!this.systemInfoRequestClient()) {
       this.systemInfoPolling.stop();
+      if (this.systemInfoTask.status === TaskStatus.PENDING) {
+        void this.systemInfoTask.run([null, null]);
+      }
       return;
     }
     if (this.systemInfoPolling.start() || forceRefresh) {
@@ -732,6 +731,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       !gatewaySource ||
       !gateway ||
       !this.isConnected ||
+      document.visibilityState === "hidden" ||
       !this.isSystemInfoVisible() ||
       this.context.gateway !== gatewaySource ||
       gateway.phase !== "connected" ||
