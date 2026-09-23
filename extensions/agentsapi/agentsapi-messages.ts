@@ -47,7 +47,7 @@ export function createAgentsApiMessageProjection(
       let observed = false;
       let reasoningTokens: number | undefined;
       // Canonical turn snapshots replace SSE observations, never add to them.
-      for (const turn of new Map(turns.map((turn) => [turn.id, turn])).values()) {
+      for (const turn of new Map(turns.map((record) => [record.id, record])).values()) {
         if (!turn.usage) {
           continue;
         }
