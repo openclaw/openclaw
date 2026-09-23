@@ -101,7 +101,10 @@ export const handleSessionBrowserGatewayRequest: GatewayRequestHandlers[string] 
         ) {
           throw new Error("Session browser requests cannot select a browser profile or target.");
         }
-        if (params.path === "/act" && !actions.has(String(params.body?.kind ?? ""))) {
+        if (
+          params.path === "/act" &&
+          (typeof params.body?.kind !== "string" || !actions.has(params.body.kind))
+        ) {
           throw new Error("This action is unavailable in an isolated session browser.");
         }
         const { response, resource } = await accessSessionBrowserDashboard(

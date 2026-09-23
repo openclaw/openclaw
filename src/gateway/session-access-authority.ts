@@ -24,7 +24,7 @@ import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { authorizeOwnSessionMutation } from "./session-sharing-policy.js";
 import { prepareSessionSharing } from "./session-sharing-read.js";
 
-export type RetainedGatewaySessionAccess = {
+type RetainedGatewaySessionAccess = {
   readonly signal: AbortSignal;
   assertCurrent: () => void;
   release: () => void;

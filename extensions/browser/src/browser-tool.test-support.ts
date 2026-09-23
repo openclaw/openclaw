@@ -2,7 +2,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, beforeEach, vi } from "vitest";
 import type { BrowserActionPathResult } from "./browser/client-actions-types.js";
 
-export const browserClientMocks = vi.hoisted(() => ({
+const browserClientMocks = vi.hoisted(() => ({
   browserCloseTab: vi.fn(async (..._args: unknown[]) => ({})),
   browserDoctor: vi.fn(async (..._args: unknown[]) => ({
     ok: true,
@@ -60,7 +60,7 @@ export const browserClientMocks = vi.hoisted(() => ({
 }));
 vi.mock("./browser/client.js", () => browserClientMocks);
 
-export const browserActionsMocks = vi.hoisted(() => ({
+const browserActionsMocks = vi.hoisted(() => ({
   browserAct: vi.fn(async (): Promise<Record<string, unknown>> => ({ ok: true })),
   browserArmDialog: vi.fn(async () => ({ ok: true })),
   browserArmFileChooser: vi.fn(async () => ({ ok: true })),
@@ -120,7 +120,7 @@ export const browserActionsMocks = vi.hoisted(() => ({
 }));
 vi.mock("./browser/client-actions.js", () => browserActionsMocks);
 
-export const browserConfigMocks = vi.hoisted(() => ({
+const browserConfigMocks = vi.hoisted(() => ({
   resolveBrowserConfig: vi.fn(() => ({
     enabled: true,
     controlPort: 18791,
@@ -162,18 +162,18 @@ export const browserConfigMocks = vi.hoisted(() => ({
 }));
 vi.mock("./browser/config.js", () => browserConfigMocks);
 
-export const browserHostAvailabilityMocks = vi.hoisted(() => ({
+const browserHostAvailabilityMocks = vi.hoisted(() => ({
   isBrowserHostAvailable: vi.fn<(_config: OpenClawConfig, _profileName?: string) => boolean>(
     () => false,
   ),
 }));
 vi.mock("./browser-host-availability.js", () => browserHostAvailabilityMocks);
 
-export const nodesUtilsMocks = vi.hoisted(() => ({
+const nodesUtilsMocks = vi.hoisted(() => ({
   listNodes: vi.fn(async (..._args: unknown[]): Promise<Array<Record<string, unknown>>> => []),
 }));
 
-export const gatewayMocks = vi.hoisted(() => ({
+const gatewayMocks = vi.hoisted(() => ({
   readGatewayToolOperatorScopes: vi.fn<() => readonly string[] | undefined>(() => undefined),
   hasGatewayToolRoutingContext: vi.fn(() => true),
   callGatewayTool: vi.fn(async (): Promise<Record<string, unknown>> => ({
@@ -182,7 +182,7 @@ export const gatewayMocks = vi.hoisted(() => ({
   })),
 }));
 
-export const configMocks = vi.hoisted(() => ({
+const configMocks = vi.hoisted(() => ({
   loadConfig: vi.fn<
     () => {
       browser: Record<string, unknown>;
@@ -201,7 +201,7 @@ vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async () => {
   };
 });
 
-export const pathValidationMocks = vi.hoisted(() => ({
+const pathValidationMocks = vi.hoisted(() => ({
   resolveExistingUploadPaths: vi.fn<
     (args: {
       requestedPaths: string[];
@@ -212,14 +212,14 @@ export const pathValidationMocks = vi.hoisted(() => ({
   })),
 }));
 
-export const sessionTabRegistryMocks = vi.hoisted(() => ({
+const sessionTabRegistryMocks = vi.hoisted(() => ({
   touchSessionBrowserTab: vi.fn(),
   trackSessionBrowserTab: vi.fn(),
   untrackSessionBrowserTab: vi.fn(),
 }));
 vi.mock("./browser/session-tab-registry.js", () => sessionTabRegistryMocks);
 
-export const toolCommonMocks = vi.hoisted(() => ({
+const toolCommonMocks = vi.hoisted(() => ({
   fetchBrowserJson: vi.fn(async (..._args: unknown[]): Promise<Record<string, unknown>> => ({
     ok: true,
     running: true,
@@ -418,3 +418,16 @@ export function registerBrowserToolAfterEachReset() {
     resetBrowserToolMocks();
   });
 }
+
+export {
+  browserActionsMocks,
+  browserClientMocks,
+  browserConfigMocks,
+  browserHostAvailabilityMocks,
+  configMocks,
+  gatewayMocks,
+  nodesUtilsMocks,
+  pathValidationMocks,
+  sessionTabRegistryMocks,
+  toolCommonMocks,
+};

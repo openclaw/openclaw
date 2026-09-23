@@ -105,7 +105,7 @@ async function createResource(
         if (resources.get(key) === resource) {
           resources.delete(key);
         }
-      })().catch((error) => {
+      })().catch((error: unknown) => {
         closing = undefined;
         throw error;
       });

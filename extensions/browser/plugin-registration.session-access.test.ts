@@ -13,7 +13,7 @@ it("declares a session-writer dashboard while preserving the global admin method
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const descriptors: PluginControlUiDescriptor[] = [];
     const methods = new Map<string, unknown>();
-    await browserPlugin.register(
+    browserPlugin.register(
       createTestPluginApi({
         id: "browser",
         runtime: createPluginRuntimeMock({

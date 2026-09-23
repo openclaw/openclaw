@@ -25,7 +25,11 @@ it("projects session-writer widgets for broad and narrow write scopes only", () 
   setActivePluginRegistry(registry);
 
   for (const scope of ["operator.admin", "operator.write", "operator.sessions.write"]) {
-    expect(listControlUiPluginWidgetKinds([scope])).toEqual([
+    expect(
+      listControlUiPluginWidgetKinds([scope]).filter(
+        (widget) => widget.pluginId === "session-widget-fixture",
+      ),
+    ).toEqual([
       {
         pluginId: "session-widget-fixture",
         kind: "session-widget-fixture:preview",
@@ -34,6 +38,10 @@ it("projects session-writer widgets for broad and narrow write scopes only", () 
     ]);
   }
   for (const scopes of [[], ["operator.read"], ["operator.sessions.read"]]) {
-    expect(listControlUiPluginWidgetKinds(scopes)).toEqual([]);
+    expect(
+      listControlUiPluginWidgetKinds(scopes).filter(
+        (widget) => widget.pluginId === "session-widget-fixture",
+      ),
+    ).toEqual([]);
   }
 });

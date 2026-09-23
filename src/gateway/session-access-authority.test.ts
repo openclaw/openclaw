@@ -1,4 +1,5 @@
 import { renameSync } from "node:fs";
+import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { callInProcessGatewayTool } from "../agents/tools/in-process-gateway.js";
@@ -317,7 +318,7 @@ describe("session resource admission", () => {
       .mockRejectedValue(new Error("worker unavailable"));
     sessionChanges.emit({ all: true, scope: "config" });
     sessionChanges.emit({ all: true, scope: "config" });
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await setImmediate();
     expect(prepare).toHaveBeenCalledOnce();
     expect(resource.signal.aborted).toBe(false);
     expect(() => resource.assertCurrent()).toThrow("refreshing");
@@ -326,7 +327,7 @@ describe("session resource admission", () => {
     resource.release();
     state.mockReturnValue({ status: "pending" });
     sessionChanges.emit({ all: true, scope: "config" });
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await setImmediate();
     expect(prepare).toHaveBeenCalledOnce();
   });
 
@@ -358,7 +359,7 @@ describe("session resource admission", () => {
     // resource owner resumes. The successor has authoritative deletion facts.
     state.mockReturnValue({ status: "pending" });
     sessionChanges.emit({ all: true, scope: "stores" });
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await setImmediate();
     expect(prepare).toHaveBeenCalledTimes(2);
     expect(resource.signal.aborted).toBe(true);
   });

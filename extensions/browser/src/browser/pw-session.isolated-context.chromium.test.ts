@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
@@ -27,7 +28,9 @@ describe.runIf(process.env.OPENCLAW_BROWSER_SNAPSHOT_E2E === "1")(
           "<!doctype html><title>Session isolation fixture</title><button>Review</button>",
         );
       });
-      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", resolve);
+      });
       const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/`;
       const port = await getFreePort();
       const cdpUrl = `http://127.0.0.1:${port}`;
@@ -55,8 +58,10 @@ describe.runIf(process.env.OPENCLAW_BROWSER_SNAPSHOT_E2E === "1")(
             }),
           );
         }
-        const first = await getPageForTargetId({ cdpUrl, targetId: owned[0].targetId });
-        const second = await getPageForTargetId({ cdpUrl, targetId: owned[1].targetId });
+        const [firstOwned, secondOwned] = owned;
+        assert(firstOwned && secondOwned, "Both isolated pages must be created");
+        const first = await getPageForTargetId({ cdpUrl, targetId: firstOwned.targetId });
+        const second = await getPageForTargetId({ cdpUrl, targetId: secondOwned.targetId });
         expect(first.context()).not.toBe(second.context());
         expect(receivedCookies).toHaveLength(2);
         expect(receivedCookies.every((cookie) => !cookie.includes("admin_session"))).toBe(true);
@@ -81,19 +86,19 @@ describe.runIf(process.env.OPENCLAW_BROWSER_SNAPSHOT_E2E === "1")(
         const popup = await popupPromise;
         await popup.waitForLoadState();
         expect(popup.context()).toBe(first.context());
-        await owned[0].close();
+        await firstOwned.close();
         expect(first.isClosed()).toBe(true);
         expect(popup.isClosed()).toBe(true);
-        expect(owned[0].isCurrent()).toBe(false);
-        expect(owned[1].isCurrent()).toBe(true);
+        expect(firstOwned.isCurrent()).toBe(false);
+        expect(secondOwned.isCurrent()).toBe(true);
         expect(adminPage.isClosed()).toBe(false);
       } finally {
         await Promise.allSettled(owned.map((page) => page.close()));
         await closePlaywrightBrowserConnection({ cdpUrl });
         await admin.close();
-        await new Promise<void>((resolve, reject) =>
-          server.close((error) => (error ? reject(error) : resolve())),
-        );
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
       }
     }, 60_000);
   },
