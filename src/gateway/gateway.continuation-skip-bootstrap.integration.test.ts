@@ -10,7 +10,7 @@ import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
-// Routing project: gateway-database-workers; one Gateway for the file, no handler or transport mocks.
+// Routing project: gateway-core; one Gateway for the file, no handler or transport mocks.
 it("continuation-skip stops re-sending workspace instructions on the next turn", async () => {
   const state = await createOpenClawTestState({
     label: "continuation-skip-bootstrap",
@@ -109,8 +109,14 @@ it("continuation-skip stops re-sending workspace instructions on the next turn",
           idempotencyKey: randomUUID(),
         });
         expect(started.status).toBe("started");
+        // The client's own request timeout defaults to the same 30s as the server-side wait, so
+        // widen it here; a loaded runner would otherwise race and fail before the run settles.
         await expect(
-          client.request("agent.wait", { runId: started.runId, timeoutMs: 30000 }),
+          client.request<{ status: string }>(
+            "agent.wait",
+            { runId: started.runId, timeoutMs: 30_000 },
+            { timeoutMs: 35_000 },
+          ),
         ).resolves.toMatchObject({ status: "ok" });
         const sent = requests.slice(requestStart);
         expect(sent).toHaveLength(1);
