@@ -618,6 +618,32 @@ describe("runServiceRestart token drift", () => {
     expect(onNotLoaded).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { loaded: true, stopWhenNotLoaded: false },
+    { loaded: false, stopWhenNotLoaded: true },
+  ])(
+    "refuses managed stop before mutation when its guard rejects (loaded=$loaded)",
+    async ({ loaded, stopWhenNotLoaded }) => {
+      service.isLoaded.mockResolvedValue(loaded);
+      const beforeServiceMutation = vi.fn(() => {
+        throw new Error("service identity denied");
+      });
+
+      await expect(
+        runServiceStop({
+          serviceNoun: "Gateway",
+          service,
+          opts: { json: true, disable: stopWhenNotLoaded },
+          stopWhenNotLoaded,
+          beforeServiceMutation,
+        }),
+      ).rejects.toThrow("service identity denied");
+
+      expect(beforeServiceMutation).toHaveBeenCalledTimes(1);
+      expect(service.stop).not.toHaveBeenCalled();
+    },
+  );
+
   it("emits started when a not-loaded start path repairs the service", async () => {
     service.isLoaded.mockResolvedValue(false);
 

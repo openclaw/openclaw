@@ -13,6 +13,7 @@ import {
 } from "../../daemon/systemd.js";
 import {
   type GatewayLockIdentity,
+  isSameGatewayLockIdentity,
   readActiveGatewayLockIdentity,
   readActiveGatewayLockPort,
 } from "../../infra/gateway-lock.js";
@@ -97,6 +98,7 @@ async function handleSystemScopeSystemdGateway(
   }
   const stdout = createNullWriter();
   if (action === "stop") {
+    assertGatewayServiceMutationAllowed("stop the gateway");
     await stopSystemdService({
       stdout,
       env: process.env,
@@ -107,6 +109,7 @@ async function handleSystemScopeSystemdGateway(
       message: `Gateway stopped via system-scope systemd unit ${installed.unitName}.`,
     };
   }
+  assertGatewayServiceMutationAllowed("restart the gateway");
   await restartSystemdService({
     stdout,
     env: process.env,
@@ -122,16 +125,52 @@ async function stopGatewayWithoutServiceManager(
   port: number,
   lockOwnerPid: number | undefined,
   serviceContext?: Parameters<typeof resolveGatewayServiceProbeHosts>[0],
+  selectedStateLock?: GatewayLockIdentity,
 ) {
   const managed = await handleSystemScopeSystemdGateway("stop");
   if (managed) {
     return managed;
   }
   const listenerPids = resolveVerifiedGatewayListenerPids(port);
+  if (selectedStateLock) {
+    if (listenerPids.some((pid) => pid !== selectedStateLock.pid)) {
+      throw new Error(
+        `Gateway listener on port ${port} does not match the selected-state lock owner; leaving it running.`,
+      );
+    }
+    const currentLock = await readActiveGatewayLockIdentity({ requireInspection: true });
+    if (
+      !currentLock ||
+      !isSameGatewayLockIdentity(selectedStateLock, currentLock) ||
+      currentLock.pid !== selectedStateLock.pid ||
+      currentLock.port !== port
+    ) {
+      throw new Error("Gateway lock changed before isolated stop; leaving every process running.");
+    }
+    const owner = readGatewayOwnerLease({ current: true });
+    if (
+      !owner ||
+      owner.state !== "live" ||
+      owner.mode !== "foreground" ||
+      owner.owner !== currentLock.ownerId ||
+      owner.pid !== currentLock.pid ||
+      owner.port !== currentLock.port
+    ) {
+      throw new Error(
+        `Cannot verify the live foreground Gateway owner for isolated state; leaving it running. Run ${formatCliCommand("openclaw gateway status --deep")} or use its supervisor.`,
+      );
+    }
+  }
   // Listener discovery needs lsof, which minimal containers omit. The gateway
   // lock already names the verified owner of this port, so signal it instead of
   // reporting the gateway as not running while it keeps serving.
-  const pids = listenerPids.length > 0 ? listenerPids : lockOwnerPid ? [lockOwnerPid] : [];
+  const pids = selectedStateLock
+    ? [selectedStateLock.pid]
+    : listenerPids.length > 0
+      ? listenerPids
+      : lockOwnerPid
+        ? [lockOwnerPid]
+        : [];
   if (pids.length === 0) {
     const probeHosts = await resolveGatewayServiceProbeHosts(serviceContext ?? {});
     const portUsage = await probePortUsage(port, probeHosts);
@@ -314,12 +353,15 @@ export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
     return;
   }
   assertGatewayServiceUpdateCurrent();
-  assertGatewayServiceMutationAllowed("stop the gateway");
+  if (isGatewayExternallySupervised()) {
+    assertGatewayServiceMutationAllowed("stop the gateway");
+  }
   const service = resolveGatewayService();
   return await runServiceStop({
     serviceNoun: "Gateway",
     service,
     opts,
+    beforeServiceMutation: () => assertGatewayServiceMutationAllowed("stop the gateway"),
     stopWhenNotLoaded: process.platform === "darwin" && Boolean(opts.disable),
     onNotLoaded: async ({ stdout }) => {
       if (process.platform === "linux") {
@@ -327,6 +369,7 @@ export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
         if (runtime?.status === "running") {
           // systemd can run a disabled unit with Restart=always. Stop it through
           // systemctl so a process-level SIGTERM cannot trigger a respawn.
+          assertGatewayServiceMutationAllowed("stop the gateway");
           await service.stop({
             env: process.env,
             stdout,
@@ -339,10 +382,25 @@ export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
       // An unmanaged run loop keeps its lock port across config edits, so use it
       // for discovery the way restart already does; otherwise a valid port
       // override makes the running gateway look like it is already stopped.
-      const lock = await readActiveGatewayLockIdentity().catch(() => undefined);
+      const mutationError = resolveGatewayServiceMutationError("stop the gateway");
+      const lock = mutationError
+        ? await readActiveGatewayLockIdentity({ requireInspection: true })
+        : await readActiveGatewayLockIdentity().catch(() => undefined);
+      if (mutationError && !lock) {
+        throw mutationError;
+      }
       const ctx = lock ? null : await resolveGatewayLifecycleContext(service).catch(() => null);
       const port = lock?.port ?? ctx?.port ?? (await resolveGatewayConfigPorts()).fallback;
-      return await stopGatewayWithoutServiceManager(port, lock?.pid, ctx ?? undefined);
+      const handled = await stopGatewayWithoutServiceManager(
+        port,
+        lock?.pid,
+        ctx ?? undefined,
+        mutationError ? lock : undefined,
+      );
+      if (!handled) {
+        assertGatewayServiceMutationAllowed("stop the gateway");
+      }
+      return handled;
     },
   });
 }
