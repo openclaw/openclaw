@@ -20,6 +20,7 @@ import {
   type CatalogJsonFileRejectionReason,
   type CatalogJsonReadBudget,
 } from "./session-catalog-scan.js";
+import { MAX_STRING_LENGTH } from "./session-catalog-shared.js";
 import {
   createDirtyDirectoryWatch,
   type DirtyDirectoryWatch,
