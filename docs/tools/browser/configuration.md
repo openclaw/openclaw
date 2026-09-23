@@ -38,7 +38,7 @@ Extension relay configuration still requires a Gateway restart.
     },
     // snapshotDefaults: { mode: "efficient" }, // default snapshot mode when the caller omits one
     defaultProfile: "openclaw",
-    headless: false,
+    headless: true, // default for local managed profiles
     noSandbox: false,
     attachOnly: false,
     executablePath: "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
@@ -225,19 +225,39 @@ main model can read the screenshot directly.
 <Accordion title="Profile behavior">
 
 - `attachOnly: true` means never launch a local browser; only attach if one is already running.
-- `headless` can be set globally or per local managed profile. Per-profile values override `browser.headless`, so one locally launched profile can stay headless while another remains visible.
+- Local managed profiles are headless by default. Set `headless: false` for a visible window; existing explicit headed settings are preserved. `headless` can be set globally or per local managed profile. Per-profile values override `browser.headless`, so one locally launched profile can stay headless while another remains visible.
 - `POST /start?headless=true` and `openclaw browser start --headless` request a
   one-shot headless launch for local managed profiles without rewriting
   `browser.headless` or profile config. Existing-session, attach-only, and
   remote CDP profiles reject the override because OpenClaw does not launch those
   browser processes.
-- On Linux hosts without `DISPLAY` or `WAYLAND_DISPLAY`, local managed profiles
-  default to headless automatically when neither the environment nor profile/global
-  config explicitly chooses headed mode. Use the unambiguous browser-level form
+- Local managed profiles default to headless on every platform, including hosts
+  with a desktop session. Existing-session, extension, remote, and attach-only
+  browser processes keep their externally selected mode. Use the unambiguous browser-level form
   `openclaw browser --json status`; trailing `openclaw browser status --json`
   also works because `status` does not define its own `--json`. The command reports
   `headlessSource` as `env`, `profile`, `config`,
-  `request`, `linux-display-fallback`, or `default`.
+  `request`, or `default`.
+- Fresh headless profiles are seeded before one browser launch; they do not run
+  a temporary browser solely to create preference files. Existing profile preferences
+  and cookie encryption settings are preserved.
+- When no installed Chromium-family browser is found, OpenClaw searches the
+  Playwright cache for full Chromium. Automatic discovery never switches to
+  headless shell, even if the full browser is removed. Discovery does not load
+  Playwright or download browsers.
+  On Linux and macOS, opt in to headless shell by setting a separate managed
+  profile's `executablePath` to the shell binary and keeping that profile headless.
+  Do not reuse a full Chromium profile: switching distributions can discard its
+  localStorage. Windows managed profiles require full Chromium.
+  The shell is a Chromium engine with its own third-party license obligations,
+  not an MIT-only binary.
+- Headless shell does not create Chromium's profile lock. On Linux and macOS,
+  cross-runtime stop and reset verify the live process, CDP listener, and exact
+  profile directory; reset preserves data if a shell still uses it on another
+  port or ownership cannot be proved. Launch and reset share a cross-runtime
+  profile lock. Managed shell launch and cross-runtime cleanup are unsupported
+  on Windows and fail closed; use full Chromium or attach to an externally
+  managed browser instead.
 - `OPENCLAW_BROWSER_HEADLESS=1` forces local managed launches headless for the
   current process. `OPENCLAW_BROWSER_HEADLESS=0` forces headed mode for ordinary
   starts and returns an actionable error on Linux hosts without a display server;

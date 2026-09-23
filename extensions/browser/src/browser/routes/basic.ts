@@ -199,23 +199,27 @@ async function buildBrowserStatus(
           }),
       )
     : null;
+  const configuredHeadlessMode = resolveManagedBrowserHeadlessMode(
+    current.resolved,
+    profileCtx.profile,
+  );
   let detected: ReturnType<typeof resolveBrowserExecutableForPlatform> = null;
   let detectError: string | null = null;
 
   try {
     detected = resolveBrowserExecutableForPlatform(
       capabilities.mode === "local-managed" && capabilities.browserFilesystemLocal
-        ? { ...current.resolved, executablePath: profileCtx.profile.executablePath }
+        ? {
+            ...current.resolved,
+            executablePath: profileCtx.profile.executablePath,
+            headless: configuredHeadlessMode.headless,
+          }
         : current.resolved,
       process.platform,
     );
   } catch (err) {
     detectError = String(err);
   }
-  const configuredHeadlessMode = resolveManagedBrowserHeadlessMode(
-    current.resolved,
-    profileCtx.profile,
-  );
   const headlessMode =
     typeof profileState?.running?.headless === "boolean"
       ? {

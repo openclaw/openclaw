@@ -152,12 +152,12 @@ export function buildBrowserDoctorReport(params: {
     const uid = params.uid ?? process.getuid?.();
     const missingDisplay =
       platform === "linux" && !status.headless && !env.DISPLAY && !env.WAYLAND_DISPLAY;
-    if (status.headlessSource === "linux-display-fallback") {
+    if (status.headless && status.headlessSource === "default") {
       checks.push({
         id: "headless-mode",
         label: "Headless mode",
         status: "pass",
-        summary: "Linux no-display fallback selected headless mode",
+        summary: "Managed browsers use headless mode by default",
       });
     }
     if (missingDisplay) {

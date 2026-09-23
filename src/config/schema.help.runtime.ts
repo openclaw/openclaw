@@ -14,7 +14,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "browser.executablePath":
     "Explicit browser executable path when auto-discovery is insufficient for your host environment. Use an absolute stable path, or a path starting with ~ for your OS home directory, so launch behavior stays deterministic across restarts.",
   "browser.headless":
-    "Forces browser launch in headless mode when the local launcher starts browser instances. Keep headless enabled for server environments and disable only when visible UI debugging is required.",
+    "Local managed browsers run headless by default. Set false for a visible browser window. Existing-session, extension, remote, and attach-only browsers keep their externally selected mode.",
   "browser.noSandbox":
     "Disables Chromium sandbox isolation flags for environments where sandboxing fails at runtime. Keep this off whenever possible because process isolation protections are reduced.",
   "browser.attachOnly":

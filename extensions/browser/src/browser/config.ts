@@ -137,13 +137,7 @@ const EXTENSION_RELAY_CDP_USER = "openclaw-internal";
 const BROWSER_HEADLESS_ENV_KEY = "OPENCLAW_BROWSER_HEADLESS";
 
 /** Source that determined managed Chrome headless mode. */
-export type ManagedBrowserHeadlessSource =
-  | "request"
-  | "env"
-  | "profile"
-  | "config"
-  | "linux-display-fallback"
-  | "default";
+export type ManagedBrowserHeadlessSource = "request" | "env" | "profile" | "config" | "default";
 
 type ManagedBrowserHeadlessMode = {
   headless: boolean;
@@ -152,7 +146,7 @@ type ManagedBrowserHeadlessMode = {
 
 type ManagedBrowserMissingDisplayError = {
   message: string;
-  headlessSource: Exclude<ManagedBrowserHeadlessSource, "linux-display-fallback">;
+  headlessSource: ManagedBrowserHeadlessSource;
 };
 
 /** Inputs used to resolve managed Chrome headless mode. */
@@ -360,7 +354,7 @@ export function resolveBrowserConfig(
     };
   }
 
-  const headless = cfg?.headless === true;
+  const headless = cfg?.headless ?? true;
   const headlessSource = typeof cfg?.headless === "boolean" ? "config" : "default";
   const noSandbox = cfg?.noSandbox === true;
   const attachOnly = cfg?.attachOnly === true;
@@ -519,7 +513,7 @@ export function resolveProfile(
       color: DEFAULT_OPENCLAW_BROWSER_COLOR,
       driver,
       executablePath,
-      headless,
+      headless: headlessSource === "default" ? false : headless,
       headlessSource,
       attachOnly: true,
     };
@@ -568,7 +562,11 @@ export function resolveProfile(
     color: DEFAULT_OPENCLAW_BROWSER_COLOR,
     driver,
     executablePath,
-    headless,
+    headless:
+      headlessSource === "default" &&
+      (!isLoopbackHost(cdpHost) || (profile.attachOnly ?? resolved.attachOnly))
+        ? false
+        : headless,
     headlessSource,
     attachOnly: profile.attachOnly ?? resolved.attachOnly,
   };
@@ -589,7 +587,6 @@ export function resolveManagedBrowserHeadlessMode(
   }
 
   const env = params.env ?? process.env;
-  const platform = params.platform ?? process.platform;
   const envHeadless = parseBooleanValue(env[BROWSER_HEADLESS_ENV_KEY]);
   if (envHeadless !== undefined) {
     return { headless: envHeadless, source: "env" };
@@ -598,10 +595,6 @@ export function resolveManagedBrowserHeadlessMode(
   const profileHeadlessSource = profile.headlessSource ?? "default";
   if (profileHeadlessSource !== "default") {
     return { headless: profile.headless, source: profileHeadlessSource };
-  }
-
-  if (platform === "linux" && !hasLinuxDisplay(env)) {
-    return { headless: true, source: "linux-display-fallback" };
   }
 
   return { headless: resolved.headless, source: "default" };
@@ -627,7 +620,7 @@ export function getManagedBrowserMissingDisplayError(
     env,
     platform,
   });
-  if (mode.headless || mode.source === "linux-display-fallback") {
+  if (mode.headless) {
     return null;
   }
 

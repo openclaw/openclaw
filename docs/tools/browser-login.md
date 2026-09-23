@@ -33,15 +33,32 @@ For agent browser tool calls:
 - If you have multiple user-browser profiles, specify the profile explicitly
   instead of guessing.
 
-Two ways to access the `openclaw` profile:
+Local managed browsers are headless by default. For manual login, use a browser
+host with a desktop session and full Chrome/Chromium; headless shell cannot show
+a login window. If your profile uses headless shell, create a separate profile
+with `executablePath` set to a full browser before signing in. Do not reuse its
+data directory across shell/full distributions. See
+[Browser configuration](/tools/browser/configuration).
 
-1. Ask the agent to open the browser, then log in yourself.
-2. Open it via CLI:
+On the browser host, set `browser.headless` to `false`. If the selected profile
+has its own `headless` value, set that to `false` too. Remove a
+`OPENCLAW_BROWSER_HEADLESS=1` override from the Gateway process environment, or
+set it to `0`; it takes precedence over config. Do not pass `start --headless`.
+
+Stop an already-running browser before starting it in headed mode. For the
+default `openclaw` profile without a per-profile override:
 
 ```bash
+openclaw browser stop
+openclaw config set browser.headless false
 openclaw browser start
 openclaw browser open https://x.com
 ```
+
+Sign in through the visible window. You can also ask the agent to open the page
+after the headed configuration is in effect. Keep the same profile when switching
+between headed and headless modes of the same full browser. Do not use
+`reset-profile`, which removes its saved browser data.
 
 For a non-default profile, put `--browser-profile <name>` before the
 subcommand (default is `openclaw`):

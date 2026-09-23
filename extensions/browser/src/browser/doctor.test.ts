@@ -130,7 +130,7 @@ describe("buildBrowserDoctorReport", () => {
     );
   });
 
-  it("reports Linux no-display fallback without a display warning", () => {
+  it("reports default headless mode without a display warning", () => {
     const report = buildBrowserDoctorReport({
       platform: "linux",
       env: {},
@@ -153,7 +153,7 @@ describe("buildBrowserDoctorReport", () => {
         userDataDir: "/tmp/openclaw",
         color: "#FF4500",
         headless: true,
-        headlessSource: "linux-display-fallback",
+        headlessSource: "default",
         noSandbox: false,
         executablePath: null,
         attachOnly: false,

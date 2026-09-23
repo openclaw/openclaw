@@ -1,5 +1,6 @@
 // Browser tests cover doctor browser plugin behavior.
-import { describe, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   maybeArchiveLegacyClawdBrowserProfileResidue,
   noteChromeMcpBrowserReadiness,
@@ -23,6 +24,107 @@ function requireNoteTextContaining(noteFn: ReturnType<typeof vi.fn>, expected: s
 }
 
 describe("browser doctor readiness", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it.each(["profile", "environment"] as const)(
+    "uses the %s headless override when checking an explicit shell",
+    async (source) => {
+      const executablePath = "/browsers/chrome-headless-shell";
+      vi.spyOn(fs, "existsSync").mockImplementation(
+        (candidate) => String(candidate) === executablePath,
+      );
+      const noteFn = vi.fn();
+      await noteChromeMcpBrowserReadiness(
+        {
+          browser: {
+            extensionRelay: { allowLegacyAuth: false },
+            executablePath,
+            headless: false,
+            profiles: {
+              openclaw: { cdpPort: 18800, ...(source === "profile" ? { headless: true } : {}) },
+              user: { driver: "existing-session", attachOnly: true },
+            },
+          },
+        },
+        {
+          noteFn,
+          platform: "linux",
+          getUid: () => 1000,
+          pathExists: () => false,
+          env: source === "environment" ? { OPENCLAW_BROWSER_HEADLESS: "1" } : {},
+          resolveChromeExecutable: () => null,
+        },
+      );
+      expect(noteFn).toHaveBeenCalledTimes(1);
+      expect(requireFirstNoteText(noteFn)).toContain("Google Chrome was not found");
+    },
+  );
+
+  it("reports invalid headed-shell selection without skipping subsequent Chrome MCP checks", async () => {
+    const executablePath = "/browsers/chrome-headless-shell";
+    vi.spyOn(fs, "existsSync").mockImplementation(
+      (candidate) => String(candidate) === executablePath,
+    );
+    const noteFn = vi.fn();
+    await noteChromeMcpBrowserReadiness(
+      {
+        browser: {
+          extensionRelay: { allowLegacyAuth: false },
+          executablePath,
+          headless: false,
+          profiles: {
+            openclaw: { cdpPort: 18800 },
+            user: { driver: "existing-session", attachOnly: true },
+          },
+        },
+      },
+      {
+        noteFn,
+        platform: "linux",
+        env: { DISPLAY: ":99" },
+        getUid: () => 1000,
+        pathExists: () => false,
+        resolveChromeExecutable: () => null,
+      },
+    );
+    expect(requireNoteTextContaining(noteFn, "could not be checked")).toContain(
+      "cannot open a headed window",
+    );
+    expect(requireNoteTextContaining(noteFn, "Google Chrome was not found")).toBeTruthy();
+  });
+
+  it("reports an unsupported Windows shell without skipping subsequent Chrome MCP checks", async () => {
+    const executablePath = "C:\\browsers\\headless_shell.exe";
+    vi.spyOn(fs, "existsSync").mockImplementation(
+      (candidate) => String(candidate) === executablePath,
+    );
+    const noteFn = vi.fn();
+    await noteChromeMcpBrowserReadiness(
+      {
+        browser: {
+          extensionRelay: { allowLegacyAuth: false },
+          executablePath,
+          headless: true,
+          profiles: {
+            openclaw: { cdpPort: 18800 },
+            user: { driver: "existing-session", attachOnly: true },
+          },
+        },
+      },
+      {
+        noteFn,
+        platform: "win32",
+        env: {},
+        pathExists: () => false,
+        resolveChromeExecutable: () => null,
+      },
+    );
+    expect(requireNoteTextContaining(noteFn, "could not be checked")).toContain(
+      "Managed headless shell is unsupported on this platform",
+    );
+    expect(requireNoteTextContaining(noteFn, "Google Chrome was not found")).toBeTruthy();
+  });
+
   it("does nothing when Chrome MCP is not configured", async () => {
     const noteFn = vi.fn();
     await noteChromeMcpBrowserReadiness(
@@ -30,7 +132,7 @@ describe("browser doctor readiness", () => {
         browser: {
           extensionRelay: { allowLegacyAuth: false },
           profiles: {
-            openclaw: { color: "#FF4500" },
+            openclaw: { cdpPort: 18800, color: "#FF4500" },
           },
         },
       },
@@ -52,7 +154,7 @@ describe("browser doctor readiness", () => {
         browser: {
           extensionRelay: { allowLegacyAuth: true },
           profiles: {
-            openclaw: { color: "#FF4500" },
+            openclaw: { cdpPort: 18800, color: "#FF4500" },
           },
         },
       },
@@ -78,7 +180,7 @@ describe("browser doctor readiness", () => {
         browser: {
           extensionRelay: { allowLegacyAuth: false },
           profiles: {
-            openclaw: { color: "#FF4500" },
+            openclaw: { cdpPort: 18800, color: "#FF4500" },
           },
         },
       },
@@ -110,7 +212,7 @@ describe("browser doctor readiness", () => {
           headless: false,
           noSandbox: false,
           profiles: {
-            openclaw: { color: "#FF4500" },
+            openclaw: { cdpPort: 18800, color: "#FF4500" },
           },
         },
       },
@@ -126,7 +228,7 @@ describe("browser doctor readiness", () => {
     expect(noteFn).toHaveBeenCalledWith(
       [
         "- OpenClaw-managed browser profile(s) are configured: openclaw.",
-        "- No DISPLAY or WAYLAND_DISPLAY is set, and browser.headless is false. Managed browser launch needs a desktop session, Xvfb, or browser.headless: true.",
+        "- No DISPLAY or WAYLAND_DISPLAY is set, and headed mode is selected for profile(s): openclaw. Managed browser launch needs a desktop session, Xvfb, or headless mode.",
         "- The Gateway is running as root and browser.noSandbox is false. Chromium commonly requires browser.noSandbox: true in container/root runtimes.",
       ].join("\n"),
       "Browser",
@@ -142,7 +244,7 @@ describe("browser doctor readiness", () => {
         browser: {
           extensionRelay: { allowLegacyAuth: false },
           profiles: {
-            openclaw: { color: "#FF4500" },
+            openclaw: { cdpPort: 18800, color: "#FF4500" },
           },
         },
       },
@@ -173,8 +275,8 @@ describe("browser doctor readiness", () => {
         browser: {
           extensionRelay: { allowLegacyAuth: false },
           profiles: {
-            clawd: { color: "#FF4500" },
-            openclaw: { color: "#00AA00" },
+            clawd: { cdpPort: 18801, color: "#FF4500" },
+            openclaw: { cdpPort: 18800, color: "#00AA00" },
           },
         },
       },
@@ -308,7 +410,7 @@ describe("legacy clawd browser profile cleanup", () => {
       {
         browser: {
           profiles: {
-            openclaw: { color: "#FF4500" },
+            openclaw: { cdpPort: 18800, color: "#FF4500" },
           },
         },
       },
@@ -335,7 +437,7 @@ describe("legacy clawd browser profile cleanup", () => {
         browser: {
           defaultProfile: "clawd",
           profiles: {
-            clawd: { color: "#FF4500" },
+            clawd: { cdpPort: 18801, color: "#FF4500" },
           },
         },
       },

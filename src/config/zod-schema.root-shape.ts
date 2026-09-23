@@ -105,7 +105,7 @@ export const OpenClawSchemaShape = {
       cdpUrl: z.string().optional(),
       /** Override the browser executable path (all platforms). */
       executablePath: z.string().optional(),
-      /** Start Chrome headless (best-effort). Default: false */
+      /** Local managed browsers default to headless; false requests a visible window. */
       headless: z.boolean().optional(),
       /** Pass --no-sandbox to Chrome (Linux containers). Default: false */
       noSandbox: z.boolean().optional(),

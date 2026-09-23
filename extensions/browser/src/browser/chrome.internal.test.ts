@@ -16,18 +16,8 @@ const execFileSyncMock = vi.hoisted(() => vi.fn());
 
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
-  const execFileSync = (...args: unknown[]) => {
-    const mock = execFileSyncMock.getMockImplementation();
-    return mock
-      ? mock(...args)
-      : (actual.execFileSync as unknown as (...actualArgs: unknown[]) => unknown)(...args);
-  };
-  return {
-    ...actual,
-    default: { ...actual, execFileSync },
-    execFileSync,
-    spawn: (...args: unknown[]) => spawnMock(...args),
-  };
+  const { createChromeInternalProcessMock } = await import("./chrome.internal.test-support.js");
+  return createChromeInternalProcessMock(actual, execFileSyncMock, spawnMock);
 });
 
 const { registerManagedProxyBrowserCdpBypassMock } = vi.hoisted(() => ({

@@ -10,13 +10,7 @@ type BrowserCdpLookup = typeof dnsLookupCb;
 
 /** Browser transport backing the selected profile. */
 export type BrowserTransport = "cdp" | "chrome-mcp" | "extension";
-type BrowserHeadlessSource =
-  | "request"
-  | "env"
-  | "profile"
-  | "config"
-  | "linux-display-fallback"
-  | "default";
+type BrowserHeadlessSource = "request" | "env" | "profile" | "config" | "default";
 
 export type BrowserGraphicsAcceleration = "hardware" | "software" | "unknown";
 

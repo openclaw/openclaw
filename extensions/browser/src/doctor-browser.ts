@@ -11,10 +11,18 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { parseBrowserMajorVersion, readBrowserVersion } from "./browser/chrome.executable-probe.js";
 import {
+  assertBrowserExecutableSupportsLaunch,
   resolveBrowserExecutableForPlatform,
   resolveGoogleChromeExecutableForPlatform,
 } from "./browser/chrome.executables.js";
-import { DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME, resolveBrowserConfig } from "./browser/config.js";
+import {
+  DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
+  getManagedBrowserMissingDisplayError,
+  isLocalManagedProfile,
+  resolveBrowserConfig,
+  resolveManagedBrowserHeadlessMode,
+  resolveProfile,
+} from "./browser/config.js";
 import { movePathToTrash } from "./browser/trash.js";
 import type { OpenClawConfig } from "./config/config.js";
 import { formatCliCommand, note } from "./sdk-setup-tools.js";
@@ -220,8 +228,6 @@ export async function noteChromeMcpBrowserReadiness(
   const resolveChromeExecutable =
     deps?.resolveChromeExecutable ?? resolveGoogleChromeExecutableForPlatform;
   const readVersion = deps?.readVersion ?? readBrowserVersion;
-  const managedProfiles = collectManagedProfiles(cfg);
-  const managedProfileLabel = managedProfiles.map((profile) => profile.name).join(", ");
   const resolved = resolveBrowserConfig(cfg.browser, cfg);
   if (resolved.enabled && resolved.extensionRelay.allowLegacyAuth) {
     noteFn(
@@ -265,21 +271,45 @@ export async function noteChromeMcpBrowserReadiness(
       "Browser",
     );
   }
-  const browserExecutable =
-    managedProfiles.length > 0 ? resolveManagedExecutable(resolved, platform) : null;
-  const missingDisplay =
-    platform === "linux" &&
-    managedProfiles.length > 0 &&
-    !resolved.headless &&
-    !normalizeOptionalString(env.DISPLAY) &&
-    !normalizeOptionalString(env.WAYLAND_DISPLAY);
+  const managedProfiles: string[] = [];
+  const missingExecutables: string[] = [];
+  const missingDisplays: string[] = [];
+  for (const { name } of collectManagedProfiles(cfg)) {
+    try {
+      const profile = resolveProfile(resolved, name);
+      if (!profile || !isLocalManagedProfile(profile)) {
+        continue;
+      }
+      managedProfiles.push(name);
+      const mode = resolveManagedBrowserHeadlessMode(resolved, profile, { platform, env });
+      if (getManagedBrowserMissingDisplayError(resolved, profile, { platform, env })) {
+        missingDisplays.push(name);
+      }
+      const executable = resolveManagedExecutable(
+        { ...resolved, executablePath: profile.executablePath, headless: mode.headless },
+        platform,
+      );
+      if (executable) {
+        assertBrowserExecutableSupportsLaunch(executable, mode.headless, platform);
+      } else {
+        missingExecutables.push(name);
+      }
+    } catch (error) {
+      noteFn(
+        `- Managed browser profile "${name}" could not be checked: ${error instanceof Error ? error.message : String(error)}`,
+        "Browser",
+      );
+    }
+  }
+  const managedProfileLabel = managedProfiles.join(", ");
+  const missingDisplay = missingDisplays.length > 0;
   const shouldWarnRootNoSandbox =
     platform === "linux" && managedProfiles.length > 0 && !resolved.noSandbox && getUid() === 0;
 
-  if (!browserExecutable && managedProfiles.length > 0) {
+  if (missingExecutables.length > 0) {
     noteFn(
       [
-        `- OpenClaw-managed browser profile(s) are configured: ${managedProfileLabel}.`,
+        `- OpenClaw-managed browser profile(s) are configured: ${missingExecutables.join(", ")}.`,
         "- No Chromium-based browser executable was found on this host for OpenClaw-managed launch.",
         "- Install Chrome, Chromium, Brave, Edge, or set browser.executablePath explicitly.",
       ].join("\n"),
@@ -291,7 +321,7 @@ export async function noteChromeMcpBrowserReadiness(
     const lines = [`- OpenClaw-managed browser profile(s) are configured: ${managedProfileLabel}.`];
     if (missingDisplay) {
       lines.push(
-        "- No DISPLAY or WAYLAND_DISPLAY is set, and browser.headless is false. Managed browser launch needs a desktop session, Xvfb, or browser.headless: true.",
+        `- No DISPLAY or WAYLAND_DISPLAY is set, and headed mode is selected for profile(s): ${missingDisplays.join(", ")}. Managed browser launch needs a desktop session, Xvfb, or headless mode.`,
       );
     }
     if (shouldWarnRootNoSandbox) {

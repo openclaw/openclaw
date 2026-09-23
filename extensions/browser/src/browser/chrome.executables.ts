@@ -7,15 +7,13 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { execBrowserProbe, WINDOWS_VERSION_DIR_RE } from "./chrome.executable-probe.js";
+import type { BrowserExecutable } from "./chrome.executable-types.js";
+import { findPlaywrightChromiumExecutable } from "./chrome.playwright-cache.js";
 import type { ResolvedBrowserConfig } from "./config.js";
+import { BrowserProfileUnavailableError } from "./errors.js";
 
-/** Browser executable candidate with product metadata and filesystem path. */
-export type BrowserExecutable = {
-  kind: "brave" | "canary" | "chromium" | "chrome" | "custom" | "edge";
-  path: string;
-};
+export type { BrowserExecutable } from "./chrome.executable-types.js";
 
-const PLAYWRIGHT_BROWSERS_PATH_ENV = "PLAYWRIGHT_BROWSERS_PATH";
 const DEFAULT_WINDOWS_PROGRAM_FILES = "C:\\Program Files";
 const DEFAULT_WINDOWS_PROGRAM_FILES_X86 = "C:\\Program Files (x86)";
 
@@ -521,48 +519,6 @@ function findFirstChromeExecutable(
   return null;
 }
 
-function findPlaywrightChromiumExecutableCandidatesLinux(): Array<BrowserExecutable> {
-  const candidates: Array<BrowserExecutable> = [];
-  for (const browserPath of getPlaywrightBrowserCachePaths()) {
-    for (const entry of readSortedDirNames(browserPath)) {
-      if (!entry.startsWith("chromium-")) {
-        continue;
-      }
-      for (const linuxDir of ["chrome-linux64", "chrome-linux"]) {
-        candidates.push({
-          kind: "chromium",
-          path: path.join(browserPath, entry, linuxDir, "chrome"),
-        });
-      }
-    }
-  }
-  return candidates;
-}
-
-function getPlaywrightBrowserCachePaths(): string[] {
-  const configured = normalizeOptionalString(process.env[PLAYWRIGHT_BROWSERS_PATH_ENV]);
-  const candidates = [
-    configured && configured !== "0" ? configured : null,
-    path.join(os.homedir(), ".cache", "ms-playwright"),
-  ];
-  const seen = new Set<string>();
-  return candidates.filter((candidate): candidate is string => {
-    if (!candidate || seen.has(candidate)) {
-      return false;
-    }
-    seen.add(candidate);
-    return true;
-  });
-}
-
-function readSortedDirNames(dir: string): string[] {
-  try {
-    return fs.readdirSync(dir).toSorted();
-  } catch {
-    return [];
-  }
-}
-
 /** Find the best Chromium-family executable on macOS. */
 function findChromeExecutableMac(): BrowserExecutable | null {
   const applications: Array<[BrowserExecutable["kind"], string]> = [
@@ -617,7 +573,6 @@ function findChromeExecutableLinux(): BrowserExecutable | null {
     { kind: "chromium", path: "/usr/lib/chromium/chromium" },
     { kind: "chromium", path: "/usr/lib/chromium-browser/chromium-browser" },
     { kind: "chromium", path: "/snap/bin/chromium" },
-    ...findPlaywrightChromiumExecutableCandidatesLinux(),
   ];
 
   return findFirstExecutable(candidates, "linux");
@@ -717,13 +672,74 @@ export function resolveBrowserExecutableForPlatform(
   }
 
   if (platform === "darwin") {
-    return findChromeExecutableMac();
+    return findChromeExecutableMac() ?? findPlaywrightChromiumExecutable(platform);
   }
   if (platform === "linux") {
-    return findChromeExecutableLinux();
+    return findChromeExecutableLinux() ?? findPlaywrightChromiumExecutable(platform);
   }
   if (platform === "win32") {
-    return findChromeExecutableWindows();
+    return findChromeExecutableWindows() ?? findPlaywrightChromiumExecutable(platform);
   }
   return null;
+}
+
+/** Launch suitability is not executable identity: cleanup can inspect a one-shot headless launch. */
+export function assertBrowserExecutableSupportsLaunch(
+  executable: BrowserExecutable,
+  headless: boolean,
+  platform: NodeJS.Platform,
+): void {
+  if (!/(?:^|[\\/])(?:chrome-headless-shell|headless_shell)(?:\.exe)?$/i.test(executable.path)) {
+    return;
+  }
+  if (!headless) {
+    throw new Error(
+      "Chromium headless shell cannot open a headed window; use headless mode or a full Chromium executable.",
+    );
+  }
+  if (platform !== "linux" && platform !== "darwin") {
+    throw new BrowserProfileUnavailableError(
+      "Managed headless shell is unsupported on this platform; use full Chromium or attach to an externally managed browser.",
+    );
+  }
+}
+
+export function processCommandUsesHeadlessChrome(command: {
+  argv: string[] | null;
+  text: string;
+}): boolean {
+  const args = command.argv ?? command.text.split(/\s+/);
+  return (
+    args.some((arg) => /^['"]?--headless(?:=.*)?['"]?$/i.test(arg)) ||
+    /(?:^|[\\/])(?:chrome-headless-shell|headless_shell)(?=\s|$|["'])/i.test(command.text)
+  );
+}
+
+/** Match executable metadata while the lifecycle owner proves PID, port, and profile identity. */
+export function isChromeExecutableFamilyMatch(
+  commandText: string,
+  exe: BrowserExecutable,
+): boolean {
+  const normalizedCommand = commandText.toLowerCase();
+  const configuredPath = exe.path.toLowerCase();
+  const configuredBase = path.basename(exe.path).toLowerCase();
+  if (
+    normalizedCommand.includes(configuredPath) ||
+    (configuredBase.length > 0 && normalizedCommand.includes(configuredBase))
+  ) {
+    return true;
+  }
+  if (exe.kind === "chrome" || exe.kind === "canary") {
+    return /\b(google chrome|google-chrome|chrome|chromium)\b/i.test(commandText);
+  }
+  if (exe.kind === "chromium") {
+    return /\b(chromium|chromium-browser)\b/i.test(commandText);
+  }
+  if (exe.kind === "brave") {
+    return /\b(brave browser|brave-browser|brave)\b/i.test(commandText);
+  }
+  if (exe.kind === "edge") {
+    return /\b(microsoft edge|microsoft-edge|msedge)\b/i.test(commandText);
+  }
+  return false;
 }

@@ -19,6 +19,7 @@ vi.mock("./browser/chrome.executables.js", () => ({
 }));
 
 import { isBrowserHostAvailable } from "./browser-host-availability.js";
+import { resolveBrowserNodeTarget } from "./browser-node-routing.js";
 import { resolveBrowserConfig, resolveProfile } from "./browser/config.js";
 
 describe("browser host availability", () => {
@@ -136,4 +137,21 @@ describe("browser host availability", () => {
       true,
     );
   });
+
+  it.each([false, true])(
+    "keeps an explicit shell on its host instead of substituting a node profile (headless=%s)",
+    async (headless) => {
+      const executablePath = "/browsers/chrome-headless-shell";
+      resolveExecutable.mockReturnValue({ kind: "custom", path: executablePath });
+      const nodes = vi.fn(() => [{ nodeId: "other-host", caps: ["browser"] }]);
+      expect(
+        await resolveBrowserNodeTarget({
+          config: { browser: { executablePath, headless } },
+          nodes,
+        }),
+      ).toBeNull();
+      expect(nodes).not.toHaveBeenCalled();
+      expect(isReachable).not.toHaveBeenCalled();
+    },
+  );
 });

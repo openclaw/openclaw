@@ -250,7 +250,7 @@ describe("browser agent snapshot timeout routing", () => {
     {
       name: "headless Linux no-display fallback when its profile is configured headed",
       configuredHeadless: false,
-      running: { headless: true, headlessSource: "linux-display-fallback" },
+      running: { headless: true, headlessSource: "default" },
       expectedHeadless: true,
     },
     {

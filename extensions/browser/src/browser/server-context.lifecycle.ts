@@ -9,6 +9,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { getChromeMcpModule } from "./chrome-mcp.runtime.js";
 import type { RunningChrome } from "./chrome.js";
 import { stopOpenClawChrome, stopOwnedOpenClawChrome } from "./chrome.js";
+import { withChromeProfileLifecycleLock } from "./chrome.profile-lifecycle-lock.js";
 import type { ResolvedBrowserConfig, ResolvedBrowserProfile } from "./config.js";
 import { BrowserProfileUnavailableError } from "./errors.js";
 import type { ExtensionRelayResource } from "./extension-relay/relay-access.js";
@@ -543,19 +544,26 @@ export function beginProfileTransition(
           actor.cleanupRelays.add(relay);
         }
       }
-      const result = await cleanupProfileResources({
-        state: params.state,
-        runtime: params.runtime,
-        eagerMcpClose,
-        hadPendingWork: hadPendingWork || Boolean(eagerPlaywrightRetirement?.retired),
-        managedChrome,
-      });
-      cleanupCompleted = true;
-      await params.afterCleanup?.();
-      if (actor.generation === transitionGeneration) {
-        actor.blockedReason = null;
-      }
-      return result;
+      const cleanup = async () => {
+        const result = await cleanupProfileResources({
+          state: params.state,
+          runtime: params.runtime,
+          eagerMcpClose,
+          hadPendingWork: hadPendingWork || Boolean(eagerPlaywrightRetirement?.retired),
+          managedChrome,
+        });
+        cleanupCompleted = true;
+        await params.afterCleanup?.();
+        if (actor.generation === transitionGeneration) {
+          actor.blockedReason = null;
+        }
+        return result;
+      };
+      // Drain actor work before acquiring the cross-runtime lock: a pending
+      // start can itself need that lock. Hold it through destructive cleanup.
+      return managedChrome
+        ? await withChromeProfileLifecycleLock(ownerProfile.name, cleanup)
+        : await cleanup();
     })
     .catch((err: unknown) => {
       if (actor.generation === transitionGeneration) {

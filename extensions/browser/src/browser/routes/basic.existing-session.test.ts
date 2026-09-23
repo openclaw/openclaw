@@ -105,7 +105,7 @@ function createManagedProfileState(
   return {
     resolved: {
       enabled: true,
-      headless: false,
+      headless: true,
       headlessSource: "default",
       noSandbox: false,
       executablePath,
@@ -122,7 +122,7 @@ function createManagedProfileState(
           cdpIsLoopback: true,
           userDataDir: "/tmp/openclaw-profile",
           color: "#FF4500",
-          headless: false,
+          headless: true,
           headlessSource: "default",
           attachOnly: false,
           ...profileOverrides,
@@ -379,7 +379,7 @@ describe("basic browser routes", () => {
     });
   });
 
-  it("reports Linux no-display headless fallback for local managed profiles", async () => {
+  it("reports default headless mode for local managed profiles", async () => {
     const originalPlatform = process.platform;
     const originalDisplay = process.env.DISPLAY;
     const originalWayland = process.env.WAYLAND_DISPLAY;
@@ -396,7 +396,7 @@ describe("basic browser routes", () => {
       const body = responseBodyRecord(response);
       expect(body.profile).toBe("openclaw");
       expect(body.headless).toBe(true);
-      expect(body.headlessSource).toBe("linux-display-fallback");
+      expect(body.headlessSource).toBe("default");
     } finally {
       Object.defineProperty(process, "platform", { value: originalPlatform });
       if (originalDisplay === undefined) {
