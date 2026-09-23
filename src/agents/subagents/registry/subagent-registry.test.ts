@@ -75,7 +75,10 @@ import {
   makeSuspendedDeliveryRun,
 } from "./subagent-registry.run-fixtures.test-support.js";
 import { saveSubagentRegistryChangesToSqlite } from "./subagent-registry.store.sqlite.js";
-import { registerRestoredTaskSettlementTest } from "./subagent-registry.task-settlement.test-support.js";
+import {
+  registerRestoredRunningTaskSettlementTest,
+  registerRestoredTaskSettlementTest,
+} from "./subagent-registry.task-settlement.test-support.js";
 import type {
   ContextEngineSubagentEndedParams,
   SubagentRunRecord,
@@ -1059,77 +1062,11 @@ describe("subagent registry seam flow", () => {
     }
   });
 
-  it.each(["done"] as const)(
-    "settles and announces a retired running row whose saved session completed as %s",
-    async (status) => {
-      resetTaskRegistryForTests({ persist: false });
-      resetTaskFlowRegistryForTests({ persist: false });
-      const announceEntered = createDeferred();
-      mocks.runSubagentAnnounceFlow.mockImplementationOnce(async () => {
-        announceEntered.resolve();
-        return "delivered";
-      });
-      const settleRootWork = observeRootWork();
-      try {
-        const startedAt = Date.now() - 2_000;
-        const endedAt = Date.now() - 1_000;
-        const runId = "run-restored-completed-session";
-        const childSessionKey = "agent:main:subagent:restored-completed-session";
-        mocks.entries = {
-          [childSessionKey]: createSessionEntry({
-            status,
-            startedAt,
-            endedAt,
-            updatedAt: endedAt,
-            lifecycleRevision: "revision-child",
-            lifecycleRunId: runId,
-            abortedLastRun: false,
-          }),
-        };
-        expect(
-          createRunningTaskRun(
-            makeRunningTaskParams({ runId, childSessionKey, startedAt, task: "saved completion" }),
-          ),
-        ).not.toBeNull();
-        const restored = createSubagentRunRecord({
-          runId,
-          childSessionKey,
-          task: "saved completion",
-          createdAt: startedAt,
-          execution: { status: "running", startedAt, lifecycleGeneration: "retired-generation" },
-        });
-        mocks.restoreSubagentRunsFromDisk.mockImplementation(((params: {
-          runs: Map<string, SubagentRunRecord>;
-        }) => {
-          params.runs.set(runId, restored);
-          return 1;
-        }) as never);
-        mockGatewayMethods(mocks.callGateway, { "agent.wait": { status: "timeout" } });
-
-        hydrateAndActivateRegistry();
-
-        await announceEntered.promise;
-        await settleRootWork(true);
-        expect(findRequesterRun(runId)).toMatchObject({
-          execution: { status: "terminal", endedAt, outcome: { status: "ok" } },
-          endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
-          delivery: { status: "delivered" },
-        });
-        expect(findTaskByRunIdForStatus(runId)).toMatchObject({ status: "succeeded", endedAt });
-        expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledExactlyOnceWith(
-          expect.objectContaining({
-            childRunId: runId,
-            outcome: expect.objectContaining({ status: "ok" }),
-          }),
-        );
-        expect(mocks.dispatchRecoveryAgent).not.toHaveBeenCalled();
-      } finally {
-        await settleRootWork();
-        resetTaskRegistryForTests({ persist: false });
-        resetTaskFlowRegistryForTests({ persist: false });
-      }
-    },
-  );
+  registerRestoredRunningTaskSettlementTest({
+    getRegistry: () => mod,
+    mocks,
+    hydrateAndActivateRegistry,
+  });
 
   it.each([
     { name: "exact retired orphan", retired: true, sameRun: true, aborted: false, waits: false },
@@ -2064,6 +2001,7 @@ describe("subagent registry seam flow", () => {
       return "delivered";
     });
 
+    const settleRootWork = observeRootWork();
     await withOwnedSessionTranscriptWrites(
       { sessionKey, withTranscriptWrite: withRequesterTranscriptWrite },
       async () => {
@@ -2083,8 +2021,12 @@ describe("subagent registry seam flow", () => {
 
     disposed = true;
     resolveWait({ status: "ok", startedAt: 111, endedAt: 222 });
+    await waitForFast(() =>
+      expect(findRequesterRun("run-detached-requester-owner")?.execution.status).toBe("terminal"),
+    );
+    await settleRootWork();
 
-    await waitForFast(() => expect(freshTranscriptWrite).toHaveBeenCalledOnce());
+    expect(freshTranscriptWrite).toHaveBeenCalledOnce();
     expect(freshCompletionWrite).toHaveBeenCalledOnce();
     expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledOnce();
     const announceParams = (
