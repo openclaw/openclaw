@@ -243,17 +243,14 @@ suite.define(() => {
             const stop = page.getByRole("button", { name: "Stop generating", exact: true });
             await stop.waitFor({ state: "visible" });
             await stop.click();
-            await expect
-              .poll(
-                () =>
-                  sent.filter(
-                    ({ frame }) =>
-                      frame.method === "chat.abort" &&
-                      frame.params?.sessionKey === sessionKey &&
-                      frame.params?.runId === firstRunId,
-                  ).length,
-              )
-              .toBe(1);
+            const firstRunAbortCount = () =>
+              sent.filter(
+                ({ frame }) =>
+                  frame.method === "chat.abort" &&
+                  frame.params?.sessionKey === sessionKey &&
+                  frame.params?.runId === firstRunId,
+              ).length;
+            await expect.poll(firstRunAbortCount).toBe(1);
             await stop.waitFor({ state: "detached" });
 
             const followUpTurn = provider.plan();
@@ -313,6 +310,7 @@ suite.define(() => {
               .join("\n");
             expect(occurrences(reloadedAssistantTranscript, offlineTail)).toBe(1);
             expect(occurrences(reloadedAssistantTranscript, followUpReply)).toBe(1);
+            expect(firstRunAbortCount()).toBe(1);
             expect(provider.requests()).toBe(2);
             expect(provider.failures).toEqual([]);
           },
