@@ -16,9 +16,11 @@ import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/sess
 import * as agentDatabaseRegistry from "../state/openclaw-agent-db-registry.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import { rpcReq, testState, writeSessionStore } from "./test-helpers.js";
+import { releaseGatewaySessionStoreFixture } from "./test/server-sessions-resources.test-helpers.js";
 import {
   directSessionReq,
   getGatewayConfigModule,
@@ -169,6 +171,8 @@ test.runIf(process.platform !== "win32")(
         },
       });
     } finally {
+      await disposeSessionReadContexts();
+      await releaseGatewaySessionStoreFixture(aliasStateDir);
       fsSync.rmSync(aliasStateDir, { force: true });
     }
   },

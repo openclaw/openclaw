@@ -9,6 +9,7 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import { PluginRegistryInspectionResources } from "../../plugins/registry-inspection-resources.js";
 import { retireInspectionInstances } from "../../plugins/registry-inspection.test-support.js";
@@ -23,6 +24,7 @@ import {
   trackAsyncWork,
 } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { CONTEXT_ENGINE_TURN_MAINTENANCE_TASK_KIND } from "../../tasks/context-engine-maintenance-task-owner.js";
 import { onTaskRegistryChange } from "../../tasks/task-registry.store.js";
 import { isTerminalTaskStatus, type TaskStatus } from "../../tasks/task-registry.types.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -56,7 +58,7 @@ vi.mock("../prepared-model-runtime.js", async (importOriginal) => {
   };
 });
 
-it.each([
+it.for([
   { mode: "timeout", factory: "none", deferred: false },
   { mode: "caller-abort", factory: "none", deferred: false },
   { mode: "success-tail", factory: "none", deferred: false },
@@ -67,7 +69,7 @@ it.each([
   { mode: "deferred-factory-signal", factory: "signal", deferred: true },
 ] as const)(
   "retains $mode resources through disposal without retaining write authority",
-  async ({ mode, factory, deferred }) => {
+  async ({ mode, factory, deferred }, { signal }) => {
     const state = await createOpenClawTestState({
       prefix: "openclaw-foreground-compaction-",
       layout: "split",
@@ -167,7 +169,6 @@ it.each([
       const forceDisposal = createDeferredCore();
       const factoryAborted = createDeferredCore();
       const operationAborted = createDeferredCore();
-      const taskSettled = createDeferredCore<TaskStatus>();
       const parent = deferred ? new AsyncWorkScope() : undefined;
       let factorySignal: AbortSignal | undefined;
       let factoryCloseContextMatches = false;
@@ -312,11 +313,13 @@ it.each([
       const caller = new AbortController();
       const callerReason = new Error("foreground compaction caller cancelled");
       let pending: Promise<unknown> | undefined;
-      const stopTasks = deferred
+      const taskSettled = createDeferredCore<TaskStatus>();
+      const stopTaskObserver = deferred
         ? onTaskRegistryChange((event) => {
             if (
               event?.kind === "upserted" &&
               event.task.ownerKey === target.sessionKey &&
+              event.task.taskKind === CONTEXT_ENGINE_TURN_MAINTENANCE_TASK_KIND &&
               isTerminalTaskStatus(event.task.status)
             ) {
               taskSettled.resolve(event.task.status);
@@ -391,14 +394,12 @@ it.each([
           expect.soft(workSignal?.aborted ?? false).toBe(false);
         }
         resume.resolve();
+        if (deferred) {
+          // Worker bookkeeping publishes before engine disposal can start.
+          expect(await racePromiseWithAbortSignal(taskSettled.promise, signal)).toBe("succeeded");
+        }
         if (factory === "none") {
           await Promise.allSettled(work.slice(0, 1));
-        }
-        if (deferred) {
-          // The owner settles its task before disposal; measure factory drainage after publication.
-          expect(
-            await withTestTimeout(taskSettled.promise, 5_000, "Deferred task never settled"),
-          ).toBe("succeeded");
         }
         await withTestTimeout(
           disposalEntered.promise,
@@ -437,7 +438,7 @@ it.each([
           reopened.close();
         }
       } finally {
-        stopTasks?.();
+        stopTaskObserver?.();
         resume.resolve();
         finishDisposal.resolve();
         stopFactory.resolve();
