@@ -288,7 +288,8 @@ class ChatDetailPanel extends OpenClawLightDomElement {
         this.fileDraftContent = null;
         editor.onDocChanged((nextContent) => {
           const draft = captureFileEditorDraft(current, {
-            editing: this.fileEditing,
+            // Reload synchronization may normalize display text without a user edit.
+            editing: this.fileEditing && !this.fileReloading,
             content: nextContent,
             dirty: !editor.contentEquals(this.fileSavedContent),
             expectedHash: this.fileHash,
@@ -588,6 +589,7 @@ class ChatDetailPanel extends OpenClawLightDomElement {
         // mode (e.g. the agent rewrote the file with mixed line endings);
         // drop the edit capability instead of letting a save corrupt it.
         if (!latest.editable && this.visibleContent?.kind === "file") {
+          setFileDraft(this.visibleContent, null);
           this.fileEditing = false;
           this.fileDirty = false;
           const { edit: _removed, ...readOnly } = this.visibleContent;
