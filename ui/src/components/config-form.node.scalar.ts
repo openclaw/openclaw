@@ -105,9 +105,6 @@ function coerceTextInputValue(
   if (numberCandidate !== undefined) {
     return numberCandidate;
   }
-  if (stringCandidateValid) {
-    return value;
-  }
   return value;
 }
 
