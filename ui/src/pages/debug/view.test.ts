@@ -375,6 +375,29 @@ describe("renderDebug", () => {
       "Session lanes · 23 9 4 —",
     );
   });
+
+  it("uses per-session capacity when displaying aggregate subagent activity", () => {
+    const container = document.createElement("div");
+    const lane = {
+      lane: "subagent",
+      activeCount: 16,
+      queuedCount: 0,
+      maxConcurrent: 8,
+      concurrencyScope: "session" as const,
+      saturatedLaneCount: 0,
+      draining: false,
+      generation: 0,
+    };
+    render(renderDebug(createProps({ lanes: [lane] })), container);
+
+    let row = container.querySelector(".command-lane-row");
+    expect(normalizedText(row)).toContain("subagent 16 · 8/session 0");
+    expect(row?.classList).not.toContain("command-lane-row--saturated");
+
+    render(renderDebug(createProps({ lanes: [{ ...lane, saturatedLaneCount: 1 }] })), container);
+    row = container.querySelector(".command-lane-row");
+    expect(row?.classList).toContain("command-lane-row--saturated");
+  });
 });
 
 describe("DebugPage", () => {

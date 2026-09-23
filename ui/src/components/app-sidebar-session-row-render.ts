@@ -14,6 +14,10 @@ import { formatDurationCompact } from "../lib/format-duration.ts";
 import { renderHoverMarquee } from "../lib/hover-marquee.ts";
 import { handleContextMenuEvent } from "../lib/keyboard-shortcuts.ts";
 import { presenceMatchesProfile, projectPresencePayload } from "../lib/presence-users.ts";
+import type {
+  SessionMethodAccess,
+  SessionMethodAccessRequest,
+} from "../lib/session-method-access.ts";
 import type { CatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import { writeSessionDragData } from "../lib/sessions/drag.ts";
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
@@ -134,12 +138,8 @@ export interface SessionListHost {
   finishSidebarSectionDrag(): void;
   toggleSection(sectionId: string): void;
   expandedAgentId(): string;
-  readNewSessionAccess(): import("../lib/session-method-access.ts").SessionMethodAccess;
-  readSessionMutationAccess(request: {
-    method: string;
-    params?: unknown;
-    requiredScope?: "operator.write" | "operator.admin";
-  }): import("../lib/session-method-access.ts").SessionMethodAccess;
+  readNewSessionAccess(): SessionMethodAccess;
+  readSessionMutationAccess(request: SessionMethodAccessRequest): SessionMethodAccess;
   requestOpenNewSession(agentId: string, target?: NewSessionTarget): void;
   setVisibleSessionLimit(sectionId: string, limit: number): void;
   clearSessionSelection(): void;
@@ -334,10 +334,14 @@ export function renderRecentSession(params: {
   const pinAccess = host.readSessionMutationAccess({
     method: "sessions.patch",
     params: { key: session.key, pinned: !session.pinned },
+    sessionScope: true,
+    session,
   });
   const archiveAccess = host.readSessionMutationAccess({
     method: "sessions.patch",
     params: { key: session.key, archived: !session.archived },
+    sessionScope: true,
+    session,
   });
   const archiveAllowed =
     session.archived ||
@@ -564,7 +568,13 @@ export function renderRecentSession(params: {
               @click=${(event: MouseEvent) => {
                 event.stopPropagation();
                 if (session.archived) {
-                  void host.sessionOrganizer.patchSession(session, { archived: false });
+                  void host.sessionOrganizer.patchSession(
+                    session,
+                    { archived: false },
+                    {
+                      sessionScope: true,
+                    },
+                  );
                 } else {
                   void host.sessionOrganizer.archiveSessionWithUndo(session);
                 }

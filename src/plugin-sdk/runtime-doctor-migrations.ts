@@ -55,6 +55,8 @@ export type {
 } from "../plugin-state/plugin-state-store.js";
 export type {
   PluginDoctorChannelIngressQueueAccess,
+  PluginDoctorMigrationBackupResource,
+  PluginDoctorMigrationBackupWarning,
   PluginDoctorStateMigration,
   PluginDoctorStateMigrationContext,
 } from "../plugins/doctor-contract-module.js";

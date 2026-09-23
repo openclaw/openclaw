@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { execFile } from "node:child_process";
 import { channel } from "node:diagnostics_channel";
+import { once } from "node:events";
 import fs from "node:fs";
 import { availableParallelism } from "node:os";
 import path from "node:path";
@@ -821,6 +822,31 @@ describe("worker task pool", () => {
     const worker = workers.at(-1);
     assert.ok(worker);
     await expect.poll(() => worker.threadId).toBe(-1);
+  });
+
+  it("keeps a promptly recreated worker warm across intermittent tasks, then expires it", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    const pool = createPool();
+    try {
+      await pool.run({ label: "cold" }, {});
+      const coldExit = once(workers.at(-1)!, "exit");
+      await vi.advanceTimersByTimeAsync(70_000);
+      await coldExit;
+      const warm = await pool.run({ label: "hot script" }, {});
+      for (let index = 0; index < 8; index++) {
+        await vi.advanceTimersByTimeAsync(70_000);
+        const next = await pool.run({ label: "intermittent" }, {});
+        expect(next.threadId).toBe(warm.threadId);
+      }
+      expect(pool.getSnapshot().workersCreated).toBe(2);
+      const warmExit = once(workers.at(-1)!, "exit");
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      await warmExit;
+      expect(pool.getSnapshot().workers).toBe(0);
+    } finally {
+      await pool.close();
+      vi.useRealTimers();
+    }
   });
 
   it("lets a headless process exit while warm workers are idle", async () => {

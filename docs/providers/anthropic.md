@@ -441,6 +441,8 @@ affected project directory. It re-reads the whole tree at most every five
 minutes as a backstop, and falls back to per-request scanning if the platform
 cannot provide a file watcher. Desktop metadata also refreshes every 60 seconds
 to pick up custom-group changes outside the watched session store.
+Desktop metadata caching keeps only bounded catalog fields and PR summaries;
+unused MCP configurations and launch snapshots are discarded after each read.
 Gateway enumeration keeps each caller isolated;
 the plugin reuses its watched filesystem snapshot across those enumerations.
 

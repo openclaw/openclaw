@@ -3,6 +3,7 @@ import Module, { createRequire, isBuiltin } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { JitiOptions, JitiResolveOptions } from "jiti";
+import { isPathInside } from "../infra/path-guards.js";
 import { toSafeImportPath } from "../shared/import-specifier.js";
 import { createJiti } from "./jiti-factory.js";
 import {
@@ -363,7 +364,9 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
                   if (
                     !(specifier.startsWith("file:") || path.isAbsolute(specifier)) ||
                     !native.url.startsWith("file:") ||
-                    artifact.moduleRoot(sourceForOutput(fileURLToPath(native.url)).source)
+                    artifact.moduleRoot(sourceForOutput(fileURLToPath(native.url)).source) ||
+                    // Resolved SDK URLs keep host identity just like their public specifiers.
+                    aliases.sdkRoots.some((root) => isPathInside(root, fileURLToPath(native.url)))
                   ) {
                     return native;
                   }

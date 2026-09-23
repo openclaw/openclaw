@@ -7,6 +7,7 @@ import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { hasOperatorAdminAccess } from "../app/operator-access.ts";
 import { updateHumanMentions, type HumanMentionInput } from "../lib/chat/human-mentions.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
+import { modelCatalogEventInvalidation } from "../lib/model-catalog-cache.ts";
 import { resolveUiSelectedGlobalAgentId } from "../lib/sessions/session-key.ts";
 import { searchVisibleSessionTranscripts } from "../lib/sessions/transcript-search.ts";
 import { GatewayPageController } from "../lit/gateway-page-controller.ts";
@@ -147,12 +148,11 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
       () => this.context?.gateway,
       (gateway) =>
         gateway.subscribeEvents((event) => {
-          if (
-            this.context?.gateway === gateway &&
-            (event.event === "cron" ||
-              event.event === "config.changed" ||
-              event.event === "chat.metadata.changed")
-          ) {
+          const invalidation = modelCatalogEventInvalidation(event);
+          if (this.context?.gateway === gateway && (event.event === "cron" || invalidation)) {
+            if (invalidation === "clear") {
+              this.clearCatalogSearch();
+            }
             if (this.open) {
               void this.ensureCatalogItems(true);
             } else {

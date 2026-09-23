@@ -23,8 +23,13 @@ import {
 } from "./navigation-guard.js";
 import { createDownloadCaptureForPage } from "./pw-download-capture.js";
 import type { RoleRefMap } from "./pw-role-snapshot.js";
-import { connectBrowser, pageTargetInfo } from "./pw-session-connection.js";
+import {
+  closeConnectionScopedPageBrowser,
+  connectBrowser,
+  pageTargetInfo,
+} from "./pw-session-connection.js";
 import type { RoleRefs } from "./pw-session-contracts.js";
+import { isConnectionScopedPage } from "./pw-session-page-target.js";
 import {
   assertPageNavigationCompletedSafely,
   closeBlockedNavigationTarget,
@@ -326,7 +331,7 @@ export async function navigateViaPlaywright(opts: {
   try {
     navigationResult = await navigateWithDownloadCapture();
   } catch (err) {
-    if (!isRetryableNavigateError(err)) {
+    if (isConnectionScopedPage(page) || !isRetryableNavigateError(err)) {
       throw err;
     }
     // Extension relays can briefly drop CDP during renderer swaps/navigation.
@@ -430,7 +435,14 @@ export async function closePageViaPlaywright(opts: InteractionTargetOptions): Pr
   if (opts.assertCurrent) {
     await assertInteractionCurrent(opts);
   }
-  await page.close();
+  if (isConnectionScopedPage(page)) {
+    const browser = page.context().browser();
+    if (browser) {
+      await closeConnectionScopedPageBrowser(opts.cdpUrl, browser);
+    }
+  } else {
+    await page.close();
+  }
 }
 
 /** Renders the target page to a PDF buffer. */

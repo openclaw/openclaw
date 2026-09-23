@@ -1,5 +1,6 @@
 // Register the shared tool mocks before any runtime dependency is evaluated.
 import "./worker-session-tool-executor.test-support.js";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DecisionReceiptV1 } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -413,7 +414,9 @@ describe("worker session tool topology", () => {
       childOperationalRun,
       {
         agentId: CHILD.agentId,
+        sessionId: CHILD.sessionId,
         sessionKey: spawnedChildKey,
+        storePath: path.join(getFixture().root, "sessions.json"),
       },
       () => {},
     );
@@ -504,7 +507,12 @@ describe("worker session tool topology", () => {
         createdAt: 3,
       },
       grandchildOperationalRun,
-      { agentId: GRANDCHILD.agentId, sessionKey: spawnedGrandchildKey! },
+      {
+        agentId: GRANDCHILD.agentId,
+        sessionId: GRANDCHILD.sessionId,
+        sessionKey: spawnedGrandchildKey!,
+        storePath: path.join(getFixture().root, "sessions.json"),
+      },
       () => {},
     );
     const grandchildSend = await execute({

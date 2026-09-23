@@ -15,9 +15,48 @@ OpenClaw loads `USER.md` beside `MEMORY.md` at session start. It has a separate 
 
 ## Personal USER files on a shared Gateway
 
-Keep workspace-root `USER.md` for shared defaults. To add preferences for one
-signed-in person, create `users/<canonical-profile-id>/USER.md` in the **agent
-workspace**, not the task's Git worktree. Obtain the durable profile ID from the
+Single-user Gateways use only the agent workspace's root `USER.md`, editable in
+**Agents → Files**. They do not expose the personal instructions editor or chat
+tool, accept personal-file API requests, or load a second per-profile `USER.md`.
+An existing per-profile file is left on disk unchanged, not automatically merged
+into the root file.
+
+Personal files are available only when the Gateway has at least two distinct,
+unmerged person profiles, using the existing multi-user identity policy. The
+shared Owner profile does not count as a separate person. After the roster
+changes, reconnect the Control UI to refresh its advertised capabilities; the
+server rechecks the current policy on every read and write.
+
+Open **Settings → Profile → Personal instructions**, choose an agent in the
+Settings sidebar’s existing agent selector, and save your preferences. You can create or edit your own personal `USER.md` with an
+authenticated profile and `operator.read`; administrator or general write access
+is not required. The editor always uses the signed-in person, not the owner of
+the currently open chat. It cannot edit another person’s file or shared defaults.
+
+You can also ask an agent in any authenticated Gateway chat session to update
+your personal instructions, including sessions backed by a project worktree or
+owned by someone else. The `personal_instructions` tool reads or updates the
+**requesting person’s** file in the selected agent’s configured workspace; the
+session owner, task directory, and model-supplied profile IDs never choose the
+write target. It reads the current file before saving with its content hash.
+Anonymous or autonomous runs without a live authenticated requester cannot use
+this exception. Normal tool policies still apply; general filesystem access is
+unchanged. On a multi-user Gateway, a token/password or device-token shared-owner login
+edits that shared owner profile’s file; use individual sign-in to keep different
+people’s files separate.
+
+Saves check the version you loaded. If another editor changes the file, keep a
+copy of your draft and reload before saving again. As with the shared workspace
+editor, conflict detection against independent host-side editors is best effort;
+avoid simultaneous UI and host-process edits to the same file. Personal instructions must fit
+the 4,000-character bootstrap budget; lower configured budgets and existing
+provenance checks still apply. Do not store secrets. The editor supports local
+agent workspaces; remotely hosted agent workspaces report an explicit error
+rather than writing a different Gateway-local file.
+
+Keep workspace-root `USER.md` for shared defaults. Personal preferences live at
+`users/<canonical-profile-id>/USER.md` in the **agent workspace**, not the task’s
+Git worktree. For manual host-side editing, obtain the durable profile ID from the
 Gateway's authenticated profile/People data; do not use a display name, GitHub
 login, email, or a profile ID pasted into a message. This uses existing session
 ownership and creation records; no schema or configuration change is needed.

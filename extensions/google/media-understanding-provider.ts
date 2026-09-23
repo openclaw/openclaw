@@ -42,13 +42,8 @@ async function generateGeminiInlineDataText(params: {
   missingTextError: string;
 }): Promise<{ text: string; model: string }> {
   const fetchFn = params.fetchFn ?? fetch;
-  const model = (() => {
-    const trimmed = params.model?.trim();
-    if (!trimmed) {
-      return params.defaultModel;
-    }
-    return normalizeGoogleModelId(trimmed);
-  })();
+  const requestedModel = params.model?.trim();
+  const model = requestedModel ? normalizeGoogleModelId(requestedModel) : params.defaultModel;
   const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
     resolveGoogleGenerativeAiHttpRequestConfig({
       apiKey: params.apiKey,
@@ -60,10 +55,7 @@ async function generateGeminiInlineDataText(params: {
     });
   const url = `${baseUrl}/models/${model}:generateContent`;
 
-  const prompt = (() => {
-    const trimmed = params.prompt?.trim();
-    return trimmed || params.defaultPrompt;
-  })();
+  const prompt = params.prompt?.trim() || params.defaultPrompt;
 
   const body = {
     contents: [
@@ -118,7 +110,7 @@ async function generateGeminiInlineDataText(params: {
 export async function transcribeGeminiAudio(
   params: AudioTranscriptionRequest,
 ): Promise<AudioTranscriptionResult> {
-  const { text, model } = await generateGeminiInlineDataText({
+  return await generateGeminiInlineDataText({
     ...params,
     defaultModel: GOOGLE_MEDIA_UNDERSTANDING_DEFAULT_MODELS.audio,
     defaultPrompt: DEFAULT_GOOGLE_AUDIO_PROMPT,
@@ -126,13 +118,12 @@ export async function transcribeGeminiAudio(
     httpErrorLabel: "Audio transcription failed",
     missingTextError: "Audio transcription response missing text",
   });
-  return { text, model };
 }
 
 export async function describeGeminiVideo(
   params: VideoDescriptionRequest,
 ): Promise<VideoDescriptionResult> {
-  const { text, model } = await generateGeminiInlineDataText({
+  return await generateGeminiInlineDataText({
     ...params,
     defaultModel: GOOGLE_MEDIA_UNDERSTANDING_DEFAULT_MODELS.video,
     defaultPrompt: DEFAULT_GOOGLE_VIDEO_PROMPT,
@@ -140,11 +131,10 @@ export async function describeGeminiVideo(
     httpErrorLabel: "Video description failed",
     missingTextError: "Video description response missing text",
   });
-  return { text, model };
 }
 
-export const googleMediaUnderstandingProvider: MediaUnderstandingProvider = {
+export const googleMediaUnderstandingProvider = {
   ...createGoogleMediaUnderstandingProviderMetadata(),
   transcribeAudio: transcribeGeminiAudio,
   describeVideo: describeGeminiVideo,
-};
+} satisfies MediaUnderstandingProvider;

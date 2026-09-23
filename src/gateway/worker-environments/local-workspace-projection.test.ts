@@ -654,7 +654,10 @@ describe("local sandbox workspace reconciliation", () => {
       ).not.toContain("guest-ignored");
       const receipt = localWorkspaceStore().get(owner.worktree.id)!.pending_ref!;
       expect(receipt).toBeTruthy();
-      const legacyState = getRegistryWorktreeProvisionedState(process.env, owner.worktree.id)!;
+      const legacyState = (await getRegistryWorktreeProvisionedState(
+        process.env,
+        owner.worktree.id,
+      ))!;
       expect(legacyState).toEqual([{ path: ".env.allowed", mode: expect.any(Number), chunks: 1 }]);
       await closeOpenClawStateDatabaseAsync();
       if (mode === "retention") {

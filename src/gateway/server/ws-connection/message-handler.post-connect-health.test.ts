@@ -53,6 +53,7 @@ import {
 import { GatewayClientRegistry } from "../client-registry.js";
 import { createGatewayWsTestLogger as createLogger } from "../ws-connection.test-helpers.js";
 import { resolveSharedGatewaySessionGeneration } from "../ws-shared-generation.js";
+import { expectAuthenticatedOwnerReconnect } from "./message-handler.owner-reconnect.test-support.js";
 import {
   createCloseMock,
   createConnectedTestClient,
@@ -675,25 +676,15 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
           caps: [],
         });
         await harness.whenAttached;
-        const client = harness.client as {
-          authenticatedUserId?: string;
-          authenticatedUserProfile?: { profileId: string; displayName: string };
-          connect: { scopes: string[] };
-        };
-        expect(client.authenticatedUserId).toBeUndefined();
-        expect(harness.registeredProfileId).toBe(client.authenticatedUserProfile?.profileId);
-        expect(client.authenticatedUserProfile).toMatchObject({
-          displayName: profileId ? "Saved Owner" : "Gateway Person",
+        const resolvedProfileId = expectAuthenticatedOwnerReconnect(harness.client, {
+          authMethod,
+          previousProfileId: profileId,
+          registeredProfileId: harness.registeredProfileId,
         });
-        if (profileId) {
-          expect(client.authenticatedUserProfile?.profileId).toBe(profileId);
-        } else {
-          profileId = client.authenticatedUserProfile!.profileId;
-          setDisplayName(profileId, "Saved Owner");
+        if (!profileId) {
+          setDisplayName(resolvedProfileId, "Saved Owner");
         }
-        expect(client.connect.scopes).toEqual(
-          authMethod === "token" || authMethod === "password" ? [] : ["operator.read"],
-        );
+        profileId = resolvedProfileId;
         expect(upsertPresenceMock).toHaveBeenCalledWith(
           `owner-${authMethod}`,
           expect.objectContaining({

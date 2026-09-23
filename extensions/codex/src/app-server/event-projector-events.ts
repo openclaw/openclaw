@@ -11,12 +11,12 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   isNonSuccessItemStatus,
+  isProjectedNativeToolItem,
   itemKind,
   itemName,
   itemStatus,
   itemTitle,
   matchesCodexSnapshotTurn,
-  shouldSynthesizeToolProgressForItem,
   unknownItemStatus,
 } from "./event-projector-items.js";
 import {
@@ -110,7 +110,7 @@ export function projectNormalizedToolItem(params: {
   detailMode?: ToolProgressDetailMode;
 }): NormalizedToolItemProjection | undefined {
   const { item } = params;
-  if (!item || !shouldSynthesizeToolProgressForItem(item)) {
+  if (!item || !isProjectedNativeToolItem(item)) {
     return undefined;
   }
   const name = itemName(item);
@@ -540,7 +540,7 @@ export class CodexEventProjection {
   }): Promise<void> {
     const { item, activeItemIds, completedItemIds, isActive } = params;
     if (
-      !shouldSynthesizeToolProgressForItem(item) ||
+      !isProjectedNativeToolItem(item) ||
       !matchesCodexSnapshotTurn(item, this.turnId) ||
       completedItemIds.has(item.id) ||
       itemStatus(item) === "running"

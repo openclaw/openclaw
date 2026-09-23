@@ -20,7 +20,7 @@ export interface PublicationIntent {
 }
 export interface PublicationDispatchEnvelope extends PublicationIntent {
   trustedWorkflow: { ref: string; fullRef: string; sha: string } | null;
-  laneInputs?: { extension_test_exclude_patterns_json?: string };
+  laneInputs?: { extension_test_exclude_patterns_json?: string; known_flaky_jobs_json?: string };
 }
 export interface PublicationSourceRequest extends PublicationIntent {
   repository: string;

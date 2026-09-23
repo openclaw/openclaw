@@ -3,7 +3,6 @@ import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { runWithSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { stageSqliteTransactionState } from "../infra/sqlite-post-commit.js";
-import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
 import {
@@ -72,16 +71,12 @@ function stageLeaseExpiryObservation(
   }
 }
 
-/** The live owner grants this exact transaction; the receipt alone grants nothing. */
-export function assertOpenClawStateLeaseWorkerOwnedInTransaction(
+function assertOpenClawStateLeaseWorkerOwned(
   database: DatabaseSync,
   identity: OpenClawStateLeaseIdentity,
   purpose: "write" | "verify" | "renew" = "write",
   stage: "transaction" | "commit" = "transaction",
 ): number {
-  if (!database.isTransaction) {
-    throw new Error("State lease worker ownership requires an active transaction");
-  }
   const readExpiry = () => {
     try {
       const expiresAt = readOpenClawStateLeaseExpiry(database, identity);
@@ -107,8 +102,21 @@ export function assertOpenClawStateLeaseWorkerOwnedInTransaction(
       expiresAt,
     },
   });
-  // The live owner grant can wait; expiry is sampled again on the held transaction.
+  // Host admission can wait; verify again before publishing the observed expiry.
   return readExpiry();
+}
+
+/** The live owner grants this exact transaction; the receipt alone grants nothing. */
+export function assertOpenClawStateLeaseWorkerOwnedInTransaction(
+  database: DatabaseSync,
+  identity: OpenClawStateLeaseIdentity,
+  purpose: "write" | "verify" | "renew" = "write",
+  stage: "transaction" | "commit" = "transaction",
+): number {
+  if (!database.isTransaction) {
+    throw new Error("State lease worker ownership requires an active transaction");
+  }
+  return assertOpenClawStateLeaseWorkerOwned(database, identity, purpose, stage);
 }
 
 export function acquireOpenClawStateLeaseInWorker(
@@ -156,12 +164,11 @@ export function executeOpenClawStateLeaseCommand(
 ): number | void {
   if (command.type === "stateLease.verify") {
     const shared = takeLeaseExpiryObservation(command.input.identity);
-    const expiresAt = runSqliteDeferredTransactionSync(database.db, () =>
-      assertOpenClawStateLeaseWorkerOwnedInTransaction(
-        database.db,
-        command.input.identity,
-        "verify",
-      ),
+    // Each SELECT owns its snapshot; host scheduling must not pin the WAL or stale the reread.
+    const expiresAt = assertOpenClawStateLeaseWorkerOwned(
+      database.db,
+      command.input.identity,
+      "verify",
     );
     publishLeaseExpiryObservation(shared, BigInt(expiresAt));
     return expiresAt;

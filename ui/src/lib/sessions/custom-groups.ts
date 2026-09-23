@@ -36,6 +36,7 @@ export function readSessionCustomGroups(payload: unknown): SessionGroupSettings[
   });
 }
 
+/** Replace defaults from a complete snapshot, retaining only catalog names and positions. */
 export function mergeSessionGroupDefaults(
   groups: readonly SessionGroupSettings[],
   payload: unknown,
@@ -56,7 +57,7 @@ export function mergeSessionGroupDefaults(
       });
     }
   }
-  return groups.map((group) => ({ ...group, ...defaults.get(group.name) }));
+  return groups.map(({ name, position }) => ({ name, position, ...defaults.get(name) }));
 }
 
 export function readSidebarSectionOrder(payload: unknown): string[] {

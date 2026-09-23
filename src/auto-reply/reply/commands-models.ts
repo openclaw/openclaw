@@ -16,7 +16,7 @@ import {
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ReplyPayload } from "../types.js";
-import { rejectUnauthorizedCommand } from "./command-gates.js";
+import { defineAuthorizedTextCommand } from "./command-gates.js";
 import {
   loadModelsProviderData,
   type ModelsCommandSessionEntry,
@@ -434,51 +434,45 @@ function buildModelsCommandReply(
   return { text: withAvailability(lines.join("\n")) };
 }
 
-export const handleModelsCommand: CommandHandler = async (params, allowTextCommands) => {
-  if (!allowTextCommands) {
-    return null;
-  }
-  const commandBodyNormalized = params.command.commandBodyNormalized.trim();
-  if (!commandBodyNormalized.startsWith("/models")) {
-    return null;
-  }
-  const parsed = parseModelsArgs(commandBodyNormalized.replace(/^\/models\b/i, "").trim());
-  const unauthorized = rejectUnauthorizedCommand(params, "/models");
-  if (unauthorized) {
-    return unauthorized;
-  }
+export const handleModelsCommand: CommandHandler = defineAuthorizedTextCommand(
+  {
+    label: "/models",
+    match: (body) => (body.trim().startsWith("/models") ? body.trim() : null),
+  },
+  async (params, commandBodyNormalized) => {
+    const parsed = parseModelsArgs(commandBodyNormalized.replace(/^\/models\b/i, "").trim());
+    if (parsed.action === "add") {
+      return { shouldContinue: false, reply: { text: MODELS_ADD_DEPRECATED_TEXT } };
+    }
 
-  if (parsed.action === "add") {
-    return { shouldContinue: false, reply: { text: MODELS_ADD_DEPRECATED_TEXT } };
-  }
+    const modelsAgentId = params.sessionKey
+      ? resolveSessionAgentId({
+          sessionKey: params.sessionKey,
+          config: params.cfg,
+        })
+      : (params.agentId ?? "main");
+    const currentAgentId = params.agentId ?? "main";
+    const modelsAgentDir =
+      modelsAgentId === currentAgentId && params.agentDir
+        ? params.agentDir
+        : resolveAgentDir(params.cfg, modelsAgentId);
+    const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
 
-  const modelsAgentId = params.sessionKey
-    ? resolveSessionAgentId({
-        sessionKey: params.sessionKey,
-        config: params.cfg,
-      })
-    : (params.agentId ?? "main");
-  const currentAgentId = params.agentId ?? "main";
-  const modelsAgentDir =
-    modelsAgentId === currentAgentId && params.agentDir
-      ? params.agentDir
-      : resolveAgentDir(params.cfg, modelsAgentId);
-  const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
-
-  const reply = await resolveModelsCommandReply({
-    cfg: params.cfg,
-    commandBodyNormalized,
-    surface: params.ctx.Surface,
-    currentModel: params.model ? `${params.provider}/${params.model}` : undefined,
-    agentId: modelsAgentId,
-    agentDir: modelsAgentDir,
-    workspaceDir:
-      targetSessionEntry?.spawnedWorkspaceDir ??
-      (modelsAgentId === currentAgentId ? params.workspaceDir : undefined),
-    sessionEntry: targetSessionEntry,
-  });
-  if (!reply) {
-    return null;
-  }
-  return { reply, shouldContinue: false };
-};
+    const reply = await resolveModelsCommandReply({
+      cfg: params.cfg,
+      commandBodyNormalized,
+      surface: params.ctx.Surface,
+      currentModel: params.model ? `${params.provider}/${params.model}` : undefined,
+      agentId: modelsAgentId,
+      agentDir: modelsAgentDir,
+      workspaceDir:
+        targetSessionEntry?.spawnedWorkspaceDir ??
+        (modelsAgentId === currentAgentId ? params.workspaceDir : undefined),
+      sessionEntry: targetSessionEntry,
+    });
+    if (!reply) {
+      return null;
+    }
+    return { reply, shouldContinue: false };
+  },
+);

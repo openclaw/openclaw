@@ -19,6 +19,7 @@ import type {
 import {
   formatUpdateCampaignLabel,
   formatUpdateTargetLabel,
+  getUpdateGitComparison,
   isUpdateActionable,
 } from "../../app/update-schedule-projection.ts";
 import { icons } from "../../components/icons.ts";
@@ -416,23 +417,13 @@ function renderScheduleStatus(props: UpdatesViewProps): TemplateResult {
 
 function readGitCommits(props: UpdatesViewProps) {
   const update = props.update.updateAvailable;
-  const gitUpdate =
-    props.update.updateSchedule?.target?.kind === "git" || Boolean(update?.currentSha);
-  const comparedBehind = props.update.updateSchedule?.install?.git;
-  if (
-    comparedBehind &&
-    comparedBehind.status !== "behind" &&
-    comparedBehind.status !== "diverged"
-  ) {
-    return [];
-  }
-  const comparedBehindCount =
-    comparedBehind?.status === "behind" || comparedBehind?.status === "diverged"
-      ? comparedBehind.commitsBehind
-      : undefined;
+  const comparison = getUpdateGitComparison(props.update.updateSchedule, update);
   const commitsMatch =
-    comparedBehindCount === undefined || comparedBehindCount === update?.commitsBehind;
-  return gitUpdate && commitsMatch ? (update?.commits ?? []) : [];
+    comparison &&
+    comparison.commitsBehind === update?.commitsBehind &&
+    comparison.currentSha === update?.currentSha &&
+    comparison.upstreamSha === update?.upstreamSha;
+  return commitsMatch ? (update?.commits ?? []) : [];
 }
 
 function renderCommitList(props: UpdatesViewProps) {

@@ -7,6 +7,7 @@ import type {
   ManagedWorktreeOwnerKind,
   ManagedWorktreeRecord,
   ManagedWorktreeRunEndCleanup,
+  ProvisionedFileState,
 } from "./types.js";
 
 type WorktreeRow = Selectable<OpenClawStateKyselyDatabase["worktrees"]>;
@@ -101,4 +102,84 @@ export function listLiveRegistryWorktreeIdsInDatabase(db: DatabaseSync): string[
     .select("id")
     .where("removed_at", "is", null);
   return executeSqliteQuerySync(db, query).rows.map((row) => row.id);
+}
+
+function isProvisionedFileState(entry: unknown): entry is ProvisionedFileState {
+  return (
+    isRecord(entry) &&
+    typeof entry.path === "string" &&
+    (entry.mode === null ||
+      (typeof entry.mode === "number" &&
+        Number.isInteger(entry.mode) &&
+        entry.mode >= 0 &&
+        entry.mode <= 0o7777)) &&
+    typeof entry.chunks === "number" &&
+    Number.isInteger(entry.chunks) &&
+    entry.chunks >= 0
+  );
+}
+
+function parseProvisionedData(
+  raw: string | null,
+): Array<string | ProvisionedFileState> | undefined {
+  if (raw === null) {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) {
+      return undefined;
+    }
+    return parsed.every(
+      (entry): entry is string | ProvisionedFileState =>
+        typeof entry === "string" || isProvisionedFileState(entry),
+    )
+      ? parsed
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function readProvisionedData(db: DatabaseSync, id: string) {
+  const query = getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "worktrees">>(db)
+    .selectFrom("worktrees")
+    .select("provisioned_paths_json")
+    .where("id", "=", id);
+  const row = executeSqliteQuerySync(db, query).rows[0];
+  return parseProvisionedData(row?.provisioned_paths_json ?? null);
+}
+
+export function getRegistryWorktreeProvisionedPathsInDatabase(
+  db: DatabaseSync,
+  id: string,
+): string[] | undefined {
+  return readProvisionedData(db, id)?.map((entry) =>
+    typeof entry === "string" ? entry : entry.path,
+  );
+}
+
+export function getRegistryWorktreeProvisionedStateInDatabase(
+  db: DatabaseSync,
+  id: string,
+): ProvisionedFileState[] | undefined {
+  const data = readProvisionedData(db, id);
+  return data?.every((entry): entry is ProvisionedFileState => typeof entry !== "string")
+    ? data
+    : undefined;
+}
+
+export function getRegistryWorktreeProvisionedChunkInDatabase(
+  db: DatabaseSync,
+  params: { worktreeId: string; path: string; chunkIndex: number },
+): Uint8Array | undefined {
+  const query = getNodeSqliteKysely<
+    Pick<OpenClawStateKyselyDatabase, "worktree_provisioned_file_chunks">
+  >(db)
+    .selectFrom("worktree_provisioned_file_chunks")
+    .select("data")
+    .where("worktree_id", "=", params.worktreeId)
+    .where("path", "=", params.path)
+    .where("chunk_index", "=", params.chunkIndex);
+  return executeSqliteQuerySync(db, query).rows[0]?.data;
 }
