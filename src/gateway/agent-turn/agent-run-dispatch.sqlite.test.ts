@@ -415,7 +415,7 @@ vi.mock("../../commands/agent.js", () => ({
 type HostWrites = { task: number; delivery: number; flow: number };
 
 function workerOperation(message: unknown): string[] {
-  if (!isRecord(message) || message.type !== "execute" || !Buffer.isBuffer(message.input)) {
+  if (!isRecord(message) || message.type !== "execute" || !(message.input instanceof Uint8Array)) {
     return [];
   }
   const command: unknown = deserialize(message.input);
@@ -457,7 +457,15 @@ it.each([
             return /\bflow_runs\b/i.test(sql) ? "flow" : null;
           },
         );
-        const workerMessages = vi.spyOn(Worker.prototype, "postMessage");
+        const commands: string[] = [];
+        // oxlint-disable-next-line typescript/unbound-method -- call restores the sending worker below.
+        const originalPost = Worker.prototype.postMessage;
+        const workerMessages = vi
+          .spyOn(Worker.prototype, "postMessage")
+          .mockImplementation(function (this: Worker, message, transferList) {
+            commands.push(...workerOperation(message));
+            return originalPost.call(this, message, transferList);
+          });
         const hostSql = observeDeviceAuthHostSql(state.statePath("state", "openclaw.sqlite"));
         let creationSql: ReturnType<typeof hostSql.counts> | undefined;
         const noWrites: HostWrites = { task: 0, delivery: 0, flow: 0 };
@@ -675,9 +683,6 @@ it.each([
               expect.objectContaining({ code: ErrorCodes.UNAVAILABLE, message: failure.message }),
             ],
             { runId, error: failure.message },
-          );
-          const commands = workerMessages.mock.calls.flatMap(([message]) =>
-            workerOperation(message),
           );
           expect(
             commands.filter((command) =>

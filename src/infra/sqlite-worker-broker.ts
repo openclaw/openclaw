@@ -598,7 +598,11 @@ export class SqliteWorkerBroker {
       }
       if (retire) {
         // Retire uncertain transfers or failed prepared-custody cleanup before settlement.
-        this.fail(slot, error, toErrorObject(error, "SQLite worker transfer failed"));
+        this.fail(
+          slot,
+          error,
+          job.nativeDispatched ? undefined : toErrorObject(error, "SQLite worker transfer failed"),
+        );
       } else {
         slot.current = undefined;
         this.finish(job, error);

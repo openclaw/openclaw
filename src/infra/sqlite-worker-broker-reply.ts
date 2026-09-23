@@ -31,6 +31,7 @@ import {
   type SqliteWorkerTransferHandle,
 } from "./sqlite-worker-transfer.js";
 import { resolveStateDatabaseCoordinatorPath } from "./state-database-coordinator.js";
+import { ownedWorkerBytes } from "./worker-transfer-bytes.js";
 
 export function dispatchSqliteWorkerJob(
   slot: Slot,
@@ -39,14 +40,16 @@ export function dispatchSqliteWorkerJob(
 ): void {
   const reject = (error: unknown, preparedNotEntered = false) => {
     let failure = error;
-    let retire = job.preparation
-      ? job.nativeDispatched === true || (job.requestPosted === true && !preparedNotEntered)
-      : Boolean(
-          job.request.gatewaySchemaFence ||
-          job.request.maintenanceSchemaFence ||
-          job.request.stateLifecycle ||
-          job.request.operationAdmission,
-        );
+    let retire =
+      job.nativeDispatched === true ||
+      (job.preparation
+        ? job.requestPosted === true && !preparedNotEntered
+        : Boolean(
+            job.request.gatewaySchemaFence ||
+            job.request.maintenanceSchemaFence ||
+            job.request.stateLifecycle ||
+            job.request.operationAdmission,
+          ));
     if (
       job.preparation &&
       !job.nativeDispatched &&
@@ -168,6 +171,8 @@ function postSqliteWorkerJob(
     job.request.operationAdmission = prepareSqliteWorkerOperationAdmission(job, actor);
   }
   const request = prepareSqliteWorkerRequest(job);
+  // Only command snapshots are private here; opening input remains owned by admission/reopening.
+  const input = request.type === "execute" ? ownedWorkerBytes(request.input) : undefined;
   assertDispatchable();
   // A throwing transfer may still have reached the worker; failure joins its exit.
   if (!job.request.workerStateLifecycle) {
@@ -175,8 +180,9 @@ function postSqliteWorkerJob(
   }
   job.requestPosted = true;
   slot.worker.postMessage(
-    request,
+    input ? { ...request, input } : request,
     [
+      ...(input ? [input.buffer] : []),
       request.gatewaySchemaFence,
       request.maintenanceSchemaFence,
       request.stateLifecycle,
@@ -427,7 +433,9 @@ export function receiveSqliteWorkerReply(
     const result = decodeSqliteWorkerReplyValue(job, reply);
     if (result.type === "continue") {
       // Continuations retain the current job and its reserved transport credits through drain.
-      slot.worker.postMessage(result.request, []);
+      const request = result.request;
+      const input = request.type === "execute-frame" ? ownedWorkerBytes(request.input) : undefined;
+      slot.worker.postMessage(input ? { ...request, input } : request, input ? [input.buffer] : []);
       return;
     }
     value = result.value;

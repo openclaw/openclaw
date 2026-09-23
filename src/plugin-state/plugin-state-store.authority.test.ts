@@ -165,10 +165,13 @@ describe("action-bound plugin state", () => {
               throw new Error("Visitor Access did not create its invitation tool");
             }
             providerConfirmed = false;
-            const posting = vi.spyOn(Worker.prototype, "postMessage");
-            const submittedRenewals = () => {
-              const submitted: unknown[] = [];
-              for (const [message] of posting.mock.calls) {
+            const submittedRenewals: unknown[] = [];
+            // oxlint-disable-next-line typescript/unbound-method -- call restores the sending worker below.
+            const originalPost = Worker.prototype.postMessage;
+            const posting = vi
+              .spyOn(Worker.prototype, "postMessage")
+              .mockImplementation(function (this: Worker, message, transferList) {
+                // Read facts before postMessage detaches the command's private wire buffer.
                 const request = asOptionalRecord(message);
                 if (request?.type === "execute" && request.input instanceof Uint8Array) {
                   const operation = asOptionalRecord(deserialize(request.input));
@@ -178,24 +181,23 @@ describe("action-bound plugin state", () => {
                     input?.pluginId === "visitor-access" &&
                     input.namespace === "visitor-grants"
                   ) {
-                    expect(providerConfirmed).toBe(true);
                     expect(input.key).toBe(email);
                     if (typeof input.valueJson !== "string") {
                       throw new Error("Expected the native visitor grant submission");
                     }
-                    submitted.push(JSON.parse(input.valueJson));
+                    submittedRenewals.push(JSON.parse(input.valueJson));
                   }
                 }
-              }
-              return submitted;
-            };
+                return originalPost.call(this, message, transferList);
+              });
             let heldCommit = false;
             const createAdmission = mutationAdmission.createSqliteWorkerOperationAdmission;
             const admission = vi
               .spyOn(mutationAdmission, "createSqliteWorkerOperationAdmission")
               .mockImplementation((admit) =>
                 createAdmission((request, grant) => {
-                  if (request.stage === "commit" && !heldCommit && submittedRenewals().length > 0) {
+                  if (request.stage === "commit" && !heldCommit && submittedRenewals.length > 0) {
+                    expect(providerConfirmed).toBe(true);
                     heldCommit = true;
                     // The native transaction already wrote its candidate; only its real commit guard remains.
                     vi.setSystemTime(previous.expiresAt + 1);
@@ -206,7 +208,8 @@ describe("action-bound plugin state", () => {
             try {
               const renewal = await invite.execute("renew", { email, days: 2 });
               expect(heldCommit).toBe(true);
-              expect(submittedRenewals()).toEqual([
+              expect(providerConfirmed).toBe(true);
+              expect(submittedRenewals).toEqual([
                 { ...previous, expiresAt: previous.createdAt + 2 * 86_400_000 },
               ]);
               expect(renewal).toMatchObject({ isError: true, details: { error: true } });

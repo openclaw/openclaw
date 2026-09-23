@@ -16,6 +16,7 @@ import { storeDeviceAuthTokenInDatabase } from "./device-auth-store.kernel.js";
 import * as nodeSqlite from "./node-sqlite.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import type { SqliteWorkerRequest } from "./sqlite-worker-contract.js";
 import { createSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
 import {
   openSharedStateSqliteWorkerStore,
@@ -499,7 +500,26 @@ export function registerSharedStateWorkerAdmissionTests(
     const foreign = await holdForeignLifecycle(captured);
     const canceled = new AbortController();
     const stopped = new Error("synthetic head canceled");
-    const posts = vi.spyOn(Worker.prototype, "postMessage");
+    const dispatched: number[] = [];
+    // oxlint-disable-next-line typescript/unbound-method -- call restores the sending worker below.
+    const originalPost = Worker.prototype.postMessage;
+    const posts = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
+      this: Worker,
+      request: SqliteWorkerRequest,
+      transferList,
+    ) {
+      // Record command facts before the private wire buffer is detached by transfer.
+      if (request.type === "execute") {
+        const command = deserialize(request.input) as {
+          type: string;
+          input: { record: NativeHookRelayBridgeRecord };
+        };
+        if (command.type === "nativeHookRelay.write" && command.input.record.pid !== 0) {
+          dispatched.push(command.input.record.pid);
+        }
+      }
+      return originalPost.call(this, request, transferList);
+    });
     let factories = 0;
     try {
       await runOpenClawStateWorkerOperation(
@@ -564,18 +584,6 @@ export function registerSharedStateWorkerAdmissionTests(
           },
         },
       );
-      const dispatched = posts.mock.calls.flatMap(([request]) => {
-        if (request.type !== "execute") {
-          return [];
-        }
-        const command = deserialize(request.input) as {
-          type: string;
-          input: { record: NativeHookRelayBridgeRecord };
-        };
-        return command.type === "nativeHookRelay.write" && command.input.record.pid !== 0
-          ? [command.input.record.pid]
-          : [];
-      });
       expect(dispatched).toEqual(Array.from({ length: 256 }, (_, index) => index + 1));
       expect(factories).toBe(256);
       expect(
