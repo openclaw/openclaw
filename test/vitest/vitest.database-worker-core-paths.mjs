@@ -528,6 +528,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/sandbox/registry-read.test.ts",
   "src/agents/sandbox/registry.test.ts",
   "src/agents/sandbox/runtime-reservation.test.ts",
+  "src/agents/sandbox.context.attachments.test.ts",
   "src/commands/doctor-sandbox-legacy-registry.test.ts",
   "src/agents/tools/sessions-tool.batch.test.ts",
   "src/agents/subagents/announce/subagent-announce.requester-settle-cancel.test.ts",

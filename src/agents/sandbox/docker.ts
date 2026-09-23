@@ -18,7 +18,11 @@ import {
   type SandboxContainerEngine,
   type SandboxContainerEngineTarget,
 } from "./container-engine.js";
-import { containerState, readContainerLabel } from "./container-inspect.js";
+import {
+  containerState,
+  readContainerLabel,
+  recordedPodmanContainerState,
+} from "./container-inspect.js";
 import {
   admitSandboxContainerSource,
   bindSandboxContainerSource,
@@ -177,37 +181,6 @@ export async function ensureContainerImage(engine: SandboxContainerEngine, image
   }
   throw new Error(
     `Sandbox image not found in ${engine.displayName}: ${image}. Build or pull it first.`,
-  );
-}
-
-function isPodmanContainerNotFound(stderr: string): boolean {
-  // Target changes are destructive only after Podman confirms absence. Treat
-  // connection and authorization failures as unknown so the old runtime stays registered.
-  return (
-    /no such container/iu.test(stderr) ||
-    /no container with name or id .* found/iu.test(stderr) ||
-    /container .* does not exist/iu.test(stderr)
-  );
-}
-
-async function recordedPodmanContainerState(engine: SandboxContainerEngine, name: string) {
-  const result = await execContainer(engine, ["inspect", "-f", "{{.State.Running}}", name], {
-    allowFailure: true,
-  });
-  if (result.code === 0) {
-    return { exists: true, running: result.stdout.trim() === "true" };
-  }
-  if (isPodmanContainerNotFound(result.stderr)) {
-    return { exists: false, running: false };
-  }
-  const detail = result.stderr.trim();
-  throw Object.assign(
-    new Error(
-      detail
-        ? `Unable to inspect recorded Podman sandbox runtime ${name}: ${detail}`
-        : `Unable to inspect recorded Podman sandbox runtime ${name} (exit ${result.code})`,
-    ),
-    { code: result.code },
   );
 }
 
