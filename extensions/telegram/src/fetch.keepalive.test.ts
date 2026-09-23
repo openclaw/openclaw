@@ -33,7 +33,9 @@ async function withApi(apiRoot: string, run: (api: Api) => Promise<void>) {
     fetchImpl: asTelegramClientFetch(transport.fetch),
     transport,
   });
-  if (!fetch) throw new Error("missing Telegram fetch");
+  if (!fetch) {
+    throw new Error("missing Telegram fetch");
+  }
   try {
     await run(new Api("123456:fixture-token", { apiRoot, fetch: asTelegramClientFetch(fetch) }));
   } finally {
@@ -130,7 +132,7 @@ it.each(["reset", "close", "body"] as const)(
             () => {
               throw new Error("expected transport failure");
             },
-            (error: unknown) => error,
+            (caught: unknown) => caught,
           );
           expect(isSafeToRetrySendError(error)).toBe(false);
           expect(accepted).toBe(1);
