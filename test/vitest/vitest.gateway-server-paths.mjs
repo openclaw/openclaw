@@ -1,6 +1,7 @@
 // Plugin integration tests retain Gateway runtime setup outside core source.
 export const gatewayPluginTestFiles = [
   "test/plugins/browser-session-authority.gateway.test.ts",
+  "test/plugins/chat-abort-codex.gateway.test.ts",
   "test/plugins/codex-model-catalog.gateway.test.ts",
   "test/plugins/crabbox-allocation-authority.gateway.test.ts",
   "test/plugins/team-reports-http.gateway.test.ts",
@@ -149,7 +150,10 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/server/ws-connection/message-handler.post-connect-health.test.ts",
   "src/gateway/session-activity-summaries.test.ts",
   "src/gateway/session-companion-runtime.test.ts",
+  "src/gateway/session-create-atomic-initialization.test.ts",
+  "src/gateway/session-create-preparation.test.ts",
   "src/gateway/session-delivery-clock-jump.integration.test.ts",
+  "src/gateway/session-groups.registration.test.ts",
   "src/gateway/session-groups.test.ts",
   "src/gateway/session-history-cold.benchmark.test.ts",
   "src/gateway/session-history-lookup.worker.test.ts",
@@ -282,6 +286,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/worker-environments/workspace-result-repository.test.ts",
   "src/gateway/worker-workspace-recovery-transcript.test.ts",
   "test/plugins/browser-session-authority.gateway.test.ts",
+  "test/plugins/chat-abort-codex.gateway.test.ts",
   "test/plugins/codex-model-catalog.gateway.test.ts",
 ];
 

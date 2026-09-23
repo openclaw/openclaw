@@ -210,10 +210,6 @@ function getSlashAliases(command: CommandLike): string[] {
     .map((alias) => (alias.startsWith("/") ? alias.slice(1) : alias));
 }
 
-function getPrimarySlashName(command: CommandLike): string | null {
-  return command.name.trim() || null;
-}
-
 function formatArgs(command: CommandLike): string | undefined {
   if (!command.args?.length) {
     return undefined;
@@ -259,10 +255,6 @@ function mapCategory(command: CommandLike): SlashCommandCategory {
   }
 }
 
-function mapIcon(command: CommandLike): IconName | undefined {
-  return COMMAND_ICON_OVERRIDES[normalizeUiKey(command)] ?? "terminal";
-}
-
 function mapTier(command: CommandLike): SlashCommandTier {
   const raw = command.tier;
   if (raw === "essential" || raw === "standard" || raw === "power") {
@@ -275,7 +267,7 @@ function toSlashCommand(
   command: CommandLike,
   source: "local" | "remote" = "local",
 ): SlashCommandDef | null {
-  const name = getPrimarySlashName(command);
+  const name = command.name.trim();
   if (!name) {
     return null;
   }
@@ -291,7 +283,7 @@ function toSlashCommand(
     args: Object.hasOwn(COMMAND_ARGS_OVERRIDES, command.key)
       ? COMMAND_ARGS_OVERRIDES[command.key]
       : formatArgs(command),
-    icon: mapIcon(command),
+    icon: COMMAND_ICON_OVERRIDES[normalizeUiKey(command)] ?? "terminal",
     category: mapCategory(command),
     executeLocal: source === "local" && LOCAL_COMMANDS.has(command.key),
     modelIndependent: command.modelIndependent,
@@ -388,7 +380,7 @@ function normalizeClientPresentation(
   return { when: "no-arguments", action: { kind: "device-pairing" } };
 }
 
-function buildLocalSlashCommands(): SlashCommandDef[] {
+export function buildFallbackSlashCommands(): SlashCommandDef[] {
   const builtins = buildBuiltinChatCommands()
     .map((command) => ({
       key: command.key,
@@ -410,7 +402,7 @@ function buildLocalSlashCommands(): SlashCommandDef[] {
   return [...builtins, ...UI_ONLY_COMMANDS];
 }
 
-function buildReservedLocalSlashNames(localCommands = buildLocalSlashCommands()): Set<string> {
+function buildReservedLocalSlashNames(localCommands = buildFallbackSlashCommands()): Set<string> {
   const reserved = new Set<string>();
   for (const command of localCommands) {
     reserved.add(normalizeLowercaseStringOrEmpty(command.name));
@@ -481,7 +473,7 @@ export function replaceSlashCommands(next: SlashCommandDef[]) {
 }
 
 export function buildSlashCommandsFromEntries(entries: CommandEntry[]): SlashCommandDef[] {
-  const local = buildLocalSlashCommands();
+  const local = buildFallbackSlashCommands();
   const reservedLocalNames = buildReservedLocalSlashNames(local);
   const mapped = entries
     .slice(0, MAX_REMOTE_COMMANDS)
@@ -510,10 +502,6 @@ export function getRemoteCommandEntries(
   return commands
     .map((entry) => asRecord(entry))
     .filter((entry): entry is CommandEntry => entry !== null);
-}
-
-export function buildFallbackSlashCommands(): SlashCommandDef[] {
-  return buildLocalSlashCommands();
 }
 
 export const SLASH_COMMANDS: SlashCommandDef[] = buildFallbackSlashCommands();

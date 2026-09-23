@@ -1334,12 +1334,11 @@ export async function createGatewaySession(
             error: errorShape(ErrorCodes.UNAVAILABLE, "failed to fork parent session transcript"),
           };
         }
-        const fork = forkResult.transcript;
         return {
           ...initialized,
           entry: buildForkedGatewaySessionEntry(
             entry,
-            fork,
+            forkResult.transcript,
             {
               sessionKey: forkParentSessionKey,
               sessionId: currentParentSessionEntry.sessionId,
@@ -1362,6 +1361,7 @@ export async function createGatewaySession(
               resolveOwnerAssignment: () => (createdNewEntry ? inheritedSpawnOwner : undefined),
             }
           : {}),
+        afterCommitted: params.afterSessionCommitted,
         onLifecycleCommitted: (entry) => {
           lifecyclePreparationCommitted = true;
           if (createdNewEntry) {

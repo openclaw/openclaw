@@ -14,6 +14,8 @@ const repoRoot = path.resolve(import.meta.dirname, "../../..");
 const helperPath = path.join(repoRoot, "ui/src/e2e/control-ui-e2e-suite.test-support.ts");
 
 type FixtureMode =
+  | "diagnostic-tracked-timeout"
+  | "diagnostic-scenario-timeout"
   | "tracked-close-success"
   | "tracked-close-failure"
   | "concurrent-close"
@@ -75,6 +77,7 @@ const state = vi.hoisted(() => {
     requestDisposed: deferred(), disposalFault: new Error("synthetic request context disposed"),
     firstCleanupEvent: "", pendingCloseCalls: -1, fulfilledBeforeFetchRelease: [],
     heldBodyErrorRetained: false, contextCleanupEvent: "", callbackOutcomes: [],
+    pendingPageReject: undefined,
     closeFault: new Error("synthetic context close failure") };
 });
 vi.mock("playwright", () => ({ chromium: { launch: async () => {
@@ -91,6 +94,37 @@ vi.mock("playwright", () => ({ chromium: { launch: async () => {
         isClosed: () => true,
         url: () => "about:blank",
       });
+      if (${JSON.stringify(mode)}.startsWith("diagnostic-")) {
+        let pageClosed = false;
+        let context;
+        const page = Object.assign(new EventEmitter(), {
+          ...closedPage,
+          isClosed: () => pageClosed,
+          context: () => context,
+          frames: () => [],
+          evaluate: async () => {
+            state.events.push(pageClosed ? "capture closed page" : "capture live page");
+            record();
+            if (pageClosed) throw new Error("synthetic page closed");
+            return { failureSummary: { available: true } };
+          },
+        });
+        context = {
+          setDefaultTimeout() {},
+          pages: () => pageClosed ? [] : [page],
+          newPage: async () => page,
+          browser: () => ({ isConnected: () => true }),
+          unrouteAll: async () => { state.events.push("drain"); record(); },
+          close: async () => {
+            pageClosed = true;
+            state.closeCalls++;
+            state.events.push("close");
+            state.pendingPageReject?.(new Error("synthetic page closed"));
+            record();
+          },
+        };
+        return context;
+      }
       if (${JSON.stringify(mode)} === "held-route-drain") {
         const handlers = [];
         const pending = new Set();
@@ -204,7 +238,7 @@ fs.writeFileSync(${JSON.stringify(path.join(root, "worker.pid"))}, String(proces
 record();
 let sharedFixture;
 const suite = createControlUiE2eSuite({ name: "owned context fixture",
-  trackBrowserContexts: ${mode.startsWith("tracked-")},
+  trackBrowserContexts: ${mode.startsWith("tracked-") || mode === "diagnostic-tracked-timeout"},
   ...(${JSON.stringify(mode)}.startsWith("resources-") ? {
     resources: {
       retainedState: () => sharedFixture?.root,
@@ -238,7 +272,22 @@ const suite = createControlUiE2eSuite({ name: "owned context fixture",
   },
 });
 suite.define(() => {
-  if (${JSON.stringify(mode)}.startsWith("resources-")) {
+  if (${JSON.stringify(mode)}.startsWith("diagnostic-")) {
+    it("retains the native page timeout", async (context) => {
+      const run = () => suite.withPage({}, async () => {
+        await new Promise((resolve, reject) => { state.pendingPageReject = reject; });
+      });
+      if (${JSON.stringify(mode)} === "diagnostic-scenario-timeout") {
+        await suite.runScenario(context, { run });
+      } else {
+        await run();
+      }
+    }, 50);
+    it("starts the successor after timeout cleanup", () => {
+      state.events.push("successor"); record();
+      fs.writeFileSync(${JSON.stringify(path.join(root, "successor.txt"))}, "started");
+    });
+  } else if (${JSON.stringify(mode)}.startsWith("resources-")) {
     it.for(["first", "second"])("uses shared resources: %s", async (name, context) => {
       await suite.runScenario(context, { run: async () => {
         expect(process.env.OPENCLAW_STATE_DIR).toBe(sharedFixture.stateDir);
@@ -441,6 +490,7 @@ export default defineConfig({
         OPENCLAW_HOME: path.join(root, "home"),
         OPENCLAW_STATE_DIR: path.join(root, "home/.openclaw"),
         OPENCLAW_CONFIG_PATH: path.join(root, "home/.openclaw/openclaw.json"),
+        OPENCLAW_UI_E2E_DIAGNOSTIC_DIR: path.join(root, "diagnostics"),
         TMPDIR: path.join(root, "tmp"),
         TMP: path.join(root, "tmp"),
         TEMP: path.join(root, "tmp"),
@@ -482,7 +532,27 @@ export default defineConfig({
         () => false,
       );
     }
+    const captures: Array<{
+      public: { hostBeforeRead: { pageClosed: boolean }; rendererRead: string };
+      private: { failure: { message: string } };
+    }> = [];
+    if (mode.startsWith("diagnostic-")) {
+      for (const entry of await fs.readdir(path.join(root, "diagnostics"))) {
+        captures.push({
+          public: JSON.parse(
+            await fs.readFile(path.join(root, "diagnostics", entry, "failure.public.json"), "utf8"),
+          ),
+          private: JSON.parse(
+            await fs.readFile(
+              path.join(root, "diagnostics", entry, "failure.private.json"),
+              "utf8",
+            ),
+          ),
+        });
+      }
+    }
     return {
+      captures,
       code: child.exitCode,
       output: `${output.stdout}\n${output.stderr}`,
       report: nativeReport,
@@ -513,6 +583,31 @@ function runJoinedShutdownTest(context: TestContext, body: () => Promise<void>) 
   context.onTestFinished(() => run);
   return run;
 }
+
+it.for(["diagnostic-tracked-timeout", "diagnostic-scenario-timeout"] as const)(
+  "captures a native timeout before its context closes: %s",
+  (mode, context) =>
+    runJoinedShutdownTest(context, async () => {
+      const result = await runFixture(mode, context.signal);
+      expect(result.code, result.output).toBe(1);
+      expect(result.report.numFailedTests, result.output).toBe(1);
+      expect(result.report.numPassedTests, result.output).toBe(1);
+      expect(result.output).toContain("Test timed out in 50ms");
+      expect(result.successorStarted).toBe(true);
+      expect(result.journal.events).toEqual(["capture live page", "drain", "close", "successor"]);
+      expect(result.captures).toHaveLength(1);
+      expect(result.captures[0]?.public).toMatchObject({
+        hostBeforeRead: { pageClosed: false },
+        rendererRead: "completed",
+      });
+      expect(result.captures[0]?.private.failure.message).toContain("Test timed out in 50ms");
+      expect(result.journal).toMatchObject({
+        closeCalls: 1,
+        browserClosed: true,
+        serverClosed: true,
+      });
+    }),
+);
 
 it("drains held-module callbacks before closing the context after a body failure", (context) =>
   runJoinedShutdownTest(context, async () => {

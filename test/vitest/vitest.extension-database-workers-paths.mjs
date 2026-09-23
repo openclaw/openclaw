@@ -233,6 +233,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/msteams/src/token.test.ts",
   "extensions/nostr/doctor-contract-api.test.ts",
   "extensions/nostr/src/nostr-state-store.test.ts",
+  "extensions/onepassword/index.worker.test.ts",
   "extensions/onepassword/src/tool-list.test.ts",
   "extensions/qa-lab/src/execution-identity-storage-inspection.test.ts",
   "extensions/qa-lab/src/live-transports/matrix/scenarios/scenario-runtime-state-files.test.ts",
