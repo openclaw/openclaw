@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { runIsolatedAgentRuntimeCompletion } from "../plugins/runtime/runtime-llm-isolated.js";
 import {
   isolatedAssistant,
   isolatedCompletionMocks as mocks,
@@ -40,6 +41,26 @@ function request() {
   };
 }
 
+function runCompletion(
+  caller: "core" | "plugin",
+  authority: ReturnType<typeof operator>,
+  model = "allowed",
+) {
+  return caller === "core"
+    ? runIsolatedCompletion({ ...request(), model, operatorAuthority: authority })
+    : runIsolatedAgentRuntimeCompletion({
+        request: {
+          messages: [{ role: "user", content: "Answer the synthetic question." }],
+          execution: { mode: "isolated-agent-runtime" },
+        },
+        cfg: config,
+        agentId: "main",
+        provider: "test-provider",
+        model,
+        operatorAuthority: authority,
+      });
+}
+
 beforeEach(() => {
   resetIsolatedCompletionTestState();
   mocks.prepareSimpleCompletionModel.mockImplementation(async (params) => {
@@ -61,102 +82,114 @@ beforeEach(() => {
 });
 
 describe("isolated completion requester model policy", () => {
-  it("cancels a removed model while another model and the original source remain active", async () => {
-    const preparePolicy = (allow: string[]) =>
-      prepareOperatorModelPolicy({
-        cfg: config,
-        policy: { sourceAgent: "main", allow },
-        manifestPlugins: [],
+  it.each(["core", "plugin"] as const)(
+    "cancels a removed model for %s while another model and the source remain active",
+    async (caller) => {
+      const preparePolicy = (allow: string[]) =>
+        prepareOperatorModelPolicy({
+          cfg: config,
+          policy: { sourceAgent: "main", allow },
+          manifestPlugins: [],
+        });
+      let policy = preparePolicy(["test-provider/model-a", "test-provider/model-b"]);
+      const observers = new Set<() => void>();
+      const authority = createAdmittedRunOperatorAuthority({
+        profileId: "isolated-reader",
+        scopes: ["operator.write"],
+        assertCurrent: () => {},
+        get modelPolicy() {
+          return policy;
+        },
+        onModelPolicyChanged: (listener) => {
+          observers.add(listener);
+          return () => {
+            observers.delete(listener);
+          };
+        },
       });
-    let policy = preparePolicy(["test-provider/model-a", "test-provider/model-b"]);
-    const observers = new Set<() => void>();
-    const authority = createAdmittedRunOperatorAuthority({
-      profileId: "isolated-reader",
-      scopes: ["operator.write"],
-      assertCurrent: () => {},
-      get modelPolicy() {
-        return policy;
-      },
-      onModelPolicyChanged: (listener) => {
-        observers.add(listener);
-        return () => {
-          observers.delete(listener);
-        };
-      },
-    });
-    mocks.resolveModelAsync.mockImplementation(async (provider, model) => ({
-      logicalRef: { provider, model },
-      model: { provider, id: model, api: "openai-completions" },
-    }));
-    const started = createDeferredCore();
-    const finishA = createDeferredCore();
-    const finishB = createDeferredCore();
-    const signals = new Map<string, AbortSignal>();
-    registerIsolatedHarness({
-      id: "test-harness",
-      runIsolatedCompletionV2: async (params) => {
-        if (!params.abortSignal) {
-          throw new Error("isolated model has no cancellation signal");
+      mocks.resolveModelAsync.mockImplementation(async (provider, model) => ({
+        logicalRef: { provider, model },
+        model: { provider, id: model, api: "openai-completions" },
+      }));
+      const started = createDeferredCore();
+      const finishA = createDeferredCore();
+      const finishB = createDeferredCore();
+      const signals = new Map<string, AbortSignal>();
+      registerIsolatedHarness({
+        id: "test-harness",
+        runIsolatedCompletionV2: async (params) => {
+          if (!params.abortSignal) {
+            throw new Error("isolated model has no cancellation signal");
+          }
+          signals.set(params.modelId, params.abortSignal);
+          if (signals.size === 2) {
+            started.resolve();
+          }
+          await (params.modelId === "model-a" ? finishA.promise : finishB.promise);
+          return {
+            assistant: {
+              ...isolatedAssistant([{ type: "text", text: "Allowed answer." }]),
+              provider: "test-provider",
+              model: params.modelId,
+            },
+          };
+        },
+      });
+      const work = new AsyncWorkScope();
+      const first = work.track(() => runCompletion(caller, authority, "model-a"));
+      const second = work.track(() => runCompletion(caller, authority, "model-b"));
+      try {
+        await Promise.race([
+          started.promise,
+          Promise.all([first, second]).then(() => {
+            throw new Error("isolated completions settled before policy changed");
+          }),
+        ]);
+        policy = preparePolicy(["test-provider/model-b"]);
+        for (const listener of observers) {
+          listener();
         }
-        signals.set(params.modelId, params.abortSignal);
-        if (signals.size === 2) {
-          started.resolve();
-        }
-        await (params.modelId === "model-a" ? finishA.promise : finishB.promise);
-        return {
-          assistant: {
-            ...isolatedAssistant([{ type: "text", text: "Allowed answer." }]),
-            provider: "test-provider",
-            model: params.modelId,
-          },
-        };
-      },
-    });
-    const work = new AsyncWorkScope();
-    const first = work.track(() =>
-      runIsolatedCompletion({ ...request(), model: "model-a", operatorAuthority: authority }),
-    );
-    const second = work.track(() =>
-      runIsolatedCompletion({ ...request(), model: "model-b", operatorAuthority: authority }),
-    );
-    try {
-      await Promise.race([
-        started.promise,
-        Promise.all([first, second]).then(() => {
-          throw new Error("isolated completions settled before policy changed");
-        }),
-      ]);
-      policy = preparePolicy(["test-provider/model-b"]);
-      for (const listener of observers) {
-        listener();
+        expect(signals.get("model-a")?.aborted).toBe(true);
+        expect(signals.get("model-b")?.aborted).toBe(false);
+        expect(() => authority.assertCurrent()).not.toThrow();
+        finishA.resolve();
+        await expect(first).rejects.toMatchObject({
+          message: expect.stringContaining("cannot use this model"),
+          ...(caller === "plugin"
+            ? { name: "LlmCompleteError", code: "LLM_COMPLETION_NOT_AUTHORIZED" }
+            : {}),
+        });
+        finishB.resolve();
+        await expect(second).resolves.toMatchObject({ text: "Allowed answer." });
+      } finally {
+        finishA.resolve();
+        finishB.resolve();
+        await Promise.allSettled([first, second]);
+        await work.drain();
       }
-      expect(signals.get("model-a")?.aborted).toBe(true);
-      expect(signals.get("model-b")?.aborted).toBe(false);
-      expect(() => authority.assertCurrent()).not.toThrow();
-      finishA.resolve();
-      await expect(first).rejects.toThrow("cannot use this model");
-      finishB.resolve();
-      await expect(second).resolves.toMatchObject({ text: "Allowed answer." });
-    } finally {
-      finishA.resolve();
-      finishB.resolve();
-      await Promise.allSettled([first, second]);
-      await work.drain();
-    }
-    expect(observers.size).toBe(0);
-  });
-  it.each(["host", "harness"] as const)(
-    "rejects a denied model resolved during %s preparation",
-    async (owner) => {
+      expect(observers.size).toBe(0);
+    },
+  );
+  it.each([
+    { owner: "host", caller: "core" },
+    { owner: "harness", caller: "core" },
+    { owner: "host", caller: "plugin" },
+    { owner: "harness", caller: "plugin" },
+  ] as const)(
+    "rejects a denied model resolved during $owner preparation for $caller",
+    async ({ owner, caller }) => {
       const dispatch = vi.fn();
       registerIsolatedHarness({
         id: "test-harness",
         ...(owner === "harness" ? { authBootstrap: "harness" as const } : {}),
         runIsolatedCompletionV2: dispatch,
       });
-      await expect(
-        runIsolatedCompletion({ ...request(), operatorAuthority: operator() }),
-      ).rejects.toThrow("cannot use this model");
+      await expect(runCompletion(caller, operator())).rejects.toMatchObject({
+        message: expect.stringContaining("cannot use this model"),
+        ...(caller === "plugin"
+          ? { name: "LlmCompleteError", code: "LLM_COMPLETION_NOT_AUTHORIZED" }
+          : {}),
+      });
       expect(dispatch).not.toHaveBeenCalled();
       expect(mocks.runCliAgent).not.toHaveBeenCalled();
     },

@@ -7,6 +7,7 @@ import type { ModelRef } from "./model-ref-shared.js";
 /** A completion keeps its selected-model fence through the runtime's physical cleanup. */
 export function createIsolatedCompletionModelAuthority(params: {
   operatorAuthority?: AdmittedRunOperatorAuthority;
+  mapOperatorAuthorizationError?: (error: unknown) => Error;
   abortSignal?: AbortSignal;
   assertCurrent: () => void;
   runtime: AsyncDisposable;
@@ -26,7 +27,12 @@ export function createIsolatedCompletionModelAuthority(params: {
         bound.model?.provider !== model?.provider ||
         bound.model?.model !== model?.model
       ) {
-        const execution = bindOperatorModelExecution(params.operatorAuthority, model);
+        let execution: ReturnType<typeof bindOperatorModelExecution>;
+        try {
+          execution = bindOperatorModelExecution(params.operatorAuthority, model);
+        } catch (error) {
+          throw params.mapOperatorAuthorizationError?.(error) ?? error;
+        }
         if (!execution) {
           return {};
         }
@@ -34,14 +40,21 @@ export function createIsolatedCompletionModelAuthority(params: {
         bound = { model: model ? { ...model } : undefined, execution };
       }
       const { execution } = bound;
-      execution.assertCurrent();
+      const assertExecutionCurrent = () => {
+        try {
+          execution.assertCurrent();
+        } catch (error) {
+          throw params.mapOperatorAuthorizationError?.(error) ?? error;
+        }
+      };
+      assertExecutionCurrent();
       return {
         abortSignal: params.abortSignal
           ? AbortSignal.any([params.abortSignal, execution.signal])
           : execution.signal,
         assertCurrent: () => {
           params.assertCurrent();
-          execution.assertCurrent();
+          assertExecutionCurrent();
         },
       };
     },
