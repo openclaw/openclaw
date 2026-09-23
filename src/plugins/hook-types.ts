@@ -1,4 +1,6 @@
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
+import type { ContextWindowInfo } from "../agents/context-window-guard.js";
+import type { NormalizedUsage } from "../agents/usage.js";
 import type {
   GetReplyOptions,
   SourceReplyDeliveryMode,
@@ -255,7 +257,21 @@ export type PluginHookToolAuthority = {
   assertActive(): void;
 };
 
-export type PluginHookAgentContext = {
+type PluginHookContextWindow = {
+  /** Resolved effective context-token budget after model/config/agent caps. */
+  contextTokenBudget?: number;
+  /** Source that supplied the resolved context-token budget. */
+  contextWindowSource?: PluginHookContextWindowSource;
+  /** Native/configured reference window when a lower cap wins. */
+  contextWindowReferenceTokens?: number;
+};
+
+type PluginHookUsage = Pick<
+  NormalizedUsage,
+  "input" | "output" | "cacheRead" | "cacheWrite" | "total"
+>;
+
+export type PluginHookAgentContext = PluginHookContextWindow & {
   runId?: string;
   jobId?: string;
   trace?: DiagnosticTraceContext;
@@ -283,12 +299,6 @@ export type PluginHookAgentContext = {
    * supply a classification; absence does not establish human origin.
    */
   inputProvenance?: InputProvenance;
-  /** Resolved effective context-token budget after model/config/agent caps. */
-  contextTokenBudget?: number;
-  /** Source that supplied the resolved context-token budget. */
-  contextWindowSource?: PluginHookContextWindowSource;
-  /** Native/configured reference window when a lower cap wins. */
-  contextWindowReferenceTokens?: number;
   /**
    * @deprecated Core does not populate cross-app sender ids. Channel plugins
    * should expose channel-specific identities by augmenting `channelContext.sender`.
@@ -305,11 +315,7 @@ export type PluginHookAgentContext = {
   readonly hookInvocation?: Readonly<{ assertActive(): void }>;
 };
 
-export type PluginHookContextWindowSource =
-  | "model"
-  | "modelsConfig"
-  | "agentContextTokens"
-  | "default";
+export type PluginHookContextWindowSource = ContextWindowInfo["source"];
 
 export type PluginHookBeforeAgentReplyEvent = {
   cleanedBody: string;
@@ -333,7 +339,7 @@ export type PluginHookLlmInputEvent = {
   tools?: unknown[];
 };
 
-type PluginHookModelCallBaseEvent = {
+type PluginHookModelCallBaseEvent = PluginHookContextWindow & {
   runId: string;
   callId: string;
   sessionKey?: string;
@@ -342,12 +348,6 @@ type PluginHookModelCallBaseEvent = {
   model: string;
   api?: string;
   transport?: string;
-  /** Resolved effective context-token budget after model/config/agent caps. */
-  contextTokenBudget?: number;
-  /** Source that supplied the resolved context-token budget. */
-  contextWindowSource?: PluginHookContextWindowSource;
-  /** Native/configured reference window when a lower cap wins. */
-  contextWindowReferenceTokens?: number;
 };
 
 export type PluginHookModelCallStartedEvent = PluginHookModelCallBaseEvent;
@@ -363,17 +363,11 @@ export type PluginHookModelCallEndedEvent = PluginHookModelCallBaseEvent & {
   upstreamRequestIdHash?: string;
 };
 
-export type PluginHookLlmOutputEvent = {
+export type PluginHookLlmOutputEvent = PluginHookContextWindow & {
   runId: string;
   sessionId: string;
   provider: string;
   model: string;
-  /** Resolved effective context-token budget after model/config/agent caps. */
-  contextTokenBudget?: number;
-  /** Source that supplied the resolved context-token budget. */
-  contextWindowSource?: PluginHookContextWindowSource;
-  /** Native/configured reference window when a lower cap wins. */
-  contextWindowReferenceTokens?: number;
   /**
    * Fully resolved provider/model ref used for the call.
    *
@@ -391,13 +385,7 @@ export type PluginHookLlmOutputEvent = {
   prompt?: string;
   assistantTexts: string[];
   lastAssistant?: unknown;
-  usage?: {
-    input?: number;
-    output?: number;
-    cacheRead?: number;
-    cacheWrite?: number;
-    total?: number;
-  };
+  usage?: PluginHookUsage;
   /**
    * Requested reasoning/think effort for this call (provider think level, e.g.
    * "off" | "low" | "medium" | "high"). Lets a passive footer show the mode the
@@ -604,26 +592,14 @@ export type PluginHookReplyUsageState = {
    * back to the aggregate prompt total, which is correct for single-call turns).
    */
   contextUsedTokens?: number;
-  usage?: {
-    input?: number;
-    output?: number;
-    cacheRead?: number;
-    cacheWrite?: number;
-    total?: number;
-  };
+  usage?: PluginHookUsage;
   /**
    * Usage from the FINAL model call of the turn only — vs `usage`, which is the
    * turn aggregate summed across every tool-loop call. Lets a footer render the
    * last exchange's i/o + cache instead of the whole turn. Absent on harnesses
    * that don't report per-call usage.
    */
-  lastUsage?: {
-    input?: number;
-    output?: number;
-    cacheRead?: number;
-    cacheWrite?: number;
-    total?: number;
-  };
+  lastUsage?: PluginHookUsage;
 };
 
 export type PluginHookReplyPayloadSendingEvent = {

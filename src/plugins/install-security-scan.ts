@@ -1,5 +1,6 @@
 // Runs security checks over plugin install candidates before activation.
 import { createLazyRuntimeMethodBinder } from "../shared/lazy-runtime.js";
+import type { PluginHookBeforeInstallSkill } from "./hook-types.js";
 import type { InstallPolicyWarningDetails } from "./install-security-scan.types.js";
 export type { InstallSafetyOverrides } from "./install-security-scan.types.js";
 
@@ -13,22 +14,7 @@ export type InstallSecurityScanResult = {
 };
 
 /** Skill install metadata shape passed into shared install policy evaluation. */
-export type SkillInstallSpecMetadata = {
-  id?: string;
-  kind: "brew" | "node" | "go" | "uv" | "download";
-  label?: string;
-  bins?: string[];
-  os?: string[];
-  formula?: string;
-  package?: string;
-  module?: string;
-  url?: string;
-  sha256?: string;
-  archive?: string;
-  extract?: boolean;
-  stripComponents?: number;
-  targetDir?: string;
-};
+export type SkillInstallSpecMetadata = NonNullable<PluginHookBeforeInstallSkill["installSpec"]>;
 
 /** Lazily loads install scanning so normal plugin startup avoids policy/runtime imports. */
 async function loadInstallSecurityScanRuntime() {

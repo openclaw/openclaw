@@ -389,12 +389,10 @@ export function normalizeProviderAuthChoices(
     const groupId = normalizeOptionalString(entry.groupId) ?? "";
     const groupLabel = normalizeOptionalString(entry.groupLabel) ?? "";
     const groupHint = normalizeOptionalString(entry.groupHint) ?? "";
-    const onboardingFeatured = entry.onboardingFeatured === true;
     const optionKey = normalizeOptionalString(entry.optionKey) ?? "";
     const cliFlag = normalizeOptionalString(entry.cliFlag) ?? "";
     const cliOption = normalizeOptionalString(entry.cliOption) ?? "";
     const cliDescription = normalizeOptionalString(entry.cliDescription) ?? "";
-    const appGuidedSecret = entry.appGuidedSecret === true;
     const appGuidedActionLabel = normalizeOptionalString(entry.appGuidedActionLabel) ?? "";
     const appGuidedAuth =
       entry.appGuidedAuth === "oauth" || entry.appGuidedAuth === "device-code"
@@ -404,7 +402,6 @@ export function normalizeProviderAuthChoices(
       (scope): scope is PluginManifestOnboardingScope =>
         scope === "text-inference" || scope === "image-generation" || scope === "music-generation",
     );
-    const appGuidedDiscovery = entry.appGuidedDiscovery === true;
     const channelLogin = normalizeProviderChannelLogin(entry.channelLogin);
     return {
       provider,
@@ -424,13 +421,13 @@ export function normalizeProviderAuthChoices(
       ...(groupId ? { groupId } : {}),
       ...(groupLabel ? { groupLabel } : {}),
       ...(groupHint ? { groupHint } : {}),
-      ...(onboardingFeatured ? { onboardingFeatured: true } : {}),
-      ...(appGuidedDiscovery ? { appGuidedDiscovery: true } : {}),
+      ...(entry.onboardingFeatured === true ? { onboardingFeatured: true } : {}),
+      ...(entry.appGuidedDiscovery === true ? { appGuidedDiscovery: true } : {}),
       ...(optionKey ? { optionKey } : {}),
       ...(cliFlag ? { cliFlag } : {}),
       ...(cliOption ? { cliOption } : {}),
       ...(cliDescription ? { cliDescription } : {}),
-      ...(appGuidedSecret ? { appGuidedSecret: true } : {}),
+      ...(entry.appGuidedSecret === true ? { appGuidedSecret: true } : {}),
       ...(entry.personalAccount === true ? { personalAccount: true } : {}),
       ...(appGuidedActionLabel ? { appGuidedActionLabel } : {}),
       ...(appGuidedAuth ? { appGuidedAuth } : {}),

@@ -78,29 +78,22 @@ export function normalizeManifestDecisionModels(
   value: unknown,
   providers: readonly string[] | undefined,
 ): PluginManifestDecisionModel[] | undefined {
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  const models: PluginManifestDecisionModel[] = [];
   const seen = new Set<string>();
-  for (const entry of value) {
-    if (!isRecord(entry)) {
-      continue;
-    }
+  return normalizeManifestObjectList(value, (entry) => {
     const provider = normalizeOptionalString(entry.provider);
     const id = normalizeOptionalString(entry.id);
     const name = normalizeOptionalString(entry.name);
     if (!provider || !id || !name || !providers?.includes(provider)) {
-      continue;
+      return undefined;
     }
     const ref = `${provider}/${id}`;
-    if (!seen.has(ref)) {
-      const capabilities = normalizeDecisionCapabilities(entry.capabilities);
-      models.push({ provider, id, name, ...(capabilities ? { capabilities } : {}) });
-      seen.add(ref);
+    if (seen.has(ref)) {
+      return undefined;
     }
-  }
-  return models.length ? models : undefined;
+    const capabilities = normalizeDecisionCapabilities(entry.capabilities);
+    seen.add(ref);
+    return { provider, id, name, ...(capabilities ? { capabilities } : {}) };
+  });
 }
 
 /** Endpoint restrictions constrain a provider alias without changing stored credential identity. */
@@ -511,17 +504,14 @@ export function normalizeManifestConfigContracts(
   const secretInputPaths = rawSecretInputs
     ? normalizeManifestSecretInputPaths(rawSecretInputs.paths)
     : undefined;
-  const secretInputs =
-    secretInputPaths && secretInputPaths.length > 0
-      ? ({
-          ...(rawSecretInputs?.bundledDefaultEnabled === true
-            ? { bundledDefaultEnabled: true }
-            : rawSecretInputs?.bundledDefaultEnabled === false
-              ? { bundledDefaultEnabled: false }
-              : {}),
-          paths: secretInputPaths,
-        } satisfies PluginManifestSecretInputContracts)
-      : undefined;
+  const secretInputs = secretInputPaths
+    ? ({
+        ...(typeof rawSecretInputs?.bundledDefaultEnabled === "boolean"
+          ? { bundledDefaultEnabled: rawSecretInputs.bundledDefaultEnabled }
+          : {}),
+        paths: secretInputPaths,
+      } satisfies PluginManifestSecretInputContracts)
+    : undefined;
   const configContracts = {
     ...(compatibilityMigrationPaths.length > 0 ? { compatibilityMigrationPaths } : {}),
     ...(compatibilityRuntimePaths.length > 0 ? { compatibilityRuntimePaths } : {}),

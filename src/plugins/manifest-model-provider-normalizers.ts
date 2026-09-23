@@ -183,9 +183,7 @@ function normalizeManifestProviderRequestProvider(
   const providerRequest = {
     ...(family ? { family } : {}),
     ...(compatibilityFamily ? { compatibilityFamily } : {}),
-    ...(openAICompletions && Object.keys(openAICompletions).length > 0
-      ? { openAICompletions }
-      : {}),
+    ...(openAICompletions ? { openAICompletions } : {}),
   } satisfies PluginManifestProviderRequestProvider;
   return Object.keys(providerRequest).length > 0 ? providerRequest : undefined;
 }
@@ -200,44 +198,6 @@ export function normalizeManifestProviderRequest(
     normalizeManifestProviderRequestProvider,
   );
   return providers ? { providers } : undefined;
-}
-
-function normalizeManifestStringArray(
-  value: unknown,
-  options?: { maxItems?: number; maxLength?: number; pattern?: RegExp },
-): string[] | undefined {
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  const normalized: string[] = [];
-  for (const entry of value) {
-    if (typeof entry !== "string") {
-      continue;
-    }
-    if (options?.maxLength !== undefined && entry.length > options.maxLength) {
-      continue;
-    }
-    if (options?.pattern && !options.pattern.test(entry)) {
-      continue;
-    }
-    normalized.push(entry);
-    if (options?.maxItems !== undefined && normalized.length >= options.maxItems) {
-      break;
-    }
-  }
-  return normalized.length > 0 ? normalized : undefined;
-}
-
-function normalizeManifestTrimmedStringArray(
-  value: unknown,
-  options?: { maxItems?: number; pattern?: RegExp },
-): string[] | undefined {
-  const normalized = normalizeTrimmedStringList(value).filter(
-    (entry) => !options?.pattern || options.pattern.test(entry),
-  );
-  const limited =
-    options?.maxItems !== undefined ? normalized.slice(0, options.maxItems) : normalized;
-  return limited.length > 0 ? limited : undefined;
 }
 
 function normalizeManifestPositiveInteger(value: unknown, max: number): number | undefined {
@@ -257,10 +217,18 @@ export function normalizeManifestSecretProviderIntegrations(
     const providerAlias = normalizeOptionalString(rawIntegration.providerAlias);
     const displayName = normalizeOptionalString(rawIntegration.displayName);
     const description = normalizeOptionalString(rawIntegration.description);
-    const args = normalizeManifestStringArray(rawIntegration.args, {
-      maxItems: MAX_SECRET_PROVIDER_EXEC_ARGS,
-      maxLength: MAX_SECRET_PROVIDER_EXEC_ARG_BYTES,
-    });
+    const args: string[] = [];
+    if (Array.isArray(rawIntegration.args)) {
+      for (const entry of rawIntegration.args) {
+        if (typeof entry !== "string" || entry.length > MAX_SECRET_PROVIDER_EXEC_ARG_BYTES) {
+          continue;
+        }
+        args.push(entry);
+        if (args.length >= MAX_SECRET_PROVIDER_EXEC_ARGS) {
+          break;
+        }
+      }
+    }
     const timeoutMs = normalizeManifestPositiveInteger(
       rawIntegration.timeoutMs,
       MAX_SECRET_PROVIDER_EXEC_TIMEOUT_MS,
@@ -274,17 +242,16 @@ export function normalizeManifestSecretProviderIntegrations(
       MAX_SECRET_PROVIDER_EXEC_OUTPUT_BYTES,
     );
     const env = normalizeManifestStringRecord(rawIntegration.env);
-    const passEnv = normalizeManifestTrimmedStringArray(rawIntegration.passEnv, {
-      maxItems: MAX_SECRET_PROVIDER_EXEC_PASS_ENV,
-      pattern: ENV_SECRET_REF_ID_RE,
-    });
+    const passEnv = normalizeTrimmedStringList(rawIntegration.passEnv)
+      .filter((entry) => ENV_SECRET_REF_ID_RE.test(entry))
+      .slice(0, MAX_SECRET_PROVIDER_EXEC_PASS_ENV);
     return {
       ...(providerAlias ? { providerAlias } : {}),
       ...(displayName ? { displayName } : {}),
       ...(description ? { description } : {}),
       source: "exec",
       command,
-      ...(args ? { args } : {}),
+      ...(args.length > 0 ? { args } : {}),
       ...(timeoutMs !== undefined ? { timeoutMs } : {}),
       ...(noOutputTimeoutMs !== undefined ? { noOutputTimeoutMs } : {}),
       ...(maxOutputBytes !== undefined ? { maxOutputBytes } : {}),
@@ -292,7 +259,7 @@ export function normalizeManifestSecretProviderIntegrations(
         ? { jsonOnly: rawIntegration.jsonOnly }
         : {}),
       ...(env ? { env } : {}),
-      ...(passEnv ? { passEnv } : {}),
+      ...(passEnv.length > 0 ? { passEnv } : {}),
     };
   });
 }
