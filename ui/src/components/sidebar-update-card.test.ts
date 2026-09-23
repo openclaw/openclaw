@@ -229,6 +229,7 @@ describe("SidebarUpdateCard", () => {
         channel: "dev",
         commitsBehind: 246,
         currentSha: "1234567890abcdef",
+        upstreamSha: "abc1234def",
       },
       {
         channel: "dev",

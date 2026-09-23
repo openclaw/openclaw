@@ -8,11 +8,11 @@ import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts
 import { generateUUID } from "../../lib/uuid.ts";
 import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
+import type { StoredChatQueueReplacement } from "./composer-persistence-state.ts";
 import {
   type ChatQueueAdmissionResult,
   listStoredChatOutboxes,
   storedChatOutboxScopeKey,
-  type StoredChatQueueReplacement,
   type ChatComposerScope,
   type StoredChatOutbox,
   type StoredChatOutboxScope,

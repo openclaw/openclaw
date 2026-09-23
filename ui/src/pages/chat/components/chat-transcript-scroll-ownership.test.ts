@@ -206,6 +206,7 @@ describe("chat transcript scroll ownership", () => {
           requestUpdate: vi.fn(),
           updateComplete: Promise.resolve(true),
         },
+        () => `footer-${intent}`,
         {
           canFollowEnd: () => !policy.chatFollowLocked,
           onReaderScroll: (towardEnd) => handleChatScrollTakeover(policy, towardEnd),

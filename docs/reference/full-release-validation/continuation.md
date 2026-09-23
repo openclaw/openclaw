@@ -25,23 +25,39 @@ changed identities still fail closed; ambiguous rows never become evidence.
 Inspect or continue an existing parent:
 
 ```bash
-pnpm frv status --run <parent-run-id>
+pnpm frv status --run <parent-run-id> --json
+pnpm frv rerun --run <parent-run-id> --job "normalCi:checks-node-agentic-control-plane-agent-chat"
 pnpm frv continue --failed --run <parent-run-id>
 pnpm frv verify --run <successful-parent-run-id>
 ```
 
-`continue --failed` waits for active child attempts instead of starting a
-duplicate. Once every active attempt is terminal, it reruns failed child jobs
-in parallel, leaves green child workflows untouched, and reruns the parent
-once. The parent restores its immutable execution plan and independent artifact
-producers, observes the effective child attempts, and writes the final all-group manifest. The manifest records
-the planned and effective attempt, accepted attempt for every logical job, and
-a digest of the composite job evidence.
+`rerun --job` selects an exact executed, terminal job name inside a child key shown by
+`status --json` (for example, `normalCi`, `pluginPrerelease`, or
+`releaseChecksIndependent`). It waits only for that child to become terminal,
+then uses GitHub's job-rerun API on the job's accepted attempt. GitHub also
+reruns dependent jobs. Other failures stay visible and require their own retry;
+a targeted retry never declares the parent recovered while blockers remain.
+
+`continue --failed` reruns each failed child's jobs as soon as that child is
+terminal, while sibling children and the original parent may still run. It
+adopts active attempts without duplicating them and leaves green child
+workflows untouched. After the resulting child evidence is green and the
+original parent finishes, it reruns the parent once. The original Decision and
+Drain may disagree after an early retry; the final parent attempt restores the
+same immutable execution plan and seals the updated evidence. Existing plan
+and attempt-binding checks remain mandatory.
+
+The final manifest records the planned and effective child attempt, accepted
+attempt for every logical job, and composite evidence digest. The controller's
+JSON result additionally lists requested reruns with their source and observed
+attempts; targeted entries include the job name and Actions job ID. Keep the
+command in a long-running shell: its default operation budget is 12 hours,
+including final collection and strict verification.
 
 Npm qualification participates in the same failed-job recovery: the controller
 retries its failed jobs on the original producer run, without rerunning
 successful diagnostic children.
-It waits for active attempts and diagnostic drain, adopts verified newer
+It waits for each producer attempt, adopts verified newer
 npm producer attempts, then reruns the parent collector once. Successful package
 preparation jobs and their exact artifact descriptors carry forward; a retry
 must not substitute rebuilt bytes for the candidate already tested.
@@ -62,6 +78,9 @@ Each child or parent rerun mutation is sent exactly once. If GitHub returns an
 ambiguous transient error, the controller performs read-only reconciliation
 until the newer attempt becomes visible or the bounded reconciliation deadline
 expires. It never repeats the mutation, and provenance drift fails closed.
+After a timeout or an interrupted command, inspect `frv status` and the exact
+GitHub attempts before deciding on another retry; the local process cannot
+prove that an unobserved mutation was rejected.
 
 The command stores no continuation ledger or local journal. GitHub run
 attempts, the immutable execution plan, producer dispatch records and receipts,
@@ -110,7 +129,7 @@ pnpm frv status --run <parent-run-id> --publication-run <publish-parent-run-id>
 pnpm frv status --run <parent-run-id> --publication-run <publish-parent-run-id> --json
 ```
 
-The JSON response retains the validation fields and adds `publication`. The
+The JSON response keeps the compact validation summary and adds `publication`. The
 selector is valid only on `status`; it does not change `continue` or `verify`.
 The FRV root still needs an attempt-aware, all-group immutable plan.
 
@@ -187,7 +206,8 @@ Use the non-release `FRV Proof Broker` and `FRV Proof Fixture` workflows only
 after the reviewed SHA lands on protected `main`. The fixture contains one
 fixed no-op job that intentionally fails on attempt one and passes on attempt
 two. The broker validates the exact maintainer, merged pull request, protected
-main SHA, fixture workflow, and run tuple before rerunning only that failed job.
+main SHA, fixture workflow, and run tuple before selecting the exact failed Actions job ID and invoking
+GitHub's job-rerun endpoint.
 Supply the merged pull request number and its exact landed commit. The broker
 requires the pull request to be merged into `main`, requires its recorded merge
 commit to equal that landed commit, and requires the landed commit to be
@@ -198,7 +218,7 @@ fixture rerun.
 Accept the hosted mutation proof only when the exact fixture run advances to
 attempt two and passes. The broker emits a receipt and must create no release
 candidate, release artifact, publication, repository ref, replacement parent,
-or other workflow mutation. This proves the GitHub failed-job rerun boundary;
+or other workflow mutation. This proves the GitHub targeted-job rerun boundary;
 the focused controller tests prove plan eligibility, green-attempt
 preservation, same-parent collection, and strict-verifier invocation. Do not
 use a real Full Release Validation run for this proof.
