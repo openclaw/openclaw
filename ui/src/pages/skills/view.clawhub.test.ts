@@ -308,7 +308,7 @@ describe("renderSkills ClawHub", () => {
         renderSkills(
           createProps({
             surface: "discovery",
-            personalImport,
+            showInventory: !personalImport,
             clawhubQuery: "pdf",
             clawhubResults: [
               {

@@ -1291,6 +1291,7 @@ globalThis.Date = class extends OriginalDate {
                   candidate_required: steps.candidate_request!.outputs.required,
                 },
               },
+              plugin_compatibility_readiness: { result: "success" },
               evidence_reuse: { result: "skipped", outputs: { reuse: "false" } },
             },
           });
@@ -1925,6 +1926,7 @@ describe("FRV publication source admission", () => {
                   id === "docker_runtime_assets_preflight" ? "2026.9.9-alpha.1" : "2026.9.9",
               },
             },
+            plugin_compatibility_readiness: { result: "success" },
             evidence_reuse: { result: "skipped", outputs: { reuse: "false" } },
           },
         }),
@@ -2284,6 +2286,7 @@ describe("FRV publication source admission", () => {
                     id === "docker_runtime_assets_preflight" ? "2026.9.9-alpha.1" : "2026.9.9",
                 },
               },
+              plugin_compatibility_readiness: { result: "success" },
               evidence_reuse: { result: "skipped", outputs: { reuse: "false" } },
             },
           }),

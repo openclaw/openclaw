@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { PreparedSessionHistoryReadTarget } from "../../gateway/session-history-read.types.js";
 import { prepareGatewaySessionStoreReadSources } from "../../gateway/session-utils-store-sources.js";
 import {
@@ -5,16 +6,17 @@ import {
   DEFAULT_WORKER_PENDING_TASKS,
 } from "../../infra/worker-task-capacity.js";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { getRuntimeConfig } from "../config.js";
 import type { SessionTranscriptReadScope } from "./session-accessor.js";
 import {
-  resolveSqliteTranscriptReadScope,
+  prepareSqliteTranscriptReadScope,
   resolveSqliteScope,
   toDatabaseOptions,
-  type SessionSqliteTargetResolutionCache,
+  type ResolvedTranscriptReadScope,
 } from "./session-accessor.sqlite-scope.js";
 import { prepareSessionTranscriptReadTargetCore } from "./session-accessor.transcript-read-target.js";
 import { readRestoredSessionTranscript } from "./session-cold-storage-read.js";
@@ -33,10 +35,17 @@ import {
   withSessionHistoryWorkerDatabase,
   type SessionHistoryWorkerDatabase,
 } from "./session-transcript-worker-runtime.js";
-import type { SessionTranscriptHistoryWorkerInput } from "./session-transcript-worker.types.js";
+import type {
+  SessionColdMetadataWorkerInput,
+  SessionColdMetadataWorkerResult,
+  SessionTranscriptHistoryWorkerInput,
+} from "./session-transcript-worker.types.js";
+import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
+
+type ForegroundHistoryResult = SessionHistoryWorkerResult | SessionColdMetadataWorkerResult;
 
 type QueuedHistoryRead = {
-  promise: Promise<SessionHistoryWorkerResult>;
+  promise: Promise<ForegroundHistoryResult>;
   remainingReaders: number;
 };
 type AdmittedSessionHistoryDelta = SessionHistoryDelta & { assertCurrent: () => void };
@@ -47,7 +56,7 @@ let pendingHistoryBytes = 0;
 function receivePage(
   queued: QueuedHistoryRead,
   signal?: AbortSignal,
-): Promise<SessionHistoryWorkerResult> {
+): Promise<ForegroundHistoryResult> {
   queued.remainingReaders++;
   return queued.promise.then(
     (page) => {
@@ -69,33 +78,120 @@ function receivePage(
   );
 }
 
-function readQueuedPage(
-  input: SessionTranscriptHistoryWorkerInput,
+function readQueuedHistory(
+  input: SessionTranscriptHistoryWorkerInput | SessionColdMetadataWorkerInput,
   key: string,
   owner: SessionHistoryWorkerDatabase,
   signal?: AbortSignal,
-): Promise<SessionHistoryWorkerResult> {
+): Promise<ForegroundHistoryResult> {
   signal?.throwIfAborted();
   const existing = queuedHistoryReads.get(key);
   if (existing) {
     return receivePage(existing, signal);
   }
-  const pending = createDeferredCore<SessionHistoryWorkerResult>();
+  const pending = createDeferredCore<ForegroundHistoryResult>();
   const queued = { promise: pending.promise, remainingReaders: 0 };
   queuedHistoryReads.set(key, queued);
-  void owner
-    .run(() => {
-      // A later caller must not join a SQLite snapshot that has already started.
+  const forget = () => {
+    if (queuedHistoryReads.get(key) === queued) {
       queuedHistoryReads.delete(key);
-      return input;
-    }, key.length * 2)
-    .then(pending.resolve, pending.reject)
-    .finally(() => {
-      if (queuedHistoryReads.get(key) === queued) {
-        queuedHistoryReads.delete(key);
-      }
-    });
+    }
+  };
+  const operation =
+    input.kind === "cold-metadata"
+      ? owner.readColdMetadata({ sessionId: input.sessionId, env: input.env })
+      : owner.run(() => {
+          // Page callers cannot join a SQLite snapshot that has already started.
+          forget();
+          return input;
+        }, key.length * 2);
+  // Initial metadata probes share only in-flight work; queued restores bypass this map.
+  void operation.then(
+    (result) => {
+      forget();
+      pending.resolve(result);
+    },
+    (error: unknown) => {
+      forget();
+      pending.reject(error);
+    },
+  );
   return receivePage(queued, signal);
+}
+
+function captureHistoryRequest(request: SessionHistoryWorkerRequest): SessionHistoryWorkerRequest {
+  if (request.kind === "delta" || request.kind === "message-lookup" || request.kind === "recent") {
+    const target = request.params.target;
+    const capturedTarget = {
+      ...target,
+      sessionEntry: target.sessionEntry ? { sessionId: target.sessionEntry.sessionId } : undefined,
+      ...(target.env ? { env: captureSessionTranscriptStorageEnvironment(target.env) } : {}),
+    };
+    if (request.kind === "recent") {
+      return {
+        kind: "recent",
+        params: {
+          target: capturedTarget,
+          maxMessages: request.params.maxMessages,
+          maxLines: request.params.maxLines,
+          allowResetArchiveFallback: request.params.allowResetArchiveFallback,
+        },
+      };
+    }
+    return request.kind === "delta"
+      ? { kind: "delta", params: { target: capturedTarget, limits: { ...request.params.limits } } }
+      : {
+          kind: "message-lookup",
+          params: { target: capturedTarget, messageId: request.params.messageId },
+        };
+  }
+  const entry = request.kind === "rpc" ? request.params.entry : request.params.target.sessionEntry;
+  const capturedEntry = entry
+    ? {
+        sessionId: entry.sessionId,
+        updatedAt: entry.updatedAt,
+        sessionStartedAt: entry.sessionStartedAt,
+      }
+    : undefined;
+  if (request.kind === "rpc") {
+    const params = request.params;
+    return {
+      kind: "rpc",
+      params: {
+        entry: capturedEntry,
+        provider: params.provider,
+        sessionId: params.sessionId,
+        storePath: params.storePath,
+        sessionAgentId: params.sessionAgentId,
+        canonicalKey: params.canonicalKey,
+        max: params.max,
+        maxHistoryBytes: params.maxHistoryBytes,
+        effectiveMaxChars: params.effectiveMaxChars,
+        offset: params.offset,
+        messageId: params.messageId,
+        ignoreCliSessionImports: params.ignoreCliSessionImports,
+      },
+    };
+  }
+  const params = request.params;
+  return {
+    kind: "http",
+    params: {
+      target: {
+        agentId: params.target.agentId,
+        sessionEntry: capturedEntry,
+        sessionId: params.target.sessionId,
+        sessionKey: params.target.sessionKey,
+        storePath: params.target.storePath,
+        ...(params.target.env
+          ? { env: captureSessionTranscriptStorageEnvironment(params.target.env) }
+          : {}),
+      },
+      maxChars: params.maxChars,
+      limit: params.limit,
+      cursor: params.cursor,
+    },
+  };
 }
 
 export function readSessionHistoryPageInWorker(
@@ -119,77 +215,35 @@ export async function readSessionHistoryPageInWorker(
   signal?: AbortSignal,
 ): Promise<ChatHistoryPage | SessionHistorySnapshot | AdmittedSessionHistoryDelta | unknown[]> {
   signal?.throwIfAborted();
+  const capturedRequest = captureHistoryRequest(request);
   const scope: SessionTranscriptReadScope =
-    request.kind === "rpc"
+    capturedRequest.kind === "rpc"
       ? {
-          agentId: request.params.sessionAgentId,
-          sessionId: request.params.sessionId,
-          sessionEntry: request.params.entry,
-          sessionKey: request.params.canonicalKey,
-          storePath: request.params.storePath,
+          agentId: capturedRequest.params.sessionAgentId,
+          sessionId: capturedRequest.params.sessionId,
+          sessionEntry: capturedRequest.params.entry,
+          sessionKey: capturedRequest.params.canonicalKey,
+          storePath: capturedRequest.params.storePath,
         }
-      : request.params.target;
-  const targetCache: SessionSqliteTargetResolutionCache = new Map();
-  const resolved = resolveSqliteTranscriptReadScope(scope, targetCache);
-  const admission = resolveSessionTranscriptReadFence(resolved);
+      : capturedRequest.params.target;
+  const env = captureSessionTranscriptStorageEnvironment(scope.env ?? process.env);
   const bound = prepareSessionTranscriptReadTargetCore(scope);
-  const entryValidationKey = bound.entryValidationScope
-    ? resolveSqliteScope(bound.entryValidationScope, targetCache).sessionKey
-    : undefined;
-  const sessionKey = entryValidationKey ?? bound.sessionKey;
-  const transcript = {
+  const capturedScope = {
+    ...scope,
     agentId: bound.agentId,
+    storePath: path.resolve(bound.storePath),
+    env,
+  };
+  const stateContext = captureOpenClawStateWorkerContext({ env });
+  const cfg = getRuntimeConfig();
+  const receipt = resolveSessionTranscriptReadFence({
+    agentId: normalizeAgentId(bound.agentId),
     sessionId: scope.sessionId,
-    ...(sessionKey ? { sessionKey } : {}),
-    storePath: bound.storePath,
-  };
-  const readScope = resolveSqliteTranscriptReadScope(transcript, targetCache);
-  const databaseOptions = toDatabaseOptions(resolved);
-  const currentSource = {
-    agentId: databaseOptions.agentId,
-    path: resolveOpenClawAgentSqlitePath(databaseOptions),
-  };
-  const stateContext = captureOpenClawStateWorkerContext();
-  const sourceReads = prepareGatewaySessionStoreReadSources({
-    cfg: getRuntimeConfig(),
-    currentSource,
-    env: process.env,
-    registryPath: stateContext.admission.databasePath,
   });
-  const assertStateCurrent = () => {
-    stateContext.maintenanceScope?.assertAdmission();
-    stateContext.admission.assertCurrent();
-    sourceReads.assertCurrent();
-  };
-  assertStateCurrent();
-  const target: Omit<PreparedSessionHistoryReadTarget, "database"> = {
-    transcript: {
-      agentId: readScope.agentId,
-      sessionId: scope.sessionId,
-      ...(readScope.sessionKey ? { sessionKey: readScope.sessionKey } : {}),
-      storePath: bound.storePath,
-      // Projection/fence identity is normalized; archive and presentation hints retain their input.
-      sessionFile: sessionKey ?? scope.sessionId,
-    },
-    stateDatabase: {
-      path: stateContext.admission.databasePath,
-      environment: stateContext.environment,
-      coordinatorRuntime: stateContext.coordinatorRuntime,
-    },
-    sourceDatabases: sourceReads.sources,
-    ...(entryValidationKey ? { entryValidationKey } : {}),
-  };
-
-  const input: SessionTranscriptHistoryWorkerInput = {
-    kind: "history-page",
-    database: currentSource,
-    request,
-    target,
-    ...(admission ? { admission: { ...admission } } : {}),
-  };
-  const key = JSON.stringify(input);
-  const inputBytes = key.length * 2;
-  // Coalescing bounds execution, but every retained caller still needs admission.
+  const admission = receipt ? { ...receipt } : undefined;
+  let resolved: ResolvedTranscriptReadScope | undefined;
+  let inputBytes = JSON.stringify(capturedRequest).length * 2;
+  // Retain caller admission across asynchronous target discovery as well as the page read.
   if (
     pendingHistoryReaders >= DEFAULT_WORKER_PENDING_TASKS ||
     pendingHistoryBytes + inputBytes > DEFAULT_WORKER_PENDING_BYTES
@@ -199,19 +253,128 @@ export async function readSessionHistoryPageInWorker(
   pendingHistoryReaders++;
   pendingHistoryBytes += inputBytes;
   try {
-    const acquired = await withSessionHistoryWorkerDatabase(input.database, async (owner) => {
+    resolved = await prepareSqliteTranscriptReadScope(capturedScope, signal);
+    signal?.throwIfAborted();
+    stateContext.maintenanceScope?.assertAdmission();
+    stateContext.admission.assertCurrent();
+    // Key normalization needs no second store discovery after the physical target is prepared.
+    const entryValidationKey = bound.entryValidationScope
+      ? resolveSqliteScope({
+          agentId: resolved.agentId,
+          sessionKey: bound.entryValidationScope.sessionKey,
+        }).sessionKey
+      : undefined;
+    const sessionKey = entryValidationKey ?? bound.sessionKey;
+    const normalizedSessionKey = entryValidationKey ?? resolved.sessionKey;
+    const databaseOptions = toDatabaseOptions(resolved);
+    const currentSource = {
+      agentId: databaseOptions.agentId,
+      path: resolveOpenClawAgentSqlitePath(databaseOptions),
+    };
+    const sourceReads = prepareGatewaySessionStoreReadSources({
+      cfg,
+      currentSource,
+      env,
+      registryPath: stateContext.admission.databasePath,
+    });
+    const assertStateCurrent = () => {
+      signal?.throwIfAborted();
+      stateContext.maintenanceScope?.assertAdmission();
+      stateContext.admission.assertCurrent();
+      sourceReads.assertCurrent();
+    };
+    assertStateCurrent();
+    const target: Omit<PreparedSessionHistoryReadTarget, "database"> = {
+      transcript: {
+        agentId: resolved.agentId,
+        sessionId: resolved.sessionId,
+        ...(normalizedSessionKey ? { sessionKey: normalizedSessionKey } : {}),
+        storePath: capturedScope.storePath,
+        sessionFile: sessionKey ?? resolved.sessionId,
+      },
+      stateDatabase: {
+        path: stateContext.admission.databasePath,
+        environment: stateContext.environment,
+        coordinatorRuntime: stateContext.coordinatorRuntime,
+      },
+      sourceDatabases: sourceReads.sources,
+      ...(entryValidationKey ? { entryValidationKey } : {}),
+    };
+    const input: SessionTranscriptHistoryWorkerInput = {
+      kind: "history-page",
+      database: currentSource,
+      request: capturedRequest,
+      target,
+      ...(admission ? { admission } : {}),
+    };
+    const key = JSON.stringify(input);
+    const metadataInput: SessionColdMetadataWorkerInput = {
+      kind: "cold-metadata",
+      database: currentSource,
+      sessionId: resolved.sessionId,
+      env,
+    };
+    const metadataKey = JSON.stringify(metadataInput);
+    const additionalBytes = (key.length + metadataKey.length) * 2 - inputBytes;
+    if (pendingHistoryBytes + additionalBytes > DEFAULT_WORKER_PENDING_BYTES) {
+      throw new WorkerTaskError("worker task capacity reached", "overloaded");
+    }
+    pendingHistoryBytes += additionalBytes;
+    inputBytes += additionalBytes;
+    const preparedTarget = resolved;
+    const acquired = await withSessionHistoryWorkerDatabase(databaseOptions, async (owner) => {
+      const assertCurrent = () => {
+        assertStateCurrent();
+        owner.assertCurrent();
+      };
       let result: SessionHistoryWorkerResult;
       try {
         result = await readRestoredSessionTranscript(
-          scope,
-          () => {
-            assertStateCurrent();
-            return readQueuedPage(input, `${owner.generation}:${key}`, owner, signal);
+          capturedScope,
+          async () => {
+            assertCurrent();
+            const page = await readQueuedHistory(
+              input,
+              `${owner.generation}:${key}`,
+              owner,
+              signal,
+            );
+            if (page.kind === "cold-metadata") {
+              throw new Error("Session history worker returned cold metadata instead of history");
+            }
+            return page;
           },
-          { assertCurrent: owner.assertCurrent },
+          {
+            assertCurrent,
+            coldRead: {
+              target: preparedTarget,
+              readMetadata: async (phase) => {
+                assertCurrent();
+                const metadata =
+                  phase === "initial"
+                    ? await readQueuedHistory(
+                        metadataInput,
+                        `${owner.generation}:${metadataKey}`,
+                        owner,
+                        signal,
+                      )
+                    : await owner.readColdMetadata({ sessionId: metadataInput.sessionId, env });
+                assertCurrent();
+                if (metadata.kind !== "cold-metadata") {
+                  throw new Error(
+                    "Session history worker returned history instead of cold metadata",
+                  );
+                }
+                return metadata.archive;
+              },
+            },
+          },
         );
       } catch (error) {
-        if (error instanceof SessionHistoryDeltaPreparationError && request.kind === "delta") {
+        if (
+          error instanceof SessionHistoryDeltaPreparationError &&
+          capturedRequest.kind === "delta"
+        ) {
           // Failed execution/retirement has joined. Recover inside the retained
           // scope so primary revocation and release failures still refuse it.
           owner.assertCurrent();
@@ -228,7 +391,7 @@ export async function readSessionHistoryPageInWorker(
     };
     assertCurrent();
     const result = acquired.result;
-    if (result.kind !== request.kind) {
+    if (result.kind !== capturedRequest.kind) {
       throw new Error("Session history worker returned the wrong page type");
     }
     return result.kind === "rpc"
@@ -239,9 +402,9 @@ export async function readSessionHistoryPageInWorker(
           ? { ...result, assertCurrent }
           : result.messages;
   } catch (error) {
-    if (isSessionTranscriptProjectionUnavailableError(error)) {
+    if (resolved && isSessionTranscriptProjectionUnavailableError(error)) {
       startSessionTranscriptIndexReconcile({
-        ...databaseOptions,
+        ...toDatabaseOptions(resolved),
         preferredSessionId: resolved.sessionId,
       });
     }

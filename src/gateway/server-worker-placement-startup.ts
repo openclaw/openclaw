@@ -572,7 +572,12 @@ export function createGatewayWorkerPlacementRuntime(
           void reconcileActivePlacements();
           return;
         }
-        void pending.then(reconcileActivePlacements, reconcileActivePlacements);
+        // The sweep owns reporting and settlement; returning it would create an
+        // unobserved rejecting promise for this best-effort event subscriber.
+        const resume = () => {
+          void reconcileActivePlacements();
+        };
+        void pending.then(resume, resume);
       }
     });
     let stopPromise: Promise<void> | undefined;

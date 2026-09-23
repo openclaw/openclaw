@@ -1,3 +1,4 @@
+import { selectSupportedReasoningEffort } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 
 const CODEX_REASONING_EFFORTS = ["minimal", "low", "medium", "high", "xhigh", "max"] as const;
@@ -15,24 +16,6 @@ export function readCodexSupportedReasoningEfforts(
   return compat && "supportedReasoningEfforts" in compat
     ? compat.supportedReasoningEfforts
     : undefined;
-}
-
-function resolveSupportedReasoningEffort(params: {
-  requested: CodexEnabledReasoningEffort;
-  supportedReasoningEfforts: readonly string[];
-}): CodexEnabledReasoningEffort | undefined {
-  const declared = new Set(
-    params.supportedReasoningEfforts.map((effort) => effort.trim().toLowerCase()),
-  );
-  const supported = CODEX_REASONING_EFFORTS.filter((effort) => declared.has(effort));
-  if (supported.includes(params.requested)) {
-    return params.requested;
-  }
-  const requestedRank = CODEX_REASONING_EFFORTS.indexOf(params.requested);
-  return (
-    supported.find((effort) => CODEX_REASONING_EFFORTS.indexOf(effort) >= requestedRank) ??
-    supported.at(-1)
-  );
 }
 
 export function resolveCodexAppServerReasoningEffort(params: {
@@ -59,9 +42,10 @@ export function resolveCodexAppServerReasoningEffort(params: {
     (LEGACY_PRO_MODEL_ID_RE.test(modelId) ? LEGACY_PRO_REASONING_EFFORTS : undefined);
   if (supportedReasoningEfforts) {
     return (
-      resolveSupportedReasoningEffort({
+      selectSupportedReasoningEffort({
         requested: params.thinkLevel,
-        supportedReasoningEfforts,
+        supportedEfforts: supportedReasoningEfforts.map((effort) => effort.trim().toLowerCase()),
+        effortOrder: CODEX_REASONING_EFFORTS,
       }) ?? null
     );
   }

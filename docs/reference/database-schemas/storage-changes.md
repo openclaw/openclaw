@@ -1360,6 +1360,18 @@ authority through queue waits and its native commit, so a revoked read cannot
 restore rows after database cleanup. These lifetimes change no schema or
 migration requirement.
 
+RPC and HTTP history pages, cursor deltas, recent messages, and exact message lookups prepare their
+physical target asynchronously and read cold-archive metadata through that same
+retained history worker only after a typed cold read requires restoration. Hot
+reads keep the atomic reader's existing cold check without a metadata preflight.
+Initial metadata
+probes share only in-flight work; every queued restoration rereads the metadata
+after earlier cold operations settle. The existing restoration owner still
+verifies and materializes the archive and retains the 24-hour hot-history cooldown.
+Write-side callers keep their existing native metadata preparation and writer
+admission rather than competing for foreground history capacity. Cold maintenance
+inventory and mutation control SQL also remain with their current owners.
+
 Correlated conversation replies retain their original store and state environment
 while waiting for write admission. Capture rechecks the live reply claim and
 session lifecycle before recording a replayable reply. Cancellation or a changed
