@@ -177,10 +177,14 @@ it.skipIf(process.platform === "win32").for([
           child.once("close", (code, exitSignal) => resolve([code, exitSignal]));
         });
         const stop = () => {
-          if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+          if (child.exitCode === null && child.signalCode === null) {
+            child.kill("SIGKILL");
+          }
         };
         testSignal.addEventListener("abort", stop, { once: true });
-        if (testSignal.aborted) stop();
+        if (testSignal.aborted) {
+          stop();
+        }
         try {
           const message = await Promise.race([
             once(child, "message").then(
@@ -211,7 +215,9 @@ it.skipIf(process.platform === "win32").for([
               ),
             ),
           );
-          if (mode !== "no-owner") expect(message.executorDatabasePath).toBe(binding.databasePath);
+          if (mode !== "no-owner") {
+            expect(message.executorDatabasePath).toBe(binding.databasePath);
+          }
           expect(child.kill(signal)).toBe(true);
           const [code, exitSignal] = await closed;
           expect(code ?? (exitSignal === "SIGINT" ? 130 : 143)).toBe(

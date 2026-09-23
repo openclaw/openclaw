@@ -114,8 +114,9 @@ export function registerPrivateHandoffBindingTests() {
     async (missing) => {
       const root = await resolveUpdateRoot();
       const wrongDirectory = dirs.make("update-lifecycle-unbound-");
-      if (missing)
+      if (missing) {
         vi.mocked(tempRoot.resolvePreferredOpenClawTmpDir).mockReturnValue(wrongDirectory);
+      }
       vi.stubEnv("OPENCLAW_SUPERVISOR_MODE", "external");
       const run = createUpdateRun({ trigger: "cli" });
       const operation = withUpdateCommandExecutor(run.runId, async (executor) => {
