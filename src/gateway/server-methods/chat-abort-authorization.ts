@@ -327,7 +327,6 @@ export function resolveAuthorizedPreRegisteredRunsForSessionKeys(params: {
   keyPrefix: string;
   preserveSideRuns?: boolean;
   includeProtectedRuns?: boolean;
-  excludeRunIds?: ReadonlySet<string>;
 }) {
   const sessionKeys = new Set(
     Array.from(params.sessionKeys, (sessionKey) => normalizeOptionalText(sessionKey)).filter(
@@ -349,9 +348,6 @@ export function resolveAuthorizedPreRegisteredRunsForSessionKeys(params: {
       params.requiredSessionId !== undefined &&
       normalizeUnknownText(run.payload.sessionId) !== params.requiredSessionId
     ) {
-      continue;
-    }
-    if (params.excludeRunIds?.has(run.runId)) {
       continue;
     }
     const runSessionKeys = [
@@ -400,7 +396,6 @@ export function resolveAuthorizedRunsForSessionKeys(params: {
   requester: ChatAbortRequester;
   preserveSideRuns?: boolean;
   includeProtectedRuns?: boolean;
-  excludeRunIds?: ReadonlySet<string>;
 }) {
   const sessionKeys = new Set(
     Array.from(params.sessionKeys, (sessionKey) => normalizeOptionalText(sessionKey)).filter(
@@ -421,9 +416,6 @@ export function resolveAuthorizedRunsForSessionKeys(params: {
     entry: ChatAbortControllerEntry;
   }>();
   for (const [runId, active] of params.chatAbortControllers) {
-    if (params.excludeRunIds?.has(runId)) {
-      continue;
-    }
     if (!sessionKeys.has(active.sessionKey) && !sessionIds.has(active.sessionId)) {
       continue;
     }
@@ -475,7 +467,6 @@ export function resolveAuthorizedQueuedTurnsForSession(params: {
   agentId?: string;
   defaultAgentId?: string;
   requester: ChatAbortRequester;
-  excludeRunIds?: ReadonlySet<string>;
 }) {
   const matches = listQueuedChatTurnsForSession({
     chatQueuedTurns: params.context.chatQueuedTurns,
@@ -484,7 +475,7 @@ export function resolveAuthorizedQueuedTurnsForSession(params: {
     requiredSessionId: params.requiredSessionId,
     agentId: params.agentId,
     defaultAgentId: params.defaultAgentId,
-  }).filter((match) => !params.excludeRunIds?.has(match.runId));
+  });
   const authorized = matches
     .filter((match) => canRequesterAbortChatRun(match.entry, params.requester))
     .map((match) => ({
