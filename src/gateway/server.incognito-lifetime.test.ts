@@ -50,8 +50,9 @@ async function withLifetime(
 ) {
   await withOpenClawTestState({ label: "incognito-lifetime" }, async (state) => {
     await state.writeConfig(config);
+    const now = Date.now();
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-    vi.setSystemTime(new Date("2026-09-01T00:00:00Z"));
+    vi.setSystemTime(now);
     await upsertSessionEntryCore(ordinary, {
       sessionId: "ordinary",
       updatedAt: Date.now() - DAY_MS,
