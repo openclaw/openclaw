@@ -87,7 +87,7 @@ async function sendSuggestedTaskPrompt(params: {
   sessionKey: string;
   agentId: string;
   sessionId?: string;
-}): Promise<Parameters<RespondFn> | undefined> {
+}): Promise<ErrorShape | undefined> {
   let response: Parameters<RespondFn> | undefined;
   const chatParams = {
     sessionKey: params.sessionKey,
@@ -97,15 +97,25 @@ async function sendSuggestedTaskPrompt(params: {
     queueMode: "steer" as const,
     idempotencyKey: `task-suggestion:${params.taskId}`,
   };
-  await handleChatSend({
-    ...params.options,
-    req: { ...params.options.req, method: "chat.send", params: chatParams },
-    params: chatParams,
-    respond: (...args) => {
-      response = args;
-    },
-  });
-  return response;
+  try {
+    await handleChatSend({
+      ...params.options,
+      req: { ...params.options.req, method: "chat.send", params: chatParams },
+      params: chatParams,
+      respond: (...args) => {
+        response = args;
+      },
+    });
+  } catch (error) {
+    return errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error));
+  }
+  return response?.[0]
+    ? undefined
+    : (response?.[2] ??
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          response ? "failed to deliver suggested task" : "chat.send did not respond",
+        ));
 }
 
 async function createSuggestedTaskSession(params: {
@@ -218,27 +228,15 @@ async function createSuggestedTaskSession(params: {
           ),
       );
     }
-    let sendResponse: Parameters<RespondFn> | undefined;
-    try {
-      sendResponse = await sendSuggestedTaskPrompt({
-        taskId: params.taskId,
-        suggestion: params.suggestion,
-        options: params.options,
-        sessionKey: key,
-        agentId,
-      });
-    } catch (error) {
-      return await fail(key, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
-    }
-    if (!sendResponse?.[0]) {
-      return await fail(
-        key,
-        sendResponse?.[2] ??
-          errorShape(
-            ErrorCodes.UNAVAILABLE,
-            sendResponse ? "failed to deliver suggested task" : "chat.send did not respond",
-          ),
-      );
+    const sendError = await sendSuggestedTaskPrompt({
+      taskId: params.taskId,
+      suggestion: params.suggestion,
+      options: params.options,
+      sessionKey: key,
+      agentId,
+    });
+    if (sendError) {
+      return await fail(key, sendError);
     }
     return finishSuggestedTaskAcceptance({
       taskId: params.taskId,
@@ -292,27 +290,16 @@ async function deliverSuggestedTaskToSourceSession(params: {
   if (lifecycleError) {
     return fail(errorShape(ErrorCodes.INVALID_REQUEST, lifecycleError));
   }
-  let sendResponse: Parameters<RespondFn> | undefined;
-  try {
-    sendResponse = await sendSuggestedTaskPrompt({
-      taskId: params.taskId,
-      suggestion: params.suggestion,
-      options: params.options,
-      sessionKey: params.suggestion.sessionKey,
-      agentId,
-      sessionId: source.entry.sessionId,
-    });
-  } catch (error) {
-    return fail(errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
-  }
-  if (!sendResponse?.[0]) {
-    return fail(
-      sendResponse?.[2] ??
-        errorShape(
-          ErrorCodes.UNAVAILABLE,
-          sendResponse ? "failed to deliver suggested task" : "chat.send did not respond",
-        ),
-    );
+  const sendError = await sendSuggestedTaskPrompt({
+    taskId: params.taskId,
+    suggestion: params.suggestion,
+    options: params.options,
+    sessionKey: params.suggestion.sessionKey,
+    agentId,
+    sessionId: source.entry.sessionId,
+  });
+  if (sendError) {
+    return fail(sendError);
   }
   return finishSuggestedTaskAcceptance({
     taskId: params.taskId,

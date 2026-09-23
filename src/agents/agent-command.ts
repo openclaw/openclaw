@@ -12,7 +12,6 @@ import {
   captureAgentRunLifecycleGeneration,
   withAgentRunLifecycleGeneration,
 } from "../infra/agent-events.js";
-import { clearAgentRunContext } from "../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
@@ -38,11 +37,11 @@ import {
 import { runAcpAgentCommand } from "./command/acp-execution.js";
 import { repairPendingAssistantTranscriptTurns } from "./command/assistant-transcript-repair.js";
 import { persistAgentSession } from "./command/attempt-execution.shared.js";
+import { finishAgentCommandCleanup } from "./command/cleanup.js";
 import { emitIngressModelUsageDiagnostic } from "./command/ingress-diagnostics.js";
 import { prepareCommandForegroundRun } from "./command/maintenance.js";
 import { resolveEmbeddedModelSelection } from "./command/model-selection.js";
 import {
-  clearCommandRecoveryClaim,
   createCompactionSessionIdReporter,
   finalizeEmbeddedAgentCommand,
 } from "./command/post-run.js";
@@ -575,24 +574,21 @@ async function agentCommandInternal(
       return finalized.deliveryResult;
     });
   } finally {
-    try {
-      compactionSessionIdReporter.reportCommitted();
-      await preparedRunAdmission?.finish();
-      sessionWorkAdmission?.release();
-      await cleanupInternalModelRunTargets();
-      await clearCommandRecoveryClaim({
-        prepared,
-        sessionEntry,
-        runOwnedSessionId,
-        sessionReboundDuringRun,
-        trackedRestartRecoveryDeliveryClaim,
-        terminalDeliveryEvidence: restartRecoveryTerminalDeliveryEvidence,
-      });
-    } finally {
-      clearAgentRunContext(runId, lifecycleGeneration);
-      sessionWorkAdmission?.release();
-      releaseForeground?.();
-    }
+    await finishAgentCommandCleanup({
+      prepared,
+      sessionEntry,
+      runOwnedSessionId,
+      sessionReboundDuringRun,
+      trackedRestartRecoveryDeliveryClaim,
+      terminalDeliveryEvidence: restartRecoveryTerminalDeliveryEvidence,
+      lifecycleGeneration,
+      beforeTerminalDelivery: opts.beforeTerminalDelivery,
+      reportCommitted: compactionSessionIdReporter.reportCommitted,
+      preparedRunAdmission,
+      sessionWorkAdmission,
+      cleanupInternalModelRunTargets,
+      releaseForeground,
+    });
     if (maintenanceRequest) {
       scheduleSessionMaintenance(maintenanceRequest);
     }

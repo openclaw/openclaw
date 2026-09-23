@@ -69,7 +69,11 @@ cleanup worker releases the exact retained lease. Retirement joins lease deletio
 store close, keeping those writes off the host connection used by live snapshots.
 Automatic process-exit cleanup makes one attempt. A failed attempt retains worker
 and lease custody for an explicit lifecycle retry instead of repeatedly scheduling
-cleanup whenever the event loop drains.
+cleanup whenever the event loop drains. Revocation removes only pending writer
+admissions from the existing FIFO. A worker waiting for its first or next permit
+receives a refusal and settles cleanup without waiting behind the foreground
+callback that requested close. Already admitted write-capable work retains its
+permit through native settlement; cancellation never releases it early.
 
 Physical page reclamation releases the session writer permit between vacuum units,
 so queued foreground writers receive their FIFO turn before the next unit. Each
@@ -91,9 +95,12 @@ separate migration work.
 Durable session entry replacement reads its detached snapshot in the history
 worker and commits through the existing agent database executor. The transaction
 rereads comparison bytes and current rows, and the host rechecks caller authority
-at admission and commit. Committed receipts invalidate retained entry projections
-and publish sharing facts before observers. Missing databases are prepared by the
-same worker owner. Incognito stores, already executing workers, Doctor maintenance,
+at admission and commit. Exact database locators reserve their existing writer
+FIFO before asynchronous schema-owner discovery; unresolved logical stores first
+select their physical target without borrowing another store's queue. Committed
+receipts invalidate retained entry projections and publish sharing facts before
+observers. Missing databases are prepared by the same worker owner. Incognito
+stores, already executing workers, Doctor maintenance,
 and prepared native deletion rollback closures retain their synchronous kernels.
 Schemas, retained bytes, configuration, and update behavior are unchanged.
 
@@ -262,6 +269,16 @@ other native task mutation callers remain migration debt. Slow main-thread
 coordinator warnings include the caller stack as well as the operation label,
 captured only after a wait exceeds 100 ms. Schemas, retention, and update behavior
 are unchanged.
+
+Worktree run-lease cleanup deletes the exact token and reads the Git unlock target
+through the shared-state worker. Failed deletions yield between bounded retries,
+retaining the original database admission and Git guard until deletion settles.
+Process exit retains its best-effort synchronous deletion because it cannot await
+a worker. Deferred context maintenance also awaits task completion and failure
+settlement before disposing its engine or releasing its process owner; its progress
+timer ends before terminal persistence. Worktree run admission, task creation and
+progress, and the remaining native cron transitions still need migration. This
+cutover preserves schemas, stored bytes, retention, configuration, and update behavior.
 
 Streaming assistant and tool-result completion events use the session manager's
 existing SQLite writer domain. The host retains extension hooks, redaction, and

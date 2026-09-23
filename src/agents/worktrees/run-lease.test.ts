@@ -5,8 +5,13 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.js";
 import { lockState, unlockWorktree } from "./git-lock.js";
+import * as registryRead from "./registry-read.js";
 import * as registry from "./registry.js";
 import {
   admitWorktreeRunLeaseRow,
@@ -45,7 +50,9 @@ async function initializeRepository(root: string): Promise<string> {
 describe("worktree run lease", () => {
   const templateTempDirs = useAutoCleanupTempDirTracker(afterAll);
   const caseTempDirs = useAutoCleanupTempDirTracker((cleanup) => {
-    afterEach(() => {
+    afterEach(async () => {
+      vi.useRealTimers();
+      await closeOpenClawStateDatabaseAsync();
       vi.restoreAllMocks();
       runLeaseTesting.resetForTest();
       closeOpenClawStateDatabaseForTest();
@@ -96,7 +103,10 @@ describe("worktree run lease", () => {
     expect(await lockState(record!)).toEqual({ kind: "live", pid: process.pid });
     expect(hasLiveWorktreeRunLease(env, created.id)).toBe(true);
 
+    const sql = observeMainThreadSql();
     await parent.release();
+    sql.expectIdle();
+    sql.restore();
     expect(await lockState(record!)).toEqual({ kind: "live", pid: process.pid });
     expect(hasLiveWorktreeRunLease(env, created.id)).toBe(true);
 
@@ -269,7 +279,7 @@ describe("worktree run lease", () => {
     const record = getRegistryWorktree(env, created.id)!;
 
     let attempts = 0;
-    runLeaseTesting.setReleaseRowImplForTest((rowEnv, id, token) => {
+    runLeaseTesting.setReleaseRowImplForTest(async (rowEnv, id, token) => {
       attempts += 1;
       if (attempts === 1) {
         throw new Error("simulated state database failure");
@@ -277,8 +287,22 @@ describe("worktree run lease", () => {
       releaseWorktreeRunLeaseRow(rowEnv, id, token);
     });
 
-    await lease.release();
-    expect(attempts).toBeGreaterThanOrEqual(2);
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    const release = lease.release();
+    let concurrentReleaseSettled = false;
+    const concurrentRelease = lease.release().then(() => {
+      concurrentReleaseSettled = true;
+    });
+    await Promise.resolve();
+    expect(attempts).toBe(1);
+    await vi.advanceTimersByTimeAsync(24);
+    expect(attempts).toBe(1);
+    expect(concurrentReleaseSettled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await release;
+    await concurrentRelease;
+    vi.useRealTimers();
+    expect(attempts).toBe(2);
     expect(hasLiveWorktreeRunLease(env, created.id)).toBe(false);
     expect(await lockState(record)).toEqual({ kind: "none" });
   });
@@ -289,14 +313,18 @@ describe("worktree run lease", () => {
     const record = getRegistryWorktree(env, created.id)!;
 
     let fail = true;
-    runLeaseTesting.setReleaseRowImplForTest((rowEnv, id, token) => {
+    runLeaseTesting.setReleaseRowImplForTest(async (rowEnv, id, token) => {
       if (fail) {
         throw new Error("simulated state database failure");
       }
       releaseWorktreeRunLeaseRow(rowEnv, id, token);
     });
 
-    await lease.release();
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    const release = lease.release();
+    await vi.advanceTimersByTimeAsync(75);
+    await release;
+    vi.useRealTimers();
     expect(hasLiveWorktreeRunLease(env, created.id)).toBe(true);
     expect(await lockState(record)).toEqual({ kind: "live", pid: process.pid });
     expect(() => claimWorktreeRemoval(env, { worktreeId: created.id, token: "remover" })).toThrow(
@@ -344,8 +372,8 @@ describe("worktree run lease", () => {
           await unlockWorktree(rec);
         });
       } else {
-        const readWorktree = registry.getRegistryWorktree;
-        vi.spyOn(registry, "getRegistryWorktree").mockImplementation((...args) => {
+        const readWorktree = registryRead.readRegistryWorktree;
+        vi.spyOn(registryRead, "readRegistryWorktree").mockImplementation(async (...args) => {
           if (fail) {
             throw new Error("simulated registry read failure");
           }
