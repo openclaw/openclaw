@@ -1,6 +1,5 @@
 // Resolves ClawHub plugin catalog entries and install metadata.
 import fs from "node:fs/promises";
-import { root } from "@openclaw/fs-safe/root";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -43,9 +42,11 @@ import {
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { sha256File } from "../infra/directory-durability.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { root } from "../infra/fs-safe.js";
 import type { ExtractedArchiveVerification } from "../infra/install-flow.js";
 import type { TimedInstallModeOptions } from "../infra/install-mode-options.js";
 import { withInstallActivity } from "../infra/install-progress.js";
+import { walkRootDirectory } from "../infra/root-walk.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import type { RuntimeVersionEnv } from "../version.js";
 import { CLAWHUB_INSTALL_ERROR_CODE, type ClawHubInstallErrorCode } from "./clawhub-error-codes.js";
@@ -756,7 +757,9 @@ async function verifyClawHubExtractedFiles(params: {
       params.archivePaths.map((filePath) => [filePath, undefined]),
     );
     const validatedGeneratedPaths: string[] = [];
-    for await (const entry of extracted.walk("", { symlinkPolicy: "skip" })) {
+    for await (const entry of walkRootDirectory(extracted.rootReal, "", {
+      symlinkPolicy: "skip",
+    })) {
       if (entry.kind !== "file") {
         continue;
       }
