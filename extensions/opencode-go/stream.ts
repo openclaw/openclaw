@@ -24,7 +24,7 @@ function hasOpencodeSessionHeader(headers: Record<string, string> | undefined): 
   return Object.keys(headers ?? {}).some((name) => name.toLowerCase() === OPENCODE_SESSION_HEADER);
 }
 
-function createOpencodeGoSessionHeaderWrapper(
+export function createOpencodeGoSessionHeaderWrapper(
   baseStreamFn: ProviderWrapStreamFnContext["streamFn"],
 ): ProviderWrapStreamFnContext["streamFn"] {
   if (!baseStreamFn) {

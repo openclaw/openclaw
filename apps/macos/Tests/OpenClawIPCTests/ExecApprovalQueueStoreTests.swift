@@ -123,6 +123,10 @@ private final class ApprovalGatewayFixture: @unchecked Sendable {
         socket.emitReceiveSuccessOnce(.data(Data(event.utf8)))
     }
 
+    func waitUntilReady() async throws {
+        _ = try await self.readySocket()
+    }
+
     private func readySocket() async throws -> GatewayTestWebSocketTask {
         let deadline = ContinuousClock.now + .seconds(2)
         while ContinuousClock.now < deadline {
@@ -210,16 +214,20 @@ struct ExecApprovalQueueStoreTests {
         try #require(await self.waitUntil { store.requests.isEmpty })
     }
 
-    @Test func `expired requests disappear without a gateway resolution event`() async throws {
-        let fixture = ApprovalGatewayFixture(initialRequests: [
-            ApprovalFixtureRequest(id: "short-lived", expiresOffsetMs: 500),
-        ])
+    @Test func `live requests disappear at expiry without a gateway resolution event`() async throws {
+        let fixture = ApprovalGatewayFixture()
         let store = ExecApprovalQueueStore(gateway: fixture.gateway)
         defer { store.stop() }
-
+        store.start()
         await store.refresh()
-        #expect(store.requests.map(\.id) == ["short-lived"])
+
+        try await fixture.waitUntilReady()
+        let request = ApprovalFixtureRequest(id: "short-lived", expiresOffsetMs: 500)
+        try await fixture.sendEvent(name: "exec.approval.requested", payload: request.json)
+
+        try #require(await self.waitUntil { store.requests.map(\.id) == ["short-lived"] })
         try #require(await self.waitUntil { store.requests.isEmpty })
+        #expect(await fixture.requestLog.requests(method: "exec.approval.resolve").isEmpty)
     }
 
     @Test func `explicit decision policy excludes allow always and blocks unavailable decisions`() async {

@@ -14,7 +14,7 @@ import {
   resolveOpencodeGoStarterModel,
 } from "./provider-catalog.js";
 import { resolveThinkingProfile } from "./provider-policy-api.js";
-import { createOpencodeGoWrapper } from "./stream.js";
+import { createOpencodeGoSessionHeaderWrapper, createOpencodeGoWrapper } from "./stream.js";
 
 const PROVIDER_ID = "opencode-go";
 type OpencodeGoCatalogAuth = { apiKey?: string; discoveryApiKey?: string };
@@ -119,6 +119,7 @@ export default defineSingleProviderPluginEntry({
     ...buildProviderReplayFamilyHooks({ family: "passthrough-gemini" }),
     resolveThinkingProfile,
     wrapStreamFn: (ctx) => createOpencodeGoWrapper(ctx.streamFn, ctx.thinkingLevel),
+    wrapSimpleCompletionStreamFn: (ctx) => createOpencodeGoSessionHeaderWrapper(ctx.streamFn),
     isModernModelRef: () => true,
   },
   register(api) {

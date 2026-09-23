@@ -598,25 +598,32 @@ describe("opencode-go provider plugin", () => {
   });
 
   it.each([
-    ["openai-completions", "https://opencode.ai/zen/go/v1"],
-    ["anthropic-messages", "https://opencode.ai/zen/go"],
-  ] as const)("sends stable conversation identity to the %s endpoint", async (api, baseUrl) => {
-    const provider = await registerSingleProviderPlugin(plugin);
-    const streamFn = vi.fn(() => ({}) as never);
-    const wrapped = provider.wrapStreamFn?.({ streamFn } as never);
+    ["stream", "openai-completions", "https://opencode.ai/zen/go/v1"],
+    ["stream", "anthropic-messages", "https://opencode.ai/zen/go"],
+    ["simple completion", "openai-completions", "https://opencode.ai/zen/go/v1"],
+    ["simple completion", "anthropic-messages", "https://opencode.ai/zen/go"],
+  ] as const)(
+    "sends stable conversation identity through the %s %s endpoint",
+    async (surface, api, baseUrl) => {
+      const provider = await registerSingleProviderPlugin(plugin);
+      const streamFn = vi.fn(() => ({}) as never);
+      const wrapper =
+        surface === "stream" ? provider.wrapStreamFn : provider.wrapSimpleCompletionStreamFn;
+      const wrapped = wrapper?.({ streamFn } as never);
 
-    await wrapped?.(
-      { provider: "opencode-go", id: "fixture", api, baseUrl } as never,
-      { messages: [] } as never,
-      { sessionId: "conversation-123" },
-    );
+      await wrapped?.(
+        { provider: "opencode-go", id: "fixture", api, baseUrl } as never,
+        { messages: [] } as never,
+        { sessionId: "conversation-123" },
+      );
 
-    expect(streamFn).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.anything(),
-      expect.objectContaining({ headers: { "x-opencode-session": "conversation-123" } }),
-    );
-  });
+      expect(streamFn).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        expect.objectContaining({ headers: { "x-opencode-session": "conversation-123" } }),
+      );
+    },
+  );
 
   it("preserves explicit session routing and leaves custom proxies unchanged", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
