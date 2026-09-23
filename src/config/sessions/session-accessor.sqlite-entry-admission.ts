@@ -1,3 +1,4 @@
+import { performance } from "node:perf_hooks";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import {
   createOpenClawAgentDatabaseClaim,
