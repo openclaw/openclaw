@@ -20,6 +20,8 @@ export class AgentsApiClient {
   ) {
     this.sessions = new OpenAI({
       apiKey,
+      // Ignore OPENAI_BASE_URL while retaining the SDK's official endpoint default.
+      baseURL: null,
       fetch: async (input, init) => {
         this.assertCurrent();
         const guarded = await fetchWithSsrFGuard({
