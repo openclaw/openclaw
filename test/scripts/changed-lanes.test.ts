@@ -2252,9 +2252,21 @@ describe("scripts/changed-lanes", () => {
           lanes: { ui: true, coreTests: true },
           includes: ["tsgo:ui", "tsgo:core:test"],
           excludes: ["tsgo:core"],
+          coreTestChecks: ["checkBoundary", "checkTypes"],
         },
       }),
     ),
+    {
+      name: "reuses the graph inventory for mixed core source and test changes",
+      path: "src/utils.test.ts",
+      extraPaths: ["src/utils.ts"],
+      expected: {
+        lanes: { core: true, coreTests: true },
+        includes: ["tsgo:core", "tsgo:core:test"],
+        excludes: [],
+        coreTestChecks: ["checkBoundary", "checkTypes"],
+      },
+    },
     {
       name: "routes core test-only changes to core test lanes only",
       path: "packages/normalization-core/src/string-normalization.test-support.ts",

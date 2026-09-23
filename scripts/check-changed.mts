@@ -797,10 +797,15 @@ export function createChangedCheckPlan(
 
   // Typechecking alone accepts extension imports; the graph guard also covers
   // shared test/tooling dependencies that core tests can pull into their graph.
-  const narrowCoreTests = getChangedCoreTestPaths(result) !== undefined;
+  // Mixed source/test changes still need every shard, but reuse this inventory
+  // to run changed test-root owners first. Aggregate tsgo:all keeps its own runner.
+  const changedCoreTests =
+    !runAll &&
+    lanes.coreTests &&
+    result.paths.some((file) => /^(?:src|ui|packages)\/.+\.test\.tsx?$/u.test(file));
   if (runAll || lanes.core || lanes.coreTests || lanes.ui || lanes.tooling) {
     add("core tsgo graph boundary", ["lint:tmp:tsgo-core-boundary"]);
-    if (narrowCoreTests) {
+    if (changedCoreTests) {
       commands.at(-1)!.coreTestCheck = "checkBoundary";
     }
   }
@@ -846,7 +851,7 @@ export function createChangedCheckPlan(
   }
   if (lanes.coreTests) {
     addTypecheck("typecheck core tests", ["tsgo:core:test"]);
-    if (narrowCoreTests) {
+    if (changedCoreTests) {
       commands.at(-1)!.coreTestCheck = "checkTypes";
     }
   }
@@ -1162,7 +1167,7 @@ async function runChangedCheck(result: ChangedLaneResult, options: ChangedCheckR
 
   const coreTestCheck = plan.commands.some((command) => command.coreTestCheck)
     ? (await import("./run-tsgo-core-test-shards.mts")).createChangedCoreTestCheck(
-        getChangedCoreTestPaths(result)!,
+        getChangedCoreTestPaths(result) ?? result.paths,
         createSparseTsgoSkipEnv(childEnv),
       )
     : undefined;

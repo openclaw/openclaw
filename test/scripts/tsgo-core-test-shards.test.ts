@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   findOversizedTsgoCoreTestShards,
   findTsgoCoreTestShardViolations,
+  orderChangedTsgoCoreTestShards,
   selectChangedTsgoCoreTestShards,
   TSGO_CORE_GRAPHS,
   selectTsgoCoreTestShards,
@@ -289,6 +290,41 @@ describe("changed core test graph selection", () => {
     ]);
   });
 
+  it("prioritizes only root owners within the selected consuming shards", () => {
+    const graphs = inventory();
+    graphs.find((graph) => graph.name === "core-test-agents-root")!.files.push(leaf);
+    const selected = selectChangedTsgoCoreTestShards([leaf], graphs)!;
+    expect(
+      orderChangedTsgoCoreTestShards(selected, [leaf], graphs).map((shard) => shard.name),
+    ).toEqual(["agents-other", "agents-root"]);
+    // An owning graph outside a selected stripe must not be added to that stripe.
+    expect(orderChangedTsgoCoreTestShards([selected[0]!], [leaf], graphs)).toEqual([selected[0]]);
+  });
+
+  it.each([
+    {
+      paths: ["src/owner.ts", "ui/src/page.test.ts", leaf, leaf],
+      owners: ["agents-other", "ui-pages"],
+    },
+    { paths: ["src/deleted.test.ts", leaf], owners: ["agents-other"] },
+    { paths: ["src/deleted.test.ts", "src/owner.ts"], owners: [] },
+    { paths: [], owners: [] },
+  ])("keeps full coverage and stable ordering for $paths", ({ paths, owners }) => {
+    const graphs = inventory();
+    const uiGraph = graphs.find((graph) => graph.name === "core-test-ui-pages")!;
+    uiGraph.roots.push("ui/src/page.test.ts");
+    uiGraph.files.push("ui/src/page.test.ts");
+    // Even when every graph imports a changed test, only its root owner moves.
+    graphs.forEach((graph) => graph.files.push(leaf));
+    expect(selectChangedTsgoCoreTestShards(paths, graphs)).toBeUndefined();
+    const ordered = orderChangedTsgoCoreTestShards(TSGO_CORE_TEST_SHARDS, paths, graphs);
+    expect(ordered.map((shard) => shard.name)).toEqual([
+      ...owners,
+      ...TSGO_CORE_TEST_SHARDS.map((shard) => shard.name).filter((name) => !owners.includes(name)),
+    ]);
+    expect(new Set(ordered.map((shard) => shard.config)).size).toBe(TSGO_CORE_TEST_SHARDS.length);
+  });
+
   it("rejects a plugin browser test even when the inventory claims core ownership", () => {
     const pluginTest = "extensions/example/browser/page.test.ts";
     const graphs = inventory();
@@ -375,9 +411,9 @@ it.runIf(process.platform !== "win32")(
         const files =
           name === "canonical"
             ? [leaf, consumer]
-            : name === "core-test-agents-other"
+            : name === "core-test-agents-tools"
               ? [leaf]
-              : name === "core-test-agents-tools"
+              : name === "core-test-agents-other"
                 ? [consumer]
                 : ["src/empty.ts"];
         write(
@@ -464,7 +500,7 @@ process.exit(result.status??1);
       };
       const initial = await check();
       expect(initial.result.status, initial.result.stderr).toBe(0);
-      expect(initial.builds).toEqual(["test/tsconfig/tsconfig.core.test.agents-other.json"]);
+      expect(initial.builds).toEqual(["test/tsconfig/tsconfig.core.test.agents-tools.json"]);
       write(
         consumer,
         "import type {Value} from '../nested/leaf.test.js';\nconst value: Value = 1;\n",
@@ -472,13 +508,21 @@ process.exit(result.status??1);
       const validConsumer = await check();
       expect(validConsumer.result.status, validConsumer.result.stderr).toBe(0);
       expect(validConsumer.builds).toEqual([
+        "test/tsconfig/tsconfig.core.test.agents-tools.json",
+        "test/tsconfig/tsconfig.core.test.agents-other.json",
+      ]);
+      // One full compiler sweep covers mixed changes and multiple owners in canonical order.
+      // Deleted-root fallback is covered by the graph-selection cases above.
+      const mixed = await check(["src/empty.ts", leaf, consumer, leaf]);
+      expect(mixed.result.status, mixed.result.stderr).toBe(0);
+      expect(mixed.builds).toEqual([
         "test/tsconfig/tsconfig.core.test.agents-other.json",
         "test/tsconfig/tsconfig.core.test.agents-tools.json",
+        ...TSGO_CORE_TEST_SHARDS.filter(
+          (shard) => !["agents-other", "agents-tools"].includes(shard.name),
+        ).map((shard) => shard.config),
       ]);
-      // A removed rename source has no current root: keep the full canonical check.
-      const renamed = await check([leaf, "src/agents/old.test.ts"]);
-      expect(renamed.result.status, renamed.result.stderr).toBe(0);
-      expect(renamed.builds).toEqual(TSGO_CORE_TEST_SHARDS.map((shard) => shard.config));
+      expect(new Set(mixed.builds).size).toBe(TSGO_CORE_TEST_SHARDS.length);
       write(leaf, "export type Value = string;\n");
       const brokenConsumer = await check();
       expect(brokenConsumer.result.status).not.toBe(0);

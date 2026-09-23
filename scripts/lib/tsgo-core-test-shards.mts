@@ -219,6 +219,27 @@ export function findTsgoCoreTestShardViolations(params: {
   return violations;
 }
 
+/** Move changed test-root owners first without changing coverage or either group's order. */
+export function orderChangedTsgoCoreTestShards(
+  shards: readonly { name: string; config: string }[],
+  paths: readonly string[],
+  graphs: readonly { config: string; roots: readonly string[] }[],
+): readonly { name: string; config: string }[] {
+  const changedTests = new Set(
+    paths.filter((file) => /^(?:src|ui|packages)\/.+\.test\.tsx?$/u.test(file)),
+  );
+  // Dependency consumers overlap heavily; only declared roots establish priority.
+  const owners = new Set(
+    graphs
+      .filter((graph) => graph.roots.some((root) => changedTests.has(root)))
+      .map((graph) => graph.config),
+  );
+  return [
+    ...shards.filter((shard) => owners.has(shard.config)),
+    ...shards.filter((shard) => !owners.has(shard.config)),
+  ];
+}
+
 /** Select every consuming graph, not just the file's declared root partition. */
 export function selectChangedTsgoCoreTestShards(
   paths: readonly string[],

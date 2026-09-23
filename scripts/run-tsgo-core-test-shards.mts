@@ -13,6 +13,7 @@ import { resolveLocalCheckEnv } from "./lib/local-check-runtime.mts";
 import { runManagedCommand } from "./lib/managed-child-process.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
+  orderChangedTsgoCoreTestShards,
   selectTsgoCoreTestShards,
   selectChangedTsgoCoreTestShards,
   TSGO_CORE_TEST_SHARDS,
@@ -103,7 +104,11 @@ export function createChangedCoreTestCheck(paths: readonly string[], env: NodeJS
       const inspected = graphs;
       graphs = undefined;
       const shards = inspected && selectChangedTsgoCoreTestShards(paths, inspected);
-      const selected = shards ?? TSGO_CORE_TEST_SHARDS;
+      const selected = orderChangedTsgoCoreTestShards(
+        shards ?? TSGO_CORE_TEST_SHARDS,
+        paths,
+        inspected ?? [],
+      );
       console.error(
         `[check:changed] core test graphs: ${selected.map((shard) => shard.name).join(", ")}`,
       );
