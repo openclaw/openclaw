@@ -20,6 +20,7 @@ import { extractAssistantTranscriptSourceText } from "../../shared/chat-message-
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
+import type { WorkerTurnTranscriptTarget } from "./worker-turn-transcript-target.js";
 
 type TurnClaimReleaseWaiter = (error?: Error) => void;
 
@@ -53,12 +54,19 @@ export type WorkerTurnExecutionIdentity = Readonly<{
   operatorAuthority?: AdmittedRunOperatorAuthority;
   receiptAuthority: () => void;
   sessionKey: string;
+  sessionTarget: Readonly<WorkerTurnTranscriptTarget>;
   turnClaim: WorkerSessionTurnClaim;
 }>;
 
-export type WorkerTurnExecutionIdentityCapability = Readonly<{
-  run<T>(callback: (identity: WorkerTurnExecutionIdentity) => Promise<T> | T): Promise<T>;
-}>;
+export type WorkerTurnTranscriptSource = Pick<
+  WorkerTurnExecutionIdentity,
+  "sessionTarget" | "receiptAuthority"
+>;
+
+export type WorkerTurnExecutionIdentityCapability = WorkerTurnTranscriptSource &
+  Readonly<{
+    run<T>(callback: (identity: WorkerTurnExecutionIdentity) => Promise<T> | T): Promise<T>;
+  }>;
 
 type WorkerTurnFinishingOutcome = { error?: string; replayInvalid?: true };
 
@@ -117,7 +125,7 @@ export function bindWorkerTurnOwner(
   claim: WorkerSessionTurnClaim,
   token: ExecutionIdentityAdmissionToken | undefined,
   operationalRunInstance: OperationalRunInstanceRef,
-  source: { agentId: string; sessionKey: string },
+  source: WorkerTurnTranscriptTarget,
   assertRunActive: () => void,
   prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage,
   operatorAuthority?: AdmittedRunOperatorAuthority,
@@ -130,6 +138,7 @@ export function bindWorkerTurnOwner(
     throw new Error(`Session ${claim.sessionId} worker turn authority changed`);
   }
   const owners = workerTurnOwners.get(path) ?? new Map();
+  const sessionTarget = Object.freeze({ ...source });
   const assertActive = () => {
     assertRunActive();
     operatorAuthority?.assertCurrent();
@@ -150,9 +159,12 @@ export function bindWorkerTurnOwner(
     ...(operatorAuthority ? { operatorAuthority } : {}),
     receiptAuthority: assertActive,
     sessionKey: source.sessionKey,
+    sessionTarget,
     turnClaim: claim,
   });
   const capability = Object.freeze({
+    sessionTarget,
+    receiptAuthority: assertActive,
     async run<T>(callback: (current: WorkerTurnExecutionIdentity) => Promise<T> | T): Promise<T> {
       assertActive();
       const result = await callback(identity);

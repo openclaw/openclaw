@@ -1,3 +1,5 @@
+import type { WorkerTurnTranscriptTarget } from "./worker-turn-transcript-target.js";
+
 export type WorkerInferenceSessionDrain = {
   drained: Promise<void>;
   hasWork(): boolean;
@@ -18,6 +20,7 @@ export type WorkerInferenceCancellation = {
 type WorkerInferenceSessionControl = {
   beginDrain: (sessionId: string) => WorkerInferenceSessionDrain;
   captureCancel: (sessionId: string, runId?: string) => WorkerInferenceCancellation;
+  resolveTarget: (runId: string) => WorkerTurnTranscriptTarget | undefined;
 };
 
 // Session lifecycle needs a stronger control without widening the inferred public service shape.
@@ -50,4 +53,14 @@ export function captureWorkerInferenceCancellation(
     return undefined;
   }
   return sessionControlByService.get(service)?.captureCancel(sessionId, runId);
+}
+
+export function resolveWorkerInferenceTarget(
+  service: unknown,
+  runId: string,
+): WorkerTurnTranscriptTarget | undefined {
+  if (typeof service !== "object" || service === null) {
+    return undefined;
+  }
+  return sessionControlByService.get(service)?.resolveTarget(runId);
 }

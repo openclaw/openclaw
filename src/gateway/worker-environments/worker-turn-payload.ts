@@ -52,6 +52,7 @@ import {
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
 import { bindWorkerTurnOwner } from "./placement-turn-claim-events.js";
+import type { WorkerTurnTranscriptTarget } from "./worker-turn-transcript-target.js";
 
 type WorkerInitialMessagePlan =
   | { kind: "complete"; messages: WorkerTranscriptMessage[] }
@@ -100,6 +101,8 @@ type PrepareWorkerAgentRuntimeIdentityParams = Omit<
   runtimeInstanceId: string;
   turn: SessionPlacementTurnParams;
   placements: WorkerSessionPlacementStore;
+  sessionTarget: WorkerTurnTranscriptTarget;
+  assertSourceCurrent: () => void;
 };
 
 export async function prepareWorkerAgentRuntimeIdentity(
@@ -112,13 +115,17 @@ export async function prepareWorkerAgentRuntimeIdentity(
     admittedRunContext: params.turn.admittedRunContext,
     preparedRunAdmission: params.turn.preparedRunAdmission,
   });
-  const assertActive = resolveAdmittedRunActiveAssertion(
+  const assertAdmittedActive = resolveAdmittedRunActiveAssertion(
     admittedRunContext,
     params.turn.abortSignal,
   );
-  if (!assertActive) {
+  if (!assertAdmittedActive) {
     throw new Error("Worker turn has no active admitted execution authority");
   }
+  const assertActive = () => {
+    params.assertSourceCurrent();
+    assertAdmittedActive();
+  };
   assertActive();
   const runtimeIdentity = buildWorkerAgentRuntimeIdentity({ ...params, admittedRunContext });
   // Stop closes the operational run before its placement claim finishes draining.
@@ -128,7 +135,7 @@ export async function prepareWorkerAgentRuntimeIdentity(
     params.turnClaim,
     runtimeIdentity.executionIdentityToken,
     admittedRunContext.operationalRunInstance,
-    { agentId: params.agentId, sessionKey: params.sessionKey },
+    params.sessionTarget,
     assertActive,
     params.turn.prepareAssistantTranscriptMessage,
     readAdmittedRunOperatorAuthority(admittedRunContext),

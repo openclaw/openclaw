@@ -8,6 +8,7 @@ import {
   type WorkerTranscriptCommitOutcome,
   type WorkerTranscriptCommitStore,
 } from "./transcript-commit-store.js";
+import type { WorkerTurnTranscriptTarget } from "./worker-turn-transcript-target.js";
 
 const loadTranscriptCommitRuntime = createLazyRuntimeModule(
   () => import("./transcript-commit.runtime.js"),
@@ -16,6 +17,7 @@ const loadTranscriptCommitRuntime = createLazyRuntimeModule(
 export type WorkerTranscriptCommitApplication = (params: {
   identity: WorkerConnectionIdentity;
   request: WorkerTranscriptCommitParams;
+  sessionTarget: WorkerTurnTranscriptTarget;
   assertCurrent: () => undefined;
 }) => Promise<WorkerTranscriptCommitOutcome>;
 

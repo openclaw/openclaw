@@ -38,7 +38,6 @@ import {
   measureLaunchTurn,
   placements,
   seedActivePlacement,
-  sessionTarget,
   setupWorkerTurnLauncherTest,
   turn,
   unusedEnvironments,
@@ -144,13 +143,11 @@ describe("cloud worker run ownership", () => {
         credentialExpiresAtMs: Date.now() + input.timeoutMs,
       };
       const receiver = createWorkerLiveEventReceiver({
-        getConfig: () => ({ session: { store: sessionTarget.storePath } }),
         startupBindings: [
           { environmentId: ENVIRONMENT_ID, runEpoch: OWNER_EPOCH, sessionId: SESSION_ID },
         ],
         startupOwners: new Map([[ENVIRONMENT_ID, OWNER_EPOCH]]),
       });
-      receiver.start();
       vi.useFakeTimers({
         toFake: ["Date", "setInterval", "clearInterval", "setTimeout", "clearTimeout"],
         now: turnStartedAtMs + firstToolDelayMs,
@@ -172,6 +169,7 @@ describe("cloud worker run ownership", () => {
       try {
         expect(
           await receiver.apply({
+            source: turnCapability,
             identity,
             request: {
               runEpoch: OWNER_EPOCH,
@@ -211,6 +209,7 @@ describe("cloud worker run ownership", () => {
         } else {
           expect(
             await receiver.apply({
+              source: turnCapability,
               identity,
               request: {
                 runEpoch: OWNER_EPOCH,

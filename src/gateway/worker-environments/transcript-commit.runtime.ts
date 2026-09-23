@@ -18,7 +18,6 @@ import {
 } from "../../sessions/transcript-events.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { prepareWorkerTurnTranscriptMessage } from "./placement-turn-claim-events.js";
-import { resolveWorkerSessionTarget, type ResolvedWorkerSessionTarget } from "./session-target.js";
 import type {
   WorkerTranscriptCommitInput,
   WorkerTranscriptCommitOutcome,
@@ -28,6 +27,7 @@ import type {
   WorkerTranscriptCommitApplication,
   WorkerTranscriptCommitterOptions,
 } from "./transcript-commit.js";
+import type { WorkerTurnTranscriptTarget } from "./worker-turn-transcript-target.js";
 
 type SemanticAgentMessage = Extract<AgentMessage, { role: "assistant" | "toolResult" | "user" }>;
 type CommittedAgentMessage = SemanticAgentMessage & { idempotencyKey: string };
@@ -206,14 +206,15 @@ async function applyWorkerTranscriptCommit(params: {
   requestedBaseLeafId: string | null;
   runId: string | null;
   sessionId: string;
-  target: ResolvedWorkerSessionTarget;
+  target: WorkerTurnTranscriptTarget;
+  lifecycleRevision: string | undefined;
 }): Promise<ApplyTranscriptCommitResult> {
   const redactedMessages = params.messages.map((message) =>
     attachSessionTranscriptRunId(redactTranscriptMessage(message, params.config), params.runId),
   );
   const expectedState = {
     sessionId: params.sessionId,
-    lifecycleRevision: params.target.sessionEntry.lifecycleRevision,
+    lifecycleRevision: params.lifecycleRevision,
   };
   let applied: ApplyTranscriptCommitResult;
   try {
@@ -348,8 +349,9 @@ export async function commitWorkerTranscript(
   }
 
   const config = options.getConfig();
-  const target = resolveWorkerSessionTarget(config, sessionId);
-  if (!target) {
+  const target = params.sessionTarget;
+  const entry = loadSessionEntry(target);
+  if (!entry || entry.sessionId !== sessionId) {
     return store.complete({
       ...input,
       outcome: { ok: false, reason: "session-not-attached" },
@@ -385,6 +387,7 @@ export async function commitWorkerTranscript(
       runId: params.identity.runId,
       sessionId,
       target,
+      lifecycleRevision: entry.lifecycleRevision,
     });
   } catch (error) {
     // A callback refusal has rolled back the agent transaction. Free only

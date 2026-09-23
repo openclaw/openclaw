@@ -39,6 +39,7 @@ import {
   type WorkerSessionTurnClaim,
 } from "./placement-record.js";
 import { formatWorkerInferenceError } from "./worker-error.js";
+import type { WorkerTurnTranscriptTarget } from "./worker-turn-transcript-target.js";
 
 const DEFAULT_REQUEST_MAX_BYTES = WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES;
 // One active turn plus one provider that ignored abort. This prevents repeated
@@ -61,6 +62,7 @@ export type WorkerInferenceExecutor = (params: {
   signal: AbortSignal;
   emit: (event: WorkerInferenceEventParams["event"]) => void;
   isCurrent(): boolean;
+  sessionTarget: WorkerTurnTranscriptTarget;
   config?: OpenClawConfig;
 }) => Promise<WorkerInferenceTerminalOutcome>;
 
@@ -90,6 +92,7 @@ type ActiveInference = {
   claimKey: string;
   identity: WorkerConnectionIdentity;
   request: WorkerInferenceStartParams;
+  sessionTarget: WorkerTurnTranscriptTarget;
   requestHash: string;
   storeInput: WorkerInferenceTurnInput;
   sink: WorkerInferenceSink;
@@ -253,6 +256,7 @@ export function createWorkerInferenceManager(options: {
       outcome = await options.execute({
         identity: entry.identity,
         request: entry.request,
+        sessionTarget: entry.sessionTarget,
         signal: entry.controller.signal,
         emit: (event) => {
           const fence = durableFence(entry);
@@ -327,6 +331,7 @@ export function createWorkerInferenceManager(options: {
     identity: WorkerConnectionIdentity;
     request: WorkerInferenceStartParams;
     sink: WorkerInferenceSink;
+    sessionTarget: WorkerTurnTranscriptTarget;
     revalidate?: RevalidateInference;
   }): WorkerInferenceStartApplicationResult => {
     if (stopping || drainingSessionIds.has(params.request.sessionId)) {
@@ -465,6 +470,7 @@ export function createWorkerInferenceManager(options: {
       claimKey,
       identity: params.identity,
       request: params.request,
+      sessionTarget: params.sessionTarget,
       requestHash: hash,
       storeInput,
       sink: params.sink,
@@ -653,14 +659,26 @@ export function createWorkerInferenceManager(options: {
     };
   };
 
-  const resolveSessionIdForRunId = (runId: string): string | undefined => {
-    const sessionIds = new Set<string>();
+  const resolveSessionTargetForRunId = (runId: string): WorkerTurnTranscriptTarget | undefined => {
+    let target: WorkerTurnTranscriptTarget | undefined;
     for (const entry of active.values()) {
       if (entry.request.runId === runId) {
-        sessionIds.add(entry.request.sessionId);
+        const source = entry.sessionTarget;
+        if (
+          target &&
+          (source.agentId !== target.agentId ||
+            source.sessionId !== target.sessionId ||
+            source.sessionKey !== target.sessionKey ||
+            source.storePath !== target.storePath ||
+            source.expectedLifecycleRevision !== target.expectedLifecycleRevision ||
+            source.expectedWriterRunId !== target.expectedWriterRunId)
+        ) {
+          return undefined;
+        }
+        target = source;
       }
     }
-    return sessionIds.size === 1 ? sessionIds.values().next().value : undefined;
+    return target;
   };
 
   const stop = async (): Promise<void> => {
@@ -682,7 +700,7 @@ export function createWorkerInferenceManager(options: {
     captureSessionCancellation,
     beginSessionDrain,
     hasSession,
-    resolveSessionIdForRunId,
+    resolveSessionTargetForRunId,
     stop,
   };
 }

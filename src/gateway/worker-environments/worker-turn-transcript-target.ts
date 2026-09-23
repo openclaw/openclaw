@@ -6,10 +6,12 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 
+export type WorkerTurnTranscriptTarget = SessionTranscriptRuntimeTarget &
+  Pick<SessionTranscriptWriteScope, "expectedLifecycleRevision" | "expectedWriterRunId">;
+
 export function resolveWorkerTurnTranscriptTarget(
   turn: Pick<SessionPlacementTurnParams, "agentId" | "sessionId" | "sessionKey" | "sessionTarget">,
-): SessionTranscriptRuntimeTarget &
-  Pick<SessionTranscriptWriteScope, "expectedLifecycleRevision" | "expectedWriterRunId"> {
+): WorkerTurnTranscriptTarget {
   if (
     !turn.sessionTarget?.agentId ||
     !turn.sessionTarget.sessionId ||
