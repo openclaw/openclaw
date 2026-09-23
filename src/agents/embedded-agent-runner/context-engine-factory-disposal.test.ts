@@ -11,6 +11,7 @@ import {
   trackAsyncWork,
 } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { configureInMemoryTaskStoresForTests } from "../../tasks/task-registry.test-support.js";
 import {
   resetTaskFlowRegistryForTests,
   resetTaskRegistryForTests,
@@ -41,6 +42,7 @@ it.each([
     resetCommandQueueStateForTest();
     resetTaskRegistryForTests({ persist: false });
     resetTaskFlowRegistryForTests({ persist: false });
+    configureInMemoryTaskStoresForTests();
     const db = new DatabaseSync(path.join(stateDir, "factory.sqlite"));
     db.exec("CREATE TABLE answer(value INTEGER); INSERT INTO answer VALUES (42)");
     const context = new AsyncLocalStorage<string>();
