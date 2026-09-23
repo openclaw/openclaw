@@ -104,7 +104,6 @@ export async function runColdMutationWorkerPort(
 async function runColdMutationWorker(port: MessagePort, data: SessionColdWorkerData) {
   const { mutateSessionColdTranscriptInWorker, prepareSessionColdRestoreInWorker } =
     await import("./session-cold-storage-worker.js");
-  const { reclaimSqliteFreePages } = await import("./session-history-archive-pruning.js");
   // Restore materialization must finish before requesting any write admission.
   const coldRecords =
     data.plan.kind === "cold-restore"
@@ -132,9 +131,6 @@ async function runColdMutationWorker(port: MessagePort, data: SessionColdWorkerD
             },
           );
           waitForSqliteReclamationParentRelease(commitGate);
-          if (data.plan.kind !== "cold-restore") {
-            await reclaimSqliteFreePages(data.plan.databaseOptions, undefined, { maxPasses: 64 });
-          }
           return changed;
         } finally {
           validation = getOpenClawAgentDatabaseValidation(openedDatabase);

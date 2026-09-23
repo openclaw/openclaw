@@ -79,7 +79,10 @@ export function evaluateWorkflowExpression(
     releaseScope?: string;
     repository: string;
     runCheck?: boolean;
-    runnerBackend?: "" | "blacksmith" | "github" | "hybrid";
+    runnerBackend?: "" | "blacksmith" | "github" | "hybrid" | "runson";
+    requestedRunnerBackend?: "default" | "hybrid" | "runson";
+    ciShape?: "default" | "main";
+    includeAndroid?: boolean;
     runnerEnvironment?: "" | "github-hosted" | "self-hosted";
     runnerProfile?: "blacksmith" | "github" | "hybrid";
     runAttempt: number;
@@ -168,6 +171,9 @@ export function evaluateWorkflowExpression(
     },
     inputs: {
       dispatch_id: context.dispatchId ?? "",
+      runner_backend: context.requestedRunnerBackend ?? "default",
+      ci_shape: context.ciShape ?? "default",
+      include_android: context.includeAndroid ?? false,
       release_gate: context.releaseGate ?? false,
       release_scope: context.releaseScope ?? "full",
       target_context_ref: context.targetContextRef ?? "",
@@ -177,7 +183,11 @@ export function evaluateWorkflowExpression(
     env: context.env ?? {},
     matrix: context.matrix ?? {},
     runner: { environment: context.runnerEnvironment ?? "" },
-    steps: context.steps ?? {},
+    steps: {
+      runner_profile: { outputs: { node_runner_backend: "" } },
+      qualification_dispatch: { outputs: { eligible: "false" } },
+      ...context.steps,
+    },
     needs: {
       resolve_target: { outputs: context.resolveTargetOutputs ?? {} },
       preflight: {
@@ -210,26 +220,22 @@ export function runWorkflowShellScript(
   const { linuxWorkflow, tempDir, ...spawnOptions } = options;
   const root = mkdtempSync(path.join(tmpdir(), "openclaw-workflow-shell-"));
   const childTempDir = tempDir ?? root;
-  const modulePaths: string[] = [];
   try {
     let moduleIndex = 0;
-    const moduleRoot = options.cwd ?? process.cwd();
     const rewritten = script
       .replace(
         /node (?:(--import tsx |"\$\{manifest_node_args\[@\]\}" ))?--input-type=module <<'([A-Z][A-Z0-9_]*)'\n([\s\S]*?)\n\2(?=\n|$)/gu,
         (_match, nodeOptions: string | undefined, _marker: string, body: string) => {
-          const modulePath = path.join(
-            moduleRoot,
-            `.openclaw-${path.basename(root)}-${moduleIndex}.mjs`,
-          );
+          // Keep scratch outside the checkout's compiler namespace. File-backed stdin
+          // avoids Bash heredoc deadlocks and preserves the workflow's cwd-based imports.
+          const modulePath = path.join(root, `module-${moduleIndex}.mjs`);
           moduleIndex += 1;
-          modulePaths.push(modulePath);
           writeFileSync(modulePath, `${body}\n`, "utf8");
           const loader =
             nodeOptions === "--import tsx "
               ? `--import ${quoteShell(TSX_IMPORT)} `
               : (nodeOptions ?? "");
-          return `${quoteShell(testNodeExecPath)} ${loader}${quoteShell(modulePath)}`;
+          return `${quoteShell(testNodeExecPath)} ${loader}--input-type=module < ${quoteShell(modulePath)}`;
         },
       )
       .replaceAll(
@@ -255,9 +261,6 @@ export function runWorkflowShellScript(
       },
     });
   } finally {
-    for (const modulePath of modulePaths) {
-      rmSync(modulePath, { force: true });
-    }
     rmSync(root, { force: true, recursive: true });
   }
 }

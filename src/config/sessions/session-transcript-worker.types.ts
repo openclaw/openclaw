@@ -5,6 +5,10 @@ import type {
   readSessionEntryResetRecallCutoff,
 } from "../../../packages/memory-host-sdk/src/host/session-files.js";
 import type { PreparedSessionHistoryReadTarget } from "../../gateway/session-history-read.types.js";
+import type {
+  SessionRowTranscriptFields,
+  SessionRowTranscriptReadParams,
+} from "../../gateway/session-row-transcript-backfill.types.js";
 import type { SessionPreviewItem, SessionTitleFields } from "../../gateway/session-utils.types.js";
 import type {
   SessionCostUsageCacheRead,
@@ -13,7 +17,6 @@ import type {
 import type { SensitiveTextRedactionSnapshot } from "../../logging/redact.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import type { OpenClawRegisteredAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
-import type { OpenClawStateWorkerErrorPayload } from "../../state/openclaw-state-worker-error.js";
 import type { SessionLifecycleTimestamps } from "./lifecycle.types.js";
 import type { SessionTranscriptBoundedActiveContext } from "./session-accessor.sqlite-active-context.js";
 import type {
@@ -33,6 +36,10 @@ import type {
   SessionModelContextLimits,
 } from "./session-accessor.sqlite-model-context.js";
 import type { loadTranscriptReadSnapshotSync } from "./session-accessor.sqlite-read.js";
+import type {
+  SessionEntryReplacementSelection,
+  SessionEntryReplacementState,
+} from "./session-accessor.sqlite-replacement-read.js";
 import type { ResolvedTranscriptReadScope } from "./session-accessor.sqlite-scope.js";
 import type { SessionTranscriptWatermark } from "./session-accessor.sqlite-transcript-watermark-read.js";
 import type {
@@ -46,6 +53,7 @@ import type { CanonicalSessionReaderContinuation } from "./session-canonical-key
 import type {
   SessionHistoryWorkerRequest,
   SessionHistoryWorkerResult,
+  SessionHistoryDelta,
 } from "./session-history-types.js";
 import type { SessionMembershipFacts } from "./session-membership-facts.types.js";
 import type { SessionMember } from "./session-sharing-store.kernel.js";
@@ -56,11 +64,11 @@ import type {
   SessionStoreTargetReadRequest,
   SessionStoreTargetReadResult,
 } from "./session-store-target-inventory.js";
-import type { SessionTranscriptStorageUnavailableError } from "./session-transcript-projection-error.js";
 import type {
   SessionTranscriptSearchParams,
   SessionTranscriptSearchResult,
 } from "./session-transcript-search.types.js";
+import type { SessionTranscriptWorkerReadError } from "./session-transcript-worker-error.types.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 
 type SessionTranscriptSearchWorkerInput = {
@@ -175,6 +183,17 @@ type SessionTitleFieldsWorkerResult = {
   fields: SessionTitleFields;
 };
 
+type SessionRowBackfillWorkerInput = {
+  kind: "session-row-backfill";
+  database: { agentId: string; path: string };
+  params: SessionRowTranscriptReadParams;
+};
+
+type SessionRowBackfillWorkerResult = {
+  kind: "session-row-backfill";
+  fields: SessionRowTranscriptFields;
+};
+
 type SessionTranscriptHydrationWorkerInput = {
   kind: "transcript-hydration";
   database: { agentId: string; path: string };
@@ -242,9 +261,10 @@ export type SessionExactEntriesWorkerInput = {
   env: NodeJS.ProcessEnv;
   sessionKeys: readonly string[];
   lifecycleSessionKey?: string;
-  projection?: "full" | "backing" | "sharing";
+  projection?: "full" | "backing" | "sharing" | "replacement";
   includeMembers?: boolean;
   includeAuthorization?: boolean;
+  replacementSelection?: SessionEntryReplacementSelection;
   continuation?: CanonicalSessionReaderContinuation;
 };
 
@@ -259,6 +279,7 @@ export type SessionExactEntriesWorkerResult = {
     birthtime?: string;
   };
   members?: Record<string, SessionMember[]>;
+  replacement?: SessionEntryReplacementState & { databaseIdentity: string };
   sharing?: {
     source: { agentId: string; path: string };
     databaseIdentity: string;
@@ -320,6 +341,7 @@ export type SessionHistoryWorkerInput =
   | SessionTranscriptHistoryWorkerInput
   | SessionPreviewWorkerInput
   | SessionTitleFieldsWorkerInput
+  | SessionRowBackfillWorkerInput
   | SessionRowPresenceWorkerInput
   | SessionMembersWorkerInput
   | SessionMembershipFactsWorkerInput
@@ -355,6 +377,7 @@ export type SessionTranscriptWorkerValues = {
   "history-page": SessionHistoryWorkerResult;
   "session-preview": SessionPreviewWorkerResult;
   "session-title-fields": SessionTitleFieldsWorkerResult;
+  "session-row-backfill": SessionRowBackfillWorkerResult;
   "session-row-presence": boolean;
   "session-members": SessionMember[];
   "session-membership-facts": SessionMembershipFacts;
@@ -373,6 +396,10 @@ export type SessionTranscriptWorkerValues = {
   };
 };
 
+type SessionTranscriptWorkerError =
+  | SessionTranscriptWorkerReadError
+  | { kind: "delta-visibility"; partial: SessionHistoryDelta };
+
 export type SessionTranscriptWorkerReply<Kind extends keyof SessionTranscriptWorkerValues> =
   | {
       ok: true;
@@ -381,13 +408,7 @@ export type SessionTranscriptWorkerReply<Kind extends keyof SessionTranscriptWor
     }
   | {
       ok: false;
-      error:
-        | { kind: "read-error"; message: string; payload: OpenClawStateWorkerErrorPayload }
-        | { kind: "cold"; sessionId: string }
-        | { kind: "projection"; sessionId: string }
-        | { kind: "fence"; message: string }
-        | { kind: "syntax"; message: string }
-        | { kind: "storage"; reason?: SessionTranscriptStorageUnavailableError["reason"] };
+      error: SessionTranscriptWorkerError;
     };
 
 export type SessionHistoryWorkerDatabase = {
@@ -406,6 +427,9 @@ export type SessionHistoryWorkerDatabase = {
   readTitleFields: (
     input: Omit<SessionTitleFieldsWorkerInput, "kind" | "database">,
   ) => Promise<SessionTitleFieldsWorkerResult["fields"]>;
+  readRowBackfill: (
+    params: SessionRowBackfillWorkerInput["params"],
+  ) => Promise<SessionRowBackfillWorkerResult["fields"]>;
   readEntryPresence: (scope: SessionRowPresenceWorkerInput["scope"]) => Promise<boolean>;
   readIdentityEvidence: (
     input: Omit<SessionIdentityEvidenceWorkerInput, "kind" | "database">,

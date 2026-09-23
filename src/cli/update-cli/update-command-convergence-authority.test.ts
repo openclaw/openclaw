@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
+import { DoctorMaintenanceRefusalError } from "../../infra/update-doctor-result.js";
 import * as pluginRecords from "../../plugins/installed-plugin-index-records.js";
 import * as pluginLifecycle from "../../plugins/plugin-lifecycle-lease.js";
 import { VERSION } from "../../version.js";
@@ -359,10 +360,18 @@ describe("candidate convergence Doctor dispatch authority", () => {
     "validation-replacement",
     "entrypoint-first-refusal",
     "maintenance-first-refusal",
+    "maintenance-deferred",
+    "maintenance-at-risk",
   ] as const)("does not dispatch fresh Doctor with stale authority after %s", async (boundary) => {
     const originalOwner = {};
     let currentOwner: object | undefined = originalOwner;
     const stale = new Error("original updater is no longer current");
+    const maintenanceRefusal = new DoctorMaintenanceRefusalError(
+      "Doctor could not enter maintenance; run openclaw doctor --fix after the current owner stops.",
+      boundary === "maintenance-at-risk"
+        ? { kind: "data-at-risk", reason: "incomplete-migration" }
+        : { kind: "deferred", reason: "coordinator-contention" },
+    );
     let refusalArmed = false;
     let refusedOnce = false;
     const assertCurrent = () => {
@@ -432,6 +441,9 @@ describe("candidate convergence Doctor dispatch authority", () => {
       assertCurrent,
       beforeDoctor: async () => {
         await Promise.resolve();
+        if (boundary === "maintenance-deferred" || boundary === "maintenance-at-risk") {
+          throw maintenanceRefusal;
+        }
         if (boundary === "maintenance-first-refusal") {
           refusalArmed = true;
         }
@@ -440,7 +452,24 @@ describe("candidate convergence Doctor dispatch authority", () => {
         }
       },
     });
-    if (boundary === "live") {
+    if (boundary === "maintenance-deferred") {
+      const completed = await outcome;
+      expect(completed.resultWithPostUpdate).toMatchObject({
+        status: "ok",
+        postUpdate: { plugins: { status: "warning", changed: true } },
+        steps: [
+          expect.objectContaining({
+            exitCode: 0,
+            advisory: { kind: "package-post-install-doctor", message: maintenanceRefusal.message },
+          }),
+        ],
+      });
+      expect(dispatched).toEqual([]);
+      expect(mocks.readConfig).not.toHaveBeenCalled();
+    } else if (boundary === "maintenance-at-risk") {
+      await expect(outcome).rejects.toBe(maintenanceRefusal);
+      expect(dispatched).toEqual([]);
+    } else if (boundary === "live") {
       expect((await outcome).resultWithPostUpdate.status).toBe("ok");
       expect(dispatched).toEqual(["repair", "validate", "readiness"]);
     } else {

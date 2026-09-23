@@ -1,7 +1,7 @@
 // Session creation tests protect dashboard-origin session records, transcript
 // creation, parent linkage, and model/provider overrides exposed by the gateway API.
 import { execFile } from "node:child_process";
-import fsSync, { constants as fsConstants, readdirSync } from "node:fs";
+import fsSync, { readdirSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -82,10 +82,13 @@ import {
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import { createMentionInbox } from "./mention-inbox.js";
+import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import { sessionLog } from "./server-methods/sessions-shared.js";
 import { identifiedClient, soloClient } from "./server-methods/sessions-sharing.test-support.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import {
+  copyGitWorkspace,
+  createGitWorkspace,
   settleWorkspaceRuns,
   waitForCreatedSessionRun,
 } from "./server.sessions.create.projects.test-support.js";
@@ -813,7 +816,7 @@ test.each(["foreign admin", "unidentified admin", "synthetic owner"] as const)(
   "sessions.create rejects a fresh personal account from a %s before worktree naming",
   async (kind) => {
     await withOpenClawTestState({ layout: "state-only" }, async (state) => {
-      const workspace = await initializeGitWorkspace(state.root);
+      const workspace = await copyGitWorkspace(gitWorkspaceTemplate, state.root);
       testState.agentConfig = { workspace };
       const { storePath, authProfileId, client, context } =
         await createPersonalAccountSessionFixture();
@@ -1982,35 +1985,6 @@ function waitForFast<T>(
   return vi.waitFor(callback, { interval: 1, ...options });
 }
 
-async function createGitWorkspace(root: string): Promise<string> {
-  const workspace = path.join(root, "workspace");
-  await fs.mkdir(workspace, { recursive: true });
-  await execFileAsync("git", ["-C", workspace, "init", "-b", "main"]);
-  await fs.writeFile(path.join(workspace, "README.md"), "base\n");
-  await execFileAsync("git", ["-C", workspace, "add", "README.md"]);
-  await execFileAsync("git", [
-    "-c",
-    "user.name=OpenClaw Test",
-    "-c",
-    "user.email=openclaw-test@example.invalid",
-    "-C",
-    workspace,
-    "commit",
-    "-m",
-    "initial",
-  ]);
-  return await fs.realpath(workspace);
-}
-
-async function initializeGitWorkspace(root: string): Promise<string> {
-  const workspace = path.join(root, "workspace");
-  await fs.cp(gitWorkspaceTemplate, workspace, {
-    recursive: true,
-    mode: fsConstants.COPYFILE_FICLONE,
-  });
-  return await fs.realpath(workspace);
-}
-
 async function removeSessionWorktree(key: string | undefined) {
   const worktree = key ? managedWorktrees.findLiveByOwner("session", key) : undefined;
   if (worktree) {
@@ -2042,7 +2016,7 @@ function managedWorktreeFixture(params: {
 
 test("sessions.create atomically arms a private workspace diff claim", async () => {
   const root = tempDirs.make("openclaw-session-diff-baseline-");
-  const workspace = await initializeGitWorkspace(root);
+  const workspace = await copyGitWorkspace(gitWorkspaceTemplate, root);
   await fs.appendFile(path.join(workspace, "README.md"), "dirty at session start\n");
   const { storePath } = await createSessionStoreDir();
   sessionDiffBaselineMocks.useReal = true;
@@ -2084,7 +2058,7 @@ test("sessions.create atomically arms a private workspace diff claim", async () 
 
 test("sessions.create fences the first workspace write behind its diff baseline", async () => {
   const root = tempDirs.make("openclaw-session-diff-first-write-");
-  const workspace = await initializeGitWorkspace(root);
+  const workspace = await copyGitWorkspace(gitWorkspaceTemplate, root);
   await fs.appendFile(path.join(workspace, "README.md"), "dirty before session\n");
   const { storePath } = await createSessionStoreDir();
   const sessionKey = "agent:main:dashboard:diff-first-write";
@@ -2105,6 +2079,7 @@ test("sessions.create fences the first workspace write behind its diff baseline"
         throw new Error("expected the precreated session entry");
       }
       await ensureSessionDiffBaseline({
+        agentId: "main",
         cwd: workspace,
         entry,
         isNewSession: false,
@@ -2363,7 +2338,7 @@ test("sessions.create rolls back failed provisioning before a same-key creator p
     layout: "state-only",
     prefix: "openclaw-session-worktree-rollback-",
   });
-  const workspace = await initializeGitWorkspace(openClawState.root);
+  const workspace = await copyGitWorkspace(gitWorkspaceTemplate, openClawState.root);
   closeOpenClawStateDatabaseForTest();
   testState.agentConfig = { workspace };
   testState.sessionConfig = { sharing: { drafts: false } };
@@ -2473,7 +2448,7 @@ test("sessions.create rolls back failed provisioning before a same-key creator p
         allowSnapshotLoss: true,
       });
     }
-    closeOpenClawStateDatabaseForTest();
+    await disposeSessionReadContexts();
     testState.agentConfig = undefined;
     testState.sessionConfig = undefined;
     await openClawState.cleanup();
@@ -2492,7 +2467,7 @@ test.each([
       layout: "state-only",
       prefix: "openclaw-session-worktree-allocation-outcome-",
     });
-    const workspace = await initializeGitWorkspace(openClawState.root);
+    const workspace = await copyGitWorkspace(gitWorkspaceTemplate, openClawState.root);
     closeOpenClawStateDatabaseForTest();
     const disk = fsSync.statfsSync(openClawState.root);
     const diskSpace = vi.spyOn(fsSync, "statfsSync").mockReturnValue({
@@ -2605,7 +2580,7 @@ test.each([
         });
       }
       diskSpace.mockRestore();
-      closeOpenClawStateDatabaseForTest();
+      await disposeSessionReadContexts();
       testState.agentConfig = undefined;
       testState.sessionConfig = undefined;
       await openClawState.cleanup();
@@ -2618,7 +2593,7 @@ test("sessions.create provisions and reuses a session worktree for later runs", 
     layout: "state-only",
     prefix: "openclaw-session-worktree-",
   });
-  const workspace = await initializeGitWorkspace(openClawState.root);
+  const workspace = await copyGitWorkspace(gitWorkspaceTemplate, openClawState.root);
   await execFileAsync("git", ["-C", workspace, "branch", "selected-base"]);
   closeOpenClawStateDatabaseForTest();
   testState.agentConfig = { workspace };
@@ -2733,7 +2708,7 @@ test("sessions.create runs an existing managed worktree cwd for initial and foll
     layout: "state-only",
     prefix: "openclaw-session-existing-worktree-cwd-",
   });
-  const workspace = await initializeGitWorkspace(openClawState.root);
+  const workspace = await copyGitWorkspace(gitWorkspaceTemplate, openClawState.root);
   closeOpenClawStateDatabaseForTest();
   testState.agentsConfig = {
     list: [
@@ -2873,7 +2848,7 @@ test("sessions.create runs an existing managed worktree cwd for initial and foll
       reason: "test-cleanup",
       allowSnapshotLoss: true,
     });
-    closeOpenClawStateDatabaseForTest();
+    await disposeSessionReadContexts();
     testState.agentsConfig = undefined;
     await openClawState.cleanup();
   }
@@ -2884,7 +2859,7 @@ test("sessions.create preserves pending worktree intent when initial-turn admiss
     layout: "state-only",
     prefix: "openclaw-session-worktree-post-commit-failure-",
   });
-  const workspace = await initializeGitWorkspace(openClawState.root);
+  const workspace = await copyGitWorkspace(gitWorkspaceTemplate, openClawState.root);
   closeOpenClawStateDatabaseForTest();
   testState.agentConfig = { workspace };
   const { storePath } = await createSessionStoreDir();
@@ -2925,7 +2900,7 @@ test("sessions.create preserves pending worktree intent when initial-turn admiss
     });
     expect(findLiveRegistryWorktreeByOwner(process.env, "session", key)).toBeUndefined();
   } finally {
-    closeOpenClawStateDatabaseForTest();
+    await disposeSessionReadContexts();
     testState.agentConfig = undefined;
     await openClawState.cleanup();
   }
@@ -3003,7 +2978,7 @@ test.each([
   "sessions.create shares a title routed through the $name selection with its worktree and first chat send",
   async ({ request, catalogTarget, parentEntry, expectedEntry, expectedTitleSelection }) =>
     await withOpenClawTestState({ layout: "state-only" }, async (state) => {
-      const workspace = await initializeGitWorkspace(state.root);
+      const workspace = await copyGitWorkspace(gitWorkspaceTemplate, state.root);
       testState.agentConfig = {
         workspace,
         model: { primary: "openai/gpt-5.6-luna" },
@@ -3110,7 +3085,7 @@ test.each([
 
 test("sessions.create names an adopted worktree with its committed account before selecting a new personal account", async () => {
   await withOpenClawTestState({ layout: "state-only" }, async (state) => {
-    const workspace = await initializeGitWorkspace(state.root);
+    const workspace = await copyGitWorkspace(gitWorkspaceTemplate, state.root);
     testState.agentConfig = { workspace, model: { primary: "openai/gpt-5.6-sol" } };
     const {
       storePath,
@@ -3183,7 +3158,7 @@ test("sessions.create does not start title generation for a model denied by poli
     layout: "state-only",
     prefix: "openclaw-session-worktree-title-denied-model-",
   });
-  const workspace = await initializeGitWorkspace(openClawState.root);
+  const workspace = await copyGitWorkspace(gitWorkspaceTemplate, openClawState.root);
   closeOpenClawStateDatabaseForTest();
   testState.agentConfig = {
     workspace,
@@ -3216,7 +3191,7 @@ test("sessions.create does not start title generation for a model denied by poli
     expect(findLiveRegistryWorktreeByOwner(process.env, "session", key)).toBeUndefined();
     expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toBeUndefined();
   } finally {
-    closeOpenClawStateDatabaseForTest();
+    await disposeSessionReadContexts();
     testState.agentConfig = undefined;
     await openClawState.cleanup();
   }
@@ -3227,7 +3202,7 @@ test("sessions.create keeps the crustacean fallback when no title source exists"
     layout: "state-only",
     prefix: "openclaw-session-worktree-empty-title-",
   });
-  const workspace = await initializeGitWorkspace(openClawState.root);
+  const workspace = await copyGitWorkspace(gitWorkspaceTemplate, openClawState.root);
   closeOpenClawStateDatabaseForTest();
   testState.agentConfig = { workspace };
   await createSessionStoreDir();
@@ -3253,7 +3228,7 @@ test("sessions.create keeps the crustacean fallback when no title source exists"
         allowSnapshotLoss: true,
       });
     }
-    closeOpenClawStateDatabaseForTest();
+    await disposeSessionReadContexts();
     testState.agentConfig = undefined;
     await openClawState.cleanup();
   }
@@ -3266,7 +3241,7 @@ test.each(["packages/app", "..notes"])(
       layout: "state-only",
       prefix: "openclaw-session-worktree-options-",
     });
-    const repoRoot = await initializeGitWorkspace(openClawState.root);
+    const repoRoot = await copyGitWorkspace(gitWorkspaceTemplate, openClawState.root);
     const workspace = path.join(repoRoot, workspaceRelativePath);
     const worktreePath = path.join(openClawState.root, "managed-worktree");
     const key = "agent:main:dashboard:worktree-options";
@@ -3340,7 +3315,7 @@ test.each(["packages/app", "..notes"])(
       expect(rejected.ok).toBe(false);
     } finally {
       createSpy.mockRestore();
-      closeOpenClawStateDatabaseForTest();
+      await disposeSessionReadContexts();
       testState.agentConfig = undefined;
       await openClawState.cleanup();
     }
@@ -3357,8 +3332,8 @@ test("sessions.create maps an admin-selected worktree cwd and rejects repository
     await fs.realpath(os.tmpdir()),
   );
   const [configuredWorkspace, selectedWorkspace] = await Promise.all([
-    initializeGitWorkspace(openClawState.root),
-    initializeGitWorkspace(selectedRoot),
+    copyGitWorkspace(gitWorkspaceTemplate, openClawState.root),
+    copyGitWorkspace(gitWorkspaceTemplate, selectedRoot),
   ]);
   const worktreePath = path.join(openClawState.root, "selected-worktree");
   const key = "agent:main:dashboard:selected-workspace";
@@ -3409,7 +3384,7 @@ test("sessions.create maps an admin-selected worktree cwd and rejects repository
   } finally {
     createSpy.mockRestore();
     findSpy.mockRestore();
-    closeOpenClawStateDatabaseForTest();
+    await disposeSessionReadContexts();
     testState.agentConfig = undefined;
     await openClawState.cleanup();
   }
@@ -3965,7 +3940,7 @@ test("sessions.create skips the worktree setup script for non-admin callers", as
     prefix: "openclaw-worktree-setup-scope-",
   });
   const root = openClawState.root;
-  const workspace = await initializeGitWorkspace(root);
+  const workspace = await copyGitWorkspace(gitWorkspaceTemplate, root);
   await fs.mkdir(path.join(workspace, ".openclaw"), { recursive: true });
   const setupScript = path.join(workspace, ".openclaw", "worktree-setup.sh");
   await fs.writeFile(setupScript, "#!/bin/sh\ntouch setup-marker.txt\n");
@@ -3996,7 +3971,7 @@ test("sessions.create skips the worktree setup script for non-admin callers", as
         allowSnapshotLoss: true,
       });
     }
-    closeOpenClawStateDatabaseForTest();
+    await disposeSessionReadContexts();
     testState.agentConfig = undefined;
     await openClawState.cleanup();
   }
@@ -4015,7 +3990,7 @@ test.each([
       prefix: "openclaw-reset-retained-worktree-",
     });
     const root = openClawState.root;
-    const workspace = await initializeGitWorkspace(root);
+    const workspace = await copyGitWorkspace(gitWorkspaceTemplate, root);
     const origin = path.join(root, "origin.git");
     await execFileAsync("git", ["init", "--bare", origin]);
     await execFileAsync("git", ["-C", workspace, "remote", "add", "origin", origin]);
@@ -4106,7 +4081,7 @@ test.each([
           allowSnapshotLoss: true,
         });
       }
-      closeOpenClawStateDatabaseForTest();
+      await disposeSessionReadContexts();
       testState.agentConfig = undefined;
       testState.sessionConfig = undefined;
       await openClawState.cleanup();
@@ -4120,7 +4095,7 @@ test("sessions.create reset-in-place detaches the prior worktree permission boun
     prefix: "openclaw-reset-session-worktree-",
   });
   const root = openClawState.root;
-  const workspace = await initializeGitWorkspace(root);
+  const workspace = await copyGitWorkspace(gitWorkspaceTemplate, root);
   // A remote makes the base commit reachable from `--remotes`, so leaving the worktree via a
   // plain New Chat is lossless and the reset can remove it (the real leave-worktree flow).
   const origin = path.join(root, "origin.git");
@@ -4254,7 +4229,7 @@ test("sessions.create reset-in-place detaches the prior worktree permission boun
         allowSnapshotLoss: true,
       });
     }
-    closeOpenClawStateDatabaseForTest();
+    await disposeSessionReadContexts();
     testState.agentConfig = undefined;
     testState.sessionConfig = undefined;
     await openClawState.cleanup();
@@ -4907,7 +4882,7 @@ test("sessions.create removes a provisioned worktree when authority closes befor
     layout: "state-only",
     prefix: "openclaw-session-authority-worktree-",
   });
-  const workspace = await initializeGitWorkspace(openClawState.root);
+  const workspace = await copyGitWorkspace(gitWorkspaceTemplate, openClawState.root);
   closeOpenClawStateDatabaseForTest();
   testState.agentConfig = { workspace };
   const { storePath } = await createSessionStoreDir();
@@ -4969,7 +4944,7 @@ test("sessions.create removes a provisioned worktree when authority closes befor
     ).toEqual([]);
   } finally {
     createSpy.mockRestore();
-    closeOpenClawStateDatabaseForTest();
+    await disposeSessionReadContexts();
     testState.agentConfig = undefined;
     await openClawState.cleanup();
   }

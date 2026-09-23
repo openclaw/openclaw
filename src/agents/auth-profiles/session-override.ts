@@ -8,7 +8,7 @@ import { shouldPreserveUnavailableSessionAuthProfileOverride } from "../../sessi
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { resolveUserProfileAuthLink } from "../../state/user-model-accounts.js";
-import { resolveAgentEffectiveModelPrimary } from "../agent-scope.js";
+import { resolveNativeModelPrimary } from "../agent-scope.js";
 import {
   isConfiguredAwsSdkAuthProfileForProvider,
   isStoredCredentialCompatibleWithAuthProvider,
@@ -627,7 +627,7 @@ export async function resolveSessionAuthSelection(params: {
   const rotatedPinnedProfileId =
     rotatedSource === "user" || rotatedSource === "user-link" ? rotatedProfileId : undefined;
   const configuredProfile = splitTrailingAuthProfile(
-    resolveAgentEffectiveModelPrimary(params.cfg, params.agentId) ?? "",
+    resolveNativeModelPrimary(params.cfg, params.agentId) ?? "",
   ).profile;
   const defaultModel = configuredProfile
     ? resolveDefaultModelForAgent({ cfg: params.cfg, agentId: params.agentId })

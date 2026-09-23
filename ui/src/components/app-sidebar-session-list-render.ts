@@ -248,6 +248,11 @@ export function renderSessionSection(params: {
               disabledReason: groupWriteAccess.allowed ? undefined : groupWriteAccess.reason,
               onStartDrag: (sectionId) => host.startSidebarSectionDrag(sectionId),
               onFinishDrag: () => host.finishSidebarSectionDrag(),
+              reorder: {
+                label,
+                onMove: (target, position) =>
+                  host.sessionOrganizer.reorderSidebarSection(section.id, target, position),
+              },
               onContextMenu: group
                 ? (event: MouseEvent) => {
                     event.preventDefault();
@@ -513,6 +518,8 @@ function renderSessionCatalog(params: {
       onSectionDrop: (event, sectionId) => host.sectionDrop(event, sectionId),
       onStartSectionDrag: (sectionId) => host.startSidebarSectionDrag(sectionId),
       onFinishSectionDrag: () => host.finishSidebarSectionDrag(),
+      onReorderSection: (source, target, position) =>
+        host.sessionOrganizer.reorderSidebarSection(source, target, position),
       viewMenuOpenCatalogId: host.sidebarMenus.catalogViewMenuPosition?.catalogId ?? null,
       ownerFilterActive: host.sessionOwnerFilterActive,
       onOpenViewMenu: (catalogId, trigger, position) => {

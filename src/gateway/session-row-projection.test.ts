@@ -73,6 +73,9 @@ it("prepares dirty persistent row facts without Gateway-thread data reads", asyn
                 "session_members",
                 "board_tabs",
                 "transcript_rewrite_watermarks",
+                "acp_sessions",
+                "config_machine_state",
+                "sqlite_master",
               ].filter((table) => sql.includes(table)),
             ),
           ).toEqual([]);

@@ -228,6 +228,7 @@ it("fences swarm effects after owner or policy loss during a shared runtime impo
     expect(emit).toHaveBeenCalledExactlyOnceWith({
       sessionKey: "agent:main:main",
       reason: "swarm-note",
+      scope: "runtime",
       swarmGroupId: "swarm:agent:main:main:run-swarm",
       kind: "log",
       text: "Still live",

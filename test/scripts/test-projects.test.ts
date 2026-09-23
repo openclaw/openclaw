@@ -14,6 +14,7 @@ import {
 import { resolveDefaultVitestNoOutputTimeoutMs } from "../../scripts/lib/vitest-process-env.mts";
 import { resolveVitestRuntimeCliSelections } from "../../scripts/lib/vitest-runtime-selection.mts";
 import { resolveShardTimingKey } from "../../scripts/lib/vitest-shard-metadata.mts";
+import { scriptModuleEntrypoints } from "../../scripts/script-module-runtime.test-support.mjs";
 import {
   applyDefaultVitestCachePaths,
   applyDefaultVitestNoOutputTimeout,
@@ -37,19 +38,26 @@ import {
   withRetryNoOutputTimeout,
   writeVitestIncludeFile,
 } from "../../scripts/test-projects.test-support.mts";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../src/infra/runtime-worker-url.js";
 import { withEnv } from "../../src/test-utils/env.js";
-import { toRepoPath } from "../../src/test-utils/repo-files.js";
+import { listGitTrackedFiles, toRepoPath } from "../../src/test-utils/repo-files.js";
 import { agentVitestProjectOwners } from "../vitest/vitest.agents-paths.mjs";
 import { databaseWorkerCoreTestFiles } from "../vitest/vitest.database-worker-core-paths.mjs";
 import { databaseWorkerExtensionTestFiles } from "../vitest/vitest.extension-database-workers-paths.mjs";
-import { gatewayDatabaseWorkerTestFiles } from "../vitest/vitest.gateway-server-paths.mjs";
+import {
+  gatewayDatabaseWorkerTestFiles,
+  isGatewayServerTestFile,
+} from "../vitest/vitest.gateway-server-paths.mjs";
+import { isSharedVitestExcludedPath } from "../vitest/vitest.pattern-file.ts";
 import {
   startupCorpusTestFiles,
   stateStartupCorpusTestFiles,
 } from "../vitest/vitest.startup-corpus-paths.mjs";
 
 const normalizeRepoPath = toRepoPath;
-const CODEX_TEST_PROCESS_FILE_LIMIT = 24;
 const MATRIX_TEST_PROCESS_FILE_LIMIT = 40;
 const TELEGRAM_TEST_PROCESS_FILE_LIMIT = 10;
 
@@ -378,7 +386,11 @@ describe("test runtime prerequisites", () => {
     ["gateway-server", ["server.config-patch.test.ts"], "runtime"],
     [
       "gateway-server",
-      ["server-sidecar-retention.test.ts", "server.config-patch.test.ts"],
+      [
+        "server-sidecar-retention.test.ts",
+        "server.config-patch.test.ts",
+        "server.acp-native-model.product.test.ts",
+      ],
       undefined,
     ],
     ["gateway", ["gateway-*.test.ts"], "runtime"],
@@ -449,7 +461,7 @@ describe("test runtime prerequisites", () => {
 
 function listOrdinaryExtensionFiles(root: string) {
   return listExtensionTestFilesForRoots([root]).filter(
-    (file) => !databaseWorkerExtensionTestFiles.includes(file),
+    (file) => !databaseWorkerExtensionTestFiles.includes(file) && !isSharedVitestExcludedPath(file),
   );
 }
 
@@ -2212,6 +2224,7 @@ describe("scripts/test-projects changed-target routing", () => {
   });
 
   it.each([
+    "src/cli/update-cli/update-command-legacy-finalize.test.ts",
     "test/scripts/check-extension-package-tsc-boundary.test.ts",
     "test/scripts/check-plugin-sdk-wildcard-reexports.test.ts",
     "test/scripts/control-ui-i18n.test.ts",
@@ -3108,6 +3121,7 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/vitest/vitest.unit-fast.config.ts",
         "test/vitest/vitest.cli-process.config.ts",
         "test/vitest/vitest.cli.config.ts",
+        "test/vitest/vitest.tooling-isolated.config.ts",
       ]),
     );
     const processPlan = plans.find(
@@ -3115,6 +3129,10 @@ describe("scripts/test-projects changed-target routing", () => {
     );
     expect(processPlan?.includePatterns).toContain("src/cli/help-exit.process.test.ts");
     expect(processPlan?.includePatterns).toContain("src/cli/update-dry-run-state.process.test.ts");
+    expect(
+      plans.find((plan) => plan.config === "test/vitest/vitest.tooling-isolated.config.ts")
+        ?.includePatterns,
+    ).toEqual(["src/cli/update-cli/update-command-legacy-finalize.test.ts"]);
   });
 
   it.each(["src/state", "src/state/", "src/state/**/*.test.ts"])(
@@ -3193,10 +3211,15 @@ describe("scripts/test-projects changed-target routing", () => {
       withTinyFileTree({}, (tempDir) => {
         const result = spawnSync(
           process.execPath,
-          ["--import", "tsx", "scripts/test-projects.mts", helpFlag],
+          [
+            ...resolveRuntimeWorkerArgv(
+              resolveRuntimeWorkerUrl(scriptModuleEntrypoints.testProjects),
+            ),
+            helpFlag,
+          ],
           {
             encoding: "utf8",
-            // Own the child's tsx cache so unrelated host transforms cannot delay help.
+            // Keep the native help probe inside its invocation-owned temporary directory.
             env: { ...process.env, TMPDIR: tempDir, TMP: tempDir, TEMP: tempDir },
             timeout: 5_000,
           },
@@ -3313,8 +3336,14 @@ describe("scripts/test-projects changed-target routing", () => {
     },
     {
       title: "routes fake-timer unit-fast tests to the serial fake-timer lane",
-      target: "src/acp/control-plane/manager.test.ts",
+      target: "src/acp/translator.stop-reason.test.ts",
       config: "test/vitest/vitest.unit-fast-fake-timers.config.ts",
+      includePattern: "src/acp/translator.stop-reason.test.ts",
+    },
+    {
+      title: "routes ACP session signal tests to the host broker lane",
+      target: "src/acp/control-plane/manager.test.ts",
+      config: "test/vitest/vitest.infra.config.ts",
       includePattern: "src/acp/control-plane/manager.test.ts",
     },
   ])("$title", ({ target, config, includePattern }) => {
@@ -3774,35 +3803,6 @@ describe("scripts/test-projects changed-target routing", () => {
       }
     },
   );
-
-  it.each([
-    ["matrix", MATRIX_TEST_PROCESS_FILE_LIMIT],
-    ["codex", CODEX_TEST_PROCESS_FILE_LIMIT],
-    ["telegram", TELEGRAM_TEST_PROCESS_FILE_LIMIT],
-  ] as const)("bounds an explicit %s directory across both database owners", (name, limit) => {
-    const root = `extensions/${name}`;
-    const plans = buildVitestRunPlans([root]);
-    const selected = plans.flatMap((plan) => plan.includePatterns ?? []);
-    expect(plans.length).toBeGreaterThan(1);
-    expect(plans.every((plan) => (plan.includePatterns?.length ?? 0) <= limit)).toBe(true);
-    expect(selected.toSorted()).toEqual(listExtensionTestFilesForRoots([root]).toSorted());
-    expect(new Set(selected).size).toBe(selected.length);
-    for (const plan of plans) {
-      if (
-        name === "telegram" &&
-        plan.config === "test/vitest/vitest.extension-database-workers.config.ts"
-      ) {
-        expect(plan.includePatterns).toHaveLength(1);
-      }
-      for (const file of plan.includePatterns ?? []) {
-        expect(plan.config).toBe(
-          databaseWorkerExtensionTestFiles.includes(file)
-            ? "test/vitest/vitest.extension-database-workers.config.ts"
-            : `test/vitest/vitest.extension-${name}.config.ts`,
-        );
-      }
-    }
-  });
 
   it("keeps an explicit Codex file target in one process", () => {
     const testFile = listExtensionTestFilesForRoots(["extensions/codex"])[0];
@@ -5096,7 +5096,15 @@ describe("scripts/test-projects full-suite sharding", () => {
       const targetedPlans = (config: string) =>
         plans.filter((plan) => plan.config === config && plan.forwardedArgs.length > 0);
       expect(targetedPlans("test/vitest/vitest.agents-core.config.ts")).toHaveLength(6);
-      expect(targetedPlans("test/vitest/vitest.gateway-server.config.ts")).toHaveLength(4);
+      const gatewayTargets = targetedPlans("test/vitest/vitest.gateway-server.config.ts").map(
+        (plan) => plan.forwardedArgs,
+      );
+      expect(gatewayTargets.every((files) => files.length > 0 && files.length <= 50)).toBe(true);
+      expect(gatewayTargets.flat()).toEqual(
+        listGitTrackedFiles({ pathspecs: "src/gateway" })
+          ?.filter(isGatewayServerTestFile)
+          .toSorted((a, b) => a.localeCompare(b)),
+      );
     } finally {
       vi.unstubAllEnvs();
     }

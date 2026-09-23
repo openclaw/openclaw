@@ -84,7 +84,7 @@ export function renderWhatsAppCard(params: {
       ${
         props.whatsappMessage
           ? html`
-              <div class="settings-row">
+              <div class="settings-row" role="status">
                 <div class="settings-row__text">
                   <span class="settings-row__desc">${props.whatsappMessage}</span>
                 </div>

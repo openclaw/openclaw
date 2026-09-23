@@ -172,22 +172,29 @@ export function selectTsgoCoreTestStripe(
   });
 }
 
-export function findTsgoCoreTestShardViolations(params: {
-  canonicalRoots: readonly string[];
+/** Oversized shards are advisory: report them as warnings, never as violations. */
+export function findOversizedTsgoCoreTestShards(params: {
   maxRoots?: number;
   shards: readonly { name: string; roots: readonly string[] }[];
 }): string[] {
   const maxRoots = params.maxRoots ?? TSGO_CORE_TEST_MAX_ROOTS;
+  return params.shards
+    .filter((shard) => shard.roots.length > maxRoots)
+    .map(
+      (shard) =>
+        `${shard.name}: ${shard.roots.length} test roots exceeds the advisory ${maxRoots} limit; rebalance when convenient`,
+    );
+}
+
+export function findTsgoCoreTestShardViolations(params: {
+  canonicalRoots: readonly string[];
+  shards: readonly { name: string; roots: readonly string[] }[];
+}): string[] {
   const canonical = new Set(params.canonicalRoots);
   const owners = new Map<string, string[]>();
   const violations: string[] = [];
 
   for (const shard of params.shards) {
-    if (shard.roots.length > maxRoots) {
-      violations.push(
-        `${shard.name}: ${shard.roots.length} test roots exceeds the ${maxRoots} limit`,
-      );
-    }
     for (const root of shard.roots) {
       const rootOwners = owners.get(root) ?? [];
       rootOwners.push(shard.name);

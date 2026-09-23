@@ -10,6 +10,7 @@ import {
 import { SqliteCoordinatorError } from "./sqlite-coordinator.js";
 import { retainSqliteWriteAdmissionService } from "./sqlite-transaction.js";
 import {
+  borrowSqliteWorkerLifecycle,
   prepareSqliteWorkerLifecycle,
   releaseSqliteWorkerLifecycle,
 } from "./sqlite-worker-broker-admission.js";
@@ -67,6 +68,12 @@ export function dispatchSqliteWorkerJob(
     onRejected(failure, retire);
   };
   job.rejectPreparation = (error) => reject(error, true);
+  const actor = [...slot.actors].find((candidate) => candidate.id === job.request.actor);
+  // Host grants must remain serviceable while a native caller waits on lifecycle custody.
+  job.requireStateLifecycle ||=
+    (job.request.stateContext ?? actor?.stateContext) !== undefined &&
+    (job.request.type === "close" ||
+      (job.request.type === "execute" && job.createAdmission !== undefined));
   if (job.requireStateLifecycle) {
     job.cancelPreparation = new AbortController();
   }
@@ -81,7 +88,6 @@ export function dispatchSqliteWorkerJob(
   };
   try {
     assertDispatchable();
-    const actor = [...slot.actors].find((candidate) => candidate.id === job.request.actor);
     const dispatch = () => {
       try {
         assertDispatchable();
@@ -123,6 +129,7 @@ function postSqliteWorkerJob(
     const preparation = createSqliteWorkerLifecyclePreparation({
       assertCurrent: assertDispatchable,
       signal: job.cancelPreparation.signal,
+      borrow: () => borrowSqliteWorkerLifecycle(job, actor),
       admit: () => prepareSqliteWorkerOperationAdmission(job, actor),
       dispatch: dispatched,
       receiveResult(reply, pumping) {

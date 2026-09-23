@@ -271,6 +271,68 @@ describe("native host origin and topology boundary", () => {
     expect(result.response).toEqual({ v: 1, ok: false, code: "origin_forbidden" });
   });
 
+  it.skipIf(process.platform === "win32")(
+    "accepts owned private hardlinked artifacts",
+    async () => {
+      const fixture = await nativeFixture();
+      for (const file of [fixture.manifestPath, fixture.launcherPath]) {
+        await fs.link(file, `${file}.link`);
+      }
+      const result = await invokeHost(fixture);
+      expect(result.response).toEqual({ v: 1, ok: true, nonce: NONCE, pairingString: PAIRING });
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "rejects an unsafe manifest substituted before its bytes are opened",
+    async () => {
+      const fixture = await nativeFixture();
+      const replacement = `${fixture.manifestPath}.replacement`;
+      await fs.writeFile(replacement, await fs.readFile(fixture.manifestPath), { mode: 0o644 });
+      await fs.chmod(replacement, 0o644);
+      let substituted = false;
+      const substitute = async (file: unknown) => {
+        if (file === fixture.manifestPath && !substituted) {
+          substituted = true;
+          await fs.rename(replacement, fixture.manifestPath);
+        }
+      };
+      const readFile = fs.readFile.bind(fs);
+      const open = fs.open.bind(fs);
+      const readSpy = vi.spyOn(fs, "readFile").mockImplementation(async (...args) => {
+        await substitute(args[0]);
+        return readFile(...args);
+      });
+      const openSpy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        await substitute(args[0]);
+        return open(...args);
+      });
+      const buildPairing = vi.fn(async () => ({ pairingString: PAIRING, topology: "local" }));
+      try {
+        const result = await invokeHost({ ...fixture, buildPairing });
+        expect(substituted).toBe(true);
+        expect(result.response).toEqual({ v: 1, ok: false, code: "manifest_invalid" });
+        expect(buildPairing).not.toHaveBeenCalled();
+      } finally {
+        openSpy.mockRestore();
+        readSpy.mockRestore();
+      }
+    },
+  );
+
+  it.skipIf(process.platform === "win32").each([
+    ["manifestPath", 0o601],
+    ["launcherPath", 0o701],
+    ["launcherPath", 0o600],
+  ] as const)("rejects %s with mode %o before pairing", async (file, mode) => {
+    const fixture = await nativeFixture();
+    await fs.chmod(fixture[file], mode);
+    const buildPairing = vi.fn(async () => ({ pairingString: PAIRING, topology: "local" }));
+    const result = await invokeHost({ ...fixture, buildPairing });
+    expect(result.response).toEqual({ v: 1, ok: false, code: "manifest_invalid" });
+    expect(buildPairing).not.toHaveBeenCalled();
+  });
+
   it("rejects a manifest with an extra valid origin before building pairing", async () => {
     const fixture = await nativeFixture();
     await fs.writeFile(

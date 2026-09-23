@@ -26,6 +26,11 @@ describe("post-install doctor result IPC", () => {
   it.each([
     { status: "ok" as const, configHash: "unchanged" },
     { status: "ok" as const, warnings: ["plugin/example: version probe timed out"] },
+    {
+      status: "ok" as const,
+      warnings: ["Doctor maintenance is deferred; run openclaw doctor --fix."],
+      maintenanceRefusal: { kind: "deferred" as const, reason: "coordinator-contention" as const },
+    },
     { status: "error" as const, configHash: "a".repeat(64), configInputHash: "b".repeat(64) },
     {
       status: "error" as const,
