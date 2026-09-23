@@ -92,6 +92,9 @@ export function createSessionRowProjectionContext() {
     /** True means the publication changes only these derived facts. */
     invalidate(change: SessionRowChange): boolean {
       if (!("all" in change)) {
+        if (change.scope === "runtime" && !change.facts && !change.factsInvalidated) {
+          return true;
+        }
         modelFactsDirty = true;
         return false;
       }
@@ -124,6 +127,7 @@ export function createSessionRowProjectionContext() {
       cfg: records.Inputs["cfg"],
       matching: (query: { key: string }) => records.Row[],
       put: (row: records.Row) => void,
+      referenced: (reference: string) => records.Row | undefined,
     ) {
       const previous = current.subagentRunsByChildSessionKey;
       prepare(epoch);
@@ -138,7 +142,13 @@ export function createSessionRowProjectionContext() {
           if (!row.storedEntry) {
             continue;
           }
-          const parents = records.readSessionRowParents(row, row.storedEntry, cfg, current);
+          const parents = records.readSessionRowParents(
+            row,
+            row.storedEntry,
+            cfg,
+            current,
+            referenced,
+          );
           if (!records.sameParents(row.parents, parents)) {
             put({ ...row, parents });
           }

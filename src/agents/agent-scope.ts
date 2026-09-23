@@ -31,6 +31,7 @@ import {
   listAgentIds,
   resolveMutableAgentEntry,
   resolveAgentConfig,
+  resolveAgentModelConfigForRuntime,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
   tryResolveLegacyDataOwnerAgentId,
@@ -47,6 +48,8 @@ export {
   toAgentEntriesRecord,
   resolveAgentConfig,
   resolveAgentContextLimits,
+  resolveAgentNativeModelPrimary,
+  resolveNativeModelPrimary,
   resolveAgentDir,
   resolveDefaultAgentDir,
   resolveAgentRunCwd,
@@ -492,7 +495,9 @@ export function resolveAgentModelFallbacksOverride(
   cfg: OpenClawConfig,
   agentId: string,
 ): string[] | undefined {
-  return resolveSelectedModelFallbacksOverride(resolveAgentConfig(cfg, agentId)?.model);
+  return resolveSelectedModelFallbacksOverride(
+    resolveAgentModelConfigForRuntime(resolveAgentConfig(cfg, agentId)),
+  );
 }
 
 function resolveSelectedModelFallbacksOverride(
@@ -533,11 +538,12 @@ export type SubagentModelConfigSelectionResult = {
 export function resolveSubagentModelConfigSelectionResult(params: {
   cfg: OpenClawConfig;
   agentId?: string;
-  agentConfigOverride?: Pick<AgentConfig, "model" | "subagents">;
+  agentConfigOverride?: Pick<AgentConfig, "model" | "subagents" | "runtime">;
 }): SubagentModelConfigSelectionResult | undefined {
   const agentConfig =
     params.agentConfigOverride ??
     (params.agentId ? resolveAgentConfig(params.cfg, params.agentId) : undefined);
+  const agentModel = resolveAgentModelConfigForRuntime(agentConfig);
   // Keep cron and fallback routing aligned with native spawn: per-agent subagent,
   // then the global subagent default, then agent-primary inheritance.
   const candidates: SubagentModelConfigSelectionResult[] = [
@@ -552,7 +558,7 @@ export function resolveSubagentModelConfigSelectionResult(params: {
           },
         ]
       : []),
-    ...(agentConfig?.model ? [{ raw: agentConfig.model, source: "agent" as const }] : []),
+    ...(agentModel ? [{ raw: agentModel, source: "agent" as const }] : []),
   ];
   return candidates.find((candidate) => resolvePrimaryStringValue(candidate.raw));
 }
@@ -568,7 +574,7 @@ export function resolveSubagentModelFallbacksOverride(
   }
   const selection = resolveSubagentModelConfigSelectionResult({ cfg, agentId });
   if (selection?.source === "agent") {
-    return resolveSelectedModelFallbacksOverride(agentConfig?.model);
+    return resolveSelectedModelFallbacksOverride(selection.raw);
   }
   if (selection?.source === "default-subagent") {
     return resolveSelectedModelFallbacksOverride(cfg.agents?.defaults?.subagents?.model);
@@ -584,7 +590,7 @@ export function resolveSubagentSpawnModelFallbacksOverride(
   return resolveFirstModelFallbacksOverride([
     agentConfig?.subagents?.model,
     cfg.agents?.defaults?.subagents?.model,
-    agentConfig?.model,
+    resolveAgentModelConfigForRuntime(agentConfig),
   ]);
 }
 

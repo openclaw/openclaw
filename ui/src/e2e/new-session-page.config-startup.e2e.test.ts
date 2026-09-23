@@ -101,7 +101,7 @@ suite.define(() => {
       await composer.getByRole("button", { name: "Add attachment" }).click();
       await menu.getByRole("menuitem", { name: /^Connectors/ }).click();
       await expect
-        .poll(() => menu.getByRole("menuitem", { name: /^github/ }).isEnabled())
+        .poll(() => menu.getByRole("menuitemcheckbox", { name: /^github/ }).isEnabled())
         .toBe(true);
       expect(await message.inputValue()).toBe("Keep this draft after the config error");
       const recoveredReads = (await gateway.getRequests("config.get")).length;

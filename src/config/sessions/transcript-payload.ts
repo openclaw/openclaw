@@ -6,6 +6,7 @@ import {
   prepareSqliteQuerySync,
   prepareSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
+import { supportsNodeSqliteJsonb } from "../../infra/node-sqlite.js";
 import { resolveZstdCodec } from "../../infra/zstd-codec.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import { findSessionTranscriptHeader } from "./session-entry-codec.js";
@@ -67,7 +68,7 @@ export function createTranscriptEventInserter(database: DatabaseSync, sessionId:
     const prepared = row.preparedPayload;
     const payload =
       prepared?.eventJson === row.eventJson &&
-      prepared.storageEncoding === readStorageEncoding(database)
+      prepared.storageEncoding === readTranscriptStorageEncoding(database)
         ? prepared.payload
         : prepareTranscriptPayload(database, row.eventJson, row.parsedEvent);
     return insert({ ...row, ...payload });
@@ -93,7 +94,7 @@ export function createTranscriptPayloadUpdater(database: DatabaseSync, sessionId
   );
 }
 
-function readStorageEncoding(database: DatabaseSync): string {
+export function readTranscriptStorageEncoding(database: DatabaseSync): string {
   let encoding = storageEncodings.get(database);
   if (encoding === undefined) {
     const db = getNodeSqliteKysely<{ pragma_encoding: { encoding: string } }>(database);
@@ -117,24 +118,25 @@ export function prepareTranscriptPayloadForReuse(
 ): PreparedTranscriptPayload {
   return {
     eventJson,
-    storageEncoding: readStorageEncoding(database),
+    storageEncoding: readTranscriptStorageEncoding(database),
     payload: prepareTranscriptPayload(database, eventJson, parsedEvent),
   };
 }
 
 function navigationProjection(
-  event: Expression<string>,
+  event: Expression<string | Uint8Array>,
   report: Expression<string>,
+  originalEvent: Expression<string>,
 ): RawBuilder<string | null> {
   return /* kysely-allow-raw: record native projections and exact byte costs; exceptional envelopes retain identity behavior. */ sql<
     string | null
-  >`CASE WHEN json_valid(${event}) AND json_valid(${report}) THEN CASE
+  >`CASE WHEN json_valid(${originalEvent}) AND json_valid(${report}) THEN CASE
     WHEN json_type(${event}) != 'object'
       OR coalesce(json_type(${event}, '$.message'), 'null') NOT IN ('object', 'null') THEN NULL
     ELSE json_object('version', 1,
       'report', json(${report}),
       'navigation', json(${projectTranscriptPayloadNavigationSql(event)}),
-      'reset', json(${projectResetBoundaryNavigationSql(event)}),
+      'reset', json(${projectResetBoundaryNavigationSql(originalEvent)}),
       'model', json(${projectModelContextNavigationSql(event)}),
       'modelBytes', octet_length(${projectModelContextEventSql(event, sql.lit(0))}),
       'modelWithoutCheckpointBytes', octet_length(${projectModelContextEventSql(event, sql.lit(1))}),
@@ -153,19 +155,25 @@ function readNavigation(database: DatabaseSync, input: NavigationInput): string 
       database,
       (parameter) => {
         const db = getNodeSqliteKysely<Record<string, never>>(database);
-        const metadata = db
+        const source = db
           .selectFrom(
             db
               .selectNoFrom([
                 parameter((value) => value.eventJson).as("event_json"),
                 parameter((value) => value.reportJson).as("report_json"),
               ])
-              .as("source"),
+              .as("input"),
           )
+          .select(["input.event_json", "input.report_json"])
           .select((eb) =>
-            navigationProjection(eb.ref("source.event_json"), eb.ref("source.report_json")).as(
-              "navigation_json",
-            ),
+            supportsNodeSqliteJsonb()
+              ? /* kysely-allow-raw: reuse native binary JSON only after the existing strict text validation. */ sql<
+                  string | Uint8Array
+                >`CASE WHEN json_valid(${eb.ref("input.event_json")})
+                  THEN jsonb(${eb.ref("input.event_json")}) ELSE ${eb.ref("input.event_json")} END`.as(
+                  "event_projection",
+                )
+              : eb.ref("input.event_json").as("event_projection"),
           );
         const admitted = /* kysely-allow-raw: reject oversized metadata natively before returning its text to JavaScript. */ sql<
           string | null
@@ -174,10 +182,24 @@ function readNavigation(database: DatabaseSync, input: NavigationInput): string 
           THEN metadata.navigation_json ELSE NULL END`;
         return (
           db
+            // Materialize the parsed input once across projections; canonical bytes stay text.
+            .with(
+              (cte) => cte("source").materialized(),
+              () => source,
+            )
             // The size guard and returned value must reuse one envelope, not flatten into two projections.
             .with(
               (cte) => cte("metadata").materialized(),
-              () => metadata,
+              (cteDb) =>
+                cteDb
+                  .selectFrom("source")
+                  .select((eb) =>
+                    navigationProjection(
+                      eb.ref("source.event_projection"),
+                      eb.ref("source.report_json"),
+                      eb.ref("source.event_json"),
+                    ).as("navigation_json"),
+                  ),
             )
             .selectFrom("metadata")
             .select(admitted.as("navigation_json"))
@@ -199,7 +221,7 @@ export function prepareTranscriptPayload(
   parsedEvent?: unknown,
 ): TranscriptPayloadRecord {
   const rawBytes = Buffer.byteLength(eventJson, "utf8");
-  const utf8 = readStorageEncoding(database) === "UTF-8";
+  const utf8 = readTranscriptStorageEncoding(database) === "UTF-8";
   const identity: TranscriptPayloadRecord = {
     event_json: eventJson,
     event_zstd: null,

@@ -34,10 +34,13 @@ This directory owns Control UI-specific guidance that should not live in the rep
   changes, Gateway-owned filters, failed reads,
   owner-prefix boundary uncertainty, and overlapping reads retain an authoritative
   refresh. Events never create list membership.
+- Re-adopting cached lineage rows changes presentation without invalidating
+  managed list membership. Fresh descriptor reads and Gateway events retain
+  their authoritative invalidation paths.
 - `lib/sessions/event-refresh-coordinator.ts` owns automatic refresh pacing:
-  debounce the first event after idle by 200 ms, coalesce continuous events within
-  one second, and after each automatic refresh wait three times its duration
-  (at least one second, at most 15 seconds) before the next automatic read.
+  collect events in a fixed five-second window that subsequent events cannot
+  postpone, and after each automatic refresh wait three times its duration
+  (at least five seconds, at most 15 seconds) before the next automatic read.
   Trailing invalidation stays with that owner, including while a request is pending.
 - Explicit refreshes, filter/agent changes, reconnects, and foreground replacements
   bypass event backoff and absorb pending invalidation. Recheck visibility and

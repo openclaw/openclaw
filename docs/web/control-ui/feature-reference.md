@@ -87,6 +87,9 @@ Control UI capabilities grouped by area, each with the Gateway RPC methods behin
 
   </Accordion>
   <Accordion title="Usage">
+
+    The session timeline's range handles support Tab, arrow keys to move one recorded point, and Home/End to select a boundary. Each handle has an accessible label and current time.
+
     - Session-derived token and estimated-cost analysis stays separate from provider billing.
     - Session rows and selected details show saved conversation names, including generated titles. Explicit renames take precedence; unnamed sessions show their keys.
     - The Sessions card counts the rows currently shown: up to 50 in **All**, or matching sessions selected on this Usage page in **Recently viewed**. The total is the loaded session count for the agent scope; the separate selected-session comparison does not increase the shown count.

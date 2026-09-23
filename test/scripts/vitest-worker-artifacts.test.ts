@@ -620,7 +620,7 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
             );
             const probe = writeFixture(
               directory,
-              "provider-hook.mts",
+              owner ? "provider-hook.mjs" : "provider-hook.mts",
               `
             import assert from 'node:assert/strict';
             import fs from 'node:fs';
@@ -1396,7 +1396,8 @@ export default class {
             "infra/sqlite-readonly-location.worker": "src/infra/sqlite-readonly-location.worker.ts",
             "infra/sqlite-snapshot-source": "src/infra/sqlite-snapshot-source.ts",
           };
-          export const legacyFinalizerBuildSources = ["src/infra/runtime-process-entrypoints.ts"];
+          export const preservedModuleBuildSources = ["src/infra/runtime-process-entrypoints.ts"];
+          export const preservedModuleBuildAssets = [];
           `,
         );
         const databasePath = path.join(fixture, "probe.sqlite");

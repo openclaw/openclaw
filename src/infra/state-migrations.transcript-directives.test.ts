@@ -112,6 +112,8 @@ function insertSession(
 }
 
 function openLegacyAgentDatabase(stateDir: string, agentId = "main") {
+  // These active stores have known-empty deletion history before their legacy bytes exist.
+  openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
   const databasePath = path.join(stateDir, "agents", agentId, "agent", "openclaw-agent.sqlite");
   fs.mkdirSync(path.dirname(databasePath), { recursive: true });
   const database = openNodeSqliteDatabase(databasePath);

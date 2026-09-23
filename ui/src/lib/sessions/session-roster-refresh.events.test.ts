@@ -39,7 +39,7 @@ describe("session roster event traffic", () => {
         }
         fail = true;
         harness.publishEvent("sessions.changed", { reason: "stores" });
-        await vi.advanceTimersByTimeAsync(200);
+        await vi.advanceTimersByTimeAsync(5_000);
         expect(sessions.listSnapshot(query).error).toBe("List unavailable");
         fail = false;
         rows = [added, updated];
@@ -83,7 +83,7 @@ describe("session roster event traffic", () => {
       try {
         await sessions.refresh({ agentId: "main", force: true });
         harness.publishEvent("sessions.changed", { reason: "patch", session: stopped });
-        await vi.advanceTimersByTimeAsync(200);
+        await vi.advanceTimersByTimeAsync(5_000);
         expect(request).toHaveBeenCalledTimes(2);
         expect(sessions.state.result?.sessions).toEqual(finalRows);
       } finally {
@@ -289,7 +289,7 @@ describe("session roster event traffic", () => {
         await sessions.refreshList({ ...query, force: true });
         bootstrap.setForegroundRoute("agent:main:chat");
         gatewayHarness.publishEvent("sessions.changed", { sessionKey: row.key, reason: "patch" });
-        await vi.advanceTimersByTimeAsync(200);
+        await vi.advanceTimersByTimeAsync(5_000);
         visibility.mockReturnValue("hidden");
         document.dispatchEvent(new Event("visibilitychange"));
         bootstrap.setForegroundPane({}, { sessionKey: "agent:main:chat", client, ready: true });
@@ -333,7 +333,7 @@ describe("session roster event traffic", () => {
       try {
         await sessions.refresh({ agentId: "main", force: true });
         gatewayHarness.publishEvent("sessions.changed", { sessionKey: row.key, reason: "patch" });
-        await vi.advanceTimersByTimeAsync(1_200);
+        await vi.advanceTimersByTimeAsync(6_000);
         expect(reads).toBe(2);
         gatewayHarness.publishEvent("sessions.changed", { sessionKey: row.key, reason: "patch" });
         if (intent === "reconnect") {
@@ -375,7 +375,7 @@ describe("session roster event traffic", () => {
           sessionKey: row.key,
           session: { ...row, updatedAt: 2 },
         });
-        await vi.advanceTimersByTimeAsync(200);
+        await vi.advanceTimersByTimeAsync(5_000);
         expect(request).toHaveBeenCalledTimes(2);
       } finally {
         sessions.dispose();

@@ -29,16 +29,15 @@ import {
   exactClaimForPlacement,
   createSharedGitHubPublicationReadMethods,
   type GitHubPublicationClaimRequest,
+  type GitHubPublicationSessionRequest as SharedRequest,
 } from "./github-publication-coordinator-methods.js";
 import { GitHubPublicationRequesterUnavailableError } from "./github-publication-failure.js";
-import {
-  restoreGitHubPublicationRequester,
-  type GitHubPublicationRequester,
-} from "./github-publication-requester.js";
+import { restoreGitHubPublicationRequester } from "./github-publication-requester.js";
 import {
   matchesGitHubPublicationIdentityRow,
   projectGitHubPublicationResult,
 } from "./github-publication-store.js";
+import { assertGitHubPublicationWorkflowChangesAllowed } from "./github-publication-workflows.js";
 import {
   executeRepositoryGitHubPublication,
   prepareRepositoryGitHubPublicationTarget,
@@ -80,11 +79,6 @@ import type {
   WorkerSessionTurnClaim,
 } from "./worker-environments/placement-store.js";
 import { withSessionRepositoryCheckpoint } from "./worker-environments/session-repository-checkpoints.js";
-type SharedRequest = SessionGitHubPublishParams & {
-  agentId: string;
-  expectedRunId?: string;
-  requester: GitHubPublicationRequester;
-};
 
 export function createRepositoryGitHubPublicationCoordinator(params: {
   placements: WorkerSessionPlacementStore;
@@ -196,15 +190,18 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
       throw new Error("My GitHub publication owner changed.");
     }
     let requester: Awaited<ReturnType<typeof restoreGitHubPublicationRequester>> | undefined;
+    const getRequester = () => {
+      if (!requester) {
+        throw new GitHubPublicationRequesterUnavailableError();
+      }
+      return requester;
+    };
     const assertExecution = () => {
       // Classify source loss before personal preparation can turn it into a retryable error.
       assertReceiptOwner(row);
       assertCustody();
       if (row.owner_profile_id === null) {
-        if (!requester) {
-          throw new GitHubPublicationRequesterUnavailableError();
-        }
-        requester.assertCurrent();
+        getRequester().assertCurrent();
       }
       context.assertCurrent?.();
       bound?.assertCurrent();
@@ -233,6 +230,9 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
         snapshot: captured.snapshot,
         snapshotRoot: captured.snapshotRoot,
         storePath: loaded.storePath,
+        assertWorkflowChangesAllowed: bound
+          ? assertExecution
+          : () => assertGitHubPublicationWorkflowChangesAllowed(getRequester()),
         assertWorkspace: () => {
           assertReceiptOwner(row);
         },

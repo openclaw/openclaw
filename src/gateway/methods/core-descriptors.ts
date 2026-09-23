@@ -568,7 +568,13 @@ export const CORE_GATEWAY_METHOD_SPECS = [
     "2026.8",
     CONTROL_PLANE_WRITE,
   ],
-  ["sessions.github.publish", "sessions-github", "operator.write", "2026.8", CONTROL_PLANE_WRITE],
+  [
+    "sessions.github.publish",
+    "sessions-github",
+    "operator.sessions.write",
+    "2026.8",
+    CONTROL_PLANE_WRITE,
+  ],
   ["diagnostics.lanes", "diagnostics", "operator.read", "2026.8"],
   // Evidence-aware member projection is additive so legacy method indices and
   // its required `addedBy` response contract remain unchanged.

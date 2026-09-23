@@ -51,6 +51,12 @@ import {
   setupInferenceLog,
   type VerifySetupInferenceResult,
 } from "./setup-inference-core.js";
+import {
+  runSetupInferenceProbeWork,
+  SETUP_INFERENCE_TEST_MAX_TOKENS,
+  type SetupTurnFailure,
+  type SetupTurnSuccess,
+} from "./setup-inference-probe-work.js";
 import { resolveSetupInferenceProfileError } from "./setup-inference-profile.js";
 import {
   captureSystemAgentOwnerPluginArtifacts,
@@ -61,17 +67,6 @@ import {
   type SystemAgentVerifiedInferenceBinding,
   type SystemAgentVerifiedInferenceDeps,
 } from "./verified-inference.js";
-
-const SETUP_INFERENCE_TEST_MAX_TOKENS = 256;
-
-type SetupTurnFailure = { ok: false; status: SetupInferenceFailureStatus; error: string };
-
-type SetupTurnSuccess = {
-  ok: true;
-  latencyMs: number;
-  text: string;
-  auth: AgentExecutionAuthBinding;
-};
 
 /**
  * Runs one bounded, tool-free turn through the exact configured route. The turn is evidence,
@@ -173,7 +168,7 @@ export async function runSetupInferenceTurn(params: {
       const runEmbedded =
         deps.runEmbeddedAgent ?? (await import("../agents/embedded-agent.js")).runEmbeddedAgent;
       const harness = route.agentHarnessRuntimeOverride;
-      result = await runEmbedded({
+      result = await runSetupInferenceProbeWork(runEmbedded, {
         ...shared,
         // The probe owns its transcript; session admission must not create durable agent state.
         sessionPersistence: "detached",

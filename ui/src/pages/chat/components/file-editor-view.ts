@@ -86,6 +86,7 @@ export async function createFileEditorView(params: {
         ]),
         syntaxHighlighting(classHighlighter),
         ...(language ? [language] : []),
+        EditorView.contentAttributes.of({ "aria-label": params.name, tabindex: "0" }),
         editable.of([EditorState.readOnly.of(!isEditable), EditorView.editable.of(isEditable)]),
         wrapping.of(isWrapped ? EditorView.lineWrapping : []),
         lineDecorations,

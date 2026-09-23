@@ -125,13 +125,9 @@ export async function prepareSubagentRunReadSnapshot<S extends SubagentRunReadSe
       // Full metadata can reveal a yielded-child scope absent from compact facts.
       const matches = (entry: SubagentRunReadRecord) =>
         scope.matches(entry) || currentScope.matches(entry);
-      const full = mergeSelectedFullRuns(
-        fullCache,
-        inMemoryRuns,
-        preparedPayloads,
-        matches,
+      const full = mergeSelectedFullRuns(fullCache, inMemoryRuns, preparedPayloads, matches, {
         context,
-      );
+      });
       for (const entry of full.values()) {
         snapshot.set(entry.runId, projectSubagentRunForSessionList(entry));
       }

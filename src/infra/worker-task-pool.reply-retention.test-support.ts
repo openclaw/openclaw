@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { setImmediate } from "node:timers/promises";
+import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import { workerTaskPoolEntrypoints } from "./worker-task-pool-runtime.test-support.js";
 import { WorkerTaskPool } from "./worker-task-pool.js";
 import type { PoolFixtureInput, PoolFixtureResult } from "./worker-task-pool.test-support.js";
 
@@ -8,7 +10,7 @@ const gc = globalThis.gc;
 assert.ok(gc, "The retention child requires --expose-gc");
 const callerContext = new AsyncLocalStorage<object>();
 const pool = new WorkerTaskPool<PoolFixtureInput, PoolFixtureResult>({
-  workerUrl: new URL("./worker-task-pool.test-support.ts", import.meta.url),
+  workerUrl: resolveRuntimeWorkerUrl(workerTaskPoolEntrypoints.worker),
   maxWorkers: 1,
 });
 

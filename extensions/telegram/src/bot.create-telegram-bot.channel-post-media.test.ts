@@ -95,6 +95,7 @@ async function withTelegramSpooledReplayUpdate<T>(
 
 function setOpenChannelPostConfig() {
   loadConfig.mockReturnValue({
+    messages: { inbound: { debounceMs: 0 } },
     channels: {
       telegram: {
         groupPolicy: "open",

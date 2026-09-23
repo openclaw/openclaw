@@ -292,9 +292,9 @@ suite.define(() => {
       const menu = composer.locator("wa-dropdown.agent-chat__capability-menu");
       await menu.getByRole("menuitem", { name: /^Skills/ }).click();
       await expect.poll(() => menu.getAttribute("data-view")).toBe("skills");
-      const docs = menu.getByRole("menuitem", { name: /^Docs/ });
-      const broken = menu.getByRole("menuitem", { name: /Broken.*deps missing/ });
-      const blocked = menu.getByRole("menuitem", {
+      const docs = menu.getByRole("menuitemcheckbox", { name: /^Docs/ });
+      const broken = menu.getByRole("menuitemcheckbox", { name: /Broken.*deps missing/ });
+      const blocked = menu.getByRole("menuitemcheckbox", {
         name: /Private.*not available for this agent/,
       });
       await expect.poll(() => broken.isDisabled()).toBe(true);
@@ -307,7 +307,7 @@ suite.define(() => {
       await menu.getByRole("menuitem", { name: "Back" }).click();
       await menu.getByRole("menuitem", { name: /^Connectors/ }).click();
       await expect.poll(() => menu.getAttribute("data-view")).toBe("connectors");
-      const github = menu.getByRole("menuitem", { name: /^github/ });
+      const github = menu.getByRole("menuitemcheckbox", { name: /^github/ });
       await github.click();
       await expect
         .poll(() => latestToolOverrides(gateway))
@@ -381,7 +381,9 @@ suite.define(() => {
       await menu.getByRole("menuitem", { name: "Tool access" }).first().click();
       await expect.poll(() => menu.getAttribute("data-view")).toBe("tools:github");
       await expect.poll(() => menu.getByText("2 of 3 tools on").isVisible()).toBe(true);
-      await expect.poll(() => menu.getByRole("menuitem", { name: "delete_page" }).count()).toBe(0);
+      await expect
+        .poll(() => menu.getByRole("menuitemcheckbox", { name: "delete_page" }).count())
+        .toBe(0);
 
       const toolRows = menu.locator('wa-dropdown-item[value^="mcp-tool:"]');
       const rawToolNames = toolRows.locator(
@@ -627,7 +629,7 @@ suite.define(() => {
         await forceCapabilitySelection(clear);
         expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
         await menu.getByRole("menuitem", { name: /^Skills/ }).click();
-        const docs = menu.getByRole("menuitem", { name: /^Docs/ });
+        const docs = menu.getByRole("menuitemcheckbox", { name: /^Docs/ });
         await expect.poll(() => docs.isDisabled()).toBe(true);
         await expect.poll(() => tooltipTitleText(docs)).toContain("operator.admin access");
         // Leave disabled-row hints before the next click's hit test. Returning to
@@ -637,7 +639,7 @@ suite.define(() => {
         await composer.locator("textarea").hover();
         await menu.getByRole("menuitem", { name: /^Connectors/ }).click();
         await expect
-          .poll(() => menu.getByRole("menuitem", { name: /^github/ }).isDisabled())
+          .poll(() => menu.getByRole("menuitemcheckbox", { name: /^github/ }).isDisabled())
           .toBe(true);
         expect(await menu.getByRole("menuitem", { name: "Browse connectors" }).count()).toBe(0);
         const addServer = menu.getByRole("menuitem", { name: /Add MCP server/ });
@@ -882,7 +884,9 @@ suite.define(() => {
       menu = composer.locator("wa-dropdown.agent-chat__capability-menu");
       await menu.getByRole("menuitem", { name: /^Connectors/ }).click();
       await expect
-        .poll(() => menu.getByRole("menuitem", { name: /session-docs.*session/ }).isVisible())
+        .poll(() =>
+          menu.getByRole("menuitemcheckbox", { name: /session-docs.*session/ }).isVisible(),
+        )
         .toBe(true);
       await menu.getByRole("menuitem", { name: /Add MCP server/ }).click();
 
@@ -930,7 +934,9 @@ suite.define(() => {
       menu = composer.locator("wa-dropdown.agent-chat__capability-menu");
       await menu.getByRole("menuitem", { name: /^Connectors/ }).click();
       await expect
-        .poll(() => menu.getByRole("menuitem", { name: /^global-docs.*Enabled/ }).isVisible())
+        .poll(() =>
+          menu.getByRole("menuitemcheckbox", { name: /^global-docs.*Enabled/ }).isVisible(),
+        )
         .toBe(true);
     });
   });

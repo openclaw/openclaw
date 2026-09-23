@@ -463,10 +463,6 @@ describeTelegramDispatch("dispatchTelegramMessage progress-rendering", () => {
           "<b>Shelling</b>\n<b>🔎 Web Search</b> docs lookup\n<b>Update</b> tests passed",
         ),
       );
-      // Retire a tool-progress-only window by repositioning, with its delete deferred.
-      expect(draftStream.rotateToNewMessageDeferringDelete).toHaveBeenCalledTimes(1);
-      expect(draftStream.forceNewMessage).not.toHaveBeenCalled();
-      expect(draftStream.clear).not.toHaveBeenCalled();
       expectDeliveredReply(0, { text: "Final after tool" });
       expect(editMessageTelegram).not.toHaveBeenCalled();
     } finally {

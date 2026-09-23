@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import fsp from "node:fs/promises";
 import {
   withWorkerWorkspaceHashMemo,
   type WorkspaceHashMemo,
@@ -72,10 +71,9 @@ export async function prepareNodeWorkerWorkspaceOverlay(params: {
   const sourceEntries = new Map(source.entries.map((entry) => [entry.path, entry]));
   return {
     changed: changedPaths(base, target, params.signal),
-    materializeSourceFile: async (
+    readSourceFile: async (
       entry: Extract<WorkerWorkspaceManifestEntry, { type: "file" }>,
-      destination: string,
-    ) => {
+    ): Promise<Buffer> => {
       const original = sourceEntries.get(entry.path);
       if (
         original?.type !== "file" ||
@@ -123,7 +121,7 @@ export async function prepareNodeWorkerWorkspaceOverlay(params: {
         throw new Error("Prepared checkpoint immutable Git content verification failed");
       }
       params.signal?.throwIfAborted();
-      await fsp.writeFile(destination, result.stdout, { mode: entry.mode, flag: "wx" });
+      return result.stdout;
     },
     apply: async (stagingRoot: string): Promise<string> => {
       params.signal?.throwIfAborted();

@@ -12,16 +12,18 @@ import type {
   SessionTranscriptContextVersion,
   TranscriptAppendRefusal,
 } from "./session-accessor.sqlite-contract.js";
-import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
+import {
+  captureSessionTranscriptStorageEnvironment,
+  sameSessionTranscriptStorageEnvironment,
+  sameSessionTranscriptTargetBinding,
+  type SessionTranscriptTargetBinding,
+} from "./transcript-target-binding.js";
 
 export type SessionMetadataChange =
   | Pick<ModelChangeEntry, "type" | "provider" | "modelId">
   | Pick<ThinkingLevelChangeEntry, "type" | "thinkingLevel">;
 
-type MetadataTarget = Pick<
-  SessionTranscriptRuntimeTarget,
-  "agentId" | "sessionId" | "sessionKey" | "storePath"
->;
+type MetadataTarget = SessionTranscriptTargetBinding;
 type MetadataPublicationOwner = {
   getSessionId(): string;
   getSessionTarget(): MetadataTarget | undefined;
@@ -58,6 +60,7 @@ type SessionTranscriptWriteTarget = {
   sessionId?: string;
   sessionKey?: string;
   storePath?: string;
+  env?: Readonly<NodeJS.ProcessEnv>;
   expectedLifecycleRevision?: string;
   expectedWriterRunId?: string;
 };
@@ -75,12 +78,21 @@ export type OwnedSessionTranscriptWriteContext = {
 
 const ownedTranscriptWriteContext = new AsyncLocalStorage<OwnedSessionTranscriptWriteContext>();
 
-function sameMetadataTarget(left: MetadataTarget | undefined, right: MetadataTarget | undefined) {
-  return left && right
-    ? (["agentId", "sessionId", "sessionKey", "storePath"] as const).every(
-        (key) => left[key] === right[key],
-      )
-    : left === right;
+function captureWriteTarget(target: SessionTranscriptWriteTarget): SessionTranscriptWriteTarget {
+  const storePath = target.storePath?.trim();
+  return {
+    ...target,
+    ...(storePath ? { storePath: path.resolve(storePath) } : {}),
+    env: captureSessionTranscriptStorageEnvironment(target.env ?? process.env),
+  };
+}
+
+function captureWriteContext(
+  context: OwnedSessionTranscriptWriteContext,
+): OwnedSessionTranscriptWriteContext {
+  return context.sessionTarget
+    ? { ...context, sessionTarget: captureWriteTarget(context.sessionTarget) }
+    : context;
 }
 
 function sameMetadataChange(left: SessionMetadataChange, right: SessionMetadataChange): boolean {
@@ -101,14 +113,7 @@ export async function withSessionMetadataPublication<T>(
   const publication: MetadataPublication = {
     owner,
     sessionId: owner.getSessionId(),
-    target: target
-      ? {
-          agentId: target.agentId,
-          sessionId: target.sessionId,
-          sessionKey: target.sessionKey,
-          storePath: target.storePath,
-        }
-      : undefined,
+    target,
     change,
     publish,
   };
@@ -139,14 +144,7 @@ export function captureSessionMetadataPublication(
   const currentTarget = owner.getSessionTarget();
   const captured = {
     sessionId: owner.getSessionId(),
-    target: currentTarget
-      ? {
-          agentId: currentTarget.agentId,
-          sessionId: currentTarget.sessionId,
-          sessionKey: currentTarget.sessionKey,
-          storePath: currentTarget.storePath,
-        }
-      : undefined,
+    target: currentTarget,
   };
   const slot = ownedTranscriptWriteContext.getStore()?.metadataPublication;
   if (!slot?.current) {
@@ -156,7 +154,7 @@ export function captureSessionMetadataPublication(
   if (
     publication.owner !== owner ||
     publication.sessionId !== owner.getSessionId() ||
-    !sameMetadataTarget(publication.target, owner.getSessionTarget()) ||
+    !sameSessionTranscriptTargetBinding(publication.target, owner.getSessionTarget()) ||
     !sameMetadataChange(publication.change, change)
   ) {
     throw new SessionTranscriptWriterClaimReboundError();
@@ -167,12 +165,12 @@ export function captureSessionMetadataPublication(
     publish: (commit) => {
       if (
         publication.sessionId !== owner.getSessionId() ||
-        !sameMetadataTarget(publication.target, owner.getSessionTarget())
+        !sameSessionTranscriptTargetBinding(publication.target, owner.getSessionTarget())
       ) {
         return undefined;
       }
       if (
-        !sameMetadataTarget(publication.target, commit.target) ||
+        !sameSessionTranscriptTargetBinding(publication.target, commit.target) ||
         !sameMetadataChange(publication.change, commit.entry)
       ) {
         throw new Error("Committed metadata differs from its publication owner");
@@ -205,7 +203,7 @@ function contextMatches(params: {
     const sessionKey = target?.sessionKey?.trim();
     const storePath = target?.storePath?.trim();
     return sessionKey && storePath
-      ? { agentId, sessionId, sessionKey, storePath: path.resolve(storePath) }
+      ? { agentId, sessionId, sessionKey, storePath, env: target?.env }
       : undefined;
   };
   const contextTarget = normalizeTarget(params.context.sessionTarget);
@@ -216,6 +214,7 @@ function contextMatches(params: {
       requestedTarget &&
       contextTarget.sessionKey === requestedTarget.sessionKey &&
       contextTarget.storePath === requestedTarget.storePath &&
+      sameSessionTranscriptStorageEnvironment(contextTarget.env, requestedTarget.env) &&
       (!contextTarget.agentId ||
         !requestedTarget.agentId ||
         contextTarget.agentId === requestedTarget.agentId) &&
@@ -264,7 +263,7 @@ export async function withOwnedSessionTranscriptWrites<T>(
   context: OwnedSessionTranscriptWriteContext,
   run: () => Promise<T>,
 ): Promise<T> {
-  return await ownedTranscriptWriteContext.run(context, run);
+  return await ownedTranscriptWriteContext.run(captureWriteContext(context), run);
 }
 
 /** Add a caller's live capability without replacing its admitted writer or settlement owner. */
@@ -274,7 +273,7 @@ export function withSessionTranscriptWriteAssertion<T>(
   run: () => T,
 ): T {
   const parent = ownedTranscriptWriteContext.getStore();
-  const target = { ...scope };
+  const target = captureWriteTarget(scope);
   assertTranscriptWriteContext(parent, target);
   assertCurrent();
   return ownedTranscriptWriteContext.run(
@@ -300,7 +299,8 @@ export function bindOwnedSessionTranscriptWrites<TArgs extends unknown[], TResul
   context: OwnedSessionTranscriptWriteContext,
   run: (...args: TArgs) => TResult,
 ): (...args: TArgs) => TResult {
-  return (...args) => ownedTranscriptWriteContext.run(context, () => run(...args));
+  const captured = captureWriteContext(context);
+  return (...args) => ownedTranscriptWriteContext.run(captured, () => run(...args));
 }
 
 /**
@@ -320,7 +320,12 @@ export function getOwnedSessionTranscriptWriterFence(
   const context = ownedTranscriptWriteContext.getStore();
   if (
     !context ||
-    (Object.keys(params).length > 0 && !ownsRequestedSession({ context, ...params }))
+    (Object.keys(params).length > 0 &&
+      !ownsRequestedSession({
+        context,
+        ...params,
+        sessionTarget: params.sessionTarget ? captureWriteTarget(params.sessionTarget) : undefined,
+      }))
   ) {
     return undefined;
   }
@@ -351,7 +356,11 @@ export function getOwnedSessionTranscriptInitialWriter(params: {
     return undefined;
   }
   if (
-    !contextMatches({ context, ...params }) ||
+    !contextMatches({
+      context,
+      ...params,
+      sessionTarget: params.sessionTarget ? captureWriteTarget(params.sessionTarget) : undefined,
+    }) ||
     context.sessionTarget?.sessionId !== params.sessionTarget?.sessionId ||
     context.sessionTarget?.agentId !== params.sessionTarget?.agentId
   ) {
@@ -380,7 +389,7 @@ function assertTranscriptWriteContext(
 
 /** A guarded context cannot silently become an unfenced write to another target. */
 export function assertOwnedTranscriptWriteCommit(scope: SessionTranscriptWriteTarget): void {
-  assertTranscriptWriteContext(ownedTranscriptWriteContext.getStore(), scope);
+  assertTranscriptWriteContext(ownedTranscriptWriteContext.getStore(), captureWriteTarget(scope));
 }
 
 /** Retained post-commit work must revalidate its original owner, not its invocation context. */
@@ -388,7 +397,7 @@ export function captureOwnedTranscriptWriteAssertion(
   scope: SessionTranscriptWriteTarget,
 ): () => void {
   const context = ownedTranscriptWriteContext.getStore();
-  const target = { ...scope };
+  const target = captureWriteTarget(scope);
   return () => assertTranscriptWriteContext(context, target);
 }
 
@@ -396,9 +405,10 @@ export function captureOwnedTranscriptWriteAssertion(
 export function withOwnedSessionTranscriptWriterFence<T extends SessionTranscriptWriteTarget>(
   scope: T,
 ): T {
+  const target = captureWriteTarget(scope);
   const fence = getOwnedSessionTranscriptWriterFence({
-    sessionKey: scope.sessionKey,
-    sessionTarget: scope,
+    sessionKey: target.sessionKey,
+    sessionTarget: target,
   });
   return fence ? { ...scope, ...fence } : scope;
 }
@@ -419,7 +429,14 @@ export async function runWithOwnedSessionTranscriptWrite<T>(
   run: () => Promise<T> | T,
 ): Promise<T> {
   const context = ownedTranscriptWriteContext.getStore();
-  if (!context || !contextMatches({ context, ...params })) {
+  if (
+    !context ||
+    !contextMatches({
+      context,
+      ...params,
+      sessionTarget: params.sessionTarget ? captureWriteTarget(params.sessionTarget) : undefined,
+    })
+  ) {
     return await run();
   }
   return await context.withTranscriptWrite(run);

@@ -142,10 +142,19 @@ export async function createRequesterPublicationFixture(
   checkpoint: Mock,
   backend: Backend,
   session: { sessionId: string; sessionKey: string } = REQUEST,
+  repositoryOptions: {
+    requestedRef?: Parameters<typeof createRepositoryPublicationFixture>[1];
+    baseFiles?: Record<string, string>;
+  } = {},
 ) {
   const repository =
     backend === "repository"
-      ? await createRepositoryPublicationFixture(checkpoint, undefined, session)
+      ? await createRepositoryPublicationFixture(
+          checkpoint,
+          repositoryOptions.requestedRef,
+          session,
+          repositoryOptions.baseFiles,
+        )
       : undefined;
   await persistPublicationTestSession(session.sessionKey);
   const local =

@@ -48,8 +48,7 @@ describePosix("native PR main refresh boundaries", () => {
   ])("%s acquires the authenticated head despite a stale pull ref", (command) => {
     const f = fixture();
     if (command === "prepare-sync-head" || command === "merge-verify") {
-      const prepared = f.run("prepare-run");
-      expect(prepared.status, prepared.stdout + prepared.stderr).toBe(0);
+      f.seedPreparedMerge();
     }
     f.git(f.origin, "update-ref", "refs/pull/42/head", f.main);
     const result = f.run(command);
@@ -385,8 +384,7 @@ ${readFileSync(gitShim, "utf8")}
 
   it("completes supervised merge with two checkpoints and releases its exact lock after cleanup", () => {
     const f = fixture();
-    const prepare = f.run("prepare-run");
-    expect(prepare.status, prepare.stdout + prepare.stderr).toBe(0);
+    f.seedPreparedMerge();
     const before = f.events().length;
     const result = f.run("merge-run");
     expect(result.status, result.stdout + result.stderr).toBe(0);
@@ -741,9 +739,12 @@ ${readFileSync(gitShim, "utf8")}
       f.git(f.canonical, "update-ref", "-d", "refs/remotes/origin/main");
       f.configure({ failFetchAt: fetchNumber });
       const failed = f.run("review-checkout-main");
-      expect(failed.status).not.toBe(0);
-      expect(existsSync(f.worktree)).toBe(fetchNumber === 2);
+      const diagnostic = `stdout:\n${failed.stdout.slice(-4000)}\nstderr:\n${failed.stderr.slice(-4000)}`;
+      expect(failed.status, diagnostic).not.toBe(0);
+      expect(failed.stderr, diagnostic).toContain("fatal: injected main fetch failure");
+      expect(existsSync(f.worktree), diagnostic).toBe(fetchNumber === 2);
       if (fetchNumber === 2) {
+        f.assertPrivateHandoffVerified();
         expect(f.git(f.worktree, "symbolic-ref", "HEAD")).toBe("refs/heads/temp/pr-42");
         expect(f.git(f.canonical, "rev-parse", "refs/heads/temp/pr-42")).toBe(f.main);
         expect(f.git(f.worktree, "write-tree")).toBe(
@@ -757,10 +758,36 @@ ${readFileSync(gitShim, "utf8")}
       f.configure({ failFetchAt: 0 });
       const result = f.run("review-checkout-main");
       expect(result.status, result.stdout + result.stderr).toBe(0);
+      f.assertPrivateHandoffVerified();
       expect(f.git(f.worktree, "rev-parse", "HEAD")).toBe(f.main);
       expect(f.git(f.canonical, "rev-parse", "HEAD")).toBe(f.main);
     },
   );
+
+  it("rejects a later uninjected provisioner despite an earlier valid receipt", () => {
+    const f = fixture();
+    f.git(f.canonical, "worktree", "remove", "--force", f.worktree);
+    const first = f.run("review-checkout-main");
+    expect(first.status, first.stdout + first.stderr).toBe(0);
+    f.assertPrivateHandoffVerified();
+
+    f.git(f.canonical, "worktree", "remove", "--force", f.worktree);
+    const nodeOptions = f.env.NODE_OPTIONS;
+    delete f.env.NODE_OPTIONS;
+    try {
+      const second = f.run("review-checkout-main");
+      expect(second.status, second.stdout + second.stderr).not.toBe(0);
+      expect(second.stderr).toContain("Missing private handoff preload");
+      expect(existsSync(f.worktree)).toBe(false);
+      expect(() => f.assertPrivateHandoffVerified()).toThrow(
+        "not every launched provisioner received its private store",
+      );
+    } finally {
+      f.env.NODE_OPTIONS = nodeOptions;
+    }
+    const owner = f.git(f.canonical, "rev-parse", "refs/openclaw/pr-operation-locks/42");
+    recoverFixtureLock(f, owner);
+  });
 
   it("invalidates the previous snapshot when the same operation provisions a new worktree", () => {
     const f = fixture();
@@ -945,8 +972,7 @@ read -r release < "$OPENCLAW_TEST_FETCH_HOLD"
     "refreshes after CI and required checks with strict drift=%s",
     (strict) => {
       const f = fixture();
-      const prepare = f.run("prepare-run");
-      expect(prepare.status, prepare.stdout + prepare.stderr).toBe(0);
+      f.seedPreparedMerge();
       // This case owns the nonhosted watcher's post-wait refresh contract.
       writeFileSync(join(f.local, "gates.env"), "GATES_MODE=full\n");
       f.configure({ moveAtCi: true });
@@ -1175,7 +1201,7 @@ fi`,
 
   it("rejects a moved prepared branch without consuming CI proof", () => {
     const f = fixture();
-    expect(f.run("prepare-run").status).toBe(0);
+    f.seedPreparedMerge();
     const stamp = readFileSync(join(f.local, "prep.env"), "utf8");
     f.git(f.worktree, "update-ref", "refs/heads/pr-42-prep", f.sameTreeHead);
     const result = f.run("merge-verify");

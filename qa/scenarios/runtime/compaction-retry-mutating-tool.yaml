@@ -192,7 +192,7 @@ flow:
             message:
               expr: "`linked waits did not preserve one nonempty Code Mode cell id: ${JSON.stringify(postWriteContinuations)}`"
         - assert:
-            expr: "writeWireToolName !== 'exec' || (terminalContinuations[0].providerVariant === 'openai' ? String(terminalContinuations[0].toolOutput ?? '').startsWith('Script completed\\n') : terminalContinuations[0].providerVariant === 'anthropic' ? (() => { try { const parsed = JSON.parse(String(terminalContinuations[0].toolOutput ?? '')); return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed) && parsed.status === 'completed'; } catch { return false; } })() : false)"
+            expr: "writeWireToolName !== 'exec' || (terminalContinuations[0].codeModeExecSurface === 'native' ? String(terminalContinuations[0].toolOutput ?? '').startsWith('Script completed\\n') : terminalContinuations[0].codeModeExecSurface === 'guest' ? (() => { try { const parsed = JSON.parse(String(terminalContinuations[0].toolOutput ?? '')); return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed) && parsed.status === 'completed'; } catch { return false; } })() : false)"
             message:
               expr: "`Code Mode terminal continuation did not report successful completion: ${JSON.stringify(terminalContinuations[0])}`"
         - call: waitForCondition

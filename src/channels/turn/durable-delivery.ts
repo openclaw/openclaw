@@ -20,7 +20,6 @@ import type { OutboundPayloadPlan } from "../../infra/outbound/reply-payload-par
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { deriveDurableFinalDeliveryRequirements } from "../message/capabilities.js";
 import {
-  durableMessageBatchMayHaveReachedRecipient,
   sendDurableMessageBatchCore,
   sendStructuredDurableMessageBatchCore,
 } from "../message/send.js";
@@ -309,7 +308,7 @@ async function deliverInboundReplyWithMessageSendContext(
     receipt: send.receipt,
     threadId: stringifyThreadId(threadId),
     ...(replyToId ? { replyToId } : {}),
-    visibleReplySent: durableMessageBatchMayHaveReachedRecipient(send),
+    visibleReplySent: send.status === "sent",
     ...(send.deliveryIntent ? { deliveryIntent: toDeliveryIntent(send.deliveryIntent) } : {}),
   });
   const delivery: ChannelDeliveryResult =

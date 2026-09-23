@@ -21,6 +21,8 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
   const hostRequest = globalThis.__openclawHostRequest;
   const hostCancelRequest = globalThis.__openclawHostCancelRequest;
   const hostObserveNetworkContent = globalThis.__openclawHostObserveNetworkContent;
+  const hostOutput = globalThis.__openclawHostOutput;
+  delete globalThis.__openclawHostOutput;
   delete globalThis.__openclawHostObserveNetworkContent;
   delete globalThis.__openclawHostRequest;
   delete globalThis.__openclawHostCancelRequest;
@@ -37,6 +39,11 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
   const GuestError = Error;
   const GuestTypeError = TypeError;
   const stringifyJson = JSON.stringify;
+  function emitOutput(entry) {
+    const count = output.push(entry);
+    if (hostOutput) hostOutput(encodeFinalValue(entry));
+    return count;
+  }
   const promiseOutput = "[Unawaited Promise: use await or Promise.all(...) before emitting or returning values.]";
   let networkContentObserved = false;
   function observeNetworkContent() {
@@ -468,8 +475,8 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
     setTimeout: { value: (callback, delay, ...args) => scheduleTimer(callback, delay, args), enumerable: true },
     clearTimeout: { value: cancelTimer, enumerable: true },
     console: { value: guestConsole, enumerable: true },
-    text: { value: (value) => output.push({ type: "text", text: asText(value) }), enumerable: true },
-    json: { value: (value) => output.push({ type: "json", value: safe(value, true) }), enumerable: true },
+    text: { value: (value) => emitOutput({ type: "text", text: asText(value) }), enumerable: true },
+    json: { value: (value) => emitOutput({ type: "json", value: safe(value, true) }), enumerable: true },
     yield_control: { value: (reason) => request("yield", [reason]), enumerable: true },
     __openclawSettleBridge: { value: settle },
     __openclawDrainQueuedRequests: { value: drainQueuedRequests },

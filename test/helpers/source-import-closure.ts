@@ -64,7 +64,13 @@ function resolveSourceModule(importer: string, rawSpecifier: string): string | u
   return resolved.endsWith(".json") || resolved.endsWith(".d.ts") ? undefined : resolved;
 }
 
-function staticDependencies(file: string): string[] {
+const staticDependencyCache = new Map<string, readonly string[]>();
+
+function staticDependencies(file: string): readonly string[] {
+  const cached = staticDependencyCache.get(file);
+  if (cached) {
+    return cached;
+  }
   const source = ts.createSourceFile(file, fs.readFileSync(file, "utf8"), ts.ScriptTarget.Latest);
   const dependencies: string[] = [];
   const visit = (node: ts.Node): void => {
@@ -113,6 +119,7 @@ function staticDependencies(file: string): string[] {
     }
   };
   visit(source);
+  staticDependencyCache.set(file, dependencies);
   return dependencies;
 }
 

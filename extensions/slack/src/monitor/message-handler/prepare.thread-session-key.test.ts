@@ -80,7 +80,8 @@ function firstBindingRouteRequest() {
   if (!call) {
     throw new Error("expected configured binding route call");
   }
-  return call[0];
+  const { route, ...request } = call[0];
+  return { ...request, route: Object.fromEntries(Object.entries(route)) };
 }
 
 describe("thread-level session keys", () => {

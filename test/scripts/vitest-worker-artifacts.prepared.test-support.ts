@@ -68,7 +68,7 @@ registerHooks({load(url,context,nextLoad) {
     const original=JSON.stringify(buildEntries+'?fixture-original');
     return {format:'module',shortCircuit:true,source:
       'export * from '+original+';import * as original from '+original+';'+
-      'export const legacyFinalizerBuildSources=original.legacyFinalizerBuildSources.filter(source=>source==="src/infra/runtime-process-entrypoints.ts");'};
+      'export const preservedModuleBuildSources=original.preservedModuleBuildSources.filter(source=>source==="src/infra/runtime-process-entrypoints.ts"||source==="scripts/run-with-env.mts");'};
   }
   if(url===${JSON.stringify(tsdown)} && process.argv[1]===${JSON.stringify(compiler)} && !narrow) {
     fs.appendFileSync(${JSON.stringify(receipt)},JSON.stringify({kind:'full',directory:process.argv[2]})+'\\n');
@@ -126,7 +126,7 @@ export function interceptCompilerBuild(directory: string, source: string): strin
 export const vitestWorkerBuildEntries = {
   "infra/sqlite-readonly-location.worker": original.vitestWorkerBuildEntries["infra/sqlite-readonly-location.worker"],
 };
-export const legacyFinalizerBuildSources = original.legacyFinalizerBuildSources.filter(
+export const preservedModuleBuildSources = original.preservedModuleBuildSources.filter(
   source => source === "src/infra/runtime-process-entrypoints.ts",
 );
 `,

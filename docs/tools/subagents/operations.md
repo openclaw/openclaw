@@ -90,6 +90,12 @@ collectors. Successful cancellation keeps selected queued collectors from
 starting while running children stop. Exact-run cancellation does not cancel
 unrelated turns or clear unrelated session-wide queues.
 
+Stop also retires pending completion continuations for the selected work, even
+when a child has already finished. Cancelling a completion turn retires its
+matching child batch, so automatic delivery retries cannot start it again under
+a new run ID. Captured child results and their execution outcomes remain intact;
+you can inspect them or send a new instruction afterward.
+
 For Gateway callers, `chat.abort` with a `runId` uses this exact-parent scope.
 `sessions.abort` with a `runId` also targets that run. When it resolves a recovered
 native run without a chat controller, it cancels children only if the captured

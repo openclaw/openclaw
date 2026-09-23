@@ -205,6 +205,7 @@ export function renderFieldRow(params: {
   control: TemplateResult | typeof nothing;
   stacked?: boolean;
   error?: unknown;
+  errorId?: string;
 }): TemplateResult {
   // Array/map item rows resolve their meta from the parent path (numeric and
   // wildcard segments collapse), so their help is the parent's. Showing it again
@@ -253,7 +254,19 @@ export function renderFieldRow(params: {
       }
       ${
         params.control !== nothing
-          ? html`<div class="settings-row__control">${params.control}</div>`
+          ? html`<div class="settings-row__control">
+              ${params.control}
+              ${
+                params.errorId
+                  ? html`<span
+                      id=${params.errorId}
+                      class="cfg-field__error settings-control__sr-label"
+                      role="alert"
+                      hidden
+                    ></span>`
+                  : nothing
+              }
+            </div>`
           : nothing
       }
     </div>

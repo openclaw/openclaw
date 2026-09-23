@@ -14,6 +14,25 @@ import { updateRecoverySchema } from "./update-recovery.js";
 import { UPDATE_RUN_TEXT_LIMIT, UPDATE_RUN_DIAGNOSTIC_LIMIT } from "./update-run-limits.js";
 import { UpdateSnapshotCapacitySchema } from "./update-snapshot-capacity-schema.js";
 
+const destinationPath = z.string().max(240);
+export const UpdateDestinationFailureSchema = z.strictObject({
+  ownership: z.enum(["foreign", "unknown"]),
+  cause: z.enum([
+    "package-mismatch",
+    "launcher-mismatch",
+    "permission",
+    "probe-failure",
+    "unreadable-layout",
+  ]),
+  destinationKind: z.enum(["npm-global", "unknown"]),
+  prefix: destinationPath.nullable(),
+  packageRoot: destinationPath.nullable(),
+  runningRoot: destinationPath,
+  runningPrefix: destinationPath.nullable(),
+  launcher: destinationPath.nullable(),
+  launcherTarget: destinationPath.nullable(),
+});
+
 export const UpdateFailureFactSchema = z.object({
   check: z.string().max(128),
   code: z.string().max(80),
@@ -22,6 +41,7 @@ export const UpdateFailureFactSchema = z.object({
   pluginId: z.string().max(80).optional(),
   errorName: z.string().max(80).nullable().optional(),
   location: z.string().max(160).nullable().optional(),
+  destination: UpdateDestinationFailureSchema.optional(),
 });
 
 const UpdateRollbackOutcomeSchema = z.object({

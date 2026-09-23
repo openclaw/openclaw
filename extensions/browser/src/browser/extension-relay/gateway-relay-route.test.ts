@@ -41,7 +41,8 @@ vi.mock("./relay-lifecycle.js", () => ({
 }));
 
 const resolveProfileMock = vi.fn();
-vi.mock("../config.js", () => ({
+vi.mock("../config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config.js")>()),
   resolveProfile: (...args: unknown[]) => resolveProfileMock(...args),
 }));
 
@@ -255,10 +256,24 @@ describe("handleGatewayExtensionUpgrade", () => {
   });
 
   it("authenticates before lazy-starting browser control on a fresh gateway", async () => {
-    const state = stateWithExtensionProfile();
+    const original = stateWithExtensionProfile();
+    const state = {
+      ...original,
+      profiles: new Map([
+        ["work", { profile: { name: "work", driver: "extension", cdpPort: 19444 } }],
+        ...original.profiles,
+      ]),
+      resolved: {
+        ...original.resolved,
+        defaultProfile: "chrome",
+        profiles: { work: { driver: "extension" }, ...original.resolved.profiles },
+      },
+    };
     getBrowserControlStateMock.mockReturnValue(null);
     startBrowserControlServiceFromConfigMock.mockResolvedValue(state);
-    primeProfile();
+    resolveProfileMock.mockImplementation(
+      (_resolved, name: string) => state.profiles.get(name)?.profile,
+    );
     const bridge = { id: "fresh-bridge" };
     ensureExtensionRelayForProfileMock.mockResolvedValue({ bridge });
     const ws = await mockSuccessfulUpgrade();
@@ -274,6 +289,10 @@ describe("handleGatewayExtensionUpgrade", () => {
     expect(readExtensionRelayTokenMock).toHaveBeenCalled();
     expect(() => ws.emit("error", new Error("Invalid WebSocket frame"))).not.toThrow();
     expect(startBrowserControlServiceFromConfigMock).toHaveBeenCalledOnce();
+    expect(ensureExtensionRelayForProfileMock).toHaveBeenCalledWith(
+      state,
+      expect.objectContaining({ name: "work", cdpPort: 19444 }),
+    );
     await expect
       .poll(() => attachExtensionWebSocketMock.mock.calls)
       .toContainEqual([bridge, expect.objectContaining({ readyState: 1 })]);

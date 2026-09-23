@@ -57,6 +57,14 @@ stop with a warning naming those counts; missing custody information never block
 the update. The next Gateway starts with the refreshed service policy. An operator drop-in
 that still shortens the native timeout is preserved and reported.
 
+Maintenance drain uses the service's local credentials, including an existing
+paired operator identity when no shared token or password is configured. It does
+not create an identity or request new pairing. Older installed updaters that omit
+this identity can report `device identity required` and wait until their existing
+drain deadline before stopping with a warning. A newer candidate cannot change
+that already-running updater; subsequent updates use the corrected local control
+client after installation.
+
 Explicit package artifacts, such as tarball paths and URLs, compare known build
 IDs before a same-version no-op. Matching known identity leaves the package unchanged;
 different or missing identity continues through normal update validation and
@@ -102,6 +110,12 @@ Interrupting a fresh local update before activation records a failed,
 An interrupted update is not a successful update or a verified rollback.
 Unresolved effects remain visible in the update report. Unsupported pending
 checkpoint records block further mutable update work and remain unchanged.
+
+After the target Doctor migrates shared state, the installed target runtime owns
+database validation, service finalization, and update-history writes, including
+rollback outcomes. The parent updater retains its live installation and requester
+checks without reopening migrated state through its older schema. A successful
+migration proceeds to finalization; it still prohibits code-only rollback.
 
 For versions that support checks before installation, the old Gateway keeps serving through `staging` and
 `validating`. The updater uses the new version to run health checks
@@ -149,6 +163,14 @@ After the package is installed, a failed post-plugin Doctor process is a recorde
 warning when it has no explicit writer or migration refusal. The updater still
 validates the final config and readiness, then starts the Gateway. A child whose
 termination cannot be confirmed remains blocking because it may still write state.
+
+Doctor's disposable database migration and repair connections use a 64 MiB SQLite
+page-cache allowance to reduce repeated reads while rebuilding large stores.
+The allowance ends when each connection closes; serving connections keep their
+existing cache policy. Transcript conversion also reuses parsed JSON while
+preparing navigation metadata, preserving the original transcript bytes. These
+candidate-side improvements apply when an older updater invokes the new Doctor;
+they do not change that updater's deadlines, integrity checks, or rollback rules.
 
 In the private migration rehearsal, Doctor lint defers optional core inspections
 until after activation. This includes per-agent model and tool-schema diagnostics;
@@ -383,17 +405,14 @@ count toward downtime. Unchanged plugins use read-only validation and readiness
 checks without another full Doctor pass. Service ownership is revalidated after
 convergence, and final runtime verification checks the resulting snapshot.
 
-If `update finalize` finds a live Gateway holding maintenance ownership, it uses
-the existing restart readiness wait within the remaining finalization allowance.
-When that exact process is verified serving the installed version and build,
-finalization leaves it running and exits successfully with a warning. The history
-records `finalize:doctor` as skipped and identifies the holder. Doctor, config
-changes, and plugin convergence remain pending until the next maintenance window:
-stop the Gateway through its owner, run `openclaw update repair`, then start it
-through the same owner. Deferred finalization does not resolve earlier interrupted
-updates. A dead process releases its physical maintenance lock; its stale lease
-does not qualify for this warning path. Ordinary maintenance admission and lease
-reclamation still apply, including refusals for unsafe or unreadable state.
+When Doctor cannot acquire maintenance before repair writes begin, finalization
+restores any service it stopped and exits successfully with a recorded warning.
+This includes lock contention from unknown or non-serving processes. Doctor and
+plugin convergence remain pending; resolve the named refusal and run
+`openclaw update repair` again. Deferred finalization does not acknowledge earlier
+interrupted updates or mark pending migrations complete. A live or unverified Gateway, active migration writes,
+unreadable state, incomplete migrations, and unsettled cleanup still fail rather
+than releasing their recovery obligations.
 
 This behavior lives in the installed finalizer, so published updaters can use it
 when they invoke the new version's `update finalize`. Older parents may omit the
@@ -561,6 +580,17 @@ Gateway handoff remain supported.
 <a id="candidate-validation-and-service-definitions" />
 
 #### Update validation and service definitions
+
+Before restarting a writable managed service, update finalization uses the
+shared service audit and native installer to repair recognized stale policy.
+It backs up the definition, preserves supported custom settings, and records
+changed keys and backup paths in update warnings. Unknown operator edits remain
+unchanged. Update-time Doctor reports drift and leaves this rewrite to finalization.
+
+Candidate-owned rollback restores the verified definition backup before running
+the previous installer's recovery. When an older published updater owns rollback,
+that release's installer regenerates the definition with the settings it supports;
+the retained backup records the original bytes.
 
 With a local managed service and restart enabled, update validation precedes
 the stop as described above. The updater reports `Gateway: restarted and verified.`

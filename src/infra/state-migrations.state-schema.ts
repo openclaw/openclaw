@@ -1,7 +1,5 @@
 import {
-  closeOpenClawStateDatabaseByPathAsync,
-  repairOpenClawStateDatabaseSchema,
-  repairOpenClawStateDatabaseSchemaIfNeeded,
+  prepareOpenClawStateDatabaseSchema,
   type OpenClawStateDatabaseSchemaMigration,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -56,7 +54,7 @@ export function describeStateSchemaMigration(
 export function createStateSchemaMigrationStep(params: {
   stateDir: string;
   env: NodeJS.ProcessEnv;
-  mode: LegacyStateMigrationMode;
+  mode: LegacyStateMigrationMode | "doctor-preparation";
   requiredness: LegacyStateMigrationStep["requiredness"];
 }): LegacyStateMigrationStep {
   const stateEnv = { ...params.env, OPENCLAW_STATE_DIR: params.stateDir };
@@ -71,14 +69,6 @@ export function createStateSchemaMigrationStep(params: {
     target: [database],
     requiredness: params.requiredness,
     reversibility: "checkpoint-required",
-    run: async () => {
-      const result =
-        params.mode === "doctor"
-          ? repairOpenClawStateDatabaseSchema({ env: stateEnv })
-          : repairOpenClawStateDatabaseSchemaIfNeeded({ env: stateEnv });
-      // Repair invalidates worker admission; join retirement before the next step acquires custody.
-      await closeOpenClawStateDatabaseByPathAsync(database.path);
-      return result;
-    },
+    run: () => prepareOpenClawStateDatabaseSchema({ env: stateEnv }, params.mode),
   };
 }

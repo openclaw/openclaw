@@ -206,6 +206,7 @@ export function renderTextInput(
   const { label, help } = resolveFieldMeta(path, schema, hints);
   const helpId =
     params.descriptionId ?? (showLabel && help ? configFieldId(path, "description") : undefined);
+  const errorId = configFieldId(path, "scalar-error");
   const sensitiveState = getSensitiveRenderState(params);
   const isStructuredValue =
     value !== null && value !== undefined && typeof value === "object" && !Array.isArray(value);
@@ -360,7 +361,7 @@ export function renderTextInput(
       type=${effectiveInputType}
       class="settings-input${effectiveRedacted ? " cfg-redacted" : ""}"
       aria-label=${label}
-      aria-describedby=${helpId ?? nothing}
+      aria-describedby=${[helpId, errorId].filter(Boolean).join(" ")}
       aria-invalid="false"
       placeholder=${placeholder}
       .value=${renderedValue}
@@ -454,6 +455,7 @@ export function renderTextInput(
       effectiveRedacted || masked ? nothing : renderSchemaDefaultDescription(schema, value),
     showLabel,
     control: presentedInput,
+    errorId,
   });
 }
 
@@ -463,6 +465,7 @@ export function renderNumberInput(params: ConfigNodeRenderParams): TemplateResul
   const { label, help } = resolveFieldMeta(path, schema, hints);
   const helpId =
     params.descriptionId ?? (showLabel && help ? configFieldId(path, "description") : undefined);
+  const errorId = configFieldId(path, "scalar-error");
   const displayValue = value ?? (params.compact ? schema.default : undefined) ?? "";
   const effectiveValue = value !== undefined ? value : schema.default;
   const constraints = numericInputConstraints(schema);
@@ -531,7 +534,7 @@ export function renderNumberInput(params: ConfigNodeRenderParams): TemplateResul
       type="number"
       class="settings-input"
       aria-label=${label}
-      aria-describedby=${helpId ?? nothing}
+      aria-describedby=${[helpId, errorId].filter(Boolean).join(" ")}
       aria-invalid="false"
       placeholder=${
         hintForPath(path, hints)?.placeholder ??
@@ -625,6 +628,7 @@ export function renderNumberInput(params: ConfigNodeRenderParams): TemplateResul
     defaultDescription: renderSchemaDefaultDescription(schema, value),
     showLabel,
     control,
+    errorId,
   });
 }
 

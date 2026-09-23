@@ -1,16 +1,18 @@
+import {
+  createAgentHarnessAttemptDeadlineController,
+  type AgentHarnessAttemptTimeout,
+} from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createAgentHarnessToolExecutionRegistry } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   closeCodexStartupClientBestEffort,
   interruptCodexTurnAndWaitBestEffort,
 } from "./attempt-client-cleanup.js";
-import {
-  createCodexAttemptDeadlineController,
-  type CodexAttemptTimeout,
-} from "./attempt-deadlines.js";
 import { createCodexSteeringQueue } from "./attempt-steering.js";
 import type { AttemptSettlementWarning } from "./attempt-terminal.js";
+import { TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS } from "./attempt-timeouts.js";
 import type { CodexDynamicToolRuntimeResponse } from "./dynamic-tool-response-state.js";
 import {
   resolveCodexNativeHookRelayTtlMs,
@@ -18,7 +20,6 @@ import {
 } from "./native-hook-relay.js";
 import type { CodexServerNotification, CodexDynamicToolCallParams } from "./protocol.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
-import { createCodexDynamicToolExecutionRegistry } from "./run-attempt-tools.js";
 import { createCodexUserInputBridge } from "./user-input-bridge.js";
 
 const CODEX_NATIVE_HOOK_RELAY_RENEW_INTERVAL_MS = 60_000;
@@ -36,7 +37,7 @@ class CodexAttemptState {
   // App-server collapses user interrupts and replacements to "interrupted";
   // this marker remains the user-interrupt hint until Codex exposes abortReason.
   sawCodexInterruptMarker = false;
-  timeout?: CodexAttemptTimeout;
+  timeout?: AgentHarnessAttemptTimeout;
   // Only the correlated completed-answer deadline fills this slot.
   settlementWarning?: AttemptSettlementWarning;
   // Finalization fills this slot while its transcript mirror is pending.
@@ -76,7 +77,10 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
   const pendingOpenClawDynamicToolCompletionIds = new Set<string>();
   // One execution promise per call id prevents duplicate delivery from
   // repeating non-idempotent computer input while the attempt remains active.
-  const openClawDynamicToolExecutions = createCodexDynamicToolExecutionRegistry();
+  const openClawDynamicToolExecutions = createAgentHarnessToolExecutionRegistry<
+    Pick<CodexDynamicToolCallParams, "threadId" | "turnId" | "callId">,
+    CodexDynamicToolRuntimeResponse
+  >((call) => [call.threadId, call.turnId, call.callId]);
   const activeTurnItemIds = new Set<string>();
   const turnIdRef: { current?: string } = {};
   const userInputBridgeRef: { current?: ReturnType<typeof createCodexUserInputBridge> } = {};
@@ -166,9 +170,10 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
       reason: `codex_app_server:${reason}`,
     });
   };
-  const deadlines = createCodexAttemptDeadlineController({
+  const deadlines = createAgentHarnessAttemptDeadlineController({
     startedAtMs: connection.attemptStartedAt,
     timeoutMs: params.timeoutMs,
+    settlementTimeoutMs: TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS,
     signal: runAbortController.signal,
     onDeadlineChanged: params.onAttemptDeadlineChanged,
     onTimeout: (timeout) => {

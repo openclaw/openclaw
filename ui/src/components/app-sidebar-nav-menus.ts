@@ -68,6 +68,7 @@ export function renderSidebarNavRoute(params: SidebarNavRouteParams) {
     <a
       href=${params.href}
       class="nav-item ${params.active ? "nav-item--active" : ""}"
+      aria-current=${params.active ? "page" : nothing}
       @focus=${(event: Event) => params.onPreload(event)}
       @blur=${params.onCancelPreload}
       @pointerenter=${(event: Event) => params.onPreload(event)}

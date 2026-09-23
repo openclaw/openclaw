@@ -84,6 +84,7 @@ import { resolveForegroundUpdateAdmission } from "./update-command-handoff.js";
 import { revalidateUpdateDatabaseContext } from "./update-command-managed-context.js";
 import {
   admitMutableUpdateSignalRun,
+  retireMutableUpdateSignalRun,
   withMutableUpdateSignals,
 } from "./update-command-mutable-signals.js";
 import { UpdateCommandPendingRecoveryFailure } from "./update-command-result.js";
@@ -433,7 +434,9 @@ export function createUpdateRunProgress(
   return {
     pendingSteps,
     onRollbackOutcome: (rollbackOutcome) => {
-      recordUpdateRunVerification(run.runId, { rollbackOutcome }, { env: run.env });
+      if (!deferred) {
+        recordUpdateRunVerification(run.runId, { rollbackOutcome }, { env: run.env });
+      }
     },
     onHeartbeat() {
       if (!deferred) {
@@ -444,6 +447,7 @@ export function createUpdateRunProgress(
       // Candidate Doctor can advance SQLite beyond this process's reader. Hold
       // activation receipts until the supported runtime owns ledger writes.
       deferred = true;
+      retireMutableUpdateSignalRun(run);
     },
     flushLedgerWrites() {
       deferred = false;

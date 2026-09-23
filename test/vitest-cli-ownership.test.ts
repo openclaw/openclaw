@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, assert, expect, it } from "vitest";
+import { afterEach, assert, beforeAll, expect, it } from "vitest";
 import { buildVitestRunPlans } from "../scripts/test-projects.test-support.mts";
 import { createPatternFileHelper } from "./helpers/pattern-file.js";
 import { createCliVitestConfig } from "./vitest/vitest.cli.config.ts";
@@ -56,6 +56,11 @@ function selectedByFilters(file: string, filters: string[]): boolean {
     filters.some((filter) => file === filter || file.startsWith(`${filter}/`))
   );
 }
+
+let canonicalGatewayFiles: ReturnType<typeof gatewayProjectFiles>;
+beforeAll(() => {
+  canonicalGatewayFiles = gatewayProjectFiles([]);
+});
 
 it.each([
   ...[
@@ -168,7 +173,7 @@ it.each([
     },
   ]);
   const includeFile = patternFiles.writePatternFile("include.json", plans[0]!.includePatterns);
-  const canonical = gatewayProjectFiles([]);
+  const canonical = canonicalGatewayFiles;
   const expected = Object.fromEntries(
     Object.entries(canonical).map(([name, files]) => [
       name,
@@ -199,7 +204,7 @@ it.each(
     ["src/gateway/server", "src/gateway/worker-environments"],
   ].map((filters) => ({ filters })),
 )("preserves canonical project ownership for $filters", ({ filters }) => {
-  const canonical = gatewayProjectFiles([]);
+  const canonical = canonicalGatewayFiles;
   expect(canonical["gateway-database-workers"]).toEqual(gatewayDatabaseWorkerTestFiles);
   const expected = Object.fromEntries(
     Object.entries(canonical).map(([name, files]) => [

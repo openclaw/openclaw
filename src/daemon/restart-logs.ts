@@ -97,7 +97,7 @@ export function appendGatewayLifecycleAuditLog(
   }
 }
 
-export function shellEscapeRestartLogValue(value: string): string {
+function shellEscapeRestartLogValue(value: string): string {
   return value.replace(/'/g, "'\\''");
 }
 
