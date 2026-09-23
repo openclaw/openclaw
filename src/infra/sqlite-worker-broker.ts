@@ -252,7 +252,7 @@ export class SqliteWorkerBroker {
       retainSqliteWorkerAdmissionCleanup(admittedActor, options.retainCleanup, () =>
         this.lifecycle.closeActor(admittedActor, options.maintenanceScope),
       );
-      options.onNativeStopped?.(actor.nativeStopped);
+      options.onNativeStopped?.(actor.nativeStopped, () => admittedActor.closeReceipt);
       await actor.opened;
       options.assertCurrent?.();
       if (actor.retirementRequested) {
@@ -436,7 +436,15 @@ export class SqliteWorkerBroker {
     return this.lifecycle.createSlot(options, borrowedGenerationSlot, (slot) => ({
       fail: (reason, currentError, completed, openOutcome) =>
         this.fail(slot, reason, currentError, completed, openOutcome),
-      finish: (job, error, value, settlement) => this.finish(job, error, value, settlement),
+      finish: (job, error, value, settlement, closeReceipt) => {
+        if (job.request.type === "close" && closeReceipt) {
+          const actor = [...slot.actors].find((candidate) => candidate.id === job.request.actor);
+          if (actor) {
+            actor.closeReceipt = closeReceipt;
+          }
+        }
+        this.finish(job, error, value, settlement);
+      },
       dispatch: () => this.dispatch(slot),
     }));
   }

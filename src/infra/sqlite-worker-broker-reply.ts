@@ -20,6 +20,7 @@ import {
   retainSqliteWorkerErrorCode,
   SqliteWorkerError,
   type SqliteWorkerReply,
+  type SqliteWorkerCloseReceipt,
   type SqliteWorkerRequest,
 } from "./sqlite-worker-contract.js";
 import { createSqliteWorkerLifecyclePreparation } from "./sqlite-worker-lifecycle-preparation.js";
@@ -343,6 +344,7 @@ export type SqliteWorkerReplyOwner = {
     error?: unknown,
     value?: unknown,
     settlement?: SqliteWorkerOperationSettlement,
+    closeReceipt?: SqliteWorkerCloseReceipt,
   ): void;
   dispatch(): void;
 };
@@ -443,7 +445,11 @@ export function receiveSqliteWorkerReply(
   }
   settle(() => {
     slot.current = undefined;
-    owner.finish(job, undefined, value);
+    if (job.request.type === "close") {
+      owner.finish(job, undefined, value, undefined, reply.closeReceipt);
+    } else {
+      owner.finish(job, undefined, value);
+    }
     owner.dispatch();
   });
 }

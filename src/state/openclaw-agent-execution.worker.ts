@@ -1,8 +1,17 @@
 import { MessageChannel, receiveMessageOnPort } from "node:worker_threads";
 import type { Result } from "@openclaw/normalization-core/result";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-coordinator.js";
+import { sqliteReaderDatabasePathKey } from "../infra/sqlite-reader-lifecycle.js";
 import { assertTransactionUsable } from "../infra/sqlite-transaction.js";
-import type { SqliteWorkerBackend } from "../infra/sqlite-worker-contract.js";
+import {
+  onSqliteWalCheckpoint,
+  type SqliteWalCheckpointSnapshot,
+} from "../infra/sqlite-wal-checkpoint.js";
+import {
+  SQLITE_WORKER_CLOSE_RECEIPT,
+  type SqliteWorkerCloseReceipt,
+  type SqliteWorkerPreparedBackend,
+} from "../infra/sqlite-worker-contract.js";
 import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
@@ -43,7 +52,7 @@ import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
 export function openExistingSqliteWorkerBackend(
   input: AgentDatabaseExecutionOpen,
   opening: { databasePath: string; existingIdentity?: string },
-): SqliteWorkerBackend<AgentDatabaseOperations> {
+): SqliteWorkerPreparedBackend<AgentDatabaseOperations> {
   if (opening.databasePath !== input.databasePath) {
     throw new Error("Agent database open does not match its captured execution owner");
   }
@@ -203,6 +212,7 @@ export function openExistingSqliteWorkerBackend(
     admit,
   });
   let closed = false;
+  let closeReceipt: SqliteWorkerCloseReceipt | undefined;
   const assertOpen = () => {
     if (closed) {
       throw new Error("Agent database execution owner is closed");
@@ -294,12 +304,35 @@ export function openExistingSqliteWorkerBackend(
       }
       throw new Error("Unknown agent database operation");
     },
+    [SQLITE_WORKER_CLOSE_RECEIPT]() {
+      return closeReceipt;
+    },
     close() {
       closed = true;
+      closeReceipt = undefined;
+      let checkpoint: SqliteWalCheckpointSnapshot | undefined;
       const errors: unknown[] = [];
       for (const cleanup of [
         () => domain.close(),
-        () => database && closeOpenClawAgentDatabaseByPath(database.path, database.agentId),
+        () => {
+          if (!database) {
+            return;
+          }
+          const closingPath = sqliteReaderDatabasePathKey(database.path);
+          const stopObserving = onSqliteWalCheckpoint((observation) => {
+            if (observation.databasePath === closingPath) {
+              checkpoint = {
+                health: observation.health,
+                observedAtNs: observation.observedAtNs,
+              };
+            }
+          });
+          try {
+            closeOpenClawAgentDatabaseByPath(database.path, database.agentId);
+          } finally {
+            stopObserving();
+          }
+        },
         () => releaseBorrow?.(),
         () => sharedBorrow?.release(),
       ]) {
@@ -318,6 +351,16 @@ export function openExistingSqliteWorkerBackend(
           "Agent database cleanup failed",
           errors[0],
         );
+      }
+      if (identity && checkpoint) {
+        closeReceipt = {
+          identity: {
+            key: `file:${identity.physicalIdentity}`,
+            canonicalPath: identity.nativeLocation,
+          },
+          incarnation: identity.incarnation,
+          checkpoint,
+        };
       }
     },
   };

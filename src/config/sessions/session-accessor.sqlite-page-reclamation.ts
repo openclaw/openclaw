@@ -228,8 +228,10 @@ export async function withSqliteSessionPageReclamation<T>(
       return result.value;
     };
     try {
-      const { withSessionHistoryWorkerDatabase } =
-        await import("./session-transcript-worker-runtime.js");
+      const [{ withSessionHistoryWorkerDatabase }, { maintenanceLane }] = await Promise.all([
+        import("./session-transcript-worker-runtime.js"),
+        import("./session-transcript-worker-resources.js"),
+      ]);
       assertPruningCurrent();
       return await withSessionHistoryWorkerDatabase(
         databaseOptions,
@@ -287,6 +289,7 @@ export async function withSqliteSessionPageReclamation<T>(
               },
             );
           }, signal),
+        maintenanceLane,
       );
     } finally {
       await execution.release();

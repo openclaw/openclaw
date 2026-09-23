@@ -1672,6 +1672,10 @@ Worker retirement preserves the original operation failure without reporting it
 again as a cleanup failure. A successfully retired execution owner is released for
 later requests; genuine native-close and lease-cleanup failures retain their
 existing retry custody.
+Successful pooled-agent close relays its recorded WAL checkpoint after native and
+lease cleanup settle. The original generation and physical database identities
+fence that observation, and the budget owner releases deferral only for a newer
+completed checkpoint.
 
 Usage-cache rollup writes, pruning, and refresh-lock changes use the same async
 agent-database admission. A cold mutation waits for the existing integrity worker;
