@@ -280,7 +280,14 @@ export function validateAndSanitizeRemoteModelCatalogBundle(
 export function validateAndSanitizeRemoteModelCatalogBundleV2(
   value: unknown,
 ): RemoteModelCatalogBundleV2 {
-  return stripRemoteTransportOverrides(
-    parseRemoteModelCatalogBundleV2(value),
-  ) as RemoteModelCatalogBundleV2; // SAFETY: only transport overrides are removed.
+  const bundle = parseRemoteModelCatalogBundleV2(value);
+  // Provider dictionary keys are identities, even when named "headers" or "baseUrl".
+  // Their strict defaults contain no transport overrides; only model metadata needs stripping.
+  return {
+    ...bundle,
+    models: bundle.models.map((model) => {
+      // SAFETY: strict v2 fields exclude transport keys; only freeform metadata can contain them.
+      return stripRemoteTransportOverrides(model) as RemoteModelCatalogModelV2;
+    }),
+  };
 }

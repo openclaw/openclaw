@@ -225,6 +225,20 @@ describe("remote model catalog v2", () => {
     });
   });
 
+  it("preserves provider identities that resemble transport fields", () => {
+    const bundle = validateAndSanitizeRemoteModelCatalogBundleV2({
+      ...validBundleV2,
+      providers: { headers: {}, baseUrl: {} },
+      models: [
+        { ...validBundleV2.models[0], provider: "headers" },
+        { ...validBundleV2.models[1], provider: "baseUrl" },
+      ],
+    });
+    expect(Object.keys(bundle.providers)).toEqual(["headers", "baseUrl"]);
+    expect(bundle.models.map((model) => model.provider)).toEqual(["headers", "baseUrl"]);
+    expect(() => parseRemoteModelCatalogBundleV2(bundle)).not.toThrow();
+  });
+
   it.each([
     {
       name: "duplicate tuple",
