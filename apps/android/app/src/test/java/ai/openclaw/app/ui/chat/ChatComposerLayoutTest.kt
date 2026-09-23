@@ -23,6 +23,7 @@ import ai.openclaw.app.chat.questionsForSession
 import ai.openclaw.app.closeNodeRuntimeTestFixture
 import ai.openclaw.app.gateway.GatewayRegistryEntry
 import ai.openclaw.app.gateway.GatewayRegistryEntryKind
+import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.i18n.NativeStringResources
 import ai.openclaw.app.i18n.nativeString
@@ -3219,6 +3220,102 @@ class ChatComposerLayoutTest {
       .getDeclaredField(name)
       .apply { isAccessible = true }
       .get(controller) as MutableStateFlow<T>
+
+  @Test
+  @Config(qualifiers = "w800dp-h800dp-mdpi")
+  fun effortHeldDragPreviewsGaugeAndCommitsOnlyOnRelease() =
+    withEffortRequests { model, requests, release ->
+      val dialog = openEffortSheet()
+      val (x, y, time) = startEffortDrag(dialog)
+      assertEquals("Preview must not dispatch", 0, requests.size)
+      assertEquals("Preview must not mutate the authoritative setting", "low", model.chatThinkingLevel.value)
+      assertEffortGauge("high")
+      composeRule.runOnUiThread { sheetTouch(dialog, MotionEvent.ACTION_UP, x, y, time, time + 80) }
+      composeRule.waitUntil { requests.size == 1 }
+      assertEquals(JsonPrimitive("high"), requests.single().second["thinkingLevel"])
+      composeRule.runOnIdle { release.complete(Unit) }
+      composeRule.waitUntil { model.chatThinkingLevel.value == "high" }
+      assertEffortGauge("high")
+      assertTrue(dialog.isShowing)
+    }
+
+  @Test
+  @Config(qualifiers = "w800dp-h800dp-mdpi")
+  fun effortCancelledDragAndRejectedReleaseRestoreAuthoritativeGauge() =
+    withEffortRequests { model, requests, release ->
+      val dialog = openEffortSheet()
+      val (x, y, time) = startEffortDrag(dialog)
+      composeRule.runOnUiThread { sheetTouch(dialog, MotionEvent.ACTION_CANCEL, x, y, time, time + 80) }
+      composeRule.waitForIdle()
+      assertEquals("A cancelled drag must not dispatch", 0, requests.size)
+      assertEffortGauge("low")
+      effortSlider().assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Low")))
+
+      val (nextX, nextY, nextTime) = startEffortDrag(dialog)
+      composeRule.runOnUiThread { sheetTouch(dialog, MotionEvent.ACTION_UP, nextX, nextY, nextTime, nextTime + 80) }
+      composeRule.waitUntil { requests.size == 1 }
+      composeRule.runOnIdle {
+        release.completeExceptionally(GatewayRequestRejected(GatewaySession.ErrorShape("FORBIDDEN", "Effort update rejected")))
+      }
+      composeRule.waitUntil {
+        composeRule.runOnIdle { model.chatThinkingLevel.value == "low" && model.chatPendingSessionSettingsKeys.value.isEmpty() }
+      }
+      assertEffortGauge("low")
+      effortSlider().assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Low")))
+      assertTrue(dialog.isShowing)
+    }
+
+  @Test
+  @Config(qualifiers = "w800dp-h800dp-mdpi")
+  fun effortModelChangeResetsHeldPreviewWithoutReplacingNativeSheet() =
+    withEffortRequests { model, requests, release ->
+      val dialog = openEffortSheet()
+      val staleSelect = checkNotNull(effortSlider().fetchSemanticsNode().config[SemanticsActions.SetProgress].action)
+      val (x, y, time) = startEffortDrag(dialog)
+      composeRule.mainClock.autoAdvance = false
+      composeRule.runOnUiThread {
+        controller.handleGatewayEvent(
+          "sessions.changed",
+          """{"session":{"key":"${controller.sessionKey.value}","modelProvider":"openai","model":"effort-proof-second"}}""",
+        )
+      }
+      composeRule.waitUntil { model.chatSelectedModelRef.value == "openai/effort-proof-second" }
+      composeRule.runOnUiThread { staleSelect(0f) }
+      assertEquals("A saved callback must reject the new model before recomposition", 0, requests.size)
+      composeRule.mainClock.autoAdvance = true
+      composeRule.waitForIdle()
+      assertTrue("A model change must preserve the same native sheet", dialog.isShowing)
+      assertTrue(dialog === ShadowDialog.getLatestDialog())
+      assertEffortGauge("low")
+      effortSlider().assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Low")))
+      composeRule.runOnUiThread { sheetTouch(dialog, MotionEvent.ACTION_UP, x, y, time, time + 80) }
+      composeRule.waitForIdle()
+      assertEquals("The old model's held gesture cannot commit to the new model", 0, requests.size)
+      val (nextX, nextY, nextTime) = startEffortDrag(dialog)
+      composeRule.runOnUiThread { sheetTouch(dialog, MotionEvent.ACTION_UP, nextX, nextY, nextTime, nextTime + 80) }
+      composeRule.waitUntil { requests.size == 1 }
+      composeRule.runOnIdle { release.complete(Unit) }
+      composeRule.waitUntil { model.chatThinkingLevel.value == "high" }
+      assertTrue(dialog.isShowing)
+    }
+
+  private fun assertEffortGauge(
+    level: String,
+    fast: Boolean = false,
+  ) {
+    composeRule
+      .onNode(hasContentDescription(nativeString("Thinking")) and hasAnyDescendant(hasTestTag("chat-thinking-gauge")), useUnmergedTree = true)
+      .assert(
+        SemanticsMatcher.expectValue(
+          SemanticsProperties.StateDescription,
+          chatThinkingChipStateDescription(
+            fast,
+            level,
+            listOf(ChatThinkingLevelOption("off", "off"), ChatThinkingLevelOption("low", "low"), ChatThinkingLevelOption("high", "high")),
+          ),
+        ),
+      )
+  }
 
   @Test
   @Config(qualifiers = "w800dp-h800dp-mdpi")

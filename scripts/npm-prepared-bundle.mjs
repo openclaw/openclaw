@@ -700,6 +700,18 @@ export function prepareNpmPackageBundle({
   releaseTag: requestedReleaseTag = "",
   npmDistTag,
   producer,
+  sanitizeRootDeclarations = (distRoot) => {
+    execFileSync(
+      process.execPath,
+      [
+        "--import",
+        join(sourceDir, "scripts/tsx.mjs"),
+        fileURLToPath(new URL("./lib/sanitize-bundler-helper-dts-exports.mts", import.meta.url)),
+        distRoot,
+      ],
+      { cwd: sourceDir, stdio: "inherit" },
+    );
+  },
   prepareRootShrinkwrap = ({ aiTarballPath }) => {
     execFileSync(
       process.execPath,
@@ -757,6 +769,10 @@ export function prepareNpmPackageBundle({
   }
   // Preserve non-root installs before hashing; qualified consumers never rewrite the archive.
   normalizePackModes(sourceDir);
+  const distRoot = join(sourceDir, "dist");
+  if (existsSync(distRoot)) {
+    sanitizeRootDeclarations(distRoot);
+  }
   const pack = (directory, packageName) => {
     const before = new Set(readdirSync(outputDir));
     runPack(directory, outputDir);
