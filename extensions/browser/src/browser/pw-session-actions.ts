@@ -1,7 +1,7 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { Browser, Page, Response } from "playwright-core";
-import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import {
   appendCdpPath,
   assertCdpEndpointAllowed,
@@ -661,6 +661,18 @@ export async function closePageByTargetIdViaPlaywright(opts: {
   signal?: AbortSignal;
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
+  await closeResolvedPageViaPlaywright(page, opts);
+}
+
+/** Close an already resolved page without bypassing dashboard or connection ownership. */
+export async function closeResolvedPageViaPlaywright(
+  page: Page,
+  opts: {
+    cdpUrl: string;
+    signal?: AbortSignal;
+    assertCurrent?: () => void | Promise<void>;
+  },
+): Promise<void> {
   opts.signal?.throwIfAborted();
   if (readBrowserDashboardTabs().length > 0) {
     const targetId = (await pageTargetInfo(page))?.targetId;
@@ -669,6 +681,10 @@ export async function closePageByTargetIdViaPlaywright(opts: {
       throw new Error("Cannot verify that this page is not retained by a dashboard");
     }
     assertBrowserDashboardTabCanClose(targetId);
+  }
+  const assertion = opts.assertCurrent?.();
+  if (assertion) {
+    await assertion;
   }
   if (isConnectionScopedPage(page)) {
     const browser = page.context().browser();
