@@ -2,159 +2,80 @@
 import type { Command } from "commander";
 import type { MessageCliHelpers } from "./helpers.js";
 
+const requiredOptions = {
+  guild: ["--guild-id <id>", "Guild id"],
+  user: ["--user-id <id>", "User id"],
+  role: ["--role-id <id>", "Role id"],
+  eventName: ["--event-name <name>", "Event name"],
+  startTime: ["--start-time <iso>", "Event start time"],
+} as const;
+
 /** Register Discord admin and moderation message subcommands. */
 export function registerMessageDiscordAdminCommands(message: Command, helpers: MessageCliHelpers) {
+  function register(
+    parent: Command,
+    name: string,
+    description: string,
+    action: string,
+    required: readonly (keyof typeof requiredOptions)[],
+  ) {
+    const command = parent.command(name).description(description);
+    // Required identifiers precede shared flags; leaf-specific options follow them.
+    for (const key of required) {
+      const [flags, optionDescription] = requiredOptions[key];
+      command.requiredOption(flags, optionDescription);
+    }
+    return helpers
+      .withMessageBase(command)
+      .action((opts) => helpers.runMessageAction(action, opts));
+  }
+
   const role = message.command("role").description("Role actions");
-  helpers
-    .withMessageBase(
-      role.command("info").description("List roles").requiredOption("--guild-id <id>", "Guild id"),
-    )
-    .action(async (opts) => {
-      await helpers.runMessageAction("role-info", opts);
-    });
-
-  helpers
-    .withMessageBase(
-      role
-        .command("add")
-        .description("Add role to a member")
-        .requiredOption("--guild-id <id>", "Guild id")
-        .requiredOption("--user-id <id>", "User id")
-        .requiredOption("--role-id <id>", "Role id"),
-    )
-    .action(async (opts) => {
-      await helpers.runMessageAction("role-add", opts);
-    });
-
-  helpers
-    .withMessageBase(
-      role
-        .command("remove")
-        .description("Remove role from a member")
-        .requiredOption("--guild-id <id>", "Guild id")
-        .requiredOption("--user-id <id>", "User id")
-        .requiredOption("--role-id <id>", "Role id"),
-    )
-    .action(async (opts) => {
-      await helpers.runMessageAction("role-remove", opts);
-    });
+  register(role, "info", "List roles", "role-info", ["guild"]);
+  register(role, "add", "Add role to a member", "role-add", ["guild", "user", "role"]);
+  register(role, "remove", "Remove role from a member", "role-remove", ["guild", "user", "role"]);
 
   const channel = message.command("channel").description("Channel actions");
   helpers
     .withMessageBase(
       helpers.withRequiredMessageTarget(channel.command("info").description("Fetch channel info")),
     )
-    .action(async (opts) => {
-      await helpers.runMessageAction("channel-info", opts);
-    });
-
-  helpers
-    .withMessageBase(
-      channel
-        .command("list")
-        .description("List channels")
-        .requiredOption("--guild-id <id>", "Guild id"),
-    )
-    .action(async (opts) => {
-      await helpers.runMessageAction("channel-list", opts);
-    });
+    .action((opts) => helpers.runMessageAction("channel-info", opts));
+  register(channel, "list", "List channels", "channel-list", ["guild"]);
 
   const member = message.command("member").description("Member actions");
-  helpers
-    .withMessageBase(
-      member
-        .command("info")
-        .description("Fetch member info")
-        .requiredOption("--user-id <id>", "User id"),
-    )
+  register(member, "info", "Fetch member info", "member-info", ["user"])
     .option("--guild-id <id>", "Guild id (Discord)")
-    .action(async (opts) => {
-      await helpers.runMessageAction("member-info", opts);
-    });
+    .option("--channel-id <id>", "Room id (Matrix) or Graph team-id/channel-id (Microsoft Teams)");
 
   const voice = message.command("voice").description("Voice actions");
-  helpers
-    .withMessageBase(
-      voice
-        .command("status")
-        .description("Fetch voice status")
-        .requiredOption("--guild-id <id>", "Guild id")
-        .requiredOption("--user-id <id>", "User id"),
-    )
-    .action(async (opts) => {
-      await helpers.runMessageAction("voice-status", opts);
-    });
+  register(voice, "status", "Fetch voice status", "voice-status", ["guild", "user"]);
 
   const event = message.command("event").description("Event actions");
-  helpers
-    .withMessageBase(
-      event
-        .command("list")
-        .description("List scheduled events")
-        .requiredOption("--guild-id <id>", "Guild id"),
-    )
-    .action(async (opts) => {
-      await helpers.runMessageAction("event-list", opts);
-    });
-
-  helpers
-    .withMessageBase(
-      event
-        .command("create")
-        .description("Create a scheduled event")
-        .requiredOption("--guild-id <id>", "Guild id")
-        .requiredOption("--event-name <name>", "Event name")
-        .requiredOption("--start-time <iso>", "Event start time"),
-    )
+  register(event, "list", "List scheduled events", "event-list", ["guild"]);
+  register(event, "create", "Create a scheduled event", "event-create", [
+    "guild",
+    "eventName",
+    "startTime",
+  ])
     .option("--end-time <iso>", "Event end time")
     .option("--desc <text>", "Event description")
     .option("--channel-id <id>", "Channel id")
     .option("--location <text>", "Event location")
     .option("--event-type <stage|external|voice>", "Event type")
-    .option("--image <url>", "Cover image URL or local file path")
-    .action(async (opts) => {
-      await helpers.runMessageAction("event-create", opts);
-    });
+    .option("--image <url>", "Cover image URL or local file path");
 
-  helpers
-    .withMessageBase(
-      message
-        .command("timeout")
-        .description("Timeout a member")
-        .requiredOption("--guild-id <id>", "Guild id")
-        .requiredOption("--user-id <id>", "User id"),
-    )
+  register(message, "timeout", "Timeout a member", "timeout", ["guild", "user"])
     .option("--duration-min <n>", "Timeout duration minutes")
     .option("--until <iso>", "Timeout until")
-    .option("--reason <text>", "Moderation reason")
-    .action(async (opts) => {
-      await helpers.runMessageAction("timeout", opts);
-    });
+    .option("--reason <text>", "Moderation reason");
 
-  helpers
-    .withMessageBase(
-      message
-        .command("kick")
-        .description("Kick a member")
-        .requiredOption("--guild-id <id>", "Guild id")
-        .requiredOption("--user-id <id>", "User id"),
-    )
-    .option("--reason <text>", "Moderation reason")
-    .action(async (opts) => {
-      await helpers.runMessageAction("kick", opts);
-    });
+  register(message, "kick", "Kick a member", "kick", ["guild", "user"]).option(
+    "--reason <text>",
+    "Moderation reason",
+  );
 
-  helpers
-    .withMessageBase(
-      message
-        .command("ban")
-        .description("Ban a member")
-        .requiredOption("--guild-id <id>", "Guild id")
-        .requiredOption("--user-id <id>", "User id"),
-    )
+  register(message, "ban", "Ban a member", "ban", ["guild", "user"])
     .option("--reason <text>", "Moderation reason")
-    .option("--delete-days <n>", "Ban delete message days")
-    .action(async (opts) => {
-      await helpers.runMessageAction("ban", opts);
-    });
+    .option("--delete-days <n>", "Ban delete message days");
 }

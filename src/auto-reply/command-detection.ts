@@ -8,7 +8,7 @@ import { matchPluginCommand } from "../plugins/commands.js";
 import { listChatCommands, listChatCommandsForConfig } from "./commands-registry-list.js";
 import { normalizeCommandBody } from "./commands-registry-normalize.js";
 import type { CommandNormalizeOptions } from "./commands-registry.types.js";
-import { isAbortTrigger } from "./reply/abort-primitives.js";
+import { isAbortTrigger } from "./reply/abort-trigger-text.js";
 import { stripInboundMetadata } from "./reply/strip-inbound-meta.js";
 
 /** Returns true when text starts with a configured control command alias. */
@@ -74,6 +74,18 @@ export function isControlCommandMessage(
   const normalized =
     normalizeOptionalLowercaseString(normalizeCommandBody(stripped, options)) ?? "";
   return isAbortTrigger(normalized);
+}
+
+/** Returns true when a command starts a new transcript rather than resetting in place. */
+export function isSessionBoundaryCommandText(
+  text?: string,
+  options?: CommandNormalizeOptions,
+): boolean {
+  const stripped = stripInboundMetadata(text?.trim() ?? "");
+  const normalized = normalizeCommandBody(stripped, options);
+  return (
+    /^\/(?:new|reset)(?:\s|$)/i.test(normalized) && !/^\/reset\s+soft(?:\s|$)/i.test(normalized)
+  );
 }
 
 /**

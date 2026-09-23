@@ -1,8 +1,10 @@
+import type { CloudflareAccessCredentials } from "../../packages/gateway-client/src/cloudflare-access.js";
+import type { DesktopHostConfig } from "../config/types.desktop.js";
 import { createExecApprovalPolicySnapshot } from "../infra/exec-approvals.js";
 import type { scanInstalledApps } from "../infra/installed-apps.js";
 import type { OpenClawPluginNodeHostCommandIo } from "../plugins/types.js";
 import type { OpenClawPluginNodeHostCommandContext } from "../plugins/types.node-host.js";
-import type { NodeHostClient } from "./client.js";
+import type { NodeHostClient, NodeInvokeResponder } from "./client.js";
 import {
   decodeClaudeCliNodeRunParams,
   type ClaudeCliNodeRunParams,
@@ -25,6 +27,11 @@ export type NodeHostInvokeRuntime = {
   installedAppsSharingEnabled?: boolean;
   installedAppsPlatform?: NodeJS.Platform;
   scanInstalledApps?: typeof scanInstalledApps;
+  gatewayUrl?: string;
+  gatewayTlsFingerprint?: string;
+  gatewayCloudflareAccess?: CloudflareAccessCredentials;
+  desktopHostConfig?: DesktopHostConfig;
+  emitProgress?: (text: string) => Promise<void>;
 };
 
 type ClaudeCliNodeInvokeDeps = Pick<
@@ -35,44 +42,62 @@ type ClaudeCliNodeInvokeDeps = Pick<
   | "sanitizeEnv"
   | "runViaMacAppExecHost"
   | "buildExecEventPayload"
-> & {
-  sendErrorResult: (
-    client: NodeHostClient,
-    frame: NodeInvokeRequestPayload,
-    code: string,
-    message: string,
-  ) => Promise<void>;
-  sendInvalidRequestResult: (
-    client: NodeHostClient,
-    frame: NodeInvokeRequestPayload,
-    error: unknown,
-  ) => Promise<void>;
-  sendInvokeResult: (
-    client: NodeHostClient,
-    frame: NodeInvokeRequestPayload,
-    result: {
-      ok: boolean;
-      payload?: unknown;
-      payloadJSON?: string | null;
-      error?: { code?: string; message?: string } | null;
+>;
+
+const CLAUDE_NODE_AUTH_INPUTS = [
+  {
+    requestEnv: "CLAUDE_CODE_OAUTH_TOKEN",
+    descriptorEnv: "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR",
+  },
+  {
+    requestEnv: "ANTHROPIC_API_KEY",
+    descriptorEnv: "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
+  },
+] as const;
+
+function prepareClaudeNodeSecretInput(params: {
+  requestEnv: Record<string, string> | undefined;
+  childEnv: Record<string, string>;
+}): { secretInput?: { fd: 3; createData: () => Buffer }; cleanup: () => void } {
+  const selected = CLAUDE_NODE_AUTH_INPUTS.find(({ requestEnv }) =>
+    Object.hasOwn(params.requestEnv ?? {}, requestEnv),
+  );
+  if (!selected) {
+    return { cleanup: () => {} };
+  }
+  for (const key of [
+    "ANTHROPIC_API_KEY",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB",
+  ]) {
+    delete params.childEnv[key];
+  }
+  const value = params.requestEnv?.[selected.requestEnv]?.trim();
+  // An empty descriptor suppresses Claude's healthy native login.
+  if (!value) {
+    return { cleanup: () => {} };
+  }
+  const source = Buffer.from(value, "utf8");
+  params.childEnv[selected.descriptorEnv] = "3";
+  return {
+    secretInput: {
+      fd: 3,
+      createData: () => Buffer.from(source),
     },
-  ) => Promise<void>;
-};
+    cleanup: () => source.fill(0),
+  };
+}
 
 export async function handleClaudeCliNodeInvoke(params: {
   frame: NodeInvokeRequestPayload;
   client: NodeHostClient;
+  response: NodeInvokeResponder;
   skillBins: SkillBinsProvider;
   runtime: NodeHostInvokeRuntime;
   deps: ClaudeCliNodeInvokeDeps;
 }): Promise<void> {
   if (!params.runtime.claudePath) {
-    await params.deps.sendErrorResult(
-      params.client,
-      params.frame,
-      "UNAVAILABLE",
-      "Claude CLI agent runs are unavailable",
-    );
+    await params.response.error("UNAVAILABLE", "Claude CLI agent runs are unavailable");
     return;
   }
   const claudePath = params.runtime.claudePath;
@@ -80,7 +105,7 @@ export async function handleClaudeCliNodeInvoke(params: {
   try {
     request = await decodeClaudeCliNodeRunParams(params.frame.paramsJSON);
   } catch (error) {
-    await params.deps.sendInvalidRequestResult(params.client, params.frame, error);
+    await params.response.invalid(error);
     return;
   }
   const approvalCommand = [claudePath, ...request.argv];
@@ -91,12 +116,7 @@ export async function handleClaudeCliNodeInvoke(params: {
     ...(request.sessionKey ? { sessionKey: request.sessionKey } : {}),
   });
   if (!preparedApproval.ok) {
-    await params.deps.sendErrorResult(
-      params.client,
-      params.frame,
-      "INVALID_REQUEST",
-      preparedApproval.message,
-    );
+    await params.response.error("INVALID_REQUEST", preparedApproval.message);
     return;
   }
   const { getRuntimeConfig: getNodeRuntimeConfig } = await import("../config/config.js");
@@ -118,7 +138,8 @@ export async function handleClaudeCliNodeInvoke(params: {
   await (params.runtime.handleSystemRun ?? handleSystemRunInvoke)({
     client: params.client,
     // The command-specific validator is the execution boundary. Approval sees
-    // every executable argument; prompt/stdin content remains request input.
+    // every caller-supplied executable argument. The node adds its own prompt,
+    // verified resources, and invocation-only MCP proxy after approval.
     params: {
       command: approvalCommand,
       ...(request.cwd ? { cwd: request.cwd } : {}),
@@ -136,17 +157,34 @@ export async function handleClaudeCliNodeInvoke(params: {
     resolveExecAsk: params.deps.resolveExecAsk,
     isCmdExeInvocation: params.deps.isCmdExeInvocation,
     sanitizeEnv: params.deps.sanitizeEnv,
-    runCommand: async (approvalArgv, cwd, env, timeoutMs) => {
-      runResult = await runClaudeCliNodeCommand({
-        client: params.client,
-        frame: params.frame,
-        request,
-        argv: approvalArgv,
-        cwd,
-        env,
-        timeoutMs,
-        signal: params.runtime.signal,
+    runCommand: async (approvalArgv, cwd, env, timeoutMs, _signal, assertCurrent) => {
+      const childEnv = { ...env };
+      for (const key of request.clearEnv ?? []) {
+        if (!Object.hasOwn(request.env ?? {}, key)) {
+          delete childEnv[key];
+        }
+      }
+      const preparedSecret = prepareClaudeNodeSecretInput({
+        requestEnv: request.env,
+        childEnv,
       });
+      try {
+        runResult = await runClaudeCliNodeCommand({
+          client: params.client,
+          frame: params.frame,
+          request,
+          argv: approvalArgv,
+          cwd,
+          env: childEnv,
+          secretInput: preparedSecret.secretInput,
+          timeoutMs,
+          signal: params.runtime.signal,
+          assertCurrent,
+          skillIo: params.runtime.pluginCommandIo,
+        });
+      } finally {
+        preparedSecret.cleanup();
+      }
       return runResult;
     },
     runViaMacAppExecHost: params.deps.runViaMacAppExecHost,
@@ -161,7 +199,7 @@ export async function handleClaudeCliNodeInvoke(params: {
         !request.approvalDecision &&
         result.error?.message?.includes("approval required")
       ) {
-        await params.deps.sendInvokeResult(params.client, params.frame, {
+        await params.response.send({
           ok: true,
           payloadJSON: JSON.stringify({
             approvalRequired: true,
@@ -173,7 +211,7 @@ export async function handleClaudeCliNodeInvoke(params: {
         return;
       }
       if (!result.ok || !runResult) {
-        await params.deps.sendInvokeResult(params.client, params.frame, result);
+        await params.response.send(result);
         return;
       }
       const payload: ClaudeCliNodeRunResult = {
@@ -184,7 +222,7 @@ export async function handleClaudeCliNodeInvoke(params: {
           ? { timeoutKind: runResult.noOutputTimedOut ? ("idle" as const) : ("hard" as const) }
           : {}),
       };
-      await params.deps.sendInvokeResult(params.client, params.frame, {
+      await params.response.send({
         ok: true,
         payloadJSON: JSON.stringify(payload),
       });

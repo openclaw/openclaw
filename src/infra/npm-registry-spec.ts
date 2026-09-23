@@ -12,6 +12,36 @@ const OPENCLAW_RELEASE_PREFIX_RE = /^\d{4}\./;
 const DIST_TAG_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 /**
+ * npm ≤11 prints `npm view`/`npm pack` `--json` results as a bare entry object
+ * or an entry array; npm 12 wraps view results in a singleton array and keys
+ * pack results by package name. Normalize both shapes to the entry list, or
+ * metadata reads mistake the wrapper for an entry and fail closed with
+ * incomplete-metadata errors.
+ */
+export function resolveNpmJsonEntries(value: unknown): unknown[] {
+  if (Array.isArray(value)) {
+    return value;
+  }
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    const looksLikeEntry =
+      typeof record.id === "string" ||
+      typeof record.name === "string" ||
+      typeof record.version === "string" ||
+      typeof record.filename === "string";
+    if (!looksLikeEntry) {
+      const entries = Object.values(record).filter(
+        (entry) => Boolean(entry) && typeof entry === "object" && !Array.isArray(entry),
+      );
+      if (entries.length > 0) {
+        return entries;
+      }
+    }
+  }
+  return [value];
+}
+
+/**
  * Parsed registry-only npm spec accepted by plugin install flows.
  * Selectors are limited to exact versions and dist-tags; URL/git/file specs
  * are rejected before they can execute on the gateway host.
@@ -118,12 +148,6 @@ export function parseRegistryNpmSpec(rawSpec: string): ParsedRegistryNpmSpec | n
   return parsed.ok ? parsed.parsed : null;
 }
 
-/** Returns whether a user-provided npm spec resolves to the official OpenClaw npm scope. */
-export function isOpenClawOrgNpmSpec(rawSpec: string | undefined): boolean {
-  const parsed = rawSpec ? parseRegistryNpmSpec(rawSpec) : null;
-  return parsed?.name.startsWith("@openclaw/") === true;
-}
-
 /** Validates a registry-only npm spec and returns a user-facing error when rejected. */
 export function validateRegistryNpmSpec(rawSpec: string): string | null {
   const parsed = parseRegistryNpmSpecInternal(rawSpec);
@@ -169,6 +193,15 @@ function parseOpenClawReleaseVersion(value: string): SemVer | null {
 function isOpenClawStableCorrectionVersion(value: string): boolean {
   const parsed = parseOpenClawReleaseVersion(value);
   return parsed !== null && isOpenClawCorrectionSemver(parsed);
+}
+
+/** Resolves stable correction releases to their shared base release cohort. */
+export function resolveOpenClawReleaseCohortVersion(value: string): string {
+  const trimmed = value.trim();
+  const parsed = parseOpenClawReleaseVersion(trimmed);
+  return parsed && isOpenClawCorrectionSemver(parsed)
+    ? `${parsed.major}.${parsed.minor}.${parsed.patch}`
+    : trimmed;
 }
 
 /** Compares OpenClaw monthly patch release versions across alpha, beta, stable, and corrections. */

@@ -3,6 +3,7 @@ import {
   listNativeCommandSpecsForConfig,
   type NativeCommandSpec,
 } from "openclaw/plugin-sdk/native-command-registry";
+import { truncateCodePoints } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { createClickClackClient } from "./http-client.js";
 import type { CoreConfig } from "./types.js";
 
@@ -21,10 +22,6 @@ type ClickClackCommandMenuLogger = {
   debug?: (message: string) => void;
   warn?: (message: string) => void;
 };
-
-function truncateCodePoints(value: string, maxLength: number): string {
-  return Array.from(value).slice(0, maxLength).join("");
-}
 
 function commandArgsHint(spec: NativeCommandSpec): string {
   if (spec.args?.length) {
@@ -86,6 +83,7 @@ function mapNativeCommandSpecsToClickClackMenu(
 }
 
 export async function syncClickClackCommandMenu(params: {
+  accountId: string;
   cfg: CoreConfig;
   client: ReturnType<typeof createClickClackClient>;
   log?: ClickClackCommandMenuLogger;
@@ -98,16 +96,19 @@ export async function syncClickClackCommandMenu(params: {
     await params.client.setBotCommands(commands);
   } catch (error) {
     const status = errorStatus(error);
+    const messagePrefix = `[${params.accountId}] ClickClack command menu sync`;
     if (status === 403) {
-      params.log?.warn?.("ClickClack command menu sync skipped: bot token lacks commands:write");
+      params.log?.warn?.(
+        `${messagePrefix} skipped: ${formatErrorMessage(error)}; verify token/workspace command permissions or set commandMenu: false if menus are not needed`,
+      );
       return;
     }
     if (status === 404) {
       params.log?.debug?.(
-        "ClickClack command menu sync skipped: server does not support /api/bots/self/commands",
+        `${messagePrefix} skipped: server does not support /api/bots/self/commands`,
       );
       return;
     }
-    params.log?.warn?.(`ClickClack command menu sync failed: ${formatErrorMessage(error)}`);
+    params.log?.warn?.(`${messagePrefix} failed: ${formatErrorMessage(error)}`);
   }
 }

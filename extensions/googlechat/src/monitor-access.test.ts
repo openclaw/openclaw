@@ -1,4 +1,5 @@
 // Googlechat tests cover monitor access plugin behavior.
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 const createChannelPairingController = vi.hoisted(() => vi.fn());
@@ -24,6 +25,7 @@ vi.mock("./api.js", () => ({
 function createCore() {
   return {
     channel: {
+      inbound: { ingress: createPluginRuntimeMock().channel.inbound.ingress },
       commands: {
         shouldComputeCommandAuthorized: vi.fn(() => false),
         resolveCommandAuthorizedFromAuthorizers: vi.fn(() => false),
@@ -140,10 +142,8 @@ describe("googlechat inbound access policy", () => {
       account: {
         accountId: "default",
         config: {
-          dm: {
-            policy: "allowlist",
-            allowFrom,
-          },
+          dmPolicy: "allowlist",
+          allowFrom,
         },
       } as never,
       senderId,
@@ -170,7 +170,7 @@ describe("googlechat inbound access policy", () => {
     const account = {
       accountId: "default",
       config: {
-        dm: { policy: "pairing" },
+        dmPolicy: "pairing",
       },
     };
 
@@ -191,6 +191,11 @@ describe("googlechat inbound access policy", () => {
           senderName: "Alice",
           senderEmail: "alice@example.com",
           rawBody: "hello",
+          contextBinding: {
+            agentId: "main",
+            sessionKey: "agent:main:googlechat:direct:users/abc",
+            inboundEventKind: "user_request",
+          },
           statusSink,
           logVerbose,
         }),
@@ -217,33 +222,37 @@ describe("googlechat inbound access policy", () => {
     core.channel.commands.shouldComputeCommandAuthorized.mockReturnValue(true);
     core.channel.commands.resolveCommandAuthorizedFromAuthorizers.mockReturnValue(true);
 
-    await expect(
-      applyInboundAccessPolicy({
-        account: {
-          accountId: "default",
-          config: {
-            botUser: "users/app-bot",
-            groups: {
-              "spaces/AAA": {
-                users: ["users/alice"],
-                requireMention: true,
-                systemPrompt: " group prompt ",
-              },
+    const result = await applyInboundAccessPolicy({
+      account: {
+        accountId: "default",
+        config: {
+          botUser: "users/app-bot",
+          groups: {
+            "spaces/AAA": {
+              users: ["users/alice"],
+              requireMention: true,
+              systemPrompt: " group prompt ",
             },
           },
-        } as never,
-        core: core as never,
-        message: {
-          annotations: [
-            {
-              type: "USER_MENTION",
-              userMention: { user: { name: "users/app-bot" } },
-            },
-          ],
-        } as never,
-      }),
-    ).resolves.toEqual({
+        },
+      } as never,
+      core: core as never,
+      message: {
+        annotations: [
+          {
+            type: "USER_MENTION",
+            userMention: { user: { name: "users/app-bot" } },
+          },
+        ],
+      } as never,
+    });
+
+    expect(result).toMatchObject({
       ok: true,
+      channelIngress: {
+        ingress: { admission: "dispatch" },
+        senderAccess: { decision: "allow" },
+      },
       commandAuthorized: true,
       effectiveWasMentioned: true,
       groupSystemPrompt: "group prompt",
@@ -305,10 +314,8 @@ describe("googlechat inbound access policy", () => {
       account: {
         accountId: "default",
         config: {
-          dm: {
-            policy: "allowlist",
-            allowFrom: ["accessGroup:operators"],
-          },
+          dmPolicy: "allowlist",
+          allowFrom: ["accessGroup:operators"],
         },
       } as never,
     });
@@ -327,10 +334,8 @@ describe("googlechat inbound access policy", () => {
         account: {
           accountId: "default",
           config: {
-            dm: {
-              policy: "allowlist",
-              allowFrom: ["users/alice"],
-            },
+            dmPolicy: "allowlist",
+            allowFrom: ["users/alice"],
             groups: {
               "spaces/AAA": {
                 enabled: true,

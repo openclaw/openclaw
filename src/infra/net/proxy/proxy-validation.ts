@@ -126,24 +126,6 @@ function validateProxyUrl(value: string | undefined): string[] {
   return [];
 }
 
-function validateProxyEnabled(source: ProxyValidationConfigSource, enabled: boolean): string[] {
-  if (enabled || source === "override" || source === "missing" || source === "disabled") {
-    return [];
-  }
-  if (source === "env") {
-    return ["proxy validation requires proxy.enabled to be true for OPENCLAW_PROXY_URL"];
-  }
-  return ["proxy validation requires proxy.enabled to be true for configured proxy URLs"];
-}
-
-function validateResolvedProxy(
-  source: ProxyValidationConfigSource,
-  enabled: boolean,
-  value: string | undefined,
-): string[] {
-  return [...validateProxyUrl(value), ...validateProxyEnabled(source, enabled)];
-}
-
 /** Resolves validation config precedence: explicit override, config, then env. */
 function resolveProxyValidationConfig(
   options: ResolveProxyValidationConfigOptions,
@@ -159,7 +141,7 @@ function resolveProxyValidationConfig(
       proxyUrl: overrideUrl,
       ...(proxyCaFile ? { proxyCaFile } : {}),
       source: "override",
-      errors: validateResolvedProxy("override", true, overrideUrl),
+      errors: validateProxyUrl(overrideUrl),
     };
   }
 
@@ -171,11 +153,14 @@ function resolveProxyValidationConfig(
       caFileOverride: options.proxyCaFileOverride,
     });
     return {
-      enabled: options.config?.enabled === true,
+      enabled: options.config?.enabled !== false,
       proxyUrl: configUrl,
       ...(proxyCaFile ? { proxyCaFile } : {}),
       source: "config",
-      errors: validateResolvedProxy("config", options.config?.enabled === true, configUrl),
+      errors:
+        options.config?.enabled === false
+          ? ["proxy validation is disabled by proxy.enabled=false"]
+          : validateProxyUrl(configUrl),
     };
   }
 
@@ -187,11 +172,14 @@ function resolveProxyValidationConfig(
       caFileOverride: options.proxyCaFileOverride,
     });
     return {
-      enabled: options.config?.enabled === true,
+      enabled: options.config?.enabled !== false,
       proxyUrl: envUrl,
       ...(proxyCaFile ? { proxyCaFile } : {}),
       source: "env",
-      errors: validateResolvedProxy("env", options.config?.enabled === true, envUrl),
+      errors:
+        options.config?.enabled === false
+          ? ["proxy validation is disabled by proxy.enabled=false"]
+          : validateProxyUrl(envUrl),
     };
   }
 
@@ -206,9 +194,7 @@ function resolveProxyValidationConfig(
   return {
     enabled: false,
     source: "disabled",
-    errors: [
-      "proxy validation requires proxy.enabled=true with proxy.proxyUrl or OPENCLAW_PROXY_URL, or --proxy-url",
-    ],
+    errors: ["proxy validation requires proxy.proxyUrl, OPENCLAW_PROXY_URL, or --proxy-url"],
   };
 }
 
@@ -230,7 +216,7 @@ async function defaultProxyValidationFetchCheck({
       dispatcher,
       redirect: "manual",
     });
-    void response.body?.cancel();
+    void response.body?.cancel().catch(() => undefined);
     return {
       ok: response.ok,
       status: response.status,
@@ -295,8 +281,9 @@ type ProxyValidationDeniedTarget = {
   transportErrorMeansBlocked: boolean;
 };
 
-type DeniedCanary = {
-  target: ProxyValidationDeniedTarget;
+type LoopbackValidationCanary = {
+  url: string;
+  token: string;
   close: () => Promise<void>;
 };
 
@@ -312,10 +299,9 @@ function closeServer(server: Server): Promise<void> {
   });
 }
 
-async function createLoopbackDeniedCanary(): Promise<DeniedCanary> {
+async function createLoopbackValidationCanary(): Promise<LoopbackValidationCanary> {
   const token = randomUUID();
-  // The default denied probe targets loopback and expects the proxy to block it.
-  // If a proxy returns this token, it forwarded a destination it should deny.
+  // Only the per-probe token distinguishes our listener from a proxy response.
   const server = createServer((_request, response) => {
     response.writeHead(204, {
       [DENIED_CANARY_HEADER]: token,
@@ -339,13 +325,33 @@ async function createLoopbackDeniedCanary(): Promise<DeniedCanary> {
   }
 
   return {
-    target: {
-      url: `http://127.0.0.1:${address.port}/`,
-      expectedCanaryToken: token,
-      transportErrorMeansBlocked: true,
-    },
+    url: `http://127.0.0.1:${address.port}/`,
+    token,
     close: () => closeServer(server),
   };
+}
+
+/** Probes the active runtime route, independently of explicit proxy-denial checks. */
+export async function probeManagedProxyLoopback(
+  options: ResolveProxyValidationConfigOptions,
+): Promise<boolean | null> {
+  const config = resolveProxyValidationConfig(options);
+  if (!config.enabled || !config.proxyUrl || config.errors.length > 0) {
+    return null;
+  }
+  const canary = await createLoopbackValidationCanary();
+  try {
+    const response = await fetchWithRuntimeDispatcher(canary.url, {
+      redirect: "manual",
+      signal: AbortSignal.timeout(DEFAULT_PROXY_VALIDATION_TIMEOUT_MS),
+    });
+    void response.body?.cancel().catch(() => undefined);
+    return response.ok && response.headers.get(DENIED_CANARY_HEADER) === canary.token;
+  } catch {
+    return false;
+  } finally {
+    await canary.close();
+  }
 }
 
 async function resolveDeniedTargets(
@@ -361,9 +367,15 @@ async function resolveDeniedTargets(
     };
   }
 
-  const canary = await createLoopbackDeniedCanary();
+  const canary = await createLoopbackValidationCanary();
   return {
-    targets: [canary.target],
+    targets: [
+      {
+        url: canary.url,
+        expectedCanaryToken: canary.token,
+        transportErrorMeansBlocked: true,
+      },
+    ],
     close: canary.close,
   };
 }
@@ -530,22 +542,7 @@ export async function runProxyValidation(
   options: RunProxyValidationOptions,
 ): Promise<ProxyValidationResult> {
   const config = resolveProxyValidationConfig(options);
-  if (config.errors.length > 0) {
-    return { ok: false, config, checks: [] };
-  }
-  if (!config.proxyUrl) {
-    if (!config.enabled && config.source === "disabled") {
-      return {
-        ok: false,
-        config: {
-          ...config,
-          errors: [
-            "Proxy validation is disabled. Set proxy.enabled=true or pass --proxy-url to run validation.",
-          ],
-        },
-        checks: [],
-      };
-    }
+  if (config.errors.length > 0 || !config.proxyUrl) {
     return { ok: false, config, checks: [] };
   }
 

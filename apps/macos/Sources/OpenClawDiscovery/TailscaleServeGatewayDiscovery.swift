@@ -20,7 +20,11 @@ enum TailscaleServeGatewayDiscovery {
         static let live = DiscoveryContext(
             tailscaleStatus: { await readTailscaleStatus() },
             probeHost: { host, timeout in
-                await probeHostForGatewayChallenge(host: host, timeout: timeout)
+                var components = URLComponents()
+                components.scheme = "wss"
+                components.host = host
+                guard let url = components.url else { return false }
+                return await GatewayDiscoveryProbe.shared.hasGatewayChallenge(url: url, timeout: timeout)
             })
     }
 
@@ -152,7 +156,12 @@ enum TailscaleServeGatewayDiscovery {
 
         for candidate in candidates {
             guard let executable = self.resolveExecutablePath(candidate) else { continue }
-            if let stdout = await self.run(path: executable, args: ["status", "--json"], timeout: 1.0) {
+            if let stdout = await BoundedCommand.run(
+                path: executable,
+                arguments: ["status", "--json"],
+                environment: self.commandEnvironment(),
+                timeout: 1.0)
+            {
                 return stdout
             }
         }
@@ -189,43 +198,6 @@ enum TailscaleServeGatewayDiscovery {
         return nil
     }
 
-    private static func run(path: String, args: [String], timeout: TimeInterval) async -> String? {
-        await withCheckedContinuation { continuation in
-            DispatchQueue.global(qos: .utility).async {
-                continuation.resume(returning: self.runBlocking(path: path, args: args, timeout: timeout))
-            }
-        }
-    }
-
-    private static func runBlocking(path: String, args: [String], timeout: TimeInterval) -> String? {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: path)
-        process.arguments = args
-        process.environment = self.commandEnvironment()
-        let outPipe = Pipe()
-        process.standardOutput = outPipe
-        process.standardError = FileHandle.nullDevice
-
-        do {
-            try process.run()
-        } catch {
-            return nil
-        }
-
-        let deadline = Date().addingTimeInterval(timeout)
-        while process.isRunning, Date() < deadline {
-            Thread.sleep(forTimeInterval: 0.02)
-        }
-        if process.isRunning {
-            process.terminate()
-        }
-        process.waitUntilExit()
-
-        let data = (try? outPipe.fileHandleForReading.readToEnd()) ?? Data()
-        let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return output?.isEmpty == false ? output : nil
-    }
-
     static func commandEnvironment(
         base: [String: String] = ProcessInfo.processInfo.environment) -> [String: String]
     {
@@ -243,23 +215,38 @@ enum TailscaleServeGatewayDiscovery {
         guard let data = raw.data(using: .utf8) else { return nil }
         return try? JSONDecoder().decode(TailscaleStatus.self, from: data)
     }
+}
 
-    private static func probeHostForGatewayChallenge(host: String, timeout: TimeInterval) async -> Bool {
-        var components = URLComponents()
-        components.scheme = "wss"
-        components.host = host
-        guard let url = components.url else { return false }
+/// Owns the credential-free transport used to identify candidate Gateways.
+final class GatewayDiscoveryProbe: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    static let shared = GatewayDiscoveryProbe()
 
-        let config = URLSessionConfiguration.ephemeral
-        config.timeoutIntervalForRequest = max(0.5, timeout)
-        config.timeoutIntervalForResource = max(0.5, timeout)
-        let session = URLSession(configuration: config)
-        let task = session.webSocketTask(with: url)
+    private lazy var session: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        // Candidate discovery must neither inherit credentials nor collect them
+        // from one peer for a later probe.
+        configuration.httpShouldSetCookies = false
+        configuration.httpCookieStorage = nil
+        configuration.urlCredentialStorage = nil
+        configuration.urlCache = nil
+        return URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
+    }()
+
+    override private init() {
+        super.init()
+        // Initialize once before concurrent peer probes access the shared session.
+        _ = self.session
+    }
+
+    func hasGatewayChallenge(url: URL, timeout: TimeInterval) async -> Bool {
+        guard !Task.isCancelled, timeout > 0, url.user == nil, url.password == nil else { return false }
+        // Discovery fans out and retries during startup. Reuse the session;
+        // AsyncTimeout owns each deadline and every websocket task owns its cancel.
+        let task = self.session.webSocketTask(with: url)
         task.resume()
 
         defer {
             task.cancel(with: .goingAway, reason: nil)
-            session.invalidateAndCancel()
         }
 
         do {
@@ -269,7 +256,7 @@ enum TailscaleServeGatewayDiscovery {
                 operation: {
                     while true {
                         let message = try await task.receive()
-                        if self.isConnectChallenge(message: message) {
+                        if Self.isConnectChallenge(message: message) {
                             return true
                         }
                     }
@@ -277,6 +264,38 @@ enum TailscaleServeGatewayDiscovery {
         } catch {
             return false
         }
+    }
+
+    func urlSession(
+        _: URLSession,
+        task _: URLSessionTask,
+        willPerformHTTPRedirection _: HTTPURLResponse,
+        newRequest _: URLRequest,
+        completionHandler: @escaping @Sendable (URLRequest?) -> Void)
+    {
+        completionHandler(nil)
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task _: URLSessionTask,
+        didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping @Sendable (URLSession.AuthChallengeDisposition, URLCredential?) -> Void)
+    {
+        self.urlSession(session, didReceive: challenge, completionHandler: completionHandler)
+    }
+
+    func urlSession(
+        _: URLSession,
+        didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping @Sendable (URLSession.AuthChallengeDisposition, URLCredential?) -> Void)
+    {
+        // Keep ordinary certificate verification. Discovery never answers
+        // HTTP, proxy, or client-certificate authentication challenges.
+        let disposition: URLSession.AuthChallengeDisposition =
+            challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust
+                ? .performDefaultHandling : .cancelAuthenticationChallenge
+        completionHandler(disposition, nil)
     }
 
     private static func isConnectChallenge(message: URLSessionWebSocketTask.Message) -> Bool {

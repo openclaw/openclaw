@@ -1,4 +1,3 @@
-// Feishu plugin module implements card action behavior.
 import {
   asDateTimestampMs,
   isFutureDateTimestampMs,
@@ -107,6 +106,7 @@ function buildSyntheticMessageEvent(
   event: FeishuCardActionEvent,
   content: string,
   chatType: "p2p" | "group",
+  botOpenId?: string,
 ): FeishuMessageEvent {
   const replyTargetMessageId = event.context.open_message_id ?? event.open_message_id;
   // card-action-c-* IDs are temporary callback tokens, not valid Feishu message IDs.
@@ -114,6 +114,7 @@ function buildSyntheticMessageEvent(
   const isTemporaryCardActionId = replyTargetMessageId?.startsWith("card-action-c-");
   const validReplyTargetId =
     replyTargetMessageId && !isTemporaryCardActionId ? replyTargetMessageId : undefined;
+  const normalizedBotOpenId = chatType === "group" ? botOpenId?.trim() : undefined;
   return {
     sender: {
       sender_id: {
@@ -131,6 +132,17 @@ function buildSyntheticMessageEvent(
       chat_type: chatType,
       message_type: "text",
       content: JSON.stringify({ text: content }),
+      ...(normalizedBotOpenId
+        ? {
+            mentions: [
+              {
+                key: "mention_bot",
+                id: { open_id: normalizedBotOpenId },
+                name: "bot",
+              },
+            ],
+          }
+        : {}),
     },
   };
 }
@@ -144,6 +156,7 @@ function resolveCallbackTarget(event: FeishuCardActionEvent): string {
 }
 
 async function dispatchSyntheticCommand(params: {
+  trackTask?: (task: Promise<void>) => void;
   cfg: ClawdbotConfig;
   event: FeishuCardActionEvent;
   command: string;
@@ -161,8 +174,14 @@ async function dispatchSyntheticCommand(params: {
     log: params.runtime?.log ?? console.log,
   });
   await handleFeishuMessage({
+    trackTask: params.trackTask,
     cfg: params.cfg,
-    event: buildSyntheticMessageEvent(params.event, params.command, resolvedChatType),
+    event: buildSyntheticMessageEvent(
+      params.event,
+      params.command,
+      resolvedChatType,
+      params.botOpenId,
+    ),
     botOpenId: params.botOpenId,
     runtime: params.runtime,
     channelRuntime: params.channelRuntime,
@@ -301,6 +320,7 @@ async function sendInvalidInteractionNotice(params: {
 }
 
 export async function handleFeishuCardAction(params: {
+  trackTask?: (task: Promise<void>) => void;
   cfg: ClawdbotConfig;
   event: FeishuCardActionEvent;
   botOpenId?: string;
@@ -423,6 +443,7 @@ export async function handleFeishuCardAction(params: {
           return;
         }
         await dispatchSyntheticCommand({
+          trackTask: params.trackTask,
           cfg,
           event,
           command,
@@ -454,6 +475,7 @@ export async function handleFeishuCardAction(params: {
     );
 
     await dispatchSyntheticCommand({
+      trackTask: params.trackTask,
       cfg,
       event,
       command: content,

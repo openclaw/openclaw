@@ -4,8 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import { withEnv } from "../test-utils/env.js";
-import { pluginLoaderCacheInstances } from "./loader-cache-instances.js";
-import { clearActivatedPluginRuntimeState, loadOpenClawPlugins } from "./loader.js";
+import { loadOpenClawPlugins } from "./loader.js";
+import { getPluginLoaderCacheState } from "./registry-lifecycle.js";
 import { resetPluginRuntimeStateForTest } from "./runtime.js";
 
 export { loadOpenClawPlugins };
@@ -32,7 +32,7 @@ export function mkdirSafe(dir: string) {
   chmodSafeDir(dir);
 }
 
-const fixtureRoot = mkdtempSafe(path.join(os.tmpdir(), "openclaw-plugin-"));
+const fixtureRoot = fs.realpathSync(mkdtempSafe(path.join(os.tmpdir(), "openclaw-plugin-")));
 let tempDirIndex = 0;
 const prevBundledDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 const prevDisableBundledPlugins = process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
@@ -74,36 +74,59 @@ export function inlineChannelPluginEntryFactorySource(): string {
 `;
 }
 
-export function makeTempDir() {
+export function makePluginLoaderTempDir() {
   const dir = path.join(fixtureRoot, `case-${tempDirIndex++}`);
   mkdirSafe(dir);
   return dir;
 }
 
-export function writePlugin(params: {
+export function writePluginMetadata(params: {
+  dir: string;
   id: string;
-  body: string;
-  dir?: string;
-  filename?: string;
   configSchema?: Record<string, unknown>;
-}): TempPlugin {
-  const dir = params.dir ?? makeTempDir();
-  const filename = params.filename ?? `${params.id}.cjs`;
-  mkdirSafe(dir);
-  const file = path.join(dir, filename);
-  fs.writeFileSync(file, params.body, "utf-8");
+  channels?: string[];
+  packageJson?: Record<string, unknown>;
+}): void {
+  if (params.packageJson) {
+    fs.writeFileSync(
+      path.join(params.dir, "package.json"),
+      JSON.stringify(params.packageJson, null, 2),
+      "utf-8",
+    );
+  }
   fs.writeFileSync(
-    path.join(dir, "openclaw.plugin.json"),
+    path.join(params.dir, "openclaw.plugin.json"),
     JSON.stringify(
       {
         id: params.id,
         configSchema: params.configSchema ?? EMPTY_PLUGIN_SCHEMA,
+        ...(params.channels ? { channels: params.channels } : {}),
       },
       null,
       2,
     ),
     "utf-8",
   );
+}
+
+export function writePlugin(
+  params: {
+    id: string;
+    dir?: string;
+    filename?: string;
+    configSchema?: Record<string, unknown>;
+  } & ({ body: string } | { registration: string }),
+): TempPlugin {
+  const dir = params.dir ?? makePluginLoaderTempDir();
+  const filename = params.filename ?? `${params.id}.cjs`;
+  mkdirSafe(dir);
+  const file = path.join(dir, filename);
+  const body =
+    "body" in params
+      ? params.body
+      : `module.exports = { id: ${JSON.stringify(params.id)}, register(api) {\n${params.registration}\n} };`;
+  fs.writeFileSync(file, body, "utf-8");
+  writePluginMetadata({ dir, id: params.id, configSchema: params.configSchema });
   return { dir, file, id: params.id };
 }
 
@@ -119,8 +142,8 @@ export function loadBundleFixture(params: {
   onlyPluginIds?: string[];
 }) {
   useNoBundledPlugins();
-  const workspaceDir = makeTempDir();
-  const stateDir = makeTempDir();
+  const workspaceDir = makePluginLoaderTempDir();
+  const stateDir = makePluginLoaderTempDir();
   const bundleRoot = path.join(workspaceDir, ".openclaw", "extensions", params.pluginId);
   params.build(bundleRoot);
   return withEnv({ OPENCLAW_STATE_DIR: stateDir, ...params.env }, () =>
@@ -159,9 +182,8 @@ export function resetPluginLoaderTestStateForTest() {
 
 /** Clears loader state for test isolation without exposing a production-only reset export. */
 export function clearPluginLoaderCache(): void {
-  pluginLoaderCacheInstances.scoped.clear();
-  pluginLoaderCacheInstances.fullWorkspace.clear();
-  clearActivatedPluginRuntimeState();
+  getPluginLoaderCacheState().clear();
+  resetPluginRuntimeStateForTest();
 }
 
 export function cleanupPluginLoaderFixturesForTest() {

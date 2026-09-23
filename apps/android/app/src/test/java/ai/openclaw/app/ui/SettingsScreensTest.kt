@@ -1,5 +1,6 @@
 package ai.openclaw.app.ui
 
+import ai.openclaw.app.GatewayConnectionDisplay
 import ai.openclaw.app.GatewayConnectionProblem
 import ai.openclaw.app.GatewayCronJobSummary
 import ai.openclaw.app.GatewayExecApprovalSummary
@@ -7,6 +8,7 @@ import ai.openclaw.app.GatewayNodeCapabilityApproval
 import ai.openclaw.app.GatewayUsageProviderSummary
 import ai.openclaw.app.GatewayUsageWindowSummary
 import ai.openclaw.app.LocationMode
+import ai.openclaw.app.appearanceAccentPalette
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.i18n.nativeText
 import ai.openclaw.app.i18n.verbatimText
@@ -131,6 +133,32 @@ class SettingsScreensTest {
     assertEquals("Ready", gatewayStatusLabel("auth failed", isConnected = true, gatewayConnectionProblem = authProblem("AUTH_TOKEN_MISSING")))
     assertEquals("Pairing needed", gatewayStatusLabel("Pairing in progress", isConnected = false, gatewayConnectionProblem = problem))
     assertEquals("Cannot reach gateway", gatewayStatusLabel("Connection failed", isConnected = false, gatewayConnectionProblem = problem))
+    assertEquals("Offline", gatewayStatusLabel("Offline", isConnected = false))
+    assertEquals("Cannot reach gateway", gatewayStatusLabel("Gateway error: offline", isConnected = false))
+  }
+
+  @Test
+  fun gatewayStatusLabelPreservesPartialConnectivity() {
+    assertEquals(
+      "Connected (node offline)",
+      gatewayStatusLabel(
+        GatewayConnectionDisplay(
+          isConnected = true,
+          statusText = "Connected (node offline)",
+          problem = null,
+        ),
+      ),
+    )
+    assertEquals(
+      "Connected (operator offline)",
+      gatewayStatusLabel(
+        GatewayConnectionDisplay(
+          isConnected = false,
+          statusText = "Connected (operator offline)",
+          problem = null,
+        ),
+      ),
+    )
   }
 
   @Test
@@ -157,7 +185,8 @@ class SettingsScreensTest {
   fun devicePairingAdminCopySeparatesPairingFromNodeApproval() {
     val text = devicePairingAdminUnavailableText()
 
-    assertEquals(true, text.contains("approve new phone pairing"))
+    assertEquals(true, text.contains("openclaw devices list"))
+    assertEquals(true, text.contains("Gateway host"))
     assertEquals(true, text.contains("Node capability approval is separate"))
     assertEquals(true, text.contains("nodes approve <request id>"))
   }
@@ -324,11 +353,18 @@ class SettingsScreensTest {
   }
 
   @Test
+  fun usageRefreshStaysVisibleBetweenIncompleteRetries() {
+    assertTrue(usageRefreshVisible(requestRefreshing = true, summaryRefreshing = false))
+    assertTrue(usageRefreshVisible(requestRefreshing = false, summaryRefreshing = true))
+    assertFalse(usageRefreshVisible(requestRefreshing = false, summaryRefreshing = false))
+  }
+
+  @Test
   fun approvalCardShowsTheWholeMonospacedCommandBeforeStackedActions() {
     val source = settingsScreensSource()
     val cardStart = source.indexOf("private fun ExecApprovalCard(")
     val reviewCall = source.indexOf("ExecApprovalCommandReview(", cardStart)
-    val actionsCall = source.indexOf("execApprovalActions(approval.allowedDecisions)", reviewCall)
+    val actionsCall = source.indexOf("execApprovalActions(", reviewCall)
     val reviewStart = source.indexOf("private fun ExecApprovalCommandReview(", actionsCall)
     val reviewEnd = source.indexOf("internal data class ExecApprovalAction", reviewStart)
     assertTrue(cardStart >= 0 && reviewCall > cardStart && actionsCall > reviewCall)
@@ -346,13 +382,13 @@ class SettingsScreensTest {
   @Test
   fun terminalNoticeRendersAsStandaloneDismissibleBannerRegardlessOfRemainingCards() {
     val source = settingsScreensSource()
-    // Terminal outcomes retire their card before the notice publishes, so any
+    // Terminal outcomes publish their notice with the card retired, so any
     // card-scoped or empty-inbox-only rendering hides losing outcomes whenever
     // another approval card remains visible.
     assertFalse(source.contains("execApprovalNoticeForCard"))
     assertFalse(source.contains("execApprovalEmptyInboxNotice"))
     val screenStart = source.indexOf("private fun ApprovalsSettingsScreen(")
-    val bannerCall = source.indexOf("execApprovalsNotice?.let", screenStart)
+    val bannerCall = source.indexOf("inbox.notice?.let", screenStart)
     val listPanelCall = source.indexOf("ExecApprovalsPanel(", screenStart)
     assertTrue(screenStart >= 0 && bannerCall > screenStart && listPanelCall > bannerCall)
 
@@ -381,18 +417,28 @@ class SettingsScreensTest {
   fun gatewayScreenOrdersPairingAheadOfManualSetup() {
     val source = settingsScreensSource()
     val screenStart = source.indexOf("private fun GatewaySettingsScreen(")
-    // Pairing stays reachable without scrolling: nav-bar scanner action plus a
-    // hero CTA while nothing is paired, then Add Gateway before manual plumbing.
+    // Pairing stays reachable without scrolling; management precedes technical details.
     val trailingScan = source.indexOf("trailingAction = {", screenStart)
     val scanHero = source.indexOf("nativeString(\"Scan QR to Pair\")", screenStart)
-    val addPanel = source.indexOf("nativeString(\"Add Gateway\")", screenStart)
+    val addAction = source.indexOf("nativeString(\"Add Gateway\")", screenStart)
     val pairedPanel = source.indexOf("nativeString(\"Gateways\")", screenStart)
     val manualPanel = source.indexOf("nativeString(\"Manual Gateway\")", screenStart)
     assertTrue(screenStart >= 0 && trailingScan > screenStart && scanHero > trailingScan)
-    assertTrue(addPanel > scanHero && pairedPanel > addPanel && manualPanel > pairedPanel)
-    // Discovered gateways surface inside Add Gateway with a per-row connect.
+    assertTrue(pairedPanel > scanHero && addAction > pairedPanel && manualPanel > addAction)
+    // Discovered gateways retain per-row Connect behind their own disclosure.
     val discoveredRows = source.indexOf("discoveredGateways.forEachIndexed", screenStart)
-    assertTrue(discoveredRows > addPanel && discoveredRows < pairedPanel)
+    val discoveryDisclosure = source.indexOf("if (showDiscovery)", screenStart)
+    assertTrue(discoveredRows > discoveryDisclosure && discoveryDisclosure > pairedPanel)
+  }
+
+  @Test
+  fun accentSwatchDescriptionsNameDefaultAndEveryColor() {
+    val descriptions =
+      (listOf<Long?>(null) + appearanceAccentPalette).map(::appearanceAccentSwatchDescription)
+
+    assertEquals(appearanceAccentPalette.size + 1, descriptions.toSet().size)
+    assertEquals("Accent color, Default", descriptions.first())
+    assertTrue(descriptions.drop(1).all { it.startsWith("Accent color, #") })
   }
 
   private fun settingsScreensSource(): String {

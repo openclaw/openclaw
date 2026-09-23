@@ -1,9 +1,19 @@
 // Context-engine delegates bridge custom engines to built-in compaction and memory prompt paths.
 import { normalizeStructuredPromptSection } from "@openclaw/ai/internal/shared";
-import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
-import type { MemoryCitationsMode } from "../config/types.memory.js";
-import { buildMemoryPromptSection } from "../plugins/memory-state.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  buildMemoryPromptSection,
+  getActivePreparedMemoryPromptSection,
+  prepareMemoryPromptSection,
+  type MemoryPromptSectionParams,
+  type PreparedMemoryPromptSection,
+} from "../plugins/memory-state.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import {
+  isRuntimeCompactionDelegate,
+  markRuntimeCompactionDelegate,
+} from "./compaction-watchdog.js";
 import type {
   ContextEngine,
   CompactResult,
@@ -15,30 +25,32 @@ const loadCompactRuntime = createLazyRuntimeModule(
   () => import("../agents/embedded-agent-runner/compact.runtime.js"),
 );
 
-function buildCompactionResultSessionTarget(params: {
+function assertCompactionSessionIdentity(params: {
   agentId?: string;
-  sessionFile?: string;
-  sessionId?: string;
+  sessionId: string;
   sessionKey?: string;
   sessionTarget?: ContextEngineSessionTarget;
-}): ContextEngineSessionTarget | undefined {
-  const sqliteMarker = parseSqliteSessionFileMarker(params.sessionFile);
-  const sessionId = sqliteMarker?.sessionId ?? params.sessionId;
-  if (!sessionId) {
-    return undefined;
+}): void {
+  const targetAgentId = normalizeOptionalString(params.sessionTarget?.agentId);
+  const targetSessionId = normalizeOptionalString(params.sessionTarget?.sessionId);
+  const targetSessionKey = normalizeOptionalString(params.sessionTarget?.sessionKey);
+  const requestedAgentId = normalizeOptionalString(params.agentId);
+  const callerSessionId = normalizeOptionalString(params.sessionId);
+  const requestedSessionKey = normalizeOptionalString(params.sessionKey);
+  const requestedSessionKeyAgentId = parseAgentSessionKey(requestedSessionKey)?.agentId;
+  if (
+    (requestedAgentId && targetAgentId && requestedAgentId !== targetAgentId) ||
+    (callerSessionId && targetSessionId && callerSessionId !== targetSessionId) ||
+    (requestedSessionKey && targetSessionKey && requestedSessionKey !== targetSessionKey) ||
+    (requestedSessionKeyAgentId && targetAgentId && requestedSessionKeyAgentId !== targetAgentId)
+  ) {
+    throw new Error("Context-engine successor target conflicts with the caller session identity");
   }
-  const agentId = params.sessionTarget?.agentId ?? params.agentId ?? sqliteMarker?.agentId;
-  const sessionKey = params.sessionTarget?.sessionKey ?? params.sessionKey;
-  const storePath = params.sessionTarget?.storePath ?? sqliteMarker?.storePath;
-  return {
-    ...(agentId ? { agentId } : {}),
-    sessionId,
-    ...(sessionKey ? { sessionKey } : {}),
-    ...(storePath ? { storePath } : {}),
-    ...(params.sessionTarget?.threadId !== undefined
-      ? { threadId: params.sessionTarget.threadId }
-      : {}),
-  };
+  const agentId = targetAgentId ?? requestedAgentId;
+  const sessionKeyAgentId = parseAgentSessionKey(targetSessionKey ?? requestedSessionKey)?.agentId;
+  if (sessionKeyAgentId && agentId && sessionKeyAgentId !== agentId) {
+    throw new Error("Context-engine successor session key conflicts with its agent identity");
+  }
 }
 
 /**
@@ -57,10 +69,9 @@ function buildCompactionResultSessionTarget(params: {
 export async function delegateCompactionToRuntime(
   params: Parameters<ContextEngine["compact"]>[0],
 ): Promise<CompactResult> {
-  // Load through the dedicated runtime boundary without introducing another
-  // source-level static edge into the embedded runner graph.
-  const { compactEmbeddedAgentSessionDirect } = await loadCompactRuntime();
-  type RuntimeCompactionParams = Parameters<typeof compactEmbeddedAgentSessionDirect>[0];
+  type RuntimeCompactionParams = Parameters<
+    Awaited<ReturnType<typeof loadCompactRuntime>>["compactEmbeddedAgentSessionOnDemand"]
+  >[0];
 
   // runtimeContext carries host-resolved runtime fields set by internal
   // callers. Keep the public delegate keyed by session identity, not by the
@@ -71,6 +82,15 @@ export async function delegateCompactionToRuntime(
   const sessionTarget = params.sessionTarget ?? runtimeContext.sessionTarget;
   const agentId = params.agentId ?? runtimeContext.agentId;
   const sessionKey = params.sessionKey ?? runtimeContext.sessionKey;
+  // Reject contradictory caller identity before loading or invoking the compactor:
+  // target precedence inside the runtime must not hide an invalid request.
+  assertCompactionSessionIdentity({
+    agentId,
+    sessionId: params.sessionId,
+    sessionKey,
+    sessionTarget,
+  });
+  const { compactEmbeddedAgentSessionOnDemand } = await loadCompactRuntime();
   const currentTokenCount =
     params.currentTokenCount ??
     (typeof runtimeContext.currentTokenCount === "number" &&
@@ -79,12 +99,14 @@ export async function delegateCompactionToRuntime(
       ? Math.floor(runtimeContext.currentTokenCount)
       : undefined);
 
-  const result = await compactEmbeddedAgentSessionDirect({
+  const result = await compactEmbeddedAgentSessionOnDemand({
     ...runtimeContextParams,
-    ...(agentId ? { agentId } : {}),
+    // Preserve identity for the private recovery-accounting bridge.
+    contextEngineRuntimeContext: runtimeContext,
+    agentId,
     sessionId: params.sessionId,
-    ...(sessionKey ? { sessionKey } : {}),
-    ...(sessionTarget ? { sessionTarget } : {}),
+    sessionKey,
+    sessionTarget,
     tokenBudget: params.tokenBudget,
     ...(currentTokenCount !== undefined ? { currentTokenCount } : {}),
     force: params.force,
@@ -93,15 +115,6 @@ export async function delegateCompactionToRuntime(
     workspaceDir:
       typeof runtimeContext.workspaceDir === "string" ? runtimeContext.workspaceDir : process.cwd(),
   });
-  const resultSessionTarget = result.result
-    ? buildCompactionResultSessionTarget({
-        agentId,
-        sessionFile: result.result.sessionFile,
-        sessionId: result.result.sessionId,
-        sessionKey,
-        sessionTarget,
-      })
-    : undefined;
 
   return {
     ok: result.ok,
@@ -118,11 +131,16 @@ export async function delegateCompactionToRuntime(
           // Core reports successors only through the typed sessionTarget; the
           // deprecated raw sessionFile field is reserved for shipped engines
           // reporting rotation to core, and post-flip core has no file path.
-          ...(resultSessionTarget ? { sessionTarget: resultSessionTarget } : {}),
+          ...(result.result.sessionTarget ? { sessionTarget: result.result.sessionTarget } : {}),
         }
       : undefined,
   };
 }
+
+markRuntimeCompactionDelegate(delegateCompactionToRuntime);
+
+/** True only for the canonical bridge whose runtime owns the compaction watchdog. */
+export { isRuntimeCompactionDelegate };
 
 /**
  * Build a context-engine-ready systemPromptAddition from the active memory
@@ -130,23 +148,39 @@ export async function delegateCompactionToRuntime(
  * same memory/wiki guidance that the legacy engine gets via system prompt
  * assembly, without reimplementing memory prompt formatting.
  */
-export function buildMemorySystemPromptAddition(params: {
-  availableTools: Set<string>;
-  citationsMode?: MemoryCitationsMode;
-  agentId?: string;
-  agentSessionKey?: string;
-  sandboxed?: boolean;
-}): string | undefined {
-  const lines = buildMemoryPromptSection({
-    availableTools: params.availableTools,
-    citationsMode: params.citationsMode,
-    agentId: params.agentId,
-    agentSessionKey: params.agentSessionKey,
-    sandboxed: params.sandboxed,
-  });
+function renderMemorySystemPromptAddition(
+  params: MemoryPromptSectionParams,
+  prepared?: PreparedMemoryPromptSection,
+): string | undefined {
+  const lines = buildMemoryPromptSection(params, prepared);
   if (lines.length === 0) {
     return undefined;
   }
   const normalized = normalizeStructuredPromptSection(lines.join("\n"));
   return normalized || undefined;
+}
+
+export function buildMemorySystemPromptAddition(
+  params: MemoryPromptSectionParams,
+): string | undefined {
+  const prepared = getActivePreparedMemoryPromptSection();
+  if (!prepared) {
+    return renderMemorySystemPromptAddition(params);
+  }
+  const contextParams: MemoryPromptSectionParams = {
+    availableTools: params.availableTools,
+    citationsMode: params.citationsMode ?? prepared.context.citationsMode,
+    agentId: params.agentId ?? prepared.context.agentId,
+    agentSessionKey: params.agentSessionKey ?? prepared.context.agentSessionKey,
+    sandboxed: params.sandboxed ?? prepared.context.sandboxed,
+  };
+  return renderMemorySystemPromptAddition(contextParams, prepared);
+}
+
+/** Prepare memory state asynchronously, then render it without prompt-path I/O. */
+export async function prepareMemorySystemPromptAddition(
+  params: MemoryPromptSectionParams,
+): Promise<string | undefined> {
+  const prepared = await prepareMemoryPromptSection(params);
+  return renderMemorySystemPromptAddition(params, prepared);
 }

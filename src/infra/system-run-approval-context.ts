@@ -5,7 +5,7 @@ import type {
   ExecSecurity,
   SystemRunApprovalPlan,
 } from "./exec-approvals.js";
-import { normalizeSystemRunApprovalPlan } from "./system-run-approval-binding.js";
+import { normalizeSystemRunApprovalPlan } from "./system-run-approval-plan.js";
 import { formatExecCommand, resolveSystemRunCommandRequest } from "./system-run-command.js";
 import { normalizeNonEmptyString, normalizeStringArray } from "./system-run-normalize.js";
 

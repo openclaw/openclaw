@@ -1,5 +1,6 @@
 // Builds compact plugin health summaries for chat status surfaces.
 import type { PluginDiagnosticCode } from "../plugins/manifest-types.js";
+import { dedupeByKey } from "../shared/dedupe-by-key.js";
 
 type StatusPluginDependencyStatus = {
   hasDependencies?: boolean;
@@ -82,22 +83,10 @@ export type StatusPluginHealthSnapshot = {
   }>;
 };
 
-/** Keeps the first record per key; later duplicates are dropped. */
-function dedupeBy<T>(items: readonly T[], keyOf: (item: T) => string): T[] {
-  const seen = new Map<string, T>();
-  for (const item of items) {
-    const key = keyOf(item);
-    if (!seen.has(key)) {
-      seen.set(key, item);
-    }
-  }
-  return [...seen.values()];
-}
-
 export function dedupePluginDiagnostics(
   diagnostics: readonly PluginDiagnosticRecord[],
 ): PluginDiagnosticRecord[] {
-  return dedupeBy(diagnostics, (entry) =>
+  return dedupeByKey(diagnostics, (entry) =>
     JSON.stringify([entry.level, entry.pluginId ?? "", entry.code ?? "", entry.message]),
   );
 }
@@ -107,7 +96,7 @@ export function dedupePluginDiagnostics(
 export function dedupeChannelPluginFailures(
   failures: readonly ChannelPluginFailureRecord[],
 ): ChannelPluginFailureRecord[] {
-  return dedupeBy(failures, (entry) =>
+  return dedupeByKey(failures, (entry) =>
     JSON.stringify([entry.channelId, entry.pluginId ?? "", entry.message]),
   );
 }
@@ -115,7 +104,7 @@ export function dedupeChannelPluginFailures(
 function dedupeCompatibilityNotices(
   notices: readonly PluginCompatibilityHealthNotice[],
 ): PluginCompatibilityHealthNotice[] {
-  return dedupeBy(notices, (entry) =>
+  return dedupeByKey(notices, (entry) =>
     JSON.stringify([entry.pluginId, entry.severity, entry.code ?? "", entry.message]),
   );
 }
@@ -263,11 +252,9 @@ function byLocale(left: string, right: string): number {
 export function formatDetailedPluginHealth(snapshot: StatusPluginHealthSnapshot): string {
   const statusLoaded = snapshot.plugins.filter((plugin) => plugin.status === "loaded");
   // "Loaded" must mean runtime-confirmed loaded. When the snapshot carries runtime
-  // provenance, render that authoritative id set directly (it spans all live
-  // registry surfaces, so a plugin live only via a pinned surface still lists even
-  // when it is absent from the merged records); installed-but-not-active is then
-  // the status-loaded records the runtime did not load. Fall back to the raw
-  // status when provenance is absent (hand-built/compact snapshots).
+  // provenance, render that authoritative root-registry id set directly;
+  // installed-but-not-active is then the status-loaded records the runtime did
+  // not load. Fall back to the raw status when provenance is absent.
   const runtimeLoadedIds = snapshot.runtimeLoadedPluginIds;
   const runtimeLoaded = runtimeLoadedIds ? new Set(runtimeLoadedIds) : undefined;
   const loaded = (runtimeLoadedIds ?? statusLoaded.map((plugin) => plugin.id)).toSorted(byLocale);
@@ -332,6 +319,17 @@ export function formatDetailedPluginHealth(snapshot: StatusPluginHealthSnapshot)
     `Disabled: ${disabledPlugins.length}`,
   ];
 
+  // Keep full counts while bounding each detailed category to eight rendered rows.
+  function appendSection<T>(
+    label: string,
+    entries: readonly T[],
+    format: (entry: T) => string,
+  ): void {
+    if (entries.length > 0) {
+      lines.push(`${label}: ${entries.length}`, ...entries.slice(0, 8).map(format));
+    }
+  }
+
   if (disabledPlugins.length > 0) {
     // Disable decisions record their reason on `error` (config off, allow/denylist,
     // overridden-by/memory-slot arbitration). Group ids per distinct reason so the
@@ -393,56 +391,31 @@ export function formatDetailedPluginHealth(snapshot: StatusPluginHealthSnapshot)
     );
   }
 
-  if (errors.length > 0) {
-    lines.push(
-      `Errors: ${errors.length}`,
-      ...errors.slice(0, 8).map((plugin) => {
-        const phase = plugin.failurePhase ? ` [${plugin.failurePhase}]` : "";
-        return `- ${plugin.id}${phase}: ${plugin.error ?? "failed to load"}`;
-      }),
-    );
-  }
+  appendSection("Errors", errors, (plugin) => {
+    const phase = plugin.failurePhase ? ` [${plugin.failurePhase}]` : "";
+    return `- ${plugin.id}${phase}: ${plugin.error ?? "failed to load"}`;
+  });
 
-  if (contextEngineQuarantines.length > 0) {
-    lines.push(
-      `Context engine quarantines: ${contextEngineQuarantines.length}`,
-      ...contextEngineQuarantines.slice(0, 8).map((entry) => {
-        const owner = entry.owner ? ` owner=${entry.owner}` : "";
-        return `- ${entry.engineId}${owner} during ${entry.operation}: ${entry.reason}`;
-      }),
-    );
-  }
+  appendSection("Context engine quarantines", contextEngineQuarantines, (entry) => {
+    const owner = entry.owner ? ` owner=${entry.owner}` : "";
+    return `- ${entry.engineId}${owner} during ${entry.operation}: ${entry.reason}`;
+  });
 
-  if (runtimeToolQuarantines.length > 0) {
-    lines.push(
-      `Runtime tool quarantines: ${runtimeToolQuarantines.length}`,
-      ...runtimeToolQuarantines.slice(0, 8).map((entry) => {
-        const owner = entry.owner ? ` owner=${entry.owner}` : "";
-        return `- ${entry.toolName}${owner}: ${entry.reason}`;
-      }),
-    );
-  }
+  appendSection("Runtime tool quarantines", runtimeToolQuarantines, (entry) => {
+    const owner = entry.owner ? ` owner=${entry.owner}` : "";
+    return `- ${entry.toolName}${owner}: ${entry.reason}`;
+  });
 
-  if (channelPluginFailures.length > 0) {
-    lines.push(
-      `Channel plugin failures: ${channelPluginFailures.length}`,
-      ...channelPluginFailures.slice(0, 8).map((entry) => {
-        const plugin = entry.pluginId ? ` plugin=${entry.pluginId}` : "";
-        const source = entry.source ? ` [${entry.source}]` : "";
-        return `- ${entry.channelId}${plugin}${source}: ${entry.message}`;
-      }),
-    );
-  }
+  appendSection("Channel plugin failures", channelPluginFailures, (entry) => {
+    const plugin = entry.pluginId ? ` plugin=${entry.pluginId}` : "";
+    const source = entry.source ? ` [${entry.source}]` : "";
+    return `- ${entry.channelId}${plugin}${source}: ${entry.message}`;
+  });
 
-  if (dependencyIssues.length > 0) {
-    lines.push(
-      `Dependency issues: ${dependencyIssues.length}`,
-      ...dependencyIssues.slice(0, 8).map((plugin) => {
-        const missing = plugin.dependencyStatus?.missing ?? [];
-        return `- ${plugin.id}: missing ${missing.join(", ") || "required dependencies"}`;
-      }),
-    );
-  }
+  appendSection("Dependency issues", dependencyIssues, (plugin) => {
+    const missing = plugin.dependencyStatus?.missing ?? [];
+    return `- ${plugin.id}: missing ${missing.join(", ") || "required dependencies"}`;
+  });
 
   if (diagnosticCounts.errors > 0 || diagnosticCounts.warnings > 0) {
     lines.push(
@@ -454,15 +427,10 @@ export function formatDetailedPluginHealth(snapshot: StatusPluginHealthSnapshot)
     }
   }
 
-  if (compatibilityNotices.length > 0) {
-    lines.push(
-      `Compatibility notices: ${compatibilityNotices.length}`,
-      ...compatibilityNotices.slice(0, 8).map((notice) => {
-        const code = notice.code ? ` [${notice.code}]` : "";
-        return `- ${notice.severity.toUpperCase()} ${notice.pluginId}${code}: ${notice.message}`;
-      }),
-    );
-  }
+  appendSection("Compatibility notices", compatibilityNotices, (notice) => {
+    const code = notice.code ? ` [${notice.code}]` : "";
+    return `- ${notice.severity.toUpperCase()} ${notice.pluginId}${code}: ${notice.message}`;
+  });
 
   lines.push("Full inventory: /plugins list");
   return lines.join("\n");

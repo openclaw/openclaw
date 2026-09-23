@@ -9,7 +9,7 @@ import OpenClawKit
 ///
 /// Both sessions derive routing and authentication ownership from the route's
 /// `stableID`. TLS certificate pins prove transport trust but are not gateway identity.
-struct GatewayConnectConfig {
+struct GatewayConnectConfig: Sendable {
     let url: URL
     let stableID: String
     let tls: GatewayTLSParams?
@@ -22,6 +22,46 @@ struct GatewayConnectConfig {
     /// If the caller doesn't provide a stableID, fall back to URL identity.
     var effectiveStableID: String {
         GatewayStableIdentifier.exact(self.stableID) ?? self.url.absoluteString
+    }
+
+    struct ControlUIInputs: Hashable, Sendable {
+        let url: URL
+        let stableID: ExactOpaqueIdentifierKey
+        let tlsRequired: Bool?
+        let tlsExpectedFingerprint: String?
+        let tlsAllowTOFU: Bool?
+        let tlsStoreKey: String?
+        let token: String?
+        let password: String?
+        let clientId: String
+        let includeDeviceIdentity: Bool
+        let allowStoredDeviceAuth: Bool
+        let deviceIdentityProfile: String
+        let deviceAuthGatewayID: ExactOpaqueIdentifierKey
+    }
+
+    /// Control UI authentication does not consume node registration metadata.
+    /// Keep bridge authority and WebView replacement on these same inputs.
+    var controlUIInputs: ControlUIInputs {
+        ControlUIInputs(
+            url: self.url,
+            stableID: ExactOpaqueIdentifierKey(self.effectiveStableID),
+            tlsRequired: self.tls?.required,
+            tlsExpectedFingerprint: self.tls?.expectedFingerprint,
+            tlsAllowTOFU: self.tls?.allowTOFU,
+            tlsStoreKey: self.tls?.storeKey,
+            token: self.token,
+            password: self.password,
+            clientId: self.nodeOptions.clientId,
+            includeDeviceIdentity: self.nodeOptions.includeDeviceIdentity,
+            allowStoredDeviceAuth: self.nodeOptions.allowStoredDeviceAuth,
+            deviceIdentityProfile: self.nodeOptions.deviceIdentityProfile.rawValue,
+            deviceAuthGatewayID: ExactOpaqueIdentifierKey(
+                self.nodeOptions.deviceAuthGatewayID ?? self.effectiveStableID))
+    }
+
+    func hasSameControlUIInputs(as other: GatewayConnectConfig) -> Bool {
+        self.controlUIInputs == other.controlUIInputs
     }
 
     func hasSameConnectionInputs(as other: GatewayConnectConfig) -> Bool {

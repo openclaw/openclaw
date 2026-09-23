@@ -1,5 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { describe, expect, test, vi } from "vitest";
+import { getRuntimeConfig } from "../config/io.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import {
   CONTROL_UI_PLUGIN_AUTH_PROBE_MESSAGE,
@@ -7,6 +9,7 @@ import {
   CONTROL_UI_PLUGIN_AUTH_PROBE_QUERY,
 } from "./control-ui-contract.js";
 import { setControlUiPluginAuthCookie } from "./control-ui-plugin-auth-cookie.js";
+import { resolveControlUiPluginAuthCookieGeneration } from "./http-auth-plugin-cookie.js";
 import { checkGatewayHttpRequestAuth } from "./http-auth-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import type { OperatorScope } from "./operator-scopes.js";
@@ -17,7 +20,7 @@ import {
   dispatchRequest,
   withGatewayServer,
 } from "./server-http.test-harness.js";
-import { createTestRegistry } from "./server/__tests__/test-utils.js";
+import { createGatewayTestRegistry } from "./server/__tests__/test-utils.js";
 import { createGatewayPluginRequestHandler } from "./server/plugins-http.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 
@@ -28,6 +31,7 @@ function createControlUiPluginAuthCookieForTest(
     path?: string;
     match?: "exact" | "prefix";
     generation?: string;
+    cfg?: OpenClawConfig;
   } = {},
 ): string {
   const response = createResponse();
@@ -41,7 +45,14 @@ function createControlUiPluginAuthCookieForTest(
         scopes: scopes as OperatorScope[],
       },
     ],
-    { generation: params.generation ?? resolveSharedGatewaySessionGeneration(AUTH_TOKEN) },
+    {
+      generation:
+        params.generation ??
+        resolveControlUiPluginAuthCookieGeneration(
+          resolveSharedGatewaySessionGeneration(AUTH_TOKEN),
+          params.cfg ?? getRuntimeConfig(),
+        ),
+    },
   );
   const setCookie = response.setHeader.mock.calls.find(([name]) => name === "Set-Cookie")?.[1];
   const cookie = Array.isArray(setCookie) ? setCookie[0] : setCookie;
@@ -61,7 +72,7 @@ function createRuntimeScopeRecorderHandler(params: {
   match?: "exact" | "prefix";
 }) {
   return createGatewayPluginRequestHandler({
-    registry: createTestRegistry({
+    registry: createGatewayTestRegistry({
       httpRoutes: [
         {
           pluginId: params.pluginId,
@@ -111,7 +122,6 @@ describe("control ui plugin frame auth route boundaries", () => {
       observedRuntimeScopes,
       allowedResults: [],
     });
-    const cookie = createControlUiPluginAuthCookieForTest(["operator.read"]);
     const nonce = "0123456789abcdef0123456789abcdef";
     const targetOrigin = "https://gateway.example";
     const path = `/secure-hook?${CONTROL_UI_PLUGIN_AUTH_PROBE_QUERY}=${nonce}&${CONTROL_UI_PLUGIN_AUTH_PROBE_ORIGIN_QUERY}=${encodeURIComponent(targetOrigin)}`;
@@ -124,6 +134,7 @@ describe("control ui plugin frame auth route boundaries", () => {
         shouldEnforcePluginGatewayAuth: (pathContext) => pathContext.pathname === "/secure-hook",
       },
       run: async (server) => {
+        const cookie = createControlUiPluginAuthCookieForTest(["operator.read"]);
         const unauthorized = createResponse();
         await dispatchRequest(server, createRequest({ path }), unauthorized.res);
         expect(unauthorized.res.statusCode).toBe(401);
@@ -166,11 +177,6 @@ describe("control ui plugin frame auth route boundaries", () => {
       observedRuntimeScopes,
       allowedResults: [],
     });
-    const cookie = createControlUiPluginAuthCookieForTest(["operator.read"], {
-      pluginId: "runtime-scope-control-ui-cookie-route-bound",
-      path: "/secure-hook",
-    });
-
     await withGatewayServer({
       prefix: "openclaw-plugin-http-runtime-scope-cookie-route-bound-test-",
       resolvedAuth: AUTH_TOKEN,
@@ -180,6 +186,10 @@ describe("control ui plugin frame auth route boundaries", () => {
           pathContext.pathname === "/other-secure-hook",
       },
       run: async (server) => {
+        const cookie = createControlUiPluginAuthCookieForTest(["operator.read"], {
+          pluginId: "runtime-scope-control-ui-cookie-route-bound",
+          path: "/secure-hook",
+        });
         const response = createResponse();
         await dispatchRequest(
           server,
@@ -196,7 +206,7 @@ describe("control ui plugin frame auth route boundaries", () => {
   test("does not broaden an exact-route grant to child paths", async () => {
     const childHandler = vi.fn(async () => true);
     const handlePluginRequest = createGatewayPluginRequestHandler({
-      registry: createTestRegistry({
+      registry: createGatewayTestRegistry({
         httpRoutes: [
           {
             pluginId: "exact-plugin",
@@ -211,12 +221,6 @@ describe("control ui plugin frame auth route boundaries", () => {
         typeof createGatewayPluginRequestHandler
       >[0]["log"],
     });
-    const cookie = createControlUiPluginAuthCookieForTest(["operator.read"], {
-      pluginId: "exact-plugin",
-      path: "/secure-hook",
-      match: "exact",
-    });
-
     await withGatewayServer({
       prefix: "openclaw-plugin-http-cookie-exact-bound-test-",
       resolvedAuth: AUTH_TOKEN,
@@ -225,6 +229,11 @@ describe("control ui plugin frame auth route boundaries", () => {
         shouldEnforcePluginGatewayAuth: () => true,
       },
       run: async (server) => {
+        const cookie = createControlUiPluginAuthCookieForTest(["operator.read"], {
+          pluginId: "exact-plugin",
+          path: "/secure-hook",
+          match: "exact",
+        });
         const response = createResponse();
         await dispatchRequest(
           server,
@@ -242,7 +251,7 @@ describe("control ui plugin frame auth route boundaries", () => {
     const outerHandler = vi.fn(async () => true);
     const adminHandler = vi.fn(async () => true);
     const handlePluginRequest = createGatewayPluginRequestHandler({
-      registry: createTestRegistry({
+      registry: createGatewayTestRegistry({
         httpRoutes: [
           {
             pluginId: "same-plugin",
@@ -264,12 +273,6 @@ describe("control ui plugin frame auth route boundaries", () => {
         typeof createGatewayPluginRequestHandler
       >[0]["log"],
     });
-    const cookie = createControlUiPluginAuthCookieForTest(["operator.admin"], {
-      pluginId: "same-plugin",
-      path: "/plugins/same",
-      match: "prefix",
-    });
-
     await withGatewayServer({
       prefix: "openclaw-plugin-http-cookie-canonical-path-test-",
       resolvedAuth: AUTH_TOKEN,
@@ -278,6 +281,11 @@ describe("control ui plugin frame auth route boundaries", () => {
         shouldEnforcePluginGatewayAuth: () => true,
       },
       run: async (server) => {
+        const cookie = createControlUiPluginAuthCookieForTest(["operator.admin"], {
+          pluginId: "same-plugin",
+          path: "/plugins/same",
+          match: "prefix",
+        });
         const response = createResponse();
         await dispatchRequest(
           server,
@@ -305,8 +313,6 @@ describe("control ui plugin frame auth route boundaries", () => {
       observedRuntimeScopes,
       allowedResults: writeAllowedResults,
     });
-    const cookie = createControlUiPluginAuthCookieForTest(["operator.read", "operator.write"]);
-
     await withGatewayServer({
       prefix: "openclaw-plugin-http-runtime-scope-cookie-test-",
       resolvedAuth: AUTH_TOKEN,
@@ -315,6 +321,7 @@ describe("control ui plugin frame auth route boundaries", () => {
         shouldEnforcePluginGatewayAuth: (pathContext) => pathContext.pathname === "/secure-hook",
       },
       run: async (server) => {
+        const cookie = createControlUiPluginAuthCookieForTest(["operator.read", "operator.write"]);
         await expectPluginRequestOk(server, {
           path: "/secure-hook",
           headers: { cookie },
@@ -336,12 +343,6 @@ describe("control ui plugin frame auth route boundaries", () => {
       observedRuntimeScopes,
       allowedResults: [],
     });
-    const cookie = createControlUiPluginAuthCookieForTest(["operator.read"], {
-      pluginId: "runtime-scope-control-ui-cookie-route-child",
-      path: "/secure-hook",
-      match: "prefix",
-    });
-
     await withGatewayServer({
       prefix: "openclaw-plugin-http-runtime-scope-cookie-route-child-test-",
       resolvedAuth: AUTH_TOKEN,
@@ -351,6 +352,11 @@ describe("control ui plugin frame auth route boundaries", () => {
           pathContext.pathname === "/secure-hook/assets/app.js",
       },
       run: async (server) => {
+        const cookie = createControlUiPluginAuthCookieForTest(["operator.read"], {
+          pluginId: "runtime-scope-control-ui-cookie-route-child",
+          path: "/secure-hook",
+          match: "prefix",
+        });
         await expectPluginRequestOk(server, {
           path: "/secure-hook/assets/app.js",
           headers: { cookie },
@@ -363,12 +369,6 @@ describe("control ui plugin frame auth route boundaries", () => {
 
   test("rejects mutation requests that present only a control ui plugin auth cookie", async () => {
     const handlePluginRequest = vi.fn(async () => true);
-    const cookie = createControlUiPluginAuthCookieForTest(["operator.read"], {
-      pluginId: "read-only-plugin",
-      path: "/secure-hook",
-      match: "prefix",
-    });
-
     await withGatewayServer({
       prefix: "openclaw-plugin-http-cookie-read-only-test-",
       resolvedAuth: AUTH_TOKEN,
@@ -377,6 +377,11 @@ describe("control ui plugin frame auth route boundaries", () => {
         shouldEnforcePluginGatewayAuth: () => true,
       },
       run: async (server) => {
+        const cookie = createControlUiPluginAuthCookieForTest(["operator.read"], {
+          pluginId: "read-only-plugin",
+          path: "/secure-hook",
+          match: "prefix",
+        });
         const response = createResponse();
         await dispatchRequest(
           server,
@@ -395,7 +400,7 @@ describe("control ui plugin frame auth route boundaries", () => {
   });
 
   test("does not accept a control ui plugin auth cookie for websocket upgrade auth", async () => {
-    const cookie = createControlUiPluginAuthCookieForTest(["operator.read"]);
+    const cookie = createControlUiPluginAuthCookieForTest(["operator.read"], { cfg: {} });
     const result = await checkGatewayHttpRequestAuth({
       req: createRequest({
         path: "/secure-hook",
@@ -422,11 +427,6 @@ describe("control ui plugin frame auth route boundaries", () => {
       observedRuntimeScopes,
       allowedResults: [],
     });
-    const cookie = createControlUiPluginAuthCookieForTest(["operator.read"], {
-      pluginId: "runtime-scope-control-ui-cookie-generation-bound",
-      generation: "stale-generation",
-    });
-
     await withGatewayServer({
       prefix: "openclaw-plugin-http-runtime-scope-cookie-generation-bound-test-",
       resolvedAuth: AUTH_TOKEN,
@@ -435,6 +435,10 @@ describe("control ui plugin frame auth route boundaries", () => {
         shouldEnforcePluginGatewayAuth: (pathContext) => pathContext.pathname === "/secure-hook",
       },
       run: async (server) => {
+        const cookie = createControlUiPluginAuthCookieForTest(["operator.read"], {
+          pluginId: "runtime-scope-control-ui-cookie-generation-bound",
+          generation: "stale-generation",
+        });
         const response = createResponse();
         await dispatchRequest(
           server,
@@ -459,11 +463,6 @@ describe("control ui plugin frame auth route boundaries", () => {
       allowedResults: adminAllowedResults,
       gatewayRuntimeScopeSurface: "trusted-operator",
     });
-    const cookie = createControlUiPluginAuthCookieForTest(["operator.read", "operator.write"], {
-      pluginId: "runtime-scope-control-ui-cookie-trusted-operator",
-      path: "/secure-admin-hook",
-    });
-
     await withGatewayServer({
       prefix: "openclaw-plugin-http-runtime-scope-cookie-trusted-operator-test-",
       resolvedAuth: AUTH_TOKEN,
@@ -473,6 +472,10 @@ describe("control ui plugin frame auth route boundaries", () => {
           pathContext.pathname === "/secure-admin-hook",
       },
       run: async (server) => {
+        const cookie = createControlUiPluginAuthCookieForTest(["operator.read", "operator.write"], {
+          pluginId: "runtime-scope-control-ui-cookie-trusted-operator",
+          path: "/secure-admin-hook",
+        });
         await expectPluginRequestOk(server, {
           path: "/secure-admin-hook",
           headers: { cookie },
@@ -488,7 +491,7 @@ describe("control ui plugin frame auth route boundaries", () => {
     const outerHandler = vi.fn(async () => true);
     const nestedHandler = vi.fn(async () => true);
     const handlePluginRequest = createGatewayPluginRequestHandler({
-      registry: createTestRegistry({
+      registry: createGatewayTestRegistry({
         httpRoutes: [
           {
             pluginId: "outer-plugin",
@@ -510,12 +513,6 @@ describe("control ui plugin frame auth route boundaries", () => {
         typeof createGatewayPluginRequestHandler
       >[0]["log"],
     });
-    const cookie = createControlUiPluginAuthCookieForTest(["operator.write"], {
-      pluginId: "outer-plugin",
-      path: "/plugins/outer",
-      match: "prefix",
-    });
-
     await withGatewayServer({
       prefix: "openclaw-plugin-http-cookie-plugin-bound-test-",
       resolvedAuth: AUTH_TOKEN,
@@ -524,6 +521,11 @@ describe("control ui plugin frame auth route boundaries", () => {
         shouldEnforcePluginGatewayAuth: () => true,
       },
       run: async (server) => {
+        const cookie = createControlUiPluginAuthCookieForTest(["operator.write"], {
+          pluginId: "outer-plugin",
+          path: "/plugins/outer",
+          match: "prefix",
+        });
         const response = createResponse();
         await dispatchRequest(
           server,
@@ -547,16 +549,6 @@ describe("control ui plugin frame auth route boundaries", () => {
       observedRuntimeScopes,
       allowedResults: [],
     });
-    const broadCookie = createControlUiPluginAuthCookieForTest(["operator.write"], {
-      pluginId: "outer-plugin",
-      path: "/plugins/outer",
-      match: "prefix",
-    });
-    const nestedCookie = createControlUiPluginAuthCookieForTest(["operator.read"], {
-      pluginId: "nested-plugin",
-      path: "/plugins/outer/nested",
-    });
-
     await withGatewayServer({
       prefix: "openclaw-plugin-http-cookie-specificity-test-",
       resolvedAuth: AUTH_TOKEN,
@@ -565,6 +557,15 @@ describe("control ui plugin frame auth route boundaries", () => {
         shouldEnforcePluginGatewayAuth: () => true,
       },
       run: async (server) => {
+        const broadCookie = createControlUiPluginAuthCookieForTest(["operator.write"], {
+          pluginId: "outer-plugin",
+          path: "/plugins/outer",
+          match: "prefix",
+        });
+        const nestedCookie = createControlUiPluginAuthCookieForTest(["operator.read"], {
+          pluginId: "nested-plugin",
+          path: "/plugins/outer/nested",
+        });
         await expectPluginRequestOk(server, {
           path: "/plugins/outer/nested",
           headers: { cookie: `${broadCookie}; ${nestedCookie}` },
@@ -588,7 +589,7 @@ describe("control ui plugin frame auth route boundaries", () => {
     const nestedHandler = vi.fn(async () => true);
     const outerHandler = vi.fn(async () => true);
     const handlePluginRequest = createGatewayPluginRequestHandler({
-      registry: createTestRegistry({
+      registry: createGatewayTestRegistry({
         httpRoutes: [
           {
             pluginId: "outer-plugin",
@@ -617,17 +618,6 @@ describe("control ui plugin frame auth route boundaries", () => {
         typeof createGatewayPluginRequestHandler
       >[0]["log"],
     });
-    const outerCookie = createControlUiPluginAuthCookieForTest(["operator.write"], {
-      pluginId: "outer-plugin",
-      path: "/plugins/outer",
-      match: "prefix",
-    });
-    const nestedCookie = createControlUiPluginAuthCookieForTest(["operator.read"], {
-      pluginId: "nested-plugin",
-      path: "/plugins/outer/nested",
-      match: "prefix",
-    });
-
     await withGatewayServer({
       prefix: "openclaw-plugin-http-cookie-dispatch-owner-test-",
       resolvedAuth: AUTH_TOKEN,
@@ -636,6 +626,16 @@ describe("control ui plugin frame auth route boundaries", () => {
         shouldEnforcePluginGatewayAuth: () => true,
       },
       run: async (server) => {
+        const outerCookie = createControlUiPluginAuthCookieForTest(["operator.write"], {
+          pluginId: "outer-plugin",
+          path: "/plugins/outer",
+          match: "prefix",
+        });
+        const nestedCookie = createControlUiPluginAuthCookieForTest(["operator.read"], {
+          pluginId: "nested-plugin",
+          path: "/plugins/outer/nested",
+          match: "prefix",
+        });
         await expectPluginRequestOk(server, {
           path: "/plugins/outer/nested/action",
           headers: { cookie: `${outerCookie}; ${nestedCookie}` },
@@ -653,7 +653,7 @@ describe("control ui plugin frame auth route boundaries", () => {
     const nestedHandler = vi.fn(async () => false);
     const outerHandler = vi.fn(async () => true);
     const handlePluginRequest = createGatewayPluginRequestHandler({
-      registry: createTestRegistry({
+      registry: createGatewayTestRegistry({
         httpRoutes: [
           {
             pluginId: "nested-plugin",
@@ -675,11 +675,6 @@ describe("control ui plugin frame auth route boundaries", () => {
         typeof createGatewayPluginRequestHandler
       >[0]["log"],
     });
-    const cookie = createControlUiPluginAuthCookieForTest(["operator.read"], {
-      pluginId: "nested-plugin",
-      path: "/plugins/outer/nested",
-    });
-
     await withGatewayServer({
       prefix: "openclaw-plugin-http-cookie-fallthrough-test-",
       resolvedAuth: AUTH_TOKEN,
@@ -688,6 +683,10 @@ describe("control ui plugin frame auth route boundaries", () => {
         shouldEnforcePluginGatewayAuth: () => true,
       },
       run: async (server) => {
+        const cookie = createControlUiPluginAuthCookieForTest(["operator.read"], {
+          pluginId: "nested-plugin",
+          path: "/plugins/outer/nested",
+        });
         const response = createResponse();
         await dispatchRequest(
           server,

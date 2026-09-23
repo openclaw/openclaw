@@ -1,5 +1,6 @@
 // Mattermost plugin module implements thread participation cache behavior.
 import { createPersistentDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
+import { createPluginStateErrorReporter } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { getOptionalMattermostRuntime } from "../runtime.js";
 
 /**
@@ -30,17 +31,14 @@ const threadParticipation = createPersistentDedupeCache<MattermostThreadParticip
     namespace: PERSISTENT_NAMESPACE,
     maxEntries: PERSISTENT_MAX_ENTRIES,
     openStore: (options) => getOptionalMattermostRuntime()?.state.openKeyedStore(options),
-    logError: (error) => {
-      try {
-        getOptionalMattermostRuntime()
-          ?.logging.getChildLogger({ plugin: "mattermost", feature: "thread-participation-state" })
-          .warn("Mattermost persistent thread participation state failed", {
-            error: String(error),
-          });
-      } catch {
-        // Best effort only: persistent state must never break Mattermost message handling.
-      }
-    },
+    logError: createPluginStateErrorReporter(
+      getOptionalMattermostRuntime,
+      "mattermost",
+      "thread-participation-state",
+      "Mattermost persistent thread participation state failed",
+    ),
+    // Restoring participation must not extend its original mention-bypass window.
+    readTimestamp: ({ repliedAt }) => repliedAt,
   },
 });
 
@@ -48,16 +46,16 @@ function makeKey(accountId: string, channelId: string, threadRootId: string): st
   return `${accountId}:${channelId}:${threadRootId}`;
 }
 
-export function recordMattermostThreadParticipation(
+export async function recordMattermostThreadParticipation(
   accountId: string,
   channelId: string,
   threadRootId: string,
   opts?: { agentId?: string },
-): void {
+): Promise<void> {
   if (!accountId || !channelId || !threadRootId) {
     return;
   }
-  void threadParticipation.register(makeKey(accountId, channelId, threadRootId), {
+  await threadParticipation.register(makeKey(accountId, channelId, threadRootId), {
     // Stored for future per-agent thread routing; current reads only need presence.
     ...(opts?.agentId ? { agentId: opts.agentId } : {}),
     repliedAt: Date.now(),

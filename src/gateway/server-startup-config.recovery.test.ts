@@ -2,6 +2,7 @@
 // auto-enable behavior, model defaults, and recovery diagnostics.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConfigFileSnapshot, ModelDefinitionConfig, OpenClawConfig } from "../config/types.js";
+import type { ModelProviderConfigInput } from "../config/types.models.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { buildTestConfigSnapshot } from "./test-helpers.config-snapshots.js";
 
@@ -14,6 +15,7 @@ const applyPluginAutoEnable = vi.hoisted(() =>
 );
 const configMocks = vi.hoisted(() => ({
   isNixMode: { value: false },
+  isConfigReadOnly: false,
 }));
 const pluginManifestRegistry = vi.hoisted(() => ({ plugins: [], diagnostics: [] }));
 const pluginMetadataSnapshot = vi.hoisted((): PluginMetadataSnapshot => {
@@ -26,6 +28,8 @@ const pluginMetadataSnapshot = vi.hoisted((): PluginMetadataSnapshot => {
     setupProviders: new Map(),
     commandAliases: new Map(),
     contracts: new Map(),
+    providerAuthContributions: [],
+    modelIdNormalizationPolicies: new Map(),
   };
   const zeroMetrics = {
     registrySnapshotMs: 0,
@@ -35,25 +39,28 @@ const pluginMetadataSnapshot = vi.hoisted((): PluginMetadataSnapshot => {
     indexPluginCount: 0,
     manifestPluginCount: 0,
   };
+  const index: PluginMetadataSnapshot["index"] = {
+    version: 1,
+    hostContractVersion: "test",
+    compatRegistryVersion: "test",
+    migrationVersion: 1,
+    policyHash: "policy",
+    generatedAtMs: 0,
+    installRecords: {},
+    plugins: [],
+    diagnostics: [],
+  };
   return {
     policyHash: "policy",
-    index: {
-      version: 1,
-      hostContractVersion: "test",
-      compatRegistryVersion: "test",
-      migrationVersion: 1,
-      policyHash: "policy",
-      generatedAtMs: 0,
-      installRecords: {},
-      plugins: [],
-      diagnostics: [],
-    },
+    index,
+    registryIndex: index,
     registryDiagnostics: [],
     manifestRegistry: pluginManifestRegistry,
     plugins: [],
     diagnostics: [],
     byPluginId: new Map(),
     normalizePluginId: (pluginId) => pluginId,
+    declaredProviderOwners: new Map(),
     owners: emptyOwners,
     metrics: zeroMetrics,
   };
@@ -65,6 +72,7 @@ vi.mock("../config/io.js", () => ({
 }));
 
 vi.mock("../config/paths.js", () => ({
+  resolveIsConfigReadOnly: () => configMocks.isNixMode.value || configMocks.isConfigReadOnly,
   get isNixMode() {
     return configMocks.isNixMode.value;
   },
@@ -182,7 +190,6 @@ async function expectStartupResult(params: {
     }),
   ).resolves.toEqual({
     snapshot: params.snapshot,
-    wroteConfig: false,
     pluginMetadataSnapshot,
   });
 }
@@ -318,6 +325,7 @@ describe("gateway startup config validation", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     configMocks.isNixMode.value = false;
+    configMocks.isConfigReadOnly = false;
     installConfigIoMockDefaults();
   });
 
@@ -358,6 +366,52 @@ describe("gateway startup config validation", () => {
     expectPluginAutoEnableFor(sourceConfig);
     expect(configMutate.replaceConfigFile).not.toHaveBeenCalled();
     expect(log.info).not.toHaveBeenCalled();
+  });
+
+  it.each<{ name: string; overlay: ModelProviderConfigInput }>([
+    { name: "API key", overlay: { apiKey: "test-api-key" } },
+    { name: "timeout", overlay: { timeoutSeconds: 600 } },
+    { name: "headers", overlay: { headers: { "X-Test": "test-header" } } },
+    { name: "empty models", overlay: { models: [] } },
+  ])("preserves materialized $name provider overlays after auto-enable", async ({ overlay }) => {
+    // Snapshot source retains authored omissions; its runtime pair has already passed validation.
+    const sourceConfig = {
+      gateway: { mode: "local" },
+      agents: { defaults: { model: "anthropic/claude-sonnet-4-6" } },
+      models: { providers: { anthropic: overlay } },
+      channels: { telegram: { botToken: "test-token" } },
+    } as OpenClawConfig;
+    const runtimeConfig: OpenClawConfig = {
+      ...sourceConfig,
+      agents: {
+        defaults: { ...sourceConfig.agents?.defaults, compaction: { mode: "safeguard" } },
+      },
+      models: { providers: { anthropic: { baseUrl: "", models: [], ...overlay } } },
+      channels: { telegram: { ...sourceConfig.channels?.telegram, dmPolicy: "pairing" } },
+      messages: { ackReactionScope: "group-mentions" },
+    };
+    const snapshot = buildRuntimeSnapshot(sourceConfig, runtimeConfig);
+    mockStartupSnapshot(snapshot);
+    mockRuntimeAutoEnable({
+      ...sourceConfig,
+      channels: { telegram: { ...sourceConfig.channels?.telegram, enabled: true } },
+      plugins: { entries: { anthropic: { enabled: true } } },
+    });
+
+    const result = await loadTestStartup({ minimalTestGateway: false });
+
+    expect(result.snapshot.runtimeConfig).toEqual({
+      ...runtimeConfig,
+      channels: { telegram: { ...runtimeConfig.channels?.telegram, enabled: true } },
+      plugins: { entries: { anthropic: { enabled: true } } },
+    });
+    expect(result.snapshot.config).toBe(result.snapshot.runtimeConfig);
+    expect(result.snapshot.sourceConfig).toBe(sourceConfig);
+    expect(result.snapshot.sourceConfig.models?.providers?.anthropic).toEqual(overlay);
+    expectPluginAutoEnableFor(sourceConfig);
+    expect(runtimeConfig.channels?.telegram?.enabled).toBeUndefined();
+    expect(configIo.writeConfigFile).not.toHaveBeenCalled();
+    expect(configMutate.replaceConfigFile).not.toHaveBeenCalled();
   });
 
   it("reuses a CLI preflight snapshot without rereading config", async () => {
@@ -484,6 +538,32 @@ describe("gateway startup config validation", () => {
     );
   });
 
+  it("renders actionable diagnostics for invalid config written by a newer version", async () => {
+    const rawConfig = {
+      meta: { lastTouchedVersion: "9999.1.1" },
+      gateway: { mode: "nope" },
+    };
+    const invalidSnapshot = buildInvalidConfigSnapshot({
+      rawConfig,
+      config: rawConfig as OpenClawConfig,
+      issues: [
+        {
+          path: "gateway.mode",
+          pathSegments: ["gateway", "mode"],
+          message: 'Invalid input (allowed: "local", "remote")',
+        },
+      ],
+    });
+    vi.mocked(configIo.readConfigFileSnapshot).mockResolvedValueOnce(invalidSnapshot);
+
+    await expectStartupRejects(
+      new RegExp(
+        'openclaw-startup-recovery\\.json:1 — gateway\\.mode: Invalid input \\(allowed: "local", "remote"\\), got: "nope".*Config was last written by OpenClaw 9999\\.1\\.1, but you are running',
+        "s",
+      ),
+    );
+  });
+
   it("does not suggest doctor repair for plugin packaging compiled-output failures", async () => {
     const rawConfig = pluginSlotRawConfig("local");
     const invalidSnapshot = buildInvalidConfigSnapshot({
@@ -542,7 +622,7 @@ describe("gateway startup config validation", () => {
     await expectStartupRejects('Run "openclaw doctor --fix" to repair, then retry.');
   });
 
-  it("rejects legacy config entries in Nix mode", async () => {
+  it.each(["Nix", "read-only"])("rejects legacy config entries in %s mode", async (mode) => {
     const legacySnapshot = buildInvalidConfigSnapshot({
       rawConfig: {
         heartbeat: { model: "anthropic/claude-3-5-haiku-20241022", every: "30m" },
@@ -564,10 +644,13 @@ describe("gateway startup config validation", () => {
       ],
     });
     mockStartupSnapshot(legacySnapshot);
-    configMocks.isNixMode.value = true;
+    configMocks.isNixMode.value = mode === "Nix";
+    configMocks.isConfigReadOnly = true;
 
     await expectStartupRejects(
-      "Legacy config entries detected while running in Nix mode. Update your Nix config to the latest schema and restart.",
+      mode === "Nix"
+        ? "Legacy config entries detected while running in Nix mode. Update your Nix config to the latest schema and restart."
+        : "Legacy config entries detected in read-only config. Update your external config source to the latest schema and restart.",
     );
   });
 

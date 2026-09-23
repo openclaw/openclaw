@@ -12,7 +12,30 @@ const BROWSER_NAVIGATION_BLOCKED_MESSAGE = "browser navigation blocked by policy
 /** Stable machine-readable browser error reasons. */
 export const BROWSER_ERROR_REASONS = {
   noDisplayForHeadedProfile: "no_display_for_headed_profile",
+  navigationBlocked: "navigation_blocked",
 } as const;
+
+/** Stable machine-readable codes returned by browser action routes. */
+export const BROWSER_ACT_ERROR_CODES = {
+  kindRequired: "ACT_KIND_REQUIRED",
+  invalidRequest: "ACT_INVALID_REQUEST",
+  selectorUnsupported: "ACT_SELECTOR_UNSUPPORTED",
+  evaluateDisabled: "ACT_EVALUATE_DISABLED",
+  unsupportedForExistingSession: "ACT_EXISTING_SESSION_UNSUPPORTED",
+  targetIdMismatch: "ACT_TARGET_ID_MISMATCH",
+  operationFailed: "ACT_OPERATION_FAILED",
+} as const;
+
+export type BrowserActErrorCode =
+  (typeof BROWSER_ACT_ERROR_CODES)[keyof typeof BROWSER_ACT_ERROR_CODES];
+
+const BROWSER_ACT_ERROR_CODE_VALUES: ReadonlySet<string> = new Set(
+  Object.values(BROWSER_ACT_ERROR_CODES),
+);
+
+function isBrowserActErrorCode(value: unknown): value is BrowserActErrorCode {
+  return typeof value === "string" && BROWSER_ACT_ERROR_CODE_VALUES.has(value);
+}
 
 const NO_DISPLAY_HEADLESS_SOURCES = ["request", "env", "profile", "config", "default"] as const;
 
@@ -28,9 +51,21 @@ export type BrowserNoDisplayErrorMetadata = {
   details: BrowserNoDisplayErrorDetails;
 };
 
-type WithNoDisplayMetadata<T> = T | (T & BrowserNoDisplayErrorMetadata);
-export type BrowserErrorResponse = WithNoDisplayMetadata<{ status: number; message: string }>;
-type BrowserErrorPayload = WithNoDisplayMetadata<{ error: string }>;
+export type BrowserErrorMetadata =
+  | BrowserNoDisplayErrorMetadata
+  | { reason: typeof BROWSER_ERROR_REASONS.navigationBlocked };
+
+type WithBrowserErrorMetadata<T> = T | (T & BrowserErrorMetadata);
+export type BrowserErrorResponse = WithBrowserErrorMetadata<{
+  status: number;
+  message: string;
+  code?: BrowserActErrorCode;
+}>;
+export type BrowserErrorPayload = WithBrowserErrorMetadata<{
+  error: string;
+  code?: BrowserActErrorCode;
+  unrecognizedCode?: true;
+}>;
 
 /** Base browser error carrying an HTTP status code. */
 export class BrowserError extends Error {
@@ -41,6 +76,11 @@ export class BrowserError extends Error {
     this.name = new.target.name;
     this.status = status;
   }
+}
+
+/** A browser interaction failed without establishing a service outage. */
+export class BrowserActionError extends BrowserError {
+  readonly code = BROWSER_ACT_ERROR_CODES.operationFailed;
 }
 
 /**
@@ -126,6 +166,9 @@ export class BrowserResourceExhaustedError extends BrowserError {
 
 /** Map browser-domain errors to HTTP response details. */
 export function toBrowserErrorResponse(err: unknown): BrowserErrorResponse | null {
+  if (err instanceof BrowserActionError) {
+    return { status: err.status, message: err.message, code: err.code };
+  }
   if (err instanceof BrowserProfileUnavailableError && err.metadata) {
     return {
       status: err.status,
@@ -137,7 +180,7 @@ export function toBrowserErrorResponse(err: unknown): BrowserErrorResponse | nul
     return { status: err.status, message: err.message };
   }
   if (err instanceof Error && err.name === "BlockedBrowserTargetError") {
-    return { status: 409, message: err.message };
+    return { status: 409, message: err.message, reason: BROWSER_ERROR_REASONS.navigationBlocked };
   }
   if (err instanceof Error && err.name === "SsrFBlockedError") {
     // SsrFBlockedError from this point is from a navigation-target check
@@ -145,10 +188,14 @@ export function toBrowserErrorResponse(err: unknown): BrowserErrorResponse | nul
     // requested URL). CDP endpoint blocks are rethrown as
     // BrowserCdpEndpointBlockedError by assertCdpEndpointAllowed and handled
     // by the BrowserError branch above.
-    return { status: 400, message: BROWSER_NAVIGATION_BLOCKED_MESSAGE };
+    return {
+      status: 400,
+      message: BROWSER_NAVIGATION_BLOCKED_MESSAGE,
+      reason: BROWSER_ERROR_REASONS.navigationBlocked,
+    };
   }
   if (err instanceof Error && err.name === "InvalidBrowserNavigationUrlError") {
-    return { status: 400, message: err.message };
+    return { status: 400, message: err.message, reason: BROWSER_ERROR_REASONS.navigationBlocked };
   }
   return null;
 }
@@ -186,11 +233,22 @@ export function parseBrowserErrorPayload(value: unknown): BrowserErrorPayload | 
   if (typeof body.error !== "string" || body.error.length === 0) {
     return null;
   }
+  const code = isBrowserActErrorCode(body.code) ? body.code : undefined;
+  const unrecognizedCode =
+    body.unrecognizedCode === true || (body.code !== undefined && !code) ? true : undefined;
+  const actionCode: { code?: BrowserActErrorCode; unrecognizedCode?: true } = code
+    ? { code }
+    : unrecognizedCode
+      ? { unrecognizedCode: true }
+      : {};
+  if (body.reason === BROWSER_ERROR_REASONS.navigationBlocked) {
+    return { error: body.error, ...actionCode, reason: body.reason };
+  }
   if (body.reason === BROWSER_ERROR_REASONS.noDisplayForHeadedProfile) {
     const details = parseNoDisplayDetails(body.details);
     if (details) {
-      return { error: body.error, reason: body.reason, details };
+      return { error: body.error, ...actionCode, reason: body.reason, details };
     }
   }
-  return { error: body.error };
+  return { error: body.error, ...actionCode };
 }

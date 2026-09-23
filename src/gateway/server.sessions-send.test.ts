@@ -1,9 +1,21 @@
 // sessions_send tests cover tool-driven agent-to-agent delivery, transcript
 // updates, gateway auth, plugin routing, and emitted agent events.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { buildAgentRunTerminalReplySnapshot } from "../agents/agent-run-terminal-reply.js";
+import type { AgentCommandGatewayIngressOpts } from "../agents/command/types.js";
 import { testing as agentStepTesting } from "../agents/tools/agent-step.test-support.js";
 import { runSessionsSendA2AFlow } from "../agents/tools/sessions-send-tool.a2a.js";
 import {
@@ -12,29 +24,42 @@ import {
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { captureEnv } from "../test-utils/env.js";
+import { acquireTestPortBlock } from "../test-utils/port-claims.js";
+import { runDirectSessionAnnounceScenario } from "./server.sessions-send.direct-announce.test-support.js";
 import {
-  agentCommand,
-  getFreePort,
+  agentCommandMock,
   installGatewayTestHooks,
-  startGatewayServer,
+  prepareGatewayReplyRuntimeForTest,
+  startTestGatewayServer,
   setTestPluginRegistry,
   testState,
   writeSessionStore,
 } from "./test-helpers.js";
+import { releaseGatewaySessionStoreFixture } from "./test/server-sessions-resources.test-helpers.js";
 
 const { createOpenClawTools } = await import("../agents/openclaw-tools.js");
 
 installGatewayTestHooks({ scope: "suite" });
 
-let server: Awaited<ReturnType<typeof startGatewayServer>>;
+let server: Awaited<ReturnType<typeof startTestGatewayServer>>;
 let gatewayPort: number;
 const gatewayToken = "test-gateway-token-1234567890";
 let envSnapshot: ReturnType<typeof captureEnv>;
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    for (const dir of tempDirs.dirs) {
+      await releaseGatewaySessionStoreFixture(dir);
+    }
+    cleanup();
+  }),
+);
 
 type SessionSendTool = ReturnType<typeof createOpenClawTools>[number];
 const SESSION_SEND_E2E_TIMEOUT_MS = 10_000;
+const SESSION_SEND_DM_ROUTING_E2E_TIMEOUT_MS = 30_000;
 let cachedSessionsSendTool: SessionSendTool | null = null;
 
 function getSessionsSendTool(): SessionSendTool {
@@ -58,7 +83,7 @@ function expectSessionsSendDetails(
     reply?: string;
     sessionKey?: string;
   };
-  expect(details.status).toBe("ok");
+  expect(details.status, JSON.stringify(details)).toBe("ok");
   expect(details.reply).toBe(expected.reply);
   expect(details.sessionKey).toBe(expected.sessionKey);
 }
@@ -73,6 +98,8 @@ async function emitLifecycleAssistantReply(params: {
     sessionId?: string;
     sessionKey?: string;
     runId?: string;
+    agentId?: string;
+    lifecycleGeneration?: string;
     extraSystemPrompt?: string;
   };
   const sessionId = commandParams.sessionId ?? params.defaultSessionId;
@@ -81,9 +108,16 @@ async function emitLifecycleAssistantReply(params: {
     throw new Error("expected session key for lifecycle reply");
   }
 
+  const routing = {
+    runId,
+    sessionKey: commandParams.sessionKey,
+    sessionId,
+    agentId: commandParams.agentId,
+    lifecycleGeneration: commandParams.lifecycleGeneration,
+  };
   const startedAt = Date.now();
   emitAgentEvent({
-    runId,
+    ...routing,
     stream: "lifecycle",
     data: { phase: "start", startedAt },
   });
@@ -108,16 +142,21 @@ async function emitLifecycleAssistantReply(params: {
   );
 
   emitAgentEvent({
-    runId,
+    ...routing,
     stream: "lifecycle",
-    data: { phase: "end", startedAt, endedAt: Date.now() },
+    data: {
+      phase: "end",
+      startedAt,
+      endedAt: Date.now(),
+      terminalReply: buildAgentRunTerminalReplySnapshot({ visibleText: text, rawText: text }),
+    },
   });
 }
 
 beforeAll(async () => {
   envSnapshot = captureEnv(["OPENCLAW_GATEWAY_PORT", "OPENCLAW_GATEWAY_TOKEN"]);
-  gatewayPort = await getFreePort();
-  const { approveDevicePairing, requestDevicePairing } = await import("../infra/device-pairing.js");
+  const { approveDevicePairing } = await import("../infra/device-pairing-approval.js");
+  const { requestDevicePairing } = await import("../infra/device-pairing.js");
   const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem } =
     await import("../infra/device-identity.js");
   const identity = loadOrCreateDeviceIdentity();
@@ -134,16 +173,34 @@ beforeAll(async () => {
     callerScopes: pending.request.scopes ?? ["operator.admin"],
   });
   testState.gatewayAuth = { mode: "token", token: gatewayToken };
+  const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+  gatewayPort = portClaim.port;
   process.env.OPENCLAW_GATEWAY_PORT = String(gatewayPort);
   process.env.OPENCLAW_GATEWAY_TOKEN = gatewayToken;
-  server = await startGatewayServer(gatewayPort);
+  server = await startTestGatewayServer(portClaim);
+  // Prepare the real history handler before the RPC deadline starts.
+  await import("./server-methods/chat.js");
 });
 
-beforeEach(() => {
+beforeEach(async () => {
   testState.gatewayAuth = { mode: "token", token: gatewayToken };
   process.env.OPENCLAW_GATEWAY_PORT = String(gatewayPort);
   process.env.OPENCLAW_GATEWAY_TOKEN = gatewayToken;
+  testState.sessionStorePath = path.join(
+    tempDirs.make("openclaw-sessions-send-case-"),
+    "sessions.json",
+  );
+  await writeSessionStore({ entries: {} });
+  await prepareGatewayReplyRuntimeForTest();
 });
+
+// Detached A2A steps retain their selected store until the owner has settled.
+afterEach(
+  async () => {
+    await waitForGatewayActiveWork(SESSION_SEND_E2E_TIMEOUT_MS * 3);
+  },
+  SESSION_SEND_E2E_TIMEOUT_MS * 3 + 1_000,
+);
 
 afterAll(async () => {
   await server.close();
@@ -151,10 +208,56 @@ afterAll(async () => {
 });
 
 describe("sessions_send gateway loopback", () => {
+  it("rejects a missing explicit key without creating or running a session", async () => {
+    const dir = tempDirs.make("openclaw-sessions-send-missing-");
+    const missingKey = "agent:main:missing";
+    const spy = agentCommandMock as unknown as Mock<(opts: unknown) => Promise<void>>;
+    testState.sessionStorePath = path.join(dir, "sessions.json");
+    try {
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+      spy.mockClear();
+      const tool = createOpenClawTools({
+        agentSessionKey: "agent:main:main",
+        config: { tools: { sessions: { visibility: "all" } } },
+      }).find((candidate) => candidate.name === "sessions_send");
+      if (!tool) {
+        throw new Error("missing sessions_send tool");
+      }
+
+      const result = await tool.execute("call-missing-key", {
+        sessionKey: missingKey,
+        message: "ping",
+        timeoutSeconds: 0,
+      });
+
+      expect(result.details).toMatchObject({
+        status: "error",
+        error: `No session found: ${missingKey}`,
+      });
+      expect(spy).not.toHaveBeenCalled();
+      expect(
+        loadSessionEntry({ sessionKey: missingKey, storePath: testState.sessionStorePath }),
+      ).toBe(undefined);
+    } finally {
+      testState.sessionStorePath = undefined;
+    }
+  });
+
   it("returns reply when lifecycle ends before agent.wait", async () => {
-    const spy = agentCommand as unknown as Mock<(opts: unknown) => Promise<void>>;
-    spy.mockImplementation(async (opts: unknown) =>
-      emitLifecycleAssistantReply({
+    const body = "    const first = 1;\n        const second = 2;";
+    const spy = agentCommandMock as unknown as Mock<
+      (opts: AgentCommandGatewayIngressOpts) => Promise<void>
+    >;
+    spy.mockImplementation(async (opts) => {
+      await opts.userTurnTranscriptRecorder?.persistApproved();
+      await emitLifecycleAssistantReply({
         opts,
         defaultSessionId: "main",
         includeTimestamp: true,
@@ -167,67 +270,128 @@ describe("sessions_send gateway loopback", () => {
           }
           return "pong";
         },
-      }),
-    );
+      });
+    });
 
     const tool = getSessionsSendTool();
 
     const result = await tool.execute("call-loopback", {
       sessionKey: "main",
-      message: "ping",
+      message: body,
       timeoutSeconds: 5,
     });
     expectSessionsSendDetails(result, { reply: "pong", sessionKey: "main" });
 
-    const firstCall = spy.mock.calls.at(0)?.[0] as
-      | { lane?: string; inputProvenance?: { kind?: string; sourceTool?: string } }
-      | undefined;
+    const firstCall = spy.mock.calls.at(0)?.[0];
     expect(firstCall?.lane).toMatch(/^nested(?::|$)/);
     expect(firstCall?.inputProvenance?.kind).toBe("inter_session");
     expect(firstCall?.inputProvenance?.sourceTool).toBe("sessions_send");
+    expect(firstCall?.runId).toBeTypeOf("string");
+    expect(result.details).toMatchObject({ runId: firstCall?.runId });
+    expect(firstCall?.userTurnTranscriptRecorder?.hasPersisted()).toBe(true);
+
+    const { callGateway } = await import("./call.js");
+    const history = await callGateway<{ messages?: unknown[] }>({
+      method: "chat.history",
+      params: { sessionKey: "main", limit: 10 },
+      timeoutMs: 5_000,
+    });
+    // Observe both receiving and persisted body failures before ending the case.
+    expect.soft(firstCall?.message?.split("\n").slice(-2).join("\n")).toBe(body);
+    expect.soft(history.messages).toContainEqual(
+      expect.objectContaining({
+        role: "assistant",
+        idempotencyKey: `${firstCall?.runId}:user`,
+        content: body,
+        provenance: expect.objectContaining({
+          kind: "inter_session",
+          sourceTool: "sessions_send",
+        }),
+      }),
+    );
   });
+
+  it.each([
+    {
+      label: "direct",
+      sessionKey: "agent:main:feishu:direct:ou_announce_recipient",
+      expectedAccountId: undefined,
+    },
+    {
+      label: "dm alias",
+      sessionKey: "agent:main:feishu:dm:ou_announce_recipient",
+      expectedAccountId: undefined,
+    },
+    {
+      label: "account-scoped direct",
+      sessionKey: "agent:main:feishu:work:direct:ou_announce_recipient",
+      expectedAccountId: "work",
+    },
+    {
+      label: "account-scoped dm alias",
+      sessionKey: "agent:main:feishu:work:dm:ou_announce_recipient",
+      expectedAccountId: "work",
+    },
+  ])(
+    "delivers a $label session announcement through the authenticated Gateway without stored delivery context",
+    { timeout: SESSION_SEND_DM_ROUTING_E2E_TIMEOUT_MS },
+    async ({ sessionKey, expectedAccountId }) => {
+      await runDirectSessionAnnounceScenario({
+        dir: tempDirs.make("openclaw-direct-announce-"),
+        sessionKey,
+        expectedAccountId,
+      });
+    },
+  );
 
   it(
     "announces through gateway send using external deliveryContext over stale webchat session fields",
     { timeout: SESSION_SEND_E2E_TIMEOUT_MS },
     async () => {
-      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-send-route-"));
+      const dir = tempDirs.make("openclaw-sessions-send-route-");
       const sendCalls: Array<{
         to?: string;
         text?: string;
         accountId?: string | null;
         threadId?: string | number | null;
       }> = [];
+      const whatsappPlugin = createOutboundTestPlugin({
+        id: "whatsapp",
+        label: "WhatsApp",
+        outbound: {
+          deliveryMode: "direct",
+          resolveTarget: ({ to }) => {
+            const target = to?.trim();
+            return target
+              ? { ok: true, to: target }
+              : { ok: false, error: new Error("missing target") };
+          },
+          sendText: async (ctx) => {
+            sendCalls.push({
+              to: ctx.to,
+              text: ctx.text,
+              accountId: ctx.accountId,
+              threadId: ctx.threadId,
+            });
+            return { channel: "whatsapp", messageId: "wa-proof-msg" };
+          },
+        },
+        messaging: {
+          normalizeTarget: (raw) => raw,
+        },
+      });
       setTestPluginRegistry(
         createTestRegistry([
           {
             pluginId: "whatsapp",
             source: "test",
-            plugin: createOutboundTestPlugin({
-              id: "whatsapp",
-              label: "WhatsApp",
-              outbound: {
-                deliveryMode: "direct",
-                resolveTarget: ({ to }) => {
-                  const target = to?.trim();
-                  return target
-                    ? { ok: true, to: target }
-                    : { ok: false, error: new Error("missing target") };
-                },
-                sendText: async (ctx) => {
-                  sendCalls.push({
-                    to: ctx.to,
-                    text: ctx.text,
-                    accountId: ctx.accountId,
-                    threadId: ctx.threadId,
-                  });
-                  return { channel: "whatsapp", messageId: "wa-proof-msg" };
-                },
+            plugin: {
+              ...whatsappPlugin,
+              config: {
+                ...whatsappPlugin.config,
+                listAccountIds: () => ["work"],
               },
-              messaging: {
-                normalizeTarget: (raw) => raw,
-              },
-            }),
+            },
           },
         ]),
       );
@@ -259,7 +423,7 @@ describe("sessions_send gateway loopback", () => {
           },
         });
 
-        agentStepTesting.setDepsForTest({
+        await agentStepTesting.setDepsForTest({
           agentCommandFromIngress: async () => ({
             payloads: [{ text: "announce through channel", mediaUrl: null }],
             meta: { durationMs: 1 },
@@ -267,6 +431,7 @@ describe("sessions_send gateway loopback", () => {
         });
 
         await runSessionsSendA2AFlow({
+          targetAgentId: "main",
           targetSessionKey: "agent:main:whatsapp:direct:peer-1",
           displayKey: "agent:main:whatsapp:direct:peer-1",
           message: "ping",
@@ -288,18 +453,16 @@ describe("sessions_send gateway loopback", () => {
           { timeout: 5_000 },
         );
       } finally {
-        agentStepTesting.setDepsForTest();
-        testState.sessionStorePath = undefined;
-        await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+        await agentStepTesting.setDepsForTest();
       }
     },
   );
 
   it(
-    "does not re-announce a trailing message-tool delivery mirror after a waited A2A run",
+    "honors source delivery from agent.wait when the transcript has no tool result",
     { timeout: SESSION_SEND_E2E_TIMEOUT_MS },
     async () => {
-      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-send-mirror-"));
+      const dir = tempDirs.make("openclaw-sessions-send-mirror-");
       const sessionKey = "agent:main:whatsapp:direct:peer-1";
       const sessionId = "sess-whatsapp-mirror";
       const runId = `run-message-tool-mirror-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -372,7 +535,7 @@ describe("sessions_send gateway loopback", () => {
               {
                 message: {
                   role: "assistant",
-                  content: [{ type: "text", text: "previous real reply" }],
+                  content: [{ type: "text", text: deliveredReply }],
                   timestamp: 1,
                 },
               },
@@ -393,24 +556,6 @@ describe("sessions_send gateway loopback", () => {
                   timestamp: 2,
                 },
               },
-              {
-                message: {
-                  role: "toolResult",
-                  toolName: "message",
-                  toolCallId: "call-message-duplicate-proof",
-                  content: { ok: true, messageId: "24271", chatId: "peer-1" },
-                  timestamp: 3,
-                },
-              },
-              {
-                message: {
-                  role: "assistant",
-                  provider: "openclaw",
-                  model: "delivery-mirror",
-                  content: [{ type: "text", text: deliveredReply }],
-                  timestamp: 4,
-                },
-              },
             ],
           },
         );
@@ -421,19 +566,11 @@ describe("sessions_send gateway loopback", () => {
           params: { sessionKey, limit: 10 },
           timeoutMs: 5_000,
         });
-        expect(history.messages).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({
-              role: "assistant",
-              content: expect.arrayContaining([
-                expect.objectContaining({ type: "text", text: deliveredReply }),
-              ]),
-              openclawMessageToolMirror: expect.objectContaining({
-                toolName: "message",
-                toolCallId: "call-message-duplicate-proof",
-              }),
-            }),
-          ]),
+        expect(history.messages).not.toContainEqual(
+          expect.objectContaining({ role: "toolResult" }),
+        );
+        expect(history.messages).not.toContainEqual(
+          expect.objectContaining({ openclawMessageToolMirror: expect.anything() }),
         );
 
         const startedAt = Date.now();
@@ -445,9 +582,32 @@ describe("sessions_send gateway loopback", () => {
         emitAgentEvent({
           runId,
           stream: "lifecycle",
-          data: { phase: "end", startedAt, endedAt: Date.now() },
+          data: {
+            phase: "end",
+            startedAt,
+            endedAt: Date.now(),
+            terminalReply: { disposition: "visible", text: deliveredReply },
+            terminalReceipt: {
+              runId,
+              sessionId,
+              turnId: runId,
+              requested: { provider: "test", model: "test" },
+              effective: { provider: "test", model: "test", responseModel: "test" },
+              successfulToolNames: ["message"],
+              rerouted: false,
+              terminalDisposition: "visible",
+              sourceReplyDelivered: true,
+            },
+          },
         });
-        agentStepTesting.setDepsForTest({
+        expect(
+          await callGateway({ method: "agent.wait", params: { runId, timeoutMs: 5_000 } }),
+        ).toMatchObject({
+          status: "ok",
+          terminalReply: { disposition: "visible", text: deliveredReply },
+          terminalReceipt: { runId, sourceReplyDelivered: true },
+        });
+        await agentStepTesting.setDepsForTest({
           agentCommandFromIngress: async () => ({
             payloads: [{ text: "SHOULD_NOT_SEND", mediaUrl: null }],
             meta: { durationMs: 1 },
@@ -455,7 +615,10 @@ describe("sessions_send gateway loopback", () => {
         });
 
         await runSessionsSendA2AFlow({
+          targetAgentId: "main",
           targetSessionKey: sessionKey,
+          requesterSessionKey: sessionKey,
+          requesterChannel: "whatsapp",
           displayKey: sessionKey,
           message: "proof ping",
           announceTimeoutMs: 5_000,
@@ -465,9 +628,7 @@ describe("sessions_send gateway loopback", () => {
 
         expect(sendCalls).toEqual([]);
       } finally {
-        agentStepTesting.setDepsForTest();
-        testState.sessionStorePath = undefined;
-        await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+        await agentStepTesting.setDepsForTest();
       }
     },
   );
@@ -490,7 +651,7 @@ describe("sessions_send label lookup", () => {
         "utf-8",
       );
 
-      const spy = agentCommand as unknown as Mock<(opts: unknown) => Promise<void>>;
+      const spy = agentCommandMock as unknown as Mock<(opts: unknown) => Promise<void>>;
       spy.mockImplementation(async (opts: unknown) =>
         emitLifecycleAssistantReply({
           opts,
@@ -535,24 +696,33 @@ describe("sessions_send label lookup", () => {
 });
 
 describe("sessions_send agent targeting", () => {
-  it(
-    "starts configured agent main session by agentId before sending",
+  it.each([
+    { name: "default cross-agent access", tools: undefined },
+    {
+      name: "explicit cross-agent access",
+      tools: { sessions: { visibility: "all" }, agentToAgent: { enabled: true } },
+    },
+    {
+      name: "disabled agent-to-agent access",
+      tools: { agentToAgent: { enabled: false } },
+      error: "Agent-to-agent messaging is disabled",
+    },
+    {
+      name: "restrictive allow list",
+      tools: { agentToAgent: { allow: ["main"] } },
+      error: "denied by tools.agentToAgent.allow",
+    },
+  ] satisfies Array<{ name: string; tools: OpenClawConfig["tools"]; error?: string }>)(
+    "enforces $name when targeting a configured agent main session by agentId",
     { timeout: SESSION_SEND_E2E_TIMEOUT_MS },
-    async () => {
+    async ({ tools, error }) => {
       const configPath = process.env.OPENCLAW_CONFIG_PATH;
       if (!configPath) {
         throw new Error("OPENCLAW_CONFIG_PATH missing in gateway test environment");
       }
-      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-send-agent-"));
+      const dir = tempDirs.make("openclaw-sessions-send-agent-");
       const config: OpenClawConfig = {
-        tools: {
-          sessions: {
-            visibility: "all",
-          },
-          agentToAgent: {
-            enabled: true,
-          },
-        },
+        ...(tools ? { tools } : {}),
         agents: {
           list: [{ id: "main", default: true }, { id: "orion" }],
         },
@@ -571,13 +741,25 @@ describe("sessions_send agent targeting", () => {
             },
           },
         });
+        await prepareGatewayReplyRuntimeForTest({ force: true });
 
-        const spy = agentCommand as unknown as Mock<(opts: unknown) => Promise<void>>;
+        const spy = agentCommandMock as unknown as Mock<(opts: unknown) => Promise<void>>;
         spy.mockImplementation(async (opts: unknown) =>
           emitLifecycleAssistantReply({
             opts,
             defaultSessionId: "orion-created",
-            resolveText: () => "orion response",
+            // The detached announce flow keeps stepping this same mock after the
+            // awaited reply; skipping both follow-up steps ends the tail instead of
+            // running five ping-pong turns no row asserts on.
+            resolveText: (extraSystemPrompt) => {
+              if (extraSystemPrompt?.includes("Agent-to-agent reply step")) {
+                return "REPLY_SKIP";
+              }
+              if (extraSystemPrompt?.includes("Agent-to-agent announce step")) {
+                return "ANNOUNCE_SKIP";
+              }
+              return "orion response";
+            },
           }),
         );
         spy.mockClear();
@@ -595,6 +777,22 @@ describe("sessions_send agent targeting", () => {
           message: "hello orion",
           timeoutSeconds: 5,
         });
+        if (error) {
+          expect(spy.mock.calls.map(([opts]) => opts)).not.toContainEqual(
+            expect.objectContaining({ sessionKey: "agent:orion:main" }),
+          );
+          expect(
+            loadSessionEntry({
+              sessionKey: "agent:orion:main",
+              storePath: testState.sessionStorePath,
+            }),
+          ).toBeUndefined();
+          expect(result.details).toMatchObject({
+            status: "forbidden",
+            error: expect.stringContaining(error),
+          });
+          return;
+        }
         expectSessionsSendDetails(result, {
           reply: "orion response",
           sessionKey: "agent:orion:main",
@@ -613,8 +811,201 @@ describe("sessions_send agent targeting", () => {
         expect(stored?.sessionId).toBe(orionCall?.sessionId);
       } finally {
         testState.agentsConfig = undefined;
-        testState.sessionStorePath = undefined;
-        await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+      }
+    },
+  );
+});
+
+type DirectMessageRequesterRoutingCase = {
+  label: string;
+  requesterSessionKey: string;
+  dmScope: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
+  bindingAccountId?: string;
+  bindingAgentId?: string;
+  expectedReplySessionKey: string;
+};
+
+describe("sessions_send direct-message requester routing", () => {
+  // Exhaustive routing variants live in the sessions_send owner tests. Keep only
+  // opposite end-to-end outcomes here so Gateway composition is proven once.
+  it.each<DirectMessageRequesterRoutingCase>([
+    {
+      label: "legacy channel direct route",
+      requesterSessionKey: "agent:main:feishu:direct:legacy-peer",
+      dmScope: "main",
+      expectedReplySessionKey: "agent:main:main",
+    },
+    {
+      label: "erased named-account route owned by another agent",
+      requesterSessionKey: "agent:main:feishu:direct:legacy-peer",
+      dmScope: "main",
+      bindingAgentId: "stranger",
+      bindingAccountId: "work",
+      expectedReplySessionKey: "agent:main:feishu:direct:legacy-peer",
+    },
+  ] as const)(
+    "returns a real cross-agent reply to the $label",
+    { timeout: SESSION_SEND_DM_ROUTING_E2E_TIMEOUT_MS },
+    async ({
+      label,
+      requesterSessionKey,
+      dmScope,
+      bindingAccountId,
+      bindingAgentId,
+      expectedReplySessionKey,
+    }) => {
+      const configPath = process.env.OPENCLAW_CONFIG_PATH;
+      if (!configPath) {
+        throw new Error("OPENCLAW_CONFIG_PATH missing in gateway test environment");
+      }
+      const dir = tempDirs.make("openclaw-sessions-send-dm-scope-");
+      // A2A follow-ups outlive tool.execute. Give every real Gateway case its
+      // own agent so a preceding case can never satisfy this case's spy.
+      const targetAgentId = `orion-${label.toLowerCase().replaceAll(" ", "-")}`;
+      const targetSessionKey = `agent:${targetAgentId}:main`;
+      const config: OpenClawConfig = {
+        ...(bindingAccountId || bindingAgentId
+          ? {
+              bindings: [
+                {
+                  type: "route",
+                  agentId: bindingAgentId ?? "main",
+                  match: {
+                    channel: "feishu",
+                    accountId: bindingAccountId ?? "default",
+                    peer: { kind: "direct", id: "legacy-peer" },
+                  },
+                },
+              ],
+            }
+          : {}),
+        session: { dmScope },
+        tools: {
+          sessions: { visibility: "all" },
+          agentToAgent: { enabled: true },
+        },
+        agents: {
+          list: [
+            { id: "main", default: true },
+            { id: targetAgentId },
+            ...(bindingAgentId ? [{ id: bindingAgentId }] : []),
+          ],
+        },
+      };
+
+      testState.sessionStorePath = path.join(dir, "sessions.json");
+      testState.agentsConfig = config.agents;
+      testState.sessionConfig = config.session;
+      try {
+        await fs.mkdir(path.dirname(configPath), { recursive: true });
+        await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf-8");
+        await writeSessionStore({
+          entries: {
+            "agent:main:main": { sessionId: "dm-scope-main", updatedAt: Date.now() },
+            [requesterSessionKey]: { sessionId: "dm-scope-legacy", updatedAt: Date.now() },
+            [targetSessionKey]: { sessionId: "dm-scope-orion", updatedAt: Date.now() },
+          },
+        });
+        await prepareGatewayReplyRuntimeForTest({ force: true });
+
+        const spy = agentCommandMock as unknown as Mock<(opts: unknown) => Promise<void>>;
+        spy.mockReset();
+        spy.mockImplementation(async (opts: unknown) =>
+          emitLifecycleAssistantReply({
+            opts,
+            defaultSessionId: `dm-scope-${targetAgentId}`,
+            resolveText: (extraSystemPrompt) => {
+              if (extraSystemPrompt?.includes("Agent-to-agent reply step")) {
+                return "REPLY_SKIP";
+              }
+              if (extraSystemPrompt?.includes("Agent-to-agent announce step")) {
+                return "ANNOUNCE_SKIP";
+              }
+              return "orion received the session message";
+            },
+          }),
+        );
+
+        const tool = createOpenClawTools({
+          agentSessionKey: requesterSessionKey,
+          agentChannel: "feishu",
+          config,
+        }).find((candidate) => candidate.name === "sessions_send");
+        if (!tool) {
+          throw new Error("missing sessions_send tool");
+        }
+
+        const result = await tool.execute("call-dm-scope-routing", {
+          sessionKey: targetSessionKey,
+          message: "deliver to the monitored requester session",
+          timeoutSeconds: 10,
+        });
+        expectSessionsSendDetails(result, {
+          reply: "orion received the session message",
+          sessionKey: targetSessionKey,
+        });
+
+        const runId = (result.details as { runId?: string }).runId;
+        expect(runId).toBeTypeOf("string");
+        const targetCall = spy.mock.calls
+          .map(
+            ([opts]) =>
+              opts as {
+                runId?: string;
+                sessionKey?: string;
+                inputProvenance?: { sourceSessionKey?: string };
+              },
+          )
+          .find((opts) => opts.sessionKey === targetSessionKey && opts.runId === runId);
+        if (!targetCall) {
+          const observedRuns = spy.mock.calls.slice(-6).map(([opts]) => {
+            const call = opts as { runId?: string; sessionKey?: string };
+            return { runId: call.runId, sessionKey: call.sessionKey };
+          });
+          throw new Error(
+            `Target run ${runId} for ${targetSessionKey} was not observed: ${JSON.stringify(observedRuns)}`,
+          );
+        }
+        expect(targetCall?.inputProvenance?.sourceSessionKey).toBe(expectedReplySessionKey);
+
+        await vi.waitFor(
+          () => {
+            expect(
+              spy.mock.calls.some(([opts]) => {
+                const call = opts as {
+                  sessionKey?: string;
+                  extraSystemPrompt?: string;
+                  inputProvenance?: { sourceSessionKey?: string };
+                };
+                return (
+                  call.sessionKey === expectedReplySessionKey &&
+                  call.inputProvenance?.sourceSessionKey === targetSessionKey &&
+                  call.extraSystemPrompt?.includes("Agent-to-agent reply step")
+                );
+              }),
+            ).toBe(true);
+          },
+          { timeout: 10_000, interval: 25 },
+        );
+        if (expectedReplySessionKey !== requesterSessionKey) {
+          expect(
+            spy.mock.calls.some(([opts]) => {
+              const call = opts as {
+                sessionKey?: string;
+                extraSystemPrompt?: string;
+                inputProvenance?: { sourceSessionKey?: string };
+              };
+              return (
+                call.sessionKey === requesterSessionKey &&
+                call.inputProvenance?.sourceSessionKey === targetSessionKey &&
+                call.extraSystemPrompt?.includes("Agent-to-agent reply step")
+              );
+            }),
+          ).toBe(false);
+        }
+      } finally {
+        testState.sessionConfig = undefined;
+        testState.agentsConfig = undefined;
       }
     },
   );

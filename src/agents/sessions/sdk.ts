@@ -3,15 +3,26 @@
  *
  * Selects models, wires built-in/custom tools, loads resources, and creates AgentSession instances.
  */
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { clampThinkingLevel } from "@openclaw/ai/internal/runtime";
+import { resolveThinkingDefaultForModel } from "../../auto-reply/thinking.js";
+import { createSessionEntryWithTranscript } from "../../config/sessions/session-accessor.js";
+import { sameSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
 import {
-  resolveThinkingDefaultForModel,
-  type ThinkingCatalogEntry,
-} from "../../auto-reply/thinking.js";
-import { streamSimple } from "../../llm/stream.js";
+  SessionTranscriptWriterClaimReboundError,
+  withSessionMetadataPublication,
+  withSessionTranscriptWriteAssertion,
+  type SessionMetadataChange,
+  type SessionMetadataCommit,
+} from "../../config/sessions/transcript-write-context.js";
+import { bindStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { Message, Model } from "../../llm/types.js";
-import { getAgentDir } from "../config.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { registerResolvedAgentDir } from "../agent-dir-registry.js";
+import { sanitizeCompactionReplayMessages } from "../compaction-replay.js";
+import { getAgentDirResolution } from "../config.js";
+import { projectModelThinkingCompat } from "../model-catalog-lookup.js";
 import {
   Agent,
   type AgentMessage,
@@ -19,7 +30,12 @@ import {
   type AgentTool,
   type ThinkingLevel,
 } from "../runtime/index.js";
-import { AgentSession, type AgentSessionWriteLockRunner } from "./agent-session.js";
+import {
+  setInternalBeforeToolBatch,
+  type InternalBeforeToolBatchHook,
+} from "../runtime/internal-hooks.js";
+import type { AgentSessionConfig } from "./agent-session-types.js";
+import { AgentSession, type AgentSessionWriteSettlementRunner } from "./agent-session.js";
 import { formatNoModelsAvailableMessage } from "./auth-guidance.js";
 import { AuthStorage } from "./auth-storage.js";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.js";
@@ -30,49 +46,24 @@ import type {
   ToolDefinition,
 } from "./extensions/index.js";
 import { convertToLlm } from "./messages.js";
+import { getModelRegistryRuntime } from "./model-registry-runtime.js";
 import { ModelRegistry } from "./model-registry.js";
 import { findInitialModel } from "./model-resolver.js";
 import { DefaultResourceLoader, type ResourceLoader } from "./resource-loader.js";
-import { getDefaultSessionDir, SessionManager } from "./session-manager.js";
+import { SessionMetadataCommittedError } from "./session-manager-metadata-error.js";
+import { withSessionManagerWrite } from "./session-manager-write-admission.js";
+import { SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
 import { isInstallTelemetryEnabled } from "./telemetry.js";
-import {
-  createCodingTools,
-  createEditTool,
-  createReadTool,
-  createWriteTool,
-  type ToolName,
-} from "./tools/index.js";
-
-type ThinkingCatalogCompat = NonNullable<ThinkingCatalogEntry["compat"]>;
-
-function projectThinkingCatalogCompat(compat: Model["compat"]) {
-  if (!compat || typeof compat !== "object") {
-    return undefined;
-  }
-  const record = compat as Record<string, unknown>;
-  const projected: ThinkingCatalogCompat = {};
-  if (typeof record.thinkingFormat === "string") {
-    projected.thinkingFormat = record.thinkingFormat;
-  }
-  if (record.supportedReasoningEfforts === null) {
-    projected.supportedReasoningEfforts = null;
-  } else if (
-    Array.isArray(record.supportedReasoningEfforts) &&
-    record.supportedReasoningEfforts.every((effort) => typeof effort === "string")
-  ) {
-    projected.supportedReasoningEfforts = record.supportedReasoningEfforts;
-  }
-  return Object.keys(projected).length > 0 ? projected : undefined;
-}
+import type { ToolName } from "./tools/index.js";
 
 export interface CreateAgentSessionOptions {
   /** Working directory for project-local discovery. Default: process.cwd() */
   cwd?: string;
-  /** Global config directory. Default: ~/.openclaw/agents/default */
+  /** Agent config directory. Defaults to the configured installation owner. */
   agentDir?: string;
 
-  /** Auth storage for credentials. Default: AuthStorage.create(agentDir/auth.json) */
+  /** Auth storage for credentials. Default: canonical per-agent SQLite auth profiles. */
   authStorage?: AuthStorage;
   /** Model registry. Default: ModelRegistry.create(authStorage, agentDir/models.json) */
   modelRegistry?: ModelRegistry;
@@ -81,8 +72,6 @@ export interface CreateAgentSessionOptions {
   model?: Model;
   /** Thinking level. Default: from settings, else 'medium' (clamped to model capabilities) */
   thinkingLevel?: ThinkingLevel;
-  /** Models available for cycling (Ctrl+P in interactive mode) */
-  scopedModels?: Array<{ model: Model; thinkingLevel?: ThinkingLevel }>;
 
   /**
    * Optional default tool suppression mode when no explicit allowlist is provided.
@@ -108,16 +97,21 @@ export interface CreateAgentSessionOptions {
   /** Resource loader. When omitted, DefaultResourceLoader is used. */
   resourceLoader?: ResourceLoader;
 
-  /** Session manager. Default: SessionManager.create(cwd) */
+  /** Session manager. Defaults to a new SQLite-backed session for the selected agent. */
   sessionManager?: SessionManager;
 
   /** Settings manager. Default: SettingsManager.create(cwd, agentDir) */
   settingsManager?: SettingsManager;
   /** Session start event metadata for extension runtime startup. */
   sessionStartEvent?: SessionStartEvent;
-  /** Optional lock used before session-file writes or write-capable extension hooks. */
-  withSessionWriteLock?: AgentSessionWriteLockRunner;
+  /** Optional settlement boundary for session writes and write-capable extension hooks. */
+  withSessionWriteSettlement?: AgentSessionWriteSettlementRunner;
 }
+
+type CreateAgentSessionInternalOptions = Pick<
+  AgentSessionConfig,
+  "cleanupProviderSessionResourcesOnDispose" | "contextOverflowRecoveryOwner"
+> & { beforeToolBatch?: InternalBeforeToolBatchHook };
 
 /** Result from createAgentSession */
 interface CreateAgentSessionResult {
@@ -129,22 +123,7 @@ interface CreateAgentSessionResult {
   modelFallbackMessage?: string;
 }
 
-// Re-exports
-
-export type {
-  ExtensionAPI,
-  ExtensionContext,
-  ExtensionFactory,
-  ToolDefinition,
-} from "./extensions/index.js";
-
-export { createCodingTools, createReadTool, createEditTool, createWriteTool };
-
 // Helper Functions
-
-function getDefaultAgentDir(): string {
-  return getAgentDir();
-}
 
 function createSessionPrepareNextTurnWithContext(
   getAgent: () => Agent,
@@ -276,23 +255,58 @@ function getAttributionHeaders(
 export async function createAgentSession(
   options: CreateAgentSessionOptions = {},
 ): Promise<CreateAgentSessionResult> {
+  return await createAgentSessionImpl(options);
+}
+
+/** Internal factory for temporary embedded sessions that do not own durable provider resources. */
+export async function createAgentSessionForEmbeddedRunner(
+  options: CreateAgentSessionOptions,
+  internalOptions: CreateAgentSessionInternalOptions,
+): Promise<CreateAgentSessionResult> {
+  return await createAgentSessionImpl(options, internalOptions, false);
+}
+
+async function createAgentSessionImpl(
+  options: CreateAgentSessionOptions,
+  internalOptions: CreateAgentSessionInternalOptions = {},
+  cleanupProviderSessionResourcesOnDispose = true,
+): Promise<CreateAgentSessionResult> {
   const cwd = options.cwd ?? options.sessionManager?.getCwd() ?? process.cwd();
-  const agentDir = options.agentDir ?? getDefaultAgentDir();
+  const install = getAgentDirResolution(options.agentDir);
+  const { dir: agentDir } = install.directory;
+  if (options.agentDir === undefined && install.directory.owner) {
+    registerResolvedAgentDir({ agentId: install.directory.owner, agentDir, env: install.env });
+  }
   let resourceLoader = options.resourceLoader;
 
   // Use provided or create AuthStorage and ModelRegistry
-  const authPath = options.agentDir ? join(agentDir, "auth.json") : undefined;
-  const modelsPath = options.agentDir ? join(agentDir, "models.json") : undefined;
-  const authStorage = options.authStorage ?? AuthStorage.create(authPath);
-  const modelRegistry = options.modelRegistry ?? ModelRegistry.create(authStorage, modelsPath);
+  const config = options.authStorage && options.modelRegistry ? undefined : install.config;
+  const authStorage = options.authStorage ?? AuthStorage.forAgent(agentDir, config);
+  const modelRegistry =
+    options.modelRegistry ??
+    ModelRegistry.create(authStorage, join(agentDir, "models.json"), { config, workspaceDir: cwd });
 
   const settingsManager = options.settingsManager ?? SettingsManager.create(cwd, agentDir);
   const sessionManager =
-    options.sessionManager ?? SessionManager.create(cwd, getDefaultSessionDir(cwd, agentDir));
+    options.sessionManager ?? (await createDefaultSdkSessionManager(cwd, install));
+
+  const initialTarget = sessionManager.getSessionTarget();
+  const initialSessionId = sessionManager.getSessionId();
+  const assertInitialSessionCurrent = () => {
+    const current = sessionManager.getSessionTarget();
+    if (
+      sessionManager.getSessionId() !== initialSessionId ||
+      !sameSessionTranscriptTargetBinding(initialTarget, current)
+    ) {
+      throw new SessionTranscriptWriterClaimReboundError();
+    }
+  };
 
   if (!resourceLoader) {
     resourceLoader = new DefaultResourceLoader({ cwd, agentDir, settingsManager });
     await resourceLoader.reload();
+    assertInitialSessionCurrent();
+    modelRegistry.refresh();
   }
 
   // Check if session has existing data to restore
@@ -343,7 +357,7 @@ export async function createAgentSession(
   // provider defaults (high, low, adaptive) fall back to DEFAULT_THINKING_LEVEL to avoid
   // silent cost changes for DeepSeek, OpenRouter, xAI, and other providers.
   const modelThinkingProvider = model?.api === "ollama" ? "ollama" : model?.provider;
-  const modelThinkingCompat = model ? projectThinkingCatalogCompat(model.compat) : undefined;
+  const modelThinkingCompat = model ? projectModelThinkingCompat(model.compat) : undefined;
   const resolvedProviderDefault =
     model && modelThinkingProvider
       ? resolveThinkingDefaultForModel({
@@ -435,9 +449,13 @@ export async function createAgentSession(
   };
 
   const extensionRunnerRef: { current?: ExtensionRunner } = {};
-  const runWithSessionWriteLock = async <T>(run: () => Promise<T> | T): Promise<T> =>
-    options.withSessionWriteLock ? await options.withSessionWriteLock(run) : await run();
+  const runWithSessionWriteSettlement = async <T>(run: () => Promise<T> | T): Promise<T> =>
+    options.withSessionWriteSettlement
+      ? await options.withSessionWriteSettlement(run)
+      : await run();
 
+  assertInitialSessionCurrent();
+  const modelRegistryRuntime = getModelRegistryRuntime(modelRegistry);
   const agent: Agent = new Agent({
     initialState: {
       systemPrompt: "",
@@ -451,13 +469,15 @@ export async function createAgentSession(
       if (!auth.ok) {
         throw new Error(auth.error);
       }
+      // Isolated session streams bypass the process-default stream facade.
+      await import("../ai-transport-runtime-host.js");
+      optionsLocal?.signal?.throwIfAborted();
       const providerRetrySettings = settingsManager.getProviderRetrySettings();
       const attributionHeaders = getAttributionHeaders(modelResult, settingsManager);
-      return streamSimple(modelResult, context, {
+      return modelRegistryRuntime.llmRuntime.streamSimple(modelResult, context, {
         ...optionsLocal,
         apiKey: auth.apiKey,
         timeoutMs: optionsLocal?.timeoutMs ?? providerRetrySettings.timeoutMs,
-        maxRetries: optionsLocal?.maxRetries ?? providerRetrySettings.maxRetries,
         maxRetryDelayMs: optionsLocal?.maxRetryDelayMs ?? providerRetrySettings.maxRetryDelayMs,
         headers:
           attributionHeaders || auth.headers || optionsLocal?.headers
@@ -471,7 +491,7 @@ export async function createAgentSession(
       if (!runner?.hasHandlers("before_provider_request")) {
         return payload;
       }
-      return await runWithSessionWriteLock(
+      return await runWithSessionWriteSettlement(
         async () => await runner.emitBeforeProviderRequest(payload),
       );
     },
@@ -481,7 +501,7 @@ export async function createAgentSession(
       if (!runner?.hasHandlers("after_provider_response")) {
         return;
       }
-      await runWithSessionWriteLock(
+      await runWithSessionWriteSettlement(
         async () =>
           await runner.emit({
             type: "after_provider_response",
@@ -490,7 +510,7 @@ export async function createAgentSession(
           }),
       );
     },
-    sessionId: sessionManager.getSessionId(),
+    sessionId: initialSessionId,
     transformContext: async (messages) => {
       const runner = extensionRunnerRef.current;
       if (!runner) {
@@ -506,19 +526,72 @@ export async function createAgentSession(
     thinkingBudgets: settingsManager.getThinkingBudgets(),
     maxRetryDelayMs: settingsManager.getProviderRetrySettings().maxRetryDelayMs,
   });
+  setInternalBeforeToolBatch(agent, internalOptions.beforeToolBatch);
+  if (agent.streamFn) {
+    bindStreamLlmRuntime(agent.streamFn, modelRegistryRuntime.llmRuntime);
+  }
 
-  // Restore messages if session has existing data
-  if (hasExistingSession) {
-    agent.state.messages = existingSession.messages;
-    if (!hasThinkingEntry) {
-      sessionManager.appendThinkingLevelChange(thinkingLevel);
+  let metadataCommit: SessionMetadataCommit | undefined;
+  const appendInitialMetadata = (change: SessionMetadataChange, append: () => Promise<string>) =>
+    withSessionMetadataPublication(
+      sessionManager,
+      change,
+      (commit) => {
+        metadataCommit = commit;
+      },
+      append,
+    );
+  const appendInitialThinking = () =>
+    appendInitialMetadata({ type: "thinking_level_change", thinkingLevel }, () =>
+      sessionManager.appendThinkingLevelChange(thinkingLevel),
+    );
+  const initializeMetadata = () => {
+    // Prepared history needs no write permit when its initial metadata already exists.
+    // Otherwise restoration waits behind unrelated writes, including reclamation.
+    if (hasExistingSession && hasThinkingEntry) {
+      return Promise.resolve();
     }
-  } else {
-    // Save initial model and thinking level for new sessions so they can be restored on resume
-    if (model) {
-      sessionManager.appendModelChange(model.provider, model.id);
+    return withSessionManagerWrite(sessionManager, async () => {
+      assertInitialSessionCurrent();
+      if (hasExistingSession) {
+        await appendInitialThinking();
+        assertInitialSessionCurrent();
+      } else {
+        // Persist initial settings before exposing the new session to callers.
+        if (model) {
+          await appendInitialMetadata(
+            { type: "model_change", provider: model.provider, modelId: model.id },
+            () => sessionManager.appendModelChange(model.provider, model.id),
+          );
+          assertInitialSessionCurrent();
+        }
+        await appendInitialThinking();
+      }
+    });
+  };
+  try {
+    await (initialTarget
+      ? withSessionTranscriptWriteAssertion(
+          initialTarget,
+          assertInitialSessionCurrent,
+          initializeMetadata,
+        )
+      : initializeMetadata());
+    // Cleanup can yield after the last append, before this factory exposes its session.
+    assertInitialSessionCurrent();
+    if (hasExistingSession) {
+      agent.state.messages = sanitizeCompactionReplayMessages(existingSession.messages);
     }
-    sessionManager.appendThinkingLevelChange(thinkingLevel);
+  } catch (cause) {
+    if (cause instanceof SessionMetadataCommittedError || !metadataCommit) {
+      throw cause;
+    }
+    throw new SessionMetadataCommittedError(
+      metadataCommit.entry,
+      metadataCommit.version,
+      cause,
+      metadataCommit.target,
+    );
   }
 
   const session = new AgentSession({
@@ -526,7 +599,6 @@ export async function createAgentSession(
     sessionManager,
     settingsManager,
     cwd,
-    scopedModels: options.scopedModels,
     resourceLoader,
     customTools: options.customTools,
     modelRegistry,
@@ -535,7 +607,9 @@ export async function createAgentSession(
     disableBuiltInTools,
     extensionRunnerRef,
     sessionStartEvent: options.sessionStartEvent,
-    withSessionWriteLock: options.withSessionWriteLock,
+    withSessionWriteSettlement: options.withSessionWriteSettlement,
+    contextOverflowRecoveryOwner: internalOptions.contextOverflowRecoveryOwner,
+    cleanupProviderSessionResourcesOnDispose,
   });
   const extensionsResult = resourceLoader.getExtensions();
 
@@ -544,4 +618,37 @@ export async function createAgentSession(
     extensionsResult,
     modelFallbackMessage,
   };
+}
+
+async function createDefaultSdkSessionManager(
+  cwd: string,
+  install: ReturnType<typeof getAgentDirResolution>,
+): Promise<SessionManager> {
+  const { dir: agentDir, owner: agentId } = install.directory;
+  if (!agentId) {
+    throw new Error(
+      "Select an agent owner or provide a sessionManager before creating an SDK session.",
+    );
+  }
+  const sessionId = randomUUID();
+  const target = {
+    agentId,
+    sessionId,
+    sessionKey: `agent:${agentId}:sdk:${sessionId}`,
+    storePath: join(agentDir, "openclaw-agent.sqlite"),
+    env: install.env,
+  };
+  openOpenClawAgentDatabase({ agentId, env: install.env, path: target.storePath });
+  const created = await createSessionEntryWithTranscript(
+    target,
+    () => ({
+      ok: true,
+      entry: { sessionId, updatedAt: Date.now() },
+    }),
+    { cwd },
+  );
+  if (!created.ok) {
+    throw new Error(`Failed to initialize SDK session transcript: ${created.error}`);
+  }
+  return SessionManager.open(target, cwd);
 }

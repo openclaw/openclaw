@@ -2,24 +2,22 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { isRecord } from "../../../lib/record-shared.mjs";
+import {
+  readSqliteTranscriptPayload,
+  sqliteTranscriptPayloadColumns,
+} from "../../../lib/sqlite-transcript-payload.mjs";
 import { extractAgentReplyTexts } from "../agent-turn-output.mjs";
+import { readPositiveIntEnv } from "../env-limits.mjs";
+import {
+  resolveOpenClawConfigPath as configPath,
+  resolveOpenClawStateDir as stateDir,
+} from "../openclaw-state-paths.mjs";
 import { readPluginInstallRecords } from "../plugin-index-sqlite.mjs";
 import { readTextFileTail, tailText } from "../text-file-utils.mjs";
 
 const command = process.argv[2];
 const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
-
-function readPositiveIntEnv(name, fallback) {
-  const text = String(process.env[name] ?? fallback).trim();
-  if (!/^\d+$/u.test(text)) {
-    throw new Error(`invalid ${name}: ${text}`);
-  }
-  const value = Number(text);
-  if (!Number.isSafeInteger(value) || value <= 0) {
-    throw new Error(`invalid ${name}: ${text}`);
-  }
-  return value;
-}
 
 const agentTurnTimeoutSeconds = readPositiveIntEnv(
   "OPENCLAW_LIVE_PLUGIN_TOOL_TIMEOUT_SECONDS",
@@ -48,24 +46,12 @@ function requireEnv(name) {
   return value;
 }
 
-function stateDir() {
-  return process.env.OPENCLAW_STATE_DIR || path.join(process.env.HOME, ".openclaw");
-}
-
-function configPath() {
-  return process.env.OPENCLAW_CONFIG_PATH || path.join(stateDir(), "openclaw.json");
-}
-
 function agentOutputPath() {
   return process.env.OPENCLAW_LIVE_PLUGIN_TOOL_AGENT_OUTPUT_PATH || "/tmp/openclaw-agent.json";
 }
 
 function agentErrorPath() {
   return process.env.OPENCLAW_LIVE_PLUGIN_TOOL_AGENT_ERROR_PATH || "/tmp/openclaw-agent.err";
-}
-
-function isRecord(value) {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function readNonEmptyString(value) {
@@ -112,6 +98,9 @@ function extractTranscriptText(value) {
 
 function extractTranscriptToolCalls(message) {
   const calls = [];
+  if (message.role !== "assistant") {
+    return calls;
+  }
   const content = message.content;
   if (Array.isArray(content)) {
     for (const block of content) {
@@ -132,6 +121,7 @@ function extractTranscriptToolCalls(message) {
           normalizeToolCallId(block.toolCallId) ??
           normalizeToolCallId(block.toolUseId),
         tool,
+        input: block.arguments ?? block.input,
       });
     }
   }
@@ -154,6 +144,7 @@ function extractTranscriptToolCalls(message) {
         normalizeToolCallId(call.toolCallId) ??
         normalizeToolCallId(call.toolUseId),
       tool,
+      input: call.arguments ?? call.input ?? functionRecord?.arguments,
     });
   }
   return calls;
@@ -245,14 +236,84 @@ function resultLinksToolCall(call, result, targetCallCount) {
   return targetCallCount === 1;
 }
 
+function matchesNestedToolEvidence(message, toolName, expected, dispatcherCalls) {
+  if (
+    message.role !== "custom" ||
+    message.customType !== "openclaw.nested-tool.v1" ||
+    message.display !== true ||
+    message.excludeFromContext !== true ||
+    message.content !== ""
+  ) {
+    return false;
+  }
+  const details = message.details;
+  if (
+    !isRecord(details) ||
+    details.toolName !== toolName ||
+    details.isError !== false ||
+    !normalizeToolCallId(details.toolCallId) ||
+    !isRecord(details.result) ||
+    !Array.isArray(details.result.content)
+  ) {
+    return false;
+  }
+  const parentId = normalizeToolCallId(details.parentToolCallId);
+  const text = extractTranscriptText(details.result.content);
+  return Boolean(
+    parentId &&
+    dispatcherCalls.has(parentId) &&
+    text.includes(expected) &&
+    !isFailureLikeToolResult({ text }),
+  );
+}
+
+function dispatcherSelectsTool(input, toolSelectors) {
+  let params = input;
+  if (typeof params === "string") {
+    try {
+      params = JSON.parse(params);
+    } catch {
+      return false;
+    }
+  }
+  if (!isRecord(params)) {
+    return false;
+  }
+  const keys = ["id", "toolId", "name"];
+  if (!keys.some((key) => Object.hasOwn(params, key))) {
+    params = params.args ?? params.input;
+  }
+  if (!isRecord(params)) {
+    return false;
+  }
+  const selectors = keys.filter((key) => Object.hasOwn(params, key));
+  // Other aliases can be target arguments; the correlated receipt identifies what ran.
+  return selectors.some((key) => toolSelectors.has(readNonEmptyString(params[key])));
+}
+
 function createToolEvidenceTracker(toolName, expected) {
+  const toolNames = new Set([toolName, "exec", "wait"]);
+  const toolSelectors = new Set([toolName, `openclaw:${requireEnv("PLUGIN_ID")}:${toolName}`]);
   const calls = [];
+  const dispatcherCalls = new Set();
   return {
     recordMessage(message) {
       for (const call of extractTranscriptToolCalls(message)) {
-        if (call.tool === toolName) {
+        if (toolNames.has(call.tool)) {
           calls.push(call);
         }
+        if (
+          call.id &&
+          call.tool === "tool_call" &&
+          dispatcherSelectsTool(call.input, toolSelectors)
+        ) {
+          dispatcherCalls.add(call.id);
+        }
+      }
+      // The package-only harness cannot import the core TS reader. Consume its
+      // durable terminal projection, never a marker echoed by the outer dispatcher.
+      if (matchesNestedToolEvidence(message, toolName, expected, dispatcherCalls)) {
+        return true;
       }
       for (const result of extractTranscriptToolResults(message)) {
         if (result.failure || !result.text.includes(expected)) {
@@ -388,7 +449,9 @@ function scanSqliteSessionTranscript(databasePath, sessionId, toolName, expected
       return { eventsChecked: 0, found: false };
     }
     const rows = database
-      .prepare("SELECT event_json FROM transcript_events WHERE session_id = ? ORDER BY seq LIMIT ?")
+      .prepare(
+        `SELECT ${sqliteTranscriptPayloadColumns(database)} FROM transcript_events WHERE session_id = ? ORDER BY seq LIMIT ?`,
+      )
       .all(sessionId, SESSION_SCAN_MAX_ENTRIES + 1);
     if (rows.length > SESSION_SCAN_MAX_ENTRIES) {
       throw new Error(`session transcript scan exceeded ${SESSION_SCAN_MAX_ENTRIES} SQLite events`);
@@ -396,10 +459,7 @@ function scanSqliteSessionTranscript(databasePath, sessionId, toolName, expected
 
     const tracker = createToolEvidenceTracker(toolName, expected);
     for (const row of rows) {
-      if (typeof row.event_json !== "string") {
-        continue;
-      }
-      const message = transcriptMessageFromLine(row.event_json);
+      const message = transcriptMessageFromLine(readSqliteTranscriptPayload(row));
       if (message && tracker.recordMessage(message)) {
         return { eventsChecked: rows.length, found: true };
       }

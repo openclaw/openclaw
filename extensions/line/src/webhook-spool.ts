@@ -1,25 +1,40 @@
 // Line plugin module owns durable webhook admission and core-drain wiring.
 import type { webhook } from "@line/bot-sdk";
+import { fanInChannelIngressLifecycles } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   bindIngressLifecycleToReplyOptions,
-  createChannelIngressDrain,
+  createChannelIngressMonitor,
   DEFAULT_INGRESS_ADOPTION_STALL_MS,
   DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
+  type ChannelIngressMonitorLifecycle,
   type ChannelIngressQueue,
 } from "openclaw/plugin-sdk/channel-outbound";
-import { danger, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { danger, type RuntimeEnv, warn } from "openclaw/plugin-sdk/runtime-env";
 import { runDetachedWebhookWork } from "openclaw/plugin-sdk/webhook-request-guards";
+import { createLineImageSetIngressBuffer } from "./inbound-image-set.js";
 import { getLineRuntime } from "./runtime.js";
+import {
+  eventIdFor,
+  laneKeyFor,
+  LINE_WEBHOOK_SPOOL_INVALID_EVENT_REASON,
+  LINE_WEBHOOK_SPOOL_INVALID_PAYLOAD_MESSAGE,
+  LINE_WEBHOOK_SPOOL_VERSION,
+  LineWebhookPayloadError,
+  type LineWebhookSpoolPayload,
+} from "./webhook-spool-contract.js";
 
-const LINE_WEBHOOK_SPOOL_VERSION = 1;
 const LINE_WEBHOOK_DRAIN_INTERVAL_MS = 500;
 const LINE_WEBHOOK_MAX_CONCURRENT_DELIVERIES = 8;
 const LINE_WEBHOOK_DRAIN_SCAN_LIMIT = 100;
-const LINE_WEBHOOK_TOMBSTONE_TTL_MS = 30 * 24 * 60 * 60_000;
-const LINE_WEBHOOK_TOMBSTONE_MAX_ENTRIES = 4096;
+const LINE_WEBHOOK_ACTIVE_DELIVERY_STOP_GRACE_MS = 5_000;
 
-type LineWebhookSpoolPayload = {
-  version: number;
+type LineWebhookIngressEvent = {
+  event: webhook.Event;
+  destination: string;
+};
+
+type LineWebhookSpoolBody = {
   rawEvent: string;
   destination: string;
 };
@@ -32,19 +47,16 @@ type LineWebhookSpoolOptions = {
   accountId: string;
   runtime: RuntimeEnv;
   deliver: (
-    event: webhook.Event,
+    events: readonly webhook.Event[],
     destination: string,
-    control: { turnAdoptionLifecycle: LineWebhookTurnAdoptionLifecycle },
+    control: {
+      turnAdoptionLifecycle: LineWebhookTurnAdoptionLifecycle;
+      /** Parts LINE announced for this send but never delivered. */
+      missingParts?: number;
+    },
   ) => Promise<void>;
   queue?: ChannelIngressQueue<LineWebhookSpoolPayload>;
 };
-
-class LineWebhookPayloadError extends Error {
-  constructor(message: string, options?: { cause?: unknown }) {
-    super(message, options);
-    this.name = "LineWebhookPayloadError";
-  }
-}
 
 export class LineWebhookTerminalDeliveryError extends Error {
   readonly reason = "delivery-side-effects-committed" as const;
@@ -56,86 +68,19 @@ export class LineWebhookTerminalDeliveryError extends Error {
 }
 
 type LineWebhookSpool = {
-  accept: (body: webhook.CallbackRequest) => Promise<void>;
+  accept: (body: webhook.CallbackRequest) => Promise<"durable" | "ignored">;
   start: () => void;
   stop: () => Promise<void>;
 };
 
-function nonEmptyString(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-
-/** Message ids preserve the shipped replay-guard keyspace; other events use LINE's delivery id. */
-function eventIdFor(event: unknown): string {
-  if (!event || typeof event !== "object") {
-    throw new LineWebhookPayloadError("LINE webhook event must be an object.");
-  }
-  const candidate = event as {
-    type?: unknown;
-    message?: { id?: unknown };
-    webhookEventId?: unknown;
-  };
-  if (candidate.type === "message") {
-    const messageId = nonEmptyString(candidate.message?.id);
-    if (messageId) {
-      return `message:${messageId}`;
-    }
-  }
-  const webhookEventId = nonEmptyString(candidate.webhookEventId);
-  if (webhookEventId) {
-    return `event:${webhookEventId}`;
-  }
-  throw new LineWebhookPayloadError("LINE webhook event is missing a stable delivery id.");
-}
-
-function laneKeyFor(event: unknown, eventId: string): string {
-  if (!event || typeof event !== "object") {
-    return eventId;
-  }
-  const source = (event as { source?: Record<string, unknown> }).source;
-  if (source?.type === "group") {
-    const groupId = nonEmptyString(source.groupId);
-    if (groupId) {
-      return `group:${groupId}`;
-    }
-  }
-  if (source?.type === "room") {
-    const roomId = nonEmptyString(source.roomId);
-    if (roomId) {
-      return `room:${roomId}`;
-    }
-  }
-  if (source?.type === "user") {
-    const userId = nonEmptyString(source.userId);
-    if (userId) {
-      return `user:${userId}`;
-    }
-  }
-  return eventId;
-}
-
-function parseClaimedEvent(payload: LineWebhookSpoolPayload, claimedId: string): webhook.Event {
-  if (
-    payload.version !== LINE_WEBHOOK_SPOOL_VERSION ||
-    typeof payload.rawEvent !== "string" ||
-    typeof payload.destination !== "string"
-  ) {
-    throw new LineWebhookPayloadError("LINE webhook spool payload is invalid.");
-  }
+function parseStoredEvent(rawEvent: string): webhook.Event {
   let event: unknown;
   try {
-    event = JSON.parse(payload.rawEvent);
+    event = JSON.parse(rawEvent);
   } catch (error) {
     throw new LineWebhookPayloadError("LINE webhook event JSON is invalid.", { cause: error });
   }
-  if (eventIdFor(event) !== claimedId) {
-    throw new LineWebhookPayloadError("LINE webhook event id changed after durable admission.");
-  }
   return event as webhook.Event;
-}
-
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function isLineAuthenticationFailure(error: unknown): boolean {
@@ -147,146 +92,338 @@ function isLineAuthenticationFailure(error: unknown): boolean {
   return status === 401 || status === 403;
 }
 
+async function waitForActiveDeliveriesBeforeDispose(
+  activeDeliveries: ReadonlySet<Promise<void>>,
+): Promise<boolean> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      Promise.allSettled(activeDeliveries).then(() => true),
+      new Promise<boolean>((resolve) => {
+        timeout = setTimeout(() => resolve(false), LINE_WEBHOOK_ACTIVE_DELIVERY_STOP_GRACE_MS);
+        timeout.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
+/** The imageSet a LINE inbound event belongs to, when it reported one. */
+// A set is one person's single send. In a group the lane is the whole room, so
+// the sender is what separates two members' sets - without it, a member the
+// group policy denies could have their image carried into an allowed member's
+// turn, which is authorized once for its holder and then downloads every part.
+function senderKeyFor(event: webhook.Event): string {
+  const source = event.source;
+  return source && "userId" in source && source.userId ? `user:${source.userId}` : "anonymous";
+}
+
+function resolveLineInboundImageSet(
+  event: webhook.Event,
+):
+  | { setId: string; senderKey: string; messageId: string; index?: number; total?: number }
+  | undefined {
+  if (event.type !== "message" || event.message.type !== "image") {
+    return undefined;
+  }
+  const imageSet = event.message.imageSet;
+  return imageSet?.id
+    ? {
+        setId: imageSet.id,
+        senderKey: senderKeyFor(event),
+        messageId: event.message.id,
+        ...(imageSet.index === undefined ? {} : { index: imageSet.index }),
+        ...(imageSet.total === undefined ? {} : { total: imageSet.total }),
+      }
+    : undefined;
+}
+
 export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWebhookSpool {
+  // Parts of one multi-image send arrive as separate claims; they are grouped
+  // here so the whole set becomes one delivery with one fanned-in ownership.
+  const imageSets = createLineImageSetIngressBuffer<
+    webhook.Event,
+    ChannelIngressMonitorLifecycle
+  >();
   const queue =
     options.queue ??
     getLineRuntime().state.openChannelIngressQueue<LineWebhookSpoolPayload>({
       accountId: options.accountId,
     });
-  const shutdown = new AbortController();
-  // Match the predecessor worker's per-spool cap across repeated drain pumps.
   const activeDeliveries = new Set<Promise<void>>();
-  const drain = createChannelIngressDrain<LineWebhookSpoolPayload>({
+  let acceptsDeferredClaims = true;
+  const monitor = createChannelIngressMonitor<
+    LineWebhookIngressEvent,
+    LineWebhookSpoolBody,
+    LineWebhookSpoolPayload
+  >({
     queue,
-    abortSignal: shutdown.signal,
-    adoptionStallTimeoutMs: DEFAULT_INGRESS_ADOPTION_STALL_MS,
-    orderBy: "received",
-    scanLimit: LINE_WEBHOOK_DRAIN_SCAN_LIMIT,
-    startLimit: LINE_WEBHOOK_MAX_CONCURRENT_DELIVERIES,
-    retryPolicy: {
-      maxAttempts: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
-      // LINE previously dead-lettered on attempt eight. The generic 24-hour floor
-      // would let one poison event block its user/group lane for a full day.
-      deadLetterMinAgeMs: 0,
+    inspect: ({ event }) => {
+      const eventId = eventIdFor(event);
+      return { eventId, laneKey: laneKeyFor(event, eventId) };
     },
-    resolveNonRetryableFailure: (error) => {
-      if (error instanceof LineWebhookPayloadError) {
-        return { reason: "invalid-event", message: error.message };
-      }
-      if (error instanceof LineWebhookTerminalDeliveryError) {
-        return { reason: error.reason, message: error.message };
-      }
-      if (isLineAuthenticationFailure(error)) {
-        return { reason: "authentication-failed", message: errorText(error) };
-      }
-      return null;
+    payload: {
+      version: LINE_WEBHOOK_SPOOL_VERSION,
+      serialize: ({ event, destination }) => ({
+        rawEvent: JSON.stringify(event),
+        destination,
+      }),
+      deserialize: ({ rawEvent, destination }) => ({
+        event: parseStoredEvent(rawEvent),
+        destination,
+      }),
+      encode: ({ version, body }) => ({
+        version,
+        rawEvent: body.rawEvent,
+        destination: body.destination,
+      }),
+      decode: (payload) => {
+        if (typeof payload.rawEvent !== "string" || typeof payload.destination !== "string") {
+          throw new LineWebhookPayloadError(LINE_WEBHOOK_SPOOL_INVALID_PAYLOAD_MESSAGE);
+        }
+        return {
+          version: payload.version,
+          body: { rawEvent: payload.rawEvent, destination: payload.destination },
+        };
+      },
+      createClaimError: (kind) =>
+        new LineWebhookPayloadError(
+          kind === "invalid-version"
+            ? LINE_WEBHOOK_SPOOL_INVALID_PAYLOAD_MESSAGE
+            : "LINE webhook event identity changed after durable admission.",
+        ),
     },
-    onLog: (message) => options.runtime.error?.(danger(`line: ${message}`)),
-    dispatchClaimedEvent: async (claimed, lifecycle) => {
-      const event = parseClaimedEvent(claimed.payload, claimed.id);
-      const delivery = options.deliver(event, claimed.payload.destination, {
-        turnAdoptionLifecycle: bindIngressLifecycleToReplyOptions(lifecycle).turnAdoptionLifecycle,
+    deliver: async ({ event, destination }, lifecycle) => {
+      const laneKey = laneKeyFor(event, eventIdFor(event));
+      const imageSet = resolveLineInboundImageSet(event);
+      let turnEvents: readonly webhook.Event[] = [event];
+      let turnLifecycles: readonly (typeof lifecycle)[] = [lifecycle];
+      let releaseLane: (() => void) | undefined;
+      let missingParts: number | undefined;
+      if (imageSet) {
+        if (!acceptsDeferredClaims) {
+          // Shutting down: a claim parked in the buffer would never flush, so hand
+          // this part back and let a restart redeliver the whole set instead.
+          await lifecycle.onAbandoned();
+          return undefined;
+        }
+        // Hold this claim while the rest of the set arrives. Deferring frees the
+        // lane, which is the only way the later parts can be claimed at all.
+        lifecycle.onDeferred();
+        const set = await imageSets.admit({
+          laneKey,
+          setId: imageSet.setId,
+          senderKey: imageSet.senderKey,
+          messageId: imageSet.messageId,
+          event,
+          lifecycle,
+          ...(imageSet.index === undefined ? {} : { index: imageSet.index }),
+          ...(imageSet.total === undefined ? {} : { total: imageSet.total }),
+        });
+        if (!set) {
+          // Another part holds this set and delivers every claim behind it.
+          return undefined;
+        }
+        if (set.missing) {
+          // The turn answers what arrived. The agent is told as well - a short
+          // set otherwise reads as the whole send - and the operator gets the
+          // count that explains a small media count.
+          missingParts = set.missing;
+          options.runtime.error?.(
+            danger(
+              `line: image set ${imageSet.setId} delivered ${set.events.length} of the send's parts, ${set.missing} still missing`,
+            ),
+          );
+        }
+        turnEvents = set.events;
+        turnLifecycles = set.lifecycles;
+        // Hold the lane until this delivery is done, or a message sent after the
+        // images overtakes them while this turn is still fetching their media.
+        releaseLane = set.finish;
+      } else if (imageSets.isBusy(laneKey)) {
+        if (!acceptsDeferredClaims) {
+          await lifecycle.onAbandoned();
+          return undefined;
+        }
+        // Release the lane before waiting. Holding it makes this event the lane
+        // owner, and the remaining parts of the set it is waiting for could then
+        // never be claimed - the set would time out partial and split in two.
+        lifecycle.onDeferred();
+        // Queue behind the set and behind anything else already released on this
+        // lane. Deferring gave up the drain's serialization, so without this the
+        // messages freed together would race each other into delivery.
+        releaseLane = await imageSets.enterLane(laneKey);
+      }
+      // One ownership lifecycle spanning every durable claim this turn consumed.
+      const fannedIn = fanInChannelIngressLifecycles(turnLifecycles);
+      // Reply options intentionally omit the drain-only onAdoptionFinalizing callback;
+      // the monitor wrapper already tracks that callback as a handoff before invoking us.
+      const boundLifecycle = bindIngressLifecycleToReplyOptions(
+        fannedIn.lifecycle ?? lifecycle,
+      ).turnAdoptionLifecycle;
+      let handedOff = false;
+      const delivery = options.deliver(turnEvents, destination, {
+        ...(missingParts === undefined ? {} : { missingParts }),
+        turnAdoptionLifecycle: {
+          ...boundLifecycle,
+          onAdopted: async () => {
+            handedOff = true;
+            await boundLifecycle.onAdopted();
+          },
+          onDeferred: () => {
+            handedOff = true;
+            if (!acceptsDeferredClaims) {
+              void Promise.resolve()
+                .then(() => boundLifecycle.onAbandoned())
+                .catch((error: unknown) => {
+                  options.runtime.error?.(
+                    danger(
+                      `line: failed to abandon a late webhook delivery: ${formatErrorMessage(error)}`,
+                    ),
+                  );
+                });
+              return;
+            }
+            boundLifecycle.onDeferred();
+          },
+          onAbandoned: async () => {
+            handedOff = true;
+            await boundLifecycle.onAbandoned();
+          },
+        },
       });
       activeDeliveries.add(delivery);
       try {
         await delivery;
+      } catch (error) {
+        // Only the holder's claim rides this rejection back to the drain. The
+        // other parts already returned as deferred, so without fanning the
+        // failure across them they stay held until recovery.
+        await fannedIn.abandon(error);
+        handedOff = true;
+        throw error;
       } finally {
         activeDeliveries.delete(delivery);
+        releaseLane?.();
       }
+      if (!handedOff && !stopTask) {
+        // A gated or deliberately skipped turn still consumed every source claim.
+        await fannedIn.settle();
+        handedOff = true;
+      }
+      if (stopTask && !handedOff) {
+        // Hand every claim back, not just the one the drain is holding: the rest
+        // of a set was deferred into this turn and would otherwise stay deferred
+        // forever, with stop() waiting on claims nothing will ever finish.
+        await fannedIn.abandon();
+        return undefined;
+      }
+      return undefined;
     },
+    pollIntervalMs: LINE_WEBHOOK_DRAIN_INTERVAL_MS,
+    retention: {
+      pruneIntervalMs: 0,
+      completedMaxEntries: 4096,
+      failedMaxEntries: 4096,
+    },
+    appendRetryDelaysMs: [0],
+    // The monitor carries active deliveries across pumps and applies startLimit before each claim.
+    waitForDeliveryIdleBeforeRepump: false,
+    waitForDeliveryIdleOnStop: false,
+    deferredClaims: "manual",
+    runPumpTask: runDetachedWebhookWork,
+    admissionMode: "durable-after-stop",
+    drain: {
+      adoptionStallTimeoutMs: DEFAULT_INGRESS_ADOPTION_STALL_MS,
+      // A deferred claim keeps its durable retry guarantee but stops owning the
+      // lane. LINE lanes are per sender/group/room, so the parts of one
+      // multi-image send share one; holding it would block every later part
+      // behind the first, and the set they are meant to join could never form.
+      deferredLaneOccupancy: "release",
+      orderBy: "received",
+      scanLimit: LINE_WEBHOOK_DRAIN_SCAN_LIMIT,
+      startLimit: LINE_WEBHOOK_MAX_CONCURRENT_DELIVERIES,
+      retryPolicy: {
+        maxAttempts: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
+        // LINE previously dead-lettered on attempt eight. The generic 24-hour floor
+        // would let one poison event block its user/group lane for a full day.
+        deadLetterMinAgeMs: 0,
+      },
+      resolveNonRetryableFailure: (error) => {
+        if (error instanceof LineWebhookPayloadError) {
+          return { reason: LINE_WEBHOOK_SPOOL_INVALID_EVENT_REASON, message: error.message };
+        }
+        if (error instanceof LineWebhookTerminalDeliveryError) {
+          return { reason: error.reason, message: error.message };
+        }
+        if (isLineAuthenticationFailure(error)) {
+          return { reason: "authentication-failed", message: formatErrorMessage(error) };
+        }
+        return null;
+      },
+      onLog: (message) => options.runtime.error?.(danger(`line: ${message}`)),
+    },
+    createStoppedError: () => new Error("LINE webhook spool is stopped."),
+    onError: (error) =>
+      options.runtime.error?.(
+        danger(`line: webhook spool drain failed: ${formatErrorMessage(error)}`),
+      ),
   });
-  let running = false;
-  let drainRequested = false;
-  let drainTask: Promise<void> | undefined;
-  let drainTimer: ReturnType<typeof setInterval> | undefined;
-
-  const requestDrain = (): void => {
-    if (!running || shutdown.signal.aborted) {
-      return;
-    }
-    drainRequested = true;
-    if (drainTask) {
-      return;
-    }
-    drainTask = runDetachedWebhookWork(async () => {
-      while (drainRequested && !shutdown.signal.aborted) {
-        if (!running) {
-          break;
-        }
-        drainRequested = false;
-        await drain.drainOnce({
-          // startLimit caps one pump. Keep later timer pumps from exceeding this
-          // spool's delivery cap after an early turn adoption frees the core lane.
-          shouldStop: () =>
-            !running ||
-            shutdown.signal.aborted ||
-            activeDeliveries.size >= LINE_WEBHOOK_MAX_CONCURRENT_DELIVERIES,
-        });
-      }
-    })
-      .catch((error: unknown) => {
-        options.runtime.error?.(danger(`line: webhook spool drain failed: ${errorText(error)}`));
-      })
-      .finally(() => {
-        drainTask = undefined;
-        if (running && drainRequested && !shutdown.signal.aborted) {
-          requestDrain();
-        }
-      });
-  };
+  let stopTask: Promise<void> | undefined;
 
   return {
     accept: async (body) => {
-      const events = body.events ?? [];
+      // Standby deliveries belong to the channel holding LINE chat control.
+      const events = (body.events ?? []).filter((event) => event.mode !== "standby");
       if (events.length === 0) {
-        return;
+        return "ignored";
       }
-      await queue.prune({
-        completedTtlMs: LINE_WEBHOOK_TOMBSTONE_TTL_MS,
-        completedMaxEntries: LINE_WEBHOOK_TOMBSTONE_MAX_ENTRIES,
-        failedTtlMs: LINE_WEBHOOK_TOMBSTONE_TTL_MS,
-        failedMaxEntries: LINE_WEBHOOK_TOMBSTONE_MAX_ENTRIES,
-      });
-      const receivedAt = Date.now();
-      for (const event of events) {
-        const eventId = eventIdFor(event);
-        await queue.enqueue(
-          eventId,
-          {
-            version: LINE_WEBHOOK_SPOOL_VERSION,
-            rawEvent: JSON.stringify(event),
-            destination: body.destination ?? "",
-          },
-          { receivedAt, laneKey: laneKeyFor(event, eventId) },
-        );
-      }
-      requestDrain();
+      const admissions = await monitor.admitBatch(
+        events.map((event) => ({ event, destination: body.destination ?? "" })),
+        { receivedAt: Date.now() },
+      );
+      return admissions.some((admission) => admission.kind === "durable") ? "durable" : "ignored";
     },
     start: () => {
-      if (running) {
-        return;
+      if (!stopTask) {
+        monitor.start();
       }
-      running = true;
-      requestDrain();
-      drainTimer = setInterval(requestDrain, LINE_WEBHOOK_DRAIN_INTERVAL_MS);
-      drainTimer.unref?.();
     },
-    stop: async () => {
-      if (!running && shutdown.signal.aborted) {
-        return;
-      }
-      running = false;
-      if (drainTimer) {
-        clearInterval(drainTimer);
-        drainTimer = undefined;
-      }
-      shutdown.abort();
-      await drainTask;
-      // Keep the claim owner live until every real delivery and core handler exits;
-      // disposing earlier lets a replacement drain recover work still producing replies.
-      await Promise.allSettled(activeDeliveries);
-      await drain.waitForIdle();
-      drain.dispose();
+    stop: () => {
+      stopTask ??= (async () => {
+        const pauseTask = monitor.pause();
+        await pauseTask;
+        try {
+          // LINE keeps a bounded active-delivery grace but waits deferred agent runs without a
+          // deadline; that asymmetric ownership cannot be expressed by the generic stop policy.
+          // Bound restart even though a delivery may finish after its row is recovered;
+          // that duplicate-side-effect window is the accepted at-least-once tradeoff.
+          const deliveriesSettled = await waitForActiveDeliveriesBeforeDispose(activeDeliveries);
+          if (!deliveriesSettled) {
+            options.runtime.log(
+              warn(
+                `line: timed out after ${LINE_WEBHOOK_ACTIVE_DELIVERY_STOP_GRACE_MS}ms waiting for active webhook deliveries; releasing drain ownership`,
+              ),
+            );
+          }
+          // Accepted shutdown tradeoff: deferred claims may wait for the full agent run.
+          // A deadline would allow duplicate side effects after replacement recovery;
+          // remove this wait only when core can cancel or abandon the run before release.
+          await monitor.waitForDeferredClaims();
+          // Close registration only after the live map drains. Later deferrals
+          // are rejected through onAbandoned so disposal cannot orphan a run.
+          acceptsDeferredClaims = false;
+          if (deliveriesSettled) {
+            await monitor.waitForIdle();
+          }
+        } finally {
+          await monitor.stop();
+        }
+      })();
+      return stopTask;
     },
   };
 }

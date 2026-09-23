@@ -1,270 +1,347 @@
-// Canonical shared-SQLite store for Web Push subscriptions and VAPID identity.
-import type { Insertable, Selectable } from "kysely";
-import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-  type OpenClawStateDatabaseOptions,
-} from "../state/openclaw-state-db.js";
-import { sha256HexPrefix } from "./crypto-digest.js";
+  executeOpenClawStateWorker,
+  runOpenClawStateWorkerOperation,
+} from "../state/openclaw-state-worker-store.js";
 import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "./kysely-sync.js";
+  WebPushSubscriptionBindingError,
+  type WebPushMutationGuard,
+} from "./push-web-store.records.js";
+import {
+  runWebPushStoreMutation,
+  useWebPushStoreSnapshot,
+  type WebPushSnapshotAction,
+} from "./push-web-store.scope.js";
+import type { WebPushWorkerOperations } from "./push-web-store.worker-contract.js";
+import { createSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
+export {
+  WebPushSubscriptionBindingError,
+  createWebPushVapidKeyPair,
+  hashWebPushEndpoint,
+  isValidWebPushEndpoint,
+  isValidWebPushKey,
+  DEFAULT_WEB_PUSH_VAPID_SUBJECT,
+  type WebPushSubscription,
+  type BoundWebPushSubscription,
+  type VapidKeyPair,
+  type WebPushMutationGuard,
+} from "./push-web-store.records.js";
 
-export const WEB_PUSH_VAPID_KEY_ID = "default";
-export const DEFAULT_WEB_PUSH_VAPID_SUBJECT = "https://openclaw.ai";
-const WEB_PUSH_MAX_ENDPOINT_LENGTH = 2048;
-const WEB_PUSH_MAX_KEY_LENGTH = 512;
+const loadNativeWebPushStore = createLazyRuntimeModule(() => import("./push-web-store.native.js"));
 
-export type WebPushSubscription = {
-  subscriptionId: string;
-  endpoint: string;
-  keys: { p256dh: string; auth: string };
-  createdAtMs: number;
-  updatedAtMs: number;
-};
-
-export type VapidKeyPair = {
-  publicKey: string;
-  privateKey: string;
-  subject: string;
-};
-
-export function createWebPushVapidKeyPair(
-  publicKey: string,
-  privateKey: string,
-  subject: string,
-): VapidKeyPair {
-  return { publicKey, privateKey, subject };
-}
-
-export type WebPushDatabase = Pick<
-  OpenClawStateKyselyDatabase,
-  "web_push_subscriptions" | "web_push_vapid_keys"
->;
-type WebPushSubscriptionRow = Selectable<WebPushDatabase["web_push_subscriptions"]>;
-type WebPushSubscriptionInsert = Insertable<WebPushDatabase["web_push_subscriptions"]>;
-type WebPushVapidKeyInsert = Insertable<WebPushDatabase["web_push_vapid_keys"]>;
-
-function webPushStateDatabaseOptions(stateDir?: string): OpenClawStateDatabaseOptions {
-  return stateDir
-    ? { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } }
-    : { env: process.env };
-}
-
-export function hashWebPushEndpoint(endpoint: string): string {
-  return sha256HexPrefix(endpoint, 32);
-}
-
-export function isValidWebPushEndpoint(endpoint: string): boolean {
-  if (!endpoint || endpoint.length > WEB_PUSH_MAX_ENDPOINT_LENGTH) {
-    return false;
+function context(stateDir?: string) {
+  const env = cloneEnvWithPlatformSemantics(process.env);
+  if (stateDir) {
+    env.OPENCLAW_STATE_DIR = stateDir;
   }
-  try {
-    return new URL(endpoint).protocol === "https:";
-  } catch {
-    return false;
+  return captureOpenClawStateWorkerContext({ env });
+}
+
+function executeWorkerWebPushMutation<
+  Type extends
+    | "webPush.setWebPushSubscriptionPreferences"
+    | "webPush.upsertWebPushSubscription"
+    | "webPush.deleteBoundWebPushSubscription",
+>(
+  type: Type,
+  input: WebPushWorkerOperations[Type]["input"],
+  captured: OpenClawStateWorkerContext,
+  guard: Extract<WebPushMutationGuard, { family: "worker" }> | undefined,
+) {
+  return runOpenClawStateWorkerOperation(
+    captured,
+    (scope) =>
+      scope.execute({
+        type,
+        input: { ...input, requestProfiles: guard?.profiles },
+      }),
+    {
+      assertCurrent: guard?.assertCurrent,
+      createAdmission: () => ({
+        nativeLocations: [captured.admission.databasePath],
+        admission: createSqliteWorkerOperationAdmission((request, grant) => {
+          if (request.stage !== "transaction") {
+            throw new Error("Web Push mutation requires transaction admission");
+          }
+          captured.admission.assertCurrent();
+          guard?.assertCurrent();
+          if (guard) {
+            const facts = request.facts;
+            if (
+              !isRecord(facts) ||
+              (facts.profileId !== null && typeof facts.profileId !== "string") ||
+              typeof facts.bindingCurrent !== "boolean"
+            ) {
+              throw new Error("Web Push mutation profile facts are invalid");
+            }
+            guard.assertProfiles({
+              profileId: facts.profileId,
+              bindingCurrent: facts.bindingCurrent,
+            });
+          }
+          grant();
+        }),
+      }),
+    },
+  );
+}
+
+export function withBoundWebPushSubscriptionByEndpoint<T>(
+  params: WebPushWorkerOperations["webPush.findBoundWebPushSubscriptionByEndpoint"]["input"] & {
+    stateDir?: string;
+  },
+  prepare: (
+    subscription: WebPushWorkerOperations["webPush.findBoundWebPushSubscriptionByEndpoint"]["output"],
+  ) => WebPushSnapshotAction<T> | undefined,
+) {
+  const { stateDir, ...input } = params;
+  const captured = context(stateDir);
+  return useWebPushStoreSnapshot(
+    captured,
+    input,
+    () =>
+      executeOpenClawStateWorker(captured, {
+        type: "webPush.findBoundWebPushSubscriptionByEndpoint",
+        input,
+      }),
+    prepare,
+  );
+}
+
+export function withBoundWebPushSubscriptions<T>(
+  stateDir: string | undefined,
+  prepare: (
+    subscriptions: WebPushWorkerOperations["webPush.listBoundWebPushSubscriptions"]["output"],
+    assertCurrent: () => void,
+  ) => WebPushSnapshotAction<T> | undefined | Promise<WebPushSnapshotAction<T> | undefined>,
+) {
+  const captured = context(stateDir);
+  return useWebPushStoreSnapshot(
+    captured,
+    undefined,
+    () =>
+      executeOpenClawStateWorker(captured, {
+        type: "webPush.listBoundWebPushSubscriptions",
+        input: undefined,
+      }),
+    prepare,
+  );
+}
+
+export function withWebPushSubscriptions<T>(
+  stateDir: string | undefined,
+  prepare: (
+    subscriptions: WebPushWorkerOperations["webPush.listWebPushSubscriptions"]["output"],
+  ) => WebPushSnapshotAction<T> | undefined,
+) {
+  const captured = context(stateDir);
+  return useWebPushStoreSnapshot(
+    captured,
+    undefined,
+    () =>
+      executeOpenClawStateWorker(captured, {
+        type: "webPush.listWebPushSubscriptions",
+        input: undefined,
+      }),
+    prepare,
+  );
+}
+
+export async function setWebPushSubscriptionPreferences(
+  params: WebPushWorkerOperations["webPush.setWebPushSubscriptionPreferences"]["input"] & {
+    stateDir?: string;
+    guard?: WebPushMutationGuard;
+  },
+) {
+  const { stateDir, guard, ...input } = params;
+  const captured = context(stateDir);
+  return runWebPushStoreMutation(captured, input, async () => {
+    if (guard?.family === "native-compatibility") {
+      const store = await loadNativeWebPushStore();
+      return store.setNativeWebPushSubscriptionPreferences(
+        { ...input, assertCurrent: guard.assertCurrent },
+        captured,
+      );
+    }
+    return executeWorkerWebPushMutation(
+      "webPush.setWebPushSubscriptionPreferences",
+      input,
+      captured,
+      guard,
+    );
+  });
+}
+
+export function listWebPushSubscriptions(stateDir?: string) {
+  return executeOpenClawStateWorker(context(stateDir), {
+    type: "webPush.listWebPushSubscriptions",
+    input: undefined,
+  });
+}
+
+export function hasBoundWebPushSubscriptions(stateDir?: string) {
+  return executeOpenClawStateWorker(context(stateDir), {
+    type: "webPush.hasBoundWebPushSubscriptions",
+    input: undefined,
+  });
+}
+
+export function listBoundWebPushSubscriptions(stateDir?: string) {
+  return executeOpenClawStateWorker(context(stateDir), {
+    type: "webPush.listBoundWebPushSubscriptions",
+    input: undefined,
+  });
+}
+
+export function prepareWebPushApprovalDeliveries(
+  params: WebPushWorkerOperations["webPush.prepareWebPushApprovalDeliveries"]["input"] & {
+    stateDir?: string;
+  },
+) {
+  if (params.subscriptions.length === 0) {
+    return Promise.resolve<string[]>([]);
   }
+  const { stateDir, ...input } = params;
+  return executeOpenClawStateWorker(context(stateDir), {
+    type: "webPush.prepareWebPushApprovalDeliveries",
+    input,
+  });
 }
 
-export function isValidWebPushKey(key: unknown): key is string {
-  return typeof key === "string" && key.length > 0 && key.length <= WEB_PUSH_MAX_KEY_LENGTH;
+export function listWebPushApprovalDeliveryTargets(
+  params: WebPushWorkerOperations["webPush.listWebPushApprovalDeliveryTargets"]["input"] & {
+    stateDir?: string;
+  },
+) {
+  const { stateDir, ...input } = params;
+  return executeOpenClawStateWorker(context(stateDir), {
+    type: "webPush.listWebPushApprovalDeliveryTargets",
+    input,
+  });
 }
 
-export function webPushSubscriptionFromRow(row: WebPushSubscriptionRow): WebPushSubscription {
-  return {
-    subscriptionId: row.subscription_id,
-    endpoint: row.endpoint,
-    keys: { p256dh: row.p256dh, auth: row.auth },
-    createdAtMs: row.created_at_ms,
-    updatedAtMs: row.updated_at_ms,
-  };
+export function deleteWebPushApprovalDeliveryTargets(
+  params: WebPushWorkerOperations["webPush.deleteWebPushApprovalDeliveryTargets"]["input"] & {
+    stateDir?: string;
+  },
+) {
+  if (params.subscriptionIds.length === 0) {
+    return Promise.resolve();
+  }
+  const { stateDir, ...input } = params;
+  return executeOpenClawStateWorker(context(stateDir), {
+    type: "webPush.deleteWebPushApprovalDeliveryTargets",
+    input,
+  });
 }
 
-export function webPushSubscriptionToRow(params: {
-  endpointHash: string;
-  subscription: WebPushSubscription;
-}): WebPushSubscriptionInsert {
-  return {
-    endpoint_hash: params.endpointHash,
-    subscription_id: params.subscription.subscriptionId,
-    endpoint: params.subscription.endpoint,
-    p256dh: params.subscription.keys.p256dh,
-    auth: params.subscription.keys.auth,
-    created_at_ms: params.subscription.createdAtMs,
-    updated_at_ms: params.subscription.updatedAtMs,
-  };
+export function listTerminalWebPushApprovalDeliveryIds(
+  params: WebPushWorkerOperations["webPush.listTerminalWebPushApprovalDeliveryIds"]["input"] & {
+    stateDir?: string;
+  },
+) {
+  const { stateDir, ...input } = params;
+  return executeOpenClawStateWorker(context(stateDir), {
+    type: "webPush.listTerminalWebPushApprovalDeliveryIds",
+    input,
+  });
 }
 
-export function webPushVapidKeyPairToRow(params: {
-  keyPair: VapidKeyPair;
-  nowMs: number;
-}): WebPushVapidKeyInsert {
-  return {
-    key_id: WEB_PUSH_VAPID_KEY_ID,
-    public_key: params.keyPair.publicKey,
-    private_key: params.keyPair.privateKey,
-    subject: params.keyPair.subject,
-    updated_at_ms: params.nowMs,
-  };
+export async function upsertWebPushSubscription(
+  params: WebPushWorkerOperations["webPush.upsertWebPushSubscription"]["input"] & {
+    stateDir?: string;
+    guard?: WebPushMutationGuard;
+  },
+) {
+  const { stateDir, guard, ...input } = params;
+  const captured = context(stateDir);
+  return runWebPushStoreMutation(captured, input, async () => {
+    if (guard?.family === "native-compatibility") {
+      const store = await loadNativeWebPushStore();
+      return store.upsertNativeWebPushSubscription(
+        { ...input, assertCurrent: guard.assertCurrent },
+        captured,
+      );
+    }
+    const result = await executeWorkerWebPushMutation(
+      "webPush.upsertWebPushSubscription",
+      input,
+      captured,
+      guard,
+    );
+    if (result.bindingError !== undefined) {
+      throw new WebPushSubscriptionBindingError(result.bindingError);
+    }
+    return result.subscription;
+  });
 }
 
-export function webPushSubscriptionsEqual(
-  left: WebPushSubscription,
-  right: WebPushSubscription,
-): boolean {
+export async function deleteBoundWebPushSubscription(
+  params: WebPushWorkerOperations["webPush.deleteBoundWebPushSubscription"]["input"] & {
+    stateDir?: string;
+    guard?: WebPushMutationGuard;
+  },
+) {
+  const { stateDir, guard, ...input } = params;
+  const captured = context(stateDir);
+  return runWebPushStoreMutation(captured, input, async () => {
+    if (guard?.family === "native-compatibility") {
+      const store = await loadNativeWebPushStore();
+      return store.deleteNativeBoundWebPushSubscription(
+        { ...input, assertCurrent: guard.assertCurrent },
+        captured,
+      );
+    }
+    return executeWorkerWebPushMutation(
+      "webPush.deleteBoundWebPushSubscription",
+      input,
+      captured,
+      guard,
+    );
+  });
+}
+
+export function deleteWebPushSubscriptionIfCurrent(
+  params: WebPushWorkerOperations["webPush.deleteWebPushSubscriptionIfCurrent"]["input"] & {
+    stateDir?: string;
+  },
+) {
+  const { stateDir, ...input } = params;
+  const captured = context(stateDir);
+  return runWebPushStoreMutation(captured, input, () =>
+    executeOpenClawStateWorker(captured, {
+      type: "webPush.deleteWebPushSubscriptionIfCurrent",
+      input,
+    }),
+  );
+}
+
+export async function readPersistedVapidKeyPair(stateDir?: string) {
   return (
-    left.subscriptionId === right.subscriptionId &&
-    left.endpoint === right.endpoint &&
-    left.keys.p256dh === right.keys.p256dh &&
-    left.keys.auth === right.keys.auth &&
-    left.createdAtMs === right.createdAtMs &&
-    left.updatedAtMs === right.updatedAtMs
+    (await runOpenClawStateWorkerOperation(
+      context(stateDir),
+      (scope) =>
+        scope.execute({
+          type: "webPush.readPersistedVapidKeyPair",
+          input: undefined,
+        }),
+      { existingOnly: true },
+    )) ?? null
   );
 }
 
-export function listWebPushSubscriptions(stateDir?: string): WebPushSubscription[] {
-  const database = openOpenClawStateDatabase(webPushStateDatabaseOptions(stateDir));
-  const stateDb = getNodeSqliteKysely<WebPushDatabase>(database.db);
-  return executeSqliteQuerySync(
-    database.db,
-    stateDb
-      .selectFrom("web_push_subscriptions")
-      .selectAll()
-      .orderBy("created_at_ms", "asc")
-      .orderBy("subscription_id", "asc"),
-  ).rows.map(webPushSubscriptionFromRow);
-}
-
-/** Reread the endpoint row inside the write transaction before creating or updating it. */
-export function upsertWebPushSubscription(params: {
-  endpointHash: string;
-  endpoint: string;
-  keys: { p256dh: string; auth: string };
-  candidateSubscriptionId: string;
-  nowMs: number;
-  stateDir?: string;
-}): WebPushSubscription {
-  return runOpenClawStateWriteTransaction(({ db }) => {
-    const stateDb = getNodeSqliteKysely<WebPushDatabase>(db);
-    const existingRow = executeSqliteQueryTakeFirstSync(
-      db,
-      stateDb
-        .selectFrom("web_push_subscriptions")
-        .selectAll()
-        .where("endpoint_hash", "=", params.endpointHash),
-    );
-    if (existingRow && existingRow.endpoint !== params.endpoint) {
-      throw new Error("web push endpoint hash collision");
-    }
-    const subscription: WebPushSubscription = {
-      subscriptionId: existingRow?.subscription_id ?? params.candidateSubscriptionId,
-      endpoint: params.endpoint,
-      keys: { ...params.keys },
-      createdAtMs: existingRow?.created_at_ms ?? params.nowMs,
-      updatedAtMs: params.nowMs,
-    };
-    const row = webPushSubscriptionToRow({
-      endpointHash: params.endpointHash,
-      subscription,
-    });
-    executeSqliteQuerySync(
-      db,
-      stateDb
-        .insertInto("web_push_subscriptions")
-        .values(row)
-        .onConflict((conflict) =>
-          conflict.column("endpoint_hash").doUpdateSet({
-            subscription_id: row.subscription_id,
-            endpoint: row.endpoint,
-            p256dh: row.p256dh,
-            auth: row.auth,
-            updated_at_ms: row.updated_at_ms,
-          }),
-        ),
-    );
-    return subscription;
-  }, webPushStateDatabaseOptions(params.stateDir));
-}
-
-export function deleteWebPushSubscriptionByEndpoint(params: {
-  endpointHash: string;
-  endpoint: string;
-  stateDir?: string;
-}): boolean {
-  return runOpenClawStateWriteTransaction(({ db }) => {
-    const result = executeSqliteQuerySync(
-      db,
-      getNodeSqliteKysely<WebPushDatabase>(db)
-        .deleteFrom("web_push_subscriptions")
-        .where("endpoint_hash", "=", params.endpointHash)
-        .where("endpoint", "=", params.endpoint),
-    );
-    return Number(result.numAffectedRows ?? 0) > 0;
-  }, webPushStateDatabaseOptions(params.stateDir));
-}
-
-/** Delete an expired send target only if no newer registration replaced it in flight. */
-export function deleteWebPushSubscriptionIfCurrent(params: {
-  endpointHash: string;
-  subscription: WebPushSubscription;
-  stateDir?: string;
-}): boolean {
-  const subscription = params.subscription;
-  return runOpenClawStateWriteTransaction(({ db }) => {
-    const result = executeSqliteQuerySync(
-      db,
-      getNodeSqliteKysely<WebPushDatabase>(db)
-        .deleteFrom("web_push_subscriptions")
-        .where("endpoint_hash", "=", params.endpointHash)
-        .where("subscription_id", "=", subscription.subscriptionId)
-        .where("endpoint", "=", subscription.endpoint)
-        .where("p256dh", "=", subscription.keys.p256dh)
-        .where("auth", "=", subscription.keys.auth)
-        .where("updated_at_ms", "=", subscription.updatedAtMs),
-    );
-    return Number(result.numAffectedRows ?? 0) > 0;
-  }, webPushStateDatabaseOptions(params.stateDir));
-}
-
-export function readPersistedVapidKeyPair(stateDir?: string): VapidKeyPair | null {
-  const database = openOpenClawStateDatabase(webPushStateDatabaseOptions(stateDir));
-  const row = executeSqliteQueryTakeFirstSync(
-    database.db,
-    getNodeSqliteKysely<WebPushDatabase>(database.db)
-      .selectFrom("web_push_vapid_keys")
-      .selectAll()
-      .where("key_id", "=", WEB_PUSH_VAPID_KEY_ID),
-  );
-  return row ? createWebPushVapidKeyPair(row.public_key, row.private_key, row.subject) : null;
-}
-
-/** First committed keypair wins so concurrent gateway bootstraps share one signing identity. */
-export function insertVapidKeyPairIfAbsent(params: {
-  candidate: VapidKeyPair;
-  nowMs: number;
-  stateDir?: string;
-}): VapidKeyPair {
-  return runOpenClawStateWriteTransaction(({ db }) => {
-    const stateDb = getNodeSqliteKysely<WebPushDatabase>(db);
-    const existing = executeSqliteQueryTakeFirstSync(
-      db,
-      stateDb
-        .selectFrom("web_push_vapid_keys")
-        .selectAll()
-        .where("key_id", "=", WEB_PUSH_VAPID_KEY_ID),
-    );
-    if (existing) {
-      return createWebPushVapidKeyPair(existing.public_key, existing.private_key, existing.subject);
-    }
-    executeSqliteQuerySync(
-      db,
-      stateDb
-        .insertInto("web_push_vapid_keys")
-        .values(webPushVapidKeyPairToRow({ keyPair: params.candidate, nowMs: params.nowMs })),
-    );
-    return params.candidate;
-  }, webPushStateDatabaseOptions(params.stateDir));
+export function insertVapidKeyPairIfAbsent(
+  params: WebPushWorkerOperations["webPush.insertVapidKeyPairIfAbsent"]["input"] & {
+    stateDir?: string;
+  },
+) {
+  const { stateDir, ...input } = params;
+  return executeOpenClawStateWorker(context(stateDir), {
+    type: "webPush.insertVapidKeyPairIfAbsent",
+    input,
+  });
 }

@@ -2,68 +2,34 @@
 import type { HealthCheck, HealthFinding } from "openclaw/plugin-sdk/health";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import type { PolicyEvidence } from "../../policy-state.js";
+import { createPolicyScopedChecks } from "../check-factory.js";
 import { CHECK_IDS } from "../check-ids.js";
+import { policyEvidenceFinding } from "../policy-evidence-finding.js";
 import type { PolicyDoctorCheckDeps } from "../types.js";
 import { readPolicyBoolean, readStringList } from "../utils.js";
 
 export function createPolicyModelNetworkChecks(
   deps: PolicyDoctorCheckDeps,
 ): readonly HealthCheck[] {
-  const { evaluatePolicy, findingsForCheck } = deps;
-
-  const policyMcpDeniedServerCheck: HealthCheck = {
-    id: CHECK_IDS.policyDeniedMcpServer,
-    kind: "plugin",
-    description: "Configured MCP servers do not match policy deny rules.",
-    source: "policy",
-    async detect(ctx) {
-      return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyDeniedMcpServer);
-    },
-  };
-  const policyMcpUnapprovedServerCheck: HealthCheck = {
-    id: CHECK_IDS.policyUnapprovedMcpServer,
-    kind: "plugin",
-    description: "Configured MCP servers do not match policy allow rules.",
-    source: "policy",
-    async detect(ctx) {
-      return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyUnapprovedMcpServer);
-    },
-  };
-  const policyModelsDeniedProviderCheck: HealthCheck = {
-    id: CHECK_IDS.policyDeniedModelProvider,
-    kind: "plugin",
-    description: "Configured model providers do not match policy deny rules.",
-    source: "policy",
-    async detect(ctx) {
-      return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyDeniedModelProvider);
-    },
-  };
-  const policyModelsUnapprovedProviderCheck: HealthCheck = {
-    id: CHECK_IDS.policyUnapprovedModelProvider,
-    kind: "plugin",
-    description: "Configured model providers do not match policy allow rules.",
-    source: "policy",
-    async detect(ctx) {
-      return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyUnapprovedModelProvider);
-    },
-  };
-  const policyNetworkPrivateAccessCheck: HealthCheck = {
-    id: CHECK_IDS.policyPrivateNetworkAccess,
-    kind: "plugin",
-    description: "Network SSRF policy settings match private-network requirements.",
-    source: "policy",
-    async detect(ctx) {
-      return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyPrivateNetworkAccess);
-    },
-  };
-
-  return [
-    policyMcpDeniedServerCheck,
-    policyMcpUnapprovedServerCheck,
-    policyModelsDeniedProviderCheck,
-    policyModelsUnapprovedProviderCheck,
-    policyNetworkPrivateAccessCheck,
-  ];
+  return createPolicyScopedChecks(deps, [
+    [CHECK_IDS.policyDeniedMcpServer, "Configured MCP servers do not match policy deny rules."],
+    [
+      CHECK_IDS.policyUnapprovedMcpServer,
+      "Configured MCP servers do not match policy allow rules.",
+    ],
+    [
+      CHECK_IDS.policyDeniedModelProvider,
+      "Configured model providers do not match policy deny rules.",
+    ],
+    [
+      CHECK_IDS.policyUnapprovedModelProvider,
+      "Configured model providers do not match policy allow rules.",
+    ],
+    [
+      CHECK_IDS.policyPrivateNetworkAccess,
+      "Network SSRF policy settings match private-network requirements.",
+    ],
+  ]);
 }
 
 export function mcpServerFindings(
@@ -78,31 +44,25 @@ export function mcpServerFindings(
 
   for (const server of evidence.mcpServers) {
     if (denied.has(server.id)) {
-      findings.push({
-        checkId: CHECK_IDS.policyDeniedMcpServer,
-        severity: "error",
-        message: `MCP server '${server.id}' is denied by policy.`,
-        source: "policy",
-        path: "openclaw config",
-        ocPath: server.source,
-        target: server.source,
-        requirement: `oc://${policyDocName}/mcp/servers/deny`,
-        fixHint: "Remove this configured MCP server or update the policy after review.",
-      });
+      findings.push(
+        policyEvidenceFinding(server, {
+          checkId: CHECK_IDS.policyDeniedMcpServer,
+          message: `MCP server '${server.id}' is denied by policy.`,
+          requirement: `oc://${policyDocName}/mcp/servers/deny`,
+          fixHint: "Remove this configured MCP server or update the policy after review.",
+        }),
+      );
       continue;
     }
     if (allowedSet.size > 0 && !allowedSet.has(server.id)) {
-      findings.push({
-        checkId: CHECK_IDS.policyUnapprovedMcpServer,
-        severity: "error",
-        message: `MCP server '${server.id}' is not in the policy allowlist.`,
-        source: "policy",
-        path: "openclaw config",
-        ocPath: server.source,
-        target: server.source,
-        requirement: `oc://${policyDocName}/mcp/servers/allow`,
-        fixHint: "Use an approved MCP server or update the policy after review.",
-      });
+      findings.push(
+        policyEvidenceFinding(server, {
+          checkId: CHECK_IDS.policyUnapprovedMcpServer,
+          message: `MCP server '${server.id}' is not in the policy allowlist.`,
+          requirement: `oc://${policyDocName}/mcp/servers/allow`,
+          fixHint: "Use an approved MCP server or update the policy after review.",
+        }),
+      );
     }
   }
 
@@ -141,30 +101,24 @@ function modelProviderConformanceFindings(
 ): readonly HealthFinding[] {
   const findings: HealthFinding[] = [];
   if (denied.has(provider.id)) {
-    findings.push({
-      checkId: CHECK_IDS.policyDeniedModelProvider,
-      severity: "error",
-      message: `Model provider '${provider.id}' is denied by policy.`,
-      source: "policy",
-      path: "openclaw config",
-      ocPath: provider.source,
-      target: provider.source,
-      requirement: `oc://${policyDocName}/models/providers/deny`,
-      fixHint: "Remove this configured provider or update the policy after review.",
-    });
+    findings.push(
+      policyEvidenceFinding(provider, {
+        checkId: CHECK_IDS.policyDeniedModelProvider,
+        message: `Model provider '${provider.id}' is denied by policy.`,
+        requirement: `oc://${policyDocName}/models/providers/deny`,
+        fixHint: "Remove this configured provider or update the policy after review.",
+      }),
+    );
   }
   if (!denied.has(provider.id) && allowed.size > 0 && !allowed.has(provider.id)) {
-    findings.push({
-      checkId: CHECK_IDS.policyUnapprovedModelProvider,
-      severity: "error",
-      message: `Model provider '${provider.id}' is not in the policy allowlist.`,
-      source: "policy",
-      path: "openclaw config",
-      ocPath: provider.source,
-      target: provider.source,
-      requirement: `oc://${policyDocName}/models/providers/allow`,
-      fixHint: "Use an approved model provider or update the policy after review.",
-    });
+    findings.push(
+      policyEvidenceFinding(provider, {
+        checkId: CHECK_IDS.policyUnapprovedModelProvider,
+        message: `Model provider '${provider.id}' is not in the policy allowlist.`,
+        requirement: `oc://${policyDocName}/models/providers/allow`,
+        fixHint: "Use an approved model provider or update the policy after review.",
+      }),
+    );
   }
   return findings;
 }
@@ -177,30 +131,24 @@ function modelRefConformanceFindings(
 ): readonly HealthFinding[] {
   const findings: HealthFinding[] = [];
   if (denied.has(modelRef.provider)) {
-    findings.push({
-      checkId: CHECK_IDS.policyDeniedModelProvider,
-      severity: "error",
-      message: `Model ref '${modelRef.ref}' uses denied provider '${modelRef.provider}'.`,
-      source: "policy",
-      path: "openclaw config",
-      ocPath: modelRef.source,
-      target: modelRef.source,
-      requirement: `oc://${policyDocName}/models/providers/deny`,
-      fixHint: "Select an approved model provider or update the policy after review.",
-    });
+    findings.push(
+      policyEvidenceFinding(modelRef, {
+        checkId: CHECK_IDS.policyDeniedModelProvider,
+        message: `Model ref '${modelRef.ref}' uses denied provider '${modelRef.provider}'.`,
+        requirement: `oc://${policyDocName}/models/providers/deny`,
+        fixHint: "Select an approved model provider or update the policy after review.",
+      }),
+    );
   }
   if (!denied.has(modelRef.provider) && allowed.size > 0 && !allowed.has(modelRef.provider)) {
-    findings.push({
-      checkId: CHECK_IDS.policyUnapprovedModelProvider,
-      severity: "error",
-      message: `Model ref '${modelRef.ref}' uses unapproved provider '${modelRef.provider}'.`,
-      source: "policy",
-      path: "openclaw config",
-      ocPath: modelRef.source,
-      target: modelRef.source,
-      requirement: `oc://${policyDocName}/models/providers/allow`,
-      fixHint: "Select an approved model provider or update the policy after review.",
-    });
+    findings.push(
+      policyEvidenceFinding(modelRef, {
+        checkId: CHECK_IDS.policyUnapprovedModelProvider,
+        message: `Model ref '${modelRef.ref}' uses unapproved provider '${modelRef.provider}'.`,
+        requirement: `oc://${policyDocName}/models/providers/allow`,
+        fixHint: "Select an approved model provider or update the policy after review.",
+      }),
+    );
   }
   return findings;
 }
@@ -217,16 +165,11 @@ export function networkFindings(
   return evidence.network
     .filter((setting) => setting.value)
     .map((setting): HealthFinding => {
-      return {
+      return policyEvidenceFinding(setting, {
         checkId: CHECK_IDS.policyPrivateNetworkAccess,
-        severity: "error",
         message: `Network setting '${setting.id}' allows private-network access.`,
-        source: "policy",
-        path: "openclaw config",
-        ocPath: setting.source,
-        target: setting.source,
         requirement: `oc://${policyDocName}/network/privateNetwork/allow`,
         fixHint: "Disable this private-network access setting or update policy after review.",
-      };
+      });
     });
 }

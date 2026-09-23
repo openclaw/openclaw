@@ -1,4 +1,3 @@
-// Slack plugin module implements prepare thread context root behavior.
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 type SlackBotAuthorIdentity = {
@@ -16,9 +15,9 @@ type SlackThreadRootCandidate = SlackThreadAuthorTuple & {
   ts?: string;
 };
 
-type SlackThreadHistoryFilterPolicy = {
-  retainCurrentBotRootTs?: string;
-};
+type SlackThreadHistoryFilterPolicy =
+  | { currentBot: "omit" | "all" }
+  | { currentBot: "root-only"; rootTs: string };
 
 type SlackThreadHistoryFilterResult<T> = {
   kept: T[];
@@ -42,12 +41,17 @@ export function isSlackThreadAuthorCurrentBot(params: {
 export function resolveSlackThreadHistoryFilterPolicy(params: {
   includeBotStarterAsRootContext: boolean;
   starterTs?: string;
+  retainCurrentBotHistory?: boolean;
 }): SlackThreadHistoryFilterPolicy {
+  if (params.retainCurrentBotHistory) {
+    return { currentBot: "all" };
+  }
   if (!params.includeBotStarterAsRootContext || !params.starterTs) {
-    return {};
+    return { currentBot: "omit" };
   }
   return {
-    retainCurrentBotRootTs: params.starterTs,
+    currentBot: "root-only",
+    rootTs: params.starterTs,
   };
 }
 
@@ -67,7 +71,10 @@ export function applySlackThreadHistoryFilterPolicy<T extends SlackThreadRootCan
       kept.push(entry);
       continue;
     }
-    if (params.policy.retainCurrentBotRootTs && entry.ts === params.policy.retainCurrentBotRootTs) {
+    if (
+      params.policy.currentBot === "all" ||
+      (params.policy.currentBot === "root-only" && entry.ts === params.policy.rootTs)
+    ) {
       kept.push(entry);
     } else {
       omittedCurrentBot += 1;

@@ -1,4 +1,3 @@
-// Discord plugin module implements directory cache behavior.
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -23,7 +22,7 @@ function normalizeSnowflake(value: string | number | bigint): string | null {
   return text;
 }
 
-function normalizeHandleKey(raw: string): string | null {
+export function normalizeDiscordHandleKey(raw: string): string | null {
   let handle = normalizeOptionalString(raw) ?? "";
   if (!handle) {
     return null;
@@ -76,7 +75,7 @@ export function rememberDiscordDirectoryUser(params: {
     if (typeof candidate !== "string") {
       continue;
     }
-    const handle = normalizeHandleKey(candidate);
+    const handle = normalizeDiscordHandleKey(candidate);
     if (!handle) {
       continue;
     }
@@ -98,7 +97,7 @@ export function resolveDiscordDirectoryUserId(params: {
   if (!cache) {
     return undefined;
   }
-  const handle = normalizeHandleKey(params.handle);
+  const handle = normalizeDiscordHandleKey(params.handle);
   if (!handle) {
     return undefined;
   }

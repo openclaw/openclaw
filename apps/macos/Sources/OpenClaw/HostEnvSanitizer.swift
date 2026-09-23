@@ -1,12 +1,7 @@
 import Foundation
 
-struct HostEnvOverrideDiagnostics: Equatable {
-    var blockedKeys: [String]
-    var invalidKeys: [String]
-}
-
 enum HostEnvSanitizer {
-    /// Generated from src/infra/host-env-security-policy.json via scripts/generate-host-env-security-policy-swift.mjs.
+    /// Generated from src/infra/host-env-security-policy.json via scripts/generate-host-env-security-policy-swift.mts.
     /// Parity is validated by src/infra/host-env-security.policy-parity.test.ts.
     private static let blockedInheritedKeys = HostEnvSecurityPolicy.blockedInheritedKeys
     private static let blockedInheritedPrefixes = HostEnvSecurityPolicy.blockedInheritedPrefixes
@@ -36,6 +31,11 @@ enum HostEnvSanitizer {
         "ssh",
     ]
 
+    private static func isNoPagerOverride(_ key: String, _ value: String) -> Bool {
+        (key.uppercased() == "GIT_PAGER" || key.uppercased() == "PAGER") &&
+            (value.isEmpty || value == "cat")
+    }
+
     private static func isBlocked(_ upperKey: String) -> Bool {
         if self.blockedKeys.contains(upperKey) { return true }
         return self.blockedPrefixes.contains(where: { upperKey.hasPrefix($0) })
@@ -63,7 +63,9 @@ enum HostEnvSanitizer {
         for (rawKey, value) in overrides {
             let key = rawKey.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !key.isEmpty else { continue }
-            if self.shellWrapperAllowedOverrideKeys.contains(key.uppercased()) {
+            if self.isNoPagerOverride(key, value) {
+                filtered[key] = ""
+            } else if self.shellWrapperAllowedOverrideKeys.contains(key.uppercased()) {
                 filtered[key] = value
             }
         }
@@ -95,10 +97,6 @@ enum HostEnvSanitizer {
         return key
     }
 
-    private static func sortedUnique(_ values: [String]) -> [String] {
-        Array(Set(values)).sorted()
-    }
-
     private static func isPermissiveGitProtocolFromUserValue(_ value: String) -> Bool {
         let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if normalized == "true" || normalized == "yes" || normalized == "on" {
@@ -116,38 +114,6 @@ enum HostEnvSanitizer {
             .split(separator: ":", omittingEmptySubsequences: false)
             .filter { self.gitDefaultAlwaysAllowedProtocols.contains(String($0)) }
         return safeProtocols.joined(separator: ":")
-    }
-
-    static func inspectOverrides(
-        overrides: [String: String]?,
-        blockPathOverrides: Bool = true) -> HostEnvOverrideDiagnostics
-    {
-        guard let overrides else {
-            return HostEnvOverrideDiagnostics(blockedKeys: [], invalidKeys: [])
-        }
-
-        var blocked: [String] = []
-        var invalid: [String] = []
-        for (rawKey, _) in overrides {
-            let candidate = rawKey.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard let normalized = self.normalizeOverrideKey(rawKey) else {
-                invalid.append(candidate.isEmpty ? rawKey : candidate)
-                continue
-            }
-            let upper = normalized.uppercased()
-            if blockPathOverrides, upper == "PATH" {
-                blocked.append(upper)
-                continue
-            }
-            if self.isBlockedOverride(upper) || self.isBlocked(upper) {
-                blocked.append(upper)
-                continue
-            }
-        }
-
-        return HostEnvOverrideDiagnostics(
-            blockedKeys: self.sortedUnique(blocked),
-            invalidKeys: self.sortedUnique(invalid))
     }
 
     static func sanitize(overrides: [String: String]?, shellWrapper: Bool = false) -> [String: String] {
@@ -187,6 +153,12 @@ enum HostEnvSanitizer {
             // PATH is part of the security boundary (command resolution + safe-bin checks). Never
             // allow request-scoped PATH overrides from agents/gateways.
             if upper == "PATH" { continue }
+            // Never pass an executable cat through generic PAGER consumers or PATH lookup.
+            // Exact cat/empty requests become empty; whitespace and commands stay blocked.
+            if self.isNoPagerOverride(key, value) {
+                merged[key] = ""
+                continue
+            }
             if self.isBlockedOverride(upper) { continue }
             if self.isBlocked(upper) { continue }
             merged[key] = value

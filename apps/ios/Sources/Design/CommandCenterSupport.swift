@@ -93,6 +93,9 @@ struct CommandSessionRow: View {
         }
         .padding(.horizontal, 4)
         .padding(.vertical, 6)
+        .overlay(alignment: .leading) {
+            OpenClawSessionColorStripe(color: self.item.sessionColor)
+        }
         .contentShape(Rectangle())
     }
 
@@ -118,6 +121,7 @@ struct CommandSessionRow: View {
 struct CommandSessionActions {
     let rename: (String?) -> Void
     let moveToGroup: (String?) -> Void
+    let setColor: (String?) -> Void
     let togglePinned: () -> Void
     let toggleUnread: () -> Void
     let fork: () -> Void
@@ -135,6 +139,8 @@ struct CommandSessionActionsModifier: ViewModifier {
     let categories: [String]
     let isArchived: Bool
     let isEnabled: Bool
+    let canArchive: Bool
+    let canDelete: Bool
     let actions: CommandSessionActions
 
     @State private var editor: Editor?
@@ -152,11 +158,16 @@ struct CommandSessionActionsModifier: ViewModifier {
     private func managedContent(_ content: Content) -> some View {
         content
             .contextMenu {
+                OpenClawSessionColorMenu(color: self.session.color, onSelect: self.actions.setColor)
                 if self.isArchived {
-                    self.actionButton("Unarchive", systemImage: "archivebox") {
-                        self.actions.toggleArchived()
+                    if self.canArchive {
+                        self.actionButton("Unarchive", systemImage: "archivebox") {
+                            self.actions.toggleArchived()
+                        }
                     }
-                    self.deleteButton
+                    if self.canDelete {
+                        self.deleteButton
+                    }
                 } else {
                     self.actionButton(
                         self.session.pinned == true
@@ -177,14 +188,23 @@ struct CommandSessionActionsModifier: ViewModifier {
                     self.actionButton("Rename…", systemImage: "pencil") {
                         self.beginRename()
                     }
-                    self.actionButton("Fork", systemImage: "arrow.triangle.branch") {
+                    self.actionButton(
+                        self.session.hasActiveRun == true
+                            ? OpenClawTextValue.localized("Fork from last completed message")
+                            : OpenClawTextValue.localized("Fork"),
+                        systemImage: "arrow.triangle.branch")
+                    {
                         self.actions.fork()
                     }
                     self.groupMenu
-                    self.actionButton("Archive", systemImage: "archivebox") {
-                        self.actions.toggleArchived()
+                    if self.canArchive {
+                        self.actionButton("Archive", systemImage: "archivebox") {
+                            self.actions.toggleArchived()
+                        }
                     }
-                    self.deleteButton
+                    if self.canDelete {
+                        self.deleteButton
+                    }
                 }
             }
             .alert(self.editorTitle, isPresented: self.editorBinding) {
@@ -328,6 +348,8 @@ extension View {
         categories: [String],
         isArchived: Bool = false,
         isEnabled: Bool = true,
+        canArchive: Bool = true,
+        canDelete: Bool = true,
         actions: CommandSessionActions) -> some View
     {
         self.modifier(CommandSessionActionsModifier(
@@ -335,6 +357,8 @@ extension View {
             categories: categories,
             isArchived: isArchived,
             isEnabled: isEnabled,
+            canArchive: canArchive,
+            canDelete: canDelete,
             actions: actions))
     }
 }

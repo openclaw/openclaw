@@ -10,13 +10,16 @@
  * overwrite each other's tokens, registered commands, or handlers.
  */
 
+import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { Readable } from "node:stream";
+import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import type { MattermostConfig } from "../types.js";
 import type { ResolvedMattermostAccount } from "./accounts.js";
 import {
+  createWebhookInFlightLimiter,
   isRequestBodyLimitError,
   readRequestBodyWithLimit,
+  sendHttpRequestRejection,
   type OpenClawPluginApi,
 } from "./runtime-api.js";
 import {
@@ -32,13 +35,17 @@ import {
 
 const MULTI_ACCOUNT_BODY_MAX_BYTES = 64 * 1024;
 const MULTI_ACCOUNT_BODY_TIMEOUT_MS = 5_000;
+const slashRouteInFlightLimiter = createWebhookInFlightLimiter();
+const SLASH_ROUTE_IN_FLIGHT_KEY = "mattermost:slash";
+const SLASH_AUTHENTICATED_IN_FLIGHT_KEY = `${SLASH_ROUTE_IN_FLIGHT_KEY}:authenticated`;
+type SlashHandler = ReturnType<typeof createSlashCommandHttpHandler>;
 type SlashHandlerMatchSource = "token" | "command";
 type SlashHandlerMatch =
   | { kind: "none" }
   | {
       kind: "single";
       source: SlashHandlerMatchSource;
-      handler: (req: IncomingMessage, res: ServerResponse) => Promise<void>;
+      handler: SlashHandler;
       accountIds: string[];
     }
   | {
@@ -55,7 +62,7 @@ type SlashCommandAccountState = {
   /** Registered command IDs for cleanup on shutdown. */
   registeredCommands: MattermostRegisteredCommand[];
   /** Current HTTP handler for this account. */
-  handler: ((req: IncomingMessage, res: ServerResponse) => Promise<void>) | null;
+  handler: SlashHandler | null;
   /** The account that activated slash commands. */
   account: ResolvedMattermostAccount;
   /** Map from trigger to original command name (for skill commands that start with oc_). */
@@ -86,10 +93,32 @@ function getSlashAccountStates(): Map<string, SlashCommandAccountState> {
 
 const accountStates = getSlashAccountStates();
 
+function resolveSlashRouteInFlightKey(authorization: string | undefined): string {
+  const token = authorization?.match(/^Token ([^,\s]+)$/iu)?.[1];
+  if (!token) {
+    return SLASH_ROUTE_IN_FLIGHT_KEY;
+  }
+
+  let matched = false;
+  for (const state of accountStates.values()) {
+    for (const commandToken of state.commandTokens) {
+      matched = safeEqualSecret(token, commandToken) || matched;
+    }
+  }
+
+  // Only known credentials create keys, never arbitrary headers or raw secrets.
+  // Distinct credentials stay isolated even when one startup token is later revoked.
+  return matched
+    ? `${SLASH_AUTHENTICATED_IN_FLIGHT_KEY}:${createHash("sha256")
+        .update(`${SLASH_AUTHENTICATED_IN_FLIGHT_KEY}:${token}`)
+        .digest("hex")}`
+    : SLASH_ROUTE_IN_FLIGHT_KEY;
+}
+
 function resolveSlashHandlerForToken(token: string): SlashHandlerMatch {
   const matches: Array<{
     accountId: string;
-    handler: (req: IncomingMessage, res: ServerResponse) => Promise<void>;
+    handler: SlashHandler;
   }> = [];
 
   for (const [accountId, state] of accountStates) {
@@ -132,7 +161,7 @@ function resolveSlashHandlerForCommand(params: {
 
   const matches: Array<{
     accountId: string;
-    handler: (req: IncomingMessage, res: ServerResponse) => Promise<void>;
+    handler: SlashHandler;
   }> = [];
 
   for (const [accountId, state] of accountStates) {
@@ -290,7 +319,11 @@ export function registerSlashCommandRoute(api: OpenClawPluginApi) {
     addCallbackPaths(accountCommandsRaw);
   }
 
-  const routeHandler = async (req: IncomingMessage, res: ServerResponse) => {
+  const dispatchRoute = async (
+    req: IncomingMessage,
+    res: ServerResponse,
+    onRequestAuthenticated: () => void,
+  ) => {
     if (accountStates.size === 0) {
       res.statusCode = 503;
       res.setHeader("Content-Type", "application/json; charset=utf-8");
@@ -321,12 +354,12 @@ export function registerSlashCommandRoute(api: OpenClawPluginApi) {
         );
         return;
       }
-      await state.handler(req, res);
+      await state.handler(req, res, undefined, onRequestAuthenticated);
       return;
     }
 
-    // Multi-account: buffer the body, find the matching account by token or
-    // registered team/trigger, then replay the request to the correct handler.
+    // Multi-account: buffer the body, then find the matching account by token or
+    // registered team/trigger before account-specific validation.
     // Use the bounded helper so a slow/never-finishing client cannot tie up the
     // routing handler indefinitely (Slowloris).
     let bodyStr: string;
@@ -334,15 +367,15 @@ export function registerSlashCommandRoute(api: OpenClawPluginApi) {
       bodyStr = await readRequestBodyWithLimit(req, {
         maxBytes: MULTI_ACCOUNT_BODY_MAX_BYTES,
         timeoutMs: MULTI_ACCOUNT_BODY_TIMEOUT_MS,
+        // Defer destruction so the rejections below reach Mattermost before the close.
+        destroyOnLimit: false,
       });
     } catch (error) {
       if (isRequestBodyLimitError(error, "REQUEST_BODY_TIMEOUT")) {
-        res.statusCode = 408;
-        res.end("Request body timeout");
+        await sendHttpRequestRejection(req, res, 408, "Request body timeout");
         return;
       }
-      res.statusCode = 413;
-      res.end("Payload Too Large");
+      await sendHttpRequestRejection(req, res, 413, "Payload Too Large");
       return;
     }
 
@@ -403,22 +436,33 @@ export function registerSlashCommandRoute(api: OpenClawPluginApi) {
       return;
     }
 
-    const matchedHandler = match.handler;
+    // Routing already enforced the body limit. Retain the original transport
+    // and pass those bytes forward instead of replaying a socket-less request.
+    await match.handler(req, res, bodyStr, onRequestAuthenticated);
+  };
 
-    // Replay: create a synthetic readable that re-emits the buffered body
-    const syntheticReq = new Readable({
-      read() {
-        this.push(Buffer.from(bodyStr, "utf8"));
-        this.push(null);
-      },
-    }) as IncomingMessage;
+  const routeHandler = async (req: IncomingMessage, res: ServerResponse) => {
+    // Header matching only selects a capacity pool. The handler still authenticates
+    // the body token and current command before releasing this admission guard.
+    const inFlightKey = resolveSlashRouteInFlightKey(req.headers.authorization);
+    if (!slashRouteInFlightLimiter.tryAcquire(inFlightKey)) {
+      await sendHttpRequestRejection(req, res, 429, "Too Many Requests");
+      return;
+    }
 
-    // Copy necessary IncomingMessage properties
-    syntheticReq.method = req.method;
-    syntheticReq.url = req.url;
-    syntheticReq.headers = req.headers;
-
-    await matchedHandler(syntheticReq, res);
+    let released = false;
+    const release = () => {
+      if (released) {
+        return;
+      }
+      released = true;
+      slashRouteInFlightLimiter.release(inFlightKey);
+    };
+    try {
+      await dispatchRoute(req, res, release);
+    } finally {
+      release();
+    }
   };
 
   for (const callbackPath of callbackPaths) {

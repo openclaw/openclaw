@@ -1,5 +1,6 @@
 // Whatsapp tests cover approval handler plugin behavior.
-import { describe, expect, it } from "vitest";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { describe, expect, it, vi } from "vitest";
 import { whatsappApprovalNativeRuntime } from "./approval-handler.runtime.js";
 
 describe("whatsappApprovalNativeRuntime", () => {
@@ -183,4 +184,91 @@ describe("whatsappApprovalNativeRuntime", () => {
       },
     });
   });
+});
+
+it("waits for native reaction binding and cleanup completion", async () => {
+  const bindingWrite = createDeferred<null>();
+  const cleanupWrite = createDeferred<void>();
+  const register = vi
+    .spyOn(await import("./approval-reactions.js"), "registerWhatsAppApprovalReactionTarget")
+    .mockReturnValue(bindingWrite.promise);
+  const unregister = vi
+    .spyOn(await import("./approval-reactions.js"), "unregisterWhatsAppApprovalReactionTarget")
+    .mockReturnValue(cleanupWrite.promise);
+  const entry = {
+    accountId: "default",
+    to: "+15551230000",
+    remoteJid: "15551230000@s.whatsapp.net",
+    messageId: "approval-message",
+  };
+  const request = {
+    id: "exec-pending",
+    request: { command: "echo hi" },
+    createdAtMs: 0,
+    expiresAtMs: 60_000,
+  };
+  try {
+    let bindingSettled = false;
+    const binding = Promise.resolve(
+      whatsappApprovalNativeRuntime.interactions!.bindPending!({
+        cfg: {},
+        accountId: "default",
+        entry,
+        request,
+        approvalKind: "exec",
+        view: {
+          approvalKind: "exec",
+          approvalId: request.id,
+          phase: "pending",
+          title: "Approval",
+          metadata: [],
+          commandText: "echo hi",
+          actions: [],
+          expiresAtMs: 60_000,
+        },
+        pendingPayload: {
+          manualFallbackPayload: { text: "pending" },
+          reactionPayload: {
+            text: "pending",
+            allowedDecisions: ["allow-once"],
+            reactionBindings: [],
+          },
+        },
+      }),
+    ).then((value) => {
+      bindingSettled = true;
+      return value;
+    });
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(bindingSettled).toBe(false);
+    bindingWrite.resolve(null);
+    await expect(binding).resolves.toBeNull();
+
+    let cleanupSettled = false;
+    const cleanup = Promise.resolve(
+      whatsappApprovalNativeRuntime.interactions!.unbindPending!({
+        cfg: {},
+        accountId: "default",
+        entry,
+        request,
+        approvalKind: "exec",
+        binding: true,
+      }),
+    ).then(() => {
+      cleanupSettled = true;
+    });
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(cleanupSettled).toBe(false);
+    cleanupWrite.resolve();
+    await cleanup;
+  } finally {
+    bindingWrite.resolve(null);
+    cleanupWrite.resolve();
+    register.mockRestore();
+    unregister.mockRestore();
+  }
 });

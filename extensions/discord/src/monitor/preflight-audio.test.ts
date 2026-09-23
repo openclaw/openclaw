@@ -3,9 +3,20 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const transcribeFirstAudioMock = vi.hoisted(() => vi.fn());
 
-vi.mock("./preflight-audio.runtime.js", () => ({
-  transcribeFirstAudio: transcribeFirstAudioMock,
-}));
+vi.mock("openclaw/plugin-sdk/media-understanding-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/media-understanding-runtime")>();
+  return {
+    ...actual,
+    createChannelPreflightAudio: (
+      params: Parameters<typeof actual.createChannelPreflightAudio>[0],
+    ) =>
+      actual.createChannelPreflightAudio({
+        ...params,
+        transcribeFirstAudio: transcribeFirstAudioMock,
+      }),
+  };
+});
 
 import { resolveDiscordPreflightAudioMentionContext } from "./preflight-audio.js";
 
@@ -37,8 +48,12 @@ describe("resolveDiscordPreflightAudioMentionContext", () => {
 
     expect(transcribeFirstAudioMock).toHaveBeenCalledWith({
       ctx: {
-        MediaUrls: ["https://cdn.discordapp.com/attachments/voice.ogg"],
-        MediaTypes: ["audio/ogg"],
+        media: [
+          {
+            url: "https://cdn.discordapp.com/attachments/voice.ogg",
+            contentType: "audio/ogg",
+          },
+        ],
       },
       cfg,
       agentDir: undefined,
@@ -70,8 +85,12 @@ describe("resolveDiscordPreflightAudioMentionContext", () => {
 
     expect(transcribeFirstAudioMock).toHaveBeenCalledWith({
       ctx: {
-        MediaUrls: ["https://cdn.discordapp.com/attachments/voice.opus"],
-        MediaTypes: ["audio/opus"],
+        media: [
+          {
+            url: "https://cdn.discordapp.com/attachments/voice.opus",
+            contentType: "audio/opus",
+          },
+        ],
       },
       cfg,
       agentDir: undefined,
@@ -100,8 +119,12 @@ describe("resolveDiscordPreflightAudioMentionContext", () => {
 
     expect(transcribeFirstAudioMock).toHaveBeenCalledWith({
       ctx: {
-        MediaUrls: ["https://cdn.discordapp.com/attachments/voice"],
-        MediaTypes: ["audio/ogg"],
+        media: [
+          {
+            url: "https://cdn.discordapp.com/attachments/voice",
+            contentType: "audio/ogg",
+          },
+        ],
       },
       cfg,
       agentDir: undefined,
@@ -130,6 +153,91 @@ describe("resolveDiscordPreflightAudioMentionContext", () => {
     expect(result).toEqual({
       hasAudioAttachment: true,
       hasTypedText: true,
+    });
+  });
+
+  it("does not preflight a duration-bearing video attachment as audio", async () => {
+    const result = await resolveDiscordPreflightAudioMentionContext({
+      message: {
+        attachments: [
+          {
+            url: "https://cdn.discordapp.com/attachments/PXL_2024.mp4",
+            content_type: "video/mp4",
+            filename: "PXL_2024.mp4",
+            duration_secs: 11.26,
+          },
+        ],
+      },
+      isDirectMessage: true,
+      shouldRequireMention: false,
+      mentionRegexes: [],
+      cfg,
+    });
+
+    expect(transcribeFirstAudioMock).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      hasAudioAttachment: false,
+      hasTypedText: false,
+    });
+  });
+
+  it("does not preflight a duration-bearing image attachment as audio", async () => {
+    const result = await resolveDiscordPreflightAudioMentionContext({
+      message: {
+        attachments: [
+          {
+            url: "https://cdn.discordapp.com/attachments/photo.png",
+            content_type: "image/png",
+            filename: "photo.png",
+            duration_secs: 0.5,
+          },
+        ],
+      },
+      isDirectMessage: true,
+      shouldRequireMention: false,
+      mentionRegexes: [],
+      cfg,
+    });
+
+    expect(transcribeFirstAudioMock).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      hasAudioAttachment: false,
+      hasTypedText: false,
+    });
+  });
+
+  it("still preflights a waveform-bearing voice note with a definitive video MIME", async () => {
+    transcribeFirstAudioMock.mockResolvedValue("waveform over video mime transcript");
+
+    await resolveDiscordPreflightAudioMentionContext({
+      message: {
+        attachments: [
+          {
+            url: "https://cdn.discordapp.com/attachments/voice",
+            content_type: "video/ogg",
+            filename: "voice",
+            duration_secs: 1.5,
+            waveform: "AAAA",
+          },
+        ],
+      },
+      isDirectMessage: true,
+      shouldRequireMention: false,
+      mentionRegexes: [],
+      cfg,
+    });
+
+    expect(transcribeFirstAudioMock).toHaveBeenCalledWith({
+      ctx: {
+        media: [
+          {
+            url: "https://cdn.discordapp.com/attachments/voice",
+            contentType: "audio/ogg",
+          },
+        ],
+      },
+      cfg,
+      agentDir: undefined,
     });
   });
 

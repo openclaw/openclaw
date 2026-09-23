@@ -1,86 +1,64 @@
 // Resolves runtime-only inputs for status JSON after the fast scan completes.
 // Keeps gateway health, usage, security audit, and service summaries behind explicit option gates.
 
-import type { OpenClawConfig } from "../config/types.js";
-import type { UpdateCheckResult } from "../infra/update-check.js";
+import { readBackupRunFreshness } from "../state/backup-run-records.js";
 import { buildStatusJsonPayload } from "./status-json-payload.ts";
 import { buildStatusOverviewSurfaceFromScan } from "./status-overview-surface.ts";
-import { resolveStatusRuntimeSnapshot } from "./status-runtime-shared.ts";
-
-type StatusJsonScanLike = {
-  cfg: OpenClawConfig;
-  sourceConfig: OpenClawConfig;
-  summary: Record<string, unknown>;
-  update: UpdateCheckResult;
-  osSummary: unknown;
-  memory: unknown;
-  memoryPlugin: unknown;
-  gatewayMode: "local" | "remote";
-  gatewayConnection: {
-    url: string;
-    urlSource?: string;
-  };
-  remoteUrlMissing: boolean;
-  gatewayReachable: boolean;
-  gatewayProbe:
-    | {
-        connectLatencyMs?: number | null;
-        error?: string | null;
-      }
-    | null
-    | undefined;
-  gatewayProbeAuth:
-    | {
-        token?: string;
-        password?: string;
-      }
-    | null
-    | undefined;
-  gatewaySelf:
-    | {
-        host?: string | null;
-        ip?: string | null;
-        version?: string | null;
-        platform?: string | null;
-      }
-    | null
-    | undefined;
-  gatewayProbeAuthWarning?: string | null;
-  agentStatus: unknown;
-  secretDiagnostics: string[];
-  pluginCompatibility?: Array<Record<string, unknown>> | null | undefined;
-};
+import {
+  resolveStatusRuntimeSnapshot,
+  resolveStatusUsageSummary,
+} from "./status-runtime-shared.ts";
+import type { StatusGatewayProbeBudget } from "./status.gateway-probe-budget.js";
+import type { StatusJsonScanResult } from "./status.scan-result.ts";
 
 /** Builds the status JSON object from a completed scan plus optional runtime/deep probes. */
 export async function resolveStatusJsonOutput(params: {
-  scan: StatusJsonScanLike;
-  opts: {
+  scan: StatusJsonScanResult;
+  opts: StatusGatewayProbeBudget & {
     deep?: boolean;
     usage?: boolean;
-    timeoutMs?: number;
+    agent?: string;
   };
   includeSecurityAudit: boolean;
   includePluginCompatibility?: boolean;
   suppressHealthErrors?: boolean;
 }) {
   const { scan, opts } = params;
+  const inspectionReason = "Local plugin inspection is not collected in online status.";
   const { securityAudit, usage, health, lastHeartbeat, gatewayService, nodeService } =
     await resolveStatusRuntimeSnapshot({
       config: scan.cfg,
       sourceConfig: scan.sourceConfig,
       timeoutMs: opts.timeoutMs,
+      gatewayProbeDeadlineMs: opts.gatewayProbeDeadlineMs,
+      ...(opts.agent ? { agentId: opts.agent } : {}),
       usage: opts.usage,
       deep: opts.deep,
       gatewayReachable: scan.gatewayReachable,
-      includeSecurityAudit: params.includeSecurityAudit,
+      ...(scan.gatewayProbe?.startupPhase
+        ? { gatewayStartupPhase: scan.gatewayProbe.startupPhase }
+        : {}),
+      ...(scan.gatewayProbe?.error ? { gatewayProbeError: scan.gatewayProbe.error } : {}),
+      includeSecurityAudit: params.includeSecurityAudit && !scan.collection,
       suppressHealthErrors: params.suppressHealthErrors,
+      ...(scan.collection && opts.usage
+        ? {
+            resolveUsage: async (input: Parameters<typeof resolveStatusUsageSummary>[0]) => {
+              const { readConfigFileSnapshot } = await import("../config/config.js");
+              const snapshot = await readConfigFileSnapshot({
+                observe: false,
+                pluginValidation: "core-only",
+              });
+              return resolveStatusUsageSummary({ ...input, config: snapshot.runtimeConfig });
+            },
+          }
+        : {}),
     });
 
-  return buildStatusJsonPayload({
+  const payload = buildStatusJsonPayload({
     summary: scan.summary,
     surface: buildStatusOverviewSurfaceFromScan({
-      // The scan shape is intentionally narrower than the surface helper's full scan type.
-      scan: scan as never,
+      scan,
       gatewayService,
       nodeService,
     }),
@@ -88,11 +66,45 @@ export async function resolveStatusJsonOutput(params: {
     memory: scan.memory,
     memoryPlugin: scan.memoryPlugin,
     agents: scan.agentStatus,
+    configDiagnostics: scan.configDiagnostics,
     secretDiagnostics: scan.secretDiagnostics,
-    securityAudit,
+    securityAudit:
+      params.includeSecurityAudit && scan.collection
+        ? { collected: false, reason: inspectionReason }
+        : securityAudit,
     health,
     usage,
     lastHeartbeat,
     pluginCompatibility: params.includePluginCompatibility ? scan.pluginCompatibility : undefined,
   });
+  const backups = await readBackupRunFreshness(scan.env ?? {});
+  if (backups.latest || backups.latestOk) {
+    Object.assign(payload, { backups });
+  }
+  return {
+    ...payload,
+    ...(scan.collection
+      ? {
+          collection: {
+            ...scan.collection,
+            notCollected: [
+              ...scan.collection.notCollected,
+              ...(params.includeSecurityAudit
+                ? [{ fields: ["securityAudit"], reason: inspectionReason }]
+                : []),
+            ],
+          },
+          ...(params.includePluginCompatibility
+            ? {
+                pluginCompatibility: {
+                  count: 0,
+                  warnings: [],
+                  collected: false,
+                  reason: inspectionReason,
+                },
+              }
+            : {}),
+        }
+      : {}),
+  };
 }

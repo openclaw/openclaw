@@ -1,10 +1,11 @@
 // Plugin Gateway Gauntlet tests cover plugin gateway gauntlet script behavior.
 import { spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
+import { watch } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -14,8 +15,7 @@ import {
   parseArgs,
   parseTimedMetrics,
   runMeasuredCommand,
-  runMeasuredCommandLive,
-} from "../../scripts/check-plugin-gateway-gauntlet.mjs";
+} from "../../scripts/check-plugin-gateway-gauntlet.mts";
 import {
   buildGauntletPrebuildEnv,
   collectGatewayCpuObservations,
@@ -26,7 +26,16 @@ import {
   detectCommandDiagnosticFailure,
   discoverBundledPluginManifests,
   selectPluginEntries,
-} from "../../scripts/lib/plugin-gateway-gauntlet.mjs";
+} from "../../scripts/lib/plugin-gateway-gauntlet.mts";
+import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
+import { isProcessAlive } from "../helpers/process-wait.js";
+import { withTestTimeout } from "../helpers/promise.js";
+import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
+import { toolingMtsEntrypoints } from "./tooling-mts-runtime.test-support.mts";
+
+const tsxImport = import.meta.resolve("tsx");
+const testNodeExecPath = resolveTestNodeExecPath();
 
 describe("plugin gateway gauntlet helpers", () => {
   let repoRoot: string;
@@ -48,11 +57,107 @@ describe("plugin gateway gauntlet helpers", () => {
     await fs.writeFile(path.join(dir, fileName), source, "utf8");
   }
 
+  async function runQaSummaryFailureScenario(params: {
+    qaSummary?: unknown;
+    scenarioIds: string[];
+    diagnosticFailure: string;
+    diagnosticDetail?: unknown;
+    maxBytes?: string;
+    rowAssertion?: "metrics" | "missing";
+  }) {
+    const outputDir = path.join(repoRoot, "artifacts");
+    await writeManifest("alpha", "openclaw.plugin.json", JSON.stringify({ id: "alpha" }));
+    await fs.writeFile(path.join(repoRoot, "extensions", "alpha", "index.ts"), "export {};\n");
+    await fs.mkdir(path.join(repoRoot, "scripts"), { recursive: true });
+    const summaryAction =
+      params.qaSummary === undefined
+        ? 'console.log("fake QA completed without writing qa-suite-summary.json");'
+        : `fs.writeFileSync(path.join(outputDir, "qa-suite-summary.json"), ${JSON.stringify(JSON.stringify(params.qaSummary))}, "utf8");`;
+    await fs.writeFile(
+      path.join(repoRoot, "scripts", "run-node.mjs"),
+      [
+        'import fs from "node:fs";',
+        'import path from "node:path";',
+        'const outputArgIndex = process.argv.indexOf("--output-dir");',
+        "const outputDir = path.resolve(process.cwd(), process.argv[outputArgIndex + 1]);",
+        "fs.mkdirSync(outputDir, { recursive: true });",
+        summaryAction,
+      ].join("\n"),
+      "utf8",
+    );
+
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        tsxImport,
+        path.resolve("scripts/check-plugin-gateway-gauntlet.mts"),
+        "--repo-root",
+        repoRoot,
+        "--output-dir",
+        outputDir,
+        "--skip-prebuild",
+        "--skip-lifecycle",
+        "--skip-slash-help",
+        "--plugin",
+        "alpha",
+        ...params.scenarioIds.flatMap((scenarioId) => ["--qa-scenario", scenarioId]),
+      ],
+      {
+        cwd: path.resolve("."),
+        encoding: "utf8",
+        ...(params.maxBytes
+          ? {
+              env: {
+                ...process.env,
+                OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_QA_SUMMARY_MAX_BYTES: params.maxBytes,
+              },
+            }
+          : {}),
+      },
+    );
+
+    expect(result.status, result.stdout).toBe(1);
+    expect(result.stdout).toContain(`diagnostic=${params.diagnosticFailure}`);
+    const summary = JSON.parse(
+      await fs.readFile(path.join(outputDir, "plugin-gateway-gauntlet-summary.json"), "utf8"),
+    );
+    expect(summary.failures).toEqual([
+      expect.objectContaining({
+        ...(params.diagnosticDetail === undefined
+          ? {}
+          : { diagnosticDetail: params.diagnosticDetail }),
+        diagnosticFailure: params.diagnosticFailure,
+        phase: "qa:rpc",
+        pluginId: "alpha",
+        status: 0,
+      }),
+    ]);
+    if (params.rowAssertion === "metrics") {
+      expect(summary.rows[0]).toEqual(
+        expect.objectContaining({
+          diagnosticFailure: params.diagnosticFailure,
+          qaMetrics: { gatewayCpuCoreRatio: 0, wallMs: 1 },
+        }),
+      );
+    } else if (params.rowAssertion === "missing") {
+      expect(summary.rows[0]).toEqual(
+        expect.objectContaining({
+          diagnosticFailure: params.diagnosticFailure,
+          qaSummaryPath: path.join(outputDir, "qa-suite", "chunk-00", "qa-suite-summary.json"),
+        }),
+      );
+    }
+    expect(summary.isolatedRunRootPreserved).toBe(true);
+    await fs.rm(summary.isolatedRunRoot, { recursive: true, force: true });
+  }
+
   function minimalQaSuiteSummary(metrics: Record<string, number>) {
     return {
       counts: { failed: 0, passed: 1, total: 1 },
       metrics,
       run: {
+        status: "completed",
         concurrency: 1,
         fastMode: false,
         finishedAt: "2026-05-30T00:00:01.000Z",
@@ -71,15 +176,6 @@ describe("plugin gateway gauntlet helpers", () => {
         },
       ],
     };
-  }
-
-  function isProcessAlive(pid: number): boolean {
-    try {
-      process.kill(pid, 0);
-      return true;
-    } catch {
-      return false;
-    }
   }
 
   async function waitFor(predicate: () => Promise<boolean> | boolean, timeoutMs = 5_000) {
@@ -261,7 +357,6 @@ describe("plugin gateway gauntlet helpers", () => {
 
   it("skips source-only plugin dirs that are excluded from the built runtime", async () => {
     await writeManifest("qa-lab", "openclaw.plugin.json", JSON.stringify({ id: "qa-lab" }));
-    await writeManifest("qqbot", "openclaw.plugin.json", JSON.stringify({ id: "qqbot" }));
     await writeManifest("telegram", "openclaw.plugin.json", JSON.stringify({ id: "telegram" }));
 
     const matrix = discoverBundledPluginManifests(repoRoot);
@@ -546,7 +641,7 @@ describe("plugin gateway gauntlet helpers", () => {
   it("prebuilds only the QA runtime needed by the gauntlet", () => {
     expect(createGauntletPrebuildCommand(repoRoot)).toEqual({
       command: process.execPath,
-      args: [path.join(repoRoot, "scripts", "build-all.mjs"), "qaRuntime"],
+      args: ["--import", "tsx", path.join(repoRoot, "scripts", "build-all.mts"), "qaRuntime"],
     });
   });
 
@@ -595,7 +690,7 @@ describe("plugin gateway gauntlet helpers", () => {
 
   it("clamps oversized measured command timers before scheduling", async () => {
     const logDir = path.join(repoRoot, "logs");
-    const row = await runMeasuredCommandLive({
+    const row = await runMeasuredCommand({
       cwd: repoRoot,
       env: process.env,
       logDir,
@@ -613,65 +708,108 @@ describe("plugin gateway gauntlet helpers", () => {
     await expect(fs.readFile(row.logPath!, "utf8")).resolves.not.toContain("ETIMEDOUT");
   });
 
-  it.runIf(process.platform !== "win32")(
-    "kills timed-out measured command process groups when the leader exits first",
-    async () => {
-      const logDir = path.join(repoRoot, "logs");
-      const scriptPath = path.join(repoRoot, "leader-exits.mjs");
-      const grandchildPidPath = path.join(repoRoot, "grandchild.pid");
-      let grandchildPid = 0;
-      await fs.writeFile(
-        scriptPath,
-        `
+  it.runIf(process.platform !== "win32").each([
+    { label: "normal-leader-exits", normalExit: true },
+    { label: "timeout-leader-exits", normalExit: false },
+  ])("cleans measured process groups after $label", async ({ label, normalExit }) => {
+    const logDir = path.join(repoRoot, "logs");
+    const scriptPath = path.join(repoRoot, "leader-exits.mjs");
+    const grandchildPidPath = path.join(repoRoot, "grandchild.pid");
+    const readyPath = path.join(repoRoot, "grandchild.ready");
+    let grandchildPid = 0;
+    await fs.writeFile(
+      scriptPath,
+      `
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 
+const normalExit = process.argv[4] === "normal";
 const grandchild = spawn(process.execPath, [
   "-e",
-  "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);",
-], { stdio: "ignore" });
-fs.writeFileSync(process.argv[2], String(grandchild.pid));
+  "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000); process.send('ready');",
+], { stdio: ["ignore", "ignore", "ignore", "ipc"] });
+// Publish the PID atomically so failed startup still has an owned rescue target.
+fs.writeFileSync(process.argv[2] + ".tmp", String(grandchild.pid));
+fs.renameSync(process.argv[2] + ".tmp", process.argv[2]);
+grandchild.once("message", () => {
+  fs.writeFileSync(process.argv[3], "ready");
+  if (normalExit) process.exit(0);
+});
 process.on("SIGTERM", () => process.exit(0));
-setInterval(() => {}, 1000);
+if (!normalExit) setInterval(() => {}, 1000);
 `,
-        "utf8",
-      );
+      "utf8",
+    );
 
-      try {
-        const rowPromise = runMeasuredCommand({
-          cwd: repoRoot,
-          env: process.env,
-          logDir,
-          command: process.execPath,
-          args: [scriptPath, grandchildPidPath],
-          label: "timeout-leader-exits",
-          phase: "probe",
-          timeoutKillGraceMs: 25,
-          timeoutMs: 250,
-          timeMode: "none",
-        });
+    const rowPromise = runMeasuredCommand({
+      cwd: repoRoot,
+      env: process.env,
+      logDir,
+      command: process.execPath,
+      args: [scriptPath, grandchildPidPath, readyPath, normalExit ? "normal" : "timeout"],
+      label,
+      phase: "probe",
+      timeoutKillGraceMs: 25,
+      timeoutMs: normalExit ? 1000 : 250,
+      timeMode: "none",
+    });
+    // Observe early rejection while readiness is checked; the original is awaited below.
+    void rowPromise.catch(() => undefined);
 
+    await runQaGatewayFixture(
+      async () => {
         await waitFor(() =>
-          fs
-            .access(grandchildPidPath)
-            .then(() => true)
-            .catch(() => false),
+          fs.access(readyPath).then(
+            () => true,
+            () => false,
+          ),
         );
         grandchildPid = Number.parseInt(await fs.readFile(grandchildPidPath, "utf8"), 10);
-        expect(Number.isInteger(grandchildPid)).toBe(true);
-        expect(isProcessAlive(grandchildPid)).toBe(true);
+        expect(Number.isSafeInteger(grandchildPid) && grandchildPid > 1).toBe(true);
+        if (!normalExit) {
+          expect(isProcessAlive(grandchildPid)).toBe(true);
+        }
 
         const row = await rowPromise;
-        expect(row.timedOut).toBe(true);
-        expect(row.spawnError?.code).toBe("ETIMEDOUT");
-        await waitFor(() => !isProcessAlive(grandchildPid));
-      } finally {
-        if (grandchildPid && isProcessAlive(grandchildPid)) {
-          process.kill(grandchildPid, "SIGKILL");
+        expect(row.timedOut).toBe(!normalExit);
+        if (normalExit) {
+          expect(row.status).toBe(1);
         }
-      }
-    },
-  );
+        expect(row.spawnError?.code).toBe(
+          normalExit ? "EPROCESSGROUP_CLEANUP_FAILED" : "ETIMEDOUT",
+        );
+        await waitFor(() => !isProcessAlive(grandchildPid));
+      },
+      async () => {
+        if (!grandchildPid) {
+          try {
+            grandchildPid = Number.parseInt(await fs.readFile(grandchildPidPath, "utf8"), 10);
+          } catch (error) {
+            if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+              return;
+            }
+            throw error;
+          }
+        }
+        expect(Number.isSafeInteger(grandchildPid) && grandchildPid > 1).toBe(true);
+        if (isProcessAlive(grandchildPid)) {
+          try {
+            process.kill(grandchildPid, "SIGKILL");
+          } catch (error) {
+            if (
+              !(error && typeof error === "object" && "code" in error && error.code === "ESRCH")
+            ) {
+              throw error;
+            }
+          }
+        }
+        await waitFor(() => !isProcessAlive(grandchildPid));
+      },
+      async () => {
+        await rowPromise;
+      },
+    );
+  });
 
   it.runIf(process.platform !== "win32")(
     "lets timed-out measured command descendants drain during kill grace",
@@ -735,7 +873,7 @@ setInterval(() => {}, 1000);
 
   it("captures output from live measured commands", async () => {
     const logDir = path.join(repoRoot, "logs");
-    const row = await runMeasuredCommandLive({
+    const row = await runMeasuredCommand({
       cwd: repoRoot,
       env: process.env,
       logDir,
@@ -756,7 +894,7 @@ setInterval(() => {}, 1000);
     const logDir = path.join(repoRoot, "not-a-directory");
     await fs.writeFile(logDir, "blocks log directory creation", "utf8");
 
-    const row = await runMeasuredCommandLive({
+    const row = await runMeasuredCommand({
       cwd: repoRoot,
       env: process.env,
       logDir,
@@ -778,7 +916,7 @@ setInterval(() => {}, 1000);
     const logDir = path.join(repoRoot, "logs");
     const before = process.listenerCount("SIGTERM");
 
-    const row = await runMeasuredCommandLive({
+    const row = await runMeasuredCommand({
       cwd: repoRoot,
       env: process.env,
       logDir,
@@ -829,11 +967,11 @@ setInterval(() => {}, 1000);
       await fs.writeFile(
         harnessPath,
         `
-import { runMeasuredCommandLive } from ${JSON.stringify(
-          pathToFileURL(path.resolve("scripts/check-plugin-gateway-gauntlet.mjs")).href,
+import { runMeasuredCommand } from ${JSON.stringify(
+          resolveRuntimeWorkerUrl(toolingMtsEntrypoints.pluginGatewayGauntlet).href,
         )};
 
-await runMeasuredCommandLive({
+await runMeasuredCommand({
   cwd: ${JSON.stringify(repoRoot)},
   env: process.env,
   logDir: ${JSON.stringify(logDir)},
@@ -851,7 +989,7 @@ await runMeasuredCommandLive({
         "utf8",
       );
 
-      const harness = spawn(process.execPath, [harnessPath], {
+      const harness = spawn(testNodeExecPath, ["--import", tsxImport, harnessPath], {
         cwd: repoRoot,
         stdio: ["ignore", "pipe", "pipe"],
       });
@@ -889,7 +1027,7 @@ await runMeasuredCommandLive({
       const scriptPath = path.join(repoRoot, "timeout-parent-termination-leader.mjs");
       const grandchildPidPath = path.join(repoRoot, "timeout-grandchild.pid");
       const grandchildReadyPath = path.join(repoRoot, "timeout-grandchild.ready");
-      const leaderExitedPath = path.join(repoRoot, "timeout-leader.exited");
+      const leaderPidPath = path.join(repoRoot, "timeout-leader.pid");
       let grandchildPid = 0;
 
       await fs.writeFile(
@@ -899,20 +1037,17 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 
 const grandchildScript = [
-  "const fs = require('node:fs');",
   "process.on('SIGTERM', () => {});",
   "process.on('SIGHUP', () => {});",
-  "fs.writeFileSync(process.argv[2], 'ready');",
+  "process.send('ready');",
   "setInterval(() => {}, 1000);",
 ].join("\\n");
-const grandchild = spawn(process.execPath, ["-e", grandchildScript, "child", process.argv[3]], {
-  stdio: "ignore",
+const grandchild = spawn(process.execPath, ["-e", grandchildScript], {
+  stdio: ["ignore", "ignore", "ignore", "ipc"],
 });
 fs.writeFileSync(process.argv[2], String(grandchild.pid));
-process.on("SIGTERM", () => {
-  fs.writeFileSync(process.argv[4], "exited");
-  process.exit(0);
-});
+process.on("SIGTERM", () => process.exit(0));
+grandchild.once("message", () => process.send("ready", () => process.disconnect()));
 setInterval(() => {}, 1000);
 `,
         "utf8",
@@ -920,73 +1055,143 @@ setInterval(() => {}, 1000);
       await fs.writeFile(
         harnessPath,
         `
+import assert from "node:assert/strict";
+import { channel } from "node:diagnostics_channel";
+import { once } from "node:events";
 import fs from "node:fs";
+import { mock } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
-import { runMeasuredCommandLive } from ${JSON.stringify(
-          pathToFileURL(path.resolve("scripts/check-plugin-gateway-gauntlet.mjs")).href,
+import { runMeasuredCommand } from ${JSON.stringify(
+          resolveRuntimeWorkerUrl(toolingMtsEntrypoints.pluginGatewayGauntlet).href,
         )};
 
-const promise = runMeasuredCommandLive({
+import { inspectManagedProcessGroup } from ${JSON.stringify(
+          resolveRuntimeWorkerUrl(toolingMtsEntrypoints.managedChildProcess).href,
+        )};
+
+const realDelay = delay;
+// Mocked timers cannot keep Node alive while a native signal is in flight.
+const keepAlive = setInterval(() => {}, 1_000);
+const children = channel("child_process");
+let child, ready, closed;
+const observeChild = ({ process: owned }) => {
+  child = owned;
+  ready = once(child, "message");
+  closed = once(child, "close");
+};
+// Only the controller's policy clock is mocked; readiness, exit, and signals are native.
+mock.timers.enable({ apis: ["Date", "setTimeout"] });
+children.subscribe(observeChild);
+const promise = runMeasuredCommand({
   cwd: ${JSON.stringify(repoRoot)},
   env: process.env,
   logDir: ${JSON.stringify(logDir)},
   command: process.execPath,
-  args: [${JSON.stringify(scriptPath)}, ${JSON.stringify(grandchildPidPath)}, ${JSON.stringify(
-    grandchildReadyPath,
-  )}, ${JSON.stringify(leaderExitedPath)}],
+  args: [${JSON.stringify(scriptPath)}, ${JSON.stringify(grandchildPidPath)}],
   label: "timeout-parent-termination",
   phase: "probe",
   timeoutKillGraceMs: 150,
   timeoutMs: 200,
   timeMode: "none",
+  spawnOptions: { stdio: ["ignore", "pipe", "pipe", "ipc"] },
 });
-for (let attempt = 0; attempt < 200 && !fs.existsSync(${JSON.stringify(
-          leaderExitedPath,
-        )}); attempt += 1) {
-  await delay(10);
+children.unsubscribe(observeChild);
+fs.writeFileSync(${JSON.stringify(leaderPidPath)}, String(child.pid));
+try {
+  assert.equal((await ready)[0], "ready");
+  fs.writeFileSync(${JSON.stringify(grandchildReadyPath)}, "ready");
+  mock.timers.tick(200);
+  assert.deepEqual(await closed, [0, null]);
+  assert.equal(inspectManagedProcessGroup(child, { errorPolicy: "indeterminate" }), "live");
+  const termination = once(process, "SIGTERM");
+  process.kill(process.pid, "SIGTERM");
+  await termination;
+  mock.timers.tick(150);
+  await new Promise(setImmediate);
+  const deadline = performance.now() + 5_000;
+  while (inspectManagedProcessGroup(child, { errorPolicy: "indeterminate" }) !== "dead") {
+    assert.ok(performance.now() < deadline, "process group survived SIGKILL");
+    await realDelay(5);
+  }
+  // Linux can retain a zombie group after native death. Drain the owner's existing
+  // 100 ms post-KILL fallback before expecting its original parent signal.
+  mock.timers.tick(100);
+  await promise;
+  process.exitCode = 7;
+} finally {
+  mock.timers.reset();
+  clearInterval(keepAlive);
 }
-if (!fs.existsSync(${JSON.stringify(leaderExitedPath)})) {
-  process.exit(2);
-}
-await delay(20);
-process.kill(process.pid, "SIGTERM");
-await promise;
-process.exit(7);
 `,
         "utf8",
       );
 
-      const harness = spawn(process.execPath, [harnessPath], {
+      const harness = spawn(testNodeExecPath, ["--import", tsxImport, harnessPath], {
         cwd: repoRoot,
         stdio: ["ignore", "pipe", "pipe"],
       });
-      try {
-        await waitFor(async () => {
-          try {
-            await fs.access(grandchildReadyPath);
-            return true;
-          } catch {
-            return false;
+      const closed = once(harness, "close");
+      void closed.catch(() => undefined);
+      let stderr = "";
+      harness.stdout.resume();
+      harness.stderr.on("data", (chunk) => {
+        stderr += String(chunk);
+      });
+      const reapPidFile = async (pidPath: string, group = false) => {
+        let pid: number;
+        try {
+          pid = Number(await fs.readFile(pidPath, "utf8"));
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+            return;
           }
-        });
-        grandchildPid = Number.parseInt(await fs.readFile(grandchildPidPath, "utf8"), 10);
+          throw error;
+        }
+        expect(Number.isSafeInteger(pid) && pid > 1).toBe(true);
+        try {
+          process.kill(group ? -pid : pid, "SIGKILL");
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
+            throw error;
+          }
+        }
+        await waitFor(() => !isProcessAlive(pid));
+      };
+      await runQaGatewayFixture(
+        async () => {
+          await waitFor(async () => {
+            try {
+              await fs.access(grandchildReadyPath);
+              return true;
+            } catch {
+              return false;
+            }
+          }).catch((error: unknown) => {
+            throw new Error(`${String(error)}\n${stderr}`, { cause: error });
+          });
+          grandchildPid = Number.parseInt(await fs.readFile(grandchildPidPath, "utf8"), 10);
 
-        await expect(waitForClose(harness)).resolves.toEqual({ code: null, signal: "SIGTERM" });
-        await waitFor(() => !isProcessAlive(grandchildPid));
-      } finally {
-        if (grandchildPid && isProcessAlive(grandchildPid)) {
-          process.kill(grandchildPid, "SIGKILL");
-        }
-        if (harness.pid && isProcessAlive(harness.pid)) {
-          harness.kill("SIGKILL");
-        }
-      }
+          expect(
+            await withTestTimeout(closed, 5_000, "harness did not close after fixture readiness"),
+            stderr,
+          ).toEqual([null, "SIGTERM"]);
+          await waitFor(() => !isProcessAlive(grandchildPid));
+        },
+        () => reapPidFile(leaderPidPath, true),
+        () => reapPidFile(grandchildPidPath),
+        async () => {
+          if (harness.pid && isProcessAlive(harness.pid)) {
+            harness.kill("SIGKILL");
+          }
+          await withTestTimeout(closed, 5_000, "fixture cleanup did not join harness closure");
+        },
+      );
     },
   );
 
   it("bounds captured output from live measured commands", async () => {
     const logDir = path.join(repoRoot, "logs");
-    const row = await runMeasuredCommandLive({
+    const row = await runMeasuredCommand({
       cwd: repoRoot,
       env: process.env,
       logDir,
@@ -1013,7 +1218,7 @@ process.exit(7);
       return true;
     });
 
-    const row = await runMeasuredCommandLive({
+    const row = await runMeasuredCommand({
       cwd: repoRoot,
       env: process.env,
       logDir,
@@ -1038,7 +1243,32 @@ process.exit(7);
   it("force kills timed-out live measured process groups that ignore SIGTERM", async () => {
     const logDir = path.join(repoRoot, "logs");
     const markerPath = path.join(repoRoot, "timeout-marker.txt");
-    const row = await runMeasuredCommandLive({
+    const watcher = watch(repoRoot);
+    const ready = new Promise<void>((resolve, reject) => {
+      watcher.on("error", reject);
+      watcher.on("change", (_event, filename) => {
+        if (filename?.toString() === path.basename(markerPath)) {
+          resolve();
+        }
+      });
+    });
+    const scheduleTimeout = globalThis.setTimeout;
+    let fireDeadline: (() => void) | undefined;
+    // Drive only the policy deadline after the real child's signal handler is ready.
+    const timerSpy = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockImplementation((callback, ms, ...args) => {
+        const timer = scheduleTimeout(callback, ms, ...args);
+        if (ms === 100 && !fireDeadline) {
+          clearTimeout(timer);
+          fireDeadline = () => {
+            fireDeadline = undefined;
+            callback(...args);
+          };
+        }
+        return timer;
+      });
+    const command = runMeasuredCommand({
       cwd: repoRoot,
       env: process.env,
       logDir,
@@ -1048,8 +1278,8 @@ process.exit(7);
         [
           "const fs = require('node:fs');",
           "const marker = process.argv[1];",
-          "fs.writeFileSync(marker, 'start\\n');",
           "process.on('SIGTERM', () => fs.appendFileSync(marker, 'term\\n'));",
+          "fs.writeFileSync(marker, 'start\\n');",
           "setInterval(() => fs.appendFileSync(marker, 'tick\\n'), 1);",
         ].join(""),
         markerPath,
@@ -1059,6 +1289,19 @@ process.exit(7);
       timeoutMs: 100,
       timeoutKillGraceMs: 10,
     });
+    let row: Awaited<ReturnType<typeof runMeasuredCommand>>;
+    try {
+      await withTestTimeout(ready, 5_000, "measured process fixture did not become ready");
+      watcher.close();
+      timerSpy.mockRestore();
+      expectDefined(fireDeadline, "command deadline should be armed before readiness")();
+      row = await command;
+    } finally {
+      watcher.close();
+      timerSpy.mockRestore();
+      fireDeadline?.();
+      await command;
+    }
 
     expect(row.status).toBe(1);
     expect(row.timedOut).toBe(true);
@@ -1076,7 +1319,9 @@ process.exit(7);
     const result = spawnSync(
       process.execPath,
       [
-        path.resolve("scripts/check-plugin-gateway-gauntlet.mjs"),
+        "--import",
+        tsxImport,
+        path.resolve("scripts/check-plugin-gateway-gauntlet.mts"),
         "--repo-root",
         repoRoot,
         "--output-dir",
@@ -1097,21 +1342,32 @@ process.exit(7);
     const summary = JSON.parse(
       await fs.readFile(path.join(outputDir, "plugin-gateway-gauntlet-summary.json"), "utf8"),
     );
-    expect(summary.guardFailures).toEqual([
-      expect.objectContaining({
-        kind: "empty-run",
-      }),
-    ]);
-    expect(summary.isolatedRunRootPreserved).toBe(true);
-    await expect(fs.stat(summary.isolatedRunRoot)).resolves.toBeTruthy();
-    await fs.rm(summary.isolatedRunRoot, { recursive: true, force: true });
+    try {
+      expect(summary.guardFailures).toEqual([
+        expect.objectContaining({
+          kind: "empty-run",
+        }),
+      ]);
+      expect(summary.isolatedRunRootPreserved).toBe(true);
+      await expect(fs.stat(summary.isolatedRunRoot)).resolves.toBeTruthy();
+      const config = JSON.parse(
+        await fs.readFile(path.join(summary.isolatedRunRoot, "state", "openclaw.json"), "utf8"),
+      );
+      expect(config).toMatchObject({
+        logging: { file: path.join(summary.isolatedRunRoot, "logs", "openclaw.log") },
+      });
+    } finally {
+      await fs.rm(summary.isolatedRunRoot, { recursive: true, force: true });
+    }
   });
 
   it("rejects non-decimal gauntlet numeric options", () => {
     const result = spawnSync(
       process.execPath,
       [
-        path.resolve("scripts/check-plugin-gateway-gauntlet.mjs"),
+        "--import",
+        tsxImport,
+        path.resolve("scripts/check-plugin-gateway-gauntlet.mts"),
         "--skip-prebuild",
         "--skip-lifecycle",
         "--skip-slash-help",
@@ -1133,7 +1389,7 @@ process.exit(7);
   it("documents gauntlet guardrail options and env defaults in help", () => {
     const result = spawnSync(
       process.execPath,
-      [path.resolve("scripts/check-plugin-gateway-gauntlet.mjs"), "--help"],
+      ["--import", tsxImport, path.resolve("scripts/check-plugin-gateway-gauntlet.mts"), "--help"],
       {
         cwd: path.resolve("."),
         encoding: "utf8",
@@ -1167,7 +1423,9 @@ process.exit(7);
     const result = spawnSync(
       process.execPath,
       [
-        path.resolve("scripts/check-plugin-gateway-gauntlet.mjs"),
+        "--import",
+        tsxImport,
+        path.resolve("scripts/check-plugin-gateway-gauntlet.mts"),
         "--repo-root",
         repoRoot,
         "--output-dir",
@@ -1209,7 +1467,9 @@ process.exit(7);
     const result = spawnSync(
       process.execPath,
       [
-        path.resolve("scripts/check-plugin-gateway-gauntlet.mjs"),
+        "--import",
+        tsxImport,
+        path.resolve("scripts/check-plugin-gateway-gauntlet.mts"),
         "--repo-root",
         repoRoot,
         "--output-dir",
@@ -1297,7 +1557,9 @@ process.exit(7);
     const result = spawnSync(
       process.execPath,
       [
-        path.resolve("scripts/check-plugin-gateway-gauntlet.mjs"),
+        "--import",
+        tsxImport,
+        path.resolve("scripts/check-plugin-gateway-gauntlet.mts"),
         "--repo-root",
         repoRoot,
         "--output-dir",
@@ -1328,7 +1590,9 @@ process.exit(7);
     const result = spawnSync(
       process.execPath,
       [
-        path.resolve("scripts/check-plugin-gateway-gauntlet.mjs"),
+        "--import",
+        tsxImport,
+        path.resolve("scripts/check-plugin-gateway-gauntlet.mts"),
         "--repo-root",
         repoRoot,
         "--output-dir",
@@ -1410,7 +1674,9 @@ process.exit(7);
     const result = spawnSync(
       process.execPath,
       [
-        path.resolve("scripts/check-plugin-gateway-gauntlet.mjs"),
+        "--import",
+        tsxImport,
+        path.resolve("scripts/check-plugin-gateway-gauntlet.mts"),
         "--repo-root",
         repoRoot,
         "--output-dir",
@@ -1511,7 +1777,9 @@ process.exit(7);
     const result = spawnSync(
       process.execPath,
       [
-        path.resolve("scripts/check-plugin-gateway-gauntlet.mjs"),
+        "--import",
+        tsxImport,
+        path.resolve("scripts/check-plugin-gateway-gauntlet.mts"),
         "--repo-root",
         repoRoot,
         "--output-dir",
@@ -1559,7 +1827,9 @@ process.exit(7);
     const result = spawnSync(
       process.execPath,
       [
-        path.resolve("scripts/check-plugin-gateway-gauntlet.mjs"),
+        "--import",
+        tsxImport,
+        path.resolve("scripts/check-plugin-gateway-gauntlet.mts"),
         "--repo-root",
         repoRoot,
         "--output-dir",
@@ -1593,425 +1863,132 @@ process.exit(7);
   });
 
   it("fails successful QA chunks whose summary reports failed scenarios", async () => {
-    const outputDir = path.join(repoRoot, "artifacts");
-    const qaSummaryJson = JSON.stringify({
-      counts: { failed: 1, passed: 1, total: 2 },
-      metrics: { gatewayCpuCoreRatio: 0, wallMs: 1 },
-      run: {
-        concurrency: 1,
-        fastMode: false,
-        finishedAt: "2026-05-30T00:00:01.000Z",
-        primaryModel: "mock-openai/gpt-5.5",
-        primaryModelName: "gpt-5.5",
-        primaryProvider: "mock-openai",
-        providerMode: "mock-openai",
-        scenarioIds: ["channel-chat-baseline", "gateway-restart-inflight-run"],
-        startedAt: "2026-05-30T00:00:00.000Z",
+    await runQaSummaryFailureScenario({
+      qaSummary: {
+        counts: { failed: 1, passed: 1, total: 2 },
+        metrics: { gatewayCpuCoreRatio: 0, wallMs: 1 },
+        run: {
+          status: "completed",
+          concurrency: 1,
+          fastMode: false,
+          finishedAt: "2026-05-30T00:00:01.000Z",
+          primaryModel: "mock-openai/gpt-5.5",
+          primaryModelName: "gpt-5.5",
+          primaryProvider: "mock-openai",
+          providerMode: "mock-openai",
+          scenarioIds: ["channel-chat-baseline", "gateway-restart-inflight-run"],
+          startedAt: "2026-05-30T00:00:00.000Z",
+        },
+        scenarios: [
+          { name: "channel-chat-baseline", status: "pass", steps: [] },
+          { name: "gateway-restart-inflight-run", status: "fail", steps: [] },
+        ],
       },
-      scenarios: [
-        { name: "channel-chat-baseline", status: "pass", steps: [] },
-        { name: "gateway-restart-inflight-run", status: "fail", steps: [] },
-      ],
+      scenarioIds: ["channel-chat-baseline", "gateway-restart-inflight-run"],
+      diagnosticFailure: "qa-summary-failed-scenarios",
+      diagnosticDetail: "QA suite reported 1 failed scenario(s)",
+      rowAssertion: "metrics",
     });
-    await writeManifest("alpha", "openclaw.plugin.json", JSON.stringify({ id: "alpha" }));
-    await fs.writeFile(path.join(repoRoot, "extensions", "alpha", "index.ts"), "export {};\n");
-    await fs.mkdir(path.join(repoRoot, "scripts"), { recursive: true });
-    await fs.writeFile(
-      path.join(repoRoot, "scripts", "run-node.mjs"),
-      [
-        'import fs from "node:fs";',
-        'import path from "node:path";',
-        'const outputArgIndex = process.argv.indexOf("--output-dir");',
-        "const outputDir = path.resolve(process.cwd(), process.argv[outputArgIndex + 1]);",
-        "fs.mkdirSync(outputDir, { recursive: true });",
-        `fs.writeFileSync(path.join(outputDir, "qa-suite-summary.json"), ${JSON.stringify(qaSummaryJson)}, "utf8");`,
-      ].join("\n"),
-      "utf8",
-    );
+  });
 
-    const result = spawnSync(
-      process.execPath,
-      [
-        path.resolve("scripts/check-plugin-gateway-gauntlet.mjs"),
-        "--repo-root",
-        repoRoot,
-        "--output-dir",
-        outputDir,
-        "--skip-prebuild",
-        "--skip-lifecycle",
-        "--skip-slash-help",
-        "--plugin",
-        "alpha",
-        "--qa-scenario",
-        "channel-chat-baseline",
-        "--qa-scenario",
-        "gateway-restart-inflight-run",
-      ],
-      {
-        cwd: path.resolve("."),
-        encoding: "utf8",
+  it("fails successful QA chunks whose summary is still running", async () => {
+    await runQaSummaryFailureScenario({
+      qaSummary: {
+        counts: { failed: 0, passed: 1, total: 1 },
+        run: { status: "running" },
+        scenarios: [
+          {
+            name: "channel-chat-baseline",
+            status: "pass",
+            steps: [{ name: "reply", status: "pass" }],
+          },
+        ],
       },
-    );
-
-    expect(result.status, result.stdout).toBe(1);
-    expect(result.stdout).toContain("diagnostic=qa-summary-failed-scenarios");
-    const summary = JSON.parse(
-      await fs.readFile(path.join(outputDir, "plugin-gateway-gauntlet-summary.json"), "utf8"),
-    );
-    expect(summary.failures).toEqual([
-      expect.objectContaining({
-        diagnosticDetail: "QA suite reported 1 failed scenario(s)",
-        diagnosticFailure: "qa-summary-failed-scenarios",
-        phase: "qa:rpc",
-        pluginId: "alpha",
-        status: 0,
-      }),
-    ]);
-    expect(summary.rows[0]).toEqual(
-      expect.objectContaining({
-        diagnosticFailure: "qa-summary-failed-scenarios",
-        qaMetrics: { gatewayCpuCoreRatio: 0, wallMs: 1 },
-      }),
-    );
-    expect(summary.isolatedRunRootPreserved).toBe(true);
-    await fs.rm(summary.isolatedRunRoot, { recursive: true, force: true });
+      scenarioIds: ["channel-chat-baseline"],
+      diagnosticFailure: "qa-summary-invalid",
+      diagnosticDetail: "QA suite summary run.status must be completed, got running",
+    });
   });
 
   it("fails successful QA chunks whose passed scenarios have no step evidence", async () => {
-    const outputDir = path.join(repoRoot, "artifacts");
-    const qaSummaryJson = JSON.stringify({
-      counts: { failed: 0, passed: 1, total: 1 },
-      metrics: { gatewayCpuCoreRatio: 0, wallMs: 1 },
-      run: {
-        concurrency: 1,
-        fastMode: false,
-        finishedAt: "2026-05-30T00:00:01.000Z",
-        primaryModel: "mock-openai/gpt-5.5",
-        primaryModelName: "gpt-5.5",
-        primaryProvider: "mock-openai",
-        providerMode: "mock-openai",
-        scenarioIds: ["channel-chat-baseline"],
-        startedAt: "2026-05-30T00:00:00.000Z",
+    await runQaSummaryFailureScenario({
+      qaSummary: {
+        counts: { failed: 0, passed: 1, total: 1 },
+        metrics: { gatewayCpuCoreRatio: 0, wallMs: 1 },
+        run: {
+          status: "completed",
+          concurrency: 1,
+          fastMode: false,
+          finishedAt: "2026-05-30T00:00:01.000Z",
+          primaryModel: "mock-openai/gpt-5.5",
+          primaryModelName: "gpt-5.5",
+          primaryProvider: "mock-openai",
+          providerMode: "mock-openai",
+          scenarioIds: ["channel-chat-baseline"],
+          startedAt: "2026-05-30T00:00:00.000Z",
+        },
+        scenarios: [{ name: "channel-chat-baseline", status: "pass", steps: [] }],
       },
-      scenarios: [{ name: "channel-chat-baseline", status: "pass", steps: [] }],
+      scenarioIds: ["channel-chat-baseline"],
+      diagnosticFailure: "qa-summary-invalid",
+      diagnosticDetail:
+        "QA suite summary passed scenario has no step evidence: channel-chat-baseline",
     });
-    await writeManifest("alpha", "openclaw.plugin.json", JSON.stringify({ id: "alpha" }));
-    await fs.writeFile(path.join(repoRoot, "extensions", "alpha", "index.ts"), "export {};\n");
-    await fs.mkdir(path.join(repoRoot, "scripts"), { recursive: true });
-    await fs.writeFile(
-      path.join(repoRoot, "scripts", "run-node.mjs"),
-      [
-        'import fs from "node:fs";',
-        'import path from "node:path";',
-        'const outputArgIndex = process.argv.indexOf("--output-dir");',
-        "const outputDir = path.resolve(process.cwd(), process.argv[outputArgIndex + 1]);",
-        "fs.mkdirSync(outputDir, { recursive: true });",
-        `fs.writeFileSync(path.join(outputDir, "qa-suite-summary.json"), ${JSON.stringify(qaSummaryJson)}, "utf8");`,
-      ].join("\n"),
-      "utf8",
-    );
-
-    const result = spawnSync(
-      process.execPath,
-      [
-        path.resolve("scripts/check-plugin-gateway-gauntlet.mjs"),
-        "--repo-root",
-        repoRoot,
-        "--output-dir",
-        outputDir,
-        "--skip-prebuild",
-        "--skip-lifecycle",
-        "--skip-slash-help",
-        "--plugin",
-        "alpha",
-        "--qa-scenario",
-        "channel-chat-baseline",
-      ],
-      {
-        cwd: path.resolve("."),
-        encoding: "utf8",
-      },
-    );
-
-    expect(result.status, result.stdout).toBe(1);
-    expect(result.stdout).toContain("diagnostic=qa-summary-invalid");
-    const summary = JSON.parse(
-      await fs.readFile(path.join(outputDir, "plugin-gateway-gauntlet-summary.json"), "utf8"),
-    );
-    expect(summary.failures).toEqual([
-      expect.objectContaining({
-        diagnosticDetail:
-          "QA suite summary passed scenario has no step evidence: channel-chat-baseline",
-        diagnosticFailure: "qa-summary-invalid",
-        phase: "qa:rpc",
-        pluginId: "alpha",
-        status: 0,
-      }),
-    ]);
-    expect(summary.isolatedRunRootPreserved).toBe(true);
-    await fs.rm(summary.isolatedRunRoot, { recursive: true, force: true });
   });
 
   it("fails successful QA chunks whose scenario statuses disagree with counts", async () => {
-    const outputDir = path.join(repoRoot, "artifacts");
-    const qaSummaryJson = JSON.stringify({
-      counts: { failed: 0, passed: 1, total: 2 },
-      metrics: { gatewayCpuCoreRatio: 0, wallMs: 1 },
-      run: {
-        concurrency: 1,
-        fastMode: false,
-        finishedAt: "2026-05-30T00:00:01.000Z",
-        primaryModel: "mock-openai/gpt-5.5",
-        primaryModelName: "gpt-5.5",
-        primaryProvider: "mock-openai",
-        providerMode: "mock-openai",
-        scenarioIds: ["channel-chat-baseline", "gateway-restart-inflight-run"],
-        startedAt: "2026-05-30T00:00:00.000Z",
+    await runQaSummaryFailureScenario({
+      qaSummary: {
+        counts: { failed: 0, passed: 1, total: 2 },
+        metrics: { gatewayCpuCoreRatio: 0, wallMs: 1 },
+        run: {
+          status: "completed",
+          concurrency: 1,
+          fastMode: false,
+          finishedAt: "2026-05-30T00:00:01.000Z",
+          primaryModel: "mock-openai/gpt-5.5",
+          primaryModelName: "gpt-5.5",
+          primaryProvider: "mock-openai",
+          providerMode: "mock-openai",
+          scenarioIds: ["channel-chat-baseline", "gateway-restart-inflight-run"],
+          startedAt: "2026-05-30T00:00:00.000Z",
+        },
+        scenarios: [
+          { name: "channel-chat-baseline", status: "pass", steps: [] },
+          { name: "gateway-restart-inflight-run", status: "fail", steps: [] },
+        ],
       },
-      scenarios: [
-        { name: "channel-chat-baseline", status: "pass", steps: [] },
-        { name: "gateway-restart-inflight-run", status: "fail", steps: [] },
-      ],
+      scenarioIds: ["channel-chat-baseline", "gateway-restart-inflight-run"],
+      diagnosticFailure: "qa-summary-invalid",
+      diagnosticDetail:
+        "QA suite summary failed count mismatch: counts.failed=0, failed scenarios=1",
     });
-    await writeManifest("alpha", "openclaw.plugin.json", JSON.stringify({ id: "alpha" }));
-    await fs.writeFile(path.join(repoRoot, "extensions", "alpha", "index.ts"), "export {};\n");
-    await fs.mkdir(path.join(repoRoot, "scripts"), { recursive: true });
-    await fs.writeFile(
-      path.join(repoRoot, "scripts", "run-node.mjs"),
-      [
-        'import fs from "node:fs";',
-        'import path from "node:path";',
-        'const outputArgIndex = process.argv.indexOf("--output-dir");',
-        "const outputDir = path.resolve(process.cwd(), process.argv[outputArgIndex + 1]);",
-        "fs.mkdirSync(outputDir, { recursive: true });",
-        `fs.writeFileSync(path.join(outputDir, "qa-suite-summary.json"), ${JSON.stringify(qaSummaryJson)}, "utf8");`,
-      ].join("\n"),
-      "utf8",
-    );
-
-    const result = spawnSync(
-      process.execPath,
-      [
-        path.resolve("scripts/check-plugin-gateway-gauntlet.mjs"),
-        "--repo-root",
-        repoRoot,
-        "--output-dir",
-        outputDir,
-        "--skip-prebuild",
-        "--skip-lifecycle",
-        "--skip-slash-help",
-        "--plugin",
-        "alpha",
-        "--qa-scenario",
-        "channel-chat-baseline",
-        "--qa-scenario",
-        "gateway-restart-inflight-run",
-      ],
-      {
-        cwd: path.resolve("."),
-        encoding: "utf8",
-      },
-    );
-
-    expect(result.status, result.stdout).toBe(1);
-    expect(result.stdout).toContain("diagnostic=qa-summary-invalid");
-    const summary = JSON.parse(
-      await fs.readFile(path.join(outputDir, "plugin-gateway-gauntlet-summary.json"), "utf8"),
-    );
-    expect(summary.failures).toEqual([
-      expect.objectContaining({
-        diagnosticDetail:
-          "QA suite summary failed count mismatch: counts.failed=0, failed scenarios=1",
-        diagnosticFailure: "qa-summary-invalid",
-        phase: "qa:rpc",
-        pluginId: "alpha",
-        status: 0,
-      }),
-    ]);
-    expect(summary.isolatedRunRootPreserved).toBe(true);
-    await fs.rm(summary.isolatedRunRoot, { recursive: true, force: true });
   });
 
   it("fails successful QA chunks that do not write the requested summary", async () => {
-    const outputDir = path.join(repoRoot, "artifacts");
-    await writeManifest("alpha", "openclaw.plugin.json", JSON.stringify({ id: "alpha" }));
-    await fs.writeFile(path.join(repoRoot, "extensions", "alpha", "index.ts"), "export {};\n");
-    await fs.mkdir(path.join(repoRoot, "scripts"), { recursive: true });
-    await fs.writeFile(
-      path.join(repoRoot, "scripts", "run-node.mjs"),
-      [
-        'import fs from "node:fs";',
-        'import path from "node:path";',
-        'const outputArgIndex = process.argv.indexOf("--output-dir");',
-        "const outputDir = path.resolve(process.cwd(), process.argv[outputArgIndex + 1]);",
-        "fs.mkdirSync(outputDir, { recursive: true });",
-        'console.log("fake QA completed without writing qa-suite-summary.json");',
-      ].join("\n"),
-      "utf8",
-    );
-
-    const result = spawnSync(
-      process.execPath,
-      [
-        path.resolve("scripts/check-plugin-gateway-gauntlet.mjs"),
-        "--repo-root",
-        repoRoot,
-        "--output-dir",
-        outputDir,
-        "--skip-prebuild",
-        "--skip-lifecycle",
-        "--skip-slash-help",
-        "--plugin",
-        "alpha",
-        "--qa-scenario",
-        "channel-chat-baseline",
-      ],
-      {
-        cwd: path.resolve("."),
-        encoding: "utf8",
-      },
-    );
-
-    expect(result.status, result.stdout).toBe(1);
-    expect(result.stdout).toContain("diagnostic=qa-summary-missing");
-    const summary = JSON.parse(
-      await fs.readFile(path.join(outputDir, "plugin-gateway-gauntlet-summary.json"), "utf8"),
-    );
-    expect(summary.failures).toEqual([
-      expect.objectContaining({
-        diagnosticFailure: "qa-summary-missing",
-        phase: "qa:rpc",
-        pluginId: "alpha",
-        status: 0,
-      }),
-    ]);
-    expect(summary.rows[0]).toEqual(
-      expect.objectContaining({
-        diagnosticFailure: "qa-summary-missing",
-        qaSummaryPath: path.join(outputDir, "qa-suite", "chunk-00", "qa-suite-summary.json"),
-      }),
-    );
-    expect(summary.isolatedRunRootPreserved).toBe(true);
-    await fs.rm(summary.isolatedRunRoot, { recursive: true, force: true });
+    await runQaSummaryFailureScenario({
+      scenarioIds: ["channel-chat-baseline"],
+      diagnosticFailure: "qa-summary-missing",
+      rowAssertion: "missing",
+    });
   });
 
   it("fails successful QA chunks that write unusable summary JSON", async () => {
-    const outputDir = path.join(repoRoot, "artifacts");
-    await writeManifest("alpha", "openclaw.plugin.json", JSON.stringify({ id: "alpha" }));
-    await fs.writeFile(path.join(repoRoot, "extensions", "alpha", "index.ts"), "export {};\n");
-    await fs.mkdir(path.join(repoRoot, "scripts"), { recursive: true });
-    await fs.writeFile(
-      path.join(repoRoot, "scripts", "run-node.mjs"),
-      [
-        'import fs from "node:fs";',
-        'import path from "node:path";',
-        'const outputArgIndex = process.argv.indexOf("--output-dir");',
-        "const outputDir = path.resolve(process.cwd(), process.argv[outputArgIndex + 1]);",
-        "fs.mkdirSync(outputDir, { recursive: true });",
-        'fs.writeFileSync(path.join(outputDir, "qa-suite-summary.json"), "{}", "utf8");',
-      ].join("\n"),
-      "utf8",
-    );
-
-    const result = spawnSync(
-      process.execPath,
-      [
-        path.resolve("scripts/check-plugin-gateway-gauntlet.mjs"),
-        "--repo-root",
-        repoRoot,
-        "--output-dir",
-        outputDir,
-        "--skip-prebuild",
-        "--skip-lifecycle",
-        "--skip-slash-help",
-        "--plugin",
-        "alpha",
-        "--qa-scenario",
-        "channel-chat-baseline",
-      ],
-      {
-        cwd: path.resolve("."),
-        encoding: "utf8",
-      },
-    );
-
-    expect(result.status, result.stdout).toBe(1);
-    expect(result.stdout).toContain("diagnostic=qa-summary-invalid");
-    const summary = JSON.parse(
-      await fs.readFile(path.join(outputDir, "plugin-gateway-gauntlet-summary.json"), "utf8"),
-    );
-    expect(summary.failures).toEqual([
-      expect.objectContaining({
-        diagnosticDetail: "QA suite summary missing scenarios array",
-        diagnosticFailure: "qa-summary-invalid",
-        phase: "qa:rpc",
-        pluginId: "alpha",
-        status: 0,
-      }),
-    ]);
-    expect(summary.isolatedRunRootPreserved).toBe(true);
-    await fs.rm(summary.isolatedRunRoot, { recursive: true, force: true });
+    await runQaSummaryFailureScenario({
+      qaSummary: {},
+      scenarioIds: ["channel-chat-baseline"],
+      diagnosticFailure: "qa-summary-invalid",
+      diagnosticDetail: "QA suite summary missing scenarios array",
+    });
   });
 
   it("fails successful QA chunks that write oversized summary JSON", async () => {
-    const outputDir = path.join(repoRoot, "artifacts");
-    await writeManifest("alpha", "openclaw.plugin.json", JSON.stringify({ id: "alpha" }));
-    await fs.writeFile(path.join(repoRoot, "extensions", "alpha", "index.ts"), "export {};\n");
-    await fs.mkdir(path.join(repoRoot, "scripts"), { recursive: true });
-    await fs.writeFile(
-      path.join(repoRoot, "scripts", "run-node.mjs"),
-      [
-        'import fs from "node:fs";',
-        'import path from "node:path";',
-        'const outputArgIndex = process.argv.indexOf("--output-dir");',
-        "const outputDir = path.resolve(process.cwd(), process.argv[outputArgIndex + 1]);",
-        "fs.mkdirSync(outputDir, { recursive: true });",
-        'fs.writeFileSync(path.join(outputDir, "qa-suite-summary.json"), JSON.stringify({ filler: "x".repeat(128) }), "utf8");',
-      ].join("\n"),
-      "utf8",
-    );
-
-    const result = spawnSync(
-      process.execPath,
-      [
-        path.resolve("scripts/check-plugin-gateway-gauntlet.mjs"),
-        "--repo-root",
-        repoRoot,
-        "--output-dir",
-        outputDir,
-        "--skip-prebuild",
-        "--skip-lifecycle",
-        "--skip-slash-help",
-        "--plugin",
-        "alpha",
-        "--qa-scenario",
-        "channel-chat-baseline",
-      ],
-      {
-        cwd: path.resolve("."),
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_QA_SUMMARY_MAX_BYTES: "64",
-        },
-      },
-    );
-
-    expect(result.status, result.stdout).toBe(1);
-    expect(result.stdout).toContain("diagnostic=qa-summary-invalid");
-    const summary = JSON.parse(
-      await fs.readFile(path.join(outputDir, "plugin-gateway-gauntlet-summary.json"), "utf8"),
-    );
-    expect(summary.failures).toEqual([
-      expect.objectContaining({
-        diagnosticDetail: expect.stringContaining("QA suite summary exceeded 64 bytes"),
-        diagnosticFailure: "qa-summary-invalid",
-        phase: "qa:rpc",
-        pluginId: "alpha",
-        status: 0,
-      }),
-    ]);
-    expect(summary.isolatedRunRootPreserved).toBe(true);
-    await fs.rm(summary.isolatedRunRoot, { recursive: true, force: true });
+    await runQaSummaryFailureScenario({
+      qaSummary: { filler: "x".repeat(128) },
+      scenarioIds: ["channel-chat-baseline"],
+      diagnosticFailure: "qa-summary-invalid",
+      diagnosticDetail: expect.stringContaining("QA suite summary exceeded 64 bytes"),
+      maxBytes: "64",
+    });
   });
 });

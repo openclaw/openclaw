@@ -28,6 +28,7 @@ import {
   hasRuntimeAvailableProviderAuth,
   resolveProviderEntryApiKeyProfileReference,
   resolveEnvApiKey,
+  type RuntimeProviderAuthLookup,
 } from "../model-auth.js";
 import { resolveConfiguredModelRef } from "../model-selection.js";
 
@@ -41,6 +42,28 @@ type OpenAiImageMediaCandidateDecision =
   | { kind: "keep"; ref: string }
   | { kind: "substitute"; ref: string; provider: string }
   | { kind: "drop" };
+
+export function applyAgentDefaultModelConfig(
+  cfg: OpenClawConfig | undefined,
+  key: "imageModel" | "image" | "video" | "music",
+  modelConfig: ToolModelConfig,
+): OpenClawConfig | undefined {
+  if (!cfg) {
+    return undefined;
+  }
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        ...(key === "imageModel"
+          ? { imageModel: modelConfig }
+          : { mediaModels: { ...cfg.agents?.defaults?.mediaModels, [key]: modelConfig } }),
+      },
+    },
+  };
+}
 
 /** Returns whether a tool model config contains a primary or fallback model ref. */
 export function hasToolModelConfig(model: ToolModelConfig | undefined): boolean {
@@ -69,12 +92,14 @@ export function hasAuthForProvider(params: {
   workspaceDir?: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
+  runtimeLookup?: RuntimeProviderAuthLookup;
 }): boolean {
   // Env-key resolution is config/workspace aware: plugin-provider env candidates
   // come from the metadata snapshot resolved for this config. Non-bundled or
   // config-scoped provider plugins are invisible without it, so a config-blind
   // lookup would wrongly report "no auth" for env-key providers.
   if (
+    !params.runtimeLookup &&
     resolveEnvApiKey(params.provider, undefined, {
       config: params.cfg,
       workspaceDir: params.workspaceDir,
@@ -131,6 +156,7 @@ export function hasProviderAuthForTool(params: {
   workspaceDir?: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
+  runtimeLookup?: RuntimeProviderAuthLookup;
 }): boolean {
   if (
     hasRuntimeAvailableProviderAuth({
@@ -138,22 +164,27 @@ export function hasProviderAuthForTool(params: {
       cfg: params.cfg,
       workspaceDir: params.workspaceDir,
       allowPluginSyntheticAuth: false,
+      runtimeLookup: params.runtimeLookup,
+      // Without the store, inline provider keys in billing cooldown would
+      // still be advertised as available to model-backed tools.
+      store: loadAuthStoreForProvider({
+        provider: params.provider,
+        cfg: params.cfg,
+        agentDir: params.agentDir,
+        authStore: params.authStore,
+      }),
     })
   ) {
     return true;
   }
-  if (
-    hasAuthForProvider({
-      provider: params.provider,
-      cfg: params.cfg,
-      workspaceDir: params.workspaceDir,
-      agentDir: params.agentDir,
-      authStore: params.authStore,
-    })
-  ) {
-    return true;
-  }
-  return false;
+  return hasAuthForProvider({
+    provider: params.provider,
+    cfg: params.cfg,
+    workspaceDir: params.workspaceDir,
+    agentDir: params.agentDir,
+    authStore: params.authStore,
+    runtimeLookup: params.runtimeLookup,
+  });
 }
 
 function formatProviderModelRef(provider: string, model: string): string {
@@ -259,6 +290,14 @@ function hasDirectProviderApiKeyAuthForTool(params: {
       workspaceDir: params.workspaceDir,
       modelApi: params.modelApi,
       allowPluginSyntheticAuth: false,
+      // Without the store, inline provider keys in billing cooldown would
+      // still be advertised as direct API-key auth for tools.
+      store: loadAuthStoreForProvider({
+        provider: params.provider,
+        cfg: params.cfg,
+        agentDir: params.agentDir,
+        authStore: params.authStore,
+      }),
     })
   ) {
     return true;
@@ -270,12 +309,6 @@ function hasDirectProviderApiKeyAuthForTool(params: {
     authStore: params.authStore,
     type: "api_key",
   });
-}
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.modelConfigHelpersTestApi")] = {
-    hasDirectProviderApiKeyAuthForTool,
-  };
 }
 
 function hasCanonicalOpenAiCodexAuthSignal(params: {

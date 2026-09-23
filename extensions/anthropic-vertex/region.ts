@@ -5,9 +5,11 @@
 import { homedir, platform } from "node:os";
 import { join } from "node:path";
 import type { GoogleAuthOptions } from "google-auth-library";
-import { resolveProviderEndpoint } from "openclaw/plugin-sdk/provider-http";
 import { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString as normalizeOptionalSecretInput,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const ANTHROPIC_VERTEX_DEFAULT_REGION = "global";
 const ANTHROPIC_VERTEX_REGION_RE = /^[a-z0-9-]+$/;
@@ -18,14 +20,6 @@ type AnthropicVertexAdcCredentials = NonNullable<GoogleAuthOptions["credentials"
   project_id?: unknown;
   quota_project_id?: unknown;
 };
-
-function normalizeOptionalSecretInput(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed || undefined;
-}
 
 /** Resolve the configured Vertex region, defaulting to global. */
 export function resolveAnthropicVertexRegion(env: NodeJS.ProcessEnv = process.env): string {
@@ -47,23 +41,6 @@ export function resolveAnthropicVertexProjectId(
     normalizeOptionalSecretInput(env.GOOGLE_CLOUD_PROJECT) ||
     normalizeOptionalSecretInput(env.GOOGLE_CLOUD_PROJECT_ID) ||
     resolveAnthropicVertexProjectIdFromAdc(env)
-  );
-}
-
-/** Extract a Vertex region from a provider base URL when possible. */
-export function resolveAnthropicVertexRegionFromBaseUrl(baseUrl?: string): string | undefined {
-  const endpoint = resolveProviderEndpoint(baseUrl);
-  return endpoint.endpointClass === "google-vertex" ? endpoint.googleVertexRegion : undefined;
-}
-
-/** Resolve the client region from model base URL first, then env fallback. */
-export function resolveAnthropicVertexClientRegion(params?: {
-  baseUrl?: string;
-  env?: NodeJS.ProcessEnv;
-}): string {
-  return (
-    resolveAnthropicVertexRegionFromBaseUrl(params?.baseUrl) ||
-    resolveAnthropicVertexRegion(params?.env)
   );
 }
 

@@ -1,0 +1,90 @@
+.command-lanes-table-wrap {
+  max-height: 420px;
+}
+
+.command-lanes-table td {
+  font-variant-numeric: tabular-nums;
+}
+
+.command-lanes-table .command-lane-row--queued {
+  background: var(--warn-subtle);
+}
+
+.command-lanes-table .command-lane-row--saturated {
+  background: var(--danger-subtle);
+}
+
+.command-lane-row__name {
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+  .command-lanes-table-wrap {
+    max-height: none;
+  }
+
+  .settings-table--stacked .command-lane-row__name {
+    max-width: none;
+    white-space: normal;
+  }
+}
+
+.debug-overlay__table-wrap {
+  max-height: 250px;
+  overflow: auto;
+}
+
+.command-lanes-table--compact {
+  font-size: 11px;
+}
+
+.command-lanes-table--compact th,
+.command-lanes-table--compact td {
+  padding: 6px 8px;
+}
+
+.debug-overlay__disks {
+  margin-top: 8px;
+}
+
+.debug-overlay__vitals-footer {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 10px;
+  text-align: right;
+}
+
+.debug-overlay__count,
+.debug-overlay__empty {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.debug-overlay__list {
+  display: grid;
+  gap: 5px;
+  margin: 8px 0 0;
+  padding: 0;
+  font-size: 11px;
+  list-style: none;
+}
+
+.debug-overlay__list li {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.debug-overlay__events li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.debug-overlay__events time {
+  flex: none;
+  color: var(--muted);
+}

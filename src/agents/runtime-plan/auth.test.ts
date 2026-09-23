@@ -40,12 +40,26 @@ vi.mock("../../plugins/plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: pluginRegistryMocks.loadPluginMetadataSnapshot,
 }));
 
-import { resetProviderAuthAliasMapCacheForTest } from "../provider-auth-aliases.test-support.js";
+import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import { buildAgentRuntimeAuthPlan } from "./auth.js";
 
 describe("buildAgentRuntimeAuthPlan", () => {
+  it.each([
+    { provider: undefined, forwarded: "arcee:default" },
+    { provider: "", forwarded: undefined },
+  ])("distinguishes an omitted credential provider from '$provider'", ({ provider, forwarded }) => {
+    const plan = buildAgentRuntimeAuthPlan({
+      provider: "arcee",
+      authProfileProvider: provider,
+      sessionAuthProfileId: "arcee:default",
+      sessionAuthProfileSource: "user",
+      providerAuthAliasesEnabled: false,
+    });
+    expect(plan.forwardedAuthProfileId).toBe(forwarded);
+  });
+
   beforeEach(() => {
-    resetProviderAuthAliasMapCacheForTest();
+    clearPluginMetadataLifecycleCaches();
     pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReset();
     pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mockReset();
     pluginRegistryMocks.loadPluginRegistrySnapshot.mockReset();

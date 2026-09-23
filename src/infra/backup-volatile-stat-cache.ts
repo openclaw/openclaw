@@ -1,7 +1,4 @@
 import type { Stats } from "node:fs";
-import { isVolatileBackupPath } from "./backup-volatile-filter.js";
-
-type VolatileFilterPlan = Parameters<typeof isVolatileBackupPath>[1];
 
 const VOLATILE_BACKUP_SYNTHETIC_STAT = {
   isBlockDevice: () => false,
@@ -14,8 +11,17 @@ const VOLATILE_BACKUP_SYNTHETIC_STAT = {
 } as unknown as Stats;
 
 class BackupVolatileStatCache extends Map<string, Stats> {
-  constructor(private readonly volatilePlan: VolatileFilterPlan) {
+  constructor(private readonly isVolatilePath: (sourcePath: string) => boolean) {
     super();
+  }
+
+  override set(key: string, stat: Stats): this {
+    // Each archive name is an independent file. Project this before node-tar
+    // schedules pending hardlinks; suppressing link-cache writes can deadlock it.
+    if (stat.isFile()) {
+      stat.nlink = 1;
+    }
+    return super.set(key, stat);
   }
 
   override get(key: string): Stats | undefined {
@@ -25,14 +31,12 @@ class BackupVolatileStatCache extends Map<string, Stats> {
     }
     // node-tar consults this cache before lstat. Synthetic hits let known
     // volatile paths disappear during a live backup without aborting it.
-    return isVolatileBackupPath(key, this.volatilePlan)
-      ? VOLATILE_BACKUP_SYNTHETIC_STAT
-      : undefined;
+    return this.isVolatilePath(key) ? VOLATILE_BACKUP_SYNTHETIC_STAT : undefined;
   }
 }
 
 export function createBackupVolatileStatCache(
-  volatilePlan: VolatileFilterPlan,
+  isVolatilePath: (sourcePath: string) => boolean,
 ): Map<string, Stats> {
-  return new BackupVolatileStatCache(volatilePlan);
+  return new BackupVolatileStatCache(isVolatilePath);
 }

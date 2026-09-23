@@ -1,9 +1,9 @@
-// Slack plugin module implements resolve channels behavior.
 import type { WebClient } from "@slack/web-api";
 import { resolveDirectoryAllowlistEntries } from "openclaw/plugin-sdk/directory-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createSlackLookupClient } from "./client.js";
-import { collectSlackCursorPages } from "./cursor-pages.js";
+import { collectSlackCursorPages, fetchSlackChannelListPage } from "./cursor-pages.js";
+import { resolveWorkspaceQualifiedSlackTarget } from "./target-parsing.js";
 
 export type SlackChannelLookup = {
   id: string;
@@ -41,13 +41,7 @@ function parseSlackChannelMention(raw: string): { id?: string; name?: string } {
 
 async function listSlackChannels(client: WebClient): Promise<SlackChannelLookup[]> {
   return collectSlackCursorPages({
-    fetchPage: (cursor) =>
-      client.conversations.list({
-        types: "public_channel,private_channel",
-        exclude_archived: false,
-        limit: 1000,
-        cursor,
-      }),
+    fetchPage: (cursor) => fetchSlackChannelListPage(client, cursor),
     collectPageItems: (res) =>
       (res.channels ?? [])
         .map((channel) => {
@@ -90,26 +84,35 @@ export async function resolveSlackChannelAllowlist(params: {
   entries: string[];
   client?: WebClient;
 }): Promise<SlackChannelResolution[]> {
-  const parsedEntries = params.entries.map((input) => ({
+  const workspaceResolved = params.entries.map((input) =>
+    resolveWorkspaceQualifiedSlackTarget(input, "channel"),
+  );
+  const lookupEntries = params.entries.filter((_, index) => !workspaceResolved[index]);
+  if (lookupEntries.length === 0) {
+    return workspaceResolved.filter((entry) => entry !== undefined);
+  }
+  const parsedEntries = lookupEntries.map((input) => ({
     input,
     parsed: parseSlackChannelMention(input),
   }));
   if (parsedEntries.every((entry) => Boolean(entry.parsed.id))) {
-    return parsedEntries.map(({ input, parsed }) => ({
+    const resolved = parsedEntries.map(({ input, parsed }) => ({
       input,
       resolved: true,
       id: parsed.id,
       name: parsed.name,
     }));
+    let resolvedIndex = 0;
+    return workspaceResolved.map((entry) => entry ?? resolved[resolvedIndex++]!);
   }
   const client = params.client ?? createSlackLookupClient(params.token);
   const channels = await listSlackChannels(client);
-  return resolveDirectoryAllowlistEntries<
+  const resolved = resolveDirectoryAllowlistEntries<
     { id?: string; name?: string },
     SlackChannelLookup,
     SlackChannelResolution
   >({
-    entries: params.entries,
+    entries: lookupEntries,
     lookup: channels,
     parseInput: parseSlackChannelMention,
     findById: (lookup, id) => lookup.find((channel) => channel.id === id),
@@ -138,4 +141,6 @@ export async function resolveSlackChannelAllowlist(params: {
     },
     buildUnresolved: (input) => ({ input, resolved: false }),
   });
+  let resolvedIndex = 0;
+  return workspaceResolved.map((entry) => entry ?? resolved[resolvedIndex++]!);
 }

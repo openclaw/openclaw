@@ -32,10 +32,6 @@ let isWSL2Sync: typeof import("./wsl.js").isWSL2Sync;
 let isWSL: typeof import("./wsl.js").isWSL;
 let resetWSLStateForTests: typeof import("./wsl.js").resetWSLStateForTests;
 
-function setPlatform(platform: NodeJS.Platform): void {
-  mockProcessPlatform(platform);
-}
-
 describe("wsl detection", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
 
@@ -50,7 +46,7 @@ describe("wsl detection", () => {
     deleteTestEnvValue("WSLENV");
     readFileSyncMock.mockReset();
     readFileMock.mockReset();
-    setPlatform("linux");
+    mockProcessPlatform("linux");
     resetWSLStateForTests();
   });
 
@@ -103,7 +99,7 @@ describe("wsl detection", () => {
   });
 
   it("returns false for sync detection on non-linux platforms", () => {
-    setPlatform("darwin");
+    mockProcessPlatform("darwin");
     expect(isWSLSync()).toBe(false);
     expect(isWSL2Sync()).toBe(false);
     expect(readFileSyncMock).not.toHaveBeenCalled();
@@ -135,7 +131,7 @@ describe("wsl detection", () => {
   });
 
   it("returns false for async detection on non-linux platforms without reading osrelease", async () => {
-    setPlatform("win32");
+    mockProcessPlatform("win32");
     await expect(isWSL()).resolves.toBe(false);
     expect(readFileMock).not.toHaveBeenCalled();
   });

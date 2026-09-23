@@ -5,11 +5,11 @@ import { pruneMapToMaxSize } from "./map-size.js";
 
 /** Small in-memory TTL/LRU-style cache for replay and duplicate suppression. */
 export type DedupeCache = {
-  /** Returns true for a recent duplicate; records the key when it was not present. */
-  check: (key: string | undefined | null, now?: number) => boolean;
+  /** Returns true for a recent duplicate; records the key and optional owner when absent. */
+  check: (key: string | undefined | null, now?: number, ownerToken?: object) => boolean;
   /** Returns true for a recent duplicate without refreshing or recording the key. */
   peek: (key: string | undefined | null, now?: number) => boolean;
-  delete: (key: string | undefined | null) => void;
+  delete: (key: string | undefined | null, ownerToken?: object) => void;
   clear: () => void;
   size: () => number;
 };
@@ -27,24 +27,30 @@ export { resolveNonNegativeIntegerOption as resolveDedupeNonNegativeInteger };
 export function createDedupeCache(options: DedupeCacheOptions): DedupeCache {
   const ttlMs = resolveNonNegativeIntegerOption(options.ttlMs, 0);
   const maxSize = resolveNonNegativeIntegerOption(options.maxSize, 0);
-  const cache = new Map<string, number>();
-
-  const touch = (key: string, now: number) => {
-    cache.delete(key);
-    cache.set(key, now);
-  };
+  const cache = new Map<string, { ownerToken?: object; recordedAt: number }>();
+  // Removals may leave an earlier bound, which only causes an extra expiry scan.
+  let oldestRecordedAt = Number.POSITIVE_INFINITY;
+  let newestRecordedAt = Number.NEGATIVE_INFINITY;
+  let timestampsOrdered = true;
 
   const prune = (now: number) => {
     const cutoff = ttlMs > 0 ? now - ttlMs : undefined;
-    if (cutoff !== undefined) {
-      for (const [entryKey, entryTs] of cache) {
-        if (entryTs < cutoff) {
+    if (cutoff !== undefined && cutoff >= oldestRecordedAt) {
+      oldestRecordedAt = Number.POSITIVE_INFINITY;
+      for (const [entryKey, entry] of cache) {
+        if (entry.recordedAt <= cutoff) {
           cache.delete(entryKey);
+        } else if (entry.recordedAt < oldestRecordedAt) {
+          oldestRecordedAt = entry.recordedAt;
+          if (timestampsOrdered) {
+            break;
+          }
         }
       }
     }
     if (maxSize <= 0) {
       cache.clear();
+      oldestRecordedAt = Number.POSITIVE_INFINITY;
       return;
     }
     pruneMapToMaxSize(cache, maxSize);
@@ -52,30 +58,43 @@ export function createDedupeCache(options: DedupeCacheOptions): DedupeCache {
 
   const hasUnexpired = (key: string, now: number, touchOnRead: boolean): boolean => {
     const existing = cache.get(key);
-    if (existing === undefined) {
+    if (!existing) {
       return false;
     }
-    if (ttlMs > 0 && now - existing >= ttlMs) {
+    if (ttlMs > 0 && now - existing.recordedAt >= ttlMs) {
       cache.delete(key);
       return false;
     }
     if (touchOnRead) {
-      // check() refreshes recency so active duplicate bursts keep their key near the LRU tail.
-      touch(key, now);
+      // Keep the original claim owner while refreshing TTL and LRU recency.
+      existing.recordedAt = now;
+      cache.delete(key);
+      cache.set(key, existing);
     }
     return true;
   };
 
   return {
-    check: (key, now = Date.now()) => {
+    check: (key, now, ownerToken) => {
       if (!key) {
         return false;
       }
-      if (hasUnexpired(key, now, true)) {
+      const checkedAt = now ?? Date.now();
+      if (ttlMs > 0) {
+        if (checkedAt < oldestRecordedAt) {
+          oldestRecordedAt = checkedAt;
+        }
+        if (timestampsOrdered) {
+          // Touches move entries to the end; backward or NaN clocks need a full scan.
+          timestampsOrdered = checkedAt >= newestRecordedAt;
+          newestRecordedAt = checkedAt;
+        }
+      }
+      if (hasUnexpired(key, checkedAt, true)) {
         return true;
       }
-      touch(key, now);
-      prune(now);
+      cache.set(key, { recordedAt: checkedAt, ...(ownerToken ? { ownerToken } : {}) });
+      prune(checkedAt);
       return false;
     },
     peek: (key, now = Date.now()) => {
@@ -84,14 +103,20 @@ export function createDedupeCache(options: DedupeCacheOptions): DedupeCache {
       }
       return hasUnexpired(key, now, false);
     },
-    delete: (key) => {
+    delete: (key, ownerToken) => {
       if (!key) {
+        return;
+      }
+      if (ownerToken && cache.get(key)?.ownerToken !== ownerToken) {
         return;
       }
       cache.delete(key);
     },
     clear: () => {
       cache.clear();
+      oldestRecordedAt = Number.POSITIVE_INFINITY;
+      newestRecordedAt = Number.NEGATIVE_INFINITY;
+      timestampsOrdered = true;
     },
     size: () => cache.size,
   };

@@ -5,10 +5,22 @@ type SecretRefResolutionCode =
   | "SECRET_REF_NOT_FOUND"
   | "SECRET_REF_POLICY_DENIED"
   | "SECRET_REF_INVALID"
+  | "SECRET_REF_REDACTED_VALUE"
   | "SECRET_REF_PROVIDER_ERROR"
   | "SECRET_REF_PROVIDER_CONTRACT";
 
-type SecretProviderResolutionCode = "SECRET_PROVIDER_INVALID" | "SECRET_PROVIDER_UNAVAILABLE";
+type SecretProviderResolutionCode =
+  | "SECRET_PROVIDER_PATH_SECURITY_UNVERIFIABLE"
+  | "SECRET_PROVIDER_INVALID"
+  | "SECRET_PROVIDER_NOT_CONFIGURED"
+  | "SECRET_PROVIDER_UNAVAILABLE";
+
+export type SecretResolutionFailureReason =
+  | "secret provider failed"
+  | "secret provider policy denied resolution"
+  | "secret provider response violated its contract"
+  | "resolved secret value is a redaction placeholder"
+  | "secret reference was not found";
 
 /** Error for failures that affect an entire configured secret provider. */
 class SecretProviderResolutionError extends Error {
@@ -73,9 +85,14 @@ export function isSecretResolutionError(
 }
 
 /** Redacted reason suitable for warnings and status output. */
-export function describeSecretResolutionError(value: unknown): string | undefined {
+export function describeSecretResolutionError(
+  value: unknown,
+): SecretResolutionFailureReason | undefined {
   if (value instanceof SecretProviderResolutionError) {
-    return value.code === "SECRET_PROVIDER_UNAVAILABLE" ? "secret provider failed" : undefined;
+    return value.code === "SECRET_PROVIDER_UNAVAILABLE" ||
+      value.code === "SECRET_PROVIDER_PATH_SECURITY_UNVERIFIABLE"
+      ? "secret provider failed"
+      : undefined;
   }
   if (!(value instanceof SecretRefResolutionError)) {
     return undefined;
@@ -89,10 +106,42 @@ export function describeSecretResolutionError(value: unknown): string | undefine
       return "secret provider failed";
     case "SECRET_REF_PROVIDER_CONTRACT":
       return "secret provider response violated its contract";
+    case "SECRET_REF_REDACTED_VALUE":
+      return "resolved secret value is a redaction placeholder";
     case "SECRET_REF_INVALID":
       return undefined;
   }
   return undefined;
+}
+
+/** Sanitized provider detail suitable for operator-facing diagnostics. */
+export function describeSecretResolutionOperatorDiagnostic(value: unknown): string | undefined {
+  if (value instanceof SecretRefResolutionError && value.code === "SECRET_REF_REDACTED_VALUE") {
+    return `Secret reference "${value.source}:${value.provider}:${value.refId}" resolves to a redaction placeholder`;
+  }
+  if (
+    value instanceof SecretProviderResolutionError &&
+    value.code === "SECRET_PROVIDER_PATH_SECURITY_UNVERIFIABLE"
+  ) {
+    return "Windows path security could not be verified";
+  }
+  return undefined;
+}
+
+/** Sanitized recovery action suitable for operator-facing diagnostics. */
+export function describeSecretResolutionOperatorRecovery(value: unknown): string | undefined {
+  if (value instanceof SecretRefResolutionError && value.code === "SECRET_REF_REDACTED_VALUE") {
+    return "Run openclaw doctor --fix to repair a store-backed Gateway token; supply a real credential for other secrets, then restart the Gateway and reconnect or re-pair clients";
+  }
+  if (
+    !(value instanceof SecretProviderResolutionError) ||
+    value.code !== "SECRET_PROVIDER_PATH_SECURITY_UNVERIFIABLE"
+  ) {
+    return undefined;
+  }
+  return value.source === "exec"
+    ? "Restore Windows path security verification, or use an existing provider command whose owner and ACLs OpenClaw can verify"
+    : "Restore Windows path security verification, or use an existing secret file whose owner and ACLs OpenClaw can verify";
 }
 
 export function providerResolutionError(params: {

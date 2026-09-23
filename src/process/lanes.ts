@@ -2,9 +2,32 @@
 export const enum CommandLane {
   Main = "main",
   SystemAgent = "system-agent",
+  SystemAgentInference = "system-agent-inference",
   Cron = "cron",
   CronNested = "cron-nested",
-  SkillWorkshopReview = "skill-workshop-review",
+  /**
+   * External hook agent-run dispatch. Distinct from `cron-nested` so hook work
+   * is schedulable in its own right; capacity is bounded by the shared lane
+   * group rather than by adding a slot outside the cron budget.
+   */
+  HookDispatch = "hook-dispatch",
+  Background = "background",
   Subagent = "subagent",
+  ActiveMemory = "active-memory",
   Nested = "nested",
 }
+
+// Keep the exported diagnostics inventory closed so per-session lanes cannot
+// turn a saturation snapshot into an unbounded payload.
+export const STATIC_COMMAND_LANES = [
+  CommandLane.Main,
+  CommandLane.SystemAgent,
+  CommandLane.SystemAgentInference,
+  CommandLane.Cron,
+  CommandLane.CronNested,
+  CommandLane.HookDispatch,
+  CommandLane.Background,
+  CommandLane.Subagent,
+  CommandLane.ActiveMemory,
+  CommandLane.Nested,
+] as const;

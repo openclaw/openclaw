@@ -1,43 +1,29 @@
-import { definePage } from "@openclaw/uirouter";
+import type { RouteLocation } from "@openclaw/uirouter";
+import { definePage, redirect } from "@openclaw/uirouter";
 import { html } from "lit";
+import { pathForRoute, routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
-import { t } from "../../i18n/index.ts";
-import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
-import { consumeCachedModelSetupDetection } from "./detect-cache.ts";
 import type { ModelSetupRouteData } from "./model-setup-page.ts";
-import { detectModelSetup } from "./rpc.ts";
-
-async function loadModelSetupRouteData(context: ApplicationContext): Promise<ModelSetupRouteData> {
-  const snapshot = context.gateway.snapshot;
-  const client = snapshot.connected ? snapshot.client : null;
-  if (
-    !client ||
-    !hasOperatorAdminAccess(snapshot.hello?.auth ?? null) ||
-    isGatewayMethodAdvertised(snapshot, "openclaw.setup.detect") !== true
-  ) {
-    return { state: { phase: "loading" }, client };
-  }
-  const cached = consumeCachedModelSetupDetection(client);
-  if (cached) {
-    return { state: { phase: "ready", result: cached }, client };
-  }
-  try {
-    return { state: { phase: "ready", result: await detectModelSetup(client) }, client };
-  } catch (error) {
-    const message =
-      error instanceof Error && error.message.trim()
-        ? error.message
-        : t("modelSetup.errors.requestFailed");
-    return { state: { phase: "detect-error", message }, client };
-  }
-}
 
 export const page = definePage({
-  id: "model-setup",
-  path: "/settings/model-setup",
-  aliases: ["/model-setup"],
-  loader: loadModelSetupRouteData,
+  ...routePageSpec("model-setup"),
+  // Query-only first-run changes need distinct matches so the completion
+  // action cannot retain a cached destination from the previous visit.
+  loaderDeps: (_context: ApplicationContext, location: RouteLocation) => location.search,
+  loader: (context: ApplicationContext, { location }) => {
+    // First-run activation owns its consent/recovery receipt. Existing settings
+    // bookmarks instead open the one connection entry point on Models.
+    const firstRun = ["1", "explicit"].includes(
+      new URLSearchParams(location.search).get("firstRun") ?? "",
+    );
+    return firstRun
+      ? ({ firstRun } satisfies ModelSetupRouteData)
+      : redirect({
+          pathname: pathForRoute("model-providers", context.basePath),
+          search: "?connect=1",
+          hash: "",
+        });
+  },
   component: () =>
     import("./model-setup-page.ts").then(() => ({
       header: true,

@@ -3,6 +3,8 @@ import Foundation
 enum CommandResolver {
     private static let projectRootDefaultsKey = "openclaw.gatewayProjectRootPath"
     private static let helperName = "openclaw"
+    /// Version probes may queue under machine load; keep command resolution tolerant but bounded.
+    static let versionProbeTimeout: TimeInterval = 10
 
     static func gatewayEntrypoint(in root: URL) -> String? {
         let distEntry = root.appendingPathComponent("dist/index.js").path
@@ -14,22 +16,8 @@ enum CommandResolver {
         return nil
     }
 
-    static func runtimeResolution(searchPaths: [String]?) -> Result<RuntimeResolution, RuntimeResolutionError> {
-        RuntimeLocator.resolve(searchPaths: searchPaths ?? self.preferredPaths())
-    }
-
-    static func makeRuntimeCommand(
-        runtime: RuntimeResolution,
-        entrypoint: String,
-        subcommand: String,
-        extraArgs: [String]) -> [String]
-    {
-        [runtime.path, entrypoint, subcommand] + extraArgs
-    }
-
-    static func runtimeErrorCommand(_ error: RuntimeResolutionError) -> [String] {
-        let message = RuntimeLocator.describeFailure(error)
-        return self.errorCommand(with: message)
+    static func runtimeResolution(searchPaths: [String]?) async -> Result<RuntimeResolution, RuntimeResolutionError> {
+        await RuntimeLocator.resolve(searchPaths: searchPaths ?? self.preferredPaths())
     }
 
     static func errorCommand(with message: String) -> [String] {
@@ -42,23 +30,29 @@ enum CommandResolver {
         return ["/bin/sh", "-c", script]
     }
 
-    static func projectRoot() -> URL {
-        if let stored = UserDefaults.standard.string(forKey: projectRootDefaultsKey),
+    static func projectRoot(
+        defaults: UserDefaults = AppDefaults.standard,
+        profile: AppProfile = .current,
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser) -> URL
+    {
+        if let stored = defaults.string(forKey: projectRootDefaultsKey),
            let url = expandPath(stored),
            FileManager().fileExists(atPath: url.path)
         {
             return url
         }
-        let fallback = FileManager().homeDirectoryForCurrentUser
-            .appendingPathComponent("Projects/openclaw")
+        if profile.isActive {
+            return profile.stateDirectoryURL(homeDirectory: homeDirectory)
+        }
+        let fallback = homeDirectory.appendingPathComponent("Projects/openclaw")
         if FileManager().fileExists(atPath: fallback.path) {
             return fallback
         }
-        return FileManager().homeDirectoryForCurrentUser
+        return homeDirectory
     }
 
     static func setProjectRoot(_ path: String) {
-        UserDefaults.standard.set(path, forKey: self.projectRootDefaultsKey)
+        AppDefaults.standard.set(path, forKey: self.projectRootDefaultsKey)
     }
 
     static func projectRootPath() -> String {
@@ -71,7 +65,7 @@ enum CommandResolver {
         let home = FileManager().homeDirectoryForCurrentUser
         let projectRoot = self.projectRoot()
         let validatedExecutable = self.validatedOpenClawExecutable(
-            defaults: .standard,
+            defaults: AppDefaults.standard,
             fileManager: .default,
             requiredVersion: GatewayEnvironment.expectedGatewayVersionString())
         return self.preferredPaths(
@@ -92,15 +86,26 @@ enum CommandResolver {
         home: URL,
         current: [String],
         projectRoot: URL,
-        validatedExecutable: String? = nil) -> [String]
+        validatedExecutable: String? = nil,
+        profile: AppProfile = .current) -> [String]
     {
         var preferredPaths: [String] = []
-        let managedPaths = self.openclawManagedPaths(home: home)
+        let managedPaths = self.openclawManagedPaths(home: home, profile: profile)
+        // Other profiles' managed trees must not leak in via stale validation or the
+        // inherited shell PATH (the CLI installer adds ~/.openclaw/bin to shell profiles).
+        let activeManagedBase = profile.stateDirectoryURL(homeDirectory: home).path
+        func isForeignManaged(_ path: String) -> Bool {
+            guard path.hasPrefix(home.path + "/") else { return false }
+            let name = path.dropFirst(home.path.count + 1)
+                .split(separator: "/").first.map(String.init) ?? ""
+            return self.isManagedDirectoryName(name)
+                && home.appendingPathComponent(name).path != activeManagedBase
+        }
         if let validatedExecutable {
             let validatedBin = URL(fileURLWithPath: validatedExecutable).deletingLastPathComponent().path
             if managedPaths.contains(validatedBin) {
                 preferredPaths.append(contentsOf: managedPaths)
-            } else {
+            } else if !isForeignManaged(validatedBin) {
                 preferredPaths.append(validatedBin)
             }
         }
@@ -119,7 +124,8 @@ enum CommandResolver {
         var seen = Set<String>()
         let fallbackPaths = self.nodeManagerBinPaths(home: home) + externalPaths + managedPaths
         // Preserve order while stripping duplicates so PATH lookups remain deterministic.
-        return (preferredPaths + fallbackPaths + current).filter { seen.insert($0).inserted }
+        return (preferredPaths + fallbackPaths + current)
+            .filter { !isForeignManaged($0) && seen.insert($0).inserted }
     }
 
     static func validatedOpenClawExecutable(
@@ -139,10 +145,13 @@ enum CommandResolver {
             expected: requiredVersion) ? executable : nil
     }
 
-    private static func openclawManagedPaths(home: URL) -> [String] {
-        let bases = [
-            home.appendingPathComponent(".openclaw"),
-        ]
+    /// Exactly the AppProfile.stateDirectoryURL namespace; ~/.openclaw2 is not managed.
+    private static func isManagedDirectoryName(_ name: String) -> Bool {
+        name == ".openclaw" || name.hasPrefix(".openclaw-")
+    }
+
+    private static func openclawManagedPaths(home: URL, profile: AppProfile) -> [String] {
+        let bases = [profile.stateDirectoryURL(homeDirectory: home)]
         var paths: [String] = []
         for base in bases {
             let bin = base.appendingPathComponent("bin")
@@ -194,26 +203,17 @@ enum CommandResolver {
             return []
         }
 
-        func parseVersion(_ name: String) -> [Int] {
-            let trimmed = name.hasPrefix("v") ? String(name.dropFirst()) : name
-            return trimmed.split(separator: ".").compactMap { Int($0) }
-        }
-
-        let sorted = entries.sorted { a, b in
-            let va = parseVersion(a)
-            let vb = parseVersion(b)
-            let maxCount = max(va.count, vb.count)
-            for i in 0..<maxCount {
-                let ai = i < va.count ? va[i] : 0
-                let bi = i < vb.count ? vb[i] : 0
-                if ai != bi { return ai > bi }
-            }
-            // If identical numerically, keep stable ordering.
-            return a > b
+        let sorted = entries.compactMap { entry -> (name: String, version: RuntimeVersion)? in
+            guard let version = RuntimeVersion.from(string: entry),
+                  RuntimeLocator.isSupportedNodeVersion(version)
+            else { return nil }
+            return (entry, version)
+        }.sorted { first, second in
+            first.version == second.version ? first.name > second.name : first.version > second.version
         }
 
         var paths: [String] = []
-        for entry in sorted {
+        for (entry, _) in sorted {
             let binDir = base.appendingPathComponent(entry).appendingPathComponent(suffix)
             let node = binDir.appendingPathComponent("node")
             if FileManager().isExecutableFile(atPath: node.path) {
@@ -254,79 +254,131 @@ enum CommandResolver {
         #endif
     }
 
-    static func openclawNodeCommand(
-        subcommand: String,
-        extraArgs: [String] = [],
-        defaults: UserDefaults = .standard,
-        configRoot: [String: Any]? = nil,
+    static func nodeHostWorkerLaunch(
+        bundle: Bundle = .main,
+        projectRoot: URL? = nil,
         searchPaths: [String]? = nil,
-        projectRoot: URL? = nil) -> [String]
+        desktopSharingEnabled: Bool? = nil) async throws -> MacNodeHostWorkerLaunch
     {
-        let settings = self.connectionSettings(defaults: defaults, configRoot: configRoot)
-        if settings.mode == .remote, settings.transport == .ssh {
-            guard let ssh = sshNodeCommand(
-                subcommand: subcommand,
-                extraArgs: extraArgs,
-                settings: settings)
-            else {
-                return self.errorCommand(with: "Remote SSH gateway target is missing or invalid.")
-            }
-            return ssh
+        // Packaging and optimization are independent: even DEBUG apps must use
+        // their signed payload, including after relocation or checkout removal.
+        if bundle.bundleURL.pathExtension == "app" {
+            return try BundledNodeWorker.launch(bundle: bundle, desktopSharingEnabled: desktopSharingEnabled)
         }
-
+        #if DEBUG
         let root = projectRoot ?? self.projectRoot()
-        if let openclawPath = projectOpenClawExecutable(projectRoot: root) {
-            return [openclawPath, subcommand] + extraArgs
+        let sourceRunner = root.appendingPathComponent("scripts/run-node.mjs")
+        guard FileManager().isReadableFile(atPath: sourceRunner.path) else {
+            throw MacNodeHostWorker.WorkerError.unavailable(reason: "Development worker source runner is missing")
         }
-        if let openclawPath = openclawExecutable(searchPaths: searchPaths) {
-            return [openclawPath, subcommand] + extraArgs
-        }
-
-        let runtimeResult = self.runtimeResolution(searchPaths: searchPaths)
-        switch runtimeResult {
+        switch await self.runtimeResolution(searchPaths: searchPaths) {
         case let .success(runtime):
-            if let entry = gatewayEntrypoint(in: root) {
-                return self.makeRuntimeCommand(
-                    runtime: runtime,
-                    entrypoint: entry,
-                    subcommand: subcommand,
-                    extraArgs: extraArgs)
-            }
-        case .failure:
-            break
-        }
-
-        if let pnpm = findExecutable(named: "pnpm", searchPaths: searchPaths) {
-            // Use --silent to avoid pnpm lifecycle banners that would corrupt JSON outputs.
-            return [pnpm, "--silent", "openclaw", subcommand] + extraArgs
-        }
-
-        switch runtimeResult {
-        case .success:
-            let missingEntry = """
-            openclaw CLI not found. Install the CLI, or run pnpm build in an OpenClaw source checkout.
-            """
-            return self.errorCommand(with: missingEntry)
+            return MacNodeHostWorkerLaunch(
+                command: self.nodeHostWorkerCommand(
+                    prefix: [runtime.path, sourceRunner.path],
+                    desktopSharingEnabled: desktopSharingEnabled),
+                currentDirectoryURL: root)
         case let .failure(error):
-            return self.runtimeErrorCommand(error)
+            throw error
         }
+        #else
+        throw MacNodeHostWorker.WorkerError.unavailable(reason: "The node worker requires a packaged OpenClaw.app")
+        #endif
     }
+
+    static func nodeHostWorkerCommand(
+        prefix: [String],
+        profile: AppProfile = .current,
+        desktopSharingEnabled: Bool? = nil) -> [String]
+    {
+        var arguments = ["node", "worker"]
+        if let desktopSharingEnabled {
+            arguments.append(desktopSharingEnabled ? "--desktop-sharing" : "--no-desktop-sharing")
+        }
+        return profile.localCLICommand(prefix: prefix, arguments: arguments)
+    }
+
+    enum LocalCLIResolution {
+        case executable([String])
+        case unavailable(String)
+    }
+
+    typealias LocalCLIResolver = @Sendable ([String]?, URL?) async -> LocalCLIResolution
 
     static func openclawCommand(
         subcommand: String,
         extraArgs: [String] = [],
-        defaults: UserDefaults = .standard,
+        defaults: UserDefaults = AppDefaults.standard,
         configRoot: [String: Any]? = nil,
         searchPaths: [String]? = nil,
-        projectRoot: URL? = nil) -> [String]
+        projectRoot: URL? = nil,
+        profile: AppProfile = .current) async -> [String]
     {
-        self.openclawNodeCommand(
+        await self.openclawCommand(
             subcommand: subcommand,
             extraArgs: extraArgs,
-            defaults: defaults,
-            configRoot: configRoot,
-            searchPaths: searchPaths,
-            projectRoot: projectRoot)
+            settings: self.connectionSettings(defaults: defaults, configRoot: configRoot),
+            localCommand: {
+                await self.localOpenclawCommand(
+                    subcommand: subcommand,
+                    extraArgs: extraArgs,
+                    searchPaths: searchPaths,
+                    projectRoot: projectRoot,
+                    profile: profile)
+            })
+    }
+
+    static func openclawCommand(
+        subcommand: String,
+        extraArgs: [String],
+        settings: RemoteSettings,
+        localCommand: () async -> [String]) async -> [String]
+    {
+        if settings.mode == .remote, settings.transport == .ssh {
+            return self.sshNodeCommand(subcommand: subcommand, extraArgs: extraArgs, settings: settings)
+                ?? self.errorCommand(with: "Remote SSH gateway target is missing or invalid.")
+        }
+        return await localCommand()
+    }
+
+    static func localOpenclawCommand(
+        subcommand: String,
+        extraArgs: [String] = [],
+        searchPaths: [String]? = nil,
+        projectRoot: URL? = nil,
+        profile: AppProfile = .current,
+        resolveCLI: LocalCLIResolver = resolveLocalCLI) async -> [String]
+    {
+        switch await resolveCLI(searchPaths, projectRoot) {
+        case let .executable(prefix):
+            profile.localCLICommand(prefix: prefix, arguments: [subcommand] + extraArgs)
+        case let .unavailable(message):
+            self.errorCommand(with: message)
+        }
+    }
+
+    static func resolveLocalCLI(searchPaths: [String]?, projectRoot: URL?) async -> LocalCLIResolution {
+        let root = projectRoot ?? self.projectRoot()
+        if let openclawPath = projectOpenClawExecutable(projectRoot: root) {
+            return .executable([openclawPath])
+        }
+        if let openclawPath = openclawExecutable(searchPaths: searchPaths) {
+            return .executable([openclawPath])
+        }
+        let runtimeResult = await self.runtimeResolution(searchPaths: searchPaths)
+        if case let .success(runtime) = runtimeResult, let entry = gatewayEntrypoint(in: root) {
+            return .executable([runtime.path, entry])
+        }
+        if let pnpm = findExecutable(named: "pnpm", searchPaths: searchPaths) {
+            return .executable([pnpm, "--silent", "openclaw"])
+        }
+        switch runtimeResult {
+        case .success:
+            return .unavailable(
+                "openclaw CLI not found. Install the CLI, or run pnpm build in an OpenClaw source checkout.")
+        case let .failure(error):
+            return .unavailable(RuntimeLocator.describeFailure(error))
+        }
     }
 
     // MARK: - SSH helpers
@@ -480,7 +532,7 @@ enum CommandResolver {
     }
 
     static func connectionSettings(
-        defaults: UserDefaults = .standard,
+        defaults: UserDefaults = AppDefaults.standard,
         configRoot: [String: Any]? = nil) -> RemoteSettings
     {
         let root = configRoot ?? OpenClawConfigFile.loadDict()
@@ -522,7 +574,7 @@ enum CommandResolver {
             sshHostKeyPolicy: sshHostKeyPolicy)
     }
 
-    static func connectionModeIsRemote(defaults: UserDefaults = .standard) -> Bool {
+    static func connectionModeIsRemote(defaults: UserDefaults = AppDefaults.standard) -> Bool {
         self.connectionSettings(defaults: defaults).mode == .remote
     }
 
@@ -660,10 +712,4 @@ enum CommandResolver {
         args.append(contentsOf: remoteCommand)
         return args
     }
-
-    #if SWIFT_PACKAGE
-    static func _testNodeManagerBinPaths(home: URL) -> [String] {
-        self.nodeManagerBinPaths(home: home)
-    }
-    #endif
 }

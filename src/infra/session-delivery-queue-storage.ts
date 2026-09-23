@@ -1,248 +1,115 @@
-// Persists queued session deliveries for retry and recovery.
-import type { SourceReplyDeliveryMode } from "../auto-reply/source-reply-delivery-mode.types.js";
-import type { ChatType } from "../channels/chat-type.js";
-import type { InputProvenance } from "../sessions/input-provenance.js";
-import { sha256Hex } from "./crypto-digest.js";
+import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
+import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
+import { bindDeliveryQueueEntry } from "./delivery-queue-sqlite-bound.js";
 import {
-  completeDeliveryQueueEntry,
-  getDeliveryQueueEntryStatus,
-  loadDeliveryQueueEntries,
-  loadDeliveryQueueEntry,
-  moveDeliveryQueueEntryToFailed,
-  updateDeliveryQueueEntry,
-  upsertDeliveryQueueEntry,
-  type DeliveryQueueRowMetadata,
-} from "./delivery-queue-sqlite.js";
-import { generateSecureUuid } from "./secure-random.js";
+  prepareClaimedSessionDelivery,
+  prepareSessionDelivery,
+  SESSION_DELIVERY_QUEUE_NAME,
+  SessionDeliveryAcknowledgementFinalizeError,
+  SessionDeliveryAttemptStartError,
+  type QueuedSessionDelivery,
+  type QueuedSessionDeliveryPayload,
+  type SessionDeliverySettledOutcome,
+} from "./session-delivery-queue.records.js";
+import type {
+  SessionDeliveryAgentRunUpdate,
+  SessionDeliveryWorkerOperations,
+} from "./session-delivery-queue.worker-contract.js";
 
-// Session delivery queue persists session-scoped messages until channel
-// delivery acknowledges them or recovery exhausts retry policy.
-const QUEUE_NAME = "session";
-
-type SessionDeliveryContext = {
-  channel?: string;
-  to?: string;
-  accountId?: string;
-  threadId?: string | number;
-};
-
-type SessionDeliveryRetryPolicy = {
-  maxRetries?: number;
-};
-
-export type SessionDeliveryRoute = {
-  channel: string;
-  to: string;
-  accountId?: string;
-  replyToId?: string;
-  threadId?: string;
-  chatType: ChatType;
-};
-
-export type SessionDeliverySettledOutcome = "recovered" | "moved-to-failed";
-
-/** Payload variants that can be replayed by session delivery recovery. */
-export type QueuedSessionDeliveryPayload =
-  | ({
-      kind: "systemEvent";
-      sessionKey: string;
-      text: string;
-      deliveryContext?: SessionDeliveryContext;
-      idempotencyKey?: string;
-    } & SessionDeliveryRetryPolicy)
-  | ({
-      kind: "agentTurn";
-      sessionKey: string;
-      message: string;
-      messageId: string;
-      expectedSessionId?: string;
-      route?: SessionDeliveryRoute;
-      deliveryContext?: SessionDeliveryContext;
-      inputProvenance?: InputProvenance;
-      sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
-      expectedMediaUrls?: string[];
-      suppressTextDelivery?: true;
-      idempotencyKey?: string;
-    } & SessionDeliveryRetryPolicy);
-
-export type QueuedSessionDelivery = QueuedSessionDeliveryPayload & {
-  id: string;
-  enqueuedAt: number;
-  agentRunAttempt?: number;
-  lastChargedAgentRunAttempt?: number;
-  retryCount: number;
-  lastAttemptAt?: number;
-  lastError?: string;
-  deliveryStartedAt?: number;
-  acknowledgedAt?: number;
-  settlementOutcome?: SessionDeliverySettledOutcome;
-  availableAt?: number;
-};
-
-export class SessionDeliveryDeferredError extends Error {
-  override name = "SessionDeliveryDeferredError";
+function executeSessionDelivery<Key extends keyof SessionDeliveryWorkerOperations>(
+  context: OpenClawStateWorkerContext,
+  command: { type: Key; input: SessionDeliveryWorkerOperations[Key]["input"] },
+): Promise<SessionDeliveryWorkerOperations[Key]["output"]> {
+  // A settled write remains authoritative if its captured owner closes while returning the result.
+  return runOpenClawStateWorkerOperation(context, (scope) => scope.execute(command));
 }
 
-/** Signals that retry budget was already persisted before a later transition failed. */
-export class SessionDeliveryRetryChargedError extends Error {
-  override name = "SessionDeliveryRetryChargedError";
+function prepareEntry(
+  entry: QueuedSessionDelivery,
+  mode: "insert" | "update",
+): ReturnType<typeof bindDeliveryQueueEntry> {
+  // Preserve the JSON persistence boundary before the transport serializes its input.
+  return bindDeliveryQueueEntry({
+    queueName: SESSION_DELIVERY_QUEUE_NAME,
+    entry,
+    ...(mode === "insert" ? { insertOnly: true } : { updatePendingOnly: true }),
+  });
 }
 
-/** Signals that durable pre-delivery ownership could not be established. */
-export class SessionDeliveryAttemptStartError extends Error {
-  override name = "SessionDeliveryAttemptStartError";
-}
-
-/** Signals that delivery proved no external or transcript side effect committed. */
-export class SessionDeliverySafeRetryError extends Error {
-  override name = "SessionDeliverySafeRetryError";
-}
-
-/** Signals that recovery must settle this pending row as failed without replaying delivery. */
-export class SessionDeliveryDeadLetteredError extends Error {
-  override name = "SessionDeliveryDeadLetteredError";
-}
-
-function buildEntryId(idempotencyKey?: string): string {
-  if (!idempotencyKey) {
-    return generateSecureUuid();
-  }
-  return sha256Hex(idempotencyKey);
-}
-
-function queuedSessionDeliveryMetadata(entry: QueuedSessionDelivery): DeliveryQueueRowMetadata {
-  const route = entry.kind === "agentTurn" ? entry.route : undefined;
-  return {
-    entryKind: entry.kind,
-    sessionKey: entry.sessionKey,
-    channel: route?.channel ?? entry.deliveryContext?.channel,
-    target: route?.to ?? entry.deliveryContext?.to,
-    accountId: route?.accountId ?? entry.deliveryContext?.accountId,
-  };
-}
-
-/** Enqueue a session delivery and return its durable id. */
 export async function enqueueSessionDelivery(
   params: QueuedSessionDeliveryPayload,
-  stateDir?: string,
+  context: OpenClawStateWorkerContext,
 ): Promise<string> {
-  const id = buildEntryId(params.idempotencyKey);
-
-  const entry: QueuedSessionDelivery = {
-    ...params,
-    id,
-    enqueuedAt: Date.now(),
-    retryCount: 0,
-  };
-  upsertDeliveryQueueEntry({
-    queueName: QUEUE_NAME,
-    entry,
-    metadata: queuedSessionDeliveryMetadata(entry),
-    stateDir,
-    reviveFailedOrCorruptPending: Boolean(params.idempotencyKey),
+  const entry = prepareSessionDelivery(params);
+  await executeSessionDelivery(context, {
+    type: "sessionDelivery.enqueue",
+    input: prepareEntry(entry, "insert"),
   });
-  return id;
+  return entry.id;
 }
 
-/** Enqueue and lease the first attempt to one caller before recovery can see it as eligible. */
 export async function enqueueClaimedSessionDelivery(
   params: QueuedSessionDeliveryPayload,
   initialAttemptLeaseMs: number,
-  stateDir?: string,
-): Promise<{
-  id: string;
-  claimed: boolean;
-  status: "pending" | "failed" | "completed" | "unknown";
-}> {
-  const id = buildEntryId(params.idempotencyKey);
-  const entry: QueuedSessionDelivery = {
-    ...params,
-    id,
-    enqueuedAt: Date.now(),
-    retryCount: 0,
-    availableAt: Date.now() + Math.max(0, initialAttemptLeaseMs),
-  };
-  const claimed = upsertDeliveryQueueEntry({
-    queueName: QUEUE_NAME,
-    entry,
-    metadata: queuedSessionDeliveryMetadata(entry),
-    stateDir,
-    insertOnly: true,
+  context: OpenClawStateWorkerContext,
+): Promise<SessionDeliveryWorkerOperations["sessionDelivery.enqueueClaimed"]["output"]> {
+  return executeSessionDelivery(context, {
+    type: "sessionDelivery.enqueueClaimed",
+    input: prepareEntry(prepareClaimedSessionDelivery(params, initialAttemptLeaseMs), "insert"),
   });
-  let status: "pending" | "failed" | "completed" | undefined;
-  try {
-    status = claimed ? "pending" : getDeliveryQueueEntryStatus(QUEUE_NAME, id, stateDir);
-  } catch {
-    // The insert-only conflict already proved another durable owner existed.
-    // Preserve that ownership when diagnostics are temporarily unreadable.
-    return { id, claimed, status: "unknown" };
-  }
-  // Old databases may still delete an acknowledged row between the conflict
-  // and lookup. Treat that race like the explicit completed tombstone.
-  return { id, claimed, status: status ?? "completed" };
 }
 
-/** Release the initial-attempt lease so runtime recovery can retry immediately. */
-export async function releaseSessionDeliveryClaim(id: string, stateDir?: string): Promise<void> {
-  updateDeliveryQueueEntry(QUEUE_NAME, id, stateDir, (entry) => ({
-    ...entry,
-    availableAt: Date.now(),
-  }));
+export async function releaseSessionDeliveryClaim(
+  id: string,
+  context: OpenClawStateWorkerContext,
+): Promise<void> {
+  return executeSessionDelivery(context, { type: "sessionDelivery.releaseClaim", input: { id } });
 }
 
-/** Defer a currently owned delivery without consuming its retry budget. */
 export async function deferSessionDelivery(
   id: string,
   delayMs: number,
-  stateDir?: string,
+  context: OpenClawStateWorkerContext,
 ): Promise<void> {
-  updateDeliveryQueueEntry(QUEUE_NAME, id, stateDir, (entry) => ({
-    ...entry,
-    availableAt: Date.now() + Math.max(0, delayMs),
-  }));
+  return executeSessionDelivery(context, { type: "sessionDelivery.defer", input: { id, delayMs } });
 }
 
-/** Advance only after a completed agent turn proves a fresh run is safe. */
 export async function advanceSessionDeliveryAgentRun(
   id: string,
-  updates?: { expectedMediaUrls?: string[]; message?: string; suppressTextDelivery?: boolean },
-  stateDir?: string,
+  updates: SessionDeliveryAgentRunUpdate | undefined,
+  context: OpenClawStateWorkerContext,
 ): Promise<void> {
-  updateDeliveryQueueEntry(QUEUE_NAME, id, stateDir, (entry) => {
-    const queued = entry as QueuedSessionDelivery;
-    if (queued.kind !== "agentTurn") {
-      return queued;
-    }
-    return {
-      ...queued,
-      agentRunAttempt: (queued.agentRunAttempt ?? 0) + 1,
-      deliveryStartedAt: undefined,
-      ...(updates?.message ? { message: updates.message } : {}),
-      ...(updates?.expectedMediaUrls ? { expectedMediaUrls: updates.expectedMediaUrls } : {}),
-      ...(updates?.suppressTextDelivery === true ? { suppressTextDelivery: true as const } : {}),
-    };
+  return executeSessionDelivery(context, {
+    type: "sessionDelivery.advanceAgentRun",
+    input: { id, updates },
   });
 }
 
-/** Mark an agent turn before it can commit transcript or channel side effects. */
+export async function mergeSessionDeliveryPreparedMediaBlocks(
+  id: string,
+  mediaUrl: string,
+  blocks: Array<Record<string, unknown>>,
+  context: OpenClawStateWorkerContext,
+): Promise<Array<Record<string, unknown>>> {
+  const result = await executeSessionDelivery(context, {
+    type: "sessionDelivery.mergePreparedMedia",
+    input: { id, mediaUrl, blocksJson: JSON.stringify(blocks) },
+  });
+  return result.source === "input" ? blocks : result.blocks;
+}
+
 export async function markSessionDeliveryAttemptStarted(
   entry: QueuedSessionDelivery,
-  stateDir?: string,
+  context: OpenClawStateWorkerContext,
 ): Promise<void> {
   try {
-    const started = upsertDeliveryQueueEntry({
-      queueName: QUEUE_NAME,
-      entry: {
-        ...entry,
-        deliveryStartedAt: entry.deliveryStartedAt ?? Date.now(),
-      } as QueuedSessionDelivery,
-      metadata: queuedSessionDeliveryMetadata(entry),
-      stateDir,
-      updatePendingOnly: true,
+    await executeSessionDelivery(context, {
+      type: "sessionDelivery.markAttemptStarted",
+      input: prepareEntry(
+        { ...entry, deliveryStartedAt: entry.deliveryStartedAt ?? Date.now() },
+        "update",
+      ),
     });
-    if (!started) {
-      throw new Error(`Session delivery ${entry.id} is no longer pending`);
-    }
   } catch (error) {
     throw new SessionDeliveryAttemptStartError(
       `Session delivery ${entry.id} could not persist attempt ownership`,
@@ -251,116 +118,79 @@ export async function markSessionDeliveryAttemptStarted(
   }
 }
 
-/** Signals that a delivered result still needs durable settlement finalization. */
-export class SessionDeliveryAcknowledgementFinalizeError extends Error {
-  constructor(id: string, options?: ErrorOptions) {
-    super(`Session delivery ${id} still needs settlement finalization`, options);
-    this.name = "SessionDeliveryAcknowledgementFinalizeError";
-  }
-}
-
-/** Persist terminal delivery state while retaining settlement cleanup metadata. */
 export async function markSessionDeliverySettlement(
   entry: QueuedSessionDelivery,
   outcome: SessionDeliverySettledOutcome,
-  stateDir?: string,
+  context: OpenClawStateWorkerContext,
 ): Promise<void> {
   try {
-    const settled = upsertDeliveryQueueEntry({
-      queueName: QUEUE_NAME,
-      entry: {
-        ...entry,
-        settlementOutcome: outcome,
-        ...(outcome === "recovered" ? { acknowledgedAt: entry.acknowledgedAt ?? Date.now() } : {}),
-      } as QueuedSessionDelivery,
-      metadata: queuedSessionDeliveryMetadata(entry),
-      stateDir,
-      updatePendingOnly: true,
+    await executeSessionDelivery(context, {
+      type: "sessionDelivery.markSettlement",
+      input: prepareEntry(
+        {
+          ...entry,
+          settlementOutcome: outcome,
+          ...(outcome === "recovered"
+            ? { acknowledgedAt: entry.acknowledgedAt ?? Date.now() }
+            : {}),
+        },
+        "update",
+      ),
     });
-    if (settled) {
-      return;
-    }
-    if (getDeliveryQueueEntryStatus(QUEUE_NAME, entry.id, stateDir) === "completed") {
-      return;
-    }
-    throw new Error(`Session delivery ${entry.id} is no longer pending`);
   } catch (error) {
-    try {
-      if (getDeliveryQueueEntryStatus(QUEUE_NAME, entry.id, stateDir) === "completed") {
-        return;
-      }
-    } catch {
-      // Unprovable state remains settlement finalization, never a delivery retry.
-    }
     throw new SessionDeliveryAcknowledgementFinalizeError(entry.id, { cause: error });
   }
 }
 
-/** Replace a settled pending row with its completed idempotency tombstone. */
-export async function completeSessionDelivery(id: string, stateDir?: string): Promise<void> {
+export async function completeSessionDelivery(
+  id: string,
+  context: OpenClawStateWorkerContext,
+): Promise<void> {
   try {
-    completeDeliveryQueueEntry(QUEUE_NAME, id, stateDir);
+    await executeSessionDelivery(context, { type: "sessionDelivery.complete", input: { id } });
   } catch (error) {
-    try {
-      if (getDeliveryQueueEntryStatus(QUEUE_NAME, id, stateDir) === "completed") {
-        return;
-      }
-    } catch {
-      // Unprovable state remains settlement finalization, never a delivery retry.
-    }
     throw new SessionDeliveryAcknowledgementFinalizeError(id, { cause: error });
   }
 }
 
-/** Record a failed delivery attempt and increment retry metadata. */
 export async function failSessionDelivery(
   id: string,
   error: string,
-  stateDir?: string,
+  context: OpenClawStateWorkerContext,
   options?: { releaseAttemptOwnership?: boolean },
 ): Promise<void> {
-  updateDeliveryQueueEntry(QUEUE_NAME, id, stateDir, (entry) => {
-    const queued = entry as QueuedSessionDelivery;
-    return {
-      ...queued,
-      retryCount: queued.retryCount + 1,
-      ...(queued.kind === "agentTurn"
-        ? { lastChargedAgentRunAttempt: queued.agentRunAttempt ?? 0 }
-        : {}),
-      ...(options?.releaseAttemptOwnership === true ? { deliveryStartedAt: undefined } : {}),
-      lastAttemptAt: Date.now(),
-      lastError: error,
-    };
+  return executeSessionDelivery(context, {
+    type: "sessionDelivery.fail",
+    input: { id, error, ...options },
   });
 }
 
-/** Load one pending session delivery by durable id. */
 export async function loadPendingSessionDelivery(
   id: string,
-  stateDir?: string,
+  context: OpenClawStateWorkerContext,
 ): Promise<QueuedSessionDelivery | null> {
-  return loadDeliveryQueueEntry(QUEUE_NAME, id, stateDir) as QueuedSessionDelivery | null;
+  const entry = await executeSessionDelivery(context, {
+    type: "sessionDelivery.load",
+    input: { id },
+  });
+  context.admission.assertCurrent();
+  return entry;
 }
 
-/** Load all pending session deliveries in retry order. */
 export async function loadPendingSessionDeliveries(
-  stateDir?: string,
+  context: OpenClawStateWorkerContext,
 ): Promise<QueuedSessionDelivery[]> {
-  return loadDeliveryQueueEntries(QUEUE_NAME, stateDir) as QueuedSessionDelivery[];
+  const entries = await executeSessionDelivery(context, {
+    type: "sessionDelivery.list",
+    input: undefined,
+  });
+  context.admission.assertCurrent();
+  return entries;
 }
 
-/** Move an exhausted session delivery out of the pending queue. */
-export async function moveSessionDeliveryToFailed(id: string, stateDir?: string): Promise<void> {
-  try {
-    moveDeliveryQueueEntryToFailed(QUEUE_NAME, id, stateDir);
-  } catch (error) {
-    try {
-      if (getDeliveryQueueEntryStatus(QUEUE_NAME, id, stateDir) === "failed") {
-        return;
-      }
-    } catch {
-      // Preserve the original transition failure when durable state is unreadable.
-    }
-    throw error;
-  }
+export async function moveSessionDeliveryToFailed(
+  id: string,
+  context: OpenClawStateWorkerContext,
+): Promise<void> {
+  return executeSessionDelivery(context, { type: "sessionDelivery.moveToFailed", input: { id } });
 }

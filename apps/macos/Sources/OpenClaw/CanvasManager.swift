@@ -12,12 +12,8 @@ final class CanvasManager {
 
     private var panelController: CanvasWindowController?
     private var panelSessionKey: String?
-    private var lastAutoA2UIUrl: String?
-    private var gatewayWatchTask: Task<Void, Never>?
 
-    private init() {
-        self.startGatewayObserver()
-    }
+    private init() {}
 
     var onPanelVisibilityChanged: ((Bool) -> Void)?
 
@@ -32,95 +28,41 @@ final class CanvasManager {
     func show(
         sessionKey: String,
         path: String? = nil,
-        placement: CanvasPlacement? = nil,
-        trustedA2UIActions: Bool = false) throws -> String
-    {
-        try self.showDetailed(
-            sessionKey: sessionKey,
-            target: path,
-            placement: placement,
-            trustedA2UIActions: trustedA2UIActions).directory
-    }
-
-    func showDetailed(
-        sessionKey: String,
-        target: String? = nil,
-        placement: CanvasPlacement? = nil,
-        trustedA2UIActions: Bool = false) throws -> CanvasShowResult
+        placement: CanvasPlacement? = nil) throws -> String
     {
         Self.logger.debug(
             """
-            showDetailed start session=\(sessionKey, privacy: .public) \
-            hasTarget=\(target != nil) \
+            show session=\(sessionKey, privacy: .public) \
+            hasTarget=\(path != nil) \
             placement=\(placement != nil)
             """)
         let anchorProvider = self.defaultAnchorProvider ?? Self.mouseAnchorProvider
-        let session = sessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        let normalizedTarget = target?
+        let normalizedTarget = path?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .nonEmpty
+        let ensured = try ensureController(sessionKey: sessionKey)
+        let controller = ensured.controller
 
-        if let controller = self.panelController, self.panelSessionKey == session {
-            Self.logger.debug("showDetailed reuse existing session=\(session, privacy: .public)")
-            controller.onVisibilityChanged = { [weak self] visible in
-                self?.onPanelVisibilityChanged?(visible)
-            }
+        if !ensured.created {
             controller.presentAnchoredPanel(anchorProvider: anchorProvider)
             controller.applyPreferredPlacement(placement)
-            self.refreshDebugStatus()
 
             // Existing session: only navigate when an explicit target was provided.
             if let normalizedTarget {
-                controller.load(target: normalizedTarget, trustedA2UIActions: trustedA2UIActions)
-                return self.makeShowResult(
-                    directory: controller.directoryPath,
-                    target: target,
-                    effectiveTarget: normalizedTarget)
+                controller.load(target: normalizedTarget)
             }
 
-            self.maybeAutoNavigateToA2UIAsync(controller: controller)
-            return CanvasShowResult(
-                directory: controller.directoryPath,
-                target: target,
-                effectiveTarget: nil,
-                status: .shown,
-                url: nil)
+            self.refreshDebugStatus()
+            return controller.directoryPath
         }
 
-        Self.logger.debug("showDetailed creating new session=\(session, privacy: .public)")
-        self.panelController?.close()
-        self.panelController = nil
-        self.panelSessionKey = nil
-
-        Self.logger.debug("showDetailed ensure canvas root dir")
-        try FileManager().createDirectory(at: Self.canvasRoot, withIntermediateDirectories: true)
-        Self.logger.debug("showDetailed init CanvasWindowController")
-        let controller = try CanvasWindowController(
-            sessionKey: session,
-            root: Self.canvasRoot,
-            presentation: .panel(anchorProvider: anchorProvider))
-        Self.logger.debug("showDetailed CanvasWindowController init done")
-        controller.onVisibilityChanged = { [weak self] visible in
-            self?.onPanelVisibilityChanged?(visible)
-        }
-        self.panelController = controller
-        self.panelSessionKey = session
         controller.applyPreferredPlacement(placement)
 
-        // New session: default to "/" so the user sees either the welcome page or `index.html`.
-        let effectiveTarget = normalizedTarget ?? "/"
-        Self.logger.debug("showDetailed showCanvas hasExplicitTarget=\(normalizedTarget != nil)")
-        controller.showCanvas(path: effectiveTarget, trustedA2UIActions: trustedA2UIActions)
-        Self.logger.debug("showDetailed showCanvas done")
-        if normalizedTarget == nil {
-            self.maybeAutoNavigateToA2UIAsync(controller: controller)
-        }
+        // New session: default to the local document root.
+        controller.showCanvas(path: normalizedTarget ?? "/")
         self.refreshDebugStatus()
 
-        return self.makeShowResult(
-            directory: controller.directoryPath,
-            target: target,
-            effectiveTarget: effectiveTarget)
+        return controller.directoryPath
     }
 
     func hide(sessionKey: String) {
@@ -133,88 +75,8 @@ final class CanvasManager {
         self.panelController?.hideCanvas()
     }
 
-    func eval(sessionKey: String, javaScript: String) async throws -> String {
-        _ = try self.show(sessionKey: sessionKey, path: nil)
-        guard let controller = self.panelController else { return "" }
-        return try await controller.eval(javaScript: javaScript)
-    }
-
-    func snapshot(sessionKey: String, outPath: String?) async throws -> String {
-        _ = try self.show(sessionKey: sessionKey, path: nil)
-        guard let controller = self.panelController else {
-            throw NSError(domain: "Canvas", code: 21, userInfo: [NSLocalizedDescriptionKey: "canvas not available"])
-        }
-        return try await controller.snapshot(to: outPath)
-    }
-
-    // MARK: - Gateway A2UI auto-nav
-
-    private func startGatewayObserver() {
-        self.gatewayWatchTask?.cancel()
-        self.gatewayWatchTask = Task { [weak self] in
-            guard let self else { return }
-            let stream = await GatewayConnection.shared.subscribe(bufferingNewest: 1)
-            for await push in stream {
-                self.handleGatewayPush(push)
-            }
-        }
-    }
-
-    private func handleGatewayPush(_ push: GatewayPush) {
-        guard case let .snapshot(snapshot) = push else { return }
-        let raw =
-            (snapshot.pluginsurfaceurls?["canvas"]?.value as? String)?
-                .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines) ?? ""
-        if raw.isEmpty {
-            Self.logger.debug("canvas plugin surface URL missing in gateway snapshot")
-        } else {
-            Self.logger.debug("canvas plugin surface URL present in gateway snapshot")
-        }
-        let a2uiUrl = CanvasHostedURLResolver.resolveA2UIURL(surfaceURL: raw)
-        if a2uiUrl == nil, !raw.isEmpty {
-            Self.logger.debug("canvas plugin surface URL invalid; cannot resolve A2UI")
-        }
-        guard let controller = self.panelController else {
-            if a2uiUrl != nil {
-                Self.logger.debug("canvas panel not visible; skipping auto-nav")
-            }
-            return
-        }
-        self.maybeAutoNavigateToA2UI(controller: controller, a2uiUrl: a2uiUrl)
-    }
-
-    private func maybeAutoNavigateToA2UIAsync(controller: CanvasWindowController) {
-        Task { [weak self] in
-            guard let self else { return }
-            let a2uiUrl = await self.resolveA2UIHostUrl()
-            await MainActor.run {
-                guard self.panelController === controller else { return }
-                self.maybeAutoNavigateToA2UI(controller: controller, a2uiUrl: a2uiUrl)
-            }
-        }
-    }
-
-    private func maybeAutoNavigateToA2UI(controller: CanvasWindowController, a2uiUrl: String?) {
-        guard let a2uiUrl else { return }
-        let shouldNavigate = controller.shouldAutoNavigateToA2UI(
-            lastAutoTarget: self.lastAutoA2UIUrl,
-            candidateTarget: a2uiUrl)
-        guard shouldNavigate else {
-            Self.logger.debug("canvas auto-nav skipped; target unchanged")
-            return
-        }
-        Self.logger.debug("canvas auto-nav to capability-scoped A2UI")
-        controller.load(target: a2uiUrl, trustedA2UIActions: true)
-        self.lastAutoA2UIUrl = a2uiUrl
-    }
-
-    private func resolveA2UIHostUrl() async -> String? {
-        let raw = await GatewayConnection.shared.canvasPluginSurfaceUrl()
-        return CanvasHostedURLResolver.resolveA2UIURL(surfaceURL: raw)
-    }
-
     func refreshDebugStatus() {
-        guard let controller = self.panelController else { return }
+        guard let controller = panelController else { return }
         let enabled = AppStateStore.shared.debugPaneEnabled
         let mode = AppStateStore.shared.connectionMode
         let title: String?
@@ -249,102 +111,36 @@ final class CanvasManager {
         return NSRect(x: pt.x, y: pt.y, width: 1, height: 1)
     }
 
-    // placement interpretation is handled by the window controller.
-
     // MARK: - Helpers
 
-    private static func directURL(for target: String?) -> URL? {
-        guard let target else { return nil }
-        let trimmed = target.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
+    /// A session switch keeps the single-panel model by replacing the previous panel.
+    private func ensureController(sessionKey: String) throws -> (controller: CanvasWindowController, created: Bool) {
+        let anchorProvider = self.defaultAnchorProvider ?? Self.mouseAnchorProvider
+        let session = sessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        if let url = URL(string: trimmed), let scheme = url.scheme?.lowercased() {
-            if scheme == "https" || scheme == "http" || scheme == "file" { return url }
-        }
-
-        // Convenience: existing absolute *file* paths resolve as local files.
-        // (Avoid treating Canvas routes like "/" as filesystem paths.)
-        if trimmed.hasPrefix("/") {
-            var isDir: ObjCBool = false
-            if FileManager().fileExists(atPath: trimmed, isDirectory: &isDir), !isDir.boolValue {
-                return URL(fileURLWithPath: trimmed)
+        if let controller = panelController, panelSessionKey == session {
+            Self.logger.debug("ensureController reuse existing session=\(session, privacy: .public)")
+            controller.onVisibilityChanged = { [weak self] visible in
+                self?.onPanelVisibilityChanged?(visible)
             }
+            return (controller, false)
         }
 
-        return nil
+        Self.logger.debug("ensureController creating new session=\(session, privacy: .public)")
+        self.panelController?.close()
+        self.panelController = nil
+        self.panelSessionKey = nil
+
+        try FileManager().createDirectory(at: Self.canvasRoot, withIntermediateDirectories: true)
+        let controller = try CanvasWindowController(
+            sessionKey: session,
+            root: Self.canvasRoot,
+            presentation: .panel(anchorProvider: anchorProvider))
+        controller.onVisibilityChanged = { [weak self] visible in
+            self?.onPanelVisibilityChanged?(visible)
+        }
+        self.panelController = controller
+        self.panelSessionKey = session
+        return (controller, true)
     }
-
-    private func makeShowResult(
-        directory: String,
-        target: String?,
-        effectiveTarget: String) -> CanvasShowResult
-    {
-        if let url = Self.directURL(for: effectiveTarget) {
-            return CanvasShowResult(
-                directory: directory,
-                target: target,
-                effectiveTarget: effectiveTarget,
-                status: .web,
-                url: url.absoluteString)
-        }
-
-        let sessionDir = URL(fileURLWithPath: directory)
-        let status = Self.localStatus(sessionDir: sessionDir, target: effectiveTarget)
-        let host = sessionDir.lastPathComponent
-        let canvasURL = CanvasScheme.makeURL(session: host, path: effectiveTarget)?.absoluteString
-        return CanvasShowResult(
-            directory: directory,
-            target: target,
-            effectiveTarget: effectiveTarget,
-            status: status,
-            url: canvasURL)
-    }
-
-    private static func localStatus(sessionDir: URL, target: String) -> CanvasShowStatus {
-        let fm = FileManager()
-        let trimmed = target.trimmingCharacters(in: .whitespacesAndNewlines)
-        let withoutQuery = trimmed.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false).first
-            .map(String.init) ?? trimmed
-        var path = withoutQuery
-        if path.hasPrefix("/") { path.removeFirst() }
-        path = path.removingPercentEncoding ?? path
-
-        // Root special-case: built-in scaffold page when no index exists.
-        if path.isEmpty {
-            let a = sessionDir.appendingPathComponent("index.html", isDirectory: false)
-            let b = sessionDir.appendingPathComponent("index.htm", isDirectory: false)
-            if fm.fileExists(atPath: a.path) || fm.fileExists(atPath: b.path) { return .ok }
-            return .welcome
-        }
-
-        // Direct file or directory.
-        var candidate = sessionDir.appendingPathComponent(path, isDirectory: false)
-        var isDir: ObjCBool = false
-        if fm.fileExists(atPath: candidate.path, isDirectory: &isDir) {
-            if isDir.boolValue {
-                return Self.indexExists(in: candidate) ? .ok : .notFound
-            }
-            return .ok
-        }
-
-        // Directory index behavior ("/yolo" -> "yolo/index.html") if directory exists.
-        if !path.isEmpty, !path.hasSuffix("/") {
-            candidate = sessionDir.appendingPathComponent(path, isDirectory: true)
-            if fm.fileExists(atPath: candidate.path, isDirectory: &isDir), isDir.boolValue {
-                return Self.indexExists(in: candidate) ? .ok : .notFound
-            }
-        }
-
-        return .notFound
-    }
-
-    private static func indexExists(in dir: URL) -> Bool {
-        let fm = FileManager()
-        let a = dir.appendingPathComponent("index.html", isDirectory: false)
-        if fm.fileExists(atPath: a.path) { return true }
-        let b = dir.appendingPathComponent("index.htm", isDirectory: false)
-        return fm.fileExists(atPath: b.path)
-    }
-
-    // no bundled A2UI shell; scaffold fallback is purely visual
 }

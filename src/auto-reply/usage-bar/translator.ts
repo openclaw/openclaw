@@ -1,10 +1,13 @@
-import { expectDefined } from "@openclaw/normalization-core";
+import {
+  asFiniteNumber,
+  asSafeIntegerInRange,
+  expectDefined,
+  isRecord as isObject,
+  parseStrictInteger,
+} from "@openclaw/normalization-core";
 export type UsageBarTemplate = Record<string, unknown>;
 export type UsageContract = Record<string, unknown>;
 type Vocab = Record<string, unknown>;
-
-const isObject = (v: unknown): v is Record<string, unknown> =>
-  typeof v === "object" && v !== null && !Array.isArray(v);
 
 function toGlyphs(scale: unknown): string[] {
   if (Array.isArray(scale)) {
@@ -16,12 +19,16 @@ function toGlyphs(scale: unknown): string[] {
   return [];
 }
 
-function num(value: unknown): string {
+function coerceFiniteValue(value: unknown): number | undefined {
   if (value === null || value === undefined || value === "") {
-    return "";
+    return undefined;
   }
-  const n = Number(value);
-  if (!Number.isFinite(n)) {
+  return asFiniteNumber(Number(value));
+}
+
+function num(value: unknown): string {
+  const n = coerceFiniteValue(value);
+  if (n === undefined) {
     return "";
   }
   if (Math.abs(n) >= 1000) {
@@ -32,22 +39,13 @@ function num(value: unknown): string {
 }
 
 function fixed(value: unknown, digits: number): string {
-  if (value === null || value === undefined || value === "") {
-    return "";
-  }
-  const n = Number(value);
-  if (!Number.isFinite(n)) {
-    return "";
-  }
-  return n.toFixed(Math.max(0, digits));
+  const n = coerceFiniteValue(value);
+  return n === undefined ? "" : n.toFixed(digits);
 }
 
 function dur(value: unknown): string {
-  if (value === null || value === undefined || value === "") {
-    return "";
-  }
-  const raw = Number(value);
-  if (!Number.isFinite(raw)) {
+  const raw = coerceFiniteValue(value);
+  if (raw === undefined) {
     return "";
   }
   const s = Math.max(0, Math.trunc(raw));
@@ -62,22 +60,13 @@ function dur(value: unknown): string {
 }
 
 function pct(value: unknown): string {
-  if (value === null || value === undefined || value === "") {
-    return "";
-  }
-  const n = Number(value);
-  return Number.isFinite(n) ? `${Math.round(n)}%` : "";
+  const n = coerceFiniteValue(value);
+  return n === undefined ? "" : `${Math.round(n)}%`;
 }
 
 function inv(value: unknown): unknown {
-  if (value === null || value === undefined || value === "") {
-    return value;
-  }
-  const n = Number(value);
-  if (!Number.isFinite(n)) {
-    return value;
-  }
-  return 100 - Math.max(0, Math.min(100, n));
+  const n = coerceFiniteValue(value);
+  return n === undefined ? value : 100 - Math.max(0, Math.min(100, n));
 }
 
 function norm(value: unknown): number {
@@ -117,13 +106,21 @@ function meter(value: unknown, width: number, scale: unknown): string {
 
 const VERB_NAMES = new Set(["num", "fixed", "dur", "pct", "inv", "alias", "meter"]);
 
+function parseBoundedIntegerArg(
+  raw: string | undefined,
+  options: { defaultValue: number; min: number; max: number },
+): number | undefined {
+  const value = raw === undefined ? options.defaultValue : parseStrictInteger(raw);
+  return asSafeIntegerInRange(value, options);
+}
+
 function applyVerb(name: string, args: string[], value: unknown, vocab: Vocab): unknown {
   switch (name) {
     case "num":
       return num(value);
     case "fixed": {
-      const digits = args[0] ? Number.parseInt(args[0], 10) || 0 : 2;
-      return fixed(value, digits);
+      const digits = parseBoundedIntegerArg(args[0], { defaultValue: 2, min: 0, max: 100 });
+      return digits === undefined ? "" : fixed(value, digits);
     }
     case "dur":
       return dur(value);
@@ -143,9 +140,10 @@ function applyVerb(name: string, args: string[], value: unknown, vocab: Vocab): 
       return Object.hasOwn(table, lower) ? table[lower] : value;
     }
     case "meter": {
-      const width = args[0] ? Number.parseInt(args[0], 10) || 5 : 5;
+      const rawWidth = args[0]?.trim() ? args[0] : undefined;
+      const width = parseBoundedIntegerArg(rawWidth, { defaultValue: 5, min: 1, max: 100 });
       const scale = args.length > 1 ? vocab[expectDefined(args[1], "args entry at 1")] : undefined;
-      return meter(value, width, scale);
+      return width === undefined ? "" : meter(value, width, scale);
     }
     default:
       return String(value);

@@ -1,16 +1,10 @@
 // Imessage plugin module verifies provider message ownership in the local Messages database.
-import { createRequire } from "node:module";
+import type { SqliteWorkerStore } from "openclaw/plugin-sdk/sqlite-runtime";
 import { isIMessageEmailChatIdentifier, type IMessageChatContext } from "./chat-context.js";
+import { openIMessageChatDbReader, type IMessageChatDbOperations } from "./chat-db.js";
 import { resolveLocalIMessageChatDbPath } from "./cli-path.js";
 
-const require = createRequire(import.meta.url);
-
 type IMessageResourceBinding = "match" | "mismatch" | "unavailable";
-type IMessageChatRow = {
-  chatGuid: unknown;
-  chatId: unknown;
-  chatIdentifier: unknown;
-};
 
 export function normalizeIMessageMessageGuidForLookup(messageId: string): string {
   const trimmed = messageId.trim();
@@ -81,24 +75,15 @@ function matchesAnyChatCandidate(stored: unknown, candidates: string[]): boolean
   return candidates.some((candidate) => matchesChatCandidate(stored, candidate));
 }
 
-function loadNodeSqlite(): typeof import("node:sqlite") | null {
-  try {
-    return require("node:sqlite") as typeof import("node:sqlite");
-  } catch {
-    return null;
-  }
-}
-
-export function checkIMessageResourceBinding(params: {
+export async function checkIMessageResourceBinding(params: {
   chatContext: IMessageChatContext;
   cliPath: string;
   dbPath?: string;
   messageId: string;
   remoteHost?: string;
-}): IMessageResourceBinding {
+}): Promise<IMessageResourceBinding> {
   const dbPath = resolveLocalIMessageChatDbPath(params);
-  const sqlite = loadNodeSqlite();
-  if (!dbPath || !sqlite) {
+  if (!dbPath) {
     return "unavailable";
   }
   const messageGuid = normalizeIMessageMessageGuidForLookup(params.messageId);
@@ -121,20 +106,13 @@ export function checkIMessageResourceBinding(params: {
     return "unavailable";
   }
 
-  let db: import("node:sqlite").DatabaseSync | undefined;
+  let store: SqliteWorkerStore<IMessageChatDbOperations> | undefined;
   try {
-    db = new sqlite.DatabaseSync(dbPath, { readOnly: true });
-    const rows = db
-      .prepare(
-        `SELECT cmj.chat_id AS chatId,
-                c.guid AS chatGuid,
-                c.chat_identifier AS chatIdentifier
-         FROM message m
-         JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
-         JOIN chat c ON c.ROWID = cmj.chat_id
-         WHERE m.guid = ?`,
-      )
-      .all(messageGuid) as unknown as IMessageChatRow[];
+    store = await openIMessageChatDbReader(dbPath);
+    if (!store) {
+      return "unavailable";
+    }
+    const rows = await store.execute({ type: "messageChats", input: { messageGuid } });
     const matched = rows.some(
       (row) =>
         (!hasChatId || row.chatId === chatId) &&
@@ -150,7 +128,7 @@ export function checkIMessageResourceBinding(params: {
     return "unavailable";
   } finally {
     try {
-      db?.close();
+      await store?.close();
     } catch {
       // Best-effort cleanup after a read-only authorization query.
     }

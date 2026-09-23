@@ -1,8 +1,13 @@
 // Slack tests cover monitor.tool result plugin behavior.
 import { CURRENT_MESSAGE_MARKER } from "openclaw/plugin-sdk/channel-mention-gating";
 import { expectPairingReplyText } from "openclaw/plugin-sdk/channel-test-helpers";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { HISTORY_CONTEXT_MARKER } from "openclaw/plugin-sdk/reply-history";
 import { resetInboundDedupe } from "openclaw/plugin-sdk/reply-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   defaultSlackTestConfig,
@@ -12,10 +17,20 @@ import {
   getSlackHandlers,
   flush,
   resetSlackTestState,
+  runSlackHandlerWithDispatch,
   runSlackMessageOnce,
   startSlackMonitor,
   stopSlackMonitor,
 } from "./monitor.test-helpers.js";
+
+const mediaFetchMock = vi.hoisted(() =>
+  vi.fn<typeof import("./monitor/media.runtime.js").fetchWithRuntimeDispatcher>(),
+);
+
+vi.mock("./monitor/media.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./monitor/media.runtime.js")>()),
+  fetchWithRuntimeDispatcher: mediaFetchMock,
+}));
 
 const { monitorSlackProvider } = await import("./monitor/provider.js");
 
@@ -23,9 +38,10 @@ const slackTestState = getSlackTestState();
 const { sendMock, replyMock, reactMock, reactionAddMock, upsertPairingRequestMock } =
   slackTestState;
 
-beforeEach(() => {
+beforeEach(async () => {
+  mediaFetchMock.mockReset().mockRejectedValue(new Error("Unexpected Slack media test request"));
   resetInboundDedupe();
-  resetSlackTestState(defaultSlackTestConfig());
+  await resetSlackTestState(defaultSlackTestConfig());
 });
 
 describe("monitorSlackProvider tool results", () => {
@@ -38,6 +54,7 @@ describe("monitorSlackProvider tool results", () => {
     channel_type: "im" | "channel";
     thread_ts?: string;
     parent_user_id?: string;
+    attachments?: Array<Record<string, unknown>>;
   };
 
   const baseSlackMessageEvent = Object.freeze({
@@ -62,7 +79,9 @@ describe("monitorSlackProvider tool results", () => {
       },
       channels: {
         slack: {
-          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+          dm: { enabled: true },
+          dmPolicy: "open",
+          allowFrom: ["*"],
           replyToMode,
         },
       },
@@ -109,7 +128,9 @@ describe("monitorSlackProvider tool results", () => {
         : {}),
       channels: {
         slack: {
-          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+          dm: { enabled: true },
+          dmPolicy: "open",
+          allowFrom: ["*"],
           channels: { C1: { allow: true, requireMention: true } },
         },
       },
@@ -152,7 +173,9 @@ describe("monitorSlackProvider tool results", () => {
       channels: {
         slack: {
           historyLimit: 5,
-          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+          dm: { enabled: true },
+          dmPolicy: "open",
+          allowFrom: ["*"],
           channels,
         },
       },
@@ -187,7 +210,9 @@ describe("monitorSlackProvider tool results", () => {
         ...currentConfig.channels,
         slack: {
           ...currentConfig.channels?.slack,
-          dm: { enabled: true, policy: "pairing", allowFrom: [] },
+          dm: { enabled: true },
+          dmPolicy: "pairing",
+          allowFrom: [],
         },
       },
     };
@@ -202,7 +227,9 @@ describe("monitorSlackProvider tool results", () => {
     visibleReplies?: "automatic" | "message_tool";
   }) {
     const slackChannelConfig: Record<string, unknown> = {
-      dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+      dm: { enabled: true },
+      dmPolicy: "open",
+      allowFrom: ["*"],
       channels: { C1: { allow: true, requireMention: false } },
       ...(params?.groupPolicy ? { groupPolicy: params.groupPolicy } : {}),
       ...(params?.replyToMode ? { replyToMode: params.replyToMode } : {}),
@@ -255,14 +282,13 @@ describe("monitorSlackProvider tool results", () => {
         ackReaction: "👀",
         ackReactionScope: "group-mentions",
         groupChat: { visibleReplies: "automatic" },
-        removeAckAfterReply: true,
-        statusReactions: statusReactionsEnabled
-          ? { enabled: true, timing: { debounceMs: 0, doneHoldMs: 0, errorHoldMs: 0 } }
-          : { enabled: false },
+        statusReactions: statusReactionsEnabled ? { enabled: true } : { enabled: false },
       },
       channels: {
         slack: {
-          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+          dm: { enabled: true },
+          dmPolicy: "open",
+          allowFrom: ["*"],
           groupPolicy: "open",
         },
       },
@@ -282,15 +308,18 @@ describe("monitorSlackProvider tool results", () => {
     });
   }
 
-  async function runMentionGatedChannelMessageAndFlush() {
-    await runSlackMessageOnce(monitorSlackProvider, {
-      event: makeSlackMessageEvent({
-        text: "<@bot-user> hello",
-        ts: "456",
-        channel_type: "channel",
-      }),
-    });
-    await flush();
+  async function runMentionGatedChannelMessage() {
+    await runSlackMessageOnce(
+      monitorSlackProvider,
+      {
+        event: makeSlackMessageEvent({
+          text: "<@bot-user> hello",
+          ts: "456",
+          channel_type: "channel",
+        }),
+      },
+      { awaitDispatch: true },
+    );
   }
 
   function expectReactionFlow(expected: {
@@ -369,28 +398,130 @@ describe("monitorSlackProvider tool results", () => {
 
   it("includes recent channel history in Body when requireMention is false", async () => {
     setHistoryCaptureConfig({ "*": { requireMention: false } });
+    const firstTs = String(Date.now() / 1_000 + 1);
+    const secondTs = String(Number(firstTs) + 1);
     const capturedCtx = captureReplyContexts<{
       Body?: string;
       RawBody?: string;
       CommandBody?: string;
     }>();
+    getSlackClient()
+      .conversations.history.mockResolvedValueOnce({ messages: [] })
+      .mockResolvedValueOnce({ messages: [{ user: "U1", text: "first", ts: firstTs }] });
     await runMonitoredSlackMessages([
-      makeSlackMessageEvent({ user: "U1", text: "first", ts: "123", channel_type: "channel" }),
-      makeSlackMessageEvent({ user: "U2", text: "second", ts: "124", channel_type: "channel" }),
+      makeSlackMessageEvent({ user: "U1", text: "first", ts: firstTs, channel_type: "channel" }),
+      makeSlackMessageEvent({ user: "U2", text: "second", ts: secondTs, channel_type: "channel" }),
     ]);
 
     expect(replyMock).toHaveBeenCalledTimes(2);
     const latestCtx = capturedCtx.at(-1) ?? {};
-    expect(latestCtx.Body).toContain(HISTORY_CONTEXT_MARKER);
+    expect(latestCtx.Body).not.toContain(HISTORY_CONTEXT_MARKER);
     expect(latestCtx.Body).toContain("first");
     expect(latestCtx.Body).toContain(CURRENT_MESSAGE_MARKER);
     expect(latestCtx.RawBody).toBe("second");
     expect(latestCtx.CommandBody).toBe("second");
   });
 
+  it("recovers platform edits and offline discussion after monitor restart without waking on quiet ingress", async () => {
+    setHistoryCaptureConfig({ C1: { allow: true, requireMention: true } });
+    const captured = captureReplyContexts<{
+      Body?: string;
+      RawBody?: string;
+      InboundHistory?: Array<{ body: string }>;
+    }>();
+    const client = getSlackClient();
+    await runSlackMessageOnce(
+      monitorSlackProvider,
+      {
+        event: makeSlackMessageEvent({
+          text: "old text before editing",
+          ts: "100",
+          channel_type: "channel",
+        }),
+      },
+      { awaitDispatch: true },
+    );
+    expect(replyMock).not.toHaveBeenCalled();
+    expect(client.conversations.history).not.toHaveBeenCalled();
+    expect(client.conversations.replies).not.toHaveBeenCalled();
+    client.conversations.history.mockResolvedValue({
+      messages: [
+        { user: "U2", text: "discussion while offline", ts: "102" },
+        { user: "U1", text: "edited platform text", ts: "100" },
+      ],
+    });
+    await runSlackMessageOnce(
+      monitorSlackProvider,
+      {
+        event: makeSlackMessageEvent({
+          text: "<@bot-user> recover the discussion",
+          ts: "103",
+          channel_type: "channel",
+        }),
+      },
+      { awaitDispatch: true },
+    );
+    expect(captured).toHaveLength(1);
+    expect(captured[0]?.InboundHistory?.map((entry) => entry.body)).toEqual([
+      "edited platform text",
+      "discussion while offline",
+    ]);
+    expect(captured[0]?.Body).toContain("edited platform text");
+    expect(captured[0]?.Body).toContain("discussion while offline");
+    expect(captured[0]?.Body).not.toContain("old text before editing");
+    expect(captured[0]?.RawBody).toContain("recover the discussion");
+  });
+
+  it("surfaces forwarded image download failures through the monitor dispatch boundary", async () => {
+    let latestCtx: { RawBody?: string } | undefined;
+    replyMock.mockImplementation(async (ctx: unknown) => {
+      latestCtx = (ctx ?? {}) as { RawBody?: string };
+      return { text: "ack" };
+    });
+    const mockFetch = mediaFetchMock.mockImplementation(
+      async () => new Response("Not Found", { status: 404 }),
+    );
+
+    await runSlackMessageOnce(
+      monitorSlackProvider,
+      {
+        event: makeSlackMessageEvent({
+          text: "caption",
+          attachments: [{ is_share: true, image_url: "https://files.slack.com/forwarded.jpg" }],
+        }),
+      },
+      { awaitDispatch: true },
+    );
+
+    expect(replyMock).toHaveBeenCalledTimes(1);
+    expect(latestCtx?.RawBody).toBe("caption\n\n[slack attachment unavailable]");
+    expect(mockFetch).toHaveBeenCalledOnce();
+
+    if (process.env.OPENCLAW_SLACK_FORWARDED_IMAGE_PROOF === "1") {
+      console.log(
+        JSON.stringify({
+          verdict: "PASS",
+          harness: "Slack monitor provider + mock Slack API + mocked file fetch",
+          entrypoint: "extensions/slack/src/monitor/provider.ts",
+          agentRawBody: latestCtx?.RawBody,
+          slackFetchStatus: 404,
+        }),
+      );
+    }
+  });
+
   it("scopes thread history to the thread by default", async () => {
     setHistoryCaptureConfig({ C1: { allow: true, requireMention: true } });
-    const capturedCtx = captureReplyContexts<{ Body?: string }>();
+    const capturedCtx = captureReplyContexts<{ Body?: string; ThreadHistoryBody?: string }>();
+    getSlackClient().conversations.replies.mockImplementation(async (...args: unknown[]) => {
+      const request = args[0] as { ts: string };
+      return {
+        messages:
+          request.ts === "100"
+            ? [{ user: "U1", text: "thread-a-one", ts: "200" }]
+            : [{ user: "U2", text: "thread-b-root", ts: "300" }],
+      };
+    });
     await runMonitoredSlackMessages([
       makeSlackMessageEvent({
         user: "U1",
@@ -416,12 +547,13 @@ describe("monitorSlackProvider tool results", () => {
     ]);
 
     expect(replyMock).toHaveBeenCalledTimes(2);
-    expect(capturedCtx[0]?.Body).toContain("thread-a-one");
+    expect(capturedCtx[0]?.ThreadHistoryBody).toContain("thread-a-one");
+    expect(capturedCtx[1]?.ThreadHistoryBody).not.toContain("thread-a-one");
+    expect(capturedCtx[1]?.ThreadHistoryBody).not.toContain("thread-a-two");
     expect(capturedCtx[1]?.Body).not.toContain("thread-a-one");
-    expect(capturedCtx[1]?.Body).not.toContain("thread-a-two");
   });
 
-  it("updates assistant thread status when replies start", async () => {
+  it("updates session status when replies start", async () => {
     replyMock.mockImplementation(async (...args: unknown[]) => {
       const opts = (args[1] ?? {}) as { onReplyStart?: () => Promise<void> | void };
       await opts?.onReplyStart?.();
@@ -433,22 +565,20 @@ describe("monitorSlackProvider tool results", () => {
       event: makeSlackMessageEvent(),
     });
 
-    const client = getSlackClient() as {
-      assistant?: { threads?: { setStatus?: ReturnType<typeof vi.fn> } };
-    };
-    const setStatus = client.assistant?.threads?.setStatus;
-    expect(setStatus).toHaveBeenCalledTimes(2);
-    expect(setStatus).toHaveBeenNthCalledWith(1, {
+    const setStatus = getSlackClient().apiCall;
+    // Status updates run detached from the awaited dispatch; wait on the mock.
+    await vi.waitFor(() => expect(setStatus).toHaveBeenCalledTimes(2), { timeout: 5_000 });
+    expect(setStatus).toHaveBeenNthCalledWith(1, "agents.sessions.setStatus", {
       token: "bot-token",
       channel_id: "C1",
       thread_ts: "123",
-      status: "is typing...",
+      status: "processing",
     });
-    expect(setStatus).toHaveBeenNthCalledWith(2, {
+    expect(setStatus).toHaveBeenNthCalledWith(2, "agents.sessions.setStatus", {
       token: "bot-token",
       channel_id: "C1",
       thread_ts: "123",
-      status: "",
+      status: "active",
     });
   });
 
@@ -500,7 +630,9 @@ describe("monitorSlackProvider tool results", () => {
       },
       channels: {
         slack: {
-          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+          dm: { enabled: true },
+          dmPolicy: "open",
+          allowFrom: ["*"],
           groupPolicy: "open",
           requireMention: false,
         },
@@ -527,12 +659,13 @@ describe("monitorSlackProvider tool results", () => {
         groupChat: { visibleReplies: "message_tool" },
         statusReactions: {
           enabled: true,
-          timing: { debounceMs: 0, doneHoldMs: 0, errorHoldMs: 0 },
         },
       },
       channels: {
         slack: {
-          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+          dm: { enabled: true },
+          dmPolicy: "open",
+          allowFrom: ["*"],
           groupPolicy: "open",
           requireMention: false,
         },
@@ -624,7 +757,9 @@ describe("monitorSlackProvider tool results", () => {
       },
       channels: {
         slack: {
-          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+          dm: { enabled: true },
+          dmPolicy: "open",
+          allowFrom: ["*"],
           groupPolicy: "open",
         },
       },
@@ -640,49 +775,109 @@ describe("monitorSlackProvider tool results", () => {
       channel: { name: "general", is_channel: true },
     });
 
-    await runSlackMessageOnce(monitorSlackProvider, {
-      event: makeSlackMessageEvent({
-        text: "<@bot-user> hello",
-        ts: "456",
-        channel_type: "channel",
-      }),
-    });
+    await runSlackMessageOnce(
+      monitorSlackProvider,
+      {
+        event: makeSlackMessageEvent({
+          text: "<@bot-user> hello",
+          ts: "456",
+          channel_type: "channel",
+        }),
+      },
+      { awaitDispatch: true },
+    );
 
-    expect(reactMock).toHaveBeenCalledWith({
-      channel: "C1",
-      timestamp: "456",
-      name: "eyes",
-    });
+    // Ack reactions apply via the status-reaction debounce/queue, detached
+    // from the awaited dispatch; wait on the mock instead of asserting inline.
+    await vi.waitFor(
+      () =>
+        expect(reactMock).toHaveBeenCalledWith({
+          channel: "C1",
+          timestamp: "456",
+          name: "eyes",
+        }),
+      { timeout: 5_000 },
+    );
   });
 
-  it("keeps ack reaction when no reply is delivered and status reactions are disabled", async () => {
+  it("applies acknowledgement scope changes without reconnecting the running monitor", async () => {
+    const config: OpenClawConfig = {
+      messages: { ackReaction: "eyes", ackReactionScope: "off" },
+      channels: { slack: { dmPolicy: "open", allowFrom: ["*"] } },
+    };
+    slackTestState.config = config;
+    setRuntimeConfigSnapshot(config, config);
+    replyMock.mockResolvedValue({ text: "reply" });
+    const monitor = startSlackMonitor(monitorSlackProvider);
+    try {
+      const handler = await getSlackHandlerOrThrow("message");
+      for (const [index, scope] of (["off", "all", "off"] as const).entries()) {
+        const nextConfig: OpenClawConfig = {
+          ...config,
+          messages: { ...config.messages, ackReactionScope: scope },
+        };
+        setRuntimeConfigSnapshot(nextConfig, nextConfig);
+        await runSlackHandlerWithDispatch(handler, {
+          event: makeSlackMessageEvent({ ts: `200.${index}` }),
+        });
+        await vi.waitFor(() => expect(reactionAddMock).toHaveBeenCalledTimes(index === 0 ? 0 : 1));
+        expect(slackTestState.appStartMock).toHaveBeenCalledTimes(1);
+        expect(slackTestState.appStopMock).not.toHaveBeenCalled();
+      }
+      expect(reactionAddMock).toHaveBeenCalledWith({
+        channel: "C1",
+        timestamp: "200.1",
+        name: "eyes",
+      });
+    } finally {
+      try {
+        await stopSlackMonitor(monitor);
+      } finally {
+        clearRuntimeConfigSnapshot();
+      }
+    }
+  });
+
+  it("keeps ack reaction after sending the missing-reply fallback when status reactions are disabled", async () => {
     replyMock.mockResolvedValue(undefined);
     setMentionGatedAckConfig(false);
     mockGeneralChannelInfo();
-    await runMentionGatedChannelMessageAndFlush();
+    await runMentionGatedChannelMessage();
 
-    expect(sendMock).not.toHaveBeenCalled();
-    expect(reactMock).toHaveBeenCalledTimes(1);
-    expect(reactMock).toHaveBeenCalledWith({
-      channel: "C1",
-      timestamp: "456",
-      name: "eyes",
-    });
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(firstMockArg(sendMock, "send", 1)).toBe(
+      "PFX ⚠️ OpenClaw couldn't produce or deliver a reply. Please try again. If this keeps happening, ask the operator to check the gateway logs.",
+    );
+    await vi.waitFor(
+      () =>
+        expect(reactMock).toHaveBeenCalledWith({
+          channel: "C1",
+          timestamp: "456",
+          name: "eyes",
+        }),
+      { timeout: 5_000 },
+    );
   });
 
-  it("keeps ack reaction when no reply is delivered and status reactions are enabled", async () => {
+  it("keeps ack reaction after sending the missing-reply fallback when status reactions are enabled", async () => {
     replyMock.mockResolvedValue(undefined);
     setMentionGatedAckConfig(true);
     mockGeneralChannelInfo();
-    await runMentionGatedChannelMessageAndFlush();
+    await runMentionGatedChannelMessage();
 
-    expect(sendMock).not.toHaveBeenCalled();
-    expect(reactMock).toHaveBeenCalledTimes(1);
-    expect(reactMock).toHaveBeenCalledWith({
-      channel: "C1",
-      timestamp: "456",
-      name: "eyes",
-    });
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(firstMockArg(sendMock, "send", 1)).toBe(
+      "PFX ⚠️ OpenClaw couldn't produce or deliver a reply. Please try again. If this keeps happening, ask the operator to check the gateway logs.",
+    );
+    await vi.waitFor(
+      () =>
+        expect(reactMock).toHaveBeenCalledWith({
+          channel: "C1",
+          timestamp: "456",
+          name: "eyes",
+        }),
+      { timeout: 5_000 },
+    );
   });
 
   it("keeps status reactions for mentioned message-tool-only channel turns", async () => {
@@ -695,41 +890,50 @@ describe("monitorSlackProvider tool results", () => {
         groupChat: { visibleReplies: "message_tool" },
         statusReactions: {
           enabled: true,
-          timing: { debounceMs: 0, doneHoldMs: 0, errorHoldMs: 0 },
         },
       },
       channels: {
         slack: {
-          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+          dm: { enabled: true },
+          dmPolicy: "open",
+          allowFrom: ["*"],
           groupPolicy: "open",
         },
       },
     };
     mockGeneralChannelInfo();
 
-    await runMentionGatedChannelMessageAndFlush();
+    await runMentionGatedChannelMessage();
 
     expect(replyMock).toHaveBeenCalledTimes(1);
     expect(sendMock).not.toHaveBeenCalled();
-    expect(reactMock).toHaveBeenCalledWith({
-      channel: "C1",
-      timestamp: "456",
-      name: "eyes",
-    });
+    await vi.waitFor(
+      () =>
+        expect(reactMock).toHaveBeenCalledWith({
+          channel: "C1",
+          timestamp: "456",
+          name: "eyes",
+        }),
+      { timeout: 5_000 },
+    );
   });
 
-  it("keeps the error reaction when dispatch fails before any reply is delivered", async () => {
+  it("restores the ack reaction when dispatch fails before any reply is delivered", async () => {
     replyMock.mockRejectedValue(new Error("boom"));
     setMentionGatedAckConfig(true);
     mockGeneralChannelInfo();
-    await runMentionGatedChannelMessageAndFlush();
+    await expect(runMentionGatedChannelMessage()).rejects.toThrow("boom");
 
     expect(sendMock).not.toHaveBeenCalled();
-    expectReactionFlow({
-      startsWith: ["eyes", "x"],
-      includes: "x",
-      endsWith: "x",
-    });
+    await vi.waitFor(
+      () =>
+        expectReactionFlow({
+          startsWith: ["eyes", "x"],
+          includes: "x",
+          endsWith: "eyes",
+        }),
+      { timeout: 5_000 },
+    );
   });
 
   it("replies with pairing code when dmPolicy is pairing and no allowFrom is set", async () => {

@@ -5,25 +5,50 @@ import type {
   ChannelMessageActionName,
   ChannelThreadingToolContext,
 } from "../../channels/plugins/types.public.js";
+import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import {
   isDeliverableMessageChannel,
+  isInternalNonDeliveryChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
-import { applyTargetToParams } from "./channel-target.js";
 import {
   actionHasResourceReference,
   actionHasTarget,
   actionRequiresTarget,
+  applyTargetToParams,
   resolveActionDeliveryTargetAlias,
   type ActionDeliveryTargetAliasSpec,
 } from "./message-action-spec.js";
+import { missingMessageActionTargetError } from "./target-errors.js";
+
+export function resolveImplicitMessageActionTarget(
+  toolContext: ChannelThreadingToolContext | undefined,
+): string | undefined {
+  for (const value of [toolContext?.currentChannelId, toolContext?.currentMessagingTarget]) {
+    const target = normalizeOptionalString(value);
+    if (!target) {
+      continue;
+    }
+    if (isInternalNonDeliveryChannel(target)) {
+      continue;
+    }
+    // A session can arrive bare or wrapped as a channel target; neither is
+    // a transport destination. Keep searching for the real conversation.
+    if (parseAgentSessionKey(target.replace(/^channel:/i, ""))) {
+      continue;
+    }
+    return target;
+  }
+  return undefined;
+}
 
 /** Normalizes message-action args before target validation and dispatch. */
 export function normalizeMessageActionInput(params: {
   action: ChannelMessageActionName;
   args: Record<string, unknown>;
   toolContext?: ChannelThreadingToolContext;
-  targetAliasSpec?: ActionDeliveryTargetAliasSpec;
+  targetAliasSpec?: ActionDeliveryTargetAliasSpec | null;
+  allowResourceOnly?: boolean;
 }): Record<string, unknown> {
   const normalizedArgs = { ...params.args };
   const { action, toolContext } = params;
@@ -42,14 +67,20 @@ export function normalizeMessageActionInput(params: {
     normalizeOptionalString(normalizedArgs.to) ??
     normalizeOptionalString(normalizedArgs.channelId) ??
     "";
-  const deliveryAliasTarget = resolveActionDeliveryTargetAlias(action, normalizedArgs, {
+  const targetAliasOptions = {
     channel: inferredChannel,
     aliasSpec: params.targetAliasSpec,
-  });
-  const hasResourceReference = actionHasResourceReference(action, normalizedArgs, {
-    channel: inferredChannel,
-    aliasSpec: params.targetAliasSpec,
-  });
+  };
+  const deliveryAliasTarget = resolveActionDeliveryTargetAlias(
+    action,
+    normalizedArgs,
+    targetAliasOptions,
+  );
+  const hasResourceReference = actionHasResourceReference(
+    action,
+    normalizedArgs,
+    targetAliasOptions,
+  );
 
   if (deliveryAliasTarget && explicitTarget && deliveryAliasTarget !== explicitTarget) {
     throw new Error(`Action ${action} received conflicting target and delivery alias values.`);
@@ -74,11 +105,9 @@ export function normalizeMessageActionInput(params: {
     !hasLegacyTarget &&
     !deliveryAliasTarget &&
     actionRequiresTarget(action) &&
-    (hasResourceReference || !actionHasTarget(action, normalizedArgs, { channel: inferredChannel }))
+    (hasResourceReference || !actionHasTarget(action, normalizedArgs, targetAliasOptions))
   ) {
-    const inferredTarget =
-      normalizeOptionalString(toolContext?.currentChannelId) ??
-      normalizeOptionalString(toolContext?.currentMessagingTarget);
+    const inferredTarget = resolveImplicitMessageActionTarget(toolContext);
     if (inferredTarget) {
       normalizedArgs.target = inferredTarget;
     }
@@ -106,10 +135,10 @@ export function normalizeMessageActionInput(params: {
   ].some((value) => Boolean(normalizeOptionalString(value)));
   if (
     actionRequiresTarget(action) &&
-    (!actionHasTarget(action, normalizedArgs, { channel: inferredChannel }) ||
-      (hasResourceReference && !hasCanonicalTarget))
+    (!actionHasTarget(action, normalizedArgs, targetAliasOptions) ||
+      (hasResourceReference && !hasCanonicalTarget && !params.allowResourceOnly))
   ) {
-    throw new Error(`Action ${action} requires a target.`);
+    throw missingMessageActionTargetError(action);
   }
 
   return normalizedArgs;

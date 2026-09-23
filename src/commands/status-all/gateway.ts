@@ -1,11 +1,15 @@
 // Gateway log-tail helpers for status diagnostics.
 // Summaries compact repeated auth/runtime failures while preserving enough context for operators.
 
+import {
+  extractBalancedJsonPrefix,
+  safeParseJson,
+  safeParseJsonRecord,
+} from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { classifyOAuthRefreshFailureReason } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { readGatewayLogTailLines } from "../../daemon/diagnostics.js";
-import { extractBalancedJsonPrefix } from "../../shared/balanced-json.js";
 
 /** Reads the last non-empty lines from a gateway log file, returning an empty list on read failure. */
 export async function readFileTailLines(filePath: string, maxLines: number): Promise<string[]> {
@@ -28,9 +32,7 @@ function shorten(message: string, maxLen: number): string {
 function normalizeGwsLine(line: string): string {
   // Remove per-request ids so repeated gateway websocket errors group into one summary.
   return line
-    .replace(/\s+runId=[^\s]+/g, "")
-    .replace(/\s+conn=[^\s]+/g, "")
-    .replace(/\s+id=[^\s]+/g, "")
+    .replace(/\s+(?:runId|conn|id)=[^\s]+/g, "")
     .replace(/\s+error=Error:.*$/g, "")
     .trim();
 }
@@ -73,48 +75,33 @@ export function summarizeLogTail(rawLines: string[], opts?: { maxLines?: number 
     out.push(base);
   };
 
-  const addLine = (line: string) => {
-    const trimmed = line.trimEnd();
-    if (!trimmed) {
-      return;
-    }
-    out.push(trimmed);
-  };
-
   const lines = rawLines.map((line) => line.trimEnd()).filter(Boolean);
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i] ?? "";
     const trimmedStart = line.trimStart();
     if (
-      (trimmedStart.startsWith('"') ||
-        trimmedStart === "}" ||
-        trimmedStart === "{" ||
-        trimmedStart.startsWith("}") ||
-        trimmedStart.startsWith("{")) &&
-      !trimmedStart.startsWith("[") &&
-      !trimmedStart.startsWith("#")
+      trimmedStart.startsWith('"') ||
+      trimmedStart.startsWith("}") ||
+      (trimmedStart.startsWith("{") && !safeParseJsonRecord(trimmedStart))
     ) {
-      // Tail can cut in the middle of a JSON blob; drop orphaned JSON fragments.
+      // Tail can cut in the middle of a JSON blob; drop orphaned fragments,
+      // but retain complete JSON console records and their structured context.
       continue;
     }
 
     // "[openai] Token refresh failed: 401 { ...json... }"
-    const tokenRefresh = line.match(/^\[([^\]]+)\]\s+Token refresh failed:\s*(\d+)\s*(\{)?\s*$/);
+    const tokenRefresh = line.match(
+      /^\[([^\]]+)\]\s+Token refresh failed:\s*(\d+)(?:\s+(\{.*))?\s*$/,
+    );
     if (tokenRefresh) {
       const tag = tokenRefresh[1] ?? "unknown";
       const status = tokenRefresh[2] ?? "unknown";
       const block = consumeJsonBlock(lines, i);
       if (block) {
         i = block.endIndex;
-        const parsed = (() => {
-          try {
-            return JSON.parse(block.json) as {
-              error?: { code?: string; message?: string };
-            };
-          } catch {
-            return null;
-          }
-        })();
+        const parsed = (safeParseJson(block.json) ?? null) as {
+          error?: { code?: string; message?: string };
+        } | null;
         const code = normalizeOptionalString(parsed?.error?.code) ?? null;
         const msg = normalizeOptionalString(parsed?.error?.message) ?? null;
         const refreshReason = classifyOAuthRefreshFailureReason(msg ?? "");
@@ -147,7 +134,7 @@ export function summarizeLogTail(rawLines: string[], opts?: { maxLines?: number 
       continue;
     }
 
-    addLine(line);
+    out.push(line);
   }
 
   for (const g of groups.values()) {

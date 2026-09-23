@@ -1,20 +1,70 @@
 // Coverage for cache-TTL session entries after embedded attempts.
 import { describe, expect, it, vi } from "vitest";
-import { appendAttemptCacheTtlIfNeeded } from "./attempt.thread-helpers.js";
+import { createToolResultPromptProjectionState } from "../session-prompt-state.js";
+import { appendAttemptCacheTtlIfNeeded } from "./attempt-thread-helpers.js";
 
 const ATTEMPT_CACHE_TTL_CUSTOM_TYPE = "openclaw.cache-ttl";
 
 describe("runEmbeddedAttempt cache-ttl tracking after compaction", () => {
-  it("skips cache-ttl append when compaction completed during the attempt", () => {
-    // Compaction already changes the prompt cache boundary, so appending a fresh
-    // cache touch for the same attempt would overstate cache continuity.
+  it.each([true, false])("uses the resolved route for marker eligibility %s", (eligible) => {
+    const sessionManager = { appendCustomEntry: vi.fn() };
+    const isCacheTtlEligibleProvider = vi.fn(() => eligible);
+    const modelRoute = { baseUrl: "https://proxy.example/v1", supportsPromptCacheKey: eligible };
+    const appended = appendAttemptCacheTtlIfNeeded({
+      sessionManager,
+      toolResultPromptProjectionState: createToolResultPromptProjectionState(),
+      timedOutDuringCompaction: false,
+      compactionOccurredThisAttempt: false,
+      config: { agents: { defaults: { contextPruning: { mode: "cache-ttl" } } } },
+      provider: "openai",
+      modelId: "gpt-4o",
+      modelApi: "openai-responses",
+      modelRoute,
+      isCacheTtlEligibleProvider,
+      now: 123,
+    });
+    expect(isCacheTtlEligibleProvider).toHaveBeenCalledExactlyOnceWith(
+      "openai",
+      "gpt-4o",
+      "openai-responses",
+      modelRoute,
+    );
+    expect(appended).toBe(eligible);
+    expect(sessionManager.appendCustomEntry).toHaveBeenCalledTimes(eligible ? 1 : 0);
+  });
+
+  it("does not inspect route eligibility when pruning is off", () => {
+    const isCacheTtlEligibleProvider = vi.fn(() => true);
+    const sessionManager = { appendCustomEntry: vi.fn() };
+    expect(
+      appendAttemptCacheTtlIfNeeded({
+        sessionManager,
+        toolResultPromptProjectionState: createToolResultPromptProjectionState(),
+        timedOutDuringCompaction: false,
+        compactionOccurredThisAttempt: false,
+        provider: "openai",
+        modelId: "gpt-4o",
+        isCacheTtlEligibleProvider,
+      }),
+    ).toBe(false);
+    expect(isCacheTtlEligibleProvider).not.toHaveBeenCalled();
+    expect(sessionManager.appendCustomEntry).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { reason: "completed", timedOutDuringCompaction: false, compactionOccurredThisAttempt: true },
+    { reason: "timed out", timedOutDuringCompaction: true, compactionOccurredThisAttempt: false },
+  ])("skips cache-ttl append when compaction $reason", (compaction) => {
+    // Completed or interrupted compaction cannot establish cache continuity for
+    // the old prompt, so neither case may record a fresh cache touch.
     const sessionManager = {
       appendCustomEntry: vi.fn(),
     };
     const appended = appendAttemptCacheTtlIfNeeded({
       sessionManager,
-      timedOutDuringCompaction: false,
-      compactionOccurredThisAttempt: true,
+      toolResultPromptProjectionState: createToolResultPromptProjectionState(),
+      timedOutDuringCompaction: compaction.timedOutDuringCompaction,
+      compactionOccurredThisAttempt: compaction.compactionOccurredThisAttempt,
       config: {
         agents: {
           defaults: {
@@ -41,6 +91,7 @@ describe("runEmbeddedAttempt cache-ttl tracking after compaction", () => {
     };
     const appended = appendAttemptCacheTtlIfNeeded({
       sessionManager,
+      toolResultPromptProjectionState: createToolResultPromptProjectionState(),
       timedOutDuringCompaction: false,
       compactionOccurredThisAttempt: false,
       config: {
@@ -64,6 +115,9 @@ describe("runEmbeddedAttempt cache-ttl tracking after compaction", () => {
       timestamp: 123,
       provider: "anthropic",
       modelId: "claude-sonnet-4-20250514",
+      prunedToolResults: [],
+      ambiguousToolResultBaseKeys: [],
+      frozenToolResults: [],
     });
   });
 });

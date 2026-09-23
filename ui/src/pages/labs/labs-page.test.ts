@@ -1,0 +1,604 @@
+/* @vitest-environment jsdom */
+
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { applyMergePatch } from "../../../../src/config/merge-patch.js";
+import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { i18n } from "../../i18n/index.ts";
+import { invalidateConfigConnection } from "../../lib/config/config-state-model.ts";
+import {
+  createApplicationContextProvider,
+  type ApplicationContextProvider,
+} from "../../test-helpers/application-context.ts";
+import { LAB_FEATURES } from "./labs-registry.ts";
+import "./labs-page.ts";
+
+type LabsPageElement = HTMLElement & { updateComplete: Promise<boolean>; requestUpdate(): void };
+
+type RuntimeConfigState = {
+  connected: boolean;
+  configLoading: boolean;
+  configSnapshot: {
+    hash: string;
+    sourceConfig: Record<string, unknown>;
+    valid?: boolean;
+  } | null;
+  lastError: string | null;
+};
+
+function createGateway() {
+  const client = {} as GatewayBrowserClient;
+  let snapshot = { client, phase: "connected" } as ApplicationGatewaySnapshot;
+  const listeners = new Set<(snapshot: ApplicationGatewaySnapshot) => void>();
+  return {
+    gateway: {
+      get snapshot() {
+        return snapshot;
+      },
+      subscribe(listener: (snapshot: ApplicationGatewaySnapshot) => void) {
+        listeners.add(listener);
+        return () => {
+          listeners.delete(listener);
+        };
+      },
+    } as unknown as ApplicationContext["gateway"],
+    setPhase(phase: ApplicationGatewaySnapshot["phase"]) {
+      snapshot = { ...snapshot, phase };
+      listeners.forEach((listener) => listener(snapshot));
+    },
+  };
+}
+
+function createRuntimeConfig(sourceConfig: Record<string, unknown>) {
+  const state: RuntimeConfigState = {
+    connected: true,
+    configLoading: false,
+    configSnapshot: { hash: "config-hash", sourceConfig },
+    lastError: null,
+  };
+  const listeners = new Set<(state: RuntimeConfigState) => void>();
+  return {
+    state,
+    ensureLoaded: vi.fn(async () => undefined),
+    refresh: vi.fn(async () => undefined),
+    patch: vi.fn(async (_input: { raw: Record<string, unknown>; note: string }) => true),
+    subscribe(listener: (state: RuntimeConfigState) => void) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  };
+}
+
+async function mountPage(sourceConfig: Record<string, unknown>): Promise<{
+  page: LabsPageElement;
+  provider: ApplicationContextProvider;
+  runtimeConfig: ReturnType<typeof createRuntimeConfig>;
+  gateway: ReturnType<typeof createGateway>;
+}> {
+  const runtimeConfig = createRuntimeConfig(sourceConfig);
+  const gateway = createGateway();
+  const context = {
+    basePath: "",
+    gateway: gateway.gateway,
+    runtimeConfig,
+  } as unknown as ApplicationContext;
+  const provider = createApplicationContextProvider(context);
+  const page = document.createElement("openclaw-labs-page") as LabsPageElement;
+  provider.append(page);
+  document.body.append(provider);
+  await page.updateComplete;
+  return { page, provider, runtimeConfig, gateway };
+}
+
+function labRow(page: LabsPageElement, title: string) {
+  const row = [...page.querySelectorAll<HTMLElement>(".settings-row")].find(
+    (candidate) => candidate.querySelector(".settings-row__title")?.textContent?.trim() === title,
+  );
+  if (!row) {
+    throw new Error(`${title} row not rendered`);
+  }
+  return row;
+}
+
+function labToggle(page: LabsPageElement, title: string) {
+  const toggle = labRow(page, title).querySelector<HTMLElement & { checked: boolean }>("wa-switch");
+  if (!toggle) {
+    throw new Error(`${title} toggle not rendered`);
+  }
+  return toggle;
+}
+
+function labDocsLink(page: LabsPageElement, title: string) {
+  const link = labRow(page, title).querySelector<HTMLAnchorElement>(".settings-row__desc a");
+  if (!link) {
+    throw new Error(`${title} documentation link not rendered`);
+  }
+  return link;
+}
+
+function codeModeToggle(page: LabsPageElement) {
+  return labToggle(page, "Code Mode");
+}
+
+describe("LabsPage", () => {
+  beforeEach(async () => {
+    await i18n.setLocale("en");
+  });
+
+  afterEach(() => {
+    document.body.replaceChildren();
+    vi.restoreAllMocks();
+  });
+
+  it("renders every registered experimental entry with its documentation link", async () => {
+    const { page, runtimeConfig } = await mountPage({
+      tools: { codeMode: { enabled: true }, swarm: { enabled: true } },
+    });
+
+    expect(page.querySelector(".page-subtitle")?.textContent).toContain("experimental");
+    expect(page.querySelector(".settings-page__intro")).toBeNull();
+    const introLink = page.querySelector<HTMLAnchorElement>(".page-subtitle a");
+    expect(introLink?.textContent?.trim()).toBe("Learn more");
+    expect(introLink?.href).toBe("https://docs.openclaw.ai/concepts/experimental-features");
+    expect(page.querySelectorAll(".settings-row wa-switch")).toHaveLength(LAB_FEATURES.length);
+    expect(page.textContent).toContain("Code Mode");
+    for (const title of [
+      "Swarm",
+      "CLI agents",
+      "Tool-loop detection",
+      "Message audit metadata",
+      "Lean tools for local models",
+    ]) {
+      expect(page.textContent).not.toContain(title);
+    }
+    expect(runtimeConfig.patch).not.toHaveBeenCalled();
+    expect(page.textContent).toContain("Host Desktop");
+    expect(page.textContent).toContain("Cloud Worker Desktop");
+    expect(codeModeToggle(page).checked).toBe(true);
+
+    const docs = LAB_FEATURES.map((feature) => labDocsLink(page, feature.title()));
+    expect(docs.map((link) => link.href)).toEqual(LAB_FEATURES.map((feature) => feature.docsUrl));
+    expect(docs.every((link) => link.target === "_blank")).toBe(true);
+    expect(docs.every((link) => link.rel.includes("noopener"))).toBe(true);
+  });
+
+  it("reflects the supported boolean Code Mode shorthand", async () => {
+    const { page } = await mountPage({ tools: { codeMode: true } });
+
+    expect(codeModeToggle(page).checked).toBe(true);
+  });
+
+  it("reads the per-model auto tier as enabled", async () => {
+    const { page } = await mountPage({ tools: { codeMode: { enabled: "auto" } } });
+
+    expect(codeModeToggle(page).checked).toBe(true);
+  });
+
+  it.each([
+    ...[true, false, "auto"].map((enabled) => ({
+      name: `${enabled} shorthand`,
+      config: enabled,
+      executor: "quickjs",
+      expectedPatch: { enabled, executor: "quickjs" },
+    })),
+    {
+      name: "inherited auto",
+      config: undefined,
+      executor: "quickjs",
+      expectedPatch: { enabled: "auto", executor: "quickjs" },
+    },
+    {
+      name: "authored limits without activation",
+      config: { timeoutMs: 5000 },
+      executor: "quickjs",
+      expectedPatch: { executor: "quickjs" },
+    },
+    {
+      name: "explicit auto and limits when restoring Node",
+      config: { enabled: "auto", executor: "quickjs", timeoutMs: 5000 },
+      executor: "node",
+      expectedPatch: { executor: null },
+    },
+  ])("preserves $name when choosing an executor", async ({ config, executor, expectedPatch }) => {
+    const { page, runtimeConfig } = await mountPage({ tools: { codeMode: config } });
+    const select = page.querySelector<HTMLSelectElement>('select[aria-label="Code Mode executor"]');
+    expect(select).not.toBeNull();
+    select!.value = executor;
+    select!.dispatchEvent(new Event("change", { bubbles: true }));
+
+    await vi.waitFor(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
+    expect(runtimeConfig.patch).toHaveBeenCalledWith({
+      raw: { tools: { codeMode: expectedPatch } },
+      note: "labs: update codeModeExecutor",
+    });
+  });
+
+  it.each([
+    {
+      label: "Code Mode",
+      sourceConfig: { tools: { codeMode: { enabled: true } } },
+      expectedPatch: { tools: { codeMode: { enabled: null } } },
+      note: "labs: update codeMode",
+    },
+    {
+      label: "Custom plugin UI",
+      sourceConfig: { gateway: { controlUi: { experimental: { customPlugins: true } } } },
+      expectedPatch: { gateway: { controlUi: { experimental: { customPlugins: null } } } },
+      note: "labs: update customPluginUi",
+    },
+    {
+      label: "Host Desktop",
+      sourceConfig: {
+        desktop: {
+          host: { enabled: true, managed: false, port: 5908, passwordFile: "/tmp/vnc-password" },
+        },
+      },
+      expectedPatch: { desktop: { host: { enabled: false } } },
+      note: "labs: update hostDesktop",
+    },
+  ])(
+    "restores the default through the canonical patch flow when disabling $label",
+    async (testCase) => {
+      const { page, runtimeConfig } = await mountPage(testCase.sourceConfig);
+      const toggle = labToggle(page, testCase.label);
+      expect(toggle.checked).toBe(true);
+
+      toggle.checked = false;
+      toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+
+      await vi.waitFor(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
+      expect(runtimeConfig.patch).toHaveBeenCalledWith({
+        raw: testCase.expectedPatch,
+        note: testCase.note,
+      });
+      expect(runtimeConfig.refresh).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not publish a retired save failure after a same-client reconnect", async () => {
+    const pendingPatch = deferred<boolean>();
+    const { gateway, page, runtimeConfig } = await mountPage({
+      tools: { codeMode: { enabled: false } },
+    });
+    runtimeConfig.patch.mockImplementationOnce(() => pendingPatch.promise);
+    const toggle = codeModeToggle(page);
+
+    toggle.checked = true;
+    toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+    await vi.waitFor(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
+
+    gateway.setPhase("reconnecting");
+    gateway.setPhase("connected");
+    pendingPatch.resolve(false);
+    await pendingPatch.promise;
+    await page.updateComplete;
+
+    expect(page.querySelector('[role="alert"]')).toBeNull();
+    expect(toggle.checked).toBe(false);
+  });
+
+  it.each([
+    {
+      // The on position selects the "auto" tier, never `true`: Labs offers
+      // Auto/Off, and force-on stays a config-only power-user state.
+      label: "Code Mode",
+      sourceConfig: { tools: { codeMode: { enabled: false } } },
+      expectedPatch: { tools: { codeMode: { enabled: "auto" } } },
+      note: "labs: update codeMode",
+    },
+    {
+      label: "Code Mode",
+      sourceConfig: { tools: { codeMode: false } },
+      expectedPatch: { tools: { codeMode: null } },
+      note: "labs: update codeMode",
+    },
+    {
+      label: "Custom plugin UI",
+      sourceConfig: {},
+      expectedPatch: { gateway: { controlUi: { experimental: { customPlugins: true } } } },
+      note: "labs: update customPluginUi",
+    },
+    {
+      label: "Host Desktop",
+      sourceConfig: { desktop: { host: { enabled: false } } },
+      expectedPatch: { desktop: { host: { enabled: true } } },
+      note: "labs: update hostDesktop",
+    },
+    {
+      label: "Cloud Worker Desktop",
+      sourceConfig: { cloudWorkers: { desktop: false } },
+      expectedPatch: { cloudWorkers: { desktop: true } },
+      note: "labs: update workerDesktop",
+    },
+  ])("writes the on value at the registered config path when enabling $label", async (testCase) => {
+    const { page, runtimeConfig } = await mountPage(testCase.sourceConfig);
+    const toggle = labToggle(page, testCase.label);
+    expect(toggle.checked).toBe(false);
+
+    toggle.checked = true;
+    toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+
+    await vi.waitFor(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
+    expect(runtimeConfig.patch).toHaveBeenCalledWith({
+      raw: testCase.expectedPatch,
+      note: testCase.note,
+    });
+  });
+
+  it("shows default provenance", async () => {
+    const inherited = await mountPage({});
+    expect(labRow(inherited.page, "Code Mode").textContent).not.toContain("Using default:");
+    inherited.provider.remove();
+
+    const overridden = await mountPage({
+      tools: {
+        codeMode: { enabled: "auto" },
+        swarm: { enabled: false },
+      },
+    });
+    expect(labRow(overridden.page, "Code Mode").textContent).toContain("Default: Disabled");
+  });
+});
+
+describe("LabsPage code mode enablement", () => {
+  // An absent global node inherits auto; authored objects remain opt-in.
+  it.each([
+    ["unset", true, {}],
+    ["empty object", false, { tools: { codeMode: {} } }],
+    ["object with options", false, { tools: { codeMode: { timeoutMs: 5000 } } }],
+    ["explicit true", true, { tools: { codeMode: { enabled: true } } }],
+    ["explicit disabled", false, { tools: { codeMode: { enabled: false } } }],
+    ["boolean shorthand false", false, { tools: { codeMode: false } }],
+    ["auto shorthand", true, { tools: { codeMode: "auto" } }],
+  ])("reads %s as %s", async (_label, expected, config) => {
+    const { page, provider } = await mountPage(config);
+
+    expect(codeModeToggle(page).checked).toBe(expected);
+    provider.remove();
+  });
+
+  it("writes explicit false when disabling the automatic default", async () => {
+    const { page, runtimeConfig } = await mountPage({});
+    const toggle = codeModeToggle(page);
+
+    expect(toggle.checked).toBe(true);
+    toggle.checked = false;
+    toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+
+    await vi.waitFor(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
+    expect(runtimeConfig.patch).toHaveBeenCalledWith({
+      raw: { tools: { codeMode: { enabled: false } } },
+      note: "labs: update codeMode",
+    });
+  });
+
+  it("writes the auto tier when re-enabling an option-bearing object", async () => {
+    const { page, runtimeConfig } = await mountPage({
+      tools: { codeMode: { enabled: false, timeoutMs: 5000 } },
+    });
+    const toggle = codeModeToggle(page);
+
+    toggle.checked = true;
+    toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+
+    await vi.waitFor(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
+    expect(runtimeConfig.patch).toHaveBeenCalledWith({
+      raw: { tools: { codeMode: { enabled: "auto" } } },
+      note: "labs: update codeMode",
+    });
+  });
+});
+
+describe("LabsPage tool search enablement", () => {
+  // The unauthored default is on; authored objects retain their existing
+  // enablement rules, including an empty object remaining off.
+  it.each([
+    ["boolean shorthand", true, { tools: { toolSearch: true } }],
+    ["explicit enabled", true, { tools: { toolSearch: { enabled: true } } }],
+    ["mode without enabled", true, { tools: { toolSearch: { mode: "tools" } } }],
+    ["explicit disabled", false, { tools: { toolSearch: { enabled: false } } }],
+    ["boolean false", false, { tools: { toolSearch: false } }],
+    ["unset", true, {}],
+    ["empty tools", true, { tools: {} }],
+    ["explicit undefined", true, { tools: { toolSearch: undefined } }],
+    ["empty object", false, { tools: { toolSearch: {} } }],
+    ["options without enabled", true, { tools: { toolSearch: { maxSearchLimit: 3 } } }],
+    [
+      "explicit disabled with options",
+      false,
+      { tools: { toolSearch: { enabled: false, mode: "directory", maxSearchLimit: 3 } } },
+    ],
+    [
+      "local model without a global override",
+      true,
+      { agents: { defaults: { model: "ollama/qwen3.5:4b" } } },
+    ],
+  ])("reads %s as %s", async (_label, expected, config) => {
+    const { page, provider, runtimeConfig } = await mountPage(config);
+
+    expect(labToggle(page, "Tool Search for all models").checked).toBe(expected);
+    expect(runtimeConfig.patch).not.toHaveBeenCalled();
+    provider.remove();
+  });
+
+  it.each([
+    ["inherited default", {}],
+    ["boolean shorthand", { tools: { toolSearch: true } }],
+    ["mode-only override", { tools: { toolSearch: { mode: "directory" } } }],
+    ["option-bearing override", { tools: { toolSearch: { enabled: true, maxSearchLimit: 3 } } }],
+  ])("disables %s without replacing authored modes or options", async (_label, config) => {
+    const { page, runtimeConfig } = await mountPage(config);
+    const toggle = labToggle(page, "Tool Search for all models");
+
+    expect(toggle.checked).toBe(true);
+    toggle.checked = false;
+    toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+
+    await vi.waitFor(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
+    expect(runtimeConfig.patch).toHaveBeenCalledWith({
+      raw: { tools: { toolSearch: { enabled: false } } },
+      note: "labs: update toolSearch",
+    });
+  });
+
+  it.each([
+    ["boolean false", { tools: { toolSearch: false } }],
+    ["empty object", { tools: { toolSearch: {} } }],
+    ["explicit disabled", { tools: { toolSearch: { enabled: false } } }],
+    [
+      "disabled mode and options",
+      { tools: { toolSearch: { enabled: false, mode: "directory", maxSearchLimit: 3 } } },
+    ],
+  ])("restores %s to the default at the Tool Search owner boundary", async (_label, config) => {
+    const { page, runtimeConfig } = await mountPage(config);
+    const toggle = labToggle(page, "Tool Search for all models");
+
+    toggle.checked = true;
+    toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+
+    await vi.waitFor(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
+    expect(labRow(page, "Tool Search for all models").textContent).toContain("Default: Enabled");
+    expect(runtimeConfig.patch).toHaveBeenCalledWith({
+      raw: { tools: { toolSearch: null } },
+      note: "labs: update toolSearch",
+    });
+  });
+});
+
+describe("LabsPage Decision assistance", () => {
+  afterEach(() => {
+    document.body.replaceChildren();
+    vi.restoreAllMocks();
+  });
+
+  it.each([
+    [undefined, false],
+    [false, false],
+    [{ mode: "auto" }, false],
+    [true, true],
+  ])(
+    "reflects saved intent %j independently of model selection",
+    async (decisionAssistance, expected) => {
+      const { page } = await mountPage({
+        agents: { defaults: { experimental: { decisionAssistance } } },
+      });
+      const row = labRow(page, "Decision assistance");
+      expect(labToggle(page, "Decision assistance").checked).toBe(expected);
+      expect(row.textContent).toContain("No features use this setting yet");
+      expect(row.textContent?.includes("Preference saved.")).toBe(expected);
+    },
+  );
+
+  it("saves explicit opt-in without a model, reloads it, and resets only the gate", async () => {
+    const initial = {
+      agents: {
+        defaults: { experimental: { localModelLean: true } },
+        entries: { quiet: { decisionModel: "" } },
+      },
+    };
+    const { page, runtimeConfig, provider } = await mountPage(initial);
+    runtimeConfig.patch.mockImplementationOnce(async ({ raw }) => {
+      const saved = applyMergePatch(initial, raw) as Record<string, unknown>;
+      runtimeConfig.state.configSnapshot = { hash: "saved-hash", sourceConfig: saved };
+      return true;
+    });
+    const toggle = labToggle(page, "Decision assistance");
+    toggle.checked = true;
+    toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+    await page.updateComplete;
+    await page.updateComplete;
+    expect(runtimeConfig.patch).toHaveBeenCalledWith({
+      raw: { agents: { defaults: { experimental: { decisionAssistance: true } } } },
+      note: "labs: update decisionAssistance",
+    });
+    const saved = runtimeConfig.state.configSnapshot!.sourceConfig;
+    provider.remove();
+    const reloaded = await mountPage(saved);
+    const savedToggle = labToggle(reloaded.page, "Decision assistance");
+    expect(savedToggle.checked).toBe(true);
+    savedToggle.checked = false;
+    savedToggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+    await reloaded.page.updateComplete;
+    expect(reloaded.runtimeConfig.patch).toHaveBeenCalledWith({
+      raw: { agents: { defaults: { experimental: { decisionAssistance: null } } } },
+      note: "labs: update decisionAssistance",
+    });
+    const resetRequest = reloaded.runtimeConfig.patch.mock.calls[0]?.[0];
+    if (!resetRequest) {
+      throw new Error("Expected a reset patch");
+    }
+    const reset = applyMergePatch(saved, resetRequest.raw) as Record<string, unknown>;
+    expect(reset).toEqual(initial);
+    reloaded.provider.remove();
+    const resetPage = await mountPage(reset);
+    expect(labToggle(resetPage.page, "Decision assistance").checked).toBe(false);
+  });
+
+  it.each(["failure", "reconnect"])("keeps pending intent scoped through %s", async (outcome) => {
+    const pending = deferred<boolean>();
+    const { page, runtimeConfig, gateway } = await mountPage({});
+    runtimeConfig.patch.mockImplementationOnce(() => pending.promise);
+    const toggle = labToggle(page, "Decision assistance");
+    toggle.checked = true;
+    toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+    await page.updateComplete;
+    expect(toggle.checked).toBe(true);
+    expect(toggle.hasAttribute("disabled")).toBe(true);
+    expect(labRow(page, "Decision assistance").textContent).not.toContain("Preference saved.");
+    if (outcome === "reconnect") {
+      gateway.setPhase("reconnecting");
+      gateway.setPhase("connected");
+    }
+    pending.resolve(false);
+    await pending.promise;
+    await page.updateComplete;
+    expect(toggle.checked).toBe(false);
+    expect(page.querySelector('[role="alert"]') !== null).toBe(outcome === "failure");
+    expect(runtimeConfig.patch).toHaveBeenCalledOnce();
+  });
+
+  it.each(["missing", "loading", "read failure", "invalid", "disconnected", "stale"])(
+    "does not present %s configuration as an observed opt-out",
+    async (state) => {
+      const { page, runtimeConfig } = await mountPage({
+        agents: { defaults: { experimental: { decisionAssistance: true } } },
+      });
+      if (state === "missing") {
+        runtimeConfig.state.configSnapshot = null;
+      }
+      if (state === "loading") {
+        runtimeConfig.state.configLoading = true;
+      }
+      if (state === "read failure") {
+        runtimeConfig.state.lastError = "Configuration read failed";
+      }
+      if (state === "invalid") {
+        runtimeConfig.state.configSnapshot!.valid = false;
+      }
+      if (state === "disconnected") {
+        runtimeConfig.state.connected = false;
+      }
+      if (state === "stale") {
+        invalidateConfigConnection(runtimeConfig.state);
+      }
+      page.requestUpdate();
+      await page.updateComplete;
+      const row = labRow(page, "Decision assistance");
+      expect(row.querySelector("wa-switch")).toBeNull();
+      expect(row.textContent).toContain(
+        state === "loading" ? "Loading setting" : "Couldn’t load this setting",
+      );
+      expect(row.textContent).not.toContain("Default: Disabled");
+      expect(runtimeConfig.patch).not.toHaveBeenCalled();
+      if (state === "read failure") {
+        row.querySelector<HTMLButtonElement>("button")!.click();
+        expect(runtimeConfig.refresh).toHaveBeenCalledOnce();
+        runtimeConfig.state.lastError = null;
+        page.requestUpdate();
+        await page.updateComplete;
+        expect(labToggle(page, "Decision assistance").checked).toBe(true);
+      }
+    },
+  );
+});

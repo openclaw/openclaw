@@ -1,16 +1,47 @@
 // Clack prompter tests cover prompt rendering, validation, and cancellation.
-import type { SpinnerOptions } from "@clack/prompts";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { CANCEL_SYMBOL, symbol, type SpinnerOptions } from "@clack/prompts";
+import {
+  afterAll,
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+  type MockInstance,
+} from "vitest";
 
 const themeMocks = vi.hoisted(() => ({
   isRich: vi.fn(() => false),
 }));
 
 const stdoutIsTTYDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+const stdoutColumnsDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "columns");
+const initialSuiteResizeListeners = process.stdout.listeners("resize");
+
+afterAll(() => {
+  expect(process.stdout.listeners("resize")).toEqual(initialSuiteResizeListeners);
+});
 
 function stubStdoutIsTTY(value: boolean): void {
   Object.defineProperty(process.stdout, "isTTY", { configurable: true, value });
 }
+
+function stubStdoutColumns(value: number | undefined): void {
+  Object.defineProperty(process.stdout, "columns", { configurable: true, value });
+}
+
+const cliProgressMocks = vi.hoisted(() => ({
+  createCliProgress: vi.fn(() => ({
+    done: vi.fn(),
+    setLabel: vi.fn(),
+  })),
+}));
+
+const terminalNoteMocks = vi.hoisted(() => ({
+  note: vi.fn(),
+}));
 
 const clackMocks = vi.hoisted(() => ({
   autocomplete: vi.fn(),
@@ -18,7 +49,6 @@ const clackMocks = vi.hoisted(() => ({
   cancel: vi.fn(),
   confirm: vi.fn(),
   intro: vi.fn(),
-  isCancel: vi.fn(() => false),
   multiselect: vi.fn(),
   outro: vi.fn(),
   password: vi.fn(),
@@ -28,7 +58,6 @@ const clackMocks = vi.hoisted(() => ({
     start: vi.fn(),
     message: vi.fn(),
     clear: vi.fn(),
-    stop: vi.fn(),
   })),
   text: vi.fn(),
 }));
@@ -51,13 +80,13 @@ vi.mock("../../packages/terminal-core/src/theme.js", async (importOriginal) => {
   };
 });
 
-vi.mock("@clack/prompts", () => ({
+vi.mock("@clack/prompts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@clack/prompts")>()),
   autocomplete: clackMocks.autocomplete,
   autocompleteMultiselect: clackMocks.autocompleteMultiselect,
   cancel: clackMocks.cancel,
   confirm: clackMocks.confirm,
   intro: clackMocks.intro,
-  isCancel: clackMocks.isCancel,
   multiselect: clackMocks.multiselect,
   outro: clackMocks.outro,
   password: clackMocks.password,
@@ -65,6 +94,15 @@ vi.mock("@clack/prompts", () => ({
   settings: clackMocks.settings,
   spinner: clackMocks.spinner,
   text: clackMocks.text,
+}));
+
+vi.mock("../cli/progress.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../cli/progress.js")>()),
+  createCliProgress: cliProgressMocks.createCliProgress,
+}));
+
+vi.mock("../../packages/terminal-core/src/note.js", () => ({
+  noteToStream: terminalNoteMocks.note,
 }));
 
 vi.mock("./clack-navigation-prompts.js", () => ({
@@ -90,6 +128,11 @@ afterEach(() => {
     Object.defineProperty(process.stdout, "isTTY", stdoutIsTTYDescriptor);
   } else {
     Reflect.deleteProperty(process.stdout, "isTTY");
+  }
+  if (stdoutColumnsDescriptor) {
+    Object.defineProperty(process.stdout, "columns", stdoutColumnsDescriptor);
+  } else {
+    Reflect.deleteProperty(process.stdout, "columns");
   }
   themeMocks.isRich.mockReturnValue(false);
   clackMocks.settings.actions = new Set(["left", "right"]);
@@ -129,6 +172,121 @@ describe("tokenizedOptionFilter", () => {
 });
 
 describe("createClackPrompter", () => {
+  let stdoutWriteSpy: MockInstance<typeof process.stdout.write>;
+
+  beforeEach(() => {
+    stdoutWriteSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+  });
+  it("clamps long progress labels by display width without splitting grapheme clusters", () => {
+    stubStdoutColumns(20);
+    const prompter = createClackPrompter();
+
+    const progress = prompter.progress("12345678😀ABC");
+    progress.update("正在扫描已安装应用…");
+    progress.stop("1234567890ABC");
+
+    const spin = clackMocks.spinner.mock.results[0]!.value;
+    const osc = cliProgressMocks.createCliProgress.mock.results[0]!.value;
+    expect(spin.start).toHaveBeenCalledWith(theme.accent("12345678…"));
+    expect(spin.message).toHaveBeenCalledWith(theme.accent("正在扫描…"));
+    expect(cliProgressMocks.createCliProgress).toHaveBeenCalledWith(
+      expect.objectContaining({ label: "12345678😀ABC" }),
+    );
+    expect(osc.setLabel).toHaveBeenCalledWith("正在扫描已安装应用…");
+  });
+
+  it("preserves emoji joined by zero-width joiners when truncating", () => {
+    stubStdoutColumns(14);
+    const prompter = createClackPrompter();
+
+    const progress = prompter.progress("👨‍👩‍👧‍👦ABCDEFGH");
+    onTestFinished(() => progress.stop());
+
+    const spin = clackMocks.spinner.mock.results[0]!.value;
+    expect(spin.start).toHaveBeenCalledWith(theme.accent("👨‍👩‍👧‍👦A…"));
+  });
+
+  it("shrinks active progress labels without expanding past the initial width", () => {
+    stubStdoutColumns(20);
+    const initialResizeListeners = process.stdout.listenerCount("resize");
+    const prompter = createClackPrompter();
+
+    const progress = prompter.progress("123456789ABC");
+    stubStdoutColumns(14);
+    process.stdout.emit("resize");
+    stubStdoutColumns(30);
+    process.stdout.emit("resize");
+    progress.update("ABCDEFGHIJK");
+    progress.stop();
+
+    const spin = clackMocks.spinner.mock.results[0]!.value;
+    expect(spin.message).toHaveBeenNthCalledWith(1, theme.accent("123…"));
+    expect(spin.message).toHaveBeenNthCalledWith(2, theme.accent("ABC…"));
+    expect(process.stdout.listenerCount("resize")).toBe(initialResizeListeners);
+  });
+
+  it("leaves progress labels untouched when terminal columns are unavailable", () => {
+    stubStdoutColumns(undefined);
+    const prompter = createClackPrompter();
+
+    const progress = prompter.progress("1234567890ABC");
+    onTestFinished(() => progress.stop());
+
+    const spin = clackMocks.spinner.mock.results[0]!.value;
+    expect(spin.start).toHaveBeenCalledWith(theme.accent("1234567890ABC"));
+  });
+
+  it("leaves short progress labels untouched", () => {
+    stubStdoutColumns(20);
+    const prompter = createClackPrompter();
+
+    const progress = prompter.progress("Loading");
+    onTestFinished(() => progress.stop());
+
+    const spin = clackMocks.spinner.mock.results[0]!.value;
+    expect(spin.start).toHaveBeenCalledWith(theme.accent("Loading"));
+  });
+
+  it.each([undefined, "", "First line\nSecond line"])(
+    "preserves tiny completion %j once",
+    (message) => {
+      stubStdoutIsTTY(true);
+      stubStdoutColumns(6);
+      vi.stubEnv("CI", "");
+      vi.stubEnv("VITEST", "");
+      themeMocks.isRich.mockReturnValue(true);
+      const progress = createClackPrompter().progress("Loading");
+      onTestFinished(() => progress.stop());
+      const spin = clackMocks.spinner.mock.results[0]!.value;
+
+      expect(spin.start).not.toHaveBeenCalled();
+      progress.update("Still loading");
+      progress.stop(message);
+      const expected = message === undefined ? [] : [[`${symbol("submit")}  ${message}\n`]];
+      expect(stdoutWriteSpy.mock.calls).toEqual(expected);
+      progress.stop("Unexpected second completion");
+      expect(stdoutWriteSpy.mock.calls).toEqual(expected);
+      expect(process.stdout.listeners("resize")).toEqual(initialSuiteResizeListeners);
+    },
+  );
+
+  it("keeps completion after clearing tiny animation", () => {
+    stubStdoutColumns(20);
+    const progress = createClackPrompter().progress("Loading");
+    onTestFinished(() => progress.stop());
+    const spin = clackMocks.spinner.mock.results[0]!.value;
+    stubStdoutColumns(6);
+    process.stdout.emit("resize");
+    expect(spin.clear).toHaveBeenCalled();
+    stubStdoutColumns(30);
+    process.stdout.emit("resize");
+    progress.update("Still loading");
+    expect(spin.start).toHaveBeenCalledTimes(1);
+
+    progress.stop("Finished after resize");
+    expect(stdoutWriteSpy).toHaveBeenCalledWith(`${symbol("submit")}  Finished after resize\n`);
+  });
+
   it("uses the claw spinner on rich interactive terminals", () => {
     stubStdoutIsTTY(true);
     vi.stubEnv("CI", "");
@@ -136,12 +294,14 @@ describe("createClackPrompter", () => {
     themeMocks.isRich.mockReturnValue(true);
     const prompter = createClackPrompter();
 
-    prompter.progress("Loading");
+    const progress = prompter.progress("Loading");
+    onTestFinished(() => progress.stop());
 
     expect(clackMocks.spinner).toHaveBeenCalledWith({
       frames: ["(\\/)", "(||)", "(--)", "(||)"],
       delay: 120,
       styleFrame: theme.accent,
+      output: process.stdout,
     });
   });
 
@@ -152,9 +312,43 @@ describe("createClackPrompter", () => {
     themeMocks.isRich.mockReturnValue(false);
     const prompter = createClackPrompter();
 
-    prompter.progress("Loading");
+    const progress = prompter.progress("Loading");
+    onTestFinished(() => progress.stop());
 
-    expect(clackMocks.spinner).toHaveBeenCalledWith();
+    expect(clackMocks.spinner).toHaveBeenCalledWith({ output: process.stdout });
+  });
+
+  it("routes Clack UI, prompts, notes, plain text, and progress to the selected output", async () => {
+    const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    clackMocks.confirm.mockResolvedValue(true);
+    const prompter = createClackPrompter(process.stderr);
+
+    await prompter.intro("Add agent");
+    await prompter.note("Details", "Agent");
+    await prompter.plain?.("plain");
+    await prompter.confirm({ message: "Continue?" });
+    await prompter.outro("Ready");
+    const progress = prompter.progress("Loading");
+    progress.update("Still loading");
+    progress.stop();
+
+    expect(clackMocks.intro).toHaveBeenCalledWith(expect.any(String), {
+      output: process.stderr,
+    });
+    expect(terminalNoteMocks.note).toHaveBeenCalledWith("Details", "Agent", process.stderr);
+    expect(stderrWrite).toHaveBeenCalledWith("plain\n");
+    expect(clackMocks.confirm).toHaveBeenCalledWith(
+      expect.objectContaining({ output: process.stderr }),
+    );
+    expect(clackMocks.outro).toHaveBeenCalledWith(expect.any(String), {
+      output: process.stderr,
+    });
+    expect(clackMocks.spinner).toHaveBeenCalledWith({ output: process.stderr });
+    expect(cliProgressMocks.createCliProgress).toHaveBeenCalledWith(
+      expect.objectContaining({ stream: process.stderr }),
+    );
+    expect(stdoutWrite).not.toHaveBeenCalled();
   });
 
   it("prints plain output without note framing", async () => {
@@ -185,6 +379,27 @@ describe("createClackPrompter", () => {
       }),
     );
   });
+
+  it.each([false, true])(
+    "preserves Symbol option values and recognizes only Clack cancellation (searchable: %s)",
+    async (searchable) => {
+      const value = Symbol("clack:cancel");
+      const mock = searchable ? clackMocks.autocomplete : clackMocks.select;
+      const params = {
+        message: "Pick a symbol",
+        options: [{ value, label: "Symbol option" }],
+        searchable,
+      };
+      const prompter = createClackPrompter();
+      mock.mockResolvedValueOnce(value);
+      await expect(prompter.select(params)).resolves.toBe(value);
+      expect(clackMocks.cancel).not.toHaveBeenCalled();
+
+      mock.mockResolvedValueOnce(CANCEL_SYMBOL);
+      await expect(prompter.select(params)).rejects.toBeInstanceOf(WizardCancelledError);
+      expect(clackMocks.cancel).toHaveBeenCalledOnce();
+    },
+  );
 
   it("uses navigation-aware searchable selects when prompt navigation is active", async () => {
     navigationPromptMocks.autocompleteWithNavigationFooter.mockResolvedValue("two");
@@ -261,33 +476,321 @@ describe("createClackPrompter", () => {
     );
   });
 
-  it("cancels text prompts silently when their owner aborts them", async () => {
-    const controller = new AbortController();
-    clackMocks.isCancel.mockReturnValueOnce(true);
-    clackMocks.text.mockImplementation(
+  it.each([
+    {
+      label: "select",
+      actions: ["left", "right", "up"],
+      mock: navigationPromptMocks.selectWithNavigationFooter,
+      value: "one",
+      run: (prompter: ReturnType<typeof createClackPrompter>) =>
+        prompter.select({
+          message: "Provider",
+          options: [{ value: "one", label: "One" }],
+          navigation: { canGoBack: true },
+        }),
+    },
+    {
+      label: "multiselect",
+      actions: ["left", "up"],
+      mock: navigationPromptMocks.multiselectWithNavigationFooter,
+      value: ["one"],
+      run: (prompter: ReturnType<typeof createClackPrompter>) =>
+        prompter.multiselect({
+          message: "Options",
+          options: [{ value: "one", label: "One" }],
+          navigation: { canGoBack: true },
+        }),
+    },
+    {
+      label: "confirm",
+      actions: ["right", "up"],
+      mock: navigationPromptMocks.confirmWithNavigationFooter,
+      value: true,
+      run: (prompter: ReturnType<typeof createClackPrompter>) =>
+        prompter.confirm({ message: "Continue?", navigation: { canGoBack: true } }),
+    },
+    {
+      label: "text",
+      actions: ["up"],
+      mock: navigationPromptMocks.textWithNavigationFooter,
+      value: "label",
+      run: (prompter: ReturnType<typeof createClackPrompter>) =>
+        prompter.text({ message: "Label", navigation: { canGoBack: true } }),
+    },
+  ])(
+    "restores prior cursor actions after $label completion",
+    async ({ actions, mock, value, run }) => {
+      clackMocks.settings.actions = new Set(actions);
+      const initialEndListeners = process.stdin.listeners("end");
+      const initialKeypressListeners = process.stdin.listeners("keypress");
+      mock.mockImplementation(async () => {
+        expect(clackMocks.settings.actions).toEqual(new Set(["up"]));
+        expect(process.stdin.listenerCount("end")).toBe(initialEndListeners.length + 1);
+        expect(process.stdin.listenerCount("keypress")).toBe(initialKeypressListeners.length + 1);
+        return value;
+      });
+
+      await expect(run(createClackPrompter())).resolves.toEqual(value);
+
+      expect(mock).toHaveBeenCalledOnce();
+      expect(clackMocks.settings.actions).toEqual(new Set(actions));
+      expect(process.stdin.listeners("end")).toEqual(initialEndListeners);
+      expect(process.stdin.listeners("keypress")).toEqual(initialKeypressListeners);
+    },
+  );
+
+  it("cleans up a throwing navigation prompt after queued EOF", async () => {
+    const failure = new Error("prompt failed");
+    const initialEndListeners = process.stdin.listeners("end");
+    const initialKeypressListeners = process.stdin.listeners("keypress");
+    clackMocks.settings.actions = new Set(["left", "up"]);
+    let promptSignal: AbortSignal | undefined;
+    navigationPromptMocks.textWithNavigationFooter.mockImplementation(({ signal }) => {
+      promptSignal = signal;
+      expect(clackMocks.settings.actions).toEqual(new Set(["up"]));
+      process.stdin.emit("end");
+      throw failure;
+    });
+
+    await expect(
+      createClackPrompter().text({ message: "Label", navigation: { canGoBack: true } }),
+    ).rejects.toBe(failure);
+
+    expect(clackMocks.settings.actions).toEqual(new Set(["left", "up"]));
+    expect(process.stdin.listeners("end")).toEqual(initialEndListeners);
+    expect(process.stdin.listeners("keypress")).toEqual(initialKeypressListeners);
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(promptSignal?.aborted).toBe(false);
+  });
+
+  it.each([
+    {
+      label: "select",
+      mock: clackMocks.select,
+      run: (prompter: ReturnType<typeof createClackPrompter>) =>
+        prompter.select({ message: "Provider", options: [{ value: "one", label: "One" }] }),
+    },
+    {
+      label: "multiselect",
+      mock: clackMocks.multiselect,
+      run: (prompter: ReturnType<typeof createClackPrompter>) =>
+        prompter.multiselect({ message: "Options", options: [{ value: "one", label: "One" }] }),
+    },
+    {
+      label: "confirm",
+      mock: clackMocks.confirm,
+      run: (prompter: ReturnType<typeof createClackPrompter>) =>
+        prompter.confirm({ message: "Continue?" }),
+    },
+    {
+      label: "text",
+      mock: clackMocks.text,
+      run: (prompter: ReturnType<typeof createClackPrompter>) =>
+        prompter.text({ message: "Account label" }),
+    },
+    {
+      label: "password",
+      mock: clackMocks.password,
+      run: (prompter: ReturnType<typeof createClackPrompter>) =>
+        prompter.text({ message: "API key", sensitive: true }),
+    },
+  ])(
+    "cancels $label input silently when its owner completes or disconnects",
+    async ({ mock, run }) => {
+      const controller = new AbortController();
+      const initialEndListeners = process.stdin.listenerCount("end");
+      const initialKeypressListeners = process.stdin.listenerCount("keypress");
+      mock.mockImplementation(
+        async ({ signal }: { signal?: AbortSignal }) =>
+          await new Promise<symbol>((resolve) => {
+            signal?.addEventListener("abort", () => resolve(CANCEL_SYMBOL), {
+              once: true,
+            });
+          }),
+      );
+      const prompt = run(createClackPrompter(process.stderr, controller.signal));
+      controller.abort();
+
+      await expect(prompt).rejects.toBeInstanceOf(WizardCancelledError);
+      expect(clackMocks.cancel).not.toHaveBeenCalled();
+      expect(mock.mock.calls[0]?.[0].signal?.aborted).toBe(true);
+      expect(process.stdin.listenerCount("end")).toBe(initialEndListeners);
+      expect(process.stdin.listenerCount("keypress")).toBe(initialKeypressListeners);
+    },
+  );
+
+  it.each(["owner", "text"])(
+    "preserves both cancellation owners for a text prompt: %s",
+    async (cancelOwner) => {
+      const owner = new AbortController();
+      const text = new AbortController();
+      clackMocks.text.mockImplementation(
+        async ({ signal }: { signal: AbortSignal }) =>
+          await new Promise<symbol>((resolve) => {
+            signal.addEventListener("abort", () => resolve(CANCEL_SYMBOL), { once: true });
+          }),
+      );
+      const prompt = createClackPrompter(process.stderr, owner.signal).text({
+        message: "Label",
+        signal: text.signal,
+      });
+      (cancelOwner === "owner" ? owner : text).abort();
+      await expect(prompt).rejects.toBeInstanceOf(WizardCancelledError);
+      expect(clackMocks.cancel).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    {
+      label: "ordinary",
+      run: () => createClackPrompter().confirm({ message: "Continue?" }),
+      mock: clackMocks.confirm,
+    },
+    {
+      label: "navigation-aware",
+      run: () =>
+        createClackPrompter().select({
+          message: "Pick",
+          options: [{ value: "one", label: "One" }],
+          navigation: { canGoBack: true, canGoForward: false },
+        }),
+      mock: navigationPromptMocks.selectWithNavigationFooter,
+    },
+  ])("turns stdin EOF into wizard cancellation for $label prompts", async ({ run, mock }) => {
+    const initialEndListeners = process.stdin.listenerCount("end");
+    const initialKeypressListeners = process.stdin.listenerCount("keypress");
+    mock.mockImplementation(
       async ({ signal }: { signal?: AbortSignal }) =>
         await new Promise<symbol>((resolve) => {
-          signal?.addEventListener("abort", () => resolve(Symbol("clack:cancel")), { once: true });
+          signal?.addEventListener("abort", () => resolve(CANCEL_SYMBOL), { once: true });
         }),
     );
-    const prompter = createClackPrompter();
 
-    const prompt = prompter.text({ message: "Paste callback", signal: controller.signal });
-    controller.abort();
+    const prompt = run();
+    await Promise.resolve();
+    process.stdin.emit("end");
 
     await expect(prompt).rejects.toBeInstanceOf(WizardCancelledError);
-    expect(clackMocks.cancel).not.toHaveBeenCalled();
-    expect(clackMocks.text).toHaveBeenCalledWith(
-      expect.objectContaining({ signal: controller.signal }),
-    );
+    expect(process.stdin.listenerCount("end")).toBe(initialEndListeners);
+    expect(process.stdin.listenerCount("keypress")).toBe(initialKeypressListeners);
   });
+
+  it("lets Clack own Ctrl-D finalization before the wrapper aborts", async () => {
+    const initialEndListeners = process.stdin.listenerCount("end");
+    const initialKeypressListeners = process.stdin.listenerCount("keypress");
+    const finalize = vi.fn();
+    const restoreRawMode = vi.fn();
+    const writeNewline = vi.fn();
+
+    clackMocks.confirm.mockImplementation(
+      async ({ signal }: { signal?: AbortSignal }) =>
+        await new Promise<symbol>((resolve) => {
+          const finish = () => {
+            finalize();
+            restoreRawMode(false);
+            writeNewline("\n");
+            process.stdin.off("keypress", onClackKeypress);
+            resolve(CANCEL_SYMBOL);
+          };
+          const onClackKeypress = (input: string | undefined) => {
+            if (input === "\x04") {
+              finish();
+            }
+          };
+          process.stdin.on("keypress", onClackKeypress);
+          signal?.addEventListener("abort", finish, { once: true });
+        }),
+    );
+
+    const prompt = createClackPrompter().confirm({ message: "Continue?" });
+    await Promise.resolve();
+    process.stdin.emit("keypress", "\x04", { ctrl: true, name: "d" });
+
+    await expect(prompt).rejects.toBeInstanceOf(WizardCancelledError);
+    expect(finalize).toHaveBeenCalledOnce();
+    expect(restoreRawMode).toHaveBeenCalledOnce();
+    expect(writeNewline).toHaveBeenCalledOnce();
+    expect(process.stdin.listenerCount("end")).toBe(initialEndListeners);
+    expect(process.stdin.listenerCount("keypress")).toBe(initialKeypressListeners);
+  });
+
+  it("lets Clack settle final piped input before the stdin end fallback", async () => {
+    const initialEndListeners = process.stdin.listenerCount("end");
+    const initialKeypressListeners = process.stdin.listenerCount("keypress");
+    const finalize = vi.fn();
+    const restoreRawMode = vi.fn();
+    const writeNewline = vi.fn();
+    const cleanup = vi.fn();
+
+    clackMocks.confirm.mockImplementation(
+      async ({ signal }: { signal?: AbortSignal }) =>
+        await new Promise<boolean>((resolve) => {
+          const finish = () => {
+            finalize();
+            restoreRawMode(false);
+            writeNewline("\n");
+            cleanup();
+          };
+          const onEnd = () => {
+            finish();
+            resolve(true);
+          };
+          process.stdin.once("end", onEnd);
+          signal?.addEventListener("abort", finish, { once: true });
+        }),
+    );
+
+    const prompt = createClackPrompter().confirm({ message: "Continue?" });
+    await Promise.resolve();
+    process.stdin.emit("data", "y\n");
+    process.stdin.emit("end");
+
+    await expect(prompt).resolves.toBe(true);
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(finalize).toHaveBeenCalledOnce();
+    expect(restoreRawMode).toHaveBeenCalledOnce();
+    expect(writeNewline).toHaveBeenCalledOnce();
+    expect(cleanup).toHaveBeenCalledOnce();
+    expect(process.stdin.listenerCount("end")).toBe(initialEndListeners);
+    expect(process.stdin.listenerCount("keypress")).toBe(initialKeypressListeners);
+  });
+
+  it.each([false, true])(
+    "keeps Ctrl-C cancellation on Clack's canonical path (navigation: %s)",
+    async (navigation) => {
+      const mock = navigation
+        ? navigationPromptMocks.confirmWithNavigationFooter
+        : clackMocks.confirm;
+      mock.mockResolvedValue(CANCEL_SYMBOL);
+      clackMocks.cancel.mockImplementationOnce(() => {
+        expect(clackMocks.settings.actions.has("left")).toBe(!navigation);
+        expect(clackMocks.settings.actions.has("right")).toBe(!navigation);
+      });
+
+      await expect(
+        createClackPrompter().confirm({
+          message: "Continue?",
+          ...(navigation ? { navigation: { canGoBack: true } } : {}),
+        }),
+      ).rejects.toBeInstanceOf(WizardCancelledError);
+
+      expect(clackMocks.cancel).toHaveBeenCalledWith(expect.any(String), {
+        output: process.stdout,
+      });
+      expect(clackMocks.settings.actions).toEqual(new Set(["left", "right"]));
+    },
+  );
 
   it("rejects navigation after Clack resolves an aborted prompt", async () => {
     navigationPromptMocks.textWithNavigationFooter.mockImplementation(async ({ signal }) => {
       await new Promise((resolve) => {
         signal.addEventListener("abort", resolve, { once: true });
       });
-      return Symbol("clack:cancel");
+      return CANCEL_SYMBOL;
     });
     const prompter = createClackPrompter();
 
@@ -301,6 +804,7 @@ describe("createClackPrompter", () => {
     await expect(result).rejects.toMatchObject({
       direction: "forward",
     } satisfies Partial<WizardNavigationError>);
+    expect(clackMocks.settings.actions).toEqual(new Set(["left", "right"]));
   });
 
   it("keeps text cursor actions when prompt navigation has no available move", async () => {
@@ -321,7 +825,7 @@ describe("createClackPrompter", () => {
     expect(navigationPromptMocks.textWithNavigationFooter).toHaveBeenCalledWith(
       expect.objectContaining({
         navigation: { canGoBack: false, canGoForward: false },
-        signal: undefined,
+        signal: expect.any(AbortSignal),
       }),
     );
   });

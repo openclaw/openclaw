@@ -1,4 +1,3 @@
-// Voice Call plugin module implements webhook behavior.
 import type { WebhookContext, WebhookVerificationResult } from "../../types.js";
 import { verifyTwilioWebhook } from "../../webhook-security.js";
 import type { TwilioProviderOptions } from "../twilio.types.js";
@@ -31,5 +30,6 @@ export function verifyTwilioProviderWebhook(params: {
     reason: result.reason,
     isReplay: result.isReplay,
     verifiedRequestKey: result.verifiedRequestKey,
+    releaseReplay: result.releaseReplay,
   };
 }

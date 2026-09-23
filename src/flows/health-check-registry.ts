@@ -1,5 +1,5 @@
 // Health check registry stores doctor health checks by identifier.
-import type { HealthCheck } from "./health-checks.js";
+import type { HealthCheck, HealthFinding } from "./health-checks.js";
 
 // Process-local registry populated by core and plugin doctor checks.
 const REGISTRY = new Map<string, HealthCheck>();
@@ -28,7 +28,8 @@ export function listHealthChecks(): readonly HealthCheck[] {
 
 /** Returns registered extension checks after rejecting any reserved core doctor id claims. */
 export function listExtensionHealthChecksForDoctor(
-  coreChecks: readonly HealthCheck[],
+  coreChecks: readonly Pick<HealthCheck, "id">[],
+  unavailablePlugins: readonly HealthFinding[] = [],
 ): readonly HealthCheck[] {
   const coreIds = new Set(coreChecks.map((check) => check.id));
   const registeredChecks = listHealthChecks();
@@ -37,7 +38,27 @@ export function listExtensionHealthChecksForDoctor(
       throw new HealthCheckRegistrationError(check.id);
     }
   }
-  return registeredChecks.filter((check) => check.kind !== "core");
+  const checks: HealthCheck[] = [];
+  for (const check of registeredChecks) {
+    if (check.kind === "core") {
+      continue;
+    }
+    const unavailable = unavailablePlugins.find(
+      (finding) => finding.source !== undefined && finding.source === check.source,
+    );
+    // Preserve selection without executing stale callbacks from an unavailable owner.
+    // The registered check remains intact for a later, healthy invocation.
+    checks.push(
+      unavailable
+        ? {
+            ...check,
+            detect: async () => [{ ...unavailable, checkId: check.id }],
+            repair: undefined,
+          }
+        : check,
+    );
+  }
+  return checks;
 }
 
 /** Looks up a registered health check by its stable id. */

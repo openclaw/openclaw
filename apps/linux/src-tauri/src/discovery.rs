@@ -1,5 +1,6 @@
 use mdns_sd::{ResolvedService, ServiceDaemon, ServiceEvent};
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -59,7 +60,7 @@ impl DiscoveredGateway {
     }
 
     fn advertises_direct_transport(&self) -> bool {
-        // The desktop has no SSH/relay transport, so match the native client's direct-selection gate.
+        // Discovery selections open direct WebViews; they cannot use the manual SSH transport.
         self.tls || self.direct_reachable || self.host.to_ascii_lowercase().ends_with(".ts.net")
     }
 
@@ -216,6 +217,38 @@ impl GatewayDiscovery {
             .map_err(|_| "The discovered gateway returned an invalid port.".to_string())?;
         Ok(url)
     }
+
+    fn gateway_name(&self, host: &str, port: u16, tls: bool) -> Result<String, String> {
+        let host = validated_service_host(host)
+            .ok_or_else(|| "The discovered gateway returned an invalid host.".to_string())?;
+        self.gateways
+            .lock()
+            .map_err(|_| "Gateway discovery snapshot is unavailable.".to_string())?
+            .values()
+            .find(|gateway| gateway.host == host && gateway.port == port && gateway.tls == tls)
+            .map(|gateway| gateway.name.clone())
+            .ok_or_else(|| "The discovered gateway is no longer available.".to_string())
+    }
+}
+
+pub(crate) fn gateway_window_label(url: &Url) -> String {
+    let host = url
+        .host_str()
+        .unwrap_or_default()
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
+    let route = format!(
+        "{}://{}:{}",
+        url.scheme(),
+        host,
+        url.port_or_known_default().unwrap_or_default()
+    );
+    let digest = Sha256::digest(route.as_bytes());
+    let suffix = digest[..12]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    format!("gateway-{suffix}")
 }
 
 fn apply_event(gateways: &GatewayMap, event: ServiceEvent) -> bool {
@@ -420,16 +453,16 @@ pub fn discover_gateways(
 }
 
 #[tauri::command]
-pub fn connect_discovered_gateway(
+pub async fn connect_discovered_gateway(
     app: tauri::AppHandle,
-    desktop: tauri::State<'_, crate::DesktopState>,
     discovery: tauri::State<'_, GatewayDiscovery>,
     host: String,
     port: u16,
     tls: bool,
 ) -> Result<(), String> {
     let url = discovery.dashboard_url(&host, port, tls)?;
-    desktop.navigate_remote(&app, url)
+    let name = discovery.gateway_name(&host, port, tls)?;
+    crate::gateway_windows::open_discovered(app, url, name).await
 }
 
 #[cfg(test)]
@@ -471,6 +504,31 @@ mod tests {
         assert_eq!(
             gateway.tailnet_dns.as_deref(),
             Some("studio.example.ts.net")
+        );
+    }
+
+    #[test]
+    fn gateway_window_labels_are_route_scoped_and_stable() {
+        let mixed_case = Url::parse("https://Studio.Local:18789/").unwrap();
+        let canonical = Url::parse("https://studio.local:18789/").unwrap();
+        let trailing_dot = Url::parse("https://studio.local.:18789/").unwrap();
+        let other_port = Url::parse("https://studio.local:18790/").unwrap();
+        let plaintext = Url::parse("http://studio.local:18789/").unwrap();
+        assert_eq!(
+            gateway_window_label(&mixed_case),
+            gateway_window_label(&canonical),
+        );
+        assert_eq!(
+            gateway_window_label(&canonical),
+            gateway_window_label(&trailing_dot)
+        );
+        assert_ne!(
+            gateway_window_label(&canonical),
+            gateway_window_label(&other_port),
+        );
+        assert_ne!(
+            gateway_window_label(&canonical),
+            gateway_window_label(&plaintext),
         );
     }
 

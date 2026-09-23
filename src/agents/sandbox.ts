@@ -41,6 +41,7 @@ export {
   createSshSandboxSessionFromConfigText,
   createSshSandboxSessionFromSettings,
   disposeSshSandboxSession,
+  prepareSshSandboxExec,
   runSshSandboxCommand,
   shellEscape,
   uploadDirectoryToSshTarget,
@@ -52,6 +53,8 @@ export { resolveWritableRenameTargets } from "./sandbox/fs-bridge-rename-targets
 export { resolveWritableRenameTargetsForBridge } from "./sandbox/fs-bridge-rename-targets.js";
 export type {
   CreateSandboxBackendParams,
+  CreateReservedSandboxBackendParamsV1,
+  ReservedSandboxBackendFactoryV1,
   SandboxBackendCommandParams,
   SandboxBackendCommandResult,
   SandboxBackendExecSpec,

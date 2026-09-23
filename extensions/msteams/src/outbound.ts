@@ -1,4 +1,3 @@
-// Msteams plugin module implements outbound behavior.
 import {
   resolveOutboundSendDep,
   type OutboundSendDeps,
@@ -12,6 +11,7 @@ import {
   resolveTextChunksWithFallback,
   sendPayloadMediaSequence,
 } from "openclaw/plugin-sdk/reply-payload";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   chunkTextForOutbound,
   normalizeStringEntries,
@@ -21,27 +21,78 @@ import { createMSTeamsPollStoreState } from "./polls.js";
 import { buildMSTeamsPresentationCard, MSTEAMS_PRESENTATION_CAPABILITIES } from "./presentation.js";
 import { sendAdaptiveCardMSTeams, sendMessageMSTeams, sendPollMSTeams } from "./send.js";
 
-function asObjectRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
 const MSTEAMS_TEXT_CHUNK_LIMIT = 4000;
+
+function resolveMSTeamsEffectiveTextChunkLimit(configuredLimit?: number): number {
+  return typeof configuredLimit === "number" && configuredLimit > 0
+    ? Math.min(configuredLimit, MSTEAMS_TEXT_CHUNK_LIMIT)
+    : MSTEAMS_TEXT_CHUNK_LIMIT;
+}
 
 type MSTeamsSendConfig = Parameters<typeof sendMessageMSTeams>[0]["cfg"];
 type MSTeamsSendResult = { messageId: string; conversationId: string };
-type MSTeamsMediaSendOptions = {
-  mediaUrl?: string;
-  mediaLocalRoots?: readonly string[];
-  mediaReadFile?: (filePath: string) => Promise<Buffer>;
-};
-type MSTeamsTextSendFn = (to: string, text: string) => Promise<MSTeamsSendResult>;
+type MSTeamsSendOptions = Pick<
+  Parameters<typeof sendMessageMSTeams>[0],
+  "assertDirectAdapterHandoff" | "onPlatformSendDispatch" | "onDeliveryResult"
+>;
+type MSTeamsMediaSendOptions = Pick<
+  Parameters<typeof sendMessageMSTeams>[0],
+  "mediaUrl" | "mediaAccess" | "mediaLocalRoots" | "mediaReadFile"
+> &
+  MSTeamsSendOptions;
+type MSTeamsTextSendFn = (
+  to: string,
+  text: string,
+  opts?: MSTeamsSendOptions,
+) => Promise<MSTeamsSendResult>;
 type MSTeamsMediaSendFn = (
   to: string,
   text: string,
   opts?: MSTeamsMediaSendOptions,
 ) => Promise<MSTeamsSendResult>;
+
+function toMSTeamsOutboundResult(result: MSTeamsSendResult) {
+  const { conversationId, ...delivery } = result;
+  return { ...delivery, target: { kind: "conversation" as const, id: conversationId } };
+}
+
+async function sendWithDeliveryResults(
+  send: (onDeliveryResult: MSTeamsSendOptions["onDeliveryResult"]) => Promise<MSTeamsSendResult>,
+  onDeliveryResult: Parameters<
+    NonNullable<ChannelOutboundAdapter["sendText"]>
+  >[0]["onDeliveryResult"],
+): Promise<MSTeamsSendResult> {
+  if (!onDeliveryResult) {
+    return send(undefined);
+  }
+  let childReported = false;
+  const result = await send(async (delivery) => {
+    childReported = true;
+    await onDeliveryResult(attachChannelToResult("msteams", toMSTeamsOutboundResult(delivery)));
+  });
+  // Injected send dependencies can return only their final result. Native sends
+  // already report each accepted activity before a later send can fail.
+  if (!childReported) {
+    await onDeliveryResult(attachChannelToResult("msteams", toMSTeamsOutboundResult(result)));
+  }
+  return result;
+}
+
+function resolveMSTeamsThreadTarget(to: string, threadId?: string | number | null) {
+  const normalizedThreadId = threadId == null ? "" : String(threadId).trim();
+  const graphChannelId = to.includes("/") ? to.slice(to.indexOf("/") + 1) : "";
+  const isConversationTarget =
+    to.startsWith("conversation:") ||
+    to.startsWith("19:") ||
+    graphChannelId.startsWith("19:") ||
+    graphChannelId.includes("@thread");
+  // Keep the resolved root on the target so proactive lookup and Connector
+  // delivery use this turn's thread, not the latest stored conversation root.
+  if (!normalizedThreadId || /(?:^|;)messageid=/iu.test(to) || !isConversationTarget) {
+    return to;
+  }
+  return `${to};messageid=${normalizedThreadId}`;
+}
 
 function resolveMSTeamsTextSend(params: {
   cfg: MSTeamsSendConfig;
@@ -49,7 +100,7 @@ function resolveMSTeamsTextSend(params: {
 }): MSTeamsTextSendFn {
   return (
     resolveOutboundSendDep<MSTeamsTextSendFn>(params.deps, "msteams") ??
-    ((to, text) => sendMessageMSTeams({ cfg: params.cfg, to, text }))
+    ((to, text, opts) => sendMessageMSTeams({ cfg: params.cfg, to, text, ...opts }))
   );
 }
 
@@ -59,15 +110,7 @@ function resolveMSTeamsMediaSend(params: {
 }): MSTeamsMediaSendFn {
   return (
     resolveOutboundSendDep<MSTeamsMediaSendFn>(params.deps, "msteams") ??
-    ((to, text, opts) =>
-      sendMessageMSTeams({
-        cfg: params.cfg,
-        to,
-        text,
-        mediaUrl: opts?.mediaUrl,
-        mediaLocalRoots: opts?.mediaLocalRoots,
-        mediaReadFile: opts?.mediaReadFile,
-      }))
+    ((to, text, opts) => sendMessageMSTeams({ cfg: params.cfg, to, text, ...opts }))
   );
 }
 
@@ -76,6 +119,8 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
   chunker: chunkTextForOutbound,
   chunkerMode: "markdown",
   textChunkLimit: MSTEAMS_TEXT_CHUNK_LIMIT,
+  resolveEffectiveTextChunkLimit: ({ fallbackLimit }) =>
+    resolveMSTeamsEffectiveTextChunkLimit(fallbackLimit),
   pollMaxOptions: 12,
   deliveryCapabilities: {
     durableFinal: {
@@ -94,7 +139,7 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
       presentation,
       text: payload.text,
     });
-    const msteamsData = asObjectRecord(payload.channelData?.msteams) ?? {};
+    const msteamsData = asOptionalRecord(payload.channelData?.msteams) ?? {};
     return {
       ...payload,
       channelData: {
@@ -111,25 +156,37 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
     to,
     text,
     mediaUrl,
+    mediaAccess,
     mediaLocalRoots,
     mediaReadFile,
     payload,
     deps,
     onDeliveryResult,
+    assertDirectAdapterHandoff,
+    onPlatformSendDispatch,
+    threadId,
   }) => {
-    const msteamsData = asObjectRecord(payload.channelData?.msteams);
+    const handoff = { assertDirectAdapterHandoff, onPlatformSendDispatch };
+    const deliveryTarget = resolveMSTeamsThreadTarget(to, threadId);
+    const msteamsData = asOptionalRecord(payload.channelData?.msteams);
     const presentationCard = msteamsData?.presentationCard;
     if (
       presentationCard &&
       typeof presentationCard === "object" &&
       !Array.isArray(presentationCard)
     ) {
-      const result = await sendAdaptiveCardMSTeams({
-        cfg,
-        to,
-        card: presentationCard as Record<string, unknown>,
-      });
-      return attachChannelToResult("msteams", result);
+      const result = await sendWithDeliveryResults(
+        (report) =>
+          sendAdaptiveCardMSTeams({
+            cfg,
+            to: deliveryTarget,
+            card: presentationCard as Record<string, unknown>,
+            ...handoff,
+            onDeliveryResult: report,
+          }),
+        onDeliveryResult,
+      );
+      return attachChannelToResult("msteams", toMSTeamsOutboundResult(result));
     }
     const mediaUrls = normalizeStringEntries(
       resolvePayloadMediaUrls({
@@ -142,49 +199,117 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
       const result = await sendPayloadMediaSequence<MSTeamsSendResult>({
         text,
         mediaUrls,
-        onResult: async (deliveryResult) => {
-          await onDeliveryResult?.(attachChannelToResult("msteams", deliveryResult));
-        },
         send: async ({ text: textLocal, mediaUrl: mediaUrlLocal }) =>
-          await send(to, textLocal, { mediaUrl: mediaUrlLocal, mediaLocalRoots, mediaReadFile }),
+          await sendWithDeliveryResults(
+            (report) =>
+              send(deliveryTarget, textLocal, {
+                mediaUrl: mediaUrlLocal,
+                mediaAccess,
+                mediaLocalRoots,
+                mediaReadFile,
+                ...handoff,
+                onDeliveryResult: report,
+              }),
+            onDeliveryResult,
+          ),
       });
       if (result) {
-        return attachChannelToResult("msteams", result);
+        return attachChannelToResult("msteams", toMSTeamsOutboundResult(result));
       }
     }
     if (text.trim()) {
       const send = resolveMSTeamsTextSend({ cfg, deps });
       const chunks = resolveTextChunksWithFallback(
         text,
-        chunkTextForOutbound(text, MSTEAMS_TEXT_CHUNK_LIMIT),
+        chunkTextForOutbound(
+          text,
+          resolveMSTeamsEffectiveTextChunkLimit(cfg.channels?.msteams?.textChunkLimit),
+        ),
       );
       let result: Awaited<ReturnType<MSTeamsTextSendFn>>;
       for (const chunk of chunks) {
-        result = await send(to, chunk);
-        await onDeliveryResult?.(attachChannelToResult("msteams", result));
+        result = await sendWithDeliveryResults(
+          (report) => send(deliveryTarget, chunk, { ...handoff, onDeliveryResult: report }),
+          onDeliveryResult,
+        );
       }
-      return attachChannelToResult("msteams", result!);
+      return attachChannelToResult("msteams", toMSTeamsOutboundResult(result!));
     }
     throw new Error("MS Teams payload send requires text, media, or a presentation card.");
   },
   ...createAttachedChannelResultAdapter({
     channel: "msteams",
-    sendText: async ({ cfg, to, text, deps }) => {
+    sendText: async ({
+      cfg,
+      to,
+      text,
+      deps,
+      threadId,
+      assertDirectAdapterHandoff,
+      onPlatformSendDispatch,
+      onDeliveryResult,
+    }) => {
       const send = resolveMSTeamsTextSend({ cfg, deps });
-      return await send(to, text);
+      return toMSTeamsOutboundResult(
+        await sendWithDeliveryResults(
+          (report) =>
+            send(resolveMSTeamsThreadTarget(to, threadId), text, {
+              assertDirectAdapterHandoff,
+              onPlatformSendDispatch,
+              onDeliveryResult: report,
+            }),
+          onDeliveryResult,
+        ),
+      );
     },
-    sendMedia: async ({ cfg, to, text, mediaUrl, mediaLocalRoots, mediaReadFile, deps }) => {
+    sendMedia: async ({
+      cfg,
+      to,
+      text,
+      mediaUrl,
+      mediaAccess,
+      mediaLocalRoots,
+      mediaReadFile,
+      deps,
+      threadId,
+      assertDirectAdapterHandoff,
+      onPlatformSendDispatch,
+      onDeliveryResult,
+    }) => {
       const send = resolveMSTeamsMediaSend({ cfg, deps });
-      return await send(to, text, { mediaUrl, mediaLocalRoots, mediaReadFile });
+      return toMSTeamsOutboundResult(
+        await sendWithDeliveryResults(
+          (report) =>
+            send(resolveMSTeamsThreadTarget(to, threadId), text, {
+              mediaUrl,
+              mediaAccess,
+              mediaLocalRoots,
+              mediaReadFile,
+              assertDirectAdapterHandoff,
+              onPlatformSendDispatch,
+              onDeliveryResult: report,
+            }),
+          onDeliveryResult,
+        ),
+      );
     },
-    sendPoll: async ({ cfg, to, poll }) => {
+    sendPoll: async ({
+      cfg,
+      to,
+      poll,
+      threadId,
+      assertDirectAdapterHandoff,
+      onPlatformSendDispatch,
+    }) => {
       const maxSelections = poll.maxSelections ?? 1;
       const result = await sendPollMSTeams({
         cfg,
-        to,
+        to: resolveMSTeamsThreadTarget(to, threadId),
         question: poll.question,
         options: poll.options,
         maxSelections,
+        assertDirectAdapterHandoff,
+        onPlatformSendDispatch,
       });
       const pollStore = createMSTeamsPollStoreState();
       await pollStore.createPoll({

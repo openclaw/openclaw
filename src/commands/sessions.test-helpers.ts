@@ -4,9 +4,15 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { vi } from "vitest";
+import { drainSessionDiskBudgetWorkers } from "../config/sessions/disk-budget-runtime.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { RuntimeEnv } from "../runtime.js";
+import {
+  closeOpenClawAgentDatabaseByPathAsync,
+  openOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db.js";
 
 const sessionsConfigState = vi.hoisted<{ loadConfig: () => Record<string, unknown> }>(() => ({
   loadConfig: () => ({
@@ -25,18 +31,6 @@ const defaultSessionsConfigLoader = sessionsConfigState.loadConfig;
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => sessionsConfigState.loadConfig(),
   loadConfig: () => sessionsConfigState.loadConfig(),
-}));
-
-vi.mock("../infra/state-migrations.js", async () => ({
-  ...(await vi.importActual<typeof import("../infra/state-migrations.js")>(
-    "../infra/state-migrations.js",
-  )),
-  autoMigrateLegacyState: vi.fn(async () => ({
-    migrated: false,
-    skipped: true,
-    changes: [],
-    warnings: [],
-  })),
 }));
 
 export function mockSessionsConfig() {
@@ -89,10 +83,16 @@ export async function writeStore(
   const storeDir = path.join(os.tmpdir(), dirName);
   fs.mkdirSync(storeDir, { recursive: true });
   const storePath = path.join(storeDir, "sessions.json");
+  const agentId = options.agentId ?? "main";
+  const databasePath = resolveSqliteTargetFromSessionStorePath(storePath, { agentId }).path;
+  openOpenClawAgentDatabase({ agentId, path: databasePath });
   for (const [sessionKey, entry] of Object.entries(data)) {
-    await replaceSessionEntry({ agentId: options.agentId ?? "main", sessionKey, storePath }, entry);
+    await replaceSessionEntry({ agentId, sessionKey, storePath }, entry);
   }
-  return storePath;
+  // Disk-budget scans inspect suffixed database owners; join them before handing off the fixture.
+  await drainSessionDiskBudgetWorkers();
+  await closeOpenClawAgentDatabaseByPathAsync(databasePath);
+  return databasePath;
 }
 
 /** Removes the temporary SQLite session store created by writeStore. */
@@ -124,6 +124,9 @@ export async function runSessionsJson<T>(
       runtime,
     );
   } finally {
+    await closeOpenClawAgentDatabaseByPathAsync(
+      resolveSqliteTargetFromSessionStorePath(store).path,
+    );
     cleanupStore(store);
   }
   return JSON.parse(logs[0] ?? "{}") as T;

@@ -3,6 +3,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.js";
+import { loadPendingDeliveries } from "./delivery-queue.test-helpers.js";
 
 const storeSpy = vi.hoisted(() => ({
   onMove: null as ((from: string, to: string, rootDir: string) => void) | null,
@@ -41,7 +44,16 @@ const {
   releaseSpoolArtifacts,
   stageQueuePayloadMedia,
 } = await import("./delivery-queue-media-spool.js");
-const { enqueueDelivery, loadPendingDeliveries } = await import("./delivery-queue-storage.js");
+const { enqueueDelivery } = await import("./delivery-queue-storage.js");
+const { loadDeliveryQueueEntry, pruneExpiredDeliveryQueueTombstones } =
+  await import("../delivery-queue-sqlite.js");
+const { seedDeliveryQueueEntry } = await import("../delivery-queue-sqlite.test-support.js");
+const {
+  LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
+  OUTBOUND_DELIVERY_MIGRATION_QUEUE_NAME,
+  OUTBOUND_DELIVERY_QUEUE_NAME,
+  OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
+} = await import("./delivery-queue-media-staging.js");
 
 const DAY_MS = 24 * 60 * 60_000;
 const ARTIFACT_A = "00000000-0000-4000-8000-000000000001.ogg";
@@ -75,16 +87,17 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   await fs.rm(stateDir, { recursive: true, force: true });
   await fs.rm(sourceDir, { recursive: true, force: true });
 });
 
 describe("retention", () => {
-  it("keeps pending media regardless of age and removes only old unreferenced artifacts", async () => {
+  it("reclaims expired custody off-thread and preserves pending media across reopen", async () => {
     const retained = await seedArtifact(ARTIFACT_A, 30 * DAY_MS);
     const orphan = await seedArtifact(ARTIFACT_B, 30 * DAY_MS);
     const fresh = await seedArtifact(PART_ARTIFACT, DAY_MS / 2);
-    await enqueueDelivery(
+    const id = await enqueueDelivery(
       {
         channel: "matrix",
         to: "!room:example",
@@ -92,13 +105,69 @@ describe("retention", () => {
       },
       stateDir,
     );
+    seedDeliveryQueueEntry({
+      queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
+      entry: { id: "expired-receipt", enqueuedAt: Date.now() - 31 * DAY_MS, retryCount: 0 },
+      status: "completed",
+      stateDir,
+    });
+    await closeOpenClawStateDatabaseAsync();
 
-    await pruneOrphanedDeliveryQueueMedia({ stateDir });
+    const mainSql = observeMainThreadSql();
+    try {
+      await pruneExpiredDeliveryQueueTombstones(stateDir);
+      await pruneOrphanedDeliveryQueueMedia({ stateDir });
+      mainSql.expectIdle();
+    } finally {
+      mainSql.restore();
+      await closeOpenClawStateDatabaseAsync();
+    }
 
+    expect(await loadPendingDeliveries(stateDir)).toMatchObject([{ id }]);
+    expect(
+      loadDeliveryQueueEntry(OUTBOUND_DELIVERY_QUEUE_NAME, "expired-receipt", stateDir, "all"),
+    ).toBeNull();
     expect(await exists(retained)).toBe(true);
     expect(await exists(orphan)).toBe(false);
     // Grace protects stage-before-row-commit and bounds crash leftovers.
     expect(await exists(fresh)).toBe(true);
+  });
+
+  it("retains media from every outbound migration namespace in one inventory", async () => {
+    const queueNames = [
+      OUTBOUND_DELIVERY_QUEUE_NAME,
+      LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
+      OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
+      OUTBOUND_DELIVERY_MIGRATION_QUEUE_NAME,
+    ];
+    const retained = await Promise.all(
+      queueNames.map(async (queueName, index) => {
+        const artifact = await seedArtifact(
+          `00000000-0000-4000-8000-${String(index + 10).padStart(12, "0")}.ogg`,
+          30 * DAY_MS,
+        );
+        const entry = {
+          id: `retained-${index}`,
+          enqueuedAt: Date.now(),
+          retryCount: 0,
+          payloads: [{ mediaUrl: artifact }],
+        };
+        seedDeliveryQueueEntry({
+          queueName,
+          entry,
+          stateDir,
+        });
+        return artifact;
+      }),
+    );
+    const orphan = await seedArtifact(ARTIFACT_B, 30 * DAY_MS);
+
+    await pruneOrphanedDeliveryQueueMedia({ stateDir });
+
+    await expect(
+      Promise.all(retained.map(async (artifact) => await exists(artifact))),
+    ).resolves.toEqual([true, true, true, true]);
+    expect(await exists(orphan)).toBe(false);
   });
 
   it("reclaims stale partial writes but ignores foreign files and symlinks", async () => {

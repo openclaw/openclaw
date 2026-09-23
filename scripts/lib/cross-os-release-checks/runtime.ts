@@ -1,13 +1,6 @@
 import { spawn } from "node:child_process";
-import { appendFileSync, createWriteStream } from "node:fs";
-import {
-  agentOutputHasExpectedOkMarker,
-  agentTurnUsedEmbeddedFallback,
-  buildCrossOsReleaseAgentSessionId,
-  buildReleaseAgentTurnArgs,
-  maybeBuildOptionalAgentTurnSkipResult,
-  shouldRetryCrossOsAgentTurnError,
-} from "./agent.ts";
+import { createWriteStream } from "node:fs";
+import { runReleaseAgentTurn } from "./agent.ts";
 import type {
   AgentTurnResult,
   GatewayHandle,
@@ -16,14 +9,10 @@ import type {
   ProviderConfig,
 } from "./config.ts";
 import {
-  CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS,
   CROSS_OS_DASHBOARD_FETCH_TIMEOUT_MS,
   CROSS_OS_DASHBOARD_SMOKE_TIMEOUT_MS,
   CROSS_OS_GATEWAY_STATUS_COMMAND_TIMEOUT_MS,
-  CROSS_OS_RELEASE_SMOKE_TOOLS_PROFILE,
-  buildCrossOsReleaseSmokeMemorySlotConfigArgs,
-  buildCrossOsReleaseSmokePluginAllowlist,
-  buildReleaseProviderConfigOverride,
+  buildReleaseModelConfigCommands,
   gatewayReadyDeadlineMs,
   managedGatewayRestartCommandTimeoutMs,
 } from "./config.ts";
@@ -33,16 +22,22 @@ import {
   buildGatewayStatusArgsFromHelpText,
   buildReleaseOnboardArgs,
   ensureManagedGatewayReady,
+  resolveInstalledGatewayStopArgs,
   runInstalledCli,
 } from "./installed.ts";
-import { readLogFileSize, readLogTextSince } from "./logs.ts";
+import { readLogFileSize } from "./logs.ts";
 import {
   dashboardHtmlMarkerStatus,
   readBoundedCrossOsResponseText,
   resolveDashboardAssetUrls,
   verifyDashboardAssetUrls,
 } from "./network-smokes.ts";
-import { registerActiveChildProcessTree, runCommand, withAllocatedGatewayPort } from "./process.ts";
+import {
+  hasChildExited,
+  registerActiveChildProcessTree,
+  runCommand,
+  waitForGatewayWithStartupMigrationRestart,
+} from "./process.ts";
 import { logLanePhase } from "./reporting.ts";
 import { formatError, sleep } from "./shared.ts";
 
@@ -64,18 +59,16 @@ export async function runOpenClaw(params: {
 }
 
 export async function runOnboard(params: LaneCommandParams & { providerConfig: ProviderConfig }) {
-  await withAllocatedGatewayPort(params.lane, async () => {
-    await runOpenClaw({
-      lane: params.lane,
-      env: params.env,
-      args: buildReleaseOnboardArgs({
-        authChoice: params.providerConfig.authChoice,
-        gatewayPort: params.lane.gatewayPort,
-        skipHealth: true,
-      }),
-      logPath: params.logPath,
-      timeoutMs: 10 * 60 * 1000,
-    });
+  await runOpenClaw({
+    lane: params.lane,
+    env: params.env,
+    args: buildReleaseOnboardArgs({
+      authChoice: params.providerConfig.authChoice,
+      gatewayPort: params.lane.gatewayPort,
+      skipHealth: true,
+    }),
+    logPath: params.logPath,
+    timeoutMs: 10 * 60 * 1000,
   });
 }
 
@@ -109,7 +102,12 @@ export async function exerciseManagedGatewayLifecycle(
   logLanePhase(params.lane, "gateway-stop");
   await runInstalledCli({
     cliPath: params.cliPath,
-    args: ["gateway", "stop"],
+    args: await resolveInstalledGatewayStopArgs({
+      cliPath: params.cliPath,
+      cwd: params.lane.homeDir,
+      env: params.env,
+      logPath: `${params.logPrefix}-stop-help.log`,
+    }),
     env: params.env,
     cwd: params.lane.homeDir,
     logPath: `${params.logPrefix}-stop.log`,
@@ -134,6 +132,7 @@ export async function exerciseManagedGatewayLifecycle(
 }
 
 export async function startGateway(params: LaneCommandParams): Promise<GatewayHandle> {
+  const launchLogOffset = readLogFileSize(params.logPath);
   const gatewayLog = createWriteStream(params.logPath, { flags: "a" });
   const useProcessGroup = process.platform !== "win32";
   const child = spawn(
@@ -163,32 +162,74 @@ export async function startGateway(params: LaneCommandParams): Promise<GatewayHa
   child.stderr?.on("data", (chunk) => {
     gatewayLog.write(chunk);
   });
-  let logClosed = false;
-  const closeLog = async () => {
-    if (logClosed) {
-      return;
-    }
-    logClosed = true;
-    await new Promise<void>((resolvePromise) => {
+  let resolveChildClose: () => void;
+  const childClosePromise = new Promise<void>((resolvePromise) => {
+    resolveChildClose = resolvePromise;
+  });
+  let closeLogPromise: Promise<void> | undefined;
+  const closeLog = () => {
+    closeLogPromise ??= new Promise<void>((resolvePromise) => {
       gatewayLog.once("error", () => resolvePromise());
       gatewayLog.end(() => resolvePromise());
     });
+    return closeLogPromise;
   };
   child.once("close", () => {
+    resolveChildClose();
     activeChildTree.unregister();
     void closeLog();
   });
   child.once("error", () => {
+    resolveChildClose();
     activeChildTree.unregister();
     void closeLog();
   });
-  return { child, closeLog, logPath: params.logPath };
+  return {
+    child,
+    closeLog,
+    launchLogOffset,
+    logPath: params.logPath,
+    waitForClose: () => childClosePromise,
+  };
 }
 
-export async function waitForGateway(params: LaneCommandParams) {
+export async function waitForGateway(
+  params: LaneCommandParams & {
+    gateway?: GatewayHandle;
+    gatewayHolder?: { current: GatewayHandle | null };
+    gatewayLogPath?: string;
+  },
+) {
+  if (params.gatewayHolder) {
+    if (!params.gatewayLogPath) {
+      throw new Error("Gateway restart coordination requires a gateway log path.");
+    }
+    const gatewayLogPath = params.gatewayLogPath;
+    await waitForGatewayWithStartupMigrationRestart({
+      gatewayHolder: params.gatewayHolder,
+      restartGateway: () =>
+        startGateway({
+          lane: params.lane,
+          env: params.env,
+          logPath: gatewayLogPath,
+        }),
+      waitUntilReady: (gateway) =>
+        waitForGateway({
+          lane: params.lane,
+          env: params.env,
+          gateway,
+          logPath: params.logPath,
+        }),
+    });
+    return;
+  }
+
   const statusArgs = await resolveGatewayStatusArgs(params.lane, params.env, params.logPath);
   const deadline = Date.now() + gatewayReadyDeadlineMs();
   while (Date.now() < deadline) {
+    if (params.gateway && hasChildExited(params.gateway.child)) {
+      throw new Error(`Gateway exited before becoming ready on port ${params.lane.gatewayPort}.`);
+    }
     let result;
     try {
       result = await runOpenClaw({
@@ -205,6 +246,9 @@ export async function waitForGateway(params: LaneCommandParams) {
     }
     if (result.exitCode === 0) {
       return;
+    }
+    if (params.gateway && hasChildExited(params.gateway.child)) {
+      throw new Error(`Gateway exited before becoming ready on port ${params.lane.gatewayPort}.`);
     }
     await sleep(2_000);
   }
@@ -229,110 +273,32 @@ async function resolveGatewayStatusArgs(lane: LaneState, env: NodeJS.ProcessEnv,
 }
 
 export async function runModelsSet(params: LaneCommandParams & { providerConfig: ProviderConfig }) {
-  await runOpenClaw({
-    lane: params.lane,
-    env: params.env,
-    args: ["models", "set", params.providerConfig.model],
-    logPath: params.logPath,
-    timeoutMs: 2 * 60 * 1000,
-  });
-  const providerConfigOverride = buildReleaseProviderConfigOverride(params.providerConfig);
-  if (providerConfigOverride) {
+  for (const args of buildReleaseModelConfigCommands(params.providerConfig)) {
     await runOpenClaw({
       lane: params.lane,
       env: params.env,
-      args: [
-        "config",
-        "set",
-        `models.providers.${params.providerConfig.extensionId}`,
-        JSON.stringify(providerConfigOverride),
-        "--strict-json",
-        "--merge",
-      ],
+      args,
       logPath: params.logPath,
       timeoutMs: 2 * 60 * 1000,
     });
   }
-  await runOpenClaw({
-    lane: params.lane,
-    env: params.env,
-    args: [
-      "config",
-      "set",
-      "plugins.allow",
-      JSON.stringify(buildCrossOsReleaseSmokePluginAllowlist(params.providerConfig)),
-      "--strict-json",
-    ],
-    logPath: params.logPath,
-    timeoutMs: 2 * 60 * 1000,
-  });
-  await runOpenClaw({
-    lane: params.lane,
-    env: params.env,
-    args: buildCrossOsReleaseSmokeMemorySlotConfigArgs(),
-    logPath: params.logPath,
-    timeoutMs: 2 * 60 * 1000,
-  });
-  await runOpenClaw({
-    lane: params.lane,
-    env: params.env,
-    args: ["config", "set", "agents.defaults.skipBootstrap", "true", "--strict-json"],
-    logPath: params.logPath,
-    timeoutMs: 2 * 60 * 1000,
-  });
-  await runOpenClaw({
-    lane: params.lane,
-    env: params.env,
-    args: ["config", "set", "tools.profile", CROSS_OS_RELEASE_SMOKE_TOOLS_PROFILE],
-    logPath: params.logPath,
-    timeoutMs: 2 * 60 * 1000,
-  });
 }
 
 export async function runAgentTurn(
   params: LaneCommandParams & { label: string },
 ): Promise<AgentTurnResult> {
-  let lastError;
-  for (let attempt = 1; attempt <= 2; attempt += 1) {
-    const sessionId = buildCrossOsReleaseAgentSessionId(params.label, attempt);
-    try {
-      const logOffset = readLogFileSize(params.logPath);
-      const result = await runOpenClaw({
+  return runReleaseAgentTurn(
+    params,
+    (args, timeoutMs) =>
+      runOpenClaw({
         lane: params.lane,
         env: params.env,
-        args: buildReleaseAgentTurnArgs(sessionId),
+        args,
         logPath: params.logPath,
-        timeoutMs: (CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS + 60) * 1000,
-      });
-      const logText = readLogTextSince(params.logPath, logOffset);
-      if (!agentOutputHasExpectedOkMarker(result.stdout, { logText })) {
-        throw new Error("Agent output did not contain the expected OK marker.");
-      }
-      if (agentTurnUsedEmbeddedFallback(result, { logText })) {
-        throw new Error("Agent turn used embedded fallback instead of gateway.");
-      }
-      return result;
-    } catch (error) {
-      lastError = error;
-      const skipped = maybeBuildOptionalAgentTurnSkipResult(error, params.logPath, {
-        attempt,
-        maxAttempts: 2,
-      });
-      if (skipped) {
-        return skipped;
-      }
-      if (attempt >= 2 || !shouldRetryCrossOsAgentTurnError(error)) {
-        throw error;
-      }
-      appendFileSync(
-        params.logPath,
-        `\n[release-checks] retrying agent turn after retryable live failure: ${
-          error instanceof Error ? error.message : String(error)
-        }\n`,
-      );
-    }
-  }
-  throw lastError;
+        timeoutMs,
+      }),
+    "agent turn",
+  );
 }
 
 export async function runDashboardSmoke(params: Pick<LaneCommandParams, "lane" | "logPath">) {

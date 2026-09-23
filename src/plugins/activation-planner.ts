@@ -3,7 +3,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.js";
-import { normalizePluginsConfig } from "./config-state.js";
+import { normalizePluginsConfig, type NormalizedPluginsConfig } from "./config-state.js";
 import {
   hasExplicitManifestOwnerTrust,
   isBundledManifestOwner,
@@ -35,6 +35,7 @@ type PluginActivationPlannerHintReason =
 
 type PluginActivationPlannerManifestReason =
   | "manifest-channel-owner"
+  | "manifest-cli-command-owner"
   | "manifest-command-alias"
   | "manifest-hook-owner"
   | "manifest-provider-owner"
@@ -61,6 +62,7 @@ type PluginActivationPlan = {
 type ResolveManifestActivationPlanParams = {
   trigger: PluginActivationPlannerTrigger;
   config?: OpenClawConfig;
+  normalizedConfig?: NormalizedPluginsConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   origin?: PluginOrigin;
@@ -74,6 +76,22 @@ type ResolveManifestActivationPlanParams = {
 export function resolveManifestActivationPlan(
   params: ResolveManifestActivationPlanParams,
 ): PluginActivationPlan {
+  const entries: PluginActivationPlanEntry[] = [];
+  const { pluginIds, diagnostics } = collectManifestActivationMatches(params, entries);
+  return { trigger: params.trigger, pluginIds, entries, diagnostics };
+}
+
+/** Selects plugin ids without materializing diagnostic reasons or plan entries. */
+export function resolveManifestActivationPluginIds(
+  params: ResolveManifestActivationPlanParams,
+): string[] {
+  return collectManifestActivationMatches(params).pluginIds;
+}
+
+function collectManifestActivationMatches(
+  params: ResolveManifestActivationPlanParams,
+  entries?: PluginActivationPlanEntry[],
+): { pluginIds: string[]; diagnostics: readonly PluginDiagnostic[] } {
   const onlyPluginIdSet = createPluginIdScopeSet(normalizePluginIdScope(params.onlyPluginIds));
   const registry = params.manifestRecords
     ? { plugins: params.manifestRecords, diagnostics: [] }
@@ -83,60 +101,65 @@ export function resolveManifestActivationPlan(
         env: params.env,
         includeDisabled: true,
       });
-  const normalizedConfig = normalizePluginsConfig(params.config?.plugins);
-  const entries = registry.plugins
-    .flatMap((plugin) => {
-      if (params.origin && plugin.origin !== params.origin) {
-        return [];
+  if (registry.plugins.length === 0 || onlyPluginIdSet?.size === 0) {
+    return { pluginIds: [], diagnostics: registry.diagnostics };
+  }
+  const normalizedConfig =
+    params.normalizedConfig ?? normalizePluginsConfig(params.config?.plugins);
+  const expected = normalizeActivationTrigger(params.trigger);
+  const rules =
+    params.trigger.kind === "capability"
+      ? CAPABILITY_RULES[params.trigger.capability]
+      : ACTIVATION_RULES[params.trigger.kind];
+  const matchedIds: string[] = [];
+  for (const plugin of registry.plugins) {
+    if (params.origin && plugin.origin !== params.origin) {
+      continue;
+    }
+    if (onlyPluginIdSet && !onlyPluginIdSet.has(plugin.id)) {
+      continue;
+    }
+    if (
+      !passesManifestOwnerBasePolicy({
+        plugin,
+        normalizedConfig,
+        allowRestrictiveAllowlistBypass: params.allowRestrictiveAllowlistBypass,
+      })
+    ) {
+      continue;
+    }
+    if (
+      params.requireExplicitManifestOwnerTrust &&
+      !hasExplicitActivationPlannerManifestOwnerTrust({ plugin, normalizedConfig })
+    ) {
+      continue;
+    }
+    const reasons: PluginActivationPlannerReason[] | undefined = entries ? [] : undefined;
+    for (const rule of rules) {
+      if (!rule.matches(plugin, expected)) {
+        continue;
       }
-      if (onlyPluginIdSet && !onlyPluginIdSet.has(plugin.id)) {
-        return [];
+      if (!reasons) {
+        matchedIds.push(plugin.id);
+        break;
       }
-      if (
-        !passesManifestOwnerBasePolicy({
-          plugin,
-          normalizedConfig,
-          allowRestrictiveAllowlistBypass: params.allowRestrictiveAllowlistBypass,
-        })
-      ) {
-        return [];
-      }
-      if (
-        params.requireExplicitManifestOwnerTrust &&
-        !hasExplicitActivationPlannerManifestOwnerTrust({
-          plugin,
-          normalizedConfig,
-        })
-      ) {
-        return [];
-      }
-      const reasons = listManifestActivationTriggerReasons(plugin, params.trigger);
-      if (reasons.length === 0) {
-        return [];
-      }
-      return [
-        {
-          pluginId: plugin.id,
-          origin: plugin.origin,
-          reasons,
-        } satisfies PluginActivationPlanEntry,
-      ];
-    })
-    .toSorted((left, right) => left.pluginId.localeCompare(right.pluginId));
-
+      reasons.push(rule.reason);
+    }
+    if (reasons?.length) {
+      entries?.push({ pluginId: plugin.id, origin: plugin.origin, reasons });
+    }
+  }
+  if (entries) {
+    entries.sort((left, right) => left.pluginId.localeCompare(right.pluginId));
+  }
   return {
-    trigger: params.trigger,
-    pluginIds: uniqueStrings(entries.map((entry) => entry.pluginId)),
-    entries,
+    pluginIds: uniqueStrings(
+      entries
+        ? entries.map((entry) => entry.pluginId)
+        : matchedIds.toSorted((left, right) => left.localeCompare(right)),
+    ),
     diagnostics: registry.diagnostics,
   };
-}
-
-/** Convenience wrapper for callers that only need plugin ids from the activation plan. */
-export function resolveManifestActivationPluginIds(
-  params: ResolveManifestActivationPlanParams,
-): string[] {
-  return [...resolveManifestActivationPlan(params).pluginIds];
 }
 
 function hasExplicitActivationPlannerManifestOwnerTrust(params: {
@@ -156,138 +179,145 @@ function hasExplicitActivationPlannerManifestOwnerTrust(params: {
   );
 }
 
-function listManifestActivationTriggerReasons(
-  plugin: PluginManifestRecord,
-  trigger: PluginActivationPlannerTrigger,
-): PluginActivationPlannerReason[] {
+type PluginActivationRule = {
+  reason: PluginActivationPlannerReason;
+  matches: (plugin: PluginManifestRecord, expected: string) => boolean;
+};
+
+// Private ordered predicates describe policy; queries retain only their normalized input.
+const ACTIVATION_RULES: Record<
+  Exclude<PluginActivationPlannerTrigger["kind"], "capability">,
+  readonly PluginActivationRule[]
+> = {
+  command: [
+    {
+      reason: "activation-command-hint",
+      matches: (plugin, command) =>
+        listHasNormalizedValue(plugin.activation?.onCommands, command, normalizeCommandId),
+    },
+    {
+      reason: "manifest-cli-command-owner",
+      matches: (plugin, command) =>
+        plugin.cliCommands?.some((descriptor) => normalizeCommandId(descriptor.name) === command) ??
+        false,
+    },
+    {
+      reason: "manifest-command-alias",
+      matches: (plugin, command) =>
+        plugin.commandAliases?.some(
+          (alias) => normalizeCommandId(alias.cliCommand ?? alias.name) === command,
+        ) ?? false,
+    },
+  ],
+  provider: [
+    {
+      reason: "activation-provider-hint",
+      matches: (plugin, provider) =>
+        listHasNormalizedValue(plugin.activation?.onProviders, provider, normalizeProviderId),
+    },
+    {
+      reason: "manifest-provider-owner",
+      matches: (plugin, provider) =>
+        listHasNormalizedValue(plugin.providers, provider, normalizeProviderId),
+    },
+    {
+      reason: "manifest-setup-provider-owner",
+      matches: (plugin, provider) =>
+        plugin.setup?.providers?.some((entry) => normalizeProviderId(entry.id) === provider) ??
+        false,
+    },
+  ],
+  agentHarness: [
+    {
+      reason: "activation-agent-harness-hint",
+      matches: (plugin, runtime) =>
+        listHasNormalizedValue(plugin.activation?.onAgentHarnesses, runtime, normalizeCommandId),
+    },
+  ],
+  channel: [
+    {
+      reason: "activation-channel-hint",
+      matches: (plugin, channel) =>
+        listHasNormalizedValue(plugin.activation?.onChannels, channel, normalizeCommandId),
+    },
+    {
+      reason: "manifest-channel-owner",
+      matches: (plugin, channel) =>
+        listHasNormalizedValue(plugin.channels, channel, normalizeCommandId),
+    },
+  ],
+  route: [
+    {
+      reason: "activation-route-hint",
+      matches: (plugin, route) =>
+        listHasNormalizedValue(plugin.activation?.onRoutes, route, normalizeCommandId),
+    },
+  ],
+};
+
+const CAPABILITY_RULES: Record<
+  PluginManifestActivationCapability,
+  readonly PluginActivationRule[]
+> = {
+  provider: [
+    {
+      reason: "activation-capability-hint",
+      matches: (plugin) => plugin.activation?.onCapabilities?.includes("provider") ?? false,
+    },
+    {
+      reason: "activation-provider-hint",
+      matches: (plugin) => hasValues(plugin.activation?.onProviders),
+    },
+    { reason: "manifest-provider-owner", matches: (plugin) => hasValues(plugin.providers) },
+    {
+      reason: "manifest-setup-provider-owner",
+      matches: (plugin) => hasValues(plugin.setup?.providers),
+    },
+  ],
+  channel: [
+    {
+      reason: "activation-capability-hint",
+      matches: (plugin) => plugin.activation?.onCapabilities?.includes("channel") ?? false,
+    },
+    {
+      reason: "activation-channel-hint",
+      matches: (plugin) => hasValues(plugin.activation?.onChannels),
+    },
+    { reason: "manifest-channel-owner", matches: (plugin) => hasValues(plugin.channels) },
+  ],
+  tool: [
+    {
+      reason: "activation-capability-hint",
+      matches: (plugin) => plugin.activation?.onCapabilities?.includes("tool") ?? false,
+    },
+    { reason: "manifest-tool-contract", matches: (plugin) => hasValues(plugin.contracts?.tools) },
+  ],
+  hook: [
+    {
+      reason: "activation-capability-hint",
+      matches: (plugin) => plugin.activation?.onCapabilities?.includes("hook") ?? false,
+    },
+    { reason: "manifest-hook-owner", matches: (plugin) => hasValues(plugin.hooks) },
+  ],
+};
+
+function normalizeActivationTrigger(trigger: PluginActivationPlannerTrigger): string {
   switch (trigger.kind) {
     case "command":
-      return listCommandTriggerReasons(plugin, normalizeCommandId(trigger.command));
+      return normalizeCommandId(trigger.command);
     case "provider":
-      return listProviderTriggerReasons(plugin, normalizeProviderId(trigger.provider));
+      return normalizeProviderId(trigger.provider);
     case "agentHarness":
-      return listAgentHarnessTriggerReasons(plugin, normalizeCommandId(trigger.runtime));
+      return normalizeCommandId(trigger.runtime);
     case "channel":
-      return listChannelTriggerReasons(plugin, normalizeCommandId(trigger.channel));
+      return normalizeCommandId(trigger.channel);
     case "route":
-      return listRouteTriggerReasons(plugin, normalizeCommandId(trigger.route));
+      return normalizeCommandId(trigger.route);
     case "capability":
-      return listCapabilityTriggerReasons(plugin, trigger.capability);
+      return trigger.capability;
   }
   const unreachableTrigger: never = trigger;
   return unreachableTrigger;
-}
-
-function listAgentHarnessTriggerReasons(
-  plugin: PluginManifestRecord,
-  runtime: string,
-): PluginActivationPlannerReason[] {
-  return listHasNormalizedValue(plugin.activation?.onAgentHarnesses, runtime, normalizeCommandId)
-    ? ["activation-agent-harness-hint"]
-    : [];
-}
-
-function listCommandTriggerReasons(
-  plugin: PluginManifestRecord,
-  command: string,
-): PluginActivationPlannerReason[] {
-  return dedupeReasons([
-    listHasNormalizedValue(plugin.activation?.onCommands, command, normalizeCommandId)
-      ? "activation-command-hint"
-      : null,
-    listHasNormalizedValue(
-      (plugin.commandAliases ?? []).flatMap((alias) => alias.cliCommand ?? alias.name),
-      command,
-      normalizeCommandId,
-    )
-      ? "manifest-command-alias"
-      : null,
-  ]);
-}
-
-function listProviderTriggerReasons(
-  plugin: PluginManifestRecord,
-  provider: string,
-): PluginActivationPlannerReason[] {
-  return dedupeReasons([
-    listHasNormalizedValue(plugin.activation?.onProviders, provider, normalizeProviderId)
-      ? "activation-provider-hint"
-      : null,
-    listHasNormalizedValue(plugin.providers, provider, normalizeProviderId)
-      ? "manifest-provider-owner"
-      : null,
-    listHasNormalizedValue(
-      plugin.setup?.providers?.map((setupProvider) => setupProvider.id),
-      provider,
-      normalizeProviderId,
-    )
-      ? "manifest-setup-provider-owner"
-      : null,
-  ]);
-}
-
-function listChannelTriggerReasons(
-  plugin: PluginManifestRecord,
-  channel: string,
-): PluginActivationPlannerReason[] {
-  return dedupeReasons([
-    listHasNormalizedValue(plugin.activation?.onChannels, channel, normalizeCommandId)
-      ? "activation-channel-hint"
-      : null,
-    listHasNormalizedValue(plugin.channels, channel, normalizeCommandId)
-      ? "manifest-channel-owner"
-      : null,
-  ]);
-}
-
-function listRouteTriggerReasons(
-  plugin: PluginManifestRecord,
-  route: string,
-): PluginActivationPlannerReason[] {
-  return listHasNormalizedValue(plugin.activation?.onRoutes, route, normalizeCommandId)
-    ? ["activation-route-hint"]
-    : [];
-}
-
-function listCapabilityTriggerReasons(
-  plugin: PluginManifestRecord,
-  capability: PluginManifestActivationCapability,
-): PluginActivationPlannerReason[] {
-  switch (capability) {
-    case "provider":
-      return dedupeReasons([
-        plugin.activation?.onCapabilities?.includes(capability)
-          ? "activation-capability-hint"
-          : null,
-        hasValues(plugin.activation?.onProviders) ? "activation-provider-hint" : null,
-        hasValues(plugin.providers) ? "manifest-provider-owner" : null,
-        hasValues(plugin.setup?.providers) ? "manifest-setup-provider-owner" : null,
-      ]);
-    case "channel":
-      return dedupeReasons([
-        plugin.activation?.onCapabilities?.includes(capability)
-          ? "activation-capability-hint"
-          : null,
-        hasValues(plugin.activation?.onChannels) ? "activation-channel-hint" : null,
-        hasValues(plugin.channels) ? "manifest-channel-owner" : null,
-      ]);
-    case "tool":
-      return dedupeReasons([
-        plugin.activation?.onCapabilities?.includes(capability)
-          ? "activation-capability-hint"
-          : null,
-        hasValues(plugin.contracts?.tools) ? "manifest-tool-contract" : null,
-      ]);
-    case "hook":
-      return dedupeReasons([
-        plugin.activation?.onCapabilities?.includes(capability)
-          ? "activation-capability-hint"
-          : null,
-        hasValues(plugin.hooks) ? "manifest-hook-owner" : null,
-      ]);
-  }
-  const unreachableCapability: never = capability;
-  return unreachableCapability;
 }
 
 function listHasNormalizedValue(
@@ -300,16 +330,6 @@ function listHasNormalizedValue(
 
 function hasValues(values: readonly unknown[] | undefined): boolean {
   return (values?.length ?? 0) > 0;
-}
-
-function dedupeReasons(
-  reasons: readonly (PluginActivationPlannerReason | null)[],
-): PluginActivationPlannerReason[] {
-  return [
-    ...new Set(
-      reasons.filter((reason): reason is PluginActivationPlannerReason => Boolean(reason)),
-    ),
-  ];
 }
 
 function normalizeCommandId(value: string | undefined): string {

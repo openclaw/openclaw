@@ -5,6 +5,7 @@ import {
   replaceManagedMarkdownBlock,
   withTrailingNewline,
 } from "openclaw/plugin-sdk/memory-host-markdown";
+import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   assessPageFreshness,
@@ -436,38 +437,19 @@ function buildLintReportBody(issues: MemoryWikiLintIssue[]): string {
   const byCategory = buildIssuesByCategory(issues);
   const lines = [`- Errors: ${errors.length}`, `- Warnings: ${warnings.length}`];
 
-  if (errors.length > 0) {
-    lines.push("", "### Errors");
-    for (const issue of errors) {
-      lines.push(`- \`${issue.path}\`: ${issue.message}`);
-    }
-  }
-
-  if (warnings.length > 0) {
-    lines.push("", "### Warnings");
-    for (const issue of warnings) {
-      lines.push(`- \`${issue.path}\`: ${issue.message}`);
-    }
-  }
-
-  if (byCategory.contradictions.length > 0) {
-    lines.push("", "### Contradictions");
-    for (const issue of byCategory.contradictions) {
-      lines.push(`- \`${issue.path}\`: ${issue.message}`);
-    }
-  }
-
-  if (byCategory["open-questions"].length > 0) {
-    lines.push("", "### Open Questions");
-    for (const issue of byCategory["open-questions"]) {
-      lines.push(`- \`${issue.path}\`: ${issue.message}`);
-    }
-  }
-
-  if (byCategory.provenance.length > 0 || byCategory.quality.length > 0) {
-    lines.push("", "### Quality Follow-Up");
-    for (const issue of [...byCategory.provenance, ...byCategory.quality]) {
-      lines.push(`- \`${issue.path}\`: ${issue.message}`);
+  const sections: Array<[string, MemoryWikiLintIssue[]]> = [
+    ["Errors", errors],
+    ["Warnings", warnings],
+    ["Contradictions", byCategory.contradictions],
+    ["Open Questions", byCategory["open-questions"]],
+    ["Quality Follow-Up", [...byCategory.provenance, ...byCategory.quality]],
+  ];
+  for (const [heading, sectionIssues] of sections) {
+    if (sectionIssues.length > 0) {
+      lines.push("", `### ${heading}`);
+      for (const issue of sectionIssues) {
+        lines.push(`- \`${issue.path}\`: ${issue.message}`);
+      }
     }
   }
 
@@ -476,6 +458,9 @@ function buildLintReportBody(issues: MemoryWikiLintIssue[]): string {
 
 async function writeLintReport(rootDir: string, issues: MemoryWikiLintIssue[]): Promise<string> {
   const reportPath = path.join(rootDir, "reports", "lint.md");
+  const directoryPath = path.dirname(reportPath);
+  await fs.mkdir(directoryPath, { recursive: true });
+  const dirMode = (await fs.stat(directoryPath)).mode & 0o7777;
   const original = await fs.readFile(reportPath, "utf8").catch(() =>
     renderWikiMarkdown({
       frontmatter: {
@@ -497,32 +482,46 @@ async function writeLintReport(rootDir: string, issues: MemoryWikiLintIssue[]): 
     endMarker: "<!-- openclaw:wiki:lint:end -->",
     body: buildLintReportBody(issues),
   });
-  await fs.writeFile(reportPath, withTrailingNewline(updated), "utf8");
+  await replaceFileAtomic({
+    filePath: reportPath,
+    content: withTrailingNewline(updated),
+    dirMode,
+    mode: 0o600,
+    preserveExistingMode: true,
+    tempPrefix: `${path.basename(reportPath)}.lint-report`,
+    syncTempFile: true,
+    syncParentDir: true,
+    throwOnCleanupError: true,
+  });
   return reportPath;
 }
 
 export async function lintMemoryWikiVault(
   config: ResolvedMemoryWikiConfig,
+  options: { signal?: AbortSignal } = {},
 ): Promise<LintMemoryWikiResult> {
-  const compileResult = await compileMemoryWikiVault(config);
+  const compileResult = await compileMemoryWikiVault(
+    config,
+    options.signal ? { signal: options.signal } : undefined,
+  );
+  options.signal?.throwIfAborted();
   const sourceSyncState = await readMemoryWikiSourceSyncState(config.vault.path);
   const managedImportedSourcePagePaths = new Set(
     Object.values(sourceSyncState.entries).map((entry) => entry.pagePath.split(path.sep).join("/")),
   );
   const issues = [
-    ...compileResult.frontmatterErrors.map(
-      (error): MemoryWikiLintIssue => ({
-        severity: "error",
-        category: "structure",
-        code: "invalid-frontmatter",
-        path: error.relativePath,
-        message: `Frontmatter failed to parse: ${error.message}`,
-      }),
-    ),
+    ...compileResult.frontmatterErrors.map((error): MemoryWikiLintIssue => ({
+      severity: "error",
+      category: "structure",
+      code: "invalid-frontmatter",
+      path: error.relativePath,
+      message: `Frontmatter failed to parse: ${error.message}`,
+    })),
     ...collectPageIssues(compileResult.pages, managedImportedSourcePagePaths),
   ].toSorted((left, right) => left.path.localeCompare(right.path));
   const issuesByCategory = buildIssuesByCategory(issues);
   const reportPath = await writeLintReport(config.vault.path, issues);
+  options.signal?.throwIfAborted();
 
   await appendMemoryWikiLog(config.vault.path, {
     type: "lint",

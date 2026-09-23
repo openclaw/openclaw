@@ -1,15 +1,29 @@
-// Clickclack tests cover inbound plugin behavior.
-import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
-import { buildAgentSessionKey, resolveAgentRoute } from "openclaw/plugin-sdk/routing";
+// Clickclack tests cover inbound plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  recordPendingDiscussionOpen,
+  reserveDiscussionBindingGeneration,
+} from "./discussions/binding-generation.js";
+import {
+  getClickClackDiscussionBindingStore,
+  type ClickClackDiscussionBinding,
+} from "./discussions/binding-store.js";
+import { markClickClackDiscussionChannelRevoked } from "./discussions/revoked-channel-store.js";
 import { handleClickClackInbound } from "./inbound.js";
+import {
+  createInboundRuntime,
+  createInboundMessage as createMessage,
+  createInboundDiscussionBinding,
+  createInboundDiscussionConfig,
+} from "./inbound.test-support.js";
 import { setClickClackRuntime } from "./runtime.js";
-import type { ClickClackMessage, CoreConfig, ResolvedClickClackAccount } from "./types.js";
+import type { CoreConfig, ResolvedClickClackAccount } from "./types.js";
 
 const sendClickClackTextMock = vi.hoisted(() => vi.fn());
 const VALID_MESSAGE_ID = "msg_01arz3ndektsv4rrffq69g5fav";
 const SECOND_VALID_MESSAGE_ID = "msg_01arz3ndektsv4rrffq69g5faw";
+const THIRD_VALID_MESSAGE_ID = "msg_01arz3ndektsv4rrffq69g5fax";
 
 type LlmCompleteMock = ReturnType<
   typeof vi.fn<
@@ -28,38 +42,7 @@ vi.mock("./outbound.js", () => ({
 }));
 
 function createRuntime(): PluginRuntime {
-  return createPluginRuntimeMock({
-    agent: {
-      runEmbeddedAgent: vi.fn().mockResolvedValue({
-        payloads: [{ text: "service bot online" }],
-        meta: {},
-      }),
-    },
-    channel: {
-      routing: {
-        resolveAgentRoute: vi.fn(
-          (params: Parameters<PluginRuntime["channel"]["routing"]["resolveAgentRoute"]>[0]) =>
-            resolveAgentRoute(params),
-        ),
-        buildAgentSessionKey: vi.fn(
-          (params: Parameters<PluginRuntime["channel"]["routing"]["buildAgentSessionKey"]>[0]) =>
-            buildAgentSessionKey(params),
-        ),
-      },
-    },
-    llm: {
-      complete: vi.fn().mockResolvedValue({
-        text: "service bot online",
-        provider: "openai",
-        model: "gpt-5.4-mini",
-        agentId: "service-bot",
-        usage: {},
-        audit: {
-          caller: { kind: "plugin", id: "clickclack" },
-        },
-      }),
-    },
-  } as unknown as PluginRuntime);
+  return createInboundRuntime(true);
 }
 
 function createAgentAccount(
@@ -70,15 +53,22 @@ function createAgentAccount(
     enabled: true,
     configured: true,
     baseUrl: "http://127.0.0.1:8080",
+    apiEndpoint: "http://127.0.0.1:8080",
     token: "test-token-placeholder",
     workspace: "wsp_1",
     replyMode: "agent",
     toolsAllow: [],
     defaultTo: "channel:general",
     allowFrom: ["*"],
+    allowBots: false,
     reconnectMs: 1_500,
     agentActivity: false,
+    nativeProgress: false,
     commandMenu: true,
+    discussions: { enabled: false, workspace: "wsp_1", section: "Sessions" },
+    requireMention: false,
+    mentionPatterns: [],
+    groups: {},
     config: {
       allowFrom: ["*"],
     },
@@ -91,28 +81,6 @@ function createAgentAccount(
       ...base.config,
       ...overrides.config,
     },
-  };
-}
-
-function createMessage(overrides: Partial<ClickClackMessage> = {}): ClickClackMessage {
-  return {
-    id: "msg_1",
-    workspace_id: "wsp_1",
-    channel_id: "chn_1",
-    author_id: "usr_owner",
-    thread_root_id: "msg_1",
-    body: "/fast on",
-    body_format: "markdown",
-    created_at: "2026-05-09T12:00:00.000Z",
-    author: {
-      id: "usr_owner",
-      kind: "human",
-      display_name: "Peter",
-      handle: "steipete",
-      avatar_url: "",
-      created_at: "2026-05-09T12:00:00.000Z",
-    },
-    ...overrides,
   };
 }
 
@@ -136,6 +104,7 @@ describe("handleClickClackInbound", () => {
       enabled: true,
       configured: true,
       baseUrl: "http://127.0.0.1:8080",
+      apiEndpoint: "http://127.0.0.1:8080",
       token: "test-auth-token",
       workspace: "wsp_1",
       agentId: "service-bot",
@@ -144,10 +113,15 @@ describe("handleClickClackInbound", () => {
       toolsAllow: [],
       defaultTo: "channel:general",
       allowFrom: ["*"],
+      allowBots: false,
       reconnectMs: 1_500,
       agentActivity: false,
       commandMenu: true,
+      discussions: { enabled: false, workspace: "wsp_1", section: "Sessions" },
       config: {},
+      requireMention: false,
+      mentionPatterns: [],
+      groups: {},
     } satisfies ResolvedClickClackAccount;
 
     await handleClickClackInbound({
@@ -224,6 +198,10 @@ describe("handleClickClackInbound", () => {
       model: "gpt-5.4-mini",
       agentId: "service-bot",
       usage: {},
+      execution: {
+        mode: "direct-provider",
+        owner: { kind: "provider", id: "openai" },
+      },
       audit: { caller: { kind: "plugin", id: "clickclack" } },
     });
     setClickClackRuntime(runtime);
@@ -307,7 +285,7 @@ describe("handleClickClackInbound", () => {
     expect(dispatchParams?.toolsAllow).toEqual(["message"]);
   });
 
-  it("wires durable activity reply options only when the account opts in", async () => {
+  it("keeps native progress opt-in and durable activity independent", async () => {
     const runtime = createRuntime();
     setClickClackRuntime(runtime);
     const cfg = {
@@ -327,40 +305,36 @@ describe("handleClickClackInbound", () => {
       }),
     });
     await handleClickClackInbound({
-      account: createAgentAccount({ agentActivity: true }),
+      account: createAgentAccount({ nativeProgress: true }),
       config: cfg,
       message: createMessage({
         id: SECOND_VALID_MESSAGE_ID,
         thread_root_id: SECOND_VALID_MESSAGE_ID,
       }),
     });
+    await handleClickClackInbound({
+      account: createAgentAccount({ agentActivity: true }),
+      config: cfg,
+      message: createMessage({
+        id: THIRD_VALID_MESSAGE_ID,
+        thread_root_id: THIRD_VALID_MESSAGE_ID,
+      }),
+    });
 
     const dispatchTurn = vi.mocked(runtime.channel.inbound.dispatch);
-    expect(dispatchTurn).toHaveBeenCalledTimes(2);
-    const withoutOptIn = dispatchTurn.mock.calls[0]?.[0] as {
-      replyOptions?: { runId?: unknown; onItemEvent?: unknown; onModelSelected?: unknown };
-    };
-    const withOptIn = dispatchTurn.mock.calls[1]?.[0] as {
-      replyOptions?: {
-        onItemEvent?: unknown;
-        onModelSelected?: unknown;
-        runId?: unknown;
-        commentaryProgressEnabled?: unknown;
-        suppressDefaultToolProgressMessages?: unknown;
-        allowProgressCallbacksWhenSourceDeliverySuppressed?: unknown;
-      };
-    };
-    expect(withoutOptIn.replyOptions).toEqual({
-      runId: `clickclack:${VALID_MESSAGE_ID}`,
-    });
-    expect(withOptIn.replyOptions?.runId).toBe(`clickclack:${SECOND_VALID_MESSAGE_ID}`);
-    expect(typeof withOptIn.replyOptions?.onModelSelected).toBe("function");
-    expect(withOptIn.replyOptions?.commentaryProgressEnabled).toBe(true);
-    // Channel-owned progress rendering: item events must flow even when
-    // session verbose mode is off and source delivery is handled by ClickClack.
-    expect(withOptIn.replyOptions?.suppressDefaultToolProgressMessages).toBe(true);
-    expect(withOptIn.replyOptions?.allowProgressCallbacksWhenSourceDeliverySuppressed).toBe(true);
-    expect(typeof withOptIn.replyOptions?.onItemEvent).toBe("function");
+    expect(dispatchTurn).toHaveBeenCalledTimes(3);
+    const [withoutOptIn, withNativeOnly, withActivityOnly] = dispatchTurn.mock.calls.map(
+      ([call]) => call as { replyOptions?: Record<string, unknown> },
+    );
+    expect(withoutOptIn?.replyOptions?.runId).toBe(`clickclack:${VALID_MESSAGE_ID}`);
+    expect(withoutOptIn?.replyOptions?.onItemEvent).toBeUndefined();
+    expect(withoutOptIn?.replyOptions?.commentaryProgressEnabled).toBeUndefined();
+    expect(withNativeOnly?.replyOptions?.runId).toBe(`clickclack:${SECOND_VALID_MESSAGE_ID}`);
+    expect(typeof withNativeOnly?.replyOptions?.onItemEvent).toBe("function");
+    expect(withNativeOnly?.replyOptions?.commentaryProgressEnabled).toBe(true);
+    expect(withActivityOnly?.replyOptions?.runId).toBe(`clickclack:${THIRD_VALID_MESSAGE_ID}`);
+    expect(typeof withActivityOnly?.replyOptions?.onItemEvent).toBe("function");
+    expect(typeof withActivityOnly?.replyOptions?.onModelSelected).toBe("function");
   });
 
   it("maps the authoritative message id to the agent run and correlates the final reply", async () => {
@@ -432,14 +406,16 @@ describe("handleClickClackInbound", () => {
     setClickClackRuntime(runtime);
 
     await handleClickClackInbound({
-      account: createAgentAccount(),
+      account: createAgentAccount({ nativeProgress: true }),
       config: {} as CoreConfig,
       message: createMessage({ id: "msg_invalid" }),
     });
 
-    expect(vi.mocked(runtime.channel.inbound.dispatch).mock.calls[0]?.[0].replyOptions).toBe(
-      undefined,
-    );
+    const replyOptions = vi.mocked(runtime.channel.inbound.dispatch).mock.calls[0]?.[0]
+      .replyOptions;
+    expect(replyOptions?.runId).toBeUndefined();
+    expect(replyOptions?.onModelSelected).toBeUndefined();
+    expect(typeof replyOptions?.onItemEvent).toBe("function");
   });
 
   it("accepts ClickClack DM target syntax in allowFrom", async () => {
@@ -516,6 +492,281 @@ describe("handleClickClackInbound", () => {
       dmScope: "per-channel-peer",
       identityLinks: { alice: ["clickclack:dm:usr_owner"] },
     });
+  });
+
+  it("routes a bound channel to a stable same-agent discussion session with observer context", async () => {
+    const runtime = createRuntime();
+    setClickClackRuntime(runtime);
+    const mainSessionKey = "agent:research:main";
+    getClickClackDiscussionBindingStore(runtime).set(
+      mainSessionKey,
+      createInboundDiscussionBinding(),
+    );
+
+    const currentConfig = createInboundDiscussionConfig() satisfies CoreConfig;
+    vi.mocked(runtime.config.current).mockReturnValue(currentConfig);
+    await handleClickClackInbound({
+      account: createAgentAccount({
+        replyMode: "model",
+        agentId: "service-bot",
+        discussions: { enabled: true, workspace: "wsp_1", section: "Sessions" },
+      }),
+      config: currentConfig,
+      message: createMessage({ channel_id: "chn_1", body: "What changed?" }),
+    });
+
+    const buildSessionKeyMock = vi.mocked(runtime.channel.routing.buildAgentSessionKey);
+    const discussionCallIndex = buildSessionKeyMock.mock.calls.findIndex(
+      ([call]) =>
+        call.agentId === "research" &&
+        call.peer != null &&
+        call.peer.kind === "channel" &&
+        call.peer.id.startsWith("disc-"),
+    );
+    expect(discussionCallIndex).toBeGreaterThanOrEqual(0);
+    const discussionSessionKey = buildSessionKeyMock.mock.results[discussionCallIndex]?.value;
+    expect(discussionSessionKey).toMatch(/^agent:research:clickclack:channel:disc-[0-9a-f]{32}$/u);
+    expect(runtime.llm.complete).not.toHaveBeenCalled();
+    expect(runtime.channel.routing.buildAgentSessionKey).toHaveBeenCalledWith({
+      agentId: "research",
+      channel: "clickclack",
+      accountId: "default",
+      peer: { kind: "channel", id: expect.stringMatching(/^disc-[0-9a-f]{32}$/u) },
+    });
+    const dispatch = vi.mocked(runtime.channel.inbound.dispatch);
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        route: expect.objectContaining({
+          agentId: "research",
+          sessionKey: discussionSessionKey,
+        }),
+        ctxPayload: expect.objectContaining({
+          SessionKey: discussionSessionKey,
+          GroupSystemPrompt: expect.stringContaining(mainSessionKey),
+        }),
+      }),
+    );
+    expect(dispatch.mock.calls[0]?.[0].ctxPayload.GroupSystemPrompt).toContain("sessions_history");
+    expect(dispatch.mock.calls[0]?.[0].ctxPayload.GroupSystemPrompt).toContain("sessions_send");
+  });
+
+  it("rotates an old attachment before dispatch after the main session is replaced", async () => {
+    const runtime = createRuntime();
+    setClickClackRuntime(runtime);
+    const mainSessionKey = "agent:research:main";
+    getClickClackDiscussionBindingStore(runtime).set(
+      mainSessionKey,
+      createInboundDiscussionBinding({ sessionId: "old-session-id" }),
+    );
+
+    const currentConfig = createInboundDiscussionConfig() satisfies CoreConfig;
+    vi.mocked(runtime.config.current).mockReturnValue(currentConfig);
+    await handleClickClackInbound({
+      account: createAgentAccount({
+        replyMode: "model",
+        discussions: { enabled: true, workspace: "wsp_1", section: "Sessions" },
+      }),
+      config: currentConfig,
+      message: createMessage({ channel_id: "chn_1", body: "Old discussion" }),
+    });
+
+    expect(runtime.llm.complete).not.toHaveBeenCalled();
+    expect(runtime.channel.inbound.dispatch).toHaveBeenCalledTimes(1);
+    expect(getClickClackDiscussionBindingStore(runtime).get(mainSessionKey)).toMatchObject({
+      sessionId: "session-id",
+      channelId: "chn_1",
+      externalRef: "openclaw:test:research",
+    });
+  });
+
+  it("ignores legacy session-derived archive metadata on a durable room", async () => {
+    const runtime = createRuntime();
+    setClickClackRuntime(runtime);
+    getClickClackDiscussionBindingStore(runtime).set(
+      "agent:research:main",
+      createInboundDiscussionBinding({ archived: true }),
+    );
+
+    const currentConfig = createInboundDiscussionConfig() satisfies CoreConfig;
+    vi.mocked(runtime.config.current).mockReturnValue(currentConfig);
+    await handleClickClackInbound({
+      account: createAgentAccount({
+        replyMode: "model",
+        discussions: { enabled: true, workspace: "wsp_1", section: "Sessions" },
+      }),
+      config: currentConfig,
+      message: createMessage({ channel_id: "chn_1", body: "Archived discussion" }),
+    });
+
+    expect(runtime.llm.complete).not.toHaveBeenCalled();
+    expect(runtime.channel.inbound.dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops inbound delivery as soon as the main session is archived", async () => {
+    const runtime = createRuntime();
+    setClickClackRuntime(runtime);
+    vi.mocked(runtime.agent.session.getSessionEntry).mockReturnValue({
+      sessionId: "session-id",
+      updatedAt: 2,
+      archivedAt: 1,
+    });
+    getClickClackDiscussionBindingStore(runtime).set(
+      "agent:research:main",
+      createInboundDiscussionBinding(),
+    );
+
+    const currentConfig = createInboundDiscussionConfig() satisfies CoreConfig;
+    vi.mocked(runtime.config.current).mockReturnValue(currentConfig);
+    await handleClickClackInbound({
+      account: createAgentAccount({
+        replyMode: "model",
+        discussions: { enabled: true, workspace: "wsp_1", section: "Sessions" },
+      }),
+      config: currentConfig,
+      message: createMessage({ channel_id: "chn_1", body: "Archived before sync" }),
+    });
+
+    expect(runtime.llm.complete).not.toHaveBeenCalled();
+    expect(runtime.channel.inbound.dispatch).not.toHaveBeenCalled();
+  });
+
+  it("drops a persisted managed channel after discussions are disabled", async () => {
+    const runtime = createRuntime();
+    setClickClackRuntime(runtime);
+    getClickClackDiscussionBindingStore(runtime).set(
+      "agent:research:main",
+      createInboundDiscussionBinding(),
+    );
+
+    const currentConfig = {} satisfies CoreConfig;
+    vi.mocked(runtime.config.current).mockReturnValue(currentConfig);
+    await handleClickClackInbound({
+      account: createAgentAccount({ replyMode: "model" }),
+      config: currentConfig,
+      message: createMessage({ channel_id: "chn_1", body: "Use the normal route" }),
+    });
+
+    expect(runtime.llm.complete).not.toHaveBeenCalled();
+    expect(runtime.channel.inbound.dispatch).not.toHaveBeenCalled();
+  });
+
+  it("drops delayed inbound after the live binding has been released", async () => {
+    const runtime = createRuntime();
+    setClickClackRuntime(runtime);
+    const mainSessionKey = "agent:research:released";
+    const binding: ClickClackDiscussionBinding = createInboundDiscussionBinding({
+      externalRef: "openclaw:test:released",
+      label: "Released",
+    });
+    const bindingStore = getClickClackDiscussionBindingStore(runtime);
+    bindingStore.set(mainSessionKey, binding);
+    markClickClackDiscussionChannelRevoked(runtime, binding);
+    bindingStore.delete(mainSessionKey);
+
+    const currentConfig = {} satisfies CoreConfig;
+    vi.mocked(runtime.config.current).mockReturnValue(currentConfig);
+    await handleClickClackInbound({
+      account: createAgentAccount({ replyMode: "model" }),
+      config: currentConfig,
+      message: createMessage({ channel_id: "chn_1", body: "Delayed managed event" }),
+    });
+
+    expect(runtime.llm.complete).not.toHaveBeenCalled();
+    expect(runtime.channel.inbound.dispatch).not.toHaveBeenCalled();
+  });
+
+  it("does not lose managed ownership when the local account id changes", async () => {
+    const runtime = createRuntime();
+    setClickClackRuntime(runtime);
+    getClickClackDiscussionBindingStore(runtime).set(
+      "agent:research:main",
+      createInboundDiscussionBinding({
+        externalRef: "openclaw:test:renamed-account",
+        label: "Renamed account",
+      }),
+    );
+
+    const currentConfig = {} satisfies CoreConfig;
+    vi.mocked(runtime.config.current).mockReturnValue(currentConfig);
+    await handleClickClackInbound({
+      account: createAgentAccount({ accountId: "replacement", replyMode: "model" }),
+      config: currentConfig,
+      message: createMessage({ channel_id: "chn_1", body: "Old managed channel" }),
+    });
+
+    expect(runtime.llm.complete).not.toHaveBeenCalled();
+    expect(runtime.channel.inbound.dispatch).not.toHaveBeenCalled();
+  });
+
+  it("quarantines unbound channel events while a create outcome is ambiguous", async () => {
+    const runtime = createRuntime();
+    setClickClackRuntime(runtime);
+    const sessionKey = "agent:research:pending";
+    const generation = await reserveDiscussionBindingGeneration({
+      runtime,
+      sessionKey,
+      accountId: "default",
+      credentialFingerprint: "test-fingerprint",
+      destinationIdentity: "http://127.0.0.1:8080\0wsp_1",
+      createGeneration: () => "pending-generation",
+    });
+    await recordPendingDiscussionOpen({
+      runtime,
+      sessionKey,
+      generation,
+      pending: {
+        accountId: "default",
+        serverBaseUrl: "http://127.0.0.1:8080",
+        workspaceId: "wsp_1",
+        sessionId: "session-id",
+        externalRef: "openclaw:test:pending",
+        credentialFingerprint: "test-fingerprint",
+      },
+    });
+
+    await handleClickClackInbound({
+      account: createAgentAccount({ replyMode: "model" }),
+      config: {} satisfies CoreConfig,
+      message: createMessage({ channel_id: "chn_unknown", body: "Maybe managed" }),
+    });
+
+    expect(runtime.llm.complete).not.toHaveBeenCalled();
+    expect(runtime.channel.inbound.dispatch).not.toHaveBeenCalled();
+  });
+
+  it("drops a managed channel after the discussion workspace changes", async () => {
+    const runtime = createRuntime();
+    setClickClackRuntime(runtime);
+    getClickClackDiscussionBindingStore(runtime).set(
+      "agent:research:main",
+      createInboundDiscussionBinding(),
+    );
+    const account = createAgentAccount({
+      replyMode: "model",
+      discussions: { enabled: true, workspace: "wsp_2", section: "Sessions" },
+    });
+
+    const currentConfig = {
+      channels: {
+        clickclack: {
+          enabled: true,
+          baseUrl: account.baseUrl,
+          token: account.token,
+          workspace: "wsp_2",
+          replyMode: "model",
+          discussions: { enabled: true, workspace: "wsp_2" },
+        },
+      },
+    } satisfies CoreConfig;
+    vi.mocked(runtime.config.current).mockReturnValue(currentConfig);
+    await handleClickClackInbound({
+      account,
+      config: currentConfig,
+      message: createMessage({ channel_id: "chn_1", body: "Use the normal route" }),
+    });
+
+    expect(runtime.llm.complete).not.toHaveBeenCalled();
+    expect(runtime.channel.inbound.dispatch).not.toHaveBeenCalled();
   });
 
   it("preserves binding scope for a canonically equivalent account agent", async () => {

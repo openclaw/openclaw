@@ -1,5 +1,5 @@
 // Google tests cover index plugin behavior.
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
@@ -7,16 +7,13 @@ import type {
   ProviderReplaySessionEntry,
   ProviderSanitizeReplayHistoryContext,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { createCapturedThinkingConfigStream } from "openclaw/plugin-sdk/provider-test-contracts";
-import type { RealtimeVoiceProviderPlugin } from "openclaw/plugin-sdk/realtime-voice";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { registerGoogleGeminiCliProvider } from "./gemini-cli-provider.js";
-import googlePlugin from "./index.js";
 import googleProviderDiscovery from "./provider-discovery.js";
 import { registerGoogleProvider } from "./provider-registration.js";
 
@@ -26,12 +23,6 @@ const googleProviderPlugin = {
     registerGoogleGeminiCliProvider(api);
   },
 };
-
-const refreshGeminiCliOAuthTokenMock = vi.hoisted(() => vi.fn());
-
-vi.mock("./oauth.runtime.js", () => ({
-  refreshGeminiCliOAuthToken: refreshGeminiCliOAuthTokenMock,
-}));
 
 describe("google provider plugin hooks", () => {
   it("owns replay policy and reasoning mode for the direct Gemini provider", async () => {
@@ -51,6 +42,7 @@ describe("google provider plugin hooks", () => {
       } as never),
     ).toEqual({
       sanitizeMode: "full",
+      appendOnlyRuntimeContext: false,
       sanitizeToolCallIds: true,
       toolCallIdMode: "strict",
       sanitizeThoughtSignatures: {
@@ -127,6 +119,23 @@ describe("google provider plugin hooks", () => {
         modelId: "gemini-2.5-pro",
       } as never),
     ).toBe("tagged");
+  });
+
+  it("keeps the Gemini CLI runtime without OpenClaw-owned OAuth surfaces", async () => {
+    const { providers } = await registerProviderPlugin({
+      plugin: googleProviderPlugin,
+      id: "google",
+      name: "Google Provider",
+    });
+    const cliProvider = requireRegisteredProvider(providers, "google-gemini-cli");
+
+    expect(cliProvider.label).toBe("Gemini CLI runtime");
+    expect(cliProvider.auth).toEqual([]);
+    expect(cliProvider.envVars).toEqual([]);
+    expect(cliProvider.wizard).toBeUndefined();
+    expect(cliProvider.refreshOAuth).toBeUndefined();
+    expect(cliProvider.resolveUsageAuth).toBeUndefined();
+    expect(cliProvider.fetchUsageSnapshot).toBeUndefined();
   });
 
   it("keeps google-antigravity hook aliases on tagged reasoning mode", async () => {
@@ -218,6 +227,86 @@ describe("google provider plugin hooks", () => {
         },
       }),
     ).toBe("gcp-vertex-credentials");
+  });
+
+  it("prefers relocated Google Cloud SDK ADC over the home fallback", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-cloud-sdk-"));
+    const cloudSdkDir = path.join(tempDir, "cloud-sdk");
+    const homeCredentialsDir = path.join(tempDir, "home", ".config", "gcloud");
+    await Promise.all([
+      mkdir(cloudSdkDir, { recursive: true }),
+      mkdir(homeCredentialsDir, { recursive: true }),
+    ]);
+    const relocatedCredentialsPath = path.join(cloudSdkDir, "application_default_credentials.json");
+    const homeCredentialsPath = path.join(
+      homeCredentialsDir,
+      "application_default_credentials.json",
+    );
+    await Promise.all([
+      writeFile(
+        relocatedCredentialsPath,
+        JSON.stringify({
+          type: "authorized_user",
+          client_id: "fixture-client",
+          client_secret: "fixture-secret",
+          refresh_token: "fixture-refresh",
+        }),
+        "utf8",
+      ),
+      writeFile(homeCredentialsPath, JSON.stringify({ type: "unsupported" }), "utf8"),
+    ]);
+    const { providers } = await registerProviderPlugin({
+      plugin: googleProviderPlugin,
+      id: "google",
+      name: "Google Provider",
+    });
+    const provider = requireRegisteredProvider(providers, "google-vertex");
+    const env = {
+      CLOUDSDK_CONFIG: cloudSdkDir,
+      HOME: path.join(tempDir, "home"),
+      GOOGLE_CLOUD_PROJECT: "fixture-project",
+      GOOGLE_CLOUD_LOCATION: "global",
+    };
+
+    expect(provider.resolveConfigApiKey?.({ provider: "google-vertex", env })).toBe(
+      "gcp-vertex-credentials",
+    );
+    expect(googleProviderDiscovery.resolveConfigApiKey?.({ provider: "google-vertex", env })).toBe(
+      "gcp-vertex-credentials",
+    );
+    expect(
+      provider.resolveConfigApiKey?.({
+        provider: "google-vertex",
+        env: { ...env, GOOGLE_APPLICATION_CREDENTIALS: homeCredentialsPath },
+      }),
+    ).toBeUndefined();
+
+    await writeFile(
+      homeCredentialsPath,
+      JSON.stringify({
+        type: "authorized_user",
+        client_id: "stale-client",
+        client_secret: "stale-secret",
+        refresh_token: "stale-refresh",
+      }),
+      "utf8",
+    );
+    const missingRelocatedCredentialsEnv = {
+      ...env,
+      CLOUDSDK_CONFIG: path.join(tempDir, "missing-cloud-sdk"),
+    };
+    expect(
+      provider.resolveConfigApiKey?.({
+        provider: "google-vertex",
+        env: missingRelocatedCredentialsEnv,
+      }),
+    ).toBeUndefined();
+    expect(
+      googleProviderDiscovery.resolveConfigApiKey?.({
+        provider: "google-vertex",
+        env: missingRelocatedCredentialsEnv,
+      }),
+    ).toBeUndefined();
   });
 
   it("owns Gemini tool schema normalization for direct and CLI providers", async () => {
@@ -383,67 +472,5 @@ describe("google provider plugin hooks", () => {
 
     expect(googleProvider.buildReplayPolicy).toBe(cliProvider.buildReplayPolicy);
     expect(googleProvider.wrapStreamFn).toBe(cliProvider.wrapStreamFn);
-  });
-
-  it("buffers early realtime audio while the lazy Google bridge loads", () => {
-    let realtimeProvider: RealtimeVoiceProviderPlugin | undefined;
-    googlePlugin.register(
-      createTestPluginApi({
-        registerRealtimeVoiceProvider(provider) {
-          realtimeProvider = provider;
-        },
-      }),
-    );
-
-    const bridge = realtimeProvider?.createBridge({
-      providerConfig: { apiKey: "gemini-key" },
-      onAudio() {},
-      onClearAudio() {},
-    });
-
-    if (!bridge) {
-      throw new Error("expected Google realtime bridge");
-    }
-    expect(bridge.supportsToolResultContinuation).toBe(false);
-    expect(bridge.supportsToolResultSuppression).toBe(false);
-    expect(bridge.sendAudio(Buffer.alloc(160))).toBeUndefined();
-    expect(bridge.setMediaTimestamp(20)).toBeUndefined();
-    expect(bridge.sendUserMessage?.("hello")).toBeUndefined();
-  });
-
-  it("refreshes Gemini CLI OAuth through the provider-owned refresh hook", async () => {
-    refreshGeminiCliOAuthTokenMock.mockResolvedValueOnce({
-      type: "oauth",
-      provider: "google-gemini-cli",
-      access: "fresh-access",
-      refresh: "fresh-refresh",
-      expires: Date.now() + 60_000,
-      email: "user@example.com",
-      projectId: "project-1",
-    });
-
-    const { providers } = await registerProviderPlugin({
-      plugin: googleProviderPlugin,
-      id: "google",
-      name: "Google Provider",
-    });
-    const provider = requireRegisteredProvider(providers, "google-gemini-cli");
-    const credential = {
-      type: "oauth" as const,
-      provider: "google-gemini-cli",
-      access: "stale-access",
-      refresh: "stale-refresh",
-      expires: Date.now() - 60_000,
-      email: "user@example.com",
-      projectId: "project-1",
-    };
-
-    await expect(provider.refreshOAuth?.(credential)).resolves.toMatchObject({
-      access: "fresh-access",
-      refresh: "fresh-refresh",
-      email: "user@example.com",
-      projectId: "project-1",
-    });
-    expect(refreshGeminiCliOAuthTokenMock).toHaveBeenCalledWith(credential);
   });
 });

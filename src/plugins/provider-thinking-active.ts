@@ -1,32 +1,13 @@
-// Reads provider thinking policy from the active runtime registry only.
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+// Reads provider thinking policy from a prepared or active runtime registry.
+import { matchesProviderPluginRef } from "./provider-registry-shared.js";
 import type {
   ProviderDefaultThinkingPolicyContext,
-  ProviderThinkingProfile,
-  ProviderThinkingPolicyContext,
+  ProviderThinkingRegistry,
 } from "./provider-thinking.types.js";
 import { PLUGIN_REGISTRY_STATE } from "./runtime-state-key.js";
 
-type ActiveThinkingProvider = {
-  id: string;
-  aliases?: string[];
-  hookAliases?: string[];
-  isBinaryThinking?: (ctx: ProviderThinkingPolicyContext) => boolean | undefined;
-  supportsXHighThinking?: (ctx: ProviderThinkingPolicyContext) => boolean | undefined;
-  resolveThinkingProfile?: (
-    ctx: ProviderDefaultThinkingPolicyContext,
-  ) => ProviderThinkingProfile | null | undefined;
-  resolveDefaultThinkingLevel?: (
-    ctx: ProviderDefaultThinkingPolicyContext,
-  ) => "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive" | null | undefined;
-};
-
 type ActiveThinkingRegistryState = {
-  activeRegistry?: {
-    providers?: Array<{
-      provider: ActiveThinkingProvider;
-    }>;
-  } | null;
+  activeRegistry?: ProviderThinkingRegistry | null;
 };
 
 type ThinkingHookParams<TContext> = {
@@ -34,52 +15,22 @@ type ThinkingHookParams<TContext> = {
   context: TContext;
 };
 
-function matchesProviderId(provider: ActiveThinkingProvider, providerId: string): boolean {
-  const normalized = normalizeProviderId(providerId);
-  if (!normalized) {
-    return false;
-  }
-  if (normalizeProviderId(provider.id) === normalized) {
-    return true;
-  }
-  return [...(provider.aliases ?? []), ...(provider.hookAliases ?? [])].some(
-    (alias) => normalizeProviderId(alias) === normalized,
-  );
-}
-
-function resolveActiveThinkingProvider(providerId: string): ActiveThinkingProvider | undefined {
+function resolveActiveThinkingProvider(providerId: string, registry?: ProviderThinkingRegistry) {
   const state = (
     globalThis as typeof globalThis & {
       [PLUGIN_REGISTRY_STATE]?: ActiveThinkingRegistryState;
     }
   )[PLUGIN_REGISTRY_STATE];
-  return state?.activeRegistry?.providers?.find((entry) =>
-    matchesProviderId(entry.provider, providerId),
+  return (registry ?? state?.activeRegistry)?.providers?.find((entry) =>
+    matchesProviderPluginRef(entry.provider, providerId),
   )?.provider;
-}
-
-export function resolveActiveProviderBinaryThinking(
-  params: ThinkingHookParams<ProviderThinkingPolicyContext>,
-) {
-  return resolveActiveThinkingProvider(params.provider)?.isBinaryThinking?.(params.context);
-}
-
-export function resolveActiveProviderXHighThinking(
-  params: ThinkingHookParams<ProviderThinkingPolicyContext>,
-) {
-  return resolveActiveThinkingProvider(params.provider)?.supportsXHighThinking?.(params.context);
 }
 
 export function resolveActiveProviderThinkingProfile(
   params: ThinkingHookParams<ProviderDefaultThinkingPolicyContext>,
+  registry?: ProviderThinkingRegistry,
 ) {
-  return resolveActiveThinkingProvider(params.provider)?.resolveThinkingProfile?.(params.context);
-}
-
-export function resolveActiveProviderDefaultThinkingLevel(
-  params: ThinkingHookParams<ProviderDefaultThinkingPolicyContext>,
-) {
-  return resolveActiveThinkingProvider(params.provider)?.resolveDefaultThinkingLevel?.(
+  return resolveActiveThinkingProvider(params.provider, registry)?.resolveThinkingProfile?.(
     params.context,
   );
 }

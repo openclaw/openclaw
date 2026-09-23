@@ -2,10 +2,14 @@ import { describe, expect, it, vi } from "vitest";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
 import {
+  createAgentTurnExecutionDefaults,
   setupAgentRunnerExecutionTestState,
-  getRunAgentTurnWithFallback,
+  getExecuteAgentTurnForTest,
   createMockTypingSignaler,
   createFollowupRun,
+  fallbackAttemptOptions,
+  initialFallbackAttemptOptions,
+  createMinimalRunAgentTurnParams,
 } from "./agent-runner-execution.test-support.js";
 import type {
   FallbackRunnerParams,
@@ -13,9 +17,9 @@ import type {
 } from "./agent-runner-execution.test-support.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 
-const state = setupAgentRunnerExecutionTestState();
+const state = await setupAgentRunnerExecutionTestState();
 
-describe("runAgentTurnWithFallback: message tool progress", () => {
+describe("executeAgentTurn: message tool progress", () => {
   it("suppresses progress callbacks after message-tool-only delivery completes", async () => {
     let releaseItemEvent: (() => void) | undefined;
     const itemEventGate = new Promise<void>((resolve) => {
@@ -70,22 +74,27 @@ describe("runAgentTurnWithFallback: message tool progress", () => {
         },
       });
       await params.onAgentEvent?.({
-        stream: "assistant",
+        stream: "item",
         data: {
-          phase: "commentary",
+          kind: "preamble",
+          phase: "update",
           itemId: "commentary-1",
-          text: "This must stay suppressed.",
+          progressText: "This must stay suppressed.",
         },
       });
       releaseItemEvent?.();
       await itemEventPromise;
-      return { payloads: [{ text: "NO_REPLY" }], meta: {} };
+      return {
+        payloads: [{ text: "NO_REPLY" }],
+        didDeliverSourceReplyViaMessageTool: true,
+        meta: {},
+      };
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
     followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
-    await runAgentTurnWithFallback({
+    await executeAgentTurn({
       commandBody: "hello",
       followupRun,
       sessionCtx: {
@@ -98,17 +107,7 @@ describe("runAgentTurnWithFallback: message tool progress", () => {
         progressPreambleEnabled: true,
       } satisfies InternalGetReplyOptions,
       typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
+      ...createAgentTurnExecutionDefaults(),
       resolvedVerboseLevel: "on",
     });
 
@@ -121,6 +120,86 @@ describe("runAgentTurnWithFallback: message tool progress", () => {
     );
     expect(onItemEvent).toHaveBeenCalledTimes(1);
     expect(onCommandOutput).not.toHaveBeenCalled();
+    expect(state.recordMessageToolRunOutcomeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        outcome: "tool_delivered",
+        runStatus: "completed",
+      }),
+    );
+  });
+
+  it("records mute when a message-tool-only run completes without a send", async () => {
+    const onAgentRunTerminalOutcome = vi.fn();
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
+    const followupRun = createFollowupRun();
+    followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
+
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    await executeAgentTurn(
+      createMinimalRunAgentTurnParams({ followupRun, opts: { onAgentRunTerminalOutcome } }),
+    );
+
+    expect(onAgentRunTerminalOutcome).toHaveBeenCalledExactlyOnceWith("completed");
+    expect(state.recordMessageToolRunOutcomeMock).toHaveBeenCalledWith(
+      expect.objectContaining({ outcome: "mute", runStatus: "completed" }),
+    );
+  });
+
+  it.each([false, true])(
+    "records failed execution independently of delivery (%s)",
+    async (delivered) => {
+      const onAgentRunTerminalOutcome = vi.fn();
+      state.runEmbeddedAgentMock.mockResolvedValueOnce({
+        payloads: [],
+        didDeliverSourceReplyViaMessageTool: delivered,
+        meta: { error: { message: "provider crashed" } },
+      });
+      const followupRun = createFollowupRun();
+      followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
+
+      const executeAgentTurn = await getExecuteAgentTurnForTest();
+      await executeAgentTurn(
+        createMinimalRunAgentTurnParams({ followupRun, opts: { onAgentRunTerminalOutcome } }),
+      );
+
+      expect(onAgentRunTerminalOutcome).toHaveBeenCalledExactlyOnceWith("failed");
+      expect(state.recordMessageToolRunOutcomeMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          outcome: delivered ? "tool_delivered" : "mute",
+          runStatus: "errored",
+        }),
+      );
+    },
+  );
+
+  it("clears run ownership when image preflight fails", async () => {
+    const onAgentRunTerminalOutcome = vi.fn();
+    const followupRun = createFollowupRun();
+    followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
+    const agentRunRegistry = await import("../../infra/agent-run-registry.js");
+    const clearAgentRunContext = vi.mocked(agentRunRegistry.clearAgentRunContext);
+    state.resolveCurrentTurnImagesMock.mockRejectedValueOnce(new Error("invalid image metadata"));
+
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    await expect(
+      executeAgentTurn(
+        createMinimalRunAgentTurnParams({
+          followupRun,
+          opts: { runId: "preflight-failure", onAgentRunTerminalOutcome },
+        }),
+      ),
+    ).rejects.toThrow("invalid image metadata");
+
+    expect(clearAgentRunContext).toHaveBeenCalledWith("preflight-failure", expect.any(String));
+    expect(onAgentRunTerminalOutcome).toHaveBeenCalledExactlyOnceWith("failed");
+    expect(state.recordMessageToolRunOutcomeMock).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        runId: "preflight-failure",
+        outcome: "mute",
+        runStatus: "errored",
+      }),
+    );
+    expect(state.runWithModelFallbackMock).not.toHaveBeenCalled();
   });
 
   it("preserves message-tool-only suppression across fallback candidates", async () => {
@@ -165,35 +244,25 @@ describe("runAgentTurnWithFallback: message tool progress", () => {
         return { payloads: [{ text: "NO_REPLY" }], meta: {} };
       });
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-      await params.run("anthropic", "primary");
+      await params.run("anthropic", "primary", initialFallbackAttemptOptions(params));
       return {
-        result: await params.run("openai", "fallback"),
+        result: await params.run("openai", "fallback", fallbackAttemptOptions(params, "unknown")),
         provider: "openai",
         model: "fallback",
         attempts: [],
       };
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
     followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
-    await runAgentTurnWithFallback({
+    await executeAgentTurn({
       commandBody: "hello",
       followupRun,
       sessionCtx: { Provider: "discord", MessageSid: "msg" } as unknown as TemplateContext,
       opts: { onItemEvent, onCommandOutput } satisfies GetReplyOptions,
       typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
+      ...createAgentTurnExecutionDefaults(),
       resolvedVerboseLevel: "on",
     });
 
@@ -256,10 +325,10 @@ describe("runAgentTurnWithFallback: message tool progress", () => {
       return { payloads: [{ text: "NO_REPLY" }], meta: {} };
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
     followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
-    await runAgentTurnWithFallback({
+    await executeAgentTurn({
       commandBody: "hello",
       followupRun,
       sessionCtx: {
@@ -272,17 +341,7 @@ describe("runAgentTurnWithFallback: message tool progress", () => {
         onCommandOutput,
       } satisfies GetReplyOptions,
       typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
+      ...createAgentTurnExecutionDefaults(),
       resolvedVerboseLevel: "on",
     });
 
@@ -347,10 +406,10 @@ describe("runAgentTurnWithFallback: message tool progress", () => {
       return { payloads: [{ text: "NO_REPLY" }], meta: {} };
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
     followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
-    await runAgentTurnWithFallback({
+    await executeAgentTurn({
       commandBody: "hello",
       followupRun,
       sessionCtx: {
@@ -362,17 +421,7 @@ describe("runAgentTurnWithFallback: message tool progress", () => {
         onCommandOutput,
       } satisfies GetReplyOptions,
       typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
+      ...createAgentTurnExecutionDefaults(),
       resolvedVerboseLevel: "on",
     });
 

@@ -15,10 +15,10 @@ Responses, Azure OpenAI Responses, ChatGPT/Codex Responses, Google Generative
 AI, Google Vertex, Mistral Conversations).
 
 It publishes alongside the root `openclaw` package on every release, pinned to
-the same version, with its own `npm-shrinkwrap.json` so its transitive
-dependency tree is locked at install time. Installing `openclaw` installs the
-matching `@openclaw/ai` automatically; library consumers can depend on it
-directly without any OpenClaw application code.
+the same version. Its exact-pinned direct dependencies resolve at install time;
+the package ships no npm lockfile. Installing `openclaw` installs the matching
+`@openclaw/ai` automatically, and library consumers can depend on it directly
+without any OpenClaw application code.
 
 ## Quick start
 
@@ -66,6 +66,11 @@ A runnable version lives in the repository at `examples/ai-chat`.
 | `./providers`    | `registerBuiltInApiProviders`, `resetApiProviders`                             |
 | `./types`        | Model/message/tool/stream types                                                |
 | `./validation`   | Tool argument validation                                                       |
-| `./diagnostics`  | Diagnostics contracts                                                          |
+| `./diagnostics`  | Diagnostics contracts, transport logging, and sanitized URL formatting         |
 | `./event-stream` | Shared `EventStream` implementation                                            |
 | `./internal/*`   | OpenClaw-internal, no semver guarantee                                         |
+
+Use `@openclaw/ai/diagnostics` for `emitModelTransportDebug`,
+`formatModelTransportDebugUrl`, and `formatModelTransportDebugBaseUrl` when
+you only need logging helpers. This entrypoint keeps provider transport
+implementations out of the import graph.

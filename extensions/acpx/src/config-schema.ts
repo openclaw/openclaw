@@ -3,6 +3,19 @@
  * this file as the single source of truth for validation and defaulting.
  */
 import { z } from "zod";
+import type { AcpxAgentCommand } from "./command-line.js";
+
+export const ACPX_NATIVE_AGENT_IDS = ["opencode", "qwen", "pi", "kilocode", "copilot"] as const;
+export type AcpxNativeAgentId = (typeof ACPX_NATIVE_AGENT_IDS)[number];
+export const AcpxNativeAgentsSchema = z
+  .strictObject({
+    opencode: z.boolean().optional(),
+    qwen: z.boolean().optional(),
+    pi: z.boolean().optional(),
+    kilocode: z.boolean().optional(),
+    copilot: z.boolean().optional(),
+  })
+  .optional();
 
 const ACPX_PERMISSION_MODES = ["approve-all", "approve-reads", "deny-all"] as const;
 /** Permission policy applied to interactive ACPX tool requests. */
@@ -12,7 +25,7 @@ const ACPX_NON_INTERACTIVE_POLICIES = ["deny", "fail"] as const;
 /** Permission policy applied when ACPX cannot ask a human for approval. */
 export type AcpxNonInteractivePermissionPolicy = (typeof ACPX_NON_INTERACTIVE_POLICIES)[number];
 
-/** Default session timeout for ACPX runtime turns. */
+/** Default timeout for ACPX startup and control operations. */
 export const DEFAULT_ACPX_TIMEOUT_SECONDS = 120;
 
 /** Raw MCP server command config accepted from plugin configuration. */
@@ -30,23 +43,6 @@ export type AcpxMcpServer = {
   env: Array<{ name: string; value: string }>;
 };
 
-/** User-provided ACPX plugin configuration before defaults are resolved. */
-export type AcpxPluginConfig = {
-  cwd?: string;
-  stateDir?: string;
-  probeAgent?: string;
-  permissionMode?: AcpxPermissionMode;
-  nonInteractivePermissions?: AcpxNonInteractivePermissionPolicy;
-  pluginToolsMcpBridge?: boolean;
-  openClawToolsMcpBridge?: boolean;
-  strictWindowsCmdWrapper?: boolean;
-  timeoutSeconds?: number;
-  queueOwnerTtlSeconds?: number;
-  piSessionCatalog?: { enabled?: boolean };
-  mcpServers?: Record<string, McpServerConfig>;
-  agents?: Record<string, { command: string; args?: string[] }>;
-};
-
 /** Fully resolved ACPX config consumed by the runtime service. */
 export type ResolvedAcpxPluginConfig = {
   cwd: string;
@@ -56,15 +52,9 @@ export type ResolvedAcpxPluginConfig = {
   nonInteractivePermissions: AcpxNonInteractivePermissionPolicy;
   pluginToolsMcpBridge: boolean;
   openClawToolsMcpBridge: boolean;
-  strictWindowsCmdWrapper: boolean;
   timeoutSeconds?: number;
-  queueOwnerTtlSeconds: number;
-  legacyCompatibilityConfig: {
-    strictWindowsCmdWrapper?: boolean;
-    queueOwnerTtlSeconds?: number;
-  };
   mcpServers: Record<string, McpServerConfig>;
-  agents: Record<string, string>;
+  agents: Record<string, AcpxAgentCommand>;
 };
 
 const nonEmptyTrimmedString = (message: string) =>
@@ -90,6 +80,7 @@ const McpServerConfigSchema = z.object({
 
 /** Zod schema for validating raw ACPX plugin config from OpenClaw config. */
 export const AcpxPluginConfigSchema = z.strictObject({
+  nativeAgents: AcpxNativeAgentsSchema,
   cwd: nonEmptyTrimmedString("cwd must be a non-empty string").optional(),
   stateDir: nonEmptyTrimmedString("stateDir must be a non-empty string").optional(),
   probeAgent: nonEmptyTrimmedString("probeAgent must be a non-empty string").optional(),
@@ -107,17 +98,10 @@ export const AcpxPluginConfigSchema = z.strictObject({
   openClawToolsMcpBridge: z
     .boolean({ error: "openClawToolsMcpBridge must be a boolean" })
     .optional(),
-  strictWindowsCmdWrapper: z
-    .boolean({ error: "strictWindowsCmdWrapper must be a boolean" })
-    .optional(),
   timeoutSeconds: z
     .number({ error: "timeoutSeconds must be a number >= 0.001" })
     .min(0.001, { error: "timeoutSeconds must be a number >= 0.001" })
     .default(DEFAULT_ACPX_TIMEOUT_SECONDS),
-  queueOwnerTtlSeconds: z
-    .number({ error: "queueOwnerTtlSeconds must be a number >= 0" })
-    .min(0, { error: "queueOwnerTtlSeconds must be a number >= 0" })
-    .optional(),
   piSessionCatalog: z
     .strictObject({
       enabled: z.boolean({ error: "piSessionCatalog.enabled must be a boolean" }).default(true),

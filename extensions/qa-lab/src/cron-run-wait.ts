@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements cron run wait behavior.
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
@@ -29,12 +28,22 @@ export async function waitForCronRunCompletion(params: {
   afterTs: number;
   timeoutMs?: number;
   intervalMs?: number;
+  gatewayCallTimeoutMs?: number;
 }) {
   const timeoutMs = params.timeoutMs ?? 90_000;
   const intervalMs = resolveCronRunPollIntervalMs(params.intervalMs);
+  const gatewayCallTimeoutMs = resolveTimerTimeoutMs(
+    params.gatewayCallTimeoutMs ?? 30_000,
+    30_000,
+    1,
+  );
   const startedAt = Date.now();
   let lastEntries: QaCronRunLogEntry[] = [];
   while (Date.now() - startedAt < timeoutMs) {
+    const remainingCallMs = timeoutMs - (Date.now() - startedAt);
+    if (remainingCallMs <= 0) {
+      break;
+    }
     const page = (await params.callGateway(
       "cron.runs",
       {
@@ -42,7 +51,7 @@ export async function waitForCronRunCompletion(params: {
         limit: 20,
         sortDir: "desc",
       },
-      { timeoutMs: Math.min(timeoutMs, 30_000) },
+      { timeoutMs: Math.min(remainingCallMs, gatewayCallTimeoutMs) },
     )) as QaCronRunsPage;
     const entries = Array.isArray(page.entries) ? page.entries : [];
     lastEntries = entries;

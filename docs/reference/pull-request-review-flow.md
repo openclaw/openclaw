@@ -45,7 +45,9 @@ and help maintainers with guarded repair or automerge flows.
 A positive ClawSweeper result is supporting evidence, not maintainer approval.
 Maintainers still decide whether and when a PR is ready to merge.
 
-ClawSweeper is queue-based. Do not expect an immediate response after opening a
+ClawSweeper is queue-based. When you open a non-draft PR or mark a draft ready
+for review, it posts a short receipt comment right away, but the review itself
+still waits for a queue slot. Do not expect an immediate review after opening a
 PR, pushing a commit, or adding a review request. Label updates after a
 ClawSweeper run can also take time.
 
@@ -115,6 +117,40 @@ Assigned PRs are marked stale 27 days after opening, regardless of later
 updates, then closed after 7 stale days without activity. If an assigned PR is
 still active, coordinate with the maintainer working on it.
 
+## Maintainer review artifacts
+
+`scripts/pr review-artifacts-init <PR>` writes `.local/review.json` for the
+current reviewed head. Its defaults are structurally valid and explicitly
+unfinished: `NEEDS WORK`, `performed: false`, empty evidence arrays, and
+`tests.result: "not_run"`. Initialization preserves an existing artifact stamped
+for the same PR and head, so it does not rewrite an older or partially filled
+review.
+
+Fill the JSON with review findings and evidence, then run
+`scripts/pr review-validate-artifacts <PR>`. JSON owns the review; validation
+prints its summary, and an existing `.local/review.md` is not authoritative.
+Keep enum values bare, without annotations such as `(allowed: ...)`:
+
+| Field                              | Accepted values                                                                 |
+| ---------------------------------- | ------------------------------------------------------------------------------- |
+| `recommendation`                   | `READY FOR /prepare-pr`, `NEEDS WORK`, `NEEDS DISCUSSION`, `NOT USEFUL (CLOSE)` |
+| `findings[].severity`              | `BLOCKER`, `IMPORTANT`, `NIT`                                                   |
+| `nitSweep.status` (optional sweep) | `none`, `has_nits`                                                              |
+| `issueValidation.source`           | `linked_issue`, `pr_body`, `both`                                               |
+| `issueValidation.status`           | `valid`, `unclear`, `invalid`, `already_fixed_on_main`                          |
+| `behavioralSweep.status`           | `pass`, `needs_work`, `not_applicable`                                          |
+| `behavioralSweep.silentDropRisk`   | `none`, `present`, `unknown`                                                    |
+| `tests.result`                     | `pass`, `fail`, `not_run`                                                       |
+| `docs`                             | `up_to_date`, `missing`, `not_applicable`                                       |
+| `changelog`                        | `required`, `not_required`                                                      |
+
+`nitSweep` is optional and omitted from a fresh template. If supplied, it requires
+`performed: true`, a status consistent with the NIT findings, and a non-empty
+summary. Required issue and behavior summaries must also be non-empty, and each
+finding needs a severity. Structural validity does not authorize preparation:
+`READY FOR /prepare-pr` still requires completed issue and behavior review,
+resolved substantive findings, and the applicable runtime proof.
+
 ## When automation stays quiet
 
 Automation may stay quiet when a maintainer is already handling the item, a
@@ -126,6 +162,24 @@ contributor code. In that case, maintainers use normal review or a safer
 workflow instead.
 
 ## Troubleshooting
+
+Maintainers can set `OPENCLAW_PR_TOOLING_ROOT` to a full checkout of this repository
+to source materialized `scripts/pr` dependencies independently of a canonical checkout parked
+on another branch. The environment setting takes precedence over
+`git config openclaw.pr.toolingRoot /path/to/tooling-checkout` in the canonical
+checkout; without either, dependency sourcing stays unchanged. Versions must
+match the wrapper's trust-anchor manifest. On mismatch, a separate clean `main`
+tooling checkout is fetched, fast-forwarded, and installed with
+`pnpm install --frozen-lockfile` once, then rechecked. Dirty or non-main tooling
+checkouts are refused with repair guidance; the canonical checkout is never
+refreshed. The setting applies at both dependency materialization handoffs;
+in-place wrappers keep their checkout's dependency context. Wrapper code selection
+and trust stay unchanged.
+
+Set `OPENCLAW_PR_GIT` to an absolute Git executable path if the host's default Git
+is broken. The wrapper checks Git with a 10-second deadline and prints the selected
+path and Xcode recovery hint on failure. API rate-limit failures identify the
+resource used and show both GraphQL and REST core balances and reset times.
 
 If ClawSweeper does not respond immediately, wait before retrying. The service is
 queue-based, and repeated comments or label changes can make the thread harder

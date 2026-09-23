@@ -1,8 +1,11 @@
-// Telegram plugin module implements fetch behavior.
 import { randomUUID } from "node:crypto";
 import * as dns from "node:dns";
 import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-contracts";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  collectErrorGraphCandidates,
+  extractErrorCode,
+  formatErrorMessage,
+} from "openclaw/plugin-sdk/error-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   createHttp1EnvHttpProxyAgent,
@@ -25,14 +28,21 @@ import {
 import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { Agent, fetch as undiciFetch } from "undici";
+// The installed package retains dispatcher composition under Bun.
+import { Agent, fetch as undiciFetch } from "undici/index.js";
 import { normalizeTelegramApiRoot } from "./api-root.js";
 import {
   resolveTelegramAutoSelectFamilyDecision,
   resolveTelegramDnsResultOrderDecision,
   TELEGRAM_DNS_RESULT_ORDER_ENV,
 } from "./network-config.js";
+import { TelegramRequestNotStartedError } from "./network-errors.js";
 import { getProxyUrlFromFetch, makeProxyFetch } from "./proxy.js";
+import {
+  bindTelegramTransportAuthority,
+  findTelegramRequestAuthorityError,
+  getTelegramRequestAuthority,
+} from "./request-authority.js";
 
 const log = createSubsystemLogger("telegram/network");
 
@@ -249,7 +259,6 @@ function resolveTelegramDispatcherPolicy(params: {
       policy: {
         mode: "env-proxy",
         connect: { ...connect },
-        proxyTls: { ...connect },
       },
       mode: "env-proxy",
     };
@@ -352,17 +361,6 @@ function createTelegramDispatcher(policy: PinnedDispatcherPolicy): {
   };
 }
 
-function withDispatcherIfMissing(
-  init: RequestInit | undefined,
-  dispatcher: TelegramDispatcher,
-): RequestInitWithDispatcher {
-  const withDispatcher = init as RequestInitWithDispatcher | undefined;
-  if (withDispatcher?.dispatcher) {
-    return init ?? {};
-  }
-  return init ? { ...init, dispatcher } : { dispatcher };
-}
-
 function resolveWrappedFetch(fetchImpl: typeof fetch): typeof fetch {
   return resolveFetch(fetchImpl) ?? fetchImpl;
 }
@@ -423,17 +421,9 @@ function formatErrorCodes(err: unknown): string {
   return codes.length > 0 ? codes.join(",") : "none";
 }
 
-class TelegramTransportAttemptUnhealthyError extends Error {
-  constructor(unhealthyUntilMs: number) {
-    const remainingMs = Math.max(0, unhealthyUntilMs - Date.now());
-    super(`telegram transport attempt temporarily unhealthy; retry after ${remainingMs}ms`);
-    this.name = "TelegramTransportAttemptUnhealthyError";
-  }
-}
-
 function shouldUseTelegramTransportFallback(err: unknown): boolean {
-  if (err instanceof TelegramTransportAttemptUnhealthyError) {
-    return true;
+  if (findTelegramRequestAuthorityError(err)) {
+    return false;
   }
   const ctx: TelegramTransportFallbackContext = {
     message:
@@ -445,6 +435,45 @@ function shouldUseTelegramTransportFallback(err: unknown): boolean {
   const hasFetchFailedEnvelope = ctx.message.includes("fetch failed");
   const hasKnownNetworkCode = FALLBACK_RETRY_ERROR_CODES.some((code) => ctx.codes.has(code));
   return hasKnownNetworkCode || (hasFetchFailedEnvelope && ctx.codes.size === 0);
+}
+
+// undici's ProxyAgent reports a non-200 CONNECT reply as a generic
+// RequestAbortedError (`UND_ERR_ABORTED`, the code an aborted in-flight request
+// also carries) and a socket failure while the tunnel is still being set up as
+// ProxyConnectionError (`UND_ERR_PRX_CONN`). Both happen before the TLS session
+// to api.telegram.org exists, so no request bytes reached Telegram. The tunnel
+// wording is the only signal that separates a refused CONNECT from a real
+// abort, so it is matched verbatim and only for the proxy dispatchers this
+// transport builds itself.
+const UNDICI_PROXY_TUNNEL_REJECTED_RE = /^Proxy response \((\d{3})\) !== 200 when HTTP Tunneling$/;
+const UNDICI_PROXY_CONNECTION_ERROR_CODE = "UND_ERR_PRX_CONN";
+
+function describeProxyTunnelFailure(
+  mode: TelegramDispatcherMode | undefined,
+  err: unknown,
+): string | undefined {
+  if (mode !== "explicit-proxy" && mode !== "env-proxy") {
+    return undefined;
+  }
+  for (const candidate of collectErrorGraphCandidates(err, (current) => [
+    current.cause,
+    ...(Array.isArray(current.errors) ? current.errors : []),
+  ])) {
+    const code = extractErrorCode(candidate);
+    if (code === UNDICI_PROXY_CONNECTION_ERROR_CODE) {
+      return "proxy connection failed while opening the tunnel";
+    }
+    if (code !== "UND_ERR_ABORTED" || !candidate || typeof candidate !== "object") {
+      continue;
+    }
+    const message = "message" in candidate ? candidate.message : undefined;
+    const rejected =
+      typeof message === "string" ? UNDICI_PROXY_TUNNEL_REJECTED_RE.exec(message) : null;
+    if (rejected) {
+      return `proxy answered CONNECT with ${rejected[1]}`;
+    }
+  }
+  return undefined;
 }
 
 export function shouldRetryTelegramTransportFallback(err: unknown): boolean {
@@ -651,7 +680,10 @@ export function resolveTelegramTransport(
     if (!isFutureDateTimestampMs(health.unhealthyUntilMs)) {
       return null;
     }
-    return new TelegramTransportAttemptUnhealthyError(health.unhealthyUntilMs);
+    const remainingMs = Math.max(0, health.unhealthyUntilMs - Date.now());
+    return new TelegramRequestNotStartedError(
+      `Telegram transport attempts are cooling down; retry after ${remainingMs}ms`,
+    );
   };
 
   const recordAttemptFailure = (attemptIndex: number, err: unknown): void => {
@@ -735,6 +767,11 @@ export function resolveTelegramTransport(
   };
 
   const resolvedFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const requestFetch = bindTelegramTransportAuthority(
+      sourceFetch,
+      getTelegramRequestAuthority(init),
+    );
+    const signal = init?.signal ?? (input instanceof Request ? input.signal : undefined);
     const callerProvidedDispatcher = Boolean(
       (init as RequestInitWithDispatcher | undefined)?.dispatcher,
     );
@@ -759,7 +796,8 @@ export function resolveTelegramTransport(
 
     if (callerProvidedDispatcher) {
       try {
-        const response = await sourceFetch(input, init);
+        const response = await requestFetch(input, init);
+        signal?.throwIfAborted();
         captureHttpExchange({
           url: resolveRequestUrl(input),
           method: init?.method ?? "GET",
@@ -771,10 +809,13 @@ export function resolveTelegramTransport(
         });
         return response;
       } catch (caught) {
+        signal?.throwIfAborted();
         if (!shouldUseTelegramTransportFallback(caught)) {
           throw caught;
         }
-        return sourceFetch(input, init ?? {});
+        const response = await requestFetch(input, init ?? {});
+        signal?.throwIfAborted();
+        return response;
       }
     }
 
@@ -796,10 +837,8 @@ export function resolveTelegramTransport(
         continue;
       }
       try {
-        const response = await sourceFetch(
-          input,
-          withDispatcherIfMissing(init, attempt.createDispatcher()),
-        );
+        const response = await requestFetch(input, init, attempt.createDispatcher());
+        signal?.throwIfAborted();
         captureHttpExchange({
           url: resolveRequestUrl(input),
           method: init?.method ?? "GET",
@@ -815,6 +854,19 @@ export function resolveTelegramTransport(
         recordSuccessfulAttempt(attemptIndex);
         return response;
       } catch (caught) {
+        signal?.throwIfAborted();
+        const tunnelFailure = describeProxyTunnelFailure(
+          attempt.exportAttempt.dispatcherPolicy?.mode,
+          caught,
+        );
+        if (tunnelFailure) {
+          // This transport built the proxy dispatcher, so a tunnel that never
+          // opened proves the request did not reach Telegram.
+          throw new TelegramRequestNotStartedError(
+            `Telegram proxy tunnel did not open: ${tunnelFailure}`,
+            { cause: caught },
+          );
+        }
         err = caught;
         if (!shouldUseTelegramTransportFallback(err)) {
           throw err;

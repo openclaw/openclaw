@@ -6,6 +6,15 @@
 
 import type { ExecAutoReviewHost } from "../infra/exec-auto-review.js";
 
+/**
+ * Review an exec request using the configured model without executing it.
+ * Handle all three results explicitly: `allow-once` with low/medium risk permits
+ * one execution; `ask` routes to human approval; `deny` must not run or escalate
+ * to human approval and must return the rationale and rejection guidance to the
+ * agent. Provider failures, timeouts, and invalid responses become `ask`;
+ * detected reviewer-directed prompt injection becomes high-risk `deny`.
+ * Facade loading or reviewer construction errors may still reject the promise.
+ */
 export async function reviewExecRequestWithConfiguredModel(params: {
   cfg?: import("../config/types.openclaw.js").OpenClawConfig;
   agentId?: string;
@@ -23,6 +32,11 @@ export async function reviewExecRequestWithConfiguredModel(params: {
   return reviewer(params.input);
 }
 
+/**
+ * Build review input for a supported shell command, or return `undefined` when
+ * this helper cannot review it. This does not authorize execution; consumers of
+ * the subsequent review must handle `allow-once`, `deny`, and `ask` explicitly.
+ */
 export async function buildExecAutoReviewInputForShellCommand(params: {
   command: string;
   cwd?: string | null;
@@ -37,10 +51,12 @@ export async function buildExecAutoReviewInputForShellCommand(params: {
     { commandRequiresSecurityAuditSuppressionApproval, evaluateShellAllowlistWithAuthorization },
     { detectUnsafeExecControlShellCommand },
     { detectPolicyInlineEval },
+    { isBlockedShellWrapperCommand },
   ] = await Promise.all([
     import("../infra/exec-approvals.js"),
     import("../infra/exec-control-command-guard.js"),
     import("../infra/command-analysis/policy.js"),
+    import("../infra/exec-wrapper-resolution.js"),
   ]);
   const command = params.command.trim();
   const host: ExecAutoReviewHost = params.host;
@@ -61,6 +77,10 @@ export async function buildExecAutoReviewInputForShellCommand(params: {
     segment !== undefined &&
     segment.raw.trim() === command;
   if (!boundSingleCommand) {
+    return undefined;
+  }
+  // Blocked carriers and startup files execute outside the reviewed payload.
+  if (segment.resolution?.policyBlocked === true || isBlockedShellWrapperCommand(segment.argv)) {
     return undefined;
   }
   if (

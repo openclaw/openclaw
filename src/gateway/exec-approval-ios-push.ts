@@ -2,6 +2,7 @@
 // Sends APNs request/resolution wakes to paired operator devices.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../config/io.js";
+import type { ChannelApprovalKind } from "../infra/approval-types.js";
 import { loadOrCreateProcessDeviceIdentity } from "../infra/device-identity.js";
 import {
   hasEffectivePairedDeviceRole,
@@ -79,7 +80,7 @@ type ApprovalRequestLike = { id: string };
 type ApprovalResolvedLike = { id: string };
 
 type ApprovalPushDriver<TRequest extends ApprovalRequestLike> = {
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
   sendRequested: (params: {
     request: TRequest;
     target: DeliveryTarget;
@@ -171,7 +172,7 @@ async function resolvePairedTargets(params: {
 }
 
 async function resolveDeliveryPlan(params: {
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
   requireApprovalScope: boolean;
   explicitNodeIds?: readonly string[];
   isTargetVisible?: (target: ApprovalPushTarget) => boolean;
@@ -284,7 +285,7 @@ async function sendApprovalPushes(params: {
   approvalId: string;
   plan: DeliveryPlan;
   log: GatewayLikeLogger;
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
   label: "request" | "cleanup";
   logThrown: boolean;
   send: ApprovalPushSender;
@@ -510,6 +511,7 @@ export function createPluginApprovalIosPushDelivery(params: { log: GatewayLikeLo
     driver: {
       approvalKind: "plugin",
       sendRequested: async ({ request, target, plan, gatewayDeviceId }) =>
+        // Keep reviewer-only detail out of size-constrained lock-screen push payloads.
         target.registration.transport === "direct"
           ? await sendApnsPluginApprovalAlert({
               registration: target.registration,

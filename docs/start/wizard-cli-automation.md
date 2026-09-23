@@ -9,9 +9,36 @@ sidebarTitle: "CLI automation"
 
 Use `openclaw onboard --non-interactive` to script setup. It requires `--accept-risk`: non-interactive setup can write credentials and daemon config without a confirmation prompt, so the flag is the explicit risk acknowledgement.
 
+Each command can install a managed Gateway with `--install-daemon`, require an already-running compatible Gateway by omitting daemon flags, explicitly leave the Gateway stopped with `--skip-daemon`, or use `--skip-health` for config-only setup. The explicit skip still probes for an existing Gateway and reports whether one is reachable, but an absent listener is informational rather than a setup failure.
+
 <Note>
 `--json` does not imply non-interactive mode. Pass `--non-interactive --accept-risk` explicitly for scripts.
 </Note>
+
+## Review required plugins
+
+Bundled plugins and verified plugins from OpenClaw's official catalog do not
+require capability consent during setup. This includes the official Codex
+runtime installed for OpenAI setup.
+
+Non-interactive onboarding cannot accept new third-party plugin capabilities.
+`--accept-risk` acknowledges onboarding risk only; it does not grant plugin
+consent. Before automating a setup that needs a third-party provider, runtime,
+or channel plugin, review its source and declared capabilities, then preinstall
+it with explicit consent:
+
+```bash
+openclaw plugins install <plugin-spec> --accept-capabilities
+```
+
+If onboarding reports a required plugin capability review, review and install
+the named plugin and rerun the same command. For an already-installed plugin
+that needs approval to enable it, use
+`openclaw plugins enable <plugin-id> --accept-capabilities`.
+
+Consent applies to the reviewed plugin operation, not every subsequent install.
+See [Capability consent](/plugins/manage-plugins#capability-consent) for artifact
+review, enablement, and update rules.
 
 ## Baseline non-interactive example
 
@@ -30,12 +57,18 @@ openclaw onboard --non-interactive --accept-risk \
 
 Add `--json` for a machine-readable summary.
 
-- `--gateway-port` defaults to `18789`; only pass it to override.
+- `--gateway-port` defaults to `18789`. Only pass it to override that default.
+- Local onboarding generates a Gateway secret in token mode by default and
+  preserves existing password mode. Use `--gateway-auth password` with
+  `--gateway-password <value>` to supply a password explicitly; the password flag
+  also selects password mode on its own. Tailscale Funnel requires password mode.
 - `--skip-bootstrap` skips creating default workspace files, for automation that pre-seeds its own workspace.
-- `--secret-input-mode ref` stores an env-backed reference (`{ source: "env", provider: "default", id: "<ENV_VAR>" }`) in the auth profile instead of the plaintext key. In non-interactive `ref` mode, the provider env var must already be set in the process environment: passing an inline key flag without its matching env var fails fast.
+- `--secret-input-mode ref` stores new credentials as env-backed references, in the form `{ source: "env", provider: "default", id: "<ENV_VAR>" }`. Set the provider env var when you add a credential or pass an inline key flag. Existing resolvable named profiles and their `env`, `file`, `exec`, or `store` references are reused unchanged, without a new credential write or additional provider env var. Existing plaintext is not migrated. Run `openclaw secrets configure --apply`, then `openclaw secrets audit --check`. See [Secrets management](/gateway/secrets).
+- The gateway token follows the same mode. Setup generates that value itself, so reference mode has no env var to point at unless you supply one. With `OPENCLAW_GATEWAY_TOKEN` exported, `gateway.auth.token` becomes an `env` ref to it. Otherwise the token goes into the SQLite secret store as `OPENCLAW_GATEWAY_TOKEN`, and config keeps a `store` ref. Either way `openclaw.json` holds no plaintext gateway token. Inspect the entry with `openclaw secrets store list`.
+- In reference mode, explicit `--gateway-password` and `--remote-password` must match `OPENCLAW_GATEWAY_PASSWORD`. `--remote-token` must match `OPENCLAW_GATEWAY_TOKEN`. Missing or mismatched environment values fail before setup changes state. Matching credentials are stored as env SecretRefs.
 
 ```bash
-openclaw onboard --non-interactive --accept-risk \
+openclaw onboard --non-interactive --accept-risk --skip-health \
   --mode local \
   --auth-choice openai-api-key \
   --secret-input-mode ref
@@ -46,7 +79,7 @@ openclaw onboard --non-interactive --accept-risk \
 <AccordionGroup>
   <Accordion title="Anthropic API key example">
     ```bash
-    openclaw onboard --non-interactive --accept-risk \
+    openclaw onboard --non-interactive --accept-risk --skip-health \
       --mode local \
       --auth-choice apiKey \
       --anthropic-api-key "$ANTHROPIC_API_KEY" \
@@ -55,7 +88,7 @@ openclaw onboard --non-interactive --accept-risk \
   </Accordion>
   <Accordion title="Cloudflare AI Gateway example">
     ```bash
-    openclaw onboard --non-interactive --accept-risk \
+    openclaw onboard --non-interactive --accept-risk --skip-health \
       --mode local \
       --auth-choice cloudflare-ai-gateway-api-key \
       --cloudflare-ai-gateway-account-id "your-account-id" \
@@ -66,7 +99,7 @@ openclaw onboard --non-interactive --accept-risk \
   </Accordion>
   <Accordion title="Gemini example">
     ```bash
-    openclaw onboard --non-interactive --accept-risk \
+    openclaw onboard --non-interactive --accept-risk --skip-health \
       --mode local \
       --auth-choice gemini-api-key \
       --gemini-api-key "$GEMINI_API_KEY" \
@@ -75,7 +108,7 @@ openclaw onboard --non-interactive --accept-risk \
   </Accordion>
   <Accordion title="Mistral example">
     ```bash
-    openclaw onboard --non-interactive --accept-risk \
+    openclaw onboard --non-interactive --accept-risk --skip-health \
       --mode local \
       --auth-choice mistral-api-key \
       --mistral-api-key "$MISTRAL_API_KEY" \
@@ -84,7 +117,7 @@ openclaw onboard --non-interactive --accept-risk \
   </Accordion>
   <Accordion title="Moonshot example">
     ```bash
-    openclaw onboard --non-interactive --accept-risk \
+    openclaw onboard --non-interactive --accept-risk --skip-health \
       --mode local \
       --auth-choice moonshot-api-key \
       --moonshot-api-key "$MOONSHOT_API_KEY" \
@@ -93,7 +126,7 @@ openclaw onboard --non-interactive --accept-risk \
   </Accordion>
   <Accordion title="Ollama example">
     ```bash
-    openclaw onboard --non-interactive --accept-risk \
+    openclaw onboard --non-interactive --accept-risk --skip-health \
       --mode local \
       --auth-choice ollama \
       --custom-model-id "qwen3.5:27b" \
@@ -102,7 +135,7 @@ openclaw onboard --non-interactive --accept-risk \
   </Accordion>
   <Accordion title="OpenCode example">
     ```bash
-    openclaw onboard --non-interactive --accept-risk \
+    openclaw onboard --non-interactive --accept-risk --skip-health \
       --mode local \
       --auth-choice opencode-zen \
       --opencode-zen-api-key "$OPENCODE_API_KEY" \
@@ -112,7 +145,7 @@ openclaw onboard --non-interactive --accept-risk \
   </Accordion>
   <Accordion title="Synthetic example">
     ```bash
-    openclaw onboard --non-interactive --accept-risk \
+    openclaw onboard --non-interactive --accept-risk --skip-health \
       --mode local \
       --auth-choice synthetic-api-key \
       --synthetic-api-key "$SYNTHETIC_API_KEY" \
@@ -121,7 +154,7 @@ openclaw onboard --non-interactive --accept-risk \
   </Accordion>
   <Accordion title="Vercel AI Gateway example">
     ```bash
-    openclaw onboard --non-interactive --accept-risk \
+    openclaw onboard --non-interactive --accept-risk --skip-health \
       --mode local \
       --auth-choice ai-gateway-api-key \
       --ai-gateway-api-key "$AI_GATEWAY_API_KEY" \
@@ -130,7 +163,7 @@ openclaw onboard --non-interactive --accept-risk \
   </Accordion>
   <Accordion title="Z.AI example">
     ```bash
-    openclaw onboard --non-interactive --accept-risk \
+    openclaw onboard --non-interactive --accept-risk --skip-health \
       --mode local \
       --auth-choice zai-api-key \
       --zai-api-key "$ZAI_API_KEY" \
@@ -139,7 +172,7 @@ openclaw onboard --non-interactive --accept-risk \
   </Accordion>
   <Accordion title="Custom provider example">
     ```bash
-    openclaw onboard --non-interactive --accept-risk \
+    openclaw onboard --non-interactive --accept-risk --skip-health \
       --mode local \
       --auth-choice custom-api-key \
       --custom-base-url "https://llm.example.com/v1" \
@@ -159,7 +192,7 @@ openclaw onboard --non-interactive --accept-risk \
 
     ```bash
     export CUSTOM_API_KEY="your-key"
-    openclaw onboard --non-interactive --accept-risk \
+    openclaw onboard --non-interactive --accept-risk --skip-health \
       --mode local \
       --auth-choice custom-api-key \
       --custom-base-url "https://llm.example.com/v1" \
@@ -183,13 +216,13 @@ Anthropic setup-token auth remains supported, but OpenClaw prefers Claude CLI re
 ```bash
 openclaw agents add work \
   --workspace ~/.openclaw/workspace-work \
-  --model openai/gpt-5.6-sol \
+  --model openai/gpt-6-astra \
   --bind whatsapp:biz \
   --non-interactive \
   --json
 ```
 
-Config keys it writes (`agents.list[]` entry for the new agent id):
+Config keys it writes (`agents.entries.*` entry for the new agent id):
 
 - `name`
 - `workspace`
@@ -200,7 +233,9 @@ Notes:
 
 - Default workspace (when `--workspace` is omitted in the interactive wizard): `~/.openclaw/workspace-<agentId>`.
 - `--bind <channel[:accountId]>` is repeatable; add bindings to route inbound messages to the new agent (the wizard can also do this interactively).
-- The agent name is normalized to a valid agent id; `main` is reserved.
+- The agent name is normalized to a valid agent id. `main` is allowed, but an
+  existing named installation may require `openclaw doctor --fix` to finish
+  legacy-session and shared-auth ownership migrations before creating it.
 
 ## Related docs
 

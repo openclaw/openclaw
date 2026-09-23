@@ -1,7 +1,7 @@
 // Featherless onboarding applies the curated model catalog and default.
 import {
   createModelCatalogPresetAppliers,
-  type OpenClawConfig,
+  createProviderConnectionPresetAppliers,
 } from "openclaw/plugin-sdk/provider-onboard";
 import {
   buildFeatherlessCatalogModels,
@@ -11,17 +11,18 @@ import {
 
 export { FEATHERLESS_DEFAULT_MODEL_REF } from "./models.js";
 
-const featherlessPresetAppliers = createModelCatalogPresetAppliers({
+const featherlessPreset = {
   primaryModelRef: FEATHERLESS_DEFAULT_MODEL_REF,
-  resolveParams: (_cfg: OpenClawConfig) => ({
+  resolveParams: () => ({
     providerId: "featherless",
     api: "openai-completions",
     baseUrl: FEATHERLESS_BASE_URL,
-    catalogModels: buildFeatherlessCatalogModels(),
+    catalogModels: buildFeatherlessCatalogModels,
     aliases: [{ modelRef: FEATHERLESS_DEFAULT_MODEL_REF, alias: "Qwen3 32B" }],
   }),
-});
+} satisfies Parameters<typeof createProviderConnectionPresetAppliers<[]>>[0];
 
-export function applyFeatherlessConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return featherlessPresetAppliers.applyConfig(cfg);
-}
+export const { applyConfig: applyFeatherlessConfig } =
+  createModelCatalogPresetAppliers(featherlessPreset);
+export const { applyConfig: applyFeatherlessConnectionConfig } =
+  createProviderConnectionPresetAppliers(featherlessPreset);

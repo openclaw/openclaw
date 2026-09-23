@@ -1,4 +1,3 @@
-// Discord plugin module implements recipient resolution behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { resolveDiscordAccount } from "./accounts.js";
@@ -42,9 +41,13 @@ export async function parseAndResolveRecipient(
 export async function parseAndResolveChannelRecipient(
   raw: string,
   cfg: OpenClawConfig,
-  accountId?: string,
+  accountId: string,
 ): Promise<DiscordRecipient> {
-  return await parseAndResolveRecipient(raw, cfg, accountId, {
-    defaultKind: "channel",
-  });
+  const resolvedCfg = requireRuntimeConfig(cfg, "Discord recipient resolution");
+  const resolved = await parseAndResolveDiscordTarget(
+    raw,
+    { cfg: resolvedCfg, accountId },
+    { defaultKind: "channel" },
+  );
+  return { kind: resolved.kind, id: resolved.id };
 }

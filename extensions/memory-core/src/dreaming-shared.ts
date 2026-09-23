@@ -1,18 +1,25 @@
-// Memory Core plugin module implements dreaming shared behavior.
-export { asNullableRecord as asRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+
 export { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
-export function normalizeTrimmedString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
+export function formatRecallRepairDetails(repair: {
+  removedInvalidEntries: number;
+  removedDanglingEntries?: number;
+  removedOverflowEntries?: number;
+}): string {
+  const removedOverflowEntries = repair.removedOverflowEntries ?? 0;
+  return [
+    repair.removedInvalidEntries > 0 ? `-${repair.removedInvalidEntries} invalid` : null,
+    (repair.removedDanglingEntries ?? 0) > 0 ? `-${repair.removedDanglingEntries} dangling` : null,
+    removedOverflowEntries > 0 ? `-${removedOverflowEntries} overflow` : null,
+  ]
+    .filter(Boolean)
+    .join(", ");
 }
 
 export function includesSystemEventToken(cleanedBody: string, eventText: string): boolean {
-  const normalizedBody = normalizeTrimmedString(cleanedBody);
-  const normalizedEventText = normalizeTrimmedString(eventText);
+  const normalizedBody = normalizeOptionalString(cleanedBody);
+  const normalizedEventText = normalizeOptionalString(eventText);
   if (!normalizedBody || !normalizedEventText) {
     return false;
   }

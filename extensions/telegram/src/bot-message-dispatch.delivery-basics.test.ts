@@ -16,6 +16,7 @@ import {
   mockDefaultSessionEntry,
   readLatestAssistantTextByIdentity,
   recordOutboundMessageForPromptContext,
+  resolveHumanDelayConfig,
   setupDraftStreams,
   telegramDepsForTest,
 } from "./bot-message-dispatch.test-harness.js";
@@ -25,53 +26,111 @@ import type {
 } from "./bot-message-dispatch.test-harness.js";
 
 describeTelegramDispatch("dispatchTelegramMessage delivery-basics", () => {
-  it("queues final Telegram replies through outbound delivery when available", async () => {
-    deliverInboundReplyWithMessageSendContext.mockResolvedValue({
-      status: "handled_visible",
-      delivery: {
-        messageIds: ["1001"],
-        visibleReplySent: true,
-      },
-    });
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
-      await dispatcherOptions.deliver({ text: "Hello queued" }, { kind: "final" });
-      return { queuedFinal: true };
-    });
+  it("forwards route-scoped humanDelay to the block dispatcher", async () => {
+    const humanDelay = { mode: "custom" as const, minMs: 800, maxMs: 2_500 };
+    const cfg = { agents: { defaults: { humanDelay } } } as Parameters<
+      typeof dispatchWithContext
+    >[0]["cfg"];
+    resolveHumanDelayConfig.mockReturnValue(humanDelay);
 
     await dispatchWithContext({
       context: createContext({
-        ctxPayload: {
-          SessionKey: "s1",
-          ChatType: "direct",
-          SenderId: "42",
-          SenderName: "Alice",
-          SenderUsername: "alice",
-        } as unknown as TelegramMessageContext["ctxPayload"],
+        route: {
+          agentId: "ops",
+          accountId: "default",
+        } as unknown as TelegramMessageContext["route"],
       }),
+      cfg,
       streamMode: "off",
-      telegramDeps: telegramDepsForTest,
     });
 
-    const outbound = expectRecordFields(mockCallArg(deliverInboundReplyWithMessageSendContext), {
-      channel: "telegram",
-      to: "123",
-      accountId: "default",
-      info: { kind: "final" },
-      replyToMode: "first",
-      threadId: 777,
-      agentId: "default",
-    });
-    expectRecordFields(outbound.payload, { text: "Hello queued" });
-    expectRecordFields(outbound.formatting, { textLimit: 4096, tableMode: "preserve" });
-    expectRecordFields(outbound.ctxPayload, {
-      SessionKey: "s1",
-      ChatType: "direct",
-      SenderId: "42",
-      SenderName: "Alice",
-      SenderUsername: "alice",
-    });
-    expect(deliverReplies).not.toHaveBeenCalled();
+    expect(resolveHumanDelayConfig).toHaveBeenCalledWith(cfg, "ops");
+    const dispatch = expectRecordFields(mockCallArg(dispatchReplyWithBufferedBlockDispatcher), {});
+    expectRecordFields(dispatch.dispatcherOptions, { humanDelay });
   });
+
+  it("forwards cfg to direct reply delivery", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+    const cfg = {
+      session: { store: "/tmp/telegram-custom-store.json" },
+    } as Parameters<typeof dispatchWithContext>[0]["cfg"];
+
+    await dispatchWithContext({
+      context: createContext(),
+      cfg,
+      streamMode: "off",
+      telegramDeps: {
+        ...telegramDepsForTest,
+        deliverStructuredInboundReplyWithMessageSendContext: undefined,
+      },
+    });
+
+    expectDeliverRepliesParams({ cfg });
+  });
+
+  it.each([
+    { participant: undefined, expectedText: "Hello queued" },
+    {
+      participant: { agentId: "analyst", name: "Analyst" },
+      expectedText: "**Analyst**\nHello queued",
+    },
+  ])(
+    "queues final Telegram replies with participant $participant",
+    async ({ participant, expectedText }) => {
+      deliverInboundReplyWithMessageSendContext.mockResolvedValue({
+        status: "handled_visible",
+        delivery: {
+          messageIds: ["1001"],
+          visibleReplySent: true,
+        },
+      });
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+        await dispatcherOptions.deliver(
+          { text: "Hello queued" },
+          { kind: "final", ...(participant ? { participant } : {}) },
+        );
+        return { queuedFinal: true };
+      });
+
+      await dispatchWithContext({
+        context: createContext({
+          ctxPayload: {
+            SessionKey: "s1",
+            ChatType: "direct",
+            SenderId: "42",
+            SenderName: "Alice",
+            SenderUsername: "alice",
+          } as unknown as TelegramMessageContext["ctxPayload"],
+        }),
+        streamMode: "off",
+        telegramDeps: telegramDepsForTest,
+      });
+
+      const outbound = expectRecordFields(mockCallArg(deliverInboundReplyWithMessageSendContext), {
+        channel: "telegram",
+        to: "telegram:123",
+        accountId: "default",
+        info: { kind: "final" },
+        replyToMode: "first",
+        threadId: 777,
+        agentId: "default",
+      });
+      expectRecordFields(outbound.payload, { text: expectedText });
+      expectRecordFields(outbound.formatting, { textLimit: 4096, tableMode: "preserve" });
+      expectRecordFields(outbound.ctxPayload, {
+        SessionKey: "s1",
+        ChatType: "direct",
+        SenderId: "42",
+        SenderName: "Alice",
+        SenderUsername: "alice",
+      });
+      expect(deliverReplies).not.toHaveBeenCalled();
+    },
+  );
 
   it("canonicalizes mixed presentation finals before durable stream-off delivery", async () => {
     deliverInboundReplyWithMessageSendContext.mockResolvedValue({
@@ -166,6 +225,51 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-basics", () => {
       telegram: { buttons: [[{ text: "Retry", callback_data: "retry" }]] },
     });
     expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("carries General-topic context through stream-off fallback recording", async () => {
+    deliverReplies.mockImplementation(async (params: Record<string, unknown>) => {
+      const sequence = params.promptContextSequence as
+        | {
+            accept(message: {
+              messageId: number;
+              message?: Record<string, unknown>;
+              text?: string;
+            }): Promise<void>;
+          }
+        | undefined;
+      await sequence?.accept({
+        messageId: 1004,
+        message: {
+          message_id: 1004,
+          chat: { id: -1001234, type: "supergroup" },
+          date: 1_779_394_741,
+          text: "Reply in General",
+        },
+        text: "Reply in General",
+      });
+      return { delivered: true };
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Reply in General" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        chatId: -1001234,
+        isGroup: true,
+        threadSpec: { id: 1, scope: "forum" },
+      }),
+      streamMode: "off",
+      telegramDeps: telegramDepsForTest,
+    });
+
+    expectRecordFields(mockCallArg(recordOutboundMessageForPromptContext), {
+      messageId: 1004,
+      messageThreadId: 1,
+      successfulSendThread: { id: 1, scope: "forum" },
+    });
   });
 
   it("queues media-only final Telegram replies through outbound delivery when available", async () => {
@@ -446,6 +550,7 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-basics", () => {
     "uses reply mode $replyToMode after retained pagination falls back to its suffix",
     async ({ replyToMode, expectedFallbackMode, keepsReply }) => {
       const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+      answerDraftStream.lastDeliveredText.mockReturnValue("visible prefix");
       answerDraftStream.remainingFinalContent.mockReturnValue({
         text: "unsent suffix",
         sourceText: "unsent suffix",
@@ -563,7 +668,12 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-basics", () => {
   ])(
     "uses reply mode $replyToMode for media after an accepted draft",
     async ({ replyToMode, expectedMediaMode, keepsReply }) => {
-      setupDraftStreams({ answerMessageId: 2001 });
+      const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+      answerDraftStream.hasConsumedReplyTarget.mockReturnValue(replyToMode !== "all");
+      answerDraftStream.currentMessageSnapshot.mockImplementation(() => {
+        const text = answerDraftStream.lastDeliveredText();
+        return text ? { text, sourceText: text, replyToMessageId: 1001 } : undefined;
+      });
       dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
         async ({ dispatcherOptions, replyOptions }) => {
           await replyOptions?.onPartialReply?.({ text: "photo" });

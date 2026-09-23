@@ -1,5 +1,8 @@
+import { kindFromMime, normalizeMimeType } from "@openclaw/media-core/mime";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+// DashScope-compatible video provider adapts DashScope-style generation APIs.
+import { resolveGeneratedMediaMaxBytes } from "../media/configured-max-bytes.js";
 import {
   assertOkOrThrowHttpError,
   createProviderOperationDeadline,
@@ -7,16 +10,17 @@ import {
   executeProviderOperationWithRetry,
   fetchWithTimeoutGuarded,
   postJsonRequest,
+  readProviderBinaryResponse,
   readProviderJsonResponse,
   resolveProviderOperationTimeoutMs,
   waitProviderOperationPollInterval,
+  type ProviderOperationDeadline,
   type ProviderOperationTimeoutMs,
-} from "openclaw/plugin-sdk/provider-http";
-// DashScope-compatible video provider adapts DashScope-style generation APIs.
-import { readResponseWithLimit } from "../infra/http-body.js";
-import { resolveGeneratedMediaMaxBytes } from "../media/configured-max-bytes.js";
+} from "../plugin-sdk/provider-http.js";
+import { buildTimeoutAbortSignal } from "../utils/fetch-timeout.js";
 import type {
   GeneratedVideoAsset,
+  VideoGenerationCatalogModelEntry,
   VideoGenerationProviderCapabilities,
   VideoGenerationRequest,
   VideoGenerationResult,
@@ -33,10 +37,48 @@ export const DASHSCOPE_WAN_VIDEO_MODELS = [
   "wan2.6-r2v-flash",
   "wan2.7-r2v",
 ];
+
+const DASHSCOPE_WAN_VIDEO_RESOLUTIONS = ["720P", "1080P"] as const;
+const DASHSCOPE_WAN_VIDEO_ASPECT_RATIOS = ["16:9", "9:16", "1:1", "4:3", "3:4"] as const;
+const DASHSCOPE_WAN_LONG_VIDEO_DURATIONS = [
+  2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+] as const;
+const DASHSCOPE_WAN_SHORT_VIDEO_DURATIONS = [2, 3, 4, 5, 6, 7, 8, 9, 10] as const;
+const DASHSCOPE_WAN_VIDEO_SIZE_BY_GEOMETRY: Readonly<
+  Record<string, Readonly<Record<string, string>>>
+> = {
+  "480P": {
+    "16:9": "832*480",
+    "9:16": "480*832",
+    "1:1": "624*624",
+  },
+  "720P": {
+    "16:9": "1280*720",
+    "9:16": "720*1280",
+    "1:1": "960*960",
+    "4:3": "1088*832",
+    "3:4": "832*1088",
+  },
+  "1080P": {
+    "16:9": "1920*1080",
+    "9:16": "1080*1920",
+    "1:1": "1440*1440",
+    "4:3": "1632*1248",
+    "3:4": "1248*1632",
+  },
+};
+const DASHSCOPE_WAN_VIDEO_SIZES = DASHSCOPE_WAN_VIDEO_RESOLUTIONS.flatMap((resolution) =>
+  Object.values(DASHSCOPE_WAN_VIDEO_SIZE_BY_GEOMETRY[resolution] ?? {}),
+);
+
 export const DASHSCOPE_WAN_VIDEO_CAPABILITIES = {
   generate: {
     maxVideos: 1,
-    maxDurationSeconds: 10,
+    maxDurationSeconds: 15,
+    supportedDurationSeconds: DASHSCOPE_WAN_LONG_VIDEO_DURATIONS,
+    sizes: DASHSCOPE_WAN_VIDEO_SIZES,
+    aspectRatios: DASHSCOPE_WAN_VIDEO_ASPECT_RATIOS,
+    resolutions: DASHSCOPE_WAN_VIDEO_RESOLUTIONS,
     supportsSize: true,
     supportsAspectRatio: true,
     supportsResolution: true,
@@ -47,9 +89,11 @@ export const DASHSCOPE_WAN_VIDEO_CAPABILITIES = {
     enabled: true,
     maxVideos: 1,
     maxInputImages: 1,
-    maxDurationSeconds: 10,
-    supportsSize: true,
-    supportsAspectRatio: true,
+    maxDurationSeconds: 15,
+    supportedDurationSeconds: DASHSCOPE_WAN_LONG_VIDEO_DURATIONS,
+    resolutions: DASHSCOPE_WAN_VIDEO_RESOLUTIONS,
+    supportsSize: false,
+    supportsAspectRatio: false,
     supportsResolution: true,
     supportsAudio: true,
     supportsWatermark: true,
@@ -57,8 +101,13 @@ export const DASHSCOPE_WAN_VIDEO_CAPABILITIES = {
   videoToVideo: {
     enabled: true,
     maxVideos: 1,
-    maxInputVideos: 4,
+    maxInputImages: 5,
+    maxInputVideos: 3,
     maxDurationSeconds: 10,
+    supportedDurationSeconds: DASHSCOPE_WAN_SHORT_VIDEO_DURATIONS,
+    sizes: DASHSCOPE_WAN_VIDEO_SIZES,
+    aspectRatios: DASHSCOPE_WAN_VIDEO_ASPECT_RATIOS,
+    resolutions: DASHSCOPE_WAN_VIDEO_RESOLUTIONS,
     supportsSize: true,
     supportsAspectRatio: true,
     supportsResolution: true,
@@ -66,6 +115,61 @@ export const DASHSCOPE_WAN_VIDEO_CAPABILITIES = {
     supportsWatermark: true,
   },
 } satisfies VideoGenerationProviderCapabilities;
+
+const disabledVideoTransform = { enabled: false } as const;
+const dashscopeWanR2vCapabilities = {
+  ...DASHSCOPE_WAN_VIDEO_CAPABILITIES,
+  imageToVideo: {
+    ...DASHSCOPE_WAN_VIDEO_CAPABILITIES.videoToVideo,
+    enabled: true,
+  },
+};
+
+// One model catalog drives both agent-visible modes and request-local runtime
+// capability overlays, so the tool cannot advertise a mode the model rejects.
+export const DASHSCOPE_WAN_VIDEO_CATALOG_BY_MODEL: Readonly<
+  Record<string, VideoGenerationCatalogModelEntry>
+> = {
+  "wan2.6-t2v": {
+    modes: ["generate"],
+    capabilities: {
+      generate: DASHSCOPE_WAN_VIDEO_CAPABILITIES.generate,
+      imageToVideo: disabledVideoTransform,
+      videoToVideo: disabledVideoTransform,
+    },
+  },
+  "wan2.6-i2v": {
+    modes: ["imageToVideo"],
+    capabilities: {
+      imageToVideo: DASHSCOPE_WAN_VIDEO_CAPABILITIES.imageToVideo,
+      videoToVideo: disabledVideoTransform,
+    },
+  },
+  "wan2.6-r2v": {
+    modes: ["imageToVideo", "videoToVideo"],
+    capabilities: dashscopeWanR2vCapabilities,
+  },
+  "wan2.6-r2v-flash": {
+    modes: ["imageToVideo", "videoToVideo"],
+    capabilities: dashscopeWanR2vCapabilities,
+  },
+  "wan2.7-r2v": {
+    modes: ["imageToVideo", "videoToVideo"],
+    capabilities: {
+      ...dashscopeWanR2vCapabilities,
+      imageToVideo: {
+        ...dashscopeWanR2vCapabilities.imageToVideo,
+        supportsAspectRatio: true,
+        supportsAudio: false,
+      },
+      videoToVideo: {
+        ...dashscopeWanR2vCapabilities.videoToVideo,
+        supportsAspectRatio: true,
+        supportsAudio: false,
+      },
+    },
+  },
+};
 
 export const DEFAULT_VIDEO_GENERATION_DURATION_SECONDS = 5;
 export const DEFAULT_VIDEO_GENERATION_TIMEOUT_MS = 120_000;
@@ -97,12 +201,62 @@ export type DashscopeVideoGenerationResponse = {
   message?: string;
 };
 
+type DashscopeWanVideoMode = "t2v" | "i2v" | "r2v";
+
+function resolveDashscopeWanVideoMode(req: VideoGenerationRequest): DashscopeWanVideoMode {
+  const model = req.model.trim().toLowerCase();
+  if (model.includes("-i2v")) {
+    return "i2v";
+  }
+  if (model.includes("-r2v")) {
+    return "r2v";
+  }
+  if (model.includes("-t2v")) {
+    return "t2v";
+  }
+  if ((req.inputVideos?.length ?? 0) > 0 || (req.inputImages?.length ?? 0) > 1) {
+    return "r2v";
+  }
+  return (req.inputImages?.length ?? 0) === 1 ? "i2v" : "t2v";
+}
+
+function isDashscopeWan27Model(model: string): boolean {
+  return model.trim().toLowerCase().startsWith("wan2.7");
+}
+
+function assertDashscopeWanVideoInputs(params: {
+  providerLabel: string;
+  req: VideoGenerationRequest;
+  mode: DashscopeWanVideoMode;
+}): void {
+  const imageCount = params.req.inputImages?.length ?? 0;
+  const videoCount = params.req.inputVideos?.length ?? 0;
+  if (params.mode === "t2v" && imageCount + videoCount > 0) {
+    throw new Error(
+      `${params.providerLabel} model ${params.req.model} is text-to-video and does not accept reference media; use an i2v or r2v Wan model.`,
+    );
+  }
+  if (params.mode === "i2v" && (imageCount !== 1 || videoCount > 0)) {
+    throw new Error(
+      `${params.providerLabel} model ${params.req.model} requires exactly one reference image and no reference videos.`,
+    );
+  }
+  if (params.mode === "r2v") {
+    const total = imageCount + videoCount;
+    if (total === 0 || total > 5 || videoCount > 3) {
+      throw new Error(
+        `${params.providerLabel} model ${params.req.model} requires 1-5 reference images/videos, with at most 3 videos.`,
+      );
+    }
+  }
+}
+
 export function buildDashscopeVideoGenerationInput(params: {
   providerLabel: string;
   req: VideoGenerationRequest;
 }): Record<string, unknown> {
   const unsupported = [...(params.req.inputImages ?? []), ...(params.req.inputVideos ?? [])].some(
-    (asset) => !asset.url?.trim() && asset.buffer,
+    (asset) => !asset.url?.trim(),
   );
   // DashScope accepts remote references in this path; buffer uploads require a
   // different provider-specific flow, so fail before silently dropping refs.
@@ -114,17 +268,26 @@ export function buildDashscopeVideoGenerationInput(params: {
   const input: Record<string, unknown> = {
     prompt: params.req.prompt,
   };
+  const mode = resolveDashscopeWanVideoMode(params.req);
+  assertDashscopeWanVideoInputs({ ...params, mode });
   const referenceUrls = resolveVideoGenerationReferenceUrls(
     params.req.inputImages,
     params.req.inputVideos,
   );
-  if (
-    referenceUrls.length === 1 &&
-    (params.req.inputImages?.length ?? 0) === 1 &&
-    !params.req.inputVideos?.length
-  ) {
+  if (mode === "i2v") {
     input.img_url = referenceUrls[0];
-  } else if (referenceUrls.length > 0) {
+  } else if (mode === "r2v" && isDashscopeWan27Model(params.req.model)) {
+    input.media = [
+      ...(params.req.inputImages ?? []).map((asset) => ({
+        type: asset.role?.trim() || "reference_image",
+        url: asset.url?.trim() ?? "",
+      })),
+      ...(params.req.inputVideos ?? []).map((asset) => ({
+        type: asset.role?.trim() || "reference_video",
+        url: asset.url?.trim() ?? "",
+      })),
+    ];
+  } else if (mode === "r2v") {
     input.reference_urls = referenceUrls;
   }
   return input;
@@ -144,23 +307,61 @@ export function buildDashscopeVideoGenerationParameters(
   resolutionToSize: Record<string, string> = DEFAULT_VIDEO_RESOLUTION_TO_SIZE,
 ): Record<string, unknown> | undefined {
   const parameters: Record<string, unknown> = {};
-  const size = req.size?.trim() || (req.resolution ? resolutionToSize[req.resolution] : undefined);
-  if (size) {
-    parameters.size = size;
-  }
-  if (req.aspectRatio?.trim()) {
-    parameters.aspect_ratio = req.aspectRatio.trim();
+  const mode = resolveDashscopeWanVideoMode(req);
+  const wan27 = isDashscopeWan27Model(req.model);
+  const requestedSize = req.size?.trim();
+  const sizeGeometry = requestedSize
+    ? resolveDashscopeWanVideoSizeGeometry(requestedSize)
+    : undefined;
+  // Wan 2.6 I2V and all Wan 2.7 models use resolution tiers. Wan 2.6 T2V/R2V
+  // use exact dimensions in `size`; folding these together causes API rejection.
+  if (wan27 || mode === "i2v") {
+    const resolution = req.resolution?.trim() || sizeGeometry?.resolution;
+    if (resolution) {
+      parameters.resolution = resolution;
+    }
+    if (wan27 && mode !== "i2v") {
+      const ratio = req.aspectRatio?.trim() || sizeGeometry?.aspectRatio;
+      if (ratio) {
+        parameters.ratio = ratio;
+      }
+    }
+  } else {
+    const ratio = req.aspectRatio?.trim() || "16:9";
+    const size =
+      requestedSize ||
+      (req.resolution
+        ? (DASHSCOPE_WAN_VIDEO_SIZE_BY_GEOMETRY[req.resolution]?.[ratio] ??
+          resolutionToSize[req.resolution])
+        : undefined);
+    if (size) {
+      parameters.size = size;
+    }
   }
   if (typeof req.durationSeconds === "number" && Number.isFinite(req.durationSeconds)) {
     parameters.duration = Math.max(1, Math.round(req.durationSeconds));
   }
-  if (typeof req.audio === "boolean") {
-    parameters.enable_audio = req.audio;
+  if (typeof req.audio === "boolean" && !wan27) {
+    parameters.audio = req.audio;
   }
   if (typeof req.watermark === "boolean") {
     parameters.watermark = req.watermark;
   }
   return Object.keys(parameters).length > 0 ? parameters : undefined;
+}
+
+function resolveDashscopeWanVideoSizeGeometry(
+  size: string,
+): { resolution: string; aspectRatio: string } | undefined {
+  const normalizedSize = size.trim().toLowerCase().replace("x", "*");
+  for (const [resolution, sizes] of Object.entries(DASHSCOPE_WAN_VIDEO_SIZE_BY_GEOMETRY)) {
+    for (const [aspectRatio, candidate] of Object.entries(sizes)) {
+      if (candidate.toLowerCase() === normalizedSize) {
+        return { resolution, aspectRatio };
+      }
+    }
+  }
+  return undefined;
 }
 
 // DashScope may return videos in results[] or a top-level output.video_url.
@@ -173,34 +374,61 @@ export function extractDashscopeVideoUrls(payload: DashscopeVideoGenerationRespo
   return uniqueStrings(urls);
 }
 
-export async function pollDashscopeVideoTaskUntilComplete(params: {
+function createDashscopeBodyReadOptions(params: {
+  label: string;
+  timeoutMs: () => number;
+  totalTimeoutMs?: number;
+}) {
+  return {
+    timeoutMs: params.timeoutMs,
+    onTimeout: ({ timeoutMs }: { timeoutMs: number }) =>
+      new Error(`${params.label} timed out after ${params.totalTimeoutMs ?? timeoutMs}ms`),
+  };
+}
+
+// Successful response bodies remain caller-owned, outside request retries.
+async function fetchDashscopeGuardedResponse(params: {
   providerLabel: string;
-  taskId: string;
-  headers: Headers;
-  timeoutMs?: number;
+  stage: "poll" | "download";
+  url: string;
+  headers?: Headers;
+  bodyReadOptions: ReturnType<typeof createDashscopeBodyReadOptions>;
+  failureLabel: string;
   fetchFn: typeof fetch;
-  baseUrl: string;
   allowPrivateNetwork?: boolean;
   dispatcherPolicy?: Parameters<typeof postJsonRequest>[0]["dispatcherPolicy"];
-  defaultTimeoutMs?: number;
-}): Promise<DashscopeVideoGenerationResponse> {
-  const defaultTimeoutMs = params.defaultTimeoutMs ?? DEFAULT_VIDEO_GENERATION_TIMEOUT_MS;
-  const deadline = createProviderOperationDeadline({
-    timeoutMs: params.timeoutMs,
-    label: `${params.providerLabel} video generation task ${params.taskId}`,
+}) {
+  const retryController = new AbortController();
+  const initialTimeoutMs = params.bodyReadOptions.timeoutMs();
+  const { signal, cleanup } = buildTimeoutAbortSignal({
+    timeoutMs: initialTimeoutMs,
+    signal: retryController.signal,
+    operation: `${params.providerLabel} ${params.stage}`,
+    url: params.url,
   });
-  for (let attempt = 0; attempt < DEFAULT_VIDEO_GENERATION_MAX_POLL_ATTEMPTS; attempt += 1) {
-    const pollResult = await executeProviderOperationWithRetry({
+  let nextTimeoutMs: number | undefined = initialTimeoutMs;
+
+  try {
+    return await executeProviderOperationWithRetry({
       provider: params.providerLabel,
-      stage: "poll",
+      stage: params.stage,
+      signal,
       operation: async () => {
-        const result = await fetchWithTimeoutGuarded(
-          `${params.baseUrl}/api/v1/tasks/${params.taskId}`,
+        let timeoutMs: number;
+        try {
+          timeoutMs = nextTimeoutMs ?? params.bodyReadOptions.timeoutMs();
+          nextTimeoutMs = undefined;
+        } catch (error) {
+          retryController.abort(error);
+          throw error;
+        }
+        const guarded = await fetchWithTimeoutGuarded(
+          params.url,
           {
             method: "GET",
-            headers: params.headers,
+            ...(params.headers ? { headers: params.headers } : {}),
           },
-          createProviderOperationTimeoutResolver({ deadline, defaultTimeoutMs })(),
+          timeoutMs,
           params.fetchFn,
           {
             ...(params.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : {}),
@@ -208,22 +436,75 @@ export async function pollDashscopeVideoTaskUntilComplete(params: {
           },
         );
         try {
-          await assertOkOrThrowHttpError(
-            result.response,
-            `${params.providerLabel} video-generation task poll failed`,
-          );
-          return result;
+          await assertOkOrThrowHttpError(guarded.response, params.failureLabel, {
+            bodyTimeoutMs: params.bodyReadOptions.timeoutMs,
+            onBodyTimeout: (timeout) => {
+              const error = params.bodyReadOptions.onTimeout(timeout);
+              // The same deadline also owns retry backoff; never sleep after
+              // response-body timeout has exhausted the operation budget.
+              retryController.abort(error);
+              return error;
+            },
+          });
+          return guarded;
         } catch (error) {
-          await result.release();
+          await guarded.release();
           throw error;
         }
       },
+    });
+  } catch (error) {
+    if (signal?.aborted && !retryController.signal.aborted) {
+      throw params.bodyReadOptions.onTimeout({ timeoutMs: initialTimeoutMs });
+    }
+    throw error;
+  } finally {
+    cleanup();
+  }
+}
+
+export async function pollDashscopeVideoTaskUntilComplete(params: {
+  providerLabel: string;
+  taskId: string;
+  headers: Headers;
+  timeoutMs?: number;
+  deadline?: ProviderOperationDeadline;
+  fetchFn: typeof fetch;
+  baseUrl: string;
+  allowPrivateNetwork?: boolean;
+  dispatcherPolicy?: Parameters<typeof postJsonRequest>[0]["dispatcherPolicy"];
+  defaultTimeoutMs?: number;
+}): Promise<DashscopeVideoGenerationResponse> {
+  const defaultTimeoutMs = params.defaultTimeoutMs ?? DEFAULT_VIDEO_GENERATION_TIMEOUT_MS;
+  const deadline =
+    params.deadline ??
+    createProviderOperationDeadline({
+      timeoutMs: params.timeoutMs ?? defaultTimeoutMs,
+      label: `${params.providerLabel} video generation task ${params.taskId}`,
+    });
+  const bodyReadOptions = createDashscopeBodyReadOptions({
+    label: deadline.label,
+    timeoutMs: createProviderOperationTimeoutResolver({ deadline, defaultTimeoutMs }),
+    totalTimeoutMs: deadline.timeoutMs,
+  });
+  for (let attempt = 0; attempt < DEFAULT_VIDEO_GENERATION_MAX_POLL_ATTEMPTS; attempt += 1) {
+    const pollResult = await fetchDashscopeGuardedResponse({
+      providerLabel: params.providerLabel,
+      stage: "poll",
+      url: `${params.baseUrl}/api/v1/tasks/${params.taskId}`,
+      headers: params.headers,
+      bodyReadOptions,
+      failureLabel: `${params.providerLabel} video-generation task poll failed`,
+      fetchFn: params.fetchFn,
+      allowPrivateNetwork: params.allowPrivateNetwork,
+      dispatcherPolicy: params.dispatcherPolicy,
     });
     let payload: DashscopeVideoGenerationResponse;
     try {
       payload = await readProviderJsonResponse<DashscopeVideoGenerationResponse>(
         pollResult.response,
         `${params.providerLabel} video-generation task poll`,
+        bodyReadOptions,
       );
     } finally {
       await pollResult.release();
@@ -231,6 +512,16 @@ export async function pollDashscopeVideoTaskUntilComplete(params: {
     const status = payload.output?.task_status?.trim().toUpperCase();
     if (status === "SUCCEEDED") {
       return payload;
+    }
+    // DashScope reports missing or expired task IDs as UNKNOWN, not PENDING;
+    // waiting cannot recover them and hides the actionable provider outcome.
+    if (status === "UNKNOWN") {
+      const reason = payload.output?.message?.trim() || payload.message?.trim();
+      throw new Error(
+        `${params.providerLabel} video generation task ${params.taskId} is unknown or expired${
+          reason ? `: ${reason}` : ""
+        }`,
+      );
     }
     // Terminal failure statuses carry provider messages; nonterminal statuses
     // continue until the shared operation deadline or max poll attempts wins.
@@ -266,8 +557,13 @@ export async function runDashscopeVideoGenerationTask(params: {
 }): Promise<VideoGenerationResult> {
   const defaultTimeoutMs = params.defaultTimeoutMs ?? DEFAULT_VIDEO_GENERATION_TIMEOUT_MS;
   const deadline = createProviderOperationDeadline({
-    timeoutMs: params.timeoutMs,
+    timeoutMs: params.timeoutMs ?? defaultTimeoutMs,
     label: `${params.providerLabel} video generation`,
+  });
+  const bodyReadOptions = createDashscopeBodyReadOptions({
+    label: deadline.label,
+    timeoutMs: createProviderOperationTimeoutResolver({ deadline, defaultTimeoutMs }),
+    totalTimeoutMs: deadline.timeoutMs,
   });
   const { response, release } = await postJsonRequest({
     url: params.url,
@@ -292,55 +588,59 @@ export async function runDashscopeVideoGenerationTask(params: {
     dispatcherPolicy: params.dispatcherPolicy,
   });
 
+  let submitted: DashscopeVideoGenerationResponse;
   try {
-    await assertOkOrThrowHttpError(response, `${params.providerLabel} video generation failed`);
-    const submitted = await readProviderJsonResponse<DashscopeVideoGenerationResponse>(
+    await assertOkOrThrowHttpError(response, `${params.providerLabel} video generation failed`, {
+      bodyTimeoutMs: bodyReadOptions.timeoutMs,
+      onBodyTimeout: bodyReadOptions.onTimeout,
+    });
+    submitted = await readProviderJsonResponse<DashscopeVideoGenerationResponse>(
       response,
       `${params.providerLabel} video generation`,
+      bodyReadOptions,
     );
-    const taskId = submitted.output?.task_id?.trim();
-    if (!taskId) {
-      throw new Error(`${params.providerLabel} video generation response missing task_id`);
-    }
-    const completed = await pollDashscopeVideoTaskUntilComplete({
-      providerLabel: params.providerLabel,
-      taskId,
-      headers: params.headers,
-      timeoutMs: resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs }),
-      fetchFn: params.fetchFn,
-      baseUrl: params.baseUrl,
-      allowPrivateNetwork: params.allowPrivateNetwork,
-      dispatcherPolicy: params.dispatcherPolicy,
-      defaultTimeoutMs,
-    });
-    const urls = extractDashscopeVideoUrls(completed);
-    if (urls.length === 0) {
-      throw new Error(
-        `${params.providerLabel} video generation completed without output video URLs`,
-      );
-    }
-    const videos = await downloadDashscopeGeneratedVideos({
-      providerLabel: params.providerLabel,
-      urls,
-      timeoutMs: createProviderOperationTimeoutResolver({ deadline, defaultTimeoutMs }),
-      fetchFn: params.fetchFn,
-      allowPrivateNetwork: params.allowPrivateNetwork,
-      dispatcherPolicy: params.dispatcherPolicy,
-      defaultTimeoutMs,
-      maxBytes: resolveGeneratedMediaMaxBytes(params.req.cfg, "video"),
-    });
-    return {
-      videos,
-      model: params.model,
-      metadata: {
-        requestId: submitted.request_id,
-        taskId,
-        taskStatus: completed.output?.task_status,
-      },
-    };
   } finally {
     await release();
   }
+
+  const taskId = submitted.output?.task_id?.trim();
+  if (!taskId) {
+    throw new Error(`${params.providerLabel} video generation response missing task_id`);
+  }
+  const completed = await pollDashscopeVideoTaskUntilComplete({
+    providerLabel: params.providerLabel,
+    taskId,
+    deadline,
+    headers: params.headers,
+    fetchFn: params.fetchFn,
+    baseUrl: params.baseUrl,
+    allowPrivateNetwork: params.allowPrivateNetwork,
+    dispatcherPolicy: params.dispatcherPolicy,
+    defaultTimeoutMs,
+  });
+  const urls = extractDashscopeVideoUrls(completed);
+  if (urls.length === 0) {
+    throw new Error(`${params.providerLabel} video generation completed without output video URLs`);
+  }
+  const videos = await downloadDashscopeGeneratedVideos({
+    providerLabel: params.providerLabel,
+    urls,
+    deadline,
+    fetchFn: params.fetchFn,
+    allowPrivateNetwork: params.allowPrivateNetwork,
+    dispatcherPolicy: params.dispatcherPolicy,
+    defaultTimeoutMs,
+    maxBytes: resolveGeneratedMediaMaxBytes(params.req.cfg, "video"),
+  });
+  return {
+    videos,
+    model: params.model,
+    metadata: {
+      requestId: submitted.request_id,
+      taskId,
+      taskStatus: completed.output?.task_status,
+    },
+  };
 }
 
 function resolveDashscopeVideoDownloadTimeoutMs(
@@ -367,70 +667,73 @@ export async function downloadDashscopeGeneratedVideos(params: {
   providerLabel: string;
   urls: string[];
   timeoutMs?: ProviderOperationTimeoutMs;
+  deadline?: ProviderOperationDeadline;
   fetchFn: typeof fetch;
   allowPrivateNetwork?: boolean;
   dispatcherPolicy?: Parameters<typeof postJsonRequest>[0]["dispatcherPolicy"];
   defaultTimeoutMs?: number;
   maxBytes: number;
 }): Promise<GeneratedVideoAsset[]> {
+  if (params.urls.length === 0) {
+    return [];
+  }
+  const defaultTimeoutMs = params.defaultTimeoutMs ?? DEFAULT_VIDEO_GENERATION_TIMEOUT_MS;
+  const downloadLabel = `${params.providerLabel} generated video download`;
+  // Numeric budgets and lazy resolvers share one absolute deadline across URLs.
+  // Continue consulting a caller resolver so it can fail closed after headers.
+  let deadline = params.deadline;
+  const resolveTimeoutMs = () => {
+    const timeoutMs = resolveDashscopeVideoDownloadTimeoutMs(
+      params.providerLabel,
+      params.timeoutMs,
+      defaultTimeoutMs,
+    );
+    deadline ??= createProviderOperationDeadline({ timeoutMs, label: downloadLabel });
+    return resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs: timeoutMs });
+  };
+  const bodyReadOptions = createDashscopeBodyReadOptions({
+    label: downloadLabel,
+    timeoutMs: resolveTimeoutMs,
+    totalTimeoutMs: deadline?.timeoutMs,
+  });
   const videos: GeneratedVideoAsset[] = [];
   for (const [index, url] of params.urls.entries()) {
-    const result = await executeProviderOperationWithRetry({
-      provider: params.providerLabel,
+    const result = await fetchDashscopeGuardedResponse({
+      providerLabel: params.providerLabel,
       stage: "download",
-      operation: async () => {
-        const downloadTimeoutMs = resolveDashscopeVideoDownloadTimeoutMs(
-          params.providerLabel,
-          params.timeoutMs,
-          params.defaultTimeoutMs,
-        );
-        const guarded = await fetchWithTimeoutGuarded(
-          url,
-          { method: "GET" },
-          downloadTimeoutMs,
-          params.fetchFn,
-          {
-            ...(params.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : {}),
-            ...(params.dispatcherPolicy ? { dispatcherPolicy: params.dispatcherPolicy } : {}),
-          },
-        );
-        try {
-          await assertOkOrThrowHttpError(
-            guarded.response,
-            `${params.providerLabel} generated video download failed`,
-          );
-          return guarded;
-        } catch (error) {
-          await guarded.release();
-          throw error;
-        }
-      },
+      url,
+      bodyReadOptions,
+      failureLabel: `${params.providerLabel} generated video download failed`,
+      fetchFn: params.fetchFn,
+      allowPrivateNetwork: params.allowPrivateNetwork,
+      dispatcherPolicy: params.dispatcherPolicy,
     });
     let buffer: Buffer;
     let mimeType: string;
     try {
-      // Re-resolve after headers so the body uses the remaining operation budget.
-      let downloadTimeoutMs: number;
       try {
-        downloadTimeoutMs = resolveDashscopeVideoDownloadTimeoutMs(
-          params.providerLabel,
-          params.timeoutMs,
-          params.defaultTimeoutMs,
-        );
+        const contentType = normalizeMimeType(result.response.headers.get("content-type"));
+        if (
+          contentType &&
+          contentType !== "application/octet-stream" &&
+          kindFromMime(contentType) !== "video"
+        ) {
+          throw new Error(`${downloadLabel}: malformed video response`);
+        }
       } catch (error) {
-        // The body reader normally owns cancellation. If deadline resolution
-        // fails first, cancel here before release clears the guarded abort.
-        await result.response.body?.cancel(error).catch(() => undefined);
+        // A capture tee can retain cancellation until the guarded transport is released.
+        void result.response.body?.cancel(error).catch(() => undefined);
         throw error;
       }
-      buffer = await readResponseWithLimit(result.response, params.maxBytes, {
-        chunkTimeoutMs: downloadTimeoutMs,
+
+      // The shared reader resolves the remaining budget at body consumption and
+      // cancels before release even when the resolver throws or capture holds a tee.
+      buffer = await readProviderBinaryResponse(result.response, downloadLabel, "video", {
+        ...bodyReadOptions,
+        maxBytes: params.maxBytes,
+        chunkTimeoutMs: defaultTimeoutMs,
         onOverflow: ({ maxBytes }) =>
           new Error(`${params.providerLabel} generated video download exceeds ${maxBytes} bytes`),
-        onIdleTimeout: ({ chunkTimeoutMs }) =>
-          new Error(
-            `${params.providerLabel} generated video download stalled: no data received for ${chunkTimeoutMs}ms`,
-          ),
       });
       mimeType = result.response.headers.get("content-type")?.trim() || "video/mp4";
     } finally {

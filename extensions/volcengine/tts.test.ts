@@ -276,6 +276,54 @@ describe("volcengineTTS", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    {
+      name: "Seed Speech",
+      response: JSON.stringify({ code: 0, data: "%%%not-base64!!" }),
+      params: { text: "hello", apiKey: "secret-api-key", timeoutMs: 1000 },
+      error: "BytePlus Seed Speech TTS returned malformed base64 audio data",
+    },
+    {
+      name: "legacy",
+      response: JSON.stringify({ code: 3000, data: "%%%not-base64!!" }),
+      params: { text: "hello", appId: "app-id", token: "secret-token", timeoutMs: 1000 },
+      error: "Volcengine TTS returned malformed base64 audio data",
+    },
+    ...[
+      {
+        name: "Seed Speech",
+        code: 0,
+        params: { text: "hello", apiKey: "test-key", timeoutMs: 1000 },
+      },
+      {
+        name: "legacy",
+        code: 3000,
+        params: { text: "hello", appId: "app", token: "test-token", timeoutMs: 1000 },
+      },
+    ].map(({ name, code, params }) => ({
+      name: `${name} UTF-8`,
+      response: Buffer.concat([
+        Buffer.from(`{"code":${code},"message":"bad`),
+        Buffer.from([0xff]),
+        Buffer.from(`","data":"${Buffer.from("audio").toString("base64")}"}`),
+      ]),
+      params,
+      error: TypeError,
+    })),
+  ])(
+    "rejects malformed $name responses and releases the request",
+    async ({ response, params, error }) => {
+      const release = vi.fn();
+      fetchWithSsrFGuardMock.mockResolvedValue({
+        response: new Response(response),
+        release,
+      });
+
+      await expect(volcengineTTS(params)).rejects.toThrow(error);
+      expect(release).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it("reports Seed Speech provider errors without exposing credentials", async () => {
     const release = vi.fn();
     fetchWithSsrFGuardMock.mockResolvedValue({
@@ -366,4 +414,37 @@ describe("volcengineTTS", () => {
     ).rejects.toThrow("Volcengine TTS response exceeds 16777216 bytes");
     expect(release).toHaveBeenCalledTimes(1);
   });
+
+  it.each([
+    { key: "speed", value: "0.2", expected: 0.2 },
+    { key: "speedratio", value: "1.25", expected: 1.25 },
+    { key: "speed_ratio", value: "3", expected: 3 },
+  ])(
+    "merges the $key=$value directive without mutating prior overrides",
+    ({ key, value, expected }) => {
+      const provider = buildVolcengineSpeechProvider();
+      const currentOverrides = Object.freeze({ voice: "retained", speedRatio: 0.75 });
+      const result = provider.parseDirectiveToken?.({
+        key,
+        value,
+        currentOverrides,
+        policy: {
+          enabled: true,
+          allowText: true,
+          allowProvider: true,
+          allowVoice: true,
+          allowModelId: true,
+          allowVoiceSettings: true,
+          allowNormalization: true,
+          allowSeed: true,
+        },
+      });
+      expect(result).toEqual({
+        handled: true,
+        overrides: { voice: "retained", speedRatio: expected },
+      });
+      expect(result?.overrides).not.toBe(currentOverrides);
+      expect(currentOverrides).toEqual({ voice: "retained", speedRatio: 0.75 });
+    },
+  );
 });

@@ -1,4 +1,3 @@
-// Discord plugin module implements components.message behavior.
 import {
   ButtonStyle,
   ComponentType,

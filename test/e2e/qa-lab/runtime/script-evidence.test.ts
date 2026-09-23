@@ -3,7 +3,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { validateQaEvidenceSummaryJson } from "../../../../extensions/qa-lab/api.js";
+import {
+  type QaProviderMode,
+  validateQaEvidenceSummaryJson,
+} from "../../../../extensions/qa-lab/test-api.js";
 import {
   createQaScriptBlockedStatusTracker,
   createQaScriptEvidenceWriter,
@@ -11,7 +14,15 @@ import {
 
 const tempRoots: string[] = [];
 
-async function makeWriter(params: { maxDetailsBytes?: number; maxLogBytes?: number } = {}) {
+async function makeWriter(
+  params: {
+    maxDetailsBytes?: number;
+    maxLogBytes?: number;
+    primaryModel?: string;
+    providerId?: string;
+    providerMode?: QaProviderMode;
+  } = {},
+) {
   const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-script-evidence-"));
   tempRoots.push(repoRoot);
   return {
@@ -19,17 +30,18 @@ async function makeWriter(params: { maxDetailsBytes?: number; maxLogBytes?: numb
     repoRoot,
     writer: createQaScriptEvidenceWriter({
       artifactBase: path.join(repoRoot, ".artifacts", "qa-e2e", "script"),
+      coverageBinding: "none",
       logFileName: "producer.log",
       maxDetailsBytes: params.maxDetailsBytes,
       maxLogBytes: params.maxLogBytes ?? 64,
-      primaryModel: "mock-openai/gpt-5.6-luna",
-      providerMode: "mock-openai",
+      primaryModel: params.primaryModel ?? "mock-openai/gpt-5.6-luna",
+      providerMode: params.providerMode ?? "mock-openai",
+      providerId: params.providerId,
       repoRoot,
       target: {
         id: "script-evidence-test",
         title: "Script evidence test",
         sourcePath: "test/e2e/qa-lab/runtime/script-evidence.test.ts",
-        primaryCoverageIds: ["qa.script-evidence"],
       },
     }),
   };
@@ -43,6 +55,46 @@ afterEach(async () => {
 });
 
 describe("QA script evidence writer", () => {
+  it.each([
+    { name: "unknown model", primaryModel: "", expectedId: "openai", expectedName: null },
+    {
+      name: "explicit model precedence",
+      primaryModel: "custom/model",
+      expectedId: "custom",
+      expectedName: "model",
+    },
+  ])(
+    "provider identity fallback: persists $name",
+    async ({ primaryModel, expectedId, expectedName }) => {
+      const { artifactBase, writer } = await makeWriter({
+        primaryModel,
+        providerMode: "live-frontier",
+        providerId: "  openai  ",
+      });
+      const evidence = await writer.write({
+        details: "missing candidate",
+        durationMs: 1,
+        status: "blocked",
+      });
+      const diskEvidence = validateQaEvidenceSummaryJson(
+        JSON.parse(await fs.readFile(path.join(artifactBase, "qa-evidence.json"), "utf8")),
+      );
+
+      expect(diskEvidence).toEqual(evidence);
+      expect(diskEvidence.entries[0]?.result).toMatchObject({
+        status: "blocked",
+        failure: { reason: "missing candidate" },
+      });
+      expect(await fs.readFile(path.join(artifactBase, "producer.log"), "utf8")).toBe("");
+      expect(diskEvidence.entries[0]?.execution?.provider).toEqual({
+        id: expectedId,
+        live: true,
+        auth: "live-frontier",
+        model: { name: expectedName, ref: primaryModel || null },
+      });
+    },
+  );
+
   for (const status of ["pass", "fail", "blocked"] as const) {
     it(`writes ${status} evidence with normalized artifact paths`, async () => {
       const { artifactBase, writer } = await makeWriter();
@@ -59,6 +111,7 @@ describe("QA script evidence writer", () => {
       });
 
       expect(evidence.entries[0]).toMatchObject({
+        coverage: [],
         execution: {
           artifacts: [
             { kind: "log", path: "producer.log", source: "script" },
@@ -80,6 +133,23 @@ describe("QA script evidence writer", () => {
     });
   }
 
+  it("rejects uncataloged targets unless coverage binding is disabled", () => {
+    expect(() =>
+      createQaScriptEvidenceWriter({
+        artifactBase: path.join(os.tmpdir(), "openclaw-script-evidence-unknown"),
+        logFileName: "producer.log",
+        primaryModel: "mock-openai/gpt-5.6-luna",
+        providerMode: "mock-openai",
+        repoRoot: process.cwd(),
+        target: {
+          id: "script-evidence-test",
+          sourcePath: "test/e2e/qa-lab/runtime/script-evidence.test.ts",
+          title: "Script evidence test",
+        },
+      }),
+    ).toThrow("unknown qa scenario: script-evidence-test");
+  });
+
   it("keeps only the bounded log tail", async () => {
     const { artifactBase, writer } = await makeWriter({ maxLogBytes: 24 });
     writer.appendLog(`discard-me-${"x".repeat(64)}`);
@@ -91,6 +161,16 @@ describe("QA script evidence writer", () => {
     expect(log).toContain("recent-tail");
     expect(log).not.toContain("discard-me");
     expect(Buffer.byteLength(log, "utf8")).toBeLessThanOrEqual(24);
+  });
+
+  it("writes the bounded log independently for multi-target summaries", async () => {
+    const { artifactBase, writer } = await makeWriter();
+    writer.appendLog("producer output\n");
+
+    await expect(writer.writeLog()).resolves.toEqual({ kind: "log", path: "producer.log" });
+    await expect(fs.readFile(path.join(artifactBase, "producer.log"), "utf8")).resolves.toBe(
+      "producer output\n",
+    );
   });
 
   it("keeps only the bounded failure detail tail", async () => {

@@ -3,13 +3,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { feishuDedupeState } from "./dedup-state.js";
 import {
   claimUnprocessedFeishuMessage,
   finalizeFeishuMessageProcessing,
   hasProcessedFeishuMessage,
-  recordProcessedFeishuMessage,
   warmupDedupFromPluginState,
 } from "./dedup.js";
 
@@ -23,8 +23,9 @@ beforeEach(() => {
   feishuDedupeState.reset();
 });
 
-afterEach(() => {
+afterEach(async () => {
   vi.useRealTimers();
+  await closeOpenClawStateDatabaseAsync();
   resetPluginStateStoreForTests();
   if (previousStateDir === undefined) {
     delete process.env.OPENCLAW_STATE_DIR;
@@ -37,14 +38,18 @@ afterEach(() => {
   tempDir = undefined;
 });
 
-// Simulates a process restart: a fresh guard has empty memory and no in-flight
-// claims, so any duplicate verdict must come from the persisted SQLite rows.
+// Reopen SQLite with an empty guard so replay detection must read committed rows.
 async function restartFeishuDedup(): Promise<void> {
+  await closeOpenClawStateDatabaseAsync();
   feishuDedupeState.reset();
 }
 
 describe("Feishu claimable dedupe", () => {
-  it("prevents replay after a restart once a message is committed", async () => {
+  it("preserves committed marks but not pending claims across a restart", async () => {
+    await expect(
+      claimUnprocessedFeishuMessage({ messageId: "msg-4", namespace: "account-a" }),
+    ).resolves.toMatchObject({ kind: "claimed" });
+    await restartFeishuDedup();
     await expect(
       finalizeFeishuMessageProcessing({ messageId: "msg-4", namespace: "account-a" }),
     ).resolves.toBe(true);
@@ -85,25 +90,37 @@ describe("Feishu claimable dedupe", () => {
   it("dedupes cross-account broadcast claims through the shared namespace", async () => {
     // Multi-account groups deliver the same event once per bot account; the
     // shared "broadcast" namespace lets the first account claim dispatch.
-    await expect(recordProcessedFeishuMessage("msg-6", "broadcast")).resolves.toBe(true);
-    await expect(recordProcessedFeishuMessage("msg-6", "broadcast")).resolves.toBe(false);
+    await expect(
+      finalizeFeishuMessageProcessing({ messageId: "msg-6", namespace: "broadcast" }),
+    ).resolves.toBe(true);
+    await expect(
+      finalizeFeishuMessageProcessing({ messageId: "msg-6", namespace: "broadcast" }),
+    ).resolves.toBe(false);
 
     await restartFeishuDedup();
-    await expect(recordProcessedFeishuMessage("msg-6", "broadcast")).resolves.toBe(false);
+    await expect(
+      finalizeFeishuMessageProcessing({ messageId: "msg-6", namespace: "broadcast" }),
+    ).resolves.toBe(false);
   });
 
   it("warms memory from persisted plugin state", async () => {
-    await expect(recordProcessedFeishuMessage("msg-7", "account-a")).resolves.toBe(true);
+    await expect(
+      finalizeFeishuMessageProcessing({ messageId: "msg-7", namespace: "account-a" }),
+    ).resolves.toBe(true);
     await restartFeishuDedup();
 
     await expect(warmupDedupFromPluginState("account-a")).resolves.toBe(1);
-    await expect(recordProcessedFeishuMessage("msg-7", "account-a")).resolves.toBe(false);
+    await expect(
+      finalizeFeishuMessageProcessing({ messageId: "msg-7", namespace: "account-a" }),
+    ).resolves.toBe(false);
   });
 
   it("ignores committed messages after the TTL expires", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
-    await expect(recordProcessedFeishuMessage("msg-8", "account-a")).resolves.toBe(true);
+    await expect(
+      finalizeFeishuMessageProcessing({ messageId: "msg-8", namespace: "account-a" }),
+    ).resolves.toBe(true);
     await restartFeishuDedup();
 
     vi.setSystemTime(1_000 + 24 * 60 * 60 * 1000 + 1);
@@ -117,7 +134,9 @@ describe("Feishu claimable dedupe", () => {
     process.env.OPENCLAW_STATE_DIR = path.join(blockedPath, "nested");
     const log = vi.fn();
 
-    await expect(recordProcessedFeishuMessage("msg-9", "account-a", log)).resolves.toBe(true);
+    await expect(
+      finalizeFeishuMessageProcessing({ messageId: "msg-9", namespace: "account-a", log }),
+    ).resolves.toBe(true);
     await expect(
       claimUnprocessedFeishuMessage({ messageId: "msg-9", namespace: "account-a", log }),
     ).resolves.toEqual({ kind: "duplicate" });

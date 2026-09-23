@@ -2,6 +2,7 @@
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { readStyleSheet } from "../../../test/helpers/ui-style-fixtures.js";
+import { withBrowserPage } from "../test-helpers/browser-page.ts";
 import {
   canRunPlaywrightChromium,
   resolvePlaywrightChromiumExecutablePath,
@@ -22,12 +23,22 @@ let mobileContext: BrowserContext;
 function readUiCss(): string {
   const files = [
     "ui/src/styles/base.css",
-    "ui/src/styles/components.css",
-    "ui/src/styles/config.css",
-    "ui/src/styles/settings.css",
+    "ui/src/styles/board.css",
     "ui/src/styles/layout.css",
+    "ui/src/styles/layout.mobile.css",
+    "ui/src/styles/components.css",
+    "ui/src/styles/settings-controls.css",
+    "ui/src/styles/settings.css",
+    "ui/src/styles/config.css",
     "ui/src/styles/usage.css",
+    "ui/src/styles/chat/startup-layout.css",
     "ui/src/styles/chat/layout.css",
+    "ui/src/styles/chat/message-layout.css",
+    "ui/src/styles/chat/composer-surface.css",
+    "ui/src/styles/chat/composer.css",
+    "ui/src/styles/sidebar-markdown.css",
+    "ui/src/styles/chat/sidebar.css",
+    "ui/src/styles/plugins.css",
   ];
   return files.map((file) => readStyleSheet(file)).join("\n");
 }
@@ -38,6 +49,7 @@ function controlsHtml() {
       <label class="field"><input type="text" value="field input" /></label>
       <label class="field"><textarea>field textarea</textarea></label>
       <label class="field"><select><option>field select</option></select></label>
+      <label class="field"><select class="settings-select"><option>field settings select</option></select></label>
       <label class="field checkbox"><input type="checkbox" /><span>field checkbox</span></label>
       <label class="field checkbox"><input type="radio" /><span>field radio</span></label>
       <input class="settings-sidebar__search-input" value="settings search" />
@@ -54,6 +66,48 @@ function controlsHtml() {
         <input type="text" value="inline usage input" />
       </div>
       <div class="agent-chat__composer-combobox"><textarea>chat composer</textarea></div>
+    </main>
+  `;
+}
+
+function revealedSensitiveInputHtml() {
+  return `
+    <span
+      class="oc-sensitive-input"
+      data-sensitive-input
+      data-sensitive-mask-ready="true"
+      data-revealed="true"
+    >
+      <span class="oc-sensitive-mask" data-sensitive-mask hidden>
+        <span data-sensitive-mask-text>*******************************</span>
+      </span>
+      <input type="text" value="fake-client-secret-for-ui-proof" />
+      <button class="oc-sensitive-toggle" type="button" aria-label="Hide value">◎</button>
+    </span>
+  `;
+}
+
+function mediaDeviceRowsHtml() {
+  return `
+    <main style="width: 100%; max-width: 900px">
+      <div class="settings-row">
+        <div class="settings-row__text"><span class="settings-row__title">Microphone input</span></div>
+        <div class="settings-row__control">
+          <select class="settings-select settings-select--media-device">
+            <option>MacBook Pro Microphone (Built-in)</option>
+          </select>
+          <button class="btn btn--sm btn--icon" type="button">↻</button>
+        </div>
+      </div>
+      <div class="settings-row">
+        <div class="settings-row__text"><span class="settings-row__title">Camera</span></div>
+        <div class="settings-row__control">
+          <select class="settings-select settings-select--media-device">
+            <option>System default</option>
+          </select>
+          <button class="btn btn--sm btn--icon" type="button">↻</button>
+        </div>
+      </div>
     </main>
   `;
 }
@@ -104,6 +158,150 @@ afterAll(async () => {
   await browser?.close().catch(() => {});
 });
 
+describeBrowserLayout("sensitive input visibility", () => {
+  it("removes the mask layer from layout when the value is revealed", async () => {
+    await withBrowserPage(desktopContext.newPage(), async (page) => {
+      await page.setContent(
+        `<!doctype html><html data-theme-mode="light"><head><style>${readUiCss()}</style></head><body>${revealedSensitiveInputHtml()}</body></html>`,
+      );
+
+      const state = await page.locator("[data-sensitive-mask]").evaluate((mask) => ({
+        hidden: (mask as HTMLElement).hidden,
+        display: getComputedStyle(mask).display,
+      }));
+      expect(state).toEqual({ hidden: true, display: "none" });
+    });
+  });
+});
+
+describeBrowserLayout("settings icon buttons", () => {
+  it("keeps MCP remove glyphs proportionate to settings buttons", async () => {
+    await withBrowserPage(desktopContext.newPage(), async (page) => {
+      await page.setContent(`
+        <!doctype html>
+        <html data-theme-mode="light">
+          <head><style>${readUiCss()}</style></head>
+          <body>
+            <div class="settings-row__control">
+              <button class="btn btn--sm btn--icon mcp-server-remove" type="button" aria-label="Remove synthetic server">
+                <svg viewBox="0 0 24 24"><path d="M3 6h18" /></svg>
+              </button>
+            </div>
+          </body>
+        </html>
+      `);
+
+      const metrics = await page
+        .getByRole("button", { name: "Remove synthetic server", exact: true })
+        .evaluate((button) => {
+          const glyph = button.querySelector("svg");
+          if (!(glyph instanceof SVGElement)) {
+            throw new Error("Missing remove button glyph");
+          }
+          const buttonRect = button.getBoundingClientRect();
+          const glyphRect = glyph.getBoundingClientRect();
+          return {
+            button: [buttonRect.width, buttonRect.height],
+            glyph: [glyphRect.width, glyphRect.height],
+          };
+        });
+      expect(metrics).toEqual({ button: [32, 32], glyph: [18, 18] });
+    });
+  });
+});
+
+describeBrowserLayout("settings row wrapping", () => {
+  it.each([393, 768, 1200])("keeps long copy beside its tile at %ipx", async (width) => {
+    await withBrowserPage(desktopContext.newPage(), async (page) => {
+      await page.setViewportSize({ width, height: 1000 });
+      const description =
+        "Calendar notes and reminders remain readable before enabling a connector. ".repeat(8);
+      await page.setContent(`<!doctype html><html><head><meta charset="utf-8"><style>${readUiCss()}</style></head>
+        <body><main style="max-width: 1100px">
+          <div class="settings-row plugins-item">
+            <span class="plugins-tile" aria-hidden="true">C</span>
+            <div class="settings-row__text"><span class="settings-row__title">Connector</span>
+              <span class="settings-row__desc">${description}</span></div>
+            <div class="settings-row__control"><button class="btn btn--sm">Disable</button>
+              <button class="btn btn--sm btn--icon" aria-label="Remove connector">×</button></div>
+            <div class="plugins-row-message" role="status">Connector remains disabled.</div>
+          </div>
+        </main></body></html>`);
+      const geometry = await page.locator(".settings-row").evaluate((row) => {
+        const [tile, text, control, message] = Array.from(row.children, (child) =>
+          child.getBoundingClientRect(),
+        );
+        if (!tile || !text || !control || !message) {
+          throw new Error("Missing settings row fixture child");
+        }
+        const style = getComputedStyle(row);
+        const contentWidth =
+          row.clientWidth -
+          Number.parseFloat(style.paddingLeft) -
+          Number.parseFloat(style.paddingRight);
+        return {
+          copyBesideTile:
+            text.left >= tile.right && text.top < tile.bottom && tile.top < text.bottom,
+          desktopControls:
+            control.left >= text.right && control.top < text.bottom && text.top < control.bottom,
+          narrowControls: control.top >= Math.max(tile.bottom, text.bottom),
+          messageBelow: message.top >= Math.max(tile.bottom, text.bottom, control.bottom),
+          messageWidth: message.width,
+          contentWidth,
+          overflow: row.scrollWidth - row.clientWidth,
+        };
+      });
+      expect(geometry.copyBesideTile).toBe(true);
+      expect(width <= 640 ? geometry.narrowControls : geometry.desktopControls).toBe(true);
+      expect(geometry.messageBelow).toBe(true);
+      expect(geometry.messageWidth).toBeCloseTo(geometry.contentWidth, 0);
+      expect(geometry.overflow).toBeLessThanOrEqual(1);
+    });
+  });
+});
+
+describeBrowserLayout("settings media device controls", () => {
+  it("keeps paired selectors the same width across device labels and viewports", async () => {
+    await withBrowserPage(desktopContext.newPage(), async (page) => {
+      await page.setViewportSize({ width: 1200, height: 800 });
+      await page.setContent(
+        `<!doctype html><html data-theme-mode="light"><head><style>${readUiCss()}</style></head><body>${mediaDeviceRowsHtml()}</body></html>`,
+      );
+
+      const measure = () =>
+        page.locator(".settings-row").evaluateAll((rows) =>
+          rows.map((row) => {
+            const select = row.querySelector(".settings-select--media-device");
+            const button = row.querySelector(".btn--icon");
+            if (!(select instanceof HTMLElement) || !(button instanceof HTMLElement)) {
+              throw new Error("Missing media device controls");
+            }
+            const selectRect = select.getBoundingClientRect();
+            const buttonRect = button.getBoundingClientRect();
+            return {
+              selectWidth: selectRect.width,
+              selectTop: selectRect.top,
+              buttonTop: buttonRect.top,
+            };
+          }),
+        );
+
+      const desktop = await measure();
+      expect(desktop.map((row) => row.selectWidth)).toEqual([340, 340]);
+      expect(desktop.every((row) => row.selectTop === row.buttonTop)).toBe(true);
+
+      await page.setViewportSize({ width: 390, height: 800 });
+      await page.locator("main").evaluate((main) => {
+        main.style.width = "285px";
+      });
+      const mobile = await measure();
+      expect(mobile[0]?.selectWidth).toBeCloseTo(mobile[1]?.selectWidth ?? 0, 5);
+      expect(mobile[0]?.selectWidth).toBeLessThan(340);
+      expect(mobile.every((row) => row.selectTop === row.buttonTop)).toBe(true);
+    });
+  });
+});
+
 describeBrowserLayout("touch-primary form controls", () => {
   it("keeps text-entry controls large enough to avoid mobile focus zoom", async () => {
     const fixture = await openMobileFixture();
@@ -151,25 +349,31 @@ describeBrowserLayout("touch-primary form controls", () => {
     }
   });
 
-  it("keeps native select affordances visible in light mode", async () => {
+  it("keeps settings select affordances visible in light mode", async () => {
     const fixture = await openMobileFixture();
     const { page } = fixture;
     try {
-      const selects = await page.locator(".field select").evaluateAll((nodes) =>
+      // Both the .field-wrapped and bare settings selects draw the themed
+      // chevron; bare ones once fell back to the misaligned native arrow.
+      const selects = await page.locator("select.settings-select").evaluateAll((nodes) =>
         nodes.map((node) => {
           const style = getComputedStyle(node as HTMLElement);
           return {
+            appearance: style.appearance,
             image: style.backgroundImage,
             paddingRight: Number.parseFloat(style.paddingRight),
+            positionX: style.backgroundPositionX,
             repeat: style.backgroundRepeat,
           };
         }),
       );
 
-      expect(selects).toHaveLength(1);
+      expect(selects).toHaveLength(2);
       for (const select of selects) {
+        expect(select.appearance).toBe("none");
         expect(select.image).not.toBe("none");
         expect(select.paddingRight).toBeGreaterThanOrEqual(32);
+        expect(select.positionX).toBe("calc(100% - 10px)");
         expect(select.repeat).toContain("no-repeat");
       }
     } finally {
@@ -208,9 +412,8 @@ describeBrowserLayout("touch-primary form controls", () => {
 });
 
 describeBrowserLayout("mount fallback cursor", () => {
-  it("uses the default cursor for its controls and the pointer for its real link", async () => {
-    const page = await desktopContext.newPage();
-    try {
+  it("uses the arrow for recovery controls and the hand for its real link", async () => {
+    await withBrowserPage(desktopContext.newPage(), async (page) => {
       await page.setContent(readStyleSheet("ui/index.html"));
       const cursors = await page.evaluate(() => {
         const cursor = (selector: string) => {
@@ -232,16 +435,258 @@ describeBrowserLayout("mount fallback cursor", () => {
         wait: "default",
         docs: "pointer",
       });
-    } finally {
-      await page.close().catch(() => {});
-    }
+    });
   });
 });
 
 describeBrowserLayout("app chrome interaction styles", () => {
-  it("keeps sidebars compact while preserving normal content scroll and text entry", async () => {
-    const page = await desktopContext.newPage();
-    try {
+  it("scales sidebar typography with the Control UI text-size preference", async () => {
+    await withBrowserPage(desktopContext.newPage(), async (page) => {
+      await page.setViewportSize({ width: 1200, height: 800 });
+      await page.setContent(`
+        <!doctype html>
+        <html>
+          <head><style>${readUiCss()}</style></head>
+          <body>
+            <span class="nav-item__text">Navigation</span>
+            <span class="sidebar-recent-session__name">Recent session</span>
+            <span class="session-row-trail">3m</span>
+            <div class="sidebar-session-catalog-host__head">
+              <span class="sidebar-session-catalog-host__label">Local host</span>
+              <span class="sidebar-session-catalog-host__count">100</span>
+            </div>
+            <button class="sidebar-session-catalog-project__head">
+              <span class="sidebar-session-catalog-project__label">Project</span>
+              <span class="sidebar-session-catalog-project__count">100</span>
+            </button>
+            <span class="sidebar-agent-card__name">Agent</span>
+            <span class="settings-sidebar__item-label">Settings</span>
+            <span class="sidebar-file-view__path">workspace/file.ts</span>
+            <span class="chat-workspace-rail__file-badge">3 files</span>
+            <span class="session-menu__shortcut">⌘K</span>
+            <div class="file-view__search">
+              <input value="query" />
+              <span class="file-view__search-counter">1/2</span>
+            </div>
+            <div class="sidebar-recent-session">
+              <button class="sidebar-child-session-toggle">
+                <span class="sidebar-child-session-toggle__count">100</span>
+              </button>
+            </div>
+            <span class="file-view__save-notice">Unsaved changes</span>
+            <article class="sidebar-markdown"><pre><code>const scaled = true;</code></pre></article>
+            <article class="md-preview-dialog__reader sidebar-markdown">
+              <h3>Preview heading</h3>
+              <p>Agent file preview</p>
+              <table><tbody><tr><td>Preview cell</td></tr></tbody></table>
+            </article>
+          </body>
+        </html>
+      `);
+
+      const selectors = [
+        ".nav-item__text",
+        ".sidebar-recent-session__name",
+        ".session-row-trail",
+        ".sidebar-session-catalog-host__count",
+        ".sidebar-session-catalog-project__count",
+        ".sidebar-agent-card__name",
+        ".settings-sidebar__item-label",
+        ".sidebar-file-view__path",
+        ".chat-workspace-rail__file-badge",
+        ".session-menu__shortcut",
+        ".file-view__search-counter",
+        ".file-view__save-notice",
+        ".sidebar-markdown pre code",
+        ".md-preview-dialog__reader.sidebar-markdown > p",
+        ".md-preview-dialog__reader.sidebar-markdown > h3",
+        ".md-preview-dialog__reader.sidebar-markdown td",
+      ];
+      const readFontSizes = () =>
+        page.evaluate((targets) => {
+          return Object.fromEntries(
+            targets.map((selector) => {
+              const node = document.querySelector(selector);
+              if (!(node instanceof HTMLElement)) {
+                throw new Error(`Missing sidebar typography fixture ${selector}`);
+              }
+              return [selector, Number.parseFloat(getComputedStyle(node).fontSize)];
+            }),
+          );
+        }, selectors);
+
+      const baseline = await readFontSizes();
+      const baselineInput = await page.$eval(".file-view__search input", (node) =>
+        Number.parseFloat(getComputedStyle(node).fontSize),
+      );
+      await page.evaluate(() => {
+        document.documentElement.style.setProperty("--control-ui-text-scale", "1.4");
+      });
+      const scaled = await readFontSizes();
+      const scaledInput = await page.$eval(".file-view__search input", (node) =>
+        Number.parseFloat(getComputedStyle(node).fontSize),
+      );
+
+      for (const selector of selectors) {
+        const baselineSize = baseline[selector];
+        const scaledSize = scaled[selector];
+        if (baselineSize === undefined || scaledSize === undefined) {
+          throw new Error(`Missing computed sidebar font size for ${selector}`);
+        }
+        expect(scaledSize, selector).toBeCloseTo(baselineSize * 1.4, 1);
+      }
+      expect(baselineInput).toBe(12);
+      expect(scaledInput).toBeCloseTo(12 * 1.4, 1);
+      for (const selector of [
+        ".sidebar-child-session-toggle",
+        ".sidebar-session-catalog-host__count",
+        ".sidebar-session-catalog-project__count",
+      ]) {
+        const fits = await page.$eval(selector, (node) => node.scrollWidth <= node.clientWidth);
+        expect(fits, selector).toBe(true);
+      }
+    });
+  });
+
+  it.each([
+    { label: "merged chat chrome", nativeClass: "", merged: true, search: "visible" },
+    { label: "topbar still shown", nativeClass: "", merged: false, search: "hidden" },
+    {
+      label: "native macOS",
+      nativeClass: "openclaw-native-macos",
+      merged: false,
+      search: "hidden",
+    },
+    { label: "native nav", nativeClass: "openclaw-native-nav", merged: false, search: "hidden" },
+    {
+      label: "native web chrome",
+      nativeClass: "openclaw-native-web-chrome",
+      merged: false,
+      search: "hidden",
+    },
+  ])(
+    "shows the mobile drawer command palette button only where nothing else carries it ($label)",
+    async ({ nativeClass, merged, search }) => {
+      await withBrowserPage(mobileContext.newPage(), async (page) => {
+        await page.setContent(`
+        <!doctype html>
+        <html class="${nativeClass}">
+          <head>
+            <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+            <style>${readUiCss()}</style>
+          </head>
+          <body>
+            <div class="shell shell--mobile-nav ${merged ? "shell--merged-chat-chrome" : ""}">
+              <div class="sidebar-brand">
+                <div class="sidebar-brand__actions">
+                  <button
+                    class="sidebar-brand__icon sidebar-brand__header-control sidebar-brand__desktop-control sidebar-brand__collapse"
+                  ></button>
+                  <button
+                    class="sidebar-brand__icon sidebar-brand__header-control sidebar-brand__desktop-control sidebar-brand__search"
+                  ></button>
+                </div>
+              </div>
+            </div>
+          </body>
+        </html>
+      `);
+
+        const display = await page.evaluate(() => {
+          const read = (selector: string) => {
+            const node = document.querySelector(selector);
+            if (!(node instanceof HTMLElement)) {
+              throw new Error(`Missing mobile drawer fixture ${selector}`);
+            }
+            return getComputedStyle(node).display;
+          };
+          return {
+            collapse: read(".sidebar-brand__collapse"),
+            search: read(".sidebar-brand__search"),
+          };
+        });
+
+        // The drawer has no collapsed state, so the collapse toggle always goes.
+        expect(display.collapse).toBe("none");
+        // Merged chat chrome hides the topbar, leaving the drawer as the only
+        // surface that can carry search. Everywhere else - including every native
+        // host, which never merges - the topbar keeps its own, so a drawer copy
+        // would put two on screen at once.
+        if (search === "visible") {
+          expect(display.search).not.toBe("none");
+        } else {
+          expect(display.search).toBe("none");
+        }
+      });
+    },
+  );
+
+  it("scales mobile sidebar variants while preserving the coarse-pointer input floor", async () => {
+    await withBrowserPage(mobileContext.newPage(), async (page) => {
+      await page.setContent(`
+        <!doctype html>
+        <html>
+          <head>
+            <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+            <style>${readUiCss()}</style>
+          </head>
+          <body>
+            <div class="shell shell--mobile-nav">
+              <span class="nav-item">Mobile navigation</span>
+              <div class="file-view__search"><input value="query" /></div>
+              <input class="settings-sidebar__search-input" value="settings" />
+              <div class="sidebar-recent-session sidebar-recent-session--child">
+                <span class="sidebar-recent-session__name">Child session</span>
+                <span class="session-row-trail">3m</span>
+              </div>
+            </div>
+          </body>
+        </html>
+      `);
+
+      const readSizes = () =>
+        page.evaluate(() => {
+          const fontSize = (selector: string) => {
+            const node = document.querySelector(selector);
+            if (!(node instanceof HTMLElement)) {
+              throw new Error(`Missing mobile sidebar fixture ${selector}`);
+            }
+            return Number.parseFloat(getComputedStyle(node).fontSize);
+          };
+          return {
+            childName: fontSize(".sidebar-recent-session--child .sidebar-recent-session__name"),
+            childTrail: fontSize(".sidebar-recent-session--child .session-row-trail"),
+            coarsePointer: matchMedia("(hover: none) and (pointer: coarse)").matches,
+            fileSearch: fontSize(".file-view__search input"),
+            settingsSearch: fontSize(".settings-sidebar__search-input"),
+            navItem: fontSize(".shell--mobile-nav .nav-item"),
+          };
+        });
+
+      const baseline = await readSizes();
+      expect(baseline).toMatchObject({
+        childName: 12,
+        childTrail: 10,
+        coarsePointer: true,
+        fileSearch: 16,
+        settingsSearch: 16,
+        navItem: 12,
+      });
+
+      await page.evaluate(() => {
+        document.documentElement.style.setProperty("--control-ui-text-scale", "1.4");
+      });
+      const scaled = await readSizes();
+      expect(scaled.childName).toBeCloseTo(12 * 1.4, 1);
+      expect(scaled.childTrail).toBeCloseTo(10 * 1.4, 1);
+      expect(scaled.fileSearch).toBeCloseTo(12 * 1.4, 1);
+      expect(scaled.settingsSearch).toBeCloseTo(12.5 * 1.4, 1);
+      expect(scaled.navItem).toBeCloseTo(12 * 1.4, 1);
+    });
+  });
+
+  it("uses one canonical scrollbar width while preserving normal content scroll and text entry", async () => {
+    await withBrowserPage(desktopContext.newPage(), async (page) => {
       await page.setViewportSize({ width: 1200, height: 800 });
       await page.setContent(`
         <!doctype html>
@@ -262,6 +707,7 @@ describeBrowserLayout("app chrome interaction styles", () => {
               <div style="height: 200px"></div>
             </main>
             <section class="chat-thread" style="height: 100px">Selectable transcript</section>
+            <div class="board-tabs__track">Hidden horizontal rail</div>
           </body>
         </html>
       `);
@@ -290,21 +736,25 @@ describeBrowserLayout("app chrome interaction styles", () => {
           regularSidebarSelection: style(".sidebar-shell__body").userSelect,
           settingsSidebarScrollbar: scrollbarWidth(".settings-sidebar__nav"),
           settingsSidebarSelection: style(".settings-sidebar__nav").userSelect,
+          // The board tab rail intentionally hides its scrollbar (a drag/wheel
+          // affordance, not a styling variant); the new blanket
+          // `* { scrollbar-width: thin }` rule in base.css must not win over
+          // its higher-specificity `scrollbar-width: none`.
+          hiddenRailScrollbarWidth: style(".board-tabs__track").scrollbarWidth,
         };
       });
 
       expect(metrics).toEqual({
         chatSelection: "text",
-        chromeSelection: "none",
+        chromeSelection: "auto",
         contentScrollbar: "12px",
+        hiddenRailScrollbarWidth: "none",
         inputSelection: "text",
-        regularSidebarScrollbar: "6px",
+        regularSidebarScrollbar: "12px",
         regularSidebarSelection: "none",
-        settingsSidebarScrollbar: "6px",
+        settingsSidebarScrollbar: "12px",
         settingsSidebarSelection: "none",
       });
-    } finally {
-      await page.close().catch(() => {});
-    }
+    });
   });
 });

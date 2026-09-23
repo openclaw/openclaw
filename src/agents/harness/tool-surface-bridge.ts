@@ -1,64 +1,38 @@
+import { messageToolOwnsVisibleReply } from "../../auto-reply/source-reply-delivery-mode.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { finalizeAgentToolAvailability } from "../agent-tool-availability.js";
 import type { HookContext } from "../agent-tools.before-tool-call.js";
-import { getActiveAgentRingZeroTools } from "../agent-tools.ring-zero-context.js";
 import {
   CODE_MODE_EXEC_TOOL_NAME,
   CODE_MODE_WAIT_TOOL_NAME,
-  applyCodeModeCatalog,
   createCodeModeTools,
-  resolveCodeModeConfig,
 } from "../code-mode.js";
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
+import { mergeForcedEmbeddedAttemptToolsAllow } from "../embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import {
   filterLocalModelLeanTools,
-  isLocalModelLeanEnabled,
   resolveLocalModelLeanPreserveToolNames,
-  shouldCatalogToolForLocalModelLean,
 } from "../local-model-lean.js";
+import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
 import { filterRuntimeCompatibleTools } from "../tool-schema-projection.js";
-import { resolveAgentToolSearchRuntimeConfig } from "../tool-search-runtime-config.js";
+import { TOOL_SEARCH_CONTROL_TOOL_NAMES } from "../tool-search-types.js";
 import {
-  applyToolSchemaDirectoryCatalog,
-  applyToolSearchCatalog,
   clearToolSearchCatalog,
   createToolSearchCatalogRef,
-  estimateToolSchemaDirectoryToolNames,
-  resolveToolSearchConfig,
-  TOOL_CALL_RAW_TOOL_NAME,
-  TOOL_DESCRIBE_RAW_TOOL_NAME,
-  TOOL_SEARCH_CODE_MODE_TOOL_NAME,
-  TOOL_SEARCH_RAW_TOOL_NAME,
-  type ToolSearchCatalogRef,
   type ToolSearchCatalogToolExecutor,
 } from "../tool-search.js";
+import { applyAgentToolSurfaceCatalog, resolveAgentToolSurfacePlan } from "../tool-surface-plan.js";
 import type { AnyAgentTool } from "../tools/common.js";
+import { createAgentHarnessPromptToolPolicy } from "./prompt-tool-policy.js";
 
-const TOOL_SEARCH_CONTROL_ALLOWLIST_NAMES = [
-  TOOL_SEARCH_CODE_MODE_TOOL_NAME,
-  TOOL_SEARCH_RAW_TOOL_NAME,
-  TOOL_DESCRIBE_RAW_TOOL_NAME,
-  TOOL_CALL_RAW_TOOL_NAME,
-];
 const CODE_MODE_CONTROL_ALLOWLIST_NAMES = [CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME];
 
-export type AgentHarnessToolSurfaceRuntime = {
-  codeModeControlsEnabled: boolean;
-  compactTools: (
-    tools: AnyAgentTool[],
-    options?: { hookContext?: HookContext; localModelLeanApplied?: boolean },
-  ) => {
-    tools: AnyAgentTool[];
-  };
-  config: OpenClawConfig | undefined;
-  includeToolSearchControls: boolean;
-  runtimeToolAllowlist: string[] | undefined;
-  toolSearchCatalogRef: ToolSearchCatalogRef | undefined;
-  toolSearchControlsEnabled: boolean;
-  cleanup: () => void;
-  toolSearchCatalogExecutor: ToolSearchCatalogToolExecutor | undefined;
-};
+type PreparedToolSurface = Pick<
+  Parameters<typeof createCodeModeTools>[0],
+  "abortSignal" | "executeTool" | "forceRestartSafeTools" | "toolExecutionAllow" | "codeModeSkills"
+> & { preserveToolNames: Iterable<string> };
 
-export function createAgentHarnessToolSurfaceRuntime(params: {
+export function createAgentHarnessToolSurfaceRuntimeCore(params: {
   abortSignal?: AbortSignal;
   agentId?: string;
   config?: OpenClawConfig;
@@ -66,166 +40,181 @@ export function createAgentHarnessToolSurfaceRuntime(params: {
   executeTool: ToolSearchCatalogToolExecutor;
   forceMessageTool?: boolean;
   isRawModelRun?: boolean;
+  /** Prepared model row carrying catalog compat; required for `"auto"` code-mode resolution. */
+  model?: { compat?: unknown; contextWindow?: number; toolSearchMode?: "tools" | false };
+  contextTokenBudget?: number;
   modelId?: string;
   modelProvider?: string;
+  codeModeOverride?: boolean | "auto";
+  disableToolSearch?: true;
+  forceCodeModeControls?: boolean;
   modelToolsEnabled: boolean;
+  /** False when the harness cannot dispatch an unregistered catalog name directly. */
+  supportsDeferredToolCalls?: boolean;
   prompt?: string;
   runId?: string;
   runtimeToolAllowlist?: readonly string[];
   sessionId?: string;
   sessionKey?: string;
+  scheduledToolPolicy?: ScheduledToolPolicyContext;
   sourceReplyDeliveryMode?: string;
   toolsAllow?: readonly string[];
-}): AgentHarnessToolSurfaceRuntime {
-  const forceDirectMessageTool =
-    params.forceMessageTool === true || params.sourceReplyDeliveryMode === "message_tool_only";
-  const localModelLeanEnabled = isLocalModelLeanEnabled({
-    config: params.config,
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-  });
-  const codeModeConfig = resolveCodeModeConfig(params.config, params.agentId);
-  const toolSearchRuntimeConfig = resolveAgentToolSearchRuntimeConfig({
+}) {
+  const forceDirectMessageTool = messageToolOwnsVisibleReply(params);
+  const plan = resolveAgentToolSurfacePlan({
     config: params.config,
     agentId: params.agentId,
     sessionKey: params.sessionKey,
     forceDirectMessageTool,
-  });
-  const toolSearchConfig = resolveToolSearchConfig(toolSearchRuntimeConfig);
-  const toolsAvailable =
-    params.modelToolsEnabled &&
-    params.disableTools !== true &&
-    params.isRawModelRun !== true &&
-    params.toolsAllow?.length !== 0;
-  const ringZeroToolRun = getActiveAgentRingZeroTools().length > 0;
-  const codeModeControlsEnabled = toolsAvailable && !ringZeroToolRun && codeModeConfig.enabled;
-  const toolSearchControlsEnabled =
-    toolsAvailable && !ringZeroToolRun && !codeModeControlsEnabled && toolSearchConfig.enabled;
-  const toolSearchCatalogRef =
-    toolSearchControlsEnabled || codeModeControlsEnabled ? createToolSearchCatalogRef() : undefined;
-  const runtimeToolAllowlist =
-    (toolSearchControlsEnabled || codeModeControlsEnabled) && params.runtimeToolAllowlist
-      ? [
-          ...new Set([
-            ...params.runtimeToolAllowlist,
-            ...(toolSearchControlsEnabled ? TOOL_SEARCH_CONTROL_ALLOWLIST_NAMES : []),
-            ...(codeModeControlsEnabled ? CODE_MODE_CONTROL_ALLOWLIST_NAMES : []),
-          ]),
-        ]
-      : params.runtimeToolAllowlist
-        ? [...params.runtimeToolAllowlist]
-        : undefined;
-  const toolSearchCatalogExecutor =
-    toolSearchControlsEnabled || codeModeControlsEnabled ? params.executeTool : undefined;
-  const capabilityProfile = resolveConversationCapabilityProfile({
-    config: params.config,
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
+    model: params.model,
     modelProvider: params.modelProvider,
     modelId: params.modelId,
-    runtimeToolAllowlist,
+    codeModeOverride: params.codeModeOverride,
+    disableToolSearch: params.disableToolSearch,
+    toolsEnabled: params.modelToolsEnabled,
+    disableTools: params.disableTools,
+    isRawModelRun: params.isRawModelRun === true,
+    toolsAllow: params.toolsAllow,
+    forceCodeModeControls: params.forceCodeModeControls,
   });
-  const preserveToolNames = resolveLocalModelLeanPreserveToolNames({
-    toolNames: capabilityProfile.policy.explicitToolOverrideAllowlist,
-    forceMessageTool: params.forceMessageTool,
-    sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+  if (params.supportsDeferredToolCalls === false && plan.toolSearchConfig.mode === "directory") {
+    plan.toolSearchConfig = { ...plan.toolSearchConfig, mode: "tools" };
+    plan.toolSearchRuntimeConfig = {
+      ...plan.toolSearchRuntimeConfig,
+      tools: {
+        ...plan.toolSearchRuntimeConfig?.tools,
+        toolSearch: plan.toolSearchConfig,
+      },
+    };
+  }
+  const {
+    codeModeControlsEnabled,
+    toolSearchControlsEnabled,
+    toolSearchConfig,
+    toolSearchRuntimeConfig,
+  } = plan;
+  const toolSearchCatalogRef =
+    toolSearchControlsEnabled || codeModeControlsEnabled ? createToolSearchCatalogRef() : undefined;
+  const runtimeToolAllowlist = mergeForcedEmbeddedAttemptToolsAllow(params.runtimeToolAllowlist, {
+    forceToolNames: [
+      ...(toolSearchControlsEnabled ? TOOL_SEARCH_CONTROL_TOOL_NAMES : []),
+      ...(codeModeControlsEnabled ? CODE_MODE_CONTROL_ALLOWLIST_NAMES : []),
+    ],
   });
+  const toolSearchCatalogExecutor =
+    toolSearchControlsEnabled || codeModeControlsEnabled ? params.executeTool : undefined;
+  let runtimePreserveToolNames: string[] | undefined;
+  const preserveRuntimeTools = () =>
+    (runtimePreserveToolNames ??= resolveLocalModelLeanPreserveToolNames({
+      toolNames: resolveConversationCapabilityProfile({
+        config: params.config,
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        modelProvider: params.modelProvider,
+        modelId: params.modelId,
+        runtimeToolAllowlist,
+        scheduledToolPolicy: params.scheduledToolPolicy,
+      }).policy.explicitToolOverrideAllowlist,
+      forceMessageTool: params.forceMessageTool,
+      sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+    }));
   const compactTools = (
     tools: AnyAgentTool[],
-    options: { hookContext?: HookContext; localModelLeanApplied?: boolean } = {},
-  ): { tools: AnyAgentTool[] } => {
-    // Native harness callers may supply raw tools, while the bundled tool constructor
-    // already applied the full prepared policy and must not be filtered a second time.
-    const projectedUncompactedTools = options.localModelLeanApplied
-      ? tools
-      : filterLocalModelLeanTools({
-          tools,
-          config: params.config,
-          agentId: params.agentId,
-          sessionKey: params.sessionKey,
-          preserveToolNames,
-        });
-    const uncompactedProjection = filterRuntimeCompatibleTools(projectedUncompactedTools);
-    let effectiveTools = [...uncompactedProjection.tools];
+    options: {
+      hookContext?: HookContext;
+      localModelLeanApplied?: boolean;
+      prepared?: PreparedToolSurface;
+    } = {},
+  ) => {
+    const prepared = options.prepared;
+    const preserveToolNames =
+      prepared?.preserveToolNames ??
+      (options.localModelLeanApplied ? undefined : preserveRuntimeTools());
+    // Core already projected bundle/client tools. Its newly added controls still
+    // need the final lean pass; native constructors may have applied both passes.
+    const projectedUncompactedTools =
+      prepared || options.localModelLeanApplied
+        ? tools
+        : filterLocalModelLeanTools({
+            tools,
+            config: params.config,
+            agentId: params.agentId,
+            sessionKey: params.sessionKey,
+            preserveToolNames,
+          });
+    let effectiveTools = prepared
+      ? projectedUncompactedTools
+      : filterRuntimeCompatibleTools(projectedUncompactedTools).tools;
     const codeModeTools = codeModeControlsEnabled
       ? createCodeModeTools({
           config: params.config,
           runtimeConfig: params.config,
+          modelContextWindowTokens: params.contextTokenBudget ?? params.model?.contextWindow,
           agentId: params.agentId,
           sessionKey: params.sessionKey,
           sessionId: params.sessionId,
           runId: params.runId,
           catalogRef: toolSearchCatalogRef,
-          abortSignal: params.abortSignal,
-          executeTool: params.executeTool,
+          abortSignal: prepared?.abortSignal ?? params.abortSignal,
+          executeTool: prepared?.executeTool ?? params.executeTool,
+          forceRestartSafeTools: prepared?.forceRestartSafeTools,
+          toolExecutionAllow: prepared?.toolExecutionAllow,
+          codeModeSkills: prepared?.codeModeSkills,
         })
       : [];
-    const directoryRequiredToolNames = forceDirectMessageTool ? ["message"] : [];
-    const directoryHydratedToolNames =
-      toolSearchControlsEnabled && toolSearchConfig.mode === "directory"
-        ? (() => {
-            try {
-              return estimateToolSchemaDirectoryToolNames({
-                tools: effectiveTools,
-                query: params.prompt ?? "",
-                maxTools: 4,
-                requiredToolNames: directoryRequiredToolNames,
-              });
-            } catch {
-              return directoryRequiredToolNames;
-            }
-          })()
-        : [];
-    const compacted = codeModeControlsEnabled
-      ? applyCodeModeCatalog({
-          tools: [...codeModeTools, ...effectiveTools],
-          config: params.config,
-          sessionId: params.sessionId,
-          sessionKey: params.sessionKey,
-          agentId: params.agentId,
-          runId: params.runId,
-          catalogRef: toolSearchCatalogRef,
-          toolHookContext: options.hookContext,
-        })
-      : toolSearchConfig.mode === "directory"
-        ? applyToolSchemaDirectoryCatalog({
-            tools: effectiveTools,
-            config: toolSearchRuntimeConfig,
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
+    const compacted = applyAgentToolSurfaceCatalog({
+      tools: [...codeModeTools, ...effectiveTools],
+      config: params.config,
+      toolSearchRuntimeConfig,
+      codeModeControlsEnabled,
+      toolSearchConfig,
+      forceDirectMessageTool,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
+      runId: params.runId,
+      catalogRef: toolSearchCatalogRef,
+      toolHookContext: options.hookContext,
+      toolExecutionAllow: prepared?.toolExecutionAllow,
+      codeModeSkills: prepared?.codeModeSkills,
+    });
+    const projectedCompactedTools =
+      !prepared && options.localModelLeanApplied
+        ? compacted.tools
+        : filterLocalModelLeanTools({
+            tools: compacted.tools,
+            config: params.config,
             agentId: params.agentId,
-            runId: params.runId,
-            catalogRef: toolSearchCatalogRef,
-            toolHookContext: options.hookContext,
-            hydrateToolNames: directoryHydratedToolNames,
-          })
-        : applyToolSearchCatalog({
-            tools: effectiveTools,
-            config: toolSearchRuntimeConfig,
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
-            agentId: params.agentId,
-            runId: params.runId,
-            catalogRef: toolSearchCatalogRef,
-            toolHookContext: options.hookContext,
-            shouldCatalogTool:
-              localModelLeanEnabled && toolSearchConfig.mode === "tools"
-                ? shouldCatalogToolForLocalModelLean
-                : undefined,
+            sessionKey: prepared ? undefined : params.sessionKey,
+            preserveToolNames,
           });
-    const projectedCompactedTools = options.localModelLeanApplied
-      ? compacted.tools
-      : filterLocalModelLeanTools({
-          tools: compacted.tools,
-          config: params.config,
-          agentId: params.agentId,
-          sessionKey: params.sessionKey,
-          preserveToolNames,
-        });
-    effectiveTools = [...filterRuntimeCompatibleTools(projectedCompactedTools).tools];
-    return { tools: effectiveTools };
+    const schemaProjection = filterRuntimeCompatibleTools(projectedCompactedTools);
+    effectiveTools = schemaProjection.tools;
+    if (!compacted.catalogRegistered) {
+      finalizeAgentToolAvailability(effectiveTools, {
+        toolExecutionAllow: prepared?.toolExecutionAllow,
+      });
+    }
+    return {
+      tools: effectiveTools,
+      catalog: compacted,
+      projectedTools: projectedCompactedTools,
+      diagnostics: schemaProjection.diagnostics,
+      promptToolPolicy: createAgentHarnessPromptToolPolicy({
+        tools: effectiveTools,
+        catalogRef: toolSearchCatalogRef,
+        codeModeControlsEnabled,
+        toolSearchPrompt: toolSearchControlsEnabled
+          ? {
+              config: toolSearchRuntimeConfig,
+              contextTokenBudget: params.contextTokenBudget ?? params.model?.contextWindow,
+            }
+          : undefined,
+      }),
+    };
   };
   return {
+    plan,
     codeModeControlsEnabled,
     compactTools,
     config: toolSearchControlsEnabled ? toolSearchRuntimeConfig : params.config,

@@ -1,4 +1,3 @@
-// Discord plugin module implements speaker context behavior.
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -33,7 +32,6 @@ export class DiscordVoiceSpeakerContextResolver {
     private readonly params: {
       client: Client;
       ownerAllowFrom?: string[];
-      ownerAllowAll?: boolean;
     },
   ) {}
 
@@ -48,7 +46,11 @@ export class DiscordVoiceSpeakerContextResolver {
       label: identity.label,
       name: identity.name,
       tag: identity.tag,
-      senderIsOwner: this.resolveIsOwner(identity),
+      senderIsOwner: resolveDiscordOwnerAccess({
+        allowFrom: this.params.ownerAllowFrom,
+        sender: identity,
+        allowNameMatching: false,
+      }).ownerAllowed,
     };
     this.setCachedContext(guildId, userId, context);
     return context;
@@ -86,21 +88,6 @@ export class DiscordVoiceSpeakerContextResolver {
         return { id: userId, label: userId, memberRoleIds: [] };
       }
     }
-  }
-
-  private resolveIsOwner(identity: Pick<VoiceSpeakerIdentity, "id" | "name" | "tag">): boolean {
-    if (this.params.ownerAllowAll === true) {
-      return true;
-    }
-    return resolveDiscordOwnerAccess({
-      allowFrom: this.params.ownerAllowFrom,
-      sender: {
-        id: identity.id,
-        name: identity.name,
-        tag: identity.tag,
-      },
-      allowNameMatching: false,
-    }).ownerAllowed;
   }
 
   private resolveCacheKey(guildId: string, userId: string): string {

@@ -1,4 +1,3 @@
-// Discord plugin module implements directory live behavior.
 import type {
   ChannelDirectoryEntry,
   DirectoryConfigParams,
@@ -98,6 +97,7 @@ export async function listDiscordDirectoryPeersLive(
 
   const guilds = await listDiscordGuilds(token);
   const rows: ChannelDirectoryEntry[] = [];
+  const seenUserIds = new Set<string>();
   const limit = typeof params.limit === "number" && params.limit > 0 ? params.limit : 25;
 
   for (const guild of guilds) {
@@ -126,6 +126,10 @@ export async function listDiscordDirectoryPeersLive(
           user.username ? `@${user.username}` : null,
         ],
       });
+      if (seenUserIds.has(user.id)) {
+        continue;
+      }
+      seenUserIds.add(user.id);
       const name = member.nick?.trim() || user.global_name?.trim() || user.username?.trim();
       rows.push({
         kind: "user",

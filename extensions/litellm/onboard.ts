@@ -1,6 +1,6 @@
 // Litellm setup module handles plugin onboarding behavior.
 import {
-  createDefaultModelPresetAppliers,
+  createDefaultModelsPresetAppliers,
   type ModelDefinitionConfig,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-onboard";
@@ -29,28 +29,23 @@ export function buildLitellmModelDefinition(): ModelDefinitionConfig {
   };
 }
 
-const litellmPresetAppliers = createDefaultModelPresetAppliers({
-  primaryModelRef: LITELLM_DEFAULT_MODEL_REF,
-  resolveParams: (cfg: OpenClawConfig) => {
-    const existingProvider = cfg.models?.providers?.litellm as { baseUrl?: unknown } | undefined;
-    const resolvedBaseUrl =
-      typeof existingProvider?.baseUrl === "string" ? existingProvider.baseUrl.trim() : "";
+export const { applyConfig: applyLitellmConfig, applyProviderConfig: applyLitellmProviderConfig } =
+  createDefaultModelsPresetAppliers<[]>({
+    primaryModelRef: LITELLM_DEFAULT_MODEL_REF,
+    resolveParams: (cfg: OpenClawConfig) => {
+      const existingProvider = cfg.models?.providers?.litellm as { baseUrl?: unknown } | undefined;
+      const resolvedBaseUrl =
+        typeof existingProvider?.baseUrl === "string" ? existingProvider.baseUrl.trim() : "";
 
-    return {
-      providerId: "litellm",
-      api: "openai-completions" as const,
-      baseUrl: resolvedBaseUrl || LITELLM_BASE_URL,
-      defaultModel: buildLitellmModelDefinition(),
-      defaultModelId: LITELLM_DEFAULT_MODEL_ID,
-      aliases: [{ modelRef: LITELLM_DEFAULT_MODEL_REF, alias: "LiteLLM" }],
-    };
-  },
-});
-
-export function applyLitellmProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return litellmPresetAppliers.applyProviderConfig(cfg);
-}
-
-export function applyLitellmConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return litellmPresetAppliers.applyConfig(cfg);
-}
+      return {
+        providerId: "litellm",
+        api: "openai-completions" as const,
+        baseUrl: resolvedBaseUrl || LITELLM_BASE_URL,
+        // Replace mode disables discovery, so it still needs the configured default.
+        defaultModels:
+          resolvedBaseUrl && cfg.models?.mode !== "replace" ? [] : [buildLitellmModelDefinition()],
+        defaultModelId: LITELLM_DEFAULT_MODEL_ID,
+        aliases: [{ modelRef: LITELLM_DEFAULT_MODEL_REF, alias: "LiteLLM" }],
+      };
+    },
+  });

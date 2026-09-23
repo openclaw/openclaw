@@ -18,6 +18,7 @@ type DirectoryContractRef = {
 const threadingContractPluginIds = new Set<ChannelId>([
   "discord",
   "googlechat",
+  "line",
   "matrix",
   "mattermost",
   "msteams",
@@ -28,6 +29,7 @@ const threadingContractPluginIds = new Set<ChannelId>([
 ]);
 
 const directoryContractPluginIds = new Set<ChannelId>([
+  "buzz",
   "discord",
   "feishu",
   "googlechat",

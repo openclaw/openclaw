@@ -9,47 +9,26 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { createJiti } from "jiti/static";
-import * as bundledLlm from "openclaw/plugin-sdk/llm";
 // Static imports of packages that extensions may use.
 // These MUST be static so Bun bundles them into the compiled binary.
 // The virtualModules option then makes them available to extensions.
 import * as bundledTypebox from "typebox";
 import * as bundledTypeboxCompile from "typebox/compile";
+import * as bundledTypeboxError from "typebox/error";
 import * as bundledTypeboxFormat from "typebox/format";
+import * as bundledTypeboxGuard from "typebox/guard";
+import * as bundledTypeboxSchema from "typebox/schema";
+import * as bundledTypeboxSystem from "typebox/system";
+import * as bundledTypeboxType from "typebox/type";
 import * as bundledTypeboxValue from "typebox/value";
+import * as bundledAgentCore from "../../../plugin-sdk/agent-core.js";
+import * as bundledLlm from "../../../plugin-sdk/llm.js";
 import { installOpenClawInternalCorePackageNativeResolver } from "../../../plugins/plugin-sdk-native-resolver.js";
 import {
   buildPluginLoaderAliasMap,
   buildPluginLoaderJitiOptions,
 } from "../../../plugins/sdk-alias.js";
-import { isBunBinary } from "../../config.js";
-import {
-  Agent,
-  bashExecutionToText,
-  buildSessionContext,
-  calculateContextTokens,
-  collectEntriesForBranchSummaryFromBranches,
-  compact,
-  estimateContextTokens,
-  estimateTokens,
-  findCutPoint,
-  findTurnStartIndex,
-  generateBranchSummary,
-  generateSummary,
-  getLastAssistantUsage,
-  openClawAgentCoreRuntime,
-  prepareBranchEntries,
-  prepareCompaction,
-  runAgentLoop,
-  serializeConversation,
-  shouldCompact,
-  uuidv7,
-  BRANCH_SUMMARY_PREFIX,
-  BRANCH_SUMMARY_SUFFIX,
-  COMPACTION_SUMMARY_PREFIX,
-  COMPACTION_SUMMARY_SUFFIX,
-  DEFAULT_COMPACTION_SETTINGS,
-} from "../../runtime/index.js";
+import { isBunBinary } from "../../package-metadata.js";
 import { createEventBus, type EventBus } from "../event-bus.js";
 import type { ExecOptions } from "../exec.js";
 import { execCommand } from "../exec.js";
@@ -68,39 +47,16 @@ import type {
   ToolDefinition,
 } from "./types.js";
 
-/** Modules available to extensions via virtualModules (for compiled Bun binary) */
-const bundledAgentCore = {
-  Agent,
-  bashExecutionToText,
-  buildSessionContext,
-  calculateContextTokens,
-  collectEntriesForBranchSummaryFromBranches,
-  compact,
-  estimateContextTokens,
-  estimateTokens,
-  findCutPoint,
-  findTurnStartIndex,
-  generateBranchSummary,
-  generateSummary,
-  getLastAssistantUsage,
-  openClawAgentCoreRuntime,
-  prepareBranchEntries,
-  prepareCompaction,
-  runAgentLoop,
-  serializeConversation,
-  shouldCompact,
-  uuidv7,
-  BRANCH_SUMMARY_PREFIX,
-  BRANCH_SUMMARY_SUFFIX,
-  COMPACTION_SUMMARY_PREFIX,
-  COMPACTION_SUMMARY_SUFFIX,
-  DEFAULT_COMPACTION_SETTINGS,
-};
-
+/** Canonical host modules shared by source extensions and compiled binaries. */
 const VIRTUAL_MODULES: Record<string, unknown> = {
   typebox: bundledTypebox,
   "typebox/compile": bundledTypeboxCompile,
+  "typebox/error": bundledTypeboxError,
   "typebox/format": bundledTypeboxFormat,
+  "typebox/guard": bundledTypeboxGuard,
+  "typebox/schema": bundledTypeboxSchema,
+  "typebox/system": bundledTypeboxSystem,
+  "typebox/type": bundledTypeboxType,
   "typebox/value": bundledTypeboxValue,
   "@sinclair/typebox": bundledTypebox,
   "@sinclair/typebox/compile": bundledTypeboxCompile,
@@ -116,10 +72,13 @@ const VIRTUAL_MODULES: Record<string, unknown> = {
 
 const require = createRequire(import.meta.url);
 
-let aliases: Record<string, string> | null = null;
 let createJitiLoaderFactory: typeof createJiti | undefined;
-let extensionSourceTransformLoader: ReturnType<typeof createJiti> | undefined;
 let nativeExtensionLoadCounter = 0;
+// One cwd slot bounds the process cache. The generation keeps an in-flight
+// load from repopulating it after an explicit reload or cwd change.
+let extensionCacheCwd: string | undefined;
+let extensionCacheGeneration = 0;
+const extensionFactoryCache = new Map<string, ExtensionFactory>();
 const EXTENSION_LOADER_ALIAS_IMPORT_PATTERN =
   /(?:@openclaw\/plugin-sdk|openclaw\/plugin-sdk|@sinclair\/typebox|typebox)(?:\/[A-Za-z0-9_-]+)?/u;
 const RELATIVE_EXTENSION_IMPORT_PATTERN =
@@ -136,43 +95,6 @@ async function loadCreateJitiLoaderFactory(): Promise<typeof createJiti> {
   }
   createJitiLoaderFactory = loaded.createJiti;
   return createJitiLoaderFactory;
-}
-
-function resolveExtensionSafeAgentSessionsEntry(): string {
-  const currentDirname = path.dirname(fileURLToPath(import.meta.url));
-  const jsEntry = path.resolve(currentDirname, "..", "extension-sdk.js");
-  return fs.existsSync(jsEntry) ? jsEntry : path.resolve(currentDirname, "..", "extension-sdk.ts");
-}
-
-function getExtensionLoaderAliases(): Record<string, string> {
-  if (aliases) {
-    return aliases;
-  }
-
-  const agentSessionsEntry = resolveExtensionSafeAgentSessionsEntry();
-  const typeboxEntry = require.resolve("typebox");
-  const typeboxCompileEntry = require.resolve("typebox/compile");
-  const typeboxFormatEntry = require.resolve("typebox/format");
-  const typeboxValueEntry = require.resolve("typebox/value");
-  const loaderModulePath = fileURLToPath(import.meta.url);
-
-  aliases = {
-    ...buildPluginLoaderAliasMap(loaderModulePath, process.argv[1], import.meta.url),
-    // The public agent-sessions export includes the resource loader. Extensions
-    // load through the resource loader, so use the cycle-safe SDK barrel here.
-    "openclaw/plugin-sdk/agent-sessions": agentSessionsEntry,
-    "@openclaw/plugin-sdk/agent-sessions": agentSessionsEntry,
-    typebox: typeboxEntry,
-    "typebox/compile": typeboxCompileEntry,
-    "typebox/format": typeboxFormatEntry,
-    "typebox/value": typeboxValueEntry,
-    "@sinclair/typebox": typeboxEntry,
-    "@sinclair/typebox/compile": typeboxCompileEntry,
-    "@sinclair/typebox/format": typeboxFormatEntry,
-    "@sinclair/typebox/value": typeboxValueEntry,
-  };
-
-  return aliases;
 }
 
 const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
@@ -201,6 +123,39 @@ function resolvePath(extPath: string, cwd: string): string {
 }
 
 type HandlerFn = (...args: unknown[]) => Promise<unknown>;
+
+type ExtensionCacheScope = {
+  cwd: string;
+  generation: number;
+};
+
+type ExtensionLoadContext = {
+  cacheScope?: ExtensionCacheScope;
+  sourceTransformLoader?: ReturnType<typeof createJiti>;
+};
+
+export function clearExtensionCache(): void {
+  extensionFactoryCache.clear();
+  extensionCacheCwd = undefined;
+  extensionCacheGeneration++;
+}
+
+function useExtensionCacheCwd(cwd: string): ExtensionCacheScope {
+  const resolvedCwd = path.resolve(expandPath(cwd));
+  if (extensionCacheCwd !== undefined && extensionCacheCwd !== resolvedCwd) {
+    clearExtensionCache();
+  }
+  extensionCacheCwd = resolvedCwd;
+  return { cwd: resolvedCwd, generation: extensionCacheGeneration };
+}
+
+function isCurrentCacheScope(scope: ExtensionCacheScope | undefined): scope is ExtensionCacheScope {
+  return (
+    scope !== undefined &&
+    extensionCacheCwd === scope.cwd &&
+    extensionCacheGeneration === scope.generation
+  );
+}
 
 /**
  * Create a runtime with throwing stubs for action methods.
@@ -400,7 +355,7 @@ function createExtensionAPI(
 
     setThinkingLevel(level) {
       runtime.assertActive();
-      runtime.setThinkingLevel(level);
+      return runtime.setThinkingLevel(level);
     },
 
     registerProvider(name: string, config: ProviderConfig) {
@@ -482,35 +437,49 @@ async function loadNativeExtensionModule(
 
 async function loadExtensionSourceTransformModule(
   extensionPath: string,
+  context: ExtensionLoadContext,
 ): Promise<ExtensionFactory | undefined> {
-  if (!extensionSourceTransformLoader) {
+  if (!context.sourceTransformLoader) {
     installOpenClawInternalCorePackageNativeResolver({ moduleUrl: import.meta.url });
     const createJitiLoader = await loadCreateJitiLoaderFactory();
-    extensionSourceTransformLoader = createJitiLoader(import.meta.url, {
-      ...(isBunBinary
-        ? {
-            ...buildPluginLoaderJitiOptions({}),
-            // Bun binaries need virtual modules because extension SDK files are
-            // bundled into the executable rather than present on disk.
-            tryNative: false,
-            virtualModules: VIRTUAL_MODULES,
-          }
-        : buildPluginLoaderJitiOptions(getExtensionLoaderAliases())),
+    const aliases = isBunBinary
+      ? {}
+      : buildPluginLoaderAliasMap(fileURLToPath(import.meta.url), process.argv[1], import.meta.url);
+    context.sourceTransformLoader = createJitiLoader(import.meta.url, {
+      ...buildPluginLoaderJitiOptions(aliases),
+      // Share the host SDK graph; entry-file aliases misresolve package subpaths
+      // and re-evaluate SDK dependencies instead of using their native owners.
+      virtualModules: VIRTUAL_MODULES,
+      // Extension entry modules must bypass the native ESM cache so an explicit
+      // reload observes edited source. Product modules stay native via nativeModules.
+      tryNative: false,
       moduleCache: false,
     });
   }
 
   return resolveExtensionFactory(
-    await extensionSourceTransformLoader.import(extensionPath, { default: true }),
+    await context.sourceTransformLoader.import(extensionPath, { default: true }),
   );
 }
 
-async function loadExtensionModule(extensionPath: string) {
-  if (shouldLoadExtensionWithNativeImport(extensionPath)) {
-    return loadNativeExtensionModule(extensionPath);
+async function loadExtensionModule(
+  extensionPath: string,
+  context: ExtensionLoadContext,
+): Promise<ExtensionFactory | undefined> {
+  if (isCurrentCacheScope(context.cacheScope)) {
+    const cachedFactory = extensionFactoryCache.get(extensionPath);
+    if (cachedFactory) {
+      return cachedFactory;
+    }
   }
 
-  return loadExtensionSourceTransformModule(extensionPath);
+  const factory = shouldLoadExtensionWithNativeImport(extensionPath)
+    ? await loadNativeExtensionModule(extensionPath)
+    : await loadExtensionSourceTransformModule(extensionPath, context);
+  if (factory && isCurrentCacheScope(context.cacheScope)) {
+    extensionFactoryCache.set(extensionPath, factory);
+  }
+  return factory;
 }
 
 /**
@@ -541,11 +510,12 @@ async function loadExtension(
   cwd: string,
   eventBus: EventBus,
   runtime: ExtensionRuntime,
+  context: ExtensionLoadContext,
 ): Promise<{ extension: Extension | null; error: string | null }> {
   const resolvedPath = resolvePath(extensionPath, cwd);
 
   try {
-    const factory = await loadExtensionModule(resolvedPath);
+    const factory = await loadExtensionModule(resolvedPath, context);
     if (!factory) {
       return {
         extension: null,
@@ -583,7 +553,7 @@ export async function loadExtensionFromFactory(
 /**
  * Load extensions from paths.
  */
-export async function loadExtensions(
+export async function loadExtensionsCached(
   paths: string[],
   cwd: string,
   eventBus?: EventBus,
@@ -592,9 +562,18 @@ export async function loadExtensions(
   const errors: Array<{ path: string; error: string }> = [];
   const resolvedEventBus = eventBus ?? createEventBus();
   const runtime = createExtensionRuntime();
+  const cacheScope = useExtensionCacheCwd(cwd);
+  const resolvedCwd = cacheScope.cwd;
+  const context: ExtensionLoadContext = { cacheScope };
 
   for (const extPath of paths) {
-    const { extension, error } = await loadExtension(extPath, cwd, resolvedEventBus, runtime);
+    const { extension, error } = await loadExtension(
+      extPath,
+      resolvedCwd,
+      resolvedEventBus,
+      runtime,
+      context,
+    );
 
     if (error) {
       errors.push({ path: extPath, error });

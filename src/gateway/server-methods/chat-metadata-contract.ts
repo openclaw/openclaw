@@ -1,0 +1,44 @@
+import type { ModelChoice } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
+import type { ChatAccountSelection } from "../../../packages/gateway-protocol/src/schema/users.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
+import type { UserModelAccountSelection } from "../model-account-authority.js";
+
+export type ChatMetadataSessionEntry = Partial<
+  Pick<
+    SessionEntry,
+    | "sessionId"
+    | "lifecycleRevision"
+    | "sessionStartedAt"
+    | "acp"
+    | "agentHarnessId"
+    | "agentRuntimeOverride"
+    | "modelSelectionLocked"
+    | "pluginOwnerId"
+    | "providerOverride"
+    | "modelOverride"
+    | "authProfileOverride"
+    | "authProfileOverrideSource"
+    | "authProfileOverrideCompactionCount"
+  >
+>;
+
+export type ChatMetadataReadParams = {
+  agentId: string;
+  sessionKey?: string;
+  storePath?: string;
+  requesterProfileId?: string;
+  sessionEntry?: ChatMetadataSessionEntry;
+  /** Saved reads retain their selected row and physical store until response settlement. */
+  isCurrent?: () => boolean;
+  assertCurrent?: () => void;
+  release?: () => void;
+  draftAccountSelection?: UserModelAccountSelection;
+};
+
+export type ChatMetadataResult = {
+  commands?: unknown[];
+  models?: ModelChoice[];
+  swarmEnabled: boolean;
+  runtimeSelectionLocked?: boolean;
+  accountSelection?: ChatAccountSelection;
+};

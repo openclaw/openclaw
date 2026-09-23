@@ -1,10 +1,11 @@
 import type { HealthFinding } from "openclaw/plugin-sdk/health";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { PolicyEvidence, PolicySandboxPostureEvidence } from "../policy-state.js";
-import { CHECK_IDS, POLICY_CHECK_IDS } from "./check-ids.js";
+import { CHECK_IDS } from "./check-ids.js";
 import { SANDBOX_CONTAINER_POLICY_RULES } from "./metadata.js";
+import { policyEvidenceFinding as sandboxPostureFinding } from "./policy-evidence-finding.js";
 import { agentScopedPolicyTargets, scopedAgentIdMatches } from "./policy-scope.js";
-import { sandboxPolicyShapeFinding } from "./sandbox-gateway-shapes.js";
+import { posturePolicyShapeFinding } from "./posture-shapes.js";
 import { hasValidScopedPolicy } from "./scoped-policy-shape.js";
 import { ocPathSegment, readPolicyBoolean, readStringList } from "./utils.js";
 
@@ -21,7 +22,7 @@ export function sandboxPostureFindings(
   const sandboxPolicy = policy.sandbox;
   if (
     isRecord(sandboxPolicy) &&
-    sandboxPolicyShapeFinding(sandboxPolicy, { policyDocName, policyPath }) === undefined
+    posturePolicyShapeFinding("sandbox", sandboxPolicy, { policyDocName, policyPath }) === undefined
   ) {
     findings.push(
       ...sandboxPostureFindingsForRule(
@@ -39,7 +40,7 @@ export function sandboxPostureFindings(
   for (const target of agentScopedPolicyTargets(policy)) {
     const scopedSandboxPolicy = target.overlay.sandbox;
     if (
-      sandboxPolicyShapeFinding(scopedSandboxPolicy, {
+      posturePolicyShapeFinding("sandbox", scopedSandboxPolicy, {
         policyDocName,
         policyPath,
         targetPrefix: `scopes/${ocPathSegment(target.scopeName)}/sandbox`,
@@ -73,8 +74,7 @@ function sandboxPostureFindingsForRule(
     return [];
   }
   return [
-    ...sandboxModeFindings(sandboxPolicy, policyDocName, requirementBase, evidence, evidenceFilter),
-    ...sandboxBackendFindings(
+    ...sandboxAllowlistFindings(
       sandboxPolicy,
       policyDocName,
       requirementBase,
@@ -165,7 +165,7 @@ function scopedSandboxDefaultDisabledForAgent(
         candidate.kind === "backend" &&
         scopedAgentIdMatches(candidate.agentId, policyAgentId),
     );
-    if (typeof backend?.value === "string" && backend.value.toLowerCase() !== "docker") {
+    if (typeof backend?.value === "string" && !isObservableContainerSandboxBackend(backend.value)) {
       return true;
     }
   }
@@ -213,53 +213,51 @@ function sandboxPostureEntriesDescribeSameField(
   );
 }
 
-function sandboxModeFindings(
+function sandboxAllowlistFindings(
   sandboxPolicy: Record<string, unknown>,
   policyDocName: string,
   requirementBase: string,
   evidence: PolicyEvidence,
   evidenceFilter: (entry: PolicySandboxPostureEvidence) => boolean,
 ): readonly HealthFinding[] {
-  const allowed = new Set(readStringList(sandboxPolicy, ["requireMode"]));
-  if (allowed.size === 0) {
-    return [];
-  }
-  return sandboxPostureEntries(evidence, "mode")
-    .filter(evidenceFilter)
-    .filter((entry) => typeof entry.value === "string" && !allowed.has(entry.value.toLowerCase()))
-    .map((entry) =>
-      sandboxPostureFinding(entry, {
+  // Keep mode before backend: finding order is part of the policy attestation.
+  return (
+    [
+      {
+        kind: "mode",
+        key: "requireMode",
         checkId: CHECK_IDS.policySandboxModeUnapproved,
-        message: `${sandboxPostureLabel(entry)} uses unapproved sandbox mode '${entry.value ?? ""}'.`,
-        requirement: `oc://${policyDocName}/${requirementBase}/requireMode`,
         fixHint:
-          "Set agents.defaults.sandbox.mode or agents.list[].sandbox.mode to an approved value.",
-      }),
-    );
+          "Set agents.defaults.sandbox.mode or agents.entries.<id>.sandbox.mode to an approved value.",
+      },
+      {
+        kind: "backend",
+        key: "allowBackends",
+        checkId: CHECK_IDS.policySandboxBackendUnapproved,
+        fixHint: "Use an approved sandbox backend or update policy after review.",
+      },
+    ] as const
+  ).flatMap((rule) => {
+    const allowed = new Set(readStringList(sandboxPolicy, [rule.key]));
+    if (allowed.size === 0) {
+      return [];
+    }
+    return sandboxPostureEntries(evidence, rule.kind)
+      .filter(evidenceFilter)
+      .filter((entry) => typeof entry.value === "string" && !allowed.has(entry.value.toLowerCase()))
+      .map((entry) =>
+        sandboxPostureFinding(entry, {
+          checkId: rule.checkId,
+          message: `${sandboxPostureLabel(entry)} uses unapproved sandbox ${rule.kind} '${entry.value ?? ""}'.`,
+          requirement: `oc://${policyDocName}/${requirementBase}/${rule.key}`,
+          fixHint: rule.fixHint,
+        }),
+      );
+  });
 }
 
-function sandboxBackendFindings(
-  sandboxPolicy: Record<string, unknown>,
-  policyDocName: string,
-  requirementBase: string,
-  evidence: PolicyEvidence,
-  evidenceFilter: (entry: PolicySandboxPostureEvidence) => boolean,
-): readonly HealthFinding[] {
-  const allowed = new Set(readStringList(sandboxPolicy, ["allowBackends"]));
-  if (allowed.size === 0) {
-    return [];
-  }
-  return sandboxPostureEntries(evidence, "backend")
-    .filter(evidenceFilter)
-    .filter((entry) => typeof entry.value === "string" && !allowed.has(entry.value.toLowerCase()))
-    .map((entry) =>
-      sandboxPostureFinding(entry, {
-        checkId: CHECK_IDS.policySandboxBackendUnapproved,
-        message: `${sandboxPostureLabel(entry)} uses unapproved sandbox backend '${entry.value ?? ""}'.`,
-        requirement: `oc://${policyDocName}/${requirementBase}/allowBackends`,
-        fixHint: "Use an approved sandbox backend or update policy after review.",
-      }),
-    );
+function isObservableContainerSandboxBackend(value: string): boolean {
+  return value.toLowerCase() === "docker" || value.toLowerCase() === "podman";
 }
 
 function sandboxContainerPostureUnobservableFindings(
@@ -277,7 +275,10 @@ function sandboxContainerPostureUnobservableFindings(
   }
   return sandboxPostureEntries(evidence, "backend")
     .filter(evidenceFilter)
-    .filter((entry) => typeof entry.value === "string" && entry.value.toLowerCase() !== "docker")
+    .filter(
+      (entry) =>
+        typeof entry.value === "string" && !isObservableContainerSandboxBackend(entry.value),
+    )
     .flatMap((entry) =>
       enabledRules.map((rule) =>
         sandboxPostureFinding(entry, {
@@ -443,28 +444,6 @@ function sandboxPostureEntries(
   kind: PolicySandboxPostureEvidence["kind"],
 ): readonly PolicySandboxPostureEvidence[] {
   return (evidence.sandboxPosture ?? []).filter((entry) => entry.kind === kind);
-}
-
-function sandboxPostureFinding(
-  entry: PolicySandboxPostureEvidence,
-  params: {
-    readonly checkId: (typeof POLICY_CHECK_IDS)[number];
-    readonly message: string;
-    readonly requirement: string;
-    readonly fixHint: string;
-  },
-): HealthFinding {
-  return {
-    checkId: params.checkId,
-    severity: "error",
-    message: params.message,
-    source: "policy",
-    path: "openclaw config",
-    ocPath: entry.source,
-    target: entry.source,
-    requirement: params.requirement,
-    fixHint: params.fixHint,
-  };
 }
 
 function sandboxPostureLabel(entry: PolicySandboxPostureEvidence): string {

@@ -1,10 +1,10 @@
 // Shared provider usage labels, ids, and timeout helpers.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import type { UsageProviderId } from "./provider-usage.types.js";
 
-/** Default timeout for provider usage collection. */
-export const DEFAULT_TIMEOUT_MS = 5000;
+/** One provider cannot hold the aggregate usage response beyond this deadline. */
+export const PROVIDER_USAGE_TIMEOUT_MS = 5000;
 
 export const PROVIDER_LABELS = {
   anthropic: "Claude",
@@ -16,6 +16,7 @@ export const PROVIDER_LABELS = {
   openai: "OpenAI",
   openrouter: "OpenRouter",
   venice: "Venice",
+  xai: "xAI",
   xiaomi: "Xiaomi",
   "xiaomi-token-plan": "Xiaomi Token Plan",
   zai: "z.ai",
@@ -25,10 +26,6 @@ export const PROVIDER_LABELS = {
 export function providerUsageLabel(provider: string): string | undefined {
   const labels: Readonly<Record<string, string | undefined>> = PROVIDER_LABELS;
   return labels[provider];
-}
-
-export function resolveProviderUsageDisplayName(provider: string): string {
-  return providerUsageLabel(provider) ?? provider;
 }
 
 /** Returns true for providers whose usage endpoint is only meaningful with OAuth/token auth. */
@@ -81,16 +78,24 @@ export const ignoredErrors = new Set([
 export const clampPercent = (value: number) =>
   Math.max(0, Math.min(100, Number.isFinite(value) ? value : 0));
 
-/** Resolves a promise with a fallback when usage collection exceeds the timeout. */
-export const withTimeout = async <T>(work: Promise<T>, ms: number, fallback: T): Promise<T> => {
+/** Aborts usage collection and returns a fallback when its deadline expires. */
+export const raceUsageTimeout = async <T>(
+  work: (signal: AbortSignal) => Promise<T>,
+  ms: number,
+  fallback: T,
+): Promise<T> => {
   let timeout: NodeJS.Timeout | undefined;
+  const controller = new AbortController();
   const timeoutMs = resolveTimerTimeoutMs(ms, 1);
   try {
     return await Promise.race([
-      work,
       new Promise<T>((resolve) => {
-        timeout = setTimeout(() => resolve(fallback), timeoutMs);
+        timeout = setTimeout(() => {
+          resolve(fallback);
+          controller.abort(new DOMException("Usage collection timed out", "TimeoutError"));
+        }, timeoutMs);
       }),
+      work(controller.signal),
     ]);
   } finally {
     if (timeout) {

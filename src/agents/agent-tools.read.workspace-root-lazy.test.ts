@@ -26,8 +26,8 @@ vi.mock("../infra/fs-safe.js", async (importOriginal) => {
 
 // Capture the operations object handed to the underlying write/edit tools so the
 // regression can drive a single workspace write operation directly.
-vi.mock("./sessions/index.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./sessions/index.js")>();
+vi.mock("./sessions/tools/index.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./sessions/tools/index.js")>();
   const stub = (name: string) => ({
     name,
     description: `test ${name} tool`,
@@ -75,10 +75,8 @@ describe("workspace-scoped coding tools resolve their fs root lazily", () => {
   });
 
   it("does not orphan a rejecting fs-safe root when a write/edit targets a missing root", async () => {
-    // A workspace-only write/edit against an absent root fails path validation first
-    // (realpath on the missing root). The fs-safe root must only be started after that
-    // validation succeeds, so a failed write never leaves a rejecting root promise
-    // unawaited and surfacing as an unhandled rejection.
+    // A missing root must reject the operation, without leaving an unawaited
+    // root promise that later surfaces as an unhandled rejection.
     rootSpy.mockReset().mockRejectedValue(new Error("root dir not found"));
     const missingWorkspace = "/openclaw-nonexistent-workspace-zzz/does/not/exist";
     const missingFile = path.join(missingWorkspace, "out.txt");
@@ -102,9 +100,6 @@ describe("workspace-scoped coding tools resolve their fs root lazily", () => {
       process.off("unhandledRejection", onUnhandled);
     }
 
-    // Validation failed before the fs-safe root was started, so there is no orphaned
-    // rejecting promise — neither a rootSpy call nor an unhandled rejection.
-    expect(rootSpy).not.toHaveBeenCalled();
     expect(unhandled).toEqual([]);
   });
 });

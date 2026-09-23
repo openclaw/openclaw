@@ -66,7 +66,11 @@ export async function pokeUrbitChannel(
       const errorText = await readResponseTextLimited(response, TLON_ERROR_BODY_LIMIT_BYTES).catch(
         () => "",
       );
-      throw new Error(`Poke failed: ${response.status}${errorText ? ` - ${errorText}` : ""}`);
+      throw new UrbitHttpError({
+        operation: "Poke",
+        status: response.status,
+        bodyText: errorText || undefined,
+      });
     }
     return pokeId;
   } finally {
@@ -75,7 +79,9 @@ export async function pokeUrbitChannel(
 }
 
 export async function scryUrbitPath(
-  deps: Pick<UrbitChannelDeps, "baseUrl" | "cookie" | "ssrfPolicy" | "lookupFn" | "fetchImpl">,
+  deps: Pick<UrbitChannelDeps, "baseUrl" | "cookie" | "ssrfPolicy" | "lookupFn" | "fetchImpl"> & {
+    beforeRequest?: () => void;
+  },
   params: { path: string; auditContext: string },
 ): Promise<unknown> {
   const scryPath = `/~/scry${params.path}`;
@@ -89,13 +95,17 @@ export async function scryUrbitPath(
     ssrfPolicy: deps.ssrfPolicy,
     lookupFn: deps.lookupFn,
     fetchImpl: deps.fetchImpl,
+    beforeRequest: deps.beforeRequest,
     timeoutMs: 30_000,
     auditContext: params.auditContext,
   });
 
   try {
     if (!response.ok) {
-      throw new Error(`Scry failed: ${response.status} for path ${params.path}`);
+      throw new UrbitHttpError({
+        operation: `Scry for path ${params.path}`,
+        status: response.status,
+      });
     }
     // Successful scry bodies come from a remote Urbit and have no protocol size bound.
     // Keep the shared JSON ceiling while retaining the path needed to identify the endpoint.

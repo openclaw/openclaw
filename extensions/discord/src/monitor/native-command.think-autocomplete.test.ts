@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createEmptyPluginRegistry,
   setActivePluginRegistry,
+  useBundledProviderPolicyArtifactsForTest,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   clearSessionStoreCacheForTest,
@@ -13,6 +14,7 @@ import {
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChannelType, type AutocompleteInteraction } from "../internal/discord.js";
+import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtime.js";
 import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
 type ConversationRuntimeModule = typeof import("openclaw/plugin-sdk/conversation-binding-runtime");
@@ -42,12 +44,9 @@ const resolveConfiguredBindingRouteMock = vi.hoisted(() =>
   vi.fn<ResolveConfiguredBindingRoute>(() => createUnboundConfiguredRouteResult()),
 );
 const providerThinkingMocks = vi.hoisted(() => ({
-  resolveProviderBinaryThinking: vi.fn(),
-  resolveProviderDefaultThinkingLevel: vi.fn(),
   resolveProviderThinkingProfile: vi.fn(),
-  resolveProviderXHighThinking: vi.fn(),
 }));
-const buildModelsProviderDataMock = vi.hoisted(() => vi.fn());
+const buildPreparedModelsProviderDataMock = vi.hoisted(() => vi.fn());
 
 type ConfiguredBindingRoute = ConfiguredBindingRouteResult;
 type ConfiguredBindingResolution = NonNullable<ConfiguredBindingRoute["bindingResolution"]>;
@@ -99,7 +98,11 @@ vi.mock("openclaw/plugin-sdk/conversation-binding-runtime", async () => {
 });
 
 vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
+  getPreparedModelCatalogSnapshot: vi.fn(() => ({ entries: [], routeVariants: [] })),
+  loadPreparedModelCatalog: vi.fn(async () => []),
   normalizeProviderId: (value: string) => value.trim().toLowerCase(),
+  resolveAgentDir: (_cfg: OpenClawConfig, agentId: string) => `/tmp/agents/${agentId}/agent`,
+  resolveAgentWorkspaceDir: (_cfg: OpenClawConfig, agentId: string) => `/tmp/workspaces/${agentId}`,
   resolveDefaultModelForAgent: (params: { cfg: OpenClawConfig }) => {
     const configuredModel = params.cfg.agents?.defaults?.model;
     const primary =
@@ -120,8 +123,9 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
   },
 }));
 
-vi.mock("openclaw/plugin-sdk/models-provider-runtime", () => ({
-  buildModelsProviderData: buildModelsProviderDataMock,
+vi.mock("openclaw/plugin-sdk/models-provider-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/models-provider-runtime")>()),
+  buildPreparedModelsProviderData: buildPreparedModelsProviderDataMock,
 }));
 
 const STORE_PATH = path.join(
@@ -162,23 +166,8 @@ function installProviderThinkingRegistryForTest(): void {
       label: "Discord Test Thinking",
       aliases: ["anthropic", "openai"],
       auth: [],
-      isBinaryThinking: (context) =>
-        providerThinkingMocks.resolveProviderBinaryThinking({
-          provider: context.provider,
-          context,
-        }),
-      supportsXHighThinking: (context) =>
-        providerThinkingMocks.resolveProviderXHighThinking({
-          provider: context.provider,
-          context,
-        }),
       resolveThinkingProfile: (context) =>
         providerThinkingMocks.resolveProviderThinkingProfile({
-          provider: context.provider,
-          context,
-        }),
-      resolveDefaultThinkingLevel: (context) =>
-        providerThinkingMocks.resolveProviderDefaultThinkingLevel({
           provider: context.provider,
           context,
         }),
@@ -200,15 +189,21 @@ async function loadDiscordThinkAutocompleteModulesForTest() {
 
 describe("discord native /think autocomplete", () => {
   beforeAll(async () => {
-    providerThinkingMocks.resolveProviderBinaryThinking.mockReturnValue(undefined);
-    providerThinkingMocks.resolveProviderDefaultThinkingLevel.mockReturnValue(undefined);
-    providerThinkingMocks.resolveProviderThinkingProfile.mockReturnValue(undefined);
-    providerThinkingMocks.resolveProviderXHighThinking.mockImplementation(({ provider, context }) =>
-      provider === "openai" && ["gpt-5.4", "gpt-5.4-pro"].includes(context.modelId)
-        ? true
-        : undefined,
+    providerThinkingMocks.resolveProviderThinkingProfile.mockImplementation(
+      ({ provider, context }) =>
+        provider === "openai" && ["gpt-5.4", "gpt-5.4-pro"].includes(context.modelId)
+          ? {
+              levels: [
+                { id: "off" },
+                { id: "low" },
+                { id: "medium" },
+                { id: "high" },
+                { id: "xhigh" },
+              ],
+            }
+          : undefined,
     );
-    buildModelsProviderDataMock.mockResolvedValue({
+    buildPreparedModelsProviderDataMock.mockResolvedValue({
       byProvider: new Map<string, Set<string>>(),
       providers: [],
       resolvedDefault: {
@@ -231,17 +226,20 @@ describe("discord native /think autocomplete", () => {
     ensureConfiguredBindingRouteReadyMock.mockResolvedValue({ ok: true });
     resolveConfiguredBindingRouteMock.mockReset();
     resolveConfiguredBindingRouteMock.mockReturnValue(createUnboundConfiguredRouteResult());
-    providerThinkingMocks.resolveProviderBinaryThinking.mockReset();
-    providerThinkingMocks.resolveProviderBinaryThinking.mockReturnValue(undefined);
-    providerThinkingMocks.resolveProviderDefaultThinkingLevel.mockReset();
-    providerThinkingMocks.resolveProviderDefaultThinkingLevel.mockReturnValue(undefined);
     providerThinkingMocks.resolveProviderThinkingProfile.mockReset();
-    providerThinkingMocks.resolveProviderThinkingProfile.mockReturnValue(undefined);
-    providerThinkingMocks.resolveProviderXHighThinking.mockReset();
-    providerThinkingMocks.resolveProviderXHighThinking.mockImplementation(({ provider, context }) =>
-      provider === "openai" && ["gpt-5.4", "gpt-5.4-pro"].includes(context.modelId)
-        ? true
-        : undefined,
+    providerThinkingMocks.resolveProviderThinkingProfile.mockImplementation(
+      ({ provider, context }) =>
+        provider === "openai" && ["gpt-5.4", "gpt-5.4-pro"].includes(context.modelId)
+          ? {
+              levels: [
+                { id: "off" },
+                { id: "low" },
+                { id: "medium" },
+                { id: "high" },
+                { id: "xhigh" },
+              ],
+            }
+          : undefined,
     );
     installProviderThinkingRegistryForTest();
     await saveSessionOverride({
@@ -313,6 +311,7 @@ describe("discord native /think autocomplete", () => {
     expect(context).toEqual({
       provider: "openai",
       model: "gpt-5.4",
+      agentId: "main",
       agentRuntime: "codex",
     });
 
@@ -374,6 +373,7 @@ describe("discord native /think autocomplete", () => {
       expect(context).toEqual({
         provider: "openai",
         model: "gpt-5.6-luna",
+        agentId: "main",
         agentRuntime: expectedRuntime,
       });
 
@@ -441,7 +441,7 @@ describe("discord native /think autocomplete", () => {
     expect(values).toContain("max");
   });
 
-  it("falls back when a configured binding is unavailable", async () => {
+  it("reads configured binding choices without preparing its runtime", async () => {
     const cfg = createConfig();
     resolveConfiguredBindingRouteMock.mockImplementation(createConfiguredRouteResult);
     ensureConfiguredBindingRouteReadyMock.mockResolvedValue({
@@ -471,8 +471,8 @@ describe("discord native /think autocomplete", () => {
       threadBindings: createNoopThreadBindingManager("default"),
     });
 
-    expect(context).toBeNull();
-    expect(ensureConfiguredBindingRouteReadyMock).toHaveBeenCalledTimes(1);
+    expect(context).toMatchObject({ provider: "openai", model: "gpt-5.4", agentId: "main" });
+    expect(ensureConfiguredBindingRouteReadyMock).not.toHaveBeenCalled();
 
     const { command, levelArg } = requireThinkLevelCommand();
     const choices = resolveCommandArgChoices({
@@ -484,6 +484,10 @@ describe("discord native /think autocomplete", () => {
       catalog: [],
     });
     const values = choices.map((choice) => choice.value);
-    expect(values).not.toContain("xhigh");
+    expect(values).toContain("xhigh");
   });
 });
+
+installDiscordIngressTestRuntime();
+
+useBundledProviderPolicyArtifactsForTest(["openai", "anthropic"]);

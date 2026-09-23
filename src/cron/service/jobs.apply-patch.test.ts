@@ -1,9 +1,10 @@
 // Cron job patch tests cover applying partial updates to scheduled jobs.
+import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it } from "vitest";
 import { resolveCronDeliveryPlan, resolveFailureDestination } from "../delivery-plan.js";
 import { projectCronJobThroughStorageCodec } from "../store/row-codec.js";
-import type { CronJob } from "../types.js";
-import { applyJobPatch } from "./jobs.js";
+import type { CronJob, CronJobCreate, CronJobPatch } from "../types.js";
+import { applyJobPatch, createJob } from "./jobs.js";
 
 function makeJob(overrides: Partial<CronJob> = {}): CronJob {
   const now = Date.now();
@@ -22,6 +23,130 @@ function makeJob(overrides: Partial<CronJob> = {}): CronJob {
     ...overrides,
   };
 }
+
+describe("applyJobPatch schedule retention", () => {
+  it.each([
+    { schedule: { kind: "every" as const, everyMs: 60_000 }, deleteAfterRun: undefined },
+    { schedule: { kind: "every" as const, everyMs: 60_000 }, deleteAfterRun: false },
+    { schedule: { kind: "cron" as const, expr: "0 * * * *" }, deleteAfterRun: undefined },
+    { schedule: { kind: "cron" as const, expr: "0 * * * *" }, deleteAfterRun: false },
+  ])("defaults $schedule.kind to cleanup when converting it to at", (previous) => {
+    const job = makeJob(previous);
+
+    applyJobPatch(job, { schedule: { kind: "at", at: "2026-07-19T09:00:00.000Z" } });
+
+    expect(job.schedule.kind).toBe("at");
+    expect(job.deleteAfterRun).toBe(true);
+  });
+
+  it("preserves an explicit keep policy when converting a recurring job to at", () => {
+    const job = makeJob({ deleteAfterRun: true });
+
+    applyJobPatch(job, {
+      schedule: { kind: "at", at: "2026-07-19T09:00:00.000Z" },
+      deleteAfterRun: false,
+    });
+
+    expect(job.deleteAfterRun).toBe(false);
+  });
+
+  it.each([
+    { kind: "every" as const, everyMs: 60_000 },
+    { kind: "cron" as const, expr: "0 * * * *" },
+  ])("clears the at-only default when converting to $kind", (schedule) => {
+    const job = makeJob({
+      schedule: { kind: "at", at: "2026-07-19T09:00:00.000Z" },
+      deleteAfterRun: true,
+    });
+
+    applyJobPatch(job, { schedule });
+
+    expect(job.schedule.kind).toBe(schedule.kind);
+    expect(Object.hasOwn(job, "deleteAfterRun")).toBe(false);
+  });
+
+  it.each([
+    {
+      label: "at to at",
+      previous: { kind: "at" as const, at: "2026-07-19T09:00:00.000Z" },
+      next: { kind: "at" as const, at: "2026-07-20T09:00:00.000Z" },
+    },
+    {
+      label: "at to on-exit",
+      previous: { kind: "at" as const, at: "2026-07-19T09:00:00.000Z" },
+      next: { kind: "on-exit" as const, command: "true" },
+    },
+    {
+      label: "on-exit to at",
+      previous: { kind: "on-exit" as const, command: "true" },
+      next: { kind: "at" as const, at: "2026-07-20T09:00:00.000Z" },
+    },
+  ])("preserves one-shot retention for $label", ({ previous, next }) => {
+    const job = makeJob({ schedule: previous, deleteAfterRun: false });
+
+    applyJobPatch(job, { schedule: next });
+
+    expect(job.deleteAfterRun).toBe(false);
+  });
+});
+
+describe("schedule activation ownership", () => {
+  it("ignores caller-supplied activation state during creation", () => {
+    const now = Date.parse("2026-07-30T00:00:00.000Z");
+    const input = {
+      name: "owned activation",
+      enabled: true,
+      schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC" },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "tick" },
+      state: {
+        scheduleActivatedAtMs: now - 60_000,
+        runningScheduleChangeId: "caller-supplied-edit",
+      },
+    } as unknown as CronJobCreate;
+
+    const job = createJob(
+      {
+        deps: {
+          nowMs: () => now,
+          defaultAgentId: "main",
+        },
+      } as never,
+      input,
+    );
+
+    expect(job.state.scheduleActivatedAtMs).toBeUndefined();
+    expect(job.state.runningScheduleChangeId).toBeUndefined();
+  });
+
+  it("ignores caller-supplied activation state during updates", () => {
+    const job = makeJob({
+      state: { scheduleActivatedAtMs: 456, runningScheduleChangeId: "pending-run-edit" },
+    });
+    const patch = {
+      state: { scheduleActivatedAtMs: 123, runningScheduleChangeId: null },
+    } as unknown as CronJobPatch;
+
+    applyJobPatch(job, patch);
+
+    expect(job.state.scheduleActivatedAtMs).toBe(456);
+    expect(job.state.runningScheduleChangeId).toBe("pending-run-edit");
+  });
+
+  it.each(["nextRunAtMs", "startupCatchupAtMs", "pacedNextRunAtMs"] as const)(
+    "rejects out-of-Date-range caller state for %s",
+    (field) => {
+      const job = makeJob({ enabled: false });
+      const patch = {
+        state: { [field]: MAX_DATE_TIMESTAMP_MS + 1 },
+      } as CronJobPatch;
+
+      expect(() => applyJobPatch(job, patch)).toThrow(`cron state.${field}`);
+      expect(job.state[field]).toBeUndefined();
+    },
+  );
+});
 
 describe("applyJobPatch delivery merge", () => {
   it("threads explicit delivery threadId patches into delivery", () => {
@@ -90,19 +215,122 @@ describe("applyJobPatch delivery merge", () => {
     expect(resolveCronDeliveryPlan(job).mode).toBe("announce");
   });
 
-  it("preserves implicit main-session delivery when patching best-effort", () => {
+  it.each([
+    { name: "best-effort enabled", delivery: { bestEffort: true } },
+    { name: "best-effort disabled", delivery: { bestEffort: false } },
+    {
+      name: "nullable clears",
+      delivery: {
+        channel: null,
+        to: null,
+        threadId: null,
+        accountId: null,
+        completionDestination: null,
+        failureDestination: null,
+      },
+    },
+    {
+      name: "explicitly disabled routes",
+      delivery: { mode: "none", channel: "telegram", to: "123", threadId: 0, accountId: "bot-a" },
+    },
+  ] satisfies Array<{ name: string; delivery: NonNullable<CronJobPatch["delivery"]> }>)(
+    "preserves main-session no-delivery semantics for $name",
+    ({ delivery }) => {
+      const job = makeJob({
+        sessionTarget: "main",
+        payload: { kind: "systemEvent", text: "tick" },
+        delivery: undefined,
+      });
+
+      applyJobPatch(job, { delivery });
+
+      expect(job.delivery).toBeUndefined();
+      expect(resolveCronDeliveryPlan(job).mode).toBe("none");
+    },
+  );
+
+  it.each<{
+    name: string;
+    delivery: NonNullable<CronJobPatch["delivery"]>;
+    existingDelivery?: CronJob["delivery"];
+  }>([
+    { name: "announce mode", delivery: { mode: "announce" } },
+    { name: "chat target", delivery: { channel: "telegram", to: "123" } },
+    { name: "channel", delivery: { channel: "telegram" } },
+    { name: "last channel", delivery: { channel: "last" } },
+    { name: "recipient", delivery: { to: "123" } },
+    {
+      name: "recipient on inherited none",
+      delivery: { to: "123" },
+      existingDelivery: { mode: "none" },
+    },
+    { name: "zero thread", delivery: { threadId: 0 } },
+    { name: "string thread", delivery: { threadId: "99" } },
+    { name: "account", delivery: { accountId: "bot-a" } },
+    {
+      name: "completion webhook",
+      delivery: {
+        completionDestination: { mode: "webhook", to: "https://example.com/completed" },
+      },
+    },
+    {
+      name: "completion webhook with announce",
+      delivery: {
+        mode: "announce",
+        completionDestination: { mode: "webhook", to: "https://example.com/completed" },
+      },
+    },
+  ])(
+    "rejects an authored $name on main instead of silently clearing it",
+    ({ delivery, existingDelivery }) => {
+      const job = makeJob({
+        sessionTarget: "main",
+        payload: { kind: "systemEvent", text: "tick" },
+        delivery: existingDelivery,
+      });
+
+      expect(() => applyJobPatch(job, { delivery })).toThrow(
+        'cron channel delivery config is only supported for sessionTarget="isolated"',
+      );
+    },
+  );
+
+  it.each([
+    { bestEffort: true },
+    { bestEffort: false },
+    { channel: null, to: null, threadId: null, accountId: null },
+  ] satisfies Array<CronJobPatch["delivery"]>)(
+    "clears inherited announce delivery when retargeting to main with %j",
+    (delivery) => {
+      const job = makeJob();
+
+      applyJobPatch(job, {
+        sessionTarget: "main",
+        payload: { kind: "systemEvent", text: "tick" },
+        delivery,
+      });
+
+      expect(job.sessionTarget).toBe("main");
+      expect(job.delivery).toBeUndefined();
+    },
+  );
+
+  it("preserves inherited main-session webhook mode in a partial delivery update", () => {
     const job = makeJob({
       sessionTarget: "main",
       payload: { kind: "systemEvent", text: "tick" },
-      delivery: undefined,
+      delivery: { mode: "webhook", to: "https://example.com/old", bestEffort: true },
     });
 
     applyJobPatch(job, {
-      delivery: { bestEffort: false },
+      delivery: { to: "https://example.com/new", bestEffort: false },
     });
 
-    expect(job.delivery).toBeUndefined();
-    expect(resolveCronDeliveryPlan(job).mode).toBe("none");
+    expect(job.delivery).toEqual({
+      mode: "webhook",
+      to: "https://example.com/new",
+      bestEffort: false,
+    });
   });
 
   it("clears nullable failure destination fields", () => {

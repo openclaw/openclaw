@@ -1,7 +1,8 @@
-// QA Lab Matrix plugin module implements scenario runtime approval behavior.
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
+import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { normalizeUniqueStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { formatApprovalResultValue } from "../../shared/live-approval-result.js";
 import type { MatrixQaObservedEvent } from "../substrate/events.js";
 import {
   MATRIX_QA_DRIVER_DM_ROOM_KEY,
@@ -24,7 +25,6 @@ const MATRIX_QA_APPROVAL_SHORT_WINDOW_MS = 4_000;
 const MATRIX_QA_APPROVAL_LONG_COMMAND_TEXT = "matrix approval chunk fallback ".repeat(40);
 
 type MatrixQaApprovalDecision = "allow-once" | "deny";
-type MatrixQaApprovalKind = "exec" | "plugin";
 type MatrixQaApprovalOptionReactionParams = {
   context: MatrixQaScenarioContext;
   emoji: string;
@@ -69,7 +69,7 @@ function hasObservedApprovalOptionReaction(params: MatrixQaApprovalOptionReactio
 
 function assertApprovalMetadata(params: {
   event: { approval?: unknown; eventId: string };
-  expectedKind: MatrixQaApprovalKind;
+  expectedKind: ChannelApprovalKind;
 }) {
   const approval =
     typeof params.event.approval === "object" && params.event.approval !== null
@@ -119,7 +119,7 @@ function isExpectedApprovalEvent(
   params: {
     context: MatrixQaScenarioContext;
     expectedApprovalId: string;
-    expectedKind: MatrixQaApprovalKind;
+    expectedKind: ChannelApprovalKind;
     roomId: string;
     threadRootEventId?: string;
   },
@@ -137,7 +137,7 @@ function isExpectedApprovalEvent(
 async function waitForApprovalEvent(params: {
   context: MatrixQaScenarioContext;
   expectedApprovalId: string;
-  expectedKind: MatrixQaApprovalKind;
+  expectedKind: ChannelApprovalKind;
   roomId: string;
   since?: string;
   threadRootEventId?: string;
@@ -176,7 +176,7 @@ async function waitForApprovalEvent(params: {
 async function waitForObservedApprovalEvent(params: {
   context: MatrixQaScenarioContext;
   expectedApprovalId: string;
-  expectedKind: MatrixQaApprovalKind;
+  expectedKind: ChannelApprovalKind;
   excludedRoomIds?: string[];
   roomIds: string[];
   timeoutMs: number;
@@ -328,16 +328,6 @@ function assertApprovalDecisionResult(params: {
   }
 }
 
-function formatApprovalResultValue(value: unknown) {
-  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
-    return String(value);
-  }
-  if (value == null) {
-    return "<missing>";
-  }
-  return JSON.stringify(value) ?? "<unserializable>";
-}
-
 async function requestExecApproval(params: {
   context: MatrixQaScenarioContext;
   command: string;
@@ -394,7 +384,7 @@ async function requestPluginApproval(params: { context: MatrixQaScenarioContext;
 async function waitForApprovalDecision(params: {
   approvalId: string;
   context: MatrixQaScenarioContext;
-  kind: MatrixQaApprovalKind;
+  kind: ChannelApprovalKind;
 }) {
   const gatewayCall = requireMatrixQaGatewayCall(params.context);
   const method =
@@ -413,7 +403,7 @@ async function resolveApprovalDecision(params: {
   approvalId: string;
   context: MatrixQaScenarioContext;
   decision: MatrixQaApprovalDecision;
-  kind: MatrixQaApprovalKind;
+  kind: ChannelApprovalKind;
 }) {
   const gatewayCall = requireMatrixQaGatewayCall(params.context);
   const method = params.kind === "exec" ? "exec.approval.resolve" : "plugin.approval.resolve";

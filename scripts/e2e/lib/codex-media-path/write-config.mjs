@@ -37,7 +37,6 @@ const config = {
             command: "node",
             args: ["scripts/e2e/lib/codex-media-path/fake-codex-app-server.mjs"],
             requestTimeoutMs: timeoutSeconds * 1000,
-            turnCompletionIdleTimeoutMs: timeoutSeconds * 1000,
           },
         },
       },
@@ -56,9 +55,8 @@ const config = {
       timeoutSeconds,
       sandbox: { mode: "off" },
     },
-    list: [
-      {
-        id: "main",
+    entries: {
+      main: {
         default: true,
         model: { primary: "openai/gpt-5.6-luna", fallbacks: [] },
         models: {
@@ -68,7 +66,7 @@ const config = {
         },
         workspace: workspaceDir,
       },
-    ],
+    },
   },
   skills: { allowBundled: [] },
 };

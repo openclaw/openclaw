@@ -1,7 +1,12 @@
 // Searchable select list tests cover filtering and selection behavior.
-import { describe, expect, it } from "vitest";
-import { stripAnsi, visibleWidth } from "../../../packages/terminal-core/src/ansi.js";
-import { SearchableSelectList, type SearchableSelectListTheme } from "./searchable-select-list.js";
+import { CURSOR_MARKER, visibleWidth } from "@earendil-works/pi-tui";
+import { describe, expect, it, vi } from "vitest";
+import { stripAnsi } from "../../../packages/terminal-core/src/ansi.js";
+import {
+  SearchableSelectList,
+  type SearchableSelectItem,
+  type SearchableSelectListTheme,
+} from "./searchable-select-list.js";
 
 const mockTheme: SearchableSelectListTheme = {
   selectedPrefix: (t) => `[${t}]`,
@@ -42,6 +47,14 @@ const testItems = [
 ];
 
 describe("SearchableSelectList", () => {
+  function selectByEnter(list: SearchableSelectList) {
+    const onSelect = vi.fn<(item: SearchableSelectItem) => void>();
+    list.onSelect = onSelect;
+    list.handleInput("\r");
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    return onSelect.mock.calls[0]?.[0];
+  }
+
   function typeInput(list: SearchableSelectList, text: string) {
     for (const ch of text) {
       list.handleInput(ch);
@@ -54,7 +67,7 @@ describe("SearchableSelectList", () => {
     expectedValue: string,
   ) {
     typeInput(list, query);
-    const selected = list.getSelectedItem();
+    const selected = selectByEnter(list);
     expect(selected?.value).toBe(expectedValue);
   }
 
@@ -71,7 +84,7 @@ describe("SearchableSelectList", () => {
     ];
     const list = new SearchableSelectList(items, 5, mockTheme);
     // Ensure first row is non-selected so description styling path is exercised.
-    list.setSelectedIndex(1);
+    list.handleInput("\x1b[B");
     const output = list.render(width).join("\n");
     if (shouldContainDescription) {
       expect(output).toContain("(desc)");
@@ -88,6 +101,46 @@ describe("SearchableSelectList", () => {
     expect(output.length).toBeGreaterThanOrEqual(3);
     expect(output[0]).toContain("search");
   });
+
+  it("emits the hardware cursor marker only while the search input is focused", () => {
+    const list = new SearchableSelectList(testItems, 5, mockTheme);
+
+    expect(list.focused).toBe(false);
+    expect(list.render(80)[0]).not.toContain(CURSOR_MARKER);
+
+    list.focused = true;
+    expect(list.focused).toBe(true);
+    expect(list.render(80)[0]).toContain(CURSOR_MARKER);
+
+    list.focused = false;
+    expect(list.focused).toBe(false);
+    expect(list.render(80)[0]).not.toContain(CURSOR_MARKER);
+  });
+
+  it.each([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])(
+    "keeps ANSI, CJK, scroll, and no-match rows within %i terminal columns",
+    (width) => {
+      const items = [
+        {
+          value: "cjk",
+          label: "\u001b[32m日本語の検索結果\u001b[0m",
+          description: "長い説明と表示幅の検証",
+        },
+        { value: "other", label: "another long search result" },
+      ];
+      const list = new SearchableSelectList(items, 1, ansiHighlightTheme);
+      list.focused = true;
+
+      for (const line of list.render(width)) {
+        expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+      }
+
+      list.handleInput("missing");
+      for (const line of list.render(width)) {
+        expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+      }
+    },
+  );
 
   it("does not truncate long labels on wide terminals when description is present", () => {
     const tail = "__TAIL__";
@@ -114,8 +167,6 @@ describe("SearchableSelectList", () => {
       { value: "other", label: "other", description: "Other description" },
     ];
     const list = new SearchableSelectList(items, 5, ansiHighlightTheme);
-    list.setSelectedIndex(1); // make first row non-selected so description styling is applied
-
     typeInput(list, "provider");
 
     const width = 80;
@@ -163,19 +214,24 @@ describe("SearchableSelectList", () => {
     expectNoMatchesForQuery(list, "32m");
   });
 
-  it("does not corrupt ANSI sequences when highlighting multiple tokens", () => {
-    const items = [{ value: "gpt-model", label: "gpt-model" }];
-    const list = new SearchableSelectList(items, 5, ansiHighlightTheme);
+  it.each(["gpt m", "gpt GPT m", "  GPT  m  "])(
+    "does not corrupt ANSI sequences when highlighting query %j",
+    (query) => {
+      const items = [{ value: "gpt-model", label: "gpt-model" }];
+      const list = new SearchableSelectList(items, 5, ansiHighlightTheme);
 
-    typeInput(list, "gpt m");
+      typeInput(list, query);
 
-    const renderedLine = list.render(80).find((line) => stripAnsi(line).includes("gpt-model"));
-    if (!renderedLine) {
-      throw new Error("expected rendered gpt-model line");
-    }
-    const highlightOpens = renderedLine.split("\u001b[31m").length - 1;
-    expect(highlightOpens).toBe(2);
-  });
+      const rendered = list.render(80);
+      const renderedLine = rendered.find((line) => stripAnsi(line).includes("gpt-model"));
+      if (!renderedLine) {
+        throw new Error("expected rendered gpt-model line");
+      }
+      const highlightOpens = renderedLine.split("\u001b[31m").length - 1;
+      expect(highlightOpens).toBe(2);
+      expect(list.render(80)).toEqual(rendered);
+    },
+  );
 
   it("filters items when typing", () => {
     const list = new SearchableSelectList(testItems, 5, mockTheme);
@@ -183,7 +239,7 @@ describe("SearchableSelectList", () => {
     // Simulate typing "gemini" - unique enough to narrow down
     typeInput(list, "gemini");
 
-    const selected = list.getSelectedItem();
+    const selected = selectByEnter(list);
     expect(selected?.value).toBe("google/gemini-pro");
   });
 
@@ -204,7 +260,7 @@ describe("SearchableSelectList", () => {
     typeInput(list, "opus");
 
     // First result should be "opus-direct" where "opus" appears at position 0
-    const selected = list.getSelectedItem();
+    const selected = selectByEnter(list);
     expect(selected?.value).toBe("opus-direct");
   });
 
@@ -233,7 +289,7 @@ describe("SearchableSelectList", () => {
     typeInput(list, "opus");
 
     // Label match should win over description match
-    const selected = list.getSelectedItem();
+    const selected = selectByEnter(list);
     expect(selected?.value).toBe("provider/opus-model");
   });
 
@@ -253,7 +309,7 @@ describe("SearchableSelectList", () => {
     // Simulate typing "gpt" which should match openai/gpt-4 models
     typeInput(list, "gpt");
 
-    const selected = list.getSelectedItem();
+    const selected = selectByEnter(list);
     expect(selected?.value).toContain("gpt");
   });
 
@@ -276,7 +332,7 @@ describe("SearchableSelectList", () => {
 
     typeInput(list, "g4");
 
-    const selected = list.getSelectedItem();
+    const selected = selectByEnter(list);
     expect(selected?.value).toBe("gpt-4");
   });
 
@@ -289,6 +345,24 @@ describe("SearchableSelectList", () => {
     expect(output).toContain("*gpt*");
   });
 
+  it("renders the current query after clearing and replacing it", () => {
+    const list = new SearchableSelectList(
+      [{ value: "match", label: "alpha beta", description: "alpha beta description" }],
+      5,
+      ansiHighlightTheme,
+    );
+    list.handleInput("alpha");
+    list.render(80);
+    list.handleInput("\u0015");
+    const cleared = list.render(80).join("\n");
+    list.handleInput("beta");
+    const replaced = list.render(80).join("\n");
+
+    expect(cleared).not.toContain("\u001b[31m");
+    expect(replaced.split("alpha \u001b[31mbeta\u001b[0m")).toHaveLength(3);
+    expect(list.render(80).join("\n")).toBe(replaced);
+  });
+
   it("shows no match message when filter yields no results", () => {
     const list = new SearchableSelectList(testItems, 5, mockTheme);
 
@@ -299,30 +373,32 @@ describe("SearchableSelectList", () => {
     const list = new SearchableSelectList(testItems, 5, mockTheme);
 
     // Initially first item is selected
-    expect(list.getSelectedItem()?.value).toBe("anthropic/claude-3-opus");
+    expect(selectByEnter(list)?.value).toBe("anthropic/claude-3-opus");
 
     // Press down arrow (escape sequence for down arrow)
     list.handleInput("\x1b[B");
 
-    expect(list.getSelectedItem()?.value).toBe("anthropic/claude-3-sonnet");
+    expect(selectByEnter(list)?.value).toBe("anthropic/claude-3-sonnet");
   });
 
-  it("types j and k into search input instead of intercepting as vim navigation", () => {
-    const items = [
-      { value: "alpha", label: "alpha" },
-      { value: "kilo", label: "kilo" },
-      { value: "juliet", label: "juliet" },
-    ];
+  it.each([
+    { query: "j", expectedValue: "juliet" },
+    { query: "k", expectedValue: "kilo" },
+  ])("filters names beginning with $query", ({ query, expectedValue }) => {
+    const list = new SearchableSelectList(
+      [
+        { value: "alpha", label: "alpha" },
+        { value: "kilo", label: "kilo" },
+        { value: "juliet", label: "juliet" },
+      ],
+      5,
+      mockTheme,
+    );
 
-    const jList = new SearchableSelectList(items, 5, mockTheme);
-    jList.handleInput("j");
-    expect(jList.getSelectedItem()?.value).toBe("juliet");
-    expect(stripAnsi(jList.render(80)[0] ?? "")).toContain("j");
+    list.handleInput(query);
 
-    const kList = new SearchableSelectList(items, 5, mockTheme);
-    kList.handleInput("k");
-    expect(kList.getSelectedItem()?.value).toBe("kilo");
-    expect(stripAnsi(kList.render(80)[0] ?? "")).toContain("k");
+    expect(selectByEnter(list)?.value).toBe(expectedValue);
+    expect(stripAnsi(list.render(80)[0] ?? "")).toContain(query);
   });
 
   it("calls onSelect when enter is pressed", () => {
@@ -339,7 +415,60 @@ describe("SearchableSelectList", () => {
     expect(selectedValue).toBe("anthropic/claude-3-opus");
   });
 
-  it("calls onCancel when escape is pressed", () => {
+  it("sanitizes rendered fields before applying trusted highlighting", () => {
+    const attacks = [
+      "\u001b[38;5;201m",
+      "\u001b[3J",
+      "\u001b]0;search-title\u0007",
+      "\u001b]52;c;search-clipboard\u0007",
+      "\u009b2K",
+      "\u009d0;search-c1-title\u009c",
+    ];
+    const rawValue = `selector-value-start${attacks[1]}selector-value-end\r\nمرحبا\tשלום`;
+    const description = `selector-description-start${attacks[3]}selector-description-end\n東京`;
+    const list = new SearchableSelectList(
+      [
+        {
+          value: rawValue,
+          label: attacks.join(""),
+          description,
+          searchText: "selector-target",
+        },
+      ],
+      5,
+      ansiHighlightTheme,
+    );
+    let selectedValue: string | undefined;
+    list.onSelect = (item) => {
+      selectedValue = item.value;
+    };
+
+    typeInput(list, "selector");
+    const rendered = list.render(160).join("\n");
+    const plainRendered = stripAnsi(rendered);
+
+    expect(rendered).toContain("\u001b[31mselector\u001b[0m-value-start");
+    expect(plainRendered).toContain("selector-description-startselector-description-end 東京");
+    expect(plainRendered).toContain("مرحبا שלום");
+    expect(plainRendered).toContain("\u2067");
+    expect(plainRendered).toContain("\u2069");
+    for (const attack of attacks) {
+      expect(rendered).not.toContain(attack);
+    }
+    expect(rendered).not.toContain("selector-value-end\r\nمرحبا\tשלום");
+
+    list.handleInput("\r");
+    expect(selectedValue).toBe(rawValue);
+  });
+
+  it.each(
+    ["", "gemini"].flatMap((query) => [
+      { name: "Escape", key: "\x1b", query },
+      { name: "Ctrl+C", key: "\u0003", query },
+      { name: "Kitty Ctrl+C", key: "\x1b[99;5u", query },
+      { name: "modifyOtherKeys Ctrl+C", key: "\x1b[27;5;99~", query },
+    ]),
+  )("cancels query '$query' with $name", ({ query, key }) => {
     const list = new SearchableSelectList(testItems, 5, mockTheme);
     let cancelled = false;
 
@@ -347,9 +476,11 @@ describe("SearchableSelectList", () => {
       cancelled = true;
     };
 
-    // Press escape
-    list.handleInput("\x1b");
+    typeInput(list, query);
+    const selected = selectByEnter(list);
+    list.handleInput(key);
 
     expect(cancelled).toBe(true);
+    expect(selectByEnter(list)).toBe(selected);
   });
 });

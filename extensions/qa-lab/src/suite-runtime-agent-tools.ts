@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements suite runtime agent tools behavior.
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -21,6 +20,20 @@ import type {
 const requireFromHere = createRequire(import.meta.url);
 const MCP_STDERR_TAIL_LIMIT = 8_192;
 const MCP_REQUEST_TIMEOUT_MS = 180_000;
+
+async function resolvePluginToolsMcpArgs(repoRoot: string) {
+  const distEntry = path.join(repoRoot, "dist", "mcp", "plugin-tools-serve.js");
+  try {
+    await fs.access(distEntry);
+    return [distEntry];
+  } catch {
+    return [
+      "--import",
+      requireFromHere.resolve("tsx"),
+      path.join(repoRoot, "src", "mcp", "plugin-tools-serve.ts"),
+    ];
+  }
+}
 
 function findSkill(skills: QaSkillStatusEntry[], name: string) {
   return skills.find((skill) => skill.name === name);
@@ -73,11 +86,7 @@ async function callPluginToolsMcp(params: {
   const nodeExecPath = await resolveQaNodeExecPath();
   const transport = new StdioClientTransport({
     command: nodeExecPath,
-    args: [
-      "--import",
-      requireFromHere.resolve("tsx"),
-      path.join(params.env.repoRoot, "src/mcp/plugin-tools-serve.ts"),
-    ],
+    args: await resolvePluginToolsMcpArgs(params.env.repoRoot),
     stderr: "pipe",
     cwd: params.env.repoRoot,
     env: transportEnv,

@@ -3,33 +3,71 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { loadDotEnv } from "../infra/dotenv.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   applyConfigEnvVars,
   collectConfigRuntimeEnvOwnership,
   collectConfigRuntimeEnvVars,
+  collectConfigServiceEnvVars,
   createConfigRuntimeEnv,
   createConfigRuntimeEnvBase,
   getPublishedConfigRuntimeEnvState,
   initializePublishedConfigRuntimeEnv,
   prepareConfigRuntimeEnv,
+  prepareConfigRuntimeEnvLoad,
   resetPublishedConfigRuntimeEnv,
 } from "./config-env-vars.js";
 import { resolveConfigEnvVars } from "./env-substitution.js";
 import { assertGatewayConfigEnvSelectionUnchanged } from "./gateway-env-selection.js";
 import { collectDurableServiceEnvVars } from "./state-dir-dotenv.js";
-import { withEnvOverride, withTempHome, writeStateDirDotEnv } from "./test-helpers.js";
+import { withTempHome, writeStateDirDotEnv } from "./test-helpers.js";
 import type { OpenClawConfig } from "./types.js";
 
 describe("config env vars", () => {
   it("applies env vars from env block when missing", async () => {
-    await withEnvOverride({ OPENROUTER_API_KEY: undefined }, async () => {
+    await withEnvAsync({ OPENROUTER_API_KEY: undefined }, async () => {
       applyConfigEnvVars({ env: { vars: { OPENROUTER_API_KEY: "config-key" } } } as OpenClawConfig);
       expect(process.env.OPENROUTER_API_KEY).toBe("config-key");
     });
   });
 
+  it.each(
+    ["OPENCLAW_CONFIG_READONLY", "OpenClaw_Config_ReadOnly"].flatMap((key) =>
+      ["direct", "vars"].map((source) => ({ key, source })),
+    ),
+  )("ignores config-owned $key from env $source in runtime and services", ({ key, source }) => {
+    const entries = { [key]: "1", OPENCLAW_NIX_MODE: "1", OPENCLAW_TEST_ALLOWED: "value" };
+    const config = { env: source === "vars" ? { vars: entries } : entries };
+    const expected = { OPENCLAW_NIX_MODE: "1", OPENCLAW_TEST_ALLOWED: "value" };
+    expect(collectConfigRuntimeEnvVars(config)).toEqual(expected);
+    expect(collectConfigServiceEnvVars(config)).toEqual(expected);
+    const env: NodeJS.ProcessEnv = {};
+    applyConfigEnvVars(config, env);
+    expect(env).toEqual(expected);
+  });
+
+  it.each([undefined, "0", "1"])(
+    "preserves host READONLY=%s through config env reload",
+    (value) => {
+      const key = "OPENCLAW_CONFIG_READONLY";
+      const env: NodeJS.ProcessEnv = value === undefined ? {} : { [key]: value };
+      const original = { ...env };
+      const previousConfig = { env: { vars: { [key]: "1" } } };
+      const nextConfig = { env: { vars: { [key]: "0" } } };
+      expect(() =>
+        assertGatewayConfigEnvSelectionUnchanged(previousConfig, nextConfig),
+      ).not.toThrow();
+      const prepared = prepareConfigRuntimeEnv({ previousConfig, nextConfig, env });
+      expect(prepared.env).toEqual(original);
+      const rollback = prepared.publish();
+      expect(env).toEqual(original);
+      rollback();
+      expect(env).toEqual(original);
+    },
+  );
+
   it("does not override existing env vars", async () => {
-    await withEnvOverride({ OPENROUTER_API_KEY: "existing-key" }, async () => {
+    await withEnvAsync({ OPENROUTER_API_KEY: "existing-key" }, async () => {
       applyConfigEnvVars({ env: { vars: { OPENROUTER_API_KEY: "config-key" } } } as OpenClawConfig);
       expect(process.env.OPENROUTER_API_KEY).toBe("existing-key");
     });
@@ -105,14 +143,14 @@ describe("config env vars", () => {
   });
 
   it("applies env vars from env.vars when missing", async () => {
-    await withEnvOverride({ GROQ_API_KEY: undefined }, async () => {
+    await withEnvAsync({ GROQ_API_KEY: undefined }, async () => {
       applyConfigEnvVars({ env: { vars: { GROQ_API_KEY: "gsk-config" } } } as OpenClawConfig);
       expect(process.env.GROQ_API_KEY).toBe("gsk-config");
     });
   });
 
   it("skips non-string env.vars values from runtime JSON configs", async () => {
-    await withEnvOverride({ API_TOKEN: undefined, PORT: undefined, DEBUG: undefined }, async () => {
+    await withEnvAsync({ API_TOKEN: undefined, PORT: undefined, DEBUG: undefined }, async () => {
       const cfg = JSON.parse(`{
         "env": {
           "vars": {
@@ -131,7 +169,7 @@ describe("config env vars", () => {
   });
 
   it("can build a merged runtime env without mutating process.env", async () => {
-    await withEnvOverride({ OPENROUTER_API_KEY: undefined }, async () => {
+    await withEnvAsync({ OPENROUTER_API_KEY: undefined }, async () => {
       const merged = createConfigRuntimeEnv({
         env: { vars: { OPENROUTER_API_KEY: "config-key" } },
       } as OpenClawConfig);
@@ -178,6 +216,165 @@ describe("config env vars", () => {
     expect(env).toEqual({ OWNED: "old", AMBIENT: "override" });
   });
 
+  it("publishes late loader config and shell changes from a detached final snapshot", () => {
+    const env: NodeJS.ProcessEnv = { AMBIENT: "original" };
+    const stage = prepareConfigRuntimeEnvLoad({ previousConfig: {}, env });
+    stage.env.DOTENV_VALUE = "dotenv";
+    stage.captureDotEnvBaseline();
+    const nextConfig = { env: { vars: { CONFIG_VALUE: "config" } } };
+    applyConfigEnvVars(nextConfig, stage.env);
+    stage.env.SHELL_VALUE = "shell";
+    const prepared = stage.prepare(nextConfig);
+    stage.env.CONFIG_VALUE = "changed after preparation";
+
+    expect(env).toEqual({ AMBIENT: "original" });
+    const rollback = prepared.publish();
+    expect(env).toEqual({
+      AMBIENT: "original",
+      DOTENV_VALUE: "dotenv",
+      CONFIG_VALUE: "config",
+      SHELL_VALUE: "shell",
+    });
+    rollback();
+    expect(env).toEqual({ AMBIENT: "original" });
+  });
+
+  it("keeps same-valued dotenv and shell entries ambient when staged config is later removed", async () => {
+    const dotenvKey = "OPENCLAW_TEST_STAGE_DOTENV";
+    const configKey = "OPENCLAW_TEST_STAGE_CONFIG";
+    const shellKey = "OPENCLAW_TEST_STAGE_SHELL";
+    await withEnvAsync(
+      { [dotenvKey]: undefined, [configKey]: undefined, [shellKey]: undefined },
+      async () => {
+        try {
+          initializePublishedConfigRuntimeEnv({});
+          const stage = prepareConfigRuntimeEnvLoad({ previousConfig: {} });
+          stage.env[dotenvKey] = "shared";
+          stage.captureDotEnvBaseline();
+          const nextConfig = { env: { vars: { [dotenvKey]: "shared", [configKey]: "config" } } };
+          applyConfigEnvVars(nextConfig, stage.env);
+          stage.env[shellKey] = "shell";
+          stage.prepare(nextConfig).publish().commit();
+
+          expect(getPublishedConfigRuntimeEnvState().ownedEnv).toEqual({ [configKey]: "config" });
+          expect(getPublishedConfigRuntimeEnvState().sourceConfig).toBe(nextConfig);
+          prepareConfigRuntimeEnv({ previousConfig: nextConfig, nextConfig: {} })
+            .publish()
+            .commit();
+          expect(process.env[configKey]).toBeUndefined();
+          expect(process.env[dotenvKey]).toBe("shared");
+          expect(process.env[shellKey]).toBe("shell");
+        } finally {
+          resetPublishedConfigRuntimeEnv();
+        }
+      },
+    );
+  });
+
+  it("publishes only captured dotenv after failed loading and preserves prior ownership", async () => {
+    const ownedKey = "OPENCLAW_TEST_STAGE_PREVIOUS";
+    const dotenvKey = "OPENCLAW_TEST_STAGE_FAILED_DOTENV";
+    const configKey = "OPENCLAW_TEST_STAGE_FAILED_CONFIG";
+    const shellKey = "OPENCLAW_TEST_STAGE_FAILED_SHELL";
+    await withEnvAsync(
+      {
+        [ownedKey]: "previous",
+        [dotenvKey]: undefined,
+        [configKey]: undefined,
+        [shellKey]: undefined,
+      },
+      async () => {
+        try {
+          const previousConfig = { env: { vars: { [ownedKey]: "previous" } } };
+          initializePublishedConfigRuntimeEnv(previousConfig, {
+            ownedEnv: { [ownedKey]: "previous" },
+          });
+          const previousOwnership = getPublishedConfigRuntimeEnvState().ownedEnv;
+          const stage = prepareConfigRuntimeEnvLoad({ previousConfig });
+          stage.env[dotenvKey] = "loaded before failure";
+          stage.captureDotEnvBaseline();
+          applyConfigEnvVars(
+            { env: { vars: { [ownedKey]: "candidate", [configKey]: "candidate" } } },
+            stage.env,
+          );
+          stage.env[shellKey] = "candidate shell";
+          stage.env[dotenvKey] = "later config mutation";
+          const rollback = stage.prepareFailure().publish();
+
+          expect(process.env[ownedKey]).toBe("previous");
+          expect(process.env[dotenvKey]).toBe("loaded before failure");
+          expect(process.env[configKey]).toBeUndefined();
+          expect(process.env[shellKey]).toBeUndefined();
+          expect(getPublishedConfigRuntimeEnvState().ownedEnv).toBe(previousOwnership);
+          expect(getPublishedConfigRuntimeEnvState().sourceConfig).toBe(previousConfig);
+          rollback();
+          expect(process.env[dotenvKey]).toBeUndefined();
+          expect(process.env[ownedKey]).toBe("previous");
+          expect(getPublishedConfigRuntimeEnvState().ownedEnv).toBe(previousOwnership);
+          expect(getPublishedConfigRuntimeEnvState().sourceConfig).toBe(previousConfig);
+        } finally {
+          resetPublishedConfigRuntimeEnv();
+        }
+      },
+    );
+  });
+
+  it("retains live overrides made while the loader was isolated and after its publication", () => {
+    const env: NodeJS.ProcessEnv = { CONFIG_VALUE: "old" };
+    const stage = prepareConfigRuntimeEnvLoad({
+      previousConfig: { env: { vars: { CONFIG_VALUE: "old" } } },
+      previousOwnedEnv: { CONFIG_VALUE: "old" },
+      env,
+    });
+    stage.captureDotEnvBaseline();
+    const nextConfig = { env: { vars: { CONFIG_VALUE: "candidate", ADDED_VALUE: "added" } } };
+    applyConfigEnvVars(nextConfig, stage.env);
+    env.CONFIG_VALUE = "external during load";
+    const rollback = stage.prepare(nextConfig).publish();
+    expect(env).toEqual({ CONFIG_VALUE: "external during load", ADDED_VALUE: "added" });
+    env.ADDED_VALUE = "external after publish";
+    rollback();
+    expect(env).toEqual({
+      CONFIG_VALUE: "external during load",
+      ADDED_VALUE: "external after publish",
+    });
+  });
+
+  it("unwinds a staged config publication behind a later failed-loader dotenv publication", async () => {
+    const key = "OPENCLAW_TEST_STAGE_CHAIN";
+    const dotenvKey = "OPENCLAW_TEST_STAGE_CHAIN_DOTENV";
+    await withEnvAsync({ [key]: "original", [dotenvKey]: undefined }, async () => {
+      try {
+        const previousConfig = { env: { vars: { [key]: "original" } } };
+        const nextConfig = { env: { vars: { [key]: "candidate" } } };
+        initializePublishedConfigRuntimeEnv(previousConfig, { ownedEnv: { [key]: "original" } });
+        const older = prepareConfigRuntimeEnvLoad({ previousConfig });
+        older.captureDotEnvBaseline();
+        applyConfigEnvVars(nextConfig, older.env);
+        const rollbackOlder = older.prepare(nextConfig).publish();
+        const newer = prepareConfigRuntimeEnvLoad({ previousConfig: {} });
+        newer.env[dotenvKey] = "dotenv";
+        newer.captureDotEnvBaseline();
+        newer.env[key] = "discarded loader mutation";
+        const rollbackNewer = newer.prepareFailure().publish();
+
+        rollbackOlder();
+        expect(process.env[key]).toBe("candidate");
+        expect(process.env[dotenvKey]).toBe("dotenv");
+        expect(getPublishedConfigRuntimeEnvState().sourceConfig).toBe(nextConfig);
+        rollbackNewer();
+        expect(process.env[key]).toBe("original");
+        expect(process.env[dotenvKey]).toBeUndefined();
+        expect(getPublishedConfigRuntimeEnvState()).toMatchObject({
+          sourceConfig: previousConfig,
+          ownedEnv: { [key]: "original" },
+        });
+      } finally {
+        resetPublishedConfigRuntimeEnv();
+      }
+    });
+  });
+
   it("preserves concurrent env overrides during publication and rollback", () => {
     const env: NodeJS.ProcessEnv = { CONFIG_VALUE: "old" };
     const prepared = prepareConfigRuntimeEnv({
@@ -198,7 +395,7 @@ describe("config env vars", () => {
 
   it("does not infer an equal-valued ambient env entry as config-owned", async () => {
     const key = "OPENCLAW_TEST_EQUAL_AMBIENT_ENV";
-    await withEnvOverride({ [key]: "shared" }, async () => {
+    await withEnvAsync({ [key]: "shared" }, async () => {
       try {
         const previousConfig = { env: { vars: { [key]: "shared" } } };
         initializePublishedConfigRuntimeEnv(previousConfig, { ownedEnv: {} });
@@ -221,7 +418,7 @@ describe("config env vars", () => {
 
   it("unwinds overlapping same-value publications after both roll back", async () => {
     const key = "OPENCLAW_TEST_OVERLAPPING_ENV";
-    await withEnvOverride({ [key]: "old" }, async () => {
+    await withEnvAsync({ [key]: "old" }, async () => {
       try {
         const previousConfig = { env: { vars: { [key]: "old" } } };
         const nextConfig = { env: { vars: { [key]: "new" } } };
@@ -253,7 +450,7 @@ describe("config env vars", () => {
     "unwinds different-value publications in %s rollback order",
     async (rollbackOrder) => {
       const key = "OPENCLAW_TEST_OVERLAPPING_DIFFERENT_ENV";
-      await withEnvOverride({ [key]: "old" }, async () => {
+      await withEnvAsync({ [key]: "old" }, async () => {
         try {
           const previousConfig = { env: { vars: { [key]: "old" } } };
           const olderConfig = { env: { vars: { [key]: "older" } } };
@@ -298,7 +495,7 @@ describe("config env vars", () => {
 
   it("lets a newer committed publication supersede an older late rollback", async () => {
     const key = "OPENCLAW_TEST_COMMITTED_OVERLAPPING_ENV";
-    await withEnvOverride({ [key]: "old" }, async () => {
+    await withEnvAsync({ [key]: "old" }, async () => {
       try {
         const previousConfig = { env: { vars: { [key]: "old" } } };
         const olderConfig = { env: { vars: { [key]: "older" } } };
@@ -327,7 +524,7 @@ describe("config env vars", () => {
 
   it("lets a newer publication remove a key added by an overlapping predecessor", async () => {
     const key = "OPENCLAW_TEST_OVERLAPPING_REMOVED_ENV";
-    await withEnvOverride({ [key]: undefined }, async () => {
+    await withEnvAsync({ [key]: undefined }, async () => {
       try {
         const previousConfig = {};
         const addedConfig = { env: { vars: { [key]: "added" } } };
@@ -348,14 +545,14 @@ describe("config env vars", () => {
     });
   });
 
-  it("rejects process-stable Gateway selector changes during reload", () => {
-    expect(() =>
-      assertGatewayConfigEnvSelectionUnchanged(
-        {},
-        { env: { vars: { OPENCLAW_CONFIG_PATH: "/tmp/other.json" } } },
-      ),
-    ).toThrow("process-stable Gateway selector OPENCLAW_CONFIG_PATH");
-  });
+  it.each(["OPENCLAW_CONFIG_PATH"])(
+    "rejects process-stable Gateway selector %s changes during reload",
+    (key) => {
+      expect(() =>
+        assertGatewayConfigEnvSelectionUnchanged({}, { env: { vars: { [key]: "1" } } }),
+      ).toThrow(`process-stable Gateway selector ${key}`);
+    },
+  );
 
   it("preserves Windows case-insensitive env precedence in merged runtime env", () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
@@ -449,7 +646,7 @@ describe("config env vars", () => {
   });
 
   it("blocks dangerous startup env vars from config env", async () => {
-    await withEnvOverride(
+    await withEnvAsync(
       {
         BASH_ENV: undefined,
         SHELL: undefined,
@@ -499,7 +696,7 @@ describe("config env vars", () => {
   });
 
   it("drops non-portable env keys from config env", async () => {
-    await withEnvOverride({ OPENROUTER_API_KEY: undefined }, async () => {
+    await withEnvAsync({ OPENROUTER_API_KEY: undefined }, async () => {
       const config = {
         env: {
           vars: {
@@ -563,7 +760,7 @@ describe("config env vars", () => {
 
   it("loads ${VAR} substitutions from ~/.openclaw/.env on repeated runtime loads", async () => {
     await withTempHome(async (_home) => {
-      await withEnvOverride({ BRAVE_API_KEY: undefined }, async () => {
+      await withEnvAsync({ BRAVE_API_KEY: undefined }, async () => {
         const stateDir = process.env.OPENCLAW_STATE_DIR?.trim();
         if (!stateDir) {
           throw new Error("Expected OPENCLAW_STATE_DIR to be set by withTempHome");
@@ -572,10 +769,14 @@ describe("config env vars", () => {
         await fs.writeFile(path.join(stateDir, ".env"), "BRAVE_API_KEY=from-dotenv\n", "utf-8");
 
         const config: OpenClawConfig = {
-          tools: {
-            web: {
-              search: {
-                apiKey: "${BRAVE_API_KEY}",
+          plugins: {
+            entries: {
+              brave: {
+                config: {
+                  webSearch: {
+                    apiKey: "${BRAVE_API_KEY}",
+                  },
+                },
               },
             },
           },
@@ -583,12 +784,24 @@ describe("config env vars", () => {
 
         loadDotEnv({ quiet: true });
         const first = resolveConfigEnvVars(config, process.env) as OpenClawConfig;
-        expect(first.tools?.web?.search?.apiKey).toBe("from-dotenv");
+        expect(
+          (
+            first.plugins?.entries?.brave?.config as
+              | { webSearch?: { apiKey?: unknown } }
+              | undefined
+          )?.webSearch?.apiKey,
+        ).toBe("from-dotenv");
 
         delete process.env.BRAVE_API_KEY;
         loadDotEnv({ quiet: true });
         const second = resolveConfigEnvVars(config, process.env) as OpenClawConfig;
-        expect(second.tools?.web?.search?.apiKey).toBe("from-dotenv");
+        expect(
+          (
+            second.plugins?.entries?.brave?.config as
+              | { webSearch?: { apiKey?: unknown } }
+              | undefined
+          )?.webSearch?.apiKey,
+        ).toBe("from-dotenv");
       });
     });
   });

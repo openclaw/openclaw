@@ -10,6 +10,18 @@ vi.mock("../agents/harness/runtime-plugin.js", () => ({
   ensureSelectedAgentHarnessPlugin: agentHarnessPluginMocks.ensureSelectedAgentHarnessPlugin,
 }));
 
+vi.mock("../agents/runtime-plugins.js", async () => {
+  const { createEmptyPluginRegistry } = await import("../plugins/registry-empty.js");
+  return {
+    withAgentPluginRegistry: ({ run }: { run: () => unknown }) => run(),
+    loadAgentRuntimePluginRegistryHandle: () => createEmptyPluginRegistry(),
+    acquireAgentRuntimePluginRegistry: async () => {
+      const registry = createEmptyPluginRegistry();
+      return { registry, primaryRegistry: registry };
+    },
+  };
+});
+
 vi.mock("../logging/subsystem.js", () => {
   const createMockLogger = () => ({
     subsystem: "test",
@@ -60,14 +72,32 @@ vi.mock("../agents/embedded-agent.js", () => ({
 
 vi.mock("../agents/model-catalog.js", () => ({
   loadManifestModelCatalog: vi.fn(() => []),
-  loadModelCatalog: vi.fn(),
 }));
 
-vi.mock("../agents/model-selection.js", () => {
+vi.mock("../agents/prepared-model-catalog.js", () => ({
+  loadProviderScopedThinkingCatalog: vi.fn(async () => []),
+  readPreparedModelCatalog: vi.fn(),
+  loadPreparedModelCatalogSnapshot: vi.fn(async () => ({
+    entries: [],
+    routeVariants: [],
+  })),
+}));
+
+vi.mock("../agents/model-selection.js", async (importOriginal) => {
+  const {
+    inferUniqueProviderFromConfiguredModels,
+    normalizeStoredOverrideModel,
+    resolvePersistedSelectedModelRef,
+  } = await importOriginal<typeof import("../agents/model-selection.js")>();
+  const { normalizeModelRef } = await import("../agents/model-ref-shared.js");
+  const { parseModelRef: parseModelRefImpl } =
+    await import("../agents/model-selection-normalize.js");
   type ConfigWithModels = {
+    meta?: { migrations?: { modelPolicyAllowlist?: boolean } };
     agents?: {
       defaults?: {
         model?: string | { primary?: string; fallbacks?: string[] };
+        modelPolicy?: { allow?: string[] };
         models?: Record<string, { params?: { thinking?: string } } | undefined>;
         thinkingDefault?: string;
       };
@@ -76,34 +106,22 @@ vi.mock("../agents/model-selection.js", () => {
   type ModelRef = { provider: string; model: string };
   type CatalogEntry = { id?: string; model?: string; name?: string; reasoning?: boolean };
 
-  const parseModelRefImpl = (raw: string, defaultProvider = "openai"): ModelRef | null => {
-    const value = raw.trim();
-    if (!value) {
-      return null;
-    }
-    const slash = value.indexOf("/");
-    if (slash >= 0) {
-      return {
-        provider: value.slice(0, slash).trim(),
-        model: value.slice(slash + 1).trim(),
-      };
-    }
-    return { provider: defaultProvider, model: value };
-  };
   const parseModelRef = vi.fn(parseModelRefImpl);
   const normalizeProviderId = (provider: string) => provider.trim().toLowerCase();
-  const normalizeModelRef = (provider: string, model: string): ModelRef => ({
-    provider: normalizeProviderId(provider),
-    model: model.trim(),
-  });
   const modelKey = (provider: string, model: string) =>
     `${normalizeProviderId(provider)}/${model.trim().toLowerCase()}`;
   const isModelKeyAllowedBySet = (allowedKeys: ReadonlySet<string>, key: string) => {
     if (allowedKeys.has(key)) {
       return true;
     }
-    const slash = key.indexOf("/");
-    return slash > 0 && allowedKeys.has(`${key.slice(0, slash)}/*`);
+    let separator = key.indexOf("/");
+    while (separator > 0) {
+      if (allowedKeys.has(`${key.slice(0, separator + 1)}*`)) {
+        return true;
+      }
+      separator = key.indexOf("/", separator + 1);
+    }
+    return false;
   };
   const resolvePrimary = (cfg?: ConfigWithModels): string | undefined => {
     const primary = cfg?.agents?.defaults?.model;
@@ -116,16 +134,31 @@ vi.mock("../agents/model-selection.js", () => {
     const parsed = parseModelRefImpl(resolvePrimary(cfg) ?? "openai/gpt-5.5", "openai");
     return parsed ?? { provider: "openai", model: "gpt-5.5" };
   };
-  const resolveModelConfig = (cfg: ConfigWithModels | undefined, ref: ModelRef) => {
-    const models = cfg?.agents?.defaults?.models ?? {};
-    return models[`${ref.provider}/${ref.model}`] ?? models[modelKey(ref.provider, ref.model)];
+  const resolvePolicyRefs = (cfg?: ConfigWithModels) => {
+    const defaults = cfg?.agents?.defaults;
+    const hasExplicitPolicy = Boolean(
+      defaults?.modelPolicy && Object.hasOwn(defaults.modelPolicy, "allow"),
+    );
+    if (hasExplicitPolicy) {
+      return {
+        refs: defaults?.modelPolicy?.allow ?? [],
+        configPath: "agents.defaults.modelPolicy.allow",
+      };
+    }
+    if (cfg?.meta?.migrations?.modelPolicyAllowlist !== true) {
+      const refs = Object.keys(defaults?.models ?? {});
+      if (refs.length > 0) {
+        return { refs, configPath: "agents.defaults.models" };
+      }
+    }
+    return { refs: [], configPath: null };
   };
 
   return {
     buildAllowedModelSet: vi.fn(({ cfg }: { cfg?: ConfigWithModels; catalog?: CatalogEntry[] }) => {
       const refs = new Set<string>();
-      const modelConfig = cfg?.agents?.defaults?.models ?? {};
-      for (const raw of Object.keys(modelConfig)) {
+      const policyRefs = resolvePolicyRefs(cfg).refs;
+      for (const raw of policyRefs) {
         const parsed = parseModelRefImpl(raw, "openai");
         if (parsed) {
           refs.add(modelKey(parsed.provider, parsed.model));
@@ -133,27 +166,18 @@ vi.mock("../agents/model-selection.js", () => {
       }
       const primary = resolveDefaultRef(cfg);
       refs.add(modelKey(primary.provider, primary.model));
-      const fallbackRefs =
-        typeof cfg?.agents?.defaults?.model === "object"
-          ? (cfg.agents.defaults.model.fallbacks ?? [])
-          : [];
-      for (const fallback of fallbackRefs) {
-        const parsed = parseModelRefImpl(fallback, primary.provider);
-        if (parsed) {
-          refs.add(modelKey(parsed.provider, parsed.model));
-        }
-      }
       return {
         allowedKeys: refs,
         allowedCatalog: [],
-        allowAny: Object.keys(modelConfig).length === 0,
+        allowAny: policyRefs.length === 0,
       };
     }),
     createModelVisibilityPolicy: vi.fn(
       ({ cfg, catalog = [] }: { cfg?: ConfigWithModels; catalog?: CatalogEntry[] }) => {
         const refs = new Set<string>();
-        const modelConfig = cfg?.agents?.defaults?.models ?? {};
-        for (const raw of Object.keys(modelConfig)) {
+        const policy = resolvePolicyRefs(cfg);
+        const policyRefs = policy.refs;
+        for (const raw of policyRefs) {
           const parsed = parseModelRefImpl(raw, "openai");
           if (parsed) {
             refs.add(modelKey(parsed.provider, parsed.model));
@@ -161,22 +185,28 @@ vi.mock("../agents/model-selection.js", () => {
         }
         const primary = resolveDefaultRef(cfg);
         refs.add(modelKey(primary.provider, primary.model));
-        const allowAny = Object.keys(modelConfig).length === 0;
+        const allowAny = policyRefs.length === 0;
+        const wildcardModelKeys = new Set(
+          policyRefs.filter((key) => key.endsWith("/*")).map((key) => key.trim().toLowerCase()),
+        );
+        const wildcardProviders = new Set(
+          [...wildcardModelKeys].map((key) => key.slice(0, key.indexOf("/"))),
+        );
         const allowsKey = (key: string) => allowAny || isModelKeyAllowedBySet(refs, key);
         return {
           allowAny,
+          catalog,
           allowedKeys: refs,
           allowedCatalog: catalog,
-          exactModelRefs: Object.keys(modelConfig).filter((key) => !key.endsWith("/*")),
-          providerWildcards: new Set(
-            Object.keys(modelConfig)
-              .filter((key) => key.endsWith("/*"))
-              .map((key) => key.slice(0, -2).trim().toLowerCase()),
-          ),
-          hasConfiguredEntries: Object.keys(modelConfig).length > 0,
-          hasProviderWildcards: Object.keys(modelConfig).some((key) => key.endsWith("/*")),
-          allowsKey,
+          exactModelRefs: policyRefs.filter((key) => !key.endsWith("/*")),
+          providerWildcards: wildcardProviders,
+          hasConfiguredEntries: policyRefs.length > 0,
+          hasProviderWildcards: wildcardModelKeys.size > 0,
+          allowConfigPath: policy.configPath,
+          allowRepairConfigPath: "agents.defaults.modelPolicy.allow",
           allows: ({ provider, model }: ModelRef) => allowsKey(modelKey(provider, model)),
+          allowsByWildcard: ({ provider, model }: ModelRef) =>
+            isModelKeyAllowedBySet(wildcardModelKeys, modelKey(provider, model)),
           resolveSelection: ({ provider, model }: ModelRef) => {
             const key = modelKey(provider, model);
             if (allowsKey(key)) {
@@ -193,12 +223,15 @@ vi.mock("../agents/model-selection.js", () => {
     buildConfiguredModelCatalog: vi.fn(() => []),
     buildModelAliasIndex: vi.fn(() => new Map()),
     isModelKeyAllowedBySet,
+    inferUniqueProviderFromConfiguredModels,
     isCliProvider: vi.fn(() => false),
     modelKey,
     normalizeModelRef,
+    normalizeStoredOverrideModel,
     normalizeProviderId,
     normalizeProviderIdForAuth: normalizeProviderId,
     parseModelRef,
+    resolvePersistedSelectedModelRef,
     resolveConfiguredModelRef: vi.fn(
       ({ cfg }: { cfg?: ConfigWithModels; defaultProvider?: string; defaultModel?: string }) =>
         resolveDefaultRef(cfg),
@@ -207,43 +240,21 @@ vi.mock("../agents/model-selection.js", () => {
       resolveDefaultRef(cfg),
     ),
     resolveModelRefFromString: vi.fn(
-      ({ raw, defaultProvider }: { raw: string; defaultProvider?: string }) => {
-        const ref = parseModelRef(raw, defaultProvider ?? "openai");
-        return ref ? { ref, source: "parsed" } : null;
-      },
-    ),
-    resolveThinkingDefault: vi.fn(
       ({
-        cfg,
-        provider,
-        model,
-        catalog,
-      }: {
-        cfg?: ConfigWithModels;
-        provider: string;
-        model: string;
-        catalog?: CatalogEntry[];
-      }) => {
-        const ref = normalizeModelRef(provider, model);
-        const modelThinking = resolveModelConfig(cfg, ref)?.params?.thinking;
-        if (modelThinking) {
-          return modelThinking;
-        }
-        const defaultThinking = cfg?.agents?.defaults?.thinkingDefault;
-        if (defaultThinking) {
-          return defaultThinking;
-        }
-        const entry = catalog?.find((item) => item.id === model || item.model === model);
-        if (entry?.reasoning && entry.name?.includes("4.6")) {
-          return "adaptive";
-        }
-        return entry?.reasoning ? "low" : "off";
+        raw,
+        defaultProvider,
+        ...options
+      }: { raw: string; defaultProvider?: string } & NonNullable<
+        Parameters<typeof parseModelRefImpl>[2]
+      >) => {
+        const ref = parseModelRef(raw, defaultProvider ?? "openai", options);
+        return ref ? { ref, source: "parsed" } : null;
       },
     ),
   };
 });
 
-vi.mock("../agents/subagent-announce.js", () => ({
+vi.mock("../agents/subagents/announce/subagent-announce.js", () => ({
   runSubagentAnnounceFlow: vi.fn(),
 }));
 
@@ -259,13 +270,29 @@ vi.mock("../agents/workspace.js", () => ({
   ensureAgentWorkspace: vi.fn(async ({ dir }: { dir: string }) => ({ dir })),
 }));
 
-vi.mock("../skills/loading/workspace.js", () => ({
-  buildWorkspaceSkillSnapshot: vi.fn(() => undefined),
-  loadWorkspaceSkillEntries: vi.fn(() => []),
+vi.mock("../skills/loading/workspace-skill-prompt.js", () => ({
+  buildSkillSnapshot: vi.fn(() => undefined),
 }));
+
+vi.mock("../skills/loading/workspace-skill-loader.js", () => {
+  const loadVisibleSkills = vi.fn<
+    typeof import("../skills/loading/workspace-skill-loader.js").loadVisibleSkills
+  >(() => []);
+  return {
+    filterWorkspaceSkills: (entries: unknown[]) => entries,
+    loadVisibleSkills,
+    prepareWorkspaceSkills: async (...args: Parameters<typeof loadVisibleSkills>) =>
+      loadVisibleSkills(...args),
+    loadWorkspaceSkills: vi.fn(() => []),
+  };
+});
 
 vi.mock("../skills/runtime/remote.js", () => ({
   getRemoteSkillEligibility: vi.fn(() => undefined),
+}));
+
+vi.mock("../plugins/bundle-commands.js", () => ({
+  loadEnabledClaudeBundleCommands: vi.fn(() => []),
 }));
 
 vi.mock("../skills/discovery/agent-filter.js", () => ({

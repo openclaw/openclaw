@@ -1,14 +1,16 @@
 // Policy doctor strictness comparisons for scoped policy overlays.
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { POLICY_TOOL_GROUPS } from "../tool-policy-conformance.js";
+import { normalizeAccountId, normalizeAgentId } from "openclaw/plugin-sdk/routing";
+import {
+  hasNonEmptyString as nonEmptyString,
+  isRecord,
+  normalizeLowercaseStringOrEmpty,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { ROUTING_MATCH_KINDS } from "../policy-routing.js";
+import { expandPolicyToolRequirement, toolListCoversTool } from "../tool-policy-conformance.js";
+import { readExecApprovalAllowlistRequirements } from "./exec-approval-rules.js";
 import type { PolicyRuleMetadata } from "./metadata.js";
-
-type ExecApprovalAllowlistRequirement = {
-  readonly key: string;
-  readonly pattern: string;
-  readonly argPattern?: string;
-};
+import { isChannelDenyRule } from "./shape-helpers.js";
 
 export function isPolicyValueAtLeastAsStrict(
   metadata: PolicyRuleMetadata,
@@ -28,8 +30,142 @@ export function isPolicyValueAtLeastAsStrict(
       return baseline !== false || candidate === false;
     case "exact-list":
       return samePolicyStringList(candidate, baseline, metadata);
+    case "routing-probes":
+      return routingProbesAtLeastAsStrict(candidate, baseline);
   }
   return false;
+}
+
+function routingProbesAtLeastAsStrict(candidate: unknown, baseline: unknown): boolean {
+  if (!Array.isArray(candidate) || !Array.isArray(baseline)) {
+    return false;
+  }
+  const candidateById = new Map<string, Record<string, unknown>>();
+  for (const entry of candidate) {
+    if (!isRecord(entry) || !nonEmptyString(entry.id) || candidateById.has(entry.id)) {
+      return false;
+    }
+    candidateById.set(entry.id, entry);
+  }
+  return baseline.every((baselineEntry) => {
+    if (!isRecord(baselineEntry) || !nonEmptyString(baselineEntry.id)) {
+      return false;
+    }
+    const candidateEntry = candidateById.get(baselineEntry.id);
+    if (!isRecord(candidateEntry)) {
+      return false;
+    }
+    const candidateRoute = canonicalRoutingRoute(candidateEntry.route);
+    const baselineRoute = canonicalRoutingRoute(baselineEntry.route);
+    if (
+      candidateRoute === undefined ||
+      baselineRoute === undefined ||
+      candidateRoute !== baselineRoute ||
+      !isRecord(candidateEntry.expect) ||
+      !isRecord(baselineEntry.expect) ||
+      !nonEmptyString(candidateEntry.expect.agentId) ||
+      !nonEmptyString(baselineEntry.expect.agentId) ||
+      normalizeAgentId(candidateEntry.expect.agentId) !==
+        normalizeAgentId(baselineEntry.expect.agentId)
+    ) {
+      return false;
+    }
+    return routingMatchKindsAtLeastAsStrict(
+      candidateEntry.expect.matchedBy,
+      baselineEntry.expect.matchedBy,
+    );
+  });
+}
+
+function routingMatchKindsAtLeastAsStrict(candidate: unknown, baseline: unknown): boolean {
+  if (baseline === undefined) {
+    return candidate === undefined || validRoutingMatchKinds(candidate);
+  }
+  if (!validRoutingMatchKinds(candidate) || !validRoutingMatchKinds(baseline)) {
+    return false;
+  }
+  const baselineKinds = new Set(baseline);
+  return candidate.every((entry) => baselineKinds.has(entry));
+}
+
+function validRoutingMatchKinds(value: unknown): value is readonly string[] {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.every(
+      (entry) => typeof entry === "string" && ROUTING_MATCH_KINDS.includes(entry as never),
+    ) &&
+    new Set(value).size === value.length
+  );
+}
+
+function canonicalRoutingRoute(value: unknown): string | undefined {
+  if (
+    !isRecord(value) ||
+    Object.keys(value).some(
+      (key) =>
+        ![
+          "accountId",
+          "channel",
+          "guildId",
+          "memberRoleIds",
+          "parentPeer",
+          "peer",
+          "teamId",
+        ].includes(key),
+    ) ||
+    !nonEmptyString(value.channel) ||
+    [value.accountId, value.guildId, value.teamId].some(
+      (entry) => entry !== undefined && !nonEmptyString(entry),
+    )
+  ) {
+    return undefined;
+  }
+  const peer = canonicalRoutingPeer(value.peer);
+  const parentPeer = canonicalRoutingPeer(value.parentPeer);
+  if (peer === null || parentPeer === null) {
+    return undefined;
+  }
+  const memberRoleIds = value.memberRoleIds;
+  if (
+    memberRoleIds !== undefined &&
+    (!Array.isArray(memberRoleIds) ||
+      memberRoleIds.length === 0 ||
+      memberRoleIds.some((entry) => !nonEmptyString(entry)) ||
+      new Set(memberRoleIds).size !== memberRoleIds.length)
+  ) {
+    return undefined;
+  }
+  return JSON.stringify({
+    channel: normalizeLowercaseStringOrEmpty(value.channel),
+    // Probe account ids are inbound values, not binding patterns, so "*" follows
+    // resolveAgentRoute and normalizes to the default account rather than a wildcard.
+    accountId: normalizeAccountId(value.accountId as string | undefined),
+    peer,
+    parentPeer,
+    guildId: normalizeRoutingId(value.guildId),
+    teamId: normalizeRoutingId(value.teamId),
+    memberRoleIds: memberRoleIds?.toSorted(),
+  });
+}
+
+function canonicalRoutingPeer(value: unknown): object | undefined | null {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (
+    !isRecord(value) ||
+    Object.keys(value).some((key) => key !== "id" && key !== "kind") ||
+    !(["channel", "direct", "group"] as const).includes(value.kind as never) ||
+    !nonEmptyString(value.id)
+  ) {
+    return null;
+  }
+  return { kind: value.kind, id: value.id.trim() };
+}
+
+function normalizeRoutingId(value: unknown): string | undefined {
+  return typeof value === "string" ? value.trim() : undefined;
 }
 
 function isPolicyOrderedStringAtLeastAsStrict(
@@ -122,11 +258,7 @@ function policyStringList(
     return undefined;
   }
   if (metadata.policyPath.join(".") === "execApprovals.agents.allowlist.expected") {
-    const entries = value.map(execApprovalAllowlistRequirement);
-    if (!entries.every((entry): entry is ExecApprovalAllowlistRequirement => entry !== undefined)) {
-      return undefined;
-    }
-    return entries.map((entry) => entry.key);
+    return readExecApprovalAllowlistRequirements(value, [])?.map((entry) => entry.key);
   }
   if (!value.every((entry) => typeof entry === "string")) {
     return undefined;
@@ -170,101 +302,4 @@ function policyString(value: unknown, metadata: PolicyRuleMetadata): string | un
   }
   const trimmed = value.trim();
   return metadata.caseSensitive === true ? trimmed : trimmed.toLowerCase();
-}
-
-function execApprovalAllowlistRequirement(
-  value: unknown,
-): ExecApprovalAllowlistRequirement | undefined {
-  if (typeof value === "string") {
-    const pattern = value.trim();
-    return pattern === "" ? undefined : execApprovalAllowlistRequirementFromParts(pattern);
-  }
-  if (!isRecord(value)) {
-    return undefined;
-  }
-  const keys = Object.keys(value);
-  if (keys.some((key) => key !== "argPattern" && key !== "pattern")) {
-    return undefined;
-  }
-  const pattern = typeof value.pattern === "string" ? value.pattern.trim() : "";
-  if (pattern === "") {
-    return undefined;
-  }
-  const argPattern = typeof value.argPattern === "string" ? value.argPattern.trim() : undefined;
-  if (value.argPattern !== undefined && argPattern === undefined) {
-    return undefined;
-  }
-  return execApprovalAllowlistRequirementFromParts(
-    pattern,
-    argPattern === "" ? undefined : argPattern,
-  );
-}
-
-function execApprovalAllowlistRequirementFromParts(
-  pattern: string,
-  argPattern?: string,
-): ExecApprovalAllowlistRequirement {
-  return {
-    key: execApprovalAllowlistRequirementKey(pattern, argPattern),
-    pattern,
-    ...(argPattern === undefined ? {} : { argPattern }),
-  };
-}
-
-function execApprovalAllowlistRequirementKey(
-  pattern: string,
-  argPattern: string | undefined,
-): string {
-  return `${pattern}\0${argPattern ?? ""}`;
-}
-
-function isChannelDenyRule(value: unknown): value is {
-  readonly id?: string;
-  readonly when?: { readonly provider?: string };
-  readonly reason?: string;
-} {
-  return (
-    isRecord(value) &&
-    (value.id === undefined || typeof value.id === "string") &&
-    (value.reason === undefined || typeof value.reason === "string") &&
-    isRecord(value.when) &&
-    typeof value.when.provider === "string"
-  );
-}
-
-function toolListCoversTool(list: readonly string[], tool: string): boolean {
-  for (const entry of list) {
-    const normalized = normalizePolicyToolName(entry);
-    if (normalized === "*" || normalized === tool) {
-      return true;
-    }
-    if (POLICY_TOOL_GROUPS[normalized]?.includes(tool)) {
-      return true;
-    }
-    if (normalized.includes("*") && policyToolGlobMatches(tool, normalized)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function expandPolicyToolRequirement(value: string): readonly string[] {
-  const normalized = normalizePolicyToolName(value);
-  return POLICY_TOOL_GROUPS[normalized] ?? [normalized];
-}
-
-function normalizePolicyToolName(value: string): string {
-  const normalized = value.trim().toLowerCase();
-  if (normalized === "bash") {
-    return "exec";
-  }
-  if (normalized === "apply-patch") {
-    return "apply_patch";
-  }
-  return normalized;
-}
-
-function policyToolGlobMatches(tool: string, pattern: string): boolean {
-  const escaped = pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`^${escaped.replaceAll("\\*", ".*")}$`).test(tool);
 }

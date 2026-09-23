@@ -29,40 +29,39 @@ function readUiCss(): string {
     "ui/src/styles/layout.css",
     "ui/src/styles/layout.mobile.css",
     "ui/src/styles/components.css",
+    "ui/src/styles/settings-controls.css",
     "ui/src/styles/settings.css",
     "ui/src/styles/sessions.css",
+    "ui/src/styles/capacity-meter.css",
   ];
   return files.map((file) => readStyleSheet(file)).join("\n");
 }
 
 function sessionsTableHtml() {
   const headers = ["", "Key", "Kind", "Status", "Updated", "Tokens", "Actions"];
-  const overviewTiles = [
-    ["3", "Sessions"],
+  const headingFacts = [
     ["1", "Live"],
     ["1", "Unread"],
-    ["123k", "Tokens"],
   ]
     .map(
-      ([value, label]) => `
-        <div class="sessions-overview__tile">
-          <span class="sessions-overview__icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" /></svg>
-          </span>
-          <span class="sessions-overview__meta">
-            <span class="sessions-overview__value">${value}</span>
-            <span class="sessions-overview__label">${label}</span>
-          </span>
-        </div>
+      ([value, label], index) => `
+        ${index > 0 ? '<span class="sessions-heading-fact__separator" aria-hidden="true">·</span>' : ""}
+        <span class="sessions-heading-fact">
+          <strong>${value}</strong> ${label}
+        </span>
       `,
     )
     .join("");
   return `
     <div class="settings-page settings-page--wide">
-      <div class="settings-group">
-        <div class="sessions-overview">${overviewTiles}</div>
-      </div>
-      <div class="settings-group">
+      <section class="settings-section">
+        <div class="settings-section__header">
+          <h2 class="settings-section__heading">
+            Sessions <span class="settings-count">3</span>
+            <span class="sessions-heading-facts">${headingFacts}</span>
+          </h2>
+        </div>
+        <div class="settings-group">
         <div class="data-table-container">
           <table class="data-table sessions-table">
             <thead>
@@ -80,9 +79,7 @@ function sessionsTableHtml() {
                               : index === 6
                                 ? "session-actions-col"
                                 : ""
-                      }">${
-                        index === 6 ? `<span class="sessions-sr-only">${header}</span>` : header
-                      }</th>`,
+                      }">${index === 6 ? `<span class="sr-only">${header}</span>` : header}</th>`,
                   )
                   .join("")}
               </tr>
@@ -125,7 +122,6 @@ function sessionsTableHtml() {
                 <td class="session-actions-cell">
                   <div class="session-actions">
                     <button class="session-details-toggle" type="button" aria-expanded="true">
-                      <span class="settings-count session-compaction-count">1</span>
                       <svg viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" /></svg>
                     </button>
                     <button class="icon-btn" aria-label="Open session menu" aria-haspopup="menu">
@@ -172,24 +168,6 @@ function sessionsTableHtml() {
                         <div class="session-detail-stat__label">Tokens</div>
                         <div class="session-detail-stat__value">123456 / 200000</div>
                       </div>
-                      <div class="session-detail-stat">
-                        <div class="session-detail-stat__label">Compaction</div>
-                        <div class="session-detail-stat__value">1 Checkpoint</div>
-                      </div>
-                    </div>
-                    <div class="session-details-section">
-                      <div class="session-details-panel__eyebrow">Compaction history</div>
-                      <div class="session-checkpoint-list">
-                        <div class="session-checkpoint-card">
-                          <div class="session-checkpoint-card__header">
-                            <strong>manual - now</strong>
-                            <span class="muted session-checkpoint-card__delta">122,414 to 38,920 tokens</span>
-                          </div>
-                          <div class="session-checkpoint-card__summary">
-                            Earlier transcript state is preserved here for branch or restore.
-                          </div>
-                        </div>
-                      </div>
                     </div>
                   </div>
                 </td>
@@ -197,7 +175,20 @@ function sessionsTableHtml() {
             </tbody>
           </table>
         </div>
-      </div>
+        <div class="data-table-pagination">
+          <div class="data-table-pagination__info">1-25 of 30 rows</div>
+          <div class="data-table-pagination__controls">
+            <select class="data-table-pagination__size" aria-label="Rows per page">
+              <option value="10">10 per page</option>
+              <option value="25" selected>25 per page</option>
+              <option value="50">50 per page</option>
+            </select>
+            <button>Previous</button>
+            <button>Next</button>
+          </div>
+        </div>
+        </div>
+      </section>
     </div>
   `;
 }
@@ -256,23 +247,27 @@ describeBrowserLayout("sessions responsive browser layout", () => {
         const kind = document.querySelector(".session-kind");
         const key = document.querySelector(".session-key-cell .session-link");
         const details = document.querySelector(".session-details-panel");
+        const facts = document.querySelector(".sessions-heading-facts");
         if (
           !(container instanceof HTMLElement) ||
           !(actions instanceof HTMLElement) ||
           !(trigger instanceof HTMLElement) ||
           !(status instanceof HTMLElement) ||
           !(kind instanceof HTMLElement) ||
-          !(key instanceof HTMLElement)
+          !(key instanceof HTMLElement) ||
+          !(facts instanceof HTMLElement)
         ) {
           throw new Error("Missing sessions table fixture elements");
         }
         const containerRect = container.getBoundingClientRect();
         const actionsRect = actions.getBoundingClientRect();
         const statusRect = status.getBoundingClientRect();
+        const factsRect = facts.getBoundingClientRect();
         const statusStyle = getComputedStyle(status);
         return {
           bodyOverflow: document.documentElement.scrollWidth - window.innerWidth,
-          checkpointCount: trigger.querySelector(".session-compaction-count")?.textContent?.trim(),
+          factsText: facts.textContent?.replace(/\s+/gu, " ").trim(),
+          factsVisible: factsRect.left >= 0 && factsRect.right <= window.innerWidth,
           statusText: status.textContent?.trim(),
           keyWhiteSpace: getComputedStyle(key).whiteSpace,
           kindWhiteSpace: getComputedStyle(kind).whiteSpace,
@@ -288,7 +283,8 @@ describeBrowserLayout("sessions responsive browser layout", () => {
       });
 
       expect(metrics.bodyOverflow).toBeLessThanOrEqual(1);
-      expect(metrics.checkpointCount).toBe("1");
+      expect(metrics.factsText).toBe("1 Live · 1 Unread");
+      expect(metrics.factsVisible).toBe(true);
       expect(metrics.statusText).toBe("Live");
       expect(metrics.keyWhiteSpace).toBe("nowrap");
       expect(metrics.kindWhiteSpace).toBe("nowrap");
@@ -299,6 +295,17 @@ describeBrowserLayout("sessions responsive browser layout", () => {
       expect(metrics.hasDetails).toBe(true);
       expect(metrics.actionsVisible).toBe(true);
       expect(metrics.statusVisible).toBe(true);
+    } finally {
+      await closeFixture(fixture);
+    }
+  });
+
+  it("exposes the page-size selector by its localized accessible name", async () => {
+    const fixture = await openFixture(context, 1440, 900);
+    try {
+      const pageSize = fixture.page.getByRole("combobox", { name: "Rows per page" });
+      await pageSize.waitFor();
+      expect(await pageSize.inputValue()).toBe("25");
     } finally {
       await closeFixture(fixture);
     }

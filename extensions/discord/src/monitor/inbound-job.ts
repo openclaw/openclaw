@@ -1,5 +1,3 @@
-// Discord plugin module implements inbound job behavior.
-import type { ChannelReplayClaimHandle } from "openclaw/plugin-sdk/persistent-dedupe";
 import {
   resolveDiscordChannelIdSafe,
   resolveDiscordChannelInfoSafe,
@@ -10,9 +8,12 @@ import type { DiscordMessagePreflightContext } from "./message-handler.preflight
 
 type DiscordInboundJobRuntimeField =
   | "runtime"
+  | "buildContext"
   | "abortSignal"
+  | "isPolicyCurrent"
   | "guildHistories"
   | "client"
+  | "turnAdoptionLifecycle"
   | "threadBindings"
   | "discordRestFetch";
 
@@ -21,35 +22,27 @@ type DiscordInboundJobRuntime = Pick<DiscordMessagePreflightContext, DiscordInbo
 type DiscordInboundJobPayload = Omit<DiscordMessagePreflightContext, DiscordInboundJobRuntimeField>;
 
 export type DiscordInboundJob = {
-  queueKey: string;
   payload: DiscordInboundJobPayload;
   runtime: DiscordInboundJobRuntime;
-  replayClaims?: readonly ChannelReplayClaimHandle[];
+  ingressSettlement?: {
+    settle: () => Promise<void>;
+    abandon: (error?: unknown) => Promise<void>;
+    cancel: () => Promise<void>;
+  };
 };
-
-function resolveDiscordInboundJobQueueKey(ctx: DiscordMessagePreflightContext): string {
-  // Serialize work by the eventual session route so one conversation cannot
-  // race itself when Discord channel and session identifiers differ.
-  const sessionKey = ctx.route.sessionKey?.trim();
-  if (sessionKey) {
-    return sessionKey;
-  }
-  const baseSessionKey = ctx.baseSessionKey?.trim();
-  if (baseSessionKey) {
-    return baseSessionKey;
-  }
-  return ctx.messageChannelId;
-}
 
 export function buildDiscordInboundJob(
   ctx: DiscordMessagePreflightContext,
-  options?: { replayClaims?: readonly ChannelReplayClaimHandle[] },
+  options?: { ingressSettlement?: DiscordInboundJob["ingressSettlement"] },
 ): DiscordInboundJob {
   const {
     runtime,
+    buildContext,
     abortSignal,
+    isPolicyCurrent,
     guildHistories,
     client,
+    turnAdoptionLifecycle,
     threadBindings,
     discordRestFetch,
     message,
@@ -60,7 +53,6 @@ export function buildDiscordInboundJob(
 
   const sanitizedMessage = sanitizeDiscordInboundMessage(message);
   return {
-    queueKey: resolveDiscordInboundJobQueueKey(ctx),
     payload: {
       ...payload,
       message: sanitizedMessage,
@@ -72,13 +64,16 @@ export function buildDiscordInboundJob(
     },
     runtime: {
       runtime,
+      buildContext,
       abortSignal,
+      isPolicyCurrent,
       guildHistories,
       client,
+      turnAdoptionLifecycle,
       threadBindings,
       discordRestFetch,
     },
-    replayClaims: options?.replayClaims,
+    ingressSettlement: options?.ingressSettlement,
   };
 }
 

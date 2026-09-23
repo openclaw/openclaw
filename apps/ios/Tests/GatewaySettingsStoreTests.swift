@@ -1,5 +1,6 @@
 import Foundation
 import OpenClawKit
+import os
 import Security
 import Testing
 @testable import OpenClaw
@@ -685,6 +686,25 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
         }
     }
 
+    @Test func `registry observers refresh only after successful mutations`() {
+        withLastGatewaySnapshot {
+            applyKeychain([gatewayRegistryKeychainEntry: nil, lastGatewayKeychainEntry: nil])
+            let notifications = OSAllocatedUnfairLock(initialState: 0)
+            let observer = NotificationCenter.default.addObserver(
+                forName: GatewaySettingsStore.gatewayRegistryDidChange,
+                object: nil,
+                queue: nil) { _ in notifications.withLock { $0 += 1 } }
+            defer { NotificationCenter.default.removeObserver(observer) }
+
+            #expect(GatewaySettingsStore.saveGatewayRegistry(.empty))
+            #expect(notifications.withLock { $0 } == 1)
+            #expect(!GatewaySettingsStore.setActiveGateway(stableID: "missing-gateway"))
+            #expect(notifications.withLock { $0 } == 1)
+            GatewaySettingsStore.clearGatewayRegistry()
+            #expect(notifications.withLock { $0 } == 2)
+        }
+    }
+
     @Test func `registry CRUD round trip persists deterministic ordering`() {
         withLastGatewaySnapshot {
             applyKeychain([gatewayRegistryKeychainEntry: nil, lastGatewayKeychainEntry: nil])
@@ -695,6 +715,7 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
                 host: "z.example.com",
                 port: 443,
                 useTLS: true,
+                contextPath: "/openclaw-gateway",
                 lastConnectedAtMs: nil)
             let gatewayA = GatewaySettingsStore.GatewayRegistryEntry(
                 stableID: "bonjour|alpha",
@@ -710,16 +731,108 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
             #expect(GatewaySettingsStore.markGatewayConnected(stableID: gatewayB.stableID, atMs: 1234))
             let firstJSON = KeychainStore.loadString(service: gatewayService, account: "gateway-registry")
             let registry = GatewaySettingsStore.loadGatewayRegistry()
+            #expect(registry.version == 1)
             #expect(registry.entries.map(\.stableID) == [gatewayA.stableID, gatewayB.stableID])
             #expect(registry.activeStableID == gatewayB.stableID)
+            #expect(registry.connectedStableIDs == [gatewayB.stableID])
             #expect(registry.entries.last?.lastConnectedAtMs == 1234)
-
+            #expect(registry.entries.last?.contextPath == "/openclaw-gateway")
             #expect(GatewaySettingsStore.upsertGatewayRegistryEntry(gatewayA))
             #expect(KeychainStore.loadString(service: gatewayService, account: "gateway-registry") == firstJSON)
+
+            #expect(GatewaySettingsStore.setActiveGateway(stableID: gatewayA.stableID))
+            #expect(GatewaySettingsStore.loadGatewayRegistry().connectedStableIDs == [
+                gatewayB.stableID,
+                gatewayA.stableID,
+            ])
+            #expect(GatewaySettingsStore.setGatewayConnectionEnabled(
+                stableID: gatewayB.stableID,
+                enabled: false))
+            #expect(GatewaySettingsStore.loadGatewayRegistry().connectedStableIDs == [gatewayA.stableID])
+
             #expect(GatewaySettingsStore.removeGatewayRegistryEntry(stableID: gatewayB.stableID))
             #expect(GatewaySettingsStore.loadGatewayRegistry().entries == [gatewayA])
-            #expect(GatewaySettingsStore.activeGatewayEntry() == nil)
+            #expect(GatewaySettingsStore.activeGatewayEntry() == gatewayA)
         }
+    }
+
+    @Test func `version one registry upgrades focused gateway to connected`() {
+        withLastGatewaySnapshot {
+            applyKeychain([
+                gatewayRegistryKeychainEntry:
+                    #"{"version":1,"activeStableID":"bonjour|alpha","entries":[{"stableID":"bonjour|alpha","kind":"discovered","name":"Alpha","useTLS":true}]}"#,
+                lastGatewayKeychainEntry: nil,
+            ])
+
+            GatewaySettingsStore.bootstrapPersistence()
+
+            let registry = GatewaySettingsStore.loadGatewayRegistry()
+            #expect(registry.version == 1)
+            #expect(registry.activeStableID == "bonjour|alpha")
+            #expect(registry.connectedStableIDs == ["bonjour|alpha"])
+            #expect(KeychainStore.loadString(
+                service: gatewayService,
+                account: "gateway-registry")?.contains("connectedStableIDs") == true)
+        }
+    }
+
+    @Test func `version two registry without connectivity does not enable focus`() {
+        withLastGatewaySnapshot {
+            applyKeychain([
+                gatewayRegistryKeychainEntry:
+                    #"{"version":2,"activeStableID":"bonjour|alpha","entries":[{"stableID":"bonjour|alpha","kind":"discovered","name":"Alpha","useTLS":true}]}"#,
+                lastGatewayKeychainEntry: nil,
+            ])
+
+            GatewaySettingsStore.bootstrapPersistence()
+
+            let registry = GatewaySettingsStore.loadGatewayRegistry()
+            #expect(registry.version == 1)
+            #expect(registry.activeStableID == "bonjour|alpha")
+            #expect(registry.connectedStableIDs.isEmpty)
+        }
+    }
+
+    @Test func `newer registry blocks pairing mutations without overwriting`() {
+        withLastGatewaySnapshot {
+            let unsupported = #"{"version":3,"future":["keep-me"]}"#
+            applyKeychain([
+                gatewayRegistryKeychainEntry: unsupported,
+                lastGatewayKeychainEntry: nil,
+            ])
+
+            #expect(!GatewaySettingsStore.upsertGatewayRegistryEntry(.init(
+                stableID: "bonjour|new",
+                kind: .discovered,
+                name: "New",
+                host: nil,
+                port: nil,
+                useTLS: true,
+                lastConnectedAtMs: nil)))
+            #expect(KeychainStore.loadString(
+                service: gatewayService,
+                account: "gateway-registry") == unsupported)
+
+            let missingVersion = #"{"entries":[]}"#
+            applyKeychain([gatewayRegistryKeychainEntry: missingVersion])
+            #expect(!GatewaySettingsStore.upsertGatewayRegistryEntry(.init(
+                stableID: "bonjour|new",
+                kind: .discovered,
+                name: "New",
+                host: nil,
+                port: nil,
+                useTLS: true,
+                lastConnectedAtMs: nil)))
+            #expect(KeychainStore.loadString(
+                service: gatewayService,
+                account: "gateway-registry") == missingVersion)
+        }
+    }
+
+    @Test func `operator fleet excludes focus and deduplicates background gateways`() {
+        #expect(GatewayOperatorFleet.backgroundStableIDs(
+            connectedStableIDs: ["alpha", "beta", "beta", "gamma"],
+            focusedStableID: "alpha") == ["beta", "gamma"])
     }
 
     @Test func `registry preserves byte-distinct unicode gateway owners`() {

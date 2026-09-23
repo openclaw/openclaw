@@ -1,0 +1,173 @@
+import { runCommandWithTimeout } from "../process/exec.js";
+import { formatErrorMessage } from "./errors.js";
+import { trimLogTail } from "./restart-sentinel.js";
+import { createUpdateErrorFact, createUpdateFailureFact } from "./update-failure-facts.js";
+import { createGlobalInstallEnv } from "./update-global.js";
+import { createNpmFailureFacts } from "./update-npm-failure.js";
+import { isFailedUpdateStep } from "./update-run-step.js";
+import { UPDATE_RUN_HEARTBEAT_MS } from "./update-run-timeouts.js";
+import type {
+  CommandRunner,
+  RunStepOptions,
+  UpdateRunResult,
+  UpdateStepInfo,
+  UpdateStepResult,
+} from "./update-runner-types.js";
+
+export const MAX_LOG_CHARS = 8000;
+
+// A run shares its heartbeat callback across steps; weak keys do not retain completed runs.
+const warnedHeartbeats = new WeakSet<() => void>();
+
+function mergeCommandEnvironments(
+  baseEnv: NodeJS.ProcessEnv | undefined,
+  overrideEnv: NodeJS.ProcessEnv | undefined,
+): NodeJS.ProcessEnv | undefined {
+  if (!baseEnv) {
+    return overrideEnv;
+  }
+  if (!overrideEnv) {
+    return baseEnv;
+  }
+  return { ...baseEnv, ...overrideEnv };
+}
+
+export async function runStep(opts: RunStepOptions): Promise<UpdateStepResult> {
+  const { runCommand, name, argv, cwd, timeoutMs, env, progress, stepIndex, totalSteps } = opts;
+  const command = argv.join(" ");
+  const stepInfo: UpdateStepInfo = { name, command, index: stepIndex, total: totalSteps };
+  progress?.onStepStart?.(stepInfo);
+
+  const started = Date.now();
+  const onHeartbeat = progress?.onHeartbeat;
+  const heartbeat = onHeartbeat
+    ? setInterval(() => {
+        try {
+          onHeartbeat();
+        } catch (error) {
+          if (!warnedHeartbeats.has(onHeartbeat)) {
+            warnedHeartbeats.add(onHeartbeat);
+            console.warn(
+              `[update] Could not refresh the update heartbeat; continuing the command: ${trimLogTail(formatErrorMessage(error), 500)}`,
+            );
+          }
+        }
+      }, UPDATE_RUN_HEARTBEAT_MS)
+    : undefined;
+  heartbeat?.unref();
+  let result: Awaited<ReturnType<CommandRunner>>;
+  let commandError: { cause: unknown } | undefined;
+  let failureFacts: UpdateStepResult["failureFacts"];
+  try {
+    result = await runCommand(argv, {
+      cwd,
+      timeoutMs,
+      env,
+    });
+  } catch (error) {
+    commandError = { cause: error };
+    const fact = createUpdateErrorFact(name, error, env);
+    failureFacts = [fact];
+    result = { code: 1, stdout: "", stderr: fact.message ?? "" };
+  } finally {
+    clearInterval(heartbeat);
+  }
+  const durationMs = Date.now() - started;
+  const stdoutTail = trimLogTail(result.stdout, MAX_LOG_CHARS);
+  const stderrTail = trimLogTail(result.stderr, MAX_LOG_CHARS);
+  if (
+    !failureFacts &&
+    result.code !== 0 &&
+    ["package-install", "package-install-omit-optional", "package-pack"].includes(name) &&
+    (/(?:^|[\\/])npm(?:\.cmd|\.exe)?$/iu.test(argv[0] ?? "") ||
+      /\bnpm (?:ERR!|error)(?:\s|$)/u.test(`${result.stderr}\n${result.stdout}`))
+  ) {
+    failureFacts = createNpmFailureFacts(result.stdout, result.stderr, env);
+  }
+  failureFacts ??= isFailedUpdateStep({
+    exitCode: result.code,
+    killed: result.killed,
+    outputLimitExceeded: result.outputLimitExceeded,
+    termination: result.termination,
+  })
+    ? [
+        createUpdateFailureFact(
+          {
+            check: name,
+            code:
+              result.stderr.match(/\bnpm (?:ERR!|error) code ([A-Z][A-Z0-9_]+)/u)?.[1] ??
+              (result.termination && result.termination !== "exit"
+                ? result.termination
+                : "command-failed"),
+            message: result.stderr,
+          },
+          env,
+        ),
+      ]
+    : undefined;
+
+  const completion: Omit<UpdateStepResult, "cwd"> = {
+    name,
+    command,
+    durationMs,
+    exitCode: result.code,
+    stdoutTail,
+    stderrTail,
+    signal: result.signal,
+    killed: result.killed,
+    outputLimitExceeded: result.outputLimitExceeded,
+    termination: result.termination,
+    ...(failureFacts ? { failureFacts } : {}),
+  };
+  progress?.onStepComplete?.({ ...stepInfo, ...completion });
+
+  const stepResult: UpdateStepResult = {
+    ...completion,
+    cwd,
+  };
+  opts.results?.push(stepResult);
+  if (commandError) {
+    throw commandError.cause;
+  }
+  return stepResult;
+}
+
+export function normalizeFallbackFailureReason(
+  stepName: string,
+): NonNullable<UpdateRunResult["reason"]> {
+  switch (stepName) {
+    case "package-install":
+    case "package-install-omit-optional":
+    case "package-stage":
+    case "package-verify":
+    case "package-swap":
+      return "global-install-failed";
+    case "openclaw doctor":
+      return "doctor-failed";
+    case "post-install-verify":
+      return "runtime-verification-failed";
+    case "post-doctor-ui-build":
+      return "ui-build-failed";
+    default:
+      return "unexpected-error";
+  }
+}
+
+export async function buildUpdateCommandRunner(
+  runCommand?: CommandRunner,
+): Promise<{ defaultCommandEnv: NodeJS.ProcessEnv | undefined; runCommand: CommandRunner }> {
+  const defaultCommandEnv = await createGlobalInstallEnv();
+  if (runCommand) {
+    return { defaultCommandEnv, runCommand };
+  }
+  return {
+    defaultCommandEnv,
+    runCommand: async (argv, options) =>
+      await runCommandWithTimeout(argv, {
+        ...options,
+        env: mergeCommandEnvironments(defaultCommandEnv, options.env),
+        // Package-manager trees must not outlive a timed-out updater.
+        killProcessTree: true,
+      }),
+  };
+}

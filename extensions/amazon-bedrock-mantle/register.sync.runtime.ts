@@ -5,18 +5,21 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { OpenClawPluginApi, ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
+import { runLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import {
   modelCostsEqual,
+  resolveClaudeOpus5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
-  mergeImplicitMantleProvider,
   resolveImplicitMantleProvider,
   resolveMantleBearerToken,
   resolveMantleRuntimeBearerToken,
   resolveMantleSonnet5Cost,
 } from "./discovery.js";
 import { createMantleAnthropicStreamFn } from "./mantle-anthropic.runtime.js";
+
+const MANTLE_OPUS_5_COST = { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 };
 
 type BedrockMantlePluginConfig = {
   discovery?: {
@@ -28,13 +31,15 @@ function normalizeMantleResolvedModel(params: {
   modelId: string;
   model: ProviderRuntimeModel;
 }): ProviderRuntimeModel | undefined {
-  if (
-    resolveClaudeSonnet5ModelIdentity({ id: params.modelId, params: params.model.params }) ===
-    undefined
-  ) {
+  const ref = { id: params.modelId, params: params.model.params };
+  const cost = resolveClaudeOpus5ModelIdentity(ref)
+    ? MANTLE_OPUS_5_COST
+    : resolveClaudeSonnet5ModelIdentity(ref)
+      ? resolveMantleSonnet5Cost()
+      : undefined;
+  if (!cost) {
     return undefined;
   }
-  const cost = resolveMantleSonnet5Cost();
   if (modelCostsEqual(params.model.cost, cost)) {
     return undefined;
   }
@@ -63,22 +68,19 @@ export function registerBedrockMantlePlugin(api: OpenClawPluginApi): void {
     auth: [],
     catalog: {
       order: "simple",
-      run: async (ctx) => {
-        const currentPluginConfig = resolveCurrentPluginConfig(ctx.config);
-        const implicit = await resolveImplicitMantleProvider({
-          env: ctx.env,
-          pluginConfig: currentPluginConfig,
-        });
-        if (!implicit) {
-          return null;
-        }
-        return {
-          provider: mergeImplicitMantleProvider({
-            existing: ctx.config.models?.providers?.[providerId],
-            implicit,
-          }),
-        };
-      },
+      run: (ctx) =>
+        runLiveProviderCatalog({
+          providerId,
+          run: async () => {
+            const currentPluginConfig = resolveCurrentPluginConfig(ctx.config);
+            const implicit = await resolveImplicitMantleProvider({
+              discoveryMode: "strict",
+              env: ctx.env,
+              pluginConfig: currentPluginConfig,
+            });
+            return implicit ? { provider: implicit } : null;
+          },
+        }),
     },
     resolveConfigApiKey: ({ env }) =>
       resolveMantleBearerToken(env) ? "env:AWS_BEARER_TOKEN_BEDROCK" : undefined,
@@ -89,6 +91,7 @@ export function registerBedrockMantlePlugin(api: OpenClawPluginApi): void {
       }),
     normalizeResolvedModel: ({ modelId, model }) =>
       normalizeMantleResolvedModel({ modelId, model }),
+    supportsSystemPromptCacheBoundary: true,
     createStreamFn: ({ model }) =>
       model.api === "anthropic-messages" ? createMantleAnthropicStreamFn() : undefined,
     matchesContextOverflowError: ({ errorMessage }) =>

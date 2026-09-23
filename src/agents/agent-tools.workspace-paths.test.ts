@@ -5,15 +5,32 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { createReadTool } from "openclaw/plugin-sdk/agent-sessions";
 import { describe, expect, it, vi } from "vitest";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createCanonicalFixtureSkill } from "../skills/test-support/test-helpers.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
-import { expectReadWriteEditTools, getTextContent } from "./test-helpers/agent-tools-fs-helpers.js";
+import {
+  createSandboxedEditTool,
+  createSandboxedReadTool,
+  createSandboxedWriteTool,
+  wrapToolWorkspaceRootGuardWithOptions,
+} from "./agent-tools.read.js";
+import { createApplyPatchTool } from "./apply-patch.js";
+import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./sandbox/constants.js";
+import { resolveReadOnlyWorkspaceSkillMounts } from "./sandbox/workspace-mounts.js";
+import {
+  expectReadWriteEditTools,
+  expectReadWriteTools,
+  getTextContent,
+} from "./test-helpers/agent-tools-fs-helpers.js";
 import { createAgentToolsSandboxContext } from "./test-helpers/agent-tools-sandbox-context.js";
 import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
+import { withUnsafeMountedSandboxHarness } from "./test-helpers/unsafe-mounted-sandbox.js";
+import type { AnyAgentTool } from "./tools/common.js";
 
 vi.mock("../infra/shell-env.js", async () => {
   const mod =
@@ -118,6 +135,28 @@ describe("workspace path resolution", () => {
     });
   });
 
+  it.runIf(process.platform === "win32")(
+    "preserves mixed-case and Unicode names for workspace-only writes on Windows",
+    async () => {
+      await withTempDir("openclaw-windows-case-", async (workspaceDir) => {
+        const cfg: OpenClawConfig = { tools: { fs: { workspaceOnly: true } } };
+        const tools = createOpenClawCodingTools({ workspaceDir, config: cfg });
+        const { writeTool } = expectReadWriteEditTools(tools);
+
+        await writeTool.execute("windows-case-write", {
+          path: "Source/İstanbul/Widget.ts",
+          content: "export const Widget = true;",
+        });
+
+        await expect(fs.readdir(workspaceDir)).resolves.toEqual(["Source"]);
+        await expect(fs.readdir(path.join(workspaceDir, "Source"))).resolves.toEqual(["İstanbul"]);
+        await expect(fs.readdir(path.join(workspaceDir, "Source", "İstanbul"))).resolves.toEqual([
+          "Widget.ts",
+        ]);
+      });
+    },
+  );
+
   it("allows deletion edits with empty newText", async () => {
     await withTempDir("openclaw-ws-", async (workspaceDir) => {
       await withTempDir("openclaw-cwd-", async (otherDir) => {
@@ -142,53 +181,10 @@ describe("workspace path resolution", () => {
     });
   });
 
-  it("supports multi-edit edits[] payloads", async () => {
-    await withTempDir("openclaw-ws-", async (workspaceDir) => {
-      await withTempDir("openclaw-cwd-", async (otherDir) => {
-        const testFile = "batch.txt";
-        await fs.writeFile(path.join(workspaceDir, testFile), "alpha beta gamma delta", "utf8");
-
-        const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(otherDir);
-        try {
-          const tools = createOpenClawCodingTools({ workspaceDir });
-          const { editTool } = expectReadWriteEditTools(tools);
-
-          await editTool.execute("ws-edit-batch", {
-            path: testFile,
-            edits: [
-              { oldText: "alpha", newText: "ALPHA" },
-              { oldText: "delta", newText: "DELTA" },
-            ],
-          });
-
-          expect(await fs.readFile(path.join(workspaceDir, testFile), "utf8")).toBe(
-            "ALPHA beta gamma DELTA",
-          );
-        } finally {
-          cwdSpy.mockRestore();
-        }
-      });
-    });
-  });
-
   it("defaults exec cwd to workspaceDir when workdir is omitted", async () => {
     await withTempDir("openclaw-ws-", async (workspaceDir) => {
       const execTool = createExecTool(workspaceDir);
       await expectExecCwdResolvesTo(execTool, "ws-exec", { command: "echo ok" }, workspaceDir);
-    });
-  });
-
-  it("lets exec workdir override the workspace default", async () => {
-    await withTempDir("openclaw-ws-", async (workspaceDir) => {
-      await withTempDir("openclaw-override-", async (overrideDir) => {
-        const execTool = createExecTool(workspaceDir);
-        await expectExecCwdResolvesTo(
-          execTool,
-          "ws-exec-override",
-          { command: "echo ok", workdir: overrideDir },
-          overrideDir,
-        );
-      });
     });
   });
 
@@ -204,6 +200,44 @@ describe("workspace path resolution", () => {
       ).rejects.toThrow(/Path escapes sandbox root/i);
     });
   });
+
+  it.each([false, true])(
+    "guards decoded file URLs with normalized forwarding=%s",
+    async (normalizeGuardedPathParams) => {
+      await withTempDir("openclaw-guard-url-", async (stateDir) => {
+        const stateRoot = await fs.realpath(stateDir);
+        const root = path.join(stateRoot, "workspace");
+        const inside = path.join(root, "note.txt");
+        const outside = path.join(stateRoot, "outside.txt");
+        await fs.mkdir(root);
+        await fs.writeFile(inside, "URL_INSIDE_MARKER");
+        await fs.writeFile(outside, "URL_OUTSIDE_MARKER");
+        const base = createReadTool(root) as unknown as AnyAgentTool;
+        const execute = vi.spyOn(base, "execute");
+        const read = wrapToolWorkspaceRootGuardWithOptions(base, root, {
+          containerWorkdir: "/workspace",
+          normalizeGuardedPathParams,
+        });
+        const insideUrl = pathToFileURL(inside).href;
+
+        expect(getTextContent(await read.execute("inside-url", { path: insideUrl }))).toContain(
+          "URL_INSIDE_MARKER",
+        );
+        expect(execute).toHaveBeenCalledWith(
+          "inside-url",
+          { path: normalizeGuardedPathParams ? inside : insideUrl },
+          undefined,
+          undefined,
+        );
+        await expect(
+          read.execute("outside-url", { path: pathToFileURL(outside).href }),
+        ).rejects.toThrow(/Path escapes sandbox root/i);
+        expect(execute).toHaveBeenCalledTimes(1);
+        expect(await fs.readFile(inside, "utf8")).toBe("URL_INSIDE_MARKER");
+        expect(await fs.readFile(outside, "utf8")).toBe("URL_OUTSIDE_MARKER");
+      });
+    },
+  );
 
   it("rejects hardlinked file aliases when workspaceOnly is enabled", async () => {
     if (process.platform === "win32") {
@@ -453,6 +487,45 @@ describe("workspace path resolution", () => {
 });
 
 describe("sandboxed workspace paths", () => {
+  it("guards file URLs before registered legacy bridge reads", async () => {
+    await withUnsafeMountedSandboxHarness(async ({ sandboxRoot, agentRoot, sandbox }) => {
+      // Older external bridges omit descriptors but may expose additional roots.
+      // Workspace admission must inspect the same decoded URL as the reader.
+      const { pathMappings, ...legacyBridge } = sandbox.fsBridge!;
+      expect(pathMappings).toBeDefined();
+      sandbox.fsBridge = legacyBridge;
+      const readFile = vi.spyOn(legacyBridge, "readFile");
+      const stat = vi.spyOn(legacyBridge, "stat");
+      const inside = path.join(sandboxRoot, "note.txt");
+      const outside = path.join(agentRoot, "outside.txt");
+      await fs.writeFile(inside, "LEGACY_URL_INSIDE_MARKER");
+      await fs.writeFile(outside, "LEGACY_URL_OUTSIDE_MARKER");
+      const tools = createOpenClawCodingTools({
+        workspaceDir: sandboxRoot,
+        sandbox,
+        config: { tools: { fs: { workspaceOnly: true } } },
+      });
+      const { readTool } = expectReadWriteEditTools(tools);
+
+      expect(
+        getTextContent(
+          await readTool.execute("legacy-inside-url", { path: pathToFileURL(inside).href }),
+        ),
+      ).toContain("LEGACY_URL_INSIDE_MARKER");
+      const readsBefore = readFile.mock.calls.length;
+      const statsBefore = stat.mock.calls.length;
+      expect(readsBefore).toBeGreaterThan(0);
+      expect(statsBefore).toBeGreaterThan(0);
+      await expect(
+        readTool.execute("legacy-outside-url", { path: pathToFileURL(outside).href }),
+      ).rejects.toThrow(/Path escapes sandbox root/i);
+      expect(readFile).toHaveBeenCalledTimes(readsBefore);
+      expect(stat).toHaveBeenCalledTimes(statsBefore);
+      expect(await fs.readFile(inside, "utf8")).toBe("LEGACY_URL_INSIDE_MARKER");
+      expect(await fs.readFile(outside, "utf8")).toBe("LEGACY_URL_OUTSIDE_MARKER");
+    });
+  });
+
   it("uses sandbox workspace for relative read/write/edit", async () => {
     await withTempDir("openclaw-sandbox-", async (sandboxDir) => {
       await withTempDir("openclaw-workspace-", async (workspaceDir) => {
@@ -490,4 +563,342 @@ describe("sandboxed workspace paths", () => {
       });
     });
   });
+});
+
+type UnsafeMountedSandbox = Parameters<
+  Parameters<typeof withUnsafeMountedSandboxHarness>[0]
+>[0]["sandbox"];
+
+const APPLY_PATCH_PAYLOAD = `*** Begin Patch
+*** Add File: /agent/pwned.txt
++owned-by-apply-patch
+*** End Patch`;
+
+function patchSandbox(sandbox: UnsafeMountedSandbox) {
+  const { workspaceDir: root, containerWorkdir: containerRoot, fsBridge } = sandbox;
+  return { root, bridge: fsBridge!, workspaceMounts: [{ hostRoot: root, containerRoot }] };
+}
+
+function resolveApplyPatchTool(params: { sandbox: UnsafeMountedSandbox; config: OpenClawConfig }) {
+  return createApplyPatchTool({
+    cwd: params.sandbox.workspaceDir,
+    sandbox: patchSandbox(params.sandbox),
+    workspaceOnly: params.config.tools?.exec?.applyPatch?.workspaceOnly !== false,
+  });
+}
+
+function createSandboxFsTools(params: { sandbox: UnsafeMountedSandbox; workspaceOnly?: boolean }) {
+  const tools = [
+    createSandboxedReadTool({
+      root: params.sandbox.workspaceDir,
+      bridge: params.sandbox.fsBridge!,
+    }),
+    createSandboxedWriteTool({
+      root: params.sandbox.workspaceDir,
+      bridge: params.sandbox.fsBridge!,
+    }),
+    createSandboxedEditTool({
+      root: params.sandbox.workspaceDir,
+      bridge: params.sandbox.fsBridge!,
+    }),
+  ];
+  if (!params.workspaceOnly) {
+    return tools;
+  }
+  return tools.map((tool) =>
+    wrapToolWorkspaceRootGuardWithOptions(tool, params.sandbox.workspaceDir, {
+      containerMounts:
+        tool.name === "read"
+          ? [
+              {
+                hostRoot: params.sandbox.workspaceDir,
+                containerRoot: params.sandbox.containerWorkdir,
+              },
+              ...(params.sandbox.workspaceAccess === "ro"
+                ? [
+                    {
+                      containerRoot: SANDBOX_AGENT_WORKSPACE_MOUNT,
+                      hostRoot: params.sandbox.agentWorkspaceDir,
+                    },
+                  ]
+                : []),
+              ...resolveReadOnlyWorkspaceSkillMounts({
+                workspaceDir: params.sandbox.workspaceDir,
+                agentWorkspaceDir: params.sandbox.agentWorkspaceDir,
+                skillsWorkspaceDir: params.sandbox.skillsWorkspaceDir,
+                workdir: params.sandbox.containerWorkdir,
+                workspaceAccess: params.sandbox.workspaceAccess,
+              }).map((mount) => ({
+                containerRoot: mount.containerPath,
+                hostRoot: mount.hostPath,
+              })),
+            ]
+          : undefined,
+      containerWorkdir: params.sandbox.containerWorkdir,
+    }),
+  );
+}
+
+describe("tools.fs.workspaceOnly", () => {
+  it("preserves valid UTF-8 BOM bytes through real sandbox edit and patch bridges", async () => {
+    await withUnsafeMountedSandboxHarness(async ({ sandboxRoot, sandbox }) => {
+      const filePath = path.join(sandboxRoot, "source.txt");
+      const original = Buffer.from("\uFEFFheading\nprice: 5\n", "utf8");
+      const expected = Buffer.from("\uFEFFheading\nprice: 7\n", "utf8");
+      const editTool = createSandboxedEditTool({
+        root: sandbox.workspaceDir,
+        bridge: sandbox.fsBridge!,
+      });
+
+      await fs.writeFile(filePath, original);
+      await editTool.execute("sandbox-edit-bom", {
+        path: "source.txt",
+        edits: [{ oldText: "price: 5", newText: "price: 7" }],
+      });
+      await expect(fs.readFile(filePath)).resolves.toEqual(expected);
+
+      await fs.writeFile(filePath, original);
+      const patchTool = createApplyPatchTool({
+        cwd: sandbox.workspaceDir,
+        sandbox: patchSandbox(sandbox),
+      });
+      await patchTool.execute("sandbox-patch-bom", {
+        input: `*** Begin Patch
+*** Update File: source.txt
+@@
+-price: 5
++price: 7
+*** End Patch`,
+      });
+      await expect(fs.readFile(filePath)).resolves.toEqual(expected);
+    });
+  });
+
+  it("preserves unrelated Unicode bytes through the real sandbox edit bridge", async () => {
+    await withUnsafeMountedSandboxHarness(async ({ sandboxRoot, sandbox }) => {
+      const filePath = path.join(sandboxRoot, "source.txt");
+      const original =
+        "const value\u00A0= 1; // keep \uFF08\uFF13\uFF09 \uFF71\uFF72\uFF73 \u2014 unchanged\r\n";
+      const expected =
+        "const value = 2; // keep \uFF08\uFF13\uFF09 \uFF71\uFF72\uFF73 \u2014 unchanged\r\n";
+      const editTool = createSandboxedEditTool({
+        root: sandbox.workspaceDir,
+        bridge: sandbox.fsBridge!,
+      });
+
+      await fs.writeFile(filePath, original, "utf8");
+      await editTool.execute("sandbox-edit-fuzzy-unicode", {
+        path: "source.txt",
+        edits: [{ oldText: "const value = 1;", newText: "const value = 2;" }],
+      });
+
+      await expect(fs.readFile(filePath, "utf8")).resolves.toBe(expected);
+    });
+  });
+
+  it("rejects invalid UTF-8 before sandbox edit or patch bridge writes", async () => {
+    await withUnsafeMountedSandboxHarness(async ({ sandboxRoot, sandbox }) => {
+      const filePath = path.join(sandboxRoot, "source.txt");
+      const original = Buffer.concat([
+        Buffer.from("heading\nprice: 5\n"),
+        Buffer.from([0xff, 0xfe]),
+      ]);
+      await fs.writeFile(filePath, original);
+      const editTool = createSandboxedEditTool({
+        root: sandbox.workspaceDir,
+        bridge: sandbox.fsBridge!,
+      });
+
+      await expect(
+        editTool.execute("sandbox-edit-invalid-utf8", {
+          path: "source.txt",
+          edits: [{ oldText: "price: 5", newText: "price: 7" }],
+        }),
+      ).rejects.toThrow(/not valid UTF-8/);
+      await expect(fs.readFile(filePath)).resolves.toEqual(original);
+
+      const patchTool = createApplyPatchTool({
+        cwd: sandbox.workspaceDir,
+        sandbox: patchSandbox(sandbox),
+      });
+      await expect(
+        patchTool.execute("sandbox-patch-invalid-utf8", {
+          input: `*** Begin Patch
+*** Update File: source.txt
+@@
+-price: 5
++price: 7
+*** End Patch`,
+        }),
+      ).rejects.toThrow(/not valid UTF-8/);
+      await expect(fs.readFile(filePath)).resolves.toEqual(original);
+    });
+  });
+
+  it("defaults to allowing sandbox mounts outside the workspace root", async () => {
+    await withUnsafeMountedSandboxHarness(async ({ agentRoot, sandbox }) => {
+      await fs.writeFile(path.join(agentRoot, "secret.txt"), "shh", "utf8");
+
+      const tools = createSandboxFsTools({ sandbox });
+      const { readTool, writeTool } = expectReadWriteTools(tools);
+
+      const readResult = await readTool?.execute("t1", { path: "/agent/secret.txt" });
+      expect(getTextContent(readResult)).toContain("shh");
+
+      await writeTool?.execute("t2", { path: "/agent/owned.txt", content: "x" });
+      expect(await fs.readFile(path.join(agentRoot, "owned.txt"), "utf8")).toBe("x");
+    });
+  });
+
+  it("rejects sandbox mounts outside the workspace root when enabled", async () => {
+    await withUnsafeMountedSandboxHarness(async ({ agentRoot, sandbox }) => {
+      await fs.writeFile(path.join(agentRoot, "secret.txt"), "shh", "utf8");
+
+      const tools = createSandboxFsTools({ sandbox, workspaceOnly: true });
+      const { readTool, writeTool, editTool } = expectReadWriteEditTools(tools);
+
+      await expect(readTool?.execute("t1", { path: "/agent/secret.txt" })).rejects.toThrow(
+        /Path escapes sandbox root/i,
+      );
+
+      await expect(
+        writeTool?.execute("t2", { path: "/agent/owned.txt", content: "x" }),
+      ).rejects.toThrow(/Path escapes sandbox root/i);
+      const missingOwnedFile = await fs
+        .stat(path.join(agentRoot, "owned.txt"))
+        .catch((error: unknown) => error);
+      expect((missingOwnedFile as NodeJS.ErrnoException).code).toBe("ENOENT");
+
+      await expect(
+        editTool?.execute("t3", { path: "/agent/secret.txt", oldText: "shh", newText: "nope" }),
+      ).rejects.toThrow(/Path escapes sandbox root/i);
+      expect(await fs.readFile(path.join(agentRoot, "secret.txt"), "utf8")).toBe("shh");
+    });
+  });
+
+  it("allows read-only agent workspace mounts for sandbox reads only", async () => {
+    await withUnsafeMountedSandboxHarness(
+      async ({ agentRoot, sandbox }) => {
+        await fs.writeFile(path.join(agentRoot, "secret.txt"), "shh", "utf8");
+
+        const tools = createSandboxFsTools({ sandbox, workspaceOnly: true });
+        const { readTool, writeTool, editTool } = expectReadWriteEditTools(tools);
+
+        const readResult = await readTool?.execute("t1", { path: "/agent/secret.txt" });
+        expect(getTextContent(readResult)).toContain("shh");
+
+        await expect(
+          writeTool?.execute("t2", { path: "/agent/owned.txt", content: "x" }),
+        ).rejects.toThrow(/Path escapes sandbox root/i);
+        const missingOwnedFile = await fs
+          .stat(path.join(agentRoot, "owned.txt"))
+          .catch((error: unknown) => error);
+        expect((missingOwnedFile as NodeJS.ErrnoException).code).toBe("ENOENT");
+
+        await expect(
+          editTool?.execute("t3", { path: "/agent/secret.txt", oldText: "shh", newText: "nope" }),
+        ).rejects.toThrow(/Path escapes sandbox root/i);
+        expect(await fs.readFile(path.join(agentRoot, "secret.txt"), "utf8")).toBe("shh");
+      },
+      { workspaceAccess: "ro" },
+    );
+  });
+
+  it("allows read-only materialized sandbox skills for sandbox reads only", async () => {
+    await withUnsafeMountedSandboxHarness(
+      async ({ sandbox, skillsWorkspaceDir }) => {
+        expect(skillsWorkspaceDir).toBeTruthy();
+        const skillDir = path.join(skillsWorkspaceDir!, "skills", "demo");
+        const userOwnedShadowDir = path.join(
+          sandbox.workspaceDir,
+          ".openclaw",
+          "sandbox-skills",
+          "skills",
+          "demo",
+        );
+        await fs.mkdir(skillDir, { recursive: true });
+        await fs.mkdir(userOwnedShadowDir, { recursive: true });
+        await fs.writeFile(path.join(skillDir, "SKILL.md"), "# Demo\nmaterialized\n", "utf8");
+        await fs.writeFile(
+          path.join(userOwnedShadowDir, "SKILL.md"),
+          "# Demo\nuser-owned shadow\n",
+          "utf8",
+        );
+
+        const tools = createSandboxFsTools({ sandbox, workspaceOnly: true });
+        const { readTool } = expectReadWriteEditTools(tools);
+        const containerSkillPath = "/workspace/.openclaw/sandbox-skills/skills/demo/SKILL.md";
+
+        const readResult = await readTool?.execute("t1", { path: containerSkillPath });
+        expect(getTextContent(readResult)).toContain("materialized");
+        expect(getTextContent(readResult)).not.toContain("user-owned shadow");
+        const relativeReadResult = await readTool?.execute("t2", {
+          path: ".openclaw/sandbox-skills/skills/demo/SKILL.md",
+        });
+        expect(getTextContent(relativeReadResult)).toContain("materialized");
+        expect(getTextContent(relativeReadResult)).not.toContain("user-owned shadow");
+        const fileUrlReadResult = await readTool?.execute("t3", {
+          path: "file:///workspace/.openclaw/sandbox-skills/skills/demo/SKILL.md",
+        });
+        expect(getTextContent(fileUrlReadResult)).toContain("materialized");
+        expect(getTextContent(fileUrlReadResult)).not.toContain("user-owned shadow");
+        expect(await fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).toContain(
+          "materialized",
+        );
+        expect(await fs.readFile(path.join(userOwnedShadowDir, "SKILL.md"), "utf8")).toContain(
+          "user-owned shadow",
+        );
+      },
+      { includeSkillsWorkspace: true, workspaceAccess: "rw" },
+    );
+  });
+
+  it("enforces apply_patch workspace-only in sandbox mounts by default", async () => {
+    await withUnsafeMountedSandboxHarness(async ({ agentRoot, sandbox }) => {
+      const applyPatchTool = resolveApplyPatchTool({
+        sandbox,
+        config: {
+          tools: {
+            allow: ["read", "write", "exec"],
+            exec: { applyPatch: {} },
+          },
+        } as OpenClawConfig,
+      });
+
+      await expect(applyPatchTool.execute("t1", { input: APPLY_PATCH_PAYLOAD })).rejects.toThrow(
+        /Path escapes sandbox root/i,
+      );
+      const missingPatchedFile = await fs
+        .stat(path.join(agentRoot, "pwned.txt"))
+        .catch((error: unknown) => error);
+      expect((missingPatchedFile as NodeJS.ErrnoException).code).toBe("ENOENT");
+    });
+  });
+
+  it("allows apply_patch outside workspace root when explicitly disabled", async () => {
+    await withUnsafeMountedSandboxHarness(async ({ agentRoot, sandbox }) => {
+      const applyPatchTool = resolveApplyPatchTool({
+        sandbox,
+        config: {
+          tools: {
+            allow: ["read", "write", "exec"],
+            exec: { applyPatch: { workspaceOnly: false } },
+          },
+        } as OpenClawConfig,
+      });
+
+      await applyPatchTool.execute("t2", { input: APPLY_PATCH_PAYLOAD });
+      expect(await fs.readFile(path.join(agentRoot, "pwned.txt"), "utf8")).toBe(
+        "owned-by-apply-patch\n",
+      );
+    });
+  });
+});
+
+vi.mock("openclaw/plugin-sdk/llm", async () => {
+  const original =
+    await vi.importActual<typeof import("openclaw/plugin-sdk/llm")>("openclaw/plugin-sdk/llm");
+  return {
+    ...original,
+  };
 });

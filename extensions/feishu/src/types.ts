@@ -1,13 +1,20 @@
 // Feishu type declarations define plugin contracts.
 import type { MessageReceipt } from "openclaw/plugin-sdk/channel-outbound";
 import type { BaseProbeResult } from "openclaw/plugin-sdk/core";
-import type { FeishuConfigSchema, FeishuAccountConfigSchema, z } from "./config-schema.js";
+import type {
+  DynamicAgentCreationSchema,
+  FeishuAccountConfigSchema,
+  FeishuConfigSchema,
+  FeishuDomainSchema,
+  FeishuToolsConfigSchema,
+  z,
+} from "./config-schema.js";
 import type { MentionTarget } from "./mention-target.types.js";
 
 export type FeishuConfig = z.infer<typeof FeishuConfigSchema>;
 export type FeishuAccountConfig = z.infer<typeof FeishuAccountConfigSchema>;
 
-export type FeishuDomain = "feishu" | "lark" | (string & {});
+export type FeishuDomain = "feishu" | "lark" | (z.infer<typeof FeishuDomainSchema> & {});
 
 export type FeishuDefaultAccountSelectionSource =
   | "explicit-default"
@@ -62,6 +69,12 @@ export type FeishuSendResult = {
 
 export type FeishuChatType = "p2p" | "group" | "topic_group" | "private";
 
+export function normalizeFeishuEventChatType(value: unknown): FeishuChatType | undefined {
+  return value === "group" || value === "topic_group" || value === "private" || value === "p2p"
+    ? value
+    : undefined;
+}
+
 export function isFeishuGroupChatType(chatType: FeishuChatType | undefined): boolean {
   return chatType === "group" || chatType === "topic_group";
 }
@@ -76,6 +89,8 @@ export type FeishuMessageInfo = {
   content: string;
   contentType: string;
   createTime?: number;
+  /** Root message ID for replies inside Feishu topics. */
+  rootId?: string;
   /** Feishu thread ID (omt_xxx) — present when the message belongs to a topic thread. */
   threadId?: string;
 };
@@ -87,27 +102,11 @@ export interface FeishuProbeResult extends BaseProbeResult {
 }
 
 export type FeishuMediaInfo = {
-  path: string;
+  path?: string;
   contentType?: string;
-  placeholder: string;
+  kind: Exclude<import("openclaw/plugin-sdk/media-runtime").MediaKind, "unknown">;
 };
 
-export type FeishuToolsConfig = {
-  doc?: boolean;
-  chat?: boolean;
-  wiki?: boolean;
-  drive?: boolean;
-  perm?: boolean;
-  scopes?: boolean;
-  /** Bitable/Base operations (default: true). */
-  bitable?: boolean;
-  /** @deprecated Use bitable. */
-  base?: boolean;
-};
+export type FeishuToolsConfig = NonNullable<z.infer<typeof FeishuToolsConfigSchema>>;
 
-export type DynamicAgentCreationConfig = {
-  enabled?: boolean;
-  workspaceTemplate?: string;
-  agentDirTemplate?: string;
-  maxAgents?: number;
-};
+export type DynamicAgentCreationConfig = NonNullable<z.infer<typeof DynamicAgentCreationSchema>>;

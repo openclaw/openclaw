@@ -1,313 +1,676 @@
-// Stores and streams transcript files for later summary and replay.
-import { createReadStream } from "node:fs";
-import type { Dirent } from "node:fs";
+// Stores meeting-capture transcripts in the shared SQLite state database.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { createInterface } from "node:readline";
-import { resolveOptionalIntegerOption } from "@openclaw/normalization-core/number-coercion";
-import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./provider-types.js";
+import type { TranscriptUtterance as ProjectedTranscriptUtterance } from "../../packages/gateway-protocol/src/schema/transcripts.js";
+import { sha256File, sha256Hex } from "../infra/crypto-digest.js";
+import { ensureAbsoluteDirectory } from "../infra/fs-safe.js";
+import { executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
+import { createSqliteWorkerWriteAdmission } from "../infra/sqlite-worker-store.js";
+import { iterateOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-read-connection.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+  type OpenClawStateDatabase,
+  type OpenClawStateDatabaseOptions,
+} from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { withOpenClawStateLease } from "../state/openclaw-state-lease.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import type { OpenClawStateWorkerOperations } from "../state/openclaw-state-worker-contract.js";
+import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
+import type {
+  TranscriptSessionDescriptor,
+  TranscriptSourceLocator,
+  TranscriptUtterance,
+} from "./provider-types.js";
+import { ensureMeetingTranscriptsSchema } from "./sqlite-schema.js";
+import {
+  isCaseSensitiveDirectory,
+  legacyTranscriptSessionSelector,
+  normalizeExportText,
+  removeTranscriptArtifact,
+  safeTranscriptPathSegment,
+  TRANSCRIPT_EXPORT_FILE_NAMES,
+  transcriptSessionExportKey,
+  transcriptSessionSelector,
+  writeTranscriptArtifact,
+} from "./store-artifacts.js";
+import { prepareTranscriptDateReader } from "./store-date-preparation.js";
+import { TranscriptsSummaryChangedError } from "./store-errors.js";
+import { writeTranscriptJsonlArtifact } from "./store-export-jsonl.js";
+import {
+  assertTranscriptExportPathAvailable,
+  hasAliasedCanonicalTranscriptExportPathOwner,
+} from "./store-export-ownership.js";
+import {
+  parseTranscriptExportManifest,
+  parseTranscriptPendingExports,
+} from "./store-export-state.js";
+import * as read from "./store-read.js";
+import {
+  assertMeetingTranscriptSelectorAvailableInDatabase,
+  markMeetingTranscriptPendingExportsInDatabase,
+  updateMeetingTranscriptExportManifestInDatabase,
+  writeMeetingTranscriptSessionInDatabase,
+} from "./store-sqlite-write.js";
+import { meetingTranscriptDb, sessionFromRow } from "./store-sqlite.js";
+import type * as StoreTypes from "./store-types.js";
+import type {
+  TranscriptAppendScheduler,
+  TranscriptReadRequests,
+  TranscriptWriteOperations,
+} from "./store-worker-contract.js";
 import type { TranscriptsSummary } from "./summary.js";
 import { renderTranscriptsMarkdown } from "./summary.js";
 
-/**
- * File-backed transcript session store.
- *
- * Sessions are stored by date/session id with metadata JSON, append-only
- * utterance JSONL, and rendered summary artifacts.
- */
-/** Stored session metadata plus the resolved session directory. */
-export type TranscriptsSessionEntry = {
-  session: TranscriptSessionDescriptor;
-  sessionDir: string;
-};
+export type * from "./store-types.js";
+export { safeTranscriptPathSegment, transcriptSessionExportKey, transcriptSessionSelector };
 
-function safeSegment(value: string): string {
-  // Session ids can come from external providers; path segments stay conservative.
-  return value.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "session";
-}
+type TranscriptSessionMatchEntry = StoreTypes.TranscriptsSessionEntry & { inputRevision: string };
 
-function dateSegment(value: string | undefined): string {
-  const isoDate = value?.match(/^(\d{4}-\d{2}-\d{2})T/)?.[1];
-  return isoDate ?? new Date().toISOString().slice(0, 10);
-}
-
-async function readJsonFile<T>(filePath: string): Promise<T | undefined> {
-  try {
-    return JSON.parse(await fs.readFile(filePath, "utf8")) as T;
-  } catch (err) {
-    if (err && typeof err === "object" && "code" in err && err.code === "ENOENT") {
-      return undefined;
-    }
-    throw err;
-  }
-}
-
-function sameSessionIdentity(
-  left: TranscriptSessionDescriptor,
-  right: TranscriptSessionDescriptor,
-): boolean {
-  return left.sessionId === right.sessionId && left.startedAt === right.startedAt;
-}
-
-/** Durable transcript store rooted at a caller-provided directory. */
+/** Canonical meeting-capture transcript store. Files are explicit exports only. */
 export class TranscriptsStore {
-  constructor(private readonly rootDir: string) {}
+  constructor(
+    private readonly exportRootDir: string,
+    private readonly databaseOptions: Pick<
+      OpenClawStateDatabaseOptions,
+      "env" | "path" | "readOnly"
+    > = {},
+  ) {}
 
-  /** Resolve the dated directory for a transcript session. */
+  private database() {
+    ensureMeetingTranscriptsSchema(this.databaseOptions);
+    return openOpenClawStateDatabase(this.databaseOptions);
+  }
+
+  private transaction(
+    operationLabel: string,
+    operation: (database: OpenClawStateDatabase) => void,
+  ): void {
+    runOpenClawStateWriteTransaction(operation, this.databaseOptions, { operationLabel });
+  }
+
   sessionDir(session: TranscriptSessionDescriptor): string {
-    return path.join(this.rootDir, dateSegment(session.startedAt), safeSegment(session.sessionId));
+    return path.join(this.exportRootDir, transcriptSessionSelector(session));
   }
 
-  private async hasSessionMetadata(dir: string): Promise<boolean> {
-    return (await readJsonFile<unknown>(path.join(dir, "metadata.json"))) !== undefined;
-  }
-
-  private async findSessionDirForSession(session: TranscriptSessionDescriptor): Promise<string> {
-    const datedDir = this.sessionDir(session);
-    const datedSession = await readJsonFile<TranscriptSessionDescriptor>(
-      path.join(datedDir, "metadata.json"),
+  private async readWorker<Key extends keyof TranscriptReadRequests>(
+    type: Key,
+    request: OpenClawStateWorkerOperations[Key]["input"],
+  ): Promise<TranscriptReadRequests[Key]["output"]> {
+    const context = captureOpenClawStateWorkerContext(this.databaseOptions);
+    const input = structuredClone(request);
+    input.readOnly = this.databaseOptions.readOnly;
+    const preparation =
+      type === "transcripts.readEntries"
+        ? prepareTranscriptDateReader(
+            context.admission.assertCurrent,
+            context.admission.databasePath,
+          )
+        : undefined;
+    const result = await runOpenClawStateWorkerOperation(
+      context,
+      (scope) => scope.execute<Key>({ type, input }),
+      preparation,
     );
-    if (datedSession && sameSessionIdentity(datedSession, session)) {
-      return datedDir;
+    context.admission.assertCurrent();
+    preparation?.assertCurrent();
+    if (!result.ok) {
+      throw new read.TranscriptLibraryError(
+        result.error.type,
+        result.error.message,
+        result.error.maxBytes,
+      );
     }
-    return datedDir;
+    return result.value;
   }
 
-  private async findSessionDir(selector: string): Promise<string | undefined> {
-    const qualified = selector.match(/^(\d{4}-\d{2}-\d{2})\/(.+)$/);
-    if (qualified?.[1] && qualified[2]) {
-      const directDir = path.join(this.rootDir, qualified[1], safeSegment(qualified[2]));
-      return (await this.hasSessionMetadata(directDir)) ? directDir : undefined;
-    }
+  private entryFromSession(
+    session: TranscriptSessionDescriptor,
+    selector: string,
+    hasSummary: boolean,
+  ): StoreTypes.TranscriptsSessionEntry {
+    const sessionDir = this.sessionDir(session);
+    return {
+      session,
+      sessionDir,
+      selector,
+      summaryPath: path.join(sessionDir, "summary.md"),
+      hasSummary,
+    };
+  }
 
-    const safeSessionId = safeSegment(selector);
-    const idDate = selector
-      .match(/^meeting-(\d{4})-(\d{2})-(\d{2})T/)
-      ?.slice(1, 4)
-      .join("-");
-    if (idDate) {
-      const directDir = path.join(this.rootDir, idDate, safeSessionId);
-      return (await this.hasSessionMetadata(directDir)) ? directDir : undefined;
+  private async readExportOwnership(session: TranscriptSessionDescriptor): Promise<{
+    manifest: Record<string, string>;
+    pending: Set<string>;
+  }> {
+    const row = await this.readWorker("transcripts.exportOwnership", {
+      params: { session: { sessionId: session.sessionId, startedAt: session.startedAt } },
+    });
+    return row
+      ? {
+          manifest: parseTranscriptExportManifest(row.export_manifest_json),
+          pending: parseTranscriptPendingExports(row.export_pending_json),
+        }
+      : { manifest: {}, pending: new Set() };
+  }
+
+  private async readSessionByIdentity({
+    sessionId,
+    startedAt,
+  }: TranscriptSessionDescriptor): Promise<TranscriptSessionDescriptor | undefined> {
+    return this.readWorker("transcripts.session", {
+      params: { session: { sessionId, startedAt } },
+    });
+  }
+
+  private async expectedExportHashes(
+    session: TranscriptSessionDescriptor,
+  ): Promise<Record<string, string>> {
+    const storedSession = await this.readSessionByIdentity(session);
+    if (!storedSession) {
+      return {};
     }
-    let entries: Dirent[];
+    const hashes: Record<string, string> = {
+      "metadata.json": sha256Hex(`${JSON.stringify(storedSession, null, 2)}\n`),
+      "transcript.jsonl": await this.readWorker("transcripts.exportDigest", {
+        params: {
+          session: { sessionId: storedSession.sessionId, startedAt: storedSession.startedAt },
+        },
+      }),
+    };
+    const summary = await this.readSummary(storedSession);
+    if (summary.summary) {
+      hashes["summary.json"] = sha256Hex(`${JSON.stringify(summary.summary, null, 2)}\n`);
+    }
+    if (summary.markdown !== undefined) {
+      hashes["summary.md"] = sha256Hex(normalizeExportText(summary.markdown));
+    }
+    return hashes;
+  }
+
+  private updateExportManifest(
+    session: TranscriptSessionDescriptor,
+    exportedHashes: Readonly<Record<string, string>>,
+    removedExports: ReadonlySet<string> = new Set(),
+  ): void {
+    this.transaction("meeting-transcripts.export.record", ({ db }) => {
+      updateMeetingTranscriptExportManifestInDatabase(db, session, exportedHashes, removedExports);
+    });
+  }
+
+  private markPendingExports(session: TranscriptSessionDescriptor, fileNames: string[]): void {
+    this.transaction("meeting-transcripts.export.pending", ({ db }) => {
+      markMeetingTranscriptPendingExportsInDatabase(db, session, fileNames);
+    });
+  }
+
+  private async assertExportDestinationOwned(
+    session: TranscriptSessionDescriptor,
+    sessionDir = this.sessionDir(session),
+  ): Promise<void> {
+    let entries;
     try {
-      entries = await fs.readdir(this.rootDir, { withFileTypes: true });
-    } catch (err) {
-      if (err && typeof err === "object" && "code" in err && err.code === "ENOENT") {
-        return undefined;
+      entries = await fs.readdir(sessionDir, { withFileTypes: true });
+    } catch (error) {
+      if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+        return;
       }
-      throw err;
+      throw error;
     }
-    const datedEntries = entries
-      .filter((entry) => entry.isDirectory() && /^\d{4}-\d{2}-\d{2}$/.test(entry.name))
-      .toSorted((left, right) => right.name.localeCompare(left.name));
-    const matches: string[] = [];
-    for (const entry of datedEntries) {
-      const candidate = path.join(this.rootDir, entry.name, safeSessionId);
-      const session = await readJsonFile<TranscriptSessionDescriptor>(
-        path.join(candidate, "metadata.json"),
-      );
-      if (session?.sessionId === selector) {
-        matches.push(candidate);
+    const ownership = await this.readExportOwnership(session);
+    const caseSensitive = await isCaseSensitiveDirectory(sessionDir);
+    let expectedHashes: Record<string, string> | undefined;
+    const repairedHashes: Record<string, string> = {};
+    for (const entry of entries) {
+      const canonicalName = caseSensitive ? entry.name : entry.name.toLowerCase();
+      if (!TRANSCRIPT_EXPORT_FILE_NAMES.has(canonicalName)) {
+        continue;
+      }
+      const filePath = path.join(sessionDir, entry.name);
+      const stat = await fs.lstat(filePath);
+      if (stat.isSymbolicLink() || !stat.isFile()) {
+        throw new Error(
+          `legacy transcript artifacts require migration before writing ${sessionDir}; run openclaw doctor --fix`,
+        );
+      }
+      const actualHash = await sha256File(filePath);
+      if (
+        ownership.manifest[canonicalName] === actualHash ||
+        ownership.pending.has(canonicalName)
+      ) {
+        continue;
+      }
+      expectedHashes ??= await this.expectedExportHashes(session);
+      if (expectedHashes[canonicalName] !== actualHash) {
+        throw new Error(
+          `legacy transcript artifacts require migration before writing ${sessionDir}; run openclaw doctor --fix`,
+        );
+      }
+      repairedHashes[canonicalName] = actualHash;
+    }
+    if (Object.keys(repairedHashes).length > 0) {
+      this.updateExportManifest(session, repairedHashes);
+    }
+  }
+
+  async listSessionEntries(): Promise<StoreTypes.TranscriptsSessionEntry[]> {
+    const entries = await this.readWorker("transcripts.sessionEntries", { params: undefined });
+    return entries.map(({ session, selector, hasSummary }) =>
+      this.entryFromSession(session, selector, hasSummary),
+    );
+  }
+
+  async *iterateReadEntries(options: read.TranscriptReadOptions = {}) {
+    return yield* iterateOpenClawStateDatabaseReadOnly(
+      this.database(),
+      ({ db }) => read.iterateTranscriptReadEntries(db, options),
+      this.databaseOptions.env,
+    );
+  }
+
+  async readEntry(selector: string, purpose: read.TranscriptReadPurpose = "page") {
+    return this.readWorker("transcripts.entry", { params: { selector, purpose } });
+  }
+
+  async readLatestEntry() {
+    return this.readWorker("transcripts.latest", { params: undefined });
+  }
+
+  async readNotes(
+    session: TranscriptSessionDescriptor,
+    purpose: read.TranscriptReadPurpose = "page",
+  ) {
+    return this.readWorker("transcripts.notes", {
+      params: {
+        session: { sessionId: session.sessionId, startedAt: session.startedAt },
+        purpose,
+      },
+    });
+  }
+
+  async readLibraryEntry(params: Parameters<typeof read.readTranscriptLibraryEntry>[1]) {
+    return this.readWorker("transcripts.libraryEntry", { params });
+  }
+
+  async *iterateExport(
+    selector: string,
+    includeNotes: boolean,
+  ): AsyncGenerator<ProjectedTranscriptUtterance, read.TranscriptExportRead | undefined> {
+    return yield* iterateOpenClawStateDatabaseReadOnly(
+      this.database(),
+      ({ db }) => read.iterateTranscriptExport(db, selector, includeNotes),
+      this.databaseOptions.env,
+    );
+  }
+
+  async readRecentStoppedSession(
+    source: TranscriptSourceLocator,
+    stoppedAfter: string,
+    stoppedBefore: string,
+  ) {
+    return this.readWorker("transcripts.recentStopped", {
+      params: { source, stoppedAfter, stoppedBefore },
+    });
+  }
+
+  async readSummaryInputRevision(
+    session: TranscriptSessionDescriptor,
+  ): Promise<string | undefined> {
+    return this.readWorker("transcripts.summaryRevision", {
+      params: {
+        session: { sessionId: session.sessionId, startedAt: session.startedAt },
+      },
+    });
+  }
+
+  summaryScope(session: TranscriptSessionDescriptor): string {
+    return JSON.stringify([
+      path.resolve(
+        this.databaseOptions.path ?? resolveOpenClawStateSqlitePath(this.databaseOptions.env),
+      ),
+      session.sessionId,
+      session.startedAt,
+    ]);
+  }
+
+  async readSummarySnapshot(
+    session: TranscriptSessionDescriptor,
+    maxUtterances: number,
+  ): Promise<StoreTypes.TranscriptSummarySnapshot | undefined> {
+    return this.readWorker("transcripts.summarySnapshot", {
+      params: {
+        session: { sessionId: session.sessionId, startedAt: session.startedAt },
+        maxUtterances,
+      },
+    });
+  }
+
+  async listReadEntries(options: read.TranscriptReadOptions) {
+    return this.readWorker("transcripts.readEntries", { params: options });
+  }
+
+  async writeSession(
+    session: TranscriptSessionDescriptor,
+    condition?: { expectedInputRevision?: string; assertCurrent?: () => void },
+  ): Promise<void> {
+    ensureMeetingTranscriptsSchema(this.databaseOptions);
+    const selector = transcriptSessionSelector(session);
+    // Classify the existing constraint before export checks, then recheck under write admission.
+    assertMeetingTranscriptSelectorAvailableInDatabase(this.database().db, session, selector);
+    if (
+      !(await this.readSessionByIdentity(session)) &&
+      !(await hasAliasedCanonicalTranscriptExportPathOwner({
+        selector: transcriptSessionSelector(session),
+        exportRootDir: this.exportRootDir,
+        owners: await this.readWorker("transcripts.exportPathOwners", {
+          params: { exportKey: transcriptSessionExportKey(session) },
+        }),
+      }))
+    ) {
+      await this.assertExportDestinationOwned(session);
+      const legacySelector = legacyTranscriptSessionSelector(session);
+      if (legacySelector !== undefined) {
+        const legacySessionDir = path.join(this.exportRootDir, legacySelector);
+        const legacyRow = this.readCanonicalSelectorRow(this.database().db, legacySelector);
+        const legacyOwner = legacyRow ? sessionFromRow(legacyRow) : undefined;
+        const legacyPathIsCanonical =
+          legacyOwner !== undefined &&
+          path.resolve(this.sessionDir(legacyOwner)) === path.resolve(legacySessionDir);
+        if (
+          path.resolve(legacySessionDir) !== path.resolve(this.sessionDir(session)) &&
+          !legacyPathIsCanonical
+        ) {
+          await this.assertExportDestinationOwned(session, legacySessionDir);
+        }
       }
     }
-    if (matches.length > 1) {
-      // Ambiguous bare ids require an explicit date prefix to avoid reading the wrong session.
+    const sessionValues = {
+      selector,
+      export_key: transcriptSessionExportKey(session),
+      session_slug: safeTranscriptPathSegment(session.sessionId),
+      provider_id: session.source.providerId,
+      title: session.title ?? null,
+      source_json: JSON.stringify(session.source),
+      stopped_at: session.stoppedAt ?? null,
+      metadata_json: session.metadata ? JSON.stringify(session.metadata) : null,
+    };
+    const now = Date.now();
+    this.transaction("meeting-transcripts.session.write", ({ db: database }) => {
+      condition?.assertCurrent?.();
+      writeMeetingTranscriptSessionInDatabase(database, {
+        session,
+        sessionValues,
+        now,
+        expectedInputRevision: condition?.expectedInputRevision,
+      });
+    });
+  }
+
+  async readSession(sessionSelector: string): Promise<TranscriptSessionDescriptor | undefined> {
+    return (await this.readSessionEntry(sessionSelector))?.session;
+  }
+
+  async readSessionEntry(
+    sessionSelector: string,
+  ): Promise<StoreTypes.TranscriptsSessionEntry | undefined> {
+    const { qualified, unqualified } = await this.matchSessionEntries(sessionSelector);
+    const entries = qualified.length ? qualified : unqualified;
+    if (entries.length > 1) {
       throw new Error(
-        `multiple transcripts sessions match ${selector}; use a YYYY-MM-DD/${selector} selector`,
+        `multiple transcripts sessions match ${sessionSelector}; use one of: ${entries
+          .map((entry) => entry.selector)
+          .join(", ")}`,
       );
     }
-    return matches[0];
-  }
-
-  /** Persist transcript session metadata. */
-  async writeSession(session: TranscriptSessionDescriptor): Promise<void> {
-    const dir = this.sessionDir(session);
-    await fs.mkdir(dir, { recursive: true });
-    await fs.writeFile(path.join(dir, "metadata.json"), `${JSON.stringify(session, null, 2)}\n`);
-  }
-
-  /** Read one session descriptor by session id or qualified date/id selector. */
-  async readSession(sessionId: string): Promise<TranscriptSessionDescriptor | undefined> {
-    return (await this.readSessionEntry(sessionId))?.session;
-  }
-
-  /** Read one session descriptor plus its directory. */
-  async readSessionEntry(sessionId: string): Promise<TranscriptsSessionEntry | undefined> {
-    const dir = await this.findSessionDir(sessionId);
-    if (!dir) {
+    const matched = entries[0];
+    if (!matched) {
       return undefined;
     }
-    const session = await readJsonFile<TranscriptSessionDescriptor>(
-      path.join(dir, "metadata.json"),
-    );
-    return session ? { session, sessionDir: dir } : undefined;
+    const { inputRevision: _inputRevision, ...entry } = matched;
+    return entry;
   }
 
-  /** Append an utterance for an exact session descriptor. */
+  private readCanonicalSelectorRow(database: OpenClawStateDatabase["db"], selector: string) {
+    return executeSqliteQueryTakeFirstSync(
+      database,
+      meetingTranscriptDb(database)
+        .selectFrom("meeting_transcript_sessions")
+        .selectAll()
+        .where("selector", "=", selector),
+    );
+  }
+
+  // Return bounded evidence, not a selection policy: operators prefer qualified
+  // matches, while legacy tool handles must also account for raw-ID collisions.
+  async matchSessionEntries(value: string): Promise<{
+    qualified: TranscriptSessionMatchEntry[];
+    unqualified: TranscriptSessionMatchEntry[];
+  }> {
+    const matches = await this.readWorker("transcripts.matches", { params: { value } });
+    const entry = (matched: (typeof matches.qualified)[number]): TranscriptSessionMatchEntry => ({
+      ...this.entryFromSession(matched.session, matched.selector, matched.hasSummary),
+      inputRevision: matched.inputRevision,
+    });
+    return { qualified: matches.qualified.map(entry), unqualified: matches.unqualified.map(entry) };
+  }
+
   async appendUtteranceForSession(
     session: TranscriptSessionDescriptor,
     utterance: TranscriptUtterance,
+    schedule?: TranscriptAppendScheduler,
   ): Promise<void> {
-    const dir = await this.findSessionDirForSession(session);
-    await this.appendUtteranceToDir(dir, session.sessionId, utterance);
+    const context = captureOpenClawStateWorkerContext(this.databaseOptions);
+    const metadataJson = utterance.metadata ? JSON.stringify(utterance.metadata) : null;
+    const now = Date.now();
+    const speaker = utterance.speaker;
+    const input: TranscriptWriteOperations["transcripts.append"]["input"] = {
+      session: { sessionId: session.sessionId, startedAt: session.startedAt },
+      utterance: {
+        id: utterance.id,
+        startedAt: utterance.startedAt,
+        endedAt: utterance.endedAt,
+        speaker: speaker ? { id: speaker.id, label: speaker.label } : undefined,
+        text: utterance.text,
+        final: utterance.final,
+      },
+      metadataJson,
+      now,
+      readOnly: this.databaseOptions.readOnly,
+    };
+    const append = (assertOwner?: () => void) => {
+      const assertCurrent = () => {
+        context.admission.assertCurrent();
+        assertOwner?.();
+      };
+      return runOpenClawStateWorkerOperation(
+        context,
+        (scope) => scope.execute({ type: "transcripts.append", input }),
+        {
+          assertCurrent,
+          createAdmission: createSqliteWorkerWriteAdmission(assertCurrent, [
+            context.admission.databasePath,
+          ]),
+        },
+      );
+    };
+    await (schedule ? schedule(append) : append());
   }
 
-  private async appendUtteranceToDir(
-    dir: string,
-    sessionId: string,
-    utterance: TranscriptUtterance,
-  ): Promise<void> {
-    await fs.mkdir(dir, { recursive: true });
-    await fs.appendFile(
-      path.join(dir, "transcript.jsonl"),
-      `${JSON.stringify({ ...utterance, sessionId })}\n`,
-    );
-  }
-
-  /** Read utterances for an exact session descriptor. */
   async readUtterancesForSession(
     session: TranscriptSessionDescriptor,
     options: { maxUtterances?: number } = {},
   ): Promise<TranscriptUtterance[]> {
-    return await this.readUtterancesFromDir(await this.findSessionDirForSession(session), options);
+    return this.readWorker("transcripts.utterances", {
+      params: {
+        session: { sessionId: session.sessionId, startedAt: session.startedAt },
+        maxUtterances: options.maxUtterances,
+      },
+    });
   }
 
-  /** Read utterances directly from a known session directory. */
-  async readUtterancesFromSessionDir(
-    sessionDir: string,
-    options: { maxUtterances?: number } = {},
-  ): Promise<TranscriptUtterance[]> {
-    return await this.readUtterancesFromDir(sessionDir, options);
-  }
-
-  private async readUtterancesFromDir(
-    dir: string,
-    options: { maxUtterances?: number } = {},
-  ): Promise<TranscriptUtterance[]> {
-    const transcriptPath = path.join(dir, "transcript.jsonl");
-    const maxUtterances = resolveOptionalIntegerOption(options.maxUtterances, { min: 1 });
-    if (maxUtterances !== undefined) {
-      return await new Promise<TranscriptUtterance[]>((resolve, reject) => {
-        const utterances: TranscriptUtterance[] = [];
-        const stream = createReadStream(transcriptPath, { encoding: "utf8" });
-        const lines = createInterface({
-          input: stream,
-          crlfDelay: Infinity,
-        });
-        let settled = false;
-        let emptyForENOENT = false;
-        let pendingError: Error | undefined;
-
-        const settle = () => {
-          if (settled) {
-            return;
-          }
-          settled = true;
-          lines.close();
-          stream.destroy();
-          if (pendingError) {
-            reject(pendingError);
-          } else if (emptyForENOENT) {
-            resolve([]);
-          } else {
-            resolve(utterances);
-          }
-        };
-        const setError = (err: unknown) => {
-          if (!pendingError) {
-            pendingError = err instanceof Error ? err : new Error(String(err));
-          }
-        };
-
-        stream.on("close", settle);
-        stream.on("error", (err) => {
-          if (err && typeof err === "object" && "code" in err && err.code === "ENOENT") {
-            emptyForENOENT = true;
-            return;
-          }
-          setError(err);
-          stream.destroy();
-        });
-        lines.on("error", (err) => {
-          if (err && typeof err === "object" && "code" in err && err.code === "ENOENT") {
-            emptyForENOENT = true;
-            return;
-          }
-          setError(err);
-          stream.destroy();
-        });
-        lines.on("line", (line) => {
-          if (!line) {
-            return;
-          }
-          try {
-            utterances.push(JSON.parse(line) as TranscriptUtterance);
-          } catch (err) {
-            setError(err);
-            stream.destroy();
-            return;
-          }
-          if (utterances.length > maxUtterances) {
-            // Stream and keep only the tail so large transcripts do not require full-file memory.
-            utterances.shift();
-          }
-        });
-      });
-    }
-    let raw: string;
-    try {
-      raw = await fs.readFile(transcriptPath, "utf8");
-    } catch (err) {
-      if (err && typeof err === "object" && "code" in err && err.code === "ENOENT") {
-        return [];
-      }
-      throw err;
-    }
-    return raw
-      .split(/\r?\n/)
-      .filter(Boolean)
-      .map((line) => JSON.parse(line) as TranscriptUtterance);
-  }
-
-  /** Mark a transcript session as stopped when metadata exists. */
-  async updateStopped(sessionId: string, stoppedAt: string): Promise<void> {
-    const dir = await this.findSessionDir(sessionId);
-    if (!dir) {
-      return;
-    }
-    const session = await readJsonFile<TranscriptSessionDescriptor>(
-      path.join(dir, "metadata.json"),
-    );
-    if (!session) {
-      return;
-    }
-    await fs.writeFile(
-      path.join(dir, "metadata.json"),
-      `${JSON.stringify({ ...session, stoppedAt }, null, 2)}\n`,
-    );
-  }
-
-  /** Write summary artifacts for a session and return the markdown path. */
   async writeSummary(
     summary: TranscriptsSummary,
-    session?: TranscriptSessionDescriptor,
+    session: TranscriptSessionDescriptor,
+    condition?: {
+      guard: StoreTypes.TranscriptSummaryWriteGuard;
+      assertCurrent?: () => void;
+    },
   ): Promise<string> {
-    const dir =
-      session !== undefined
-        ? await this.findSessionDirForSession(session)
-        : ((await this.findSessionDir(summary.sessionId)) ??
-          path.join(this.rootDir, dateSegment(summary.sessionId), safeSegment(summary.sessionId)));
-    return await this.writeSummaryToDir(summary, dir);
+    const context = captureOpenClawStateWorkerContext(this.databaseOptions);
+    const identity = { sessionId: session.sessionId, startedAt: session.startedAt };
+    const intendedSummaryPath = path.join(this.sessionDir(session), "summary.md");
+    const assertOwner = condition?.assertCurrent;
+    const guard = condition
+      ? {
+          inputRevision: condition.guard.inputRevision,
+          nextSequence: condition.guard.nextSequence,
+          summaryRevision: condition.guard.summaryRevision,
+          allowAppends: condition.guard.allowAppends,
+        }
+      : undefined;
+    const summaryJson = JSON.stringify(summary);
+    const markdown = renderTranscriptsMarkdown(summary);
+    const input: TranscriptWriteOperations["transcripts.writeSummary"]["input"] = {
+      session: identity,
+      summaryValues: {
+        generated_at: summary.generatedAt,
+        summary_json: summaryJson,
+        markdown,
+        utterance_count: summary.utteranceCount,
+      },
+      guard,
+      readOnly: this.databaseOptions.readOnly,
+    };
+    const assertCurrent = () => {
+      context.admission.assertCurrent();
+      assertOwner?.();
+    };
+    const result = await runOpenClawStateWorkerOperation(
+      context,
+      (scope) => scope.execute({ type: "transcripts.writeSummary", input }),
+      {
+        assertCurrent,
+        createAdmission: createSqliteWorkerWriteAdmission(assertCurrent, [
+          context.admission.databasePath,
+        ]),
+      },
+    );
+    if (!result.ok) {
+      throw new TranscriptsSummaryChangedError();
+    }
+    return intendedSummaryPath;
   }
 
-  /** Write summary JSON and markdown to a known directory. */
-  async writeSummaryToDir(summary: TranscriptsSummary, dir: string): Promise<string> {
-    await fs.mkdir(dir, { recursive: true });
-    await fs.writeFile(path.join(dir, "summary.json"), `${JSON.stringify(summary, null, 2)}\n`);
-    const markdown = renderTranscriptsMarkdown(summary);
-    const markdownPath = path.join(dir, "summary.md");
-    await fs.writeFile(markdownPath, `${markdown}\n`);
-    return markdownPath;
+  async readSummary(
+    session: TranscriptSessionDescriptor,
+  ): Promise<{ summary?: TranscriptsSummary; markdown?: string }> {
+    return this.readWorker("transcripts.summary", {
+      params: {
+        session: { sessionId: session.sessionId, startedAt: session.startedAt },
+      },
+    });
+  }
+
+  async materializeSessionArtifacts(
+    sessionOrSelector: TranscriptSessionDescriptor | string,
+    kind: StoreTypes.TranscriptArtifactKind,
+  ): Promise<StoreTypes.MaterializedTranscriptArtifacts> {
+    const session =
+      typeof sessionOrSelector === "string"
+        ? await this.readSession(sessionOrSelector)
+        : await this.readSessionByIdentity(sessionOrSelector);
+    if (!session) {
+      const selector =
+        typeof sessionOrSelector === "string" ? sessionOrSelector : sessionOrSelector.sessionId;
+      throw new Error(`transcripts session not found: ${selector}`);
+    }
+    return await withOpenClawStateLease(
+      {
+        scope: "meeting-transcript.export",
+        key: transcriptSessionExportKey(session),
+        database: { scope: "shared", options: this.databaseOptions },
+        leaseMs: 60_000,
+        waitMs: 10_000,
+        leaseLabel: "meeting transcript export lease",
+        operationLabel: "meeting-transcripts.export.lease",
+      },
+      async () => await this.materializeSessionArtifactsOwned(session, kind),
+    );
+  }
+
+  private async materializeSessionArtifactsOwned(
+    session: TranscriptSessionDescriptor,
+    kind: StoreTypes.TranscriptArtifactKind,
+  ): Promise<StoreTypes.MaterializedTranscriptArtifacts> {
+    const sessionDir = this.sessionDir(session);
+    const includeTranscript = kind === "all" || kind === "transcript";
+    const includeSummary = kind === "all" || kind === "summary";
+    const storedSummary = includeSummary ? await this.readSummary(session) : {};
+    const exportedHashes: Record<string, string> = {};
+    const removedExports = new Set<string>();
+    await assertTranscriptExportPathAvailable({
+      selector: transcriptSessionSelector(session),
+      exportRootDir: this.exportRootDir,
+      collisions: await this.readWorker("transcripts.exportPathCollisions", {
+        params: { exportKey: transcriptSessionExportKey(session) },
+      }),
+    });
+    await this.assertExportDestinationOwned(session);
+    const pendingFiles = [
+      "metadata.json",
+      ...(includeTranscript ? ["transcript.jsonl"] : []),
+      ...(includeSummary ? ["summary.json", "summary.md"] : []),
+    ];
+    this.markPendingExports(session, pendingFiles);
+    const ensured = await ensureAbsoluteDirectory(sessionDir, {
+      mode: 0o700,
+      scopeLabel: "transcript export directory",
+    });
+    if (!ensured.ok) {
+      throw ensured.error;
+    }
+    // Every export starts with identity metadata, so even an interrupted partial
+    // materialization remains inspectable by Doctor without guessing its owner.
+    exportedHashes["metadata.json"] = await writeTranscriptArtifact(
+      sessionDir,
+      "metadata.json",
+      `${JSON.stringify(session, null, 2)}\n`,
+    );
+    if (includeTranscript) {
+      exportedHashes["transcript.jsonl"] = await writeTranscriptJsonlArtifact({
+        sessionDir,
+        session,
+        databaseOptions: this.databaseOptions,
+      });
+    }
+    if (includeSummary) {
+      const summaries = {
+        "summary.json": storedSummary.summary
+          ? `${JSON.stringify(storedSummary.summary, null, 2)}\n`
+          : undefined,
+        "summary.md":
+          storedSummary.markdown === undefined
+            ? undefined
+            : normalizeExportText(storedSummary.markdown),
+      };
+      for (const [fileName, content] of Object.entries(summaries)) {
+        if (content === undefined) {
+          await removeTranscriptArtifact(sessionDir, fileName);
+          removedExports.add(fileName);
+        } else {
+          exportedHashes[fileName] = await writeTranscriptArtifact(sessionDir, fileName, content);
+        }
+      }
+    }
+    this.updateExportManifest(session, exportedHashes, removedExports);
+    return {
+      sessionDir,
+      metadataPath: path.join(sessionDir, "metadata.json"),
+      transcriptPath: path.join(sessionDir, "transcript.jsonl"),
+      summaryJsonPath: path.join(sessionDir, "summary.json"),
+      summaryPath: path.join(sessionDir, "summary.md"),
+      hasSummary: storedSummary.summary !== undefined || storedSummary.markdown !== undefined,
+    };
   }
 }

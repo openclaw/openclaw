@@ -3,26 +3,19 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { FetchLike } from "../../../docker-runtime.js";
 
-const MATRIX_QA_DEFAULT_IMAGE = "ghcr.io/matrix-construct/tuwunel:v1.5.1";
+const MATRIX_QA_DEFAULT_IMAGE =
+  "ghcr.io/matrix-construct/tuwunel:v1.8.3@sha256:699fa9971c174e01c884abad8d1a3cfb2fe518e1a71f1fa16ea9dedf11873d74";
 const MATRIX_QA_DEFAULT_SERVER_NAME = "matrix-qa.test";
-export const MATRIX_QA_DEFAULT_PORT = 28008;
 export const MATRIX_QA_INTERNAL_PORT = 8008;
 export const MATRIX_QA_SERVICE = "matrix-qa-homeserver";
 export const MATRIX_QA_CLEANUP_TIMEOUT_MS = 90_000;
 const MATRIX_QA_HEALTH_REQUEST_TIMEOUT_MS = 2_000;
 
-type MatrixQaHarnessManifest = {
-  image: string;
-  serverName: string;
-  homeserverPort: number;
-  composeFile: string;
-  dataDir: string;
-};
+class MatrixQaHarnessTimeoutError extends Error {}
 
 export type MatrixQaHarnessFiles = {
   outputDir: string;
   composeFile: string;
-  manifestPath: string;
   image: string;
   serverName: string;
   homeserverPort: number;
@@ -36,12 +29,11 @@ export function buildVersionsUrl(baseUrl: string) {
 export async function isMatrixVersionsReachable(
   baseUrl: string,
   fetchImpl: FetchLike,
-  timeoutMs = MATRIX_QA_HEALTH_REQUEST_TIMEOUT_MS,
+  timeoutSignal = AbortSignal.timeout(MATRIX_QA_HEALTH_REQUEST_TIMEOUT_MS),
   signal?: AbortSignal,
 ) {
   let response: Awaited<ReturnType<FetchLike>> | undefined;
   try {
-    const timeoutSignal = AbortSignal.timeout(Math.max(1, timeoutMs));
     response = await fetchImpl(buildVersionsUrl(baseUrl), {
       signal: signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal,
     });
@@ -66,7 +58,7 @@ export async function withMatrixQaHarnessTimeout<T>(
       task,
       new Promise<never>((_, reject) => {
         timeout = setTimeout(() => {
-          reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+          reject(new MatrixQaHarnessTimeoutError(`${label} timed out after ${timeoutMs}ms`));
         }, timeoutMs);
       }),
     ]);
@@ -101,6 +93,8 @@ export async function waitForReachableMatrixBaseUrl(params: {
     }
     const probeController = new AbortController();
     let reachableCandidate: string | undefined;
+    let probeConsumedDeadline = false;
+    const requestTimeoutMs = Math.min(MATRIX_QA_HEALTH_REQUEST_TIMEOUT_MS, remainingMs);
     try {
       // Race both network paths so neither stalled probe can starve or delay
       // a healthy peer. The outer deadline also bounds injected fetch fakes.
@@ -109,27 +103,36 @@ export async function waitForReachableMatrixBaseUrl(params: {
         remainingMs,
         Promise.any(
           candidateBaseUrls.map(async (baseUrl) => {
+            const requestTimeoutSignal = AbortSignal.timeout(Math.max(1, requestTimeoutMs));
             if (
               await isMatrixVersionsReachable(
                 baseUrl,
                 params.fetchImpl,
-                Math.min(MATRIX_QA_HEALTH_REQUEST_TIMEOUT_MS, remainingMs),
+                requestTimeoutSignal,
                 probeController.signal,
               )
             ) {
               return baseUrl;
             }
+            if (requestTimeoutMs === remainingMs && requestTimeoutSignal.aborted) {
+              probeConsumedDeadline = true;
+            }
             throw new Error("Matrix versions endpoint unreachable");
           }),
         ),
       );
-    } catch {
-      // Poll again after every candidate fails or the discovery deadline expires.
+    } catch (error) {
+      // The outer timeout covers injected fetches that ignore abort signals.
+      // Request timeouts record the same deadline fact before rejecting.
+      probeConsumedDeadline ||= error instanceof MatrixQaHarnessTimeoutError;
     } finally {
       probeController.abort();
     }
     if (reachableCandidate) {
       return reachableCandidate;
+    }
+    if (probeConsumedDeadline) {
+      break;
     }
     const remainingSleepMs = deadline - Date.now();
     if (remainingSleepMs > 0) {
@@ -161,11 +164,17 @@ function renderMatrixQaCompose(params: {
   registrationToken: string;
   serverName: string;
 }) {
+  // Omitting `published` lets Docker atomically choose and bind the host port;
+  // probing a free numeric port before Compose starts races parallel harnesses.
+  const portMapping =
+    params.homeserverPort === 0
+      ? `      - target: ${MATRIX_QA_INTERNAL_PORT}\n        host_ip: 127.0.0.1`
+      : `      - "127.0.0.1:${params.homeserverPort}:${MATRIX_QA_INTERNAL_PORT}"`;
   return `services:
   ${MATRIX_QA_SERVICE}:
     image: ${params.image}
     ports:
-      - "127.0.0.1:${params.homeserverPort}:${MATRIX_QA_INTERNAL_PORT}"
+${portMapping}
     environment:
       TUWUNEL_ADDRESS: "0.0.0.0"
       TUWUNEL_ALLOW_ENCRYPTION: "true"
@@ -192,7 +201,6 @@ export async function writeMatrixQaHarnessFiles(params: {
   const serverName = params.serverName?.trim() || MATRIX_QA_DEFAULT_SERVER_NAME;
   const composeFile = path.join(params.outputDir, "docker-compose.matrix-qa.yml");
   const dataDir = path.join(params.outputDir, "data");
-  const manifestPath = path.join(params.outputDir, "matrix-qa-harness.json");
 
   await fs.mkdir(dataDir, { recursive: true });
   await fs.writeFile(
@@ -205,22 +213,9 @@ export async function writeMatrixQaHarnessFiles(params: {
     })}\n`,
     { encoding: "utf8", mode: 0o600 },
   );
-  const manifest: MatrixQaHarnessManifest = {
-    image,
-    serverName,
-    homeserverPort: params.homeserverPort,
-    composeFile,
-    dataDir,
-  };
-  await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, {
-    encoding: "utf8",
-    mode: 0o600,
-  });
-
   return {
     outputDir: params.outputDir,
     composeFile,
-    manifestPath,
     image,
     serverName,
     homeserverPort: params.homeserverPort,

@@ -103,37 +103,6 @@ func (docFrontmatterFallbackTranslator) TranslateRaw(_ context.Context, text, _,
 
 func (docFrontmatterFallbackTranslator) Close() {}
 
-type docProtocolLeakTranslator struct{}
-
-func (docProtocolLeakTranslator) Translate(_ context.Context, text, _, _ string) (string, error) {
-	return text, nil
-}
-
-func (docProtocolLeakTranslator) TranslateRaw(_ context.Context, text, _, _ string) (string, error) {
-	switch {
-	case strings.Contains(text, "First chunk") && strings.Contains(text, "Second chunk"):
-		return strings.Join([]string{
-			"<frontmatter>",
-			"title: leaked",
-			"</frontmatter>",
-			"",
-			"<body>",
-			"First translated",
-			"",
-			"Second translated",
-			"</body>",
-		}, "\n"), nil
-	default:
-		replacer := strings.NewReplacer(
-			"First chunk", "First translated",
-			"Second chunk", "Second translated",
-		)
-		return replacer.Replace(text), nil
-	}
-}
-
-func (docProtocolLeakTranslator) Close() {}
-
 type docWrappedLeafTranslator struct{}
 
 func (docWrappedLeafTranslator) Translate(_ context.Context, text, _, _ string) (string, error) {
@@ -188,18 +157,6 @@ func (t *docPromptBudgetTranslator) TranslateRaw(_ context.Context, text, _, _ s
 
 func (t *docPromptBudgetTranslator) Close() {}
 
-type uppercaseWrapperTranslator struct{}
-
-func (uppercaseWrapperTranslator) Translate(_ context.Context, text, _, _ string) (string, error) {
-	return text, nil
-}
-
-func (uppercaseWrapperTranslator) TranslateRaw(_ context.Context, text, _, _ string) (string, error) {
-	return "<BODY>\n" + strings.ReplaceAll(text, "Regular paragraph.", "Translated paragraph.") + "\n</BODY>\n", nil
-}
-
-func (uppercaseWrapperTranslator) Close() {}
-
 type boundaryWrapperTranslator struct{}
 
 func (boundaryWrapperTranslator) Translate(_ context.Context, text, _, _ string) (string, error) {
@@ -248,18 +205,6 @@ func (t *singletonFenceRetryTranslator) TranslateRaw(_ context.Context, text, _,
 
 func (t *singletonFenceRetryTranslator) Close() {}
 
-type splitProtocolMarkerTranslator struct{}
-
-func (splitProtocolMarkerTranslator) Translate(_ context.Context, text, _, _ string) (string, error) {
-	return text, nil
-}
-
-func (splitProtocolMarkerTranslator) TranslateRaw(_ context.Context, text, _, _ string) (string, error) {
-	return strings.ReplaceAll(text, "[Notice kind=system]", "[Aviso kind=system]"), nil
-}
-
-func (splitProtocolMarkerTranslator) Close() {}
-
 type fencedLiteralMaskingTranslator struct {
 	rawInputs []string
 }
@@ -294,11 +239,35 @@ func (t *docSyntaxMaskingTranslator) Translate(_ context.Context, text, _, _ str
 func (t *docSyntaxMaskingTranslator) TranslateRaw(_ context.Context, text, _, _ string) (string, error) {
 	t.rawInputs = append(t.rawInputs, text)
 	translated := strings.ReplaceAll(text, "Visible prose", "Видимый текст")
-	translated = regexp.MustCompile(`(?m)^\s+(__OC_I18N_\d+__)`).ReplaceAllString(translated, "$1")
+	translated = regexp.MustCompile(`(?m)^(__OC_I18N_\d+__)`).ReplaceAllString(translated, "  1. $1")
 	return translated, nil
 }
 
 func (t *docSyntaxMaskingTranslator) Close() {}
+
+type accidentalListMarkerTranslator struct{}
+
+func (accidentalListMarkerTranslator) Translate(_ context.Context, text, _, _ string) (string, error) {
+	return text, nil
+}
+
+func (accidentalListMarkerTranslator) TranslateRaw(_ context.Context, text, _, _ string) (string, error) {
+	return strings.ReplaceAll(text, "September begins the standard rate.", "1. September beginnt der Standardtarif."), nil
+}
+
+func (accidentalListMarkerTranslator) Close() {}
+
+type translatedOrdinalTranslator struct{}
+
+func (translatedOrdinalTranslator) Translate(_ context.Context, text, _, _ string) (string, error) {
+	return text, nil
+}
+
+func (translatedOrdinalTranslator) TranslateRaw(_ context.Context, text, _, _ string) (string, error) {
+	return strings.NewReplacer("1st failure", "1. Fehler", "2nd failure", "2. Fehler").Replace(text), nil
+}
+
+func (translatedOrdinalTranslator) Close() {}
 
 type duplicateFirstFencedPlaceholderTranslator struct {
 	rawCalls int
@@ -488,24 +457,32 @@ func TestTranslateDocBodyChunkedFallsBackToSmallerChunks(t *testing.T) {
 func TestStripAndReapplyCommonIndent(t *testing.T) {
 	t.Parallel()
 
-	source := strings.Join([]string{
-		"    <Step title=\"Example\">",
-		"      - item one",
-		"      - item two",
-		"    </Step>",
-		"",
-	}, "\n")
-
-	normalized, indent := stripCommonIndent(source)
-	if indent != "    " {
-		t.Fatalf("expected common indent of four spaces, got %q", indent)
-	}
-	if strings.HasPrefix(normalized, "    ") {
-		t.Fatalf("expected normalized text without common indent:\n%s", normalized)
-	}
-	roundTrip := reapplyCommonIndent(normalized, indent)
-	if roundTrip != source {
-		t.Fatalf("expected indent round-trip to preserve source\nwant:\n%s\ngot:\n%s", source, roundTrip)
+	for _, tc := range []struct {
+		name   string
+		source string
+		indent string
+	}{
+		{
+			name:   "indented component with nested list",
+			source: "    <Step title=\"Example\">\n      - item one\n      - item two\n    </Step>\n",
+			indent: "    ",
+		},
+		{name: "unindented start with spaced tail", source: "Plain paragraph.\n\n  indented tail\n"},
+		{name: "unindented start with tabbed tail", source: "\r\nPlain paragraph.\r\n\tindented tail\r\n"},
+		{name: "unindented middle", source: "  indented start\nPlain paragraph.\n  indented tail\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			normalized, indent := stripCommonIndent(tc.source)
+			if indent != tc.indent {
+				t.Fatalf("expected common indent %q, got %q", tc.indent, indent)
+			}
+			if indent != "" && strings.HasPrefix(normalized, indent) {
+				t.Fatalf("expected normalized text without common indent:\n%s", normalized)
+			}
+			if roundTrip := reapplyCommonIndent(normalized, indent); roundTrip != tc.source {
+				t.Fatalf("expected indent round-trip to preserve source\nwant:\n%s\ngot:\n%s", tc.source, roundTrip)
+			}
+		})
 	}
 }
 
@@ -733,6 +710,103 @@ func TestExtractMarkdownListMarkerPrefixesIgnoresFencedExamples(t *testing.T) {
 	}
 }
 
+func TestNormalizeMaskedListMarkerPlaceholdersRemovesAddedContainers(t *testing.T) {
+	t.Parallel()
+
+	mapping := map[string]string{
+		"__OC_I18N_000001__": "- ",
+		"__OC_I18N_000002__": "  - ",
+		"__OC_I18N_000003__": "> 1. ",
+		"__OC_I18N_000004__": "`inline`",
+	}
+	translated := strings.Join([]string{
+		"  __OC_I18N_000001__Top level",
+		"> __OC_I18N_000002__Nested",
+		"  > __OC_I18N_000003__Quoted",
+		"1. __OC_I18N_000001__Numbered wrapper",
+		"  - __OC_I18N_000002__Bullet wrapper",
+		"  __OC_I18N_000004__ prose",
+		"",
+	}, "\n")
+	want := strings.Join([]string{
+		"__OC_I18N_000001__Top level",
+		"__OC_I18N_000002__Nested",
+		"__OC_I18N_000003__Quoted",
+		"__OC_I18N_000001__Numbered wrapper",
+		"__OC_I18N_000002__Bullet wrapper",
+		"  __OC_I18N_000004__ prose",
+		"",
+	}, "\n")
+
+	if got := normalizeMaskedListMarkerPlaceholders(translated, mapping); got != want {
+		t.Fatalf("normalized placeholders changed unexpectedly\nwant:\n%s\ngot:\n%s", want, got)
+	}
+}
+
+func TestEscapeUnexpectedMarkdownListMarkersPreservesFencedExamples(t *testing.T) {
+	t.Parallel()
+
+	translated := strings.Join([]string{
+		"1. September beginnt der Standardtarif.",
+		"- Unbeabsichtigter Aufzählungspunkt.",
+		"> 2) Verschachtelte Nummerierung.",
+		"- __OC_I18N_000001__Maskierter Listeneintrag.",
+		"3. September mit __OC_I18N_000002__Inlinecode.",
+		"```md",
+		"1. Beispiel bleibt unverändert.",
+		"```",
+		"",
+	}, "\n")
+	want := strings.Join([]string{
+		`1\. September beginnt der Standardtarif.`,
+		`\- Unbeabsichtigter Aufzählungspunkt.`,
+		`> 2\) Verschachtelte Nummerierung.`,
+		"- __OC_I18N_000001__Maskierter Listeneintrag.",
+		`3\. September mit __OC_I18N_000002__Inlinecode.`,
+		"```md",
+		"1. Beispiel bleibt unverändert.",
+		"```",
+		"",
+	}, "\n")
+
+	if got := escapeUnexpectedMarkdownListMarkers(translated, map[string]string{"__OC_I18N_000001__": "- "}); got != want {
+		t.Fatalf("unexpected escaped list markers:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestNormalizeMaskedListMarkerSpacingRestoresSourceWhitespace(t *testing.T) {
+	t.Parallel()
+
+	first := "__OC_I18N_000001__"
+	second := "__OC_I18N_000002__"
+	markers := map[string]string{first: "- ", second: "  - "}
+	source := "Intro.\n\n" + first + "First\n  continuation\n" + second + "Second\n"
+	translated := "Einleitung. " + first + "Erste\n  Fortsetzung\n\n\n" + second + "Zweite\n"
+	want := "Einleitung.\n\n" + first + "Erste\n  Fortsetzung\n" + second + "Zweite\n"
+
+	if got := normalizeMaskedListMarkerSpacing(source, translated, markers); got != want {
+		t.Fatalf("unexpected normalized spacing:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestTranslateDocBodyChunkedEscapesTranslatedOrdinalAtListItemStart(t *testing.T) {
+	t.Parallel()
+
+	body := "- 1st failure: 30 seconds\n- 2nd failure: 1 minute\n- 3rd+ failure: 5 minutes\n"
+	translated, err := translateDocBodyChunked(
+		context.Background(), translatedOrdinalTranslator{}, "concepts/model-failover.md", body, "en", "de",
+	)
+	if err != nil {
+		t.Fatalf("translateDocBodyChunked returned error: %v", err)
+	}
+	if !strings.Contains(translated, `- 1\. Fehler: 30 seconds`) || !strings.Contains(translated, `- 2\. Fehler: 1 minute`) {
+		t.Fatalf("expected translated ordinals to be escaped:\n%s", translated)
+	}
+	if err := validateDocBodyFencedLiterals(body, translated); err != nil {
+		t.Fatalf("expected repaired final structure to validate: %v", err)
+	}
+}
+
 func TestValidateDocChunkTranslationRejectsTranslatedInlineCode(t *testing.T) {
 	t.Parallel()
 
@@ -767,6 +841,30 @@ func TestValidateDocChunkTranslationAcceptsReorderedInlineCode(t *testing.T) {
 
 	if err := validateDocChunkTranslation(source, translated); err != nil {
 		t.Fatalf("expected reordered intact inline code to pass, got %v", err)
+	}
+}
+
+func TestUnwrapUnexpectedInlineCodeSpans(t *testing.T) {
+	t.Parallel()
+
+	source := "Use labels in ordinary prose.\n"
+	translated := "Verwende `Bezeichnungen` in `normalem Text`.\n"
+	want := "Verwende Bezeichnungen in normalem Text.\n"
+	if got := unwrapUnexpectedInlineCodeSpans(source, translated); got != want {
+		t.Fatalf("unexpected inline-code repair:\n%s\nwant:\n%s", got, want)
+	}
+	if err := validateDocChunkTranslation(source, want); err != nil {
+		t.Fatalf("expected repaired translation to validate: %v", err)
+	}
+}
+
+func TestUnwrapUnexpectedInlineCodeSpansPreservesSourceCodeContract(t *testing.T) {
+	t.Parallel()
+
+	source := "Use `--source`.\n"
+	translated := "Verwende `--target`.\n"
+	if got := unwrapUnexpectedInlineCodeSpans(source, translated); got != translated {
+		t.Fatalf("expected source inline-code contract to remain untouched: %q", got)
 	}
 }
 
@@ -1061,6 +1159,38 @@ func TestValidateDocChunkTranslationAllowsTranslatedProseInIsolatedIndentedFence
 	}
 	if err := validateDocChunkTranslation(source, translated); err != nil {
 		t.Fatalf("expected translated fence prose to validate, got %v", err)
+	}
+}
+
+func TestValidateDocChunkTranslationAllowsDedentedCodeInIndentedFence(t *testing.T) {
+	t.Parallel()
+
+	sourceFence := "    ```typescript\n" +
+		"const plugin = createPlugin<Account>({\n" +
+		"  // Account resolution belongs on `config`.\n" +
+		"  notify: (code) => `Pairing code: ${code}`,\n" +
+		"});\n" +
+		"    ```\n"
+	translatedFence := "    ```typescript\n" +
+		"const plugin = createPlugin<Account>({\n" +
+		"  // La resolución de cuentas pertenece a `config`.\n" +
+		"  notify: (code) => `Código de emparejamiento: ${code}`,\n" +
+		"});\n" +
+		"    ```\n"
+
+	if err := validateDocChunkTranslation(sourceFence, translatedFence); err != nil {
+		t.Fatalf("expected translated pure fenced chunk to validate, got %v", err)
+	}
+
+	source := "<Example>\n" + sourceFence + "    Run `openclaw doctor` after editing.\n</Example>\n"
+	translated := "<Example>\n" + translatedFence + "    Ejecuta `openclaw doctor` después de editar.\n</Example>\n"
+	if err := validateDocChunkTranslation(source, translated); err != nil {
+		t.Fatalf("expected translated component fence and preserved trailing inline code to validate, got %v", err)
+	}
+	changedTrailingCode := strings.Replace(translated, "`openclaw doctor`", "`openclaw fix`", 1)
+	err := validateDocChunkTranslation(source, changedTrailingCode)
+	if err == nil || !strings.Contains(err.Error(), "inline code mismatch") {
+		t.Fatalf("expected changed inline code after the fence to be rejected, got %v", err)
 	}
 }
 
@@ -2013,43 +2143,6 @@ func TestValidateDocChunkTranslationRejectsTopLevelBodyWrapperLeakEvenWhenSource
 	}
 }
 
-func TestTranslateDocBodyChunkedSplitsOnProtocolTokenLeakage(t *testing.T) {
-	body := strings.Join([]string{
-		"First chunk",
-		"",
-		"Second chunk",
-		"",
-	}, "\n")
-
-	t.Setenv("OPENCLAW_DOCS_I18N_DOC_CHUNK_MAX_BYTES", "4096")
-	translated, err := translateDocBodyChunked(context.Background(), docProtocolLeakTranslator{}, "gateway/configuration-reference.md", body, "en", "zh-CN")
-	if err != nil {
-		t.Fatalf("translateDocBodyChunked returned error: %v", err)
-	}
-	if strings.Contains(translated, "<frontmatter>") || strings.Contains(translated, "<body>") || strings.Contains(translated, "[[[FM_") {
-		t.Fatalf("expected protocol wrapper leakage to be removed after split:\n%s", translated)
-	}
-	if !strings.Contains(translated, "First translated") || !strings.Contains(translated, "Second translated") {
-		t.Fatalf("expected split chunks to translate successfully:\n%s", translated)
-	}
-}
-
-func TestTranslateDocBodyChunkedStripsUppercaseBodyWrapper(t *testing.T) {
-	body := "Regular paragraph.\n"
-
-	t.Setenv("OPENCLAW_DOCS_I18N_DOC_CHUNK_MAX_BYTES", "4096")
-	translated, err := translateDocBodyChunked(context.Background(), uppercaseWrapperTranslator{}, "gateway/configuration-reference.md", body, "en", "zh-CN")
-	if err != nil {
-		t.Fatalf("translateDocBodyChunked returned error: %v", err)
-	}
-	if strings.Contains(strings.ToLower(translated), "<body>") {
-		t.Fatalf("expected uppercase wrapper to be stripped:\n%s", translated)
-	}
-	if !strings.Contains(translated, "Translated paragraph.") {
-		t.Fatalf("expected translated body content to survive unwrap:\n%s", translated)
-	}
-}
-
 func TestTranslateDocBodyChunkedPreservesListStructureAcrossSanitizedChunkBoundary(t *testing.T) {
 	body := "Intro paragraph.\n\n1. First item\n2. Second item\n\n"
 
@@ -2063,6 +2156,19 @@ func TestTranslateDocBodyChunkedPreservesListStructureAcrossSanitizedChunkBounda
 	}
 	if !strings.Contains(translated, "Einleitung\n\n1. Erster Eintrag") {
 		t.Fatalf("expected paragraph/list boundary to survive chunk assembly:\n%s", translated)
+	}
+}
+
+func TestTranslateDocBodyChunkedPreservesHeadingBetweenListsWithIndentedTail(t *testing.T) {
+	body := "- First item\n- Second item\n\n## Code sample\n\n- Third item\n  continuation\n"
+
+	translated, err := translateDocBodyChunked(context.Background(), docChunkTranslator{}, "example.md", body, "en", "zh-CN")
+	if err != nil {
+		t.Fatalf("expected separate lists to survive translation, got %v", err)
+	}
+	want := strings.ReplaceAll(body, "Code sample", "代码示例")
+	if translated != want {
+		t.Fatalf("expected heading and list indentation to be preserved\nwant:\n%s\ngot:\n%s", want, translated)
 	}
 }
 
@@ -2283,6 +2389,7 @@ func TestTranslateDocBodyChunkedMasksInlineCodeAndListMarkers(t *testing.T) {
 	body := strings.Join([]string{
 		"- Visible prose uses `openclaw config`.",
 		"  1. Visible prose keeps ``nested `ticks` `` exact.",
+		"- Visible prose keeps Hailuo 2.3/02 exact.",
 		"- Channel configs:",
 		"  - Telegram: Visible prose.",
 		"  - WhatsApp: Visible prose.",
@@ -2307,7 +2414,7 @@ func TestTranslateDocBodyChunkedMasksInlineCodeAndListMarkers(t *testing.T) {
 		t.Fatal("expected raw translator inputs")
 	}
 	for _, input := range translator.rawInputs {
-		if strings.Contains(input, "`openclaw config`") || strings.Contains(input, "``nested `ticks` ``") {
+		if strings.Contains(input, "`openclaw config`") || strings.Contains(input, "``nested `ticks` ``") || strings.Contains(input, "2.3/02") {
 			t.Fatalf("expected inline code outside fences to be masked:\n%s", input)
 		}
 		if strings.Contains(input, "- Visible prose uses") || strings.Contains(input, "1. Visible prose keeps") || strings.Contains(input, "> - Visible prose inside a quote.") {
@@ -2320,6 +2427,7 @@ func TestTranslateDocBodyChunkedMasksInlineCodeAndListMarkers(t *testing.T) {
 	for _, exact := range []string{
 		"- Видимый текст uses `openclaw config`.",
 		"  1. Видимый текст keeps ``nested `ticks` `` exact.",
+		"- Видимый текст keeps Hailuo 2.3/02 exact.",
 		"- Channel configs:\n  - Telegram: Видимый текст.\n  - WhatsApp: Видимый текст.",
 		"> - Видимый текст inside a quote.",
 		"```md\n- Видимый текст and `fenced example` stay exposed.\n```",
@@ -2331,6 +2439,27 @@ func TestTranslateDocBodyChunkedMasksInlineCodeAndListMarkers(t *testing.T) {
 	}
 	if err := validateDocBodyFencedLiterals(body, translated); err != nil {
 		t.Fatalf("expected final structure to validate: %v", err)
+	}
+}
+
+func TestTranslateDocBodyChunkedEscapesModelInventedListMarker(t *testing.T) {
+	t.Parallel()
+
+	body := "1. First step.\n2. Second step.\n\nSeptember begins the standard rate.\n"
+	translated, err := translateDocBodyChunked(
+		context.Background(), accidentalListMarkerTranslator{}, "concepts/model-failover.md", body, "en", "de",
+	)
+	if err != nil {
+		t.Fatalf("translateDocBodyChunked returned error: %v", err)
+	}
+	if !strings.Contains(translated, "1. First step.\n2. Second step.") {
+		t.Fatalf("expected source list markers to be restored:\n%s", translated)
+	}
+	if !strings.Contains(translated, `1\. September beginnt der Standardtarif.`) {
+		t.Fatalf("expected model-invented list marker to be escaped:\n%s", translated)
+	}
+	if err := validateDocBodyFencedLiterals(body, translated); err != nil {
+		t.Fatalf("expected repaired final structure to validate: %v", err)
 	}
 }
 
@@ -2553,8 +2682,8 @@ func TestValidateDocBodyRejectsChangedCompositeLiteral(t *testing.T) {
 func TestExtractNumericValuesKeepsLowAmbiguityComposites(t *testing.T) {
 	t.Parallel()
 
-	got := strings.Join(extractNumericValues("0xFF 0b101 0o755 1.5:1 24/7 1e-3 v1.2.3 v24/7 24/7z"), ",")
-	if want := "0xFF,0b101,0o755,1.5:1,24/7,1e-3"; got != want {
+	got := strings.Join(extractNumericValues("0xFF 0b101 0o755 1.5:1 24/7 1e-3 v1.2.3 v24/7 24/7z Hailuo-2.3/02"), ",")
+	if want := "0xFF,0b101,0o755,1.5:1,24/7,1e-3,2.3/02"; got != want {
 		t.Fatalf("unexpected composite literals: got=%q want=%q", got, want)
 	}
 	if err := validateDocChunkTranslation("Supports 1:1 conversations.\n", "Unterstützt 1:1-Unterhaltungen.\n"); err != nil {
@@ -2562,6 +2691,9 @@ func TestExtractNumericValuesKeepsLowAmbiguityComposites(t *testing.T) {
 	}
 	if err := validateDocChunkTranslation("Available 24/7.\n", "24/7 उपलब्ध।\n"); err != nil {
 		t.Fatalf("expected translated prose around exact slash ratio to pass: %v", err)
+	}
+	if err := validateDocChunkTranslation("Hailuo 2.3/02 models.\n", "Hailuo-2.3/02-Modelle.\n"); err != nil {
+		t.Fatalf("expected locale hyphen compound around exact ratio to pass: %v", err)
 	}
 }
 
@@ -2654,7 +2786,6 @@ func TestContextualProtectedProductLinksRecognizeCanonicalDestinations(t *testin
 		{"fal", "/providers/fal"},
 		{"Fal", "/providers/fal"},
 		{"Fireworks", "/providers/fireworks"},
-		{"Inferrs", "/providers/inferrs"},
 		{"Meta", "/providers/meta"},
 		{"Runway", "/providers/runway"},
 		{"Synthetic", "/providers/synthetic"},

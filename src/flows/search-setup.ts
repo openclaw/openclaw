@@ -15,36 +15,29 @@ import {
   normalizeSecretInputString,
 } from "../config/types.secrets.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "../plugins/config-state.js";
-import { enablePluginInConfig } from "../plugins/enable.js";
+import { enablePluginInConfig, enablePluginWithCapabilityConsent } from "../plugins/enable.js";
+import { sortPluginEntriesById } from "../plugins/plugin-entry-order.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
 import {
   resolveWebSearchInstallCatalogEntries,
   type WebSearchInstallCatalogEntry,
 } from "../plugins/web-search-install-catalog.js";
 import { resolvePluginWebSearchProviders } from "../plugins/web-search-providers.runtime.js";
-import { sortWebSearchProviders } from "../plugins/web-search-providers.shared.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveWebSearchProviderId } from "../web-search/runtime.js";
 import { t } from "../wizard/i18n/index.js";
+import { createPluginCapabilityConsentPrompter } from "../wizard/plugin-capability-consent.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import type { FlowContribution, FlowOption } from "./types.js";
-import { sortFlowContributionsByLabel } from "./types.js";
+import { sortFlowContributionsByLabel, type FlowContribution } from "./types.js";
 
-type SearchProvider = NonNullable<
-  NonNullable<NonNullable<NonNullable<OpenClawConfig["tools"]>["web"]>["search"]>["provider"]
->;
 type SearchConfig = NonNullable<NonNullable<NonNullable<OpenClawConfig["tools"]>["web"]>["search"]>;
+type SearchProvider = NonNullable<SearchConfig["provider"]>;
 type MutableSearchConfig = SearchConfig & Record<string, unknown>;
-
-type SearchProviderSetupOption = FlowOption & {
-  value: SearchProvider;
-};
 
 type SearchProviderSetupContribution = FlowContribution & {
   kind: "search";
   surface: "setup";
   provider: PluginWebSearchProviderEntry;
-  option: SearchProviderSetupOption;
   source: "runtime" | "install-catalog";
 };
 
@@ -107,7 +100,7 @@ function buildSearchProviderSetupContribution(params: {
 function resolveSearchProviderSetupContributions(
   config?: OpenClawConfig,
 ): SearchProviderSetupContribution[] {
-  const runtimeProviders = sortWebSearchProviders(
+  const runtimeProviders = sortPluginEntriesById(
     resolvePluginWebSearchProviders({
       config,
       env: process.env,
@@ -130,11 +123,10 @@ function resolveSearchProviderSetupContributions(
           enabledByDefault: true,
         }).enabled,
     )
-    .map(
-      (entry): SearchProviderEntryWithInstall =>
-        Object.assign({}, entry.provider, { [SEARCH_INSTALL_CATALOG_ENTRY]: entry }),
+    .map((entry): SearchProviderEntryWithInstall =>
+      Object.assign({}, entry.provider, { [SEARCH_INSTALL_CATALOG_ENTRY]: entry }),
     );
-  const providers = sortWebSearchProviders([...runtimeProviders, ...installCatalogProviders]);
+  const providers = sortPluginEntriesById([...runtimeProviders, ...installCatalogProviders]);
   return sortFlowContributionsByLabel(
     providers.filter(showsSearchProviderInSetup).map((provider) =>
       buildSearchProviderSetupContribution({
@@ -280,9 +272,6 @@ export function applySearchKey(
     return config;
   }
   const search: MutableSearchConfig = { ...config.tools?.web?.search, provider, enabled: true };
-  if (!providerEntry.setConfiguredCredentialValue) {
-    providerEntry.setCredentialValue(search, key);
-  }
   const nextBase: OpenClawConfig = {
     ...config,
     tools: {
@@ -357,14 +346,10 @@ function preserveDisabledState(original: OpenClawConfig, result: OpenClawConfig)
   }
 
   const pluginId = providerEntry.pluginId;
-  const originalPluginEntry = (
-    original.plugins?.entries as Record<string, Record<string, unknown>> | undefined
-  )?.[pluginId];
-  const resultPluginEntry = (
-    next.plugins?.entries as Record<string, Record<string, unknown>> | undefined
-  )?.[pluginId];
+  const originalPluginEntry = original.plugins?.entries?.[pluginId];
+  const resultPluginEntry = next.plugins?.entries?.[pluginId];
 
-  const nextPlugins = { ...next.plugins } as Record<string, unknown>;
+  const nextPlugins = { ...next.plugins };
 
   if (Array.isArray(original.plugins?.allow)) {
     nextPlugins.allow = [...original.plugins.allow];
@@ -374,7 +359,7 @@ function preserveDisabledState(original: OpenClawConfig, result: OpenClawConfig)
 
   if (resultPluginEntry || originalPluginEntry) {
     const nextEntries = {
-      ...(nextPlugins.entries as Record<string, Record<string, unknown>> | undefined),
+      ...nextPlugins.entries,
     };
     const patchedEntry = { ...resultPluginEntry };
     if (typeof originalPluginEntry?.enabled === "boolean") {
@@ -388,7 +373,7 @@ function preserveDisabledState(original: OpenClawConfig, result: OpenClawConfig)
 
   return {
     ...next,
-    plugins: nextPlugins as OpenClawConfig["plugins"],
+    plugins: nextPlugins,
   };
 }
 
@@ -396,7 +381,32 @@ type SetupSearchOptions = {
   quickstartDefaults?: boolean;
   preserveDisabledSearchState?: boolean;
   secretInputMode?: SecretInputMode;
+  beforePersistentEffect?: () => Promise<void>;
 };
+
+type SearchSetupResult =
+  | { outcome: "completed"; config: OpenClawConfig }
+  | {
+      outcome: "kept-current";
+      config: OpenClawConfig;
+      reason: "no-providers" | "user-skipped";
+    }
+  | {
+      outcome: "kept-current";
+      config: OpenClawConfig;
+      reason: "provider-unavailable" | "provider-install-skipped";
+      providerId: string;
+    }
+  | {
+      outcome: "install-failed";
+      config: OpenClawConfig;
+      providerId: string;
+      reason: "failed" | "timed-out";
+    };
+
+function completedSearchSetup(config: OpenClawConfig): SearchSetupResult {
+  return { outcome: "completed", config };
+}
 
 async function finalizeSearchProviderSetup(params: {
   originalConfig: OpenClawConfig;
@@ -405,7 +415,7 @@ async function finalizeSearchProviderSetup(params: {
   runtime: RuntimeEnv;
   prompter: WizardPrompter;
   opts?: SetupSearchOptions;
-}): Promise<OpenClawConfig> {
+}): Promise<SearchSetupResult> {
   let next = params.nextConfig;
   const installEntry = params.entry[SEARCH_INSTALL_CATALOG_ENTRY];
   if (installEntry && next.tools?.web?.search?.enabled !== false) {
@@ -424,9 +434,25 @@ async function finalizeSearchProviderSetup(params: {
       prompter: params.prompter,
       runtime: params.runtime,
       autoConfirmSingleSource: true,
+      ...(params.opts?.beforePersistentEffect
+        ? { beforePersistentEffect: params.opts.beforePersistentEffect }
+        : {}),
     });
     if (!installed.installed) {
-      return params.originalConfig;
+      if (installed.status === "skipped") {
+        return {
+          outcome: "kept-current",
+          config: params.originalConfig,
+          reason: "provider-install-skipped",
+          providerId: params.entry.id,
+        };
+      }
+      return {
+        outcome: "install-failed",
+        config: params.originalConfig,
+        providerId: params.entry.id,
+        reason: installed.status === "timed_out" ? "timed-out" : "failed",
+      };
     }
     next = installed.cfg;
   }
@@ -434,7 +460,7 @@ async function finalizeSearchProviderSetup(params: {
     next = preserveDisabledState(params.originalConfig, next);
   }
   if (!params.entry.runSetup) {
-    return next;
+    return completedSearchSetup(next);
   }
   next = await params.entry.runSetup({
     config: next,
@@ -443,9 +469,11 @@ async function finalizeSearchProviderSetup(params: {
     quickstartDefaults: params.opts?.quickstartDefaults,
     secretInputMode: params.opts?.secretInputMode,
   });
-  return params.opts?.preserveDisabledSearchState === false
-    ? next
-    : preserveDisabledState(params.originalConfig, next);
+  return completedSearchSetup(
+    params.opts?.preserveDisabledSearchState === false
+      ? next
+      : preserveDisabledState(params.originalConfig, next),
+  );
 }
 
 export async function runSearchSetupFlow(
@@ -453,7 +481,7 @@ export async function runSearchSetupFlow(
   runtime: RuntimeEnv,
   prompter: WizardPrompter,
   opts?: SetupSearchOptions,
-): Promise<OpenClawConfig> {
+): Promise<SearchSetupResult> {
   const availableProviderOptions = resolveSearchProviderOptions(config);
   const codexRecommended =
     defaultModelUsesCodexRuntime(config) &&
@@ -471,7 +499,7 @@ export async function runSearchSetupFlow(
       ].join("\n"),
       t("wizard.search.title"),
     );
-    return config;
+    return { outcome: "kept-current", config, reason: "no-providers" };
   }
 
   await prompter.note(
@@ -555,13 +583,37 @@ export async function runSearchSetupFlow(
   });
 
   if (choice === "__skip__") {
-    return config;
+    return { outcome: "kept-current", config, reason: "user-skipped" };
   }
 
   const entry =
     resolveSearchProviderEntry(config, choice) ?? providerOptions.find((e) => e.id === choice);
   if (!entry) {
-    return config;
+    return { outcome: "kept-current", config, reason: "provider-unavailable", providerId: choice };
+  }
+  if (
+    entry.pluginId &&
+    !(SEARCH_INSTALL_CATALOG_ENTRY in entry) &&
+    (opts?.preserveDisabledSearchState === false || config.tools?.web?.search?.enabled !== false)
+  ) {
+    const enabled = await enablePluginWithCapabilityConsent(config, entry.pluginId, {
+      onCapabilityConsent: createPluginCapabilityConsentPrompter(
+        prompter,
+        opts?.beforePersistentEffect,
+      ),
+    });
+    if (!enabled.enabled) {
+      await prompter.note(
+        enabled.reason ?? "Plugin could not be enabled.",
+        "Web search unavailable",
+      );
+      return {
+        outcome: "install-failed",
+        config: enabled.config,
+        providerId: choice,
+        reason: "failed",
+      };
+    }
   }
   const finalizeSelection = (nextConfig: OpenClawConfig) =>
     finalizeSearchProviderSetup({
@@ -696,17 +748,19 @@ export async function runSearchSetupFlow(
     enabled: false,
     provider: choice,
   };
-  return applySearchProviderSelectionConfig(
-    {
-      ...config,
-      tools: {
-        ...config.tools,
-        web: {
-          ...config.tools?.web,
-          search,
+  return completedSearchSetup(
+    applySearchProviderSelectionConfig(
+      {
+        ...config,
+        tools: {
+          ...config.tools,
+          web: {
+            ...config.tools?.web,
+            search,
+          },
         },
       },
-    },
-    entry,
+      entry,
+    ),
   );
 }

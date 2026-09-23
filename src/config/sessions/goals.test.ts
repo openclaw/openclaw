@@ -11,7 +11,7 @@ import {
 } from "./goals.js";
 import {
   loadSessionEntry,
-  upsertSessionEntry as upsertAccessorSessionEntry,
+  upsertSessionEntryCore as upsertAccessorSessionEntry,
 } from "./session-accessor.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
 import type { SessionEntry } from "./types.js";
@@ -50,6 +50,7 @@ describe("session goals", () => {
         updatedAt: 1,
         totalTokens,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
       },
     });
   }
@@ -61,13 +62,15 @@ describe("session goals", () => {
       entry: {
         ...getSessionEntry({ storePath: fixture.storePath(), sessionKey })!,
         totalTokens: 100,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
       },
     });
 
     const goal = await createSessionGoal({
       storePath: fixture.storePath(),
       sessionKey,
-      objective: "land the PR",
+      objective: "  land the PR \n",
       tokenBudget: 50,
       now: 10,
     });
@@ -90,6 +93,7 @@ describe("session goals", () => {
         updatedAt: 1,
         totalTokens: 10,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
       },
       now: 10,
     });
@@ -219,6 +223,7 @@ describe("session goals", () => {
         ...getSessionEntry({ storePath: fixture.storePath(), sessionKey })!,
         totalTokens: 125,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
       },
     });
 
@@ -230,7 +235,7 @@ describe("session goals", () => {
     expect(snapshot.goal?.status).toBe("active");
   });
 
-  it("treats token snapshots as fresh unless explicitly stale", async () => {
+  it("accounts token snapshots with current context provenance", async () => {
     await upsertSessionEntry({
       storePath: fixture.storePath(),
       sessionKey,
@@ -238,6 +243,8 @@ describe("session goals", () => {
         sessionId: "sess-1",
         updatedAt: 1,
         totalTokens: 100,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
       },
     });
     await createSessionGoal({
@@ -252,6 +259,8 @@ describe("session goals", () => {
       entry: {
         ...getSessionEntry({ storePath: fixture.storePath(), sessionKey })!,
         totalTokens: 125,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
       },
     });
 
@@ -280,6 +289,18 @@ describe("session goals", () => {
 
     expect(completed.status).toBe("complete");
     expect(completed.lastStatusNote).toBe("done");
+    const repeated = await updateSessionGoalStatus({
+      storePath: fixture.storePath(),
+      sessionKey,
+      status: "complete",
+      note: "verified",
+      now: 30,
+    });
+    expect(repeated.completedAt).toBe(completed.completedAt);
+    expect(repeated.lastStatusNote).toBe("verified");
+    expect(getSessionEntry({ storePath: fixture.storePath(), sessionKey })?.goal?.completedAt).toBe(
+      completed.completedAt,
+    );
     await expect(
       updateSessionGoalStatus({
         storePath: fixture.storePath(),
@@ -387,7 +408,7 @@ describe("session goals", () => {
     const updated = await updateSessionGoalObjective({
       storePath: fixture.storePath(),
       sessionKey,
-      objective: "ship the fix and update docs",
+      objective: "\tship the fix and update docs \n",
       now: 20,
     });
 
@@ -440,6 +461,7 @@ describe("session goals", () => {
       {
         totalTokens: 140,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
         goal: {
           schemaVersion: 1,
           id: "goal-1",
@@ -465,6 +487,7 @@ describe("session goals", () => {
       {
         totalTokens: 140,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
         goal: {
           schemaVersion: 1,
           id: "goal-1",

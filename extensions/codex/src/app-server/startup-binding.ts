@@ -7,15 +7,20 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import {
   embeddedAgentLog,
-  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { parseSqliteSessionFileMarker } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  isPathStrictlyInside,
+  readFileWindowFully,
+  root as openSafeFilesystemRoot,
+} from "openclaw/plugin-sdk/file-access-runtime";
 import { resolveCodexAppServerHomeDir } from "./auth-bridge.js";
 import { isJsonObject, type JsonValue } from "./protocol.js";
-import type {
-  CodexAppServerBindingIdentity,
-  CodexAppServerBindingStore,
-  CodexAppServerThreadBinding,
+import {
+  assertCodexBindingMayBeReplaced,
+  type CodexAppServerBindingIdentity,
+  type CodexAppServerBindingStore,
+  type CodexAppServerThreadBinding,
 } from "./session-binding.js";
 
 // Codex owns proactive auto-compaction, but OpenClaw must not resume a native
@@ -24,6 +29,7 @@ const CODEX_APP_SERVER_NATIVE_THREAD_FALLBACK_MAX_TOKENS = 300_000;
 const CODEX_APP_SERVER_NATIVE_THREAD_DEFAULT_RESERVE_TOKENS = 20_000;
 const CODEX_APP_SERVER_NATIVE_THREAD_MIN_PROMPT_BUDGET_TOKENS = 8_000;
 const CODEX_APP_SERVER_NATIVE_THREAD_MIN_PROMPT_BUDGET_RATIO = 0.5;
+const CODEX_APP_SERVER_ROLLOUT_TAIL_READ_BYTES = 64 * 1024;
 const CODEX_APP_SERVER_BYTE_UNITS: Record<string, number> = {
   b: 1,
   k: 1024,
@@ -39,14 +45,11 @@ const CODEX_APP_SERVER_BYTE_UNITS: Record<string, number> = {
   tb: 1024 * 1024 * 1024 * 1024,
   tib: 1024 * 1024 * 1024 * 1024,
 };
-type CodexSessionRecordCacheEntry = {
-  sessionsFile: string;
-  mtimeMs: number;
-  size: number;
-  record: (Record<string, unknown> & { sessionKey: string }) | undefined;
+type CodexAppServerRolloutFile = {
+  path: string;
+  bytes: number;
+  handle?: Awaited<ReturnType<typeof fs.open>>;
 };
-
-const codexSessionRecordCache = new Map<string, CodexSessionRecordCacheEntry>();
 
 function parseCodexAppServerByteLimit(value: unknown): number | undefined {
   if (typeof value === "number" && Number.isFinite(value) && value > 0) {
@@ -75,7 +78,8 @@ async function listCodexAppServerRolloutFilesForThread(
   agentDir: string,
   threadId: string,
   codexHome?: string,
-): Promise<Array<{ path: string; bytes: number }>> {
+  rolloutPath?: string,
+): Promise<CodexAppServerRolloutFile[]> {
   const resolvedAgentDir = path.resolve(agentDir);
   const resolvedCodexHome = codexHome?.trim()
     ? path.resolve(codexHome)
@@ -86,7 +90,33 @@ async function listCodexAppServerRolloutFilesForThread(
     path.join(resolvedAgentDir, "agent", "codex-home", "sessions"),
     path.join(path.dirname(resolvedAgentDir), "codex-home", "sessions"),
   ];
-  const files: Array<{ path: string; bytes: number }> = [];
+  const rolloutRoot = rolloutPath
+    ? roots.find((root) => isPathStrictlyInside(root, rolloutPath))
+    : undefined;
+  if (
+    rolloutPath &&
+    rolloutRoot &&
+    path.isAbsolute(rolloutPath) &&
+    path.extname(rolloutPath) === ".jsonl" &&
+    path.basename(rolloutPath).includes(threadId)
+  ) {
+    try {
+      // Pin the verified descriptor: lexical checks or realpath followed by
+      // another open would allow a symlinked parent to escape the native root.
+      const safeRoot = await openSafeFilesystemRoot(rolloutRoot, {
+        hardlinks: "reject",
+        // Tail reads stay bounded; the default 16 MiB whole-file cap would
+        // send large native rollouts back through recursive discovery.
+        maxBytes: Number.MAX_SAFE_INTEGER,
+        symlinks: "reject",
+      });
+      const opened = await safeRoot.open(path.relative(rolloutRoot, rolloutPath));
+      return [{ path: opened.realPath, bytes: opened.stat.size, handle: opened.handle }];
+    } catch {
+      // Older Codex servers and moved rollouts still need root-scoped discovery.
+    }
+  }
+  const files: CodexAppServerRolloutFile[] = [];
   const visited = new Set<string>();
   for (const root of roots) {
     if (visited.has(root)) {
@@ -125,64 +155,6 @@ async function listCodexAppServerRolloutFilesForThread(
   return files;
 }
 
-async function readCodexSessionRecordForSessionFile(
-  sessionFile: string,
-): Promise<(Record<string, unknown> & { sessionKey: string }) | undefined> {
-  if (isSqliteSessionFileMarker(sessionFile)) {
-    return undefined;
-  }
-  const sessionsFile = path.join(path.dirname(sessionFile), "sessions.json");
-  const resolvedSessionFile = path.resolve(sessionFile);
-  let stat: Awaited<ReturnType<typeof fs.stat>>;
-  try {
-    stat = await fs.stat(sessionsFile);
-  } catch {
-    codexSessionRecordCache.delete(resolvedSessionFile);
-    return undefined;
-  }
-  const cached = codexSessionRecordCache.get(resolvedSessionFile);
-  if (
-    cached?.sessionsFile === sessionsFile &&
-    cached.mtimeMs === stat.mtimeMs &&
-    cached.size === stat.size
-  ) {
-    return cached.record;
-  }
-  let store: JsonValue | undefined;
-  try {
-    store = JSON.parse(await fs.readFile(sessionsFile, "utf8")) as JsonValue;
-  } catch {
-    codexSessionRecordCache.delete(resolvedSessionFile);
-    return undefined;
-  }
-  if (!isJsonObject(store)) {
-    codexSessionRecordCache.delete(resolvedSessionFile);
-    return undefined;
-  }
-  let found: (Record<string, unknown> & { sessionKey: string }) | undefined;
-  for (const [sessionKey, record] of Object.entries(store)) {
-    if (!isJsonObject(record) || typeof record.sessionFile !== "string") {
-      continue;
-    }
-    if (path.resolve(record.sessionFile) !== resolvedSessionFile) {
-      continue;
-    }
-    found = { sessionKey, ...record };
-    break;
-  }
-  codexSessionRecordCache.set(resolvedSessionFile, {
-    sessionsFile,
-    mtimeMs: stat.mtimeMs,
-    size: stat.size,
-    record: found,
-  });
-  return found;
-}
-
-function isSqliteSessionFileMarker(sessionFile: string | undefined): boolean {
-  return parseSqliteSessionFileMarker(sessionFile) !== undefined;
-}
-
 type CodexAppServerRolloutTokenSnapshot = {
   totalTokens?: number;
   modelContextWindow?: number;
@@ -190,26 +162,66 @@ type CodexAppServerRolloutTokenSnapshot = {
 
 async function readCodexAppServerRolloutTokenSnapshot(
   file: string,
+  openedHandle?: Awaited<ReturnType<typeof fs.open>>,
 ): Promise<CodexAppServerRolloutTokenSnapshot | undefined> {
-  let handle: Awaited<ReturnType<typeof fs.open>>;
-  try {
-    handle = await fs.open(file, "r");
-  } catch {
-    return undefined;
+  let handle = openedHandle;
+  if (!handle) {
+    try {
+      handle = await fs.open(file, "r");
+    } catch {
+      return undefined;
+    }
   }
   let snapshot: CodexAppServerRolloutTokenSnapshot | undefined;
   try {
-    for await (const line of handle.readLines()) {
+    let position = (await handle.stat()).size;
+    const partialLineFragments: Buffer[] = [];
+    const applySnapshotLine = (line: string): boolean => {
       const lineSnapshot = readCodexAppServerRolloutTokenSnapshotLine(line);
-      if (lineSnapshot !== undefined) {
-        snapshot ??= {};
-        if (lineSnapshot.totalTokens !== undefined) {
-          snapshot.totalTokens = lineSnapshot.totalTokens;
-        }
-        if (lineSnapshot.modelContextWindow !== undefined) {
-          snapshot.modelContextWindow = lineSnapshot.modelContextWindow;
-        }
+      if (lineSnapshot === undefined) {
+        return false;
       }
+      snapshot ??= {};
+      snapshot.totalTokens ??= lineSnapshot.totalTokens;
+      snapshot.modelContextWindow ??= lineSnapshot.modelContextWindow;
+      return snapshot.totalTokens !== undefined && snapshot.modelContextWindow !== undefined;
+    };
+
+    // Codex appends token snapshots to its rollout. Walk backward so a growing
+    // thread does not reparse its entire conversation before every new turn.
+    while (position > 0) {
+      const bytesToRead = Math.min(position, CODEX_APP_SERVER_ROLLOUT_TAIL_READ_BYTES);
+      const nextPosition = position - bytesToRead;
+      const chunk = Buffer.allocUnsafe(bytesToRead);
+      const bytesRead = await readFileWindowFully(handle, chunk, nextPosition);
+      if (bytesRead < bytesToRead) {
+        return snapshot;
+      }
+      let lineEnd = bytesRead;
+      // Negative Buffer offsets wrap from the end, so stop when byte zero is consumed.
+      while (lineEnd > 0) {
+        const index = chunk.lastIndexOf(0x0a, lineEnd - 1);
+        if (index < 0) {
+          break;
+        }
+        const lineFragment = chunk.subarray(index + 1, lineEnd);
+        const line =
+          partialLineFragments.length === 0
+            ? lineFragment.toString("utf8")
+            : Buffer.concat([lineFragment, ...partialLineFragments.toReversed()]).toString("utf8");
+        partialLineFragments.length = 0;
+        if (applySnapshotLine(line)) {
+          return snapshot;
+        }
+        lineEnd = index;
+      }
+      if (lineEnd > 0) {
+        partialLineFragments.push(chunk.subarray(0, lineEnd));
+      }
+      position = nextPosition;
+    }
+    if (partialLineFragments.length > 0) {
+      applySnapshotLine(Buffer.concat(partialLineFragments.toReversed()).toString("utf8"));
     }
   } finally {
     await handle.close();
@@ -260,32 +272,10 @@ function readCodexAppServerRolloutTokenSnapshotLine(
   }
 }
 
-function toNonNegativeInt(value: unknown): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
-    return undefined;
-  }
-  return Math.floor(value);
-}
-
 function readCompactionConfig(config: EmbeddedRunAttemptParams["config"] | undefined) {
   return isJsonObject(config?.agents?.defaults?.compaction)
     ? config.agents.defaults.compaction
     : undefined;
-}
-
-function resolveCodexAppServerNativeThreadReserveTokens(
-  config: EmbeddedRunAttemptParams["config"] | undefined,
-): number {
-  const compaction = readCompactionConfig(config);
-  const reserveTokens = toNonNegativeInt(compaction?.reserveTokens);
-  const reserveTokensFloor = toNonNegativeInt(compaction?.reserveTokensFloor);
-  if (reserveTokens !== undefined) {
-    return Math.max(
-      reserveTokens,
-      reserveTokensFloor ?? CODEX_APP_SERVER_NATIVE_THREAD_DEFAULT_RESERVE_TOKENS,
-    );
-  }
-  return reserveTokensFloor ?? CODEX_APP_SERVER_NATIVE_THREAD_DEFAULT_RESERVE_TOKENS;
 }
 
 function resolveCodexAppServerNativeThreadTokenFuse(params: {
@@ -322,125 +312,47 @@ function maxFiniteNumber(values: Array<number | undefined>): number | undefined 
   return Math.max(...nums);
 }
 
-function minFiniteNumber(values: Array<number | undefined>): number | undefined {
-  const nums = values.filter(
-    (value): value is number => typeof value === "number" && Number.isFinite(value),
-  );
-  if (nums.length === 0) {
-    return undefined;
-  }
-  return Math.min(...nums);
-}
-
 function hasContextEngineThreadBootstrapProjection(binding: CodexAppServerThreadBinding): boolean {
   return binding.contextEngine?.projection?.mode === "thread_bootstrap";
 }
 
 /** Clears and drops a binding when the native Codex thread is too large to resume safely. */
 export async function rotateOversizedCodexAppServerStartupBinding(params: {
+  assertCurrent?: () => void;
   binding: CodexAppServerThreadBinding | undefined;
   bindingStore: CodexAppServerBindingStore;
   identity: CodexAppServerBindingIdentity;
-  sessionFile: string;
   agentDir: string;
   codexHome?: string;
   config: EmbeddedRunAttemptParams["config"] | undefined;
   contextEngineActive?: boolean;
   projectedTurnTokens?: number;
-}): Promise<CodexAppServerThreadBinding | undefined> {
+  expectedSessionRuntimeOwnership?: EmbeddedRunAttemptParams["expectedSessionRuntimeOwnership"];
+}): Promise<{
+  binding: CodexAppServerThreadBinding | undefined;
+  startupContextTokens?: number;
+}> {
   const binding = params.binding;
   if (!binding?.threadId) {
-    return binding;
+    return { binding };
   }
   // Native Codex owns compaction for supervised threads. Clearing this private
   // scope marker would silently move the next turn back to the agent runtime.
   if (binding.connectionScope === "supervision") {
-    return binding;
+    return { binding };
   }
-  const sessionRecord = await readCodexSessionRecordForSessionFile(params.sessionFile);
   const rolloutFiles = await listCodexAppServerRolloutFilesForThread(
     params.agentDir,
     binding.threadId,
     params.codexHome,
+    binding.rolloutPath,
   );
   const compaction = readCompactionConfig(params.config);
+  const maxBytes = parseCodexAppServerByteLimit(compaction?.maxActiveTranscriptBytes);
   const shouldDeferByteGuard =
-    compaction?.truncateAfterCompaction === true &&
+    maxBytes !== undefined &&
     params.contextEngineActive === true &&
     hasContextEngineThreadBootstrapProjection(binding);
-  if (compaction?.truncateAfterCompaction === true && !shouldDeferByteGuard) {
-    const maxBytes = parseCodexAppServerByteLimit(compaction.maxActiveTranscriptBytes);
-    if (maxBytes !== undefined) {
-      const oversizedFiles = rolloutFiles.filter((file) => file.bytes >= maxBytes);
-      if (oversizedFiles.length > 0) {
-        embeddedAgentLog.warn(
-          "codex app-server native transcript exceeded active byte limit; starting a fresh thread",
-          {
-            threadId: binding.threadId,
-            maxBytes,
-            files: oversizedFiles.map((file) => ({ path: file.path, bytes: file.bytes })),
-          },
-        );
-        await params.bindingStore.mutate(params.identity, {
-          kind: "clear",
-          threadId: binding.threadId,
-        });
-        return undefined;
-      }
-    }
-  }
-  const nativeTokenSnapshots = await Promise.all(
-    rolloutFiles.map(async (file) => readCodexAppServerRolloutTokenSnapshot(file.path)),
-  );
-  const nativeTokens = maxFiniteNumber(
-    nativeTokenSnapshots.map((snapshot) => snapshot?.totalTokens),
-  );
-  const nativeModelContextWindow = maxFiniteNumber(
-    nativeTokenSnapshots.map((snapshot) => snapshot?.modelContextWindow),
-  );
-  const sessionModelContextWindow =
-    typeof sessionRecord?.contextTokens === "number" &&
-    Number.isFinite(sessionRecord.contextTokens) &&
-    sessionRecord.contextTokens > 0
-      ? Math.floor(sessionRecord.contextTokens)
-      : undefined;
-  const reserveTokens = resolveCodexAppServerNativeThreadReserveTokens(params.config);
-  const maxTokens = resolveCodexAppServerNativeThreadTokenFuse({
-    modelContextWindow: minFiniteNumber([nativeModelContextWindow, sessionModelContextWindow]),
-    reserveTokens,
-    projectedTurnTokens: params.projectedTurnTokens,
-  });
-  const sessionTokens =
-    sessionRecord?.totalTokensFresh !== false &&
-    typeof sessionRecord?.totalTokens === "number" &&
-    Number.isFinite(sessionRecord.totalTokens)
-      ? sessionRecord.totalTokens
-      : undefined;
-  const tokenCount = maxFiniteNumber([sessionTokens, nativeTokens]);
-  if (tokenCount !== undefined && tokenCount >= maxTokens) {
-    embeddedAgentLog.warn(
-      "codex app-server native transcript exceeded active token limit; starting a fresh thread",
-      {
-        threadId: binding.threadId,
-        maxTokens,
-        sessionKey: sessionRecord?.sessionKey,
-        sessionTokens,
-        nativeTokens,
-        nativeModelContextWindow,
-        sessionModelContextWindow,
-        reserveTokens,
-        projectedTurnTokens: params.projectedTurnTokens,
-      },
-    );
-    await params.bindingStore.mutate(params.identity, {
-      kind: "clear",
-      threadId: binding.threadId,
-    });
-    return undefined;
-  }
-  if (compaction?.truncateAfterCompaction !== true) {
-    return binding;
-  }
   if (shouldDeferByteGuard) {
     embeddedAgentLog.debug(
       "codex app-server deferring native transcript byte guard for context-engine thread bootstrap",
@@ -451,7 +363,84 @@ export async function rotateOversizedCodexAppServerStartupBinding(params: {
         fingerprint: binding.contextEngine?.projection?.fingerprint,
       },
     );
-    return binding;
+  } else if (maxBytes !== undefined) {
+    const oversizedFiles = rolloutFiles.filter((file) => file.bytes >= maxBytes);
+    if (oversizedFiles.length > 0) {
+      await Promise.all(
+        rolloutFiles.map(async (file) => {
+          await file.handle?.close();
+        }),
+      );
+      assertCodexBindingMayBeReplaced(
+        binding,
+        "rotating an oversized native transcript",
+        params.expectedSessionRuntimeOwnership,
+      );
+      embeddedAgentLog.warn(
+        "codex app-server native transcript exceeded active byte limit; starting a fresh thread",
+        {
+          threadId: binding.threadId,
+          maxBytes,
+          files: oversizedFiles.map((file) => ({ path: file.path, bytes: file.bytes })),
+        },
+      );
+      await params.bindingStore.mutate(
+        params.identity,
+        {
+          kind: "clear",
+          threadId: binding.threadId,
+        },
+        params.assertCurrent,
+      );
+      return { binding: undefined };
+    }
   }
-  return binding;
+  const nativeTokenSnapshots = await Promise.all(
+    rolloutFiles.map(async (file) =>
+      readCodexAppServerRolloutTokenSnapshot(file.path, file.handle),
+    ),
+  );
+  const nativeTokens = maxFiniteNumber(
+    nativeTokenSnapshots.map((snapshot) => snapshot?.totalTokens),
+  );
+  const nativeModelContextWindow = maxFiniteNumber(
+    nativeTokenSnapshots.map((snapshot) => snapshot?.modelContextWindow),
+  );
+  const reserveTokens = CODEX_APP_SERVER_NATIVE_THREAD_DEFAULT_RESERVE_TOKENS;
+  const maxTokens = resolveCodexAppServerNativeThreadTokenFuse({
+    modelContextWindow: nativeModelContextWindow,
+    reserveTokens,
+    projectedTurnTokens: params.projectedTurnTokens,
+  });
+  if (nativeTokens !== undefined && nativeTokens >= maxTokens) {
+    assertCodexBindingMayBeReplaced(
+      binding,
+      "rotating a full native context",
+      params.expectedSessionRuntimeOwnership,
+    );
+    embeddedAgentLog.warn(
+      "codex app-server native transcript exceeded active token limit; starting a fresh thread",
+      {
+        threadId: binding.threadId,
+        maxTokens,
+        nativeTokens,
+        nativeModelContextWindow,
+        reserveTokens,
+        projectedTurnTokens: params.projectedTurnTokens,
+      },
+    );
+    await params.bindingStore.mutate(
+      params.identity,
+      {
+        kind: "clear",
+        threadId: binding.threadId,
+      },
+      params.assertCurrent,
+    );
+    return { binding: undefined };
+  }
+  return {
+    binding,
+    ...(nativeModelContextWindow ? { startupContextTokens: nativeModelContextWindow } : {}),
+  };
 }

@@ -1,13 +1,12 @@
-// Proxy fetch helpers build undici proxy-aware fetch functions with managed TLS
-// options and runtime FormData normalization.
 import { logWarn } from "../../logger.js";
 import { formatErrorMessage } from "../errors.js";
-import {
-  addActiveManagedProxyTlsOptions,
-  resolveManagedEnvHttpProxyAgentOptions,
-} from "./proxy/managed-proxy-undici.js";
+import { resolveEnvHttpProxyAgentOptions } from "./proxy-env.js";
 import { fetchWithPreparedRuntimeDispatcher } from "./runtime-fetch.js";
-import { loadUndiciRuntimeDeps } from "./undici-runtime.js";
+import {
+  createHttp1EnvHttpProxyAgent,
+  createHttp1ProxyAgent,
+  loadUndiciRuntimeDeps,
+} from "./undici-runtime.js";
 
 /** Non-enumerable marker used to recover the explicit proxy URL from proxy fetch wrappers. */
 export const PROXY_FETCH_PROXY_URL = Symbol.for("openclaw.proxyFetch.proxyUrl");
@@ -21,24 +20,16 @@ type ProxyFetchWithMetadata = typeof fetch & {
  */
 export function makeProxyFetch(proxyUrl: string): typeof fetch {
   const runtimeDeps = loadUndiciRuntimeDeps();
-  const { ProxyAgent } = runtimeDeps;
-  let agent: InstanceType<typeof ProxyAgent> | null = null;
-  const resolveAgent = (): InstanceType<typeof ProxyAgent> => {
-    if (!agent) {
-      agent = new ProxyAgent(addActiveManagedProxyTlsOptions({ uri: proxyUrl }));
-    }
-    return agent;
-  };
-  const proxyFetch = ((input: RequestInfo | URL, init?: RequestInit) =>
-    fetchWithPreparedRuntimeDispatcher(runtimeDeps, input, {
+  let agent: ReturnType<typeof createHttp1ProxyAgent> | null = null;
+  const proxyFetch: ProxyFetchWithMetadata = (input, init) => {
+    agent ??= createHttp1ProxyAgent({ uri: proxyUrl });
+    return fetchWithPreparedRuntimeDispatcher(runtimeDeps, input, {
       ...init,
-      dispatcher: resolveAgent(),
-    })) as ProxyFetchWithMetadata;
+      dispatcher: agent,
+    });
+  };
   Object.defineProperty(proxyFetch, PROXY_FETCH_PROXY_URL, {
     value: proxyUrl,
-    enumerable: false,
-    configurable: false,
-    writable: false,
   });
   return proxyFetch;
 }
@@ -62,14 +53,13 @@ export function getProxyUrlFromFetch(fetchImpl?: typeof fetch): string | undefin
 export function resolveProxyFetchFromEnv(
   env: NodeJS.ProcessEnv = process.env,
 ): typeof fetch | undefined {
-  const proxyOptions = resolveManagedEnvHttpProxyAgentOptions(env);
+  const proxyOptions = resolveEnvHttpProxyAgentOptions(env);
   if (!proxyOptions) {
     return undefined;
   }
   try {
     const runtimeDeps = loadUndiciRuntimeDeps();
-    const { EnvHttpProxyAgent } = runtimeDeps;
-    const agent = new EnvHttpProxyAgent(proxyOptions);
+    const agent = createHttp1EnvHttpProxyAgent(proxyOptions, undefined, env);
     return ((input: RequestInfo | URL, init?: RequestInit) =>
       fetchWithPreparedRuntimeDispatcher(runtimeDeps, input, {
         ...init,

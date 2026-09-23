@@ -1,8 +1,53 @@
 // First-run onboarding welcome: state findings, propose setup, wait for "yes".
+import type { SystemAgentChatQuestion } from "../../packages/gateway-protocol/src/index.js";
 import { isSecretRef, normalizeSecretInputString } from "../config/types.secrets.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import type { SystemAgentChatEngine } from "./chat-engine.js";
 import { formatSystemAgentOnboardingWelcome } from "./overview.js";
+
+/**
+ * Card-client questions for the two welcome variants. Replies are texts the
+ * engine already understands; the prose welcome always stands alone for
+ * text-only clients (macOS app, TUI).
+ */
+const READY_WELCOME_QUESTION: SystemAgentChatQuestion = {
+  id: "onboarding-next-step",
+  header: "Next step",
+  question: "What would you like to do first?",
+  options: [
+    {
+      label: "Talk to my agent",
+      reply: "talk to agent",
+      recommended: true,
+      description: "Meet your agent right here.",
+    },
+    { label: "Connect WhatsApp", reply: "connect whatsapp" },
+    { label: "Connect Telegram", reply: "connect telegram" },
+    { label: "See all channels", reply: "channels" },
+  ],
+  isOther: true,
+  skipAction: "exit",
+};
+
+const SETUP_WELCOME_QUESTION: SystemAgentChatQuestion = {
+  id: "onboarding-apply-setup",
+  header: "Ready when you are",
+  question: "Should I set all of that up now?",
+  options: [
+    { label: "Yes — set it up", reply: "yes", recommended: true },
+    {
+      label: "What will you change?",
+      reply: "what exactly will you set up?",
+      description: "Ask before anything is written.",
+    },
+  ],
+  isOther: true,
+};
+
+type OnboardingWelcome = {
+  text: string;
+  question: SystemAgentChatQuestion;
+};
 
 /**
  * The basic bootstrap is conversational: the welcome message carries the plan
@@ -15,7 +60,7 @@ import { formatSystemAgentOnboardingWelcome } from "./overview.js";
  * auth), not just a model: a model-only config would otherwise get the
  * ready-guide welcome while the gate stays locked, stranding the page.
  */
-export async function loadAuthoredSetupConfig(params: {
+async function loadAuthoredSetupConfig(params: {
   configExists: boolean;
   configValid: boolean;
 }): Promise<{
@@ -50,13 +95,28 @@ export async function loadAuthoredSetupConfig(params: {
 export async function buildOnboardingWelcome(params: {
   engine: SystemAgentChatEngine;
   workspace?: string;
-}): Promise<string> {
+  agentName?: string;
+  /** Only the local terminal can finish the machine-owned Gateway installation. */
+  localRecovery?: true;
+}): Promise<OnboardingWelcome> {
   const overview = await params.engine.loadOverview();
   const { authoredConfig, hasAuthoredSetup } = await loadAuthoredSetupConfig({
     configExists: overview.config.exists,
     configValid: overview.config.valid,
   });
-  const defaultModel = overview.defaultModel?.trim();
+  const localSetup =
+    params.localRecovery === true &&
+    overview.config.exists &&
+    overview.config.valid &&
+    authoredConfig !== undefined &&
+    authoredConfig?.gateway?.mode !== "remote"
+      ? (await import("../state/local-onboarding-state.js")).readLocalOnboardingStateForConfig(
+          overview.config.path,
+          authoredConfig,
+        )
+      : undefined;
+  const pendingSetup = localSetup?.status === "pending" ? localSetup : undefined;
+  const setupModel = (overview.defaultModel ?? overview.setupModel)?.trim();
   const requestedWorkspace = params.workspace?.trim()
     ? resolveUserPath(params.workspace.trim())
     : undefined;
@@ -65,37 +125,52 @@ export async function buildOnboardingWelcome(params: {
     : undefined;
   if (
     hasAuthoredSetup &&
-    defaultModel &&
+    !pendingSetup &&
+    setupModel &&
     (!requestedWorkspace || requestedWorkspace === authoredWorkspace)
   ) {
     const welcome = formatSystemAgentOnboardingWelcome(overview);
     params.engine.noteAssistantMessage(welcome);
-    return welcome;
+    return { text: welcome, question: READY_WELCOME_QUESTION };
   }
-  if (!defaultModel) {
+  if (!setupModel) {
     throw new Error(
-      "OpenClaw onboarding requires working inference first. Run `openclaw onboard` to configure and verify a default model.",
+      "OpenClaw onboarding requires working inference first. Run `openclaw onboard` on the machine running OpenClaw to configure and verify a default model.",
     );
   }
 
   const { DEFAULT_WORKSPACE } = await import("../commands/onboard-helpers.js");
-  const workspace = resolveUserPath(requestedWorkspace || authoredWorkspace || DEFAULT_WORKSPACE);
+  // A durable receipt owns recovery even after partial config writes; using its
+  // workspace prevents the fallback chat from resuming a different installation.
+  const workspace = resolveUserPath(
+    pendingSetup?.workspace || requestedWorkspace || authoredWorkspace || DEFAULT_WORKSPACE,
+  );
 
-  params.engine.propose({ kind: "setup", workspace });
+  params.engine.propose({
+    kind: "setup",
+    workspace,
+    ...(params.agentName ? { agentName: params.agentName } : {}),
+  });
   const welcome = [
-    "## Hi, I'm OpenClaw — let's hatch your agent.",
+    overview.defaultModel
+      ? "## Hi, I'm OpenClaw — let's hatch your agent."
+      : "## Hi, I'm OpenClaw — let's get you set up.",
     "",
     "No menus here: tell me what you want and I'll do the configuring. I looked around this machine:",
     "",
-    `- AI: ${defaultModel} — already verified with a real reply; switching later is one sentence.`,
+    overview.defaultModel
+      ? `- AI: ${setupModel} — already verified with a real reply; switching later is one sentence.`
+      : `- Setup AI: ${setupModel} — verified with a real reply.`,
     `- Workspace: ${shortenHomePath(workspace)}`,
     "- Gateway: runs locally, private to this machine (token auth).",
     "",
     "Say **yes** and I'll set all of that up now.",
     "",
     "Heads up: your agent gets real access to this machine — https://docs.openclaw.ai/security",
-    "Afterwards: `connect discord`, `connect slack`, `connect telegram`, `connect whatsapp` (or `channels` for the full list), then `talk to agent` to meet your agent.",
+    overview.defaultModel
+      ? "Afterwards: `talk to agent` to meet your agent right here. Channels are optional: use `connect discord`, `connect slack`, `connect telegram`, `connect whatsapp` (or `channels` for the full list) if you want to chat from another service."
+      : "This model handles setup and utility tasks. Choose a primary model in Model Setup or run `openclaw onboard` before regular agent chat. You can continue setup here and connect channels when ready.",
   ].join("\n");
   params.engine.noteAssistantMessage(welcome);
-  return welcome;
+  return { text: welcome, question: SETUP_WELCOME_QUESTION };
 }

@@ -55,10 +55,17 @@ for attempt in $(seq 1 "$attempts"); do
     exit "$status"
   fi
 
+  # Keep raw tee output; classify without ANSI formatting or complete successful Vitest rows.
+  classification="$(
+    LC_ALL=C sed -E \
+      -e $'s/\033\\[[0-?]*[ -/]*[@-~]//g' \
+      -e $'/^[[:space:]]+\342\234\223[[:space:]]+.+[[:space:]]+([0-9]+ms([[:space:]]+\\((retry|repeat) x[0-9]+\\))*([[:space:]]+[0-9]+ MB heap used)?|\\([0-9]+\\))[[:space:]]*$/d' \
+      "$log_file"
+  )"
   is_rate_limited=0
-  if grep -Eiq "$rate_limit_pattern" "$log_file"; then
+  if printf '%s\n' "$classification" | grep -Ei "$rate_limit_pattern" >/dev/null; then
     is_rate_limited=1
-  elif ! grep -Eiq "$retry_pattern" "$log_file"; then
+  elif ! printf '%s\n' "$classification" | grep -Ei "$retry_pattern" >/dev/null; then
     exit "$status"
   fi
 

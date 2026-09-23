@@ -39,7 +39,6 @@ describe("buildApiErrorObservationFields", () => {
     );
 
     expect(observed.rawErrorPreview).not.toContain(OBSERVATION_BEARER_TOKEN);
-    expect(observed.rawErrorPreview).toContain(OBSERVATION_BEARER_TOKEN.slice(0, 6));
     expect(observed.rawErrorHash).toMatch(/^sha256:/);
   });
 
@@ -51,6 +50,15 @@ describe("buildApiErrorObservationFields", () => {
     expect(observed.rawErrorPreview).not.toContain(OBSERVATION_COOKIE_VALUE);
     expect(observed.rawErrorPreview).toContain("x-api-key: ***");
     expect(observed.rawErrorPreview).toContain("Cookie: session=");
+  });
+
+  it("redacts provider error types as well as message previews", () => {
+    const observed = buildApiErrorObservationFields(
+      JSON.stringify({
+        error: { type: `x-api-key: ${OBSERVATION_BEARER_TOKEN}`, message: "Request failed" },
+      }),
+    );
+    expect(observed.providerErrorType).toBe("x-api-key: ***");
   });
 
   it("does not let cookie redaction consume unrelated fields on the same line", () => {

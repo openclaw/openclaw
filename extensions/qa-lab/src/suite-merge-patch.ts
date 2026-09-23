@@ -1,10 +1,14 @@
-// Qa Lab plugin module implements suite merge patch behavior.
 import { isRecord as isPlainObject } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const QA_MERGE_PATCH_BLOCKED_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 
 export function isQaMergePatchObject(value: unknown): value is Record<string, unknown> {
   return isPlainObject(value);
+}
+
+/** Prototype-mutating keys a patch may never carry into a config. */
+export function isQaMergePatchBlockedKey(key: string): boolean {
+  return QA_MERGE_PATCH_BLOCKED_KEYS.has(key);
 }
 
 function isObjectWithStringId(value: unknown): value is { id: string } & Record<string, unknown> {

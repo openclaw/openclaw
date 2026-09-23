@@ -1,52 +1,56 @@
-// Tracks detached task runtime state and spawned process handles.
-import type {
-  DetachedTaskLifecycleRuntime,
-  DetachedTaskLifecycleRuntimeRegistration,
-} from "./detached-task-runtime-contract.js";
-
-// Process-wide detached task runtime registration, owned by plugin activation.
-let detachedTaskLifecycleRuntimeRegistration: DetachedTaskLifecycleRuntimeRegistration | undefined;
-
-/** Registers the active detached task lifecycle runtime implementation. */
-export function registerDetachedTaskLifecycleRuntime(
-  pluginId: string,
-  runtime: DetachedTaskLifecycleRuntime,
-): void {
-  detachedTaskLifecycleRuntimeRegistration = {
-    pluginId,
-    runtime,
-  };
-}
-
-export function getDetachedTaskLifecycleRuntimeRegistration():
-  | DetachedTaskLifecycleRuntimeRegistration
-  | undefined {
-  if (!detachedTaskLifecycleRuntimeRegistration) {
-    return undefined;
-  }
-  return {
-    pluginId: detachedTaskLifecycleRuntimeRegistration.pluginId,
-    runtime: detachedTaskLifecycleRuntimeRegistration.runtime,
-  };
-}
+import {
+  capturePluginLifecycleAuthority,
+  capturePluginRegistryLifecycleEpoch,
+  getPluginRecordRegistry,
+  isPluginRegistryLifecycleEpochActive,
+} from "../plugins/registry-lifecycle.js";
+import { getPluginRegistryForContext, requireActivePluginRegistry } from "../plugins/runtime.js";
+import type { DetachedTaskLifecycleRuntime } from "./detached-task-runtime-contract.js";
 
 export function getRegisteredDetachedTaskLifecycleRuntime():
   | DetachedTaskLifecycleRuntime
   | undefined {
-  return detachedTaskLifecycleRuntimeRegistration?.runtime;
+  return requireActivePluginRegistry().detachedTaskRuntimes[0]?.runtime;
 }
 
-export function restoreDetachedTaskLifecycleRuntimeRegistration(
-  registration: DetachedTaskLifecycleRuntimeRegistration | undefined,
-): void {
-  detachedTaskLifecycleRuntimeRegistration = registration
-    ? {
-        pluginId: registration.pluginId,
-        runtime: registration.runtime,
-      }
+/** Core creation retains its activation; plugin work follows its exact live instance. */
+export function captureDetachedTaskRuntimeOwner(): {
+  runtime: DetachedTaskLifecycleRuntime | undefined;
+  assertCurrent: () => void;
+} {
+  const registry = requireActivePluginRegistry();
+  const registration = registry.detachedTaskRuntimes[0];
+  const runtime = registration?.runtime;
+  const pluginId = registration?.pluginId;
+  const record = registration
+    ? registry.plugins.find((candidate) => candidate.id === pluginId)
     : undefined;
-}
-
-export function clearDetachedTaskLifecycleRuntimeRegistration(): void {
-  detachedTaskLifecycleRuntimeRegistration = undefined;
+  const authority = record
+    ? capturePluginLifecycleAuthority(getPluginRecordRegistry(registry, record), record)
+    : undefined;
+  const epoch = registration ? undefined : capturePluginRegistryLifecycleEpoch(registry);
+  return {
+    runtime,
+    assertCurrent() {
+      if (registration) {
+        const owner = record ? getPluginRecordRegistry(registry, record) : undefined;
+        if (
+          authority?.() &&
+          owner?.detachedTaskRuntimes.some(
+            (candidate) => candidate.pluginId === pluginId && candidate.runtime === runtime,
+          )
+        ) {
+          return;
+        }
+      } else if (
+        epoch &&
+        isPluginRegistryLifecycleEpochActive(registry, epoch) &&
+        getPluginRegistryForContext() === registry &&
+        registry.detachedTaskRuntimes[0] === undefined
+      ) {
+        return;
+      }
+      throw new Error("Detached task runtime owner changed before task creation settled.");
+    },
+  };
 }

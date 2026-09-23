@@ -13,12 +13,12 @@ For the cross-channel groups model (Discord, iMessage, Matrix, Microsoft Teams, 
 Goal: let OpenClaw sit in WhatsApp groups, wake up only when pinged, and keep that thread separate from the personal DM session.
 
 <Note>
-`agents.list[].groupChat.mentionPatterns` is shared with the other channels' mention gating. For multi-agent setups, set it per agent, or use `messages.groupChat.mentionPatterns` as a global fallback. With neither set, patterns are derived from the agent identity name/emoji.
+`agents.entries.*.groupChat.mentionPatterns` is shared with the other channels' mention gating. For multi-agent setups, set it per agent, or use `messages.groupChat.mentionPatterns` as a global fallback. With neither set, patterns are derived from the agent identity name/emoji.
 </Note>
 
 ## Behavior
 
-- Activation modes: `mention` (default) or `always`. `mention` requires a ping: a real WhatsApp @-mention (`mentionedJids`), a configured regex pattern, the bot's E.164 digits anywhere in the text, or a quoted reply to one of the bot's messages (except shared-number self-chat setups). `always` wakes the agent on every message, but the injected group prompt tells it to reply only when it adds value and to return the exact silent token `NO_REPLY` (case-insensitive) otherwise. Defaults come from config (`channels.whatsapp.groups` `requireMention`) and can be overridden per group via `/activation`.
+- Activation modes: `mention` (default) or `always`. `mention` requires a ping: a real WhatsApp @-mention (`mentionedJids`), a configured regex pattern, the bot's E.164 digits anywhere in the text, or a quoted reply to one of the bot's messages (except shared-number self-chat setups). `always` wakes the agent on every admitted message and requires a reply by default. To permit selective silence for unaddressed messages, explicitly set `surfaces.whatsapp.silentReply.group: "allow"`; the automatic-reply prompt then permits the exact silent token `NO_REPLY` (case-insensitive). See [Silent replies](/concepts/messages#silent-replies) for the global setting and precedence. Activation defaults come from config (`channels.whatsapp.groups` `requireMention`) and can be overridden per group via `/activation`.
 - Group allowlist: when `channels.whatsapp.groups` is set, only listed group JIDs are admitted (include `"*"` to allow all); messages from unlisted groups are dropped with a log hint.
 - Group policy: `channels.whatsapp.groupPolicy` controls whether group messages are accepted (`open|disabled|allowlist`). `allowlist` uses `channels.whatsapp.groupAllowFrom` (fallback: explicit `channels.whatsapp.allowFrom`). Default is `allowlist` (blocked until you add senders).
 - Per-group sessions: session keys look like `agent:<agentId>:whatsapp:group:<jid>` (non-default accounts append `:thread:whatsapp-account-<accountId>`), so directives such as `/verbose on`, `/trace on`, or `/think high` (sent as standalone messages) are scoped to that group; personal DM state is untouched.
@@ -42,14 +42,14 @@ Make display-name pings work even when WhatsApp strips the visual `@` from the t
     },
   },
   agents: {
-    list: [
-      {
-        id: "main",
+    entries: {
+      main: {
+        default: true,
         groupChat: {
           mentionPatterns: ["@?openclaw", "\\+?15555550123"],
         },
       },
-    ],
+    },
   },
 }
 ```
@@ -88,7 +88,7 @@ Only owner numbers (from `channels.whatsapp.allowFrom`, or the bot's own E.164 w
 - Heartbeats run in the agent's main session; group sessions never get heartbeat runs.
 - Echo suppression remembers the combined prompt (history + current message) per session so the bot's own delivered messages do not retrigger it; an identical repeated batch can be skipped as an echo.
 - Session store entries appear as `agent:<agentId>:whatsapp:group:<jid>` in the per-agent SQLite session store; a missing entry just means the group has not triggered a run yet.
-- Typing indicators follow `session.typingMode` / `agents.defaults.typingMode`. When visible replies are opted into message-tool-only mode, typing starts immediately by default so group members can see the agent working even if no automatic final reply is posted. Explicit typing-mode config still wins.
+- Typing indicators follow `agents.entries.*.typingMode` / `agents.defaults.typingMode`. When visible replies are opted into message-tool-only mode, typing starts immediately by default so group members can see the agent working even if no automatic final reply is posted. Explicit typing-mode config still wins.
 
 ## Related
 

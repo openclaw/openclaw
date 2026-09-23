@@ -1,15 +1,4 @@
-// extensions/browser/src/browser/screenshot-annotate.ts
-//
-// Pure helper module for screenshot label annotations.
-// Has no Playwright / CDP / page dependency: takes document-space inputs,
-// returns coordinate-projected annotations + IIFE strings the caller can
-// hand to page.evaluate / Runtime.evaluate.
-//
-// Used by:
-//   - pw-tools-core.interactions.ts (Playwright path, M1.2-a)
-//   - planned: raw-CDP path in M1.2-b
-//
-// chrome-mcp path keeps its own inline overlay (renderChromeMcpLabels) for now.
+// Projects document-space boxes into screenshot coordinates and builds Playwright overlays.
 
 const ANNOTATION_OVERLAY_ATTR = "data-openclaw-labels";
 const ANNOTATION_OVERLAY_ROOT_ID = "__openclaw-annotations__";
@@ -247,30 +236,26 @@ export function buildOverlayClearScript(): string {
 }
 
 /**
- * Scale annotation boxes by independent x/y factors. Used to keep annotation
- * coordinates aligned with the saved image after the response pipeline
- * resizes the screenshot (e.g. via normalizeBrowserScreenshot capping the
- * longest side or the byte budget). Returns a new array; inputs are not
- * mutated. When both factors are 1 the boxes are returned unchanged (modulo
- * structural copy) so callers can share the same code path for resized and
- * non-resized captures.
+ * Translate the capture origin before scaling boxes into image pixels.
+ * Also used for subsequent output resizing; inputs remain unchanged.
  */
 export function scaleAnnotations(
   items: AnnotationItem[],
   scaleX: number,
   scaleY: number,
+  offset = { x: 0, y: 0 },
 ): AnnotationItem[] {
   if (!Number.isFinite(scaleX) || !Number.isFinite(scaleY) || scaleX <= 0 || scaleY <= 0) {
     return items.map((it) => ({ ...it, box: { ...it.box } }));
   }
-  if (scaleX === 1 && scaleY === 1) {
+  if (scaleX === 1 && scaleY === 1 && offset.x === 0 && offset.y === 0) {
     return items.map((it) => ({ ...it, box: { ...it.box } }));
   }
   return items.map((it) => ({
     ...it,
     box: {
-      x: round(it.box.x * scaleX),
-      y: round(it.box.y * scaleY),
+      x: round((it.box.x - offset.x) * scaleX),
+      y: round((it.box.y - offset.y) * scaleY),
       width: Math.max(1, round(it.box.width * scaleX)),
       height: Math.max(1, round(it.box.height * scaleY)),
     },

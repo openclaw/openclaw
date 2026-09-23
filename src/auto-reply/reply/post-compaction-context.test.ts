@@ -2,7 +2,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
+import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../../agents/workspace-bootstrap-read.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
 
@@ -74,10 +76,70 @@ describe("readPostCompactionContext", () => {
     expect(result).toBeNull();
   });
 
+  it.each(["available", "revoked", "oversized", "unavailable", "invalid-utf8"] as const)(
+    "reads remote post-compaction rules without stale local fallback when %s",
+    async (state) => {
+      fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), "## Session Startup\nStale local rules.");
+      let release = () => {};
+      const readFile = vi.fn(async () => {
+        if (state === "unavailable") {
+          throw new Error("Remote workspace is unavailable");
+        }
+        if (state === "revoked") {
+          release();
+        }
+        if (state === "oversized") {
+          return Buffer.alloc(MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES + 1);
+        }
+        return state === "invalid-utf8"
+          ? Buffer.from([0xff])
+          : Buffer.from("## Session Startup\nRemote rules.");
+      });
+      release = registerAgentWorkspaceAccess(tmpDir, {
+        bridge: { readFile, writeFile: vi.fn(), stat: vi.fn() },
+      });
+      try {
+        const result = await readDefaultPostCompactionContext();
+        if (state === "available") {
+          expect(result).toContain("Remote rules.");
+          expect(result).not.toContain("Stale local rules.");
+        } else {
+          expect(result).toBeNull();
+        }
+        expect(readFile).toHaveBeenCalledWith({
+          filePath: "AGENTS.md",
+          maxBytes: MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
+        });
+        release();
+        expect(await readDefaultPostCompactionContext()).toBeNull();
+        expect(readFile).toHaveBeenCalledTimes(1);
+      } finally {
+        release();
+      }
+    },
+  );
+
   it("returns null when AGENTS.md has no relevant sections", async () => {
     fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), "# My Agent\n\nSome content.\n");
     const result = await readDefaultPostCompactionContext();
     expect(result).toBeNull();
+  });
+
+  it("returns null when AGENTS.md exceeds the byte read limit", async () => {
+    // An unbounded read would extract the section header at the top of the file;
+    // the bound rejects the whole file instead of allocating it all.
+    const oversized = `## Session Startup\n\n` + "x".repeat(MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES);
+    fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), oversized);
+    const result = await readDefaultPostCompactionContext();
+    expect(result).toBeNull();
+  });
+
+  it("extracts sections from an AGENTS.md just under the byte read limit", async () => {
+    const section = `## Session Startup\n\nDo startup things.\n`;
+    const padding = "x".repeat(MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES - section.length);
+    fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), section + padding);
+    const result = await readDefaultPostCompactionContext();
+    expect(result).toContain("Do startup things");
   });
 
   it("extracts Session Startup section", async () => {

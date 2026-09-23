@@ -1,4 +1,3 @@
-// Discord plugin module implements agent components data behavior.
 import { logError } from "openclaw/plugin-sdk/logging-core";
 import {
   parseDiscordComponentCustomId,
@@ -200,18 +199,4 @@ export function formatModalSubmissionText(
     lines.push("- (no values)");
   }
   return lines.join("\n");
-}
-
-export function resolveDiscordInteractionId(interaction: AgentComponentInteraction): string {
-  const rawId =
-    interaction.rawData && typeof interaction.rawData === "object" && "id" in interaction.rawData
-      ? (interaction.rawData as { id?: unknown }).id
-      : undefined;
-  if (typeof rawId === "string" && rawId.trim()) {
-    return rawId.trim();
-  }
-  if (typeof rawId === "number" && Number.isFinite(rawId)) {
-    return String(rawId);
-  }
-  return `discord-interaction:${Date.now()}`;
 }

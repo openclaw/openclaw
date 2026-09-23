@@ -121,6 +121,99 @@ describe("runGitHubCopilotDeviceFlow — normal flow", () => {
   });
 });
 
+describe("runGitHubCopilotDeviceFlow — live authority", () => {
+  it("does not dispatch the initial request after authority is revoked", async () => {
+    const dispatch = vi.fn();
+    mocks.fetchWithSsrFGuard.mockImplementation(async (params) => {
+      params.beforeRequest?.();
+      dispatch();
+      throw new Error("Request dispatched after authority was revoked");
+    });
+
+    await expect(
+      runGitHubCopilotDeviceFlow({
+        showCode: vi.fn(),
+        assertCurrent: () => {
+          throw new Error("Login revoked");
+        },
+      }),
+    ).rejects.toThrow("Login revoked");
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("does not poll after authority is revoked while presenting the device code", async () => {
+    vi.useFakeTimers();
+    let current = true;
+    let tokenPolls = 0;
+    mocks.fetchWithSsrFGuard.mockImplementation(async (params) => {
+      params.beforeRequest?.();
+      if (params.url === DEVICE_CODE_URL) {
+        return guardResponse({ ...VALID_DEVICE_CODE_BODY, interval: 0 });
+      }
+      tokenPolls += 1;
+      return guardResponse(
+        { access_token: "ghu_tok_xyz", token_type: "bearer" },
+        200,
+        ACCESS_TOKEN_URL,
+      );
+    });
+
+    const rejection = expect(
+      runGitHubCopilotDeviceFlow({
+        showCode: async () => {
+          current = false;
+        },
+        assertCurrent: () => {
+          if (!current) {
+            throw new Error("Login revoked");
+          }
+        },
+      }),
+    ).rejects.toThrow("Login revoked");
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    await rejection;
+    expect(tokenPolls).toBe(0);
+  });
+
+  it("does not issue another poll after a pending response loses authority", async () => {
+    vi.useFakeTimers();
+    let current = true;
+    let tokenPolls = 0;
+    mocks.fetchWithSsrFGuard.mockImplementation(async (params) => {
+      params.beforeRequest?.();
+      if (params.url === DEVICE_CODE_URL) {
+        return guardResponse({ ...VALID_DEVICE_CODE_BODY, interval: 1 });
+      }
+      tokenPolls += 1;
+      if (tokenPolls === 1) {
+        current = false;
+        return guardResponse({ error: "authorization_pending" }, 200, ACCESS_TOKEN_URL);
+      }
+      return guardResponse(
+        { access_token: "ghu_tok_xyz", token_type: "bearer" },
+        200,
+        ACCESS_TOKEN_URL,
+      );
+    });
+
+    const rejection = expect(
+      runGitHubCopilotDeviceFlow({
+        showCode: vi.fn(async () => {}),
+        assertCurrent: () => {
+          if (!current) {
+            throw new Error("Login revoked");
+          }
+        },
+      }),
+    ).rejects.toThrow("Login revoked");
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    await rejection;
+    expect(tokenPolls).toBe(1);
+  });
+});
+
 describe("runGitHubCopilotDeviceFlow — HTTP error propagation", () => {
   it("throws with failureLabel on non-OK device code response", async () => {
     mocks.fetchWithSsrFGuard.mockImplementation(async () => guardResponse({}, 401));
@@ -128,6 +221,35 @@ describe("runGitHubCopilotDeviceFlow — HTTP error propagation", () => {
     await expect(runGitHubCopilotDeviceFlow({ showCode: vi.fn() })).rejects.toThrow(
       "GitHub device code failed: HTTP 401",
     );
+  });
+
+  it("cancels the unread device code body before throwing on non-OK", async () => {
+    let canceled = false;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(
+          new TextEncoder().encode(
+            JSON.stringify({ error: "server_error", error_description: "boom" }),
+          ),
+        );
+      },
+      cancel() {
+        canceled = true;
+      },
+    });
+    mocks.fetchWithSsrFGuard.mockImplementation(async () => ({
+      response: new Response(body, {
+        status: 502,
+        headers: { "Content-Type": "application/json" },
+      }),
+      finalUrl: DEVICE_CODE_URL,
+      release: vi.fn(async () => {}),
+    }));
+
+    await expect(runGitHubCopilotDeviceFlow({ showCode: vi.fn() })).rejects.toThrow(
+      "GitHub device code failed: HTTP 502",
+    );
+    expect(canceled).toBe(true);
   });
 
   it("throws with failureLabel on non-OK access token response", async () => {
@@ -143,6 +265,40 @@ describe("runGitHubCopilotDeviceFlow — HTTP error propagation", () => {
     await expect(runDeviceFlowAfterFirstPoll({ showCode: vi.fn(async () => {}) })).rejects.toThrow(
       "GitHub device token failed: HTTP 500",
     );
+  });
+
+  it("cancels the unread access token body before throwing on non-OK", async () => {
+    let canceled = false;
+    let callIdx = 0;
+    mocks.fetchWithSsrFGuard.mockImplementation(async () => {
+      callIdx += 1;
+      if (callIdx === 1) {
+        return guardResponse(VALID_DEVICE_CODE_BODY);
+      }
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(
+            new TextEncoder().encode(JSON.stringify({ error: "bad_verification_code" })),
+          );
+        },
+        cancel() {
+          canceled = true;
+        },
+      });
+      return {
+        response: new Response(body, {
+          status: 401,
+          headers: { "Content-Type": "application/json" },
+        }),
+        finalUrl: ACCESS_TOKEN_URL,
+        release: vi.fn(async () => {}),
+      };
+    });
+
+    await expect(runDeviceFlowAfterFirstPoll({ showCode: vi.fn(async () => {}) })).rejects.toThrow(
+      "GitHub device token failed: HTTP 401",
+    );
+    expect(canceled).toBe(true);
   });
 
   it("rejects a malformed access token response", async () => {
@@ -307,7 +463,7 @@ describe("runGitHubCopilotDeviceFlow — polling intervals", () => {
     const pollTimes: number[] = [];
     const pollResponses = [
       { error: "authorization_pending" },
-      { error: "slow_down" },
+      { error: "slow_down", interval: 7 },
       { error: "slow_down" },
       { access_token: "test-access-token", token_type: "bearer" },
     ];

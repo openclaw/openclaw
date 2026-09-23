@@ -1,5 +1,6 @@
 // Telegram plugin module tracks per-update processing outcomes.
 import { AsyncLocalStorage } from "node:async_hooks";
+import type { ChannelIngressMonitorLifecycle } from "openclaw/plugin-sdk/channel-outbound";
 
 export type TelegramMessageProcessingResult =
   | { kind: "completed" }
@@ -10,13 +11,12 @@ type TelegramUpdateProcessingFrame = {
   result?: TelegramMessageProcessingResult;
 };
 
-type TelegramSpooledReplayLifecycle = {
-  abortSignal: AbortSignal;
-  onAdopted: () => void | Promise<void>;
-  onDeferred: () => void;
+type TelegramSpooledReplayLifecycle = Omit<
+  ChannelIngressMonitorLifecycle,
+  "admission" | "onFailed" | "onCancelled" | "onAdoptionFinalizing"
+> & {
   /** Clears pre-adoption stall while durable adoption finalization is held. */
   onAdoptionFinalizing?: () => void;
-  onAbandoned: () => void;
 };
 
 type TelegramSpooledReplayFrame = {
@@ -28,6 +28,8 @@ export type TelegramSpooledReplayDeferredParticipant = {
   key: string;
   abortSignal: AbortSignal;
   task: Promise<TelegramMessageProcessingResult>;
+  isSettled: () => boolean;
+  wasOwnerAbortedWhilePending: () => boolean;
   /** Defers external timeout settlement while durable adoption decides ownership. */
   beginSettlementHold: () => TelegramSpooledReplaySettlementHold | undefined;
   settle: (result: TelegramMessageProcessingResult) => void;
@@ -54,9 +56,21 @@ export class TelegramSpooledReplayProcessingError extends Error {
 export async function runWithTelegramUpdateProcessingFrame<T>(
   fn: () => Promise<T>,
 ): Promise<{ value: T; result?: TelegramMessageProcessingResult }> {
-  const frame: TelegramUpdateProcessingFrame = {};
-  const value = await telegramUpdateProcessingFrames.run(frame, fn);
+  const inheritedFrame = telegramUpdateProcessingFrames.getStore();
+  // Durable ingress owns the outer frame; bot middleware must update that same fact.
+  const frame = inheritedFrame ?? {};
+  const value = inheritedFrame ? await fn() : await telegramUpdateProcessingFrames.run(frame, fn);
   return frame.result ? { value, result: frame.result } : { value };
+}
+
+/** Records a default only when a handler has not already chosen its terminal disposition. */
+export function ensureTelegramMessageProcessingResult(
+  result: TelegramMessageProcessingResult,
+): void {
+  const frame = telegramUpdateProcessingFrames.getStore();
+  if (frame && !frame.result) {
+    frame.result = result;
+  }
 }
 
 export function recordTelegramMessageProcessingResult(
@@ -79,27 +93,53 @@ export function createTelegramSpooledReplayParticipant(
   key: string,
 ): TelegramSpooledReplayDeferredParticipant {
   const abortController = new AbortController();
+  const ownerAbortSignal = telegramSpooledReplayFrames.getStore()?.lifecycle?.abortSignal;
+  const abortSignal = ownerAbortSignal
+    ? AbortSignal.any([abortController.signal, ownerAbortSignal])
+    : abortController.signal;
   let settled = false;
+  let ownerAbortedWhilePending = ownerAbortSignal?.aborted === true;
   let settlementHeld = false;
   let pendingSettlement: TelegramMessageProcessingResult | undefined;
   let resolveTask: (result: TelegramMessageProcessingResult) => void = () => {};
   const task = new Promise<TelegramMessageProcessingResult>((resolve) => {
     resolveTask = resolve;
   });
+  const onOwnerAbort = () => {
+    if (!settled) {
+      ownerAbortedWhilePending = true;
+      // An adoption hold owns its eventual commit or rollback outcome.
+      if (!settlementHeld) {
+        settleNow({
+          kind: "failed-retryable",
+          error: ownerAbortSignal?.reason ?? new Error("telegram spooled replay owner aborted"),
+        });
+      }
+    }
+  };
+  ownerAbortSignal?.addEventListener("abort", onOwnerAbort, { once: true });
   const settleNow = (result: TelegramMessageProcessingResult) => {
     if (settled) {
       return;
     }
     settled = true;
+    ownerAbortSignal?.removeEventListener("abort", onOwnerAbort);
     if (result.kind !== "completed") {
       abortController.abort(result.kind === "failed-retryable" ? result.error : result.kind);
     }
     resolveTask(result);
   };
+  if (ownerAbortSignal?.aborted) {
+    onOwnerAbort();
+  }
   return {
     key,
-    abortSignal: abortController.signal,
+    // Buffered work outlives the ALS frame, so its signal must retain the
+    // claim owner's pre-adoption cancellation boundary.
+    abortSignal,
     task,
+    isSettled: () => settled,
+    wasOwnerAbortedWhilePending: () => ownerAbortedWhilePending,
     beginSettlementHold: () => {
       if (settled || settlementHeld) {
         return undefined;

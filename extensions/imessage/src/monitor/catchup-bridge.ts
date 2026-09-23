@@ -1,4 +1,3 @@
-// Imessage plugin module implements catchup bridge behavior.
 import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
 import { warn } from "openclaw/plugin-sdk/runtime-env";
 import type { IMessageRpcClient } from "../client.js";
@@ -13,11 +12,12 @@ import {
 import { parseIMessageNotification } from "./parse-notification.js";
 import type { IMessagePayload } from "./types.js";
 
-// Per-chat history fetch budget. messages.history is per-chat; we cap each
-// chat's fetch to the global perRunLimit so a single noisy group cannot
-// dominate the cursor advance — the cross-chat sort + final slice still
-// caps the global pass at perRunLimit.
-const PER_CHAT_HISTORY_LIMIT_CAP = 500;
+// Per-chat history fetch budget. Upstream `messages.history` serves rows
+// `ORDER BY date DESC LIMIT ?`, so a smaller limit trims the OLDEST rows
+// server-side before we ever see them. Always request the full budget: the
+// cross-chat sort plus the perRunLimit slice below can only pick the true
+// oldest rows if the per-chat page reached them.
+const PER_CHAT_HISTORY_LIMIT = 500;
 
 // chats.list page size used during catchup. 200 covers far more than any
 // realistic offline window worth of distinct chats while staying well under
@@ -48,13 +48,11 @@ type RunIMessageCatchupParams = {
   config: ResolvedCatchupConfig;
   includeAttachments: boolean;
   /**
-   * The same per-message handler the live `imsg watch` notification path
-   * runs (i.e. the post-debounce `handleMessageNow` in `monitor-provider`).
-   * Catchup feeds rows in oldest-first by rowid. Throws are recorded as
-   * dispatch failures; non-throw returns count as successful dispatch
-   * (including non-error drops, which mirrors the live pipeline).
+   * The durable admission handler shared with live `imsg watch` notifications.
+   * Catchup feeds rows oldest-first by rowid. Throws are recorded as admission
+   * failures; non-throw returns mean the row is durably queued.
    */
-  dispatchPayload: (message: IMessagePayload) => Promise<void>;
+  dispatchPayload: (message: IMessagePayload, rawEnvelope: unknown) => Promise<void>;
   /**
    * Called for `is_from_me=true` rows that catchup intentionally does not
    * dispatch. The live inbound path still needs to observe those rows so
@@ -74,14 +72,12 @@ type RunIMessageCatchupParams = {
  *   1. listing recently-active chats via `chats.list`,
  *   2. fetching per-chat history since the cursor via `messages.history`,
  *   3. sorting cross-chat by `rowid`, capping at `perRunLimit`,
- *   4. replaying each row through the same `dispatchPayload` handler used
- *      by the live notification loop, so existing dedupe / coalesce / echo
- *      / read-receipt behavior covers replayed rows for free.
+ *   4. admitting each row through the same durable GUID queue used by live
+ *      notifications, so replay, coalescing, echo, and receipt behavior match.
  *
  * Runs at most once per `monitorIMessageProvider` invocation, between
  * `watch.subscribe` and the live dispatch loop. Anything that arrives during
- * catchup itself flows through live dispatch; the existing inbound-dedupe
- * cache absorbs any overlap.
+ * catchup itself flows through live admission; queue tombstones reject overlap.
  */
 export async function runIMessageCatchup(
   params: RunIMessageCatchupParams,
@@ -93,7 +89,10 @@ export async function runIMessageCatchup(
   // Map keyed by guid so the dispatch adapter can recover the full payload
   // the fetcher pulled from `messages.history`. Local to this catchup pass —
   // discarded when the function returns.
-  const payloadByGuid = new Map<string, IMessagePayload>();
+  const payloadByGuid = new Map<
+    string,
+    { message: IMessagePayload; rawEnvelope: { message: unknown } }
+  >();
 
   const fetchFn: CatchupFetchFn = async ({ sinceMs, sinceRowid, limit }) => {
     const sinceISO = timestampMsToIsoString(sinceMs);
@@ -114,7 +113,6 @@ export async function runIMessageCatchup(
     }
     const chats = chatsResult?.chats ?? [];
     const collected: IMessageCatchupRow[] = [];
-    const perChatLimit = Math.min(limit, PER_CHAT_HISTORY_LIMIT_CAP);
     let historyFetchFailed = false;
     // Track the highest rowid / date the imsg bridge actually returned across
     // all chats, regardless of whether each row passed the parser. The catchup
@@ -144,7 +142,7 @@ export async function runIMessageCatchup(
           "messages.history",
           {
             chat_id: chatId,
-            limit: perChatLimit,
+            limit: PER_CHAT_HISTORY_LIMIT,
             start: sinceISO,
             attachments: includeAttachments,
           },
@@ -203,7 +201,7 @@ export async function runIMessageCatchup(
           date: dateMs,
           isFromMe: payload.is_from_me === true,
         });
-        payloadByGuid.set(guid, payload);
+        payloadByGuid.set(guid, { message: payload, rawEnvelope: { message: raw } });
       }
     }
 
@@ -260,8 +258,8 @@ export async function runIMessageCatchup(
   };
 
   const dispatchFn: CatchupDispatchFn = async (row) => {
-    const payload = payloadByGuid.get(row.guid);
-    if (!payload) {
+    const entry = payloadByGuid.get(row.guid);
+    if (!entry) {
       // Should not happen: the fetcher only emits rows it has stashed. But
       // if a future caller wires a different fetcher and forgets to populate
       // the map, we would otherwise silently no-op. Treat as a transient
@@ -270,7 +268,7 @@ export async function runIMessageCatchup(
       return { ok: false };
     }
     try {
-      await dispatchPayload(payload);
+      await dispatchPayload(entry.message, entry.rawEnvelope);
       return { ok: true };
     } catch (err) {
       warnLog(`imessage catchup: dispatch threw for guid=${row.guid}: ${String(err)}`);
@@ -284,12 +282,12 @@ export async function runIMessageCatchup(
     fetch: fetchFn,
     dispatch: dispatchFn,
     observeSkippedFromMe: async (row) => {
-      const payload = payloadByGuid.get(row.guid);
-      if (!payload) {
+      const entry = payloadByGuid.get(row.guid);
+      if (!entry) {
         warnLog(`imessage catchup: missing skipped from-me payload for guid=${row.guid}`);
         return;
       }
-      await params.observeSkippedFromMePayload?.(payload);
+      await params.observeSkippedFromMePayload?.(entry.message);
     },
     log,
     warn: warnLog,

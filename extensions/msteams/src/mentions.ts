@@ -45,7 +45,7 @@ export function parseMentions(text: string): {
   text: string;
   entities: MentionEntity[];
 } {
-  const mentionPattern = /@\[([^\]]+)\]\(([^)]+)\)/g;
+  const mentionPattern = /@\[((?:\\[\s\S]|[^\]\\])+)\]\(([^)]+)\)/g;
   const entities: MentionEntity[] = [];
 
   // Replace @[Name](id) with <at>Name</at> only for valid Teams IDs
@@ -57,7 +57,7 @@ export function parseMentions(text: string): {
       return match;
     }
 
-    const trimmedName = name.trim();
+    const trimmedName = name.replace(/\\([\\[\]])/g, "$1").trim();
     const mentionTag = `<at>${trimmedName}</at>`;
     entities.push({
       type: "mention",

@@ -49,6 +49,19 @@ function collectStaticModuleSpecifiers(sourceFile: ts.SourceFile): string[] {
 function createImportGraph(files: readonly string[]): Map<string, string[]> {
   const compilerOptions = loadCompilerOptions();
   const compilerHost = ts.createCompilerHost(compilerOptions, false);
+  const directoryExists = compilerHost.directoryExists?.bind(compilerHost);
+  if (directoryExists) {
+    const directories = new Map<string, boolean>();
+    compilerHost.directoryExists = (directory) => {
+      const cached = directories.get(directory);
+      if (cached !== undefined) {
+        return cached;
+      }
+      const exists = directoryExists(directory);
+      directories.set(directory, exists);
+      return exists;
+    };
+  }
   const resolutionCache = ts.createModuleResolutionCache(
     repoRoot,
     (value) => value,
@@ -65,7 +78,7 @@ function createImportGraph(files: readonly string[]): Map<string, string[]> {
       file,
       readFileSync(absoluteFile, "utf8"),
       ts.ScriptTarget.Latest,
-      true,
+      false,
     );
     const imports = collectStaticModuleSpecifiers(sourceFile).flatMap((specifier) => {
       const resolved = ts.resolveModuleName(

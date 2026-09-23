@@ -1,0 +1,282 @@
+title: Telegram prepared replies preserve literal code and recover delivery facts
+
+scenario:
+  id: telegram-prepared-delivery-recovery
+  surface: channels
+  coverage:
+    primary:
+      - channels.streaming-final-reply
+      - telegram.conversation-routing-and-delivery
+  regressionRefs:
+    - openclaw/openclaw#146361
+  objective: Preserve code during streaming and recover a shortened final from normal assistant persistence without losing its reply target or duplicating media.
+  successCriteria:
+    - A hook-free streamed answer edits the same Telegram message and preserves literal directives in native code entities without attaching their example paths.
+    - A public hook demonstrably shortens each recovery final and removes its target, while the delivered answer recovers the full text and replies to the triggering message.
+    - After one genuine media block, an audited hook cancellation retains a shortened final whose recovery sends the full targeted text without sending the document again.
+  docsRefs:
+    - docs/channels/telegram.md
+    - docs/concepts/streaming.md
+    - docs/plugins/hooks.md
+  codeRefs:
+    - extensions/telegram/src/bot-message-dispatch.ts
+    - extensions/telegram/src/bot-message-dispatch-payload.ts
+    - src/config/sessions/transcript-assistant-delivery.ts
+    - src/media/parse.ts
+  execution:
+    kind: flow
+    channel: telegram
+    providerMode: mock-openai
+    retryCount: 0
+    timeoutMs: 300000
+    suiteIsolation: isolated
+    isolationReason: Loads a run-owned reply hook only after the streaming case and restarts the ephemeral Gateway between cases.
+    transportPolicy:
+      directMessageOnly: true
+    summary: Observe real Telegram Test Server messages, edits, code entities, reply relationships, and document counts. The media case uses public-hook fault injection to cancel only its second full-answer block before shortening the retained final. Hooked recovery suppresses previews; preview deletion, late recovery, and compact alias alignment remain boundary-test claims.
+    config:
+      requiredProviderMode: mock-openai
+      requiredChannelDriver: live
+      conversationId: telegram-prepared-delivery
+      pluginId: qa-prepared-delivery-recovery
+      cases: [stream, target, media]
+      fixtureSource: |-
+        import { appendFileSync, readFileSync } from "node:fs";
+        import { definePluginEntry } from "__PLUGIN_ENTRY_URL__";
+        export default definePluginEntry({
+          id: "qa-prepared-delivery-recovery",
+          name: "Prepared delivery QA fixture",
+          register(api) {
+            const { prefix, fullText, auditPath, media, mediaPath } = api.pluginConfig;
+            let shortened = false;
+            api.on("reply_payload_sending", (event) => {
+              if (event.channel !== "telegram" || event.payload.text?.trimEnd() !== fullText) return;
+              const references = [...new Set([
+                ...(event.payload.mediaUrls ?? []),
+                ...(event.payload.mediaUrl ? [event.payload.mediaUrl] : []),
+              ])];
+              if (media && event.kind === "block") {
+                if (references.length !== 1 || !readFileSync(references[0]).equals(readFileSync(mediaPath))) {
+                  throw new Error("Prepared delivery fixture block must contain its original document");
+                }
+                appendFileSync(auditPath, JSON.stringify({ phase: "cancelled-full-block", fullText, mediaReferences: 1 }) + "\n", { mode: 0o600 });
+                return { cancel: true, reason: "QA retains this full-answer block for final recovery" };
+              }
+              if (shortened || event.kind !== "final") return;
+              if (references.length !== 0) {
+                throw new Error("Prepared delivery fixture received unexpected media references");
+              }
+              shortened = true;
+              const payload = { ...event.payload, text: `${prefix}...` };
+              delete payload.replyToId;
+              delete payload.replyToCurrent;
+              delete payload.replyToTag;
+              appendFileSync(auditPath, JSON.stringify({
+                phase: "shortened-final", fullText, shortenedText: payload.text,
+                hadTarget: Boolean(event.payload.replyToId || event.payload.replyToCurrent),
+                outputHasTarget: Boolean(payload.replyToId || payload.replyToCurrent || payload.replyToTag),
+                mediaReferences: references.length,
+              }) + "\n", { mode: 0o600 });
+              return { payload };
+            });
+          },
+        });
+
+flow:
+  steps:
+    - name: streams literal examples and recovers persisted delivery facts
+      actions:
+        - assert:
+            expr: env.providerMode === "mock-openai" && transport.id === "telegram" && typeof readTelegramMessages === "function"
+            message: this proof requires the mock provider and native Telegram Test Server observer
+        - set: fixtureDir
+          value:
+            expr: path.join(env.gateway.tempRoot, config.pluginId)
+        - set: sourcePath
+          value:
+            expr: path.join(env.gateway.workspaceDir, "prepared-delivery-note.txt")
+        - call: fs.writeFile
+          args: [{ ref: sourcePath }, "Synthetic prepared delivery note.\n", utf8]
+        - set: proofs
+          value: []
+        - forEach:
+            items: { ref: config.cases }
+            item: caseName
+            actions:
+              - set: marker
+                value:
+                  expr: "`TELEGRAM-PREPARED-${caseName.toUpperCase()}-${randomUUID().slice(0, 8).toUpperCase()}`"
+              - set: prefix
+                value:
+                  expr: "`${marker} The complete explanation retains the original delivery context`"
+              - set: firstParagraph
+                value:
+                  expr: "`${prefix} and continues with the remaining details instead of stopping at the shortened prefix.`"
+              - set: finalMarker
+                value:
+                  expr: "`${marker}-DONE`"
+              - set: blockCaption
+                value:
+                  expr: "`${marker}-DOCUMENT`"
+              - set: finalParagraph
+                value:
+                  expr: "`The explanation is complete. ${finalMarker}`"
+              - set: codeBlocks
+                value:
+                  [
+                    "  [[reply_to_current]]\n  MEDIA:./fenced-example.txt",
+                    "[[reply_to_current]]\nMEDIA:./indented-example.txt",
+                  ]
+              - set: fullText
+                value:
+                  expr: |-
+                    [firstParagraph, '```text\n' + codeBlocks[0] + '\n```', codeBlocks[1].split('\n').map((line) => '    ' + line).join('\n'), finalParagraph].join('\n\n')
+              - set: expectedText
+                value:
+                  expr: |-
+                    [firstParagraph, ...codeBlocks, finalParagraph].join('\n\n')
+              - set: auditPath
+                value:
+                  expr: path.join(env.gateway.tempRoot, `${marker}.jsonl`)
+              - call: env.gateway.restartAfterStateMutation
+                args:
+                  - lambda:
+                      async: true
+                      params: [ctx]
+                      expr: |-
+                        (async () => {
+                          const cfg = JSON.parse(await fs.readFile(ctx.configPath, "utf8"));
+                          const telegram = cfg.channels.telegram.accounts?.[transport.accountId] ?? cfg.channels.telegram;
+                          telegram.streaming = { mode: "partial", block: { enabled: false } };
+                          telegram.replyToMode = caseName === "stream" ? "all" : "off";
+                          telegram.richMessages = false;
+                          if (caseName !== "stream") {
+                            await fs.mkdir(fixtureDir, { recursive: true });
+                            const { pathToFileURL } = await qaImport("node:url");
+                            const pluginEntryUrl = pathToFileURL(path.join(env.repoRoot, "dist/plugin-sdk/plugin-entry.js")).href;
+                            await fs.writeFile(path.join(fixtureDir, "index.js"), config.fixtureSource.replace("__PLUGIN_ENTRY_URL__", pluginEntryUrl), "utf8");
+                            await fs.writeFile(path.join(fixtureDir, "package.json"), JSON.stringify({ name: "@openclaw/qa-prepared-delivery-fixture", version: "0.0.0", type: "module", openclaw: { extensions: ["./index.js"] } }), "utf8");
+                            await fs.writeFile(path.join(fixtureDir, "openclaw.plugin.json"), JSON.stringify({
+                              id: config.pluginId, activation: { onStartup: true },
+                              configSchema: {
+                                type: "object", additionalProperties: false,
+                                required: ["prefix", "fullText", "auditPath", "media", "mediaPath"],
+                                properties: { prefix: { type: "string" }, fullText: { type: "string" }, auditPath: { type: "string" }, media: { type: "boolean" }, mediaPath: { type: "string" } },
+                              },
+                            }), "utf8");
+                            cfg.plugins ??= {};
+                            cfg.plugins.allow = [...new Set([...(cfg.plugins.allow ?? []), config.pluginId])];
+                            cfg.plugins.load ??= {};
+                            cfg.plugins.load.paths = [...new Set([...(cfg.plugins.load.paths ?? []), fixtureDir])];
+                            cfg.plugins.entries ??= {};
+                            cfg.plugins.entries[config.pluginId] = { enabled: true, config: { prefix, fullText, auditPath, media: caseName === "media", mediaPath: sourcePath } };
+                          }
+                          await fs.writeFile(ctx.configPath, `${JSON.stringify(cfg, null, 2)}\n`, "utf8");
+                        })()
+              - call: waitForGatewayHealthy
+                args: [{ ref: env }, 60000]
+              - call: waitForTransportReady
+                args: [{ ref: env }, 60000]
+              - resetTransport: true
+              - set: startCursor
+                value:
+                  expr: state.getSnapshot().cursor
+              - set: requestCursor
+                value:
+                  expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
+              - sendInbound:
+                  conversation:
+                    id: { ref: config.conversationId }
+                    kind: direct
+                  senderId: qa-prepared-delivery-operator
+                  senderName: QA Delivery Operator
+                  text:
+                    expr: |-
+                      'Telegram prepared delivery QA: ' + JSON.stringify({ text: fullText + (caseName === 'media' ? '\n\nMEDIA:' + sourcePath : '') + (caseName === 'stream' ? '' : '\n\n[[reply_to_current]]'), previewText: firstParagraph + '\n\n```text\n' + codeBlocks[0], ...(caseName === 'media' ? { mediaPath: sourcePath, blockCaption } : {}) })
+                saveAs: inbound
+              - waitForOutboundSequence:
+                  conversationId: { ref: config.conversationId }
+                  sinceCursor: { ref: startCursor }
+                  finalTextIncludes: { ref: finalMarker }
+                  minimumPreviewEvents:
+                    expr: 'caseName === "stream" ? 1 : 0'
+                  finalSettleMs: 1500
+                  timeoutMs: 90000
+                saveAs: sequence
+              - set: received
+                value:
+                  expr: readTelegramMessages()
+              - set: finalNative
+                value:
+                  expr: received.at(-1)
+              - assert:
+                  expr: 'received.length === (caseName === "media" ? 2 : 1) && finalNative.text === expectedText && finalNative.contentType === "messageText" && (caseName !== "media" || (received[0].contentType === "messageDocument" && received[0].text === blockCaption))'
+                  message:
+                    expr: |-
+                      JSON.stringify({
+                        case: caseName,
+                        expected: { count: caseName === 'media' ? 2 : 1, text: expectedText, contentType: 'messageText' },
+                        observed: received.map(({ kind, text, contentType, entities }) => {
+                          const fixtureText = expectedText.replace(/\s/gu, '').includes(text.replace(/\s/gu, '')) || text === blockCaption;
+                          return {
+                            kind, contentType, text: fixtureText ? text : text.replace(/\S/gu, '?'), nonWhitespaceRedacted: !fixtureText,
+                            entities: entities.map(({ offset, length, type }) => ({ offset, length, type: type['@type'] })),
+                          };
+                        }),
+                        correctlyTargeted: sequence.final.replyToId === inbound.id,
+                        eventKinds: sequence.events.map(({ kind }) => kind),
+                      })
+              - set: observedCode
+                value:
+                  expr: "finalNative.entities.filter((entity) => ['textEntityTypePre', 'textEntityTypePreCode'].includes(entity.type['@type'])).map((entity) => finalNative.text.slice(entity.offset, entity.offset + entity.length))"
+              - assert:
+                  expr: |-
+                    observedCode.length === codeBlocks.length && observedCode.every((text, index) => text === codeBlocks[index] || text === codeBlocks[index] + '\n')
+                  message: native code entities must preserve both literal directive examples and their indentation
+              - assert:
+                  expr: sequence.final.replyToId === inbound.id
+                  message: the native final reply must target the triggering inbound message
+              - if:
+                  expr: caseName === "stream"
+                  then:
+                    - assert:
+                        expr: "sequence.events.some((event) => event.kind === 'sent' && event.message.id === sequence.final.id && !event.message.text.includes(finalMarker)) && sequence.events.some((event) => event.kind === 'edited' && event.message.id === sequence.final.id && event.message.text.includes(finalMarker))"
+                        message: the final must edit the same message that displayed the incomplete streamed prefix
+                  else:
+                    - set: receipts
+                      value:
+                        expr: |-
+                          (await fs.readFile(auditPath, 'utf8')).trim().split('\n').map((line) => JSON.parse(line))
+                    - set: rewrites
+                      value:
+                        expr: "receipts.filter((receipt) => receipt.phase === 'shortened-final')"
+                    - assert:
+                        expr: rewrites.length === 1 && rewrites[0].fullText === fullText && rewrites[0].shortenedText === `${prefix}...` && rewrites[0].hadTarget === true && rewrites[0].outputHasTarget === false && rewrites[0].mediaReferences === 0
+                        message:
+                          expr: |-
+                            JSON.stringify({
+                              case: caseName,
+                              receiptCount: receipts.length,
+                              rewriteCount: rewrites.length,
+                              phases: receipts.map(({ phase }) => phase),
+                              rewrites: rewrites.map((receipt) => ({
+                                fullTextMatches: receipt.fullText === fullText,
+                                shortenedTextMatches: receipt.shortenedText === `${prefix}...`,
+                                hadTarget: receipt.hadTarget,
+                                outputHasTarget: receipt.outputHasTarget,
+                                mediaReferences: receipt.mediaReferences,
+                              })),
+                            })
+                    - assert:
+                        expr: 'receipts.length === (caseName === "media" ? 2 : 1) && (caseName !== "media" || (receipts[0].phase === "cancelled-full-block" && receipts[0].fullText === fullText && receipts[0].mediaReferences === 1 && sequence.events.some((event) => event.kind === "sent" && event.message.text === blockCaption && event.cursor < sequence.events.find((entry) => entry.message.id === sequence.final.id).cursor)))'
+                        message: media recovery must follow one observed document and exactly one scoped full-answer block cancellation
+              - set: requests
+                value:
+                  expr: "await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursor}`)"
+              - assert:
+                  expr: 'requests.length === (caseName === "media" ? 2 : 1) && requests.every((request) => request.outcome === "success") && (caseName === "media" ? requests[0].plannedToolName === "read" && requests[0].plannedToolArgs?.path === "QA_KICKOFF_TASK.md" && requests[0].plannedToolCallId && requests[1].toolOutputCallId === requests[0].plannedToolCallId && !requests[1].toolOutputStructuredError && !requests[1].plannedToolName : !requests[0].plannedToolName)'
+                  message: the media case must cross two successful provider requests with one correlated read; other cases must answer once without tools
+              - set: proofs
+                value:
+                  expr: "proofs.concat([{ case: caseName, providerRequests: requests.length, hookRewrites: caseName === 'stream' ? 0 : rewrites.length, cancelledFullBlocks: caseName === 'media' ? 1 : 0, correctlyTargeted: true, nativeMessages: received.map(({ text, contentType }) => ({ text, contentType })), codeBlocks: observedCode, sameMessageEdited: caseName === 'stream', previewDeletion: 'not claimed' }])"
+      detailsExpr: "JSON.stringify({ transport: 'Telegram Test Server TDLib userbot', cases: proofs, compactAliasAlignment: 'registered boundary proof', lateRecovery: 'registered boundary proof' })"

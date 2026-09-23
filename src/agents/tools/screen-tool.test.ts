@@ -1,5 +1,8 @@
+import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/client-info.js";
+import { UiCommandResultSchema } from "../../../packages/gateway-protocol/src/schema/ui-command.js";
+import { compactToolOutputHint } from "../tool-schema-hints.js";
 import type { InProcessGatewayCaller } from "./in-process-gateway.js";
 import { createScreenTool } from "./screen-tool.js";
 
@@ -16,6 +19,16 @@ function createGatewayRecorder() {
 }
 
 describe("screen tool", () => {
+  it("declares the exact ui.command result contract", async () => {
+    const { callGateway } = createGatewayRecorder();
+    const tool = createScreenTool({ callGateway });
+    const result = await tool.execute("contract", { action: "sidebar_show" });
+
+    expect(tool.outputSchema).toBe(UiCommandResultSchema);
+    expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
+    expect(compactToolOutputHint(tool.outputSchema)).toBe("{ ok: boolean }");
+  });
+
   it("uses a flat action enum and requires the UI capability", () => {
     const tool = createScreenTool();
     expect(tool.requiredClientCaps).toEqual([GATEWAY_CLIENT_CAPS.UI_COMMANDS]);
@@ -38,6 +51,8 @@ describe("screen tool", () => {
     ["sidebar_hide", { kind: "sidebar", visible: false }],
     ["terminal_hide", { kind: "panel", panel: "terminal", open: false }],
     ["browser_hide", { kind: "panel", panel: "browser", open: false }],
+    ["desktop_hide", { kind: "panel", panel: "desktop", open: false }],
+    ["portal_hide", { kind: "panel", panel: "portal", open: false }],
     ["navigate", { kind: "navigate", sessionKey: "agent:main:main" }],
   ])("maps %s to a UI command", async (action, command) => {
     const { callGateway, calls } = createGatewayRecorder();
@@ -71,4 +86,38 @@ describe("screen tool", () => {
       ],
     ]);
   });
+
+  it.each([
+    ["desktop_show", "environmentId", "desktop"],
+    ["portal_show", "portalId", "portal"],
+    ["portal_show", "environmentId", "portal"],
+  ] as const)(
+    "opens %s with %s in the selected conversation's right sidebar",
+    async (action, targetKey, panel) => {
+      const { callGateway, calls } = createGatewayRecorder();
+      const tool = createScreenTool({ agentSessionKey: "agent:main:current", callGateway });
+
+      await tool.execute("show", {
+        action,
+        [targetKey]: "attached-app",
+        sessionKey: "agent:main:preview",
+      });
+
+      expect(calls).toEqual([
+        [
+          "ui.command",
+          {
+            command: {
+              kind: "panel",
+              panel,
+              open: true,
+              dock: "right",
+              [targetKey]: "attached-app",
+            },
+            sessionKey: "agent:main:preview",
+          },
+        ],
+      ]);
+    },
+  );
 });

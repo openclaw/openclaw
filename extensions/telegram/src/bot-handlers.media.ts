@@ -1,4 +1,3 @@
-// Telegram plugin module implements bot handlers.media behavior.
 import type { Message } from "grammy/types";
 import { MediaFetchError } from "openclaw/plugin-sdk/media-runtime";
 import { isRecoverableTelegramNetworkError } from "./network-errors.js";
@@ -19,8 +18,8 @@ export class TelegramBotApiFileTooLargeError extends MediaFetchError {
 }
 
 export function isMediaSizeLimitError(err: unknown): boolean {
-  if (err instanceof TelegramBotApiFileTooLargeError) {
-    return true;
+  if (err instanceof MediaFetchError) {
+    return err.code === "max_bytes";
   }
   const errMsg = String(err);
   return errMsg.includes("exceeds") && errMsg.includes("MB limit");
@@ -65,17 +64,5 @@ export function hasInboundMedia(msg: Message): boolean {
     Boolean(msg.media_group_id) ||
     (Array.isArray(msg.photo) && msg.photo.length > 0) ||
     Boolean(msg.video ?? msg.video_note ?? msg.document ?? msg.audio ?? msg.voice ?? msg.sticker)
-  );
-}
-
-export function resolveInboundMediaFileId(msg: Message): string | undefined {
-  return (
-    msg.sticker?.file_id ??
-    msg.photo?.[msg.photo.length - 1]?.file_id ??
-    msg.video?.file_id ??
-    msg.video_note?.file_id ??
-    msg.document?.file_id ??
-    msg.audio?.file_id ??
-    msg.voice?.file_id
   );
 }

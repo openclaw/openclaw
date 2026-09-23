@@ -32,23 +32,14 @@ function resolvePositiveIntegerOption(value: number | undefined, fallback: numbe
   return parsed === undefined || parsed <= 0 ? fallback : Math.max(1, Math.floor(parsed));
 }
 
-function resolveKeepaliveIntervalMs(value: number | undefined): number {
-  return resolveTimerTimeoutMs(value, 3_000, 0);
-}
-
-function resolveDurationMsOption(value: number | undefined, fallback: number): number {
-  return resolveTimerTimeoutMs(value, fallback, 0);
-}
-
 export function createTypingCallbacks(params: CreateTypingCallbacksParams): TypingCallbacks {
   const stop = params.stop;
-  const keepaliveIntervalMs = resolveKeepaliveIntervalMs(params.keepaliveIntervalMs);
+  const keepaliveIntervalMs = resolveTimerTimeoutMs(params.keepaliveIntervalMs, 3_000, 0);
   const maxConsecutiveFailures = resolvePositiveIntegerOption(
     params.maxConsecutiveFailures,
     DEFAULT_MAX_CONSECUTIVE_TYPING_FAILURES,
   );
-  const maxDurationMs = resolveDurationMsOption(params.maxDurationMs, 60_000);
-  let stopSent = false;
+  const maxDurationMs = resolveTimerTimeoutMs(params.maxDurationMs, 60_000, 0);
   let closed = false;
   let ttlTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -60,9 +51,19 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
       keepaliveLoop.stop();
     },
   });
+  // Explicit refreshes and keepalive ticks share this gate so one stalled
+  // provider request cannot fan out into unbounded concurrent starts.
+  let startInFlight: ReturnType<typeof startGuard.run> | undefined;
 
   const fireStart = async (): Promise<void> => {
-    await startGuard.run(() => params.start());
+    const pending = (startInFlight ??= startGuard.run(() => params.start()));
+    try {
+      await pending;
+    } finally {
+      if (startInFlight === pending) {
+        startInFlight = undefined;
+      }
+    }
   };
 
   const keepaliveLoop = createTypingKeepaliveLoop({
@@ -95,15 +96,16 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
     if (closed) {
       return;
     }
-    stopSent = false;
     startGuard.reset();
-    keepaliveLoop.stop();
     clearTtlTimer();
     const startPromise = fireStart();
     void startPromise.then(() => {
       if (closed || startGuard.isTripped()) {
         return;
       }
+      // Core can refresh an active reply independently of this channel loop.
+      // Restarting the interval here shifts its deadline and can outlive a
+      // provider's visible typing window between consecutive renewals.
       keepaliveLoop.start();
       startTtlTimer();
     });
@@ -111,14 +113,20 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
   };
 
   const fireStop = () => {
+    if (closed) {
+      return;
+    }
     closed = true;
     keepaliveLoop.stop();
     clearTtlTimer();
-    if (!stop || stopSent) {
+    if (!stop) {
       return;
     }
-    stopSent = true;
-    void stop().catch((err: unknown) => (params.onStopError ?? params.onStartError)(err));
+    // An admitted start may publish activity after cleanup. Its terminal stop
+    // must follow that work so late acknowledgments cannot leave typing visible.
+    void (startInFlight ? startInFlight.then(stop) : stop()).catch((err: unknown) =>
+      (params.onStopError ?? params.onStartError)(err),
+    );
   };
 
   return { onReplyStart, onIdle: fireStop, onCleanup: fireStop };

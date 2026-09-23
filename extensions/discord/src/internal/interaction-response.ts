@@ -1,4 +1,3 @@
-// Discord plugin module implements interaction response behavior.
 import { InteractionResponseType, MessageFlags } from "discord-api-types/v10";
 
 export type InteractionResponseState =
@@ -39,6 +38,10 @@ export class InteractionResponseController {
   }
 
   recordReplyEdit(): void {
+    this.state = "replied";
+  }
+
+  recordReplyDelete(): void {
     this.state = "replied";
   }
 }

@@ -1,4 +1,3 @@
-// Discord plugin module implements preview streaming behavior.
 import {
   resolveChannelPreviewStreamMode,
   type StreamingMode,
@@ -9,8 +8,5 @@ export function resolveDiscordPreviewStreamMode(
     streaming?: unknown;
   } = {},
 ): StreamingMode {
-  if (params.streaming === undefined) {
-    return "progress";
-  }
   return resolveChannelPreviewStreamMode(params, "off");
 }

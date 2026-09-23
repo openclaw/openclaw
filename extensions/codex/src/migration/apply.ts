@@ -1,11 +1,13 @@
 // Codex plugin module implements apply behavior.
 import path from "node:path";
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   applyMigrationManualItem,
   markMigrationItemConflict,
   markMigrationItemError,
   markMigrationItemSkipped,
   MIGRATION_REASON_TARGET_EXISTS,
+  resolveMigrationConfigRuntime,
   summarizeMigrationItems,
   writeMigrationConfigPath,
 } from "openclaw/plugin-sdk/migration";
@@ -13,6 +15,7 @@ import {
   archiveMigrationItem,
   copyMemoryMigrationFileItem,
   copyMigrationFileItem,
+  resolvePlannedMigrationTargets,
   withCachedMigrationConfigRuntime,
   writeMigrationReport,
 } from "openclaw/plugin-sdk/migration-runtime";
@@ -26,11 +29,9 @@ import type {
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { defaultCodexAppInventoryCache } from "../app-server/app-inventory-cache.js";
-import {
-  resolveCodexAppServerAuthAccountCacheKey,
-  resolveCodexAppServerAuthProfileIdForAgent,
-  resolveCodexAppServerFallbackApiKeyCacheKey,
-} from "../app-server/auth-bridge.js";
+import { resolveCodexAppServerAuthAccountCacheKey } from "../app-server/auth-bridge.js";
+import { resolveCodexAppServerFallbackApiKeyCacheKey } from "../app-server/auth-cache-key.js";
+import { resolveCodexAppServerAuthProfileIdForAgent } from "../app-server/auth-profile.js";
 import {
   CODEX_PLUGINS_MARKETPLACE_NAME,
   readCodexPluginConfig,
@@ -39,6 +40,8 @@ import {
 } from "../app-server/config.js";
 import { ensureCodexPluginActivation } from "../app-server/plugin-activation.js";
 import { buildCodexPluginAppCacheKey } from "../app-server/plugin-app-cache-key.js";
+import { isOpenAiCuratedMarketplace } from "../app-server/plugin-inventory.js";
+import type { v2 } from "../app-server/protocol.js";
 import { requestCodexAppServerJson } from "../app-server/request.js";
 import {
   clearSharedCodexAppServerClientIfCurrentAndWait,
@@ -46,9 +49,13 @@ import {
   releaseLeasedSharedCodexAppServerClient,
 } from "../app-server/shared-client.js";
 import { codexPluginActivationReportState, sanitizeAppsNeedingAuth } from "./apply-report.js";
-import { applyCodexAuthItem, buildCodexAuthConfigPatchItems } from "./auth.js";
-import { buildCodexMigrationPlan } from "./plan.js";
 import {
+  createCodexAuthItemApplier,
+  resolveCodexConfigPatchMode,
+  type CodexAuthSource,
+} from "./auth.js";
+import {
+  buildCodexMigrationPlan,
   buildCodexPluginsConfigValue,
   CODEX_PLUGIN_CONFIG_ITEM_ID,
   CODEX_PLUGIN_CONFIG_PATH,
@@ -56,11 +63,9 @@ import {
   readCodexPluginMigrationConfigEntry,
   type CodexPluginMigrationConfigEntry,
 } from "./plan.js";
-import { resolveCodexMigrationTargets } from "./targets.js";
 
 const CODEX_PLUGIN_AUTH_REQUIRED_REASON = "auth_required";
 const CODEX_PLUGIN_NOT_SELECTED_REASON = "not selected for migration";
-const CODEX_CONFIG_PATCH_MODE_RETURN = "return";
 const CODEX_PLUGIN_LOAD_WARNING =
   "Some Codex plugins could not be migrated. Run `openclaw migrate codex` after onboarding.";
 const TARGET_CODEX_MARKETPLACE_DISCOVERY_POLL_MS = 250;
@@ -80,14 +85,14 @@ class CodexPluginConfigConflictError extends Error {
 }
 
 function shouldReturnCodexPluginConfigPatch(ctx: MigrationProviderContext): boolean {
-  return ctx.providerOptions?.configPatchMode === CODEX_CONFIG_PATCH_MODE_RETURN;
+  return resolveCodexConfigPatchMode(ctx) === "return";
 }
 
 export function prepareTargetCodexAppServer(
   ctx: MigrationProviderContext,
 ): CodexMigrationTargetAppServerPreparation {
   const appServer = resolveTargetCodexAppServer(ctx);
-  const targets = resolveCodexMigrationTargets(ctx);
+  const targets = resolvePlannedMigrationTargets(ctx);
   let warmedClient: Awaited<ReturnType<typeof getLeasedSharedCodexAppServerClient>> | undefined;
   const ready = getLeasedSharedCodexAppServerClient({
     startOptions: appServer.start,
@@ -122,27 +127,27 @@ export async function applyCodexMigrationPlan(params: {
   const plan = params.plan ?? (await buildCodexMigrationPlan(params.ctx));
   const reportDir = params.ctx.reportDir ?? path.join(params.ctx.stateDir, "migration", "codex");
   const items: MigrationItem[] = [];
-  const targets = resolveCodexMigrationTargets(params.ctx);
+  const targets = resolvePlannedMigrationTargets(params.ctx);
   const codexHome =
     typeof plan.metadata?.codexHome === "string" && plan.metadata.codexHome.trim()
       ? plan.metadata.codexHome
       : plan.source;
-  const authSource = {
-    root: plan.source,
-    confidence: "high" as const,
+  const authSource: CodexAuthSource = {
     codexHome,
     authPath: path.join(codexHome, "auth.json"),
     modelsCachePath: path.join(codexHome, "models_cache.json"),
-    memoryFiles: [],
-    skills: [],
-    plugins: [],
-    archivePaths: [],
   };
   const runtime = withCachedMigrationConfigRuntime(
     params.ctx.runtime ?? params.runtime,
     params.ctx.config,
   );
   const applyCtx = { ...params.ctx, runtime };
+  const applyAuthItem = createCodexAuthItemApplier({
+    ctx: applyCtx,
+    source: authSource,
+    targets,
+    items: plan.items,
+  });
   for (const item of plan.items) {
     if (item.status !== "planned") {
       items.push(item);
@@ -151,20 +156,7 @@ export async function applyCodexMigrationPlan(params: {
     if (item.id === CODEX_PLUGIN_CONFIG_ITEM_ID) {
       items.push(await applyCodexPluginConfigItem(applyCtx, item, items));
     } else if (item.kind === "auth") {
-      const authItem = await applyCodexAuthItem({
-        ctx: applyCtx,
-        item,
-        source: authSource,
-        targets,
-      });
-      items.push(authItem);
-      items.push(
-        ...(await buildCodexAuthConfigPatchItems({
-          ctx: applyCtx,
-          item: authItem,
-          source: authSource,
-        })),
-      );
+      items.push(...(await applyAuthItem(item)));
     } else if (item.kind === "plugin" && item.action === "install") {
       items.push(await applyCodexPluginInstallItem(applyCtx, item));
     } else if (item.kind === "manual") {
@@ -220,7 +212,7 @@ async function applyCodexPluginInstallItem(
           requestParams,
           timeoutMs: 60_000,
           startOptions: appServer.start,
-          agentDir: resolveCodexMigrationTargets(ctx).agentDir,
+          agentDir: resolvePlannedMigrationTargets(ctx).agentDir,
           config: ctx.config,
           isolated: false,
         }),
@@ -283,14 +275,14 @@ async function applyCodexPluginInstallItem(
           ...item.details,
           code: "plugin_inventory_unavailable",
           warningReason: CODEX_PLUGIN_LOAD_WARNING,
-          diagnostic: formatCodexMigrationError(error),
+          diagnostic: coerceErrorMessage(error),
         },
       };
     }
     return {
       ...item,
       status: "error",
-      reason: formatCodexMigrationError(error),
+      reason: coerceErrorMessage(error),
       details: {
         ...item.details,
         code: "plugin_install_failed",
@@ -300,12 +292,8 @@ async function applyCodexPluginInstallItem(
 }
 
 function isCodexPluginInventoryLoadError(error: unknown): boolean {
-  const message = formatCodexMigrationError(error);
+  const message = coerceErrorMessage(error);
   return message.includes("codex app-server plugin/list timed out");
-}
-
-function formatCodexMigrationError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function resolveTargetCodexAppServer(ctx: MigrationProviderContext) {
@@ -330,16 +318,14 @@ async function requestTargetCodexAppServerJson(params: {
   const deadline = Date.now() + params.timeoutMs;
   const discoveryTimeoutMs = targetCodexMarketplaceDiscoveryTimeoutMs();
   const discoveryDeadline = Math.min(deadline, Date.now() + discoveryTimeoutMs);
-  let lastResponse: unknown;
-  let attempt = 0;
+  let lastResponse: v2.PluginListResponse;
   do {
-    attempt += 1;
     const remainingMs = Math.max(1, discoveryDeadline - Date.now());
-    lastResponse = await requestCodexAppServerJson({
+    lastResponse = await requestCodexAppServerJson<v2.PluginListResponse>({
       ...params,
       timeoutMs: remainingMs,
     });
-    if (hasOpenAiCuratedMarketplace(lastResponse)) {
+    if (lastResponse.marketplaces.some(isOpenAiCuratedMarketplace)) {
       return lastResponse;
     }
     if (Date.now() >= discoveryDeadline) {
@@ -353,22 +339,6 @@ async function requestTargetCodexAppServerJson(params: {
   } while (Date.now() < discoveryDeadline);
 
   return lastResponse;
-}
-
-function hasOpenAiCuratedMarketplace(response: unknown): boolean {
-  if (!response || typeof response !== "object" || !("marketplaces" in response)) {
-    return false;
-  }
-  const marketplaces = (response as { marketplaces?: unknown }).marketplaces;
-  return (
-    Array.isArray(marketplaces) &&
-    marketplaces.some(
-      (marketplace) =>
-        marketplace &&
-        typeof marketplace === "object" &&
-        (marketplace as { name?: unknown }).name === CODEX_PLUGINS_MARKETPLACE_NAME,
-    )
-  );
 }
 
 function targetCodexMarketplaceDiscoveryTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
@@ -391,7 +361,7 @@ function isCodexPluginLoadWarningItem(item: MigrationItem): boolean {
 }
 
 async function buildTargetCodexPluginAppCacheKey(ctx: MigrationProviderContext): Promise<string> {
-  const targets = resolveCodexMigrationTargets(ctx);
+  const targets = resolvePlannedMigrationTargets(ctx);
   const appServer = resolveTargetCodexAppServer(ctx);
   const authProfileId = resolveCodexAppServerAuthProfileIdForAgent({
     agentDir: targets.agentDir,
@@ -421,21 +391,38 @@ async function applyCodexPluginConfigItem(
   item: MigrationItem,
   appliedItems: readonly MigrationItem[],
 ): Promise<MigrationItem> {
+  const incompletePluginItems = appliedItems.filter(
+    (candidate) =>
+      candidate.kind === "plugin" &&
+      candidate.action === "install" &&
+      readCodexPluginPolicy(candidate) !== undefined &&
+      !isCodexPluginConfigTerminal(candidate),
+  );
+  if (incompletePluginItems.length > 0) {
+    return {
+      ...item,
+      status: "warning",
+      reason: "selected Codex plugin activation is incomplete",
+    };
+  }
   const entries = appliedItems
     .map(readAppliedPluginConfigEntry)
     .filter((entry): entry is CodexPluginMigrationConfigEntry => entry !== undefined);
   if (entries.length === 0) {
-    return markMigrationItemSkipped(item, "no selected Codex plugins");
+    return {
+      ...markMigrationItemSkipped(item, "no selected Codex plugins"),
+      deferredCompletion: true,
+    };
   }
   const returnPatch = shouldReturnCodexPluginConfigPatch(ctx);
-  const configApi = ctx.runtime?.config;
+  const configApi = resolveMigrationConfigRuntime(ctx);
   const currentConfig = returnPatch
     ? ctx.config
     : (configApi?.current?.() as MigrationProviderContext["config"] | undefined);
   if (!currentConfig) {
     return markMigrationItemError(item, "config runtime unavailable");
   }
-  const value = buildCodexPluginsConfigValue(entries, { config: currentConfig });
+  const value = buildCodexPluginsConfigValue(entries, currentConfig);
   if (!ctx.overwrite && hasCodexPluginConfigConflict(currentConfig, value)) {
     return markMigrationItemConflict(item, MIGRATION_REASON_TARGET_EXISTS);
   }
@@ -470,41 +457,41 @@ async function applyCodexPluginConfigItem(
     if (error instanceof CodexPluginConfigConflictError) {
       return markMigrationItemConflict(item, error.reason);
     }
-    return markMigrationItemError(item, error instanceof Error ? error.message : String(error));
+    return markMigrationItemError(item, coerceErrorMessage(error));
   }
+}
+
+function isCodexPluginConfigTerminal(item: MigrationItem): boolean {
+  return (
+    item.status === "migrated" ||
+    (item.status === "skipped" &&
+      (item.deferredCompletion === true ||
+        item.reason === CODEX_PLUGIN_NOT_SELECTED_REASON ||
+        item.reason === CODEX_PLUGIN_AUTH_REQUIRED_REASON))
+  );
 }
 
 function readAppliedPluginConfigEntry(
   item: MigrationItem,
 ): CodexPluginMigrationConfigEntry | undefined {
-  if (item.status === "migrated") {
+  if (item.status === "migrated" || item.deferredCompletion === true) {
     return readCodexPluginMigrationConfigEntry(item, true);
   }
-  if (
-    item.status === "skipped" &&
-    item.reason !== CODEX_PLUGIN_NOT_SELECTED_REASON &&
-    item.reason === CODEX_PLUGIN_AUTH_REQUIRED_REASON
-  ) {
+  if (item.status === "skipped" && item.reason === CODEX_PLUGIN_AUTH_REQUIRED_REASON) {
     return readCodexPluginMigrationConfigEntry(item, false);
   }
   return undefined;
 }
 
 function readCodexPluginPolicy(item: MigrationItem): ResolvedCodexPluginPolicy | undefined {
-  const configKey = item.details?.configKey;
-  const marketplaceName = item.details?.marketplaceName;
-  const pluginName = item.details?.pluginName;
-  if (
-    typeof configKey !== "string" ||
-    marketplaceName !== CODEX_PLUGINS_MARKETPLACE_NAME ||
-    typeof pluginName !== "string"
-  ) {
+  const entry = readCodexPluginMigrationConfigEntry(item, true);
+  if (!entry) {
     return undefined;
   }
   return {
-    configKey,
+    configKey: entry.configKey,
     marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
-    pluginName,
+    pluginName: entry.pluginName,
     enabled: true,
     allowDestructiveActions: true,
     destructiveApprovalMode: "allow",

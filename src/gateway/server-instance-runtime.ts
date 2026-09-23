@@ -1,25 +1,58 @@
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "../../packages/gateway-client/src/timeouts.js";
+import type { AgentWaitParams } from "../../packages/gateway-protocol/src/index.js";
+import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
 import {
   GATEWAY_NATIVE_APPROVAL_METHODS,
   type GatewayNativeApprovalMethod,
 } from "../infra/approval-gateway-runtime-methods.js";
 import type {
-  GatewayApprovalEventKind,
   GatewayApprovalEventSubscriber,
   GatewayApprovalRequest,
   GatewayApprovalResolved,
 } from "../infra/approval-gateway-runtime.types.js";
 import { createApprovalNativeRouteCoordinator } from "../infra/approval-native-route-coordinator.js";
-import { APPROVALS_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
+import type { ChannelApprovalKind } from "../infra/approval-types.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+// HTTP agent ingress can finish before the lazy agent.wait handler loads its recorder.
+import "./agent-turn/agent-job.js";
+import { createInternalAgentTurnFacade } from "./agent-turn/internal-facade.js";
+import type { InternalAgentTurnPrincipalOptions } from "./agent-turn/internal-facade.types.js";
+import {
+  resolveLeastPrivilegeOperatorScopesForMethod,
+  APPROVALS_SCOPE,
+  WRITE_SCOPE,
+} from "./method-scopes.js";
 import type { GatewayMethodRegistry } from "./methods/registry.js";
+import { createRecoveryTypingManager } from "./recovery-typing.js";
 import { dispatchGatewayRequestInProcess } from "./server-in-process-dispatch.js";
 import type {
+  GatewayInstanceAgentDispatchOptions,
   GatewayInstanceRuntime,
   GatewayRecoveryRuntime,
+  GatewayRecoverySessionMethod,
 } from "./server-instance-runtime.types.js";
+import type { AgentRunRequest } from "./server-methods/agent-request-types.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import { registerGatewayRecoveryRuntime } from "./server-recovery-runtime-context.js";
+import {
+  cancelSubagentCompletionToolHandoff,
+  registerSubagentCompletionToolHandoff,
+} from "./subagent-completion-tool-handoff.js";
+
+const loadRecoveryTypingAdapter = createLazyRuntimeModule(
+  () => import("../channels/plugins/index.js"),
+);
+
+const loadOutboundMessageRuntime = createLazyRuntimeModule(
+  () => import("../infra/outbound/message.js"),
+);
+
+const RECOVERY_NOTICE_COMPLETION_RETENTION = {
+  idPrefix: "main-session-restart-recovery:",
+  maxAgeMs: 24 * 60 * 60_000,
+  maxEntries: 2_000,
+} as const;
 
 type GatewayInstanceRuntimeOptions = {
   getContext: () => GatewayRequestContext;
@@ -35,67 +68,209 @@ export function createGatewayInstanceRuntime(
   const approvalSubscribers = new Set<GatewayApprovalEventSubscriber>();
   const routeCoordinator = createApprovalNativeRouteCoordinator();
   let closed = false;
+  const recoveryTyping = createRecoveryTypingManager({
+    isAvailable: () => !closed && options.isDispatchAvailable(),
+    getConfig: () => options.getContext().getRuntimeConfig(),
+    resolveAdapter: async (channel) =>
+      (await loadRecoveryTypingAdapter()).getLoadedChannelPlugin(channel)?.heartbeat,
+    onError: () => options.logError?.("recovery typing unavailable; final delivery continues"),
+  });
+
+  const assertDispatchAvailable = (method: string) => {
+    if (closed || !options.isDispatchAvailable()) {
+      throw new Error(`Gateway instance dispatch unavailable for ${method}`);
+    }
+  };
+
+  const createAgentTurnFacade = (principal: InternalAgentTurnPrincipalOptions) => {
+    const assertContextCurrent = () => {
+      assertDispatchAvailable("agent turn");
+      principal.assertContextCurrent?.();
+    };
+    return createInternalAgentTurnFacade({
+      ...principal,
+      assertContextCurrent,
+      getContext: options.getContext,
+      getMethodRegistry: options.getMethodRegistry,
+    });
+  };
 
   const dispatch = async <T>(params: {
     allowedMethods: ReadonlySet<string>;
     client: ReturnType<typeof createSyntheticPluginRuntimeClient>;
     method: string;
-    payload: Record<string, unknown>;
+    payload: unknown;
     timeoutMs?: number;
+    signal?: AbortSignal;
+    assertCurrent?: () => void;
   }): Promise<T> => {
-    if (closed || !options.isDispatchAvailable()) {
-      throw new Error(`Gateway instance dispatch unavailable for ${params.method}`);
-    }
+    assertDispatchAvailable(params.method);
     if (!params.allowedMethods.has(params.method)) {
       throw new Error(`Gateway internal principal cannot dispatch ${params.method}`);
     }
-    return await dispatchGatewayRequestInProcess<T>(params.method, params.payload, {
+    const context = options.getContext();
+    const assertCurrent = () => {
+      assertDispatchAvailable(params.method);
+      if (options.getContext() !== context) {
+        throw new Error(`Gateway instance dispatch unavailable for ${params.method}`);
+      }
+      params.assertCurrent?.();
+    };
+    assertCurrent();
+    const result = await dispatchGatewayRequestInProcess<T>(params.method, params.payload, {
       client: params.client,
-      context: options.getContext(),
+      context,
       methodRegistry: options.getMethodRegistry(),
       requestIdPrefix: "gateway-internal",
       timeoutMs: params.timeoutMs,
+      signal: params.signal,
+      sessionMutationCommitGuard: assertCurrent,
     });
+    assertCurrent();
+    return result;
   };
 
-  const recoveryClient = createSyntheticPluginRuntimeClient({ scopes: [WRITE_SCOPE] });
-  const recoveryMethods = new Set(["agent", "agent.wait"]);
-  const recoveryNoticeMethods = new Set(["message.action"]);
-  const approvalClient = createSyntheticPluginRuntimeClient({ scopes: [APPROVALS_SCOPE] });
+  const recoveryClient = createSyntheticPluginRuntimeClient({
+    operatorRoleActor: { kind: "system" },
+    scopes: [WRITE_SCOPE],
+  });
+  const recoveryAgentTurns = createAgentTurnFacade({
+    client: recoveryClient,
+  });
+  const approvalClient = createSyntheticPluginRuntimeClient({
+    operatorRoleActor: { kind: "system" },
+    scopes: [APPROVALS_SCOPE],
+  });
   const approvalMethods = new Set<GatewayNativeApprovalMethod>(GATEWAY_NATIVE_APPROVAL_METHODS);
-  const approvalRouteClient = createSyntheticPluginRuntimeClient({ scopes: [WRITE_SCOPE] });
+  const approvalRouteClient = createSyntheticPluginRuntimeClient({
+    operatorRoleActor: { kind: "system" },
+    scopes: [WRITE_SCOPE],
+  });
   const approvalRouteMethods = new Set(["send"]);
 
+  const recoverySessionMethods = new Set<GatewayRecoverySessionMethod>([
+    "chat.history",
+    "chat.abort",
+    "sessions.delete",
+  ]);
   const recovery: GatewayRecoveryRuntime = {
-    dispatchAgent: async <T>(payload: Record<string, unknown>, timeoutMs?: number) =>
-      await dispatch<T>({
-        allowedMethods: recoveryMethods,
-        client: recoveryClient,
-        method: "agent",
+    dispatchSessionMethod: (method, payload, requestOptions = {}) =>
+      dispatch({
+        allowedMethods: recoverySessionMethods,
+        client: createSyntheticPluginRuntimeClient({
+          operatorRoleActor: { kind: "system" },
+          scopes: resolveLeastPrivilegeOperatorScopesForMethod(method, payload),
+        }),
+        method,
         payload,
-        timeoutMs,
+        ...requestOptions,
       }),
-    waitForAgent: async <T>(payload: Record<string, unknown>, timeoutMs?: number) =>
-      await dispatch<T>({
-        allowedMethods: recoveryMethods,
-        client: recoveryClient,
-        method: "agent.wait",
-        payload,
-        timeoutMs,
-      }),
-    sendRecoveryNotice: async <T>(payload: Record<string, unknown>, timeoutMs?: number) =>
-      await dispatch<T>({
-        allowedMethods: recoveryNoticeMethods,
-        client: recoveryClient,
-        method: "message.action",
-        payload,
-        timeoutMs,
-      }),
+    startRecoveryTyping: (params) => recoveryTyping.start(params),
+    dispatchAgent: async <T>(
+      payload: AgentRunRequest,
+      timeoutMs?: number,
+      dispatchOptions: GatewayInstanceAgentDispatchOptions = {},
+    ) => {
+      assertDispatchAvailable("agent");
+      const delegatedToolPolicyHandoffId = dispatchOptions.delegatedToolPolicyHandoff
+        ? registerSubagentCompletionToolHandoff(dispatchOptions.delegatedToolPolicyHandoff)
+        : undefined;
+      const needsDedicatedPrincipal = Boolean(
+        dispatchOptions.allowModelOverride === true ||
+        dispatchOptions.allowSyntheticModelOverride === true ||
+        dispatchOptions.allowSyntheticCronRunContinuation === true ||
+        dispatchOptions.internalDeliveryMediaUrls ||
+        dispatchOptions.runtimeContextFragments ||
+        dispatchOptions.internalDeliverySuppressText === true ||
+        delegatedToolPolicyHandoffId ||
+        dispatchOptions.scopes ||
+        dispatchOptions.syntheticScopes,
+      );
+      const agentTurns = needsDedicatedPrincipal
+        ? createAgentTurnFacade({
+            client: createSyntheticPluginRuntimeClient({
+              operatorRoleActor: { kind: "system" },
+              allowModelOverride:
+                dispatchOptions.allowModelOverride === true ||
+                dispatchOptions.allowSyntheticModelOverride === true,
+              cronRunContinuation: dispatchOptions.allowSyntheticCronRunContinuation === true,
+              internalDeliveryMediaUrls: dispatchOptions.internalDeliveryMediaUrls,
+              runtimeContextFragments: dispatchOptions.runtimeContextFragments,
+              internalDeliverySuppressText: dispatchOptions.internalDeliverySuppressText,
+              delegatedToolPolicyHandoffId,
+              scopes: dispatchOptions.scopes ?? dispatchOptions.syntheticScopes,
+            }),
+          })
+        : recoveryAgentTurns;
+      try {
+        return await agentTurns.dispatch<T>(payload, {
+          expectFinal: dispatchOptions.expectFinal,
+          onAccepted: dispatchOptions.onAccepted,
+          onStartOwner: dispatchOptions.onStartOwner,
+          onExecutionStarted: dispatchOptions.onExecutionStarted,
+          onSignalAbort: dispatchOptions.onSignalAbort,
+          signal: dispatchOptions.signal,
+          timeoutMs,
+        });
+      } finally {
+        cancelSubagentCompletionToolHandoff(delegatedToolPolicyHandoffId);
+      }
+    },
+    waitForAgent: async <T>(payload: AgentWaitParams, timeoutMs?: number, signal?: AbortSignal) => {
+      assertDispatchAvailable("agent.wait");
+      return await recoveryAgentTurns.wait<T>(payload, timeoutMs, signal);
+    },
+    sendRecoveryNotice: async (payload) => {
+      if (closed || !options.isDispatchAvailable()) {
+        throw new Error("Gateway instance dispatch unavailable for recovery notice");
+      }
+      const { sendMessage } = await loadOutboundMessageRuntime();
+      const assertNoticeCurrent = () => {
+        if (
+          closed ||
+          !options.isDispatchAvailable() ||
+          payload.isCurrent?.(options.getContext().getRuntimeConfig()) === false
+        ) {
+          throw new Error("Recovery notice owner retired before delivery");
+        }
+      };
+      assertNoticeCurrent();
+      const context = options.getContext();
+      const result = await sendMessage({
+        cfg: context.getRuntimeConfig(),
+        deps: createOutboundSendDeps(context.deps),
+        channel: payload.channel,
+        to: payload.to,
+        accountId: payload.accountId,
+        threadId: payload.threadId,
+        content: payload.text,
+        gatewayOwnedDelivery: true,
+        bestEffort: true,
+        idempotencyKey: payload.idempotencyKey,
+        // Only an explicitly live-only announcement declines durable custody.
+        // Existing guarded callers still need deduplication across owner retries.
+        ...(payload.liveOnly
+          ? { skipQueue: true }
+          : {
+              deliveryIntentId: payload.idempotencyKey,
+              reusePendingDeliveryIntent: true,
+              completionRetention: RECOVERY_NOTICE_COMPLETION_RETENTION,
+            }),
+        onPlatformSendDispatch: async () => assertNoticeCurrent(),
+        // Provider throttles may wait after the asynchronous dispatch check.
+        assertDirectAdapterHandoff: assertNoticeCurrent,
+        abortSignal: AbortSignal.timeout(10_000),
+      });
+      if (result.deliveryStatus === "failed" || result.deliveryStatus === "partial_failed") {
+        throw new Error(result.error ?? "recovery notice delivery failed");
+      }
+      return { suppressed: result.deliveryStatus === "suppressed" };
+    },
   };
   const releaseRecoveryRuntime = registerGatewayRecoveryRuntime(recovery);
 
   const publish = (
-    kind: GatewayApprovalEventKind,
+    kind: ChannelApprovalKind,
     callback: (subscriber: GatewayApprovalEventSubscriber) => void,
     shouldDeliver?: (subscriber: GatewayApprovalEventSubscriber) => boolean,
   ): number => {
@@ -121,6 +296,7 @@ export function createGatewayInstanceRuntime(
   };
 
   return {
+    createAgentTurnFacade,
     approvalEvents: {
       publishRequested: (kind, request) =>
         publish(
@@ -181,8 +357,10 @@ export function createGatewayInstanceRuntime(
       },
     },
     recovery,
+    isAvailable: () => !closed && options.isDispatchAvailable(),
     close: () => {
       closed = true;
+      recoveryTyping.close();
       releaseRecoveryRuntime();
       approvalSubscribers.clear();
       routeCoordinator.close();

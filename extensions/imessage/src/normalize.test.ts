@@ -7,13 +7,27 @@ describe("normalizeIMessageMessagingTarget", () => {
     expect(normalizeIMessageMessagingTarget("   ")).toBeUndefined();
   });
 
-  it("preserves service prefixes for handles", () => {
-    expect(normalizeIMessageMessagingTarget("sms:+1 (555) 222-3333")).toBe("sms:+15552223333");
-    expect(normalizeIMessageMessagingTarget("sms:++1 (555) 222-3333")).toBe("sms:+15552223333");
+  it.each([
+    ["sms:+1 (555) 222-3333", "sms:+15552223333"],
+    ["sms:++1 (555) 222-3333", "sms:+15552223333"],
+    ["Name@Example.com", "name@example.com"],
+    ["tel:+1 (555) 222-3333", "+15552223333"],
+  ])("normalizes handle %s", (input, expected) => {
+    expect(normalizeIMessageMessagingTarget(input)).toBe(expected);
   });
 
-  it("preserves non-phone handles instead of collapsing them to a plus sign", () => {
-    expect(normalizeIMessageMessagingTarget("auto:Alice Smith")).toBe("auto:AliceSmith");
+  it.each([
+    ["Alice Smith", undefined],
+    ["auto:Alice Smith", "auto:AliceSmith"],
+    ["sms:auto:Alice Smith", undefined],
+    ["auto:chatident:AbC", "chatident:AbC"],
+    ["auto:C0AG22RN7L3", "auto:C0AG22RN7L3"],
+  ] as const)("preserves the service and contact boundary for %s", (input, expected) => {
+    expect(normalizeIMessageMessagingTarget(input)).toBe(expected);
+  });
+
+  it("rejects unqualified provider identifiers instead of coercing them into phone numbers", () => {
+    expect(normalizeIMessageMessagingTarget("C0AG22RN7L3")).toBeUndefined();
   });
 
   it("drops service prefixes for chat targets", () => {
@@ -22,11 +36,13 @@ describe("normalizeIMessageMessagingTarget", () => {
     expect(normalizeIMessageMessagingTarget("auto:ChatIdentifier:foo")).toBe("chatidentifier:foo");
   });
 
-  it("treats a bare 32-char hex group chat identifier as a chat_identifier, not a phone number", () => {
-    const hex = "7d5297154d5f436d83dbbdf03fcc8fdd";
-    expect(normalizeIMessageMessagingTarget(hex)).toBe(`chat_identifier:${hex}`);
-    expect(normalizeIMessageMessagingTarget(hex.toUpperCase())).toBe(`chat_identifier:${hex}`);
-  });
+  it.each(["7d5297154d5f436d83dbbdf03fcc8fdd", "1".repeat(32)])(
+    "treats bare 32-hex %s as a chat identifier before phone normalization",
+    (hex) => {
+      expect(normalizeIMessageMessagingTarget(hex)).toBe(`chat_identifier:${hex}`);
+      expect(normalizeIMessageMessagingTarget(hex.toUpperCase())).toBe(`chat_identifier:${hex}`);
+    },
+  );
 });
 
 describe("looksLikeIMessageTargetId", () => {

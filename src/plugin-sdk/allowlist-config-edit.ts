@@ -1,9 +1,11 @@
-// Allowlist config edit helpers build safe config mutations for channel allowlists.
+import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { ConfigWriteTarget } from "../channels/plugins/config-writes.js";
 import type { ChannelAllowlistAdapter } from "../channels/plugins/types.adapters.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
+// Allowlist config edit helpers build safe config mutations for channel allowlists.
+import { resolveChannelAccountKey } from "../routing/account-lookup.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 import { isRecord } from "../utils.js";
 
@@ -191,16 +193,17 @@ function resolveAccountScopedWriteTarget(
   // Once an accounts map exists, even the default account writes through it so scoped
   // and unscoped config do not diverge inside the same channel stanza.
   const accounts = (channel.accounts ??= {}) as Record<string, unknown>;
-  const existingAccount = Object.hasOwn(accounts, normalizedAccountId)
-    ? accounts[normalizedAccountId]
-    : undefined;
+  const accountKey =
+    resolveChannelAccountKey(accounts, normalizedAccountId, channelId, (id) => id) ??
+    normalizedAccountId;
+  const existingAccount = accounts[accountKey];
   if (!existingAccount || typeof existingAccount !== "object") {
-    accounts[normalizedAccountId] = {};
+    accounts[accountKey] = {};
   }
-  const account = accounts[normalizedAccountId] as Record<string, unknown>;
+  const account = accounts[accountKey] as Record<string, unknown>;
   return {
     target: account,
-    pathPrefix: `channels.${channelId}.accounts.${normalizedAccountId}`,
+    pathPrefix: `channels.${channelId}.accounts.${accountKey}`,
     writeTarget: {
       kind: "account",
       scope: { channelId, accountId: normalizedAccountId },
@@ -278,7 +281,7 @@ function applyAccountScopedAllowlistConfigEdit(params: {
     params.channelId,
     params.accountId,
   );
-  const existing: string[] = [];
+  const storedEntries: unknown[] = [];
   let hasStoredList = false;
   for (const path of params.paths.readPaths) {
     const existingRaw = getNestedValue(resolvedTarget.target, path);
@@ -287,24 +290,14 @@ function applyAccountScopedAllowlistConfigEdit(params: {
     }
     hasStoredList = true;
     for (const entry of existingRaw) {
-      const value = String(entry).trim();
-      if (!value || existing.includes(value)) {
-        continue;
-      }
-      existing.push(value);
+      storedEntries.push(entry);
     }
   }
   // A new account override starts from its effective inherited list; otherwise the
   // first scoped edit would silently discard every channel-level entry.
-  if (!hasStoredList) {
-    for (const entry of params.resolveEffectiveEntries?.() ?? []) {
-      const value = String(entry).trim();
-      if (!value || existing.includes(value)) {
-        continue;
-      }
-      existing.push(value);
-    }
-  }
+  const existing = normalizeUniqueStringEntries(
+    hasStoredList ? storedEntries : (params.resolveEffectiveEntries?.() ?? []),
+  );
 
   const normalizedEntry = params.normalize([params.entry]);
   if (normalizedEntry.length === 0) {

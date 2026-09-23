@@ -1,29 +1,21 @@
 // Browser tests cover register.files downloads plugin behavior.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import * as browserCliSharedModule from "../browser-cli-shared.js";
+import * as browserPathsModule from "../../browser/paths.js";
 import {
   createBrowserProgram,
+  mockBrowserGateway,
   getBrowserCliRuntime,
   getBrowserCliRuntimeCapture,
 } from "../browser-cli.test-support.js";
 import * as cliCoreApiModule from "../core-api.js";
 
-const mocks = vi.hoisted(() => ({
-  callBrowserRequest: vi.fn<
-    (
-      _opts: unknown,
-      req: { path?: string },
-      extra?: { timeoutMs?: number },
-    ) => Promise<Record<string, unknown>>
-  >(async (_opts: unknown, req: { path?: string }) =>
-    req.path === "/wait/download" || req.path === "/download"
-      ? { download: { path: "/tmp/openclaw/downloads/file.txt" } }
-      : { ok: true },
-  ),
-}));
-
-vi.spyOn(browserCliSharedModule, "callBrowserRequest").mockImplementation(mocks.callBrowserRequest);
+const gatewayMock = mockBrowserGateway();
+gatewayMock.mockImplementation(async (_method, _opts, request) =>
+  request.path === "/wait/download" || request.path === "/download"
+    ? { download: { path: "/tmp/openclaw/downloads/file.txt" } }
+    : { ok: true },
+);
 const browserCliRuntime = getBrowserCliRuntime();
 vi.spyOn(cliCoreApiModule.defaultRuntime, "log").mockImplementation(browserCliRuntime.log);
 vi.spyOn(cliCoreApiModule.defaultRuntime, "writeJson").mockImplementation(
@@ -31,7 +23,7 @@ vi.spyOn(cliCoreApiModule.defaultRuntime, "writeJson").mockImplementation(
 );
 vi.spyOn(cliCoreApiModule.defaultRuntime, "error").mockImplementation(browserCliRuntime.error);
 vi.spyOn(cliCoreApiModule.defaultRuntime, "exit").mockImplementation(browserCliRuntime.exit);
-vi.spyOn(cliCoreApiModule, "resolveExistingUploadPaths").mockResolvedValue({
+vi.spyOn(browserPathsModule, "resolveExistingUploadPaths").mockResolvedValue({
   ok: true,
   paths: ["/tmp/openclaw/uploads/a.pdf", "/tmp/openclaw/uploads/b.pdf"],
 });
@@ -45,13 +37,13 @@ function createActionInputProgram(): Command {
 }
 
 function getLastRequestOptions(): { timeoutMs?: number } | undefined {
-  return mocks.callBrowserRequest.mock.calls.at(-1)?.[2] as { timeoutMs?: number } | undefined;
+  return gatewayMock.mock.calls.at(-1)?.[2];
 }
 
 describe("browser action input file/download commands", () => {
   beforeEach(() => {
-    mocks.callBrowserRequest.mockClear();
-    vi.mocked(cliCoreApiModule.resolveExistingUploadPaths).mockClear();
+    gatewayMock.mockClear();
+    vi.mocked(browserPathsModule.resolveExistingUploadPaths).mockClear();
     getBrowserCliRuntimeCapture().resetRuntimeCapture();
     getBrowserCliRuntime().exit.mockImplementation(() => {});
   });
@@ -77,12 +69,10 @@ describe("browser action input file/download commands", () => {
       { from: "user" },
     );
 
-    expect(cliCoreApiModule.resolveExistingUploadPaths).toHaveBeenCalledWith({
+    expect(browserPathsModule.resolveExistingUploadPaths).toHaveBeenCalledWith({
       requestedPaths: ["/tmp/openclaw/uploads/a.pdf", "media://inbound/b"],
     });
-    const request = mocks.callBrowserRequest.mock.calls.at(-1)?.[1] as
-      | { path?: string; body?: Record<string, unknown> }
-      | undefined;
+    const request = gatewayMock.mock.calls.at(-1)?.[2];
     expect(request).toMatchObject({
       path: "/hooks/file-chooser",
       body: {
@@ -93,7 +83,7 @@ describe("browser action input file/download commands", () => {
         timeoutMs: 45000,
       },
     });
-    expect(getLastRequestOptions()?.timeoutMs).toBeGreaterThan(45000);
+    expect(getLastRequestOptions()?.timeoutMs).toBe(50000);
   });
 
   it("keeps the outer waitfordownload request open for the advertised default wait", async () => {
@@ -101,7 +91,7 @@ describe("browser action input file/download commands", () => {
 
     await program.parseAsync(["browser", "waitfordownload"], { from: "user" });
 
-    expect(getLastRequestOptions()?.timeoutMs).toBeGreaterThan(120000);
+    expect(getLastRequestOptions()?.timeoutMs).toBe(125000);
   });
 
   it("accepts signed and zero-padded download timeouts", async () => {
@@ -111,7 +101,7 @@ describe("browser action input file/download commands", () => {
       from: "user",
     });
 
-    expect(getLastRequestOptions()?.timeoutMs).toBeGreaterThan(25_000);
+    expect(getLastRequestOptions()?.timeoutMs).toBe(30000);
   });
 
   it("uses custom download timeouts as the inner wait plus outer slack", async () => {
@@ -124,7 +114,7 @@ describe("browser action input file/download commands", () => {
       },
     );
 
-    expect(getLastRequestOptions()?.timeoutMs).toBeGreaterThan(25000);
+    expect(getLastRequestOptions()?.timeoutMs).toBe(30000);
   });
 
   it("rejects non-decimal file and download timeouts before dispatch", async () => {
@@ -142,7 +132,7 @@ describe("browser action input file/download commands", () => {
         from: "user",
       }),
     ).rejects.toThrow("--timeout-ms must be a positive integer.");
-    expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
+    expect(gatewayMock).not.toHaveBeenCalled();
   });
 
   it("rejects conflicting dialog actions without arming the hook", async () => {
@@ -151,8 +141,19 @@ describe("browser action input file/download commands", () => {
     await program.parseAsync(["browser", "dialog", "--accept", "--dismiss"], { from: "user" });
 
     const errorCall = getBrowserCliRuntime().error.mock.calls.at(-1);
-    expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
+    expect(gatewayMock).not.toHaveBeenCalled();
     expect(String(errorCall?.[0])).toContain("Specify only one of --accept or --dismiss");
     expect(getBrowserCliRuntime().exit).toHaveBeenCalledWith(1);
+  });
+
+  it.each(["", "  padded 🦞  "])("preserves prompt response %j", async (prompt) => {
+    await createActionInputProgram().parseAsync(
+      ["browser", "dialog", "--accept", "--prompt", prompt],
+      { from: "user" },
+    );
+    expect(gatewayMock.mock.calls.at(-1)?.[2]).toMatchObject({
+      path: "/hooks/dialog",
+      body: { accept: true, promptText: prompt },
+    });
   });
 });

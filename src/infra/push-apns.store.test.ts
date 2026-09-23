@@ -4,18 +4,22 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
-  closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
+import { persistDevicePairingStoreState } from "./device-pairing-store.js";
+import { resolveNodePairingGeneration, type PairedDevice } from "./device-pairing.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import {
+  ApnsRegistrationPairingChangedError,
   clearApnsRegistrationIfCurrent,
   loadApnsRegistration,
   loadApnsRegistrations,
   registerApnsRegistration,
 } from "./push-apns.js";
+import * as workerAdmission from "./sqlite-worker-operation-admission.js";
 
 const tempDirs = createTrackedTempDirs();
 const APNS_DEVICE_FIELD = "token";
@@ -32,6 +36,7 @@ async function registerDirectApnsRegistration(params: {
   token?: string;
   topic?: string;
   environment?: unknown;
+  expectedPairingGeneration?: string;
   baseDir: string;
 }) {
   return await registerApnsRegistration({
@@ -48,7 +53,7 @@ function databaseEnv(baseDir: string): NodeJS.ProcessEnv {
 
 afterEach(async () => {
   vi.useRealTimers();
-  closeOpenClawStateDatabaseForTest();
+  await closeStateDatabaseForTest();
   await tempDirs.cleanup();
 });
 
@@ -88,7 +93,7 @@ describe("push APNs registration store", () => {
     );
 
     await expect(loadApnsRegistration("legacy-node", baseDir)).resolves.toBeNull();
-    await expect(fs.access(legacyPath)).resolves.toBeUndefined();
+    await fs.access(legacyPath);
   });
 
   it("round-trips direct and sandbox relay fields including relay origin", async () => {
@@ -243,6 +248,135 @@ describe("push APNs registration store", () => {
     ).resolves.toBe(false);
     await expect(loadApnsRegistration("ios-node-1", baseDir)).resolves.toEqual(replacement);
   });
+
+  it("rejects a stale registration after the expected pairing generation is removed", async () => {
+    const baseDir = await makeTempDir();
+    const nodeId = "ios-node-generation-guard";
+    const pairedDevice: PairedDevice = {
+      deviceId: nodeId,
+      publicKey: "public-key-generation-a",
+      role: "node",
+      roles: ["node"],
+      tokens: {
+        node: {
+          token: "node-token-generation-a",
+          role: "node",
+          scopes: [],
+          createdAtMs: 100,
+        },
+      },
+      nodeSurface: {
+        createdAtMs: 200,
+        approvedAtMs: 300,
+      },
+      createdAtMs: 50,
+      approvedAtMs: 300,
+    };
+    persistDevicePairingStoreState(
+      { pendingById: {}, pairedByDeviceId: { [nodeId]: pairedDevice } },
+      baseDir,
+      "paired",
+    );
+    const generation = resolveNodePairingGeneration(pairedDevice);
+    if (!generation) {
+      throw new Error("expected node pairing generation");
+    }
+
+    await registerDirectApnsRegistration({
+      nodeId,
+      expectedPairingGeneration: generation.key,
+      baseDir,
+    });
+    persistDevicePairingStoreState({ pendingById: {}, pairedByDeviceId: {} }, baseDir, "paired", {
+      clearApnsNodeIds: [nodeId],
+    });
+    await expect(loadApnsRegistration(nodeId, baseDir)).resolves.toBeNull();
+
+    const replacementDevice: PairedDevice = {
+      ...pairedDevice,
+      publicKey: "public-key-generation-b",
+      tokens: {
+        node: {
+          token: "node-token-generation-b",
+          role: "node",
+          scopes: [],
+          createdAtMs: 101,
+        },
+      },
+      nodeSurface: {
+        ...pairedDevice.nodeSurface,
+        createdAtMs: 200,
+        approvedAtMs: 301,
+      },
+    };
+    persistDevicePairingStoreState(
+      { pendingById: {}, pairedByDeviceId: { [nodeId]: replacementDevice } },
+      baseDir,
+      "paired",
+    );
+    const replacementGeneration = resolveNodePairingGeneration(replacementDevice);
+    if (!replacementGeneration) {
+      throw new Error("expected replacement node pairing generation");
+    }
+    const replacement = await registerDirectApnsRegistration({
+      nodeId,
+      token: "DCBA4321DCBA4321DCBA4321DCBA4321",
+      expectedPairingGeneration: replacementGeneration.key,
+      baseDir,
+    });
+    await expect(loadApnsRegistration(nodeId, baseDir)).resolves.toEqual(replacement);
+
+    await expect(
+      registerDirectApnsRegistration({
+        nodeId,
+        token: "ABCD1234ABCD1234ABCD1234ABCD1234",
+        expectedPairingGeneration: generation.key,
+        baseDir,
+      }),
+    ).rejects.toBeInstanceOf(ApnsRegistrationPairingChangedError);
+    await expect(loadApnsRegistration(nodeId, baseDir)).resolves.toEqual(replacement);
+  });
+
+  it.each(["transaction", "commit"] as const)(
+    "keeps the prior APNs owner when the connection changes before worker %s admission",
+    async (stage) => {
+      const baseDir = await makeTempDir();
+      const previous = await registerDirectApnsRegistration({ nodeId: "ios-lease", baseDir });
+      const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
+      let connectionCurrent = true;
+      let reachedStage = false;
+      const admission = vi
+        .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
+        .mockImplementation((admit) =>
+          createAdmission((request, grant) => {
+            if (request.stage === stage) {
+              reachedStage = true;
+              connectionCurrent = false;
+            }
+            admit(request, grant);
+          }),
+        );
+      try {
+        await expect(
+          registerApnsRegistration({
+            nodeId: "ios-lease",
+            token: "DCBA4321DCBA4321DCBA4321DCBA4321",
+            topic: "ai.openclaw.ios",
+            baseDir,
+            assertCurrent: () => {
+              if (!connectionCurrent) {
+                throw new ApnsRegistrationPairingChangedError();
+              }
+            },
+          }),
+        ).rejects.toBeInstanceOf(ApnsRegistrationPairingChangedError);
+        expect(reachedStage).toBe(true);
+        await expect(loadApnsRegistration("ios-lease", baseDir)).resolves.toEqual(previous);
+      } finally {
+        admission.mockRestore();
+      }
+    },
+  );
 
   it("rejects invalid direct and relay inputs", async () => {
     const baseDir = await makeTempDir();

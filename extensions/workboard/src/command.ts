@@ -58,6 +58,9 @@ function formatCardDetails(card: WorkboardCard): string {
   if (card.runId) {
     lines.push(`run: ${card.runId}`);
   }
+  if (card.metadata?.archivedAt) {
+    lines.push("archived: yes (excluded from dispatch)");
+  }
   if (card.notes) {
     lines.push("", card.notes);
   }
@@ -101,6 +104,7 @@ async function handleWorkboardCommand(params: {
   store: WorkboardStore;
   args?: string;
   senderIsOwner?: boolean;
+  assertOwnerCurrent?: () => void;
   gatewayClientScopes?: readonly string[];
   resolveAgentWorkspace?: (agentId?: string) => string;
   resolveAgentWorkspaceRuntime?: (
@@ -150,7 +154,11 @@ async function handleWorkboardCommand(params: {
     const workspaceAccess = await canonicalizeWorkboardWorkspaceAccess(
       params.workspaceAccess ?? { unrestricted: true },
     );
-    const card = await params.store.create({ title, workspaceAccess });
+    const card = await params.store.create(
+      { title, workspaceAccess },
+      undefined,
+      params.assertOwnerCurrent,
+    );
     return { text: `Created ${card.id.slice(0, 8)} ${card.title}` };
   }
   if (action === "move") {
@@ -178,7 +186,13 @@ async function handleWorkboardCommand(params: {
     if (!card) {
       return { text: error, isError: true };
     }
-    return { text: formatCardLine(await params.store.move(card.id, status, undefined)) };
+    return {
+      text: formatCardLine(
+        await params.store.move(card.id, status, undefined, undefined, {
+          assertOwnerCurrent: params.assertOwnerCurrent,
+        }),
+      ),
+    };
   }
   if (action === "dispatch") {
     const accessError = requireWriteAccess(params);
@@ -195,6 +209,7 @@ async function handleWorkboardCommand(params: {
         resolveAgentWorkspace: params.resolveAgentWorkspace,
         resolveAgentWorkspaceRuntime: params.resolveAgentWorkspaceRuntime,
         workspaceAccess,
+        assertOwnerCurrent: params.assertOwnerCurrent,
       },
     });
     return {
@@ -225,6 +240,7 @@ export function registerWorkboardCommand(params: {
         store: params.store,
         args: ctx.args,
         senderIsOwner: ctx.senderIsOwner,
+        assertOwnerCurrent: ctx.gatewayClientScopes ? undefined : ctx.assertOwnerCurrent,
         gatewayClientScopes: ctx.gatewayClientScopes,
         resolveAgentWorkspace: (agentId) => resolveWorkboardAgentWorkspace(ctx.config, agentId),
         resolveAgentWorkspaceRuntime: (agentId, sessionKey, workspaceDir, modelProvider, modelId) =>

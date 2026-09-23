@@ -2,11 +2,12 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import type { ResolvedTelegramAccount } from "./accounts.js";
-import { createTelegramPluginBase, telegramConfigAdapter } from "./shared.js";
+import { telegramConfigAdapter } from "./config-adapter.js";
+import { createTelegramPluginBase } from "./shared.js";
 
 const telegramPluginBase = createTelegramPluginBase({
   setupWizard: {} as never,
-  setup: {} as never,
+  setupContract: {} as never,
 });
 
 function createCfg(): OpenClawConfig {
@@ -29,25 +30,30 @@ function resolveAccount(cfg: OpenClawConfig, accountId: string): ResolvedTelegra
 }
 
 describe("createTelegramPluginBase config duplicate token guard", () => {
-  it("wires the top-level models menu adapter into the production plugin", () => {
-    const channelData = telegramPluginBase.commands?.buildModelsMenuChannelData?.({
-      providers: [
-        { id: "anthropic", count: 2 },
-        { id: "openai", count: 3 },
-      ],
-    });
-
-    expect(channelData).toEqual({
-      telegram: {
-        buttons: [
-          [
-            { text: "anthropic (2)", callback_data: "mdl_list_anthropic_1" },
-            { text: "openai (3)", callback_data: "mdl_list_openai_1" },
-          ],
+  it.each(["buildModelsMenuChannelData", "buildModelsProviderChannelData"] as const)(
+    "%s renders providers and preserves the empty fallback",
+    (hook) => {
+      const render = telegramPluginBase.commands?.[hook];
+      const channelData = render?.({
+        providers: [
+          { id: "anthropic", count: 2 },
+          { id: "openai", count: 3 },
         ],
-      },
-    });
-  });
+      });
+
+      expect(channelData).toEqual({
+        telegram: {
+          buttons: [
+            [
+              { text: "anthropic (2)", callback_data: "mdl_list_anthropic_1" },
+              { text: "openai (3)", callback_data: "mdl_list_openai_1" },
+            ],
+          ],
+        },
+      });
+      expect(render?.({ providers: [] })).toBeNull();
+    },
+  );
 
   it("wires the guided add-provider adapter into the production plugin", () => {
     const channelData = telegramPluginBase.commands?.buildModelsAddProviderChannelData?.({
@@ -166,6 +172,11 @@ describe("createTelegramPluginBase config duplicate token guard", () => {
     const account = resolveAccount(cfg, "default");
     expect(await telegramPluginBase.config.isConfigured!(account, cfg)).toBe(false);
     expect(telegramPluginBase.config.unconfiguredReason?.(account, cfg)).toContain("unavailable");
+    expect(telegramPluginBase.config.describeAccount?.(account, cfg)).toMatchObject({
+      configured: true,
+      tokenSource: "tokenFile",
+      tokenStatus: "configured_unavailable",
+    });
   });
 
   it("keeps read-only accessors from resolving bot token SecretRefs", () => {

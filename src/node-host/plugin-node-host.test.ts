@@ -2,9 +2,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import {
+  hasRegisteredNodeHostCommandActiveWork,
   invokeRegisteredNodeHostCommand,
+  isRegisteredNodeHostCommandDuplex,
   listRegisteredNodeHostCapsAndCommands,
+  notifyRegisteredNodeHostCommandDisconnect,
   watchRegisteredNodeHostCommandAvailability,
 } from "./plugin-node-host.js";
 
@@ -15,6 +19,30 @@ afterEach(() => {
 });
 
 describe("plugin node-host registry", () => {
+  it("advertises optional duplex to unary nodes and forwards IO only when available", async () => {
+    const handle = vi.fn(async () => "{}");
+    const registry = createEmptyPluginRegistry();
+    registry.nodeHostCommands.push({
+      pluginId: "files",
+      source: "test",
+      command: { command: "file.fetch", cap: "file", duplex: "optional", handle },
+    });
+    setActivePluginRegistry(registry);
+    expect(
+      listRegisteredNodeHostCapsAndCommands(availabilityContext, { includeDuplex: false }).commands,
+    ).toEqual(["file.fetch"]);
+    expect(isRegisteredNodeHostCommandDuplex("file.fetch")).toBe(true);
+    await expect(invokeRegisteredNodeHostCommand("file.fetch", "{}")).resolves.toBe("{}");
+    expect(handle).toHaveBeenLastCalledWith("{}", undefined);
+    const io = {
+      signal: new AbortController().signal,
+      emitChunk: async () => {},
+      onInput: () => {},
+    };
+    await invokeRegisteredNodeHostCommand("file.fetch", "{}", io);
+    expect(handle).toHaveBeenLastCalledWith("{}", io);
+  });
+
   it("lists plugin-declared caps and commands", () => {
     const registry = createEmptyPluginRegistry();
     registry.nodeHostCommands = [
@@ -96,6 +124,42 @@ describe("plugin node-host registry", () => {
     ]);
   });
 
+  it("publishes a validated Computer Use descriptor beside its command pair", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.nodeHostCommands = [
+      {
+        pluginId: "computer",
+        pluginName: "Computer",
+        command: {
+          command: "computer.act",
+          cap: "computer",
+          computerUse: () => ({
+            contractVersion: 2,
+            provider: { id: "fixture", label: "Fixture", generation: "generation-1" },
+            actions: ["screenshot", "left_click"],
+            targets: ["screen"],
+            deliveryModes: ["foreground"],
+            observations: ["image"],
+            features: { recording: false, agentCursor: false, multiDisplay: false },
+          }),
+          handle: vi.fn(async () => "{}"),
+        },
+        source: "test",
+      },
+    ];
+    setActivePluginRegistry(registry);
+
+    expect(listRegisteredNodeHostCapsAndCommands(availabilityContext)).toMatchObject({
+      caps: ["computer"],
+      commands: ["computer.act"],
+      computerUse: {
+        contractVersion: 2,
+        provider: { id: "fixture", generation: "generation-1" },
+        actions: ["screenshot", "left_click"],
+      },
+    });
+  });
+
   it("skips agent tool descriptors with provider-unsafe names", () => {
     const registry = createEmptyPluginRegistry();
     registry.nodeHostCommands = [
@@ -166,6 +230,7 @@ describe("plugin node-host registry", () => {
     let notify: (() => void) | undefined;
     const cleanup = vi.fn();
     const onChange = vi.fn();
+    const scopedRegistry = vi.fn();
     const registry = createEmptyPluginRegistry();
     registry.nodeHostCommands = [
       {
@@ -176,7 +241,11 @@ describe("plugin node-host registry", () => {
           cap: "browser",
           watchAvailability: (_context, callback) => {
             notify = callback;
-            return cleanup;
+            scopedRegistry(getPluginRuntimeGatewayRequestScope()?.pluginRegistry);
+            return () => {
+              scopedRegistry(getPluginRuntimeGatewayRequestScope()?.pluginRegistry);
+              cleanup();
+            };
           },
           handle: vi.fn(async () => "{}"),
         },
@@ -185,15 +254,99 @@ describe("plugin node-host registry", () => {
     ];
     setActivePluginRegistry(registry);
 
-    const stop = watchRegisteredNodeHostCommandAvailability(availabilityContext, onChange);
+    const stop = watchRegisteredNodeHostCommandAvailability(availabilityContext, () => {
+      scopedRegistry(getPluginRuntimeGatewayRequestScope()?.pluginRegistry);
+      onChange();
+    });
     notify?.();
     expect(onChange).toHaveBeenCalledOnce();
     stop();
     expect(cleanup).toHaveBeenCalledOnce();
+    expect(scopedRegistry).toHaveBeenCalledTimes(3);
+    expect(scopedRegistry).toHaveBeenNthCalledWith(1, registry);
+    expect(scopedRegistry).toHaveBeenNthCalledWith(2, registry);
+    expect(scopedRegistry).toHaveBeenNthCalledWith(3, registry);
+  });
+
+  it("notifies each shared plugin disconnect owner once", async () => {
+    const onDisconnect = vi.fn(async () => {});
+    const registry = createEmptyPluginRegistry();
+    registry.nodeHostCommands = ["screen.snapshot", "computer.act"].map((command) => ({
+      pluginId: "computer",
+      pluginName: "Computer",
+      command: { command, onDisconnect, handle: vi.fn(async () => "{}") },
+      source: "test",
+    }));
+    setActivePluginRegistry(registry);
+
+    await notifyRegisteredNodeHostCommandDisconnect();
+
+    expect(onDisconnect).toHaveBeenCalledOnce();
+  });
+
+  it("retains plugin work after invocation and availability end until its owner cleans up", async () => {
+    let busy = false;
+    let available = true;
+    const registry = createEmptyPluginRegistry();
+    registry.nodeHostCommands = [
+      {
+        pluginId: "meeting",
+        pluginName: "Meeting",
+        source: "test",
+        command: {
+          command: "meeting.start",
+          isAvailable: () => available,
+          handle: async () => {
+            busy = true;
+            return "{}";
+          },
+          hasActiveWork: () => {
+            expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(registry);
+            return busy;
+          },
+          onDisconnect: () => {
+            busy = false;
+          },
+        },
+      },
+    ];
+    setActivePluginRegistry(registry);
+
+    expect(hasRegisteredNodeHostCommandActiveWork()).toBe(false);
+    await invokeRegisteredNodeHostCommand("meeting.start");
+    available = false;
+    expect(listRegisteredNodeHostCapsAndCommands(availabilityContext).commands).toEqual([]);
+    expect(hasRegisteredNodeHostCommandActiveWork()).toBe(true);
+    await notifyRegisteredNodeHostCommandDisconnect();
+    expect(hasRegisteredNodeHostCommandActiveWork()).toBe(false);
+  });
+
+  it("keeps uncertain plugin work busy when its owner query throws", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.nodeHostCommands = [
+      {
+        pluginId: "meeting",
+        pluginName: "Meeting",
+        source: "test",
+        command: {
+          command: "meeting.start",
+          handle: async () => "{}",
+          hasActiveWork: () => {
+            throw new Error("work state unavailable");
+          },
+        },
+      },
+    ];
+    setActivePluginRegistry(registry);
+
+    expect(hasRegisteredNodeHostCommandActiveWork()).toBe(true);
   });
 
   it("dispatches plugin-declared node-host commands", async () => {
-    const handle = vi.fn(async (paramsJSON?: string | null) => paramsJSON ?? "");
+    const handle = vi.fn(async (paramsJSON?: string | null) => {
+      expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(registry);
+      return paramsJSON ?? "";
+    });
     const registry = createEmptyPluginRegistry();
     registry.nodeHostCommands = [
       {
@@ -217,7 +370,10 @@ describe("plugin node-host registry", () => {
       invokeRegisteredNodeHostCommand("browser.proxy", '{"ok":true}', undefined, context),
     ).resolves.toBe('{"ok":true}');
     await expect(invokeRegisteredNodeHostCommand("missing.command", null)).resolves.toBeNull();
-    expect(handle).toHaveBeenCalledWith('{"ok":true}', undefined, context);
+    expect(handle).toHaveBeenCalledWith('{"ok":true}', undefined, {
+      ...context,
+      prepareExecAuthorization: expect.any(Function),
+    });
   });
 
   it("gates duplex commands from embedded-worker manifests and supplies their IO context", async () => {

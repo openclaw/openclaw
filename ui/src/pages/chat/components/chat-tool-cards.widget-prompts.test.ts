@@ -1,5 +1,5 @@
 /* @vitest-environment jsdom */
-// Covers the interactive-widget prompt channel: offer adoption, text
+// Covers the URL-only Canvas prompt channel: offer adoption, text
 // validation, rate limiting, user-interaction gating, and external-embed
 // rejection — all through the real port + DOM event path.
 
@@ -20,7 +20,6 @@ function renderWidgetPreviewFrame(url: string, allowExternalEmbedUrls = false) {
         kind: "canvas",
         surface: "assistant_message",
         render: "url",
-        viewId: "cv_prompt",
         url,
       },
       "chat_message",
@@ -79,23 +78,29 @@ function restoreActiveElement() {
   delete (document as unknown as Record<string, unknown>).activeElement;
 }
 
-describe("widget prompts", () => {
+describe("URL-only widget prompts", () => {
   it("adopts the bridge's prompt port offer and enforces the prompt contract", async () => {
     const { container, frame } = renderWidgetPreviewFrame(
       "/__openclaw__/canvas/documents/cv_prompt/index.html",
     );
     // The bridge posts its offer at parse time, before the frame's load event.
     const port = offerPromptPort(frame);
+    const hostMessages: unknown[] = [];
+    port.addEventListener("message", (event) => hostMessages.push(event.data));
+    port.start();
     frame.dispatchEvent(new Event("load"));
+    await flushPorts();
+    expect(hostMessages).toContainEqual({ type: "openclaw:widget-prompt-host-ready" });
     emulateInteractableFrame(frame);
     const received = collectPromptEvents(container);
     try {
       postPrompt(port, "  Show details  ");
       await flushPorts();
       expect(received).toEqual(["Show details"]);
-      // Slash commands would run UI commands such as /approve on the widget's
-      // behalf; the send path must only ever receive conversational text.
+      // Slash and bang commands would run host commands on the widget's behalf;
+      // the send path must only ever receive conversational text.
       postPrompt(port, "/approve");
+      postPrompt(port, "!pwd");
       postPrompt(port, "   ");
       postPrompt(port, 42);
       postPrompt(port, "x".repeat(4_001));

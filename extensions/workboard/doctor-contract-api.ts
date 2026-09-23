@@ -1,8 +1,10 @@
 // Workboard API module exposes the plugin public contract.
+import { fileURLToPath } from "node:url";
 import type {
   PluginDoctorStateMigration,
   PluginDoctorStateMigrationContext,
-} from "openclaw/plugin-sdk/runtime-doctor";
+  PluginStateKeyedStore,
+} from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import type {
   PersistedWorkboardAttachment,
   PersistedWorkboardBoard,
@@ -10,7 +12,6 @@ import type {
   PersistedWorkboardNotificationSubscription,
   WorkboardKeyedStore,
 } from "./src/persistence-types.js";
-import { createWorkboardSqliteStores, resolveWorkboardSqlitePath } from "./src/sqlite-store.js";
 
 const MAX_CARDS = 2000;
 
@@ -23,7 +24,7 @@ function openLegacyStore<T>(params: {
   env: NodeJS.ProcessEnv;
   namespace: string;
   maxEntries: number;
-}): WorkboardKeyedStore<T> {
+}): PluginStateKeyedStore<T> {
   return params.context.openPluginStateKeyedStore<T>({
     namespace: params.namespace,
     maxEntries: params.maxEntries,
@@ -177,34 +178,40 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     label: "Workboard .28 plugin-state KV",
     async detectLegacyState(params) {
       const env = migrationEnv(params);
-      const cards = await openLegacyStore<PersistedWorkboardCard>({
+      const cards = openLegacyStore<PersistedWorkboardCard>({
         context: params.context,
         env,
         namespace: "workboard.cards",
         maxEntries: MAX_CARDS,
-      }).entries();
-      const boards = await openLegacyStore<PersistedWorkboardBoard>({
+      });
+      const boards = openLegacyStore<PersistedWorkboardBoard>({
         context: params.context,
         env,
         namespace: "workboard.boards",
         maxEntries: 200,
-      }).entries();
-      const subscriptions = await openLegacyStore<PersistedWorkboardNotificationSubscription>({
+      });
+      const subscriptions = openLegacyStore<PersistedWorkboardNotificationSubscription>({
         context: params.context,
         env,
         namespace: "workboard.notify",
         maxEntries: 2000,
-      }).entries();
-      const attachments = await openLegacyStore<PersistedWorkboardAttachment>({
+      });
+      const attachments = openLegacyStore<PersistedWorkboardAttachment>({
         context: params.context,
         env,
         namespace: "workboard.attachments",
         maxEntries: MAX_CARDS * 21,
-      }).entries();
-      const count = cards.length + boards.length + subscriptions.length + attachments.length;
+      });
+      let count = 0;
+      for (const store of [cards, boards, subscriptions, attachments]) {
+        count += store.count ? await store.count() : (await store.entries()).length;
+      }
       if (count === 0) {
         return null;
       }
+      // Empty legacy namespaces need no SQLite runtime. Resolve the target only
+      // when there is state to preview and migrate.
+      const { resolveWorkboardSqlitePath } = await import("./src/sqlite-store-paths.js");
       return {
         preview: [
           `- Workboard: ${count} legacy .28 plugin-state KV ${count === 1 ? "entry" : "entries"} → ${resolveWorkboardSqlitePath(env)}`,
@@ -212,6 +219,8 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       };
     },
     async migrateLegacyState(params) {
+      const { createWorkboardSqliteStores } = await import("./src/sqlite-store.js");
+      const { resolveWorkboardSqliteWorkerModuleUrl } = await import("./src/sqlite-store-paths.js");
       const env = migrationEnv(params);
       const cards = openLegacyStore<PersistedWorkboardCard>({
         context: params.context,
@@ -237,7 +246,10 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         namespace: "workboard.attachments",
         maxEntries: MAX_CARDS * 21,
       });
-      const sqlite = createWorkboardSqliteStores({ env });
+      const sqlite = createWorkboardSqliteStores({
+        env,
+        workerModuleUrl: resolveWorkboardSqliteWorkerModuleUrl(fileURLToPath(import.meta.url)),
+      });
       try {
         const cardResult = await migrateNamespace({
           label: "card",
@@ -282,7 +294,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
           ],
         };
       } finally {
-        sqlite.close();
+        await sqlite.close();
       }
     },
   },

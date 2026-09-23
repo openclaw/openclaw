@@ -1,10 +1,21 @@
+import { downloadArtifact } from "../../api/artifact-download.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import type { ApplicationContext } from "../../app/context.ts";
 import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
+import { t } from "../../i18n/index.ts";
+import {
+  resolveControlUiFollowUpMode,
+  resolveControlUiServerQueueMode,
+} from "../../lib/chat/follow-up-mode.ts";
+import { getChatHistoryLoadState } from "./chat-history-state.ts";
+import type { ChatState } from "./chat-state-contract.ts";
+import type { ChatPageHost } from "./chat-state-host.ts";
 
 type SelectedSessionProjectionState = {
   chatEffectiveQueueMode?: GatewaySessionRow["effectiveQueueMode"];
   chatQueueModeOverride?: GatewaySessionRow["queueMode"];
   selectedChatSessionArchived: boolean;
+  selectedChatSessionIncognito: boolean;
 };
 
 export function applySelectedSessionProjection(
@@ -15,9 +26,66 @@ export function applySelectedSessionProjection(
     return false;
   }
   state.selectedChatSessionArchived = session.archived === true;
+  state.selectedChatSessionIncognito = session.incognito === true;
   state.chatQueueModeOverride = session.queueMode;
   state.chatEffectiveQueueMode = session.effectiveQueueMode;
   return true;
+}
+
+const MAX_TRACKED_SESSION_ROWS = 256;
+const CHAT_ARTIFACT_IMAGE_MIME = /^image\/(?:png|jpeg|gif|webp|avif)$/u;
+
+export class SessionParticipationTracker {
+  private readonly lastBlocked = new Map<string, boolean>();
+
+  reset(): void {
+    this.lastBlocked.clear();
+  }
+
+  resolve(params: {
+    catalog: boolean;
+    listLoading: boolean;
+    sessionKey: string;
+    session: Pick<GatewaySessionRow, "sharingRole" | "visibility"> | undefined;
+  }): boolean {
+    if (params.catalog) {
+      return false;
+    }
+    if (params.session) {
+      const blocked =
+        params.session.visibility === "draft"
+          ? params.session.sharingRole !== "admin" && params.session.sharingRole !== "owner"
+          : params.session.visibility !== undefined &&
+            params.session.visibility !== "shared" &&
+            params.session.sharingRole === "viewer";
+      this.remember(params.sessionKey, blocked);
+      return blocked;
+    }
+    // The selected session has no row. Absence is NOT a revocation signal:
+    // filtering, search, pagination, and deletion all remove a row the caller
+    // can still write to, so inferring a block would wrongly disable a valid
+    // session. Block only on a positively observed restricted state above.
+    // During an in-flight refresh, hold the last known block so a restricted
+    // session does not flicker enabled; a completed absence never blocks. The
+    // redaction case (a session hidden from a non-owner) is handled once the
+    // explicit revocation signal lands (openclaw/openclaw#112760).
+    if (params.listLoading) {
+      return this.lastBlocked.get(params.sessionKey) === true;
+    }
+    return false;
+  }
+
+  private remember(sessionKey: string, blocked: boolean): void {
+    this.lastBlocked.delete(sessionKey);
+    this.lastBlocked.set(sessionKey, blocked);
+    if (this.lastBlocked.size <= MAX_TRACKED_SESSION_ROWS) {
+      return;
+    }
+    const oldest = this.lastBlocked.keys().next().value;
+    if (oldest) {
+      this.lastBlocked.delete(oldest);
+    }
+  }
 }
 
 export function resolveAssistantAttachmentAuthToken(state: {
@@ -28,6 +96,39 @@ export function resolveAssistantAttachmentAuthToken(state: {
   return resolveControlUiAuthToken(state);
 }
 
+export async function resolveChatArtifactDownload(
+  state: Parameters<typeof downloadArtifact>[0],
+  params: { sessionKey: string; artifactId: string },
+  signal?: AbortSignal,
+): Promise<{ url: string; expiresAt?: string; blob?: Blob } | null> {
+  const result = await downloadArtifact(state, params, signal);
+  if (
+    result?.blob &&
+    (result.artifact.type !== "image" ||
+      !CHAT_ARTIFACT_IMAGE_MIME.test(result.blob.type.split(";", 1)[0]?.trim().toLowerCase() ?? ""))
+  ) {
+    return null;
+  }
+  if (
+    result?.encoding === "base64" &&
+    result.artifact.type === "image" &&
+    CHAT_ARTIFACT_IMAGE_MIME.test(result.artifact.mimeType ?? "") &&
+    result.data
+  ) {
+    return { url: `data:${result.artifact.mimeType};base64,${result.data}` };
+  }
+  const url = typeof result?.url === "string" ? result.url.trim() : "";
+  if (!url) {
+    return null;
+  }
+  const expiresAt = typeof result?.expiresAt === "string" ? result.expiresAt.trim() : undefined;
+  return {
+    url,
+    ...(expiresAt ? { expiresAt } : {}),
+    ...(result?.blob ? { blob: result.blob } : {}),
+  };
+}
+
 export function dismissChatError(state: {
   chatError?: string | null;
   lastError: string | null;
@@ -36,4 +137,29 @@ export function dismissChatError(state: {
   state.lastError = null;
   state.lastErrorCode = null;
   state.chatError = null;
+}
+
+export function initialHistorySubmitState(state: ChatState, unavailable: boolean) {
+  const historyLoad = getChatHistoryLoadState(state);
+  const failure = unavailable && historyLoad.phase === "failed" ? historyLoad.message : null;
+  return {
+    submitDisabledReason: unavailable ? (failure ?? t("chat.thread.loading")) : null,
+    submitPending: unavailable && historyLoad.phase !== "failed",
+  };
+}
+
+export function resolveChatPaneFollowUpMode(
+  state: Pick<ChatPageHost, "settings" | "chatEffectiveQueueMode" | "chatQueueModeOverride">,
+  session: GatewaySessionRow | undefined,
+  runtimeConfig: ApplicationContext["runtimeConfig"]["state"],
+) {
+  return resolveControlUiFollowUpMode(
+    state.settings.chatFollowUpMode,
+    resolveControlUiServerQueueMode(runtimeConfig.configSnapshot?.runtimeConfig, {
+      configNeedsApply: runtimeConfig.configNeedsApply,
+      effectiveMode: state.chatEffectiveQueueMode,
+      sessionMetadataLoaded: session !== undefined || state.chatEffectiveQueueMode !== undefined,
+      sessionMode: state.chatQueueModeOverride,
+    }),
+  );
 }

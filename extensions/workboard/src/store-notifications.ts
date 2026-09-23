@@ -37,7 +37,7 @@ export class WorkboardNotificationStore extends WorkboardWorkflowStore {
   ): Promise<{ subscriptions: WorkboardNotificationSubscription[] }> {
     const boardId = normalizeBoardId(input.boardId);
     const cardId = normalizeBoundedString(input.cardId, undefined, 120, "card id");
-    const subscriptions = (await this.subscriptionStore.entries())
+    const subscriptions = (await this.subscriptionStore.entries({ boardId, cardId }))
       .map((entry) => entry.value)
       .filter(
         (entry): entry is PersistedWorkboardNotificationSubscription =>
@@ -51,7 +51,9 @@ export class WorkboardNotificationStore extends WorkboardWorkflowStore {
   }
 
   async deleteNotificationSubscription(id: string): Promise<{ deleted: boolean }> {
-    return { deleted: await this.subscriptionStore.delete(id.trim()) };
+    return await this.enqueueMutation(async () => ({
+      deleted: await this.subscriptionStore.delete(id.trim()),
+    }));
   }
 
   private async collectNotificationEvents(input: WorkboardNotificationEventsInput = {}): Promise<{
@@ -82,8 +84,14 @@ export class WorkboardNotificationStore extends WorkboardWorkflowStore {
     const effectiveSessionKey = subscription?.sessionKey;
     const effectiveRunId = subscription?.runId;
     const events: WorkboardNotification[] = [];
-    for (const card of await this.list({ boardId: effectiveBoardId })) {
-      if (effectiveCardId && card.id !== effectiveCardId) {
+    const selectedCard = effectiveCardId ? await this.get(effectiveCardId) : undefined;
+    const cards = effectiveCardId
+      ? selectedCard
+        ? [selectedCard]
+        : []
+      : await this.list({ boardId: effectiveBoardId });
+    for (const card of cards) {
+      if (card.metadata?.archivedAt || (effectiveCardId && card.id !== effectiveCardId)) {
         continue;
       }
       const stale = card.metadata?.stale;
@@ -115,20 +123,19 @@ export class WorkboardNotificationStore extends WorkboardWorkflowStore {
         if (subscription?.eventKinds?.length && !subscription.eventKinds.includes(event.kind)) {
           continue;
         }
-        const eventSequence = notificationSequence(event);
-        if (subscription?.lastEventSequence && eventSequence !== undefined) {
-          if (
-            eventSequence < subscription.lastEventSequence ||
-            (eventSequence === subscription.lastEventSequence &&
-              event.id <= (subscription.lastEventId ?? ""))
-          ) {
-            continue;
-          }
-        } else if (
-          subscription?.lastEventAt &&
-          (event.createdAt < subscription.lastEventAt ||
-            (event.createdAt === subscription.lastEventAt &&
-              event.id <= (subscription.lastEventId ?? "")))
+        // Cursor advancement must use the same mixed-sequence ordering as
+        // event delivery or valid same-millisecond notifications disappear.
+        if (
+          subscription?.lastEventAt !== undefined &&
+          compareNotifications(event, {
+            id: subscription.lastEventId ?? "",
+            kind: event.kind,
+            createdAt: subscription.lastEventAt,
+            ...(subscription.lastEventSequence !== undefined
+              ? { sequence: subscription.lastEventSequence }
+              : {}),
+            message: "",
+          }) <= 0
         ) {
           continue;
         }

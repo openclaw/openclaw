@@ -1,12 +1,19 @@
 // Provider catalog shared tests cover catalog hashing, normalization, and model visibility.
 import type { ModelCatalogProvider } from "@openclaw/model-catalog-core/model-catalog-types";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  captureProviderCatalogExpiries,
+  recordLiveCatalogExpiry,
+  withProviderCatalogExpiry,
+} from "../plugins/provider-catalog-expiry.js";
 import {
   applyProviderNativeStreamingUsageCompat,
   buildManifestModelProviderConfig,
   clearLiveCatalogCacheForTests,
   getCachedLiveCatalogValue,
   readConfiguredProviderCatalogEntries,
+  readManifestProviderDefaultModelRef,
   supportsNativeStreamingUsageCompat,
 } from "./provider-catalog-shared.js";
 import type { ModelDefinitionConfig } from "./provider-model-shared.js";
@@ -91,6 +98,120 @@ describe("provider-catalog-shared live catalog cache", () => {
     ).resolves.toBe("ok");
     expect(load).toHaveBeenCalledTimes(2);
   });
+
+  it.each([undefined, 64_000])(
+    "retains slow successful catalogs without extending absolute expiry %s",
+    async (absoluteExpiry) => {
+      let now = 1_000;
+      const pending = createDeferred<string>();
+      const load = vi.fn(() => pending.promise);
+      const read = () =>
+        captureProviderCatalogExpiries(() =>
+          withProviderCatalogExpiry(
+            async () => {
+              if (absoluteExpiry !== undefined) {
+                recordLiveCatalogExpiry(absoluteExpiry);
+              }
+              return getCachedLiveCatalogValue({
+                keyParts: ["slow-provider", absoluteExpiry],
+                load,
+                now: () => now,
+              });
+            },
+            () => ["fixture"],
+          ),
+        );
+
+      const first = read();
+      now = 63_600;
+      pending.resolve("usable");
+      const completed = await first;
+      expect(completed.value).toBe("usable");
+      const expectedExpiry = absoluteExpiry ?? 93_600;
+      expect(completed.providerExpiries.get("fixture")).toBe(expectedExpiry);
+
+      now = 63_800;
+      const cached = await read();
+      expect(cached.value).toBe("usable");
+      expect(cached.providerExpiries.get("fixture")).toBe(expectedExpiry);
+      expect(load).toHaveBeenCalledOnce();
+
+      now = 93_600;
+      await read();
+      expect(load).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it.each(["resolve", "reject", "throw"] as const)(
+    "bypasses a warm cache without modifying it when the uncached loader will %s",
+    async (outcome) => {
+      const keyParts = ["provider", "models"];
+      await getCachedLiveCatalogValue({ keyParts, load: async () => "cached" });
+      const error = new Error("uncached failure");
+      const load = vi.fn(() => {
+        if (outcome === "throw") {
+          throw error;
+        }
+        return outcome === "reject" ? Promise.reject(error) : Promise.resolve("fresh");
+      });
+      const shouldCache = vi.fn(() => false);
+      const fresh = getCachedLiveCatalogValue({ keyParts, load, shouldCache, ttlMs: 0 });
+      if (outcome === "resolve") {
+        await expect(fresh).resolves.toBe("fresh");
+      } else {
+        await expect(fresh).rejects.toBe(error);
+      }
+      expect(shouldCache).not.toHaveBeenCalled();
+      await expect(getCachedLiveCatalogValue({ keyParts, load })).resolves.toBe("cached");
+      expect(load).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each(["resolve", "reject", "predicate-false", "predicate-throw", "same-promise"] as const)(
+    "preserves a replacement cache entry after expired work finishes with %s",
+    async (outcome) => {
+      let now = 1_000;
+      const keyParts = ["provider", "models"];
+      const pending = createDeferred<string>();
+      const error = new Error("expired failure");
+      const first = getCachedLiveCatalogValue({
+        keyParts,
+        load: () => pending.promise,
+        ttlMs: 100,
+        now: () => now,
+        shouldCache: () => {
+          if (outcome === "predicate-throw") {
+            throw error;
+          }
+          return outcome === "resolve";
+        },
+      });
+      now = 1_101;
+      const replacement = getCachedLiveCatalogValue({
+        keyParts,
+        load: () => (outcome === "same-promise" ? pending.promise : Promise.resolve("replacement")),
+        ttlMs: 100,
+        now: () => now,
+      });
+      if (outcome === "reject") {
+        pending.reject(error);
+      } else {
+        pending.resolve("expired");
+      }
+      if (outcome === "reject" || outcome === "predicate-throw") {
+        await expect(first).rejects.toBe(error);
+      } else {
+        await expect(first).resolves.toBe("expired");
+      }
+      const expected = outcome === "same-promise" ? "expired" : "replacement";
+      await expect(replacement).resolves.toBe(expected);
+      const load = vi.fn(async () => "unnecessary reload");
+      await expect(getCachedLiveCatalogValue({ keyParts, load, now: () => now })).resolves.toBe(
+        expected,
+      );
+      expect(load).not.toHaveBeenCalled();
+    },
+  );
 
   it("does not retain resolved live catalog values rejected by the cache predicate", async () => {
     const load = vi
@@ -295,9 +416,11 @@ describe("provider-catalog-shared configured catalog entries", () => {
 
 describe("provider-catalog-shared manifest provider configs", () => {
   it("converts manifest model catalog rows into provider config rows", () => {
+    const contextWindows = [{ id: "128k", label: "128K", contextWindow: 128000 }];
     const catalog: ModelCatalogProvider = {
       baseUrl: "https://api.example.test/v1",
       api: "openai-completions",
+      defaultModel: " example-model ",
       headers: { "x-provider": "example" },
       models: [
         {
@@ -307,6 +430,8 @@ describe("provider-catalog-shared manifest provider configs", () => {
           reasoning: true,
           contextWindow: 128_000,
           contextTokens: 64_000,
+          contextWindows,
+          contextWindowDefault: "128k",
           maxTokens: 8192,
           thinkingLevelMap: { off: null, minimal: "low", max: "max" },
           mediaInput: {
@@ -359,6 +484,8 @@ describe("provider-catalog-shared manifest provider configs", () => {
           },
           contextWindow: 128_000,
           contextTokens: 64_000,
+          contextWindows,
+          contextWindowDefault: "128k",
           maxTokens: 8192,
           thinkingLevelMap: { off: null, minimal: "low", max: "max" },
           mediaInput: {
@@ -368,6 +495,12 @@ describe("provider-catalog-shared manifest provider configs", () => {
         },
       ],
     });
+    expect(
+      readManifestProviderDefaultModelRef(
+        { modelCatalog: { providers: { example: catalog } } },
+        "example",
+      ),
+    ).toBe("example/example-model");
   });
 
   it("normalizes retired nested Gemini ids before emitting manifest provider config", () => {

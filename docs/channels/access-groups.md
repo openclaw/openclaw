@@ -121,7 +121,7 @@ Access groups work in the shared message-channel authorization paths:
 - channel-specific per-room sender allowlists that use the same sender matching rules (for example Google Chat `groups.<space>.users`)
 - command authorization paths that reuse message-channel sender allowlists
 
-Channel support depends on whether that channel is wired through the shared OpenClaw sender-authorization helpers. Current bundled support includes ClickClack, Discord, Feishu, Google Chat, iMessage, IRC, LINE, Mattermost, Microsoft Teams, Nextcloud Talk, Nostr, QQ Bot, Signal, Slack, SMS, Telegram, WhatsApp, Zalo, and Zalo Personal. Static `message.senders` groups are channel-agnostic, so new message channels get them by using the shared plugin SDK ingress helpers instead of custom allowlist expansion.
+Channel support depends on whether that channel is wired through the shared OpenClaw sender-authorization helpers. Current supported channel integrations include ClickClack, Discord, Feishu, Google Chat, iMessage, IRC, LINE, Mattermost, Microsoft Teams, Nextcloud Talk, Nostr, QQ Bot, Signal, Slack, SMS, Telegram, WhatsApp, Zalo, and Zalo Personal. Static `message.senders` groups are channel-agnostic, so new message channels get them by using the shared plugin SDK ingress helpers instead of custom allowlist expansion.
 
 ## Discord channel audiences
 
@@ -156,7 +156,7 @@ Requirements and failure behavior:
 - The bot needs the Discord Developer Portal **Server Members Intent**.
 - The access group fails closed when Discord returns `Missing Access`, the sender cannot be resolved as a guild member, or the channel belongs to another guild.
 
-More Discord-specific examples: [Discord access control](/channels/discord#access-control-and-routing)
+More Discord-specific examples: [Discord access control](/channels/discord/access-control#access-control-and-routing)
 
 ## Plugin diagnostics
 
@@ -195,3 +195,9 @@ If a sender should match but is blocked:
 5. For Discord channel audiences, confirm the bot can see the guild channel and has Server Members Intent enabled.
 
 Run `openclaw doctor` after editing access-control config. It catches many invalid allowlist and policy combinations before runtime.
+
+## Related
+
+- [Groups](/channels/groups) — group chat behavior and mention gating
+- [Pairing](/channels/pairing) — the separate DM pairing flow for channel senders
+- [Channels overview](/channels) — the channels these groups apply to

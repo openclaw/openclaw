@@ -3,17 +3,18 @@
  * HTTP context settings.
  */
 import type { Command } from "commander";
+import { parseStrictFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { ACT_MAX_VIEWPORT_DIMENSION } from "../browser/act-policy.js";
-import { runCommandWithRuntime } from "../core-api.js";
-import { runBrowserResizeWithOutput } from "./browser-cli-resize.js";
+import { parseBrowserViewportDimension, runBrowserResizeWithOutput } from "./browser-cli-resize.js";
 import {
   BROWSER_TAB_REFERENCE_HELP,
   callBrowserRequest,
-  parseBrowserPositiveIntegerValue,
+  printBrowserJsonResult,
+  runBrowserCliCommand as runBrowserCommand,
+  runBrowserCliRequest,
   type BrowserParentOpts,
 } from "./browser-cli-shared.js";
 import { registerBrowserCookiesAndStorageCommands } from "./browser-cli-state.cookies-storage.js";
@@ -24,68 +25,17 @@ function parseOnOff(raw: string): boolean | null {
   return parsed === undefined ? null : parsed;
 }
 
-function parsePositiveInteger(value: unknown, label: string): number | undefined {
-  const parsed = parseBrowserPositiveIntegerValue(value);
-  if (parsed === undefined) {
-    defaultRuntime.error(danger(`Invalid ${label}: must be a positive integer`));
-    defaultRuntime.exit(1);
-    return undefined;
-  }
-  if (parsed > ACT_MAX_VIEWPORT_DIMENSION) {
-    defaultRuntime.error(danger(`Invalid ${label}: maximum is ${ACT_MAX_VIEWPORT_DIMENSION}`));
-    defaultRuntime.exit(1);
-    return undefined;
-  }
-  return parsed;
-}
-
 function parseFiniteNumberOption(value: string | undefined, label: string): number | undefined {
   if (value === undefined) {
     return undefined;
   }
-  const raw = value.trim();
-  const parsed = /^[+-]?(?:(?:\d+\.?\d*)|(?:\.\d+))(?:e[+-]?\d+)?$/i.test(raw)
-    ? Number(raw)
-    : Number.NaN;
-  if (!Number.isFinite(parsed)) {
+  const parsed = parseStrictFiniteNumber(value);
+  if (parsed === undefined) {
     defaultRuntime.error(danger(`Invalid ${label}: must be a finite number`));
     defaultRuntime.exit(1);
     return undefined;
   }
   return parsed;
-}
-
-function runBrowserCommand(action: () => Promise<void>) {
-  return runCommandWithRuntime(defaultRuntime, action, (err) => {
-    defaultRuntime.error(danger(String(err)));
-    defaultRuntime.exit(1);
-  });
-}
-
-async function runBrowserSetRequest(params: {
-  parent: BrowserParentOpts;
-  path: string;
-  body: Record<string, unknown>;
-  successMessage: string;
-}) {
-  await runBrowserCommand(async () => {
-    const profile = params.parent?.browserProfile;
-    const result = await callBrowserRequest(
-      params.parent,
-      {
-        method: "POST",
-        path: params.path,
-        query: profile ? { profile } : undefined,
-        body: params.body,
-      },
-      { timeoutMs: 20000 },
-    );
-    if (params.parent?.json) {
-      defaultRuntime.writeJson(result);
-      return;
-    }
-    defaultRuntime.log(params.successMessage);
-  });
 }
 
 /** Registers Browser state/configuration commands. */
@@ -104,8 +54,8 @@ export function registerBrowserStateCommands(
     .argument("<height>", "Viewport height")
     .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (widthRaw: string, heightRaw: string, opts, cmd) => {
-      const width = parsePositiveInteger(widthRaw, "width");
-      const height = parsePositiveInteger(heightRaw, "height");
+      const width = parseBrowserViewportDimension(widthRaw, "width");
+      const height = parseBrowserViewportDimension(heightRaw, "height");
       if (width === undefined || height === undefined) {
         return;
       }
@@ -118,7 +68,6 @@ export function registerBrowserStateCommands(
           width,
           height,
           targetId: opts.targetId,
-          timeoutMs: 20000,
           successMessage: `viewport set: ${width}x${height}`,
         });
       });
@@ -137,7 +86,7 @@ export function registerBrowserStateCommands(
         defaultRuntime.exit(1);
         return;
       }
-      await runBrowserSetRequest({
+      await runBrowserCliRequest({
         parent,
         path: "/set/offline",
         body: {
@@ -173,21 +122,16 @@ export function registerBrowserStateCommands(
           }
         }
         const profile = parent?.browserProfile;
-        const result = await callBrowserRequest(
-          parent,
-          {
-            method: "POST",
-            path: "/set/headers",
-            query: profile ? { profile } : undefined,
-            body: {
-              headers,
-              targetId: normalizeOptionalString(opts.targetId),
-            },
+        const result = await callBrowserRequest(parent, {
+          method: "POST",
+          path: "/set/headers",
+          query: profile ? { profile } : undefined,
+          body: {
+            headers,
+            targetId: normalizeOptionalString(opts.targetId),
           },
-          { timeoutMs: 20000 },
-        );
-        if (parent?.json) {
-          defaultRuntime.writeJson(result);
+        });
+        if (printBrowserJsonResult(parent, result)) {
           return;
         }
         defaultRuntime.log("headers set");
@@ -203,7 +147,7 @@ export function registerBrowserStateCommands(
     .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (username: string | undefined, password: string | undefined, opts, cmd) => {
       const parent = parentOpts(cmd);
-      await runBrowserSetRequest({
+      await runBrowserCliRequest({
         parent,
         path: "/set/credentials",
         body: {
@@ -238,7 +182,7 @@ export function registerBrowserStateCommands(
         ) {
           return;
         }
-        await runBrowserSetRequest({
+        await runBrowserCliRequest({
           parent,
           path: "/set/geolocation",
           body: {
@@ -269,7 +213,7 @@ export function registerBrowserStateCommands(
         defaultRuntime.exit(1);
         return;
       }
-      await runBrowserSetRequest({
+      await runBrowserCliRequest({
         parent,
         path: "/set/media",
         body: {
@@ -287,7 +231,7 @@ export function registerBrowserStateCommands(
     .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (timezoneId: string, opts, cmd) => {
       const parent = parentOpts(cmd);
-      await runBrowserSetRequest({
+      await runBrowserCliRequest({
         parent,
         path: "/set/timezone",
         body: {
@@ -305,7 +249,7 @@ export function registerBrowserStateCommands(
     .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (locale: string, opts, cmd) => {
       const parent = parentOpts(cmd);
-      await runBrowserSetRequest({
+      await runBrowserCliRequest({
         parent,
         path: "/set/locale",
         body: {
@@ -323,7 +267,7 @@ export function registerBrowserStateCommands(
     .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (name: string, opts, cmd) => {
       const parent = parentOpts(cmd);
-      await runBrowserSetRequest({
+      await runBrowserCliRequest({
         parent,
         path: "/set/device",
         body: {

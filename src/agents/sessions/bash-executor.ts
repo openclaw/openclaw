@@ -1,12 +1,8 @@
 /**
  * Bash command execution with streaming support and cancellation.
- *
- * This module provides a unified bash execution implementation used by:
- * - AgentSession.executeBash() for interactive and RPC modes
- * - Direct calls from modes that need bash execution
  */
 
-import { sanitizeBinaryOutput } from "../shell-utils.js";
+import { createStreamingBinaryOutputSanitizer } from "../shell-utils.js";
 import type { BashOperations } from "./tools/bash-operations.js";
 import { OutputAccumulator } from "./tools/output-accumulator.js";
 
@@ -50,12 +46,14 @@ export async function executeBashWithOperations(
 ): Promise<BashResult> {
   const output = new OutputAccumulator({
     tempFilePrefix: "openclaw-bash",
-    transformDecodedText: (text) =>
-      sanitizeBinaryOutput(text, { ansiMode: "compat" }).replace(/\r/g, ""),
+    createTextTransform: () => {
+      const sanitizeOutput = createStreamingBinaryOutputSanitizer();
+      return (text) => sanitizeOutput(text).replace(/\r/g, "");
+    },
   });
 
-  const onData = (data: Buffer) => {
-    const text = output.append(data);
+  const onData = (data: Buffer, stream?: "stdout" | "stderr") => {
+    const text = output.append(data, stream);
     options?.onChunk?.(text);
   };
 

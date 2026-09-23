@@ -10,15 +10,28 @@ import {
 vi.mock("./target-normalization.js", () => ({
   normalizeTargetForProvider: (_provider: string, raw?: string) => raw?.trim(),
 }));
-import {
-  createSourceDeliveryPlan,
-  resolveSourceDeliveryOutcome,
-  sourceDeliveryTargetsMatch,
-} from "./source-delivery-plan.js";
+import { createSourceDeliveryPlan, resolveSourceDeliveryOutcome } from "./source-delivery-plan.js";
 
 afterEach(() => {
   setActivePluginRegistry(createTestRegistry());
 });
+
+function isVerifiedSourceDeliveryTarget(
+  target: NonNullable<
+    Parameters<typeof resolveSourceDeliveryOutcome>[1]["messageToolSentTargets"]
+  >[number],
+  delivery: NonNullable<Parameters<typeof createSourceDeliveryPlan>[0]["target"]>,
+): boolean {
+  const plan = createSourceDeliveryPlan({
+    owner: "message_tool_then_direct_fallback",
+    reason: "cron_announce",
+    target: delivery,
+  });
+  return resolveSourceDeliveryOutcome(plan, {
+    didSendViaMessageTool: true,
+    messageToolSentTargets: [target],
+  }).verifiedMessageToolDelivery;
+}
 
 describe("source delivery plan", () => {
   it("projects message-tool-owned delivery to existing source reply and message tool fields", () => {
@@ -217,13 +230,13 @@ describe("source delivery plan", () => {
 
   it("matches source targets through the same provider normalization used by delivery", () => {
     expect(
-      sourceDeliveryTargetsMatch(
+      isVerifiedSourceDeliveryTarget(
         { provider: "message", to: "channel:C1" },
         { channel: "slack", to: "channel:C1" },
       ),
     ).toBe(true);
     expect(
-      sourceDeliveryTargetsMatch(
+      isVerifiedSourceDeliveryTarget(
         { provider: "discord", to: "channel:C1" },
         { channel: "slack", to: "channel:C1" },
       ),
@@ -272,7 +285,7 @@ describe("source delivery plan", () => {
       );
 
       expect(
-        sourceDeliveryTargetsMatch(
+        isVerifiedSourceDeliveryTarget(
           { provider: channel, to: targetTo },
           { channel, to: deliveryTo },
         ),
@@ -280,36 +293,129 @@ describe("source delivery plan", () => {
     },
   );
 
-  it("matches threaded delivery only with explicit or supported implicit thread evidence", () => {
-    expect(
-      sourceDeliveryTargetsMatch(
-        { provider: "telegram", to: "-100:topic:462" },
-        { channel: "telegram", to: "-100", threadId: 462 },
-      ),
-    ).toBe(true);
-    expect(
-      sourceDeliveryTargetsMatch(
-        { provider: "telegram", to: "-100" },
-        { channel: "telegram", to: "-100", threadId: 462 },
-      ),
-    ).toBe(false);
-    expect(
-      sourceDeliveryTargetsMatch(
-        { provider: "telegram", to: "-100", threadImplicit: true },
-        { channel: "telegram", to: "-100", threadId: 462 },
-      ),
-    ).toBe(true);
-    expect(
-      sourceDeliveryTargetsMatch(
-        { provider: "telegram", to: "-100", threadImplicit: true, threadSuppressed: true },
-        { channel: "telegram", to: "-100", threadId: 462 },
-      ),
-    ).toBe(false);
-    expect(
-      sourceDeliveryTargetsMatch(
-        { provider: "telegram", to: "-100", threadId: "111" },
-        { channel: "telegram", to: "-100", threadId: 462 },
-      ),
-    ).toBe(false);
-  });
+  it.each([
+    [
+      "topic-qualified send to an explicitly threaded source",
+      { to: "-100:topic:462" },
+      { to: "-100", threadId: 462 },
+      true,
+    ],
+    [
+      "explicitly threaded send to a topic-qualified source",
+      { to: "-100", threadId: "462" },
+      { to: "-100:topic:462" },
+      true,
+    ],
+    [
+      "captured source with both topic and explicit thread evidence",
+      { to: "-100", threadId: "462" },
+      { to: "-100:topic:462", threadId: 462 },
+      true,
+    ],
+    [
+      "matching topics without explicit thread fields",
+      { to: "-100:topic:462" },
+      { to: "-100:topic:462" },
+      true,
+    ],
+    [
+      "different topics in the same chat",
+      { to: "-100:topic:111" },
+      { to: "-100:topic:462" },
+      false,
+    ],
+    ["missing thread evidence", { to: "-100" }, { to: "-100:topic:462" }, false],
+    ["threaded send to an unthreaded source", { to: "-100:topic:462" }, { to: "-100" }, false],
+    [
+      "supported implicit thread evidence",
+      { to: "-100", threadImplicit: true },
+      { to: "-100:topic:462" },
+      true,
+    ],
+    [
+      "suppressed implicit threading",
+      { to: "-100", threadImplicit: true, threadSuppressed: true },
+      { to: "-100:topic:462" },
+      false,
+    ],
+    [
+      "explicit send thread taking precedence over its topic suffix",
+      { to: "-100:topic:462", threadId: "111" },
+      { to: "-100:topic:462" },
+      false,
+    ],
+    [
+      "explicit source thread taking precedence over its topic suffix",
+      { to: "-100:topic:462" },
+      { to: "-100:topic:462", threadId: 111 },
+      false,
+    ],
+    [
+      "unrecognized topic suffix remaining part of the destination",
+      { to: "-100" },
+      { to: "-100:topic:unknown" },
+      false,
+    ],
+  ] as const)(
+    "requires matching conversation and thread evidence: %s",
+    (_name, sent, source, verified) => {
+      const plan = createSourceDeliveryPlan({
+        owner: "message_tool_then_direct_fallback",
+        reason: "subagent_completion",
+        target: { channel: "telegram", ...source },
+      });
+      const outcome = resolveSourceDeliveryOutcome(plan, {
+        didSendViaMessageTool: true,
+        messageToolSentTargets: [{ provider: "telegram", ...sent }],
+      });
+
+      expect(outcome.verifiedMessageToolDelivery).toBe(verified);
+      expect(outcome.satisfiesSourceDelivery).toBe(verified);
+      expect(outcome.unverifiedMessageToolDelivery).toBe(!verified);
+    },
+  );
+
+  it.each([
+    [
+      "missing destination recipient",
+      { provider: "telegram", to: "123456" },
+      { channel: "telegram", to: undefined },
+      false,
+    ],
+    [
+      "missing destination channel",
+      { provider: "telegram", to: "123456" },
+      { channel: undefined, to: "123456" },
+      false,
+    ],
+    [
+      "missing observed recipient",
+      { provider: "telegram", to: undefined },
+      { channel: "telegram", to: "123456" },
+      false,
+    ],
+    [
+      "different account owners",
+      { provider: "telegram", to: "123456", accountId: "bot-a" },
+      { channel: "telegram", to: "123456", accountId: "bot-b" },
+      false,
+    ],
+    [
+      "inferred message-tool account",
+      { provider: "message", to: "123456" },
+      { channel: "telegram", to: "123456", accountId: "bot-a" },
+      true,
+    ],
+    [
+      "matching account owners",
+      { provider: "telegram", to: "123456", accountId: "bot-a" },
+      { channel: "telegram", to: "123456", accountId: "bot-a" },
+      true,
+    ],
+  ] as const)(
+    "verifies source delivery through its public outcome: %s",
+    (_name, observed, destination, verified) => {
+      expect(isVerifiedSourceDeliveryTarget(observed, destination)).toBe(verified);
+    },
+  );
 });

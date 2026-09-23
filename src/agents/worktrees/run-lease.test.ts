@@ -3,10 +3,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { lockState, unlockWorktree } from "./git-lock.js";
+import * as registry from "./registry.js";
 import {
   admitWorktreeRunLeaseRow,
   getRegistryWorktree,
@@ -45,6 +46,7 @@ describe("worktree run lease", () => {
   const templateTempDirs = useAutoCleanupTempDirTracker(afterAll);
   const caseTempDirs = useAutoCleanupTempDirTracker((cleanup) => {
     afterEach(() => {
+      vi.restoreAllMocks();
       runLeaseTesting.resetForTest();
       closeOpenClawStateDatabaseForTest();
       cleanup();
@@ -77,6 +79,7 @@ describe("worktree run lease", () => {
     const created = await service.create({
       repoRoot: repo,
       name: "run-lease-session",
+      baseRef: "HEAD",
       ownerKind: "session",
       ownerId: "agent:main:run-lease",
     });
@@ -102,6 +105,69 @@ describe("worktree run lease", () => {
     expect(hasLiveWorktreeRunLease(env, created.id)).toBe(false);
   });
 
+  it("rejects admission when the linked Git admin directory is missing", async () => {
+    const created = await createSessionWorktree();
+    const knownFile = path.join(created.path, "README.md");
+    const gitAdminDir = await git(created.path, "rev-parse", "--absolute-git-dir");
+    const displacedGitAdminDir = path.join(root, "git-admin-aside");
+    await fs.rename(gitAdminDir, displacedGitAdminDir);
+
+    try {
+      const acquisition = acquireWorktreeRunLease(created.id, { env });
+      await expect(acquisition).rejects.toThrow(
+        `managed worktree is unusable because its Git removal guard could not be acquired: ${created.path}`,
+      );
+      await expect(acquisition).rejects.toMatchObject({ cause: expect.any(Error) });
+      expect(hasLiveWorktreeRunLease(env, created.id)).toBe(false);
+      expect(await fs.readFile(knownFile, "utf8")).toBe("base\n");
+    } finally {
+      await fs.rename(displacedGitAdminDir, gitAdminDir);
+    }
+
+    const lease = await acquireWorktreeRunLease(created.id, { env });
+    await lease.release();
+    expect(hasLiveWorktreeRunLease(env, created.id)).toBe(false);
+  });
+
+  it("excludes runs and publishers for the lifetime of an exclusive publication lease", async () => {
+    const created = await createSessionWorktree();
+    const running = await acquireWorktreeRunLease(created.id, { env });
+    await expect(acquireWorktreeRunLease(created.id, { env, exclusive: true })).rejects.toThrow(
+      "in use",
+    );
+    await running.release();
+    const publication = await acquireWorktreeRunLease(created.id, { env, exclusive: true });
+    await expect(acquireWorktreeRunLease(created.id, { env })).rejects.toThrow("in use");
+    await expect(acquireWorktreeRunLease(created.id, { env, exclusive: true })).rejects.toThrow(
+      "in use",
+    );
+    expect(() =>
+      claimWorktreeRemoval(env, { worktreeId: created.id, token: "remove-during-publication" }),
+    ).toThrow();
+    await publication.release();
+    const nextRun = await acquireWorktreeRunLease(created.id, { env });
+    await nextRun.release();
+    expect(hasLiveWorktreeRunLease(env, created.id)).toBe(false);
+  });
+
+  it("acquires a Git guard after a previous acquisition failed to read the registry", async () => {
+    const created = await createSessionWorktree();
+    const record = getRegistryWorktree(env, created.id)!;
+    vi.spyOn(registry, "getRegistryWorktree").mockImplementationOnce(() => {
+      throw new Error("simulated registry read failure");
+    });
+
+    await expect(acquireWorktreeRunLease(created.id, { env })).rejects.toThrow(
+      "simulated registry read failure",
+    );
+    expect(hasLiveWorktreeRunLease(env, created.id)).toBe(false);
+
+    const lease = await acquireWorktreeRunLease(created.id, { env });
+    expect(await lockState(record)).toEqual({ kind: "live", pid: process.pid });
+    await lease.release();
+    expect(await lockState(record)).toEqual({ kind: "none" });
+  });
+
   it("resolves the worktree id for a nested workspace path with no session binding", async () => {
     const created = await createSessionWorktree();
     const nested = path.join(created.path, "workspace");
@@ -111,9 +177,9 @@ describe("worktree run lease", () => {
     expect(resolved).toBe(created.id);
 
     const lease = await acquireWorktreeRunLease(created.id, { env });
-    expect(() =>
-      claimWorktreeRemoval(env, { worktreeId: created.id, token: "remover", force: false }),
-    ).toThrow("worktree is busy");
+    expect(() => claimWorktreeRemoval(env, { worktreeId: created.id, token: "remover" })).toThrow(
+      "worktree is busy",
+    );
     await lease.release();
   });
 
@@ -130,7 +196,7 @@ describe("worktree run lease", () => {
 
     expect(hasLiveWorktreeRunLease(env, created.id)).toBe(false);
     expect(() =>
-      claimWorktreeRemoval(env, { worktreeId: created.id, token: "remover", force: false }),
+      claimWorktreeRemoval(env, { worktreeId: created.id, token: "remover" }),
     ).not.toThrow();
   });
 
@@ -154,22 +220,19 @@ describe("worktree run lease", () => {
     expect(hasLiveWorktreeRunLease(env, created.id)).toBe(false);
   });
 
-  it("rejects removal of a live lease unless forced", async () => {
+  it("rejects removal while a live lease exists", async () => {
     const created = await createSessionWorktree();
     const lease = await acquireWorktreeRunLease(created.id, { env });
 
-    expect(() =>
-      claimWorktreeRemoval(env, { worktreeId: created.id, token: "remover", force: false }),
-    ).toThrow("worktree is busy");
-    expect(() =>
-      claimWorktreeRemoval(env, { worktreeId: created.id, token: "remover", force: true }),
-    ).not.toThrow();
+    expect(() => claimWorktreeRemoval(env, { worktreeId: created.id, token: "remover" })).toThrow(
+      "worktree is busy",
+    );
     await lease.release();
   });
 
   it("fails admission once a removal claim is held", async () => {
     const created = await createSessionWorktree();
-    claimWorktreeRemoval(env, { worktreeId: created.id, token: "remover", force: true });
+    claimWorktreeRemoval(env, { worktreeId: created.id, token: "remover" });
 
     await expect(acquireWorktreeRunLease(created.id, { env })).rejects.toThrow(
       `managed worktree was removed: ${created.path}`,
@@ -178,7 +241,7 @@ describe("worktree run lease", () => {
 
   it("recovers admission when the remover died before finalizing the removal", async () => {
     const created = await createSessionWorktree();
-    claimWorktreeRemoval(env, { worktreeId: created.id, token: "remover", force: true });
+    claimWorktreeRemoval(env, { worktreeId: created.id, token: "remover" });
     runLeaseTesting.setDeadPidResolverForTest((pid) => pid === process.pid);
 
     const lease = await acquireWorktreeRunLease(created.id, { env });
@@ -186,20 +249,17 @@ describe("worktree run lease", () => {
     await lease.release();
   });
 
-  it("rejects a second live remover until the first releases, even with force", async () => {
+  it("rejects a second live remover until the first releases", async () => {
     const created = await createSessionWorktree();
-    claimWorktreeRemoval(env, { worktreeId: created.id, token: "remover-a", force: false });
+    claimWorktreeRemoval(env, { worktreeId: created.id, token: "remover-a" });
 
-    expect(() =>
-      claimWorktreeRemoval(env, { worktreeId: created.id, token: "remover-b", force: false }),
-    ).toThrow("worktree removal is already in progress");
-    expect(() =>
-      claimWorktreeRemoval(env, { worktreeId: created.id, token: "remover-b", force: true }),
-    ).toThrow("worktree removal is already in progress");
+    expect(() => claimWorktreeRemoval(env, { worktreeId: created.id, token: "remover-b" })).toThrow(
+      "worktree removal is already in progress",
+    );
 
     abortWorktreeRemoval(env, created.id, "remover-a");
     expect(() =>
-      claimWorktreeRemoval(env, { worktreeId: created.id, token: "remover-b", force: false }),
+      claimWorktreeRemoval(env, { worktreeId: created.id, token: "remover-b" }),
     ).not.toThrow();
   });
 
@@ -239,16 +299,16 @@ describe("worktree run lease", () => {
     await lease.release();
     expect(hasLiveWorktreeRunLease(env, created.id)).toBe(true);
     expect(await lockState(record)).toEqual({ kind: "live", pid: process.pid });
-    expect(() =>
-      claimWorktreeRemoval(env, { worktreeId: created.id, token: "remover", force: false }),
-    ).toThrow("worktree is busy");
+    expect(() => claimWorktreeRemoval(env, { worktreeId: created.id, token: "remover" })).toThrow(
+      "worktree is busy",
+    );
 
     fail = false;
     await runLeaseTesting.drainPendingCleanupsForTest();
     expect(hasLiveWorktreeRunLease(env, created.id)).toBe(false);
     expect(await lockState(record)).toEqual({ kind: "none" });
     expect(() =>
-      claimWorktreeRemoval(env, { worktreeId: created.id, token: "remover", force: false }),
+      claimWorktreeRemoval(env, { worktreeId: created.id, token: "remover" }),
     ).not.toThrow();
   });
 
@@ -268,27 +328,40 @@ describe("worktree run lease", () => {
     expect(await lockState(record)).toEqual({ kind: "none" });
   });
 
-  it("retains the git guard when unlock fails, releasing it on a lifecycle retry", async () => {
-    const created = await createSessionWorktree();
-    const lease = await acquireWorktreeRunLease(created.id, { env });
-    const record = getRegistryWorktree(env, created.id)!;
+  it.each(["unlock", "registry read"])(
+    "retains the Git guard when %s fails, releasing it on a lifecycle retry",
+    async (failure) => {
+      const created = await createSessionWorktree();
+      const lease = await acquireWorktreeRunLease(created.id, { env });
+      const record = getRegistryWorktree(env, created.id)!;
 
-    let failUnlock = true;
-    runLeaseTesting.setUnlockImplForTest(async (rec) => {
-      if (failUnlock) {
-        throw new Error("simulated git unlock failure");
+      let fail = true;
+      if (failure === "unlock") {
+        runLeaseTesting.setUnlockImplForTest(async (rec) => {
+          if (fail) {
+            throw new Error("simulated git unlock failure");
+          }
+          await unlockWorktree(rec);
+        });
+      } else {
+        const readWorktree = registry.getRegistryWorktree;
+        vi.spyOn(registry, "getRegistryWorktree").mockImplementation((...args) => {
+          if (fail) {
+            throw new Error("simulated registry read failure");
+          }
+          return readWorktree(...args);
+        });
       }
-      await unlockWorktree(rec);
-    });
 
-    await lease.release();
-    expect(hasLiveWorktreeRunLease(env, created.id)).toBe(false);
-    expect(await lockState(record)).toEqual({ kind: "live", pid: process.pid });
+      await lease.release();
+      expect(hasLiveWorktreeRunLease(env, created.id)).toBe(false);
+      expect(await lockState(record)).toEqual({ kind: "live", pid: process.pid });
 
-    failUnlock = false;
-    await runLeaseTesting.drainPendingCleanupsForTest();
-    expect(await lockState(record)).toEqual({ kind: "none" });
-  });
+      fail = false;
+      await runLeaseTesting.drainPendingCleanupsForTest();
+      expect(await lockState(record)).toEqual({ kind: "none" });
+    },
+  );
 
   it("does not let a failed cleanup unlock a newer holder generation", async () => {
     const created = await createSessionWorktree();
@@ -317,7 +390,11 @@ describe("worktree run lease", () => {
 
   it("fails closed when a session's authoritative worktree binding is removed", async () => {
     const created = await createSessionWorktree();
-    await service.remove({ id: created.id, reason: "manual-delete", force: true });
+    await service.remove({
+      id: created.id,
+      reason: "manual-delete",
+      allowSnapshotLoss: true,
+    });
 
     await expect(
       resolveWorktreeIdForPath({
@@ -330,10 +407,10 @@ describe("worktree run lease", () => {
 
   it("does not let a superseded remover clear a newer removal claim", async () => {
     const created = await createSessionWorktree();
-    claimWorktreeRemoval(env, { worktreeId: created.id, token: "remover-a", force: false });
+    claimWorktreeRemoval(env, { worktreeId: created.id, token: "remover-a" });
 
     runLeaseTesting.setDeadPidResolverForTest((pid) => pid === process.pid);
-    claimWorktreeRemoval(env, { worktreeId: created.id, token: "remover-b", force: false });
+    claimWorktreeRemoval(env, { worktreeId: created.id, token: "remover-b" });
     runLeaseTesting.setDeadPidResolverForTest(null);
 
     abortWorktreeRemoval(env, created.id, "remover-a");

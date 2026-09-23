@@ -1,10 +1,50 @@
 /**
  * Normalizes embedded-agent conversation turn ordering for provider contracts.
  */
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AgentMessage } from "../runtime/index.js";
 import { isThinkingLikeBlock } from "../thinking-block.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "../tool-call-id.js";
+import type { TranscriptPolicy } from "../transcript-policy.js";
+import { isAnthropicApi } from "./anthropic-api.js";
+
+const SIGNED_THINKING_PROVIDERS = new Set(["anthropic", "amazon-bedrock", "anthropic-vertex"]);
+
+/** Return true when a provider family owns signed thinking blocks. */
+export function providerRequiresSignedThinking(provider?: string | null): boolean {
+  return SIGNED_THINKING_PROVIDERS.has(normalizeProviderId(provider ?? ""));
+}
+
+/** Decide whether signed thinking can be replayed under the current provider policy. */
+export function shouldAllowProviderOwnedThinkingReplay(params: {
+  modelApi?: string | null;
+  provider?: string | null;
+  policy: Pick<
+    TranscriptPolicy,
+    "validateAnthropicTurns" | "preserveSignatures" | "dropThinkingBlocks"
+  >;
+}): boolean {
+  const hasProviderOwnedSignedThinking =
+    params.policy.preserveSignatures || providerRequiresSignedThinking(params.provider);
+  return (
+    isAnthropicApi(params.modelApi) &&
+    params.policy.validateAnthropicTurns &&
+    hasProviderOwnedSignedThinking &&
+    !params.policy.dropThinkingBlocks
+  );
+}
+
+/**
+ * Bedrock Converse still requires strict role alternation, so only the direct
+ * Messages API keeps consecutive user turns separate under append-only replay.
+ */
+export function shouldMergeConsecutiveUserTurns(
+  policy: Pick<TranscriptPolicy, "appendOnlyRuntimeContext">,
+  modelApi?: string | null,
+): boolean {
+  return !(policy.appendOnlyRuntimeContext && modelApi === "anthropic-messages");
+}
 
 type AnthropicContentBlock = {
   type: "text" | "toolUse" | "toolCall" | "functionCall" | "toolResult" | "tool";
@@ -28,15 +68,15 @@ function isAbortedAssistantTurn(message: AgentMessage): boolean {
   return stopReason === "aborted" || stopReason === "error";
 }
 
-function extractToolResultMatchIds(record: Record<string, unknown>): Set<string> {
+function extractToolResultMatchIds(record: object): Set<string> {
   const ids = new Set<string>();
   for (const value of [
-    record.toolUseId,
-    record.toolCallId,
-    record.tool_use_id,
-    record.tool_call_id,
-    record.callId,
-    record.call_id,
+    Reflect.get(record, "toolUseId"),
+    Reflect.get(record, "toolCallId"),
+    Reflect.get(record, "tool_use_id"),
+    Reflect.get(record, "tool_call_id"),
+    Reflect.get(record, "callId"),
+    Reflect.get(record, "call_id"),
   ]) {
     const id = normalizeOptionalString(value);
     if (id) {
@@ -46,8 +86,12 @@ function extractToolResultMatchIds(record: Record<string, unknown>): Set<string>
   return ids;
 }
 
-function extractToolResultMatchName(record: Record<string, unknown>): string | null {
-  return normalizeOptionalString(record.toolName) ?? normalizeOptionalString(record.name) ?? null;
+function extractToolResultMatchName(record: object): string | null {
+  return (
+    normalizeOptionalString(Reflect.get(record, "toolName")) ??
+    normalizeOptionalString(Reflect.get(record, "name")) ??
+    null
+  );
 }
 
 function collectAnyToolResultIds(message: AgentMessage): Set<string> {
@@ -61,8 +105,7 @@ function collectAnyToolResultIds(message: AgentMessage): Set<string> {
       ids.add(toolResultId);
     }
   } else if (role === "tool") {
-    const record = message as unknown as Record<string, unknown>;
-    for (const id of extractToolResultMatchIds(record)) {
+    for (const id of extractToolResultMatchIds(message)) {
       ids.add(id);
     }
   }
@@ -102,10 +145,9 @@ function collectTrustedToolResultMatches(message: AgentMessage): Map<string, Set
   };
 
   if (role === "toolResult") {
-    const record = message as unknown as Record<string, unknown>;
     addMatch(
       [
-        ...extractToolResultMatchIds(record),
+        ...extractToolResultMatchIds(message),
         ...(() => {
           const canonicalId = extractToolResultId(
             message as Extract<AgentMessage, { role: "toolResult" }>,
@@ -113,11 +155,10 @@ function collectTrustedToolResultMatches(message: AgentMessage): Map<string, Set
           return canonicalId ? [canonicalId] : [];
         })(),
       ],
-      extractToolResultMatchName(record),
+      extractToolResultMatchName(message),
     );
   } else if (role === "tool") {
-    const record = message as unknown as Record<string, unknown>;
-    addMatch(extractToolResultMatchIds(record), extractToolResultMatchName(record));
+    addMatch(extractToolResultMatchIds(message), extractToolResultMatchName(message));
   }
 
   return matches;
@@ -312,7 +353,7 @@ function validateTurnsWithConsecutiveMerge<TRole extends "assistant" | "user">(p
     lastRole = msgRole;
   }
 
-  return result;
+  return result.length === messages.length ? messages : result;
 }
 
 function mergeConsecutiveAssistantTurns(
@@ -374,13 +415,19 @@ function normalizeUserContentForMerge(content: unknown): UserContentBlock[] {
   return [];
 }
 
+export const mergeConsecutiveUserMessages = (messages: AgentMessage[]): AgentMessage[] =>
+  validateTurnsWithConsecutiveMerge({ messages, role: "user", merge: mergeConsecutiveUserTurns });
+
 /**
  * Validates and fixes conversation turn sequences for Anthropic API.
  * Anthropic requires strict alternating user→assistant pattern.
  * Merges consecutive user messages together.
  * Also strips dangling tool_use blocks that lack corresponding tool_result blocks.
  */
-export function validateAnthropicTurns(messages: AgentMessage[]): AgentMessage[] {
+export function validateAnthropicTurns(
+  messages: AgentMessage[],
+  options: { mergeConsecutiveUserTurns?: boolean } = {},
+): AgentMessage[] {
   // Merge first so an injected assistant turn cannot hide the tool result that
   // resolves the preceding signed tool call. Stripping first would destroy the
   // active Anthropic tool-use turn before the adjacent turns can be repaired.
@@ -391,9 +438,12 @@ export function validateAnthropicTurns(messages: AgentMessage[]): AgentMessage[]
   });
   const stripped = stripDanglingAnthropicToolUses(mergedAssistant);
 
-  return validateTurnsWithConsecutiveMerge({
-    messages: stripped,
-    role: "user",
-    merge: mergeConsecutiveUserTurns,
-  });
+  // Merging user turns re-renders them as one multi-block message whose later
+  // blocks never carry their own timestamp stamp, so the bytes differ from the
+  // active turn that produced the following thinking signature. Prefix-bound
+  // replay keeps consecutive user turns separate; the Messages API accepts them.
+  if (options.mergeConsecutiveUserTurns === false) {
+    return stripped;
+  }
+  return mergeConsecutiveUserMessages(stripped);
 }

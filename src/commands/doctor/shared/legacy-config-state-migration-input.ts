@@ -23,11 +23,12 @@ export function resolveStateMigrationConfigInput(params: {
   if (params.snapshot.legacyIssues.length === 0 || migrationSource === undefined) {
     return null;
   }
-  const migrated = migrateLegacyConfig(migrationSource);
-  if (!migrated.config) {
-    return null;
-  }
-  if (migrated.partiallyValid) {
+  const migrated = migrateLegacyConfig(migrationSource, {
+    sourceConfigBeforeMigrations: params.snapshot.sourceConfigBeforeMigrations,
+  });
+  // Plugin config repair may retain a legacy locator until its state migration
+  // completes. No config mutation must not prevent that owner from retrying.
+  if (!migrated.config || migrated.partiallyValid) {
     return {
       pluginDoctorConfig: (pluginDoctorConfig ?? migrationSource) as OpenClawConfig,
     };

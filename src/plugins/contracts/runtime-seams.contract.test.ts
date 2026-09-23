@@ -51,6 +51,7 @@ function createInstalledRuntimePluginDir(
     JSON.stringify({
       name: `@openclaw/${pluginId}`,
       version: "0.0.0",
+      type: "module",
       openclaw: {
         extensions: ["./runtime-api.js"],
         channel: { id: pluginId },
@@ -129,7 +130,6 @@ describe("shared runtime seam contracts", () => {
         artifactBasename: "runtime-api.js",
         location,
         sourceExtensionsRoot: bundledDir,
-        resolutionKey: `test:${pluginId}`,
       }).allowed,
     ).toBe(true);
     expect(

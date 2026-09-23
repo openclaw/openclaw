@@ -1,6 +1,17 @@
 import { describe, expect, it } from "vitest";
+import { migratePersistedImplicitMainRoster } from "../../config/legacy.roster.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveAgentHarnessPolicy } from "./policy.js";
+import { resolveOpenAIModelRoutes } from "../openai-model-routes.js";
+import { resolveAgentHarnessPolicy as resolveAgentHarnessPolicyBase } from "./policy.js";
+
+function resolveAgentHarnessPolicy(
+  params: Parameters<typeof resolveAgentHarnessPolicyBase>[0],
+): ReturnType<typeof resolveAgentHarnessPolicyBase> {
+  return resolveAgentHarnessPolicyBase({
+    ...params,
+    config: migratePersistedImplicitMainRoster(params.config).config as OpenClawConfig,
+  });
+}
 
 function openAIProviderConfig(overrides: Record<string, unknown>): OpenClawConfig {
   return {
@@ -50,11 +61,22 @@ describe("resolveAgentHarnessPolicy", () => {
       runtime: "openclaw",
     },
     {
+      name: "explicit API runtime on Completions",
+      params: {
+        config: openAIProviderConfig({
+          api: "openai-completions",
+          agentRuntime: { id: "openclaw" },
+        }),
+      },
+      runtime: "openclaw",
+      runtimeSource: "provider",
+    },
+    {
       name: "request override",
       params: { config: openAIProviderConfig({ headers: { "x-route": "custom" } }) },
       runtime: "openclaw",
     },
-  ])("uses the provider-owned runtime for $name", ({ params, runtime }) => {
+  ])("uses the provider-owned runtime for $name", ({ params, runtime, runtimeSource }) => {
     expect(
       resolveAgentHarnessPolicy({
         provider: "openai",
@@ -62,7 +84,7 @@ describe("resolveAgentHarnessPolicy", () => {
         env: {},
         ...params,
       }),
-    ).toEqual({ runtime, runtimeSource: "implicit" });
+    ).toEqual({ runtime, runtimeSource: runtimeSource ?? "implicit" });
   });
 
   it("keeps explicit runtime policy authoritative", () => {
@@ -198,6 +220,7 @@ describe("resolveAgentHarnessPolicy", () => {
       name: "later route facts fill an omitted adapter",
       models: [{ id: "gpt-5.5" }, { id: "gpt-5.5", api: "openai-completions" }],
       runtime: "openclaw",
+      api: "openai-completions",
     },
     {
       name: "a provider-looking native id stays distinct",
@@ -206,6 +229,7 @@ describe("resolveAgentHarnessPolicy", () => {
         { id: "gpt-5.5", api: "openai-completions" },
       ],
       runtime: "openclaw",
+      api: "openai-completions",
     },
     {
       name: "an authored empty header map stays authoritative",
@@ -214,20 +238,29 @@ describe("resolveAgentHarnessPolicy", () => {
         { id: "gpt-5.5", headers: { "x-route": "custom" } },
       ],
       runtime: "codex",
+      api: "openai-responses",
     },
     {
       name: "later headers fill an omitted header map",
       models: [{ id: "gpt-5.5" }, { id: "gpt-5.5", headers: { "x-route": "custom" } }],
       runtime: "openclaw",
+      api: "openai-responses",
     },
-  ])("keeps duplicate model config aligned: $name", ({ models, runtime }) => {
+  ])("keeps duplicate model config aligned: $name", ({ models, runtime, api }) => {
+    const config = openAIProviderConfig({ models });
     expect(
       resolveAgentHarnessPolicy({
         provider: "openai",
         modelId: "gpt-5.5",
-        config: openAIProviderConfig({ models }),
+        config,
         env: {},
       }),
     ).toEqual({ runtime, runtimeSource: "implicit" });
+    const resolution = resolveOpenAIModelRoutes({ provider: "openai", modelId: "gpt-5.5", config });
+    expect(
+      resolution?.kind === "routes"
+        ? resolution.routes.find((route) => route.authRequirement === "api-key")?.api
+        : undefined,
+    ).toBe(api);
   });
 });

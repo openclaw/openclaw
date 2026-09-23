@@ -4,35 +4,10 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import zlib from "node:zlib";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
+import { resolveZstdCodec } from "../../infra/zstd-codec.js";
 
 export const SESSION_ARCHIVE_ZSTD_SUFFIX = ".zst";
-
-type ZstdCodec = {
-  compress: (data: Buffer) => Buffer;
-  decompress: (data: Buffer) => Buffer;
-};
-
-// node:zlib ships zstd since Node 22.15/23.8; Bun may not implement it yet.
-// Feature-detect so the Bun path writes plain JSONL archives instead of
-// crashing, and mixed plain/compressed archives always stay readable.
-function resolveZstdCodec(): ZstdCodec | null {
-  const candidate = zlib as Partial<{
-    zstdCompressSync: (data: Buffer) => Buffer;
-    zstdDecompressSync: (data: Buffer) => Buffer;
-  }>;
-  if (
-    typeof candidate.zstdCompressSync !== "function" ||
-    typeof candidate.zstdDecompressSync !== "function"
-  ) {
-    return null;
-  }
-  return {
-    compress: candidate.zstdCompressSync.bind(zlib),
-    decompress: candidate.zstdDecompressSync.bind(zlib),
-  };
-}
 
 const zstdCodec = resolveZstdCodec();
 
@@ -68,6 +43,17 @@ export function readSessionArchiveContentSync(filePath: string): string {
     );
   }
   return zstdCodec.decompress(fs.readFileSync(filePath)).toString("utf8");
+}
+
+/** Decodes staged archive bytes using the source archive's codec. */
+export function decodeSessionArchiveBytes(bytes: Uint8Array, compressed: boolean): string {
+  if (!compressed) {
+    return Buffer.from(bytes).toString("utf8");
+  }
+  if (!zstdCodec) {
+    throw new Error("Cannot decode compressed transcript archive: this runtime lacks zstd support");
+  }
+  return zstdCodec.decompress(Buffer.from(bytes)).toString("utf8");
 }
 
 /**

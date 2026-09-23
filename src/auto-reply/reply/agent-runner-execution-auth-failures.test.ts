@@ -1,55 +1,96 @@
 import { describe, expect, it } from "vitest";
 import { OAuthRefreshFailureError } from "../../agents/auth-profiles/oauth-refresh-failure.js";
+import { createCliOutputFailoverError } from "../../agents/cli-runner/output-error.js";
 import { FailoverError } from "../../agents/failover-error.js";
-import { MissingProviderAuthError } from "../../agents/model-auth.js";
+import { MissingProviderAuthError, ProviderAuthError } from "../../agents/model-auth.js";
 import type { TemplateContext } from "../templating.js";
 import {
   setupAgentRunnerExecutionTestState,
-  getRunAgentTurnWithFallback,
-  createMockTypingSignaler,
+  getExecuteAgentTurnForTest,
+  createRunAgentTurnParams,
   createFollowupRun,
   createMinimalRunAgentTurnParams,
+  createTestFallbackSummaryError,
 } from "./agent-runner-execution.test-support.js";
 
-const state = setupAgentRunnerExecutionTestState();
+const state = await setupAgentRunnerExecutionTestState();
 
-describe("runAgentTurnWithFallback: authentication failures", () => {
-  it("surfaces gateway reauth guidance for known OAuth refresh failures", async () => {
+const providerLoginPresentation = (command: string) => ({
+  blocks: [
+    {
+      type: "buttons",
+      buttons: [
+        {
+          label: "Sign in",
+          action: { type: "command", command },
+        },
+      ],
+    },
+  ],
+});
+const PROVIDER_LOGIN_PRESENTATION = providerLoginPresentation("/login openai");
+
+describe("executeAgentTurn: authentication failures", () => {
+  it("surfaces gateway reauth guidance without a profile id", async () => {
     state.runEmbeddedAgentMock.mockRejectedValueOnce(
-      new Error(
-        "OAuth token refresh failed for openai: refresh_token_reused. Please try again or re-authenticate.",
-      ),
+      new OAuthRefreshFailureError({ provider: "openai", message: "refresh_token_reused" }),
     );
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
-      commandBody: "hello",
-      followupRun: createFollowupRun(),
-      sessionCtx: {
-        Provider: "whatsapp",
-        MessageSid: "msg",
-      } as unknown as TemplateContext,
-      opts: {},
-      typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
-    });
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(createRunAgentTurnParams(createFollowupRun()));
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toBe(
-        "⚠️ Model login expired on the gateway for openai. Send `/login codex` from a private chat or Web UI session to pair a new Codex login, or re-auth with `openclaw models auth login --provider openai` in a terminal, then try again.",
+        "⚠️ Your model provider needs a new login. Send `/login openai` from a private chat or Control UI session. Where shown, you can also select **Sign in**. You can also re-auth with `openclaw models auth login --provider openai` on the gateway.",
       );
+      expect(result.payload.presentation).toEqual(PROVIDER_LOGIN_PRESENTATION);
+    }
+  });
+
+  it("adds provider login recovery to raw forwarded refresh failures", async () => {
+    const message = "OAuth token refresh failed for openai: refresh_token_invalidated";
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(
+      new FailoverError(message, {
+        reason: "auth_permanent",
+        provider: "openai",
+        model: "gpt-5.6-sol",
+        status: 401,
+        rawError: message,
+      }),
+    );
+
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(createMinimalRunAgentTurnParams());
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.presentation).toEqual(PROVIDER_LOGIN_PRESENTATION);
+    }
+  });
+
+  it("keeps provider login recovery actionable on Control UI turns", async () => {
+    state.isInternalMessageChannelMock.mockReturnValue(true);
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(
+      new OAuthRefreshFailureError({ provider: "openai", message: "refresh_token_reused" }),
+    );
+    const followupRun = createFollowupRun();
+    followupRun.run.messageProvider = "webchat";
+
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(
+      createMinimalRunAgentTurnParams({
+        followupRun,
+        sessionCtx: { Provider: "webchat", MessageSid: "msg" } as unknown as TemplateContext,
+      }),
+    );
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toBe(
+        "⚠️ Your model provider needs a new login. Send `/login openai` from a private chat or Control UI session. Where shown, you can also select **Sign in**. You can also re-auth with `openclaw models auth login --provider openai` on the gateway.",
+      );
+      expect(result.payload.presentation).toEqual(PROVIDER_LOGIN_PRESENTATION);
     }
   });
 
@@ -62,14 +103,15 @@ describe("runAgentTurnWithFallback: authentication failures", () => {
       }),
     );
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(createMinimalRunAgentTurnParams());
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toBe(
-        "⚠️ Model login expired on the gateway for openai. Send `/login codex` from a private chat or Web UI session to pair a new Codex login, or re-auth with `openclaw models auth login --provider openai --profile-id 'openai:user@example.com'` in a terminal, then try again.",
+        "⚠️ Your model provider needs a new login. Send `/login openai` from a private chat or Control UI session. Where shown, you can also select **Sign in**. You can also re-auth with `openclaw models auth login --provider openai --profile-id 'openai:user@example.com'` on the gateway.",
       );
+      expect(result.payload.presentation).toEqual(PROVIDER_LOGIN_PRESENTATION);
     }
   });
 
@@ -91,12 +133,13 @@ describe("runAgentTurnWithFallback: authentication failures", () => {
       }),
     );
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(createMinimalRunAgentTurnParams());
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toContain("--profile-id 'openai:user@example.com'");
+      expect(result.payload.presentation).toEqual(PROVIDER_LOGIN_PRESENTATION);
     }
   });
 
@@ -115,9 +158,8 @@ describe("runAgentTurnWithFallback: authentication failures", () => {
       status: 401,
       cause: refreshError,
     });
-    const summaryError = new Error("All models failed", { cause: failoverError });
-    summaryError.name = "FallbackSummaryError";
-    Object.assign(summaryError, {
+    const summaryError = createTestFallbackSummaryError({
+      message: "All models failed",
       attempts: [
         {
           provider: "openai",
@@ -127,15 +169,17 @@ describe("runAgentTurnWithFallback: authentication failures", () => {
         },
       ],
       soonestCooldownExpiry: null,
+      cause: failoverError,
     });
     state.runEmbeddedAgentMock.mockRejectedValueOnce(summaryError);
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(createMinimalRunAgentTurnParams());
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toContain("--profile-id 'openai:user@example.com'");
+      expect(result.payload.presentation).toEqual(PROVIDER_LOGIN_PRESENTATION);
     }
   });
 
@@ -148,8 +192,8 @@ describe("runAgentTurnWithFallback: authentication failures", () => {
       }),
     );
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback(
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(
       createMinimalRunAgentTurnParams({
         sessionCtx: {
           Provider: "whatsapp",
@@ -161,14 +205,76 @@ describe("runAgentTurnWithFallback: authentication failures", () => {
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
-      expect(result.payload.text).toContain(
-        "openclaw models auth login --provider openai` in a terminal",
-      );
+      expect(result.payload.text).toContain("openclaw models auth login --provider openai");
       expect(result.payload.text).not.toContain("user@example.com");
+      expect(result.payload.presentation).toEqual(PROVIDER_LOGIN_PRESENTATION);
     }
   });
 
-  it("keeps non-OpenAI OAuth refresh failures on provider-specific terminal guidance", async () => {
+  it.each([
+    ["openai", "/login openai"],
+    ["xai", "/login xai"],
+    ["minimax-portal", "/login minimax-portal"],
+  ])("keeps disabled %s OAuth profiles actionable on later turns", async (provider, command) => {
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(
+      new FailoverError("All OpenAI auth profiles are unavailable", {
+        reason: "auth_permanent",
+        provider,
+        model: "fixture-model",
+        authMode: "oauth",
+        authProfileFailure: { allInCooldown: true },
+      }),
+    );
+
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(createMinimalRunAgentTurnParams());
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toContain(command);
+      expect(result.payload.presentation).toEqual(providerLoginPresentation(command));
+    }
+  });
+
+  it.each([
+    {
+      label: "provider names without OAuth evidence",
+      error: new FailoverError("Authentication unavailable", {
+        reason: "auth_permanent",
+        provider: "some-provider",
+        authProfileFailure: { allInCooldown: true },
+      }),
+    },
+    {
+      label: "OpenAI API-key failures",
+      error: new FailoverError("invalid API key", {
+        reason: "auth_permanent",
+        provider: "openai",
+        model: "gpt-5.5",
+        authMode: "api-key",
+        authProfileFailure: { allInCooldown: true },
+      }),
+    },
+    {
+      label: "transient OpenAI refresh failures",
+      error: new OAuthRefreshFailureError({
+        provider: "openai",
+        message: "temporary upstream issue",
+      }),
+    },
+  ])("does not offer provider login for $label", async ({ error }) => {
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(error);
+
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(createMinimalRunAgentTurnParams());
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.presentation).toBeUndefined();
+    }
+  });
+
+  it("adds provider login while retaining non-OpenAI terminal guidance", async () => {
     state.runEmbeddedAgentMock.mockRejectedValueOnce(
       new OAuthRefreshFailureError({
         provider: "anthropic",
@@ -176,45 +282,50 @@ describe("runAgentTurnWithFallback: authentication failures", () => {
       }),
     );
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(createMinimalRunAgentTurnParams());
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toBe(
-        "⚠️ Model login expired on the gateway for anthropic. Re-auth with `openclaw models auth login --provider anthropic` in a terminal, then try again.",
+        "⚠️ Your model provider needs a new login. Send `/login anthropic` from a private chat or Control UI session. Where shown, you can also select **Sign in**. You can also re-auth with `openclaw models auth login --provider anthropic` on the gateway.",
       );
-      expect(result.payload.text).not.toContain("/login codex");
+      expect(result.payload.presentation).toEqual(providerLoginPresentation("/login anthropic"));
     }
   });
 
-  it("surfaces claude-cli re-auth hint over generic provider auth copy for 401 OAuth expiry", async () => {
-    // When the claude subprocess emits a 401 "Failed to authenticate" because
-    // its OAuth token has expired, the error is wrapped as a FailoverError with
-    // reason:"auth" and status:401.  Without the ordering fix, this would be
-    // caught by classifyProviderRequestError before reaching classifyOAuthRefreshFailure,
-    // producing the generic "re-authenticate this provider" copy instead of the
-    // targeted claude-cli re-auth command.
-    state.runEmbeddedAgentMock.mockRejectedValueOnce(
-      new FailoverError(
-        "Provider claude-cli failed: Failed to authenticate. API Error: 401 Invalid authentication credentials",
-        {
-          reason: "auth",
-          provider: "claude-cli",
-          model: "claude-sonnet-4-20250514",
-          status: 401,
-        },
-      ),
-    );
+  it("surfaces Agent SDK OAuth session expiry in Discord channels", async () => {
+    const error = createCliOutputFailoverError({
+      output: {
+        text: "",
+        errorText: "Failed to authenticate: OAuth session expired and could not be refreshed",
+      },
+      provider: "claude-cli",
+      model: "claude-opus-5",
+    });
+    if (!error) {
+      throw new Error("expected CLI output failure");
+    }
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(error);
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(
+      createMinimalRunAgentTurnParams({
+        sessionCtx: {
+          Provider: "discord",
+          Surface: "discord",
+          ChatType: "channel",
+          MessageSid: "msg",
+        } as unknown as TemplateContext,
+      }),
+    );
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toBe(
-        "⚠️ Model login expired on the gateway for claude-cli. Re-auth with `claude auth login && openclaw models auth login --provider anthropic --method cli` in a terminal, then try again.",
+        "⚠️ Your model provider needs a new login. Send `/login` from a private chat or Control UI session. Where shown, you can also select **Sign in**. You can also re-auth with `claude auth login && openclaw models auth login --provider anthropic --method cli` on the gateway.",
       );
+      expect(result.payload.presentation).toEqual(providerLoginPresentation("/login"));
     }
   });
 
@@ -231,13 +342,13 @@ describe("runAgentTurnWithFallback: authentication failures", () => {
       ),
     );
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(createMinimalRunAgentTurnParams());
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toBe(
-        "⚠️ Model login expired on the gateway for claude-cli. Re-auth with `claude auth login && openclaw models auth login --provider anthropic --method cli` in a terminal, then try again.",
+        "⚠️ Your model provider needs a new login. Send `/login` from a private chat or Control UI session. Where shown, you can also select **Sign in**. You can also re-auth with `claude auth login && openclaw models auth login --provider anthropic --method cli` on the gateway.",
       );
     }
   });
@@ -252,52 +363,34 @@ describe("runAgentTurnWithFallback: authentication failures", () => {
       }),
     );
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(createMinimalRunAgentTurnParams());
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toBe(
-        "⚠️ Model login expired on the gateway for claude-cli. Re-auth with `claude auth login && openclaw models auth login --provider anthropic --method cli` in a terminal, then try again.",
+        "⚠️ Your model provider needs a new login. Send `/login` from a private chat or Control UI session. Where shown, you can also select **Sign in**. You can also re-auth with `claude auth login && openclaw models auth login --provider anthropic --method cli` on the gateway.",
       );
     }
   });
 
   it("surfaces direct provider auth guidance for missing API keys", async () => {
     state.runEmbeddedAgentMock.mockRejectedValueOnce(
-      new Error(
-        'No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth; OpenAI agent model runs use openai/gpt-* through the Codex runtime. Set OPENAI_API_KEY only for direct OpenAI API-key surfaces. | No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth; OpenAI agent model runs use openai/gpt-* through the Codex runtime. Set OPENAI_API_KEY only for direct OpenAI API-key surfaces.',
+      new ProviderAuthError(
+        "missing-provider-auth",
+        "openai",
+        'No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth.',
+        { providerGuidance: true },
       ),
     );
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
-      commandBody: "hello",
-      followupRun: createFollowupRun(),
-      sessionCtx: {
-        Provider: "whatsapp",
-        MessageSid: "msg",
-      } as unknown as TemplateContext,
-      opts: {},
-      typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
-    });
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(createRunAgentTurnParams(createFollowupRun()));
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toBe(
-        "⚠️ Missing API key for OpenAI on the gateway. Use `openai/gpt-5.6-sol` with the OpenAI OAuth profile, or set `OPENAI_API_KEY` for direct OpenAI API-key runs.",
+        "⚠️ Missing API key for OpenAI on the gateway. Use `openai/gpt-6-astra` with the OpenAI OAuth profile, or set `OPENAI_API_KEY` for direct OpenAI API-key runs.",
       );
     }
   });
@@ -310,8 +403,8 @@ describe("runAgentTurnWithFallback: authentication failures", () => {
       }),
     );
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(createMinimalRunAgentTurnParams());
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
@@ -332,8 +425,8 @@ describe("runAgentTurnWithFallback: authentication failures", () => {
       }),
     );
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(createMinimalRunAgentTurnParams());
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
@@ -341,6 +434,34 @@ describe("runAgentTurnWithFallback: authentication failures", () => {
       expect(result.payload.text).toContain("openclaw configure");
       expect(result.payload.text).toContain("(invalid_grant)");
       expect(result.payload.text).not.toContain("Auth profile failover exhausted");
+    }
+  });
+
+  it("renders bounded recovery when the selected auth profile is unavailable", async () => {
+    state.isInternalMessageChannelMock.mockReturnValue(true);
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(
+      new FailoverError('Codex app-server auth profile "openai:private" was not found', {
+        reason: "auth",
+        provider: "openai",
+        status: 401,
+        code: "selected_auth_profile_unavailable",
+        authProfileFailure: { allInCooldown: false },
+        cause: new Error("arbitrary plugin detail for openai:private"),
+      }),
+    );
+
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(createMinimalRunAgentTurnParams());
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toBe(
+        "The selected auth profile is unavailable in this agent's OpenClaw credential store. Import or migrate that credential into the agent, select another configured profile, or run `openclaw configure`, then retry.",
+      );
+      expect(result.payload.text).not.toContain("openai:private");
+      expect(result.payload.text).not.toContain("arbitrary plugin detail");
+      expect(result.payload.text).not.toContain("/login");
+      expect(result.payload.presentation).toBeUndefined();
     }
   });
 
@@ -354,8 +475,8 @@ describe("runAgentTurnWithFallback: authentication failures", () => {
       }),
     );
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(createMinimalRunAgentTurnParams());
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
@@ -368,11 +489,15 @@ describe("runAgentTurnWithFallback: authentication failures", () => {
 
   it("points stale openai missing-key failures at doctor repair with re-auth fallback", async () => {
     state.runEmbeddedAgentMock.mockRejectedValueOnce(
-      new Error('No API key found for provider "openai".'),
+      new ProviderAuthError(
+        "missing-provider-auth",
+        "openai",
+        'No API key found for provider "openai".',
+      ),
     );
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(createMinimalRunAgentTurnParams());
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
@@ -384,32 +509,15 @@ describe("runAgentTurnWithFallback: authentication failures", () => {
 
   it("falls back to a generic provider message for unsafe missing-key provider ids", async () => {
     state.runEmbeddedAgentMock.mockRejectedValueOnce(
-      new Error('No API key found for provider "openai`\nrm -rf /".'),
+      new ProviderAuthError(
+        "missing-provider-auth",
+        "openai`\nrm -rf /",
+        'No API key found for provider "openai`\nrm -rf /".',
+      ),
     );
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
-      commandBody: "hello",
-      followupRun: createFollowupRun(),
-      sessionCtx: {
-        Provider: "whatsapp",
-        MessageSid: "msg",
-      } as unknown as TemplateContext,
-      opts: {},
-      typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
-    });
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(createRunAgentTurnParams(createFollowupRun()));
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
@@ -421,40 +529,18 @@ describe("runAgentTurnWithFallback: authentication failures", () => {
 
   it("falls back to a generic reauth command when the provider in the OAuth error is unsafe", async () => {
     state.runEmbeddedAgentMock.mockRejectedValueOnce(
-      new Error(
-        "OAuth token refresh failed for openai`\nrm -rf /: invalid_grant. Please try again or re-authenticate.",
-      ),
+      new OAuthRefreshFailureError({ provider: "openai`\nrm -rf /", message: "invalid_grant" }),
     );
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
-      commandBody: "hello",
-      followupRun: createFollowupRun(),
-      sessionCtx: {
-        Provider: "whatsapp",
-        MessageSid: "msg",
-      } as unknown as TemplateContext,
-      opts: {},
-      typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
-    });
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(createRunAgentTurnParams(createFollowupRun()));
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toBe(
-        "⚠️ Model login expired on the gateway. Re-auth with `openclaw models auth login` in a terminal, then try again.",
+        "⚠️ Your model provider needs a new login. Send `/login` from a private chat or Control UI session. Where shown, you can also select **Sign in**. You can also re-auth with `openclaw models auth login` on the gateway.",
       );
+      expect(result.payload.presentation).toEqual(providerLoginPresentation("/login"));
     }
   });
 });

@@ -2,13 +2,25 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveAgentContextLimits } from "../../agents/agent-scope.js";
 import { resolveCronStyleNow } from "../../agents/current-time.js";
 import { formatDateStamp, resolveUserTimezone } from "../../agents/date-time.js";
+import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
+import {
+  MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
+  readWorkspaceBootstrapFile,
+} from "../../agents/workspace-bootstrap-read.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { openRootFile } from "../../infra/boundary-file-read.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { FollowupRun } from "./queue/types.js";
+
+const log = createSubsystemLogger("post-compaction-context");
 
 const MAX_CONTEXT_CHARS = 1800;
 const DEFAULT_POST_COMPACTION_SECTIONS = ["Session Startup", "Red Lines"];
@@ -62,29 +74,48 @@ export async function readPostCompactionContext(
   const cfg = options?.cfg;
   const agentId = options?.agentId;
   const effectiveNowMs = options?.nowMs;
+  const configuredSections = cfg?.agents?.defaults?.compaction?.postCompactionSections;
+  if (!Array.isArray(configuredSections) || configuredSections.length === 0) {
+    return null;
+  }
   const agentsPath = path.join(workspaceDir, "AGENTS.md");
 
   try {
-    const opened = await openRootFile({
-      absolutePath: agentsPath,
-      rootPath: workspaceDir,
-      boundaryLabel: "workspace root",
-    });
-    if (!opened.ok) {
-      return null;
-    }
-    const content = (() => {
+    let content: string;
+    const access = getAgentWorkspaceAccess(workspaceDir);
+    if (access) {
+      const data = await access.bridge.readFile({
+        filePath: "AGENTS.md",
+        maxBytes: MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
+      });
+      if (data.length > MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES) {
+        return null;
+      }
+      content = new TextDecoder("utf-8", { fatal: true }).decode(data);
+    } else {
+      const opened = await openRootFile({
+        absolutePath: agentsPath,
+        rootPath: workspaceDir,
+        boundaryLabel: "workspace root",
+      });
+      if (!opened.ok) {
+        return null;
+      }
       try {
-        return fs.readFileSync(opened.fd, "utf-8");
+        content = await readWorkspaceBootstrapFile(opened.fd);
+      } catch (err) {
+        if (err instanceof RangeError) {
+          log.warn(
+            `Ignoring oversized AGENTS.md ${agentsPath}: file exceeds the ${MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES}-byte limit`,
+          );
+          return null;
+        }
+        throw err;
       } finally {
         fs.closeSync(opened.fd);
       }
-    })();
-
-    const configuredSections = cfg?.agents?.defaults?.compaction?.postCompactionSections;
-    if (!Array.isArray(configuredSections) || configuredSections.length === 0) {
-      return null;
     }
+
     const sectionNames = configuredSections;
 
     const foundSectionNames: string[] = [];
@@ -224,4 +255,26 @@ export function extractSections(
   }
 
   return results;
+}
+
+export async function appendPostCompactionRefreshPrompt(params: {
+  cfg: OpenClawConfig;
+  followupRun: FollowupRun;
+}): Promise<void> {
+  const refreshPrompt = await readPostCompactionContext(params.followupRun.run.workspaceDir, {
+    cfg: params.cfg,
+    agentId: params.followupRun.run.agentId,
+  });
+  if (!refreshPrompt) {
+    return;
+  }
+
+  const existingPrompt = normalizeOptionalString(params.followupRun.run.extraSystemPrompt);
+  if (existingPrompt?.includes(refreshPrompt)) {
+    return;
+  }
+
+  params.followupRun.run.extraSystemPrompt = [existingPrompt, refreshPrompt]
+    .filter(Boolean)
+    .join("\n\n");
 }

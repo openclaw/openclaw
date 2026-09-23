@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements outbound mentions behavior.
 import type { AnyMessageContent } from "baileys";
 
 export type WhatsAppOutboundMentionParticipant =
@@ -16,7 +15,7 @@ export type WhatsAppOutboundMentionResolution = {
 };
 
 const CODE_FENCE_RE = /```[\s\S]*?```/g;
-const INLINE_CODE_RE = /`[^`\n]+`/g;
+const INLINE_CODE_RE = /(?<=(?:^|[^\\])(?:\\\\)*)(`+)[\s\S]*?(?:(?<!`)\1(?!`)|$)/g;
 const OUTBOUND_MENTION_RE = /@(\+?\d+)/g;
 const KNOWN_USER_JID_RE = /^(\d+)(?::\d+)?@(s\.whatsapp\.net|hosted|lid|hosted\.lid|c\.us)$/i;
 const PHONE_JID_DOMAIN_RE = /^(s\.whatsapp\.net|hosted|c\.us)$/i;

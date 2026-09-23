@@ -4,22 +4,19 @@
  * Converts loosely typed route bodies into the closed BrowserActRequest union
  * used by Playwright and Chrome MCP action executors.
  */
+import { filterStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   ACT_MAX_BATCH_ACTIONS,
+  ACT_MAX_BATCH_DEPTH,
   ACT_MAX_CLICK_DELAY_MS,
   ACT_MAX_VIEWPORT_DIMENSION,
   ACT_MAX_WAIT_TIME_MS,
   normalizeActBoundedNonNegativeMs,
 } from "../act-policy.js";
-import type { BrowserActRequest, BrowserFormField } from "../client-actions.types.js";
-import { normalizeBrowserFormField } from "../form-fields.js";
+import type { BrowserActRequest } from "../client-actions.types.js";
+import { normalizeBrowserFormFields } from "../form-fields.js";
 import { resolveTargetIdFromTabs } from "../target-id.js";
-import {
-  type ActKind,
-  isActKind,
-  parseClickButton,
-  parseClickModifiers,
-} from "./agent.act.shared.js";
+import { isActKind, parseClickButton, parseClickModifiers } from "./agent.act.shared.js";
 import {
   readRouteFiniteNumber,
   readRouteInteger,
@@ -28,12 +25,30 @@ import {
 } from "./route-numeric.js";
 import { toBoolean, toStringArray, toStringOrEmpty } from "./utils.js";
 
-function normalizeActKind(raw: unknown): ActKind {
-  const kind = toStringOrEmpty(raw);
-  if (!isActKind(kind)) {
-    throw new Error("kind is required");
+const KEY_ALIASES = new Map([
+  ["esc", "Escape"],
+  ["return", "Enter"],
+  ["del", "Delete"],
+  ["ctrl", "Control"],
+  ["cmd", "Meta"],
+  ["space", "Space"],
+]);
+
+/**
+ * KeyboardEvent.key for Space is the literal " ". Map that exact whole value
+ * before trim so Browser panel Space presses survive. Keep trim-first chord
+ * splitting for every other input so whitespace-padded Plus (`" + "`, `"+ "`)
+ * still normalizes to `"+"`; use named `Ctrl+Space` for Space chords.
+ */
+function normalizePressKeyChord(raw: unknown): string {
+  if (raw === " ") {
+    return "Space";
   }
-  return kind;
+  // Empty chord segments represent a literal plus key and must survive normalization.
+  return toStringOrEmpty(raw)
+    .split("+")
+    .map((part) => KEY_ALIASES.get(part.toLowerCase()) ?? part)
+    .join("+");
 }
 
 function countBatchActions(actions: BrowserActRequest[]): number {
@@ -75,23 +90,15 @@ export function canonicalizeActTargetIds(
   return null;
 }
 
-function normalizeFields(rawFields: unknown): BrowserFormField[] {
-  const entries = Array.isArray(rawFields) ? rawFields : [];
-  return entries
-    .map((field) => {
-      if (!field || typeof field !== "object") {
-        return null;
-      }
-      return normalizeBrowserFormField(field as Record<string, unknown>);
-    })
-    .filter((field): field is BrowserFormField => field !== null);
+function normalizeFields(rawFields: unknown) {
+  return normalizeBrowserFormFields(Array.isArray(rawFields) ? rawFields : []);
 }
 
-function normalizeBatchAction(value: unknown): BrowserActRequest {
+function normalizeBatchAction(value: unknown, depth: number): BrowserActRequest {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("batch actions must be objects");
   }
-  return normalizeActRequest(value as Record<string, unknown>, { source: "batch" });
+  return normalizeActRequest(value as Record<string, unknown>, { source: "batch", depth });
 }
 
 function readActionNonNegativeInteger(
@@ -128,13 +135,27 @@ function readResizeDimension(body: Record<string, unknown>, key: "width" | "heig
   return value;
 }
 
+function definedAction<T extends BrowserActRequest>(action: T): T {
+  for (const key in action) {
+    if (action[key] === undefined) {
+      delete action[key];
+    }
+  }
+  return action;
+}
+
 /** Normalize one model/client action payload into a BrowserActRequest. */
 export function normalizeActRequest(
   body: Record<string, unknown>,
-  options?: { source?: "request" | "batch" },
+  options?: { source?: "request" | "batch"; depth?: number },
 ): BrowserActRequest {
   const source = options?.source ?? "request";
-  const kind = normalizeActKind(body.kind);
+  const depth = options?.depth ?? 0;
+  const kind = toStringOrEmpty(body.kind);
+  if (!isActKind(kind)) {
+    throw new Error("kind is required");
+  }
+  const targetId = toStringOrEmpty(body.targetId) || undefined;
 
   switch (kind) {
     case "click": {
@@ -161,18 +182,17 @@ export function normalizeActRequest(
         ACT_MAX_CLICK_DELAY_MS,
       );
       const timeoutMs = readActionTimeoutMs(body);
-      const targetId = toStringOrEmpty(body.targetId) || undefined;
-      return {
+      return definedAction({
         kind,
-        ...(ref ? { ref } : {}),
-        ...(selector ? { selector } : {}),
-        ...(targetId ? { targetId } : {}),
-        ...(doubleClick !== undefined ? { doubleClick } : {}),
-        ...(button ? { button } : {}),
-        ...(parsedModifiers.modifiers ? { modifiers: parsedModifiers.modifiers } : {}),
-        ...(delayMs !== undefined ? { delayMs } : {}),
-        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-      };
+        ref,
+        selector,
+        targetId,
+        doubleClick,
+        button,
+        modifiers: parsedModifiers.modifiers,
+        delayMs,
+        timeoutMs,
+      });
     }
     case "clickCoords": {
       const x = readRouteFiniteNumber(body.x, "x");
@@ -193,17 +213,7 @@ export function normalizeActRequest(
         ACT_MAX_CLICK_DELAY_MS,
       );
       const timeoutMs = readActionTimeoutMs(body);
-      const targetId = toStringOrEmpty(body.targetId) || undefined;
-      return {
-        kind,
-        x,
-        y,
-        ...(targetId ? { targetId } : {}),
-        ...(doubleClick !== undefined ? { doubleClick } : {}),
-        ...(button ? { button } : {}),
-        ...(delayMs !== undefined ? { delayMs } : {}),
-        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-      };
+      return definedAction({ kind, x, y, targetId, doubleClick, button, delayMs, timeoutMs });
     }
     case "type": {
       const ref = toStringOrEmpty(body.ref) || undefined;
@@ -215,34 +225,24 @@ export function normalizeActRequest(
       if (typeof text !== "string") {
         throw new Error("type requires text");
       }
-      const targetId = toStringOrEmpty(body.targetId) || undefined;
       const submit = toBoolean(body.submit);
       const slowly = toBoolean(body.slowly);
       const timeoutMs = readActionTimeoutMs(body);
-      return {
-        kind,
-        ...(ref ? { ref } : {}),
-        ...(selector ? { selector } : {}),
-        text,
-        ...(targetId ? { targetId } : {}),
-        ...(submit !== undefined ? { submit } : {}),
-        ...(slowly !== undefined ? { slowly } : {}),
-        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-      };
+      return definedAction({ kind, ref, selector, text, targetId, submit, slowly, timeoutMs });
+    }
+    case "insertText": {
+      if (typeof body.text !== "string") {
+        throw new Error("insertText requires text");
+      }
+      return definedAction({ kind, text: body.text, targetId });
     }
     case "press": {
-      const key = toStringOrEmpty(body.key);
+      const key = normalizePressKeyChord(body.key);
       if (!key) {
         throw new Error("press requires key");
       }
-      const targetId = toStringOrEmpty(body.targetId) || undefined;
       const delayMs = readActionNonNegativeInteger(body, "delayMs");
-      return {
-        kind,
-        key,
-        ...(targetId ? { targetId } : {}),
-        ...(delayMs !== undefined ? { delayMs } : {}),
-      };
+      return definedAction({ kind, key, targetId, delayMs });
     }
     case "hover":
     case "scrollIntoView": {
@@ -251,15 +251,8 @@ export function normalizeActRequest(
       if (!ref && !selector) {
         throw new Error(`${kind} requires ref or selector`);
       }
-      const targetId = toStringOrEmpty(body.targetId) || undefined;
       const timeoutMs = readActionTimeoutMs(body);
-      return {
-        kind,
-        ...(ref ? { ref } : {}),
-        ...(selector ? { selector } : {}),
-        ...(targetId ? { targetId } : {}),
-        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-      };
+      return definedAction({ kind, ref, selector, targetId, timeoutMs });
     }
     case "drag": {
       const startRef = toStringOrEmpty(body.startRef) || undefined;
@@ -272,49 +265,35 @@ export function normalizeActRequest(
       if (!endRef && !endSelector) {
         throw new Error("drag requires endRef or endSelector");
       }
-      const targetId = toStringOrEmpty(body.targetId) || undefined;
       const timeoutMs = readActionTimeoutMs(body);
-      return {
+      return definedAction({
         kind,
-        ...(startRef ? { startRef } : {}),
-        ...(startSelector ? { startSelector } : {}),
-        ...(endRef ? { endRef } : {}),
-        ...(endSelector ? { endSelector } : {}),
-        ...(targetId ? { targetId } : {}),
-        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-      };
+        startRef,
+        startSelector,
+        endRef,
+        endSelector,
+        targetId,
+        timeoutMs,
+      });
     }
     case "select": {
       const ref = toStringOrEmpty(body.ref) || undefined;
       const selector = toStringOrEmpty(body.selector) || undefined;
-      const values = toStringArray(body.values);
-      if ((!ref && !selector) || !values?.length) {
+      // Option values are content: empty strings and surrounding whitespace can identify a choice.
+      const values = filterStringEntries(body.values);
+      if ((!ref && !selector) || !values.length) {
         throw new Error("select requires ref/selector and values");
       }
-      const targetId = toStringOrEmpty(body.targetId) || undefined;
       const timeoutMs = readActionTimeoutMs(body);
-      return {
-        kind,
-        ...(ref ? { ref } : {}),
-        ...(selector ? { selector } : {}),
-        values,
-        ...(targetId ? { targetId } : {}),
-        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-      };
+      return definedAction({ kind, ref, selector, values, targetId, timeoutMs });
     }
     case "fill": {
       const fields = normalizeFields(body.fields);
       if (!fields.length) {
         throw new Error("fill requires fields");
       }
-      const targetId = toStringOrEmpty(body.targetId) || undefined;
       const timeoutMs = readActionTimeoutMs(body);
-      return {
-        kind,
-        fields,
-        ...(targetId ? { targetId } : {}),
-        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-      };
+      return definedAction({ kind, fields, targetId, timeoutMs });
     }
     case "resize": {
       const width = readResizeDimension(body, "width");
@@ -325,13 +304,7 @@ export function normalizeActRequest(
       if (width > ACT_MAX_VIEWPORT_DIMENSION || height > ACT_MAX_VIEWPORT_DIMENSION) {
         throw new Error(`resize width and height must not exceed ${ACT_MAX_VIEWPORT_DIMENSION}`);
       }
-      const targetId = toStringOrEmpty(body.targetId) || undefined;
-      return {
-        kind,
-        width,
-        height,
-        ...(targetId ? { targetId } : {}),
-      };
+      return definedAction({ kind, width, height, targetId });
     }
     case "wait": {
       const loadStateRaw = toStringOrEmpty(body.loadState);
@@ -357,20 +330,19 @@ export function normalizeActRequest(
           "wait requires at least one of: timeMs, text, textGone, selector, url, loadState, fn",
         );
       }
-      const targetId = toStringOrEmpty(body.targetId) || undefined;
       const timeoutMs = readActionTimeoutMs(body);
-      return {
+      return definedAction({
         kind,
-        ...(timeMs !== undefined ? { timeMs } : {}),
-        ...(text ? { text } : {}),
-        ...(textGone ? { textGone } : {}),
-        ...(selector ? { selector } : {}),
-        ...(url ? { url } : {}),
-        ...(loadState ? { loadState } : {}),
-        ...(fn ? { fn } : {}),
-        ...(targetId ? { targetId } : {}),
-        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-      };
+        timeMs,
+        text,
+        textGone,
+        selector,
+        url,
+        loadState,
+        fn,
+        targetId,
+        timeoutMs,
+      });
     }
     case "evaluate": {
       const fn = toStringOrEmpty(body.fn);
@@ -378,39 +350,30 @@ export function normalizeActRequest(
         throw new Error("evaluate requires fn");
       }
       const ref = toStringOrEmpty(body.ref) || undefined;
-      const targetId = toStringOrEmpty(body.targetId) || undefined;
       const timeoutMs = readActionTimeoutMs(body);
-      return {
-        kind,
-        fn,
-        ...(ref ? { ref } : {}),
-        ...(targetId ? { targetId } : {}),
-        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-      };
+      return definedAction({ kind, fn, ref, targetId, timeoutMs });
     }
     case "close": {
-      const targetId = toStringOrEmpty(body.targetId) || undefined;
-      return {
-        kind,
-        ...(targetId ? { targetId } : {}),
-      };
+      return definedAction({ kind, targetId });
     }
     case "batch": {
-      const actions = Array.isArray(body.actions) ? body.actions.map(normalizeBatchAction) : [];
+      // Bound nesting before recursing: oversized bodies parse fine, but
+      // unbounded recursion overflows the stack before the count check runs.
+      // Matches the executor's ACT_MAX_BATCH_DEPTH enforcement.
+      if (depth > ACT_MAX_BATCH_DEPTH) {
+        throw new Error(`batch nesting exceeds maximum depth of ${ACT_MAX_BATCH_DEPTH}`);
+      }
+      const actions = Array.isArray(body.actions)
+        ? body.actions.map((action) => normalizeBatchAction(action, depth + 1))
+        : [];
       if (!actions.length) {
         throw new Error(source === "batch" ? "batch requires actions" : "actions are required");
       }
       if (countBatchActions(actions) > ACT_MAX_BATCH_ACTIONS) {
         throw new Error(`batch exceeds maximum of ${ACT_MAX_BATCH_ACTIONS} actions`);
       }
-      const targetId = toStringOrEmpty(body.targetId) || undefined;
       const stopOnError = toBoolean(body.stopOnError);
-      return {
-        kind,
-        actions,
-        ...(targetId ? { targetId } : {}),
-        ...(stopOnError !== undefined ? { stopOnError } : {}),
-      };
+      return definedAction({ kind, actions, targetId, stopOnError });
     }
   }
   throw new Error("Unsupported browser act kind");

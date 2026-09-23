@@ -3,23 +3,37 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { WorkerAdmissionHandshake } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
-import type { WorkerProfile, WorkerSshEndpoint } from "../../plugins/types.js";
+import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import type {
+  WorkerDesktopEndpoint,
+  WorkerProfile,
+  WorkerSshEndpoint,
+} from "../../plugins/types.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
+import { ensureAdditiveStateColumns } from "../../state/openclaw-state-db-schema-additive.js";
 import {
+  assertOpenClawStateDatabaseForMaintenance,
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { hashWorkerCredential } from "./credential.js";
+import { ensureWorkerEnvironmentStoreSchema } from "./store-schema.js";
 import { createWorkerEnvironmentStore, type WorkerEnvironmentStore } from "./store.js";
 
-type WorkerEnvironmentBootstrapReceipt = WorkerAdmissionHandshake;
+type WorkerEnvironmentBootstrapReceipt = WorkerAdmissionHandshake & {
+  installKind?: "bundle" | "local";
+};
 type WorkerEnvironmentProfileSnapshot = WorkerProfile;
 type WorkerEnvironmentSshEndpoint = WorkerSshEndpoint;
 
 const HOST_KEY = ["ssh-ed25519", "AAAA"].join(" ");
 const SSH_ENDPOINT: WorkerEnvironmentSshEndpoint = {
   host: "worker.example.test",
-  port: 22,
+  port: 2222,
+  fallbackPorts: [22, 2200],
   user: "openclaw",
   hostKey: HOST_KEY,
   keyRef: {
@@ -27,6 +41,21 @@ const SSH_ENDPOINT: WorkerEnvironmentSshEndpoint = {
     provider: "worker-keys",
     id: "/static-development-key",
   },
+};
+const DESKTOP: WorkerDesktopEndpoint = {
+  protocol: "rfb",
+  port: 5900,
+  passwordFilePath: "/var/lib/crabbox/vnc.password",
+  username: "worker",
+  apps: [
+    {
+      id: "browser",
+      executablePath: "/usr/local/bin/openclaw-worker-browser",
+      args: ["--profile", "lease profile"],
+      cdpPort: 9222,
+    },
+    { id: "terminal", executablePath: "/usr/local/bin/openclaw-worker-terminal" },
+  ],
 };
 const BOOTSTRAP_RECEIPT: WorkerEnvironmentBootstrapReceipt = {
   bundleHash: "a".repeat(64),
@@ -45,10 +74,11 @@ describe("worker environment store", () => {
     root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-worker-env-"));
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     nowMs = 1_000;
-    store = createWorkerEnvironmentStore({ database, now: () => nowMs });
+    store = await createWorkerEnvironmentStore({ database, now: () => nowMs });
   });
 
   afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
   });
@@ -69,9 +99,20 @@ describe("worker environment store", () => {
     });
   }
 
-  function seedBootstrapping(environmentId: string, leaseId: string) {
-    createIntent(environmentId);
-    store.transition({ environmentId, from: "requested", to: "provisioning" });
+  function fallbackPortRows(environmentId: string) {
+    return database.db
+      .prepare(
+        `SELECT position, port
+         FROM worker_environment_ssh_fallback_ports
+         WHERE environment_id = ?
+         ORDER BY position`,
+      )
+      .all(environmentId);
+  }
+
+  async function seedBootstrapping(environmentId: string, leaseId: string) {
+    await createIntent(environmentId);
+    await store.transition({ environmentId, from: "requested", to: "provisioning" });
     return store.transition({
       environmentId,
       from: "provisioning",
@@ -104,9 +145,9 @@ describe("worker environment store", () => {
     };
   }
 
-  it("persists immutable intent before provisioning and survives reopen", () => {
+  it("persists immutable intent before provisioning and survives reopen", async () => {
     const snapshot = { settings: { region: "original" }, lifetime: { idleMinutes: 10 } };
-    expect(createIntent("worker-crash", snapshot)).toMatchObject({
+    expect(await createIntent("worker-crash", snapshot)).toMatchObject({
       environmentId: "worker-crash",
       providerId: "fake-provider",
       profileId: "test-profile",
@@ -126,9 +167,10 @@ describe("worker environment store", () => {
     });
 
     snapshot.settings.region = "mutated-after-create";
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-    store = createWorkerEnvironmentStore({ database, now: () => nowMs });
+    store = await createWorkerEnvironmentStore({ database, now: () => nowMs });
 
     expect(store.get("worker-crash")?.profileSnapshot).toEqual({
       settings: { region: "original" },
@@ -136,12 +178,12 @@ describe("worker environment store", () => {
     });
   });
 
-  it("persists a destroy request without inventing an unleased lifecycle state", () => {
-    createIntent("worker-cancelled");
+  it("persists a destroy request without inventing an unleased lifecycle state", async () => {
+    await createIntent("worker-cancelled");
     nowMs = 1_050;
 
     expect(
-      store.requestDestroy({ environmentId: "worker-cancelled", state: "requested" }),
+      await store.requestDestroy({ environmentId: "worker-cancelled", state: "requested" }),
     ).toMatchObject({
       state: "requested",
       leaseId: null,
@@ -150,43 +192,51 @@ describe("worker environment store", () => {
       updatedAtMs: 1_050,
     });
 
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-    store = createWorkerEnvironmentStore({ database, now: () => nowMs });
+    store = await createWorkerEnvironmentStore({ database, now: () => nowMs });
     expect(store.get("worker-cancelled")?.destroyRequestedAtMs).toBe(1_050);
   });
 
-  it("persists the complete lifecycle with canonical attachment metadata", () => {
-    createIntent();
+  it("persists the complete lifecycle with canonical attachment metadata", async () => {
+    await createIntent();
     nowMs = 1_010;
-    store.transition({ environmentId: "worker-1", from: "requested", to: "provisioning" });
+    await store.transition({ environmentId: "worker-1", from: "requested", to: "provisioning" });
     nowMs = 1_020;
-    store.transition({
+    await store.transition({
       environmentId: "worker-1",
       from: "provisioning",
       to: "bootstrapping",
-      patch: { leaseId: "lease-1", sshEndpoint: SSH_ENDPOINT },
+      patch: { leaseId: "lease-1", sshEndpoint: SSH_ENDPOINT, sharedHost: true },
     });
     nowMs = 1_030;
-    store.transition({
+    await store.transition({
       environmentId: "worker-1",
       from: "bootstrapping",
       to: "ready",
       patch: readyPatch(),
     });
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-    store = createWorkerEnvironmentStore({ database, now: () => nowMs });
+    store = await createWorkerEnvironmentStore({ database, now: () => nowMs });
     expect(store.get("worker-1")).toMatchObject({
       sshEndpoint: SSH_ENDPOINT,
+      sharedHost: true,
       bootstrapReceipt: {
         ...BOOTSTRAP_RECEIPT,
         protocolFeatures: ["model-proxy-v1", "workspace-sync-v1"],
       },
     });
+    expect(store.list()[0]?.sshEndpoint).toEqual(SSH_ENDPOINT);
+    expect(fallbackPortRows("worker-1")).toEqual([
+      { position: 0, port: 22 },
+      { position: 1, port: 2200 },
+    ]);
     nowMs = 1_040;
     expect(
-      store.transition({
+      await store.transition({
         environmentId: "worker-1",
         from: "ready",
         to: "attached",
@@ -200,10 +250,10 @@ describe("worker environment store", () => {
     });
     nowMs = 1_050;
     expect(
-      store.transition({ environmentId: "worker-1", from: "attached", to: "idle" }),
+      await store.transition({ environmentId: "worker-1", from: "attached", to: "idle" }),
     ).toMatchObject({ state: "idle", attachedSessionIds: [], idleSinceAtMs: 1_050 });
     nowMs = 1_055;
-    store.transition({
+    await store.transition({
       environmentId: "worker-1",
       from: "idle",
       to: "attached",
@@ -211,27 +261,243 @@ describe("worker environment store", () => {
     });
     nowMs = 1_060;
     expect(
-      store.transition({ environmentId: "worker-1", from: "attached", to: "draining" }),
+      await store.transition({ environmentId: "worker-1", from: "attached", to: "draining" }),
     ).toMatchObject({ state: "draining", attachedSessionIds: [] });
     nowMs = 1_070;
-    store.transition({ environmentId: "worker-1", from: "draining", to: "destroying" });
+    await store.transition({ environmentId: "worker-1", from: "draining", to: "destroying" });
 
     expect(store.listForReconcile().map((record) => record.state)).toEqual(["destroying"]);
     nowMs = 1_080;
     expect(
-      store.transition({ environmentId: "worker-1", from: "destroying", to: "destroyed" }),
+      await store.transition({ environmentId: "worker-1", from: "destroying", to: "destroyed" }),
     ).toMatchObject({
       state: "destroyed",
       stateChangedAtMs: 1_080,
       idleSinceAtMs: null,
       attachedSessionIds: [],
+      sshEndpoint: SSH_ENDPOINT,
     });
+    expect(fallbackPortRows("worker-1")).toEqual([
+      { position: 0, port: 22 },
+      { position: 1, port: 2200 },
+    ]);
     expect(store.listForReconcile()).toEqual([]);
   });
 
-  it("keeps renewal on one owner epoch and fences session replacement", () => {
-    const bootstrapping = seedBootstrapping("worker-owner", "lease-owner");
-    store.transition({
+  it.each([
+    { name: "none", fallbackPorts: [] },
+    { name: "one", fallbackPorts: [2201] },
+    { name: "non-numeric order", fallbackPorts: [2201, 22] },
+    { name: "ten", fallbackPorts: Array.from({ length: 10 }, (_, index) => 2310 - index) },
+  ])("replaces and reopens ordered SSH fallback rows ($name)", async ({ fallbackPorts }) => {
+    await seedBootstrapping("worker-unrelated", "lease-unrelated");
+    await seedBootstrapping("worker-endpoint-change", "lease-endpoint-change");
+    const replacement = { ...SSH_ENDPOINT, fallbackPorts };
+    const expected: WorkerEnvironmentSshEndpoint = { ...replacement };
+    if (fallbackPorts.length === 0) {
+      delete expected.fallbackPorts;
+    }
+
+    expect(
+      (
+        await store.transition({
+          environmentId: "worker-endpoint-change",
+          from: "bootstrapping",
+          to: "ready",
+          patch: { ...readyPatch(), sshEndpoint: replacement },
+        })
+      ).sshEndpoint,
+    ).toStrictEqual(expected);
+    expect(fallbackPortRows("worker-endpoint-change")).toEqual(
+      fallbackPorts.map((port, position) => ({ position, port })),
+    );
+
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
+    store = await createWorkerEnvironmentStore({ database, now: () => nowMs });
+    expect(store.get("worker-endpoint-change")?.sshEndpoint).toStrictEqual(expected);
+    for (const records of [store.list(), store.listForReconcile()]) {
+      expect(records.map((record) => [record.environmentId, record.sshEndpoint])).toEqual([
+        ["worker-endpoint-change", expected],
+        ["worker-unrelated", SSH_ENDPOINT],
+      ]);
+    }
+  });
+
+  it.each([0, 65_536, 9_007_199_254_740_993n])(
+    "rejects invalid persisted fallback port %s for an SSH environment",
+    async (port) => {
+      await seedBootstrapping("worker-invalid-port", "lease-invalid-port");
+      // Simulate damaged stored values while leaving the real decoder and endpoint validation active.
+      database.db.exec("PRAGMA ignore_check_constraints = ON");
+      try {
+        const sql = "UPDATE worker_environment_ssh_fallback_ports SET port = ? WHERE position = 0";
+        database.db.prepare(sql).run(port);
+      } finally {
+        database.db.exec("PRAGMA ignore_check_constraints = OFF");
+      }
+      await closeOpenClawStateDatabaseAsync();
+      closeOpenClawStateDatabaseForTest();
+      await expect(createWorkerEnvironmentStore({ database, now: () => nowMs })).rejects.toThrow(
+        /SSH fallback ports|CHECK constraint failed in worker_environment_ssh_fallback_ports/u,
+      );
+    },
+  );
+
+  it("lazily ensures the companion table once for a current database", async () => {
+    const databasePath = database.path;
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    const { DatabaseSync } = requireNodeSqlite();
+    const current = new DatabaseSync(databasePath);
+    current.exec("DROP TABLE worker_environment_ssh_fallback_ports;");
+    current.close();
+
+    database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
+    expect(
+      database.db
+        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
+        .get("worker_environment_ssh_fallback_ports"),
+    ).toBeUndefined();
+    expect(database.db.prepare("PRAGMA user_version").get()).toEqual({
+      user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+    });
+
+    expect(() =>
+      runOpenClawStateWriteTransaction(
+        () => {
+          ensureWorkerEnvironmentStoreSchema(database);
+          throw new Error("refused environment mutation");
+        },
+        { database },
+      ),
+    ).toThrow("refused environment mutation");
+    expect(
+      database.db
+        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
+        .get("worker_environment_ssh_fallback_ports"),
+    ).toBeUndefined();
+    ensureWorkerEnvironmentStoreSchema(database);
+    expect(
+      database.db
+        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
+        .get("worker_environment_ssh_fallback_ports"),
+    ).toEqual({ name: "worker_environment_ssh_fallback_ports" });
+
+    store = await createWorkerEnvironmentStore({ database, now: () => nowMs });
+    await createWorkerEnvironmentStore({ database, now: () => nowMs });
+    expect(
+      database.db
+        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
+        .get("worker_environment_ssh_fallback_ports"),
+    ).toEqual({ name: "worker_environment_ssh_fallback_ports" });
+    expect(() =>
+      assertOpenClawStateDatabaseForMaintenance(database.db, {
+        pathname: database.path,
+      }),
+    ).not.toThrow();
+  });
+
+  it("enforces canonical companion-table constraints and cascading ownership", async () => {
+    await createIntent("worker-constraints");
+    expect(
+      database.db
+        .prepare(
+          "SELECT strict FROM pragma_table_list WHERE name = 'worker_environment_ssh_fallback_ports'",
+        )
+        .get(),
+    ).toEqual({ strict: 1 });
+    const insert = database.db.prepare(
+      `INSERT INTO worker_environment_ssh_fallback_ports (environment_id, position, port)
+       VALUES (?, ?, ?)`,
+    );
+    expect(() => insert.run("worker-constraints", -1, 22)).toThrow();
+    expect(() => insert.run("worker-constraints", 10, 22)).toThrow();
+    expect(() => insert.run("worker-constraints", 0, 0)).toThrow();
+    expect(() => insert.run("worker-constraints", 0, 65_536)).toThrow();
+    expect(() => insert.run("missing-worker", 0, 22)).toThrow();
+
+    insert.run("worker-constraints", 0, 22);
+    expect(() => insert.run("worker-constraints", 0, 2200)).toThrow();
+    expect(() => insert.run("worker-constraints", 1, 22)).toThrow();
+    database.db
+      .prepare("DELETE FROM worker_environments WHERE environment_id = ?")
+      .run("worker-constraints");
+    expect(fallbackPortRows("worker-constraints")).toEqual([]);
+  });
+
+  it.each<WorkerDesktopEndpoint>([
+    DESKTOP,
+    {
+      protocol: "rfb",
+      port: 5900,
+      passwordFilePath: "/var/db/crabbox/openclaw-vnc.password",
+      username: "ec2-user",
+      allowsResize: false,
+    },
+    {
+      protocol: "rfb",
+      port: 5900,
+      passwordFilePath: "C:\\ProgramData\\crabbox\\vnc.password",
+      allowsResize: false,
+    },
+  ])("round-trips $passwordFilePath and clears it with the provider lease", async (desktop) => {
+    await createIntent("worker-desktop");
+    await store.transition({
+      environmentId: "worker-desktop",
+      from: "requested",
+      to: "provisioning",
+    });
+    await store.transition({
+      environmentId: "worker-desktop",
+      from: "provisioning",
+      to: "bootstrapping",
+      patch: { leaseId: "lease-desktop", sshEndpoint: SSH_ENDPOINT, desktop },
+    });
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
+    store = await createWorkerEnvironmentStore({ database, now: () => nowMs });
+    expect(store.get("worker-desktop")?.desktop).toEqual(desktop);
+
+    const requested = await store.requestDestroy({
+      environmentId: "worker-desktop",
+      state: "bootstrapping",
+      terminalState: "failed",
+    });
+    const draining = await store.transition({
+      environmentId: requested.environmentId,
+      from: requested.state,
+      to: "draining",
+    });
+    const destroying = await store.transition({
+      environmentId: draining.environmentId,
+      from: draining.state,
+      to: "destroying",
+    });
+    expect(
+      await store.transition({
+        environmentId: destroying.environmentId,
+        from: destroying.state,
+        to: "failed",
+        patch: { leaseId: null, sshEndpoint: null, lastError: "teardown complete" },
+      }),
+    ).toMatchObject({ leaseId: null, sshEndpoint: null, desktop: null });
+  });
+
+  it("idempotently ensures desktop_json on an existing state database", () => {
+    ensureAdditiveStateColumns(database.db, "runtime");
+    ensureAdditiveStateColumns(database.db, "runtime");
+    const columns = database.db.prepare("PRAGMA table_info(worker_environments)").all() as Array<{
+      name: string;
+    }>;
+    expect(columns.filter((column) => column.name === "desktop_json")).toHaveLength(1);
+  });
+
+  it("keeps renewal on one owner epoch and fences session replacement", async () => {
+    const bootstrapping = await seedBootstrapping("worker-owner", "lease-owner");
+    await store.transition({
       environmentId: bootstrapping.environmentId,
       from: bootstrapping.state,
       to: "ready",
@@ -240,12 +506,13 @@ describe("worker environment store", () => {
     expect(store.get("worker-owner")?.ownerEpoch).toBe(1);
     expect(store.getCredential("worker-owner")).toMatchObject({ ownerEpoch: 1, sessionId: null });
 
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-    store = createWorkerEnvironmentStore({ database, now: () => nowMs });
+    store = await createWorkerEnvironmentStore({ database, now: () => nowMs });
     const renewal = [CREDENTIAL, "renewal"].join("-");
     expect(
-      store.renewCredential({
+      await store.renewCredential({
         environmentId: "worker-owner",
         expectedOwnerEpoch: 1,
         credentialHash: hashWorkerCredential(renewal),
@@ -256,7 +523,7 @@ describe("worker environment store", () => {
     ).toMatchObject({ ownerEpoch: 1, credentialHash: hashWorkerCredential(renewal) });
     expect(store.get("worker-owner")?.ownerEpoch).toBe(1);
 
-    const attached = store.transition({
+    const attached = await store.transition({
       environmentId: "worker-owner",
       from: "ready",
       to: "attached",
@@ -269,7 +536,7 @@ describe("worker environment store", () => {
       sessionId: "session-1",
       deliveredAtMs: null,
     });
-    expect(() =>
+    await expect(
       store.renewCredential({
         environmentId: "worker-owner",
         expectedOwnerEpoch: 1,
@@ -278,12 +545,28 @@ describe("worker environment store", () => {
         rpcSetVersion: 1,
         expiresAtMs: nowMs + 20_000,
       }),
-    ).toThrow("owner epoch changed");
+    ).rejects.toThrow("owner epoch changed");
   });
 
-  it("allocates globally distinct owner epochs when a session moves environments", () => {
-    const makeReady = (environmentId: string, leaseId: string) => {
-      const bootstrapping = seedBootstrapping(environmentId, leaseId);
+  it("revokes one environment credential without changing lifecycle state", async () => {
+    const bootstrapping = await seedBootstrapping("worker-revocation", "lease-revocation");
+    await store.transition({
+      environmentId: bootstrapping.environmentId,
+      from: bootstrapping.state,
+      to: "ready",
+      patch: readyPatch(),
+    });
+    expect(store.getCredential(bootstrapping.environmentId)).toBeDefined();
+
+    await store.revokeEnvironmentCredential(bootstrapping.environmentId);
+
+    expect(store.getCredential(bootstrapping.environmentId)).toBeUndefined();
+    expect(store.get(bootstrapping.environmentId)?.state).toBe("ready");
+  });
+
+  it("allocates globally distinct owner epochs when a session moves environments", async () => {
+    const makeReady = async (environmentId: string, leaseId: string) => {
+      const bootstrapping = await seedBootstrapping(environmentId, leaseId);
       return store.transition({
         environmentId,
         from: bootstrapping.state,
@@ -292,23 +575,23 @@ describe("worker environment store", () => {
       });
     };
 
-    const firstReady = makeReady("worker-owner-a", "lease-owner-a");
-    const first = store.transition({
+    const firstReady = await makeReady("worker-owner-a", "lease-owner-a");
+    const first = await store.transition({
       environmentId: firstReady.environmentId,
       from: firstReady.state,
       to: "attached",
       patch: attachedPatch("shared-session", firstReady.environmentId),
     });
-    const secondReady = makeReady("worker-owner-b", "lease-owner-b");
-    expect(() =>
+    const secondReady = await makeReady("worker-owner-b", "lease-owner-b");
+    await expect(
       store.transition({
         environmentId: secondReady.environmentId,
         from: secondReady.state,
         to: "attached",
         patch: attachedPatch("shared-session", secondReady.environmentId),
       }),
-    ).toThrow("already attached to worker environment worker-owner-a");
-    store.transition({
+    ).rejects.toThrow("already attached to worker environment worker-owner-a");
+    await store.transition({
       environmentId: first.environmentId,
       from: first.state,
       to: "idle",
@@ -323,7 +606,7 @@ describe("worker environment store", () => {
     database.db
       .prepare("DELETE FROM worker_environments WHERE environment_id = ?")
       .run(first.environmentId);
-    const second = store.transition({
+    const second = await store.transition({
       environmentId: secondReady.environmentId,
       from: secondReady.state,
       to: "attached",
@@ -334,78 +617,86 @@ describe("worker environment store", () => {
     expect(second.ownerEpoch).toBeGreaterThan(first.ownerEpoch);
   });
 
-  it("rejects illegal, stale, and lease-incomplete transitions", () => {
-    createIntent();
-    expect(() =>
+  it("rejects illegal, stale, and lease-incomplete transitions", async () => {
+    await createIntent();
+    await expect(
       store.transition({ environmentId: "worker-1", from: "requested", to: "ready" }),
-    ).toThrow("Illegal worker environment transition");
+    ).rejects.toThrow("Illegal worker environment transition");
 
-    store.transition({ environmentId: "worker-1", from: "requested", to: "provisioning" });
-    expect(() =>
+    await store.transition({ environmentId: "worker-1", from: "requested", to: "provisioning" });
+    await expect(
       store.transition({
         environmentId: "worker-1",
         from: "requested",
         to: "provisioning",
       }),
-    ).toThrow("state conflict");
-    expect(() =>
+    ).rejects.toThrow("state conflict");
+    await expect(
       store.transition({
         environmentId: "worker-1",
         from: "provisioning",
         to: "bootstrapping",
       }),
-    ).toThrow("requires a provider lease");
-    expect(() =>
+    ).rejects.toThrow("requires a provider lease");
+    await expect(
       store.transition({
         environmentId: "worker-1",
         from: "provisioning",
         to: "bootstrapping",
         patch: { leaseId: "lease-1" },
       }),
-    ).toThrow("requires an SSH endpoint reference");
+    ).rejects.toThrow("requires an SSH endpoint reference");
+    await expect(
+      store.transition({
+        environmentId: "worker-1",
+        from: "provisioning",
+        to: "ready",
+        patch: { leaseId: "lease-1", sshEndpoint: SSH_ENDPOINT },
+      }),
+    ).rejects.toThrow("requires bootstrap proof or a node lease");
 
-    store.transition({
+    await store.transition({
       environmentId: "worker-1",
       from: "provisioning",
       to: "bootstrapping",
       patch: { leaseId: "lease-1", sshEndpoint: SSH_ENDPOINT },
     });
-    expect(() =>
+    await expect(
       store.transition({
         environmentId: "worker-1",
         from: "bootstrapping",
         to: "ready",
       }),
-    ).toThrow("requires a bootstrap receipt");
-    expect(() =>
+    ).rejects.toThrow("requires a bootstrap receipt");
+    await expect(
       store.transition({
         environmentId: "worker-1",
         from: "bootstrapping",
         to: "ready",
         patch: { leaseId: "different-lease" },
       }),
-    ).toThrow("lease id is immutable");
+    ).rejects.toThrow("lease id is immutable");
   });
 
-  it("enforces one credential-bound session and teardown fencing", () => {
-    const bootstrapping = seedBootstrapping("worker-multi-session", "lease-multi-session");
+  it("enforces one credential-bound session and teardown fencing", async () => {
+    const bootstrapping = await seedBootstrapping("worker-multi-session", "lease-multi-session");
     const ready = readyPatch();
-    expect(() =>
+    await expect(
       store.transition({
         environmentId: bootstrapping.environmentId,
         from: "bootstrapping",
         to: "ready",
         patch: { ...ready, credential: { ...ready.credential, sessionId: "session-1" } },
       }),
-    ).toThrow("session does not match");
-    store.transition({
+    ).rejects.toThrow("session does not match");
+    await store.transition({
       environmentId: bootstrapping.environmentId,
       from: bootstrapping.state,
       to: "ready",
       patch: ready,
     });
 
-    expect(() =>
+    await expect(
       store.transition({
         environmentId: bootstrapping.environmentId,
         from: "ready",
@@ -415,22 +706,22 @@ describe("worker environment store", () => {
           attachedSessionIds: ["session-a", "session-b"],
         },
       }),
-    ).toThrow("exactly one session id");
+    ).rejects.toThrow("exactly one session id");
 
-    store.requestDestroy({ environmentId: bootstrapping.environmentId, state: "ready" });
-    expect(() =>
+    await store.requestDestroy({ environmentId: bootstrapping.environmentId, state: "ready" });
+    await expect(
       store.transition({
         environmentId: bootstrapping.environmentId,
         from: "ready",
         to: "attached",
         patch: attachedPatch("session-a", "destroying"),
       }),
-    ).toThrow("after destroy is requested");
+    ).rejects.toThrow("after destroy is requested");
   });
 
-  it("invalidates stale receipts for rebootstrap and replaces them on readiness", () => {
-    seedBootstrapping("worker-rebootstrap", "lease-rebootstrap");
-    store.transition({
+  it("invalidates stale receipts for rebootstrap and replaces them on readiness", async () => {
+    await seedBootstrapping("worker-rebootstrap", "lease-rebootstrap");
+    await store.transition({
       environmentId: "worker-rebootstrap",
       from: "bootstrapping",
       to: "ready",
@@ -445,12 +736,16 @@ describe("worker environment store", () => {
         bootstrap_protocol_features_json = NULL
       WHERE environment_id = 'worker-rebootstrap';
     `);
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
+    store = await createWorkerEnvironmentStore({ database, now: () => nowMs });
     expect(store.get("worker-rebootstrap")).toMatchObject({
       state: "ready",
       bootstrapReceipt: null,
     });
     const beforeAttach = store.get("worker-rebootstrap");
-    expect(() =>
+    await expect(
       store.transition({
         environmentId: "worker-rebootstrap",
         from: "ready",
@@ -458,19 +753,19 @@ describe("worker environment store", () => {
         expectedOwnerEpoch: beforeAttach?.ownerEpoch,
         patch: attachedPatch("session-1", "legacy"),
       }),
-    ).toThrow("requires bootstrap proof");
+    ).rejects.toThrow("requires bootstrap proof");
     expect(store.get("worker-rebootstrap")).toMatchObject({
       state: "ready",
       ownerEpoch: beforeAttach?.ownerEpoch,
       attachedSessionIds: [],
     });
-    const idle = store.transition({
+    const idle = await store.transition({
       environmentId: "worker-rebootstrap",
       from: "ready",
       to: "idle",
     });
 
-    const bootstrapping = store.transition({
+    const bootstrapping = await store.transition({
       environmentId: "worker-rebootstrap",
       from: idle.state,
       to: "bootstrapping",
@@ -483,7 +778,7 @@ describe("worker environment store", () => {
 
     const nextReceipt = { ...BOOTSTRAP_RECEIPT, bundleHash: "b".repeat(64) };
     expect(
-      store.transition({
+      await store.transition({
         environmentId: "worker-rebootstrap",
         from: "bootstrapping",
         to: "ready",
@@ -498,33 +793,33 @@ describe("worker environment store", () => {
     });
   });
 
-  it("requires provider teardown proof before terminal bootstrap failure", () => {
-    seedBootstrapping("worker-bootstrap-failed", "lease-bootstrap-failed");
+  it("requires provider teardown proof before terminal bootstrap failure", async () => {
+    await seedBootstrapping("worker-bootstrap-failed", "lease-bootstrap-failed");
 
-    expect(() =>
+    await expect(
       store.transition({
         environmentId: "worker-bootstrap-failed",
         from: "bootstrapping",
         to: "failed",
         patch: { lastError: "node runtime missing" },
       }),
-    ).toThrow("Illegal worker environment transition");
+    ).rejects.toThrow("Illegal worker environment transition");
 
-    const unrequested = seedBootstrapping(
+    const unrequested = await seedBootstrapping(
       "worker-bootstrap-unrequested",
       "lease-bootstrap-unrequested",
     );
-    const unrequestedDraining = store.transition({
+    const unrequestedDraining = await store.transition({
       environmentId: unrequested.environmentId,
       from: unrequested.state,
       to: "draining",
     });
-    const unrequestedDestroying = store.transition({
+    const unrequestedDestroying = await store.transition({
       environmentId: unrequested.environmentId,
       from: unrequestedDraining.state,
       to: "destroying",
     });
-    expect(() =>
+    await expect(
       store.transition({
         environmentId: unrequested.environmentId,
         from: unrequestedDestroying.state,
@@ -535,27 +830,27 @@ describe("worker environment store", () => {
           lastError: "node runtime missing",
         },
       }),
-    ).toThrow("requires durable provider teardown intent");
+    ).rejects.toThrow("requires durable provider teardown intent");
 
-    const pending = seedBootstrapping("worker-bootstrap-cleanup", "lease-bootstrap-cleanup");
-    const requested = store.requestDestroy({
+    const pending = await seedBootstrapping("worker-bootstrap-cleanup", "lease-bootstrap-cleanup");
+    const requested = await store.requestDestroy({
       environmentId: pending.environmentId,
       state: pending.state,
       terminalState: "failed",
     });
-    const draining = store.transition({
+    const draining = await store.transition({
       environmentId: pending.environmentId,
       from: requested.state,
       to: "draining",
     });
-    const destroying = store.transition({
+    const destroying = await store.transition({
       environmentId: pending.environmentId,
       from: draining.state,
       to: "destroying",
     });
     expect(destroying.teardownTerminalState).toBe("failed");
     expect(
-      store.transition({
+      await store.transition({
         environmentId: pending.environmentId,
         from: destroying.state,
         to: "failed",
@@ -570,17 +865,25 @@ describe("worker environment store", () => {
       leaseId: null,
       teardownTerminalState: "failed",
     });
+    expect(store.get(pending.environmentId)?.sshEndpoint).toBeNull();
+    expect(fallbackPortRows(pending.environmentId)).toEqual([]);
   });
 
-  it("persists retryable errors without a self-transition", () => {
-    createIntent();
+  it("persists retryable errors without a self-transition", async () => {
+    const initialVersion = store.inventoryVersion();
+    await createIntent();
+    const createdVersion = store.inventoryVersion();
+    expect(createdVersion).toBeGreaterThan(initialVersion);
     nowMs = 1_010;
-    store.transition({ environmentId: "worker-1", from: "requested", to: "provisioning" });
+    await store.transition({ environmentId: "worker-1", from: "requested", to: "provisioning" });
+    const provisioningVersion = store.inventoryVersion();
+    expect(provisioningVersion).toBeGreaterThan(createdVersion);
     const stateChangedAtMs = store.get("worker-1")?.stateChangedAtMs;
+    expect(store.inventoryVersion()).toBe(provisioningVersion);
 
     nowMs = 1_020;
     expect(
-      store.recordError({
+      await store.recordError({
         environmentId: "worker-1",
         state: "provisioning",
         error: "provider temporarily unavailable",
@@ -591,11 +894,12 @@ describe("worker environment store", () => {
       updatedAtMs: 1_020,
       lastError: "provider temporarily unavailable",
     });
+    expect(store.inventoryVersion()).toBeGreaterThan(provisioningVersion);
   });
 
-  it("accepts only SecretRef metadata for persisted SSH keys", () => {
-    createIntent();
-    store.transition({ environmentId: "worker-1", from: "requested", to: "provisioning" });
+  it("accepts only SecretRef metadata for persisted SSH keys", async () => {
+    await createIntent();
+    await store.transition({ environmentId: "worker-1", from: "requested", to: "provisioning" });
     const plaintextEndpoint = {
       ...SSH_ENDPOINT,
       keyRef: "plaintext-private-key",
@@ -606,14 +910,14 @@ describe("worker environment store", () => {
     } as WorkerEnvironmentSshEndpoint;
 
     for (const sshEndpoint of [plaintextEndpoint, noncanonicalEndpoint]) {
-      expect(() =>
+      await expect(
         store.transition({
           environmentId: "worker-1",
           from: "provisioning",
           to: "bootstrapping",
           patch: { leaseId: "lease-1", sshEndpoint },
         }),
-      ).toThrow("SSH key must be a canonical SecretRef");
+      ).rejects.toThrow("SSH key must be a canonical SecretRef");
     }
   });
 
@@ -621,18 +925,18 @@ describe("worker environment store", () => {
     ["missing", undefined],
     ["multiple lines", `${HOST_KEY}\n${HOST_KEY}`],
     ["extra fields", [HOST_KEY, "comment"].join(" ")],
-  ])("rejects %s persisted SSH host-key material", (_label, hostKey) => {
-    createIntent();
-    store.transition({ environmentId: "worker-1", from: "requested", to: "provisioning" });
+  ])("rejects %s persisted SSH host-key material", async (_label, hostKey) => {
+    await createIntent();
+    await store.transition({ environmentId: "worker-1", from: "requested", to: "provisioning" });
     const sshEndpoint = { ...SSH_ENDPOINT, hostKey } as unknown as WorkerEnvironmentSshEndpoint;
 
-    expect(() =>
+    await expect(
       store.transition({
         environmentId: "worker-1",
         from: "provisioning",
         to: "bootstrapping",
         patch: { leaseId: "lease-1", sshEndpoint },
       }),
-    ).toThrow("SSH host key");
+    ).rejects.toThrow("SSH host key");
   });
 });

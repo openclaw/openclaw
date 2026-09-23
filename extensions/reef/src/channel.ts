@@ -1,3 +1,4 @@
+import type { ChannelThreadingToolContext } from "openclaw/plugin-sdk/channel-contract";
 import {
   dispatchInboundDirectDm,
   recordChannelBotPairLoopAndCheckSuppression,
@@ -10,6 +11,8 @@ import {
   type ChannelPlugin,
 } from "openclaw/plugin-sdk/core";
 import { createChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
+import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
+import { runReefChannelLifecycle } from "./channel-lifecycle.js";
 import {
   ReefChannelConfigSchema,
   autonomyBudget,
@@ -18,24 +21,31 @@ import {
   resolveReefConfig,
   type ReefCoreConfig,
 } from "./config-schema.js";
-import { createConfiguredGuard, ReefMessageFlow } from "./flow.js";
+import { ReefMessageFlow } from "./flow.js";
 import { ReefFriendManager } from "./friends.js";
+import { createConfiguredGuard } from "./guard.js";
 import { resolveReefInboundDispatchContent } from "./inbound.js";
 import { reefMessageAdapter, reefOutboundAdapter } from "./outbound.js";
 import {
   createReefOwnerNoticeHandler,
+  notifyOverdueReefDeliveries,
   processReefInboxEntriesInOrder,
   ReefReceiptNotifier,
 } from "./owner-notice.js";
 import { isRephrasedReefResend } from "./rejection-resend.js";
-import { getActiveReef, getOptionalReefRuntime, getReefRuntime, setActiveReef } from "./runtime.js";
-import { reefSetupAdapter, reefSetupWizard } from "./setup.js";
-import { assertReefIdentityBinding, loadKeys, openStores } from "./state.js";
+import {
+  createReefRuntimeAuthority,
+  getActiveReef,
+  getOptionalReefRuntime,
+  getReefRuntime,
+} from "./runtime.js";
+import { reefSetupContract, reefSetupWizard } from "./setup.js";
+import { assertReefIdentityBinding, loadKeys, openStores, ReefInboxCursorStore } from "./state.js";
 import {
   ReefInboxConnection,
   ReefTransportClient,
-  abortableSleep,
   createReefWebSocket,
+  isRetryableReefRelayFailure,
 } from "./transport.js";
 import { isReefPairingApprovalToken, openReefTrustStore } from "./trust-store.js";
 import type { ReefAccount, ReefIngressMessage } from "./types.js";
@@ -91,6 +101,12 @@ function replyText(payload: unknown): string {
     : "";
 }
 
+function matchesReefToolTarget(target: string, toolContext?: ChannelThreadingToolContext): boolean {
+  const currentTarget = toolContext?.currentMessagingTarget ?? toolContext?.currentChannelId;
+  const normalizedCurrent = normalizeReefTarget(currentTarget ?? "");
+  return normalizedCurrent !== undefined && normalizeReefTarget(target) === normalizedCurrent;
+}
+
 export const reefPlugin: ChannelPlugin<ReefAccount> = {
   id: "reef",
   meta: {
@@ -113,7 +129,7 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
   },
   reload: { configPrefixes: ["channels.reef"] },
   configSchema: buildChannelConfigSchema(ReefChannelConfigSchema),
-  setup: reefSetupAdapter,
+  setupContract: reefSetupContract,
   setupWizard: reefSetupWizard as never,
   config: {
     listAccountIds: () => ["default"],
@@ -165,6 +181,26 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
         : null;
     },
   },
+  threading: {
+    threadAddressing: "message",
+    matchesToolContextTarget: ({ target, toolContext }) =>
+      matchesReefToolTarget(target, toolContext),
+    resolveReplyToMode: () => "all",
+    buildToolContext: ({ context, hasRepliedRef }) => {
+      const currentTarget = context.To?.trim() || undefined;
+      return {
+        currentChannelId: currentTarget,
+        currentMessagingTarget: currentTarget,
+        currentMessageId: context.CurrentMessageId,
+        currentThreadTs:
+          context.MessageThreadId != null ? String(context.MessageThreadId) : undefined,
+        replyToMode: context.ReplyToMode ?? "all",
+        hasRepliedRef,
+      };
+    },
+    resolveAutoThreadId: ({ to, toolContext }) =>
+      matchesReefToolTarget(to, toolContext) ? toolContext?.currentThreadTs : undefined,
+  },
   directory: createChannelDirectoryAdapter({
     listPeers: async ({ cfg, query, limit }) =>
       listTrustedPeerDirectoryEntries({
@@ -207,6 +243,7 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
       configured: account.configured,
       running: runtime?.running ?? false,
       connected: runtime?.connected ?? false,
+      lifecycle: runtime?.lifecycle,
       lastConnectedAt: runtime?.lastConnectedAt ?? null,
       lastError: runtime?.lastError ?? null,
       extra: { handle: account.config.handle },
@@ -219,16 +256,19 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
       }
       const runtime = getReefRuntime();
       const keys = await loadKeys(runtime);
-      assertReefIdentityBinding(runtime, {
+      const identityBinding = {
         handle: ctx.account.config.handle!,
         relayUrl: parseReefRelayUrl(ctx.account.config.relayUrl),
-      });
+      };
+      await assertReefIdentityBinding(runtime, identityBinding);
+      const authority = createReefRuntimeAuthority(ctx.abortSignal);
       const transport = new ReefTransportClient(
         ctx.account.config.relayUrl,
         ctx.account.config.handle!,
         keys,
       );
-      const stores = openStores(runtime, keys);
+      const stores = openStores(runtime, keys, { authoritySignal: authority.signal });
+      const inboxCursor = new ReefInboxCursorStore(runtime, identityBinding);
       const reviews = stores.reviews;
       const pairing = createChannelPairingController({
         core: runtime,
@@ -236,12 +276,15 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
         accountId: "default",
       });
       const trust = openReefTrustStore(runtime, ctx.account.config);
-      const friends = new ReefFriendManager(transport, trust, {
-        list: pairing.readAllowFromStore,
-        remove: async (peer) => {
-          return (await pairing.removeAllowFromStoreEntry(peer)).changed;
+      const friends = new ReefFriendManager(
+        transport,
+        trust,
+        {
+          list: pairing.readAllowFromStore,
+          remove: async (peer) => (await pairing.removeAllowFromStoreEntry(peer)).changed,
         },
-      });
+        authority.signal,
+      );
       const onIngress = async (message: ReefIngressMessage) => {
         const dispatchContent = resolveReefInboundDispatchContent(message);
         const budget = autonomyBudget(message.autonomy);
@@ -262,6 +305,7 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
           return;
         }
         await dispatchInboundDirectDm({
+          channelIngress: "unsupported",
           cfg: ctx.cfg,
           channel: "reef",
           channelLabel: "Reef",
@@ -307,6 +351,7 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
         replay: stores.replay,
         reviews,
         delivered: stores.delivered,
+        authoritySignal: authority.signal,
         onIngress,
         onOwnerNotice: async (text) =>
           ownerNotice({
@@ -319,6 +364,7 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
           let resendText = "";
           let dispatchFailure: Error | undefined;
           await dispatchInboundDirectDm({
+            channelIngress: "unsupported",
             cfg: ctx.cfg,
             channel: "reef",
             channelLabel: "Reef",
@@ -391,8 +437,8 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
           signal: ctx.abortSignal,
         },
       );
-      const reconcile = async () => {
-        await friends.reconcile();
+      const reconcile = async (signal: AbortSignal) => {
+        await friends.reconcile(signal);
         await friends.surfacePairingCandidates(async ({ peer, fingerprint, approvalToken }) => {
           await pairing.issueChallenge({
             senderId: peer,
@@ -400,14 +446,19 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
             meta: { reefApproval: approvalToken },
             sendPairingReply: async () => {},
           });
-        });
+        }, signal);
       };
-      // Refresh peer keys before recovery can dispatch an agent turn. Activate
-      // only after reconciliation, but before that turn can use Reef outbound.
-      await reconcile();
-      setActiveReef({ flow, friends, reviews });
-      await receiptNotifier.notifyRejections(trust.pendingOutboundRejections());
-      ctx.setStatus({ accountId: "default", running: true, connected: false });
+      // Attempt the peer-key refresh before recovery can dispatch an agent
+      // turn. The lifecycle activates only after that attempt is classified.
+      // The lifecycle owns both the ordering and the reconcile failure policy.
+      const activate = async () => {
+        await receiptNotifier.notifyRejections(trust.pendingOutboundRejections());
+        if (ctx.abortSignal.aborted) {
+          return;
+        }
+        authority.activate({ flow, friends, reviews });
+        ctx.setStatus({ accountId: "default", running: true, connected: false });
+      };
       const inbox = new ReefInboxConnection(
         transport,
         (entries) =>
@@ -419,33 +470,68 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
               ctx.log?.error?.(`reef rejection notice processing failed: ${String(error)}`),
           }),
         createReefWebSocket,
-        (state) => {
-          if (ctx.abortSignal.aborted) {
-            return;
-          }
-          ctx.setStatus(
-            state === "connected"
-              ? {
-                  accountId: "default",
-                  running: true,
-                  connected: true,
-                  lastConnectedAt: Date.now(),
-                }
-              : { accountId: "default", running: true, connected: false },
-          );
+        {
+          initialCursor: await inboxCursor.load(),
+          persistCursor: (cursor) => inboxCursor.advance(cursor),
+          onState: (state) => {
+            if (ctx.abortSignal.aborted || state !== "connected") {
+              return;
+            }
+            ctx.setStatus(channelReadyPatch({ accountId: "default", lastDisconnect: null }));
+          },
+          onError: (error) => {
+            if (ctx.abortSignal.aborted) {
+              return;
+            }
+            ctx.log?.error?.(`reef inbox connection failed: ${error.message}`);
+            ctx.setStatus({
+              accountId: "default",
+              running: true,
+              connected: false,
+              lifecycle: "recovering",
+              lastError: error.message,
+              lastDisconnect: { at: Date.now(), error: error.message },
+            });
+          },
         },
       );
-      const reconciliationLoop = async () => {
-        while (!ctx.abortSignal.aborted) {
-          await abortableSleep(30_000, ctx.abortSignal);
-          if (!ctx.abortSignal.aborted) {
-            await reconcile();
-          }
-        }
-      };
       try {
-        await Promise.all([inbox.start(ctx.abortSignal), reconciliationLoop()]);
+        await runReefChannelLifecycle({
+          parentSignal: ctx.abortSignal,
+          startInbox: (signal) => inbox.start(signal),
+          reconcile: async (signal) => {
+            // The overdue sweep must run even while the relay is unreachable:
+            // that outage is exactly when queued sends go unconfirmed, and the
+            // notices themselves are local.
+            let reconcileError: Error | undefined;
+            try {
+              await reconcile(signal);
+            } catch (error) {
+              reconcileError = error instanceof Error ? error : new Error(String(error));
+            }
+            signal.throwIfAborted();
+            await notifyOverdueReefDeliveries({ trust, ownerNotice });
+            signal.throwIfAborted();
+            // Re-attempts parked inbox entries (pending owner reviews, guard
+            // outages) so an owner decision completes delivery within one
+            // reconcile interval without waiting for a socket reconnect.
+            try {
+              await inbox.poll(signal);
+            } catch (error) {
+              signal.throwIfAborted();
+              ctx.log?.warn?.(`reef inbox poll failed: ${String(error)}`);
+            }
+            if (reconcileError) {
+              throw reconcileError;
+            }
+          },
+          onReconcileError: (error) =>
+            ctx.log?.error?.(`reef friend reconcile failed: ${String(error)}`),
+          shouldContinueAfterStartupReconcileError: isRetryableReefRelayFailure,
+          onReady: activate,
+        });
       } finally {
+        authority.release();
         ctx.setStatus({ accountId: "default", running: false, connected: false });
       }
     },

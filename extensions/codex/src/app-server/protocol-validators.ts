@@ -1,26 +1,30 @@
+import { normalizeJsonSchemaForTypeBox } from "openclaw/plugin-sdk/json-schema-runtime";
 /**
  * Runtime validators for Codex app-server protocol payloads, including schema
  * normalization for generated JSON Schema before TypeBox compilation.
  */
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { Compile, type Validator as TypeBoxValidator } from "typebox/compile";
-import dynamicToolCallParamsSchema from "./protocol-generated/json/DynamicToolCallParams.json" with { type: "json" };
-import errorNotificationSchema from "./protocol-generated/json/v2/ErrorNotification.json" with { type: "json" };
-import modelListResponseSchema from "./protocol-generated/json/v2/ModelListResponse.json" with { type: "json" };
-import threadResumeResponseSchema from "./protocol-generated/json/v2/ThreadResumeResponse.json" with { type: "json" };
-import threadStartResponseSchema from "./protocol-generated/json/v2/ThreadStartResponse.json" with { type: "json" };
-import turnCompletedNotificationSchema from "./protocol-generated/json/v2/TurnCompletedNotification.json" with { type: "json" };
-import turnStartResponseSchema from "./protocol-generated/json/v2/TurnStartResponse.json" with { type: "json" };
-import type {
-  CodexDynamicToolCallParams,
-  CodexErrorNotification,
-  CodexModelListResponse,
-  CodexThreadForkResponse,
-  CodexThreadResumeResponse,
-  CodexThreadStartResponse,
-  CodexTurn,
-  CodexTurnCompletedNotification,
-  CodexTurnStartResponse,
+import rawDynamicToolCallParamsSchema from "./protocol-generated/json/DynamicToolCallParams.json" with { type: "json" };
+import sharedDefinitionsSchema from "./protocol-generated/json/v2/CodexAppServerProtocolDefinitions.json" with { type: "json" };
+import rawErrorNotificationSchema from "./protocol-generated/json/v2/ErrorNotification.json" with { type: "json" };
+import rawModelListResponseSchema from "./protocol-generated/json/v2/ModelListResponse.json" with { type: "json" };
+import rawThreadResumeResponseSchema from "./protocol-generated/json/v2/ThreadResumeResponse.json" with { type: "json" };
+import rawThreadStartResponseSchema from "./protocol-generated/json/v2/ThreadStartResponse.json" with { type: "json" };
+import rawTurnCompletedNotificationSchema from "./protocol-generated/json/v2/TurnCompletedNotification.json" with { type: "json" };
+import rawTurnStartResponseSchema from "./protocol-generated/json/v2/TurnStartResponse.json" with { type: "json" };
+import {
+  isJsonObject,
+  type CodexDynamicToolCallParams,
+  type CodexErrorNotification,
+  type CodexModelListResponse,
+  type CodexThread,
+  type CodexThreadForkResponse,
+  type CodexThreadItem,
+  type CodexThreadResumeResponse,
+  type CodexThreadStartResponse,
+  type CodexTurnCompletedNotification,
+  type CodexTurnStartResponse,
 } from "./protocol.js";
 
 type ValidationError = {
@@ -33,80 +37,109 @@ type CodexValidator<T> = {
   errors: (value: unknown) => ValidationError[];
 };
 
+const externalDefinitionRefPrefix = "./CodexAppServerProtocolDefinitions.json#/definitions/";
+const rootExternalDefinitionRefPrefix = "./v2/CodexAppServerProtocolDefinitions.json#/definitions/";
+const localDefinitionRefPrefix = "#/definitions/";
+
+function materializeCodexSchema(
+  schema: unknown,
+  externalRefPrefix = externalDefinitionRefPrefix,
+): unknown {
+  const sharedDefinitions: unknown = sharedDefinitionsSchema.definitions;
+  if (!isRecord(schema) || !isRecord(sharedDefinitions)) {
+    return schema;
+  }
+  const reachable = collectDefinitionRefs(schema, externalRefPrefix);
+  const pending = [...reachable];
+  while (pending.length > 0) {
+    const name = pending.pop();
+    if (name === undefined) {
+      continue;
+    }
+    const definition = sharedDefinitions[name];
+    if (definition === undefined) {
+      throw new Error(`Missing generated Codex schema definition: ${name}`);
+    }
+    for (const dependency of collectDefinitionRefs(definition, localDefinitionRefPrefix)) {
+      if (!reachable.has(dependency)) {
+        reachable.add(dependency);
+        pending.push(dependency);
+      }
+    }
+  }
+  if (reachable.size === 0) {
+    return schema;
+  }
+  const definitions = Object.fromEntries(
+    Object.entries(sharedDefinitions).filter(([name]) => reachable.has(name)),
+  );
+  return rewriteDefinitionRefs({ ...schema, definitions }, externalRefPrefix);
+}
+
+function collectDefinitionRefs(
+  value: unknown,
+  prefix: string,
+  names = new Set<string>(),
+): Set<string> {
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      collectDefinitionRefs(entry, prefix, names);
+    }
+  } else if (isRecord(value)) {
+    if (typeof value.$ref === "string" && value.$ref.startsWith(prefix)) {
+      const name = value.$ref.slice(prefix.length).split("/", 1)[0];
+      if (name) {
+        names.add(name.replaceAll("~1", "/").replaceAll("~0", "~"));
+      }
+    }
+    for (const entry of Object.values(value)) {
+      collectDefinitionRefs(entry, prefix, names);
+    }
+  }
+  return names;
+}
+
+function rewriteDefinitionRefs(value: unknown, externalRefPrefix: string): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => rewriteDefinitionRefs(entry, externalRefPrefix));
+  }
+  if (!isRecord(value)) {
+    return value;
+  }
+  return Object.fromEntries(
+    Object.entries(value).map(([key, entry]) => [
+      key,
+      key === "$ref" && typeof entry === "string" && entry.startsWith(externalRefPrefix)
+        ? `${localDefinitionRefPrefix}${entry.slice(externalRefPrefix.length)}`
+        : rewriteDefinitionRefs(entry, externalRefPrefix),
+    ]),
+  );
+}
+
+const dynamicToolCallParamsSchema = materializeCodexSchema(
+  rawDynamicToolCallParamsSchema,
+  rootExternalDefinitionRefPrefix,
+);
+const errorNotificationSchema = materializeCodexSchema(rawErrorNotificationSchema);
+const modelListResponseSchema = materializeCodexSchema(rawModelListResponseSchema);
+const threadResumeResponseSchema = materializeCodexSchema(rawThreadResumeResponseSchema);
+const threadStartResponseSchema = materializeCodexSchema(rawThreadStartResponseSchema);
+const turnCompletedNotificationSchema = materializeCodexSchema(rawTurnCompletedNotificationSchema);
+const turnStartResponseSchema = materializeCodexSchema(rawTurnStartResponseSchema);
+
 function compileCodexSchema<T>(schema: unknown): CodexValidator<T> {
-  const validator = Compile(normalizeJsonSchemaNode(schema) as never) as TypeBoxValidator;
+  if (typeof schema !== "boolean" && !isRecord(schema)) {
+    throw new TypeError("Generated Codex schema must be an object or boolean");
+  }
+  const validator = Compile(normalizeJsonSchemaForTypeBox(schema) as never) as TypeBoxValidator;
   return {
     check: (value): value is T => validator.Check(value),
     errors: (value) => [...validator.Errors(value)] as ValidationError[],
   };
 }
 
-const schemaMapKeywords = new Set([
-  "$defs",
-  "definitions",
-  "dependentSchemas",
-  "patternProperties",
-  "properties",
-]);
-const schemaValueKeywords = new Set([
-  "additionalItems",
-  "additionalProperties",
-  "contains",
-  "else",
-  "if",
-  "items",
-  "not",
-  "propertyNames",
-  "then",
-  "unevaluatedItems",
-  "unevaluatedProperties",
-]);
-const schemaArrayKeywords = new Set(["allOf", "anyOf", "oneOf", "prefixItems"]);
-
 function schemaTypeIncludes(schema: Record<string, unknown>, type: string): boolean {
   return schema.type === type || (Array.isArray(schema.type) && schema.type.includes(type));
-}
-
-function normalizeSchemaMap(value: unknown): unknown {
-  if (!isRecord(value)) {
-    return value;
-  }
-  return Object.fromEntries(
-    Object.entries(value).map(([key, entry]) => [key, normalizeJsonSchemaNode(entry)]),
-  );
-}
-
-function expandJsonSchemaTypeArray(schema: Record<string, unknown>): Record<string, unknown> {
-  const { type, ...rest } = schema;
-  if (!Array.isArray(type)) {
-    return schema;
-  }
-  return {
-    anyOf: type.map((entry) => Object.assign({}, rest, { type: entry })),
-  };
-}
-
-function normalizeJsonSchemaNode(schema: unknown): unknown {
-  // Generated schemas can use JSON Schema type arrays; TypeBox validators need
-  // equivalent anyOf branches to preserve nullable/union semantics.
-  if (Array.isArray(schema)) {
-    return schema.map((entry) => normalizeJsonSchemaNode(entry));
-  }
-  if (!isRecord(schema)) {
-    return schema;
-  }
-  const normalizedSchema = expandJsonSchemaTypeArray(schema);
-  return Object.fromEntries(
-    Object.entries(normalizedSchema).map(([key, value]) => {
-      if (schemaMapKeywords.has(key)) {
-        return [key, normalizeSchemaMap(value)];
-      }
-      if (schemaValueKeywords.has(key) || schemaArrayKeywords.has(key)) {
-        return [key, normalizeJsonSchemaNode(value)];
-      }
-      return [key, value];
-    }),
-  );
 }
 
 function readDefault(schema: unknown): unknown {
@@ -242,13 +275,74 @@ export function assertCodexThreadResumeResponse(value: unknown): CodexThreadResu
   return assertCodexShape(validateThreadResumeResponse, normalized, "thread/resume response");
 }
 
+export class CodexThreadDirectInputError extends Error {
+  constructor(threadId: string) {
+    super(
+      `Codex thread ${threadId} is controlled by its parent and cannot accept direct input. ` +
+        "Continue its parent thread, or use /new for a separate OpenClaw session.",
+    );
+    this.name = "CodexThreadDirectInputError";
+  }
+}
+
+/** Native V2 children allow observation, but only their parent may supply turn input. */
+export function assertCodexThreadAcceptsDirectInput(
+  thread: Pick<CodexThread, "id" | "canAcceptDirectInput">,
+): void {
+  // Unloaded threads report null; only an explicit native refusal is conclusive.
+  if (thread.canAcceptDirectInput === false) {
+    throw new CodexThreadDirectInputError(thread.id);
+  }
+}
+
 /** Asserts and normalizes a Codex turn/start response. */
 export function assertCodexTurnStartResponse(value: unknown): CodexTurnStartResponse {
-  const normalized = normalizeWithDefaults(
-    turnStartResponseSchema,
-    normalizeTurnStartResponse(value),
-  );
+  const normalized = normalizeWithDefaults(turnStartResponseSchema, value);
   return assertCodexShape(validateTurnStartResponse, normalized, "turn/start response");
+}
+
+/** Prompt echoes and attested managed-hook continuations cannot admit native capabilities. */
+export function assertCodexPassiveTurnItems(
+  items: readonly CodexThreadItem[],
+  prompt: string,
+  taskLabel: string,
+  options: { allowManagedHookPrompts?: boolean } = {},
+): void {
+  let promptEchoSeen = false;
+  for (const item of items) {
+    if (item.type === "agentMessage" || item.type === "reasoning") {
+      continue;
+    }
+    if (
+      item.type === "hookPrompt" &&
+      options.allowManagedHookPrompts === true &&
+      Array.isArray(item.fragments) &&
+      item.fragments.length > 0 &&
+      item.fragments.every(
+        (fragment) =>
+          isJsonObject(fragment) &&
+          typeof fragment.text === "string" &&
+          typeof fragment.hookRunId === "string" &&
+          fragment.hookRunId.trim().length > 0,
+      )
+    ) {
+      continue;
+    }
+    if (item.type === "userMessage" && !promptEchoSeen) {
+      const content = Array.isArray(item.content) ? item.content : [];
+      const input = content[0];
+      if (
+        content.length === 1 &&
+        isJsonObject(input) &&
+        input.type === "text" &&
+        input.text === prompt
+      ) {
+        promptEchoSeen = true;
+        continue;
+      }
+    }
+    throw new Error(`Codex ${taskLabel} returned unexpected native item: ${item.type}`);
+  }
 }
 
 /** Reads Codex dynamic-tool call params, returning undefined for invalid payloads. */
@@ -269,34 +363,25 @@ export function readCodexErrorNotification(value: unknown): CodexErrorNotificati
   );
 }
 
-/** Reads a Codex model/list response if it matches the protocol schema. */
-export function readCodexModelListResponse(value: unknown): CodexModelListResponse | undefined {
-  return readCodexShape(
+/** Asserts and normalizes a Codex model/list response. */
+export function assertCodexModelListResponse(value: unknown): CodexModelListResponse {
+  return assertCodexShape(
     validateModelListResponse,
     normalizeWithDefaults(modelListResponseSchema, value),
+    "model/list response",
   );
-}
-
-/** Reads and normalizes a Codex turn object. */
-export function readCodexTurn(value: unknown): CodexTurn | undefined {
-  const response = readCodexShape(
-    validateTurnStartResponse,
-    normalizeWithDefaults(turnStartResponseSchema, { turn: normalizeTurn(value) }),
-  );
-  return response?.turn;
 }
 
 /** Reads a Codex turn/completed notification payload if it matches the protocol schema. */
 export function readCodexTurnCompletedNotification(
   value: unknown,
 ): CodexTurnCompletedNotification | undefined {
-  return readCodexShape(
+  const notification = readCodexShape(
     validateTurnCompletedNotification,
-    normalizeWithDefaults(
-      turnCompletedNotificationSchema,
-      normalizeTurnCompletedNotification(value),
-    ),
+    normalizeWithDefaults(turnCompletedNotificationSchema, value),
   );
+  // Turn is shared with turn/start, but only terminal states belong in this notification.
+  return notification?.turn.status === "inProgress" ? undefined : notification;
 }
 
 function assertCodexShape<T>(validate: CodexValidator<T>, value: unknown, label: string): T {
@@ -308,69 +393,6 @@ function assertCodexShape<T>(validate: CodexValidator<T>, value: unknown, label:
 
 function readCodexShape<T>(validate: CodexValidator<T>, value: unknown): T | undefined {
   return validate.check(value) ? value : undefined;
-}
-
-function normalizeTurn(value: unknown): unknown {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return value;
-  }
-  return {
-    error: null,
-    startedAt: null,
-    completedAt: null,
-    durationMs: null,
-    ...value,
-    items: Array.isArray((value as { items?: unknown }).items)
-      ? (value as { items: unknown[] }).items.map(normalizeThreadItem)
-      : [],
-  };
-}
-
-function normalizeThreadItem(value: unknown): unknown {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return value;
-  }
-  const item = value as { type?: unknown };
-  switch (item.type) {
-    case "agentMessage":
-      return { phase: null, memoryCitation: null, ...value };
-    case "plan":
-      return { text: "", ...value };
-    case "reasoning":
-      return { summary: [], content: [], ...value };
-    case "dynamicToolCall":
-      return {
-        namespace: null,
-        arguments: null,
-        status: "completed",
-        contentItems: null,
-        success: null,
-        durationMs: null,
-        ...value,
-      };
-    default:
-      return value;
-  }
-}
-
-function normalizeTurnStartResponse(value: unknown): unknown {
-  if (!value || typeof value !== "object" || Array.isArray(value) || !("turn" in value)) {
-    return value;
-  }
-  return {
-    ...value,
-    turn: normalizeTurn((value as { turn?: unknown }).turn),
-  };
-}
-
-function normalizeTurnCompletedNotification(value: unknown): unknown {
-  if (!value || typeof value !== "object" || Array.isArray(value) || !("turn" in value)) {
-    return value;
-  }
-  return {
-    ...value,
-    turn: normalizeTurn((value as { turn?: unknown }).turn),
-  };
 }
 
 function formatValidationErrors(validate: CodexValidator<unknown>, value: unknown): string {

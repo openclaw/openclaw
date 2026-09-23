@@ -1,5 +1,7 @@
 // Tests subagent agent-list command output and filtering.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { captureSubagentListReadContext } from "../../../agents/subagents/registry/subagent-list.js";
+import { buildSubagentRunReadIndexFromRuns } from "../../../agents/subagents/registry/subagent-registry-queries.js";
 
 const THREAD_CHANNEL = "thread-chat";
 const ROOM_CHANNEL = "room-chat";
@@ -69,16 +71,22 @@ function subagentRun(params: {
     requesterSessionKey: MAIN_SESSION_KEY,
     requesterDisplayKey: "main",
     task: params.task,
-    cleanup: "keep",
+    cleanup: "keep" as const,
     createdAt: Date.now() - startedAgoMs,
-    startedAt: Date.now() - startedAgoMs,
-    ...(params.endedAgoMs === undefined
-      ? {}
-      : { endedAt: Date.now() - params.endedAgoMs, outcome: { status: "ok" } }),
+    execution:
+      params.endedAgoMs === undefined
+        ? { status: "running" as const, startedAt: Date.now() - startedAgoMs }
+        : {
+            status: "terminal" as const,
+            startedAt: Date.now() - startedAgoMs,
+            endedAt: Date.now() - params.endedAgoMs,
+            outcome: { status: "ok" as const },
+          },
   };
 }
 
 function agentsActionInput(channel: string, runs: ReturnType<typeof subagentRun>[]) {
+  const snapshot = new Map(runs.map((run) => [run.runId, run]));
   return {
     params: {
       ctx: {
@@ -90,7 +98,14 @@ function agentsActionInput(channel: string, runs: ReturnType<typeof subagentRun>
       },
     },
     requesterKey: MAIN_SESSION_KEY,
-    runs,
+    readContext: {
+      list: captureSubagentListReadContext(
+        runs,
+        buildSubagentRunReadIndexFromRuns({ runs: snapshot }),
+        snapshot,
+        30,
+      ),
+    },
     restTokens: [],
   } as never;
 }
@@ -161,6 +176,12 @@ describe("handleSubagentsAgentsAction", () => {
     const result = handleSubagentsAgentsAction(
       agentsActionInput(THREAD_CHANNEL, [
         subagentRun({
+          runId: "run-stale-unended",
+          childSessionKey: "agent:main:subagent:stale-unended",
+          task: "stale unended worker",
+          startedAgoMs: 3 * 60 * 60_000,
+        }),
+        subagentRun({
           runId: "run-hidden-recent",
           childSessionKey: hiddenSessionKey,
           task: "hidden recent worker",
@@ -179,6 +200,7 @@ describe("handleSubagentsAgentsAction", () => {
     expect(result.reply?.text).toContain("2. visible bound worker");
     expect(result.reply?.text).not.toContain("1. visible bound worker");
     expect(result.reply?.text).not.toContain("hidden recent worker");
+    expect(result.reply?.text).not.toContain("stale unended worker");
   });
 
   it("shows room-channel runs as unbound when the plugin supports conversation bindings", () => {

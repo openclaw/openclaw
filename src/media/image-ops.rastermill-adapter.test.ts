@@ -1,108 +1,296 @@
 // Raster image adapter tests cover image operation integration with RasterMill.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ImageProbe } from "rastermill";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createTinyJpegBuffer } from "../../test/helpers/image-fixtures.js";
+
+function jpegWithDimensions(width: number, height: number): Buffer {
+  const buffer = createTinyJpegBuffer();
+  const startOfFrame = buffer.indexOf(Buffer.from([0xff, 0xc0]));
+  expect(startOfFrame).toBeGreaterThanOrEqual(0);
+  buffer.writeUInt16BE(height, startOfFrame + 5);
+  buffer.writeUInt16BE(width, startOfFrame + 7);
+  return buffer;
+}
 
 describe("image ops Rastermill adapter", () => {
-  afterEach(() => {
-    vi.doUnmock("rastermill");
-    vi.doUnmock("@silvia-odwyer/photon-node");
-    vi.doUnmock("../infra/resolve-system-bin.js");
-    vi.resetModules();
-  });
-
-  it("does not load Photon for Rastermill-backed operations", async () => {
-    const encode = vi.fn(async () => ({ data: Buffer.from("jpeg") }));
-    const photonModuleFactory = vi.fn(() => {
-      throw new Error("Photon loaded eagerly");
+  describe("cold processor initialization", () => {
+    beforeEach(() => {
+      vi.resetModules();
     });
 
-    vi.doMock("@silvia-odwyer/photon-node", photonModuleFactory);
-    vi.doMock("rastermill", () => ({
-      RastermillUnavailableError: class RastermillUnavailableError extends Error {
-        causes = [];
-      },
-      createRastermill: vi.fn(() => ({ encode })),
-      isRastermillUnavailableError: () => false,
-      readImageMetadataFromHeader: vi.fn(() => ({ width: 1, height: 1 })),
-      readImageProbeFromHeader: vi.fn(() => ({ width: 1, height: 1, format: "jpeg" })),
-    }));
-
-    const { resizeToJpeg } = await import("./image-ops.js");
-
-    await expect(
-      resizeToJpeg({ buffer: Buffer.from("input"), maxSide: 1, quality: 80 }),
-    ).resolves.toEqual(Buffer.from("jpeg"));
-    expect(photonModuleFactory).not.toHaveBeenCalled();
-  });
-
-  it("configures Rastermill with OpenClaw limits, temp root, and command resolution", async () => {
-    const encode = vi.fn(async () => ({ data: Buffer.from("jpeg") }));
-    const createRastermill = vi.fn((_options: unknown) => ({ encode }));
-    const resolveSystemBin = vi.fn(() => "/usr/bin/tool");
-
-    vi.doMock("rastermill", () => ({
-      RastermillUnavailableError: class RastermillUnavailableError extends Error {
-        causes = [];
-      },
-      createRastermill,
-      isRastermillUnavailableError: () => false,
-      readImageMetadataFromHeader: vi.fn(() => ({ width: 1, height: 1 })),
-      readImageProbeFromHeader: vi.fn(() => ({ width: 1, height: 1, format: "png" })),
-    }));
-    vi.doMock("../infra/resolve-system-bin.js", () => ({
-      resolveSystemBin,
-    }));
-
-    const { resizeToJpeg, MAX_IMAGE_INPUT_PIXELS } = await import("./image-ops.js");
-
-    await expect(
-      resizeToJpeg({ buffer: Buffer.from("input"), maxSide: 1, quality: 80 }),
-    ).resolves.toEqual(Buffer.from("jpeg"));
-
-    expect(createRastermill).toHaveBeenCalledWith({
-      execution: "auto",
-      limits: {
-        inputPixels: MAX_IMAGE_INPUT_PIXELS,
-        outputPixels: MAX_IMAGE_INPUT_PIXELS,
-      },
-      temp: expect.objectContaining({
-        prefix: "openclaw-img-",
-      }),
-      commandResolver: expect.any(Function),
+    afterEach(() => {
+      vi.doUnmock("rastermill");
+      vi.doUnmock("@silvia-odwyer/photon-node");
+      vi.doUnmock("../infra/resolve-system-bin.js");
+      vi.doUnmock("../agents/image-compression-policy.js");
+      vi.doUnmock("../infra/worker-task-pool.js");
+      vi.resetModules();
     });
-    const options = createRastermill.mock.calls[0]?.[0] as {
-      commandResolver: (command: string) => string | null;
-      env?: unknown;
-    };
-    expect(options.env).toBeUndefined();
-    expect(options.commandResolver("powershell")).toBe("/usr/bin/tool");
-    expect(resolveSystemBin).toHaveBeenLastCalledWith("powershell", { trust: "strict" });
+
+    it("does not load Photon for Rastermill-backed operations", async () => {
+      const actualRastermill = await vi.importActual<typeof import("rastermill")>("rastermill");
+      const encode = vi.fn(async () => ({ data: Buffer.from("jpeg") }));
+      const photonModuleFactory = vi.fn(() => {
+        throw new Error("Photon loaded eagerly");
+      });
+
+      vi.doMock("@silvia-odwyer/photon-node", photonModuleFactory);
+      vi.doMock("rastermill", () => ({
+        ...actualRastermill,
+        createRastermill: vi.fn(() => ({ encode })),
+        readImageMetadataFromHeader: vi.fn(() => ({ width: 1, height: 1 })),
+        readImageProbeFromHeader: vi.fn(() => ({ width: 1, height: 1, format: "jpeg" })),
+      }));
+
+      const { createLocalImageProcessor } = await import("./image-processor-config.js");
+
+      await expect(
+        createLocalImageProcessor("auto").encode(Buffer.from("input"), { format: "jpeg" }),
+      ).resolves.toEqual({ data: Buffer.from("jpeg") });
+      expect(photonModuleFactory).not.toHaveBeenCalled();
+    });
+
+    it("configures Rastermill with OpenClaw limits, temp root, and command resolution", async () => {
+      const actualRastermill = await vi.importActual<typeof import("rastermill")>("rastermill");
+      const encode = vi.fn(async () => ({ data: Buffer.from("jpeg") }));
+      const createRastermill = vi.fn((_options: unknown) => ({ encode }));
+      const resolveSystemBin = vi.fn(() => "/usr/bin/tool");
+
+      vi.doMock("rastermill", () => ({
+        ...actualRastermill,
+        createRastermill,
+        readImageMetadataFromHeader: vi.fn(() => ({ width: 1, height: 1 })),
+        readImageProbeFromHeader: vi.fn(() => ({ width: 1, height: 1, format: "png" })),
+      }));
+      vi.doMock("../infra/resolve-system-bin.js", () => ({
+        resolveSystemBin,
+      }));
+
+      const { createLocalImageProcessor, MAX_IMAGE_INPUT_PIXELS } =
+        await import("./image-processor-config.js");
+
+      await expect(
+        createLocalImageProcessor("auto").encode(Buffer.from("input"), { format: "jpeg" }),
+      ).resolves.toEqual({ data: Buffer.from("jpeg") });
+
+      expect(createRastermill).toHaveBeenCalledWith({
+        execution: "auto",
+        limits: {
+          inputPixels: MAX_IMAGE_INPUT_PIXELS,
+          outputPixels: MAX_IMAGE_INPUT_PIXELS,
+        },
+        temp: expect.objectContaining({
+          prefix: "openclaw-img-",
+        }),
+        commandResolver: expect.any(Function),
+      });
+      const options = createRastermill.mock.calls[0]?.[0] as {
+        commandResolver: (command: string) => string | null;
+        env?: unknown;
+      };
+      expect(options.env).toBeUndefined();
+      expect(options.commandResolver("powershell")).toBe("/usr/bin/tool");
+      expect(resolveSystemBin).toHaveBeenLastCalledWith("powershell", { trust: "strict" });
+    });
+
+    it("scopes the larger source admission to media understanding", async () => {
+      const actualRastermill = await vi.importActual<typeof import("rastermill")>("rastermill");
+      const encode = vi.fn(async () => ({
+        data: Buffer.from("jpeg"),
+        bytes: 4,
+        base64Bytes: 8,
+        width: 1,
+        height: 1,
+        format: "jpeg" as const,
+        mimeType: "image/jpeg" as const,
+        metadata: "stripped" as const,
+        resized: true,
+        chosen: { format: "jpeg" as const, maxSide: 1, quality: 80 },
+      }));
+      const createRastermill = vi.fn(() => ({ encode }));
+      vi.doMock("rastermill", () => ({
+        ...actualRastermill,
+        createRastermill,
+        readImageMetadataFromHeader: vi.fn(() => ({ width: 2, height: 2 })),
+        readImageProbeFromHeader: vi.fn(() => ({
+          width: 2,
+          height: 2,
+          format: "png",
+          hasAlpha: false,
+          orientation: null,
+          bytes: 32,
+        })),
+      }));
+
+      // This adapter fixture observes native fallback construction. A separate real-worker
+      // regression verifies that operation-specific limits also reach worker execution.
+      vi.doMock("../infra/worker-task-pool.js", () => ({
+        WorkerTaskPool: class {
+          async run() {
+            return {
+              kind: "failed",
+              unavailable: true,
+              error: new Error("internal codec unavailable"),
+            };
+          }
+        },
+      }));
+
+      const { MAX_IMAGE_INPUT_PIXELS } = await import("./image-ops.js");
+      const { optimizeImageBufferForWebMedia } = await import("./web-media.js");
+      await optimizeImageBufferForWebMedia({
+        buffer: Buffer.alloc(32),
+        contentType: "image/png",
+        maxBytes: 16,
+      });
+
+      expect(createRastermill).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          limits: {
+            inputPixels: MAX_IMAGE_INPUT_PIXELS,
+            outputPixels: MAX_IMAGE_INPUT_PIXELS,
+          },
+        }),
+      );
+
+      createRastermill.mockClear();
+      vi.doMock("../agents/image-compression-policy.js", () => ({
+        resolveImageCompressionModelPolicy: vi.fn(async () => ({ maxSidePx: 1 })),
+      }));
+      const { optimizeImageDescriptionInput } =
+        await import("../media-understanding/image-input-normalize.js");
+      await optimizeImageDescriptionInput({
+        buffer: Buffer.alloc(32),
+        mime: "image/png",
+        maxBytes: 16,
+        provider: "vision-plugin",
+        model: "vision-v1",
+      });
+
+      expect(createRastermill).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          limits: {
+            inputPixels: 40_000_000,
+            outputPixels: MAX_IMAGE_INPUT_PIXELS,
+          },
+        }),
+      );
+    });
+
+    it("admits phone-sized JPEG headers only to the bounded downscale path", async () => {
+      const { createImageProcessor, MAX_IMAGE_INPUT_PIXELS } = await import("./image-ops.js");
+      const { createImageProcessorWithPixelLimits } = await import("./image-processor.js");
+      const phonePhoto = jpegWithDimensions(4536, 8064);
+      const createDownscaleProcessor = () =>
+        createImageProcessorWithPixelLimits({
+          inputPixels: 40_000_000,
+          outputPixels: MAX_IMAGE_INPUT_PIXELS,
+        });
+
+      await expect(createImageProcessor().probe(phonePhoto)).resolves.toBeNull();
+      await expect(createDownscaleProcessor().probe(phonePhoto)).resolves.toMatchObject({
+        width: 4536,
+        height: 8064,
+      });
+      await expect(
+        createDownscaleProcessor().probe(jpegWithDimensions(8000, 5001)),
+      ).resolves.toBeNull();
+    });
+
+    it("preserves native fallback and the SDK unavailable classification when the worker declines", async () => {
+      const actualRastermill = await vi.importActual<typeof import("rastermill")>("rastermill");
+      const unavailableError = new actualRastermill.RastermillUnavailableError(
+        "encode",
+        "Image processor unavailable",
+        [new Error("missing backend")],
+      );
+      const encode = vi.fn(async () => {
+        throw unavailableError;
+      });
+      vi.doMock("rastermill", () => ({
+        ...actualRastermill,
+        createRastermill: vi.fn(() => ({ encode })),
+      }));
+      vi.doMock("../infra/worker-task-pool.js", () => ({
+        WorkerTaskPool: class {
+          async run() {
+            return {
+              kind: "failed",
+              unavailable: true,
+              error: new Error("internal codec unavailable"),
+            };
+          }
+        },
+      }));
+      const { createImageProcessor, isImageProcessorUnavailableError } =
+        await import("./image-ops.js");
+      const input = Buffer.from("input");
+      const options = { format: "jpeg" as const };
+      await expect(
+        createImageProcessor()
+          .encode(input, options)
+          .then(
+            () => false,
+            (error: unknown) => isImageProcessorUnavailableError(error),
+          ),
+      ).resolves.toBe(true);
+      expect(encode).toHaveBeenCalledWith(input, options);
+    });
   });
 
-  it("exposes Rastermill unavailable errors through the SDK alias", async () => {
-    class RastermillUnavailableError extends Error {
-      readonly causes = [new Error("missing backend")];
-    }
-    const createRastermill = vi.fn(() => ({
-      encode: vi.fn(async () => {
-        throw new RastermillUnavailableError("Image processor unavailable");
-      }),
-    }));
+  describe("display metadata", () => {
+    const probe = vi.fn<() => Promise<ImageProbe | null>>();
+    const readProbe = vi.fn<() => ImageProbe | null>();
+    let imageOps: typeof import("./image-ops.js");
 
-    vi.doMock("rastermill", () => ({
-      RastermillUnavailableError,
-      createRastermill,
-      isRastermillUnavailableError: (error: unknown) => error instanceof RastermillUnavailableError,
-      readImageMetadataFromHeader: vi.fn(() => ({ width: 1, height: 1 })),
-      readImageProbeFromHeader: vi.fn(() => ({ width: 1, height: 1, format: "png" })),
-    }));
+    beforeAll(async () => {
+      vi.resetModules();
+      const actualRastermill = await vi.importActual<typeof import("rastermill")>("rastermill");
+      vi.doMock("rastermill", () => ({
+        ...actualRastermill,
+        createRastermill: vi.fn(() => ({ probe })),
+        readImageProbeFromHeader: readProbe,
+      }));
+      imageOps = await import("./image-ops.js");
+    });
 
-    const { isImageProcessorUnavailableError, resizeToJpeg } = await import("./image-ops.js");
+    beforeEach(() => {
+      probe.mockReset();
+      readProbe.mockReset();
+    });
 
-    await expect(
-      resizeToJpeg({ buffer: Buffer.from("input"), maxSide: 1, quality: 80 }).then(
-        () => false,
-        (error: unknown) => isImageProcessorUnavailableError(error),
-      ),
-    ).resolves.toBe(true);
+    afterAll(() => {
+      vi.doUnmock("rastermill");
+      vi.resetModules();
+    });
+
+    it.each([
+      { orientation: null, expected: { width: 640, height: 480 } },
+      { orientation: 1, expected: { width: 640, height: 480 } },
+      { orientation: 4, expected: { width: 640, height: 480 } },
+      { orientation: 5, expected: { width: 480, height: 640 } },
+      { orientation: 6, expected: { width: 480, height: 640 } },
+      { orientation: 7, expected: { width: 480, height: 640 } },
+      { orientation: 8, expected: { width: 480, height: 640 } },
+    ] as const)(
+      "reports display dimensions for EXIF orientation $orientation",
+      async (testCase) => {
+        const imageProbe = {
+          width: 640,
+          height: 480,
+          format: "jpeg" as const,
+          hasAlpha: false,
+          orientation: testCase.orientation,
+          bytes: 24,
+        };
+        probe.mockResolvedValue(imageProbe);
+        readProbe.mockReturnValue(imageProbe);
+        const image = Buffer.from("image");
+
+        expect(imageOps.readImageMetadataFromHeader(image)).toEqual(testCase.expected);
+        await expect(imageOps.getImageMetadata(image)).resolves.toEqual(testCase.expected);
+        expect(imageOps.readImageProbeFromHeader(image)).toEqual(imageProbe);
+      },
+    );
   });
 });

@@ -1,4 +1,3 @@
-// QA Lab Matrix plugin module implements scenario types behavior.
 import type { MatrixQaObservedEvent } from "../substrate/events.js";
 
 export type MatrixQaReplyArtifact = {
@@ -72,6 +71,8 @@ type MatrixQaScenarioArtifacts = {
   reactionEventId?: string;
   reactionTargetEventId?: string;
   redactionEventId?: string;
+  redactionTargetEventId?: string;
+  redactionCount?: number;
   reply?: MatrixQaReplyArtifact;
   replies?: Array<{
     eventId: string;

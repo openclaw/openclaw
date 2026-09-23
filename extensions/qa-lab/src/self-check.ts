@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements self check behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -107,7 +106,7 @@ export async function runQaSelfCheckAgainstState(params: {
   });
   await fs.mkdir(path.dirname(outputPath), { recursive: true });
   await fs.writeFile(outputPath, report, "utf8");
-  await transportFactoryResult.cleanup();
+  await transportFactoryResult.cleanupWithoutGateway();
 
   return {
     outputPath,

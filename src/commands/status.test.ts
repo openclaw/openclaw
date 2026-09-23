@@ -1,9 +1,14 @@
 // Status command tests cover text/JSON output, gateway health, compatibility notices, and update state.
 import type { Mock } from "vitest";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
 import { createCompatibilityNotice } from "../plugins/status.test-fixtures.js";
+import { createEmptyTaskRegistrySummary } from "../tasks/task-registry.summary.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+import { createErrorChannelPlugin } from "./status.channel-plugin.test-helpers.js";
+import type { StatusScanResult } from "./status.scan-result.js";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 let envSnapshot: ReturnType<typeof captureEnv>;
 
@@ -27,6 +32,7 @@ function createDefaultSessionStoreEntry() {
     cacheWrite: 1_000,
     totalTokens: 5_000,
     totalTokensFresh: true as boolean,
+    totalTokensVersion: 1 as const,
     contextTokens: 10_000,
     model: "test:opus",
     sessionId: "abc123",
@@ -42,37 +48,6 @@ function createUnknownUsageSessionStore() {
       outputTokens: 3_000,
       contextTokens: 10_000,
       model: "test:opus",
-    },
-  };
-}
-
-function createChannelIssueCollector(channel: string) {
-  return (accounts: Array<Record<string, unknown>>) =>
-    accounts
-      .filter((account) => typeof account.lastError === "string" && account.lastError)
-      .map((account) => ({
-        channel,
-        accountId: typeof account.accountId === "string" ? account.accountId : "default",
-        message: `Channel error: ${String(account.lastError)}`,
-      }));
-}
-
-function createErrorChannelPlugin(params: { id: string; label: string; docsPath: string }) {
-  return {
-    id: params.id,
-    meta: {
-      id: params.id,
-      label: params.label,
-      selectionLabel: params.label,
-      docsPath: params.docsPath,
-      blurb: "mock",
-    },
-    config: {
-      listAccountIds: () => ["default"],
-      resolveAccount: () => ({}),
-    },
-    status: {
-      collectStatusIssues: createChannelIssueCollector(params.id),
     },
   };
 }
@@ -116,7 +91,7 @@ function expectLogsMatch(logs: readonly string[], pattern: RegExp) {
 
 async function runStatusAndGetLogs(args: Parameters<typeof statusCommand>[0] = {}) {
   runtimeLogMock.mockClear();
-  await statusCommand(args, runtime as never);
+  await statusCommand(args, runtime);
   return getRuntimeLogs();
 }
 
@@ -230,6 +205,8 @@ function createSessionStatusRows() {
     const recent = Object.entries(store).map(([key, entry]) => {
       const contextTokens = typeof entry.contextTokens === "number" ? entry.contextTokens : null;
       const total = typeof entry.totalTokens === "number" ? entry.totalTokens : null;
+      const freshTotal =
+        total !== null && entry.totalTokensFresh && entry.totalTokensVersion === 1 ? total : null;
       return {
         agentId: agent.id,
         key,
@@ -242,13 +219,17 @@ function createSessionStatusRows() {
         inputTokens: entry.inputTokens,
         outputTokens: entry.outputTokens,
         totalTokens: total,
-        totalTokensFresh: typeof entry.totalTokens === "number" ? entry.totalTokensFresh : false,
+        totalTokensFresh: freshTotal !== null,
         cacheRead: entry.cacheRead,
         cacheWrite: entry.cacheWrite,
         remainingTokens:
-          total !== null && contextTokens !== null ? Math.max(0, contextTokens - total) : null,
+          freshTotal !== null && contextTokens !== null
+            ? Math.max(0, contextTokens - freshTotal)
+            : null,
         percentUsed:
-          total !== null && contextTokens ? Math.round((total / contextTokens) * 100) : null,
+          freshTotal !== null && contextTokens
+            ? Math.round((freshTotal / contextTokens) * 100)
+            : null,
         model: typeof entry.model === "string" ? entry.model : null,
         contextTokens,
         flags: [
@@ -272,7 +253,15 @@ function createSessionStatusRows() {
   };
 }
 
-async function createMockStatusScanResult(params: { includePluginCompatibility?: boolean } = {}) {
+async function createMockStatusScanResult(
+  params: {
+    includePluginCompatibility?: boolean;
+    configDiagnostics?: {
+      path: string;
+      issues: Array<{ path: string; message: string }>;
+    } | null;
+  } = {},
+) {
   const cfg = mocks.loadConfig();
   const gatewayProbe = await mocks.probeGateway();
   const gatewayReachable = gatewayProbe.ok === true;
@@ -321,6 +310,7 @@ async function createMockStatusScanResult(params: { includePluginCompatibility?:
   return {
     cfg,
     sourceConfig: cfg,
+    configDiagnostics: params.configDiagnostics ?? null,
     secretDiagnostics: gatewayAuthWarning ? ["gateway.auth.token unavailable"] : [],
     osSummary: {
       platform: "darwin",
@@ -526,7 +516,7 @@ vi.mock("../channels/config-presence.js", () => ({
 }));
 
 vi.mock("../plugins/memory-runtime.js", () => ({
-  getActiveMemorySearchManager: vi.fn(async ({ agentId }: { agentId: string }) => ({
+  getActiveMemorySearchManagerCore: vi.fn(async ({ agentId }: { agentId: string }) => ({
     manager: {
       probeVectorAvailability: vi.fn(async () => true),
       status: () => ({
@@ -559,22 +549,21 @@ vi.mock("../config/sessions/main-session.js", () => ({
   resolveMainSessionKey: mocks.resolveMainSessionKey,
 }));
 vi.mock("../config/sessions/paths.js", () => ({
-  resolveStorePath: mocks.resolveStorePath,
+  resolveSessionStorePathCore: mocks.resolveStorePath,
 }));
 vi.mock("../config/sessions/session-accessor.js", () => ({
-  listSessionEntries: (opts?: { storePath?: string }) =>
+  listSessionEntriesCore: (opts?: { storePath?: string }) =>
     Object.entries(mocks.loadSessionStore(opts?.storePath)).map(([sessionKey, entry]) => ({
       sessionKey,
       entry,
     })),
 }));
 vi.mock("../config/sessions/types.js", () => ({
-  resolveSessionTotalTokens: vi.fn((entry?: { totalTokens?: number }) =>
-    typeof entry?.totalTokens === "number" ? entry.totalTokens : undefined,
-  ),
   resolveFreshSessionTotalTokens: vi.fn(
-    (entry?: { totalTokens?: number; totalTokensFresh?: boolean }) =>
-      typeof entry?.totalTokens === "number" && entry?.totalTokensFresh !== false
+    (entry?: { totalTokens?: number; totalTokensFresh?: boolean; totalTokensVersion?: number }) =>
+      typeof entry?.totalTokens === "number" &&
+      entry?.totalTokensFresh === true &&
+      entry.totalTokensVersion === 1
         ? entry.totalTokens
         : undefined,
   ),
@@ -735,7 +724,7 @@ vi.mock("../config/config.js", () => ({
   readBestEffortConfig: vi.fn(async () => mocks.loadConfig()),
   readBestEffortConfigSnapshot: vi.fn(async () => {
     const config = mocks.loadConfig();
-    return { config, sourceConfig: config };
+    return { config, sourceConfig: config, configDiagnostics: null };
   }),
   resolveGatewayPort: vi.fn(() => 18789),
 }));
@@ -747,6 +736,7 @@ vi.mock("../daemon/node-service.js", () => ({
 }));
 vi.mock("../node-host/config.js", () => ({
   loadNodeHostConfig: mocks.loadNodeHostConfig,
+  loadNodeHostConfigReadOnly: mocks.loadNodeHostConfig,
 }));
 vi.mock("../tasks/task-registry.maintenance.js", () => ({
   getInspectableTaskRegistrySummary: mocks.getInspectableTaskRegistrySummary,
@@ -767,8 +757,8 @@ vi.mock("../plugins/status.js", () => ({
 }));
 
 vi.mock("./status.scan.fast-json.js", () => ({
-  scanStatusJsonFast: vi.fn(async () =>
-    createMockStatusScanResult({ includePluginCompatibility: false }),
+  scanStatusJsonFast: vi.fn(async (opts: { all?: boolean }) =>
+    createMockStatusScanResult({ includePluginCompatibility: opts.all === true }),
   ),
 }));
 
@@ -777,9 +767,6 @@ vi.mock("./status.scan.js", () => ({
 }));
 
 vi.mock("./status-runtime-shared.ts", () => ({
-  loadStatusProviderUsageModule: vi.fn(async () => ({
-    formatUsageReportLines: vi.fn(() => []),
-  })),
   resolveStatusGatewayHealth: vi.fn(async () => ({})),
   resolveStatusSecurityAudit: vi.fn(async (input: unknown) =>
     mocks.runSecurityAudit({
@@ -831,15 +818,10 @@ import {
   resolveStatusUsageSummary,
 } from "./status-runtime-shared.ts";
 import { statusCommand } from "./status.command.js";
-import { resolvePairingRecoveryContext } from "./status.command.test-support.js";
 
-const runtime = {
-  log: vi.fn(),
-  error: vi.fn(),
-  exit: vi.fn(),
-};
+const runtime = createTestRuntime();
 
-const runtimeLogMock = runtime.log as Mock<(...args: unknown[]) => void>;
+const runtimeLogMock = runtime.log;
 
 vi.mock("../channels/chat-meta.js", () => {
   const mockChatChannels = [
@@ -908,6 +890,7 @@ vi.mock("./status.daemon.js", () => ({
 
 describe("statusCommand", () => {
   afterEach(() => {
+    vi.restoreAllMocks();
     mocks.loadConfig.mockReset();
     mocks.loadConfig.mockReturnValue({ session: {} });
     mocks.loadSessionStore.mockReset();
@@ -934,27 +917,7 @@ describe("statusCommand", () => {
     mocks.buildPluginCompatibilityNotices.mockReset();
     mocks.buildPluginCompatibilityNotices.mockReturnValue([]);
     mocks.getInspectableTaskRegistrySummary.mockReset();
-    mocks.getInspectableTaskRegistrySummary.mockReturnValue({
-      total: 0,
-      active: 0,
-      terminal: 0,
-      failures: 0,
-      byStatus: {
-        queued: 0,
-        running: 0,
-        succeeded: 0,
-        failed: 0,
-        timed_out: 0,
-        cancelled: 0,
-        lost: 0,
-      },
-      byRuntime: {
-        subagent: 0,
-        acp: 0,
-        cli: 0,
-        cron: 0,
-      },
-    });
+    mocks.getInspectableTaskRegistrySummary.mockReturnValue(createEmptyTaskRegistrySummary());
     mocks.getInspectableTaskAuditSummary.mockReset();
     mocks.getInspectableTaskAuditSummary.mockReturnValue({
       total: 0,
@@ -1008,14 +971,14 @@ describe("statusCommand", () => {
       }),
     });
     runtimeLogMock.mockClear();
-    (runtime.error as Mock<(...args: unknown[]) => void>).mockClear();
+    runtime.error.mockClear();
   });
 
-  it("prints JSON and includes security audit only when all is requested", async () => {
+  it("prints JSON and includes full diagnostics only when all is requested", async () => {
     mocks.buildPluginCompatibilityNotices.mockReturnValue([
-      createCompatibilityNotice({ pluginId: "legacy-plugin", code: "legacy-before-agent-start" }),
+      createCompatibilityNotice({ pluginId: "legacy-plugin", code: "hook-only" }),
     ]);
-    await statusCommand({ json: true }, runtime as never);
+    await statusCommand({ json: true }, runtime);
     const payload = JSON.parse(getRuntimeLog(0));
     expect(payload.linkChannel).toBeUndefined();
     expect(payload.memory).toBeNull();
@@ -1034,10 +997,7 @@ describe("statusCommand", () => {
     expect(payload.securityAudit).toBeUndefined();
     expect(payload.gatewayService.label).toBe("LaunchAgent");
     expect(payload.nodeService.label).toBe("LaunchAgent");
-    expect(payload.pluginCompatibility).toEqual({
-      count: 0,
-      warnings: [],
-    });
+    expect(payload.pluginCompatibility).toBeUndefined();
     expect(payload.tasks.total).toBe(0);
     expect(payload.tasks.active).toBe(0);
     expect(payload.tasks.byStatus.queued).toBe(0);
@@ -1045,69 +1005,155 @@ describe("statusCommand", () => {
     expect(mocks.runSecurityAudit).not.toHaveBeenCalled();
 
     runtimeLogMock.mockClear();
-    await statusCommand({ json: true, all: true }, runtime as never);
+    await statusCommand({ json: true, all: true }, runtime);
 
     const allPayload = JSON.parse(getRuntimeLog(0));
     expect(allPayload.securityAudit.summary.critical).toBe(1);
     expect(allPayload.securityAudit.summary.warn).toBe(1);
+    expect(allPayload.pluginCompatibility).toEqual({
+      count: 1,
+      warnings: [createCompatibilityNotice({ pluginId: "legacy-plugin", code: "hook-only" })],
+    });
     const auditParams = mocks.runSecurityAudit.mock.calls[0]?.[0];
     expect(auditParams?.includeFilesystem).toBe(true);
     expect(auditParams?.includeChannelSecurity).toBe(true);
   });
 
+  it("includes invalid config diagnostics in JSON status only when present", async () => {
+    const { scanStatusJsonFast } = await import("./status.scan.fast-json.js");
+    const configDiagnostics = {
+      path: "/tmp/openclaw.json",
+      issues: [{ path: "gateway.port", message: "invalid" }],
+    };
+    vi.mocked(scanStatusJsonFast).mockResolvedValueOnce(
+      (await createMockStatusScanResult({ configDiagnostics })) as unknown as StatusScanResult,
+    );
+
+    await statusCommand({ json: true }, runtime);
+
+    expect(JSON.parse(getRuntimeLog(0)).configDiagnostics).toEqual(configDiagnostics);
+    runtimeLogMock.mockClear();
+    await statusCommand({ json: true }, runtime);
+    expect(JSON.parse(getRuntimeLog(0))).not.toHaveProperty("configDiagnostics");
+  });
+
   it("scopes usage resolution to the scanned config", async () => {
+    vi.spyOn(performance, "now").mockReturnValue(0);
     const snapshotMock = resolveStatusRuntimeSnapshot as Mock;
     const usageMock = resolveStatusUsageSummary as Mock;
     snapshotMock.mockClear();
     usageMock.mockClear();
 
-    await statusCommand({ usage: true, timeoutMs: 1234 }, runtime as never);
+    await statusCommand({ usage: true, timeoutMs: 1234 }, runtime);
 
     const params = snapshotMock.mock.calls[snapshotMock.mock.calls.length - 1]?.[0] as
       | {
           config: unknown;
           timeoutMs?: number;
+          gatewayProbeDeadlineMs: number;
           usage?: boolean;
-          resolveUsage?: (input: { config: unknown; timeoutMs?: number }) => Promise<unknown>;
+          resolveUsage?: (input: {
+            config: unknown;
+            timeoutMs?: number;
+            gatewayProbeDeadlineMs: number;
+          }) => Promise<unknown>;
         }
       | undefined;
     expect(params?.usage).toBe(true);
     expect(params?.timeoutMs).toBe(1234);
+    expect(params?.gatewayProbeDeadlineMs).toBe(1234);
     if (!params?.resolveUsage) {
       throw new Error("missing status usage resolver");
     }
     await params.resolveUsage({
       timeoutMs: 1234,
+      gatewayProbeDeadlineMs: 1234,
       config: params.config,
     });
     expect(usageMock).toHaveBeenCalledWith({
       timeoutMs: 1234,
+      gatewayProbeDeadlineMs: 1234,
       config: params?.config,
     });
   });
 
   it("keeps default text status off the security audit path", async () => {
-    await statusCommand({}, runtime as never);
+    await statusCommand({}, runtime);
 
     expect(mocks.runSecurityAudit).not.toHaveBeenCalled();
   });
 
+  it("prints invalid config diagnostics in default and deep text status only when present", async () => {
+    const { scanStatus } = await import("./status.scan.js");
+    const configDiagnostics = {
+      path: "/tmp/openclaw.json",
+      issues: [
+        {
+          path: "gateway.port",
+          message: "Invalid input: expected number, received string",
+        },
+      ],
+    };
+
+    for (const args of [{}, { deep: true }]) {
+      vi.mocked(scanStatus).mockResolvedValueOnce(
+        (await createMockStatusScanResult({ configDiagnostics })) as unknown as StatusScanResult,
+      );
+      const output = (await runStatusAndGetLogs(args)).join("\n");
+      expect(output).toContain("Config diagnostics:");
+      expect(output).toContain("Config file is invalid: /tmp/openclaw.json");
+      expect(output).toContain("gateway.port: Invalid input: expected number, received string");
+      expect(output).toContain("Fix: openclaw --profile isolated doctor --fix");
+    }
+
+    expect((await runStatusAndGetLogs()).join("\n")).not.toContain("Config diagnostics:");
+  });
+
+  it("prints invalid config diagnostics before a deep gateway-health failure", async () => {
+    const { scanStatus } = await import("./status.scan.js");
+    vi.mocked(scanStatus).mockResolvedValueOnce(
+      (await createMockStatusScanResult({
+        configDiagnostics: {
+          path: "/tmp/openclaw.json",
+          issues: [{ path: "gateway.port", message: "invalid" }],
+        },
+      })) as unknown as StatusScanResult,
+    );
+    vi.mocked(resolveStatusRuntimeSnapshot).mockResolvedValueOnce({
+      health: { error: "gateway health unavailable" },
+    } as never);
+
+    await expect(statusCommand({ deep: true }, runtime)).rejects.toThrow(
+      "gateway health unavailable",
+    );
+    expect(runtimeLogMock.mock.calls.flat().join("\n")).toContain("Config diagnostics:");
+  });
+
+  it("includes the security audit for deep JSON status", async () => {
+    await statusCommand({ json: true, deep: true }, runtime);
+
+    expect(mocks.runSecurityAudit).toHaveBeenCalledOnce();
+    expect(JSON.parse(getRuntimeLog(0)).securityAudit.summary.critical).toBe(1);
+  });
+
   it("passes deep mode through to the text status scan", async () => {
+    vi.spyOn(performance, "now").mockReturnValue(0);
     const { scanStatus } = await import("./status.scan.js");
     vi.mocked(scanStatus).mockClear();
 
-    await statusCommand({ deep: true, timeoutMs: 5000 }, runtime as never);
+    await statusCommand({ deep: true, timeoutMs: 5000 }, runtime);
 
-    expect(scanStatus).toHaveBeenCalledWith(
-      { json: false, timeoutMs: 5000, all: undefined, deep: true },
-      runtime,
-    );
+    expect(scanStatus).toHaveBeenCalledWith({
+      timeoutMs: 5000,
+      gatewayProbeDeadlineMs: 5000,
+      deep: true,
+    });
   });
 
   it("surfaces unknown usage when totalTokens is missing", async () => {
     await withUnknownUsageStore(async () => {
       runtimeLogMock.mockClear();
-      await statusCommand({ json: true }, runtime as never);
+      await statusCommand({ json: true }, runtime);
       const payload = JSON.parse(getLastRuntimeLog());
       expect(payload.sessions.recent[0].totalTokens).toBeNull();
       expect(payload.sessions.recent[0].totalTokensFresh).toBe(false);
@@ -1127,17 +1173,17 @@ describe("statusCommand", () => {
       },
     });
     runtimeLogMock.mockClear();
-    await statusCommand({ json: true }, runtime as never);
+    await statusCommand({ json: true }, runtime);
     const payload = JSON.parse(getLastRuntimeLog());
     expect(payload.sessions.recent[0].totalTokens).toBe(5000);
     expect(payload.sessions.recent[0].totalTokensFresh).toBe(false);
-    expect(payload.sessions.recent[0].percentUsed).toBe(50);
-    expect(payload.sessions.recent[0].remainingTokens).toBe(5000);
+    expect(payload.sessions.recent[0].percentUsed).toBeNull();
+    expect(payload.sessions.recent[0].remainingTokens).toBeNull();
   });
 
   it("prints formatted lines with verbose cache details", async () => {
     mocks.buildPluginCompatibilityNotices.mockReturnValue([
-      createCompatibilityNotice({ pluginId: "legacy-plugin", code: "legacy-before-agent-start" }),
+      createCompatibilityNotice({ pluginId: "legacy-plugin", code: "hook-only" }),
     ]);
     const logs = await runStatusAndGetLogs({ verbose: true });
     for (const token of [
@@ -1164,7 +1210,7 @@ describe("statusCommand", () => {
     ]) {
       expectLogsInclude(logs, token);
     }
-    expectLogsInclude(logs, "legacy-plugin still uses legacy before_agent_start");
+    expectLogsInclude(logs, "legacy-plugin is hook-only");
     expectLogsMatch(logs, /openclaw (?:--profile isolated )?status --all/);
     expectLogsInclude(logs, "Cache");
     expectLogsInclude(logs, "40% hit");
@@ -1322,7 +1368,7 @@ describe("statusCommand", () => {
       },
     });
 
-    await statusCommand({ json: true }, runtime as never);
+    await statusCommand({ json: true }, runtime);
     const payload = JSON.parse(getLastRuntimeLog());
     const gatewayAuthMessage = payload.gateway.error ?? payload.gateway.authWarning;
     expect(typeof gatewayAuthMessage).toBe("string");
@@ -1419,60 +1465,116 @@ describe("statusCommand", () => {
     expect(joined).toMatch(/WARN/);
   });
 
-  it("prints safe gateway pairing recovery guidance", async () => {
-    expect(
-      resolvePairingRecoveryContext({
+  it.each([
+    {
+      name: "legacy scope-upgrade request",
+      probe: {
         error: "scope upgrade pending approval (requestId: req-123)",
-        closeReason: "pairing required",
-      }),
-    ).toEqual({ requestId: "req-123", reason: "scope-upgrade", remediationHint: null });
-    expect(
-      resolvePairingRecoveryContext({
+        close: { code: 1008, reason: "pairing required" },
+      },
+      expected: [
+        "Gateway scope upgrade approval required.",
+        "Reason: device is asking for more scopes than currently approved.",
+        "Recovery: openclaw --profile isolated devices approve req-123",
+      ],
+      forbiddenRaw: [],
+    },
+    {
+      name: "legacy pairing without a request",
+      probe: {
         error: "connect failed: pairing required",
-        closeReason: "connect failed",
-      }),
-    ).toEqual({ requestId: null, reason: "not-paired", remediationHint: null });
-    expect(
-      resolvePairingRecoveryContext({
+        close: { code: 1008, reason: "connect failed" },
+      },
+      expected: ["Gateway pairing approval required.", "Reason: device is not approved yet."],
+      forbiddenRaw: [],
+    },
+    {
+      name: "unsafe legacy request identifier",
+      probe: {
         error: "connect failed: pairing required (requestId: req-123;rm -rf /)",
-        closeReason: "pairing required (requestId: req-123;rm -rf /)",
-      }),
-    ).toEqual({ requestId: null, reason: "not-paired", remediationHint: null });
-    expect(
-      resolvePairingRecoveryContext({
+        close: {
+          code: 1008,
+          reason: "pairing required (requestId: req-123;rm -rf /)",
+        },
+      },
+      expected: ["Gateway pairing approval required.", "Reason: device is not approved yet."],
+      forbiddenRaw: [],
+    },
+    {
+      name: "request identifier carried only by the close reason",
+      probe: {
         error: "connect failed: pairing required",
-        closeReason: "pairing required (requestId: req-close-456)",
-      }),
-    ).toEqual({ requestId: "req-close-456", reason: "not-paired", remediationHint: null });
-    expect(
-      resolvePairingRecoveryContext({
-        details: {
+        close: { code: 1008, reason: "pairing required (requestId: req-close-456)" },
+      },
+      expected: [
+        "Gateway pairing approval required.",
+        "Reason: device is not approved yet.",
+        "Recovery: openclaw --profile isolated devices approve req-close-456",
+      ],
+      forbiddenRaw: [],
+    },
+    {
+      name: "structured request and remediation hint",
+      probe: {
+        connectErrorDetails: {
           code: "PAIRING_REQUIRED",
           reason: "scope-upgrade",
           requestId: "req-structured-789",
           remediationHint: "Review the requested scopes, then approve the pending upgrade.",
         },
-      }),
-    ).toEqual({
-      requestId: "req-structured-789",
-      reason: "scope-upgrade",
-      remediationHint: "Review the requested scopes, then approve the pending upgrade.",
-    });
-    expect(
-      resolvePairingRecoveryContext({
-        details: {
+      },
+      expected: [
+        "Gateway scope upgrade approval required.",
+        "Reason: device is asking for more scopes than currently approved.",
+        "Hint: Review the requested scopes, then approve the pending upgrade.",
+        "Recovery: openclaw --profile isolated devices approve req-structured-789",
+      ],
+      forbiddenRaw: [],
+    },
+    {
+      name: "unsafe structured request and terminal-control hint",
+      probe: {
+        connectErrorDetails: {
           code: "PAIRING_REQUIRED",
           reason: "scope-upgrade",
           requestId: "req-structured-789;rm -rf /",
           remediationHint: "\u001b[31mReview\nfirst\u001b[0m",
         },
-      }),
-    ).toEqual({
-      requestId: null,
-      reason: "scope-upgrade",
-      remediationHint: "Review\\nfirst",
-    });
+      },
+      expected: [
+        "Gateway scope upgrade approval required.",
+        "Reason: device is asking for more scopes than currently approved.",
+        "Hint: Review\\nfirst",
+      ],
+      forbiddenRaw: ["\u001b[31mReview"],
+    },
+  ])(
+    "prints pairing recovery from $name through status output",
+    async ({ probe, expected, forbiddenRaw }) => {
+      await withOptionalEnvVar("OPENCLAW_CONTAINER_HINT", undefined, async () => {
+        mockProbeGatewayResult(probe);
+        const joined = await runStatusAndGetJoinedLogs();
+        // Strip renderer colors, but do not let that hide the input's unsafe ANSI prefix.
+        for (const fragment of forbiddenRaw) {
+          expect(joined).not.toContain(fragment);
+        }
+        const recoveryLines = stripAnsi(joined)
+          .split("\n")
+          .filter((line) =>
+            /^(Gateway .*approval required\.|Reason: |Hint: |Recovery: |Fallback: |Inspect: )/.test(
+              line,
+            ),
+          );
+        expect(recoveryLines).toEqual([
+          ...expected,
+          "Fallback: openclaw --profile isolated devices approve --latest",
+          "Inspect: openclaw --profile isolated devices list",
+        ]);
+      });
+    },
+  );
 
+  it("prints safe gateway pairing recovery guidance", async () => {
     mocks.loadConfig.mockReturnValue({
       session: {},
       channels: { whatsapp: { allowFrom: ["*"] } },
@@ -1533,7 +1635,7 @@ describe("statusCommand", () => {
       };
     });
 
-    await statusCommand({ json: true }, runtime as never);
+    await statusCommand({ json: true }, runtime);
     const payload = JSON.parse(getLastRuntimeLog());
     expect(payload.sessions.count).toBe(2);
     expect(payload.sessions.paths.length).toBe(2);

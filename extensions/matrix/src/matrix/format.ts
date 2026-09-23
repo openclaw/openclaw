@@ -1,10 +1,24 @@
 // Matrix helper module supports format behavior.
 import MarkdownIt from "markdown-it";
+import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isAutoLinkedFileRef } from "openclaw/plugin-sdk/text-autolink-runtime";
+import {
+  markdownToIR,
+  renderMarkdownWithMarkers,
+  tokenizeHtmlTags,
+} from "openclaw/plugin-sdk/text-chunking";
+import { createMatrixPrivateMarkers, MATRIX_FORMAT_PROFILE } from "./format-profile.js";
+import type { MatrixSpoilerMarkers, MatrixSpoilerProtection } from "./format-profile.js";
+import { analyzeMatrixSpoilers, type MatrixSpoilerAnalysis } from "./format-spoiler-ranges.js";
 import type { MatrixClient } from "./sdk.js";
 import { isMatrixQualifiedUserId } from "./target-ids.js";
 
+export { MATRIX_FORMAT_PROFILE, renderMatrixMarkdownTables } from "./format-profile.js";
+const MATRIX_STYLE_MARKERS = {
+  underline: { open: "<u>", close: "</u>" },
+  spoiler: { open: "<span data-mx-spoiler>", close: "</span>" },
+} as const;
 const md = new MarkdownIt({
   html: false,
   linkify: true,
@@ -12,6 +26,7 @@ const md = new MarkdownIt({
   typographer: false,
 });
 
+md.linkify.set({ fuzzyLink: true });
 md.enable("strikethrough");
 
 const { escapeHtml } = md.utils;
@@ -23,6 +38,7 @@ export type MatrixMentions = {
 
 type MarkdownToken = ReturnType<typeof md.parse>[number];
 type MarkdownInlineToken = NonNullable<MarkdownToken["children"]>[number];
+type MarkdownInlineRule = Parameters<typeof md.inline.ruler.before>[2];
 type MatrixMentionCandidate = {
   raw: string;
   start: number;
@@ -31,7 +47,6 @@ type MatrixMentionCandidate = {
   userId?: string;
 };
 
-const ESCAPED_MENTION_SENTINEL = "\uE000";
 const MENTION_PATTERN = /@[A-Za-z0-9._=+\-/:[\]]+/g;
 const MATRIX_MENTION_SERVER_NAME_PATTERN =
   /(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)(?:\.(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?))*(?::\d+)?/;
@@ -39,6 +54,48 @@ const MATRIX_MENTION_USER_ID_PATTERN = new RegExp(
   `^@[A-Za-z0-9._=+\\-/]+:(?:${MATRIX_MENTION_SERVER_NAME_PATTERN.source}|\\[[0-9A-Fa-f:.]+\\](?::\\d+)?)$`,
 );
 const TRIMMABLE_MENTION_SUFFIX = /[),.!?:;\]]/;
+
+const parseMatrixUnderline: MarkdownInlineRule = (state, silent) => {
+  if (state.src.charCodeAt(state.pos) !== 0x3c) {
+    return false;
+  }
+  const tag = tokenizeHtmlTags(state.src.slice(state.pos)).next().value;
+  if (!tag || tag.start !== 0 || (tag.name !== "u" && tag.name !== "ins")) {
+    return false;
+  }
+  if (!silent) {
+    const token = state.push(
+      tag.selfClosing ? "text" : tag.closing ? "matrix_underline_close" : "matrix_underline_open",
+      tag.selfClosing ? "" : "u",
+      tag.selfClosing ? 0 : tag.closing ? -1 : 1,
+    );
+    if (tag.selfClosing) {
+      token.content = tag.raw;
+    }
+  }
+  state.pos += tag.end;
+  return true;
+};
+
+md.inline.ruler.before("html_inline", "matrix_underline", parseMatrixUnderline);
+md.renderer.rules.matrix_underline_open = () => MATRIX_STYLE_MARKERS.underline.open;
+md.renderer.rules.matrix_underline_close = () => MATRIX_STYLE_MARKERS.underline.close;
+md.renderer.rules.matrix_spoiler_open = () => MATRIX_STYLE_MARKERS.spoiler.open;
+md.renderer.rules.matrix_spoiler_close = () => MATRIX_STYLE_MARKERS.spoiler.close;
+md.core.ruler.after("inline", "matrix_spoilers", (state) => {
+  const markers = (state.env as { matrixSpoilerMarkers?: MatrixSpoilerMarkers })
+    .matrixSpoilerMarkers;
+  if (!markers) {
+    return;
+  }
+  for (const token of state.tokens as MarkdownToken[]) {
+    if (token.children?.length) {
+      token.children = normalizeMatrixSpoilerNesting(
+        injectProtectedMatrixSpoilers(token.children, markers),
+      );
+    }
+  }
+});
 
 function shouldSuppressAutoLink(
   tokens: Parameters<NonNullable<typeof md.renderer.rules.link_open>>[0],
@@ -48,15 +105,27 @@ function shouldSuppressAutoLink(
   if (token?.type !== "link_open" || token.info !== "auto") {
     return false;
   }
-  const href = token.attrGet("href") ?? "";
+  const href = String(token.attrGet("href") ?? "");
   const label = tokens[idx + 1]?.type === "text" ? (tokens[idx + 1]?.content ?? "") : "";
   return Boolean(href && label && isAutoLinkedFileRef(href, label));
 }
 
-md.renderer.rules.image = (tokens, idx) => escapeHtml(tokens[idx]?.content ?? "");
+md.renderer.rules.image = (tokens, idx, options, env, self) => {
+  const token = tokens[idx];
+  return token?.children?.length
+    ? self.renderInline(token.children, options, env)
+    : escapeHtml(token?.content ?? "");
+};
 
 md.renderer.rules.html_block = (tokens, idx) => escapeHtml(tokens[idx]?.content ?? "");
 md.renderer.rules.html_inline = (tokens, idx) => escapeHtml(tokens[idx]?.content ?? "");
+md.renderer.rules.text_special = (tokens, idx) => escapeHtml(tokens[idx]?.content ?? "");
+md.renderer.rules.matrix_escaped_mention = () => "@";
+md.core.ruler.before("text_join", "matrix_escaped_mentions", (state) => {
+  // Preserve the parser's escape decision before text_join erases it; otherwise
+  // literal IDs become mentions when their surrounding Markdown is incomplete.
+  preserveEscapedMentionTokens(state.tokens);
+});
 md.renderer.rules.link_open = (tokens, idx, _options, _env, self) =>
   shouldSuppressAutoLink(tokens, idx) ? "" : self.renderToken(tokens, idx, _options);
 md.renderer.rules.link_close = (tokens, idx, _options, _env, self) => {
@@ -67,60 +136,13 @@ md.renderer.rules.link_close = (tokens, idx, _options, _env, self) => {
   return self.renderToken(tokens, idx, _options);
 };
 
-function maskEscapedMentions(markdown: string): string {
-  let masked = "";
-  let idx = 0;
-  let codeFenceLength = 0;
-
-  while (idx < markdown.length) {
-    if (markdown[idx] === "`" && !isMarkdownEscaped(markdown, idx)) {
-      let runLength = 1;
-      while (markdown[idx + runLength] === "`") {
-        runLength += 1;
-      }
-      if (codeFenceLength === 0) {
-        codeFenceLength = runLength;
-      } else if (runLength === codeFenceLength) {
-        codeFenceLength = 0;
-      }
-      masked += markdown.slice(idx, idx + runLength);
-      idx += runLength;
-      continue;
-    }
-    if (codeFenceLength === 0 && markdown[idx] === "\\" && markdown[idx + 1] === "@") {
-      masked += ESCAPED_MENTION_SENTINEL;
-      idx += 2;
-      continue;
-    }
-    masked += markdown[idx] ?? "";
-    idx += 1;
-  }
-
-  return masked;
-}
-
-function isMarkdownEscaped(markdown: string, idx: number): boolean {
-  let slashCount = 0;
-  let cursor = idx - 1;
-  while (cursor >= 0 && markdown[cursor] === "\\") {
-    slashCount += 1;
-    cursor -= 1;
-  }
-  return slashCount % 2 === 1;
-}
-
-function restoreEscapedMentions(text: string): string {
-  return text.replaceAll(ESCAPED_MENTION_SENTINEL, "@");
-}
-
-function restoreEscapedMentionsInCode(text: string): string {
-  return text.replaceAll(ESCAPED_MENTION_SENTINEL, "\\@");
-}
-
-function restoreEscapedMentionsInBlockTokens(tokens: MarkdownToken[]): void {
+function preserveEscapedMentionTokens(tokens: MarkdownToken[]): void {
   for (const token of tokens) {
-    if ((token.type === "fence" || token.type === "code_block") && token.content) {
-      token.content = restoreEscapedMentionsInCode(token.content);
+    if (token.type === "text_special" && token.info === "escape" && token.content === "@") {
+      token.type = "matrix_escaped_mention";
+    }
+    if (token.children) {
+      preserveEscapedMentionTokens(token.children);
     }
   }
 }
@@ -216,6 +238,100 @@ function createTextToken(sample: MarkdownInlineToken, content: string): Markdown
   return token;
 }
 
+function injectProtectedMatrixSpoilers(
+  tokens: MarkdownInlineToken[],
+  markers: MatrixSpoilerMarkers,
+): MarkdownInlineToken[] {
+  const result: MarkdownInlineToken[] = [];
+  for (const token of tokens) {
+    if (token.type !== "text") {
+      if (token.children?.length) {
+        token.children = normalizeMatrixSpoilerNesting(
+          injectProtectedMatrixSpoilers(token.children, markers),
+        );
+      }
+      result.push(token);
+      continue;
+    }
+    let cursor = 0;
+    for (let index = 0; index < token.content.length; index += 1) {
+      const marker = token.content[index];
+      if (
+        (marker !== markers.open && marker !== markers.close) ||
+        token.content[index + 1] !== markers.padding
+      ) {
+        continue;
+      }
+      if (index > cursor) {
+        result.push(createTextToken(token, token.content.slice(cursor, index)));
+      }
+      result.push(
+        createToken(
+          token,
+          marker === markers.open ? "matrix_spoiler_open" : "matrix_spoiler_close",
+          "span",
+          marker === markers.open ? 1 : -1,
+        ),
+      );
+      index += 1;
+      cursor = index + 1;
+    }
+    if (cursor < token.content.length) {
+      result.push(createTextToken(token, token.content.slice(cursor)));
+    }
+  }
+  return result;
+}
+
+function copyInlineToken(
+  sample: MarkdownInlineToken,
+  type: string,
+  tag: string,
+  nesting: number,
+): MarkdownInlineToken {
+  const token = createToken(sample, type, tag, nesting);
+  token.markup = sample.markup;
+  token.attrs = sample.attrs ? [...sample.attrs] : null;
+  return token;
+}
+
+function normalizeMatrixSpoilerNesting(tokens: MarkdownInlineToken[]): MarkdownInlineToken[] {
+  const result: MarkdownInlineToken[] = [];
+  const stack: MarkdownInlineToken[] = [];
+  for (const token of tokens) {
+    if (token.nesting === 1) {
+      stack.push(token);
+      result.push(token);
+      continue;
+    }
+    if (token.nesting !== -1) {
+      result.push(token);
+      continue;
+    }
+    const openIndex = stack.findLastIndex((open) => open.tag === token.tag);
+    if (openIndex < 0) {
+      result.push(token);
+      continue;
+    }
+    if (openIndex === stack.length - 1) {
+      stack.pop();
+      result.push(token);
+      continue;
+    }
+    const crossing = stack.splice(openIndex + 1);
+    for (const open of crossing.toReversed()) {
+      result.push(copyInlineToken(open, open.type.replace(/_open$/u, "_close"), open.tag, -1));
+    }
+    stack.pop();
+    result.push(token);
+    for (const open of crossing) {
+      result.push(copyInlineToken(open, open.type, open.tag, 1));
+      stack.push(open);
+    }
+  }
+  return result;
+}
+
 function createMentionLinkTokens(params: {
   sample: MarkdownInlineToken;
   href: string;
@@ -268,23 +384,20 @@ function mutateInlineTokensWithMentions(params: {
       continue;
     }
 
-    const visibleContent = restoreEscapedMentions(child.content);
     if (insideLinkDepth > 0) {
-      nextChildren.push(createTextToken(child, visibleContent));
+      nextChildren.push(child);
       continue;
     }
     const matches = collectMentionCandidates(child.content);
     if (matches.length === 0) {
-      nextChildren.push(createTextToken(child, visibleContent));
+      nextChildren.push(child);
       continue;
     }
 
     let cursor = 0;
     for (const match of matches) {
       if (match.start > cursor) {
-        nextChildren.push(
-          createTextToken(child, restoreEscapedMentions(child.content.slice(cursor, match.start))),
-        );
+        nextChildren.push(createTextToken(child, child.content.slice(cursor, match.start)));
       }
       cursor = match.end;
       if (match.kind === "room") {
@@ -311,9 +424,7 @@ function mutateInlineTokensWithMentions(params: {
       );
     }
     if (cursor < child.content.length) {
-      nextChildren.push(
-        createTextToken(child, restoreEscapedMentions(child.content.slice(cursor))),
-      );
+      nextChildren.push(createTextToken(child, child.content.slice(cursor)));
     }
   }
   return { children: nextChildren, roomMentioned };
@@ -328,31 +439,25 @@ function mutateInlineTokensWithMentions(params: {
 function compactLooseListTokens(tokens: MarkdownToken[]): void {
   const listItemStack: Array<{
     level: number;
-    immediateParagraphOpenIndexes: number[];
-    immediateParagraphCloseIndexes: number[];
+    // null keeps multi-paragraph items visible, including after later paragraphs.
+    paragraphIndex: number | null | undefined;
   }> = [];
 
   for (const [index, token] of tokens.entries()) {
     if (token.type === "list_item_open") {
       listItemStack.push({
         level: token.level,
-        immediateParagraphOpenIndexes: [],
-        immediateParagraphCloseIndexes: [],
+        paragraphIndex: undefined,
       });
       continue;
     }
 
     if (token.type === "list_item_close") {
       const item = listItemStack.pop();
-      if (
-        item &&
-        item.immediateParagraphOpenIndexes.length === 1 &&
-        item.immediateParagraphCloseIndexes.length === 1
-      ) {
-        const openIndex = item.immediateParagraphOpenIndexes[0];
-        const closeIndex = item.immediateParagraphCloseIndexes[0];
-        const openToken = openIndex === undefined ? undefined : tokens[openIndex];
-        const closeToken = closeIndex === undefined ? undefined : tokens[closeIndex];
+      if (typeof item?.paragraphIndex === "number") {
+        // markdown-it emits each paragraph as open, inline, close tokens.
+        const openToken = tokens[item.paragraphIndex];
+        const closeToken = tokens[item.paragraphIndex + 2];
         if (openToken && closeToken) {
           openToken.hidden = true;
           closeToken.hidden = true;
@@ -367,26 +472,108 @@ function compactLooseListTokens(tokens: MarkdownToken[]): void {
     }
 
     if (token.type === "paragraph_open") {
-      currentItem.immediateParagraphOpenIndexes.push(index);
-    } else if (token.type === "paragraph_close") {
-      currentItem.immediateParagraphCloseIndexes.push(index);
+      currentItem.paragraphIndex = currentItem.paragraphIndex === undefined ? index : null;
     }
   }
 }
 
-export function markdownToMatrixHtml(markdown: string): string {
-  const tokens = md.parse(markdown ?? "", {});
+export function markdownToMatrixHtml(
+  markdown: string,
+  options: { tableMode?: MarkdownTableMode } = {},
+): string {
+  const analysis = analyzeMatrixSpoilers(markdown);
+  if (analysis.metadataCollision) {
+    return renderMatrixFallbackHtml(analysis);
+  }
+  const tokens = parseMatrixMarkdown(analysis, options.tableMode);
   compactLooseListTokens(tokens);
   return md.renderer.render(tokens, md.options, {}).trimEnd();
 }
 
+export function protectMatrixSpoilerDelimiters(
+  analysis: MatrixSpoilerAnalysis,
+): MatrixSpoilerProtection {
+  const { markdown, delimiterOffsets: offsets } = analysis;
+  if (offsets.length === 0) {
+    return { markdown };
+  }
+  const markers = createMatrixPrivateMarkers(
+    markdown,
+    "Matrix spoiler formatting exhausted its private marker pool",
+  );
+  let protectedMarkdown = "";
+  let cursor = 0;
+  for (const [index, offset] of offsets.entries()) {
+    const marker = index % 2 === 0 ? markers.open : markers.close;
+    protectedMarkdown += `${markdown.slice(cursor, offset)}${marker}${markers.padding}`;
+    cursor = offset + 2;
+  }
+  protectedMarkdown += markdown.slice(cursor);
+  return { markdown: protectedMarkdown, markers };
+}
+
+function parseMatrixMarkdown(
+  analysis: MatrixSpoilerAnalysis,
+  tableMode?: MarkdownTableMode,
+): MarkdownToken[] {
+  const protectedSpoilers = protectMatrixSpoilerDelimiters(analysis);
+  if (tableMode === "off") {
+    md.disable("table");
+  }
+  try {
+    return md.parse(protectedSpoilers.markdown, {
+      matrixSpoilerMarkers: protectedSpoilers.markers,
+    });
+  } finally {
+    if (tableMode === "off") {
+      md.enable("table");
+    }
+  }
+}
+
+export function markdownToMatrixBody(markdown: string): string {
+  return renderMatrixBody(analyzeMatrixSpoilers(markdown));
+}
+
+export function renderMatrixBody(analysis: MatrixSpoilerAnalysis): string {
+  const { markdown: projected, delimiterOffsets: offsets, metadataCollision } = analysis;
+  if (offsets.length === 0 && !metadataCollision) {
+    return projected;
+  }
+  let body = projected;
+  if (metadataCollision) {
+    body = "[Spoiler]";
+  } else {
+    for (let index = offsets.length - 2; index >= 0; index -= 2) {
+      const open = offsets[index];
+      const close = offsets[index + 1];
+      if (open !== undefined && close !== undefined) {
+        body = `${body.slice(0, open)}[Spoiler]${body.slice(close + 2)}`;
+      }
+    }
+  }
+  const ir = markdownToIR(body, {
+    enableHtmlUnderline: true,
+    headingStyle: "rich",
+    linkify: true,
+  });
+  return renderMarkdownWithMarkers(
+    ir,
+    { styleMarkers: {}, escapeText: (text) => text },
+    MATRIX_FORMAT_PROFILE,
+  );
+}
+
+function renderMatrixFallbackHtml(analysis: MatrixSpoilerAnalysis): string {
+  return `<p>${escapeHtml(renderMatrixBody(analysis)).replaceAll("\n", "<br>\n")}</p>`;
+}
+
 async function resolveMarkdownMentionState(params: {
-  markdown: string;
+  analysis: MatrixSpoilerAnalysis;
   client: MatrixClient;
+  tableMode?: MarkdownTableMode;
 }): Promise<{ tokens: MarkdownToken[]; mentions: MatrixMentions }> {
-  const markdown = maskEscapedMentions(params.markdown ?? "");
-  const tokens = md.parse(markdown, {});
-  restoreEscapedMentionsInBlockTokens(tokens);
+  const tokens = parseMatrixMarkdown(params.analysis, params.tableMode);
   const selfUserId = await resolveMatrixSelfUserId(params.client);
   const userIds: string[] = [];
   const seenUserIds = new Set<string>();
@@ -423,15 +610,28 @@ export async function resolveMatrixMentionsInMarkdown(params: {
   markdown: string;
   client: MatrixClient;
 }): Promise<MatrixMentions> {
-  const state = await resolveMarkdownMentionState(params);
+  const state = await resolveMarkdownMentionState({
+    analysis: analyzeMatrixSpoilers(params.markdown),
+    client: params.client,
+  });
   return state.mentions;
 }
 
 export async function renderMarkdownToMatrixHtmlWithMentions(params: {
   markdown: string;
   client: MatrixClient;
+  tableMode?: MarkdownTableMode;
 }): Promise<{ html?: string; mentions: MatrixMentions }> {
-  const state = await resolveMarkdownMentionState(params);
+  const analysis = analyzeMatrixSpoilers(params.markdown);
+  const state = await resolveMarkdownMentionState({ ...params, analysis });
+  if (analysis.metadataCollision) {
+    const redacted = renderMatrixBody(analysis);
+    const redactedState = await resolveMarkdownMentionState({
+      ...params,
+      analysis: analyzeMatrixSpoilers(redacted),
+    });
+    return { html: renderMatrixFallbackHtml(analysis), mentions: redactedState.mentions };
+  }
   compactLooseListTokens(state.tokens);
   const html = md.renderer.render(state.tokens, md.options, {}).trimEnd();
   return {

@@ -26,6 +26,9 @@ data class WearRealtimeTalkEntry(
   val role: WearRealtimeTalkRole,
   val text: String,
   val streaming: Boolean = false,
+  val textTruncated: Boolean = false,
+  val fullTextAvailable: Boolean = false,
+  val textRevision: Long = 0,
 )
 
 @Serializable
@@ -115,6 +118,7 @@ object WearRealtimeAudioFraming {
       WearRealtimeAudioFrameType.INPUT_PCM,
       WearRealtimeAudioFrameType.OUTPUT_PCM,
       -> require(payload.isNotEmpty() && payload.size % 2 == 0)
+
       WearRealtimeAudioFrameType.CLEAR_OUTPUT -> require(payload.isEmpty())
     }
   }

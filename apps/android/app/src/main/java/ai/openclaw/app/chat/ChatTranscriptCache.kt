@@ -1,17 +1,13 @@
 package ai.openclaw.app.chat
 
-import android.content.Context
-import androidx.room.Dao
-import androidx.room.Database
-import androidx.room.Entity
-import androidx.room.Insert
-import androidx.room.OnConflictStrategy
-import androidx.room.Query
-import androidx.room.Room
-import androidx.room.RoomDatabase
-import androidx.room.migration.Migration
-import androidx.room.withTransaction
-import androidx.sqlite.db.SupportSQLiteDatabase
+import androidx.room3.Dao
+import androidx.room3.Entity
+import androidx.room3.Insert
+import androidx.room3.OnConflictStrategy
+import androidx.room3.Query
+import androidx.room3.withWriteTransaction
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
@@ -20,10 +16,45 @@ import java.util.UUID
 /** Upper bound of cached session rows per gateway across every agent owner. */
 internal const val MAX_CACHED_SESSIONS = 50
 
-internal const val CHAT_TRANSCRIPT_CACHE_DB_NAME = "chat-transcript-cache.db"
-
 /** Upper bound of cached transcript rows per session; only the newest messages are kept. */
 internal const val MAX_CACHED_MESSAGES_PER_SESSION = 200
+
+@Serializable
+private data class CachedMessageContent(
+  val type: String,
+  val text: String? = null,
+  val mimeType: String? = null,
+  val fileName: String? = null,
+  val artifactId: String? = null,
+  val url: String? = null,
+  val openUrl: String? = null,
+  val alt: String? = null,
+  val width: Int? = null,
+  val height: Int? = null,
+  val sizeBytes: Long? = null,
+  val durationMs: Long? = null,
+  val playback: String? = null,
+  val toolActivity: ChatToolActivity? = null,
+)
+
+@Serializable
+private data class CachedMessagePayload(
+  val content: List<CachedMessageContent>,
+  val provenance: ChatMessageProvenance? = null,
+  @SerialName("__openclaw") val transcriptMarker: ChatTranscriptMarker? = null,
+  val senderLabel: String? = null,
+  val provider: String? = null,
+  val model: String? = null,
+  val deliveryMirror: ChatDeliveryMirror? = null,
+  val usage: ChatMessageUsage? = null,
+  val cost: ChatMessageCost? = null,
+  val isSyntheticDisplay: Boolean = false,
+  val runId: String? = null,
+  val steerTargetRunId: String? = null,
+  val turnBoundary: Boolean = false,
+  val phase: String? = null,
+  val isError: Boolean = false,
+)
 
 /**
  * Read-only offline cache of chat sessions and transcripts.
@@ -63,6 +94,7 @@ interface ChatTranscriptCache {
     agentId: String,
     sessionKey: String,
     messages: List<ChatMessage>,
+    sessionInfo: ChatSessionEntry? = null,
   )
 
   /** Removes one session and its transcript, so gateway-side deletes also purge offline copies. */
@@ -82,7 +114,14 @@ internal data class CachedSessionEntity(
   val agentId: String,
   val sessionKey: String,
   val displayName: String?,
+  val color: String?,
   val updatedAtMs: Long?,
+  val status: String?,
+  val startedAt: Long?,
+  val endedAt: Long?,
+  val runtimeMs: Long?,
+  val outputTokens: Long?,
+  val hasRunMetadata: Boolean,
   // Preserves gateway list order so offline session rows render in the familiar order.
   val rowOrder: Int,
 )
@@ -94,7 +133,7 @@ internal data class CachedMessageEntity(
   val sessionKey: String,
   val rowOrder: Int,
   val role: String,
-  // JSON array of text part strings; attachments/binary parts are never persisted.
+  // JSON array of text and managed-media references; attachment bytes are never persisted.
   val textPartsJson: String,
   val timestampMs: Long?,
   // Kept so live history reconciliation can match cached rows by identity key.
@@ -226,168 +265,17 @@ internal interface ChatCacheDao {
   suspend fun evictGatewayOrphanedTranscripts(gatewayId: String)
 }
 
-@Database(
-  entities = [
-    CachedSessionEntity::class,
-    CachedMessageEntity::class,
-    OutboxCommandEntity::class,
-    OutboxAttachmentEntity::class,
-    OutboxAttachmentChunkEntity::class,
-    ComposerSendAdmissionEntity::class,
-    CachedGatewayOwnerEntity::class,
-  ],
-  version = 8,
-  exportSchema = false,
-)
-internal abstract class ChatCacheDatabase : RoomDatabase() {
-  abstract fun dao(): ChatCacheDao
-
-  abstract fun outboxDao(): ChatOutboxDao
-
-  companion object {
-    internal val MIGRATION_2_3 =
-      object : Migration(2, 3) {
-        override fun migrate(db: SupportSQLiteDatabase) {
-          // v2 persisted every post-dispatch exception as queued+lastError. Those rows may
-          // already have run, so upgrading must park them alongside crash-interrupted sends.
-          db.execSQL(
-            "UPDATE outbox_commands SET status = ?, lastError = ? " +
-              "WHERE status = ? OR (status = ? AND lastError IS NOT NULL)",
-            arrayOf<Any?>(
-              ChatOutboxStatus.Failed.dbValue,
-              OUTBOX_DELIVERY_UNCONFIRMED_ERROR,
-              ChatOutboxStatus.Sending.dbValue,
-              ChatOutboxStatus.Queued.dbValue,
-            ),
-          )
-        }
-      }
-
-    internal val MIGRATION_3_4 =
-      object : Migration(3, 4) {
-        override fun migrate(db: SupportSQLiteDatabase) {
-          db.execSQL("ALTER TABLE `outbox_commands` ADD COLUMN `gatedEpoch` INTEGER")
-          // Legacy queued command-shaped rows predate connection epochs; the sentinel makes
-          // them park for explicit retry instead of silently replaying on the next reconnect.
-          db.execSQL(
-            "UPDATE outbox_commands SET gatedEpoch = ? WHERE status = ? AND text LIKE '/%'",
-            arrayOf<Any?>(OUTBOX_GATED_EPOCH_NEVER, ChatOutboxStatus.Queued.dbValue),
-          )
-          db.execSQL(
-            "CREATE TABLE IF NOT EXISTS `outbox_attachments` (`id` TEXT NOT NULL, `commandId` TEXT NOT NULL, " +
-              "`position` INTEGER NOT NULL, `type` TEXT NOT NULL, `mimeType` TEXT NOT NULL, `fileName` TEXT NOT NULL, " +
-              "`durationMs` INTEGER, `byteLength` INTEGER NOT NULL, PRIMARY KEY(`id`))",
-          )
-          db.execSQL("CREATE INDEX IF NOT EXISTS `index_outbox_attachments_commandId` ON `outbox_attachments` (`commandId`)")
-          db.execSQL(
-            "CREATE TABLE IF NOT EXISTS `outbox_attachment_chunks` (`attachmentId` TEXT NOT NULL, " +
-              "`chunkIndex` INTEGER NOT NULL, `bytes` BLOB NOT NULL, PRIMARY KEY(`attachmentId`, `chunkIndex`))",
-          )
-        }
-      }
-
-    internal val MIGRATION_4_5 =
-      object : Migration(4, 5) {
-        override fun migrate(db: SupportSQLiteDatabase) {
-          db.execSQL("ALTER TABLE `outbox_commands` ADD COLUMN `ownerAgentId` TEXT")
-          // Agent-qualified keys carry a durable owner in the key itself. Backfill it so session
-          // deletion and replay keep working after upgrade without consulting mutable defaults.
-          db.execSQL(
-            "UPDATE outbox_commands SET ownerAgentId = " +
-              "substr(sessionKey, 7, instr(substr(sessionKey, 7), ':') - 1) " +
-              "WHERE sessionKey LIKE 'agent:%:%' AND instr(substr(sessionKey, 7), ':') > 1",
-          )
-          // Earlier rows did not persist the default agent that owned an unscoped key. Never
-          // guess after upgrade: queued input stays visible for manual resend, while accepted
-          // input remains delivery-ambiguous and must not be replayed under a different owner.
-          db.execSQL(
-            "UPDATE outbox_commands SET status = ?, lastError = ? " +
-              "WHERE status = ? AND sessionKey NOT LIKE 'agent:%'",
-            arrayOf<Any?>(
-              ChatOutboxStatus.Failed.dbValue,
-              OUTBOX_OWNER_CHANGED_ERROR,
-              ChatOutboxStatus.Queued.dbValue,
-            ),
-          )
-          db.execSQL(
-            "UPDATE outbox_commands SET status = ?, lastError = ? " +
-              "WHERE status = ? AND sessionKey NOT LIKE 'agent:%'",
-            arrayOf<Any?>(
-              ChatOutboxStatus.Failed.dbValue,
-              OUTBOX_DELIVERY_UNCONFIRMED_ERROR,
-              ChatOutboxStatus.Accepted.dbValue,
-            ),
-          )
-        }
-      }
-
-    internal val MIGRATION_5_6 =
-      object : Migration(5, 6) {
-        override fun migrate(db: SupportSQLiteDatabase) {
-          // Session and transcript caches are disposable, and legacy unscoped rows have no
-          // provable owner. Rebuild both; the durable outbox remains intact across the upgrade.
-          db.execSQL("DROP TABLE IF EXISTS `cached_sessions`")
-          db.execSQL("DROP TABLE IF EXISTS `cached_messages`")
-          db.execSQL(
-            "CREATE TABLE IF NOT EXISTS `cached_sessions` " +
-              "(`gatewayId` TEXT NOT NULL, `agentId` TEXT NOT NULL, `sessionKey` TEXT NOT NULL, " +
-              "`displayName` TEXT, `updatedAtMs` INTEGER, `rowOrder` INTEGER NOT NULL, " +
-              "PRIMARY KEY(`gatewayId`, `agentId`, `sessionKey`))",
-          )
-          db.execSQL(
-            "CREATE TABLE IF NOT EXISTS `cached_messages` " +
-              "(`gatewayId` TEXT NOT NULL, `agentId` TEXT NOT NULL, `sessionKey` TEXT NOT NULL, " +
-              "`rowOrder` INTEGER NOT NULL, `role` TEXT NOT NULL, `textPartsJson` TEXT NOT NULL, " +
-              "`timestampMs` INTEGER, `idempotencyKey` TEXT, " +
-              "PRIMARY KEY(`gatewayId`, `agentId`, `sessionKey`, `rowOrder`))",
-          )
-        }
-      }
-
-    internal val MIGRATION_6_7 =
-      object : Migration(6, 7) {
-        override fun migrate(db: SupportSQLiteDatabase) {
-          db.execSQL(
-            "CREATE TABLE IF NOT EXISTS `cached_gateway_owners` " +
-              "(`gatewayId` TEXT NOT NULL, `agentId` TEXT NOT NULL, PRIMARY KEY(`gatewayId`))",
-          )
-        }
-      }
-
-    internal val MIGRATION_7_8 =
-      object : Migration(7, 8) {
-        override fun migrate(db: SupportSQLiteDatabase) {
-          db.execSQL(
-            "CREATE TABLE IF NOT EXISTS `composer_send_admissions` " +
-              "(`id` TEXT NOT NULL, `gatewayId` TEXT NOT NULL, `ownerAgentId` TEXT NOT NULL, " +
-              "`sessionKey` TEXT NOT NULL, PRIMARY KEY(`id`))",
-          )
-        }
-      }
-
-    fun open(
-      context: Context,
-      name: String = CHAT_TRANSCRIPT_CACHE_DB_NAME,
-    ): ChatCacheDatabase =
-      Room
-        .databaseBuilder(context, ChatCacheDatabase::class.java, name)
-        .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8)
-        // v1 has only disposable transcripts. Starting with v2, the outbox is user data, so every
-        // supported bump needs an explicit migration; destructive fallback remains for v1 only.
-        .fallbackToDestructiveMigrationFrom(true, 1)
-        .build()
-  }
-}
-
 /**
  * Room-backed [ChatTranscriptCache]. Callers bind every operation to the gateway scope captured
  * before their suspend point, so a connection switch cannot re-scope an old response.
  */
 class RoomChatTranscriptCache internal constructor(
-  private val database: ChatCacheDatabase,
+  private val database: GatewayCacheDatabase,
 ) : ChatTranscriptCache {
-  private val json = Json
-  private val textPartsSerializer = ListSerializer(String.serializer())
+  private val json = Json { ignoreUnknownKeys = true }
+  private val cachedPayloadSerializer = CachedMessagePayload.serializer()
+  private val cachedContentSerializer = ListSerializer(CachedMessageContent.serializer())
+  private val legacyTextPartsSerializer = ListSerializer(String.serializer())
 
   override suspend fun loadLastDefaultAgentId(gatewayId: String): String? {
     val gateway = scopedGatewayId(gatewayId) ?: return null
@@ -419,6 +307,13 @@ class RoomChatTranscriptCache internal constructor(
         updatedAtMs = row.updatedAtMs,
         ownerAgentId = agent,
         displayName = row.displayName,
+        color = row.color,
+        status = row.status,
+        startedAt = row.startedAt,
+        endedAt = row.endedAt,
+        runtimeMs = row.runtimeMs,
+        outputTokens = row.outputTokens,
+        hasRunMetadata = row.hasRunMetadata,
       )
     }
   }
@@ -433,12 +328,47 @@ class RoomChatTranscriptCache internal constructor(
     val key = sessionKey.trim().takeIf { it.isNotEmpty() } ?: return emptyList()
     return database.dao().messages(gateway, agent, key).mapNotNull { row ->
       val role = normalizeVisibleChatMessageRole(row.role) ?: return@mapNotNull null
+      val payload = decodeCachedMessage(row.textPartsJson)
       ChatMessage(
         id = UUID.randomUUID().toString(),
         role = role,
-        content = decodeTextParts(row.textPartsJson).map { ChatMessageContent(type = "text", text = it) },
+        content =
+          payload.content.map { part ->
+            ChatMessageContent(
+              type = part.type,
+              text = part.text,
+              mimeType = part.mimeType,
+              fileName = part.fileName,
+              artifactId = part.artifactId,
+              url = part.url,
+              openUrl = part.openUrl,
+              alt = part.alt,
+              width = part.width,
+              height = part.height,
+              sizeBytes = part.sizeBytes,
+              durationMs = part.durationMs,
+              playback = part.playback,
+              toolActivity = part.toolActivity,
+            )
+          },
         timestampMs = row.timestampMs,
         idempotencyKey = row.idempotencyKey,
+        // Canonical tree ids stay live-only; cached rows regain actions after history refresh.
+        entryId = null,
+        provenance = payload.provenance,
+        transcriptMarker = payload.transcriptMarker,
+        senderLabel = payload.senderLabel,
+        provider = payload.provider,
+        model = payload.model,
+        deliveryMirror = payload.deliveryMirror,
+        usage = payload.usage,
+        cost = payload.cost,
+        isSyntheticDisplay = payload.isSyntheticDisplay,
+        runId = payload.runId,
+        steerTargetRunId = payload.steerTargetRunId,
+        turnBoundary = payload.turnBoundary,
+        phase = payload.phase,
+        isError = payload.isError,
       )
     }
   }
@@ -453,36 +383,21 @@ class RoomChatTranscriptCache internal constructor(
     val agent = scopedAgentId(agentId) ?: return
     val retainedKey = retainedSessionKey?.trim()?.takeIf { it.isNotEmpty() }
     val dao = database.dao()
-    database.withTransaction {
+    database.withWriteTransaction {
       val initialSessions = sessions.take(MAX_CACHED_SESSIONS)
       val needsRetainedRow = retainedKey != null && initialSessions.none { it.key == retainedKey }
       val retainedEntry = if (needsRetainedRow) sessions.firstOrNull { it.key == retainedKey } else null
       val retainedRow =
         if (needsRetainedRow) {
-          retainedEntry?.let { entry ->
-            CachedSessionEntity(
-              gatewayId = gateway,
-              agentId = agent,
-              sessionKey = entry.key,
-              displayName = entry.displayName,
-              updatedAtMs = entry.updatedAtMs,
-              rowOrder = 0,
-            )
-          } ?: dao.session(gateway, agent, retainedKey)
+          retainedEntry?.toCachedSession(gateway, agent, rowOrder = 0)
+            ?: dao.session(gateway, agent, retainedKey)
         } else {
           null
         }
       val listedSessionLimit = MAX_CACHED_SESSIONS - if (retainedRow == null) 0 else 1
       val rows =
         sessions.take(listedSessionLimit).mapIndexed { index, session ->
-          CachedSessionEntity(
-            gatewayId = gateway,
-            agentId = agent,
-            sessionKey = session.key,
-            displayName = session.displayName,
-            updatedAtMs = session.updatedAtMs,
-            rowOrder = index,
-          )
+          session.toCachedSession(gateway, agent, rowOrder = index)
         }
       dao.deleteSessions(gateway, agent)
       dao.insertSessions(rows)
@@ -498,33 +413,93 @@ class RoomChatTranscriptCache internal constructor(
     agentId: String,
     sessionKey: String,
     messages: List<ChatMessage>,
+    sessionInfo: ChatSessionEntry?,
   ) {
     val gateway = scopedGatewayId(gatewayId) ?: return
     val agent = scopedAgentId(agentId) ?: return
     val key = sessionKey.trim().takeIf { it.isNotEmpty() } ?: return
-    // Text rows only: attachment/binary parts are dropped, and messages without any text are skipped.
+    // Persist small managed-media references, never attachment bytes. Cards remain visible offline
+    // even though their short-lived download capability must be reacquired after reconnecting.
     val rows =
       messages
         .mapNotNull { message ->
           val role = normalizeVisibleChatMessageRole(message.role) ?: return@mapNotNull null
-          val textParts = message.content.filter { it.type == "text" }.mapNotNull { it.text }
-          if (textParts.isEmpty()) return@mapNotNull null
-          Triple(message, role, textParts)
+          val content =
+            message.content.mapNotNull { part ->
+              val isImage = part.type == "image"
+              when {
+                part.type == "text" && !part.text.isNullOrBlank() -> {
+                  CachedMessageContent(type = "text", text = part.text)
+                }
+
+                part.toolActivity != null -> {
+                  CachedMessageContent(type = part.type, toolActivity = part.toolActivity)
+                }
+
+                (isImage && !part.artifactId.isNullOrBlank() && !part.url.isNullOrBlank()) ||
+                  part.type == "audio" || part.type == "video" || part.type == "file" -> {
+                  CachedMessageContent(
+                    type = part.type,
+                    mimeType = part.mimeType,
+                    fileName = part.fileName,
+                    artifactId = part.artifactId,
+                    url = part.url,
+                    openUrl = part.openUrl,
+                    alt = part.alt,
+                    width = part.width,
+                    height = part.height,
+                    sizeBytes = part.sizeBytes,
+                    durationMs = part.durationMs.takeUnless { isImage },
+                    playback = part.playback.takeUnless { isImage },
+                  )
+                }
+
+                else -> {
+                  null
+                }
+              }
+            }
+          val hasPersistedMetadata =
+            message.provenance != null || message.transcriptMarker != null || message.deliveryMirror != null ||
+              message.usage != null || message.cost != null || message.turnBoundary
+          // An empty real call still ends the previous call’s usage snapshot.
+          val isRealAssistantBoundary =
+            message.role == "assistant" && !message.isSyntheticDisplay && !message.isTranscriptOnlyOpenClawAssistant()
+          if (content.isEmpty() && !hasPersistedMetadata && !isRealAssistantBoundary) return@mapNotNull null
+          val payload =
+            CachedMessagePayload(
+              content = content,
+              provenance = message.provenance,
+              transcriptMarker = message.transcriptMarker,
+              senderLabel = message.senderLabel,
+              provider = message.provider,
+              model = message.model,
+              deliveryMirror = message.deliveryMirror,
+              usage = message.usage,
+              cost = message.cost,
+              isSyntheticDisplay = message.isSyntheticDisplay,
+              runId = message.runId,
+              steerTargetRunId = message.steerTargetRunId,
+              turnBoundary = message.turnBoundary,
+              phase = message.phase,
+              isError = message.isError,
+            )
+          Triple(message, role, payload)
         }.takeLast(MAX_CACHED_MESSAGES_PER_SESSION)
-        .mapIndexed { index, (message, role, textParts) ->
+        .mapIndexed { index, (message, role, payload) ->
           CachedMessageEntity(
             gatewayId = gateway,
             agentId = agent,
             sessionKey = key,
             rowOrder = index,
             role = role,
-            textPartsJson = json.encodeToString(textPartsSerializer, textParts),
+            textPartsJson = json.encodeToString(cachedPayloadSerializer, payload),
             timestampMs = message.timestampMs,
             idempotencyKey = message.idempotencyKey,
           )
         }
     val dao = database.dao()
-    database.withTransaction {
+    database.withWriteTransaction {
       dao.deleteTranscript(gateway, agent, key)
       dao.insertMessages(rows)
       // A transcript may arrive for a session missing from the cached list (e.g. deep session
@@ -532,17 +507,16 @@ class RoomChatTranscriptCache internal constructor(
       val currentSession = dao.session(gateway, agent, key)
       // REPLACE refreshes SQLite rowid, making the transcript's session the most recent gateway
       // row while preserving list metadata when that session was already cached.
+      // Persist the accepted history row with its transcript, including cleared usage.
+      // Otherwise a failed list refresh resurrects the previous run on offline reopen.
+      val session = sessionInfo?.copy(key = key) ?: ChatSessionEntry(key = key, updatedAtMs = null)
       dao.insertSessions(
         listOf(
-          currentSession
-            ?: CachedSessionEntity(
-              gatewayId = gateway,
-              agentId = agent,
-              sessionKey = key,
-              displayName = null,
-              updatedAtMs = null,
-              rowOrder = dao.nextSessionRowOrder(gateway, agent),
-            ),
+          if (sessionInfo != null || currentSession == null) {
+            session.toCachedSession(gateway, agent, rowOrder = currentSession?.rowOrder ?: dao.nextSessionRowOrder(gateway, agent))
+          } else {
+            currentSession
+          },
         ),
       )
       dao.evictSessionsBeyondKeeping(gateway, agent, keepSessionKey = key, keep = MAX_CACHED_SESSIONS - 1)
@@ -555,7 +529,7 @@ class RoomChatTranscriptCache internal constructor(
   override suspend fun clearGateway(gatewayId: String) {
     val gateway = scopedGatewayId(gatewayId) ?: return
     val dao = database.dao()
-    database.withTransaction {
+    database.withWriteTransaction {
       dao.deleteMessages(gateway)
       dao.deleteSessionsForGateway(gateway)
       dao.deleteGatewayOwner(gateway)
@@ -571,7 +545,7 @@ class RoomChatTranscriptCache internal constructor(
     val agent = scopedAgentId(agentId) ?: return
     val key = sessionKey.trim().takeIf { it.isNotEmpty() } ?: return
     val dao = database.dao()
-    database.withTransaction {
+    database.withWriteTransaction {
       dao.deleteSessionRow(gateway, agent, key)
       dao.deleteTranscript(gateway, agent, key)
     }
@@ -581,5 +555,37 @@ class RoomChatTranscriptCache internal constructor(
 
   private fun scopedAgentId(agentId: String): String? = agentId.trim().takeIf { it.isNotEmpty() }
 
-  private fun decodeTextParts(encoded: String): List<String> = runCatching { json.decodeFromString(textPartsSerializer, encoded) }.getOrDefault(emptyList())
+  private fun decodeCachedMessage(encoded: String): CachedMessagePayload =
+    runCatching { json.decodeFromString(cachedPayloadSerializer, encoded) }.getOrElse {
+      // Offline transcript browsing is shipped behavior. Keep the previous string-array rows
+      // readable until a live history refresh naturally rewrites this disposable cache entry.
+      val content =
+        runCatching { json.decodeFromString(cachedContentSerializer, encoded) }.getOrElse {
+          runCatching { json.decodeFromString(legacyTextPartsSerializer, encoded) }
+            .getOrDefault(emptyList())
+            .map { CachedMessageContent(type = "text", text = it) }
+        }
+      CachedMessagePayload(content = content)
+    }
 }
+
+private fun ChatSessionEntry.toCachedSession(
+  gatewayId: String,
+  agentId: String,
+  rowOrder: Int,
+): CachedSessionEntity =
+  CachedSessionEntity(
+    gatewayId = gatewayId,
+    agentId = agentId,
+    sessionKey = key,
+    displayName = displayName,
+    color = color,
+    updatedAtMs = updatedAtMs,
+    status = status,
+    startedAt = startedAt,
+    endedAt = endedAt,
+    runtimeMs = runtimeMs,
+    outputTokens = outputTokens,
+    hasRunMetadata = hasRunMetadata,
+    rowOrder = rowOrder,
+  )

@@ -5,7 +5,9 @@
  */
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createOpenClawReadTool } from "./agent-tools.read.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
+import { createSandboxFsBridgeFromResolver } from "./test-helpers/host-sandbox-fs-bridge.js";
 
 type AssertSandboxPath = typeof import("./sandbox-paths.js").assertSandboxPath;
 
@@ -16,9 +18,10 @@ const mocks = vi.hoisted(() => ({
   })),
 }));
 
-vi.mock("./sandbox-paths.js", () => ({
-  assertSandboxPath: mocks.assertSandboxPath,
-}));
+vi.mock("./sandbox-paths.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./sandbox-paths.js")>();
+  return { ...actual, assertSandboxPath: mocks.assertSandboxPath };
+});
 
 function createToolHarness() {
   const execute = vi.fn(async () => ({
@@ -105,31 +108,41 @@ describe("wrapToolWorkspaceRootGuardWithOptions", () => {
     });
   });
 
-  it("does not remap remote-host file:// paths", async () => {
+  it.each([
+    {
+      title: "does not remap remote-host file:// paths",
+      toolCallId: "tc-remote-file-url",
+      requestedPath: "file://attacker/share/readme.md",
+      expectedPath: "file://attacker/share/readme.md",
+    },
+    {
+      title: "does not remap malformed file:// container workspace paths",
+      toolCallId: "tc-malformed-file-url",
+      requestedPath: "file:///workspace/%E0%A4%A",
+      expectedPath: "file:///workspace/%E0%A4%A",
+    },
+    {
+      title: "normalizes @-prefixed absolute paths before guard checks",
+      toolCallId: "tc-at-absolute",
+      requestedPath: "@/etc/passwd",
+      expectedPath: "/etc/passwd",
+    },
+    {
+      title: "does not remap absolute paths outside the configured container workdir",
+      toolCallId: "tc3",
+      requestedPath: "/workspace-two/secret.txt",
+      expectedPath: "/workspace-two/secret.txt",
+    },
+  ])("$title", async ({ toolCallId, requestedPath, expectedPath }) => {
     const { tool } = createToolHarness();
     const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
       containerWorkdir: "/workspace",
     });
 
-    await wrapped.execute("tc-remote-file-url", { path: "file://attacker/share/readme.md" });
+    await wrapped.execute(toolCallId, { path: requestedPath });
 
     expect(mocks.assertSandboxPath).toHaveBeenCalledWith({
-      filePath: "file://attacker/share/readme.md",
-      cwd: root,
-      root,
-    });
-  });
-
-  it("does not remap malformed file:// container workspace paths", async () => {
-    const { tool } = createToolHarness();
-    const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
-      containerWorkdir: "/workspace",
-    });
-
-    await wrapped.execute("tc-malformed-file-url", { path: "file:///workspace/%E0%A4%A" });
-
-    expect(mocks.assertSandboxPath).toHaveBeenCalledWith({
-      filePath: "file:///workspace/%E0%A4%A",
+      filePath: expectedPath,
       cwd: root,
       root,
     });
@@ -167,36 +180,6 @@ describe("wrapToolWorkspaceRootGuardWithOptions", () => {
     });
   });
 
-  it("normalizes @-prefixed absolute paths before guard checks", async () => {
-    const { tool } = createToolHarness();
-    const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
-      containerWorkdir: "/workspace",
-    });
-
-    await wrapped.execute("tc-at-absolute", { path: "@/etc/passwd" });
-
-    expect(mocks.assertSandboxPath).toHaveBeenCalledWith({
-      filePath: "/etc/passwd",
-      cwd: root,
-      root,
-    });
-  });
-
-  it("does not remap absolute paths outside the configured container workdir", async () => {
-    const { tool } = createToolHarness();
-    const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
-      containerWorkdir: "/workspace",
-    });
-
-    await wrapped.execute("tc3", { path: "/workspace-two/secret.txt" });
-
-    expect(mocks.assertSandboxPath).toHaveBeenCalledWith({
-      filePath: "/workspace-two/secret.txt",
-      cwd: root,
-      root,
-    });
-  });
-
   it("adds a workspace-safe temp hint when rejecting paths outside the workspace", async () => {
     const { execute, tool } = createToolHarness();
     const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
@@ -218,7 +201,7 @@ describe("wrapToolWorkspaceRootGuardWithOptions", () => {
     const { tool } = createToolHarness();
     const agentRoot = path.resolve("/tmp/agent-root");
     const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
-      additionalContainerMounts: [{ containerRoot: "/agent", hostRoot: agentRoot }],
+      containerMounts: [{ containerRoot: "/agent", hostRoot: agentRoot }],
       containerWorkdir: "/workspace",
     });
 
@@ -235,7 +218,10 @@ describe("wrapToolWorkspaceRootGuardWithOptions", () => {
     const { tool } = createToolHarness();
     const skillRoot = path.resolve("/tmp/skill-root");
     const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
-      additionalContainerMounts: [{ containerRoot: "/workspace/skills", hostRoot: skillRoot }],
+      containerMounts: [
+        { containerRoot: "/workspace/skills", hostRoot: skillRoot },
+        { containerRoot: "/workspace", hostRoot: root },
+      ],
       containerWorkdir: "/workspace",
     });
 
@@ -252,7 +238,7 @@ describe("wrapToolWorkspaceRootGuardWithOptions", () => {
     const { tool } = createToolHarness();
     const agentRoot = path.resolve("/tmp/agent-root");
     const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
-      additionalContainerMounts: [{ containerRoot: "/agent", hostRoot: agentRoot }],
+      containerMounts: [{ containerRoot: "/agent", hostRoot: agentRoot }],
       containerWorkdir: "/workspace",
     });
 
@@ -264,6 +250,52 @@ describe("wrapToolWorkspaceRootGuardWithOptions", () => {
       root: agentRoot,
     });
   });
+
+  it.each(["legacy", "empty", "miss", "mapped"] as const)(
+    "honors %s bridge admission without inferring a namespace",
+    async (mode) => {
+      const { execute, tool } = createToolHarness();
+      const mapping = { hostRoot: root, containerRoot: "C:\\NativeWorkspace" };
+      const pathMappings = mode === "legacy" ? undefined : mode === "empty" ? [] : [mapping];
+      const containerPath =
+        mode === "miss" ? "C:\\Other\\note.txt" : "C:\\NativeWorkspace\\note.txt";
+      const bridge = createSandboxFsBridgeFromResolver(
+        () => ({
+          hostPath: path.join(root, "note.txt"),
+          relativePath: "note.txt",
+          containerPath,
+        }),
+        pathMappings,
+      );
+      const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
+        bridge,
+        containerWorkdir: "C:\\NativeWorkspace",
+        normalizeGuardedPathParams: true,
+      });
+      if (mode === "empty" || mode === "miss") {
+        await expect(wrapped.execute("admission", { path: "note.txt" })).rejects.toThrow(
+          "Path escapes sandbox root",
+        );
+        expect(execute).not.toHaveBeenCalled();
+        expect(mocks.assertSandboxPath).not.toHaveBeenCalled();
+        return;
+      }
+      await wrapped.execute("admission", { path: "note.txt" });
+      expect(mocks.assertSandboxPath).toHaveBeenCalledWith({
+        filePath: mode === "legacy" ? "note.txt" : path.join(root, "note.txt"),
+        cwd: root,
+        root,
+      });
+      expect(execute).toHaveBeenCalledWith(
+        "admission",
+        {
+          path: mode === "legacy" ? path.join(root, "note.txt") : containerPath,
+        },
+        undefined,
+        undefined,
+      );
+    },
+  );
 
   it("does not guard outPath by default", async () => {
     const { tool } = createToolHarness();
@@ -312,6 +344,71 @@ describe("wrapToolWorkspaceRootGuardWithOptions", () => {
     ).rejects.toThrow(/Malformed path parameter: outPath/);
 
     expect(mocks.assertSandboxPath).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+  });
+});
+
+describe("createOpenClawReadTool malformed XML arg-value suffix handling", () => {
+  it("strips the suffix from read paths before invoking the base tool", async () => {
+    const execute = vi.fn(async () => ({ content: [{ type: "text" as const, text: "ok" }] }));
+    const base = {
+      name: "read",
+      label: "read",
+      description: "read a file",
+      parameters: {},
+      execute,
+    } as unknown as AnyAgentTool;
+    const tool = createOpenClawReadTool(base);
+
+    await tool.execute("read-1", { path: "notes.txt</arg_value>>" });
+
+    expect(execute).toHaveBeenCalledWith(
+      "read-1",
+      {
+        path: "notes.txt",
+        offset: 1,
+      },
+      undefined,
+    );
+  });
+
+  it("normalizes hallucinated Office/codex read path extensions", async () => {
+    const execute = vi.fn(async () => ({ content: [{ type: "text" as const, text: "ok" }] }));
+    const base = {
+      name: "read",
+      label: "read",
+      description: "read a file",
+      parameters: {},
+      execute,
+    } as unknown as AnyAgentTool;
+    const tool = createOpenClawReadTool(base);
+
+    await tool.execute("read-1", { path: "reports/final.docodex" });
+
+    expect(execute).toHaveBeenCalledWith(
+      "read-1",
+      {
+        path: "reports/final.docx",
+        offset: 1,
+      },
+      undefined,
+    );
+  });
+
+  it("rejects read paths that become empty after suffix stripping", async () => {
+    const execute = vi.fn();
+    const base = {
+      name: "read",
+      label: "read",
+      description: "read a file",
+      parameters: {},
+      execute,
+    } as unknown as AnyAgentTool;
+    const tool = createOpenClawReadTool(base);
+
+    await expect(tool.execute("read-1", { path: "</arg_value>>" })).rejects.toThrow(
+      /Missing required parameter: path/,
+    );
     expect(execute).not.toHaveBeenCalled();
   });
 });

@@ -6,11 +6,13 @@ export {
   resolveConfiguredBindingRoute,
   type ConfiguredBindingRouteResult,
   resolveRuntimeConversationBindingRoute,
+  resolveRuntimeConversationBindingRouteAsync,
+  inspectRuntimeConversationBindingRoute,
   type RuntimeConversationBindingRouteResult,
 } from "../channels/plugins/binding-routing.js";
 export {
   type SessionBindingRecord,
   getSessionBindingService,
 } from "../infra/outbound/session-binding-service.js";
-export { isPluginOwnedSessionBindingRecord } from "../plugins/conversation-binding.js";
+export { isPluginOwnedSessionBindingRecord } from "../plugins/conversation-binding-metadata.js";
 export { buildPairingReply } from "../pairing/pairing-messages.js";

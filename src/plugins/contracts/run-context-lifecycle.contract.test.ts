@@ -1,15 +1,15 @@
 // Run context lifecycle contract tests cover plugin run context setup and cleanup.
-import fs from "node:fs/promises";
 import path from "node:path";
 import {
   createPluginRegistryFixture,
   registerTestPlugin,
 } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { loadSessionStore, updateSessionStore } from "../../config/sessions.js";
 import { withTempConfig } from "../../gateway/test-temp-config.js";
 import { emitAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.js";
-import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
+import { loadSessionStore, updateSessionStore } from "../../plugin-sdk/session-store-runtime.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { runPluginHostCleanup } from "../host-hook-cleanup.js";
 import {
   clearPluginHostRuntimeState,
@@ -22,8 +22,14 @@ import {
   listPluginSessionSchedulerJobs,
   PLUGIN_TERMINAL_EVENT_CLEANUP_WAIT_MS,
 } from "../host-hook-runtime.test-fixtures.js";
+import { runPluginRegisterSyncInRegistry } from "../loader-module-runtime.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
-import { setActivePluginRegistry } from "../runtime.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  rollbackStagedPluginRegistry,
+  setActivePluginRegistry,
+  stageActivePluginRegistry,
+} from "../runtime.js";
 import { createPluginRecord } from "../status.test-helpers.js";
 import type { OpenClawPluginApi } from "../types.js";
 
@@ -58,7 +64,57 @@ describe("plugin run context lifecycle", () => {
     resetAgentEventsForTest();
   });
 
-  it("blocks stale plugin API run-context mutations after registry replacement", () => {
+  it("keeps run-context APIs callable after registration closes", () => {
+    const { config, registry } = createPluginRegistryFixture();
+    let capturedApi: OpenClawPluginApi | undefined;
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "late-run-context-plugin",
+        name: "Late Run Context Plugin",
+      }),
+      register(api) {
+        runPluginRegisterSyncInRegistry(
+          (guardedApi) => {
+            capturedApi = guardedApi;
+          },
+          api,
+          registry.registry,
+          "late-run-context-plugin",
+        );
+      },
+    });
+    setActivePluginRegistry(registry.registry);
+
+    capturedApi?.registerGatewayMethod("late-run-context.blocked", () => {});
+    expect(Object.keys(registry.registry.gatewayHandlers)).not.toContain(
+      "late-run-context.blocked",
+    );
+    expect(
+      capturedApi?.runContext.setRunContext({
+        runId: "late-run",
+        namespace: "state",
+        value: { available: true },
+      }),
+    ).toBe(true);
+    expect(
+      capturedApi?.runContext.getRunContext({
+        runId: "late-run",
+        namespace: "state",
+      }),
+    ).toEqual({ available: true });
+
+    capturedApi?.runContext.clearRunContext({ runId: "late-run", namespace: "state" });
+    expect(
+      capturedApi?.runContext.getRunContext({
+        runId: "late-run",
+        namespace: "state",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("blocks stale plugin API run-context access after registry replacement", () => {
     const { config, registry } = createPluginRegistryFixture();
     let capturedApi: OpenClawPluginApi | undefined;
     registerTestPlugin({
@@ -95,6 +151,10 @@ describe("plugin run context lifecycle", () => {
         patch: { runId: "stale-run", namespace: "state", value: { live: true } },
       }),
     ).toBe(true);
+    expect(capturedApi?.getRunContext({ runId: "stale-run", namespace: "state" })).toBeUndefined();
+    expect(
+      capturedApi?.runContext.getRunContext({ runId: "stale-run", namespace: "state" }),
+    ).toBeUndefined();
     capturedApi?.runContext?.clearRunContext({ runId: "stale-run", namespace: "state" });
     expect(
       getPluginRunContext({
@@ -119,8 +179,9 @@ describe("plugin run context lifecycle", () => {
       },
     });
     setActivePluginRegistry(registry.registry);
-    setActivePluginRegistry(createEmptyPluginRegistry());
-    setActivePluginRegistry(registry.registry);
+    const snapshot = captureActivePluginRegistrySnapshot();
+    stageActivePluginRegistry(createEmptyPluginRegistry(), null, "default");
+    rollbackStagedPluginRegistry(snapshot);
 
     expect(
       capturedApi?.runContext?.setRunContext({
@@ -139,105 +200,135 @@ describe("plugin run context lifecycle", () => {
 
   it("allows run-context initialization during activating plugin registration", () => {
     const { config, registry } = createPluginRegistryFixture();
-    const api = registry.createApi(
-      createPluginRecord({
-        id: "registration-run-context-plugin",
-        name: "Registration Run Context Plugin",
-      }),
-      { config },
+    const record = createPluginRecord({
+      id: "registration-run-context-plugin",
+      name: "Registration Run Context Plugin",
+    });
+    const api = registry.createApi(record, { config });
+
+    runPluginRegisterSyncInRegistry(
+      () => {
+        expect(registry.registry.plugins).not.toContain(record);
+        expect(
+          api.setRunContext({
+            runId: "run-registration",
+            namespace: "state",
+            value: { initialized: true },
+          }),
+        ).toBe(true);
+        expect(
+          getPluginRunContext({
+            pluginId: "registration-run-context-plugin",
+            get: { runId: "run-registration", namespace: "state" },
+          }),
+        ).toEqual({ initialized: true });
+
+        api.clearRunContext({ runId: "run-registration", namespace: "state" });
+        expect(
+          getPluginRunContext({
+            pluginId: "registration-run-context-plugin",
+            get: { runId: "run-registration", namespace: "state" },
+          }),
+        ).toBeUndefined();
+      },
+      api,
+      registry.registry,
+      record.id,
     );
-
-    expect(
-      api.setRunContext({
-        runId: "run-registration",
-        namespace: "state",
-        value: { initialized: true },
-      }),
-    ).toBe(true);
-    expect(
-      getPluginRunContext({
-        pluginId: "registration-run-context-plugin",
-        get: { runId: "run-registration", namespace: "state" },
-      }),
-    ).toEqual({ initialized: true });
-
-    api.clearRunContext({ runId: "run-registration", namespace: "state" });
-    expect(
-      getPluginRunContext({
-        pluginId: "registration-run-context-plugin",
-        get: { runId: "run-registration", namespace: "state" },
-      }),
-    ).toBeUndefined();
   });
 
-  it("keeps restored active registry state after stale async cleanup finishes", async () => {
-    let releaseCleanup: (() => void) | undefined;
-    let markCleanupStarted: (() => void) | undefined;
-    let capturedApi: OpenClawPluginApi | undefined;
-    const cleanupStarted = new Promise<void>((resolve) => {
-      markCleanupStarted = resolve;
+  it("fences retired agent-event callbacks from successor run context", async () => {
+    let releasePriorHandler: (() => void) | undefined;
+    let markPriorHandlerStarted: (() => void) | undefined;
+    let retiredHandlerSawContext: unknown;
+    const priorHandlerStarted = new Promise<void>((resolve) => {
+      markPriorHandlerStarted = resolve;
     });
-    const cleanupRelease = new Promise<void>((resolve) => {
-      releaseCleanup = resolve;
+    const priorHandlerRelease = new Promise<void>((resolve) => {
+      releasePriorHandler = resolve;
     });
-    const schedulerCleanup = vi.fn();
-    const { config, registry } = createPluginRegistryFixture();
+    const prior = createPluginRegistryFixture();
     registerTestPlugin({
-      registry,
-      config,
+      registry: prior.registry,
+      config: prior.config,
       record: createPluginRecord({
-        id: "delayed-restored-registry-plugin",
-        name: "Delayed Restored Registry Plugin",
+        id: "agent-event-generation",
+        name: "Agent Event Generation",
       }),
       register(api) {
-        capturedApi = api;
-        api.registerRuntimeLifecycle({
-          id: "delayed-cleanup",
-          async cleanup() {
-            markCleanupStarted?.();
-            await cleanupRelease;
+        api.registerAgentEventSubscription({
+          id: "prior",
+          streams: ["tool"],
+          async handle(event, ctx) {
+            if (event.data.name !== "hold") {
+              return;
+            }
+            markPriorHandlerStarted?.();
+            await priorHandlerRelease;
+            retiredHandlerSawContext = ctx.getRunContext("state");
+            ctx.setRunContext("state", { generation: "A" });
+            ctx.clearRunContext("preserved");
           },
-        });
-        api.registerSessionSchedulerJob({
-          id: "live-job",
-          sessionKey: "agent:main:main",
-          kind: "session-turn",
-          cleanup: schedulerCleanup,
         });
       },
     });
-    setActivePluginRegistry(registry.registry);
-    setActivePluginRegistry(createEmptyPluginRegistry());
-    await cleanupStarted;
-    setActivePluginRegistry(registry.registry);
-
-    expect(
-      capturedApi?.setRunContext({
-        runId: "restored-after-cleanup-started",
-        namespace: "state",
-        value: { restored: true },
+    const successor = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry: successor.registry,
+      config: successor.config,
+      record: createPluginRecord({
+        id: "agent-event-generation",
+        name: "Agent Event Generation",
       }),
-    ).toBe(true);
+      register(api) {
+        api.registerAgentEventSubscription({
+          id: "successor",
+          streams: ["tool"],
+          handle(event, ctx) {
+            if (event.data.name !== "successor") {
+              return;
+            }
+            ctx.setRunContext("state", { generation: "B" });
+            ctx.setRunContext("preserved", { generation: "B" });
+          },
+        });
+      },
+    });
 
-    releaseCleanup?.();
-    await waitForPluginEventHandlers();
+    setActivePluginRegistry(prior.registry.registry);
+    emitAgentEvent({
+      runId: "run-agent-event-generation",
+      stream: "tool",
+      data: { name: "hold" },
+    });
+    await priorHandlerStarted;
+
+    setActivePluginRegistry(successor.registry.registry);
+    emitAgentEvent({
+      runId: "run-agent-event-generation",
+      stream: "tool",
+      data: { name: "successor" },
+    });
     await waitForPluginEventHandlers();
 
+    // Restoring the same registry object must not revive callbacks admitted before cutover.
+    setActivePluginRegistry(prior.registry.registry);
+    releasePriorHandler?.();
+    await waitForPluginEventHandlers();
+
+    expect(retiredHandlerSawContext).toBeUndefined();
     expect(
       getPluginRunContext({
-        pluginId: "delayed-restored-registry-plugin",
-        get: { runId: "restored-after-cleanup-started", namespace: "state" },
+        pluginId: "agent-event-generation",
+        get: { runId: "run-agent-event-generation", namespace: "state" },
       }),
-    ).toEqual({ restored: true });
-    expect(schedulerCleanup).not.toHaveBeenCalled();
-    expect(listPluginSessionSchedulerJobs("delayed-restored-registry-plugin")).toEqual([
-      {
-        id: "live-job",
-        pluginId: "delayed-restored-registry-plugin",
-        sessionKey: "agent:main:main",
-        kind: "session-turn",
-      },
-    ]);
+    ).toEqual({ generation: "B" });
+    expect(
+      getPluginRunContext({
+        pluginId: "agent-event-generation",
+        get: { runId: "run-agent-event-generation", namespace: "preserved" },
+      }),
+    ).toEqual({ generation: "B" });
   });
 
   it("does not let delayed non-terminal subscriptions resurrect closed run context", async () => {
@@ -686,16 +777,16 @@ describe("plugin run context lifecycle", () => {
       },
     });
 
-    const stateDir = await fs.mkdtemp(
-      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-run-context-restart-state-"),
-    );
+    const openClawState = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "openclaw-run-context-restart-state-",
+    });
+    const stateDir = openClawState.stateDir;
     const storePath = path.join(stateDir, "sessions.json");
     const tempConfig = {
       session: { store: storePath },
     };
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     try {
-      process.env.OPENCLAW_STATE_DIR = stateDir;
       await withTempConfig({
         cfg: tempConfig,
         run: async () => {
@@ -748,12 +839,7 @@ describe("plugin run context lifecycle", () => {
         },
       });
     } finally {
-      if (previousStateDir === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
-      }
-      await fs.rm(stateDir, { recursive: true, force: true });
+      await openClawState.cleanup();
     }
   });
 
@@ -789,6 +875,7 @@ describe("plugin run context lifecycle", () => {
   it("bounds session, runtime, and scheduler cleanup callbacks so cleanup keeps moving", async () => {
     vi.useFakeTimers();
     const { config, registry } = createPluginRegistryFixture();
+    const cleanupRelease = createDeferredCore();
     registerTestPlugin({
       registry,
       config,
@@ -800,39 +887,46 @@ describe("plugin run context lifecycle", () => {
         api.registerSessionExtension({
           namespace: "state",
           description: "hangs during cleanup",
-          cleanup: () => new Promise(() => {}),
+          cleanup: () => cleanupRelease.promise,
         });
         api.registerRuntimeLifecycle({
           id: "runtime-cleanup",
-          cleanup: () => new Promise(() => {}),
+          cleanup: () => cleanupRelease.promise,
         });
         api.registerSessionSchedulerJob({
           id: "scheduler-cleanup",
           sessionKey: "agent:main:main",
           kind: "monitor",
-          cleanup: () => new Promise(() => {}),
+          cleanup: () => cleanupRelease.promise,
         });
       },
     });
 
+    setActivePluginRegistry(registry.registry);
+    expect(listPluginSessionSchedulerJobs("hanging-cleanup-fixture")).toHaveLength(1);
     const cleanupPromise = runPluginHostCleanup({
       cfg: config,
       registry: registry.registry,
       pluginId: "hanging-cleanup-fixture",
       reason: "delete",
     });
-    for (let index = 0; index < 3; index += 1) {
-      await vi.advanceTimersByTimeAsync(PLUGIN_HOST_CLEANUP_TIMEOUT_MS + 1);
-    }
-    const result = await cleanupPromise;
-    expect(result.failures).toHaveLength(3);
-    for (const hookId of [
-      "session:state",
-      "runtime:runtime-cleanup",
-      "scheduler:scheduler-cleanup",
-    ]) {
-      const failure = requireFailureByHookId(result, hookId);
-      expect(failure?.pluginId).toBe("hanging-cleanup-fixture");
+    try {
+      for (let index = 0; index < 3; index += 1) {
+        await vi.advanceTimersByTimeAsync(PLUGIN_HOST_CLEANUP_TIMEOUT_MS + 1);
+      }
+      const result = await cleanupPromise;
+      expect(result.failures).toHaveLength(3);
+      for (const hookId of [
+        "session:state",
+        "runtime:runtime-cleanup",
+        "scheduler:scheduler-cleanup",
+      ]) {
+        const failure = requireFailureByHookId(result, hookId);
+        expect(failure?.pluginId).toBe("hanging-cleanup-fixture");
+      }
+    } finally {
+      cleanupRelease.resolve();
+      await cleanupPromise;
     }
   });
 
@@ -845,6 +939,7 @@ describe("plugin run context lifecycle", () => {
     ).toBe(true);
     dispatchPluginAgentEventSubscriptions({
       registry: createEmptyPluginRegistry(),
+      isLive: () => true,
       event: {
         runId: "run-closed",
         seq: 1,

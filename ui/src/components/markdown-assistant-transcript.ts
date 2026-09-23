@@ -1,4 +1,4 @@
-import type MarkdownIt from "markdown-it";
+import type { MarkdownIt } from "markdown-it";
 import {
   ASSISTANT_TRANSCRIPT_ROLE_NODE_TYPE,
   markdownItAssistantTranscriptRoles,
@@ -13,6 +13,33 @@ function renderAssistantTranscriptRoleMarker(
   escapeHtml: (value: string) => string,
 ): string {
   return `${ROLE_MARKER_OPEN}${escapeHtml(text)}${ROLE_MARKER_CLOSE}`;
+}
+
+const linkedImageIndicesByTokens = new WeakMap<readonly { type: string }[], ReadonlySet<number>>();
+
+function linkedImageIndices(tokens: readonly { type: string }[]): ReadonlySet<number> {
+  const cached = linkedImageIndicesByTokens.get(tokens);
+  if (cached) {
+    return cached;
+  }
+  const linked = new Set<number>();
+  let linkDepth = 0;
+  for (let index = 0; index < tokens.length; index += 1) {
+    const tokenType = tokens[index]?.type;
+    if (tokenType === "link_open") {
+      linkDepth += 1;
+    } else if (tokenType === "link_close") {
+      linkDepth = Math.max(0, linkDepth - 1);
+    } else if (tokenType === "image" && linkDepth > 0) {
+      linked.add(index);
+    }
+  }
+  linkedImageIndicesByTokens.set(tokens, linked);
+  return linked;
+}
+
+function isImageWithinLink(tokens: readonly { type: string }[], index: number): boolean {
+  return linkedImageIndices(tokens).has(index);
 }
 
 function renderAssistantTranscriptRoleImageLabel(
@@ -56,40 +83,66 @@ export function installAssistantTranscriptRoleImageRenderer(
     isInlineDataImage: (src: string) => boolean;
     normalizeLabel: (value: string) => string;
     assistantLabel: () => string;
+    openImageLabel: (alt: string, hasAlt: boolean) => string;
+    renderExternalImageFallback: (
+      src: string,
+      renderedLabel: string,
+      linkedImage: boolean,
+    ) => string;
+    interactiveImages: (env: unknown) => boolean;
+    allowRemoteImages: (env: unknown) => boolean;
   },
 ): void {
-  md.renderer.rules.image = (tokens, index) => {
+  md.renderer.rules.image = (tokens, index, _rendererOptions, env) => {
     const token = tokens[index];
     if (!token) {
       return "";
     }
-    const src = token.attrGet("src")?.trim() ?? "";
+    const src = String(token.attrGet("src") ?? "").trim();
     // token.content preserves raw Markdown formatting in image labels.
     const alt = options.normalizeLabel(token.content);
     const roleMeta = (token.meta as AssistantTranscriptRoleImageMeta | undefined)
       ?.assistantTranscriptRoleImage;
-    if (!options.isInlineDataImage(src)) {
-      return roleMeta
+    const linkedImage = isImageWithinLink(tokens, index);
+    if (!options.isInlineDataImage(src) && !options.allowRemoteImages(env)) {
+      const renderedLabel = roleMeta
         ? renderAssistantTranscriptRoleImageLabel(roleMeta.text, roleMeta.spans, options.escapeHtml)
         : options.escapeHtml(alt);
+      return options.renderExternalImageFallback(src, renderedLabel, linkedImage);
     }
     const image = `<img class="markdown-inline-image" src="${options.escapeHtml(src)}" alt="${options.escapeHtml(alt)}">`;
+    const interactiveImage =
+      linkedImage || !options.interactiveImages(env)
+        ? image
+        : `<button class="markdown-inline-image-button" type="button" aria-label="${options.escapeHtml(options.openImageLabel(alt, token.content.trim().length > 0))}">${image}</button>`;
     return roleMeta
-      ? `${renderAssistantTranscriptRoleMarker(`${options.assistantLabel()}:`, options.escapeHtml)} ${image}`
-      : image;
+      ? `${renderAssistantTranscriptRoleMarker(`${options.assistantLabel()}:`, options.escapeHtml)} ${interactiveImage}`
+      : interactiveImage;
   };
 }
 
-export function renderAssistantTranscriptPlainTextFallback(
+function normalizeHtmlTextContent(value: string): string {
+  // Preserve HTML parser text normalization without reparsing the escaped body.
+  return value.replace(/\r\n?/g, "\n").replace(/\0/g, "");
+}
+
+export function createAssistantTranscriptPlainTextFallback(
   text: string,
   enabled: boolean,
   assistantLabel: () => string,
-  escapeHtml: (value: string) => string,
-): string {
-  const escaped = escapeHtml(text);
+): HTMLDivElement {
+  const container = document.createElement("div");
+  container.className = "markdown-plain-text-fallback";
   if (!enabled) {
-    return `<div class="markdown-plain-text-fallback">${escaped}</div>`;
+    container.textContent = normalizeHtmlTextContent(text);
+    return container;
   }
-  const marker = renderAssistantTranscriptRoleMarker(`${assistantLabel()}:`, escapeHtml);
-  return `<div class="markdown-plain-text-fallback">${marker}\n<span class="markdown-plain-text-source">${escaped}</span></div>`;
+  const marker = document.createElement("code");
+  marker.className = "assistant-transcript-role";
+  marker.textContent = normalizeHtmlTextContent(`${assistantLabel()}:`);
+  const source = document.createElement("span");
+  source.className = "markdown-plain-text-source";
+  source.textContent = normalizeHtmlTextContent(text);
+  container.append(marker, "\n", source);
+  return container;
 }

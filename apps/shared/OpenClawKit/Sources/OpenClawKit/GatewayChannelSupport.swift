@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import OpenClawProtocol
 
 func gatewayIntValue(_ value: Any?) -> Int? {
     if let value = value as? Int {
@@ -43,8 +44,14 @@ final class GatewayRequestCancellationGate: @unchecked Sendable {
 }
 
 extension GatewayChannelActor {
+    struct PendingRequest {
+        let continuation: CheckedContinuation<GatewayFrame, Error>
+        var timeoutTask: Task<Void, Never>?
+        let transportLifetime = WebSocketRequestLifetime()
+    }
+
     enum ConnectChallengeError: Error {
-        case timeout
+        case invalid
     }
 
     public static let defaultOperatorConnectScopes: [String] = [
@@ -52,6 +59,7 @@ extension GatewayChannelActor {
         "operator.read",
         "operator.write",
         "operator.approvals",
+        "operator.questions",
         "operator.pairing",
     ]
 
@@ -69,6 +77,21 @@ extension GatewayChannelActor {
 }
 
 extension GatewayChannelActor.SelectedConnectAuth {
+    func httpResourceBearer(hello: HelloOk, role: String) -> String? {
+        if (hello.auth["role"]?.stringValue ?? role) == role,
+           let token = hello.auth["deviceToken"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !token.isEmpty
+        {
+            return token
+        }
+        return switch self.authSource {
+        case .deviceToken: self.authDeviceToken ?? self.authToken
+        case .sharedToken: self.authToken
+        case .password: self.authPassword
+        case .bootstrapToken, .none: nil
+        }
+    }
+
     func makeAuthBinding(key: SymmetricKey?, deviceId: String?) -> GatewayAuthBinding {
         let credentialFingerprint = key.map { key in
             var values = [

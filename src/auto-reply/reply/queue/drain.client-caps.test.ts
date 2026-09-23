@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createQueueTestRun } from "../queue.test-helpers.js";
-import { resolveFollowupDeliveryContextKey } from "./drain.js";
+import { resolveFollowupDeliveryContextKey } from "./delivery-context.js";
 
 describe("followup delivery context", () => {
   it("separates runs with different gateway client capabilities", () => {
@@ -18,6 +18,49 @@ describe("followup delivery context", () => {
     first.run.clientCaps = ["tool-events", "inline-widgets"];
     const second = createQueueTestRun({ prompt: "second" });
     second.run.clientCaps = ["inline-widgets", "tool-events", "inline-widgets"];
+
+    expect(resolveFollowupDeliveryContextKey(first)).toBe(
+      resolveFollowupDeliveryContextKey(second),
+    );
+  });
+
+  it("never collect-batches runs bound to different tool targets", () => {
+    const first = createQueueTestRun({ prompt: "first" });
+    first.run.toolBindings = { browser: { kind: "tab", targetId: "tab-a" } };
+    const second = createQueueTestRun({ prompt: "second" });
+    second.run.toolBindings = { browser: { kind: "tab", targetId: "tab-b" } };
+
+    expect(resolveFollowupDeliveryContextKey(first)).not.toBe(
+      resolveFollowupDeliveryContextKey(second),
+    );
+  });
+
+  it("canonicalizes equivalent tool bindings", () => {
+    const first = createQueueTestRun({ prompt: "first" });
+    first.run.toolBindings = { browser: { targetId: "tab-a", kind: "tab" } };
+    const second = createQueueTestRun({ prompt: "second" });
+    second.run.toolBindings = { browser: { kind: "tab", targetId: "tab-a" } };
+
+    expect(resolveFollowupDeliveryContextKey(first)).toBe(
+      resolveFollowupDeliveryContextKey(second),
+    );
+  });
+
+  it("separates runs admitted under different conversation policies", () => {
+    const restricted = createQueueTestRun({ prompt: "restricted" });
+    restricted.run.conversationToolPolicy = { deny: ["exec"] };
+    const unrestricted = createQueueTestRun({ prompt: "unrestricted" });
+
+    expect(resolveFollowupDeliveryContextKey(restricted)).not.toBe(
+      resolveFollowupDeliveryContextKey(unrestricted),
+    );
+  });
+
+  it("canonicalizes equivalent conversation policies", () => {
+    const first = createQueueTestRun({ prompt: "first" });
+    first.run.conversationToolPolicy = { allow: ["read"], deny: ["exec"] };
+    const second = createQueueTestRun({ prompt: "second" });
+    second.run.conversationToolPolicy = { deny: ["exec"], allow: ["read"] };
 
     expect(resolveFollowupDeliveryContextKey(first)).toBe(
       resolveFollowupDeliveryContextKey(second),

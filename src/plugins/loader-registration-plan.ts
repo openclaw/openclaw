@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { shouldLoadChannelPluginInSetupRuntime } from "./loader-channel-setup.js";
+import type { ChannelPluginLoadIntent } from "./loader-types.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginRegistrationMode } from "./types.js";
 
@@ -16,77 +17,55 @@ export type PluginRegistrationPlan = {
   runFullActivationOnlyRegistrations: boolean;
 };
 
+function createRegistrationPlan(mode: PluginRegistrationMode): PluginRegistrationPlan {
+  const loadSetupEntry = mode === "setup-only" || mode === "setup-runtime";
+  return {
+    mode,
+    loadSetupEntry,
+    loadSetupRuntimeEntry: mode === "setup-runtime",
+    runRuntimeCapabilityPolicy: !loadSetupEntry,
+    runFullActivationOnlyRegistrations: mode === "full",
+  };
+}
+
 /** Converts loader intent into explicit entrypoint and activation behavior. */
 export function resolvePluginRegistrationPlan(params: {
   canLoadScopedSetupOnlyChannelPlugin: boolean;
-  scopedSetupOnlyChannelPluginRequested: boolean;
-  requireSetupEntryForSetupOnlyChannelPlugins: boolean;
   enableStateEnabled: boolean;
   shouldLoadModules: boolean;
   validateOnly: boolean;
-  shouldActivate: boolean;
+  runtimeSideEffects: boolean;
   manifestRecord: PluginManifestRecord;
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
-  preferSetupRuntimeForChannelPlugins: boolean;
-  forceFullRuntimeForChannelPlugins: boolean;
+  channelPluginLoadIntent: ChannelPluginLoadIntent;
   toolDiscovery: boolean;
+  cliMetadata?: boolean;
 }): PluginRegistrationPlan | null {
-  if (params.canLoadScopedSetupOnlyChannelPlugin) {
-    return {
-      mode: "setup-only",
-      loadSetupEntry: true,
-      loadSetupRuntimeEntry: false,
-      runRuntimeCapabilityPolicy: false,
-      runFullActivationOnlyRegistrations: false,
-    };
+  if (params.cliMetadata) {
+    return params.enableStateEnabled ? createRegistrationPlan("cli-metadata") : null;
   }
-  if (
-    params.scopedSetupOnlyChannelPluginRequested &&
-    params.requireSetupEntryForSetupOnlyChannelPlugins
-  ) {
-    return null;
+  if (params.canLoadScopedSetupOnlyChannelPlugin) {
+    return createRegistrationPlan("setup-only");
   }
   if (!params.enableStateEnabled) {
     return null;
   }
   if (params.toolDiscovery) {
-    return {
-      mode: "tool-discovery",
-      loadSetupEntry: false,
-      loadSetupRuntimeEntry: false,
-      runRuntimeCapabilityPolicy: true,
-      runFullActivationOnlyRegistrations: false,
-    };
+    return createRegistrationPlan("tool-discovery");
   }
   const loadSetupRuntimeEntry =
-    !params.forceFullRuntimeForChannelPlugins &&
     params.shouldLoadModules &&
     !params.validateOnly &&
     shouldLoadChannelPluginInSetupRuntime({
       manifestChannels: params.manifestRecord.channels,
       setupSource: params.manifestRecord.setupSource,
-      startupDeferConfiguredChannelFullLoadUntilAfterListen:
-        params.manifestRecord.startupDeferConfiguredChannelFullLoadUntilAfterListen,
       cfg: params.cfg,
       env: params.env,
-      preferSetupRuntimeForChannelPlugins: params.preferSetupRuntimeForChannelPlugins,
+      channelPluginLoadIntent: params.channelPluginLoadIntent,
     });
   if (loadSetupRuntimeEntry) {
-    return {
-      mode: "setup-runtime",
-      loadSetupEntry: true,
-      loadSetupRuntimeEntry: true,
-      runRuntimeCapabilityPolicy: false,
-      runFullActivationOnlyRegistrations: false,
-    };
+    return createRegistrationPlan("setup-runtime");
   }
-  const mode = params.shouldActivate ? "full" : "discovery";
-  return {
-    mode,
-    loadSetupEntry: false,
-    loadSetupRuntimeEntry: false,
-    runRuntimeCapabilityPolicy: true,
-    runFullActivationOnlyRegistrations: mode === "full",
-  };
+  return createRegistrationPlan(params.runtimeSideEffects ? "full" : "discovery");
 }

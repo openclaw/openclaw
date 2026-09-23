@@ -1,20 +1,14 @@
-import type { PluginInstallRecord } from "../config/types.plugins.js";
 import {
   discoverOpenClawPlugins,
   type PluginCandidate,
   type PluginDiscoveryResult,
 } from "./discovery.js";
-import { pluginLoaderCacheState } from "./loader-cache.js";
 import type { PluginLoadCacheContext } from "./loader-load-context.js";
-import {
-  buildProvenanceIndex,
-  compareDuplicateCandidateOrder,
-  warnWhenAllowlistIsOpen,
-} from "./loader-provenance.js";
-import { createPluginCandidatesFromManifestRegistry, pushDiagnostics } from "./loader-shared.js";
+import { buildProvenanceIndex, warnWhenAllowlistIsOpen } from "./loader-provenance.js";
+import { createPluginCandidatesFromManifestRegistry } from "./loader-shared.js";
 import type { PluginLoadOptions } from "./loader-types.js";
 import {
-  loadPluginManifestRegistry,
+  loadPluginManifestRegistryCore,
   type PluginManifestRecord,
   type PluginManifestRegistry,
 } from "./manifest-registry.js";
@@ -25,7 +19,7 @@ type ResolvedPluginLoadDiscovery = {
   discovery: PluginDiscoveryResult;
   manifestRegistry: PluginManifestRegistry;
   orderedCandidates: PluginCandidate[];
-  manifestByRoot: Map<string, PluginManifestRecord>;
+  manifestBySource: Map<string, PluginManifestRecord>;
   provenance: ReturnType<typeof buildProvenanceIndex>;
 };
 
@@ -37,12 +31,16 @@ export function resolvePluginLoadDiscovery(params: {
   onlyPluginIdSet: ReadonlySet<string> | null;
   emitWarning: boolean;
   warningCacheKey: string;
-  suppliedManifestRegistry?: PluginManifestRegistry;
 }): ResolvedPluginLoadDiscovery {
   const { options, context } = params;
-  const discovery = params.suppliedManifestRegistry
+  // The load context has already verified workspace, environment, config, and
+  // plugin scope against the current lifecycle-owned metadata generation.
+  const suppliedManifestRegistry =
+    options.manifestRegistry ??
+    (options.discovery === undefined ? context.metadataSnapshot?.manifestRegistry : undefined);
+  const discovery = suppliedManifestRegistry
     ? {
-        candidates: createPluginCandidatesFromManifestRegistry(params.suppliedManifestRegistry),
+        candidates: createPluginCandidatesFromManifestRegistry(suppliedManifestRegistry),
         diagnostics: [] as PluginDiagnostic[],
       }
     : (options.discovery ??
@@ -53,59 +51,45 @@ export function resolvePluginLoadDiscovery(params: {
         installRecords: context.installRecords,
       }));
   const manifestRegistry =
-    params.suppliedManifestRegistry ??
-    loadPluginManifestRegistry({
+    suppliedManifestRegistry ??
+    loadPluginManifestRegistryCore({
       config: context.cfg,
       workspaceDir: options.workspaceDir,
       env: context.env,
       candidates: discovery.candidates,
       diagnostics: discovery.diagnostics,
-      installRecords: nonEmptyInstallRecords(context.installRecords),
+      installRecords:
+        Object.keys(context.installRecords).length > 0 ? context.installRecords : undefined,
     });
-  pushDiagnostics(params.diagnostics, manifestRegistry.diagnostics);
+  params.diagnostics.push(...manifestRegistry.diagnostics);
   warnWhenAllowlistIsOpen({
     emitWarning: params.emitWarning,
     logger: params.logger,
     pluginsEnabled: context.normalized.enabled,
     allow: context.normalized.allow,
     warningCacheKey: params.warningCacheKey,
-    warningCache: pluginLoaderCacheState,
+    warningCache: context.cacheState,
     explicitlyEnabledPluginIds: new Set(
       Object.entries(context.normalized.entries)
         .filter(([, entry]) => entry.enabled === true)
         .map(([pluginId]) => pluginId),
     ),
     // Partial snapshots should only warn about plugins intentionally in scope.
-    discoverablePlugins: manifestRegistry.plugins
-      .filter((plugin) => !params.onlyPluginIdSet || params.onlyPluginIdSet.has(plugin.id))
-      .map((plugin) => ({
-        id: plugin.id,
-        source: plugin.source,
-        origin: plugin.origin,
-      })),
+    discoverablePlugins: manifestRegistry.plugins.filter(
+      (plugin) => !params.onlyPluginIdSet || params.onlyPluginIdSet.has(plugin.id),
+    ),
   });
   const provenance = buildProvenanceIndex({
     normalizedLoadPaths: context.normalized.loadPaths,
     env: context.env,
     installRecords: context.installRecords,
   });
-  const manifestByRoot = new Map(
-    manifestRegistry.plugins.map((record) => [record.rootDir, record]),
+  const manifestBySource = new Map(
+    manifestRegistry.plugins.map((record) => [record.source, record]),
   );
-  const orderedCandidates = [...discovery.candidates].toSorted((left, right) =>
-    compareDuplicateCandidateOrder({
-      left,
-      right,
-      manifestByRoot,
-      provenance,
-      env: context.env,
-    }),
+  // Manifest selection owns duplicate precedence; runtime consumes only its winners.
+  const orderedCandidates = discovery.candidates.filter((candidate) =>
+    manifestBySource.has(candidate.source),
   );
-  return { discovery, manifestRegistry, orderedCandidates, manifestByRoot, provenance };
-}
-
-function nonEmptyInstallRecords(
-  records: Record<string, PluginInstallRecord>,
-): Record<string, PluginInstallRecord> | undefined {
-  return Object.keys(records).length > 0 ? records : undefined;
+  return { discovery, manifestRegistry, orderedCandidates, manifestBySource, provenance };
 }

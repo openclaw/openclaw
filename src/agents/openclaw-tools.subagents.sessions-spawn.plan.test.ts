@@ -1,0 +1,370 @@
+// Verifies sessions_spawn model, thinking, and timeout planning.
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
+import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
+import { resolveConfiguredSubagentSpawnModelSelection } from "./model-selection.js";
+import {
+  resolveConfiguredSubagentRunTimeoutSeconds,
+  resolveSubagentModelAndThinkingPlan,
+  splitModelRef,
+} from "./subagents/spawn/subagent-spawn-plan.js";
+import { resolveSubagentThinkingOverride } from "./subagents/spawn/subagent-spawn-thinking.js";
+import { supportedSpawnModelChoice } from "./subagents/spawn/subagent-spawn.test-helpers.js";
+
+const modelChoice = vi.hoisted(() => vi.fn<typeof supportedSpawnModelChoice>());
+vi.mock("./subagents/spawn/subagent-spawn.runtime.js", () => ({
+  prepareModelChoice: modelChoice,
+}));
+beforeEach(() => {
+  modelChoice.mockReset().mockImplementation(supportedSpawnModelChoice);
+});
+
+type SubagentModelPlan = Awaited<ReturnType<typeof resolveSubagentModelAndThinkingPlan>>;
+type OkSubagentModelPlan = Extract<SubagentModelPlan, { status: "ok" }>;
+
+function createConfig(overrides?: Record<string, unknown>): OpenClawConfig {
+  return {
+    session: { mainKey: "main", scope: "per-sender" },
+    ...overrides,
+  } as OpenClawConfig;
+}
+
+function expectOkPlan(plan: SubagentModelPlan): OkSubagentModelPlan {
+  // Narrows the discriminated plan before checking the resolved patch details.
+  expect(plan.status).toBe("ok");
+  if (plan.status !== "ok") {
+    throw new Error(`Expected ok plan, received ${plan.status}`);
+  }
+  return plan;
+}
+
+describe("subagent spawn model + thinking plan", () => {
+  it("includes explicit model overrides in the initial patch", async () => {
+    const plan = expectOkPlan(
+      await resolveSubagentModelAndThinkingPlan({
+        cfg: createConfig(),
+        targetAgentId: "research",
+        modelOverride: "claude-haiku-4-5",
+      }),
+    );
+    expect(plan.resolvedModel).toBe(`${DEFAULT_PROVIDER}/claude-haiku-4-5`);
+    expect(plan.modelApplied).toBe(true);
+    expect(plan.initialSessionPatch.model).toBe(`${DEFAULT_PROVIDER}/claude-haiku-4-5`);
+    expect(plan.initialSessionPatch.modelOverrideSource).toBe("user");
+  });
+
+  it("preserves model ids containing slashes", () => {
+    expect(splitModelRef("openrouter/meta-llama/llama-3.3-70b:free")).toEqual({
+      provider: "openrouter",
+      model: "meta-llama/llama-3.3-70b:free",
+    });
+  });
+
+  it("normalizes thinking overrides into the initial patch", async () => {
+    const plan = expectOkPlan(
+      await resolveSubagentModelAndThinkingPlan({
+        cfg: createConfig(),
+        targetAgentId: "research",
+        thinkingOverrideRaw: "high",
+      }),
+    );
+    expect(plan.thinkingOverride).toBe("high");
+    expect(plan.initialSessionPatch.thinkingLevel).toBe("high");
+  });
+
+  it("threads explicit fast mode into the initial child session patch", async () => {
+    const plan = expectOkPlan(
+      await resolveSubagentModelAndThinkingPlan({
+        cfg: createConfig(),
+        targetAgentId: "research",
+        fastMode: "auto",
+      }),
+    );
+    expect(plan.initialSessionPatch.fastMode).toBe("auto");
+  });
+
+  it("rejects invalid thinking levels before any runtime work", async () => {
+    const plan = await resolveSubagentModelAndThinkingPlan({
+      cfg: createConfig(),
+      targetAgentId: "research",
+      thinkingOverrideRaw: "banana",
+    });
+    expect(plan.status).toBe("error");
+    expect(modelChoice).not.toHaveBeenCalled();
+    if (plan.status === "error") {
+      expect(plan.error).toMatch(/Invalid thinking level/i);
+    }
+  });
+
+  it("applies default subagent model from defaults config", async () => {
+    const plan = expectOkPlan(
+      await resolveSubagentModelAndThinkingPlan({
+        cfg: createConfig({
+          agents: { defaults: { subagents: { model: "minimax/MiniMax-M2.7" } } },
+        }),
+        targetAgentId: "research",
+      }),
+    );
+    expect(plan.resolvedModel).toBe("minimax/MiniMax-M2.7");
+    expect(plan.initialSessionPatch.model).toBe("minimax/MiniMax-M2.7");
+    expect(plan.initialSessionPatch.modelOverrideSource).toBe("auto");
+    expect(plan.initialSessionPatch.modelOverrideFallbackOriginProvider).toBe("minimax");
+    expect(plan.initialSessionPatch.modelOverrideFallbackOriginModel).toBe("MiniMax-M2.7");
+  });
+
+  it("falls back to runtime default model when no model config is set", async () => {
+    const plan = expectOkPlan(
+      await resolveSubagentModelAndThinkingPlan({
+        cfg: createConfig(),
+        targetAgentId: "research",
+      }),
+    );
+    const defaultModelRef = `${DEFAULT_PROVIDER}/${DEFAULT_MODEL}`;
+    expect(plan.resolvedModel).toBe(defaultModelRef);
+    expect(plan.initialSessionPatch.model).toBe(defaultModelRef);
+    expect(plan.initialSessionPatch.modelOverrideSource).toBe("auto");
+    expect(plan.initialSessionPatch.modelOverrideFallbackOriginProvider).toBeUndefined();
+    expect(plan.initialSessionPatch.modelOverrideFallbackOriginModel).toBeUndefined();
+  });
+
+  it("uses the target default provider for bare configured subagent models", async () => {
+    const plan = expectOkPlan(
+      await resolveSubagentModelAndThinkingPlan({
+        cfg: createConfig({
+          agents: {
+            defaults: {
+              model: { primary: "openai/gpt-5.5" },
+              subagents: { model: "gpt-5.4" },
+            },
+          },
+        }),
+        targetAgentId: "research",
+      }),
+    );
+    expect(plan.resolvedModel).toBe("openai/gpt-5.4");
+    expect(plan.initialSessionPatch.modelOverrideFallbackOriginProvider).toBe("openai");
+    expect(plan.initialSessionPatch.modelOverrideFallbackOriginModel).toBe("gpt-5.4");
+  });
+
+  it("can resolve only explicit or configured subagent model selections", () => {
+    expect(
+      resolveConfiguredSubagentSpawnModelSelection({
+        cfg: createConfig(),
+        agentId: "research",
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveConfiguredSubagentSpawnModelSelection({
+        cfg: createConfig({
+          agents: { defaults: { subagents: { model: "minimax/MiniMax-M2.7" } } },
+        }),
+        agentId: "research",
+      }),
+    ).toBe("minimax/MiniMax-M2.7");
+  });
+
+  it.each([
+    {
+      name: "per-agent subagent model over defaults",
+      defaults: { subagents: { model: "minimax/MiniMax-M2.7" } },
+      targetAgentConfig: {
+        id: "research",
+        runtime: { type: "acp", acp: { agent: "cursor" } },
+        model: "gpt-5.6-sol[context=272k,reasoning=medium,fast=false]",
+        subagents: { model: "opencode/claude" },
+      },
+      expectedModel: "opencode/claude",
+      expectedProvider: "opencode",
+      expectedOriginModel: "claude",
+    },
+    {
+      name: "default subagent model over target agent primary model",
+      defaults: { subagents: { model: "minimax/MiniMax-M2.7" } },
+      targetAgentConfig: {
+        id: "research",
+        runtime: { type: "acp", acp: { agent: "cursor" } },
+        model: { primary: "gpt-5.6-sol[context=272k,reasoning=medium,fast=false]" },
+      },
+      expectedModel: "minimax/MiniMax-M2.7",
+      expectedProvider: "minimax",
+      expectedOriginModel: "MiniMax-M2.7",
+    },
+    {
+      name: "target agent primary model over global default",
+      defaults: { model: { primary: "minimax/MiniMax-M2.7" } },
+      targetAgentConfig: { id: "research", model: { primary: "opencode/claude" } },
+      expectedModel: "opencode/claude",
+      expectedProvider: "opencode",
+      expectedOriginModel: "claude",
+    },
+    {
+      name: "native default over an ACP target's harness primary",
+      defaults: { model: { primary: "minimax/MiniMax-M2.7" } },
+      targetAgentConfig: {
+        id: "research",
+        runtime: { type: "acp", acp: { agent: "cursor" } },
+        model: { primary: "gpt-5.6-sol[context=272k,reasoning=medium,fast=false]" },
+      },
+      expectedModel: "minimax/MiniMax-M2.7",
+      expectedProvider: undefined,
+      expectedOriginModel: undefined,
+    },
+    {
+      name: "explicit native model over an ACP target's configured defaults",
+      defaults: {
+        model: { primary: "anthropic/claude-sonnet-4-6" },
+        subagents: { model: "minimax/MiniMax-M2.7" },
+      },
+      targetAgentConfig: {
+        id: "research",
+        runtime: { type: "acp", acp: { agent: "cursor" } },
+        model: "gpt-5.6-sol[context=272k,reasoning=medium,fast=false]",
+        subagents: { model: "opencode/claude" },
+      },
+      modelOverride: "openai/gpt-5.4",
+      expectedModel: "openai/gpt-5.4",
+      expectedProvider: undefined,
+      expectedOriginModel: undefined,
+    },
+  ])("prefers $name", async (row) => {
+    const cfg = createConfig({
+      agents: { defaults: row.defaults, list: [row.targetAgentConfig] },
+    });
+    const plan = expectOkPlan(
+      await resolveSubagentModelAndThinkingPlan({
+        cfg,
+        targetAgentId: "research",
+        targetAgentConfig: row.targetAgentConfig,
+        modelOverride: row.modelOverride,
+      }),
+    );
+    expect(plan.resolvedModel).toBe(row.expectedModel);
+    expect(plan.initialSessionPatch.model).toBe(row.expectedModel);
+    expect(plan.initialSessionPatch.modelOverrideSource).toBe(row.modelOverride ? "user" : "auto");
+    expect(plan.initialSessionPatch.modelOverrideFallbackOriginProvider).toBe(row.expectedProvider);
+    expect(plan.initialSessionPatch.modelOverrideFallbackOriginModel).toBe(row.expectedOriginModel);
+  });
+
+  it.each([
+    {
+      name: "uses config default timeout when agent omits runTimeoutSeconds",
+      configured: 120,
+      explicit: undefined,
+      expected: 120,
+    },
+    {
+      name: "explicit runTimeoutSeconds wins over config default",
+      configured: 120,
+      explicit: 2,
+      expected: 2,
+    },
+    {
+      name: "falls back to 0 when config omits the timeout",
+      configured: undefined,
+      explicit: undefined,
+      expected: 0,
+    },
+  ])("$name", ({ configured, explicit, expected }) => {
+    expect(
+      resolveConfiguredSubagentRunTimeoutSeconds({
+        cfg: createConfig({
+          agents: {
+            defaults: {
+              subagents:
+                configured === undefined ? { maxConcurrent: 8 } : { runTimeoutSeconds: configured },
+            },
+          },
+        }),
+        runTimeoutSeconds: explicit,
+      }),
+    ).toBe(expected);
+  });
+});
+
+type ThinkingLevel = "high" | "medium" | "low" | "off";
+
+function expectResolvedThinkingPlan(input: {
+  expected: ThinkingLevel;
+  expectedOverride?: ThinkingLevel | null;
+  thinkingOverrideRaw?: string;
+  callerThinkingRaw?: string;
+  requesterAgentConfig?: unknown;
+  targetAgentConfig?: unknown;
+  cfg?: OpenClawConfig;
+}) {
+  const cfg =
+    input.cfg ??
+    (createConfig({ agents: { defaults: { subagents: { thinking: "high" } } } }) as OpenClawConfig);
+  const plan = resolveSubagentThinkingOverride({
+    cfg,
+    requesterAgentConfig: input.requesterAgentConfig,
+    targetAgentConfig: input.targetAgentConfig,
+    thinkingOverrideRaw: input.thinkingOverrideRaw,
+    callerThinkingRaw: input.callerThinkingRaw,
+  });
+
+  expect(plan).toEqual({
+    status: "ok",
+    thinkingOverride:
+      input.expectedOverride === null ? undefined : (input.expectedOverride ?? input.expected),
+    initialSessionPatch: { thinkingLevel: input.expected },
+  });
+}
+
+describe("sessions_spawn thinking defaults", () => {
+  it.each([
+    {
+      name: "applies agents.defaults.subagents.thinking when thinking is omitted",
+      expected: "high",
+    },
+    {
+      name: "prefers explicit sessions_spawn.thinking over config default",
+      thinkingOverrideRaw: "low",
+      expected: "low",
+    },
+    {
+      name: "prefers per-agent subagent thinking over global subagent thinking",
+      targetAgentConfig: { subagents: { thinking: "medium" } },
+      expected: "medium",
+    },
+    {
+      name: "prefers requester-agent subagent thinking over target-agent subagent thinking",
+      requesterAgentConfig: { subagents: { thinking: "low" } },
+      targetAgentConfig: { subagents: { thinking: "medium" } },
+      callerThinkingRaw: "high",
+      expected: "low",
+    },
+    {
+      name: "inherits caller thinking when no explicit or configured subagent thinking exists",
+      cfg: createConfig({ agents: { defaults: {} } }),
+      callerThinkingRaw: "medium",
+      expected: "medium",
+      expectedOverride: null,
+    },
+    {
+      name: "prefers global subagent thinking over caller thinking",
+      callerThinkingRaw: "medium",
+      expected: "high",
+    },
+    {
+      name: "preserves caller thinking off when inherited",
+      cfg: createConfig({ agents: { defaults: {} } }),
+      callerThinkingRaw: "off",
+      expected: "off",
+      expectedOverride: null,
+    },
+    {
+      name: "preserves explicit thinking off",
+      thinkingOverrideRaw: "off",
+      expected: "off",
+    },
+    {
+      name: "preserves configured subagent thinking off",
+      targetAgentConfig: { subagents: { thinking: "off" } },
+      callerThinkingRaw: "high",
+      expected: "off",
+    },
+  ] as const)("$name", (row) => {
+    expectResolvedThinkingPlan(row);
+  });
+});

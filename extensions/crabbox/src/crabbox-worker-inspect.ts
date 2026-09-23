@@ -1,14 +1,12 @@
+import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { nonEmptyString } from "./crabbox-worker-profile.js";
 
 type CrabboxInspect = {
-  host?: unknown;
+  failureError?: unknown;
   id?: unknown;
   providerMetadata?: unknown;
   ready?: unknown;
-  sshHost?: unknown;
-  sshHostKey?: unknown;
-  sshKey?: unknown;
-  sshPort?: unknown;
   sshUser?: unknown;
   state?: unknown;
   tailscale?: unknown;
@@ -16,12 +14,9 @@ type CrabboxInspect = {
 
 export type ParsedInspect = {
   awsInstanceProfileAttached?: boolean;
-  host?: string;
+  failureError?: string;
   id: string;
   ready?: boolean;
-  sshHostKey?: string;
-  sshKey?: string;
-  sshPort?: number;
   sshUser?: string;
   state: string;
   tailscaleEnabled: boolean;
@@ -47,6 +42,10 @@ export function parseInspectJson(stdout: string): ParsedInspect {
   if (value.ready !== undefined && typeof value.ready !== "boolean") {
     throw new Error("Crabbox inspect returned an invalid ready state");
   }
+  if (value.sshUser !== undefined && typeof value.sshUser !== "string") {
+    throw new Error("Crabbox inspect returned an invalid SSH user");
+  }
+  const sshUser = nonEmptyString(value.sshUser);
   if (
     value.tailscale !== undefined &&
     (value.tailscale === null ||
@@ -72,47 +71,21 @@ export function parseInspectJson(stdout: string): ParsedInspect {
     awsInstanceProfileAttached = attached as boolean | undefined;
   }
 
-  const sshHost = inspectString(value.sshHost, "sshHost");
-  const fallbackHost = inspectString(value.host, "host");
-  const host = sshHost ?? fallbackHost;
-  const sshUser = inspectString(value.sshUser, "sshUser");
-  const sshHostKey = inspectString(value.sshHostKey, "sshHostKey");
-  const sshKey = inspectString(value.sshKey, "sshKey");
-  const sshPort = inspectPort(value.sshPort);
+  const failureError = nonEmptyString(value.failureError);
   return {
     id,
     state,
     tailscaleEnabled,
+    ...(failureError
+      ? {
+          failureError: truncateUtf16Safe(
+            redactSensitiveText(failureError).replace(/\s+/gu, " "),
+            512,
+          ),
+        }
+      : {}),
     ...(awsInstanceProfileAttached !== undefined ? { awsInstanceProfileAttached } : {}),
-    ...(host ? { host } : {}),
-    ...(sshUser ? { sshUser } : {}),
-    ...(sshHostKey ? { sshHostKey } : {}),
-    ...(sshKey ? { sshKey } : {}),
-    ...(sshPort ? { sshPort } : {}),
     ...(typeof value.ready === "boolean" ? { ready: value.ready } : {}),
+    ...(sshUser && sshUser !== "<token>" ? { sshUser } : {}),
   };
-}
-
-function inspectString(value: unknown, field: string): string | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  if (typeof value !== "string") {
-    throw new Error(`Crabbox inspect returned an invalid ${field}`);
-  }
-  return nonEmptyString(value);
-}
-
-function inspectPort(value: unknown): number | undefined {
-  if (value === undefined || value === "") {
-    return undefined;
-  }
-  if (typeof value !== "number" && (typeof value !== "string" || !/^\d+$/u.test(value))) {
-    throw new Error("Crabbox inspect returned an invalid sshPort");
-  }
-  const port = typeof value === "number" ? value : Number(value);
-  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
-    throw new Error("Crabbox inspect returned an invalid sshPort");
-  }
-  return port;
 }

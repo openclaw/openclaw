@@ -21,7 +21,7 @@ class ShareLaunchTest {
   @Test
   fun composesDistinctSubjectAndTextForReview() {
     val parsed =
-      parseShareLaunchIntent(
+      parseShare(
         Intent(Intent.ACTION_SEND)
           .setType("text/plain")
           .putExtra(Intent.EXTRA_SUBJECT, "Article title")
@@ -30,14 +30,14 @@ class ShareLaunchTest {
 
     requireNotNull(parsed)
     assertEquals("Article title\n\nhttps://example.com/article", parsed.text)
-    assertEquals(emptyList<Uri>(), parsed.imageUris)
+    assertEquals(emptyList<SharedAttachment>(), parsed.attachments)
   }
 
   @Test
   fun keepsCaptionAndProviderBackedImage() {
     val image = Uri.parse("content://photos/shared/1")
     val parsed =
-      parseShareLaunchIntent(
+      parseShare(
         Intent(Intent.ACTION_SEND)
           .setType("image/png")
           .putExtra(Intent.EXTRA_TEXT, "What is in this image?")
@@ -46,14 +46,87 @@ class ShareLaunchTest {
 
     requireNotNull(parsed)
     assertEquals("What is in this image?", parsed.text)
-    assertEquals(listOf(image), parsed.imageUris)
+    assertEquals(listOf(image), parsed.attachments.map(SharedAttachment::uri))
+    assertEquals(listOf(SharedAttachmentKind.Image), parsed.attachments.map(SharedAttachment::kind))
+  }
+
+  @Test
+  fun preservesIndexedCaptionsAcrossMultipleAttachmentsWithoutRepeatingSubjectOrClipData() {
+    val first = Uri.parse("content://photos/shared/first")
+    val second = Uri.parse("content://photos/shared/second")
+    val parsed =
+      parseShare(
+        Intent(Intent.ACTION_SEND_MULTIPLE)
+          .setType("image/png")
+          .putExtra(Intent.EXTRA_SUBJECT, "  First caption  ")
+          .putCharSequenceArrayListExtra(Intent.EXTRA_TEXT, arrayListOf("First caption", "Second caption"))
+          .putParcelableArrayListExtra(Intent.EXTRA_STREAM, arrayListOf(first, second))
+          .apply {
+            clipData =
+              ClipData("shared", arrayOf("image/png"), ClipData.Item("First caption", null, first)).apply {
+                addItem(ClipData.Item("Second caption", null, second))
+              }
+          },
+      )
+
+    requireNotNull(parsed)
+    assertEquals("First caption\n\nSecond caption", parsed.text)
+    assertEquals(listOf(first, second), parsed.attachments.map(SharedAttachment::uri))
+    assertEquals(0, parsed.droppedAttachmentCount)
+  }
+
+  @Test
+  fun acceptsTextOnlyMultipleShareArrayAtTheExistingParserBoundary() {
+    val parsed =
+      parseShare(
+        Intent(Intent.ACTION_SEND_MULTIPLE)
+          .setType("text/plain")
+          .putCharSequenceArrayListExtra(Intent.EXTRA_TEXT, arrayListOf("First note", "Second note")),
+      )
+
+    requireNotNull(parsed)
+    assertEquals("First note\n\nSecond note", parsed.text)
+    assertEquals(emptyList<SharedAttachment>(), parsed.attachments)
+  }
+
+  @Test
+  fun readsProviderBackedImageCaptionDirectlyFromClipData() {
+    val image = Uri.parse("content://photos/shared/captioned-clip")
+    val parsed =
+      parseShare(
+        Intent(Intent.ACTION_SEND)
+          .setType("image/png")
+          .apply {
+            clipData = ClipData("shared", arrayOf("image/png"), ClipData.Item("Clip caption", null, image))
+          },
+      )
+
+    requireNotNull(parsed)
+    assertEquals("Clip caption", parsed.text)
+    assertEquals(listOf(image), parsed.attachments.map(SharedAttachment::uri))
+  }
+
+  @Test
+  fun preservesLegacyScalarCaptionForMultipleAttachmentSenders() {
+    val image = Uri.parse("content://photos/shared/legacy-caption")
+    val parsed =
+      parseShare(
+        Intent(Intent.ACTION_SEND_MULTIPLE)
+          .setType("image/png")
+          .putExtra(Intent.EXTRA_TEXT, "Legacy scalar caption")
+          .putParcelableArrayListExtra(Intent.EXTRA_STREAM, arrayListOf(image)),
+      )
+
+    requireNotNull(parsed)
+    assertEquals("Legacy scalar caption", parsed.text)
+    assertEquals(listOf(image), parsed.attachments.map(SharedAttachment::uri))
   }
 
   @Test
   fun readsProviderBackedImageFromClipData() {
     val image = Uri.parse("content://photos/shared/clip")
     val parsed =
-      parseShareLaunchIntent(
+      parseShare(
         Intent(Intent.ACTION_SEND)
           .setType("IMAGE/PNG")
           .apply {
@@ -62,14 +135,14 @@ class ShareLaunchTest {
       )
 
     requireNotNull(parsed)
-    assertEquals(listOf(image), parsed.imageUris)
+    assertEquals(listOf(image), parsed.attachments.map(SharedAttachment::uri))
   }
 
   @Test
-  fun deduplicatesAndBoundsMultipleImagesAcrossExtrasAndClipData() {
+  fun deduplicatesAndBoundsMultipleAttachmentsAcrossExtrasAndClipData() {
     val images = (1..10).map { index -> Uri.parse("content://photos/shared/$index") }
     val parsed =
-      parseShareLaunchIntent(
+      parseShare(
         Intent(Intent.ACTION_SEND_MULTIPLE)
           .setType("image/jpeg")
           .putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(images))
@@ -79,55 +152,200 @@ class ShareLaunchTest {
       )
 
     requireNotNull(parsed)
-    assertEquals(images.take(8), parsed.imageUris)
-    assertEquals(2, parsed.droppedImageCount)
+    assertEquals(images.take(8), parsed.attachments.map(SharedAttachment::uri))
+    assertEquals(2, parsed.droppedAttachmentCount)
+  }
+
+  @Test
+  fun acceptsSingleAudioShareWhenProviderMimeIsUnknown() {
+    val audio = Uri.parse("content://media/shared/song")
+    val parsed =
+      parseShare(
+        Intent(Intent.ACTION_SEND)
+          .setType("audio/mpeg")
+          .putExtra(Intent.EXTRA_STREAM, audio),
+      )
+
+    requireNotNull(parsed)
+    assertEquals(listOf(audio), parsed.attachments.map(SharedAttachment::uri))
+    assertEquals(listOf(SharedAttachmentKind.Audio), parsed.attachments.map(SharedAttachment::kind))
+  }
+
+  @Test
+  fun rejectsWildcardAudioWhenProviderMimeIsUnknown() {
+    val audio = Uri.parse("content://media/shared/unknown")
+    val parsed =
+      parseShare(
+        Intent(Intent.ACTION_SEND)
+          .setType("audio/*")
+          .putExtra(Intent.EXTRA_STREAM, audio),
+      )
+
+    requireNotNull(parsed)
+    assertEquals(emptyList<SharedAttachment>(), parsed.attachments)
+    assertEquals(1, parsed.droppedAttachmentCount)
+  }
+
+  @Test
+  fun acceptsMultipleAudioShares() {
+    val audio = (1..3).map { Uri.parse("content://media/shared/$it") }
+    val parsed =
+      parseShare(
+        Intent(Intent.ACTION_SEND_MULTIPLE)
+          .setType("audio/ogg")
+          .putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(audio)),
+      )
+
+    requireNotNull(parsed)
+    assertEquals(audio, parsed.attachments.map(SharedAttachment::uri))
+    assertTrue(parsed.attachments.all { it.kind == SharedAttachmentKind.Audio })
+  }
+
+  @Test
+  fun acceptsVideoShareFromProviderMimeType() {
+    val video = Uri.parse("content://media/shared/video")
+    val parsed =
+      parseShare(
+        intent =
+          Intent(Intent.ACTION_SEND)
+            .setType("video/*")
+            .putExtra(Intent.EXTRA_STREAM, video),
+        mimeTypes = mapOf(video to "video/mp4"),
+      )
+
+    requireNotNull(parsed)
+    assertEquals(SharedAttachmentKind.Video, parsed.attachments.single().kind)
+    assertEquals("video/mp4", parsed.attachments.single().mimeType)
+    assertTrue("video/*" in SHARED_ATTACHMENT_MIME_ALLOWLIST)
+  }
+
+  @Test
+  fun acceptsCuratedDocumentShare() {
+    val document = Uri.parse("content://docs/shared/report")
+    val parsed =
+      parseShare(
+        Intent(Intent.ACTION_SEND)
+          .setType("application/pdf")
+          .putExtra(Intent.EXTRA_STREAM, document),
+      )
+
+    requireNotNull(parsed)
+    assertEquals(listOf(SharedAttachmentKind.Document), parsed.attachments.map(SharedAttachment::kind))
+    assertEquals("application/pdf", parsed.attachments.single().mimeType)
+  }
+
+  @Test
+  fun classifiesMixedBatchFromProviderMimeTypes() {
+    val image = Uri.parse("content://mixed/image")
+    val audio = Uri.parse("content://mixed/audio")
+    val document = Uri.parse("content://mixed/document")
+    val mimeTypes =
+      mapOf(
+        image to "image/png",
+        audio to "audio/mpeg",
+        document to "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      )
+    val parsed =
+      parseShare(
+        intent =
+          Intent(Intent.ACTION_SEND_MULTIPLE)
+            .setType("*/*")
+            .putParcelableArrayListExtra(Intent.EXTRA_STREAM, arrayListOf(image, audio, document)),
+        mimeTypes = mimeTypes,
+      )
+
+    requireNotNull(parsed)
+    assertEquals(
+      listOf(SharedAttachmentKind.Image, SharedAttachmentKind.Audio, SharedAttachmentKind.Document),
+      parsed.attachments.map(SharedAttachment::kind),
+    )
+  }
+
+  @Test
+  fun rejectsBlanketApplicationTypeUsingProviderMimeAndReportsDrop() {
+    val payload = Uri.parse("content://files/shared/blob")
+    val parsed =
+      parseShare(
+        intent =
+          Intent(Intent.ACTION_SEND)
+            .setType("application/pdf")
+            .putExtra(Intent.EXTRA_STREAM, payload),
+        mimeTypes = mapOf(payload to "application/octet-stream"),
+      )
+
+    requireNotNull(parsed)
+    assertEquals(emptyList<SharedAttachment>(), parsed.attachments)
+    assertEquals(1, parsed.droppedAttachmentCount)
+  }
+
+  @Test
+  fun unsupportedEntriesDoNotConsumeAttachmentCap() {
+    val unsupported = Uri.parse("content://mixed/unsupported")
+    val documents = (1..8).map { Uri.parse("content://mixed/document/$it") }
+    val mimeTypes =
+      buildMap {
+        put(unsupported, "application/octet-stream")
+        documents.forEach { document -> put(document, "application/pdf") }
+      }
+    val parsed =
+      parseShare(
+        intent =
+          Intent(Intent.ACTION_SEND_MULTIPLE)
+            .setType("*/*")
+            .putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(listOf(unsupported) + documents)),
+        mimeTypes = mimeTypes,
+      )
+
+    requireNotNull(parsed)
+    assertEquals(documents, parsed.attachments.map(SharedAttachment::uri))
+    assertEquals(1, parsed.droppedAttachmentCount)
   }
 
   @Test
   fun rejectsFileUrisAndEmptyOrUnrelatedIntents() {
     assertNull(
-      parseShareLaunchIntent(
+      parseShare(
         Intent(Intent.ACTION_SEND)
           .setType("image/jpeg")
           .putExtra(Intent.EXTRA_STREAM, Uri.parse("file:///data/data/ai.openclaw.app/private.jpg")),
       ),
     )
-    assertNull(parseShareLaunchIntent(Intent(Intent.ACTION_SEND).setType("text/plain")))
-    assertNull(parseShareLaunchIntent(Intent(Intent.ACTION_VIEW)))
+    assertNull(parseShare(Intent(Intent.ACTION_SEND).setType("text/plain")))
+    assertNull(parseShare(Intent(Intent.ACTION_VIEW)))
   }
 
   @Test
   fun rapidSharesKeepStableHeadUntilMatchingAcknowledgement() {
     val queue = ChatShareDraftQueue(capacity = 2)
     val owner = composerOwner("main", "agent:main:device")
-    val first = ChatShareDraft(id = 1, text = "first", imageUris = emptyList(), droppedImageCount = 0)
-    val second = ChatShareDraft(id = 2, text = "second", imageUris = emptyList(), droppedImageCount = 0)
+    val first = ChatShareDraft(id = 1, text = "first", attachments = emptyList(), droppedAttachmentCount = 0)
+    val second = ChatShareDraft(id = 2, text = "second", attachments = emptyList(), droppedAttachmentCount = 0)
 
     assertTrue(queue.enqueue(first, owner))
     assertTrue(queue.enqueue(second, owner))
-    assertEquals(first, queue.head.value)
+    assertEquals(listOf(first, second), queue.queued.value)
     assertFalse(queue.acknowledgeHead(second.id, owner))
-    assertEquals(first, queue.head.value)
+    assertEquals(listOf(first, second), queue.queued.value)
 
     runBlocking { assertTrue(queue.withHeadLease(first.id, owner) {}) }
     assertTrue(queue.acknowledgeHead(first.id, owner))
-    assertEquals(second, queue.head.value)
+    assertEquals(listOf(second), queue.queued.value)
     runBlocking { assertTrue(queue.withHeadLease(second.id, owner) {}) }
     assertTrue(queue.acknowledgeHead(second.id, owner))
-    assertNull(queue.head.value)
+    assertTrue(queue.queued.value.isEmpty())
   }
 
   @Test
   fun pendingShareQueueIsBoundedWithoutReplacingItsHead() {
     val queue = ChatShareDraftQueue(capacity = 1)
     val owner = composerOwner("main", "agent:main:device")
-    val first = ChatShareDraft(id = 1, text = "first", imageUris = emptyList(), droppedImageCount = 0)
-    val overflow = ChatShareDraft(id = 2, text = "overflow", imageUris = emptyList(), droppedImageCount = 0)
+    val first = ChatShareDraft(id = 1, text = "first", attachments = emptyList(), droppedAttachmentCount = 0)
+    val overflow = ChatShareDraft(id = 2, text = "overflow", attachments = emptyList(), droppedAttachmentCount = 0)
 
     assertTrue(queue.enqueue(first, owner))
     assertFalse(queue.enqueue(overflow, owner))
     assertEquals(1, queue.size())
-    assertEquals(first, queue.head.value)
+    assertEquals(listOf(first), queue.queued.value)
   }
 
   @Test
@@ -136,15 +354,15 @@ class ShareLaunchTest {
       val queue = ChatShareDraftQueue(capacity = 2)
       val ownerA = composerOwner("agent-a", "session-a")
       val ownerB = composerOwner("agent-b", "session-b")
-      val first = ChatShareDraft(id = 1, text = "first", imageUris = emptyList(), droppedImageCount = 0)
-      val second = ChatShareDraft(id = 2, text = "second", imageUris = emptyList(), droppedImageCount = 0)
+      val first = ChatShareDraft(id = 1, text = "first", attachments = emptyList(), droppedAttachmentCount = 0)
+      val second = ChatShareDraft(id = 2, text = "second", attachments = emptyList(), droppedAttachmentCount = 0)
       queue.enqueue(first, ownerA)
       queue.enqueue(second, ownerB)
 
-      assertEquals(first, queue.head.value)
+      assertEquals(listOf(first, second), queue.queued.value)
       assertTrue(queue.withHeadLease(second.id, ownerB) {})
       assertTrue(queue.acknowledgeHead(second.id, ownerB))
-      assertEquals(first, queue.head.value)
+      assertEquals(listOf(first), queue.queued.value)
       assertTrue(queue.withHeadLease(first.id, ownerA) {})
     }
 
@@ -152,8 +370,8 @@ class ShareLaunchTest {
   fun overlappingActivityLoadersCannotCommitTheSameHead() =
     runBlocking {
       val queue = ChatShareDraftQueue(capacity = 2)
-      val first = ChatShareDraft(id = 1, text = "first", imageUris = emptyList(), droppedImageCount = 0)
-      val next = ChatShareDraft(id = 2, text = "second", imageUris = emptyList(), droppedImageCount = 0)
+      val first = ChatShareDraft(id = 1, text = "first", attachments = emptyList(), droppedAttachmentCount = 0)
+      val next = ChatShareDraft(id = 2, text = "second", attachments = emptyList(), droppedAttachmentCount = 0)
       val owner = composerOwner("main", "agent:main:device")
       queue.enqueue(first, owner)
       queue.enqueue(next, owner)
@@ -181,14 +399,14 @@ class ShareLaunchTest {
       assertTrue(firstLoader.await())
       assertFalse(staleLoader.await())
       assertFalse(staleLoaderRan)
-      assertEquals(next, queue.head.value)
+      assertEquals(listOf(next), queue.queued.value)
     }
 
   @Test
   fun claimedShareCannotRetargetAcrossComposerNavigation() =
     runBlocking {
       val queue = ChatShareDraftQueue(capacity = 1)
-      val share = ChatShareDraft(id = 1, text = "private", imageUris = emptyList(), droppedImageCount = 0)
+      val share = ChatShareDraft(id = 1, text = "private", attachments = emptyList(), droppedAttachmentCount = 0)
       val ownerA = composerOwner("agent-a", "session-a")
       val ownerB = composerOwner("agent-b", "session-b")
       val resolvedA = ownerA.copy(sessionKey = "agent:agent-a:device")
@@ -207,7 +425,7 @@ class ShareLaunchTest {
   fun shareOwnerIsCapturedBeforeAnyLoaderRuns() =
     runBlocking {
       val queue = ChatShareDraftQueue(capacity = 1)
-      val share = ChatShareDraft(id = 1, text = "private", imageUris = emptyList(), droppedImageCount = 0)
+      val share = ChatShareDraft(id = 1, text = "private", attachments = emptyList(), droppedAttachmentCount = 0)
       val ownerA = composerOwner("agent-a", "session-a")
       val ownerB = composerOwner("agent-b", "session-b")
 
@@ -223,8 +441,8 @@ class ShareLaunchTest {
       val queue = ChatShareDraftQueue(capacity = 2)
       val ownerA = composerOwner("agent-a", "session-a", gatewayStableId = "gateway-a")
       val ownerB = composerOwner("agent-b", "session-b", gatewayStableId = "gateway-b")
-      val first = ChatShareDraft(id = 1, text = "private a", imageUris = emptyList(), droppedImageCount = 0)
-      val second = ChatShareDraft(id = 2, text = "private b", imageUris = emptyList(), droppedImageCount = 0)
+      val first = ChatShareDraft(id = 1, text = "private a", attachments = emptyList(), droppedAttachmentCount = 0)
+      val second = ChatShareDraft(id = 2, text = "private b", attachments = emptyList(), droppedAttachmentCount = 0)
       queue.enqueue(first, ownerA)
       queue.enqueue(second, ownerB)
 
@@ -245,4 +463,9 @@ class ShareLaunchTest {
       agentId = agentId,
       sessionKey = sessionKey,
     )
+
+  private fun parseShare(
+    intent: Intent,
+    mimeTypes: Map<Uri, String> = emptyMap(),
+  ): ShareLaunchRequest? = parseShareLaunchIntent(intent) { uri -> mimeTypes[uri] }
 }

@@ -2,6 +2,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { overwriteFileHandle } from "@openclaw/fs-safe/advanced";
 import {
   canonicalPathFromExistingAncestor,
   FsSafeError,
@@ -9,6 +10,23 @@ import {
   root,
 } from "openclaw/plugin-sdk/security-runtime";
 import { inspectStrictBase64 } from "../shared/base64.js";
+import {
+  fileIdentity,
+  matchesFileIdentity,
+  readPathBinding,
+  type FileIdentity,
+  type PathBinding,
+} from "../shared/path-binding.js";
+import {
+  canonicalTargetForSymlinkError,
+  captureWriteBinding,
+  fileWriteError as err,
+  openBoundWriteRoot,
+  symlinkRedirectError,
+  writeFsSafeError,
+  type FileWriteError,
+} from "./file-write-path.js";
+import { rejectCanonicalPathChange } from "./path-errors.js";
 
 const MAX_CONTENT_BYTES = 16 * 1024 * 1024; // 16 MB
 
@@ -19,7 +37,10 @@ type FileWriteParams = {
   createParents: boolean;
   expectedSha256?: string;
   followSymlinks?: boolean;
+  rejectHardlinks?: boolean;
   preflightOnly?: boolean;
+  expectedCanonicalPath?: unknown;
+  expectedBinding?: unknown;
 };
 
 type FileWriteSuccess = {
@@ -28,13 +49,8 @@ type FileWriteSuccess = {
   size: number;
   sha256: string;
   overwritten: boolean;
-};
-
-type FileWriteError = {
-  ok: false;
-  code: string;
-  message: string;
-  canonicalPath?: string;
+  binding: PathBinding;
+  rejectHardlinks?: true;
 };
 
 type FileWriteResult = FileWriteSuccess | FileWriteError;
@@ -43,39 +59,89 @@ function sha256Hex(buf: Buffer): string {
   return crypto.createHash("sha256").update(buf).digest("hex");
 }
 
-function err(code: string, message: string, canonicalPath?: string): FileWriteError {
-  return { ok: false, code, message, ...(canonicalPath ? { canonicalPath } : {}) };
-}
-
-function symlinkRedirectError(error: FsSafeError): FileWriteError {
-  const canonicalTarget =
-    error.cause &&
-    typeof error.cause === "object" &&
-    "canonicalPath" in error.cause &&
-    typeof error.cause.canonicalPath === "string"
-      ? error.cause.canonicalPath
+async function writeBoundTarget(input: {
+  binding: Extract<PathBinding, { kind: "write" }>;
+  buffer: Buffer;
+  canonicalTargetPath: string;
+  rejectHardlinks: boolean;
+}): Promise<
+  { ok: true; path: string; overwritten: boolean; identity: FileIdentity } | FileWriteError
+> {
+  const expectedTarget =
+    input.binding.targetDevice && input.binding.targetInode
+      ? { device: input.binding.targetDevice, inode: input.binding.targetInode }
       : undefined;
-  return err(
-    "SYMLINK_REDIRECT",
-    "path traverses a symlink; refusing because followSymlinks=false (set plugins.entries.file-transfer.config.nodes.<node>.followSymlinks=true to allow, or update allowWritePaths to the canonical path)",
-    canonicalTarget,
-  );
-}
+  if (expectedTarget) {
+    let handle: Awaited<ReturnType<typeof fs.open>>;
+    try {
+      handle = await fs.open(input.canonicalTargetPath, "r+");
+    } catch {
+      return err(
+        "CANONICAL_PATH_CHANGED",
+        "filesystem identity differs from the authorized target",
+        input.canonicalTargetPath,
+      );
+    }
+    try {
+      const stats = await handle.stat({ bigint: true });
+      if (!stats.isFile() || !matchesFileIdentity(stats, expectedTarget)) {
+        return err(
+          "CANONICAL_PATH_CHANGED",
+          "filesystem identity differs from the authorized target",
+          input.canonicalTargetPath,
+        );
+      }
+      // Workspace document writes must not modify aliases outside their allowed path.
+      // Ordinary file.write retains its existing inode-preserving behavior.
+      if (input.rejectHardlinks && stats.nlink > 1n) {
+        return err("HARDLINK_TARGET_DENIED", "refusing to overwrite a file with hard links");
+      }
+      // Preserve the inode authorized by the binding while fs-safe owns write rollback.
+      await overwriteFileHandle(handle, input.buffer);
+      await handle.sync();
+      return {
+        ok: true,
+        path: input.canonicalTargetPath,
+        overwritten: true,
+        identity: fileIdentity(stats),
+      };
+    } finally {
+      await handle.close().catch(() => undefined);
+    }
+  }
 
-function writeFsSafeError(error: FsSafeError, targetPath: string): FileWriteError {
-  if (error.code === "symlink") {
-    return err(
-      "SYMLINK_TARGET_DENIED",
-      `path is a symlink; refusing to write through it: ${targetPath}`,
-    );
+  const anchor = await openBoundWriteRoot(input);
+  if (!anchor.ok) {
+    return anchor;
   }
-  if (error.code === "not-file") {
-    return err("IS_DIRECTORY", `path resolves to a directory: ${targetPath}`);
+  const { anchorRoot, relativeTarget } = anchor;
+  try {
+    await anchorRoot.create(relativeTarget, input.buffer, { mkdir: true });
+    const opened = await anchorRoot.open(relativeTarget);
+    try {
+      const stats = await opened.handle.stat({ bigint: true });
+      return {
+        ok: true,
+        path: opened.realPath,
+        overwritten: false,
+        identity: fileIdentity(stats),
+      };
+    } finally {
+      await opened.handle.close().catch(() => undefined);
+    }
+  } catch (error) {
+    if (error instanceof FsSafeError && error.code === "already-exists") {
+      return err(
+        "CANONICAL_PATH_CHANGED",
+        "filesystem identity differs from the authorized target",
+        input.canonicalTargetPath,
+      );
+    }
+    if (error instanceof FsSafeError) {
+      return writeFsSafeError(error, input.canonicalTargetPath);
+    }
+    return err("WRITE_ERROR", `failed to write file: ${String(error)}`);
   }
-  if (error.code === "already-exists") {
-    return err("EXISTS_NO_OVERWRITE", `file already exists and overwrite is false: ${targetPath}`);
-  }
-  return err("WRITE_ERROR", error.message, targetPath);
 }
 
 export async function handleFileWrite(
@@ -90,6 +156,7 @@ export async function handleFileWrite(
     typeof params?.expectedSha256 === "string" ? params.expectedSha256 : undefined;
   const followSymlinks = params?.followSymlinks === true;
   const preflightOnly = params?.preflightOnly === true;
+  const rejectHardlinks = params?.rejectHardlinks === true;
 
   // 1. Validate path: must be absolute, non-empty, no NUL byte
   if (!rawPath) {
@@ -146,9 +213,29 @@ export async function handleFileWrite(
     parentExists = resolved.parentExists;
   } catch (error) {
     if (error instanceof FsSafeError && error.code === "symlink") {
-      return symlinkRedirectError(error);
+      return symlinkRedirectError(
+        "SYMLINK_REDIRECT",
+        await canonicalTargetForSymlinkError(error, rawPath),
+      );
     }
     throw error;
+  }
+
+  const canonicalTargetPath = await canonicalPathFromExistingAncestor(targetPath);
+  const canonicalPathChange = rejectCanonicalPathChange(
+    params.expectedCanonicalPath,
+    canonicalTargetPath,
+  );
+  if (canonicalPathChange) {
+    return canonicalPathChange;
+  }
+  const expectedBinding = readPathBinding(params.expectedBinding);
+  if (params.expectedBinding !== undefined && expectedBinding?.kind !== "write") {
+    return err(
+      "CANONICAL_PATH_CHANGED",
+      "filesystem identity differs from the authorized target",
+      canonicalTargetPath,
+    );
   }
 
   if (!parentExists) {
@@ -166,17 +253,21 @@ export async function handleFileWrite(
       }
       return {
         ok: true,
-        path: await canonicalPathFromExistingAncestor(targetPath),
+        path: canonicalTargetPath,
         size: buf.length,
         sha256: computedSha256,
         overwritten: false,
+        binding: await captureWriteBinding(canonicalTargetPath),
+        ...(rejectHardlinks ? { rejectHardlinks: true as const } : {}),
       };
     }
-    try {
-      await fs.mkdir(parentDir, { recursive: true });
-    } catch (mkdirErr) {
-      const message = mkdirErr instanceof Error ? mkdirErr.message : String(mkdirErr);
-      return err("WRITE_ERROR", `failed to create parent directories: ${message}`);
+    if (!expectedBinding) {
+      try {
+        await fs.mkdir(parentDir, { recursive: true });
+      } catch (mkdirErr) {
+        const message = mkdirErr instanceof Error ? mkdirErr.message : String(mkdirErr);
+        return err("WRITE_ERROR", `failed to create parent directories: ${message}`);
+      }
     }
   }
 
@@ -186,16 +277,19 @@ export async function handleFileWrite(
     });
   } catch (error) {
     if (error instanceof FsSafeError && error.code === "symlink") {
-      return symlinkRedirectError(error);
+      return symlinkRedirectError(
+        "SYMLINK_REDIRECT",
+        await canonicalTargetForSymlinkError(error, targetPath),
+      );
     }
     throw error;
   }
 
   const targetFileName = path.basename(targetPath);
-  const parentRoot = await root(parentDir);
   let overwritten = false;
+  let existingIdentity: FileIdentity | undefined;
   try {
-    const existingLStat = await fs.lstat(targetPath);
+    const existingLStat = await fs.lstat(targetPath, { bigint: true });
     if (existingLStat.isSymbolicLink()) {
       return err(
         "SYMLINK_TARGET_DENIED",
@@ -211,7 +305,11 @@ export async function handleFileWrite(
         `file already exists and overwrite is false: ${targetPath}`,
       );
     }
+    if (rejectHardlinks && existingLStat.nlink > 1n) {
+      return err("HARDLINK_TARGET_DENIED", "refusing to overwrite a file with hard links");
+    }
     overwritten = true;
+    existingIdentity = fileIdentity(existingLStat);
   } catch (statErr: unknown) {
     const statErrorCode =
       statErr instanceof FsSafeError ? statErr.code : (statErr as NodeJS.ErrnoException).code;
@@ -241,12 +339,36 @@ export async function handleFileWrite(
   if (preflightOnly) {
     return {
       ok: true,
-      path: await canonicalPathFromExistingAncestor(targetPath),
+      path: canonicalTargetPath,
       size: buf.length,
       sha256: computedSha256,
       overwritten,
+      binding: await captureWriteBinding(canonicalTargetPath, existingIdentity),
+      ...(rejectHardlinks ? { rejectHardlinks: true as const } : {}),
     };
   }
+
+  if (expectedBinding?.kind === "write") {
+    const writeResult = await writeBoundTarget({
+      binding: expectedBinding,
+      buffer: buf,
+      canonicalTargetPath,
+      rejectHardlinks,
+    });
+    if (!writeResult.ok) {
+      return writeResult;
+    }
+    return {
+      ok: true,
+      path: writeResult.path,
+      size: buf.length,
+      sha256: computedSha256,
+      overwritten: writeResult.overwritten,
+      binding: { kind: "existing", ...writeResult.identity },
+    };
+  }
+
+  const parentRoot = await root(parentDir);
 
   try {
     if (overwrite) {
@@ -266,9 +388,11 @@ export async function handleFileWrite(
   }
 
   let canonicalPath = targetPath;
+  let finalIdentity: FileIdentity | undefined;
   try {
     const opened = await parentRoot.open(targetFileName);
     canonicalPath = opened.realPath;
+    finalIdentity = fileIdentity(await opened.handle.stat({ bigint: true }));
     await opened.handle.close().catch(() => undefined);
   } catch (openErr) {
     if (openErr instanceof FsSafeError) {
@@ -282,5 +406,9 @@ export async function handleFileWrite(
     size: buf.length,
     sha256: computedSha256,
     overwritten,
+    binding: {
+      kind: "existing",
+      ...(finalIdentity ?? fileIdentity(await fs.stat(canonicalPath, { bigint: true }))),
+    },
   };
 }

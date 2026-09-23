@@ -3,6 +3,7 @@ import { normalizeE164 } from "openclaw/plugin-sdk/account-resolution";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
+import { buildLiveQaApprovalForwardingConfig } from "../shared/live-approval-config.js";
 import type { WhatsAppQaConfigOverrides, WhatsAppQaRuntimeEnv } from "./whatsapp-live.contracts.js";
 
 const WHATSAPP_QA_ENV_KEYS = [
@@ -163,6 +164,7 @@ export function buildWhatsAppQaConfig(
     authDir: string;
     dmPolicy: "allowlist" | "disabled" | "open" | "pairing";
     groupJid?: string;
+    ownerAllowFrom: string[];
     overrides?: WhatsAppQaConfigOverrides;
     sutAccountId: string;
   },
@@ -174,10 +176,6 @@ export function buildWhatsAppQaConfig(
     ? buildNonMatchingWhatsAppQaAllowFrom(params.allowFrom)
     : undefined;
   const groupHistoryLimit = params.overrides?.groupHistoryLimit;
-  const statusReactionOverride =
-    typeof params.overrides?.statusReactions === "object"
-      ? params.overrides.statusReactions
-      : undefined;
   const statusReactionsEnabled = Boolean(params.overrides?.statusReactions);
   const whatsappHistoryLimit =
     typeof groupHistoryLimit === "number" && groupHistoryLimit > 0
@@ -195,46 +193,23 @@ export function buildWhatsAppQaConfig(
           ...baseCfg.tools,
           media: {
             ...baseCfg.tools?.media,
+            models: [
+              {
+                provider: "openai",
+                model: "gpt-4o-transcribe",
+                capabilities: ["audio" as const],
+              },
+              ...(baseCfg.tools?.media?.models ?? []),
+            ],
             audio: {
               ...baseCfg.tools?.media?.audio,
               enabled: true,
-              models: [
-                {
-                  provider: "openai",
-                  model: "gpt-4o-transcribe",
-                },
-              ],
             },
           },
         },
       }
     : {};
-  const approvalForwardingConfig =
-    approvalOverrides?.exec || approvalOverrides?.plugin
-      ? {
-          approvals: {
-            ...baseCfg.approvals,
-            ...(approvalOverrides.exec
-              ? {
-                  exec: {
-                    ...baseCfg.approvals?.exec,
-                    enabled: true,
-                    mode: "session" as const,
-                  },
-                }
-              : {}),
-            ...(approvalOverrides.plugin
-              ? {
-                  plugin: {
-                    ...baseCfg.approvals?.plugin,
-                    enabled: true,
-                    mode: "session" as const,
-                  },
-                }
-              : {}),
-          },
-        }
-      : {};
+  const approvalForwardingConfig = buildLiveQaApprovalForwardingConfig(baseCfg, approvalOverrides);
   const actionToolConfig = params.overrides?.actions
     ? {
         tools: {
@@ -243,12 +218,55 @@ export function buildWhatsAppQaConfig(
         },
       }
     : {};
+  const messagesConfig = {
+    ...baseCfg.messages,
+    ...(params.overrides?.inboundDebounceMs !== undefined
+      ? {
+          inbound: {
+            ...baseCfg.messages?.inbound,
+            byChannel: {
+              ...baseCfg.messages?.inbound?.byChannel,
+              whatsapp: params.overrides.inboundDebounceMs,
+            },
+          },
+        }
+      : {}),
+    ...(params.groupJid
+      ? {
+          groupChat: {
+            ...baseCfg.messages?.groupChat,
+            visibleReplies: "automatic" as const,
+            mentionPatterns: [
+              ...new Set([
+                ...(baseCfg.messages?.groupChat?.mentionPatterns ?? []),
+                "\\bopenclawqa\\b",
+              ]),
+            ],
+          },
+        }
+      : {}),
+    ...(statusReactionsEnabled
+      ? {
+          statusReactions: {
+            ...baseCfg.messages?.statusReactions,
+            enabled: true,
+          },
+        }
+      : {}),
+  };
   return {
     ...baseCfg,
     ...approvalForwardingConfig,
     ...audioPreflightConfig,
     ...broadcastConfig,
     ...actionToolConfig,
+    commands: {
+      ...baseCfg.commands,
+      ownerAllowFrom: uniqueStrings([
+        ...normalizeStringEntries(baseCfg.commands?.ownerAllowFrom),
+        ...params.ownerAllowFrom,
+      ]),
+    },
     plugins: {
       ...baseCfg.plugins,
       allow: pluginAllow,
@@ -257,6 +275,7 @@ export function buildWhatsAppQaConfig(
         whatsapp: { enabled: true },
       },
     },
+    messages: messagesConfig,
     channels: {
       ...baseCfg.channels,
       whatsapp: {
@@ -295,11 +314,6 @@ export function buildWhatsAppQaConfig(
                   replyToMode: params.overrides.replyToMode,
                 }
               : {}),
-            ...(params.overrides?.inboundDebounceMs !== undefined
-              ? {
-                  debounceMs: params.overrides.inboundDebounceMs,
-                }
-              : {}),
             ...(params.groupJid
               ? {
                   groupPolicy,
@@ -325,47 +339,5 @@ export function buildWhatsAppQaConfig(
         },
       },
     },
-    ...(params.groupJid || statusReactionsEnabled
-      ? {
-          messages: {
-            ...baseCfg.messages,
-            ...(params.groupJid
-              ? {
-                  groupChat: {
-                    ...baseCfg.messages?.groupChat,
-                    visibleReplies: "automatic",
-                    mentionPatterns: [
-                      ...new Set([
-                        ...(baseCfg.messages?.groupChat?.mentionPatterns ?? []),
-                        "\\bopenclawqa\\b",
-                      ]),
-                    ],
-                  },
-                }
-              : {}),
-            ...(statusReactionsEnabled
-              ? {
-                  ...(statusReactionOverride?.removeAckAfterReply !== undefined
-                    ? {
-                        removeAckAfterReply: statusReactionOverride.removeAckAfterReply,
-                      }
-                    : {}),
-                  statusReactions: {
-                    ...baseCfg.messages?.statusReactions,
-                    enabled: true,
-                    ...(statusReactionOverride?.timing
-                      ? {
-                          timing: {
-                            ...baseCfg.messages?.statusReactions?.timing,
-                            ...statusReactionOverride.timing,
-                          },
-                        }
-                      : {}),
-                  },
-                }
-              : {}),
-          },
-        }
-      : {}),
   };
 }

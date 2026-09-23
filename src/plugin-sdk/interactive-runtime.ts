@@ -1,20 +1,22 @@
 /**
  * Runtime SDK subpath for interactive replies and message presentation helpers.
  */
+import { reduceLegacyInteractiveReply } from "../interactive/payload.js";
+
 export {
   adaptMessagePresentationForChannel,
   applyPresentationActionLimits,
   presentationPageSize,
-  reduceInteractiveReply,
-} from "../channels/plugins/outbound/interactive.js";
+} from "../channels/plugins/outbound/presentation-limits.js";
+
+/** @deprecated Use MessagePresentation helpers for new rendering paths. */
+export const reduceInteractiveReply = reduceLegacyInteractiveReply;
 export type {
   InteractiveButtonStyle,
   InteractiveReply,
   InteractiveReplyBlock,
   InteractiveReplyButton,
   InteractiveReplyOption,
-  InteractiveReplySelectBlock,
-  InteractiveReplyTextBlock,
   LegacyInteractiveReply,
   LegacyInteractiveReplyBlock,
   LegacyInteractiveReplyButton,
@@ -39,9 +41,11 @@ export type {
   MessagePresentationTableCell,
   MessagePresentationTextBlock,
   MessagePresentationTone,
+  ModelPickerAction,
   ReplyPayloadDelivery,
   ReplyPayloadDeliveryPin,
 } from "../interactive/payload.js";
+export type { ModelPickerCapabilityProfile } from "../model-picker/capabilities.js";
 export {
   hasInteractiveReplyBlocks,
   hasLegacyInteractiveReplyBlocks,
@@ -67,3 +71,4 @@ export {
   reduceLegacyInteractiveReply,
   resolveLegacyInteractiveTextFallback,
 } from "../interactive/payload.js";
+export { renderPresentationForDelivery } from "../channels/plugins/outbound/presentation-delivery.js";

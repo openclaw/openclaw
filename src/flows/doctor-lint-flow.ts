@@ -1,9 +1,11 @@
 // Doctor lint flow runs lint-like doctor checks and formats findings.
+import { OpenClawStateLeaseAcquisitionError } from "../state/openclaw-state-lease-error.js";
 import { scrubDoctorErrorMessage } from "./doctor-error-message.js";
 import { listHealthChecks } from "./health-check-registry.js";
 import {
   HEALTH_FINDING_SEVERITY_RANK,
   healthFindingMeetsSeverity,
+  isHealthCheckEnabledByDefault,
   type HealthCheck,
   type HealthCheckContext,
   type HealthFinding,
@@ -39,7 +41,7 @@ export async function runDoctorLintChecks(
     if (only.size > 0 && !only.has(c.id)) {
       return false;
     }
-    if (only.size === 0 && !includeDefaultDisabled && isDefaultDisabled(c)) {
+    if (only.size === 0 && !includeDefaultDisabled && !isHealthCheckEnabledByDefault(c)) {
       return false;
     }
     if (skip.has(c.id)) {
@@ -50,14 +52,20 @@ export async function runDoctorLintChecks(
 
   const findings: HealthFinding[] = [];
   for (const id of only) {
+    let message: string;
     if (!allIds.has(id)) {
-      findings.push({
-        checkId: "core/doctor/lint-selection",
-        severity: "error",
-        message: `Unknown health check id selected by --only: ${id}.`,
-        path: id,
-      });
+      message = `Unknown health check id selected by --only: ${id}.`;
+    } else if (selected.length === 0 && skip.has(id)) {
+      message = `Health check ${id} cannot be selected by --only and excluded by --skip.`;
+    } else {
+      continue;
     }
+    findings.push({
+      checkId: "core/doctor/lint-selection",
+      severity: "error",
+      message,
+      path: id,
+    });
   }
   for (const check of selected) {
     try {
@@ -66,10 +74,17 @@ export async function runDoctorLintChecks(
         findings.push(f);
       }
     } catch (err) {
+      const aborted =
+        err instanceof OpenClawStateLeaseAcquisitionError && err.outcome.kind === "aborted"
+          ? err.outcome
+          : undefined;
       findings.push({
         checkId: check.id,
-        severity: "error",
-        message: `health check threw: ${scrubDoctorErrorMessage(err)}`,
+        severity: aborted ? "info" : "error",
+        ...(aborted ? { errorCode: "OPENCLAW_STATE_LEASE_ABORTED" } : {}),
+        message: aborted
+          ? `state lease inspection not performed: aborted after ${aborted.elapsedMs} ms by the caller's signal`
+          : `health check threw: ${scrubDoctorErrorMessage(err)}`,
       });
     }
   }
@@ -83,8 +98,12 @@ export async function runDoctorLintChecks(
   };
 }
 
-function isDefaultDisabled(check: HealthCheck): boolean {
-  return "defaultEnabled" in check && check.defaultEnabled === false;
+/** Internal update gate selection; public Doctor lint remains selector-driven. */
+export function selectUpdateReadinessChecks(
+  checks: readonly HealthCheck[],
+  phase: "post-plugin",
+): readonly HealthCheck[] {
+  return checks.filter((check) => "updateReadiness" in check && check.updateReadiness === phase);
 }
 
 // Stable ordering keeps CLI output and tests deterministic across registry order changes.

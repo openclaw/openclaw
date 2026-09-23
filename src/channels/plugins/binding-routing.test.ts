@@ -7,9 +7,14 @@ import {
   type SessionBindingRecord,
 } from "../../infra/outbound/session-binding-service.js";
 import type { ResolvedAgentRoute } from "../../routing/resolve-route.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import { readConversationBindingRouteFacts } from "../conversation-binding-route-facts.js";
 import {
   ensureConfiguredBindingRouteReady,
   resolveRuntimeConversationBindingRoute,
+  resolveRuntimeConversationBindingRouteAsync,
+  inspectRuntimeConversationBindingRoute,
+  type RuntimeConversationBindingRouteResult,
 } from "./binding-routing.js";
 import { registerStatefulBindingTargetDriver } from "./stateful-target-drivers.js";
 
@@ -48,8 +53,8 @@ function registerAdapter(record: SessionBindingRecord | null): {
   const resolveByConversation = vi.fn<SessionBindingAdapter["resolveByConversation"]>(() => record);
   const touch = vi.fn<NonNullable<SessionBindingAdapter["touch"]>>();
   registerSessionBindingAdapter({
-    channel: "demo",
-    accountId: "default",
+    channel: record?.conversation.channel ?? "demo",
+    accountId: record?.conversation.accountId ?? "default",
     listBySession: () => [],
     resolveByConversation,
     touch,
@@ -62,9 +67,120 @@ describe("runtime conversation binding route", () => {
     testing.resetSessionBindingAdaptersForTests();
   });
 
-  it("rewrites the route to a runtime-bound ACP session and touches the binding", () => {
+  it("rechecks the binding after awaiting activity persistence and keeps inspection pure", async () => {
+    let binding = createBinding();
+    const gate = createDeferredCore();
+    const touchAsync = vi.fn(() => gate.promise);
+    const touch = vi.fn();
+    registerSessionBindingAdapter({
+      channel: "demo",
+      accountId: "default",
+      listBySession: () => [],
+      resolveByConversation: () => binding,
+      touch,
+      touchAsync,
+    });
+    const params = { route: createRoute(), conversation: binding.conversation };
+    expect(
+      inspectRuntimeConversationBindingRoute({
+        route: params.route,
+        inspection: { status: "available", binding },
+      }).boundSessionKey,
+    ).toBe(binding.targetSessionKey);
+    expect(touchAsync).not.toHaveBeenCalled();
+    expect(touch).not.toHaveBeenCalled();
+    let settled = false;
+    const pending = resolveRuntimeConversationBindingRouteAsync(params).then((result) => {
+      settled = true;
+      return result;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    binding = createBinding({ targetSessionKey: "agent:replacement:acp:session-2" });
+    gate.resolve();
+    expect((await pending).boundSessionKey).toBe(binding.targetSessionKey);
+    expect(touch).not.toHaveBeenCalled();
+  });
+
+  it("keeps the stable runtime-route result structurally assignable", () => {
+    const result: RuntimeConversationBindingRouteResult = {
+      bindingRecord: null,
+      route: createRoute(),
+    };
+
+    expect(result.bindingOwnerAvailable).toBeUndefined();
+  });
+
+  it.each([
+    { mode: "stable", change: { bindingId: "binding-2" }, label: "new ID" },
+    { mode: "churn", change: { bindingId: "binding-2" }, label: "repeated replacement" },
+    { mode: "stable", change: { boundAt: 2 }, label: "reused ID with new creation time" },
+    {
+      mode: "stable",
+      change: { targetSessionKey: "agent:replacement:main" },
+      label: "reused ID with new target",
+    },
+    { mode: "stable", change: { targetKind: "subagent" }, label: "reused ID with new kind" },
+  ] as const)("settles replacement activity before routing ($label)", async ({ mode, change }) => {
+    let binding = createBinding();
+    const entered = createDeferredCore();
+    const firstTouch = createDeferredCore();
+    const touchAsync = vi
+      .fn(async (_bindingId: string) => {
+        binding =
+          mode === "churn"
+            ? createBinding({ bindingId: "binding-3" })
+            : { ...binding, metadata: { lastActivityAt: 1234 } };
+      })
+      .mockImplementationOnce(async () => {
+        entered.resolve();
+        await firstTouch.promise;
+      });
+    registerSessionBindingAdapter({
+      channel: "demo",
+      accountId: "default",
+      listBySession: () => [],
+      resolveByConversation: () => binding,
+      inspectByConversationAsync: async () => binding,
+      touchAsync,
+    });
+    const pending = resolveRuntimeConversationBindingRouteAsync({
+      route: createRoute(),
+      conversation: binding.conversation,
+    });
+    const failure =
+      mode === "churn" ? expect(pending).rejects.toThrow(/changed.*activity/) : undefined;
+    await entered.promise;
+    const replacement = createBinding({
+      ...change,
+      metadata: { lastActivityAt: 1 },
+    });
+    binding = replacement;
+    firstTouch.resolve();
+    if (failure) {
+      await failure;
+    } else {
+      const result = await pending;
+      expect(result.boundSessionKey).toBe(replacement.targetSessionKey);
+      expect(result.bindingRecord?.metadata?.lastActivityAt).toBe(1234);
+    }
+    expect(touchAsync.mock.calls.map(([bindingId]) => bindingId)).toEqual([
+      "binding-1",
+      replacement.bindingId,
+    ]);
+  });
+
+  it("rewrites the route and touches only the owning channel account's binding", () => {
     const binding = createBinding();
     const { resolveByConversation, touch } = registerAdapter(binding);
+    const siblingTouches = [
+      { channel: "other", accountId: "default" },
+      { channel: "demo", accountId: "other" },
+    ].map(
+      (scope) =>
+        registerAdapter(createBinding({ conversation: { ...binding.conversation, ...scope } }))
+          .touch,
+    );
 
     const result = resolveRuntimeConversationBindingRoute({
       route: createRoute(),
@@ -81,9 +197,12 @@ describe("runtime conversation binding route", () => {
       conversationId: "room-1",
     });
     expect(touch).toHaveBeenCalledWith("binding-1", undefined);
+    for (const siblingTouch of siblingTouches) {
+      expect(siblingTouch).not.toHaveBeenCalled();
+    }
     expect(result.boundSessionKey).toBe("agent:review:acp:session-1");
     expect(result.boundAgentId).toBe("review");
-    expect(result.route).toEqual({
+    expect(Object.fromEntries(Object.entries(result.route))).toEqual({
       agentId: "review",
       accountId: "default",
       channel: "demo",
@@ -117,7 +236,64 @@ describe("runtime conversation binding route", () => {
     expect(touch).toHaveBeenCalledWith("binding-1", undefined);
     expect(result.bindingRecord).toBe(binding);
     expect(result.boundSessionKey).toBeUndefined();
-    expect(result.route).toBe(route);
+    expect(Object.fromEntries(Object.entries(result.route))).toEqual(route);
+    expect(readConversationBindingRouteFacts(route)).toBeUndefined();
+    expect(Object.isFrozen(readConversationBindingRouteFacts(result.route))).toBe(true);
+    expect(readConversationBindingRouteFacts(result.route)?.kind).toBe("plugin");
+  });
+
+  it.each([
+    { targetSessionKey: "global", metadata: { agentId: "review" }, agentId: "review" },
+    { targetSessionKey: "global", metadata: undefined, agentId: "main" },
+    {
+      targetSessionKey: "agent:review:session-1",
+      metadata: { agentId: "other" },
+      agentId: "review",
+    },
+  ])("resolves $targetSessionKey to owner $agentId", ({ targetSessionKey, metadata, agentId }) => {
+    const binding = createBinding({ targetSessionKey, metadata });
+    registerAdapter(binding);
+
+    const result = resolveRuntimeConversationBindingRoute({
+      route: createRoute(),
+      conversation: binding.conversation,
+    });
+
+    expect(result.route).toMatchObject({ sessionKey: targetSessionKey, agentId });
+    expect(result.boundAgentId).toBe(agentId);
+  });
+
+  it("rejects an opaque target when its plugin ownership metadata is missing", () => {
+    const binding = createBinding({
+      targetSessionKey: "plugin-thread-1",
+      metadata: { agentId: "review" },
+    });
+    registerAdapter(binding);
+
+    expect(() =>
+      resolveRuntimeConversationBindingRoute({
+        route: createRoute(),
+        conversation: binding.conversation,
+      }),
+    ).toThrow();
+  });
+
+  it("inspects a runtime-bound route without touching the binding", () => {
+    const { touch } = registerAdapter(createBinding());
+
+    const result = resolveRuntimeConversationBindingRoute({
+      route: createRoute(),
+      touchBinding: false,
+      conversation: {
+        channel: "demo",
+        accountId: "default",
+        conversationId: "room-1",
+      },
+    });
+
+    expect(touch).not.toHaveBeenCalled();
+    expect(result.bindingOwnerAvailable).toBe(true);
+    expect(result.boundSessionKey).toBe("agent:review:acp:session-1");
   });
 
   it("ignores runtime bindings that target isolated cron run sessions", () => {
@@ -139,7 +315,10 @@ describe("runtime conversation binding route", () => {
     expect(touch).not.toHaveBeenCalled();
     expect(result.bindingRecord).toBeNull();
     expect(result.boundSessionKey).toBeUndefined();
-    expect(result.route).toBe(route);
+    expect(Object.fromEntries(Object.entries(result.route))).toEqual(route);
+    expect(readConversationBindingRouteFacts(route)).toBeUndefined();
+    expect(Object.isFrozen(readConversationBindingRouteFacts(result.route))).toBe(true);
+    expect(readConversationBindingRouteFacts(result.route)?.kind).toBe("none");
   });
 });
 

@@ -1,56 +1,48 @@
-// Cache-TTL eligibility coverage for native and provider-routed model families.
+// Cache-TTL delegation, built-in fallback, and session-marker coverage.
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("../../plugins/provider-runtime.js", async () => {
-  const actual = await vi.importActual<typeof import("../../plugins/provider-runtime.js")>(
-    "../../plugins/provider-runtime.js",
-  );
-  return {
-    ...actual,
-    resolveProviderCacheTtlEligibility: (params: {
-      context: { provider: string; modelId: string; modelApi?: string };
-    }) => {
-      // Provider runtime owns model-family-specific eligibility; tests mirror
-      // plugin decisions without loading actual provider plugins.
-      if (params.context.provider === "anthropic") {
-        return true;
-      }
-      if (params.context.provider === "moonshot" || params.context.provider === "zai") {
-        return true;
-      }
-      if (params.context.provider === "openrouter") {
-        return ["anthropic/", "deepseek/", "moonshot/", "moonshotai/", "zai/"].some((prefix) =>
-          params.context.modelId.startsWith(prefix),
-        );
-      }
-      return undefined;
-    },
-  };
-});
+const providerEligibility = vi.hoisted(() => vi.fn());
+
+vi.mock("../../plugins/provider-runtime.js", () => ({
+  resolveProviderCacheTtlEligibility: (params: { context: { provider: string } }) => {
+    providerEligibility(params);
+    if (params.context.provider === "moonshot" || params.context.provider === "zai") {
+      return true;
+    }
+    if (params.context.provider === "openrouter") {
+      return false;
+    }
+    return undefined;
+  },
+}));
 
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "./cache-ttl.js";
 
 describe("isCacheTtlEligibleProvider", () => {
-  it("allows anthropic", () => {
-    expect(isCacheTtlEligibleProvider("anthropic", "claude-sonnet-4-20250514")).toBe(true);
-  });
-
-  it("allows moonshot and zai providers", () => {
-    expect(isCacheTtlEligibleProvider("moonshot", "kimi-k2.5")).toBe(true);
-    expect(isCacheTtlEligibleProvider("zai", "glm-5")).toBe(true);
+  it("forwards only the normalized identity and bounded resolved route", () => {
+    providerEligibility.mockClear();
+    const route = {
+      baseUrl: "https://proxy.example/v1",
+      supportsPromptCacheKey: false,
+      headers: { "x-test-private": "not-for-provider-hooks" },
+      apiKey: "synthetic-not-for-provider-hooks",
+    };
+    isCacheTtlEligibleProvider(" OPENAI ", " GPT-4O ", "openai-responses", route);
+    expect(providerEligibility).toHaveBeenCalledExactlyOnceWith({
+      provider: "openai",
+      context: {
+        provider: "openai",
+        modelId: "gpt-4o",
+        modelApi: "openai-responses",
+        baseUrl: "https://proxy.example/v1",
+        supportsPromptCacheKey: false,
+      },
+    });
   });
 
   it("is case-insensitive for native providers", () => {
     expect(isCacheTtlEligibleProvider("Moonshot", "Kimi-K2.5")).toBe(true);
     expect(isCacheTtlEligibleProvider("ZAI", "GLM-5")).toBe(true);
-  });
-
-  it("allows openrouter cache-ttl models", () => {
-    expect(isCacheTtlEligibleProvider("openrouter", "anthropic/claude-sonnet-4")).toBe(true);
-    expect(isCacheTtlEligibleProvider("openrouter", "deepseek/deepseek-v3.2")).toBe(true);
-    expect(isCacheTtlEligibleProvider("openrouter", "moonshotai/kimi-k2.5")).toBe(true);
-    expect(isCacheTtlEligibleProvider("openrouter", "moonshot/kimi-k2.5")).toBe(true);
-    expect(isCacheTtlEligibleProvider("openrouter", "zai/glm-5")).toBe(true);
   });
 
   it("rejects unsupported providers and models", () => {
@@ -91,7 +83,7 @@ describe("isCacheTtlEligibleProvider", () => {
 });
 
 describe("readLastCacheTtlTimestamp", () => {
-  it("returns the latest matching timestamp for the active provider/model", () => {
+  it("returns the latest matching timestamp while ignoring projection metadata", () => {
     // Replay only reuses cache TTL entries scoped to the current model target;
     // stale entries for other providers must not reset pruning clocks.
     const sessionManager = {
@@ -103,6 +95,8 @@ describe("readLastCacheTtlTimestamp", () => {
             timestamp: 1_700_000_000_000,
             provider: "anthropic",
             modelId: "claude-sonnet-4-5",
+            prunedToolResults: [{ key: "tool:old:42", mode: "hard" }],
+            ambiguousToolResultBaseKeys: [],
           },
         },
         {
@@ -112,6 +106,14 @@ describe("readLastCacheTtlTimestamp", () => {
             timestamp: 1_700_000_001_000,
             provider: "google",
             modelId: "gemini-3.1-pro-preview",
+          },
+        },
+        {
+          type: "custom",
+          customType: "openclaw.cache-ttl",
+          data: {
+            prunedToolResults: [],
+            frozenToolResults: [{ key: "tool:new:43", sourceHash: "hash" }],
           },
         },
       ],

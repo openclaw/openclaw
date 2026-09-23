@@ -1,13 +1,15 @@
 // Gateway daemon install plan builder, including service env and SecretRef passthrough policy.
-import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { resolveConfigWidePluginManifestRegistry } from "../config/io.plugin-metadata.js";
+import { collectEnvSecretRefIds, resolveConfigSecretRef } from "../config/resolution-facts.js";
 import { collectDurableServiceEnvVarSources } from "../config/state-dir-dotenv.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { coerceSecretRef, resolveSecretInputRef, type SecretRef } from "../config/types.secrets.js";
+import { resolveSecretInputRef, type SecretRef } from "../config/types.secrets.js";
 import { resolveGatewayLaunchAgentLabel } from "../daemon/constants.js";
+import { resolveLaunchAgentLabel } from "../daemon/launchd-label.js";
+import { resolveLaunchAgentEnvWrapperPath } from "../daemon/launchd-service-files.js";
 import { resolveGatewayStateDir, resolveGatewayTaskScriptPath } from "../daemon/paths.js";
 import {
   OPENCLAW_WRAPPER_ENV_KEY,
@@ -23,25 +25,28 @@ import { applyManagedServiceEnvRenderPolicy } from "../daemon/service-env-render
 import { buildServiceEnvironment } from "../daemon/service-env.js";
 import {
   formatManagedServiceEnvKeys,
-  hasEnvironmentFileSource,
+  readEnvironmentValueSource,
   readManagedServiceEnvKeysFromEnvironment,
 } from "../daemon/service-managed-env.js";
-import { isNonMinimalServicePathEntry } from "../daemon/service-path-policy.js";
-import type { GatewayServiceEnvironmentValueSource } from "../daemon/service-types.js";
+import { mergeServicePath } from "../daemon/service-path-policy.js";
+import {
+  resolveManagedGatewayServiceCommand,
+  type GatewayServiceCommandConfig,
+  type GatewayServiceEnvironmentValueSource,
+} from "../daemon/service-types.js";
 import {
   isDangerousHostEnvOverrideVarName,
   isDangerousHostEnvVarName,
   normalizeEnvVarKey,
 } from "../infra/host-env-security.js";
-import {
-  loadPluginManifestRegistry,
-  type PluginManifestRegistry,
-} from "../plugins/manifest-registry.js";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
   isPluginIntegrationSecretProviderConfig,
   resolveSecretProviderIntegrationConfig,
 } from "../secrets/provider-integrations.js";
 import { collectPluginConfigAssignments } from "../secrets/runtime-config-collectors-plugins.js";
+import { evaluateGatewayAuthSurfaceStates } from "../secrets/runtime-gateway-auth-surfaces.js";
+import { hasSecretRefCandidate } from "../secrets/runtime-secret-scan.js";
 import { createResolverContext } from "../secrets/runtime-shared.js";
 import { discoverConfigSecretTargets } from "../secrets/target-registry.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
@@ -49,43 +54,18 @@ import {
   emitDaemonInstallRuntimeWarning,
   resolveDaemonInstallRuntimeInputs,
   resolveDaemonServicePathDirs,
+  type GatewayInstallPlan,
 } from "./daemon-install-plan.shared.js";
 import type { DaemonInstallWarnFn } from "./daemon-install-runtime-warning.js";
 import type { GatewayDaemonRuntime } from "./daemon-runtime.js";
 
-type GatewayInstallPlan = {
-  programArguments: string[];
-  workingDirectory?: string;
-  environment: Record<string, string | undefined>;
-  environmentValueSources?: Record<string, GatewayServiceEnvironmentValueSource | undefined>;
-};
-
+// Gateway ingress secrets must never be newly materialized into supervisor metadata.
+// Existing active service values are retained separately during regeneration.
 const NON_PERSISTED_CONFIG_SECRET_ENV_TARGET_IDS = new Set([
   "gateway.auth.password",
   "gateway.auth.token",
 ]);
 const EXEC_SECRET_REF_PASS_ENV_ALLOWED_OVERRIDE_ONLY_KEYS = new Set(["HOME"]);
-
-function configContainsSecretRef(config: OpenClawConfig | undefined): boolean {
-  if (!config) {
-    return false;
-  }
-  const pending: unknown[] = [config];
-  const seen = new Set<object>();
-  const defaults = config.secrets?.defaults;
-  while (pending.length > 0) {
-    const value = pending.pop();
-    if (coerceSecretRef(value, defaults)) {
-      return true;
-    }
-    if (!value || typeof value !== "object" || seen.has(value)) {
-      continue;
-    }
-    seen.add(value);
-    pending.push(...Object.values(value));
-  }
-  return false;
-}
 
 function isBlockedExecSecretRefPassEnvKey(key: string): boolean {
   if (isDangerousHostEnvVarName(key)) {
@@ -104,6 +84,11 @@ const loadDaemonInstallAuthProfileSourceRuntime = createLazyPromise(
 
 const loadDaemonInstallAuthProfileStoreRuntime = createLazyPromise(
   () => import("./daemon-install-auth-profiles-store.runtime.js"),
+  { cacheRejections: true },
+);
+
+const loadDaemonInstallProviderManifestRuntime = createLazyPromise(
+  () => import("../plugins/manifest-contract-eligibility.js"),
   { cacheRejections: true },
 );
 
@@ -174,6 +159,82 @@ function collectAuthProfileServiceEnvVars(params: {
   return entries;
 }
 
+async function collectAmbientProviderApiKeyServiceEnvVars(params: {
+  env: Record<string, string | undefined>;
+  config?: OpenClawConfig;
+  durableEnvironment: Record<string, string | undefined>;
+  authProfileEnvironment: Record<string, string | undefined>;
+  existingEnvironment?: Record<string, string | undefined>;
+  platform: NodeJS.Platform;
+}): Promise<Record<string, string>> {
+  if (params.platform !== "linux") {
+    return {};
+  }
+  const existingManagedKeys = readManagedServiceEnvKeysFromEnvironment(params.existingEnvironment);
+  const ownedKeys = new Set(
+    [
+      ...Object.keys(params.durableEnvironment),
+      ...Object.keys(params.authProfileEnvironment),
+      ...Object.entries(params.existingEnvironment ?? {}).flatMap(([key, value]) =>
+        existingManagedKeys.has(key.toUpperCase()) && params.env[key]?.trim() !== value?.trim()
+          ? []
+          : [key],
+      ),
+    ].map((key) => key.toUpperCase()),
+  );
+  const candidates = new Map(
+    Object.entries(params.env).flatMap(([rawKey, rawValue]) => {
+      const key = normalizeEnvVarKey(rawKey, { portable: true })?.toUpperCase();
+      const value = rawValue?.trim();
+      return key &&
+        key.endsWith("_API_KEY") &&
+        !key.endsWith("_ADMIN_API_KEY") &&
+        !ownedKeys.has(key) &&
+        value &&
+        !isDangerousHostEnvVarName(key) &&
+        !isDangerousHostEnvOverrideVarName(key)
+        ? [[key, value] as const]
+        : [];
+    }),
+  );
+  if (candidates.size === 0) {
+    return {};
+  }
+  const { isManifestPluginAvailableForControlPlane, loadManifestMetadataSnapshot } =
+    await loadDaemonInstallProviderManifestRuntime();
+  const config = params.config ?? {};
+  const snapshot = loadManifestMetadataSnapshot({ config, env: params.env });
+  return Object.fromEntries(
+    snapshot.plugins.flatMap((plugin) => {
+      if (
+        (plugin.origin !== "bundled" && plugin.trustedOfficialInstall !== true) ||
+        !isManifestPluginAvailableForControlPlane({ snapshot, plugin, config })
+      ) {
+        return [];
+      }
+      const providers = new Set(
+        (plugin.providerAuthChoices ?? [])
+          .filter(
+            ({ method, appGuidedSecret, onboardingScopes }) =>
+              method === "api-key" &&
+              appGuidedSecret === true &&
+              (!onboardingScopes || onboardingScopes.includes("text-inference")),
+          )
+          .map(({ provider }) => provider),
+      );
+      return (plugin.setup?.providers ?? [])
+        .filter(({ id }) => providers.has(id))
+        .flatMap(({ envVars = [] }) =>
+          envVars.flatMap((name) => {
+            const key = normalizeEnvVarKey(name, { portable: true })?.toUpperCase();
+            const value = key ? candidates.get(key) : undefined;
+            return key && value ? [[key, value] as const] : [];
+          }),
+        );
+    }),
+  );
+}
+
 type ExecSecretRefPassEnvSource = {
   ref: SecretRef;
   warningTitle: "Config SecretRef" | "Auth profile" | "Plugin config SecretRef";
@@ -191,15 +252,23 @@ function collectConfigSecretRefServiceEnvSources(params: {
   if (!params.config || !params.configContainsSecretRef) {
     return { keys: [], environment };
   }
+  const gatewayAuthSurfaceStates = evaluateGatewayAuthSurfaceStates({
+    config: params.config,
+    env: params.env as NodeJS.ProcessEnv,
+    defaults: params.config.secrets?.defaults,
+  });
   for (const target of discoverConfigSecretTargets(params.config)) {
     if (!target.entry.includeInPlan) {
       continue;
     }
-    if (NON_PERSISTED_CONFIG_SECRET_ENV_TARGET_IDS.has(target.entry.id)) {
-      continue;
-    }
     const { ref } = resolveSecretInputRef({
-      value: target.value,
+      value: resolveConfigSecretRef({
+        config: params.config,
+        path: target.path,
+        value: target.value,
+        defaults: params.config.secrets?.defaults,
+        includeResolved: true,
+      }),
       refValue: target.refValue,
       defaults: params.config.secrets?.defaults,
     });
@@ -219,6 +288,14 @@ function collectConfigSecretRefServiceEnvSources(params: {
         `Config SecretRef env ref "${key}" blocked by host-env security policy`,
         "Config SecretRef",
       );
+      continue;
+    }
+    if (NON_PERSISTED_CONFIG_SECRET_ENV_TARGET_IDS.has(target.entry.id)) {
+      const surface =
+        gatewayAuthSurfaceStates[target.entry.id as keyof typeof gatewayAuthSurfaceStates];
+      if (surface?.active) {
+        keys.add(key.toUpperCase());
+      }
       continue;
     }
     keys.add(key.toUpperCase());
@@ -254,7 +331,13 @@ function collectExecSecretRefPassEnvServiceEnvVars(params: {
         continue;
       }
       const { ref } = resolveSecretInputRef({
-        value: target.value,
+        value: resolveConfigSecretRef({
+          config: params.config,
+          path: target.path,
+          value: target.value,
+          defaults: params.config.secrets?.defaults,
+          includeResolved: true,
+        }),
         refValue: target.refValue,
         defaults: params.config.secrets?.defaults,
       });
@@ -286,7 +369,7 @@ function collectExecSecretRefPassEnvServiceEnvVars(params: {
     }
     const execProvider = isPluginIntegrationSecretProviderConfig(provider)
       ? (() => {
-          manifestRegistry ??= loadPluginManifestRegistry({
+          manifestRegistry ??= resolveConfigWidePluginManifestRegistry({
             config: params.config,
             env: params.env,
           });
@@ -319,6 +402,10 @@ function collectExecSecretRefPassEnvServiceEnvVars(params: {
         );
         continue;
       }
+      const value = Object.hasOwn(params.env, key) ? params.env[key]?.trim() : undefined;
+      if (!value) {
+        continue;
+      }
       if (isBlockedExecSecretRefPassEnvKey(key)) {
         params.warn?.(
           `Exec SecretRef passEnv ref "${key}" blocked by host-env security policy`,
@@ -327,10 +414,6 @@ function collectExecSecretRefPassEnvServiceEnvVars(params: {
         continue;
       }
       if (Object.hasOwn(params.durableEnvironment, key)) {
-        continue;
-      }
-      const value = params.env[key]?.trim();
-      if (!value) {
         continue;
       }
       entries[key] = value;
@@ -355,110 +438,13 @@ function collectPluginConfigSecretRefs(params: {
   return context.assignments.map((assignment) => assignment.ref);
 }
 
-function mergeServicePath(
-  nextPath: string | undefined,
-  existingPath: string | undefined,
-  tmpDir: string | undefined,
-  platform: NodeJS.Platform,
-): string | undefined {
-  const segments: string[] = [];
-  const seen = new Set<string>();
-  const normalizedTmpDirs = [tmpDir, os.tmpdir()]
-    .map((value) => value?.trim())
-    .filter((value): value is string => Boolean(value))
-    .map((value) => path.resolve(value));
-  const realTmpDirs = normalizedTmpDirs.map((tmpRoot) => {
-    try {
-      return path.normalize(fs.realpathSync.native(tmpRoot));
-    } catch {
-      return tmpRoot;
-    }
-  });
-  const isSameOrChildPath = (candidate: string, parent: string) =>
-    candidate === parent || candidate.startsWith(`${parent}${path.sep}`);
-  const isUnsafeProcPath = (candidate: string) =>
-    candidate === `${path.sep}proc` || candidate.startsWith(`${path.sep}proc${path.sep}`);
-  const realpathExistingPath = (candidate: string): string | undefined => {
-    const parts: string[] = [];
-    let current = candidate;
-    while (current && current !== path.dirname(current)) {
-      try {
-        const realCurrent = path.normalize(fs.realpathSync.native(current));
-        return path.normalize(path.join(realCurrent, ...parts.toReversed()));
-      } catch {
-        parts.push(path.basename(current));
-        current = path.dirname(current);
-      }
-    }
-    try {
-      return path.normalize(path.join(fs.realpathSync.native(current), ...parts.toReversed()));
-    } catch {
-      return undefined;
-    }
-  };
-  const normalizePreservedPathSegment = (segment: string): string | undefined => {
-    if (!path.isAbsolute(segment)) {
-      return undefined;
-    }
-    const normalized = path.normalize(segment);
-    if (isUnsafeProcPath(normalized)) {
-      return undefined;
-    }
-    const cwd = path.resolve(process.cwd());
-    if (isSameOrChildPath(normalized, cwd)) {
-      return undefined;
-    }
-    try {
-      const realSegment = realpathExistingPath(normalized);
-      const realCwd = path.normalize(fs.realpathSync.native(cwd));
-      if (realSegment && isSameOrChildPath(realSegment, realCwd)) {
-        return undefined;
-      }
-    } catch {
-      // Legacy PATH entries may no longer exist; keep filtering best-effort.
-    }
-    return normalized;
-  };
-  const shouldPreserveNormalizedPathSegment = (segment: string) => {
-    if (isNonMinimalServicePathEntry(segment, platform)) {
-      return false;
-    }
-    const resolved = path.resolve(segment);
-    const realResolved = realpathExistingPath(resolved) ?? resolved;
-    return ![...normalizedTmpDirs, ...realTmpDirs].some(
-      (tmpRoot) => isSameOrChildPath(resolved, tmpRoot) || isSameOrChildPath(realResolved, tmpRoot),
-    );
-  };
-  const addPath = (value: string | undefined, options?: { preserve?: boolean }) => {
-    if (typeof value !== "string" || value.trim().length === 0) {
-      return;
-    }
-    for (const segment of value.split(path.delimiter)) {
-      const trimmed = segment.trim();
-      const candidate = options?.preserve ? normalizePreservedPathSegment(trimmed) : trimmed;
-      if (options?.preserve && (!candidate || !shouldPreserveNormalizedPathSegment(candidate))) {
-        continue;
-      }
-      if (!candidate || seen.has(candidate)) {
-        continue;
-      }
-      seen.add(candidate);
-      segments.push(candidate);
-    }
-  };
-  addPath(nextPath);
-  if (platform !== "darwin") {
-    addPath(existingPath, { preserve: true });
-  }
-  return segments.length > 0 ? segments.join(path.delimiter) : undefined;
-}
-
 // Operator opt-in env vars that should survive service regeneration even though
 // they share the OPENCLAW_ prefix that is otherwise stripped from preserved
 // environments. These represent intentional, user-placed configuration on the
 // service definition that the install/repair flow should not silently revert.
 const PRESERVED_OPENCLAW_OPERATOR_OPT_IN_ENV_KEYS = new Set([
   "OPENCLAW_CLI_CONTAINER_BYPASS",
+  "OPENCLAW_CONFIG_READONLY",
   "OPENCLAW_CONTAINER_HINT",
 ]);
 
@@ -477,10 +463,12 @@ function collectPreservedExistingServiceEnvVars(
       continue;
     }
     const upper = key.toUpperCase();
+    // Like OPENCLAW_SQLITE_LIBRARY, HOMEBREW_PREFIX must regenerate from each install/repair invocation.
     if (
       upper === "HOME" ||
       upper === "PATH" ||
       upper === "TMPDIR" ||
+      upper === "HOMEBREW_PREFIX" ||
       (upper.startsWith("OPENCLAW_") && !PRESERVED_OPENCLAW_OPERATOR_OPT_IN_ENV_KEYS.has(upper))
     ) {
       continue;
@@ -500,28 +488,8 @@ function collectPreservedExistingServiceEnvVars(
   return preserved;
 }
 
-function readExistingEnvironmentValueSource(params: {
-  existingEnvironmentValueSources?: Record<
-    string,
-    GatewayServiceEnvironmentValueSource | undefined
-  >;
-  normalizedKey: string;
-}): GatewayServiceEnvironmentValueSource | undefined {
-  for (const [rawKey, source] of Object.entries(params.existingEnvironmentValueSources ?? {})) {
-    const key = normalizeEnvVarKey(rawKey, { portable: true })?.toUpperCase();
-    if (key === params.normalizedKey) {
-      return source;
-    }
-  }
-  return undefined;
-}
-
-function collectExistingEnvironmentFileManagedServiceEnvVars(params: {
+function collectExistingConfigSecretRefServiceEnvVars(params: {
   existingEnvironment: Record<string, string | undefined> | undefined;
-  existingEnvironmentValueSources?: Record<
-    string,
-    GatewayServiceEnvironmentValueSource | undefined
-  >;
   configSecretRefKeys: ReadonlySet<string>;
 }): Record<string, string | undefined> {
   if (!params.existingEnvironment || params.configSecretRefKeys.size === 0) {
@@ -538,13 +506,6 @@ function collectExistingEnvironmentFileManagedServiceEnvVars(params: {
       continue;
     }
     if (isDangerousHostEnvVarName(key) || isDangerousHostEnvOverrideVarName(key)) {
-      continue;
-    }
-    const source = readExistingEnvironmentValueSource({
-      existingEnvironmentValueSources: params.existingEnvironmentValueSources,
-      normalizedKey,
-    });
-    if (!hasEnvironmentFileSource(source)) {
       continue;
     }
     const value = rawValue?.trim();
@@ -612,7 +573,9 @@ async function buildGatewayInstallEnvironment(params: {
       config: params.config,
     });
   // Full target discovery materializes plugin metadata; configs without refs do not need it.
-  const containsConfigSecretRef = configContainsSecretRef(params.config);
+  const containsConfigSecretRef =
+    hasSecretRefCandidate(params.config, params.config?.secrets?.defaults) ||
+    collectEnvSecretRefIds(params.config).size > 0;
   const { keys: configSecretRefKeys, environment: configSecretRefEnvironment } =
     collectConfigSecretRefServiceEnvSources({
       env: params.env,
@@ -635,6 +598,14 @@ async function buildGatewayInstallEnvironment(params: {
     authStore,
     warn: params.warn,
   });
+  const ambientProviderApiKeyEnvironment = await collectAmbientProviderApiKeyServiceEnvVars({
+    env: params.env,
+    config: params.config,
+    durableEnvironment,
+    authProfileEnvironment,
+    existingEnvironment: params.existingEnvironment,
+    platform: params.platform,
+  });
   const stateDirDotEnvRenderEnvironment = omitEnvironmentEntriesShadowedBy(
     stateDirDotEnvEnvironment,
     [
@@ -651,11 +622,9 @@ async function buildGatewayInstallEnvironment(params: {
   const plan = createMutableServiceEnvPlan();
   addServiceEnvPlanEntries(plan, preservedExistingEnvironment, {
     valueSource: ({ normalizedKey }) =>
-      readExistingEnvironmentValueSource({
-        existingEnvironmentValueSources: params.existingEnvironmentValueSources,
-        normalizedKey,
-      }) ?? "inline",
+      readEnvironmentValueSource(params.existingEnvironmentValueSources, normalizedKey) ?? "inline",
   });
+  addServiceEnvPlanEntries(plan, ambientProviderApiKeyEnvironment, { valueSource: "file" });
   addServiceEnvPlanEntries(plan, stateDirDotEnvEnvironment, {});
   addServiceEnvPlanEntries(plan, configEnvironment, {});
   addServiceEnvPlanEntries(plan, configSecretRefEnvironment, {});
@@ -672,10 +641,9 @@ async function buildGatewayInstallEnvironment(params: {
     },
     { omitKeys: Object.keys(params.serviceEnvironment) },
   );
-  const existingEnvironmentFileRenderEnvironment = omitEnvironmentEntriesShadowedBy(
-    collectExistingEnvironmentFileManagedServiceEnvVars({
+  const existingSecretRefRenderEnvironment = omitEnvironmentEntriesShadowedBy(
+    collectExistingConfigSecretRefServiceEnvVars({
       existingEnvironment: params.existingEnvironment,
-      existingEnvironmentValueSources: params.existingEnvironmentValueSources,
       configSecretRefKeys: new Set(configSecretRefKeys),
     }),
     [
@@ -690,7 +658,7 @@ async function buildGatewayInstallEnvironment(params: {
     managedServiceEnvKeys,
     serviceEnvironment: params.serviceEnvironment,
     platform: params.platform,
-    existingEnvironmentFileEnvironment: existingEnvironmentFileRenderEnvironment,
+    existingSecretRefEnvironment: existingSecretRefRenderEnvironment,
     stateDirDotEnvEnvironment: stateDirDotEnvRenderEnvironment,
     configSecretRefEnvironment,
   });
@@ -718,10 +686,13 @@ async function buildGatewayInstallEnvironment(params: {
 export async function buildGatewayInstallPlan(params: {
   env: Record<string, string | undefined>;
   port: number;
+  allowUnconfigured?: boolean;
   runtime: GatewayDaemonRuntime;
   existingEnvironment?: Record<string, string | undefined>;
+  existingCommand?: GatewayServiceCommandConfig | null;
   devMode?: boolean;
-  nodePath?: string;
+  runtimePath?: string;
+  pinnedRuntimePath?: string;
   wrapperPath?: string;
   platform?: NodeJS.Platform;
   warn?: DaemonInstallWarnFn;
@@ -734,36 +705,54 @@ export async function buildGatewayInstallPlan(params: {
   >;
 }): Promise<GatewayInstallPlan> {
   const platform = params.platform ?? process.platform;
-  const { devMode, nodePath } = await resolveDaemonInstallRuntimeInputs({
+  const wrapperInput = params.wrapperPath ?? params.env[OPENCLAW_WRAPPER_ENV_KEY];
+  const generatedWrapperPath =
+    platform === "win32"
+      ? resolveGatewayTaskScriptPath(params.env)
+      : platform === "darwin"
+        ? resolveLaunchAgentEnvWrapperPath(params.env, resolveLaunchAgentLabel(params.env))
+        : undefined;
+  const wrapperPointsAtGeneratedScript =
+    generatedWrapperPath !== undefined &&
+    normalizeServicePathForCompare(wrapperInput, platform) ===
+      normalizeServicePathForCompare(generatedWrapperPath, platform);
+  if (wrapperPointsAtGeneratedScript) {
+    params.warn?.(
+      platform === "win32"
+        ? `Ignoring ${OPENCLAW_WRAPPER_ENV_KEY} because it points to the Windows task script; using the OpenClaw gateway entrypoint directly to avoid a recursive gateway.cmd wrapper.`
+        : `Ignoring ${OPENCLAW_WRAPPER_ENV_KEY} because it points to the generated LaunchAgent environment wrapper; using the OpenClaw gateway entrypoint directly to avoid a self-referencing wrapper.`,
+    );
+  }
+  const wrapperPath = wrapperPointsAtGeneratedScript
+    ? undefined
+    : await resolveOpenClawWrapperPath(wrapperInput);
+  const { devMode, runtimePath } = await resolveDaemonInstallRuntimeInputs({
     env: params.env,
     runtime: params.runtime,
     devMode: params.devMode,
-    nodePath: params.nodePath,
+    runtimePath: params.runtimePath,
+    pinnedRuntimePath: params.pinnedRuntimePath,
+    wrapperPath,
   });
-  const wrapperInput = params.wrapperPath ?? params.env[OPENCLAW_WRAPPER_ENV_KEY];
-  const wrapperPointsAtWindowsTaskScript =
-    Boolean(wrapperInput?.trim()) &&
-    platform === "win32" &&
-    isSameServicePath(wrapperInput, resolveGatewayTaskScriptPath(params.env), platform);
-  if (wrapperPointsAtWindowsTaskScript) {
-    params.warn?.(
-      `Ignoring ${OPENCLAW_WRAPPER_ENV_KEY} because it points to the Windows task script; using the OpenClaw gateway entrypoint directly to avoid a recursive gateway.cmd wrapper.`,
-    );
+  const serviceInputEnv = { ...params.env };
+  if (wrapperPath) {
+    serviceInputEnv[OPENCLAW_WRAPPER_ENV_KEY] = wrapperPath;
+  } else if (wrapperPointsAtGeneratedScript) {
+    delete serviceInputEnv[OPENCLAW_WRAPPER_ENV_KEY];
   }
-  const wrapperPath = wrapperPointsAtWindowsTaskScript
-    ? undefined
-    : await resolveOpenClawWrapperPath(wrapperInput);
-  const serviceInputEnv: Record<string, string | undefined> = wrapperPath
-    ? { ...params.env, [OPENCLAW_WRAPPER_ENV_KEY]: wrapperPath }
-    : wrapperPointsAtWindowsTaskScript
-      ? omitEnvKey(params.env, OPENCLAW_WRAPPER_ENV_KEY)
-      : params.env;
   const { programArguments, workingDirectory } = await resolveGatewayProgramArguments({
     port: params.port,
+    allowUnconfigured:
+      params.allowUnconfigured ??
+      (params.config?.gateway?.mode === "remote" &&
+        resolveManagedGatewayServiceCommand(params.existingCommand)?.programArguments.includes(
+          "--allow-unconfigured",
+        ) === true),
     dev: devMode,
     runtime: params.runtime,
-    nodePath,
+    runtimePath,
     wrapperPath,
+    ...(params.existingCommand ? { existingCommand: params.existingCommand } : {}),
   });
   await emitDaemonInstallRuntimeWarning({
     env: params.env,
@@ -775,14 +764,16 @@ export async function buildGatewayInstallPlan(params: {
   const serviceEnvironment = buildServiceEnvironment({
     env: serviceInputEnv,
     port: params.port,
-    existingNodeOptions: params.existingEnvironment?.NODE_OPTIONS,
+    runtime: params.runtime,
+    existingNodeOptions: resolveManagedGatewayServiceCommand(params.existingCommand)?.environment
+      ?.NODE_OPTIONS,
     launchdLabel:
       platform === "darwin"
         ? resolveGatewayLaunchAgentLabel(serviceInputEnv.OPENCLAW_PROFILE)
         : undefined,
     platform,
     extraPathDirs: resolveDaemonServicePathDirs({
-      nodePath,
+      runtimePath,
       env: serviceInputEnv,
       platform,
     }),
@@ -821,25 +812,6 @@ function normalizeServicePathForCompare(
     return undefined;
   }
   return platform === "win32" ? path.win32.resolve(trimmed).toLowerCase() : path.resolve(trimmed);
-}
-
-function isSameServicePath(
-  left: string | undefined,
-  right: string | undefined,
-  platform: NodeJS.Platform,
-): boolean {
-  const normalizedLeft = normalizeServicePathForCompare(left, platform);
-  const normalizedRight = normalizeServicePathForCompare(right, platform);
-  return Boolean(normalizedLeft && normalizedRight && normalizedLeft === normalizedRight);
-}
-
-function omitEnvKey(
-  env: Record<string, string | undefined>,
-  key: string,
-): Record<string, string | undefined> {
-  const next = { ...env };
-  delete next[key];
-  return next;
 }
 
 /** Return the user-facing recovery hint for failed Gateway service installation. */

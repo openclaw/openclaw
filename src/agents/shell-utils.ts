@@ -1,16 +1,14 @@
 /**
  * Shell execution helpers.
  *
- * Resolves platform shell commands, sanitizes binary output, and exposes process-tree cleanup.
+ * Resolves platform shell commands and sanitizes binary output.
  */
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { AnsiSequenceStripper } from "../../packages/terminal-core/src/ansi-sequences.js";
 import { stripAnsiForStreamChunk } from "../../packages/terminal-core/src/ansi.js";
-import {
-  killProcessTree as killProcessTreeGracefully,
-  type KillProcessTreeOptions,
-} from "../process/kill-tree.js";
+import { resolveExecutableFromPathEnv } from "../infra/executable-path.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { getBinDir } from "./config.js";
 
 type ShellConfig = {
@@ -132,12 +130,7 @@ function resolveWindowsGitBashUsrBin(shellPath: string): string | undefined {
     fs.existsSync(usrBin)
       ? usrBin
       : undefined;
-  if (windowsGitBashUsrBinCache.size >= WINDOWS_GIT_BASH_CACHE_LIMIT) {
-    const oldestKey = windowsGitBashUsrBinCache.keys().next().value;
-    if (oldestKey) {
-      windowsGitBashUsrBinCache.delete(oldestKey);
-    }
-  }
+  pruneMapToMaxSize(windowsGitBashUsrBinCache, WINDOWS_GIT_BASH_CACHE_LIMIT - 1);
   windowsGitBashUsrBinCache.set(cacheKey, resolved);
   return resolved;
 }
@@ -249,12 +242,19 @@ export function getBashShellConfig(customShellPath?: string): ShellConfig {
     return resolveBashCommandConfig("/bin/bash");
   }
 
-  const shell =
-    resolveShellFromPath("bash") ??
-    resolveShellFromWhich("bash") ??
-    resolveShellFromPath("sh") ??
-    "sh";
-  return resolveBashCommandConfig(shell);
+  let shell = resolveShellFromPath("bash");
+  if (!shell) {
+    try {
+      // The which fallback also searched cwd for empty PATH entries.
+      shell = resolveExecutableFromPathEnv("bash", process.env.PATH ?? "", process.env, {
+        cwd: process.cwd(),
+        useCache: false,
+      });
+    } catch {
+      // An unavailable cwd must not prevent the remaining sh fallback.
+    }
+  }
+  return resolveBashCommandConfig(shell ?? resolveShellFromPath("sh") ?? "sh");
 }
 
 function resolveShellFromPath(
@@ -266,36 +266,20 @@ function resolveShellFromPath(
     return undefined;
   }
   const entries = envPath.split(path.delimiter).filter(Boolean);
-  for (const entry of entries) {
-    const candidate = path.join(entry, name);
-    try {
-      fs.accessSync(candidate, fs.constants.X_OK);
-      return candidate;
-    } catch {
-      // ignore missing or non-executable entries
+  const executableNames =
+    process.platform === "win32" && !path.extname(name) ? [`${name}.exe`, name] : [name];
+  for (const executableName of executableNames) {
+    for (const entry of entries) {
+      const candidate = path.join(entry, executableName);
+      try {
+        fs.accessSync(candidate, fs.constants.X_OK);
+        return candidate;
+      } catch {
+        // Ignore missing or non-executable entries.
+      }
     }
   }
   return undefined;
-}
-
-function resolveShellFromWhich(name: string): string | undefined {
-  if (process.platform === "win32") {
-    return undefined;
-  }
-  try {
-    const result = spawnSync("which", [name], {
-      encoding: "utf8",
-      timeout: 5_000,
-      windowsHide: true,
-    });
-    if (result.status !== 0 || !result.stdout) {
-      return undefined;
-    }
-    const firstMatch = result.stdout.trim().split(/\r?\n/)[0]?.trim();
-    return firstMatch || undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 function normalizeShellName(value: string): string {
@@ -361,29 +345,31 @@ export function sanitizeBinaryOutput(
 ): string {
   // Output callbacks are stream chunks, not true EOF. Preserve a pending CSI
   // visibly so a split final byte cannot leak from the following chunk.
-  const scrubbed = stripAnsiForStreamChunk(text, {
-    compatibilityGrammar: options?.ansiMode === "compat",
-  }).replace(/[\p{Format}\p{Surrogate}]/gu, "");
+  return sanitizeStrippedBinaryOutput(
+    stripAnsiForStreamChunk(text, {
+      compatibilityGrammar: options?.ansiMode === "compat",
+    }),
+  );
+}
+
+/** Keep one ANSI parser per process stream so control sequences can span callbacks. */
+export function createStreamingBinaryOutputSanitizer(
+  onCsi?: (sequence: string) => void,
+): (text: string) => string {
+  const ansiStripper = new AnsiSequenceStripper(onCsi);
+  return (text) => sanitizeStrippedBinaryOutput(ansiStripper.write(text));
+}
+
+function sanitizeStrippedBinaryOutput(text: string): string {
+  const scrubbed = text.replace(/[\p{Format}\p{Surrogate}]/gu, "");
   if (!scrubbed) {
     return scrubbed;
   }
-  const chunks: string[] = [];
-  for (const char of scrubbed) {
-    const code = char.codePointAt(0);
-    if (code == null) {
-      continue;
-    }
-    if (code === 0x09 || code === 0x0a || code === 0x0d) {
-      chunks.push(char);
-      continue;
-    }
-    if (code < 0x20 || (code >= 0x7f && code <= 0x9f)) {
-      chunks.push(`\\x${code.toString(16).padStart(2, "0")}`);
-      continue;
-    }
-    chunks.push(char);
-  }
-  return chunks.join("");
+  return scrubbed.replace(/\p{Cc}/gu, (control) =>
+    control === "\t" || control === "\n" || control === "\r"
+      ? control
+      : `\\x${control.charCodeAt(0).toString(16).padStart(2, "0")}`,
+  );
 }
 
 function getShellEnv(sourceEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
@@ -395,9 +381,10 @@ function getShellEnv(sourceEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const pathKey = process.platform === "win32" ? "PATH" : (sourcePathKey ?? "PATH");
   const currentPath = sourcePathKey ? (sourceEnv[sourcePathKey] ?? "") : "";
   const pathEntries = currentPath.split(path.delimiter).filter(Boolean);
-  const updatedPath = pathEntries.includes(binDir)
-    ? currentPath
-    : [binDir, currentPath].filter(Boolean).join(path.delimiter);
+  const updatedPath =
+    !binDir || pathEntries.includes(binDir)
+      ? currentPath
+      : [binDir, currentPath].filter(Boolean).join(path.delimiter);
   const env = { ...sourceEnv };
   if (process.platform === "win32") {
     for (const key of pathKeys) {
@@ -426,8 +413,4 @@ export function getBashShellEnv(
     ...pathEntries.filter((entry) => entry.toLowerCase() !== normalizedUsrBin),
   ].join(path.delimiter);
   return env;
-}
-
-export function killProcessTree(pid: number, opts?: KillProcessTreeOptions): void {
-  killProcessTreeGracefully(pid, { force: true, ...opts });
 }

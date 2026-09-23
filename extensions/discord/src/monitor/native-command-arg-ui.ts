@@ -1,4 +1,3 @@
-// Discord plugin module implements native command arg ui behavior.
 import { ButtonStyle } from "discord-api-types/v10";
 import {
   buildCommandTextFromArgs,
@@ -113,6 +112,7 @@ async function handleDiscordCommandArgInteraction(params: {
   };
   const prompt = buildCommandTextFromArgs(commandDefinition, commandArgsWithRaw);
   await params.dispatchCommandInteraction({
+    readPolicy: ctx.readPolicy,
     interaction,
     prompt,
     command: commandDefinition,
@@ -124,6 +124,9 @@ async function handleDiscordCommandArgInteraction(params: {
     preferFollowUp: true,
     threadBindings: ctx.threadBindings,
     responseEphemeral: resolveDiscordSlashCommandConfig(ctx.discordConfig?.slashCommand).ephemeral,
+    buildContext: ctx.buildContext,
+    dispatchReplyFromConfig: ctx.dispatchReplyFromConfig,
+    pluginCommandDispatch: { kind: "non-plugin" },
   });
 }
 

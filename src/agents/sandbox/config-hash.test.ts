@@ -142,15 +142,32 @@ describe("computeSandboxConfigHash", () => {
 
     const withoutSkills = computeSandboxConfigHash({
       ...shared,
-      readOnlyWorkspaceSkillMounts: [],
+      managedMounts: [],
     });
 
     const withSkills = computeSandboxConfigHash({
       ...shared,
-      readOnlyWorkspaceSkillMounts: ["/tmp/workspace/skills:/workspace/skills:ro"],
+      managedMounts: ["/tmp/workspace/skills:/workspace/skills:ro"],
     });
 
     expect(withoutSkills).not.toBe(withSkills);
+  });
+
+  it("changes when read-only resource mount state changes", () => {
+    const shared = {
+      docker: createDockerConfig(),
+      workspaceAccess: "rw" as const,
+      workspaceDir: "/tmp/workspace",
+      agentWorkspaceDir: "/tmp/workspace",
+      mountFormatVersion: SANDBOX_MOUNT_FORMAT_VERSION,
+      createArgsEpoch: SANDBOX_DOCKER_CREATE_ARGS_EPOCH,
+    };
+    const withoutResources = computeSandboxConfigHash(shared);
+    const withResources = computeSandboxConfigHash({
+      ...shared,
+      managedMounts: ["/host/attachments:/openclaw/attachments:ro"],
+    });
+    expect(withoutResources).not.toBe(withResources);
   });
 });
 
@@ -163,7 +180,7 @@ describe("computeSandboxBrowserConfigHash", () => {
         vncPort: 5900,
         noVncPort: 6080,
         headless: false,
-        enableNoVnc: true,
+        noVncEnabled: true,
         autoStartTimeoutMs: 12000,
       },
       securityEpoch: "epoch-v1",
@@ -197,7 +214,7 @@ describe("computeSandboxBrowserConfigHash", () => {
         vncPort: 5900,
         noVncPort: 6080,
         headless: false,
-        enableNoVnc: true,
+        noVncEnabled: true,
         autoStartTimeoutMs: 12000,
       },
       securityEpoch: "browser-security-v1",
@@ -220,7 +237,7 @@ describe("computeSandboxBrowserConfigHash", () => {
         vncPort: 5900,
         noVncPort: 6080,
         headless: false,
-        enableNoVnc: true,
+        noVncEnabled: true,
         autoStartTimeoutMs: 12000,
       },
       workspaceAccess: "rw" as const,
@@ -248,7 +265,7 @@ describe("computeSandboxBrowserConfigHash", () => {
         vncPort: 5900,
         noVncPort: 6080,
         headless: false,
-        enableNoVnc: true,
+        noVncEnabled: true,
         autoStartTimeoutMs: 12000,
       },
       securityEpoch: "epoch-v1",
@@ -278,7 +295,7 @@ describe("computeSandboxBrowserConfigHash", () => {
         vncPort: 5900,
         noVncPort: 6080,
         headless: false,
-        enableNoVnc: true,
+        noVncEnabled: true,
         autoStartTimeoutMs: 12000,
       },
       securityEpoch: "epoch-v1",

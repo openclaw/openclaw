@@ -37,46 +37,46 @@ enum ChatLinkPreviewImageResult: @unchecked Sendable {
     case failed
 }
 
-/// Returns the first HTTP(S) link outside inline and block code.
-func chatFirstPreviewURL(in markdown: String) -> URL? {
-    chatFirstPreviewURL(in: Document(parsing: markdown))
+/// Returns HTTP(S) links in reading order, without treating code or image labels as citations.
+func chatPreviewURLs(in markdown: String) -> [URL] {
+    chatPreviewURLs(in: Document(parsing: markdown))
 }
 
-private func chatFirstPreviewURL(in markup: any Markup) -> URL? {
-    if markup is InlineCode || markup is CodeBlock {
-        return nil
+func chatFirstPreviewURL(in markdown: String) -> URL? {
+    chatPreviewURLs(in: markdown).first
+}
+
+private func chatPreviewURLs(in markup: any Markup) -> [URL] {
+    if markup is InlineCode || markup is CodeBlock || markup is Markdown.Image {
+        return []
     }
     if let link = markup as? Markdown.Link {
-        return link.destination.flatMap(chatSafeWebURL)
+        return link.destination.flatMap(chatSafeWebURL).map { [$0] } ?? []
     }
-    if let text = markup as? Markdown.Text,
-       let bareURL = chatFirstBareWebURL(in: text.string)
-    {
-        return bareURL
+    if let text = markup as? Markdown.Text {
+        return chatBarePreviewURLs(in: text.string)
     }
-    for child in markup.children {
-        if let url = chatFirstPreviewURL(in: child) {
-            return url
-        }
-    }
-    return nil
+    return markup.children.flatMap(chatPreviewURLs)
 }
 
-private func chatFirstBareWebURL(in text: String) -> URL? {
+private func chatBarePreviewURLs(in text: String) -> [URL] {
     let pattern = #"(?i)https?://[^\s<>\"`]+"#
-    guard let match = text.range(of: pattern, options: .regularExpression) else { return nil }
-    var candidate = String(text[match])
-    while let last = candidate.last, ".,;:!?".contains(last) {
-        candidate.removeLast()
-    }
-    for pair: (open: Character, close: Character) in [("(", ")"), ("[", "]"), ("{", "}")] {
-        while candidate.hasSuffix(String(pair.close)),
-              candidate.count(of: pair.close) > candidate.count(of: pair.open)
-        {
+    guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+    return regex.matches(in: text, range: NSRange(text.startIndex..., in: text)).compactMap { match in
+        guard let range = Range(match.range, in: text) else { return nil }
+        var candidate = String(text[range])
+        while let last = candidate.last, ".,;:!?".contains(last) {
             candidate.removeLast()
         }
+        for pair: (open: Character, close: Character) in [("(", ")"), ("[", "]"), ("{", "}")] {
+            while candidate.hasSuffix(String(pair.close)),
+                  candidate.count(of: pair.close) > candidate.count(of: pair.open)
+            {
+                candidate.removeLast()
+            }
+        }
+        return chatSafeWebURL(candidate)
     }
-    return chatSafeWebURL(candidate)
 }
 
 extension String {

@@ -1,7 +1,7 @@
-// Qa Lab plugin module implements suite runtime agent media behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { buildQaImageGenerationConfigPatch } from "./providers/image-generation.js";
+import { readFirstMediaPath } from "./providers/mock-openai/mock-openai-directives.js";
 import {
   fetchJson,
   patchConfig,
@@ -32,39 +32,7 @@ function extractMediaPathFromText(text: string | undefined): string | undefined 
   if (!media || typeof media !== "object" || Array.isArray(media)) {
     return undefined;
   }
-  return readFirstMediaPath(media);
-}
-
-function readFirstMediaPath(value: unknown): string | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  const media = value as Record<string, unknown>;
-  for (const key of ["mediaUrl", "path", "filePath"] as const) {
-    const candidate = media[key];
-    if (typeof candidate === "string" && candidate.trim()) {
-      return candidate.trim();
-    }
-  }
-  const mediaUrls = media.mediaUrls;
-  if (Array.isArray(mediaUrls)) {
-    const mediaUrl = mediaUrls.find(
-      (candidate) => typeof candidate === "string" && candidate.trim(),
-    );
-    if (typeof mediaUrl === "string" && mediaUrl.trim()) {
-      return mediaUrl.trim();
-    }
-  }
-  const attachments = media.attachments;
-  if (Array.isArray(attachments)) {
-    for (const attachment of attachments) {
-      const mediaPath = readFirstMediaPath(attachment);
-      if (mediaPath) {
-        return mediaPath;
-      }
-    }
-  }
-  return undefined;
+  return readFirstMediaPath(media) || undefined;
 }
 
 function readPluginAllow(config: Record<string, unknown>) {
@@ -100,7 +68,11 @@ async function resolveGeneratedImagePath(params: {
           }
           const mediaPath = extractMediaPathFromText(request.toolOutput);
           if (mediaPath) {
-            return mediaPath;
+            const stat = await fs.stat(mediaPath).catch(() => null);
+            // Request snapshots include previous runs; only fresh, nonempty files prove this run.
+            if (stat?.isFile() && stat.size > 0 && stat.mtimeMs >= params.startedAtMs - 1_000) {
+              return mediaPath;
+            }
           }
         }
       } catch {
@@ -108,26 +80,31 @@ async function resolveGeneratedImagePath(params: {
       }
     }
 
-    const mediaDir = path.join(
-      params.env.gateway.tempRoot,
-      "state",
-      "media",
-      "tool-image-generation",
+    // Generated media may deliver directly from tool storage or be staged outbound;
+    // either fresh owner artifact proves this run without depending on one delivery path.
+    const mediaDirs = ["outbound", "tool-image-generation"].map((subdir) =>
+      path.join(params.env.gateway.tempRoot, "state", "media", subdir),
     );
-    const entries = await fs.readdir(mediaDir).catch(() => []);
-    const candidates = await Promise.all(
-      entries.map(async (entry) => {
-        const fullPath = path.join(mediaDir, entry);
-        const stat = await fs.stat(fullPath).catch(() => null);
-        if (!stat?.isFile()) {
-          return null;
-        }
-        return {
-          fullPath,
-          mtimeMs: stat.mtimeMs,
-        };
-      }),
-    );
+    const candidates = (
+      await Promise.all(
+        mediaDirs.map(async (mediaDir) => {
+          const entries = await fs.readdir(mediaDir).catch(() => []);
+          return Promise.all(
+            entries.map(async (entry) => {
+              const fullPath = path.join(mediaDir, entry);
+              const stat = await fs.stat(fullPath).catch(() => null);
+              if (!stat?.isFile() || stat.size === 0) {
+                return null;
+              }
+              return {
+                fullPath,
+                mtimeMs: stat.mtimeMs,
+              };
+            }),
+          );
+        }),
+      )
+    ).flat();
     const match = candidates
       .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry))
       .filter((entry) => entry.mtimeMs >= params.startedAtMs - 1_000)

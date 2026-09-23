@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawIPC
 
 struct GatewayConfig {
     var mode: String?
@@ -19,13 +20,30 @@ struct GatewayEndpoint {
     let mode: String
 }
 
-func loadGatewayConfig() -> GatewayConfig {
-    let home = FileManager().homeDirectoryForCurrentUser
-    let candidates = [
-        home.appendingPathComponent(".openclaw/openclaw.json"),
-    ]
-    let url = candidates.first { FileManager().isReadableFile(atPath: $0.path) } ?? candidates[0]
-    guard let data = try? Data(contentsOf: url) else { return GatewayConfig() }
+/// Keep standalone CLI reads and configure-remote writes on the same profile.
+/// An explicit config path wins; otherwise the selected state directory owns openclaw.json.
+func resolveOpenClawConfigURL(
+    profile: MacControlProfile,
+    environment: [String: String],
+    homeDirectory: URL) -> URL
+{
+    if let configPath = openClawEnvironmentPath("OPENCLAW_CONFIG_PATH", environment: environment) {
+        return URL(fileURLWithPath: NSString(string: configPath).expandingTildeInPath)
+    }
+    let stateDir = openClawEnvironmentPath("OPENCLAW_STATE_DIR", environment: environment).map {
+        URL(fileURLWithPath: NSString(string: $0).expandingTildeInPath, isDirectory: true)
+    } ?? profile.stateDirectoryURL(homeDirectory: homeDirectory)
+    return stateDir.appendingPathComponent("openclaw.json")
+}
+
+private func openClawEnvironmentPath(_ key: String, environment: [String: String]) -> String? {
+    guard let raw = environment[key] else { return nil }
+    let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    return value.isEmpty ? nil : value
+}
+
+func loadGatewayConfig(from configURL: URL) -> GatewayConfig {
+    guard let data = try? Data(contentsOf: configURL) else { return GatewayConfig() }
     guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
         return GatewayConfig()
     }

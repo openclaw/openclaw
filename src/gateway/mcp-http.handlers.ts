@@ -4,11 +4,16 @@ import crypto from "node:crypto";
 import { ContentBlockSchema, type ContentBlock } from "@modelcontextprotocol/sdk/types.js";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { runBeforeToolCallHook, type HookContext } from "../agents/agent-tools.before-tool-call.js";
+import { extractToolErrorMessage } from "../agents/embedded-agent-tool-results.js";
+import { runAgentHarnessAfterToolCallHook } from "../agents/harness/hook-helpers.js";
+import { copyInternalToolResultState } from "../agents/runtime/internal-hooks.js";
 import {
   formatToolExecutionErrorMessage,
+  protectNetworkToolExecutionError,
   resolveToolExecutionErrorKind,
   resolveToolResultFailureKind,
 } from "../agents/tool-result-error.js";
+import { isAutomationsToolName } from "../agents/tools/automations-tool-name.js";
 import type { McpLoopbackToolCallOutcome } from "./mcp-http.loopback-runtime.js";
 import {
   MCP_LOOPBACK_SERVER_NAME,
@@ -97,7 +102,17 @@ export async function handleMcpJsonRpc(params: {
     case "tools/list":
       return jsonRpcResult(id, { tools: params.toolSchema });
     case "tools/call": {
-      const toolName = typeof methodParams?.name === "string" ? methodParams.name.trim() : "";
+      const requestedToolName =
+        typeof methodParams?.name === "string" ? methodParams.name.trim() : "";
+      // "cron" is a permanently accepted inbound alias for the scheduler tool
+      // (owner decision, RFC 0026; same contract as bash -> exec). Resolve it to
+      // the published canonical tool without re-advertising it in tools/list.
+      const toolName =
+        !params.toolSchema.some((tool) => tool.name === requestedToolName) &&
+        isAutomationsToolName(requestedToolName)
+          ? (params.toolSchema.find((tool) => isAutomationsToolName(tool.name))?.name ??
+            requestedToolName)
+          : requestedToolName;
       const rawToolArgs = methodParams?.arguments;
       if (rawToolArgs !== undefined && !isRecord(rawToolArgs)) {
         return jsonRpcError(id, -32602, "Invalid params: tools/call arguments must be an object");
@@ -125,8 +140,26 @@ export async function handleMcpJsonRpc(params: {
         });
       }
       const toolCallId = `mcp-${crypto.randomUUID()}`;
+      const startedAt = Date.now();
       let executedToolArgs = toolArgs;
-      const reportToolCallResult = (outcome: McpLoopbackToolCallOutcome) => {
+      const reportToolCallResult = (
+        outcome: McpLoopbackToolCallOutcome,
+        result: unknown,
+        error?: string,
+      ) => {
+        void runAgentHarnessAfterToolCallHook({
+          toolName,
+          toolCallId,
+          runId: params.hookContext?.runId,
+          agentId: params.hookContext?.agentId,
+          sessionId: params.hookContext?.sessionId,
+          sessionKey: params.hookContext?.sessionKey,
+          channelId: params.hookContext?.channelId,
+          startArgs: executedToolArgs,
+          result,
+          error,
+          startedAt,
+        }).catch(() => {});
         try {
           params.onToolCallResult?.({
             toolName,
@@ -165,6 +198,8 @@ export async function handleMcpJsonRpc(params: {
                   deniedReason: hookResult.deniedReason ?? "plugin-before-tool-call",
                 }
               : { outcome: disposition },
+            hookResult.reason,
+            hookResult.reason,
           );
           return jsonRpcResult(id, {
             content: [{ type: "text", text: hookResult.reason }],
@@ -181,31 +216,51 @@ export async function handleMcpJsonRpc(params: {
           // Observability callbacks must never alter the tool result returned to the MCP client.
         }
         if (params.authorizeToolCall && !params.authorizeToolCall()) {
-          reportToolCallResult({ outcome: "blocked", deniedReason: "client-grant-revoked" });
+          reportToolCallResult(
+            { outcome: "blocked", deniedReason: "client-grant-revoked" },
+            undefined,
+            "Tool call authorization expired",
+          );
           return jsonRpcResult(id, {
             content: [{ type: "text", text: "Tool call authorization expired" }],
             isError: true,
           });
         }
-        const result = await tool.execute(toolCallId, finalizedToolArgs, params.signal);
+        let result: Awaited<ReturnType<typeof tool.execute>>;
+        try {
+          result = await tool.execute(toolCallId, finalizedToolArgs, params.signal);
+        } catch (error) {
+          throw tool.resultContentSource === "network"
+            ? protectNetworkToolExecutionError(error, "tool execution failed", params.signal)
+            : error;
+        }
         const failureKind = resolveToolResultFailureKind(result);
         reportToolCallResult(
           failureKind === "blocked"
             ? { outcome: "blocked", deniedReason: "tool_result_blocked" }
             : { outcome: failureKind ?? "completed", result },
+          result,
+          failureKind ? (extractToolErrorMessage(result) ?? "Tool execution failed") : undefined,
         );
-        return jsonRpcResult(id, {
-          content: normalizeToolCallContent(result),
-          isError: failureKind !== undefined,
-        });
+        return copyInternalToolResultState(
+          result,
+          jsonRpcResult(id, {
+            content: normalizeToolCallContent(result),
+            isError: failureKind !== undefined,
+          }),
+        );
       } catch (error) {
         // A disconnected request does not identify the enclosing run outcome,
         // but its payload may prove partial delivery and prevent a duplicate send.
-        reportToolCallResult({
-          outcome: params.signal?.aborted ? "unknown" : resolveToolExecutionErrorKind(error),
-          result: error,
-        });
         const message = formatToolExecutionErrorMessage(error, "tool execution failed");
+        reportToolCallResult(
+          {
+            outcome: params.signal?.aborted ? "unknown" : resolveToolExecutionErrorKind(error),
+            result: error,
+          },
+          error,
+          message,
+        );
         return jsonRpcResult(id, {
           content: [{ type: "text", text: message || "tool execution failed" }],
           isError: true,

@@ -1,27 +1,51 @@
 import type fs from "node:fs";
 import type JSON5 from "json5";
+import type { DeferredPluginMigration } from "../infra/deferred-plugin-migrations.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import type { ConfigMutationBase } from "./mutation-types.js";
 import type {
   ConfigWriteAfterWrite,
   RuntimeConfigSnapshotRefreshOptions,
   RuntimeConfigWriteNotification,
 } from "./runtime-snapshot.js";
-import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
+import type { ConfigFileSnapshot, ConfigValidationIssue, OpenClawConfig } from "./types.js";
 
 export type ParseConfigJson5Result = { ok: true; parsed: unknown } | { ok: false; error: string };
+
+export const configWriteCommittedSnapshot = Symbol("configWriteCommittedSnapshot");
 
 export type ConfigWriteResult = {
   persistedHash: string;
   persistedConfig: OpenClawConfig;
+  /** Exact resolved source accepted before commit; absent for legacy custom writers. */
+  persistedSourceConfig?: OpenClawConfig;
+  /** Internal receipt from the committed inputs, independent of later filesystem reads. */
+  [configWriteCommittedSnapshot]?: { hash: string; sourceConfig: OpenClawConfig };
 };
+
+export type ConfigWriteInputBasis = { kind: ConfigMutationBase; config: unknown };
 
 export const configWritePostCommitRollback = Symbol("configWritePostCommitRollback");
 
 export type InternalConfigWriteResult = ConfigWriteResult & {
-  [configWritePostCommitRollback]?: () => void;
+  [configWritePostCommitRollback]?: {
+    restoreFile: (assertCurrent: () => void) => Promise<boolean>;
+    restoreEffects: (assertCurrent: () => void) => void;
+  };
 };
 
+export type ConfigWriteAuditOrigin =
+  | "doctor"
+  | "system-agent"
+  | "config-rpc"
+  | "plugin-install"
+  | "cli";
+
 export type ConfigWriteOptions = {
+  /** Candidate's source/runtime basis within its write snapshot; omitted inputs use active globals. */
+  inputBase?: ConfigMutationBase;
+  /** Semantic writer label recorded in the config audit journal. */
+  auditOrigin?: ConfigWriteAuditOrigin;
   /** Read-time env snapshot used to validate `${VAR}` restoration decisions. */
   envSnapshotForRestore?: Record<string, string | undefined>;
   /** Only use envSnapshotForRestore for the config path that produced it. */
@@ -30,12 +54,20 @@ export type ConfigWriteOptions = {
   ownedConfigPathForWrite?: string;
   /** Rechecks that the config path captured at mutation start is still active. */
   assertConfigPathForWrite?: () => void;
+  /** Internal synchronous live-owner assertion checked at guarded publication effects. */
+  assertCurrent?: () => void;
   /** Paths that must be removed from the persisted payload. */
   unsetPaths?: string[][];
   /** Caller-authored paths that stay persisted even when equal to defaults. */
   explicitSetPaths?: readonly (readonly string[])[];
   /** Source-shaped values paired with explicitSetPaths. */
   explicitSetValueSource?: OpenClawConfig;
+  /** Persist roster format without treating every leaf as an explicit value edit. */
+  persistCanonicalAgentRoster?: boolean;
+  /** Agent ids that this write intentionally removes from the canonical roster. */
+  allowedAgentRosterRemovals?: readonly string[];
+  /** Permit explicit local overrides below an ancestor $include without flattening it. */
+  allowIncludeAncestorExplicitSetPaths?: boolean;
   /** Fresh snapshot fast path for an immediate write. */
   baseSnapshot?: ConfigFileSnapshot;
   /** Plugin metadata paired with baseSnapshot. */
@@ -56,10 +88,14 @@ export type ConfigWriteOptions = {
   preservedLegacyRootKeys?: readonly string[];
   /** Skip plugin-aware validation for bounded repair migrations only. */
   skipPluginValidation?: boolean;
+  /** Disable observation during mutation snapshots and canonical rereads, not write auditing. */
+  observe?: boolean;
   /** Preserve an older writer version during update handoff writes. */
   lastTouchedVersionOverride?: string;
-  /** Final async authority gate after runtime preflight and before commit. */
+  /** Optional runtime candidate preflight; the runtime writer composes its own preflight. */
   preCommitRuntimePreflight?: (sourceConfig: OpenClawConfig) => Promise<unknown>;
+  /** Prepare authority before the synchronous root-file publication phase. */
+  beforeCommit?: () => void | Promise<void>;
   /** Snapshot-time hashes for include files that mutation writers may update. */
   includeFileHashesForWrite?: Record<string, string>;
   /** Snapshot-time canonical include targets that writers may update. */
@@ -97,27 +133,39 @@ export type ConfigIoDeps = {
 export type NormalizedConfigIoDeps = Required<ConfigIoDeps>;
 
 export type ConfigIoFactoryOptions = ConfigIoDeps & {
-  pluginValidation?: "full" | "skip";
+  pluginValidation?: "full" | "skip" | "core-only";
   preservedLegacyRootKeys?: readonly string[];
+  /** Admission can prepare migration facts before their checkpoint is writable. */
+  deferredPluginMigrations?: readonly DeferredPluginMigration[];
   shellEnvFallback?: "load" | "defer";
 };
 
 export type ConfigSnapshotReadOptions = {
+  deferredPluginMigrations?: readonly DeferredPluginMigration[];
   measure?: ConfigSnapshotReadMeasure;
   observe?: boolean;
   isolateEnv?: boolean;
   lowerPrecedenceEnv?: Readonly<Record<string, string>>;
+  allowCurrentPluginMetadata?: boolean;
   recoverSuspicious?: boolean;
   allowSuspiciousRecovery?: (
     candidate: OpenClawConfig,
     current: OpenClawConfig,
   ) => boolean | Promise<boolean>;
+  /** Controls whether snapshot validation resolves plugin metadata and defaults. */
+  pluginValidation?: "full" | "skip" | "core-only";
   skipPluginValidation?: boolean;
   preservedLegacyRootKeys?: readonly string[];
   suppressFutureVersionWarning?: boolean;
 };
 
+export type ConfigSnapshotMetadataReadOptions = ConfigSnapshotReadOptions & {
+  /** CLI diagnostics prepare metadata before validation; strict mode also retains source facts. */
+  prepareValidation?: "runtime" | "strict";
+};
+
 export type ReadConfigFileSnapshotInternalResult = {
+  strictIssues?: ConfigValidationIssue[];
   snapshot: ConfigFileSnapshot;
   envSnapshotForRestore?: Record<string, string | undefined>;
   includeFileHashesForWrite?: Record<string, string>;
@@ -126,20 +174,31 @@ export type ReadConfigFileSnapshotInternalResult = {
 };
 
 export type ReadConfigFileSnapshotWithPluginMetadataResult = {
+  strictIssues?: ConfigValidationIssue[];
   snapshot: ConfigFileSnapshot;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
+};
+
+export type PreparedConfigRecovery = ReadConfigFileSnapshotWithPluginMetadataResult & {
+  apply: (beforeCommit?: () => void) => Promise<void>;
 };
 
 export type BestEffortConfigSnapshot = {
   config: OpenClawConfig;
   sourceConfig: OpenClawConfig;
+  configDiagnostics: { path: string; issues: ConfigValidationIssue[] } | null;
 };
 
-export type ShippedPluginInstallConfigWriteMigration = { migrated: false } | { migrated: true };
-
-export type ShippedPluginInstallConfigReadMigration = {
-  config: unknown;
-  validationConfig?: unknown;
-  persistedRootParsed?: unknown;
-  persistedRootRaw?: string;
+export type ConfigRecoveryCandidate = {
+  raw: string;
+  parsed: unknown;
+  config?: OpenClawConfig;
 };
+
+export type ConfigRecoveryCandidatePreparation =
+  | { ok: true; candidate: ConfigRecoveryCandidate }
+  | { ok: false; reason: string };
+
+export type PrepareConfigRecoveryCandidate = (
+  candidate: ConfigRecoveryCandidate,
+) => ConfigRecoveryCandidatePreparation;

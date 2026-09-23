@@ -34,8 +34,10 @@ import type { Static, TSchema } from "typebox";
 import type { Theme } from "../../modes/interactive/theme/theme.js";
 import type {
   AgentMessage,
+  AgentTool,
   AgentToolResult,
   AgentToolUpdateCallback,
+  StreamFn,
   ThinkingLevel,
   ToolExecutionMode,
 } from "../../runtime/index.js";
@@ -495,6 +497,8 @@ export interface ToolDefinition<
   label: string;
   /** Preserve lifecycle telemetry without rendering transient channel progress. */
   hideFromChannelProgress?: boolean;
+  /** Tool results contain externally controlled network content. */
+  resultContentSource?: AgentTool["resultContentSource"];
   /** Description for LLM */
   description: string;
   /** Optional one-line snippet for the Available tools section in the default system prompt. Custom tools are omitted from that section when this is not provided. */
@@ -503,6 +507,8 @@ export interface ToolDefinition<
   promptGuidelines?: string[];
   /** Parameter schema (TypeBox) */
   parameters: TParams;
+  /** Exact schema for the structured value returned in AgentToolResult.details. */
+  outputSchema?: TSchema;
   /** Controls whether ToolExecutionComponent renders the standard colored shell or the tool renders its own framing. */
   renderShell?: "default" | "self";
 
@@ -612,6 +618,10 @@ interface SessionBeforeCompactEvent {
   branchEntries: SessionEntry[];
   customInstructions?: string;
   signal: AbortSignal;
+  /** Prepared reasoning level for extension-owned summarization. */
+  thinkingLevel?: ThinkingLevel;
+  /** Prepared provider stream for extension-owned summarization. */
+  streamFn?: StreamFn;
 }
 
 /** Fired after context compaction */
@@ -715,6 +725,11 @@ interface AgentStartEvent {
 interface AgentEndEvent {
   type: "agent_end";
   messages: AgentMessage[];
+}
+
+/** Fired once the session has no automatic retry, compaction, or queued continuation left. */
+interface AgentSettledEvent {
+  type: "agent_settled";
 }
 
 /** Fired at the start of each turn */
@@ -908,6 +923,7 @@ interface ToolResultEventBase {
   input: Record<string, unknown>;
   content: (TextContent | ImageContent)[];
   isError: boolean;
+  terminate?: boolean;
 }
 
 interface BashToolResultEvent extends ToolResultEventBase {
@@ -1047,6 +1063,7 @@ export type ExtensionEvent =
   | BeforeAgentStartEvent
   | AgentStartEvent
   | AgentEndEvent
+  | AgentSettledEvent
   | TurnStartEvent
   | TurnEndEvent
   | MessageStartEvent
@@ -1070,8 +1087,6 @@ export interface ContextEventResult {
   messages?: AgentMessage[];
 }
 
-type BeforeProviderRequestEventResult = unknown;
-
 export interface ToolCallEventResult {
   /** Block tool execution. To modify arguments, mutate `event.input` in place instead. */
   block?: boolean;
@@ -1090,6 +1105,7 @@ export interface ToolResultEventResult {
   content?: (TextContent | ImageContent)[];
   details?: unknown;
   isError?: boolean;
+  terminate?: boolean;
 }
 
 export interface MessageEndEventResult {
@@ -1209,7 +1225,7 @@ export interface ExtensionAPI {
   on(event: "context", handler: ExtensionHandler<ContextEvent, ContextEventResult>): void;
   on(
     event: "before_provider_request",
-    handler: ExtensionHandler<BeforeProviderRequestEvent, BeforeProviderRequestEventResult>,
+    handler: ExtensionHandler<BeforeProviderRequestEvent, unknown>,
   ): void;
   on(event: "after_provider_response", handler: ExtensionHandler<AfterProviderResponseEvent>): void;
   on(
@@ -1218,6 +1234,7 @@ export interface ExtensionAPI {
   ): void;
   on(event: "agent_start", handler: ExtensionHandler<AgentStartEvent>): void;
   on(event: "agent_end", handler: ExtensionHandler<AgentEndEvent>): void;
+  on(event: "agent_settled", handler: ExtensionHandler<AgentSettledEvent>): void;
   on(event: "turn_start", handler: ExtensionHandler<TurnStartEvent>): void;
   on(event: "turn_end", handler: ExtensionHandler<TurnEndEvent>): void;
   on(event: "message_start", handler: ExtensionHandler<MessageStartEvent>): void;
@@ -1339,7 +1356,7 @@ export interface ExtensionAPI {
   getThinkingLevel(): ThinkingLevel;
 
   /** Set thinking level (clamped to model capabilities). */
-  setThinkingLevel(level: ThinkingLevel): void;
+  setThinkingLevel(level: ThinkingLevel): Promise<void>;
 
   // =========================================================================
   // Provider Registration
@@ -1514,44 +1531,14 @@ export interface ExtensionShortcut {
 
 type HandlerFn = (...args: unknown[]) => Promise<unknown>;
 
-type SendMessageHandler = <T = unknown>(
-  message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details">,
-  options?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" },
-) => void;
-
-type SendUserMessageHandler = (
-  content: string | (TextContent | ImageContent)[],
-  options?: { deliverAs?: "steer" | "followUp" },
-) => void;
-
-type AppendEntryHandler = (customType: string, data?: unknown) => void;
-
-export type SetSessionNameHandler = (name: string) => void;
-
-export type GetSessionNameHandler = () => string | undefined;
-
-type GetActiveToolsHandler = () => string[];
+export type SetSessionNameHandler = ExtensionAPI["setSessionName"];
+export type GetSessionNameHandler = ExtensionAPI["getSessionName"];
+export type RefreshToolsHandler = () => void;
 
 /** Tool info with name, description, parameter schema, and source metadata */
 export type ToolInfo = Pick<ToolDefinition, "name" | "description" | "parameters"> & {
   sourceInfo: SourceInfo;
 };
-
-type GetAllToolsHandler = () => ToolInfo[];
-
-type GetCommandsHandler = () => SlashCommandInfo[];
-
-type SetActiveToolsHandler = (toolNames: string[]) => void;
-
-export type RefreshToolsHandler = () => void;
-
-type SetModelHandler = (model: Model) => Promise<boolean>;
-
-type GetThinkingLevelHandler = () => ThinkingLevel;
-
-type SetThinkingLevelHandler = (level: ThinkingLevel) => void;
-
-type SetLabelHandler = (entryId: string, label: string | undefined) => void;
 
 /**
  * Shared state created by loader, used during registration and runtime.
@@ -1583,72 +1570,45 @@ export interface ExtensionRuntimeState {
  * Action implementations for ExtensionAPI methods.
  * Provided to runner.initialize(), copied into the shared runtime.
  */
-export interface ExtensionActions {
-  sendMessage: SendMessageHandler;
-  sendUserMessage: SendUserMessageHandler;
-  appendEntry: AppendEntryHandler;
-  setSessionName: SetSessionNameHandler;
-  getSessionName: GetSessionNameHandler;
-  setLabel: SetLabelHandler;
-  getActiveTools: GetActiveToolsHandler;
-  getAllTools: GetAllToolsHandler;
-  setActiveTools: SetActiveToolsHandler;
+export interface ExtensionActions extends Pick<
+  ExtensionAPI,
+  | "sendMessage"
+  | "sendUserMessage"
+  | "appendEntry"
+  | "setSessionName"
+  | "getSessionName"
+  | "setLabel"
+  | "getActiveTools"
+  | "getAllTools"
+  | "setActiveTools"
+  | "getCommands"
+  | "setModel"
+  | "getThinkingLevel"
+  | "setThinkingLevel"
+> {
   refreshTools: RefreshToolsHandler;
-  getCommands: GetCommandsHandler;
-  setModel: SetModelHandler;
-  getThinkingLevel: GetThinkingLevelHandler;
-  setThinkingLevel: SetThinkingLevelHandler;
 }
 
-/**
- * Actions for ExtensionContext (ctx.* in event handlers).
- * Required by all modes.
- */
-export interface ExtensionContextActions {
-  getModel: () => Model | undefined;
-  isIdle: () => boolean;
-  getSignal: () => AbortSignal | undefined;
-  abort: () => void;
-  hasPendingMessages: () => boolean;
-  shutdown: () => void;
-  getContextUsage: () => ContextUsage | undefined;
-  compact: (options?: CompactOptions) => void;
-  getSystemPrompt: () => string;
+/** Actions for the live extension context, supplied by each runtime mode. */
+export interface ExtensionContextActions extends Pick<
+  ExtensionContext,
+  | "isIdle"
+  | "abort"
+  | "hasPendingMessages"
+  | "shutdown"
+  | "getContextUsage"
+  | "compact"
+  | "getSystemPrompt"
+> {
+  getModel: () => ExtensionContext["model"];
+  getSignal: () => ExtensionContext["signal"];
 }
 
-/**
- * Actions for ExtensionCommandContext (ctx.* in command handlers).
- * Only needed for interactive mode where extension commands are invokable.
- */
-export interface ExtensionCommandContextActions {
-  waitForIdle: () => Promise<void>;
-  newSession: (options?: {
-    parentSession?: string;
-    setup?: (sessionManager: SessionManager) => Promise<void>;
-    withSession?: (ctx: ReplacedSessionContext) => Promise<void>;
-  }) => Promise<{ cancelled: boolean }>;
-  fork: (
-    entryId: string,
-    options?: {
-      position?: "before" | "at";
-      withSession?: (ctx: ReplacedSessionContext) => Promise<void>;
-    },
-  ) => Promise<{ cancelled: boolean }>;
-  navigateTree: (
-    targetId: string,
-    options?: {
-      summarize?: boolean;
-      customInstructions?: string;
-      replaceInstructions?: boolean;
-      label?: string;
-    },
-  ) => Promise<{ cancelled: boolean }>;
-  switchSession: (
-    sessionPath: string,
-    options?: { withSession?: (ctx: ReplacedSessionContext) => Promise<void> },
-  ) => Promise<{ cancelled: boolean }>;
-  reload: () => Promise<void>;
-}
+/** Session controls provided by modes that support extension commands. */
+export interface ExtensionCommandContextActions extends Pick<
+  ExtensionCommandContext,
+  "waitForIdle" | "newSession" | "fork" | "navigateTree" | "switchSession" | "reload"
+> {}
 
 /**
  * Full runtime = state + actions.

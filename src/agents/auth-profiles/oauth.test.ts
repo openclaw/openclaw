@@ -8,23 +8,31 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { resolveAuthProfileSecretOwnerId } from "../../secrets/runtime-auth-profile-owner.js";
 import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
 import { withEnvAsync } from "../../test-utils/env.js";
-import type { AuthProfileStore } from "./types.js";
+import {
+  createApiKeyCredential,
+  createAuthProfileStoreFixture,
+} from "./credential-fixtures.test-support.js";
+import type { AuthProfileStore, RuntimeAuthProfileStore } from "./types.js";
 
 vi.hoisted(() => {
   vi.resetModules();
 });
 
+const resolveProviderOAuthCredentialWithPlugin = vi.hoisted(() =>
+  vi.fn(async () => ({ status: "unhandled" as const })),
+);
+
 vi.mock("../cli-credentials.js", () => ({
-  readClaudeCliCredentialsCached: () => null,
   readCodexCliCredentialsCached: () => null,
   readMiniMaxCliCredentialsCached: () => null,
-  resetCliCredentialCachesForTest: () => undefined,
 }));
 
 vi.mock("../../plugins/provider-runtime.runtime.js", () => ({
+  buildProviderAuthDoctorHintWithPlugin: async () => undefined,
   formatProviderAuthProfileApiKeyWithPlugin: async (params: { context?: { access?: string } }) =>
     params.context?.access,
-  refreshProviderOAuthCredentialWithPlugin: async () => null,
+  resolveProviderOAuthCredentialWithPlugin,
+  resolveProviderOAuthRefreshCapabilityWithPlugin: async () => ({ status: "unhandled" }),
 }));
 
 let resolveApiKeyForProfile: typeof import("./oauth.js").resolveApiKeyForProfile;
@@ -119,12 +127,12 @@ async function expectResolvedApiKey(params: {
 beforeAll(loadOAuthModuleForTest);
 
 beforeEach(() => {
+  resolveProviderOAuthCredentialWithPlugin.mockClear();
   clearRuntimeAuthProfileStoreSnapshots();
   setActiveDegradedSecretOwners([]);
   // SecretRef cases consume the materialized store published by runtime activation.
-  setRuntimeAuthProfileStoreSnapshot({
-    version: 1,
-    profiles: {
+  setRuntimeAuthProfileStoreSnapshot(
+    createAuthProfileStoreFixture({
       "openai:default": {
         type: "api_key",
         provider: "openai",
@@ -155,7 +163,62 @@ beforeEach(() => {
         token: ["gh", "inline", "token"].join("-"),
         tokenRef: { source: "env", provider: "default", id: "GITHUB_TOKEN" },
       },
-    },
+    }),
+  );
+});
+
+describe("resolveApiKeyForProfile retired external CLI profiles", () => {
+  it("rejects a persisted Claude CLI token even when legacy metadata marks it external", async () => {
+    const profileId = "anthropic:claude-cli";
+    const store: RuntimeAuthProfileStore = {
+      version: 1,
+      profiles: {
+        [profileId]: {
+          type: "oauth",
+          provider: "anthropic",
+          access: "copied-native-access",
+          refresh: "copied-native-refresh",
+          expires: Date.now() + 60 * 60_000,
+        },
+      },
+      runtimePersistedProfileIds: [profileId],
+      runtimeExternalCliProfileIds: [profileId],
+    };
+
+    await expect(
+      resolveApiKeyForProfile({
+        cfg: cfgFor(profileId, "anthropic", "oauth"),
+        store,
+        profileId,
+      }),
+    ).resolves.toBeNull();
+    expect(resolveProviderOAuthCredentialWithPlugin).not.toHaveBeenCalled();
+  });
+
+  it("rejects a runtime-only Claude CLI token without refreshing it", async () => {
+    const profileId = "anthropic:claude-cli";
+    const store: RuntimeAuthProfileStore = {
+      version: 1,
+      profiles: {
+        [profileId]: {
+          type: "oauth",
+          provider: "claude-cli",
+          access: "current-native-access",
+          refresh: "current-native-refresh",
+          expires: Date.now() + 60 * 60_000,
+        },
+      },
+      runtimeExternalCliProfileIds: [profileId],
+    };
+
+    await expect(
+      resolveApiKeyForProfile({
+        cfg: cfgFor(profileId, "claude-cli", "oauth"),
+        store,
+        profileId,
+      }),
+    ).resolves.toBeNull();
+    expect(resolveProviderOAuthCredentialWithPlugin).not.toHaveBeenCalled();
   });
 });
 
@@ -174,16 +237,13 @@ function createUsableOAuthExpiry(): number {
 describe("resolveApiKeyForProfile config compatibility", () => {
   it("accepts token credentials when config mode is oauth", async () => {
     const profileId = "anthropic:token";
-    const store: AuthProfileStore = {
-      version: 1,
-      profiles: {
-        [profileId]: {
-          type: "token",
-          provider: "anthropic",
-          token: "tok-123",
-        },
+    const store: AuthProfileStore = createAuthProfileStoreFixture({
+      [profileId]: {
+        type: "token",
+        provider: "anthropic",
+        token: "tok-123",
       },
-    };
+    });
 
     const result = await resolveApiKeyForProfile({
       cfg: cfgFor(profileId, "anthropic", "oauth"),
@@ -230,18 +290,15 @@ describe("resolveApiKeyForProfile config compatibility", () => {
 
   it("accepts oauth credentials when config mode is token (bidirectional compat)", async () => {
     const profileId = "anthropic:oauth";
-    const store: AuthProfileStore = {
-      version: 1,
-      profiles: {
-        [profileId]: {
-          type: "oauth",
-          provider: "anthropic",
-          access: "access-123",
-          refresh: "refresh-123",
-          expires: createUsableOAuthExpiry(),
-        },
+    const store: AuthProfileStore = createAuthProfileStoreFixture({
+      [profileId]: {
+        type: "oauth",
+        provider: "anthropic",
+        access: "access-123",
+        refresh: "refresh-123",
+        expires: createUsableOAuthExpiry(),
       },
-    };
+    });
 
     const result = await resolveApiKeyForProfile({
       cfg: cfgFor(profileId, "anthropic", "token"),
@@ -355,9 +412,8 @@ describe("resolveApiKeyForProfile token expiry handling", () => {
   it("uses current expired metadata before applying degraded owner state", async () => {
     const profileId = "github-copilot:expired-ref";
     const tokenRef = { source: "env" as const, provider: "default", id: "EXPIRED_TOKEN" };
-    setRuntimeAuthProfileStoreSnapshot({
-      version: 1,
-      profiles: {
+    setRuntimeAuthProfileStoreSnapshot(
+      createAuthProfileStoreFixture({
         [profileId]: {
           type: "token",
           provider: "github-copilot",
@@ -365,8 +421,8 @@ describe("resolveApiKeyForProfile token expiry handling", () => {
           tokenRef,
           expires: Date.now() + 60_000,
         },
-      },
-    });
+      }),
+    );
     setActiveDegradedSecretOwners([
       {
         ownerKind: "account",
@@ -381,17 +437,14 @@ describe("resolveApiKeyForProfile token expiry handling", () => {
     await expect(
       resolveApiKeyForProfile({
         cfg: cfgFor(profileId, "github-copilot", "token"),
-        store: {
-          version: 1,
-          profiles: {
-            [profileId]: {
-              type: "token",
-              provider: "github-copilot",
-              tokenRef,
-              expires: Date.now() - 1,
-            },
+        store: createAuthProfileStoreFixture({
+          [profileId]: {
+            type: "token",
+            provider: "github-copilot",
+            tokenRef,
+            expires: Date.now() - 1,
           },
-        },
+        }),
         profileId,
       }),
     ).resolves.toBeNull();
@@ -426,16 +479,13 @@ describe("resolveApiKeyForProfile secret refs", () => {
     try {
       const result = await resolveApiKeyForProfile({
         cfg: cfgFor(profileId, "openai", "api_key"),
-        store: {
-          version: 1,
-          profiles: {
-            [profileId]: {
-              type: "api_key",
-              provider: "openai",
-              keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-            },
+        store: createAuthProfileStoreFixture({
+          [profileId]: {
+            type: "api_key",
+            provider: "openai",
+            keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
           },
-        },
+        }),
         profileId,
       });
       expect(result).toEqual({
@@ -507,16 +557,13 @@ describe("resolveApiKeyForProfile secret refs", () => {
     await expect(
       resolveApiKeyForProfile({
         cfg: cfgFor(profileId, "anthropic", "oauth"),
-        store: {
-          version: 1,
-          profiles: {
-            [profileId]: {
-              type: "token",
-              provider: "anthropic",
-              tokenRef: { source: "env", provider: "default", id: "ANTHROPIC_TOKEN" },
-            },
+        store: createAuthProfileStoreFixture({
+          [profileId]: {
+            type: "token",
+            provider: "anthropic",
+            tokenRef: { source: "env", provider: "default", id: "ANTHROPIC_TOKEN" },
           },
-        },
+        }),
         profileId,
       }),
     ).rejects.toThrow(/mode is "oauth"/i);
@@ -532,11 +579,7 @@ describe("resolveApiKeyForProfile secret refs", () => {
         store: {
           version: 1,
           profiles: {
-            [profileId]: {
-              type: "api_key",
-              provider: "openai",
-              key: "${OPENAI_API_KEY}",
-            },
+            [profileId]: createApiKeyCredential("openai", "${OPENAI_API_KEY}"),
           },
         },
         profileId,
@@ -593,16 +636,13 @@ describe("resolveApiKeyForProfile secret refs", () => {
     await expect(
       resolveApiKeyForProfile({
         cfg: cfgFor(profileId, "openai", "api_key"),
-        store: {
-          version: 1,
-          profiles: {
-            [profileId]: {
-              type: "api_key",
-              provider: "openai",
-              keyRef: { source: "env", provider: "default", id: "UNPUBLISHED_OPENAI_KEY" },
-            },
+        store: createAuthProfileStoreFixture({
+          [profileId]: {
+            type: "api_key",
+            provider: "openai",
+            keyRef: { source: "env", provider: "default", id: "UNPUBLISHED_OPENAI_KEY" },
           },
-        },
+        }),
         profileId,
       }),
     ).rejects.toMatchObject({
@@ -610,4 +650,100 @@ describe("resolveApiKeyForProfile secret refs", () => {
       ownerKind: "account",
     });
   });
+});
+
+describe("setup-owned SecretRef materialization", () => {
+  it.each(["normal", "abort", "replacement", "nested", "other-store", "other-profile"] as const)(
+    "keeps the prepared credential scoped through %s settlement",
+    async (settlement) => {
+      const { withSetupCredentialAccess, runOutsideSetupCredentialAccess } =
+        await import("./setup-access.js");
+      const {
+        getRuntimeAuthProfileStoreCredentialsRevision,
+        getRuntimeAuthProfileStoreSnapshotCore,
+      } = await import("./runtime-snapshots.js");
+      const profileId = "openai:setup-scope";
+      const source = {
+        type: "api_key" as const,
+        provider: "openai",
+        keyRef: { source: "env" as const, provider: "default", id: "SETUP_SCOPED_KEY" },
+      };
+      const store: AuthProfileStore = { version: 1, profiles: { [profileId]: source } };
+      const controller = new AbortController();
+      const prior = getRuntimeAuthProfileStoreSnapshotCore();
+      const resolve = (agentDir?: string) =>
+        resolveApiKeyForProfile({
+          cfg: cfgFor(profileId, "openai", "api_key"),
+          store,
+          profileId,
+          agentDir,
+        });
+      let readAfterClose: (() => ReturnType<typeof resolve>) | undefined;
+      await withSetupCredentialAccess(
+        {
+          profileId,
+          signal: controller.signal,
+          runtimeCredential: {
+            source,
+            materialized: { ...source, key: "synthetic-scoped-credential" },
+            credentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
+          },
+        },
+        async () => {
+          await expect(resolve()).resolves.toMatchObject({ apiKey: "synthetic-scoped-credential" });
+          let releaseRetained: (() => void) | undefined;
+          const retained = new Promise<void>((done) => {
+            releaseRetained = done;
+          }).then(() => resolve());
+          readAfterClose = () => {
+            releaseRetained!();
+            return retained;
+          };
+          if (settlement === "abort") {
+            controller.abort();
+            await expect(resolve()).rejects.toMatchObject({ code: "SECRET_SURFACE_UNAVAILABLE" });
+          } else if (settlement === "replacement") {
+            setRuntimeAuthProfileStoreSnapshot({
+              version: 1,
+              profiles: { [profileId]: { ...source, key: "synthetic-new-owner-credential" } },
+            });
+            await expect(resolve()).rejects.toMatchObject({ code: "SECRET_SURFACE_UNAVAILABLE" });
+          } else if (settlement === "nested") {
+            await withSetupCredentialAccess({ profileId }, async () => {
+              await expect(resolve()).resolves.toMatchObject({
+                apiKey: "synthetic-scoped-credential",
+              });
+              await runOutsideSetupCredentialAccess(async () => {
+                await expect(resolve()).rejects.toMatchObject({
+                  code: "SECRET_SURFACE_UNAVAILABLE",
+                });
+              });
+              await expect(resolve()).resolves.toMatchObject({
+                apiKey: "synthetic-scoped-credential",
+              });
+            });
+          } else if (settlement === "other-profile") {
+            await withSetupCredentialAccess({ profileId: "openai:another-setup" }, async () => {
+              await expect(resolve()).rejects.toMatchObject({ code: "SECRET_SURFACE_UNAVAILABLE" });
+            });
+          } else if (settlement === "other-store") {
+            await expect(resolve("/unrelated/setup-owner")).rejects.toMatchObject({
+              code: "SECRET_SURFACE_UNAVAILABLE",
+            });
+          }
+        },
+      );
+      expect(readAfterClose).toBeDefined();
+      await expect(readAfterClose!()).rejects.toMatchObject({ code: "SECRET_SURFACE_UNAVAILABLE" });
+      if (settlement === "replacement") {
+        await expect(resolve()).resolves.toMatchObject({
+          apiKey: "synthetic-new-owner-credential",
+        });
+      } else {
+        expect(getRuntimeAuthProfileStoreSnapshotCore()).toEqual(prior);
+      }
+      expect(store.profiles[profileId]).toEqual(source);
+      expect(store.profiles[profileId]).not.toHaveProperty("key");
+    },
+  );
 });

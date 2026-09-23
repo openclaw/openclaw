@@ -1,5 +1,5 @@
 // Context-engine public types define the pluggable context-management lifecycle.
-import type { AgentMessage } from "../agents/runtime/index.js";
+import type { AgentMessage } from "../../packages/agent-core/src/types.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 
 // Result types
@@ -109,22 +109,6 @@ export type ContextEngineRuntimeSettings = {
   };
 };
 
-export class ContextEngineRuntimeSettingsUnavailableError extends Error {
-  readonly code = "context_engine_runtime_settings_unavailable";
-  constructor(message?: string) {
-    super(message);
-    this.name = "ContextEngineRuntimeSettingsUnavailableError";
-  }
-}
-
-export class ContextEngineRuntimeSettingsUnsupportedError extends Error {
-  readonly code = "context_engine_runtime_settings_unsupported";
-  constructor(message?: string) {
-    super(message);
-    this.name = "ContextEngineRuntimeSettingsUnsupportedError";
-  }
-}
-
 export type CompactResult = {
   ok: boolean;
   compacted: boolean;
@@ -194,6 +178,11 @@ export type ContextEngineInfo = {
   id: string;
   name: string;
   version?: string;
+  acceptedHostParams?: string[];
+  transcriptSemantics?: {
+    currentTurnFence?: "before-current-turn-entry-v1";
+    turnAdvancementIdempotency?: "atomic-idempotent-v1";
+  };
   /** True when the engine manages its own compaction lifecycle. */
   ownsCompaction?: boolean;
   /**
@@ -224,7 +213,9 @@ export type TranscriptRewriteReplacement = {
   message: AgentMessage;
 };
 
-export type TranscriptRewriteRequest = {
+// Local-only: engines consume this shape structurally via rewriteTranscriptEntries;
+// the last named importer was the deleted destructive rewrite path (#115271).
+type TranscriptRewriteRequest = {
   /** Message entry replacements to apply in one branch-and-reappend pass. */
   replacements: TranscriptRewriteReplacement[];
   /** Optional entry-id set that must cover every active-branch entry from the first replacement onward. */
@@ -258,10 +249,12 @@ type ContextEnginePromptCacheUsage = {
 };
 
 type ContextEnginePromptCacheObservationChangeCode =
+  | "aggregateToolResultTruncation"
   | "cacheRetention"
   | "model"
   | "streamStrategy"
   | "systemPrompt"
+  | "systemPromptSuffix"
   | "tools"
   | "transport";
 
@@ -388,6 +381,11 @@ export interface ContextEngine {
     sessionFile: string;
     runtimeSettings?: ContextEngineRuntimeSettings;
     runtimeContext?: ContextEngineRuntimeContext;
+    /**
+     * Optional caller cancellation for maintenance work that may block.
+     * Engines should reject promptly when this signal aborts.
+     */
+    abortSignal?: AbortSignal;
   }): Promise<ContextEngineMaintenanceResult>;
 
   /**
@@ -438,6 +436,24 @@ export interface ContextEngine {
   }): Promise<void>;
 
   /**
+   * Atomically and idempotently commit one accepted durable transcript turn.
+   * Messages span the admitted user entry through the accepted terminal entry.
+   * Hosts may retry the same advancement key after process or plugin failure.
+   */
+  commitTurn?(params: {
+    advancementKey: string;
+    admission: import("../config/sessions/transcript-entry-anchor.js").TranscriptTurnAdmission;
+    terminal: import("../config/sessions/transcript-entry-anchor.js").TranscriptEntryAnchor;
+    messages: AgentMessage[];
+    sessionId: string;
+    sessionKey?: string;
+    sessionTarget?: ContextEngineSessionTarget;
+    runtimeSettings?: ContextEngineRuntimeSettings;
+    runtimeContext?: ContextEngineRuntimeContext;
+    isHeartbeat?: boolean;
+  }): Promise<{ status: "committed" | "duplicate" }>;
+
+  /**
    * Assemble model context under a token budget.
    * Returns an ordered set of messages ready for the model.
    */
@@ -456,6 +472,7 @@ export interface ContextEngine {
     /** The incoming user prompt for this turn (useful for retrieval-oriented engines). */
     prompt?: string;
     runtimeSettings?: ContextEngineRuntimeSettings;
+    runtimeContext?: ContextEngineRuntimeContext;
   }): Promise<AssembleResult>;
 
   /**

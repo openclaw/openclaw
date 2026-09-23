@@ -1,11 +1,4 @@
-// Google provider module implements model/runtime integration.
-import { transcodeAudioBufferToOpus } from "openclaw/plugin-sdk/media-runtime";
-import {
-  assertOkOrThrowProviderError,
-  postJsonRequest,
-  readProviderJsonResponse,
-  sanitizeConfiguredModelProviderRequest,
-} from "openclaw/plugin-sdk/provider-http";
+import type { sanitizeConfiguredModelProviderRequest } from "openclaw/plugin-sdk/provider-http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-onboard";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
@@ -15,9 +8,13 @@ import type {
   SpeechProviderPlugin,
   SpeechSynthesisRequest,
 } from "openclaw/plugin-sdk/speech-core";
-import { asObject, trimToUndefined } from "openclaw/plugin-sdk/speech-core";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveGoogleGenerativeAiHttpRequestConfig } from "./api.js";
+import { retryAsync } from "openclaw/plugin-sdk/speech-provider";
+import {
+  asOptionalRecord,
+  normalizeOptionalString,
+  normalizeOptionalString as trimToUndefined,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { GOOGLE_PREBUILT_VOICES } from "./voice-catalog.js";
 
 const DEFAULT_GOOGLE_TTS_MODEL = "gemini-3.1-flash-tts-preview";
 const DEFAULT_GOOGLE_TTS_VOICE = "Kore";
@@ -30,39 +27,6 @@ const GOOGLE_TTS_MODELS = [
   "gemini-3.1-flash-tts-preview",
   "gemini-2.5-flash-preview-tts",
   "gemini-2.5-pro-preview-tts",
-] as const;
-
-const GOOGLE_TTS_VOICES = [
-  "Zephyr",
-  "Puck",
-  "Charon",
-  "Kore",
-  "Fenrir",
-  "Leda",
-  "Orus",
-  "Aoede",
-  "Callirrhoe",
-  "Autonoe",
-  "Enceladus",
-  "Iapetus",
-  "Umbriel",
-  "Algieba",
-  "Despina",
-  "Erinome",
-  "Algenib",
-  "Rasalgethi",
-  "Laomedeia",
-  "Achernar",
-  "Alnilam",
-  "Schedar",
-  "Gacrux",
-  "Pulcherrima",
-  "Achird",
-  "Zubenelgenubi",
-  "Vindemiatrix",
-  "Sadachbia",
-  "Sadaltager",
-  "Sulafat",
 ] as const;
 
 type GoogleTtsProviderConfig = {
@@ -192,8 +156,8 @@ function resolveGoogleTtsBaseUrl(params: {
 function resolveGoogleTtsConfigRecord(
   rawConfig: Record<string, unknown>,
 ): Record<string, unknown> | undefined {
-  const providers = asObject(rawConfig.providers);
-  return asObject(providers?.google) ?? asObject(rawConfig.google);
+  const providers = asOptionalRecord(rawConfig.providers);
+  return asOptionalRecord(providers?.google) ?? asOptionalRecord(rawConfig.google);
 }
 
 function normalizeGoogleTtsProviderConfig(
@@ -205,7 +169,7 @@ function normalizeGoogleTtsProviderConfig(
   return {
     apiKey: normalizeResolvedSecretInputString({
       value: raw?.apiKey,
-      path: "messages.tts.providers.google.apiKey",
+      path: "tts.providers.google.apiKey",
     }),
     baseUrl: trimToUndefined(raw?.baseUrl),
     model: normalizeGoogleTtsModel(raw?.model),
@@ -289,20 +253,6 @@ function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext): {
   }
 }
 
-function extractGoogleSpeechPcm(payload: GoogleGenerateSpeechResponse): Buffer {
-  for (const candidate of payload.candidates ?? []) {
-    for (const part of candidate.content?.parts ?? []) {
-      const inline = part.inlineData ?? part.inline_data;
-      const data = normalizeOptionalString(inline?.data);
-      if (!data) {
-        continue;
-      }
-      return Buffer.from(data, "base64");
-    }
-  }
-  throw new Error("Google TTS response missing audio data");
-}
-
 function normalizePromptSectionText(value: string | undefined): string | undefined {
   const trimmed = trimToUndefined(value?.replace(/\r\n?/g, "\n"));
   if (!trimmed) {
@@ -325,12 +275,6 @@ function normalizePromptSectionText(value: string | undefined): string | undefin
   return sanitized;
 }
 
-function normalizePromptList(values: readonly string[] | undefined): string[] {
-  return (values ?? [])
-    .map((value) => normalizePromptSectionText(value))
-    .filter((value): value is string => Boolean(value));
-}
-
 function isOpenClawGoogleAudioProfilePrompt(text: string): boolean {
   return (
     text.includes("# AUDIO PROFILE:") &&
@@ -344,27 +288,10 @@ function renderGoogleAudioProfilePrompt(params: {
   persona?: {
     id: string;
     label?: string;
-    prompt?: {
-      profile?: string;
-      scene?: string;
-      sampleContext?: string;
-      style?: string;
-      accent?: string;
-      pacing?: string;
-      constraints?: string[];
-    };
   };
   personaPrompt?: string;
 }): string {
   const transcript = params.text.replace(/\r\n?/g, "\n").trim();
-  const prompt = params.persona?.prompt;
-  const profile = normalizePromptSectionText(prompt?.profile);
-  const scene = normalizePromptSectionText(prompt?.scene);
-  const sampleContext = normalizePromptSectionText(prompt?.sampleContext);
-  const style = normalizePromptSectionText(prompt?.style);
-  const accent = normalizePromptSectionText(prompt?.accent);
-  const pacing = normalizePromptSectionText(prompt?.pacing);
-  const constraints = normalizePromptList(prompt?.constraints);
   const personaPrompt = normalizePromptSectionText(params.personaPrompt);
   const label =
     normalizePromptSectionText(params.persona?.label) ??
@@ -378,35 +305,16 @@ function renderGoogleAudioProfilePrompt(params: {
     ].join("\n"),
   ];
 
-  if (label || profile) {
-    sections.push([`# AUDIO PROFILE: ${label ?? "voice"}`, profile].filter(Boolean).join("\n"));
-  }
-  if (scene) {
-    sections.push(["## THE SCENE", scene].join("\n"));
+  if (label) {
+    sections.push(`# AUDIO PROFILE: ${label}`);
   }
 
   const directorNotes: string[] = [];
-  if (style) {
-    directorNotes.push(`Style: ${style}`);
-  }
-  if (accent) {
-    directorNotes.push(`Accent: ${accent}`);
-  }
-  if (pacing) {
-    directorNotes.push(`Pacing: ${pacing}`);
-  }
-  if (constraints.length > 0) {
-    directorNotes.push(["Constraints:", ...constraints.map((item) => `- ${item}`)].join("\n"));
-  }
   if (personaPrompt) {
     directorNotes.push(["Provider notes:", personaPrompt].join("\n"));
   }
   if (directorNotes.length > 0) {
     sections.push(["### DIRECTOR'S NOTES", ...directorNotes].join("\n"));
-  }
-
-  if (sampleContext) {
-    sections.push(["### SAMPLE CONTEXT", sampleContext].join("\n"));
   }
 
   sections.push(["### TRANSCRIPT", transcript].join("\n"));
@@ -446,6 +354,10 @@ async function synthesizeGoogleTtsPcmOnce(params: {
   speakerName?: string;
   timeoutMs: number;
 }): Promise<Buffer> {
+  const { assertOkOrThrowProviderError, postJsonRequest, readProviderJsonResponse } =
+    await import("openclaw/plugin-sdk/provider-http");
+  const { resolveGoogleGenerativeAiHttpRequestConfig } = await import("./api.js");
+  const { canonicalizeGoogleProviderBase64 } = await import("./base64.js");
   const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
     resolveGoogleGenerativeAiHttpRequestConfig({
       apiKey: params.apiKey,
@@ -508,7 +420,21 @@ async function synthesizeGoogleTtsPcmOnce(params: {
         res,
         "Google TTS response",
       );
-      return extractGoogleSpeechPcm(payload);
+      for (const candidate of payload.candidates ?? []) {
+        for (const part of candidate.content?.parts ?? []) {
+          const inline = part.inlineData ?? part.inline_data;
+          const data = normalizeOptionalString(inline?.data);
+          if (!data) {
+            continue;
+          }
+          const canonicalAudio = canonicalizeGoogleProviderBase64(data);
+          if (!canonicalAudio) {
+            throw new Error("Google TTS response returned malformed base64 audio data");
+          }
+          return Buffer.from(canonicalAudio, "base64");
+        }
+      }
+      throw new Error("Google TTS response missing audio data");
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       throw new GoogleTtsRetryableError(message);
@@ -529,18 +455,11 @@ async function synthesizeGoogleTtsPcm(params: {
   speakerName?: string;
   timeoutMs: number;
 }): Promise<Buffer> {
-  let lastError: unknown;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      return await synthesizeGoogleTtsPcmOnce(params);
-    } catch (err) {
-      lastError = err;
-      if (!isGoogleTtsRetryableError(err) || attempt > 0) {
-        throw err;
-      }
-    }
-  }
-  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+  return await retryAsync(() => synthesizeGoogleTtsPcmOnce(params), {
+    attempts: 2,
+    minDelayMs: 0,
+    shouldRetry: isGoogleTtsRetryableError,
+  });
 }
 
 type GoogleTtsSynthesisRequest = Pick<
@@ -558,6 +477,8 @@ async function synthesizeConfiguredGoogleTts(req: GoogleTtsSynthesisRequest): Pr
   if (!apiKey) {
     throw new Error("Google API key missing");
   }
+  const { sanitizeConfiguredModelProviderRequest } =
+    await import("openclaw/plugin-sdk/provider-http");
   return synthesizeGoogleTtsPcm({
     text: req.text,
     apiKey,
@@ -578,7 +499,7 @@ export function buildGoogleSpeechProvider(): SpeechProviderPlugin {
     autoSelectOrder: 50,
     defaultModel: DEFAULT_GOOGLE_TTS_MODEL,
     models: GOOGLE_TTS_MODELS,
-    voices: GOOGLE_TTS_VOICES,
+    voices: GOOGLE_PREBUILT_VOICES,
     resolveConfig: ({ rawConfig }) => normalizeGoogleTtsProviderConfig(rawConfig),
     parseDirectiveToken,
     resolveTalkConfig: ({ baseTtsConfig, talkProviderConfig }) => {
@@ -612,7 +533,7 @@ export function buildGoogleSpeechProvider(): SpeechProviderPlugin {
         ? {}
         : { model: normalizeGoogleTtsModel(params.modelId) }),
     }),
-    listVoices: async () => GOOGLE_TTS_VOICES.map((voice) => ({ id: voice, name: voice })),
+    listVoices: async () => GOOGLE_PREBUILT_VOICES.map((voice) => ({ id: voice, name: voice })),
     isConfigured: ({ cfg, providerConfig }) =>
       Boolean(resolveGoogleTtsApiKey({ cfg, providerConfig })),
     prepareSynthesis: (ctx) => {
@@ -634,6 +555,7 @@ export function buildGoogleSpeechProvider(): SpeechProviderPlugin {
     synthesize: async (req) => {
       const pcm = await synthesizeConfiguredGoogleTts(req);
       if (req.target === "voice-note") {
+        const { transcodeAudioBufferToOpus } = await import("openclaw/plugin-sdk/media-runtime");
         return {
           audioBuffer: await transcodeAudioBufferToOpus({
             audioBuffer: wrapPcm16MonoToWav(pcm),

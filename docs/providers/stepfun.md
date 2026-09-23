@@ -19,8 +19,10 @@ Standard and Step Plan are **separate providers** with different endpoints and m
 
 ```bash
 openclaw plugins install @openclaw/stepfun-provider
-openclaw gateway restart
 ```
+
+Installation applies to a running Gateway automatically; otherwise it takes effect
+on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 
 ## Region and endpoint overview
 
@@ -32,6 +34,9 @@ openclaw gateway restart
 Auth env var: `STEPFUN_API_KEY`
 
 ## Built-in catalog
+
+Setup saves connection settings and aliases without copying generated catalog rows into your config.
+Explicit `models.mode: "replace"` keeps catalog seeding enabled; custom model rows stay intact.
 
 Standard (`stepfun`):
 
@@ -74,7 +79,8 @@ Step Plan (`stepfun-plan`):
       </Step>
       <Step title="Non-interactive alternative">
         ```bash
-        openclaw onboard --auth-choice stepfun-standard-api-key-intl \
+        openclaw onboard --non-interactive --accept-risk --skip-health \
+          --auth-choice stepfun-standard-api-key-intl \
           --stepfun-api-key "$STEPFUN_API_KEY"
         ```
       </Step>
@@ -113,7 +119,8 @@ Step Plan (`stepfun-plan`):
       </Step>
       <Step title="Non-interactive alternative">
         ```bash
-        openclaw onboard --auth-choice stepfun-plan-api-key-intl \
+        openclaw onboard --non-interactive --accept-risk --skip-health \
+          --auth-choice stepfun-plan-api-key-intl \
           --stepfun-api-key "$STEPFUN_API_KEY"
         ```
       </Step>
@@ -138,7 +145,7 @@ A single auth flow writes region-matched profiles for both `stepfun` and `stepfu
   <Accordion title="Full config: Standard provider">
     ```json5
     {
-      env: { STEPFUN_API_KEY: "your-key" },
+      env: { vars: { STEPFUN_API_KEY: "your-key" } },
       agents: { defaults: { model: { primary: "stepfun/step-3.5-flash" } } },
       models: {
         mode: "merge",
@@ -157,33 +164,13 @@ A single auth flow writes region-matched profiles for both `stepfun` and `stepfu
                 cost: { input: 0.2, output: 1.15, cacheRead: 0.04, cacheWrite: 0 },
                 contextWindow: 262144,
                 maxTokens: 262144,
-                compat: {
-                  supportsStore: false,
-                  supportsDeveloperRole: false,
-                  supportsUsageInStreaming: false,
-                  supportsReasoningEffort: true,
-                  supportsStrictMode: false,
-                  supportedReasoningEfforts: ["low", "medium", "high"],
-                  maxTokensField: "max_tokens",
-                  reasoningEffortMap: {
-                    off: "low",
-                    none: "low",
-                    minimal: "low",
-                    low: "low",
-                    medium: "medium",
-                    high: "high",
-                    xhigh: "high",
-                    adaptive: "high",
-                    max: "high",
-                  },
-                },
               },
               {
                 id: "step-3.5-flash",
                 name: "Step 3.5 Flash",
                 reasoning: true,
                 input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                cost: { input: 0.1, output: 0.3, cacheRead: 0.02, cacheWrite: 0 },
                 contextWindow: 262144,
                 maxTokens: 65536,
               },
@@ -198,7 +185,7 @@ A single auth flow writes region-matched profiles for both `stepfun` and `stepfu
   <Accordion title="Full config: Step Plan provider">
     ```json5
     {
-      env: { STEPFUN_API_KEY: "your-key" },
+      env: { vars: { STEPFUN_API_KEY: "your-key" } },
       agents: { defaults: { model: { primary: "stepfun-plan/step-3.5-flash" } } },
       models: {
         mode: "merge",
@@ -217,26 +204,6 @@ A single auth flow writes region-matched profiles for both `stepfun` and `stepfu
                 cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                 contextWindow: 262144,
                 maxTokens: 262144,
-                compat: {
-                  supportsStore: false,
-                  supportsDeveloperRole: false,
-                  supportsUsageInStreaming: false,
-                  supportsReasoningEffort: true,
-                  supportsStrictMode: false,
-                  supportedReasoningEfforts: ["low", "medium", "high"],
-                  maxTokensField: "max_tokens",
-                  reasoningEffortMap: {
-                    off: "low",
-                    none: "low",
-                    minimal: "low",
-                    low: "low",
-                    medium: "medium",
-                    high: "high",
-                    xhigh: "high",
-                    adaptive: "high",
-                    max: "high",
-                  },
-                },
               },
               {
                 id: "step-3.5-flash",
@@ -265,9 +232,9 @@ A single auth flow writes region-matched profiles for both `stepfun` and `stepfu
   </Accordion>
 
   <Accordion title="Notes">
-    - `step-3.7-flash` accepts text and image input through OpenClaw. StepFun's API also supports video, which is not yet a model input modality in OpenClaw.
+    - `step-3.7-flash` accepts text and image input through OpenClaw. StepFun's API also supports video, which OpenClaw does not declare as an input modality for StepFun models.
     - Step 3.7 supports `low`, `medium`, and `high` reasoning effort. Because the model has no non-reasoning mode, `/think off` maps to `low`.
-    - `step-3.5-flash-2603` is currently exposed only on `stepfun-plan`.
+    - `step-3.5-flash-2603` is exposed only on `stepfun-plan`.
     - Use `openclaw models list` and `openclaw models set <provider/model>` to inspect or switch models.
 
   </Accordion>

@@ -1,14 +1,63 @@
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
-import { clearSessionStoreCacheForTest } from "../../config/sessions/store.js";
+import {
+  loadSessionEntry,
+  patchSessionEntryCore,
+  replaceSessionEntry,
+} from "../../config/sessions/session-accessor.js";
+import { clearSessionStoreCacheForTest } from "../../config/sessions/store-writer-state.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { persistReplySessionEntry } from "./session-entry-persistence.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const sessionKey = "agent:main:main";
 
 describe("persistReplySessionEntry", () => {
+  it("rejects account selection authority revoked while waiting for the session writer", async () => {
+    const dir = tempDirs.make("openclaw-reply-session-authority-");
+    const storePath = path.join(dir, "sessions.json");
+    const initialEntry: SessionEntry = {
+      sessionId: "session-1",
+      updatedAt: 100,
+      delivery: { kind: "none" },
+    };
+    await replaceSessionEntry({ sessionKey, storePath }, initialEntry);
+    const entered = createDeferred();
+    const release = createDeferred();
+    const writer = patchSessionEntryCore({ sessionKey, storePath }, async () => {
+      entered.resolve();
+      await release.promise;
+      return null;
+    });
+    await entered.promise;
+    let authorized = true;
+    const pending = persistReplySessionEntry({
+      storePath,
+      sessionKey,
+      initialEntry,
+      entry: {
+        ...initialEntry,
+        authProfileOverride: "openai:work",
+        authProfileOverrideSource: "user",
+      },
+      validateCommit: () => (authorized ? undefined : "Select an account you own."),
+    });
+    authorized = false;
+    release.resolve();
+    await writer;
+
+    expect(await pending).toMatchObject({
+      status: "commit-rejected",
+      error: "Select an account you own.",
+      entry: initialEntry,
+    });
+    expect(loadSessionEntry({ sessionKey, storePath, readConsistency: "latest" })).toEqual(
+      initialEntry,
+    );
+  });
+
   it("does not restore policy fields revoked during reply processing", async () => {
     const dir = tempDirs.make("openclaw-reply-session-store-");
     try {
@@ -27,11 +76,11 @@ describe("persistReplySessionEntry", () => {
         thinkingLevel: "low",
         sendPolicy: "deny",
       };
-      await replaceSessionEntry({ sessionKey: "main", storePath }, currentEntry);
+      await replaceSessionEntry({ sessionKey, storePath }, currentEntry);
 
       const result = await persistReplySessionEntry({
         storePath,
-        sessionKey: "main",
+        sessionKey,
         initialEntry,
         entry: {
           ...initialEntry,
@@ -52,9 +101,9 @@ describe("persistReplySessionEntry", () => {
       });
       expect(result.entry.elevatedLevel).toBeUndefined();
       expect(result.entry.inheritedToolAllow).toBeUndefined();
-      expect(
-        loadSessionEntry({ sessionKey: "main", storePath, readConsistency: "latest" }),
-      ).toEqual(result.entry);
+      expect(loadSessionEntry({ sessionKey, storePath, readConsistency: "latest" })).toEqual(
+        result.entry,
+      );
     } finally {
       clearSessionStoreCacheForTest();
     }
@@ -73,24 +122,25 @@ describe("persistReplySessionEntry", () => {
         sessionId: "session-2",
         updatedAt: 400,
         thinkingLevel: "medium",
+        delivery: { kind: "none" },
       };
-      await replaceSessionEntry({ sessionKey: "main", storePath }, currentEntry);
+      await replaceSessionEntry({ sessionKey, storePath }, currentEntry);
 
       const result = await persistReplySessionEntry({
         storePath,
-        sessionKey: "main",
+        sessionKey,
         initialEntry,
         entry: { ...initialEntry, thinkingLevel: "high", updatedAt: 250 },
       });
 
       expect(result).toEqual({
         status: "lifecycle-invalidated",
-        error: 'Session "main" changed while starting work. Retry.',
+        error: `Session "${sessionKey}" changed while starting work. Retry.`,
         entry: currentEntry,
       });
-      expect(
-        loadSessionEntry({ sessionKey: "main", storePath, readConsistency: "latest" }),
-      ).toEqual(currentEntry);
+      expect(loadSessionEntry({ sessionKey, storePath, readConsistency: "latest" })).toEqual(
+        currentEntry,
+      );
     } finally {
       clearSessionStoreCacheForTest();
     }
@@ -106,17 +156,17 @@ describe("persistReplySessionEntry", () => {
       };
       const result = await persistReplySessionEntry({
         storePath,
-        sessionKey: "main",
+        sessionKey,
         initialEntry,
         entry: { ...initialEntry, updatedAt: 250 },
       });
 
       expect(result).toEqual({
         status: "lifecycle-invalidated",
-        error: 'Session "main" was deleted while starting work. Retry.',
+        error: `Session "${sessionKey}" was deleted while starting work. Retry.`,
       });
       expect(
-        loadSessionEntry({ sessionKey: "main", storePath, readConsistency: "latest" }),
+        loadSessionEntry({ sessionKey, storePath, readConsistency: "latest" }),
       ).toBeUndefined();
     } finally {
       clearSessionStoreCacheForTest();
@@ -136,12 +186,13 @@ describe("persistReplySessionEntry", () => {
         ...initialEntry,
         updatedAt: 400,
         archivedAt: 300,
+        delivery: { kind: "none" },
       };
-      await replaceSessionEntry({ sessionKey: "main", storePath }, archivedEntry);
+      await replaceSessionEntry({ sessionKey, storePath }, archivedEntry);
 
       const result = await persistReplySessionEntry({
         storePath,
-        sessionKey: "main",
+        sessionKey,
         initialEntry,
         entry: { ...initialEntry, updatedAt: 250 },
         touchedFields: ["modelOverride"],
@@ -149,12 +200,12 @@ describe("persistReplySessionEntry", () => {
 
       expect(result).toEqual({
         status: "lifecycle-invalidated",
-        error: 'Session "main" is archived. Restore it before starting new work.',
+        error: `Session "${sessionKey}" is archived. Restore it before starting new work.`,
         entry: archivedEntry,
       });
-      expect(
-        loadSessionEntry({ sessionKey: "main", storePath, readConsistency: "latest" }),
-      ).toEqual(archivedEntry);
+      expect(loadSessionEntry({ sessionKey, storePath, readConsistency: "latest" })).toEqual(
+        archivedEntry,
+      );
     } finally {
       clearSessionStoreCacheForTest();
     }

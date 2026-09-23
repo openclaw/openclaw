@@ -1,45 +1,25 @@
-/**
- * Runtime OpenRouter model capability detection.
- *
- * When an OpenRouter model is not in the built-in static list, we look up its
- * actual capabilities from a cached copy of the OpenRouter model catalog.
- *
- * Cache layers (checked in order):
- * 1. In-memory Map (instant, cleared on process restart)
- * 2. Shared SQLite state cache
- * 3. OpenRouter API fetch (populates both layers)
- *
- * Model capabilities are assumed stable — the cache has no TTL expiry.
- * A background refresh is triggered only when a model is not found in
- * the cache (i.e. a newly added model on OpenRouter).
- *
- * Sync callers can read whatever is already cached. Async callers can await a
- * one-time fetch so the first unknown-model lookup resolves with real
- * capabilities instead of the text-only fallback.
- */
+// Dynamic OpenRouter models use a process cache backed by shared SQLite.
+// Rows have no TTL: await first-use or missing-model refresh; synchronous
+// lookups consume cached capabilities while a missing-model refresh runs.
 
+import { normalizeOpenRouterModelReasoning } from "@openclaw/model-catalog-core/model-catalog-normalize";
+import { normalizeOpenRouterModelPricing } from "@openclaw/model-catalog-core/model-catalog-pricing";
+import type { ModelCatalogModel } from "@openclaw/model-catalog-core/model-catalog-types";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { readResponseWithLimit } from "../../infra/http-body.js";
+import { cancelUnreadResponseBody } from "../../infra/http-body.js";
 import { resolveProxyFetchFromEnv } from "../../infra/net/proxy-fetch.js";
-import { parseStrictFiniteNumber } from "../../infra/parse-finite-number.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createCorePluginStateSyncKeyedStore } from "../../plugin-state/plugin-state-store.js";
+import { readProviderJsonArrayFieldResponse } from "../provider-http-errors.js";
 
 const log = createSubsystemLogger("openrouter-model-capabilities");
 
 const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
 const FETCH_TIMEOUT_MS = 10_000;
-// Cap the catalog body so an untrusted/oversized OpenRouter response cannot force
-// the runtime to buffer an unbounded payload before parsing. Mirrors the bound
-// applied to the sibling pricing-cache endpoint (16 MiB).
-const OPENROUTER_MODELS_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 const SQLITE_CACHE_OWNER_ID = "core:openrouter-model-capabilities";
-const SQLITE_CACHE_NAMESPACE = "models.v3";
+// v3 did not retain effort-selection or mandatory-reasoning capabilities.
+const SQLITE_CACHE_NAMESPACE = "models.v4";
 const SQLITE_CACHE_MAX_ENTRIES = 10_000;
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
 
 interface OpenRouterApiModel {
   id: string;
@@ -49,6 +29,7 @@ interface OpenRouterApiModel {
     modality?: string;
   };
   supported_parameters?: string[];
+  reasoning?: unknown;
   context_length?: number;
   max_completion_tokens?: number;
   max_output_tokens?: number;
@@ -56,32 +37,21 @@ interface OpenRouterApiModel {
     context_length?: number;
     max_completion_tokens?: number;
   };
-  pricing?: {
-    prompt?: string;
-    completion?: string;
-    input_cache_read?: string;
-    input_cache_write?: string;
-  };
+  pricing?: unknown;
 }
 
-interface OpenRouterModelCapabilities {
+interface OpenRouterModelCapabilities extends Pick<
+  ModelCatalogModel,
+  "compat" | "thinkingLevelMap"
+> {
   name: string;
   input: Array<"text" | "image">;
   reasoning: boolean;
   supportsTools?: boolean;
   contextWindow: number;
   maxTokens: number;
-  cost: {
-    input: number;
-    output: number;
-    cacheRead: number;
-    cacheWrite: number;
-  };
+  cost: NonNullable<ReturnType<typeof normalizeOpenRouterModelPricing>>;
 }
-
-// ---------------------------------------------------------------------------
-// SQLite cache
-// ---------------------------------------------------------------------------
 
 function isValidCapabilities(value: unknown): value is OpenRouterModelCapabilities {
   if (!value || typeof value !== "object") {
@@ -138,10 +108,6 @@ function readSqliteCache(): Map<string, OpenRouterModelCapabilities> | undefined
   }
 }
 
-// ---------------------------------------------------------------------------
-// In-memory cache state
-// ---------------------------------------------------------------------------
-
 let cache: Map<string, OpenRouterModelCapabilities> | undefined;
 let fetchInFlight: Promise<void> | undefined;
 const skipNextMissRefresh = new Set<string>();
@@ -161,6 +127,7 @@ function parseModel(model: OpenRouterApiModel): OpenRouterModelCapabilities {
     name: model.name || model.id,
     input,
     reasoning: supportedParameters?.includes("reasoning") ?? false,
+    ...normalizeOpenRouterModelReasoning(model.reasoning),
     ...(supportedParameters ? { supportsTools: supportedParameters.includes("tools") } : {}),
     contextWindow: model.top_provider?.context_length ?? model.context_length ?? 128_000,
     maxTokens:
@@ -168,24 +135,14 @@ function parseModel(model: OpenRouterApiModel): OpenRouterModelCapabilities {
       model.max_completion_tokens ??
       model.max_output_tokens ??
       8192,
-    cost: {
-      input: (parseStrictFiniteNumber(model.pricing?.prompt) ?? 0) * 1_000_000,
-      output: (parseStrictFiniteNumber(model.pricing?.completion) ?? 0) * 1_000_000,
-      cacheRead: (parseStrictFiniteNumber(model.pricing?.input_cache_read) ?? 0) * 1_000_000,
-      cacheWrite: (parseStrictFiniteNumber(model.pricing?.input_cache_write) ?? 0) * 1_000_000,
+    cost: normalizeOpenRouterModelPricing(model.pricing) ?? {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
     },
   };
 }
-
-async function cancelUnreadResponseBody(response: Response | undefined): Promise<void> {
-  if (response && !response.bodyUsed) {
-    await response.body?.cancel().catch(() => undefined);
-  }
-}
-
-// ---------------------------------------------------------------------------
-// API fetch
-// ---------------------------------------------------------------------------
 
 async function doFetch(): Promise<void> {
   const controller = new AbortController();
@@ -203,15 +160,19 @@ async function doFetch(): Promise<void> {
       return;
     }
 
-    const bytes = await readResponseWithLimit(response, OPENROUTER_MODELS_RESPONSE_MAX_BYTES, {
-      onOverflow: ({ size }) => new Error(`OpenRouter models response too large: ${size} bytes`),
-    });
-    const data = JSON.parse(bytes.toString("utf8")) as { data?: OpenRouterApiModel[] };
-    const models = data.data ?? [];
+    const models = await readProviderJsonArrayFieldResponse(
+      response,
+      "OpenRouter models response",
+      "data",
+    );
     const map = new Map<string, OpenRouterModelCapabilities>();
 
-    for (const model of models) {
-      if (!model.id) {
+    for (const value of models) {
+      if (!value || typeof value !== "object" || Array.isArray(value)) {
+        continue;
+      }
+      const model = value as OpenRouterApiModel;
+      if (typeof model.id !== "string" || !model.id) {
         continue;
       }
       map.set(model.id, parseModel(model));
@@ -237,10 +198,6 @@ function triggerFetch(): void {
     fetchInFlight = undefined;
   });
 }
-
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
 
 /**
  * Ensure the cache is populated. Checks in-memory first, then SQLite, then

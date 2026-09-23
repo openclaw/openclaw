@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements accounts behavior.
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -44,7 +43,6 @@ export type ResolvedWhatsAppAccount = {
   reactionLevel?: WhatsAppAccountConfig["reactionLevel"];
   groups?: WhatsAppAccountConfig["groups"];
   direct?: WhatsAppAccountConfig["direct"];
-  debounceMs?: number;
   replyToMode?: ReplyToMode;
 };
 
@@ -133,7 +131,7 @@ export function resolveWhatsAppAccount(params: {
     name: normalizeOptionalString(merged.name),
     enabled,
     sendReadReceipts: merged.sendReadReceipts ?? true,
-    messagePrefix: merged.messagePrefix ?? params.cfg.messages?.messagePrefix,
+    messagePrefix: merged.responsePrefix,
     defaultTo: merged.defaultTo,
     authDir,
     isLegacyAuthDir: isLegacy,
@@ -151,7 +149,6 @@ export function resolveWhatsAppAccount(params: {
     reactionLevel: merged.reactionLevel,
     groups: merged.groups,
     direct: merged.direct,
-    debounceMs: merged.debounceMs,
     replyToMode: merged.replyToMode,
   };
 }

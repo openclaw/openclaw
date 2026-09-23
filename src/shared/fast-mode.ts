@@ -1,5 +1,7 @@
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { modelKey } from "./model-key.js";
+
+export type { FastMode } from "@openclaw/normalization-core/string-coerce";
 
 export const DEFAULT_FAST_MODE_AUTO_ON_SECONDS = 60;
 
@@ -22,33 +24,7 @@ type FastModeConfig = {
   };
 };
 
-function modelConfigKey(provider?: string, model?: string): string {
-  const providerId = provider?.trim() ?? "";
-  const modelId = model?.trim() ?? "";
-  if (!providerId) {
-    return modelId;
-  }
-  if (!modelId) {
-    return providerId;
-  }
-  return normalizeLowercaseStringOrEmpty(modelId).startsWith(
-    `${normalizeLowercaseStringOrEmpty(providerId)}/`,
-  )
-    ? modelId
-    : `${providerId}/${modelId}`;
-}
-
-function modelConfigKeys(provider?: string, model?: string): string[] {
-  const key = modelConfigKey(provider, model);
-  const providerId = normalizeLowercaseStringOrEmpty(provider?.trim() ?? "");
-  if (providerId !== "openai-codex") {
-    return [key];
-  }
-  const openAiKey = modelConfigKey("openai", model);
-  return openAiKey === key ? [key] : [key, openAiKey];
-}
-
-export function resolveFastModeModelParams(params: {
+function resolveFastModeModelParams(params: {
   cfg: FastModeConfig | undefined;
   provider?: string;
   model?: string;
@@ -57,16 +33,10 @@ export function resolveFastModeModelParams(params: {
   if (!models) {
     return undefined;
   }
-  for (const key of modelConfigKeys(params.provider, params.model)) {
-    const modelConfig = models[key];
-    if (modelConfig?.params) {
-      return modelConfig.params;
-    }
-  }
-  return undefined;
+  return models[modelKey(params.provider ?? "", params.model ?? "")]?.params;
 }
 
-export function normalizeFastModeAutoOnSeconds(value: unknown): number | undefined {
+function normalizeFastModeAutoOnSeconds(value: unknown): number | undefined {
   return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
 }
 
@@ -74,15 +44,19 @@ export function resolveFastModeModelAutoOnSeconds(params: {
   cfg: FastModeConfig | undefined;
   provider?: string;
   model?: string;
+  modelParamSources?: readonly (Record<string, unknown> | undefined)[];
 }): number {
-  const modelParams = resolveFastModeModelParams(params);
-  return (
-    normalizeFastModeAutoOnSeconds(modelParams?.fastAutoOnSeconds) ??
-    normalizeFastModeAutoOnSeconds(modelParams?.fast_auto_on_seconds) ??
-    normalizeFastModeAutoOnSeconds(modelParams?.fastSeconds) ??
-    normalizeFastModeAutoOnSeconds(modelParams?.fast_seconds) ??
-    DEFAULT_FAST_MODE_AUTO_ON_SECONDS
-  );
+  for (const modelParams of params.modelParamSources ?? [resolveFastModeModelParams(params)]) {
+    const seconds =
+      normalizeFastModeAutoOnSeconds(modelParams?.fastAutoOnSeconds) ??
+      normalizeFastModeAutoOnSeconds(modelParams?.fast_auto_on_seconds) ??
+      normalizeFastModeAutoOnSeconds(modelParams?.fastSeconds) ??
+      normalizeFastModeAutoOnSeconds(modelParams?.fast_seconds);
+    if (seconds !== undefined) {
+      return seconds;
+    }
+  }
+  return DEFAULT_FAST_MODE_AUTO_ON_SECONDS;
 }
 
 export function resolveFastModeForElapsed(params: {
@@ -148,12 +122,6 @@ export function formatFastModeCommandOptions(params?: { fastAutoOnSeconds?: numb
   return `on, off, ${formatFastModeAutoLabel({
     fastAutoOnSeconds: params?.fastAutoOnSeconds,
   })}, default, status`;
-}
-
-export function normalizeFastModeSource(value: unknown): FastModeSource | undefined {
-  return value === "session" || value === "agent" || value === "config" || value === "default"
-    ? value
-    : undefined;
 }
 
 export function formatFastModeSourceSuffix(source: FastModeSource | undefined): string {

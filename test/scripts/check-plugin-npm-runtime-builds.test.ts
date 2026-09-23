@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { checkPluginNpmRuntimeBuilds } from "../../scripts/check-plugin-npm-runtime-builds.mjs";
+import { checkPluginNpmRuntimeBuilds } from "../../scripts/check-plugin-npm-runtime-builds.mts";
 
 const tempDirs: string[] = [];
 
@@ -76,7 +76,10 @@ describe("plugin npm runtime build checks", () => {
         repoRoot,
         packageDirs: ["extensions/missing"],
       }),
-    ).rejects.toThrow("did not produce a package-local runtime build plan");
+    ).rejects.toMatchObject({
+      code: "ENOENT",
+      path: join(repoRoot, "extensions", "missing", "package.json"),
+    });
   });
 
   it("builds a ClawHub-only TypeScript package runtime", async () => {

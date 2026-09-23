@@ -1,117 +1,18 @@
 // Qa Lab tests cover scenario runtime api plugin behavior.
-import { randomUUID } from "node:crypto";
-import * as fs from "node:fs/promises";
-import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
+import { createQaTransportAdapter } from "./qa-transport-registry.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
 import { createQaScenarioRuntimeApi } from "./scenario-runtime-api.js";
 
 type CreateQaScenarioRuntimeApiParams = Parameters<typeof createQaScenarioRuntimeApi>[0];
 type QaScenarioRuntimeConstants = CreateQaScenarioRuntimeApiParams["constants"];
-type QaScenarioRuntimeDeps = CreateQaScenarioRuntimeApiParams["deps"];
-
-function createDeps(overrides?: Partial<QaScenarioRuntimeDeps>): QaScenarioRuntimeDeps {
-  const fn = vi.fn();
-  return {
-    fs,
-    path,
-    sleep: vi.fn(async () => undefined),
-    randomUUID,
-    runScenario: fn,
-    waitForOutboundMessage: fn,
-    waitForTransportOutboundMessage: fn,
-    waitForChannelOutboundMessage: fn,
-    waitForNoOutbound: fn,
-    waitForNoTransportOutbound: fn,
-    recentOutboundSummary: fn,
-    formatConversationTranscript: fn,
-    readTransportTranscript: fn,
-    formatTransportTranscript: fn,
-    fetchJson: fn,
-    waitForGatewayHealthy: fn,
-    waitForTransportReady: fn,
-    waitForQaChannelReady: fn,
-    browserRequest: fn,
-    waitForBrowserReady: fn,
-    browserOpenTab: fn,
-    browserSnapshot: fn,
-    browserAct: fn,
-    webOpenPage: fn,
-    webWait: fn,
-    webType: fn,
-    webSnapshot: fn,
-    webEvaluate: fn,
-    waitForConfigRestartSettle: fn,
-    patchConfig: fn,
-    applyConfig: fn,
-    readConfigSnapshot: fn,
-    restartGatewayWithConfigPatch: fn,
-    createSession: fn,
-    readEffectiveTools: fn,
-    readSkillStatus: fn,
-    readRawQaSessionStore: fn,
-    seedQaSessionTranscript: fn,
-    readGatewayLogs: fn,
-    markGatewayLogCursor: fn,
-    scanGatewayLogSentinels: fn,
-    assertNoGatewayLogSentinels: fn,
-    readSessionTranscriptSummary: fn,
-    runQaCli: fn,
-    extractMediaPathFromText: fn,
-    resolveGeneratedImagePath: fn,
-    startAgentRun: fn,
-    waitForAgentRun: fn,
-    waitForAgentHistoryReply: fn,
-    listCronJobs: fn,
-    waitForCronRunCompletion: fn,
-    findManagedDreamingCronJob: fn,
-    readDoctorMemoryStatus: fn,
-    forceMemoryIndex: fn,
-    findSkill: fn,
-    writeWorkspaceSkill: fn,
-    callPluginToolsMcp: fn,
-    runAgentPrompt: fn,
-    ensureImageGenerationConfigured: fn,
-    handleQaAction: fn,
-    runRuntimeToolFixture: fn,
-    extractQaToolPayload: fn,
-    formatMemoryDreamingDay: fn,
-    resolveSessionTranscriptsDirForAgent: fn,
-    activeMemoryToggleKey: fn,
-    setActiveMemorySessionDisabled: fn,
-    buildAgentSessionKey: fn,
-    normalizeLowercaseStringOrEmpty: fn,
-    formatErrorMessage: fn,
-    liveTurnTimeoutMs: fn,
-    resolveQaLiveTurnTimeoutMs: fn,
-    splitModelRef: fn,
-    hasDiscoveryLabels: fn,
-    reportsDiscoveryScopeLeak: fn,
-    reportsMissingDiscoveryFiles: fn,
-    hasModelSwitchContinuitySignal: fn,
-    ...overrides,
-  };
-}
 
 const constants: QaScenarioRuntimeConstants = {
   imageUnderstandingPngBase64: "png-small",
   imageUnderstandingLargePngBase64: "png-large",
   imageUnderstandingValidPngBase64: "png-valid",
 };
-
-const browserAndWebRuntimeTools = [
-  "browserRequest",
-  "waitForBrowserReady",
-  "browserOpenTab",
-  "browserSnapshot",
-  "browserAct",
-  "webOpenPage",
-  "webWait",
-  "webType",
-  "webSnapshot",
-  "webEvaluate",
-] as const;
 
 describe("createQaScenarioRuntimeApi", () => {
   it("builds a markdown-flow runtime surface from the transport adapter", async () => {
@@ -176,7 +77,13 @@ describe("createQaScenarioRuntimeApi", () => {
         },
       },
     };
-    const deps = createDeps({ sleep });
+    const deps = {
+      sleep,
+      waitForTransportReady: vi.fn(),
+      waitForAgentHistoryReply: vi.fn(),
+      browserRequest: vi.fn(),
+      normalizeModelRef: vi.fn(),
+    };
 
     const api = createQaScenarioRuntimeApi({
       env,
@@ -190,18 +97,14 @@ describe("createQaScenarioRuntimeApi", () => {
     expect(api.config).toEqual({ expected: "value" });
     expect(api.waitForCondition).toBe(waitForCondition);
     expect(api.waitForChannelReady).toBe(api.waitForTransportReady);
-    expect(api.waitForAgentHistoryReply).toBe(deps.waitForAgentHistoryReply);
-    expect(api.markGatewayLogCursor).toBe(deps.markGatewayLogCursor);
-    expect(api.assertNoGatewayLogSentinels).toBe(deps.assertNoGatewayLogSentinels);
-    expect(api.readSessionTranscriptSummary).toBe(deps.readSessionTranscriptSummary);
-    expect(api.seedQaSessionTranscript).toBe(deps.seedQaSessionTranscript);
-    for (const toolName of browserAndWebRuntimeTools) {
-      expect(api[toolName]).toBe(deps[toolName]);
+    expect(api.waitForQaChannelReady).toBe(api.waitForTransportReady);
+    for (const name of Object.keys(deps) as Array<keyof typeof deps>) {
+      expect(api[name]).toBe(deps[name]);
     }
     expect(api.getTransportSnapshot()).toEqual(state.getSnapshot());
     expect(api.imageUnderstandingPngBase64).toBe("png-small");
 
-    const inbound = api.injectInboundMessage({
+    const inbound = await api.injectInboundMessage({
       accountId: "qa-channel",
       conversation: { id: "qa-operator", kind: "direct" },
       senderId: "qa-operator",
@@ -224,5 +127,78 @@ describe("createQaScenarioRuntimeApi", () => {
     expect(readSpy).toHaveBeenCalledTimes(1);
     expect(resetSpy).toHaveBeenCalledTimes(3);
     expect(sleep).toHaveBeenCalledTimes(3);
+  });
+
+  it("routes scenario injection through a factory-created transport", async () => {
+    const state = createQaBusState();
+    const providerState = createQaBusState();
+    const sendInbound = vi.fn(async (input: Parameters<QaTransportAdapter["sendInbound"]>[0]) =>
+      providerState.addInboundMessage(input),
+    );
+    const created = await createQaTransportAdapter(
+      {
+        channelId: "discord",
+        driver: "crabline",
+        outputDir: ".artifacts/qa-e2e/scenario-runtime-api",
+        state,
+      },
+      [
+        {
+          id: "crabline-test",
+          matches: () => true,
+          async create() {
+            return {
+              id: "discord",
+              label: "Crabline Discord",
+              accountId: "sut",
+              requiredPluginIds: [],
+              supportedActions: [],
+              sendInbound,
+              createGatewayConfig: () => ({}),
+              async waitReady() {},
+              buildAgentDelivery: ({ target }: { target: string }) => ({
+                channel: "discord",
+                to: target,
+                replyChannel: "discord",
+                replyTo: target,
+              }),
+              async handleAction() {},
+              createReportNotes: () => [],
+            };
+          },
+        },
+      ],
+    );
+    const api = createQaScenarioRuntimeApi({
+      env: { lab: { baseUrl: "http://127.0.0.1:1234" }, transport: created.adapter },
+      scenario: {
+        id: "factory-inbound",
+        title: "Factory inbound",
+        surface: "channel",
+        objective: "test provider delivery",
+        successCriteria: ["provider receives inbound"],
+        sourcePath: "qa/scenarios/factory-inbound.yaml",
+        execution: { kind: "flow", flow: { steps: [] } },
+      },
+      deps: {
+        sleep: vi.fn(async () => undefined),
+        waitForTransportReady: vi.fn(),
+      },
+      constants,
+    });
+
+    const inbound = await api.injectInboundMessage({
+      accountId: "sut",
+      conversation: { id: "qa-operator", kind: "direct" },
+      senderId: "qa-operator",
+      text: "provider ingress",
+    });
+
+    expect(sendInbound).toHaveBeenCalledOnce();
+    expect(providerState.readMessage({ accountId: "sut", messageId: inbound.id })).toMatchObject({
+      text: "provider ingress",
+    });
+    expect(state.getSnapshot().messages).toEqual([]);
+    await created.cleanupWithoutGateway();
   });
 });

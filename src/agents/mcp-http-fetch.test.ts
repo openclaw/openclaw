@@ -1,7 +1,6 @@
-import fs from "node:fs";
+import fs from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import os from "node:os";
 import path from "node:path";
 import { parseErrorResponse } from "@modelcontextprotocol/sdk/client/auth.js";
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
@@ -10,12 +9,14 @@ import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
  * Verifies SSRF-guarded fetch, scoped dispatcher behavior, and same-origin headers.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   buildMcpHttpFetch,
   withoutMcpAuthorizationHeader,
   withSameOriginMcpHttpHeaders,
 } from "./mcp-http-fetch.js";
 import { withMcpOAuthBearer } from "./mcp-oauth-fetch.js";
+import { operatorMcpOAuthIdentity } from "./mcp-oauth-identity.js";
 
 const testGlobal = globalThis as Record<string, unknown>;
 const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
@@ -133,6 +134,7 @@ async function captureRejection(promise: Promise<unknown>): Promise<unknown> {
 }
 
 describe("MCP HTTP fetch helpers", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   const fetchCalls: Array<{
     url: string | URL | Request;
     init: unknown;
@@ -186,53 +188,69 @@ describe("MCP HTTP fetch helpers", () => {
     ).toBeUndefined();
   });
 
-  it("loads bounded client certificate and key files", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-mcp-tls-"));
+  it("preserves and reuses TLS material at the file limit", async () => {
+    const root = tempDirs.make("openclaw-mcp-tls-");
     const clientCert = path.join(root, "client.crt");
     const clientKey = path.join(root, "client.key");
-    fs.writeFileSync(clientCert, "client-certificate\n", "utf8");
-    fs.writeFileSync(clientKey, "client-key\n", "utf8");
+    const cert = "client-certificate".padEnd(64 * 1024, "\n");
+    const key = "client-key\n";
+    await Promise.all([fs.writeFile(clientCert, cert), fs.writeFile(clientKey, key)]);
+    const fetch = buildMcpHttpFetch({
+      clientCert,
+      clientKey,
+      resourceUrl: "https://mcp.example.com/mcp",
+    });
 
-    try {
-      const fetch = buildMcpHttpFetch({
-        clientCert,
-        clientKey,
-        resourceUrl: "https://mcp.example.com/mcp",
-      });
+    await fetch("https://mcp.example.com/mcp");
+    await Promise.all([fs.unlink(clientCert), fs.unlink(clientKey)]);
+    await fetch("https://mcp.example.com/mcp");
 
-      await fetch("https://mcp.example.com/token");
-
-      expect(getDispatcherConnectOptions(fetchCalls[0]?.init)).toMatchObject({
-        cert: "client-certificate",
-        key: "client-key",
-      });
-    } finally {
-      fs.rmSync(root, { recursive: true, force: true });
+    expect(fetchCalls).toHaveLength(2);
+    for (const call of fetchCalls) {
+      expect(getDispatcherConnectOptions(call.init)).toMatchObject({ cert, key });
     }
   });
 
   it.each(["clientCert", "clientKey"] as const)(
-    "rejects oversized %s files before dispatch",
+    "rejects oversized %s before dispatch and retries after repair",
     async (field) => {
-      const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-mcp-tls-"));
-      const oversized = path.join(root, field);
-      fs.writeFileSync(oversized, "x".repeat(64 * 1024 + 1), "utf8");
+      const filePath = path.join(tempDirs.make("openclaw-mcp-tls-"), field);
+      await fs.writeFile(filePath, "x".repeat(64 * 1024 + 1));
+      const fetch = buildMcpHttpFetch({
+        [field]: filePath,
+        resourceUrl: "https://mcp.example.com/mcp",
+      });
 
-      try {
-        const fetch = buildMcpHttpFetch({
-          [field]: oversized,
-          resourceUrl: "https://mcp.example.com/mcp",
-        });
-
-        await expect(fetch("https://mcp.example.com/token")).rejects.toThrow(
-          `exceeds ${64 * 1024} bytes`,
-        );
-        expect(fetchCalls).toHaveLength(0);
-      } finally {
-        fs.rmSync(root, { recursive: true, force: true });
-      }
+      await expect(fetch("https://mcp.example.com/mcp")).rejects.toThrow("exceeds 65536 bytes");
+      expect(fetchCalls).toHaveLength(0);
+      await fs.writeFile(filePath, "repaired\n");
+      await fetch("https://mcp.example.com/mcp");
+      expect(getDispatcherConnectOptions(fetchCalls[0]?.init)).toMatchObject({
+        [field === "clientCert" ? "cert" : "key"]: "repaired\n",
+      });
     },
   );
+
+  it("loads TLS files only when a redirect reaches the resource origin", async () => {
+    const clientCert = path.join(tempDirs.make("openclaw-mcp-tls-"), "missing.crt");
+    testGlobal[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: TestAgent,
+      EnvHttpProxyAgent: TestEnvHttpProxyAgent,
+      ProxyAgent: TestProxyAgent,
+      fetch: async (url: string | URL | Request, init?: unknown) => {
+        fetchCalls.push({ url, init });
+        return redirectResponse("https://mcp.example.com/mcp");
+      },
+    };
+    const fetch = buildMcpHttpFetch({
+      clientCert,
+      resourceUrl: "https://mcp.example.com/mcp",
+    });
+
+    await expect(fetch("https://auth.example.com/token")).rejects.toThrow("ENOENT");
+    expect(fetchCalls).toHaveLength(1);
+    expect(getDispatcherConnectOptions(fetchCalls[0]?.init)?.cert).toBeUndefined();
+  });
 
   it("uses configured env proxy for ordinary MCP HTTP requests", async () => {
     vi.stubEnv("https_proxy", "http://proxy.example:8080");
@@ -345,7 +363,7 @@ describe("MCP HTTP fetch helpers", () => {
       authorization: string | null;
       cache: RequestCache;
       credentials: RequestCredentials;
-      keepalive: boolean;
+      keepalive: boolean | undefined;
       mode: RequestMode;
     }> = [];
     testGlobal[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
@@ -369,11 +387,12 @@ describe("MCP HTTP fetch helpers", () => {
       },
     };
     const resourceUrl = "https://mcp.example.com/mcp";
+    // Removal: expect true after Bun exposes the Request.keepalive getter.
+    const expectedKeepalive = process.versions.bun ? undefined : true;
     const fetch = withMcpOAuthBearer({
       fetchFn: buildMcpHttpFetch({ resourceUrl }),
       authFetchFn: buildMcpHttpFetch({ resourceUrl }),
-      serverName: "docs",
-      resourceUrl,
+      identity: operatorMcpOAuthIdentity("docs", resourceUrl),
     });
 
     const response = await fetch(resourceUrl, {
@@ -394,7 +413,7 @@ describe("MCP HTTP fetch helpers", () => {
         authorization: "Bearer first-token",
         cache: "no-store",
         credentials: "include",
-        keepalive: true,
+        keepalive: expectedKeepalive,
         mode: "cors",
       },
       {
@@ -403,7 +422,7 @@ describe("MCP HTTP fetch helpers", () => {
         authorization: "Bearer second-token",
         cache: "no-store",
         credentials: "include",
-        keepalive: true,
+        keepalive: expectedKeepalive,
         mode: "cors",
       },
     ]);

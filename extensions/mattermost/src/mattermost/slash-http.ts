@@ -11,12 +11,9 @@ import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
-import {
-  createReplyDispatcherWithTyping,
-  dispatchInboundMessage,
-  finalizeInboundContext,
-} from "openclaw/plugin-sdk/reply-runtime";
+import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
+import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ResolvedMattermostAccount } from "../mattermost/accounts.js";
@@ -38,18 +35,14 @@ import {
   authorizeMattermostCommandInvocation,
   normalizeMattermostAllowList,
 } from "./monitor-auth.js";
+import { deliverMattermostReplyPayload } from "./reply-delivery.js";
 import {
-  createMattermostReplyDeliveryBarrier,
-  deliverMattermostReplyPayload,
-} from "./reply-delivery.js";
-import {
-  buildModelsProviderData,
-  createChannelMessageReplyPipeline,
+  buildPreparedModelsProviderData,
   isRequestBodyLimitError,
   logTypingFailure,
   readRequestBodyWithLimit,
+  sendHttpRequestRejection,
   type OpenClawConfig,
-  type ReplyPayload,
   type RuntimeEnv,
 } from "./runtime-api.js";
 import { sendMessageMattermost } from "./send.js";
@@ -120,6 +113,8 @@ function readBody(
   return readRequestBodyWithLimit(req, {
     maxBytes,
     timeoutMs,
+    // Defer destruction so the rejections below reach Mattermost before the close.
+    destroyOnLimit: false,
   });
 }
 
@@ -585,7 +580,12 @@ async function authorizeSlashInvocation(params: {
 export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
   const { account, cfg, runtime, registeredCommands, triggerMap, log, bodyTimeoutMs } = params;
 
-  return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
+  return async (
+    req: IncomingMessage,
+    res: ServerResponse,
+    bufferedBody?: string,
+    onRequestAuthenticated?: () => void,
+  ): Promise<void> => {
     if (req.method !== "POST") {
       res.statusCode = 405;
       res.setHeader("Allow", "POST");
@@ -595,15 +595,13 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
 
     let body: string;
     try {
-      body = await readBody(req, MAX_BODY_BYTES, bodyTimeoutMs);
+      body = bufferedBody ?? (await readBody(req, MAX_BODY_BYTES, bodyTimeoutMs));
     } catch (error) {
       if (isRequestBodyLimitError(error, "REQUEST_BODY_TIMEOUT")) {
-        res.statusCode = 408;
-        res.end("Request body timeout");
+        await sendHttpRequestRejection(req, res, 408, "Request body timeout");
         return;
       }
-      res.statusCode = 413;
-      res.end("Payload Too Large");
+      await sendHttpRequestRejection(req, res, 413, "Payload Too Large");
       return;
     }
 
@@ -626,11 +624,7 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
     // valid for command A from advancing to upstream validation for command B,
     // which would otherwise let an attacker poison the per-command failure
     // cache and DoS legitimate invocations of command B.
-    if (
-      registeredCommands.length === 0 ||
-      !registeredCommand ||
-      !safeEqualSecret(payload.token, registeredCommand.token)
-    ) {
+    if (!registeredCommand || !safeEqualSecret(payload.token, registeredCommand.token)) {
       sendJsonResponse(res, 401, {
         response_type: "ephemeral",
         text: "Unauthorized: invalid command token.",
@@ -660,7 +654,8 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
       return;
     }
 
-    // Extract command info
+    // Release the route's pre-auth slot before user authorization or command work.
+    onRequestAuthenticated?.();
     const trigger = normalizeSlashCommandTrigger(payload.command);
     const commandText = resolveCommandText(trigger, payload.text, triggerMap);
     const channelId = payload.channel_id;
@@ -792,12 +787,18 @@ async function handleSlashCommandAsync(params: {
   const to = kind === "direct" ? `user:${senderId}` : `channel:${channelId}`;
   const pickerEntry = resolveMattermostModelPickerEntry(commandText);
   if (pickerEntry) {
-    const data = await buildModelsProviderData(cfg, route.agentId);
+    const sessionEntry = getSessionEntry({
+      storePath: resolveStorePath(cfg.session?.store, { agentId: route.agentId }),
+      sessionKey: route.sessionKey,
+      readConsistency: "latest",
+    });
+    const data = await buildPreparedModelsProviderData(cfg, route.agentId, { sessionEntry });
     if (data.providers.length === 0) {
-      await sendMessageMattermost(to, "No models available.", {
-        cfg,
-        accountId: account.accountId,
-      });
+      await sendMessageMattermost(
+        `channel:${channelId}`,
+        [data.refreshWarning, "No models available."].filter(Boolean).join("\n\n"),
+        { cfg, accountId: account.accountId },
+      );
       return;
     }
 
@@ -826,11 +827,11 @@ async function handleSlashCommandAsync(params: {
               currentModel,
             });
 
-    await sendMessageMattermost(to, view.text, {
-      cfg,
-      accountId: account.accountId,
-      buttons: view.buttons,
-    });
+    await sendMessageMattermost(
+      `channel:${channelId}`,
+      [data.refreshWarning, view.text].filter(Boolean).join("\n\n"),
+      { cfg, accountId: account.accountId, buttons: view.buttons },
+    );
     runtime.log?.(`delivered model picker to ${to}`);
     return;
   }
@@ -851,7 +852,10 @@ async function handleSlashCommandAsync(params: {
     SessionKey: route.sessionKey,
     AccountId: route.accountId,
     ChatType: chatType,
+    ConversationRouteContextObserved: true,
+    ConversationRoutePeerId: kind === "direct" ? senderId : channelId,
     ConversationLabel: fromLabel,
+    GroupSpace: teamId,
     GroupSubject: kind !== "direct" ? channelDisplay || roomLabel : undefined,
     SenderName: senderName,
     SenderId: senderId,
@@ -861,6 +865,7 @@ async function handleSlashCommandAsync(params: {
     Timestamp: Date.now(),
     WasMentioned: true,
     CommandAuthorized: commandAuthorized,
+    InboundAccessAuthorized: true,
     CommandSource: "native" as const,
     OriginatingChannel: "mattermost" as const,
     OriginatingTo: to,
@@ -875,67 +880,58 @@ async function handleSlashCommandAsync(params: {
     accountId: account.accountId,
   });
 
-  const { onModelSelected, typingCallbacks, ...replyPipeline } = createChannelMessageReplyPipeline({
+  await core.channel.inbound.dispatch({
     cfg,
-    agentId: route.agentId,
     channel: "mattermost",
     accountId: account.accountId,
-    typing: {
-      start: () => sendMattermostTyping(client, { channelId }),
-      onStartError: (err) => {
-        logTypingFailure({
-          log: (message) => log?.(message),
-          channel: "mattermost",
-          target: channelId,
-          error: err,
+    route: {
+      agentId: route.agentId,
+      dmScope: route.dmScope,
+      sessionKey: route.sessionKey,
+    },
+    ctxPayload,
+    delivery: {
+      observeMessageSent: true,
+      deliver: async (payload) => {
+        const result = await deliverMattermostReplyPayload({
+          core,
+          cfg,
+          payload,
+          channelId,
+          accountId: account.accountId,
+          agentId: route.agentId,
+          textLimit,
+          tableMode,
+          sendMessage: sendMessageMattermost,
         });
+        if (result.visibleReplySent) {
+          runtime.log?.(`delivered slash reply to ${to}`);
+        }
+        return result;
+      },
+      onError: (err, info) => {
+        runtime.error?.(
+          `mattermost slash ${info.kind} reply failed: ${sanitizeCommandLookupError(err)}`,
+        );
       },
     },
-  });
-  const humanDelay = resolveHumanDelayConfig(cfg, route.agentId);
-  const deliveryBarrier = createMattermostReplyDeliveryBarrier({
-    isDirect: kind === "direct",
-    dmRetryOptions: account.config.dmChannelRetry,
-  });
-
-  const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping({
-    ...replyPipeline,
-    resolveFollowupAdmissionBarrierTimeoutPolicy: deliveryBarrier.resolveTimeoutPolicy,
-    onDeliverySettled: deliveryBarrier.markDeliverySettled,
-    humanDelay,
-    deliver: async (payload: ReplyPayload) => {
-      await deliverMattermostReplyPayload({
-        core,
-        cfg,
-        payload,
-        to,
-        accountId: account.accountId,
-        agentId: route.agentId,
-        textLimit,
-        tableMode,
-        sendMessage: sendMessageMattermost,
-        onDmChannelResolution: deliveryBarrier.trackDmChannelResolution,
-      });
-      runtime.log?.(`delivered slash reply to ${to}`);
+    replyPipeline: {
+      typing: {
+        start: () => sendMattermostTyping(client, { channelId }),
+        onStartError: (err) => {
+          logTypingFailure({
+            log: (message) => log?.(message),
+            channel: "mattermost",
+            target: channelId,
+            error: err,
+          });
+        },
+      },
     },
-    onError: (err, info) => {
-      runtime.error?.(
-        `mattermost slash ${info.kind} reply failed: ${sanitizeCommandLookupError(err)}`,
-      );
-    },
-    onReplyStart: typingCallbacks?.onReplyStart,
-  });
-
-  await dispatchInboundMessage({
-    ctx: ctxPayload,
-    cfg,
-    dispatcher,
-    onSettled: () => markDispatchIdle(),
+    dispatcherOptions: { humanDelay: resolveHumanDelayConfig(cfg, route.agentId) },
     replyOptions: {
-      ...replyOptions,
       disableBlockStreaming:
         typeof account.blockStreaming === "boolean" ? !account.blockStreaming : undefined,
-      onModelSelected,
     },
   });
 }

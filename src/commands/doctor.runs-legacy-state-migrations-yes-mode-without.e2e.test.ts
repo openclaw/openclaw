@@ -9,12 +9,12 @@ import {
   mockDoctorConfigSnapshot,
   serviceIsLoaded,
   serviceRestart,
-  writeConfigFile,
+  transformConfigFile,
 } from "./doctor.e2e-harness.js";
 
 const providerRuntimeMocks = vi.hoisted(() => ({
   useMockProviders: false,
-  resolvePluginProviders: vi.fn((_params?: unknown): ProviderPlugin[] => []),
+  resolvePluginProvidersCore: vi.fn((_params?: unknown): ProviderPlugin[] => []),
 }));
 
 vi.mock("../plugins/providers.runtime.js", async () => {
@@ -23,12 +23,12 @@ vi.mock("../plugins/providers.runtime.js", async () => {
   );
   return {
     ...actual,
-    resolvePluginProviders: (
-      params: Parameters<typeof actual.resolvePluginProviders>[0],
+    resolvePluginProvidersCore: (
+      params: Parameters<typeof actual.resolvePluginProvidersCore>[0],
     ): ProviderPlugin[] =>
       providerRuntimeMocks.useMockProviders
-        ? providerRuntimeMocks.resolvePluginProviders(params)
-        : actual.resolvePluginProviders(params),
+        ? providerRuntimeMocks.resolvePluginProvidersCore(params)
+        : actual.resolvePluginProvidersCore(params),
   };
 });
 
@@ -43,7 +43,7 @@ describe("doctor command", () => {
     ({ healthCommand } = await import("./health.js"));
     vi.clearAllMocks();
     providerRuntimeMocks.useMockProviders = false;
-    providerRuntimeMocks.resolvePluginProviders.mockReturnValue([]);
+    providerRuntimeMocks.resolvePluginProvidersCore.mockReturnValue([]);
   });
 
   it("runs legacy state migrations in yes mode without prompting", async () => {
@@ -92,7 +92,7 @@ describe("doctor command", () => {
       }
     }
 
-    expect(writeConfigFile).not.toHaveBeenCalled();
+    expect(transformConfigFile).not.toHaveBeenCalled();
   });
 
   it("refuses doctor gateway token generation in Nix before config writes", async () => {
@@ -111,7 +111,7 @@ describe("doctor command", () => {
       }
     }
 
-    expect(writeConfigFile).not.toHaveBeenCalled();
+    expect(transformConfigFile).not.toHaveBeenCalled();
   });
 
   it("skips gateway restarts in non-interactive mode", async () => {
@@ -154,7 +154,7 @@ describe("doctor command", () => {
       },
     });
     providerRuntimeMocks.useMockProviders = true;
-    providerRuntimeMocks.resolvePluginProviders.mockReturnValue([
+    providerRuntimeMocks.resolvePluginProvidersCore.mockReturnValue([
       {
         id: "anthropic",
         label: "Anthropic",
@@ -177,22 +177,16 @@ describe("doctor command", () => {
       }
     }
 
-    const writtenCall = writeConfigFile.mock.calls.findLast((call) => {
-      const candidate = call[0] as Record<string, unknown>;
-      const auth = candidate.auth as { profiles?: unknown } | undefined;
-      return Boolean(auth?.profiles);
+    const committed = await Promise.all(
+      transformConfigFile.mock.results.flatMap((result) =>
+        result.type === "return" ? [result.value] : [],
+      ),
+    );
+    const profiles = committed.findLast((result) => result.nextConfig.auth?.profiles)?.nextConfig
+      .auth?.profiles;
+    expect(profiles).toMatchObject({
+      "anthropic:me@example.com": { provider: "anthropic", mode: "oauth" },
     });
-    const written = writtenCall?.[0] as Record<string, unknown> | undefined;
-    if (!written) {
-      throw new Error("Expected doctor to write migrated auth profiles");
-    }
-    const profiles = (written.auth as { profiles: Record<string, unknown> }).profiles;
-    expect(profiles).toHaveProperty("anthropic:me@example.com");
-    const migratedProfile = profiles["anthropic:me@example.com"] as
-      | { provider?: unknown; mode?: unknown }
-      | undefined;
-    expect(migratedProfile?.provider).toBe("anthropic");
-    expect(migratedProfile?.mode).toBe("oauth");
-    expect(profiles["anthropic:default"]).toBeUndefined();
+    expect(profiles).not.toHaveProperty("anthropic:default");
   }, 30_000);
 });

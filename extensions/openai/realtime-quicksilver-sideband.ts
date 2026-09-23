@@ -1,0 +1,235 @@
+import { sleepWithAbort, toErrorObject } from "openclaw/plugin-sdk/realtime-voice-provider";
+import type { RawData } from "ws";
+import type { OpenAIRealtimeHost } from "./realtime-host.js";
+import type {
+  OpenAIQuicksilverSocket,
+  OpenAIQuicksilverSocketFactory,
+  QuicksilverMediaSocketFactory,
+} from "./realtime-quicksilver-socket.shared.js";
+import {
+  openAIQuicksilverAuthHeaders,
+  type OpenAIQuicksilverAuth,
+  type OpenAIQuicksilverRequestIds,
+} from "./realtime-quicksilver-wire.js";
+
+const SIDEBAND_CONNECT_TIMEOUT_MS = 15_000;
+const SIDEBAND_CONNECT_ATTEMPTS = 5;
+const SIDEBAND_RETRY_BASE_MS = 200;
+const EARLY_FRAME_MAX = 32;
+const EARLY_FRAME_MAX_BYTES = 1024 * 1024;
+const SIDEBAND_MAX_PAYLOAD_BYTES = 16 * 1024 * 1024;
+
+type OpenAIQuicksilverBufferedFrame = { data: RawData; isBinary: boolean };
+type OpenAIQuicksilverTerminalEvent =
+  | { kind: "error"; error: Error }
+  | { kind: "close"; code: number; reason: string };
+
+type OpenAIQuicksilverConnectedSideband = {
+  socket: OpenAIQuicksilverSocket;
+  bufferedFrames: OpenAIQuicksilverBufferedFrame[];
+  detachBuffer: () => OpenAIQuicksilverTerminalEvent | undefined;
+};
+
+function rawDataByteLength(data: RawData): number {
+  if (Array.isArray(data)) {
+    return data.reduce((total, chunk) => total + chunk.byteLength, 0);
+  }
+  return data.byteLength;
+}
+
+function waitForSocketOpen(params: {
+  socket: OpenAIQuicksilverSocket;
+  signal: AbortSignal;
+}): Promise<{ detachTerminalListeners: () => OpenAIQuicksilverTerminalEvent | undefined }> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let opened = false;
+    let terminalEvent: OpenAIQuicksilverTerminalEvent | undefined;
+    const detachTerminalListeners = () => {
+      params.socket.off("error", onError);
+      params.socket.off("close", onClose);
+      return terminalEvent;
+    };
+    const finish = (error?: Error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      params.signal.removeEventListener("abort", onAbort);
+      params.socket.off("open", onOpen);
+      if (error) {
+        detachTerminalListeners();
+        reject(error);
+      } else {
+        resolve({ detachTerminalListeners });
+      }
+    };
+    const onOpen = () => {
+      opened = true;
+      finish();
+    };
+    const onError = (error: Error) => {
+      if (opened) {
+        terminalEvent ??= { kind: "error", error };
+        return;
+      }
+      finish(error);
+    };
+    const onClose = (code: number, reason: Buffer) => {
+      if (opened) {
+        terminalEvent ??= {
+          kind: "close",
+          code: code ?? 1006,
+          reason: reason?.toString("utf8") ?? "",
+        };
+        return;
+      }
+      finish(new Error("GPT-Live sideband closed during startup"));
+    };
+    const onAbort = () =>
+      finish(
+        params.signal.reason instanceof Error
+          ? params.signal.reason
+          : new Error("GPT-Live session stopped during startup"),
+      );
+    const timeout = setTimeout(
+      () => finish(new Error("GPT-Live sideband connection timed out")),
+      SIDEBAND_CONNECT_TIMEOUT_MS,
+    );
+    timeout.unref?.();
+    params.socket.once("open", onOpen);
+    params.socket.on("error", onError);
+    params.socket.on("close", onClose);
+    params.signal.addEventListener("abort", onAbort, { once: true });
+    if (params.signal.aborted) {
+      onAbort();
+    }
+  });
+}
+
+export async function connectOpenAIQuicksilverSideband(
+  params: {
+    auth: OpenAIQuicksilverAuth;
+    createSocket: OpenAIQuicksilverSocketFactory;
+    requestIds: OpenAIQuicksilverRequestIds;
+    signal: AbortSignal;
+    url: string;
+  },
+  runtime: OpenAIRealtimeHost,
+): Promise<OpenAIQuicksilverConnectedSideband> {
+  let lastError: unknown = new Error("GPT-Live sideband connection failed");
+  for (let attempt = 0; attempt < SIDEBAND_CONNECT_ATTEMPTS; attempt += 1) {
+    if (params.signal.aborted) {
+      throw params.signal.reason;
+    }
+    const socket = params.createSocket(params.url, {
+      headers: openAIQuicksilverAuthHeaders(params.auth, params.requestIds, runtime, params.url),
+      maxPayload: SIDEBAND_MAX_PAYLOAD_BYTES,
+    });
+    const bufferedFrames: OpenAIQuicksilverBufferedFrame[] = [];
+    let bufferedBytes = 0;
+    const bufferFrame = (data: RawData, isBinary: boolean) => {
+      const frameBytes = rawDataByteLength(data);
+      if (
+        bufferedFrames.length >= EARLY_FRAME_MAX ||
+        bufferedBytes + frameBytes > EARLY_FRAME_MAX_BYTES
+      ) {
+        socket.off("message", bufferFrame);
+        socket.close(1009, "sideband startup buffer exceeded");
+        return;
+      }
+      bufferedBytes += frameBytes;
+      bufferedFrames.push({ data, isBinary });
+    };
+    socket.on("message", bufferFrame);
+    try {
+      const openHandoff = await waitForSocketOpen({ socket, signal: params.signal });
+      if (params.signal.aborted) {
+        socket.off("message", bufferFrame);
+        openHandoff.detachTerminalListeners();
+        socket.on("error", () => {});
+        socket.close(1000, "sideband startup stopped");
+        throw params.signal.reason;
+      }
+      return {
+        socket,
+        bufferedFrames,
+        detachBuffer: () => {
+          socket.off("message", bufferFrame);
+          return openHandoff.detachTerminalListeners();
+        },
+      };
+    } catch (error) {
+      lastError = error;
+      socket.off("message", bufferFrame);
+      // waitForSocketOpen already detached its error listener, and closing a still
+      // CONNECTING ws emits `error` asynchronously. Without a listener that is an
+      // unhandled EventEmitter error, which is fatal to the Gateway process, so keep
+      // this swallow attached for the discarded socket's lifetime.
+      socket.on("error", () => {});
+      try {
+        socket.close(1000, "retrying sideband");
+      } catch {
+        // Failed startup sockets are already unusable.
+      }
+      if (params.signal.aborted) {
+        throw params.signal.reason;
+      }
+      if (attempt + 1 < SIDEBAND_CONNECT_ATTEMPTS) {
+        await sleepWithAbort(SIDEBAND_RETRY_BASE_MS * 2 ** attempt, params.signal, {
+          ref: false,
+        }).catch(() => {
+          const reason = params.signal.reason;
+          throw reason instanceof Error
+            ? reason
+            : new Error(reason === undefined ? "GPT-Live session stopped" : String(reason), {
+                cause: reason,
+              });
+        });
+      }
+    }
+  }
+  throw lastError;
+}
+
+/** Default transport loading belongs to live connection admission, not cold catalogs. */
+export async function loadOpenAIQuicksilverMediaSocketFactory(
+  signal: AbortSignal,
+): Promise<QuicksilverMediaSocketFactory> {
+  return (
+    await waitForOpenAIQuicksilverConnectStep(import("./realtime-quicksilver-socket.js"), signal)
+  ).OpenAIQuicksilverWorkerSocket.create;
+}
+
+export function openAIQuicksilverConnectAbortError(signal: AbortSignal): Error {
+  return signal.reason instanceof Error
+    ? signal.reason
+    : new Error("GPT-Live gateway relay startup stopped", { cause: signal.reason });
+}
+
+export function waitForOpenAIQuicksilverConnectStep<T>(
+  promise: Promise<T>,
+  signal: AbortSignal,
+): Promise<T> {
+  if (signal.aborted) {
+    return Promise.reject(openAIQuicksilverConnectAbortError(signal));
+  }
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => {
+      signal.removeEventListener("abort", onAbort);
+      reject(openAIQuicksilverConnectAbortError(signal));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(toErrorObject(error, "OpenAI GPT-Live gateway relay failed"));
+      },
+    );
+  });
+}

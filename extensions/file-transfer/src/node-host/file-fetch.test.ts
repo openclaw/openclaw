@@ -133,6 +133,55 @@ describe("handleFileFetch — happy path", () => {
     expect(readFileSpy).not.toHaveBeenCalled();
   });
 
+  it.runIf(process.platform !== "win32")(
+    "rejects a retargeted path before reading file bytes",
+    async () => {
+      const first = path.join(tmpRoot, "first.txt");
+      const second = path.join(tmpRoot, "second.txt");
+      const link = path.join(tmpRoot, "current.txt");
+      await fs.writeFile(first, "approved");
+      await fs.writeFile(second, "not approved");
+      await fs.symlink(first, link);
+
+      const preflight = await handleFileFetch({
+        path: link,
+        followSymlinks: true,
+        preflightOnly: true,
+      });
+      expectSuccess(preflight);
+      await fs.unlink(link);
+      await fs.symlink(second, link);
+
+      const result = await handleFileFetch({
+        path: link,
+        followSymlinks: true,
+        expectedCanonicalPath: preflight.path,
+      });
+
+      expectFailureCode(result, "CANONICAL_PATH_CHANGED");
+      expect(result.canonicalPath).toBe(second);
+    },
+  );
+
+  it("rejects a replacement at the same canonical pathname before reading bytes", async () => {
+    const target = path.join(tmpRoot, "target.txt");
+    const moved = path.join(tmpRoot, "moved.txt");
+    await fs.writeFile(target, "approved");
+    const preflight = await handleFileFetch({ path: target, preflightOnly: true });
+    expectSuccess(preflight);
+    await fs.rename(target, moved);
+    await fs.writeFile(target, "not approved");
+
+    const result = await handleFileFetch({
+      path: target,
+      expectedCanonicalPath: preflight.path,
+      expectedBinding: preflight.binding,
+    });
+
+    expectFailureCode(result, "CANONICAL_PATH_CHANGED");
+    expect(await fs.readFile(target, "utf8")).toBe("not approved");
+  });
+
   it("returns a sensible mime type for known extensions", async () => {
     const target = path.join(tmpRoot, "readme.md");
     await fs.writeFile(target, "# heading\n");
@@ -192,6 +241,51 @@ describe("handleFileFetch — happy path", () => {
 });
 
 describe("handleFileFetch — size enforcement", () => {
+  it("bounds bytes consumed when a file grows after the size check", async () => {
+    const target = path.join(tmpRoot, "growing.txt");
+    await fs.writeFile(target, "small");
+    const realOpen = fs.open.bind(fs);
+    let bytesRead = 0;
+    let grown = false;
+    const grow = async () => {
+      if (!grown) {
+        grown = true;
+        await fs.appendFile(target, Buffer.alloc(1024));
+      }
+    };
+    vi.spyOn(fs, "open").mockImplementation(async (file, flags, mode) => {
+      const handle = await realOpen(file, flags, mode);
+      if (String(file) === target) {
+        const read = handle.read.bind(handle);
+        const readFile = handle.readFile.bind(handle);
+        // Keep real filesystem reads; append only after the handler has checked size.
+        handle.read = (async (
+          buffer: Buffer,
+          offset: number,
+          length: number,
+          position: number | null,
+        ) => {
+          await grow();
+          const result = await read(buffer, offset, length, position);
+          bytesRead += result.bytesRead;
+          return result;
+        }) as typeof handle.read;
+        handle.readFile = (async (...args: Parameters<typeof handle.readFile>) => {
+          await grow();
+          const result = await readFile(...args);
+          bytesRead += Buffer.byteLength(result);
+          return result;
+        }) as typeof handle.readFile;
+      }
+      return handle;
+    });
+
+    expectFailureCode(await handleFileFetch({ path: target, maxBytes: 8 }), "FILE_TOO_LARGE");
+    expect(grown).toBe(true);
+    expect(bytesRead).toBeGreaterThan(8);
+    expect(bytesRead).toBeLessThanOrEqual(9);
+  });
+
   it("returns FILE_TOO_LARGE when stat size exceeds the cap", async () => {
     const target = path.join(tmpRoot, "big.bin");
     const data = Buffer.alloc(2048, 0xab);

@@ -1,12 +1,12 @@
-// Discord plugin module implements handle action.guild admin behavior.
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
+import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
+import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import {
   readNonNegativeIntegerParam,
   readPositiveIntegerParam,
   readStringArrayParam,
   readStringParam,
-} from "openclaw/plugin-sdk/agent-runtime";
-import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
+} from "openclaw/plugin-sdk/param-readers";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { handleDiscordAction } from "../../action-runtime-api.js";
 import { isTrustedRequesterGuildAdminAction } from "../trusted-requester-actions.js";
@@ -27,11 +27,11 @@ type Ctx = Pick<
   | "params"
   | "cfg"
   | "accountId"
+  | "requesterAccountId"
   | "requesterSenderId"
   | "senderIsOwner"
   | "toolContext"
-  | "mediaLocalRoots"
-  | "mediaReadFile"
+  | "assertDirectAdapterHandoff"
 >;
 
 function readDiscordRequesterSenderId(ctx: Ctx): string | undefined {
@@ -39,11 +39,32 @@ function readDiscordRequesterSenderId(ctx: Ctx): string | undefined {
   if (currentProvider?.toLowerCase() === "discord") {
     return normalizeOptionalString(ctx.requesterSenderId);
   }
+  // The host binds a source-less scheduled edit to its saved native requester.
+  // The handoff guards that admitted invocation; requester fields never come from params.
+  if (
+    ctx.action === "channel-edit" &&
+    !currentProvider &&
+    ctx.senderIsOwner === false &&
+    ctx.assertDirectAdapterHandoff &&
+    ctx.accountId &&
+    ctx.requesterAccountId === ctx.accountId
+  ) {
+    ctx.assertDirectAdapterHandoff();
+    const requester = normalizeOptionalString(ctx.requesterSenderId);
+    if (requester) {
+      return requester;
+    }
+  }
   if (
     isTrustedRequesterGuildAdminAction(ctx.action) &&
     (currentProvider || ctx.senderIsOwner !== true)
   ) {
-    throw new Error("Discord guild admin actions require a trusted Discord sender identity.");
+    throw new Error(
+      "Discord guild admin actions require a trusted Discord sender identity." +
+        (ctx.action === "channel-edit" && !currentProvider
+          ? " Recreate an automation without recorded execution authorization from a fresh authenticated Discord turn that can manage automations."
+          : ""),
+    );
   }
   return undefined;
 }
@@ -56,8 +77,9 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
   ctx: Ctx;
   resolveChannelId: () => string;
   readPolicyOptions?: DiscordMessagingActionOptions;
+  actionOptions: DiscordMessagingActionOptions;
 }): Promise<AgentToolResult<unknown> | undefined> {
-  const { ctx, resolveChannelId, readPolicyOptions } = params;
+  const { ctx, resolveChannelId, readPolicyOptions, actionOptions } = params;
   const { action, params: actionParams, cfg } = ctx;
   const accountId = ctx.accountId ?? readStringParam(actionParams, "accountId");
   const senderUserId = readDiscordRequesterSenderId(ctx);
@@ -86,11 +108,15 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
   }
 
   if (action === "emoji-list") {
-    const guildId = readStringParam(actionParams, "guildId", {
-      required: true,
-    });
+    const guildId = readStringParam(actionParams, "guildId");
+    const limit = readPositiveIntegerParam(actionParams, "limit");
     return await handleDiscordAction(
-      { action: "emojiList", accountId: accountId ?? undefined, guildId },
+      {
+        action: "emojiList",
+        accountId: accountId ?? undefined,
+        ...(guildId ? { guildId } : { channelId: resolveChannelId() }),
+        ...(limit ? { limit } : {}),
+      },
       cfg,
       readPolicyOptions,
     );
@@ -117,6 +143,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
         ...senderParam(senderUserId),
       },
       cfg,
+      actionOptions,
     );
   }
 
@@ -149,6 +176,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
         ...senderParam(senderUserId),
       },
       cfg,
+      actionOptions,
     );
   }
 
@@ -362,7 +390,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
         ...senderParam(senderUserId),
       },
       cfg,
-      { mediaLocalRoots: ctx.mediaLocalRoots },
+      actionOptions,
     );
   }
 
@@ -419,6 +447,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
   if (action === "thread-reply") {
     const content = readStringParam(actionParams, "message", {
       required: true,
+      trim: false,
     });
     const mediaUrl =
       readStringParam(actionParams, "media", { trim: false }) ??
@@ -439,9 +468,10 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
         content,
         mediaUrl: mediaUrl ?? undefined,
         replyTo: replyTo ?? undefined,
+        ...(readBooleanParam(actionParams, "silent") === true ? { silent: true } : {}),
       },
       cfg,
-      { mediaLocalRoots: ctx.mediaLocalRoots, mediaReadFile: ctx.mediaReadFile },
+      actionOptions,
     );
   }
 

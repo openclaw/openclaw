@@ -20,13 +20,34 @@ export const UiSidebarCommandSchema = closedObject({
   kind: Type.Literal("sidebar"),
   visible: Type.Boolean(),
 });
-export const UiPanelCommandSchema = closedObject({
+const UiPanelCommandFields = {
   kind: Type.Literal("panel"),
-  panel: Type.Union([Type.Literal("terminal"), Type.Literal("browser")]),
   open: Type.Boolean(),
   dock: Type.Optional(Type.Union([Type.Literal("bottom"), Type.Literal("right")])),
-  terminalSessionId: Type.Optional(NonEmptyString),
-});
+};
+export const UiPanelCommandSchema = Type.Union([
+  closedObject({
+    ...UiPanelCommandFields,
+    panel: Type.Literal("terminal"),
+    terminalSessionId: Type.Optional(NonEmptyString),
+  }),
+  closedObject({ ...UiPanelCommandFields, panel: Type.Literal("browser") }),
+  closedObject({
+    ...UiPanelCommandFields,
+    panel: Type.Literal("desktop"),
+    environmentId: Type.Optional(NonEmptyString),
+  }),
+  closedObject({
+    ...UiPanelCommandFields,
+    panel: Type.Literal("portal"),
+    portalId: Type.Optional(NonEmptyString),
+  }),
+  closedObject({
+    ...UiPanelCommandFields,
+    panel: Type.Literal("portal"),
+    environmentId: NonEmptyString,
+  }),
+]);
 export const UiNavigateCommandSchema = closedObject({
   kind: Type.Literal("navigate"),
   sessionKey: NonEmptyString,
@@ -45,6 +66,7 @@ export type UiCommand = Static<typeof UiCommandSchema>;
 export const UiCommandParamsSchema = closedObject({
   command: UiCommandSchema,
   sessionKey: Type.Optional(NonEmptyString),
+  agentId: Type.Optional(NonEmptyString),
 });
 export type UiCommandParams = Static<typeof UiCommandParamsSchema>;
 

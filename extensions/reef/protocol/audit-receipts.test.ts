@@ -5,7 +5,6 @@ import {
   appendInboxRead,
   decryptAuditText,
   exportRedactedJsonl,
-  MemoryAuditStore,
   signCheckpoint,
   verifyChain,
   verifyCheckpoint,
@@ -13,6 +12,7 @@ import {
 } from "./audit.js";
 import { base64url, fromBase64url, utf8 } from "./encoding.js";
 import { generateIdentity } from "./identity.js";
+import { MemoryAuditStore } from "./memory-stores.test-support.js";
 import { confirmDelivery, signReceipt, verifyReceipt, type SignedReceipt } from "./receipts.js";
 
 const auditKey = Uint8Array.from({ length: 32 }, (_, index) => index + 1);
@@ -140,6 +140,8 @@ describe("receipts", () => {
       "accepted",
       "rejected",
     ]);
+    expect(entries[0]!.event.payload).not.toHaveProperty("category");
+    expect(entries[1]!.event.payload).toHaveProperty("category", "guard_deny");
     await expect(
       confirmDelivery({ ...accepted, bodyHash: "e".repeat(64) }, identity.signing.publicKey, audit),
     ).rejects.toThrow("invalid delivery receipt");

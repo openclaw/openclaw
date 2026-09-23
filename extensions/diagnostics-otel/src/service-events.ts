@@ -17,6 +17,10 @@ type DiagnosticsEventRecorders = ReturnType<typeof createHarnessRecorders> &
   ReturnType<typeof createOperationsRecorders> &
   ReturnType<typeof createToolAndSystemRecorders> &
   ReturnType<typeof createUsageRecorders>;
+type OtelDiagnosticEventPrivateData = DiagnosticEventPrivateData &
+  Readonly<{
+    hostPluginId?: string;
+  }>;
 
 export function createDiagnosticsEventHandler(params: {
   logger: OtelLogger;
@@ -26,6 +30,9 @@ export function createDiagnosticsEventHandler(params: {
 }) {
   const { logger, recorders, recordLogRecord, recordSecurityEvent } = params;
   const {
+    recordGcDuration,
+    recordGatewayEventLoopSample,
+    recordGatewayRpc,
     recordModelUsage,
     recordWebhookReceived,
     recordWebhookProcessed,
@@ -57,11 +64,9 @@ export function createDiagnosticsEventHandler(params: {
     recordHarnessRunError,
     recordContextAssembled,
     recordModelCallStarted,
-    recordModelCallCompleted,
-    recordModelCallError,
+    recordModelCallFinished,
     recordToolExecutionStarted,
-    recordToolExecutionCompleted,
-    recordToolExecutionError,
+    recordToolExecutionFinished,
     recordToolExecutionBlocked,
     recordSkillUsed,
     recordExecProcessCompleted,
@@ -76,12 +81,24 @@ export function createDiagnosticsEventHandler(params: {
   return (
     evt: DiagnosticEventPayload,
     metadata: DiagnosticEventMetadata,
-    privateData: DiagnosticEventPrivateData,
+    privateData: OtelDiagnosticEventPrivateData,
   ) => {
     try {
       switch (evt.type) {
+        case "diagnostic.child_process.spawn":
+          // Child-launch counts currently export through Prometheus.
+          return;
+        case "diagnostic.gc":
+          recordGcDuration(evt, metadata);
+          return;
+        case "gateway.event_loop.sample":
+          recordGatewayEventLoopSample(evt, metadata);
+          return;
+        case "gateway.rpc":
+          recordGatewayRpc(evt, metadata);
+          return;
         case "model.usage":
-          recordModelUsage(evt, metadata);
+          recordModelUsage(evt, metadata, privateData.hostPluginId);
           return;
         case "webhook.received":
           recordWebhookReceived(evt);
@@ -148,6 +165,8 @@ export function createDiagnosticsEventHandler(params: {
           break;
         case "run.progress":
           break;
+        case "run.execution_phase":
+          break;
         case "diagnostic.heartbeat":
           recordHeartbeat(evt);
           return;
@@ -155,7 +174,7 @@ export function createDiagnosticsEventHandler(params: {
           recordLivenessWarning(evt);
           return;
         case "diagnostic.phase.completed":
-          recordDiagnosticPhaseCompleted(evt);
+          recordDiagnosticPhaseCompleted(evt, metadata);
           return;
         case "run.started":
           recordRunStarted(evt, metadata);
@@ -179,19 +198,15 @@ export function createDiagnosticsEventHandler(params: {
           recordModelCallStarted(evt, metadata);
           return;
         case "model.call.completed":
-          recordModelCallCompleted(evt, metadata, privateData.modelContent);
-          return;
         case "model.call.error":
-          recordModelCallError(evt, metadata, privateData.modelContent);
+          recordModelCallFinished(evt, metadata, privateData.modelContent);
           return;
         case "tool.execution.started":
           recordToolExecutionStarted(evt, metadata);
           return;
         case "tool.execution.completed":
-          recordToolExecutionCompleted(evt, metadata, privateData.toolContent);
-          return;
         case "tool.execution.error":
-          recordToolExecutionError(evt, metadata, privateData.toolContent);
+          recordToolExecutionFinished(evt, metadata, privateData.toolContent);
           return;
         case "tool.execution.blocked":
           recordToolExecutionBlocked(evt, metadata);
@@ -200,7 +215,7 @@ export function createDiagnosticsEventHandler(params: {
           recordSkillUsed(evt, metadata);
           return;
         case "exec.process.completed":
-          recordExecProcessCompleted(evt);
+          recordExecProcessCompleted(evt, metadata);
           break;
         case "exec.approval.followup_suppressed":
           break;

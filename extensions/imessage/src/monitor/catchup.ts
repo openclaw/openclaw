@@ -1,8 +1,17 @@
-// Imessage plugin module implements catchup behavior.
-import { createHash } from "node:crypto";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
-import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
+import type {
+  PluginStateCompareIntent,
+  PluginStateKeyedStore,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import { getIMessageRuntime } from "../runtime.js";
+import {
+  IMESSAGE_CATCHUP_CURSOR_NAMESPACE,
+  IMESSAGE_CATCHUP_CURSOR_MAX_ENTRIES,
+  resolveIMessageCatchupCursorKey,
+  capFailureRetriesMap,
+  type IMessageCatchupCursor,
+} from "../state-contract.js";
 
 // iMessage inbound catchup. When the gateway is offline (crash, restart, mac
 // sleep, machine off), `imsg watch` resumes from current state and ignores
@@ -11,7 +20,7 @@ import { getIMessageRuntime } from "../runtime.js";
 //
 // This module keeps catchup on the same inbound evaluation and dispatch path
 // as live `imsg watch` notifications. The replay loop is pluggable via the
-// `dispatch` callback so `evaluateIMessageInbound` + `dispatchInboundMessage`
+// `dispatch` callback so `evaluateIMessageInbound` + `runChannelInboundEvent`
 // runs unchanged on replayed rows.
 //
 // See https://github.com/openclaw/openclaw/issues/78649 for design discussion.
@@ -23,13 +32,6 @@ const MAX_PER_RUN_LIMIT = 500;
 const DEFAULT_FIRST_RUN_LOOKBACK_MINUTES = 30;
 const DEFAULT_MAX_FAILURE_RETRIES = 10;
 const MAX_MAX_FAILURE_RETRIES = 1_000;
-// Defense-in-depth bound on the retry map. The cursor is one plugin-state
-// value, so keep the retry payload well below the 64KB store limit.
-const MAX_FAILURE_RETRY_MAP_SIZE = 512;
-const MAX_FAILURE_RETRY_MAP_JSON_BYTES = 48_000;
-const textEncoder = new TextEncoder();
-export const IMESSAGE_CATCHUP_CURSOR_NAMESPACE = "imessage.catchup-cursors";
-export const IMESSAGE_CATCHUP_CURSOR_MAX_ENTRIES = 256;
 const cursorWriteQueue = new KeyedAsyncQueue();
 
 type IMessageCatchupConfig = {
@@ -38,28 +40,6 @@ type IMessageCatchupConfig = {
   perRunLimit?: number;
   firstRunLookbackMinutes?: number;
   maxFailureRetries?: number;
-};
-
-export type IMessageCatchupCursor = {
-  /** Timestamp (ms since epoch) of the highest-watermark message we processed. */
-  lastSeenMs: number;
-  /** ROWID of the highest-watermark processed message. Monotonic in chat.db. */
-  lastSeenRowid: number;
-  /** UTC ms timestamp of the most recent cursor write. */
-  updatedAt: number;
-  /**
-   * Per-GUID failure counter, preserved across runs. Two states:
-   * - `1 <= count < maxFailureRetries`: the GUID is still retrying and
-   *   continues to hold the cursor back.
-   * - `count >= maxFailureRetries`: catchup has given up on the GUID. The
-   *   message is skipped on sight (no dispatch attempt) and the cursor no
-   *   longer waits on it. Entry stays in the map until the cursor naturally
-   *   advances past the message's timestamp.
-   *
-   * A successful dispatch removes the entry. Optional on the persisted shape
-   * so older cursor files without this field load cleanly.
-   */
-  failureRetries?: Record<string, number>;
 };
 
 export type IMessageCatchupRow = {
@@ -96,26 +76,11 @@ export type IMessageCatchupSummary = {
   windowEndMs: number;
 };
 
-export function resolveIMessageCatchupCursorKey(accountId: string): string {
-  return createHash("sha256").update(accountId, "utf8").digest("hex").slice(0, 32);
-}
-
-function openCatchupCursorStore(): PluginStateSyncKeyedStore<IMessageCatchupCursor> {
-  return getIMessageRuntime().state.openSyncKeyedStore<IMessageCatchupCursor>({
+function openCatchupCursorStore(): PluginStateKeyedStore<IMessageCatchupCursor> {
+  return getIMessageRuntime().state.openKeyedStore<IMessageCatchupCursor>({
     namespace: IMESSAGE_CATCHUP_CURSOR_NAMESPACE,
     maxEntries: IMESSAGE_CATCHUP_CURSOR_MAX_ENTRIES,
   });
-}
-
-function updateCatchupCursorStore(
-  key: string,
-  updateValue: (current: IMessageCatchupCursor | undefined) => IMessageCatchupCursor | undefined,
-): boolean {
-  const store = openCatchupCursorStore();
-  if (!store.update) {
-    throw new Error("iMessage catchup cursor persistence requires atomic plugin-state update.");
-  }
-  return store.update(key, updateValue);
 }
 
 function enqueueCursorWrite<T>(accountId: string, fn: () => Promise<T>): Promise<T> {
@@ -161,29 +126,54 @@ function normalizeIMessageCatchupCursor(value: unknown): IMessageCatchupCursor |
   };
 }
 
-function readIMessageCatchupCursor(accountId: string): IMessageCatchupCursor | null {
+async function loadIMessageCatchupCursor(accountId: string): Promise<IMessageCatchupCursor | null> {
   return normalizeIMessageCatchupCursor(
-    openCatchupCursorStore().lookup(resolveIMessageCatchupCursorKey(accountId)),
+    await openCatchupCursorStore().lookup(resolveIMessageCatchupCursorKey(accountId)),
   );
 }
 
-async function loadIMessageCatchupCursor(accountId: string): Promise<IMessageCatchupCursor | null> {
-  return readIMessageCatchupCursor(accountId);
-}
-
-function buildIMessageCatchupCursor(next: {
-  lastSeenMs: number;
-  lastSeenRowid: number;
-  failureRetries?: Record<string, number>;
-}): IMessageCatchupCursor {
+function buildIMessageCatchupCursor(
+  next: {
+    lastSeenMs: number;
+    lastSeenRowid: number;
+    failureRetries?: Record<string, number>;
+  },
+  updatedAt: number,
+): IMessageCatchupCursor {
   const sanitized = sanitizeFailureRetriesInput(next.failureRetries);
   const hasRetries = Object.keys(sanitized).length > 0;
   return {
     lastSeenMs: next.lastSeenMs,
     lastSeenRowid: next.lastSeenRowid,
-    updatedAt: Date.now(),
+    updatedAt,
     ...(hasRetries ? { failureRetries: sanitized } : {}),
   };
+}
+
+function decideCatchupCursorSave(
+  existingValue: IMessageCatchupCursor | undefined,
+  cursor: IMessageCatchupCursor,
+  allowCursorRewindForRetries: boolean,
+): PluginStateCompareIntent<IMessageCatchupCursor> {
+  const existing = normalizeIMessageCatchupCursor(existingValue);
+  if (existing && cursor.lastSeenRowid < existing.lastSeenRowid) {
+    if (!allowCursorRewindForRetries) {
+      return { operation: "update", action: "keep" };
+    }
+    return {
+      operation: "update",
+      action: "set",
+      value: buildIMessageCatchupCursor(
+        {
+          lastSeenMs: cursor.lastSeenMs,
+          lastSeenRowid: cursor.lastSeenRowid,
+          failureRetries: { ...existing.failureRetries, ...cursor.failureRetries },
+        },
+        cursor.updatedAt,
+      ),
+    };
+  }
+  return { operation: "update", action: "set", value: cursor };
 }
 
 async function saveIMessageCatchupCursor(
@@ -191,50 +181,24 @@ async function saveIMessageCatchupCursor(
   next: { lastSeenMs: number; lastSeenRowid: number; failureRetries?: Record<string, number> },
   options: { allowCursorRewindForRetries?: boolean } = {},
 ): Promise<void> {
-  const cursor = buildIMessageCatchupCursor(next);
-  updateCatchupCursorStore(resolveIMessageCatchupCursorKey(accountId), (existingValue) => {
-    const existing = normalizeIMessageCatchupCursor(existingValue);
-    if (existing && cursor.lastSeenRowid < existing.lastSeenRowid) {
-      if (!options.allowCursorRewindForRetries) {
-        return undefined;
-      }
-      return buildIMessageCatchupCursor({
-        lastSeenMs: cursor.lastSeenMs,
-        lastSeenRowid: cursor.lastSeenRowid,
-        failureRetries: { ...existing.failureRetries, ...cursor.failureRetries },
-      });
-    }
-    return cursor;
-  });
-}
-
-/**
- * Bound the retry map so a pathological storm of unique failing GUIDs
- * cannot grow the cursor file without limit. Keeps the `maxSize` entries
- * with the highest counts (closest to give-up) when over the bound.
- */
-export function capFailureRetriesMap(
-  map: Record<string, number>,
-  maxSize: number = MAX_FAILURE_RETRY_MAP_SIZE,
-  maxBytes: number = MAX_FAILURE_RETRY_MAP_JSON_BYTES,
-): Record<string, number> {
-  const entries = Object.entries(map);
-  if (entries.length <= maxSize && textEncoder.encode(JSON.stringify(map)).byteLength <= maxBytes) {
-    return map;
+  const cursor = buildIMessageCatchupCursor(next, Date.now());
+  const allowCursorRewindForRetries = options.allowCursorRewindForRetries === true;
+  const store = openCatchupCursorStore();
+  if (!store.observe || !store.compareAndApply) {
+    throw new Error(
+      "iMessage catchup cursor persistence requires plugin-state comparison support.",
+    );
   }
-  // Sort by count desc; stable tiebreak on guid string so the retained set
-  // is deterministic across runs (important for cursor-file diffing during
-  // debugging).
-  entries.sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
-  const capped: Record<string, number> = {};
-  for (const [guid, count] of entries.slice(0, maxSize)) {
-    capped[guid] = count;
-    if (textEncoder.encode(JSON.stringify(capped)).byteLength > maxBytes) {
-      delete capped[guid];
-      break;
+  const key = resolveIMessageCatchupCursorKey(accountId);
+  let observation = await store.observe(key);
+  for (;;) {
+    const intent = decideCatchupCursorSave(observation.value, cursor, allowCursorRewindForRetries);
+    const result = await store.compareAndApply(key, observation.comparison, intent);
+    if (result.status !== "conflict") {
+      return;
     }
+    observation = result.current;
   }
-  return capped;
 }
 
 export type ResolvedCatchupConfig = {
@@ -246,10 +210,7 @@ export type ResolvedCatchupConfig = {
 };
 
 function clampInt(value: number | undefined, min: number, max: number, fallback: number): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return fallback;
-  }
-  return Math.min(max, Math.max(min, Math.floor(value)));
+  return resolveIntegerOption(value, fallback, { min, max });
 }
 
 export function resolveCatchupConfig(
@@ -315,6 +276,35 @@ type PerformCatchupParams = {
   warn?: (message: string) => void;
 };
 
+function decideLiveCatchupCursorAdvance(
+  existingValue: IMessageCatchupCursor | undefined,
+  next: IMessageCatchupCursor,
+  maxFailureRetries: number,
+): PluginStateCompareIntent<IMessageCatchupCursor> {
+  const cursor = normalizeIMessageCatchupCursor(existingValue);
+  if (cursor && next.lastSeenRowid <= cursor.lastSeenRowid) {
+    return { operation: "update", action: "keep" };
+  }
+  const blockingFailure = Object.values(cursor?.failureRetries ?? {}).some(
+    (count) => count < maxFailureRetries,
+  );
+  if (blockingFailure) {
+    return { operation: "update", action: "keep" };
+  }
+  return {
+    operation: "update",
+    action: "set",
+    value: buildIMessageCatchupCursor(
+      {
+        lastSeenMs: Math.max(cursor?.lastSeenMs ?? next.lastSeenMs, next.lastSeenMs),
+        lastSeenRowid: next.lastSeenRowid,
+        failureRetries: cursor?.failureRetries,
+      },
+      next.updatedAt,
+    ),
+  };
+}
+
 export async function advanceIMessageCatchupCursor(
   accountId: string,
   next: { lastSeenMs: number; lastSeenRowid: number },
@@ -325,28 +315,24 @@ export async function advanceIMessageCatchupCursor(
   }
 
   return await enqueueCursorWrite(accountId, async () => {
-    let advanced = false;
-    updateCatchupCursorStore(resolveIMessageCatchupCursorKey(accountId), (existingValue) => {
-      const cursor = normalizeIMessageCatchupCursor(existingValue);
-      if (cursor && next.lastSeenRowid <= cursor.lastSeenRowid) {
-        return undefined;
-      }
-
-      const blockingFailure = Object.values(cursor?.failureRetries ?? {}).some(
-        (count) => count < config.maxFailureRetries,
+    const cursor = buildIMessageCatchupCursor(next, Date.now());
+    const maxFailureRetries = config.maxFailureRetries;
+    const store = openCatchupCursorStore();
+    if (!store.observe || !store.compareAndApply) {
+      throw new Error(
+        "iMessage catchup cursor persistence requires plugin-state comparison support.",
       );
-      if (blockingFailure) {
-        return undefined;
+    }
+    const key = resolveIMessageCatchupCursorKey(accountId);
+    let observation = await store.observe(key);
+    for (;;) {
+      const intent = decideLiveCatchupCursorAdvance(observation.value, cursor, maxFailureRetries);
+      const result = await store.compareAndApply(key, observation.comparison, intent);
+      if (result.status !== "conflict") {
+        return result.status === "applied";
       }
-
-      advanced = true;
-      return buildIMessageCatchupCursor({
-        lastSeenMs: Math.max(cursor?.lastSeenMs ?? next.lastSeenMs, next.lastSeenMs),
-        lastSeenRowid: next.lastSeenRowid,
-        failureRetries: cursor?.failureRetries,
-      });
-    });
-    return advanced;
+      observation = result.current;
+    }
   });
 }
 
@@ -358,7 +344,7 @@ export async function advanceIMessageCatchupCursor(
  * The fetch and dispatch functions are injected so this loop is unit-testable
  * without standing up an `imsg` daemon. The wiring in `monitor-provider.ts`
  * passes the live `client.request("messages.history", ...)` adapter as
- * `fetch` and the `evaluateIMessageInbound` + `dispatchInboundMessage`
+ * `fetch` and the `evaluateIMessageInbound` + `runChannelInboundEvent`
  * pipeline as `dispatch`.
  */
 export async function performIMessageCatchup(
@@ -426,7 +412,7 @@ export async function performIMessageCatchup(
   // failure is held, the persisted cursor must NOT leapfrog it — otherwise
   // the next pass would filter the failed row out via `row.rowid <= sinceRowid`
   // and never retry. Already-successful rows above the held failure get
-  // re-replayed on the next pass and absorbed by the inbound-dedupe cache.
+  // re-replayed on the next pass and rejected by durable ingress tombstones.
   const cursorBeforeMs = cursor?.lastSeenMs ?? windowStartMs;
   const cursorBeforeRowid = cursor?.lastSeenRowid ?? 0;
   let highWatermarkMs = cursorBeforeMs;
@@ -526,8 +512,8 @@ export async function performIMessageCatchup(
   let lastSeenRowid: number;
   if (earliestHeldFailureRow !== null) {
     // Hold cursor strictly below the failed row. Already-successful rows
-    // above it get re-replayed next pass; the inbound-dedupe cache absorbs
-    // the duplicate dispatch.
+    // above it get re-replayed next pass; durable ingress tombstones reject
+    // the duplicate GUID before dispatch.
     lastSeenMs = Math.max(cursorBeforeMs, earliestHeldFailureRow.date - 1);
     lastSeenRowid = Math.max(cursorBeforeRowid, earliestHeldFailureRow.rowid - 1);
   } else {

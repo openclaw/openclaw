@@ -1,20 +1,26 @@
 // Collects process activity shared by restart and host-suspension decisions.
+import type { GatewayWriteCustody } from "../../packages/gateway-protocol/src/schema/gateway-suspend.js";
 import { getActiveBackgroundExecSessionCount } from "../agents/bash-process-registry.js";
-import { getActiveEmbeddedRunCount } from "../agents/embedded-agent-runner/run-state.js";
+import { getActiveEmbeddedRunCount } from "../agents/embedded-agent-runner/active-run-projections.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import { getActiveCronJobCount } from "../cron/active-jobs.js";
 import { getSuspensionVisibleCronTaskRunCount } from "../cron/service/active-run-cancellation.js";
 import { getTotalQueueSize } from "../process/command-queue.js";
-import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
+import {
+  getActiveGatewayRootWorkCount,
+  getActiveGatewayRootWorkHolders,
+} from "../process/gateway-work-admission.js";
 import {
   getActiveSessionLifecycleMutationCount,
   getActiveSessionWorkAdmissionCount,
 } from "../sessions/session-lifecycle-admission.js";
+import { isBackgroundExecTask } from "../tasks/background-exec-task-contract.js";
 import { getInspectableActiveTaskRestartBlockers } from "../tasks/task-registry.maintenance.js";
 import {
   type ActiveTaskRestartBlocker,
   formatActiveTaskRestartBlocker,
 } from "../tasks/task-restart-blocker.js";
+import { readLifecycleWriteCustody } from "./lifecycle-write-custody.js";
 
 type GatewayActiveWorkCounts = {
   queueSize: number;
@@ -30,6 +36,7 @@ type GatewayActiveWorkCounts = {
   queuedTurns: number;
   terminalPersistence: number;
   terminalSessions: number;
+  lifecycleWrites: number;
   /** Compatibility aggregate. Categories can overlap; use individual counts for diagnostics. */
   totalActive: number;
 };
@@ -51,13 +58,19 @@ export type GatewayActiveWorkBlocker = {
     | "terminal-session";
   count: number;
   message: string;
-  task?: ActiveTaskRestartBlocker;
+  task?: Omit<ActiveTaskRestartBlocker, "taskKind">;
 };
 
 export type GatewayActiveWorkSnapshot = {
   idle: boolean;
   counts: GatewayActiveWorkCounts;
   blockers: GatewayActiveWorkBlocker[];
+  writeCustody: GatewayWriteCustody;
+};
+
+type GatewayActiveWorkWaitResult = {
+  drained: boolean;
+  snapshot: GatewayActiveWorkSnapshot;
 };
 
 export type GatewayActiveWorkInspectors = {
@@ -69,6 +82,7 @@ export type GatewayActiveWorkInspectors = {
   getActiveTasks: () => number;
   getTaskBlockers: () => ActiveTaskRestartBlocker[];
   getRootRequests: () => number;
+  getRootRequestHolders?: () => string[];
   getSessionAdmissions: () => number;
   getSessionMutations: () => number;
   getChatRuns: () => number;
@@ -86,6 +100,7 @@ const defaultInspectors: GatewayActiveWorkInspectors = {
   getActiveTasks: () => getInspectableActiveTaskRestartBlockers().length,
   getTaskBlockers: getInspectableActiveTaskRestartBlockers,
   getRootRequests: () => getActiveGatewayRootWorkCount({ excludeCurrent: true }),
+  getRootRequestHolders: () => getActiveGatewayRootWorkHolders({ excludeCurrent: true }),
   getSessionAdmissions: getActiveSessionWorkAdmissionCount,
   getSessionMutations: getActiveSessionLifecycleMutationCount,
   getChatRuns: () => 0,
@@ -98,30 +113,50 @@ function normalizeCount(value: number): number {
   return Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
 }
 
+/** Cheap projection for status; suspension still uses the complete snapshot below. */
+export function readGatewayMaintenanceWork(inspectors: Partial<GatewayActiveWorkInspectors> = {}) {
+  const resolved = { ...defaultInspectors, ...inspectors };
+  const writeCustody: GatewayWriteCustody = readLifecycleWriteCustody();
+  const counts = {
+    rootRequests: normalizeCount(resolved.getRootRequests()),
+    cronRuns: normalizeCount(resolved.getCronRuns()),
+    sessionMutations: normalizeCount(resolved.getSessionMutations()),
+    terminalPersistence: normalizeCount(resolved.getTerminalPersistence()),
+    lifecycleWrites: writeCustody.reduce((sum, fact) => sum + fact.count, 0),
+  };
+  for (const [phase, count] of [
+    ["session-mutation", counts.sessionMutations],
+    ["terminal-persistence", counts.terminalPersistence],
+  ] as const) {
+    if (count > 0) {
+      writeCustody.push({ phase, count });
+    }
+  }
+  return { counts, writeCustody };
+}
+
 export function createGatewayActiveWorkSnapshot(
   inspectors: Partial<GatewayActiveWorkInspectors> = {},
+  options: { ignoreTerminalSessions?: boolean } = {},
 ): GatewayActiveWorkSnapshot {
   const resolved = { ...defaultInspectors, ...inspectors };
+  const maintenance = readGatewayMaintenanceWork(inspectors);
   const counts: GatewayActiveWorkCounts = {
     queueSize: normalizeCount(resolved.getQueueSize()),
     pendingReplies: normalizeCount(resolved.getPendingReplies()),
     embeddedRuns: normalizeCount(resolved.getEmbeddedRuns()),
     backgroundExecSessions: normalizeCount(resolved.getBackgroundExecSessions()),
-    cronRuns: normalizeCount(resolved.getCronRuns()),
     activeTasks: normalizeCount(resolved.getActiveTasks()),
-    rootRequests: normalizeCount(resolved.getRootRequests()),
     sessionAdmissions: normalizeCount(resolved.getSessionAdmissions()),
-    sessionMutations: normalizeCount(resolved.getSessionMutations()),
     chatRuns: normalizeCount(resolved.getChatRuns()),
     queuedTurns: normalizeCount(resolved.getQueuedTurns()),
-    terminalPersistence: normalizeCount(resolved.getTerminalPersistence()),
     terminalSessions: normalizeCount(resolved.getTerminalSessions()),
+    ...maintenance.counts,
     totalActive: 0,
   };
-  counts.totalActive = Object.entries(counts).reduce(
-    (total, [key, count]) => (key === "totalActive" ? total : total + count),
-    0,
-  );
+  counts.totalActive =
+    Object.values(counts).reduce((total, count) => total + count, 0) -
+    (options.ignoreTerminalSessions ? counts.terminalSessions : 0);
 
   const blockers: GatewayActiveWorkBlocker[] = [];
   const add = (count: number, kind: GatewayActiveWorkBlocker["kind"], message: string) => {
@@ -142,7 +177,21 @@ export function createGatewayActiveWorkSnapshot(
     `${counts.backgroundExecSessions} active background exec session(s)`,
   );
   add(counts.cronRuns, "cron-run", `${counts.cronRuns} active cron run(s)`);
-  add(counts.rootRequests, "root-request", `${counts.rootRequests} active gateway request(s)`);
+  const rootRequestHolders =
+    inspectors.getRootRequests && !inspectors.getRootRequestHolders
+      ? []
+      : (resolved.getRootRequestHolders?.() ?? []);
+  const rootRequestHolderNames = rootRequestHolders.toSorted().slice(0, 8);
+  if (rootRequestHolders.length > rootRequestHolderNames.length) {
+    rootRequestHolderNames.push(
+      `+${rootRequestHolders.length - rootRequestHolderNames.length} more`,
+    );
+  }
+  add(
+    counts.rootRequests,
+    "root-request",
+    `${counts.rootRequests} active gateway request(s)${rootRequestHolderNames.length > 0 ? `: ${rootRequestHolderNames.join(", ")}` : ""}`,
+  );
   add(
     counts.sessionAdmissions,
     "session-admission",
@@ -160,11 +209,13 @@ export function createGatewayActiveWorkSnapshot(
     "terminal-persistence",
     `${counts.terminalPersistence} pending terminal session write(s)`,
   );
-  add(
-    counts.terminalSessions,
-    "terminal-session",
-    `${counts.terminalSessions} open terminal session(s)`,
-  );
+  if (!options.ignoreTerminalSessions) {
+    add(
+      counts.terminalSessions,
+      "terminal-session",
+      `${counts.terminalSessions} open terminal session(s)`,
+    );
+  }
 
   if (counts.activeTasks > 0) {
     const taskBlockers = resolved.getTaskBlockers();
@@ -176,9 +227,11 @@ export function createGatewayActiveWorkSnapshot(
       });
     } else {
       const shownTaskBlockers = taskBlockers.slice(0, 8);
-      for (const task of shownTaskBlockers) {
+      for (const { taskKind, ...task } of shownTaskBlockers) {
         blockers.push({
-          kind: "task",
+          kind: isBackgroundExecTask({ runtime: task.runtime, taskKind })
+            ? "background-exec"
+            : "task",
           count: 1,
           message: formatActiveTaskRestartBlocker(task),
           task,
@@ -195,5 +248,39 @@ export function createGatewayActiveWorkSnapshot(
     }
   }
 
-  return { idle: counts.totalActive === 0, counts, blockers };
+  return {
+    idle: counts.totalActive === 0,
+    counts,
+    blockers,
+    writeCustody: maintenance.writeCustody,
+  };
+}
+
+const GATEWAY_ACTIVE_WORK_POLL_MS = 250;
+
+/** Waits for the complete process-wide active-work inventory to become idle. */
+export async function waitForGatewayActiveWork(
+  timeoutMs?: number,
+  options: { onSnapshot?: (snapshot: GatewayActiveWorkSnapshot) => void } = {},
+): Promise<GatewayActiveWorkWaitResult> {
+  const timeout =
+    typeof timeoutMs === "number" && Number.isFinite(timeoutMs)
+      ? Math.max(0, Math.floor(timeoutMs))
+      : undefined;
+  const deadlineAt = timeout === undefined ? undefined : Date.now() + timeout;
+
+  while (true) {
+    const snapshot = createGatewayActiveWorkSnapshot();
+    options.onSnapshot?.(snapshot);
+    if (snapshot.idle) {
+      return { drained: true, snapshot };
+    }
+    const remainingMs = deadlineAt === undefined ? undefined : deadlineAt - Date.now();
+    if (remainingMs !== undefined && remainingMs <= 0) {
+      return { drained: false, snapshot };
+    }
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, Math.min(GATEWAY_ACTIVE_WORK_POLL_MS, remainingMs ?? Infinity));
+    });
+  }
 }

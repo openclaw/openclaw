@@ -76,18 +76,71 @@ export function buildChannelsStatusMock(baseTime: number) {
   };
 }
 
+export function buildChannelsPairingMock(baseTime: number) {
+  const iso = (offsetMs: number) => new Date(baseTime + offsetMs).toISOString();
+  return {
+    accounts: [
+      {
+        channel: "telegram",
+        channelLabel: "Telegram",
+        accountId: "default",
+        accountLabel: "Telegram Bot",
+        notifySupported: true,
+      },
+      {
+        channel: "whatsapp",
+        channelLabel: "WhatsApp",
+        accountId: "default",
+        accountLabel: "WhatsApp Web",
+        notifySupported: false,
+      },
+    ],
+    requests: [
+      {
+        requestId: "pairing-req-1",
+        channel: "telegram",
+        channelLabel: "Telegram",
+        accountId: "default",
+        accountLabel: "Telegram Bot",
+        senderId: "telegram-demo-user",
+        senderLabel: "Mira Delgado (@miradelgado)",
+        metadata: { username: "miradelgado", firstName: "Mira", lastName: "Delgado" },
+        createdAt: iso(-14 * 60_000),
+        lastSeenAt: iso(-2 * 60_000),
+        expiresAt: iso(46 * 60_000),
+        notifySupported: true,
+      },
+      {
+        requestId: "pairing-req-2",
+        channel: "whatsapp",
+        channelLabel: "WhatsApp",
+        accountId: "default",
+        accountLabel: "WhatsApp Web",
+        senderId: "whatsapp-demo-user",
+        senderLabel: "Unknown sender",
+        createdAt: iso(-3 * 60_000),
+        lastSeenAt: iso(-60_000),
+        expiresAt: iso(57 * 60_000),
+        notifySupported: false,
+      },
+    ],
+    commandOwnerConfigured: false,
+    limits: { pendingPerAccount: 3, ttlMs: 3_600_000 },
+  };
+}
+
 export function buildChannelWizardMocks() {
+  const channelOptions = [
+    { value: "telegram", label: "Telegram", hint: "bot via @BotFather" },
+    { value: "slack", label: "Slack", hint: "socket mode app" },
+    { value: "signal", label: "Signal", hint: "signal-cli link" },
+    { value: "imessage", label: "iMessage", hint: "macOS Messages" },
+  ];
   const channelSelectStep = {
     id: "mock-wizard-step-channel",
     type: "select",
     message: "Which channel do you want to set up?",
-    options: [
-      { value: "telegram", label: "Telegram", hint: "bot via @BotFather" },
-      { value: "slack", label: "Slack", hint: "socket mode app" },
-      { value: "signal", label: "Signal", hint: "signal-cli link" },
-      { value: "imessage", label: "iMessage", hint: "macOS Messages" },
-      { value: "__skip__", label: "Skip for now" },
-    ],
+    options: [...channelOptions, { value: "__skip__", label: "Skip for now" }],
     initialValue: "telegram",
     executor: "client",
   };
@@ -101,13 +154,40 @@ export function buildChannelWizardMocks() {
   };
   return {
     start: {
-      sessionId: "mock-wizard-session",
-      done: false,
-      status: "running",
-      step: channelSelectStep,
+      cases: [
+        ...channelOptions.map(({ value, label }) => ({
+          match: { flow: "channels", channel: value },
+          response: {
+            sessionId: "mock-wizard-session",
+            done: false,
+            status: "running",
+            step: {
+              id: `mock-wizard-step-${value}`,
+              type: "note",
+              message: `Continue to configure ${label}.`,
+              executor: "client",
+            },
+          },
+        })),
+        {
+          match: { flow: "channels" },
+          response: {
+            sessionId: "mock-wizard-session",
+            done: false,
+            status: "running",
+            step: channelSelectStep,
+          },
+        },
+      ],
     },
     next: {
       cases: [
+        ...channelOptions.map(({ value }) => ({
+          match: {
+            answer: { stepId: `mock-wizard-step-${value}`, value: null },
+          },
+          response: { done: true, status: "done", channels: [value] },
+        })),
         {
           match: {
             answer: { stepId: "mock-wizard-step-channel", value: "telegram" },

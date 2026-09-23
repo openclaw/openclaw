@@ -1,7 +1,7 @@
 // Shared resolver for channel live-preview draft chunk thresholds.
 import { resolveTextChunkLimit } from "../auto-reply/chunk.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveAccountEntry } from "../routing/account-lookup.js";
+import { resolveChannelAccountEntry } from "../routing/account-lookup.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import type { ChannelId } from "./plugins/types.core.js";
 import { resolveChannelStreamingPreviewChunk, type StreamingCompatEntry } from "./streaming.js";
@@ -30,7 +30,11 @@ export function resolveChannelDraftStreamingChunking(
   });
   const normalizedAccountId = normalizeAccountId(accountId);
   const channelCfg = cfg?.channels?.[channelId] as ChannelDraftStreamingConfig | undefined;
-  const accountCfg = resolveAccountEntry(channelCfg?.accounts, normalizedAccountId);
+  const accountCfg = resolveChannelAccountEntry(
+    channelCfg?.accounts,
+    normalizedAccountId,
+    channelId,
+  );
   const draftCfg =
     resolveChannelStreamingPreviewChunk(accountCfg) ??
     resolveChannelStreamingPreviewChunk(channelCfg);

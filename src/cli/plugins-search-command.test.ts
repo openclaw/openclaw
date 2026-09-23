@@ -1,6 +1,7 @@
 // Plugins search command tests cover plugin search command registration and results.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { withEnvAsync } from "../test-utils/env.js";
 
 const mocks = vi.hoisted(() => {
   const logs: string[] = [];
@@ -32,7 +33,7 @@ vi.mock("../runtime.js", () => ({
     runtime.writeJson(value, space),
 }));
 
-vi.mock("../infra/clawhub.js", () => ({
+vi.mock("../infra/clawhub-packages.js", () => ({
   searchClawHubPackages: mocks.searchClawHubPackages,
 }));
 
@@ -50,7 +51,32 @@ describe("plugins search command", () => {
     mocks.searchClawHubPackages.mockReset();
   });
 
-  it("searches ClawHub code and bundle plugin families", async () => {
+  it.each([
+    {
+      context: "default",
+      profile: undefined,
+      container: undefined,
+      command: "openclaw plugins install clawhub:openclaw-calendar",
+    },
+    {
+      context: "profile",
+      profile: "work",
+      container: undefined,
+      command: "openclaw --profile work plugins install clawhub:openclaw-calendar",
+    },
+    {
+      context: "container",
+      profile: undefined,
+      container: "staging",
+      command: "openclaw --container staging plugins install clawhub:openclaw-calendar",
+    },
+    {
+      context: "container over profile",
+      profile: "work",
+      container: "staging",
+      command: "openclaw --container staging plugins install clawhub:openclaw-calendar",
+    },
+  ])("searches ClawHub plugin families with the $context install context", async (scenario) => {
     mocks.searchClawHubPackages
       .mockResolvedValueOnce([
         {
@@ -85,7 +111,13 @@ describe("plugins search command", () => {
         },
       ]);
 
-    await runPluginsSearchCommand(["calendar"], { limit: 5 }, mocks.runtime);
+    await withEnvAsync(
+      {
+        OPENCLAW_PROFILE: scenario.profile,
+        OPENCLAW_CONTAINER_HINT: scenario.container,
+      },
+      () => runPluginsSearchCommand(["calendar"], { limit: 5 }, mocks.runtime),
+    );
 
     expect(mocks.searchClawHubPackages).toHaveBeenCalledWith({
       query: "calendar",
@@ -98,9 +130,7 @@ describe("plugins search command", () => {
       limit: 5,
     });
     expect(mocks.logs.join("\n")).toContain("openclaw-calendar");
-    expect(mocks.logs.join("\n")).toContain(
-      "Install: openclaw plugins install clawhub:openclaw-calendar",
-    );
+    expect(mocks.logs.join("\n")).toContain(`Install: ${scenario.command}`);
   });
 
   it("writes JSON results when requested", async () => {
@@ -109,6 +139,62 @@ describe("plugins search command", () => {
     await runPluginsSearchCommand("calendar", { json: true }, mocks.runtime);
 
     expect(mocks.runtime.writeJson).toHaveBeenCalledWith({ results: [] }, 2);
+  });
+
+  it("formats catalog version labels while preserving raw JSON values", async () => {
+    const results = ["1.2.3", "v1.2.3", "V1.2.3", "canary", "  v1.2.3  ", undefined].map(
+      (latestVersion, index) => ({
+        score: 1,
+        package: {
+          name: `plugin-${index}`,
+          displayName: "Plugin",
+          family: "bundle-plugin",
+          channel: "community",
+          isOfficial: false,
+          createdAt: 1,
+          updatedAt: 1,
+          latestVersion,
+        },
+      }),
+    );
+    mocks.searchClawHubPackages.mockResolvedValue(results);
+
+    const program = new Command();
+    registerPluginsCli(program);
+    await program.parseAsync(["plugins", "search", "version"], { from: "user" });
+    const output = mocks.logs.join("\n");
+    for (const line of [
+      "plugin-0  bundle-plugin | community | v1.2.3\n",
+      "plugin-1  bundle-plugin | community | v1.2.3\n",
+      "plugin-2  bundle-plugin | community | V1.2.3\n",
+      "plugin-3  bundle-plugin | community | canary\n",
+      "plugin-4  bundle-plugin | community | v1.2.3\n",
+      "plugin-5  bundle-plugin | community\n",
+    ]) {
+      expect(output).toContain(line);
+    }
+    await program.parseAsync(["plugins", "search", "version", "--json"], { from: "user" });
+    expect(mocks.runtime.writeJson).toHaveBeenCalledExactlyOnceWith({ results }, 2);
+  });
+
+  it("leaves missing-query JSON failures to the root renderer", async () => {
+    await expect(runPluginsSearchCommand([], { json: true }, mocks.runtime)).rejects.toThrow(
+      "Usage: openclaw plugins search <query>",
+    );
+
+    expect(mocks.runtime.error).not.toHaveBeenCalled();
+    expect(mocks.runtime.exit).not.toHaveBeenCalled();
+  });
+
+  it("leaves ClawHub JSON failures to the root renderer", async () => {
+    mocks.searchClawHubPackages.mockRejectedValueOnce(new Error("offline fixture"));
+
+    await expect(
+      runPluginsSearchCommand("calendar", { json: true }, mocks.runtime),
+    ).rejects.toThrow("offline fixture");
+
+    expect(mocks.runtime.error).not.toHaveBeenCalled();
+    expect(mocks.runtime.exit).not.toHaveBeenCalled();
   });
 
   it("rejects partial numeric search limits", async () => {

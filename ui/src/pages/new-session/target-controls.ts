@@ -1,346 +1,280 @@
 import { html, nothing } from "lit";
-import { icons } from "../../components/icons.ts";
+import type { GatewayAgentRow } from "../../api/types.ts";
+import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
+import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
+import { normalizeAgentTargetLabel } from "../../lib/agents/display.ts";
+import type { AgentIdentityCapability } from "../../lib/agents/identity.ts";
+import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
-import { renderCloudProfileMenuItems, renderSessionMenuItem } from "./cloud-target.ts";
-import type { DraftBranches, DraftCloudProfile, DraftNode } from "./discovery.ts";
-import { folderDisplayName } from "./path.ts";
+import * as catalog from "./catalog-target.ts";
+import { renderCheckoutChip, resolveCheckoutChip } from "./checkout-chip.ts";
+import type { DraftGatewayState } from "./draft-gateway-state.ts";
+import type { DraftPlaceState } from "./draft-place-state.ts";
+import type { NewSessionRouteData } from "./location.ts";
+import "../../components/agent-select-registration.ts";
+import { renderProjectChip, resolveProjectChip } from "./project-chip.ts";
+import { renderNewSessionTerminalHost } from "./terminal-start.ts";
+import { renderWhereChip, resolveWhereChip } from "./where-chip.ts";
 
-type DraftAgent = {
-  id: string;
-  name?: string;
-  identity?: { name?: string };
-};
+registerNewSessionSetupEnglish();
 
-function agentDisplayName(agent: DraftAgent): string {
-  return agent.identity?.name ?? agent.name ?? agent.id;
-}
+type DraftAgent = GatewayAgentRow;
 
 export function renderAgentSelect(params: {
   agents: DraftAgent[];
   agentId: string;
+  agentIdentity?: AgentIdentityCapability;
   disabled: boolean;
-  popoverOpen: boolean;
-  popoverHiding: boolean;
-  onGuardTransition: (event: MouseEvent) => void;
-  onPopoverOpenChange: (open: boolean) => void;
-  onPopoverHidingChange: (hiding: boolean) => void;
-  onRestoreTrigger: () => void;
+  variant?: "default" | "compact";
   onSelect: (agentId: string) => void;
+  onOpenChange: (open: boolean) => void;
 }) {
   const selectedId = normalizeAgentId(params.agentId);
-  const active = params.agents.find((agent) => normalizeAgentId(agent.id) === selectedId);
-  const activeLabel = active ? agentDisplayName(active) : params.agentId;
   return html`
-    <span class="new-session-page__select">
-      <button
-        id="new-session-agent-trigger"
-        type="button"
-        class="new-session-page__trigger ${params.popoverHiding
-          ? "new-session-page__trigger--hiding"
-          : ""}"
-        title=${t("newSession.agent")}
-        aria-label="${t("newSession.agent")}: ${activeLabel}"
-        aria-haspopup="dialog"
-        aria-expanded=${String(params.popoverOpen)}
-        ?disabled=${params.disabled}
-        @click=${params.onGuardTransition}
-      >
-        <span class="new-session-page__target-icon" aria-hidden="true">${icons.bot}</span>
-        <span class="new-session-page__trigger-label">${activeLabel}</span>
-        <span class="new-session-page__trigger-chevron" aria-hidden="true"
-          >${icons.chevronDown}</span
-        >
-      </button>
+    <span class="new-session-page__select new-session-page__select--agent">
+      <openclaw-agent-select
+        .variant=${params.variant ?? "compact"}
+        .options=${params.agents.map((agent) => ({
+          value: normalizeAgentId(agent.id),
+          label: normalizeAgentTargetLabel(agent, params.agentIdentity?.get(agent.id)),
+          agent,
+        }))}
+        .identityById=${Object.fromEntries(
+          params.agents.flatMap((agent) => {
+            const identity = params.agentIdentity?.get(agent.id);
+            return identity ? [[agent.id, identity]] : [];
+          }),
+        )}
+        .value=${selectedId}
+        .accessibleLabel=${t("newSession.agent")}
+        .menuLabel=${t("newSession.agents")}
+        .disabled=${params.disabled}
+        .onSelect=${params.onSelect}
+        @wa-show=${() => params.onOpenChange(true)}
+        @wa-hide=${() => params.onOpenChange(false)}
+      ></openclaw-agent-select>
     </span>
-    <wa-popover
-      class="new-session-page__select new-session-page__agent-popover"
-      for="new-session-agent-trigger"
-      placement="bottom-start"
-      without-arrow
-      @wa-show=${() => params.onPopoverOpenChange(true)}
-      @wa-hide=${() => {
-        params.onPopoverOpenChange(false);
-        params.onPopoverHidingChange(true);
-      }}
-      @wa-after-hide=${() => {
-        params.onPopoverHidingChange(false);
-        params.onRestoreTrigger();
-      }}
-    >
-      <div class="new-session-page__menu-title">${t("newSession.agent")}</div>
-      ${params.agents.map((option) =>
-        renderSessionMenuItem(
-          {
-            value: normalizeAgentId(option.id),
-            label: agentDisplayName(option),
-            checked: normalizeAgentId(option.id) === selectedId,
-            onSelect: () => params.onSelect(normalizeAgentId(option.id)),
+  `;
+}
+
+export function renderNewSessionPlaceControls({
+  idPrefix,
+  context,
+  data,
+  gateway,
+  place,
+  submitting,
+  pendingPlacement,
+  onConnectMachine,
+  onNavigate,
+  onFocusComposer,
+  requestUpdate,
+}: {
+  idPrefix?: string;
+  context: ApplicationContext | undefined;
+  data: NewSessionRouteData | undefined;
+  gateway: DraftGatewayState;
+  place: DraftPlaceState;
+  submitting: boolean;
+  pendingPlacement: boolean;
+  onConnectMachine: () => void;
+  onNavigate: ApplicationContext["navigate"];
+  onFocusComposer: () => void;
+  requestUpdate: () => void;
+}) {
+  const browser = place.browser;
+  const { machineClass, os } = place.cloudSelection;
+  const nativeTerminal = catalog.isTarget(data);
+  const cloudProfiles = nativeTerminal || !place.isAdmin() ? [] : gateway.cloudProfiles;
+  const branches = place.repository.kind === "git" ? place.repository : null;
+  const projects = nativeTerminal ? [] : browser.projects;
+  const recents = nativeTerminal
+    ? []
+    : browser.resolveProjectRecents({
+        sessions: context?.sessions.state.result?.sessions ?? [],
+        workspace: place.workspacePath(),
+        workspaceRoots: place.knownWorkspaceRoots(),
+        isAdmin: place.isAdmin(),
+      });
+  const whereState = resolveWhereChip({
+    environments: place.canWrite() ? gateway.environments : [],
+    cloudProfiles,
+    cloudProfileId: place.cloudProfileId,
+    machineClass,
+    os,
+    deviceId: place.deviceId,
+    autoDevice: place.autoDevice,
+    devicePlacement: place.devicePlacementRuntime()?.devicePlacement,
+    deviceDisabledReason:
+      place.modelControl.devicePlacementUnsupportedReason() ?? gateway.deviceCatalogDisabledReason,
+  });
+  const projectState = resolveProjectChip({
+    folder: place.folder,
+    workspace: place.workspacePath(),
+    projectId: browser.projectId,
+    selectedRemoteProject: browser.remoteProject,
+    projects,
+    recents,
+    projectQuery: browser.projectQuery,
+    freshWorkspace: place.freshWorkspace,
+  });
+  const checkoutState = resolveCheckoutChip({
+    destination: place.cloudProfileId ? "cloud" : place.remotePlacement ? "remote" : "local",
+    worktree: place.worktree,
+    worktreeAvailable: place.worktreeAvailable(),
+    headBranch: branches?.headBranch,
+    baseRef: place.baseRef,
+    repository: Boolean(place.remoteRepository),
+  });
+  const gatewayLabel = gateway.gatewayName
+    ? t("newSession.gatewayNamed", { name: gateway.gatewayName })
+    : t("newSession.gateway");
+  return html`${
+    nativeTerminal
+      ? renderNewSessionTerminalHost({
+          hosts: data?.terminalHosts,
+          hostId: place.terminalHostId,
+          submitting,
+          onSelect: (hostId) => place.selectTerminalHost(hostId),
+        })
+      : renderWhereChip({
+          idPrefix,
+          state: whereState,
+          environmentQuery: browser.environmentQuery,
+          onEnvironmentQueryInput: (query) => browser.changeEnvironmentQuery(query),
+          gatewayName: gateway.gatewayName,
+          cloudProfileId: place.cloudProfileId,
+          machineClass,
+          os,
+          deviceId: place.deviceId,
+          autoDevice: place.autoDevice,
+          autoPlacementMode: place.modelControl.autoPlacementSelectionMode(),
+          cloudDisabledReason: place.modelControl.cloudRuntimeUnsupportedReason(),
+          cloudProfileDisabledReason: (profile) =>
+            place.modelControl.cloudRuntimeUnsupportedReason(profile),
+          submitting,
+          pendingPlacement,
+          catalogLoading: place.canWrite() && gateway.cloudProfilesPending,
+          isAdmin: place.isAdmin(),
+          ...browser.popoverCallbacks("where"),
+          onSelectDevice: (deviceId) => place.selectDevice(deviceId),
+          onSelectAutoDevice: () => place.selectDevice("", true),
+          onSelectCloudProfile: (profileId, useDefaults) => {
+            if (useDefaults) {
+              place.cloudMachines.applyPending(profileId);
+            }
+            place.selectCloudProfile(profileId);
           },
-          params.disabled,
-        ),
-      )}
-    </wa-popover>
-  `;
-}
-
-export function renderWhereSelect(params: {
-  execNodes: DraftNode[];
-  cloudProfiles: DraftCloudProfile[];
-  cloudProfileId: string;
-  execNode: string;
-  syncFolder: string;
-  worktree: boolean;
-  worktreeAvailable: boolean;
-  customFolder: boolean;
-  branches: DraftBranches | null;
-  branchesLoading: boolean;
-  baseRef: string;
-  worktreeName: string;
-  submitting: boolean;
-  pendingCloud: boolean;
-  showTargets: boolean;
-  popoverOpen: boolean;
-  popoverHiding: boolean;
-  onGuardTransition: (event: MouseEvent) => void;
-  onPopoverOpenChange: (open: boolean) => void;
-  onPopoverHidingChange: (hiding: boolean) => void;
-  onRestoreTrigger: () => void;
-  onSelectExecNode: (nodeId: string) => void;
-  onSelectCloudProfile: (profileId: string) => void;
-  onToggleWorktree: () => void;
-  onBaseRefInput: (baseRef: string) => void;
-  onWorktreeNameInput: (name: string) => void;
-}) {
-  const activeNode = params.execNodes.find((node) => node.nodeId === params.execNode);
-  const activeProfile = params.cloudProfiles.find(
-    (profile) => profile.id === params.cloudProfileId,
-  );
-  const whereLabel = params.cloudProfileId
-    ? t("newSession.cloudWorker", { profile: params.cloudProfileId })
-    : params.execNode
-      ? (activeNode?.displayName ?? params.execNode)
-      : t("newSession.gateway");
-  return html`
-    <span class="new-session-page__select">
-      <button
-        id="new-session-where-trigger"
-        type="button"
-        class="new-session-page__trigger ${params.popoverHiding
-          ? "new-session-page__trigger--hiding"
-          : ""}"
-        title=${t("newSession.where")}
-        aria-label="${t("newSession.where")}: ${whereLabel}"
-        data-worktree=${String(params.worktree)}
-        data-cloud-profile=${params.cloudProfileId || nothing}
-        aria-haspopup="dialog"
-        aria-expanded=${String(params.popoverOpen)}
-        ?disabled=${params.submitting || params.pendingCloud}
-        @click=${params.onGuardTransition}
-      >
-        <span class="new-session-page__target-icon" aria-hidden="true"
-          >${params.cloudProfileId ? icons.server : icons.monitor}</span
-        >
-        <span class="new-session-page__trigger-label">${whereLabel}</span>
-        ${params.worktree
-          ? html`<span class="new-session-page__target-icon" aria-hidden="true"
-              >${icons.gitBranch}</span
-            >`
-          : nothing}
-        <span class="new-session-page__trigger-chevron" aria-hidden="true"
-          >${icons.chevronDown}</span
-        >
-      </button>
-    </span>
-    <wa-popover
-      class="new-session-page__select new-session-page__where-popover"
-      for="new-session-where-trigger"
-      placement="bottom-start"
-      without-arrow
-      @wa-show=${() => params.onPopoverOpenChange(true)}
-      @wa-hide=${() => {
-        params.onPopoverOpenChange(false);
-        params.onPopoverHidingChange(true);
-      }}
-      @wa-after-hide=${() => {
-        params.onPopoverHidingChange(false);
-        params.onRestoreTrigger();
-      }}
-    >
-      ${params.showTargets
-        ? html`
-            <div class="new-session-page__menu-title">${t("newSession.where")}</div>
-            ${renderSessionMenuItem(
-              {
-                value: "gateway",
-                label: t("newSession.gateway"),
-                checked: !params.execNode && !params.cloudProfileId,
-                onSelect: () => params.onSelectExecNode(""),
-              },
-              params.submitting,
-            )}
-            ${params.execNodes.map((node) =>
-              renderSessionMenuItem(
-                {
-                  value: `node:${node.nodeId}`,
-                  label: node.displayName,
-                  checked: params.execNode === node.nodeId,
-                  onSelect: () => params.onSelectExecNode(node.nodeId),
-                },
-                params.submitting,
-              ),
-            )}
-            ${renderCloudProfileMenuItems({
-              profiles: params.cloudProfiles,
-              selectedId: params.cloudProfileId,
-              submitting: params.submitting,
-              disabled: !params.worktreeAvailable,
-              onSelect: params.onSelectCloudProfile,
-            })}
-            ${params.cloudProfileId && !activeProfile
-              ? renderSessionMenuItem(
-                  {
-                    value: `cloud:${params.cloudProfileId}`,
-                    label: t("newSession.cloudWorker", { profile: params.cloudProfileId }),
-                    checked: true,
-                    disabled: true,
-                    title: t("newSession.catalogUnavailable"),
-                    onSelect: () => undefined,
-                  },
-                  params.submitting,
-                )
-              : nothing}
-            ${params.cloudProfileId && params.syncFolder
-              ? html`<div class="new-session-page__menu-note">
-                  ${t("newSession.cloudSyncsFolder", {
-                    folder: folderDisplayName(params.syncFolder),
-                  })}
-                </div>`
-              : nothing}
-          `
-        : nothing}
-      ${!params.execNode
-        ? html`
-            ${params.showTargets
-              ? html`<div class="session-menu__separator" role="separator"></div>`
-              : nothing}
-            ${renderSessionMenuItem(
-              {
-                value: "worktree",
-                label: t("newSession.worktree"),
-                checked: params.worktree,
-                disabled:
-                  Boolean(params.cloudProfileId) ||
-                  !params.worktreeAvailable ||
-                  params.customFolder,
-                title: params.cloudProfileId
-                  ? t("newSession.cloudRequiresWorktree")
-                  : params.worktreeAvailable
-                    ? t("chat.runControls.newSessionWorktree")
-                    : t("newSession.worktreeUnavailable"),
-                onSelect: params.onToggleWorktree,
-                keepOpen: true,
-              },
-              params.submitting,
-            )}
-            ${params.worktree
-              ? html`
-                  <label class="new-session-page__menu-field">
-                    <span>${t("newSession.baseBranch")}</span>
-                    <input
-                      type="text"
-                      list="new-session-branches"
-                      ?disabled=${params.submitting || params.pendingCloud}
-                      placeholder=${params.branchesLoading
-                        ? t("common.loading")
-                        : (params.branches?.defaultBranch ?? t("newSession.baseBranch"))}
-                      .value=${params.baseRef}
-                      @input=${(event: Event) =>
-                        params.onBaseRefInput((event.target as HTMLInputElement).value.trim())}
-                    />
-                    <datalist id="new-session-branches">
-                      ${(params.branches?.branches ?? []).map(
-                        (branch) => html`<option value=${branch.name}></option>`,
-                      )}
-                    </datalist>
-                  </label>
-                  <label class="new-session-page__menu-field">
-                    <span>${t("newSession.worktreeName")}</span>
-                    <input
-                      type="text"
-                      ?disabled=${params.submitting || params.pendingCloud}
-                      placeholder=${t("newSession.worktreeNamePlaceholder")}
-                      .value=${params.worktreeName}
-                      @input=${(event: Event) =>
-                        params.onWorktreeNameInput((event.target as HTMLInputElement).value.trim())}
-                    />
-                  </label>
-                `
-              : nothing}
-          `
-        : nothing}
-    </wa-popover>
-  `;
-}
-
-export function renderFolderSelect(params: {
-  browseAvailable: boolean;
-  folder: string;
-  execNode: string;
-  workspace: string;
-  browserOpen: boolean;
-  popoverHiding: boolean;
-  submitting: boolean;
-  pendingCloud: boolean;
-  browser: unknown;
-  onGuardTransition: (event: MouseEvent) => void;
-  onShow: () => void;
-  onHide: () => void;
-  onAfterHide: () => void;
-}) {
-  const folder = params.folder.trim();
-  // An empty folder on a node session means that node's default directory.
-  const label = folder
-    ? folderDisplayName(folder)
-    : params.execNode
-      ? t("newSession.folderPlaceholder")
-      : folderDisplayName(params.workspace) || t("newSession.folderPlaceholder");
-  return html`
-    <span class="new-session-page__select">
-      <button
-        id="new-session-folder-trigger"
-        type="button"
-        class="new-session-page__trigger ${params.browseAvailable
-          ? ""
-          : "new-session-page__trigger--disabled"} ${params.popoverHiding
-          ? "new-session-page__trigger--hiding"
-          : ""}"
-        title=${params.browseAvailable
-          ? t("newSession.browse")
-          : t("newSession.browseRequiresAdmin")}
-        aria-label="${t("newSession.folder")}: ${label}"
-        aria-haspopup="dialog"
-        aria-expanded=${String(params.browserOpen)}
-        ?disabled=${params.submitting || params.pendingCloud || !params.browseAvailable}
-        @click=${params.onGuardTransition}
-      >
-        <span class="new-session-page__target-icon" aria-hidden="true">${icons.folder}</span>
-        <span class="new-session-page__trigger-label">${label}</span>
-        <span class="new-session-page__trigger-chevron" aria-hidden="true"
-          >${icons.chevronDown}</span
-        >
-      </button>
-    </span>
-    <wa-popover
-      class="new-session-page__select new-session-page__select--folder"
-      for="new-session-folder-trigger"
-      placement="bottom-start"
-      without-arrow
-      @wa-show=${params.onShow}
-      @wa-hide=${params.onHide}
-      @wa-after-hide=${params.onAfterHide}
-    >
-      <div class="new-session-page__browser-menu">${params.browser}</div>
-    </wa-popover>
-  `;
+          onSelectCloudOs: (osId) =>
+            place.cloudMachines.selectOs(
+              place.cloudProfileId,
+              osId,
+              cloudProfiles,
+              submitting || pendingPlacement,
+              requestUpdate,
+            ),
+          onSelectCloudMachine: (machineId) =>
+            place.cloudMachines.select(
+              place.cloudProfileId,
+              machineId,
+              cloudProfiles,
+              submitting || pendingPlacement,
+              requestUpdate,
+            ),
+          onConnectMachine,
+          onManageCloudWorkers: () => {
+            browser.close();
+            onNavigate("cloud-workers");
+          },
+        })
+  }${
+    nativeTerminal && place.terminalOnNode
+      ? html`<label class="new-session-page__select new-session-page__menu-field"
+          ><span>${t("newSession.terminalNodeFolder")}</span
+          ><input
+            aria-label=${t("newSession.terminalNodeFolder")}
+            .value=${place.folder}
+            ?disabled=${submitting}
+            @input=${(event: Event) => {
+              if (event.currentTarget instanceof HTMLInputElement) {
+                place.applyFolder(event.currentTarget.value);
+              }
+            }}
+        /></label>`
+      : renderProjectChip({
+          idPrefix,
+          state: projectState,
+          browseAvailable: place.browseAvailable(),
+          isAdmin: place.isAdmin(),
+          canWrite: place.canWrite(),
+          folder: place.folder,
+          workspace: place.workspacePath(),
+          projects,
+          projectQuery: browser.projectQuery,
+          projectSearchAvailable:
+            !nativeTerminal &&
+            canCallGatewayMethod(
+              context?.gateway.snapshot,
+              "projects.searchRemote",
+              "operator.read",
+            ),
+          projectAddAvailable:
+            !nativeTerminal &&
+            canCallGatewayMethod(
+              context?.gateway.snapshot,
+              place.remotePlacement ? "sessions.create" : "projects.add",
+              "operator.write",
+            ),
+          remoteProjects: browser.projectSearchResult?.projects ?? [],
+          selectedRemoteProject: browser.remoteProject,
+          projectSearchCredentialMissing: browser.projectSearchResult?.credential === "missing",
+          projectSearchLoading: browser.projectSearchLoading,
+          projectSearchError: browser.projectSearchError,
+          projectId: browser.projectId,
+          freshWorkspace: place.freshWorkspace,
+          onNewWorkspace: place.remotePlacement ? () => place.selectNewWorkspace() : undefined,
+          gatewayLabel,
+          submitting,
+          pendingPlacement,
+          ...browser.popoverCallbacks("project"),
+          browserOpen: browser.browserOpen,
+          browser: browser.browser,
+          registerProjectPath: browser.browserProjectPath,
+          registeringProject: browser.browserRegistering,
+          onSelectProject: (projectId) => place.selectProjectId(projectId),
+          onProjectQueryInput: (query) => browser.changeProjectQuery(query),
+          onSelectRemoteProject: (project) => place.selectRemoteProject(project),
+          onApplyFolder: (folder) => place.applyFolder(folder),
+          onBrowse: () =>
+            browser.selectGatewayBrowser(place.folder.trim() || place.workspacePath()),
+          onBrowserBack: () => browser.showRoot(),
+          onRegisterProject: (path) => void browser.registerBrowserProject(path),
+          onClose: () => browser.close(),
+        })
+  }${
+    checkoutState && !place.freshWorkspace && !(nativeTerminal && place.terminalOnNode)
+      ? renderCheckoutChip({
+          idPrefix,
+          state: checkoutState,
+          remotePlacement: place.remotePlacement,
+          repository: Boolean(place.remoteRepository),
+          folderLabel: projectState.label,
+          worktree: place.worktree,
+          worktreeAvailable: place.worktreeAvailable(),
+          repositoryUnavailable: place.repository.kind === "unavailable",
+          branches,
+          branchesLoading: place.repository.kind === "checking",
+          baseRef: place.baseRef,
+          worktreeName: place.worktreeName,
+          submitting,
+          pendingPlacement,
+          ...browser.popoverCallbacks("checkout"),
+          onSelectWorktree: (value) => place.selectWorktree(value),
+          onBaseRefInput: (baseRef) => place.setBaseRef(baseRef),
+          onWorktreeNameInput: (worktreeName) => place.setWorktreeName(worktreeName),
+          onConfirm: onFocusComposer,
+        })
+      : nothing
+  }`;
 }

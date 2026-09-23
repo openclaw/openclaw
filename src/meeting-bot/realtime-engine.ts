@@ -2,28 +2,17 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { PluginRuntime, RuntimeLogger } from "../plugins/runtime/types.js";
-import type {
-  RealtimeTranscriptionProviderPlugin,
-  RealtimeVoiceProviderPlugin,
-} from "../plugins/types.js";
-import {
-  getRealtimeTranscriptionProvider,
-  listRealtimeTranscriptionProviders,
-} from "../realtime-transcription/provider-registry.js";
-import type { RealtimeTranscriptionProviderConfig } from "../realtime-transcription/provider-types.js";
-import { resolveConfiguredRealtimeVoiceProvider } from "../talk/provider-resolver.js";
-import type {
-  RealtimeVoiceProviderConfig,
-  RealtimeVoiceTool,
-  RealtimeVoiceToolCallEvent,
-} from "../talk/provider-types.js";
+import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
+import type { RealtimeVoiceAgentConsultToolPolicy } from "../talk/agent-consult-tool.js";
+import { isRealtimeVoiceAudioAudible } from "../talk/audio-energy.js";
+import type { RealtimeVoiceTool, RealtimeVoiceToolCallEvent } from "../talk/provider-types.js";
 import {
   createRealtimeVoiceSessionHarness,
   type RealtimeVoiceSessionHarness,
 } from "../talk/realtime-session-harness.js";
+import { resolveRealtimeVoiceBargeIn } from "../talk/realtime-session-policy.js";
 import type { RealtimeVoiceBridgeSession } from "../talk/session-runtime.js";
 import type { TalkEventInput } from "../talk/talk-events.js";
-import { truncateUtf16Safe } from "../utils.js";
 import {
   resolveMeetingRealtimeAudioFormat,
   type MeetingRealtimeAudioFormat,
@@ -32,7 +21,28 @@ import type {
   MeetingRealtimeAudioTransport,
   MeetingRealtimeAudioTransportHealth,
 } from "./realtime-audio-transport.js";
+import {
+  buildMeetingSpeakExactUserMessage,
+  createMeetingRealtimeLifecycleHandlers,
+  formatMeetingTranscriptSummaryLog,
+  formatMeetingRealtimeVoiceModelLog,
+  meetingOutputBytesPerMs,
+  resolveMeetingRealtimeProvider,
+} from "./realtime-engine-support.js";
+import {
+  createMeetingRealtimeOutputOwner,
+  createMeetingRealtimeOutputQueue,
+} from "./realtime-output-owner.js";
+import { createMeetingRealtimeToolContinuity } from "./realtime-tool-continuity.js";
 
+export {
+  formatMeetingAgentAudioModelLog,
+  formatMeetingAgentTtsResultLog,
+  formatMeetingTranscriptSummaryLog,
+  meetingOutputBytesPerMs,
+  normalizeMeetingTtsPromptText,
+  resolveMeetingRealtimeTranscriptionProvider,
+} from "./realtime-engine-support.js";
 export type MeetingRuntimePlatform = {
   /** Adapter-owned identity keeps platform names and log prefixes out of core. */
   displayName: string;
@@ -44,12 +54,14 @@ export type MeetingRealtimeEngineConfig = {
   chrome: { audioFormat: MeetingRealtimeAudioFormat };
   realtime: {
     strategy: string;
+    agentId?: string;
     provider?: string;
     transcriptionProvider?: string;
     voiceProvider?: string;
     model?: string;
     instructions?: string;
     introMessage?: string;
+    toolPolicy?: RealtimeVoiceAgentConsultToolPolicy;
     providers: Record<string, Record<string, unknown>>;
   };
 };
@@ -59,6 +71,8 @@ export type MeetingAgentConsultParams = {
   requesterSessionKey?: string;
   args: unknown;
   transcript: Array<{ role: "user" | "assistant"; text: string }>;
+  /** Meeting-owned cancellation for the active consult. */
+  abortSignal?: AbortSignal;
 };
 
 export type MeetingRealtimeToolCallParams = {
@@ -87,192 +101,10 @@ export type MeetingRealtimeAudioEngineHandle = {
   stop: () => Promise<void>;
 };
 
-type ResolvedRealtimeProvider = {
-  provider: RealtimeVoiceProviderPlugin;
-  providerConfig: RealtimeVoiceProviderConfig;
-};
-
-type ResolvedRealtimeTranscriptionProvider = {
-  provider: RealtimeTranscriptionProviderPlugin;
-  providerConfig: RealtimeTranscriptionProviderConfig;
-};
-
 export const MEETING_AGENT_TRANSCRIPT_DEBOUNCE_MS = 900;
 // Playback duration plus a tail blocks live loopback; transcript lookback catches delayed echo.
 export const MEETING_OUTPUT_ECHO_SUPPRESSION_TAIL_MS = 3_000;
 export const MEETING_TRANSCRIPT_ECHO_LOOKBACK_MS = 45_000;
-
-export function meetingOutputBytesPerMs(audioFormat: MeetingRealtimeAudioFormat): number {
-  return audioFormat === "g711-ulaw-8khz" ? 8 : 48;
-}
-
-function resolveMeetingRealtimeProvider(params: {
-  config: MeetingRealtimeEngineConfig;
-  fullConfig: OpenClawConfig;
-  providers?: RealtimeVoiceProviderPlugin[];
-}): ResolvedRealtimeProvider {
-  const providerId = params.config.realtime.voiceProvider ?? params.config.realtime.provider;
-  return resolveConfiguredRealtimeVoiceProvider({
-    configuredProviderId: providerId,
-    providerConfigs: params.config.realtime.providers,
-    cfg: params.fullConfig,
-    providers: params.providers,
-    defaultModel: params.config.realtime.model,
-    noRegisteredProviderMessage: "No configured realtime voice provider registered",
-  });
-}
-
-export function resolveMeetingRealtimeTranscriptionProvider(params: {
-  config: MeetingRealtimeEngineConfig;
-  fullConfig: OpenClawConfig;
-  providers?: RealtimeTranscriptionProviderPlugin[];
-}): ResolvedRealtimeTranscriptionProvider {
-  const providers = params.providers ?? listRealtimeTranscriptionProviders(params.fullConfig);
-  if (providers.length === 0) {
-    throw new Error("No configured realtime transcription provider registered");
-  }
-  const providerId =
-    params.config.realtime.transcriptionProvider ?? params.config.realtime.provider;
-  const configuredProvider = providerId
-    ? (params.providers?.find(
-        (entry) => entry.id === providerId || entry.aliases?.includes(providerId),
-      ) ?? getRealtimeTranscriptionProvider(providerId, params.fullConfig))
-    : undefined;
-  const provider = configuredProvider ?? providers[0];
-  if (!provider) {
-    throw new Error("No configured realtime transcription provider registered");
-  }
-  const rawConfig = providerId
-    ? (params.config.realtime.providers[providerId] ??
-      params.config.realtime.providers[provider.id] ??
-      {})
-    : (params.config.realtime.providers[provider.id] ?? {});
-  const providerConfig = provider.resolveConfig
-    ? provider.resolveConfig({ cfg: params.fullConfig, rawConfig })
-    : rawConfig;
-  if (!provider.isConfigured({ cfg: params.fullConfig, providerConfig })) {
-    throw new Error(`Realtime transcription provider "${provider.id}" is not configured`);
-  }
-  return { provider, providerConfig };
-}
-
-function buildMeetingSpeakExactUserMessage(text: string): string {
-  return [
-    "Speak this exact OpenClaw answer to the meeting, without adding, removing, or rephrasing words.",
-    `Answer: ${JSON.stringify(text)}`,
-  ].join("\n");
-}
-
-function readLogString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function formatLogValue(value: string | undefined): string {
-  const normalized = value ? truncateUtf16Safe(value.replace(/\s+/g, "_"), 180) : undefined;
-  return normalized || "unknown";
-}
-
-function resolveProviderModelForLog(params: {
-  provider: { defaultModel?: string };
-  providerConfig: RealtimeVoiceProviderConfig | RealtimeTranscriptionProviderConfig;
-  fallbackModel?: string;
-}): string {
-  return (
-    readLogString(params.providerConfig.model) ??
-    readLogString(params.providerConfig.modelId) ??
-    readLogString(params.fallbackModel) ??
-    readLogString(params.provider.defaultModel) ??
-    "provider-default"
-  );
-}
-
-function formatMeetingRealtimeVoiceModelLog(params: {
-  logScope: string;
-  strategy: string;
-  provider: RealtimeVoiceProviderPlugin;
-  providerConfig: RealtimeVoiceProviderConfig;
-  fallbackModel?: string;
-  audioFormat: MeetingRealtimeAudioFormat;
-}): string {
-  return [
-    `${params.logScope} realtime voice bridge starting: strategy=${formatLogValue(params.strategy)}`,
-    `provider=${formatLogValue(params.provider.id)}`,
-    `model=${formatLogValue(
-      resolveProviderModelForLog({
-        provider: params.provider,
-        providerConfig: params.providerConfig,
-        fallbackModel: params.fallbackModel,
-      }),
-    )}`,
-    `audioFormat=${formatLogValue(params.audioFormat)}`,
-  ].join(" ");
-}
-
-export function formatMeetingAgentAudioModelLog(params: {
-  logScope: string;
-  provider: RealtimeTranscriptionProviderPlugin;
-  providerConfig: RealtimeTranscriptionProviderConfig;
-  audioFormat: MeetingRealtimeAudioFormat;
-}): string {
-  return [
-    `${params.logScope} agent audio bridge starting: transcriptionProvider=${formatLogValue(
-      params.provider.id,
-    )}`,
-    `transcriptionModel=${formatLogValue(
-      resolveProviderModelForLog({
-        provider: params.provider,
-        providerConfig: params.providerConfig,
-      }),
-    )}`,
-    "tts=telephony",
-    `audioFormat=${formatLogValue(params.audioFormat)}`,
-  ].join(" ");
-}
-
-type MeetingTtsResultLogFields = {
-  provider?: string;
-  providerModel?: string;
-  providerVoice?: string;
-  outputFormat?: string;
-  sampleRate?: number;
-  fallbackFrom?: string;
-};
-
-export function formatMeetingAgentTtsResultLog(
-  logScope: string,
-  prefix: string,
-  result: MeetingTtsResultLogFields,
-): string {
-  return [
-    `${logScope} ${prefix} TTS: provider=${formatLogValue(result.provider)}`,
-    `model=${formatLogValue(result.providerModel)}`,
-    `voice=${formatLogValue(result.providerVoice)}`,
-    `outputFormat=${formatLogValue(result.outputFormat)}`,
-    `sampleRate=${result.sampleRate ?? "unknown"}`,
-    ...(result.fallbackFrom ? [`fallbackFrom=${formatLogValue(result.fallbackFrom)}`] : []),
-  ].join(" ");
-}
-
-export function formatMeetingTranscriptSummaryLog(
-  logScope: string,
-  prefix: string,
-  text: string,
-): string {
-  return `${logScope} ${prefix}: chars=${text.length}`;
-}
-
-export function normalizeMeetingTtsPromptText(text: string | undefined): string | undefined {
-  const trimmed = text?.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  const sayExactly = trimmed.match(/^say exactly:\s*(?<text>.+)$/is)?.groups?.text?.trim();
-  if (sayExactly) {
-    return sayExactly.replace(/^["']|["']$/g, "").trim() || trimmed;
-  }
-  return trimmed;
-}
-
 export async function startMeetingRealtimeEngine(params: {
   config: MeetingRealtimeEngineConfig;
   fullConfig: OpenClawConfig;
@@ -295,30 +127,53 @@ export async function startMeetingRealtimeEngine(params: {
   let bridgeClosed = false;
   let transportStopped = false;
   let transportDisposed = false;
-  // Not const: the synchronous onFatal replay can run stop() (and its bridge?.close())
-  // before createBridge() below executes; a later `const` would throw at that read.
-  let bridge: RealtimeVoiceBridgeSession | undefined = undefined;
-  let realtimeReady = false;
-  let lastClearAt: string | undefined;
-  let clearCount = 0;
+  // Fatal transport callbacks can stop the session before its bridge exists.
+  let bridge: RealtimeVoiceBridgeSession | undefined;
+  const lifecycle = {
+    realtimeReady: false,
+    outputGenerationActive: false,
+    continuityResetActive: false,
+  };
+  const outputOwner = createMeetingRealtimeOutputOwner();
+  const toolContinuity = createMeetingRealtimeToolContinuity(params.handleToolCall);
   const realtimeLogScope = params.logPrefix ? `${params.logPrefix} realtime` : "realtime";
+  const audioFormat = resolveMeetingRealtimeAudioFormat(params.config.chrome.audioFormat);
+  const outputQueue = createMeetingRealtimeOutputQueue({
+    transport: params.transport,
+    bytesPerMs: meetingOutputBytesPerMs(params.config.chrome.audioFormat),
+    onFailure: (source, error) => {
+      params.logger.warn(
+        `${params.platform.logScope} ${realtimeLogScope} ${source} failed: ${formatErrorMessage(error)}`,
+      );
+      stopAfterFailure(source);
+    },
+  });
 
   const stop = async () => {
-    stopped = true;
+    if (!stopped) {
+      stopped = true;
+      outputOwner.reset();
+      outputQueue.stop();
+      lifecycle.outputGenerationActive = false;
+      toolContinuity.reset("meeting realtime stopped");
+      harness.talkback?.close();
+      harness.forcedConsults.clear();
+    }
     if (stopPromise) {
       await stopPromise;
       return;
     }
     const cleanup = Promise.resolve().then(async () => {
       if (!bridgeClosed) {
-        bridgeClosed = true;
-        harness.close();
         try {
-          bridge?.close();
+          await bridge?.close();
         } catch (error) {
           params.logger.debug?.(
             `${params.platform.logScope} ${realtimeLogScope}${params.logPrefix ? "" : " voice"} bridge close ignored: ${formatErrorMessage(error)}`,
           );
+        } finally {
+          bridgeClosed = true;
+          harness.close();
         }
       }
       let cleanupError: unknown;
@@ -360,29 +215,56 @@ export async function startMeetingRealtimeEngine(params: {
       );
     });
   };
-  const clearOutputPlayback = () => {
-    if (stopped) {
+  const invalidateOutputPlayback = (): void => {
+    outputQueue.invalidate();
+    lifecycle.outputGenerationActive = false;
+  };
+  const invalidateAndClearOutputPlayback = (): void => {
+    blockOutput();
+    outputQueue.clear();
+  };
+
+  const blockOutput = (): { blocked: boolean; token: symbol } => {
+    const result = outputOwner.block();
+    invalidateOutputPlayback();
+    return result;
+  };
+
+  const handleOutputBackpressure = () => {
+    const { pendingBytes, pendingFrames } = outputQueue.pending();
+    const block = bridge?.bridge.outputAudioMode === "continuous" ? undefined : blockOutput();
+    if (block && !block.blocked) {
       return;
     }
-    clearCount += 1;
-    lastClearAt = new Date().toISOString();
-    void params.transport.clearOutput().catch((error: unknown) => {
-      params.logger.warn(
-        `${params.platform.logScope} ${params.logPrefix ? `${params.logPrefix} audio clear` : "audio output clear"} failed: ${formatErrorMessage(error)}`,
-      );
-      stopAfterFailure("audio output clear");
+    params.logger.warn(
+      `${params.platform.logScope} ${realtimeLogScope} audio output backpressured: pendingBytes=${pendingBytes} pendingFrames=${pendingFrames}`,
+    );
+    if (!block) {
+      invalidateOutputPlayback();
+    }
+    harness.flushOutput(outputQueue.clear);
+    harness.finishOutputAudio("output-backpressure");
+    if (!block) {
+      return;
+    }
+    queueMicrotask(() => {
+      if (stopped || !outputOwner.isBlockedBy(block.token)) {
+        return;
+      }
+      harness.handleBargeIn({ audioPlaybackActive: true, force: true }, () => {});
     });
   };
-  const writeOutputAudio = (audio: Buffer) => {
-    void params.transport.writeOutput(audio).catch((error: unknown) => {
-      params.logger.warn(
-        `${params.platform.logScope} ${params.logPrefix ? `${params.logPrefix} audio output` : "audio output"} failed: ${formatErrorMessage(error)}`,
-      );
-      stopAfterFailure("audio output");
-    });
-  };
+
   const startHumanBargeInMonitor = () => {
-    if (!params.transport.startBargeInMonitor) {
+    if (
+      !params.transport.startBargeInMonitor ||
+      !resolveRealtimeVoiceBargeIn({
+        configuredBargeIn: undefined,
+        interruptResponseOnInputAudio: undefined,
+        capabilities: resolved.capabilities,
+        outputAudioMode: bridge?.bridge.outputAudioMode,
+      })
+    ) {
       return;
     }
     params.transport.startBargeInMonitor(() => {
@@ -395,7 +277,7 @@ export async function startMeetingRealtimeEngine(params: {
       if (!playbackActive && (lastOutputAudioAt === undefined || now - lastOutputAudioAt > 1_000)) {
         return false;
       }
-      harness.handleBargeIn({ audioPlaybackActive: true }, clearOutputPlayback);
+      harness.handleBargeIn({ audioPlaybackActive: true }, invalidateAndClearOutputPlayback);
       return true;
     });
   };
@@ -433,7 +315,10 @@ export async function startMeetingRealtimeEngine(params: {
         `${params.platform.sessionIdPrefix}:${params.meetingSessionId}:command-realtime`,
       mode: "realtime",
       transport: "gateway-relay",
-      brain: strategy === "bidi" ? "direct-tools" : "agent-consult",
+      brain:
+        strategy === "bidi" && !resolved.capabilities?.handlesAgentConsult
+          ? "direct-tools"
+          : "agent-consult",
       provider: resolved.provider.id,
     },
     talkPayloads: {
@@ -444,23 +329,26 @@ export async function startMeetingRealtimeEngine(params: {
       outputAudioDelta: (audio) => ({ byteLength: audio.byteLength }),
       outputAudioDone: reasonTalkPayload,
     },
-    echoSuppression: {
-      bytesPerMs: meetingOutputBytesPerMs(params.config.chrome.audioFormat),
-      tailMs: MEETING_OUTPUT_ECHO_SUPPRESSION_TAIL_MS,
-      transcriptLookbackMs: MEETING_TRANSCRIPT_ECHO_LOOKBACK_MS,
-    },
+    echoSuppression: params.transport.inputAudioIsolated
+      ? undefined
+      : {
+          bytesPerMs: meetingOutputBytesPerMs(params.config.chrome.audioFormat),
+          tailMs: MEETING_OUTPUT_ECHO_SUPPRESSION_TAIL_MS,
+          transcriptLookbackMs: MEETING_TRANSCRIPT_ECHO_LOOKBACK_MS,
+        },
     talkback: {
       debounceMs: MEETING_AGENT_TRANSCRIPT_DEBOUNCE_MS,
       logger: params.logger,
       logPrefix: `${params.platform.logScope} ${realtimeLogScope} agent`,
       responseStyle: "Brief, natural spoken answer for a live meeting.",
       fallbackText: "I hit an error while checking that. Please try again.",
-      consult: ({ question, responseStyle }) =>
+      consult: ({ question, responseStyle, signal }) =>
         params.consultAgent({
           meetingSessionId: params.meetingSessionId,
           requesterSessionKey: params.requesterSessionKey,
           args: { question, responseStyle },
           transcript: harness.transcript,
+          abortSignal: signal,
         }),
       deliver: (text) => {
         bridge?.sendUserMessage(buildMeetingSpeakExactUserMessage(text));
@@ -483,27 +371,100 @@ export async function startMeetingRealtimeEngine(params: {
       `${params.platform.displayName} audio transport failed before realtime provider setup`,
     );
   }
+  const lifecycleHandlers = createMeetingRealtimeLifecycleHandlers({
+    clearOutputPlayback: outputQueue.clear,
+    lifecycle,
+    harness,
+    invalidateOutputPlayback,
+    logger: params.logger,
+    logScope: params.platform.logScope,
+    outputOwner,
+    outputTalkPayload,
+    realtimeLogScope,
+    resetToolContinuity: (reason) => toolContinuity.reset(reason),
+  });
   try {
+    const requireIsolatedInput = () => {
+      if (!params.transport.inputAudioIsolated) {
+        throw new Error(
+          `${params.platform.displayName} native live voice requires isolated meeting audio input. Remove chrome.audioInputCommand to use managed browser capture, which must be available before connecting.`,
+        );
+      }
+    };
+    if (
+      resolved.capabilities?.handlesInputAudioBargeIn === true &&
+      resolved.capabilities.supportsBargeIn === false
+    ) {
+      requireIsolatedInput();
+    }
     bridge = harness.createBridge({
       provider: resolved.provider,
+      capabilities: resolved.capabilities,
       cfg: params.fullConfig,
+      agentId: params.config.realtime.agentId,
       providerConfig: resolved.providerConfig,
-      audioFormat: resolveMeetingRealtimeAudioFormat(params.config.chrome.audioFormat),
+      audioFormat,
       instructions: params.config.realtime.instructions,
       initialGreetingInstructions: params.config.realtime.introMessage,
       autoRespondToAudio: strategy === "bidi",
       triggerGreetingOnReady: false,
       markStrategy: "ack-immediately",
-      tools: strategy === "bidi" ? params.tools : [],
+      tools: strategy === "bidi" && !resolved.capabilities?.handlesAgentConsult ? params.tools : [],
+      ...(resolved.capabilities?.handlesAgentConsult
+        ? {
+            runAgentConsult: (request) => {
+              if (stopped) {
+                throw new Error("Meeting realtime session is closed");
+              }
+              return toolContinuity.runConsult(request, ({ prompt, signal }) => {
+                if (params.config.realtime.toolPolicy === "none") {
+                  throw new Error("Agent delegation is disabled by the meeting tool policy");
+                }
+                return params.consultAgent({
+                  meetingSessionId: params.meetingSessionId,
+                  requesterSessionKey: params.requesterSessionKey,
+                  args: { question: prompt },
+                  transcript: harness.transcript,
+                  abortSignal: signal,
+                });
+              });
+            },
+          }
+        : {}),
       audioSink: {
         isOpen: () => !stopped,
         sendAudio: (audio) => {
+          const responseId = outputOwner.takeNextResponseId();
+          const continuous = bridge?.bridge.outputAudioMode === "continuous";
+          const audible = !continuous || isRealtimeVoiceAudioAudible(audio, audioFormat);
+          if (!audible && !outputQueue.hasUnplayedAudibleAudio()) {
+            if (lifecycle.outputGenerationActive) {
+              lifecycle.outputGenerationActive = false;
+              harness.finishOutputAudio("silence");
+            }
+            return;
+          }
+          if (stopped || (!continuous && !outputOwner.accept(responseId))) {
+            return;
+          }
+          if (!outputQueue.enqueue(audio, audible, !lifecycle.outputGenerationActive)) {
+            handleOutputBackpressure();
+            return;
+          }
+          lifecycle.outputGenerationActive = true;
           harness.outputActivity.markPlaybackStarted();
           harness.recordOutputAudio(audio);
-          writeOutputAudio(audio);
         },
         clearAudio: () => {
-          harness.flushOutput(clearOutputPlayback);
+          const continuous = bridge?.bridge.outputAudioMode === "continuous";
+          if (!continuous && !outputOwner.providerClear()) {
+            return;
+          }
+          if (continuous) {
+            outputOwner.reset();
+          }
+          invalidateOutputPlayback();
+          harness.flushOutput(outputQueue.clear);
           harness.finishOutputAudio("clear");
         },
       },
@@ -532,88 +493,53 @@ export async function startMeetingRealtimeEngine(params: {
             final: true,
           });
         }
-        if (isFinal) {
+        if (!isFinal) {
+          return;
+        }
+        params.logger.info(
+          formatMeetingTranscriptSummaryLog(
+            params.platform.logScope,
+            `${realtimeLogScope} ${role}`,
+            text,
+          ),
+        );
+        if (role !== "user" || strategy !== "agent") {
+          return;
+        }
+        if (harness.isLikelyAssistantEchoTranscript(text)) {
           params.logger.info(
             formatMeetingTranscriptSummaryLog(
               params.platform.logScope,
-              `${realtimeLogScope} ${role}`,
+              `${realtimeLogScope} ignored assistant echo transcript`,
               text,
             ),
           );
-          if (role === "user" && strategy === "agent") {
-            if (harness.isLikelyAssistantEchoTranscript(text)) {
-              params.logger.info(
-                formatMeetingTranscriptSummaryLog(
-                  params.platform.logScope,
-                  `${realtimeLogScope} ignored assistant echo transcript`,
-                  text,
-                ),
-              );
-              return;
-            }
-            harness.talkback?.enqueue(text);
-          }
+          return;
+        }
+        if (!stopped) {
+          harness.talkback?.enqueue(text);
         }
       },
-      onEvent: (event) => {
-        if (event.type === "input_audio_buffer.speech_started") {
-          harness.ensureTurn();
-        } else if (event.type === "input_audio_buffer.speech_stopped") {
-          const turnId = harness.talk.activeTurnId;
-          if (!turnId) {
-            return;
-          }
-          harness.emit({
-            type: "input.audio.committed",
-            turnId,
-            payload: { ...outputTalkPayload, source: event.type },
-            final: true,
-          });
-        } else if (event.type === "response.done") {
-          harness.finishOutputAudio("response.done");
-          harness.endTurn("response.done");
-        } else if (event.type === "error") {
-          harness.emit({
-            type: "session.error",
-            payload: { message: event.detail ?? "Realtime provider error" },
-            final: true,
-          });
-        }
-        if (
-          event.type === "error" ||
-          event.type === "response.done" ||
-          event.type === "input_audio_buffer.speech_started" ||
-          event.type === "input_audio_buffer.speech_stopped" ||
-          event.type === "conversation.item.input_audio_transcription.completed" ||
-          event.type === "conversation.item.input_audio_transcription.failed"
-        ) {
-          const detail = event.detail ? ` ${event.detail}` : "";
-          params.logger.info(
-            `${params.platform.logScope} ${realtimeLogScope} ${event.direction}:${event.type}${detail}`,
-          );
-        }
-      },
+      onEvent: lifecycleHandlers.onEvent,
+      onResponseDone: lifecycleHandlers.onResponseDone,
       onToolCall: (event, session) => {
-        harness.emit({
-          type: "tool.call",
-          turnId: harness.ensureTurn(),
-          itemId: event.itemId,
-          callId: event.callId,
-          payload: { name: event.name, args: event.args },
-        });
-        const turnId = harness.ensureTurn();
-        return params.handleToolCall({
-          strategy,
+        if (stopped) {
+          return Promise.resolve();
+        }
+        return toolContinuity.run({
           session,
-          event,
-          meetingSessionId: params.meetingSessionId,
-          requesterSessionKey: params.requesterSessionKey,
-          transcript: harness.transcript,
-          onTalkEvent: (inputLocal) =>
-            harness.emit({ ...inputLocal, turnId: inputLocal.turnId ?? turnId }),
+          call: {
+            strategy,
+            event,
+            meetingSessionId: params.meetingSessionId,
+            requesterSessionKey: params.requesterSessionKey,
+            transcript: harness.transcript,
+          },
+          harness,
         });
       },
       onError: (error) => {
+        // Provider errors may be recoverable; onClose owns terminal teardown.
         harness.emit({
           type: "session.error",
           payload: { message: formatErrorMessage(error) },
@@ -622,10 +548,10 @@ export async function startMeetingRealtimeEngine(params: {
         params.logger.warn(
           `${params.platform.logScope} ${realtimeLogScope} voice bridge failed: ${formatErrorMessage(error)}`,
         );
-        stopAfterFailure("voice bridge");
       },
       onClose: (reason) => {
-        realtimeReady = false;
+        lifecycle.outputGenerationActive = false;
+        lifecycle.realtimeReady = false;
         harness.finishOutputAudio(reason);
         harness.emit({
           type: "session.closed",
@@ -635,13 +561,17 @@ export async function startMeetingRealtimeEngine(params: {
         stopAfterFailure("voice bridge close");
       },
       onReady: () => {
-        realtimeReady = true;
+        lifecycle.realtimeReady = true;
+        lifecycle.continuityResetActive = false;
         harness.emit({
           type: "session.ready",
           payload: outputTalkPayload,
         });
       },
     });
+    if (bridge.bridge.outputAudioMode === "continuous") {
+      requireIsolatedInput();
+    }
     startHumanBargeInMonitor();
 
     // Drain transport input while connect() is pending so the capture pipe never backpressures.
@@ -689,12 +619,14 @@ export async function startMeetingRealtimeEngine(params: {
     getHealth: () => ({
       ...harness.getHealth({
         providerConnected: bridge?.bridge.isConnected() ?? false,
-        realtimeReady,
+        realtimeReady: lifecycle.realtimeReady,
       }),
+      ...(bridge?.bridge.outputAudioMode === "continuous"
+        ? { audioOutputActive: outputQueue.hasUnplayedAudibleAudio() }
+        : {}),
       ...params.transport.getHealth?.(),
-      lastClearAt,
-      clearCount,
-      bridgeClosed: stopped,
+      ...outputQueue.getHealth(),
+      bridgeClosed,
     }),
     stop,
   };

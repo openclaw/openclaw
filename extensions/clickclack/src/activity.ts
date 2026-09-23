@@ -15,25 +15,15 @@
  *   Normalize the prefix away to one key per call, POST one row on the first
  *   frame, and PATCH it when a later frame carries a strictly longer body.
  */
-import { buildChannelProgressDraftLine } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  formatChannelProgressDraftLineForEntry,
+  isCompleteAgentPreamble,
+} from "openclaw/plugin-sdk/channel-outbound";
+import type { ClickClackItemEventPayload } from "./progress.js";
 import type { ClickClackMessage, ClickClackMessageProvenance } from "./types.js";
 
 /** Debounce window for PATCHing streaming commentary snapshots. */
 const CLICKCLACK_COMMENTARY_FLUSH_MS = 700;
-
-/** Item event payload shape delivered by `replyOptions.onItemEvent`. */
-type ClickClackItemEventPayload = {
-  itemId?: string;
-  toolCallId?: string;
-  kind?: string;
-  title?: string;
-  name?: string;
-  phase?: string;
-  status?: string;
-  summary?: string;
-  progressText?: string;
-  meta?: string;
-};
 
 /** Destination for durable activity rows (channel or DM conversation). */
 type ClickClackActivityTarget = {
@@ -93,7 +83,7 @@ function activityBody(payload: ClickClackItemEventPayload): string {
   // Reuse the shared channel progress-line renderer so ClickClack rows show
   // the same tool name + command/argument detail as Discord/Slack/Telegram
   // progress lines instead of a bespoke format.
-  const line = buildChannelProgressDraftLine({
+  const line = formatChannelProgressDraftLineForEntry(undefined, {
     event: "item",
     itemId: payload.itemId,
     toolCallId: payload.toolCallId,
@@ -105,7 +95,8 @@ function activityBody(payload: ClickClackItemEventPayload): string {
     summary: payload.summary,
     progressText: payload.progressText,
     meta: payload.meta,
-  })?.text?.trim();
+    commandBearing: payload.commandBearing,
+  })?.trim();
   if (line) {
     return line;
   }
@@ -139,7 +130,7 @@ type ToolRow = {
 
 /** Publisher wired into one agent turn via `replyOptions.onItemEvent`. */
 export type ClickClackActivityPublisher = {
-  onItemEvent: (payload: ClickClackItemEventPayload) => void;
+  onItemEvent: (payload: ClickClackItemEventPayload) => false;
   /**
    * Records the resolved model/thinking for this turn (from
    * `replyOptions.onModelSelected`); stamped onto subsequent activity rows.
@@ -215,20 +206,26 @@ export function createClickClackActivityPublisher(params: {
 
   const handleCommentary = (payload: ClickClackItemEventPayload): void => {
     const body = commentaryBody(payload);
-    if (!body.trim()) {
-      return;
-    }
     const key = payload.itemId?.trim() || "turn";
     let segment = commentaryByItem.get(key);
+    if (!body.trim()) {
+      if (segment) {
+        clearTimeout(segment.timer);
+        commentaryByItem.delete(key);
+        const retracted = segment;
+        void enqueue(async () => {
+          if (retracted.messageId) {
+            await params.client.updateMessageBody(retracted.messageId, "");
+          }
+        });
+      }
+      return;
+    }
     if (!segment) {
       segment = { body: "", dirty: false };
       commentaryByItem.set(key, segment);
     }
-    // Snapshots are cumulative per item; never shrink the row body on a
-    // shorter (stale or whitespace-normalized) frame, and skip identical
-    // snapshots entirely so out-of-order frames cannot queue redundant
-    // PATCHes.
-    if (body.length < segment.body.length || body === segment.body) {
+    if (body === segment.body) {
       return;
     }
     segment.body = body;
@@ -242,16 +239,7 @@ export function createClickClackActivityPublisher(params: {
   };
 
   const toolRowKey = (payload: ClickClackItemEventPayload): string => {
-    // toolCallId is an opaque identifier: use it untouched when present.
-    // itemId carries a lane/lifecycle prefix (`tool:X`, `command:X`) on some
-    // frames and appears bare on others, so normalize only itemId to give
-    // all frames of one call a shared key.
-    const toolCallId = payload.toolCallId?.trim();
-    if (toolCallId) {
-      return toolCallId;
-    }
-    const itemId = payload.itemId?.trim() ?? "";
-    return itemId.replace(/^(tool|command):/, "");
+    return payload.itemId?.trim() || payload.toolCallId?.trim() || "";
   };
 
   const handleDiscreteItem = (payload: ClickClackItemEventPayload): void => {
@@ -281,9 +269,7 @@ export function createClickClackActivityPublisher(params: {
       });
       return;
     }
-    // Only upgrade the row when the new frame says strictly more (longer
-    // body), so a bare lane echo like "read" never clobbers a summary.
-    if (body.length <= existing.body.length) {
+    if (body === existing.body) {
       return;
     }
     existing.body = body;
@@ -297,15 +283,37 @@ export function createClickClackActivityPublisher(params: {
 
   return {
     onItemEvent: (payload) => {
+      if (
+        payload.hideFromChannelProgress ||
+        payload.suppressChannelProgress ||
+        payload.suppressDurableProgress
+      ) {
+        const key = toolRowKey(payload);
+        const row = key ? toolRows.get(`agent_tool:${key}`) : undefined;
+        if (row) {
+          toolRows.delete(`agent_tool:${key}`);
+          void enqueue(async () => {
+            if (row.messageId) {
+              await params.client.updateMessageBody(row.messageId, "");
+            }
+          });
+        }
+        return false;
+      }
+      if (payload.kind === "preamble" && !isCompleteAgentPreamble(payload)) {
+        return false;
+      }
       const kind = normalizedItemKind(payload);
       if (STREAMING_COMMENTARY_ITEM_KINDS.has(kind)) {
         handleCommentary(payload);
-        return;
+        return false;
       }
       if (SKIPPED_ITEM_KINDS.has(kind)) {
-        return;
+        return false;
       }
       handleDiscreteItem(payload);
+      // Activity transport is serialized in the background; queueing is not visibility.
+      return false;
     },
     setProvenance: (next) => {
       provenance = next;

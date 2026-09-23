@@ -1,4 +1,3 @@
-// Matrix plugin module implements profile behavior.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,

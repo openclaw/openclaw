@@ -1,25 +1,85 @@
 // Model-bound thinking cannot be exposed or replayed after a model switch.
 import {
+  CLAUDE_FABLE_5_THINKING_PROFILE,
+  CLAUDE_OPUS_55_THINKING_PROFILE,
   requiresClaudeDefaultSampling,
   requiresClaudeMandatoryAdaptiveThinking,
   resolveClaudeFable5ModelIdentity,
   resolveClaudeMythos5ModelIdentity,
+  resolveClaudeNativeThinkingLevelMap,
+  resolveClaudeOpus55ModelIdentity,
+  resolveClaudeOpus5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
+  supportsClaudeNativeMaxEffort,
+  supportsClaudeNativeXhighEffort,
 } from "@openclaw/llm-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import type { Context, Model } from "../types.js";
+import { clampThinkingLevel } from "../model-utils.js";
+import type { AnthropicEffort } from "../provider-options.js";
+import type {
+  Context,
+  Model,
+  ModelThinkingLevel,
+  SimpleStreamOptions,
+  StopReason,
+} from "../types.js";
+import { headersToRecord } from "../utils/headers.js";
 export {
+  bindsClaudeThinkingPrefix,
   requiresClaudeDefaultSampling,
   requiresClaudeMandatoryAdaptiveThinking,
   resolveClaudeFable5ModelIdentity,
   resolveClaudeModelIdentity,
   resolveClaudeMythos5ModelIdentity,
   resolveClaudeNativeThinkingLevelMap,
+  resolveClaudeOpus55ModelIdentity,
+  resolveClaudeOpus5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
   supportsClaudeAdaptiveThinking,
   supportsClaudeNativeMaxEffort,
   supportsClaudeNativeXhighEffort,
 } from "@openclaw/llm-core";
+
+// Anthropic gates OAuth models with claude_code_version_too_old. Keep this floor
+// at the published Claude Code release (2.1.278); older or absent CLIs must not downgrade it.
+export const ANTHROPIC_CLAUDE_CODE_VERSION = "2.1.278";
+
+/** Build OAuth headers and the matching billing identity from one request snapshot. */
+export function buildAnthropicClaudeCodeIdentity(
+  betaHeader: string | undefined,
+  ...headerSources: (Record<string, string> | undefined)[]
+): { headers: Record<string, string>; version: string } {
+  const headers = new Headers({
+    accept: "application/json",
+    "anthropic-dangerous-direct-browser-access": "true",
+    ...(betaHeader ? { "anthropic-beta": betaHeader } : {}),
+    "x-app": "cli",
+  });
+  for (const source of headerSources) {
+    for (const [name, value] of Object.entries(source ?? {})) {
+      headers.set(name, value);
+    }
+  }
+  let version = ANTHROPIC_CLAUDE_CODE_VERSION;
+  const candidate = headers.get("user-agent")?.match(/^claude-cli\/(\d+\.\d+\.\d+)$/)?.[1];
+  if (candidate) {
+    const components = candidate.split(".").map(Number);
+    const minimum = version.split(".").map(Number);
+    const differing = components.findIndex((component, index) => component !== minimum[index]);
+    const component = components[differing];
+    const minimumComponent = minimum[differing];
+    if (
+      components.every(Number.isSafeInteger) &&
+      component !== undefined &&
+      minimumComponent !== undefined &&
+      component > minimumComponent
+    ) {
+      version = candidate;
+    }
+  }
+  headers.set("user-agent", `claude-cli/${version}`);
+  return { headers: headersToRecord(headers), version };
+}
 
 type ReplayModelRef = {
   provider?: string;
@@ -72,6 +132,7 @@ export function usesClaudeStreamingRefusalContract(model: {
   return (
     resolveClaudeFable5ModelIdentity(model) !== undefined ||
     resolveClaudeMythos5ModelIdentity(model) !== undefined ||
+    resolveClaudeOpus5ModelIdentity(model) !== undefined ||
     resolveClaudeSonnet5ModelIdentity(model) !== undefined
   );
 }
@@ -87,7 +148,7 @@ export function requiresClaudeAdaptiveThinking(model: {
   return requiresClaudeMandatoryAdaptiveThinking(model);
 }
 
-/** Return whether omitted thinking should default to adaptive/high. */
+/** Return whether omitted thinking should default to adaptive mode. */
 export function defaultsClaudeAdaptiveThinking(model: {
   id?: string;
   params?: Record<string, unknown>;
@@ -96,13 +157,74 @@ export function defaultsClaudeAdaptiveThinking(model: {
   return (
     requiresClaudeAdaptiveThinking(model) ||
     (normalizeApi(model.api) === "anthropic-messages" &&
-      resolveClaudeSonnet5ModelIdentity(model) !== undefined)
+      (resolveClaudeOpus5ModelIdentity(model) !== undefined ||
+        resolveClaudeSonnet5ModelIdentity(model) !== undefined))
   );
 }
 
-/** Remove Sonnet 5 assistant prefills while preserving completed tool-use turns. */
-export function prepareClaudeSonnet5RequestContext(model: Model, context: Context): Context {
-  if (!resolveClaudeSonnet5ModelIdentity(model)) {
+/** Resolve provider-native effort once for direct and managed Claude requests. */
+export function resolveAnthropicThinkingEffort(
+  model: Model<"anthropic-messages">,
+  level: SimpleStreamOptions["reasoning"],
+): AnthropicEffort {
+  const requestedLevel: ModelThinkingLevel | undefined =
+    level ??
+    (resolveClaudeOpus55ModelIdentity(model)
+      ? CLAUDE_OPUS_55_THINKING_PROFILE.defaultLevel
+      : resolveClaudeFable5ModelIdentity(model)
+        ? CLAUDE_FABLE_5_THINKING_PROFILE.defaultLevel
+        : undefined);
+  const thinkingLevelMap = resolveClaudeNativeThinkingLevelMap(model);
+  const clampModel = {
+    ...model,
+    ...(typeof model.params?.canonicalModelId === "string" ? { reasoning: true } : {}),
+    ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
+  };
+  const resolvedLevel = requestedLevel ? clampThinkingLevel(clampModel, requestedLevel) : undefined;
+  const mapped = resolvedLevel ? thinkingLevelMap?.[resolvedLevel] : undefined;
+  if (typeof mapped === "string") {
+    return mapped as AnthropicEffort;
+  }
+  switch (resolvedLevel) {
+    case "off":
+    case "minimal":
+    case "low":
+      return "low";
+    case "medium":
+      return "medium";
+    case "xhigh":
+      return supportsClaudeNativeXhighEffort(model) ? "xhigh" : "high";
+    case "max":
+      return supportsClaudeNativeMaxEffort(model) ? "max" : "high";
+    default:
+      return "high";
+  }
+}
+
+/** Normalize Anthropic and Anthropic-compatible terminal reasons identically. */
+export function mapAnthropicStopReason(reason: string | undefined): StopReason {
+  switch (reason) {
+    case "end_turn":
+    case "pause_turn":
+    case "compaction":
+    case "stop_sequence":
+      return "stop";
+    case "max_tokens":
+    case "model_context_window_exceeded":
+      return "length";
+    case "tool_use":
+      return "toolUse";
+    case "refusal":
+    case "sensitive":
+      return "error";
+    default:
+      throw new Error(`Unhandled stop reason: ${String(reason)}`);
+  }
+}
+
+/** Remove unsupported assistant prefills while preserving completed tool-use turns. */
+export function prepareClaudeNoPrefillRequestContext(model: Model, context: Context): Context {
+  if (!resolveClaudeOpus5ModelIdentity(model) && !resolveClaudeSonnet5ModelIdentity(model)) {
     return context;
   }
 
@@ -122,8 +244,15 @@ export function prepareClaudeSonnet5RequestContext(model: Model, context: Contex
     : { ...context, messages: context.messages.slice(0, end) };
 }
 
+type ClaudeSamplingRequestParams = {
+  temperature?: unknown;
+  top_p?: unknown;
+  top_k?: unknown;
+  service_tier?: unknown;
+};
+
 export function applyClaudeRequestContract(
-  params: Record<string, unknown>,
+  params: ClaudeSamplingRequestParams,
   model: {
     id?: string;
     params?: Record<string, unknown>;
@@ -133,14 +262,15 @@ export function applyClaudeRequestContract(
   if (normalizeApi(model.api) !== "anthropic-messages") {
     return;
   }
+  const opus5 = resolveClaudeOpus5ModelIdentity(model) !== undefined;
   const sonnet5 = resolveClaudeSonnet5ModelIdentity(model) !== undefined;
-  if (!requiresClaudeDefaultSampling(model) && !sonnet5) {
+  if (!requiresClaudeDefaultSampling(model) && !opus5 && !sonnet5) {
     return;
   }
   delete params.temperature;
   delete params.top_p;
   delete params.top_k;
-  if (sonnet5) {
+  if (opus5 || sonnet5) {
     delete params.service_tier;
   }
 }
@@ -160,8 +290,30 @@ function resolveReplayModelBoundIdentity(ref: ReplayModelRef): string | undefine
   if (mythosIdentity) {
     return `mythos:${mythosIdentity}`;
   }
+  const opusIdentity = resolveClaudeOpus5ModelIdentity(modelRef);
+  if (opusIdentity) {
+    return `opus:${opusIdentity}`;
+  }
   const sonnetIdentity = resolveClaudeSonnet5ModelIdentity(modelRef);
   return sonnetIdentity ? `sonnet:${sonnetIdentity}` : undefined;
+}
+
+/**
+ * Fable 5.1 reads thinking from every earlier Claude generation (verified live:
+ * Opus 5, Sonnet 5, Opus 4.8 replay with no drops), while the API silently
+ * drops anything it cannot read. Moving onto it therefore keeps prior reasoning;
+ * every other cross-identity move, including unregistered Mythos targets, is
+ * still dropped here until its replay contract is proven separately.
+ */
+function readsPriorClaudeThinking(targetIdentity: string | undefined): boolean {
+  return (
+    targetIdentity !== undefined && /^fable:claude-fable-5-1(?=$|[^a-z0-9])/.test(targetIdentity)
+  );
+}
+
+function isClaudeReplaySource(ref: ReplayModelRef): boolean {
+  const modelId = hasConcreteResponseModel(ref) ? ref.responseModelId : ref.modelId;
+  return /(?:^|[-/])claude-/.test(normalizeModelId(modelId));
 }
 
 export function resolveModelBoundThinkingReplayMode(params: {
@@ -179,6 +331,13 @@ export function resolveModelBoundThinkingReplayMode(params: {
     normalizeModelId(params.source.modelId) === normalizeModelId(params.target.modelId);
   if (!sourceIdentity && !targetIdentity) {
     return "default";
+  }
+  if (
+    sourceApi === targetApi &&
+    readsPriorClaudeThinking(targetIdentity) &&
+    isClaudeReplaySource(params.source)
+  ) {
+    return "preserve";
   }
   if (!sourceIdentity && !hasConcreteResponseModel(params.source) && targetIdentity && sameRoute) {
     return "preserve";

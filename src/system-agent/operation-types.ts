@@ -1,7 +1,8 @@
-// Leaf contract for the parsed OpenClaw operation shape. Kept import-free so
+// Leaf contract for the parsed OpenClaw operation shape. Uses only type imports so
 // gateway server types can reference it without pulling the system-agent
 // runtime graph (operations-parse -> overview -> config -> gateway) into a
 // type-only import cycle.
+import type { AgentRoleId } from "../agents/agent-roles.js";
 
 /** Parsed OpenClaw operation before approval/execution. */
 export type SystemAgentOperation =
@@ -18,20 +19,14 @@ export type SystemAgentOperation =
   | {
       kind: "config-set-ref";
       path: string;
-      source: "env" | "file" | "exec";
+      source: "env" | "file" | "exec" | "store";
       id: string;
       provider?: string;
     }
-  | { kind: "setup"; workspace?: string; model?: string }
-  | { kind: "model-setup"; workspace?: string }
+  | { kind: "setup"; workspace?: string; model?: string; agentName?: string }
+  | SystemAgentNavigationOperation
   | { kind: "channel-list" }
   | { kind: "channel-info"; channel: string }
-  | { kind: "channel-setup"; channel: string }
-  | {
-      kind: "open-setup";
-      target: "guided" | "classic" | "channels";
-      channel?: string;
-    }
   | { kind: "gateway-status" }
   | { kind: "gateway-start" }
   | { kind: "gateway-stop" }
@@ -41,8 +36,53 @@ export type SystemAgentOperation =
   | { kind: "plugin-list" }
   | { kind: "plugin-search"; query: string }
   | { kind: "plugin-install"; spec: string }
+  | { kind: "plugin-activate-artifact"; path: string; sha256: string }
   | { kind: "plugin-uninstall"; pluginId: string }
   | { kind: "audit" }
-  | { kind: "create-agent"; agentId: string; workspace?: string; model?: string }
-  | { kind: "open-tui"; agentId?: string; workspace?: string }
-  | { kind: "set-default-model"; model: string };
+  | {
+      kind: "create-agent";
+      agentId: string;
+      name?: string;
+      purpose?: string;
+      role?: AgentRoleId;
+      workspace?: string;
+      model?: string;
+      requesterAgentId?: string;
+    }
+  | { kind: "create-team"; coordinatorId?: string; prefix?: string; workspaceRoot?: string }
+  | { kind: "set-default-model"; model: string; agentId?: string };
+
+/** Interactive actions owned by the host chat, never by delegated model turns. */
+export type SystemAgentNavigationOperation =
+  | { kind: "model-setup"; workspace?: string }
+  | { kind: "model-accounts" }
+  | { kind: "channel-setup"; channel: string }
+  | { kind: "skills-setup" }
+  | { kind: "search-setup" }
+  | { kind: "gateway-config-setup" }
+  | { kind: "memory-import" }
+  | {
+      kind: "open-setup";
+      target: "guided" | "classic" | "channels" | "search" | "gateway";
+      channel?: string;
+    }
+  | { kind: "open-tui"; agentId?: string; workspace?: string; agentDraft?: "hatch" };
+
+export function isSystemAgentNavigationOperation(
+  operation: SystemAgentOperation,
+): operation is SystemAgentNavigationOperation {
+  switch (operation.kind) {
+    case "channel-setup":
+    case "skills-setup":
+    case "search-setup":
+    case "gateway-config-setup":
+    case "memory-import":
+    case "model-setup":
+    case "model-accounts":
+    case "open-setup":
+    case "open-tui":
+      return true;
+    default:
+      return false;
+  }
+}

@@ -9,45 +9,6 @@ import {
 import { applyAgentCompactionSettingsFromConfig } from "./agent-settings.js";
 import { SettingsManager } from "./sessions/index.js";
 
-function createEmbeddedAgentSettingsManager(params: {
-  cwd: string;
-  agentDir: string;
-  cfg?: OpenClawConfig;
-  pluginMetadataSnapshot?: PluginMetadataSnapshot;
-}): SettingsManager {
-  const fileSettingsManager = SettingsManager.create(params.cwd, params.agentDir);
-  const policy = resolveEmbeddedAgentProjectSettingsPolicy(params.cfg);
-  const pluginSettings = loadEnabledBundleAgentSettingsSnapshot({
-    cwd: params.cwd,
-    cfg: params.cfg,
-    pluginMetadataSnapshot: params.pluginMetadataSnapshot,
-  });
-  const hasPluginSettings = Object.keys(pluginSettings).length > 0;
-  if (policy === "trusted" && !hasPluginSettings) {
-    return fileSettingsManager;
-  }
-  const settings = buildEmbeddedAgentSettingsSnapshot({
-    globalSettings: fileSettingsManager.getGlobalSettings(),
-    pluginSettings,
-    projectSettings: fileSettingsManager.getProjectSettings(),
-    policy,
-  });
-  return SettingsManager.inMemory(settings);
-}
-
-function createRuntimeEmbeddedAgentSettingsManager(
-  settingsManager: SettingsManager,
-): SettingsManager {
-  return SettingsManager.inMemory(
-    buildEmbeddedAgentSettingsSnapshot({
-      globalSettings: settingsManager.getGlobalSettings(),
-      pluginSettings: {},
-      projectSettings: settingsManager.getProjectSettings(),
-      policy: "trusted",
-    }),
-  );
-}
-
 /** Creates the runtime SettingsManager with project/plugin settings and compaction overrides. */
 export function createPreparedEmbeddedAgentSettingsManager(params: {
   cwd: string;
@@ -57,18 +18,22 @@ export function createPreparedEmbeddedAgentSettingsManager(params: {
   /** Resolved context window budget so reserve-token floor can be capped for small models. */
   contextTokenBudget?: number;
 }): SettingsManager {
-  const settingsManager = createRuntimeEmbeddedAgentSettingsManager(
-    createEmbeddedAgentSettingsManager(params),
+  const fileSettingsManager = SettingsManager.create(params.cwd, params.agentDir);
+  // Lock-backed reads stay authoritative; runtime writes and reloads use only this snapshot.
+  const settingsManager = SettingsManager.inMemory(
+    buildEmbeddedAgentSettingsSnapshot({
+      globalSettings: fileSettingsManager.getGlobalSettings(),
+      pluginSettings: loadEnabledBundleAgentSettingsSnapshot(params),
+      projectSettings: fileSettingsManager.getProjectSettings(),
+      policy: resolveEmbeddedAgentProjectSettingsPolicy(params.cfg),
+    }),
   );
   applyAgentCompactionSettingsFromConfig({
     settingsManager,
     cfg: params.cfg,
     contextTokenBudget: params.contextTokenBudget,
   });
-  // Disable the session runtime auto-retry. OpenClaw has its own comprehensive
-  // retry layer (failover rotation, auth profile rotation, empty-error retry,
-  // thinking-level fallback) in run.ts. Having both layers active creates a
-  // double-retry that can replay failed tool calls in an unbounded loop (#73781).
+  // The embedded runner owns retries; session auto-retry could replay tool calls (#73781).
   settingsManager.setRetryEnabled(false);
   return settingsManager;
 }

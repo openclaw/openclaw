@@ -3,6 +3,7 @@ import type { ChildProcess } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { isPidAlive } from "openclaw/plugin-sdk/process-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -73,15 +74,6 @@ async function waitForChildClose(child: ChildProcess | undefined): Promise<void>
   });
 }
 
-function isProcessRunning(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 async function waitForPidFile(pathToCheck: string, timeoutMs: number): Promise<number> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -115,9 +107,13 @@ describe("Matrix QA CLI runtime stream errors", () => {
     childProcessMocks.spawn.mockClear();
   });
 
-  it.each(["stdout", "stderr"] as const)(
-    "rejects after cleaning up when %s emits a stream error",
-    async (streamName) => {
+  it.each([
+    ["stdout", false],
+    ["stderr", false],
+    ["stdout", true],
+  ] as const)(
+    "rejects after cleaning up when %s emits a stream error (after exit: %s)",
+    async (streamName, afterExit) => {
       const { grandchildPidPath, grandchildReadyPath, root } = await createCliRoot();
       let child: ChildProcess | undefined;
       let grandchildPid: number | undefined;
@@ -142,17 +138,23 @@ describe("Matrix QA CLI runtime stream errors", () => {
         grandchildPid = await waitForPidFile(grandchildPidPath, 2_000);
         await waitForFile(grandchildReadyPath, 2_000);
 
-        child[streamName]?.emit("error", new Error(`${streamName} pipe failed`));
+        const streamError = new Error(`${streamName} pipe failed`);
+        if (afterExit) {
+          child.once("exit", () => child?.[streamName]?.emit("error", streamError));
+          child.kill("SIGTERM");
+        } else {
+          child[streamName]?.emit("error", streamError);
+        }
 
         await expect(session.wait()).rejects.toThrow(
           `${streamName} stream error: ${streamName} pipe failed`,
         );
         expect(childClosed).toBe(true);
-        expect(isProcessRunning(grandchildPid)).toBe(false);
+        expect(isPidAlive(grandchildPid)).toBe(false);
       } finally {
         session?.kill();
         await waitForChildClose(child);
-        if (grandchildPid && isProcessRunning(grandchildPid)) {
+        if (grandchildPid && isPidAlive(grandchildPid)) {
           process.kill(grandchildPid, "SIGKILL");
         }
         await rm(root, { force: true, recursive: true });

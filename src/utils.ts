@@ -1,18 +1,18 @@
 // Shared filesystem, path, and process helpers for the CLI.
 import fs from "node:fs";
 import os from "node:os";
-import path from "node:path";
+import { normalizeHomeDirValue } from "@openclaw/normalization-core/home-dir";
+import { resolveConfigDir } from "./infra/config-dir.js";
 import { pathExists as fsSafePathExists } from "./infra/fs-safe.js";
-import {
-  resolveEffectiveHomeDir,
-  resolveRequiredHomeDir,
-  resolveUserPath,
-} from "./infra/home-dir.js";
-import { isPlainObject } from "./infra/plain-object.js";
+import { resolveEffectiveHomeDir, resolveUserPath } from "./infra/home-dir.js";
+import { shortenPathWithHome } from "./infra/home-display.js";
+import "./infra/plain-object.js";
+import { escapeRegExp as escapeRegExpValue } from "./shared/regexp.js";
+export { isPlainObject } from "./infra/plain-object.js";
 export { escapeRegExp } from "./shared/regexp.js";
 export { sleep } from "./utils/sleep.js";
 export { isRecord } from "@openclaw/normalization-core/record-coerce";
-export { resolveUserPath };
+export { resolveConfigDir, resolveUserPath };
 
 /** Creates a directory tree if it does not already exist. */
 export async function ensureDir(dir: string) {
@@ -36,15 +36,13 @@ export const clamp = clampNumber;
  * Safely parse JSON, returning null on error instead of throwing.
  */
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- JSON parsing helper lets callers ascribe the expected payload type.
-export function safeParseJson<T>(raw: string): T | null {
+export function tryParseJson<T>(raw: string): T | null {
   try {
     return JSON.parse(raw) as T;
   } catch {
     return null;
   }
 }
-
-export { isPlainObject };
 
 /** Normalizes phone-like input into the loose E.164 shape used by channel helpers. */
 export function normalizeE164(number: string): string {
@@ -58,31 +56,6 @@ export function normalizeE164(number: string): string {
 // to preserve the historical `utils.ts` import surface.
 export { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 
-/** Resolves the OpenClaw config directory from state/config env overrides or home. */
-export function resolveConfigDir(
-  env: NodeJS.ProcessEnv = process.env,
-  homedir: () => string = os.homedir,
-): string {
-  const override = env.OPENCLAW_STATE_DIR?.trim();
-  if (override) {
-    return resolveUserPath(override, env, homedir);
-  }
-  const configPath = env.OPENCLAW_CONFIG_PATH?.trim();
-  if (configPath) {
-    return path.dirname(resolveUserPath(configPath, env, homedir));
-  }
-  const newDir = path.join(resolveRequiredHomeDir(env, homedir), ".openclaw");
-  try {
-    const hasNew = fs.existsSync(newDir);
-    if (hasNew) {
-      return newDir;
-    }
-  } catch {
-    // best-effort
-  }
-  return newDir;
-}
-
 /** Resolves the effective OpenClaw home directory, if one can be determined. */
 export function resolveHomeDir(): string | undefined {
   return resolveEffectiveHomeDir(process.env, os.homedir);
@@ -93,7 +66,7 @@ function resolveHomeDisplayPrefix(): { home: string; prefix: string } | undefine
   if (!home) {
     return undefined;
   }
-  const explicitHome = process.env.OPENCLAW_HOME?.trim();
+  const explicitHome = normalizeHomeDirValue(process.env.OPENCLAW_HOME);
   if (explicitHome) {
     return { home, prefix: "$OPENCLAW_HOME" };
   }
@@ -102,21 +75,11 @@ function resolveHomeDisplayPrefix(): { home: string; prefix: string } | undefine
 
 /** Replaces the leading home directory in a path with `~` or `$OPENCLAW_HOME`. */
 export function shortenHomePath(input: string): string {
-  if (!input) {
-    return input;
-  }
   const display = resolveHomeDisplayPrefix();
   if (!display) {
     return input;
   }
-  const { home, prefix } = display;
-  if (input === home) {
-    return prefix;
-  }
-  if (input.startsWith(`${home}/`) || input.startsWith(`${home}\\`)) {
-    return `${prefix}${input.slice(home.length)}`;
-  }
-  return input;
+  return shortenPathWithHome(input, display);
 }
 
 /** Replaces all effective-home occurrences inside a diagnostic string. */
@@ -127,6 +90,9 @@ export function shortenHomeInString(input: string): string {
   const display = resolveHomeDisplayPrefix();
   if (!display) {
     return input;
+  }
+  if (process.platform === "win32") {
+    return input.replace(new RegExp(escapeRegExpValue(display.home), "giu"), display.prefix);
   }
   return input.split(display.home).join(display.prefix);
 }

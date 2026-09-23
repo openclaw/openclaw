@@ -7,6 +7,12 @@ export type CodexNativeToolUnfinishedStatus = Extract<
   "failed" | "unknown"
 >;
 
+export function matchesCodexSnapshotTurn(item: CodexThreadItem, turnId: string): boolean {
+  // Missing turnId inherits the validated enclosing snapshot; explicit foreign IDs do not.
+  const itemTurnId = readItemString(item, "turnId");
+  return itemTurnId === undefined || itemTurnId === turnId;
+}
+
 export function itemKind(
   item: CodexThreadItem,
 ): "tool" | "command" | "patch" | "search" | "analysis" | undefined {
@@ -61,6 +67,23 @@ export function itemStatus(item: CodexThreadItem): "completed" | "failed" | "run
     return "running";
   }
   return "completed";
+}
+
+export function unknownItemStatus(item: CodexThreadItem): string | undefined {
+  const status = readItemString(item, "status");
+  switch (status) {
+    case undefined:
+    case "completed":
+    case "failed":
+    case "error":
+    case "declined":
+    case "inProgress":
+    case "in_progress":
+    case "running":
+      return undefined;
+    default:
+      return status;
+  }
 }
 
 export function auditNativeToolTerminalStatus(item: CodexThreadItem): CodexNativeToolAuditStatus {
@@ -159,7 +182,15 @@ export function shouldSynthesizeToolProgressForItem(item: CodexThreadItem): bool
 }
 
 export function shouldRecordNativeToolTranscript(item: CodexThreadItem): boolean {
-  return shouldSynthesizeToolProgressForItem(item) && item.type !== "webSearch";
+  switch (item.type) {
+    case "commandExecution":
+    case "fileChange":
+    case "webSearch":
+    case "mcpToolCall":
+      return true;
+    default:
+      return false;
+  }
 }
 
 export function isMutatingNativeToolItem(item: CodexThreadItem): boolean {

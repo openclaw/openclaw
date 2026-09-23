@@ -1,12 +1,12 @@
-#!/usr/bin/env bash
+#!/bin/bash
 set -euo pipefail
 
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/ios-write-version-xcconfig.sh [--version 2026.6.11] [--build-number 7]
+  scripts/ios-write-version-xcconfig.sh [--version 2026.7.2] [--revision 1] [--build-number 3]
 
-Writes apps/ios/build/Version.xcconfig from package.json or explicit --version:
+Writes apps/ios/build/Version.xcconfig from apps/mobile/version.json or explicit --version:
 - OPENCLAW_IOS_VERSION = exact canonical iOS version
 - OPENCLAW_MARKETING_VERSION = short iOS/App Store version
 - OPENCLAW_BUILD_VERSION = explicit build number or local numeric fallback
@@ -22,6 +22,7 @@ VERSION_HELPER="${ROOT_DIR}/scripts/ios-version.ts"
 IOS_VERSION=""
 MARKETING_VERSION=""
 BUILD_NUMBER=""
+APP_STORE_REVISION=""
 RELEASE_VERSION=""
 RESOLVED_GIT_COMMIT=""
 RESOLVED_BUILD_TIMESTAMP=""
@@ -70,6 +71,11 @@ while [[ $# -gt 0 ]]; do
       BUILD_NUMBER="${2:-}"
       shift 2
       ;;
+    --revision)
+      require_option_value "$1" "${2-}"
+      APP_STORE_REVISION="${2:-}"
+      shift 2
+      ;;
     --version)
       require_option_value "$1" "${2-}"
       RELEASE_VERSION="${2:-}"
@@ -90,6 +96,13 @@ done
 VERSION_HELPER_ARGS=(--shell)
 if [[ -n "${RELEASE_VERSION}" ]]; then
   VERSION_HELPER_ARGS+=(--version "${RELEASE_VERSION}")
+fi
+if [[ -n "${APP_STORE_REVISION}" ]]; then
+  if [[ -z "${RELEASE_VERSION}" ]]; then
+    echo "--revision requires an explicit --version." >&2
+    exit 1
+  fi
+  VERSION_HELPER_ARGS+=(--revision "${APP_STORE_REVISION}")
 fi
 
 while IFS='=' read -r key value; do

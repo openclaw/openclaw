@@ -1,7 +1,9 @@
 import type { HealthFinding } from "openclaw/plugin-sdk/health";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { EXEC_APPROVALS_POLICY_URI, execApprovalsPolicyUri } from "../exec-approvals-uri.js";
 import type { PolicyExecApprovalEvidence } from "../policy-state.js";
+import { getPolicyPath } from "../policy-value.js";
 import { policyShapeFinding, unsupportedPolicyKey } from "./shape-helpers.js";
 import { ocPathSegment } from "./utils.js";
 
@@ -49,13 +51,7 @@ export function readExecApprovalAllowlistRequirements(
   policy: unknown,
   path: readonly string[],
 ): readonly ExecApprovalAllowlistRequirement[] | undefined {
-  let current: unknown = policy;
-  for (const part of path) {
-    if (!isRecord(current)) {
-      return undefined;
-    }
-    current = current[part];
-  }
+  const current = getPolicyPath(policy, path);
   if (!Array.isArray(current)) {
     return undefined;
   }
@@ -112,8 +108,8 @@ export function execApprovalAllowlistRequirementKey(
 
 export function execApprovalAllowlistMissingTarget(agentId: string | undefined): string {
   return agentId === undefined
-    ? "oc://exec-approvals.json"
-    : `oc://exec-approvals.json/agents/${ocPathSegment(agentId)}/allowlist`;
+    ? EXEC_APPROVALS_POLICY_URI
+    : execApprovalsPolicyUri(`agents/${ocPathSegment(agentId)}/allowlist`);
 }
 
 export function formatExecApprovalAllowlistRequirement(
@@ -170,7 +166,7 @@ export function syntheticExecApprovalAgentEntry(agentId: string): PolicyExecAppr
   return {
     id: `agent:${agentId}:runtime-defaults`,
     kind: "agent",
-    source: "oc://exec-approvals.json",
+    source: EXEC_APPROVALS_POLICY_URI,
     agentId,
   };
 }

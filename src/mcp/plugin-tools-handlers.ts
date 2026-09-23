@@ -1,10 +1,15 @@
+import { randomUUID } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 // Plugin MCP tool handlers route plugin tool calls through the active runtime.
 import {
+  consumeAdjustedParamsForToolCall,
   isToolWrappedWithBeforeToolCallHook,
   rewrapToolWithBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "../agents/agent-tools.before-tool-call.js";
+import { getBeforeToolCallHookContext } from "../agents/before-tool-call-metadata.js";
+import { isToolResultError } from "../agents/tool-result-error.js";
+import { isAutomationsToolName } from "../agents/tools/automations-tool-name.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { coerceChatContentText } from "../shared/chat-content.js";
@@ -60,10 +65,15 @@ export function createPluginToolsMcpHandlers(tools: AnyAgentTool[]) {
     // as the agent and HTTP tool execution paths.
     return wrapToolWithBeforeToolCallHook(tool, undefined, { approvalMode: "report" });
   });
-  const toolMap = new Map<string, AnyAgentTool>();
+  const toolMap = new Map<string, { tool: AnyAgentTool; runId: string | undefined }>();
   for (const tool of wrappedTools) {
-    toolMap.set(tool.name, tool);
+    toolMap.set(tool.name, { tool, runId: getBeforeToolCallHookContext(tool)?.runId });
   }
+  // "cron" remains an inbound scheduler alias (owner decision, RFC 0026).
+  // Capture the first advertised name without adding another listTools entry;
+  // map lookup keeps the last tool for duplicate names.
+  const automationsName = wrappedTools.find((tool) => isAutomationsToolName(tool.name))?.name;
+  const automationsEntry = automationsName ? toolMap.get(automationsName) : undefined;
 
   return {
     listTools: async () => ({
@@ -74,15 +84,19 @@ export function createPluginToolsMcpHandlers(tools: AnyAgentTool[]) {
       })),
     }),
     callTool: async (params: CallPluginToolParams, signal?: AbortSignal) => {
-      const tool = toolMap.get(params.name);
-      if (!tool) {
+      const entry =
+        toolMap.get(params.name) ??
+        (isAutomationsToolName(params.name) ? automationsEntry : undefined);
+      if (!entry) {
         return {
           content: [{ type: "text", text: `Unknown tool: ${params.name}` }],
           isError: true,
         };
       }
+      const toolCallId = `mcp-${randomUUID()}`;
       try {
-        const result = await tool.execute(`mcp-${Date.now()}`, params.arguments ?? {}, signal);
+        const result = await entry.tool.execute(toolCallId, params.arguments ?? {}, signal);
+        const isError = isToolResultError(result);
         const rawContent =
           result && typeof result === "object" && "content" in result
             ? (result as { content?: unknown }).content
@@ -91,12 +105,17 @@ export function createPluginToolsMcpHandlers(tools: AnyAgentTool[]) {
           content: Array.isArray(rawContent)
             ? rawContent.map(toMcpContentBlock)
             : [{ type: "text", text: coerceChatContentText(rawContent) }],
+          ...(isError ? { isError: true } : {}),
         };
       } catch (err) {
         return {
           content: [{ type: "text", text: `Tool error: ${formatErrorMessage(err)}` }],
           isError: true,
         };
+      } finally {
+        // Direct MCP calls have no agent event consumer, so release the cloned
+        // hook arguments as soon as the tool reaches a terminal state.
+        consumeAdjustedParamsForToolCall(toolCallId, entry.runId);
       }
     },
   };

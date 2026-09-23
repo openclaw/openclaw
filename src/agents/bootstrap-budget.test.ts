@@ -1,16 +1,64 @@
 /** Tests bootstrap context truncation accounting and user-facing warning metadata. */
 import { describe, expect, it } from "vitest";
+import { buildBootstrapPromptWarning } from "./bootstrap-budget-warning.js";
 import {
-  appendBootstrapPromptWarning,
   analyzeBootstrapBudget,
+  buildBootstrapBudgetState,
   buildBootstrapInjectionStats,
-  buildBootstrapPromptWarning,
   buildBootstrapPromptWarningNotice,
   buildBootstrapTruncationReportMeta,
   resolveBootstrapWarningSignaturesSeen,
 } from "./bootstrap-budget.js";
-import { buildAgentSystemPrompt } from "./system-prompt.js";
+import type { BootstrapInjectionStat } from "./bootstrap-budget.types.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
+
+function createTruncatedBootstrapFile(
+  name: string,
+  path: string,
+  rawChars: number,
+  injectedChars: number,
+): BootstrapInjectionStat {
+  return { name, path, missing: false, rawChars, injectedChars, truncated: true };
+}
+
+describe("buildBootstrapBudgetState", () => {
+  it("composes configured limits, ordered injection stats, and warning state", () => {
+    const bootstrapFiles: WorkspaceBootstrapFile[] = [
+      {
+        name: "AGENTS.md",
+        path: "/tmp/AGENTS.md",
+        content: "a".repeat(8),
+        missing: false,
+      },
+      {
+        name: "SOUL.md",
+        path: "/tmp/SOUL.md",
+        content: "b".repeat(8),
+        missing: false,
+      },
+    ];
+
+    const state = buildBootstrapBudgetState({
+      config: {
+        agents: { defaults: { bootstrapMaxChars: 10, bootstrapTotalMaxChars: 12 } },
+      },
+      files: buildBootstrapInjectionStats({
+        bootstrapFiles,
+        injectedFiles: [
+          { path: "/tmp/AGENTS.md", content: "a".repeat(8) },
+          { path: "/tmp/SOUL.md", content: "b".repeat(4) },
+        ],
+      }),
+    });
+
+    expect(state.bootstrapMaxChars).toBe(10);
+    expect(state.bootstrapTotalMaxChars).toBe(12);
+    expect(state.bootstrapPromptWarningMode).toBe("always");
+    expect(state.bootstrapAnalysis.totalNearLimit).toBe(true);
+    expect(state.bootstrapAnalysis.truncatedFiles[0]?.causes).toEqual(["total-limit"]);
+    expect(state.bootstrapPromptWarning.warningShown).toBe(true);
+  });
+});
 
 describe("buildBootstrapInjectionStats", () => {
   it("maps raw and injected sizes and marks truncation", () => {
@@ -46,74 +94,190 @@ describe("buildBootstrapInjectionStats", () => {
     expect(stats[1]?.injectedChars).toBe(20);
     expect(stats[1]?.truncated).toBe(true);
   });
+
+  it("gives a budget-dropped file zero injected chars when a sibling shares its basename", () => {
+    // Extra bootstrap files can repeat a root basename (packages/*/AGENTS.md).
+    // Injection identity is the source path, so a file the total budget dropped
+    // must not inherit the bytes of the sibling that consumed that budget.
+    const bootstrapFiles: WorkspaceBootstrapFile[] = [
+      {
+        name: "AGENTS.md",
+        path: "/tmp/workspace/AGENTS.md",
+        content: "a".repeat(1_000),
+        missing: false,
+      },
+      {
+        name: "AGENTS.md",
+        path: "/tmp/workspace/packages/core/AGENTS.md",
+        content: "b".repeat(500),
+        missing: false,
+      },
+    ];
+
+    const stats = buildBootstrapInjectionStats({
+      bootstrapFiles,
+      injectedFiles: [{ path: "/tmp/workspace/AGENTS.md", content: "a".repeat(1_000) }],
+    });
+    const analysis = analyzeBootstrapBudget({
+      files: stats,
+      bootstrapMaxChars: 20_000,
+      bootstrapTotalMaxChars: 1_000,
+    });
+
+    expect(stats[1]).toMatchObject({
+      path: "/tmp/workspace/packages/core/AGENTS.md",
+      rawChars: 500,
+      injectedChars: 0,
+      truncated: true,
+    });
+    expect(analysis.totals.injectedChars).toBe(1_000);
+    expect(analysis.truncatedFiles.map((file) => file.path)).toEqual([
+      "/tmp/workspace/packages/core/AGENTS.md",
+    ]);
+    expect(analysis.truncatedFiles[0]?.causes).toEqual(["total-limit"]);
+  });
+
+  it("derives names for path-only files supplied by bootstrap hooks", () => {
+    const pathOnlyFile = {
+      path: "/tmp/SELF_IMPROVEMENT_REMINDER.md",
+      content: "remember",
+      missing: false,
+    } as unknown as WorkspaceBootstrapFile;
+    const injectedFiles = [
+      {
+        path: "/tmp/SELF_IMPROVEMENT_REMINDER.md",
+        content: "remember",
+      },
+    ];
+
+    const stats = buildBootstrapInjectionStats({
+      bootstrapFiles: [pathOnlyFile],
+      injectedFiles,
+    });
+    const analysis = analyzeBootstrapBudget({
+      files: stats,
+      bootstrapMaxChars: 20_000,
+      bootstrapTotalMaxChars: 60_000,
+    });
+
+    expect(analysis.files).toEqual([
+      expect.objectContaining({
+        name: "SELF_IMPROVEMENT_REMINDER.md",
+        path: "/tmp/SELF_IMPROVEMENT_REMINDER.md",
+        injectedChars: 8,
+        truncated: false,
+      }),
+    ]);
+  });
 });
 
 describe("analyzeBootstrapBudget", () => {
-  it("reports per-file and total-limit causes", () => {
+  it("reports causes while excluding missing-file markers from file totals", () => {
     const analysis = analyzeBootstrapBudget({
       files: [
+        createTruncatedBootstrapFile("AGENTS.md", "/tmp/AGENTS.md", 150, 120),
         {
-          name: "AGENTS.md",
-          path: "/tmp/AGENTS.md",
-          missing: false,
-          rawChars: 150,
-          injectedChars: 120,
-          truncated: true,
+          name: "IDENTITY.md",
+          path: "/tmp/IDENTITY.md",
+          missing: true,
+          rawChars: 0,
+          injectedChars: 40,
+          truncated: false,
         },
-        {
-          name: "SOUL.md",
-          path: "/tmp/SOUL.md",
-          missing: false,
-          rawChars: 90,
-          injectedChars: 80,
-          truncated: true,
-        },
+        createTruncatedBootstrapFile("SOUL.md", "/tmp/SOUL.md", 50, 40),
       ],
       bootstrapMaxChars: 120,
       bootstrapTotalMaxChars: 200,
     });
     expect(analysis.hasTruncation).toBe(true);
-    expect(analysis.totalNearLimit).toBe(true);
+    expect(analysis.totalNearLimit).toBe(false);
     expect(analysis.truncatedFiles).toHaveLength(2);
+    expect(analysis.totals).toMatchObject({ rawChars: 200, injectedChars: 160 });
+    expect(analysis.files[1]).toMatchObject({ nearLimit: false, causes: [] });
     const agents = analysis.truncatedFiles.find((file) => file.name === "AGENTS.md");
     const soul = analysis.truncatedFiles.find((file) => file.name === "SOUL.md");
     expect(agents?.causes).toContain("per-file-limit");
-    expect(agents?.causes).toContain("total-limit");
+    expect(agents?.causes).not.toContain("total-limit");
     expect(soul?.causes).toContain("total-limit");
   });
 
   it("does not force a total-limit cause when totals are within limits", () => {
     const analysis = analyzeBootstrapBudget({
+      files: [createTruncatedBootstrapFile("AGENTS.md", "/tmp/AGENTS.md", 90, 40)],
+      bootstrapMaxChars: 120,
+      bootstrapTotalMaxChars: 200,
+    });
+    expect(analysis.truncatedFiles[0]?.causes).toStrictEqual([]);
+  });
+
+  it("accounts for the fixed USER.md budget", () => {
+    const analysis = analyzeBootstrapBudget({
+      files: [createTruncatedBootstrapFile("USER.md", "/tmp/USER.md", 5_000, 4_000)],
+      bootstrapMaxChars: 20_000,
+      bootstrapTotalMaxChars: 60_000,
+    });
+
+    expect(analysis.truncatedFiles[0]?.causes).toContain("per-file-limit");
+    const lines = buildBootstrapPromptWarning({ analysis, mode: "always" }).lines;
+    expect(lines).toContain("USER.md has a fixed 4000-character bootstrap cap; keep it compact.");
+    expect(lines.join("\n")).not.toContain("raise agents.defaults.bootstrapMaxChars");
+  });
+
+  it("keeps USER.md advice accurate for lower per-file and exhausted total limits", () => {
+    const lowerPerFile = analyzeBootstrapBudget({
+      files: [createTruncatedBootstrapFile("USER.md", "/tmp/USER.md", 3_000, 2_000)],
+      bootstrapMaxChars: 2_000,
+      bootstrapTotalMaxChars: 60_000,
+    });
+    const lowerLines = buildBootstrapPromptWarning({
+      analysis: lowerPerFile,
+      mode: "always",
+    }).lines;
+    expect(lowerLines.join("\n")).not.toContain("fixed 4000-character");
+    expect(lowerLines.join("\n")).toContain("raise agents.defaults.bootstrapMaxChars");
+
+    const exhaustedTotal = analyzeBootstrapBudget({
       files: [
         {
           name: "AGENTS.md",
           path: "/tmp/AGENTS.md",
           missing: false,
-          rawChars: 90,
-          injectedChars: 40,
-          truncated: true,
+          rawChars: 2_000,
+          injectedChars: 2_000,
+          truncated: false,
         },
+        createTruncatedBootstrapFile("USER.md", "/tmp/USER.md", 5_000, 0),
       ],
-      bootstrapMaxChars: 120,
-      bootstrapTotalMaxChars: 200,
+      bootstrapMaxChars: 20_000,
+      bootstrapTotalMaxChars: 2_040,
     });
-    expect(analysis.truncatedFiles[0]?.causes).toStrictEqual([]);
+    const exhaustedLines = buildBootstrapPromptWarning({
+      analysis: exhaustedTotal,
+      mode: "always",
+    }).lines;
+    expect(exhaustedTotal.truncatedFiles[0]?.causes).toContain("total-limit");
+    expect(exhaustedLines.join("\n")).toContain("fixed 4000-character");
+    expect(exhaustedLines.join("\n")).toContain("bootstrapTotalMaxChars");
+
+    const laterExhaustion = analyzeBootstrapBudget({
+      files: [
+        createTruncatedBootstrapFile("USER.md", "/tmp/USER.md", 5_000, 4_000),
+        createTruncatedBootstrapFile("SOUL.md", "/tmp/SOUL.md", 100, 0),
+      ],
+      bootstrapMaxChars: 20_000,
+      bootstrapTotalMaxChars: 4_040,
+    });
+    const user = laterExhaustion.truncatedFiles.find((file) => file.name === "USER.md");
+    const soul = laterExhaustion.truncatedFiles.find((file) => file.name === "SOUL.md");
+    expect(user?.causes).toStrictEqual(["per-file-limit"]);
+    expect(soul?.causes).toContain("total-limit");
   });
 });
 
 describe("bootstrap prompt warnings", () => {
   it("handles malformed truncation entries without names", () => {
     const analysis = analyzeBootstrapBudget({
-      files: [
-        {
-          name: "TEMP.md",
-          path: "/tmp/unknown",
-          missing: false,
-          rawChars: 10,
-          injectedChars: 1,
-          truncated: true,
-        },
-      ],
+      files: [createTruncatedBootstrapFile("TEMP.md", "/tmp/unknown", 10, 1)],
       bootstrapMaxChars: 5,
       bootstrapTotalMaxChars: 5,
     });
@@ -124,36 +288,6 @@ describe("bootstrap prompt warnings", () => {
       mode: "always",
     }).lines;
     expect(lines.join("\n")).toContain("10 raw -> 1 injected");
-  });
-
-  it("appends warning details to the turn prompt instead of mutating the system prompt", () => {
-    const prompt = appendBootstrapPromptWarning("Please continue.", [
-      "AGENTS.md: 200 raw -> 0 injected",
-    ]);
-    expect(prompt.startsWith("Please continue.")).toBe(true);
-    expect(prompt).toContain("[Bootstrap truncation warning]");
-    expect(prompt).toContain("Treat Project Context as partial");
-    expect(prompt).toContain("- AGENTS.md: 200 raw -> 0 injected");
-    expect(prompt.endsWith("- AGENTS.md: 200 raw -> 0 injected")).toBe(true);
-  });
-
-  it("preserves raw prompt whitespace when appending warning details", () => {
-    const prompt = appendBootstrapPromptWarning("  indented\nkeep tail  ", [
-      "AGENTS.md: 200 raw -> 0 injected",
-    ]);
-
-    expect(prompt).toContain("  indented\nkeep tail  ");
-    expect(prompt.indexOf("  indented\nkeep tail  ")).toBe(0);
-  });
-
-  it("preserves exact heartbeat prompts without warning suffixes", () => {
-    const heartbeatPrompt = "Read HEARTBEAT.md. Reply HEARTBEAT_OK.";
-
-    expect(
-      appendBootstrapPromptWarning(heartbeatPrompt, ["AGENTS.md: 200 raw -> 0 injected"], {
-        preserveExactPrompt: heartbeatPrompt,
-      }),
-    ).toBe(heartbeatPrompt);
   });
 
   it("builds a concise agent notice without raw truncation diagnostics", () => {
@@ -212,16 +346,7 @@ describe("bootstrap prompt warnings", () => {
 
   it("dedupes warnings in once mode by signature", () => {
     const analysis = analyzeBootstrapBudget({
-      files: [
-        {
-          name: "AGENTS.md",
-          path: "/tmp/AGENTS.md",
-          missing: false,
-          rawChars: 150,
-          injectedChars: 100,
-          truncated: true,
-        },
-      ],
+      files: [createTruncatedBootstrapFile("AGENTS.md", "/tmp/AGENTS.md", 150, 100)],
       bootstrapMaxChars: 120,
       bootstrapTotalMaxChars: 200,
     });
@@ -267,30 +392,12 @@ describe("bootstrap prompt warnings", () => {
 
   it("dedupes once mode across non-consecutive repeated signatures", () => {
     const analysisA = analyzeBootstrapBudget({
-      files: [
-        {
-          name: "A.md",
-          path: "/tmp/A.md",
-          missing: false,
-          rawChars: 150,
-          injectedChars: 100,
-          truncated: true,
-        },
-      ],
+      files: [createTruncatedBootstrapFile("A.md", "/tmp/A.md", 150, 100)],
       bootstrapMaxChars: 120,
       bootstrapTotalMaxChars: 200,
     });
     const analysisB = analyzeBootstrapBudget({
-      files: [
-        {
-          name: "B.md",
-          path: "/tmp/B.md",
-          missing: false,
-          rawChars: 150,
-          injectedChars: 100,
-          truncated: true,
-        },
-      ],
+      files: [createTruncatedBootstrapFile("B.md", "/tmp/B.md", 150, 100)],
       bootstrapMaxChars: 120,
       bootstrapTotalMaxChars: 200,
     });
@@ -316,30 +423,9 @@ describe("bootstrap prompt warnings", () => {
   it("includes overflow line when more files are truncated than shown", () => {
     const analysis = analyzeBootstrapBudget({
       files: [
-        {
-          name: "A.md",
-          path: "/tmp/A.md",
-          missing: false,
-          rawChars: 10,
-          injectedChars: 1,
-          truncated: true,
-        },
-        {
-          name: "B.md",
-          path: "/tmp/B.md",
-          missing: false,
-          rawChars: 10,
-          injectedChars: 1,
-          truncated: true,
-        },
-        {
-          name: "C.md",
-          path: "/tmp/C.md",
-          missing: false,
-          rawChars: 10,
-          injectedChars: 1,
-          truncated: true,
-        },
+        createTruncatedBootstrapFile("A.md", "/tmp/A.md", 10, 1),
+        createTruncatedBootstrapFile("B.md", "/tmp/B.md", 10, 1),
+        createTruncatedBootstrapFile("C.md", "/tmp/C.md", 10, 1),
       ],
       bootstrapMaxChars: 20,
       bootstrapTotalMaxChars: 10,
@@ -354,16 +440,7 @@ describe("bootstrap prompt warnings", () => {
 
   it("warns explicitly when AGENTS.md bootstrap policy is truncated", () => {
     const analysis = analyzeBootstrapBudget({
-      files: [
-        {
-          name: "AGENTS.md",
-          path: "/tmp/AGENTS.md",
-          missing: false,
-          rawChars: 150,
-          injectedChars: 100,
-          truncated: true,
-        },
-      ],
+      files: [createTruncatedBootstrapFile("AGENTS.md", "/tmp/AGENTS.md", 150, 100)],
       bootstrapMaxChars: 120,
       bootstrapTotalMaxChars: 200,
     });
@@ -380,22 +457,8 @@ describe("bootstrap prompt warnings", () => {
   it("disambiguates duplicate file names in warning lines", () => {
     const analysis = analyzeBootstrapBudget({
       files: [
-        {
-          name: "AGENTS.md",
-          path: "/tmp/a/AGENTS.md",
-          missing: false,
-          rawChars: 150,
-          injectedChars: 100,
-          truncated: true,
-        },
-        {
-          name: "AGENTS.md",
-          path: "/tmp/b/AGENTS.md",
-          missing: false,
-          rawChars: 140,
-          injectedChars: 100,
-          truncated: true,
-        },
+        createTruncatedBootstrapFile("AGENTS.md", "/tmp/a/AGENTS.md", 150, 100),
+        createTruncatedBootstrapFile("AGENTS.md", "/tmp/b/AGENTS.md", 140, 100),
       ],
       bootstrapMaxChars: 120,
       bootstrapTotalMaxChars: 300,
@@ -410,16 +473,7 @@ describe("bootstrap prompt warnings", () => {
 
   it("respects off/always warning modes", () => {
     const analysis = analyzeBootstrapBudget({
-      files: [
-        {
-          name: "AGENTS.md",
-          path: "/tmp/AGENTS.md",
-          missing: false,
-          rawChars: 150,
-          injectedChars: 100,
-          truncated: true,
-        },
-      ],
+      files: [createTruncatedBootstrapFile("AGENTS.md", "/tmp/AGENTS.md", 150, 100)],
       bootstrapMaxChars: 120,
       bootstrapTotalMaxChars: 200,
     });
@@ -452,30 +506,12 @@ describe("bootstrap prompt warnings", () => {
 
   it("uses file path in signature to avoid collisions for duplicate names", () => {
     const left = analyzeBootstrapBudget({
-      files: [
-        {
-          name: "AGENTS.md",
-          path: "/tmp/a/AGENTS.md",
-          missing: false,
-          rawChars: 150,
-          injectedChars: 100,
-          truncated: true,
-        },
-      ],
+      files: [createTruncatedBootstrapFile("AGENTS.md", "/tmp/a/AGENTS.md", 150, 100)],
       bootstrapMaxChars: 120,
       bootstrapTotalMaxChars: 200,
     });
     const right = analyzeBootstrapBudget({
-      files: [
-        {
-          name: "AGENTS.md",
-          path: "/tmp/b/AGENTS.md",
-          missing: false,
-          rawChars: 150,
-          injectedChars: 100,
-          truncated: true,
-        },
-      ],
+      files: [createTruncatedBootstrapFile("AGENTS.md", "/tmp/b/AGENTS.md", 150, 100)],
       bootstrapMaxChars: 120,
       bootstrapTotalMaxChars: 200,
     });
@@ -486,16 +522,7 @@ describe("bootstrap prompt warnings", () => {
 
   it("builds truncation report metadata from analysis + warning decision", () => {
     const analysis = analyzeBootstrapBudget({
-      files: [
-        {
-          name: "AGENTS.md",
-          path: "/tmp/AGENTS.md",
-          missing: false,
-          rawChars: 150,
-          injectedChars: 100,
-          truncated: true,
-        },
-      ],
+      files: [createTruncatedBootstrapFile("AGENTS.md", "/tmp/AGENTS.md", 150, 100)],
       bootstrapMaxChars: 120,
       bootstrapTotalMaxChars: 200,
     });
@@ -514,43 +541,5 @@ describe("bootstrap prompt warnings", () => {
     expect(meta.nearLimitFiles).toBe(1);
     expect(meta.promptWarningSignature).toBe(warning.signature);
     expect(meta.warningSignaturesSeen).toEqual([warning.signature]);
-  });
-
-  it("improves cache-relevant system prompt stability versus legacy warning injection", () => {
-    const contextFiles = [{ path: "AGENTS.md", content: "Follow AGENTS guidance." }];
-    const warningLines = ["AGENTS.md: 200 raw -> 0 injected"];
-    const stableSystemPrompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
-      contextFiles,
-    });
-    // Legacy injection mutated the system prompt; current warning placement keeps
-    // the system prompt stable for provider prompt caches.
-    const optimizedTurns = [stableSystemPrompt, stableSystemPrompt, stableSystemPrompt];
-    const injectLegacyWarning = (prompt: string, lines: string[]) => {
-      const warningBlock = [
-        "⚠ Bootstrap truncation warning:",
-        ...lines.map((line) => `- ${line}`),
-        "",
-      ].join("\n");
-      return prompt.replace("## AGENTS.md", `${warningBlock}## AGENTS.md`);
-    };
-    const legacyTurns = [
-      injectLegacyWarning(optimizedTurns[0] ?? "", warningLines),
-      optimizedTurns[1] ?? "",
-      injectLegacyWarning(optimizedTurns[2] ?? "", warningLines),
-    ];
-    const cacheHitRate = (turns: string[]) => {
-      let hits = 0;
-      for (let index = 1; index < turns.length; index++) {
-        if (turns[index] === turns[index - 1]) {
-          hits++;
-        }
-      }
-      return hits / Math.max(1, turns.length - 1);
-    };
-
-    expect(cacheHitRate(legacyTurns)).toBe(0);
-    expect(cacheHitRate(optimizedTurns)).toBe(1);
-    expect(optimizedTurns[0]).not.toContain("⚠ Bootstrap truncation warning:");
   });
 });

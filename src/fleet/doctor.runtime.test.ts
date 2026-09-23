@@ -1,7 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { cellAuthSecretDir, cellOwnerId } from "./cell-profile.js";
 import type {
@@ -78,7 +81,7 @@ function runtimeMock(
 beforeEach(async () => {
   root = await tempRoot.setup();
   env = { ...process.env, OPENCLAW_STATE_DIR: root };
-  record = reserveFleetCell(env, {
+  record = await reserveFleetCell(env, {
     tenantId: "acme",
     createdAtMs: 0,
     image: "image",
@@ -91,6 +94,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   await tempRoot.cleanup();
 });
@@ -100,8 +104,8 @@ describe("fleet doctor", () => {
     "reports a healthy %s cell as all pass",
     async (runtime) => {
       if (runtime !== record.runtime) {
-        deleteFleetCell(env, "acme");
-        record = reserveFleetCell(env, {
+        await deleteFleetCell(env, "acme");
+        record = await reserveFleetCell(env, {
           tenantId: "acme",
           createdAtMs: 0,
           image: "image",
@@ -126,13 +130,35 @@ describe("fleet doctor", () => {
         fetchImpl: vi.fn<typeof fetch>(async () => new Response(null, { status: 200 })),
       });
       expect(reports).toHaveLength(1);
+      expect(reports[0]?.findings.map((entry) => entry.check)).toEqual([
+        "runtime-local",
+        "container-present",
+        "container-owned",
+        "container-running",
+        "gateway-health",
+        "cap-drop",
+        "security-opt",
+        "init",
+        "pids-limit",
+        "memory-limit",
+        "cpu-limit",
+        "restart-policy",
+        "port-binding",
+        "gateway-token-env",
+        "network-present",
+        "network-owned",
+        "network-attachments",
+        "network-egress",
+        "data-dir",
+        "auth-dir",
+      ]);
       expect(reports[0]?.findings.every((entry) => entry.status === "pass")).toBe(true);
     },
   );
 
   it("fails cap-drop when a Podman cell retains effective capabilities", async () => {
-    deleteFleetCell(env, "acme");
-    record = reserveFleetCell(env, {
+    await deleteFleetCell(env, "acme");
+    record = await reserveFleetCell(env, {
       tenantId: "acme",
       createdAtMs: 0,
       image: "image",

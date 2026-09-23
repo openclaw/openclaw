@@ -4,7 +4,7 @@ import { mintFriendCode, verifyFriendCode } from "./friendcode.js";
 import { createMonotonicUlidFactory } from "./ulid.js";
 
 // Secret-shaped fixtures are assembled at runtime so the source never contains
-// scanner-matching literals (GitHub push protection, review bundlers, trufflehog).
+// scanner-matching literals (GitHub push protection, review bundlers).
 const fake = (...parts: string[]) => parts.join("");
 
 describe("deterministic checks", () => {

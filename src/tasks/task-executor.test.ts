@@ -1,233 +1,53 @@
 // Covers task executor runtime selection, lifecycle updates, and error paths.
+import "./task-executor.mocks.test-support.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resetAgentEventsForTest } from "../infra/agent-events.js";
-import { resetSystemEventsForTest } from "../infra/system-events.js";
-import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
-import { captureEnv } from "../test-utils/env.js";
+import { emitAgentEvent } from "../infra/agent-events.js";
+import { createInMemoryTaskFlowRegistryStore } from "../test-utils/task-registry-store.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "./detached-task-runtime-contract.js";
 import { getDetachedTaskLifecycleRuntime } from "./detached-task-runtime.js";
+import { createSubagentTaskBackingDetail } from "./task-backing-authority.js";
 import {
   cancelFlowById,
   cancelFlowByIdForOwner,
   cancelDetachedTaskRunById,
-  completeTaskRunByRunId,
-  createQueuedTaskRun as createQueuedTaskRunOrNull,
-  createRunningTaskRun as createRunningTaskRunOrNull,
-  failTaskRunByRunId,
-  recordTaskRunProgressByRunId,
+  completeTaskRunByRunIdCore as completeTaskRunByRunId,
+  failTaskRunByRunIdCore as failTaskRunByRunId,
+  recordTaskRunProgressByRunIdCore as recordTaskRunProgressByRunId,
   runTaskInFlowForOwner,
-  setDetachedTaskDeliveryStatusByRunId,
-  startTaskRunByRunId,
+  setDetachedTaskDeliveryStatusByRunIdCore as setDetachedTaskDeliveryStatusByRunId,
+  startTaskRunByRunIdCore as startTaskRunByRunId,
 } from "./task-executor.js";
 import {
-  createManagedTaskFlow as createManagedTaskFlowOrNull,
-  getTaskFlowById,
-  listTaskFlowRecords,
-} from "./task-flow-registry.js";
-import type { TaskFlowRecord } from "./task-flow-registry.types.js";
+  createQueuedTaskRun,
+  createRunningTaskRun,
+  createManagedTaskFlow,
+  runTaskInFlow,
+  hoisted,
+  withTaskExecutorStateDir,
+  expectParentFlowId,
+  requireCreatedFlowTask,
+  expectCancelRequestedAt,
+  createRunningAcpChildTaskRun,
+  spyOnRuntimeCancel,
+  expectCancelledAcpChildTask,
+  resetTaskExecutorTestState,
+} from "./task-executor.test-support.js";
+import { getTaskFlowById, listTaskFlowRecords, requestFlowCancel } from "./task-flow-registry.js";
+import { updateTask } from "./task-registry-mutation.js";
 import {
   getTaskById,
   findTaskByRunId,
   listTasksForFlowId,
   markTaskTerminalById,
 } from "./task-registry.js";
-import type { TaskRecord } from "./task-registry.types.js";
 import {
   configureTaskFlowRegistryRuntime,
-  resetDetachedTaskLifecycleRuntimeForTests,
-  resetTaskRegistryControlRuntimeForTests,
-  resetTaskRegistryDeliveryRuntimeForTests,
-  resetTaskRegistryForTests,
   resetTaskFlowRegistryForTests,
   setDetachedTaskLifecycleRuntime,
-  setTaskRegistryControlRuntimeForTests,
-  setTaskRegistryDeliveryRuntimeForTests,
 } from "./task-runtime.test-helpers.js";
 
-const ORIGINAL_ENV = captureEnv(["OPENCLAW_STATE_DIR"]);
-
-function createQueuedTaskRun(params: Parameters<typeof createQueuedTaskRunOrNull>[0]): TaskRecord {
-  const task = createQueuedTaskRunOrNull(params);
-  if (!task) {
-    throw new Error("expected queued task creation to succeed");
-  }
-  return task;
-}
-
-function createRunningTaskRun(
-  params: Parameters<typeof createRunningTaskRunOrNull>[0],
-): TaskRecord {
-  const task = createRunningTaskRunOrNull(params);
-  if (!task) {
-    throw new Error("expected running task creation to succeed");
-  }
-  return task;
-}
-
-function createManagedTaskFlow(
-  params: Parameters<typeof createManagedTaskFlowOrNull>[0],
-): TaskFlowRecord {
-  const flow = createManagedTaskFlowOrNull(params);
-  if (!flow) {
-    throw new Error("expected managed TaskFlow creation to succeed");
-  }
-  return flow;
-}
-
-function runTaskInFlow(
-  params: Omit<Parameters<typeof runTaskInFlowForOwner>[0], "callerOwnerKey">,
-) {
-  return runTaskInFlowForOwner({
-    ...params,
-    callerOwnerKey: "agent:main:main",
-  });
-}
-const hoisted = vi.hoisted(() => {
-  const sendMessageMock = vi.fn();
-  const cancelSessionMock = vi.fn();
-  const killSubagentRunAdminMock = vi.fn();
-  return {
-    sendMessageMock,
-    cancelSessionMock,
-    killSubagentRunAdminMock,
-  };
-});
-
-vi.mock("../acp/control-plane/manager.js", () => ({
-  getAcpSessionManager: () => ({
-    cancelSession: hoisted.cancelSessionMock,
-  }),
-}));
-
-vi.mock("../agents/subagent-control.js", () => ({
-  killSubagentRunAdmin: (params: unknown) => hoisted.killSubagentRunAdminMock(params),
-}));
-
-vi.mock("../utils/message-channel.js", () => ({
-  isDeliverableMessageChannel: (channel: string) => channel === "notifychat",
-}));
-
-async function withTaskExecutorStateDir(run: (stateDir: string) => Promise<void>): Promise<void> {
-  await withStateDirEnv("openclaw-task-executor-", async ({ stateDir }) => {
-    resetDetachedTaskLifecycleRuntimeForTests();
-    resetSystemEventsForTest();
-    resetAgentEventsForTest();
-    resetTaskRegistryDeliveryRuntimeForTests();
-    resetTaskRegistryControlRuntimeForTests();
-    resetTaskRegistryForTests({ persist: false });
-    resetTaskFlowRegistryForTests({ persist: false });
-    setTaskRegistryDeliveryRuntimeForTests({
-      sendMessage: hoisted.sendMessageMock,
-    });
-    setTaskRegistryControlRuntimeForTests({
-      cancelActiveCronTaskRun: () => false,
-      getAcpSessionManager: () => ({
-        cancelSession: hoisted.cancelSessionMock,
-      }),
-      killSubagentRunAdmin: async (params) => hoisted.killSubagentRunAdminMock(params),
-    });
-    try {
-      await run(stateDir);
-    } finally {
-      resetSystemEventsForTest();
-      resetAgentEventsForTest();
-      resetTaskRegistryDeliveryRuntimeForTests();
-      resetTaskRegistryControlRuntimeForTests();
-      resetTaskRegistryForTests({ persist: false });
-      resetTaskFlowRegistryForTests({ persist: false });
-    }
-  });
-}
-
-function expectParentFlowId(task: { parentFlowId?: string }): string {
-  expect(task.parentFlowId).toMatch(
-    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-  );
-  if (task.parentFlowId === undefined) {
-    throw new Error("Expected task parent flow id");
-  }
-  return task.parentFlowId;
-}
-
-function requireCreatedFlowTask(
-  result: ReturnType<typeof runTaskInFlow>,
-): NonNullable<ReturnType<typeof runTaskInFlow>["task"]> {
-  if (!result.task) {
-    throw new Error("Expected TaskFlow child task to be created");
-  }
-  return result.task;
-}
-
-function expectCancelRequestedAt(value: unknown): number {
-  expect(typeof value).toBe("number");
-  if (typeof value !== "number") {
-    throw new Error("Expected numeric cancelRequestedAt");
-  }
-  expect(Number.isInteger(value)).toBe(true);
-  expect(value).toBeGreaterThan(0);
-  return value;
-}
-
-function createRunningAcpChildTaskRun(
-  overrides: Partial<Parameters<typeof createRunningTaskRun>[0]> = {},
-) {
-  return createRunningTaskRun({
-    runtime: "acp",
-    ownerKey: "agent:main:main",
-    scopeKind: "session",
-    childSessionKey: "agent:codex:acp:child",
-    runId: "run-acp-child",
-    task: "Inspect a PR",
-    startedAt: 10,
-    deliveryStatus: "pending",
-    ...overrides,
-  });
-}
-
-function spyOnRuntimeCancel() {
-  const defaultRuntime = getDetachedTaskLifecycleRuntime();
-  const cancelDetachedTaskRunByIdSpy = vi.fn(
-    (...args: Parameters<typeof defaultRuntime.cancelDetachedTaskRunById>) =>
-      defaultRuntime.cancelDetachedTaskRunById(...args),
-  );
-
-  setDetachedTaskLifecycleRuntime({
-    ...defaultRuntime,
-    cancelDetachedTaskRunById: cancelDetachedTaskRunByIdSpy,
-  });
-
-  return cancelDetachedTaskRunByIdSpy;
-}
-
-function expectCancelledAcpChildTask(
-  child: ReturnType<typeof createRunningTaskRun>,
-  cancelled: { found?: boolean; cancelled?: boolean },
-) {
-  expect(cancelled.found).toBe(true);
-  expect(cancelled.cancelled).toBe(true);
-  const task = getTaskById(child.taskId);
-  expect(task?.taskId).toBe(child.taskId);
-  expect(task?.status).toBe("cancelled");
-  expect(hoisted.cancelSessionMock).toHaveBeenCalledWith({
-    cfg: {} as never,
-    sessionKey: "agent:codex:acp:child",
-    reason: "task-cancel",
-  });
-}
-
 describe("task-executor", () => {
-  afterEach(() => {
-    ORIGINAL_ENV.restore();
-    resetSystemEventsForTest();
-    resetAgentEventsForTest();
-    resetTaskRegistryDeliveryRuntimeForTests();
-    resetTaskRegistryControlRuntimeForTests();
-    resetTaskRegistryForTests({ persist: false });
-    resetTaskFlowRegistryForTests({ persist: false });
-    hoisted.sendMessageMock.mockReset();
-    hoisted.cancelSessionMock.mockReset();
-    hoisted.killSubagentRunAdminMock.mockReset();
-  });
+  afterEach(resetTaskExecutorTestState);
 
   it("advances a queued run through start and completion", async () => {
     await withTaskExecutorStateDir(async () => {
@@ -374,8 +194,8 @@ describe("task-executor", () => {
       });
       configureTaskFlowRegistryRuntime({
         store: {
+          ...createInMemoryTaskFlowRegistryStore(),
           loadSnapshot,
-          saveSnapshot: () => {},
         },
       });
 
@@ -483,17 +303,18 @@ describe("task-executor", () => {
           to: "notifychat:123",
         },
       });
-      const child = createRunningTaskRun({
-        runtime: "acp",
-        ownerKey: "agent:main:main",
-        scopeKind: "session",
-        parentFlowId: flow.flowId,
-        childSessionKey: "agent:codex:acp:child",
-        runId: "run-linear-cancel",
-        task: "Inspect a PR",
-        startedAt: 10,
-        deliveryStatus: "pending",
-      });
+      createRunningAcpChildTaskRun({ runId: "run-linear-cancel" });
+      const child = requireCreatedFlowTask(
+        runTaskInFlow({
+          flowId: flow.flowId,
+          runtime: "acp",
+          childSessionKey: "agent:codex:acp:child",
+          runId: "run-linear-cancel",
+          task: "Inspect a PR",
+          status: "running",
+          startedAt: 10,
+        }),
+      );
 
       const cancelled = await cancelFlowById({
         cfg: {} as never,
@@ -502,7 +323,7 @@ describe("task-executor", () => {
 
       expect(cancelled.found).toBe(true);
       expect(cancelled.cancelled).toBe(true);
-      const task = findTaskByRunId("run-linear-cancel");
+      const task = getTaskById(child.taskId);
       expect(task?.taskId).toBe(child.taskId);
       expect(task?.status).toBe("cancelled");
       const cancelledFlow = getTaskFlowById(flow.flowId);
@@ -517,6 +338,15 @@ describe("task-executor", () => {
         ownerKey: "agent:main:main",
         controllerId: "tests/managed-flow",
         goal: "Cancel a killed child",
+      });
+      createRunningTaskRun({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey: "agent:worker:subagent:flow-killed",
+        runId: "run-flow-provisional-kill",
+        task: "Stop the child",
+        startedAt: 10,
       });
       const created = runTaskInFlow({
         flowId: flow.flowId,
@@ -577,6 +407,7 @@ describe("task-executor", () => {
           to: "notifychat:123",
         },
       });
+      createRunningAcpChildTaskRun({ runId: "run-flow-child" });
 
       const created = runTaskInFlow({
         flowId: flow.flowId,
@@ -607,6 +438,44 @@ describe("task-executor", () => {
       expect(task?.parentFlowId).toBe(flow.flowId);
       expect(task?.ownerKey).toBe("agent:main:main");
       expect(task?.childSessionKey).toBe("agent:codex:acp:child");
+    });
+  });
+
+  it("rejects child tasks and cancellation for ended blocked TaskFlows", async () => {
+    await withTaskExecutorStateDir(async () => {
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/managed-flow",
+        goal: "Completed without a usable result",
+        status: "blocked",
+        updatedAt: 20,
+        endedAt: 20,
+      });
+
+      const created = runTaskInFlow({
+        flowId: flow.flowId,
+        runtime: "acp",
+        childSessionKey: "agent:codex:acp:child",
+        runId: "run-flow-after-blocked-completion",
+        task: "Should be denied",
+      });
+      const cancelled = await cancelFlowById({
+        cfg: {} as never,
+        flowId: flow.flowId,
+      });
+
+      expect(created).toMatchObject({
+        found: true,
+        created: false,
+        reason: "Flow is already blocked.",
+      });
+      expect(cancelled).toMatchObject({
+        found: true,
+        cancelled: false,
+        reason: "Flow is already blocked.",
+      });
+      expect(getTaskFlowById(flow.flowId)).toMatchObject({ status: "blocked", endedAt: 20 });
+      expect(listTasksForFlowId(flow.flowId)).toStrictEqual([]);
     });
   });
 
@@ -649,6 +518,7 @@ describe("task-executor", () => {
         controllerId: "tests/managed-flow",
         goal: "Long running batch",
       });
+      createRunningAcpChildTaskRun({ runId: "run-flow-sticky-cancel" });
       const created = runTaskInFlow({
         flowId: flow.flowId,
         runtime: "acp",
@@ -739,23 +609,6 @@ describe("task-executor", () => {
     });
   });
 
-  it("cancels active ACP child tasks", async () => {
-    await withTaskExecutorStateDir(async () => {
-      hoisted.cancelSessionMock.mockResolvedValue(undefined);
-
-      const child = createRunningAcpChildTaskRun({
-        runId: "run-linear-cancel",
-      });
-
-      const cancelled = await cancelDetachedTaskRunById({
-        cfg: {} as never,
-        taskId: child.taskId,
-      });
-
-      expectCancelledAcpChildTask(child, cancelled);
-    });
-  });
-
   it("dispatches detached task cancellation through the registered runtime", async () => {
     await withTaskExecutorStateDir(async () => {
       hoisted.cancelSessionMock.mockResolvedValue(undefined);
@@ -820,10 +673,10 @@ describe("task-executor", () => {
       resetTaskFlowRegistryForTests({ persist: false });
       configureTaskFlowRegistryRuntime({
         store: {
+          ...createInMemoryTaskFlowRegistryStore(),
           loadSnapshot: () => {
             throw new Error("SQLITE_IOERR: cancellation flow restore failed");
           },
-          saveSnapshot: () => {},
         },
       });
 
@@ -992,10 +845,10 @@ describe("task-executor", () => {
       resetTaskFlowRegistryForTests({ persist: false });
       configureTaskFlowRegistryRuntime({
         store: {
+          ...createInMemoryTaskFlowRegistryStore(),
           loadSnapshot: () => {
             throw new Error("SQLITE_IOERR: provisional cancellation restore failed");
           },
-          saveSnapshot: () => {},
         },
       });
 
@@ -1046,6 +899,10 @@ describe("task-executor", () => {
       expect(hoisted.killSubagentRunAdminMock).toHaveBeenCalledWith({
         cfg: {} as never,
         sessionKey: "agent:codex:subagent:child",
+        expectedTaskRunId: "run-subagent-cancel",
+        expectedGeneration: 1,
+        expectedOwnerKey: "agent:main:main",
+        onResult: expect.any(Function),
       });
     });
   });
@@ -1059,6 +916,7 @@ describe("task-executor", () => {
         controllerId: "tests/cancel-flow",
         goal: "Cancel linked tasks",
       });
+      createRunningAcpChildTaskRun({ runId: "run-flow-cancel-via-runtime" });
       const child = runTaskInFlow({
         flowId: flow.flowId,
         runtime: "acp",
@@ -1098,7 +956,7 @@ describe("task-executor", () => {
     await withTaskExecutorStateDir(async () => {
       const victim = createRunningTaskRun({
         runtime: "acp",
-        ownerKey: "agent:victim:main",
+        ownerKey: "agent:main:victim",
         scopeKind: "session",
         childSessionKey: "agent:victim:acp:child",
         runId: "run-shared-executor-scope",
@@ -1107,7 +965,7 @@ describe("task-executor", () => {
       });
       const attacker = createRunningTaskRun({
         runtime: "cli",
-        ownerKey: "agent:attacker:main",
+        ownerKey: "agent:main:attacker",
         scopeKind: "session",
         childSessionKey: "agent:attacker:main",
         runId: "run-shared-executor-scope",
@@ -1128,6 +986,163 @@ describe("task-executor", () => {
       expect(attackerTask?.status).toBe("failed");
       expect(attackerTask?.error).toBe("attacker controlled error");
       expect(getTaskById(victim.taskId)?.status).toBe("running");
+    });
+  });
+
+  it("does not apply agent lifecycle events to a foreign managed projection", async () => {
+    await withTaskExecutorStateDir(async () => {
+      const backing = createRunningTaskRun({
+        runtime: "subagent",
+        ownerKey: "agent:main:victim",
+        scopeKind: "session",
+        childSessionKey: "agent:main:subagent:victim-child",
+        runId: "run-agent-event-foreign-child",
+        task: "Victim subagent task",
+        deliveryStatus: "pending",
+      });
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/foreign-agent-event",
+        goal: "Foreign agent-event projection",
+      });
+      const projection = createRunningTaskRun({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        parentFlowId: flow.flowId,
+        childSessionKey: "agent:main:subagent:victim-child",
+        runId: "run-agent-event-foreign-child",
+        task: "Forged agent-event projection",
+        detail: { ...createSubagentTaskBackingDetail(1), taskId: backing.taskId },
+      });
+      const currentFlow = getTaskFlowById(flow.flowId);
+      if (!currentFlow) {
+        throw new Error("Expected managed flow");
+      }
+      const cancelRequest = requestFlowCancel({
+        flowId: flow.flowId,
+        expectedRevision: currentFlow.revision,
+      });
+      if (!cancelRequest.applied) {
+        throw new Error(cancelRequest.reason);
+      }
+      const beforeFlow = getTaskFlowById(flow.flowId);
+
+      emitAgentEvent({
+        runId: "run-agent-event-foreign-child",
+        sessionKey: "agent:main:subagent:victim-child",
+        stream: "lifecycle",
+        data: { phase: "end", endedAt: 40 },
+      });
+
+      expect(getTaskFlowById(flow.flowId)).toMatchObject({
+        status: beforeFlow?.status,
+        revision: beforeFlow?.revision,
+        cancelRequestedAt: beforeFlow?.cancelRequestedAt,
+      });
+      expect(getTaskById(projection.taskId)?.status).toBe("running");
+    });
+  });
+
+  it("keeps an owner-matched subagent projection pending until its canonical owner settles", async () => {
+    await withTaskExecutorStateDir(async () => {
+      createRunningTaskRun({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey: "agent:main:subagent:owned-child",
+        runId: "run-agent-event-owned-child",
+        task: "Owned subagent task",
+        deliveryStatus: "pending",
+      });
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/owned-agent-event",
+        goal: "Owned agent-event projection",
+      });
+      const projected = runTaskInFlow({
+        flowId: flow.flowId,
+        runtime: "subagent",
+        childSessionKey: "agent:main:subagent:owned-child",
+        runId: "run-agent-event-owned-child",
+        task: "Owned agent-event projection",
+        status: "running",
+      });
+      if (!projected.created) {
+        throw new Error(projected.reason);
+      }
+      const projection = requireCreatedFlowTask(projected);
+
+      emitAgentEvent({
+        runId: "run-agent-event-owned-child",
+        sessionKey: "agent:main:subagent:owned-child",
+        stream: "lifecycle",
+        data: { phase: "end", endedAt: 40 },
+      });
+
+      expect(getTaskById(projection.taskId)?.status).toBe("running");
+      completeTaskRunByRunId({
+        runId: "run-agent-event-owned-child",
+        runtime: "subagent",
+        sessionKey: "agent:main:subagent:owned-child",
+        endedAt: 40,
+        lastEventAt: 40,
+      });
+
+      expect(getTaskById(projection.taskId)).toMatchObject({
+        status: "succeeded",
+        endedAt: 40,
+      });
+    });
+  });
+
+  it("revokes a managed projection when its backing generation is replaced", async () => {
+    await withTaskExecutorStateDir(async () => {
+      const canonical = createRunningTaskRun({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey: "agent:main:subagent:replaced-child",
+        runId: "run-reused-after-recovery",
+        task: "Original subagent generation",
+        deliveryStatus: "pending",
+      });
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/replaced-generation",
+        goal: "Reject replaced generation",
+      });
+      const projection = requireCreatedFlowTask(
+        runTaskInFlow({
+          flowId: flow.flowId,
+          runtime: "subagent",
+          childSessionKey: "agent:main:subagent:replaced-child",
+          runId: "run-reused-after-recovery",
+          task: "Managed original generation",
+          status: "running",
+        }),
+      );
+
+      expect(
+        updateTask(canonical.taskId, { detail: createSubagentTaskBackingDetail(2) }),
+      ).not.toBeNull();
+
+      const cancelled = await cancelFlowById({ cfg: {} as never, flowId: flow.flowId });
+      emitAgentEvent({
+        runId: "run-reused-after-recovery",
+        sessionKey: "agent:main:subagent:replaced-child",
+        stream: "lifecycle",
+        data: { phase: "end", endedAt: 40 },
+      });
+
+      expect(cancelled).toMatchObject({
+        found: true,
+        cancelled: false,
+        reason: "Child task ownership could not be verified; no cancellation was performed.",
+      });
+      expect(getTaskFlowById(flow.flowId)?.cancelRequestedAt).toBeUndefined();
+      expect(getTaskById(projection.taskId)?.status).toBe("running");
+      expect(hoisted.killSubagentRunAdminMock).not.toHaveBeenCalled();
     });
   });
 });

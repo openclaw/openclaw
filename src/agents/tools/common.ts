@@ -9,20 +9,22 @@ import {
   asSafeIntegerInRange,
   parseStrictFiniteNumber,
 } from "@openclaw/normalization-core/number-coercion";
-import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeSingleOrTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { TSchema } from "typebox";
-import { readLocalFileSafely } from "../../infra/fs-safe.js";
-import { readSnakeCaseParamRaw } from "../../param-key.js";
-import type { ImageSanitizationLimits } from "../image-sanitization.js";
 import type {
   AgentTool,
   AgentToolProgress,
   AgentToolResult,
   AgentToolUpdateCallback,
-} from "../runtime/index.js";
-import { sanitizeToolResultImages } from "../tool-images.js";
+} from "../../../packages/agent-core/src/types.js";
+import { readLocalFileSafely } from "../../infra/fs-safe.js";
+import { readSnakeCaseParamRaw } from "../../param-key.js";
+import type { ImageSanitizationLimits } from "../image-sanitization.js";
+import { ToolAuthorizationError, ToolInputError } from "../tool-input-error.js";
 import { textResult } from "./tool-results.js";
 
+export { ToolAuthorizationError, ToolInputError };
 export { jsonResult, textResult } from "./tool-results.js";
 
 export type AgentToolWithMeta<TParameters extends TSchema, TResult> = AgentTool<
@@ -34,6 +36,8 @@ export type AgentToolWithMeta<TParameters extends TSchema, TResult> = AgentTool<
   catalogMode?: "direct-only";
   /** Gateway client capabilities required before this tool can be assembled. */
   requiredClientCaps?: string[];
+  /** Tool-owned execution and transport wait budget, before any harness completion grace. */
+  getExecutionTimeoutMs?: (args: unknown) => number | undefined;
   prepareBeforeToolCallParams?: (
     params: unknown,
     ctx: { toolCallId?: string; hookContext?: unknown; signal?: AbortSignal },
@@ -58,6 +62,7 @@ export type AnyAgentTool = Omit<AgentTool, "execute"> &
     catalogMode?: "direct-only";
     /** Gateway client capabilities required before this tool can be assembled. */
     requiredClientCaps?: string[];
+    getExecutionTimeoutMs?: AgentToolWithMeta<TSchema, unknown>["getExecutionTimeoutMs"];
     prepareBeforeToolCallParams?: AgentToolWithMeta<
       TSchema,
       unknown
@@ -69,9 +74,7 @@ export type AnyAgentTool = Omit<AgentTool, "execute"> &
   };
 
 export function asToolParamsRecord(params: unknown): Record<string, unknown> {
-  return params && typeof params === "object" && !Array.isArray(params)
-    ? (params as Record<string, unknown>)
-    : {};
+  return asNonArrayRecord(params);
 }
 
 type StringParamOptions = {
@@ -86,24 +89,6 @@ export type ActionGate<T extends Record<string, boolean | undefined>> = (
   defaultValue?: boolean,
 ) => boolean;
 
-export class ToolInputError extends Error {
-  readonly status: number = 400;
-
-  constructor(message: string) {
-    super(message);
-    this.name = "ToolInputError";
-  }
-}
-
-export class ToolAuthorizationError extends ToolInputError {
-  override readonly status = 403;
-
-  constructor(message: string) {
-    super(message);
-    this.name = "ToolAuthorizationError";
-  }
-}
-
 export function createActionGate<T extends Record<string, boolean | undefined>>(
   actions: T | undefined,
 ): ActionGate<T> {
@@ -116,33 +101,29 @@ export function createActionGate<T extends Record<string, boolean | undefined>>(
   };
 }
 
-function readParamRaw(params: Record<string, unknown>, key: string): unknown {
-  return readSnakeCaseParamRaw(params, key);
-}
-
 // Models may emit blank defaults for optional numeric fields. Treat them as
 // absent while still rejecting nonblank invalid input.
 function isBlankParamValue(raw: unknown): boolean {
   return typeof raw === "string" && raw.trim() === "";
 }
 
-export function readStringParam(
+export function readToolStringParam(
   params: Record<string, unknown>,
   key: string,
   options: StringParamOptions & { required: true },
 ): string;
-export function readStringParam(
+export function readToolStringParam(
   params: Record<string, unknown>,
   key: string,
   options?: StringParamOptions,
 ): string | undefined;
-export function readStringParam(
+export function readToolStringParam(
   params: Record<string, unknown>,
   key: string,
   options: StringParamOptions = {},
 ) {
   const { required = false, trim = true, label = key, allowEmpty = false } = options;
-  const raw = readParamRaw(params, key);
+  const raw = readSnakeCaseParamRaw(params, key);
   if (typeof raw !== "string") {
     if (required) {
       throw new ToolInputError(`${label} required`);
@@ -182,7 +163,7 @@ export function readStringOrNumberParam(
   options: { required?: boolean; label?: string } = {},
 ): string | undefined {
   const { required = false, label = key } = options;
-  const raw = readParamRaw(params, key);
+  const raw = readSnakeCaseParamRaw(params, key);
   if (typeof raw === "number" && Number.isFinite(raw)) {
     return String(raw);
   }
@@ -218,7 +199,7 @@ export function readNumberParam(
     positiveInteger = false,
     nonNegativeInteger = false,
   } = options;
-  const raw = readParamRaw(params, key);
+  const raw = readSnakeCaseParamRaw(params, key);
   let value: number | undefined;
   if (typeof raw === "number" && Number.isFinite(raw)) {
     value = raw;
@@ -259,7 +240,7 @@ export function readPositiveIntegerParam(
     strict: true,
   });
   if (value === undefined) {
-    const raw = readParamRaw(params, key);
+    const raw = readSnakeCaseParamRaw(params, key);
     if (raw != null && !isBlankParamValue(raw)) {
       throw new ToolInputError(options.message ?? `${key} must be a positive integer`);
     }
@@ -283,7 +264,7 @@ export function readNonNegativeIntegerParam(
     strict: true,
   });
   if (value === undefined) {
-    const raw = readParamRaw(params, key);
+    const raw = readSnakeCaseParamRaw(params, key);
     if (raw != null && !isBlankParamValue(raw)) {
       throw new ToolInputError(options.message ?? `${key} must be a non-negative integer`);
     }
@@ -309,7 +290,7 @@ export function readFiniteNumberParam(
     strict: true,
   });
   if (value === undefined) {
-    const raw = readParamRaw(params, key);
+    const raw = readSnakeCaseParamRaw(params, key);
     if (raw != null && !isBlankParamValue(raw)) {
       throw new ToolInputError(options.message ?? `${key} must be a finite number`);
     }
@@ -346,26 +327,9 @@ export function readStringArrayParam(
   options: StringParamOptions = {},
 ) {
   const { required = false, label = key } = options;
-  const raw = readParamRaw(params, key);
-  if (Array.isArray(raw)) {
-    const values = normalizeStringEntries(raw.filter((entry) => typeof entry === "string"));
-    if (values.length === 0) {
-      if (required) {
-        throw new ToolInputError(`${label} required`);
-      }
-      return undefined;
-    }
+  const values = normalizeSingleOrTrimmedStringList(readSnakeCaseParamRaw(params, key));
+  if (values.length > 0) {
     return values;
-  }
-  if (typeof raw === "string") {
-    const value = raw.trim();
-    if (!value) {
-      if (required) {
-        throw new ToolInputError(`${label} required`);
-      }
-      return undefined;
-    }
-    return [value];
   }
   if (required) {
     throw new ToolInputError(`${label} required`);
@@ -390,7 +354,7 @@ export function readReactionParams(
   const emojiKey = options.emojiKey ?? "emoji";
   const removeKey = options.removeKey ?? "remove";
   const remove = typeof params[removeKey] === "boolean" ? params[removeKey] : false;
-  const emoji = readStringParam(params, emojiKey, {
+  const emoji = readToolStringParam(params, emojiKey, {
     required: true,
     allowEmpty: true,
   });
@@ -520,6 +484,7 @@ async function imageResult(params: {
       },
     },
   };
+  const { sanitizeToolResultImages } = await import("../tool-images.runtime.js");
   return await sanitizeToolResultImages(result, params.label, params.imageSanitization);
 }
 

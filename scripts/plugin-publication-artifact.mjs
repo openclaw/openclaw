@@ -16,6 +16,7 @@ import {
   validateActionsArtifactBinding,
   validateActionsArtifactProducerJob,
 } from "./lib/actions-artifact-archive.mjs";
+import { parseStrictBooleanArg } from "./lib/arg-utils.runtime.mjs";
 import { resolveNpmPublishPlan } from "./lib/npm-publish-plan.mjs";
 
 export {
@@ -39,7 +40,8 @@ const MAX_ARCHIVE_BYTES = 256 * 1024 * 1024;
 const MAX_EXPANDED_BYTES = 512 * 1024 * 1024;
 const MAX_MANIFEST_BYTES = 4 * 1024 * 1024;
 const MAX_PLUGIN_MANIFEST_BYTES = 2 * 1024 * 1024;
-const MAX_TAR_ENTRIES = 10_000;
+// Bundled SDKs can exceed 10k files; byte, path, and expansion caps remain authoritative.
+const MAX_TAR_ENTRIES = 20_000;
 const MAX_TAR_PATH_BYTES = 4 * 1024 * 1024;
 const MAX_TAR_TOTAL_FILE_BYTES = 512 * 1024 * 1024;
 export const CLAWHUB_PUBLICATION_TAR_LIMITS = Object.freeze({
@@ -107,16 +109,6 @@ function assertPositiveInteger(value, label) {
     throw new Error(`${label} must be a safe positive integer.`);
   }
   return value;
-}
-
-function assertBooleanString(value, label) {
-  if (value === "true") {
-    return true;
-  }
-  if (value === "false") {
-    return false;
-  }
-  throw new Error(`${label} must be true or false.`);
 }
 
 function hasControlCharacters(value) {
@@ -441,6 +433,10 @@ export function inspectPackageTarballBytes(inputBytes, options = {}) {
   if (!(inputBytes instanceof Uint8Array)) {
     throw new Error("Plugin tarball bytes must be a Uint8Array.");
   }
+  const onFile = options.onFile;
+  if (onFile !== undefined && typeof onFile !== "function") {
+    throw new Error("Plugin tarball onFile option must be a function.");
+  }
   const tarballBytes = Buffer.from(inputBytes.buffer, inputBytes.byteOffset, inputBytes.byteLength);
   const limits = normalizeTarInspectionOptions(options);
   if (tarballBytes.length === 0 || tarballBytes.length > limits.maxArchiveBytes) {
@@ -584,6 +580,7 @@ export function inspectPackageTarballBytes(inputBytes, options = {}) {
       type: "file",
     };
     inventory.push(entry);
+    onFile?.({ content, path: safePath });
     if (safePath === "package/package.json") {
       if (content.length === 0 || content.length > MAX_MANIFEST_BYTES) {
         throw new Error(
@@ -1136,6 +1133,18 @@ export function verifyPluginPublicationArtifact(params) {
   if (!statSync(outputPath).isFile()) {
     throw new Error(`Verified plugin tarball was not written: ${outputPath}`);
   }
+  if (params.verificationOutput) {
+    if (!normalized.sourcePackageJsonSha256) {
+      throw new Error("A publication qualification receipt requires the exact source manifest.");
+    }
+    // Carry the consumed tuple, including retained producer attempts. Parent
+    // verification must not rediscover a different artifact or trust local paths.
+    writeFileSync(
+      params.verificationOutput,
+      `${JSON.stringify({ ...normalized, ...expectedBinding })}\n`,
+      { flag: "wx", mode: 0o600 },
+    );
+  }
   return {
     artifactDigest: expectedArtifactDigest,
     artifactId,
@@ -1192,7 +1201,7 @@ function commonCliParams(values) {
     requiresManualOverride:
       values.requiresManualOverride === undefined
         ? false
-        : assertBooleanString(values.requiresManualOverride, "requires-manual-override"),
+        : parseStrictBooleanArg(values.requiresManualOverride, "requires-manual-override"),
     route: values.route,
     publicationReason: values.publicationReason,
     publisherPolicy:
@@ -1254,6 +1263,7 @@ export function main(argv = process.argv.slice(2)) {
     workflowRunMetadataPath: values.workflowRunMetadata,
     runStatePolicy: values.runStatePolicy,
     workflowSha: values.workflowSha,
+    verificationOutput: values.verificationOutput,
   });
   if (values.githubOutput) {
     appendGithubOutput(values.githubOutput, {

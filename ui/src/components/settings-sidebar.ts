@@ -1,41 +1,68 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 // Dedicated sidebar for the full-page settings takeover (see app-host.ts).
 import { html, nothing } from "lit";
-import type { UpdateAvailable } from "../api/types.ts";
+import type { AgentsListResult } from "../api/types.ts";
 import {
   cancelRoutePreload,
+  isSettingsNavigationRouteVisible,
   navigationIconForRoute,
   scheduleRoutePreload,
-  SETTINGS_NAVIGATION_GROUPS,
+  SETTINGS_SEARCHABLE_SUBPAGE_ROUTES,
   settingsNavigationLabelForRoute,
+  settingsNavigationOwnerRoute,
   settingsSearchTextMatches,
   subtitleForRoute,
   titleForRoute,
+  visibleSettingsNavigationGroups,
   type SettingsSearchBlock,
 } from "../app-navigation.ts";
 import { pathForRoute, type RouteId } from "../app-route-paths.ts";
+import type { AgentSelectionCapability } from "../app/agent-selection.ts";
 import type { ApplicationNavigationOptions } from "../app/context.ts";
+import type { NativeDeviceSettingsCapability } from "../app/native-device-settings.ts";
+import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
 import { t } from "../i18n/index.ts";
-import { normalizeLowercaseStringOrEmpty } from "../lib/string-coerce.ts";
+import { listSelectableAgents, normalizeAgentLabel } from "../lib/agents/display.ts";
+import type { AgentIdentityCapability } from "../lib/agents/identity.ts";
+import type { GatewayStatus } from "../lib/gateway-status.ts";
+import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import { normalizeAgentId } from "../lib/sessions/session-key.ts";
+import { findSettingsSearchBlocks } from "../pages/config/settings-search.ts";
+import { renderGatewayStatus } from "./gateway-status.ts";
 import { icons } from "./icons.ts";
-import "./sidebar-update-card.ts";
+import type { SettingsSaveIndicatorProps } from "./settings-save-indicator.ts";
+import "./agent-select-registration.ts";
+import "./settings-save-indicator.ts";
+import "../styles/settings.css";
+import "./sidebar-build-chip.ts";
+
+type AgentRosterRow = AgentsListResult["agents"][number];
 
 type SettingsSidebarProps = {
+  presentation?: "sidebar" | "embed-list" | "embed-page";
   basePath: string;
   activeRouteId: RouteId;
+  agents: readonly AgentRosterRow[];
+  agentIdentity: AgentIdentityCapability;
+  settingsAgentSelection: AgentSelectionCapability;
+  activePathname?: string;
   activeSearch?: string;
   activeHash?: string;
-  connected: boolean;
-  version: string;
-  updateAvailable: UpdateAvailable | null;
-  updateRunning: boolean;
-  onUpdate: () => void;
+  connectionStatus: GatewayStatus | null;
+  lastError: string | null;
+  gatewayVersion: string;
   searchQuery: string;
   searchBlockMatches?: readonly SettingsSearchBlock[];
+  searchParams?: Parameters<typeof findSettingsSearchBlocks>[0];
   onExit: () => void;
+  onRetryConnect: () => void;
   onNavigate: (routeId: RouteId, options?: ApplicationNavigationOptions) => void;
   onPreload?: (routeId: RouteId) => Promise<void> | void;
   onSearchQueryChange: (query: string) => void;
   preloadTimers: Map<EventTarget, ReturnType<typeof globalThis.setTimeout>>;
+  saveIndicator: SettingsSaveIndicatorProps;
+  canAdmin?: boolean;
+  nativeDeviceSettings?: NativeDeviceSettingsCapability | null;
 };
 
 type SettingsNavigationGroupView = {
@@ -49,6 +76,9 @@ type SettingsNavigationItemView = {
 };
 
 function isRedundantRouteBlock(routeId: RouteId, block: SettingsSearchBlock): boolean {
+  if (block.pathname) {
+    return false;
+  }
   const blockLabel = normalizeLowercaseStringOrEmpty(block.label);
   return [settingsNavigationLabelForRoute(routeId), titleForRoute(routeId)].some(
     (label) => normalizeLowercaseStringOrEmpty(label) === blockLabel,
@@ -58,16 +88,31 @@ function isRedundantRouteBlock(routeId: RouteId, block: SettingsSearchBlock): bo
 function filterSettingsNavigationGroups(
   searchQuery: string,
   blockMatches: readonly SettingsSearchBlock[],
+  canAdmin: boolean,
+  nativeDeviceSettings: NativeDeviceSettingsCapability | null,
 ): readonly SettingsNavigationGroupView[] {
+  const navigationGroups = visibleSettingsNavigationGroups(canAdmin, nativeDeviceSettings);
+  const visibleBlockMatches = blockMatches.filter((block) =>
+    isSettingsNavigationRouteVisible(block.routeId, canAdmin, nativeDeviceSettings),
+  );
   const query = normalizeLowercaseStringOrEmpty(searchQuery);
   if (!query) {
-    return SETTINGS_NAVIGATION_GROUPS.map((group) => ({
+    return navigationGroups.map((group) => ({
       labelKey: group.labelKey,
       items: group.routes.map((routeId) => ({ routeId, blocks: [] })),
     }));
   }
-  const allRoutes = SETTINGS_NAVIGATION_GROUPS.flatMap((group) => group.routes);
-  const directRoutes = allRoutes.filter((routeId) =>
+  const sidebarRoutes = navigationGroups.flatMap((group) => group.routes);
+  const searchableRoutes = [
+    ...new Set([
+      ...sidebarRoutes,
+      ...SETTINGS_SEARCHABLE_SUBPAGE_ROUTES.filter((routeId) =>
+        isSettingsNavigationRouteVisible(routeId, canAdmin, nativeDeviceSettings),
+      ),
+      ...visibleBlockMatches.map((block) => block.routeId),
+    ]),
+  ];
+  const directRoutes = searchableRoutes.filter((routeId) =>
     [
       settingsNavigationLabelForRoute(routeId),
       titleForRoute(routeId),
@@ -75,7 +120,7 @@ function filterSettingsNavigationGroups(
     ].some((value) => settingsSearchTextMatches(value, query)),
   );
   const includedRoutes = new Set<RouteId>(directRoutes);
-  const groupRoutes = SETTINGS_NAVIGATION_GROUPS.flatMap((group) => {
+  const groupRoutes = navigationGroups.flatMap((group) => {
     const groupMatches = group.labelKey && settingsSearchTextMatches(t(group.labelKey), query);
     if (!groupMatches) {
       return [];
@@ -90,8 +135,8 @@ function filterSettingsNavigationGroups(
   });
   const blocksByRoute = new Map<RouteId, SettingsSearchBlock[]>();
   const seenBlocks = new Set<string>();
-  for (const block of blockMatches) {
-    const blockKey = `${block.routeId}\u0000${block.search ?? ""}\u0000${block.hash}`;
+  for (const block of visibleBlockMatches) {
+    const blockKey = `${block.routeId}\u0000${block.pathname ?? ""}\u0000${block.search ?? ""}\u0000${block.hash}`;
     if (seenBlocks.has(blockKey)) {
       continue;
     }
@@ -115,7 +160,7 @@ function filterSettingsNavigationGroups(
           },
         ]
       : []),
-    ...allRoutes
+    ...searchableRoutes
       .filter((routeId) => !includedRoutes.has(routeId) && blocksByRoute.has(routeId))
       .map((routeId) => ({
         labelKey: null,
@@ -125,7 +170,7 @@ function filterSettingsNavigationGroups(
 }
 
 function renderItem(props: SettingsSidebarProps, routeId: RouteId, label?: string) {
-  const active = !props.searchQuery && props.activeRouteId === routeId;
+  const active = settingsNavigationOwnerRoute(props.activeRouteId) === routeId;
   return html`
     <a
       href=${pathForRoute(routeId, props.basePath)}
@@ -137,17 +182,13 @@ function renderItem(props: SettingsSidebarProps, routeId: RouteId, label?: strin
       @pointerenter=${(event: Event) =>
         scheduleRoutePreload(props.preloadTimers, routeId, event, props.onPreload, active)}
       @pointerleave=${(event: Event) => cancelRoutePreload(props.preloadTimers, event)}
-      @touchstart=${(event: TouchEvent) =>
-        scheduleRoutePreload(props.preloadTimers, routeId, event, props.onPreload, active, true)}
+      @touchstart=${{
+        handleEvent: (event: TouchEvent) =>
+          scheduleRoutePreload(props.preloadTimers, routeId, event, props.onPreload, active, true),
+        passive: true,
+      }}
       @click=${(event: MouseEvent) => {
-        if (
-          event.defaultPrevented ||
-          event.button !== 0 ||
-          event.metaKey ||
-          event.ctrlKey ||
-          event.shiftKey ||
-          event.altKey
-        ) {
+        if (!shouldHandleNavigationClick(event)) {
           return;
         }
         event.preventDefault();
@@ -158,16 +199,19 @@ function renderItem(props: SettingsSidebarProps, routeId: RouteId, label?: strin
         >${icons[navigationIconForRoute(routeId)]}</span
       >
       <span class="settings-sidebar__item-label"
-        >${label ?? settingsNavigationLabelForRoute(routeId)}</span
+        >${label ?? settingsNavigationLabelForRoute(routeId, props.nativeDeviceSettings?.snapshot)}</span
       >
+      ${props.presentation === "embed-list" ? html`<span class="settings-row__chevron" aria-hidden="true">${icons.chevronRight}</span>` : nothing}
     </a>
   `;
 }
 
 function renderBlockItem(props: SettingsSidebarProps, block: SettingsSearchBlock) {
-  const href = pathForRoute(block.routeId, props.basePath) + (block.search ?? "") + block.hash;
+  const pathname = block.pathname ?? pathForRoute(block.routeId, props.basePath);
+  const href = pathname + (block.search ?? "") + block.hash;
   const active =
     props.activeRouteId === block.routeId &&
+    (block.pathname === undefined || props.activePathname === block.pathname) &&
     props.activeHash === block.hash &&
     (block.search === undefined || props.activeSearch === block.search);
   return html`
@@ -176,18 +220,12 @@ function renderBlockItem(props: SettingsSidebarProps, block: SettingsSearchBlock
       class="settings-sidebar__subitem ${active ? "settings-sidebar__subitem--active" : ""}"
       aria-current=${active ? "location" : nothing}
       @click=${(event: MouseEvent) => {
-        if (
-          event.defaultPrevented ||
-          event.button !== 0 ||
-          event.metaKey ||
-          event.ctrlKey ||
-          event.shiftKey ||
-          event.altKey
-        ) {
+        if (!shouldHandleNavigationClick(event)) {
           return;
         }
         event.preventDefault();
         props.onNavigate(block.routeId, {
+          ...(block.pathname ? { pathname: block.pathname } : {}),
           ...(block.search ? { search: block.search } : {}),
           hash: block.hash,
         });
@@ -198,17 +236,167 @@ function renderBlockItem(props: SettingsSidebarProps, block: SettingsSearchBlock
   `;
 }
 
+function syncSettingsSearchScrollShadow(nav: HTMLElement) {
+  // The nav's top padding scrolls away with its rows. Keep the fixed search
+  // region visually separated once content reaches that boundary.
+  nav
+    .closest(".settings-sidebar")
+    ?.querySelector(".settings-sidebar__search")
+    ?.classList.toggle("settings-sidebar__search--scrolled", nav.scrollTop > 0);
+}
+
+function buildAgentRosterTree(agents: AgentRosterRow[]) {
+  const agentById = new Map(agents.map((agent) => [agent.id, agent]));
+  const childrenById = new Map<string, AgentRosterRow[]>();
+  const roots: AgentRosterRow[] = [];
+  for (const agent of agents) {
+    const creatorAgentId = agent.creatorAgentId;
+    if (creatorAgentId && creatorAgentId !== agent.id && agentById.has(creatorAgentId)) {
+      const children = childrenById.get(creatorAgentId) ?? [];
+      children.push(agent);
+      childrenById.set(creatorAgentId, children);
+    } else {
+      roots.push(agent);
+    }
+  }
+  const entries: Array<{ agent: AgentRosterRow; creatorAgentId?: string }> = [];
+  const visited = new Set<string>();
+  const append = (agent: AgentRosterRow, depth: number): void => {
+    if (visited.has(agent.id)) {
+      return;
+    }
+    visited.add(agent.id);
+    entries.push({
+      agent,
+      ...(depth > 0 && agent.creatorAgentId ? { creatorAgentId: agent.creatorAgentId } : {}),
+    });
+    for (const child of childrenById.get(agent.id) ?? []) {
+      append(child, depth + 1);
+    }
+  };
+  roots.forEach((agent) => append(agent, 0));
+  // Match the CLI tree: malformed cycles cannot make configured agents disappear.
+  agents.forEach((agent) => append(agent, 0));
+  return entries;
+}
+
+function renderSettingsAgentSelector(props: SettingsSidebarProps) {
+  const agents = listSelectableAgents(props.agents).map((agent) =>
+    Object.assign({}, agent, {
+      id: normalizeAgentId(agent.id),
+      creatorAgentId: agent.creatorAgentId
+        ? normalizeAgentId(agent.creatorAgentId)
+        : agent.creatorAgentId,
+    }),
+  );
+  const options = buildAgentRosterTree(agents).map(({ agent, creatorAgentId }) => ({
+    value: agent.id,
+    label: normalizeAgentLabel(agent),
+    agent,
+    description: creatorAgentId ? t("agents.createdBy", { id: creatorAgentId }) : undefined,
+  }));
+  return html`<div class="settings-sidebar__agent">
+    <openclaw-agent-select
+      .options=${options}
+      .identityById=${Object.fromEntries(
+        props.agentIdentity.entries().map((identity) => [identity.agentId, identity]),
+      )}
+      .value=${props.settingsAgentSelection.state.selectedId ?? ""}
+      .accessibleLabel=${t("agentScope.label")}
+      .menuLabel=${t("agentScope.label")}
+      .disabled=${options.length <= 1}
+      .onSelect=${(agentId: string) => props.settingsAgentSelection.set(agentId)}
+      @wa-show=${() => void props.agentIdentity.ensure(agents.map((agent) => agent.id))}
+    ></openclaw-agent-select>
+  </div>`;
+}
+
+function renderEmbeddedSettingsHeader(props: SettingsSidebarProps) {
+  return html`<header class="native-embed-header">
+    ${
+      props.presentation === "embed-page"
+        ? html`<button
+            class="native-embed-header__back btn btn--ghost"
+            type="button"
+            aria-label=${t("common.back")}
+            @click=${props.onExit}
+          >
+            <span aria-hidden="true">${icons.chevronLeft}</span>${t("common.back")}
+          </button>`
+        : nothing
+    }
+    <h1 class="page-title">
+      ${props.presentation === "embed-list" ? t("nav.settings") : settingsNavigationLabelForRoute(props.activeRouteId, props.nativeDeviceSettings?.snapshot)}
+    </h1>
+    ${
+      props.connectionStatus !== null
+        ? renderGatewayStatus({
+            kind: props.connectionStatus,
+            lastError: props.lastError,
+            onRetry: props.onRetryConnect,
+          })
+        : nothing
+    }
+    ${
+      props.connectionStatus === null
+        ? html`<openclaw-settings-save-indicator
+            .props=${props.saveIndicator}
+          ></openclaw-settings-save-indicator>`
+        : nothing
+    }
+  </header>`;
+}
+
 export function renderSettingsSidebar(props: SettingsSidebarProps) {
-  const gatewayStatus = t("chat.gatewayStatus", {
-    status: props.connected ? t("common.online") : t("common.offline"),
-  });
+  if (props.presentation === "embed-page") {
+    return html`${renderEmbeddedSettingsHeader(props)} ${renderSettingsAgentSelector(props)}`;
+  }
+  const searchBlockMatches =
+    props.searchBlockMatches ??
+    (props.searchParams ? findSettingsSearchBlocks(props.searchParams) : []);
   const navigationGroups = filterSettingsNavigationGroups(
     props.searchQuery,
-    props.searchBlockMatches ?? [],
+    searchBlockMatches,
+    props.canAdmin !== false,
+    props.nativeDeviceSettings ?? null,
   );
+  const navigation = html` <nav
+    class="settings-sidebar__nav"
+    aria-label=${t("common.settingsSections")}
+    @scroll=${(event: Event) => syncSettingsSearchScrollShadow(event.currentTarget as HTMLElement)}
+  >
+    ${
+      navigationGroups.length === 0
+        ? html`<p class="settings-sidebar__empty" role="status">
+            ${t("nav.settingsSearchNoResults")}
+          </p>`
+        : navigationGroups.map(
+            (group) => html`
+              <div class="settings-sidebar__group">
+                ${
+                  group.labelKey
+                    ? html`<div class="settings-sidebar__group-label">${t(group.labelKey)}</div>`
+                    : nothing
+                }
+                ${group.items.map(
+                  (item) => html`
+                    ${renderItem(props, item.routeId)}
+                    ${item.blocks.map((block) => renderBlockItem(props, block))}
+                  `,
+                )}
+              </div>
+            `,
+          )
+    }
+  </nav>`;
+  if (props.presentation === "embed-list") {
+    return html`<section class="settings-embed-list">
+      ${renderEmbeddedSettingsHeader(props)} ${renderSettingsAgentSelector(props)} ${navigation}
+    </section>`;
+  }
   return html`
     <aside class="settings-sidebar">
-      <header class="settings-sidebar__header">
+      <header class="settings-sidebar__header" @mousedown=${beginNativeWindowDragFromTopInset}>
         <button type="button" class="settings-sidebar__back" @click=${() => props.onExit()}>
           <span class="settings-sidebar__back-icon" aria-hidden="true">${icons.arrowLeft}</span>
           ${t("nav.exitSettings")}
@@ -216,6 +404,7 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
         </button>
         <h1 class="settings-sidebar__title">${t("nav.settings")}</h1>
       </header>
+      ${renderSettingsAgentSelector(props)}
       <div class="settings-sidebar__search" role="search">
         <span class="settings-sidebar__search-icon" aria-hidden="true">${icons.search}</span>
         <input
@@ -229,70 +418,62 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
           @input=${(event: Event) =>
             props.onSearchQueryChange((event.currentTarget as HTMLInputElement).value)}
           @keydown=${(event: KeyboardEvent) => {
-            if (event.key !== "Escape" || !props.searchQuery) {
+            if (event.key !== "Escape") {
               return;
             }
             event.preventDefault();
-            props.onSearchQueryChange("");
+            if (props.searchQuery) {
+              props.onSearchQueryChange("");
+              return;
+            }
+            props.onExit();
           }}
         />
-        ${props.searchQuery
-          ? html`
-              <button
-                type="button"
-                class="settings-sidebar__search-clear"
-                aria-label=${t("nav.settingsSearchClear")}
-                @click=${(event: MouseEvent) => {
-                  const searchInput = (
-                    event.currentTarget as HTMLElement
-                  ).parentElement?.querySelector<HTMLInputElement>("input");
-                  props.onSearchQueryChange("");
-                  searchInput?.focus();
-                }}
-              >
-                ${icons.x}
-              </button>
-            `
-          : nothing}
+        ${
+          props.searchQuery
+            ? html`
+                <button
+                  type="button"
+                  class="settings-sidebar__search-clear"
+                  aria-label=${t("nav.settingsSearchClear")}
+                  @click=${(event: MouseEvent) => {
+                    const searchInput = (
+                      event.currentTarget as HTMLElement
+                    ).parentElement?.querySelector<HTMLInputElement>("input");
+                    props.onSearchQueryChange("");
+                    searchInput?.focus();
+                  }}
+                >
+                  ${icons.x}
+                </button>
+              `
+            : nothing
+        }
       </div>
-      <nav class="settings-sidebar__nav" aria-label=${t("common.settingsSections")}>
-        ${navigationGroups.length === 0
-          ? html`<p class="settings-sidebar__empty" role="status">
-              ${t("nav.settingsSearchNoResults")}
-            </p>`
-          : navigationGroups.map(
-              (group) => html`
-                <div class="settings-sidebar__group">
-                  ${group.labelKey
-                    ? html`<div class="settings-sidebar__group-label">${t(group.labelKey)}</div>`
-                    : nothing}
-                  ${group.items.map(
-                    (item) => html`
-                      ${renderItem(props, item.routeId)}
-                      ${item.blocks.map((block) => renderBlockItem(props, block))}
-                    `,
-                  )}
-                </div>
-              `,
-            )}
-      </nav>
-      <openclaw-sidebar-update-card
-        .updateAvailable=${props.updateAvailable}
-        .updateRunning=${props.updateRunning}
-        .onUpdate=${props.onUpdate}
-      ></openclaw-sidebar-update-card>
+      ${navigation}
       <footer class="settings-sidebar__footer">
-        <span
-          class="sidebar-status__dot ${props.connected
-            ? "sidebar-connection-status--online"
-            : "sidebar-connection-status--offline"}"
-          role="img"
-          aria-label=${gatewayStatus}
-        ></span>
-        <span class="settings-sidebar__footer-status">${gatewayStatus}</span>
-        ${props.version
-          ? html`<span class="settings-sidebar__footer-version">${props.version}</span>`
-          : nothing}
+        ${
+          props.connectionStatus !== null
+            ? renderGatewayStatus({
+                kind: props.connectionStatus,
+                lastError: props.lastError,
+                onRetry: props.onRetryConnect,
+              })
+            : nothing
+        }
+        ${
+          props.connectionStatus === null
+            ? html`<openclaw-settings-save-indicator
+                .props=${props.saveIndicator}
+              ></openclaw-settings-save-indicator>`
+            : nothing
+        }
+        <openclaw-sidebar-build-chip
+          .basePath=${props.basePath}
+          .gatewayVersion=${props.gatewayVersion || null}
+          .variant=${"settings"}
+          .onNavigate=${() => props.onNavigate("about")}
+        ></openclaw-sidebar-build-chip>
       </footer>
     </aside>
   `;

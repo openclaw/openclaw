@@ -14,7 +14,11 @@ export type SandboxBackendId = string;
 export type SandboxBackendExecSpec = {
   argv: string[];
   env: NodeJS.ProcessEnv;
+  /** Local transport cwd, independent of the remote command's workdir. */
+  cwd?: string;
   stdinMode: "pipe-open" | "pipe-closed";
+  /** Synchronously revalidate runtime authority at deferred process admission. */
+  assertCurrent?: () => void;
   finalizeToken?: unknown;
 };
 
@@ -44,11 +48,13 @@ export type SandboxFsBridgeContext = {
   workspaceDir: string;
   agentWorkspaceDir: string;
   skillsWorkspaceDir?: string;
+  readOnlyResourceMounts?: Array<{ hostPath: string; containerPath: string }>;
   workspaceAccess: "none" | "ro" | "rw";
   containerName: string;
   containerWorkdir: string;
   docker: {
     binds?: string[];
+    tmpfs?: string[];
   };
   backend?: {
     runShellCommand(params: SandboxBackendCommandParams): Promise<SandboxBackendCommandResult>;
@@ -78,6 +84,7 @@ export type SandboxBackendHandle = {
   workdirRoots?: readonly string[];
   capabilities?: {
     browser?: boolean;
+    readOnlyResourceMounts?: boolean;
   };
   buildExecSpec(params: {
     command: string;
@@ -91,6 +98,13 @@ export type SandboxBackendHandle = {
     timedOut: boolean;
     token?: unknown;
   }) => Promise<void>;
+  /** Mint termination-only custody while execution is admitted; retained cleanup cannot run arbitrary commands. */
+  prepareProcessCleanup?: (env: Record<string, string>) => {
+    env: Record<string, string>;
+    terminate: () => Promise<void>;
+    /** Interrupt may run guest signal handlers, so it retains ordinary live execution checks. */
+    interrupt: (timeoutMs: number) => Promise<boolean>;
+  };
   runShellCommand(params: SandboxBackendCommandParams): Promise<SandboxBackendCommandResult>;
   createFsBridge?: (params: { sandbox: SandboxFsBridgeContext }) => SandboxFsBridge;
 };

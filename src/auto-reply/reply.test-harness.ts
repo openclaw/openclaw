@@ -33,12 +33,14 @@ vi.mock("../agents/embedded-agent.js", () => ({
 }));
 
 vi.mock("../agents/model-catalog.runtime.js", () => ({
-  loadModelCatalog: (...args: unknown[]) => replyRuntimeMockState.mocks.loadModelCatalog(...args),
+  loadProviderScopedThinkingCatalog: async () => [],
+  readPreparedModelCatalog: (...args: unknown[]) =>
+    replyRuntimeMockState.mocks.loadModelCatalog(...args),
 }));
 
 vi.mock("../agents/auth-profiles/session-override.js", () => ({
   clearSessionAuthProfileOverride: vi.fn(),
-  resolveSessionAuthProfileOverride: vi.fn().mockResolvedValue(undefined),
+  resolveSessionAuthSelection: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("../commands-registry.runtime.js", () => ({
@@ -46,7 +48,7 @@ vi.mock("../commands-registry.runtime.js", () => ({
 }));
 
 vi.mock("../skills/discovery/chat-commands.runtime.js", () => ({
-  listSkillCommandsForWorkspace: () => [],
+  prepareSkillCommandsForWorkspace: () => [],
 }));
 
 vi.mock("../plugins/runtime/runtime-web-channel-plugin.js", () => ({

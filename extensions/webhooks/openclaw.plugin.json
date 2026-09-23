@@ -1,5 +1,6 @@
 {
   "id": "webhooks",
+  "categories": ["integrations"],
   "activation": {
     "onStartup": true
   },
@@ -16,6 +17,14 @@
       ]
     }
   },
+  "configGroups": [
+    {
+      "id": "webhook-routes",
+      "title": "Webhook routes",
+      "order": 10,
+      "properties": ["routes"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
@@ -26,7 +35,7 @@
         "properties": {
           "source": {
             "type": "string",
-            "enum": ["env", "file", "exec"]
+            "enum": ["env", "file", "exec", "store"]
           },
           "provider": { "type": "string" },
           "id": { "type": "string" }

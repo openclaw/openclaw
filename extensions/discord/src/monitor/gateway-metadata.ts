@@ -1,4 +1,3 @@
-// Discord plugin module implements gateway metadata behavior.
 import type { APIGatewayBotInfo } from "discord-api-types/v10";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
@@ -82,12 +81,8 @@ function normalizeGatewayInfoTimeoutMs(value: unknown): number | undefined {
   return Math.min(numeric, MAX_DISCORD_GATEWAY_INFO_TIMEOUT_MS);
 }
 
-export function resolveDiscordGatewayInfoTimeoutMs(params?: {
-  configuredTimeoutMs?: number;
-  env?: NodeJS.ProcessEnv;
-}): number {
+export function resolveDiscordGatewayInfoTimeoutMs(params?: { env?: NodeJS.ProcessEnv }): number {
   return (
-    normalizeGatewayInfoTimeoutMs(params?.configuredTimeoutMs) ??
     normalizeGatewayInfoTimeoutMs(params?.env?.[DISCORD_GATEWAY_INFO_TIMEOUT_ENV]) ??
     DEFAULT_DISCORD_GATEWAY_INFO_TIMEOUT_MS
   );
@@ -174,12 +169,13 @@ function parseDiscordGatewayInfoBody(body: string): APIGatewayBotInfo {
 
 async function fetchDiscordGatewayInfo(params: {
   token: string;
+  gatewayBotUrl?: string;
   fetchImpl: DiscordGatewayFetch;
   fetchInit?: DiscordGatewayFetchInit;
 }): Promise<APIGatewayBotInfo> {
   let response: DiscordGatewayMetadataResponse;
   try {
-    response = await params.fetchImpl(DISCORD_GATEWAY_BOT_URL, {
+    response = await params.fetchImpl(params.gatewayBotUrl ?? DISCORD_GATEWAY_BOT_URL, {
       ...params.fetchInit,
       headers: {
         ...params.fetchInit?.headers,
@@ -227,6 +223,7 @@ async function fetchDiscordGatewayInfo(params: {
 
 export async function fetchDiscordGatewayInfoWithTimeout(params: {
   token: string;
+  gatewayBotUrl?: string;
   fetchImpl: DiscordGatewayFetch;
   fetchInit?: DiscordGatewayFetchInit;
   timeoutMs?: number;
@@ -243,6 +240,7 @@ export async function fetchDiscordGatewayInfoWithTimeout(params: {
     run: async (signal) =>
       await fetchDiscordGatewayInfo({
         token: params.token,
+        gatewayBotUrl: params.gatewayBotUrl,
         fetchImpl: params.fetchImpl,
         fetchInit: {
           ...params.fetchInit,

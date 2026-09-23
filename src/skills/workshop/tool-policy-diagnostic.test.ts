@@ -3,10 +3,72 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { detectSkillWorkshopToolPolicyDiagnostic } from "./tool-policy-diagnostic.js";
 
 function detect(config: OpenClawConfig, workshopEnabled = true) {
-  return detectSkillWorkshopToolPolicyDiagnostic({ config, workshopEnabled });
+  const agents = config.agents;
+  const hasRoster = Boolean(agents && ("entries" in agents || "list" in agents));
+  return detectSkillWorkshopToolPolicyDiagnostic({
+    config: {
+      ...config,
+      agents: hasRoster ? agents : { ...agents, entries: { main: { default: true } } },
+    },
+    workshopEnabled,
+  });
 }
 
 describe("detectSkillWorkshopToolPolicyDiagnostic", () => {
+  it.each([false, true])(
+    "reports the sandbox construction gate before profile advice (alsoAllow=%s)",
+    (alsoAllow) => {
+      const diagnostic = detect({
+        agents: {
+          entries: {
+            main: {
+              sandbox: { mode: "all" },
+              tools: {
+                profile: "minimal",
+                ...(alsoAllow ? { alsoAllow: ["skill_workshop"] } : {}),
+              },
+            },
+          },
+        },
+      });
+
+      expect(diagnostic).toMatchObject({ source: "agents.entries.main.sandbox.mode" });
+      expect(diagnostic?.detail).toContain("sandboxed run without library-authoring authority");
+      expect(diagnostic?.fix).toContain("non-sandboxed session");
+      expect(diagnostic?.fix).toContain("host-granted library-authoring authority");
+      expect(diagnostic?.fix).not.toContain("alsoAllow");
+    },
+  );
+
+  it("identifies inherited sandbox mode and limits non-main advice to those sessions", () => {
+    const diagnostic = detect({
+      agents: {
+        defaults: { sandbox: { mode: "non-main" } },
+        entries: { main: { tools: { profile: "minimal", alsoAllow: ["skill_workshop"] } } },
+      },
+    });
+
+    expect(diagnostic).toMatchObject({ source: "agents.defaults.sandbox.mode" });
+    expect(diagnostic?.detail).toContain("In non-main sessions");
+    expect(diagnostic?.fix).not.toContain("alsoAllow");
+  });
+
+  it("honors an agent's unsandboxed override of the inherited mode", () => {
+    expect(
+      detect({
+        agents: {
+          defaults: { sandbox: { mode: "all" } },
+          entries: {
+            main: {
+              sandbox: { mode: "off" },
+              tools: { profile: "minimal", alsoAllow: ["skill_workshop"] },
+            },
+          },
+        },
+      }),
+    ).toBeNull();
+  });
+
   it("names the profile and exact additive grant when policy excludes the tool", () => {
     expect(detect({ tools: { profile: "messaging" } })).toMatchObject({
       source: "tools.profile",
@@ -35,20 +97,20 @@ describe("detectSkillWorkshopToolPolicyDiagnostic", () => {
   it("names agent-scoped profile and allowlist sources", () => {
     expect(
       detect({
-        agents: { list: [{ id: "main", tools: { profile: "messaging" } }] },
+        agents: { list: [{ id: "main", default: true, tools: { profile: "messaging" } }] },
       }),
     ).toMatchObject({
-      source: "agents.list[0].tools.profile",
-      fix: 'Add agents.list[0].tools.alsoAllow: ["skill_workshop"].',
+      source: "agents.entries.main.tools.profile",
+      fix: 'Add agents.entries.main.tools.alsoAllow: ["skill_workshop"].',
     });
 
     expect(
       detect({
-        agents: { list: [{ id: "main", tools: { allow: ["read"] } }] },
+        agents: { entries: { main: { default: true, tools: { allow: ["read"] } } } },
       }),
     ).toMatchObject({
-      source: "agents.list[0].tools.allow",
-      fix: 'Add "skill_workshop" to agents.list[0].tools.allow.',
+      source: "agents.entries.main.tools.allow",
+      fix: 'Add "skill_workshop" to agents.entries.main.tools.allow.',
     });
   });
 
@@ -56,11 +118,11 @@ describe("detectSkillWorkshopToolPolicyDiagnostic", () => {
     expect(
       detect({
         tools: { profile: "messaging" },
-        agents: { list: [{ id: "main", tools: { alsoAllow: ["read"] } }] },
+        agents: { entries: { main: { default: true, tools: { alsoAllow: ["read"] } } } },
       }),
     ).toMatchObject({
       source: "tools.profile",
-      fix: 'Add agents.list[0].tools.alsoAllow: ["skill_workshop"].',
+      fix: 'Add agents.entries.main.tools.alsoAllow: ["skill_workshop"].',
     });
   });
 
@@ -81,18 +143,18 @@ describe("detectSkillWorkshopToolPolicyDiagnostic", () => {
       detect({
         agents: {
           defaults: { model: { primary: "openai/gpt-5.5" } },
-          list: [
-            {
-              id: "main",
+          entries: {
+            main: {
+              default: true,
               tools: { byProvider: { openai: { alsoAllow: ["read"] } } },
             },
-          ],
+          },
         },
         tools: { byProvider: { openai: { profile: "messaging" } } },
       }),
     ).toMatchObject({
       source: 'tools.byProvider["openai"].profile',
-      fix: 'Add agents.list[0].tools.byProvider["openai"].alsoAllow: ["skill_workshop"].',
+      fix: 'Add agents.entries.main.tools.byProvider["openai"].alsoAllow: ["skill_workshop"].',
     });
   });
 
@@ -101,17 +163,17 @@ describe("detectSkillWorkshopToolPolicyDiagnostic", () => {
       detect({
         agents: {
           defaults: { model: { primary: "openai/gpt-5.5" } },
-          list: [
-            {
-              id: "main",
+          entries: {
+            main: {
+              default: true,
               tools: { byProvider: { openai: { allow: ["read"] } } },
             },
-          ],
+          },
         },
       }),
     ).toMatchObject({
-      source: 'agents.list[0].tools.byProvider["openai"].allow',
-      fix: 'Add "skill_workshop" to agents.list[0].tools.byProvider["openai"].allow.',
+      source: 'agents.entries.main.tools.byProvider["openai"].allow',
+      fix: 'Add "skill_workshop" to agents.entries.main.tools.byProvider["openai"].allow.',
     });
   });
 

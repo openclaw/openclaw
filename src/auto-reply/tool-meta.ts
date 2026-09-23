@@ -1,5 +1,5 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { resolveToolDisplay } from "../agents/tool-display.js";
+import { isShellToolDisplayName, resolveToolDisplay } from "../agents/tool-display.js";
 /** Formats compact tool metadata labels for auto-reply progress/status messages. */
 import { formatInlineCodeSpan } from "../shared/markdown-code.js";
 import { shortenHomeInString } from "../utils.js";
@@ -8,20 +8,23 @@ type ToolAggregateOptions = {
   markdown?: boolean;
 };
 
-/** Formats one grouped tool-progress label from a tool name and metadata entries. */
-export function formatToolAggregate(
+/**
+ * Formats one grouped tool-progress label and returns the detail segment it was
+ * composed from. Callers that need both must not re-parse the label: recovering
+ * the detail by stripping the rendered prefix silently yields nothing whenever
+ * the prefix shape changes.
+ */
+export function formatToolAggregateParts(
   toolName?: string,
   metas?: string[],
   options?: ToolAggregateOptions,
-): string {
+): { text: string; detail?: string } {
   const filtered = (metas ?? []).filter(Boolean).map(shortenHomeInString);
   const display = resolveToolDisplay({ name: toolName });
-  const normalizedToolName = normalizeLowercaseStringOrEmpty(toolName);
-  const compactCommandSummary =
-    filtered.length > 0 && (normalizedToolName === "exec" || normalizedToolName === "bash");
+  const compactCommandSummary = filtered.length > 0 && isShellToolDisplayName(toolName);
   const prefix = compactCommandSummary ? display.emoji : `${display.emoji} ${display.label}`;
   if (!filtered.length) {
-    return `${display.emoji} ${display.label}`;
+    return { text: `${display.emoji} ${display.label}` };
   }
 
   const rawSegments: string[] = [];
@@ -36,34 +39,36 @@ export function formatToolAggregate(
       rawSegments.push(m);
       continue;
     }
-    const parts = m.split("/");
-    if (parts.length > 1) {
-      const dir = parts.slice(0, -1).join("/");
-      const base = parts.at(-1) ?? m;
-      if (!grouped[dir]) {
-        grouped[dir] = [];
-      }
-      grouped[dir].push(base);
-    } else {
-      if (!grouped["."]) {
-        grouped["."] = [];
-      }
-      grouped["."].push(m);
+    const slash = m.lastIndexOf("/");
+    const dir = m.slice(0, slash);
+    const base = m.slice(slash + 1);
+    if (!grouped[dir]) {
+      grouped[dir] = [];
     }
+    grouped[dir].push(base);
   }
 
   const segments = Object.entries(grouped).map(([dir, files]) => {
     const brace = files.length > 1 ? `{${files.join(", ")}}` : files[0];
-    if (dir === ".") {
-      return brace;
-    }
     return `${dir}/${brace}`;
   });
 
   const allSegments = [...rawSegments, ...segments];
   const meta = allSegments.join("; ");
-  const formattedMeta = formatMetaForDisplay(toolName, meta, options?.markdown);
-  return compactCommandSummary ? `${prefix} ${formattedMeta}` : `${prefix}: ${formattedMeta}`;
+  const detail = formatMetaForDisplay(toolName, meta, options?.markdown);
+  return {
+    text: compactCommandSummary ? `${prefix} ${detail}` : `${prefix}: ${detail}`,
+    detail,
+  };
+}
+
+/** Formats one grouped tool-progress label from a tool name and metadata entries. */
+export function formatToolAggregate(
+  toolName?: string,
+  metas?: string[],
+  options?: ToolAggregateOptions,
+): string {
+  return formatToolAggregateParts(toolName, metas, options).text;
 }
 
 function formatMetaForDisplay(

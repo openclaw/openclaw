@@ -11,7 +11,7 @@ import {
   type PinnedDispatcherPolicy,
 } from "../infra/net/ssrf.js";
 import { loadUndiciRuntimeDeps } from "../infra/net/undici-runtime.js";
-import { readSecretFileSync } from "../infra/secret-file.js";
+import { readMcpClientTlsFile } from "./mcp-client-tls.js";
 
 /** Default MCP HTTP fetch backed by lazy-loaded undici runtime deps. */
 const fetchWithUndici: FetchLike = async (url, init) =>
@@ -26,14 +26,6 @@ const fetchWithUndiciGuard = async (
 ): Promise<Response> => await fetchWithUndici(input instanceof Request ? input.url : input, init);
 
 const MCP_HTTP_MAX_REDIRECTS = 20;
-const MCP_CLIENT_TLS_FILE_MAX_BYTES = 64 * 1024;
-
-function readMcpClientTlsFile(filePath: string, label: string): string {
-  return readSecretFileSync(filePath, label, {
-    maxBytes: MCP_CLIENT_TLS_FILE_MAX_BYTES,
-    rejectHardlinks: false,
-  });
-}
 
 function resolveFetchRequest(input: RequestInfo | URL, init?: RequestInit) {
   if (input instanceof Request) {
@@ -107,6 +99,7 @@ export function buildMcpHttpFetch(params: {
   clientKey?: string;
   resourceUrl?: string;
   timeoutMs?: number;
+  beforeRequest?: () => void;
 }): FetchLike {
   const needsCustomDispatcher =
     params.sslVerify === false || Boolean(params.clientCert || params.clientKey);
@@ -115,21 +108,27 @@ export function buildMcpHttpFetch(params: {
     ? ssrfPolicyFromHttpBaseUrlAllowedOrigin(params.resourceUrl)
     : undefined;
 
-  let customConnect: Record<string, unknown> | undefined;
-  const resolveCustomDispatcherPolicy = (url: URL): PinnedDispatcherPolicy | undefined => {
+  let customConnect: Promise<Record<string, unknown>> | undefined;
+  const resolveCustomDispatcherPolicy = async (
+    url: URL,
+  ): Promise<PinnedDispatcherPolicy | undefined> => {
     if (!needsCustomDispatcher || !scopedOrigin || url.origin !== scopedOrigin) {
       return undefined;
     }
-    customConnect ??= {
-      ...(params.sslVerify === false ? { rejectUnauthorized: false } : {}),
-      ...(params.clientCert
-        ? { cert: readMcpClientTlsFile(params.clientCert, "MCP client certificate") }
-        : {}),
-      ...(params.clientKey
-        ? { key: readMcpClientTlsFile(params.clientKey, "MCP client key") }
-        : {}),
-    };
-    return { mode: "direct", connect: customConnect };
+    customConnect ??= Promise.all([
+      params.clientCert ? readMcpClientTlsFile(params.clientCert) : undefined,
+      params.clientKey ? readMcpClientTlsFile(params.clientKey) : undefined,
+    ])
+      .then(([cert, key]) => ({
+        ...(params.sslVerify === false ? { rejectUnauthorized: false } : {}),
+        ...(cert !== undefined ? { cert } : {}),
+        ...(key !== undefined ? { key } : {}),
+      }))
+      .catch((error: unknown) => {
+        customConnect = undefined;
+        throw error;
+      });
+    return { mode: "direct", connect: await customConnect };
   };
 
   return async (url, init) => {
@@ -142,6 +141,7 @@ export function buildMcpHttpFetch(params: {
       allowCrossOriginUnsafeRedirectReplay: true,
       auditContext: "mcp-http",
       useEnvProxyForEligibleUrls: true,
+      beforeRequest: params.beforeRequest,
       ...(request.signal ? { signal: request.signal } : {}),
       ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
       ...(policy ? { policy } : {}),

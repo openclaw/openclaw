@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Insertable, Selectable } from "kysely";
 import type {
   WorkerTranscriptCommitErrorReason,
@@ -82,10 +83,6 @@ function normalizeRequestHash(value: unknown): string {
     throw new Error("Worker transcript commit request hash must be lowercase SHA-256 hex");
   }
   return value;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function isNonEmptyStringArray(value: unknown): value is string[] {
@@ -317,7 +314,36 @@ export function createWorkerTranscriptCommitStore(
     });
   };
 
-  return { begin, complete };
+  // Only the invocation that freshly claimed this row may discard it after a
+  // known rollback. Recovered reservations can describe an already committed batch.
+  const discardUncommitted = (rawInput: WorkerTranscriptCommitInput): void => {
+    const input = normalizeInput(rawInput, now());
+    write((db) =>
+      executeSqliteQuerySync(
+        db,
+        query(db)
+          .deleteFrom("worker_transcript_commits")
+          .where("session_id", "=", input.sessionId)
+          .where("run_epoch", "=", input.runEpoch)
+          .where("seq", "=", input.seq)
+          .where("request_hash", "=", input.requestHash)
+          .where("state", "=", "pending")
+          .where((eb) =>
+            eb.exists(
+              eb
+                .selectFrom("worker_transcript_commit_heads")
+                .select("session_id")
+                .where("session_id", "=", input.sessionId)
+                .where("run_epoch", "=", input.runEpoch)
+                .where("environment_id", "=", input.environmentId)
+                .where("next_seq", "=", input.seq),
+            ),
+          ),
+      ),
+    );
+  };
+
+  return { begin, complete, discardUncommitted };
 }
 
 export type WorkerTranscriptCommitStore = ReturnType<typeof createWorkerTranscriptCommitStore>;

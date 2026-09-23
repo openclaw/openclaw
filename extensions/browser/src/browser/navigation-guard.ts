@@ -107,15 +107,11 @@ function isIpLiteralHostname(hostname: string): boolean {
 
 function isExplicitlyAllowedBrowserHostname(hostname: string, ssrfPolicy?: SsrFPolicy): boolean {
   const normalizedHostname = normalizeHostname(hostname);
-  const exactMatches = ssrfPolicy?.allowedHostnames ?? [];
-  if (exactMatches.some((value) => normalizeHostname(value) === normalizedHostname)) {
-    return true;
-  }
-  const hostnameAllowlist = (ssrfPolicy?.hostnameAllowlist ?? [])
+  const allowedHostnames = (ssrfPolicy?.allowedHostnames ?? [])
     .map((pattern) => normalizeHostname(pattern))
     .filter(Boolean);
-  return hostnameAllowlist.length > 0
-    ? matchesHostnameAllowlist(normalizedHostname, hostnameAllowlist)
+  return allowedHostnames.length > 0
+    ? matchesHostnameAllowlist(normalizedHostname, allowedHostnames)
     : false;
 }
 
@@ -124,8 +120,10 @@ export async function assertBrowserNavigationAllowed(
   opts: {
     url: string;
     lookupFn?: LookupFn;
+    signal?: AbortSignal;
   } & BrowserNavigationPolicyOptions,
 ): Promise<void> {
+  opts.signal?.throwIfAborted();
   const parsed = parseBrowserNavigationUrl(opts.url);
 
   if (!NETWORK_NAVIGATION_PROTOCOLS.has(parsed.protocol)) {
@@ -168,6 +166,7 @@ export async function assertBrowserNavigationAllowed(
   await resolvePinnedHostnameWithPolicy(parsed.hostname, {
     lookupFn: opts.lookupFn,
     policy: opts.ssrfPolicy,
+    signal: opts.signal,
   });
 }
 
@@ -181,8 +180,10 @@ export async function assertBrowserNavigationResultAllowed(
   opts: {
     url: string;
     lookupFn?: LookupFn;
+    signal?: AbortSignal;
   } & BrowserNavigationPolicyOptions,
 ): Promise<void> {
+  opts.signal?.throwIfAborted();
   const rawUrl = opts.url.trim();
   if (!rawUrl) {
     return;
@@ -206,8 +207,10 @@ export async function assertBrowserNavigationRedirectChainAllowed(
   opts: {
     request?: BrowserNavigationRequestLike | null;
     lookupFn?: LookupFn;
+    signal?: AbortSignal;
   } & BrowserNavigationPolicyOptions,
 ): Promise<void> {
+  opts.signal?.throwIfAborted();
   const chain: string[] = [];
   let current = opts.request ?? null;
   while (current) {
@@ -220,6 +223,7 @@ export async function assertBrowserNavigationRedirectChainAllowed(
       lookupFn: opts.lookupFn,
       ssrfPolicy: opts.ssrfPolicy,
       browserProxyMode: opts.browserProxyMode,
+      signal: opts.signal,
     });
   }
 }

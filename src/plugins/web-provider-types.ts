@@ -24,7 +24,10 @@ export type WebSearchProviderToolDefinition = {
 export type WebFetchProviderToolDefinition = {
   description: string;
   parameters: TSchema;
-  execute: (args: Record<string, unknown>) => Promise<Record<string, unknown>>;
+  execute: (
+    args: Record<string, unknown>,
+    context?: { signal?: AbortSignal },
+  ) => Promise<Record<string, unknown>>;
 };
 
 type WebSearchProviderContext = {
@@ -36,6 +39,8 @@ type WebSearchProviderContext = {
 
 export type WebSearchProviderToolExecutionContext = {
   signal?: AbortSignal;
+  /** Synchronous caller fence; non-HTTP transports must invoke it before each side effect. */
+  assertCurrent?: () => void;
 };
 
 type WebFetchProviderContext = {
@@ -92,6 +97,8 @@ export type WebSearchProviderPlugin = {
   id: WebSearchProviderId;
   label: string;
   hint: string;
+  /** Settings subtree relative to this plugin's config; null hides inline settings. Defaults to ["webSearch"]. */
+  configPath?: readonly string[] | null;
   onboardingScopes?: readonly "text-inference"[];
   requiresCredential?: boolean;
   credentialLabel?: string;

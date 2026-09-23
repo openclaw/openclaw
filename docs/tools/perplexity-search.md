@@ -12,12 +12,14 @@ For compatibility, OpenClaw also supports legacy Perplexity Sonar/OpenRouter set
 
 ## Install plugin
 
-Install the official plugin, then restart Gateway:
+Install the official plugin:
 
 ```bash
 openclaw plugins install @openclaw/perplexity-plugin
-openclaw gateway restart
 ```
+
+Installation applies to a running Gateway automatically; otherwise it takes effect
+on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 
 ## Getting a Perplexity API key
 
@@ -213,6 +215,9 @@ await web_search({
   </Card>
   <Card title="Exa search" href="/tools/exa-search" icon="magnifying-glass">
     Neural search with content extraction.
+  </Card>
+  <Card title="Perplexity provider" href="/providers/perplexity-provider" icon="server">
+    Provider setup, auth, and config keys for Perplexity web search.
   </Card>
   <Card title="Perplexity Search API docs" href="https://docs.perplexity.ai/docs/search/quickstart" icon="arrow-up-right-from-square">
     Official Perplexity Search API quickstart and reference.

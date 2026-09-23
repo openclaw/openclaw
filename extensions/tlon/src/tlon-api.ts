@@ -10,12 +10,13 @@ import { authenticate } from "./urbit/auth.js";
 import { scryUrbitPath } from "./urbit/channel-ops.js";
 import { ssrfPolicyFromDangerouslyAllowPrivateNetwork } from "./urbit/context.js";
 
-type ClientConfig = {
+export type ClientConfig = {
   shipUrl: string;
   shipName: string;
   verbose: boolean;
   getCode: () => Promise<string>;
   dangerouslyAllowPrivateNetwork?: boolean;
+  assertDirectAdapterHandoff?: () => void;
 };
 
 type StorageService = "presigned-url" | "credentials";
@@ -56,20 +57,23 @@ const TLON_MEMEX_UPLOAD_URL_TIMEOUT_MS = 30_000;
 /** Total deadline for Memex and custom S3 PUTs, including DNS and the full upload. */
 const TLON_UPLOAD_TIMEOUT_MS = 300_000;
 
-let currentClientConfig: ClientConfig | null = null;
-
-export function configureClient(params: ClientConfig): void {
-  currentClientConfig = {
-    ...params,
-    shipName: params.shipName.replace(/^~/, ""),
-  };
-}
-
-function requireClientConfig(): ClientConfig {
-  if (!currentClientConfig) {
-    throw new Error("Tlon client not configured");
+async function releaseUploadResponse(
+  guarded: Awaited<ReturnType<typeof fetchWithSsrFGuard>> | undefined,
+): Promise<void> {
+  if (!guarded) {
+    return;
   }
-  return currentClientConfig;
+  try {
+    // Guard release closes the dispatcher, not an unread response stream. Settle terminal
+    // upload bodies first so a streaming response cannot delay dispatcher cleanup.
+    if (!guarded.response.bodyUsed) {
+      await guarded.response.body?.cancel();
+    }
+  } catch {
+    // Response cancellation is best-effort; dispatcher release must still run.
+  } finally {
+    await guarded.release();
+  }
 }
 
 function getExtensionFromMimeType(mimeType?: string): string {
@@ -172,6 +176,7 @@ function sanitizeFileName(fileName: string): string {
 async function getAuthCookie(config: ClientConfig): Promise<string> {
   return await authenticate(config.shipUrl, await config.getCode(), {
     ssrfPolicy: ssrfPolicyFromDangerouslyAllowPrivateNetwork(config.dangerouslyAllowPrivateNetwork),
+    beforeRequest: config.assertDirectAdapterHandoff,
   });
 }
 
@@ -183,6 +188,7 @@ async function scryJson<T>(config: ClientConfig, cookie: string, path: string): 
       ssrfPolicy: ssrfPolicyFromDangerouslyAllowPrivateNetwork(
         config.dangerouslyAllowPrivateNetwork,
       ),
+      beforeRequest: config.assertDirectAdapterHandoff,
     },
     { path, auditContext: "tlon-storage-scry" },
   )) as T;
@@ -240,9 +246,9 @@ async function getMemexUploadUrl(params: {
   }
 
   const endpoint = `${MEMEX_BASE_URL}/v1/${params.config.shipName}/upload`;
-  let release: (() => Promise<void>) | undefined;
+  let guarded: Awaited<ReturnType<typeof fetchWithSsrFGuard>> | undefined;
   try {
-    const guarded = await fetchWithSsrFGuard({
+    guarded = await fetchWithSsrFGuard({
       url: endpoint,
       init: {
         method: "PUT",
@@ -258,8 +264,8 @@ async function getMemexUploadUrl(params: {
       capture: false,
       maxRedirects: 0,
       timeoutMs: TLON_MEMEX_UPLOAD_URL_TIMEOUT_MS,
+      beforeRequest: params.config.assertDirectAdapterHandoff,
     });
-    release = guarded.release;
     if (!guarded.response.ok) {
       throw new Error(`Memex upload request failed: ${guarded.response.status}`);
     }
@@ -275,12 +281,18 @@ async function getMemexUploadUrl(params: {
 
     return { hostedUrl: data.filePath, uploadUrl: data.url };
   } finally {
-    await release?.();
+    await releaseUploadResponse(guarded);
   }
 }
 
-export async function uploadFile(params: UploadFileParams): Promise<UploadResult> {
-  const config = requireClientConfig();
+export async function uploadFile(
+  params: UploadFileParams,
+  clientConfig: ClientConfig,
+): Promise<UploadResult> {
+  const config: ClientConfig = {
+    ...clientConfig,
+    shipName: clientConfig.shipName.replace(/^~/, ""),
+  };
   const cookie = await getAuthCookie(config);
   const privateNetworkPolicy = ssrfPolicyFromDangerouslyAllowPrivateNetwork(
     config.dangerouslyAllowPrivateNetwork,
@@ -310,9 +322,9 @@ export async function uploadFile(params: UploadFileParams): Promise<UploadResult
     });
     const trustedUploadUrl = assertTrustedMemexUploadUrl(uploadUrl, "Memex upload URL");
 
-    let release: (() => Promise<void>) | undefined;
+    let guarded: Awaited<ReturnType<typeof fetchWithSsrFGuard>> | undefined;
     try {
-      const guarded = await fetchWithSsrFGuard({
+      guarded = await fetchWithSsrFGuard({
         url: trustedUploadUrl,
         init: {
           method: "PUT",
@@ -326,14 +338,14 @@ export async function uploadFile(params: UploadFileParams): Promise<UploadResult
         capture: false,
         maxRedirects: 0,
         timeoutMs: TLON_UPLOAD_TIMEOUT_MS,
+        beforeRequest: config.assertDirectAdapterHandoff,
       });
-      release = guarded.release;
       assertTrustedMemexUploadUrl(guarded.finalUrl, "Memex final upload URL");
       if (!guarded.response.ok) {
         throw new Error(`Upload failed: ${guarded.response.status}`);
       }
     } finally {
-      await release?.();
+      await releaseUploadResponse(guarded);
     }
 
     return { url: assertTrustedMemexUploadUrl(hostedUrl, "Memex hosted URL") };
@@ -371,9 +383,9 @@ export async function uploadFile(params: UploadFileParams): Promise<UploadResult
     expiresIn: 3600,
   });
 
-  let release: (() => Promise<void>) | undefined;
+  let guarded: Awaited<ReturnType<typeof fetchWithSsrFGuard>> | undefined;
   try {
-    const guarded = await fetchWithSsrFGuard({
+    guarded = await fetchWithSsrFGuard({
       url: signedUrl,
       init: {
         method: "PUT",
@@ -385,13 +397,13 @@ export async function uploadFile(params: UploadFileParams): Promise<UploadResult
       maxRedirects: 0,
       policy: privateNetworkPolicy,
       timeoutMs: TLON_UPLOAD_TIMEOUT_MS,
+      beforeRequest: config.assertDirectAdapterHandoff,
     });
-    release = guarded.release;
     if (!guarded.response.ok) {
       throw new Error(`Upload failed: ${guarded.response.status}`);
     }
   } finally {
-    await release?.();
+    await releaseUploadResponse(guarded);
   }
 
   const publicUrl = storageConfig.publicUrlBase

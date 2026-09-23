@@ -1,14 +1,305 @@
 import Foundation
 import OpenClawChatUI
 import OpenClawKit
+import OpenClawProtocol
 
 extension OnboardingAISetupModel {
+    static let setupDetectionRequestTimeoutMs = 40000
+
+    /// Device-code providers advertise windows up to 15 minutes. Keep transport
+    /// alive long enough for approval plus the post-login inference probe.
+    static let providerAuthRequestTimeoutMs: Double = 1_200_000
+
+    enum SetupIntent {
+        case inspectOnly
+        case resumePending
+        case startSetup
+    }
+
+    enum ModelTarget: String, Decodable {
+        case utility
+    }
+
+    struct ProviderAuthReconciliation {
+        let modelTarget: ModelTarget?
+    }
+
+    enum ActivationRequest {
+        case candidate(kind: String, modelRef: String, label: String, modelTarget: ModelTarget? = nil)
+        case manual(key: String, provider: ManualProvider)
+
+        var kind: String {
+            switch self {
+            case let .candidate(kind, _, _, _): kind
+            case .manual: "api-key"
+            }
+        }
+
+        var modelRef: String? {
+            switch self {
+            case let .candidate(_, modelRef, _, _): modelRef
+            case .manual: nil
+            }
+        }
+
+        var label: String {
+            switch self {
+            case let .candidate(_, _, label, _): label
+            case let .manual(_, provider): provider.label
+            }
+        }
+
+        var modelTarget: ModelTarget? {
+            switch self {
+            case let .candidate(_, _, _, modelTarget): modelTarget
+            case let .manual(_, provider): provider.modelTarget
+            }
+        }
+
+        var isManual: Bool {
+            if case .manual = self {
+                true
+            } else {
+                false
+            }
+        }
+
+        @MainActor
+        func params(supportsExactModel: Bool) -> [String: AnyCodable] {
+            switch self {
+            case let .candidate(kind, modelRef, _, modelTarget):
+                return OnboardingAISetupModel.activationParams(
+                    kind: kind,
+                    modelRef: modelRef,
+                    supportsExactModel: supportsExactModel,
+                    modelTarget: modelTarget)
+            case let .manual(key, provider):
+                var params = [
+                    "kind": AnyCodable("api-key"),
+                    "authChoice": AnyCodable(provider.id),
+                    "apiKey": AnyCodable(key),
+                ]
+                if let modelTarget = provider.modelTarget {
+                    params["modelTarget"] = AnyCodable(modelTarget.rawValue)
+                }
+                return params
+            }
+        }
+    }
+
+    struct PersistedActivationState: Equatable {
+        let setupComplete: Bool
+        let configuredModel: String?
+        let utilityModel: String?
+    }
+
+    struct AttemptContext: Equatable {
+        let token: UUID
+        let routeIdentity: String
+        let supersededAttemptDeadline: Date?
+    }
+
+    struct PendingVerification {
+        let context: AttemptContext
+        let task: Task<PendingVerificationOutcome, Never>
+    }
+
+    struct CompletedHandoff {
+        let routeIdentity: String
+        let activationOwner: OnboardingSystemAgentResumeStore.ActivationOwner?
+    }
+
+    @MainActor
+    struct ReconciliationDeadline {
+        private let clock: ContinuousClock
+        private let deadline: ContinuousClock.Instant
+
+        init(timeout: ContinuousClock.Duration, clock: ContinuousClock = .init()) {
+            self.clock = clock
+            self.deadline = clock.now.advanced(by: timeout)
+        }
+
+        var hasTimeRemaining: Bool {
+            self.clock.now < self.deadline
+        }
+
+        func remainingMilliseconds(cappedAt capMs: Int) -> Int {
+            OnboardingAISetupModel.remainingMilliseconds(
+                until: self.deadline,
+                clock: self.clock,
+                cappedAt: capMs)
+        }
+    }
+
+    @MainActor
+    struct PersistedActivationVerification {
+        let expectedModel: String
+        let modelTarget: ModelTarget?
+        let routeIdentity: String
+        let activationOwner: OnboardingSystemAgentResumeStore.ActivationOwner
+        let before: PersistedActivationState?
+
+        func reconcile(
+            gateway: GatewayConnection,
+            defaults: UserDefaults,
+            serverLease: GatewayConnection.ServerLease,
+            deadline: ReconciliationDeadline,
+            isCurrentAttempt: () -> Bool,
+            onVerified: (ActivateResult) -> Bool) async -> Bool
+        {
+            let detectTimeoutMs = deadline.remainingMilliseconds(
+                cappedAt: OnboardingAISetupModel.setupDetectionRequestTimeoutMs)
+            guard detectTimeoutMs > 0,
+                  isCurrentAttempt(),
+                  !Task.isCancelled,
+                  OnboardingSystemAgentResumeStore.isOwned(
+                      by: self.activationOwner,
+                      for: self.routeIdentity,
+                      defaults: defaults),
+                  await gateway.activationOwnershipFingerprint(ifCurrentServerLease: serverLease) ==
+                  self.activationOwner.routeFingerprint
+            else { return false }
+            guard let detectData = try? await gateway.request(
+                method: "openclaw.setup.detect",
+                params: [:],
+                timeoutMs: Double(detectTimeoutMs),
+                ifCurrentServerLease: serverLease),
+                await gateway.isCurrentServerLease(serverLease),
+                isCurrentAttempt(),
+                !Task.isCancelled,
+                let detection = try? JSONDecoder().decode(DetectResult.self, from: detectData),
+                OnboardingAISetupModel.activationTransitionWasPersisted(
+                    expectedModel: self.expectedModel,
+                    modelTarget: self.modelTarget,
+                    before: self.before,
+                    after: detection.persistedActivationState)
+            else { return false }
+            let verifyTimeoutMs = deadline.remainingMilliseconds(
+                cappedAt: OnboardingAISetupModel.setupDetectionRequestTimeoutMs)
+            guard verifyTimeoutMs > 0 else { return false }
+            guard let verifyData = try? await gateway.request(
+                method: "openclaw.setup.verify",
+                params: self.modelTarget == .utility ? ["modelTarget": AnyCodable("utility")] : [:],
+                timeoutMs: Double(verifyTimeoutMs),
+                ifCurrentServerLease: serverLease),
+                await gateway.isCurrentServerLease(serverLease),
+                isCurrentAttempt(),
+                !Task.isCancelled,
+                let result = try? JSONDecoder().decode(ActivateResult.self, from: verifyData),
+                result.verifies(modelRef: self.expectedModel, modelTarget: self.modelTarget)
+            else { return false }
+            return onVerified(result)
+        }
+    }
+
+    struct DetectResult: Decodable {
+        struct DetectedCandidate: Decodable {
+            let brandId: String?
+            let icon: String?
+            let website: String?
+            let kind: String
+            let label: String
+            let detail: String
+            let modelRef: String
+            let credentials: Bool?
+            let modelTarget: ModelTarget?
+        }
+
+        let candidates: [DetectedCandidate]
+        let unavailableCandidates: [UnavailableCandidate]?
+        let manualProviders: [ManualProvider]?
+        let authOptions: [AuthOption]?
+        let prepareOptions: [PrepareOption]?
+        let recommendedInstalls: [RecommendedInstall]?
+        let nativeSessionCatalogs: [NativeSessionCatalog]?
+        let nativeSessionCatalogPreferenceRequired: Bool?
+        let configuredModel: String?
+        let utilityModel: String?
+        let setupModel: String?
+        let setupComplete: Bool?
+
+        var persistedActivationState: PersistedActivationState? {
+            self.setupComplete.map {
+                PersistedActivationState(
+                    setupComplete: $0,
+                    configuredModel: self.configuredModel,
+                    utilityModel: self.utilityModel ?? self.setupModel)
+            }
+        }
+    }
+
+    struct ActivateResult: Decodable {
+        let ok: Bool
+        let modelRef: String?
+        let status: String?
+        let error: String?
+        let gatewayRestartRequired: Bool?
+        let modelTarget: ModelTarget?
+
+        func handoff(for kind: String) -> OnboardingDashboardHandoff {
+            kind == "existing-model" && self.modelTarget != .utility ? .dashboard : .custodianOnboarding
+        }
+
+        func verifies(modelRef: String?, modelTarget: ModelTarget?) -> Bool {
+            self.ok && self.modelRef?.isEmpty == false &&
+                (modelRef == nil || self.modelRef == modelRef) && self.modelTarget == modelTarget
+        }
+    }
+
+    static func activationWizardResult(
+        done: Bool,
+        status: String?,
+        error: String?,
+        preparedModelRef: String?,
+        modelActivation: [String: AnyCodable]?,
+        activationRejection: [String: AnyCodable]?) -> Result<ActivateResult, Error>
+    {
+        if status == "done", activationRejection == nil,
+           let modelRef = modelActivation?["modelRef"]?.value as? String,
+           !modelRef.isEmpty
+        {
+            let modelTarget: ModelTarget?
+            if let value = modelActivation?["modelTarget"] {
+                guard let rawValue = value.value as? String,
+                      let target = ModelTarget(rawValue: rawValue)
+                else { return .failure(OnboardingAISetupError.activationOutcomeUnavailable) }
+                modelTarget = target
+            } else {
+                modelTarget = nil
+            }
+            return .success(ActivateResult(
+                ok: true,
+                modelRef: modelRef,
+                status: nil,
+                error: nil,
+                gatewayRestartRequired: modelActivation?["gatewayRestartRequired"]?.value as? Bool,
+                modelTarget: modelTarget))
+        }
+        if status == "cancelled", modelActivation == nil, activationRejection == nil {
+            return .failure(OnboardingAISetupError.activationCancelled)
+        }
+        // A settled runner can have failed after promotion. Only its explicit,
+        // complete pre-promotion rejection permits another setup mutation.
+        if done, status == "error", modelActivation == nil, preparedModelRef == nil,
+           let rejection = activationRejection, rejection.count == 2,
+           rejection["disposition"]?.value as? String == "rejected-before-promotion",
+           let failureStatus = rejection["status"]?.value as? String,
+           ["auth", "rate_limit", "billing", "timeout", "format", "unavailable", "unknown"].contains(failureStatus)
+        {
+            return .failure(OnboardingAISetupError.activationRejected(status: failureStatus, error: error))
+        }
+        return .failure(status == "error"
+            ? OnboardingAISetupError.activationFailed(error ?? "AI setup failed.")
+            : OnboardingAISetupError.activationOutcomeUnavailable)
+    }
+
     struct Candidate: Identifiable, Equatable {
         let kind: String
         let label: String
         let detail: String
         let modelRef: String
         let credentials: Bool?
+        let modelTarget: ModelTarget?
 
         var id: String {
             self.kind
@@ -16,6 +307,7 @@ extension OnboardingAISetupModel {
     }
 
     struct CandidatePresentation: Equatable {
+        let brandId: String?
         let icon: String?
         let website: String?
     }
@@ -31,7 +323,6 @@ extension OnboardingAISetupModel {
         case untried
         case testing
         case failed(Failure)
-        case connected
     }
 
     struct Failure: Equatable {
@@ -48,26 +339,29 @@ extension OnboardingAISetupModel {
         case detecting
         case ready
         case testing
-        case connected
+        case connected(OnboardingDashboardHandoff)
     }
 
     enum PendingVerificationOutcome: Equatable {
         case connected
-        case freshSetupAllowed
+        case freshSetupAllowed(AttemptContext)
         case notConnected
         case superseded
     }
 
     struct ManualProvider: Identifiable, Equatable, Decodable {
         let id: String
+        let brandId: String?
         let label: String
         let hint: String?
         let icon: String?
         let website: String?
+        let modelTarget: ModelTarget?
     }
 
     struct AuthOption: Identifiable, Equatable, Decodable {
         let id: String
+        let brandId: String?
         let label: String
         let hint: String?
         let groupLabel: String?
@@ -75,6 +369,7 @@ extension OnboardingAISetupModel {
         let website: String?
         let kind: String
         let featured: Bool
+        let modelTarget: ModelTarget?
     }
 
     struct RecommendedInstall: Identifiable, Equatable, Decodable {
@@ -83,14 +378,226 @@ extension OnboardingAISetupModel {
         let hint: String
         let website: String
         let icon: String
+        let brandId: String?
+    }
+
+    struct NativeSessionCatalog: Identifiable, Equatable, Decodable {
+        let pluginId: String
+        let label: String
+        let detail: String?
+
+        var id: String {
+            self.pluginId
+        }
+    }
+
+    struct PrepareOption: Identifiable, Equatable, Decodable {
+        let id: String
+        let label: String
+        let hint: String?
+        let actionLabel: String?
+        let brandId: String?
+        let icon: String?
+        let website: String?
+        let modelTarget: ModelTarget?
+    }
+
+    /// Unconfirmed requests still carry cancellation intent when admission replies late.
+    enum ProviderAuthCancellation: Equatable {
+        case requesting
+        case unconfirmed
+    }
+
+    func activationAuthOption(for request: ActivationRequest) -> AuthOption {
+        let id: String
+        let presentation: CandidatePresentation?
+        switch request {
+        case let .candidate(kind, _, _, _):
+            id = kind
+            presentation = self.candidatePresentation[kind]
+        case let .manual(_, provider):
+            id = provider.id
+            presentation = CandidatePresentation(
+                brandId: provider.brandId, icon: provider.icon, website: provider.website)
+        }
+        return AuthOption(
+            id: id,
+            brandId: presentation?.brandId,
+            label: request.label,
+            hint: nil,
+            groupLabel: nil,
+            icon: presentation?.icon,
+            website: presentation?.website,
+            kind: "activation",
+            featured: false,
+            modelTarget: request.modelTarget)
+    }
+
+    enum ProviderWizardKind: Equatable {
+        case auth
+        case prepare
+        case activation
+
+        var startMethod: String {
+            switch self {
+            case .auth: "openclaw.setup.auth.start"
+            case .prepare: "openclaw.setup.prepare.start"
+            case .activation: "openclaw.setup.activate.start"
+            }
+        }
+    }
+
+    var selectedManualProvider: ManualProvider? {
+        self.manualProviders.first { $0.id == self.manualProviderID }
+    }
+
+    var prepareOptions: [PrepareOption] {
+        guard self.prepareAvailable else { return [] }
+        return Self.prepareOptions(
+            candidates: self.candidates,
+            advertisedOptions: self.detectedPrepareOptions)
+    }
+
+    var isPreparingModel: Bool {
+        self.providerWizardKind == .prepare
+    }
+
+    var authWizardOptions: [WizardOption] {
+        parseWizardOptions(self.authStep?.options)
+    }
+
+    var selectedAuthWizardOption: WizardOption? {
+        let options = self.authWizardOptions
+        guard options.indices.contains(self.authSelection) else { return options.first }
+        return options[self.authSelection]
+    }
+
+    var connected: Bool {
+        if case .connected = self.phase { return true }
+        return false
+    }
+
+    var nativeSessionCatalogSummary: String {
+        self.nativeSessionCatalogs.map(\.label).formatted(.list(type: .and))
+    }
+
+    var busyReason: String? {
+        // Every connection attempt must make quitting mid-setup confirmable.
+        if self.phase == .testing || self.manualTesting ||
+            self.phase == .detecting && self.pendingActivationVerification
+        {
+            "OpenClaw is testing your AI connection."
+        } else if self.activeAuthOption != nil {
+            self.isPreparingModel
+                ? "OpenClaw is preparing a local model."
+                : "OpenClaw is completing provider sign-in."
+        } else {
+            nil
+        }
+    }
+
+    var isBusy: Bool {
+        self.phase == .detecting || self.phase == .testing || self.manualTesting || self.authBusy ||
+            self.pendingActivationVerification
+    }
+
+    func canSelectCandidate(kind: String) -> Bool {
+        guard !self.connected, self.activeAuthOption == nil else { return false }
+        return !self.isBusy || (self.phase == .testing && self.selectedKind != kind)
+    }
+
+    func startProviderAuth(_ option: AuthOption) {
+        self.startProviderWizard(option, kind: .auth)
+    }
+
+    func continueProviderAuth() {
+        guard let step = authStep, wizardStepExecutor(step) != "gateway" else { return }
+        let value: AnyCodable? = switch wizardStepType(step) {
+        case "text": AnyCodable(self.authText)
+        case "select": self.selectedAuthWizardOption?.value
+        case "confirm": AnyCodable(self.authConfirmation)
+        default: nil
+        }
+        self.advanceProviderAuth(stepID: step.id, value: value)
+    }
+
+    func startProviderPrepare(_ option: PrepareOption) {
+        self.startProviderWizard(
+            AuthOption(
+                id: option.id,
+                brandId: option.brandId,
+                label: option.label,
+                hint: option.hint,
+                groupLabel: nil,
+                icon: option.icon,
+                website: option.website,
+                kind: "prepare",
+                featured: false,
+                modelTarget: option.modelTarget),
+            kind: .prepare)
+    }
+
+    /// True when setup live-verified an already-configured route instead of
+    /// activating a new one. The custodian first-run handoff belongs only to
+    /// fresh activations; verified reopens land on the normal dashboard.
+    var verifiedExistingInference: Bool {
+        self.phase == .connected(.dashboard)
+    }
+
+    /// Once setup starts changing inference, its successful result belongs to
+    /// OpenClaw rather than the existing-Gateway onboarding bypass.
+    var ownsInferenceTransition: Bool {
+        (self.phase == .detecting && self.configuredGatewayBlocker == nil) ||
+            self.phase == .testing || self.manualTesting || self.authBusy || self.connected ||
+            self.pendingActivationVerification
+    }
+
+    static func prepareOptions(
+        candidates: [Candidate],
+        advertisedOptions: [PrepareOption]?) -> [PrepareOption]
+    {
+        // Released Gateways do not send prepareOptions. Preserve their two
+        // existing rows until the connected Gateway advertises provider-owned choices.
+        let legacyOptions = [
+            PrepareOption(
+                id: "ollama",
+                label: "Ollama",
+                hint: "Download a tools-capable model from your Ollama server",
+                actionLabel: nil,
+                brandId: "ollama",
+                icon: nil,
+                website: nil,
+                modelTarget: nil),
+            PrepareOption(
+                id: "llama-cpp",
+                label: "Local model (llama.cpp)",
+                hint: "Download an approximately 5.0 GB local model; requires 16 GB RAM",
+                actionLabel: nil,
+                brandId: "llama-cpp",
+                icon: nil,
+                website: nil,
+                modelTarget: nil),
+        ]
+        return (advertisedOptions ?? legacyOptions).filter { choice in
+            let providerKind = self.providerAutoSetupKind(choiceID: choice.id)
+            guard !candidates.contains(where: {
+                $0.credentials != false &&
+                    ($0.kind == providerKind ||
+                        $0.modelRef.hasPrefix("\(choice.brandId ?? choice.id)/"))
+            }) else { return false }
+            return true
+        }
     }
 
     static func canAcceptProviderAuthReconciliation(
-        pending: Bool,
-        setupComplete: Bool,
-        configuredModel: String?) -> Bool
+        pending: ProviderAuthReconciliation?,
+        state: PersistedActivationState?) -> Bool
     {
-        pending && setupComplete && configuredModel?.isEmpty == false
+        guard let pending, let state else { return false }
+        if pending.modelTarget == .utility {
+            return state.utilityModel?.isEmpty == false
+        }
+        return state.setupComplete && state.configuredModel?.isEmpty == false
     }
 
     /// Transport/protocol failures deserve plain language, not RPC codes.
@@ -104,6 +611,16 @@ extension OnboardingAISetupModel {
             : "The Gateway setup request failed. Show details to inspect or copy the error."
     }
 
+    static func activationRequestTimeoutMs(
+        for kind: String,
+        gateway: GatewayConnection,
+        serverLease: GatewayConnection.ServerLease) async -> Double
+    {
+        await gateway.supportsServerMethod("openclaw.setup.activate.start", ifCurrentServerLease: serverLease) == true
+            ? OnboardingSystemAgentResumeStore.maximumActivationTimeoutMs
+            : self.activationRequestTimeoutMs(for: kind)
+    }
+
     static func activationRequestTimeoutMs(for kind: String) -> Double {
         // Codex can spend 305s installing its runtime plugin before the 90s live probe.
         // Keep a bounded client deadline with room for registry refresh and finalization.
@@ -112,13 +629,30 @@ extension OnboardingAISetupModel {
             : 150_000
     }
 
+    static func activationFailure(_ error: Error, label: String) -> Failure {
+        switch error {
+        case OnboardingAISetupError.activationCancelled:
+            Failure(summary: error.localizedDescription, detail: nil)
+        case let OnboardingAISetupError.activationRejected(status, detail):
+            self.failure(label: label, status: status, error: detail)
+        default:
+            self.transportFailure(error.localizedDescription)
+        }
+    }
+
     static func activationFailureIsDefinitive(_ error: Error) -> Bool {
+        switch error {
+        case OnboardingAISetupError.activationCancelled, OnboardingAISetupError.activationRejected:
+            return true
+        default:
+            break
+        }
         if let response = error as? GatewayResponseError {
             let code = response.code.uppercased()
             let message = response.message.lowercased()
-            // These responses are emitted before the activation handler runs.
-            // Handler failures are UNAVAILABLE and can arrive after mutation.
-            return code == "UNKNOWN_METHOD" ||
+            // Only confirmed non-admission or pre-handler validation proves no mutation.
+            // Generic UNAVAILABLE failures can arrive after mutation.
+            return Self.setupAdmissionIsBusy(response) || code == "UNKNOWN_METHOD" ||
                 (code == "INVALID_REQUEST" &&
                     (message.contains("unknown method") ||
                         message.contains("invalid openclaw.setup.activate params")))
@@ -128,27 +662,43 @@ extension OnboardingAISetupModel {
             error is OpenClawChatTransportSendError
     }
 
+    static func setupAdmissionIsBusy(_ error: Error) -> Bool {
+        guard let response = error as? GatewayResponseError else { return false }
+        return [
+            "openclaw.setup.activate",
+            "openclaw.setup.activate.start",
+            "openclaw.setup.auth.start",
+            "openclaw.setup.prepare.start",
+        ].contains(response.method) &&
+            response.code.uppercased() == "UNAVAILABLE" &&
+            response.details["code"]?.value as? String == "SETUP_ADMISSION_BUSY"
+    }
+
     static func activationParams(
         kind: String,
         modelRef: String,
-        supportsExactModel: Bool) -> [String: AnyCodable]
+        supportsExactModel: Bool,
+        modelTarget: ModelTarget? = nil) -> [String: AnyCodable]
     {
         var params = ["kind": AnyCodable(kind)]
         if supportsExactModel {
             params["modelRef"] = AnyCodable(modelRef)
         }
+        if let modelTarget {
+            params["modelTarget"] = AnyCodable(modelTarget.rawValue)
+        }
         return params
+    }
+
+    static func providerAutoSetupKind(choiceID: String) -> String {
+        let componentCharacters = CharacterSet(
+            charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.!~*'()")
+        let encoded = choiceID.addingPercentEncoding(withAllowedCharacters: componentCharacters) ?? choiceID
+        return "provider-auto:\(encoded)"
     }
 
     static func providerAuthCancellationSessionID(requested: String, returned: String) -> String? {
         requested == returned ? nil : returned
-    }
-
-    static func normalizedSetupLines(_ lines: [String]?) -> [String] {
-        (lines ?? []).compactMap { line in
-            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmed.isEmpty ? nil : trimmed
-        }
     }
 
     /// Keep the exact Gateway-sanitized error available behind the friendly
@@ -165,6 +715,12 @@ extension OnboardingAISetupModel {
         return Failure(
             summary: self.friendlyTransportError(detail),
             detail: detail.isEmpty ? nil : detail)
+    }
+
+    static func providerAuthCancellationUnconfirmed() -> Failure {
+        Failure(
+            summary: "OpenClaw couldn’t confirm cancellation. Setup may still be running. Try Cancel again.",
+            detail: nil)
     }
 
     /// One friendly sentence per failure bucket.
@@ -190,19 +746,51 @@ extension OnboardingAISetupModel {
         }
     }
 
-    var connectedSummary: String {
-        guard let modelRef = connectedModelRef else { return "Your AI is connected." }
-        let label = candidates.first { $0.kind == self.selectedKind }?.label ??
-            (selectedKind == "api-key" ? selectedManualProvider?.label : nil)
-        let via = label.map { " via \($0)" } ?? ""
-        if let latency = connectedLatencyMs {
-            let seconds = Double(latency) / 1000
-            return "\(modelRef)\(via) — replied in \(String(format: "%.1f", seconds))s"
+    static func activationTransitionWasPersisted(
+        expectedModel: String,
+        modelTarget: ModelTarget? = nil,
+        before: PersistedActivationState?,
+        after: PersistedActivationState?) -> Bool
+    {
+        guard let before, let after else { return false }
+        if modelTarget == .utility {
+            return before.utilityModel != expectedModel && after.utilityModel == expectedModel
         }
-        return "\(modelRef)\(via)"
+        let wasAlreadyPersisted = before.setupComplete && before.configuredModel == expectedModel
+        return !wasAlreadyPersisted && after.setupComplete && after.configuredModel == expectedModel
     }
 
-    var connectedSetupCopyText: String {
-        connectedSetupLines.joined(separator: "\n")
+    static func remainingMilliseconds(
+        until deadline: ContinuousClock.Instant,
+        clock: ContinuousClock,
+        cappedAt capMs: Int) -> Int
+    {
+        let components = clock.now.duration(to: deadline).components
+        let milliseconds = components.seconds * 1000 + components.attoseconds / 1_000_000_000_000_000
+        return max(0, min(capMs, Int(milliseconds)))
+    }
+}
+
+enum OnboardingAISetupError: LocalizedError {
+    case providerCatalogUnavailable
+    case activationCancelled
+    case activationOutcomeUnavailable
+    case activationFailed(String)
+    case activationRejected(status: String, error: String?)
+
+    var errorDescription: String? {
+        switch self {
+        case .activationCancelled:
+            "AI setup was cancelled. No inference route was selected. Choose a connection to try again."
+        case .activationOutcomeUnavailable:
+            "AI setup ended before its result was received. OpenClaw will verify the Gateway before trying again."
+        case let .activationFailed(message):
+            message
+        case let .activationRejected(_, error):
+            error ?? "AI setup failed."
+        case .providerCatalogUnavailable:
+            "The Gateway is running an older OpenClaw version that doesn’t provide the " +
+                "supported provider list. Update OpenClaw on the gateway, then try again."
+        }
     }
 }

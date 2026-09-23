@@ -1,7 +1,8 @@
 // Filters host environment variables before passing them to runtimes.
+import { AsyncLocalStorage } from "node:async_hooks";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { HOST_ENV_SECURITY_POLICY } from "./host-env-security-policy.js";
-import { markOpenClawExecEnv } from "./openclaw-exec-env.js";
+import { markOpenClawExecEnv, SUBAGENT_EXEC_ENV_VAR } from "./openclaw-exec-env.js";
 
 const PORTABLE_ENV_VAR_KEY = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const WINDOWS_COMPAT_OVERRIDE_ENV_VAR_KEY = /^[A-Za-z_][A-Za-z0-9_()]*$/;
@@ -33,6 +34,7 @@ const HOST_SHELL_WRAPPER_ALLOWED_OVERRIDE_ENV_KEY_VALUES: readonly string[] = Ob
   "COLORTERM",
   "NO_COLOR",
   "FORCE_COLOR",
+  SUBAGENT_EXEC_ENV_VAR,
 ]);
 const HOST_SHELL_WRAPPER_ALLOWED_OVERRIDE_ENV_PREFIX_VALUES: readonly string[] = Object.freeze([
   "LC_",
@@ -48,6 +50,31 @@ const GIT_ALLOW_PROTOCOL_ENV_KEY = "GIT_ALLOW_PROTOCOL";
 const GIT_PROTOCOL_FROM_USER_ENV_KEY = "GIT_PROTOCOL_FROM_USER";
 const GIT_PROTOCOL_FROM_USER_DISABLED_VALUE = "0";
 const GIT_DEFAULT_ALWAYS_ALLOWED_PROTOCOLS = new Set(["git", "http", "https", "ssh"]);
+const scopedBlockedInheritedEnvKeys = new AsyncLocalStorage<ReadonlySet<string>>();
+
+/** Run a bounded operation without forwarding selected inherited env vars to host exec. */
+export function withHostExecInheritedEnvOmitted<T>(keys: Iterable<string>, run: () => T): T {
+  const normalized = new Set(scopedBlockedInheritedEnvKeys.getStore() ?? []);
+  for (const key of keys) {
+    const trimmed = key.trim();
+    if (trimmed) {
+      normalized.add(trimmed.toUpperCase());
+    }
+  }
+  return scopedBlockedInheritedEnvKeys.run(normalized, run);
+}
+
+function isScopedBlockedHostExecEnvVarName(rawKey: string): boolean {
+  const key = normalizeEnvVarKey(rawKey);
+  return key ? (scopedBlockedInheritedEnvKeys.getStore()?.has(key.toUpperCase()) ?? false) : false;
+}
+
+function isNoPagerOverride(key: string, value: string): boolean {
+  return (
+    (key.toUpperCase() === "GIT_PAGER" || key.toUpperCase() === "PAGER") &&
+    (value === "" || value === "cat")
+  );
+}
 
 function isShellWrapperAllowedOverrideEnvVarName(rawKey: string): boolean {
   const key = normalizeEnvVarKey(rawKey, { portable: true });
@@ -235,10 +262,20 @@ function sanitizeHostEnvOverridesWithDiagnostics(params?: {
       continue;
     }
     const upper = normalized.toUpperCase();
+    if (isScopedBlockedHostExecEnvVarName(upper)) {
+      rejectedBlocked.push(upper);
+      continue;
+    }
     // PATH is part of the security boundary (command resolution + safe-bin checks). Never allow
     // request-scoped PATH overrides from agents/gateways.
     if (blockPathOverrides && upper === "PATH") {
       rejectedBlocked.push(upper);
+      continue;
+    }
+    // Git treats exact cat/empty as no pager. Never forward cat: generic PAGER consumers
+    // can resolve it through PATH/cwd. Empty carries no executable override. Do not trim values.
+    if (isNoPagerOverride(upper, value)) {
+      acceptedOverrides[normalized] = "";
       continue;
     }
     if (isDangerousHostEnvVarName(upper) || isDangerousHostEnvOverrideVarName(upper)) {
@@ -264,6 +301,9 @@ export function sanitizeHostExecEnvWithDiagnostics(params?: {
 
   const merged: Record<string, string> = {};
   for (const [key, value] of listNormalizedEnvEntries(baseEnv)) {
+    if (isScopedBlockedHostExecEnvVarName(key)) {
+      continue;
+    }
     const sanitizedEntry = sanitizeHostInheritedEnvEntry(key, value);
     if (!sanitizedEntry) {
       continue;
@@ -321,6 +361,10 @@ export function sanitizeSystemRunEnvOverrides(params?: {
   }
   const filtered: Record<string, string> = {};
   for (const [key, value] of listNormalizedEnvEntries(overrides, { portable: true })) {
+    if (isNoPagerOverride(key, value) && !isScopedBlockedHostExecEnvVarName(key)) {
+      filtered[key] = "";
+      continue;
+    }
     if (!isShellWrapperAllowedOverrideEnvVarName(key)) {
       continue;
     }

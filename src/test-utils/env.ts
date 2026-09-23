@@ -112,7 +112,7 @@ export function captureFullEnv() {
   return {
     restore() {
       for (const key of Object.keys(process.env)) {
-        if (!(key in snapshot)) {
+        if (!Object.hasOwn(snapshot, key)) {
           deleteTestEnvValue(key);
         }
       }

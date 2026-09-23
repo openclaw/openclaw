@@ -1,6 +1,6 @@
-// Bot API 10.2 rich block/RichText model: types, size accounting, and the
-// plain-text projection shared by the emitter, splitter, and fallback paths.
-export type TelegramRichBlocksDegradationReason = "table-ascii";
+// OpenClaw-authored rich block subset plus size accounting and the plain-text
+// projection shared by the emitter, splitter, and fallback paths.
+export type TelegramRichBlocksDegradationReason = "list-limit" | "table-ascii";
 
 export type RichText =
   | string
@@ -45,8 +45,8 @@ export type RichBlockTableCell = {
   is_header?: true;
   colspan?: number;
   rowspan?: number;
-  align?: RichBlockTableCellAlign;
-  valign?: "top" | "middle" | "bottom";
+  align: RichBlockTableCellAlign;
+  valign: "top" | "middle" | "bottom";
 };
 
 export type InputRichBlockParagraph = {
@@ -171,95 +171,137 @@ export function countRichTextChars(text: RichText): number {
   return countRichTextChars(text.text);
 }
 
-function countCaptionChars(caption: RichBlockCaption | undefined): number {
-  if (!caption) {
-    return 0;
-  }
-  return countRichTextChars(caption.text) + countRichTextChars(caption.credit ?? "");
-}
+type RichBlockMeasurement = { chars: number; blocks: number; media: number; nesting: number };
 
-export function countInputRichBlockChars(block: InputRichBlock): number {
-  switch (block.type) {
-    case "paragraph":
-    case "heading":
-    case "footer":
-      return countRichTextChars(block.text);
-    case "pre":
-      return block.text.length;
-    case "mathematical_expression":
-      return block.expression.length;
-    case "pullquote":
-      return countRichTextChars(block.text) + countRichTextChars(block.credit ?? "");
-    case "blockquote":
-      return (
-        block.blocks.reduce((total, item) => total + countInputRichBlockChars(item), 0) +
-        countRichTextChars(block.credit ?? "")
-      );
-    case "collage":
-    case "slideshow":
-      return (
-        block.blocks.reduce((total, item) => total + countInputRichBlockChars(item), 0) +
-        countCaptionChars(block.caption)
-      );
-    case "details":
-      return (
-        countRichTextChars(block.summary) +
-        block.blocks.reduce((total, item) => total + countInputRichBlockChars(item), 0)
-      );
-    case "list":
-      return block.items.reduce(
-        (total, item) =>
-          total + item.blocks.reduce((inner, child) => inner + countInputRichBlockChars(child), 0),
-        0,
-      );
-    case "table":
-      return (
-        countRichTextChars(block.caption ?? "") +
-        block.cells.reduce(
-          (rowTotal, row) =>
-            rowTotal +
-            row.reduce((cellTotal, cell) => cellTotal + countRichTextChars(cell.text ?? ""), 0),
-          0,
-        )
-      );
-    case "photo":
-    case "video":
-    case "audio":
-    case "animation":
-    case "voice_note":
-    case "map":
-      return countCaptionChars(block.caption);
-    // divider and anchor carry no text.
-    default:
-      return 0;
+function measureRichBlockText(text: RichText, size: RichBlockMeasurement, depth: number): void {
+  if (typeof text === "string") {
+    size.chars += text.length;
+  } else if (Array.isArray(text)) {
+    for (const part of text) {
+      measureRichBlockText(part, size, depth);
+    }
+  } else if (text.type === "mathematical_expression") {
+    size.chars += text.expression.length;
+  } else if (text.type === "custom_emoji") {
+    size.chars += text.alternative_text.length;
+  } else {
+    if (depth >= size.nesting) {
+      size.nesting = depth + 1;
+    }
+    measureRichBlockText(text.text, size, depth + 1);
   }
 }
 
-/** Media elements per block, for the wire's 50-media message cap. */
-export function countInputRichBlockMedia(block: InputRichBlock): number {
-  switch (block.type) {
-    // Maps are excluded: 51 maps in one message were accepted live, so they
-    // do not consume the 50-attachment budget.
-    case "photo":
-    case "video":
-    case "audio":
-    case "animation":
-    case "voice_note":
-      return 1;
-    case "collage":
-    case "slideshow":
-    case "blockquote":
-    case "details":
-      return block.blocks.reduce((total, item) => total + countInputRichBlockMedia(item), 0);
-    case "list":
-      return block.items.reduce(
-        (total, item) =>
-          total + item.blocks.reduce((inner, child) => inner + countInputRichBlockMedia(child), 0),
-        0,
-      );
-    default:
-      return 0;
+function measureRichBlockCaption(
+  caption: RichBlockCaption | undefined,
+  size: RichBlockMeasurement,
+  depth: number,
+): void {
+  if (caption) {
+    if (depth > size.nesting) {
+      size.nesting = depth;
+    }
+    measureRichBlockText(caption.text, size, depth);
+    if (caption.credit) {
+      measureRichBlockText(caption.credit, size, depth);
+    }
   }
+}
+
+function measureRichBlockChildren(
+  children: readonly InputRichBlock[],
+  size: RichBlockMeasurement,
+  depth: number,
+): void {
+  // Empty containers still contribute their nesting edge; plain text leaves do not add one.
+  if (depth > size.nesting) {
+    size.nesting = depth;
+  }
+  for (const block of children) {
+    size.blocks += 1;
+    switch (block.type) {
+      case "paragraph":
+      case "heading":
+      case "footer":
+        measureRichBlockText(block.text, size, depth);
+        break;
+      case "pre":
+        size.chars += block.text.length;
+        break;
+      case "mathematical_expression":
+        size.chars += block.expression.length;
+        break;
+      case "pullquote":
+        measureRichBlockText(block.text, size, depth);
+        if (block.credit) {
+          measureRichBlockText(block.credit, size, depth);
+        }
+        break;
+      case "blockquote":
+        measureRichBlockChildren(block.blocks, size, depth + 1);
+        if (block.credit) {
+          measureRichBlockText(block.credit, size, depth + 1);
+        }
+        break;
+      case "details":
+        measureRichBlockChildren(block.blocks, size, depth + 1);
+        measureRichBlockText(block.summary, size, depth + 1);
+        break;
+      case "collage":
+      case "slideshow":
+        measureRichBlockChildren(block.blocks, size, depth + 1);
+        measureRichBlockCaption(block.caption, size, depth + 1);
+        break;
+      case "list":
+        size.blocks += block.items.length;
+        if (depth >= size.nesting) {
+          size.nesting = depth + 1;
+        }
+        for (const item of block.items) {
+          measureRichBlockChildren(item.blocks, size, depth + 1);
+        }
+        break;
+      case "table":
+        size.blocks += block.cells.length;
+        if (depth >= size.nesting) {
+          size.nesting = depth + 1;
+        }
+        if (block.caption) {
+          measureRichBlockText(block.caption, size, depth + 1);
+        }
+        for (const row of block.cells) {
+          for (const cell of row) {
+            const text = cell.text;
+            if (text) {
+              measureRichBlockText(text, size, depth + 1);
+            }
+          }
+        }
+        break;
+      case "photo":
+      case "video":
+      case "audio":
+      case "animation":
+      case "voice_note":
+        size.media += 1;
+        measureRichBlockCaption(block.caption, size, depth + 1);
+        break;
+      case "map":
+        // Live-verified: maps do not consume the 50-attachment budget.
+        measureRichBlockCaption(block.caption, size, depth + 1);
+        break;
+      case "anchor":
+      case "divider":
+        break;
+    }
+  }
+}
+
+/** Bot API budgets: UTF-16 text, nested blocks/items/rows, media, and formatting edges. */
+export function measureInputRichBlocks(blocks: readonly InputRichBlock[]) {
+  const size = { chars: 0, blocks: 0, media: 0, nesting: 0 };
+  measureRichBlockChildren(blocks, size, 0);
+  return size;
 }
 
 export function richTextToPlainString(text: RichText): string {
@@ -286,7 +328,10 @@ function captionToPlainText(caption: RichBlockCaption | undefined): string {
   return `${richTextToPlainString(caption.text)}${credit}`.trim();
 }
 
-export function inputRichBlocksToPlainText(blocks: readonly InputRichBlock[]): string {
+function inputRichBlocksToPlainTextAtDepth(
+  blocks: readonly InputRichBlock[],
+  listDepth: number,
+): string {
   const parts: string[] = [];
   const push = (value: string) => {
     if (value) {
@@ -314,30 +359,31 @@ export function inputRichBlocksToPlainText(blocks: readonly InputRichBlock[]): s
         );
         break;
       case "blockquote":
-        push(inputRichBlocksToPlainText(block.blocks));
+        push(inputRichBlocksToPlainTextAtDepth(block.blocks, listDepth));
         if (block.credit) {
           push(`— ${richTextToPlainString(block.credit)}`);
         }
         break;
       case "collage":
       case "slideshow":
-        push(inputRichBlocksToPlainText(block.blocks));
+        push(inputRichBlocksToPlainTextAtDepth(block.blocks, listDepth));
         push(captionToPlainText(block.caption));
         break;
       case "details":
         push(richTextToPlainString(block.summary));
-        push(inputRichBlocksToPlainText(block.blocks));
+        push(inputRichBlocksToPlainTextAtDepth(block.blocks, listDepth));
         break;
       case "list":
         for (const item of block.items) {
-          const marker = item.has_checkbox
+          const markerText = item.has_checkbox
             ? item.is_checked
               ? "[x] "
               : "[ ] "
             : item.value !== undefined
               ? `${item.value}. `
               : "• ";
-          push(`${marker}${inputRichBlocksToPlainText(item.blocks)}`);
+          const marker = `${"  ".repeat(listDepth)}${markerText}`;
+          push(`${marker}${inputRichBlocksToPlainTextAtDepth(item.blocks, listDepth + 1)}`);
         }
         break;
       case "table":
@@ -378,12 +424,12 @@ export function inputRichBlocksToPlainText(blocks: readonly InputRichBlock[]): s
   return parts.join("\n");
 }
 
-export function boldRichText(text: string): RichText {
-  return { type: "bold", text };
+export function inputRichBlocksToPlainText(blocks: readonly InputRichBlock[]): string {
+  return inputRichBlocksToPlainTextAtDepth(blocks, 0);
 }
 
-export function codeRichText(text: string): RichText {
-  return { type: "code", text };
+export function boldRichText(text: string): RichText {
+  return { type: "bold", text };
 }
 
 export function italicRichText(text: string): RichText {

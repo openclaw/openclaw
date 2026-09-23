@@ -1,18 +1,19 @@
 import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
 import {
+  getAllActiveGeneratedMediaSessionKeys,
   getLatestGeneratedMediaTaskAdmissionIdForSessionKey,
   listActiveGeneratedMediaTaskIdsForSessionKey,
 } from "./generated-media-task-activity.js";
-import { isTerminalTaskStatus } from "./task-executor-policy.js";
+import { prepareTaskRegistryRead } from "./task-registry-read.js";
 // Filters task status visibility by requester, owner, and flow scope.
 import {
   findTaskByRunId,
-  getTaskById,
   listTaskRecords,
-  listTasksForAgentId,
-  listTasksForSessionKey,
+  listTaskSessionActivity,
+  listTasksForRelatedSessionKey,
 } from "./task-registry.js";
-import type { TaskRecord } from "./task-registry.types.js";
+import { isTerminalTaskStatus, type TaskRecord } from "./task-registry.types.js";
+import { buildTaskStatusSnapshot } from "./task-status.js";
 
 const GENERATED_MEDIA_TASK_KINDS = new Set([
   "image_generation",
@@ -20,36 +21,38 @@ const GENERATED_MEDIA_TASK_KINDS = new Set([
   "video_generation",
 ]);
 
-/** Returns only the session lookup fields needed by task status commands. */
-export function getTaskSessionLookupByIdForStatus(
-  taskId: string,
-):
-  | Pick<TaskRecord, "requesterSessionKey" | "ownerKey" | "runId" | "agentId" | "requesterAgentId">
-  | undefined {
-  const task = getTaskById(taskId);
-  return task
-    ? {
-        requesterSessionKey: task.requesterSessionKey,
-        ownerKey: task.ownerKey,
-        ...(task.runId ? { runId: task.runId } : {}),
-        ...(task.agentId ? { agentId: task.agentId } : {}),
-        ...(task.requesterAgentId ? { requesterAgentId: task.requesterAgentId } : {}),
-      }
-    : undefined;
-}
-
-export function listTasksForSessionKeyForStatus(sessionKey: string): TaskRecord[] {
-  return listTasksForSessionKey(sessionKey);
+export function listTasksForSessionKeyForStatus(
+  sessionKey: string,
+  sessionAgentId?: string,
+): TaskRecord[] {
+  return listTasksForRelatedSessionKey(sessionKey, sessionAgentId);
 }
 
 export function listTasksForOwnerOrRequesterSessionKeyForStatus(sessionKey: string): TaskRecord[] {
-  return listTaskRecords().filter(
+  return listTaskRecords(
     (task) => task.requesterSessionKey === sessionKey || task.ownerKey === sessionKey,
   );
 }
 
-export function listTasksForAgentIdForStatus(agentId: string): TaskRecord[] {
-  return listTasksForAgentId(agentId);
+/** Session details and agent fallback counts share one accepted-write read. */
+export async function readTaskStatusSnapshots(params: { sessionKey?: string; agentId: string }) {
+  const read = await prepareTaskRegistryRead();
+  if (!read) {
+    throw new Error("Task activity did not stabilize. Retry the status lookup.");
+  }
+  const session = buildTaskStatusSnapshot(
+    params.sessionKey === undefined
+      ? []
+      : read.listTasksForRelatedSessionKey(params.sessionKey, params.agentId),
+  );
+  return {
+    session,
+    agent:
+      session.totalCount === 0
+        ? buildTaskStatusSnapshot(read.listTasksForAgentId(params.agentId))
+        : undefined,
+    assertCurrent: read.assertCurrent,
+  };
 }
 
 export function findTaskByRunIdForStatus(runId: string): TaskRecord | undefined {
@@ -95,4 +98,24 @@ export function hasPendingGeneratedMediaTaskForSessionKey(sessionKey: string): b
     (task) =>
       GENERATED_MEDIA_TASK_KINDS.has(task.taskKind ?? "") && !isTerminalTaskStatus(task.status),
   );
+}
+
+/**
+ * Builds a one-shot snapshot of all session keys with pending generated-media
+ * work. Consume this once per reaper sweep for O(1) per-row lookups instead of
+ * repeating global task and activity scans for every cron continuation row.
+ */
+export function buildPendingGeneratedMediaSessionKeySet(): Set<string> {
+  const keys = getAllActiveGeneratedMediaSessionKeys();
+  for (const task of listTaskSessionActivity()) {
+    if (GENERATED_MEDIA_TASK_KINDS.has(task.taskKind ?? "") && !isTerminalTaskStatus(task.status)) {
+      if (task.requesterSessionKey) {
+        keys.add(task.requesterSessionKey);
+      }
+      if (task.ownerKey) {
+        keys.add(task.ownerKey);
+      }
+    }
+  }
+  return keys;
 }

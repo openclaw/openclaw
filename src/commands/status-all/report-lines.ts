@@ -5,55 +5,31 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { getTerminalTableWidth, renderTable } from "../../../packages/terminal-core/src/table.js";
 import { isRich, theme } from "../../../packages/terminal-core/src/theme.js";
 import type { ProgressReporter } from "../../cli/progress.js";
+import type { BestEffortConfigSnapshot } from "../../config/io.js";
+import { formatStatusConfigDiagnosticEntries } from "../status.format.js";
+import { buildStatusChannelsTableRows, statusChannelsTableColumns } from "./channels-table.js";
 import { appendStatusAllDiagnosis } from "./diagnosis.js";
 import {
-  buildStatusAgentsSection,
-  buildStatusChannelDetailsSections,
-  buildStatusChannelsSection,
-  buildStatusOverviewSection,
-} from "./report-sections.js";
-import { appendStatusReportSections, appendStatusSectionHeading } from "./text-report.js";
+  buildStatusAgentTableRows,
+  buildStatusChannelDetailSections,
+  statusAgentsTableColumns,
+  statusOverviewTableColumns,
+} from "./report-tables.js";
+import { appendStatusReportHeading, appendStatusReportTable } from "./text-report.js";
 
 type OverviewRow = { Item: string; Value: string };
-
-type ChannelsTable = {
-  rows: Array<{
-    id: string;
-    label: string;
-    enabled: boolean;
-    state: "ok" | "warn" | "off" | "setup";
-    detail: string;
-  }>;
-  details: Array<{
-    title: string;
-    columns: string[];
-    rows: Array<Record<string, string>>;
-  }>;
-};
-
-type ChannelIssueLike = {
-  channel: string;
-  message: string;
-};
-
-type AgentStatusLike = {
-  agents: Array<{
-    id: string;
-    name?: string | null;
-    bootstrapPending?: boolean | null;
-    sessionsCount: number;
-    lastActiveAgeMs?: number | null;
-    sessionsPath: string;
-  }>;
-};
 
 /** Builds the complete status-all text report, including overview tables and diagnosis lines. */
 export async function buildStatusAllReportLines(params: {
   progress: ProgressReporter;
+  configDiagnostics: BestEffortConfigSnapshot["configDiagnostics"];
   overviewRows: OverviewRow[];
-  channels: ChannelsTable;
-  channelIssues: ChannelIssueLike[];
-  agentStatus: AgentStatusLike;
+  channels: {
+    rows: Array<Parameters<typeof buildStatusChannelsTableRows>[0]["rows"][number]>;
+    details: Parameters<typeof buildStatusChannelDetailSections>[0]["details"];
+  };
+  channelIssues: Array<Parameters<typeof buildStatusChannelsTableRows>[0]["channelIssues"][number]>;
+  agentStatus: Parameters<typeof buildStatusAgentTableRows>[0]["agentStatus"];
   connectionDetailsForReport: string;
   diagnosis: Omit<
     Parameters<typeof appendStatusAllDiagnosis>[0],
@@ -70,48 +46,41 @@ export async function buildStatusAllReportLines(params: {
   const tableWidth = getTerminalTableWidth();
 
   const lines: string[] = [];
+  if (params.configDiagnostics) {
+    lines.push(
+      warn("Config diagnostics:"),
+      ...formatStatusConfigDiagnosticEntries(params.configDiagnostics),
+      "",
+    );
+  }
   lines.push(heading("OpenClaw status --all"));
-  appendStatusReportSections({
-    lines,
-    heading,
-    sections: [
-      buildStatusOverviewSection({
-        width: tableWidth,
-        renderTable,
-        rows: params.overviewRows,
-      }),
-      buildStatusChannelsSection({
-        width: tableWidth,
-        renderTable,
-        rows: params.channels.rows,
-        channelIssues: params.channelIssues,
-        ok,
-        warn,
-        muted,
-        accentDim: theme.accentDim,
-        formatIssueMessage: (message) => truncateUtf16Safe(message, 90),
-      }),
-      ...buildStatusChannelDetailsSections({
-        details: params.channels.details,
-        width: tableWidth,
-        renderTable,
-        ok,
-        warn,
-      }),
-      buildStatusAgentsSection({
-        width: tableWidth,
-        renderTable,
-        agentStatus: params.agentStatus,
-        ok,
-        warn,
-      }),
-    ],
+  const report = { lines, heading, width: tableWidth, renderTable };
+  const overviewColumns = [...statusOverviewTableColumns];
+  const overviewRows = params.overviewRows;
+  // Prepare every styled row before table rendering so callbacks retain their existing order.
+  const channelColumns = statusChannelsTableColumns.map((column) =>
+    column.key === "Detail" ? Object.assign({}, column, { minWidth: 28 }) : column,
+  );
+  const channelRows = buildStatusChannelsTableRows({
+    rows: params.channels.rows,
+    channelIssues: params.channelIssues,
+    ok,
+    warn,
+    muted,
+    accentDim: theme.accentDim,
+    formatIssueMessage: (message) => truncateUtf16Safe(message, 90),
   });
-  appendStatusSectionHeading({
-    lines,
-    heading,
-    title: "Diagnosis (read-only)",
-  });
+  const details = buildStatusChannelDetailSections({ details: params.channels.details, ok, warn });
+  const agentColumns = [...statusAgentsTableColumns];
+  const agentRows = buildStatusAgentTableRows({ agentStatus: params.agentStatus, ok, warn });
+
+  appendStatusReportTable(report, "Overview", overviewColumns, overviewRows);
+  appendStatusReportTable(report, "Channels", channelColumns, channelRows);
+  for (const detail of details) {
+    appendStatusReportTable(report, detail.title, detail.columns, detail.rows);
+  }
+  appendStatusReportTable(report, "Agents", agentColumns, agentRows);
+  appendStatusReportHeading(report, "Diagnosis (read-only)");
 
   await appendStatusAllDiagnosis({
     lines,

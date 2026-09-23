@@ -48,6 +48,7 @@ function buildAccount(replyToMode: "all" | "first" | "off" | "batched"): Resolve
   return {
     accountId: "default",
     enabled: true,
+    identity: "bot",
     botTokenSource: "config",
     appTokenSource: "config",
     userTokenSource: "none",
@@ -69,9 +70,6 @@ function buildChannelMessage(overrides?: Partial<SlackMessageEvent>): SlackMessa
 
 function buildEventScope(teamId: string): SlackEventScope {
   return {
-    apiAppId: "A1",
-    enterpriseId: "E1",
-    isEnterpriseInstall: true,
     teamId,
     client: {} as SlackEventScope["client"],
   };
@@ -82,7 +80,8 @@ function firstBindingRouteRequest() {
   if (!call) {
     throw new Error("expected configured binding route call");
   }
-  return call[0];
+  const { route, ...request } = call[0];
+  return { ...request, route: Object.fromEntries(Object.entries(route)) };
 }
 
 describe("thread-level session keys", () => {
@@ -152,6 +151,7 @@ describe("thread-level session keys", () => {
         sessionKey: "agent:main:slack:channel:c123",
         mainSessionKey: "agent:main:main",
         dmScope: "main",
+        groupScope: "per-group",
         lastRoutePolicy: "session",
         matchedBy: "default",
       },
@@ -364,9 +364,94 @@ describe("thread-level session keys", () => {
     expect(routing.threadContext.replyToId).toBeUndefined();
   });
 
-  it("does not seed top-level group DM mentions into thread sessions", () => {
+  it.each(
+    (["off", "first", "all", "batched"] as const).flatMap((replyToMode) =>
+      [false, true].map((mentioned) => ({ replyToMode, mentioned })),
+    ),
+  )(
+    "keeps $replyToMode MPIM roots flat and routes $mentioned mention follow-ups by thread",
+    ({ replyToMode, mentioned }) => {
+      const ctx = buildCtx({ replyToMode });
+      const account = buildAccount(replyToMode);
+      const rootTs = "1777244692.409919";
+      const root = resolveSlackRoutingContext({
+        ctx,
+        account,
+        message: buildChannelMessage({
+          channel: "G123",
+          channel_type: "mpim",
+          text: mentioned ? "<@B1> send a subagent" : "send a subagent",
+          ts: rootTs,
+        }),
+        isDirectMessage: false,
+        isGroupDm: true,
+        isRoom: false,
+        isRoomish: true,
+        seedTopLevelRoomThread: mentioned,
+      });
+      const followUp = resolveSlackRoutingContext({
+        ctx,
+        account,
+        message: buildChannelMessage({
+          channel: "G123",
+          channel_type: "mpim",
+          text: "what did you find?",
+          ts: "1777244714.000100",
+          thread_ts: rootTs,
+          parent_user_id: "U1",
+        }),
+        isDirectMessage: false,
+        isGroupDm: true,
+        isRoom: false,
+        isRoomish: true,
+      });
+
+      expect(root.sessionKey).toBe("agent:main:slack:group:g123");
+      expect(root.threadContext.replyToId).toBeUndefined();
+      expect(root.threadContext.messageThreadId).toBe(replyToMode === "all" ? rootTs : undefined);
+      expect(followUp.sessionKey).toBe(`agent:main:slack:group:g123:thread:${rootTs}`);
+      expect(followUp.threadContext.replyToId).toBe(rootTs);
+      expect(followUp.threadContext.messageThreadId).toBe(rootTs);
+      expect(followUp.sessionKey).not.toContain("1777244714.000100");
+    },
+  );
+
+  it("keeps configured MPIM bindings flat when Slack starts a reply thread", () => {
     const ctx = buildCtx({ replyToMode: "all" });
     const account = buildAccount("all");
+    const targetSessionKey = "agent:codex:acp:binding:slack:default:g123";
+    resolveConfiguredBindingRouteMock.mockImplementation(({ route, conversation }) => ({
+      bindingResolution: {
+        conversation,
+        record: {
+          bindingId: "config:acp:slack:default:g123",
+          targetSessionKey,
+          targetKind: "session",
+          conversation: {
+            channel: "slack",
+            accountId: "default",
+            conversationId: "g123",
+          },
+          status: "active",
+          boundAt: 0,
+          metadata: {
+            source: "config",
+            mode: "persistent",
+            agentId: "codex",
+          },
+        },
+      },
+      boundSessionKey: targetSessionKey,
+      boundAgentId: "codex",
+      route: {
+        ...route,
+        agentId: "codex",
+        sessionKey: targetSessionKey,
+        mainSessionKey: "agent:codex:main",
+        matchedBy: "binding.channel",
+        lastRoutePolicy: "session",
+      },
+    }));
 
     const routing = resolveSlackRoutingContext({
       ctx,
@@ -374,17 +459,18 @@ describe("thread-level session keys", () => {
       message: buildChannelMessage({
         channel: "G123",
         channel_type: "mpim",
-        text: "<@B1> send a subagent",
-        ts: "1777244692.409919",
+        text: "what did you find?",
+        ts: "1777244714.000100",
+        thread_ts: "1777244692.409919",
+        parent_user_id: "U1",
       }),
       isDirectMessage: false,
       isGroupDm: true,
       isRoom: false,
       isRoomish: true,
-      seedTopLevelRoomThread: true,
     });
 
-    expect(routing.sessionKey).toBe("agent:main:slack:group:g123");
+    expect(routing.sessionKey).toBe(targetSessionKey);
     expect(routing.sessionKey).not.toContain(":thread:");
   });
 
@@ -427,8 +513,6 @@ describe("thread-level session keys", () => {
     const expectedSessionKey = "agent:main:slack:channel:c0ahzfcas1k:thread:1777244692.409919";
     expect(root.sessionKey).toBe(expectedSessionKey);
     expect(followUp.sessionKey).toBe(expectedSessionKey);
-    expect(root.historyKey).toBe("C0AHZFCAS1K");
-    expect(followUp.historyKey).toBe(expectedSessionKey);
     expect(new Set([root.sessionKey, followUp.sessionKey]).size).toBe(1);
   });
 
@@ -473,8 +557,6 @@ describe("thread-level session keys", () => {
     expect(rootMention.sessionKey).toBe(
       "agent:main:slack:channel:c0ahzfcas1k:thread:1777244692.409919",
     );
-    expect(rootMention.historyKey).toBe("C0AHZFCAS1K");
-    expect(urlFollowUp.historyKey).toBe(rootMention.sessionKey);
     expect(spawnedSubagentsByParent.size).toBe(1);
   });
 

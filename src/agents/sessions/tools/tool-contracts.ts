@@ -3,6 +3,7 @@
  *
  * Keeps tool factories, renderers, and callers aligned on typed payload and metadata shapes.
  */
+import { Type, type Static } from "typebox";
 import type { Edit } from "./edit-diff.js";
 import type { TruncationResult } from "./truncate.js";
 
@@ -25,14 +26,19 @@ export interface EditToolInput {
   edits: Edit[];
 }
 
-export interface EditToolDetails {
-  /** Display-oriented diff of the changes made */
-  diff: string;
-  /** Standard unified patch of the changes made */
-  patch: string;
-  /** Line number of the first change in the new file (for editor navigation) */
-  firstChangedLine?: number;
-}
+export type EditToolDetails =
+  | {
+      changed: false;
+    }
+  | {
+      changed: true;
+      /** Display-oriented diff of the changes made */
+      diff: string;
+      /** Standard unified patch of the changes made */
+      patch: string;
+      /** Line number of the first change in the new file (for editor navigation) */
+      firstChangedLine?: number;
+    };
 
 export interface FindToolInput {
   pattern: string;
@@ -40,8 +46,10 @@ export interface FindToolInput {
   limit?: number;
 }
 
+// Keep one text payload; duplicate truncation content can exceed Code Mode value bounds.
 export interface FindToolDetails {
-  truncation?: TruncationResult;
+  content: string;
+  truncation?: Omit<TruncationResult, "content">;
   resultLimitReached?: number;
 }
 
@@ -56,7 +64,8 @@ export interface GrepToolInput {
 }
 
 export interface GrepToolDetails {
-  truncation?: TruncationResult;
+  content: string;
+  truncation?: Omit<TruncationResult, "content">;
   matchLimitReached?: number;
   linesTruncated?: boolean;
 }
@@ -64,24 +73,81 @@ export interface GrepToolDetails {
 export interface LsToolInput {
   path?: string;
   limit?: number;
+  after?: string;
 }
 
 export interface LsToolDetails {
-  truncation?: TruncationResult;
-  entryLimitReached?: number;
+  content: string;
+  nextAfter?: string;
 }
 
 export interface ReadToolInput {
   path: string;
   offset?: number;
   limit?: number;
+  cursor?: number;
+  optional?: true;
 }
 
-export interface ReadToolDetails {
-  truncation?: TruncationResult;
-}
+export type ReadToolTruncationDetails = Omit<TruncationResult, "content">;
+
+const readContinuationFields = {
+  offset: Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER })),
+};
+
+export const ReadToolContinuationSchema = Type.Union([
+  Type.Object(
+    { kind: Type.Literal("line"), ...readContinuationFields },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      kind: Type.Literal("cursor"),
+      ...readContinuationFields,
+      cursor: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+    },
+    { additionalProperties: false },
+  ),
+]);
+
+export type ReadToolContinuation = Static<typeof ReadToolContinuationSchema>;
+
+export type ReadToolDetails =
+  | { kind: "text"; content: string }
+  | { kind: "image"; content: string; mimeType: string }
+  | {
+      kind: "truncated";
+      content: string;
+      truncation: ReadToolTruncationDetails;
+      continuation: ReadToolContinuation;
+    }
+  | {
+      kind: "not_found";
+      status: "not_found";
+      path: string;
+      optional: true;
+    };
 
 export interface WriteToolInput {
   path: string;
   content: string;
 }
+
+export type WriteToolDetails =
+  | { changed: false }
+  | {
+      changed: true;
+      created: true;
+      diff: string;
+      patch: string;
+      firstChangedLine?: number;
+    }
+  | {
+      changed: true;
+      created: false;
+      diff: string;
+      patch: string;
+      firstChangedLine?: number;
+    }
+  | { changed: true; created?: boolean };

@@ -3,10 +3,6 @@ import { isTruthyEnvValue } from "../infra/env.js";
 import type { CliCommandPluginLoadPolicy } from "./command-catalog.js";
 import { resolveCliCommandPathPolicy } from "./command-path-policy.js";
 
-export function shouldBypassConfigGuardForCommandPath(commandPath: string[]): boolean {
-  return resolveCliCommandPathPolicy(commandPath).bypassConfigGuard;
-}
-
 function shouldLoadPlugins(params: {
   argv?: string[];
   commandPath: string[];
@@ -28,33 +24,40 @@ function shouldLoadPlugins(params: {
 export function resolveCliStartupPolicy(params: {
   argv?: string[];
   commandPath: string[];
-  protocolCommandPath?: string[];
   jsonOutputMode: boolean;
+  machineOutputMode?: boolean;
   env?: NodeJS.ProcessEnv;
-  routeMode?: boolean;
+  /** Set only by the parsed, registered native capability action. */
+  nativeUpdateExecutorCheck?: boolean;
 }) {
   const commandPolicy = resolveCliCommandPathPolicy(params.commandPath);
-  // Commander resolves required option values before selecting the action command, so this path
-  // remains authoritative when a protocol option value itself begins with "-".
-  const ownsProtocolStdout = params.protocolCommandPath
-    ? resolveCliCommandPathPolicy(params.protocolCommandPath).ownsProtocolStdout
-    : commandPolicy.ownsProtocolStdout;
+  const nativeCheck = params.nativeUpdateExecutorCheck === true;
+  const machineOutputMode =
+    nativeCheck || params.jsonOutputMode || params.machineOutputMode === true;
   // Protocol commands own stdout from process startup, before their action installs later routing.
-  const suppressDoctorStdout = params.jsonOutputMode || ownsProtocolStdout;
+  const suppressDoctorStdout = machineOutputMode || commandPolicy.ownsProtocolStdout;
+  const configGuard =
+    typeof commandPolicy.configGuard === "function"
+      ? commandPolicy.configGuard({ argv: params.argv ?? [], commandPath: params.commandPath })
+      : commandPolicy.configGuard;
   const env = params.env ?? process.env;
+  const hideBanner = machineOutputMode || commandPolicy.hideBanner;
   return {
     suppressDoctorStdout,
-    hideBanner: isTruthyEnvValue(env.OPENCLAW_HIDE_BANNER) || commandPolicy.hideBanner,
-    skipConfigGuard: params.routeMode
-      ? commandPolicy.routeConfigGuard === "always" ||
-        (commandPolicy.routeConfigGuard === "when-suppressed" && suppressDoctorStdout)
-      : false,
-    loadPlugins: shouldLoadPlugins({
-      argv: params.argv,
-      commandPath: params.commandPath,
-      jsonOutputMode: params.jsonOutputMode,
-      loadPlugins: commandPolicy.loadPlugins,
-    }),
+    hideBanner: hideBanner || isTruthyEnvValue(env.OPENCLAW_HIDE_BANNER),
+    skipConfigGuard:
+      nativeCheck ||
+      configGuard === "skip" ||
+      (configGuard === "when-suppressed" && suppressDoctorStdout),
+    ...(configGuard === "validate" ? { validateConfigOnly: true } : {}),
+    loadPlugins:
+      !nativeCheck &&
+      shouldLoadPlugins({
+        argv: params.argv,
+        commandPath: params.commandPath,
+        jsonOutputMode: params.jsonOutputMode,
+        loadPlugins: commandPolicy.loadPlugins,
+      }),
     pluginRegistry: commandPolicy.pluginRegistry,
   };
 }

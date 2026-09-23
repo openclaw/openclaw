@@ -48,23 +48,11 @@ describe("resolveSessionRuntimeOverrideForProvider", () => {
     ).toBeUndefined();
   });
 
-  it("keeps a locked harness pin ahead of a conflicting runtime override", () => {
-    expect(
-      resolveSessionRuntimeOverrideForProvider({
-        provider: "anthropic",
-        entry: {
-          agentHarnessId: "codex",
-          agentRuntimeOverride: "claude-cli",
-          modelSelectionLocked: true,
-        },
-      }),
-    ).toBe("codex");
-  });
   it("keeps CLI runtime pins only when the runtime serves the selected provider", () => {
     cliBackendsTesting.setDepsForTest({
       resolveRuntimeCliBackends: () => [],
-      resolvePluginSetupCliBackend: ({ backend, config }) =>
-        backend === "claude-cli" && config
+      resolvePluginSetupCliBackend: ({ backend }) =>
+        backend === "claude-cli"
           ? {
               pluginId: "anthropic",
               backend: {
@@ -76,15 +64,7 @@ describe("resolveSessionRuntimeOverrideForProvider", () => {
             }
           : undefined,
     });
-    const cfg = {
-      agents: {
-        defaults: {
-          cliBackends: {
-            "claude-cli": { command: "claude" },
-          },
-        },
-      },
-    };
+    const cfg = {};
 
     expect(
       resolveSessionRuntimeOverrideForProvider({

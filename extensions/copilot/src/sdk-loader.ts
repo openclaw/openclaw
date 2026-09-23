@@ -5,12 +5,13 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type * as Sdk from "@github/copilot-sdk";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
+import copilotPluginPackage from "../package.json" with { type: "json" };
 
 function resolveCopilotSdkFallbackDir(env: NodeJS.ProcessEnv = process.env): string {
   return path.join(resolveStateDir(env), "npm-runtime", "copilot");
 }
 
-const COPILOT_SDK_SPEC = "@github/copilot-sdk@1.0.5";
+const COPILOT_SDK_SPEC = `@github/copilot-sdk@${copilotPluginPackage.dependencies["@github/copilot-sdk"]}`;
 
 let cached: Promise<typeof Sdk> | undefined;
 
@@ -81,7 +82,7 @@ function createMissingSdkError(
     "[copilot] @github/copilot-sdk is not installed.",
     "",
     "The external @openclaw/copilot plugin depends on @github/copilot-sdk",
-    "(~260 MB after pulling its platform-specific @github/copilot CLI binary).",
+    "including its platform-specific Copilot runtime package.",
     "Reinstall the plugin once with:",
     "",
     "  openclaw plugins install @openclaw/copilot",

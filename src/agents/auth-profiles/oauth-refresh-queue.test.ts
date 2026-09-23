@@ -1,15 +1,15 @@
-/**
- * Tests in-process OAuth refresh queuing.
- * Ensures concurrent refresh attempts serialize and queue gates release after
- * both success and failure.
- */
+/** Tests durable ownership after an OAuth refresh failure. */
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetFileLockStateForTest } from "../../infra/file-lock.js";
+import { AsyncWorkScope } from "../../shared/async-work-scope.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { captureEnv } from "../../test-utils/env.js";
 import { getOAuthProviderRuntimeMocks } from "./oauth-common-mocks.test-support.js";
 import "./oauth-external-auth-passthrough.test-support.js";
 import "./oauth-file-lock-passthrough.test-support.js";
+import { createOAuthManager } from "./oauth-manager.js";
+import { isPendingOAuthRefreshFence } from "./oauth-refresh-marker.js";
 import {
   OAUTH_AGENT_ENV_KEYS,
   createOAuthMainAgentDir,
@@ -21,11 +21,13 @@ import {
 } from "./oauth-test-utils.js";
 import { resolveApiKeyForProfile } from "./oauth.js";
 import { resetOAuthRefreshQueuesForTest } from "./oauth.test-support.js";
+import { clearRuntimeAuthProfileStoreSnapshots } from "./runtime-snapshots.js";
 import {
-  clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
+  ensureAuthProfileStoreWithoutExternalProfiles,
   saveAuthProfileStore,
-} from "./store.js";
+} from "./store-runtime.js";
+import type { OAuthCredential } from "./types.js";
 
 const {
   refreshProviderOAuthCredentialWithPluginMock,
@@ -37,7 +39,7 @@ vi.mock("../../llm/oauth.js", () => ({
   getOAuthProviders: () => [{ id: "openai" }],
 }));
 
-describe("OAuth refresh in-process queue", () => {
+describe("OAuth refresh failure ownership", () => {
   const envSnapshot = captureEnv(OAUTH_AGENT_ENV_KEYS);
   let tempRoot = "";
   let agentDir = "";
@@ -70,7 +72,7 @@ describe("OAuth refresh in-process queue", () => {
     await removeOAuthTestTempRoot(tempRoot);
   });
 
-  it("releases the queue even when the refresh throws", async () => {
+  it("fences the failed generation instead of retrying it", async () => {
     const profileId = "openai:default";
     const provider = "openai";
     saveAuthProfileStore(createExpiredOauthStore({ profileId, provider }), agentDir);
@@ -81,8 +83,7 @@ describe("OAuth refresh in-process queue", () => {
       if (callCount === 1) {
         throw new Error("simulated upstream failure");
       }
-      // Second caller must actually get a chance to run (proves the gate
-      // released despite the first caller throwing).
+      // A failed owner leaves its generation fenced. No peer may replay it.
       return {
         type: "oauth",
         provider,
@@ -106,67 +107,93 @@ describe("OAuth refresh in-process queue", () => {
     ]);
 
     expect(first).toBeInstanceOf(Error);
-    expect(callCount).toBeGreaterThanOrEqual(1);
-    // Second caller was not blocked forever \u2014 it either got the fresh token
-    // (if the queue let it run) or adopted from main. Either way, it resolved.
-    expect(second).toEqual({
-      apiKey: "second-try-access",
-      email: undefined,
-      provider: "openai",
-    });
+    expect(callCount).toBe(1);
+    expect(second).toBeNull();
   });
 
-  it("serializes a 10-caller burst so later arrivals never pass an earlier caller", async () => {
-    // Burst-arrival stress: 10 same-PID callers all fire concurrently.
-    // The queue must chain them so each refresh completes fully before the
-    // next one begins — i.e. no overlap between running refresh calls.
-    const profileId = "openai:default";
-    const provider = "openai";
-    saveAuthProfileStore(createExpiredOauthStore({ profileId, provider }), agentDir);
-
-    const startOrder: number[] = [];
-    const endOrder: number[] = [];
-    let inFlight = 0;
-    let maxInFlight = 0;
-    let seq = 0;
-    refreshProviderOAuthCredentialWithPluginMock.mockImplementation(async () => {
-      const n = ++seq;
-      startOrder.push(n);
-      inFlight += 1;
-      maxInFlight = Math.max(maxInFlight, inFlight);
-      // Yield once so any non-serialized overlap is observable without wall-clock sleep.
-      await Promise.resolve();
-      inFlight -= 1;
-      endOrder.push(n);
-      return {
-        type: "oauth",
-        provider,
-        access: `refreshed-${n}`,
-        refresh: `refresh-${n}`,
-        // Re-expire immediately so each queued caller also enters the
-        // refresh path (otherwise later callers would adopt the fresh
-        // cred and the serialization chain wouldn't be exercised).
-        expires: Date.now() - 1_000,
-      } as never;
+  it("cancels auth waiters while the canonical refresh owner durably settles for another caller", async () => {
+    const profileId = "xai:default";
+    const credential: OAuthCredential = {
+      type: "oauth",
+      provider: "xai",
+      access: "synthetic-access",
+      refresh: "synthetic-refresh",
+      expires: Date.now() - 60_000,
+      accountId: "synthetic-account",
+    };
+    const refreshed = {
+      ...credential,
+      access: "rotated-access",
+      refresh: "rotated-refresh",
+      expires: Date.now() + 600_000,
+    };
+    saveAuthProfileStore({ version: 1, profiles: { [profileId]: credential } }, agentDir);
+    const started = createDeferredCore();
+    const release = createDeferredCore<OAuthCredential>();
+    const settled = createDeferredCore();
+    const refreshCredential = vi.fn(async () => {
+      started.resolve();
+      return await release.promise;
     });
-
-    const results = await Promise.all(
-      Array.from({ length: 10 }, () =>
-        resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
-          store: ensureAuthProfileStore(agentDir),
-          profileId,
-          agentDir,
-        }).catch((e: unknown) => e),
-      ),
+    const manager = createOAuthManager({
+      buildApiKey: async (_provider, value) => {
+        settled.resolve();
+        return value.access;
+      },
+      canRefreshCredential: async () => true,
+      refreshCredential,
+      readBootstrapCredential: () => null,
+    });
+    const params = {
+      store: ensureAuthProfileStore(agentDir),
+      profileId,
+      credential,
+      agentDir,
+    };
+    const activeController = new AbortController();
+    const queuedController = new AbortController();
+    const activeReason = new Error("active lookup cancelled");
+    const queuedReason = new Error("queued lookup cancelled");
+    const scope = new AsyncWorkScope();
+    const active = scope.run(() =>
+      manager.resolveOAuthAccess({ ...params, signal: activeController.signal }),
     );
-
-    // Every caller must have run to completion (null result or error —
-    // either is fine; what matters is that no caller is lost or blocked).
-    expect(results).toHaveLength(10);
-    // FIFO: start order matches end order (no overlap – each caller fully
-    // completed before the next started).
-    expect(startOrder).toEqual(endOrder);
-    // At no point did two refresh calls run concurrently.
-    expect(maxInFlight).toBe(1);
+    const activeRejected = expect(active).rejects.toBe(activeReason);
+    await started.promise;
+    const queued = scope.run(() =>
+      manager.resolveOAuthAccess({ ...params, signal: queuedController.signal }),
+    );
+    const queuedRejected = expect(queued).rejects.toBe(queuedReason);
+    const requests: Promise<unknown>[] = [active, queued];
+    try {
+      queuedController.abort(queuedReason);
+      await queuedRejected;
+      activeController.abort(activeReason);
+      await activeRejected;
+      const pending = ensureAuthProfileStoreWithoutExternalProfiles(agentDir).profiles[profileId];
+      expect(pending?.type === "oauth" && isPendingOAuthRefreshFence(pending)).toBe(true);
+      let drained = false;
+      const draining = scope.drain().then(() => {
+        drained = true;
+      });
+      await Promise.resolve();
+      expect(drained).toBe(false);
+      release.resolve(refreshed);
+      await draining;
+      await settled.promise;
+      const continuing = manager.resolveOAuthAccess(params);
+      requests.push(continuing);
+      await expect(continuing).resolves.toMatchObject({ apiKey: "rotated-access" });
+      expect(
+        ensureAuthProfileStoreWithoutExternalProfiles(agentDir).profiles[profileId],
+      ).toMatchObject(refreshed);
+      expect(refreshCredential).toHaveBeenCalledOnce();
+    } finally {
+      activeController.abort(activeReason);
+      queuedController.abort(queuedReason);
+      release.resolve(refreshed);
+      await settled.promise;
+      await Promise.allSettled([...requests, scope.drain()]);
+    }
   });
 });

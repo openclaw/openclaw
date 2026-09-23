@@ -3,7 +3,8 @@
  * Arcee API usage and the OpenRouter-backed path.
  */
 import {
-  createModelCatalogPresetAppliers,
+  applyProviderConfigWithModelCatalogPreset,
+  applyProviderConnectionConfig,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-onboard";
 import { ARCEE_BASE_URL } from "./models.js";
@@ -18,34 +19,48 @@ export const ARCEE_DEFAULT_MODEL_REF = "arcee/trinity-large-thinking";
 /** Default Arcee model ref for OpenRouter setup. */
 export const ARCEE_OPENROUTER_DEFAULT_MODEL_REF = "arcee/trinity-large-thinking";
 
-const arceePresetAppliers = createModelCatalogPresetAppliers({
+const ARCEE_PRESET = {
   primaryModelRef: ARCEE_DEFAULT_MODEL_REF,
-  resolveParams: (_cfg: OpenClawConfig) => ({
-    providerId: "arcee",
-    api: "openai-completions",
-    baseUrl: ARCEE_BASE_URL,
-    catalogModels: buildArceeCatalogModels(),
-    aliases: [{ modelRef: ARCEE_DEFAULT_MODEL_REF, alias: "Arcee AI" }],
-  }),
-});
+  providerId: "arcee",
+  api: "openai-completions" as const,
+  baseUrl: ARCEE_BASE_URL,
+  aliases: [{ modelRef: ARCEE_DEFAULT_MODEL_REF, alias: "Arcee AI" }],
+};
 
-const arceeOpenRouterPresetAppliers = createModelCatalogPresetAppliers({
+const ARCEE_OPENROUTER_PRESET = {
   primaryModelRef: ARCEE_OPENROUTER_DEFAULT_MODEL_REF,
-  resolveParams: (_cfg: OpenClawConfig) => ({
-    providerId: "arcee",
-    api: "openai-completions",
-    baseUrl: OPENROUTER_BASE_URL,
-    catalogModels: buildArceeOpenRouterCatalogModels(),
-    aliases: [{ modelRef: ARCEE_OPENROUTER_DEFAULT_MODEL_REF, alias: "Arcee AI (OpenRouter)" }],
-  }),
-});
+  providerId: "arcee",
+  api: "openai-completions" as const,
+  baseUrl: OPENROUTER_BASE_URL,
+  aliases: [{ modelRef: ARCEE_OPENROUTER_DEFAULT_MODEL_REF, alias: "Arcee AI (OpenRouter)" }],
+};
 
 /** Apply direct Arcee provider defaults to config. */
 export function applyArceeConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return arceePresetAppliers.applyConfig(cfg);
+  return applyProviderConfigWithModelCatalogPreset(cfg, {
+    ...ARCEE_PRESET,
+    catalogModels: buildArceeCatalogModels(),
+  });
 }
 
 /** Apply OpenRouter-backed Arcee provider defaults to config. */
 export function applyArceeOpenRouterConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return arceeOpenRouterPresetAppliers.applyConfig(cfg);
+  return applyProviderConfigWithModelCatalogPreset(cfg, {
+    ...ARCEE_OPENROUTER_PRESET,
+    catalogModels: buildArceeOpenRouterCatalogModels(),
+  });
+}
+
+export function applyArceeOnboardConfig(cfg: OpenClawConfig): OpenClawConfig {
+  return applyProviderConnectionConfig(cfg, {
+    ...ARCEE_PRESET,
+    catalogModels: buildArceeCatalogModels,
+  });
+}
+
+export function applyArceeOpenRouterOnboardConfig(cfg: OpenClawConfig): OpenClawConfig {
+  return applyProviderConnectionConfig(cfg, {
+    ...ARCEE_OPENROUTER_PRESET,
+    catalogModels: buildArceeOpenRouterCatalogModels,
+  });
 }

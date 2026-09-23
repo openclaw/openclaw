@@ -1,16 +1,13 @@
 // Subagent session reactivation helper.
-// Replaces completed subagent run records when a user steers the child session.
-import { getLatestSubagentRunByChildSessionKey } from "../agents/subagent-registry-read.js";
-
-// Completed subagent sessions can be reactivated after a user steer by replacing
-// the previous completed run id with the next run id through a lazy runtime
-// import. Active subagent runs are never replaced here.
-async function loadSessionSubagentReactivationRuntime() {
-  return import("./session-subagent-reactivation.runtime.js");
-}
+// Continues yielded or completed subagent work when a user messages the child session.
+import {
+  getLatestLiveSubagentRunByChildSessionKey,
+  getLatestSubagentRunByChildSessionKey,
+} from "../agents/subagents/registry/subagent-registry-read.js";
+import type { GatewayContextResolver } from "./server-methods/types.js";
 
 /**
- * Reactivates a completed subagent session by swapping in the new run id.
+ * Reactivates a yielded or completed subagent session under its next run id.
  *
  * `task` is the canonical user-supplied prompt text that just dispatched the
  * follow-up. When provided, it is persisted on the new run record so a later
@@ -23,23 +20,55 @@ export async function reactivateCompletedSubagentSession(params: {
   sessionKey: string;
   runId?: string;
   task?: string;
+  gatewayContextResolver?: GatewayContextResolver;
 }): Promise<boolean> {
   const runId = params.runId?.trim();
   if (!runId) {
     return false;
   }
-  const existing = getLatestSubagentRunByChildSessionKey(params.sessionKey);
-  if (!existing || typeof existing.endedAt !== "number") {
+  const paused = getLatestLiveSubagentRunByChildSessionKey(
+    params.sessionKey,
+    (entry) => entry.pauseReason === "sessions_yield",
+  );
+  const existing = paused ?? getLatestSubagentRunByChildSessionKey(params.sessionKey);
+  if (!existing || typeof existing.execution.endedAt !== "number") {
     return false;
   }
-  const { replaceSubagentRunAfterSteer } = await loadSessionSubagentReactivationRuntime();
+  const runtime = await import("../agents/subagents/registry/subagent-registry-runtime.js");
+  // The lazy import can outlive its Gateway. Check the exact owner immediately
+  // before the synchronous replacement write.
+  if (params.gatewayContextResolver && !params.gatewayContextResolver()) {
+    return false;
+  }
   const task = params.task;
   const hasTask = typeof task === "string" && task.trim().length > 0;
-  return replaceSubagentRunAfterSteer({
-    previousRunId: existing.runId,
-    nextRunId: runId,
-    fallback: existing,
-    runTimeoutSeconds: existing.runTimeoutSeconds ?? 0,
-    ...(hasTask ? { task } : {}),
-  });
+  // A yielded child still owes its parent completion; operator follow-ups must
+  // preserve that wake rather than treating the task as already completed.
+  const gatewayBinding = params.gatewayContextResolver
+    ? { gatewayContextResolver: params.gatewayContextResolver }
+    : {};
+  const replaced = paused
+    ? runtime.adoptPausedSubagentRunForFollowUp({
+        childSessionKey: params.sessionKey,
+        runId,
+        task: hasTask ? task : paused.task,
+        ...gatewayBinding,
+      })
+    : runtime.replaceSubagentRunAfterSteer({
+        previousRunId: existing.runId,
+        nextRunId: runId,
+        fallback: existing,
+        runTimeoutSeconds: existing.runTimeoutSeconds ?? 0,
+        persistenceFailure: "throw",
+        ...(hasTask ? { task } : {}),
+        ...gatewayBinding,
+      });
+  if (replaced) {
+    return true;
+  }
+  const currentOwner = getLatestLiveSubagentRunByChildSessionKey(params.sessionKey);
+  if (currentOwner?.runId === runId) {
+    return true;
+  }
+  throw new Error("subagent follow-up owner replacement was rejected");
 }

@@ -14,6 +14,7 @@ type UrbitFetchOptions = {
   ssrfPolicy?: SsrFPolicy;
   lookupFn?: LookupFn;
   fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+  beforeRequest?: () => void;
   timeoutMs?: number;
   maxRedirects?: number;
   signal?: AbortSignal;
@@ -28,9 +29,10 @@ export async function urbitFetch(params: UrbitFetchOptions) {
   }
 
   const url = new URL(params.path, validated.baseUrl).toString();
-  return await fetchWithSsrFGuard({
+  const guarded = await fetchWithSsrFGuard({
     url,
     fetchImpl: params.fetchImpl,
+    beforeRequest: params.beforeRequest,
     init: params.init,
     timeoutMs: params.timeoutMs,
     maxRedirects: params.maxRedirects,
@@ -40,4 +42,16 @@ export async function urbitFetch(params: UrbitFetchOptions) {
     auditContext: params.auditContext,
     pinDns: params.pinDns,
   });
+
+  return {
+    ...guarded,
+    release: async () => {
+      // Guard cleanup only closes the dispatcher; captured response clones can
+      // keep cancellation pending, so start it without delaying the release.
+      if (!guarded.response.bodyUsed) {
+        void guarded.response.body?.cancel().catch(() => undefined);
+      }
+      await guarded.release();
+    },
+  };
 }

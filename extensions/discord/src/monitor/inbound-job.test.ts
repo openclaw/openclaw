@@ -11,28 +11,6 @@ function jsonRoundTrip<T>(value: T): T {
 }
 
 describe("buildDiscordInboundJob", () => {
-  it("prefers route session key, then base session key, then channel id for queueing", async () => {
-    const routed = await createBaseDiscordMessageContext({
-      route: { sessionKey: "agent:main:discord:direct:routed" },
-      baseSessionKey: "agent:main:discord:direct:base",
-      messageChannelId: "channel-routed",
-    });
-    const baseOnly = await createBaseDiscordMessageContext({
-      route: { sessionKey: "" },
-      baseSessionKey: "agent:main:discord:direct:base-only",
-      messageChannelId: "channel-base",
-    });
-    const channelFallback = await createBaseDiscordMessageContext({
-      route: { sessionKey: "   " },
-      baseSessionKey: "   ",
-      messageChannelId: "channel-fallback",
-    });
-
-    expect(buildDiscordInboundJob(routed).queueKey).toBe("agent:main:discord:direct:routed");
-    expect(buildDiscordInboundJob(baseOnly).queueKey).toBe("agent:main:discord:direct:base-only");
-    expect(buildDiscordInboundJob(channelFallback).queueKey).toBe("channel-fallback");
-  });
-
   it("keeps live runtime references out of the payload", async () => {
     const ctx = await createBaseDiscordMessageContext({
       message: {
@@ -72,14 +50,16 @@ describe("buildDiscordInboundJob", () => {
         {
           path: "/tmp/openclaw-discord-test/photo.png",
           contentType: "image/png",
-          placeholder: "<media:image>",
         },
       ],
     });
 
-    const job = buildDiscordInboundJob(ctx);
+    const buildContext = vi.fn();
+    const job = buildDiscordInboundJob({ ...ctx, buildContext });
 
     expect("runtime" in job.payload).toBe(false);
+    expect("buildContext" in job.payload).toBe(false);
+    expect(job.runtime.buildContext).toBe(buildContext);
     expect("client" in job.payload).toBe(false);
     expect("threadBindings" in job.payload).toBe(false);
     expect("discordRestFetch" in job.payload).toBe(false);
@@ -143,23 +123,25 @@ describe("buildDiscordInboundJob", () => {
 
   it("re-materializes the process context with an overridden abort signal", async () => {
     const ctx = await createBaseDiscordMessageContext();
-    const replayClaim = {
-      keys: ["default:ch-1:m-1"] as const,
-      commit: vi.fn(async () => true),
-      release: vi.fn(),
+    const buildContext = vi.fn();
+    const ingressSettlement = {
+      settle: vi.fn(async () => {}),
+      abandon: vi.fn(async () => {}),
+      cancel: vi.fn(async () => {}),
     };
-    const job = buildDiscordInboundJob(ctx, { replayClaims: [replayClaim] });
+    const job = buildDiscordInboundJob({ ...ctx, buildContext }, { ingressSettlement });
     const overrideAbortController = new AbortController();
 
     const rematerialized = materializeDiscordInboundJob(job, overrideAbortController.signal);
 
     expect(rematerialized.runtime).toBe(ctx.runtime);
+    expect(rematerialized.buildContext).toBe(buildContext);
     expect(rematerialized.client).toBe(ctx.client);
     expect(rematerialized.threadBindings).toBe(ctx.threadBindings);
     expect(rematerialized.abortSignal).toBe(overrideAbortController.signal);
     expect(rematerialized.message).toEqual(job.payload.message);
     expect(rematerialized.data).toEqual(job.payload.data);
-    expect(job.replayClaims).toEqual([replayClaim]);
+    expect(job.ingressSettlement).toBe(ingressSettlement);
   });
 
   it("preserves Discord message getters across queued jobs", async () => {

@@ -1,7 +1,9 @@
 // Xai provider module implements model/runtime integration.
 import {
   buildLiveModelProviderConfig,
-  getCachedLiveProviderModelRows,
+  readLiveModelCatalogBooleanField,
+  readLiveModelCatalogPositiveSafeIntegerField,
+  readLiveModelCatalogStringField,
   type LiveModelCatalogFetchGuard,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import type {
@@ -15,6 +17,7 @@ import {
   XAI_DEFAULT_CONTEXT_WINDOW,
   XAI_IMAGE_MODELS,
   XAI_DEFAULT_MAX_TOKENS,
+  XAI_UNKNOWN_MODEL_COST,
 } from "./model-definitions.js";
 
 const PROVIDER_ID = "xai";
@@ -26,28 +29,26 @@ const XAI_GROK_OAUTH_MODELS_CACHE_TTL_MS = 60_000;
 // Composer emits replayable Responses reasoning, but the OAuth catalog omits that capability.
 // Keep it classified here or the stream wrapper will omit encrypted reasoning from replay.
 const XAI_GROK_OAUTH_REASONING_MODEL_IDS = new Set(["grok-composer-2.5-fast"]);
-const XAI_UNKNOWN_MODEL_COST = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-} satisfies ModelDefinitionConfig["cost"];
+
+export function isXaiGrokProxyBaseUrl(baseUrl: string | undefined): boolean {
+  if (!baseUrl) {
+    return false;
+  }
+  try {
+    return new URL(baseUrl).href.replace(/\/+$/u, "") === XAI_GROK_OAUTH_BASE_URL;
+  } catch {
+    return false;
+  }
+}
 
 export function buildXaiProvider(
   api: ModelProviderConfig["api"] = "openai-responses",
+  authMode?: "oauth" | "token",
 ): ModelProviderConfig {
   return {
-    baseUrl: XAI_BASE_URL,
-    api,
-    models: buildXaiCatalogModels(),
-  };
-}
-
-function buildXaiOAuthFallbackProvider(): ModelProviderConfig {
-  return {
-    baseUrl: XAI_GROK_OAUTH_BASE_URL,
-    api: "openai-responses",
-    auth: "oauth",
+    baseUrl: authMode ? XAI_GROK_OAUTH_BASE_URL : XAI_BASE_URL,
+    api: authMode ? "openai-responses" : api,
+    ...(authMode ? { auth: authMode } : {}),
     models: buildXaiCatalogModels(),
   };
 }
@@ -59,6 +60,7 @@ export async function buildLiveXaiProvider(params: {
   signal?: AbortSignal;
 }): Promise<ModelProviderConfig> {
   return await buildLiveModelProviderConfig({
+    discoveryMode: "strict",
     providerId: PROVIDER_ID,
     endpoint: XAI_MODELS_ENDPOINT,
     providerConfig: {
@@ -75,36 +77,6 @@ export async function buildLiveXaiProvider(params: {
   });
 }
 
-function readLiveModelString(row: unknown, key: string): string | undefined {
-  if (!row || typeof row !== "object" || Array.isArray(row)) {
-    return undefined;
-  }
-  const value = (row as Record<string, unknown>)[key];
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
-}
-
-function readLiveModelPositiveInteger(row: unknown, keys: readonly string[]): number | undefined {
-  if (!row || typeof row !== "object" || Array.isArray(row)) {
-    return undefined;
-  }
-  const record = row as Record<string, unknown>;
-  for (const key of keys) {
-    const value = record[key];
-    if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) {
-      return value;
-    }
-  }
-  return undefined;
-}
-
-function readLiveModelBoolean(row: unknown, key: string): boolean | undefined {
-  if (!row || typeof row !== "object" || Array.isArray(row)) {
-    return undefined;
-  }
-  const value = (row as Record<string, unknown>)[key];
-  return typeof value === "boolean" ? value : undefined;
-}
-
 function resolveXaiOauthMetadataFallback(modelId: string) {
   if (modelId === "grok-build") {
     return resolveXaiCatalogEntry("grok-build-0.1");
@@ -113,14 +85,15 @@ function resolveXaiOauthMetadataFallback(modelId: string) {
 }
 
 function isXaiOAuthResponsesModel(row: unknown, fallback: ModelDefinitionConfig | undefined) {
-  const modelId = readLiveModelString(row, "id") ?? readLiveModelString(row, "model");
+  const modelId =
+    readLiveModelCatalogStringField(row, "id") ?? readLiveModelCatalogStringField(row, "model");
   if (modelId && (XAI_IMAGE_MODELS as readonly string[]).includes(modelId)) {
     return false;
   }
   const backend =
-    readLiveModelString(row, "api_backend") ??
-    readLiveModelString(row, "apiBackend") ??
-    readLiveModelString(row, "backend");
+    readLiveModelCatalogStringField(row, "api_backend") ??
+    readLiveModelCatalogStringField(row, "apiBackend") ??
+    readLiveModelCatalogStringField(row, "backend");
   if (backend) {
     const normalizedBackend = backend.toLowerCase();
     return (
@@ -133,7 +106,8 @@ function isXaiOAuthResponsesModel(row: unknown, fallback: ModelDefinitionConfig 
 }
 
 function buildXaiOauthModelFromLiveRow(row: unknown): ModelDefinitionConfig | undefined {
-  const modelId = readLiveModelString(row, "id") ?? readLiveModelString(row, "model");
+  const modelId =
+    readLiveModelCatalogStringField(row, "id") ?? readLiveModelCatalogStringField(row, "model");
   if (!modelId) {
     return undefined;
   }
@@ -142,16 +116,19 @@ function buildXaiOauthModelFromLiveRow(row: unknown): ModelDefinitionConfig | un
     return undefined;
   }
   const contextWindow =
-    readLiveModelPositiveInteger(row, ["context_window", "contextWindow"]) ??
+    readLiveModelCatalogPositiveSafeIntegerField(row, ["context_window", "contextWindow"]) ??
     fallback?.contextWindow ??
     XAI_DEFAULT_CONTEXT_WINDOW;
   const maxTokens =
-    readLiveModelPositiveInteger(row, ["max_completion_tokens", "maxCompletionTokens"]) ??
+    readLiveModelCatalogPositiveSafeIntegerField(row, [
+      "max_completion_tokens",
+      "maxCompletionTokens",
+    ]) ??
     fallback?.maxTokens ??
     XAI_DEFAULT_MAX_TOKENS;
   const supportsReasoningEffort =
-    readLiveModelBoolean(row, "supports_reasoning_effort") ??
-    readLiveModelBoolean(row, "supportsReasoningEffort");
+    readLiveModelCatalogBooleanField(row, "supports_reasoning_effort") ??
+    readLiveModelCatalogBooleanField(row, "supportsReasoningEffort");
   const reasoning =
     supportsReasoningEffort === true ||
     fallback?.reasoning === true ||
@@ -159,7 +136,7 @@ function buildXaiOauthModelFromLiveRow(row: unknown): ModelDefinitionConfig | un
 
   return {
     id: modelId,
-    name: readLiveModelString(row, "name") ?? fallback?.name ?? modelId,
+    name: readLiveModelCatalogStringField(row, "name") ?? fallback?.name ?? modelId,
     api: "openai-responses",
     baseUrl: XAI_GROK_OAUTH_BASE_URL,
     reasoning,
@@ -174,39 +151,34 @@ function buildXaiOauthModelFromLiveRow(row: unknown): ModelDefinitionConfig | un
 
 export async function buildLiveXaiOAuthProvider(params: {
   discoveryApiKey: string;
+  authMode?: "oauth" | "token";
   fetchGuard?: LiveModelCatalogFetchGuard;
   signal?: AbortSignal;
 }): Promise<ModelProviderConfig> {
-  try {
-    const rows = await getCachedLiveProviderModelRows({
-      providerId: PROVIDER_ID,
-      endpoint: XAI_GROK_OAUTH_MODELS_ENDPOINT,
-      discoveryApiKey: params.discoveryApiKey,
-      fetchGuard: params.fetchGuard,
-      signal: params.signal,
-      ttlMs: XAI_GROK_OAUTH_MODELS_CACHE_TTL_MS,
-      auditContext: "xai-grok-oauth-model-discovery",
-      cacheKeyParts: [
-        PROVIDER_ID,
-        "grok-oauth-model-rows",
-        XAI_GROK_OAUTH_MODELS_ENDPOINT,
-        params.discoveryApiKey,
-      ],
-    });
-    const models = rows
-      .map(buildXaiOauthModelFromLiveRow)
-      .filter((model): model is ModelDefinitionConfig => Boolean(model));
-    if (models.length > 0) {
-      return {
-        baseUrl: XAI_GROK_OAUTH_BASE_URL,
-        api: "openai-responses",
-        auth: "oauth",
-        models,
-      };
-    }
-  } catch {
-    // Grok subscription discovery is advisory. If the proxy is unavailable,
-    // preserve the OAuth proxy transport instead of publishing API-key rows.
-  }
-  return buildXaiOAuthFallbackProvider();
+  const { models, ...providerConfig } = buildXaiProvider(
+    "openai-responses",
+    params.authMode ?? "oauth",
+  );
+  return await buildLiveModelProviderConfig({
+    discoveryMode: "strict",
+    providerId: PROVIDER_ID,
+    endpoint: XAI_GROK_OAUTH_MODELS_ENDPOINT,
+    providerConfig,
+    models,
+    discoveryApiKey: params.discoveryApiKey,
+    fetchGuard: params.fetchGuard,
+    signal: params.signal,
+    ttlMs: XAI_GROK_OAUTH_MODELS_CACHE_TTL_MS,
+    auditContext: "xai-grok-oauth-model-discovery",
+    cacheKeyParts: [
+      PROVIDER_ID,
+      "grok-oauth-model-rows",
+      XAI_GROK_OAUTH_MODELS_ENDPOINT,
+      params.discoveryApiKey,
+    ],
+    projectRows: (rows) =>
+      rows
+        .map(buildXaiOauthModelFromLiveRow)
+        .filter((model): model is ModelDefinitionConfig => Boolean(model)),
+  });
 }

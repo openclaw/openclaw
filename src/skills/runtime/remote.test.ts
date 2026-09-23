@@ -1,59 +1,37 @@
 // Remote skill runtime tests cover remote refresh and session snapshot flows.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { NodeRegistry } from "../../gateway/node-registry.js";
+import { GatewayConnectionWork } from "../../gateway/server-connection-work.js";
+import { runWithGatewayIndependentRootWorkAdmission } from "../../process/gateway-work-admission.js";
 import { getSkillsSnapshotVersion } from "./refresh-state.js";
-import { resetSkillsRefreshForTest } from "./refresh.test-support.js";
+import { closeSkillsWatchers } from "./refresh.js";
+import { mergeRemoteNodeSkillEntries, replaceRemoteNodeSkills } from "./remote-skills.js";
+import {
+  createRemoteSkillWorkspace,
+  recordRemoteMacWithSystemWhich,
+  setTestSkillsRemoteRegistry,
+  TEST_PAIRING_GENERATION,
+  testRemoteSession,
+} from "./remote.test-helpers.js";
+
+vi.mock("../../infra/device-pairing-node-facts.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../infra/device-pairing-node-facts.js")>();
+  return { ...actual, updatePairedNodeBins: vi.fn(async () => true) };
+});
+
 import {
   getRemoteSkillEligibility,
   recordRemoteNodeBins,
   recordRemoteNodeInfo,
   removeRemoteNodeInfo,
+  removeRemoteNodeInfoForConnection,
   refreshRemoteBinsForConnectedNodes,
   refreshRemoteNodeBins,
   setSkillsRemoteRegistry,
 } from "./remote.js";
-
-function createRemoteSkillWorkspace(bin: string): { cfg: OpenClawConfig; workspaceDir: string } {
-  const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-remote-skills-"));
-  const skillDir = path.join(workspaceDir, "skills", "remote-skill");
-  fs.mkdirSync(skillDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(skillDir, "SKILL.md"),
-    [
-      "---",
-      "name: remote-skill",
-      "description: Needs a remote bin",
-      `metadata: { "openclaw": { "os": ["darwin"], "requires": { "bins": ["${bin}"] } } }`,
-      "---",
-      "# Remote Skill",
-      "",
-    ].join("\n"),
-  );
-  return {
-    workspaceDir,
-    cfg: {
-      agents: {
-        defaults: {
-          workspace: workspaceDir,
-        },
-      },
-    } satisfies OpenClawConfig,
-  };
-}
-
-function recordRemoteMacWithSystemWhich(nodeId: string): void {
-  recordRemoteNodeInfo({
-    nodeId,
-    displayName: "Remote Mac",
-    platform: "darwin",
-    commands: ["system.run", "system.which"],
-  });
-}
 
 describe("skills-remote", () => {
   afterEach(() => {
@@ -71,7 +49,7 @@ describe("skills-remote", () => {
       platform: "darwin",
       commands: ["system.run"],
     });
-    recordRemoteNodeBins(nodeId, [bin]);
+    recordRemoteNodeBins(nodeId, [bin], TEST_PAIRING_GENERATION);
 
     expect(getRemoteSkillEligibility()?.hasBin(bin)).toBe(true);
 
@@ -86,8 +64,76 @@ describe("skills-remote", () => {
     expect(removeRemoteNodeInfo(nodeId)).toBeUndefined();
   });
 
+  it("preserves bins across reconnects only within one pairing generation", () => {
+    const nodeId = `node-${randomUUID()}`;
+    const retiredBin = `bin-${randomUUID()}`;
+    try {
+      recordRemoteNodeInfo({
+        nodeId,
+        connId: "conn-a",
+        pairingGeneration: "generation-a",
+        platform: "darwin",
+        commands: ["system.run"],
+      });
+      recordRemoteNodeBins(nodeId, [retiredBin], "generation-a");
+      recordRemoteNodeInfo({
+        nodeId,
+        connId: "conn-a-reconnect",
+        pairingGeneration: "generation-a",
+        platform: "darwin",
+        commands: ["system.run"],
+      });
+      expect(getRemoteSkillEligibility()?.hasBin(retiredBin)).toBe(true);
+
+      recordRemoteNodeInfo({
+        nodeId,
+        connId: "conn-b",
+        pairingGeneration: "generation-b",
+        platform: "darwin",
+        commands: ["system.run"],
+      });
+      expect(getRemoteSkillEligibility()?.hasBin(retiredBin) ?? false).toBe(false);
+    } finally {
+      removeRemoteNodeInfo(nodeId);
+    }
+  });
+
+  it("removes remote projections only for the exact invalidated connection", () => {
+    const nodeId = `node-${randomUUID()}`;
+    const bin = `bin-${randomUUID()}`;
+    const skillName = `skill-${randomUUID()}`;
+    recordRemoteNodeInfo({
+      nodeId,
+      connId: "conn-current",
+      displayName: "Remote Mac",
+      platform: "darwin",
+      commands: ["system.run"],
+    });
+    recordRemoteNodeBins(nodeId, [bin], TEST_PAIRING_GENERATION);
+    replaceRemoteNodeSkills({
+      nodeId,
+      displayName: "Remote Mac",
+      skills: [
+        {
+          name: skillName,
+          description: "Remote test skill",
+          content: `---\nname: ${skillName}\ndescription: Remote test skill\n---\n`,
+        },
+      ],
+    });
+    const listRemoteSkillNames = () =>
+      mergeRemoteNodeSkillEntries([], { canExec: true }).map((entry) => entry.skill.name);
+
+    expect(removeRemoteNodeInfoForConnection(nodeId, "conn-retired")).toBe(false);
+    expect(getRemoteSkillEligibility()?.hasBin(bin)).toBe(true);
+    expect(listRemoteSkillNames()).toContain(skillName);
+    expect(removeRemoteNodeInfoForConnection(nodeId, "conn-current")).toBe(true);
+    expect(getRemoteSkillEligibility()?.hasBin(bin) ?? false).toBe(false);
+    expect(listRemoteSkillNames()).not.toContain(skillName);
+  });
+
   it("bumps the skills snapshot version when an eligible remote node disconnects", async () => {
-    await resetSkillsRefreshForTest();
+    await closeSkillsWatchers(true);
     const workspaceDir = `/tmp/ws-${randomUUID()}`;
     const nodeId = `node-${randomUUID()}`;
     recordRemoteNodeInfo({
@@ -104,6 +150,24 @@ describe("skills-remote", () => {
     expect(after).toBeGreaterThan(before);
   });
 
+  it("bumps the skills snapshot version when an eligible remote node connects", async () => {
+    await closeSkillsWatchers(true);
+    const workspaceDir = `/tmp/ws-${randomUUID()}`;
+    const nodeId = `node-${randomUUID()}`;
+
+    const before = getSkillsSnapshotVersion(workspaceDir);
+    recordRemoteNodeInfo({
+      nodeId,
+      displayName: "Remote Mac",
+      platform: "darwin",
+      commands: ["system.run"],
+    });
+    const after = getSkillsSnapshotVersion(workspaceDir);
+
+    expect(after).toBeGreaterThan(before);
+    removeRemoteNodeInfo(nodeId);
+  });
+
   it("ignores non-mac and non-system.run nodes for eligibility", () => {
     const linuxNodeId = `node-${randomUUID()}`;
     const noRunNodeId = `node-${randomUUID()}`;
@@ -115,7 +179,7 @@ describe("skills-remote", () => {
         platform: "linux",
         commands: ["system.run"],
       });
-      recordRemoteNodeBins(linuxNodeId, [bin]);
+      recordRemoteNodeBins(linuxNodeId, [bin], TEST_PAIRING_GENERATION);
 
       recordRemoteNodeInfo({
         nodeId: noRunNodeId,
@@ -123,7 +187,7 @@ describe("skills-remote", () => {
         platform: "darwin",
         commands: ["system.which"],
       });
-      recordRemoteNodeBins(noRunNodeId, [bin]);
+      recordRemoteNodeBins(noRunNodeId, [bin], TEST_PAIRING_GENERATION);
 
       expect(getRemoteSkillEligibility()).toBeUndefined();
     } finally {
@@ -144,14 +208,14 @@ describe("skills-remote", () => {
         platform: "darwin",
         commands: ["system.run"],
       });
-      recordRemoteNodeBins(nodeA, [binA]);
+      recordRemoteNodeBins(nodeA, [binA], TEST_PAIRING_GENERATION);
 
       recordRemoteNodeInfo({
         nodeId: nodeB,
         platform: "macOS",
         commands: ["system.run"],
       });
-      recordRemoteNodeBins(nodeB, [binB]);
+      recordRemoteNodeBins(nodeB, [binB], TEST_PAIRING_GENERATION);
 
       const eligibility = getRemoteSkillEligibility();
       expect(eligibility?.platforms).toEqual(["darwin"]);
@@ -175,7 +239,7 @@ describe("skills-remote", () => {
         platform: "darwin",
         commands: ["system.run"],
       });
-      recordRemoteNodeBins(nodeId, [bin]);
+      recordRemoteNodeBins(nodeId, [bin], TEST_PAIRING_GENERATION);
 
       const eligibility = getRemoteSkillEligibility({ advertiseExecNode: false });
 
@@ -190,7 +254,7 @@ describe("skills-remote", () => {
     const nodeId = `node-${randomUUID()}`;
     const bin = `bin-${randomUUID()}`;
     try {
-      recordRemoteNodeBins(nodeId, [bin]);
+      recordRemoteNodeBins(nodeId, [bin], TEST_PAIRING_GENERATION);
 
       expect(getRemoteSkillEligibility()?.hasBin(bin) ?? false).toBe(false);
     } finally {
@@ -198,75 +262,73 @@ describe("skills-remote", () => {
     }
   });
 
-  it("clears stale bins when a connected node probe times out", async () => {
-    await resetSkillsRefreshForTest();
+  it.each(
+    [
+      { command: "system.which", failure: "result" },
+      { command: "system.which", failure: "throw" },
+      { command: "system.run", failure: "result" },
+      { command: "system.run", failure: "throw" },
+    ].flatMap((scenario) => [
+      { ...scenario, skills: undefined },
+      { ...scenario, skills: ["remote-skill"] },
+    ]),
+  )(
+    "clears stale bins after a probe failure ($command/$failure, skills=$skills)",
+    async ({ command, failure, skills }) => {
+      await closeSkillsWatchers(true);
+      const nodeId = `node-${randomUUID()}`;
+      const bin = `bin-${randomUUID()}`;
+      const { cfg, workspaceDir } = createRemoteSkillWorkspace(bin);
+      cfg.agents = {
+        ...cfg.agents,
+        defaults: { ...cfg.agents?.defaults, skills },
+      };
+      try {
+        const invokeCalls: string[] = [];
+        setTestSkillsRemoteRegistry(nodeId, {
+          get: () => testRemoteSession(nodeId, { commands: [command] }),
+          invoke: async (params: { command: string }) => {
+            invokeCalls.push(params.command);
+            if (failure === "throw") {
+              throw new Error("node invoke timed out");
+            }
+            return {
+              ok: false,
+              error: { code: "TIMEOUT", message: "node invoke timed out" },
+            };
+          },
+        } as unknown as NodeRegistry);
+        recordRemoteMacWithSystemWhich(nodeId);
+        recordRemoteNodeBins(nodeId, [bin], TEST_PAIRING_GENERATION);
+        const before = getSkillsSnapshotVersion(workspaceDir);
+
+        await refreshRemoteNodeBins({
+          nodeId,
+          platform: "darwin",
+          commands: ["system.run", "system.which"],
+          cfg,
+          timeoutMs: 10,
+        });
+
+        expect(invokeCalls).toEqual([command]);
+        expect(getRemoteSkillEligibility()?.hasBin(bin) ?? false).toBe(false);
+        expect(getSkillsSnapshotVersion(workspaceDir)).toBeGreaterThan(before);
+      } finally {
+        removeRemoteNodeInfo(nodeId);
+        fs.rmSync(workspaceDir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("skips remote bin probes when the node connectivity preflight fails", async () => {
+    await closeSkillsWatchers(true);
     const nodeId = `node-${randomUUID()}`;
     const bin = `bin-${randomUUID()}`;
     const { cfg, workspaceDir } = createRemoteSkillWorkspace(bin);
     try {
       const invokeCalls: string[] = [];
-      setSkillsRemoteRegistry({
-        listConnected: () => [],
-        get: () => undefined,
-        invoke: async (params: { command: string }) => {
-          invokeCalls.push(params.command);
-          return {
-            ok: false,
-            error: { code: "TIMEOUT", message: "node invoke timed out" },
-          };
-        },
-      } as unknown as NodeRegistry);
-      recordRemoteMacWithSystemWhich(nodeId);
-      recordRemoteNodeBins(nodeId, [bin]);
-      const before = getSkillsSnapshotVersion(workspaceDir);
-
-      await refreshRemoteNodeBins({
-        nodeId,
-        platform: "darwin",
-        commands: ["system.run", "system.which"],
-        cfg,
-        timeoutMs: 10,
-      });
-
-      expect(invokeCalls).toEqual(["system.which"]);
-      expect(getRemoteSkillEligibility()?.hasBin(bin) ?? false).toBe(false);
-      expect(getSkillsSnapshotVersion(workspaceDir)).toBeGreaterThan(before);
-    } finally {
-      removeRemoteNodeInfo(nodeId);
-      fs.rmSync(workspaceDir, { recursive: true, force: true });
-    }
-  });
-
-  it("skips remote bin probes when the node connectivity preflight fails", async () => {
-    await resetSkillsRefreshForTest();
-    const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-remote-skills-"));
-    const nodeId = `node-${randomUUID()}`;
-    const bin = `bin-${randomUUID()}`;
-    try {
-      fs.mkdirSync(path.join(workspaceDir, "remote-skill"), { recursive: true });
-      fs.writeFileSync(
-        path.join(workspaceDir, "remote-skill", "SKILL.md"),
-        [
-          "---",
-          "name: remote-skill",
-          "description: Needs a remote bin",
-          `metadata: { "openclaw": { "os": ["darwin"], "requires": { "bins": ["${bin}"] } } }`,
-          "---",
-          "# Remote Skill",
-          "",
-        ].join("\n"),
-      );
-      const cfg = {
-        agents: {
-          defaults: {
-            workspace: workspaceDir,
-          },
-        },
-      } satisfies OpenClawConfig;
-      const invokeCalls: string[] = [];
-      setSkillsRemoteRegistry({
-        listConnected: () => [],
-        get: () => undefined,
+      setTestSkillsRemoteRegistry(nodeId, {
+        get: () => testRemoteSession(nodeId),
         checkConnectivity: async () => ({
           ok: false,
           error: { code: "TIMEOUT", message: "node connectivity probe timed out" },
@@ -281,11 +343,12 @@ describe("skills-remote", () => {
       } as unknown as NodeRegistry);
       recordRemoteNodeInfo({
         nodeId,
+        pairingGeneration: TEST_PAIRING_GENERATION,
         displayName: "Remote Mac",
         platform: "darwin",
         commands: ["system.run", "system.which"],
       });
-      recordRemoteNodeBins(nodeId, [bin]);
+      recordRemoteNodeBins(nodeId, [bin], TEST_PAIRING_GENERATION);
       const before = getSkillsSnapshotVersion(workspaceDir);
 
       await refreshRemoteNodeBins({
@@ -306,47 +369,28 @@ describe("skills-remote", () => {
   });
 
   it("retries the bin probe when the node reconnects during preflight", async () => {
-    await resetSkillsRefreshForTest();
-    const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-remote-skills-"));
+    await closeSkillsWatchers(true);
     const nodeId = `node-${randomUUID()}`;
     const bin = `bin-${randomUUID()}`;
+    const { cfg, workspaceDir } = createRemoteSkillWorkspace(bin);
     try {
-      fs.mkdirSync(path.join(workspaceDir, "remote-skill"), { recursive: true });
-      fs.writeFileSync(
-        path.join(workspaceDir, "remote-skill", "SKILL.md"),
-        [
-          "---",
-          "name: remote-skill",
-          "description: Needs a remote bin",
-          `metadata: { "openclaw": { "os": ["darwin"], "requires": { "bins": ["${bin}"] } } }`,
-          "---",
-          "# Remote Skill",
-          "",
-        ].join("\n"),
-      );
-      const cfg = {
-        agents: {
-          defaults: {
-            workspace: workspaceDir,
-          },
-        },
-      } satisfies OpenClawConfig;
       let connId = "conn-old";
       const connectivityCalls: string[] = [];
       const invokeCalls: string[] = [];
-      setSkillsRemoteRegistry({
-        listConnected: () => [],
-        get: () =>
-          ({
-            nodeId,
-            connId,
-            platform: "darwin",
-            commands: ["system.run", "system.which"],
-          }) as unknown as ReturnType<NodeRegistry["get"]>,
+      setTestSkillsRemoteRegistry(nodeId, {
+        get: () => testRemoteSession(nodeId, { connId }),
         checkConnectivity: async () => {
           connectivityCalls.push(connId);
           if (connectivityCalls.length === 1) {
             connId = "conn-new";
+            recordRemoteNodeInfo({
+              nodeId,
+              connId,
+              pairingGeneration: TEST_PAIRING_GENERATION,
+              displayName: "Remote Mac",
+              platform: "darwin",
+              commands: ["system.run", "system.which"],
+            });
             return {
               ok: false,
               error: { code: "TIMEOUT", message: "node connectivity probe timed out" },
@@ -364,6 +408,8 @@ describe("skills-remote", () => {
       } as unknown as NodeRegistry);
       recordRemoteNodeInfo({
         nodeId,
+        connId,
+        pairingGeneration: TEST_PAIRING_GENERATION,
         displayName: "Remote Mac",
         platform: "darwin",
         commands: ["system.run", "system.which"],
@@ -387,95 +433,84 @@ describe("skills-remote", () => {
   });
 
   it("coalesces overlapping bin probes for the same node", async () => {
-    const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-remote-skills-"));
+    vi.useFakeTimers();
     const nodeId = `node-${randomUUID()}`;
     const bin = `bin-${randomUUID()}`;
-    let invokeCount = 0;
-    let releaseProbe: (() => void) | undefined;
-    const probeStarted = new Promise<void>((resolve) => {
-      setSkillsRemoteRegistry({
-        listConnected: () => [],
-        get: () => undefined,
-        invoke: async () => {
-          invokeCount += 1;
-          resolve();
-          await new Promise<void>((release) => {
-            releaseProbe = release;
-          });
-          return {
-            ok: false,
-            error: { code: "TIMEOUT", message: "node invoke timed out" },
-          };
-        },
-      } as unknown as NodeRegistry);
+    const { cfg, workspaceDir } = createRemoteSkillWorkspace(bin);
+    const releaseProbe = createDeferred();
+    const probeStarted = createDeferred();
+    const firstLifetime = new AbortController();
+    const secondLifetime = new AbortController();
+    let first: Promise<void> | undefined;
+    let second: Promise<void> | undefined;
+    let completed = 0;
+    const invoke = vi.fn(async () => {
+      probeStarted.resolve();
+      await releaseProbe.promise;
+      return { ok: false, error: { code: "TIMEOUT", message: "node invoke timed out" } };
     });
     try {
-      fs.mkdirSync(path.join(workspaceDir, "remote-skill"), { recursive: true });
-      fs.writeFileSync(
-        path.join(workspaceDir, "remote-skill", "SKILL.md"),
-        [
-          "---",
-          "name: remote-skill",
-          "description: Needs a remote bin",
-          `metadata: { "openclaw": { "os": ["darwin"], "requires": { "bins": ["${bin}"] } } }`,
-          "---",
-          "# Remote Skill",
-          "",
-        ].join("\n"),
-      );
-      const cfg = {
-        agents: {
-          defaults: {
-            workspace: workspaceDir,
-          },
-        },
-      } satisfies OpenClawConfig;
+      setTestSkillsRemoteRegistry(nodeId, {
+        get: () => testRemoteSession(nodeId),
+        invoke,
+      });
       recordRemoteNodeInfo({
         nodeId,
+        pairingGeneration: TEST_PAIRING_GENERATION,
         displayName: "Remote Mac",
         platform: "darwin",
         commands: ["system.run", "system.which"],
       });
 
-      const first = refreshRemoteNodeBins({
+      first = refreshRemoteNodeBins({
         nodeId,
         platform: "darwin",
         commands: ["system.run", "system.which"],
         cfg,
         timeoutMs: 10,
+        readinessSignal: firstLifetime.signal,
+      }).then(() => {
+        completed += 1;
       });
-      await probeStarted;
-      const second = refreshRemoteNodeBins({
+      await probeStarted.promise;
+      second = refreshRemoteNodeBins({
         nodeId,
         platform: "darwin",
         commands: ["system.run", "system.which"],
         cfg,
         timeoutMs: 10,
+        readinessSignal: secondLifetime.signal,
+      }).then(() => {
+        completed += 1;
       });
-      if (!releaseProbe) {
-        throw new Error("Expected remote skill probe release callback to be initialized");
-      }
-      releaseProbe();
+      firstLifetime.abort();
+      secondLifetime.abort();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(completed).toBe(0);
+      expect(invoke).toHaveBeenCalledOnce();
+      releaseProbe.resolve();
 
       await Promise.all([first, second]);
-      expect(invokeCount).toBe(1);
+      expect(invoke).toHaveBeenCalledOnce();
+      expect(completed).toBe(2);
     } finally {
+      releaseProbe.resolve();
+      await Promise.allSettled([first, second]);
       removeRemoteNodeInfo(nodeId);
       fs.rmSync(workspaceDir, { recursive: true, force: true });
     }
   });
 
   it("reuses a successful probe after reconnect and invalidates the skills snapshot", async () => {
-    await resetSkillsRefreshForTest();
+    await closeSkillsWatchers(true);
     const nodeId = `node-${randomUUID()}`;
     const bin = `bin-${randomUUID()}`;
     const { cfg, workspaceDir } = createRemoteSkillWorkspace(bin);
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
     let invokeCount = 0;
     try {
-      setSkillsRemoteRegistry({
-        listConnected: () => [],
-        get: () => undefined,
+      setTestSkillsRemoteRegistry(nodeId, {
+        get: () => testRemoteSession(nodeId),
         invoke: async () => {
           invokeCount += 1;
           return { ok: true, payload: { bins: [bin] } };
@@ -528,9 +563,8 @@ describe("skills-remote", () => {
     vi.spyOn(Date, "now").mockReturnValue(2_000_000);
     let invokeCount = 0;
     try {
-      setSkillsRemoteRegistry({
-        listConnected: () => [],
-        get: () => undefined,
+      setTestSkillsRemoteRegistry(nodeId, {
+        get: () => testRemoteSession(nodeId),
         invoke: async () => {
           invokeCount += 1;
           return { ok: false, error: { code: "TIMEOUT", message: "node invoke timed out" } };
@@ -558,6 +592,58 @@ describe("skills-remote", () => {
     }
   });
 
+  it.each(["disconnect", "shutdown", "commands", "replacement"] as const)(
+    "rechecks the live node after loading workspace skills (%s)",
+    async (change) => {
+      const nodeId = `node-${randomUUID()}`;
+      const bin = `bin-${randomUUID()}`;
+      const { cfg, workspaceDir } = createRemoteSkillWorkspace(bin);
+      const lifetime = new AbortController();
+      let session: ReturnType<NodeRegistry["get"]> = testRemoteSession(nodeId, {
+        commands: ["system.run"],
+      });
+      const invoke = vi.fn(async () => ({ ok: true as const, payload: { bins: [bin] } }));
+      let refresh: Promise<void> | undefined;
+      try {
+        setTestSkillsRemoteRegistry(nodeId, { get: () => session, invoke });
+        recordRemoteNodeInfo(session);
+        refresh = refreshRemoteNodeBins({ nodeId, cfg, readinessSignal: lifetime.signal });
+        if (change === "disconnect") {
+          session = undefined;
+          removeRemoteNodeInfo(nodeId);
+        } else if (change === "shutdown") {
+          lifetime.abort();
+        } else {
+          session = {
+            ...session,
+            commands: change === "replacement" ? ["system.which"] : [],
+            pairingGeneration: "generation-current",
+          };
+          recordRemoteNodeInfo(session);
+        }
+        await refresh;
+
+        if (change === "replacement") {
+          expect(invoke).toHaveBeenCalledOnce();
+          expect(invoke).toHaveBeenCalledWith(
+            expect.objectContaining({
+              command: "system.which",
+              expectedPairingGeneration: "generation-current",
+            }),
+          );
+        } else {
+          expect(invoke).not.toHaveBeenCalled();
+          expect(getRemoteSkillEligibility()?.hasBin(bin) ?? false).toBe(false);
+        }
+      } finally {
+        lifetime.abort();
+        await Promise.allSettled([refresh]);
+        removeRemoteNodeInfo(nodeId);
+        fs.rmSync(workspaceDir, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("waits for connect readiness before connectivity preflight and bin probing", async () => {
     vi.useFakeTimers();
     const nodeId = `node-${randomUUID()}`;
@@ -566,9 +652,8 @@ describe("skills-remote", () => {
     const checkConnectivity = vi.fn(async () => ({ ok: true as const }));
     const invoke = vi.fn(async () => ({ ok: true as const, payload: { bins: [bin] } }));
     try {
-      setSkillsRemoteRegistry({
-        listConnected: () => [],
-        get: () => undefined,
+      setTestSkillsRemoteRegistry(nodeId, {
+        get: () => testRemoteSession(nodeId),
         checkConnectivity,
         invoke,
       } as unknown as NodeRegistry);
@@ -595,37 +680,91 @@ describe("skills-remote", () => {
     }
   });
 
-  it("retries a failed probe after the node reconnects", async () => {
+  it.each(["linux", "darwin"])(
+    "retires a connect-readiness delay when the Gateway lifetime closes (%s)",
+    async (platform) => {
+      vi.useFakeTimers();
+      const nodeId = `node-${randomUUID()}`;
+      const bin = `bin-${randomUUID()}`;
+      const { cfg, workspaceDir } = createRemoteSkillWorkspace(bin);
+      const owner = new GatewayConnectionWork();
+      const checkConnectivity = vi.fn(async () => ({ ok: true as const }));
+      const invoke = vi.fn(async () => ({ ok: true as const, payload: { bins: [bin] } }));
+      const params = {
+        nodeId,
+        platform,
+        commands: platform === "linux" ? ["camera.list"] : ["system.which"],
+        cfg,
+        readinessDelayMs: 5_000,
+        readinessSignal: owner.signal,
+      };
+      let refresh: Promise<void> | undefined;
+      let closing: Promise<void> | undefined;
+      try {
+        setTestSkillsRemoteRegistry(nodeId, {
+          get: () => testRemoteSession(nodeId, { platform, commands: params.commands }),
+          checkConnectivity,
+          invoke,
+        });
+        let admitted = false;
+        refresh = owner.track(() =>
+          runWithGatewayIndependentRootWorkAdmission(
+            async () => {
+              admitted = true;
+              await refreshRemoteNodeBins(params);
+            },
+            "ws:preauth",
+            owner.signal,
+          ),
+        );
+        await vi.advanceTimersByTimeAsync(0);
+        expect(admitted).toBe(true);
+        expect(owner.hasPendingWork).toBe(true);
+
+        let closed = false;
+        closing = owner.drain().then(() => {
+          closed = true;
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(closed).toBe(true);
+        expect(checkConnectivity).not.toHaveBeenCalled();
+        expect(invoke).not.toHaveBeenCalled();
+        await refreshRemoteNodeBins({
+          ...params,
+          readinessDelayMs: 0,
+          readinessSignal: undefined,
+        });
+        expect(invoke).toHaveBeenCalledTimes(platform === "darwin" ? 1 : 0);
+      } finally {
+        owner.beginClose();
+        await vi.runAllTimersAsync();
+        await Promise.allSettled([refresh, closing]);
+        removeRemoteNodeInfo(nodeId);
+        fs.rmSync(workspaceDir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("coalesces replacement waiters after a failed probe", async () => {
     const nodeId = `node-${randomUUID()}`;
     const bin = `bin-${randomUUID()}`;
     const { cfg, workspaceDir } = createRemoteSkillWorkspace(bin);
     vi.spyOn(Date, "now").mockReturnValue(2_000_000);
     let connId = "conn-old";
-    let resolveFirstInvoke:
-      | ((value: Awaited<ReturnType<NodeRegistry["invoke"]>>) => void)
-      | undefined;
-    const firstInvoke = new Promise<Awaited<ReturnType<NodeRegistry["invoke"]>>>((resolve) => {
-      resolveFirstInvoke = resolve;
-    });
+    const firstInvoke = createDeferred<Awaited<ReturnType<NodeRegistry["invoke"]>>>();
     const invoke = vi
       .fn()
-      .mockImplementationOnce(async () => await firstInvoke)
+      .mockImplementationOnce(async () => await firstInvoke.promise)
       .mockResolvedValueOnce({ ok: true as const, payload: { bins: [bin] } });
     try {
-      setSkillsRemoteRegistry({
-        listConnected: () => [],
-        get: () =>
-          ({
-            nodeId,
-            connId,
-            platform: "darwin",
-            commands: ["system.run", "system.which"],
-          }) as unknown as ReturnType<NodeRegistry["get"]>,
+      setTestSkillsRemoteRegistry(nodeId, {
+        get: () => testRemoteSession(nodeId, { connId }),
         invoke,
       } as unknown as NodeRegistry);
       recordRemoteNodeInfo({
         nodeId,
         connId,
+        pairingGeneration: TEST_PAIRING_GENERATION,
         platform: "darwin",
         commands: ["system.run", "system.which"],
       });
@@ -644,15 +783,17 @@ describe("skills-remote", () => {
       recordRemoteNodeInfo({
         nodeId,
         connId,
+        pairingGeneration: TEST_PAIRING_GENERATION,
         platform: "darwin",
         commands: ["system.run", "system.which"],
       });
       const reconnectRefresh = refresh();
-      resolveFirstInvoke?.({
+      const overlappingReconnectRefresh = refresh();
+      firstInvoke.resolve({
         ok: false,
         error: { code: "TIMEOUT", message: "node invoke timed out" },
       });
-      await Promise.all([failedRefresh, reconnectRefresh]);
+      await Promise.all([failedRefresh, reconnectRefresh, overlappingReconnectRefresh]);
       expect(invoke).toHaveBeenCalledTimes(2);
       expect(getRemoteSkillEligibility()?.hasBin(bin)).toBe(true);
     } finally {
@@ -661,27 +802,101 @@ describe("skills-remote", () => {
     }
   });
 
+  it.each(["success", "failure", "throw"])(
+    "does not carry a retired generation probe into its replacement (%s)",
+    async (completion) => {
+      const nodeId = `node-${randomUUID()}`;
+      const retiredBin = `bin-${randomUUID()}`;
+      const currentBin = `bin-${randomUUID()}`;
+      const { cfg, workspaceDir } = createRemoteSkillWorkspace(currentBin);
+      let session = testRemoteSession(nodeId, {
+        connId: "conn-a",
+        pairingGeneration: "generation-a",
+      });
+      const retiredProbe = createDeferred<Awaited<ReturnType<NodeRegistry["invoke"]>>>();
+      const invoke = vi
+        .fn()
+        .mockImplementationOnce(async () => await retiredProbe.promise)
+        .mockResolvedValueOnce({ ok: true as const, payload: { bins: [currentBin] } });
+      try {
+        setTestSkillsRemoteRegistry(nodeId, {
+          get: () => session,
+          invoke,
+        } as unknown as NodeRegistry);
+        recordRemoteNodeInfo(session);
+        const firstRefresh = refreshRemoteNodeBins({
+          nodeId,
+          platform: session.platform,
+          commands: session.commands,
+          cfg,
+        });
+        await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(1));
+
+        session = { ...session, connId: "conn-b", pairingGeneration: "generation-b" };
+        recordRemoteNodeInfo(session);
+        recordRemoteNodeBins(nodeId, [currentBin], "generation-b");
+        const replacementRefresh = refreshRemoteNodeBins({
+          nodeId,
+          platform: session.platform,
+          commands: session.commands,
+          cfg,
+        });
+        const beforeCompletion = getSkillsSnapshotVersion(workspaceDir);
+        if (completion === "throw") {
+          retiredProbe.reject(new Error("retired probe failed"));
+        } else {
+          retiredProbe.resolve({
+            ok: completion === "success",
+            payload: { bins: [retiredBin] },
+            error: { message: "retired probe failed" },
+          });
+        }
+        await Promise.all([firstRefresh, replacementRefresh]);
+
+        expect(invoke).toHaveBeenNthCalledWith(
+          1,
+          expect.objectContaining({ expectedPairingGeneration: "generation-a" }),
+        );
+        expect(invoke).toHaveBeenNthCalledWith(
+          2,
+          expect.objectContaining({ expectedPairingGeneration: "generation-b" }),
+        );
+        expect(getRemoteSkillEligibility()?.hasBin(retiredBin) ?? false).toBe(false);
+        expect(getRemoteSkillEligibility()?.hasBin(currentBin)).toBe(true);
+        expect(getSkillsSnapshotVersion(workspaceDir)).toBe(beforeCompletion);
+      } finally {
+        removeRemoteNodeInfo(nodeId);
+        fs.rmSync(workspaceDir, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("uses the approved live command surface after the connect readiness delay", async () => {
     vi.useFakeTimers();
     const nodeId = `node-${randomUUID()}`;
     const bin = `bin-${randomUUID()}`;
     const { cfg, workspaceDir } = createRemoteSkillWorkspace(bin);
     let commands: string[] = [];
+    let pairingGeneration = "generation-before-approval";
     const invoke = vi.fn(async () => ({ ok: true as const, payload: { bins: [bin] } }));
     try {
-      setSkillsRemoteRegistry({
-        listConnected: () => [],
+      setTestSkillsRemoteRegistry(nodeId, {
         get: () =>
-          ({
-            nodeId,
+          testRemoteSession(nodeId, {
             connId: "conn-current",
-            platform: "darwin",
+            pairingGeneration,
             commands,
-          }) as unknown as ReturnType<NodeRegistry["get"]>,
+          }),
         checkConnectivity: async () => ({ ok: true }),
         invoke,
       } as unknown as NodeRegistry);
-      recordRemoteNodeInfo({ nodeId, platform: "darwin", commands: [] });
+      recordRemoteNodeInfo({
+        nodeId,
+        connId: "conn-current",
+        pairingGeneration,
+        platform: "darwin",
+        commands: [],
+      });
 
       const connectRefresh = refreshRemoteNodeBins({
         nodeId,
@@ -690,7 +905,17 @@ describe("skills-remote", () => {
         cfg,
         readinessDelayMs: 5_000,
       });
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(invoke).not.toHaveBeenCalled();
       commands = ["system.run", "system.which"];
+      pairingGeneration = TEST_PAIRING_GENERATION;
+      recordRemoteNodeInfo({
+        nodeId,
+        connId: "conn-current",
+        pairingGeneration,
+        platform: "darwin",
+        commands,
+      });
       const approvalRefresh = refreshRemoteNodeBins({
         nodeId,
         platform: "darwin",
@@ -698,11 +923,15 @@ describe("skills-remote", () => {
         cfg,
       });
 
-      await vi.advanceTimersByTimeAsync(5_000);
+      await vi.advanceTimersByTimeAsync(1);
       await Promise.all([connectRefresh, approvalRefresh]);
       expect(invoke).toHaveBeenCalledTimes(1);
       expect(invoke).toHaveBeenCalledWith(
-        expect.objectContaining({ nodeId, command: "system.which" }),
+        expect.objectContaining({
+          nodeId,
+          command: "system.which",
+          expectedPairingGeneration: TEST_PAIRING_GENERATION,
+        }),
       );
     } finally {
       removeRemoteNodeInfo(nodeId);
@@ -711,15 +940,14 @@ describe("skills-remote", () => {
   });
 
   it("records bins from system.which object-map responses", async () => {
-    await resetSkillsRefreshForTest();
+    await closeSkillsWatchers(true);
     const nodeId = `node-${randomUUID()}`;
     const bin = `bin-${randomUUID()}`;
     const { cfg, workspaceDir } = createRemoteSkillWorkspace(bin);
     try {
       const invokeCalls: string[] = [];
-      setSkillsRemoteRegistry({
-        listConnected: () => [],
-        get: () => undefined,
+      setTestSkillsRemoteRegistry(nodeId, {
+        get: () => testRemoteSession(nodeId),
         invoke: async (params: { command: string }) => {
           invokeCalls.push(params.command);
           return {
@@ -751,19 +979,15 @@ describe("skills-remote", () => {
   });
 
   it("continues the connected-node refresh after one node fails", async () => {
-    await resetSkillsRefreshForTest();
+    await closeSkillsWatchers(true);
     const nodeA = `node-${randomUUID()}`;
     const nodeB = `node-${randomUUID()}`;
     const bin = `bin-${randomUUID()}`;
     const { cfg, workspaceDir } = createRemoteSkillWorkspace(bin);
     try {
       const invokeCalls: string[] = [];
-      setSkillsRemoteRegistry({
-        listConnected: () => [
-          { nodeId: nodeA, platform: "darwin", commands: ["system.run", "system.which"] },
-          { nodeId: nodeB, platform: "darwin", commands: ["system.run", "system.which"] },
-        ],
-        get: () => undefined,
+      setTestSkillsRemoteRegistry([nodeA, nodeB], {
+        get: (nodeId: string) => testRemoteSession(nodeId),
         checkConnectivity: (nodeId: string) => {
           if (nodeId === nodeA) {
             throw new Error("simulated connectivity failure");
@@ -777,7 +1001,7 @@ describe("skills-remote", () => {
       } as unknown as NodeRegistry);
       recordRemoteMacWithSystemWhich(nodeA);
       recordRemoteMacWithSystemWhich(nodeB);
-      recordRemoteNodeBins(nodeA, ["stale-bin"]);
+      recordRemoteNodeBins(nodeA, ["stale-bin"], TEST_PAIRING_GENERATION);
 
       await expect(refreshRemoteBinsForConnectedNodes(cfg)).resolves.toBeUndefined();
 
@@ -787,6 +1011,54 @@ describe("skills-remote", () => {
     } finally {
       removeRemoteNodeInfo(nodeA);
       removeRemoteNodeInfo(nodeB);
+      fs.rmSync(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("refreshes bins only for generation-current connected sessions", async () => {
+    await closeSkillsWatchers(true);
+    const staleNodeId = `node-${randomUUID()}`;
+    const currentNodeId = `node-${randomUUID()}`;
+    const bin = `bin-${randomUUID()}`;
+    const { cfg, workspaceDir } = createRemoteSkillWorkspace(bin);
+    const staleSession = testRemoteSession(staleNodeId, { connId: "conn-stale" });
+    const currentSession = testRemoteSession(currentNodeId, { connId: "conn-current" });
+    const invoke = vi.fn(async () => ({
+      ok: false as const,
+      error: { code: "TIMEOUT", message: "node invoke timed out" },
+    }));
+    const listCurrentConnected = vi.fn(async () => [currentSession]);
+    try {
+      setSkillsRemoteRegistry({
+        listConnected: () => [staleSession, currentSession],
+        listCurrentConnected,
+        listCurrentConnectedSync: () => [currentSession],
+        get: (nodeId: string) => (nodeId === currentNodeId ? currentSession : staleSession),
+        invoke,
+      } as unknown as NodeRegistry);
+      recordRemoteNodeInfo({
+        nodeId: staleNodeId,
+        connId: "conn-stale",
+        pairingGeneration: TEST_PAIRING_GENERATION,
+        platform: "darwin",
+        commands: ["system.run", "system.which"],
+      });
+      recordRemoteNodeInfo({
+        nodeId: currentNodeId,
+        connId: "conn-current",
+        pairingGeneration: TEST_PAIRING_GENERATION,
+        platform: "darwin",
+        commands: ["system.run", "system.which"],
+      });
+
+      await refreshRemoteBinsForConnectedNodes(cfg);
+
+      expect(listCurrentConnected).toHaveBeenCalled();
+      expect(invoke).toHaveBeenCalledTimes(1);
+      expect(invoke).toHaveBeenCalledWith(expect.objectContaining({ nodeId: currentNodeId }));
+    } finally {
+      removeRemoteNodeInfo(staleNodeId);
+      removeRemoteNodeInfo(currentNodeId);
       fs.rmSync(workspaceDir, { recursive: true, force: true });
     }
   });

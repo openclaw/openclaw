@@ -1,63 +1,63 @@
 import {
   ErrorCodes,
   errorShape,
-  formatValidationErrors,
   validateAgentWaitParams,
+  type AgentWaitParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { waitForAgentJob } from "./agent-job.js";
+import { getAgentRunLifecycleGeneration } from "../../infra/agent-run-registry.js";
+import { createAgentTurnService } from "../agent-turn/agent-turn-service.js";
+import type { AgentJobSession } from "../agent-turn/types.js";
+import { operatorSessionCap } from "../operator-role-policy.js";
+import {
+  createSessionListEntryFilter,
+  isGatewayAdmin,
+  resolveSessionSharingTarget,
+} from "../session-sharing.js";
 import type { GatewayRequestHandlers } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 export const agentWaitHandler: GatewayRequestHandlers["agent.wait"] = async ({
   params,
   respond,
   context,
+  client,
+  isWebchatConnect,
 }) => {
-  if (!validateAgentWaitParams(params)) {
-    respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        `invalid agent.wait params: ${formatValidationErrors(validateAgentWaitParams.errors)}`,
-      ),
-    );
+  if (!assertValidParams(params, validateAgentWaitParams, "agent.wait", respond)) {
     return;
   }
-  const runId = (params.runId ?? "").trim();
-  const timeoutMs =
-    typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
-      ? Math.max(0, Math.floor(params.timeoutMs))
-      : 30_000;
-  // `hasActiveChatRun` must exclude agent-kind abort entries so wait snapshot
-  // preference continues to distinguish chat.send from agent RPC runs.
-  const activeChatEntry = context.chatAbortControllers.get(runId);
-  const hasActiveChatRun = activeChatEntry !== undefined && activeChatEntry.kind !== "agent";
-  const snapshot = await waitForAgentJob({
-    runId,
-    timeoutMs,
-    ...(hasActiveChatRun ? { source: "chat" } : {}),
-  });
-  if (!snapshot) {
-    const activeRunRegistered = activeChatEntry !== undefined;
-    respond(true, {
-      runId,
-      status: "timeout",
-      timeoutPhase: activeRunRegistered ? "gateway_draining" : "queue",
-      ...(activeRunRegistered ? {} : { providerStarted: false }),
-    });
+  const gatewayClient = client ?? null;
+  const prepared = createAgentTurnService({ context, isWebchatConnect }).prepareWaitForTurn(
+    params as AgentWaitParams,
+  );
+  const authorizeWait = (run: Readonly<AgentJobSession> | undefined) => {
+    if (!gatewayClient?.authenticatedUserProfile || isGatewayAdmin(gatewayClient)) {
+      return true;
+    }
+    const cfg = context.getRuntimeConfig();
+    if (operatorSessionCap(gatewayClient, cfg) !== "none") {
+      return true;
+    }
+    const target = run?.sessionKey
+      ? resolveSessionSharingTarget({ cfg, sessionKey: run.sessionKey, agentId: run.agentId })
+      : null;
+    const visibilityFilter = createSessionListEntryFilter({ client: gatewayClient, cfg });
+    if (
+      !target ||
+      run?.lifecycleGeneration !== getAgentRunLifecycleGeneration() ||
+      (run?.sessionId !== undefined && target.entry.sessionId !== run.sessionId) ||
+      visibilityFilter?.(target.storeKey, target.entry) === false
+    ) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "agent run was not found"));
+      return false;
+    }
+    return true;
+  };
+  if (!authorizeWait(prepared.session)) {
     return;
   }
-  respond(true, {
-    runId,
-    status: snapshot.status,
-    startedAt: snapshot.startedAt,
-    endedAt: snapshot.endedAt,
-    error: snapshot.error,
-    stopReason: snapshot.stopReason,
-    livenessState: snapshot.livenessState,
-    yielded: snapshot.yielded,
-    pendingError: snapshot.pendingError,
-    timeoutPhase: snapshot.timeoutPhase,
-    providerStarted: snapshot.providerStarted,
-  });
+  const observation = await prepared.wait();
+  if (authorizeWait(observation.session)) {
+    respond(true, observation.result);
+  }
 };

@@ -1,3 +1,4 @@
+import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/core";
 // Microsoft Foundry image provider routes MAI image deployments to the MAI API.
@@ -13,7 +14,7 @@ import {
   parseOpenAiCompatibleImageResponse,
   resolveInlineImageJsonResponseMaxBytes,
 } from "openclaw/plugin-sdk/image-generation";
-import { MAX_IMAGE_BYTES } from "openclaw/plugin-sdk/media-runtime";
+import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
@@ -46,7 +47,6 @@ const MAI_MAX_IMAGE_PIXELS = 1_048_576;
 const MAI_IMAGE_BASE_PATH = "/mai/v1";
 const MAI_IMAGE_MAX_RESULTS = 1;
 const MAI_IMAGE_OUTPUT_MIME = "image/png";
-const MB = 1024 * 1024;
 const MAI_IMAGE_UPLOAD_MIME_TYPES = new Set(["image/jpeg", "image/jpg", "image/png"]);
 
 type ModelProviderConfig = NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>[string];
@@ -112,16 +112,6 @@ function resolveMaiImageSize(size: string | undefined): { width: number; height:
     );
   }
   return { width, height };
-}
-
-function resolveGeneratedImageMaxBytes(req: {
-  cfg: { agents?: { defaults?: { mediaMaxMb?: number } } };
-}): number {
-  const configured = req.cfg.agents?.defaults?.mediaMaxMb;
-  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
-    return Math.floor(configured * MB);
-  }
-  return MAX_IMAGE_BYTES;
 }
 
 function assertSingleImageCount(count: number | undefined): void {
@@ -234,7 +224,7 @@ function buildEditFormData(params: {
   form.set("prompt", params.req.prompt);
   form.set(
     "image",
-    new Blob([new Uint8Array(params.image.buffer)], {
+    new Blob([bufferToBlobPart(params.image.buffer)], {
       type: mimeType === "image/jpg" ? "image/jpeg" : mimeType,
     }),
     imageSourceUploadFileName({
@@ -265,11 +255,7 @@ export function buildMicrosoftFoundryImageGenerationProvider(): ImageGenerationP
     label: "Microsoft Foundry",
     defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
     models: [],
-    isConfigured: ({ agentDir }) =>
-      isProviderApiKeyConfigured({
-        provider: PROVIDER_ID,
-        agentDir,
-      }),
+    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: PROVIDER_ID, ...ctx }),
     capabilities: {
       generate: {
         maxCount: MAI_IMAGE_MAX_RESULTS,
@@ -341,43 +327,37 @@ export function buildMicrosoftFoundryImageGenerationProvider(): ImageGenerationP
         defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
       });
 
+      const requestOptions = {
+        url: buildMaiImageUrl(baseUrl, mode),
+        headers: new Headers(headers),
+        timeoutMs,
+        fetchFn: fetch,
+        allowPrivateNetwork,
+        ssrfPolicy: req.ssrfPolicy,
+        dispatcherPolicy,
+      };
+      if (mode === "edits") {
+        requestOptions.headers.delete("Content-Type");
+      } else {
+        requestOptions.headers.set("Content-Type", "application/json");
+      }
       const request =
         mode === "edits"
           ? postMultipartRequest({
-              url: buildMaiImageUrl(baseUrl, mode),
-              headers: (() => {
-                const multipartHeaders = new Headers(headers);
-                multipartHeaders.delete("Content-Type");
-                return multipartHeaders;
-              })(),
+              ...requestOptions,
               body: buildEditFormData({
                 req,
                 image: expectDefined(inputImages[0], "Microsoft Foundry edit source image"),
                 model,
               }),
-              timeoutMs,
-              fetchFn: fetch,
-              allowPrivateNetwork,
-              ssrfPolicy: req.ssrfPolicy,
-              dispatcherPolicy,
             })
           : postJsonRequest({
-              url: buildMaiImageUrl(baseUrl, mode),
-              headers: (() => {
-                const jsonHeaders = new Headers(headers);
-                jsonHeaders.set("Content-Type", "application/json");
-                return jsonHeaders;
-              })(),
+              ...requestOptions,
               body: {
                 model,
                 prompt: req.prompt,
                 ...resolveMaiImageSize(req.size),
               },
-              timeoutMs,
-              fetchFn: fetch,
-              allowPrivateNetwork,
-              ssrfPolicy: req.ssrfPolicy,
-              dispatcherPolicy,
             });
 
       const { response, release } = await request;
@@ -389,7 +369,7 @@ export function buildMicrosoftFoundryImageGenerationProvider(): ImageGenerationP
           {
             maxBytes: resolveInlineImageJsonResponseMaxBytes(
               MAI_IMAGE_MAX_RESULTS,
-              resolveGeneratedImageMaxBytes(req),
+              resolveGeneratedMediaMaxBytes(req.cfg, "image"),
             ),
           },
         );

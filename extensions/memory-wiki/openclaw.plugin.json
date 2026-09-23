@@ -1,10 +1,26 @@
 {
   "id": "memory-wiki",
+  "categories": ["memory"],
+  "doctorContract": {
+    "configRepair": true,
+    "stateMigrations": [
+      { "id": "memory-wiki-compiled-cache-file-cleanup" },
+      { "id": "memory-wiki-source-sync-json-to-plugin-state" },
+      { "id": "memory-wiki-import-runs-json-to-plugin-state" }
+    ]
+  },
   "activation": {
     "onStartup": true
   },
   "name": "Memory Wiki",
   "description": "Persistent wiki compiler and Obsidian-friendly knowledge vault for OpenClaw.",
+  "cliCommands": [
+    {
+      "name": "wiki",
+      "description": "Inspect and initialize the memory wiki vault",
+      "hasSubcommands": true
+    }
+  ],
   "catalog": { "featured": true, "order": 30 },
   "contracts": {
     "tools": ["wiki_apply", "wiki_get", "wiki_lint", "wiki_search", "wiki_status"]
@@ -48,6 +64,44 @@
       "help": "Append a compact compiled wiki digest snapshot to memory prompt sections for context engines and legacy prompt assembly."
     }
   },
+  "configGroups": [
+    {
+      "id": "wiki-vault",
+      "title": "Wiki vault",
+      "order": 10,
+      "properties": ["vaultMode", "vault"]
+    },
+    {
+      "id": "obsidian",
+      "title": "Obsidian",
+      "order": 20,
+      "properties": ["obsidian"]
+    },
+    {
+      "id": "memory-sources",
+      "title": "Memory sources",
+      "order": 30,
+      "properties": ["bridge", "unsafeLocal"]
+    },
+    {
+      "id": "ingestion",
+      "title": "Ingestion",
+      "order": 40,
+      "properties": ["ingest"]
+    },
+    {
+      "id": "search-and-context",
+      "title": "Search and context",
+      "order": 50,
+      "properties": ["search", "context"]
+    },
+    {
+      "id": "page-rendering",
+      "title": "Page rendering",
+      "order": 60,
+      "properties": ["render"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

@@ -1,18 +1,19 @@
 // Backup atomicity tests cover temp-file writes, rollback behavior, and backup archive consistency.
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import * as directoryDurability from "../infra/directory-durability.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 import {
   backupVerifyCommandMock,
   createMockTarStream,
-  createBackupTestRuntime,
   mockStateOnlyBackupPlan,
   resetBackupTempHome,
-  tarCreateMock,
+  backupWalkMock,
 } from "./backup.test-support.js";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const sleepMock = vi.hoisted(() => vi.fn(async (_ms: number) => {}));
 
@@ -31,7 +32,7 @@ describe("backupCreateCommand atomic archive write", () => {
 
   beforeEach(async () => {
     await resetBackupTempHome(tempHome);
-    tarCreateMock.mockReset();
+    backupWalkMock.mockReset();
     backupVerifyCommandMock.mockReset();
     sleepMock.mockClear();
   });
@@ -53,7 +54,7 @@ describe("backupCreateCommand atomic archive write", () => {
     await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
     await fs.writeFile(path.join(stateDir, "state.txt"), "state\n", "utf8");
 
-    const runtime = createBackupTestRuntime();
+    const runtime = createTestRuntime();
     const outputPath = path.join(archiveDir, params.outputName ?? "backup.tar.gz");
 
     await mockStateOnlyBackupPlan(stateDir);
@@ -79,7 +80,7 @@ describe("backupCreateCommand atomic archive write", () => {
       archivePrefix: "openclaw-backup-failure-",
     });
     try {
-      tarCreateMock.mockReturnValueOnce(createMockTarStream({ error: new Error("disk full") }));
+      backupWalkMock.mockReturnValueOnce(createMockTarStream({ error: new Error("disk full") }));
 
       await expect(
         backupCreateCommand(runtime, {
@@ -95,37 +96,42 @@ describe("backupCreateCommand atomic archive write", () => {
     }
   });
 
-  it("cleans intermediate retry temp archives after cleanup races", async () => {
+  it("cleans intermediate retry archives after a later attempt succeeds", async () => {
     const { archiveDir, outputPath, runtime } = await prepareAtomicBackupScenario({
       archivePrefix: "openclaw-backup-retry-cleanup-",
     });
-    const realRm = fs.rm.bind(fs);
-    const rmAttempts = new Map<string, number>();
-    const attemptFiles: string[] = [];
-    const rmSpy = vi.spyOn(fs, "rm").mockImplementation((async (
-      targetPath: Parameters<typeof fs.rm>[0],
-      options?: Parameters<typeof fs.rm>[1],
-    ) => {
-      const key = String(targetPath);
-      const attempt = (rmAttempts.get(key) ?? 0) + 1;
-      rmAttempts.set(key, attempt);
-      if (key.startsWith(`${outputPath}.`) && !attemptFiles.includes(key)) {
-        attemptFiles.push(key);
+    const volatilePath = path.join(tempHome.home, ".openclaw", "logs", "gateway.log");
+    await fs.mkdir(path.dirname(volatilePath), { recursive: true });
+    await fs.writeFile(volatilePath, "volatile log\n", "utf8");
+    const originalUnlinkSync = fsSync.unlinkSync.bind(fsSync);
+    let blockedPartialPath: string | undefined;
+    let blockedPartialCleanupAttempts = 0;
+    const unlinkSpy = vi.spyOn(fsSync, "unlinkSync").mockImplementation((target) => {
+      const targetPath = path.resolve(String(target));
+      if (!blockedPartialPath && targetPath.endsWith("archive.tar.gz.tmp")) {
+        blockedPartialPath = targetPath;
       }
-      if (attemptFiles.length <= 2 && key === attemptFiles.at(-1) && attempt === 1) {
-        throw Object.assign(new Error("resource busy"), { code: "EBUSY" });
+      if (targetPath === blockedPartialPath) {
+        blockedPartialCleanupAttempts += 1;
+        if (blockedPartialCleanupAttempts === 1) {
+          throw Object.assign(new Error("busy"), { code: "EBUSY" });
+        }
       }
-      await realRm(targetPath, options);
-    }) as typeof fs.rm);
+      return originalUnlinkSync(target);
+    });
     try {
       let tarAttempt = 0;
-      tarCreateMock.mockImplementation(() => {
+      backupWalkMock.mockImplementation((options: { skip: (entryPath: string) => boolean }) => {
         tarAttempt += 1;
         return createMockTarStream({
+          beforeRead: () => {
+            expect(options.skip(volatilePath)).toBe(true);
+          },
           contents: `archive-attempt-${tarAttempt}`,
           ...(tarAttempt < 3
             ? {
-                error: Object.assign(new Error("did not encounter expected EOF"), {
+                error: Object.assign(new Error("encountered unexpected EOF"), {
+                  code: "EOF",
                   path: path.join(tempHome.home, ".openclaw", "state.txt"),
                 }),
               }
@@ -138,18 +144,12 @@ describe("backupCreateCommand atomic archive write", () => {
       });
 
       expect(result.archivePath).toBe(outputPath);
+      expect(result.skippedVolatileCount).toBe(1);
       expect(sleepMock.mock.calls).toStrictEqual([[10_000], [20_000]]);
-      expect(attemptFiles).toStrictEqual([
-        attemptFiles[0],
-        `${attemptFiles[0]}.retry-2`,
-        `${attemptFiles[0]}.retry-3`,
-      ]);
-      expect(
-        rmAttempts.get(expectDefined(attemptFiles[1], "attemptFiles[1] test invariant")),
-      ).toBeGreaterThanOrEqual(2);
+      expect(blockedPartialCleanupAttempts).toBeGreaterThanOrEqual(2);
       expect((await fs.readdir(archiveDir)).toSorted()).toStrictEqual([path.basename(outputPath)]);
     } finally {
-      rmSpy.mockRestore();
+      unlinkSpy.mockRestore();
       await fs.rm(archiveDir, { recursive: true, force: true });
     }
   });
@@ -158,13 +158,16 @@ describe("backupCreateCommand atomic archive write", () => {
     const { archiveDir, outputPath, runtime } = await prepareAtomicBackupScenario({
       archivePrefix: "openclaw-backup-race-",
     });
-    const realLink = fs.link.bind(fs);
-    const linkSpy = vi.spyOn(fs, "link");
+    const publish = directoryDurability.publishFileExclusive;
+    const publicationSpy = vi.spyOn(directoryDurability, "publishFileExclusive");
     try {
-      tarCreateMock.mockReturnValueOnce(createMockTarStream());
-      linkSpy.mockImplementationOnce(async (existingPath, newPath) => {
-        await fs.writeFile(newPath, "concurrent-archive", "utf8");
-        return await realLink(existingPath, newPath);
+      backupWalkMock.mockReturnValueOnce(createMockTarStream());
+      publicationSpy.mockImplementationOnce(async (options) => {
+        await fs.writeFile(options.targetPath, "concurrent-archive", {
+          encoding: "utf8",
+          flag: "wx",
+        });
+        return await publish(options);
       });
 
       await expect(
@@ -175,30 +178,34 @@ describe("backupCreateCommand atomic archive write", () => {
 
       expect(await fs.readFile(outputPath, "utf8")).toBe("concurrent-archive");
     } finally {
-      linkSpy.mockRestore();
+      publicationSpy.mockRestore();
       await fs.rm(archiveDir, { recursive: true, force: true });
     }
   });
 
-  it("falls back to exclusive copy when hard-link publication is unsupported", async () => {
+  it("fails closed when hard-link publication is unsupported", async () => {
     const { archiveDir, outputPath, runtime } = await prepareAtomicBackupScenario({
-      archivePrefix: "openclaw-backup-copy-fallback-",
+      archivePrefix: "openclaw-backup-no-hardlink-",
     });
-    const linkSpy = vi.spyOn(fs, "link");
+    const publicationSpy = vi.spyOn(directoryDurability, "publishFileExclusive");
     try {
-      tarCreateMock.mockReturnValueOnce(createMockTarStream());
-      linkSpy.mockRejectedValueOnce(
+      backupWalkMock.mockReturnValueOnce(createMockTarStream());
+      publicationSpy.mockRejectedValueOnce(
         Object.assign(new Error("hard links not supported"), { code: "EOPNOTSUPP" }),
       );
 
-      const result = await backupCreateCommand(runtime, {
-        output: outputPath,
-      });
-
-      expect(result.archivePath).toBe(outputPath);
-      expect(await fs.readFile(outputPath, "utf8")).toBe("archive-bytes");
+      await expect(
+        backupCreateCommand(runtime, {
+          output: outputPath,
+        }),
+      ).rejects.toThrow(/requires hard-link support/iu);
+      expect(publicationSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ strategy: "link-required" }),
+      );
+      await expectPathMissing(outputPath);
+      await expect(fs.readdir(archiveDir)).resolves.toEqual([]);
     } finally {
-      linkSpy.mockRestore();
+      publicationSpy.mockRestore();
       await fs.rm(archiveDir, { recursive: true, force: true });
     }
   });

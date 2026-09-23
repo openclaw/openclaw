@@ -1,10 +1,7 @@
-import AppKit
+import ApplicationServices
 import CoreGraphics
 import Foundation
 import OpenClawKit
-import PeekabooAutomationKit
-import PeekabooFoundation
-@preconcurrency import ScreenCaptureKit
 
 /// Linearizes caller cancellation against action completion outside MainActor.
 /// The cancellation handler must record authority loss synchronously; its actor
@@ -63,35 +60,40 @@ final class ComputerActionExecutionQueue {
         let id: UUID
         let params: OpenClawComputerActParams
         let lifecycleGeneration: UInt64
+        let inputScopeId: UUID
         let operation: Operation
         let continuation: CheckedContinuation<OpenClawComputerActResult, Error>
         let cancellationState: ComputerActionCancellationState
     }
 
-    private let onLifecycleRelease: @MainActor () -> Bool
+    private let onInputRelease: @MainActor (UUID?) -> Bool
+    private let defaultInputScopeId = UUID()
     private let scheduleCancellationHop: CancellationHop
     private var lifecycleGeneration: UInt64 = 0
     private var pendingActions: [QueuedAction] = []
     private var drainTask: Task<Void, Never>?
     private var currentActionID: UUID?
     private var currentActionGeneration: UInt64?
+    private var currentActionScopeId: UUID?
     private var currentActionCancellationState: ComputerActionCancellationState?
     private var currentActionTask: Task<OpenClawComputerActResult, Error>?
     private var lifecycleReleasePending = false
+    private var scopeReleasesPending: Set<UUID> = []
 
     init(
-        onLifecycleRelease: @escaping @MainActor () -> Bool,
+        onInputRelease: @escaping @MainActor (UUID?) -> Bool,
         scheduleCancellationHop: @escaping CancellationHop = { operation in
             Task { @MainActor in operation() }
         })
     {
-        self.onLifecycleRelease = onLifecycleRelease
+        self.onInputRelease = onInputRelease
         self.scheduleCancellationHop = scheduleCancellationHop
     }
 
     func perform(
         _ params: OpenClawComputerActParams,
         lifecycleGeneration: UInt64,
+        inputScopeId: UUID? = nil,
         operation: @escaping Operation) async throws -> OpenClawComputerActResult
     {
         let actionID = UUID()
@@ -116,6 +118,7 @@ final class ComputerActionExecutionQueue {
                     id: actionID,
                     params: params,
                     lifecycleGeneration: lifecycleGeneration,
+                    inputScopeId: inputScopeId ?? self.defaultInputScopeId,
                     operation: operation,
                     continuation: continuation,
                     cancellationState: cancellationState))
@@ -140,6 +143,24 @@ final class ComputerActionExecutionQueue {
             _ = try? await activeTask.value
         }
         try? await self.waitForLifecycleRelease(lifecycleGeneration: lifecycleGeneration)
+    }
+
+    func releaseHeldInput(inputScopeId: UUID) async {
+        let generation = self.lifecycleGeneration
+        let activeTask = self.currentActionScopeId == inputScopeId ? self.currentActionTask : nil
+        if self.currentActionScopeId == inputScopeId {
+            _ = self.currentActionCancellationState?.requestCancellation()
+            self.currentActionTask?.cancel()
+        }
+        let matching = self.pendingActions.filter { $0.inputScopeId == inputScopeId }
+        self.pendingActions.removeAll { $0.inputScopeId == inputScopeId }
+        for queued in matching {
+            _ = queued.cancellationState.finish()
+            queued.continuation.resume(throwing: CancellationError())
+        }
+        self.attemptInputRelease(inputScopeId: inputScopeId)
+        if let activeTask { _ = try? await activeTask.value }
+        try? await self.waitForLifecycleRelease(lifecycleGeneration: generation)
     }
 
     func checkExecutionAllowed(lifecycleGeneration: UInt64) throws {
@@ -178,13 +199,30 @@ final class ComputerActionExecutionQueue {
                     throwing: ComputerActionService.ComputerActionError.lifecycleChanged)
                 continue
             }
+            self.currentActionID = queued.id
+            self.currentActionGeneration = queued.lifecycleGeneration
+            self.currentActionScopeId = queued.inputScopeId
+            self.currentActionCancellationState = queued.cancellationState
+            defer {
+                self.currentActionID = nil
+                self.currentActionGeneration = nil
+                self.currentActionScopeId = nil
+                self.currentActionCancellationState = nil
+                self.currentActionTask = nil
+            }
             do {
                 try await self.waitForLifecycleRelease(
                     lifecycleGeneration: queued.lifecycleGeneration,
                     cancellationState: queued.cancellationState)
             } catch {
                 _ = queued.cancellationState.finish()
-                queued.continuation.resume(throwing: error)
+                queued.continuation.resume(throwing: queued.lifecycleGeneration == self.lifecycleGeneration
+                    ? error : ComputerActionService.ComputerActionError.lifecycleChanged)
+                continue
+            }
+            guard queued.lifecycleGeneration == self.lifecycleGeneration else {
+                _ = queued.cancellationState.finish()
+                queued.continuation.resume(throwing: ComputerActionService.ComputerActionError.lifecycleChanged)
                 continue
             }
             guard !queued.cancellationState.isCancelled else {
@@ -193,9 +231,6 @@ final class ComputerActionExecutionQueue {
                 continue
             }
 
-            self.currentActionID = queued.id
-            self.currentActionGeneration = queued.lifecycleGeneration
-            self.currentActionCancellationState = queued.cancellationState
             let operationTask = Task { @MainActor [weak self] in
                 guard let self else { throw CancellationError() }
                 defer {
@@ -206,7 +241,7 @@ final class ComputerActionExecutionQueue {
                     if Task.isCancelled || callerCancelled
                         || queued.lifecycleGeneration != self.lifecycleGeneration
                     {
-                        let released = self.attemptLifecycleRelease()
+                        let released = self.attemptInputRelease(inputScopeId: queued.inputScopeId)
                         if callerCancelled, released {
                             queued.cancellationState.recordOperationReleaseSuccess()
                         }
@@ -230,21 +265,16 @@ final class ComputerActionExecutionQueue {
                 // Cancellation can win after the operation defer but before the
                 // result is committed. Release here so the actor hop cannot miss
                 // a just-finished left_mouse_down.
-                self.attemptLifecycleRelease()
+                self.attemptInputRelease(inputScopeId: queued.inputScopeId)
             }
             if cancellation.wasCancelled {
-                // A failed synthetic mouse-up keeps lifecycleReleasePending set.
+                // A failed synthetic mouse-up keeps its scoped release pending.
                 // Cancellation is not complete until the owned button is released
                 // or a newer lifecycle takes responsibility for the retry.
                 try? await self.waitForLifecycleRelease(
                     lifecycleGeneration: queued.lifecycleGeneration)
             }
             let lifecycleChanged = queued.lifecycleGeneration != self.lifecycleGeneration
-            self.currentActionID = nil
-            self.currentActionGeneration = nil
-            self.currentActionCancellationState = nil
-            self.currentActionTask = nil
-
             if lifecycleChanged {
                 queued.continuation.resume(
                     throwing: ComputerActionService.ComputerActionError.lifecycleChanged)
@@ -262,9 +292,10 @@ final class ComputerActionExecutionQueue {
         self.lifecycleGeneration = generation
 
         if let currentActionGeneration, currentActionGeneration < generation {
+            _ = self.currentActionCancellationState?.requestCancellation()
             self.currentActionTask?.cancel()
         }
-        self.attemptLifecycleRelease()
+        self.attemptInputRelease(inputScopeId: nil)
 
         let staleActions = self.pendingActions.filter { $0.lifecycleGeneration < generation }
         self.pendingActions.removeAll { $0.lifecycleGeneration < generation }
@@ -285,14 +316,23 @@ final class ComputerActionExecutionQueue {
         guard self.currentActionID == id else { return }
         // A canceled action may already have posted left_mouse_down. Release now,
         // and let the operation-task defer catch any later cancellation-ignoring post.
-        self.attemptLifecycleRelease()
+        if let scope = self.currentActionScopeId { self.attemptInputRelease(inputScopeId: scope) }
         self.currentActionTask?.cancel()
     }
 
     @discardableResult
-    private func attemptLifecycleRelease() -> Bool {
-        let released = self.onLifecycleRelease()
-        self.lifecycleReleasePending = !released
+    private func attemptInputRelease(inputScopeId: UUID?) -> Bool {
+        let released = self.onInputRelease(inputScopeId)
+        if let inputScopeId {
+            if released {
+                self.scopeReleasesPending.remove(inputScopeId)
+            } else {
+                self.scopeReleasesPending.insert(inputScopeId)
+            }
+        } else {
+            self.lifecycleReleasePending = !released
+            if released { self.scopeReleasesPending.removeAll() }
+        }
         return released
     }
 
@@ -300,7 +340,7 @@ final class ComputerActionExecutionQueue {
         lifecycleGeneration: UInt64,
         cancellationState: ComputerActionCancellationState? = nil) async throws
     {
-        while self.lifecycleReleasePending {
+        while self.lifecycleReleasePending || !self.scopeReleasesPending.isEmpty {
             try Task.checkCancellation()
             if cancellationState?.isCancelled == true {
                 throw CancellationError()
@@ -308,37 +348,119 @@ final class ComputerActionExecutionQueue {
             guard lifecycleGeneration == self.lifecycleGeneration else {
                 throw ComputerActionService.ComputerActionError.lifecycleChanged
             }
-            self.attemptLifecycleRelease()
-            guard self.lifecycleReleasePending else { return }
+            if self.lifecycleReleasePending {
+                self.attemptInputRelease(inputScopeId: nil)
+            } else {
+                for scope in self.scopeReleasesPending {
+                    self.attemptInputRelease(inputScopeId: scope)
+                }
+            }
+            guard self.lifecycleReleasePending || !self.scopeReleasesPending.isEmpty else { return }
             try await Task.sleep(for: .milliseconds(100))
         }
     }
 }
 
-/// Fulfills `computer.act` on this Mac by driving the embedded Peekaboo
-/// automation engine in-process. Peekaboo covers single/right/double click,
-/// move, drag, scroll, and key/hold. A narrow CoreGraphics path handles
-/// grapheme-atomic typing plus computer_20251124 primitives Peekaboo cannot
-/// express: middle/triple click, separate mouse down/up, and modified input.
+struct ComputerControlPermissionSnapshot: Equatable, Sendable {
+    enum Access: Equatable, Sendable {
+        case granted
+        case missing
+    }
+
+    enum Bucket: Equatable, Sendable {
+        case accessibility
+        case postEvent
+        case screenCapture
+
+        var displayName: String {
+            switch self {
+            case .accessibility: "Accessibility"
+            case .postEvent: "Event Posting"
+            case .screenCapture: "Screen Recording"
+            }
+        }
+    }
+
+    enum Diagnostic: Equatable, Sendable {
+        case granted
+        case missing([Bucket])
+        case accessibilityGrantMayBeStale
+
+        var detailText: String {
+            switch self {
+            case .granted:
+                "Accessibility, Event Posting, and Screen Recording are granted."
+            case let .missing(buckets):
+                "Missing: \(buckets.map(\.displayName).joined(separator: ", ")). "
+                    + "Grant access in System Settings → Privacy & Security, then reopen OpenClaw."
+            case .accessibilityGrantMayBeStale:
+                Self.staleAccessibilityRemediation
+            }
+        }
+
+        static let staleAccessibilityRemediation = """
+        OpenClaw may already appear enabled under System Settings → Privacy & Security → Accessibility. \
+        If so, the grant is pinned to an older build: select OpenClaw, remove it with −, then re-add \
+        /Applications/OpenClaw.app.
+        """
+    }
+
+    enum InputAccess: Equatable, Sendable {
+        case granted
+        case accessibilityMissing
+        case accessibilityGrantMayBeStale
+        case postEventMissing
+    }
+
+    let accessibility: Access
+    let postEvent: Access
+    let screenCapture: Access
+
+    @MainActor
+    static func probe() -> Self {
+        Self(
+            accessibility: AXIsProcessTrusted() ? .granted : .missing,
+            postEvent: CGPreflightPostEventAccess() ? .granted : .missing,
+            screenCapture: PermissionManager.screenRecordingPermissions.checkScreenRecordingPermission()
+                ? .granted : .missing)
+    }
+
+    var diagnostic: Diagnostic {
+        // Capture granted + AX denied is the observed stale cdhash signature after an app rebuild.
+        if self.accessibility == .missing, self.screenCapture == .granted {
+            return .accessibilityGrantMayBeStale
+        }
+        let missing = [
+            (Bucket.accessibility, self.accessibility),
+            (.postEvent, self.postEvent),
+            (.screenCapture, self.screenCapture),
+        ].compactMap { bucket, access in
+            access == .missing ? bucket : nil
+        }
+        return missing.isEmpty ? .granted : .missing(missing)
+    }
+
+    var inputAccess: InputAccess {
+        if self.accessibility == .missing {
+            return self.screenCapture == .granted
+                ? .accessibilityGrantMayBeStale
+                : .accessibilityMissing
+        }
+        return self.postEvent == .granted ? .granted : .postEventMissing
+    }
+}
+
+/// Routes one `computer.act` request to the executor that owns it: screen
+/// coordinates go to `ComputerScreenActionExecutor`, window- and element-scoped
+/// requests to `ComputerWindowActionExecutor`. This type owns everything the two
+/// executors share — the serializing execution queue, the input-permission
+/// probe, and the `ComputerActionError` vocabulary both of them throw.
 @MainActor
 final class ComputerActionService {
-    typealias MouseButtonEventPoster = @MainActor (
-        _ down: Bool,
-        _ point: CGPoint,
-        _ flags: CGEventFlags) throws -> Void
-    typealias MouseEventFactory = @MainActor (
-        _ type: CGEventType,
-        _ point: CGPoint,
-        _ button: CGMouseButton,
-        _ clickState: Int,
-        _ flags: CGEventFlags) throws -> CGEvent
-    typealias MouseEventPoster = @MainActor (_ event: CGEvent) throws -> Void
-    /// Posts one Swift grapheme as an atomic key-down/key-up pair. Cancellation
-    /// checkpoints live between calls so authority loss cannot strand a key.
-    typealias TextGraphemePoster = @MainActor (_ grapheme: Character) async throws -> Void
-
     enum ComputerActionError: LocalizedError {
         case accessibilityNotTrusted
+        case accessibilityGrantMayBeStale
+        case postEventAccessDenied
         case noDisplays
         case invalidScreenIndex(Int)
         case missingDisplayFrameId
@@ -354,11 +476,19 @@ final class ComputerActionService {
         case buttonNotHeld
         case eventCreationFailed
         case lifecycleChanged
+        case invalidRequest(String)
+        case staleObservation
+        case unsupportedAction(OpenClawComputerAction)
+        case refused(String)
 
         var errorDescription: String? {
             switch self {
             case .accessibilityNotTrusted:
                 "Accessibility permission is required for computer control"
+            case .accessibilityGrantMayBeStale:
+                ComputerControlPermissionSnapshot.Diagnostic.staleAccessibilityRemediation
+            case .postEventAccessDenied:
+                "Event Posting permission is required for computer control"
             case .noDisplays:
                 "No displays available for computer control"
             case let .invalidScreenIndex(idx):
@@ -388,394 +518,106 @@ final class ComputerActionService {
             case .eventCreationFailed:
                 "Failed to synthesize input event"
             case .lifecycleChanged:
-                "Computer control lifecycle changed while the action was pending"
+                "COMPUTER_STALE_OBSERVATION: provider generation changed; take a fresh observation and retry"
+            case let .invalidRequest(message):
+                "COMPUTER_INVALID_REQUEST: \(message)"
+            case .staleObservation:
+                "COMPUTER_STALE_OBSERVATION: take a fresh observation and retry"
+            case let .unsupportedAction(action):
+                "COMPUTER_UNSUPPORTED_ACTION: \(action.rawValue)"
+            case let .refused(message):
+                "COMPUTER_REFUSED_action_refused: \(message)"
             }
         }
     }
 
-    private let automation: UIAutomationService
-    private let permissions: PermissionsService
-    private let mouseButtonEventPoster: MouseButtonEventPoster
-    private let mouseEventFactory: MouseEventFactory
-    private let mouseEventPoster: MouseEventPoster
-    private let textGraphemePoster: TextGraphemePoster
-    /// Tracks whether a left_mouse_down is outstanding so mouse_move emits
-    /// drag events (state persists across invokes on the shared instance).
-    private var leftButtonDown = false
-    /// Bounded watchdog that releases a stuck left button if the matching
-    /// left_mouse_up never arrives (arm expiry, disconnect, or a failed turn).
-    private var buttonReleaseTask: Task<Void, Never>?
-    /// Modifier flags held since the outstanding left_mouse_down, reapplied to
-    /// drag and release events so a modifier-held split drag keeps Cmd/Opt/Shift
-    /// for the whole gesture even when later turns omit the modifier.
-    private var heldButtonFlags: CGEventFlags = []
-    private lazy var executionQueue = ComputerActionExecutionQueue { [weak self] in
-        self?.releaseCurrentHeldButton() ?? true
+    private let screen: ComputerScreenActionExecutor
+    private let defaultInputScopeId = UUID()
+    private lazy var window = ComputerWindowActionExecutor()
+    private lazy var executionQueue = ComputerActionExecutionQueue { [weak self] scope in
+        self?.screen.releaseCurrentHeldButton(inputScopeId: scope) ?? true
     }
 
-    // Drag pacing: fast enough to feel responsive, slow enough that dropped
-    // targets (AppKit hit-testing mid-drag) do not misfire.
-    private static let dragDurationMs = 400
-    private static let dragSteps = 24
-    private static let clickInterEventDelay: useconds_t = 12000
-    /// Cap wheel ticks at the node so a direct armed caller cannot overflow the
-    /// Int32 wheel delta (line count = ticks * 5) and crash the app.
-    private static let maxScrollTicks = 100
-    /// Cap hold_key at the node: computer.act is directly invocable once armed,
-    /// so an unbounded durationMs must not pin a key down for minutes.
-    private static let maxHoldMs = 10000
-    /// Allow slightly-past-edge coordinates so clicks on the last row/column of
-    /// the reported frame still land instead of erroring on rounding.
-    private static let coordinateBoundsEpsilon: Double = 2
-    /// Idle timeout for an outstanding left button. Refreshed by each drag move,
-    /// so a legitimate multi-turn drag (every turn adds a screenshot plus a model
-    /// inference) is not force-released mid-gesture. Only a truly abandoned button
-    /// (arm expiry, disconnect, or a failed turn with no further activity) hits
-    /// this bounded cleanup.
-    private static let buttonHoldIdleTimeoutNanoseconds: UInt64 = 120 * 1_000_000_000
-
     init() {
-        self.automation = UIAutomationService()
-        self.permissions = PermissionsService()
-        self.mouseButtonEventPoster = Self.postMouseButtonEvent
-        self.mouseEventFactory = Self.makeMouseEvent
-        self.mouseEventPoster = Self.postMouseEvent
-        self.textGraphemePoster = { try Self.postTextGrapheme($0) }
+        self.screen = ComputerScreenActionExecutor()
     }
 
     #if DEBUG
-    init(mouseButtonEventPoster: @escaping MouseButtonEventPoster) {
-        self.automation = UIAutomationService()
-        self.permissions = PermissionsService()
-        self.mouseButtonEventPoster = mouseButtonEventPoster
-        self.mouseEventFactory = Self.makeMouseEvent
-        self.mouseEventPoster = Self.postMouseEvent
-        self.textGraphemePoster = { try Self.postTextGrapheme($0) }
-    }
-
-    init(
-        mouseEventFactory: @escaping MouseEventFactory,
-        mouseEventPoster: @escaping MouseEventPoster)
-    {
-        self.automation = UIAutomationService()
-        self.permissions = PermissionsService()
-        self.mouseButtonEventPoster = Self.postMouseButtonEvent
-        self.mouseEventFactory = mouseEventFactory
-        self.mouseEventPoster = mouseEventPoster
-        self.textGraphemePoster = { try Self.postTextGrapheme($0) }
-    }
-
-    init(textGraphemePoster: @escaping TextGraphemePoster) {
-        self.automation = UIAutomationService()
-        self.permissions = PermissionsService()
-        self.mouseButtonEventPoster = Self.postMouseButtonEvent
-        self.mouseEventFactory = Self.makeMouseEvent
-        self.mouseEventPoster = Self.postMouseEvent
-        self.textGraphemePoster = textGraphemePoster
+    init(screen: ComputerScreenActionExecutor) {
+        self.screen = screen
     }
     #endif
 
     func perform(
         _ params: OpenClawComputerActParams,
-        lifecycleGeneration: UInt64) async throws -> OpenClawComputerActResult
+        lifecycleGeneration: UInt64,
+        inputScopeId: UUID? = nil,
+        checkScopeAllowed: @escaping @MainActor () throws -> Void = {}) async throws -> OpenClawComputerActResult
     {
-        try await self.executionQueue.perform(
+        try checkScopeAllowed()
+        let scope = inputScopeId ?? self.defaultInputScopeId
+        return try await self.executionQueue.perform(
             params,
-            lifecycleGeneration: lifecycleGeneration)
+            lifecycleGeneration: lifecycleGeneration,
+            inputScopeId: scope)
         { [weak self] params, lifecycleGeneration in
             guard let self else { throw CancellationError() }
             return try await self.performImmediately(
                 params,
-                lifecycleGeneration: lifecycleGeneration)
+                lifecycleGeneration: lifecycleGeneration,
+                inputScopeId: scope,
+                checkScopeAllowed: checkScopeAllowed)
         }
     }
 
     private func performImmediately(
         _ params: OpenClawComputerActParams,
-        lifecycleGeneration: UInt64) async throws -> OpenClawComputerActResult
+        lifecycleGeneration: UInt64,
+        inputScopeId: UUID,
+        checkScopeAllowed: @escaping @MainActor () throws -> Void) async throws -> OpenClawComputerActResult
     {
         try self.executionQueue.checkExecutionAllowed(lifecycleGeneration: lifecycleGeneration)
-        guard self.permissions.checkAccessibilityPermission() else {
-            throw ComputerActionError.accessibilityNotTrusted
+        try checkScopeAllowed()
+        if params.deliveryMode == .background,
+           params.windowRef == nil,
+           !params.action.isWindowScopedOnly
+        {
+            return OpenClawComputerActResult(
+                ok: false,
+                effect: .suspectedNoop,
+                escalation: OpenClawComputerEscalation(
+                    recommended: "window-pixel",
+                    reasonCode: "no_window_target"))
         }
-        let display = try await resolveDisplay(params: params)
-        try executionQueue.checkExecutionAllowed(lifecycleGeneration: lifecycleGeneration)
-        try await self.dispatch(
-            params,
-            display: display,
-            lifecycleGeneration: lifecycleGeneration)
-        try self.executionQueue.checkExecutionAllowed(lifecycleGeneration: lifecycleGeneration)
-        let cursor = self.automation.currentMouseLocation() ?? CGPoint.zero
-        return OpenClawComputerActResult(ok: true, cursorX: cursor.x, cursorY: cursor.y)
-    }
-
-    // MARK: - Dispatch
-
-    private func dispatch(
-        _ params: OpenClawComputerActParams,
-        display: ResolvedDisplay,
-        lifecycleGeneration: UInt64) async throws
-    {
-        try self.executionQueue.checkExecutionAllowed(lifecycleGeneration: lifecycleGeneration)
-        let modifiers = try ComputerModifiers.parse(params.modifiers)
-        try Self.validateHeldButtonTransition(action: params.action, leftButtonDown: self.leftButtonDown)
-        switch params.action {
-        case .leftClick, .rightClick, .doubleClick:
-            let point = try requiredPoint(params, display: display)
-            let button: ComputerMouseButton = params.action == .rightClick ? .right : .left
-            let count = params.action == .doubleClick ? 2 : 1
-            if modifiers.isEmpty {
-                try await self.peekabooClick(at: point, action: params.action)
-            } else {
-                try self.rawClick(at: point, button: button, count: count, flags: modifiers.flags)
-            }
-        case .middleClick:
-            let point = try requiredPoint(params, display: display)
-            try rawClick(at: point, button: .middle, count: 1, flags: modifiers.flags)
-        case .tripleClick:
-            let point = try requiredPoint(params, display: display)
-            try rawClick(at: point, button: .left, count: 3, flags: modifiers.flags)
-        case .mouseMove:
-            let point = try requiredPoint(params, display: display)
-            if self.leftButtonDown {
-                // A drag is in progress; ordinary moveMouse would post
-                // mouseMoved and break drag targets, so emit dragged events
-                // carrying the modifiers held since left_mouse_down.
-                let event = try self.mouseEventFactory(
-                    .leftMouseDragged,
-                    point,
-                    .left,
-                    1,
-                    self.heldButtonFlags)
-                try self.mouseEventPoster(event)
-                // Refresh the release watchdog: an active drag must not be
-                // auto-released mid-gesture during normal tool-loop latency.
-                self.armButtonWatchdog()
-            } else {
-                try await self.automation.moveMouse(to: point, duration: 0, steps: 1, profile: .linear)
-            }
-        case .leftClickDrag:
-            let to = try requiredPoint(params, display: display)
-            let from = try point(params.fromX, params.fromY, params: params, display: display)
-                ?? to
-            try await self.rawDrag(from: from, to: to, flags: modifiers.flags)
-        case .leftMouseDown, .leftMouseUp:
-            // Coordinate is optional: press/release at the current cursor when omitted.
-            let mappedPoint = try self.point(params.x, params.y, params: params, display: display)
-            let point = if let mappedPoint {
-                mappedPoint
-            } else if params.action == .leftMouseDown {
-                try Self.validatedCurrentCursorPoint(
-                    self.automation.currentMouseLocation(),
-                    display: display.geometry)
-            } else {
-                self.automation.currentMouseLocation() ?? CGPoint.zero
-            }
-            if params.action == .leftMouseDown {
-                try self.rawMouseButton(down: true, at: point, flags: modifiers.flags)
-                self.setLeftButtonDown(true, flags: modifiers.flags)
-            } else {
-                // Release with the modifiers held since left_mouse_down (unioned
-                // with any the release turn resends) so modifier-held drops keep
-                // their copy/move semantics.
-                try self.releaseHeldButton(at: point, additionalFlags: modifiers.flags)
-            }
-        case .scroll:
-            try await self.performScroll(
-                params,
-                display: display,
-                modifiers: modifiers,
+        let checkExecutionAllowed: @MainActor () throws -> Void = { [weak self] in
+            guard let self else { throw CancellationError() }
+            try self.executionQueue.checkExecutionAllowed(
                 lifecycleGeneration: lifecycleGeneration)
-        case .type:
-            guard let text = params.text, !text.isEmpty else { throw ComputerActionError.emptyText }
-            try await self.typeText(text, lifecycleGeneration: lifecycleGeneration)
-        case .key:
-            let keys = try requireKeys(params.keys)
-            try await self.automation.hotkey(keys: keys, holdDuration: 0)
-        case .holdKey:
-            let keys = try requireKeys(params.keys)
-            let holdMs = min(Self.maxHoldMs, max(0, params.durationMs ?? 1000))
-            try await self.automation.hotkey(keys: keys, holdDuration: holdMs)
+            try checkScopeAllowed()
         }
+        if params.isWindowScopedRequest {
+            return try await self.window.perform(
+                params,
+                lifecycleGeneration: lifecycleGeneration,
+                checkExecutionAllowed: checkExecutionAllowed)
+        }
+        return try await self.screen.perform(
+            params,
+            inputScopeId: inputScopeId,
+            checkExecutionAllowed: checkExecutionAllowed)
     }
 
-    private func peekabooClick(at point: CGPoint, action: OpenClawComputerAction) async throws {
-        let clickType: ClickType = switch action {
-        case .rightClick: .right
-        case .doubleClick: .double
-        default: .single
-        }
-        try await self.automation.click(target: .coordinates(point), clickType: clickType, snapshotId: nil)
-    }
-
-    private func typeText(_ text: String, lifecycleGeneration: UInt64) async throws {
-        for grapheme in text {
-            // Caller cancellation is recorded synchronously by the execution
-            // queue, so this check remains authoritative even before its actor
-            // cancellation hop runs.
-            try self.executionQueue.checkExecutionAllowed(lifecycleGeneration: lifecycleGeneration)
-            try await self.textGraphemePoster(grapheme)
-            // The default poster is synchronous. Yield explicitly so disconnect,
-            // pause, disable, and endpoint-replacement lifecycle hops can revoke
-            // authority before the next synthetic key pair.
-            await Task.yield()
-        }
-        try self.executionQueue.checkExecutionAllowed(lifecycleGeneration: lifecycleGeneration)
-    }
-
-    private func performScroll(
-        _ params: OpenClawComputerActParams,
-        display: ResolvedDisplay,
-        modifiers: ComputerModifiers,
-        lifecycleGeneration: UInt64) async throws
-    {
-        guard let direction = params.scrollDirection else { throw ComputerActionError.invalidScroll }
-        let amount = min(Self.maxScrollTicks, max(1, params.scrollAmount ?? 3))
-        // Position the pointer over the requested region first; both Peekaboo
-        // and the raw wheel event scroll at the current mouse location.
-        if let point = try point(params.x, params.y, params: params, display: display) {
-            try await self.automation.moveMouse(to: point, duration: 0, steps: 1, profile: .linear)
-        } else {
-            _ = try Self.validatedCurrentCursorPoint(
-                self.automation.currentMouseLocation(),
-                display: display.geometry)
-        }
-        try self.executionQueue.checkExecutionAllowed(lifecycleGeneration: lifecycleGeneration)
-        if modifiers.isEmpty {
-            try await self.automation.scroll(ScrollRequest(
-                direction: Self.scrollDirection(direction),
-                amount: amount))
-        } else {
-            try self.rawScroll(direction: direction, amount: amount, flags: modifiers.flags)
-        }
-    }
-
-    // MARK: - Coordinate mapping
-
-    /// The target display in global points plus the capture source width used to
-    /// derive the captured screenshot pixel width for coordinate scaling.
-    private struct ResolvedDisplay {
-        var geometry: OpenClawComputerDisplayGeometry
-        var sourceWidth: Double
-        var sourceHeight: Double
-    }
-
-    private func requiredPoint(
-        _ params: OpenClawComputerActParams,
-        display: ResolvedDisplay) throws -> CGPoint
-    {
-        guard let point = try point(params.x, params.y, params: params, display: display) else {
-            throw ComputerActionError.missingCoordinate
-        }
-        return point
-    }
-
-    private func point(
-        _ x: Double?,
-        _ y: Double?,
-        params: OpenClawComputerActParams,
-        display: ResolvedDisplay) throws -> CGPoint?
-    {
-        if x == nil, y == nil {
-            return nil
-        }
-        // A partial coordinate (only x or only y) is malformed: optional-coordinate
-        // actions (scroll, mouse down/up) must fail rather than silently acting at
-        // the current cursor, and a partial drag origin must not fall back to the
-        // destination.
-        guard let x, let y else { throw ComputerActionError.missingCoordinate }
-        // Coordinates are meaningful only in the exact reference frame bound into
-        // displayFrameId. Missing or non-positive widths must never fall back to
-        // the native source width, which could turn valid screenshot pixels into a
-        // deterministic misclick.
-        let refWidth = try Self.requiredReferenceWidth(params)
-        let capturedWidth = OpenClawComputerInputGeometry.capturedWidth(
-            refWidth: refWidth,
-            sourceWidth: display.sourceWidth,
-            sourceHeight: display.sourceHeight)
-        let mapped = OpenClawComputerInputGeometry.mapReferencePointToGlobal(
-            x: x,
-            y: y,
-            capturedWidthPixels: capturedWidth,
-            display: display.geometry)
-        // Reject coordinates well outside the captured display: on a multi-display
-        // Mac an out-of-frame coordinate could otherwise map onto an adjacent
-        // screen and click content the model never saw.
-        let geometry = display.geometry
-        let epsilon = Self.coordinateBoundsEpsilon
-        let withinX = mapped.x >= geometry.originX - epsilon
-            && mapped.x <= geometry.originX + geometry.widthPoints + epsilon
-        let withinY = mapped.y >= geometry.originY - epsilon
-            && mapped.y <= geometry.originY + geometry.heightPoints + epsilon
-        guard withinX, withinY else { throw ComputerActionError.coordinateOutOfBounds }
-        // Clamp the epsilon-tolerated rounding to strictly inside the selected
-        // display so a far-edge coordinate cannot post onto an adjacent screen.
-        let clamped = OpenClawComputerInputGeometry.clampToDisplay(
-            x: mapped.x,
-            y: mapped.y,
-            display: geometry)
-        return CGPoint(x: clamped.x, y: clamped.y)
-    }
-
-    static func validatedCurrentCursorPoint(
-        _ point: CGPoint?,
-        display: OpenClawComputerDisplayGeometry) throws -> CGPoint
-    {
-        guard let point,
-              point.x >= display.originX,
-              point.x < display.originX + display.widthPoints,
-              point.y >= display.originY,
-              point.y < display.originY + display.heightPoints
-        else { throw ComputerActionError.coordinateOutOfBounds }
-        return point
-    }
-
-    static func validateHeldButtonTransition(
-        action: OpenClawComputerAction,
-        leftButtonDown: Bool) throws
-    {
-        if action == .leftMouseUp, !leftButtonDown {
-            // Never synthesize an unmatched up: it could terminate a physical
-            // user drag that this service did not start.
-            throw ComputerActionError.buttonNotHeld
-        }
-        guard leftButtonDown else { return }
-        switch action {
-        case .leftClick, .doubleClick, .tripleClick, .leftClickDrag, .leftMouseDown:
-            throw ComputerActionError.buttonAlreadyHeld
-        default:
+    static func validateInputPermissions(_ permissions: ComputerControlPermissionSnapshot) throws {
+        switch permissions.inputAccess {
+        case .granted:
             return
+        case .accessibilityMissing:
+            throw ComputerActionError.accessibilityNotTrusted
+        case .accessibilityGrantMayBeStale:
+            throw ComputerActionError.accessibilityGrantMayBeStale
+        case .postEventMissing:
+            throw ComputerActionError.postEventAccessDenied
         }
-    }
-
-    // MARK: - Button-hold watchdog
-
-    private func setLeftButtonDown(_ down: Bool, flags: CGEventFlags = []) {
-        self.buttonReleaseTask?.cancel()
-        self.buttonReleaseTask = nil
-        self.leftButtonDown = down
-        self.heldButtonFlags = down ? flags : []
-        guard down else { return }
-        self.armButtonWatchdog()
-    }
-
-    /// Arms or re-arms the bounded idle watchdog for an outstanding left button.
-    /// Re-armed on each drag move so a live multi-turn gesture is never cut off,
-    /// while an abandoned button still gets released after the idle timeout.
-    private func armButtonWatchdog() {
-        self.buttonReleaseTask?.cancel()
-        self.buttonReleaseTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: Self.buttonHoldIdleTimeoutNanoseconds)
-            guard !Task.isCancelled else { return }
-            self?.autoReleaseLeftButton()
-        }
-    }
-
-    private func autoReleaseLeftButton() {
-        // This task has fired and cannot serve as a future retry. Clear its handle
-        // before attempting release; a failure must install a new watchdog below.
-        self.buttonReleaseTask = nil
-        self.releaseCurrentHeldButton()
     }
 
     /// Releases any outstanding synthetic left button immediately. Called on
@@ -786,413 +628,33 @@ final class ComputerActionService {
         await self.executionQueue.releaseHeldInput(lifecycleGeneration: lifecycleGeneration)
     }
 
-    /// Releases the current button without advancing the lifecycle epoch. The
-    /// execution queue owns epoch changes so a reordered duplicate release cannot
-    /// cancel a fresh action that already adopted the same epoch.
-    @discardableResult
-    private func releaseCurrentHeldButton() -> Bool {
-        guard self.leftButtonDown else {
-            self.buttonReleaseTask?.cancel()
-            self.buttonReleaseTask = nil
-            return true
-        }
-        let point = self.automation.currentMouseLocation() ?? CGPoint.zero
-        try? self.releaseHeldButton(at: point)
-        return !self.leftButtonDown
-    }
-
-    /// Posts the service-owned mouse-up and commits the state transition only
-    /// after synthesis succeeds. A failed explicit up carries its modifiers into
-    /// watchdog/lifecycle retries so the eventual drop preserves its semantics.
-    private func releaseHeldButton(
-        at point: CGPoint,
-        additionalFlags: CGEventFlags = []) throws
-    {
-        let releaseFlags = self.heldButtonFlags.union(additionalFlags)
-        do {
-            try self.rawMouseButton(down: false, at: point, flags: releaseFlags)
-        } catch {
-            // Ownership authorizes the only safe follow-up mouse-up. Keep it and
-            // its modifiers until synthesis succeeds, with a live watchdog retry.
-            self.heldButtonFlags = releaseFlags
-            self.armButtonWatchdog()
-            throw error
-        }
-        self.setLeftButtonDown(false)
+    func releaseHeldInput(inputScopeId: UUID?) async {
+        await self.executionQueue.releaseHeldInput(inputScopeId: inputScopeId ?? self.defaultInputScopeId)
     }
 
     #if DEBUG
-    var isLeftButtonDownForTesting: Bool {
-        self.leftButtonDown
-    }
-
-    var heldButtonFlagsForTesting: CGEventFlags {
-        self.heldButtonFlags
-    }
-
-    var buttonWatchdogArmedForTesting: Bool {
-        self.buttonReleaseTask != nil
-    }
-
-    func holdLeftButtonForTesting(flags: CGEventFlags) {
-        self.setLeftButtonDown(true, flags: flags)
-    }
-
-    func fireButtonWatchdogForTesting() {
-        self.buttonReleaseTask?.cancel()
-        self.autoReleaseLeftButton()
-    }
-
-    func releaseHeldButtonForTesting(additionalFlags: CGEventFlags) throws {
-        let point = self.automation.currentMouseLocation() ?? CGPoint.zero
-        try self.releaseHeldButton(at: point, additionalFlags: additionalFlags)
-    }
-
     var lifecycleGenerationForTesting: UInt64 {
         self.executionQueue.lifecycleGenerationForTesting
     }
 
     func typeTextForTesting(
         _ text: String,
-        lifecycleGeneration: UInt64 = 0) async throws -> OpenClawComputerActResult
+        lifecycleGeneration: UInt64 = 0,
+        inputScopeId: UUID? = nil) async throws -> OpenClawComputerActResult
     {
         let params = OpenClawComputerActParams(action: .type, text: text)
         return try await self.executionQueue.perform(
             params,
-            lifecycleGeneration: lifecycleGeneration)
+            lifecycleGeneration: lifecycleGeneration,
+            inputScopeId: inputScopeId ?? self.defaultInputScopeId)
         { [weak self] _, generation in
             guard let self else { throw CancellationError() }
-            try await self.typeText(text, lifecycleGeneration: generation)
-            return OpenClawComputerActResult(ok: true, cursorX: 0, cursorY: 0)
+            try await self.screen.typeText(text) { [weak self] in
+                guard let self else { throw CancellationError() }
+                try self.executionQueue.checkExecutionAllowed(lifecycleGeneration: generation)
+            }
+            return OpenClawComputerActResult(ok: true)
         }
     }
     #endif
-
-    private func resolveDisplay(params: OpenClawComputerActParams) async throws -> ResolvedDisplay {
-        // Match ScreenSnapshotService display ordering so a computer.act
-        // screenIndex targets the same display the model saw in screen.snapshot.
-        let content = try await SCShareableContent.current
-        let displays = content.displays.sorted { $0.displayID < $1.displayID }
-        guard !displays.isEmpty else { throw ComputerActionError.noDisplays }
-        let idx = params.screenIndex ?? 0
-        guard idx >= 0, idx < displays.count else { throw ComputerActionError.invalidScreenIndex(idx) }
-        // CGDisplayBounds is the global top-left point space CGEvent uses;
-        // SCDisplay.width/height is the capture source size ScreenSnapshotService
-        // caps to refWidth, so together they recover the captured pixel scale and
-        // the source aspect ratio needed for portrait longest-edge scaling.
-        let bounds = CGDisplayBounds(displays[idx].displayID)
-        let geometry = OpenClawComputerDisplayGeometry(
-            originX: bounds.origin.x,
-            originY: bounds.origin.y,
-            widthPoints: bounds.width,
-            heightPoints: bounds.height)
-        let sourceWidth = Double(displays[idx].width)
-        let sourceHeight = Double(displays[idx].height)
-        // A display can disappear between the ScreenCaptureKit snapshot and
-        // CGDisplayBounds, which returns a zero rectangle for a stale id. Reject
-        // all degenerate geometry here; mapping it would collapse input to (0, 0).
-        guard OpenClawComputerInputGeometry.isValidMappingGeometry(
-            sourceWidth: sourceWidth,
-            sourceHeight: sourceHeight,
-            display: geometry)
-        else {
-            throw ComputerActionError.noDisplays
-        }
-        if Self.usesScreenshotCoordinates(params) {
-            let refWidth = try Self.requiredReferenceWidth(params)
-            let currentFrameId = OpenClawComputerInputGeometry.displayFrameId(
-                displayID: displays[idx].displayID,
-                sourceWidth: sourceWidth,
-                sourceHeight: sourceHeight,
-                referenceWidth: refWidth,
-                display: geometry)
-            try Self.validateDisplayFrame(params, currentFrameId: currentFrameId)
-        }
-        return ResolvedDisplay(
-            geometry: geometry,
-            sourceWidth: sourceWidth,
-            sourceHeight: sourceHeight)
-    }
-
-    private static func usesScreenshotCoordinates(_ params: OpenClawComputerActParams) -> Bool {
-        params.x != nil || params.y != nil || params.fromX != nil || params.fromY != nil
-    }
-
-    private static func requiredReferenceWidth(_ params: OpenClawComputerActParams) throws -> Int {
-        guard let refWidth = params.refWidth, refWidth > 0 else {
-            throw ComputerActionError.invalidReferenceWidth
-        }
-        return refWidth
-    }
-
-    static func validateDisplayFrame(
-        _ params: OpenClawComputerActParams,
-        currentFrameId: String) throws
-    {
-        guard self.usesScreenshotCoordinates(params) else { return }
-        _ = try self.requiredReferenceWidth(params)
-        guard let expectedFrameId = params.displayFrameId, !expectedFrameId.isEmpty else {
-            throw ComputerActionError.missingDisplayFrameId
-        }
-        guard expectedFrameId == currentFrameId else {
-            throw ComputerActionError.displayFrameChanged
-        }
-    }
-
-    private func requireKeys(_ keys: String?) throws -> String {
-        guard let keys, !keys.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            throw ComputerActionError.missingKeys
-        }
-        return keys
-    }
-
-    private static func scrollDirection(
-        _ direction: OpenClawComputerScrollDirection) -> PeekabooFoundation.ScrollDirection
-    {
-        switch direction {
-        case .up: .up
-        case .down: .down
-        case .left: .left
-        case .right: .right
-        }
-    }
-
-    // MARK: - Raw CoreGraphics primitives
-
-    private func rawClick(at point: CGPoint, button: ComputerMouseButton, count: Int, flags: CGEventFlags) throws {
-        // Build every down/up pair before posting the first down. Event creation
-        // failure can then never strand a button between a successfully created
-        // down and a missing up.
-        let pairs = try (1...max(1, count)).map { click in
-            let down = try self.mouseEventFactory(
-                button.downType,
-                point,
-                button.cgButton,
-                click,
-                flags)
-            let up = try self.mouseEventFactory(
-                button.upType,
-                point,
-                button.cgButton,
-                click,
-                flags)
-            return (down: down, up: up)
-        }
-        for pair in pairs {
-            try self.mouseEventPoster(pair.down)
-            try self.mouseEventPoster(pair.up)
-            usleep(Self.clickInterEventDelay)
-        }
-    }
-
-    private func rawDrag(from: CGPoint, to: CGPoint, flags: CGEventFlags) async throws {
-        let down = try self.mouseEventFactory(.leftMouseDown, from, .left, 1, flags)
-        let moves = try (1...Self.dragSteps).map { step in
-            let fraction = Double(step) / Double(Self.dragSteps)
-            let point = CGPoint(
-                x: from.x + (to.x - from.x) * fraction,
-                y: from.y + (to.y - from.y) * fraction)
-            return try self.mouseEventFactory(.leftMouseDragged, point, .left, 1, flags)
-        }
-        let up = try self.mouseEventFactory(.leftMouseUp, to, .left, 1, flags)
-
-        try self.mouseEventPoster(down)
-        var needsRelease = true
-        defer {
-            if needsRelease {
-                try? self.mouseEventPoster(up)
-            }
-        }
-        let stepDelay = UInt64(Self.dragDurationMs) * 1_000_000 / UInt64(Self.dragSteps)
-        for move in moves {
-            try Task.checkCancellation()
-            try self.mouseEventPoster(move)
-            try await Task.sleep(nanoseconds: stepDelay)
-        }
-        try self.mouseEventPoster(up)
-        needsRelease = false
-    }
-
-    private func rawMouseButton(down: Bool, at point: CGPoint, flags: CGEventFlags) throws {
-        try self.mouseButtonEventPoster(down, point, flags)
-    }
-
-    private static func postMouseButtonEvent(
-        _ down: Bool,
-        _ point: CGPoint,
-        _ flags: CGEventFlags) throws
-    {
-        let type: CGEventType = down ? .leftMouseDown : .leftMouseUp
-        let event = try Self.makeMouseEvent(type, point, .left, 1, flags)
-        try Self.postMouseEvent(event)
-    }
-
-    private static func makeMouseEvent(
-        _ type: CGEventType,
-        _ point: CGPoint,
-        _ button: CGMouseButton,
-        _ clickState: Int,
-        _ flags: CGEventFlags) throws -> CGEvent
-    {
-        guard let event = CGEvent(
-            mouseEventSource: nil,
-            mouseType: type,
-            mouseCursorPosition: point,
-            mouseButton: button)
-        else {
-            throw ComputerActionError.eventCreationFailed
-        }
-        if clickState > 1 {
-            event.setIntegerValueField(.mouseEventClickState, value: Int64(clickState))
-        }
-        if !flags.isEmpty {
-            event.flags = flags
-        }
-        return event
-    }
-
-    private static func postMouseEvent(_ event: CGEvent) throws {
-        event.post(tap: .cghidEventTap)
-    }
-
-    /// Mirrors the pinned Peekaboo/AXorcist typing contract: iterate Swift
-    /// graphemes, map newline/tab to their physical keys, and post Unicode for
-    /// everything else. Both events are built before the first is posted.
-    private static func postTextGrapheme(_ grapheme: Character) throws {
-        let keyCode: CGKeyCode = switch grapheme {
-        case "\n": 0x24
-        case "\t": 0x30
-        default: 0
-        }
-        guard let keyDown = CGEvent(
-            keyboardEventSource: nil,
-            virtualKey: keyCode,
-            keyDown: true),
-            let keyUp = CGEvent(
-                keyboardEventSource: nil,
-                virtualKey: keyCode,
-                keyDown: false)
-        else { throw ComputerActionError.eventCreationFailed }
-
-        if grapheme != "\n", grapheme != "\t" {
-            let utf16 = Array(String(grapheme).utf16)
-            utf16.withUnsafeBufferPointer { buffer in
-                guard let baseAddress = buffer.baseAddress else { return }
-                keyDown.keyboardSetUnicodeString(
-                    stringLength: buffer.count,
-                    unicodeString: baseAddress)
-                keyUp.keyboardSetUnicodeString(
-                    stringLength: buffer.count,
-                    unicodeString: baseAddress)
-            }
-        }
-
-        keyDown.post(tap: .cghidEventTap)
-        usleep(1000)
-        keyUp.post(tap: .cghidEventTap)
-    }
-
-    #if DEBUG
-    func rawClickForTesting(count: Int = 1) throws {
-        try self.rawClick(at: .zero, button: .left, count: count, flags: [])
-    }
-
-    func rawDragForTesting() async throws {
-        try await self.rawDrag(
-            from: .zero,
-            to: CGPoint(x: 24, y: 24),
-            flags: [])
-    }
-    #endif
-
-    private func rawScroll(direction: OpenClawComputerScrollDirection, amount: Int, flags: CGEventFlags) throws {
-        // Line units per tick match Peekaboo's non-smooth scroll (~5 lines).
-        let lines = Int32(amount * 5)
-        let (wheel1, wheel2): (Int32, Int32) = switch direction {
-        case .up: (lines, 0)
-        case .down: (-lines, 0)
-        case .left: (0, lines)
-        case .right: (0, -lines)
-        }
-        guard let event = CGEvent(
-            scrollWheelEvent2Source: nil,
-            units: .line,
-            wheelCount: 2,
-            wheel1: wheel1,
-            wheel2: wheel2,
-            wheel3: 0)
-        else {
-            throw ComputerActionError.eventCreationFailed
-        }
-        if !flags.isEmpty {
-            event.flags = flags
-        }
-        event.post(tap: .cghidEventTap)
-    }
-}
-
-/// Mouse button plus the CoreGraphics event types for the raw click path.
-private enum ComputerMouseButton {
-    case left
-    case right
-    case middle
-
-    var cgButton: CGMouseButton {
-        switch self {
-        case .left: .left
-        case .right: .right
-        case .middle: .center
-        }
-    }
-
-    var downType: CGEventType {
-        switch self {
-        case .left: .leftMouseDown
-        case .right: .rightMouseDown
-        case .middle: .otherMouseDown
-        }
-    }
-
-    var upType: CGEventType {
-        switch self {
-        case .left: .leftMouseUp
-        case .right: .rightMouseUp
-        case .middle: .otherMouseUp
-        }
-    }
-}
-
-/// Parses a portable modifier string ("shift", "cmd+alt") into CGEvent flags.
-struct ComputerModifiers {
-    var flags: CGEventFlags
-
-    var isEmpty: Bool {
-        self.flags.isEmpty
-    }
-
-    static func parse(_ raw: String?) throws -> ComputerModifiers {
-        guard let raw, !raw.isEmpty else { return ComputerModifiers(flags: []) }
-        var flags: CGEventFlags = []
-        for piece in raw.split(whereSeparator: { $0 == "+" || $0 == "," || $0 == " " }) {
-            let key = piece.lowercased()
-            switch key {
-            case "cmd", "command", "meta", "super", "win", "windows":
-                flags.insert(.maskCommand)
-            case "shift":
-                flags.insert(.maskShift)
-            case "ctrl", "control":
-                flags.insert(.maskControl)
-            case "alt", "opt", "option":
-                flags.insert(.maskAlternate)
-            case "fn", "function":
-                flags.insert(.maskSecondaryFn)
-            default:
-                // A typo like "shfit" would otherwise silently drop the modifier
-                // and perform a materially different high-risk gesture (a plain
-                // click instead of a modifier-click); reject it instead.
-                throw ComputerActionService.ComputerActionError.invalidModifier(key)
-            }
-        }
-        return ComputerModifiers(flags: flags)
-    }
 }

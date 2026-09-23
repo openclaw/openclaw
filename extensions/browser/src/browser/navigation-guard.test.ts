@@ -1,4 +1,5 @@
 // Browser tests cover navigation guard plugin behavior.
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SsrFBlockedError, type LookupFn } from "../infra/net/ssrf.js";
 import {
@@ -116,6 +117,54 @@ describe("browser navigation guard", () => {
     expect(lookupFn).toHaveBeenCalledWith("example.com", { all: true });
   });
 
+  it.each([
+    { name: "requested navigation", check: assertBrowserNavigationAllowed },
+    { name: "final URL", check: assertBrowserNavigationResultAllowed },
+    {
+      name: "redirect chain",
+      check: (options: Parameters<typeof assertBrowserNavigationAllowed>[0]) =>
+        assertBrowserNavigationRedirectChainAllowed({
+          ...options,
+          request: {
+            url: () => options.url,
+            redirectedFrom: () => ({
+              url: () => "https://example.com/start",
+              redirectedFrom: () => null,
+            }),
+          },
+        }),
+    },
+  ])("cancels a stalled $name DNS check without waiting for lookup", async ({ check }) => {
+    const lookup = createDeferred<Awaited<ReturnType<LookupFn>>>();
+    const lookupFn = vi.fn<LookupFn>(() => lookup.promise);
+    const controller = new AbortController();
+    const reason = new Error("browser action deadline expired");
+    const rejected = vi.fn();
+    const options = {
+      url: "https://example.com/final",
+      lookupFn,
+      signal: controller.signal,
+    };
+    const completion = check(options).catch((error: unknown) => {
+      rejected(error);
+      return error;
+    });
+    try {
+      expect(lookupFn).toHaveBeenCalledOnce();
+
+      controller.abort(reason);
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+
+      expect(rejected).toHaveBeenCalledWith(reason);
+      expect(await completion).toBe(reason);
+    } finally {
+      lookup.resolve([{ address: "93.184.216.34", family: 4 }]);
+      await completion;
+    }
+  });
+
   it("blocks hostname navigation when strict SSRF policy is explicitly configured", async () => {
     const lookupFn = createLookupFn("93.184.216.34");
     await expect(
@@ -162,7 +211,7 @@ describe("browser navigation guard", () => {
         lookupFn,
         ssrfPolicy: {
           dangerouslyAllowPrivateNetwork: false,
-          hostnameAllowlist: ["*.example.com"],
+          allowedHostnames: ["*.example.com"],
         },
       }),
     ).resolves.toBeUndefined();
@@ -176,7 +225,7 @@ describe("browser navigation guard", () => {
         lookupFn,
         ssrfPolicy: {
           dangerouslyAllowPrivateNetwork: false,
-          hostnameAllowlist: ["*.example.com"],
+          allowedHostnames: ["*.example.com"],
         },
       }),
     ).rejects.toThrow(/dns rebinding protections are unavailable/i);
@@ -191,7 +240,7 @@ describe("browser navigation guard", () => {
         lookupFn,
         ssrfPolicy: {
           dangerouslyAllowPrivateNetwork: false,
-          hostnameAllowlist: ["*.example.com"],
+          allowedHostnames: ["*.example.com"],
         },
       }),
     ).rejects.toThrow(/dns rebinding protections are unavailable/i);

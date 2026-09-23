@@ -1,16 +1,19 @@
 // Signal plugin module implements install signal cli behavior.
-import { createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { Readable, Transform } from "node:stream";
-import { pipeline } from "node:stream/promises";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+import { walkDirectory } from "@openclaw/fs-safe/walk";
+import { extractErrorCode, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { root as fsRoot } from "openclaw/plugin-sdk/file-access-runtime";
+import { readProviderJsonObjectResponse } from "openclaw/plugin-sdk/provider-http";
 import { runPluginCommandWithTimeout } from "openclaw/plugin-sdk/run-command";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { CONFIG_DIR, extractArchive, resolveBrewExecutable } from "openclaw/plugin-sdk/setup-tools";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isRecord,
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { withTempDownloadPath } from "openclaw/plugin-sdk/temp-path";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
@@ -24,14 +27,13 @@ export type NamedAsset = {
   browser_download_url: string;
 };
 
-type ReleaseResponse = {
-  tag_name?: string;
-  assets?: ReleaseAsset[];
+type SignalCliRelease = {
+  version: string;
+  assets: NamedAsset[];
 };
 
 const MAX_SIGNAL_CLI_ARCHIVE_BYTES = 256 * 1024 * 1024;
-/** @internal Exported for testing. */
-export const MAX_SIGNAL_CLI_EXTRACTED_BYTES = 384 * 1024 * 1024;
+const MAX_SIGNAL_CLI_EXTRACTED_BYTES = 384 * 1024 * 1024;
 const SIGNAL_CLI_DOWNLOAD_TIMEOUT_MS = 5 * 60_000;
 const SIGNAL_CLI_RELEASE_INFO_TIMEOUT_MS = 30_000;
 const CONTENT_LENGTH_RE = /^\d+$/;
@@ -69,22 +71,30 @@ export function looksLikeArchive(name: string): boolean {
   return name.endsWith(".tar.gz") || name.endsWith(".tgz") || name.endsWith(".zip");
 }
 
-function isNodeReadableStream(value: unknown): value is Readable {
-  return Boolean(value && typeof (value as { pipe?: unknown }).pipe === "function");
+function normalizeReleaseAsset(value: unknown): NamedAsset | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const name = normalizeOptionalString(value.name);
+  const browserDownloadUrl = normalizeOptionalString(value.browser_download_url);
+  return name && browserDownloadUrl
+    ? { name, browser_download_url: browserDownloadUrl }
+    : undefined;
 }
 
-function chunkByteLength(chunk: unknown): number {
-  if (typeof chunk === "string") {
-    return Buffer.byteLength(chunk);
+function normalizeSignalCliRelease(value: Record<string, unknown>): SignalCliRelease | undefined {
+  const tagName = normalizeOptionalString(value.tag_name);
+  const version = normalizeOptionalString(tagName?.replace(/^v/, ""));
+  if (!version || !Array.isArray(value.assets)) {
+    return undefined;
   }
-  if (chunk instanceof Uint8Array) {
-    return chunk.byteLength;
-  }
-  return Buffer.byteLength(String(chunk));
-}
-
-async function cancelUnusedResponseBody(response: Response): Promise<void> {
-  await response.body?.cancel().catch(() => undefined);
+  return {
+    version,
+    assets: value.assets.flatMap((asset) => {
+      const normalized = normalizeReleaseAsset(asset);
+      return normalized ? [normalized] : [];
+    }),
+  };
 }
 
 /**
@@ -142,7 +152,6 @@ export async function downloadToFile(
   maxRedirects = 5,
   maxBytes = MAX_SIGNAL_CLI_ARCHIVE_BYTES,
 ): Promise<void> {
-  let completed = false;
   const { response, release } = await fetchWithSsrFGuard({
     url,
     maxRedirects,
@@ -153,7 +162,6 @@ export async function downloadToFile(
   });
   try {
     if (!response.ok || !response.body) {
-      await cancelUnusedResponseBody(response);
       throw new Error(`HTTP ${response.status || "?"} downloading file`);
     }
 
@@ -170,49 +178,37 @@ export async function downloadToFile(
       }
     }
 
-    let totalBytes = 0;
     const body = response.body;
-    const readable = isNodeReadableStream(body) ? body : Readable.fromWeb(body as never);
-    const limiter = new Transform({
-      transform(chunk: unknown, _encoding, callback) {
-        totalBytes += chunkByteLength(chunk);
-        if (totalBytes > maxBytes) {
-          callback(new Error(`signal-cli archive exceeded the ${maxBytes}-byte download cap.`));
-          return;
-        }
-        callback(null, chunk);
-      },
+    async function* chunks() {
+      // Acquire the reader only after path admission; the fetch guard owns abort/cancel.
+      yield* body.values({ preventCancel: true });
+    }
+    const destination = await fsRoot(path.dirname(dest));
+    await destination.create(path.basename(dest), chunks(), {
+      maxBytes,
+      mkdir: false,
+      durable: false,
+      mode: 0o666 & ~process.umask(),
     });
-
-    const out = createWriteStream(dest);
-    await pipeline(readable, limiter, out);
-    completed = true;
+  } catch (error) {
+    if (extractErrorCode(error) === "too-large") {
+      throw new Error(`signal-cli archive exceeded the ${maxBytes}-byte download cap.`, {
+        cause: error,
+      });
+    }
+    throw error;
   } finally {
     await release();
-    if (!completed) {
-      await fs.rm(dest, { force: true }).catch(() => undefined);
-    }
   }
 }
 
 async function findSignalCliBinary(root: string): Promise<string | null> {
-  const candidates: string[] = [];
-  const enqueue = async (dir: string, depth: number) => {
-    if (depth > 3) {
-      return;
-    }
-    const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
-    for (const entry of entries) {
-      const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        await enqueue(full, depth + 1);
-      } else if (entry.isFile() && entry.name === "signal-cli") {
-        candidates.push(full);
-      }
-    }
-  };
-  await enqueue(root, 0);
-  return candidates[0] ?? null;
+  const { entries } = await walkDirectory(root, {
+    maxDepth: 4,
+    symlinks: "skip",
+    include: (entry) => entry.kind === "file" && entry.name === "signal-cli",
+  });
+  return entries[0]?.path ?? null;
 }
 
 // ---------------------------------------------------------------------------
@@ -315,17 +311,21 @@ export async function installSignalCliFromRelease(
     },
   });
 
-  let payload: ReleaseResponse;
+  let releaseInfo: SignalCliRelease;
   try {
     if (!response.ok) {
-      await cancelUnusedResponseBody(response);
       return {
         ok: false,
         error: `Failed to fetch release info (${response.status})`,
       };
     }
     try {
-      payload = await readProviderJsonResponse<ReleaseResponse>(response, "signal.release-info");
+      const payload = await readProviderJsonObjectResponse(response, "signal.release-info");
+      const normalized = normalizeSignalCliRelease(payload);
+      if (!normalized) {
+        throw new Error("Unexpected signal-cli release info");
+      }
+      releaseInfo = normalized;
     } catch {
       return {
         ok: false,
@@ -335,9 +335,7 @@ export async function installSignalCliFromRelease(
   } finally {
     await release();
   }
-  const version = payload.tag_name?.replace(/^v/, "") ?? "unknown";
-  const assets = payload.assets ?? [];
-  const asset = pickAsset(assets, process.platform, process.arch);
+  const asset = pickAsset(releaseInfo.assets, process.platform, process.arch);
 
   if (!asset) {
     return {
@@ -351,10 +349,10 @@ export async function installSignalCliFromRelease(
   return await withTempDownloadPath(
     { prefix: "openclaw-signal", fileName: asset.name },
     async (archivePath) => {
-      runtime.log(`Downloading signal-cli ${version} (${asset.name})…`);
+      runtime.log(`Downloading signal-cli ${releaseInfo.version} (${asset.name})…`);
       await downloadToFile(asset.browser_download_url, archivePath);
 
-      const installRoot = path.join(CONFIG_DIR, "tools", "signal-cli", version);
+      const installRoot = path.join(CONFIG_DIR, "tools", "signal-cli", releaseInfo.version);
       await fs.mkdir(installRoot, { recursive: true });
 
       if (!looksLikeArchive(normalizeLowercaseStringOrEmpty(asset.name))) {
@@ -383,7 +381,7 @@ export async function installSignalCliFromRelease(
       return {
         ok: true,
         cliPath,
-        version,
+        version: releaseInfo.version,
       };
     },
   );

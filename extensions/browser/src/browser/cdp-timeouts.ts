@@ -14,9 +14,12 @@ import { DEFAULT_BROWSER_LOCAL_LAUNCH_TIMEOUT_MS } from "./constants.js";
 export const CDP_HTTP_REQUEST_TIMEOUT_MS = 1500;
 export const CDP_WS_HANDSHAKE_TIMEOUT_MS = 5000;
 export const CDP_JSON_NEW_TIMEOUT_MS = 1500;
+export const PLAYWRIGHT_TARGET_INFO_TIMEOUT_MS = 2000;
 
 export const CHROME_REACHABILITY_TIMEOUT_MS = 500;
 export const CHROME_WS_READY_TIMEOUT_MS = 800;
+// Launch and owned-browser actions must tolerate the same Gateway scheduling delays.
+export const MANAGED_CDP_READY_HTTP_TIMEOUT_MS = 1500;
 export const CHROME_BOOTSTRAP_PREFS_TIMEOUT_MS = 10_000;
 export const CHROME_BOOTSTRAP_PREFS_POLL_MS = 100;
 export const CHROME_BOOTSTRAP_EXIT_TIMEOUT_MS = 5000;

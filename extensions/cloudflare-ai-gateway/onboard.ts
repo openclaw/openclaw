@@ -5,6 +5,7 @@
 import {
   applyAgentDefaultModelPrimary,
   applyProviderConfigWithDefaultModel,
+  applyProviderConnectionConfig,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-onboard";
 import {
@@ -99,6 +100,32 @@ export function applyCloudflareAiGatewayConfig(
 ): OpenClawConfig {
   return applyAgentDefaultModelPrimary(
     applyCloudflareAiGatewayProviderConfig(cfg, params),
+    CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF,
+  );
+}
+
+/** Registered setup keeps authored rows and seeds the default only in replace mode. */
+export function applyCloudflareAiGatewayProviderConnectionConfig(
+  cfg: OpenClawConfig,
+  params: { accountId: string; gatewayId: string },
+): OpenClawConfig {
+  return applyProviderConnectionConfig(cfg, {
+    providerId: "cloudflare-ai-gateway",
+    api: "anthropic-messages",
+    baseUrl: resolveCloudflareAiGatewayBaseUrl(params),
+    catalogModels: () => [buildCloudflareAiGatewayModelDefinition()],
+    aliases: [
+      { modelRef: CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF, alias: "Cloudflare AI Gateway" },
+    ],
+  });
+}
+
+export function applyCloudflareAiGatewayConnectionConfig(
+  cfg: OpenClawConfig,
+  params: { accountId: string; gatewayId: string },
+): OpenClawConfig {
+  return applyAgentDefaultModelPrimary(
+    applyCloudflareAiGatewayProviderConnectionConfig(cfg, params),
     CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF,
   );
 }

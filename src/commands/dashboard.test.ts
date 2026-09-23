@@ -2,15 +2,18 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBindMode } from "../config/types.gateway.js";
 import { dashboardCommand } from "./dashboard.js";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   readConfigFileSnapshot: vi.fn(),
   resolveGatewayPort: vi.fn(),
   resolveControlUiLinks: vi.fn(),
   copyToClipboard: vi.fn(),
+  issueDeviceBootstrapToken: vi.fn(),
   openUrl: vi.fn(),
   inspectPortUsage: vi.fn(),
   ensureGatewayReadyForOperation: vi.fn(),
+  waitForControlUiDocument: vi.fn(),
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -29,6 +32,10 @@ vi.mock("../infra/clipboard.js", () => ({
   copyToClipboard: mocks.copyToClipboard,
 }));
 
+vi.mock("../infra/device-bootstrap.js", () => ({
+  issueDeviceBootstrapToken: mocks.issueDeviceBootstrapToken,
+}));
+
 vi.mock("../infra/ports-inspect.js", () => ({
   inspectPortUsage: mocks.inspectPortUsage,
 }));
@@ -37,11 +44,12 @@ vi.mock("./gateway-readiness.js", () => ({
   ensureGatewayReadyForOperation: mocks.ensureGatewayReadyForOperation,
 }));
 
-const runtime = {
-  log: vi.fn(),
-  error: vi.fn(),
-  exit: vi.fn(),
-};
+vi.mock("./control-ui-handoff.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./control-ui-handoff.js")>()),
+  waitForControlUiDocument: mocks.waitForControlUiDocument,
+}));
+
+const runtime = createTestRuntime();
 
 type SnapshotParams = {
   token?: string;
@@ -116,6 +124,11 @@ describe("dashboardCommand bind selection", () => {
     mocks.resolveGatewayPort.mockClear();
     mocks.resolveControlUiLinks.mockClear();
     mocks.copyToClipboard.mockClear();
+    mocks.issueDeviceBootstrapToken.mockReset();
+    mocks.issueDeviceBootstrapToken.mockResolvedValue({
+      token: "browser-bootstrap",
+      expiresAtMs: 123_456,
+    });
     mocks.openUrl.mockClear();
     mocks.inspectPortUsage.mockReset();
     mocks.ensureGatewayReadyForOperation.mockReset();
@@ -124,6 +137,8 @@ describe("dashboardCommand bind selection", () => {
       status: {},
       recovered: false,
     });
+    mocks.waitForControlUiDocument.mockReset();
+    mocks.waitForControlUiDocument.mockResolvedValue({ ready: true });
     runtime.log.mockClear();
     runtime.error.mockClear();
     runtime.exit.mockClear();
@@ -186,7 +201,9 @@ describe("dashboardCommand bind selection", () => {
       basePath: undefined,
       tlsEnabled: false,
     });
-    expect(mocks.copyToClipboard).toHaveBeenCalledWith("http://127.0.0.1:18789/#token=abc123");
+    expect(mocks.copyToClipboard).toHaveBeenCalledWith(
+      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner&gatewayUrl=ws%3A%2F%2F127.0.0.1%3A18789",
+    );
   });
 
   it("refuses an authenticated loopback URL owned by a different process", async () => {
@@ -197,6 +214,7 @@ describe("dashboardCommand bind selection", () => {
     await dashboardCommand(runtime, { noOpen: true });
 
     expect(mocks.copyToClipboard).not.toHaveBeenCalled();
+    expect(mocks.issueDeviceBootstrapToken).not.toHaveBeenCalled();
     expect(runtime.error).toHaveBeenCalledWith(
       expect.stringContaining("refusing to copy or open an authenticated URL"),
     );
@@ -212,8 +230,43 @@ describe("dashboardCommand bind selection", () => {
     await dashboardCommand(runtime);
 
     expect(mocks.copyToClipboard).not.toHaveBeenCalled();
+    expect(mocks.issueDeviceBootstrapToken).not.toHaveBeenCalled();
     expect(mocks.openUrl).not.toHaveBeenCalled();
     expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("Dashboard URL:"));
+  });
+
+  it("does not issue browser credentials when the dashboard document is unavailable", async () => {
+    mockSnapshot();
+    mocks.waitForControlUiDocument.mockResolvedValue({
+      ready: false,
+      reason: "Control UI assets are missing from the configured root.",
+      status: 503,
+    });
+
+    await dashboardCommand(runtime);
+
+    expect(mocks.issueDeviceBootstrapToken).not.toHaveBeenCalled();
+    expect(mocks.copyToClipboard).not.toHaveBeenCalled();
+    expect(mocks.openUrl).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Control UI assets are missing from the configured root.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("rejects invalid configuration before probing or issuing browser credentials", async () => {
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: false,
+      path: "/tmp/openclaw.json",
+    });
+
+    await dashboardCommand(runtime);
+
+    expect(mocks.ensureGatewayReadyForOperation).not.toHaveBeenCalled();
+    expect(mocks.issueDeviceBootstrapToken).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("openclaw doctor --fix"));
+    expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
   it("re-probes a changed endpoint after recovery before URL delivery", async () => {
@@ -256,7 +309,9 @@ describe("dashboardCommand bind selection", () => {
     );
     expect(mocks.inspectPortUsage).not.toHaveBeenCalled();
     expect(mocks.copyToClipboard).not.toHaveBeenCalled();
+    expect(mocks.issueDeviceBootstrapToken).not.toHaveBeenCalled();
     expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("Dashboard URL:"));
+    expect(runtime.exit).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -283,5 +338,9 @@ describe("dashboardCommand bind selection", () => {
       tlsEnabled: true,
     });
     expect(mocks.inspectPortUsage).not.toHaveBeenCalled();
+    const delivered = new URL(mocks.copyToClipboard.mock.calls[0]![0]);
+    expect(new URLSearchParams(delivered.hash.slice(1)).get("gatewayUrl")).toBe(
+      `wss://${params.host}:18789`,
+    );
   });
 });

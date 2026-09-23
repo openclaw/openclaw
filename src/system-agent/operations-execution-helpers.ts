@@ -1,6 +1,7 @@
 // Shared execution helpers keep the public dispatcher small and reviewable.
-import type { ConfigSetOptions } from "../cli/config-set-input.js";
-import { isSensitiveConfigPath } from "../config/sensitive-paths.js";
+import { parseConfigSetPath } from "../cli/config-cli-path.js";
+import type { OpenClawConfig } from "../config/config.js";
+import { hashConfigRaw } from "../config/io.read-helpers.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -8,6 +9,7 @@ import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { appendSystemAgentAuditEntry } from "./audit.js";
 import {
   projectDefaultInferenceRoute,
+  projectInferenceRoute,
   sameDefaultInferenceRoute,
   type DefaultInferenceRouteProjection,
 } from "./inference-route.js";
@@ -18,7 +20,7 @@ import type {
 } from "./operations-parse.js";
 import { formatSystemAgentPersistentPlan } from "./operations-parse.js";
 import type { SystemAgentOverview } from "./overview.js";
-import { validateSystemAgentPluginInstallSpec } from "./plugin-install.js";
+import type { SystemAgentVerifiedInferenceBinding } from "./verified-inference.js";
 
 type ConfigModule = typeof import("../config/config.js");
 type ConfigFileSnapshot = Awaited<ReturnType<ConfigModule["readConfigFileSnapshot"]>>;
@@ -28,45 +30,24 @@ const loadOverviewModule = async () => await import("./overview.js");
 export const CONFIG_GET_OUTPUT_MAX_CHARS = 2_000;
 export const CONFIG_SCHEMA_CHILDREN_MAX = 40;
 
-export function redactConfigValue(value: unknown, configPath: string): unknown {
-  if (typeof value === "string" || typeof value === "number") {
-    return isSensitiveConfigPath(configPath) ? "<redacted>" : value;
-  }
-  if (Array.isArray(value)) {
-    return value.map((entry) => redactConfigValue(entry, `${configPath}[]`));
-  }
-  if (value && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>).map(([key, entry]) => [
-        key,
-        redactConfigValue(entry, configPath ? `${configPath}.${key}` : key),
-      ]),
-    );
-  }
-  return value;
-}
-
 export function readConfigValueAtPath(
   config: unknown,
   path: string,
 ): { found: boolean; value?: unknown } {
   let current: unknown = config;
-  for (const rawSegment of path.split(".")) {
-    // Support foo[0] style array segments alongside dotted keys.
-    const parts = rawSegment.split(/[[\]]/).filter(Boolean);
-    for (const part of parts) {
-      if (current === null || typeof current !== "object") {
-        return { found: false };
-      }
-      const index = /^\d+$/.test(part) ? Number(part) : undefined;
-      if (index !== undefined && Array.isArray(current)) {
-        current = current[index];
-      } else {
-        current = (current as Record<string, unknown>)[part];
-      }
-      if (current === undefined) {
-        return { found: false };
-      }
+  for (const part of parseConfigSetPath(path)) {
+    if (current === null || typeof current !== "object") {
+      return { found: false };
+    }
+    // Reads allow array properties and indices beyond the CLI writer's sparse-write limit.
+    const index = /^\d+$/.test(part) ? Number(part) : undefined;
+    if (index !== undefined && Array.isArray(current)) {
+      current = current[index];
+    } else {
+      current = (current as Record<string, unknown>)[part];
+    }
+    if (current === undefined) {
+      return { found: false };
     }
   }
   return { found: true, value: current };
@@ -92,7 +73,9 @@ export async function runGatewayLifecycle(
     return;
   }
   if (operation === "stop") {
-    await lifecycle.runDaemonStop();
+    // The system-agent approval gate is the non-interactive equivalent of an
+    // operator passing --force after explicitly approving the mutation.
+    await lifecycle.runDaemonStop({ force: true });
     return;
   }
   return await lifecycle.runDaemonRestart();
@@ -161,21 +144,28 @@ export function formatConfigValidationLine(snapshot: ConfigFileSnapshot): string
   ].join("\n");
 }
 
-function createNoExitRuntime(runtime: RuntimeEnv): RuntimeEnv {
+/** A CLI command already wrote its failure to the runtime before calling exit. */
+export class SystemAgentOperationExitError extends Error {
+  constructor(code: number | undefined) {
+    super(`operation exited with code ${code}`);
+  }
+}
+
+export function createNoExitRuntime(runtime: RuntimeEnv): RuntimeEnv {
   return {
     ...runtime,
     exit: (code) => {
-      throw new Error(`operation exited with code ${code}`);
+      throw new SystemAgentOperationExitError(code);
     },
   };
 }
 
-export async function resolveTuiAgentId(params: {
+export function resolveTuiAgentId(params: {
   requestedAgentId: string | undefined;
   requestedWorkspace?: string;
-  deps?: SystemAgentCommandDeps;
-}): Promise<string | undefined> {
-  const overview = await loadOverviewForOperation(params.deps);
+  overview: SystemAgentOverview;
+}): string | undefined {
+  const { overview } = params;
   const workspace = params.requestedWorkspace
     ? resolveUserPath(params.requestedWorkspace)
     : undefined;
@@ -200,8 +190,27 @@ export async function resolveTuiAgentId(params: {
   return match?.id ?? requested;
 }
 
+/** Utility inference can power setup without making an ordinary agent ready. */
+export function getRegularAgentSetupNotice(
+  overview: SystemAgentOverview,
+  agentId = overview.defaultAgentId,
+): string | undefined {
+  const requestedId = normalizeAgentId(agentId);
+  const isDefault = requestedId === normalizeAgentId(overview.defaultAgentId);
+  const agent = overview.agents.find((entry) => normalizeAgentId(entry.id) === requestedId);
+  const primaryModel = agent?.model ?? (isDefault ? overview.defaultModel : undefined);
+  const utilityModel = agent?.utilityModel ?? (isDefault ? overview.setupModel : undefined);
+  if (primaryModel || !utilityModel) {
+    return undefined;
+  }
+  return "Your setup and utility model is ready, but this agent needs a primary model. Choose one in Model Setup or run `openclaw onboard`; you can continue setup here in the meantime.";
+}
+
 export type ExecuteOptions = {
   approved?: boolean;
+  /** Host-owned origin for team members; never supplied by model tool arguments. */
+  requesterAgentId?: string;
+  operatorApprovalOnly?: boolean;
   deps?: SystemAgentCommandDeps;
   auditDetails?: Record<string, unknown>;
   /**
@@ -209,7 +218,9 @@ export type ExecuteOptions = {
    * A multi-step operation may invoke it more than once; every invocation is
    * immediately followed by the persistent effect it authorizes.
    */
-  beforePersistentApply?: () => Promise<void>;
+  beforePersistentApply?: () => void;
+  /** Adopt the exact final binding after a verified model-route write commits. */
+  onVerifiedInferenceChanged?: (binding: SystemAgentVerifiedInferenceBinding) => void;
 };
 
 /**
@@ -221,12 +232,16 @@ export type ExecuteOptions = {
 type PersistentApplyContext = {
   runtime: RuntimeEnv;
   deps?: SystemAgentCommandDeps;
+  /** Synchronous authority guard for the owner immediately before mutation. */
+  assertPersistentApply?: () => void;
   /** Re-check authority, then enter one persistent side-effect boundary. */
   commit<T>(effect: () => Promise<T> | T): Promise<T>;
 };
 
 type PersistentApplyOutcome = {
   summary: string;
+  bootstrapPending?: boolean;
+  agentId?: string;
   details?: Record<string, unknown>;
   /** Overrides the after-snapshot config path in the audit record. */
   configPath?: string;
@@ -241,26 +256,32 @@ export async function applyPersistentOperation(params: {
 }): Promise<SystemAgentOperationResult> {
   const { auditOperation, runtime, opts } = params;
   if (!opts.approved) {
-    const message = formatSystemAgentPersistentPlan(params.operation);
+    const message = formatSystemAgentPersistentPlan(params.operation, opts.operatorApprovalOnly);
     runtime.log(message);
     return { applied: false, message };
   }
   runtime.log(`[openclaw] running: ${auditOperation}`);
   const { readConfigFileSnapshot } = await loadConfigModule();
   const before = await readConfigFileSnapshot();
+  const assertPersistentApply = opts.beforePersistentApply;
   const commit: PersistentApplyContext["commit"] = async (effect) => {
-    await opts.beforePersistentApply?.();
+    assertPersistentApply?.();
     return await effect();
   };
-  const outcome = await params.run({ runtime, deps: opts.deps, commit });
+  const outcome = await params.run({
+    runtime,
+    deps: opts.deps,
+    ...(assertPersistentApply ? { assertPersistentApply } : {}),
+    commit,
+  });
   const after = await readConfigFileSnapshot();
   try {
     await appendSystemAgentAuditEntry({
       operation: auditOperation,
       summary: outcome.summary,
       configPath: outcome.configPath ?? after.path ?? before.path ?? undefined,
-      configHashBefore: before.hash ?? null,
-      configHashAfter: after.hash ?? null,
+      configHashBefore: hashConfigRaw(before.raw),
+      configHashAfter: hashConfigRaw(after.raw),
       details: { ...opts.auditDetails, ...outcome.details },
     });
   } catch (error) {
@@ -271,7 +292,13 @@ export async function applyPersistentOperation(params: {
     );
   }
   runtime.log(`[openclaw] done: ${auditOperation}`);
-  return { applied: true };
+  return {
+    applied: true,
+    ...(outcome.bootstrapPending === undefined
+      ? {}
+      : { bootstrapPending: outcome.bootstrapPending }),
+    ...(outcome.agentId ? { agentId: outcome.agentId } : {}),
+  };
 }
 
 export async function runConfigSetOperation(params: {
@@ -281,77 +308,24 @@ export async function runConfigSetOperation(params: {
   const { operation, ctx } = params;
   const runConfigSet =
     ctx.deps?.runConfigSet ??
-    (async (setOpts: { path?: string; value?: string; cliOptions: ConfigSetOptions }) => {
+    (async (setOpts: Parameters<NonNullable<SystemAgentCommandDeps["runConfigSet"]>>[0]) => {
       const { runConfigSet: importedRunConfigSet } = await import("../cli/config-cli.js");
-      await importedRunConfigSet({
-        ...setOpts,
-        runtime: createNoExitRuntime(ctx.runtime),
-      });
+      await importedRunConfigSet({ ...setOpts, runtime: createNoExitRuntime(ctx.runtime) });
     });
-  if (operation.kind === "config-set") {
-    await ctx.commit(async () => {
-      await runConfigSet({ path: operation.path, value: operation.value, cliOptions: {} });
-    });
-    return;
-  }
-  await ctx.commit(async () => {
-    await runConfigSet({
+  await ctx.commit(() =>
+    runConfigSet({
       path: operation.path,
-      cliOptions: {
-        refProvider: operation.provider ?? "default",
-        refSource: operation.source,
-        refId: operation.id,
-      },
-    });
-  });
-}
-
-function isInferenceRouteConfigPath(path: readonly string[]): boolean {
-  const segments = path.map((segment) => segment.trim().toLowerCase()).filter(Boolean);
-  const [root, scope, ownerOrField, field] = segments;
-  if (["$include", "auth", "env", "models", "plugins", "secrets", "tools"].includes(root ?? "")) {
-    return true;
-  }
-  if (root !== "agents") {
-    return false;
-  }
-  if (!scope || (scope === "defaults" && !ownerOrField) || (scope === "list" && !ownerOrField)) {
-    return true;
-  }
-  if (scope === "defaults") {
-    return ["agentruntime", "clibackends", "model", "models", "params", "tools"].includes(
-      ownerOrField ?? "",
-    );
-  }
-  if (scope !== "list") {
-    return false;
-  }
-  if (/^\d+$/.test(ownerOrField ?? "") && !field) {
-    return true;
-  }
-  const routeField = /^\d+$/.test(ownerOrField ?? "") ? field : ownerOrField;
-  return [
-    "agentdir",
-    "agentruntime",
-    "clibackends",
-    "default",
-    "id",
-    "model",
-    "models",
-    "params",
-    "tools",
-  ].includes(routeField ?? "");
-}
-
-export async function assertConfigWriteDoesNotBypassInferenceVerification(
-  operation: Extract<SystemAgentOperation, { kind: "config-set" | "config-set-ref" }>,
-): Promise<void> {
-  const { parseConfigSetPath } = await import("../cli/config-cli.js");
-  if (!isInferenceRouteConfigPath(parseConfigSetPath(operation.path))) {
-    return;
-  }
-  throw new Error(
-    "Direct config writes cannot change inference routing or include alternate config. Use `set default model <provider/model>` for an already configured route, or exit OpenClaw and run `openclaw onboard` to change provider/auth access.",
+      ...(operation.kind === "config-set"
+        ? { value: operation.value, cliOptions: {} }
+        : {
+            cliOptions: {
+              refProvider: operation.provider ?? "default",
+              refSource: operation.source,
+              refId: operation.id,
+            },
+          }),
+      ...(ctx.assertPersistentApply ? { beforePersistentApply: ctx.assertPersistentApply } : {}),
+    }),
   );
 }
 
@@ -367,14 +341,14 @@ async function verifyCurrentSetupInference(
   const before = await readConfigFileSnapshot();
   if (!before.exists || !before.valid) {
     throw new Error(
-      "OpenClaw setup requires a valid configured inference route. Exit OpenClaw and run `openclaw onboard`, then retry.",
+      "OpenClaw setup requires a valid configured inference route. Run `openclaw onboard` on the machine running OpenClaw, then retry.",
     );
   }
   const beforeConfig = before.runtimeConfig ?? before.config;
   const beforeRoute = await projectDefaultInferenceRoute(beforeConfig);
   if (!beforeRoute.route) {
     throw new Error(
-      "OpenClaw setup requires working inference first. Exit OpenClaw and run `openclaw onboard`, then retry.",
+      "OpenClaw setup requires working inference first. Run `openclaw onboard` on the machine running OpenClaw, then retry.",
     );
   }
   const verifyInferenceConfig =
@@ -383,7 +357,7 @@ async function verifyCurrentSetupInference(
   const verification = await verifyInferenceConfig({ config: beforeConfig, runtime });
   if (!verification.ok) {
     throw new Error(
-      `OpenClaw setup requires working inference first. The configured route failed a live check: ${verification.error} Exit OpenClaw and run \`openclaw onboard\`, then retry.`,
+      `OpenClaw setup requires working inference first. The configured route failed a live check: ${verification.error} Run \`openclaw onboard\` on the machine running OpenClaw, then retry.`,
     );
   }
 
@@ -416,22 +390,23 @@ export async function executeSetup(
   opts: ExecuteOptions,
 ): Promise<SystemAgentOperationResult> {
   const overview = await loadOverviewForOperation(opts.deps);
-  const defaultModel = overview.defaultModel?.trim();
-  if (!defaultModel) {
+  const setupModel = (overview.defaultModel ?? overview.setupModel)?.trim();
+  const modelRole = overview.defaultModel ? "default" : "setup";
+  if (!setupModel) {
     throw new Error(
-      "OpenClaw setup requires working inference first. Run `openclaw onboard` to configure and verify a default model, then start OpenClaw again.",
+      "OpenClaw setup requires working inference first. Run `openclaw onboard` on the machine running OpenClaw to configure and verify a default model, then start OpenClaw again.",
     );
   }
   const requestedModel = operation.model?.trim();
-  if (requestedModel && requestedModel !== defaultModel) {
+  if (requestedModel && requestedModel !== setupModel) {
     throw new Error(
-      `OpenClaw setup will preserve the verified default model ${defaultModel}. Exit OpenClaw and run \`openclaw onboard\` to stage, live-test, and save a different inference route.`,
+      `OpenClaw setup will preserve the verified ${modelRole} model ${setupModel}. Staging, live-testing, and saving a different inference route is \`openclaw onboard\` on the machine running OpenClaw.`,
     );
   }
   if (!opts.approved) {
     const message = [
-      formatSystemAgentPersistentPlan(operation),
-      `Model choice: keep verified default ${defaultModel}.`,
+      formatSystemAgentPersistentPlan(operation, opts.operatorApprovalOnly),
+      `Model choice: keep verified ${modelRole} ${setupModel}.`,
     ].join("\n");
     runtime.log(message);
     return { applied: false, message };
@@ -439,10 +414,9 @@ export async function executeSetup(
   const verified = await verifyCurrentSetupInference(runtime, opts.deps);
   if (requestedModel && requestedModel !== verified.modelRef) {
     throw new Error(
-      `The verified default model is now ${verified.modelRef}, not ${requestedModel}. Review the current route or exit OpenClaw and run \`openclaw onboard\` before retrying setup.`,
+      `The verified default model is now ${verified.modelRef}, not ${requestedModel}. Review the current route, or run \`openclaw onboard\` on the machine running OpenClaw, before retrying setup.`,
     );
   }
-  const workspace = resolveUserPath(operation.workspace ?? process.cwd());
   return await applyPersistentOperation({
     auditOperation: "openclaw.setup",
     operation,
@@ -452,33 +426,51 @@ export async function executeSetup(
       const applySetup =
         ctx.deps?.applySetup ?? (await import("./setup-apply.js")).applySystemAgentSetup;
       const surface = ctx.deps?.setupSurface ?? "cli";
-      // The outer boundary covers injected implementations. The production
-      // setup helper also uses this same seam for each of its internal writes.
-      const applied = await ctx.commit(
-        async () =>
-          await applySetup(
-            {
-              workspace,
-              expectedInferenceRoute: verified.route,
-              surface,
-              runtime: ctx.runtime,
-            },
-            { commit: async (effect) => await ctx.commit(effect) },
-          ),
+      const recovery =
+        surface === "cli"
+          ? await (await import("./setup-recovery.js")).loadLocalSetupRecovery(operation.workspace)
+          : undefined;
+      const workspace =
+        recovery?.workspace ?? resolveUserPath(operation.workspace ?? process.cwd());
+      // Cover injected implementations at entry and carry the same synchronous
+      // authority into production setup's workspace and config owners.
+      const applied = await ctx.commit(() =>
+        applySetup(
+          {
+            workspace,
+            ...(operation.agentName ? { firstAgent: { name: operation.agentName } } : {}),
+            expectedInferenceRoute: verified.route,
+            ...recovery?.applyOptions,
+            surface,
+            runtime: ctx.runtime,
+          },
+          { beforePersistentApply: ctx.assertPersistentApply },
+        ),
       );
-      const after = await readConfigFileSnapshotLazy();
+      if (!applied.workspaceReady) {
+        throw new Error("The workspace could not be prepared. Retry onboarding to finish setup.");
+      }
+      if (applied.gateway.status === "failed") {
+        throw new Error(applied.gateway.error);
+      }
+      const after =
+        (await recovery?.complete(applied.configPath, (effect) => ctx.commit(effect))) ??
+        (await readConfigFileSnapshotLazy());
       ctx.runtime.log(`Updated ${after.path || applied.configPath || "config"}`);
       for (const line of applied.lines) {
         ctx.runtime.log(line);
       }
-      ctx.runtime.log(`Default model: ${verified.modelRef} (verified and kept)`);
+      ctx.runtime.log(
+        `${modelRole === "default" ? "Default" : "Setup"} model: ${verified.modelRef} (verified and kept)`,
+      );
       return {
         summary: "Bootstrapped setup workspace",
+        bootstrapPending: applied.bootstrapPending,
         configPath: after.path || applied.configPath,
         details: {
           workspace,
           model: verified.modelRef,
-          modelSource: "live-verified default model",
+          modelSource: `live-verified ${modelRole} model`,
           inferenceLatencyMs: verified.latencyMs,
         },
       };
@@ -499,14 +491,20 @@ export async function executeSetDefaultModel(
     run: async (ctx) => {
       const { mutateConfigFile, readConfigFileSnapshot } = await loadConfigModule();
       const { applySystemAgentModelSelection, createSystemAgentModelSelectionUpdater } =
-        await import("./setup-apply.js");
+        await import("./setup-model-selection.js");
+      const targetAgentId = operation.agentId;
       const snapshot = await readConfigFileSnapshot();
+      // Route projection and the live probes below all take the same optional
+      // agent scope, so a per-agent selection is verified against that agent's
+      // route with the exact rigor the default route gets.
+      const projectRoute = (config: OpenClawConfig) => projectInferenceRoute(config, targetAgentId);
       const stagedConfig = await applySystemAgentModelSelection({
         config: snapshot.sourceConfig,
         model: operation.model,
+        ...(targetAgentId ? { targetAgentId } : {}),
       });
-      const beforeRoute = await projectDefaultInferenceRoute(snapshot.sourceConfig);
-      const verifiedRoute = await projectDefaultInferenceRoute(stagedConfig);
+      const beforeRoute = await projectRoute(snapshot.sourceConfig);
+      const verifiedRoute = await projectRoute(stagedConfig);
       const verifyInferenceConfig =
         ctx.deps?.verifyInferenceConfig ??
         (await import("./setup-inference.js")).verifySetupInferenceConfig;
@@ -514,6 +512,7 @@ export async function executeSetDefaultModel(
         config: stagedConfig,
         runtime: ctx.runtime,
         requireExecutionOwner: true,
+        ...(targetAgentId ? { agentId: targetAgentId } : {}),
       });
       if (!initialVerification.ok) {
         throw new Error(
@@ -527,25 +526,40 @@ export async function executeSetDefaultModel(
         );
       }
       let persistedVerification = initialVerification;
+      let persistedBinding: SystemAgentVerifiedInferenceBinding | undefined;
       let selectedRouteForCommit = verifiedRoute;
       const selectModel = await createSystemAgentModelSelectionUpdater({
         model: operation.model,
+        ...(targetAgentId ? { targetAgentId } : {}),
       });
       const result = await mutateConfigFile({
         base: "source",
         writeOptions: {
+          auditOrigin: "system-agent",
+          ...(ctx.assertPersistentApply
+            ? { assertConfigPathForWrite: ctx.assertPersistentApply }
+            : {}),
           preCommitRuntimePreflight: async (sourceConfig) => {
-            const commitRoute = await projectDefaultInferenceRoute(sourceConfig);
+            const commitRoute = await projectRoute(sourceConfig);
             if (!sameDefaultInferenceRoute(commitRoute, selectedRouteForCommit)) {
               throw new Error(
                 "The selected inference route changed while preparing the config write, so the requested model was not saved. Review the current model/auth/runtime settings and retry.",
               );
             }
-            await opts.beforePersistentApply?.();
+            ctx.assertPersistentApply?.();
+            let latestBinding: SystemAgentVerifiedInferenceBinding | undefined;
             const latestVerification = await verifyInferenceConfig({
               config: sourceConfig,
               runtime: ctx.runtime,
               requireExecutionOwner: true,
+              ...(targetAgentId ? { agentId: targetAgentId } : {}),
+              ...(opts.onVerifiedInferenceChanged
+                ? {
+                    onVerifiedExecution: (binding: SystemAgentVerifiedInferenceBinding) => {
+                      latestBinding = binding;
+                    },
+                  }
+                : {}),
             });
             if (!latestVerification.ok) {
               throw new Error(
@@ -557,23 +571,29 @@ export async function executeSetDefaultModel(
                 "The final live inference test did not verify the exact model route at the config commit boundary, so the requested model was not saved. Review model aliases and runtime routing, then retry.",
               );
             }
+            if (opts.onVerifiedInferenceChanged && !latestBinding) {
+              throw new Error(
+                "The final live inference test did not return a reusable session binding, so the requested model was not saved. Retry the model change.",
+              );
+            }
             // The live probe can outlive the original OpenClaw authority.
             // Re-check it last, immediately before the writer crosses to disk.
-            await opts.beforePersistentApply?.();
+            ctx.assertPersistentApply?.();
             persistedVerification = latestVerification;
+            persistedBinding = latestBinding;
           },
         },
         mutate: async (cfg) => {
           // Verification may take time. Preserve unrelated edits, but never
           // combine the passing result with a concurrently changed route.
-          const currentRoute = await projectDefaultInferenceRoute(cfg);
+          const currentRoute = await projectRoute(cfg);
           if (!sameDefaultInferenceRoute(currentRoute, beforeRoute)) {
             throw new Error(
               "The default-agent inference route changed during verification, so the requested model was not saved. Review the current model/auth/runtime settings and retry.",
             );
           }
           const selected = selectModel(cfg);
-          const selectedRoute = await projectDefaultInferenceRoute(selected);
+          const selectedRoute = await projectRoute(selected);
           if (selectedRoute.route?.modelLabel !== verifiedModelRef) {
             throw new Error(
               "The model selection no longer resolves to the exact model that passed live inference. Review the current model/auth/runtime settings and retry.",
@@ -586,12 +606,22 @@ export async function executeSetDefaultModel(
           cfg.agents = selected.agents;
         },
       });
+      if (persistedBinding) {
+        opts.onVerifiedInferenceChanged?.(persistedBinding);
+      }
       ctx.runtime.log(`Updated ${result.path}`);
-      ctx.runtime.log(`Default model: ${persistedVerification.modelRef}`);
+      ctx.runtime.log(
+        targetAgentId
+          ? `Agent ${targetAgentId} model: ${persistedVerification.modelRef}`
+          : `Default model: ${persistedVerification.modelRef}`,
+      );
       return {
-        summary: `Set default model to ${operation.model}`,
+        summary: targetAgentId
+          ? `Set agent ${targetAgentId} model to ${operation.model}`
+          : `Set default model to ${operation.model}`,
         configPath: result.path,
         details: {
+          ...(targetAgentId ? { agentId: targetAgentId } : {}),
           requestedModel: operation.model,
           effectiveModel: persistedVerification.modelRef,
           inferenceVerified: true,
@@ -602,38 +632,50 @@ export async function executeSetDefaultModel(
   });
 }
 
-export async function executePluginInstall(
-  operation: Extract<SystemAgentOperation, { kind: "plugin-install" }>,
-  runtime: RuntimeEnv,
-  opts: ExecuteOptions,
-): Promise<SystemAgentOperationResult> {
-  // Reject an untrusted plugin source before proposing or installing it, not
-  // only on the approved apply — a formatted "plan" must never surface an
-  // arbitrary npm/url/file spec that bypassed the ClawHub trust boundary.
-  const validationError = validateSystemAgentPluginInstallSpec(operation.spec);
-  if (validationError) {
-    throw new Error(validationError);
+/**
+ * Uninstalling the plugin that provides the active default inference route
+ * would break the very session driving the change, so that case stays a
+ * terminal-only operation. Every other plugin is uninstallable behind the
+ * standard approval gate — matching what the operator can do from the UI/CLI.
+ */
+export async function isPluginBackingDefaultInferenceRoute(pluginId: string): Promise<boolean> {
+  const { readConfigFileSnapshot } = await loadConfigModule();
+  const snapshot = await readConfigFileSnapshot();
+  if (!snapshot.exists || !snapshot.valid) {
+    return true;
   }
-  const result = await applyPersistentOperation({
-    auditOperation: "plugin.install",
-    operation,
-    runtime,
-    opts,
-    run: async (ctx) => {
-      const runPluginInstall =
-        ctx.deps?.runPluginInstall ??
-        (async (spec: string, pluginRuntime: RuntimeEnv) => {
-          const { runPluginInstallCommand } = await import("../cli/plugins-install-command.js");
-          await runPluginInstallCommand({ raw: spec, opts: {}, runtime: pluginRuntime });
-        });
-      await ctx.commit(async () => {
-        await runPluginInstall(operation.spec, createNoExitRuntime(ctx.runtime));
-      });
-      return { summary: `Installed plugin ${operation.spec}`, details: { spec: operation.spec } };
-    },
-  });
-  if (result.applied) {
-    runtime.log("Restart the Gateway to apply installed plugin changes.");
+  const config = snapshot.runtimeConfig ?? snapshot.config;
+  const route = (await projectDefaultInferenceRoute(config ?? {})).route;
+  if (!route) {
+    return false;
   }
-  return result;
+  // The route's execution owners are the provider plus whichever runtime
+  // component executes it (embedded harness override or the resolved model
+  // runtime policy, e.g. a CLI-backend harness plugin) — removing any of them
+  // breaks the session driving this change.
+  const { resolveModelRuntimePolicy } = await import("../agents/model-runtime-policy.js");
+  const runtimePolicyId = resolveModelRuntimePolicy({
+    config,
+    provider: route.provider,
+    modelId: route.model,
+    agentId: route.agentId,
+  }).policy?.id;
+  const normalizedPluginId = pluginId.trim().toLowerCase();
+  const components = [
+    route.provider,
+    runtimePolicyId,
+    route.runner === "embedded" ? route.agentHarnessRuntimeOverride : undefined,
+  ]
+    .map((component) => component?.trim().toLowerCase())
+    .filter((component): component is string => Boolean(component));
+  // Same-name convention covers components with no resolvable plugin metadata.
+  if (components.includes(normalizedPluginId)) {
+    return true;
+  }
+  const { resolveOwningPluginIdsForProviderRef } = await import("../plugins/providers.js");
+  return components.some((component) =>
+    (resolveOwningPluginIdsForProviderRef({ provider: component, config }) ?? []).some(
+      (owner) => owner.trim().toLowerCase() === normalizedPluginId,
+    ),
+  );
 }

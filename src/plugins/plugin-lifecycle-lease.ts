@@ -1,0 +1,200 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import path from "node:path";
+import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { runOutsideOpenClawStateLeaseScope } from "../state/openclaw-state-lease-exclusion.js";
+import {
+  OpenClawStateLeaseError,
+  withOpenClawStateLease,
+  type OpenClawStateLeaseContext,
+} from "../state/openclaw-state-lease.js";
+import {
+  createPluginCache,
+  retirePluginCache,
+  waitForPluginCacheRetirement,
+  withPluginCache,
+} from "./plugin-cache.js";
+
+const PLUGIN_LIFECYCLE_LEASE_SCOPE = "core:plugin-lifecycle";
+const PLUGIN_LIFECYCLE_LEASE_KEY = "global";
+const DEFAULT_PLUGIN_LIFECYCLE_LEASE_MS = 5 * 60_000;
+const DEFAULT_PLUGIN_LIFECYCLE_WAIT_MS = 10 * 60_000;
+
+export type PluginLifecycleLeaseContext = OpenClawStateLeaseContext & {
+  databasePath: string;
+};
+
+type PluginLifecycleRefusal = { current?: { error: unknown } };
+
+type ActivePluginLifecycleLease = {
+  databasePath: string;
+  lease: PluginLifecycleLeaseContext;
+  refusal: PluginLifecycleRefusal;
+};
+
+type PluginLifecycleLeaseOptions = Pick<
+  OpenClawStateDatabaseOptions,
+  "env" | "path" | "database"
+> & {
+  schemaPolicy?: "existing";
+  signal?: AbortSignal;
+  leaseMs?: number;
+  waitMs?: number;
+  /** Additional live caller authority; never replaces the plugin lease. */
+  assertCurrent?: () => void;
+};
+
+const activePluginLifecycleLease = new AsyncLocalStorage<ActivePluginLifecycleLease>();
+
+export function hasPluginLifecycleLease(): boolean {
+  return activePluginLifecycleLease.getStore() !== undefined;
+}
+
+/** Detached observers must acquire ownership rather than borrow their writer's lease. */
+export function runOutsidePluginLifecycleLease<T>(run: () => T): T {
+  return activePluginLifecycleLease.exit(() => runOutsideOpenClawStateLeaseScope(run));
+}
+
+function resolveLifecycleLeaseEnv(env: NodeJS.ProcessEnv | undefined): NodeJS.ProcessEnv {
+  const requested = env ?? process.env;
+  if (!process.env.VITEST || requested.VITEST || requested.OPENCLAW_STATE_DIR) {
+    return requested;
+  }
+  return {
+    ...requested,
+    VITEST: process.env.VITEST,
+    VITEST_WORKER_ID: process.env.VITEST_WORKER_ID,
+    VITEST_POOL_ID: process.env.VITEST_POOL_ID,
+  };
+}
+
+/** Serialize plugin artifact, install-index, and config mutations across processes. */
+export async function withPluginLifecycleLease<T>(
+  options: PluginLifecycleLeaseOptions,
+  run: (lease: PluginLifecycleLeaseContext) => Promise<T>,
+): Promise<T> {
+  const active = activePluginLifecycleLease.getStore();
+  const refusal: PluginLifecycleRefusal = active?.refusal ?? {};
+  const assertAuthority = (check: () => void) => {
+    if (refusal.current) {
+      throw refusal.current.error;
+    }
+    try {
+      check();
+    } catch (error) {
+      refusal.current = { error };
+      throw error;
+    }
+  };
+  const assertCurrent = options.assertCurrent;
+  assertAuthority(() => assertCurrent?.());
+  const runWithLease = async (lease: PluginLifecycleLeaseContext) => {
+    const owned: PluginLifecycleLeaseContext =
+      !assertCurrent && lease === active?.lease
+        ? lease
+        : {
+            ...lease,
+            assertOwned: () =>
+              assertAuthority(() => {
+                assertCurrent?.();
+                lease.assertOwned();
+              }),
+            assertOwnedInTransaction: (database) =>
+              assertAuthority(() => {
+                assertCurrent?.();
+                lease.assertOwnedInTransaction(database);
+              }),
+          };
+    if (assertCurrent) {
+      owned.assertOwned();
+    }
+    // Package settlement and nested metadata writers share the first refusal.
+    // A recovered read cannot authorize rollback beneath retained inventory.
+    return activePluginLifecycleLease.run(
+      { databasePath: owned.databasePath, lease: owned, refusal },
+      () => run(owned),
+    );
+  };
+  if (
+    active &&
+    options.env === undefined &&
+    options.path === undefined &&
+    options.database === undefined
+  ) {
+    options.signal?.throwIfAborted();
+    active.lease.assertOwned();
+    return await runWithLease(active.lease);
+  }
+
+  const env = resolveLifecycleLeaseEnv(options.env);
+  const databasePath = path.resolve(
+    options.database?.path ?? options.path ?? resolveOpenClawStateSqlitePath(env),
+  );
+  if (active) {
+    if (active.databasePath !== databasePath) {
+      throw new OpenClawStateLeaseError(
+        "nested plugin lifecycle lease cannot switch the shared state database",
+        { code: "OPENCLAW_STATE_LEASE_INVALID_INPUT" },
+      );
+    }
+    options.signal?.throwIfAborted();
+    active.lease.assertOwned();
+    return await runWithLease(active.lease);
+  }
+
+  return await withOpenClawStateLease(
+    {
+      scope: PLUGIN_LIFECYCLE_LEASE_SCOPE,
+      key: PLUGIN_LIFECYCLE_LEASE_KEY,
+      database: {
+        scope: "shared",
+        schemaPolicy: options.schemaPolicy,
+        options: {
+          env,
+          ...(options.path ? { path: options.path } : {}),
+          ...(options.database ? { database: options.database } : {}),
+        },
+      },
+      leaseMs: options.leaseMs ?? DEFAULT_PLUGIN_LIFECYCLE_LEASE_MS,
+      waitMs: options.waitMs ?? DEFAULT_PLUGIN_LIFECYCLE_WAIT_MS,
+      ...(options.signal ? { signal: options.signal } : {}),
+      leaseLabel: "plugin lifecycle lease",
+      operationLabel: "plugins.lifecycle.lease",
+    },
+    async (lease) => {
+      const pluginLease: PluginLifecycleLeaseContext = {
+        databasePath,
+        signal: lease.signal,
+        assertOwned: () => lease.assertOwned(),
+        assertOwnedInTransaction: (database) => lease.assertOwnedInTransaction(database),
+      };
+      // Capture fresh facts only after ownership: another process may have committed while we waited.
+      const cache = createPluginCache();
+      const failures: unknown[] = [];
+      let result!: T;
+      try {
+        result = await withPluginCache(cache, () => runWithLease(pluginLease));
+      } catch (error) {
+        failures.push(error);
+      }
+      // Both owners must settle before releasing the lease, even when the operation or cleanup fails.
+      for (const cleanup of [
+        () => (cache.kind === "operation" ? retirePluginCache(cache) : undefined),
+        waitForPluginCacheRetirement,
+      ]) {
+        try {
+          await cleanup();
+        } catch (error) {
+          failures.push(error);
+        }
+      }
+      if (failures.length === 1) {
+        throw failures[0];
+      }
+      if (failures.length > 1) {
+        throw new AggregateError(failures, "Plugin lifecycle work failed");
+      }
+      return result;
+    },
+  );
+}

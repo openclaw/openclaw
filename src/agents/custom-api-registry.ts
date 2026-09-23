@@ -1,7 +1,8 @@
 /**
  * Registers caller-supplied custom API stream functions with the LLM registry.
  */
-import { getApiProvider, registerApiProvider } from "@openclaw/ai/internal/runtime";
+import type { ApiRegistry } from "@openclaw/ai";
+import type { StreamFn } from "@openclaw/llm-core";
 import type {
   Api,
   AssistantMessageEventStreamContract,
@@ -9,7 +10,7 @@ import type {
   StreamOptions,
 } from "../llm/types.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
-import type { StreamFn } from "./runtime/index.js";
+import { runPluginStreamConsumer } from "../plugins/plugin-instance-scope.js";
 import { buildStreamErrorAssistantMessage } from "./stream-message-shared.js";
 
 const CUSTOM_API_SOURCE_PREFIX = "openclaw-custom-api:";
@@ -32,11 +33,13 @@ function adaptCustomStream(
     try {
       // Registry providers must return a stream immediately, while plugin
       // hooks may resolve one lazily. Bridge that lifecycle at the boundary.
-      const resolved = await stream;
-      for await (const event of resolved) {
-        adapted.push(event);
-      }
-      adapted.end(await resolved.result());
+      await runPluginStreamConsumer(stream, async () => {
+        const resolved = await stream;
+        for await (const event of resolved) {
+          adapted.push(event);
+        }
+        adapted.end(await resolved.result());
+      });
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       const message = buildStreamErrorAssistantMessage({ model, errorMessage });
@@ -47,12 +50,16 @@ function adaptCustomStream(
 }
 
 /** Registers a custom API stream function when no provider already owns it. */
-export function ensureCustomApiRegistered(api: Api, streamFn: StreamFn): boolean {
-  if (getApiProvider(api)) {
+export function ensureCustomApiRegistered(
+  registry: ApiRegistry,
+  api: Api,
+  streamFn: StreamFn,
+): boolean {
+  if (registry.getApiProvider(api)) {
     return false;
   }
 
-  registerApiProvider(
+  registry.registerApiProvider(
     {
       api,
       stream: (model, context, options) =>

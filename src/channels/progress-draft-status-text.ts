@@ -1,6 +1,9 @@
 // Progress-draft status text normalization for reasoning, preamble, and commentary lanes.
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatReasoningMessage } from "../agents/embedded-agent-utils.js";
-import { findCodeRegions, isInsideCode } from "../shared/text/code-regions.js";
+import { redactToolPayloadText } from "../logging/redact.js";
+import { compactProgressText } from "../shared/text-truncate.js";
+import { type CodeRegion, findCodeRegions, isInsideCode } from "../shared/text/code-regions.js";
 import { stripInlineDirectiveTagsForDelivery } from "../utils/directive-tags.js";
 
 const REASONING_PROGRESS_TAG_RE =
@@ -22,7 +25,7 @@ const REASONING_PROGRESS_TAG_PREFIXES = REASONING_PROGRESS_TAG_NAMES.flatMap((na
   `</${name}`,
 ]);
 
-export function normalizeReasoningProgressLine(text: string): string {
+function normalizeReasoningProgressLine(text: string): string {
   const reasoningText = readReasoningProgressTextOutsideCode(text);
   if (reasoningText === undefined) {
     return "";
@@ -32,7 +35,7 @@ export function normalizeReasoningProgressLine(text: string): string {
       /^\s*(?:>\s*)?(?:Reasoning:\s*(?:\r?\n|\r)\s*|Thinking\.{0,3}\s*(?:\r?\n|\r)\s*(?:\r?\n|\r)\s*)/i,
       "",
     )
-    .replace(/\s+/g, " ")
+    .replace(/\s{2,}|[^\S ]/g, " ")
     .trim();
 }
 
@@ -42,14 +45,14 @@ function readReasoningProgressTextOutsideCode(text: string): string | undefined 
     // fragment can flash as user-visible progress.
     return undefined;
   }
-  const codeRegions = findCodeRegions(text);
+  let codeRegions: CodeRegion[] | undefined;
   let hasTags = false;
   let inReasoning = false;
   let cursor = 0;
   const chunks: string[] = [];
   for (const match of text.matchAll(REASONING_PROGRESS_TAG_RE)) {
     const offset = match.index ?? 0;
-    if (isInsideCode(offset, codeRegions)) {
+    if (isInsideCode(offset, (codeRegions ??= findCodeRegions(text)))) {
       // Preserve code examples that mention reasoning tags; only actual model
       // wrapper tags outside code delimit private reasoning progress.
       continue;
@@ -79,20 +82,20 @@ function readReasoningProgressTextOutsideCode(text: string): string | undefined 
 }
 
 function isPartialReasoningProgressTagPrefix(text: string): boolean {
-  const normalized = text.trimStart().toLowerCase();
-  return (
-    normalized.startsWith("<") &&
-    !normalized.includes(">") &&
-    REASONING_PROGRESS_TAG_PREFIXES.some(
-      (prefix) => prefix.startsWith(normalized) || normalized.startsWith(prefix),
-    )
+  const trimmed = text.trimStart();
+  if (!trimmed.startsWith("<") || trimmed.includes(">")) {
+    return false;
+  }
+  const normalized = trimmed.toLowerCase();
+  return REASONING_PROGRESS_TAG_PREFIXES.some(
+    (prefix) => prefix.startsWith(normalized) || normalized.startsWith(prefix),
   );
 }
 
 function stripReasoningProgressTagsOutsideCode(text: string): string {
-  const codeRegions = findCodeRegions(text);
+  let codeRegions: CodeRegion[] | undefined;
   return text.replace(REASONING_PROGRESS_TAG_RE, (match, _closing: string, offset: number) =>
-    isInsideCode(offset, codeRegions) ? match : "",
+    isInsideCode(offset, (codeRegions ??= findCodeRegions(text))) ? match : "",
   );
 }
 
@@ -108,35 +111,17 @@ export function formatReasoningProgressDisplayLine(text: string, maxChars: numbe
   if (!formatted) {
     return "";
   }
-  if (Array.from(formatted).length <= maxChars) {
+  if (
+    Array.from(sliceUtf16Safe(formatted, 0, (Math.max(0, maxChars) + 1) * 2)).length <= maxChars
+  ) {
     return formatted;
   }
   const italic = formatted.match(/^_(.*)_$/u);
   if (!italic) {
-    return compactReasoningProgressDisplayLine(formatted, maxChars);
+    return compactProgressText(formatted, maxChars);
   }
-  const body = compactReasoningProgressDisplayLine(italic[1] ?? "", Math.max(1, maxChars - 2));
+  const body = compactProgressText((italic[1] ?? "").trim(), Math.max(1, maxChars - 2));
   return body ? `_${body}_` : "";
-}
-
-function compactReasoningProgressDisplayLine(text: string, maxChars: number): string {
-  const normalized = text.replace(/\s+/g, " ").trim();
-  const chars = Array.from(normalized);
-  if (chars.length <= maxChars) {
-    return normalized;
-  }
-  if (maxChars <= 1) {
-    return "…";
-  }
-  const head = chars
-    .slice(0, maxChars - 1)
-    .join("")
-    .trimEnd();
-  const boundary = head.search(/\s+\S*$/u);
-  if (boundary > Math.floor(maxChars * 0.6)) {
-    return `${head.slice(0, boundary).trimEnd()}…`;
-  }
-  return `${head}…`;
 }
 
 export function sanitizeProgressStatusText(text: string): string {
@@ -144,7 +129,7 @@ export function sanitizeProgressStatusText(text: string): string {
   if (!cleaned || isSilentCommentaryProgressText(cleaned)) {
     return "";
   }
-  return cleaned;
+  return redactToolPayloadText(cleaned);
 }
 
 export function normalizeCommentaryProgressText(text: string): string {
@@ -165,7 +150,7 @@ function isSilentCommentaryProgressText(text: string): boolean {
   return /^NO_REPLY$/iu.test(normalized);
 }
 
-export function mergeReasoningProgressText(
+function mergeReasoningProgressText(
   current: string,
   incoming: string,
   options?: { snapshot?: boolean },
@@ -210,11 +195,57 @@ function shouldAppendEmptyReasoningProgressDelta(current: string, incoming: stri
 }
 
 function hasReasoningProgressTagOutsideCode(text: string): boolean {
-  const codeRegions = findCodeRegions(text);
+  let codeRegions: CodeRegion[] | undefined;
   for (const match of text.matchAll(REASONING_PROGRESS_TAG_RE)) {
-    if (!isInsideCode(match.index ?? 0, codeRegions)) {
+    if (!isInsideCode(match.index ?? 0, (codeRegions ??= findCodeRegions(text)))) {
       return true;
     }
   }
   return false;
+}
+/**
+ * Commentary line identity. An explicit item id owns its line. Without one,
+ * providers stream cumulative snapshots ("Checking" → "Checking the
+ * workspace"), so a snapshot that continues the open line reuses its id and
+ * updates in place; anything else starts a new line.
+ */
+export function resolveCommentaryLineId(commentary: {
+  itemId?: string;
+  normalized: string;
+  bareNormalized: string;
+  lastIdLessCommentaryId?: string;
+  lastIdLessCommentaryBare: string;
+}): string {
+  if (commentary.itemId) {
+    return `commentary:${commentary.itemId}`;
+  }
+  if (!commentary.normalized) {
+    // Sanitized to nothing (directive-only / NO_REPLY): no line to address, so
+    // it cannot retract the open one. Only an explicit itemId clears a line.
+    return "";
+  }
+  const continuesOpenLine =
+    Boolean(commentary.lastIdLessCommentaryBare) &&
+    (commentary.bareNormalized.startsWith(commentary.lastIdLessCommentaryBare) ||
+      commentary.lastIdLessCommentaryBare.startsWith(commentary.bareNormalized));
+  if (continuesOpenLine && commentary.lastIdLessCommentaryId) {
+    return commentary.lastIdLessCommentaryId;
+  }
+  return `commentary:${commentary.normalized}`;
+}
+
+export function createReasoningProgressAccumulator() {
+  let rawText = "";
+  return {
+    reset() {
+      rawText = "";
+    },
+    merge(this: void, text?: string, options?: { snapshot?: boolean }): string {
+      if (!text) {
+        return "";
+      }
+      rawText = mergeReasoningProgressText(rawText, text, options);
+      return redactToolPayloadText(normalizeReasoningProgressLine(rawText));
+    },
+  };
 }

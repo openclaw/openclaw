@@ -1,15 +1,27 @@
-/**
- * Public SDK subpath for realtime voice provider types, runtime helpers, and talk events.
- */
+/** Production-private runtime seam for bundled and separately published official plugins. */
+export {
+  registerRealtimeVoiceSelection,
+  type RealtimeVoiceSelectionHandle,
+  type RealtimeVoiceSelectionInfo,
+  type RealtimeVoiceSelectionRequest,
+} from "../talk/voice-selection-control.js";
 export type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
+export { projectInternalRealtimeVoicePublicConfig } from "../talk/provider-internal.js";
 export type {
+  OpenAICompatibleRealtimeAudioFormat,
   RealtimeVoiceAudioFormat,
+  RealtimeVoiceAudioChunkMetadata,
+  RealtimeVoicePlaybackItem,
+  RealtimeVoiceAgentConsultRunner,
   RealtimeVoiceBargeInOptions,
   RealtimeVoiceBridge,
   RealtimeVoiceBridgeCallbacks,
   RealtimeVoiceBridgeEvent,
+  RealtimeVoiceCloseDisposition,
+  RealtimeVoiceCloseOptions,
   RealtimeVoiceBrowserSession,
   RealtimeVoiceBrowserSessionCreateRequest,
+  RealtimeVoiceGatewayControl,
   RealtimeVoiceBridgeCreateRequest,
   RealtimeVoiceProviderCapabilities,
   RealtimeVoiceCloseReason,
@@ -17,14 +29,19 @@ export type {
   RealtimeVoiceProviderConfiguredContext,
   RealtimeVoiceProviderId,
   RealtimeVoiceProviderResolveConfigContext,
+  RealtimeVoiceResponseError,
+  RealtimeVoiceResponseOutcome,
   RealtimeVoiceRole,
   RealtimeVoiceTool,
   RealtimeVoiceToolCallEvent,
   RealtimeVoiceToolResultOptions,
 } from "../talk/provider-types.js";
 export {
+  normalizeRealtimeVoiceResponseOutcome,
   REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
   REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+  realtimeVoiceAudioDurationMs,
+  toOpenAICompatibleRealtimeAudioFormat,
 } from "../talk/provider-types.js";
 export {
   createTalkEventSequencer,
@@ -105,6 +122,7 @@ export {
   buildRealtimeVoiceAgentConsultPolicyInstructions,
   buildRealtimeVoiceAgentConsultPrompt,
   buildRealtimeVoiceAgentConsultWorkingResponse,
+  buildRealtimeVoiceSessionInstructions,
   collectRealtimeVoiceAgentConsultVisibleText,
   isRealtimeVoiceAgentConsultToolPolicy,
   parseRealtimeVoiceAgentConsultArgs,
@@ -119,8 +137,23 @@ export {
   type RealtimeVoiceAgentConsultTranscriptEntry,
 } from "../talk/agent-consult-tool.js";
 export {
+  buildRealtimeVoiceSpeakExactMessage,
+  classifyRealtimeVoiceConsultToolCall,
+  type RealtimeVoiceConsultToolCallOutcome,
+} from "../talk/exact-speech-protocol.js";
+export {
+  isRealtimeVoiceWakeNameRequired,
+  resolveRealtimeVoiceBargeIn,
+  resolveRealtimeVoiceInterruptResponseOnInputAudio,
+  resolveRealtimeVoiceMinBargeInAudioEndMs,
+  resolveRealtimeVoiceSessionPolicy,
+  type RealtimeVoiceSessionPolicy,
+  type RealtimeVoiceWakeNamePolicy,
+} from "../talk/realtime-session-policy.js";
+export {
   assertRealtimeVoiceAgentConsultModelSelectionUnlocked,
   consultRealtimeVoiceAgent,
+  REALTIME_VOICE_AGENT_CONSULT_SENDER_AUTH_VERSION,
   type RealtimeVoiceAgentConsultResult,
   type RealtimeVoiceAgentConsultRuntime,
 } from "../talk/agent-consult-runtime.js";
@@ -133,6 +166,7 @@ export {
 export {
   buildRealtimeVoiceAgentCancelProviderResult,
   buildRealtimeVoiceAgentControlSpeechMessage,
+  buildRealtimeVoiceAgentErrorProviderResult,
   classifyRealtimeVoiceAgentControlText,
   controlRealtimeVoiceAgentRun,
   normalizeRealtimeVoiceAgentControlMode,
@@ -161,6 +195,7 @@ export {
 } from "../talk/provider-registry.js";
 export {
   resolveConfiguredRealtimeVoiceProvider,
+  resolveRealtimeVoiceProviderCapabilities,
   type ResolvedRealtimeVoiceProvider,
   type ResolveConfiguredRealtimeVoiceProviderParams,
 } from "../talk/provider-resolver.js";
@@ -176,6 +211,12 @@ export {
   type RealtimeVoiceSessionHarness,
 } from "../talk/realtime-session-harness.js";
 export {
+  createRealtimeVoiceAudioQueue,
+  RealtimeVoiceSessionLifecycle,
+  type RealtimeVoiceAudioQueue,
+  type RealtimeVoiceSessionConnection,
+} from "../talk/realtime-session-lifecycle.js";
+export {
   extendRealtimeVoiceOutputEchoSuppression,
   getRealtimeVoiceBridgeEventHealth,
   getRealtimeVoiceTranscriptHealth,
@@ -190,13 +231,21 @@ export {
 export {
   calculateMulawRms,
   createSpeechThresholdGate,
+  isRealtimeVoiceAudioAudible,
   readPcm16AudioStats,
   type AudioEnergyStats,
 } from "../talk/audio-energy.js";
 export {
   convertPcmToMulaw8k,
+  createStreamingPcmResampler,
   mulawToPcm,
   pcmToMulaw,
   resamplePcm,
   resamplePcmTo8k,
 } from "../talk/audio-codec.js";
+
+export {
+  createRealtimeVoiceAudioPortSender,
+  type RealtimeVoiceAudioOutputPort,
+  type RealtimeVoiceAudioOutputMessage,
+} from "../talk/audio-output-port.js";

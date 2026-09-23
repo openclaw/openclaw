@@ -1,14 +1,26 @@
-// Msteams tests cover graph upload plugin behavior.
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withFetchPreconnect, withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildTeamsFileInfoCard } from "./graph-chat.js";
-import { requireMSTeamsSharePointSiteId, uploadAndShareSharePoint } from "./graph-upload.js";
+import {
+  getDriveItemProperties,
+  requireMSTeamsSharePointSiteId,
+  uploadAndShareSharePoint,
+} from "./graph-upload.js";
 import {
   MSTEAMS_REQUEST_TIMEOUT_MS,
   resolveMSTeamsSharePointUploadTimeoutMs,
 } from "./request-timeout.js";
 
 const SHAREPOINT_UPLOAD_BASE_TIMEOUT_MS = resolveMSTeamsSharePointUploadTimeoutMs(0);
+const DEFAULT_BUFFER = Buffer.from("world");
+const DEFAULT_UPLOAD_RESULT = { id: "item-1", webUrl: "https://example.com/1", name: "a.txt" };
+const DEFAULT_DRIVE_PROPERTIES = {
+  eTag: '"{file-1},1"',
+  webDavUrl: "https://example.com/a.txt",
+  name: "a.txt",
+};
+const tokenProvider = { getAccessToken: vi.fn(async () => "graph-token") };
 
 type FetchCall = [string, { method?: string; headers?: Record<string, string> } | undefined];
 
@@ -20,12 +32,16 @@ function requireFetchCall(fetchFn: ReturnType<typeof vi.fn>, index = 0): FetchCa
   return call;
 }
 
-function expectGraphUploadFetch(fetchFn: ReturnType<typeof vi.fn>, expectedUrl: string): void {
+function expectGraphUploadFetch(
+  fetchFn: ReturnType<typeof vi.fn>,
+  expectedUrl: string,
+  contentType = "application/octet-stream",
+): void {
   const [url, init] = requireFetchCall(fetchFn);
   expect(url).toBe(expectedUrl);
   expect(init?.method).toBe("PUT");
   expect(init?.headers?.Authorization).toBe("Bearer graph-token");
-  expect(init?.headers?.["Content-Type"]).toBe("application/octet-stream");
+  expect(init?.headers?.["Content-Type"]).toBe(contentType);
   expect(init?.headers?.["User-Agent"]).toMatch(/^teams\.ts\[apps\]\/.+ OpenClaw\/.+$/);
 }
 
@@ -38,12 +54,101 @@ function bodyOnlyErrorResponse(body: string, status = 500): Response {
   } as unknown as Response;
 }
 
+type GraphRoute = {
+  includes: string;
+  respond: (init?: RequestInit) => Response | Promise<Response>;
+};
+
+function createGraphFetch(...routes: GraphRoute[]): ReturnType<typeof vi.fn> {
+  return vi.fn(async (url: string, init?: RequestInit) => {
+    const route = routes.find((candidate) => url.includes(candidate.includes));
+    if (!route) {
+      throw new Error(`Unexpected SharePoint request: ${url}`);
+    }
+    return await route.respond(init);
+  });
+}
+
+function fixedGraphRoute(includes: string, value: unknown, status = 200): GraphRoute {
+  return {
+    includes,
+    respond: () =>
+      typeof value === "string"
+        ? new Response(value, { status })
+        : Response.json(value, { status }),
+  };
+}
+
+function successfulGraphRoutes(): GraphRoute[] {
+  return [
+    fixedGraphRoute("/content", DEFAULT_UPLOAD_RESULT),
+    fixedGraphRoute("/members", { value: [{ userId: "user-1" }] }),
+    fixedGraphRoute("/createLink", { link: { webUrl: "https://example.com/private" } }),
+    fixedGraphRoute("/drive/items/item-1?", DEFAULT_DRIVE_PROPERTIES),
+  ];
+}
+
+function createGraphSendAuthority() {
+  let current = true;
+  const error = new Error("Teams send authority closed");
+  return {
+    error,
+    revoke: () => {
+      current = false;
+    },
+    handoff: {
+      assertDirectAdapterHandoff: () => {
+        if (!current) {
+          throw error;
+        }
+      },
+      onPlatformSendDispatch: vi.fn(async () => {}),
+    },
+  };
+}
+
+function hangingGraphRoute(includes: string): GraphRoute {
+  return {
+    includes,
+    respond: async (init) =>
+      await new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal;
+        if (!signal) {
+          reject(new Error("Expected fetch AbortSignal"));
+          return;
+        }
+        signal.addEventListener("abort", () => reject(abortReasonError(signal)), { once: true });
+      }),
+  };
+}
+
+function runGraphUpload(
+  fetchFn: ReturnType<typeof vi.fn>,
+  overrides: Partial<Parameters<typeof uploadAndShareSharePoint>[0]> = {},
+): ReturnType<typeof uploadAndShareSharePoint> {
+  return uploadAndShareSharePoint({
+    buffer: DEFAULT_BUFFER,
+    filename: DEFAULT_UPLOAD_RESULT.name,
+    siteId: "site-123",
+    tokenProvider,
+    fetchFn: fetchFn as unknown as typeof fetch,
+    ...overrides,
+  });
+}
+
+function uploadWithPerUserSharing(
+  fetchFn: ReturnType<typeof vi.fn>,
+  accessTokenProvider = tokenProvider,
+) {
+  return runGraphUpload(fetchFn, {
+    chatId: "chat-123",
+    usePerUserSharing: true,
+    tokenProvider: accessTokenProvider,
+  });
+}
+
 async function waitForFetchCall(fetchFn: ReturnType<typeof vi.fn>, index = 0): Promise<void> {
-  // Response parsing can span several microtasks before the next Graph request starts.
-  for (let i = 0; i < 20 && fetchFn.mock.calls.length <= index; i += 1) {
-    await Promise.resolve();
-  }
-  requireFetchCall(fetchFn, index);
+  await vi.waitFor(() => requireFetchCall(fetchFn, index));
 }
 
 function fetchSignal(fetchFn: ReturnType<typeof vi.fn>, index = 0): AbortSignal {
@@ -60,17 +165,7 @@ function abortReasonError(signal: AbortSignal): Error {
 }
 
 function createHangingFetch(): ReturnType<typeof vi.fn> {
-  return vi.fn(
-    async (_url: string, init?: RequestInit) =>
-      await new Promise<Response>((_resolve, reject) => {
-        const signal = init?.signal;
-        if (!signal) {
-          reject(new Error("Expected fetch AbortSignal"));
-          return;
-        }
-        signal.addEventListener("abort", () => reject(abortReasonError(signal)), { once: true });
-      }),
-  );
+  return createGraphFetch(hangingGraphRoute(""));
 }
 
 function createHangingBodyFetch(): ReturnType<typeof vi.fn> {
@@ -94,6 +189,19 @@ function createHangingBodyFetch(): ReturnType<typeof vi.fn> {
   });
 }
 
+function createDelayedUploadFetch(value: unknown, delayMs: number): ReturnType<typeof vi.fn> {
+  return vi.fn(async (_url: string, init?: RequestInit) => {
+    const signal = init?.signal;
+    if (!signal) {
+      throw new Error("Expected fetch AbortSignal");
+    }
+    return await new Promise<Response>((resolve, reject) => {
+      signal.addEventListener("abort", () => reject(abortReasonError(signal)), { once: true });
+      setTimeout(() => resolve(Response.json(value)), delayMs);
+    });
+  });
+}
+
 function expectMSTeamsTimeout(promise: Promise<unknown>, label: string, timeoutMs: number) {
   return expect(promise).rejects.toMatchObject({
     name: "TimeoutError",
@@ -101,32 +209,50 @@ function expectMSTeamsTimeout(promise: Promise<unknown>, label: string, timeoutM
   });
 }
 
-type UploadToSharePointParams = Omit<
-  Parameters<typeof uploadAndShareSharePoint>[0],
-  "chatId" | "usePerUserSharing"
+type UploadToSharePointParams = Partial<
+  Omit<Parameters<typeof uploadAndShareSharePoint>[0], "chatId" | "usePerUserSharing">
 >;
 
-async function uploadToSharePoint(params: UploadToSharePointParams) {
+async function uploadToSharePoint(params: UploadToSharePointParams = {}) {
   const uploadFetch = params.fetchFn ?? fetch;
-  const fetchFn: typeof fetch = async (input, init) => {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-    if (url.endsWith("/createLink")) {
-      return new Response(JSON.stringify({ link: { webUrl: "https://example.com/share" } }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
-    }
-    return await uploadFetch(input, init);
-  };
-  const result = await uploadAndShareSharePoint({ ...params, fetchFn });
+  const fetchFn = withFetchPreconnect(
+    vi.fn<typeof fetch>(async (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.endsWith("/createLink")) {
+        return Response.json({ link: { webUrl: "https://example.com/share" } });
+      }
+      return await uploadFetch(input, init);
+    }),
+  );
+  const result = await uploadAndShareSharePoint({
+    buffer: params.buffer ?? DEFAULT_BUFFER,
+    filename: params.filename ?? DEFAULT_UPLOAD_RESULT.name,
+    siteId: params.siteId ?? "site-123",
+    tokenProvider: params.tokenProvider ?? tokenProvider,
+    contentType: params.contentType,
+    fetchFn,
+    assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
+    onPlatformSendDispatch: params.onPlatformSendDispatch,
+  });
   return { id: result.itemId, webUrl: result.webUrl, name: result.name };
 }
 
-describe("graph upload helpers", () => {
-  const tokenProvider = {
-    getAccessToken: vi.fn(async () => "graph-token"),
-  };
+async function startTimedUpload(
+  fetchFn: ReturnType<typeof vi.fn>,
+  filename: string,
+  buffer = DEFAULT_BUFFER,
+) {
+  const timeoutMs = resolveMSTeamsSharePointUploadTimeoutMs(buffer.length);
+  const upload = uploadToSharePoint({
+    buffer,
+    filename,
+    fetchFn: fetchFn as unknown as typeof fetch,
+  });
+  await waitForFetchCall(fetchFn);
+  return { upload, signal: fetchSignal(fetchFn), timeoutMs };
+}
 
+describe("graph upload helpers", () => {
   it("requires a non-empty SharePoint site ID", () => {
     expect(() => requireMSTeamsSharePointSiteId()).toThrow(
       "channels.msteams.sharePointSiteId is required",
@@ -134,52 +260,73 @@ describe("graph upload helpers", () => {
     expect(requireMSTeamsSharePointSiteId(" site-123 ")).toBe("site-123");
   });
 
-  it("uploads to SharePoint with the site drive path", async () => {
-    const fetchFn = vi.fn(
-      async () =>
-        new Response(
-          JSON.stringify({ id: "item-2", webUrl: "https://example.com/2", name: "b.txt" }),
-          {
-            status: 200,
-            headers: { "content-type": "application/json" },
-          },
-        ),
+  it.each([undefined, "application/pdf"])(
+    "uploads to SharePoint with the site drive path and MIME %s",
+    async (contentType) => {
+      const backing = Buffer.from([0xfe, 0xfd, 1, 2, 3, 0xfc]);
+      const buffer = backing.subarray(2, 5);
+      const expectedBytes = Buffer.from([0, 0x80, 0xff]);
+      const { promise: tokenReady, resolve: finishToken } = createDeferred<string>();
+      const delayedTokenProvider = { getAccessToken: vi.fn(async () => await tokenReady) };
+      const fetchFn = vi.fn<typeof fetch>(async (_url, init) => {
+        backing.fill(0);
+        expect(Buffer.from(await new Response(init?.body).arrayBuffer())).toEqual(expectedBytes);
+        return Response.json({ id: "item-2", webUrl: "https://example.com/2", name: "b.txt" });
+      });
+
+      const upload = uploadToSharePoint({
+        buffer,
+        contentType,
+        filename: "b.txt",
+        tokenProvider: delayedTokenProvider,
+        fetchFn: withFetchPreconnect(fetchFn),
+      });
+      await vi.waitFor(() => expect(delayedTokenProvider.getAccessToken).toHaveBeenCalledOnce());
+      expect(fetchFn).not.toHaveBeenCalled();
+      expectedBytes.copy(buffer);
+      finishToken("graph-token");
+      const result = await upload;
+
+      expectGraphUploadFetch(
+        fetchFn,
+        "https://graph.microsoft.com/v1.0/sites/site-123/drive/root:/OpenClawShared/b.txt:/content?@microsoft.graph.conflictBehavior=rename",
+        contentType,
+      );
+      expect(result).toEqual({
+        id: "item-2",
+        webUrl: "https://example.com/2",
+        name: "b.txt",
+      });
+    },
+  );
+
+  it("uploads with conflictBehavior=rename and surfaces the name SharePoint assigns", async () => {
+    // Regression: openclaw-runtime image assets reuse names (image-1.png). Graph's default
+    // replace overwrote the prior file and Teams (caching cards by driveItem URL) showed the
+    // stale image; rename mints a distinct item, so callers use the returned name, not the request.
+    const fetchFn = vi.fn(async () =>
+      Response.json({ id: "item-9", webUrl: "https://example.com/9", name: "image-1 1.png" }),
     );
 
     const result = await uploadToSharePoint({
-      buffer: Buffer.from("world"),
-      filename: "b.txt",
-      siteId: "site-123",
-      tokenProvider,
+      buffer: Buffer.from("img"),
+      filename: "image-1.png",
       fetchFn: withFetchPreconnect(fetchFn),
     });
 
     expectGraphUploadFetch(
       fetchFn,
-      "https://graph.microsoft.com/v1.0/sites/site-123/drive/root:/OpenClawShared/b.txt:/content",
+      "https://graph.microsoft.com/v1.0/sites/site-123/drive/root:/OpenClawShared/image-1.png:/content?@microsoft.graph.conflictBehavior=rename",
     );
-    expect(result).toEqual({
-      id: "item-2",
-      webUrl: "https://example.com/2",
-      name: "b.txt",
-    });
+    expect(result.name).toBe("image-1 1.png");
   });
 
   it("rejects upload responses missing required fields", async () => {
-    const fetchFn = vi.fn(
-      async () =>
-        new Response(JSON.stringify({ id: "item-3" }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
-    );
+    const fetchFn = vi.fn(async () => Response.json({ id: "item-3" }));
 
     await expect(
       uploadToSharePoint({
-        buffer: Buffer.from("world"),
         filename: "bad.txt",
-        siteId: "site-123",
-        tokenProvider,
         fetchFn: withFetchPreconnect(fetchFn),
       }),
     ).rejects.toThrow("SharePoint upload response missing required fields");
@@ -193,10 +340,7 @@ describe("graph upload helpers", () => {
     let error: unknown;
     try {
       await uploadToSharePoint({
-        buffer: Buffer.from("world"),
         filename: "large.txt",
-        siteId: "site-123",
-        tokenProvider,
         fetchFn: fetchFn as unknown as typeof fetch,
       });
     } catch (caught) {
@@ -212,13 +356,7 @@ describe("graph upload helpers", () => {
 });
 
 describe("graph upload request timeouts", () => {
-  const tokenProvider = {
-    getAccessToken: vi.fn(async () => "graph-token"),
-  };
-
-  afterEach(() => {
-    vi.useRealTimers();
-  });
+  afterEach(() => vi.useRealTimers());
 
   it("bounds Graph token acquisition before starting an upload", async () => {
     vi.useFakeTimers();
@@ -228,9 +366,7 @@ describe("graph upload request timeouts", () => {
     const fetchFn = vi.fn();
 
     const upload = uploadToSharePoint({
-      buffer: Buffer.from("world"),
       filename: "token-hang.txt",
-      siteId: "site-123",
       tokenProvider: hangingTokenProvider,
       fetchFn: fetchFn as unknown as typeof fetch,
     });
@@ -248,19 +384,7 @@ describe("graph upload request timeouts", () => {
   it("aborts SharePoint uploads that hang before response headers", async () => {
     vi.useFakeTimers();
     const fetchFn = createHangingFetch();
-    const buffer = Buffer.from("world");
-    const timeoutMs = resolveMSTeamsSharePointUploadTimeoutMs(buffer.length);
-
-    const upload = uploadToSharePoint({
-      buffer,
-      filename: "hang.txt",
-      siteId: "site-123",
-      tokenProvider,
-      fetchFn: fetchFn as unknown as typeof fetch,
-    });
-    await waitForFetchCall(fetchFn);
-
-    const signal = fetchSignal(fetchFn);
+    const { upload, signal, timeoutMs } = await startTimedUpload(fetchFn, "hang.txt");
     expect(signal.aborted).toBe(false);
     const assertion = expectMSTeamsTimeout(upload, "MS Teams SharePoint upload", timeoutMs);
 
@@ -273,62 +397,23 @@ describe("graph upload request timeouts", () => {
   it("keeps the SharePoint timeout active while reading the response body", async () => {
     vi.useFakeTimers();
     const fetchFn = createHangingBodyFetch();
-    const buffer = Buffer.from("world");
-    const timeoutMs = resolveMSTeamsSharePointUploadTimeoutMs(buffer.length);
-
-    const upload = uploadToSharePoint({
-      buffer,
-      filename: "body-hang.txt",
-      siteId: "site-123",
-      tokenProvider,
-      fetchFn: fetchFn as unknown as typeof fetch,
-    });
-    await waitForFetchCall(fetchFn);
-    const signal = fetchSignal(fetchFn);
+    const { upload, signal, timeoutMs } = await startTimedUpload(fetchFn, "body-hang.txt");
     const assertion = expectMSTeamsTimeout(upload, "MS Teams SharePoint upload", timeoutMs);
 
-    await vi.advanceTimersByTimeAsync(timeoutMs);
-
-    await assertion;
+    await Promise.all([assertion, vi.advanceTimersByTimeAsync(timeoutMs)]);
     expect(signal.aborted).toBe(true);
   });
 
   it("allows SharePoint uploads that exceed the control-plane timeout but finish before the transfer timeout", async () => {
     vi.useFakeTimers();
+    const timersBeforeUpload = vi.getTimerCount();
     const uploadResponse = {
       id: "item-slow",
       webUrl: "https://example.com/slow",
       name: "slow.txt",
     };
-    const fetchFn = vi.fn(async (_url: string, init?: RequestInit) => {
-      const signal = init?.signal;
-      if (!signal) {
-        throw new Error("Expected fetch AbortSignal");
-      }
-      return await new Promise<Response>((resolve, reject) => {
-        signal.addEventListener("abort", () => reject(abortReasonError(signal)), { once: true });
-        setTimeout(
-          () =>
-            resolve(
-              new Response(JSON.stringify(uploadResponse), {
-                status: 200,
-                headers: { "content-type": "application/json" },
-              }),
-            ),
-          MSTEAMS_REQUEST_TIMEOUT_MS + 1_000,
-        );
-      });
-    });
-
-    const upload = uploadToSharePoint({
-      buffer: Buffer.from("world"),
-      filename: "slow.txt",
-      siteId: "site-123",
-      tokenProvider,
-      fetchFn: fetchFn as unknown as typeof fetch,
-    });
-    await waitForFetchCall(fetchFn);
-    const signal = fetchSignal(fetchFn);
+    const fetchFn = createDelayedUploadFetch(uploadResponse, MSTEAMS_REQUEST_TIMEOUT_MS + 1_000);
+    const { upload, signal, timeoutMs } = await startTimedUpload(fetchFn, "slow.txt");
 
     await vi.advanceTimersByTimeAsync(MSTEAMS_REQUEST_TIMEOUT_MS);
     expect(signal.aborted).toBe(false);
@@ -336,11 +421,16 @@ describe("graph upload request timeouts", () => {
     await vi.advanceTimersByTimeAsync(1_000);
 
     await expect(upload).resolves.toEqual(uploadResponse);
-    expect(signal.aborted).toBe(false);
+    // Completed guarded responses release their hop signal without expiring the request deadline.
+    expect(vi.getTimerCount()).toBe(timersBeforeUpload);
+    await vi.advanceTimersByTimeAsync(timeoutMs);
+    expect(vi.getTimerCount()).toBe(timersBeforeUpload);
+    expect(abortReasonError(signal).name).not.toBe("TimeoutError");
   });
 
   it("sizes the SharePoint upload timeout for slow large transfers", async () => {
     vi.useFakeTimers();
+    const timersBeforeUpload = vi.getTimerCount();
     const buffer = Buffer.alloc(1024 * 1024);
     const timeoutMs = resolveMSTeamsSharePointUploadTimeoutMs(buffer.length);
     const uploadResponse = {
@@ -348,60 +438,29 @@ describe("graph upload request timeouts", () => {
       webUrl: "https://example.com/large",
       name: "large.bin",
     };
-    const fetchFn = vi.fn(async (_url: string, init?: RequestInit) => {
-      const signal = init?.signal;
-      if (!signal) {
-        throw new Error("Expected fetch AbortSignal");
-      }
-      return await new Promise<Response>((resolve, reject) => {
-        signal.addEventListener("abort", () => reject(abortReasonError(signal)), { once: true });
-        setTimeout(
-          () =>
-            resolve(
-              new Response(JSON.stringify(uploadResponse), {
-                status: 200,
-                headers: { "content-type": "application/json" },
-              }),
-            ),
-          SHAREPOINT_UPLOAD_BASE_TIMEOUT_MS + 1_000,
-        );
-      });
-    });
-
-    const upload = uploadToSharePoint({
-      buffer,
-      filename: "large.bin",
-      siteId: "site-123",
-      tokenProvider,
-      fetchFn: fetchFn as unknown as typeof fetch,
-    });
-    await waitForFetchCall(fetchFn);
-    const signal = fetchSignal(fetchFn);
+    const fetchFn = createDelayedUploadFetch(
+      uploadResponse,
+      SHAREPOINT_UPLOAD_BASE_TIMEOUT_MS + 1_000,
+    );
+    const { upload, signal } = await startTimedUpload(fetchFn, "large.bin", buffer);
 
     await vi.advanceTimersByTimeAsync(SHAREPOINT_UPLOAD_BASE_TIMEOUT_MS);
     expect(signal.aborted).toBe(false);
     await vi.advanceTimersByTimeAsync(1_000);
 
     await expect(upload).resolves.toEqual(uploadResponse);
-    expect(signal.aborted).toBe(false);
+    expect(vi.getTimerCount()).toBe(timersBeforeUpload);
+    await vi.advanceTimersByTimeAsync(timeoutMs);
+    expect(vi.getTimerCount()).toBe(timersBeforeUpload);
+    expect(abortReasonError(signal).name).not.toBe("TimeoutError");
     expect(timeoutMs).toBeGreaterThan(SHAREPOINT_UPLOAD_BASE_TIMEOUT_MS + 1_000);
   });
 
   it("aborts slow large SharePoint uploads after the size-aware transfer budget", async () => {
     vi.useFakeTimers();
     const buffer = Buffer.alloc(1024 * 1024);
-    const timeoutMs = resolveMSTeamsSharePointUploadTimeoutMs(buffer.length);
     const fetchFn = createHangingFetch();
-
-    const upload = uploadToSharePoint({
-      buffer,
-      filename: "large-hang.bin",
-      siteId: "site-123",
-      tokenProvider,
-      fetchFn: fetchFn as unknown as typeof fetch,
-    });
-    await waitForFetchCall(fetchFn);
-    const signal = fetchSignal(fetchFn);
+    const { upload, signal, timeoutMs } = await startTimedUpload(fetchFn, "large-hang.bin", buffer);
     const assertion = expectMSTeamsTimeout(upload, "MS Teams SharePoint upload", timeoutMs);
 
     await vi.advanceTimersByTimeAsync(timeoutMs);
@@ -412,30 +471,12 @@ describe("graph upload request timeouts", () => {
 
   it("keeps the short timeout for SharePoint control-plane requests", async () => {
     vi.useFakeTimers();
-    const fetchFn = vi.fn(async (url: string, init?: RequestInit) => {
-      if (url.includes("/createLink")) {
-        const signal = init?.signal;
-        if (!signal) {
-          throw new Error("Expected fetch AbortSignal");
-        }
-        return await new Promise<Response>((_resolve, reject) => {
-          signal.addEventListener("abort", () => reject(abortReasonError(signal)), { once: true });
-        });
-      }
+    const fetchFn = createGraphFetch(
+      fixedGraphRoute("/content", DEFAULT_UPLOAD_RESULT),
+      hangingGraphRoute("/createLink"),
+    );
 
-      return new Response(
-        JSON.stringify({ id: "item-1", webUrl: "https://example.com/1", name: "a.txt" }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      );
-    });
-
-    const upload = uploadAndShareSharePoint({
-      buffer: Buffer.from("world"),
-      filename: "a.txt",
-      siteId: "site-123",
-      tokenProvider,
-      fetchFn: fetchFn as unknown as typeof fetch,
-    });
+    const upload = runGraphUpload(fetchFn);
 
     await vi.advanceTimersByTimeAsync(0);
     await waitForFetchCall(fetchFn);
@@ -456,34 +497,12 @@ describe("graph upload request timeouts", () => {
 
   it("fails closed when per-user member lookup times out", async () => {
     vi.useFakeTimers();
-    const fetchFn = vi.fn(async (url: string, init?: RequestInit) => {
-      if (url.includes("/content")) {
-        return new Response(
-          JSON.stringify({ id: "item-1", webUrl: "https://example.com/1", name: "a.txt" }),
-          { status: 200, headers: { "content-type": "application/json" } },
-        );
-      }
-      if (url.includes("/members")) {
-        const signal = init?.signal;
-        if (!signal) {
-          throw new Error("Expected fetch AbortSignal");
-        }
-        return await new Promise<Response>((_resolve, reject) => {
-          signal.addEventListener("abort", () => reject(abortReasonError(signal)), { once: true });
-        });
-      }
-      throw new Error(`Unexpected SharePoint request: ${url}`);
-    });
+    const fetchFn = createGraphFetch(
+      fixedGraphRoute("/content", DEFAULT_UPLOAD_RESULT),
+      hangingGraphRoute("/members"),
+    );
 
-    const upload = uploadAndShareSharePoint({
-      buffer: Buffer.from("world"),
-      filename: "a.txt",
-      siteId: "site-123",
-      chatId: "chat-123",
-      usePerUserSharing: true,
-      tokenProvider,
-      fetchFn: fetchFn as unknown as typeof fetch,
-    });
+    const upload = uploadWithPerUserSharing(fetchFn);
     await vi.advanceTimersByTimeAsync(0);
     await waitForFetchCall(fetchFn, 1);
     const memberSignal = fetchSignal(fetchFn, 1);
@@ -501,70 +520,25 @@ describe("graph upload request timeouts", () => {
   });
 
   it("fails closed when per-user member lookup has a transient Graph error", async () => {
-    const fetchFn = vi.fn(async (url: string) => {
-      if (url.includes("/content")) {
-        return new Response(
-          JSON.stringify({ id: "item-1", webUrl: "https://example.com/1", name: "a.txt" }),
-          { status: 200, headers: { "content-type": "application/json" } },
-        );
-      }
-      if (url.includes("/members")) {
-        return new Response("temporarily unavailable", { status: 503 });
-      }
-      throw new Error(`Unexpected SharePoint request: ${url}`);
-    });
+    const fetchFn = createGraphFetch(
+      fixedGraphRoute("/content", DEFAULT_UPLOAD_RESULT),
+      fixedGraphRoute("/members", "temporarily unavailable", 503),
+    );
 
-    await expect(
-      uploadAndShareSharePoint({
-        buffer: Buffer.from("world"),
-        filename: "a.txt",
-        siteId: "site-123",
-        chatId: "chat-123",
-        usePerUserSharing: true,
-        tokenProvider,
-        fetchFn: fetchFn as unknown as typeof fetch,
-      }),
-    ).rejects.toMatchObject({ statusCode: 503 });
+    await expect(uploadWithPerUserSharing(fetchFn)).rejects.toMatchObject({ statusCode: 503 });
     expect(fetchFn).toHaveBeenCalledTimes(2);
   });
 
   it("creates a per-user link when member lookup succeeds", async () => {
-    const fetchFn = vi.fn(async (url: string) => {
-      if (url.includes("/content")) {
-        return new Response(
-          JSON.stringify({ id: "item-1", webUrl: "https://example.com/1", name: "a.txt" }),
-          { status: 200, headers: { "content-type": "application/json" } },
-        );
-      }
-      if (url.includes("/members")) {
-        return new Response(
-          JSON.stringify({ value: [{ userId: "user-1" }, { userId: "user-2" }] }),
-          {
-            status: 200,
-            headers: { "content-type": "application/json" },
-          },
-        );
-      }
-      if (url.endsWith("/createLink")) {
-        return new Response(JSON.stringify({ link: { webUrl: "https://example.com/private" } }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        });
-      }
-      throw new Error(`Unexpected SharePoint request: ${url}`);
-    });
+    const fetchFn = createGraphFetch(
+      fixedGraphRoute("/content", DEFAULT_UPLOAD_RESULT),
+      fixedGraphRoute("/members", { value: [{ userId: "user-1" }, { userId: "user-2" }] }),
+      fixedGraphRoute("/createLink", { link: { webUrl: "https://example.com/private" } }),
+    );
 
-    await expect(
-      uploadAndShareSharePoint({
-        buffer: Buffer.from("world"),
-        filename: "a.txt",
-        siteId: "site-123",
-        chatId: "chat-123",
-        usePerUserSharing: true,
-        tokenProvider,
-        fetchFn: fetchFn as unknown as typeof fetch,
-      }),
-    ).resolves.toMatchObject({ shareUrl: "https://example.com/private" });
+    await expect(uploadWithPerUserSharing(fetchFn)).resolves.toMatchObject({
+      shareUrl: "https://example.com/private",
+    });
     const [createLinkUrl, createLinkInit] = requireFetchCall(fetchFn, 2);
     expect(createLinkUrl).toContain("/beta/");
     expect((createLinkInit as RequestInit | undefined)?.body).toBe(
@@ -577,30 +551,12 @@ describe("graph upload request timeouts", () => {
   });
 
   it("fails closed when Graph denies member lookup", async () => {
-    const fetchFn = vi.fn(async (url: string) => {
-      if (url.includes("/content")) {
-        return new Response(
-          JSON.stringify({ id: "item-1", webUrl: "https://example.com/1", name: "a.txt" }),
-          { status: 200, headers: { "content-type": "application/json" } },
-        );
-      }
-      if (url.includes("/members")) {
-        return new Response("forbidden", { status: 403 });
-      }
-      throw new Error(`Unexpected SharePoint request: ${url}`);
-    });
+    const fetchFn = createGraphFetch(
+      fixedGraphRoute("/content", DEFAULT_UPLOAD_RESULT),
+      fixedGraphRoute("/members", "forbidden", 403),
+    );
 
-    await expect(
-      uploadAndShareSharePoint({
-        buffer: Buffer.from("world"),
-        filename: "a.txt",
-        siteId: "site-123",
-        chatId: "chat-123",
-        usePerUserSharing: true,
-        tokenProvider,
-        fetchFn: fetchFn as unknown as typeof fetch,
-      }),
-    ).rejects.toMatchObject({
+    await expect(uploadWithPerUserSharing(fetchFn)).rejects.toMatchObject({
       statusCode: 403,
       message: expect.stringContaining("verify Graph chat-member permissions"),
     });
@@ -616,68 +572,248 @@ describe("graph upload request timeouts", () => {
         .mockRejectedValueOnce(tokenError)
         .mockResolvedValueOnce("graph-token"),
     };
-    const fetchFn = vi.fn(async (url: string) => {
-      if (url.includes("/content")) {
-        return new Response(
-          JSON.stringify({ id: "item-1", webUrl: "https://example.com/1", name: "a.txt" }),
-          { status: 200, headers: { "content-type": "application/json" } },
-        );
-      }
-      throw new Error(`Unexpected SharePoint request: ${url}`);
-    });
+    const fetchFn = createGraphFetch(fixedGraphRoute("/content", DEFAULT_UPLOAD_RESULT));
 
-    await expect(
-      uploadAndShareSharePoint({
-        buffer: Buffer.from("world"),
-        filename: "a.txt",
-        siteId: "site-123",
-        chatId: "chat-123",
-        usePerUserSharing: true,
-        tokenProvider: tokenProvider403,
-        fetchFn: fetchFn as unknown as typeof fetch,
-      }),
-    ).rejects.toBe(tokenError);
+    await expect(uploadWithPerUserSharing(fetchFn, tokenProvider403)).rejects.toBe(tokenError);
     expect(tokenProvider403.getAccessToken).toHaveBeenCalledTimes(2);
     expect(fetchFn).toHaveBeenCalledTimes(1);
   });
 
   it("fails closed when member lookup returns no recipients", async () => {
-    const fetchFn = vi.fn(async (url: string) => {
-      if (url.includes("/content")) {
-        return new Response(
-          JSON.stringify({ id: "item-1", webUrl: "https://example.com/1", name: "a.txt" }),
-          { status: 200, headers: { "content-type": "application/json" } },
-        );
-      }
-      if (url.includes("/members")) {
-        return new Response(JSON.stringify({ value: [] }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        });
-      }
-      throw new Error(`Unexpected SharePoint request: ${url}`);
-    });
+    const fetchFn = createGraphFetch(
+      fixedGraphRoute("/content", DEFAULT_UPLOAD_RESULT),
+      fixedGraphRoute("/members", { value: [] }),
+    );
 
-    await expect(
-      uploadAndShareSharePoint({
-        buffer: Buffer.from("world"),
-        filename: "a.txt",
-        siteId: "site-123",
-        chatId: "chat-123",
-        usePerUserSharing: true,
-        tokenProvider,
-        fetchFn: fetchFn as unknown as typeof fetch,
-      }),
-    ).rejects.toThrow("MS Teams chat member lookup returned no recipients");
+    await expect(uploadWithPerUserSharing(fetchFn)).rejects.toThrow(
+      "MS Teams chat member lookup returned no recipients",
+    );
     expect(fetchFn).toHaveBeenCalledTimes(2);
   });
 });
 
-describe("graph upload response limits", () => {
-  const tokenProvider = {
-    getAccessToken: vi.fn(async () => "graph-token"),
-  };
+describe("graph upload send authority", () => {
+  function runPreparation(
+    step: string,
+    fetchFn: ReturnType<typeof vi.fn>,
+    overrides: Partial<Parameters<typeof uploadAndShareSharePoint>[0]>,
+  ) {
+    return step === "properties"
+      ? getDriveItemProperties({
+          siteId: "site-123",
+          itemId: "item-1",
+          tokenProvider,
+          fetchFn: withFetchPreconnect(fetchFn),
+          ...overrides,
+        })
+      : runGraphUpload(fetchFn, {
+          chatId: "chat-123",
+          usePerUserSharing: true,
+          ...overrides,
+        });
+  }
 
+  it.each([
+    { step: "upload", tokenCall: 1 },
+    { step: "members", tokenCall: 2 },
+    { step: "sharing", tokenCall: 3 },
+    { step: "properties", tokenCall: 1 },
+  ])("stops $step after authority closes during token acquisition", async ({ step, tokenCall }) => {
+    const authority = createGraphSendAuthority();
+    const tokenStarted = createDeferred<void>();
+    const tokenReady = createDeferred<string>();
+    let calls = 0;
+    const delayedTokenProvider = {
+      getAccessToken: vi.fn(async () => {
+        if (++calls === tokenCall) {
+          tokenStarted.resolve();
+          return await tokenReady.promise;
+        }
+        return "graph-token";
+      }),
+    };
+    const fetchFn = createGraphFetch(...successfulGraphRoutes());
+    const operation = runPreparation(step, fetchFn, {
+      tokenProvider: delayedTokenProvider,
+      ...authority.handoff,
+    });
+    const assertion = expect(operation).rejects.toMatchObject({ cause: authority.error });
+
+    await tokenStarted.promise;
+    expect(fetchFn).toHaveBeenCalledTimes(tokenCall - 1);
+    authority.revoke();
+    tokenReady.resolve("graph-token");
+
+    await assertion;
+    expect(fetchFn).toHaveBeenCalledTimes(tokenCall - 1);
+    expect(delayedTokenProvider.getAccessToken).toHaveBeenCalledTimes(tokenCall);
+    expect(authority.handoff.onPlatformSendDispatch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { completed: "/content", requestCount: 1 },
+    { completed: "/members", requestCount: 2 },
+  ])(
+    "stops the next preparation step after $completed settles under revoked authority",
+    async ({ completed, requestCount }) => {
+      const authority = createGraphSendAuthority();
+      const accessTokenProvider = { getAccessToken: vi.fn(async () => "graph-token") };
+      const fetchFn = createGraphFetch(
+        ...successfulGraphRoutes().map((route) => ({
+          includes: route.includes,
+          respond: async (init?: RequestInit) => {
+            const response = await route.respond(init);
+            if (route.includes === completed) {
+              authority.revoke();
+            }
+            return response;
+          },
+        })),
+      );
+
+      await expect(
+        runPreparation("upload", fetchFn, {
+          tokenProvider: accessTokenProvider,
+          ...authority.handoff,
+        }),
+      ).rejects.toMatchObject({ cause: authority.error });
+      expect(fetchFn).toHaveBeenCalledTimes(requestCount);
+      expect(accessTokenProvider.getAccessToken).toHaveBeenCalledTimes(requestCount);
+      expect(authority.handoff.onPlatformSendDispatch).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    {
+      step: "sharing",
+      finalRoute: "/createLink",
+      expected: { shareUrl: "https://example.com/private" },
+    },
+    { step: "properties", finalRoute: "/drive/items/item-1?", expected: DEFAULT_DRIVE_PROPERTIES },
+  ])(
+    "retains the accepted $step response when authority closes before settlement",
+    async ({ step, finalRoute, expected }) => {
+      const authority = createGraphSendAuthority();
+      const fetchFn = createGraphFetch(
+        ...successfulGraphRoutes().map((route) => ({
+          includes: route.includes,
+          respond: async (init?: RequestInit) => {
+            const response = await route.respond(init);
+            if (route.includes === finalRoute) {
+              authority.revoke();
+            }
+            return response;
+          },
+        })),
+      );
+
+      await expect(runPreparation(step, fetchFn, authority.handoff)).resolves.toMatchObject(
+        expected,
+      );
+      expect(authority.handoff.onPlatformSendDispatch).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    { status: 307, redirectedStep: "upload" },
+    { status: 308, redirectedStep: "upload" },
+    { status: 307, redirectedStep: "createLink" },
+    { status: 308, redirectedStep: "createLink" },
+  ])(
+    "follows $status $redirectedStep redirects only while authority remains current",
+    async ({ status, redirectedStep }) => {
+      const requests: Array<{
+        path: string;
+        method: string;
+        body: string;
+        authorization?: string;
+      }> = [];
+      let authority = createGraphSendAuthority();
+      let revokeOnRedirect = false;
+      const uploadPath = "/v1.0/sites/site-123/drive/root:/OpenClawShared/a.txt:/content";
+      const linkPath = "/v1.0/sites/site-123/drive/items/item-1/createLink";
+      const redirectPath = `/redirected/${redirectedStep}`;
+
+      await withServer(
+        (req, res) => {
+          const chunks: Buffer[] = [];
+          req.on("data", (chunk: Buffer) => chunks.push(chunk));
+          req.on("end", () => {
+            const path = new URL(req.url ?? "/", "http://localhost").pathname;
+            requests.push({
+              path,
+              method: req.method ?? "GET",
+              body: Buffer.concat(chunks).toString(),
+              authorization: req.headers.authorization,
+            });
+            if (path === (redirectedStep === "upload" ? uploadPath : linkPath)) {
+              if (revokeOnRedirect) {
+                authority.revoke();
+              }
+              res.writeHead(status, { location: redirectPath });
+              res.end();
+              return;
+            }
+            res.writeHead(200, { "content-type": "application/json" });
+            res.end(
+              JSON.stringify(
+                path === uploadPath || (path === redirectPath && redirectedStep === "upload")
+                  ? DEFAULT_UPLOAD_RESULT
+                  : { link: { webUrl: "https://example.com/private" } },
+              ),
+            );
+          });
+        },
+        async (baseUrl) => {
+          const realFetch = globalThis.fetch.bind(globalThis);
+          const fetchFn = vi.fn<typeof fetch>(async (input, init) => {
+            const url = new URL(input instanceof Request ? input.url : String(input));
+            // Map only the URL: baseline fetch must retain its native automatic redirects.
+            return await realFetch(new URL(`${url.pathname}${url.search}`, baseUrl), init);
+          });
+
+          await expect(runGraphUpload(fetchFn, authority.handoff)).resolves.toMatchObject({
+            itemId: DEFAULT_UPLOAD_RESULT.id,
+            shareUrl: "https://example.com/private",
+          });
+          const firstUpload = {
+            path: uploadPath,
+            method: "PUT",
+            body: DEFAULT_BUFFER.toString(),
+            authorization: "Bearer graph-token",
+          };
+          const firstLink = {
+            path: linkPath,
+            method: "POST",
+            body: JSON.stringify({ type: "view", scope: "organization" }),
+            authorization: "Bearer graph-token",
+          };
+          expect(requests).toEqual(
+            redirectedStep === "upload"
+              ? [firstUpload, { ...firstUpload, path: redirectPath }, firstLink]
+              : [firstUpload, firstLink, { ...firstLink, path: redirectPath }],
+          );
+          expect(authority.handoff.onPlatformSendDispatch).not.toHaveBeenCalled();
+
+          requests.length = 0;
+          authority = createGraphSendAuthority();
+          revokeOnRedirect = true;
+          const outcome = await runGraphUpload(fetchFn, authority.handoff).then(
+            (value) => ({ value }),
+            (error: unknown) => ({ error }),
+          );
+          expect(requests).toEqual(
+            redirectedStep === "upload" ? [firstUpload] : [firstUpload, firstLink],
+          );
+          expect(outcome).toMatchObject({ error: { cause: authority.error } });
+          expect(authority.handoff.onPlatformSendDispatch).not.toHaveBeenCalled();
+        },
+      );
+    },
+  );
+});
+
+describe("graph upload response limits", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
@@ -710,19 +846,19 @@ describe("graph upload response limits", () => {
         const realFetch = globalThis.fetch.bind(globalThis);
         vi.stubGlobal(
           "fetch",
-          withFetchPreconnect(async (input: RequestInfo | URL, init?: RequestInit) => {
-            const url = new URL(input instanceof Request ? input.url : String(input));
-            const loopback = new URL(`${url.pathname}${url.search}`, baseUrl);
-            return realFetch(loopback, init);
-          }),
+          withFetchPreconnect(
+            vi.fn<typeof fetch>(async (input, init) => {
+              const url = new URL(input instanceof Request ? input.url : String(input));
+              const loopback = new URL(`${url.pathname}${url.search}`, baseUrl);
+              return realFetch(loopback, init);
+            }),
+          ),
         );
 
         await expect(
           uploadToSharePoint({
             buffer: Buffer.from("x"),
             filename: "big.txt",
-            siteId: "site-123",
-            tokenProvider,
           }),
         ).rejects.toThrow(
           "msteams.graph-upload.uploadSharePointFile: JSON response exceeds 16777216 bytes",

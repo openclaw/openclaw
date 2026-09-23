@@ -1,6 +1,21 @@
+import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
 import type { RuntimeLogger } from "../plugins/runtime/types.js";
+import type {
+  TranscriptStartRequest,
+  TranscriptsStartResult,
+  TranscriptStopRequest,
+  TranscriptsStopResult,
+} from "../transcripts/provider-types.js";
 import { MeetingSessionCleanupTracker } from "./session-cleanup-tracker.js";
-import { MeetingSessionJoinLock } from "./session-join-lock.js";
+import { MeetingSessionDurableTranscripts } from "./session-durable-transcripts.js";
+import type {
+  MeetingBrowserSessionView,
+  MeetingSessionRuntimeHandles,
+  MeetingSessionRuntimeJoinContext,
+  MeetingSessionRuntimeMessages,
+  MeetingSessionLeaveResult,
+} from "./session-runtime-types.js";
+import { evaluateMeetingSpeechReadiness } from "./session-speech-readiness.js";
 import { MeetingSessionTranscriptStore } from "./session-transcript-store.js";
 import type {
   MeetingBrowserHealth,
@@ -9,59 +24,14 @@ import type {
   MeetingSessionRecord,
   MeetingTranscriptSnapshot,
 } from "./session-types.js";
-
-export type MeetingSessionRuntimeHandles<THealth extends MeetingBrowserHealth> = {
-  stop?: () => Promise<void>;
-  speak?: (instructions?: string) => void;
-  getHealth?: () => Partial<THealth>;
-};
-
-export type MeetingBrowserSessionView<
-  THealth extends MeetingBrowserHealth,
-  TTab extends MeetingBrowserTab,
-> = {
-  launched: boolean;
-  nodeId?: string;
-  tab?: TTab;
-  health?: THealth;
-  hasAudioBridge: boolean;
-};
-
-export type MeetingSessionRuntimeJoinContext<
-  TSession extends MeetingSessionRecord<TTransport, TMode>,
-  TTransport extends string,
-  TMode extends string,
-  THealth extends MeetingBrowserHealth,
-  TTab extends MeetingBrowserTab,
-> = {
-  attachRuntimeHandles(session: TSession, handles: MeetingSessionRuntimeHandles<THealth>): void;
-  inheritedBrowserTab(params: {
-    session: TSession;
-    transport: TTransport;
-    nodeId?: string;
-    meetingUrl: string;
-    tab?: TTab;
-  }): TTab | undefined;
-};
-
-export type MeetingSessionRuntimeMessages<TSpeechBlockedReason extends string> = {
-  previousBrowserLeaveFailed: string;
-  reassignedSessionNote: string;
-  reusedSessionNote: string;
-  replacementBrowserLeaveFailed: string;
-  speechBlockedFallback: string;
-  speech: {
-    audioBridgeUnavailable: string;
-    browserUnverified: string;
-    manualActionFallback: string;
-    microphoneMuted: string;
-    microphoneMutedReason: TSpeechBlockedReason;
-    notInCall: string;
-    notInCallReason: TSpeechBlockedReason;
-    browserUnverifiedReason: TSpeechBlockedReason;
-    audioBridgeUnavailableReason: TSpeechBlockedReason;
-  };
-};
+import type { MeetingDurableTranscriptsOptions } from "./transcripts-bridge.js";
+export type {
+  MeetingBrowserSessionView,
+  MeetingSessionRuntimeHandles,
+  MeetingSessionRuntimeJoinContext,
+  MeetingSessionRuntimeMessages,
+  MeetingSessionLeaveResult,
+} from "./session-runtime-types.js";
 
 export type MeetingSessionRuntimeOptions<
   TSession extends MeetingSessionRecord<TTransport, TMode>,
@@ -107,7 +77,11 @@ export type MeetingSessionRuntimeOptions<
     options?: { force?: boolean; readOnly?: boolean },
   ): Promise<void>;
   refreshStatus(session: TSession): Promise<void>;
-  refreshReusableSession(session: TSession): Promise<void>;
+  refreshReusableSession(
+    session: TSession,
+    request: TRequest,
+    resolved: MeetingResolvedJoin<TTransport, TMode>,
+  ): Promise<{ keepBrowserTab: boolean } | void>;
   ensureRealtimeBridge(
     session: TSession,
   ): Promise<MeetingSessionRuntimeHandles<THealth> | undefined>;
@@ -120,12 +94,7 @@ export type MeetingSessionRuntimeOptions<
     instructions?: string,
   ): Promise<{ handled: boolean; spoken: boolean } | undefined>;
   defaultSpeechInstructions?: string;
-};
-
-export type MeetingSessionLeaveResult<TSession> = {
-  found: boolean;
-  session?: TSession;
-  browserLeft?: boolean;
+  durableTranscripts?: MeetingDurableTranscriptsOptions;
 };
 
 const nowIso = () => new Date().toISOString();
@@ -144,10 +113,10 @@ export class MeetingSessionRuntime<
   readonly #sessions = new Map<string, TSession>();
   readonly #sessionLeaves = new Map<string, Promise<MeetingSessionLeaveResult<TSession>>>();
   readonly #sessionCleanup = new MeetingSessionCleanupTracker();
-  readonly #meetingLock = new MeetingSessionJoinLock();
-  readonly #sessionStops = new Map<string, () => Promise<void>>();
+  readonly #meetingLock = new KeyedAsyncQueue();
   readonly #sessionSpeakers = new Map<string, (instructions?: string) => void>();
   readonly #sessionHealth = new Map<string, () => Partial<THealth>>();
+  readonly #durableTranscripts: MeetingSessionDurableTranscripts<TSession>;
   readonly #transcriptStore: MeetingSessionTranscriptStore<TSession>;
 
   constructor(
@@ -169,6 +138,18 @@ export class MeetingSessionRuntime<
       hasBrowserTab: (session) => Boolean(this.options.getBrowser(session)?.tab),
       capture: async (session, captureOptions) =>
         await this.options.captureTranscript(session, captureOptions),
+      onLines: async (session, lines) => await this.#durableTranscripts.ingest(session, lines),
+    });
+    this.#durableTranscripts = new MeetingSessionDurableTranscripts({
+      config: options.durableTranscripts,
+      formatError: (error) => options.formatError(error),
+      isBrowserSession: (session) => options.isBrowserTransport(session.transport),
+      isTranscribeSession: (session) => options.isTranscribeMode(session.mode),
+      listSessions: () => [...this.#sessions.values()],
+      logger: options.logger,
+      logScope: options.logScope,
+      sameMeetingUrl: (left, right) => options.sameMeetingUrl(left, right),
+      transcriptStore: this.#transcriptStore,
     });
   }
 
@@ -205,6 +186,18 @@ export class MeetingSessionRuntime<
     return await this.#transcriptStore.read(sessionId, options);
   }
 
+  async startTranscriptSource(request: TranscriptStartRequest): Promise<TranscriptsStartResult> {
+    return await this.#durableTranscripts.startSource(request);
+  }
+
+  reconcileTranscriptPolicy(enabled: boolean): Promise<void> {
+    return this.#durableTranscripts.reconcilePolicy(enabled);
+  }
+
+  async stopTranscriptSource(request: TranscriptStopRequest): Promise<TranscriptsStopResult> {
+    return await this.#durableTranscripts.stopSource(request);
+  }
+
   isReusableSession(session: TSession, resolved: MeetingResolvedJoin<TTransport, TMode>): boolean {
     return (
       session.state === "active" &&
@@ -219,7 +212,7 @@ export class MeetingSessionRuntime<
     const resolved = this.options.resolveJoin(request);
     // Session publication follows async transport setup. Serialize every transport so
     // concurrent identical joins cannot both create an external participant.
-    return await this.#meetingLock.run(
+    return await this.#meetingLock.enqueue(
       this.#meetingKey(resolved.transport, resolved.url),
       async () => await this.#joinUnlocked(request, resolved),
     );
@@ -233,7 +226,9 @@ export class MeetingSessionRuntime<
     if (!session) {
       return { found: false };
     }
-    return await this.#meetingLock.run(
+    // The meeting lock fences joins and leaves before terminal transcript work;
+    // #sessionLeaves then coalesces retries owned by the same session.
+    return await this.#meetingLock.enqueue(
       this.#meetingKey(session.transport, session.url),
       async () => await this.#leaveUnlocked(sessionId, options),
     );
@@ -261,15 +256,18 @@ export class MeetingSessionRuntime<
     if (session.state !== "active") {
       return { found: true, spoken: false, session };
     }
-    const handles = await this.options.ensureRealtimeBridge(session);
+    await this.#sessionCleanup.prepareRuntime(session.id, async () => {
+      if (session.state !== "active") {
+        return;
+      }
+      const handles = await this.options.ensureRealtimeBridge(session);
+      if (handles) {
+        this.#attachRuntimeHandles(session, handles);
+      }
+    });
     if (session.state !== "active") {
-      // A concurrent leave can finish while bridge startup awaits. Stop the late bridge
-      // instead of attaching it to an ended session with no remaining cleanup owner.
-      await handles?.stop?.();
+      await this.#sessionCleanup.stopRuntime(session.id);
       return { found: true, spoken: false, session };
-    }
-    if (handles) {
-      this.#attachRuntimeHandles(session, handles);
     }
     const speak = this.#sessionSpeakers.get(sessionId);
     if (!speak || session.state !== "active") {
@@ -309,7 +307,7 @@ export class MeetingSessionRuntime<
         return true;
       }
       const health = this.options.getBrowser(result.session as TSession)?.health;
-      if (health?.manualActionRequired || result.session?.state !== "active") {
+      if (health?.manualAction || result.session?.state !== "active") {
         return false;
       }
       const blocked = health?.speechBlockedReason;
@@ -398,6 +396,16 @@ export class MeetingSessionRuntime<
     request: TRequest,
     resolved: MeetingResolvedJoin<TTransport, TMode>,
   ): Promise<{ session: TSession; spoken?: boolean }> {
+    for (const session of this.list()) {
+      if (
+        session.state === "ended" &&
+        session.transport === resolved.transport &&
+        this.options.sameMeetingUrl(session.url, resolved.url) &&
+        this.#sessionCleanup.hasRuntime(session.id)
+      ) {
+        await this.#leaveUnlocked(session.id);
+      }
+    }
     const activeSessions = this.list().filter(
       (session) =>
         session.state === "active" &&
@@ -435,13 +443,19 @@ export class MeetingSessionRuntime<
     }
     let reusable = activeSessions.find((session) => this.isReusableSession(session, resolved));
     if (reusable) {
-      await this.options.refreshReusableSession(reusable);
+      const refreshResult = await this.options.refreshReusableSession(reusable, request, resolved);
       if (reusable.state !== "active") {
+        // The refresh hook runs inside the join lock, so it marks stale sessions
+        // ended and lets this owner perform cleanup without recursive lock entry.
+        await this.#leaveSession(reusable, {
+          keepBrowserTab: refreshResult?.keepBrowserTab ?? true,
+        });
         reusable = undefined;
       }
     }
     const speechInstructions = this.options.resolveSpeechInstructions(request);
     if (reusable) {
+      await this.#durableTranscripts.start(reusable);
       await this.refreshBrowserHealth(reusable);
       this.#noteSession(reusable, this.options.messages.reusedSessionNote);
       reusable.updatedAt = nowIso();
@@ -475,9 +489,13 @@ export class MeetingSessionRuntime<
         throw new Error(this.options.messages.replacementBrowserLeaveFailed);
       }
     } catch (error) {
-      // Failed joins are never published, so this catch is their only cleanup owner.
-      // Stop attached transports and release the new browser participant before rethrowing.
+      // Complete rollback now; keep only unfinished cleanup reachable for a later leave.
       await this.#rollbackFailedJoinSession(session);
+      if (this.#sessionCleanup.isPending(session.id)) {
+        this.#sessionCleanup.retainFailedJoin(session.id);
+        this.#sessions.set(session.id, session);
+        this.#noteSession(session, "Meeting cleanup is pending; use leave to retry.");
+      }
       await this.#settleRetainedBrowserTabsAfterFailure(retained);
       this.options.logger.warn(
         `${this.options.logScope} join failed: ${this.options.formatError(error)}`,
@@ -486,6 +504,7 @@ export class MeetingSessionRuntime<
     }
 
     this.#sessions.set(session.id, session);
+    await this.#durableTranscripts.start(session);
     const spoken = delegatedSpoken
       ? true
       : this.options.isTalkBackMode(resolved.mode) && speechInstructions
@@ -506,7 +525,11 @@ export class MeetingSessionRuntime<
     if (!session) {
       return { found: false };
     }
-    if (session.state === "ended" && !this.#sessionCleanup.isPending(sessionId)) {
+    if (
+      session.state === "ended" &&
+      !this.#sessionCleanup.isPending(sessionId) &&
+      !this.#sessionCleanup.hasRuntime(sessionId)
+    ) {
       return {
         found: true,
         session,
@@ -529,32 +552,44 @@ export class MeetingSessionRuntime<
     options?: { keepBrowserTab?: boolean },
   ): Promise<MeetingSessionLeaveResult<TSession>> {
     const firstAttempt = this.#sessionCleanup.begin(session.id, session.browserLeft);
-    if (firstAttempt && this.options.isTranscribeMode(session.mode)) {
-      this.#transcriptStore.startFinalizing(session.id);
-      await this.#transcriptStore.capture(session, { finalize: true }).catch((error: unknown) => {
-        this.options.logger.debug?.(
-          `${this.options.logScope} final transcript snapshot ignored: ${this.options.formatError(error)}`,
-        );
-      });
-    }
     session.state = "ended";
     session.updatedAt = nowIso();
-    this.#sessionSpeakers.delete(session.id);
-    this.#sessionHealth.delete(session.id);
-    const stop = this.#sessionStops.get(session.id);
+    this.#dropRuntimeHandles(session.id);
+    const transcribe = this.options.isTranscribeMode(session.mode);
+    let transcriptStopped = false;
+    if (transcribe) {
+      // Fence new live reads before final capture; the store's capture chain drains
+      // reads already admitted before this terminal boundary.
+      this.#transcriptStore.startFinalizing(session.id);
+    }
     try {
+      transcriptStopped = await this.#durableTranscripts.stop(session, {
+        allowFallback: firstAttempt,
+      });
       const cleanup = await this.#sessionCleanup.cleanup({
         sessionId: session.id,
-        stop,
         keepBrowserTab: options?.keepBrowserTab === true,
+        hasBrowserTab: () => Boolean(this.options.getBrowser(session)?.tab),
         releaseBrowser: async () => await this.options.releaseBrowserTab(session),
       });
       session.browserLeft = cleanup.browserLeft;
-      if (cleanup.stopSettled && stop && this.#sessionStops.get(session.id) === stop) {
-        this.#sessionStops.delete(session.id);
+      const browser = this.options.getBrowser(session);
+      if (cleanup.browserLeft === true && browser?.health) {
+        this.options.setBrowserHealth(session, {
+          ...browser.health,
+          inCall: false,
+          micMuted: undefined,
+          manualAction: undefined,
+          speechReady: false,
+          speechBlockedReason: undefined,
+          speechBlockedMessage: undefined,
+        } as THealth);
       }
       if (cleanup.complete) {
         this.#dropRuntimeHandles(session.id);
+        if (cleanup.unpublished) {
+          this.#sessions.delete(session.id);
+        }
       }
       return {
         found: true,
@@ -562,8 +597,10 @@ export class MeetingSessionRuntime<
         ...(cleanup.browserLeft === undefined ? {} : { browserLeft: cleanup.browserLeft }),
       };
     } finally {
-      if (firstAttempt) {
+      if (transcriptStopped) {
         this.#transcriptStore.retire(session.id);
+      }
+      if (transcribe) {
         this.#transcriptStore.finishFinalizing(session.id);
       }
     }
@@ -670,7 +707,10 @@ export class MeetingSessionRuntime<
 
   #attachRuntimeHandles(session: TSession, handles: MeetingSessionRuntimeHandles<THealth>): void {
     if (handles.stop) {
-      this.#sessionStops.set(session.id, handles.stop);
+      this.#sessionCleanup.addStop(session.id, handles.stop);
+    }
+    if (session.state !== "active") {
+      return;
     }
     if (handles.speak) {
       this.#sessionSpeakers.set(session.id, handles.speak);
@@ -681,7 +721,6 @@ export class MeetingSessionRuntime<
   }
 
   #dropRuntimeHandles(sessionId: string): void {
-    this.#sessionStops.delete(sessionId);
     this.#sessionSpeakers.delete(sessionId);
     this.#sessionHealth.delete(sessionId);
   }
@@ -696,53 +735,12 @@ export class MeetingSessionRuntime<
     reason?: TSpeechBlockedReason;
     message?: string;
   } {
-    const speech = this.options.messages.speech;
-    const browser = this.options.getBrowser(session);
-    if (!this.options.isTalkBackMode(session.mode) || !browser) {
-      return { ready: true };
-    }
-    if (!this.#isManagedBrowserSession(session)) {
-      return browser.hasAudioBridge
-        ? { ready: true }
-        : {
-            ready: false,
-            reason: speech.audioBridgeUnavailableReason,
-            message: speech.audioBridgeUnavailable,
-          };
-    }
-    const health = browser.health;
-    if (health?.manualActionRequired) {
-      return {
-        ready: false,
-        reason: (health.manualActionReason ??
-          speech.browserUnverifiedReason) as TSpeechBlockedReason,
-        message: health.manualActionMessage ?? speech.manualActionFallback,
-      };
-    }
-    if (health?.inCall === true) {
-      if (health.micMuted === true) {
-        return {
-          ready: false,
-          reason: speech.microphoneMutedReason,
-          message: speech.microphoneMuted,
-        };
-      }
-      return browser.hasAudioBridge
-        ? { ready: true }
-        : {
-            ready: false,
-            reason: speech.audioBridgeUnavailableReason,
-            message: speech.audioBridgeUnavailable,
-          };
-    }
-    if (health?.inCall === false) {
-      return { ready: false, reason: speech.notInCallReason, message: speech.notInCall };
-    }
-    return {
-      ready: false,
-      reason: speech.browserUnverifiedReason,
-      message: speech.browserUnverified,
-    };
+    return evaluateMeetingSpeechReadiness({
+      browser: this.options.getBrowser(session),
+      managedBrowser: this.#isManagedBrowserSession(session),
+      speech: this.options.messages.speech,
+      talkBack: this.options.isTalkBackMode(session.mode),
+    });
   }
 
   #noteSession(session: TSession, note: string): void {

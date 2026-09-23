@@ -6,6 +6,7 @@ import {
   normalizeOptionalString,
 } from "../../packages/normalization-core/src/string-coerce.js";
 import { normalizeStringEntries } from "../../packages/normalization-core/src/string-normalization.js";
+import { resolveEnvironmentValue } from "../infra/process-env.js";
 
 /** Final execution strategy chosen for a Windows spawn command. */
 export type WindowsSpawnResolution =
@@ -128,7 +129,8 @@ export function detectWindowsSpawnCommandInlineArgs(
   }
   const normalizedToken = parsed.token.replace(/\\/g, "/");
   const executable = normalizeLowercaseStringOrEmpty(path.posix.basename(normalizedToken));
-  if (!INLINE_ARGUMENT_EXECUTABLES.has(executable)) {
+  // Existing paths can contain spaces after a directory named node or pnpm.
+  if (!INLINE_ARGUMENT_EXECUTABLES.has(executable) || isFilePath(command)) {
     return null;
   }
   return {
@@ -137,20 +139,25 @@ export function detectWindowsSpawnCommandInlineArgs(
   };
 }
 
-/** Resolve a Windows command name through PATH and PATHEXT so wrapper inspection sees the real file. */
-export function resolveWindowsExecutablePath(command: string, env: NodeJS.ProcessEnv): string {
+/** Resolve PATH/PATHEXT before inspecting wrappers; relative paths use the supplied child cwd. */
+export function resolveWindowsExecutablePath(
+  command: string,
+  env: NodeJS.ProcessEnv,
+  cwd?: string,
+): string {
   if (command.includes("/") || command.includes("\\") || path.isAbsolute(command)) {
-    return command;
+    return cwd && !path.isAbsolute(command) ? path.resolve(cwd, command) : command;
   }
 
-  const pathValue = env.PATH ?? env.Path ?? process.env.PATH ?? process.env.Path ?? "";
+  const pathValue =
+    resolveEnvironmentValue(env, "PATH", "win32") ??
+    resolveEnvironmentValue(process.env, "PATH", "win32") ??
+    "";
   const pathEntries = normalizeStringEntries(pathValue.split(";"));
   const hasExtension = path.extname(command).length > 0;
   const pathExtRaw =
-    env.PATHEXT ??
-    env.Pathext ??
-    process.env.PATHEXT ??
-    process.env.Pathext ??
+    resolveEnvironmentValue(env, "PATHEXT", "win32") ??
+    resolveEnvironmentValue(process.env, "PATHEXT", "win32") ??
     ".EXE;.CMD;.BAT;.COM";
   const pathExt = hasExtension
     ? [""]
@@ -159,11 +166,12 @@ export function resolveWindowsExecutablePath(command: string, env: NodeJS.Proces
       );
 
   for (const dir of pathEntries) {
+    const directory = cwd ? path.resolve(cwd, dir) : dir;
     for (const ext of pathExt) {
       const normalizedExt = normalizeLowercaseStringOrEmpty(ext);
       const uppercaseExt = ext.toUpperCase();
       for (const candidateExt of [ext, normalizedExt, uppercaseExt]) {
-        const candidate = path.join(dir, `${command}${candidateExt}`);
+        const candidate = path.join(directory, `${command}${candidateExt}`);
         if (isFilePath(candidate)) {
           return candidate;
         }

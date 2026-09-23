@@ -1,29 +1,14 @@
-// Defines node-host-local capability configuration types.
+// Defines node-host-local capability configuration types from the canonical schema.
+import type { z } from "zod";
 import type { McpServerConfig } from "./types.mcp.js";
-export type NodeHostBrowserProxyConfig = {
-  /** Enable the browser proxy on the node host (default: true). */
-  enabled?: boolean;
-  /** Optional allowlist of profile names exposed via the proxy; when set, create/delete profile routes are blocked on the proxy surface. */
-  allowProfiles?: string[];
-};
+import type { NodeHostSchema } from "./zod-schema.root-support.js";
 
-export type NodeHostConfig = {
-  /** Sensitive native agent execution exposed by the headless node host. */
-  agentRuns?: {
-    claude?: {
-      /** Advertise approval-gated Claude CLI turns when the binary is installed. */
-      enabled?: boolean;
-    };
-  };
-  /** Browser proxy settings for node hosts. */
-  browserProxy?: NodeHostBrowserProxyConfig;
-  /** MCP servers started and exposed by the headless node host. */
+type NodeHostSchemaInput = NonNullable<z.input<typeof NodeHostSchema>>;
+
+export type NodeHostConfig = Omit<NodeHostSchemaInput, "mcp"> & {
   mcp?: {
     servers?: Record<string, McpServerConfig>;
   };
-  /** Skills published by the headless node host. */
-  skills?: {
-    /** Scan and publish ~/.openclaw/skills (default: true). */
-    enabled?: boolean;
-  };
 };
+
+export type NodeHostBrowserProxyConfig = NonNullable<NodeHostConfig["browserProxy"]>;

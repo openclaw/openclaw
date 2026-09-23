@@ -1,13 +1,16 @@
 // ACP manager task state helper resets task flow state for ACP tests.
+import { closeOpenClawStateDatabaseByPathAsync } from "../../src/state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../src/state/openclaw-state-db.paths.js";
 import { findTaskByRunId } from "../../src/tasks/task-registry.js";
 import {
   configureTaskFlowRegistryRuntime,
   resetTaskFlowRegistryForTests,
   resetTaskRegistryForTests,
 } from "../../src/tasks/task-runtime.test-helpers.js";
-import { withTempDir } from "../../src/test-helpers/temp-dir.js";
+import { withTestDir } from "../../src/test-helpers/temp-dir.js";
 import { captureEnv, setTestEnvValue } from "../../src/test-utils/env.js";
 import { installInMemoryTaskRegistryRuntime } from "../../src/test-utils/task-registry-runtime.js";
+import { createInMemoryTaskFlowRegistryStore } from "../../src/test-utils/task-registry-store.js";
 
 // Shared ACP manager task registry setup for tests.
 
@@ -21,27 +24,25 @@ export function resetAcpManagerTaskStateForTests(): void {
 export async function withAcpManagerTaskStateDir(
   run: (root: string) => Promise<void>,
 ): Promise<void> {
-  await withTempDir({ prefix: "openclaw-acp-manager-task-" }, async (root) => {
+  await withTestDir({ prefix: "openclaw-acp-manager-task-" }, async (root) => {
     const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
     setTestEnvValue("OPENCLAW_STATE_DIR", root);
     resetAcpManagerTaskStateForTests();
     installInMemoryTaskRegistryRuntime();
     configureTaskFlowRegistryRuntime({
-      store: {
-        loadSnapshot: () => ({
-          flows: new Map(),
-        }),
-        saveSnapshot: () => {},
-        upsertFlow: () => {},
-        deleteFlow: () => {},
-        close: () => {},
-      },
+      store: createInMemoryTaskFlowRegistryStore(),
     });
     try {
       await run(root);
     } finally {
-      resetAcpManagerTaskStateForTests();
-      envSnapshot.restore();
+      try {
+        await closeOpenClawStateDatabaseByPathAsync(
+          resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: root }),
+        );
+      } finally {
+        resetAcpManagerTaskStateForTests();
+        envSnapshot.restore();
+      }
     }
   });
 }

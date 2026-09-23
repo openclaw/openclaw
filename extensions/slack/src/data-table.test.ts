@@ -6,7 +6,7 @@ import {
   hasSlackDataTableBlock,
   renderSlackDataTableCompactPlainTextFallback,
   renderSlackDataTableFallbackText,
-  SLACK_DATA_TABLE_CELL_CHARACTERS_MAX,
+  SLACK_DATA_TABLE_AGGREGATE_CELL_CHARACTERS_MAX,
 } from "./data-table.js";
 
 describe("Slack data table blocks", () => {
@@ -69,12 +69,12 @@ describe("Slack data table blocks", () => {
     ).toBeUndefined();
     expect(
       buildSlackDataTableBlock(base, {
-        cellCharacterCountOffset: SLACK_DATA_TABLE_CELL_CHARACTERS_MAX - 7,
+        cellCharacterCountOffset: SLACK_DATA_TABLE_AGGREGATE_CELL_CHARACTERS_MAX - 7,
       }),
     ).toBeDefined();
     expect(
       buildSlackDataTableBlock(base, {
-        cellCharacterCountOffset: SLACK_DATA_TABLE_CELL_CHARACTERS_MAX - 6,
+        cellCharacterCountOffset: SLACK_DATA_TABLE_AGGREGATE_CELL_CHARACTERS_MAX - 6,
       }),
     ).toBeUndefined();
   });
@@ -224,5 +224,15 @@ describe("Slack data table blocks", () => {
         rows: [],
       }),
     ).toBe("Provider table");
+    const sparseHeader: unknown[] = [];
+    sparseHeader.length = 1;
+    const malformedTable = {
+      type: "data_table",
+      caption: "Sparse header",
+      rows: [sparseHeader, [{ type: "raw_text", text: "value" }]],
+    };
+    expect(renderSlackDataTableFallbackText(malformedTable)).toBe("Sparse header");
+    expect(renderSlackDataTableCompactPlainTextFallback(malformedTable)).toBe("Sparse header");
+    expect(countSlackDataTableCellCharacters(malformedTable)).toBeUndefined();
   });
 });

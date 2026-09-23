@@ -6,12 +6,11 @@
  */
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import type {
-  PluginHookBeforeAgentStartResult,
-  PluginHookBeforePromptBuildResult,
-} from "../../plugins/types.js";
+import type { PluginHookBeforePromptBuildResult } from "../../plugins/types.js";
 import { joinPresentTextSegments } from "../../shared/text/join-segments.js";
 import type { BootstrapContextRunKind } from "../bootstrap-mode.js";
+import type { CurrentInboundPromptContext } from "../embedded-agent-runner/run/params.js";
+import { buildCurrentInboundPrompt } from "../embedded-agent-runner/run/runtime-context-prompt.js";
 import { wrapPluginSystemContextSection } from "../hook-system-context-boundary.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { buildAgentHookContext, type AgentHarnessHookContext } from "./hook-context.js";
@@ -22,44 +21,62 @@ const log = createSubsystemLogger("agents/harness");
 type AgentHarnessPromptBuildResult = {
   prompt: string;
   developerInstructions: string;
+  /** Optional per-turn tool restriction requested by before_prompt_build hooks. */
+  toolsAllow?: string[];
   /** Span within prompt containing the original prompt input. */
   promptInputRange?: { start: number; end: number };
+};
+
+type AgentHarnessDeveloperInstructionBuilder = {
+  build: (params: { toolsAllow?: string[] }) => string | undefined;
 };
 
 /** Runs before-prompt hooks and returns the adjusted prompt fields. */
 export async function resolveAgentHarnessBeforePromptBuildResult(params: {
   prompt: string;
-  developerInstructions: string;
+  currentInboundContext?: CurrentInboundPromptContext;
+  currentUserMessage?: string;
+  currentUserMessageId?: string;
+  developerInstructions: string | AgentHarnessDeveloperInstructionBuilder;
   messages: unknown[];
   ctx: AgentHarnessHookContext;
-  beforeAgentStartResult?: PluginHookBeforeAgentStartResult;
   bootstrapContextRunKind?: BootstrapContextRunKind;
+  toolAuthority?: {
+    fingerprint?: string;
+    activeToolNames: () => readonly string[];
+    assertActive: () => void;
+  };
 }): Promise<AgentHarnessPromptBuildResult> {
+  const inputPrompt = buildCurrentInboundPrompt({
+    context: params.currentInboundContext,
+    prompt: params.prompt,
+  });
   const hookRunner = getGlobalHookRunner();
-  const hasPrecomputedBeforeAgentStartResult = "beforeAgentStartResult" in params;
   // heartbeat_prompt_contribution fires only on heartbeat turns. Harness runtimes
   // (e.g. the Codex app-server) build the prompt through this helper rather than
   // the embedded runner's resolvePromptBuildHookResult, so the hook must run from
   // here too — otherwise it never fires on those runtimes.
-  const isHeartbeatTurn =
-    params.ctx.trigger === "heartbeat" && params.bootstrapContextRunKind !== "commitment-only";
+  const isHeartbeatTurn = params.ctx.trigger === "heartbeat";
   const hasHeartbeatContribution =
     isHeartbeatTurn && Boolean(hookRunner?.hasHooks("heartbeat_prompt_contribution"));
-  if (
-    !hasPrecomputedBeforeAgentStartResult &&
-    !hasHeartbeatContribution &&
-    !hookRunner?.hasHooks("before_prompt_build") &&
-    !hookRunner?.hasHooks("before_agent_start")
-  ) {
+  const hasPromptBuildHooks = Boolean(hookRunner?.hasHooks("before_prompt_build"));
+  if (!hasHeartbeatContribution && !hasPromptBuildHooks) {
+    const developerInstructions = resolveDeveloperInstructions(params.developerInstructions);
     return {
-      prompt: params.prompt,
-      developerInstructions: params.developerInstructions,
-      promptInputRange: { start: 0, end: params.prompt.length },
+      prompt: inputPrompt,
+      developerInstructions,
+      promptInputRange: { start: 0, end: inputPrompt.length },
     };
   }
   const hookCtx = buildAgentHookContext(params.ctx);
   const promptEvent = {
-    prompt: params.prompt,
+    prompt: inputPrompt,
+    ...(typeof params.currentUserMessage === "string"
+      ? { currentUserMessage: params.currentUserMessage }
+      : {}),
+    ...(typeof params.currentUserMessageId === "string"
+      ? { currentUserMessageId: params.currentUserMessageId }
+      : {}),
     messages: params.messages,
   };
 
@@ -82,77 +99,86 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
           })
       : undefined;
 
-  // Support the newer before_prompt_build hook plus the deprecated
-  // before_agent_start hook during the prompt-build migration window.
-  const promptBuildResult = hookRunner?.hasHooks("before_prompt_build")
-    ? await hookRunner.runBeforePromptBuild(promptEvent, hookCtx).catch((error: unknown) => {
-        log.warn(`before_prompt_build hook failed: ${String(error)}`);
-        return undefined;
-      })
-    : undefined;
-  // The runner resolves before_agent_start during model selection. Reuse that
-  // result so legacy one-shot hooks do not run twice for the same turn.
-  const beforeAgentStartResult = hasPrecomputedBeforeAgentStartResult
-    ? params.beforeAgentStartResult
-    : hookRunner?.hasHooks("before_agent_start")
-      ? await hookRunner.runBeforeAgentStart(promptEvent, hookCtx).catch((error: unknown) => {
-          log.warn(
-            `deprecated before_agent_start hook failed during prompt build: ${String(error)}`,
-          );
+  const promptBuildResult =
+    hookRunner && hasPromptBuildHooks
+      ? await hookRunner.runBeforePromptBuild(promptEvent, hookCtx).catch((error: unknown) => {
+          log.warn(`before_prompt_build hook failed: ${String(error)}`);
           return undefined;
         })
       : undefined;
-
+  const developerInstructions = resolveDeveloperInstructions(
+    params.developerInstructions,
+    promptBuildResult?.toolsAllow,
+  );
+  const toolAuthority = params.toolAuthority;
+  const toolAuthorityFingerprint = toolAuthority?.fingerprint?.trim();
+  const authorizedPromptBuildResult =
+    hookRunner && toolAuthorityFingerprint && toolAuthority
+      ? await hookRunner
+          .runAuthorizedPromptBuild(promptEvent, hookCtx, {
+            toolAuthorityFingerprint,
+            activeToolNames: toolAuthority.activeToolNames(),
+            assertHostActive: toolAuthority.assertActive,
+          })
+          .catch((error: unknown) => {
+            log.warn(`authorized before_prompt_build hook failed: ${String(error)}`);
+            return undefined;
+          })
+      : undefined;
   const systemPrompt = resolvePromptBuildSystemPrompt({
-    developerInstructions: params.developerInstructions,
+    developerInstructions,
     promptBuildResult,
-    beforeAgentStartResult,
   });
   const promptPrefix = joinPresentTextSegments([
     heartbeatResult?.prependContext,
     promptBuildResult?.prependContext,
-    beforeAgentStartResult?.prependContext,
+    authorizedPromptBuildResult?.prependContext,
   ]);
   const promptSuffix = joinPresentTextSegments([
     heartbeatResult?.appendContext,
     promptBuildResult?.appendContext,
-    beforeAgentStartResult?.appendContext,
+    authorizedPromptBuildResult?.appendContext,
   ]);
-  const prompt =
-    joinPresentTextSegments([promptPrefix, params.prompt, promptSuffix]) ?? params.prompt;
+  const prompt = joinPresentTextSegments([promptPrefix, inputPrompt, promptSuffix]) ?? inputPrompt;
   const promptInputStart =
-    params.prompt.length === 0
+    inputPrompt.length === 0
       ? (promptPrefix?.length ?? 0)
       : promptPrefix
         ? promptPrefix.length + 2
         : 0;
   return {
     prompt,
+    ...(promptBuildResult?.toolsAllow !== undefined
+      ? { toolsAllow: promptBuildResult.toolsAllow }
+      : {}),
     developerInstructions:
       joinPresentTextSegments([
         wrapPluginSystemContextSection(promptBuildResult?.prependSystemContext),
-        wrapPluginSystemContextSection(beforeAgentStartResult?.prependSystemContext),
         systemPrompt,
         wrapPluginSystemContextSection(promptBuildResult?.appendSystemContext),
-        wrapPluginSystemContextSection(beforeAgentStartResult?.appendSystemContext),
       ]) ?? systemPrompt,
     promptInputRange: {
       start: promptInputStart,
-      end: promptInputStart + params.prompt.length,
+      end: promptInputStart + inputPrompt.length,
     },
   };
+}
+
+function resolveDeveloperInstructions(
+  instructions: string | AgentHarnessDeveloperInstructionBuilder,
+  toolsAllow?: string[],
+): string {
+  return typeof instructions === "string"
+    ? instructions
+    : (instructions.build({ toolsAllow }) ?? "");
 }
 
 function resolvePromptBuildSystemPrompt(params: {
   developerInstructions: string;
   promptBuildResult?: PluginHookBeforePromptBuildResult;
-  beforeAgentStartResult?: PluginHookBeforeAgentStartResult;
 }): string {
   if (typeof params.promptBuildResult?.systemPrompt === "string") {
     return params.promptBuildResult.systemPrompt;
-  }
-  if (typeof params.beforeAgentStartResult?.systemPrompt === "string") {
-    return params.beforeAgentStartResult.systemPrompt;
   }
   return params.developerInstructions;
 }

@@ -55,16 +55,7 @@ export const NostrProfileSchema = z.object({
   lud16: z.string().optional(),
 });
 
-export interface NostrProfile {
-  name?: string;
-  displayName?: string;
-  about?: string;
-  picture?: string;
-  banner?: string;
-  website?: string;
-  nip05?: string;
-  lud16?: string;
-}
+export type NostrProfile = z.infer<typeof NostrProfileSchema>;
 
 /**
  * Zod schema for channels.nostr.* configuration
@@ -78,6 +69,7 @@ export const NostrConfigSchema = z.object({
 
   /** Whether this channel is enabled */
   enabled: z.boolean().optional(),
+  configWrites: z.boolean().optional(),
 
   /** Markdown formatting overrides (tables). */
   markdown: MarkdownConfigSchema,

@@ -1,10 +1,13 @@
 import { isDeepStrictEqual } from "node:util";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString as normalizeRunId } from "@openclaw/normalization-core/string-coerce";
 import {
   normalizeDeliveryContext,
   type DeliveryContext,
 } from "../../utils/delivery-context.shared.js";
 import { isDeliverableMessageChannel } from "../../utils/message-channel.js";
 import type {
+  HarnessCompletionRecovery,
   RestartRecoveryTerminalDeliveryEvidence,
   RestartRecoveryTerminalDeliveryEvidenceResult,
 } from "./restart-recovery-types.js";
@@ -16,10 +19,6 @@ type RestartRecoveryChannelAuthority = {
   deliveryContext: DeliveryContext & { channel: string; to: string };
   sourceTurnId: string;
 };
-
-function normalizeRunId(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
 
 /** Resolves only a complete durable channel claim; session-route fallbacks carry no authority. */
 export function resolveRestartRecoveryChannelAuthority(
@@ -71,6 +70,45 @@ function normalizePresentStringArray(value: unknown): string[] | undefined {
     return undefined;
   }
   return normalizeStringArray(value) ?? [];
+}
+
+function normalizeHarnessCompletionRecovery(value: unknown): HarnessCompletionRecovery | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const taskId = normalizeRunId(value.taskId);
+  const taskStatus =
+    value.taskStatus === "succeeded" || value.taskStatus === "failed"
+      ? value.taskStatus
+      : undefined;
+  const taskRunId = normalizeRunId(value.taskRunId);
+  const sourceRunId = normalizeRunId(value.sourceRunId);
+  const requesterSessionKey = normalizeRunId(value.requesterSessionKey);
+  const requesterAgentId = normalizeRunId(value.requesterAgentId);
+  const sessionId = normalizeRunId(value.sessionId);
+  const lifecycleRevision = normalizeRunId(value.lifecycleRevision);
+  if (
+    !taskId ||
+    !taskStatus ||
+    !taskRunId ||
+    !sourceRunId ||
+    !requesterSessionKey ||
+    !requesterAgentId ||
+    !sessionId ||
+    (value.lifecycleRevision !== undefined && !lifecycleRevision)
+  ) {
+    return undefined;
+  }
+  return {
+    taskId,
+    taskStatus,
+    taskRunId,
+    sourceRunId,
+    requesterSessionKey,
+    requesterAgentId,
+    sessionId,
+    ...(lifecycleRevision ? { lifecycleRevision } : {}),
+  };
 }
 
 function normalizeTerminalDeliveryEvidenceResult(
@@ -152,6 +190,11 @@ function normalizeTerminalDeliveryEvidenceResult(
   const deliveryStatus: RestartRecoveryTerminalDeliveryEvidenceResult["deliveryStatus"] = status
     ? {
         status,
+        ...(typeof rawStatus?.resultCount === "number" &&
+        Number.isSafeInteger(rawStatus.resultCount) &&
+        rawStatus.resultCount >= 0
+          ? { resultCount: rawStatus.resultCount }
+          : {}),
         ...(errorMessage ? { errorMessage } : {}),
         ...(payloadOutcomes?.length ? { payloadOutcomes } : {}),
       }
@@ -185,6 +228,9 @@ function normalizeTerminalDeliveryEvidenceResult(
               ...(target.threadSuppressed === true ? { threadSuppressed: true as const } : {}),
               ...(mediaUrls ? { mediaUrls } : {}),
               ...(visible !== undefined ? { visible } : {}),
+              ...(typeof target.sourceReplyFinal === "boolean"
+                ? { sourceReplyFinal: target.sourceReplyFinal }
+                : {}),
             },
           ];
         })
@@ -232,10 +278,10 @@ function normalizeRestartRecoveryTerminalDeliveryEvidence(
   }
   const evidence: RestartRecoveryTerminalDeliveryEvidence[] = [];
   for (const item of value) {
-    if (!item || typeof item !== "object" || Array.isArray(item)) {
+    if (!isRecord(item)) {
       continue;
     }
-    const runId = normalizeRunId((item as Record<string, unknown>).runId);
+    const runId = normalizeRunId(item.runId);
     const result = normalizeTerminalDeliveryEvidenceResult(item);
     if (!runId || !result) {
       continue;
@@ -244,14 +290,40 @@ function normalizeRestartRecoveryTerminalDeliveryEvidence(
     if (previousIndex >= 0) {
       evidence.splice(previousIndex, 1);
     }
-    evidence.push({ runId, ...result });
+    const transcriptRunId = normalizeRunId(item.transcriptRunId);
+    const harnessCompletion = normalizeHarnessCompletionRecovery(item.harnessCompletion);
+    const rawContext = isRecord(item.deliveryContext) ? item.deliveryContext : undefined;
+    const deliveryContext = normalizeDeliveryContext({
+      channel: normalizeRunId(rawContext?.channel),
+      to: normalizeRunId(rawContext?.to),
+      accountId: normalizeRunId(rawContext?.accountId),
+      threadId:
+        typeof rawContext?.threadId === "number"
+          ? rawContext.threadId
+          : normalizeRunId(rawContext?.threadId),
+    });
+    const rawFinalReceipt = isRecord(item.durableFinalReceipt)
+      ? item.durableFinalReceipt
+      : undefined;
+    const intentId = normalizeRunId(rawFinalReceipt?.intentId);
+    const deliveryId = normalizeRunId(rawFinalReceipt?.deliveryId);
+    const platformMessageId = normalizeRunId(rawFinalReceipt?.platformMessageId);
+    evidence.push({
+      runId,
+      ...result,
+      ...(transcriptRunId ? { transcriptRunId } : {}),
+      ...(harnessCompletion?.sourceRunId === runId ? { harnessCompletion, deliveryContext } : {}),
+      ...(harnessCompletion?.sourceRunId === runId && intentId && deliveryId && platformMessageId
+        ? { durableFinalReceipt: { intentId, deliveryId, platformMessageId } }
+        : {}),
+    });
   }
   const bounded = evidence.slice(-MAX_TERMINAL_RUN_IDS);
   return bounded.length > 0 ? bounded : undefined;
 }
 
 /** Keeps a bounded durable set of client runs that must never execute again. */
-function normalizeRestartRecoveryTerminalRunIds(value: unknown): string[] | undefined {
+export function normalizeRestartRecoveryTerminalRunIds(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) {
     return undefined;
   }
@@ -281,6 +353,7 @@ type RestartRecoveryNormalizedField =
   | "restartRecoveryDeliveryRequestFingerprint"
   | "restartRecoveryDeliveryRunId"
   | "restartRecoveryDeliverySourceRunId"
+  | "restartRecoveryHarnessCompletion"
   | "restartRecoveryRequesterAccountId"
   | "restartRecoveryRequesterSenderId"
   | "restartRecoverySameChannelThreadRequired"
@@ -309,6 +382,15 @@ export function normalizeRestartRecoveryEntryFields(
     value: SessionEntry[K] | undefined,
   ) => void,
 ): void {
+  const harnessCompletion = normalizeHarnessCompletionRecovery(
+    entry.restartRecoveryHarnessCompletion,
+  );
+  assign(
+    "restartRecoveryHarnessCompletion",
+    isDeepStrictEqual(harnessCompletion, entry.restartRecoveryHarnessCompletion)
+      ? entry.restartRecoveryHarnessCompletion
+      : harnessCompletion,
+  );
   const deliveryMediaUrls = normalizePresentStringArray(entry.restartRecoveryDeliveryMediaUrls);
   assign(
     "restartRecoveryDeliveryMediaUrls",
@@ -402,7 +484,7 @@ export function normalizeRestartRecoveryEntryFields(
   );
 }
 
-function mergeRestartRecoveryTerminalDeliveryEvidence(
+export function mergeRestartRecoveryTerminalDeliveryEvidence(
   current: unknown,
   appended: unknown,
 ): RestartRecoveryTerminalDeliveryEvidence[] | undefined {
@@ -470,22 +552,38 @@ export function buildRestartRecoveryClaimCleanupPatch(params: {
   entry: SessionEntry;
   recordTerminalSource: boolean;
   terminalDeliveryEvidence?: RestartRecoveryTerminalDeliveryEvidenceResult;
+  terminalRunId?: string;
   terminalSourceRunId?: string;
 }): Partial<SessionEntry> {
   const sourceRunId =
     normalizeRunId(params.terminalSourceRunId) ??
     normalizeRunId(params.entry.restartRecoveryDeliverySourceRunId);
   const terminalRunIds =
-    params.recordTerminalSource && sourceRunId
+    params.recordTerminalSource && (sourceRunId || params.terminalRunId)
       ? mergeRestartRecoveryTerminalRunIds(params.entry.restartRecoveryTerminalRunIds, [
-          sourceRunId,
+          ...(sourceRunId ? [sourceRunId] : []),
+          ...(params.terminalRunId ? [params.terminalRunId] : []),
         ])
       : undefined;
   const terminalDeliveryEvidence =
     params.recordTerminalSource && sourceRunId && params.terminalDeliveryEvidence
       ? mergeRestartRecoveryTerminalDeliveryEvidence(
           params.entry.restartRecoveryTerminalDeliveryEvidence,
-          [{ runId: sourceRunId, ...params.terminalDeliveryEvidence }],
+          [
+            {
+              runId: sourceRunId,
+              ...params.terminalDeliveryEvidence,
+              ...(params.entry.restartRecoveryHarnessCompletion?.sourceRunId === sourceRunId
+                ? {
+                    harnessCompletion: params.entry.restartRecoveryHarnessCompletion,
+                    deliveryContext: params.entry.restartRecoveryDeliveryContext,
+                  }
+                : {}),
+              transcriptRunId:
+                normalizeRunId(params.terminalRunId) ??
+                normalizeRunId(params.entry.restartRecoveryDeliveryRunId),
+            },
+          ],
         )
       : undefined;
   return {
@@ -499,6 +597,7 @@ export function buildRestartRecoveryClaimCleanupPatch(params: {
     restartRecoveryDeliveryRequestFingerprint: undefined,
     restartRecoveryDeliveryRunId: undefined,
     restartRecoveryDeliverySourceRunId: undefined,
+    restartRecoveryHarnessCompletion: undefined,
     restartRecoveryRequesterAccountId: undefined,
     restartRecoveryRequesterSenderId: undefined,
     restartRecoverySameChannelThreadRequired: undefined,

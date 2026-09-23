@@ -1,45 +1,22 @@
+import { isProviderRefusalAssistantError } from "@openclaw/llm-core/diagnostics";
 import {
-  buildAgentRunTerminalOutcome,
+  buildAgentRunTerminalOutcomeFromAttempt,
+  classifyAgentRunTerminalOutcome,
+  projectAgentRunAttemptTerminal,
   type AgentRunTerminalOutcome,
 } from "../../agent-run-terminal-outcome.js";
-import {
-  AGENT_RUN_RESTART_ABORT_STOP_REASON,
-  isAgentRunRestartAbortReason,
-  resolveAgentRunAbortLifecycleFields,
-} from "../../run-termination.js";
+import { formatUserFacingAssistantErrorText } from "../../embedded-agent-helpers.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
 type EmbeddedRunAttemptTerminalInput = Pick<
   EmbeddedRunAttemptResult,
-  | "aborted"
-  | "idleTimedOut"
-  | "promptError"
-  | "promptTimeoutOutcome"
-  | "timedOut"
-  | "timedOutDuringCompaction"
-  | "timedOutDuringToolExecution"
+  "terminal" | "promptTimeoutOutcome"
 >;
 
-function hasRestartAbortReason(value: unknown): boolean {
-  let candidate = value;
-  for (let depth = 0; depth < 3; depth += 1) {
-    if (isAgentRunRestartAbortReason(candidate)) {
-      return true;
-    }
-    if (!(candidate instanceof Error)) {
-      return false;
-    }
-    try {
-      if (candidate.cause === undefined) {
-        return false;
-      }
-      candidate = candidate.cause;
-    } catch {
-      return false;
-    }
-  }
-  return false;
-}
+export type EmbeddedRunTerminalState = {
+  outcome: AgentRunTerminalOutcome;
+  signalOwnedInterruption: boolean;
+};
 
 /** Projects private attempt metadata into the canonical agent terminal outcome. */
 export function resolveEmbeddedRunAttemptTerminalOutcome(params: {
@@ -47,57 +24,57 @@ export function resolveEmbeddedRunAttemptTerminalOutcome(params: {
   assistant: EmbeddedRunAttemptResult["lastAssistant"];
   abortSignal?: AbortSignal;
 }): AgentRunTerminalOutcome {
-  const { attempt } = params;
-  const abortFields = resolveAgentRunAbortLifecycleFields(params.abortSignal);
-  const attemptTimedOut = attempt.timedOut || attempt.idleTimedOut;
-  const timedOut = attemptTimedOut || abortFields.stopReason === "timeout";
-  const timedOutDuringPrompt =
-    attemptTimedOut &&
-    !attempt.timedOutDuringCompaction &&
-    attempt.timedOutDuringToolExecution !== true;
-  const timeoutPhase =
-    attempt.promptTimeoutOutcome?.timeoutPhase ?? (timedOutDuringPrompt ? "provider" : undefined);
-  const providerStarted =
-    attempt.promptTimeoutOutcome?.providerStarted ?? (timedOutDuringPrompt ? true : undefined);
-  // Internal queue restarts are wrapped by the attempt's abortable prompt race,
-  // so promptError must preserve restart ownership when no parent signal exists.
-  const restartAborted = hasRestartAbortReason(attempt.promptError);
-  const assistantStopReason = attempt.promptError ? undefined : params.assistant?.stopReason;
-  const unattributedAttemptTimeout =
-    attemptTimedOut && timeoutPhase === undefined && providerStarted !== true;
-  const stopReason = unattributedAttemptTimeout
-    ? undefined
-    : (abortFields.stopReason ??
-      (restartAborted ? AGENT_RUN_RESTART_ABORT_STOP_REASON : undefined) ??
-      (!timedOut && attempt.aborted ? "aborted" : undefined) ??
-      (!timedOut ? assistantStopReason : undefined));
-  const status = timedOut
-    ? "timeout"
-    : abortFields.aborted ||
-        attempt.aborted ||
-        attempt.promptError ||
-        assistantStopReason === "error"
-      ? "error"
-      : "ok";
-
-  return buildAgentRunTerminalOutcome({
-    status,
-    error: attempt.promptError ?? params.assistant?.errorMessage,
-    stopReason,
-    livenessState: attempt.promptTimeoutOutcome?.livenessState,
-    timeoutPhase,
-    providerStarted,
+  return buildAgentRunTerminalOutcomeFromAttempt({
+    terminal: params.attempt.terminal,
+    promptTimeoutOutcome: params.attempt.promptTimeoutOutcome,
+    // Terminal metadata is displayed directly; keep the provider's raw diagnostics
+    // on the original message and project only safe refusal copy.
+    assistant:
+      params.assistant && isProviderRefusalAssistantError(params.assistant)
+        ? {
+            ...params.assistant,
+            errorMessage: formatUserFacingAssistantErrorText(params.assistant),
+          }
+        : params.assistant,
+    abortSignal: params.abortSignal,
   });
 }
 
+/** Owner-recorded timeout failure cannot be inferred away from partial or completed-looking output. */
+export function isEmbeddedRunTimeoutFinal(
+  attempt: Pick<
+    EmbeddedRunAttemptResult,
+    "terminal" | "promptTimeoutOutcome" | "codexAppServerFailure"
+  >,
+): boolean {
+  return (
+    projectAgentRunAttemptTerminal(attempt.terminal).timedOut &&
+    (attempt.promptTimeoutOutcome?.replayInvalid === true ||
+      // Published older harnesses reported this failure before the generic replay-invalid fact.
+      attempt.codexAppServerFailure?.kind === "turn_completion_idle_timeout")
+  );
+}
+
 export function isEmbeddedRunTerminalTimeout(outcome: AgentRunTerminalOutcome): boolean {
-  return outcome.reason === "hard_timeout" || outcome.reason === "timed_out";
+  return classifyAgentRunTerminalOutcome(outcome) === "timeout";
 }
 
 export function isEmbeddedRunTerminalAbort(outcome: AgentRunTerminalOutcome): boolean {
-  return outcome.reason === "aborted" || outcome.reason === "cancelled";
+  return classifyAgentRunTerminalOutcome(outcome) === "cancellation";
 }
 
 export function isEmbeddedRunTerminalInterrupted(outcome: AgentRunTerminalOutcome): boolean {
   return isEmbeddedRunTerminalTimeout(outcome) || isEmbeddedRunTerminalAbort(outcome);
+}
+
+/** Captures signal ownership with the outcome before async recovery can change the signal. */
+export function resolveEmbeddedRunAttemptTerminalState(
+  params: Parameters<typeof resolveEmbeddedRunAttemptTerminalOutcome>[0],
+): EmbeddedRunTerminalState {
+  const outcome = resolveEmbeddedRunAttemptTerminalOutcome(params);
+  return {
+    outcome,
+    signalOwnedInterruption:
+      isEmbeddedRunTerminalInterrupted(outcome) && params.abortSignal?.aborted === true,
+  };
 }

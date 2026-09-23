@@ -1,6 +1,6 @@
 {
   "id": "alibaba",
-  "icon": "https://cdn.simpleicons.org/alibabacloud",
+  "categories": ["media"],
   "activation": {
     "onStartup": false
   },

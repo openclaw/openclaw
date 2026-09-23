@@ -48,6 +48,7 @@ type IrcPrivmsgEvent = {
   senderNick: string;
   senderUser?: string;
   senderHost?: string;
+  connectedNick: string;
   target: string;
   text: string;
   rawLine: string;
@@ -86,12 +87,12 @@ export type IrcClient = {
   isReady: () => boolean;
   sendRaw: (line: string) => void;
   join: (channel: string) => void;
-  sendPrivmsg: (target: string, text: string) => void;
+  sendPrivmsg: (target: string, text: string, replyTo?: string) => void;
   quit: (reason?: string) => void;
   close: () => void;
 };
 
-function toError(err: unknown): Error {
+function toIrcError(err: unknown): Error {
   if (err instanceof Error) {
     return err;
   }
@@ -174,7 +175,7 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
   });
 
   const fail = (err: unknown) => {
-    const error = toError(err);
+    const error = toIrcError(err);
     if (options.onError) {
       options.onError(error);
     }
@@ -237,15 +238,16 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
     sendRaw(`JOIN ${target}`);
   };
 
-  const sendPrivmsg = (target: string, text: string) => {
+  const sendPrivmsg = (target: string, text: string, replyTo?: string) => {
     const normalizedTarget = sanitizeIrcTarget(target);
     const cleaned = sanitizeIrcOutboundText(text);
     if (!cleaned) {
-      return;
+      throw new Error("Message must be non-empty for IRC sends");
     }
     const lineOverheadBytes = Buffer.byteLength(`PRIVMSG ${normalizedTarget} :\r\n`, "utf8");
     const maxChunkBytes = IRC_MAX_LINE_BYTES - lineOverheadBytes;
-    let remaining = cleaned;
+    // Encode the original text with the reference so escapes are not decoded twice.
+    let remaining = replyTo ? sanitizeIrcOutboundText(`${text}\n\n[reply:${replyTo}]`) : cleaned;
     while (remaining.length > 0) {
       const chunk = takeIrcPrivmsgChunk(remaining, messageChunkMaxChars, maxChunkBytes).trim();
       sendRaw(`PRIVMSG ${normalizedTarget} :${chunk}`);
@@ -387,7 +389,7 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
       if (line.command === "PRIVMSG") {
         const targetParam = line.params[0];
         const target = targetParam ? targetParam.trim() : "";
-        const text = line.trailing != null ? line.trailing : "";
+        const text = line.trailing ?? line.params[1] ?? "";
         const prefix = parseIrcPrefix(line.prefix);
         const senderNick = prefix.nick ? prefix.nick.trim() : "";
         if (!target || !senderNick || !text.trim()) {
@@ -399,6 +401,7 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
               senderNick,
               senderUser: prefix.user ? prefix.user.trim() : undefined,
               senderHost: prefix.host ? prefix.host.trim() : undefined,
+              connectedNick: currentNick,
               target,
               text,
               rawLine,

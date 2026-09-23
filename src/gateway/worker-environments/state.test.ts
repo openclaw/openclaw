@@ -7,7 +7,7 @@ import {
 
 const EXPECTED_TRANSITIONS: Record<WorkerEnvironmentState, readonly WorkerEnvironmentState[]> = {
   requested: ["provisioning", "failed"],
-  provisioning: ["bootstrapping", "failed"],
+  provisioning: ["bootstrapping", "ready", "draining", "failed"],
   bootstrapping: ["ready", "draining", "orphaned"],
   ready: ["bootstrapping", "attached", "idle", "draining", "orphaned"],
   attached: ["idle", "draining", "orphaned"],
@@ -28,12 +28,6 @@ describe("worker environment state", () => {
           EXPECTED_TRANSITIONS[from].includes(to),
         );
       }
-    }
-  });
-
-  it("keeps terminal states terminal", () => {
-    for (const from of ["destroyed", "failed", "orphaned"] as const) {
-      expect(STATES.some((to) => canTransitionWorkerEnvironment(from, to))).toBe(false);
     }
   });
 

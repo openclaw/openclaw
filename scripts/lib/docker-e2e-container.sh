@@ -134,7 +134,7 @@ child.on("error", (error) => {
   process.exit(127);
 });
 ' "$timeout_value" "$@"
-      return
+      return "$?"
     fi
     echo "timeout command not found; cannot bound Docker command after ${timeout_value}" >&2
     return 127
@@ -152,9 +152,15 @@ docker_e2e_docker_cmd() {
     shift
     docker_e2e_docker_run_resource_args "$@" || return $?
     docker_e2e_docker_run_with_resource_diagnostics "$timeout_value" "$@"
-    return
+    # A bare return in an EXIT trap can restore the trap's original status.
+    return "$?"
   fi
   docker_e2e_timeout_cmd "$timeout_value" docker "$@"
+}
+
+docker_e2e_cleanup_container_run() {
+  docker_e2e_docker_cmd rm -f "$1" >/dev/null 2>&1 || true
+  rm -f "$2"
 }
 
 docker_e2e_docker_run_cmd() {
@@ -163,7 +169,7 @@ docker_e2e_docker_run_cmd() {
     shift
     docker_e2e_docker_run_resource_args "$@" || return $?
     docker_e2e_docker_run_with_resource_diagnostics "$timeout_value" "$@"
-    return
+    return "$?"
   fi
   docker_e2e_timeout_cmd "$timeout_value" docker "$@"
 }
@@ -241,6 +247,7 @@ docker_e2e_resolve_pids_limit() {
 
 docker_e2e_docker_run_resource_args() {
   DOCKER_E2E_RUN_RESOURCE_ARGS=()
+  docker_e2e_append_update_check_suppression "$@"
   if docker_e2e_resource_limits_disabled; then
     return 0
   fi
@@ -260,6 +267,45 @@ docker_e2e_docker_run_resource_args() {
     pids_limit="$(docker_e2e_resolve_pids_limit "$pids_limit")" || return $?
     DOCKER_E2E_RUN_RESOURCE_ARGS+=(--pids-limit "$pids_limit")
   fi
+
+}
+
+docker_e2e_run_env_present() {
+  local name="$1"
+  shift
+  local arg
+  local expect_value=0
+  for arg in "$@"; do
+    if [ "$expect_value" = 1 ]; then
+      expect_value=0
+      case "$arg" in
+        "$name" | "$name"=*)
+          return 0
+          ;;
+      esac
+      continue
+    fi
+    case "$arg" in
+      -e | --env)
+        expect_value=1
+        ;;
+      -e"$name" | -e"$name"=* | --env="$name" | --env="$name"=*)
+        return 0
+        ;;
+    esac
+  done
+  return 1
+}
+
+# CI containers are not installations. The runner's own CI variable does not
+# cross into `docker run`, so without this every E2E container reports a daily
+# update check and drowns real operators in the telemetry aggregates. Callers
+# that exercise update behavior pass their own value and keep it.
+docker_e2e_append_update_check_suppression() {
+  if docker_e2e_run_env_present OPENCLAW_NO_AUTO_UPDATE "$@"; then
+    return 0
+  fi
+  DOCKER_E2E_RUN_RESOURCE_ARGS+=(-e OPENCLAW_NO_AUTO_UPDATE=1)
 }
 
 docker_e2e_container_running() {

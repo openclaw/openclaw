@@ -1,4 +1,3 @@
-// Telegram plugin module implements bot update tracker behavior.
 import {
   createMessageReceiveContext,
   type MessageAckPolicy,
@@ -306,7 +305,7 @@ export function createTelegramUpdateTracker(options: TelegramUpdateTrackerOption
       activeHandledUpdateKeys.set(key, true);
       return false;
     }
-    const skipped = recentUpdates.check(key);
+    const skipped = recentUpdates.peek(key);
     if (skipped) {
       skip(key);
     }

@@ -1,5 +1,5 @@
 // Control UI module implements open external url behavior.
-import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 const DATA_URL_PREFIX = "data:";
 const ALLOWED_EXTERNAL_PROTOCOLS = new Set(["http:", "https:", "blob:"]);
@@ -59,6 +59,18 @@ export function resolveSafeExternalUrl(
 type OpenExternalUrlSafeOptions = ResolveSafeExternalUrlOptions & {
   baseHref?: string;
 };
+
+export function reserveExternalWindowForDeferredNavigation(
+  opts: { popup?: boolean } = {},
+): WindowProxy | null {
+  // Reserve while user activation is live, then detach the opener before any
+  // caller-controlled URL can be loaded into the new browsing context.
+  const opened = window.open("about:blank", "_blank", opts.popup ? "popup" : undefined);
+  if (opened) {
+    opened.opener = null;
+  }
+  return opened;
+}
 
 export function openExternalUrlSafe(
   rawUrl: string,

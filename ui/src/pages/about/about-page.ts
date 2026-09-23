@@ -58,15 +58,15 @@ class AboutPage extends OpenClawLightDomElement {
     if (!commit || this.copyState === "copying") {
       return;
     }
+    // A previous feedback reset must not clear a pending retry's busy state.
+    globalThis.clearTimeout(this.copyResetTimer ?? undefined);
+    this.copyResetTimer = null;
     this.copyState = "copying";
     const copied = await copyToClipboard(commit);
     if (!this.isConnected) {
       return;
     }
     this.copyState = copied ? "copied" : "error";
-    if (this.copyResetTimer !== null) {
-      globalThis.clearTimeout(this.copyResetTimer);
-    }
     this.copyResetTimer = globalThis.setTimeout(() => {
       this.copyResetTimer = null;
       this.copyState = "idle";
@@ -75,9 +75,10 @@ class AboutPage extends OpenClawLightDomElement {
 
   override render() {
     const gatewaySnapshot = this.context.gateway.snapshot;
-    const gatewayVersion = gatewaySnapshot.connected
-      ? gatewaySnapshot.hello?.server?.version?.trim() || null
-      : null;
+    const gatewayVersion =
+      gatewaySnapshot.phase === "connected"
+        ? gatewaySnapshot.hello?.server?.version?.trim() || null
+        : null;
     const body = renderAbout({
       buildInfo: CONTROL_UI_BUILD_INFO,
       gatewayVersion,
@@ -89,7 +90,7 @@ class AboutPage extends OpenClawLightDomElement {
     return html`
       <section class="content-header">
         <div>
-          <div class="page-title">${titleForRoute("about")}</div>
+          <h1 class="page-title">${titleForRoute("about")}</h1>
         </div>
       </section>
       ${renderSettingsWorkspace(body)}
@@ -97,4 +98,6 @@ class AboutPage extends OpenClawLightDomElement {
   }
 }
 
-customElements.define("openclaw-about-page", AboutPage);
+if (!customElements.get("openclaw-about-page")) {
+  customElements.define("openclaw-about-page", AboutPage);
+}

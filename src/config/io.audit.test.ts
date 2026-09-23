@@ -1,17 +1,133 @@
 // Covers config audit reporting for files, paths, and values.
-import fs from "node:fs";
-import { promises as fsPromises } from "node:fs";
+import fs, { promises as fsPromises } from "node:fs";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, expectTypeOf, it } from "vitest";
+import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.js";
 import {
   appendConfigAuditRecord,
   createConfigWriteAuditRecordBase,
   finalizeConfigWriteAuditRecord,
   formatConfigOverwriteLogMessage,
-  resolveConfigAuditLogPath,
+  readRecentConfigAuditRecords,
+  resolveLegacyConfigAuditLogPath,
+  sanitizeConfigAuditRecord,
   scrubConfigAuditLog,
 } from "./io.audit.js";
+import type { ConfigAuditRecord } from "./io.audit.js";
+import { listConfigAuditRecordsForTests } from "./io.audit.test-support.js";
+
+type ExpectedConfigObserveAuditRecord = {
+  ts: string;
+  source: "config-io";
+  event: "config.observe";
+  phase: "read";
+  configPath: string;
+  pid: number;
+  ppid: number;
+  cwd: string;
+  argv: string[];
+  execArgv: string[];
+  exists: boolean;
+  valid: boolean;
+  hash: string | null;
+  bytes: number | null;
+  mtimeMs: number | null;
+  ctimeMs: number | null;
+  dev: string | null;
+  ino: string | null;
+  mode: number | null;
+  nlink: number | null;
+  uid: number | null;
+  gid: number | null;
+  hasMeta: boolean;
+  gatewayMode: string | null;
+  suspicious: string[];
+  lastKnownGoodHash: string | null;
+  lastKnownGoodBytes: number | null;
+  lastKnownGoodMtimeMs: number | null;
+  lastKnownGoodCtimeMs: number | null;
+  lastKnownGoodDev: string | null;
+  lastKnownGoodIno: string | null;
+  lastKnownGoodMode: number | null;
+  lastKnownGoodNlink: number | null;
+  lastKnownGoodUid: number | null;
+  lastKnownGoodGid: number | null;
+  lastKnownGoodGatewayMode: string | null;
+  backupHash: string | null;
+  backupBytes: number | null;
+  backupMtimeMs: number | null;
+  backupCtimeMs: number | null;
+  backupDev: string | null;
+  backupIno: string | null;
+  backupMode: number | null;
+  backupNlink: number | null;
+  backupUid: number | null;
+  backupGid: number | null;
+  backupGatewayMode: string | null;
+  clobberedPath: string | null;
+  restoredFromBackup: boolean;
+  restoredBackupPath: string | null;
+  restoreErrorCode: string | null;
+  restoreErrorMessage: string | null;
+};
+
+type ConfigObserveAuditRecord = Extract<ConfigAuditRecord, { event: "config.observe" }>;
+
+expectTypeOf<ConfigObserveAuditRecord>().toMatchTypeOf<ExpectedConfigObserveAuditRecord>();
+expectTypeOf<ExpectedConfigObserveAuditRecord>().toMatchTypeOf<ConfigObserveAuditRecord>();
+
+type ExpectedConfigWriteAuditRecord = {
+  ts: string;
+  source: "config-io";
+  event: "config.write";
+  result: "rename" | "copy-fallback" | "failed" | "rejected";
+  configPath: string;
+  pid: number;
+  ppid: number;
+  cwd: string;
+  argv: string[];
+  execArgv: string[];
+  watchMode: boolean;
+  watchSession: string | null;
+  watchCommand: string | null;
+  existsBefore: boolean;
+  previousHash: string | null;
+  nextHash: string | null;
+  previousBytes: number | null;
+  nextBytes: number | null;
+  previousDev: string | null;
+  nextDev: string | null;
+  previousIno: string | null;
+  nextIno: string | null;
+  previousMode: number | null;
+  nextMode: number | null;
+  previousNlink: number | null;
+  nextNlink: number | null;
+  previousUid: number | null;
+  nextUid: number | null;
+  previousGid: number | null;
+  nextGid: number | null;
+  changedPathCount: number | null;
+  changedPaths?: string[];
+  origin?: import("./io.types.js").ConfigWriteAuditOrigin;
+  hasMetaBefore: boolean;
+  hasMetaAfter: boolean;
+  gatewayModeBefore: string | null;
+  gatewayModeAfter: string | null;
+  suspicious: string[];
+  errorCode?: string;
+  errorMessage?: string;
+};
+
+expectTypeOf<
+  Extract<ConfigAuditRecord, { event: "config.write" }>
+>().toMatchTypeOf<ExpectedConfigWriteAuditRecord>();
+expectTypeOf<ExpectedConfigWriteAuditRecord>().toMatchTypeOf<
+  Extract<ConfigAuditRecord, { event: "config.write" }>
+>();
 
 function createAuditRecordBase(configPath: string, argv?: string[]) {
   return createConfigWriteAuditRecordBase({
@@ -66,7 +182,7 @@ function createRenameAuditRecord(home: string) {
   });
 }
 
-function readAuditLog(home: string): unknown[] {
+function readLegacyAuditLog(home: string): unknown[] {
   const auditPath = path.join(home, ".openclaw", "logs", "config-audit.jsonl");
   return fs
     .readFileSync(auditPath, "utf-8")
@@ -89,13 +205,36 @@ describe("config io audit helpers", () => {
     await suiteRootTracker.setup();
   });
 
+  it("sanitizes external records without adding write-process fields", () => {
+    const record = sanitizeConfigAuditRecord({
+      ts: "2026-07-18T00:00:00.000Z",
+      source: "config-io",
+      event: "config.external",
+      detectedBy: "watch",
+      configPath: "/tmp/openclaw.json",
+      previousHash: "previous",
+      nextHash: null,
+      valid: false,
+      issues: ["gateway.port: expected number"],
+    });
+
+    expect(record).not.toHaveProperty("argv");
+    expect(record).not.toHaveProperty("execArgv");
+    expect(record).toHaveProperty("issues", ["gateway.port: expected number"]);
+  });
+
   afterAll(async () => {
     await suiteRootTracker.cleanup();
   });
 
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
+    resetPluginStateStoreForTests();
+  });
+
   it('ignores literal "undefined" home env values when choosing the audit log path', async () => {
     const home = await suiteRootTracker.make("home");
-    const auditPath = resolveConfigAuditLogPath(
+    const auditPath = resolveLegacyConfigAuditLogPath(
       {
         HOME: "undefined",
         USERPROFILE: "null",
@@ -196,23 +335,46 @@ describe("config io audit helpers", () => {
     expect(record.errorMessage).toBe("disk full");
   });
 
-  it("appends JSONL audit entries to the resolved audit path", async () => {
+  it("appends audit entries off-thread and retains them after canonical close", async () => {
     const home = await suiteRootTracker.make("append");
     const record = createRenameAuditRecord(home);
 
-    await appendConfigAuditRecord({
-      fs,
+    const mainSql = observeMainThreadSql();
+    try {
+      await appendConfigAuditRecord({ env: {}, homedir: () => home, record });
+      await closeOpenClawStateDatabaseAsync();
+      mainSql.expectIdle();
+    } finally {
+      mainSql.restore();
+    }
+
+    const records = listConfigAuditRecordsForTests({
       env: {} as NodeJS.ProcessEnv,
       homedir: () => home,
-      record,
     });
-
-    const records = readAuditLog(home);
     expect(records).toHaveLength(1);
     const written = requireAuditRecord(records[0]);
     expect(written.event).toBe("config.write");
     expect(written.result).toBe("rename");
     expect(written.nextHash).toBe("next-hash");
+  });
+
+  it("reads a bounded newest-first audit window for Doctor provenance", async () => {
+    const home = await suiteRootTracker.make("recent");
+    const first = createRenameAuditRecord(home);
+    const second = {
+      ...first,
+      ts: "2026-04-07T08:01:00.000Z",
+      previousHash: first.nextHash,
+      nextHash: "newest-hash",
+    };
+    await appendConfigAuditRecord({ env: {}, homedir: () => home, record: first });
+    await appendConfigAuditRecord({ env: {}, homedir: () => home, record: second });
+
+    const recent = readRecentConfigAuditRecords({ env: {}, homedir: () => home, limit: 1 });
+
+    expect(recent).toHaveLength(1);
+    expect(recent[0]).toMatchObject({ nextHash: "newest-hash" });
   });
 
   it("redacts structured audit records before persistence", async () => {
@@ -230,15 +392,16 @@ describe("config io audit helpers", () => {
     });
 
     await appendConfigAuditRecord({
-      fs,
       env: {} as NodeJS.ProcessEnv,
       homedir: () => home,
       record,
     });
 
-    const raw = fs.readFileSync(
-      path.join(home, ".openclaw", "logs", "config-audit.jsonl"),
-      "utf-8",
+    const raw = JSON.stringify(
+      listConfigAuditRecordsForTests({
+        env: {} as NodeJS.ProcessEnv,
+        homedir: () => home,
+      }),
     );
     expect(raw).not.toContain("AIzaSyD-very-real-looking");
     expect(raw).not.toContain("ya29.fake-access-token");
@@ -330,32 +493,133 @@ describe("config io audit helpers", () => {
   });
 
   it.each([
-    {
-      name: "inline known secret",
-      argv: ["openclaw", "--token=fake", "--port=8080"],
-      expected: ["openclaw", "--token=***", "--port=8080"],
-    },
-    {
-      name: "custom credential suffix",
-      argv: ["openclaw", "--tenant-credential", "fake", "--bind", "lan"],
-      expected: ["openclaw", "--tenant-credential", "***", "--bind", "lan"],
-    },
-    {
-      name: "underscore key suffix",
-      argv: ["openclaw", "--provider_api_key", "fake"],
-      expected: ["openclaw", "--provider_api_key", "***"],
-    },
-    {
-      name: "dash-leading secret value",
-      argv: ["openclaw", "--password", "-fake"],
-      expected: ["openclaw", "--password", "***"],
-    },
-    {
-      name: "secret flag without a value",
-      argv: ["openclaw", "--token"],
-      expected: ["openclaw", "--token"],
-    },
-  ])("redacts $name in persisted audit process info", ({ argv, expected }) => {
+    [
+      "inline known secret",
+      ["openclaw", "--token=fake", "--port=8080"],
+      ["openclaw", "--token=***", "--port=8080"],
+    ],
+    [
+      "custom credential suffix",
+      ["openclaw", "--tenant-credential", "fake", "--bind", "lan"],
+      ["openclaw", "--tenant-credential", "***", "--bind", "lan"],
+    ],
+    [
+      "underscore key suffix",
+      ["openclaw", "--provider_api_key", "fake"],
+      ["openclaw", "--provider_api_key", "***"],
+    ],
+    [
+      "dash-leading secret value",
+      ["openclaw", "--password", "-fake"],
+      ["openclaw", "--password", "***"],
+    ],
+    [
+      "password alias covered by the secret suffix matcher",
+      ["openclaw", "--passwd", "fake"],
+      ["openclaw", "--passwd", "***"],
+    ],
+    ["secret flag without a value", ["openclaw", "--token"], ["openclaw", "--token"]],
+    [
+      "sensitive config set positional value",
+      ["openclaw", "config", "set", "channels.slack.token", "secret-value"],
+      ["openclaw", "config", "set", "channels.slack.token", "***"],
+    ],
+    [
+      "sensitive config set value after boolean option",
+      ["openclaw", "config", "set", "--json", "channels.slack.token", '"secret-value"'],
+      ["openclaw", "config", "set", "--json", "channels.slack.token", "***"],
+    ],
+    [
+      "sensitive config set value after root value option",
+      ["openclaw", "config", "set", "--profile", "work", "channels.slack.token", "secret-value"],
+      ["openclaw", "config", "set", "--profile", "work", "channels.slack.token", "***"],
+    ],
+    [
+      "sensitive config set value after option before subcommand",
+      ["openclaw", "config", "--profile", "work", "set", "channels.slack.token", "secret-value"],
+      ["openclaw", "config", "--profile", "work", "set", "channels.slack.token", "***"],
+    ],
+    [
+      "sensitive config set value after config parent option",
+      [
+        "openclaw",
+        "config",
+        "--section",
+        "channels",
+        "set",
+        "channels.slack.token",
+        "secret-value",
+      ],
+      ["openclaw", "config", "--section", "channels", "set", "channels.slack.token", "***"],
+    ],
+    [
+      "sensitive config set value when a root option value is config",
+      ["openclaw", "--profile", "config", "config", "set", "channels.slack.token", "secret-value"],
+      ["openclaw", "--profile", "config", "config", "set", "channels.slack.token", "***"],
+    ],
+    [
+      "sensitive config set value after interleaved option",
+      ["openclaw", "config", "set", "channels.slack.token", "--strict-json", '"secret-value"'],
+      ["openclaw", "config", "set", "channels.slack.token", "--strict-json", "***"],
+    ],
+    [
+      "independent option terminators for command and positional scanning",
+      [
+        "openclaw",
+        "config",
+        "--",
+        "set",
+        "--section=channels",
+        "channels.slack.token",
+        "secret-value",
+      ],
+      ["openclaw", "config", "--", "set", "--section=channels", "channels.slack.token", "***"],
+    ],
+    [
+      "dash-leading positional after inline parent option and terminator",
+      ["openclaw", "config", "--profile=work", "set", "--", "channels.slack.token", "--dash-value"],
+      ["openclaw", "config", "--profile=work", "set", "--", "channels.slack.token", "***"],
+    ],
+    [
+      "batch JSON after both positionals and an option terminator",
+      [
+        "openclaw",
+        "config",
+        "set",
+        "ui.theme",
+        "dark",
+        "--",
+        '--batch-json={"value":"secret-value"}',
+      ],
+      ["openclaw", "config", "set", "ui.theme", "dark", "--", "--batch-json=***"],
+    ],
+    [
+      "non-set command whose first positional is set",
+      ["openclaw", "config", "get", "set", "channels.slack.token", "visible-value"],
+      ["openclaw", "config", "get", "set", "channels.slack.token", "visible-value"],
+    ],
+    [
+      "config set batch JSON",
+      [
+        "openclaw",
+        "config",
+        "set",
+        "--batch-json",
+        '[{"path":"channels.slack.token","value":"secret-value"}]',
+      ],
+      ["openclaw", "config", "set", "--batch-json", "***"],
+    ],
+    [
+      "config provider env assignment",
+      ["openclaw", "config", "set", "--provider-env", "KEY=secret-value"],
+      ["openclaw", "config", "set", "--provider-env", "***"],
+    ],
+    [
+      "inline config provider env assignment",
+      ["openclaw", "config", "set", "--provider-env=KEY=secret-value"],
+      ["openclaw", "config", "set", "--provider-env=***"],
+    ],
+  ])("redacts $0 in persisted audit process info", (_name, argv, expected) => {
     expect(createAuditRecordBase("/tmp/openclaw.json", argv).argv).toEqual(expected);
   });
 
@@ -364,13 +628,15 @@ describe("config io audit helpers", () => {
     const record = createRenameAuditRecord(home);
 
     await appendConfigAuditRecord({
-      fs,
       env: {} as NodeJS.ProcessEnv,
       homedir: () => home,
       ...record,
     });
 
-    const records = readAuditLog(home);
+    const records = listConfigAuditRecordsForTests({
+      env: {} as NodeJS.ProcessEnv,
+      homedir: () => home,
+    });
     expect(records).toHaveLength(1);
     const written = requireAuditRecord(records[0]);
     expect(written.event).toBe("config.write");
@@ -429,7 +695,7 @@ describe("config io audit helpers", () => {
     });
 
     expect(result).toEqual({ scanned: 2, rewritten: 1, skipped: 0, aborted: false });
-    const after = readAuditLog(home);
+    const after = readLegacyAuditLog(home);
     expect(after).toHaveLength(2);
     const firstAfter = requireAuditRecord(after[0]);
     const secondAfter = requireAuditRecord(after[1]);

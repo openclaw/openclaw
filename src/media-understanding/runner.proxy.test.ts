@@ -35,7 +35,6 @@ vi.mock("../infra/net/proxy-fetch.js", () => ({
 }));
 
 let buildProviderRegistry: typeof import("./runner.js").buildProviderRegistry;
-let clearMediaUnderstandingBinaryCacheForTests: typeof import("./runner.test-support.js").clearMediaUnderstandingBinaryCacheForTests;
 let runCapability: typeof import("./runner.js").runCapability;
 
 function createOpenAiAudioCfg(providerOverrides: Record<string, unknown> = {}): OpenClawConfig {
@@ -51,9 +50,9 @@ function createOpenAiAudioCfg(providerOverrides: Record<string, unknown> = {}): 
     },
     tools: {
       media: {
+        models: [{ provider: "openai", model: "whisper-1", capabilities: ["audio"] }],
         audio: {
           enabled: true,
-          models: [{ provider: "openai", model: "whisper-1" }],
         },
       },
     },
@@ -106,13 +105,11 @@ async function runAudioCapabilityWithFetchCapture(params: {
 describe("runCapability proxy fetch passthrough", () => {
   beforeAll(async () => {
     ({ buildProviderRegistry, runCapability } = await import("./runner.js"));
-    ({ clearMediaUnderstandingBinaryCacheForTests } = await import("./runner.test-support.js"));
   });
 
   beforeEach(() => {
     vi.useRealTimers();
     vi.clearAllMocks();
-    clearMediaUnderstandingBinaryCacheForTests();
   });
 
   it("passes fetchFn to audio provider when HTTPS_PROXY is set", async () => {
@@ -143,9 +140,9 @@ describe("runCapability proxy fetch passthrough", () => {
             },
             tools: {
               media: {
+                models: [{ provider: "moonshot", model: "kimi-k2.5", capabilities: ["video"] }],
                 video: {
                   enabled: true,
-                  models: [{ provider: "moonshot", model: "kimi-k2.5" }],
                 },
               },
             },

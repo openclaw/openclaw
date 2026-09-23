@@ -6,7 +6,8 @@ const transcodeAudioBufferToOpusMock = vi.hoisted(() => vi.fn());
 
 const PROVIDER_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 
-vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>()),
   transcodeAudioBufferToOpus: transcodeAudioBufferToOpusMock,
 }));
 
@@ -41,10 +42,8 @@ describe("buildXiaomiSpeechProvider", () => {
   });
 
   describe("isConfigured", () => {
-    const savedEnv = { ...process.env };
-
     afterEach(() => {
-      process.env = { ...savedEnv };
+      vi.unstubAllEnvs();
     });
 
     it("returns true when apiKey is in provider config", () => {
@@ -54,17 +53,17 @@ describe("buildXiaomiSpeechProvider", () => {
     });
 
     it("returns false when no apiKey is available", () => {
-      delete process.env.XIAOMI_API_KEY;
+      vi.stubEnv("XIAOMI_API_KEY", undefined);
       expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 30000 })).toBe(false);
     });
 
     it("returns true when XIAOMI_API_KEY env var is set", () => {
-      process.env.XIAOMI_API_KEY = "sk-env";
+      vi.stubEnv("XIAOMI_API_KEY", "sk-env");
       expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 30000 })).toBe(true);
     });
 
     it.each(["", "   "])("returns false when XIAOMI_API_KEY is blank", (apiKey) => {
-      process.env.XIAOMI_API_KEY = apiKey;
+      vi.stubEnv("XIAOMI_API_KEY", apiKey);
       expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 30000 })).toBe(false);
     });
   });
@@ -179,10 +178,7 @@ describe("buildXiaomiSpeechProvider", () => {
       const audio = Buffer.from("fake-mp3-audio").toString("base64");
       const mockFetch = vi.mocked(globalThis.fetch);
       mockFetch.mockResolvedValueOnce(
-        new Response(JSON.stringify({ choices: [{ message: { audio: { data: audio } } }] }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }),
+        Response.json({ choices: [{ message: { audio: { data: audio } } }] }),
       );
 
       const result = await provider.synthesize({
@@ -220,14 +216,27 @@ describe("buildXiaomiSpeechProvider", () => {
       expect(transcodeAudioBufferToOpusMock).not.toHaveBeenCalled();
     });
 
+    it("rejects malformed base64 audio", async () => {
+      vi.mocked(globalThis.fetch).mockResolvedValueOnce(
+        Response.json({ choices: [{ message: { audio: { data: "ZE==" } } }] }),
+      );
+
+      await expect(
+        provider.synthesize({
+          text: "Hello from OpenClaw.",
+          cfg: {} as never,
+          providerConfig: { apiKey: "sk-test" },
+          target: "audio-file",
+          timeoutMs: 30000,
+        }),
+      ).rejects.toThrow("Xiaomi TTS API returned malformed base64 audio data");
+    });
+
     it("omits voice and uses configured style for Xiaomi voice design models", async () => {
       const audio = Buffer.from("fake-wav-audio").toString("base64");
       const mockFetch = vi.mocked(globalThis.fetch);
       mockFetch.mockResolvedValueOnce(
-        new Response(JSON.stringify({ choices: [{ message: { audio: { data: audio } } }] }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }),
+        Response.json({ choices: [{ message: { audio: { data: audio } } }] }),
       );
 
       const result = await provider.synthesize({
@@ -264,10 +273,7 @@ describe("buildXiaomiSpeechProvider", () => {
       const audio = Buffer.from("fake-mp3-audio").toString("base64");
       const mockFetch = vi.mocked(globalThis.fetch);
       mockFetch.mockResolvedValueOnce(
-        new Response(JSON.stringify({ choices: [{ message: { audio: { data: audio } } }] }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }),
+        Response.json({ choices: [{ message: { audio: { data: audio } } }] }),
       );
 
       await provider.synthesize({
@@ -297,10 +303,7 @@ describe("buildXiaomiSpeechProvider", () => {
     it("transcodes Xiaomi output to Opus for voice-note targets", async () => {
       const audio = Buffer.from("fake-mp3-audio").toString("base64");
       vi.mocked(globalThis.fetch).mockResolvedValueOnce(
-        new Response(JSON.stringify({ choices: [{ message: { audio: { data: audio } } }] }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }),
+        Response.json({ choices: [{ message: { audio: { data: audio } } }] }),
       );
       transcodeAudioBufferToOpusMock.mockResolvedValueOnce(Buffer.from("fake-opus-audio"));
 
@@ -327,10 +330,7 @@ describe("buildXiaomiSpeechProvider", () => {
     it("transcodes Xiaomi voice design output to Opus for voice-note targets", async () => {
       const audio = Buffer.from("fake-wav-audio").toString("base64");
       vi.mocked(globalThis.fetch).mockResolvedValueOnce(
-        new Response(JSON.stringify({ choices: [{ message: { audio: { data: audio } } }] }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }),
+        Response.json({ choices: [{ message: { audio: { data: audio } } }] }),
       );
       transcodeAudioBufferToOpusMock.mockResolvedValueOnce(Buffer.from("fake-opus-audio"));
 
@@ -363,17 +363,9 @@ describe("buildXiaomiSpeechProvider", () => {
 
     it("caps oversized TTS request timeouts before scheduling or fetching", async () => {
       const audio = Buffer.from("fake-mp3-audio").toString("base64");
-      const timeoutSpy = vi
-        .spyOn(globalThis, "setTimeout")
-        .mockReturnValue(1 as unknown as ReturnType<typeof setTimeout>);
-      const clearTimeoutSpy = vi
-        .spyOn(globalThis, "clearTimeout")
-        .mockImplementation(() => undefined);
+      const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
       vi.mocked(globalThis.fetch).mockResolvedValueOnce(
-        new Response(JSON.stringify({ choices: [{ message: { audio: { data: audio } } }] }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }),
+        Response.json({ choices: [{ message: { audio: { data: audio } } }] }),
       );
 
       try {
@@ -388,7 +380,6 @@ describe("buildXiaomiSpeechProvider", () => {
         expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
       } finally {
         timeoutSpy.mockRestore();
-        clearTimeoutSpy.mockRestore();
       }
     });
 
@@ -449,10 +440,7 @@ describe("buildXiaomiSpeechProvider", () => {
       const audio = Buffer.from("fake-mp3-audio").toString("base64");
       const mockFetch = vi.mocked(globalThis.fetch);
       mockFetch.mockResolvedValueOnce(
-        new Response(JSON.stringify({ choices: [{ message: { audio: { data: audio } } }] }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }),
+        Response.json({ choices: [{ message: { audio: { data: audio } } }] }),
       );
       try {
         await provider.synthesize({
@@ -476,10 +464,7 @@ describe("buildXiaomiSpeechProvider", () => {
 
     it("throws when the API response has no audio data", async () => {
       vi.mocked(globalThis.fetch).mockResolvedValueOnce(
-        new Response(JSON.stringify({ choices: [{ message: {} }] }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }),
+        Response.json({ choices: [{ message: {} }] }),
       );
       await expect(
         provider.synthesize({

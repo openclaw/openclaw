@@ -1,5 +1,6 @@
-// Discord tests cover threading.auto thread plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+// Discord tests cover threading.auto thread plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChannelType } from "../internal/discord.js";
 import { EMPTY_DISCORD_TEST_CONFIG } from "../test-support/config.js";
@@ -22,7 +23,7 @@ const mockClient = {
   rest: { post: postMock, get: getMock, patch: patchMock },
 } as unknown as Parameters<MaybeCreateDiscordAutoThreadFn>[0]["client"];
 const mockMessage = {
-  id: "msg1",
+  id: "1001",
   timestamp: "123",
 } as unknown as Parameters<MaybeCreateDiscordAutoThreadFn>[0]["message"];
 
@@ -57,12 +58,7 @@ async function flushAsyncWork() {
   await Promise.resolve();
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function callArg(mock: unknown, callIndex: number, argIndex: number, label: string) {
   const calls = (mock as { mock?: { calls?: Array<Array<unknown>> } }).mock?.calls ?? [];

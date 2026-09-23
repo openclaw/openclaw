@@ -1,0 +1,195 @@
+import { on } from "node:events";
+import http from "node:http";
+import net from "node:net";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { WebSocket, type RawData } from "ws";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { createHostDesktopService } from "./host-source.js";
+import { handleDesktopObserveUpgrade } from "./observe-bridge.js";
+import { createDesktopSessionRegistry } from "./session-registry.js";
+import { SocketReader } from "./socket-reader.test-support.js";
+
+const VERSION = Buffer.from("RFB 003.008\n", "ascii");
+const cleanups: Array<() => Promise<void>> = [];
+
+afterEach(async () => {
+  await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
+});
+
+class WebSocketReader {
+  private readonly messages: AsyncIterator<unknown[]>;
+
+  constructor(ws: WebSocket) {
+    this.messages = on(ws, "message", { close: ["close"] });
+  }
+
+  async next(): Promise<Buffer> {
+    const message = await this.messages.next();
+    if (message.done) {
+      throw new Error("WebSocket closed before the next RFB frame");
+    }
+    const [data] = message.value as [RawData];
+    return Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer);
+  }
+}
+
+describe("gateway host desktop observe integration", () => {
+  it.each(["connected", "access denied", "invalid security"] as const)(
+    "preserves ARD authentication, access rejection, and protocol failure (%s)",
+    async (outcome) => {
+      const peers = new Set<net.Socket>();
+      let connectionCount = 0;
+      const {
+        promise: observerScript,
+        resolve: resolveObserverScript,
+        reject: rejectObserverScript,
+      } = createDeferred();
+      const browserReady = createDeferred();
+      const rfbServer = net.createServer((socket) => {
+        peers.add(socket);
+        socket.once("close", () => peers.delete(socket));
+        connectionCount += 1;
+        const connectionIndex = connectionCount;
+        const reader = new SocketReader(socket);
+        void (async () => {
+          try {
+            socket.write(Buffer.from("RFB 003.889\n", "ascii"));
+            expect(await reader.readExactly(12)).toEqual(VERSION);
+            socket.write(Buffer.from([4, 30, 33, 36, 35]));
+            if (connectionIndex === 1) {
+              return;
+            }
+
+            expect(await reader.readExactly(1)).toEqual(Buffer.from([30]));
+            const keyLength = 16;
+            const header = Buffer.alloc(4);
+            header.writeUInt16BE(5, 0);
+            header.writeUInt16BE(outcome === "invalid security" ? 0 : keyLength, 2);
+            const modulus = Buffer.alloc(keyLength);
+            modulus.writeUInt16BE(7919, keyLength - 2);
+            const serverPublic = Buffer.alloc(keyLength);
+            serverPublic.writeUInt16BE(6817, keyLength - 2);
+            await browserReady.promise;
+            socket.write(Buffer.concat([header, modulus, serverPublic]));
+            if (outcome === "invalid security") {
+              resolveObserverScript();
+              return;
+            }
+            expect(await reader.readExactly(128 + keyLength)).toHaveLength(128 + keyLength);
+            if (outcome === "access denied") {
+              const reason = Buffer.from("access denied for operator using account-password");
+              const result = Buffer.alloc(8);
+              result.writeUInt32BE(1, 0);
+              result.writeUInt32BE(reason.length, 4);
+              socket.write(Buffer.concat([result, reason]));
+              resolveObserverScript();
+              return;
+            }
+            socket.write(Buffer.alloc(4));
+
+            // Browser version/security bytes were consumed by the Gateway. ClientInit is first.
+            expect(await reader.readExactly(1)).toEqual(Buffer.from([1]));
+            socket.write(Buffer.from("server-init", "ascii"));
+            const framebufferRequest = Buffer.from([3, 1, 0, 0, 0, 0, 0, 64, 0, 64]);
+            expect(await reader.readExactly(framebufferRequest.length)).toEqual(framebufferRequest);
+            resolveObserverScript();
+          } catch (error) {
+            rejectObserverScript(error instanceof Error ? error : new Error(String(error)));
+          }
+        })();
+      });
+      await new Promise<void>((resolve, reject) => {
+        rfbServer.once("error", reject);
+        rfbServer.listen(0, "127.0.0.1", resolve);
+      });
+      const rfbAddress = rfbServer.address();
+      if (!rfbAddress || typeof rfbAddress === "string") {
+        throw new Error("expected RFB address");
+      }
+      cleanups.push(
+        async () =>
+          await new Promise<void>((resolve) => {
+            for (const peer of peers) {
+              peer.destroy();
+            }
+            rfbServer.close(() => resolve());
+          }),
+      );
+
+      const registry = createDesktopSessionRegistry();
+      const service = createHostDesktopService({
+        getConfig: () => ({ enabled: true, port: rfbAddress.port }),
+        registry,
+      });
+      cleanups.push(async () => registry.stopAll());
+      const observed = await service.observe({
+        control: false,
+        credentials: { username: "operator", password: "account-password" },
+      });
+      expect(observed.auth).toBe("ard-account");
+      expect(observed.vncPassword).toBeUndefined();
+
+      const httpServer = http.createServer();
+      httpServer.on("upgrade", (req, socket, head) => {
+        handleDesktopObserveUpgrade(req, socket, head, { registry });
+      });
+      await new Promise<void>((resolve) => {
+        httpServer.listen(0, "127.0.0.1", resolve);
+      });
+      const httpAddress = httpServer.address();
+      if (!httpAddress || typeof httpAddress === "string") {
+        throw new Error("expected HTTP address");
+      }
+      cleanups.push(
+        async () =>
+          await new Promise<void>((resolve) => {
+            httpServer.close(() => resolve());
+          }),
+      );
+
+      const ws = new WebSocket(`ws://127.0.0.1:${httpAddress.port}${observed.wsPath}`);
+      const browser = new WebSocketReader(ws);
+      const closed = new Promise<{ code: number; reason: string }>((resolve) => {
+        ws.once("close", (code, reason) => resolve({ code, reason: reason.toString() }));
+      });
+      cleanups.push(async () => ws.terminate());
+      await new Promise<void>((resolve, reject) => {
+        ws.once("open", resolve);
+        ws.once("error", reject);
+      });
+      expect(await browser.next()).toEqual(VERSION);
+      // Coalesce the synthetic handshake replies with exclusive ClientInit.
+      ws.send(Buffer.concat([VERSION, Buffer.from([1, 0])]));
+      expect(await browser.next()).toEqual(Buffer.from([1, 1]));
+      browserReady.resolve();
+      if (outcome !== "connected") {
+        const result = await closed;
+        expect(result).toEqual(
+          outcome === "access denied"
+            ? {
+                code: 1008,
+                reason:
+                  "macOS denied desktop access; check credentials and Screen Sharing or Remote Management Observe/Control permissions",
+              }
+            : {
+                code: 1011,
+                reason:
+                  "desktop security negotiation failed; check the desktop service and reconnect",
+              },
+        );
+        expect(Buffer.byteLength(result.reason)).toBeLessThanOrEqual(123);
+        expect(result.reason).not.toContain("account-password");
+        await expect(observerScript).resolves.toBeUndefined();
+        return;
+      }
+      expect(await browser.next()).toEqual(Buffer.alloc(4));
+      expect(await browser.next()).toEqual(Buffer.from("server-init", "ascii"));
+
+      const keyEvent = Buffer.from([4, 1, 0, 0, 0, 0, 0, 65]);
+      const framebufferRequest = Buffer.from([3, 1, 0, 0, 0, 0, 0, 64, 0, 64]);
+      ws.send(Buffer.concat([keyEvent, framebufferRequest]));
+      await expect(observerScript).resolves.toBeUndefined();
+      await vi.waitFor(() => expect(connectionCount).toBe(2));
+    },
+  );
+});

@@ -1,35 +1,12 @@
 // Builds channel setup metadata from plugin light surfaces.
+import { mergeChannelPluginSection } from "../channels/plugins/merge-plugin-section.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import { isChannelConfigured } from "../config/channel-configured.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ChannelPluginLoadIntent } from "./loader-types.js";
 import { unwrapDefaultModuleExport } from "./module-export.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import type { OpenClawPluginApi } from "./types.js";
-
-function mergeChannelPluginSection<T>(
-  baseValue: T | undefined,
-  overrideValue: T | undefined,
-): T | undefined {
-  if (
-    baseValue &&
-    overrideValue &&
-    typeof baseValue === "object" &&
-    typeof overrideValue === "object"
-  ) {
-    const merged = {
-      ...(baseValue as Record<string, unknown>),
-    };
-    for (const [key, value] of Object.entries(overrideValue as Record<string, unknown>)) {
-      if (value !== undefined) {
-        merged[key] = value;
-      }
-    }
-    return {
-      ...merged,
-    } as T;
-  }
-  return overrideValue ?? baseValue;
-}
 
 export function mergeSetupRuntimeChannelPlugin(
   runtimePlugin: ChannelPlugin,
@@ -203,38 +180,19 @@ export function resolveSetupChannelRegistration(moduleExport: unknown): {
 export function shouldLoadChannelPluginInSetupRuntime(params: {
   manifestChannels: string[];
   setupSource?: string;
-  startupDeferConfiguredChannelFullLoadUntilAfterListen?: boolean;
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
-  preferSetupRuntimeForChannelPlugins?: boolean;
+  channelPluginLoadIntent: ChannelPluginLoadIntent;
 }): boolean {
-  if (!params.setupSource || params.manifestChannels.length === 0) {
-    return false;
-  }
   if (
-    params.preferSetupRuntimeForChannelPlugins &&
-    params.startupDeferConfiguredChannelFullLoadUntilAfterListen === true
+    params.channelPluginLoadIntent !== "setup" ||
+    !params.setupSource ||
+    params.manifestChannels.length === 0
   ) {
-    return true;
+    return false;
   }
   return !params.manifestChannels.some((channelId) =>
     isChannelConfigured(params.cfg, channelId, params.env),
-  );
-}
-
-export function shouldDeferConfiguredChannelFullRuntimeMerge(params: {
-  manifestChannels: string[];
-  startupDeferConfiguredChannelFullLoadUntilAfterListen?: boolean;
-  cfg: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  preferSetupRuntimeForChannelPlugins?: boolean;
-}): boolean {
-  return (
-    params.preferSetupRuntimeForChannelPlugins === true &&
-    params.startupDeferConfiguredChannelFullLoadUntilAfterListen === true &&
-    params.manifestChannels.some((channelId) =>
-      isChannelConfigured(params.cfg, channelId, params.env),
-    )
   );
 }
 

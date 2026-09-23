@@ -1,0 +1,375 @@
+import fs from "node:fs/promises";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { writeOpenAiResponsesSse } from "../../test/helpers/openai-responses-sse.js";
+import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
+import { listKnownProviderEnvApiKeyNames } from "../agents/model-auth-env-vars.js";
+import { captureFullEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+import type { GuidedOnboardingDeps } from "./onboard-guided.js";
+
+vi.mock("./onboard-interactive-runner.js", async (importActual) => {
+  const actual = await importActual<typeof import("./onboard-interactive-runner.js")>();
+  return {
+    ...actual,
+    hasInteractiveOnboardingTty: () => true,
+    runInteractiveOnboarding: async (run: () => Promise<void>) => await run(),
+  };
+});
+
+type MockOpenAiServer = {
+  baseUrl: string;
+  requestBodies: string[];
+  close: () => Promise<void>;
+};
+
+const cleanupTasks: Array<() => Promise<void>> = [];
+
+afterEach(async () => {
+  await Promise.allSettled(cleanupTasks.splice(0).map((cleanup) => cleanup()));
+  vi.restoreAllMocks();
+  vi.resetModules();
+});
+
+describe("guided onboarding inference composition", () => {
+  it.each(["configured", "before-provision", "after-members", "after-provision"] as const)(
+    "advances through a real embedded probe and setup (%s)",
+    { timeout: 300_000 },
+    async (mode) => {
+      const team = mode !== "configured";
+      const env = captureFullEnv();
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-guided-inference-e2e-"));
+      const workspace = path.join(root, "workspace");
+      const configPath = path.join(root, "openclaw.json");
+      const mockOpenAi = await startMockOpenAiServer();
+      cleanupTasks.push(async () => {
+        env.restore();
+        await mockOpenAi.close();
+        await fs.rm(root, { recursive: true, force: true });
+      });
+
+      for (const key of listKnownProviderEnvApiKeyNames()) {
+        deleteTestEnvValue(key);
+      }
+      setTestEnvValue("HOME", root);
+      setTestEnvValue("USERPROFILE", root);
+      setTestEnvValue("CODEX_HOME", path.join(root, "codex"));
+      setTestEnvValue("CLAUDE_CONFIG_DIR", path.join(root, "claude"));
+      setTestEnvValue("OPENCLAW_STATE_DIR", root);
+      setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
+      setTestEnvValue("OPENAI_API_KEY", "test-openai-key");
+      setTestEnvValue("PATH", path.dirname(process.execPath));
+
+      await fs.mkdir(workspace, { recursive: true });
+      await fs.writeFile(
+        configPath,
+        `${JSON.stringify({
+          meta: { migrations: { utilityModelSeparation: true } },
+          ...(!team ? { gateway: { mode: "local" } } : {}),
+          plugins: { slots: { memory: "none" } },
+          agents: {
+            defaults: {
+              ...(!team ? { workspace } : {}),
+              skipBootstrap: true,
+              skills: [],
+            },
+          },
+          models: {
+            mode: "replace",
+            providers: {
+              openai: {
+                baseUrl: `${mockOpenAi.baseUrl}/v1`,
+                apiKey: "OPENAI_API_KEY",
+                api: "openai-responses",
+                request: { allowPrivateNetwork: true },
+                models: [
+                  {
+                    id: "gpt-5.6",
+                    name: "GPT-5.6 mock",
+                    api: "openai-responses",
+                    reasoning: true,
+                    input: ["text"],
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 272_000,
+                    maxTokens: 128_000,
+                  },
+                ],
+              },
+            },
+          },
+        })}\n`,
+      );
+
+      const prompter = createWizardPrompter(
+        {
+          text: vi.fn(async ({ initialValue }) => initialValue ?? ""),
+        },
+        { selectValues: [team ? "team" : "one", "full", "detected-ai"] },
+      );
+      const runSetupMemoryImportStep = vi.fn(async () => ({
+        status: "skipped" as const,
+        providers: [],
+      }));
+      const runAppRecommendations = vi.fn(async ({ config }) => ({
+        config,
+        commitResult: vi.fn(async () => undefined),
+      }));
+      const launchHatchTui = vi.fn(async () => undefined);
+      const runSystemAgentChat = vi.fn(async () => undefined);
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn((code: number): never => {
+          throw new Error(`unexpected exit ${code}`);
+        }),
+      };
+
+      const configModule = await import("../config/config.js");
+      configModule.clearConfigCache();
+      const setupInference = await import("../system-agent/setup-inference.js");
+      const onboardInference = await import("./onboard-inference.js");
+      const { runGuidedOnboarding } = await import("./onboard-guided.js");
+      let activePrompter = prompter;
+      let interruptAfterProvision = team;
+      const deps: GuidedOnboardingDeps = {
+        createPrompter: () => activePrompter,
+        detect: async () => {
+          const probeLocalCommand = async (command: string) => ({
+            command,
+            found: false,
+            error: "not found",
+          });
+          const result = await setupInference.detectSetupInference({
+            detectInferenceBackends: async (options) =>
+              await onboardInference.detectInferenceBackends({
+                config: options?.config,
+                env: process.env,
+                platform: "linux",
+                deps: {
+                  probeLocalCommand,
+                  detectClaudeLoginState: async () => ({ credentials: false }),
+                  readCodexCliCredentials: () => null,
+                  readGeminiCliCredentials: () => null,
+                  randomInt: () => 0,
+                },
+              }),
+            resolveManifestProviderAuthChoices: () => [],
+          });
+          return result;
+        },
+        activate: async (params) => {
+          const result = await setupInference.activateSetupInference(params);
+          expect(result.ok, result.ok ? undefined : result.error).toBe(true);
+          return result;
+        },
+        applySetup: async (params, hooks) => {
+          if (interruptAfterProvision && mode === "before-provision") {
+            throw new Error("fixture interruption before provisioning");
+          }
+          if (interruptAfterProvision && mode === "after-members") {
+            const onboarding = await import("./onboard-agent.js");
+            const ensureAgent = onboarding.ensureOnboardingAgent;
+            vi.spyOn(onboarding, "ensureOnboardingAgent").mockImplementationOnce(async (input) => {
+              await ensureAgent(input);
+              throw new Error("fixture interruption after member creation");
+            });
+          }
+          const { applySystemAgentSetup } = await import("../system-agent/setup-apply.js");
+          const result = await applySystemAgentSetup({ ...params, surface: "gateway" }, hooks);
+          return interruptAfterProvision ? { ...result, workspaceReady: false } : result;
+        },
+        runSetupMemoryImportStep,
+        runAppRecommendations,
+        launchHatchTui,
+        runSystemAgentChat,
+      };
+      const run = () =>
+        runGuidedOnboarding({ acceptRisk: true, workspace, tui: true }, runtime, deps);
+      if (team) {
+        await expect(run()).rejects.toThrow(
+          mode === "after-provision" ? "workspace could not be prepared" : "fixture interruption",
+        );
+        const { readLocalOnboardingState } = await import("../state/local-onboarding-state.js");
+        expect(readLocalOnboardingState(configPath)).toMatchObject({
+          status: "pending",
+          workspace,
+          teamCoordinatorId: "coordinator",
+        });
+        expect(launchHatchTui).not.toHaveBeenCalled();
+        if (mode === "after-members") {
+          expect(
+            (await configModule.readConfigFileSnapshot()).sourceConfigBeforeMigrations?.agents
+              ?.defaults?.workspace,
+          ).toBeUndefined();
+        }
+        interruptAfterProvision = false;
+        activePrompter = createWizardPrompter(undefined, {
+          selectValues: ["full", "detected-ai", "candidate:existing-model"],
+        });
+      }
+      await run();
+
+      expect(prompter.select).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({
+          initialValue: false,
+          options: [
+            expect.objectContaining({ value: false }),
+            expect.objectContaining({ value: true }),
+          ],
+        }),
+      );
+      expect(prompter.select).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          initialValue: "one",
+          options: [
+            { value: "one", label: "One agent" },
+            { value: "team", label: "A small team: a chief of staff plus specialists" },
+          ],
+        }),
+      );
+      expect(prompter.select).toHaveBeenNthCalledWith(
+        3,
+        expect.objectContaining({
+          options: expect.arrayContaining([expect.objectContaining({ value: "full" })]),
+        }),
+      );
+      const persisted = await configModule.readConfigFileSnapshot();
+      expect(runSystemAgentChat).not.toHaveBeenCalled();
+      expect(persisted.valid).toBe(true);
+      expect(persisted.sourceConfig).toMatchObject({
+        telemetry: { enabled: false, consentedAt: expect.any(String) },
+        wizard: { accessMode: "full" },
+      });
+      expect(mockOpenAi.requestBodies).toHaveLength(team ? 2 : 1);
+      expect(JSON.parse(mockOpenAi.requestBodies[0] ?? "{}")).toMatchObject({
+        model: "gpt-6-astra",
+      });
+      const notes = [
+        ...vi.mocked(prompter.note).mock.calls,
+        ...(activePrompter === prompter ? [] : vi.mocked(activePrompter.note).mock.calls),
+      ];
+      const inferenceReadyIndex = notes.findIndex((call) => call[1] === "Inference ready");
+      const postInferenceIndex = notes.findIndex(
+        (call, index) =>
+          index > inferenceReadyIndex &&
+          call[0].includes(team ? "Workspace:" : "your AI just passed a fresh check"),
+      );
+      expect(inferenceReadyIndex).toBeGreaterThanOrEqual(0);
+      expect(postInferenceIndex).toBeGreaterThan(inferenceReadyIndex);
+      expect(runSetupMemoryImportStep).toHaveBeenCalledOnce();
+      expect(runAppRecommendations).toHaveBeenCalledWith(
+        expect.objectContaining({
+          modelRouteVerified: true,
+          workspaceDir: team ? path.join(workspace, "coordinator") : workspace,
+        }),
+      );
+      expect(launchHatchTui).toHaveBeenCalledWith(
+        team ? path.join(workspace, "coordinator") : workspace,
+      );
+      if (team) {
+        expect(Object.keys(persisted.sourceConfig.agents?.entries ?? {})).toEqual([
+          "coordinator",
+          "researcher",
+          "writer",
+          "reviewer",
+        ]);
+        const { readLocalOnboardingState } = await import("../state/local-onboarding-state.js");
+        expect(readLocalOnboardingState(configPath)).toMatchObject({
+          status: "completed",
+          workspace,
+        });
+      }
+    },
+  );
+});
+
+async function startMockOpenAiServer(): Promise<MockOpenAiServer> {
+  const requestBodies: string[] = [];
+  const server = createServer((request, response) => {
+    void handleMockOpenAiRequest(request, response, requestBodies);
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("mock OpenAI server did not bind");
+  }
+  return {
+    baseUrl: `http://127.0.0.1:${address.port}`,
+    requestBodies,
+    close: async () => {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => {
+        server.close(() => {
+          resolve();
+        });
+      });
+    },
+  };
+}
+
+async function handleMockOpenAiRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  requestBodies: string[],
+): Promise<void> {
+  const url = new URL(request.url ?? "/", "http://127.0.0.1");
+  if (request.method !== "POST" || url.pathname !== "/v1/responses") {
+    response.writeHead(404).end();
+    return;
+  }
+  let body = "";
+  for await (const chunk of request) {
+    body += String(chunk);
+  }
+  requestBodies.push(body);
+  writeMockOpenAiResponse(response);
+}
+
+function writeMockOpenAiResponse(response: ServerResponse): void {
+  const text = "OK";
+  const message = {
+    type: "message",
+    id: "guided-inference-message",
+    role: "assistant",
+    status: "completed",
+    content: [{ type: "output_text", text, annotations: [] }],
+  };
+  const events = [
+    {
+      type: "response.output_item.added",
+      output_index: 0,
+      item: { ...message, status: "in_progress", content: [] },
+    },
+    {
+      type: "response.output_text.delta",
+      item_id: message.id,
+      output_index: 0,
+      content_index: 0,
+      delta: text,
+    },
+    {
+      type: "response.output_text.done",
+      item_id: message.id,
+      output_index: 0,
+      content_index: 0,
+      text,
+    },
+    { type: "response.output_item.done", output_index: 0, item: message },
+    {
+      type: "response.completed",
+      response: {
+        id: "guided-inference-response",
+        status: "completed",
+        output: [message],
+        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+      },
+    },
+  ];
+  writeOpenAiResponsesSse(response, events);
+}

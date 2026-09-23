@@ -1,7 +1,15 @@
 // Loads dotenv files while blocking unsafe workspace env keys.
 import path from "node:path";
-import { listKnownProviderAuthEnvVarNames } from "../secrets/provider-env-vars.js";
-import { loadGlobalRuntimeDotEnvFiles, readDotEnvFile } from "./dotenv-global.js";
+import {
+  listKnownProviderAuthEnvVarNamesCore,
+  listKnownProviderAuthEnvVarNamesAsync,
+} from "../secrets/provider-env-vars.js";
+import {
+  loadGlobalRuntimeDotEnvFiles,
+  loadGlobalRuntimeDotEnvFilesAsync,
+  readDotEnvFile,
+  readDotEnvFileAsync,
+} from "./dotenv-global.js";
 import {
   isDangerousHostEnvOverrideVarName,
   isDangerousHostEnvVarName,
@@ -107,11 +115,15 @@ const BLOCKED_WORKSPACE_DOTENV_KEYS = new Set([
   "CLAWHUB_TOKEN",
   "CLAWHUB_URL",
   "COMSPEC",
+  "DISCORD_API_URL",
   "HTTP_PROXY",
   "HTTPS_PROXY",
   "HOMEBREW_BREW_FILE",
+  "HOMEBREW_CURL_PATH",
+  "HOMEBREW_GIT_PATH",
   "HOMEBREW_PREFIX",
   "IRC_HOST",
+  "APPDATA",
   "LOCALAPPDATA",
   "MATTERMOST_URL",
   "MATRIX_HOMESERVER",
@@ -169,8 +181,33 @@ const BLOCKED_WORKSPACE_DOTENV_KEYS = new Set([
   "PROGRAMFILES(X86)",
   "PROGRAMW6432",
   "STATE_DIRECTORY",
+  "AWS_ACCESS_KEY_ID",
+  "AWS_ACCOUNT_ID",
+  "AWS_ACCOUNT_ID_ENDPOINT_MODE",
+  "AWS_BEARER_TOKEN_BEDROCK",
+  "AWS_BEDROCK_SKIP_AUTH",
+  "AWS_CONFIG_FILE",
+  "AWS_CREDENTIAL_EXPIRATION",
+  "AWS_CREDENTIAL_SCOPE",
+  "AWS_EC2_METADATA_DISABLED",
+  "AWS_EC2_METADATA_SERVICE_ENDPOINT",
+  "AWS_EC2_METADATA_SERVICE_ENDPOINT_MODE",
+  "AWS_EC2_METADATA_V1_DISABLED",
+  "AWS_ENDPOINT_URL",
+  "AWS_PROFILE",
+  "AWS_ROLE_ARN",
+  "AWS_ROLE_SESSION_NAME",
+  "AWS_SECRET_ACCESS_KEY",
+  "AWS_SESSION_TOKEN",
+  "AWS_SHARED_CREDENTIALS_FILE",
+  "AWS_WEB_IDENTITY_TOKEN_FILE",
+  "BUZZ_RELAY_URL",
+  "SMS_ALLOWED_USERS",
+  "SMS_DANGEROUSLY_DISABLE_SIGNATURE_VALIDATION",
+  "SMS_PUBLIC_WEBHOOK_URL",
   "SLACK_API_URL",
   "SYNOLOGY_CHAT_INCOMING_URL",
+  "SYNOLOGY_ALLOWED_USER_IDS",
   "SYNOLOGY_NAS_HOST",
   "UV_PYTHON",
   "ZALO_API_URL",
@@ -180,17 +217,29 @@ const BLOCKED_WORKSPACE_DOTENV_KEYS = new Set([
 // `_HOMESERVER` covers Matrix's per-account scoped keys (MATRIX_<ACCOUNT>_HOMESERVER)
 // in addition to the bare MATRIX_HOMESERVER listed above.
 const BLOCKED_WORKSPACE_DOTENV_SUFFIXES = ["_API_HOST", "_BASE_URL", "_ENDPOINT", "_HOMESERVER"];
+const BLOCKED_WORKSPACE_DOTENV_TOKEN_SEQUENCES = [
+  ["DANGEROUSLY"],
+  ["DISABLE", "AUTH"],
+  ["DISABLE", "CERT"],
+  ["DISABLE", "SIGNATURE"],
+  ["DISABLE", "SSL"],
+  ["DISABLE", "TLS"],
+  ["SKIP", "AUTH"],
+];
 const BLOCKED_WORKSPACE_DOTENV_PREFIXES = [
   "ANTHROPIC_API_KEY_",
   "CLAWHUB_",
   // Google Cloud SDK launchers treat CLOUDSDK_* values as runtime controls.
   // Workspace .env must not steer gcloud subprocess interpreters or args.
   "CLOUDSDK_",
+  // AWS container credentials can redirect credential fetches and auth-token reads.
+  "AWS_CONTAINER_",
+  // AWS SDK endpoint overrides redirect signed provider traffic by service id.
+  "AWS_ENDPOINT_URL_",
   "OPENAI_API_KEY_",
   // Workspace .env is untrusted; reserve the full OpenClaw runtime namespace
   // for shell/global config so new OPENCLAW_* controls are fail-closed by default.
   "OPENCLAW_",
-  "OPENCLAW_CLAWHUB_",
   "OPENCLAW_DISABLE_",
   "OPENCLAW_SKIP_",
   "OPENCLAW_UPDATE_",
@@ -200,11 +249,23 @@ function shouldBlockWorkspaceRuntimeDotEnvKey(key: string): boolean {
   return isDangerousHostEnvVarName(key) || isDangerousHostEnvOverrideVarName(key);
 }
 
-function buildProviderAuthWorkspaceDotEnvBlocklist(): ReadonlySet<string> {
+function hasBlockedWorkspaceDotEnvTokenSequence(key: string): boolean {
+  const tokens = key.split("_").filter(Boolean);
+  return BLOCKED_WORKSPACE_DOTENV_TOKEN_SEQUENCES.some((sequence) => {
+    for (let index = 0; index <= tokens.length - sequence.length; index += 1) {
+      if (sequence.every((token, offset) => tokens[index + offset] === token)) {
+        return true;
+      }
+    }
+    return false;
+  });
+}
+
+function buildProviderAuthWorkspaceDotEnvBlocklist(
+  providerEnvNames: readonly string[],
+): ReadonlySet<string> {
   const keys = new Set<string>(BLOCKED_PROVIDER_AUTH_WORKSPACE_DOTENV_KEYS);
-  for (const rawKey of listKnownProviderAuthEnvVarNames({
-    includeUntrustedWorkspacePlugins: false,
-  })) {
+  for (const rawKey of providerEnvNames) {
     const key = normalizeEnvVarKey(rawKey, { portable: true });
     if (key) {
       keys.add(key.toUpperCase());
@@ -213,52 +274,96 @@ function buildProviderAuthWorkspaceDotEnvBlocklist(): ReadonlySet<string> {
   return keys;
 }
 
-function shouldBlockWorkspaceDotEnvKey(
-  key: string,
-  getProviderAuthBlockedKeys: () => ReadonlySet<string>,
-): boolean {
+function shouldBlockWorkspaceStaticDotEnvKey(key: string): boolean {
   const upper = key.toUpperCase();
   return (
     shouldBlockWorkspaceRuntimeDotEnvKey(upper) ||
     BLOCKED_WORKSPACE_DOTENV_KEYS.has(upper) ||
     BLOCKED_WORKSPACE_DOTENV_PREFIXES.some((prefix) => upper.startsWith(prefix)) ||
     BLOCKED_WORKSPACE_DOTENV_SUFFIXES.some((suffix) => upper.endsWith(suffix)) ||
-    getProviderAuthBlockedKeys().has(upper)
+    hasBlockedWorkspaceDotEnvTokenSequence(upper)
   );
 }
 
-export function loadWorkspaceDotEnvFile(filePath: string, opts?: { quiet?: boolean }) {
+export function loadWorkspaceDotEnvFile(
+  filePath: string,
+  opts?: { quiet?: boolean; env?: NodeJS.ProcessEnv },
+) {
+  const env = opts?.env ?? process.env;
   let providerAuthBlockedKeys: ReadonlySet<string> | undefined;
   const getProviderAuthBlockedKeys = () => {
-    providerAuthBlockedKeys ??= buildProviderAuthWorkspaceDotEnvBlocklist();
+    providerAuthBlockedKeys ??= buildProviderAuthWorkspaceDotEnvBlocklist(
+      listKnownProviderAuthEnvVarNamesCore({ env, includeUntrustedWorkspacePlugins: false }),
+    );
     return providerAuthBlockedKeys;
   };
   const parsed = readDotEnvFile({
     filePath,
-    entryFilter: (key) => !shouldBlockWorkspaceDotEnvKey(key, getProviderAuthBlockedKeys),
+    entryFilter: (key) =>
+      !shouldBlockWorkspaceStaticDotEnvKey(key) &&
+      !getProviderAuthBlockedKeys().has(key.toUpperCase()),
     quiet: opts?.quiet ?? true,
   });
   if (!parsed) {
     return;
   }
   for (const { key, value } of parsed.entries) {
-    if (process.env[key] !== undefined) {
+    if (env[key] !== undefined) {
       continue;
     }
-    process.env[key] = value;
+    env[key] = value;
   }
+}
+
+async function loadWorkspaceDotEnvFileAsync(
+  filePath: string,
+  opts: { env: NodeJS.ProcessEnv; quiet?: boolean },
+): Promise<void> {
+  const parsed = await readDotEnvFileAsync({
+    filePath,
+    entryFilter: (key) => !shouldBlockWorkspaceStaticDotEnvKey(key),
+    quiet: opts.quiet ?? true,
+  });
+  if (!parsed?.entries.length) {
+    return;
+  }
+  const blocked = buildProviderAuthWorkspaceDotEnvBlocklist(
+    await listKnownProviderAuthEnvVarNamesAsync({
+      env: opts.env,
+      includeUntrustedWorkspacePlugins: false,
+    }),
+  );
+  for (const { key, value } of parsed.entries) {
+    if (!blocked.has(key.toUpperCase()) && opts.env[key] === undefined) {
+      opts.env[key] = value;
+    }
+  }
+}
+
+export async function loadDotEnvAsync(opts: {
+  env: NodeJS.ProcessEnv;
+  quiet?: boolean;
+  cwd?: string;
+}): Promise<void> {
+  const quiet = opts.quiet ?? true;
+  const cwd = Object.hasOwn(opts, "cwd") ? opts.cwd : tryProcessCwd();
+  if (cwd) {
+    await loadWorkspaceDotEnvFileAsync(path.join(cwd, ".env"), { env: opts.env, quiet });
+  }
+  await loadGlobalRuntimeDotEnvFilesAsync({ env: opts.env, quiet });
 }
 
 export { loadGlobalRuntimeDotEnvFiles };
 
-export function loadDotEnv(opts?: { quiet?: boolean }) {
+export function loadDotEnv(opts?: { quiet?: boolean; env?: NodeJS.ProcessEnv }) {
   const quiet = opts?.quiet ?? true;
+  const env = opts?.env ?? process.env;
   const cwd = tryProcessCwd();
   if (cwd) {
-    loadWorkspaceDotEnvFile(path.join(cwd, ".env"), { quiet });
+    loadWorkspaceDotEnvFile(path.join(cwd, ".env"), { quiet, env });
   }
 
   // Then load global fallback: ~/.openclaw/.env (or OPENCLAW_STATE_DIR/.env),
   // without overriding any env vars already present.
-  loadGlobalRuntimeDotEnvFiles({ quiet });
+  loadGlobalRuntimeDotEnvFiles({ quiet, env });
 }

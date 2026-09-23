@@ -38,7 +38,7 @@ telephony, meetings, browser realtime, and native push-to-talk clients.
   </Card>
   <Card title="Text-to-speech" href="/tools/tts" icon="microphone">
     Convert outbound replies to spoken audio via the `tts` tool plus
-    `messages.tts` config. Synchronous.
+    `tts` config. Synchronous.
   </Card>
   <Card title="Media understanding" href="/nodes/media-understanding" icon="eye">
     Summarize inbound images, audio, and video using vision-capable model
@@ -48,7 +48,24 @@ telephony, meetings, browser realtime, and native push-to-talk clients.
     Transcribe inbound voice messages through batch STT or Voice Call
     streaming STT providers.
   </Card>
+  <Card title="Media playback" href="/nodes/media-playback" icon="play">
+    Play assistant audio and video inline across the Control UI and native
+    apps, with managed access and portable playback renditions.
+  </Card>
 </CardGroup>
+
+## Local media files
+
+`view_image`, `pdf`, and reference inputs for `image_generate`, `music_generate`,
+and `video_generate` use the task's working directory for relative paths. A task
+running in a Git worktree can read media from that worktree even when the agent's
+default workspace is elsewhere.
+
+Workspace-only access follows the session's approved filesystem root, which can
+include parent directories of the current working directory. Paths and symlinks
+that escape that root are rejected. Sandboxed tools read through the sandbox
+filesystem; selecting a host worktree does not grant access outside the sandbox.
+OpenClaw-managed inbound attachments retain their existing access rules.
 
 ## Provider capability matrix
 
@@ -171,6 +188,7 @@ catalogs returned by the Gateway.
 - [Video generation](/tools/video-generation)
 - [Music generation](/tools/music-generation)
 - [Text-to-speech](/tools/tts)
+- [Media playback](/nodes/media-playback)
 - [Media understanding](/nodes/media-understanding)
 - [Audio nodes](/nodes/audio)
 - [Talk mode](/nodes/talk)

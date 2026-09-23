@@ -1,7 +1,11 @@
 // Tests library entrypoint exports and package boundary behavior.
-import { readFileSync } from "node:fs";
-import { expectDefined } from "@openclaw/normalization-core";
+import fs, { readFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
+import { collectModuleReferencesFromSource } from "../scripts/lib/guard-inventory-utils.mjs";
+import { loadSessionStore, saveSessionStore } from "./library.js";
 
 const libraryPath = new URL("./library.ts", import.meta.url);
 const lazyRuntimeSpecifiers = [
@@ -12,23 +16,38 @@ const lazyRuntimeSpecifiers = [
   "./plugins/runtime/runtime-web-channel-plugin.js",
 ] as const;
 
-function readLibraryModuleImports() {
-  const sourceText = readFileSync(libraryPath, "utf8");
+function readLibraryModuleImports(sourceText = readFileSync(libraryPath, "utf8")) {
+  const { outputText } = ts.transpileModule(sourceText, {
+    compilerOptions: { module: ts.ModuleKind.ESNext, verbatimModuleSyntax: true },
+  });
   const staticImports = new Set<string>();
   const dynamicImports = new Set<string>();
-  const staticImportPattern = /(?:^|\n)\s*import\s+(?!type\b)[\s\S]*?\s+from\s+["']([^"']+)["']/g;
-  const dynamicImportPattern = /\bimport\s*\(\s*["']([^"']+)["']\s*\)/g;
-
-  for (const match of sourceText.matchAll(staticImportPattern)) {
-    staticImports.add(expectDefined(match[1], "match[1] test invariant"));
-  }
-  for (const match of sourceText.matchAll(dynamicImportPattern)) {
-    dynamicImports.add(expectDefined(match[1], "match[1] test invariant"));
+  for (const { kind, specifier } of collectModuleReferencesFromSource(outputText, { ts })) {
+    if (kind === "import" || kind === "export") {
+      staticImports.add(specifier);
+    } else if (kind === "dynamic-import") {
+      dynamicImports.add(specifier);
+    }
   }
   return { dynamicImports, staticImports };
 }
 
 describe("library module imports", () => {
+  it("distinguishes runtime module edges from erased types", () => {
+    const { dynamicImports, staticImports } = readLibraryModuleImports(`
+      import "./side-effect.js";
+      import type { TypeOnly } from "./type-only.js";
+      import { value } from "./value.js";
+      export { reexported } from "./reexported.js";
+      export type { ExportType } from "./export-type.js";
+      type Query = import("./type-query.js").Query;
+      const lazy = () => import("./dynamic.js");
+    `);
+
+    expect([...staticImports]).toEqual(["./side-effect.js", "./value.js", "./reexported.js"]);
+    expect([...dynamicImports]).toEqual(["./dynamic.js"]);
+  });
+
   it("keeps lazy runtime boundaries on dynamic imports", () => {
     const { dynamicImports, staticImports } = readLibraryModuleImports();
 
@@ -37,6 +56,29 @@ describe("library module imports", () => {
       expect(dynamicImports.has(specifier), `${specifier} should remain dynamically imported`).toBe(
         true,
       );
+    }
+  });
+
+  it("keeps the deprecated root session-store wrappers uncached", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-library-session-store-"));
+    const storePath = path.join(dir, "sessions.json");
+    try {
+      await saveSessionStore(
+        storePath,
+        {
+          "agent:main:main": { sessionId: "first", updatedAt: Date.now() },
+        },
+        { skipMaintenance: true },
+      );
+      expect(loadSessionStore(storePath)["agent:main:main"]?.sessionId).toBe("first");
+
+      fs.writeFileSync(
+        storePath,
+        JSON.stringify({ "agent:main:main": { sessionId: "second", updatedAt: 2 } }),
+      );
+      expect(loadSessionStore(storePath)["agent:main:main"]?.sessionId).toBe("second");
+    } finally {
+      fs.rmSync(dir, { force: true, recursive: true });
     }
   });
 });

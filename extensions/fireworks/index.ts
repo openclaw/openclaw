@@ -1,16 +1,13 @@
-// Fireworks plugin entrypoint registers its OpenClaw integration.
 import type { ProviderResolveDynamicModelContext } from "openclaw/plugin-sdk/plugin-entry";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import {
   buildProviderReplayFamilyHooks,
-  cloneFirstTemplateModel,
-  DEFAULT_CONTEXT_TOKENS,
-  normalizeModelCompat,
+  resolveFamilyForwardCompatModel,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { isFireworksKimiModelId } from "./model-id.js";
-import { applyFireworksConfig, FIREWORKS_DEFAULT_MODEL_REF } from "./onboard.js";
+import { applyFireworksConfig } from "./onboard.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 import {
-  buildFireworksProvider,
   FIREWORKS_BASE_URL,
   FIREWORKS_DEFAULT_CONTEXT_WINDOW,
   FIREWORKS_DEFAULT_MAX_TOKENS,
@@ -45,57 +42,44 @@ function resolveFireworksDynamicModel(ctx: ProviderResolveDynamicModelContext) {
   const isKimiModel = isFireworksKimiModelId(modelId);
   const input = resolveFireworksDynamicInput(modelId);
 
-  return (
-    cloneFirstTemplateModel({
-      providerId: PROVIDER_ID,
-      modelId,
-      templateIds: [FIREWORKS_DEFAULT_MODEL_ID],
-      ctx,
-      patch: {
-        provider: PROVIDER_ID,
-        reasoning: !isKimiModel,
-        input,
+  return resolveFamilyForwardCompatModel({
+    providerId: PROVIDER_ID,
+    modelId,
+    ctx,
+    cases: [
+      {
+        match: () => true,
+        templateIds: [FIREWORKS_DEFAULT_MODEL_ID],
+        patch: ({ template }) =>
+          template
+            ? undefined
+            : {
+                api: "openai-completions",
+                baseUrl: FIREWORKS_BASE_URL,
+                contextWindow: FIREWORKS_DEFAULT_CONTEXT_WINDOW,
+                maxTokens: FIREWORKS_DEFAULT_MAX_TOKENS,
+              },
       },
-    }) ??
-    normalizeModelCompat({
-      id: modelId,
-      name: modelId,
-      provider: PROVIDER_ID,
-      api: "openai-completions",
-      baseUrl: FIREWORKS_BASE_URL,
-      reasoning: !isKimiModel,
-      input,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: FIREWORKS_DEFAULT_CONTEXT_WINDOW,
-      maxTokens: FIREWORKS_DEFAULT_MAX_TOKENS || DEFAULT_CONTEXT_TOKENS,
-    })
-  );
+    ],
+    patch: { provider: PROVIDER_ID, reasoning: !isKimiModel, input },
+    synthesize: true,
+  });
 }
 
 export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
   name: "Fireworks Provider",
   description: "Bundled Fireworks AI provider plugin",
+  manifest,
   provider: {
     label: "Fireworks",
     aliases: ["fireworks-ai"],
     docsPath: "/providers/fireworks",
-    auth: [
-      {
-        methodId: "api-key",
-        label: "Fireworks API key",
-        hint: "API key",
-        optionKey: "fireworksApiKey",
-        flagName: "--fireworks-api-key",
-        envVar: "FIREWORKS_API_KEY",
-        promptMessage: "Enter Fireworks API key",
-        defaultModel: FIREWORKS_DEFAULT_MODEL_REF,
-        applyConfig: (cfg) => applyFireworksConfig(cfg),
-      },
-    ],
+    manifestAuth: { applyConfig: applyFireworksConfig },
     catalog: {
-      buildProvider: buildFireworksProvider,
+      discoveryMode: "strict",
       allowExplicitBaseUrl: true,
+      liveModelDiscovery: true,
     },
     ...buildProviderReplayFamilyHooks({ family: "openai-compatible" }),
     wrapStreamFn: wrapFireworksProviderStream,

@@ -3,6 +3,7 @@ import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString, SecretInputSchema } from "./primitives.js";
+import { GatewayEventLoopHealthSchema } from "./runtime-vitals.js";
 
 /**
  * Channel and Talk protocol schemas.
@@ -186,9 +187,15 @@ export const TalkEventSchema = Type.Object(
   },
 );
 
+// Voice ids compose into transcript idempotency keys (`voice:<id>:<entry>`), so the
+// charset excludes the `:` delimiter to keep distinct id pairs collision-free.
+const VoiceIdString = Type.String({ pattern: "^[A-Za-z0-9_-]{1,128}$" });
+
 /** Creates a browser-facing Talk client session. */
 export const TalkClientCreateParamsSchema = closedObject({
-  sessionKey: Type.Optional(Type.String()),
+  sessionKey: Type.Optional(NonEmptyString),
+  voiceSessionId: Type.Optional(VoiceIdString),
+  voiceChangeId: Type.Optional(NonEmptyString),
   provider: Type.Optional(Type.String()),
   model: Type.Optional(Type.String()),
   voice: Type.Optional(Type.String()),
@@ -199,22 +206,56 @@ export const TalkClientCreateParamsSchema = closedObject({
   mode: Type.Optional(TalkModeSchema),
   transport: Type.Optional(TalkTransportSchema),
   brain: Type.Optional(TalkBrainSchema),
-  capabilities: Type.Optional(Type.Array(Type.Literal("camera-frame"), { uniqueItems: true })),
+  capabilities: Type.Optional(
+    Type.Array(
+      Type.Union([
+        Type.Literal("camera-frame"),
+        Type.Literal("voice-transcript"),
+        Type.Literal("gateway-control-v1"),
+        Type.Literal("voice-selection"),
+      ]),
+      { uniqueItems: true },
+    ),
+  ),
 });
 
 /** Tool-call request from a browser/client session back into the agent runtime. */
 export const TalkClientToolCallParamsSchema = closedObject({
   sessionKey: NonEmptyString,
+  voiceSessionId: Type.Optional(VoiceIdString),
   callId: NonEmptyString,
   name: NonEmptyString,
   args: Type.Optional(Type.Unknown()),
   relaySessionId: Type.Optional(NonEmptyString),
 });
 
+/** One finalized transcript item from a client-owned Talk session. */
+export const TalkClientTranscriptParamsSchema = closedObject({
+  sessionKey: NonEmptyString,
+  voiceSessionId: VoiceIdString,
+  entryId: VoiceIdString,
+  role: Type.Union([Type.Literal("user"), Type.Literal("assistant")]),
+  text: NonEmptyString,
+  timestamp: Type.Optional(Type.Number()),
+});
+
+/** Logical close for a client-owned Talk session. */
+export const TalkClientCloseParamsSchema = closedObject({
+  sessionKey: NonEmptyString,
+  voiceSessionId: VoiceIdString,
+});
+
+/** Result for client-owned transcript and close mutations. */
+export const TalkClientMutationResultSchema = closedObject({
+  ok: Type.Literal(true),
+});
+
 /** Agent run identity returned after accepting a Talk client tool call. */
 export const TalkClientToolCallResultSchema = closedObject({
   runId: NonEmptyString,
   idempotencyKey: NonEmptyString,
+  agentId: NonEmptyString,
+  agentSessionKey: NonEmptyString,
 });
 
 /** Text steering request for a Talk session bound to an agent turn. */
@@ -249,15 +290,11 @@ export const TalkAgentControlResultSchema = closedObject({
   deliveredAtMs: Type.Optional(Type.Number()),
 });
 
-/** Joins an existing managed-room Talk session. */
-export const TalkSessionJoinParamsSchema = closedObject({
-  sessionId: NonEmptyString,
-  token: NonEmptyString,
-});
-
 /** Creates a gateway-managed Talk session for realtime, transcription, or relay use. */
 export const TalkSessionCreateParamsSchema = closedObject({
   sessionKey: Type.Optional(Type.String()),
+  voiceChangeId: Type.Optional(NonEmptyString),
+  capabilities: Type.Optional(Type.Array(Type.Literal("voice-selection"), { uniqueItems: true })),
   spawnedBy: Type.Optional(NonEmptyString),
   provider: Type.Optional(Type.String()),
   model: Type.Optional(Type.String()),
@@ -280,24 +317,20 @@ export const TalkSessionAppendAudioParamsSchema = closedObject({
   timestamp: Type.Optional(Type.Number()),
 });
 
-/** Starts or advances a Talk turn within a session. */
-export const TalkSessionTurnParamsSchema = closedObject({
-  sessionId: NonEmptyString,
-  turnId: Type.Optional(Type.String()),
-});
-
-/** Cancels the active or named Talk turn. */
-export const TalkSessionCancelTurnParamsSchema = closedObject({
-  sessionId: NonEmptyString,
-  turnId: Type.Optional(Type.String()),
-  reason: Type.Optional(Type.String()),
-});
-
 /** Cancels currently streaming Talk output without necessarily ending the turn. */
 export const TalkSessionCancelOutputParamsSchema = closedObject({
   sessionId: NonEmptyString,
   turnId: Type.Optional(Type.String()),
   reason: Type.Optional(Type.String()),
+});
+
+/** Reports whether a Talk output cancellation applied to the requested turn. */
+export const TalkSessionCancelOutputResultSchema = closedObject({
+  ok: Type.Literal(true),
+  status: Type.Optional(
+    Type.Union([Type.Literal("applied"), Type.Literal("stale"), Type.Literal("idle")]),
+  ),
+  turnId: Type.Optional(NonEmptyString),
 });
 
 /** Submits a tool result back to a Talk provider session. */
@@ -326,35 +359,11 @@ export const TalkSessionCloseParamsSchema = closedObject({
   sessionId: NonEmptyString,
 });
 
-/** Mutable room state returned when a client joins a managed Talk room. */
-const TalkSessionManagedRoomStateSchema = closedObject({
-  activeClientId: Type.Optional(Type.String()),
-  activeTurnId: Type.Optional(Type.String()),
-  recentTalkEvents: Type.Array(TalkEventSchema),
+/** Reads Talk provider capabilities with optional realtime launch overrides. */
+export const TalkCatalogParamsSchema = closedObject({
+  provider: Type.Optional(NonEmptyString),
+  model: Type.Optional(NonEmptyString),
 });
-
-/** Managed-room session record shared with browser clients. */
-const TalkSessionManagedRoomRecordSchema = closedObject({
-  id: NonEmptyString,
-  roomId: NonEmptyString,
-  roomUrl: NonEmptyString,
-  sessionKey: NonEmptyString,
-  sessionId: Type.Optional(Type.String()),
-  channel: Type.Optional(Type.String()),
-  target: Type.Optional(Type.String()),
-  provider: Type.Optional(Type.String()),
-  model: Type.Optional(Type.String()),
-  voice: Type.Optional(Type.String()),
-  mode: TalkModeSchema,
-  transport: TalkTransportSchema,
-  brain: TalkBrainSchema,
-  createdAt: Type.Number(),
-  expiresAt: Type.Number(),
-  room: TalkSessionManagedRoomStateSchema,
-});
-
-/** Empty request payload for reading configured Talk provider capabilities. */
-export const TalkCatalogParamsSchema = closedObject({});
 
 /** One provider entry in the Talk capability catalog. */
 const TalkCatalogProviderSchema = closedObject({
@@ -364,6 +373,9 @@ const TalkCatalogProviderSchema = closedObject({
   aliases: Type.Optional(Type.Array(NonEmptyString)),
   models: Type.Optional(Type.Array(Type.String())),
   voices: Type.Optional(Type.Array(Type.String())),
+  activeVoices: Type.Optional(Type.Array(Type.String())),
+  activeVoiceSelectionPolicy: Type.Optional(Type.Literal("allowlist-default")),
+  voicesByModel: Type.Optional(Type.Record(Type.String(), Type.Array(Type.String()))),
   defaultModel: Type.Optional(Type.String()),
   modes: Type.Optional(Type.Array(TalkModeSchema)),
   transports: Type.Optional(Type.Array(TalkTransportSchema)),
@@ -437,16 +449,6 @@ export const TalkSessionCreateResultSchema = closedObject({
   expiresAt: Type.Optional(Type.Number()),
 });
 
-/** Result for a Talk turn request, optionally including emitted events. */
-export const TalkSessionTurnResultSchema = closedObject({
-  ok: Type.Boolean(),
-  turnId: Type.Optional(Type.String()),
-  events: Type.Optional(Type.Array(TalkEventSchema)),
-});
-
-/** Managed-room record returned to clients after joining an existing Talk session. */
-export const TalkSessionJoinResultSchema = TalkSessionManagedRoomRecordSchema;
-
 /** Generic success result for Talk session lifecycle calls. */
 export const TalkSessionOkResultSchema = closedObject({
   ok: Type.Boolean(),
@@ -456,18 +458,21 @@ export const TalkSessionOkResultSchema = closedObject({
 const BrowserRealtimeWebRtcSdpSessionSchema = closedObject({
   provider: NonEmptyString,
   transport: Type.Literal("webrtc"),
+  voiceSessionId: NonEmptyString,
   clientSecret: NonEmptyString,
   offerUrl: Type.Optional(Type.String()),
   offerHeaders: Type.Optional(Type.Record(Type.String(), Type.String())),
   model: Type.Optional(Type.String()),
   voice: Type.Optional(Type.String()),
   expiresAt: Type.Optional(Type.Number()),
+  clientControl: Type.Optional(closedObject({ owner: Type.Literal("gateway") })),
 });
 
 /** Browser websocket setup payload with JSON/PCM audio contract. */
 const BrowserRealtimeJsonPcmWebSocketSessionSchema = closedObject({
   provider: NonEmptyString,
   transport: Type.Literal("provider-websocket"),
+  voiceSessionId: NonEmptyString,
   protocol: NonEmptyString,
   clientSecret: NonEmptyString,
   websocketUrl: NonEmptyString,
@@ -482,6 +487,8 @@ const BrowserRealtimeJsonPcmWebSocketSessionSchema = closedObject({
 const BrowserRealtimeGatewayRelaySessionSchema = closedObject({
   provider: NonEmptyString,
   transport: Type.Literal("gateway-relay"),
+  // Server-owned: older gateways omit it and clients derive it from relaySessionId.
+  voiceSessionId: Type.Optional(NonEmptyString),
   relaySessionId: NonEmptyString,
   audio: BrowserRealtimeAudioContractSchema,
   model: Type.Optional(Type.String()),
@@ -493,6 +500,8 @@ const BrowserRealtimeGatewayRelaySessionSchema = closedObject({
 const BrowserRealtimeManagedRoomSessionSchema = closedObject({
   provider: NonEmptyString,
   transport: Type.Literal("managed-room"),
+  // Server-owned rooms carry no client voice bookkeeping yet.
+  voiceSessionId: Type.Optional(NonEmptyString),
   roomUrl: NonEmptyString,
   token: Type.Optional(Type.String()),
   model: Type.Optional(Type.String()),
@@ -572,6 +581,16 @@ export const TalkConfigResultSchema = closedObject({
         seamColor: Type.Optional(Type.String()),
       }),
     ),
+    clientHints: Type.Optional(
+      closedObject({
+        realtime: Type.Optional(
+          closedObject({
+            modelSource: Type.Optional(Type.Literal("gateway")),
+            gatewayRelaySupported: Type.Optional(Type.Boolean()),
+          }),
+        ),
+      }),
+    ),
   }),
 });
 
@@ -602,12 +621,12 @@ export const ChannelsStatusParamsSchema = closedObject({
 });
 
 /**
- * Per-account status snapshot for channel docking.
+ * Per-account channel status snapshot.
  *
  * This is intentionally schema-light so new channel-specific metadata can ship
  * without a gateway protocol update; known fields stay documented for UI use.
  */
-export const ChannelAccountSnapshotSchema = Type.Object(
+const ChannelAccountSnapshotSchema = Type.Object(
   {
     accountId: NonEmptyString,
     name: Type.Optional(Type.String()),
@@ -617,24 +636,30 @@ export const ChannelAccountSnapshotSchema = Type.Object(
     running: Type.Optional(Type.Boolean()),
     connected: Type.Optional(Type.Boolean()),
     reconnectAttempts: Type.Optional(Type.Integer({ minimum: 0 })),
-    lastConnectedAt: Type.Optional(Type.Integer({ minimum: 0 })),
-    lastError: Type.Optional(Type.String()),
+    lastConnectedAt: Type.Optional(Type.Union([Type.Integer({ minimum: 0 }), Type.Null()])),
+    lastError: Type.Optional(Type.Union([Type.String(), Type.Null()])),
     healthState: Type.Optional(Type.String()),
-    lastStartAt: Type.Optional(Type.Integer({ minimum: 0 })),
-    lastStopAt: Type.Optional(Type.Integer({ minimum: 0 })),
-    lastInboundAt: Type.Optional(Type.Integer({ minimum: 0 })),
-    lastOutboundAt: Type.Optional(Type.Integer({ minimum: 0 })),
-    lastTransportActivityAt: Type.Optional(Type.Integer({ minimum: 0 })),
+    lastStartAt: Type.Optional(Type.Union([Type.Integer({ minimum: 0 }), Type.Null()])),
+    lastStopAt: Type.Optional(Type.Union([Type.Integer({ minimum: 0 }), Type.Null()])),
+    lastInboundAt: Type.Optional(Type.Union([Type.Integer({ minimum: 0 }), Type.Null()])),
+    lastOutboundAt: Type.Optional(Type.Union([Type.Integer({ minimum: 0 }), Type.Null()])),
+    lastTransportActivityAt: Type.Optional(Type.Union([Type.Integer({ minimum: 0 }), Type.Null()])),
     busy: Type.Optional(Type.Boolean()),
     activeRuns: Type.Optional(Type.Integer({ minimum: 0 })),
-    lastRunActivityAt: Type.Optional(Type.Integer({ minimum: 0 })),
-    lastProbeAt: Type.Optional(Type.Integer({ minimum: 0 })),
+    lastRunActivityAt: Type.Optional(Type.Union([Type.Integer({ minimum: 0 }), Type.Null()])),
+    activeRunStartedAt: Type.Optional(Type.Union([Type.Integer({ minimum: 0 }), Type.Null()])),
+    lastProbeAt: Type.Optional(Type.Union([Type.Integer({ minimum: 0 }), Type.Null()])),
     mode: Type.Optional(Type.String()),
     dmPolicy: Type.Optional(Type.String()),
     allowFrom: Type.Optional(Type.Array(Type.String())),
     tokenSource: Type.Optional(Type.String()),
     botTokenSource: Type.Optional(Type.String()),
     appTokenSource: Type.Optional(Type.String()),
+    credentialSource: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+    audienceType: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+    audience: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+    webhookPath: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+    webhookUrl: Type.Optional(Type.Union([Type.String(), Type.Null()])),
     baseUrl: Type.Optional(Type.String()),
     allowUnmentionedGroups: Type.Optional(Type.Boolean()),
     cliPath: Type.Optional(Type.Union([Type.String(), Type.Null()])),
@@ -648,7 +673,7 @@ export const ChannelAccountSnapshotSchema = Type.Object(
 );
 
 /** UI label and icon metadata for one channel. */
-export const ChannelUiMetaSchema = closedObject({
+const ChannelUiMetaSchema = closedObject({
   id: NonEmptyString,
   label: NonEmptyString,
   detailLabel: NonEmptyString,
@@ -656,20 +681,9 @@ export const ChannelUiMetaSchema = closedObject({
 });
 
 /** Event-loop health snapshot included with channel status responses. */
-export const ChannelEventLoopHealthSchema = closedObject({
-  degraded: Type.Boolean(),
-  reasons: Type.Array(
-    Type.Union([
-      Type.Literal("event_loop_delay"),
-      Type.Literal("event_loop_utilization"),
-      Type.Literal("cpu"),
-    ]),
-  ),
+const ChannelEventLoopHealthSchema = closedObject({
+  ...GatewayEventLoopHealthSchema.properties,
   intervalMs: Type.Integer({ minimum: 0 }),
-  delayP99Ms: Type.Number({ minimum: 0 }),
-  delayMaxMs: Type.Number({ minimum: 0 }),
-  utilization: Type.Number({ minimum: 0 }),
-  cpuCoreRatio: Type.Number({ minimum: 0 }),
 });
 
 /** Full channel status result for dashboard and operator diagnostics. */
@@ -686,6 +700,24 @@ export const ChannelsStatusResultSchema = closedObject({
   eventLoop: Type.Optional(ChannelEventLoopHealthSchema),
   partial: Type.Optional(Type.Boolean()),
   warnings: Type.Optional(Type.Array(Type.String())),
+  statusIssues: Type.Optional(
+    Type.Array(
+      closedObject({
+        channel: NonEmptyString,
+        accountId: NonEmptyString,
+        kind: Type.Union([
+          Type.Literal("intent"),
+          Type.Literal("permissions"),
+          Type.Literal("config"),
+          Type.Literal("auth"),
+          Type.Literal("runtime"),
+        ]),
+        message: Type.String(),
+        fix: Type.Optional(Type.String()),
+      }),
+      { maxItems: 50 },
+    ),
+  ),
 });
 
 /** Logs out one channel account. */
@@ -708,6 +740,7 @@ export const ChannelsStartParamsSchema = closedObject({
 
 /** Starts browser/web login for a channel account. */
 export const WebLoginStartParamsSchema = closedObject({
+  channel: Type.Optional(NonEmptyString),
   force: Type.Optional(Type.Boolean()),
   timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
   verbose: Type.Optional(Type.Boolean()),
@@ -721,6 +754,8 @@ const QrDataUrlSchema = Type.String({
 
 /** Waits for web login completion or the next QR code. */
 export const WebLoginWaitParamsSchema = closedObject({
+  channel: Type.Optional(NonEmptyString),
+  sessionKey: Type.Optional(NonEmptyString),
   timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
   accountId: Type.Optional(Type.String()),
   currentQrDataUrl: Type.Optional(QrDataUrlSchema),
@@ -740,15 +775,14 @@ export type TalkClientSteerParams = Static<typeof TalkClientSteerParamsSchema>;
 export type TalkAgentControlResult = Static<typeof TalkAgentControlResultSchema>;
 export type TalkClientToolCallParams = Static<typeof TalkClientToolCallParamsSchema>;
 export type TalkClientToolCallResult = Static<typeof TalkClientToolCallResultSchema>;
+export type TalkClientTranscriptParams = Static<typeof TalkClientTranscriptParamsSchema>;
+export type TalkClientCloseParams = Static<typeof TalkClientCloseParamsSchema>;
+export type TalkClientMutationResult = Static<typeof TalkClientMutationResultSchema>;
 export type TalkSessionCreateParams = Static<typeof TalkSessionCreateParamsSchema>;
 export type TalkSessionCreateResult = Static<typeof TalkSessionCreateResultSchema>;
-export type TalkSessionJoinParams = Static<typeof TalkSessionJoinParamsSchema>;
-export type TalkSessionJoinResult = Static<typeof TalkSessionJoinResultSchema>;
 export type TalkSessionAppendAudioParams = Static<typeof TalkSessionAppendAudioParamsSchema>;
-export type TalkSessionTurnParams = Static<typeof TalkSessionTurnParamsSchema>;
-export type TalkSessionCancelTurnParams = Static<typeof TalkSessionCancelTurnParamsSchema>;
 export type TalkSessionCancelOutputParams = Static<typeof TalkSessionCancelOutputParamsSchema>;
-export type TalkSessionTurnResult = Static<typeof TalkSessionTurnResultSchema>;
+export type TalkSessionCancelOutputResult = Static<typeof TalkSessionCancelOutputResultSchema>;
 export type TalkSessionSteerParams = Static<typeof TalkSessionSteerParamsSchema>;
 export type TalkSessionSubmitToolResultParams = Static<
   typeof TalkSessionSubmitToolResultParamsSchema

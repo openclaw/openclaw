@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements qa credentials admin behavior.
 import { randomUUID } from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
@@ -133,7 +132,7 @@ function parsePositiveIntegerEnv(env: NodeJS.ProcessEnv, key: string, fallback: 
     env,
     key,
     fallback,
-    toError: (message) =>
+    createError: (message) =>
       new QaCredentialAdminError({
         code: "INVALID_ENV",
         message,
@@ -145,7 +144,7 @@ function normalizeConvexSiteUrl(raw: string, env: NodeJS.ProcessEnv): string {
   return normalizeQaCredentialConvexSiteUrl({
     raw,
     env,
-    toError: (message) =>
+    createError: (message) =>
       new QaCredentialAdminError({
         code: "INVALID_SITE_URL",
         message,
@@ -160,7 +159,7 @@ function normalizeEndpointPrefix(value: string | undefined): string {
     invalidAbsoluteMessage:
       '--endpoint-prefix must be an absolute path like "/qa-credentials/v1" (not //host).',
     invalidSegmentsMessage: '--endpoint-prefix must not contain backslashes or ".." path segments.',
-    toError: (message) =>
+    createError: (message) =>
       new QaCredentialAdminError({
         code: "INVALID_ARGUMENT",
         message,

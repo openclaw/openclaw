@@ -1,4 +1,3 @@
-// Slack plugin module implements scopes behavior.
 import type { WebClient } from "@slack/web-api";
 import {
   isRecord,
@@ -6,7 +5,7 @@ import {
   normalizeOptionalString,
   sortUniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { createSlackWebClient } from "./client.js";
+import { createSlackReadClient } from "./client.js";
 import { formatSlackError } from "./errors.js";
 
 export type SlackScopesResult = {
@@ -96,7 +95,7 @@ export async function fetchSlackScopes(
   token: string,
   timeoutMs: number,
 ): Promise<SlackScopesResult> {
-  const client = createSlackWebClient(token, { timeout: timeoutMs });
+  const client = createSlackReadClient(token, { timeout: timeoutMs });
   const attempts: SlackScopesMethod[] = ["auth.test", "auth.scopes", "apps.permissions.info"];
   const errors: string[] = [];
 

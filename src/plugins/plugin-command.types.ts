@@ -9,6 +9,13 @@ import type {
 
 type ChannelId = import("../channels/plugins/types.core.js").ChannelId;
 
+type PluginCommandSessionTarget = {
+  agentId: string;
+  sessionId: string;
+  sessionKey: string;
+  storePath: string;
+};
+
 // =============================================================================
 // Plugin Commands
 // =============================================================================
@@ -18,6 +25,8 @@ export type PluginCommandDiagnosticsSession = {
   sessionKey?: string;
   /** Ephemeral OpenClaw session id when available. */
   sessionId?: string;
+  /** Canonical SQLite identity for active transcript access. */
+  sessionTarget?: PluginCommandSessionTarget;
   /**
    * Deprecated transcript locator for this OpenClaw session when available.
    *
@@ -56,6 +65,8 @@ export type PluginCommandContext = {
   isAuthorizedSender: boolean;
   /** Whether the sender is an owner for owner-only command surfaces. */
   senderIsOwner?: boolean;
+  /** Revalidate admitted owner authority before privileged effects, after awaited preparation. */
+  assertOwnerCurrent?: () => void;
   /** Gateway client scopes for internal control-plane callers */
   gatewayClientScopes?: string[];
   /** Host-resolved agent that owns the active session. */
@@ -64,6 +75,8 @@ export type PluginCommandContext = {
   sessionKey?: string;
   /** Ephemeral host session id for the active conversation when available. */
   sessionId?: string;
+  /** Canonical SQLite identity for active transcript access. */
+  sessionTarget?: PluginCommandSessionTarget;
   /**
    * Deprecated transcript locator for the active OpenClaw session when available.
    *
@@ -95,6 +108,12 @@ export type PluginCommandContext = {
   /** Host-bound runtime capabilities scoped to this command invocation. */
   runtimeContext?: {
     llm?: Pick<import("./runtime/types-core.js").PluginRuntimeCore["llm"], "complete">;
+    compactCurrent?: () => Promise<{
+      compacted: boolean;
+      reason?: string;
+      tokensBefore?: number;
+      tokensAfter?: number;
+    }>;
   };
   /** Internal diagnostics-only marker that exec approval already authorized upload. */
   diagnosticsUploadApproved?: boolean;
@@ -178,6 +197,12 @@ export type OpenClawPluginCommandDefinition = {
   agentPromptGuidance?: readonly AgentPromptGuidance[];
   /** Whether this command accepts arguments */
   acceptsArgs?: boolean;
+  /** Optional bounded presentation for clients that explicitly support it. */
+  clientPresentation?: {
+    /** Parsed invocation shape eligible for client handling. */
+    when: "no-arguments";
+    action: { kind: "device-pairing" };
+  };
   /** Whether only authorized senders can use this command (default: true) */
   requireAuth?: boolean;
   /** Operator scopes required by gateway clients; command owners may satisfy this on chat surfaces. */

@@ -3,18 +3,22 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
-import { pathToFileURL } from "node:url";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../infra/runtime-worker-url.js";
+import { sessionNativeProcessEntrypoints } from "./native-process-runtime.test-support.js";
 import {
   appendTranscriptMessage,
   loadSessionEntry,
   loadTranscriptEvents,
   updateSessionEntry,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
   withTranscriptWriteLock,
 } from "./session-accessor.js";
-import { replaceSqliteTranscriptEvents } from "./session-accessor.sqlite.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
 
 vi.mock("../config.js", async () => ({
   ...(await vi.importActual<typeof import("../config.js")>("../config.js")),
@@ -79,14 +83,13 @@ type ConcurrencyWorkerMessage =
   | { phase: "ready"; requestId: number; value: unknown }
   | { phase: "result"; requestId: number; value: unknown };
 
-// Cold tsx/module loading competes with other CI shards. Pay that cost once
-// with a process-start budget, while keeping each concurrency handshake tight.
+// Module compilation belongs to invocation preparation; retain native startup and handshake guards.
 const WORKER_BOOT_TIMEOUT_MS = 30_000;
 const SCENARIO_TIMEOUT_MS = 10_000;
 const SESSION_KEY = "agent:main:main";
 const AGENT_ID = "main";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-// Preserve the OS-process boundary while paying tsx/module startup once per file.
+// Preserve one OS-process boundary per file.
 // Every request still uses an isolated store path.
 let concurrencyWorker: ReturnType<typeof spawn> | undefined;
 let nextRequestId = 0;
@@ -115,6 +118,7 @@ function waitForProceed(requestId) {
 
 async function runReplyInit(request) {
   const snapshot = loadReplySessionInitializationSnapshot({
+    agentId: AGENT_ID,
     sessionKey: SESSION_KEY,
     storePath: request.storePath,
   });
@@ -305,17 +309,14 @@ async function getConcurrencyWorker(): Promise<ReturnType<typeof spawn>> {
   if (concurrencyWorker) {
     return concurrencyWorker;
   }
-  const sessionAccessorUrl = pathToFileURL(
-    path.resolve("src/config/sessions/session-accessor.ts"),
-  ).href;
+  const sessionAccessorUrl = resolveRuntimeWorkerUrl(sessionNativeProcessEntrypoints.accessor);
   const child = spawn(
     process.execPath,
     [
-      "--import",
-      "tsx",
+      ...resolveRuntimeWorkerArgv(sessionAccessorUrl).slice(0, -1),
       "--input-type=module",
       "--eval",
-      createConcurrencyWorkerScript(sessionAccessorUrl),
+      createConcurrencyWorkerScript(sessionAccessorUrl.href),
     ],
     { stdio: ["ignore", "pipe", "pipe", "ipc"] },
   );
@@ -461,7 +462,7 @@ describe("session accessor cross-process concurrency", () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-reply-init-"));
     const storePath = path.join(tempDir, "sessions.json");
     try {
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { sessionKey: SESSION_KEY, storePath },
         {
           sessionId: "existing-session",
@@ -523,11 +524,11 @@ describe("session accessor cross-process concurrency", () => {
       storePath,
     };
     try {
-      await upsertSessionEntry(scope, {
+      await upsertSessionEntryCore(scope, {
         sessionId,
         updatedAt: Date.now(),
       });
-      await replaceSqliteTranscriptEvents(scope, [
+      await replaceTranscriptEvents(scope, [
         { type: "session", version: 3, id: sessionId },
         {
           type: "message",
@@ -603,7 +604,7 @@ describe("session accessor cross-process concurrency", () => {
     ];
 
     try {
-      await upsertSessionEntry(scope, { sessionId, updatedAt: Date.now() });
+      await upsertSessionEntryCore(scope, { sessionId, updatedAt: Date.now() });
       await withTranscriptWriteLock(scope, async (transcript) => {
         await transcript.replaceEvents(replacement);
       });
@@ -634,7 +635,7 @@ describe("session accessor cross-process concurrency", () => {
       },
     ];
     try {
-      await upsertSessionEntry(scope, { sessionId, updatedAt: Date.now() });
+      await upsertSessionEntryCore(scope, { sessionId, updatedAt: Date.now() });
       const result = await runConcurrencyScenario(
         {
           kind: "transcript-rewrite",
@@ -686,8 +687,8 @@ describe("session accessor cross-process concurrency", () => {
     };
 
     try {
-      await upsertSessionEntry(scope, { sessionId, updatedAt: Date.now() });
-      await replaceSqliteTranscriptEvents(scope, [
+      await upsertSessionEntryCore(scope, { sessionId, updatedAt: Date.now() });
+      await replaceTranscriptEvents(scope, [
         { type: "session", version: 3, id: sessionId },
         {
           type: "message",

@@ -18,6 +18,9 @@ export type EffectiveToolInventoryEntry = {
   source: EffectiveToolSource;
   pluginId?: string;
   channelId?: string;
+  mcpServer?: string;
+  mcpToolName?: string;
+  deniedBySession?: true;
   risk?: "low" | "medium" | "high";
   tags?: string[];
 };
@@ -35,6 +38,7 @@ export type EffectiveToolInventoryNotice = {
   id: string;
   severity: "info" | "warning";
   message: string;
+  servers?: string[];
 };
 
 /** Effective tool inventory result for one agent/profile. */
@@ -50,6 +54,7 @@ export type ResolveEffectiveToolInventoryParams = {
   cfg: OpenClawConfig;
   agentId?: string;
   sessionKey?: string;
+  sessionId?: string;
   workspaceDir?: string;
   agentDir?: string;
   messageProvider?: string;

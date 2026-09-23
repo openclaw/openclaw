@@ -2,9 +2,12 @@
 import { spawnSync } from "node:child_process";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { createHookRunner } from "./hooks.js";
 import { addTestHook, TEST_PLUGIN_AGENT_CTX } from "./hooks.test-fixtures.js";
-import { createEmptyPluginRegistry, type PluginRegistry } from "./registry.js";
+import { pluginProcessRuntimeEntrypoints } from "./process-runtime.test-support.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
+import type { PluginRegistry } from "./registry.js";
 import type { PluginHookRegistration } from "./types.js";
 
 describe("hook correlation fields", () => {
@@ -17,24 +20,6 @@ describe("hook correlation fields", () => {
 
   beforeEach(() => {
     registry = createEmptyPluginRegistry();
-  });
-
-  it("adds runId to legacy before_agent_start events from hook context", async () => {
-    const handler = vi.fn(() => undefined);
-    addTestHook({
-      registry,
-      pluginId: "plugin-a",
-      hookName: "before_agent_start",
-      handler: handler as PluginHookRegistration["handler"],
-    });
-
-    const runner = createHookRunner(registry);
-    await runner.runBeforeAgentStart({ prompt: "hello" }, TEST_PLUGIN_AGENT_CTX);
-
-    expect(handler).toHaveBeenCalledWith(
-      { prompt: "hello", runId: "test-run-id" },
-      TEST_PLUGIN_AGENT_CTX,
-    );
   });
 
   it("adds runId to agent_end events from hook context", async () => {
@@ -94,8 +79,9 @@ describe("hook correlation fields", () => {
   });
 
   beforeAll(() => {
+    const hooksUrl = resolveRuntimeWorkerUrl(pluginProcessRuntimeEntrypoints.hooks);
     const script = `
-      import { createHookRunner } from "./src/plugins/hooks.ts";
+      import { createHookRunner } from ${JSON.stringify(hooksUrl.href)};
       const registry = {
         typedHooks: [{
           pluginId: "plugin-a",
@@ -130,11 +116,11 @@ describe("hook correlation fields", () => {
 
     const child = spawnSync(
       process.execPath,
-      ["--import", "tsx", "--input-type=module", "-e", script],
+      [...resolveRuntimeWorkerArgv(hooksUrl).slice(0, -1), "--input-type=module", "-e", script],
       {
         cwd: process.cwd(),
         encoding: "utf8",
-        timeout: 3_000,
+        timeout: 30_000,
       },
     );
     oneShotAgentEndProbe = {

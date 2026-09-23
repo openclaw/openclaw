@@ -1,3 +1,30 @@
+import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
+
+const commandCleanupUncertain = Symbol.for("openclaw.command-cleanup-uncertain");
+
+/** An admitted command may still write; callers must retain its artifacts for recovery. */
+export class CommandProcessCleanupError extends Error {
+  readonly code = "ERR_COMMAND_PROCESS_CLEANUP_UNCERTAIN";
+  readonly cleanup = "uncertain";
+
+  constructor(options?: ErrorOptions) {
+    super("Command cleanup could not confirm that owned work stopped", options);
+    this.name = "CommandProcessCleanupError";
+    Object.defineProperty(this, commandCleanupUncertain, { value: true });
+  }
+}
+
+/** Preserve canonical cleanup classification across cause chains and module copies. */
+export function hasCommandProcessCleanupError(error: unknown): boolean {
+  return collectNestedErrorCandidates(error).some((candidate) => {
+    try {
+      return Object.getOwnPropertyDescriptor(candidate, commandCleanupUncertain)?.value === true;
+    } catch {
+      return false;
+    }
+  });
+}
+
 export type SpawnResult = {
   pid?: number;
   stdout: string;
@@ -9,6 +36,10 @@ export type SpawnResult = {
   code: number | null;
   signal: NodeJS.Signals | null;
   killed: boolean;
+  /** The runner accepted cancellation and requested termination, independent of the OS signal. */
+  killIssuedByAbort?: boolean;
+  /** Completion of this invocation's cleanup; never an escaped-descendant inventory. */
+  cleanup?: "normal" | "cooperative" | "forced" | "uncertain";
   termination: "exit" | "timeout" | "no-output-timeout" | "signal";
   noOutputTimedOut?: boolean;
   outputLimitExceeded?: boolean;

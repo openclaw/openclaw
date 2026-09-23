@@ -5,20 +5,16 @@ import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
-import type { getAgentLocalStatuses as getAgentLocalStatusesFn } from "./status.agent-local.js";
+import type { MemoryPluginStatus } from "../status/memory-plugin.js";
+import type { AgentLocalStatusesResult } from "./status.agent-local.js";
 import {
   resolveSharedMemoryStatusSnapshot,
-  type MemoryPluginStatus,
   type MemoryStatusSnapshot,
 } from "./status.scan.shared.js";
 
 const statusScanDepsRuntimeModuleLoader = createLazyImportLoader(
   () => import("./status.scan.deps.runtime.js"),
 );
-
-function loadStatusScanDepsRuntimeModule() {
-  return statusScanDepsRuntimeModuleLoader.load();
-}
 
 /** Returns the owning agent database path for built-in memory. */
 export function resolveDefaultMemoryDatabasePath(agentId: string): string {
@@ -28,11 +24,11 @@ export function resolveDefaultMemoryDatabasePath(agentId: string): string {
 /** Resolves memory index/cache status for the current status scan. */
 export async function resolveStatusMemoryStatusSnapshot(params: {
   cfg: OpenClawConfig;
-  agentStatus: Awaited<ReturnType<typeof getAgentLocalStatusesFn>>;
+  agentStatus: AgentLocalStatusesResult;
   memoryPlugin: MemoryPluginStatus;
   requireDefaultDatabasePath?: (agentId: string) => string;
 }): Promise<MemoryStatusSnapshot | null> {
-  const { getMemorySearchManager } = await loadStatusScanDepsRuntimeModule();
+  const { getMemorySearchManager } = await statusScanDepsRuntimeModuleLoader.load();
   return await resolveSharedMemoryStatusSnapshot({
     cfg: params.cfg,
     agentStatus: params.agentStatus,

@@ -1,4 +1,3 @@
-// ClickClack tests cover post-write connection verification and gateway guidance.
 import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -35,20 +34,17 @@ const configuredAccount = {
   channels: {
     clickclack: {
       baseUrl: "https://clickclack.example",
+      apiBaseUrl: "http://127.0.0.1:8484",
       token: "ccb_test",
       workspace: "default",
     },
   },
 } satisfies CoreConfig;
 
-function createRuntime() {
-  return createNonExitingRuntimeEnv();
-}
-
 async function verify(
   cfg: CoreConfig = configuredAccount,
-  runtime = createRuntime(),
-): Promise<ReturnType<typeof createRuntime>> {
+  runtime = createNonExitingRuntimeEnv(),
+): Promise<ReturnType<typeof createNonExitingRuntimeEnv>> {
   await verifyClickClackAccountAfterSetup({
     cfg,
     accountId: "default",
@@ -73,6 +69,12 @@ describe("ClickClack post-write setup verification", () => {
 
   it("prints the resolved bot and workspace without blocking setup", async () => {
     const runtime = await verify();
+
+    expect(mocks.createClient).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baseUrl: "http://127.0.0.1:8484",
+      }),
+    );
 
     expect(runtime.log).toHaveBeenNthCalledWith(
       1,
@@ -107,7 +109,7 @@ describe("ClickClack post-write setup verification", () => {
     },
   ])("logs a warning for $name and continues", async ({ arrange, expected }) => {
     arrange();
-    const runtime = createRuntime();
+    const runtime = createNonExitingRuntimeEnv();
 
     await expect(verify(configuredAccount, runtime)).resolves.toBe(runtime);
     expect(runtime.log).toHaveBeenNthCalledWith(1, expected);

@@ -5,14 +5,86 @@
 import { describe, expect, it } from "vitest";
 import { resolveToolSearchCodeDisplayTarget } from "./tool-display-common.js";
 import {
+  hasShellCompoundCommand,
   scanTopLevelChars,
   splitTopLevelPipes,
   splitTopLevelStages,
 } from "./tool-display-exec-shell.js";
 import { resolveExecDetail } from "./tool-display-exec.js";
-import { formatToolDetail, formatToolSummary, resolveToolDisplay } from "./tool-display.js";
+import {
+  formatToolDetail,
+  formatToolSummary,
+  isShellToolDisplayName,
+  resolveToolDisplay,
+} from "./tool-display.js";
+
+describe("isShellToolDisplayName", () => {
+  it("matches shell tools whatever case the backend spells them in", () => {
+    // The Claude CLI sends "Bash"; embedded runs send "bash"/"exec".
+    for (const name of ["Bash", "bash", "BASH", "Exec", "exec", "shell"]) {
+      expect(isShellToolDisplayName(name)).toBe(true);
+    }
+    for (const name of ["Read", "web_search", undefined, ""]) {
+      expect(isShellToolDisplayName(name)).toBe(false);
+    }
+  });
+
+  it("keeps the compact summary form for a capitalized shell tool", () => {
+    const display = resolveToolDisplay({ name: "Bash", args: { command: "echo alpha" } });
+    // Compact form is "<emoji> <detail>", not "<emoji> Bash: <detail>".
+    expect(formatToolSummary(display)).toBe(`${display.emoji} ${formatToolDetail(display)}`);
+  });
+});
 
 describe("tool display details", () => {
+  it("preserves the curated presentation for historical image activity", () => {
+    const display = resolveToolDisplay({
+      name: "image",
+      args: { image: "/tmp/screenshot.png", prompt: "Inspect the error" },
+    });
+
+    expect(display).toMatchObject({ emoji: "🖼️", title: "Image" });
+  });
+
+  it("uses the curated view_image presentation", () => {
+    const display = resolveToolDisplay({
+      name: "view_image",
+      args: { path: "/tmp/screenshot.png", prompt: "Inspect the error" },
+    });
+
+    expect(display).toMatchObject({ emoji: "🖼️", title: "View Image" });
+    expect(formatToolDetail(display)).toBe("path /tmp/screenshot.png, prompt Inspect the error");
+  });
+
+  it("keeps sessions_yield private context out of tool status", () => {
+    const display = resolveToolDisplay({
+      name: "sessions_yield",
+      args: {
+        message: "private resume context",
+        acknowledgment: "Public waiting status",
+      },
+    });
+
+    expect(formatToolSummary(display)).toBe("⏸️ Yield");
+    expect(formatToolDetail(display)).toBeUndefined();
+  });
+
+  it("puts the camera PTZ operation before its node and device", () => {
+    const detail = formatToolDetail(
+      resolveToolDisplay({
+        name: "nodes",
+        args: {
+          action: "camera_ptz",
+          ptzOperation: "status",
+          node: "Mac",
+          deviceId: "camera-id",
+        },
+      }),
+    );
+
+    expect(detail).toBe("ptz operation status, node Mac, device id camera-id");
+  });
+
   it("keeps same-line heredoc operators from attaching the body to later stages", () => {
     const command = "cat <<EOF && printf ok\nbody | secret\nEOF\nprintf done";
     const stages = splitTopLevelStages(command);
@@ -71,7 +143,7 @@ describe("tool display details", () => {
       resolveToolDisplay({
         name: "sessions_spawn",
         args: {
-          task: "double-message-bug-gpt",
+          taskName: "double-message-bug-gpt",
           label: 0,
           runTimeoutSeconds: 0,
         },
@@ -224,15 +296,237 @@ describe("tool display details", () => {
     expect(detail).toBe("print lines 1-80 from extensions/discord/src/draft-stream.ts");
   });
 
-  it("moves cd path to context suffix and appends raw command", () => {
+  it("keeps shell compound commands intact instead of inventing command stages", () => {
+    const loop = 'for d in $(find . -type d); do echo "$d"; ls "$d"; done';
+    const conditional = "echo start && if test -f package.json; then pnpm test; fi";
+    const subshell = "(echo one; echo two)";
+    const functionBody = "f() { echo one; echo two; }";
+    const functionKeyword = "function f { echo one; echo two; }";
+    const hyphenatedFunction = "function deploy-prod { echo one; echo two; }";
+    const namespacedFunction = "function log::info { echo one; echo two; }";
+    const selectLoop = 'select d in a b; do echo "$d"; break; done';
+    const doubleBracket = "[[ -f package.json && -f pnpm-lock.yaml ]] && pnpm test";
+    const pipedSelect = "printf x | select d in a b; do break; done";
+    const pipedDoubleBracket = "printf x | [[ -n x ]]";
+    const backgroundSelect = "true & select d in a b; do break; done";
+    const stderrPipedSelect = "printf x |& select d in a b; do break; done";
+    const pipedFunction = "printf x | function deploy-prod { echo one; echo two; }";
+    const conditionalFunction = "function deploy-prod if true; then echo ok; fi";
+    const doubleBracketFunction = "function check [[ -n x ]]";
+    const arithmeticFunction = "function bump (( n++ )) && pnpm test";
+    const subshellFunction = "function sub() (echo one; echo two)";
+    const posixConditionalFunction = "plain() if true; then echo ok; fi";
+    const negatedDoubleBracket = "! [[ -f a && -f b ]] && pnpm test";
+    const timedNegatedDoubleBracket = "time -p ! [[ -n x ]]";
+    const negatedTimedDoubleBracket = "! time [[ -n x ]]";
+    const operatorTimedSubshell = "time(echo one; echo two)";
+    const operatorArithmeticFunction = "function bump(( n++ )) && pnpm test";
+
+    for (const command of [
+      loop,
+      conditional,
+      subshell,
+      functionBody,
+      functionKeyword,
+      hyphenatedFunction,
+      namespacedFunction,
+      "deploy-prod() { echo one; echo two; }",
+      "log::info() { echo one; echo two; }",
+      selectLoop,
+      "coproc worker { echo one; echo two; }",
+      "coproc (echo one; echo two)",
+      doubleBracket,
+      pipedSelect,
+      pipedDoubleBracket,
+      backgroundSelect,
+      stderrPipedSelect,
+      pipedFunction,
+      conditionalFunction,
+      doubleBracketFunction,
+      arithmeticFunction,
+      subshellFunction,
+      "function worker (echo one; echo two)",
+      "function worker(echo one; echo two)",
+      posixConditionalFunction,
+      negatedDoubleBracket,
+      timedNegatedDoubleBracket,
+      negatedTimedDoubleBracket,
+      operatorTimedSubshell,
+      operatorArithmeticFunction,
+      "time -- if true; then echo one; echo two; fi",
+    ]) {
+      expect(splitTopLevelStages(command)).toEqual([command]);
+      expect(
+        formatToolDetail(
+          resolveToolDisplay({ name: "exec", args: { command }, detailMode: "explain" }),
+        ),
+      ).toBe(command);
+    }
+
+    for (const command of [
+      "(( ready && enabled )) && pnpm test",
+      "time (( ready || fallback )) && pnpm test",
+      ["(\\", "( ready && enabled )) && pnpm test"].join("\n"),
+      ["echo $\\", "(( ready && enabled )) && pnpm test"].join("\n"),
+      "time(( n++ )) && pnpm test",
+      "time -p(( n++ )) && pnpm test",
+      "!(( n++ )) && pnpm test",
+      "time -p -- (( n++ )) && pnpm test",
+    ]) {
+      const separatorIndex = command.lastIndexOf(" && ");
+      expect(splitTopLevelStages(command)).toEqual([command.slice(0, separatorIndex), "pnpm test"]);
+    }
+
+    for (const command of [
+      ["true && \\", "if true; then echo ok; fi"].join("\n"),
+      ["printf x | \\", "select d in a b; do break; done"].join("\n"),
+      ["true && \\\\", "if true; then echo ok; fi"].join("\n"),
+    ]) {
+      expect(splitTopLevelStages(command)).toEqual([command]);
+    }
+
+    for (const quoted of [
+      "printf '%s' '; if ' && pnpm test",
+      "printf '%s' 'function f { echo; }' && pnpm test",
+      "printf '%s' 'select d; do echo; done' && pnpm test",
+      "printf '%s' '[[ a && b ]]' && pnpm test",
+      "printf '%s' $'can\\'t; if literal' && pnpm test",
+      ["printf '%s' $\\", "'can\\'t; if literal' && pnpm test"].join("\n"),
+    ]) {
+      expect(splitTopLevelStages(quoted)).toEqual([
+        quoted.slice(0, quoted.lastIndexOf(" && ")),
+        "pnpm test",
+      ]);
+      expect(
+        formatToolDetail(
+          resolveToolDisplay({ name: "exec", args: { command: quoted }, detailMode: "explain" }),
+        ),
+      ).toBe("print text → run tests");
+    }
+
+    for (const command of [
+      "select-editor --version && pnpm test",
+      "coprocess --version && pnpm test",
+      "[[helper arg && pnpm test",
+      '"x"select --version && pnpm test',
+      "select'' --version && pnpm test",
+      'selec"t" --version && pnpm test',
+    ]) {
+      expect(splitTopLevelStages(command)).toEqual([
+        command.slice(0, command.lastIndexOf(" && ")),
+        "pnpm test",
+      ]);
+    }
+
+    for (const command of [
+      "function f{ echo one; echo two; }",
+      "function f {not-a-body; echo two; }",
+      "printf x >& select",
+      "printf x &> select",
+      "printf x >| select",
+    ]) {
+      expect(hasShellCompoundCommand(command)).toBe(false);
+    }
+  });
+
+  it("keeps normal search patterns concise", () => {
+    for (const [command, expected] of [
+      ['rg "foo|bar" src/agents', 'search "foo|bar" in src/agents'],
+      ["rg 'search engine' src/agents", 'search "search engine" in src/agents'],
+      ["rg 'search textual data' src/agents", 'search "search textual data" in src/agents'],
+      ["rg 'research text in docs' src/agents", 'search "research text in docs" in src/agents'],
+    ]) {
+      expect(
+        formatToolDetail(
+          resolveToolDisplay({ name: "exec", args: { command }, detailMode: "explain" }),
+        ),
+      ).toBe(expected);
+    }
+  });
+
+  it("uses a neutral label for recursive or malformed search patterns", () => {
+    for (const command of [
+      `rg 'search "foo" in src/agents' src`,
+      `rg 'Bash failed: search "foo" in src|search "bar"' src`,
+      `rg 'run printf -> search "foo" in src' src`,
+      "rg 'search text' src",
+      "rg 'search text in src/agents' src",
+      "rg 'foo|search text in src/agents' src",
+      "rg 'run printf -> search text' src",
+      "rg 'line1\nline2' src",
+      "rg 'line with trailing newline\n' src",
+      "rg '`generated command`' src",
+      `rg '${"x".repeat(121)}' src`,
+      `rg '${" ".repeat(121)}x' src`,
+    ]) {
+      expect(
+        formatToolDetail(
+          resolveToolDisplay({ name: "exec", args: { command }, detailMode: "explain" }),
+        ),
+      ).toBe("search text in src");
+    }
+  });
+
+  it("sanitizes recursive search patterns inside pipelines", () => {
+    expect(
+      formatToolDetail(
+        resolveToolDisplay({
+          name: "exec",
+          args: { command: `printf x | rg 'search "foo" in src' .` },
+          detailMode: "explain",
+        }),
+      ),
+    ).toBe("print text -> search text in .");
+  });
+
+  it.each<[name: string, command: string, expected: string]>([
+    [
+      "moves cd path to context suffix and appends raw command",
+      "cd ~/my-project && npm install",
+      "install dependencies (in ~/my-project), `cd ~/my-project && npm install`",
+    ],
+    [
+      "moves cd path to context suffix with multiple stages and raw command",
+      "cd ~/my-project && npm install && npm test",
+      "install dependencies → run tests (in ~/my-project), `cd ~/my-project && npm install && npm test`",
+    ],
+    [
+      "moves pushd path to context suffix and appends raw command",
+      "pushd /tmp && git status",
+      "check git status (in /tmp), `pushd /tmp && git status`",
+    ],
+    [
+      "clears inferred cwd when popd is stripped from preamble",
+      "pushd /tmp && popd && npm install",
+      "install dependencies, `pushd /tmp && popd && npm install`",
+    ],
+    [
+      "summarizes all stages and appends raw command",
+      "git fetch && git rebase origin/main",
+      "fetch git changes → rebase git branch, `git fetch && git rebase origin/main`",
+    ],
+    [
+      "falls back to raw command for unknown binaries",
+      "jj rebase -s abc -d main",
+      "jj rebase -s abc -d main",
+    ],
+    // standalone cd (no following command) — treated as raw since it's generic
+    ["handles standalone cd as raw command", "cd /tmp", "cd /tmp"],
+    // both cd's are preamble; last path wins
+    [
+      "handles chained cd commands using last path",
+      "cd /tmp && cd /app",
+      "cd /tmp && cd /app (in /app)",
+    ],
+  ])("%s", (_name, command, expected) => {
     const detail = formatToolDetail(
       resolveToolDisplay({
         name: "exec",
-        args: { command: "cd ~/my-project && npm install" },
+        args: { command },
       }),
     );
 
-    expect(detail).toBe("install dependencies (in ~/my-project), `cd ~/my-project && npm install`");
+    expect(detail).toBe(expected);
   });
 
   it("omits raw command details in explain mode", () => {
@@ -303,41 +597,6 @@ describe("tool display details", () => {
     ).toBe('🔎 Web Search: for "OpenClaw docs"');
   });
 
-  it("moves cd path to context suffix with multiple stages and raw command", () => {
-    const detail = formatToolDetail(
-      resolveToolDisplay({
-        name: "exec",
-        args: { command: "cd ~/my-project && npm install && npm test" },
-      }),
-    );
-
-    expect(detail).toBe(
-      "install dependencies → run tests (in ~/my-project), `cd ~/my-project && npm install && npm test`",
-    );
-  });
-
-  it("moves pushd path to context suffix and appends raw command", () => {
-    const detail = formatToolDetail(
-      resolveToolDisplay({
-        name: "exec",
-        args: { command: "pushd /tmp && git status" },
-      }),
-    );
-
-    expect(detail).toBe("check git status (in /tmp), `pushd /tmp && git status`");
-  });
-
-  it("clears inferred cwd when popd is stripped from preamble", () => {
-    const detail = formatToolDetail(
-      resolveToolDisplay({
-        name: "exec",
-        args: { command: "pushd /tmp && popd && npm install" },
-      }),
-    );
-
-    expect(detail).toBe("install dependencies, `pushd /tmp && popd && npm install`");
-  });
-
   it("moves cd path to context suffix with || separator", () => {
     const detail = formatToolDetail(
       resolveToolDisplay({
@@ -362,30 +621,6 @@ describe("tool display details", () => {
     expect(detail).toBe("install dependencies (in /app), `cd /tmp && npm install`");
   });
 
-  it("summarizes all stages and appends raw command", () => {
-    const detail = formatToolDetail(
-      resolveToolDisplay({
-        name: "exec",
-        args: { command: "git fetch && git rebase origin/main" },
-      }),
-    );
-
-    expect(detail).toBe(
-      "fetch git changes → rebase git branch, `git fetch && git rebase origin/main`",
-    );
-  });
-
-  it("falls back to raw command for unknown binaries", () => {
-    const detail = formatToolDetail(
-      resolveToolDisplay({
-        name: "exec",
-        args: { command: "jj rebase -s abc -d main" },
-      }),
-    );
-
-    expect(detail).toBe("jj rebase -s abc -d main");
-  });
-
   it("falls back to raw command for unknown binary with cwd", () => {
     const detail = formatToolDetail(
       resolveToolDisplay({
@@ -407,30 +642,6 @@ describe("tool display details", () => {
 
     // "run cargo build" is generic, but "run tests" is known — keep joined summary
     expect(detail).toMatch(/^run cargo build → run tests/);
-  });
-
-  it("handles standalone cd as raw command", () => {
-    const detail = formatToolDetail(
-      resolveToolDisplay({
-        name: "exec",
-        args: { command: "cd /tmp" },
-      }),
-    );
-
-    // standalone cd (no following command) — treated as raw since it's generic
-    expect(detail).toBe("cd /tmp");
-  });
-
-  it("handles chained cd commands using last path", () => {
-    const detail = formatToolDetail(
-      resolveToolDisplay({
-        name: "exec",
-        args: { command: "cd /tmp && cd /app" },
-      }),
-    );
-
-    // both cd's are preamble; last path wins
-    expect(detail).toBe("cd /tmp && cd /app (in /app)");
   });
 
   it("respects quotes when splitting preamble separators", () => {
@@ -605,7 +816,7 @@ describe("tool display details", () => {
     const detail = formatToolDetail(
       resolveToolDisplay({ name: "exec", args: { command }, detailMode: "explain" }),
     );
-    expect(detail).toBe("show <<EOF → run tests → run build");
+    expect(detail).toBe("show output → run tests → run build");
 
     expect(splitTopLevelStages("echo foo\\ #bar && npm test")).toEqual([
       "echo foo\\ #bar",
@@ -673,7 +884,7 @@ describe("tool display details", () => {
       }),
     );
 
-    expect(detail).toBe("show > → run email_preview_new → run email_preview_new");
+    expect(detail).toBe("show output → run email_preview_new → run email_preview_new");
   });
 
   it("consumes same-line heredocs in declaration order before splitting later stages", () => {
@@ -850,7 +1061,7 @@ describe("coerceDisplayValue middle truncation", () => {
     const detail = formatToolDetail(
       resolveToolDisplay({
         name: "sessions_spawn",
-        args: { task: longPath },
+        args: { label: longPath },
       }),
     );
     // Should contain the start of the path
@@ -859,17 +1070,6 @@ describe("coerceDisplayValue middle truncation", () => {
     expect(detail).toContain("important-file.txt");
     // Should contain the ellipsis for middle truncation
     expect(detail).toContain("…");
-  });
-
-  it("does not truncate short string values", () => {
-    const detail = formatToolDetail(
-      resolveToolDisplay({
-        name: "sessions_spawn",
-        args: { task: "short-task-name" },
-      }),
-    );
-    expect(detail).toBe("short-task-name");
-    expect(detail).not.toContain("…");
   });
 
   it("redacts credential-like values in long generic string details", () => {
@@ -883,7 +1083,7 @@ describe("coerceDisplayValue middle truncation", () => {
     const detail = formatToolDetail(
       resolveToolDisplay({
         name: "sessions_spawn",
-        args: { task: longValue },
+        args: { label: longValue },
       }),
     );
     // The ghp_ token must be redacted before truncation
@@ -898,7 +1098,7 @@ describe("coerceDisplayValue middle truncation", () => {
     const detail = formatToolDetail(
       resolveToolDisplay({
         name: "sessions_spawn",
-        args: { task: longValue },
+        args: { label: longValue },
       }),
     );
 

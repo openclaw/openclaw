@@ -1,13 +1,13 @@
-#!/usr/bin/env bash
+#!/bin/bash
 set -euo pipefail
 
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/ios-release-prepare.sh --version 2026.6.11 --build-number 7 [--team-id TEAMID]
+  scripts/ios-release-prepare.sh --version 2026.7.2 --revision 1 --build-number 3 [--team-id TEAMID]
 
 Prepares local App Store release inputs without touching local signing overrides:
-- writes apps/ios/build/Version.xcconfig for the explicit release version
+- writes apps/ios/build/Version.xcconfig for the explicit gateway and App Store revision
 - writes apps/ios/build/AppStoreRelease.xcconfig with canonical bundle IDs
 - configures the release build for relay-backed APNs registration
 - configures manual App Store distribution signing with pinned provisioning profiles
@@ -16,6 +16,7 @@ EOF
 }
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "${ROOT_DIR}/scripts/lib/ios-fastlane.sh"
 IOS_DIR="${ROOT_DIR}/apps/ios"
 BUILD_DIR="${IOS_DIR}/build"
 RELEASE_XCCONFIG="${IOS_DIR}/build/AppStoreRelease.xcconfig"
@@ -28,6 +29,7 @@ RELEASE_SOURCE_HELPER="${ROOT_DIR}/scripts/apple-release-source-check.sh"
 CANONICAL_TEAM_ID="FWJYW4S8P8"
 
 BUILD_NUMBER=""
+APP_STORE_REVISION=""
 RELEASE_VERSION=""
 TEAM_ID="${IOS_DEVELOPMENT_TEAM:-}"
 IOS_VERSION=""
@@ -57,48 +59,7 @@ write_generated_file() {
   mv -f "${tmp_file}" "${output_path}"
 }
 
-require_option_value() {
-  local option="$1"
-  local value="${2-}"
-
-  if [[ -z "${value}" || "${value}" == --* ]]; then
-    echo "Missing value for ${option}." >&2
-    usage >&2
-    exit 1
-  fi
-}
-
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --)
-      shift
-      ;;
-    --build-number)
-      require_option_value "$1" "${2-}"
-      BUILD_NUMBER="${2:-}"
-      shift 2
-      ;;
-    --version)
-      require_option_value "$1" "${2-}"
-      RELEASE_VERSION="${2:-}"
-      shift 2
-      ;;
-    --team-id)
-      require_option_value "$1" "${2-}"
-      TEAM_ID="${2:-}"
-      shift 2
-      ;;
-    -h|--help)
-      usage
-      exit 0
-      ;;
-    *)
-      echo "Unknown argument: $1" >&2
-      usage
-      exit 1
-      ;;
-  esac
-done
+parse_ios_release_args prepare "$@"
 
 if [[ -z "${BUILD_NUMBER}" ]]; then
   echo "Missing required --build-number." >&2
@@ -112,8 +73,14 @@ if [[ -z "${RELEASE_VERSION}" ]]; then
   exit 1
 fi
 
+if [[ -z "${APP_STORE_REVISION}" ]]; then
+  echo "Missing required --revision." >&2
+  usage >&2
+  exit 1
+fi
+
 if [[ -z "${TEAM_ID}" ]]; then
-  TEAM_ID="$(IOS_ALLOW_KEYCHAIN_TEAM_FALLBACK=1 bash "${TEAM_HELPER}" --require-canonical)"
+  TEAM_ID="$(IOS_ALLOW_KEYCHAIN_TEAM_FALLBACK=1 /bin/bash "${TEAM_HELPER}" --require-canonical)"
 fi
 
 if [[ -z "${TEAM_ID}" ]]; then
@@ -133,18 +100,18 @@ fi
 
 source "${ROOT_DIR}/scripts/lib/build-metadata.sh"
 RELEASE_GIT_COMMIT="$(OPENCLAW_REQUIRE_BUILD_METADATA=1 openclaw_resolve_git_commit "${ROOT_DIR}")"
-bash "${RELEASE_SOURCE_HELPER}" --root "${ROOT_DIR}" --expected-commit "${RELEASE_GIT_COMMIT}"
+/bin/bash "${RELEASE_SOURCE_HELPER}" --root "${ROOT_DIR}" --expected-commit "${RELEASE_GIT_COMMIT}"
 export GIT_COMMIT="${RELEASE_GIT_COMMIT}"
 
 prepare_build_dir
 
 (
-  cd "${ROOT_DIR}" && node --import tsx "${VERSION_SYNC_HELPER}" --check --version "${RELEASE_VERSION}"
+  cd "${ROOT_DIR}" && node --import tsx "${VERSION_SYNC_HELPER}" --check --version "${RELEASE_VERSION}" --revision "${APP_STORE_REVISION}"
 )
 
-IOS_VERSION="$(cd "${ROOT_DIR}" && node --import tsx "${IOS_VERSION_HELPER}" --version "${RELEASE_VERSION}" --field canonicalVersion)"
+IOS_VERSION="$(cd "${ROOT_DIR}" && node --import tsx "${IOS_VERSION_HELPER}" --version "${RELEASE_VERSION}" --revision "${APP_STORE_REVISION}" --field marketingVersion)"
 if [[ -z "${IOS_VERSION}" ]]; then
-  echo "Unable to resolve iOS release version '${RELEASE_VERSION}'." >&2
+  echo "Unable to resolve App Store version for gateway '${RELEASE_VERSION}' revision '${APP_STORE_REVISION}'." >&2
   exit 1
 fi
 
@@ -156,7 +123,7 @@ fi
 
 (
   OPENCLAW_REQUIRE_BUILD_METADATA=1 \
-    bash "${VERSION_HELPER}" --version "${IOS_VERSION}" --build-number "${BUILD_NUMBER}"
+    /bin/bash "${VERSION_HELPER}" --version "${RELEASE_VERSION}" --revision "${APP_STORE_REVISION}" --build-number "${BUILD_NUMBER}"
 )
 node "${ROOT_DIR}/scripts/ios-write-swift-filelist.mjs"
 

@@ -1,183 +1,512 @@
-// Message-action runner test helpers define reusable plugin fixtures, target
-// parsers, and dry-run wrappers.
+// Shared runner-facade test harness. These mocks isolate message-action routing,
+// execution, and send coordination from real channel and gateway runtimes.
+import { afterEach, beforeEach, expect, vi } from "vitest";
+import { createRequireRecord } from "../../../test/helpers/record.js";
+import { jsonResult } from "../../agents/tools/common.js";
+import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
 import type {
-  ChannelDirectoryEntryKind,
   ChannelMessageActionName,
-  ChannelMessagingAdapter,
-  ChannelOutboundAdapter,
   ChannelPlugin,
 } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
-import { runMessageAction } from "./message-action-runner.js";
+import {
+  normalizeMessagePresentation,
+  renderMessagePresentationFallbackText,
+} from "../../interactive/payload.js";
+import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
+import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 
-/** Workspace-style config fixture used by message action runner tests. */
-export const workspaceConfig = {
-  channels: {
-    workspace: {
-      botToken: "workspace-test",
-      appToken: "workspace-app-test",
-    },
-  },
-} as OpenClawConfig;
+type ChannelActionHandler = NonNullable<NonNullable<ChannelPlugin["actions"]>["handleAction"]>;
 
-/** Direct-chat config fixture that allows any sender. */
-export const directChatConfig = {
-  channels: {
-    directchat: {
-      allowFrom: ["*"],
-    },
-  },
-} as OpenClawConfig;
+// Factories can run during static imports, before the exported alias initializes.
+// Use the hoisted binding directly so resets and imports share the same functions.
+const hoistedMessageActionRunnerMocks = vi.hoisted(() => ({
+  resolveOutboundChannelPlugin: vi.fn(),
+  executeSendAction: vi.fn(),
+  executePollAction: vi.fn(),
+  hasCorePresentationDelivery: vi.fn(),
+  materializeMessagePresentationFallback: vi.fn(),
+  callGateway: vi.fn(),
+  callGatewayLeastPrivilege: vi.fn(),
+  isGatewayTransportError: vi.fn(),
+  randomIdempotencyKey: vi.fn(() => "idem-gateway-action"),
+  maybeApplyTtsToPayload: vi.fn(async (params: { payload: unknown }) => params.payload),
+  prepareOutboundMirrorRoute: vi.fn(),
+  beginTerminalSourceReplyDelivery: vi.fn(),
+  cancelTerminalSourceReplyDelivery: vi.fn(),
+  isDeliveredCurrentSourceReplyAsync: vi.fn(async () => false),
+  reconcileTerminalSourceReplyDelivery: vi.fn(),
+  loadWebMedia: vi.fn<typeof import("../../media/web-media.js").loadWebMedia>(),
+}));
 
-export const directOutbound: ChannelOutboundAdapter = {
-  deliveryMode: "direct",
-  sendText: async () => ({ channel: "test", messageId: "test" }),
-};
+export const messageActionRunnerMocks = hoistedMessageActionRunnerMocks;
 
-// Test plugins model token-gated workspace sends without booting real channel runtimes.
-function hasChannelBotToken(channelConfig: unknown): boolean {
-  if (channelConfig == null || typeof channelConfig !== "object" || Array.isArray(channelConfig)) {
-    return false;
-  }
-  const token = (channelConfig as Record<string, unknown>).botToken;
-  return typeof token === "string" && Boolean(token.trim());
-}
+vi.mock("./channel-resolution.js", () => ({
+  normalizeDeliverableOutboundChannel: (value?: string | null) =>
+    typeof value === "string" ? value.trim().toLowerCase() || undefined : undefined,
+  resolveOutboundChannelPlugin: hoistedMessageActionRunnerMocks.resolveOutboundChannelPlugin,
+  resetOutboundChannelResolutionStateForTest: vi.fn(),
+}));
 
-export const runDryAction = (params: {
-  cfg: OpenClawConfig;
-  action: ChannelMessageActionName;
-  actionParams: Record<string, unknown>;
-  toolContext?: Record<string, unknown>;
-  abortSignal?: AbortSignal;
-  sandboxRoot?: string;
-  agentId?: string;
-}) =>
-  runMessageAction({
-    cfg: params.cfg,
-    action: params.action,
-    params: params.actionParams as never,
-    toolContext: params.toolContext as never,
-    dryRun: true,
-    abortSignal: params.abortSignal,
-    sandboxRoot: params.sandboxRoot,
-    agentId: params.agentId,
-  });
+vi.mock("./outbound-send-service.js", () => ({
+  executeSendAction: hoistedMessageActionRunnerMocks.executeSendAction,
+  executePollAction: hoistedMessageActionRunnerMocks.executePollAction,
+  hasCorePresentationDelivery: hoistedMessageActionRunnerMocks.hasCorePresentationDelivery,
+  materializeMessagePresentationFallback:
+    hoistedMessageActionRunnerMocks.materializeMessagePresentationFallback,
+}));
 
-export const runDrySend = (params: {
-  cfg: OpenClawConfig;
-  actionParams: Record<string, unknown>;
-  toolContext?: Record<string, unknown>;
-  abortSignal?: AbortSignal;
-  sandboxRoot?: string;
-  agentId?: string;
-}) =>
-  runDryAction({
-    ...params,
-    action: "send",
-  });
+vi.mock("./message.gateway.runtime.js", () => ({
+  callGateway: hoistedMessageActionRunnerMocks.callGateway,
+  callGatewayLeastPrivilege: hoistedMessageActionRunnerMocks.callGatewayLeastPrivilege,
+  isGatewayTransportError: hoistedMessageActionRunnerMocks.isGatewayTransportError,
+  randomIdempotencyKey: hoistedMessageActionRunnerMocks.randomIdempotencyKey,
+}));
 
-type ResolvedTestTarget = { to: string; kind: ChannelDirectoryEntryKind };
+vi.mock("./source-reply-mirror.js", () => ({
+  beginTerminalSourceReplyDelivery:
+    hoistedMessageActionRunnerMocks.beginTerminalSourceReplyDelivery,
+  cancelTerminalSourceReplyDelivery:
+    hoistedMessageActionRunnerMocks.cancelTerminalSourceReplyDelivery,
+  isDeliveredCurrentSourceReplyAsync:
+    hoistedMessageActionRunnerMocks.isDeliveredCurrentSourceReplyAsync,
+  reconcileTerminalSourceReplyDelivery:
+    hoistedMessageActionRunnerMocks.reconcileTerminalSourceReplyDelivery,
+}));
 
-function normalizeWorkspaceTarget(raw: string): string {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return trimmed;
-  }
-  if (trimmed.startsWith("#")) {
-    return trimmed.slice(1).trim();
-  }
-  if (/^channel:/i.test(trimmed)) {
-    return trimmed.replace(/^channel:/i, "").trim();
-  }
-  if (/^user:/i.test(trimmed)) {
-    return trimmed.replace(/^user:/i, "").trim();
-  }
-  const mention = trimmed.match(/^<@([A-Z0-9]+)>$/i);
-  if (mention?.[1]) {
-    return mention[1];
-  }
-  return trimmed;
-}
+vi.mock("../../tts/tts.runtime.js", () => ({
+  maybeApplyTtsToPayload: hoistedMessageActionRunnerMocks.maybeApplyTtsToPayload,
+}));
 
-function createConfiguredTestPlugin(params: {
-  id: string;
-  isConfigured: (cfg: OpenClawConfig) => boolean;
-  normalizeTarget: (raw: string) => string | undefined;
-  resolveTarget: (input: string) => ResolvedTestTarget | null;
-}): ChannelPlugin {
-  const messaging: ChannelMessagingAdapter = {
-    normalizeTarget: params.normalizeTarget,
-    targetResolver: {
-      looksLikeId: (raw) => Boolean(params.resolveTarget(raw.trim())),
-      hint: "<id>",
-      resolveTarget: async (resolverParams) => {
-        const resolved = params.resolveTarget(resolverParams.input);
-        return resolved ? { ...resolved, source: "normalized" } : null;
-      },
-    },
-    inferTargetChatType: (inferParams) =>
-      params.resolveTarget(inferParams.to)?.kind === "user" ? "direct" : "group",
+vi.mock("./outbound-session.js", () => ({
+  ensureOutboundSessionEntry: vi.fn(async () => undefined),
+  resolveOutboundSessionRoute: vi.fn(async () => null),
+}));
+
+vi.mock("../../channels/plugins/bootstrap-registry.js", () => ({
+  getBootstrapChannelPlugin: (id: string) =>
+    id === "actionhub"
+      ? {
+          actions: {
+            messageActionTargetAliases: {
+              pin: { aliases: ["messageId"] },
+              unpin: { aliases: ["messageId"] },
+              "list-pins": { aliases: ["chatId"] },
+            },
+          },
+        }
+      : undefined,
+}));
+
+vi.mock("./message-action-threading.js", async (importOriginal) => {
+  const threading = await importOriginal<typeof import("./message-action-threading.js")>();
+  hoistedMessageActionRunnerMocks.prepareOutboundMirrorRoute.mockImplementation(
+    threading.prepareOutboundMirrorRoute,
+  );
+  return {
+    ...threading,
+    prepareOutboundMirrorRoute: hoistedMessageActionRunnerMocks.prepareOutboundMirrorRoute,
   };
+});
+
+vi.mock("../../media/web-media.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../media/web-media.js")>()),
+  loadWebMedia: hoistedMessageActionRunnerMocks.loadWebMedia,
+}));
+
+type RunMessageAction = typeof import("./message-action-runner.js").runMessageAction;
+
+export const runMessageAction: RunMessageAction = async (...args) =>
+  (await import("./message-action-runner.js")).runMessageAction(...args);
+
+export function setMessageActionTestPlugin(plugin: unknown, pluginId: string, origin?: "bundled") {
+  setActivePluginRegistry(
+    createTestRegistry([{ pluginId, source: "test", ...(origin ? { origin } : {}), plugin }]),
+  );
+}
+
+export function createWorkspaceMediaTestPlugin(): ChannelPlugin {
   return {
     ...createChannelTestPluginBase({
-      id: params.id,
+      id: "workspace",
+      label: "Workspace",
       config: {
         listAccountIds: () => ["default"],
-        resolveAccount: () => ({ enabled: true }),
-        isConfigured: (_account, cfg) => params.isConfigured(cfg),
+        resolveAccount: (cfg) => cfg.channels?.workspace ?? {},
+        isConfigured: async (account) =>
+          typeof (account as { botToken?: unknown }).botToken === "string" &&
+          (account as { botToken?: string }).botToken!.trim() !== "" &&
+          typeof (account as { appToken?: unknown }).appToken === "string" &&
+          (account as { appToken?: string }).appToken!.trim() !== "",
       },
     }),
-    outbound: directOutbound,
-    messaging,
+    outbound: {
+      deliveryMode: "direct",
+      resolveTarget: ({ to }) => {
+        const trimmed = to?.trim() ?? "";
+        if (!trimmed) {
+          return {
+            ok: false,
+            error: new Error("missing target for workspace"),
+          };
+        }
+        return { ok: true, to: trimmed };
+      },
+      sendText: async () => ({ channel: "workspace", messageId: "msg-test" }),
+      sendMedia: async () => ({ channel: "workspace", messageId: "msg-test" }),
+    },
   };
 }
 
-export const workspaceTestPlugin = createConfiguredTestPlugin({
-  id: "workspace",
-  isConfigured: (cfg) => hasChannelBotToken(cfg.channels?.workspace),
-  normalizeTarget: (raw) => normalizeWorkspaceTarget(raw) || undefined,
-  resolveTarget: (input) => {
-    const normalized = normalizeWorkspaceTarget(input);
-    if (!normalized) {
-      return null;
-    }
-    if (/^[A-Z0-9]+$/i.test(normalized)) {
-      const kind = /^U/i.test(normalized) ? "user" : "group";
-      return { to: normalized, kind };
-    }
-    return null;
-  },
-});
+export function createAlwaysConfiguredPluginConfig(
+  account: Record<string, unknown> = { enabled: true },
+) {
+  return {
+    listAccountIds: () => ["default"],
+    resolveAccount: () => account,
+    isConfigured: () => true,
+  };
+}
 
-export const forumTestPlugin = createConfiguredTestPlugin({
-  id: "forum",
-  isConfigured: (cfg) => hasChannelBotToken(cfg.channels?.forum),
-  normalizeTarget: (raw) => raw.trim() || undefined,
-  resolveTarget: (input) => {
-    const normalized = input.trim();
-    if (!normalized) {
-      return null;
-    }
-    return {
-      to: normalized.replace(/^forum:/i, ""),
-      kind: normalized.startsWith("@") ? "user" : "group",
-    };
-  },
-});
+export function createActionHubPluginFixture() {
+  const handleAction = vi.fn(async ({ params }: { params: Record<string, unknown> }) =>
+    jsonResult({ ok: true, params }),
+  );
+  const plugin: ChannelPlugin = {
+    id: "actionhub",
+    meta: {
+      id: "actionhub",
+      label: "Action Hub",
+      selectionLabel: "Action Hub",
+      docsPath: "/channels/actionhub",
+      blurb: "Action Hub action dispatch test plugin.",
+    },
+    capabilities: { chatTypes: ["direct", "channel"] },
+    config: createAlwaysConfiguredPluginConfig(),
+    messaging: {
+      targetPrefixes: ["actionhub", "actionhub-alias"],
+      normalizeTarget: (raw) => raw.replace(/^actionhub-alias:/i, "actionhub:"),
+      targetResolver: {
+        looksLikeId: () => true,
+      },
+    },
+    actions: {
+      describeMessageTool: () => ({
+        actions: [
+          "pin",
+          "unpin",
+          "list-pins",
+          "member-info",
+          "channel-info",
+          "edit",
+          "thread-create",
+          "thread-reply",
+        ],
+      }),
+      messageActionTargetAliases: {
+        "list-pins": { aliases: ["chatId"] },
+        edit: {
+          aliases: ["messageId", "chatId", "chat_id", "channel_id"],
+          deliveryTargetAliases: ["chatId", "chat_id", "channel_id"],
+        },
+        pin: {
+          aliases: ["messageId", "chatId", "chat_id", "channel_id"],
+          deliveryTargetAliases: ["chatId", "chat_id", "channel_id"],
+        },
+        unpin: {
+          aliases: ["messageId", "chatId", "chat_id", "channel_id"],
+          deliveryTargetAliases: ["chatId", "chat_id", "channel_id"],
+        },
+      },
+      supportsAction: ({ action }) =>
+        action === "pin" ||
+        action === "unpin" ||
+        action === "list-pins" ||
+        action === "member-info" ||
+        action === "channel-info" ||
+        action === "edit" ||
+        action === "thread-create" ||
+        action === "thread-reply",
+      handleAction,
+    },
+  };
+  return { handleAction, plugin };
+}
 
-export const directChatTestPlugin = createConfiguredTestPlugin({
-  id: "directchat",
-  isConfigured: (cfg) => Boolean(cfg.channels?.directchat),
-  normalizeTarget: (raw) => raw.trim() || undefined,
-  resolveTarget: (input) => {
-    const normalized = input.trim();
-    if (!normalized) {
-      return null;
-    }
-    return {
-      to: normalized,
-      kind: normalized.endsWith("@g.us") ? "group" : "user",
-    };
-  },
-});
+export function createGatewayActionPlugin(params: {
+  pluginId: string;
+  label: string;
+  blurb: string;
+  actions: ChannelMessageActionName[];
+  gatewayActions?: ChannelMessageActionName[];
+  capabilities?: ChannelPlugin["capabilities"];
+  messaging?: ChannelPlugin["messaging"];
+  threading?: ChannelPlugin["threading"];
+  handleAction: ChannelActionHandler;
+}): ChannelPlugin & { actions: NonNullable<ChannelPlugin["actions"]> } {
+  const actions = new Set(params.actions);
+  const gatewayActions = new Set(params.gatewayActions ?? params.actions);
+  return {
+    id: params.pluginId,
+    meta: {
+      id: params.pluginId,
+      label: params.label,
+      selectionLabel: params.label,
+      docsPath: `/channels/${params.pluginId}`,
+      blurb: params.blurb,
+    },
+    capabilities: params.capabilities ?? { chatTypes: ["direct"] },
+    config: createAlwaysConfiguredPluginConfig(),
+    messaging: params.messaging,
+    threading: params.threading,
+    actions: {
+      describeMessageTool: () => ({ actions: params.actions }),
+      supportsAction: ({ action }) => actions.has(action),
+      resolveExecutionMode: ({ action }) => (gatewayActions.has(action) ? "gateway" : "local"),
+      handleAction: params.handleAction,
+    },
+  };
+}
+
+export function createPollForwardingPlugin(params: {
+  pluginId: string;
+  label: string;
+  blurb: string;
+  handleAction: ChannelActionHandler;
+}): ChannelPlugin {
+  return {
+    id: params.pluginId,
+    meta: {
+      id: params.pluginId,
+      label: params.label,
+      selectionLabel: params.label,
+      docsPath: `/channels/${params.pluginId}`,
+      blurb: params.blurb,
+    },
+    capabilities: { chatTypes: ["direct"] },
+    config: createAlwaysConfiguredPluginConfig(),
+    messaging: {
+      targetResolver: {
+        looksLikeId: () => true,
+      },
+    },
+    actions: {
+      describeMessageTool: () => ({ actions: ["poll"] }),
+      supportsAction: ({ action }) => action === "poll",
+      handleAction: params.handleAction,
+    },
+  };
+}
+
+async function executePluginAction(params: {
+  action: "send" | "poll";
+  ctx: Parameters<typeof import("./outbound-send-service.js").executeSendAction>[0]["ctx"];
+}) {
+  const handled = await dispatchChannelMessageAction({
+    channel: params.ctx.channel,
+    action: params.action,
+    cfg: params.ctx.cfg,
+    params: params.ctx.params,
+    mediaAccess: params.ctx.mediaAccess,
+    mediaLocalRoots: params.ctx.mediaAccess?.localRoots ?? [],
+    mediaReadFile:
+      typeof params.ctx.mediaAccess?.readFile === "function"
+        ? params.ctx.mediaAccess.readFile
+        : undefined,
+    accountId: params.ctx.accountId ?? undefined,
+    gateway: params.ctx.gateway,
+    toolContext: params.ctx.input.toolContext,
+    inboundEventKind: params.ctx.input.inboundEventKind,
+    dryRun: params.ctx.dryRun,
+    agentId: params.ctx.agentId,
+  });
+  if (!handled) {
+    throw new Error(`expected plugin to handle ${params.action}`);
+  }
+  return {
+    handledBy: "plugin" as const,
+    payload: extractToolPayload(handled),
+    toolResult: handled,
+  };
+}
+
+export function resetMessageActionRunnerMocks() {
+  const mocks = messageActionRunnerMocks;
+  mocks.resolveOutboundChannelPlugin.mockReset();
+  mocks.resolveOutboundChannelPlugin.mockImplementation(
+    ({ channel }: { channel: string }) =>
+      getActivePluginRegistry()?.channels.find((entry) => entry?.plugin?.id === channel)?.plugin,
+  );
+  mocks.executeSendAction.mockReset();
+  mocks.executeSendAction.mockImplementation(
+    async ({ ctx }: { ctx: Parameters<typeof executePluginAction>[0]["ctx"] }) =>
+      await executePluginAction({ action: "send", ctx }),
+  );
+  mocks.executePollAction.mockReset();
+  mocks.executePollAction.mockImplementation(
+    async ({ ctx }: { ctx: Parameters<typeof executePluginAction>[0]["ctx"] }) =>
+      await executePluginAction({ action: "poll", ctx }),
+  );
+  mocks.hasCorePresentationDelivery.mockReset();
+  mocks.hasCorePresentationDelivery.mockImplementation(
+    (outbound?: { sendPayload?: unknown; sendText?: unknown; sendFormattedText?: unknown }) =>
+      Boolean(outbound?.sendPayload || outbound?.sendText || outbound?.sendFormattedText),
+  );
+  mocks.materializeMessagePresentationFallback.mockReset();
+  mocks.materializeMessagePresentationFallback.mockImplementation(
+    (params: { payload: { presentation?: unknown; text?: string }; text?: string }) => {
+      const presentation = normalizeMessagePresentation(params.payload.presentation);
+      const text = (params.text ?? params.payload.text ?? "").trim();
+      if (!presentation) {
+        return text;
+      }
+      const fallback = renderMessagePresentationFallbackText({ presentation });
+      return !fallback || text.includes(fallback)
+        ? text
+        : [text, fallback].filter(Boolean).join("\n\n");
+    },
+  );
+  mocks.callGateway.mockReset();
+  mocks.callGatewayLeastPrivilege.mockReset();
+  mocks.isGatewayTransportError.mockReset();
+  mocks.isGatewayTransportError.mockImplementation(
+    (value: unknown) => value instanceof Error && (value as { kind?: unknown }).kind === "timeout",
+  );
+  mocks.randomIdempotencyKey.mockClear();
+  mocks.maybeApplyTtsToPayload.mockReset();
+  mocks.maybeApplyTtsToPayload.mockImplementation(
+    async (params: { payload: unknown }) => params.payload,
+  );
+  mocks.prepareOutboundMirrorRoute.mockClear();
+  mocks.beginTerminalSourceReplyDelivery.mockReset();
+  mocks.cancelTerminalSourceReplyDelivery.mockReset();
+  mocks.reconcileTerminalSourceReplyDelivery.mockReset();
+}
+
+let actualLoadWebMedia: typeof import("../../media/web-media.js").loadWebMedia | undefined;
+
+export async function resetMessageActionMediaMocks() {
+  actualLoadWebMedia ??= (
+    await vi.importActual<typeof import("../../media/web-media.js")>("../../media/web-media.js")
+  ).loadWebMedia;
+  vi.restoreAllMocks();
+  vi.clearAllMocks();
+  const mocks = messageActionRunnerMocks;
+  mocks.resolveOutboundChannelPlugin.mockReset();
+  mocks.resolveOutboundChannelPlugin.mockImplementation(
+    ({ channel }: { channel: string }) =>
+      getActivePluginRegistry()?.channels.find((entry) => entry?.plugin?.id === channel)?.plugin,
+  );
+  mocks.executeSendAction.mockReset();
+  mocks.executeSendAction.mockImplementation(
+    async ({
+      ctx,
+      to,
+      message,
+      mediaUrl,
+      mediaUrls,
+    }: {
+      ctx: { channel: string; dryRun: boolean };
+      to: string;
+      message: string;
+      mediaUrl?: string;
+      mediaUrls?: string[];
+    }) => ({
+      handledBy: "core" as const,
+      payload: {
+        channel: ctx.channel,
+        to,
+        message,
+        mediaUrl,
+        mediaUrls,
+        dryRun: ctx.dryRun,
+      },
+      sendResult: {
+        channel: ctx.channel,
+        messageId: "msg-test",
+        ...(mediaUrl ? { mediaUrl } : {}),
+        ...(mediaUrls ? { mediaUrls } : {}),
+      },
+    }),
+  );
+  mocks.executePollAction.mockReset();
+  mocks.executePollAction.mockImplementation(async () => {
+    throw new Error("executePollAction should not run in media tests");
+  });
+  mocks.loadWebMedia.mockReset();
+  mocks.loadWebMedia.mockImplementation(actualLoadWebMedia);
+}
+
+const requireRecord = createRequireRecord("record", "expected-non-array-record");
+const requireLabeledRecord = createRequireRecord("record", "expected-label");
+
+export function readFirstPluginCall(mock: {
+  mock: { calls: unknown[][] };
+}): Record<string, unknown> {
+  const [mockCall] = mock.mock.calls;
+  const call = mockCall?.[0];
+  return requireRecord(call);
+}
+
+export function readPluginCall(
+  mock: { mock: { calls: unknown[][] } },
+  callIndex: number,
+): Record<string, unknown> {
+  const mockCall = mock.mock.calls[callIndex];
+  const call = mockCall?.[0];
+  return requireRecord(call);
+}
+
+export function readLastPluginCall(mock: {
+  mock: { calls: unknown[][] };
+}): Record<string, unknown> {
+  return readPluginCall(mock, mock.mock.calls.length - 1);
+}
+
+export function readMockCallArg(
+  mock: { mock: { calls: unknown[][] } },
+  label: string,
+  callIndex = 0,
+  argIndex = 0,
+): Record<string, unknown> {
+  const mockCall = mock.mock.calls[callIndex];
+  const value = mockCall?.[argIndex];
+  return requireLabeledRecord(value, label);
+}
+
+export function readRecordField(record: Record<string, unknown>, key: string, label: string) {
+  const value = record[key];
+  return requireLabeledRecord(value, label);
+}
+
+export function expectRecordFields(
+  record: Record<string, unknown>,
+  expected: Record<string, unknown>,
+  label: string,
+) {
+  for (const [key, value] of Object.entries(expected)) {
+    expect(record[key], `${label}.${key}`).toEqual(value);
+  }
+}
+
+export function createEnabledMessageActionConfig(channel: string): OpenClawConfig {
+  return { channels: { [channel]: { enabled: true } } };
+}
+
+export function useActionHubPluginFixture() {
+  const fixture = createActionHubPluginFixture();
+  beforeEach(() => {
+    setMessageActionTestPlugin(fixture.plugin, "actionhub");
+    fixture.handleAction.mockClear();
+  });
+  afterEach(() => {
+    setActivePluginRegistry(createTestRegistry([]));
+    vi.clearAllMocks();
+    vi.unstubAllEnvs();
+  });
+  return fixture;
+}

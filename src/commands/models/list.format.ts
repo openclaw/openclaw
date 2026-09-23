@@ -5,21 +5,30 @@ import { isRich as isRichTerminal, theme } from "../../../packages/terminal-core
 
 const TRUNCATED_SUFFIX = "...";
 
+/** Formats token counts as compact decimal-K labels. */
+export const formatTokenK = (value?: number | null) => {
+  if (!value || !Number.isFinite(value)) {
+    return "-";
+  }
+  // Provider context windows use decimal K, so 200000 must stay "200k".
+  if (value < 1000) {
+    return `${Math.round(value)}`;
+  }
+  return `${Math.round(value / 1000)}k`;
+};
+
 /** Enables rich formatting only for non-machine-readable output. */
 export const isRich = (opts?: { json?: boolean; plain?: boolean }) =>
   isRichTerminal() && !opts?.json && !opts?.plain;
 
 /** Pads a table cell to a fixed terminal visible width. */
-export const pad = (value: string, size: number) => {
+export const padTerminalCell = (value: string, size: number) => {
   const remaining = size - visibleWidth(value);
   return remaining > 0 ? `${value}${" ".repeat(remaining)}` : value;
 };
 
 /** Applies terminal color based on a model-list tag. */
-export const formatTag = (tag: string, rich: boolean) => {
-  if (!rich) {
-    return tag;
-  }
+export const formatTag = (tag: string) => {
   if (tag === "default") {
     return theme.success(tag);
   }
@@ -32,10 +41,7 @@ export const formatTag = (tag: string, rich: boolean) => {
   if (tag === "missing") {
     return theme.error(tag);
   }
-  if (tag.startsWith("fallback#")) {
-    return theme.warn(tag);
-  }
-  if (tag.startsWith("img-fallback#")) {
+  if (tag.startsWith("fallback#") || tag.startsWith("img-fallback#")) {
     return theme.warn(tag);
   }
   if (tag.startsWith("alias:")) {

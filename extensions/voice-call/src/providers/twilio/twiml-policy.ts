@@ -1,4 +1,3 @@
-// Voice Call plugin module implements twiml policy behavior.
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { WebhookContext } from "../../types.js";
 
@@ -16,7 +15,6 @@ type TwimlRequestView = {
 /** Full TwiML policy input including manager/runtime state. */
 type TwimlPolicyInput = TwimlRequestView & {
   hasStoredTwiml: boolean;
-  isNotifyCall: boolean;
   hasActiveStreams: boolean;
   canStream: boolean;
 };
@@ -65,10 +63,6 @@ export function decideTwimlResponse(input: TwimlPolicyInput): TwimlDecision {
     if (input.hasStoredTwiml) {
       return { kind: "stored", consumeStoredTwimlCallId: input.callIdFromQuery };
     }
-    if (input.isNotifyCall) {
-      return { kind: "empty" };
-    }
-
     if (isOutboundDirection(input.direction)) {
       return input.canStream ? { kind: "stream" } : { kind: "pause" };
     }

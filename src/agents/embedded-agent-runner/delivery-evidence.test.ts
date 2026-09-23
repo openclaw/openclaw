@@ -1,13 +1,22 @@
 import { describe, expect, it } from "vitest";
 import {
+  collectAmbiguousAutomaticMediaUrls,
   collectAutomaticDeliveredMediaUrls,
   collectDeliveredMediaUrls,
   hasCompleteAutomaticMediaDeliveryOutcomeEvidence,
   hasCompletedSourceReplyDeliveryEvidence,
+  getAutomaticDeliveryEvidence,
+  getGatewayAgentResult,
   hasUnaccountedMessagingToolAggregateEvidence,
   hasVisibleOutboundDeliveryEvidence,
   resolveExplicitFinalSourceReplyDeliveryEvidence,
 } from "./delivery-evidence.js";
+import {
+  hasIntentionalSilentAgentPayload,
+  hasVisibleAgentPayload,
+  isMeaningfulTranscriptMessage,
+  isTerminalSilentAssistantMessage,
+} from "./message-visibility.js";
 
 describe("explicit final source-reply delivery evidence", () => {
   it("distinguishes progress from a delivered final reply", () => {
@@ -36,12 +45,20 @@ describe("explicit final source-reply delivery evidence", () => {
     ).toBeUndefined();
   });
 
-  it("preserves legacy completion evidence when no marker is present", () => {
+  it.each([
+    { name: "legacy", final: undefined, state: undefined, delivered: true },
+    { name: "explicit progress", final: false, state: undefined, delivered: false },
+    { name: "explicit final", final: true, state: undefined, delivered: true },
+    { name: "earlier input", final: true, state: "missing", delivered: false },
+  ] as const)("honors $name evidence over coarse send flags", ({ final, state, delivered }) => {
     expect(
       hasCompletedSourceReplyDeliveryEvidence({
+        sourceReplyDelivered: true,
         didDeliverSourceReplyViaMessageTool: true,
+        sourceReplyDeliveryState: state,
+        messagingToolSentTargets: final === undefined ? [] : [{ sourceReplyFinal: final }],
       }),
-    ).toBe(true);
+    ).toBe(delivered);
   });
 });
 
@@ -121,9 +138,10 @@ describe("route-checkable messaging-tool aggregate evidence", () => {
 });
 
 describe("collectDeliveredMediaUrls attachment recursion", () => {
-  it("collects media URLs across nested attachments", () => {
+  it("collects unique media URLs in payload, aggregate, and target order", () => {
     const urls = collectDeliveredMediaUrls({
       payloads: [
+        Object.assign([], { url: "https://example.com/ignored-array.png" }),
         {
           url: "https://example.com/root.png",
           attachments: [
@@ -132,11 +150,18 @@ describe("collectDeliveredMediaUrls attachment recursion", () => {
           ],
         },
       ],
+      messagingToolSentMediaUrls: ["https://example.com/root.png", "/tmp/aggregate.png"],
+      messagingToolSentTargets: [
+        Object.assign([], { mediaUrl: "/tmp/ignored-target.png" }),
+        { mediaUrls: ["/tmp/aggregate.png", "/tmp/target.png"] },
+      ],
     });
-    expect(urls.toSorted()).toEqual([
-      "/tmp/grandchild.jpg",
-      "https://example.com/child.png",
+    expect(urls).toEqual([
       "https://example.com/root.png",
+      "https://example.com/child.png",
+      "/tmp/grandchild.jpg",
+      "/tmp/aggregate.png",
+      "/tmp/target.png",
     ]);
   });
 
@@ -165,6 +190,23 @@ describe("collectDeliveredMediaUrls attachment recursion", () => {
 });
 
 describe("queued delivery evidence", () => {
+  it("retains array-backed result/status metadata but rejects array-backed outcomes", () => {
+    const payloads = [{ mediaUrl: "/tmp/proof.png" }];
+    const payloadOutcomes: unknown[] = [Object.assign([], { index: 0, status: "sent" })];
+    const result = Object.assign([], {
+      payloads,
+      deliveryStatus: Object.assign([], { status: "sent", payloadOutcomes }),
+    });
+    expect(getGatewayAgentResult(result)).toBe(result);
+    expect(getGatewayAgentResult({ result })).toBe(result);
+    expect(collectAutomaticDeliveredMediaUrls(result)).toEqual([]);
+    expect(hasCompleteAutomaticMediaDeliveryOutcomeEvidence(result, ["/tmp/proof.png"])).toBe(
+      false,
+    );
+    result.deliveryStatus.payloadOutcomes = [{ index: 0, status: "sent" }];
+    expect(collectAutomaticDeliveredMediaUrls(result)).toEqual(["/tmp/proof.png"]);
+  });
+
   it("requires exact per-payload evidence before retrying a partial media send", () => {
     const payloads = [{ text: "sent" }, { mediaUrls: ["/tmp/proof.png"] }];
     expect(
@@ -234,5 +276,83 @@ describe("queued delivery evidence", () => {
         },
       }),
     ).toEqual(["/tmp/committed.png"]);
+  });
+
+  it("classifies partial payload outcomes in one canonical state machine", () => {
+    const complete = {
+      payloads: [{ text: "sent" }, { mediaUrls: ["/tmp/proof.png"] }],
+      deliveryStatus: {
+        status: "partial_failed",
+        payloadOutcomes: [
+          { index: 0, status: "sent" },
+          { index: 1, status: "failed", sentBeforeError: true },
+        ],
+      },
+    };
+    expect(getAutomaticDeliveryEvidence(complete).mayHaveSent).toBe(true);
+    expect(collectAmbiguousAutomaticMediaUrls(complete)).toEqual(["/tmp/proof.png"]);
+    expect(hasCompleteAutomaticMediaDeliveryOutcomeEvidence(complete, ["/tmp/proof.png"])).toBe(
+      true,
+    );
+    expect(
+      hasCompleteAutomaticMediaDeliveryOutcomeEvidence(
+        {
+          ...complete,
+          deliveryStatus: {
+            ...complete.deliveryStatus,
+            payloadOutcomes: complete.deliveryStatus.payloadOutcomes.slice(0, 1),
+          },
+        },
+        ["/tmp/proof.png"],
+      ),
+    ).toBe(false);
+  });
+
+  it("credits an ambiguous single-payload send only when requested", () => {
+    const result = {
+      payloads: [{ mediaUrls: ["/tmp/proof.png"] }],
+      deliveryStatus: {
+        status: "partial_failed",
+        payloadOutcomes: [{ index: 0, status: "failed", sentBeforeError: true }],
+      },
+    };
+    expect(
+      collectAutomaticDeliveredMediaUrls(result, { includeSuppressedOutcomes: false }),
+    ).toEqual([]);
+    expect(
+      collectAutomaticDeliveredMediaUrls(result, {
+        includeAmbiguousSinglePayloadFailure: true,
+        includeSuppressedOutcomes: false,
+      }),
+    ).toEqual(["/tmp/proof.png"]);
+  });
+});
+
+describe("agent reply visibility", () => {
+  it("distinguishes visible replies from intentional silent payloads", () => {
+    const result = { payloads: [{ text: "NO_REPLY" }] };
+    expect(hasVisibleAgentPayload(result)).toBe(true);
+    expect(hasVisibleAgentPayload(result, { includeSilentReplyPayloads: false })).toBe(false);
+    expect(hasIntentionalSilentAgentPayload(result)).toBe(true);
+    expect(
+      hasIntentionalSilentAgentPayload({
+        payloads: [{ text: "NO_REPLY", mediaUrls: ["/tmp/proof.png"] }],
+      }),
+    ).toBe(false);
+  });
+
+  it("classifies terminal silent transcript messages and meaningful tails", () => {
+    expect(
+      isTerminalSilentAssistantMessage({
+        role: "assistant",
+        stopReason: "stop",
+        content: [
+          { type: "thinking", text: "internal" },
+          { type: "text", text: "NO_REPLY" },
+        ],
+      }),
+    ).toBe(true);
+    expect(isMeaningfulTranscriptMessage({ role: "system" })).toBe(false);
+    expect(isMeaningfulTranscriptMessage({ role: "toolResult" })).toBe(true);
   });
 });

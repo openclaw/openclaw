@@ -1,3 +1,4 @@
+import { parseDateStringTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 // Memory Wiki plugin module implements claim health behavior.
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { WikiClaim, WikiPageSummary } from "./markdown.js";
@@ -50,11 +51,7 @@ export type WikiPageContradictionCluster = {
 };
 
 function parseTimestamp(value?: string): number | null {
-  if (!value?.trim()) {
-    return null;
-  }
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? parsed : null;
+  return parseDateStringTimestampMs(value) ?? null;
 }
 
 function clampDaysSinceTouch(daysSinceTouch: number): number {
@@ -81,24 +78,14 @@ function buildFreshnessFromTimestamp(params: { timestamp?: string; now?: Date })
     };
   }
   const daysSinceTouch = clampDaysSinceTouch(Math.floor((now.getTime() - timestampMs) / DAY_MS));
-  if (daysSinceTouch >= WIKI_STALE_DAYS) {
-    return {
-      level: "stale",
-      reason: `last touched ${params.timestamp}`,
-      daysSinceTouch,
-      lastTouchedAt: params.timestamp,
-    };
-  }
-  if (daysSinceTouch >= WIKI_AGING_DAYS) {
-    return {
-      level: "aging",
-      reason: `last touched ${params.timestamp}`,
-      daysSinceTouch,
-      lastTouchedAt: params.timestamp,
-    };
-  }
+  const level =
+    daysSinceTouch >= WIKI_STALE_DAYS
+      ? "stale"
+      : daysSinceTouch >= WIKI_AGING_DAYS
+        ? "aging"
+        : "fresh";
   return {
-    level: "fresh",
+    level,
     reason: `last touched ${params.timestamp}`,
     daysSinceTouch,
     lastTouchedAt: params.timestamp,

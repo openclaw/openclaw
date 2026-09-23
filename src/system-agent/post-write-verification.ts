@@ -4,7 +4,7 @@ import { isSystemAgentInferenceUnavailableError } from "./inference-error.js";
 function unavailable(reason: string): string {
   return [
     `⚠ The write was applied, but post-write verification is unavailable: ${reason}.`,
-    "Run `openclaw doctor --fix`, then verify the configuration before continuing.",
+    "Run `openclaw doctor --fix` on the machine running OpenClaw, then verify the configuration before continuing.",
   ].join("\n");
 }
 
@@ -29,19 +29,29 @@ export async function verifyConfigAfterSystemAgentWrite(
   } catch {
     return unavailable("openclaw.json could not be read");
   }
-  const notice = `⚠ openclaw.json failed validation after that write:\n${issuesText}`;
+  return await resolveConfigWriteRepair(issuesText, resolveRepair, true);
+}
+
+export async function resolveConfigWriteRepair(
+  issuesText: string,
+  resolveRepair: (message: string) => Promise<{ text: string }>,
+  applied = false,
+): Promise<string> {
+  const notice = applied
+    ? `⚠ openclaw.json failed validation after that write:\n${issuesText}`
+    : `The config write failed; proposing a fix.\n${issuesText}`;
   let recovery: { text: string };
   try {
     recovery = await resolveRepair(
-      `[config-verify] The config file is now invalid:\n${issuesText}\nPropose one corrective command from the allowed list.`,
+      `[config-verify] ${applied ? "The config file is now invalid" : "The config write failed"}:\n${issuesText}\n${applied ? "" : "If the report says the config was written, inspect the current value before correcting it. "}Propose one corrective command from the allowed list.`,
     );
   } catch (error) {
     if (!isSystemAgentInferenceUnavailableError(error)) {
       throw error;
     }
-    return `${notice}\nThe write was applied, but inference could not propose a repair. Run \`openclaw doctor --fix\`, then try again.`;
+    return `${notice}\n${applied ? "The write was applied, but inference" : "Inference"} could not propose a repair. Run \`openclaw doctor --fix\` on the machine running OpenClaw, then try again.`;
   }
   return recovery.text
     ? `${notice}\n\n${recovery.text}`
-    : `${notice}\nExit OpenClaw and run \`openclaw doctor --fix\`, or use \`config schema <path>\` to check the expected shape before leaving.`;
+    : `${notice}\nUse \`config schema <path>\` here to check the expected shape. Or, with OpenClaw stopped, run \`openclaw doctor --fix\` on the machine running it.`;
 }

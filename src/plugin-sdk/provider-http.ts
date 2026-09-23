@@ -2,10 +2,16 @@
 // capability SDKs do not depend on each other.
 
 export {
+  inspectTlsCertificateError,
+  type TlsCertificateErrorDetails,
+  type TlsCertificateErrorKind,
+} from "@openclaw/ai/internal/shared";
+export {
   assertOkOrThrowHttpError,
   assertOkOrThrowProviderError,
   assertProviderBinaryResponseContent,
   createProviderHttpError,
+  ProviderHttpError,
   extractProviderErrorDetail,
   extractProviderRequestId,
   formatProviderErrorPayload,
@@ -18,6 +24,10 @@ export {
   readResponseTextLimited,
   truncateErrorDetail,
 } from "../agents/provider-http-errors.js";
+export {
+  readProviderResponseErrorText,
+  redactProviderResponseErrorText,
+} from "../agents/provider-request-header-redaction.js";
 export {
   buildAudioTranscriptionFormData,
   createProviderOperationDeadline,
@@ -33,11 +43,13 @@ export {
   postTranscriptionRequest,
   resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
+  resolveProviderHttpRequestConfigWithOriginTrust,
   resolveAudioTranscriptionUploadFileName,
   requireTranscriptionText,
   sanitizeConfiguredModelProviderRequest,
   waitProviderOperationPollInterval,
 } from "../media-understanding/shared.js";
+export { openProviderWebSocket } from "../infra/net/provider-websocket.js";
 export type {
   ProviderOperationDeadline,
   ProviderOperationTimeoutMs,

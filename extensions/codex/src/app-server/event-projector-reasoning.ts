@@ -1,34 +1,35 @@
-import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AgentPlanStep, AgentPlanStepStatus } from "openclaw/plugin-sdk/channel-outbound";
+import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   readNonNegativeInteger,
   readNullableString,
-  readString,
   splitPlanText,
 } from "./event-projector-values.js";
 import type { CodexThreadItem, JsonObject } from "./protocol.js";
 
 type ReasoningDeltaMethod = "item/reasoning/summaryTextDelta" | "item/reasoning/textDelta";
 
-type ReasoningTextGroup = {
-  itemId: string;
-  method: ReasoningDeltaMethod;
-  index: number;
-  text: string;
+type ReasoningItemText = {
+  summary: Map<number, string>;
+  content: Map<number, string>;
 };
 
 type AgentEvent = Parameters<NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>>[0];
+type PlanUpdateSource = "codex-app-server" | "openclaw";
+type NativePlanUpdate = { markdown?: string; steps: AgentPlanStep[] };
 
 export class CodexReasoningProjection {
-  private readonly reasoningTextByGroup = new Map<string, ReasoningTextGroup>();
-  private readonly reasoningItemOrder = new Map<string, number>();
+  private readonly reasoningTextByItem = new Map<string, ReasoningItemText>();
   private readonly planTextByItem = new Map<string, string>();
+  private turnPlanText: string | undefined;
   private reasoningStarted = false;
   private reasoningEnded = false;
 
   constructor(
     private readonly params: EmbeddedRunAttemptParams,
     private readonly emitAgentEvent: (event: AgentEvent) => void,
+    private readonly onNativePlanUpdate?: (update: NativePlanUpdate) => void | Promise<void>,
   ) {}
 
   async handleReasoningDelta(method: ReasoningDeltaMethod, params: JsonObject): Promise<void> {
@@ -38,22 +39,18 @@ export class CodexReasoningProjection {
       return;
     }
     this.reasoningStarted = true;
-    if (!this.reasoningItemOrder.has(itemId)) {
-      this.reasoningItemOrder.set(itemId, this.reasoningItemOrder.size);
-    }
+    const item = this.reasoningTextByItem.get(itemId) ?? {
+      summary: new Map<number, string>(),
+      content: new Map<number, string>(),
+    };
+    this.reasoningTextByItem.set(itemId, item);
     // Codex indexes reasoning sections independently within an item.
     const groupIndex =
       method === "item/reasoning/textDelta"
         ? (readNonNegativeInteger(params, "contentIndex") ?? 0)
         : (readNonNegativeInteger(params, "summaryIndex") ?? 0);
-    const groupKey = `${method}\0${itemId}\0${groupIndex}`;
-    const current = this.reasoningTextByGroup.get(groupKey);
-    this.reasoningTextByGroup.set(groupKey, {
-      itemId,
-      method,
-      index: groupIndex,
-      text: `${current?.text ?? ""}${delta}`,
-    });
+    const sections = method === "item/reasoning/textDelta" ? item.content : item.summary;
+    sections.set(groupIndex, `${sections.get(groupIndex) ?? ""}${delta}`);
     await this.params.onReasoningStream?.({
       text: this.reasoningText(),
       isReasoningSnapshot: true,
@@ -74,7 +71,11 @@ export class CodexReasoningProjection {
     });
   }
 
-  handleTurnPlanUpdated(params: JsonObject): void {
+  async handleTurnPlanUpdated(
+    params: JsonObject,
+    source: PlanUpdateSource = "codex-app-server",
+  ): Promise<void> {
+    const explanation = readNullableString(params, "explanation");
     const plan = Array.isArray(params.plan)
       ? params.plan.flatMap((entry) => {
           if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
@@ -88,13 +89,47 @@ export class CodexReasoningProjection {
           return [{ step, status: normalizePlanStepStatus(readString(record, "status")) }];
         })
       : undefined;
-    this.emitPlanUpdate({
-      explanation: readNullableString(params, "explanation"),
-      steps: plan,
-    });
+    const planText = [
+      explanation,
+      ...(plan ?? []).map(({ step, status }) => `- [${status}] ${step}`),
+    ]
+      .filter((part): part is string => Boolean(part))
+      .join("\n");
+    if (planText) {
+      // Structured turn updates are the canonical latest plan for terminal classification.
+      this.turnPlanText = planText;
+    }
+    if (source === "codex-app-server" && plan) {
+      await this.onNativePlanUpdate?.({
+        ...(typeof explanation === "string" ? { markdown: explanation } : {}),
+        steps: plan,
+      });
+    }
+    this.emitPlanUpdate(
+      {
+        explanation,
+        ...(params.explanationFormat === "plain" ? { explanationFormat: "plain" as const } : {}),
+        steps: plan,
+      },
+      source,
+    );
   }
 
-  recordItem(item: CodexThreadItem | undefined): void {
+  async recordItem(item: CodexThreadItem | undefined): Promise<void> {
+    if (item?.type === "reasoning") {
+      const previousText = this.reasoningText();
+      // Contributors can suppress deltas; completed sections are authoritative.
+      this.reasoningTextByItem.set(item.id, {
+        summary: readReasoningSections(item.summary),
+        content: readReasoningSections(item.content),
+      });
+      const text = this.reasoningText();
+      if (text !== previousText) {
+        this.reasoningStarted = true;
+        await this.params.onReasoningStream?.({ text, isReasoningSnapshot: true });
+      }
+      return;
+    }
     if (item?.type === "plan" && typeof item.text === "string" && item.text) {
       this.planTextByItem.set(item.id, item.text);
       this.emitPlanUpdate({
@@ -113,17 +148,26 @@ export class CodexReasoningProjection {
   }
 
   reasoningText(): string {
-    return collectReasoningTextValues(this.reasoningTextByGroup, this.reasoningItemOrder).join(
-      "\n\n",
-    );
+    return [...this.reasoningTextByItem.values()]
+      .flatMap(({ summary, content }) => [summary, content])
+      .flatMap((sections) => [...sections].toSorted(([left], [right]) => left - right))
+      .map(([, text]) => text)
+      .filter((text) => text.trim().length > 0)
+      .join("\n\n");
   }
 
   planText(): string {
-    return [...this.planTextByItem.values()].filter((text) => text.trim().length > 0).join("\n\n");
+    return (
+      this.turnPlanText ??
+      [...this.planTextByItem.values()].filter((text) => text.trim().length > 0).join("\n\n")
+    );
   }
 
-  private emitPlanUpdate(params: { explanation?: string | null; steps?: AgentPlanStep[] }): void {
-    if (!params.explanation && (!params.steps || params.steps.length === 0)) {
+  private emitPlanUpdate(
+    params: { explanation?: string | null; explanationFormat?: "plain"; steps?: AgentPlanStep[] },
+    source: PlanUpdateSource = "codex-app-server",
+  ): void {
+    if (!params.explanation && params.steps === undefined) {
       return;
     }
     this.emitAgentEvent({
@@ -131,9 +175,10 @@ export class CodexReasoningProjection {
       data: {
         phase: "update",
         title: "Plan updated",
-        source: "codex-app-server",
+        source,
         ...(params.explanation ? { explanation: params.explanation } : {}),
-        ...(params.steps && params.steps.length > 0 ? { steps: params.steps } : {}),
+        ...(params.explanationFormat ? { explanationFormat: params.explanationFormat } : {}),
+        ...(params.steps ? { steps: params.steps } : {}),
       },
     });
   }
@@ -146,25 +191,14 @@ function normalizePlanStepStatus(status: string | undefined): AgentPlanStepStatu
   return status === "completed" ? "completed" : "pending";
 }
 
-function collectReasoningTextValues(
-  groups: Map<string, ReasoningTextGroup>,
-  itemOrder: Map<string, number>,
-): string[] {
-  return [...groups.values()]
-    .toSorted((left, right) => {
-      const itemDelta =
-        (itemOrder.get(left.itemId) ?? Number.MAX_SAFE_INTEGER) -
-        (itemOrder.get(right.itemId) ?? Number.MAX_SAFE_INTEGER);
-      if (itemDelta !== 0) {
-        return itemDelta;
+function readReasoningSections(value: unknown): Map<number, string> {
+  const sections = new Map<number, string>();
+  if (Array.isArray(value)) {
+    value.forEach((text, index) => {
+      if (typeof text === "string") {
+        sections.set(index, text);
       }
-      const methodDelta = reasoningMethodOrder(left.method) - reasoningMethodOrder(right.method);
-      return methodDelta !== 0 ? methodDelta : left.index - right.index;
-    })
-    .map((group) => group.text)
-    .filter((text) => text.trim().length > 0);
-}
-
-function reasoningMethodOrder(method: ReasoningDeltaMethod): number {
-  return method === "item/reasoning/summaryTextDelta" ? 0 : 1;
+    });
+  }
+  return sections;
 }

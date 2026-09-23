@@ -1,10 +1,11 @@
-// Telegram plugin module implements update offset store behavior.
 import { readJsonFileWithFallback } from "openclaw/plugin-sdk/json-store";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { getTelegramRuntime } from "./runtime.js";
 import { normalizeTelegramStateAccountId } from "./state-account-id.js";
-import { fingerprintTelegramBotToken } from "./token-fingerprint.js";
-import { resolveTelegramBotUserIdFromToken } from "./token.js";
+import {
+  fingerprintTelegramBotToken,
+  resolveTelegramBotUserIdFromToken,
+} from "./token-fingerprint.js";
 
 const STORE_VERSION = 3;
 export const TELEGRAM_UPDATE_OFFSET_NAMESPACE = "telegram.update-offsets";

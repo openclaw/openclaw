@@ -1,11 +1,14 @@
 // Tests session usage command output and token accounting summaries.
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type {
   CostUsageSummary,
   CostUsageTotals,
   SessionCostSummary,
 } from "../../infra/session-cost-usage.js";
+import { withTempDir } from "../../test-utils/temp-dir.js";
 import { handleFastCommand, handleUsageCommand } from "./commands-session.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
@@ -38,6 +41,16 @@ type FastModeStateMockResult = {
   enabled: boolean;
   source: "session" | "agent" | "config" | "default";
   fastAutoOnSeconds?: number;
+};
+type UsageFooterScenario = {
+  name: string;
+  command: string;
+  targetUsage?: "off" | "tokens" | "full";
+  wrapperUsage?: "off" | "tokens" | "full";
+  configDefault?: "off" | "tokens" | "full";
+  shareTargetEntry?: boolean;
+  expectedUsage: "off" | "tokens" | "full" | undefined;
+  expectedText: string;
 };
 const resolveFastModeStateMock = vi.hoisted(() =>
   vi.fn<() => FastModeStateMockResult>(() => ({
@@ -96,7 +109,7 @@ function buildUsageParams(): HandleCommandsParams {
       to: "bot",
     },
     sessionKey: "agent:target:whatsapp:direct:12345",
-    agentId: "main",
+    agentId: "target",
     sessionEntry: {
       sessionId: "session-1",
       updatedAt: Date.now(),
@@ -176,19 +189,81 @@ describe("handleUsageCommand", () => {
     const args = expectSessionCostArgs();
     expect(args.agentId).toBe("target");
     expect(args.sessionId).toBe("session-1");
+    expect(loadCostUsageSummaryMock).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "target" }),
+    );
+  });
+
+  it.each([
+    ["cold", "refreshing", 0, 2],
+    ["refreshing", "refreshing", 4.56, 2],
+    ["refreshing-current", "refreshing", 4.56, 0],
+    ["partial", "partial", 4.56, 2],
+    ["stale", "stale", 0, 2],
+    ["empty", "fresh", 0, 0],
+    ["fresh", "fresh", 4.56, 0],
+    ["legacy", undefined, 4.56, 0],
+  ] as const)(
+    "qualifies %s aggregate costs without changing the session total",
+    async (_name, status, totalCost, pendingFiles) => {
+      const totals = buildCostTotals({ totalCost });
+      loadCostUsageSummaryMock.mockResolvedValue({
+        updatedAt: 1,
+        days: 30,
+        daily: [],
+        totals,
+        ...(status
+          ? {
+              cacheStatus: {
+                status,
+                cachedFiles: totalCost === 0 ? 0 : 1,
+                pendingFiles,
+                staleFiles: pendingFiles,
+              },
+            }
+          : {}),
+      });
+
+      const result = await handleUsageCommand(buildUsageParams(), true);
+
+      expect(result?.shouldContinue).toBe(false);
+      expect(loadSessionCostSummaryMock).toHaveBeenCalledOnce();
+      expect(loadCostUsageSummaryMock).toHaveBeenCalledOnce();
+      const costLabel = totalCost === 0 ? "$0.0000" : "$4.56";
+      const expectedLines = ["💸 Usage cost", "Session $1.23 · 100 tokens"];
+      if (status && status !== "fresh") {
+        expectedLines.push(
+          `Usage totals may be incomplete (${status}). Run this command again later.`,
+        );
+      }
+      expectedLines.push("Today n/a", `Last 30d ${costLabel}`);
+      expect(result?.reply?.text).toBe(expectedLines.join("\n"));
+    },
+  );
+
+  it("keeps the current agent for an unqualified global session key", async () => {
+    const params = buildUsageParams();
+    params.agentId = "other";
+    params.sessionKey = "global";
+
+    await handleUsageCommand(params, true);
+
+    const args = expectSessionCostArgs();
+    expect(args.agentId).toBe("other");
+    expect(args.sessionTarget).toMatchObject({ agentId: "other", sessionKey: "global" });
+    expect(resolveSessionAgentIdMock).not.toHaveBeenCalled();
   });
 
   it("prefers the target session entry from sessionStore for /usage cost", async () => {
     const params = buildUsageParams();
+    params.storePath = "/tmp/custom-session-store.sqlite";
     params.sessionEntry = {
       sessionId: "wrapper-session",
-      sessionFile: "/tmp/wrapper-session.jsonl",
       updatedAt: Date.now(),
     };
     params.sessionStore = {
       [params.sessionKey]: {
         sessionId: "target-session",
-        sessionFile: "/tmp/target-session.jsonl",
         updatedAt: Date.now(),
       },
     };
@@ -197,149 +272,100 @@ describe("handleUsageCommand", () => {
 
     const args = expectSessionCostArgs();
     expect(args.sessionId).toBe("target-session");
-    expect(args.sessionFile).toBe("/tmp/target-session.jsonl");
+    expect(args.sessionTarget).toMatchObject({
+      agentId: "target",
+      sessionId: "target-session",
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+    });
   });
 
-  it("prefers the target session entry from sessionStore for /usage footer mode", async () => {
+  it.each([
+    {
+      name: "prefers the target session entry from sessionStore for /usage footer mode",
+      command: "/usage",
+      targetUsage: "tokens",
+      wrapperUsage: "off",
+      expectedUsage: "full",
+      expectedText: "⚙️ Usage footer: full.",
+    },
+    {
+      name: "updates usage footer mode as a session preference",
+      command: "/usage tokens",
+      targetUsage: "full",
+      shareTargetEntry: true,
+      expectedUsage: "tokens",
+      expectedText: "⚙️ Usage footer: tokens.",
+    },
+    {
+      name: "persists an explicit /usage off so a configured default cannot re-enable it",
+      command: "/usage off",
+      targetUsage: "tokens",
+      expectedUsage: "off",
+      expectedText: "⚙️ Usage footer: off.",
+    },
+    {
+      name: "no-arg toggle uses the effective mode (config default) when session is unset",
+      command: "/usage",
+      configDefault: "tokens",
+      expectedUsage: "full",
+      expectedText: "⚙️ Usage footer: full.",
+    },
+    {
+      name: "/usage reset clears the session override so the config default takes over",
+      command: "/usage reset",
+      targetUsage: "off",
+      expectedUsage: undefined,
+      expectedText: "⚙️ Usage footer: reset to default.",
+    },
+    {
+      name: "/usage inherit (alias) clears the session override",
+      command: "/usage inherit",
+      targetUsage: "full",
+      expectedUsage: undefined,
+      expectedText: "⚙️ Usage footer: reset to default.",
+    },
+    {
+      name: "explicit off is stored and not treated as unset — config default cannot override it",
+      command: "/usage",
+      targetUsage: "off",
+      configDefault: "tokens",
+      expectedUsage: "tokens",
+      expectedText: "⚙️ Usage footer: tokens.",
+    },
+  ] satisfies UsageFooterScenario[])("$name", async (scenario: UsageFooterScenario) => {
     const params = buildUsageParams();
-    params.command.commandBodyNormalized = "/usage";
-    params.sessionEntry = {
-      sessionId: "wrapper-session",
-      updatedAt: Date.now(),
-      responseUsage: "off",
-    };
-    params.sessionStore = {
-      [params.sessionKey]: {
-        sessionId: "target-session",
-        updatedAt: Date.now(),
-        responseUsage: "tokens",
-      },
-    };
-
-    const result = await handleUsageCommand(params, true);
-
-    expect(result?.shouldContinue).toBe(false);
-    expect(result?.reply?.text).toBe("⚙️ Usage footer: full.");
-  });
-
-  it("updates usage footer mode as a session preference", async () => {
-    const params = buildUsageParams();
-    params.command.commandBodyNormalized = "/usage tokens";
-    params.sessionEntry = {
+    params.command.commandBodyNormalized = scenario.command;
+    if (scenario.configDefault) {
+      params.cfg = { ...params.cfg, messages: { responseUsage: scenario.configDefault } };
+    }
+    const targetEntry: NonNullable<HandleCommandsParams["sessionEntry"]> = {
       sessionId: "target-session",
       updatedAt: Date.now(),
-      responseUsage: "full",
+      ...(scenario.targetUsage ? { responseUsage: scenario.targetUsage } : {}),
     };
-    params.sessionStore = { [params.sessionKey]: params.sessionEntry };
-
-    const result = await handleUsageCommand(params, true);
-
-    expect(result?.reply?.text).toBe("⚙️ Usage footer: tokens.");
-    expect(params.sessionEntry.responseUsage).toBe("tokens");
-  });
-
-  it("persists an explicit /usage off so a configured default cannot re-enable it", async () => {
-    const params = buildUsageParams();
-    params.command.commandBodyNormalized = "/usage off";
-    params.sessionStore = {
-      [params.sessionKey]: {
-        sessionId: "target-session",
+    params.sessionStore = { [params.sessionKey]: targetEntry };
+    if (scenario.shareTargetEntry) {
+      params.sessionEntry = targetEntry;
+    } else if (scenario.wrapperUsage) {
+      params.sessionEntry = {
+        sessionId: "wrapper-session",
         updatedAt: Date.now(),
-        responseUsage: "tokens",
-      },
-    };
+        responseUsage: scenario.wrapperUsage,
+      };
+    }
 
     const result = await handleUsageCommand(params, true);
 
     expect(result?.shouldContinue).toBe(false);
-    expect(result?.reply?.text).toBe("⚙️ Usage footer: off.");
-    expect(params.sessionStore[params.sessionKey]?.responseUsage).toBe("off");
-  });
-
-  it("no-arg toggle uses the effective mode (config default) when session is unset", async () => {
-    // When session has no override, the effective mode is the config default.
-    // The toggle should cycle from that effective value, not from "off".
-    const params = buildUsageParams();
-    params.command.commandBodyNormalized = "/usage";
-    params.cfg = {
-      ...params.cfg,
-      messages: { responseUsage: "tokens" },
-    } as OpenClawConfig;
-    params.sessionStore = {
-      [params.sessionKey]: {
-        sessionId: "target-session",
-        updatedAt: Date.now(),
-        // responseUsage is absent — session inherits config default "tokens"
-      },
-    };
-
-    const result = await handleUsageCommand(params, true);
-
-    expect(result?.shouldContinue).toBe(false);
-    // Effective current = "tokens" (from config), so cycle → "full"
-    expect(result?.reply?.text).toBe("⚙️ Usage footer: full.");
-    expect(params.sessionStore[params.sessionKey]?.responseUsage).toBe("full");
-  });
-
-  it("/usage reset clears the session override so the config default takes over", async () => {
-    const params = buildUsageParams();
-    params.command.commandBodyNormalized = "/usage reset";
-    params.sessionStore = {
-      [params.sessionKey]: {
-        sessionId: "target-session",
-        updatedAt: Date.now(),
-        responseUsage: "off",
-      },
-    };
-
-    const result = await handleUsageCommand(params, true);
-
-    expect(result?.shouldContinue).toBe(false);
-    expect(result?.reply?.text).toBe("⚙️ Usage footer: reset to default.");
-    // responseUsage is deleted (undefined) — session now inherits the config default
-    expect(params.sessionStore[params.sessionKey]?.responseUsage).toBeUndefined();
-  });
-
-  it("/usage inherit (alias) clears the session override", async () => {
-    const params = buildUsageParams();
-    params.command.commandBodyNormalized = "/usage inherit";
-    params.sessionStore = {
-      [params.sessionKey]: {
-        sessionId: "target-session",
-        updatedAt: Date.now(),
-        responseUsage: "full",
-      },
-    };
-
-    const result = await handleUsageCommand(params, true);
-
-    expect(result?.shouldContinue).toBe(false);
-    expect(result?.reply?.text).toBe("⚙️ Usage footer: reset to default.");
-    expect(params.sessionStore[params.sessionKey]?.responseUsage).toBeUndefined();
-  });
-
-  it("explicit off is stored and not treated as unset — config default cannot override it", async () => {
-    // This verifies the three-state distinction: "off" vs undefined.
-    // When session has explicit "off", the effective value is "off" regardless of config.
-    const params = buildUsageParams();
-    params.command.commandBodyNormalized = "/usage";
-    params.cfg = {
-      ...params.cfg,
-      messages: { responseUsage: "tokens" },
-    } as OpenClawConfig;
-    params.sessionStore = {
-      [params.sessionKey]: {
-        sessionId: "target-session",
-        updatedAt: Date.now(),
-        responseUsage: "off", // explicit off — stays off despite config default "tokens"
-      },
-    };
-
-    const result = await handleUsageCommand(params, true);
-
-    expect(result?.shouldContinue).toBe(false);
-    // Effective current = "off" (explicit, not inherited), so cycle → "tokens"
-    expect(result?.reply?.text).toBe("⚙️ Usage footer: tokens.");
+    expect(result?.reply?.text).toBe(scenario.expectedText);
+    expect(params.sessionStore[params.sessionKey]?.responseUsage).toBe(scenario.expectedUsage);
+    if (scenario.shareTargetEntry) {
+      expect(params.sessionEntry?.responseUsage).toBe(scenario.expectedUsage);
+    }
+    if (scenario.wrapperUsage) {
+      expect(params.sessionEntry?.responseUsage).toBe(scenario.wrapperUsage);
+    }
   });
 });
 
@@ -411,6 +437,95 @@ describe("handleFastCommand", () => {
     const sessionEntry = args.sessionEntry as Record<string, unknown> | undefined;
     expect(sessionEntry?.sessionId).toBe("target-session");
     expect(sessionEntry?.fastMode).toBe(true);
+  });
+
+  it.each([
+    { mode: "on", value: true, text: "⚙️ Fast mode enabled." },
+    { mode: "off", value: false, text: "⚙️ Fast mode disabled." },
+    { mode: "auto", value: "auto", text: "⚙️ Fast mode set to auto." },
+  ] as const)("persists /fast $mode on the canonical target", async ({ mode, value, text }) => {
+    await withTempDir("openclaw-fast-command-", async (dir) => {
+      const params = buildUsageParams();
+      params.command.commandBodyNormalized = `/fast ${mode}`;
+      params.storePath = path.join(dir, "sessions.json");
+      params.sessionEntry = { sessionId: "wrapper-session", updatedAt: 1, fastMode: false };
+      const target: NonNullable<HandleCommandsParams["sessionEntry"]> = {
+        sessionId: "target-session",
+        updatedAt: 1,
+        fastMode: mode !== "on",
+      };
+      params.initialSessionEntry = { ...target };
+      params.sessionStore = { [params.sessionKey]: target };
+      await replaceSessionEntry(
+        { storePath: params.storePath, sessionKey: params.sessionKey },
+        { ...target },
+      );
+
+      const result = await handleFastCommand(params, true);
+
+      expect(result).toEqual({ shouldContinue: false, reply: { text } });
+      expect(
+        loadSessionEntry({ storePath: params.storePath, sessionKey: params.sessionKey })?.fastMode,
+      ).toBe(value);
+      expect(params.sessionStore[params.sessionKey]?.fastMode).toBe(value);
+      expect(params.sessionEntry.fastMode).toBe(false);
+      expect(resolveFastModeStateMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it.each([
+    ["on", "⚙️ Fast mode enabled."],
+    ["off", "⚙️ Fast mode disabled."],
+    ["auto", "⚙️ Fast mode set to auto."],
+    ["default", "⚙️ Fast mode reset to default."],
+  ])("keeps the /fast %s reply without a target entry", async (mode, text) => {
+    const params = buildUsageParams();
+    params.command.commandBodyNormalized = `/fast ${mode}`;
+    params.sessionEntry = undefined;
+
+    expect(await handleFastCommand(params, true)).toEqual({
+      shouldContinue: false,
+      reply: { text },
+    });
+    expect(params.sessionStore).toBeUndefined();
+    expect(resolveFastModeStateMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects an invalid /fast mode without mutating the target", async () => {
+    const params = buildUsageParams();
+    params.command.commandBodyNormalized = "/fast invalid";
+    const target = { sessionId: "target-session", updatedAt: 1, fastMode: true };
+    params.sessionEntry = target;
+    params.sessionStore = { [params.sessionKey]: target };
+
+    expect(await handleFastCommand(params, true)).toEqual({
+      shouldContinue: false,
+      reply: { text: "⚙️ Usage: /fast status|auto|on|off|default" },
+    });
+    expect(target).toEqual({ sessionId: "target-session", updatedAt: 1, fastMode: true });
+    expect(resolveFastModeStateMock).not.toHaveBeenCalled();
+  });
+
+  it.each(["default", "off"])("reports a /fast %s persistence conflict", async (mode) => {
+    await withTempDir("openclaw-fast-conflict-", async (dir) => {
+      const params = buildUsageParams();
+      params.command.commandBodyNormalized = `/fast ${mode}`;
+      params.storePath = path.join(dir, "sessions.json");
+      const target = { sessionId: "missing-session", updatedAt: 1, fastMode: true };
+      params.sessionEntry = target;
+      params.initialSessionEntry = { ...target };
+      params.sessionStore = { [params.sessionKey]: target };
+
+      expect(await handleFastCommand(params, true)).toEqual({
+        shouldContinue: false,
+        reply: {
+          text: "⚠️ Session changed before this setting could be saved. Retry the command.",
+        },
+      });
+      expect(
+        loadSessionEntry({ storePath: params.storePath, sessionKey: params.sessionKey }),
+      ).toBeUndefined();
+    });
   });
 
   it("clears fast mode for /fast default", async () => {

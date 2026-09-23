@@ -1,15 +1,7 @@
-import type {
-  EmbeddedRunAttemptParams,
-  NativeHookRelayRegistrationHandle,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
 import { isSystemAgentOnlyCodexDynamicToolAllowlist } from "./dynamic-tool-profile.js";
-import type {
-  CodexDynamicToolCallParams,
-  CodexDynamicToolCallResponse,
-  JsonValue,
-} from "./protocol.js";
+import type { CodexDynamicToolCallResponse } from "./protocol.js";
 import { sanitizeCodexToolResponse } from "./tool-progress-normalization.js";
 
 export function toTranscriptToolResult(
@@ -51,63 +43,9 @@ function formatUnsupportedCodexDynamicToolOutput(type: unknown): string {
   return `[Unsupported Codex dynamic tool output: ${label}${suffix}]`;
 }
 
-type CodexDynamicToolExecutionIdentity = Pick<
-  CodexDynamicToolCallParams,
-  "threadId" | "turnId" | "callId"
->;
-
-export function createCodexDynamicToolExecutionRegistry() {
-  const executions = new Map<string, Promise<CodexDynamicToolCallResponse>>();
-  const keyFor = (call: CodexDynamicToolExecutionIdentity) =>
-    JSON.stringify([call.threadId, call.turnId, call.callId]);
-
-  return {
-    get(call: CodexDynamicToolExecutionIdentity) {
-      return executions.get(keyFor(call));
-    },
-    claim(
-      call: CodexDynamicToolExecutionIdentity,
-      start: () => Promise<CodexDynamicToolCallResponse>,
-    ) {
-      const existing = executions.get(keyFor(call));
-      if (existing) {
-        return { execution: existing, replayed: true } as const;
-      }
-      const execution = start();
-      executions.set(keyFor(call), execution);
-      return { execution, replayed: false } as const;
-    },
-  };
-}
-
-export function handleApprovalRequest(params: {
-  method: string;
-  params: JsonValue | undefined;
-  paramsForRun: EmbeddedRunAttemptParams;
-  threadId: string;
-  turnId: string;
-  nativeHookRelay?: NativeHookRelayRegistrationHandle;
-  autoApprove?: boolean;
-  signal?: AbortSignal;
-  onNativeToolFailureDisposition?: Parameters<
-    typeof handleCodexAppServerApprovalRequest
-  >[0]["onNativeToolFailureDisposition"];
-}): Promise<JsonValue | undefined> {
-  return handleCodexAppServerApprovalRequest({
-    method: params.method,
-    requestParams: params.params,
-    paramsForRun: params.paramsForRun,
-    threadId: params.threadId,
-    turnId: params.turnId,
-    nativeHookRelay: params.nativeHookRelay,
-    autoApprove: params.autoApprove,
-    signal: params.signal,
-    onNativeToolFailureDisposition: params.onNativeToolFailureDisposition,
-  });
-}
-
 export function resolveCodexDynamicToolDirectNames(
   params: EmbeddedRunAttemptParams,
+  registeredTools: readonly { name: string }[],
   hostSystemAgentActive = false,
 ): string[] {
   // Tools with catalogMode=direct-only use the model-only namespace. This list
@@ -118,7 +56,9 @@ export function resolveCodexDynamicToolDirectNames(
   if (hostSystemAgentActive && isSystemAgentOnlyCodexDynamicToolAllowlist(params.toolsAllow)) {
     names.push("openclaw");
   }
-  if (params.sourceReplyDeliveryMode === "message_tool_only") {
+  // Registration owns persistent layout; a turn may narrow execution without
+  // moving this tool into a namespace and changing the thread fingerprint.
+  if (registeredTools.some((tool) => tool.name === "message")) {
     names.push("message");
   }
   return names;

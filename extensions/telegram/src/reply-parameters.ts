@@ -1,10 +1,12 @@
-// Telegram plugin module implements reply parameters behavior.
 import { GrammyError } from "grammy";
 import type { MessageEntity } from "grammy/types";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
+import { asFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helpers.js";
 import { normalizeTelegramReplyToMessageId } from "./outbound-params.js";
 
+const sendLogger = createSubsystemLogger("telegram/send");
 const QUOTE_PARAM_RE = /\bquote not found\b|\bQUOTE_TEXT_INVALID\b|\bquote text invalid\b/i;
 const GrammyErrorCtor: typeof GrammyError | undefined =
   typeof GrammyError === "function" ? GrammyError : undefined;
@@ -19,6 +21,7 @@ type TelegramReplyParameters = {
 
 type TelegramThreadReplyParams = {
   message_thread_id?: number;
+  direct_messages_topic_id?: number;
   reply_parameters?: TelegramReplyParameters;
   reply_to_message_id?: number;
   allow_sending_without_reply?: true;
@@ -26,16 +29,21 @@ type TelegramThreadReplyParams = {
 
 export function resolveTelegramSendThreadSpec(params: {
   targetMessageThreadId?: number;
+  targetDirectMessagesTopicId?: number;
   messageThreadId?: number;
   chatType?: "direct" | "group" | "unknown";
 }): TelegramThreadSpec | undefined {
+  if (params.targetDirectMessagesTopicId != null) {
+    return { id: params.targetDirectMessagesTopicId, scope: "direct-messages" };
+  }
   const messageThreadId =
     params.messageThreadId != null ? params.messageThreadId : params.targetMessageThreadId;
   if (messageThreadId == null) {
     return undefined;
   }
-  // Telegram supports DM topics; keep direct chat thread IDs and let invalid
-  // topics fail closed instead of sending to the base chat.
+  // Bot-private topics retain the historical dm scope. A :topic: marker on a
+  // group remains forum semantics; channel Direct Messages require their
+  // distinct :direct-topic: marker and never infer from a negative chat id.
   return {
     id: messageThreadId,
     scope: params.chatType === "direct" ? "dm" : "forum",
@@ -51,11 +59,7 @@ export function buildTelegramThreadReplyParams(opts?: {
   replyQuoteEntities?: unknown[];
   useReplyIdAsQuoteSource?: boolean;
 }): TelegramThreadReplyParams {
-  const params: TelegramThreadReplyParams = {};
-  const threadParams = buildTelegramThreadParams(opts?.thread);
-  if (threadParams) {
-    params.message_thread_id = threadParams.message_thread_id;
-  }
+  const params: TelegramThreadReplyParams = { ...buildTelegramThreadParams(opts?.thread) };
 
   const replyToMessageId = normalizeTelegramReplyToMessageId(opts?.replyToMessageId);
   if (replyToMessageId == null) {
@@ -116,7 +120,7 @@ export function getTelegramNativeQuoteReplyMessageId(
     return undefined;
   }
   const messageId = (replyParameters as { message_id?: unknown }).message_id;
-  return typeof messageId === "number" && Number.isFinite(messageId) ? messageId : undefined;
+  return asFiniteNumber(messageId);
 }
 
 export function isTelegramQuoteParamError(err: unknown): boolean {
@@ -126,7 +130,7 @@ export function isTelegramQuoteParamError(err: unknown): boolean {
   return QUOTE_PARAM_RE.test(formatErrorMessage(err));
 }
 
-export function removeTelegramNativeQuoteParam(
+function removeTelegramNativeQuoteParam(
   params: Record<string, unknown> | undefined,
 ): Record<string, unknown> {
   if (!params) {
@@ -139,4 +143,39 @@ export function removeTelegramNativeQuoteParam(
     rest.allow_sending_without_reply = true;
   }
   return rest;
+}
+
+export async function withTelegramNativeQuoteFallback<T>(params: {
+  label: string;
+  requestParams: Record<string, unknown>;
+  request: (requestParams: Record<string, unknown>, label: string) => Promise<T>;
+  removeNativeQuoteParam?: (requestParams: Record<string, unknown>) => Record<string, unknown>;
+}): Promise<{ result: T; acceptedParams: Record<string, unknown> }> {
+  try {
+    return {
+      result: await params.request(params.requestParams, params.label),
+      acceptedParams: params.requestParams,
+    };
+  } catch (err) {
+    if (
+      getTelegramNativeQuoteReplyMessageId(params.requestParams) == null ||
+      !isTelegramQuoteParamError(err)
+    ) {
+      throw err;
+    }
+    // Model quotes can drift from the source text; rejecting the quote must not
+    // discard its message reply target or topic routing.
+    sendLogger.warn(
+      `telegram ${params.label} native quote rejected, retrying with legacy reply_to_message_id: ${formatErrorMessage(
+        err,
+      )}`,
+    );
+    const acceptedParams = (params.removeNativeQuoteParam ?? removeTelegramNativeQuoteParam)(
+      params.requestParams,
+    );
+    return {
+      result: await params.request(acceptedParams, `${params.label}-legacy-reply`),
+      acceptedParams,
+    };
+  }
 }

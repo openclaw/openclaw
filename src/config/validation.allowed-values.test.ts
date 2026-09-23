@@ -1,6 +1,6 @@
 // Verifies config validation rejects unsupported enumerated values.
 import { describe, expect, it } from "vitest";
-import { validateConfigObjectRaw } from "./validation.js";
+import { validateConfigObjectRaw } from "./validation-core.js";
 
 function requireIssue<T extends { path: string }>(issues: T[], path: string): T {
   const issue = issues.find((entry) => entry.path === path);
@@ -11,6 +11,40 @@ function requireIssue<T extends { path: string }>(issues: T[], path: string): T 
 }
 
 describe("config validation allowed-values metadata", () => {
+  it.each([
+    { path: "talk.agentId", config: { talk: { agentId: 'expected one of "bogus"' } } },
+    {
+      path: "bindings.0.agentId",
+      config: {
+        agents: { entries: { main: {} } },
+        bindings: [{ agentId: 'expected one of "bogus"', match: { channel: "discord" } }],
+      },
+    },
+    {
+      path: "broadcast.discord:qa.0",
+      config: {
+        agents: { entries: { main: {} } },
+        broadcast: { "discord:qa": ['expected one of "bogus"'] },
+      },
+    },
+    {
+      path: "talk.provider",
+      config: { talk: { provider: 'expected one of "bogus"', providers: { qa: {} } } },
+    },
+  ])("does not infer allowed values from user text at $path", ({ path, config }) => {
+    const original = structuredClone(config);
+    const result = validateConfigObjectRaw(config);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      const issue = requireIssue(result.issues, path);
+      expect(issue.message).toContain('expected one of "bogus"');
+      expect(issue.allowedValues).toBeUndefined();
+      expect(issue.allowedValuesHiddenCount).toBeUndefined();
+    }
+    expect(config).toEqual(original);
+  });
+
   it("accepts extended-stable as an additive update channel", () => {
     expect(
       validateConfigObjectRaw({
@@ -31,6 +65,23 @@ describe("config validation allowed-values metadata", () => {
       expect(JSON.stringify(issue)).not.toContain("pathSegments");
       expect(issue.message).toContain('(allowed: "stable", "extended-stable", "beta", "dev")');
       expect(issue.allowedValues).toEqual(["stable", "extended-stable", "beta", "dev"]);
+      expect(issue.allowedValuesHiddenCount).toBe(0);
+    }
+  });
+
+  it("reports the supported diagnostics OTel protocol when grpc is configured", () => {
+    const result = validateConfigObjectRaw({
+      diagnostics: {
+        otel: {
+          protocol: "grpc",
+        },
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      const issue = requireIssue(result.issues, "diagnostics.otel.protocol");
+      expect(issue.allowedValues).toEqual(["http/protobuf"]);
       expect(issue.allowedValuesHiddenCount).toBe(0);
     }
   });
@@ -126,7 +177,7 @@ describe("config validation allowed-values metadata", () => {
   it("keeps generic union messaging for mixed scalar-or-object unions", () => {
     const result = validateConfigObjectRaw({
       agents: {
-        list: [{ id: "a", model: true }],
+        entries: { a: { model: true } },
       },
     });
 
@@ -134,7 +185,7 @@ describe("config validation allowed-values metadata", () => {
     if (!result.ok) {
       expect(result.issues).toEqual([
         {
-          path: "agents.list.0.model",
+          path: "agents.entries.a.model",
           message: "Invalid input",
         },
       ]);

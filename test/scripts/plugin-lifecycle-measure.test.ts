@@ -1,26 +1,12 @@
 // Plugin Lifecycle Measure tests cover plugin lifecycle measure script behavior.
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const tempDirs: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const scriptPath = "scripts/e2e/lib/plugin-lifecycle-matrix/measure.mjs";
-
-function makeTempDir(): string {
-  const dir = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-lifecycle-measure-"));
-  tempDirs.push(dir);
-  return dir;
-}
 
 function writeFakeGetconf(dir: string, body: string): string {
   const binDir = path.join(dir, "bin");
@@ -53,46 +39,61 @@ function waitForPidExit(pid: number, timeoutMs: number): boolean {
   return !pidExists(pid);
 }
 
-function waitForPath(filePath: string, timeoutMs: number): boolean {
+function nonEmptyPathExists(filePath: string): boolean {
+  try {
+    return statSync(filePath).size > 0;
+  } catch {
+    return false;
+  }
+}
+
+function waitForNonEmptyPath(filePath: string, timeoutMs: number): boolean {
   const waitBuffer = new SharedArrayBuffer(4);
   const waitView = new Int32Array(waitBuffer);
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (existsSync(filePath)) {
+    if (nonEmptyPathExists(filePath)) {
       return true;
     }
     Atomics.wait(waitView, 0, 0, 5);
   }
-  return existsSync(filePath);
+  return nonEmptyPathExists(filePath);
 }
 
 function waitForChildClose(
   child: ChildProcess,
   timeoutMs: number,
-): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
+): Promise<{ code: number | null; signal: NodeJS.Signals | null; stderr: string }> {
   return new Promise((resolve, reject) => {
+    let stderr = "";
+    child.stderr?.setEncoding("utf8").on("data", (chunk: string) => {
+      stderr += chunk;
+    });
     const timer = setTimeout(() => {
       child.kill("SIGKILL");
       reject(new Error("timed out waiting for measured wrapper to exit"));
     }, timeoutMs);
     child.once("close", (code, signal) => {
       clearTimeout(timer);
-      resolve({ code, signal });
+      resolve({ code, signal, stderr });
     });
   });
 }
 
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
+function expectDrainedBeforeGraceDeadline(stderr: string) {
+  const termination = stderr.match(
+    /reason=(\S+) signal=SIGTERM exit_ms=([\d.]+) grace_deadline_ms=([\d.]+)/u,
+  );
+  expect(termination, stderr).not.toBeNull();
+  expect(termination?.[1]).toBe("descendants-drained");
+  expect(Number(termination?.[2])).toBeLessThan(Number(termination?.[3]));
+}
 
 describe("plugin lifecycle resource sampler", () => {
   it.runIf(process.platform === "linux")(
     "derives proc units from getconf when overrides are absent",
     () => {
-      const dir = makeTempDir();
+      const dir = tempDirs.make("openclaw-plugin-lifecycle-measure-");
       const summary = path.join(dir, "summary.tsv");
       const logPath = path.join(dir, "getconf.log");
       const binDir = writeFakeGetconf(
@@ -124,7 +125,7 @@ describe("plugin lifecycle resource sampler", () => {
   );
 
   it("rejects loose numeric env values instead of parsing prefixes", () => {
-    const dir = makeTempDir();
+    const dir = tempDirs.make("openclaw-plugin-lifecycle-measure-");
     const summary = path.join(dir, "summary.tsv");
     const result = spawnSync("node", [scriptPath, summary, "invalid-env", "--", "node", "-e", ""], {
       cwd: process.cwd(),
@@ -143,7 +144,7 @@ describe("plugin lifecycle resource sampler", () => {
   });
 
   it("rejects zero lifecycle timeouts instead of disabling the guard", () => {
-    const dir = makeTempDir();
+    const dir = tempDirs.make("openclaw-plugin-lifecycle-measure-");
     const summary = path.join(dir, "summary.tsv");
     const result = spawnSync("node", [scriptPath, summary, "invalid-env", "--", "node", "-e", ""], {
       cwd: process.cwd(),
@@ -162,7 +163,7 @@ describe("plugin lifecycle resource sampler", () => {
   });
 
   it("rejects loose resource ceiling env values instead of parsing prefixes", () => {
-    const dir = makeTempDir();
+    const dir = tempDirs.make("openclaw-plugin-lifecycle-measure-");
     const summary = path.join(dir, "summary.tsv");
     const result = spawnSync("node", [scriptPath, summary, "invalid-env", "--", "node", "-e", ""], {
       cwd: process.cwd(),
@@ -198,7 +199,7 @@ describe("plugin lifecycle resource sampler", () => {
   it.runIf(process.platform === "linux")(
     "fails successful phases that exceed wall ceilings",
     () => {
-      const dir = makeTempDir();
+      const dir = tempDirs.make("openclaw-plugin-lifecycle-measure-");
       const summary = path.join(dir, "summary.tsv");
       const result = spawnSync(
         "node",
@@ -225,7 +226,7 @@ describe("plugin lifecycle resource sampler", () => {
   it.runIf(process.platform === "linux")(
     "times out wedged phases and records the timeout signal",
     () => {
-      const dir = makeTempDir();
+      const dir = tempDirs.make("openclaw-plugin-lifecycle-measure-");
       const summary = path.join(dir, "summary.tsv");
       const result = spawnSync(
         "node",
@@ -251,7 +252,7 @@ describe("plugin lifecycle resource sampler", () => {
   );
 
   it.runIf(process.platform === "linux")("clamps oversized timer env values", () => {
-    const dir = makeTempDir();
+    const dir = tempDirs.make("openclaw-plugin-lifecycle-measure-");
     const summary = path.join(dir, "summary.tsv");
     const oversizedTimerMs = "2147000001";
     const result = spawnSync(
@@ -286,17 +287,40 @@ describe("plugin lifecycle resource sampler", () => {
   });
 
   it.runIf(process.platform === "linux")(
-    "kills stubborn descendants after the timeout grace period",
+    "kills stubborn descendants after timeout grace despite disappearing processes",
     () => {
-      const dir = makeTempDir();
+      const dir = tempDirs.make("openclaw-plugin-lifecycle-measure-");
       const summary = path.join(dir, "summary.tsv");
       const pidFile = path.join(dir, "descendant.pid");
+      const procRaceMarker = path.join(dir, "proc-race");
+      const preload = path.join(dir, "vanishing-proc.mjs");
+      writeFileSync(
+        preload,
+        `import fs from "node:fs";
+const readdirSync = fs.readdirSync.bind(fs);
+const vanishedPid = String(Number(fs.readFileSync("/proc/sys/kernel/pid_max", "utf8")) + 1);
+let scans = 0;
+let injected = false;
+fs.readdirSync = (target, options) => {
+  const entries = readdirSync(target, options);
+  if (target !== "/proc" || ++scans === 1 || injected) return entries;
+  if (!fs.existsSync(process.env.PID_FILE) || fs.statSync(process.env.PID_FILE).size === 0) return entries;
+  injected = true;
+  fs.writeFileSync(process.env.PROC_RACE_MARKER, vanishedPid);
+  // Node resolves unknown Dirent types with lstat, which can race process exit.
+  if (options?.withFileTypes) fs.lstatSync("/proc/" + vanishedPid);
+  return [...entries, vanishedPid];
+};
+`,
+      );
       let descendantPid: number | undefined;
 
       try {
         const result = spawnSync(
           "node",
           [
+            "--import",
+            preload,
             scriptPath,
             summary,
             "stubborn-descendant",
@@ -314,16 +338,26 @@ describe("plugin lifecycle resource sampler", () => {
             encoding: "utf8",
             env: {
               ...process.env,
-              OPENCLAW_PLUGIN_LIFECYCLE_PHASE_TIMEOUT_MS: "250",
-              OPENCLAW_PLUGIN_LIFECYCLE_TIMEOUT_KILL_GRACE_MS: "50",
+              OPENCLAW_PLUGIN_LIFECYCLE_PHASE_TIMEOUT_MS: "3000",
+              OPENCLAW_PLUGIN_LIFECYCLE_TIMEOUT_KILL_GRACE_MS: "200",
               PID_FILE: pidFile,
+              PROC_RACE_MARKER: procRaceMarker,
             },
-            timeout: 5000,
+            timeout: 7000,
           },
         );
 
+        const resultDetails = JSON.stringify({
+          status: result.status,
+          signal: result.signal,
+          error: result.error?.message,
+          stdout: result.stdout,
+          stderr: result.stderr,
+        });
+        expect(nonEmptyPathExists(pidFile), resultDetails).toBe(true);
         descendantPid = Number.parseInt(readFileSync(pidFile, "utf8"), 10);
-        expect(result.status).toBe(124);
+        expect(result.status, resultDetails).toBe(124);
+        expect(nonEmptyPathExists(procRaceMarker)).toBe(true);
         expect(result.stdout).toContain("signal=timeout");
         expect(readFileSync(summary, "utf8")).toMatch(
           /^stubborn-descendant\t\d+\t[\d.]+\t\d+\t[\d.]+\ttimeout$/mu,
@@ -340,7 +374,7 @@ describe("plugin lifecycle resource sampler", () => {
   it.runIf(process.platform === "linux")(
     "forwards external termination to the measured process group",
     async () => {
-      const dir = makeTempDir();
+      const dir = tempDirs.make("openclaw-plugin-lifecycle-measure-");
       const summary = path.join(dir, "summary.tsv");
       const pidFile = path.join(dir, "descendant.pid");
       let descendantPid: number | undefined;
@@ -365,15 +399,16 @@ describe("plugin lifecycle resource sampler", () => {
               OPENCLAW_PLUGIN_LIFECYCLE_TIMEOUT_KILL_GRACE_MS: "200",
               PID_FILE: pidFile,
             },
-            stdio: "ignore",
+            stdio: ["ignore", "ignore", "pipe"],
           },
         );
 
-        expect(waitForPath(pidFile, 2000)).toBe(true);
+        expect(waitForNonEmptyPath(pidFile, 2000)).toBe(true);
         descendantPid = Number.parseInt(readFileSync(pidFile, "utf8"), 10);
         result.kill("SIGTERM");
         const close = await waitForChildClose(result, 5000);
         expect(close.signal).toBe("SIGTERM");
+        expect(close.stderr).toContain("reason=grace-elapsed signal=SIGTERM");
         expect(waitForPidExit(descendantPid, 1000)).toBe(true);
       } finally {
         if (descendantPid !== undefined && descendantPid > 0 && pidExists(descendantPid)) {
@@ -383,10 +418,10 @@ describe("plugin lifecycle resource sampler", () => {
     },
   );
 
-  it.runIf(process.platform === "linux")(
-    "exits promptly when externally terminated phases stop during grace",
-    async () => {
-      const dir = makeTempDir();
+  it.runIf(process.platform === "linux").each(["open", "closed"])(
+    "exits promptly when externally terminated phases stop during grace (stderr %s)",
+    async (stderr) => {
+      const dir = tempDirs.make("openclaw-plugin-lifecycle-measure-");
       const summary = path.join(dir, "summary.tsv");
       const readyFile = path.join(dir, "ready.pid");
       const result = spawn(
@@ -414,16 +449,20 @@ describe("plugin lifecycle resource sampler", () => {
             OPENCLAW_PLUGIN_LIFECYCLE_TIMEOUT_KILL_GRACE_MS: "1500",
             READY_FILE: readyFile,
           },
-          stdio: "ignore",
+          stdio: ["ignore", "ignore", "pipe"],
         },
       );
 
-      expect(waitForPath(readyFile, 1000)).toBe(true);
-      const started = Date.now();
+      expect(waitForNonEmptyPath(readyFile, 5000)).toBe(true);
+      if (stderr === "closed") {
+        result.stderr.destroy();
+      }
       result.kill("SIGTERM");
       const close = await waitForChildClose(result, 5000);
 
-      expect(Date.now() - started).toBeLessThan(1000);
+      if (stderr === "open") {
+        expectDrainedBeforeGraceDeadline(close.stderr);
+      }
       expect(close.signal).toBe("SIGTERM");
     },
   );
@@ -431,7 +470,7 @@ describe("plugin lifecycle resource sampler", () => {
   it.runIf(process.platform === "linux")(
     "exits promptly when shell descendants drain during termination grace",
     async () => {
-      const dir = makeTempDir();
+      const dir = tempDirs.make("openclaw-plugin-lifecycle-measure-");
       const summary = path.join(dir, "summary.tsv");
       const readyFile = path.join(dir, "ready.pid");
       const result = spawn(
@@ -453,16 +492,15 @@ describe("plugin lifecycle resource sampler", () => {
             OPENCLAW_PLUGIN_LIFECYCLE_TIMEOUT_KILL_GRACE_MS: "1500",
             READY_FILE: readyFile,
           },
-          stdio: "ignore",
+          stdio: ["ignore", "ignore", "pipe"],
         },
       );
 
-      expect(waitForPath(readyFile, 1000)).toBe(true);
-      const started = Date.now();
+      expect(waitForNonEmptyPath(readyFile, 5000)).toBe(true);
       result.kill("SIGTERM");
       const close = await waitForChildClose(result, 5000);
 
-      expect(Date.now() - started).toBeLessThan(1000);
+      expectDrainedBeforeGraceDeadline(close.stderr);
       expect(close.signal).toBe("SIGTERM");
     },
   );

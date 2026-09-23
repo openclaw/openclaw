@@ -1,0 +1,2045 @@
+#!/usr/bin/env node
+
+import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import process from "node:process";
+import { pathToFileURL } from "node:url";
+import { promisify } from "node:util";
+import {
+  buildScriptEvidenceSummary,
+  captureQaEvidenceRuntimeIdentity,
+  captureQaEvidenceSourceIdentity as readSourceIdentity,
+  createQaEvidenceInvocation,
+  QA_EVIDENCE_FILENAME,
+  QA_FRONTIER_PROVIDER_IDS,
+  validateQaEvidenceSummaryJson,
+  type QaEvidenceIdentity,
+  type QaEvidenceStatus,
+  type QaEvidenceSummaryJson,
+} from "../extensions/qa-lab/test-api.js";
+import type { CodeModeExecutorId } from "../src/agents/code-mode-executor-types.js";
+import type { AgentExecEnvelope } from "../src/commands/agent-exec-result.ts";
+import type { OpenClawConfig } from "../src/config/types.openclaw.js";
+import { mergeDeep } from "../src/infra/deep-merge.js";
+import { requireOptionArgument } from "./lib/arg-utils.mts";
+import { summarizeGatewayMatrixOutcomes } from "./lib/code-mode-matrix-comparison.ts";
+import {
+  GATEWAY_MATRIX_TASKS,
+  type GatewayMatrixTask,
+} from "./lib/code-mode-matrix-gateway-fixtures.ts";
+import type {
+  GatewayMatrixEvidence,
+  GatewayMatrixWorkload,
+} from "./lib/code-mode-matrix-gateway.ts";
+import {
+  MATRIX_PERFORMANCE_TASKS,
+  isMatrixPerformanceTask,
+  type MatrixPerformanceTask,
+} from "./lib/code-mode-matrix-performance-fixtures.ts";
+import {
+  classifyCodeModeMatrixProviderFailure,
+  matrixModelConfig,
+  matrixProviderEnv,
+  matrixProviderAuthSelection,
+  type MatrixProviderFailureCategory,
+} from "./lib/code-mode-matrix-provider.ts";
+import type { MatrixUsageAccounting } from "./lib/code-mode-matrix-usage.ts";
+import { previewForDevToolLog, redactJsonValueForDevToolLog } from "./lib/dev-tooling-safety.ts";
+
+export { validateQaEvidenceSummaryJson };
+
+const execFileAsync = promisify(execFile);
+const SOURCE_PATH = "scripts/code-mode-model-matrix.ts";
+const MATRIX_SCHEMA_VERSION = 1;
+const DEFAULT_REPETITIONS = 3;
+const DEFAULT_TIMEOUT_SECONDS = 180;
+const MAX_REPETITIONS = 10;
+const MAX_DIAGNOSTIC_CHARS = 8_000;
+const STRICT_SOURCE_IDENTITY_OPTIONS = { gitTimeoutMs: 60_000 };
+const DEFAULT_ADMISSION = {
+  concurrency: 2,
+  maxCells: 36,
+  maxTokens: 1_000_000,
+  maxKnownCostUsd: 25,
+  maxWallSeconds: 3_600,
+};
+
+export type CodeModeMatrixMode = "direct" | "auto" | "code";
+const MATRIX_TASKS = [
+  "read",
+  "dependent-read-write",
+  "large-result-reduction",
+  "parallel-independent-reads",
+  "dependent-chain",
+  ...GATEWAY_MATRIX_TASKS,
+  ...MATRIX_PERFORMANCE_TASKS,
+] as const;
+export type CodeModeMatrixTask = (typeof MATRIX_TASKS)[number];
+
+export type CodeModeMatrixOptions = {
+  allowFailures: boolean;
+  dryRun: boolean;
+  gatewayExecutor?: CodeModeExecutorId;
+  keepState: boolean;
+  models: string[];
+  modes: CodeModeMatrixMode[];
+  outputDir?: string;
+  repetitions: number;
+  repoRoot: string;
+  runtimeDir?: string;
+  baselineResults?: string;
+  tasks: CodeModeMatrixTask[];
+  thinking: string;
+  timeoutSeconds: number;
+  concurrency?: number;
+  maxCells?: number;
+  maxTokens?: number;
+  maxKnownCostUsd?: number;
+  maxWallSeconds?: number;
+  schedulePath?: string;
+};
+
+export type MatrixCell = {
+  id: string;
+  mode: CodeModeMatrixMode;
+  model: string;
+  repetition: number;
+  task: CodeModeMatrixTask;
+};
+
+type MatrixTaskFixture = {
+  expected: string;
+  prompt: string;
+  resultPath?: string;
+};
+
+export type MatrixRuntimeEntrypoint = {
+  args: string[];
+  cwd: string;
+};
+
+type CellFailureCategory =
+  | MatrixProviderFailureCategory
+  | "activation"
+  | "agent_error"
+  | "answer_mismatch"
+  | "effect_mismatch"
+  | "harness_error"
+  | "interview_mismatch"
+  | "model_mismatch"
+  | "timeout"
+  | "tool_execution";
+
+export type CodeModeMatrixCellResult = {
+  accounting?: MatrixUsageAccounting;
+  assistantTurns?: number;
+  bridgeCalls?: AgentExecEnvelope["bridgeCalls"];
+  buildSha256: string;
+  codeModeEngaged: boolean | null;
+  costUsd?: number;
+  diagnostics?: string;
+  elapsedMs: number;
+  evidenceOccurrenceId?: string;
+  executor?: CodeModeExecutorId;
+  error?: AgentExecEnvelope["error"];
+  expected: string;
+  failureCategory: CellFailureCategory | null;
+  final: string;
+  gitSha: string;
+  id: string;
+  mode: CodeModeMatrixMode;
+  model: string;
+  observedModel: string | null;
+  observedProvider: string | null;
+  oracle: {
+    answer: boolean | null;
+    effect: boolean;
+    engagement: boolean;
+    identity: boolean;
+    toolExecution: boolean;
+  };
+  passed: boolean;
+  repetition: number;
+  sourceDirty: boolean;
+  sourcePatchSha256: string | null;
+  status: AgentExecEnvelope["status"];
+  task: CodeModeMatrixTask;
+  timestamp: string;
+  toolSummary?: AgentExecEnvelope["toolSummary"];
+  usage?: AgentExecEnvelope["usage"];
+  gateway?: GatewayMatrixEvidence;
+  workload?: GatewayMatrixWorkload;
+};
+
+export type RunCellParams = {
+  abortSignal?: AbortSignal;
+  buildSha256: string;
+  cell: MatrixCell;
+  executor?: CodeModeExecutorId;
+  gitSha: string;
+  keepState: boolean;
+  outputDir: string;
+  repoRoot: string;
+  runtime?: MatrixRuntimeEntrypoint;
+  sourceDirty: boolean;
+  sourcePatchSha256: string | null;
+  thinking: string;
+  timeoutSeconds: number;
+};
+
+type MatrixRunDependencies = {
+  buildCliArtifacts?: (repoRoot: string) => Promise<void>;
+  now?: () => Date;
+  readBuildSha256?: (repoRoot: string) => Promise<string>;
+  readGitSha?: (repoRoot: string) => Promise<string>;
+  readSourceIdentity?: (repoRoot: string) => Promise<SourceIdentity>;
+  runCell?: (params: RunCellParams) => Promise<CodeModeMatrixCellResult>;
+};
+
+type SourceIdentity = {
+  gitSha: string;
+  sourceDirty: boolean;
+  sourcePatchSha256: string | null;
+};
+
+function usage() {
+  return `Usage: pnpm qa:code-mode-models --model <provider/model> [options]
+
+Runs repeated Code Mode acceptance cells through the normal embedded agent path.
+
+Options:
+  --model <provider/model>  Model reference; repeat for multiple models
+  --mode <mode>             direct | auto | code; repeat to select modes
+  --executor <executor>     node | quickjs for Gateway tasks only (default: node)
+  --task <task>             ${MATRIX_TASKS.join(" | ")}; repeat to select tasks
+                            (default: read, dependent-read-write)
+  --repetitions <n>         Runs per model/mode/task cell (default: ${DEFAULT_REPETITIONS}, max: ${MAX_REPETITIONS})
+  --timeout <seconds>       Per-run agent deadline (default: ${DEFAULT_TIMEOUT_SECONDS})
+  --thinking <level>        Agent thinking level (default: low)
+  --concurrency <n>         Concurrent root cells per wave, 1–3 (default: 2)
+  --schedule <path>         JSON array of {model,task,repetition,firstMode} paired waves
+  --max-cells <n>           Admit complete waves up to this count (default: 36)
+  --max-tokens <n>          Stop new waves at observed token total (default: 1000000)
+  --max-known-cost-usd <n>  Stop new waves at known cost (default: 25)
+  --max-wall-seconds <n>    Stop new waves after elapsed time (default: 3600)
+  --output-dir <path>       Repo-relative artifact directory
+  --runtime-dir <path>      Use a clean, already-built checkout without rebuilding it
+  --baseline-results <path> Compare matching cells from an earlier results.jsonl
+  --keep-state              Retain per-cell state and workspace directories
+  --allow-failures          Exit zero after writing evidence even when cells fail
+  --dry-run                 Write the manifest without calling models
+  -h, --help                Show this help
+
+Provider credentials are read from the environment and are never written to artifacts.
+Token, known-cost, and wall limits stop admission; already admitted waves settle.
+Missing usage and prices remain unknown. These limits are not hard spending caps.
+`;
+}
+
+function parseIntegerOption(raw: string, flag: string, max?: number): number {
+  if (!/^\d+$/u.test(raw)) {
+    throw new Error(`${flag} must be a positive integer`);
+  }
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 1 || (max !== undefined && value > max)) {
+    const suffix = max === undefined ? "" : ` from 1 to ${max}`;
+    throw new Error(`${flag} must be an integer${suffix}`);
+  }
+  return value;
+}
+
+function collectUnique<T extends string>(values: T[], value: T, flag: string): void {
+  if (values.includes(value)) {
+    throw new Error(`Duplicate ${flag} value: ${value}`);
+  }
+  values.push(value);
+}
+
+function parseMode(raw: string): CodeModeMatrixMode {
+  if (raw === "direct" || raw === "auto" || raw === "code") {
+    return raw;
+  }
+  throw new Error(`--mode must be one of direct, auto, code; got ${JSON.stringify(raw)}`);
+}
+
+function parseTask(raw: string): CodeModeMatrixTask {
+  const task = MATRIX_TASKS.find((candidate) => candidate === raw);
+  if (task) {
+    return task;
+  }
+  throw new Error(`--task must be one of ${MATRIX_TASKS.join(", ")}; got ${JSON.stringify(raw)}`);
+}
+
+function isGatewayTask(
+  task: CodeModeMatrixTask,
+): task is GatewayMatrixTask | MatrixPerformanceTask {
+  return isMatrixPerformanceTask(task) || isGatewayContractTask(task);
+}
+
+function isGatewayContractTask(task: CodeModeMatrixTask): task is GatewayMatrixTask {
+  return GATEWAY_MATRIX_TASKS.some((candidate) => candidate === task);
+}
+
+export function parseCodeModeMatrixOptions(
+  argv: readonly string[],
+  cwd = process.cwd(),
+): CodeModeMatrixOptions {
+  const models: string[] = [];
+  const modes: CodeModeMatrixMode[] = [];
+  const tasks: CodeModeMatrixTask[] = [];
+  let allowFailures = false;
+  let dryRun = false;
+  let gatewayExecutor: CodeModeExecutorId = "node";
+  let keepState = false;
+  let outputDir: string | undefined;
+  let runtimeDir: string | undefined;
+  let baselineResults: string | undefined;
+  let repetitions = DEFAULT_REPETITIONS;
+  let thinking = "low";
+  let timeoutSeconds = DEFAULT_TIMEOUT_SECONDS;
+  const admission = { ...DEFAULT_ADMISSION };
+  let schedulePath: string | undefined;
+  const seen = new Set<string>();
+  const recordOnce = (flag: string) => {
+    if (seen.has(flag)) {
+      throw new Error(`${flag} was provided more than once`);
+    }
+    seen.add(flag);
+  };
+
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index] ?? "";
+    if (arg === "--model") {
+      const value = requireOptionArgument(argv, index, arg).trim();
+      if (!value.includes("/")) {
+        throw new Error(
+          `--model must use a provider/model reference; got ${JSON.stringify(value)}`,
+        );
+      }
+      collectUnique(models, value, arg);
+      index += 1;
+      continue;
+    }
+    const admissionKeys: Record<string, keyof typeof admission> = {
+      "--concurrency": "concurrency",
+      "--max-cells": "maxCells",
+      "--max-tokens": "maxTokens",
+      "--max-known-cost-usd": "maxKnownCostUsd",
+      "--max-wall-seconds": "maxWallSeconds",
+    };
+    const admissionKey = admissionKeys[arg];
+    if (admissionKey) {
+      recordOnce(arg);
+      const raw = requireOptionArgument(argv, index, arg);
+      const value =
+        admissionKey === "maxKnownCostUsd"
+          ? Number(raw)
+          : parseIntegerOption(raw, arg, admissionKey === "concurrency" ? 3 : undefined);
+      if (!Number.isFinite(value) || value <= 0) {
+        throw new Error(`${arg} must be a positive number`);
+      }
+      admission[admissionKey] = value;
+      index += 1;
+      continue;
+    }
+    if (arg === "--schedule") {
+      recordOnce(arg);
+      schedulePath = path.resolve(cwd, requireOptionArgument(argv, index, arg));
+      index += 1;
+      continue;
+    }
+    if (arg === "--mode") {
+      collectUnique(modes, parseMode(requireOptionArgument(argv, index, arg)), arg);
+      index += 1;
+      continue;
+    }
+    if (arg === "--executor") {
+      recordOnce(arg);
+      const value = requireOptionArgument(argv, index, arg);
+      if (value !== "node" && value !== "quickjs") {
+        throw new Error(`--executor must be node or quickjs; got ${JSON.stringify(value)}`);
+      }
+      gatewayExecutor = value;
+      index += 1;
+      continue;
+    }
+    if (arg === "--task") {
+      collectUnique(tasks, parseTask(requireOptionArgument(argv, index, arg)), arg);
+      index += 1;
+      continue;
+    }
+    if (arg === "--repetitions") {
+      recordOnce(arg);
+      repetitions = parseIntegerOption(
+        requireOptionArgument(argv, index, arg),
+        arg,
+        MAX_REPETITIONS,
+      );
+      index += 1;
+      continue;
+    }
+    if (arg === "--timeout") {
+      recordOnce(arg);
+      timeoutSeconds = parseIntegerOption(requireOptionArgument(argv, index, arg), arg);
+      index += 1;
+      continue;
+    }
+    if (arg === "--thinking") {
+      recordOnce(arg);
+      thinking = requireOptionArgument(argv, index, arg).trim();
+      index += 1;
+      continue;
+    }
+    if (arg === "--output-dir") {
+      recordOnce(arg);
+      outputDir = requireOptionArgument(argv, index, arg);
+      index += 1;
+      continue;
+    }
+    if (arg === "--runtime-dir" || arg === "--baseline-results") {
+      recordOnce(arg);
+      const value = path.resolve(cwd, requireOptionArgument(argv, index, arg));
+      if (arg === "--runtime-dir") {
+        runtimeDir = value;
+      } else {
+        baselineResults = value;
+      }
+      index += 1;
+      continue;
+    }
+    if (arg === "--allow-failures") {
+      recordOnce(arg);
+      allowFailures = true;
+      continue;
+    }
+    if (arg === "--keep-state") {
+      recordOnce(arg);
+      keepState = true;
+      continue;
+    }
+    if (arg === "--dry-run") {
+      recordOnce(arg);
+      dryRun = true;
+      continue;
+    }
+    if (arg === "--help" || arg === "-h") {
+      throw Object.assign(new Error(usage()), { code: "HELP" });
+    }
+    throw new Error(`Unknown argument: ${arg}`);
+  }
+
+  if (models.length === 0) {
+    throw new Error("At least one --model <provider/model> is required");
+  }
+  if (
+    seen.has("--executor") &&
+    (tasks.length === 0 || tasks.some((task) => !isGatewayTask(task)))
+  ) {
+    throw new Error("--executor requires only Gateway-backed tasks.");
+  }
+  if (tasks.some(isGatewayContractTask)) {
+    if (modes.length !== 1 || modes[0] !== "code") {
+      throw new Error("Gateway interview tasks require --mode code.");
+    }
+  }
+  if (
+    tasks.some(isGatewayTask) &&
+    models.some(
+      (model) => !QA_FRONTIER_PROVIDER_IDS.some((provider) => model.startsWith(`${provider}/`)),
+    )
+  ) {
+    throw new Error("Gateway tasks require explicit OpenAI, Anthropic, or Google models.");
+  }
+  if (
+    tasks.some(isMatrixPerformanceTask) &&
+    modes.length > 0 &&
+    (modes.length !== 2 || !modes.includes("direct") || !modes.includes("code"))
+  ) {
+    throw new Error("Performance tasks require both explicit direct/code treatment arms.");
+  }
+  if (baselineResults && (tasks.length === 0 || tasks.some((task) => !isGatewayTask(task)))) {
+    throw new Error(
+      "--baseline-results requires Gateway interview tasks with fixed workload fingerprints.",
+    );
+  }
+  return {
+    allowFailures,
+    ...admission,
+    dryRun,
+    gatewayExecutor,
+    keepState,
+    models,
+    modes:
+      modes.length > 0
+        ? modes
+        : tasks.some(isMatrixPerformanceTask)
+          ? ["direct", "code"]
+          : ["direct", "auto", "code"],
+    outputDir,
+    repetitions,
+    repoRoot: path.resolve(cwd),
+    ...(runtimeDir ? { runtimeDir } : {}),
+    ...(baselineResults ? { baselineResults } : {}),
+    ...(schedulePath ? { schedulePath } : {}),
+    tasks: tasks.length > 0 ? tasks : ["read", "dependent-read-write"],
+    thinking,
+    timeoutSeconds,
+  };
+}
+
+function slug(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/gu, "-")
+    .replace(/^-+|-+$/gu, "")
+    .slice(0, 80);
+}
+
+function defaultOutputDir(now: Date): string {
+  return path.join(
+    ".artifacts",
+    "qa-e2e",
+    "code-mode-model-matrix",
+    now.toISOString().replaceAll(":", "-"),
+  );
+}
+
+export function resolveCodeModeMatrixOutputDir(
+  repoRoot: string,
+  configured: string | undefined,
+  now = new Date(),
+): string {
+  const raw = configured?.trim() || defaultOutputDir(now);
+  if (path.isAbsolute(raw)) {
+    throw new Error("--output-dir must be repo-relative");
+  }
+  const resolvedRoot = path.resolve(repoRoot);
+  const resolved = path.resolve(resolvedRoot, raw);
+  if (resolved === resolvedRoot || !resolved.startsWith(`${resolvedRoot}${path.sep}`)) {
+    throw new Error("--output-dir must stay within the repository");
+  }
+  return resolved;
+}
+
+function pathsOverlap(left: string, right: string, caseInsensitive: boolean): boolean {
+  const normalize = (value: string) => {
+    const resolved = path.resolve(value);
+    return caseInsensitive ? resolved.toLowerCase() : resolved;
+  };
+  const resolvedLeft = normalize(left);
+  const resolvedRight = normalize(right);
+  return (
+    resolvedLeft === resolvedRight ||
+    resolvedLeft.startsWith(`${resolvedRight}${path.sep}`) ||
+    resolvedRight.startsWith(`${resolvedLeft}${path.sep}`)
+  );
+}
+
+async function filesystemUsesCaseInsensitivePaths(repoRoot: string): Promise<boolean> {
+  const canonicalRoot = await fs.realpath(repoRoot);
+  const rootName = path.basename(canonicalRoot);
+  const letterIndex = rootName.search(/[a-z]/iu);
+  if (letterIndex < 0) {
+    return process.platform === "win32";
+  }
+  const letter = rootName[letterIndex] ?? "";
+  const alternateLetter =
+    letter === letter.toLowerCase() ? letter.toUpperCase() : letter.toLowerCase();
+  const alternateRoot = path.join(
+    path.dirname(canonicalRoot),
+    `${rootName.slice(0, letterIndex)}${alternateLetter}${rootName.slice(letterIndex + 1)}`,
+  );
+  return await fs.realpath(alternateRoot).then(
+    (resolved) => resolved === canonicalRoot,
+    () => false,
+  );
+}
+
+async function canonicalizeExistingPathPrefix(value: string): Promise<string> {
+  let current = path.resolve(value);
+  const missingSegments: string[] = [];
+  for (;;) {
+    try {
+      return path.join(await fs.realpath(current), ...missingSegments.toReversed());
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+      const parent = path.dirname(current);
+      if (parent === current) {
+        throw error;
+      }
+      missingSegments.push(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
+async function runtimeArtifactDirectories(repoRoot: string, outputDir: string): Promise<string[]> {
+  const packagesRoot = path.join(repoRoot, "packages");
+  const packageEntries = await fs
+    .readdir(packagesRoot, { withFileTypes: true })
+    .catch((error: unknown) => {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return [];
+      }
+      throw error;
+    });
+  const artifacts = [
+    path.join(repoRoot, "dist"),
+    ...packageEntries
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => path.join(packagesRoot, entry.name, "dist")),
+  ];
+  const outputSegments = path
+    .relative(path.resolve(repoRoot), path.resolve(outputDir))
+    .split(path.sep);
+  const outputPackage = outputSegments[0]?.toLowerCase() === "packages" && outputSegments[1];
+  if (outputPackage) {
+    artifacts.push(path.join(packagesRoot, outputPackage, "dist"));
+  }
+  return artifacts;
+}
+
+async function assertOutputOutsideRuntimeArtifacts(
+  repoRoot: string,
+  outputDir: string,
+): Promise<void> {
+  const caseInsensitive = await filesystemUsesCaseInsensitivePaths(repoRoot);
+  const canonicalOutput = await canonicalizeExistingPathPrefix(outputDir);
+  for (const artifactDir of await runtimeArtifactDirectories(repoRoot, outputDir)) {
+    const canonicalArtifact = await canonicalizeExistingPathPrefix(artifactDir);
+    if (pathsOverlap(canonicalOutput, canonicalArtifact, caseInsensitive)) {
+      throw new Error(
+        `--output-dir must not overlap runtime artifacts: ${path.relative(repoRoot, artifactDir)}`,
+      );
+    }
+  }
+}
+
+async function assertOutputOutsideGitMetadata(repoRoot: string, outputDir: string): Promise<void> {
+  const gitDirectories = [path.join(repoRoot, ".git")];
+  const discovered = await execFileAsync(
+    "git",
+    ["rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir"],
+    {
+      cwd: repoRoot,
+      encoding: "utf8",
+    },
+  ).catch(() => null);
+  if (discovered) {
+    gitDirectories.push(
+      ...discovered.stdout
+        .split(/\r?\n/u)
+        .map((value) => value.trim())
+        .filter(Boolean),
+    );
+  }
+
+  const caseInsensitive = await filesystemUsesCaseInsensitivePaths(repoRoot);
+  const canonicalOutput = await canonicalizeExistingPathPrefix(outputDir);
+  for (const gitDirectory of new Set(gitDirectories)) {
+    const canonicalGitDirectory = await canonicalizeExistingPathPrefix(gitDirectory);
+    if (pathsOverlap(canonicalOutput, canonicalGitDirectory, caseInsensitive)) {
+      throw new Error("--output-dir must not overlap Git metadata");
+    }
+  }
+}
+
+export async function reserveCodeModeMatrixOutputDir(
+  repoRoot: string,
+  outputDir: string,
+): Promise<void> {
+  const resolvedRoot = path.resolve(repoRoot);
+  const resolvedOutput = path.resolve(outputDir);
+  const relative = path.relative(resolvedRoot, resolvedOutput);
+  if (
+    !relative ||
+    relative === ".." ||
+    relative.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relative)
+  ) {
+    throw new Error("--output-dir must stay within the repository");
+  }
+  let current = resolvedRoot;
+  for (const segment of relative.split(path.sep)) {
+    current = path.join(current, segment);
+    for (;;) {
+      try {
+        const stats = await fs.lstat(current);
+        if (stats.isSymbolicLink()) {
+          throw new Error(`--output-dir must not traverse symlinks: ${relative}`);
+        }
+        if (current === resolvedOutput) {
+          throw new Error(`--output-dir must not already exist: ${relative}`);
+        }
+        if (!stats.isDirectory()) {
+          throw new Error(
+            `--output-dir parent must be a directory: ${path.relative(repoRoot, current)}`,
+          );
+        }
+        break;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+          throw error;
+        }
+        try {
+          await fs.mkdir(current);
+          break;
+        } catch (mkdirError) {
+          if ((mkdirError as NodeJS.ErrnoException).code !== "EEXIST") {
+            throw mkdirError;
+          }
+          // A concurrent creator won the race. Inspect its path before proceeding.
+        }
+      }
+    }
+  }
+}
+
+type MatrixScheduleEntry = {
+  model: string;
+  task: CodeModeMatrixTask;
+  repetition: number;
+  firstMode: "direct" | "code";
+};
+
+async function buildCellWaves(options: CodeModeMatrixOptions): Promise<MatrixCell[][]> {
+  let schedule: MatrixScheduleEntry[];
+  if (options.schedulePath) {
+    const value: unknown = JSON.parse(await fs.readFile(options.schedulePath, "utf8"));
+    if (!Array.isArray(value) || value.length === 0) {
+      throw new Error("--schedule must contain a nonempty JSON array of paired waves.");
+    }
+    if (
+      options.modes.length !== 2 ||
+      !options.modes.includes("direct") ||
+      !options.modes.includes("code")
+    ) {
+      throw new Error("--schedule requires exactly --mode direct and --mode code.");
+    }
+    schedule = value.map((row: unknown): MatrixScheduleEntry => {
+      if (
+        !row ||
+        typeof row !== "object" ||
+        !("model" in row) ||
+        !("task" in row) ||
+        !("repetition" in row) ||
+        typeof row.model !== "string" ||
+        !options.models.includes(row.model) ||
+        typeof row.task !== "string" ||
+        !options.tasks.some((task) => task === row.task) ||
+        typeof row.repetition !== "number" ||
+        !Number.isInteger(row.repetition) ||
+        row.repetition < 1 ||
+        row.repetition > options.repetitions ||
+        !("firstMode" in row) ||
+        (row.firstMode !== "direct" && row.firstMode !== "code")
+      ) {
+        throw new Error(
+          "Each schedule wave must select an admitted model, task, repetition, and direct/code firstMode.",
+        );
+      }
+      return {
+        model: row.model,
+        task: parseTask(row.task),
+        repetition: row.repetition,
+        firstMode: row.firstMode,
+      };
+    });
+  } else {
+    schedule = options.models.flatMap((model, modelIndex) =>
+      options.tasks.flatMap((task, taskIndex) =>
+        Array.from({ length: options.repetitions }, (_, index) => ({
+          model,
+          task,
+          repetition: index + 1,
+          firstMode:
+            (modelIndex + taskIndex + index) % 2 === 0 ? ("direct" as const) : ("code" as const),
+        })),
+      ),
+    );
+  }
+  const seen = new Set<string>();
+  return schedule.map(({ model, task, repetition, firstMode }) => {
+    const key = `${model}\0${task}\0${repetition}`;
+    if (seen.has(key)) {
+      throw new Error(`Duplicate scheduled wave: ${model} ${task} ${repetition}`);
+    }
+    seen.add(key);
+    const modes: CodeModeMatrixMode[] =
+      options.modes.includes("direct") && options.modes.includes("code")
+        ? [
+            firstMode,
+            firstMode === "direct" ? ("code" as const) : ("direct" as const),
+            ...options.modes.filter((mode) => mode === "auto"),
+          ]
+        : options.modes;
+    return modes.map((mode) => ({
+      id: `${modelCellPrefix(model)}-${mode}-${task}-${repetition}`,
+      mode,
+      model,
+      repetition,
+      task,
+    }));
+  });
+}
+
+export function modelCellPrefix(model: string): string {
+  const modelHash = createHash("sha256").update(model).digest("hex").slice(0, 10);
+  return `${slug(model)}-${modelHash}`;
+}
+
+function verificationCode(cell: MatrixCell): string {
+  return `CM-${createHash("sha256").update(cell.id).digest("hex").slice(0, 12).toUpperCase()}`;
+}
+
+function taskFixture(cell: MatrixCell): MatrixTaskFixture & { files: Record<string, string> } {
+  const expected = verificationCode({ ...cell, id: `${cell.task}-${cell.repetition}` });
+  const facts = { "facts.txt": `project=openclaw\nverification_code=${expected}\n` };
+  if (cell.task === "read") {
+    return {
+      expected,
+      files: facts,
+      prompt:
+        "Read facts.txt using tools. Reply with only the verification_code value, with no prose or formatting.",
+    };
+  }
+  if (cell.task === "dependent-read-write") {
+    return {
+      expected,
+      files: facts,
+      prompt:
+        "Read facts.txt using tools. Write only its verification_code value to result.txt, then read result.txt and reply with only that value. Do not guess or skip verification.",
+      resultPath: "result.txt",
+    };
+  }
+  // Extended tasks use identical inputs across models/modes for each repetition.
+  const code = verificationCode({ ...cell, id: `${cell.task}-${cell.repetition}` });
+  const finish =
+    " Write only the answer to result.txt, read it back, and reply with only that answer, with no prose or formatting. Use file tools, not shell commands.";
+  if (cell.task === "large-result-reduction") {
+    const rows = Array.from({ length: 512 }, (_, index) => ({
+      id: index + 1,
+      region: index % 3 === 0 ? "west" : "east",
+      units: (index % 7) + 1,
+      unitPriceCents: 100 + (index % 23),
+      note: "irrelevant-detail-".repeat(4),
+    }));
+    const selected = rows.filter((row) => row.region === "east" && row.units >= 4);
+    return {
+      expected: `${code}:${selected.length}:${selected.reduce((total, row) => total + row.units * row.unitPriceCents, 0)}`,
+      files: {
+        "rules.json": JSON.stringify({ region: "east", minUnits: 4, verificationCode: code }),
+        "orders.jsonl": rows.map((row) => JSON.stringify(row)).join("\n") + "\n",
+      },
+      prompt:
+        "Read rules.json and all of orders.jsonl using tools, following read continuations when truncated. Select orders matching rules.region with units >= rules.minUnits. Compute their count and sum of units * unitPriceCents. The answer is verificationCode:count:sum, using rules.verificationCode and integer decimal numbers. Do not emit the raw orders." +
+        finish,
+      resultPath: "result.txt",
+    };
+  }
+  if (cell.task === "parallel-independent-reads") {
+    const names = ["north", "south", "west"];
+    const values = names.map((name, index) => `${code}-${index + 1}-${name}`);
+    return {
+      expected: values.join("|"),
+      files: Object.fromEntries(
+        names.map((name, index) => [`${name}.json`, JSON.stringify({ value: values[index] })]),
+      ),
+      prompt:
+        "Read north.json, south.json, and west.json using independent tool calls. Run the reads in parallel when the tool surface supports it; in Code Mode use Promise.all. Join their value fields in north, south, west order with | (not completion order)." +
+        finish,
+      resultPath: "result.txt",
+    };
+  }
+  const route = `route-${code.slice(3, 9)}.json`;
+  const payload = `payload-${code.slice(9)}.json`;
+  return {
+    expected: code,
+    files: {
+      "start.json": JSON.stringify({ next: route }),
+      [route]: JSON.stringify({ next: payload }),
+      [payload]: JSON.stringify({ value: code }),
+    },
+    prompt:
+      "Read start.json using tools. Its next field names the next file; read that file and follow its next field to the payload file. The answer is the payload's value. Await each read before choosing the next path; do not list the directory or guess paths." +
+      finish,
+    resultPath: "result.txt",
+  };
+}
+
+async function prepareTaskFixture(workspace: string, cell: MatrixCell): Promise<MatrixTaskFixture> {
+  const { files, ...fixture } = taskFixture(cell);
+  await fs.mkdir(workspace, { recursive: true });
+  for (const [name, content] of Object.entries(files)) {
+    await fs.writeFile(path.join(workspace, name), content, "utf8");
+  }
+  if (fixture.resultPath) {
+    fixture.resultPath = path.join(workspace, fixture.resultPath);
+    await fs.rm(fixture.resultPath, { force: true });
+  }
+  return fixture;
+}
+
+async function hashDirectory(root: string): Promise<string> {
+  const hash = createHash("sha256");
+  const visit = async (directory: string): Promise<void> => {
+    const entries = (await fs.readdir(directory, { withFileTypes: true })).toSorted((a, b) =>
+      a.name < b.name ? -1 : a.name > b.name ? 1 : 0,
+    );
+    for (const entry of entries) {
+      const filePath = path.join(directory, entry.name);
+      const relativePath = path.relative(root, filePath);
+      hash.update(`\0${relativePath}\0`);
+      if (entry.isDirectory()) {
+        await visit(filePath);
+      } else if (entry.isSymbolicLink()) {
+        hash.update(await fs.readlink(filePath));
+      } else if (entry.isFile()) {
+        hash.update(await fs.readFile(filePath));
+      }
+    }
+  };
+  await visit(root);
+  return hash.digest("hex");
+}
+
+async function hashRuntimeArtifacts(repoRoot: string): Promise<string> {
+  const artifacts = [{ label: "dist", root: path.join(repoRoot, "dist") }];
+  const packagesRoot = path.join(repoRoot, "packages");
+  const packageEntries = await fs.readdir(packagesRoot, { withFileTypes: true });
+  for (const entry of packageEntries.toSorted((a, b) =>
+    a.name < b.name ? -1 : a.name > b.name ? 1 : 0,
+  )) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+    const packageDist = path.join(packagesRoot, entry.name, "dist");
+    const stat = await fs.stat(packageDist).catch(() => null);
+    if (stat?.isDirectory()) {
+      artifacts.push({ label: `packages/${entry.name}/dist`, root: packageDist });
+    }
+  }
+
+  const hash = createHash("sha256");
+  for (const artifact of artifacts) {
+    hash.update(`\0${artifact.label}\0${await hashDirectory(artifact.root)}`);
+  }
+  return hash.digest("hex");
+}
+
+async function buildMatrixCliArtifacts(repoRoot: string): Promise<void> {
+  for (const args of [
+    ["--import", "tsx", "scripts/bundled-plugin-assets.mts", "--phase", "build"],
+    ["--import", "tsx", "scripts/tsdown-build.mts", "--no-clean"],
+    ["scripts/runtime-postbuild.mjs"],
+  ]) {
+    const { stderr, stdout } = await execFileAsync(process.execPath, args, {
+      cwd: repoRoot,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        OPENCLAW_BUILD_ALL_NO_PNPM: "1",
+        OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
+      },
+      maxBuffer: 8 * 1024 * 1024,
+      timeout: 10 * 60 * 1_000,
+    });
+    const output = `${stdout}\n${stderr}`.trim();
+    if (output) {
+      console.log(output);
+    }
+  }
+}
+
+function expectedEngagement(mode: CodeModeMatrixMode, engaged: boolean | undefined): boolean {
+  if (mode === "auto") {
+    return typeof engaged === "boolean";
+  }
+  return engaged === (mode === "code");
+}
+
+export function classifyCodeModeMatrixCell(params: {
+  diagnostics: string;
+  effectPassed: boolean;
+  envelope: Readonly<AgentExecEnvelope>;
+  expected: string;
+  mode: CodeModeMatrixMode;
+  model: string;
+  stdoutContractValid?: boolean;
+  task: CodeModeMatrixTask;
+}): {
+  failureCategory: CellFailureCategory | null;
+  oracle: CodeModeMatrixCellResult["oracle"];
+  passed: boolean;
+} {
+  const engagement = expectedEngagement(params.mode, params.envelope.codeModeEngaged);
+  const answer = params.envelope.final.trim() === params.expected;
+  const effect = params.effectPassed;
+  const separator = params.model.indexOf("/");
+  const requestedProvider = params.model.slice(0, separator);
+  const requestedModel = params.model.slice(separator + 1);
+  const identity =
+    params.envelope.provider === requestedProvider && params.envelope.model === requestedModel;
+  const outerToolExecution = (params.envelope.toolSummary?.calls ?? 0) > 0;
+  // Direct and auto evaluate the model-visible outer tool surface. Forced Code
+  // Mode additionally proves that the exec cell reached a nested catalog tool.
+  const toolExecution =
+    outerToolExecution && (params.mode !== "code" || (params.envelope.bridgeCalls?.call ?? 0) > 0);
+  const oracle = { answer, effect, engagement, identity, toolExecution };
+  if (params.stdoutContractValid === false) {
+    return { failureCategory: "harness_error", oracle, passed: false };
+  }
+  if (params.envelope.status === "timeout") {
+    return { failureCategory: "timeout", oracle, passed: false };
+  }
+  if (!params.envelope.ok) {
+    const providerFailure = classifyCodeModeMatrixProviderFailure(
+      `${params.envelope.error?.message ?? ""}\n${params.diagnostics}`,
+    );
+    if (providerFailure) {
+      return { failureCategory: providerFailure, oracle, passed: false };
+    }
+    return { failureCategory: "agent_error", oracle, passed: false };
+  }
+  if (!identity) {
+    return { failureCategory: "model_mismatch", oracle, passed: false };
+  }
+  if (!engagement) {
+    return { failureCategory: "activation", oracle, passed: false };
+  }
+  if (!toolExecution) {
+    return { failureCategory: "tool_execution", oracle, passed: false };
+  }
+  if (!effect) {
+    return { failureCategory: "effect_mismatch", oracle, passed: false };
+  }
+  if (!answer) {
+    return { failureCategory: "answer_mismatch", oracle, passed: false };
+  }
+  return { failureCategory: null, oracle, passed: true };
+}
+
+function parseAgentExecOutput(stdout: string): {
+  envelope: AgentExecEnvelope;
+  trailing: string;
+} {
+  const value = stdout.trimStart();
+  if (!value) {
+    throw new Error("agent exec produced no JSON envelope");
+  }
+  if (value[0] !== "{") {
+    throw new Error("agent exec stdout did not begin with a JSON envelope");
+  }
+  let depth = 0;
+  let escaped = false;
+  let inString = false;
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === "\\") {
+        escaped = true;
+      } else if (character === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (character === '"') {
+      inString = true;
+    } else if (character === "{") {
+      depth += 1;
+    } else if (character === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        const envelope = JSON.parse(value.slice(0, index + 1)) as AgentExecEnvelope;
+        return { envelope, trailing: value.slice(index + 1).trim() };
+      }
+    }
+  }
+  throw new Error("agent exec produced an incomplete JSON envelope");
+}
+
+async function pathIsDirectory(value: string): Promise<boolean> {
+  return await fs
+    .stat(value)
+    .then((stats) => stats.isDirectory())
+    .catch(() => false);
+}
+
+async function cloneTreeWithHardlinks(source: string, destination: string): Promise<void> {
+  await fs.mkdir(destination, { recursive: true });
+  for (const entry of await fs.readdir(source, { withFileTypes: true })) {
+    const sourcePath = path.join(source, entry.name);
+    const destinationPath = path.join(destination, entry.name);
+    if (entry.isDirectory()) {
+      await cloneTreeWithHardlinks(sourcePath, destinationPath);
+    } else if (entry.isSymbolicLink()) {
+      await fs.symlink(await fs.readlink(sourcePath), destinationPath);
+    } else {
+      try {
+        await fs.link(sourcePath, destinationPath);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EXDEV") {
+          throw error;
+        }
+        await fs.copyFile(sourcePath, destinationPath);
+      }
+    }
+  }
+}
+
+async function prepareRuntimeEntrypoint(
+  repoRoot: string,
+  runtimeRoot: string,
+): Promise<MatrixRuntimeEntrypoint> {
+  const entrypoint = path.join(repoRoot, "dist", "entry.js");
+  try {
+    await fs.access(entrypoint);
+  } catch (error) {
+    throw new Error("dist/entry.js is missing; run pnpm build before the matrix", { cause: error });
+  }
+
+  const nodeModules = path.join(repoRoot, "node_modules");
+  const physicalNodeModules = await fs.realpath(nodeModules);
+  if (physicalNodeModules === path.resolve(nodeModules)) {
+    return { args: [entrypoint], cwd: repoRoot };
+  }
+
+  const overlayDist = path.join(runtimeRoot, "dist");
+  const overlayNodeModules = path.join(runtimeRoot, "node_modules");
+  await cloneTreeWithHardlinks(path.join(repoRoot, "dist"), overlayDist);
+  await fs.mkdir(overlayNodeModules);
+  await fs.copyFile(path.join(repoRoot, "package.json"), path.join(runtimeRoot, "package.json"));
+
+  const entries = await fs.readdir(physicalNodeModules, { withFileTypes: true });
+  for (const entry of entries) {
+    if (entry.name.startsWith(".") || entry.name === "@openclaw") {
+      continue;
+    }
+    await fs.symlink(
+      path.join(physicalNodeModules, entry.name),
+      path.join(overlayNodeModules, entry.name),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+  }
+
+  const overlayOpenClaw = path.join(overlayNodeModules, "@openclaw");
+  const physicalOpenClaw = path.join(physicalNodeModules, "@openclaw");
+  await fs.mkdir(overlayOpenClaw);
+  for (const entry of await fs.readdir(physicalOpenClaw, { withFileTypes: true })) {
+    const worktreePackage = path.join(repoRoot, "packages", entry.name);
+    const target = (await pathIsDirectory(path.join(worktreePackage, "dist")))
+      ? worktreePackage
+      : path.join(physicalOpenClaw, entry.name);
+    await fs.symlink(
+      target,
+      path.join(overlayOpenClaw, entry.name),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+  }
+
+  return {
+    args: [path.join(runtimeRoot, "dist", "entry.js")],
+    cwd: runtimeRoot,
+  };
+}
+
+export function buildCodeModeMatrixAgentEnv(
+  model: string,
+  runtimeCwd: string,
+  baseEnv: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  const provider = model.slice(0, model.indexOf("/"));
+  const config: OpenClawConfig = {
+    plugins: { allow: [provider], entries: { [provider]: { enabled: true } } },
+  };
+  const env: NodeJS.ProcessEnv = {
+    PATH: baseEnv.PATH,
+    SystemRoot: baseEnv.SystemRoot,
+    ...matrixProviderEnv(model, config, baseEnv),
+    NODE_DISABLE_COMPILE_CACHE: "1",
+    OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(runtimeCwd, "dist", "extensions"),
+  };
+  return env;
+}
+
+async function executeAgentExec(params: {
+  fixture: MatrixTaskFixture;
+  matrix: RunCellParams;
+  stateDir: string;
+  workspace: string;
+}): Promise<{
+  diagnostics: string;
+  envelope: AgentExecEnvelope;
+  stdoutContractValid: boolean;
+}> {
+  const runtime = params.matrix.runtime;
+  if (!runtime) {
+    throw new Error("matrix runtime entrypoint was not prepared");
+  }
+  const provider = params.matrix.cell.model.split("/")[0]!;
+  const home = path.join(params.stateDir, "home");
+  const tmp = path.join(params.stateDir, "tmp");
+  await Promise.all([fs.mkdir(home, { recursive: true }), fs.mkdir(tmp, { recursive: true })]);
+  const config = mergeDeep(
+    {
+      agents: { entries: { main: {} } },
+      plugins: { allow: [provider], entries: { [provider]: { enabled: true } } },
+      tools: { codeMode: { executor: "node" } },
+    },
+    { agents: matrixModelConfig(params.matrix.cell.model, params.matrix.thinking) },
+  );
+  const configPath = path.join(params.stateDir, "matrix-config.json");
+  await fs.writeFile(configPath, JSON.stringify(config), { mode: 0o600 });
+  const args = [
+    ...runtime.args,
+    "agent",
+    "exec",
+    params.fixture.prompt,
+    "--cwd",
+    params.workspace,
+    "--state-dir",
+    params.stateDir,
+    "--model",
+    params.matrix.cell.model,
+    "--code-mode",
+    params.matrix.cell.mode,
+    "--config",
+    configPath,
+    "--thinking",
+    params.matrix.thinking,
+    "--timeout",
+    String(params.matrix.timeoutSeconds),
+    "--json",
+  ];
+  try {
+    const env: NodeJS.ProcessEnv = {
+      ...buildCodeModeMatrixAgentEnv(params.matrix.cell.model, runtime.cwd),
+      HOME: home,
+      USERPROFILE: home,
+      OPENCLAW_HOME: home,
+      OPENCLAW_STATE_DIR: params.stateDir,
+      TMPDIR: tmp,
+      TEMP: tmp,
+      TMP: tmp,
+    };
+    const { stdout, stderr } = await execFileAsync(process.execPath, args, {
+      cwd: runtime.cwd,
+      encoding: "utf8",
+      env,
+      maxBuffer: 4 * 1024 * 1024,
+      timeout: (params.matrix.timeoutSeconds + 30) * 1_000,
+      signal: params.matrix.abortSignal,
+    });
+    const parsed = parseAgentExecOutput(stdout);
+    return {
+      diagnostics:
+        `${stderr}\n${parsed.trailing ? `unexpected stdout after JSON: ${parsed.trailing}` : ""}`
+          .trim()
+          .slice(-MAX_DIAGNOSTIC_CHARS),
+      envelope: parsed.envelope,
+      stdoutContractValid: parsed.trailing.length === 0,
+    };
+  } catch (error) {
+    const commandError = error as Error & {
+      code?: string;
+      killed?: boolean;
+      stderr?: string;
+      stdout?: string;
+    };
+    if (commandError.killed || commandError.code === "ETIMEDOUT") {
+      return {
+        diagnostics: previewForDevToolLog(commandError.stderr ?? commandError.message, 2_000),
+        envelope: {
+          ok: false,
+          status: "timeout",
+          final: "",
+          payloads: [],
+          model: null,
+          provider: null,
+          sessionId: "",
+          error: { kind: "timeout", message: "agent exec process deadline elapsed" },
+        },
+        stdoutContractValid: true,
+      };
+    }
+    if (commandError.stdout?.trim()) {
+      const parsed = parseAgentExecOutput(commandError.stdout);
+      return {
+        diagnostics:
+          `${commandError.stderr ?? ""}\n${parsed.trailing ? `unexpected stdout after JSON: ${parsed.trailing}` : ""}`
+            .trim()
+            .slice(-MAX_DIAGNOSTIC_CHARS),
+        envelope: parsed.envelope,
+        stdoutContractValid: parsed.trailing.length === 0,
+      };
+    }
+    throw error;
+  }
+}
+
+async function runMatrixCell(params: RunCellParams): Promise<CodeModeMatrixCellResult> {
+  if (isGatewayTask(params.cell.task)) {
+    const { runGatewayMatrixCell } = await import("./lib/code-mode-matrix-gateway.ts");
+    return await runGatewayMatrixCell({
+      ...params,
+      cell: { ...params.cell, task: params.cell.task },
+    });
+  }
+  const retainedRoot = path.join(params.outputDir, "state", params.cell.id);
+  if (params.keepState) {
+    await fs.rm(retainedRoot, { force: true, recursive: true });
+  }
+  const root = params.keepState
+    ? retainedRoot
+    : await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-code-mode-matrix-"));
+  const stateDir = path.join(root, "state");
+  const workspace = path.join(root, "workspace");
+  await fs.mkdir(stateDir, { recursive: true });
+  const fixture = await prepareTaskFixture(workspace, params.cell);
+  const startedAt = Date.now();
+  try {
+    const command = await executeAgentExec({
+      fixture,
+      matrix: params,
+      stateDir,
+      workspace,
+    });
+    const effectPassed = fixture.resultPath
+      ? (await fs.readFile(fixture.resultPath, "utf8").catch(() => "")).trim() === fixture.expected
+      : true;
+    const diagnosticText = command.diagnostics;
+    const classification = classifyCodeModeMatrixCell({
+      diagnostics: diagnosticText,
+      effectPassed,
+      envelope: command.envelope,
+      expected: fixture.expected,
+      mode: params.cell.mode,
+      model: params.cell.model,
+      stdoutContractValid: command.stdoutContractValid,
+      task: params.cell.task,
+    });
+    return {
+      ...(command.envelope.assistantTurns !== undefined
+        ? { assistantTurns: command.envelope.assistantTurns }
+        : {}),
+      ...(command.envelope.bridgeCalls ? { bridgeCalls: command.envelope.bridgeCalls } : {}),
+      buildSha256: params.buildSha256,
+      codeModeEngaged: command.envelope.codeModeEngaged ?? null,
+      ...(command.envelope.costUsd !== undefined ? { costUsd: command.envelope.costUsd } : {}),
+      ...(diagnosticText ? { diagnostics: diagnosticText } : {}),
+      elapsedMs: Date.now() - startedAt,
+      ...(command.envelope.error ? { error: command.envelope.error } : {}),
+      expected: fixture.expected,
+      failureCategory: classification.failureCategory,
+      final: command.envelope.final,
+      gitSha: params.gitSha,
+      id: params.cell.id,
+      mode: params.cell.mode,
+      model: params.cell.model,
+      observedModel: command.envelope.model,
+      observedProvider: command.envelope.provider,
+      oracle: classification.oracle,
+      passed: classification.passed,
+      repetition: params.cell.repetition,
+      sourceDirty: params.sourceDirty,
+      sourcePatchSha256: params.sourcePatchSha256,
+      status: command.envelope.status,
+      task: params.cell.task,
+      timestamp: new Date().toISOString(),
+      ...(command.envelope.toolSummary ? { toolSummary: command.envelope.toolSummary } : {}),
+      ...(command.envelope.usage ? { usage: command.envelope.usage } : {}),
+    };
+  } finally {
+    if (!params.keepState) {
+      await fs.rm(root, { force: true, recursive: true });
+    }
+  }
+}
+
+function harnessFailureResult(
+  cell: MatrixCell,
+  provenance: Pick<RunCellParams, "buildSha256" | "gitSha" | "sourceDirty" | "sourcePatchSha256">,
+  elapsedMs: number,
+  error: unknown,
+): CodeModeMatrixCellResult {
+  const message = previewForDevToolLog(
+    error instanceof Error ? error.message : String(error),
+    2_000,
+  );
+  return {
+    buildSha256: provenance.buildSha256,
+    codeModeEngaged: null,
+    diagnostics: message,
+    elapsedMs,
+    error: { kind: "harness_error", message },
+    expected: isGatewayTask(cell.task) ? "Gateway task result" : taskFixture(cell).expected,
+    failureCategory: classifyCodeModeMatrixProviderFailure(message) ?? "harness_error",
+    final: "",
+    gitSha: provenance.gitSha,
+    id: cell.id,
+    mode: cell.mode,
+    model: cell.model,
+    observedModel: null,
+    observedProvider: null,
+    oracle: {
+      answer: isMatrixPerformanceTask(cell.task) ? null : false,
+      effect: false,
+      engagement: false,
+      identity: false,
+      toolExecution: false,
+    },
+    passed: false,
+    repetition: cell.repetition,
+    sourceDirty: provenance.sourceDirty,
+    sourcePatchSha256: provenance.sourcePatchSha256,
+    status: "error",
+    task: cell.task,
+    timestamp: new Date().toISOString(),
+  };
+}
+
+function summarizeMetric(values: (number | undefined)[]) {
+  const samples = values
+    .filter((value): value is number => value !== undefined)
+    .toSorted((a, b) => a - b);
+  return {
+    samples: samples.length,
+    total: samples.length > 0 ? samples.reduce((total, value) => total + value, 0) : null,
+    p50: samples[Math.floor(samples.length / 2)] ?? null,
+  };
+}
+
+function summarizeResults(results: CodeModeMatrixCellResult[]) {
+  const groups = new Map<
+    string,
+    {
+      codeModeEngaged: number;
+      failed: number;
+      failures: Record<string, number>;
+      firstPassPassed: boolean;
+      passed: number;
+      total: number;
+      wallMs: number[];
+      results: CodeModeMatrixCellResult[];
+    }
+  >();
+  for (const result of results) {
+    const key = `${result.model}\0${result.mode}\0${result.task}`;
+    const group = groups.get(key) ?? {
+      codeModeEngaged: 0,
+      failed: 0,
+      failures: {},
+      firstPassPassed: false,
+      passed: 0,
+      total: 0,
+      wallMs: [],
+      results: [],
+    };
+    group.results.push(result);
+    group.total += 1;
+    group.wallMs.push(result.elapsedMs);
+    if (result.passed) {
+      group.passed += 1;
+      if (result.repetition === 1) {
+        group.firstPassPassed = true;
+      }
+    } else {
+      group.failed += 1;
+      const category = result.failureCategory ?? "unknown";
+      group.failures[category] = (group.failures[category] ?? 0) + 1;
+    }
+    if (result.codeModeEngaged === true) {
+      group.codeModeEngaged += 1;
+    }
+    groups.set(key, group);
+  }
+  return [...groups.entries()].map(([key, group]) => {
+    const [model, mode, task] = key.split("\0");
+    const sortedWallMs = group.wallMs.toSorted((a, b) => a - b);
+    const summary = {
+      codeModeEngaged: group.codeModeEngaged,
+      failed: group.failed,
+      failures: group.failures,
+      firstPassPassed: group.firstPassPassed,
+      mode,
+      model,
+      eventualPassed: group.passed > 0,
+      p50WallMs: sortedWallMs[Math.floor(sortedWallMs.length / 2)] ?? 0,
+      metrics: {
+        assistantTurns: summarizeMetric(group.results.map((result) => result.assistantTurns)),
+        outerToolCalls: summarizeMetric(
+          group.results.map((result) => result.toolSummary?.calls ?? result.gateway?.outerCalls),
+        ),
+        bridgeSearchCalls: summarizeMetric(
+          group.results.map((result) => result.bridgeCalls?.search),
+        ),
+        bridgeDescribeCalls: summarizeMetric(
+          group.results.map((result) => result.bridgeCalls?.describe),
+        ),
+        bridgeToolCalls: summarizeMetric(group.results.map((result) => result.bridgeCalls?.call)),
+        costUsd: summarizeMetric(group.results.map((result) => result.costUsd)),
+        gatewayUpstreamCalls: summarizeMetric(
+          group.results.map((result) => result.gateway?.upstreamCalls),
+        ),
+        gatewayTaskElapsedMs: summarizeMetric(
+          group.results.map((result) => result.gateway?.taskElapsedMs),
+        ),
+        inputTokens: summarizeMetric(group.results.map((result) => result.usage?.input)),
+        outputTokens: summarizeMetric(group.results.map((result) => result.usage?.output)),
+      },
+      passRate: group.total === 0 ? 0 : group.passed / group.total,
+      passed: group.passed,
+      task,
+      total: group.total,
+    };
+    return group.results.some((result) => result.workload)
+      ? Object.assign(summary, { gatewayOutcomes: summarizeGatewayMatrixOutcomes(group.results) })
+      : summary;
+  });
+}
+
+async function writeJson(filePath: string, value: unknown): Promise<void> {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(
+    filePath,
+    `${JSON.stringify(redactJsonValueForDevToolLog(value), null, 2)}\n`,
+    "utf8",
+  );
+}
+
+function evidenceStatus(result: CodeModeMatrixCellResult): QaEvidenceStatus {
+  if (result.passed) {
+    return "pass";
+  }
+  if (result.failureCategory === "provider_auth" || result.failureCategory === "provider_billing") {
+    return "blocked";
+  }
+  return "fail";
+}
+
+function observedModelRef(result: CodeModeMatrixCellResult): string {
+  if (result.observedProvider && result.observedModel) {
+    return `${result.observedProvider}/${result.observedModel}`;
+  }
+  return result.model;
+}
+
+function buildCodeModeMatrixEvidence(params: {
+  generatedAt: string;
+  repoRoot: string;
+  results: readonly CodeModeMatrixCellResult[];
+}): QaEvidenceSummaryJson {
+  const artifactPaths = [
+    { kind: "manifest", path: "manifest.json" },
+    { kind: "summary", path: "summary.json" },
+    { kind: "results", path: "results.jsonl" },
+  ];
+  const entries = params.results.flatMap((result) => {
+    const summary = buildScriptEvidenceSummary({
+      artifactPaths,
+      evidenceMode: "full",
+      generatedAt: result.timestamp,
+      packageSource: { kind: "source-checkout", sha: result.gitSha },
+      primaryModel: observedModelRef(result),
+      providerMode: "live-frontier",
+      repoRoot: params.repoRoot,
+      runner: "code-mode-model-matrix",
+      targets: [
+        {
+          id: result.id,
+          title: `${result.model} ${result.mode} ${result.task} repetition ${result.repetition}`,
+          sourcePath: SOURCE_PATH,
+        },
+      ],
+      results: [
+        {
+          id: result.id,
+          status: evidenceStatus(result),
+          durationMs: Math.max(1, result.elapsedMs),
+          failureMessage: result.failureCategory ?? undefined,
+        },
+      ],
+    });
+    const entry = summary.entries[0];
+    if (!entry) {
+      return [];
+    }
+    if (entry.result.failure && result.failureCategory) {
+      entry.result.failure.class = result.failureCategory;
+    }
+    return [entry];
+  });
+  const base = buildScriptEvidenceSummary({
+    artifactPaths,
+    evidenceMode: "full",
+    generatedAt: params.generatedAt,
+    packageSource: { kind: "source-checkout" },
+    primaryModel: "unknown/unknown",
+    providerMode: "live-frontier",
+    repoRoot: params.repoRoot,
+    runner: "code-mode-model-matrix",
+    targets: [],
+    results: [],
+  });
+  return validateQaEvidenceSummaryJson({
+    ...base,
+    entries,
+  });
+}
+
+export async function runCodeModeModelMatrix(
+  options: CodeModeMatrixOptions,
+  deps: MatrixRunDependencies = {},
+): Promise<{ exitCode: number; outputDir: string; summary: unknown }> {
+  const now = deps.now?.() ?? new Date();
+  const outputDir = resolveCodeModeMatrixOutputDir(options.repoRoot, options.outputDir, now);
+  const runtimeRepoRoot = options.runtimeDir ?? options.repoRoot;
+  const sourceIdentity = deps.readSourceIdentity
+    ? await deps.readSourceIdentity(runtimeRepoRoot)
+    : deps.readGitSha
+      ? {
+          gitSha: await deps.readGitSha(runtimeRepoRoot),
+          sourceDirty: false,
+          sourcePatchSha256: null,
+        }
+      : await readSourceIdentity(runtimeRepoRoot, STRICT_SOURCE_IDENTITY_OPTIONS);
+  if (options.runtimeDir && sourceIdentity.sourceDirty) {
+    throw new Error("--runtime-dir must identify a clean committed checkout.");
+  }
+  const waves = await buildCellWaves(options);
+  const cells = waves.flat();
+  const admission = {
+    concurrency: options.concurrency ?? DEFAULT_ADMISSION.concurrency,
+    maxCells: options.maxCells ?? DEFAULT_ADMISSION.maxCells,
+    maxTokens: options.maxTokens ?? DEFAULT_ADMISSION.maxTokens,
+    maxKnownCostUsd: options.maxKnownCostUsd ?? DEFAULT_ADMISSION.maxKnownCostUsd,
+    maxWallSeconds: options.maxWallSeconds ?? DEFAULT_ADMISSION.maxWallSeconds,
+  };
+  if (
+    !Number.isInteger(admission.concurrency) ||
+    admission.concurrency < 1 ||
+    admission.concurrency > 3
+  ) {
+    throw new Error("concurrency must be an integer from 1 to 3");
+  }
+  await assertOutputOutsideGitMetadata(options.repoRoot, outputDir);
+  if (!options.dryRun && !options.runtimeDir) {
+    await (deps.buildCliArtifacts ?? buildMatrixCliArtifacts)(options.repoRoot);
+  }
+  if (!options.dryRun && options.runtimeDir) {
+    // Current source can be clean after reverting edits that produced the retained artifacts.
+    for (const stamp of [".buildstamp", ".runtime-postbuildstamp"]) {
+      const value: unknown = JSON.parse(
+        await fs.readFile(path.join(runtimeRepoRoot, "dist", stamp), "utf8"),
+      );
+      if (
+        !value ||
+        typeof value !== "object" ||
+        !("head" in value) ||
+        value.head !== sourceIdentity.gitSha ||
+        !("inputsClean" in value) ||
+        value.inputsClean !== true
+      ) {
+        throw new Error(
+          `Frozen runtime ${stamp} must match its clean committed source and record clean build inputs. Choose a revision with provenance-capable stamp writers and run pnpm build; rebuilding older source without those writers cannot satisfy this check.`,
+        );
+      }
+    }
+  }
+  // Build first so its output set is complete, then reserve evidence storage
+  // before hashing. Dry runs also write evidence, so every run needs isolation.
+  await assertOutputOutsideRuntimeArtifacts(options.repoRoot, outputDir);
+  if (options.runtimeDir) {
+    await assertOutputOutsideRuntimeArtifacts(runtimeRepoRoot, outputDir);
+  }
+  await reserveCodeModeMatrixOutputDir(options.repoRoot, outputDir);
+  const buildSha256 = options.dryRun
+    ? null
+    : await (deps.readBuildSha256 ?? hashRuntimeArtifacts)(runtimeRepoRoot);
+  const launch: QaEvidenceIdentity = {
+    source: {
+      ref: sourceIdentity.gitSha,
+      integrity: `git:${sourceIdentity.gitSha}${sourceIdentity.sourcePatchSha256 ? `+sha256:${sourceIdentity.sourcePatchSha256}` : ""}`,
+    },
+    runtime: captureQaEvidenceRuntimeIdentity(),
+    package: null,
+    protocol: null,
+    accountRef: null,
+    proofClass: null,
+  };
+  const invocation = createQaEvidenceInvocation({
+    scenarios: cells.map((cell) => ({ id: cell.id, execution: { kind: "script" } })),
+    channel: null,
+    launch,
+  });
+  const writeEvidence = async (generatedAt: string) =>
+    await writeJson(
+      path.join(outputDir, QA_EVIDENCE_FILENAME),
+      invocation.snapshot({ generatedAt, evidenceMode: "full" }),
+    );
+  const manifest = {
+    schemaVersion: MATRIX_SCHEMA_VERSION,
+    generatedAt: now.toISOString(),
+    source: SOURCE_PATH,
+    ...(options.runtimeDir
+      ? { harness: await readSourceIdentity(options.repoRoot, STRICT_SOURCE_IDENTITY_OPTIONS) }
+      : {}),
+    ...(options.runtimeDir ? { runtimeDir: runtimeRepoRoot } : {}),
+    ...sourceIdentity,
+    buildSha256,
+    models: options.models,
+    authentication: options.models.map((model) => ({
+      model,
+      ...matrixProviderAuthSelection(model),
+    })),
+    modes: options.modes,
+    ...(options.tasks.some(isGatewayTask)
+      ? { gatewayExecutor: options.gatewayExecutor ?? "node" }
+      : {}),
+    tasks: options.tasks,
+    repetitions: options.repetitions,
+    timeoutSeconds: options.timeoutSeconds,
+    thinking: options.thinking,
+    keepState: options.keepState,
+    cells: cells.map((cell) => cell.id),
+    waves: waves.map((wave) => wave.map((cell) => cell.id)),
+    admission,
+    admissionContract:
+      "Whole waves are admitted. Token, known-cost, and wall limits are soft; already admitted cells settle. Missing usage and price evidence are not zero.",
+  };
+  await writeJson(path.join(outputDir, "manifest.json"), manifest);
+  // Persist the complete schedule before any cell starts. An interrupted or dry
+  // run retains null selections instead of inventing successful observations.
+  await writeEvidence(now.toISOString());
+  if (options.dryRun) {
+    const summary = { status: "dry-run", total: cells.length };
+    await writeJson(path.join(outputDir, "summary.json"), summary);
+    return { exitCode: 0, outputDir, summary };
+  }
+
+  const runtimeRoot = deps.runCell
+    ? undefined
+    : await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-code-mode-runtime-"));
+  const abortController = new AbortController();
+  const interrupt = () => abortController.abort(new Error("Code Mode matrix interrupted"));
+  process.once("SIGINT", interrupt);
+  process.once("SIGTERM", interrupt);
+  try {
+    const runtime = runtimeRoot
+      ? await prepareRuntimeEntrypoint(runtimeRepoRoot, runtimeRoot)
+      : undefined;
+    const results: CodeModeMatrixCellResult[] = [];
+    const resultsPath = path.join(outputDir, "results.jsonl");
+    await fs.writeFile(resultsPath, "", "utf8");
+    const executeCell = deps.runCell ?? runMatrixCell;
+    const executionStartedAt = Date.now();
+    let admittedCells = 0;
+    let stopReason: string | null = null;
+    const stoppedProviders = new Map<string, string>();
+    const stoppedModels = new Map<string, string>();
+    const unstarted: Array<{ id: string; reason: string }> = [];
+    let persistence = Promise.resolve();
+    const observedBudget = () => ({
+      tokens: results.reduce(
+        (total, result) =>
+          total + (result.accounting?.knownTotalTokens ?? result.usage?.total ?? 0),
+        0,
+      ),
+      knownCostUsd: results.reduce(
+        (total, result) => total + (result.accounting?.knownCostUsd ?? result.costUsd ?? 0),
+        0,
+      ),
+      missingTokenCells: results.filter((result) =>
+        result.accounting ? !result.accounting.complete : result.usage?.total === undefined,
+      ).length,
+      missingCostCells: results.filter((result) =>
+        result.accounting ? !result.accounting.costComplete : result.costUsd === undefined,
+      ).length,
+      wallSeconds: (Date.now() - executionStartedAt) / 1_000,
+    });
+    const stoppedReason = (cell: MatrixCell) =>
+      stoppedModels.get(cell.model) ?? stoppedProviders.get(cell.model.split("/")[0]!);
+    const runCell = async (cell: MatrixCell) => {
+      const index = cells.indexOf(cell);
+      abortController.signal.throwIfAborted();
+      const workload = isGatewayTask(cell.task)
+        ? (await import("./lib/code-mode-matrix-gateway.ts")).createGatewayMatrixWorkload(
+            cell.task,
+            cell.repetition,
+            options.thinking,
+            options.timeoutSeconds,
+            options.gatewayExecutor ?? "node",
+          )
+        : undefined;
+      // Repetitions are independent scheduled cells, not retries whose eventual
+      // success could hide an earlier failure.
+      const occurrenceId = invocation.begin(index, null);
+      let result: CodeModeMatrixCellResult;
+      const cellStartedAt = Date.now();
+      try {
+        result = await executeCell({
+          abortSignal: abortController.signal,
+          buildSha256: buildSha256 ?? "dry-run",
+          cell,
+          ...(workload ? { executor: workload.settings.executor } : {}),
+          gitSha: sourceIdentity.gitSha,
+          keepState: options.keepState,
+          outputDir,
+          repoRoot: runtimeRepoRoot,
+          runtime,
+          sourceDirty: sourceIdentity.sourceDirty,
+          sourcePatchSha256: sourceIdentity.sourcePatchSha256,
+          thinking: options.thinking,
+          timeoutSeconds: options.timeoutSeconds,
+        });
+      } catch (error) {
+        result = harnessFailureResult(
+          cell,
+          {
+            buildSha256: buildSha256 ?? "dry-run",
+            ...sourceIdentity,
+          },
+          Date.now() - cellStartedAt,
+          error,
+        );
+      }
+      if (workload) {
+        result.workload = workload;
+        result.executor = workload.settings.executor;
+      }
+      if (
+        result.failureCategory === "provider_auth" ||
+        result.failureCategory === "provider_billing"
+      ) {
+        stoppedProviders.set(cell.model.split("/")[0]!, result.failureCategory);
+      } else if (result.failureCategory === "model_unavailable") {
+        stoppedModels.set(cell.model, result.failureCategory);
+      }
+      const persist = async () => {
+        result.evidenceOccurrenceId = occurrenceId;
+        const artifactPath = path.posix.join("observations", `${occurrenceId}.json`);
+        const artifactBytes = `${JSON.stringify(redactJsonValueForDevToolLog({ result, launch, buildSha256 }), null, 2)}\n`;
+        await fs.mkdir(path.join(outputDir, "observations"), { recursive: true });
+        await fs.writeFile(path.join(outputDir, artifactPath), artifactBytes, {
+          flag: "wx",
+          mode: 0o600,
+        });
+        const artifact = {
+          kind: "matrix-observation",
+          path: artifactPath,
+          source: "code-mode-model-matrix",
+          sha256: createHash("sha256").update(artifactBytes).digest("hex"),
+        };
+        // The envelope observes provider/model responses, not a target runtime's
+        // package, protocol, account, or proof class. Keep this receipt prepared-only.
+        invocation.complete(occurrenceId, {
+          status: evidenceStatus(result),
+          entries: buildCodeModeMatrixEvidence({
+            generatedAt: result.timestamp,
+            repoRoot: options.repoRoot,
+            results: [result],
+          }).entries.map((entry) =>
+            Object.assign({}, entry, {
+              execution: entry.execution
+                ? {
+                    ...entry.execution,
+                    artifacts: [
+                      ...entry.execution.artifacts,
+                      {
+                        kind: artifact.kind,
+                        path: artifact.path,
+                        source: artifact.source,
+                      },
+                    ],
+                  }
+                : undefined,
+            }),
+          ),
+          receipts: [
+            { id: `${occurrenceId}:prepared`, phase: "prepared", identity: launch, artifact },
+          ],
+        });
+        invocation.select(index, occurrenceId);
+        results.push(result);
+        await fs.appendFile(
+          resultsPath,
+          `${JSON.stringify(redactJsonValueForDevToolLog(result))}\n`,
+          "utf8",
+        );
+        await writeEvidence(result.timestamp);
+        console.log(
+          `[code-mode-matrix-result] ${JSON.stringify(redactJsonValueForDevToolLog(result))}`,
+        );
+        const label = result.passed ? "PASS" : `FAIL ${result.failureCategory ?? "unknown"}`;
+        console.log(`[code-mode-matrix] ${label} ${result.id} ${result.elapsedMs}ms`);
+      };
+      const written = persistence.then(persist);
+      persistence = written.catch(() => {});
+      await written;
+    };
+    for (const wave of waves) {
+      abortController.signal.throwIfAborted();
+      const budget = observedBudget();
+      const stopped = stoppedReason(wave[0]!);
+      stopReason ??=
+        admittedCells + wave.length > admission.maxCells
+          ? "max_cells"
+          : budget.tokens >= admission.maxTokens
+            ? "max_tokens"
+            : budget.knownCostUsd >= admission.maxKnownCostUsd
+              ? "max_known_cost_usd"
+              : budget.wallSeconds >= admission.maxWallSeconds
+                ? "max_wall_seconds"
+                : null;
+      if (stopReason || stopped) {
+        unstarted.push(...wave.map((cell) => ({ id: cell.id, reason: stopReason ?? stopped! })));
+        continue;
+      }
+      admittedCells += wave.length;
+      let next = 0;
+      const workers = Array.from(
+        { length: Math.min(admission.concurrency, wave.length) },
+        async () => {
+          while (next < wave.length) {
+            const cell = wave[next++]!;
+            await runCell(cell);
+          }
+        },
+      );
+      const outcomes = await Promise.allSettled(workers);
+      const rejected = outcomes.find((outcome) => outcome.status === "rejected");
+      if (rejected?.status === "rejected") {
+        throw rejected.reason;
+      }
+      if (
+        !options.dryRun &&
+        (await (deps.readBuildSha256 ?? hashRuntimeArtifacts)(runtimeRepoRoot)) !== buildSha256
+      ) {
+        throw new Error(
+          "Runtime build changed during the benchmark; per-cell evidence is retained but cannot establish a fixed-build comparison.",
+        );
+      }
+    }
+    abortController.signal.throwIfAborted();
+    if (options.runtimeDir && !deps.runCell) {
+      const finalIdentity = await readSourceIdentity(
+        runtimeRepoRoot,
+        STRICT_SOURCE_IDENTITY_OPTIONS,
+      );
+      if (finalIdentity.sourceDirty || finalIdentity.gitSha !== sourceIdentity.gitSha) {
+        throw new Error(
+          "Frozen runtime changed during the benchmark; per-cell evidence is retained but cannot establish a fixed-source comparison.",
+        );
+      }
+    }
+
+    const groups = summarizeResults(results);
+    const failed = results.filter((result) => !result.passed).length;
+    const firstPassPassed = groups.filter((group) => group.firstPassPassed).length;
+    const eventualPassed = groups.filter((group) => group.eventualPassed).length;
+    const summary = {
+      schemaVersion: MATRIX_SCHEMA_VERSION,
+      finishedAt: new Date().toISOString(),
+      ...(options.tasks.some(isGatewayTask)
+        ? { gatewayExecutor: options.gatewayExecutor ?? "node" }
+        : {}),
+      ...sourceIdentity,
+      buildSha256,
+      counts: {
+        total: results.length,
+        passed: results.length - failed,
+        failed,
+      },
+      groupCounts: {
+        total: groups.length,
+        firstPassPassed,
+        eventualPassed,
+      },
+      ...(results.some((result) => result.workload)
+        ? { gatewayOutcomes: summarizeGatewayMatrixOutcomes(results) }
+        : {}),
+      groups,
+      admission: {
+        ...admission,
+        admittedCells,
+        plannedCells: cells.length,
+        completedCells: results.length,
+        stoppedProviders: Object.fromEntries(stoppedProviders),
+        stoppedModels: Object.fromEntries(stoppedModels),
+        stopReason,
+        unstarted,
+        observed: observedBudget(),
+        overshoot: {
+          tokens: Math.max(0, observedBudget().tokens - admission.maxTokens),
+          knownCostUsd: Math.max(0, observedBudget().knownCostUsd - admission.maxKnownCostUsd),
+          wallSeconds: Math.max(0, observedBudget().wallSeconds - admission.maxWallSeconds),
+          contract:
+            "Admission limits are soft. An admitted wave finishes before another starts, including its queued arm at concurrency 1. Missing usage/prices make observed totals lower bounds, not hard spend limits.",
+        },
+      },
+    };
+    await writeJson(path.join(outputDir, "summary.json"), summary);
+    const performanceResults = results.filter((result) => isMatrixPerformanceTask(result.task));
+    if (performanceResults.length > 0) {
+      const { compareCodeModeMatrixModes } = await import("./lib/code-mode-matrix-comparison.ts");
+      await writeJson(
+        path.join(outputDir, "mode-comparison.json"),
+        compareCodeModeMatrixModes(performanceResults),
+      );
+    }
+    if (options.baselineResults) {
+      const { compareCodeModeMatrixResultsFile } =
+        await import("./lib/code-mode-matrix-comparison.ts");
+      await writeJson(
+        path.join(outputDir, "comparison.json"),
+        await compareCodeModeMatrixResultsFile(options.baselineResults, results),
+      );
+    }
+    await writeEvidence(summary.finishedAt);
+    return {
+      exitCode: (failed > 0 || unstarted.length > 0) && !options.allowFailures ? 1 : 0,
+      outputDir,
+      summary,
+    };
+  } finally {
+    process.off("SIGINT", interrupt);
+    process.off("SIGTERM", interrupt);
+    if (runtimeRoot) {
+      await fs.rm(runtimeRoot, { force: true, recursive: true });
+    }
+  }
+}
+
+async function main(): Promise<void> {
+  try {
+    const options = parseCodeModeMatrixOptions(process.argv.slice(2));
+    const result = await runCodeModeModelMatrix(options);
+    console.log(
+      `[code-mode-matrix] artifacts ${path.relative(options.repoRoot, result.outputDir)}`,
+    );
+    process.exitCode = result.exitCode;
+  } catch (error) {
+    if ((error as { code?: unknown }).code === "HELP") {
+      console.log(error instanceof Error ? error.message : String(error));
+      return;
+    }
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  }
+}
+
+function isCliEntrypoint(): boolean {
+  const entrypoint = process.argv[1];
+  return Boolean(entrypoint && import.meta.url === pathToFileURL(path.resolve(entrypoint)).href);
+}
+
+if (isCliEntrypoint()) {
+  await main();
+}

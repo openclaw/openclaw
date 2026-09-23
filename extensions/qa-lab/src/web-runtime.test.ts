@@ -68,6 +68,7 @@ import {
 } from "./web-runtime.js";
 
 beforeEach(async () => {
+  vi.stubEnv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH", undefined);
   const page = {
     on: pageOn,
     goto,
@@ -139,7 +140,7 @@ describe("qa web runtime", () => {
     const launchOptions = requireLaunchOptions();
     expect(spawnSync).toHaveBeenCalledWith(
       process.execPath,
-      ["scripts/ensure-playwright-chromium.mjs", "--skip-ffmpeg"],
+      ["--import", "tsx", "scripts/ensure-playwright-chromium.mts", "--skip-ffmpeg"],
       expect.objectContaining({ cwd: process.cwd(), stdio: "inherit" }),
     );
     expect(launchOptions?.channel).toBeUndefined();

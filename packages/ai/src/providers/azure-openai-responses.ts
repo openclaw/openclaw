@@ -1,24 +1,23 @@
-// Azure OpenAI Responses provider adapts Azure deployments to Responses API streams.
 import OpenAI, { AzureOpenAI } from "openai";
 import type { ResponseCreateParamsStreaming } from "openai/resources/responses/responses.js";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost } from "../host.js";
-import type {
-  Context,
-  Model,
-  SimpleStreamOptions,
-  StreamFunction,
-  StreamOptions,
-} from "../types.js";
+import type { BaseOpenAIStreamOptions } from "../provider-options.js";
+import type { OpenAIResponsesReplayMode } from "../transports/openai-responses-compaction-replay.js";
+import type { OpenAIResponsesRequestParams } from "../transports/openai-responses-contracts.js";
+import type { Context, Model, SimpleStreamOptions, StreamFunction } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { resolveAzureDeploymentNameFromMap } from "./azure-deployment-map.js";
 import { isOpenAICompatibleAzureResponsesBaseUrl } from "./azure-openai-responses-client-compat.js";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
 import {
+  resolveOpenAISimpleReasoningEffort,
+  type OpenAIRequestReasoningEffort,
+} from "./openai-request-reasoning.js";
+import {
   applyCommonResponsesParams,
   convertResponsesMessages,
   createResponsesAssistantOutput,
-  resolveResponsesReasoningEffort,
   runResponsesStreamLifecycle,
 } from "./openai-responses-shared.js";
 import { buildBaseOptions } from "./simple-options.js";
@@ -39,25 +38,8 @@ function resolveDeploymentName(
   });
 }
 
-function formatAzureOpenAIError(error: unknown): string {
-  if (error instanceof Error) {
-    const status = (error as Error & { status?: unknown }).status;
-    const statusCode = typeof status === "number" ? status : undefined;
-    if (statusCode !== undefined) {
-      return `Azure OpenAI API error (${statusCode}): ${error.message}`;
-    }
-    return error.message;
-  }
-  try {
-    return JSON.stringify(error);
-  } catch {
-    return String(error);
-  }
-}
-
-// Azure OpenAI Responses-specific options
-interface AzureOpenAIResponsesOptions extends StreamOptions {
-  reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh";
+interface AzureOpenAIResponsesOptions extends BaseOpenAIStreamOptions {
+  reasoningEffort?: OpenAIRequestReasoningEffort;
   reasoningSummary?: "auto" | "detailed" | "concise" | null;
   azureApiVersion?: string;
   azureResourceName?: string;
@@ -65,9 +47,6 @@ interface AzureOpenAIResponsesOptions extends StreamOptions {
   azureDeploymentName?: string;
 }
 
-/**
- * Generate function for Azure OpenAI Responses API
- */
 export const streamAzureOpenAIResponses: StreamFunction<
   "azure-openai-responses",
   AzureOpenAIResponsesOptions
@@ -79,18 +58,27 @@ export const streamAzureOpenAIResponses: StreamFunction<
   const stream = new AssistantMessageEventStream();
   const output = createResponsesAssistantOutput(model, "azure-openai-responses");
 
-  // Start async processing
   void runResponsesStreamLifecycle({
     stream,
     model,
     output,
     options,
-    createClient: () => {
-      const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
-      return createClient(model, apiKey, options);
+    resolveRequestModel: (requestModel) => {
+      const { baseUrl } = resolveAzureConfig(requestModel, options);
+      return baseUrl === requestModel.baseUrl ? requestModel : { ...requestModel, baseUrl };
     },
-    buildParams: () => buildParams(model, context, options, resolveDeploymentName(model, options)),
-    formatError: formatAzureOpenAIError,
+    createClient: (requestModel) => {
+      const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
+      return createClient(requestModel, apiKey, options);
+    },
+    buildParams: (requestModel, replayMode) =>
+      buildParams(
+        requestModel,
+        context,
+        options,
+        resolveDeploymentName(model, options),
+        replayMode,
+      ),
   });
 
   return stream;
@@ -106,11 +94,12 @@ export const streamSimpleAzureOpenAIResponses: StreamFunction<
   }
 
   const base = buildBaseOptions(model, options, apiKey);
-  const reasoningEffort = resolveResponsesReasoningEffort(model, options?.reasoning);
-
+  const authProfileId = (options as (SimpleStreamOptions & { authProfileId?: string }) | undefined)
+    ?.authProfileId;
   return streamAzureOpenAIResponses(model, context, {
     ...base,
-    reasoningEffort: reasoningEffort === "max" ? "xhigh" : reasoningEffort,
+    authProfileId,
+    reasoningEffort: resolveOpenAISimpleReasoningEffort(model, options?.reasoning),
   } satisfies AzureOpenAIResponsesOptions);
 };
 
@@ -183,14 +172,11 @@ function createClient(
   apiKeyInput: string,
   options?: AzureOpenAIResponsesOptions,
 ) {
-  let apiKey = apiKeyInput;
+  const apiKey = apiKeyInput.trim();
   if (!apiKey) {
-    if (!process.env.AZURE_OPENAI_API_KEY) {
-      throw new Error(
-        "Azure OpenAI API key is required. Set AZURE_OPENAI_API_KEY environment variable or pass it as an argument.",
-      );
-    }
-    apiKey = process.env.AZURE_OPENAI_API_KEY;
+    throw new Error(
+      "Azure OpenAI API key is required. Set AZURE_OPENAI_API_KEY environment variable or pass it as an argument.",
+    );
   }
 
   const headers = { ...model.headers };
@@ -210,6 +196,7 @@ function createClient(
       defaultHeaders: headers,
       baseURL: baseUrl,
       fetch: guardedFetch,
+      maxRetries: 0,
     });
   }
 
@@ -220,6 +207,7 @@ function createClient(
     defaultHeaders: headers,
     baseURL: baseUrl,
     fetch: guardedFetch,
+    maxRetries: 0,
   });
 }
 
@@ -228,10 +216,15 @@ function buildParams(
   context: Context,
   options: AzureOpenAIResponsesOptions | undefined,
   deploymentName: string,
+  replayMode: OpenAIResponsesReplayMode = "checkpoint",
 ) {
-  const messages = convertResponsesMessages(model, context, AZURE_TOOL_CALL_PROVIDERS);
+  const messages = convertResponsesMessages(model, context, AZURE_TOOL_CALL_PROVIDERS, {
+    sessionId: options?.sessionId,
+    authProfileId: options?.authProfileId,
+    replayMode,
+  });
 
-  const params: ResponseCreateParamsStreaming = {
+  const params: ResponseCreateParamsStreaming & OpenAIResponsesRequestParams = {
     model: deploymentName,
     input: messages,
     stream: true,
@@ -246,9 +239,3 @@ function buildParams(
 
   return params;
 }
-
-export const testing = {
-  isOpenAICompatibleAzureResponsesBaseUrl,
-  normalizeAzureBaseUrl,
-  resolveAzureConfig,
-};

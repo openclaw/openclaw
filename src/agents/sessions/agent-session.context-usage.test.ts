@@ -1,8 +1,51 @@
 import { describe, expect, it } from "vitest";
 import type { AgentMessage } from "../runtime/index.js";
+import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
+import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import { AgentSession } from "./agent-session.js";
 
 describe("AgentSession context usage", () => {
+  it("reports unknown usage after a provider checkpoint until a later measured response", () => {
+    const owner = makeAgentAssistantMessage({ content: [{ type: "text", text: "covered" }] });
+    owner.usage = {
+      ...owner.usage,
+      input: 90_000,
+      totalTokens: 90_000,
+      contextUsage: { state: "available", promptTokens: 90_000, totalTokens: 90_000 },
+    };
+    owner.providerReplay = {
+      v: 1,
+      type: "openai-responses-retained-compaction",
+      data: "opaque",
+      provider: owner.provider,
+      api: owner.api,
+      model: owner.model,
+      baseUrlHash: "hash",
+    };
+    const messages: AgentMessage[] = [owner];
+    const branchEntries = [{ type: "message", id: "checkpoint-owner", message: owner }];
+    const session = {
+      model: { contextWindow: 100_000 },
+      messages,
+      sessionManager: { getBranch: () => branchEntries },
+    } as unknown as AgentSession;
+    expect(AgentSession.prototype.getContextUsage.call(session)).toEqual({
+      tokens: null,
+      contextWindow: 100_000,
+      percent: null,
+    });
+    const later = makeAgentAssistantMessage({ content: [{ type: "text", text: "later" }] });
+    later.usage = {
+      ...later.usage,
+      input: 8_000,
+      totalTokens: 8_000,
+      contextUsage: { state: "available", promptTokens: 8_000, totalTokens: 8_000 },
+    };
+    messages.push(later);
+    branchEntries.push({ type: "message", id: "later", message: later });
+    expect(AgentSession.prototype.getContextUsage.call(session)?.tokens).toBe(8_000);
+  });
+
   it("preserves an earlier exact snapshot when unavailable usage precedes any compaction", () => {
     const messages = [
       {
@@ -10,22 +53,14 @@ describe("AgentSession context usage", () => {
         content: [{ type: "text", text: "large exact response" }],
         stopReason: "stop",
         usage: {
+          ...createZeroUsageFixture(),
           input: 180_000,
           output: 10_000,
-          cacheRead: 0,
-          cacheWrite: 0,
           totalTokens: 190_000,
           contextUsage: {
             state: "available" as const,
             promptTokens: 180_000,
             totalTokens: 190_000,
-          },
-          cost: {
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            total: 0,
           },
         },
       },
@@ -35,19 +70,12 @@ describe("AgentSession context usage", () => {
         content: [{ type: "text", text: "small answer" }],
         stopReason: "stop",
         usage: {
+          ...createZeroUsageFixture(),
           input: 12,
           output: 8,
           cacheRead: 180_000,
-          cacheWrite: 0,
           totalTokens: 180_020,
           contextUsage: { state: "unavailable" as const },
-          cost: {
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            total: 0,
-          },
         },
       },
     ] as unknown as AgentMessage[];
@@ -63,19 +91,13 @@ describe("AgentSession context usage", () => {
 
   it("uses a content estimate after compaction when provider context usage is unavailable", () => {
     const unavailableUsage = {
+      ...createZeroUsageFixture(),
       input: 12,
       output: 15_104,
       cacheRead: 819_661,
       cacheWrite: 93_130,
       totalTokens: 927_907,
       contextUsage: { state: "unavailable" as const },
-      cost: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        total: 0,
-      },
     };
     const messages = [
       {
@@ -130,22 +152,14 @@ describe("AgentSession context usage", () => {
 
   it("preserves an earlier exact post-compaction snapshot before an unavailable response", () => {
     const exactUsage = {
+      ...createZeroUsageFixture(),
       input: 180_000,
       output: 10_000,
-      cacheRead: 0,
-      cacheWrite: 0,
       totalTokens: 190_000,
       contextUsage: {
         state: "available" as const,
         promptTokens: 180_000,
         totalTokens: 190_000,
-      },
-      cost: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        total: 0,
       },
     };
     const messages = [
@@ -203,26 +217,19 @@ describe("AgentSession context usage", () => {
 
   it("preserves an earlier exact post-compaction snapshot before zero usage", () => {
     const exactUsage = {
+      ...createZeroUsageFixture(),
       input: 180_000,
       output: 10_000,
-      cacheRead: 0,
-      cacheWrite: 0,
       totalTokens: 190_000,
       contextUsage: {
         state: "available" as const,
         promptTokens: 180_000,
         totalTokens: 190_000,
       },
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
     };
     const zeroUsage = {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
+      ...createZeroUsageFixture(),
       contextUsage: { state: "available" as const, promptTokens: 0, totalTokens: 0 },
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
     };
     const messages = [
       {

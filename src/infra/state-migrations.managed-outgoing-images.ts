@@ -1,8 +1,10 @@
 // Doctor-only import for retired managed outgoing image metadata JSON files.
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonBlankString as optionalNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import {
   managedImageRecordFromRow,
   managedImageRecordsEqual,
@@ -21,6 +23,12 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import { assertAllowedJsonFields } from "./state-migrations.json-fields.js";
+import {
+  legacyMigrationSourceSnapshotsMatch as sourceSnapshotsMatch,
+  readLegacyMigrationSourceSnapshotSync,
+  type LegacyMigrationSourceSnapshot as LegacySourceSnapshot,
+} from "./state-migrations.source-snapshot.js";
 import type { LegacyStateDetection, MigrationMessages } from "./state-migrations.types.js";
 
 const LEGACY_RECORD_MAX_BYTES = 1024 * 1024;
@@ -41,16 +49,6 @@ const RECORD_KEYS = new Set([
   "original",
 ]);
 const ORIGINAL_KEYS = new Set(["path", "contentType", "width", "height", "sizeBytes", "filename"]);
-
-type LegacySourceSnapshot = {
-  sourcePath: string;
-  dev: number;
-  ino: number;
-  mtimeMs: number;
-  raw: string;
-  sha256: string;
-  size: number;
-};
 
 type ParsedLegacyRecord = {
   record: ManagedImageRecord;
@@ -125,55 +123,18 @@ function recoverInterruptedDoctorClaims(sourceDir: string): void {
 }
 
 function readLegacySourceSnapshot(sourcePath: string): LegacySourceSnapshot {
-  const before = fs.lstatSync(sourcePath);
-  if (!before.isFile() || before.isSymbolicLink()) {
-    throw new Error("legacy managed image source is not a regular non-symlink file");
-  }
-  if (before.size > LEGACY_RECORD_MAX_BYTES) {
-    throw new Error("legacy managed image source exceeds the metadata size limit");
-  }
-  const raw = fs.readFileSync(sourcePath, "utf8");
-  const after = fs.lstatSync(sourcePath);
-  if (
-    !after.isFile() ||
-    after.isSymbolicLink() ||
-    before.dev !== after.dev ||
-    before.ino !== after.ino ||
-    before.size !== after.size ||
-    before.mtimeMs !== after.mtimeMs
-  ) {
-    throw new Error("legacy managed image source changed while doctor was reading it");
-  }
-  return {
+  return readLegacyMigrationSourceSnapshotSync({
     sourcePath,
-    dev: after.dev,
-    ino: after.ino,
-    mtimeMs: after.mtimeMs,
-    raw,
-    sha256: createHash("sha256").update(raw).digest("hex"),
-    size: after.size,
-  };
-}
-
-function sourceSnapshotsMatch(left: LegacySourceSnapshot, right: LegacySourceSnapshot): boolean {
-  return (
-    left.dev === right.dev &&
-    left.ino === right.ino &&
-    left.mtimeMs === right.mtimeMs &&
-    left.sha256 === right.sha256 &&
-    left.size === right.size
-  );
-}
-
-function optionalNonEmptyString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value : undefined;
+    label: "managed image",
+    maxBytes: LEGACY_RECORD_MAX_BYTES,
+  });
 }
 
 function nullableNonNegativeInteger(value: unknown): number | null | undefined {
   if (value === null) {
     return null;
   }
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+  return asSafeIntegerInRange(value, { min: 0 });
 }
 
 function parseLegacyManagedImageRecord(params: {
@@ -184,13 +145,10 @@ function parseLegacyManagedImageRecord(params: {
   if (!isRecord(raw) || !isRecord(raw.original)) {
     throw new Error("legacy managed image record must be an object");
   }
-  const unexpectedRecordKey = Object.keys(raw).find((key) => !RECORD_KEYS.has(key));
-  const unexpectedOriginalKey = Object.keys(raw.original).find((key) => !ORIGINAL_KEYS.has(key));
-  if (unexpectedRecordKey || unexpectedOriginalKey) {
-    throw new Error(
-      `legacy managed image record has unexpected field ${unexpectedRecordKey ?? `original.${unexpectedOriginalKey}`}`,
-    );
-  }
+  assertAllowedJsonFields(raw, RECORD_KEYS, "legacy managed image record");
+  assertAllowedJsonFields(raw.original, ORIGINAL_KEYS, "legacy managed image record", {
+    fieldPrefix: "original.",
+  });
 
   const attachmentId = optionalNonEmptyString(raw.attachmentId);
   const sessionKey = optionalNonEmptyString(raw.sessionKey);

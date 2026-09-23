@@ -1,101 +1,9 @@
-// Persists and resolves per-session model override choices.
+// Detects stale heartbeat fallback pins from the identities their producers selected.
+import { buildModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { hasSessionAutoModelFallbackProvenance } from "../../agents/agent-scope.js";
-import {
-  modelKey,
-  normalizeModelRef,
-  normalizeStoredOverrideModel,
-  resolvePersistedOverrideModelRef,
-} from "../../agents/model-selection.js";
-import { resolveSessionParentSessionKey } from "../../channels/plugins/session-conversation.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-
-/** Model override loaded from the current session or its parent session. */
-export type StoredModelOverride = {
-  provider?: string;
-  model: string;
-  source: "session" | "parent";
-};
-
-function resolveParentSessionKeyCandidate(params: {
-  sessionKey?: string;
-  parentSessionKey?: string;
-}): string | null {
-  const explicit = normalizeOptionalString(params.parentSessionKey);
-  if (explicit && explicit !== params.sessionKey) {
-    return explicit;
-  }
-  const derived = resolveSessionParentSessionKey(params.sessionKey);
-  if (derived && derived !== params.sessionKey) {
-    return derived;
-  }
-  return null;
-}
-
-/** Resolves the persisted model override visible to the current session. */
-export function resolveStoredModelOverride(params: {
-  loadSessionEntry?: (sessionKey: string) => SessionEntry | undefined;
-  sessionEntry?: SessionEntry;
-  sessionStore?: Record<string, SessionEntry>;
-  sessionKey?: string;
-  parentSessionKey?: string;
-  defaultProvider: string;
-}): StoredModelOverride | null {
-  const directOverride = normalizeStoredOverrideModel({
-    providerOverride: params.sessionEntry?.providerOverride,
-    modelOverride: params.sessionEntry?.modelOverride,
-  });
-  const direct = resolvePersistedOverrideModelRef({
-    defaultProvider: params.defaultProvider,
-    overrideProvider: directOverride.providerOverride,
-    overrideModel: directOverride.modelOverride,
-  });
-  if (direct) {
-    return { ...direct, source: "session" };
-  }
-  const parentKey = resolveParentSessionKeyCandidate({
-    sessionKey: params.sessionKey,
-    parentSessionKey: params.parentSessionKey,
-  });
-  if (!parentKey) {
-    return null;
-  }
-  const parentEntry = params.loadSessionEntry?.(parentKey) ?? params.sessionStore?.[parentKey];
-  const normalizedParentOverride = normalizeStoredOverrideModel({
-    providerOverride: parentEntry?.providerOverride,
-    modelOverride: parentEntry?.modelOverride,
-  });
-  const parentOverride = resolvePersistedOverrideModelRef({
-    defaultProvider: params.defaultProvider,
-    overrideProvider: normalizedParentOverride.providerOverride,
-    overrideModel: normalizedParentOverride.modelOverride,
-  });
-  if (!parentOverride) {
-    return null;
-  }
-  return { ...parentOverride, source: "parent" };
-}
-
-function resolveModelRefKey(params: {
-  defaultProvider: string;
-  overrideProvider?: string;
-  overrideModel?: string;
-}): string | null {
-  const normalizedOverride = normalizeStoredOverrideModel({
-    providerOverride: params.overrideProvider,
-    modelOverride: params.overrideModel,
-  });
-  const ref = resolvePersistedOverrideModelRef({
-    defaultProvider: params.defaultProvider,
-    overrideProvider: normalizedOverride.providerOverride,
-    overrideModel: normalizedOverride.modelOverride,
-  });
-  if (!ref) {
-    return null;
-  }
-  const normalizedRef = normalizeModelRef(ref.provider, ref.model);
-  return modelKey(normalizedRef.provider, normalizedRef.model);
-}
+import type { StoredModelOverride } from "../../sessions/stored-model-overrides.js";
 
 /** Detects heartbeat auto-fallback overrides that no longer match the primary model. */
 export function isStaleHeartbeatAutoFallbackOverride(params: {
@@ -127,36 +35,19 @@ export function isStaleHeartbeatAutoFallbackOverride(params: {
     return false;
   }
 
-  const primaryKey = resolveModelRefKey({
-    defaultProvider: params.defaultProvider,
-    overrideProvider: params.primaryProvider ?? params.defaultProvider,
-    overrideModel: params.primaryModel ?? params.defaultModel,
-  });
-  if (!primaryKey) {
-    return false;
+  // These are prepared identities, including the encoded notice. Alias expansion or
+  // self-provider stripping would conflate distinct models such as custom/custom/model.
+  const primaryProvider = params.primaryProvider ?? params.defaultProvider;
+  const primaryModel = params.primaryModel ?? params.defaultModel;
+  const originModel = normalizeOptionalString(entry.modelOverrideFallbackOriginModel);
+  if (originModel) {
+    const originProvider =
+      normalizeOptionalString(entry.modelOverrideFallbackOriginProvider) ?? params.defaultProvider;
+    return originProvider !== primaryProvider || originModel !== primaryModel;
   }
-
-  const originKey = resolveModelRefKey({
-    defaultProvider: params.defaultProvider,
-    overrideProvider: entry.modelOverrideFallbackOriginProvider,
-    overrideModel: entry.modelOverrideFallbackOriginModel,
-  });
-  if (originKey) {
-    return originKey !== primaryKey;
-  }
-
-  const noticeSelectedKey = resolveModelRefKey({
-    defaultProvider: params.defaultProvider,
-    overrideModel: normalizeOptionalString(entry.fallbackNoticeSelectedModel),
-  });
-  if (noticeSelectedKey) {
-    return noticeSelectedKey !== primaryKey;
-  }
-
-  const storedOverrideKey = resolveModelRefKey({
-    defaultProvider: params.defaultProvider,
-    overrideProvider: params.storedOverride.provider,
-    overrideModel: params.storedOverride.model,
-  });
-  return storedOverrideKey !== null && storedOverrideKey !== primaryKey;
+  const noticeSelectedKey = normalizeOptionalString(entry.fallbackNotice?.selectedModel);
+  return noticeSelectedKey
+    ? noticeSelectedKey !== buildModelCatalogRef(primaryProvider, primaryModel)
+    : (params.storedOverride.provider ?? params.defaultProvider) !== primaryProvider ||
+        params.storedOverride.model !== primaryModel;
 }

@@ -1,663 +1,17 @@
-import { createServer } from "node:http";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
-import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import type { Api, Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import {
-  buildOpenAICompletionsParams,
-  createOpenAICompletionsTransportStreamFn,
-} from "./openai-transport-stream.js";
-import {
   buildOpenAIResponsesParams,
-  type CapturedStreamEvent,
-  makeCompletionsModel,
-  makeResponsesModel,
-  makeCompletionsChunk,
-  createDeepSeekCompletionsModel,
-  createAssistantOutput,
   createAzureResponsesModel,
-  streamChunks,
   expectRecordFields,
+  makeResponsesModel,
 } from "./openai-transport-stream.test-harness.js";
 import { testing } from "./openai-transport-stream.test-support.js";
-import { attachModelProviderRequestTransport } from "./provider-request-config.js";
+import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 
 describe("openai transport stream", () => {
-  it("surfaces aggregated chat-completions message.refusal as visible assistant text", async () => {
-    const model = makeCompletionsModel({
-      id: "gpt-5.5",
-      name: "GPT-5.5",
-      reasoning: false,
-      contextWindow: 128_000,
-      maxTokens: 4096,
-    });
-    const output = createAssistantOutput(model);
-
-    await testing.processOpenAICompletionsStream(
-      streamChunks([
-        makeCompletionsChunk({}, null, {
-          choices: [
-            {
-              index: 0,
-              // Some OpenAI-compatible endpoints deliver a full message instead of delta.
-              message: {
-                role: "assistant",
-                content: null,
-                refusal: "Requests like this are not allowed.",
-              },
-              logprobs: null,
-              finish_reason: "stop",
-            } as unknown as ChatCompletionChunk["choices"][number],
-          ],
-        }),
-      ]),
-      output,
-      model,
-      { push() {} },
-    );
-
-    expect(output.content).toStrictEqual([
-      { type: "text", text: "Requests like this are not allowed." },
-    ]);
-    expect(output.stopReason).toBe("stop");
-  });
-
-  it("filters DeepSeek DSML content without disturbing native tool calls", async () => {
-    const model = createDeepSeekCompletionsModel();
-    const output = createAssistantOutput(model);
-    const events: CapturedStreamEvent[] = [];
-
-    await testing.processOpenAICompletionsStream(
-      streamChunks([
-        makeCompletionsChunk({
-          content: "before <｜DSML｜tool_use_error>body</｜DSML｜tool_use_error> after",
-        }),
-        makeCompletionsChunk(
-          {
-            content: "<|DSML|tool_calls>shadow</|DSML|tool_calls>",
-            tool_calls: [
-              {
-                index: 0,
-                id: "call_native_1",
-                type: "function",
-                function: { name: "read", arguments: '{"path":"/tmp/native.md"}' },
-              },
-            ],
-          },
-          "tool_calls",
-        ),
-      ]),
-      output,
-      model,
-      { push: (event) => events.push(event as CapturedStreamEvent) },
-    );
-
-    expect(output.content).toEqual([
-      { type: "text", text: "before  after" },
-      {
-        type: "toolCall",
-        id: "call_native_1",
-        name: "read",
-        arguments: { path: "/tmp/native.md" },
-        partialArgs: '{"path":"/tmp/native.md"}',
-      },
-    ]);
-    expect(JSON.stringify(events)).not.toContain("DSML");
-  });
-
-  it("preserves DeepSeek visible content before same-chunk native tool calls", async () => {
-    const model = createDeepSeekCompletionsModel();
-    const output = createAssistantOutput(model);
-
-    await testing.processOpenAICompletionsStream(
-      streamChunks([
-        makeCompletionsChunk(
-          {
-            content: "I'll check",
-            tool_calls: [
-              {
-                index: 0,
-                id: "call_native_1",
-                type: "function",
-                function: { name: "read", arguments: '{"path":"/tmp/native.md"}' },
-              },
-            ],
-          },
-          "tool_calls",
-        ),
-      ]),
-      output,
-      model,
-      { push() {} },
-    );
-
-    expect(output.content).toEqual([
-      { type: "text", text: "I'll check" },
-      {
-        type: "toolCall",
-        id: "call_native_1",
-        name: "read",
-        arguments: { path: "/tmp/native.md" },
-        partialArgs: '{"path":"/tmp/native.md"}',
-      },
-    ]);
-  });
-
-  it("filters DeepSeek DSML text queued after native tool calls", async () => {
-    const model = createDeepSeekCompletionsModel();
-    const output = createAssistantOutput(model);
-    const events: CapturedStreamEvent[] = [];
-
-    await testing.processOpenAICompletionsStream(
-      streamChunks([
-        makeCompletionsChunk(
-          {
-            tool_calls: [
-              {
-                index: 0,
-                id: "call_native_1",
-                type: "function",
-                function: { name: "read", arguments: '{"path":"/tmp/native.md"}' },
-              },
-            ],
-          },
-          "tool_calls",
-        ),
-        makeCompletionsChunk({
-          content: "<|DSML|tool_calls>shadow</|DSML|tool_calls> visible",
-        }),
-      ]),
-      output,
-      model,
-      { push: (event) => events.push(event as CapturedStreamEvent) },
-    );
-
-    expect(output.content).toEqual([
-      {
-        type: "toolCall",
-        id: "call_native_1",
-        name: "read",
-        arguments: { path: "/tmp/native.md" },
-        partialArgs: '{"path":"/tmp/native.md"}',
-      },
-      { type: "text", text: " visible" },
-    ]);
-    expect(JSON.stringify(events)).not.toContain("DSML");
-  });
-
-  it("keeps DeepSeek DSML state across native tool-call chunks", async () => {
-    const model = createDeepSeekCompletionsModel();
-    const output = createAssistantOutput(model);
-    const events: CapturedStreamEvent[] = [];
-
-    await testing.processOpenAICompletionsStream(
-      streamChunks([
-        makeCompletionsChunk(
-          {
-            content: "before <|DSML|tool",
-            tool_calls: [
-              {
-                index: 0,
-                id: "call_native_1",
-                type: "function",
-                function: { name: "read", arguments: '{"path":"/tmp/native.md"}' },
-              },
-            ],
-          },
-          "tool_calls",
-        ),
-        makeCompletionsChunk({
-          content: "_calls>shadow</|DSML|tool_calls> after",
-        }),
-      ]),
-      output,
-      model,
-      { push: (event) => events.push(event as CapturedStreamEvent) },
-    );
-
-    expect(output.content).toEqual([
-      { type: "text", text: "before " },
-      {
-        type: "toolCall",
-        id: "call_native_1",
-        name: "read",
-        arguments: { path: "/tmp/native.md" },
-        partialArgs: '{"path":"/tmp/native.md"}',
-      },
-      { type: "text", text: " after" },
-    ]);
-    expect(JSON.stringify(events)).not.toContain("DSML");
-  });
-
-  it("recovers DeepSeek DSML parameter tool calls emitted as text", async () => {
-    const model = createDeepSeekCompletionsModel();
-    const output = createAssistantOutput(model);
-    const events: CapturedStreamEvent[] = [];
-
-    await testing.processOpenAICompletionsStream(
-      streamChunks([
-        makeCompletionsChunk(
-          {
-            content:
-              '<｜DSML｜tool_calls>\n<｜DSML｜invoke name="session_status">\n<｜DSML｜parameter name="sessionKey" string="true">current</｜DSML｜parameter>\n</｜DSML｜invoke>\n</｜DSML｜tool_calls>',
-          },
-          "stop",
-        ),
-      ]),
-      output,
-      model,
-      { push: (event) => events.push(event as CapturedStreamEvent) },
-    );
-
-    expect(output.stopReason).toBe("toolUse");
-    expect(output.content).toEqual([
-      {
-        type: "toolCall",
-        id: expect.stringMatching(/^call_[0-9a-f]{24}$/),
-        name: "session_status",
-        arguments: { sessionKey: "current" },
-        partialArgs: '{"sessionKey":"current"}',
-      },
-    ]);
-    expect(JSON.stringify(events)).not.toContain("DSML");
-  });
-
-  it.each([
-    { finishReason: "length", stopReason: "length" },
-    { finishReason: "content_filter", stopReason: "error" },
-  ])(
-    "does not authorize recovered DeepSeek DSML calls after $finishReason",
-    async ({ finishReason, stopReason }) => {
-      const model = createDeepSeekCompletionsModel();
-      const output = createAssistantOutput(model);
-      expect(testing.getCompat(model).thinkingFormat).toBe("deepseek");
-
-      await testing.processOpenAICompletionsStream(
-        streamChunks([
-          makeCompletionsChunk(
-            {
-              content:
-                '<|DSML|tool_calls><|DSML|invoke name="read">{"path":"/tmp/partial.md"}</|DSML|invoke></|DSML|tool_calls>',
-            },
-            finishReason,
-          ),
-        ]),
-        output,
-        model,
-        { push() {} },
-      );
-
-      expect(output.stopReason).toBe(stopReason);
-      expect(output.content).toEqual([]);
-    },
-  );
-
-  it("does not authorize recovered DeepSeek DSML calls when the stream omits a terminal", async () => {
-    const model = createDeepSeekCompletionsModel();
-    const output = createAssistantOutput(model);
-
-    await testing.processOpenAICompletionsStream(
-      streamChunks([
-        makeCompletionsChunk({
-          content:
-            '<|DSML|tool_calls><|DSML|invoke name="read">{"path":"/tmp/partial.md"}</|DSML|invoke></|DSML|tool_calls>',
-        }),
-      ]),
-      output,
-      model,
-      { push() {} },
-    );
-
-    expect(output.stopReason).toBe("stop");
-    expect(output.content).toEqual([]);
-  });
-
-  it("emits recovered DeepSeek content-filter terminals as errors", async () => {
-    const server = createServer((req, res) => {
-      req.resume();
-      req.on("end", () => {
-        res.writeHead(200, {
-          "content-type": "text/event-stream; charset=utf-8",
-          "cache-control": "no-cache",
-          connection: "keep-alive",
-        });
-        res.write(
-          `data: ${JSON.stringify(
-            makeCompletionsChunk(
-              {
-                content:
-                  '<|DSML|tool_calls><|DSML|invoke name="read">{"path":"/tmp/partial.md"}</|DSML|invoke></|DSML|tool_calls>',
-              },
-              "content_filter",
-            ),
-          )}\n\n`,
-        );
-        res.end("data: [DONE]\n\n");
-      });
-    });
-
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    try {
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("Missing loopback server address");
-      }
-      const model = makeCompletionsModel({
-        ...createDeepSeekCompletionsModel(),
-        baseUrl: `http://127.0.0.1:${address.port}/v1`,
-      });
-      const stream = createOpenAICompletionsTransportStreamFn()(
-        model,
-        {
-          systemPrompt: "system",
-          messages: [{ role: "user", content: "Read the file", timestamp: Date.now() }],
-          tools: [],
-        } as never,
-        { apiKey: "test-key" } as never,
-      );
-
-      const terminalEvents: Array<{
-        type: string;
-        reason?: string;
-        error?: Record<string, unknown>;
-      }> = [];
-      for await (const event of stream as AsyncIterable<{
-        type: string;
-        reason?: string;
-        error?: Record<string, unknown>;
-      }>) {
-        if (event.type === "done" || event.type === "error") {
-          terminalEvents.push(event);
-        }
-      }
-
-      expect(terminalEvents).toEqual([
-        expect.objectContaining({
-          type: "error",
-          reason: "error",
-          error: expect.objectContaining({
-            stopReason: "error",
-            errorMessage: "Provider finish_reason: content_filter",
-            content: [],
-          }),
-        }),
-      ]);
-    } finally {
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    }
-  });
-
-  it("parses repeated DeepSeek DSML calls with response-unique ids", async () => {
-    // Guards the cached attribute matchers: repeated parses must stay identical
-    // apart from invocation identity (no stale RegExp lastIndex).
-    const model = createDeepSeekCompletionsModel();
-    const content =
-      '<｜DSML｜tool_calls>\n<｜DSML｜invoke name="session_status">\n<｜DSML｜parameter name="sessionKey" string="true">current</｜DSML｜parameter>\n</｜DSML｜invoke>\n</｜DSML｜tool_calls>';
-
-    const runOnce = async () => {
-      const output = createAssistantOutput(model);
-      await testing.processOpenAICompletionsStream(
-        streamChunks([makeCompletionsChunk({ content }, "stop")]),
-        output,
-        model,
-        { push() {} },
-      );
-      return output.content;
-    };
-
-    const first = await runOnce();
-    const second = await runOnce();
-    for (const resultContent of [first, second]) {
-      expect(resultContent).toEqual([
-        {
-          type: "toolCall",
-          id: expect.stringMatching(/^call_[0-9a-f]{24}$/),
-          name: "session_status",
-          arguments: { sessionKey: "current" },
-          partialArgs: '{"sessionKey":"current"}',
-        },
-      ]);
-    }
-    expect((second[0] as { id?: string }).id).not.toBe((first[0] as { id?: string }).id);
-  });
-
-  it("recovers split DeepSeek DSML JSON tool calls emitted as text", async () => {
-    const model = createDeepSeekCompletionsModel();
-    const output = createAssistantOutput(model);
-
-    await testing.processOpenAICompletionsStream(
-      streamChunks([
-        makeCompletionsChunk({ content: '<|DSML|tool_calls><|DSML|invoke name="read">' }),
-        makeCompletionsChunk({ content: '{"path":"/tmp/native.md"}</|DSML|invoke>' }),
-        makeCompletionsChunk({ content: "</|DSML|tool_calls>" }, "stop"),
-      ]),
-      output,
-      model,
-      { push() {} },
-    );
-
-    expect(output.stopReason).toBe("toolUse");
-    expect(output.content).toEqual([
-      {
-        type: "toolCall",
-        id: expect.stringMatching(/^call_[0-9a-f]{24}$/),
-        name: "read",
-        arguments: { path: "/tmp/native.md" },
-        partialArgs: '{"path":"/tmp/native.md"}',
-      },
-    ]);
-  });
-
-  it("does not recover malformed DeepSeek DSML tool calls", async () => {
-    const model = createDeepSeekCompletionsModel();
-    const output = createAssistantOutput(model);
-
-    await testing.processOpenAICompletionsStream(
-      streamChunks([
-        makeCompletionsChunk(
-          {
-            content:
-              '<｜DSML｜tool_calls>\n<｜DSML｜invoke name="session_status">\n</｜DSML｜invoke>\n</｜DSML｜tool_calls>',
-          },
-          "stop",
-        ),
-      ]),
-      output,
-      model,
-      { push() {} },
-    );
-
-    expect(output.stopReason).toBe("stop");
-    expect(output.content).toEqual([]);
-  });
-
-  it("keeps OpenRouter thinking format for declared OpenRouter providers on custom proxy URLs", () => {
-    const params = buildOpenAICompletionsParams(
-      attachModelProviderRequestTransport(
-        makeCompletionsModel({
-          id: "anthropic/claude-sonnet-4",
-          name: "Claude Sonnet 4",
-          provider: "openrouter",
-          baseUrl: "https://proxy.example.com/v1",
-        }),
-        {
-          proxy: {
-            mode: "explicit-proxy",
-            url: "http://proxy.internal:8443",
-          },
-        },
-      ),
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [],
-      } as never,
-      {
-        reasoningEffort: "high",
-      } as never,
-    );
-
-    expect(params.reasoning).toEqual({ effort: "high" });
-  });
-
-  it("keeps OpenRouter thinking format for native OpenRouter hosts behind custom provider ids", () => {
-    const params = buildOpenAICompletionsParams(
-      attachModelProviderRequestTransport(
-        makeCompletionsModel({
-          id: "anthropic/claude-sonnet-4",
-          name: "Claude Sonnet 4",
-          provider: "custom-openrouter",
-          baseUrl: "https://openrouter.ai/api/v1",
-        }),
-        {
-          proxy: {
-            mode: "explicit-proxy",
-            url: "http://proxy.internal:8443",
-          },
-        },
-      ),
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [],
-      } as never,
-      {
-        reasoningEffort: "high",
-      } as never,
-    );
-
-    expect(params.reasoning).toEqual({ effort: "high" });
-  });
-
-  it("forwards temperature and top_p to chat completions request params", () => {
-    const params = buildOpenAICompletionsParams(
-      makeCompletionsModel({
-        id: "gpt-5.4",
-        name: "GPT-5.4",
-        reasoning: false,
-      }),
-      {
-        systemPrompt: "system",
-        messages: [{ role: "user", content: "hi", timestamp: 1 }],
-        tools: [],
-      } as never,
-      {
-        temperature: 0.4,
-        topP: 0.9,
-      },
-    );
-
-    expect(params.temperature).toBe(0.4);
-    expect(params.top_p).toBe(0.9);
-  });
-
-  it("forwards penalty params and seed to chat completions request params", () => {
-    const params = buildOpenAICompletionsParams(
-      makeCompletionsModel({
-        id: "gpt-5.4",
-        name: "GPT-5.4",
-        reasoning: false,
-      }),
-      {
-        systemPrompt: "system",
-        messages: [{ role: "user", content: "hi", timestamp: 1 }],
-        tools: [],
-      } as never,
-      {
-        frequencyPenalty: -0.5,
-        presencePenalty: 1.25,
-        seed: 12345,
-      },
-    );
-
-    expect(params.frequency_penalty).toBe(-0.5);
-    expect(params.presence_penalty).toBe(1.25);
-    expect(params.seed).toBe(12345);
-  });
-
-  it("forwards stop sequences to chat completions request params", () => {
-    const params = buildOpenAICompletionsParams(
-      makeCompletionsModel({
-        id: "gpt-5.4",
-        name: "GPT-5.4",
-        reasoning: false,
-      }),
-      {
-        systemPrompt: "system",
-        messages: [{ role: "user", content: "hi", timestamp: 1 }],
-        tools: [],
-      } as never,
-      {
-        stop: ["User:", "Assistant:"],
-      },
-    );
-
-    expect(params.stop).toEqual(["User:", "Assistant:"]);
-  });
-
-  it("forwards response_format to chat completions request params", () => {
-    const model = makeCompletionsModel({
-      id: "gpt-5.4",
-      name: "GPT-5.4",
-      reasoning: false,
-    });
-
-    const context = {
-      systemPrompt: "system",
-      messages: [{ role: "user", content: "hi", timestamp: 1 }],
-      tools: [],
-    } as never;
-
-    {
-      const params = buildOpenAICompletionsParams(model, context, {
-        responseFormat: { type: "json_object" },
-      });
-      expect(params.response_format).toEqual({ type: "json_object" });
-    }
-
-    {
-      const params = buildOpenAICompletionsParams(model, context, {
-        responseFormat: { type: "json_schema", json_schema: {} },
-      });
-      expect(params.response_format).toEqual({ type: "json_schema", json_schema: {} });
-    }
-
-    {
-      const params = buildOpenAICompletionsParams(model, context, {});
-      expect(params).not.toHaveProperty("response_format");
-    }
-  });
-
-  it("does not build OpenRouter reasoning params for Hunter Alpha when reasoning is disabled", () => {
-    const params = buildOpenAICompletionsParams(
-      makeCompletionsModel({
-        id: "openrouter/hunter-alpha",
-        name: "Hunter Alpha",
-        provider: "openrouter",
-        baseUrl: "https://openrouter.ai/api/v1",
-        reasoning: false,
-        contextWindow: 1_048_576,
-        maxTokens: 65_536,
-      }),
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [],
-      } as never,
-      {
-        reasoningEffort: "high",
-      } as never,
-    ) as { reasoning?: unknown; reasoning_effort?: unknown };
-
-    expect(params).not.toHaveProperty("reasoning");
-    expect(params).not.toHaveProperty("reasoning_effort");
-  });
-
-  it("uses system role instead of developer for responses providers that disable developer role", () => {
+  it("carries the system prompt via top-level instructions for xAI responses providers", () => {
     const params = buildOpenAIResponsesParams(
       makeResponsesModel({
         id: "grok-4.1-fast",
@@ -671,28 +25,31 @@ describe("openai transport stream", () => {
         tools: [],
       } as never,
       undefined,
-    ) as { input?: Array<{ role?: string }> };
+    ) as { instructions?: string };
 
-    expect(params.input?.[0]?.role).toBe("system");
+    expect(params.instructions).toBe("system");
   });
 
-  it("adds explicit message item types for Responses system and user input items", () => {
+  it("adds explicit message item types for Responses user input items, carrying the system prompt via instructions", () => {
     const params = buildOpenAIResponsesParams(
-      createAzureResponsesModel(),
+      // Azure is not verified for instructions by default (unlike native
+      // OpenAI/xAI); this test is about message-item-type structure once
+      // instructions is in play, so opt in explicitly. `compat` types to
+      // `never` for this API variant (no recognized branch in Model<TApi>).
+      { ...createAzureResponsesModel(), compat: { supportsInstructions: true } } as never,
       {
         systemPrompt: "system",
         messages: [{ role: "user", content: "hello" }],
         tools: [],
       } as never,
       undefined,
-    ) as { input?: Array<{ type?: string; role?: string; content?: unknown }> };
+    ) as {
+      instructions?: string;
+      input?: Array<{ type?: string; role?: string; content?: unknown }>;
+    };
 
+    expect(params.instructions).toBe("system");
     expect(params.input?.[0]).toMatchObject({
-      type: "message",
-      role: "system",
-      content: [{ type: "input_text", text: "system" }],
-    });
-    expect(params.input?.[1]).toMatchObject({
       type: "message",
       role: "user",
       content: [{ type: "input_text", text: "hello" }],
@@ -701,19 +58,16 @@ describe("openai transport stream", () => {
 
   it("omits Responses reasoning params when model compat disables reasoning effort", () => {
     const params = buildOpenAIResponsesParams(
-      {
+      makeResponsesModel({
         id: "grok-4.20-0309-reasoning",
         name: "Grok 4.20 0309 (Reasoning)",
-        api: "openai-responses",
         provider: "xai",
         baseUrl: "https://api.x.ai/v1",
-        reasoning: true,
         input: ["text", "image"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 1_000_000,
         maxTokens: 30_000,
         compat: { supportsReasoningEffort: false },
-      } as unknown as Model<"openai-responses">,
+      }),
       {
         systemPrompt: "system",
         messages: [],
@@ -730,22 +84,19 @@ describe("openai transport stream", () => {
 
   it("preserves xAI Grok 4.3 default reasoning by omitting default none", () => {
     const params = buildOpenAIResponsesParams(
-      {
+      makeResponsesModel({
         id: "grok-4.3",
         name: "Grok 4.3",
-        api: "openai-responses",
         provider: "xai",
         baseUrl: "https://api.x.ai/v1",
-        reasoning: true,
         input: ["text", "image"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 1_000_000,
         maxTokens: 128_000,
         compat: {
           supportsReasoningEffort: true,
           supportedReasoningEfforts: ["none", "low", "medium", "high"],
         },
-      } as unknown as Model<"openai-responses">,
+      }),
       {
         systemPrompt: "system",
         messages: [],
@@ -760,22 +111,19 @@ describe("openai transport stream", () => {
 
   it("passes explicit xAI Grok 4.3 reasoning effort through", () => {
     const params = buildOpenAIResponsesParams(
-      {
+      makeResponsesModel({
         id: "grok-4.3",
         name: "Grok 4.3",
-        api: "openai-responses",
         provider: "xai",
         baseUrl: "https://api.x.ai/v1",
-        reasoning: true,
         input: ["text", "image"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 1_000_000,
         maxTokens: 128_000,
         compat: {
           supportsReasoningEffort: true,
           supportedReasoningEfforts: ["none", "low", "medium", "high"],
         },
-      } as unknown as Model<"openai-responses">,
+      }),
       {
         systemPrompt: "system",
         messages: [],
@@ -790,7 +138,64 @@ describe("openai transport stream", () => {
     expect(params.include).toEqual(["reasoning.encrypted_content"]);
   });
 
-  it("keeps developer role for native OpenAI reasoning responses models", () => {
+  it.each([
+    { intent: "omitted", options: undefined, reasoning: undefined, include: undefined },
+    {
+      intent: "logical off",
+      options: { reasoning: "off" },
+      reasoning: { effort: "low", summary: "auto" },
+      include: ["reasoning.encrypted_content"],
+    },
+    {
+      intent: "native none",
+      options: { reasoningEffort: "none" },
+      reasoning: { effort: "none" },
+      include: undefined,
+    },
+  ] as const)("preserves custom Responses $intent intent", ({ options, reasoning, include }) => {
+    const params = buildOpenAIResponsesParams(
+      makeResponsesModel({
+        id: "synthetic-reasoner",
+        provider: "custom-provider",
+        baseUrl: "https://reasoning.example/v1",
+        compat: { supportedReasoningEfforts: ["none", "low", "high"] },
+        thinkingLevelMap: { off: "low" },
+      }),
+      { systemPrompt: "system", messages: [], tools: [] },
+      options,
+    );
+
+    if (reasoning === undefined) {
+      expect(params).not.toHaveProperty("reasoning");
+    } else {
+      expect(params.reasoning).toEqual(reasoning);
+    }
+    if (include === undefined) {
+      expect(params).not.toHaveProperty("include");
+    } else {
+      expect(params.include).toEqual(include);
+    }
+  });
+
+  it.each(["openai", "github-copilot"])(
+    "preserves the %s managed Responses default on a native endpoint",
+    (provider) => {
+      const params = buildOpenAIResponsesParams(
+        makeResponsesModel({ id: "gpt-5.4", provider }),
+        { systemPrompt: "system", messages: [], tools: [] },
+        undefined,
+      );
+
+      if (provider === "openai") {
+        expect(params.reasoning).toEqual({ effort: "none" });
+      } else {
+        expect(params).not.toHaveProperty("reasoning");
+      }
+      expect(params).not.toHaveProperty("include");
+    },
+  );
+
+  it("carries the system prompt via top-level instructions for native OpenAI reasoning responses models", () => {
     const params = buildOpenAIResponsesParams(
       makeResponsesModel({
         id: "gpt-5.4",
@@ -802,9 +207,9 @@ describe("openai transport stream", () => {
         tools: [],
       } as never,
       undefined,
-    ) as { input?: Array<{ role?: string }> };
+    ) as { instructions?: string };
 
-    expect(params.input?.[0]?.role).toBe("developer");
+    expect(params.instructions).toBe("system");
   });
 
   it("serializes Responses input messages with explicit message type and content parts", () => {
@@ -814,6 +219,10 @@ describe("openai transport stream", () => {
         name: "GPT-5.4",
         provider: "microsoft-foundry",
         baseUrl: "https://example.services.ai.azure.com/api/projects/demo/openai/v1",
+        // Azure is not verified for instructions by default; this test is
+        // about message serialization structure once instructions is in
+        // play, so opt in explicitly.
+        compat: { supportsInstructions: true },
       }),
       {
         systemPrompt: "system",
@@ -821,14 +230,10 @@ describe("openai transport stream", () => {
         tools: [],
       } as never,
       undefined,
-    ) as { input?: unknown };
+    ) as { instructions?: string; input?: unknown };
 
+    expect(params.instructions).toBe("system");
     expect(params.input).toEqual([
-      {
-        type: "message",
-        role: "system",
-        content: [{ type: "input_text", text: "system" }],
-      },
       {
         type: "message",
         role: "user",
@@ -942,32 +347,6 @@ describe("openai transport stream", () => {
     expect(params.prompt_cache_retention).toBeUndefined();
   });
 
-  it("treats canonical OpenAI Codex responses models as native Codex responses", () => {
-    const params = buildOpenAIResponsesParams(
-      makeResponsesModel({
-        id: "gpt-5.5",
-        name: "GPT-5.5",
-        api: "openai-chatgpt-responses",
-        baseUrl: "https://chatgpt.com/backend-api/codex",
-        contextWindow: 400000,
-        maxTokens: 128000,
-      }),
-      {
-        systemPrompt: "",
-        messages: [{ role: "user", content: "Reply OK", timestamp: 1 }],
-        tools: [],
-      } as never,
-      {
-        maxTokens: 16,
-        sessionId: "session-123",
-      },
-    ) as Record<string, unknown>;
-
-    expect(params.instructions).toBe("Follow the user request.");
-    expect(params.max_output_tokens).toBeUndefined();
-    expect(params.prompt_cache_retention).toBeUndefined();
-  });
-
   it("does not add fallback instructions for custom Codex-compatible responses backends", () => {
     const params = buildOpenAIResponsesParams(
       makeResponsesModel({
@@ -993,58 +372,62 @@ describe("openai transport stream", () => {
     expect(params.max_output_tokens).toBe(16);
   });
 
-  it("uses top-level instructions for Codex responses and preserves prompt cache identity", () => {
-    const params = buildOpenAIResponsesParams(
-      makeResponsesModel({
-        id: "gpt-5.4",
-        name: "GPT-5.4",
-        api: "openai-chatgpt-responses",
-        baseUrl: "https://chatgpt.com/backend-api",
-      }),
-      {
-        systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
-        messages: [{ role: "user", content: "Hello", timestamp: 1 }],
-        tools: [],
-      } as never,
-      {
-        cacheRetention: "long",
-        maxTokens: 1024,
-        serviceTier: "auto",
-        sessionId: "session-123",
-        temperature: 0.2,
-        topP: 0.85,
-      },
-      {
-        openclaw_session_id: "session-123",
-        openclaw_turn_id: "turn-123",
-      },
-    ) as Record<string, unknown> & {
-      input?: Array<{ role?: string }>;
-      instructions?: string;
-    };
+  it.each(["none", "short", "long"] as const)(
+    "preserves native ChatGPT cache identity with %s retention",
+    (cacheRetention) => {
+      const params = buildOpenAIResponsesParams(
+        makeResponsesModel({
+          id: "gpt-5.6-sol",
+          name: "GPT-5.6 Sol",
+          api: "openai-chatgpt-responses",
+          baseUrl: "https://chatgpt.com/backend-api",
+        }),
+        {
+          systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
+          messages: [{ role: "user", content: "Hello", timestamp: 1 }],
+          tools: [],
+        } as never,
+        {
+          cacheRetention,
+          maxTokens: 1024,
+          serviceTier: "auto",
+          sessionId: "session-123",
+          temperature: 0.2,
+          topP: 0.85,
+        },
+        {
+          openclaw_session_id: "session-123",
+          openclaw_turn_id: "turn-123",
+        },
+      ) as Record<string, unknown> & {
+        input?: Array<{ role?: string }>;
+        instructions?: string;
+      };
 
-    expect(params.instructions).toBe("Stable prefix\nDynamic suffix");
-    expect(Array.isArray(params.input)).toBe(true);
-    expect(params.input?.map((item) => item.role)).toEqual(["user"]);
-    expect(
-      params.input?.filter((item) => item.role === "system" || item.role === "developer"),
-    ).toStrictEqual([]);
-    expect(params.prompt_cache_key).toBe("session-123");
-    expect(params.store).toBe(false);
-    expect(params).not.toHaveProperty("metadata");
-    expect(params).not.toHaveProperty("max_output_tokens");
-    expect(params).not.toHaveProperty("prompt_cache_retention");
-    expect(params).not.toHaveProperty("service_tier");
-    expect(params).not.toHaveProperty("temperature");
-    expect(params).not.toHaveProperty("top_p");
-  });
+      expect(params.instructions).toBe("Stable prefix\nDynamic suffix");
+      expect(Array.isArray(params.input)).toBe(true);
+      expect(params.input?.map((item) => item.role)).toEqual(["user"]);
+      expect(
+        params.input?.filter((item) => item.role === "system" || item.role === "developer"),
+      ).toStrictEqual([]);
+      expect(params.prompt_cache_key).toBe(cacheRetention === "none" ? undefined : "session-123");
+      expect(params.store).toBe(false);
+      expect(params).not.toHaveProperty("metadata");
+      expect(params).not.toHaveProperty("max_output_tokens");
+      expect(params).not.toHaveProperty("prompt_cache_retention");
+      expect(params).not.toHaveProperty("prompt_cache_options");
+      expect(params).not.toHaveProperty("service_tier");
+      expect(params).not.toHaveProperty("temperature");
+      expect(params).not.toHaveProperty("top_p");
+    },
+  );
 
   it("keeps Codex response shaping when simple completions use the OpenClaw transport alias", () => {
     const params = buildOpenAIResponsesParams(
       {
         id: "gpt-5.5",
         name: "GPT-5.5",
-        api: "openclaw-openai-responses-transport" as Api,
+        api: "openclaw-openai-chatgpt-responses-transport" as Api,
         provider: "openai",
         baseUrl: "https://chatgpt.com/backend-api/codex",
         reasoning: true,
@@ -1096,6 +479,7 @@ describe("openai transport stream", () => {
       metadata: { openclaw_session_id: "session-123" },
       prompt_cache_key: "session-123",
       prompt_cache_retention: "24h",
+      prompt_cache_options: { ttl: "30m" },
       service_tier: "auto",
       temperature: 0.2,
       text: { format: { type: "json_object" }, verbosity: "low" },
@@ -1116,6 +500,7 @@ describe("openai transport stream", () => {
     expect(sanitized).not.toHaveProperty("metadata");
     expect(sanitized).not.toHaveProperty("max_output_tokens");
     expect(sanitized).not.toHaveProperty("prompt_cache_retention");
+    expect(sanitized).not.toHaveProperty("prompt_cache_options");
     expect(sanitized).not.toHaveProperty("service_tier");
     expect(sanitized).not.toHaveProperty("temperature");
     expect(sanitized.text).toEqual({ verbosity: "low" });
@@ -1129,7 +514,13 @@ describe("openai transport stream", () => {
         name: "GPT-5.4",
         api: "openai-chatgpt-responses",
         baseUrl: "https://proxy.example.com/v1",
-      }),
+        // Unrecognized custom base URL: instructions default off unless
+        // verified. This fixture is specifically testing param preservation
+        // once instructions is in play, so opt in explicitly. `compat` types
+        // to `never` for this API variant (no recognized branch in
+        // Model<TApi>), matching the sibling `as never` casts in this file.
+        compat: { supportsInstructions: true, supportsPromptCacheKey: true },
+      } as never),
       {
         systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
         messages: [{ role: "user", content: "Hello", timestamp: 1 }],
@@ -1239,14 +630,7 @@ describe("openai transport stream", () => {
             api: "openai-chatgpt-responses",
             provider: "openai",
             model: "gpt-5.4",
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
+            usage: createZeroUsageFixture(),
             stopReason: "toolUse",
             timestamp: 1,
             content: [
@@ -1325,4 +709,3 @@ describe("openai transport stream", () => {
     expect(functionCall?.id).toBeUndefined();
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

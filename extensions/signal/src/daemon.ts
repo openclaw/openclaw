@@ -4,6 +4,14 @@ import os from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import {
+  ensurePortAvailable,
+  extractErrorCode,
+  formatErrorMessage,
+} from "openclaw/plugin-sdk/security-runtime";
+import { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
+import { signalCheck } from "./client-adapter.js";
+import { prepareSignalSocketPath } from "./socket-path.js";
 
 type SignalDaemonOpts = {
   cliPath: string;
@@ -11,6 +19,7 @@ type SignalDaemonOpts = {
   account?: string;
   httpHost: string;
   httpPort: number;
+  socketPath?: string;
   receiveMode?: "on-start" | "manual";
   ignoreAttachments?: boolean;
   ignoreStories?: boolean;
@@ -35,6 +44,85 @@ type SignalDaemonExitEvent = {
 
 export function formatSignalDaemonExit(exit: SignalDaemonExitEvent): string {
   return `signal daemon exited (source=${exit.source} code=${exit.code ?? "null"} signal=${exit.signal ?? "null"})`;
+}
+
+function formatSignalDaemonEndpoint(httpHost: string, httpPort: number): string {
+  return `${httpHost.includes(":") ? `[${httpHost}]` : httpHost}:${httpPort}`;
+}
+
+export async function assertSignalDaemonEndpointAvailable(params: {
+  httpHost: string;
+  httpPort: number;
+  socketPath?: string;
+  abortSignal?: AbortSignal;
+}): Promise<void> {
+  if (params.socketPath) {
+    params.abortSignal?.throwIfAborted();
+    await prepareSignalSocketPath(params.socketPath, params.abortSignal);
+    params.abortSignal?.throwIfAborted();
+    return;
+  }
+  try {
+    await ensurePortAvailable(params.httpPort, params.httpHost, params.abortSignal);
+  } catch (error) {
+    if (params.abortSignal?.aborted) {
+      throw params.abortSignal.reason;
+    }
+    const isPortCollision =
+      extractErrorCode(error) === "EADDRINUSE" ||
+      (error instanceof Error && error.name === "PortInUseError");
+    if (!isPortCollision) {
+      // The operator-selected signal-cli may have stronger bind permissions than OpenClaw.
+      // Only a confirmed collision is authoritative from this parent-process probe.
+      return;
+    }
+    const endpoint = formatSignalDaemonEndpoint(params.httpHost, params.httpPort);
+    throw new Error(
+      `Signal managed native endpoint ${endpoint} is unavailable: ${formatErrorMessage(error)} Stop the conflicting service, configure this Signal account with a different transport.httpPort, or use external-native for an intentionally operator-managed daemon.`,
+      {
+        cause: error,
+      },
+    );
+  }
+}
+
+export async function waitForSignalDaemonReady(params: {
+  baseUrl: string;
+  abortSignal?: AbortSignal;
+  startupDeadlineMs: number;
+  logAfterMs: number;
+  logIntervalMs?: number;
+  runtime: RuntimeEnv;
+  waitForTransportReadyFn?: typeof waitForTransportReady;
+}): Promise<void> {
+  const waitForTransportReadyFn = params.waitForTransportReadyFn ?? waitForTransportReady;
+  const timeoutMs = Math.max(0, params.startupDeadlineMs - Date.now());
+  await waitForTransportReadyFn({
+    label: "signal daemon",
+    timeoutMs,
+    logAfterMs: params.logAfterMs,
+    logIntervalMs: params.logIntervalMs,
+    pollIntervalMs: 150,
+    abortSignal: params.abortSignal,
+    runtime: params.runtime,
+    check: async () => {
+      const remainingMs = params.startupDeadlineMs - Date.now();
+      if (remainingMs <= 0) {
+        return { ok: false, error: "startup deadline exceeded" };
+      }
+      const res = await signalCheck(params.baseUrl, Math.min(1_000, remainingMs));
+      if (Date.now() >= params.startupDeadlineMs) {
+        return { ok: false, error: "startup deadline exceeded" };
+      }
+      if (res.ok) {
+        return { ok: true };
+      }
+      return {
+        ok: false,
+        error: res.error ?? (res.status ? `HTTP ${res.status}` : "unreachable"),
+      };
+    },
+  });
 }
 
 function isRecoverableSignalCliReceiveException(line: string): boolean {
@@ -102,10 +190,17 @@ function buildDaemonArgs(opts: SignalDaemonOpts): string[] {
     args.push("-a", opts.account);
   }
   args.push("daemon");
-  args.push("--http", `${opts.httpHost}:${opts.httpPort}`);
+  if (opts.socketPath) {
+    args.push("--socket", opts.socketPath);
+  } else {
+    args.push("--http", `${opts.httpHost}:${opts.httpPort}`);
+  }
   args.push("--no-receive-stdout");
 
-  if (opts.receiveMode) {
+  if (opts.socketPath) {
+    // The socket client explicitly subscribes; automatic subscriptions would duplicate events.
+    args.push("--receive-mode", "manual");
+  } else if (opts.receiveMode) {
     args.push("--receive-mode", opts.receiveMode);
   }
   if (opts.ignoreAttachments) {

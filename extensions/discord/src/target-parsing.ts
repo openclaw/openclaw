@@ -1,4 +1,3 @@
-// Discord plugin module implements target parsing behavior.
 import {
   buildMessagingTarget,
   parseMentionPrefixOrAtUserTarget,

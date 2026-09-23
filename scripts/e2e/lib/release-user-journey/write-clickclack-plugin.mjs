@@ -17,7 +17,13 @@ fs.writeFileSync(
       name: "clickclack",
       version: "0.0.1",
       type: "module",
-      openclaw: { extensions: ["./index.mjs"] },
+      openclaw: {
+        extensions: ["./index.mjs"],
+        channel: {
+          id: "clickclack",
+          configuredState: { env: { anyOf: ["CLICKCLACK_BOT_TOKEN"] } },
+        },
+      },
     },
     null,
     2,
@@ -30,7 +36,6 @@ fs.writeFileSync(
       id: "clickclack",
       activation: { onStartup: false },
       channels: ["clickclack"],
-      channelEnvVars: { clickclack: ["CLICKCLACK_BOT_TOKEN"] },
       channelConfigs: {
         clickclack: {
           schema: {
@@ -357,11 +362,15 @@ const clickclackPlugin = {
       label: snapshot.configured ? "configured" : "missing config",
       detail: snapshot.baseUrl ?? "",
     }),
-    buildAccountSnapshot: ({ account }) => ({
+    buildAccountSnapshot: ({ account, runtime }) => ({
       accountId: account.accountId,
       enabled: account.enabled,
       configured: account.configured,
       baseUrl: account.baseUrl,
+      running: runtime?.running ?? false,
+      lastStartAt: runtime?.lastStartAt ?? null,
+      lastStopAt: runtime?.lastStopAt ?? null,
+      lastError: runtime?.lastError ?? null,
     }),
   },
   outbound: {

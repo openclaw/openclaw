@@ -1,7 +1,5 @@
 // Codex plugin module implements node cli sessions behavior.
-import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
@@ -11,6 +9,8 @@ import type {
   OpenClawPluginNodeInvokePolicy,
 } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import { runCommandBuffered, withCommandProcessScope } from "openclaw/plugin-sdk/process-runtime";
+import { parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -18,10 +18,18 @@ import {
   materializeWindowsSpawnProgram,
   resolveWindowsSpawnProgram,
 } from "openclaw/plugin-sdk/windows-spawn";
+import { resolveCodexAppServerUserHomeDir } from "./app-server/auth-start-options.js";
 import { formatCodexDisplayText } from "./command-formatters.js";
+import { visitJsonlLines } from "./jsonl-lines.js";
+import { codexCatalogHomeId } from "./session-catalog-home-id.js";
+import { MAX_SESSION_ID_LENGTH, readBoundedOptionalString } from "./session-catalog-parsing.js";
+import type { CodexSessionCatalogControlFactory } from "./session-catalog-types.js";
 
 const CODEX_CLI_SESSIONS_LIST_COMMAND = "codex.cli.sessions.list";
 export const CODEX_CLI_SESSION_RESUME_COMMAND = "codex.cli.session.resume";
+export const CODEX_CLI_SESSION_SOURCE_CAPABILITY = "codex-cli-session-source";
+export const CODEX_CLI_SESSION_SOURCE_UPGRADE_MESSAGE =
+  "Update the node and approve its refreshed capabilities before continuing this Codex catalog session.";
 
 const DEFAULT_SESSION_LIMIT = 10;
 const MAX_SESSION_LIMIT = 50;
@@ -57,30 +65,32 @@ type CodexCliSessionNodeInfo = {
   commands?: string[];
 };
 
-type CodexCliResumeSpawnRuntime = {
-  platform: NodeJS.Platform;
-  env: NodeJS.ProcessEnv;
-  execPath: string;
-};
+type ResolveCatalogSource = (
+  agentId: string,
+) => Promise<
+  Pick<
+    Awaited<ReturnType<CodexSessionCatalogControlFactory["forNode"]>>,
+    "codexHome" | "sourceHomeId" | "transport" | "assertCurrent"
+  >
+>;
 
-const DEFAULT_RESUME_SPAWN_RUNTIME: CodexCliResumeSpawnRuntime = {
-  platform: process.platform,
-  env: process.env,
-  execPath: process.execPath,
-};
-
-export function createCodexCliSessionNodeHostCommands(): OpenClawPluginNodeHostCommand[] {
+export function createCodexCliSessionNodeHostCommands(
+  resolveCatalogSource: ResolveCatalogSource,
+): OpenClawPluginNodeHostCommand[] {
   return [
     {
       command: CODEX_CLI_SESSIONS_LIST_COMMAND,
       cap: "codex-cli-sessions",
+      hasActiveWork: () => false,
       handle: listLocalCodexCliSessions,
     },
     {
       command: CODEX_CLI_SESSION_RESUME_COMMAND,
-      cap: "codex-cli-sessions",
+      cap: CODEX_CLI_SESSION_SOURCE_CAPABILITY,
       dangerous: true,
-      handle: resumeLocalCodexCliSession,
+      hasActiveWork: () => activeResumeSessions.size > 0,
+      handle: (paramsJSON, _io, context) =>
+        resumeLocalCodexCliSession(paramsJSON, resolveCatalogSource, context),
     },
   ];
 }
@@ -95,7 +105,16 @@ export function createCodexCliSessionNodeInvokePolicies(): OpenClawPluginNodeInv
     {
       commands: [CODEX_CLI_SESSION_RESUME_COMMAND],
       dangerous: true,
-      handle: (ctx) => ctx.invokeNode(),
+      handle: (ctx) =>
+        isRecord(ctx.params) &&
+        (ctx.params.agentId !== undefined || ctx.params.sourceHomeId !== undefined) &&
+        !ctx.node?.caps?.includes(CODEX_CLI_SESSION_SOURCE_CAPABILITY)
+          ? {
+              ok: false,
+              code: "CODEX_NODE_SOURCE_UNAVAILABLE",
+              message: CODEX_CLI_SESSION_SOURCE_UPGRADE_MESSAGE,
+            }
+          : ctx.invokeNode(),
     },
   ];
 }
@@ -150,15 +169,57 @@ export async function resumeCodexCliSessionOnNode(params: {
   runtime: PluginRuntime;
   nodeId: string;
   sessionId: string;
+  agentId?: string;
+  sessionKey?: string;
   prompt: string;
   cwd?: string;
   timeoutMs?: number;
 }): Promise<CodexCliSessionResumeResult> {
+  let catalogAgentId: string | undefined;
+  let catalogHomeId: string | undefined;
+  if (params.sessionKey) {
+    const { adoptionSessionKeyRest, CODEX_NODE_SESSION_KEY_PREFIX, readNodeSessionMarker } =
+      await import("./session-catalog-node-adoption.js");
+    const entry = params.runtime.agent.session.getSessionEntry({
+      sessionKey: params.sessionKey,
+      readConsistency: "latest",
+    });
+    const codex = entry?.pluginExtensions?.codex;
+    if (
+      adoptionSessionKeyRest(params.sessionKey).startsWith(CODEX_NODE_SESSION_KEY_PREFIX) ||
+      (isRecord(codex) && codex.sessionCatalog !== undefined)
+    ) {
+      const marker = entry ? readNodeSessionMarker(entry) : undefined;
+      catalogAgentId = params.agentId?.trim();
+      if (
+        !catalogAgentId ||
+        parseAgentSessionKey(params.sessionKey)?.agentId !== catalogAgentId ||
+        !marker ||
+        marker.initializing === true ||
+        marker.nodeId !== params.nodeId ||
+        marker.sourceHostId !== `node:${params.nodeId}` ||
+        marker.sourceThreadId !== params.sessionId ||
+        entry?.initializationPending === true ||
+        entry?.agentHarnessId !== "codex" ||
+        entry.modelSelectionLocked !== true
+      ) {
+        throw new Error("Codex catalog session changed before its node turn could run.");
+      }
+      if (!marker.sourceHomeId) {
+        throw new Error(
+          "This Codex catalog session has no saved source home. Reopen it from the catalog to continue in a new chat.",
+        );
+      }
+      catalogHomeId = marker.sourceHomeId;
+    }
+  }
   const raw = await params.runtime.nodes.invoke({
     nodeId: params.nodeId,
     command: CODEX_CLI_SESSION_RESUME_COMMAND,
     params: {
       sessionId: params.sessionId,
+      ...(catalogAgentId ? { agentId: catalogAgentId } : {}),
+      ...(catalogHomeId ? { sourceHomeId: catalogHomeId } : {}),
       prompt: params.prompt,
       cwd: params.cwd,
       timeoutMs: params.timeoutMs,
@@ -203,9 +264,8 @@ async function listLocalCodexCliSessions(paramsJSON?: string | null): Promise<st
   const params = readRecordParam(paramsJSON);
   const limit = normalizeLimit(params.limit);
   const filter = typeof params.filter === "string" ? params.filter.trim().toLowerCase() : "";
-  const codexHome = resolveCodexHome();
+  const codexHome = resolveCodexAppServerUserHomeDir();
   const summaries = await readHistorySessions(codexHome);
-  await hydrateSessionFiles(codexHome, summaries);
   await hydrateSessionsFromSessionFiles(codexHome, summaries);
   const sessions = [...summaries.values()]
     .filter((session) => {
@@ -221,26 +281,57 @@ async function listLocalCodexCliSessions(paramsJSON?: string | null): Promise<st
   return JSON.stringify({ sessions, codexHome } satisfies CodexCliSessionsListResult);
 }
 
-async function resumeLocalCodexCliSession(paramsJSON?: string | null): Promise<string> {
+async function resumeLocalCodexCliSession(
+  paramsJSON: string | null | undefined,
+  resolveCatalogSource: ResolveCatalogSource,
+  context?: Parameters<OpenClawPluginNodeHostCommand["handle"]>[2],
+): Promise<string> {
+  context?.signal?.throwIfAborted();
   const params = readRecordParam(paramsJSON);
   const sessionId = typeof params.sessionId === "string" ? params.sessionId.trim() : "";
   const prompt = typeof params.prompt === "string" ? params.prompt.trim() : "";
+  const expectedHomeId = readBoundedOptionalString(params, "sourceHomeId", MAX_SESSION_ID_LENGTH);
   if (!sessionId || !SESSION_ID_PATTERN.test(sessionId)) {
     throw new Error("Missing or invalid Codex CLI session id.");
   }
   if (!prompt) {
     throw new Error("Missing Codex CLI prompt.");
   }
-  if (activeResumeSessions.has(sessionId)) {
+  let codexHome = resolveCodexAppServerUserHomeDir();
+  let sourceHomeId: string;
+  let assertCurrent: (() => void) | undefined;
+  if (params.agentId !== undefined) {
+    if (typeof params.agentId !== "string" || !params.agentId.trim()) {
+      throw new Error("Codex catalog agent id must be a nonempty string.");
+    }
+    const source = await resolveCatalogSource(params.agentId.trim());
+    if (source.transport !== "stdio") {
+      throw new Error("Codex CLI continuation requires a local Codex catalog source.");
+    }
+    codexHome = source.codexHome;
+    sourceHomeId = source.sourceHomeId;
+    assertCurrent = () => source.assertCurrent();
+  } else {
+    sourceHomeId = codexCatalogHomeId(codexHome);
+  }
+  if (expectedHomeId && expectedHomeId !== sourceHomeId) {
+    throw new Error("Codex catalog source home changed. Reopen the session from the catalog.");
+  }
+  context?.signal?.throwIfAborted();
+  const resumeKey = `${sourceHomeId}\0${sessionId}`;
+  if (activeResumeSessions.has(resumeKey)) {
     throw new Error(`Codex CLI session ${sessionId} already has an active resume turn.`);
   }
-  activeResumeSessions.add(sessionId);
+  activeResumeSessions.add(resumeKey);
   try {
     const text = await runCodexExecResume({
       sessionId,
       prompt,
       cwd: typeof params.cwd === "string" && params.cwd.trim() ? params.cwd.trim() : undefined,
       timeoutMs: normalizeTimeoutMs(params.timeoutMs),
+      codexHome,
+      assertCurrent,
+      signal: context?.signal,
     });
     return JSON.stringify({
       ok: true,
@@ -248,7 +339,7 @@ async function resumeLocalCodexCliSession(paramsJSON?: string | null): Promise<s
       text: text.trim() || "Codex completed without a text reply.",
     } satisfies CodexCliSessionResumeResult);
   } finally {
-    activeResumeSessions.delete(sessionId);
+    activeResumeSessions.delete(resumeKey);
   }
 }
 
@@ -257,6 +348,9 @@ async function runCodexExecResume(params: {
   prompt: string;
   cwd?: string;
   timeoutMs: number;
+  codexHome: string;
+  assertCurrent?: () => void;
+  signal?: AbortSignal;
 }): Promise<string> {
   const outputPath = path.join(
     await fs.mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "openclaw-codex-cli-")),
@@ -272,74 +366,48 @@ async function runCodexExecResume(params: {
       params.sessionId,
       "-",
     ];
-    const invocation = resolveCodexCliResumeSpawnInvocation(args, {
-      platform: process.platform,
-      env: process.env,
-      execPath: process.execPath,
-    });
-    const child = spawn(invocation.command, invocation.args, {
-      cwd: params.cwd || process.cwd(),
-      stdio: ["pipe", "pipe", "pipe"],
-      env: process.env,
-      shell: invocation.shell,
-      windowsHide: invocation.windowsHide,
-    });
-    const stdout: Buffer[] = [];
-    const stderr: Buffer[] = [];
-    let timedOut = false;
-    let forceKillTimeout: NodeJS.Timeout | undefined;
-    const timeout = setTimeout(() => {
-      timedOut = true;
-      child.kill("SIGTERM");
-      forceKillTimeout = setTimeout(() => child.kill("SIGKILL"), 2_000);
-      forceKillTimeout.unref?.();
-    }, params.timeoutMs);
-    child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
-    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
-    child.stdin.end(params.prompt);
-    const exitCode = await new Promise<number | null>((resolve, reject) => {
-      child.on("error", reject);
-      child.on("exit", (code) => resolve(code));
-    }).finally(() => {
-      clearTimeout(timeout);
-      if (forceKillTimeout) {
-        clearTimeout(forceKillTimeout);
-      }
-    });
-    if (timedOut) {
+    const invocation = materializeWindowsSpawnProgram(
+      resolveWindowsSpawnProgram({
+        command: "codex",
+        platform: process.platform,
+        env: process.env,
+        execPath: process.execPath,
+        packageName: "@openai/codex",
+      }),
+      args,
+    );
+    const result = await withCommandProcessScope(() => {
+      params.assertCurrent?.();
+      return runCommandBuffered([invocation.command, ...invocation.argv], {
+        cwd: params.cwd || process.cwd(),
+        input: params.prompt,
+        env: { ...process.env, CODEX_HOME: params.codexHome },
+        killGraceMs: 2_000,
+        signal: params.signal,
+        terminateOnOutputError: true,
+        timeoutMs: params.timeoutMs,
+      });
+    }, params.signal);
+    params.signal?.throwIfAborted();
+    if (result.termination === "timeout") {
       throw new Error(`codex exec resume timed out after ${String(params.timeoutMs)}ms`);
     }
-    if (exitCode !== 0) {
+    if (result.termination === "error" && result.error) {
+      throw result.error;
+    }
+    if (result.code !== 0) {
       const message =
-        Buffer.concat(stderr).toString("utf8").trim() ||
-        Buffer.concat(stdout).toString("utf8").trim() ||
-        `codex exec resume exited with code ${String(exitCode)}`;
+        result.stderr.toString("utf8").trim() ||
+        result.stdout.toString("utf8").trim() ||
+        `codex exec resume exited with code ${String(result.code)}`;
       throw new Error(message);
     }
-    return await fs.readFile(outputPath, "utf8");
+    const text = await fs.readFile(outputPath, "utf8");
+    params.signal?.throwIfAborted();
+    return text;
   } finally {
     await fs.rm(path.dirname(outputPath), { recursive: true, force: true });
   }
-}
-
-function resolveCodexCliResumeSpawnInvocation(
-  args: string[],
-  runtime: CodexCliResumeSpawnRuntime = DEFAULT_RESUME_SPAWN_RUNTIME,
-): { command: string; args: string[]; shell?: boolean; windowsHide?: boolean } {
-  const program = resolveWindowsSpawnProgram({
-    command: "codex",
-    platform: runtime.platform,
-    env: runtime.env,
-    execPath: runtime.execPath,
-    packageName: "@openai/codex",
-  });
-  const resolved = materializeWindowsSpawnProgram(program, args);
-  return {
-    command: resolved.command,
-    args: resolved.argv,
-    shell: resolved.shell,
-    windowsHide: resolved.windowsHide,
-  };
 }
 
 async function readHistorySessions(
@@ -347,27 +415,23 @@ async function readHistorySessions(
 ): Promise<Map<string, CodexCliSessionSummary>> {
   const summaries = new Map<string, CodexCliSessionSummary>();
   const historyPath = path.join(codexHome, "history.jsonl");
-  const content = await readFileIfExists(historyPath);
-  if (!content) {
-    return summaries;
-  }
-  for (const line of content.split(/\r?\n/u)) {
+  const result = await visitJsonlLines(historyPath, (line) => {
     const trimmed = line.trim();
     if (!trimmed) {
-      continue;
+      return;
     }
     let parsed: unknown;
     try {
       parsed = JSON.parse(trimmed) as unknown;
     } catch {
-      continue;
+      return;
     }
     if (!isRecord(parsed) || typeof parsed.session_id !== "string") {
-      continue;
+      return;
     }
     const sessionId = parsed.session_id.trim();
     if (!sessionId) {
-      continue;
+      return;
     }
     const entry = summaries.get(sessionId) ?? {
       sessionId,
@@ -381,41 +445,11 @@ async function readHistorySessions(
       entry.updatedAt = timestampMsToIsoString(parsed.ts * 1000) ?? entry.updatedAt;
     }
     summaries.set(sessionId, entry);
+  });
+  if (!result.ok) {
+    return new Map();
   }
   return summaries;
-}
-
-async function hydrateSessionFiles(
-  codexHome: string,
-  summaries: Map<string, CodexCliSessionSummary>,
-): Promise<void> {
-  if (summaries.size === 0) {
-    return;
-  }
-  const sessionsDir = path.join(codexHome, "sessions");
-  const files = await findSessionFiles(sessionsDir, 4);
-  const pending = new Set(summaries.keys());
-  for (const file of files) {
-    const basename = path.basename(file);
-    const sessionId = [...pending].find((id) => basename.includes(id));
-    if (!sessionId) {
-      continue;
-    }
-    const entry = summaries.get(sessionId);
-    if (!entry) {
-      continue;
-    }
-    entry.sessionFile = file;
-    const firstLine = (await readFirstLine(file)) ?? "";
-    const cwd = readSessionMetaCwd(firstLine);
-    if (cwd) {
-      entry.cwd = cwd;
-    }
-    pending.delete(sessionId);
-    if (pending.size === 0) {
-      return;
-    }
-  }
 }
 
 async function hydrateSessionsFromSessionFiles(
@@ -443,28 +477,24 @@ async function hydrateSessionsFromSessionFiles(
 }
 
 async function readSessionFileSummary(file: string): Promise<CodexCliSessionSummary | null> {
-  const content = await readFileIfExists(file);
-  if (!content) {
-    return null;
-  }
   let sessionId = "";
   let cwd: string | undefined;
   let updatedAt: string | undefined;
   let lastMessage: string | undefined;
   let messageCount = 0;
-  for (const line of content.split(/\r?\n/u)) {
+  const result = await visitJsonlLines(file, (line) => {
     const trimmed = line.trim();
     if (!trimmed) {
-      continue;
+      return;
     }
     let parsed: unknown;
     try {
       parsed = JSON.parse(trimmed) as unknown;
     } catch {
-      continue;
+      return;
     }
     if (!isRecord(parsed)) {
-      continue;
+      return;
     }
     if (typeof parsed.timestamp === "string" && parsed.timestamp.trim()) {
       updatedAt = parsed.timestamp.trim();
@@ -476,13 +506,19 @@ async function readSessionFileSummary(file: string): Promise<CodexCliSessionSumm
       if (typeof parsed.payload.cwd === "string" && parsed.payload.cwd.trim()) {
         cwd = parsed.payload.cwd.trim();
       }
-      continue;
+      return;
     }
     const messageText = readResponseItemMessageText(parsed);
     if (messageText) {
       messageCount += 1;
       lastMessage = truncateText(messageText, 140);
     }
+  });
+  if (!result.ok) {
+    return null;
+  }
+  if (result.lineCount === 0) {
+    return null;
   }
   if (!sessionId) {
     sessionId = readSessionIdFromFilename(file) ?? "";
@@ -520,20 +556,6 @@ async function findSessionFiles(dir: string, maxDepth: number): Promise<string[]
     }
   }
   return files;
-}
-
-function readSessionMetaCwd(line: string): string | undefined {
-  try {
-    const parsed = JSON.parse(line) as unknown;
-    if (!isRecord(parsed) || parsed.type !== "session_meta" || !isRecord(parsed.payload)) {
-      return undefined;
-    }
-    return typeof parsed.payload.cwd === "string" && parsed.payload.cwd.trim()
-      ? parsed.payload.cwd.trim()
-      : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 function readResponseItemMessageText(parsed: Record<string, unknown>): string | undefined {
@@ -655,23 +677,6 @@ function readRecordParam(paramsJSON?: string | null): Record<string, unknown> {
   } catch {
     return {};
   }
-}
-
-function resolveCodexHome(): string {
-  return process.env.CODEX_HOME?.trim() || path.join(os.homedir(), ".codex");
-}
-
-async function readFileIfExists(file: string): Promise<string | undefined> {
-  try {
-    return await fs.readFile(file, "utf8");
-  } catch {
-    return undefined;
-  }
-}
-
-async function readFirstLine(file: string): Promise<string | undefined> {
-  const content = await readFileIfExists(file);
-  return content?.split(/\r?\n/u)[0];
 }
 
 async function readFileMtimeIso(file: string): Promise<string | undefined> {

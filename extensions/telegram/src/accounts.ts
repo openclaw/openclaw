@@ -1,4 +1,3 @@
-// Telegram plugin module implements accounts behavior.
 import util from "node:util";
 import {
   createAccountActionGate,
@@ -21,6 +20,10 @@ import {
 } from "./account-selection.js";
 import type { TelegramTransport } from "./fetch.js";
 import { resolveTelegramToken } from "./token.js";
+
+type CredentialUnavailableDiagnostic = NonNullable<
+  ReturnType<typeof resolveTelegramToken>["credentialDiagnostics"]
+>[number];
 
 export { mergeTelegramAccountConfig, resolveTelegramAccountConfig } from "./account-config.js";
 
@@ -56,6 +59,8 @@ export type ResolvedTelegramAccount = {
   name?: string;
   token: string;
   tokenSource: "env" | "tokenFile" | "config" | "none";
+  tokenStatus: "available" | "configured_unavailable" | "missing";
+  credentialDiagnostics?: CredentialUnavailableDiagnostic[];
   config: TelegramAccountConfig;
 };
 
@@ -164,6 +169,14 @@ export function resolveTelegramAccount(params: {
       name: normalizeOptionalString(merged.name),
       token: tokenResolution.token,
       tokenSource: tokenResolution.source,
+      tokenStatus: tokenResolution.credentialDiagnostics?.length
+        ? "configured_unavailable"
+        : tokenResolution.token
+          ? "available"
+          : "missing",
+      ...(tokenResolution.credentialDiagnostics
+        ? { credentialDiagnostics: tokenResolution.credentialDiagnostics }
+        : {}),
       config: merged,
     } satisfies ResolvedTelegramAccount;
   };

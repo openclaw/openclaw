@@ -1,16 +1,8 @@
+import type { DurableDeliveryCompletion } from "../../infra/outbound/delivery-completion.js";
 import { normalizeReplyPayloadsForDelivery } from "../../infra/outbound/payloads.js";
-import {
-  isSilentReplyPayloadText,
-  isSilentReplyText,
-  SILENT_REPLY_TOKEN,
-  startsWithSilentToken,
-  stripLeadingSilentToken,
-  stripSilentToken,
-} from "../tokens.js";
-/** Sanitizes pending final delivery text before channel-visible output. */
-import type { ReplyPayload } from "../types.js";
-import { stripInternalMetadataForDisplay } from "./display-text-sanitize.js";
+import { getReplyPayloadMetadata, type ReplyPayload } from "../reply-payload.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
+import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery-state.js";
 
 /** Normalize raw final payloads into the channel-agnostic sendable set recovery can mark. */
 export function normalizePendingFinalDeliveryPayloads(
@@ -38,12 +30,16 @@ export function buildRecoverablePendingFinalDeliveryText(
     if (payload.isReasoning === true) {
       continue;
     }
-    const deliveryPayloads = normalizeReplyPayloadsForDelivery([payload]);
+    const recoveryPayload =
+      payload.replyToId && getReplyPayloadMetadata(payload)?.replyToIdExplicit !== true
+        ? { ...payload, replyToId: undefined }
+        : payload;
+    const deliveryPayloads = normalizeReplyPayloadsForDelivery([recoveryPayload]);
     if (deliveryPayloads.length === 0) {
       continue;
     }
     if (
-      hasUnsupportedDurableRecoveryShape(payload) ||
+      hasUnsupportedDurableRecoveryShape(recoveryPayload) ||
       deliveryPayloads.some(hasUnrecoverableNormalizedDeliveryShape)
     ) {
       return undefined;
@@ -57,51 +53,37 @@ export function buildRecoverablePendingFinalDeliveryText(
     return undefined;
   }
 
-  const recoveryPayloads: ReplyPayload[] = [];
+  const recoveryText: string[] = [];
   for (const payload of sendablePayloads) {
     const textAndMedia = [
       payload.text,
-      ...collectDurableMediaDirectives(payload).map((mediaUrl) => `MEDIA:${mediaUrl}`),
+      ...(payload.mediaUrls ?? []).map((mediaUrl) => `MEDIA:${mediaUrl}`),
     ]
       .filter((value): value is string => Boolean(value?.trim()))
       .join("\n");
     if (textAndMedia) {
-      recoveryPayloads.push({
-        ...payload,
-        mediaUrl: undefined,
-        mediaUrls: undefined,
-        text: textAndMedia,
-      });
+      recoveryText.push(textAndMedia);
     }
   }
-  return buildPendingFinalDeliveryText(recoveryPayloads) || undefined;
+  return sanitizePendingFinalDeliveryText(recoveryText.join("\n\n")) || undefined;
 }
 
-/** Build the restart-recovery text represented by one or more final payloads. */
-export function buildPendingFinalDeliveryText(payloads: ReplyPayload[]): string {
-  const text = payloads
-    .filter((payload) => payload.isReasoning !== true)
-    .map((payload) => payload.text)
-    .filter((textLocal): textLocal is string => Boolean(textLocal))
-    .join("\n\n");
-  return sanitizePendingFinalDeliveryText(text);
-}
-
-function collectDurableMediaDirectives(payload: ReplyPayload): string[] {
-  if (payload.sensitiveMedia === true) {
-    return [];
-  }
-  const mediaUrls = [...(payload.mediaUrls ?? []), ...(payload.mediaUrl ? [payload.mediaUrl] : [])];
-  const seen = new Set<string>();
-  return mediaUrls
-    .map((mediaUrl) => mediaUrl.trim())
-    .filter((mediaUrl) => {
-      if (!mediaUrl || seen.has(mediaUrl)) {
-        return false;
+export function resolvePendingFinalDeliveryCompletion(
+  payloads: readonly ReplyPayload[] | undefined,
+): Extract<DurableDeliveryCompletion, { kind: "pending-final" }> | undefined {
+  const metadata = payloads
+    ?.map((payload) => getReplyPayloadMetadata(payload))
+    .find((candidate) => candidate?.pendingFinalDeliveryCompletion);
+  const completion = metadata?.pendingFinalDeliveryCompletion;
+  return completion
+    ? {
+        kind: "pending-final",
+        ...completion,
+        ...(metadata.sessionWriterDeliveryAuthority
+          ? { sessionWriterDeliveryAuthority: metadata.sessionWriterDeliveryAuthority }
+          : {}),
       }
-      seen.add(mediaUrl);
-      return true;
-    });
+    : undefined;
 }
 
 function hasUnsupportedDurableRecoveryShape(payload: ReplyPayload): boolean {
@@ -116,8 +98,8 @@ function hasUnsupportedDurableRecoveryShape(payload: ReplyPayload): boolean {
     payload.channelData !== undefined ||
     payload.location !== undefined ||
     payload.replyToId !== undefined ||
-    payload.replyToTag !== undefined ||
-    payload.replyToCurrent !== undefined ||
+    payload.replyToTag === true ||
+    payload.replyToCurrent === true ||
     payload.audioAsVoice === true ||
     payload.videoAsNote === true ||
     payload.spokenText !== undefined ||
@@ -142,29 +124,4 @@ function hasUnrecoverableNormalizedDeliveryShape(payload: ReplyPayload): boolean
     payload.audioAsVoice === true ||
     payload.videoAsNote === true
   );
-}
-
-/** Sanitizes final pending-delivery text and removes silent control tokens. */
-export function sanitizePendingFinalDeliveryText(text: string): string {
-  let stripped = stripInternalMetadataForDisplay(text).trim();
-  if (isSilentReplyPayloadText(stripped, SILENT_REPLY_TOKEN)) {
-    return "";
-  }
-  if (stripped && !isSilentReplyText(stripped, SILENT_REPLY_TOKEN)) {
-    const hasLeadingSilentToken = startsWithSilentToken(stripped, SILENT_REPLY_TOKEN);
-    if (hasLeadingSilentToken) {
-      stripped = stripLeadingSilentToken(stripped, SILENT_REPLY_TOKEN);
-    }
-    // Remove stray silent tokens only after confirming the payload is not entirely silent.
-    if (
-      hasLeadingSilentToken ||
-      stripped.toLowerCase().includes(SILENT_REPLY_TOKEN.toLowerCase())
-    ) {
-      stripped = stripSilentToken(stripped, SILENT_REPLY_TOKEN);
-    }
-  }
-  if (!stripped.trim()) {
-    return "";
-  }
-  return isSilentReplyPayloadText(stripped, SILENT_REPLY_TOKEN) ? "" : stripped.trim();
 }

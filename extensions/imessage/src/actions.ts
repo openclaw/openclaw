@@ -1,4 +1,3 @@
-// Imessage plugin module implements actions behavior.
 import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
 import {
   createActionGate,
@@ -11,9 +10,11 @@ import {
 } from "openclaw/plugin-sdk/channel-actions";
 import type {
   ChannelMessageActionAdapter,
+  ChannelMessageActionContext,
   ChannelMessageActionName,
 } from "openclaw/plugin-sdk/channel-contract";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
+import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
 import { normalizePollInput } from "openclaw/plugin-sdk/poll-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -27,11 +28,13 @@ import { describeIMessageMessageTool } from "./message-tool-api.js";
 import {
   findLatestIMessageEntryForChat,
   isIMessageCurrentMessageInChat,
+  isIMessageCurrentMessageInChatAsync,
   rememberIMessageReplyCache,
   type IMessageChatContext,
 } from "./monitor-reply-cache.js";
 import { imessageRpcSupportsMethod } from "./private-api-status.js";
 import { getCachedIMessagePrivateApiStatus, probeIMessagePrivateApi } from "./probe.js";
+import { resolveIMessageRemoteHost } from "./remote-host.js";
 import { parseIMessageTarget, type IMessageService, type IMessageTarget } from "./targets.js";
 
 const loadIMessageActionsRuntime = createLazyRuntimeNamedExport(
@@ -55,14 +58,27 @@ const GROUP_MANAGEMENT_ACTIONS = new Set<ChannelMessageActionName>([
   "leaveGroup",
 ]);
 
+type IMessageConversationReadOrigin = NonNullable<
+  ChannelMessageActionContext["conversationReadOrigin"]
+>;
+
 function readMessageText(params: Record<string, unknown>): string | undefined {
   return readStringParam(params, "text") ?? readStringParam(params, "message");
 }
 
+function rejectRedactedIMessageTarget(value: string | undefined): string | undefined {
+  if (value === "***") {
+    throw new Error(
+      "iMessage action target is a redacted display value. Omit the target to use the current conversation.",
+    );
+  }
+  return value;
+}
+
 function resolveIMessageDeliveryTarget(args: Record<string, unknown>): string | undefined {
-  const chatGuid = readStringParam(args, "chatGuid");
+  const chatGuid = rejectRedactedIMessageTarget(readStringParam(args, "chatGuid"));
   const chatId = readPositiveIntegerParam(args, "chatId");
-  const chatIdentifier = readStringParam(args, "chatIdentifier");
+  const chatIdentifier = rejectRedactedIMessageTarget(readStringParam(args, "chatIdentifier"));
   const targets = [
     chatGuid ? `chat_guid:${chatGuid}` : undefined,
     chatId !== undefined ? `chat_id:${chatId}` : undefined,
@@ -83,23 +99,24 @@ function resolveIMessageActionTarget(params: {
     readStringParam(params.actionParams, "to") ??
     readStringParam(params.actionParams, "target") ??
     (params.currentChannelId?.trim() || undefined);
+  rejectRedactedIMessageTarget(rawTarget);
   return rawTarget ? parseIMessageTarget(rawTarget) : null;
 }
 
 const IMESSAGE_DELIVERY_TARGET_ALIASES = ["chatGuid", "chatIdentifier", "chatId"];
 
-function matchesIMessageCurrentConversation(params: {
+function currentConversationMatchParams(params: {
   args: Record<string, unknown>;
   accountId: string;
   toolContext: {
     currentMessageId?: string | number;
   };
-}): boolean {
+}) {
   const currentMessageId = params.toolContext.currentMessageId;
   if (currentMessageId === undefined) {
-    return false;
+    return undefined;
   }
-  return isIMessageCurrentMessageInChat({
+  return {
     accountId: params.accountId,
     currentMessageId,
     chatContext: {
@@ -107,7 +124,7 @@ function matchesIMessageCurrentConversation(params: {
       chatIdentifier: readStringParam(params.args, "chatIdentifier"),
       chatId: readPositiveIntegerParam(params.args, "chatId"),
     },
-  });
+  };
 }
 
 function createIMessageTargetAliases(resourceAliases: string[] = []) {
@@ -116,20 +133,29 @@ function createIMessageTargetAliases(resourceAliases: string[] = []) {
     deliveryTargetAliases: [...IMESSAGE_DELIVERY_TARGET_ALIASES],
     resolveDeliveryTarget: ({ args }: { args: Record<string, unknown> }) =>
       resolveIMessageDeliveryTarget(args),
-    matchesCurrentConversation: matchesIMessageCurrentConversation,
+    matchesCurrentConversation: (params: Parameters<typeof currentConversationMatchParams>[0]) => {
+      const match = currentConversationMatchParams(params);
+      return match ? isIMessageCurrentMessageInChat(match) : false;
+    },
+    matchesCurrentConversationAsync: async (
+      params: Parameters<typeof currentConversationMatchParams>[0],
+    ) => {
+      const match = currentConversationMatchParams(params);
+      return match ? await isIMessageCurrentMessageInChatAsync(match) : false;
+    },
   };
 }
 
-function rememberOutboundBridgeMessage(params: {
+async function rememberOutboundBridgeMessage(params: {
   accountId: string;
   messageId?: string;
   chatGuid: string;
-}): void {
+}): Promise<void> {
   const messageId = params.messageId?.trim();
   if (!messageId || messageId === "ok" || messageId === "unknown") {
     return;
   }
-  rememberIMessageReplyCache({
+  await rememberIMessageReplyCache({
     accountId: params.accountId,
     messageId,
     chatGuid: params.chatGuid,
@@ -169,10 +195,12 @@ async function resolveChatGuid(params: {
   action: ChannelMessageActionName;
   actionParams: Record<string, unknown>;
   currentChannelId?: string;
+  conversationReadOrigin: IMessageConversationReadOrigin;
   runtime: IMessageActionsRuntime;
   options: {
     cliPath: string;
     dbPath?: string;
+    remoteHost?: string;
     timeoutMs?: number;
   };
 }): Promise<string> {
@@ -185,6 +213,7 @@ async function resolveChatGuid(params: {
       const resolved = await params.runtime.resolveChatGuidForTarget({
         target,
         options: params.options,
+        conversationReadOrigin: params.conversationReadOrigin,
       });
       if (resolved) {
         return resolved;
@@ -202,6 +231,7 @@ async function resolveChatGuid(params: {
       const resolved = await params.runtime.resolveChatGuidForTarget({
         target: { kind: "chat_identifier", chatIdentifier: synthesizedIdentifier },
         options: params.options,
+        conversationReadOrigin: params.conversationReadOrigin,
       });
       if (resolved) {
         return resolved;
@@ -277,7 +307,11 @@ function decodeBase64Buffer(params: Record<string, unknown>, action: string): Ui
   if (!base64Buffer) {
     throw new Error(`iMessage ${action} requires buffer (base64) parameter.`);
   }
-  return Uint8Array.from(Buffer.from(base64Buffer, "base64"));
+  const canonical = canonicalizeBase64(base64Buffer.replaceAll("-", "+").replaceAll("_", "/"));
+  if (!canonical) {
+    throw new Error(`iMessage ${action} buffer must be valid base64.`);
+  }
+  return Uint8Array.from(Buffer.from(canonical, "base64"));
 }
 
 // Path-shaped attachment params the message-tool schema declares. We only
@@ -311,7 +345,7 @@ function extractReplyAttachment(
     return {
       spec: {
         kind: "buffer",
-        buffer: Uint8Array.from(Buffer.from(buffer, "base64")),
+        buffer: decodeBase64Buffer(params, "reply attachment"),
         filename,
       },
       sourceParam: "buffer",
@@ -447,6 +481,10 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
     });
     assertActionEnabled(action, account.config.actions);
     const cliPathForProbe = account.config.cliPath?.trim() || "imsg";
+    const remoteHost = await resolveIMessageRemoteHost({
+      cliPath: cliPathForProbe,
+      remoteHost: account.config.remoteHost,
+    });
     let privateApiStatus = getCachedIMessagePrivateApiStatus(cliPathForProbe);
     const probePrivateApiStatus = async (forceRefresh = false) => {
       privateApiStatus = await probeIMessagePrivateApi(
@@ -487,15 +525,17 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
     const opts = {
       cliPath: account.config.cliPath?.trim() || "imsg",
       dbPath: account.config.dbPath?.trim() || undefined,
-      remoteHost: account.config.remoteHost?.trim() || undefined,
+      remoteHost,
       timeoutMs: account.config.probeTimeoutMs,
       chatGuid: "",
     };
+    const attestedConversationReadOrigin = conversationReadOrigin ?? "delegated";
     const chatGuid = async () =>
       await resolveChatGuid({
         action,
         actionParams: params,
         currentChannelId: toolContext?.currentChannelId,
+        conversationReadOrigin: attestedConversationReadOrigin,
         runtime,
         options: opts,
       });
@@ -523,9 +563,10 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
             account,
             cliPath: opts.cliPath,
             dbPath: opts.dbPath,
+            remoteHost: opts.remoteHost,
           }),
           remoteHost: opts.remoteHost,
-          conversationReadOrigin,
+          conversationReadOrigin: attestedConversationReadOrigin,
         },
       });
     };
@@ -621,7 +662,10 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         // refuse loudly here rather than letting send-rich ship the text
         // alone and silently drop the attachment — the original symptom
         // of openclaw/openclaw#79822.
-        if (privateApiStatus?.cliCapabilities?.sendRichSupportsAttachment !== true) {
+        if (
+          !opts.remoteHost &&
+          privateApiStatus?.cliCapabilities?.sendRichSupportsAttachment !== true
+        ) {
           throw new Error(
             "iMessage reply with an attachment needs an imsg build that exposes `send-rich --file` " +
               "(openclaw/imsg#114). Upgrade imsg, or use action 'upload-file' (with filePath/filename) " +
@@ -638,7 +682,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         attachment: attachment?.spec ?? undefined,
         options: { ...opts, chatGuid: reference.chatGuid },
       });
-      rememberOutboundBridgeMessage({
+      await rememberOutboundBridgeMessage({
         accountId: account.accountId,
         messageId: result.messageId,
         chatGuid: reference.chatGuid,
@@ -662,7 +706,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         effectId,
         options: { ...opts, chatGuid: resolvedChatGuid },
       });
-      rememberOutboundBridgeMessage({
+      await rememberOutboundBridgeMessage({
         accountId: account.accountId,
         messageId: result.messageId,
         chatGuid: resolvedChatGuid,
@@ -735,7 +779,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
     if (action === "sendAttachment" || action === "upload-file") {
       await assertPrivateApiEnabled();
       const filename = readStringParam(params, "filename", { required: true });
-      const asVoice = readBooleanParam(params, "asVoice") ?? readBooleanParam(params, "as_voice");
+      const asVoice = readBooleanParam(params, "asVoice");
       const resolvedChatGuid = await chatGuid();
       const result = await runtime.sendAttachment({
         chatGuid: resolvedChatGuid,
@@ -744,7 +788,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         asVoice: asVoice ?? undefined,
         options: { ...opts, chatGuid: resolvedChatGuid },
       });
-      rememberOutboundBridgeMessage({
+      await rememberOutboundBridgeMessage({
         accountId: account.accountId,
         messageId: result.messageId,
         chatGuid: resolvedChatGuid,
@@ -775,7 +819,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         choices: poll.options,
         options: { ...opts, chatGuid: resolvedChatGuid },
       });
-      rememberOutboundBridgeMessage({
+      await rememberOutboundBridgeMessage({
         accountId: account.accountId,
         messageId: result.messageId,
         chatGuid: resolvedChatGuid,
@@ -850,7 +894,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         optionText: optionText ?? undefined,
         options: { ...opts, chatGuid: pollReference.chatGuid },
       });
-      rememberOutboundBridgeMessage({
+      await rememberOutboundBridgeMessage({
         accountId: account.accountId,
         messageId: result.messageId,
         chatGuid: pollReference.chatGuid,

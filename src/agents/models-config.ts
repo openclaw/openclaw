@@ -1,56 +1,71 @@
 /**
- * Ensures the agent-local models.json and plugin model catalog sidecars match
- * runtime config, discovered providers, auth-profile state, and generated
- * catalog ownership.
+ * Ensures agent-local models.json and the SQLite-backed plugin model catalog
+ * match runtime config, discovered providers, auth-profile state, and
+ * generated catalog ownership.
  */
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { stableStringify } from "@openclaw/normalization-core";
+import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import {
-  getRuntimeConfig,
   getRuntimeConfigSourceSnapshot,
   projectConfigOntoRuntimeSourceSnapshot,
   type OpenClawConfig,
 } from "../config/config.js";
 import { createConfigRuntimeEnv } from "../config/env-vars.js";
+import { captureRuntimeConfigAsyncReader } from "../config/io.runtime.js";
+import { hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
 import { privateFileStore } from "../infra/private-file-store.js";
 import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/manifest-registry-installed.js";
 import {
   resolvePluginMetadataSnapshot,
   type PluginMetadataSnapshot,
 } from "../plugins/plugin-metadata-snapshot.js";
+import type { ProviderCatalogOutcome } from "../plugins/provider-catalog.types.js";
+import type { PreparedProviderStaticCatalog } from "../plugins/provider-discovery.js";
 import {
   resolveAgentWorkspaceDir,
+  resolveAmbientOwnerAgentId,
   resolveDefaultAgentDir,
-  resolveDefaultAgentId,
 } from "./agent-scope.js";
 import { resolveAuthProfileDatabasePath } from "./auth-profiles/sqlite.js";
-import {
-  MODELS_JSON_STATE,
-  type ModelsJsonReadyResult,
-  type ModelsJsonReadyState,
-} from "./models-config-state.js";
-import { planOpenClawModelsJson } from "./models-config.plan.js";
+import type { AuthProfileStore } from "./auth-profiles/types.js";
+import { MODELS_JSON_STATE, type ModelsJsonReadyResult } from "./models-config-state.js";
+import { planOpenClawModelsJson, type PreparedModelsConfigContext } from "./models-config.plan.js";
+import { repairPluginModelCatalogTransportMetadata } from "./plugin-model-catalog-repair.js";
 import {
   decodePluginModelCatalogRelativePathPluginId,
-  isGeneratedPluginModelCatalog,
-  isPluginModelCatalogRelativePath,
-  listPluginModelCatalogRelativePaths,
-  resolvePluginModelCatalogOwnerPluginId,
+  loadPersistedPluginModelCatalogsReadOnly,
+  replacePersistedPluginModelCatalogs,
+  type PersistedPluginModelCatalog,
 } from "./plugin-model-catalog.js";
-import { stableStringify } from "./stable-stringify.js";
 
-type PreparedOpenClawModelsJsonSource = ModelsJsonReadyResult & {
-  fingerprint: string;
-  workspaceDir?: string;
-};
+type ModelsConfigPluginMetadataSnapshot = Pick<
+  PluginMetadataSnapshot,
+  "index" | "manifestRegistry" | "owners" | "pluginIds"
+>;
 
 type EnsureOpenClawModelsJsonOptions = {
-  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "index" | "manifestRegistry" | "owners">;
+  env?: NodeJS.ProcessEnv;
+  pluginMetadataSnapshot?: ModelsConfigPluginMetadataSnapshot;
+  preparedStaticProviderCatalog?: PreparedProviderStaticCatalog;
   workspaceDir?: string;
   providerDiscoveryProviderIds?: readonly string[];
   providerDiscoveryTimeoutMs?: number;
   providerDiscoveryEntriesOnly?: boolean;
+  onProviderCatalogOutcome?: (outcome: ProviderCatalogOutcome) => void;
 };
+
+type PlanOpenClawModelsJsonSourceOptions = EnsureOpenClawModelsJsonOptions & {
+  authStore?: AuthProfileStore;
+};
+
+type PlannedOpenClawModelsJsonSource = Readonly<{
+  agentDir: string;
+  modelsJsonContents: string | null;
+  pluginCatalogs: readonly PersistedPluginModelCatalog[];
+}>;
 
 async function readFileMtimeMs(pathname: string): Promise<number | null> {
   try {
@@ -61,50 +76,35 @@ async function readFileMtimeMs(pathname: string): Promise<number | null> {
   }
 }
 
-async function readPluginCatalogMtimes(agentDir: string): Promise<Array<[string, number | null]>> {
-  const entries = await Promise.all(
-    listPluginModelCatalogRelativePaths(agentDir).map(async (relativePath) => {
-      return [relativePath, await readFileMtimeMs(path.join(agentDir, relativePath))] satisfies [
-        string,
-        number | null,
-      ];
-    }),
-  );
-  return entries.toSorted(([left], [right]) => left.localeCompare(right));
-}
-
-async function buildModelsJsonFingerprint(params: {
-  config: OpenClawConfig;
-  sourceConfigForSecrets: OpenClawConfig;
-  agentDir: string;
-  workspaceDir?: string;
-  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "index">;
-  providerDiscoveryProviderIds?: readonly string[];
-  providerDiscoveryTimeoutMs?: number;
-  providerDiscoveryEntriesOnly?: boolean;
-}): Promise<string> {
-  const authProfilesSqlitePath = resolveAuthProfileDatabasePath(params.agentDir);
+async function buildModelsJsonFingerprint(context: PreparedModelsConfigContext): Promise<string> {
+  const authProfilesSqlitePath = resolveAuthProfileDatabasePath(context.agentDir);
   const authProfilesMtimeMs = await readFileMtimeMs(authProfilesSqlitePath);
   const authProfilesWalMtimeMs = await readFileMtimeMs(`${authProfilesSqlitePath}-wal`);
-  const modelsFileMtimeMs = await readFileMtimeMs(path.join(params.agentDir, "models.json"));
-  const pluginCatalogMtimes = await readPluginCatalogMtimes(params.agentDir);
-  const envShape = createConfigRuntimeEnv(params.config, {});
-  const pluginMetadataSnapshotIndexFingerprint = params.pluginMetadataSnapshot
-    ? resolveInstalledManifestRegistryIndexFingerprint(params.pluginMetadataSnapshot.index)
+  const modelsFileMtimeMs = await readFileMtimeMs(path.join(context.agentDir, "models.json"));
+  const pluginCatalogFingerprint = createHash("sha256")
+    .update(stableStringify(loadPersistedPluginModelCatalogsReadOnly(context.agentDir)))
+    .digest("base64url");
+  const pluginMetadataSnapshotIndexFingerprint = context.pluginMetadataSnapshot
+    ? resolveInstalledManifestRegistryIndexFingerprint(context.pluginMetadataSnapshot.index)
     : undefined;
   return stableStringify({
-    config: params.config,
-    sourceConfigForSecrets: params.sourceConfigForSecrets,
-    envShape,
+    config: context.cfg,
+    discoveryAuthConfigHash: hashRuntimeConfigValue(context.discoveryAuthConfig),
+    sourceConfigForSecrets: context.sourceConfigForSecrets,
+    envShape: context.envFingerprint,
     authProfilesMtimeMs,
     authProfilesWalMtimeMs,
     modelsFileMtimeMs,
-    pluginCatalogMtimes,
-    workspaceDir: params.workspaceDir,
+    pluginCatalogFingerprint,
+    workspaceDir: context.workspaceDir,
     pluginMetadataSnapshotIndexFingerprint,
-    providerDiscoveryProviderIds: params.providerDiscoveryProviderIds,
-    providerDiscoveryTimeoutMs: params.providerDiscoveryTimeoutMs,
-    providerDiscoveryEntriesOnly: params.providerDiscoveryEntriesOnly === true,
+    pluginMetadataSnapshotPluginIds:
+      context.pluginMetadataSnapshot?.pluginIds === undefined
+        ? null
+        : context.pluginMetadataSnapshot.pluginIds.toSorted(),
+    providerDiscoveryProviderIds: context.providerDiscoveryProviderIds,
+    providerDiscoveryTimeoutMs: context.providerDiscoveryTimeoutMs,
+    providerDiscoveryEntriesOnly: context.providerDiscoveryEntriesOnly === true,
   });
 }
 
@@ -138,345 +138,214 @@ async function readExistingModelsFile(pathname: string): Promise<{
   }
 }
 
-/** Best-effort chmod for generated models.json and plugin catalog files. */
+/** Best-effort chmod for the user-visible generated models.json file. */
 async function ensureModelsFileModeForModelsJson(pathname: string): Promise<void> {
   await fs.chmod(pathname, 0o600).catch(() => {
     // best-effort
   });
 }
 
-/** Atomic private-file-store write used by models.json generation. */
-async function writeModelsFileAtomicForModelsJson(
-  targetPath: string,
-  contents: string,
-): Promise<void> {
-  await privateFileStore(path.dirname(targetPath)).writeText(path.basename(targetPath), contents);
-}
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.modelsConfigTestApi")] = {
-    ensureModelsFileModeForModelsJson,
-    writeModelsFileAtomicForModelsJson,
-  };
-}
-
-async function isGeneratedPluginCatalogFile(targetPath: string): Promise<boolean> {
-  return (await readGeneratedPluginCatalog(targetPath)) !== undefined;
-}
-
-async function readGeneratedPluginCatalog(targetPath: string): Promise<unknown> {
-  const existing = await readExistingModelsFile(targetPath);
-  const parsed = existing.parsed;
-  return isGeneratedPluginModelCatalog(parsed) ? parsed : undefined;
-}
-
-function isRecordLike(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-async function mergeGeneratedPluginCatalogProvidersIntoExistingParsed(params: {
-  agentDir: string;
-  existingParsed: unknown;
-  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "owners">;
-}): Promise<unknown> {
-  const root = isRecordLike(params.existingParsed) ? params.existingParsed : {};
-  const providers = isRecordLike(root.providers) ? { ...root.providers } : {};
-  let changed = false;
-  for (const relativePath of listPluginModelCatalogRelativePaths(params.agentDir)) {
-    const catalogPluginId = decodePluginModelCatalogRelativePathPluginId(relativePath);
-    if (!catalogPluginId) {
-      continue;
-    }
-    const catalog = await readGeneratedPluginCatalog(path.join(params.agentDir, relativePath));
-    if (!isRecordLike(catalog) || !isRecordLike(catalog.providers)) {
-      continue;
-    }
-    for (const [providerId, provider] of Object.entries(catalog.providers)) {
-      const currentOwnerPluginId = resolvePluginModelCatalogOwnerPluginId({
-        providerId,
-        pluginMetadataSnapshot: params.pluginMetadataSnapshot,
-      });
-      if (currentOwnerPluginId !== catalogPluginId) {
-        continue;
+function materializePlannedPluginCatalogs(
+  pluginCatalogWrites: Readonly<Record<string, string>>,
+): PersistedPluginModelCatalog[] {
+  return Object.entries(pluginCatalogWrites)
+    .map(([relativePath, contents]) => {
+      const pluginId = decodePluginModelCatalogRelativePathPluginId(relativePath);
+      if (!pluginId) {
+        throw new Error(`Invalid generated plugin model catalog key: ${relativePath}`);
       }
-      providers[providerId] = provider;
-      changed = true;
-    }
-  }
-  if (!changed) {
-    return params.existingParsed;
-  }
-  return { ...root, providers };
+      return {
+        pluginId,
+        contents: repairPluginModelCatalogTransportMetadata(contents).contents,
+      };
+    })
+    .toSorted((left, right) => left.pluginId.localeCompare(right.pluginId));
 }
 
-async function removeStalePluginCatalogs(params: {
-  agentDir: string;
-  activeRelativePaths: ReadonlySet<string>;
-}): Promise<boolean> {
-  let wrote = false;
-  for (const relativePath of listPluginModelCatalogRelativePaths(params.agentDir)) {
-    if (params.activeRelativePaths.has(path.normalize(relativePath))) {
-      continue;
-    }
-    const targetPath = path.join(params.agentDir, relativePath);
-    if (!(await isGeneratedPluginCatalogFile(targetPath))) {
-      continue;
-    }
-    await fs.unlink(targetPath).catch((error: unknown) => {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        return;
-      }
-      throw error;
-    });
-    wrote = true;
-  }
-  return wrote;
-}
-
-async function writePluginCatalogsForModelsJson(params: {
+function writePluginCatalogsForModelsJson(params: {
   agentDir: string;
   pluginCatalogWrites?: Record<string, string>;
-}): Promise<boolean> {
+}): boolean {
   if (!params.pluginCatalogWrites) {
     return false;
   }
-  let wrote = false;
-  const activeRelativePaths = new Set<string>();
-  for (const [relativePath, contents] of Object.entries(params.pluginCatalogWrites)) {
-    if (!isPluginModelCatalogRelativePath(relativePath)) {
-      continue;
-    }
-    activeRelativePaths.add(path.normalize(relativePath));
-    const targetPath = path.join(params.agentDir, relativePath);
-    const existing = await readExistingModelsFile(targetPath);
-    if (existing.raw === contents) {
-      await ensureModelsFileModeForModelsJson(targetPath);
-      continue;
-    }
-    await fs.mkdir(path.dirname(targetPath), { recursive: true, mode: 0o700 });
-    await writeModelsFileAtomicForModelsJson(targetPath, contents);
-    await ensureModelsFileModeForModelsJson(targetPath);
-    wrote = true;
-  }
-  const removedStale = await removeStalePluginCatalogs({
+  return replacePersistedPluginModelCatalogs({
     agentDir: params.agentDir,
-    activeRelativePaths,
+    pluginCatalogWrites: params.pluginCatalogWrites,
   });
-  return wrote || removedStale;
 }
 
-function resolveModelsConfigInput(config?: OpenClawConfig): {
+function resolveModelsConfigInput(config: OpenClawConfig): {
   config: OpenClawConfig;
+  discoveryAuthConfig: OpenClawConfig;
   sourceConfigForSecrets: OpenClawConfig;
 } {
   const runtimeSource = getRuntimeConfigSourceSnapshot();
-  if (!config) {
-    const loaded = getRuntimeConfig();
-    return {
-      config: runtimeSource ?? loaded,
-      sourceConfigForSecrets: runtimeSource ?? loaded,
-    };
-  }
   if (!runtimeSource) {
     return {
       config,
+      discoveryAuthConfig: config,
       sourceConfigForSecrets: config,
     };
   }
   const projected = projectConfigOntoRuntimeSourceSnapshot(config);
   return {
     config: projected,
+    discoveryAuthConfig: config,
     // If projection is skipped (for example incompatible top-level shape),
     // keep managed secret persistence anchored to the active source snapshot.
     sourceConfigForSecrets: projected === config ? runtimeSource : projected,
   };
 }
 
-/** Builds the canonical source freshness fingerprint for generated model catalogs. */
-export async function buildModelsJsonSourceFingerprint(
-  config?: OpenClawConfig,
-  agentDirOverride?: string,
-  options: {
-    pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "index" | "manifestRegistry" | "owners">;
-    workspaceDir?: string;
-    providerDiscoveryProviderIds?: readonly string[];
-    providerDiscoveryTimeoutMs?: number;
-    providerDiscoveryEntriesOnly?: boolean;
-  } = {},
-): Promise<{ agentDir: string; fingerprint: string; workspaceDir?: string }> {
-  const resolved = resolveModelsConfigInput(config);
-  const cfg = resolved.config;
-  const workspaceDir =
-    options.workspaceDir ??
-    (agentDirOverride?.trim()
-      ? undefined
-      : resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)));
-  const providerScopedDiscovery = Boolean(options.providerDiscoveryProviderIds?.length);
-  const pluginMetadataSnapshot =
-    options.pluginMetadataSnapshot ??
-    resolvePluginMetadataSnapshot({
-      config: cfg,
-      env: createConfigRuntimeEnv(cfg),
-      ...(workspaceDir ? { workspaceDir } : {}),
-      ...(providerScopedDiscovery ? { preferPersisted: false } : {}),
-    });
-  const agentDir = agentDirOverride?.trim() ? agentDirOverride.trim() : resolveDefaultAgentDir(cfg);
-  const fingerprint = await buildModelsJsonFingerprint({
-    config: cfg,
-    sourceConfigForSecrets: resolved.sourceConfigForSecrets,
-    agentDir,
-    ...(workspaceDir ? { workspaceDir } : {}),
-    ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
-    ...(options.providerDiscoveryProviderIds
-      ? { providerDiscoveryProviderIds: options.providerDiscoveryProviderIds }
-      : {}),
-    ...(options.providerDiscoveryTimeoutMs !== undefined
-      ? { providerDiscoveryTimeoutMs: options.providerDiscoveryTimeoutMs }
-      : {}),
-    ...(options.providerDiscoveryEntriesOnly === true
-      ? { providerDiscoveryEntriesOnly: true }
-      : {}),
-  });
-  return {
-    agentDir,
-    fingerprint,
-    ...(workspaceDir ? { workspaceDir } : {}),
-  };
-}
-
-async function withModelsJsonWriteLock<T>(targetPath: string, run: () => Promise<T>): Promise<T> {
-  return await MODELS_JSON_STATE.writeQueue.enqueue(targetPath, run);
-}
-
-/** Ensures models.json and plugin catalog sidecars are current for an agent. */
-export async function prepareOpenClawModelsJsonSource(
+async function prepareModelsConfigContext(
   config?: OpenClawConfig,
   agentDirOverride?: string,
   options: EnsureOpenClawModelsJsonOptions = {},
-): Promise<PreparedOpenClawModelsJsonSource> {
-  const resolved = resolveModelsConfigInput(config);
-  const cfg = resolved.config;
-  const sourceFingerprint = await buildModelsJsonSourceFingerprint(
-    config,
-    agentDirOverride,
-    options,
-  );
-  const workspaceDir = sourceFingerprint.workspaceDir;
-  const pluginMetadataSnapshot =
-    options.pluginMetadataSnapshot ??
-    resolvePluginMetadataSnapshot({
-      config: cfg,
-      env: createConfigRuntimeEnv(cfg),
-      ...(workspaceDir ? { workspaceDir } : {}),
-      ...(options.providerDiscoveryProviderIds?.length ? { preferPersisted: false } : {}),
-    });
-  const agentDir = sourceFingerprint.agentDir;
-  const targetPath = path.join(agentDir, "models.json");
-  const fingerprint = sourceFingerprint.fingerprint;
-  const cacheKey = modelsJsonReadyCacheKey(targetPath, fingerprint);
-  const cached = MODELS_JSON_STATE.readyCache.get(cacheKey);
-  if (cached) {
-    const settled = await cached;
-    await ensureModelsFileModeForModelsJson(targetPath);
-    return {
-      ...settled.result,
-      fingerprint: settled.fingerprint,
-      ...(workspaceDir ? { workspaceDir } : {}),
+): Promise<PreparedModelsConfigContext> {
+  let ambientEnv = process.env;
+  let capturedOptions = options;
+  let resolved: ReturnType<typeof resolveModelsConfigInput>;
+  if (config) {
+    resolved = resolveModelsConfigInput(config);
+  } else {
+    capturedOptions = {
+      ...options,
+      ...(options.env ? { env: cloneEnvWithPlatformSemantics(options.env) } : {}),
+      ...(options.providerDiscoveryProviderIds
+        ? { providerDiscoveryProviderIds: [...options.providerDiscoveryProviderIds] }
+        : {}),
+    };
+    const captured = await captureRuntimeConfigAsyncReader({ capture: true })();
+    ambientEnv = captured.env;
+    const source = projectConfigOntoRuntimeSourceSnapshot(captured.config);
+    resolved = {
+      config: source,
+      discoveryAuthConfig: captured.config,
+      sourceConfigForSecrets: source,
     };
   }
-
-  const pending: Promise<ModelsJsonReadyState> = withModelsJsonWriteLock(targetPath, async () => {
-    // Ensure config env vars (e.g. AWS_PROFILE, AWS_ACCESS_KEY_ID) are
-    // are available to provider discovery without mutating process.env.
-    const env = createConfigRuntimeEnv(cfg);
-    const existingModelsFile = await readExistingModelsFile(targetPath);
-    const existingParsedForMerge = await mergeGeneratedPluginCatalogProvidersIntoExistingParsed({
-      agentDir,
-      existingParsed: existingModelsFile.parsed,
-      ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
-    });
-    const plan = await planOpenClawModelsJson({
-      cfg,
-      sourceConfigForSecrets: resolved.sourceConfigForSecrets,
-      agentDir,
+  const cfg = resolved.config;
+  const agentDir = agentDirOverride?.trim()
+    ? agentDirOverride.trim()
+    : resolveDefaultAgentDir(cfg, ambientEnv);
+  const workspaceDir =
+    capturedOptions.workspaceDir ??
+    (agentDirOverride?.trim()
+      ? undefined
+      : // Same ambient owner resolveDefaultAgentDir just used for agentDir; resolving it
+        // on the deprecated chain here rejected explicit fleets owned by a system agent.
+        resolveAgentWorkspaceDir(cfg, resolveAmbientOwnerAgentId(cfg), ambientEnv));
+  const fingerprintEnv = createConfigRuntimeEnv(cfg, capturedOptions.env ?? {});
+  const env = capturedOptions.env ? fingerprintEnv : createConfigRuntimeEnv(cfg, ambientEnv);
+  const providerScopedDiscovery = Boolean(capturedOptions.providerDiscoveryProviderIds?.length);
+  const pluginMetadataSnapshot =
+    capturedOptions.pluginMetadataSnapshot ??
+    resolvePluginMetadataSnapshot({
+      config: cfg,
       env,
       ...(workspaceDir ? { workspaceDir } : {}),
+      ...(providerScopedDiscovery ? { preferPersisted: false } : {}),
+    });
+  return {
+    cfg,
+    discoveryAuthConfig: resolved.discoveryAuthConfig,
+    // Native readiness belongs to the captured auth inputs, not the catalog's env clone.
+    discoveryAuthEnv: capturedOptions.env ?? ambientEnv,
+    sourceConfigForSecrets: resolved.sourceConfigForSecrets,
+    agentDir,
+    env,
+    envFingerprint: capturedOptions.env ? hashRuntimeConfigValue(fingerprintEnv) : fingerprintEnv,
+    ...(workspaceDir ? { workspaceDir } : {}),
+    ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
+    ...(capturedOptions.preparedStaticProviderCatalog
+      ? { preparedStaticProviderCatalog: capturedOptions.preparedStaticProviderCatalog }
+      : {}),
+    ...(capturedOptions.providerDiscoveryProviderIds
+      ? { providerDiscoveryProviderIds: capturedOptions.providerDiscoveryProviderIds }
+      : {}),
+    ...(capturedOptions.providerDiscoveryTimeoutMs !== undefined
+      ? { providerDiscoveryTimeoutMs: capturedOptions.providerDiscoveryTimeoutMs }
+      : {}),
+    ...(capturedOptions.providerDiscoveryEntriesOnly === true
+      ? { providerDiscoveryEntriesOnly: true }
+      : {}),
+    ...(capturedOptions.onProviderCatalogOutcome
+      ? { onProviderCatalogOutcome: capturedOptions.onProviderCatalogOutcome }
+      : {}),
+  };
+}
+
+/** Ensures models.json and the agent SQLite catalog cache are current. */
+export async function ensureOpenClawModelsJson(
+  config?: OpenClawConfig,
+  agentDirOverride?: string,
+  options: EnsureOpenClawModelsJsonOptions = {},
+): Promise<ModelsJsonReadyResult> {
+  const context = await prepareModelsConfigContext(config, agentDirOverride, options);
+  const { agentDir } = context;
+  const targetPath = path.join(agentDir, "models.json");
+  const fingerprint = await buildModelsJsonFingerprint(context);
+  const cacheKey = modelsJsonReadyCacheKey(targetPath, fingerprint);
+  const cached = MODELS_JSON_STATE.readyCache.get(cacheKey);
+  if (cached && !context.onProviderCatalogOutcome) {
+    const settled = await cached;
+    await ensureModelsFileModeForModelsJson(targetPath);
+    return { ...settled };
+  }
+
+  const pending = MODELS_JSON_STATE.writeQueue.enqueue(targetPath, async () => {
+    // Ensure config env vars (e.g. AWS_PROFILE, AWS_ACCESS_KEY_ID) are
+    // are available to provider discovery without mutating process.env.
+    const existingModelsFile = await readExistingModelsFile(targetPath);
+    const plan = await planOpenClawModelsJson({
+      context,
       existingRaw: existingModelsFile.raw,
-      existingParsed: existingParsedForMerge,
-      ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
-      ...(options.providerDiscoveryProviderIds
-        ? { providerDiscoveryProviderIds: options.providerDiscoveryProviderIds }
-        : {}),
-      ...(options.providerDiscoveryTimeoutMs !== undefined
-        ? { providerDiscoveryTimeoutMs: options.providerDiscoveryTimeoutMs }
-        : {}),
-      ...(options.providerDiscoveryEntriesOnly === true
-        ? { providerDiscoveryEntriesOnly: true }
-        : {}),
+      existingParsed: existingModelsFile.parsed,
+      pluginCatalogs: loadPersistedPluginModelCatalogsReadOnly(agentDir),
     });
 
     if (plan.action === "skip") {
-      const wrotePluginCatalog = await writePluginCatalogsForModelsJson({
+      const wrotePluginCatalog = writePluginCatalogsForModelsJson({
         agentDir,
         pluginCatalogWrites: plan.pluginCatalogWrites,
       });
-      return { fingerprint, result: { agentDir, wrote: wrotePluginCatalog } };
+      return { agentDir, wrote: wrotePluginCatalog };
     }
 
     if (plan.action === "noop") {
-      const wrotePluginCatalog = await writePluginCatalogsForModelsJson({
+      const wrotePluginCatalog = writePluginCatalogsForModelsJson({
         agentDir,
         pluginCatalogWrites: plan.pluginCatalogWrites,
       });
       await ensureModelsFileModeForModelsJson(targetPath);
-      return { fingerprint, result: { agentDir, wrote: wrotePluginCatalog } };
+      return { agentDir, wrote: wrotePluginCatalog };
     }
 
     await fs.mkdir(agentDir, { recursive: true, mode: 0o700 });
     const existingRoot = existingModelsFile.raw;
     const wroteRoot = existingRoot !== plan.contents;
     if (wroteRoot) {
-      await writeModelsFileAtomicForModelsJson(targetPath, plan.contents);
+      await privateFileStore(path.dirname(targetPath)).writeText("models.json", plan.contents);
+      MODELS_JSON_STATE.costCache.delete(agentDir);
     }
     await ensureModelsFileModeForModelsJson(targetPath);
-    const wrotePluginCatalog = await writePluginCatalogsForModelsJson({
+    const wrotePluginCatalog = writePluginCatalogsForModelsJson({
       agentDir,
       pluginCatalogWrites: plan.pluginCatalogWrites,
     });
-    return { fingerprint, result: { agentDir, wrote: wroteRoot || wrotePluginCatalog } };
+    return { agentDir, wrote: wroteRoot || wrotePluginCatalog };
   });
   MODELS_JSON_STATE.readyCache.set(cacheKey, pending);
   try {
     const settled = await pending;
-    const refreshedFingerprint = await buildModelsJsonFingerprint({
-      config: cfg,
-      sourceConfigForSecrets: resolved.sourceConfigForSecrets,
-      agentDir,
-      ...(workspaceDir ? { workspaceDir } : {}),
-      ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
-      ...(options.providerDiscoveryProviderIds
-        ? { providerDiscoveryProviderIds: options.providerDiscoveryProviderIds }
-        : {}),
-      ...(options.providerDiscoveryTimeoutMs !== undefined
-        ? { providerDiscoveryTimeoutMs: options.providerDiscoveryTimeoutMs }
-        : {}),
-      ...(options.providerDiscoveryEntriesOnly === true
-        ? { providerDiscoveryEntriesOnly: true }
-        : {}),
-    });
+    const refreshedFingerprint = await buildModelsJsonFingerprint(context);
     const refreshedCacheKey = modelsJsonReadyCacheKey(targetPath, refreshedFingerprint);
     if (refreshedCacheKey !== cacheKey) {
       MODELS_JSON_STATE.readyCache.delete(cacheKey);
-      MODELS_JSON_STATE.readyCache.set(
-        refreshedCacheKey,
-        Promise.resolve({ fingerprint: refreshedFingerprint, result: settled.result }),
-      );
+      MODELS_JSON_STATE.readyCache.set(refreshedCacheKey, Promise.resolve(settled));
     }
-    return {
-      ...settled.result,
-      fingerprint: refreshedFingerprint,
-      ...(workspaceDir ? { workspaceDir } : {}),
-    };
+    return { ...settled };
   } catch (error) {
     if (MODELS_JSON_STATE.readyCache.get(cacheKey) === pending) {
       MODELS_JSON_STATE.readyCache.delete(cacheKey);
@@ -485,12 +354,35 @@ export async function prepareOpenClawModelsJsonSource(
   }
 }
 
-/** Ensures models.json and plugin catalog sidecars are current for an agent. */
-export async function ensureOpenClawModelsJson(
+/**
+ * Plans the complete root/plugin catalog generation without mutating agent-owned state.
+ * Control-plane inventory reads use this when their lifecycle generation may be superseded.
+ */
+export async function planOpenClawModelsJsonSource(
   config?: OpenClawConfig,
   agentDirOverride?: string,
-  options: EnsureOpenClawModelsJsonOptions = {},
-): Promise<ModelsJsonReadyResult> {
-  const prepared = await prepareOpenClawModelsJsonSource(config, agentDirOverride, options);
-  return { agentDir: prepared.agentDir, wrote: prepared.wrote };
+  options: PlanOpenClawModelsJsonSourceOptions = {},
+): Promise<PlannedOpenClawModelsJsonSource> {
+  const { authStore } = options;
+  const context = await prepareModelsConfigContext(config, agentDirOverride, options);
+  const { agentDir } = context;
+  const existingModelsFile = await readExistingModelsFile(path.join(agentDir, "models.json"));
+  const existingPluginCatalogs = loadPersistedPluginModelCatalogsReadOnly(agentDir);
+  const plan = await planOpenClawModelsJson({
+    context,
+    ...(authStore ? { authStore } : {}),
+    existingRaw: existingModelsFile.raw,
+    existingParsed: existingModelsFile.parsed,
+    pluginCatalogs: existingPluginCatalogs,
+  });
+  return {
+    agentDir,
+    modelsJsonContents: plan.action === "write" ? plan.contents : existingModelsFile.raw || null,
+    // Planned writes share the writer's complete-replacement contract, including intentional
+    // stale-catalog deletion. Only a non-authoritative plan omits this field.
+    pluginCatalogs:
+      plan.pluginCatalogWrites === undefined
+        ? existingPluginCatalogs
+        : materializePlannedPluginCatalogs(plan.pluginCatalogWrites),
+  };
 }

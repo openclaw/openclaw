@@ -1,11 +1,15 @@
 // Covers gateway-backed approval channel runtime behavior.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { GatewayClient } from "../gateway/client.js";
-import { createDeferred } from "../test-utils/deferred.js";
 import { withGatewayNativeApprovalRuntime } from "./approval-gateway-runtime-context.js";
 import type { GatewayNativeApprovalRuntime } from "./approval-gateway-runtime.types.js";
 import type { ExecApprovalRequest } from "./exec-approvals.js";
 import type { PluginApprovalRequest, PluginApprovalResolved } from "./plugin-approvals.js";
+import type {
+  SystemAgentApprovalRequest,
+  SystemAgentApprovalResolved,
+} from "./system-agent-approvals.js";
 
 const mockGatewayClientStarts = vi.hoisted(() => vi.fn());
 const mockGatewayClientStops = vi.hoisted(() => vi.fn());
@@ -25,7 +29,7 @@ vi.mock("../gateway/operator-approvals-client.js", () => ({
   createOperatorApprovalsGatewayClient: mockCreateOperatorApprovalsGatewayClient,
 }));
 
-vi.mock("../gateway/client-start-readiness.js", () => ({
+vi.mock("../../packages/gateway-client/src/readiness.js", () => ({
   startGatewayClientWhenEventLoopReady: mockStartGatewayClientWhenEventLoopReady,
 }));
 
@@ -296,6 +300,50 @@ describe("createExecApprovalChannelRuntime", () => {
     });
   });
 
+  it("routes a system-agent expiry event through expiry finalization", async () => {
+    const finalizedExpired = vi.fn(async () => undefined);
+    const finalizedResolved = vi.fn(async () => undefined);
+    const runtime = createExecApprovalChannelRuntime<
+      { id: string },
+      SystemAgentApprovalRequest,
+      SystemAgentApprovalResolved
+    >({
+      label: "test/system-agent-approvals",
+      clientDisplayName: "Test System-Agent Approvals",
+      cfg: {} as never,
+      eventKinds: ["system-agent"],
+      isConfigured: () => true,
+      shouldHandle: () => true,
+      deliverRequested: async () => [{ id: "system-agent:expired" }],
+      finalizeResolved: finalizedResolved,
+      finalizeExpired: finalizedExpired,
+    });
+
+    await runtime.handleRequested({
+      id: "system-agent:expired",
+      request: {
+        title: "OpenClaw change",
+        description: "restart the Gateway",
+        command: "restart the Gateway",
+        proposalHash: "a".repeat(64),
+        allowedDecisions: ["allow-once", "deny"],
+        sessionId: "session-1",
+      },
+      createdAtMs: 1000,
+      expiresAtMs: 2000,
+    });
+    await runtime.handleResolved({
+      id: "system-agent:expired",
+      decision: "deny",
+      resolvedBy: "timeout",
+      ts: 2000,
+      terminalStatus: "expired",
+    });
+
+    expect(finalizedExpired).toHaveBeenCalledOnce();
+    expect(finalizedResolved).not.toHaveBeenCalled();
+  });
+
   it("routes gateway requests through the shared client", async () => {
     const runtime = createExecApprovalChannelRuntime({
       label: "test/exec-approvals",
@@ -416,7 +464,7 @@ describe("createExecApprovalChannelRuntime", () => {
     const runtime = createExecApprovalChannelRuntime({
       label: "test/exec-approvals",
       clientDisplayName: "Test Exec Approvals",
-      cfg: { gateway: { handshakeTimeoutMs: 30_000 } } as never,
+      cfg: {},
       isConfigured: () => true,
       shouldHandle: () => true,
       deliverRequested: async () => [],
@@ -429,7 +477,7 @@ describe("createExecApprovalChannelRuntime", () => {
 
     expect(mockGatewayClientStarts).not.toHaveBeenCalled();
     expect(mockGatewayClientStops).toHaveBeenCalledTimes(1);
-    expectStartGatewayClientCall(30_000);
+    expectStartGatewayClientCall();
   });
 
   it("can retry start after gateway client creation fails", async () => {
@@ -697,6 +745,53 @@ describe("createExecApprovalChannelRuntime", () => {
       expect(mockGatewayClientRequests).toHaveBeenCalledWith("exec.approval.list", {});
       expectDeliveredRequestId(deliverRequested, "abc");
     });
+  });
+
+  it("round-trips old-shape replay requests without mutating their serialized form", async () => {
+    const oldShapeRequest = createPluginReplayRequest("plugin:old-shape");
+    const oldShapeJson = JSON.stringify(oldShapeRequest);
+    mockReplayLists({ plugin: [oldShapeRequest] });
+    const deliverRequested = vi.fn(async (request) => [{ id: request.id }]);
+    const finalizeResolved = vi.fn(async () => undefined);
+    const runtime = createExecApprovalChannelRuntime<
+      { id: string },
+      PluginApprovalRequest,
+      PluginApprovalResolved
+    >({
+      label: "test/plugin-old-shape-replay",
+      clientDisplayName: "Test Plugin Old Shape Replay",
+      cfg: {} as never,
+      eventKinds: ["plugin"],
+      isConfigured: () => true,
+      shouldHandle: () => true,
+      deliverRequested,
+      finalizeResolved,
+    });
+
+    await runtime.start();
+    await vi.waitFor(() => {
+      expect(deliverRequested).toHaveBeenCalledWith({
+        ...oldShapeRequest,
+        approvalKind: "plugin",
+      });
+    });
+
+    await runtime.handleResolved({
+      id: oldShapeRequest.id,
+      decision: "allow-once",
+      ts: 1500,
+    });
+
+    expect(finalizeResolved).toHaveBeenCalledWith({
+      request: { ...oldShapeRequest, approvalKind: "plugin" },
+      resolved: {
+        id: oldShapeRequest.id,
+        decision: "allow-once",
+        ts: 1500,
+      },
+      entries: [{ id: oldShapeRequest.id }],
+    });
+    expect(JSON.stringify(oldShapeRequest)).toBe(oldShapeJson);
   });
 
   it("does not block start on pending approval replay delivery", async () => {

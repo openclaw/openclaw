@@ -3,21 +3,8 @@ import {
   resolveNonNegativeIntegerOption,
   resolveOptionalIntegerOption,
 } from "@openclaw/normalization-core/number-coercion";
-import type { InboundDebounceByProvider } from "../config/types.messages.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-
-const resolveMs = (value: unknown): number | undefined =>
-  resolveOptionalIntegerOption(value, { min: 0 });
-
-const resolveChannelOverride = (params: {
-  byChannel?: InboundDebounceByProvider;
-  channel: string;
-}): number | undefined => {
-  if (!params.byChannel) {
-    return undefined;
-  }
-  return resolveMs(params.byChannel[params.channel]);
-};
+import { toErrorObject } from "../infra/errors.js";
 
 /** Resolve effective inbound debounce milliseconds from explicit, channel, and global config. */
 export function resolveInboundDebounceMs(params: {
@@ -26,35 +13,140 @@ export function resolveInboundDebounceMs(params: {
   overrideMs?: number;
 }): number {
   const inbound = params.cfg.messages?.inbound;
-  const override = resolveMs(params.overrideMs);
-  const byChannel = resolveChannelOverride({
-    byChannel: inbound?.byChannel,
-    channel: params.channel,
-  });
-  const base = resolveMs(inbound?.debounceMs);
-  return override ?? byChannel ?? base ?? 0;
+  for (const value of [
+    params.overrideMs,
+    inbound?.byChannel?.[params.channel],
+    inbound?.debounceMs,
+  ]) {
+    const resolved = resolveOptionalIntegerOption(value, { min: 0 });
+    if (resolved !== undefined) {
+      return resolved;
+    }
+  }
+  return 0;
 }
 
 type DebounceBuffer<T> = {
   items: T[];
   timeout: ReturnType<typeof setTimeout> | null;
   debounceMs: number;
+  flushDeadlineMs: number;
   releaseReady: () => void;
   readyReleased: boolean;
   task: Promise<void>;
 };
 
+/** A flush releases its debounce lane at admission while completion remains drainable. */
+type InboundDebounceFlush = {
+  admission: Promise<void>;
+  completion: Promise<void>;
+};
+
+type InboundDebounceAdmissionLifecycleInput = {
+  abortSignal?: AbortSignal;
+  onAdopted?: () => void | Promise<void>;
+  onDeferred?: () => boolean | void;
+  onDeferredHeartbeat?: () => void;
+  deferredHeartbeatIntervalMs?: number;
+  onAdoptionFinalizing?: () => void;
+  onFailed?: (error: unknown) => void | Promise<void>;
+  onAbandoned?: () => void | Promise<void>;
+};
+
+/** Lifecycle shape passed to a channel dispatch so it can signal session-lane admission. */
+type InboundDebounceAdmissionLifecycle = {
+  abortSignal: AbortSignal;
+  onAdopted: () => Promise<void>;
+  onDeferred: () => boolean | void;
+  onDeferredHeartbeat?: () => void;
+  deferredHeartbeatIntervalMs?: number;
+  onAdoptionFinalizing: () => void;
+  onFailed?: (error: unknown) => Promise<void>;
+  onAbandoned: () => Promise<void>;
+};
+
+/**
+ * Start one flush and bind its admission signal to the turn lifecycle.
+ * Completion also releases admission for gated work that never enters a session lane.
+ */
+function createInboundDebounceFlush(params: {
+  lifecycle?: InboundDebounceAdmissionLifecycleInput;
+  dispatch: (lifecycle: InboundDebounceAdmissionLifecycle) => Promise<void>;
+}): InboundDebounceFlush {
+  let resolveAdmission!: () => void;
+  let admitted = false;
+  const admission = new Promise<void>((resolve) => {
+    resolveAdmission = resolve;
+  });
+  const markAdmitted = () => {
+    if (admitted) {
+      return;
+    }
+    admitted = true;
+    resolveAdmission();
+  };
+  const source = params.lifecycle;
+  const lifecycle: InboundDebounceAdmissionLifecycle = {
+    abortSignal: source?.abortSignal ?? new AbortController().signal,
+    onAdopted: async () => {
+      await source?.onAdopted?.();
+      markAdmitted();
+    },
+    onDeferred: () => {
+      const accepted = source?.onDeferred?.();
+      if (accepted !== false) {
+        markAdmitted();
+      }
+      return accepted;
+    },
+    onDeferredHeartbeat: () => source?.onDeferredHeartbeat?.(),
+    deferredHeartbeatIntervalMs: source?.deferredHeartbeatIntervalMs,
+    onAdoptionFinalizing: () => source?.onAdoptionFinalizing?.(),
+    onFailed: source?.onFailed
+      ? async (error) => {
+          try {
+            await source.onFailed?.(error);
+          } finally {
+            markAdmitted();
+          }
+        }
+      : undefined,
+    onAbandoned: async () => {
+      await source?.onAbandoned?.();
+    },
+  };
+  let completion: Promise<void>;
+  try {
+    completion = params.dispatch(lifecycle);
+  } catch (error) {
+    completion = Promise.reject(toErrorObject(error, "Inbound debounce dispatch failed"));
+  }
+  // A failed dispatch must settle its source claim before releasing the keyed
+  // lane; an already-admitted turn owns its later completion failure.
+  completion = completion.then(markAdmitted).catch(async (error: unknown) => {
+    if (!admitted && lifecycle.onFailed) {
+      await Promise.allSettled([lifecycle.onFailed(error)]);
+    }
+    markAdmitted();
+    throw error;
+  });
+  return { admission, completion };
+}
+
 const DEFAULT_MAX_TRACKED_KEYS = 2048;
+const MAX_DEBOUNCE_WINDOW_MULTIPLIER = 5;
 
 /** Options for creating a keyed inbound debouncer. */
 export type InboundDebounceCreateParams<T> = {
   debounceMs: number;
   maxTrackedKeys?: number;
+  maxWaitMs?: number | ((item: T) => number | undefined);
   buildKey: (item: T) => string | null | undefined;
   shouldDebounce?: (item: T) => boolean;
-  resolveDebounceMs?: (item: T) => number | undefined;
+  resolveDebounceMs?: (item: T, pending?: readonly T[]) => number | undefined;
+  canAppend?: (item: T, pending: readonly T[]) => boolean;
   serializeImmediate?: boolean;
-  onFlush: (items: T[]) => Promise<void>;
+  onFlush: (items: T[], createFlush: typeof createInboundDebounceFlush) => InboundDebounceFlush;
   onError?: (err: unknown, items: T[]) => void;
   onCancel?: (items: T[]) => void;
 };
@@ -62,27 +154,69 @@ export type InboundDebounceCreateParams<T> = {
 /** Create a keyed debouncer with flush/cancel controls and same-key serialization. */
 export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>) {
   const buffers = new Map<string, DebounceBuffer<T>>();
+  const pendingBuffers = new Map<string, Set<DebounceBuffer<T>>>();
   const keyChains = new Map<string, Promise<void>>();
   const keyGenerations = new Map<string, number>();
+  const activeCompletions = new Set<Promise<void>>();
   const defaultDebounceMs = resolveNonNegativeIntegerOption(params.debounceMs, 0);
   const maxTrackedKeys = Math.max(1, Math.trunc(params.maxTrackedKeys ?? DEFAULT_MAX_TRACKED_KEYS));
 
-  const resolveDebounceMs = (item: T) => {
-    const resolved = params.resolveDebounceMs?.(item);
+  const resolveDebounceMs = (item: T, pending?: readonly T[]) => {
+    const resolved = params.resolveDebounceMs?.(item, pending);
     return resolveNonNegativeIntegerOption(resolved, defaultDebounceMs);
   };
 
-  const runFlush = async (items: T[]) => {
-    try {
-      await params.onFlush(items);
-    } catch (err) {
-      try {
-        params.onError?.(err, items);
-      } catch {
-        // Flush failures are reported via onError, but this helper stays
-        // non-throwing so keyed chains can continue processing later items.
-      }
+  const resolvePending = (item: T, key: string) => {
+    const buffer = buffers.get(key);
+    return buffer && (params.canAppend?.(item, buffer.items) ?? true) ? buffer : undefined;
+  };
+  const shouldBuffer = (item: T): boolean => {
+    const key = params.buildKey(item);
+    return Boolean(
+      key &&
+      resolveDebounceMs(item, resolvePending(item, key)?.items) > 0 &&
+      (params.shouldDebounce?.(item) ?? true),
+    );
+  };
+  const untrackBuffer = (key: string, buffer: DebounceBuffer<T>) => {
+    const pending = pendingBuffers.get(key);
+    pending?.delete(buffer);
+    if (pending?.size === 0) {
+      pendingBuffers.delete(key);
     }
+  };
+
+  const reportFlushError = (err: unknown, items: T[]) => {
+    try {
+      params.onError?.(err, items);
+    } catch {
+      // Flush failures are reported via onError, but this helper stays
+      // non-throwing so keyed chains can continue processing later items.
+    }
+  };
+
+  const runFlush = async (items: T[]) => {
+    let flush: InboundDebounceFlush;
+    try {
+      flush = params.onFlush(items, createInboundDebounceFlush);
+    } catch (err) {
+      reportFlushError(err, items);
+      return;
+    }
+    let reported = false;
+    const reportOnce = (err: unknown) => {
+      if (reported) {
+        return;
+      }
+      reported = true;
+      reportFlushError(err, items);
+    };
+    const admission = flush.admission.catch(reportOnce);
+    const completion = flush.completion.catch(reportOnce);
+    activeCompletions.add(completion);
+    const cleanup = () => activeCompletions.delete(completion);
+    void completion.then(cleanup, cleanup);
+    await Promise.race([admission, completion]);
   };
 
   const cancelItems = (items: T[]) => {
@@ -199,27 +333,27 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
   };
 
   const cancelKey = (key: string): boolean => {
-    const buffer = buffers.get(key);
-    if (!buffer && !keyChains.has(key)) {
+    const pending = pendingBuffers.get(key);
+    if (!pending?.size && !keyChains.has(key)) {
       return false;
     }
     // Invalidate released tasks still waiting behind an active same-key flush.
     // The active task has already crossed this check and remains caller-owned.
     keyGenerations.set(key, resolveKeyGeneration(key) + 1);
-    if (!buffer) {
-      return true;
+    for (const buffer of pending ?? []) {
+      if (buffers.get(key) === buffer) {
+        buffers.delete(key);
+      }
+      if (buffer.timeout) {
+        clearTimeout(buffer.timeout);
+        buffer.timeout = null;
+      }
+      const canceledItems = buffer.items;
+      buffer.items = [];
+      cancelItems(canceledItems);
+      releaseBuffer(buffer);
     }
-    if (buffers.get(key) === buffer) {
-      buffers.delete(key);
-    }
-    if (buffer.timeout) {
-      clearTimeout(buffer.timeout);
-      buffer.timeout = null;
-    }
-    const canceledItems = buffer.items;
-    buffer.items = [];
-    cancelItems(canceledItems);
-    releaseBuffer(buffer);
+    pendingBuffers.delete(key);
     return true;
   };
 
@@ -227,22 +361,22 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     if (buffer.timeout) {
       clearTimeout(buffer.timeout);
     }
+    // Keep the first item's monotonic deadline fixed so continuous arrivals
+    // and wall-clock changes cannot hold a reserved ingress lane indefinitely.
+    const delayMs = Math.min(
+      buffer.debounceMs,
+      Math.max(0, buffer.flushDeadlineMs - performance.now()),
+    );
     buffer.timeout = setTimeout(() => {
       void flushBuffer(key, buffer);
-    }, buffer.debounceMs);
+    }, delayMs);
     buffer.timeout.unref?.();
-  };
-
-  const canTrackKey = (key: string) => {
-    if (buffers.has(key) || keyChains.has(key)) {
-      return true;
-    }
-    return new Set([...buffers.keys(), ...keyChains.keys()]).size < maxTrackedKeys;
   };
 
   const enqueue = async (item: T) => {
     const key = params.buildKey(item);
-    const debounceMs = resolveDebounceMs(item);
+    const existing = key ? resolvePending(item, key) : undefined;
+    const debounceMs = resolveDebounceMs(item, existing?.items);
     const canDebounce = debounceMs > 0 && (params.shouldDebounce?.(item) ?? true);
 
     if (!canDebounce || !key) {
@@ -282,14 +416,20 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
       return;
     }
 
-    const existing = buffers.get(key);
     if (existing) {
       existing.items.push(item);
       existing.debounceMs = debounceMs;
       scheduleFlush(key, existing);
       return;
     }
-    if (!canTrackKey(key)) {
+    if (key && buffers.has(key)) {
+      // Seal a full batch without waiting for its turn; the new batch reserves
+      // the following FIFO slot while later ingress remains free to append.
+      void flushKey(key);
+    }
+    // Buffers reserve a chain before insertion and release it only after removal,
+    // so chain keys already cover every tracked debounce key.
+    if (!(keyChains.has(key) || keyChains.size < maxTrackedKeys)) {
       // When the debounce map is saturated, fall back to immediate keyed work
       // instead of buffering, but still preserve same-key ordering.
       const generation = resolveKeyGeneration(key);
@@ -300,6 +440,7 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     }
     const generation = resolveKeyGeneration(key);
     const reservedTask = enqueueReservedKeyTask(key, async () => {
+      untrackBuffer(key, buffer);
       if (buffer.items.length === 0) {
         return;
       }
@@ -313,13 +454,33 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
       items: [item],
       timeout: null,
       debounceMs,
+      flushDeadlineMs:
+        performance.now() +
+        Math.max(
+          debounceMs,
+          resolveNonNegativeIntegerOption(
+            typeof params.maxWaitMs === "function" ? params.maxWaitMs(item) : params.maxWaitMs,
+            debounceMs * MAX_DEBOUNCE_WINDOW_MULTIPLIER,
+          ),
+        ),
       releaseReady: reservedTask.release,
       readyReleased: false,
       task: reservedTask.task,
     };
     buffers.set(key, buffer);
+    const pending = pendingBuffers.get(key) ?? new Set<DebounceBuffer<T>>();
+    pending.add(buffer);
+    pendingBuffers.set(key, pending);
     scheduleFlush(key, buffer);
   };
 
-  return { enqueue, flushKey, cancelKey };
+  const drain = async () => {
+    // Callers flush or cancel buffers first. Waiting both registries closes the
+    // handoff gap before a queued same-key task registers its completion.
+    while (keyChains.size > 0 || activeCompletions.size > 0) {
+      await Promise.all([...keyChains.values(), ...activeCompletions]);
+    }
+  };
+
+  return { enqueue, shouldBuffer, flushKey, cancelKey, drain };
 }

@@ -1,6 +1,7 @@
 /**
  * Public SDK subpath for shared browser-meeting audio transports and realtime engines.
  */
+
 export {
   startMeetingRealtimeEngine,
   type MeetingAgentConsultParams,
@@ -18,9 +19,7 @@ export {
 export { createLocalMeetingRealtimeAudioTransport } from "../meeting-bot/realtime-local-audio-transport.js";
 export { createNodeMeetingRealtimeAudioTransport } from "../meeting-bot/realtime-node-audio-transport.js";
 export {
-  convertMeetingBridgeAudioForStt,
   convertMeetingTtsAudioForBridge,
-  resolveMeetingRealtimeAudioFormat,
   type MeetingRealtimeAudioFormat,
 } from "../meeting-bot/realtime-audio-format.js";
 export {
@@ -32,6 +31,7 @@ export {
   type MeetingSessionRuntimeMessages,
   type MeetingSessionRuntimeOptions,
 } from "../meeting-bot/session-runtime.js";
+export { createMeetingSession } from "../meeting-bot/session-factory.js";
 export type {
   MeetingBrowserCandidateTab,
   MeetingBrowserHealth,
@@ -58,7 +58,6 @@ export {
 } from "../meeting-bot/browser-request.js";
 export {
   callMeetingBrowserProxyOnNode,
-  createMeetingBrowserNodeCaller,
   resolveMeetingBrowserNode,
   resolveMeetingBrowserNodeInfo,
   type MeetingBrowserNodeInfo,
@@ -72,14 +71,9 @@ export type {
   MeetingBrowserStatusScriptParams,
   MeetingManualAction,
   MeetingManualActionCategory,
-  MeetingPlatformAdapter,
 } from "../meeting-bot/platform-adapter.js";
-export {
-  consultMeetingAgent,
-  handleMeetingRealtimeConsultToolCall,
-  resolveMeetingRealtimeTools,
-  type MeetingAgentConsultSurface,
-} from "../meeting-bot/agent-consult.js";
+export { MeetingPlatformAdapter } from "../meeting-bot/platform-adapter.js";
+export { createMeetingRealtimeEngineBindings } from "../meeting-bot/agent-consult.js";
 export {
   createMeetingVoiceCallGateway,
   endMeetingVoiceCallGatewayCall,

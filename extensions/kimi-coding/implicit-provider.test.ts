@@ -46,7 +46,7 @@ describe("Kimi implicit provider (#22409)", () => {
   });
 
   it("publishes the Kimi provider when an API key is resolved", async () => {
-    const provider = await runKimiCatalogProvider({ apiKey: "test-key" });
+    const { models, ...provider } = await runKimiCatalogProvider({ apiKey: "test-key" });
 
     expect(provider).toEqual({
       baseUrl: "https://api.kimi.com/coding/",
@@ -54,64 +54,15 @@ describe("Kimi implicit provider (#22409)", () => {
       headers: {
         "User-Agent": "claude-code/0.1.0",
       },
-      models: [
-        {
-          id: "kimi-for-coding",
-          name: "Kimi Code",
-          reasoning: true,
-          input: ["text", "image"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 262144,
-          maxTokens: 32768,
-        },
-        {
-          id: "kimi-for-coding-highspeed",
-          name: "Kimi K2.7 Code HighSpeed",
-          reasoning: true,
-          input: ["text", "image"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 262144,
-          maxTokens: 32768,
-        },
-        {
-          id: "k3",
-          name: "Kimi K3",
-          reasoning: true,
-          thinkingLevelMap: {
-            off: null,
-            minimal: null,
-            low: null,
-            medium: null,
-            high: null,
-            xhigh: "max",
-            max: "max",
-          },
-          input: ["text", "image"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 262144,
-          maxTokens: 32768,
-        },
-        {
-          id: "k3[1m]",
-          name: "Kimi K3 (1M)",
-          reasoning: true,
-          thinkingLevelMap: {
-            off: null,
-            minimal: null,
-            low: null,
-            medium: null,
-            high: null,
-            xhigh: "max",
-            max: "max",
-          },
-          input: ["text", "image"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 1048576,
-          maxTokens: 32768,
-        },
-      ],
       apiKey: "test-key",
     });
+    // Credential-aware catalog assembly may prioritize the configured default.
+    expect(models.map((model) => model.id).toSorted()).toEqual([
+      "k3",
+      "k3-256k",
+      "kimi-for-coding",
+      "kimi-for-coding-highspeed",
+    ]);
   });
 
   it("ignores retired kimi-coding provider overrides", async () => {

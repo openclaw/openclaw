@@ -1,4 +1,3 @@
-// Discord plugin module implements channel.conversation behavior.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalStringifiedId,

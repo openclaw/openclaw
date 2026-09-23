@@ -1,12 +1,17 @@
+import type { AgentMessage, StreamFn } from "../../packages/agent-core/src/types.js";
 import type { AuthProfileCredential, OAuthCredential } from "../agents/auth-profiles/types.js";
-import type { FailoverReason } from "../agents/embedded-agent-helpers/types.js";
+import type { FailoverReason } from "../agents/failover/signal.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
-import type { AgentMessage, StreamFn } from "../agents/runtime/index.js";
 import type { ProviderSystemPromptContribution } from "../agents/system-prompt-contribution.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderUsageSnapshot } from "../infra/provider-usage.types.js";
+import type { ProviderFastModePolicyContext } from "../plugin-sdk/provider-model-types.js";
+import type {
+  OAuthCredentials as SessionOAuthCredentials,
+  OAuthLoginCallbacks,
+} from "../plugin-sdk/provider-oauth-runtime.js";
 import type { PluginTextTransforms } from "./cli-backend.types.js";
 import type {
   ProviderAuthMethod,
@@ -23,7 +28,6 @@ import type {
   ProviderBuiltInModelSuppressionResult,
   ProviderModernModelPolicyContext,
   ProviderAugmentModelCatalogContext,
-  ProviderPluginDiscovery,
 } from "./provider-catalog.types.js";
 import type {
   ProviderApplyConfigDefaultsContext,
@@ -32,15 +36,12 @@ import type {
 } from "./provider-config-context.types.js";
 import type {
   ProviderExternalAuthProfile,
-  ProviderExternalOAuthProfile,
   ProviderResolveExternalAuthProfilesContext,
-  ProviderResolveExternalOAuthProfilesContext,
   ProviderResolveSyntheticAuthContext,
   ProviderSyntheticAuthResult,
 } from "./provider-external-auth.types.js";
 import type {
   ProviderReasoningOutputMode,
-  ProviderCapabilities,
   ProviderReplayPolicy,
   ProviderReplayPolicyContext,
   ProviderSanitizeReplayHistoryContext,
@@ -74,7 +75,6 @@ import type {
 import type {
   ProviderDefaultThinkingPolicyContext,
   ProviderThinkingProfile,
-  ProviderThinkingPolicyContext,
 } from "./provider-thinking.types.js";
 import type {
   ProviderCreateStreamFnContext,
@@ -89,11 +89,14 @@ import type {
   ProviderCacheTtlEligibilityContext,
   ProviderBuildMissingAuthMessageContext,
   ProviderBuildUnknownModelHintContext,
+  ProviderReconcileLocalServiceContext,
 } from "./provider-transport.types.js";
 
 export type ProviderPlugin = {
   id: string;
   pluginId?: string;
+  /** Loader-owned dependency root, shared by lightweight and full registration. */
+  pluginRoot?: string;
   label: string;
   docsPath?: string;
   aliases?: string[];
@@ -147,13 +150,6 @@ export type ProviderPlugin = {
    */
   preserveLiteralProviderPrefix?: boolean;
   /**
-   * @deprecated Use catalog.
-   *
-   * Legacy alias for catalog.
-   * Kept for compatibility with existing provider plugins.
-   */
-  discovery?: ProviderPluginDiscovery;
-  /**
    * Sync runtime fallback for model ids not present in the local catalog.
    *
    * Hook order:
@@ -162,19 +158,21 @@ export type ProviderPlugin = {
    * 3. core fallback heuristics
    * 4. generic provider-config fallback
    *
-   * Keep this hook cheap and deterministic. If you need network I/O first, use
-   * `prepareDynamicModel` to prime state for the async retry path.
+   * Keep this hook cheap and deterministic. Async model discovery belongs in
+   * `prepareDynamicModel`, which can return the prepared model directly.
    */
   resolveDynamicModel?: (
     ctx: ProviderResolveDynamicModelContext,
   ) => ProviderRuntimeModel | null | undefined;
   /**
-   * Optional async prefetch for dynamic model resolution.
+   * Optional async preparation for dynamic model resolution.
    *
-   * OpenClaw calls this only from async model resolution paths. After it
-   * completes, `resolveDynamicModel` is called again.
+   * OpenClaw calls this only from async model resolution paths. Return the
+   * requested model directly, or return nothing to retry `resolveDynamicModel`.
    */
-  prepareDynamicModel?: (ctx: ProviderPrepareDynamicModelContext) => Promise<void>;
+  prepareDynamicModel?: (
+    ctx: ProviderPrepareDynamicModelContext,
+  ) => Promise<ProviderRuntimeModel | void>;
   /**
    * Lets a provider plugin opt exact configured models into a runtime
    * metadata comparison pass before the embedded runner returns the explicit
@@ -231,13 +229,6 @@ export type ProviderPlugin = {
    * markers rather than a normal API-key env var.
    */
   resolveConfigApiKey?: (ctx: ProviderResolveConfigApiKeyContext) => string | null | undefined;
-  /**
-   * @deprecated Legacy static capability bag kept only for compatibility.
-   *
-   * New provider behavior should use explicit hooks instead. Core replay and
-   * stream/runtime logic no longer consumes this field.
-   */
-  capabilities?: ProviderCapabilities;
   /**
    * Provider-owned replay/compaction policy override.
    *
@@ -320,6 +311,12 @@ export type ProviderPlugin = {
    */
   createStreamFn?: (ctx: ProviderCreateStreamFnContext) => StreamFn | null | undefined;
   /**
+   * Opt custom streams into the internal stable/dynamic system-prompt boundary.
+   * The transport must consume the boundary before sending its provider payload.
+   * Otherwise the host strips it before invoking the custom stream.
+   */
+  supportsSystemPromptCacheBoundary?: boolean;
+  /**
    * Provider-owned stream wrapper applied after generic OpenClaw wrappers.
    *
    * Typical uses: provider attribution headers, request-body rewrites, or
@@ -332,8 +329,12 @@ export type ProviderPlugin = {
    *
    * Opt in only when the provider must enforce the same wire contract outside
    * the embedded agent runtime.
+   * The factory runs once per prepared model; its returned stream retains
+   * wrapper-local state and reads per-request options on each invocation.
    */
   wrapSimpleCompletionStreamFn?: (ctx: ProviderWrapStreamFnContext) => StreamFn | null | undefined;
+  /** Cheap, idempotent provider repair after local-service health and before each request. */
+  reconcileLocalService?: (ctx: ProviderReconcileLocalServiceContext) => Promise<void>;
   /**
    * Provider-owned native transport turn identity.
    *
@@ -347,9 +348,8 @@ export type ProviderPlugin = {
   /**
    * Provider-owned WebSocket session policy.
    *
-   * Use this when a provider wants generic WebSocket transports to attach
-   * native session headers or tune the session-scoped cool-down before HTTP
-   * fallback.
+   * @deprecated Return `websocket` from `resolveTransportTurnState`. When both
+   * hooks provide a field, the new hook takes precedence.
    */
   resolveWebSocketSessionPolicy?: (
     ctx: ProviderResolveWebSocketSessionPolicyContext,
@@ -474,23 +474,6 @@ export type ProviderPlugin = {
     | null
     | undefined;
   /**
-   * Provider-owned binary thinking toggle.
-   *
-   * Return true when the provider exposes a coarse on/off reasoning control
-   * instead of the normal multi-level ladder shown by `/think`.
-   *
-   * @deprecated Prefer `resolveThinkingProfile`.
-   */
-  isBinaryThinking?: (ctx: ProviderThinkingPolicyContext) => boolean | undefined;
-  /**
-   * Provider-owned xhigh reasoning support.
-   *
-   * Return true only for models that should expose the `xhigh` thinking level.
-   *
-   * @deprecated Prefer `resolveThinkingProfile`.
-   */
-  supportsXHighThinking?: (ctx: ProviderThinkingPolicyContext) => boolean | undefined;
-  /**
    * Provider-owned thinking level profile.
    *
    * Prefer this over the individual thinking capability hooks when a provider
@@ -501,17 +484,8 @@ export type ProviderPlugin = {
   resolveThinkingProfile?: (
     ctx: ProviderDefaultThinkingPolicyContext,
   ) => ProviderThinkingProfile | null | undefined;
-  /**
-   * Provider-owned default thinking level.
-   *
-   * Use this to keep model-family defaults (for example Claude 4.6 =>
-   * adaptive) out of core command logic.
-   *
-   * @deprecated Prefer `resolveThinkingProfile`.
-   */
-  resolveDefaultThinkingLevel?: (
-    ctx: ProviderDefaultThinkingPolicyContext,
-  ) => "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive" | null | undefined;
+  /** Whether Fast can affect this selected request; undefined retains existing unknown behavior. */
+  resolveFastModeSupport?: (ctx: ProviderFastModePolicyContext) => boolean | undefined;
   /**
    * Provider-owned system-prompt contribution.
    *
@@ -588,11 +562,19 @@ export type ProviderPlugin = {
    */
   formatApiKey?: (cred: AuthProfileCredential) => string;
   /**
-   * Legacy auth-profile ids that should be retired by `openclaw doctor`.
+   * Provider-owned OAuth login adapter for the session SDK AuthStorage API.
+   *
+   * This keeps the public callback-based login contract usable without seeding
+   * provider implementations into core. Modern setup flows should use `auth`.
+   */
+  loginOAuth?: (callbacks: OAuthLoginCallbacks) => Promise<SessionOAuthCredentials>;
+  /**
+   * Legacy auth-profile ids that generic auth must ignore and `openclaw doctor` should remove.
    *
    * Use this when a provider plugin replaces an older core-managed profile id
    * and wants cleanup/migration messaging to live with the provider instead of
-   * in hardcoded doctor tables.
+   * in hardcoded doctor tables. A runtime-only external CLI profile remains usable by its exact
+   * provider when it intentionally reuses a retired id.
    */
   deprecatedProfileIds?: string[];
   /**
@@ -637,15 +619,6 @@ export type ProviderPlugin = {
    * Runtime callers must not treat non-secret markers as runnable credentials;
    * they should retry against the active runtime snapshot when available.
    *
-   * This hook is the canonical seam for provider-specific fallback auth
-   * derived from plugin/private config. It may return:
-   * - a runnable literal credential for runtime callers
-   * - a non-secret marker for managed-secret source config, which is still useful
-   *   for discovery/bootstrap callers
-   *
-   * Runtime callers must not treat non-secret markers as runnable credentials;
-   * they should retry against the active runtime snapshot when available.
-   *
    * Use this when the provider can operate without a real secret for certain
    * configured local/self-hosted cases and wants auth resolution to treat that
    * config as available.
@@ -653,6 +626,17 @@ export type ProviderPlugin = {
   resolveSyntheticAuth?: (
     ctx: ProviderResolveSyntheticAuthContext,
   ) => ProviderSyntheticAuthResult | null | undefined;
+  /**
+   * Prepare external availability before synchronous synthetic-auth reads.
+   * Keep process/network I/O here; OpenClaw publishes the completed result for this generation.
+   */
+  prepareSyntheticAuth?: (
+    ctx: ProviderResolveSyntheticAuthContext & {
+      env?: NodeJS.ProcessEnv;
+      signal?: AbortSignal;
+      pluginRoot?: string;
+    },
+  ) => Promise<ProviderSyntheticAuthResult | null | undefined>;
   /**
    * Provider-owned external auth profile discovery.
    *
@@ -668,18 +652,6 @@ export type ProviderPlugin = {
     | null
     | undefined;
   /**
-   * @deprecated Declare `contracts.externalAuthProviders` in the plugin manifest
-   * and implement `resolveExternalAuthProfiles` instead. Kept at the public
-   * plugin boundary until the SDK removal window closes.
-   */
-  resolveExternalOAuthProfiles?: (
-    ctx: ProviderResolveExternalOAuthProfilesContext,
-  ) =>
-    | Array<ProviderExternalOAuthProfile>
-    | ReadonlyArray<ProviderExternalOAuthProfile>
-    | null
-    | undefined;
-  /**
    * Provider-owned precedence rule for stored synthetic auth profiles.
    *
    * Return true when a stored profile API key is only a provider-owned
@@ -690,4 +662,13 @@ export type ProviderPlugin = {
     ctx: ProviderDeferSyntheticProfileAuthContext,
   ) => boolean | undefined;
   onModelSelected?: (ctx: ProviderModelSelectedContext) => Promise<void>;
+};
+
+/** Provider runtime registered with its owning plugin and source. */
+export type PluginProviderRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  provider: ProviderPlugin;
+  source: string;
+  rootDir?: string;
 };

@@ -4,8 +4,14 @@
  * advertises native search support.
  */
 import { describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
+import { createCodeModeCatalogProjection } from "./code-mode-catalog.js";
+import {
+  createToolSearchCatalogRef,
+  registerHeadlessToolSearchCatalog,
+} from "./tool-search-catalog.js";
 
 vi.mock("./openclaw-plugin-tools.js", () => ({
   resolveOpenClawPluginToolsForOptions: () => [{ name: "browser" }],
@@ -62,7 +68,6 @@ describe("applyModelProviderToolPolicy", () => {
     const filtered = testing.applyModelProviderToolPolicy(baseTools, {
       modelCompat: {
         toolSchemaProfile: XAI_TOOL_SCHEMA_PROFILE,
-        nativeWebSearchTool: true,
         toolCallArgumentsEncoding: HTML_ENTITY_TOOL_CALL_ARGUMENTS_ENCODING,
       },
     });
@@ -74,12 +79,89 @@ describe("applyModelProviderToolPolicy", () => {
     const filtered = testing.applyModelProviderToolPolicy(baseTools, {
       modelCompat: {
         toolSchemaProfile: XAI_TOOL_SCHEMA_PROFILE,
-        nativeWebSearchTool: true,
       },
     });
 
     expect(toolNames(filtered)).toEqual(["read", "web_search", "exec"]);
   });
+
+  it.each<{
+    label: string;
+    provider?: string;
+    baseUrl: string;
+    modelBaseUrl?: string;
+    native: boolean;
+    plugins?: OpenClawConfig["plugins"];
+  }>([
+    { label: "automatic", provider: undefined, baseUrl: "https://api.openai.com/v1", native: true },
+    {
+      label: "explicit managed",
+      provider: "brave",
+      baseUrl: "https://api.openai.com/v1",
+      native: false,
+    },
+    {
+      label: "custom endpoint",
+      provider: undefined,
+      baseUrl: "https://proxy.example/v1",
+      native: false,
+    },
+    {
+      label: "resolved custom endpoint",
+      provider: undefined,
+      baseUrl: "https://api.openai.com/v1",
+      modelBaseUrl: "https://proxy.example/v1",
+      native: false,
+    },
+    {
+      label: "resolved official endpoint",
+      provider: undefined,
+      baseUrl: "https://proxy.example/v1",
+      modelBaseUrl: "https://api.openai.com/v1",
+      native: true,
+    },
+    {
+      label: "enabled plugin",
+      plugins: { allow: ["openai"] },
+      baseUrl: "https://api.openai.com/v1",
+      native: true,
+    },
+    ...[
+      { label: "disabled plugin", plugins: { entries: { openai: { enabled: false } } } },
+      { label: "globally disabled plugins", plugins: { enabled: false } },
+      { label: "denied plugin", plugins: { deny: ["openai"] } },
+      { label: "unlisted plugin", plugins: { allow: ["brave"] } },
+    ].map(({ label, plugins }) => ({
+      label,
+      plugins,
+      provider: undefined,
+      baseUrl: "https://api.openai.com/v1",
+      native: false,
+    })),
+  ])(
+    "uses one search route before tool discovery for OpenAI $label",
+    ({ provider, baseUrl, modelBaseUrl, native, plugins }) => {
+      const filtered = testing.applyModelProviderToolPolicy(baseTools, {
+        config: {
+          plugins,
+          tools: { web: { search: { provider } } },
+          models: { providers: { openai: { api: "openai-responses", baseUrl, models: [] } } },
+        },
+        modelProvider: "openai",
+        modelApi: "openai-responses",
+        modelBaseUrl,
+        modelId: "gpt-5.4",
+      });
+
+      expect(toolNames(filtered)).toEqual(
+        native ? ["read", "exec"] : ["read", "web_search", "exec"],
+      );
+      const catalogRef = createToolSearchCatalogRef();
+      registerHeadlessToolSearchCatalog({ catalogRef, tools: filtered });
+      const projection = createCodeModeCatalogProjection(catalogRef.current?.entries ?? []);
+      expect(projection.byCallableName.has("web_search")).toBe(!native);
+    },
+  );
 
   it("removes managed web_search when native Codex search is active", () => {
     const filtered = testing.applyModelProviderToolPolicy(baseTools, {
@@ -175,7 +257,7 @@ describe("applyModelProviderToolPolicy", () => {
       [
         { name: "read" },
         { name: "browser" },
-        { name: "cron" },
+        { name: "automations" },
         { name: "message" },
         { name: "exec" },
       ] as unknown as AnyAgentTool[],
@@ -203,7 +285,7 @@ describe("applyModelProviderToolPolicy", () => {
       [
         { name: "read" },
         { name: "browser" },
-        { name: "cron" },
+        { name: "automations" },
         { name: "message" },
         { name: "exec" },
       ] as unknown as AnyAgentTool[],
@@ -235,7 +317,7 @@ describe("applyModelProviderToolPolicy", () => {
       [
         { name: "read" },
         { name: "browser" },
-        { name: "cron" },
+        { name: "automations" },
         { name: "message" },
         { name: "exec" },
       ] as unknown as AnyAgentTool[],
@@ -267,7 +349,7 @@ describe("applyModelProviderToolPolicy", () => {
       [
         { name: "read" },
         { name: "browser" },
-        { name: "cron" },
+        { name: "automations" },
         { name: "message" },
         { name: "exec" },
       ] as unknown as AnyAgentTool[],
@@ -305,7 +387,7 @@ describe("applyModelProviderToolPolicy", () => {
       [
         { name: "read" },
         { name: "browser" },
-        { name: "cron" },
+        { name: "automations" },
         { name: "message" },
         { name: "exec" },
       ] as unknown as AnyAgentTool[],
@@ -334,7 +416,7 @@ describe("applyModelProviderToolPolicy", () => {
       },
     );
 
-    expect(toolNames(filtered)).toEqual(["read", "browser", "cron", "message", "exec"]);
+    expect(toolNames(filtered)).toEqual(["read", "browser", "automations", "message", "exec"]);
   });
 
   it("keeps heavyweight tools when the experimental lean local-model flag is not enabled", () => {
@@ -342,7 +424,7 @@ describe("applyModelProviderToolPolicy", () => {
       [
         { name: "read" },
         { name: "browser" },
-        { name: "cron" },
+        { name: "automations" },
         { name: "message" },
         { name: "exec" },
       ] as unknown as AnyAgentTool[],
@@ -362,6 +444,6 @@ describe("applyModelProviderToolPolicy", () => {
       },
     );
 
-    expect(toolNames(filtered)).toEqual(["read", "browser", "cron", "message", "exec"]);
+    expect(toolNames(filtered)).toEqual(["read", "browser", "automations", "message", "exec"]);
   });
 });

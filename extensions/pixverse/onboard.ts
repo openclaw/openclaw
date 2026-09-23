@@ -7,13 +7,10 @@ import type {
 import {
   applyAuthProfileConfig,
   buildApiKeyCredential,
-  ensureApiKeyFromOptionEnvOrPrompt,
-  normalizeApiKeyInput,
+  captureProviderApiKey,
   normalizeOptionalSecretInput,
   type OpenClawConfig,
-  type SecretInput,
-  upsertAuthProfileWithLock,
-  validateApiKeyInput,
+  persistProviderApiKey,
 } from "openclaw/plugin-sdk/provider-auth-api-key";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-onboard";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -32,17 +29,6 @@ type PixVerseAuthResult = {
   configPatch: OpenClawConfig;
   notes: string[];
 };
-
-type UpsertAuthProfileParams = Parameters<typeof upsertAuthProfileWithLock>[0];
-
-async function upsertAuthProfileWithLockOrThrow(params: UpsertAuthProfileParams): Promise<void> {
-  const updated = await upsertAuthProfileWithLock(params);
-  if (!updated) {
-    throw new Error(
-      "Failed to update auth profile store; the auth store lock may be busy. Wait a moment and retry.",
-    );
-  }
-}
 
 function normalizePixVerseRegion(value: unknown): PixVerseApiRegion | undefined {
   const region = normalizeOptionalString(value)?.toLowerCase();
@@ -100,7 +86,7 @@ function applyPixVerseConfig(
   options?: { resetBaseUrl?: boolean },
 ): OpenClawConfig {
   const next = applyPixVerseProviderConfig(cfg, region, options);
-  if (next.agents?.defaults?.videoGenerationModel) {
+  if (next.agents?.defaults?.mediaModels?.video) {
     return next;
   }
   return {
@@ -109,8 +95,9 @@ function applyPixVerseConfig(
       ...next.agents,
       defaults: {
         ...next.agents?.defaults,
-        videoGenerationModel: {
-          primary: PIXVERSE_DEFAULT_VIDEO_MODEL_REF,
+        mediaModels: {
+          ...next.agents?.defaults?.mediaModels,
+          video: { primary: PIXVERSE_DEFAULT_VIDEO_MODEL_REF },
         },
       },
     },
@@ -137,40 +124,20 @@ async function promptForPixVerseRegion(ctx: ProviderAuthContext): Promise<PixVer
 }
 
 async function runPixVerseApiKeyAuth(ctx: ProviderAuthContext): Promise<PixVerseAuthResult> {
-  let capturedSecretInput: SecretInput | undefined;
-  let capturedCredential = false;
-  let capturedMode: "plaintext" | "ref" | undefined;
-
-  await ensureApiKeyFromOptionEnvOrPrompt({
+  const { input, mode } = await captureProviderApiKey(ctx, {
     token:
       normalizeOptionalSecretInput(ctx.opts?.pixverseApiKey) ??
       normalizeOptionalSecretInput(ctx.opts?.token),
     tokenProvider: normalizeOptionalSecretInput(ctx.opts?.pixverseApiKey)
       ? PIXVERSE_PROVIDER_ID
       : normalizeOptionalSecretInput(ctx.opts?.tokenProvider),
-    secretInputMode:
-      ctx.allowSecretRefPrompt === false
-        ? (ctx.secretInputMode ?? "plaintext")
-        : ctx.secretInputMode,
-    config: ctx.config,
     env: ctx.env,
     expectedProviders: [PIXVERSE_PROVIDER_ID],
     provider: PIXVERSE_PROVIDER_ID,
     envLabel: "PIXVERSE_API_KEY",
     promptMessage: "Enter PixVerse API key",
-    normalize: normalizeApiKeyInput,
-    validate: validateApiKeyInput,
-    prompter: ctx.prompter,
-    setCredential: async (apiKey, mode) => {
-      capturedSecretInput = apiKey;
-      capturedCredential = true;
-      capturedMode = mode;
-    },
+    missingInputMessage: "Missing PixVerse API key.",
   });
-
-  if (!capturedCredential) {
-    throw new Error("Missing PixVerse API key.");
-  }
 
   const region = await promptForPixVerseRegion(ctx);
   return {
@@ -179,11 +146,11 @@ async function runPixVerseApiKeyAuth(ctx: ProviderAuthContext): Promise<PixVerse
         profileId: PROFILE_ID,
         credential: buildApiKeyCredential(
           PIXVERSE_PROVIDER_ID,
-          capturedSecretInput ?? "",
+          input,
           undefined,
-          capturedMode
+          mode
             ? {
-                secretInputMode: capturedMode,
+                secretInputMode: mode,
                 config: ctx.config,
               }
             : undefined,
@@ -206,19 +173,13 @@ async function runPixVerseApiKeyAuthNonInteractive(ctx: ProviderAuthMethodNonInt
     return null;
   }
 
-  if (resolved.source !== "profile") {
-    const credential = ctx.toApiKeyCredential({
+  if (
+    !(await persistProviderApiKey(ctx, PROFILE_ID, {
       provider: PIXVERSE_PROVIDER_ID,
       resolved,
-    });
-    if (!credential) {
-      return null;
-    }
-    await upsertAuthProfileWithLockOrThrow({
-      profileId: PROFILE_ID,
-      credential,
-      agentDir: ctx.agentDir,
-    });
+    }))
+  ) {
+    return null;
   }
 
   const next = applyAuthProfileConfig(ctx.config, {

@@ -1,4 +1,5 @@
 // Msteams tests cover setup surface plugin behavior.
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/setup";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMSTeamsSetupWizardBase, msteamsSetupAdapter } from "./setup-core.js";
@@ -46,7 +47,7 @@ describe("msteams setup surface", () => {
     normalizeSecretInputString.mockClear();
     hasConfiguredMSTeamsCredentials.mockReset();
     resolveMSTeamsCredentials.mockReset();
-    saveDelegatedTokens.mockReset();
+    saveDelegatedTokens.mockReset().mockResolvedValue(undefined);
     loginMSTeamsDelegated.mockReset();
   });
 
@@ -121,16 +122,21 @@ describe("msteams setup surface", () => {
     vi.stubEnv("MSTEAMS_TENANT_ID", "env-tenant");
     resolveMSTeamsCredentials.mockReturnValue(null);
     hasConfiguredMSTeamsCredentials.mockReturnValue(false);
+    const confirm = vi.fn(async () => true);
 
     const result = await msteamsSetupWizard.finalize?.({
       cfg: { channels: { msteams: { existing: true } } },
       prompter: {
-        confirm: vi.fn(async () => true),
+        confirm,
         note: vi.fn(async () => {}),
         text: vi.fn(),
       },
     } as never);
 
+    expect(confirm).toHaveBeenCalledWith({
+      message: "MSTEAMS_APP_ID + MSTEAMS_APP_PASSWORD + MSTEAMS_TENANT_ID detected. Use env vars?",
+      initialValue: true,
+    });
     expect(result).toEqual({
       accountId: "default",
       cfg: {
@@ -143,6 +149,83 @@ describe("msteams setup surface", () => {
       },
     });
   });
+
+  it.each([
+    {
+      label: "federated managed-identity env",
+      env: {
+        MSTEAMS_AUTH_TYPE: "federated",
+        MSTEAMS_APP_ID: "env-app",
+        MSTEAMS_TENANT_ID: "env-tenant",
+        MSTEAMS_USE_MANAGED_IDENTITY: "true",
+      },
+      credentials: {
+        type: "federated",
+        appId: "env-app",
+        tenantId: "env-tenant",
+        useManagedIdentity: true,
+      },
+      msteams: {},
+    },
+    {
+      label: "federated certificate env",
+      env: {
+        MSTEAMS_AUTH_TYPE: "federated",
+        MSTEAMS_APP_ID: "env-app",
+        MSTEAMS_TENANT_ID: "env-tenant",
+        MSTEAMS_CERTIFICATE_PATH: "/tmp/msteams-certificate.pem",
+      },
+      credentials: {
+        type: "federated",
+        appId: "env-app",
+        tenantId: "env-tenant",
+        certificatePath: "/tmp/msteams-certificate.pem",
+      },
+      msteams: {},
+    },
+    {
+      label: "persisted secret",
+      env: {},
+      credentials: {
+        type: "secret",
+        appId: "stored-app",
+        appPassword: "stored-password",
+        tenantId: "stored-tenant",
+      },
+      msteams: {
+        enabled: false,
+        appId: "stored-app",
+        appPassword: "stored-password",
+        tenantId: "stored-tenant",
+      },
+    },
+  ])(
+    "finalize enables accepted $label credentials without rewriting them",
+    async ({ env, credentials, msteams }) => {
+      for (const [name, value] of Object.entries(env)) {
+        vi.stubEnv(name, value);
+      }
+      resolveMSTeamsCredentials.mockReturnValue(credentials);
+      hasConfiguredMSTeamsCredentials.mockReturnValue(true);
+      const confirm = vi.fn(async () => true);
+      const text = vi.fn();
+
+      const result = await msteamsSetupWizard.finalize?.({
+        cfg: { channels: { msteams } },
+        prompter: { confirm, note: vi.fn(async () => {}), text },
+      } as never);
+
+      expect(confirm).toHaveBeenCalledWith({
+        message: "MS Teams credentials already configured. Keep them?",
+        initialValue: true,
+      });
+      expect(text).not.toHaveBeenCalled();
+      expect(result).toEqual({
+        accountId: DEFAULT_ACCOUNT_ID,
+        cfg: { channels: { msteams: { ...msteams, enabled: true } } },
+      });
+    },
+  );
 
   it("finalize prompts for manual credentials when env/config creds are unavailable", async () => {
     resolveMSTeamsCredentials.mockReturnValue(null);
@@ -207,8 +290,14 @@ describe("msteams setup surface", () => {
       expect(oauthModuleState.loaded).toBe(true);
     });
     const progress = { update: vi.fn(), stop: vi.fn() };
+    const writing = createDeferred<void>();
+    const releaseWrite = createDeferred<void>();
+    saveDelegatedTokens.mockImplementationOnce(async () => {
+      writing.resolve();
+      await releaseWrite.promise;
+    });
 
-    await delegatedMsteamsSetupWizard.finalize?.({
+    const configured = delegatedMsteamsSetupWizard.finalize?.({
       cfg: { channels: { msteams: {} } },
       prompter: {
         confirm: vi.fn().mockResolvedValueOnce(true).mockResolvedValueOnce(true),
@@ -219,6 +308,14 @@ describe("msteams setup surface", () => {
       options: { beforePersistentEffect },
     } as never);
 
+    try {
+      await writing.promise;
+      expect(progress.stop).not.toHaveBeenCalled();
+    } finally {
+      releaseWrite.resolve();
+      await configured;
+    }
+    expect(progress.stop).toHaveBeenCalledWith(expect.any(String));
     expect(beforePersistentEffect).toHaveBeenCalledTimes(2);
     expect(loginMSTeamsDelegated).toHaveBeenCalledTimes(1);
     expect(saveDelegatedTokens).toHaveBeenCalledWith(tokens);

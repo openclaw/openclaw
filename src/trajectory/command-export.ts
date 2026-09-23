@@ -1,6 +1,7 @@
 // Trajectory command export helpers implement CLI export behavior.
 import fsp from "node:fs/promises";
 import path from "node:path";
+import type { SessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.js";
 import { pathExists } from "../infra/fs-safe.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { exportTrajectoryBundle, resolveDefaultTrajectoryExportDir } from "./export.js";
@@ -112,7 +113,8 @@ async function resolveTrajectoryCommandOutputDir(params: {
 export async function exportTrajectoryForCommand(params: {
   outputDir?: string;
   outputPath?: string;
-  sessionFile: string;
+  sessionFile?: string;
+  sessionTarget?: SessionTranscriptRuntimeTarget;
   sessionId: string;
   sessionKey: string;
   workspaceDir: string;
@@ -127,6 +129,7 @@ export async function exportTrajectoryForCommand(params: {
   const bundle = await exportTrajectoryBundle({
     outputDir,
     sessionFile: params.sessionFile,
+    sessionTarget: params.sessionTarget,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     workspaceDir: params.workspaceDir,
@@ -136,11 +139,6 @@ export async function exportTrajectoryForCommand(params: {
     relativePath && !relativePath.startsWith("..") && !path.isAbsolute(relativePath)
       ? relativePath
       : path.basename(bundle.outputDir);
-  const files = ["manifest.json", "events.jsonl", "session-branch.json"];
-  if (bundle.events.some((event) => event.type === "context.compiled")) {
-    files.push("system-prompt.txt", "tools.json");
-  }
-  files.push(...bundle.supplementalFiles);
   return {
     outputDir: bundle.outputDir,
     displayPath,
@@ -148,7 +146,10 @@ export async function exportTrajectoryForCommand(params: {
     eventCount: bundle.manifest.eventCount,
     runtimeEventCount: bundle.manifest.runtimeEventCount,
     transcriptEventCount: bundle.manifest.transcriptEventCount,
-    files,
+    files: [
+      ...bundle.files.filter((file) => !bundle.supplementalFiles.includes(file)),
+      ...bundle.supplementalFiles,
+    ],
   };
 }
 

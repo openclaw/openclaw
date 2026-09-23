@@ -1,4 +1,3 @@
-// Matrix plugin module implements mentions behavior.
 import { decodeHtmlEntities } from "openclaw/plugin-sdk/html-entity-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -36,6 +35,21 @@ function resolveMatrixUserLocalpart(userId: string): string | null {
     return null;
   }
   return trimmed.slice(1, colonIndex).trim() || null;
+}
+
+function hasVisibleNativeMatrixUserMention(text: string | undefined, userId: string): boolean {
+  const localpart = resolveMatrixUserLocalpart(userId);
+  if (!text || !localpart) {
+    return false;
+  }
+
+  // Historical localparts can end in any punctuation, so shorthand must stay
+  // bare; colon plus visible whitespace is safe because localparts forbid colon.
+  const pattern = new RegExp(
+    String.raw`(?:^|\p{White_Space})(?:${escapeRegExp(userId)}(?=$|\p{White_Space}|:\p{White_Space}|[,!?;](?=$|\p{White_Space}))|${escapeRegExp(`@${localpart}`)}(?=$|\p{White_Space}|:\p{White_Space}))`,
+    "u",
+  );
+  return pattern.test(text);
 }
 
 function resolveMatrixMentionPrefixCandidates(params: {
@@ -216,13 +230,14 @@ export function resolveMentions(params: {
         mentionRegexes: params.mentionRegexes,
       })
     : false;
-  // Matrix clients can mention users through m.mentions metadata plus a visible
-  // Matrix URI label in formatted_body. Keep the visible-mention requirement so
-  // hidden metadata-only mentions do not trigger the handler.
+  // Native mentions may use visible plain-text Matrix IDs without HTML. Keep
+  // exact metadata ownership and visibility so forged mentions stay inert.
   const metadataBackedUserMention = Boolean(
     params.userId &&
     mentionedUsers.has(params.userId) &&
-    (mentionedInFormattedBody || textMentioned),
+    (mentionedInFormattedBody ||
+      textMentioned ||
+      hasVisibleNativeMatrixUserMention(params.text, params.userId)),
   );
   const metadataBackedRoomMention = Boolean(mentions?.room) && visibleRoomMention;
   const explicitMention =

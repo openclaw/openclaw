@@ -16,7 +16,7 @@ The model:
 
 ## Prerequisites
 
-- **Podman** in rootless mode
+- **Podman** in rootless mode, with its host init executable (normally `catatonit`) available for the launcher's `--init` flag. On minimal Debian/Ubuntu hosts, install both explicitly: `sudo apt-get install podman catatonit`. For Podman Machine, the helper must be available inside the machine.
 - **OpenClaw CLI** installed on the host
 - **Optional:** `systemd --user` if you want Quadlet-managed auto-start
 - **Optional:** `sudo` only if you want `loginctl enable-linger "$(whoami)"` for boot persistence on a headless host
@@ -90,7 +90,13 @@ The model:
 
 The manual launcher reads only a small allowlist of Podman-related keys from `~/.openclaw/.env` and passes explicit runtime env vars to the container; it does not hand the full env file to Podman.
 
-<a id="podman-and-tailscale"></a>
+## Agent sandbox backend
+
+This page covers running the Gateway itself in a Podman container. Agent sandboxing is separate. Set `agents.defaults.sandbox.backend: "podman"` to select the native Podman CLI directly. The default `"docker"` backend remains Docker-only.
+
+Podman reuses the same `agents.defaults.sandbox.docker.*` container settings as Docker but executes them through the native `podman` CLI. Browser sandboxes remain Docker-only for now.
+
+See [Sandboxing](/gateway/sandboxing#podman-backend) for the config example and image-build command.
 
 ## Podman and Tailscale
 
@@ -137,7 +143,7 @@ The generated Quadlet service keeps a fixed, hardened default shape: `127.0.0.1`
 - **Token file:** `~/.openclaw/.env`
 - **Launch helper:** `./scripts/run-openclaw-podman.sh`
 
-The launch script and Quadlet bind-mount host state into the container: `OPENCLAW_CONFIG_DIR` -> `/home/node/.openclaw`, `OPENCLAW_WORKSPACE_DIR` -> `/home/node/.openclaw/workspace`. By default those are host directories, not anonymous container state, so `openclaw.json`, per-agent `auth-profiles.json`, channel/provider state, sessions, and workspace survive container replacement. Setup also seeds `gateway.controlUi.allowedOrigins` for `127.0.0.1` and `localhost` on the published gateway port so the local dashboard works with the container's non-loopback bind.
+The launch script and Quadlet bind-mount host state into the container: `OPENCLAW_CONFIG_DIR` -> `/home/node/.openclaw`, `OPENCLAW_WORKSPACE_DIR` -> `/home/node/.openclaw/workspace`. By default those are host directories, not anonymous container state, so `openclaw.json`, shared and per-agent SQLite auth stores, channel/provider state, sessions, and workspace survive container replacement. Setup also seeds `gateway.controlUi.allowedOrigins` for `127.0.0.1` and `localhost` on the published gateway port so the local dashboard works with the container's non-loopback bind.
 
 Useful env vars for the manual launcher (persist these in `~/.openclaw/.env`; the launcher reads that file before finalizing container/image defaults):
 
@@ -182,6 +188,14 @@ podman run --rm -it \
 On SELinux hosts, add `,Z` to both bind mounts if Podman blocks access to the
 mounted state.
 
+After restarting the Gateway with the updated image, run the read-only
+deployment preflight through the container-aware host CLI:
+
+```bash
+export OPENCLAW_CONTAINER=openclaw
+openclaw doctor --json
+```
+
 ## Useful commands
 
 - **Container logs:** `podman logs -f openclaw`
@@ -192,6 +206,7 @@ mounted state.
 
 ## Troubleshooting
 
+- **Init executable missing (`lookup init binary` / `container-init binary not found on the host`):** Install `catatonit` on the Podman engine host or repair its configured `init_path`/`helper_binaries_dir` in `containers.conf`, then retry. Installing the helper inside the Gateway or sandbox image does not repair the engine host. Keep `--init` enabled; see [Host init prerequisite](/gateway/sandboxing/podman-backend#host-init-prerequisite).
 - **Permission denied (EACCES) on config or workspace:** The container runs with `--userns=keep-id` and `--user <your uid>:<your gid>` by default. Ensure the host config/workspace paths are owned by your current user.
 - **Gateway start blocked (missing `gateway.mode=local`):** Ensure `~/.openclaw/openclaw.json` exists and sets `gateway.mode="local"`. `scripts/podman/setup.sh` creates this if missing.
 - **Container restarts after an image update:** Run the one-off `openclaw doctor --fix` command in [Upgrading images](#upgrading-images), then start the gateway again.
@@ -203,5 +218,6 @@ mounted state.
 ## Related
 
 - [Docker](/install/docker)
+- [Sandboxing](/gateway/sandboxing#podman-backend)
 - [Gateway background process](/gateway/background-process)
 - [Gateway troubleshooting](/gateway/troubleshooting)
