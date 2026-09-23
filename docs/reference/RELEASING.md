@@ -1467,6 +1467,8 @@ release. Existing approval and provenance checks still apply.
 
 Stable publication requires Full Release Validation with `runReleaseSoak=true` unless the operator supplies a non-empty `stable_soak_waiver` reason; the waiver also accepts advisory (beta-profile) performance evidence for publication and closeout when the product performance child run succeeded. The reason is recorded in postpublish evidence and the release verification tail, and all other evidence checks remain required. For regular stable tags published to `latest`, the waiver also authorizes first-time plugin npm bootstrap with beta-profile validation and is recorded in the attested bootstrap approval. The [fast path](#fast-path-default) supplies the waiver by default; leave the input empty only when soak actually ran:
 
+**Operator lane waiver.** When the release owner decides non-proof lanes must not block a stable, dispatch Full Release Validation with `-f lane_waiver='<reason>'`: failed jobs in the CI, plugin prerelease, release-checks, and performance children become advisory and are recorded in the manifest (`advisoryJobs` with `reason: lane_waiver`), while install-smoke, upgrade-survivor, pack/qualify-npm, `resolve_target`, and every artifact gate stay blocking (a lost `update-first-hop-compat` lane is waivable only behind green upgrade-survivor lanes). Publishing that evidence requires `lane_waiver=<reason>` on `openclaw-release-publish.yml` as acknowledgement; the receipt records `laneWaiver`, `laneWaiverAcknowledgement`, and `waivedJobs` next to `stableSoakWaiver`. Native app and Control UI CI lanes and cross-OS execution lanes are advisory for the npm decision even without a waiver.
+
 ```bash
 gh workflow run openclaw-release-publish.yml \
   --ref "$PUBLISH_REF" \
