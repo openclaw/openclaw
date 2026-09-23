@@ -26,7 +26,10 @@ describe("capability CLI numeric option parsing", () => {
     expect(parse).toThrow(`${label} must be`);
   });
 
-  it.each(["", "  "])("rejects explicit blank --timeout-ms value %j", (raw) => {
-    expect(() => parseOptionalTimeoutMs(raw)).toThrow("Invalid --timeout");
+  it.each(["", "  ", "1000ms"])("rejects invalid --timeout-ms value %j", (raw) => {
+    // A substring match would still pass on a message that names the wrong flag.
+    expect(() => parseOptionalTimeoutMs(raw)).toThrow(
+      "Invalid --timeout-ms. Use a positive millisecond value, e.g. --timeout-ms 30000.",
+    );
   });
 });
