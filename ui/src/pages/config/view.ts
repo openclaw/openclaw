@@ -653,6 +653,7 @@ export function renderConfig(props: ConfigProps) {
                                   )}
                                 </div>`
                               : html`<textarea
+                                  aria-label=${t("configView.rawConfig")}
                                   placeholder=${t("configView.rawConfig")}
                                   .value=${props.raw}
                                   ?disabled=${configBusy || !mutationAllowed}

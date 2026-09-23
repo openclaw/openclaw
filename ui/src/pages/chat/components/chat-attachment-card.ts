@@ -1,4 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
+import { ref } from "lit/directives/ref.js";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
@@ -24,6 +25,7 @@ export type AttachmentCardHeaderOptions = {
   sizeBytes?: number;
   downloadHref?: string;
   downloadPending?: boolean;
+  downloadPendingFocusable?: boolean;
   onDownload?: () => void;
   loading?: boolean;
   expandLabel?: string;
@@ -32,10 +34,16 @@ export type AttachmentCardHeaderOptions = {
   voiceNote?: boolean;
 };
 
-export function renderCompactAttachmentCard(options: AttachmentCardHeaderOptions): TemplateResult {
+export function renderCompactAttachmentCard(
+  options: AttachmentCardHeaderOptions,
+  elementRef?: (element: Element | undefined) => void,
+  onFocus?: () => void,
+): TemplateResult {
   return html`<div
+    ${elementRef ? ref(elementRef) : nothing}
     class="chat-assistant-attachment-card chat-assistant-attachment-card--compact"
     ?data-openable=${Boolean(options.onExpand)}
+    @focusin=${onFocus ?? nothing}
     @click=${(event: MouseEvent) => openAttachmentCardFromClick(event, options.onExpand)}
   >
     ${renderAttachmentCardHeader({ ...options, visualMode: "large-placeholder" })}
@@ -183,6 +191,7 @@ export function renderAttachmentCardHeader(options: AttachmentCardHeaderOptions)
                   class=${`${downloadClass} ${skeleton}`}
                   href=${options.downloadPending ? nothing : options.downloadHref}
                   aria-disabled=${options.downloadPending ? "true" : nothing}
+                  tabindex=${options.downloadPending && options.downloadPendingFocusable ? 0 : nothing}
                   role="link"
                   download=${options.label}
                   target="_blank"

@@ -18,7 +18,6 @@ import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
 } from "../../../utils/message-channel.js";
-import { buildAnnounceIdempotencyKey } from "../../announce-idempotency.js";
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { selectConnectedSettledSubagentWave } from "../registry/subagent-registry-queries.js";
@@ -33,6 +32,7 @@ import type {
   RequesterSettleWakeState,
   SubagentRunRecord,
 } from "../registry/subagent-registry.types.js";
+import { buildRequesterSettleWakeIdentity } from "../registry/subagent-requester-settle-identity.js";
 import { hasSubagentRunEnded } from "../registry/subagent-run-liveness.js";
 import { withRequesterCronAuthority } from "../requester-cron-authority.js";
 import {
@@ -430,14 +430,12 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
     children: completionRows,
     preserveModelRouteNotice: !completionChannel || !isDeliverableMessageChannel(completionChannel),
   });
-  const wakeKeyBase = [
-    `requester-settle:${requesterAgentId ?? "unknown"}:${requesterSessionKey}:${batchRunIds.join(",")}`,
-    selectedState.rearmGeneration === undefined
-      ? undefined
-      : `yield-${selectedState.rearmGeneration}`,
-  ]
-    .filter(Boolean)
-    .join(":");
+  const { batchKey: wakeKeyBase } = buildRequesterSettleWakeIdentity({
+    requesterSessionKey,
+    requesterAgentId,
+    batchRunIds,
+    rearmGeneration: selectedState.rearmGeneration,
+  });
   if (activeRequesterSettleWakeBatches.get(wakeKeyBase)?.() === false) {
     return false;
   }
@@ -498,11 +496,14 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
       params.transitionBatch(settledBatch, state);
     }
 
-    const directIdempotencyKey = buildAnnounceIdempotencyKey(
-      privateRows.length > 0 || attemptIndex === 0
-        ? wakeKeyBase
-        : `${wakeKeyBase}:retry-${attemptIndex}`,
-    );
+    const { runId: directIdempotencyKey } = buildRequesterSettleWakeIdentity({
+      requesterSessionKey,
+      requesterAgentId,
+      batchRunIds,
+      rearmGeneration: selectedState.rearmGeneration,
+      attemptIndex,
+      parentOnly,
+    });
     const requesterSessionId = requesterEntry.sessionId;
     const requesterLifecycleRevision = requesterEntry.lifecycleRevision;
     const isRequesterCurrent = () => {
@@ -540,7 +541,8 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
       return settledBatch.every(
         (entry) =>
           currentRuns.includes(entry) &&
-          entry.requesterSettleWake?.rearmGeneration === currentRearmGeneration,
+          entry.requesterSettleWake !== undefined &&
+          entry.requesterSettleWake.rearmGeneration === currentRearmGeneration,
       );
     };
     const isSourceSessionEffectsAllowed = () =>

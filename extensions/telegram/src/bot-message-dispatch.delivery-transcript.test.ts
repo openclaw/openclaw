@@ -316,13 +316,21 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-transcript", () => {
 
       const acceptedCount = chunks.length - Number(failLastSend);
       expect(finalHistoryWrites).toEqual([2800 + acceptedCount]);
-      expect(sendMessage).toHaveBeenCalledTimes(chunks.length);
-      expect(sendMessage.mock.calls.map(([, text]) => text).join("")).toBe(finalText);
-      for (const call of sendMessage.mock.calls) {
+      const answerSends = sendMessage.mock.calls.slice(0, chunks.length);
+      expect(answerSends.map(([, text]) => text).join("")).toBe(finalText);
+      for (const call of answerSends) {
         expect(call[2]?.reply_parameters).toMatchObject({
           message_id: 9001,
           quote: "quoted slice",
         });
+      }
+      const warningSends = sendMessage.mock.calls.slice(chunks.length);
+      if (failLastSend) {
+        const warningText = warningSends.map(([, text]) => text).join("");
+        expect(warningText).toContain("Telegram");
+        expect(warningText).not.toContain(chunks[0]);
+      } else {
+        expect(warningSends).toEqual([]);
       }
       expect(isChannelPartialDeliveryError(observedError)).toBe(true);
       if (!isChannelPartialDeliveryError(observedError)) {

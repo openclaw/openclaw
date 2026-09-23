@@ -92,6 +92,7 @@ import {
   settleWorkspaceRuns,
   waitForCreatedSessionRun,
 } from "./server.sessions.create.projects.test-support.js";
+import { expectNonAdminWorktreeSetupIsSkipped } from "./server.sessions.create.worktree-scope.test-support.js";
 import { listSessionGroups } from "./session-groups.js";
 import {
   resolveSessionMutationAuthorization,
@@ -3935,46 +3936,10 @@ test.each(["direct path", "symlink escape"])(
 );
 
 test("sessions.create skips the worktree setup script for non-admin callers", async () => {
-  const openClawState = await createOpenClawTestState({
-    layout: "state-only",
-    prefix: "openclaw-worktree-setup-scope-",
+  await expectNonAdminWorktreeSetupIsSkipped({
+    workspaceTemplate: gitWorkspaceTemplate,
+    prepareSessionStore: createSessionStoreDir,
   });
-  const root = openClawState.root;
-  const workspace = await copyGitWorkspace(gitWorkspaceTemplate, root);
-  await fs.mkdir(path.join(workspace, ".openclaw"), { recursive: true });
-  const setupScript = path.join(workspace, ".openclaw", "worktree-setup.sh");
-  await fs.writeFile(setupScript, "#!/bin/sh\ntouch setup-marker.txt\n");
-  await fs.chmod(setupScript, 0o755);
-  closeOpenClawStateDatabaseForTest();
-  testState.agentConfig = { workspace };
-  await createSessionStoreDir();
-  let worktreeId: string | undefined;
-  try {
-    const created = await directSessionReq<{
-      key: string;
-      worktree: { id: string; path: string; branch: string };
-    }>(
-      "sessions.create",
-      { agentId: "main", worktree: true },
-      { client: { connect: { scopes: ["operator.write"] } } as never },
-    );
-    expect(created.ok).toBe(true);
-    const worktree = requireNonEmptyString(created.payload?.worktree.path, "worktree path");
-    worktreeId = created.payload?.worktree.id;
-    // Write-scoped callers get provisioning but never repo-script execution.
-    await expect(fs.stat(path.join(worktree, "setup-marker.txt"))).rejects.toThrow();
-  } finally {
-    if (worktreeId) {
-      await managedWorktrees.remove({
-        id: worktreeId,
-        reason: "test-cleanup",
-        allowSnapshotLoss: true,
-      });
-    }
-    await disposeSessionReadContexts();
-    testState.agentConfig = undefined;
-    await openClawState.cleanup();
-  }
 });
 
 test.each([

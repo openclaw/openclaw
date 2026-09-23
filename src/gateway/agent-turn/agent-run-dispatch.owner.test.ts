@@ -2,8 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { AgentCommandOpts } from "../../agents/command/types.js";
 import type { CreatedDetachedTaskRun } from "../../tasks/detached-task-runtime-contract.js";
-import type { TaskRunOwner } from "../../tasks/task-registry.process-state.js";
 import type { TaskRecord } from "../../tasks/task-registry.types.js";
+import type { TaskRunOwner } from "../../tasks/task-run-owner.types.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import { setGatewayDedupeEntries } from "./agent-dedupe.js";
 import { dispatchAgentRunFromGateway } from "./agent-run-dispatch.js";
@@ -80,6 +80,15 @@ function taskReceipt(
 ): CreatedDetachedTaskRun {
   return {
     task,
+    async bindRunOwner(cancel, assertCurrent) {
+      assertCurrent();
+      const release = mocks.bindTaskRunOwner(task, cancel);
+      const owner = mocks.getTaskRunOwner(task);
+      if (!owner) {
+        throw new Error("Expected the bound fixture task owner");
+      }
+      return { owner, release };
+    },
     settleUnstarted,
     finalizeActive: (terminal, canSettle) => mocks.finalizeActive(task, terminal, canSettle),
   };

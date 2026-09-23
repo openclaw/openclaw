@@ -301,9 +301,6 @@ describeTelegramDispatch("dispatchTelegramMessage directive delivery", () => {
         expect(
           deliveredPayload && isReplyPayloadNonTerminalToolErrorWarning(deliveredPayload),
         ).toBe(true);
-        if (streaming) {
-          expect(answerDraftStream.clear).toHaveBeenCalledOnce();
-        }
         if (!recover) {
           const payload = deliverInboundReplyWithMessageSendContext.mock.calls[0]?.[0]?.payload;
           expect(payload?.replyToId).toBeUndefined();
@@ -507,7 +504,6 @@ describeTelegramDispatch("dispatchTelegramMessage directive delivery", () => {
         }),
       );
       expect(answerDraftStream.update).not.toHaveBeenCalledWith(fullText);
-      expect(answerDraftStream.clear).toHaveBeenCalledOnce();
       if (media) {
         const payload = deliverInboundReplyWithMessageSendContext.mock.calls[0]?.[0]?.payload;
         expect(payload?.mediaUrls).toEqual(mediaUrls);

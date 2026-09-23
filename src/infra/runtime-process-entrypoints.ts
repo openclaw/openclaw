@@ -174,6 +174,11 @@ export const runtimeProcessEntrypoints = {
     sourceWorkerName: "../agents/sessions/session-manager-metadata.worker",
     distWorkerPath: "agents/sessions/session-manager-metadata.worker.js",
   },
+  sessionTranscriptReports: {
+    currentModuleUrl,
+    sourceWorkerName: "../config/sessions/session-accessor.sqlite-transcript-reports.worker",
+    distWorkerPath: "config/sessions/session-accessor.sqlite-transcript-reports.worker.js",
+  },
   sessionTranscriptReconcile: {
     currentModuleUrl,
     sourceWorkerName: "../config/sessions/session-transcript-reconcile.worker",

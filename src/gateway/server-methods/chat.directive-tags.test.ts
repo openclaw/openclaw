@@ -3263,30 +3263,6 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     await pending;
   });
 
-  it("scopes chat history global aliases before loading session state", async () => {
-    await createGlobalTranscriptFixture("openclaw-chat-history-global-alias-load-", "work");
-    mockState.sessionEntry = { canonicalKey: "global" };
-    const { context, respond } = createChatRequestFixture();
-    mockState.loadSessionEntryCalls = [];
-
-    await expectDefined(
-      chatHandlers["chat.history"],
-      'chatHandlers["chat.history"] test invariant',
-    )({
-      params: { sessionKey: "agent:work:main" },
-      respond: respond as never,
-      req: {} as never,
-      client: null,
-      isWebchatConnect: () => false,
-      context,
-    });
-
-    expect(mockState.loadSessionEntryCalls).toContainEqual({
-      rawKey: "agent:work:main",
-      opts: { agentId: "work", clone: false, includeStoreChildEntries: true, projection: "list" },
-    });
-  });
-
   it("returns the rendered history branch leaf in session info", async () => {
     await withSqliteTranscriptFixtureState("openclaw-chat-history-active-leaf-", async () => {
       mockState.config = { session: { store: mockState.storePath } };

@@ -322,15 +322,30 @@ export async function handleChatAbortRequestWithLifecycle(
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized"));
         return;
       }
-      assertCurrent();
-      const aborted = writePreRegisteredAgentAbort({
-        context,
-        runId,
-        sessionKey: pendingAgentMatch.sessionKey,
-        payload: pendingAgentPayload,
-        expectedPayload: pendingAgentPayload,
-        stopReason: "rpc",
+      let aborted = false;
+      const descendants = await abortControlledSubagents({
+        cfg: abortCfg,
+        sessionKey: pendingAgentMatch.sessionKey ?? canonicalAbortSessionKey,
+        agentId: abortAgentId,
+        requesterTurnRunId: runId,
+        assertCurrent,
+        beforeKill: () => {
+          assertCurrent();
+          return (aborted = writePreRegisteredAgentAbort({
+            context,
+            runId,
+            sessionKey: pendingAgentMatch.sessionKey,
+            payload: pendingAgentPayload,
+            expectedPayload: pendingAgentPayload,
+            stopReason: "rpc",
+          }));
+        },
       });
+      const error = descendantAbortError(descendants, "Parent run");
+      if (error) {
+        respond(false, undefined, error);
+        return;
+      }
       respondWithWorkerRuns(aborted ? [runId] : []);
       return;
     }

@@ -71,19 +71,38 @@ describe("Node Code Mode executor", () => {
     });
   });
 
-  it.each(["while (true) {}", "await null; while (true) {}"])(
-    "interrupts guest execution under the same timeout: %s",
-    async (source) => {
-      expect(await execute(source, { executionTimeoutMs: 30 })).toMatchObject({
-        status: "failed",
-        code: "timeout",
-      });
-      expect(await execute("return 42")).toMatchObject({
-        status: "completed",
-        value: { kind: "complete", json: "42" },
-      });
-    },
-  );
+  it.each([
+    "while (true) {}",
+    "await null; while (true) {}",
+    'Object.prototype.toJSON = () => { throw new Error("inherited hook"); }; text("safe"); while (true) {}',
+  ])("interrupts guest execution under the same timeout: %s", async (source) => {
+    const started = performance.now();
+    expect(
+      await execute('text("before"); json({ n: 1 }); console.log("diagnostic"); ' + source, {
+        executionTimeoutMs: 30,
+      }),
+    ).toMatchObject({
+      status: "failed",
+      code: "timeout",
+      error: "code mode timeout exceeded",
+      failurePhase: "guest",
+      output: {
+        count: source.includes("inherited hook") ? 4 : 3,
+        source: {
+          kind: "complete",
+          json:
+            '[{"type":"text","text":"before"},{"type":"json","value":{"n":1}},{"type":"text","text":"diagnostic"}' +
+            (source.includes("inherited hook") ? ',{"type":"text","text":"safe"}]' : "]"),
+        },
+      },
+    });
+    // Includes cold Worker startup, but must not spend the 5 s wall budget.
+    expect(performance.now() - started).toBeLessThan(2_000);
+    expect(await execute("return 42")).toMatchObject({
+      status: "completed",
+      value: { kind: "complete", json: "42" },
+    });
+  });
 
   it("creates fresh globals for a reused worker and preserves pure encoding APIs", async () => {
     expect(
@@ -119,6 +138,63 @@ describe("Node Code Mode executor", () => {
       },
     });
   });
+
+  it.each(["resume", "inline"] as const)(
+    "interrupts loops after %s without replaying delivered output",
+    async (mode) => {
+      const input: CodeModeExecutorStartInput = {
+        kind: "exec",
+        source: 'text("before"); await yield_control(); text("after"); while (true) {}',
+        config,
+        catalog: [],
+        namespaces: [],
+      };
+      const reply = (id: string) => ({ id, ok: true, json: "null" });
+      let result = await nodeCodeModeExecutor.execute(input, {
+        timeoutMs: 7_000,
+        ...(mode === "inline"
+          ? {
+              inlineHost: {
+                onBoundary: async (boundary) => {
+                  expect(boundary.output.source).toEqual({
+                    kind: "complete",
+                    json: '[{"type":"text","text":"before"}]',
+                  });
+                  return {
+                    kind: "continue",
+                    timeoutMs: 30,
+                    pendingRequests: [],
+                    settledRequests: boundary.pendingRequests.map(({ id }) => reply(id)),
+                  };
+                },
+              },
+            }
+          : {}),
+      });
+      if (mode === "resume") {
+        if (result.status !== "waiting") {
+          throw new Error(JSON.stringify(result));
+        }
+        continuations.add(result.continuation);
+        result = await result.continuation.resume(
+          {
+            kind: "resume",
+            config: { ...config, timeoutMs: 30 },
+            settledRequests: result.pendingRequests.map(({ id }) => reply(id)),
+          },
+          { timeoutMs: 7_000 },
+        );
+      }
+      expect(result).toMatchObject({
+        status: "failed",
+        code: "timeout",
+        output: {
+          count: 1,
+          source: { kind: "complete", json: '[{"type":"text","text":"after"}]' },
+        },
+      });
+    },
+  );
 
   it("joins worker cancellation while the host owns a pending bridge exchange", async () => {
     const controller = new AbortController();

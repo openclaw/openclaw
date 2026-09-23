@@ -22,7 +22,10 @@ globalThis.fetch = async (url, options = {}) => {
     }
   };
   const key = `${method} ${parsed.pathname}`;
-  const route = fixture.routes[key];
+  const queryKey = `${key}${parsed.search}`;
+  const route = Object.hasOwn(fixture.routes, queryKey)
+    ? fixture.routes[queryKey]
+    : fixture.routes[key];
   if (route === undefined) {
     if (method !== "GET" && /\/(?:statuses\/|issues\/)/u.test(parsed.pathname)) {
       recordStatus();

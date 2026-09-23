@@ -302,6 +302,9 @@ const rootEntries = [
   "scripts/e2e/*.{js,mjs,ts}!",
   "scripts/e2e/lib/**/{assertions,probe,mock-server}.{js,mjs,ts}!",
   "src/agents/prepared-model-catalog.worker.ts!",
+  // Documented core-only Decision Labs foundation entry. No automatic consumers
+  // ship with the gate; remove this root when the first consumer imports it.
+  "src/agents/decision-assistance.ts!",
   // Split runtime loaded through a path assembled in subagent-registry.ts.
   "src/agents/subagents/registry/subagent-registry.runtime.ts!",
   // Loaded lazily by the sweeper only when a receipt-bearing or interrupted row is found.
@@ -901,7 +904,7 @@ const config = {
     [`${BUNDLED_PLUGIN_ROOT_DIR}/memory-core`]: bundledPluginWorkspace([
       // The subprocess boundary tests spawn these fixtures by computed URL.
       "src/memory/fixtures/manager-search-knn-child.fixture.mjs!",
-      "src/memory/fixtures/manager-search-knn-parent.fixture.mjs!",
+      "src/memory/fixtures/manager-search-knn-parent.test-support.ts!",
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/memory-lancedb`]: {
       ...bundledPluginWorkspace(),

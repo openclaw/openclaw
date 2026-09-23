@@ -24,6 +24,7 @@ import {
   registerRepairCustodyTests,
 } from "./update-command-lifecycle-repair.test-support.js";
 import {
+  registerPrivateHandoffBindingTests,
   validConfigSnapshot,
   expectLifecycleBoundary,
   finalizationCleanupCases,
@@ -263,6 +264,7 @@ describe("update plugin lifecycle lease boundaries", () => {
     vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => undefined);
   });
 
+  registerPrivateHandoffBindingTests();
   registerAbandonedRepairHistoryTests();
 
   it.each([false, true])(

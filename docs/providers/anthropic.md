@@ -262,8 +262,9 @@ After setting up either auth route above, select the canonical model ref:
 openclaw models set anthropic/claude-opus-5-5
 ```
 
-The explicit aliases `opus-5.5` and `opus-5-5` select this model. The bare
-`opus` alias continues to select `anthropic/claude-opus-5`.
+The bare `opus` alias and explicit aliases `opus-5.5` / `opus-5-5` select this model.
+Fresh API and Claude CLI setup defaults to Opus 5.5; existing version-pinned
+models and authored aliases remain unchanged.
 
 For Claude CLI authentication, keep the canonical ref and select the CLI runtime:
 
@@ -523,11 +524,9 @@ catalog is used unchanged.
 ## Thinking defaults (Claude Opus 5, Sonnet 5, Mythos 5, Fable 5, 4.8, and 4.6)
 
 Bare family aliases are rolling: `opus` currently resolves to
-`anthropic/claude-opus-5`, while Opus 5.5 requires an explicit versioned
-selection. Upgrading OpenClaw can move a config that says `opus` onto a newer
-model generation. Pin a version to opt
-out — versioned aliases such as `opus-4.8` keep resolving to their own model,
-and configs that already name `claude-opus-4-8` are never rewritten.
+`anthropic/claude-opus-5-5`. Upgrading OpenClaw can move a config that says
+`opus` onto a newer model generation. Pin a version to opt out: `opus-5`,
+`claude-opus-5`, and other explicit versioned selections keep their own model.
 
 `anthropic/claude-opus-5` uses adaptive thinking at `high` effort by default.
 Use `/think off` to disable thinking, or `/think xhigh|max` for the model's
@@ -835,7 +834,7 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
 
     | Property        | Value                 |
     | --------------- | --------------------- |
-    | Default model   | `claude-opus-5`       |
+    | Default model   | `claude-opus-5-5`       |
     | Supported input | Images, PDF documents |
 
     When an image or PDF is attached to a conversation, OpenClaw automatically

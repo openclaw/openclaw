@@ -14,6 +14,7 @@ import {
   executeMcpOAuthWorkerCommand,
 } from "../agents/mcp-oauth-store.worker.js";
 import { importSandboxRegistryRow } from "../agents/sandbox/registry-import.worker.js";
+import { writeSandboxRegistry } from "../agents/sandbox/registry-write.worker.js";
 import { writeSubagentRunValuesInDatabase } from "../agents/subagents/registry/subagent-registry.store.kernel.js";
 import * as worktreeRegistry from "../agents/worktrees/registry-read.kernel.js";
 import { listAuditEventsInDatabase } from "../audit/audit-event-read.kernel.js";
@@ -101,10 +102,7 @@ import {
   resolveRecordedProjectRootInDatabase,
 } from "../projects/project-registry.kernel.js";
 import { purgeExpiredSecretStoreEntriesInDatabase } from "../secrets/store/secret-store-expiry.kernel.js";
-import {
-  pruneSessionStateEventsInDatabase,
-  recordSessionStateEventInDatabase,
-} from "../sessions/session-state-events.kernel.js";
+import { executeSessionStateCommand } from "../sessions/session-state-events.worker.js";
 import { listWatchedSessionUpstreamLinksInDatabase } from "../sessions/session-upstream-links.kernel.js";
 import {
   isSkillUploadCommand,
@@ -411,6 +409,9 @@ export function executeSharedStateCommand(
       }) ?? { state: {}, basis: {} }
     );
   }
+  if (isNodeWorkerJournalCommand(command)) {
+    return executeNodeWorkerJournalCommand(command, context.databasePath, open);
+  }
   if (command.type === "deviceAuth.read" || command.type === "deviceAuth.readOrigin") {
     const read = (db: OpenClawStateDatabase["db"]) =>
       command.type === "deviceAuth.read"
@@ -506,6 +507,9 @@ export function executeSharedStateCommand(
   if (command.type === "sandboxRegistry.insertIfMissing") {
     return importSandboxRegistryRow(command.input, writeOptions);
   }
+  if (command.type === "sandboxRegistry.write") {
+    return writeSandboxRegistry(command.input, writeOptions);
+  }
   if (command.type === "secrets.purge") {
     return purgeExpiredSecretStoreEntriesInDatabase(command.input, writeOptions);
   }
@@ -514,9 +518,6 @@ export function executeSharedStateCommand(
     command.type === "conversationBindings.touch"
   ) {
     return executeCurrentConversationBindingCommand(command, writeOptions);
-  }
-  if (isNodeWorkerJournalCommand(command)) {
-    return executeNodeWorkerJournalCommand(command, writeOptions);
   }
   if (command.type === "sessionGroups.mutate") {
     return mutateSessionGroupCatalogInDatabase(database, command.input, writeOptions.env);
@@ -571,18 +572,8 @@ export function executeSharedStateCommand(
       { operationLabel: "config-machine-state.update" },
     );
   }
-  if (command.type === "sessionState.recordGoalChange") {
-    return runOpenClawStateWriteTransaction(
-      ({ db }) =>
-        recordSessionStateEventInDatabase(db, command.input.event, command.input.now).notices,
-      writeOptions,
-    );
-  }
-  if (command.type === "sessionState.prune") {
-    return runOpenClawStateWriteTransaction(
-      ({ db }) => pruneSessionStateEventsInDatabase(db, command.input.now),
-      writeOptions,
-    );
+  if (command.type === "sessionState.record" || command.type === "sessionState.prune") {
+    return executeSessionStateCommand(command, writeOptions);
   }
   if (command.type === "plugins.catalogSnapshot.write") {
     try {

@@ -10,7 +10,7 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { runWithSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
-import { historyPages } from "../../config/sessions/session-transcript-worker-resources.js";
+import { historyLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
@@ -135,10 +135,10 @@ it.each(["run", "read-resource"] as const)(
       };
       const interceptNext = () => {
         if (kind === "read-resource") {
-          const spy = vi.spyOn(historyPages, "run").mockImplementationOnce((input, options) => {
+          const spy = vi.spyOn(historyLane.pool, "run").mockImplementationOnce((input, options) => {
             spy.mockRestore();
             let pause = false;
-            return historyPages
+            return historyLane.pool
               .run(async () => {
                 const request = typeof input === "function" ? await input() : input;
                 pause = request.kind === "transcript-hydration";

@@ -6,6 +6,7 @@ import type {
 import { serveOwnedWorkerTasks } from "../../infra/worker-task-server.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import type { SessionIdentityEvidenceResult } from "./session-accessor.sqlite-entry-availability.js";
+import { readSessionColdTranscript } from "./session-cold-storage-state.js";
 import type { SessionHistoryWorkerResult } from "./session-history-types.js";
 import {
   encodeSessionTranscriptWorkerError,
@@ -123,6 +124,34 @@ serveOwnedWorkerTasks(
       }
     }
     try {
+      if (request.kind === "session-archive-pruning") {
+        const { readSessionArchivePruningInWorker } =
+          await import("./session-history-archive-pruning.worker.js");
+        return {
+          ok: true,
+          ...(await withHistoryDatabase(request.database, () => ({
+            kind: "session-archive-pruning" as const,
+            result: readSessionArchivePruningInWorker(request),
+          }))),
+        };
+      }
+      if (request.kind === "cold-metadata") {
+        const { withOpenClawAgentDatabaseReadOnly } =
+          await import("../../state/openclaw-agent-db-readonly.js");
+        return {
+          ok: true,
+          ...(await withHistoryDatabase(request.database, () => {
+            const result = withOpenClawAgentDatabaseReadOnly(
+              (database) => readSessionColdTranscript(database.db, request.sessionId),
+              { ...request.database, env: cloneEnvWithPlatformSemantics(request.env) },
+            );
+            return {
+              kind: "cold-metadata" as const,
+              archive: result.found ? result.value : undefined,
+            };
+          })),
+        };
+      }
       if (request.kind === "transcript-search") {
         const { searchSessionTranscriptsReadOnlySync } =
           await import("./session-transcript-search.js");

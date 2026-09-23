@@ -15,7 +15,7 @@ import { delimiter, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { runInNewContext } from "node:vm";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import {
   normalizePublicationIntent,
@@ -31,10 +31,12 @@ import { resolveReleaseContextIdentity } from "../../scripts/lib/release-context
 import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { writePublishablePluginFixture } from "../helpers/publishable-plugin-fixture.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { prepareCopiedSourceModules } from "./copied-source-modules.test-support.js";
+import { preparedScriptWrapperPreload } from "./prepared-script-wrapper.test-support.js";
 
 const temps = useAutoCleanupTempDirTracker(afterEach);
 const templateDirs = useAutoCleanupTempDirTracker(afterAll);
-let toolingTemplate: { loose: string; packed: string } | undefined;
+let toolingTemplate: { loose: string; packed: string };
 const repo = resolve(".");
 const nodeExecutable = realpathSync(requireNodeTool("node"));
 const workflowPath = ".github/workflows/full-release-validation.yml";
@@ -130,6 +132,59 @@ const toolingPaths = [
   "src/shared/global-singleton.ts",
   "src/shared/regexp.ts",
 ];
+const write = (directory: string, path: string, bytes: string | Buffer) => {
+  const file = join(directory, path);
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, bytes);
+};
+const git = (directory: string, ...args: string[]) =>
+  execFileSync(
+    "git",
+    [
+      "--no-lazy-fetch",
+      "-c",
+      "maintenance.auto=false",
+      "-c",
+      "gc.auto=0",
+      "-c",
+      "core.hooksPath=/dev/null",
+      "-c",
+      "commit.gpgsign=false",
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.invalid",
+      ...args,
+    ],
+    { cwd: directory, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+  ).trim();
+const commit = (directory: string) => {
+  git(directory, "add", ".");
+  git(directory, "commit", "-qm", "fixture");
+  return git(directory, "rev-parse", "HEAD");
+};
+beforeAll(async () => {
+  const prepared = templateDirs.make("frv-publication-tooling-template-");
+  git(prepared, "init", "-q", "-b", "main");
+  for (const path of [...toolingPaths, "scripts/lib/release-publish-children.sh"]) {
+    write(prepared, path, readFileSync(join(repo, path)));
+  }
+  for (const directory of [".github/workflows", "scripts/e2e/lib/upgrade-survivor/config-recipe"]) {
+    cpSync(join(repo, directory), join(prepared, directory), { recursive: true });
+  }
+  symlinkSync(join(repo, "node_modules"), join(prepared, "node_modules"), "junction");
+  await prepareCopiedSourceModules(
+    prepared,
+    toolingPaths.filter((file) => /\.[cm]?ts$/u.test(file)),
+  );
+  rmSync(join(prepared, "node_modules"));
+  commit(prepared);
+  const packed = templateDirs.make("frv-publication-packed-tooling-template-");
+  cpSync(prepared, packed, { recursive: true, mode: fsConstants.COPYFILE_FICLONE });
+  git(packed, "repack", "-ad");
+  toolingTemplate = { loose: prepared, packed };
+});
+
 const selection = {
   route: "normal",
   npmDistTag: "latest",
@@ -414,37 +469,6 @@ function fixture(
   for (const directory of [target, temporary]) {
     mkdirSync(directory);
   }
-  const write = (directory: string, path: string, bytes: string | Buffer) => {
-    const file = join(directory, path);
-    mkdirSync(dirname(file), { recursive: true });
-    writeFileSync(file, bytes);
-  };
-  const git = (directory: string, ...args: string[]) =>
-    execFileSync(
-      "git",
-      [
-        "--no-lazy-fetch",
-        "-c",
-        "maintenance.auto=false",
-        "-c",
-        "gc.auto=0",
-        "-c",
-        "core.hooksPath=/dev/null",
-        "-c",
-        "commit.gpgsign=false",
-        "-c",
-        "user.name=Test",
-        "-c",
-        "user.email=test@example.invalid",
-        ...args,
-      ],
-      { cwd: directory, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-    ).trim();
-  const commit = (directory: string) => {
-    git(directory, "add", ".");
-    git(directory, "commit", "-qm", "fixture");
-    return git(directory, "rev-parse", "HEAD");
-  };
   git(target, "init", "-q");
   const version = options.version ?? "2026.9.9";
   write(target, "package.json", JSON.stringify({ name: "openclaw", version, type: "module" }));
@@ -525,24 +549,6 @@ function fixture(
     git(target, "commit", "-qm", "non-utf8 fixture");
     targetSha = git(target, "rev-parse", "HEAD");
   }
-  if (!toolingTemplate) {
-    const prepared = templateDirs.make("frv-publication-tooling-template-");
-    git(prepared, "init", "-q", "-b", "main");
-    for (const path of [...toolingPaths, "scripts/lib/release-publish-children.sh"]) {
-      write(prepared, path, readFileSync(join(repo, path)));
-    }
-    for (const directory of [
-      ".github/workflows",
-      "scripts/e2e/lib/upgrade-survivor/config-recipe",
-    ]) {
-      cpSync(join(repo, directory), join(prepared, directory), { recursive: true });
-    }
-    commit(prepared);
-    const packed = templateDirs.make("frv-publication-packed-tooling-template-");
-    cpSync(prepared, packed, { recursive: true, mode: fsConstants.COPYFILE_FICLONE });
-    git(packed, "repack", "-ad");
-    toolingTemplate = { loose: prepared, packed };
-  }
   // These faults delete individual loose blobs; other cases copy compact packed history.
   const template = ["tooling-object", "platform-helper-object", "worker-object"].includes(
     options.fault ?? "",
@@ -558,6 +564,18 @@ function fixture(
       tooling,
       "scripts/tsx.mjs",
       readFileSync(join(tooling, "scripts/tsx.mjs"), "utf8") +
+        "\n" +
+        preparedScriptWrapperPreload(
+          toolingPaths
+            .filter((source) => /\.[cm]?ts$/u.test(source))
+            .map(
+              (source) =>
+                [
+                  pathToFileURL(join(tooling, source)),
+                  pathToFileURL(join(tooling, source.replace(/\.[cm]?ts$/u, ".js"))),
+                ] as const,
+            ),
+        ) +
         `
 const { appendFileSync } = await import("node:fs");
 const { basename } = await import("node:path");
@@ -1273,6 +1291,7 @@ globalThis.Date = class extends OriginalDate {
                   candidate_required: steps.candidate_request!.outputs.required,
                 },
               },
+              plugin_compatibility_readiness: { result: "success" },
               evidence_reuse: { result: "skipped", outputs: { reuse: "false" } },
             },
           });
@@ -1907,6 +1926,7 @@ describe("FRV publication source admission", () => {
                   id === "docker_runtime_assets_preflight" ? "2026.9.9-alpha.1" : "2026.9.9",
               },
             },
+            plugin_compatibility_readiness: { result: "success" },
             evidence_reuse: { result: "skipped", outputs: { reuse: "false" } },
           },
         }),
@@ -2266,6 +2286,7 @@ describe("FRV publication source admission", () => {
                     id === "docker_runtime_assets_preflight" ? "2026.9.9-alpha.1" : "2026.9.9",
                 },
               },
+              plugin_compatibility_readiness: { result: "success" },
               evidence_reuse: { result: "skipped", outputs: { reuse: "false" } },
             },
           }),

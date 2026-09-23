@@ -28,8 +28,9 @@ import type { AgentFilesViewState } from "./files.ts";
 import { renderAgentFiles } from "./panels-files.ts";
 import type { AgentIdentityDraft, IdentityAvatarLoader } from "./panels-overview.ts";
 import { renderAgentOverview } from "./panels-overview.ts";
+import { renderAgentSkills } from "./panels-skills.ts";
 import { renderAgentChannels, renderAgentCron } from "./panels-status-files.ts";
-import { renderAgentTools, renderAgentSkills } from "./panels-tools-skills.ts";
+import { renderAgentTools } from "./panels-tools-skills.ts";
 import type { AgentSkillsState } from "./skills.ts";
 
 type AgentsProps = {

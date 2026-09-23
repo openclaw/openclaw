@@ -13,6 +13,7 @@ import {
   buildVitestRunPlans,
   CHANNEL_CONTRACT_CONFIG_PATTERNS,
   CONTRACTS_PLUGIN_VITEST_CONFIG,
+  E2E_VITEST_CONFIG,
   findUnmatchedExplicitTestTargets,
   hasImportGraphConsumers,
   hasImportGraphImpactOnTargets,
@@ -53,9 +54,6 @@ import {
   type VitestPretestBuildMode,
 } from "./vitest-build-prerequisites.mts";
 import { VITEST_PRETEST_BUILD_SECONDS } from "./vitest-shard-metadata.mts";
-
-// The trusted CI harness loads this export from the selected target revision.
-export { resolveChangedDockerSeedLanes } from "./ci-docker-seed-plan.mts";
 
 type ChangedNodeTestShard = {
   checkName: string;
@@ -781,50 +779,58 @@ export function createChangedNodeTestShards(
     )
       ? regularPaths.filter((file) => isControlUiSourcePath(file) && !documentationPaths.has(file))
       : [];
-  const uiConsumerPlans = uiPaths.length
-    ? resolveControlUiTestConsumers(uiPaths, cwd).flatMap((target) =>
-        buildVitestRunPlans([target], cwd),
-      )
-    : [];
-  const uiShards = uiPaths.length
+  const uiCanonicalShards = uiPaths.length
     ? createNodeTestShardBundles({
         changedPaths,
         includeReleaseOnlyPluginShards: false,
-        // Explicit UI consumers retain their complete canonical host-contract rows.
         includeReleaseOnlyToolingShards: true,
         includeReleaseOnlyRuntimeTests: options.includeReleaseOnlyRuntimeTests,
         compactMode: "pull-request",
         runnerBackend: options.runnerBackend,
       })
-        .filter((shard) =>
-          shard.groups?.some(
-            (group) =>
-              group.configs.some((config) => UI_NODE_TEST_CONFIGS.has(config)) ||
-              uiConsumerPlans.some(
-                (plan) =>
-                  group.configs.includes(plan.config) &&
-                  plan.includePatterns?.some(
-                    (target) =>
-                      !group.includePatterns ||
-                      group.includePatterns.some((pattern) => path.matchesGlob(target, pattern)),
-                  ),
-              ),
-          ),
-        )
-        .map((shard) =>
+    : [];
+  const uiConsumerPlans = (uiPaths.length ? resolveControlUiTestConsumers(uiPaths, cwd) : []).map(
+    (target) => ({ target, plans: buildVitestRunPlans([target], cwd) }),
+  );
+  if (
+    uiConsumerPlans.some(({ plans }) => plans.length === 0) ||
+    findUnmatchedExplicitTestTargets(
+      uiConsumerPlans.map(({ target }) => target),
+      cwd,
+    ).length > 0
+  ) {
+    return fallback("unresolved UI host consumer");
+  }
+  // General E2E consumers retain their separate owners outside the Node matrix.
+  const uiConsumers = new Set(
+    uiConsumerPlans
+      .filter(({ plans }) => !plans.every((plan) => plan.config === E2E_VITEST_CONFIG))
+      .map(({ target }) => target),
+  );
+  const uiShards = uiCanonicalShards.flatMap((shard) => {
+    const groups = shard.groups.filter((group) =>
+      group.configs.some((config) => UI_NODE_TEST_CONFIGS.has(config)),
+    );
+    return groups.length
+      ? [
           Object.assign({}, shard, {
+            groups,
             configs: [],
             checkName: `checks-node-changed-ui-${shard.shardName}`,
             shardName: `changed-ui-${shard.shardName}`,
           }),
-        )
-    : [];
+        ]
+      : [];
+  });
   const resolvedTargetPlans = resolvePreciseChangedTargets(
     regularPaths.filter((file) => !uiPaths.includes(file)),
     cwd,
     documentationPaths,
     [
       ...[...policyTargetsByPath.values()].flat(),
+      // Host consumers use the same exact-file owner as other precise targets;
+      // a packed tooling neighbor is not part of the UI area contract.
+      ...uiConsumers,
       // Plugin changes normally select only extension suites. This host-owned
       // proof also exercises the real Copilot entrypoint and manifest discovery.
       ...(livePaths.some((changedPath) => changedPath.startsWith("extensions/copilot/"))
@@ -838,7 +844,8 @@ export function createChangedNodeTestShards(
   }
   const targetPlans = resolvedTargetPlans.filter(
     ({ target, plans }) =>
-      (options.includeReleaseOnlyToolingShards !== false ||
+      (uiConsumers.has(target) ||
+        options.includeReleaseOnlyToolingShards !== false ||
         (!isReleaseOnlyToolingTestFile(target) &&
           !plans.every((plan) => RELEASE_ONLY_TOOLING_CONFIGS.has(plan.config)))) &&
       !plans.every(({ config }) =>

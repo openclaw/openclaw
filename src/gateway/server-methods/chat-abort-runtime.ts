@@ -5,7 +5,10 @@ import {
   type ErrorShape,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { killSubagentRunAdmin } from "../../agents/subagents/registry/subagent-control-kill.js";
-import { ensureSubagentControllerOwnsRun } from "../../agents/subagents/registry/subagent-control-scope.js";
+import {
+  ensureSubagentControllerOwnsRun,
+  listControlledSubagentRunsForTurn,
+} from "../../agents/subagents/registry/subagent-control-scope.js";
 import {
   killAllControlledSubagentRuns,
   resolveSubagentController,
@@ -13,7 +16,6 @@ import {
 import {
   getLatestLiveSubagentRunByChildSessionKey,
   isSubagentRunQueued,
-  listSubagentRunsForController,
 } from "../../agents/subagents/registry/subagent-registry-read.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isAgentEventLifecycleGenerationCurrent } from "../../infra/agent-events.js";
@@ -74,14 +76,7 @@ export async function abortControlledSubagents(params: {
     agentSessionKey: params.sessionKey,
     agentId: params.agentId,
   });
-  const runs = listSubagentRunsForController(
-    controller.controllerSessionKey,
-    controller.controllerAgentId,
-  ).filter(
-    (entry) =>
-      params.requesterTurnRunId === undefined ||
-      entry.requesterTurnRunId === params.requesterTurnRunId,
-  );
+  const runs = listControlledSubagentRunsForTurn(controller, params.requesterTurnRunId);
   if (runs.length === 0) {
     await params.beforeKill?.();
     return undefined;
