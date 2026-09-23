@@ -225,6 +225,13 @@ describe("native completion final-effect authority", () => {
       signal.addEventListener("abort", release, { once: true });
       const executionModule = await import("./agent-turn/agent-run-execution-phase.js");
       const execution = vi.spyOn(executionModule, "startAgentRunExecution");
+      const requestWork = vi.spyOn(context, "trackExecution");
+      const settleRequests = () =>
+        Promise.all(
+          requestWork.mock.results.flatMap((result) =>
+            result.type === "return" ? [result.value] : [],
+          ),
+        );
       const stage = sessionAccessor.stageSessionPendingInput;
       const stageSpy = vi
         .spyOn(sessionAccessor, "stageSessionPendingInput")
@@ -251,6 +258,8 @@ describe("native completion final-effect authority", () => {
         await completion.changeOwner(change);
         release();
         const result = await delivery;
+        // The RPC responds before its request owner releases the unaccepted reservation.
+        await settleRequests();
         if (change === "live") {
           expect(result).toMatchObject({ delivered: true, path: "direct" });
           expect(execution).toHaveBeenCalledOnce();
@@ -274,13 +283,14 @@ describe("native completion final-effect authority", () => {
           expect(agentCommandMock).not.toHaveBeenCalled();
           expect(listSessionPendingInputs(completion.sessionScope).total).toBe(0);
           expect(sessionAccessor.loadTranscriptEventsSync(completion.sessionScope)).toEqual(before);
-          expect(context.dedupe.get(`agent:${completion.idempotencyKey}`)?.ok).not.toBe(true);
+          expect(context.dedupe.get(`agent:${completion.idempotencyKey}`)).toBeUndefined();
         }
       } finally {
         release();
-        await Promise.allSettled([delivery]);
+        await Promise.allSettled([delivery, settleRequests()]);
         stageSpy.mockRestore();
         execution.mockRestore();
+        requestWork.mockRestore();
         signal.removeEventListener("abort", release);
       }
     },
@@ -302,8 +312,10 @@ describe("native completion final-effect authority", () => {
       const actualRuns = await vi.importActual<typeof embeddedRuns>(
         "../agents/embedded-agent-runner/runs.js",
       );
+      // importActual can share this namespace; capture the function before spyOn replaces it.
+      const isEmbeddedAgentRunActive = actualRuns.isEmbeddedAgentRunActive;
       vi.spyOn(embeddedRuns, "isEmbeddedAgentRunActive").mockImplementation(
-        actualRuns.isEmbeddedAgentRunActive,
+        isEmbeddedAgentRunActive,
       );
       const entered = createDeferred<void>();
       const resume = createDeferred<void>();
