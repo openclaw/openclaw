@@ -183,11 +183,14 @@ describe("registerTelegramNativeCommands", () => {
       skillCommands,
       provider: "telegram",
       includeBundledChannelFallback: false,
-    }).map((command) => ({
-      command: normalizeTelegramCommandName(command.name),
-      description: command.description,
-      isAlias: command.isAlias,
-    }));
+    })
+      .map((command) => ({
+        command: normalizeTelegramCommandName(command.name),
+        description: command.description,
+        isAlias: command.isAlias,
+      }))
+      // /dashboard is yielded to the Telegram Mini App plugin command (#142336).
+      .filter((command) => command.command !== "dashboard");
     expect(registered).toEqual([
       { command: "custom_two", description: "Custom two unchanged" },
       { command: "custom_one", description: "Custom one unchanged" },
@@ -246,7 +249,8 @@ describe("registerTelegramNativeCommands", () => {
       listNativeCommandSpecsForConfig(cfg, {
         provider: "telegram",
         includeBundledChannelFallback: false,
-      }).length;
+      }).length -
+      1; // /dashboard yielded to Mini App plugin (#142336)
     expect(runtimeLog).toHaveBeenCalledWith(
       `Telegram limits bots to 100 commands. ${expectedTotalCommands} configured; registering first 100. Use channels.telegram.commands.native: false to disable, or reduce plugin/skill/custom commands.`,
     );

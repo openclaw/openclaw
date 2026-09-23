@@ -126,11 +126,14 @@ describe("createTelegramBot command menu", () => {
     const native = listNativeCommandSpecsForConfig(config, {
       skillCommands,
       provider: "telegram",
-    }).map((command) => ({
-      command: normalizeTelegramCommandName(command.name),
-      description: command.description,
-      isAlias: command.isAlias === true,
-    }));
+    })
+      .map((command) => ({
+        command: normalizeTelegramCommandName(command.name),
+        description: command.description,
+        isAlias: command.isAlias === true,
+      }))
+      // /dashboard is yielded to the Telegram Mini App plugin command (#142336).
+      .filter((command) => command.command !== "dashboard");
     expect(registered).toStrictEqual([
       { command: "custom_backup", description: "Git backup" },
       { command: "custom_generate", description: "Create an image" },
@@ -186,11 +189,14 @@ describe("createTelegramBot command menu", () => {
     const native = listNativeCommandSpecsForConfig(config, {
       skillCommands,
       provider: "telegram",
-    }).map((command) => ({
-      command: normalizeTelegramCommandName(command.name),
-      description: command.description,
-      isAlias: command.isAlias === true,
-    }));
+    })
+      .map((command) => ({
+        command: normalizeTelegramCommandName(command.name),
+        description: command.description,
+        isAlias: command.isAlias === true,
+      }))
+      // /dashboard is yielded to the Telegram Mini App plugin command (#142336).
+      .filter((command) => command.command !== "dashboard");
     const nativeStatus = native.find((command) => command.command === "status");
     if (!nativeStatus) {
       throw new Error("expected native Telegram status command");
