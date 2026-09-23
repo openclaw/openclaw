@@ -255,7 +255,7 @@ suite.define(() => {
       const items = [
         { itemId: "commentary-item-one", text: "Inspecting the workspace." },
         { itemId: "commentary-item-two", text: "Checking the result." },
-      ];
+      ] as const;
       const events = items.map(({ itemId, text }, index) => ({
         data: { kind: "preamble", itemId, phase: "end", progressText: text },
         runId,
