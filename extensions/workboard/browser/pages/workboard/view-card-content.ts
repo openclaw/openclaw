@@ -117,7 +117,7 @@ function labelOverflowRef(labels: readonly string[]) {
         const chips = [...element.querySelectorAll<HTMLElement>(".workboard-card__label")];
         const overflow = element.querySelector<HTMLElement>(".workboard-card__label-overflow");
         if (!overflow) {
-          return;
+          return undefined;
         }
         for (const chip of chips) {
           chip.hidden = false;
