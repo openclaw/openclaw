@@ -1,11 +1,17 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   readTelegramPrivateProductionDescriptor,
   requestTelegramPrivateAppTurn,
+  resolveTelegramPrivateProductionBot,
 } from "./private-production.runtime.js";
+
+const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
+  fetchWithSsrFGuard: fetchWithSsrFGuardMock,
+}));
 
 const roots: string[] = [];
 
@@ -31,6 +37,7 @@ function writeDescriptor() {
 }
 
 afterEach(() => {
+  fetchWithSsrFGuardMock.mockReset();
   for (const root of roots.splice(0)) {
     fs.rmSync(root, { force: true, recursive: true });
   }
@@ -51,6 +58,36 @@ describe("Telegram private production local-app proof", () => {
         { alias: "second", host: "macbook", userId: "101" },
       ],
     });
+  });
+
+  it("resolves the bot through the guarded network boundary and releases it", async () => {
+    const release = vi.fn();
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(
+        JSON.stringify({
+          ok: true,
+          result: { id: 700000001, username: "qa_bot" },
+        }),
+        { status: 200 },
+      ),
+      release,
+    });
+
+    await expect(
+      resolveTelegramPrivateProductionBot({ TELEGRAM_BOT_TOKEN: "test-token" }),
+    ).resolves.toEqual({
+      id: "700000001",
+      token: "test-token",
+      username: "qa_bot",
+    });
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith({
+      url: "https://api.telegram.org/bottest-token/getMe",
+      init: { method: "POST" },
+      timeoutMs: 30_000,
+      maxRedirects: 0,
+      auditContext: "qa-lab-telegram-private-production-bot-api",
+    });
+    expect(release).toHaveBeenCalledOnce();
   });
 
   it("accepts a native UI acknowledgement without placing raw participant IDs in the handoff", async () => {

@@ -28,7 +28,7 @@ export const telegramQaCliRegistration: LiveTransportQaCliRegistration =
         "Credential role for convex auth: maintainer or ci (default: ci in CI, maintainer otherwise)",
     },
     credentialFileHelp: "Private qualification-mode descriptor (contains no credentials)",
-    description: "Run Telegram QA with a Convex-leased real-user driver",
+    description: "Run Telegram Test Server QA with a Convex-leased user or private production apps",
     listScenariosHelp: "Print available Telegram scenario ids and exit",
     outputDirHelp: "Telegram QA artifact directory",
     profileHelp: "Taxonomy profile for Telegram scenario selection (default: release)",

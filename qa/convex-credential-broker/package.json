@@ -7,8 +7,7 @@
   "scripts": {
     "dashboard": "convex dashboard",
     "deploy": "convex deploy",
-    "dev": "convex dev",
-    "test": "node --import tsx --test convex/*.test.ts"
+    "dev": "convex dev"
   },
   "dependencies": {
     "convex": "1.45.0",

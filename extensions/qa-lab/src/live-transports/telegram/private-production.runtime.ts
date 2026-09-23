@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export type TelegramPrivateAppParticipant = {
@@ -99,15 +100,22 @@ export function readTelegramPrivateProductionDescriptor(
 
 async function botApi(bot: TelegramBotIdentity, method: string) {
   try {
-    const response = await fetch(`https://api.telegram.org/bot${bot.token}/${method}`, {
-      method: "POST",
-      signal: AbortSignal.timeout(30_000),
+    const guarded = await fetchWithSsrFGuard({
+      url: `https://api.telegram.org/bot${bot.token}/${method}`,
+      init: { method: "POST" },
+      timeoutMs: 30_000,
+      maxRedirects: 0,
+      auditContext: "qa-lab-telegram-private-production-bot-api",
     });
-    const value: unknown = await response.json();
-    if (!response.ok || !isRecord(value) || value.ok !== true) {
-      throw new Error("request rejected");
+    try {
+      const value: unknown = await guarded.response.json();
+      if (!guarded.response.ok || !isRecord(value) || value.ok !== true) {
+        throw new Error("request rejected");
+      }
+      return value.result;
+    } finally {
+      await guarded.release();
     }
-    return value.result;
   } catch {
     throw new Error(`Telegram private production Bot API ${method} failed.`);
   }

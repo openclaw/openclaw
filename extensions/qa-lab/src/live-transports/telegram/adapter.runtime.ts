@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { buildQaTarget, parseQaTarget } from "openclaw/plugin-sdk/qa-channel-protocol";
 import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
 import {
   assertQaGatewayCredentialLeaseQuarantine,
@@ -101,6 +100,7 @@ export async function createTelegramQaTransportAdapter(
   context: FactoryContext,
 ): Promise<AdapterDefinition> {
   const options = context.adapterOptions ?? {};
+  const { buildQaTarget, parseQaTarget } = await import("openclaw/plugin-sdk/qa-channel-protocol");
   const privateDescriptor = readTelegramPrivateProductionDescriptor(options.credentialFile);
   const privateProduction = privateDescriptor !== undefined;
   const skillRuntime = privateProduction
