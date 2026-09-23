@@ -132,7 +132,10 @@ it("keeps the selector's Windows state snapshot through a caller environment cha
     const selected = await selection;
     expect(selected?.project).toEqual(project);
     expect(captured?.environment).toEqual({
-      ...originalEnv,
+      HOME: originalEnv.HOME,
+      USERPROFILE: originalEnv.USERPROFILE,
+      NODE_ENV: originalEnv.NODE_ENV,
+      OPENCLAW_TEST_FAST: originalEnv.OPENCLAW_TEST_FAST,
       OPENCLAW_STATE_DIR: root,
       OPENCLAW_SUPERVISOR_MODE: "external",
     });
