@@ -1,5 +1,7 @@
 import type { managedWorktrees } from "../agents/worktrees/service.js";
-import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
+import { createSessionEntryRevisionGuard } from "../config/sessions/session-accessor.sqlite-entry-revision.js";
+import { createSessionTranscriptOwnerPredicate } from "../config/sessions/session-accessor.sqlite-transcript-write-guard.js";
+import { readSessionEntriesFromStoreInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { captureSessionTranscriptTargetBinding } from "../config/sessions/transcript-target-binding.js";
 import { withSessionTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -52,22 +54,10 @@ export function createWorkerWorkspaceRecoveryPreparer(options: {
       ...captureSessionTranscriptTargetBinding({ ...identity, storePath: target.readSource.path }),
       defaultAgentId: target.readSource.agentId,
     };
-    const preparedEntry = loadSessionEntryReadOnly({ ...binding, readConsistency: "latest" });
-    if (
-      preparedEntry?.sessionId !== identity.sessionId ||
-      preparedEntry.lifecycleRevision !== entry.lifecycleRevision
-    ) {
-      throw new WorkerDispatchTargetChangedError("Workspace recovery session generation changed");
-    }
     const retained = retainOpenClawAgentDatabaseReadOnly(target.readSource);
     if (!retained.found) {
       throw new WorkerDispatchTargetChangedError("Workspace recovery session store is unavailable");
     }
-    const transcriptTarget = {
-      ...binding,
-      expectedLifecycleRevision: preparedEntry.lifecycleRevision,
-      expectedWriterRunId: preparedEntry.activeWriterRunId,
-    };
     let released = false;
     const completion = createDeferredCore();
     const controller = new AbortController();
@@ -80,7 +70,7 @@ export function createWorkerWorkspaceRecoveryPreparer(options: {
       unregister();
       retained.claim.release();
     };
-    const assertCurrent = () => {
+    const assertSourceCurrent = () => {
       controller.signal.throwIfAborted();
       assertOwnerCurrent();
       if (
@@ -89,14 +79,6 @@ export function createWorkerWorkspaceRecoveryPreparer(options: {
         !isOpenClawAgentDatabasePathCurrent(retained.database)
       ) {
         throw new WorkerDispatchTargetChangedError("Workspace recovery session source changed");
-      }
-      const current = loadSessionEntryReadOnly({ ...transcriptTarget, readConsistency: "latest" });
-      if (
-        current?.sessionId !== identity.sessionId ||
-        current.lifecycleRevision !== transcriptTarget.expectedLifecycleRevision ||
-        current.activeWriterRunId !== transcriptTarget.expectedWriterRunId
-      ) {
-        throw new WorkerDispatchTargetChangedError("Workspace recovery session generation changed");
       }
     };
     try {
@@ -107,6 +89,38 @@ export function createWorkerWorkspaceRecoveryPreparer(options: {
           controller.abort(new WorkerDispatchTargetChangedError("Workspace recovery was revoked")),
         close: () => completion.promise,
       });
+      const prepared = await readSessionEntriesFromStoreInWorker({
+        agentId: target.readSource.agentId,
+        storePath: target.readSource.path,
+        env: binding.env,
+        sessionKeys: [identity.sessionKey],
+      });
+      assertSourceCurrent();
+      const preparedEntry = prepared.entries.find(
+        (candidate) => candidate.sessionKey === identity.sessionKey,
+      )?.entry;
+      if (
+        preparedEntry?.sessionId !== identity.sessionId ||
+        preparedEntry.lifecycleRevision !== entry.lifecycleRevision
+      ) {
+        throw new WorkerDispatchTargetChangedError("Workspace recovery session generation changed");
+      }
+      const transcriptTarget = {
+        ...binding,
+        expectedLifecycleRevision: preparedEntry.lifecycleRevision,
+        expectedWriterRunId: preparedEntry.activeWriterRunId,
+      };
+      const assertCurrent = createSessionEntryRevisionGuard(
+        retained.database.db,
+        assertSourceCurrent,
+        createSessionTranscriptOwnerPredicate(retained.database, {
+          sessionKey: identity.sessionKey,
+          sessionId: identity.sessionId,
+          lifecycleRevision: preparedEntry.lifecycleRevision,
+          activeWriterRunId: preparedEntry.activeWriterRunId,
+        }),
+      );
+      assertCurrent();
       // A new recovery owns the current target; callbacks cannot select a later route.
       return await withSessionTranscriptWriteAssertion(transcriptTarget, assertCurrent, () =>
         run({

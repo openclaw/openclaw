@@ -1,12 +1,14 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   getRuntimeConfig,
   resetConfigRuntimeState,
@@ -24,6 +26,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { enqueueGitRefMutation } from "../infra/git-exec.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { retainOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createGatewayWorkerPlacementRuntime } from "./server-worker-placement-startup.js";
 import {
@@ -51,6 +54,7 @@ import {
 const boundary = vi.hoisted(() => ({
   worktreePath: "",
   onReportQueued: undefined as (() => void) | undefined,
+  onReportCompleted: undefined as (() => void) | undefined,
   onRefMutationRequested: undefined as (() => void) | undefined,
 }));
 
@@ -108,6 +112,10 @@ vi.mock("../config/sessions/session-accessor.sqlite-scope.js", async (importOrig
       // Observe enqueueing without replacing the real writer or supplying its authority.
       if (operation === "session.transcript.report") {
         boundary.onReportQueued?.();
+        return pending.then((result) => {
+          boundary.onReportCompleted?.();
+          return result;
+        });
       }
       return pending;
     },
@@ -160,6 +168,7 @@ async function withRecovery(
       await verify(fixture);
     } finally {
       boundary.onReportQueued = undefined;
+      boundary.onReportCompleted = undefined;
       boundary.onRefMutationRequested = undefined;
       await fixture.environments.stop();
       resetConfigRuntimeState();
@@ -309,6 +318,7 @@ describe("registered worker workspace recovery target binding", () => {
 
   afterEach(() => {
     boundary.onReportQueued = undefined;
+    boundary.onReportCompleted = undefined;
     boundary.onRefMutationRequested = undefined;
     resetConfigRuntimeState();
     vi.restoreAllMocks();
@@ -357,6 +367,103 @@ describe("registered worker workspace recovery target binding", () => {
       expect(destroy).not.toHaveBeenCalled();
     });
   });
+
+  it("keeps repeated mutation guards payload-free while unrelated conversations keep writing", async () => {
+    await withRecovery({}, async ({ a, runtime, placements, onReconcile }) => {
+      const unrelatedKey = "agent:main:unrelated-recovery";
+      await upsertSessionEntryCore(
+        { ...a, sessionKey: unrelatedKey },
+        { sessionId: "unrelated-session", updatedAt: 1 },
+      );
+      await upsertSessionEntryCore(a, { label: "x".repeat(1024 * 1024) });
+      let observed: { stableReads: number; returnedTextBytes: number } | undefined;
+      onReconcile.mockImplementation(async (request) => {
+        if (request.source.kind !== "local" || !request.source.assertCurrent) {
+          throw new Error("Expected a guarded local recovery");
+        }
+        const retained = retainOpenClawAgentDatabaseReadOnly({
+          agentId: a.agentId,
+          path: a.storePath,
+        });
+        if (!retained.found) {
+          throw new Error("Recovery test store is unavailable");
+        }
+        const foreign = new DatabaseSync(retained.database.path);
+        const reads = trackSqliteStatementExecutions(retained.database.db, ["session"], (sql) =>
+          sql.includes('from "session_nodes"') ? "session" : null,
+        );
+        try {
+          for (let index = 0; index < 100; index += 1) {
+            request.source.assertCurrent();
+          }
+          const stableReads = reads.counts.session;
+          const update = foreign.prepare(
+            "UPDATE session_nodes SET display_name = ? WHERE session_key = ?",
+          );
+          for (let index = 0; index < 20; index += 1) {
+            update.run(`unrelated-${index}`, unrelatedKey);
+            request.source.assertCurrent();
+          }
+          observed = { stableReads, returnedTextBytes: reads.textBytes.session };
+        } finally {
+          reads.restore();
+          foreign.close();
+          retained.claim.release();
+        }
+      });
+
+      await runtime.dispatchService.reconcile("startup");
+
+      expect(onReconcile).toHaveBeenCalledOnce();
+      expect(observed).toEqual({ stableReads: 0, returnedTextBytes: 0 });
+      expect(placements.listPendingWorkspaceResults()).toEqual([]);
+    });
+  });
+
+  it.each(["guarded", "unrelated"] as const)(
+    "rechecks a %s conversation write interleaved with its committed report",
+    async (changed) => {
+      await withRecovery({}, async ({ a, runtime, placements, onReconcile }) => {
+        const unrelatedKey = "agent:main:unrelated-report";
+        await upsertSessionEntryCore(
+          { ...a, sessionKey: unrelatedKey },
+          { sessionId: "unrelated-report-session", updatedAt: 1 },
+        );
+        const foreign = new DatabaseSync(a.storePath);
+        const replaceWriter = foreign.prepare(
+          "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.activeWriterRunId', ?) WHERE session_key = ?",
+        );
+        onReconcile.mockImplementation(async () => {
+          boundary.onReportCompleted = () => {
+            replaceWriter.run(
+              "foreign-writer",
+              changed === "guarded" ? a.sessionKey : unrelatedKey,
+            );
+          };
+        });
+        try {
+          await runtime.dispatchService.reconcile("startup");
+
+          expect(
+            (await loadTranscriptEvents(a)).filter(
+              (event) =>
+                isRecord(event) && event.customType === WORKSPACE_CONFLICT_CLEARED_TRANSCRIPT_TYPE,
+            ),
+          ).toHaveLength(1);
+          const pending = placements.listPendingWorkspaceResults();
+          if (changed === "guarded") {
+            expect(pending).toHaveLength(1);
+            expect(pending[0]?.workspaceAcceptedAtMs).not.toBeNull();
+          } else {
+            expect(pending).toEqual([]);
+          }
+        } finally {
+          boundary.onReportCompleted = undefined;
+          foreign.close();
+        }
+      });
+    },
+  );
 
   it("rejects a queued recovery report after durable claim replacement and keeps its recovery debt", async () => {
     await withRecovery(
