@@ -85,36 +85,39 @@ export function registerRequiredReplyCompletionCases({
     },
   );
 
-  it.each([false, true])("settles a required queued answer with explicit silence=%s", async (silent) => {
-    state.runEmbeddedAgentMock
-      .mockResolvedValueOnce({ payloads: [], meta: {} })
-      .mockResolvedValueOnce({
-        payloads: [{ text: "NO_REPLY" }],
-        meta: silent ? { finalAssistantRawText: "NO_REPLY", finalAssistantVisibleText: "" } : {},
+  it.each([false, true])(
+    "settles a required queued answer with explicit silence=%s",
+    async (silent) => {
+      state.runEmbeddedAgentMock
+        .mockResolvedValueOnce({ payloads: [], meta: {} })
+        .mockResolvedValueOnce({
+          payloads: [{ text: "NO_REPLY" }],
+          meta: silent ? { finalAssistantRawText: "NO_REPLY", finalAssistantVisibleText: "" } : {},
+        });
+      const onBlockReply = vi.fn(async (_payload: ReplyPayload) => {});
+      const heartbeat = createMinimalRun({
+        opts: { isHeartbeat: true, onBlockReply },
+        runOverrides: { terminalReplyExpectation: "optional" },
       });
-    const onBlockReply = vi.fn(async (_payload: ReplyPayload) => {});
-    const heartbeat = createMinimalRun({
-      opts: { isHeartbeat: true, onBlockReply },
-      runOverrides: { terminalReplyExpectation: "optional" },
-    });
-    await expect(heartbeat.run()).resolves.toBeUndefined();
-    expect(onBlockReply).not.toHaveBeenCalled();
-
-    const queued = createMinimalRun({
-      currentInboundEventKind: "user_request",
-      runOverrides: { terminalReplyExpectation: "required" },
-    });
-    await requireScheduledFollowupRunner()(queued.followupRun);
-
-    if (silent) {
+      await expect(heartbeat.run()).resolves.toBeUndefined();
       expect(onBlockReply).not.toHaveBeenCalled();
-    } else {
-      expect(onBlockReply).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ isError: true, text: expect.any(String) }),
-      );
-    }
-    expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
-  });
+
+      const queued = createMinimalRun({
+        currentInboundEventKind: "user_request",
+        runOverrides: { terminalReplyExpectation: "required" },
+      });
+      await requireScheduledFollowupRunner()(queued.followupRun);
+
+      if (silent) {
+        expect(onBlockReply).not.toHaveBeenCalled();
+      } else {
+        expect(onBlockReply).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ isError: true, text: expect.any(String) }),
+        );
+      }
+      expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
+    },
+  );
 
   it.each([
     { label: "empty output", payloads: [] },
