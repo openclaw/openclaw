@@ -960,7 +960,7 @@ function runCheckShardFixture(options: {
 const args = process.argv.slice(2);
 appendFileSync(process.env.TYPE_CALLS, [process.env.TYPE_ROW, process.env.OPENCLAW_LOCAL_CHECK ?? "<unset>", "node " + args.join(" ")].join("\\t") + "\\n");
 const stripe = args[args.indexOf("--stripe") + 1];
-if (stripe === process.env.FAIL_TYPE_STRIPE || stripe?.replace(/-\\d+\\//, "/") === process.env.FAIL_TYPE_STRIPE) process.exit(17);
+if (stripe === process.env.FAIL_TYPE_STRIPE) process.exit(17);
 `,
     );
   }
@@ -1043,7 +1043,8 @@ appendFileSync(process.env.TYPE_CALLS, [process.env.TYPE_ROW, process.env.OPENCL
   const rows: { name: string; step: WorkflowStep; matrix: Record<string, unknown> }[] = [];
   const coreJob = workflow.jobs["check-test-types-hosted-core-shard"];
   if (options.types?.compose && evaluateWorkflowExpression(coreJob.if, context)) {
-    for (const stripe of coreJob.strategy.matrix.stripe) {
+    const stripes = evaluateWorkflowExpression(coreJob.strategy.matrix.stripe, context);
+    for (const stripe of stripes) {
       rows.push({
         name: `core-${stripe}`,
         step: coreJob.steps.find(
@@ -2043,13 +2044,13 @@ describe("ci workflow guards", () => {
       const baseline = manifestWithHostedNodeRows(0);
       const originalBase = Number(baseline.outputs.hybrid_hosted_base_rows);
       for (const healthy of ["true", "false", ""]) {
-        for (const baseRows of [32, 33, 34, 35, 36, 40, 41, 45, 46]) {
+        for (const baseRows of [30, 31, 32, 33, 40, 41, 45, 46]) {
           const manifest = manifestWithHostedNodeRows(baseRows - originalBase, {
             scopeEnv: { OPENCLAW_CI_HOSTED_HEALTHY: healthy },
           });
           expect(manifest.status, manifest.output).toBe(0);
-          const admitted = healthy === "true" && baseRows <= 35;
-          const mainAdmitted = admitted && baseRows <= 33;
+          const admitted = healthy === "true" && baseRows <= 32;
+          const mainAdmitted = admitted && baseRows <= 30;
           expect(manifest.outputs.hybrid_hosted_checks).toBe(String(admitted));
           expect(manifest.outputs.hybrid_hosted_main_checks).toBe(String(mainAdmitted));
           const hosted = emittedHostedRows(manifest.outputs);
@@ -2060,12 +2061,12 @@ describe("ci workflow guards", () => {
           });
           expect(Number(manifest.outputs.hybrid_hosted_total_rows)).toBe(hosted.length);
           expect(hosted.length - withoutChecks.length).toBe(
-            (admitted ? 5 : 0) + (mainAdmitted ? 2 : 0),
+            (admitted ? 8 : 0) + (mainAdmitted ? 2 : 0),
           );
           expect(hosted).not.toContain("build-artifacts");
           expect(
             hosted.filter((name) => name === "check-test-types-hosted-core-shard"),
-          ).toHaveLength(admitted ? 2 : 0);
+          ).toHaveLength(admitted ? 5 : 0);
           for (const name of ["check-shard", "check-additional-shard"]) {
             expect(
               hosted.filter((row) => row === name).length -
@@ -2129,6 +2130,9 @@ describe("ci workflow guards", () => {
         emittedHostedRows(manifest.outputs, context).length,
       );
       expect(base.filter((name) => name === "macos-node")).toHaveLength(3);
+      expect(base.filter((name) => name === "check-lint-hosted-extension-shard")).toHaveLength(
+        runnerProfile === "hybrid" ? 3 : 0,
+      );
     });
 
     it.each<{ label: string } & Partial<Parameters<typeof runCiManifestFixture>[0]>>([
@@ -4768,7 +4772,7 @@ describe("ci workflow guards", () => {
       const packages = result.typeCalls.filter((call) => call.command.startsWith("pnpm "));
       expect(packages.map((call) => call.localCheck)).toEqual(packages.map(() => "0"));
       if (striped) {
-        expect(result.rows).toHaveLength(3);
+        expect(result.rows).toHaveLength(frozenTarget ? 3 : 6);
         expect(
           result.rows.map((row) =>
             stripes
@@ -4778,7 +4782,7 @@ describe("ci workflow guards", () => {
         ).toEqual(
           frozenTarget
             ? [["1/5", "2/5"], ["3/5", "4/5"], ["5/5"]]
-            : [["1-2/5"], ["3-4/5"], ["5/5"]],
+            : [["1/5"], ["2/5"], ["3/5"], ["4/5"], ["5/5"], []],
         );
         for (const call of stripes) {
           const args = call.command.split(" ").slice(1);
@@ -4793,24 +4797,37 @@ describe("ci workflow guards", () => {
     },
   );
 
-  it.each(["1/5", "5/5"])("halts only the type row whose first stripe %s fails", (failStripe) => {
-    const result = runCheckShardFixture({
-      task: "test-types",
-      scripts: ["tsgo:scripts", "tsgo:test:root"],
-      frozenTarget: false,
-      types: { compose: true, failStripe },
-    });
-    expect(result.status, result.output).toBe(17);
-    expect(readCiWorkflow().jobs["check-test-types-hosted-core-shard"].strategy["fail-fast"]).toBe(
-      false,
-    );
-    const failed = result.rows.filter((row) => row.status !== 0);
-    expect(failed).toHaveLength(1);
-    expect(result.rows.filter((row) => row.status === 0)).toHaveLength(2);
-    expect(
-      result.typeCalls.filter((call) => call.row === failed[0]!.name).map((call) => call.command),
-    ).toEqual([`node --stripe ${failStripe === "1/5" ? "1-2/5" : failStripe} --concurrency 2`]);
-  });
+  it.each([
+    { failStripe: "1/5", frozenTarget: false },
+    { failStripe: "5/5", frozenTarget: false },
+    { failStripe: "1/5", frozenTarget: true },
+    { failStripe: "5/5", frozenTarget: true },
+  ])(
+    "halts only the type row whose first stripe $failStripe fails (frozen=$frozenTarget)",
+    ({ failStripe, frozenTarget }) => {
+      const result = runCheckShardFixture({
+        task: "test-types",
+        scripts: ["tsgo:scripts", "tsgo:test:root"],
+        frozenTarget,
+        types: { compose: true, failStripe },
+      });
+      expect(result.status, result.output).toBe(17);
+      expect(
+        readCiWorkflow().jobs["check-test-types-hosted-core-shard"].strategy["fail-fast"],
+      ).toBe(false);
+      const failed = result.rows.filter((row) => row.status !== 0);
+      expect(failed).toHaveLength(1);
+      expect(result.rows.filter((row) => row.status === 0)).toHaveLength(frozenTarget ? 2 : 5);
+      expect(
+        result.typeCalls.filter((call) => call.row === failed[0]!.name).map((call) => call.command),
+      ).toEqual([`node --stripe ${failStripe} --concurrency 2`]);
+      expect(result.calls).toEqual(
+        frozenTarget && failStripe === "5/5"
+          ? []
+          : ["tsgo:extensions:test", "tsgo:scripts", "tsgo:test:root"],
+      );
+    },
+  );
 
   it.each(["main", "trunk/release"])(
     "resolves manual diff and cache bases from authenticated %s when anonymous Git is unavailable",
@@ -8223,6 +8240,7 @@ describe("ci workflow guards", () => {
       "checks-node-core-test-nondist-shard",
       "check-shard",
       "check-lint-hosted-core-shard",
+      "check-lint-hosted-extension-shard",
       "check-test-types-hosted-core-shard",
       "check-additional-shard",
       "check-docs",
@@ -8341,13 +8359,31 @@ describe("ci workflow guards", () => {
       context: { eventName: "push", runnerProfile: "github" },
       expected: {
         "check-lint-hosted-core-shard": true,
+        "check-lint-hosted-extension-shard": false,
         "check-test-types-hosted-core-shard": true,
       },
     },
     {
       label: "hybrid PR",
       context: { eventName: "pull_request", runnerProfile: "hybrid" },
-      expected: { "check-lint-hosted-core-shard": true },
+      expected: {
+        "check-lint-hosted-core-shard": true,
+        "check-lint-hosted-extension-shard": true,
+      },
+    },
+    {
+      label: "hybrid release gate keeps its existing lint owner",
+      context: { releaseGate: true, runnerProfile: "hybrid" },
+      expected: { "check-lint-hosted-extension-shard": false },
+    },
+    {
+      label: "hybrid qualification keeps automatic lint stripes",
+      context: {
+        releaseGate: true,
+        runnerProfile: "hybrid",
+        preflightOutputs: { ci_qualification: "true" },
+      },
+      expected: { "check-lint-hosted-extension-shard": true },
     },
     {
       label: "targeted core test PR",
@@ -8360,6 +8396,7 @@ describe("ci workflow guards", () => {
         "check-shard": true,
         "check-additional-shard": true,
         "check-lint-hosted-core-shard": true,
+        "check-lint-hosted-extension-shard": true,
         "check-test-types-hosted-core-shard": false,
       },
     },
@@ -8368,6 +8405,7 @@ describe("ci workflow guards", () => {
       context: { frozenTarget: true },
       expected: {
         "check-lint-hosted-core-shard": false,
+        "check-lint-hosted-extension-shard": false,
         "check-test-types-hosted-core-shard": false,
       },
     },
@@ -8376,6 +8414,7 @@ describe("ci workflow guards", () => {
       context: { frozenTarget: true, hostedRunnerProfileContract: false, runnerProfile: "github" },
       expected: {
         "check-lint-hosted-core-shard": false,
+        "check-lint-hosted-extension-shard": false,
         "check-test-types-hosted-core-shard": false,
       },
     },
@@ -8384,6 +8423,7 @@ describe("ci workflow guards", () => {
       context: { frozenTarget: true, runnerProfile: "hybrid" },
       expected: {
         "check-lint-hosted-core-shard": true,
+        "check-lint-hosted-extension-shard": false,
         "check-test-types-hosted-core-shard": true,
       },
     },
@@ -8394,10 +8434,11 @@ describe("ci workflow guards", () => {
     },
     {
       label: "hosted checks out of scope",
-      context: { runnerProfile: "github", preflightOutputs: { run_check: "false" } },
+      context: { runnerProfile: "hybrid", preflightOutputs: { run_check: "false" } },
       expected: {
         "check-shard": false,
         "check-lint-hosted-core-shard": false,
+        "check-lint-hosted-extension-shard": false,
         "check-test-types-hosted-core-shard": false,
       },
     },
@@ -8428,7 +8469,10 @@ describe("ci workflow guards", () => {
         runnerProfile: "hybrid",
         preflightOutputs: { node_runner_backend: "runson" },
       },
-      expected: { "checks-node-compat": false },
+      expected: {
+        "checks-node-compat": false,
+        "check-lint-hosted-extension-shard": true,
+      },
     },
     {
       label: "manual Node 22 without artifacts",
@@ -8592,7 +8636,7 @@ describe("ci workflow guards", () => {
       const jobResults = renderCiGateEnvironment(
         {
           eventName: selected ? "workflow_dispatch" : "pull_request",
-          runnerProfile: "github",
+          runnerProfile: "hybrid",
           preflightOutputs: Object.fromEntries(
             Object.keys(workflow.jobs.preflight.outputs)
               .filter((key) => key.startsWith("run_"))
