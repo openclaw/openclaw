@@ -8,6 +8,8 @@ import {
 import type { CliDeps } from "../cli/deps.types.js";
 import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../config/types.js";
+import type { DeliveryQueueCompletionRetention } from "../infra/delivery-queue-sqlite.js";
+import type { DurableDeliveryCompletion } from "../infra/outbound/delivery-completion.js";
 import { resolveAgentOutboundIdentity } from "../infra/outbound/identity.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import "./delivery-plan.js";
@@ -97,6 +99,9 @@ export async function sendCronAnnouncePayloadStrict(params: {
   target: CronAnnounceTarget;
   payload: ReplyPayload;
   abortSignal: AbortSignal;
+  deliveryIntentId?: string;
+  deliveryCompletion?: DurableDeliveryCompletion;
+  completionRetention?: DeliveryQueueCompletionRetention;
   onDeliveryAttempt?: (reachedRecipient: boolean) => void;
 }): Promise<CronAnnounceDeliveryOutcome> {
   const delivery = await resolveCronAnnounceDelivery(params);
@@ -120,6 +125,12 @@ export async function sendCronAnnouncePayloadStrict(params: {
     session: delivery.session,
     identity: delivery.identity,
     bestEffort: false,
+    ...(params.deliveryIntentId ? { deliveryIntentId: params.deliveryIntentId } : {}),
+    ...(params.deliveryCompletion ? { deliveryCompletion: params.deliveryCompletion } : {}),
+    ...(params.completionRetention ? { completionRetention: params.completionRetention } : {}),
+    ...(params.deliveryCompletion?.kind === "cron-task"
+      ? { reusePendingDeliveryIntent: true }
+      : {}),
     deps: createOutboundSendDeps(params.deps),
     signal: params.abortSignal,
     onDeliveryResult: () => {

@@ -224,6 +224,72 @@ describe("native run transition selection", () => {
 });
 
 describe("worker row transition selection", () => {
+  it("validates cron delivery identity and never downgrades committed terminal evidence", () => {
+    const { db } = createProjectionTransactionDatabase();
+    const task: TaskRecord = {
+      ...record("cron-task"),
+      runtime: "cron",
+      scopeKind: "system",
+      ownerKey: "",
+      runId: "cron-run",
+      deliveryStatus: "pending",
+      detail: { kind: "cron-run", deliveryStatus: "unknown" },
+    };
+    memory.tasks.set(task.taskId, task);
+    const transition = (state: "queued" | "delivered") =>
+      transitionTaskRecordInDatabase(
+        db,
+        {
+          kind: "cron-delivery-evidence",
+          taskId: task.taskId,
+          now: 200,
+          params: {
+            runId: task.runId!,
+            runtime: "cron",
+            intentId: "cron-command-delivery:v1:cron-task",
+            state,
+          },
+        },
+        (operation) => operation(),
+        { assertCurrent() {}, onCommitted() {} },
+      );
+
+    expect(transition("queued")).toMatchObject({
+      persisted: true,
+      task: { deliveryStatus: "pending", detail: { deliveryEvidence: { state: "queued" } } },
+    });
+    expect(transition("delivered")).toMatchObject({
+      persisted: true,
+      task: {
+        deliveryStatus: "delivered",
+        detail: { delivered: true, deliveryEvidence: { state: "delivered" } },
+      },
+    });
+    expect(transition("queued")).toMatchObject({
+      persisted: false,
+      task: { deliveryStatus: "delivered", detail: { deliveryEvidence: { state: "delivered" } } },
+    });
+    expect(
+      transitionTaskRecordInDatabase(
+        db,
+        {
+          kind: "cron-delivery-evidence",
+          taskId: task.taskId,
+          now: 200,
+          params: {
+            runId: "wrong-run",
+            runtime: "cron",
+            intentId: "cron-command-delivery:v1:cron-task",
+            state: "queued",
+          },
+        },
+        (operation) => operation(),
+        { assertCurrent() {}, onCommitted() {} },
+      ),
+    ).toBeNull();
+    expect(memory.writes).toEqual([task.taskId, task.taskId]);
+  });
+
   it("publishes terminal corrections despite a clock behind the prior observation", () => {
     const { db } = createProjectionTransactionDatabase();
     const task: TaskRecord = {

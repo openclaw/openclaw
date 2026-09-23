@@ -45,7 +45,7 @@ export type TaskRunStateTransitionParams = {
   suppressDelivery?: boolean;
 };
 
-type TaskRunDeliveryTransitionParams = {
+export type TaskRunDeliveryTransitionParams = {
   runId: string;
   runtime?: TaskRuntime;
   sessionKey?: string;
@@ -53,9 +53,24 @@ type TaskRunDeliveryTransitionParams = {
   error?: string;
 };
 
+export type TaskCronDeliveryEvidenceState =
+  | "queued"
+  | "delivered"
+  | "suppressed"
+  | "rejected"
+  | "unknown";
+
+export type TaskCronDeliveryEvidenceTransitionParams = {
+  runId: string;
+  runtime: "cron";
+  intentId: string;
+  state: TaskCronDeliveryEvidenceState;
+};
+
 export type TaskRunTransition =
   | { kind: "state"; params: TaskRunStateTransitionParams }
-  | { kind: "delivery"; params: TaskRunDeliveryTransitionParams };
+  | { kind: "delivery"; params: TaskRunDeliveryTransitionParams }
+  | { kind: "cron-delivery-evidence"; params: TaskCronDeliveryEvidenceTransitionParams };
 
 type TaskRunOwnerTransition = {
   kind: "run-owner";
@@ -90,6 +105,52 @@ export type TaskRecordTransitionReceipt = TaskRecordUpdate & {
   deliver: boolean;
   nextEvent?: TaskEventRecord;
 };
+
+type CronTaskDeliveryEvidence = {
+  intentId: string;
+  state: TaskCronDeliveryEvidenceState;
+};
+
+function readCronTaskDeliveryEvidence(
+  detail: JsonValue | undefined,
+): CronTaskDeliveryEvidence | null {
+  if (!detail || typeof detail !== "object" || Array.isArray(detail)) {
+    return null;
+  }
+  const evidence = detail.deliveryEvidence;
+  if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)) {
+    return null;
+  }
+  const state = evidence.state;
+  if (
+    typeof evidence.intentId !== "string" ||
+    (state !== "queued" &&
+      state !== "delivered" &&
+      state !== "suppressed" &&
+      state !== "rejected" &&
+      state !== "unknown")
+  ) {
+    return null;
+  }
+  return { intentId: evidence.intentId, state };
+}
+
+function deliveryStatusFromCronEvidence(
+  current: TaskRecord,
+  fallback: TaskDeliveryStatus,
+): TaskDeliveryStatus {
+  if (current.runtime !== "cron") {
+    return fallback;
+  }
+  const evidence = readCronTaskDeliveryEvidence(current.detail);
+  return evidence?.state === "queued"
+    ? "pending"
+    : evidence?.state === "delivered"
+      ? "delivered"
+      : evidence
+        ? "failed"
+        : fallback;
+}
 
 /** This is also the ordinary synchronous update owner's persistence/no-op decision. */
 export function prepareTaskRecordUpdate(
@@ -230,12 +291,61 @@ function prepareTaskRecordTransition(
       deliver: false,
     };
   }
+  if (input.kind === "cron-delivery-evidence") {
+    if (current.runtime !== "cron" || current.runId !== input.params.runId) {
+      return null;
+    }
+    const detail: { [key: string]: JsonValue } =
+      current.detail && typeof current.detail === "object" && !Array.isArray(current.detail)
+        ? { ...current.detail }
+        : {};
+    const existing = readCronTaskDeliveryEvidence(current.detail);
+    const terminalState =
+      existing?.intentId === input.params.intentId && existing.state !== "queued"
+        ? existing.state
+        : undefined;
+    if (terminalState) {
+      return {
+        previous: current,
+        task: current,
+        persisted: false,
+        becomesTerminal: false,
+        deliver: false,
+      };
+    }
+    const state = input.params.state;
+    detail.deliveryEvidence = { intentId: input.params.intentId, state };
+    if (detail.kind === "cron-run") {
+      detail.deliveryStatus =
+        state === "delivered"
+          ? "delivered"
+          : state === "unknown"
+            ? "unknown"
+            : state === "queued"
+              ? "unknown"
+              : "not-delivered";
+      if (state === "delivered") {
+        detail.delivered = true;
+      } else if (state === "suppressed" || state === "rejected") {
+        detail.delivered = false;
+      } else if (state === "queued" || state === "unknown") {
+        delete detail.delivered;
+      }
+    }
+    const deliveryStatus: TaskDeliveryStatus =
+      state === "queued" ? "pending" : state === "delivered" ? "delivered" : "failed";
+    return {
+      ...prepareTaskRecordUpdate(current, { deliveryStatus, detail }, input.now),
+      deliver: false,
+    };
+  }
   if (input.kind === "delivery") {
+    const deliveryStatus = deliveryStatusFromCronEvidence(current, input.params.deliveryStatus);
     return {
       ...prepareTaskRecordUpdate(
         current,
         {
-          deliveryStatus: input.params.deliveryStatus,
+          deliveryStatus,
           ...(input.params.error !== undefined ? { error: input.params.error } : {}),
         },
         input.now,

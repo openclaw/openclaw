@@ -58,6 +58,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/commands/onboard-recommendations.test.ts",
   "src/wizard/setup.app-recommendations.test.ts",
   "test/loopback-ask-user-telegram-channel.test.ts",
+  "test/command-cron-matrix-transport.integration.test.ts",
   "test/slack-outbound-permanent-rejection-loopback.test.ts",
   "test/telegram-outbound-permanent-rejection-loopback.test.ts",
   "src/agents/bash-tools.exec-host-gateway.test.ts",

@@ -80,6 +80,20 @@ export async function createTaskFlowEffectsFixture(
         originalCreate(context, { type: "tasks.createRecord", input }, assertCurrent, onGranted),
       "tasks.settleUnstarted": (input) =>
         originalCreate(context, { type: "tasks.settleUnstarted", input }, assertCurrent, onGranted),
+      "tasks.setCronDeliveryEvidence": (input) =>
+        originalCreate(
+          context,
+          { type: "tasks.setCronDeliveryEvidence", input },
+          assertCurrent,
+          onGranted,
+        ),
+      "tasks.setDeliveryStatus": (input) =>
+        originalCreate(
+          context,
+          { type: "tasks.setDeliveryStatus", input },
+          assertCurrent,
+          onGranted,
+        ),
       "flows.finalizeTaskCancellation": (input) => {
         beforeFinalize(input);
         const task = store.loadSnapshot().tasks.get(input.taskId) ?? null;

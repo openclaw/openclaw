@@ -15,7 +15,10 @@ import { applyCronRuntimeRowsToState, commitCronRuntimeRows } from "./runtime-st
 import { recomputeUnownedCronSchedules } from "./schedule-maintenance.js";
 import { emit, type CronServiceState, type DeferredCronNotifications } from "./state.js";
 import { ensureLoaded, runPostPersistCronNotifications } from "./store.js";
-import { tryFinishCronTaskRunWithoutHistory } from "./task-runs.js";
+import {
+  drainCronTaskDeliveryProjections,
+  tryFinishCronTaskRunWithoutHistory,
+} from "./task-runs.js";
 import type { TimedCronRunOutcome } from "./timer-execution-timeout.js";
 import { emitCronOutcomeEventForJob, recordCronOutcomeForJob } from "./timer-outcome-events.js";
 import { applyOutcomeToAuthoritativeJob, applyOutcomeToStoredJob } from "./timer-outcomes.js";
@@ -302,6 +305,7 @@ export async function finalizeCompletedCronRunOutcomes(
     }
     throw error;
   } finally {
+    await drainCronTaskDeliveryProjections();
     for (const outcome of outcomes) {
       if (outcome.reservationIdentity) {
         releaseQueuedCronRun(state, outcome.jobId, outcome.reservationIdentity);

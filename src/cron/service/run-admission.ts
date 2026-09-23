@@ -658,7 +658,6 @@ export async function executeQueuedCronRun(params: {
       return undefined;
     }
     const { executionJob, taskRun, activeJobMarker } = started;
-    const taskRunId = taskRun?.runId;
     emit(state, {
       jobId: executionJob.id,
       action: "started",
@@ -668,7 +667,7 @@ export async function executeQueuedCronRun(params: {
     const base = {
       jobId: params.jobId,
       job: executionJob,
-      taskRunId,
+      taskRunId: taskRun?.runId,
       activeJobMarker,
       reservationIdentity: params.reservationIdentity,
       startedAt: started.startedAt,
@@ -677,7 +676,8 @@ export async function executeQueuedCronRun(params: {
     let outcome: TimedCronRunOutcome;
     try {
       const result = await executeJobCoreWithTimeout(state, executionJob, {
-        runId: taskRunId,
+        runId: base.taskRunId,
+        taskId: taskRun?.taskId,
         activeJobMarker,
         runReceipt: started.runReceipt,
         executionIdentity: createCronOwnerExecutionIdentityAdmission({

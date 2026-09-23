@@ -9,6 +9,7 @@ import { onTimer } from "../../cron/service/timer.test-support.js";
 import { loadCronStore } from "../../cron/store.js";
 import type { CronJob } from "../../cron/types.js";
 import { getActiveGatewayRootWorkCount } from "../../process/gateway-work-admission.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import * as taskExecutor from "../../tasks/task-executor.js";
 import { findTaskByRunId, listTaskRecords } from "../../tasks/task-registry.js";
@@ -113,9 +114,7 @@ function findCronTaskByBaseRunId(baseRunId: string) {
   );
 }
 
-afterEach(() => {
-  resetTaskRegistryForTests();
-});
+afterEach(() => closeOpenClawStateDatabaseAsync().finally(resetTaskRegistryForTests));
 
 describe("cron service timer seam coverage", () => {
   it.each(["timer", "startup"] as const)("%s ignores stale event schedule slots", async (entry) => {

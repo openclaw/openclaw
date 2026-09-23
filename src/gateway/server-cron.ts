@@ -11,10 +11,8 @@ import {
 } from "../agents/agent-scope.js";
 import { abortAndDrainEmbeddedAgentRun } from "../agents/embedded-agent.js";
 import { loadPreparedInboundPluginRegistry } from "../agents/prepared-model-runtime.inbound-registry.js";
-import type { NormalizeReplySkipReason } from "../auto-reply/reply/normalize-reply-skip-reason.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { CliDeps } from "../cli/deps.types.js";
-import { resolveControlUiAutomationRunUrl } from "../config/control-ui-link-base.js";
 import { getRuntimeConfig } from "../config/io.js";
 import {
   resolveSessionStoreCompatibilityAgentId,
@@ -40,13 +38,10 @@ import {
 } from "../cron/command-output-summary.js";
 import { runCronCommandJob } from "../cron/command-runner.js";
 import { resolveCronStoredDeliveryContext } from "../cron/delivery-context.js";
-import { resolveCronDeliveryPlan, sendCronAnnouncePayloadStrict } from "../cron/delivery.js";
 import { reconcileHeartbeatMonitorJobs } from "../cron/heartbeat-monitor.js";
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
-import { retryTransientDirectCronDelivery } from "../cron/isolated-agent/delivery-dispatch-policy.js";
 import { resolveCronJobBoundSessionKeys } from "../cron/job-session-bindings.js";
 import { toPublicCronJob } from "../cron/public-job.js";
-import { createCronExecutionId } from "../cron/run-id.js";
 import { cronScriptFailureMetadata } from "../cron/script-failure.js";
 import { CronService, type CronEvent } from "../cron/service.js";
 import {
@@ -54,20 +49,12 @@ import {
   waitForActiveCronTaskRuns,
 } from "../cron/service/active-run-cancellation.js";
 import { applyJobPatch } from "../cron/service/jobs.js";
-import {
-  resolveCronDeliverySessionKey,
-  resolveCronSessionTargetSessionKey,
-} from "../cron/session-target.js";
+import { resolveCronSessionTargetSessionKey } from "../cron/session-target.js";
 import { skillCollectionReviewMonitorAgentId } from "../cron/skill-collection-review-monitor.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { cronStreamScheduleKey } from "../cron/stream-schedule.js";
 import { createCronScriptRuntime } from "../cron/trigger-script.js";
-import type {
-  CronDeliveryTrace,
-  CronJob,
-  CronPayload,
-  CronResolvedDeliveryState,
-} from "../cron/types.js";
+import type { CronJob, CronPayload } from "../cron/types.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveMainScopedEventSessionKey } from "../infra/event-session-routing.js";
@@ -127,6 +114,7 @@ import {
   createScheduledGatewayRunner,
   fenceScheduledGatewayContextResolver,
 } from "./scheduled-run-gateway-context.js";
+import { finalizeCronCompletionAnnouncement } from "./server-cron-command-delivery.js";
 import type { GatewayCronServiceContract } from "./server-cron-contract.js";
 import {
   dispatchGatewayCronFinishedNotifications,
@@ -265,122 +253,6 @@ function sanitizeCronHeartbeatOverride(
   return heartbeat?.target === "last"
     ? { ...heartbeat, to: undefined, accountId: undefined }
     : heartbeat;
-}
-
-async function finalizeCronCompletionAnnouncement(params: {
-  job: CronJob;
-  text?: string;
-  suppressionReason?: NormalizeReplySkipReason;
-  runStartedAtMs?: number;
-  abortSignal?: AbortSignal;
-  deps: CliDeps;
-  resolveCronAgent: (requested?: string | null) => { agentId: string; cfg: OpenClawConfig };
-  logger: ReturnType<typeof getChildLogger>;
-  label: string;
-  traceResolvedFailure?: boolean;
-}) {
-  const plan = resolveCronDeliveryPlan(params.job);
-  const delivery: CronDeliveryTrace = {
-    intended: pickDefined(
-      {
-        channel: plan.channel,
-        to: plan.to,
-        accountId: plan.accountId,
-        threadId: plan.threadId,
-        source: "explicit" as const,
-      },
-      ["channel", "to", "accountId", "threadId", "source"],
-    ),
-  };
-  if (plan.mode !== "announce") {
-    return { deliveryAttempted: false, delivered: false, delivery };
-  }
-  const deliveryState: CronResolvedDeliveryState = {
-    status: "not-delivered",
-    delivered: false,
-    failureNotification: { status: "not-requested" },
-  };
-  const finish = (deliveryAttempted: boolean) => ({
-    deliveryAttempted,
-    delivered: deliveryState.delivered,
-    deliveryError: deliveryState.error,
-    deliverySuppressionReason: deliveryState.deliverySuppressionReason,
-    deliveryState,
-    delivery: { ...delivery, delivered: deliveryState.delivered },
-  });
-  if (params.text === undefined) {
-    deliveryState.deliverySuppressionReason = params.suppressionReason ?? "empty";
-    return finish(false);
-  }
-
-  const { agentId, cfg } = params.resolveCronAgent(params.job.agentId);
-  const inspectUrl = resolveControlUiAutomationRunUrl(cfg, {
-    jobId: params.job.id,
-    runId:
-      params.runStartedAtMs === undefined
-        ? undefined
-        : createCronExecutionId(params.job.id, params.runStartedAtMs),
-  });
-  // Command summaries are already redacted; adding the link earlier would strip its URL.
-  const text = inspectUrl ? `${params.text}\nInspect: ${inspectUrl}` : params.text;
-  const abortSignal = params.abortSignal ?? new AbortController().signal;
-  let deliveryMayHaveReachedRecipient = false;
-  try {
-    const result = await retryTransientDirectCronDelivery({
-      jobId: params.job.id,
-      label: params.label,
-      signal: abortSignal,
-      shouldRetryError: () => !deliveryMayHaveReachedRecipient,
-      run: () =>
-        sendCronAnnouncePayloadStrict({
-          deps: params.deps,
-          cfg,
-          agentId,
-          jobId: params.job.id,
-          target: {
-            channel: plan.channel,
-            to: plan.to,
-            threadId: plan.threadId,
-            accountId: plan.accountId,
-            sessionKey: resolveCronDeliverySessionKey(params.job),
-          },
-          payload: { text },
-          abortSignal,
-          onDeliveryAttempt: (reachedRecipient) => {
-            deliveryMayHaveReachedRecipient ||= reachedRecipient;
-          },
-        }),
-    });
-    if (result.status === "sent") {
-      deliveryState.status = "delivered";
-      deliveryState.delivered = true;
-    } else {
-      const uncertain = result.reason === "adapter_returned_no_identity";
-      deliveryState.status = uncertain ? "unknown" : "not-delivered";
-      deliveryState.delivered = uncertain ? undefined : false;
-      deliveryState.error = `cron delivery ${uncertain ? "outcome is unknown" : "was suppressed"}: ${result.reason}`;
-    }
-    return finish(true);
-  } catch (err) {
-    const deliveryError = formatErrorMessage(err);
-    params.logger.warn(
-      { jobId: params.job.id, err: deliveryError },
-      `cron: ${params.label} delivery failed`,
-    );
-    deliveryState.error = deliveryError;
-    if (params.traceResolvedFailure) {
-      delivery.resolved = {
-        channel: plan.channel,
-        to: plan.to,
-        accountId: plan.accountId,
-        threadId: plan.threadId,
-        source: "explicit",
-        ok: false,
-        error: deliveryError,
-      };
-    }
-    return finish(true);
-  }
 }
 
 function isCommandCronJob(job: CronJob | null | undefined): boolean {
@@ -860,7 +732,7 @@ export function buildGatewayCronService(params: {
         }
       }
     },
-    runCommandJob: async ({ job, abortSignal }) => {
+    runCommandJob: async ({ job, abortSignal, taskIdentity }) => {
       const result = await runCronCommandJob({
         job,
         abortSignal,
@@ -877,6 +749,7 @@ export function buildGatewayCronService(params: {
           resolveCronAgent,
           logger: cronLogger,
           label: "command",
+          taskIdentity,
         });
         return { ...silentResult, ...completion };
       }
@@ -893,6 +766,7 @@ export function buildGatewayCronService(params: {
         logger: cronLogger,
         label: "command",
         traceResolvedFailure: true,
+        taskIdentity,
       });
       return { ...result, ...completion };
     },

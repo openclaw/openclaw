@@ -81,6 +81,44 @@ describe("sendCronAnnouncePayloadStrict", () => {
     );
   });
 
+  it("forwards runtime-owned durable custody without adding it to the payload", async () => {
+    const deliveryCompletion = {
+      kind: "cron-task" as const,
+      taskId: "task-1",
+      runId: "run-1",
+      intentId: "cron-command-delivery:v1:task-1",
+    };
+    const completionRetention = {
+      idPrefix: "cron-command-delivery:v1:",
+      maxAgeMs: 24 * 60 * 60_000,
+      maxEntries: 2_000,
+    } as const;
+
+    await sendCronAnnouncePayloadStrict({
+      deps: {} as never,
+      cfg: {} as never,
+      agentId: "main",
+      jobId: "job-1",
+      target: { channel: "telegram", to: "123" },
+      payload: { text: "Automation completed" },
+      abortSignal: new AbortController().signal,
+      deliveryIntentId: deliveryCompletion.intentId,
+      deliveryCompletion,
+      completionRetention,
+    });
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        deliveryIntentId: deliveryCompletion.intentId,
+        deliveryCompletion,
+        completionRetention,
+        reusePendingDeliveryIntent: true,
+        payloads: [{ text: "Automation completed" }],
+      }),
+      undefined,
+    );
+  });
+
   it("does not begin delivery when target resolution settles after cancellation", async () => {
     let resolvePendingTarget: (value: unknown) => void = () => {};
     mocks.resolveDeliveryTarget.mockImplementationOnce(

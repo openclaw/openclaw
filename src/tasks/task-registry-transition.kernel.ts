@@ -20,13 +20,19 @@ import type { TaskPersistenceReceipt, TaskRecord } from "./task-registry.types.j
 
 export type { TaskRecordTransitionReceipt } from "./task-registry-transition.operation.js";
 
-type TaskWorkerTransitionInput = Extract<
-  TaskRecordTransitionInput,
-  { kind: "state" | "run-owner" }
-> & {
-  expectedTask: TaskPersistenceReceipt;
-  selection?: never;
-};
+type TaskWorkerTransitionInput =
+  | (Extract<TaskRecordTransitionInput, { kind: "state" | "run-owner" }> & {
+      expectedTask: TaskPersistenceReceipt;
+      selection?: never;
+    })
+  | (Extract<TaskRecordTransitionInput, { kind: "cron-delivery-evidence" }> & {
+      expectedTask?: never;
+      selection?: never;
+    })
+  | (Extract<TaskRecordTransitionInput, { kind: "delivery" }> & {
+      expectedTask: TaskPersistenceReceipt;
+      selection?: never;
+    });
 
 export function hasAuthoritativeTaskBackingInDatabase(db: DatabaseSync, task: TaskRecord): boolean {
   return hasAuthoritativeTaskBackingFromRecords(task, {
@@ -53,7 +59,7 @@ export function transitionTaskRecordInDatabase(
   write: <T>(operation: () => T) => T,
   options: Required<Pick<TaskRecordTransitionOperations, "assertCurrent" | "onCommitted">>,
 ) {
-  if (!input.expectedTask) {
+  if (input.kind !== "cron-delivery-evidence" && !input.expectedTask) {
     throw new Error("Worker task transition requires an exact task persistence receipt");
   }
   return runTaskRecordTransitionOperation(input, {

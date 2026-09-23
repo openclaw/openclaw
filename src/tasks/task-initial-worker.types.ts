@@ -15,6 +15,10 @@ import type {
 import type { TaskCreateInput, TaskCreateResult } from "./task-registry-create.kernel.js";
 import type { TaskRecordTransitionReceipt } from "./task-registry-transition.kernel.js";
 import type {
+  TaskCronDeliveryEvidenceTransitionParams,
+  TaskRunDeliveryTransitionParams,
+} from "./task-registry-transition.operation.js";
+import type {
   TaskExecutionOwner,
   TaskPersistenceReceipt,
   TaskRuntime,
@@ -59,6 +63,23 @@ export type TaskInitialWorkerOperations = {
         DetachedTaskTerminalState,
         "status" | "endedAt" | "error" | "terminalSummary" | "suppressDelivery" | "lastEventAt"
       >;
+      now: number;
+    };
+    output: TaskRecordTransitionReceipt | null;
+  };
+  "tasks.setCronDeliveryEvidence": {
+    input: {
+      taskId: string;
+      params: TaskCronDeliveryEvidenceTransitionParams;
+      now: number;
+    };
+    output: TaskRecordTransitionReceipt | null;
+  };
+  "tasks.setDeliveryStatus": {
+    input: {
+      taskId: string;
+      expectedTask: TaskPersistenceReceipt;
+      params: TaskRunDeliveryTransitionParams;
       now: number;
     };
     output: TaskRecordTransitionReceipt | null;

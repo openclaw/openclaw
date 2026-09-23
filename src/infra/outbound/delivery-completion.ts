@@ -29,6 +29,7 @@ import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.pa
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { getOwedHarnessCompletionTask } from "../../tasks/agent-harness-completion-recovery.js";
+import { setTaskCronDeliveryEvidenceById } from "../../tasks/runtime-internal.js";
 import {
   resolveDeliveryQueueStateEnv,
   type DeliveryQueueStateContext,
@@ -79,6 +80,12 @@ export type DurableDeliveryCompletion =
       sessionKey: string;
       storePath: string;
       sessionWriterDeliveryAuthority?: SessionWriterDeliveryAuthority;
+    }
+  | {
+      kind: "cron-task";
+      taskId: string;
+      runId: string;
+      intentId: string;
     };
 
 type DurableDeliveryCompletionResult = {
@@ -86,6 +93,73 @@ type DurableDeliveryCompletionResult = {
   platformMessageId?: string;
   rejectionError?: string;
 };
+
+const COMMAND_CRON_DELIVERY_COMPLETION_RETENTION = {
+  idPrefix: "cron-command-delivery:v1:",
+  maxAgeMs: 24 * 60 * 60_000,
+  maxEntries: 2_000,
+} as const;
+
+export function createCommandCronDeliveryCustody(taskIdentity: { taskId: string; runId: string }) {
+  const intentId = `${COMMAND_CRON_DELIVERY_COMPLETION_RETENTION.idPrefix}${taskIdentity.taskId}`;
+  return {
+    deliveryIntentId: intentId,
+    deliveryCompletion: {
+      kind: "cron-task" as const,
+      taskId: taskIdentity.taskId,
+      runId: taskIdentity.runId,
+      intentId,
+    },
+    completionRetention: COMMAND_CRON_DELIVERY_COMPLETION_RETENTION,
+  };
+}
+
+type CronTaskDeliveryState = "queued" | "delivered" | "suppressed" | "rejected" | "unknown";
+
+async function cronTaskDeliveryResult(
+  completion: Extract<DurableDeliveryCompletion, { kind: "cron-task" }>,
+  state: CronTaskDeliveryState,
+  queueId?: string,
+  stateDir?: string,
+  stateContext?: DeliveryQueueStateContext,
+): Promise<DurableDeliveryCompletionResult> {
+  const expectedIntentId = `${COMMAND_CRON_DELIVERY_COMPLETION_RETENTION.idPrefix}${completion.taskId}`;
+  if (completion.intentId !== expectedIntentId || (queueId && queueId !== expectedIntentId)) {
+    return { state: "stale" };
+  }
+  const updated = await setTaskCronDeliveryEvidenceById({
+    taskId: completion.taskId,
+    runId: completion.runId,
+    intentId: completion.intentId,
+    state,
+    context:
+      stateContext?.workerContext ??
+      captureOpenClawStateWorkerContext({
+        env: resolveDeliveryQueueStateEnv(stateDir, stateContext),
+      }),
+  });
+  if (!updated) {
+    return { state: "stale" };
+  }
+  const evidence =
+    updated.detail && typeof updated.detail === "object" && !Array.isArray(updated.detail)
+      ? updated.detail.deliveryEvidence
+      : undefined;
+  const settledState =
+    evidence && typeof evidence === "object" && !Array.isArray(evidence)
+      ? evidence.state
+      : undefined;
+  return {
+    state:
+      settledState === "queued" ||
+      settledState === "delivered" ||
+      settledState === "suppressed" ||
+      settledState === "rejected" ||
+      settledState === "unknown"
+        ? settledState
+        : state,
+  };
+}
 
 export function resolveConversationDeliveryScope(
   completion: Extract<DurableDeliveryCompletion, { kind: "conversation" }>,
@@ -352,6 +426,9 @@ export async function markDurableDeliveryQueued(
   stateContext?: DeliveryQueueStateContext,
   target?: ConversationDeliveryTarget,
 ): Promise<DurableDeliveryCompletionResult> {
+  if (completion.kind === "cron-task") {
+    return cronTaskDeliveryResult(completion, "queued", queueId, stateDir, stateContext);
+  }
   return completion.kind === "pending-final"
     ? // The reply dispatcher may have claimed direct custody ("queued") before the
       // durable enqueue; both states still belong to this send attempt.
@@ -378,6 +455,9 @@ export async function completeDurableDelivery(
   stateContext?: DeliveryQueueStateContext,
   target?: ConversationDeliveryTarget,
 ): Promise<DurableDeliveryCompletionResult> {
+  if (completion.kind === "cron-task") {
+    return cronTaskDeliveryResult(completion, "delivered", undefined, stateDir, stateContext);
+  }
   return completion.kind === "pending-final"
     ? await settlePendingFinalDelivery(completion, "delivered", undefined, {
         stateDir,
@@ -405,6 +485,9 @@ async function suppressDurableDelivery(
   stateContext?: DeliveryQueueStateContext,
   target?: ConversationDeliveryTarget,
 ): Promise<DurableDeliveryCompletionResult> {
+  if (completion.kind === "cron-task") {
+    return cronTaskDeliveryResult(completion, "suppressed", undefined, stateDir, stateContext);
+  }
   return completion.kind === "pending-final"
     ? await settlePendingFinalDelivery(completion, "suppressed", undefined, {
         stateDir,
@@ -427,6 +510,9 @@ export async function rejectDurableDelivery(
   stateContext?: DeliveryQueueStateContext,
   target?: ConversationDeliveryTarget,
 ): Promise<DurableDeliveryCompletionResult> {
+  if (completion.kind === "cron-task") {
+    return cronTaskDeliveryResult(completion, "rejected", undefined, stateDir, stateContext);
+  }
   // Proven no-send: terminal suppression, not the unknown state that owes an
   // uncertainty notice for a send the provider asserts never began.
   return completion.kind === "pending-final"
@@ -450,6 +536,9 @@ export async function failDurableDelivery(
   stateContext?: DeliveryQueueStateContext,
   target?: ConversationDeliveryTarget,
 ): Promise<DurableDeliveryCompletionResult> {
+  if (completion.kind === "cron-task") {
+    return cronTaskDeliveryResult(completion, "unknown", undefined, stateDir, stateContext);
+  }
   return completion.kind === "pending-final"
     ? await settlePendingFinalDelivery(completion, "unknown", undefined, { stateDir, stateContext })
     : conversationResult(

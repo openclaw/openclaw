@@ -137,6 +137,24 @@ export function executeTaskInitialMutation(
                   : null;
               break;
             }
+            case "tasks.setCronDeliveryEvidence": {
+              result = transitionTaskRecordInDatabase(
+                database.db,
+                { kind: "cron-delivery-evidence", ...command.input },
+                (operation) => operation(),
+                { assertCurrent, onCommitted() {} },
+              );
+              break;
+            }
+            case "tasks.setDeliveryStatus": {
+              result = transitionTaskRecordInDatabase(
+                database.db,
+                { kind: "delivery", ...command.input },
+                (operation) => operation(),
+                { assertCurrent, onCommitted() {} },
+              );
+              break;
+            }
             case "flows.createForTask":
               result = createInitialTaskFlowInDatabase(database.db, command.input, assertCurrent);
               break;

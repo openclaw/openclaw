@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createCommandCronDeliveryCustody } from "../../infra/outbound/delivery-completion.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { getDetachedTaskLifecycleRuntime } from "../../tasks/detached-task-runtime.js";
 import * as taskExecutor from "../../tasks/task-executor.js";
@@ -518,6 +519,89 @@ describe("cron task run terminal records", () => {
             deliveryError: "cron webhook delivery cancelled: Cancelled by operator.",
           }),
         ]);
+      },
+    );
+  });
+
+  it("keeps committed delivery evidence across interrupted cron finalization", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "openclaw-cron-delivered-before-interruption-" },
+      async () => {
+        resetTaskRegistryForTests();
+        const startedAt = 2_000;
+        const job: CronJob = {
+          id: "delivered-before-interruption",
+          name: "delivered before interruption",
+          enabled: true,
+          createdAtMs: 100,
+          updatedAtMs: 100,
+          schedule: { kind: "every", everyMs: 60_000, anchorMs: 100 },
+          sessionTarget: "isolated",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "agentTurn", message: "work" },
+          state: { nextRunAtMs: 60_000 },
+        };
+        const state = createCronServiceState({
+          storePath: "/tmp/jobs.json",
+          cronEnabled: true,
+          log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+          nowMs: () => startedAt + 100,
+          enqueueSystemEvent: vi.fn(),
+          requestHeartbeat: vi.fn(),
+          runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+        });
+        const taskRunId = tryCreateCronTaskRun({ state, job, startedAt });
+        if (!taskRunId) {
+          throw new Error("expected cron task run id");
+        }
+        const task = taskRegistry.findTaskByRunId(taskRunId);
+        if (!task) {
+          throw new Error("expected cron task");
+        }
+        const custody = createCommandCronDeliveryCustody({ taskId: task.taskId, runId: taskRunId });
+        await taskRegistry.setTaskCronDeliveryEvidenceById({
+          taskId: task.taskId,
+          runId: taskRunId,
+          intentId: custody.deliveryIntentId,
+          state: "delivered",
+        });
+
+        tryFinishCronTaskRun(state, {
+          taskRunId,
+          job,
+          event: {
+            jobId: job.id,
+            action: "finished",
+            job,
+            status: "error",
+            completionStatus: "unknown",
+            error: "cron: job interrupted by gateway restart",
+            delivered: false,
+            deliveryStatus: "unknown",
+            runAtMs: startedAt,
+            durationMs: 100,
+          },
+        });
+
+        const [row] = listTaskRegistryRecordsByRuntimeSourceIdFromSqlite({
+          runtime: "cron",
+          sourceId: job.id,
+        });
+        expect(row).toMatchObject({
+          status: "failed",
+          deliveryStatus: "delivered",
+          detail: {
+            delivered: true,
+            deliveryStatus: "delivered",
+            deliveryEvidence: { intentId: custody.deliveryIntentId, state: "delivered" },
+          },
+        });
+        expect(
+          readCronTaskRunHistoryPage({
+            storeKey: cronStoreKey(state.deps.storePath),
+            jobId: job.id,
+          }).entries,
+        ).toMatchObject([{ delivered: true, deliveryStatus: "delivered" }]);
       },
     );
   });

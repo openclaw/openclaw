@@ -113,6 +113,12 @@ export type CronRunDeliveryResult = {
   delivery?: CronDeliveryTrace;
 };
 
+/** Runtime-minted command delivery identity. Never sourced from job payload or environment. */
+export type CronCommandTaskIdentity = {
+  taskId: string;
+  runId: string;
+};
+
 /** Dependency injection surface for the cron service runtime. */
 export type CronServiceDeps = {
   nowMs?: () => number;
@@ -214,6 +220,7 @@ export type CronServiceDeps = {
   runCommandJob?: (params: {
     job: CronJob;
     abortSignal?: AbortSignal;
+    taskIdentity?: CronCommandTaskIdentity;
   }) => Promise<CronRunOutcome & CronRunDeliveryResult>;
   runScriptJob?: (params: {
     job: CronStoredJob;

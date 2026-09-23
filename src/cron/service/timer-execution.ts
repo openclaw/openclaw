@@ -346,6 +346,7 @@ async function executeDetachedCronJob(
     const res = await state.deps.runCommandJob({
       job,
       abortSignal,
+      ...(options?.taskIdentity ? { taskIdentity: options.taskIdentity } : {}),
     });
     if (
       abortSignal?.aborted &&

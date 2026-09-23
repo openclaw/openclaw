@@ -7,8 +7,11 @@ import {
   isRetainedExecutionOwnerBinding,
 } from "../../audit/execution-owner-binding.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { trackAsyncWork } from "../../shared/async-work-scope.js";
+import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { CRON_TASK_KIND } from "../../tasks/cron-task-contract.js";
+import { setTaskDeliveryStatusById } from "../../tasks/runtime-internal.js";
 import {
   createRunningTaskRunCore,
   finalizeTaskRunById,
@@ -17,6 +20,7 @@ import {
   recordTaskRunProgressByRunIdCore,
 } from "../../tasks/task-executor.js";
 import { bindTaskFlowExecution } from "../../tasks/task-flow-registry.store.sqlite.js";
+import { captureTaskPersistenceReceipt } from "../../tasks/task-registry-records.js";
 import { listTaskRecordsByRuntimeSourceIdInDatabase } from "../../tasks/task-registry.store.kernel.js";
 import { bindTaskRunExecution } from "../../tasks/task-registry.store.sqlite.js";
 import type { JsonValue, TaskRecord, TaskStatus } from "../../tasks/task-registry.types.js";
@@ -24,6 +28,7 @@ import {
   CRON_AGENT_SELECTION_REQUIRED_MESSAGE,
   resolveCronJobEffectiveAgentId,
 } from "../agent-id.js";
+import { resolveCronDeliveryPlan } from "../delivery-plan.js";
 import { createCronExecutionId } from "../run-id.js";
 import type { CronRunLogEntry } from "../run-log-types.js";
 import { cronStoreKey } from "../store/key.js";
@@ -33,6 +38,8 @@ import {
   cronRunLogEntryToTaskDetail,
   cronRunStatusToTaskStatus,
   cronQuietTriggerTaskDetail,
+  preserveCronTaskDeliveryEvidence,
+  readCronTaskDeliveryEvidenceState,
   cronTaskRecordStoreKey,
   cronTaskRecordToRunLogEntry,
   cronTaskRecordToScriptRunResult,
@@ -49,6 +56,32 @@ import type {
 import { normalizeCronRunErrorText } from "./execution-errors.js";
 import type { CronEvent, CronExecutionIdentityAdmission, CronServiceState } from "./state.js";
 import { CRON_TASK_RUNNING_PROGRESS_SUMMARY } from "./task-ledger.js";
+
+const pendingCronTaskDeliveryProjections = resolveGlobalSingleton(
+  Symbol.for("openclaw.cronTaskDeliveryProjections"),
+  () => new Set<Promise<void>>(),
+  async (pending) => {
+    while (pending.size > 0) {
+      await Promise.allSettled(pending);
+    }
+  },
+);
+
+function trackCronTaskDeliveryProjection(run: () => Promise<void>): void {
+  const projection = trackAsyncWork(run);
+  pendingCronTaskDeliveryProjections.add(projection);
+  void projection.then(
+    () => pendingCronTaskDeliveryProjections.delete(projection),
+    () => pendingCronTaskDeliveryProjections.delete(projection),
+  );
+}
+
+/** Joins task-worker projections before a cron finalization or lifecycle boundary completes. */
+export async function drainCronTaskDeliveryProjections(): Promise<void> {
+  while (pendingCronTaskDeliveryProjections.size > 0) {
+    await Promise.allSettled(pendingCronTaskDeliveryProjections);
+  }
+}
 
 function requireCronAgentId(agentId: string | undefined): string {
   if (!agentId?.trim()) {
@@ -337,7 +370,11 @@ function tryCreateCronTaskRunRecord(params: {
       runId: params.runId,
       label: params.job?.name,
       task: params.job?.name || params.jobId,
-      deliveryStatus: "not_applicable",
+      deliveryStatus:
+        params.job?.payload.kind === "command" &&
+        resolveCronDeliveryPlan(params.job).mode === "announce"
+          ? "pending"
+          : "not_applicable",
       notifyPolicy: "silent",
       startedAt: params.startedAt,
       lastEventAt: params.startedAt,
@@ -464,11 +501,14 @@ export function tryFinishCronTaskRun(
     }
     const storeKey = cronStoreKey(state.deps.storePath);
     const legacyRecoveryRunId = createCronExecutionId(entry.jobId, startedAt);
-    const detail = cronRunLogEntryToTaskDetail(entry, {
-      storeKey,
-      ...(result.scriptResult ? { scriptResult: result.scriptResult } : {}),
-      ...(result.triggerEval ? { triggerEval: result.triggerEval } : {}),
-    });
+    const detail = preserveCronTaskDeliveryEvidence(
+      cronRunLogEntryToTaskDetail(entry, {
+        storeKey,
+        ...(result.scriptResult ? { scriptResult: result.scriptResult } : {}),
+        ...(result.triggerEval ? { triggerEval: result.triggerEval } : {}),
+      }),
+      existingCandidate,
+    );
     const finalize = (
       runId: string,
       status: Extract<
@@ -541,6 +581,47 @@ export function tryFinishCronTaskRun(
     }
     if (updated.length === 0) {
       state.deps.log.warn({ runId: taskRunId }, "cron: task ledger record was not finalized");
+      return;
+    }
+    const retainedDeliveryState = updated
+      .map((task) => readCronTaskDeliveryEvidenceState(task.detail))
+      .find((value) => value !== undefined);
+    const taskDeliveryStatus =
+      retainedDeliveryState === "delivered" || entry.deliveryStatus === "delivered"
+        ? "delivered"
+        : retainedDeliveryState === "queued"
+          ? "pending"
+          : retainedDeliveryState === undefined &&
+              (entry.deliveryStatus === "not-requested" || entry.deliveryStatus === undefined)
+            ? "not_applicable"
+            : "failed";
+    const completedJob = result.job ?? result.event.job;
+    const tasksNeedingDeliveryProjection = updated.filter(
+      (task) => task.deliveryStatus !== taskDeliveryStatus,
+    );
+    if (completedJob?.payload.kind === "command" && tasksNeedingDeliveryProjection.length > 0) {
+      // Finalization runs on the Gateway thread. Keep the new delivery projection
+      // off that thread and publish only after the task worker commits each exact row.
+      trackCronTaskDeliveryProjection(async () => {
+        try {
+          await Promise.all(
+            tasksNeedingDeliveryProjection.map((task) =>
+              setTaskDeliveryStatusById({
+                taskId: task.taskId,
+                expectedTask: captureTaskPersistenceReceipt(task),
+                runId: taskRunId,
+                runtime: "cron",
+                deliveryStatus: taskDeliveryStatus,
+              }),
+            ),
+          );
+        } catch (error) {
+          state.deps.log.warn(
+            { runId: taskRunId, jobStatus: entry.status, error },
+            "cron: failed to project task delivery status",
+          );
+        }
+      });
     }
   } catch (error) {
     state.deps.log.warn(

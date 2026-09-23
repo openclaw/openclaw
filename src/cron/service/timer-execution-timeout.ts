@@ -120,6 +120,7 @@ export type StartupCatchupExecution =
   | { ok: false; outcomes: TimedCronRunOutcome[]; error: unknown };
 
 export type ExecuteJobCoreOptions = {
+  taskIdentity?: import("./state.js").CronCommandTaskIdentity;
   activeJobMarker?: CronActiveJobMarker;
   owningCronLaneTaskMarker?: CommandLaneTaskMarker;
   onPayloadExecutionStarted?: () => void;

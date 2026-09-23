@@ -1,15 +1,30 @@
+import path from "node:path";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { normalizeTaskSummary, resolveTaskTerminalOutcome } from "./task-registry-common.js";
 import { assertParentFlowLinkAllowed } from "./task-registry-flow-link.js";
 import { updateTask } from "./task-registry-mutation.js";
 import { cloneTaskRecord } from "./task-registry-records.js";
-import { withTaskRegistryMutation, ensureTaskRegistryReady, tasks } from "./task-registry-state.js";
+import {
+  ensureTaskRegistryReady,
+  ensureTaskRegistryReadyAsync,
+  runTaskRegistryWorkerMutation,
+  tasks,
+  withTaskRegistryMutation,
+} from "./task-registry-state.js";
 import { transitionTaskRecordsByRunNative } from "./task-registry-transition.native.js";
-import type { TaskRunStateTransitionParams } from "./task-registry-transition.operation.js";
+import type {
+  TaskCronDeliveryEvidenceState,
+  TaskRunStateTransitionParams,
+} from "./task-registry-transition.operation.js";
+import { getTaskRegistryStore } from "./task-registry.store.js";
 import {
   parseTaskNotifyPolicy,
   type JsonValue,
   type TaskDeliveryStatus,
   type TaskNotifyPolicy,
+  type TaskPersistenceReceipt,
   type TaskRecord,
   type TaskRuntime,
   type TaskStatus,
@@ -195,6 +210,132 @@ export function setTaskRunDeliveryStatusByRunId(params: {
   error?: string;
 }) {
   return updateTaskDeliveryByRunId(params);
+}
+
+/** Commits one exact task's delivery projection through the task worker. */
+export async function setTaskDeliveryStatusById(params: {
+  taskId: string;
+  expectedTask: TaskPersistenceReceipt;
+  runId: string;
+  runtime: TaskRuntime;
+  deliveryStatus: TaskDeliveryStatus;
+  error?: string;
+  context?: OpenClawStateWorkerContext;
+}): Promise<TaskRecord | null> {
+  const context = params.context ?? captureOpenClawStateWorkerContext();
+  const store = getTaskRegistryStore();
+  const assertCurrent = () => {
+    context.admission.assertCurrent();
+    if (getTaskRegistryStore() !== store) {
+      throw new Error("Task delivery projection lost its selected registry owner");
+    }
+  };
+  const command = {
+    type: "tasks.setDeliveryStatus" as const,
+    input: {
+      taskId: params.taskId,
+      expectedTask: params.expectedTask,
+      params: {
+        runId: params.runId,
+        runtime: params.runtime,
+        deliveryStatus: params.deliveryStatus,
+        ...(params.error !== undefined ? { error: params.error } : {}),
+      },
+      now: Date.now(),
+    },
+  };
+  const mutate = () => store.runInitialMutationAsync(context, command, assertCurrent);
+
+  if (path.resolve(resolveOpenClawStateSqlitePath()) !== context.admission.databasePath) {
+    const committed = await mutate();
+    return committed ? cloneTaskRecord(committed.task) : null;
+  }
+
+  await ensureTaskRegistryReadyAsync(context);
+  assertCurrent();
+  let committed: Awaited<
+    ReturnType<typeof store.runInitialMutationAsync<"tasks.setDeliveryStatus">>
+  > = null;
+  const scope = { taskId: params.taskId, runId: params.runId };
+  const receipt = await runTaskRegistryWorkerMutation(
+    {
+      scope,
+      admission: context.admission,
+      readIdentity: "preserved",
+      taskRowsWritten: () => committed?.persisted ?? false,
+      publicationRecords: () => new Map(committed ? [[committed.task.taskId, committed.task]] : []),
+      forcePublish: () => committed?.task,
+    },
+    async () => {
+      committed = await mutate();
+      return committed;
+    },
+    () => store.loadMutationSnapshotAsync(context, scope),
+  );
+  return receipt ? cloneTaskRecord(receipt.task) : null;
+}
+
+/** Commits delivery evidence through the task worker after exact row identity validation. */
+export async function setTaskCronDeliveryEvidenceById(params: {
+  taskId: string;
+  runId: string;
+  intentId: string;
+  state: TaskCronDeliveryEvidenceState;
+  context?: OpenClawStateWorkerContext;
+}): Promise<TaskRecord | null> {
+  const context = params.context ?? captureOpenClawStateWorkerContext();
+  const store = getTaskRegistryStore();
+  const assertCurrent = () => {
+    context.admission.assertCurrent();
+    if (getTaskRegistryStore() !== store) {
+      throw new Error("Task delivery evidence lost its selected registry owner");
+    }
+  };
+  const command = {
+    type: "tasks.setCronDeliveryEvidence" as const,
+    input: {
+      taskId: params.taskId,
+      params: {
+        runId: params.runId,
+        runtime: "cron" as const,
+        intentId: params.intentId,
+        state: params.state,
+      },
+      now: Date.now(),
+    },
+  };
+  const mutate = () => store.runInitialMutationAsync(context, command, assertCurrent);
+
+  // Recovery may intentionally select a state root other than the process ambient root.
+  // Mutate that exact database through its worker without publishing it into the ambient
+  // in-memory projection.
+  if (path.resolve(resolveOpenClawStateSqlitePath()) !== context.admission.databasePath) {
+    const committed = await mutate();
+    return committed ? cloneTaskRecord(committed.task) : null;
+  }
+
+  await ensureTaskRegistryReadyAsync(context);
+  assertCurrent();
+  let committed: Awaited<
+    ReturnType<typeof store.runInitialMutationAsync<"tasks.setCronDeliveryEvidence">>
+  > = null;
+  const scope = { taskId: params.taskId, runId: params.runId };
+  const receipt = await runTaskRegistryWorkerMutation(
+    {
+      scope,
+      admission: context.admission,
+      readIdentity: "preserved",
+      taskRowsWritten: () => committed?.persisted ?? false,
+      publicationRecords: () => new Map(committed ? [[committed.task.taskId, committed.task]] : []),
+      forcePublish: () => committed?.task,
+    },
+    async () => {
+      committed = await mutate();
+      return committed;
+    },
+    () => store.loadMutationSnapshotAsync(context, scope),
+  );
+  return receipt ? cloneTaskRecord(receipt.task) : null;
 }
 
 export function updateTaskNotifyPolicyById(params: {

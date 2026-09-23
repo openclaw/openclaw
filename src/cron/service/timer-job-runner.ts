@@ -48,6 +48,7 @@ type CronCoreRunOutcome = Awaited<ReturnType<typeof executeJobCore>> & {
 type CronRunTimeout = { timeoutMs: number; reason: string };
 type CronCoreRunOptions = {
   runId?: string;
+  taskId?: string;
   activeJobMarker?: CronActiveJobMarker;
   owningCronLaneTaskMarker?: CommandLaneTaskMarker;
   streamBatch?: string;
@@ -278,6 +279,9 @@ async function executeJobCoreWithTimeoutUnfinalized(
     const resolveHeartbeatTimeoutMs = state.deps.resolveHeartbeatTimeoutMs;
     const executionIdentity = opts?.executionIdentity;
     const coreOptions: ExecuteJobCoreOptions = {
+      ...(opts?.taskId && opts.runId
+        ? { taskIdentity: { taskId: opts.taskId, runId: opts.runId } }
+        : {}),
       activeJobMarker: opts?.activeJobMarker,
       owningCronLaneTaskMarker: opts?.owningCronLaneTaskMarker,
       streamBatch: opts?.streamBatch,
