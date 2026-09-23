@@ -2259,7 +2259,7 @@ src/config/sessions/session-accessor.sqlite-entry-availability.ts	1
 src/config/sessions/session-accessor.sqlite-entry.ts	1
 src/config/sessions/session-accessor.sqlite-message-cut.ts	1
 src/config/sessions/session-accessor.sqlite-parent-fork.ts	1
-src/config/sessions/session-accessor.sqlite-read.ts	9
+src/config/sessions/session-accessor.sqlite-read.ts	6
 src/config/sessions/session-accessor.sqlite-recovery.ts	1
 src/config/sessions/session-accessor.sqlite-reset-window.ts	2
 src/config/sessions/session-accessor.sqlite-transcript-message-append.ts	1
@@ -3090,7 +3090,6 @@ src/snapshot/git-backup.ts	2
 src/snapshot/local-repository.ts	7
 src/snapshot/manifest.ts	1
 src/state/agent-deletion-journal.ts	15
-src/state/backup-run-records.ts	1
 src/state/config-machine-state.ts	1
 src/state/local-onboarding-state.ts	1
 src/state/openclaw-agent-board-schema.ts	1
@@ -3113,7 +3112,6 @@ src/state/openclaw-state-db-schema-additive.ts	1
 src/state/openclaw-state-db-schema-helpers.ts	3
 src/state/openclaw-state-db-schema-repair.ts	2
 src/state/openclaw-state-ownership.ts	1
-src/state/openclaw-state-snapshot-sanitizer.ts	1
 src/state/user-profiles-tailscale-avatar.ts	2
 src/state/user-profiles.ts	1
 src/status/summary.runtime.ts	1

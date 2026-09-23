@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
-import { createSqliteLifecycleAggregateError } from "../infra/sqlite-coordinator.js";
+import { throwSqliteLifecycleErrors } from "../infra/sqlite-coordinator.js";
 import {
   inspectDatabasePathIdentitySync,
   readDatabasePathIdentitySync,
@@ -296,16 +296,7 @@ export function createOpenClawDatabaseMaintenanceScope(
                 const errors = results.flatMap((result) =>
                   result.status === "rejected" ? [result.reason] : [],
                 );
-                if (errors.length === 1) {
-                  throw errors[0];
-                }
-                if (errors.length > 1) {
-                  throw createSqliteLifecycleAggregateError(
-                    errors,
-                    "Maintenance resource cleanup failed",
-                    errors[0],
-                  );
-                }
+                throwSqliteLifecycleErrors(errors, "Maintenance resource cleanup failed");
               }
             }
           }
@@ -644,16 +635,7 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
               }),
             );
           }
-          if (errors.length === 1) {
-            throw errors[0];
-          }
-          if (errors.length > 1) {
-            throw createSqliteLifecycleAggregateError(
-              errors,
-              "OpenClaw state resource drainage failed",
-              errors[0],
-            );
-          }
+          throwSqliteLifecycleErrors(errors, "OpenClaw state resource drainage failed");
           const retired = retireNative(record?.identity);
           attempts.delete(record);
           seals.delete(current.seal);
