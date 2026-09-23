@@ -1100,16 +1100,23 @@ describe("subagent registry seam flow", () => {
         }) as never);
         mockGatewayMethods(mocks.callGateway, { "agent.wait": { status: "timeout" } });
 
-        hydrateAndActivateRegistry();
-
-        await waitForFast(() => {
-          expect(findRequesterRun(runId)).toMatchObject({
-            execution: { status: "terminal", endedAt, outcome: { status: "ok" } },
-            endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
-            delivery: { status: "delivered" },
-          });
-          expect(findTaskByRunIdForStatus(runId)).toMatchObject({ status: "succeeded", endedAt });
+        const announceEntered = createDeferred();
+        mocks.runSubagentAnnounceFlow.mockImplementationOnce(async () => {
+          announceEntered.resolve();
+          return "delivered";
         });
+
+        const settleRootWork = observeRootWork();
+        hydrateAndActivateRegistry();
+        await announceEntered.promise;
+        await settleRootWork();
+
+        expect(findRequesterRun(runId)).toMatchObject({
+          execution: { status: "terminal", endedAt, outcome: { status: "ok" } },
+          endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
+          delivery: { status: "delivered" },
+        });
+        expect(findTaskByRunIdForStatus(runId)).toMatchObject({ status: "succeeded", endedAt });
         expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({
             childRunId: runId,
@@ -2043,6 +2050,7 @@ describe("subagent registry seam flow", () => {
     };
     const freshTranscriptWrite = vi.fn(async () => {});
     const freshCompletionWrite = vi.fn(async () => {});
+    const announceEntered = createDeferred();
 
     mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
       if (request.method !== "agent.wait") {
@@ -2053,31 +2061,40 @@ describe("subagent registry seam flow", () => {
       return result;
     });
     mocks.runSubagentAnnounceFlow.mockImplementation(async () => {
+      announceEntered.resolve();
       await runWithOwnedSessionTranscriptWrite({ sessionKey }, freshTranscriptWrite);
       return "delivered";
     });
 
-    await withOwnedSessionTranscriptWrites(
-      { sessionKey, withTranscriptWrite: withRequesterTranscriptWrite },
-      async () => {
-        mod.registerSubagentRun({
-          runId: "run-detached-requester-owner",
-          requesterSessionKey: sessionKey,
-          task: "finish after the requester attempt exits",
-          expectsCompletionMessage: true,
-        });
-        await waitForFast(() =>
-          expect(mocks.callGateway).toHaveBeenCalledWith(
-            expect.objectContaining({ method: "agent.wait" }),
-          ),
-        );
-      },
-    );
+    const settleRootWork = observeRootWork();
+    try {
+      await withOwnedSessionTranscriptWrites(
+        { sessionKey, withTranscriptWrite: withRequesterTranscriptWrite },
+        async () => {
+          mod.registerSubagentRun({
+            runId: "run-detached-requester-owner",
+            requesterSessionKey: sessionKey,
+            task: "finish after the requester attempt exits",
+            expectsCompletionMessage: true,
+          });
+          await waitForFast(() =>
+            expect(mocks.callGateway).toHaveBeenCalledWith(
+              expect.objectContaining({ method: "agent.wait" }),
+            ),
+          );
+        },
+      );
 
-    disposed = true;
-    resolveWait({ status: "ok", startedAt: 111, endedAt: 222 });
+      disposed = true;
+      resolveWait({ status: "ok", startedAt: 111, endedAt: 222 });
+      await announceEntered.promise;
+    } finally {
+      disposed = true;
+      resolveWait({ status: "ok", startedAt: 111, endedAt: 222 });
+      await settleRootWork();
+    }
 
-    await waitForFast(() => expect(freshTranscriptWrite).toHaveBeenCalledOnce());
+    expect(freshTranscriptWrite).toHaveBeenCalledOnce();
     expect(freshCompletionWrite).toHaveBeenCalledOnce();
     expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledOnce();
     const announceParams = (
