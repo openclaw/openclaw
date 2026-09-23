@@ -422,19 +422,13 @@ export function createWorkerInferenceManager(options: {
           }
           launched = true;
           const fence = safeRevalidate(params.revalidate);
-          const frame: WorkerInferenceTerminalFrame = {
-            type: "event",
-            event: "worker.inference.terminal",
-            payload: {
-              runEpoch: params.request.runEpoch,
-              sessionId: params.request.sessionId,
-              runId: params.request.runId,
-              turnId: params.request.turnId,
-              seq: 1,
-              outcome: fence ? terminalError(fence) : cachedOutcome,
-            },
-          };
-          trySend(params.sink, frame);
+          trySend(
+            params.sink,
+            terminalFrame(
+              { request: params.request, seq: 0 },
+              fence ? terminalError(fence) : cachedOutcome,
+            ),
+          );
         },
       };
     };
