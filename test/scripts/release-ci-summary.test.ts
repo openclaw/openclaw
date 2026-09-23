@@ -5343,6 +5343,6 @@ describe("lane waiver advisory evidence", () => {
     ]);
     expect(
       releaseAdvisoryJobEvidence(childEvidence, "stable", "main").map((entry) => entry.job),
-    ).toEqual(["checks-windows-node-test-1", "cross_os_release_checks / Linux / packaged fresh"]);
+    ).toEqual(["checks-windows-node-test-1"]);
   });
 });

@@ -4639,9 +4639,7 @@ describe("operator lane waiver", () => {
   it("keeps a solitary gate failure and incomplete evidence blocking under a waiver", () => {
     const lonelyGate = child("normalCi", {
       conclusion: "failure",
-      jobs: [job("checks-node-fast"), job("openclaw/ci-gate")].map((entry) =>
-        entry.name === "checks-node-fast" ? { ...entry, conclusion: "success" } : entry,
-      ),
+      jobs: [job("checks-node-fast", "success"), job("openclaw/ci-gate")],
       status: "completed",
     });
     expect(terminalPolicyPass(lonelyGate, policy.releaseProfile, policy.workflowRef, "ship")).toBe(
