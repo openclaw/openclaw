@@ -21,7 +21,9 @@ function resolve(configuredModel?: Record<string, unknown>) {
     baseUrl,
     models: configuredModel ? [{ id: "future-model", ...configuredModel }] : [],
   };
-  const cfg = { models: { providers: { [provider]: providerConfig } } } as OpenClawConfig;
+  const cfg = {
+    models: { providers: { [provider]: providerConfig } },
+  } as unknown as OpenClawConfig;
   return applyConfiguredProviderOverrides({
     provider,
     discoveredModel,
