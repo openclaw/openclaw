@@ -558,6 +558,7 @@ export function claimWorktreeRemovalRow(
     now: number;
     checks?: RunLeaseOwnerChecks;
     retiredExact?: true;
+    retiredRemoval?: true;
     assertCurrent?: () => void;
   },
 ): void {
@@ -576,10 +577,13 @@ export function claimWorktreeRemovalRow(
       ).rows[0];
       if (
         !record ||
-        (params.retiredExact
+        (params.retiredRemoval
           ? record.removed_at == null ||
-            !record.snapshot_ref?.startsWith("refs/openclaw/snapshots/exact-")
-          : record.removed_at != null)
+            record.snapshot_ref !== `refs/openclaw/snapshots/${params.worktreeId}`
+          : params.retiredExact
+            ? record.removed_at == null ||
+              !record.snapshot_ref?.startsWith("refs/openclaw/snapshots/exact-")
+            : record.removed_at != null)
       ) {
         throw new WorktreeRemovalContentionError(
           "finalized",
