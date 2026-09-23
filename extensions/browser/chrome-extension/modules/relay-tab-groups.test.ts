@@ -7,11 +7,13 @@ function createChromeApi({
   groupError,
   renameError,
   groupErrorTargetGroup,
+  groupTitle = OPENCLAW_TAB_GROUP_TITLE,
 }: {
   group?: boolean;
   groupError?: Error;
   renameError?: Error;
   groupErrorTargetGroup?: number;
+  groupTitle?: string;
 } = {}) {
   const tab = { id: 1, windowId: 1, groupId: group ? 7 : -1 };
   return {
@@ -30,7 +32,7 @@ function createChromeApi({
       },
       tabGroups: {
         query: vi.fn(async () => (group ? [{ id: 7, windowId: 1 }] : [])),
-        get: vi.fn(async () => ({ id: 7, title: OPENCLAW_TAB_GROUP_TITLE, windowId: 1 })),
+        get: vi.fn(async (groupId: number) => ({ id: groupId, title: groupTitle, windowId: 1 })),
         update: vi.fn(async () => {
           if (renameError) {
             throw renameError;
@@ -79,6 +81,33 @@ describe("addTabToOpenClawGroup", () => {
       grouping: true,
       initialGroup: false,
       expectedGroupId: 7,
+      assertCurrent: vi.fn(),
+    };
+
+    await expect(
+      addTabToOpenClawGroup(1, {
+        chromeApi: harness.chromeApi,
+        getGroupColor: async () => "orange",
+        created,
+      }),
+    ).rejects.toThrow(groupingError.message);
+    expect(created.groupFallback).toBe(false);
+  });
+
+  it("requires the current group title when group creation never proves ownership", async () => {
+    const groupingError = new Error("group identity unavailable");
+    const harness = createChromeApi({
+      groupError: groupingError,
+      groupErrorTargetGroup: 8,
+      groupTitle: "Unrelated",
+    });
+    const created = {
+      tab: { ...harness.tab },
+      groupId: -1,
+      groupFallback: false,
+      grouping: true,
+      initialGroup: true,
+      expectedGroupId: undefined,
       assertCurrent: vi.fn(),
     };
 

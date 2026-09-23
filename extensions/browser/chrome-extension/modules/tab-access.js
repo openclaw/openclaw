@@ -222,12 +222,14 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
     // Handoff retires the creator's epoch gate, not its initial-blank record.
     // Commands and attachments retain their own epochs after re-selection.
     const created = createdTabs.get(tabId);
+    const creatorIsCurrent =
+      !created || (created.handedOff && !created.initialBlank) || created.isCurrent();
     return (
       epochMatches(tabId, epoch, groupId) &&
+      creatorIsCurrent &&
       (!created ||
-        (created.isCurrent() &&
-          (created.handedOff ||
-            (groupRevocations.isCreationCurrent(created) && epochMatches(tabId, created.epoch)))))
+        created.handedOff ||
+        (groupRevocations.isCreationCurrent(created) && epochMatches(tabId, created.epoch)))
     );
   }
 
