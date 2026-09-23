@@ -95,12 +95,22 @@ function prepareWorkshop(baseline: DatabaseSync, target: DatabaseSync): void {
     }
     // Reintroduced migration fields are candidate-owned facts, not permission
     // to overwrite them with B's older attribution. Even nullable columns can
-    // contain acknowledged writes; refuse before rebuilding either table.
+    // contain acknowledged writes; refuse before rebuilding the affected table.
+    const candidateColumns = new Set(
+      columns(target, table).map((column) => text(column, "name").toLowerCase()),
+    );
     const restoredColumns =
       table === proposals ? ["workspace_dir", "claim_released_time"] : ["workspace_dir"];
     for (const column of restoredColumns) {
-      if (tableHasColumn(baseline, table, column) && tableHasColumn(target, table, column)) {
+      if (tableHasColumn(baseline, table, column) && candidateColumns.has(column)) {
         refuse(table, `candidate column ${column} collides with a restored migration field`);
+      }
+    }
+    // SQLite column names are case-insensitive. Neither a declared rowid nor
+    // an extra field may shadow the physical row identity retained below.
+    for (const column of ["rowid", "__recovery_rowid__"]) {
+      if (candidateColumns.has(column)) {
+        refuse(table, `candidate column ${column} collides with the retained row identity`);
       }
     }
     const currentRows = rows(target, `SELECT rowid AS __recovery_rowid__, * FROM ${table}`);

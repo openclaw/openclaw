@@ -49,6 +49,10 @@ describe("shared-state recovery preparation", () => {
       "proposal workspace collision",
       "proposal claim collision",
       "review workspace collision",
+      "proposal internal rowid collision",
+      "review internal rowid collision",
+      "proposal native rowid collision",
+      "review native rowid collision",
       "owner collision",
       "unknown schema",
       "prepared worker",
@@ -142,6 +146,13 @@ describe("shared-state recovery preparation", () => {
           } else if (change === "review workspace collision") {
             candidate.exec(`ALTER TABLE skill_workshop_collection_reviews ADD COLUMN workspace_dir TEXT;
               UPDATE skill_workshop_collection_reviews SET workspace_dir='candidate review workspace'`);
+          } else if (change.includes("rowid collision")) {
+            const table = change.startsWith("proposal")
+              ? "skill_workshop_proposals"
+              : "skill_workshop_collection_reviews";
+            const column = change.includes("internal") ? "__RECOVERY_ROWID__" : "ROWID";
+            candidate.exec(`ALTER TABLE ${table} ADD COLUMN ${column} INTEGER;
+              UPDATE ${table} SET ${column}=123`);
           } else if (change === "owner collision") {
             candidate.exec(
               "UPDATE skill_workshop_proposals SET owner_agent_id='other' WHERE proposal_id='kept'",
@@ -227,7 +238,7 @@ describe("shared-state recovery preparation", () => {
         } else {
           await expect(prepare).rejects.toThrow(
             change.endsWith("collision") && change !== "owner collision"
-              ? /candidate column .* collides with a restored migration field/
+              ? /candidate column .* collides with (?:a restored migration field|the retained row identity)/
               : /recovery refused/,
           );
         }
