@@ -18,6 +18,7 @@ export type CapabilityEnvelope = {
   inputs?: Array<Record<string, unknown>>;
   outputs: Array<Record<string, unknown>>;
   ignoredOverrides?: Array<Record<string, unknown>>;
+  requestedOverrides?: Record<string, unknown>;
   error?: string;
 };
 
@@ -28,9 +29,12 @@ export const CAPABILITY_METADATA: CapabilityMetadata[] = [
     transports: ["local", "gateway"],
     flags: [
       "--prompt",
+      "--prompt-file",
       "--file",
       "--model",
       "--thinking",
+      "--max-output-tokens",
+      "--temperature",
       "--local",
       "--gateway",
       "--agent",

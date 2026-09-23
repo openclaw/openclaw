@@ -120,6 +120,8 @@ Text inference and model/provider inspection.
 
 ```bash
 openclaw infer model run --prompt "Reply with exactly: smoke-ok" --json
+chmod 600 ./private-prompt.txt
+openclaw infer model run --prompt-file ./private-prompt.txt --max-output-tokens 2048 --temperature 0.2 --json
 openclaw infer model run --prompt "Summarize this changelog entry" --model openai/gpt-5.4 --json
 openclaw infer model run --prompt "Describe this image in one sentence" --file ./photo.jpg --model google/gemini-2.5-flash --json
 openclaw infer model run --prompt "Use more reasoning here" --thinking high --json
@@ -150,7 +152,9 @@ Notes:
 - OpenAI ChatGPT/Codex OAuth (`openai-chatgpt-responses` API) local probes add a minimal system instruction so the transport can populate its required `instructions` field — no full agent context, tools, memory, or session transcript.
 - `model run --file` attaches image content directly to the single user message. Common formats (PNG, JPEG, WebP) work when MIME type is detected as `image/*`; unsupported or unrecognized files fail before the provider is called. Use `infer image describe` instead when you want OpenClaw's image-model routing and fallbacks rather than a direct multimodal-model probe.
 - The selected model must support image input; text-only models may reject the request at the provider layer.
-- `model run --prompt` must contain non-whitespace text; empty prompts are rejected before any provider or Gateway call.
+- Use exactly one of `--prompt` or `--prompt-file`. Both inputs must contain non-whitespace text; empty prompts are rejected before any provider or Gateway call.
+- `--prompt-file` is supported only on POSIX hosts. The CLI opens at most 1 MiB from a regular, non-symlink file owned by the current user with mode exactly `0600`, and rejects the request before local or Gateway execution when those checks fail. Windows is not supported because this contract depends on POSIX ownership, permission, and no-follow semantics.
+- `--max-output-tokens` accepts an integer from 1 to 1,000,000 and `--temperature` accepts a number from 0 to 2. These are requested overrides: providers can apply, constrain, or reject them. JSON output reports only the values OpenClaw requested; it does not claim provider-resolved effective settings.
 - Local `model run` exits non-zero when the provider returns no text output, so unreachable providers and empty completions do not look like successful probes.
 - Use `model run --gateway` to test Gateway routing or agent-runtime setup while keeping the model input raw. Use [`openclaw agent`](/cli/agent) or a chat surface for full agent context, tools, memory, and session transcript.
 - `--thinking adaptive` maps to the completion-runtime level `medium`; `--thinking max` maps to `max` for OpenAI models that support the native max effort, otherwise `xhigh`.
