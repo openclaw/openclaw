@@ -107,6 +107,8 @@ async function startProofProvider() {
   const errors: unknown[] = [];
   let afterCancel = false;
   let childRequestCount = 0;
+  let freshRequestCount = 0;
+  let unexpectedWakeRequestCount = 0;
   let sequence = 0;
   const server = createServer((request, response) => {
     void (async () => {
@@ -167,10 +169,17 @@ async function startProofProvider() {
         return;
       }
       if (inputText.includes(FRESH_PROMPT)) {
+        freshRequestCount += 1;
+        if (freshRequestCount > 1) {
+          unexpectedWakeRequestCount += 1;
+          reply(WAKE_MARKER);
+          return;
+        }
         reply(FRESH_MARKER);
         return;
       }
       if (afterCancel) {
+        unexpectedWakeRequestCount += 1;
         reply(WAKE_MARKER);
         return;
       }
@@ -212,11 +221,17 @@ async function startProofProvider() {
     firstChildStarted: firstChildStarted.promise,
     firstChildClosed: firstChildClosed.promise,
     releaseYieldCall: () => releaseYieldCall.resolve(),
-    markCancelCommitted: () => {
+    markStopRequested: () => {
       afterCancel = true;
     },
     get childRequestCount() {
       return childRequestCount;
+    },
+    get freshRequestCount() {
+      return freshRequestCount;
+    },
+    get unexpectedWakeRequestCount() {
+      return unexpectedWakeRequestCount;
     },
     stop: async () => {
       releaseYieldCall.resolve();
@@ -334,12 +349,12 @@ describe("yielded parent cancellation across Gateway restart", () => {
     )) as { status?: string; livenessState?: string; stopReason?: string };
     expect(yielded).toMatchObject({ status: "ok", livenessState: "paused" });
 
+    provider.markStopRequested();
     const stop = (await gateway.call("sessions.abort", {
       key: PARENT_KEY,
       clearQueued: true,
     })) as { ok?: boolean; status?: string; abortedRunId?: string | null };
     expect(stop).toMatchObject({ ok: true, status: "aborted", abortedRunId: null });
-    provider.markCancelCommitted();
     await provider.firstChildClosed;
 
     const beforeRestartTasks = (await gateway.call("tasks.list", {
@@ -381,12 +396,16 @@ describe("yielded parent cancellation across Gateway restart", () => {
         cancelledTask,
         retainedTask,
         childRequestCount: provider.childRequestCount,
+        freshRequestCount: provider.freshRequestCount,
+        unexpectedWakeRequestCount: provider.unexpectedWakeRequestCount,
         requests: provider.requests,
         outbound: outbound.map((message) => message.text),
       }),
     );
     expect(provider.errors).toEqual([]);
     expect(provider.childRequestCount).toBe(1);
+    expect(provider.freshRequestCount).toBe(1);
+    expect(provider.unexpectedWakeRequestCount).toBe(0);
     expect(retainedTask).toMatchObject({ runId: spawn.runId, status: "cancelled" });
     expect(outbound.filter((message) => message.text.includes(FRESH_MARKER))).toHaveLength(1);
     expect(
