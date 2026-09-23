@@ -149,6 +149,7 @@ function bindSession(
 
 export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalogProvider {
   const pages = new Map<string, NodePage>();
+  let connectedNodes = new Map<string, CatalogNode["connectedAtMs"]>();
   const active = new Set<Promise<CatalogPage>>();
   let config: ReturnType<PluginRuntime["config"]["current"]> | undefined;
   let invokeNode: OpenClawPluginServiceContext["invokeNode"];
@@ -163,6 +164,7 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
       invokeNode = undefined;
       lifetime.abort();
       pages.clear();
+      connectedNodes.clear();
       await Promise.allSettled(active);
     },
   });
@@ -231,18 +233,12 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
       };
       const key = JSON.stringify([node.nodeId, params]);
       let entry = pages.get(key);
-      if (cursor !== undefined && entry?.page) {
-        // A timed-out load-more has no subscriber; its retry consumes the completed page.
-        pages.delete(key);
-        return project(entry.page);
-      }
       if (!entry) {
         if (pages.size >= 32) {
           const evict = [...pages].find(([, candidate]) => !candidate.pending);
-          if (!evict) {
-            return failed();
+          if (evict) {
+            pages.delete(evict[0]);
           }
-          pages.delete(evict[0]);
         }
         entry = { nodeId: node.nodeId, connection: node.connectedAtMs };
         pages.set(key, entry);
@@ -253,7 +249,8 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
       const current = () =>
         !signal.aborted &&
         api.runtime.config.current() === revision &&
-        pages.get(key) === publication;
+        connectedNodes.has(node.nodeId) &&
+        connectedNodes.get(node.nodeId) === publication.connection;
       const follower = Boolean(publication.pending);
       if (!publication.pending) {
         const pending = observeCatalogPhase("invoke", () =>
@@ -276,6 +273,10 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
         const release = () => {
           publication.pending = undefined;
           active.delete(pending);
+          // Bound retained pages without rejecting or retiring admitted source work.
+          if (pages.size > 32 && pages.get(key) === publication) {
+            pages.delete(key);
+          }
         };
         void pending.then(release, release);
       }
@@ -284,6 +285,10 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
         (page) => (current() ? project(page) : failed()),
         failed,
       );
+      // Metadata lookups and pagination cannot consume pending host updates.
+      if (query.allowPartialResults !== true || !onHost || !waitUntil) {
+        return await completed;
+      }
       const loading = (): SessionCatalogHost => {
         publishSessionCatalogHost(
           {
@@ -299,27 +304,15 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
         return {
           ...(publication.page ? project(publication.page) : { ...common, sessions: [] }),
           pending: true,
-          ...(cursor !== undefined
-            ? {
-                error: {
-                  code: "NODE_CATALOG_LOADING",
-                  message: "Shared sessions are still loading. Retry shortly.",
-                },
-              }
-            : {}),
         };
       };
       const remaining = deadline - performance.now();
       if (follower || publication.page || remaining <= 0) {
         return loading();
       }
-      const host = await withTimeout(completed, remaining, {
+      return await withTimeout(completed, remaining, {
         message: "Session Share catalog is still loading",
       }).catch(loading);
-      if (cursor !== undefined && !host.pending && pages.get(key) === publication) {
-        pages.delete(key);
-      }
-      return host;
     } catch {
       query.signal?.throwIfAborted();
       return failed();
@@ -355,13 +348,16 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
         config = currentConfig;
         pages.clear();
       }
-      const connected = new Map(
+      connectedNodes = new Map(
         nodes
           .filter((node) => node.connected && isSessionHost(node))
           .map((node) => [node.nodeId, node.connectedAtMs]),
       );
       for (const [key, entry] of pages) {
-        if (!connected.has(entry.nodeId) || connected.get(entry.nodeId) !== entry.connection) {
+        if (
+          !connectedNodes.has(entry.nodeId) ||
+          connectedNodes.get(entry.nodeId) !== entry.connection
+        ) {
           pages.delete(key);
         }
       }
@@ -379,7 +375,9 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
       const pending = eligible.map(async (node) => {
         const host = await listNode(node, query, deadline);
         query.signal?.throwIfAborted();
-        query.onHost?.(host);
+        if (!host.pending) {
+          query.onHost?.(host);
+        }
         return host;
       });
       let hosts: SessionCatalogHost[];

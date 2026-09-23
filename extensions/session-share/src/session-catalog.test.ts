@@ -87,6 +87,91 @@ async function catalogFixture() {
 }
 
 describe("session-share receiver catalog", () => {
+  it("serves complete lookups during cache saturation without losing active publications", async () => {
+    vi.useFakeTimers();
+    const fixture = await catalogFixture();
+    const gate = createDeferred<unknown>();
+    fixture.list.mockResolvedValue({
+      nodes: Array.from({ length: 32 }, (_, index) => ({
+        nodeId: `node-${index}`,
+        connected: true,
+        commands,
+      })),
+    });
+    fixture.invoke.mockImplementation(() => gate.promise);
+    const onHost = vi.fn();
+    const publications: Promise<void>[] = [];
+    try {
+      const listing = fixture.catalog.list({
+        allowPartialResults: true,
+        onHost,
+        waitUntil: (work) => publications.push(work),
+      });
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(await listing).toHaveLength(32);
+      const selected = fixture.catalog.list({ hostIds: ["node:node-0"], limitPerHost: 1 });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fixture.invoke).toHaveBeenCalledTimes(33);
+      gate.resolve({ sessions: [nativeSession] });
+      expect((await selected)[0]).toMatchObject({ sessions: [nativeSession] });
+      await Promise.all(publications);
+      expect(onHost.mock.calls.filter(([host]) => host.sessions.length === 1)).toHaveLength(32);
+    } finally {
+      gate.resolve({ sessions: [] });
+      await vi.runAllTimersAsync();
+      await fixture.stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    { label: "cold default", query: {}, warm: false },
+    { label: "warm default", query: {}, warm: true },
+    { label: "explicit complete", query: { allowPartialResults: false }, warm: false },
+    { label: "unsubscribed opt-in", query: { allowPartialResults: true }, warm: false },
+    { label: "targeted", query: { hostIds: ["node:alpha"] }, warm: false },
+    {
+      label: "cursor",
+      query: { cursors: { "node:alpha": sessionCatalogPaging.encodeCursor(20) } },
+      warm: false,
+    },
+  ])("returns complete snapshots for $label callers", async ({ query, warm }) => {
+    vi.useFakeTimers();
+    const fixture = await catalogFixture();
+    try {
+      if (warm) {
+        await fixture.catalog.list(query);
+      }
+      const refreshed = { ...nativeSession, name: "Complete refresh" };
+      fixture.invoke.mockImplementation(async () => {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 6_000);
+        });
+        return { sessions: [refreshed] };
+      });
+      let settled = 0;
+      const calls = Array.from({ length: 6 }, () =>
+        fixture.catalog.list(query).then((hosts) => {
+          settled++;
+          return hosts;
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(settled).toBe(0);
+      await vi.advanceTimersByTimeAsync(1_000);
+      for (const hosts of await Promise.all(calls)) {
+        expect(hosts[0]).toMatchObject({ sessions: [refreshed] });
+        expect(hosts[0]?.pending).toBeUndefined();
+        expect(hosts[0]?.error).toBeUndefined();
+      }
+      expect(fixture.invoke).toHaveBeenCalledTimes(warm ? 2 : 1);
+    } finally {
+      await vi.runAllTimersAsync();
+      await fixture.stop();
+      vi.useRealTimers();
+    }
+  });
+
   it.each(["success", "failure"])(
     "bounds a six-caller cold burst through a slow node %s",
     async (outcome) => {
@@ -108,7 +193,11 @@ describe("session-share receiver catalog", () => {
         const updates = Array.from({ length: 6 }, () => vi.fn());
         const pending = updates.map((onHost) =>
           fixture.catalog
-            .list({ onHost, waitUntil: (work) => publications.push(work) })
+            .list({
+              allowPartialResults: true,
+              onHost,
+              waitUntil: (work) => publications.push(work),
+            })
             .then((hosts) => {
               elapsed.push(Date.now() - started);
               return hosts;
@@ -126,6 +215,7 @@ describe("session-share receiver catalog", () => {
         expect(Math.max(...elapsed)).toBeLessThanOrEqual(5_000);
         expect(fixture.invoke).toHaveBeenCalledTimes(1);
         for (const update of updates) {
+          expect(update).not.toHaveBeenCalledWith(expect.objectContaining({ pending: true }));
           expect(update).toHaveBeenLastCalledWith(
             expect.objectContaining(
               outcome === "success"
@@ -143,7 +233,7 @@ describe("session-share receiver catalog", () => {
     },
   );
 
-  it.each(["unchanged", "config", "connection", "query", "cursor"])(
+  it.each(["unchanged", "config", "connection", "query"])(
     "retains only a compatible page during %s refresh",
     async (revision) => {
       const fixture = await catalogFixture();
@@ -164,11 +254,8 @@ describe("session-share receiver catalog", () => {
         const onHost = vi.fn();
         const publications: Promise<void>[] = [];
         const pending = fixture.catalog.list({
+          allowPartialResults: true,
           search: revision === "query" ? "new" : undefined,
-          cursors:
-            revision === "cursor"
-              ? { "node:alpha": sessionCatalogPaging.encodeCursor(20) }
-              : undefined,
           onHost,
           waitUntil: (work) => publications.push(work),
         });
@@ -180,20 +267,9 @@ describe("session-share receiver catalog", () => {
             sessions: revision === "unchanged" ? [nativeSession] : [],
           }),
         ]);
-        if (revision === "cursor") {
-          expect(hosts[0]?.error?.code).toBe("NODE_CATALOG_LOADING");
-        }
         gate.resolve({ sessions: [refreshed] });
         await Promise.all(publications);
         expect(onHost).toHaveBeenLastCalledWith(expect.objectContaining({ sessions: [refreshed] }));
-        if (revision === "cursor") {
-          const retried = await fixture.catalog.list({
-            cursors: { "node:alpha": sessionCatalogPaging.encodeCursor(20) },
-          });
-          expect(retried[0]).toMatchObject({ sessions: [refreshed] });
-          expect(retried[0]?.pending).toBeUndefined();
-          expect(retried[0]?.error).toBeUndefined();
-        }
         expect(fixture.invoke).toHaveBeenCalledTimes(2);
       } finally {
         gate.resolve({ sessions: [] });
@@ -215,7 +291,11 @@ describe("session-share receiver catalog", () => {
       search: "other",
       waitUntil: (work) => publications.push(work),
     });
-    const follower = fixture.catalog.list({ waitUntil: (work) => publications.push(work) });
+    const follower = fixture.catalog.list({
+      allowPartialResults: true,
+      onHost: vi.fn(),
+      waitUntil: (work) => publications.push(work),
+    });
     await follower;
     expect(fixture.invoke).toHaveBeenCalledTimes(2);
     controller.abort(new Error("caller retired"));
