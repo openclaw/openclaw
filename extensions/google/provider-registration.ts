@@ -1,17 +1,11 @@
-import type {
-  OpenClawPluginApi,
-  ProviderReasoningOutputModeContext,
-} from "openclaw/plugin-sdk/plugin-entry";
+import type { ProviderReasoningOutputModeContext } from "openclaw/plugin-sdk/plugin-entry";
 import { runLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-entry";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeGoogleModelId } from "./model-id.js";
 import { GOOGLE_GEMINI_DEFAULT_MODEL, applyGoogleGeminiModelDefault } from "./onboard.js";
 import { buildGoogleLiveCatalogProvider } from "./provider-catalog-runtime.js";
-import {
-  buildGoogleStaticCatalogProvider,
-  buildGoogleVertexStaticCatalogProvider,
-} from "./provider-catalog.js";
+import googleProviderDiscovery from "./provider-discovery.js";
 import { GOOGLE_GEMINI_PROVIDER_HOOKS } from "./provider-hooks.js";
 import {
   isGoogleNativeVideoModelId,
@@ -28,7 +22,6 @@ import {
   createGoogleGenerativeAiTransportStreamFn,
   createGoogleVertexTransportStreamFn,
 } from "./transport-stream.js";
-import { resolveGoogleVertexConfigApiKey } from "./vertex-adc-config.js";
 
 function normalizeGoogleVideoInput(
   ctx: Parameters<NonNullable<ProviderPlugin["normalizeResolvedModel"]>>[0],
@@ -56,9 +49,7 @@ function resolveGoogleReasoningOutputMode(
 
 export function buildGoogleProvider(): ProviderPlugin {
   return {
-    id: "google",
-    label: "Google AI Studio",
-    docsPath: "/providers/models",
+    ...googleProviderDiscovery,
     hookAliases: ["google-antigravity", "google-vertex"],
     envVars: ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
     auth: [
@@ -87,17 +78,6 @@ export function buildGoogleProvider(): ProviderPlugin {
       resolveGoogleGenerativeAiTransport({ provider, api, baseUrl }),
     normalizeConfig: ({ provider, providerConfig }) =>
       normalizeGoogleProviderConfig(provider, providerConfig),
-    resolveConfigApiKey: ({ provider, env }) =>
-      provider === "google-vertex" ? resolveGoogleVertexConfigApiKey(env) : undefined,
-    staticCatalog: {
-      order: "simple",
-      run: async () => ({
-        providers: {
-          google: buildGoogleStaticCatalogProvider(),
-          "google-vertex": buildGoogleVertexStaticCatalogProvider(),
-        },
-      }),
-    },
     catalog: {
       order: "simple",
       run: async (ctx) => {
@@ -151,8 +131,4 @@ export function buildGoogleProvider(): ProviderPlugin {
     resolveReasoningOutputMode: resolveGoogleReasoningOutputMode,
     isModernModelRef: ({ modelId }) => isModernGoogleModel(modelId),
   };
-}
-
-export function registerGoogleProvider(api: OpenClawPluginApi) {
-  api.registerProvider(buildGoogleProvider());
 }

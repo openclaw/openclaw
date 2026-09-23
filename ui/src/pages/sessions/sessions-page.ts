@@ -29,7 +29,10 @@ import { openEditor } from "../../lib/editor-links.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
-import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
+import {
+  readSessionMethodAccess,
+  type SessionMethodAccessRequest,
+} from "../../lib/session-method-access.ts";
 import {
   SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
   sessionPullRequestsForGateway,
@@ -65,7 +68,7 @@ import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { runControlUiPluginAction } from "../../plugins/control-ui-actions.ts";
-import { sessionAgentIdentityById, sessionAgentIds } from "./agent-scope.ts";
+import { ensureSessionAgentIdentities, sessionAgentIdentityById } from "./agent-scope.ts";
 import { prepareArchiveOutcome } from "./archive-outcome.ts";
 import { rememberSessionCustomGroup, sessionCategoryNames } from "./custom-groups.ts";
 import { buildSessionsListQuery } from "./list-query.ts";
@@ -312,22 +315,14 @@ class SessionsPage extends OpenClawLightDomElement {
     );
   }
 
-  private mutationDisabledReason(request: {
-    method: string;
-    params?: unknown;
-    requiredScope?: "operator.write" | "operator.admin";
-  }): string | undefined {
+  private mutationDisabledReason(request: SessionMethodAccessRequest): string | undefined {
     const access = readSessionMethodAccess(this.context?.gateway.snapshot, request);
     return access.allowed ? undefined : access.reason;
   }
 
   private requireMutationAccess(
     scope: SessionsPageRequestScope,
-    request: {
-      method: string;
-      params?: unknown;
-      requiredScope?: "operator.write" | "operator.admin";
-    },
+    request: SessionMethodAccessRequest,
   ): boolean {
     const access = readSessionMethodAccess(scope.gateway.snapshot, request);
     if (access.allowed) {
@@ -484,7 +479,7 @@ class SessionsPage extends OpenClawLightDomElement {
     }
     this.appliedListResult = result;
     this.result = filterSessionRows(result, { archivedFilter: this.statusFilter });
-    this.ensureAgentIdentities(this.result);
+    ensureSessionAgentIdentities(this.context?.agentIdentity, this.result);
   }
 
   private async refreshSessionList(scope = this.captureRequestScope()) {
@@ -576,20 +571,6 @@ class SessionsPage extends OpenClawLightDomElement {
     this.transcriptSearchQuery = query;
     this.submittedTranscriptSearchQuery = query;
     await this.transcriptSearchTask.run();
-  }
-
-  private ensureAgentIdentities(result: SessionsListResult | null) {
-    const context = this.context;
-    if (!context || !result) {
-      return;
-    }
-    const agentIds = sessionAgentIds(result).filter(
-      (agentId) => !context.agentIdentity.get(agentId),
-    );
-    if (agentIds.length === 0) {
-      return;
-    }
-    void context.agentIdentity.ensure(agentIds);
   }
 
   private updateFilters(next: {
@@ -1067,7 +1048,7 @@ class SessionsPage extends OpenClawLightDomElement {
     }
     const patch = resolveSessionRenamePatch(value, initialValue, row.label);
     if (patch) {
-      await this.patchSession(row.key, patch, scope, row.sessionId);
+      await this.patchSession(row.key, patch, scope, row.sessionId, { sessionScope: true });
     }
   }
 
@@ -1076,7 +1057,7 @@ class SessionsPage extends OpenClawLightDomElement {
     patch: Parameters<SessionsProps["onPatch"]>[1],
     scope: SessionsPageRequestScope | null = this.captureRequestScope(),
     expectedSessionId?: string,
-    onConfirmed?: (result: SessionPatchResult) => void,
+    options: { onConfirmed?: (result: SessionPatchResult) => void; sessionScope?: boolean } = {},
   ): Promise<SessionsPageMutationResult> {
     if (!scope) {
       // Nothing was attempted (e.g. rename dialog submitted after the gateway
@@ -1089,9 +1070,12 @@ class SessionsPage extends OpenClawLightDomElement {
       return "failed";
     }
     const agentId = this.sessionAgentId(key, scope.context);
+    const row = this.result?.sessions.find((entry) => entry.key === key);
     if (
       !this.requireMutationAccess(scope, {
         method: "sessions.patch",
+        sessionScope: options.sessionScope,
+        session: row,
         params: {
           key,
           ...patch,
@@ -1107,7 +1091,6 @@ class SessionsPage extends OpenClawLightDomElement {
           agentId,
           ...(expectedSessionId ? { expectedSessionId } : {}),
         });
-      const row = this.result?.sessions.find((entry) => entry.key === key);
       const patched =
         patch.archived === true
           ? await withSessionWorkspaceRecovery({
@@ -1124,7 +1107,7 @@ class SessionsPage extends OpenClawLightDomElement {
             })
           : await request();
       if (patched) {
-        onConfirmed?.(patched);
+        options.onConfirmed?.(patched);
       }
       if (!this.isRequestScopeCurrent(scope)) {
         return "stale";
@@ -1168,7 +1151,10 @@ class SessionsPage extends OpenClawLightDomElement {
       return;
     }
     try {
-      await this.patchSession(row.key, { archived: true }, scope, row.sessionId, onConfirmed);
+      await this.patchSession(row.key, { archived: true }, scope, row.sessionId, {
+        onConfirmed,
+        sessionScope: true,
+      });
     } finally {
       finishArchive();
     }
@@ -1338,7 +1324,9 @@ class SessionsPage extends OpenClawLightDomElement {
             });
             break;
           case "toggle-pin":
-            void this.patchSession(row.key, { pinned: row.pinned !== true });
+            void this.patchSession(row.key, { pinned: row.pinned !== true }, undefined, undefined, {
+              sessionScope: true,
+            });
             break;
           case "toggle-involving-me": {
             const scope = this.captureRequestScope();
@@ -1393,7 +1381,9 @@ class SessionsPage extends OpenClawLightDomElement {
             break;
           case "toggle-archived":
             if (row.archived === true) {
-              void this.patchSession(row.key, { archived: false }, undefined, row.sessionId);
+              void this.patchSession(row.key, { archived: false }, undefined, row.sessionId, {
+                sessionScope: true,
+              });
             } else {
               void this.archiveSessionWithUndo(row);
             }
@@ -1475,10 +1465,13 @@ class SessionsPage extends OpenClawLightDomElement {
           selectedKeys: this.selectedKeys,
           sessionMenu: this.sessionMenu,
           expandedSessionKey: this.expandedSessionKey,
-          patchWriteDisabledReason: this.mutationDisabledReason({
-            method: "sessions.patch",
-            params: { key: "", label: null },
-          }),
+          labelDisabledReason: (row) =>
+            this.mutationDisabledReason({
+              method: "sessions.patch",
+              params: { key: row.key, label: null },
+              sessionScope: true,
+              session: row,
+            }),
           patchAdminDisabledReason: this.mutationDisabledReason({
             method: "sessions.patch",
             params: { key: "", thinkingLevel: null },
@@ -1547,7 +1540,8 @@ class SessionsPage extends OpenClawLightDomElement {
           onRefresh: () => void this.refreshSessionList(),
           onStatusFilterChange: (statusFilter) => this.updateStatusFilter(statusFilter),
           onDeleteAllArchived: () => void this.deleteAllArchived(),
-          onPatch: (key, patch) => void this.patchSession(key, patch),
+          onPatch: (key, patch, options) =>
+            void this.patchSession(key, patch, undefined, undefined, options),
           onToggleSelect: (key) => {
             const next = new Set(this.selectedKeys);
             if (next.has(key)) {

@@ -296,7 +296,13 @@ export async function acquireWorktreeRunLease(
 
 export function claimWorktreeRemoval(
   env: NodeJS.ProcessEnv,
-  params: { worktreeId: string; token: string; retiredExact?: true; assertCurrent?: () => void },
+  params: {
+    worktreeId: string;
+    token: string;
+    retiredExact?: true;
+    retiredRemoval?: true;
+    assertCurrent?: () => void;
+  },
 ): void {
   const pid = process.pid;
   claimWorktreeRemovalRow(env, {

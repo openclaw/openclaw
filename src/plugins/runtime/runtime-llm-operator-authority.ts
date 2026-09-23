@@ -32,7 +32,7 @@ export function bindLlmOperatorAuthority(
       if (hostCaller?.kind === "context-engine") {
         return await complete(params, {
           signal: params.signal,
-          assertCurrent: () => params.signal?.throwIfAborted(),
+          assertCurrent: () => {},
           bindModelExecution: () => undefined,
         });
       }
@@ -55,10 +55,10 @@ export function bindLlmOperatorAuthority(
           ? AbortSignal.any([params.signal, operatorAuthority.signal])
           : operatorAuthority.signal
         : params.signal;
+      // Operator currency only: the caller's own abort settles through the provider result.
       const assertCurrent = () => {
         capturedOperator.assertInvocationCurrent?.();
         operatorAuthority?.assertCurrent();
-        signal?.throwIfAborted();
       };
       assertCurrent();
       return await complete(params, {

@@ -7,69 +7,64 @@ import {
 } from "./method-scopes.js";
 
 describe("session-scoped method admission", () => {
-  it("keeps agent catalogs behind broad read authority", () => {
-    expect(resolveSessionMethodScope("agents.list", {})).toBeUndefined();
-    for (const scopes of [
-      ["operator.sessions.read"],
-      ["operator.sessions.write"],
-      ["operator.sessions.read", "operator.sessions.write"],
-    ]) {
-      expect(authorizeOperatorScopesForMethod("agents.list", scopes, {})).toEqual({
-        allowed: false,
-        missingScope: "operator.read",
-      });
-    }
-    for (const scope of ["operator.read", "operator.write", "operator.admin"]) {
-      expect(
-        authorizeOperatorScopesForMethod("agents.list", [scope, "operator.sessions.read"], {}),
-      ).toEqual({ allowed: true });
-    }
-  });
-
   it.each([
-    {},
-    { agentId: "main" },
-    { sessionKey: "agent:main:own" },
-    { sessionKey: "agent:main:own", view: "provider-config" },
-    { agentId: "main", authProfileId: "personal-account" },
-  ])("admits projected model catalogs with the registered session-read floor (%j)", (params) => {
-    expect(resolveSessionMethodScope("models.list", params)).toBeUndefined();
-    expect(authorizeOperatorScopesForMethod("models.list", [], params)).toEqual({
-      allowed: false,
-      missingScope: "operator.sessions.read",
-    });
-    for (const scope of [
-      "operator.sessions.read",
-      "operator.sessions.write",
-      "operator.read",
-      "operator.write",
-      "operator.admin",
-    ]) {
-      expect(authorizeOperatorScopesForMethod("models.list", [scope], params)).toEqual({
-        allowed: true,
-      });
-    }
-  });
-
-  it.each(["sessions.list", "chat.history", "sessions.describe", "session.members.list"])(
-    "admits %s for a session reader without granting a global read scope",
-    (method) => {
-      expect(authorizeOperatorScopesForMethod(method, ["operator.sessions.read"])).toEqual({
-        allowed: true,
-        sessionScope: "operator.sessions.read",
-      });
-      expect(
-        authorizeOperatorScopesForMethod("config.get", ["operator.sessions.read"]),
-      ).toMatchObject({ allowed: false });
+    ["agent.identity.get", { agentId: "main" }],
+    ["agents.list", {}],
+    ["models.list", {}],
+    ["models.list", { sessionKey: "agent:main:own" }],
+    ["progressCard.get", { sessionKey: "agent:main:own" }],
+    ["projects.list", {}],
+    ["session.suggestions.list", { sessionKey: "agent:main:own" }],
+    ["sessions.groups.list", {}],
+    ["sessions.list", {}],
+    ["chat.history", { sessionKey: "agent:main:own" }],
+    ["chat.startup", { sessionKey: "agent:main:own" }],
+    ["chat.metadata", { sessionKey: "agent:main:own" }],
+    ["sessions.describe", { key: "agent:main:own" }],
+    ["session.members.list", { sessionKey: "agent:main:own" }],
+    ["themes.get", { id: "default" }],
+    ["themes.list", {}],
+    ["users.prefs.get", {}],
+    ["users.self", {}],
+  ] as const)(
+    "admits visible-session and bootstrap reads through the narrow alternative: %s",
+    (method, params) => {
+      for (const scopes of [
+        ["operator.sessions.read"],
+        ["operator.sessions.write"],
+        ["operator.sessions.read", "operator.sessions.write"],
+      ]) {
+        expect(authorizeOperatorScopesForMethod(method, scopes, params)).toEqual({
+          allowed: true,
+          sessionScope: "operator.sessions.read",
+        });
+      }
+      for (const scope of ["operator.read", "operator.write", "operator.admin"]) {
+        expect(
+          authorizeOperatorScopesForMethod(method, [scope, "operator.sessions.read"], params),
+        ).toEqual({ allowed: true });
+      }
       for (const allowed of ["operator.sessions.read", "operator.sessions.write"]) {
         expect(
           projectOperatorScopesForMethod({
             method,
-            requestParams: {},
+            requestParams: params,
             requestedScopes: ["operator.read", "operator.admin"],
             allowedScopes: [allowed],
           }),
         ).toEqual(["operator.sessions.read"]);
+      }
+    },
+  );
+
+  it.each(["config.get", "artifacts.list", "artifacts.get", "artifacts.download"])(
+    "retains broad read authority for %s",
+    (method) => {
+      for (const scope of ["operator.sessions.read", "operator.sessions.write"]) {
+        expect(authorizeOperatorScopesForMethod(method, [scope])).toEqual({
+          allowed: false,
+          missingScope: "operator.read",
+        });
       }
     },
   );
@@ -79,7 +74,6 @@ describe("session-scoped method admission", () => {
     ["sessions.create", {}],
     ["sessions.patch", { key: "agent:main:own", label: "updated" }],
     ["sessions.patchMany", { targets: [{ key: "agent:main:own" }], patch: { unread: true } }],
-    ["sessions.delete", { key: "agent:main:own", archivedOnly: true }],
   ] as const)("requires the narrow write grant for %s", (method, params) => {
     expect(authorizeOperatorScopesForMethod(method, ["operator.sessions.write"], params)).toEqual({
       allowed: true,
@@ -112,6 +106,7 @@ describe("session-scoped method admission", () => {
     ["sessions.patchMany", { targets: [{ key: "agent:main:own" }], patch: { sandboxMode: "off" } }],
     ["sessions.patch", { key: "agent:main:own", unknownMutation: true }],
     ["sessions.delete", { key: "agent:main:own" }],
+    ["sessions.delete", { key: "agent:main:own", archivedOnly: true }],
     ["agent", { message: "/reset" }],
     ["users.setDisplayName", {}],
     ["tools.invoke", {}],
@@ -128,6 +123,15 @@ describe("session-scoped method admission", () => {
         allowedScopes: ["operator.sessions.write"],
       }),
     ).toEqual([]);
+  });
+
+  it("preserves broad write authority for archived-only deletion", () => {
+    expect(
+      authorizeOperatorScopesForMethod("sessions.delete", ["operator.write"], {
+        key: "agent:main:own",
+        archivedOnly: true,
+      }),
+    ).toEqual({ allowed: true });
   });
 
   it.each([

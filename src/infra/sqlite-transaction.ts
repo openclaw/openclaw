@@ -264,15 +264,27 @@ export function logSlowSqliteCoordinatorWait(
   if (!isMainThread || elapsedMs <= 100) {
     return;
   }
-  transactionLogger(undefined).warn("slow SQLite coordinator lock wait", {
-    async: false,
-    ...transactionDiagnosticLabels(undefined, options),
-    elapsedMs,
-    isMainThread,
-    pid: process.pid,
-    threadId,
-    thresholdMs: 100,
-  });
+  try {
+    // Capture only slow waits, while the synchronous owner's call chain is still on the stack.
+    const trace = new Error();
+    Error.captureStackTrace(trace, logSlowSqliteCoordinatorWait);
+    transactionLogger(undefined).warn("slow SQLite coordinator lock wait", {
+      async: false,
+      caller: trace.stack
+        ?.split("\n")
+        .slice(1, 9)
+        .map((frame) => frame.trim())
+        .join(" <- "),
+      ...transactionDiagnosticLabels(undefined, options),
+      elapsedMs,
+      isMainThread,
+      pid: process.pid,
+      threadId,
+      thresholdMs: 100,
+    });
+  } catch {
+    // Diagnostics cannot abandon an acquired coordinator or replace its admission error.
+  }
 }
 
 function logSlowTransactionStep(params: {

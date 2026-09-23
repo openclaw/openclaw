@@ -2,7 +2,7 @@ import type { OperatorScope } from "../../../src/gateway/operator-scopes.js";
 import { roleScopesAllow } from "../../../src/shared/operator-scope-compat.js";
 import {
   resolveBaseSessionMutationRequiredScope,
-  resolveBaseSessionReadRequiredScope,
+  resolveSessionMethodScope,
 } from "../../../src/shared/session-method-scopes-base.js";
 import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
 
@@ -64,7 +64,10 @@ export function canCallGatewayMethod(
       requiredScope === "operator.admin"
         ? requiredScope
         : (resolveBaseSessionMutationRequiredScope(method) ??
-          resolveBaseSessionReadRequiredScope(method) ??
+          (requiredScope === "operator.read" &&
+          resolveSessionMethodScope(method) === "operator.sessions.read"
+            ? "operator.sessions.read"
+            : undefined) ??
           requiredScope),
     ],
     allowedScopes: auth.scopes,

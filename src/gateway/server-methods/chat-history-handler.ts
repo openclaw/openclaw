@@ -79,6 +79,7 @@ export async function handleChatHistoryRequest({
   context,
   method,
   signal,
+  sessionMutationAuthorization,
   retainedSessionId,
 }: GatewayRequestHandlerOptions & {
   method: ChatHistoryMethod;
@@ -119,6 +120,7 @@ export async function handleChatHistoryRequest({
   const agentIdOverride = normalizeOptionalText((params as { agentId?: string }).agentId);
   const selection = await prepareChatHistorySessionRead({
     context,
+    sessionMutationAuthorization,
     client,
     respond,
     signal,

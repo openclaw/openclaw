@@ -62,7 +62,10 @@ export function resolveChatMetadataReadParams(
     const session = retainGatewaySessionEntryReadOnly(params.sessionKey, requested.agentId);
     const isCurrent = () => isRequestCurrent() && session.isCurrent();
     const assertVisible = () => {
-      const visible = createSessionListEntryFilter({ client, cfg: context.getRuntimeConfig() });
+      const visible = createSessionListEntryFilter({
+        client,
+        cfg: (context.getCommittedRuntimeConfig ?? context.getRuntimeConfig)(),
+      });
       if (
         session.entry &&
         visible?.(session.legacyKey ?? session.canonicalKey, session.entry) === false

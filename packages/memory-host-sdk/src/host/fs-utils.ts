@@ -1,11 +1,7 @@
 // Retain fs-safe's process configuration for host-side memory file operations.
 export { root } from "@openclaw/fs-safe/root";
-export { isPathInside, isPathInsideWithRealpath } from "@openclaw/fs-safe/path";
-export {
-  assertNoSymlinkParents,
-  readRegularFile,
-  statRegularFile,
-} from "@openclaw/fs-safe/advanced";
+export { isPathInside } from "@openclaw/fs-safe/path";
+export { readRegularFile, statRegularFile } from "@openclaw/fs-safe/advanced";
 export { walkDirectory, type WalkDirectoryEntry } from "@openclaw/fs-safe/walk";
 
 /**

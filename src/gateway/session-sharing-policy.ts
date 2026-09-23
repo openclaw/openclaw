@@ -32,7 +32,7 @@ import {
   type GatewaySessionStoreCache,
   type GatewaySessionStoreDiscoveryCache,
 } from "./session-utils-store-lookup.js";
-import { resolveCanonicalSessionStoreMatchFromStoreKeys } from "./session-utils-store.js";
+import { findCanonicalStoreMatch } from "./session-utils-store-selection.js";
 
 export type SessionSharingTarget = {
   agentId: string;
@@ -127,7 +127,7 @@ export function resolveSessionSharingTargets(params: {
 function toSessionSharingTarget(
   target: ReturnType<typeof resolveGatewaySessionStoreTargetWithStore>,
 ): SessionSharingTarget | null {
-  const match = resolveCanonicalSessionStoreMatchFromStoreKeys(target.store, target.storeKeys);
+  const match = findCanonicalStoreMatch(target.store, target.storeKeys);
   return match
     ? {
         agentId: target.agentId,
