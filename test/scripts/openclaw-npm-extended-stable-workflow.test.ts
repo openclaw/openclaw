@@ -1,20 +1,13 @@
 import { spawnSync } from "node:child_process";
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const workflowPath = ".github/workflows/openclaw-npm-release.yml";
 const preflightWorkflowPath = ".github/workflows/openclaw-npm-preflight.yml";
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 type Step = {
   env?: Record<string, string>;
@@ -70,7 +63,7 @@ function step(job: Job | undefined, name: string): Step {
 }
 
 function runControlUiArtifactStep(options: { artifactPresent: boolean }) {
-  const root = mkdtempSync(join(tmpdir(), "openclaw-npm-preflight-ui-"));
+  const root = tempDirs.make("openclaw-npm-preflight-ui-");
   const binDir = join(root, "bin");
   const artifactPath = join(root, "dist", "control-ui", "index.html");
   const invocationPath = join(root, "pnpm-invocation.txt");
@@ -122,12 +115,11 @@ printf '<!doctype html>\\n' > "${artifactPath}"
     : null;
   const artifactExists = existsSync(artifactPath);
   const targetHasTsxLoader = existsSync(join(root, "scripts", "tsx.mjs"));
-  rmSync(root, { force: true, recursive: true });
   return { artifactExists, invocation, result, targetHasTsxLoader };
 }
 
 function runPluginCompatibilityGate(options: { hasScript: boolean; relationship: string }) {
-  const root = mkdtempSync(join(tmpdir(), "openclaw-npm-plugin-compat-"));
+  const root = tempDirs.make("openclaw-npm-plugin-compat-");
   const binDir = join(root, "bin");
   const invocationPath = join(root, "pnpm-invocation.txt");
   const apiPath = join(root, "gh-invocation.txt");
@@ -168,7 +160,6 @@ function runPluginCompatibilityGate(options: { hasScript: boolean; relationship:
     ? readFileSync(invocationPath, "utf8").trim()
     : null;
   const apiInvocation = existsSync(apiPath) ? readFileSync(apiPath, "utf8").trim() : null;
-  rmSync(root, { force: true, recursive: true });
   return { apiInvocation, invocation, result };
 }
 
