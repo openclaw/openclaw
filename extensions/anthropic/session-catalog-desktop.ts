@@ -9,7 +9,6 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { readClaudeDesktopCustomGroups } from "./claude-desktop-groups.js";
 import { probeDesktopArchiveStatus } from "./session-catalog-desktop-probe.js";
-import type { DesktopSessionMetadata } from "./session-catalog-desktop.types.js";
 import {
   childDirectories,
   desktopSessionsDir,
@@ -140,9 +139,9 @@ function parseDesktopMetadata(raw: unknown): ParsedDesktopSessionMetadata | unde
 }
 
 function enrichDesktopMetadataWithCustomGroup(
-  metadata: DesktopSessionMetadata,
+  metadata: ParsedDesktopSessionMetadata,
   customGroups: Map<string, string>,
-): DesktopSessionMetadata {
+): ParsedDesktopSessionMetadata {
   const localSessionId = readBoundedString(metadata.sessionId, 256);
   const customGroup = localSessionId ? customGroups.get(localSessionId) : undefined;
   return customGroup ? { ...metadata, customGroup } : metadata;
@@ -181,7 +180,7 @@ async function readDesktopMetadata(
 ): Promise<{
   available: boolean;
   customGroups: Map<string, string>;
-  active: Map<string, DesktopSessionMetadata>;
+  active: Map<string, ParsedDesktopSessionMetadata>;
   activeSessionIds: Set<string>;
   activeFileIndexes: Map<string, number>;
   archived: Set<string>;
@@ -192,7 +191,7 @@ async function readDesktopMetadata(
   scannedBytes: number;
   readFailed: boolean;
 }> {
-  const active = new Map<string, DesktopSessionMetadata>();
+  const active = new Map<string, ParsedDesktopSessionMetadata>();
   const activeSessionIds = new Set<string>();
   const activeFileIndexes = new Map<string, number>();
   const archived = new Set<string>();
@@ -239,10 +238,13 @@ async function readDesktopMetadata(
               } else if (!archived.has(archive.cliSessionId)) {
                 activeSessionIds.add(archive.cliSessionId);
                 if (archive.metadata) {
-                  active.set(
-                    archive.cliSessionId,
-                    enrichDesktopMetadataWithCustomGroup(archive.metadata, customGroups),
-                  );
+                  const metadata = parseDesktopMetadata(archive.metadata);
+                  if (metadata) {
+                    active.set(
+                      archive.cliSessionId,
+                      enrichDesktopMetadataWithCustomGroup(metadata, customGroups),
+                    );
+                  }
                 }
               }
             }
@@ -304,10 +306,13 @@ async function readDesktopMetadata(
     } else if (!archived.has(archive.cliSessionId)) {
       activeSessionIds.add(archive.cliSessionId);
       if (archive.metadata) {
-        active.set(
-          archive.cliSessionId,
-          enrichDesktopMetadataWithCustomGroup(archive.metadata, customGroups),
-        );
+        const metadata = parseDesktopMetadata(archive.metadata);
+        if (metadata) {
+          active.set(
+            archive.cliSessionId,
+            enrichDesktopMetadataWithCustomGroup(metadata, customGroups),
+          );
+        }
       }
     }
   }
@@ -375,7 +380,7 @@ function replayDesktopReadStatus(
       budget.skippedFiles += 1;
     }
   }
-  const active = new Map<string, DesktopSessionMetadata>();
+  const active = new Map<string, ParsedDesktopSessionMetadata>();
   const activeFileIndexes = new Map<string, number>();
   for (const [sessionId, metadata] of overlay.active) {
     const fileIndex = overlay.activeFileIndexes.get(sessionId);
