@@ -8,7 +8,6 @@ import { listAuthProfileRepairCandidates } from "../commands/doctor-auth-legacy-
 import { maybeMigrateModelCatalogCredentials } from "../commands/doctor-model-catalog-credentials.js";
 import { createDoctorPrompter } from "../commands/doctor-prompter.js";
 import { repairCanonicalSessionKeys } from "../commands/doctor-session-canonical-keys.js";
-import { projectExistingAgentDatabaseTargets } from "../commands/doctor-session-sqlite-readers.js";
 import { runDoctorSessionSqlite } from "../commands/doctor-session-sqlite.js";
 import { noteSessionTranscriptHeaderHealth } from "../commands/doctor-session-transcript-headers.js";
 import { noteSessionTranscriptLabelHealth } from "../commands/doctor-session-transcript-labels.js";
@@ -40,6 +39,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { projectExistingAgentDatabaseTargets } from "./session-sqlite-migration-readers.js";
 import { autoMigrateLegacyState } from "./state-migrations.doctor.js";
 import type { PreparedAgentDatabaseMigrationDiscovery } from "./state-migrations.media-persistence-targets.js";
 import {

@@ -186,7 +186,7 @@ it.for(["allow", "deny", "cancel", "always-only"] as const)(
                   agentDir: state.agentDir(),
                   workspaceDir: state.workspaceDir,
                 }),
-              ).resolves.toEqual([]);
+              ).resolves.toEqual({ entries: [] });
             } finally {
               next.close();
             }

@@ -2651,22 +2651,27 @@ describe("ci workflow guards", () => {
       };
     }
 
-    it.each(["test-play", "test-third-party"])(
-      "reuses one build instant across the %s unit and lint commands",
-      (task) => {
-        const result = runAndroidTask(
-          { task, lint: true },
-          { eventName: "pull_request", repository: "openclaw/openclaw", runAttempt: 1 },
-        );
+    it.each([
+      { task: "test-wear", lint: true, app_lint: "third-party", build_benchmark: false, calls: 3 },
+      { task: "ktlint", lint: false, app_lint: "play", build_benchmark: false, calls: 2 },
+      { task: "ktlint", lint: false, app_lint: "play", build_benchmark: true, calls: 3 },
+    ])(
+      "reuses one build instant across every command in $task with benchmark=$build_benchmark",
+      ({ calls, ...row }) => {
+        const result = runAndroidTask(row, {
+          eventName: "pull_request",
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+        });
         expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
-        expect(result.calls).toHaveLength(2);
+        expect(result.calls).toHaveLength(calls);
         const metadata = result.calls.map((call) =>
           call.filter((arg) => arg.startsWith("-PopenclawBuildTimestamp=")),
         );
-        expect(metadata[0]).toHaveLength(1);
-        expect(metadata[1]).toEqual(metadata[0]);
         expect(result.clockReads).toHaveLength(1);
-        expect(metadata[0]).toEqual([`-PopenclawBuildTimestamp=${result.clockReads[0]}`]);
+        expect(metadata).toEqual(
+          result.calls.map(() => [`-PopenclawBuildTimestamp=${result.clockReads[0]}`]),
+        );
       },
     );
 
@@ -2717,7 +2722,7 @@ describe("ci workflow guards", () => {
             const testCall = call.some((arg) => arg.endsWith("UnitTest"));
             expect(call.includes("--init-script")).toBe(testCall);
           }
-          if ((row.task !== "test-play" && row.task !== "test-third-party") || row.lint !== true) {
+          if (row.lint !== true && !row.app_lint) {
             expect(result.clockReads).toEqual([]);
             expect(
               result.calls.flat().filter((arg) => arg.startsWith("-PopenclawBuildTimestamp=")),
@@ -2821,22 +2826,51 @@ describe("ci workflow guards", () => {
     });
 
     it.each([
-      ["test-play", ":app:testPlayDebugUnitTest"],
-      ["test-play", ":app:lintPlayDebug"],
-      ["test-third-party", ":app:testThirdPartyDebugUnitTest"],
-      ["test-third-party", ":app:lintThirdPartyDebug"],
-      ["test-wear", ":wear:lintDebug"],
-      ["ktlint", ":benchmark:assembleDebug"],
-    ])("propagates %s failure from %s", (task, failTask) => {
+      { task: "test-play", failTask: ":app:testPlayDebugUnitTest", calls: 1 },
+      { task: "test-third-party", failTask: ":app:testThirdPartyDebugUnitTest", calls: 1 },
+      {
+        task: "test-wear",
+        lint: true,
+        app_lint: "third-party",
+        failTask: ":wear:testDebugUnitTest",
+        calls: 1,
+      },
+      {
+        task: "test-wear",
+        lint: true,
+        app_lint: "third-party",
+        failTask: ":wear:lintDebug",
+        calls: 2,
+      },
+      {
+        task: "test-wear",
+        lint: true,
+        app_lint: "third-party",
+        failTask: ":app:lintThirdPartyDebug",
+        calls: 3,
+      },
+      {
+        task: "ktlint",
+        app_lint: "play",
+        build_benchmark: true,
+        failTask: ":benchmark:assembleDebug",
+        calls: 2,
+      },
+      {
+        task: "ktlint",
+        app_lint: "play",
+        build_benchmark: true,
+        failTask: ":app:lintPlayDebug",
+        calls: 3,
+      },
+    ])("propagates $task failure from $failTask", ({ failTask, calls, ...row }) => {
       const result = runAndroidTask(
-        { task, lint: true, build_benchmark: true },
+        row,
         { eventName: "pull_request", repository: "openclaw/openclaw", runAttempt: 1 },
         failTask,
       );
       expect(result.status).toBe(23);
-      if (failTask.endsWith("UnitTest")) {
-        expect(result.calls).toHaveLength(1);
-      }
+      expect(result.calls).toHaveLength(calls);
     });
   });
 
@@ -5983,10 +6017,15 @@ describe("ci workflow guards", () => {
         expect(
           JSON.parse(expectDefined(preflightOutputs.android_matrix, "Android matrix")).include,
         ).toEqual([
-          { check_name: "android-test-play", task: "test-play", lint: true },
-          { check_name: "android-test-third-party", task: "test-third-party", lint: true },
-          { check_name: "android-test-wear", task: "test-wear", lint: true },
-          { check_name: "android-ktlint", task: "ktlint" },
+          { check_name: "android-test-play", task: "test-play" },
+          { check_name: "android-test-third-party", task: "test-third-party" },
+          {
+            check_name: "android-test-wear",
+            task: "test-wear",
+            lint: true,
+            app_lint: "third-party",
+          },
+          { check_name: "android-ktlint", task: "ktlint", app_lint: "play" },
         ]);
       }
     },
@@ -6456,10 +6495,15 @@ describe("ci workflow guards", () => {
         ),
       ).include,
     ).toEqual([
-      { check_name: "android-test-play", task: "test-play", lint: true },
-      { check_name: "android-test-third-party", task: "test-third-party", lint: true },
-      { check_name: "android-test-wear", task: "test-wear", lint: true },
-      { check_name: "android-ktlint", task: "ktlint" },
+      { check_name: "android-test-play", task: "test-play" },
+      { check_name: "android-test-third-party", task: "test-third-party" },
+      {
+        check_name: "android-test-wear",
+        task: "test-wear",
+        lint: true,
+        app_lint: "third-party",
+      },
+      { check_name: "android-ktlint", task: "ktlint", app_lint: "play" },
     ]);
 
     expect(
@@ -6982,11 +7026,19 @@ describe("ci workflow guards", () => {
     const commandBin = path.join(commandRoot, "bin");
     const commandArgs = path.join(commandRoot, "args");
     const commandInclude = path.join(commandRoot, "include-path");
+    const commandNativeWorkers = path.join(commandRoot, "native-workers");
+    const workerEnvKey = expectDefined(
+      Object.entries(scenario.env ?? {}).find(
+        ([, value]) => value === "${{ matrix.vitest_max_workers || 2 }}",
+      )?.[0],
+      "Control UI E2E worker count",
+    );
     mkdirSync(commandBin);
     writeExecutable(path.join(commandBin, "node"), [
       "#!/bin/sh",
       'printf "%s\\n" "$@" > "$UI_E2E_COMMAND_ARGS"',
       'printf "%s" "${OPENCLAW_VITEST_INCLUDE_FILE:-}" > "$UI_E2E_COMMAND_INCLUDE"',
+      'printf "%s" "${VITEST_MAX_WORKERS:-}" > "$UI_E2E_COMMAND_NATIVE_WORKERS"',
     ]);
     const runCommand = (env: Record<string, string>) => {
       const result = runWorkflowShellScript(expectDefined(scenario.run, "UI E2E command"), {
@@ -6995,14 +7047,19 @@ describe("ci workflow guards", () => {
           ...process.env,
           OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: "",
           OPENCLAW_VITEST_INCLUDE_FILE: "",
+          OPENCLAW_VITEST_MAX_WORKERS: undefined,
+          VITEST_MAX_WORKERS: undefined,
           RUNNER_TEMP: commandRoot,
           ...env,
           PATH: `${commandBin}:${process.env.PATH ?? ""}`,
           UI_E2E_COMMAND_ARGS: commandArgs,
           UI_E2E_COMMAND_INCLUDE: commandInclude,
+          UI_E2E_COMMAND_NATIVE_WORKERS: commandNativeWorkers,
         },
       });
       expect(result.status, result.stdout + result.stderr).toBe(0);
+      // Vitest's native env override defeats the source-server project's serial limit.
+      expect(readFileSync(commandNativeWorkers, "utf8")).toBe("");
       return readFileSync(commandArgs, "utf8").trim().split("\n");
     };
     const shardEnv = { VITEST_SHARD_COUNT: "3", VITEST_SHARD_INDEX: "1" };
@@ -7019,7 +7076,7 @@ describe("ci workflow guards", () => {
       "1/3",
     ];
     expect(runCommand(shardEnv)).toEqual(expectedArgs);
-    expect(runCommand({ ...shardEnv, VITEST_MAX_WORKERS: "3" })).toEqual(
+    expect(runCommand({ ...shardEnv, [workerEnvKey]: "3" })).toEqual(
       expectedArgs.with(expectedArgs.indexOf("--maxWorkers") + 1, "3"),
     );
     expect(readFileSync(commandInclude, "utf8")).toBe("");
@@ -7346,7 +7403,7 @@ describe("ci workflow guards", () => {
         ".artifacts/control-ui-e2e-timeouts/shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}",
       VITEST_SHARD_INDEX: "${{ matrix.shard }}",
       VITEST_SHARD_COUNT: "${{ matrix.vitest_shard_count }}",
-      VITEST_MAX_WORKERS: "${{ matrix.vitest_max_workers || 2 }}",
+      OPENCLAW_VITEST_MAX_WORKERS: "${{ matrix.vitest_max_workers || 2 }}",
       OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64:
         "${{ needs.preflight.outputs.ui_e2e_test_groups_gzip_base64 }}",
     });

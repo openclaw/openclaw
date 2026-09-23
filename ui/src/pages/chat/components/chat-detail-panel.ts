@@ -13,13 +13,14 @@ import type { ImageLightboxItem } from "../../../components/image-lightbox.types
 import type { MarkdownGitHubContext } from "../../../components/markdown-render-options.ts";
 import type { SessionLinkTarget } from "../../../components/markdown-session-links.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import { type EditorId, openEditor } from "../../../lib/editor-links.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
 import { AttachmentDownloadController } from "./chat-attachment-download-controller.ts";
 import { FileCopyController } from "./chat-file-copy-controller.ts";
-import { readFileDraft, setFileDraft } from "./chat-file-drafts.ts";
+import { captureFileEditorDraft, readFileDraft, setFileDraft } from "./chat-file-drafts.ts";
 import { FileHtmlPreviewController } from "./chat-html-preview.ts";
 import { releaseChatMediaResourceSubscriber } from "./chat-message-media.ts";
 import type {
@@ -40,6 +41,8 @@ import {
   saveFileWrapPreference,
 } from "./chat-sidebar-file-view.ts";
 import type { FileEditorViewHandle } from "./file-editor-view.ts";
+
+registerFilePreviewEnglish();
 
 type FileSidebarContent = Extract<SidebarContent, { kind: "file" }>;
 
@@ -284,17 +287,17 @@ class ChatDetailPanel extends OpenClawLightDomElement {
         this.fileEditor = editor;
         this.fileDraftContent = null;
         editor.onDocChanged((nextContent) => {
-          const dirty = nextContent !== this.fileSavedContent;
-          if (dirty !== this.fileDirty) {
-            this.fileDirty = dirty;
+          const draft = captureFileEditorDraft(current, {
+            editing: this.fileEditing,
+            content: nextContent,
+            savedContent: this.fileSavedContent,
+            expectedHash: this.fileHash,
+          });
+          if (!draft) {
+            return;
           }
-          if (!dirty && this.visibleContent?.kind === "file") {
-            this.fileHash = this.visibleContent.edit?.hash ?? "";
-          }
-          setFileDraft(
-            current,
-            dirty ? { content: nextContent, expectedHash: this.fileHash } : null,
-          );
+          this.fileDirty = draft.dirty;
+          this.fileHash = draft.expectedHash;
           if (this.fileSaveNotice?.kind === "error") {
             this.fileSaveNotice = null;
           }

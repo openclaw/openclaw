@@ -10,6 +10,8 @@ sidebarTitle: "Settings"
 
 Everything under Settings, plus the settings-owned pages the sidebar links to.
 
+**Back to app** returns to the workspace page you were using before opening Settings, including its selected session and URL filters. Escape does the same when an editor or dialog is not using that key. Moving between Settings pages does not change the return destination.
+
 Use **Search settings** to find pages and configuration fields. Search for **Typography**, **font**, or **Chat prose** to jump to the Interface and Chat prose font controls in Appearance. Authored schema tags remain searchable with `tag:<name>` but are not displayed as field badges. Tags are not inferred from setting names, sensitivity, or complexity. For a field authored with a `storage` tag, combine it with text such as `Log tag:storage File`. Multiple tags require a field to match every tag.
 
 Model menus with more than eight choices include search. Filter by model name or provider/model reference, then choose a result to apply it. Typing or dismissing the menu leaves the current selection unchanged. Short menus stay compact, and custom model entry remains available where the setting supports it.
@@ -299,6 +301,11 @@ show the installed → target short commit SHAs on a separate line below the com
 count. **Compare on GitHub** opens a comparison when the tracked upstream is
 a GitHub repository; other installs show plain revisions. This distinguishes
 revisions that share a version number.
+After a checkout refresh, the count, revisions, and comparison link describe the
+same checked upstream. An automatic update campaign keeps its announced target;
+its displayed comparison stays bound to that target. If the installed revision
+has changed, the campaign shows its target without an outdated count or link.
+Commit details from a different comparison stay hidden.
 
 After confirmation, one update view shows the ordered phases, current or last
 step details, and verification results for the service, version, plugins,

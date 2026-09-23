@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { resolveSessionParentSessionKey } from "../channels/plugins/session-conversation.js";
 import { projectGatewaySessionEntry } from "../config/sessions/combined-store-gateway.js";
+import type { GatewayStoredSessionTargets } from "../config/sessions/combined-store-model-sources.js";
 import type { SessionRowDatabaseFacts } from "../config/sessions/session-transcript-worker.types.js";
 import type { SessionStoreTarget } from "../config/sessions/targets.js";
 import type {
@@ -15,7 +16,7 @@ import {
 } from "./server-methods/session-placement-read-projection.js";
 import { compareSessionEntryPairs } from "./session-list-order.js";
 import { readSessionListSelectionFacts } from "./session-list-target.js";
-import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
+import { selectStoredSessionLineage } from "./session-store-key.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
 import * as rowProjection from "./session-utils-row.js";
 
@@ -40,6 +41,7 @@ export type Row = {
   storedEntry?: SessionEntry;
   /** Accepted under retained database custody; presentation consumes the whole snapshot. */
   pendingDatabaseFacts?: PreparedSessionRowDatabaseFacts;
+  databaseFactsRevision: number;
   /** Current committed sharing facts remain usable while display materialization is dirty. */
   sharingEntry?: SessionEntry;
   entry?: SessionEntry;
@@ -95,10 +97,17 @@ export function markRelated(
   },
   dirty: Set<string>,
   includeChildren = true,
+  cfg?: Inputs["cfg"],
 ) {
   if (includeChildren) {
     for (const id of dependents(row, indexes.byParent)) {
       dirty.add(id);
+    }
+    if (cfg && parseAgentSessionKey(row.key)) {
+      // A new literal parent must wake children still indexed under its absent-row alias.
+      for (const id of indexes.byParent.get(parentReference(cfg, row.key, row.agentId)) ?? []) {
+        dirty.add(id);
+      }
     }
   }
   for (const parent of row.parents) {
@@ -132,10 +141,16 @@ export function markAutomation(
 ) {
   for (const row of rows) {
     if (!agentId || row.agentId === agentId) {
-      row.pendingDatabaseFacts = undefined;
+      invalidateDatabaseFacts(row);
       dirty.add(identity(row));
     }
   }
+}
+
+/** Expire both accepted facts and worker replies still waiting to enter this row. */
+export function invalidateDatabaseFacts(row: Row) {
+  row.databaseFactsRevision++;
+  row.pendingDatabaseFacts = undefined;
 }
 
 export function create(target: RowTarget, entry?: SessionEntry): Row {
@@ -147,7 +162,51 @@ export function create(target: RowTarget, entry?: SessionEntry): Row {
     parents: new Set(),
     membership: new Set(),
     generation: Symbol("row"),
+    databaseFactsRevision: 0,
   };
+}
+
+/** Seed the complete identity inventory before any row selects its stored lineage. */
+export function seedSessionRowEntries(params: {
+  targets: GatewayStoredSessionTargets;
+  rows: ReadonlyMap<string, Row>;
+  replaced: ReadonlySet<string>;
+  remove: (id: string) => void;
+  put: (row: Row) => void;
+}) {
+  const { targets, rows, replaced, remove, put } = params;
+  const admitted = new Set<string>();
+  const acquisitions: Array<{ row: Row; entry: SessionEntry }> = [];
+  for (const [key, target] of targets) {
+    const entry = target.entry;
+    if (!entry || entry.incognito || isIncognitoSessionKey(key)) {
+      continue;
+    }
+    const fields = {
+      key: target.storeKey ?? key,
+      agentId: target.agentId,
+      storeTarget: target.storeTarget,
+    };
+    const id = identity(fields);
+    admitted.add(id);
+    if (!rows.has(id) || replaced.has(target.storeTarget.storePath)) {
+      remove(id);
+      const row = create(fields, entry);
+      put(row);
+      acquisitions.push({ row, entry });
+    } else {
+      const row = rows.get(id)!;
+      if (row.entry?.archivedAt !== undefined) {
+        acquisitions.push({ row, entry });
+      }
+    }
+  }
+  for (const id of rows.keys()) {
+    if (!admitted.has(id)) {
+      remove(id);
+    }
+  }
+  return acquisitions;
 }
 
 export function renewGeneration(row: Row): Row {
@@ -361,12 +420,28 @@ export function parentReference(
   key: string,
   fallbackAgentId: string,
   sourcePath?: string,
+  referenced?: (reference: string) => Row | undefined,
+) {
+  return selectSessionRowParent(cfg, key, fallbackAgentId, sourcePath, referenced).reference;
+}
+
+function selectSessionRowParent(
+  cfg: Inputs["cfg"],
+  key: string,
+  fallbackAgentId: string,
+  sourcePath?: string,
+  referenced?: (reference: string) => Row | undefined,
 ) {
   if (sourcePath && (key === "global" || key === "unknown")) {
-    return physical(sourcePath, key);
+    return { key, reference: physical(sourcePath, key) };
   }
-  const agentId = parseAgentSessionKey(key)?.agentId ?? fallbackAgentId;
-  return logical(agentId, resolveStoredSessionKeyForAgentStore({ cfg, agentId, sessionKey: key }));
+  const selected = selectStoredSessionLineage({
+    cfg,
+    agentId: fallbackAgentId,
+    sessionKey: key,
+    read: (agentId, sessionKey) => referenced?.(logical(agentId, sessionKey))?.storedEntry,
+  });
+  return { key: selected.key, reference: logical(selected.agentId, selected.key) };
 }
 
 /** Drop reader-only graphs while retaining cold metadata and index identity. */
@@ -377,6 +452,7 @@ export function dematerialize(row: Row): Row {
     materializedSequence: undefined,
     facts: undefined,
     pendingDatabaseFacts: undefined,
+    databaseFactsRevision: row.databaseFactsRevision + 1,
     membership: new Set<string>(),
     lastMessagePreview: undefined,
     fallbackModel: undefined,
@@ -388,11 +464,12 @@ export function readSessionRowParents(
   storedEntry: SessionEntry,
   cfg: Inputs["cfg"],
   context: SessionListRowContext,
+  referenced?: (reference: string) => Row | undefined,
 ) {
   const parents = new Set<string>();
   const addParent = (key: string | null | undefined) => {
     if (key && key !== row.key) {
-      parents.add(parentReference(cfg, key, row.agentId, row.storeTarget.storePath));
+      parents.add(parentReference(cfg, key, row.agentId, row.storeTarget.storePath, referenced));
     }
   };
   addParent(storedEntry.parentSessionKey ?? resolveSessionParentSessionKey(row.key));
@@ -404,6 +481,27 @@ export function readSessionRowParents(
     }
   }
   return parents;
+}
+
+/** Reproject held lineage without acquiring board, transcript, or database facts. */
+export function readSessionRowLineage(
+  row: Row,
+  storedEntry: SessionEntry,
+  cfg: Inputs["cfg"],
+  context: SessionListRowContext,
+  referenced?: (reference: string) => Row | undefined,
+) {
+  const entry = projectGatewaySessionEntry(
+    cfg,
+    storedEntry,
+    (key) =>
+      selectSessionRowParent(cfg, key, row.agentId, row.storeTarget.storePath, referenced).key,
+  );
+  return {
+    entry,
+    parents: readSessionRowParents(row, storedEntry, cfg, context, referenced),
+    selection: readSessionListSelectionFacts(row.key, entry),
+  };
 }
 
 export function sameParents(left: ReadonlySet<string>, right: ReadonlySet<string>): boolean {
@@ -423,6 +521,7 @@ export function acquireSessionRowEntry(params: {
   storedEntry: SessionEntry | undefined;
   cfg: Inputs["cfg"];
   context: SessionListRowContext;
+  referenced?: (reference: string) => Row | undefined;
   remove: (id: string) => void;
   put: (row: Row) => void;
   markRelated: (row: Row, includeChildren: boolean) => void;
@@ -433,8 +532,8 @@ export function acquireSessionRowEntry(params: {
     remove(identity(row));
     return undefined;
   }
-  const entry = projectGatewaySessionEntry(cfg, storedEntry);
-  const parents = readSessionRowParents(row, storedEntry, cfg, context);
+  const lineage = readSessionRowLineage(row, storedEntry, cfg, context, params.referenced);
+  const { entry, parents } = lineage;
   // Equal timestamps still need the full metadata comparison.
   const changed =
     !sameParents(row.parents, parents) ||
@@ -454,11 +553,9 @@ export function acquireSessionRowEntry(params: {
     ...row,
     storedEntry,
     pendingDatabaseFacts: undefined,
-    entry,
+    databaseFactsRevision: row.databaseFactsRevision + 1,
+    ...lineage,
     sharingEntry: entry,
-    // Selection metadata survives archive dematerialization and refreshes with the entry.
-    selection: readSessionListSelectionFacts(row.key, entry),
-    parents,
     generation,
     hasBoard:
       entry.archivedAt !== undefined ? (row.hasBoard ?? readSessionRowHasBoard(row)) : row.hasBoard,

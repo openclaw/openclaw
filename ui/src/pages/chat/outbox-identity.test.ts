@@ -356,7 +356,7 @@ describe("outbox browser-state transfer", () => {
       const entry = readChatOutboxRecovery(state).entries[0]!;
       const destination = captureDefaultDestination();
       expect(restoreChatOutboxRecovery(state, entry, destination)).toBe("restored");
-      expect(sessionStorage.getItem(source.key)).toBe(source.raw);
+      expect(sessionStorage.getItem(source.key) || null).toBeNull();
       expect(readChatOutboxRecovery(state).entries).toEqual([]);
       expect(listStoredChatOutboxes(state)[0]?.queue).toHaveLength(60);
       remove.mockRestore();

@@ -94,6 +94,36 @@ them for later Code-SHA, Release-SHA, and focused reruns. Main lineage
 authorizes the initial Tooling SHA selection; it does not authorize refreshing
 the tooling from moving `main`.
 
+## Exact frozen-target test omissions
+
+Declare narrowly justified omissions before dispatch with JSON arrays of exact
+repository-relative test paths. `plugin_prerelease_node_exclude_patterns_json`
+applies to the Plugin Prerelease Node lane, for example
+`["src/plugins/manifest-registry.test.ts"]`.
+`extension_test_exclude_patterns_json` applies to the Plugin Prerelease extension
+shards, for example
+`["extensions/codex/src/app-server/run-attempt.test.ts"]`. Both default to `[]`;
+there is no implicit Codex test omission. Normal CI keeps its own core lanes;
+Plugin Prerelease owns the full extension sweep.
+
+Pass them through the SHA-pinned helper as `-f name='["exact/path.test.ts"]'`.
+The helper packs the extension input into the existing trusted dispatch envelope
+to stay within GitHub's 25-input limit, and refuses tooling without the matching
+lane-input capability before creating remote refs or dispatching.
+
+Preflight rejects malformed, duplicate, nonexistent, and out-of-lane paths using
+the selected target's actual Vitest discovery. Globs and basenames are not
+accepted. Pinned tooling applies each exact omission to the executing config's
+inline projects, preserves the candidate's normal test runner and setup, and
+restores the original config bytes after the command. It does not depend on a
+new exclusion environment variable being supported by the frozen candidate.
+
+The immutable request, coverage identity, evidence reuse comparison, and final
+manifest retain both input values. Changing them requires a new validation
+request; continuation cannot widen an existing omission. Record the reason and
+owning fix for each omitted test in release evidence. An omission is untested
+coverage, not passing evidence.
+
 ## Retain and reconcile the root request
 
 Before creating remote refs, the helper writes a private operator artifact at

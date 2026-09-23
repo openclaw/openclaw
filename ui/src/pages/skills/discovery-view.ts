@@ -14,12 +14,13 @@ import "../../styles/skills-discovery.css";
 registerSkillsBrowserEnglish();
 
 function renderCard(entry: SkillDiscoveryEntry, props: SkillsProps) {
+  const { state } = props;
   const remote = entry.remote;
   const reference = remote ? clawHubSkillRef(remote) : "";
   const installed = Boolean(entry.skill || entry.library);
   const canOpen = installed || !remote?.installOnly;
-  const icon = remote?.icon ? props.clawhubIconUrls?.[remote.icon] : undefined;
-  const busy = props.operation?.kind === "clawhub" && props.operation.ref === reference;
+  const icon = remote?.icon ? state.clawhubIconUrls?.[remote.icon] : undefined;
+  const busy = state.skillOperation?.kind === "clawhub" && state.skillOperation.ref === reference;
   return html`<article
     class="plugin-catalog-card oc-card oc-card-interactive"
     data-skill-id=${entry.id}
@@ -49,12 +50,12 @@ function renderCard(entry: SkillDiscoveryEntry, props: SkillsProps) {
           installed
             ? renderSkillStateStatus(
                 entry.skill ?? { disabled: !entry.library!.enabled },
-                entry.skill ? verdictForSkill(entry.skill, props.clawhubVerdicts) : null,
+                entry.skill ? verdictForSkill(entry.skill, state.clawhubVerdicts) : null,
               )
             : html`<button
                 type="button"
                 class="btn btn--sm plugin-catalog-card__install oc-action oc-action-secondary"
-                ?disabled=${!props.connected || !props.canInstall || props.loading || props.operation !== null}
+                ?disabled=${!state.connected || !props.canInstall || props.loading || state.skillOperation !== null}
                 aria-label=${t("skillsPage.installNamed", { name: entry.name })}
                 @click=${() => props.onClawHubInstall(reference)}
               >
@@ -69,11 +70,12 @@ function renderCard(entry: SkillDiscoveryEntry, props: SkillsProps) {
 }
 
 export function renderSkillDiscovery(props: SkillsProps) {
+  const { state } = props;
   const entries = skillDiscoveryEntries({
-    skills: props.report?.skills ?? [],
+    skills: state.skillsReport?.skills ?? [],
     libraries: props.libraryEntries ?? [],
-    results: props.clawhubResults ?? [],
-    query: props.clawhubQuery,
+    results: state.clawhubSearchResults ?? [],
+    query: state.clawhubSearchQuery,
   });
   return html`<section
     class="plugin-catalog-results skill-discovery"
@@ -89,7 +91,7 @@ export function renderSkillDiscovery(props: SkillsProps) {
         autofocus
         aria-label=${t("skillDiscovery.search")}
         placeholder=${t("skillDiscovery.search")}
-        .value=${props.clawhubQuery}
+        .value=${state.clawhubSearchQuery}
         @input=${(event: Event) => {
           // SAFETY: this listener is attached directly to the search input.
           props.onClawHubQueryChange((event.currentTarget as HTMLInputElement).value);
@@ -107,15 +109,15 @@ export function renderSkillDiscovery(props: SkillsProps) {
       />
     </label>
     ${props.error ? html`<div class="callout danger" role="alert">${props.error}</div>` : nothing}
-    ${!props.connected ? html`<p role="status" class="muted">${t("skillsPage.disconnected")}</p>` : nothing}
+    ${!state.connected ? html`<p role="status" class="muted">${t("skillsPage.disconnected")}</p>` : nothing}
     ${
-      props.clawhubSearchError
+      state.clawhubSearchError
         ? html`<div class="callout danger" role="alert">
-            ${props.clawhubSearchError}
+            ${state.clawhubSearchError}
             <button
               type="button"
               class="btn btn--sm"
-              @click=${() => props.onClawHubQueryChange(props.clawhubQuery)}
+              @click=${() => props.onClawHubQueryChange(state.clawhubSearchQuery)}
             >
               ${t("common.retry")}
             </button>
@@ -123,18 +125,18 @@ export function renderSkillDiscovery(props: SkillsProps) {
         : nothing
     }
     ${
-      props.clawhubInstallMessage
+      state.clawhubInstallMessage
         ? html`<div
-            role=${props.clawhubInstallMessage.kind === "error" ? "alert" : "status"}
-            class="callout ${props.clawhubInstallMessage.kind === "error" ? "danger" : "success"}"
+            role=${state.clawhubInstallMessage.kind === "error" ? "alert" : "status"}
+            class="callout ${state.clawhubInstallMessage.kind === "error" ? "danger" : "success"}"
           >
-            ${props.clawhubInstallMessage.text}
+            ${state.clawhubInstallMessage.text}
           </div>`
         : nothing
     }
     <div
       class="plugin-catalog-grid plugin-catalog-grid--results"
-      aria-busy=${props.loading || props.clawhubSearchLoading}
+      aria-busy=${props.loading || state.clawhubSearchLoading}
     >
       ${repeat(
         entries,
@@ -145,9 +147,9 @@ export function renderSkillDiscovery(props: SkillsProps) {
     ${
       entries.length === 0 &&
       !props.loading &&
-      !props.clawhubSearchLoading &&
-      props.connected &&
-      !props.clawhubSearchError
+      !state.clawhubSearchLoading &&
+      state.connected &&
+      !state.clawhubSearchError
         ? html`<p class="muted" role="status">${t("skillsPage.empty")}</p>`
         : nothing
     }

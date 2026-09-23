@@ -440,6 +440,8 @@ describe("update run ledger", () => {
         "previous generation restoration",
         "finalize:doctor",
         "finalize:future-phase",
+        // Candidate Doctor's predecessor-stop receipt: identity lives in the key.
+        "finalize:predecessor-stop:1758600000000:1000:631:0123456789abcdef",
         "post-update verification",
       ];
       for (const step of [...UPDATE_RUN_PHASES, ...notices]) {

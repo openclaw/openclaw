@@ -14,6 +14,7 @@ import {
   stringListFlag,
   type FlagSpec,
 } from "./lib/arg-utils.mts";
+import { reportLimitViolations } from "./lib/check-limits.mts";
 import { coerceErrorMessage } from "./lib/error-format.mts";
 import {
   inspectManagedProcessGroup,
@@ -1147,10 +1148,17 @@ async function main() {
   console.log(renderGroupedTestReport(report, { limit: args.limit, topFiles: args.topFiles }));
   console.log(`[test-group-report] wrote ${path.relative(process.cwd(), output)}`);
 
-  if (args.maxTestMs !== null && report.slowTests.length > 0) {
-    console.error(
-      `[test-group-report] ${report.slowTests.length} tests exceeded ${formatMs(args.maxTestMs)}`,
-    );
+  const maxTestMs = args.maxTestMs;
+  if (
+    maxTestMs !== null &&
+    reportLimitViolations(
+      report.slowTests.map((test) => ({
+        file: test.file,
+        title: "Test duration budget",
+        message: `${test.fullName}: ${formatMs(test.durationMs)} exceeds ${formatMs(maxTestMs)}`,
+      })),
+    )
+  ) {
     process.exit(1);
   }
 

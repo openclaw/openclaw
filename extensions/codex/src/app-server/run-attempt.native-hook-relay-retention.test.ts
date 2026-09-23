@@ -15,6 +15,19 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
 import { createCodexNativeHookRelay } from "./native-hook-relay.js";
+import { resolveCodexNativeModelInputTools } from "./native-model-input-tools.js";
+import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
+import {
+  createClient,
+  createRuntime,
+  createNativeModelSourceFixture,
+  childTurnCompletedNotification,
+  directSpawnItem,
+  notifyChildStarted,
+  successfulSendInputOutput,
+  turnStartedNotification,
+  threadRead,
+} from "./native-subagent-monitor.test-support.js";
 import type { CodexServerNotification } from "./protocol.js";
 import {
   createParams,
@@ -35,6 +48,361 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
   beforeEach(() => {
     // Retention owns this clock; cold preparation must not consume the execution budget.
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+  });
+
+  it("refuses foreign V1 steering before write and fences an accepted same-turn source mismatch", async () => {
+    const client = createClient();
+    const qualification = {
+      assertCurrent: () => {},
+      hasProvider: (provider: string) => provider === "test-provider",
+    };
+    for (const threadId of ["parent-thread", "child-thread", "reserved-root"]) {
+      const response = threadRead({ childThreadId: threadId, threadStatus: "active" });
+      response.thread.modelProvider = "test-provider";
+      client.setThreadRead(threadId, response);
+    }
+    const a = { sourceIdentity: {}, assertCurrent: vi.fn(), release: vi.fn() };
+    const b = createNativeModelSourceFixture(["model-b"]);
+    const first = codexNativeSubagentMonitorRuntime.register({
+      client: client.client,
+      parentThreadId: "parent-thread",
+      runtime: createRuntime(),
+      modelSource: a,
+      configurationQualification: qualification,
+    });
+    first.bindTurn("parent-a");
+    await notifyChildStarted(client);
+    await client.notify(turnStartedNotification("child-a"));
+    await client.notify({
+      method: "item/completed",
+      params: {
+        threadId: "parent-thread",
+        turnId: "parent-a",
+        item: directSpawnItem("v1", "parent-thread", "child-thread"),
+      },
+    });
+    const second = codexNativeSubagentMonitorRuntime.register({
+      client: client.client,
+      parentThreadId: "parent-thread",
+      modelSource: b,
+      configurationQualification: qualification,
+    });
+    second.bindTurn("parent-b");
+    const reserved = codexNativeSubagentMonitorRuntime.register({
+      client: client.client,
+      parentThreadId: "reserved-root",
+      modelSource: { sourceIdentity: {}, assertCurrent: vi.fn(), release: vi.fn() },
+    });
+    const host = await createAdmittedHostCapabilityTestFixture({ runId: "active-input" });
+    const lateAdmissionSettled = createDeferred<void>();
+    const register = relayRuntime.registerNativeHookRelayForBundledRuntime;
+    const observeAdmission = vi
+      .spyOn(relayRuntime, "registerNativeHookRelayForBundledRuntime")
+      .mockImplementation((params) => {
+        const admission = params.executionAdmission;
+        return register(
+          admission
+            ? {
+                ...params,
+                executionAdmission: {
+                  ...admission,
+                  admit: async (invocation, assertSource, preparation) => {
+                    try {
+                      await admission.admit(invocation, assertSource, preparation);
+                    } finally {
+                      if (invocation.toolUseId === "abandoned-input") {
+                        lateAdmissionSettled.resolve();
+                      }
+                    }
+                  },
+                },
+              }
+            : params,
+        );
+      });
+    const relay = createCodexNativeHookRelay({
+      options: { enabled: true },
+      events: ["pre_tool_use"],
+      agentId: undefined,
+      sessionId: "active-input",
+      sessionKey: undefined,
+      config: {},
+      runId: "active-input",
+      attemptTimeoutMs: 30_000,
+      startupTimeoutMs: 1_000,
+      turnStartTimeoutMs: 1_000,
+      loopDetectionPreToolUseRelay: false,
+      signal: new AbortController().signal,
+      hostCapabilities: host.hostCapabilities,
+      nativeModelAdmission: {
+        client: () => client.client,
+        threadId: () => "parent-thread",
+        readQualification: () => qualification,
+        tools: resolveCodexNativeModelInputTools({}),
+      },
+      onPreToolUseFailure: () => {},
+    });
+    if (!relay) {
+      throw new Error("Expected native input admission relay");
+    }
+    const invoke = (
+      turnId: string,
+      callId: string,
+      target = "child-thread",
+      toolName = "multi_agent_v1send_input",
+      signal?: AbortSignal,
+    ) =>
+      invokeNativeHookRelay(
+        {
+          provider: "codex",
+          relayId: relay.relayId,
+          event: "pre_tool_use",
+          rawPayload: {
+            session_id: "parent-thread",
+            turn_id: turnId,
+            tool_use_id: callId,
+            tool_name: toolName,
+            tool_input: { target, message: "Continue" },
+          },
+        },
+        signal,
+      );
+    const request = {
+      client: client.client,
+      threadId: "child-thread",
+      turnId: "child-a",
+      parentThreadId: "parent-thread",
+      parentTurnId: "parent-a",
+      rootTurnId: "parent-a",
+    };
+    const capture = await codexNativeSubagentMonitorRuntime.captureModelSource(request);
+    if (!capture) {
+      throw new Error("Expected child execution custody");
+    }
+    try {
+      expect(relay.toolMatcherForEvent("pre_tool_use")).toEqual(
+        resolveCodexNativeModelInputTools({}).toSorted(),
+      );
+      const nativeWrite = vi.fn();
+      await expect(invoke("parent-b", "denied-steer").then(nativeWrite)).rejects.toThrow(
+        "same admitted model source",
+      );
+      expect(nativeWrite).not.toHaveBeenCalled();
+      await expect(invoke("parent-b", "ambiguous-root", "parent-thread")).rejects.toThrow(
+        "unambiguous receiver turn",
+      );
+      await expect(invoke("parent-b", "unbound-root", "reserved-root")).rejects.toThrow(
+        "receiver turn to be bound",
+      );
+      expect(() => capture.assertCurrent()).not.toThrow();
+      await expect(
+        invoke(
+          "parent-b",
+          "foreign-active-followup",
+          "child-thread",
+          "collaborationfollowup_task",
+        ).then(nativeWrite),
+      ).rejects.toThrow("same admitted model source");
+      expect(nativeWrite).not.toHaveBeenCalled();
+      await expect(
+        invoke("parent-a", "same-active-followup", "child-thread", "collaborationfollowup_task"),
+      ).resolves.toEqual({ stdout: "", stderr: "", exitCode: 0 });
+      await client.notify({
+        method: "rawResponseItem/completed",
+        params: {
+          threadId: "parent-thread",
+          turnId: "parent-a",
+          item: {
+            type: "function_call_output",
+            call_id: "same-active-followup",
+            output: "Input declined",
+          },
+        },
+      });
+
+      await invoke("parent-a", "initial-same-source-steer");
+      await client.notify(
+        successfulSendInputOutput({
+          turnId: "parent-a",
+          callId: "initial-same-source-steer",
+          submissionId: "initial-opaque-steer",
+        }),
+      );
+
+      // The accepted opaque receipt plus unresolved writes share the capacity
+      // reserved before native input. Failed calls release their reservations.
+      for (let index = 0; index < 31; index++) {
+        await invoke("parent-a", `pending-${index}`);
+      }
+      await expect(invoke("parent-a", "over-capacity").then(nativeWrite)).rejects.toThrow(
+        "native input admission capacity reached",
+      );
+      expect(nativeWrite).not.toHaveBeenCalled();
+      for (let index = 0; index < 31; index++) {
+        await client.notify({
+          method: "rawResponseItem/completed",
+          params: {
+            threadId: "parent-thread",
+            turnId: "parent-a",
+            item: {
+              type: "function_call_output",
+              call_id: `pending-${index}`,
+              output: "Input rejected",
+            },
+          },
+        });
+      }
+      await expect(invoke("parent-a", "same-source-steer")).resolves.toEqual({
+        stdout: "",
+        stderr: "",
+        exitCode: 0,
+      });
+      await client.notify(
+        successfulSendInputOutput({
+          turnId: "parent-a",
+          callId: "same-source-steer",
+          submissionId: "opaque-same-turn-receipt",
+        }),
+      );
+      expect(() => capture.assertCurrent()).not.toThrow();
+
+      // A stock V1 successful steer reports an opaque submission ID while the
+      // receiver keeps its old native turn and lineage, including after a hook race.
+      await client.notify({
+        method: "item/completed",
+        params: {
+          threadId: "parent-thread",
+          turnId: "parent-b",
+          item: {
+            type: "collabAgentToolCall",
+            tool: "sendInput",
+            status: "completed",
+            id: "accepted-steer",
+            senderThreadId: "parent-thread",
+            receiverThreadIds: ["child-thread"],
+          },
+        },
+      });
+      await expect(codexNativeSubagentMonitorRuntime.captureModelSource(request)).rejects.toThrow(
+        "same admitted model source",
+      );
+      await client.notify(
+        successfulSendInputOutput({
+          turnId: "parent-b",
+          callId: "accepted-steer",
+          submissionId: "opaque-foreign-receipt",
+        }),
+      );
+      expect(() => capture.assertCurrent()).toThrow("execution was cancelled");
+      await expect(codexNativeSubagentMonitorRuntime.captureModelSource(request)).rejects.toThrow(
+        "execution was cancelled",
+      );
+      await client.notify(
+        childTurnCompletedNotification({ turnId: "child-a", status: "interrupted" }),
+      );
+      const coldTarget = threadRead({ threadStatus: "notLoaded" });
+      coldTarget.thread.modelProvider = "unqualified-provider";
+      client.setThreadRead("child-thread", coldTarget);
+      await expect(
+        invoke(
+          "parent-b",
+          "denied-cold-followup",
+          "child-thread",
+          "collaborationfollowup_task",
+        ).then(nativeWrite),
+      ).rejects.toThrow("does not admit this model");
+      expect(nativeWrite).not.toHaveBeenCalled();
+      const warmTarget = threadRead({ threadStatus: "idle" });
+      warmTarget.thread.modelProvider = "test-provider";
+      client.setThreadRead("child-thread", warmTarget);
+
+      const entered = createDeferred<void>();
+      const lateRead = createDeferred<ReturnType<typeof threadRead>>();
+      client.setThreadReadFactory("child-thread", () => {
+        entered.resolve();
+        return lateRead.promise;
+      });
+      const requester = new AbortController();
+      const abandoned = invoke(
+        "parent-a",
+        "abandoned-input",
+        "child-thread",
+        "collaborationfollowup_task",
+        requester.signal,
+      );
+      await Promise.race([
+        entered.promise,
+        abandoned.then(() => {
+          throw new Error("Native input returned before its metadata read");
+        }),
+      ]);
+      requester.abort(new Error("native hook requester closed"));
+      await expect(abandoned).rejects.toMatchObject({
+        name: "AbortError",
+        cause: requester.signal.reason,
+      });
+      await client.notify({
+        method: "rawResponseItem/completed",
+        params: {
+          threadId: "parent-thread",
+          turnId: "parent-a",
+          item: {
+            type: "function_call_output",
+            call_id: "abandoned-input",
+            output: "Requester closed",
+          },
+        },
+      });
+      lateRead.resolve(warmTarget);
+      await lateAdmissionSettled.promise;
+      client.setThreadRead("child-thread", warmTarget);
+      await invoke(
+        "parent-b",
+        "followup-after-a",
+        "child-thread",
+        "collaborationfollowup_task",
+      ).then(nativeWrite);
+      expect(nativeWrite).toHaveBeenCalledOnce();
+      await expect(
+        invoke("parent-a", "incompatible-pending", "child-thread", "collaborationfollowup_task"),
+      ).rejects.toThrow("same admitted model source");
+      await client.notify({
+        method: "item/completed",
+        params: {
+          threadId: "parent-thread",
+          turnId: "parent-b",
+          item: {
+            type: "subAgentActivity",
+            kind: "interacted",
+            id: "followup-after-a",
+            agentThreadId: "child-thread",
+            agentPath: "/root/child-thread",
+          },
+        },
+      });
+      await client.notify(turnStartedNotification("child-b"));
+      const next = await codexNativeSubagentMonitorRuntime.captureModelSource({
+        ...request,
+        turnId: "child-b",
+        parentTurnId: "parent-b",
+        rootTurnId: "parent-b",
+      });
+      expect(next?.source).toBe(b);
+      next?.release();
+    } finally {
+      observeAdmission.mockRestore();
+      capture.release();
+      relay.unregister();
+      await relay.drain();
+      await first.unregister();
+      await second.unregister();
+      await reserved.unregister();
+      client.close();
+      host.closeHost();
+      host.closeAdmission();
+    }
+    expect(a.release).toHaveBeenCalledOnce();
+    expect(b.release).toHaveBeenCalledOnce();
   });
 
   it.each([undefined, "callback cancelled"])(
@@ -221,7 +589,9 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
       params.runtimePlan = createCodexRuntimePlanFixture();
       params.onAgentEvent = vi.fn();
       setCodexTestModelSupportsTools(params, true);
-      const fixture = await createAdmittedHostCapabilityTestFixture(params);
+      const fixture = await createAdmittedHostCapabilityTestFixture(params, {
+        nativeModelPolicySupport: "exact",
+      });
       params.hostCapabilities = fixture.hostCapabilities;
       if (hasDeliveryScope) {
         params.agentHarnessTaskRuntimeScope = fixture.agentHarnessTaskRuntimeScope;
@@ -527,7 +897,9 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
     params.disableTools = false;
     params.runtimePlan = createCodexRuntimePlanFixture();
     setCodexTestModelSupportsTools(params, true);
-    const fixture = await createAdmittedHostCapabilityTestFixture(params);
+    const fixture = await createAdmittedHostCapabilityTestFixture(params, {
+      nativeModelPolicySupport: "exact",
+    });
     params.hostCapabilities = fixture.hostCapabilities;
 
     const beforeToolCall = vi.fn(async () => undefined);

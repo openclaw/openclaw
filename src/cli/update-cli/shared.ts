@@ -27,6 +27,7 @@ import {
   detectGlobalInstallManagerForRoot,
   type GlobalInstallManager,
 } from "../../infra/update-global.js";
+import { cleanupUpdateTemporaryDirectory } from "../../infra/update-maintenance.js";
 import { createUpdatePreflightFailure } from "../../infra/update-preflight-details.js";
 import type { UpdateRequesterAuthority } from "../../infra/update-requester-authority.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
@@ -301,6 +302,7 @@ type StagedGitCheckout = (
   root: string,
   publish: () => Promise<string>,
   targetRoot: string,
+  storageRoot: string,
 ) => Promise<void>;
 
 async function cloneGitCheckoutTransactionally(params: {
@@ -319,11 +321,31 @@ async function cloneGitCheckoutTransactionally(params: {
     : path.join(canonicalParentDir, path.basename(params.dir));
   const targetIdentity = preserveDir ? await fs.lstat(targetDir, { bigint: true }) : undefined;
   const stagingParent = preserveDir ? targetDir : canonicalParentDir;
-  const stagingDir = await fs.mkdtemp(path.join(stagingParent, ".openclaw-clone-"));
+  // Publication moves only the repository; candidate builds keep their paths
+  // until runtime promotion and cleanup finish on this same filesystem.
+  const storageRoot = await fs.mkdtemp(path.join(stagingParent, ".openclaw-clone-"));
+  const storageIdentity = await fs.lstat(storageRoot, { bigint: true });
+  const stagingDir = path.join(storageRoot, "repository");
+  await fs.mkdir(stagingDir).catch(async (error: unknown) => {
+    try {
+      if (await ownsDirectory(storageRoot, storageIdentity)) {
+        await fs.rmdir(storageRoot);
+      }
+    } catch {
+      // Retain nonempty or replaced storage; cleanup must not hide the allocation error.
+    }
+    throw error;
+  });
   const stagingIdentity = await fs.lstat(stagingDir, { bigint: true });
   let cleanupStaging = true;
+  let published = false;
+  let result: UpdateStepResult | undefined;
 
-  async function ownsDirectory(directory: string, identity: typeof stagingIdentity) {
+  async function ownsDirectory(
+    directory: string,
+    identity: typeof storageIdentity,
+    allowMissing = false,
+  ) {
     try {
       const current = await fs.lstat(directory, { bigint: true });
       // Unknown Windows identities cannot authorize publication or recursive cleanup.
@@ -336,14 +358,14 @@ async function cloneGitCheckoutTransactionally(params: {
       );
     } catch (error) {
       if (hasErrnoCode(error, "ENOENT")) {
-        return false;
+        return allowMissing;
       }
       throw error;
     }
   }
 
   try {
-    const result = await runUpdateStep({
+    result = await runUpdateStep({
       name: "git-clone",
       argv: ["git", "clone", GIT_CLONE_BLOB_FILTER, UPSTREAM_REPOSITORY_URL, stagingDir],
       env: params.env,
@@ -356,6 +378,7 @@ async function cloneGitCheckoutTransactionally(params: {
 
     const publish = async (): Promise<string> => {
       if (
+        !(await ownsDirectory(storageRoot, storageIdentity)) ||
         !(await ownsDirectory(stagingDir, stagingIdentity)) ||
         (targetIdentity && !(await ownsDirectory(targetDir, targetIdentity)))
       ) {
@@ -371,6 +394,7 @@ async function cloneGitCheckoutTransactionally(params: {
             throw error;
           }
           await fs.rename(stagingDir, targetDir);
+          published = true;
           return targetDir;
         }
       }
@@ -381,7 +405,7 @@ async function cloneGitCheckoutTransactionally(params: {
         );
       }
 
-      const expectedEntries = preserveDir ? [path.basename(stagingDir)] : [];
+      const expectedEntries = preserveDir ? [path.basename(storageRoot)] : [];
       const destinationEntries = await fs.readdir(targetDir);
       if (destinationEntries.toSorted().join("\0") !== expectedEntries.toSorted().join("\0")) {
         throw new Error(
@@ -420,17 +444,38 @@ async function cloneGitCheckoutTransactionally(params: {
         }
         throw publishError.value;
       }
+      published = true;
       return targetDir;
     };
     if (params.useStagedCheckout) {
-      await params.useStagedCheckout(stagingDir, publish, targetDir);
+      await params.useStagedCheckout(stagingDir, publish, targetDir, storageRoot);
     } else {
       await publish();
     }
     return { checkoutDir: targetDir, step: result };
   } finally {
-    if (cleanupStaging && (await ownsDirectory(stagingDir, stagingIdentity))) {
-      await fs.rm(stagingDir, { recursive: true, force: true });
+    // The container does not confer ownership of a replaced repository child.
+    // Only completed publication permits that child to be absent at cleanup.
+    if (cleanupStaging) {
+      // Cleanup must not replace a completed publication or the callback's original error.
+      await cleanupUpdateTemporaryDirectory({
+        directory: storageRoot,
+        root: targetDir,
+        name: "git-clone-staging-cleanup",
+        canRemove: async () =>
+          (await ownsDirectory(storageRoot, storageIdentity)) &&
+          (await ownsDirectory(stagingDir, stagingIdentity, published)),
+        onWarning: (warning) => {
+          if (result && warning.advisory) {
+            result.warnings = [...(result.warnings ?? []), warning.advisory.message];
+          }
+          try {
+            params.progress?.onStepComplete?.({ ...warning, index: 0, total: 0 });
+          } catch {
+            // Ledger callbacks can throw; cleanup diagnostics cannot replace the operation outcome.
+          }
+        },
+      });
     }
   }
 }

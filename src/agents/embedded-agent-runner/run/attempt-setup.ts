@@ -79,8 +79,8 @@ export type EmbeddedAttemptSetup = Awaited<ReturnType<typeof prepareEmbeddedAtte
 export async function prepareEmbeddedAttemptSetup(params: EmbeddedRunAttemptParams) {
   // Ultra is a logical orchestration mode, not a provider effort. Preserve it for
   // prompt/status surfaces, then lower only at agent-core and provider boundaries.
-  const agentCoreThinkingLevel = mapThinkingLevel(params.thinkLevel);
-  const providerThinkingLevel = mapThinkingLevelForProvider(params.thinkLevel);
+  const providerThinkingLevel = mapThinkingLevelForProvider(params.thinkLevel, params.model);
+  const agentCoreThinkingLevel = mapThinkingLevel(providerThinkingLevel);
   const proactiveSubagentOrchestration = params.thinkLevel === "ultra";
   configureEmbeddedAttemptHttpRuntime({ timeoutMs: params.timeoutMs });
 

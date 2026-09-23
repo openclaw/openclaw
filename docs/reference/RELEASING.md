@@ -437,7 +437,7 @@ owner authorization; admission does not grant it.
 
 An explicit stable or full release request includes macOS publication unless the operator limits its scope. That authorization carries through macOS validation, signing, notarization, promotion, and verification without a separate macOS consent step. Follow the current owner-configured environment policy and retain all enforced rules and exact-source artifact checks.
 
-For beta, stable, and full profiles, Linux (`ubuntu`) cross-OS lanes gate npm publication. Windows and macOS cross-OS lanes run in parallel as advisory coverage; their failures remain visible under **advisory** in `release-ci-summary` and in the evidence manifest without blocking Release Decision or `pnpm release:candidate`. Selected lanes still finish for terminal evidence. npm qualification, Docker, Package Acceptance, normal CI, and the profile's performance and soak gates remain required. macOS app signing/notarization/appcast and Windows Hub asset promotion run in parallel with or after npm publication and never delay it; verify platform readiness separately.
+For beta, stable, and full profiles, Linux (`ubuntu`) cross-OS lanes gate npm publication. Windows and macOS cross-OS lanes run in parallel as advisory coverage; their failures remain visible under **advisory** in `release-ci-summary` and in the evidence manifest without blocking Release Decision or `pnpm release:candidate`. Selected lanes still finish for terminal evidence. npm qualification, Docker, Package Acceptance, normal CI, and the profile's performance and soak gates remain required. macOS app signing/notarization/appcast and Windows Hub asset promotion run in parallel with or after npm publication and never delay it; verify platform readiness separately. npm + ClawHub publication is the priority path: native app publication and advisory cross-OS Windows/macOS lanes never gate it, and a native-only failure is classified and repaired in parallel rather than re-cutting or re-running npm validation. Windows should not hold the release either; its node-test shards are still a required `ci.yml` check for npm qualification, so repair and rerun that lane in parallel.
 
 1. Start from current `main`: pull latest, confirm the target commit is pushed, and confirm `main` CI is green enough to branch from.
 2. Create `release/YYYY.M.PATCH` from that commit. Backports are optional; apply only the operator-selected set. Bump every required version location, run `pnpm release:prep`, finish release fixes and required forward-ports, and review `src/plugins/compat/registry.ts` plus `src/commands/doctor/shared/deprecation-compat.ts`.
@@ -710,7 +710,7 @@ design approval and package-manager integration proof before implementation.
   Example:
 
   ```bash
-  gh workflow run package-acceptance.yml --ref main -f workflow_ref=main -f source=npm -f package_spec=openclaw@beta -f suite_profile=product -f published_upgrade_survivor_baseline=openclaw@2026.4.26 -f telegram_mode=mock-openai
+  gh workflow run package-acceptance.yml --ref main -f workflow_ref=main -f source=npm -f package_spec=openclaw@beta -f suite_profile=product -f telegram_mode=mock-openai
   ```
 
   Common profiles:
@@ -983,7 +983,7 @@ It is the GitHub-native replacement for most of the package/update coverage that
 
 The canonical checklist for update and plugin validation is [Testing updates and plugins](/help/testing-updates-plugins). Use it when deciding which local, Docker, Package Acceptance, or release-check lane proves a plugin install/update, doctor cleanup, or published-package migration change. Exhaustive published update migration from every stable `2026.4.23+` package is a separate manual `Update Migration` workflow, not part of Full Release CI.
 
-Legacy package-acceptance leniency is intentionally time boxed. Packages through `2026.4.25` may use the compatibility path for metadata gaps already published to npm: private QA inventory entries missing from the tarball, missing `gateway install --wrapper`, missing patch files in the tarball-derived git fixture, missing persisted `update.channel`, legacy plugin install-record locations, missing marketplace install-record persistence, and config metadata migration during `plugins update`. The published `2026.4.26` package may warn for local build metadata stamp files that were already shipped. Later packages must satisfy the modern package contracts; those same gaps fail release validation.
+Pre-June 2026 package-acceptance exceptions are retired. Current tooling requires complete package inventory, no local build metadata, service-wrapper support, and current update/plugin persistence contracts. Use matching historical `workflow_ref` tooling when reproducing acceptance results for old candidates.
 
 Use broader Package Acceptance profiles when the release question is about an actual installable package:
 
@@ -993,8 +993,7 @@ gh workflow run package-acceptance.yml \
   -f workflow_ref=main \
   -f source=npm \
   -f package_spec=openclaw@beta \
-  -f suite_profile=product \
-  -f published_upgrade_survivor_baseline=openclaw@2026.4.26
+  -f suite_profile=product
 ```
 
 Common package profiles:

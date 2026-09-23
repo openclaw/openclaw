@@ -80,6 +80,7 @@ import {
   isBoundaryTestFile,
   isBundledPluginDependentUnitTestFile,
   isUnitConfigTestFile,
+  filterUnitConfigTestFiles,
 } from "../test/vitest/vitest.unit-paths.mjs";
 import {
   detectChangedLanes,
@@ -233,7 +234,7 @@ const CONTRACTS_CHANNEL_SURFACE_VITEST_CONFIG =
 export const CONTRACTS_PLUGIN_VITEST_CONFIG = "test/vitest/vitest.contracts-plugin.config.ts";
 const CRON_VITEST_CONFIG = "test/vitest/vitest.cron.config.ts";
 const DAEMON_VITEST_CONFIG = "test/vitest/vitest.daemon.config.ts";
-const E2E_VITEST_CONFIG = "test/vitest/vitest.e2e.config.ts";
+export const E2E_VITEST_CONFIG = "test/vitest/vitest.e2e.config.ts";
 const EXTENSION_ACTIVE_MEMORY_VITEST_CONFIG =
   "test/vitest/vitest.extension-active-memory.config.ts";
 const EXTENSION_ACPX_VITEST_CONFIG = "test/vitest/vitest.extension-acpx.config.ts";
@@ -1076,13 +1077,13 @@ function listUnitSrcFullSuiteTestTargets(cwd: string) {
   }
   const unitFastTargets = new Set(getUnitFastTestFiles());
   const srcDir = path.join(cwd, "src");
-  cachedUnitSrcFullSuiteTestTargets = (
-    fs.existsSync(srcDir) ? listRepoFilesRecursive(srcDir, cwd) : []
+  cachedUnitSrcFullSuiteTestTargets = filterUnitConfigTestFiles(
+    (fs.existsSync(srcDir) ? listRepoFilesRecursive(srcDir, cwd) : []).filter((file) =>
+      file.endsWith(".test.ts"),
+    ),
   )
     .filter(
       (file) =>
-        file.endsWith(".test.ts") &&
-        isUnitConfigTestFile(file) &&
         !unitFastTargets.has(file) &&
         !path.matchesGlob(file, "src/acp/**") &&
         !path.matchesGlob(file, "src/security/**"),
@@ -2399,6 +2400,7 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
   ["scripts/release-verify-beta.ts", ["release-wrapper-scripts"]],
   ["scripts/lib/bundled-plugin-build-entries.mjs", ["bundled-plugin-build-entries", releaseCheck]],
   ["scripts/lib/docker-e2e-package.sh", [dockerBuild]],
+  ["scripts/relay-build-limit-warnings.mts", [dockerBuild]],
   [
     "scripts/lib/release-version.mjs",
     [

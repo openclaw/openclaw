@@ -435,8 +435,11 @@ is no central provider fallback. Manifest values remain authoritative, so
 hydration only fills undefined metadata and never supplies transport settings
 or prices. Costs still come from each provider's pricing policy. Only rows with
 tool calling and text output are imported, and rows models.dev marks deprecated
-or retired are skipped. Hydration errors fail publication and preserve the last
-published artifact instead of publishing an incomplete replacement. This is a
+or retired are skipped. If models.dev itself is unreachable or malformed,
+publication fails and the last published artifact stays in place. A single
+missing or renamed upstream provider only skips that provider's hydration; its
+manifest rows still publish, so one provider cannot block catalog updates for
+the rest. This is a
 publication-time contract: it adds no Gateway fetches or hot reload, and updated
 metadata still becomes visible after a Gateway restart.
 Its scheduled workflow checks OpenClaw's default-branch plugin manifests and

@@ -1,7 +1,11 @@
 import type { Worker } from "node:worker_threads";
 import type { OpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import type { RuntimeWorkerGeneration } from "./runtime-worker-generation.js";
-import type { SqliteWorkerRequest, SqliteWorkerReply } from "./sqlite-worker-contract.js";
+import type {
+  SqliteWorkerRequest,
+  SqliteWorkerReply,
+  SqliteWorkerCloseReceipt,
+} from "./sqlite-worker-contract.js";
 import type {
   SqliteWorkerAdmissionFactory,
   SqliteWorkerOperationAdmission,
@@ -66,7 +70,6 @@ export type Slot = {
   queue: Job[];
   current?: Job;
   failed?: Error;
-  retiredAfterCompletion?: true;
   retiring?: Promise<void>;
   exit: Promise<void>;
   exited: boolean;
@@ -76,6 +79,7 @@ export type Actor = {
   runtimeGeneration?: RuntimeWorkerGeneration;
   nativeStopped: Promise<void>;
   markNativeStopped(): void;
+  closeReceipt?: SqliteWorkerCloseReceipt;
   stateDatabasePath?: string;
   id: number;
   key: string;
@@ -144,7 +148,10 @@ export type PreparedSqliteWorkerOpen = {
   createOpenAdmission?: SqliteWorkerAdmissionFactory;
   maintenanceScope?: OpenClawDatabaseMaintenanceScope;
   retainCleanup?: (cleanup: SqliteWorkerAdmissionCleanup) => void;
-  onNativeStopped?: (stopped: Promise<void>) => void;
+  onNativeStopped?: (
+    stopped: Promise<void>,
+    readCloseReceipt: () => SqliteWorkerCloseReceipt | undefined,
+  ) => void;
   stateDatabasePath?: string;
   createAdmission?: SqliteWorkerAdmissionFactory;
   assertCurrent?: () => void;

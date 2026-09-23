@@ -2,12 +2,17 @@ import { performance } from "node:perf_hooks";
 import { StatementSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
-import { writeAcpSessionMetaForMigration } from "../acp/runtime/session-meta.js";
+import { readAcpSessionMetaForEntries } from "../acp/runtime/session-meta-readonly.js";
+import {
+  upsertAcpSessionMeta,
+  writeAcpSessionMetaForMigration,
+} from "../acp/runtime/session-meta.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { persistSubagentRunsToDiskOrThrow } from "../agents/subagents/registry/subagent-registry-state.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import {
   assignSessionOwner,
+  loadSessionEntry,
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
 import * as entryCache from "../config/sessions/session-accessor.sqlite-entry-cache.js";
@@ -17,6 +22,7 @@ import {
 } from "../config/sessions/session-sharing-store.native.js";
 import * as history from "../config/sessions/session-transcript-worker-runtime.js";
 import type { SessionRowDatabaseFacts } from "../config/sessions/session-transcript-worker.types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { registerAgentRunCapacityWait } from "../infra/agent-run-capacity-wait.js";
 import {
   clearAgentRunContext,
@@ -33,10 +39,13 @@ import {
   requestContext,
 } from "./server-methods/sessions-read-cache.test-support.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
+import { readSessionRowModelFacts } from "./session-row-model-facts.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import * as databaseFactsRead from "./session-row-projection-read.js";
 import * as records from "./session-row-projection-record.js";
-import { createSessionRowProjection } from "./session-row-projection.js";
+import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
+import { resolveSessionStoreKey } from "./session-store-key.js";
+import { listProjectedSessions } from "./session-utils-list.js";
 import * as rowInputs from "./session-utils-row.js";
 
 afterEach(() => vi.restoreAllMocks());
@@ -266,11 +275,14 @@ it.each([
   "membership revocation",
   "runtime stored facts",
   "invalidated presentation facts",
+  "unrelated stored row",
+  "captured sibling row",
 ] as const)("consumes current list facts across an awaited worker reply: %s", async (change) => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = { agents: { list: [{ id: "main", default: true }] } };
     const changesOwner =
       change === "runtime stored facts" || change === "invalidated presentation facts";
+    const changesSibling = change === "unrelated stored row" || change === "captured sibling row";
     const requiresFreshRead = change === "membership revocation" || changesOwner;
     const scope = { agentId: "main", sessionKey: "agent:main:worker-fact-freshness" };
     const owner = ensureProfileForEmail("projection-owner@example.test");
@@ -284,6 +296,10 @@ it.each([
       createdActor: { type: "human" as const, source: "profile" as const, id: owner.id },
     };
     replaceSessionEntrySync(scope, entry);
+    const unrelated = { agentId: "main", sessionKey: "agent:main:worker-fact-unrelated" };
+    if (changesSibling) {
+      replaceSessionEntrySync(unrelated, { sessionId: "unrelated", updatedAt: 0 });
+    }
     addSessionMember(scope, { identityId: viewer.id, addedBy: owner.id, addedAt: 1 });
     const releaseForeground = retainSessionListForegroundWork();
     try {
@@ -321,10 +337,13 @@ it.each([
                   async readRowFacts(input) {
                     const reply = await database.readRowFacts(input);
                     if (first) {
+                      if (change === "captured sibling row") {
+                        expect(input.sessionKeys).toContain(unrelated.sessionKey);
+                      }
                       first = false;
                       captured.resolve();
                       await releaseFirst.promise;
-                    } else {
+                    } else if (input.sessionKeys.includes(scope.sessionKey)) {
                       repeated.resolve();
                       await releaseRepeated.promise;
                     }
@@ -335,6 +354,13 @@ it.each([
             ),
         );
         replaceSessionEntrySync(scope, { ...entry, updatedAt: 2, label: "Fresh stored label" });
+        if (change === "captured sibling row") {
+          replaceSessionEntrySync(unrelated, {
+            sessionId: "unrelated",
+            updatedAt: 0,
+            label: "Previous sibling",
+          });
+        }
         reading = listSessions({ client, context, request });
         await Promise.race([
           captured.promise,
@@ -342,7 +368,13 @@ it.each([
             throw new Error("List bypassed pending dirty row facts");
           }),
         ]);
-        if (change === "profile display") {
+        if (changesSibling) {
+          replaceSessionEntrySync(unrelated, {
+            sessionId: "unrelated",
+            updatedAt: 0,
+            label: "Current sibling",
+          });
+        } else if (change === "profile display") {
           setDisplayName(owner.id, "Current owner");
         } else if (change === "run publication" || change === "capacity transition") {
           registerAgentRunContext(runId, {
@@ -417,6 +449,12 @@ it.each([
           expect(boundary).toBe("response");
         }
         const result = await reading;
+        if (changesSibling) {
+          expect(
+            projection.snapshot({ agentId: unrelated.agentId, key: unrelated.sessionKey }).row
+              ?.label,
+          ).toBe("Current sibling");
+        }
         expect(result.sessions).toEqual([
           expect.objectContaining({
             key: scope.sessionKey,
@@ -458,6 +496,93 @@ it.each([
         }
       }
     } finally {
+      releaseForeground();
+    }
+  });
+});
+
+it("keeps the stored main address and ACP runtime after mainKey changes", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const cfgBefore = {
+      agents: { ownership: "explicit", entries: { main: {} } },
+      session: { mainKey: "main" },
+    } satisfies OpenClawConfig;
+    const target = { agentId: "main", sessionKey: "agent:main:main" };
+    const entry = {
+      sessionId: "stored-main",
+      lifecycleRevision: "stored-main-first",
+      updatedAt: 1,
+    };
+    await state.writeConfig(cfgBefore);
+    state.applyEnv();
+    replaceSessionEntrySync(target, entry);
+    const meta = {
+      backend: "fixture-backend",
+      agent: "fixture-harness",
+      runtimeSessionName: "stored-main-runtime",
+      mode: "persistent" as const,
+      state: "idle" as const,
+      lastActivityAt: 2,
+    };
+    expect(
+      await upsertAcpSessionMeta({
+        ...target,
+        cfg: cfgBefore,
+        env: state.env,
+        now: () => 2,
+        mutate: () => meta,
+      }),
+    ).toMatchObject({ sessionId: entry.sessionId, acp: meta });
+    const stored = loadSessionEntry(target);
+    if (!stored) {
+      throw new Error("Expected the ACP writer to retain its session entry");
+    }
+    expect(stored.acp).toBeUndefined();
+    expect(
+      await readAcpSessionMetaForEntries({
+        cfg: cfgBefore,
+        env: state.env,
+        entries: [{ ...target, entry: stored }],
+      }),
+    ).toEqual([meta]);
+
+    const cfgAfter = { ...cfgBefore, session: { mainKey: "work" } };
+    await state.writeConfig(cfgAfter);
+    state.applyEnv();
+    expect(loadSessionEntry(target)).toEqual(stored);
+    expect(
+      await readAcpSessionMetaForEntries({
+        cfg: cfgAfter,
+        env: state.env,
+        entries: [{ ...target, entry: stored }],
+      }),
+    ).toEqual([meta]);
+    expect(resolveSessionStoreKey({ cfg: cfgAfter, ...target })).toBe("agent:main:work");
+
+    const releaseForeground = retainSessionListForegroundWork();
+    let projection: SessionRowProjection | undefined;
+    try {
+      projection = await createSessionRowProjection({ cfg: cfgAfter, modelCatalog: [] });
+      const facts = readSessionRowModelFacts({
+        cfg: cfgAfter,
+        key: target.sessionKey,
+        agentId: target.agentId,
+        entry: stored,
+        source: { entry: stored, readSourceEntry: () => undefined },
+        rowContext: projection.state.rowContext,
+        modelCatalog: [],
+      });
+      expect(facts.thinkingProjection.acpMeta).toEqual(meta);
+      const result = await listProjectedSessions({ projection, opts: { agentId: "main" } });
+      expect(result.sessions).toEqual([
+        expect.objectContaining({
+          key: target.sessionKey,
+          sessionId: entry.sessionId,
+          runtimeSelectionLocked: true,
+        }),
+      ]);
+    } finally {
+      projection?.dispose();
       releaseForeground();
     }
   });

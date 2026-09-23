@@ -87,6 +87,7 @@ export function createManagedHandoffLeaseStore(
     readProcessStartIdentity,
     processIdentity,
     processState,
+    inspectProcessIdentity,
     isProcessIdentityCurrent,
     acceptSelfIdentity,
   } = createManagedHandoffProcessIdentityReader({
@@ -693,6 +694,7 @@ export function createManagedHandoffLeaseStore(
     stopNative,
     isInNativeScope,
     processIdentity,
+    inspectProcessIdentity,
     isProcessIdentityCurrent,
     readProcessStartIdentity,
     isPidAlive,

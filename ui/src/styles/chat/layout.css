@@ -950,11 +950,9 @@ openclaw-pending-session-create {
 }
 
 .context-usage__popover {
-  position: absolute;
-  right: 0;
-  bottom: calc(100% + 10px);
-  z-index: 70;
   width: min(300px, calc(100vw - 42px));
+  max-height: var(--auto-size-available-height, calc(100dvh - 16px));
+  overflow-y: auto;
   padding: 14px;
   color: var(--popover-foreground);
   animation: fade-in 150ms var(--ease-out);
@@ -2933,13 +2931,7 @@ openclaw-chat-ci-details {
 
 @media (max-width: 640px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
   .context-usage__popover {
-    position: fixed;
-    left: max(12px, var(--safe-area-left));
-    right: max(12px, var(--safe-area-right));
-    bottom: var(--chat-composer-popover-bottom, calc(96px + var(--safe-area-bottom)));
-    width: auto;
-    max-height: var(--chat-composer-popover-max-height, calc(100dvh - 116px));
-    overflow-y: auto;
+    width: calc(100vw - max(12px, var(--safe-area-left)) - max(12px, var(--safe-area-right)));
   }
 }
 

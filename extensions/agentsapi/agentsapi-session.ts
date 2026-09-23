@@ -1,6 +1,8 @@
 import { setTimeout as delay } from "node:timers/promises";
+import type { AgentSessionEvent } from "openai/resources/beta/agents/agents";
+import type { Turn } from "openai/resources/beta/agents/sessions/turns";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { AgentsApiClient, type AgentsApiEvent } from "./agentsapi-client.js";
+import { AgentsApiClient } from "./agentsapi-client.js";
 
 /** Native input receipts and session idle, together, establish Agents API completion. */
 export function createAgentsApiSession(options: {
@@ -9,15 +11,16 @@ export function createAgentsApiSession(options: {
   sessionId: string;
   signal: AbortSignal;
   assertCurrent: () => void;
-  onEvent: (event: AgentsApiEvent) => void;
+  onEvent: (event: AgentSessionEvent) => void;
   onSettled?: () => void;
+  onUsageError?: (error: unknown) => void;
 }) {
   const { client, cleanupClient, sessionId, signal, assertCurrent } = options;
   let streamController = new AbortController();
   let submitted = false;
   let stopped = false;
   let settled = false;
-  let rootTurn: AgentsApiEvent["turn"];
+  let rootTurn: Turn | undefined;
   let turnFailure: string | undefined;
   let cancelled = false;
   let submission: Promise<void> = Promise.resolve();
@@ -27,6 +30,8 @@ export function createAgentsApiSession(options: {
   const observedInputItems = new Set<string>();
   const coordinatorTurnIds = new Set<string>();
   let latestInputTurnId: string | undefined;
+  let baselineTurnId: string | undefined;
+  let usageTurns: Promise<Turn[]> | undefined;
 
   const isAvailable = () => submitted && !stopped && !settled && !rootTurn && !signal.aborted;
   const submit = (text: string) => {
@@ -64,6 +69,7 @@ export function createAgentsApiSession(options: {
         submissionError = error;
       }
       await cleanupClient.cancel(sessionId, AbortSignal.timeout(30_000));
+      settled = true;
       if (submissionError !== undefined) {
         throw submissionError instanceof Error
           ? submissionError
@@ -80,7 +86,7 @@ export function createAgentsApiSession(options: {
 
   const collectInputs = async (turnId: string) => {
     for (const item of await client.items(sessionId, turnId, signal)) {
-      if (item.type === "message" && item.role === "user") {
+      if (item.type === "message" && item.role === "user" && item.id) {
         observedInputItems.add(item.id);
       }
     }
@@ -100,9 +106,39 @@ export function createAgentsApiSession(options: {
     isSettled: () => settled,
     queueMessage: submit,
     cancel,
+    readUsageTurns() {
+      if (!submitted || !settled) {
+        return Promise.resolve([]);
+      }
+      return (usageTurns ??= (async () => {
+        const usageSignal = AbortSignal.timeout(5_000);
+        let turns: Turn[] = [];
+        // Idle can precede the REST records and their usage. Give accounting
+        // a bounded settlement window, without treating unknown usage as zero.
+        try {
+          while (true) {
+            turns = await cleanupClient.turns(sessionId, usageSignal, baselineTurnId);
+            const recordedIds = new Set(turns.map((turn) => turn.id));
+            if (
+              turns.length > 0 &&
+              [...coordinatorTurnIds].every((id) => recordedIds.has(id)) &&
+              turns.every((turn) => turn.usage !== null)
+            ) {
+              return turns;
+            }
+            await delay(500, undefined, { signal: usageSignal });
+          }
+        } catch (error) {
+          if (!usageSignal.aborted) {
+            options.onUsageError?.(error);
+          }
+          return turns;
+        }
+      })());
+    },
     async run(prompt: string, persistInput: () => Promise<void>, onSubmitted: () => void) {
       signal.throwIfAborted();
-      const baselineTurnId = (await client.turns(sessionId, signal, undefined, true))[0]?.id;
+      baselineTurnId = (await client.turns(sessionId, signal, undefined, true))[0]?.id;
       let events = await client.subscribe(
         sessionId,
         AbortSignal.any([signal, streamController.signal]),
@@ -204,6 +240,7 @@ export function createAgentsApiSession(options: {
               event.type === "agent.session.turn.item.done") &&
             event.item?.type === "message" &&
             event.item.role === "user" &&
+            event.item.id &&
             !observedInputItems.has(event.item.id)
           ) {
             observedInputItems.add(event.item.id);
@@ -229,14 +266,11 @@ export function createAgentsApiSession(options: {
             throw new Error(`Agents API MVP cannot continue: ${event.type}`);
           }
           if (
-            event.type.startsWith("agent.session.turn.") &&
-            event.turn?.subagent_id === null &&
-            event.turn.id === latestInputTurnId &&
-            [
-              "agent.session.turn.completed",
-              "agent.session.turn.failed",
-              "agent.session.turn.cancelled",
-            ].includes(event.type)
+            (event.type === "agent.session.turn.completed" ||
+              event.type === "agent.session.turn.failed" ||
+              event.type === "agent.session.turn.cancelled") &&
+            event.turn.subagent_id === null &&
+            event.turn.id === latestInputTurnId
           ) {
             rootTurn = event.turn;
             turnFailure = event.type.endsWith(".failed")

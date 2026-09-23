@@ -5,6 +5,7 @@ import {
 } from "../../../../../packages/gateway-protocol/src/index.js";
 import { t } from "../../../i18n/index.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
+import { RealtimeTalkAudioInputBudget } from "./audio-input-budget.ts";
 import {
   bytesToBase64,
   floatToPcm16,
@@ -29,7 +30,6 @@ import {
 const BARGE_IN_RMS_THRESHOLD = 0.02;
 const BARGE_IN_PEAK_THRESHOLD = 0.08;
 const BARGE_IN_CONSECUTIVE_SPEECH_FRAMES = 2;
-const MAX_PENDING_AUDIO_APPENDS = 4;
 const AUDIO_APPEND_TIMEOUT_MS = 8_000;
 const RELAY_CLOSE_TIMEOUT_MS = 8_000;
 const MAX_PENDING_ACTIVATION_EVENTS = 32;
@@ -56,7 +56,9 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
   private closed = false;
   private closeCompletion: Promise<void> = Promise.resolve();
   private audioAppendAbortController: AbortController | null = null;
-  private readonly pendingAudioAppends = new Set<Promise<unknown>>();
+  private readonly audioInputBudget = new RealtimeTalkAudioInputBudget((detail) =>
+    this.ctx.callbacks.onInputNotice?.(detail),
+  );
   private readonly outputQueue = new RealtimeTalkPcmOutputQueue();
   private readonly toolAbortControllers = new Map<string, AbortController>();
   private readonly completedToolCalls = new Set<string>();
@@ -225,17 +227,17 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
         this.cancelOutput("barge-in");
       }
       const abortController = this.audioAppendAbortController;
-      // Live microphone frames become stale once the Gateway falls behind, so fail at
-      // the ownership cap instead of silently dropping speech or growing a latency queue.
+      const frameMs = (samples.length / this.session.audio.inputSampleRateHz) * 1000;
       if (!abortController || abortController.signal.aborted || this.pendingOutputCancellations) {
         return;
       }
-      if (this.pendingAudioAppends.size >= MAX_PENDING_AUDIO_APPENDS) {
-        this.failAudioAppend("Realtime Talk audio input fell behind");
+      // Drop stale frames past the budget without ending the call, but make the loss
+      // visible so the user repeats it. The append timeout still fails a dead relay.
+      if (!this.audioInputBudget.reserve(frameMs)) {
         return;
       }
       const pcm = floatToPcm16(samples);
-      const request = this.ctx.client
+      void this.ctx.client
         .request(
           "talk.session.appendAudio",
           {
@@ -248,18 +250,16 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
             timeoutMs: AUDIO_APPEND_TIMEOUT_MS,
           },
         )
-        .catch((error: unknown) => this.failAudioAppend(error));
-      this.pendingAudioAppends.add(request);
-      void request.finally(() => {
-        this.pendingAudioAppends.delete(request);
-      });
+        .catch((error: unknown) => this.failAudioAppend(error))
+        // Close resets the budget first, so late settlements cannot report recovery.
+        .finally(() => this.audioInputBudget.settle(frameMs));
     });
   }
 
   private abortPendingAudioAppends(): void {
     this.audioAppendAbortController?.abort();
     this.audioAppendAbortController = null;
-    this.pendingAudioAppends.clear();
+    this.audioInputBudget.reset();
   }
 
   private failAudioAppend(error: unknown): void {
@@ -372,6 +372,8 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
               role: event.role,
               text: event.text,
               final: event.final ?? false,
+              ...(event.textMode ? { textMode: event.textMode } : {}),
+              ...(event.transcriptId ? { transcriptId: event.transcriptId } : {}),
             });
           }
           return;

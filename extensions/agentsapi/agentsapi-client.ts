@@ -1,94 +1,112 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
+import OpenAI from "openai";
+import type {
+  AgentReasoningParam,
+  AgentSessionEvent,
+  AgentSessionItem,
+} from "openai/resources/beta/agents/agents";
+import type { Turn } from "openai/resources/beta/agents/sessions/turns";
 import { responseWithRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { z } from "zod";
 
-const usageSchema = z.object({
-  input_tokens: z.number(),
-  output_tokens: z.number(),
-  input_tokens_details: z.object({ cached_tokens: z.number() }).optional(),
-});
-const errorSchema = z.object({ message: z.string() });
-const turnSchema = z.object({
-  id: z.string(),
-  session_id: z.string(),
-  subagent_id: z.string().nullable(),
-  status: z.enum(["queued", "in_progress", "waiting", "completed", "failed", "cancelled"]),
-  error: errorSchema.nullable(),
-  usage: usageSchema.nullable(),
-});
-const itemSchema = z.object({
-  id: z.string(),
-  type: z.string(),
-  role: z.string().optional(),
-  phase: z.string().nullable().optional(),
-  status: z.string().optional(),
-  turn_id: z.string().optional(),
-  content: z.array(z.object({ type: z.string(), text: z.string().optional() })).optional(),
-});
-const eventSchema = z.object({
-  type: z.string(),
-  session_id: z.string().optional(),
-  turn_id: z.string().nullable().optional(),
-  item_id: z.string().optional(),
-  content_index: z.number().optional(),
-  delta: z.string().optional(),
-  text: z.string().optional(),
-  item: itemSchema.optional(),
-  turn: z
-    .object({
-      id: z.string(),
-      subagent_id: z.string().nullable(),
-      error: errorSchema.nullable().optional(),
-      usage: usageSchema.nullable().optional(),
-    })
-    .optional(),
-  error: errorSchema.optional(),
-});
-export type AgentsApiEvent = z.infer<typeof eventSchema>;
-export type AgentsApiItem = z.infer<typeof itemSchema>;
-export type AgentsApiTurn = z.infer<typeof turnSchema>;
-
-/** The MVP intentionally fixes endpoint, agent settings, and execution placement. */
+/** The SDK owns the wire protocol; OpenClaw retains native session authority. */
 export class AgentsApiClient {
-  constructor(
-    private readonly apiKey: string,
-    private readonly assertCurrent: () => void,
-  ) {}
+  private readonly sessions: OpenAI["beta"]["agents"]["sessions"];
 
-  async create(signal: AbortSignal, instructions: string, model: string): Promise<string> {
-    const response = await this.request("", "POST", signal, {
-      agent: {
-        model,
-        instructions,
-        reasoning: { effort: "low" },
-        multi_agent: { enabled: false },
+  constructor(
+    apiKey: string,
+    private readonly assertCurrent: () => void,
+  ) {
+    this.sessions = new OpenAI({
+      apiKey,
+      // Ignore OPENAI_BASE_URL while retaining the SDK's official endpoint default.
+      baseURL: null,
+      // SDK retry backoff ignores aborts; preserve the harness's operation deadlines.
+      maxRetries: 0,
+      defaultHeaders: {
+        Authorization: `Bearer ${apiKey}`,
+        "OpenAI-Organization": null,
+        "OpenAI-Project": null,
       },
-      environment: { type: "openai_hosted" },
-    });
-    const result = z.object({ id: z.string() }).parse(await response.json());
+      fetch: async (input, init) => {
+        this.assertCurrent();
+        const guarded = await fetchWithSsrFGuard({
+          url: input instanceof Request ? input.url : String(input),
+          init,
+          signal: init?.signal ?? undefined,
+          beforeRequest: this.assertCurrent,
+        });
+        const response = responseWithRelease(guarded.response, guarded.release);
+        try {
+          this.assertCurrent();
+        } catch (error) {
+          await response.body?.cancel().catch(() => undefined);
+          throw error;
+        }
+        return response;
+      },
+    }).beta.agents.sessions;
+  }
+
+  async create(
+    signal: AbortSignal,
+    instructions: string,
+    model: string,
+    reasoningEffort?: AgentReasoningParam["effort"],
+  ): Promise<string> {
+    const session = await this.sessions.create(
+      {
+        agent: {
+          model,
+          instructions,
+          reasoning: reasoningEffort === undefined ? undefined : { effort: reasoningEffort },
+          multi_agent: { enabled: false },
+          tools: [{ type: "web_search", mode: "live" }],
+        },
+        environment: { type: "openai_hosted" },
+      },
+      { signal, headers: { "Idempotency-Key": randomUUID() } },
+    );
     this.assertCurrent();
-    return result.id;
+    return session.id;
+  }
+
+  async setReasoningEffort(
+    sessionId: string,
+    effort: AgentReasoningParam["effort"],
+    signal: AbortSignal,
+  ): Promise<void> {
+    const session = await this.sessions.update(
+      sessionId,
+      {},
+      {
+        signal,
+        headers: { "Idempotency-Key": randomUUID() },
+        // The API supports agent updates; this SDK version types only metadata.
+        body: { agent: { reasoning: { effort: effort ?? null } } },
+      },
+    );
+    this.assertCurrent();
+    if (session.id !== sessionId) {
+      throw new Error("Agents API returned a different session");
+    }
   }
 
   async subscribe(sessionId: string, signal: AbortSignal) {
-    const response = await this.request(
-      `/${encodeURIComponent(sessionId)}/events?stream=true`,
-      "GET",
-      signal,
-    );
-    if (!response.body) {
-      throw new Error("Agents API returned an empty event stream");
+    const stream = await this.sessions.events.stream(sessionId, { signal });
+    try {
+      this.assertCurrent();
+      signal.throwIfAborted();
+    } catch (error) {
+      stream.controller.abort();
+      throw error;
     }
-    return readEvents(response.body, signal);
+    return observeEvents(stream, signal, this.assertCurrent);
   }
 
   async session(sessionId: string, signal: AbortSignal) {
-    const response = await this.request(`/${encodeURIComponent(sessionId)}`, "GET", signal);
-    const session = z
-      .object({ id: z.string(), status: z.string(), error: z.string().nullable() })
-      .parse(await response.json());
+    const session = await this.sessions.retrieve(sessionId, { signal });
     this.assertCurrent();
     if (session.id !== sessionId) {
       throw new Error("Agents API returned a different session");
@@ -97,28 +115,17 @@ export class AgentsApiClient {
   }
 
   async turns(sessionId: string, signal: AbortSignal, after?: string, latestOnly = false) {
-    const turns: AgentsApiTurn[] = [];
-    let cursor = after;
-    do {
-      const query = new URLSearchParams({
+    const turns: Turn[] = [];
+    const pages = this.sessions.turns.list(
+      sessionId,
+      {
         order: latestOnly ? "desc" : "asc",
-        limit: latestOnly ? "1" : "100",
-      });
-      if (cursor) {
-        query.set("after", cursor);
-      }
-      const response = await this.request(
-        `/${encodeURIComponent(sessionId)}/turns?${query}`,
-        "GET",
-        signal,
-      );
-      const page = z
-        .object({
-          data: z.array(turnSchema),
-          has_more: z.boolean(),
-          last_id: z.string().nullable(),
-        })
-        .parse(await response.json());
+        limit: latestOnly ? 1 : 100,
+        after,
+      },
+      { signal },
+    );
+    for await (const page of (await pages).iterPages()) {
       this.assertCurrent();
       if (page.data.some((turn) => turn.session_id !== sessionId || turn.subagent_id !== null)) {
         throw new Error("Agents API returned a turn outside the single-agent session");
@@ -127,28 +134,43 @@ export class AgentsApiClient {
       if (latestOnly) {
         break;
       }
-      cursor = page.has_more ? (page.last_id ?? undefined) : undefined;
-      if (page.has_more && !cursor) {
+      if (page.has_more && !page.hasNextPage()) {
         throw new Error("Agents API turns page has no continuation cursor");
       }
-    } while (cursor);
+    }
     return turns;
   }
 
   async message(sessionId: string, text: string, signal: AbortSignal): Promise<void> {
-    await this.input(sessionId, signal, {
-      type: "agent.session.input.message",
-      input: [{ role: "user", content: [{ type: "input_text", text }] }],
-    });
+    await this.sessions.events.create(
+      sessionId,
+      {
+        events: [
+          {
+            type: "agent.session.input.message",
+            input: [{ role: "user", content: [{ type: "input_text", text }] }],
+          },
+        ],
+        "Idempotency-Key": randomUUID(),
+      },
+      { signal },
+    );
+    this.assertCurrent();
   }
 
   async cancel(sessionId: string, signal: AbortSignal): Promise<void> {
-    await this.input(sessionId, signal, { type: "agent.session.input.cancel" });
+    await this.sessions.events.create(
+      sessionId,
+      {
+        events: [{ type: "agent.session.input.cancel" }],
+        "Idempotency-Key": randomUUID(),
+      },
+      { signal },
+    );
+    this.assertCurrent();
     // The input acknowledgement is not a settlement barrier for hosted work.
     while (true) {
-      const response = await this.request(`/${encodeURIComponent(sessionId)}`, "GET", signal);
-      const session = z.object({ status: z.string() }).parse(await response.json());
-      this.assertCurrent();
+      const session = await this.session(sessionId, signal);
       if (session.status === "idle" || session.status === "failed") {
         return;
       }
@@ -156,148 +178,29 @@ export class AgentsApiClient {
     }
   }
 
-  async items(sessionId: string, turnId: string, signal: AbortSignal): Promise<AgentsApiItem[]> {
-    const items: AgentsApiItem[] = [];
-    let after: string | undefined;
-    do {
-      const query = new URLSearchParams({ order: "asc", limit: "100" });
-      if (after) {
-        query.set("after", after);
-      }
-      const response = await this.request(
-        `/${encodeURIComponent(sessionId)}/items?${query}`,
-        "GET",
-        signal,
-      );
-      const page = z
-        .object({
-          data: z.array(itemSchema),
-          has_more: z.boolean(),
-          last_id: z.string().nullable(),
-        })
-        .parse(await response.json());
+  async items(sessionId: string, turnId: string, signal: AbortSignal): Promise<AgentSessionItem[]> {
+    const items: AgentSessionItem[] = [];
+    const pages = this.sessions.items.list(sessionId, { order: "asc", limit: 100 }, { signal });
+    for await (const page of (await pages).iterPages()) {
       this.assertCurrent();
       items.push(...page.data.filter((item) => item.turn_id === turnId));
-      after = page.has_more ? (page.last_id ?? undefined) : undefined;
-      if (page.has_more && !after) {
+      if (page.has_more && !page.hasNextPage()) {
         throw new Error("Agents API items page has no continuation cursor");
       }
-    } while (after);
+    }
     return items;
   }
+}
 
-  private async input(sessionId: string, signal: AbortSignal, event: unknown): Promise<void> {
-    const response = await this.request(
-      `/${encodeURIComponent(sessionId)}/events`,
-      "POST",
-      signal,
-      {
-        events: [event],
-      },
-    );
-    await response.body?.cancel();
-  }
-
-  private async request(
-    path: string,
-    method: string,
-    signal: AbortSignal,
-    body?: unknown,
-  ): Promise<Response> {
-    this.assertCurrent();
+async function* observeEvents(
+  stream: AsyncIterable<AgentSessionEvent>,
+  signal: AbortSignal,
+  assertCurrent: () => void,
+) {
+  for await (const event of stream) {
     signal.throwIfAborted();
-    const headers = {
-      Authorization: `Bearer ${this.apiKey}`,
-      "OpenAI-Beta": "agents=v1",
-      "Content-Type": "application/json",
-      Accept: "text/event-stream, application/json",
-      ...(method === "POST" ? { "Idempotency-Key": randomUUID() } : {}),
-    };
-    let response: Response;
-    for (let attempt = 0; ; attempt++) {
-      this.assertCurrent();
-      const guarded = await fetchWithSsrFGuard({
-        url: `https://api.openai.com/v1/agents/sessions${path}`,
-        signal,
-        beforeRequest: this.assertCurrent,
-        init: {
-          method,
-          headers,
-          ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-        },
-      });
-      response = responseWithRelease(guarded.response, guarded.release);
-      if (response.status !== 503 || attempt === 2) {
-        break;
-      }
-      await response.body?.cancel();
-      await delay(1_000, undefined, { signal });
-    }
-    try {
-      this.assertCurrent();
-    } catch (error) {
-      await response.body?.cancel().catch(() => undefined);
-      throw error;
-    }
-    if (!response.ok) {
-      const result: unknown = await response.json();
-      const parsed = z.object({ error: errorSchema }).safeParse(result);
-      throw new Error(
-        `Agents API ${method} ${path}: HTTP ${response.status}${parsed.success ? `: ${parsed.data.error.message}` : ""}`,
-      );
-    }
-    return response;
+    assertCurrent();
+    yield event;
   }
-}
-
-async function* readEvents(
-  body: ReadableStream<Uint8Array>,
-  signal: AbortSignal,
-): AsyncGenerator<AgentsApiEvent> {
-  const reader = body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  try {
-    while (true) {
-      signal.throwIfAborted();
-      const chunk = await reader.read();
-      if (chunk.done) {
-        break;
-      }
-      buffer += decoder.decode(chunk.value, { stream: true });
-      if (buffer.length > 2_000_000) {
-        throw new Error("Agents API event exceeded the stream buffer limit");
-      }
-      let match: RegExpExecArray | null;
-      while ((match = /\r?\n\r?\n/u.exec(buffer))) {
-        const frame = buffer.slice(0, match.index);
-        buffer = buffer.slice(match.index + match[0].length);
-        const data = frame
-          .split(/\r?\n/u)
-          .filter((line) => line.startsWith("data:"))
-          .map((line) => line.slice(5).trimStart())
-          .join("\n");
-        if (data && data !== "[DONE]") {
-          yield eventSchema.parse(JSON.parse(data));
-        }
-      }
-    }
-  } finally {
-    await closeResponseReader(reader, signal);
-  }
-}
-
-async function closeResponseReader(
-  reader: ReadableStreamDefaultReader<Uint8Array>,
-  signal: AbortSignal,
-): Promise<void> {
-  try {
-    await reader.cancel();
-  } catch (error) {
-    if (!signal.aborted) {
-      throw error;
-    }
-  } finally {
-    reader.releaseLock();
-  }
+  signal.throwIfAborted();
 }
