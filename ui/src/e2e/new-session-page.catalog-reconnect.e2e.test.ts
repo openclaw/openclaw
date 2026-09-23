@@ -15,6 +15,7 @@ import {
   REFRESHED_RESEARCH_WORKSPACE,
   SESSION_LIST_DEFAULTS,
   WORKSPACE,
+  checkoutBaseRefInput,
   controlUiSessionPath,
   createNewSessionPageE2eSuite,
   installMockGateway,
@@ -367,9 +368,9 @@ suite.define(() => {
       const initialBranchRequestCount = (await gateway.getRequests("worktrees.branches")).length;
       await worktreeButton.click();
       await expect
-        .poll(() => placePopover.getByLabel("From", { exact: true }).getAttribute("placeholder"))
+        .poll(() => checkoutBaseRefInput(placePopover).getAttribute("placeholder"))
         .toBe("main");
-      expect(await placePopover.getByLabel("From", { exact: true }).inputValue()).toBe("");
+      expect(await checkoutBaseRefInput(placePopover).inputValue()).toBe("");
       await placePopover.getByLabel("Name", { exact: true }).fill("terminal-task");
       await page.locator("#new-session-checkout-trigger").click();
       await page.locator(".new-session-page__message").fill("  inspect the checkout  ");
@@ -880,7 +881,7 @@ suite.define(() => {
         exact: true,
       });
       await worktreeItem.click();
-      const baseInput = placeSelect.locator('input[aria-label="From"]');
+      const baseInput = checkoutBaseRefInput(placeSelect);
       await expect.poll(() => baseInput.getAttribute("placeholder")).toBe("main");
       expect(await baseInput.inputValue()).toBe("");
       await page.keyboard.press("Escape");

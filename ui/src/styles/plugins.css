@@ -873,11 +873,6 @@ h3.settings-row__title {
 
 /* ---------- plugin settings ---------- */
 
-.plugins-settings-title {
-  margin: 0;
-  font: inherit;
-}
-
 /* The inventory header is already inside the padded settings page. Remove the
    shared outer-header inset so its title aligns with this page's rows. */
 .settings-page.oc-app-surface:has(> .plugins-settings-content) > .content-header--settings {
