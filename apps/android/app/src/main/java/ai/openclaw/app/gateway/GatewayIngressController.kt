@@ -71,6 +71,17 @@ internal class GatewayIngressController(
       get() = buildGatewayWebSocketUrl(endpoint.host, endpoint.port, true, endpoint.contextPath)
   }
 
+  private class SignOutAcknowledgement(
+    val action: GatewayAccessAttention,
+    val entry: GatewayRegistryEntry,
+    var registration: Registration?,
+    val origin: CloudflareAccessOrigin,
+  ) {
+    var completedAction: GatewayAccessAttention? = null
+    val currentAction: GatewayAccessAttention
+      get() = completedAction ?: action
+  }
+
   private class BrowserParticipant(
     val registration: Registration,
     val context: kotlin.coroutines.CoroutineContext,
@@ -103,6 +114,7 @@ internal class GatewayIngressController(
   private val expiryJobs = mutableMapOf<CloudflareAccessOrigin, Job>()
   private val discoveries = mutableSetOf<DiscoveryOperation>()
   private var browserIntent: BrowserIntent? = null
+  private var signOutAcknowledgement: SignOutAcknowledgement? = null
   private val mutablePresentation = MutableStateFlow(GatewayAccessPresentation(browserRequired = requiredBrowserProfiles()))
   val presentation = mutablePresentation.asStateFlow()
   private val store =
@@ -159,10 +171,18 @@ internal class GatewayIngressController(
         val current =
           previous?.takeIf { it.endpoint == endpoint && it.tls == tls }
             ?: Registration(endpoint, tls, clientForRoute(endpoint, tls))
+        val acknowledgement =
+          signOutAcknowledgement?.takeIf {
+            previous == null && it.registration == null && it.action.stableId == endpoint.stableId &&
+              it.origin == current.origin && isAcknowledgementRegisteredLocked(it)
+          }
         var retired: BrowserIntent? = null
         if (current !== previous) {
           leases.remove(endpoint.stableId)?.active?.set(false)
           registrations[endpoint.stableId] = current
+          // A cold Sign out belongs to the saved entry until its first registration.
+          // Bind before publication can invalidate that owner.
+          acknowledgement?.registration = current
           retired = previous?.let(::retireBrowserParticipationLocked)
           publishLocked()
         }
@@ -399,10 +419,22 @@ internal class GatewayIngressController(
     attention: GatewayAccessAttention? = mutablePresentation.value.attention,
     browserLaunch: GatewayAccessBrowserLaunch? = mutablePresentation.value.browserLaunch,
   ) {
+    val acknowledgement = signOutAcknowledgement
+    // Registration replacement invalidates this action before its raw probe finishes.
+    // Keep its completed action on the same owner for Retry captured before acknowledgement.
+    val currentAttention = attention.takeUnless { acknowledgement != null && it === acknowledgement.currentAction && !isAcknowledgementRegisteredLocked(acknowledgement) }
+    if (currentAttention !== acknowledgement?.currentAction) signOutAcknowledgement = null
     // One emission is the commit boundary for UI observers that can resume inline.
     // Never publish a second field after an observer has canceled or replaced its owner.
-    mutablePresentation.value = GatewayAccessPresentation(attention, browserLaunch, requiredBrowserProfiles())
+    mutablePresentation.value = GatewayAccessPresentation(currentAttention, browserLaunch, requiredBrowserProfiles())
   }
+
+  private fun isAcknowledgementRegisteredLocked(acknowledgement: SignOutAcknowledgement): Boolean =
+    registrations[acknowledgement.action.stableId] === acknowledgement.registration && acknowledgement.registration?.ordinaryAdmission != true &&
+      registry.entries.value.any {
+        it.stableId == acknowledgement.action.stableId && it.accessOrigin == acknowledgement.origin.uri.toString() &&
+          (acknowledgement.registration != null || it === acknowledgement.entry)
+      }
 
   fun consumeBrowserLaunch(id: UUID): String? =
     synchronized(lock) {
@@ -741,6 +773,64 @@ internal class GatewayIngressController(
     }
     intent.task?.cancel()
     store.cancelSignIn(intent.application.origin)
+  }
+
+  fun signOut(stableId: String): Deferred<Unit>? {
+    val entry = registry.entries.value.firstOrNull { it.stableId == stableId } ?: return null
+    val origin = entry.accessOrigin?.let(CloudflareAccessOrigin::from) ?: return null
+    // Revoke the canonical snapshot before observable effects can re-enter admission.
+    // Store cancellation and retirement starts must execute outside the ingress lock.
+    val retirement = store.forget(origin)
+    val (acknowledgement, task, expiry) =
+      synchronized(lock) {
+        val registration = registrations[stableId]
+        // Admission can run before or after revocation. Recapture here, retiring
+        // only stale work and preserving a fresh browser intent or grant.
+        val intent = browserIntent?.takeIf { it.application.origin == origin && !isLiveIntentLocked(it) }
+        val task = intent?.task
+        intent?.canceled?.set(true)
+        if (intent != null) browserIntent = null
+        leases.values.filter { it.origin == origin && !it.hasCurrentSnapshot() }.forEach { it.active.set(false) }
+        val expiry = if (store.isCurrent(retirement)) expiryJobs.remove(origin) else null
+        val survivingAttention = mutablePresentation.value.attention.takeUnless { intent != null && it?.attemptId == intent.id }
+        val carried =
+          signOutAcknowledgement?.takeIf {
+            it.action === survivingAttention && it.origin == origin &&
+              ownsRetirementPresentationLocked(retirement, it.action.stableId, it.registration, survivingAttention)
+          }
+        val acknowledgement =
+          if (ownsRetirementPresentationLocked(retirement, stableId, registration, survivingAttention.takeUnless { carried != null })) {
+            val pending = GatewayAccessAttention(stableId, "Signing out…")
+            // StateFlow retains equal values. Capture this action before publication
+            // can synchronously re-enter and replace it with a newer Retry outcome.
+            SignOutAcknowledgement(survivingAttention?.takeIf { it == pending } ?: pending, entry, registration, origin)
+          } else {
+            // Preserve the original profile's displayed action, but give every explicit
+            // Sign out new completion custody so an older acquired Retry cannot replace it.
+            carried?.let { SignOutAcknowledgement(it.action, it.entry, it.registration, it.origin) }
+          }
+        if (acknowledgement != null) signOutAcknowledgement = acknowledgement
+        publishLocked(acknowledgement?.action ?: survivingAttention, mutablePresentation.value.browserLaunch.takeUnless { intent != null && it?.attemptId == intent.id })
+        Triple(acknowledgement, task, expiry)
+      }
+    task?.cancel()
+    expiry?.cancel()
+    observeRetirement(retirement) { succeeded ->
+      if (acknowledgement != null && signOutAcknowledgement === acknowledgement && mutablePresentation.value.attention === acknowledgement.action &&
+        ownsRetirementPresentationLocked(retirement, acknowledgement.action.stableId, acknowledgement.registration)
+      ) {
+        val message =
+          if (succeeded) {
+            "This host’s Access session is signed out. Sign in to reconnect gateways using it."
+          } else {
+            "Could not clear this host’s saved Access session. Try Sign out again."
+          }
+        val completedAction = GatewayAccessAttention(acknowledgement.action.stableId, message)
+        acknowledgement.completedAction = completedAction
+        publishLocked(attention = completedAction)
+      }
+    }
+    return retirement.task
   }
 
   private fun observeRetirement(
