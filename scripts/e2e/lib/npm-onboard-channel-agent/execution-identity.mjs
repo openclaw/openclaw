@@ -5,7 +5,6 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 
-const RUN_ID = "npm-onboard-channel-agent";
 const PSEUDONYM = /^hmac-sha256:v1:[a-f0-9]{32}:[a-f0-9]{64}$/u;
 
 export function readIdentityRows(stateDir) {
@@ -43,11 +42,17 @@ function assertIdentityPrivacy(text, needles) {
 export function assertIdentityProjection(result, persisted, needles) {
   assertIdentityPrivacy(JSON.stringify(result), needles);
   assertIdentityPrivacy(persisted, needles);
+  const persistedContext = JSON.parse(persisted);
+  const expectedRunId = persistedContext.runId;
+  assert.ok(
+    typeof expectedRunId === "string" && expectedRunId.length > 0,
+    "missing persisted run id",
+  );
   assert.equal(result.identity?.state, "present", "installed CLI omitted execution identity");
-  assert.equal(result.run?.runId, RUN_ID, "installed CLI selected another run");
+  assert.equal(result.run?.runId, expectedRunId, "installed CLI selected another run");
   assert.equal(Object.hasOwn(result, "decisions"), false, "private receipts reached the CLI");
   const context = result.identity.context;
-  assert.equal(context.runId, RUN_ID);
+  assert.equal(context.runId, expectedRunId);
   assert.equal(context.schemaVersion, 1);
   for (const id of [context.contextId, context.executionId]) {
     assert.ok(typeof id === "string" && id.length > 0, "missing opaque identity id");
@@ -106,6 +111,13 @@ function main() {
   const rows = readIdentityRows(stateDir);
   if (command === "empty") {
     assert.equal(rows.length, 0, "identity state existed before the opted-in turn");
+    return;
+  }
+  if (command === "run-id") {
+    assert.equal(rows.length, 1, "expected exactly one admitted execution identity");
+    const runId = JSON.parse(rows[0]).runId;
+    assert.ok(typeof runId === "string" && runId.length > 0, "missing persisted run id");
+    process.stdout.write(runId);
     return;
   }
   assert.equal(command, "verify");

@@ -16,14 +16,14 @@ const privateMarker = "PRIVATE_PACKAGE_AUDIT_FIXTURE";
 
 function projection() {
   return {
-    run: { runId: "npm-onboard-channel-agent", executionId: "execution-1" },
+    run: { runId: "admitted-run-1", executionId: "execution-1" },
     identity: {
       state: "present",
       context: {
         schemaVersion: 1,
         contextId: "context-1",
         executionId: "execution-1",
-        runId: "npm-onboard-channel-agent",
+        runId: "admitted-run-1",
         createdAt: 123,
         trustDomain: { kind: "gateway-cell", domainRef, state: "present" },
         invoker: { state: "absent" },
@@ -55,7 +55,7 @@ describe("installed-package execution identity proof", () => {
     expect(existsSync(path.join(state, "state/openclaw.sqlite"))).toBe(false);
   });
 
-  it("accepts private, unattributed local admission with exact persisted bytes", () => {
+  it("accepts the persisted run id when it differs from the caller session id", () => {
     const result = projection();
     expect(
       assertIdentityProjection(result, JSON.stringify(result.identity.context), [privateMarker]),

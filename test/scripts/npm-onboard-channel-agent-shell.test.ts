@@ -152,6 +152,7 @@ if [ "$1" = scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs ]; then
 fi
 if [ "$1" = scripts/e2e/lib/npm-onboard-channel-agent/execution-identity.mjs ]; then
   if [ "$2" = clean-home ]; then exec "$REAL_NODE" "$@"; fi
+  if [ "$2" = run-id ]; then printf '%s' admitted-run-fixture; exit 0; fi
   # Projection/storage assertions have their own real SQLite support tests.
   [ "$2" = verify ] || exit 0
   exec "$REAL_NODE" "$FIXTURE_CLI" identity "\${@:2}"
@@ -248,7 +249,7 @@ describe("npm onboarding fixture consent", () => {
         .map((args) => args.slice(0, 3)),
     ).toEqual([
       ["gateway-start"],
-      ["audit", "--run", "npm-onboard-channel-agent"],
+      ["audit", "--run", "admitted-run-fixture"],
       ["gateway-stop"],
       ["gateway-start"],
       ["audit", "--execution", "execution-fixture"],

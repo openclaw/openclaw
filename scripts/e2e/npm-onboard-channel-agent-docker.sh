@@ -286,6 +286,7 @@ if [ "$agent_status" -ne 0 ]; then
 fi
 
 node scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs assert-agent-turn "$SUCCESS_MARKER" "$MOCK_REQUEST_LOG"
+run_id="$(node "$identity_assertions" run-id)"
 
 # The local CLI flushes its audit writer before exiting. Inspect once after that
 # boundary; polling a read-only inspector would hide lost admission writes.
@@ -293,7 +294,7 @@ entry="$(openclaw_e2e_package_entrypoint "$package_root")"
 export OPENCLAW_SKIP_CHANNELS=1 OPENCLAW_SKIP_GMAIL_WATCHER=1 OPENCLAW_SKIP_CANVAS_HOST=1
 gateway_pid="$(openclaw_e2e_start_gateway "$entry" "$PORT" "$scenario_tmp/gateway-before.log")"
 openclaw_e2e_wait_gateway_ready "$gateway_pid" "$scenario_tmp/gateway-before.log" 300 "$PORT"
-openclaw audit --run npm-onboard-channel-agent --explain --json >"$scenario_tmp/identity-before.json"
+openclaw audit --run "$run_id" --explain --json >"$scenario_tmp/identity-before.json"
 execution_id="$(node "$identity_assertions" verify "$scenario_tmp/identity-before.json")"
 openclaw_e2e_stop_process "$gateway_pid"
 gateway_pid=""
