@@ -1,10 +1,15 @@
 package ai.openclaw.app.gateway
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import okhttp3.Headers
+import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
@@ -22,6 +27,9 @@ import java.net.InetAddress
 import java.net.ProtocolException
 import java.security.cert.CertificateException
 import java.util.Base64
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLException
 import javax.net.ssl.SSLHandshakeException
@@ -345,6 +353,73 @@ class CloudflareAccessClientTest {
         val failure = runCatching { client.discover(application.origin.uri.toString()) }.exceptionOrNull()
         assertEquals(CloudflareAccessException.Kind.InvalidApplication, (failure as? CloudflareAccessException)?.kind)
         assertEquals(2, requests)
+      }
+    }
+
+  @Test fun queuedCredentialedDiscoveryRechecksGrantBeforeWritingHeaders() =
+    runBlocking {
+      val (socketFactory, fingerprint) = gatewayTestTls()
+      for (retired in listOf(false, true)) {
+        MockWebServer().use { server ->
+          server.useHttps(socketFactory, false)
+          server.enqueue(MockResponse().setResponseCode(200))
+          server.start()
+          val target = server.url("/gateway/socket").toString()
+          val descriptor = application.copy(origin = CloudflareAccessOrigin.from(target))
+          val expires = System.currentTimeMillis() / 1000.0 + 3600
+          val session = CloudflareAccessSession(descriptor, "test-subject", expires, CloudflareAccessTestTokens.token(CloudflareAccessTestTokens.claims(expires = expires)))
+          val current = AtomicBoolean(true)
+          val entered = CompletableDeferred<Unit>()
+          val release = CountDownLatch(1)
+          val settled = CompletableDeferred<Unit>()
+          val config = checkNotNull(buildGatewayTlsConfig(GatewayTlsParams(true, fingerprint, false, "discovery-test")))
+          val transport =
+            OkHttpClient
+              .Builder()
+              .sslSocketFactory(config.sslSocketFactory, config.trustManager)
+              .hostnameVerifier(config.hostnameVerifier)
+              .addNetworkInterceptor { chain ->
+                entered.complete(Unit)
+                try {
+                  check(release.await(5, TimeUnit.SECONDS)) { "Discovery test gate was not released" }
+                  chain.proceed(chain.request())
+                } finally {
+                  settled.complete(Unit)
+                }
+              }.build()
+          val client = CloudflareAccessClient { request, maximumBytes, timeout -> CloudflareAccessClient.send(request, maximumBytes, timeout, transport) }
+          val pending =
+            async {
+              runCatching {
+                client.discover(target, session) {
+                  if (!current.get()) throw GatewayExternalAuthorizationException()
+                }
+              }
+            }
+          try {
+            withTimeout(5_000) { entered.await() }
+            assertEquals(0, server.requestCount)
+            if (retired) current.set(false)
+            release.countDown()
+            val outcome = withTimeout(5_000) { pending.await() }
+            withTimeout(5_000) { settled.await() }
+            if (retired) {
+              assertTrue(outcome.exceptionOrNull() is GatewayExternalAuthorizationException)
+              assertEquals(0, server.requestCount)
+            } else {
+              assertTrue(outcome.isSuccess)
+              assertNull(outcome.getOrNull())
+              assertEquals(1, server.requestCount)
+              assertEquals(session.authorizationHeader(target), server.takeRequest().getHeader("Cf-Access-Token"))
+            }
+          } finally {
+            release.countDown()
+            pending.cancelAndJoin()
+            if (entered.isCompleted) withTimeout(5_000) { settled.await() }
+            transport.dispatcher.executorService.shutdown()
+            transport.connectionPool.evictAll()
+          }
+        }
       }
     }
 

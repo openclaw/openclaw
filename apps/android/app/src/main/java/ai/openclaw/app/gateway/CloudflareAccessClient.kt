@@ -21,6 +21,10 @@ import kotlin.coroutines.resumeWithException
 internal class CloudflareAccessClient(
   private val request: suspend (Request, Int, Long) -> Reply = ::send,
 ) {
+  private class DiscoveryAuthorization(
+    val requireCurrent: () -> Unit,
+  )
+
   class Reply(
     val url: String,
     val code: Int,
@@ -33,12 +37,17 @@ internal class CloudflareAccessClient(
     gatewayUrl: String,
     session: CloudflareAccessSession? = null,
     customHeaders: Map<String, String> = emptyMap(),
+    requireCurrent: (() -> Unit)? = null,
   ): CloudflareAccessApplication? {
     val origin = CloudflareAccessOrigin.from(gatewayUrl)
     val url = gatewayUrl.replaceFirst(Regex("^wss:", RegexOption.IGNORE_CASE), "https:")
     val probe = Request.Builder().url(url)
     GatewayCustomHeaders.sanitized(customHeaders).forEach { (name, value) -> probe.header(name, value) }
-    session?.authorizationHeader(url)?.let { probe.header("Cf-Access-Token", it) }
+    session?.authorizationHeader(url)?.let {
+      probe.header("Cf-Access-Token", it)
+      requireCurrent?.let { check -> probe.tag(DiscoveryAuthorization::class.java, DiscoveryAuthorization(check)) }
+    }
+    requireCurrent?.invoke()
     val response = request(probe.build(), 0, 15)
     if (!isChallenge(response, origin)) return null
     try {
@@ -189,14 +198,30 @@ internal class CloudflareAccessClient(
       request: Request,
       maximumBytes: Int,
       timeoutSeconds: Long,
+    ): Reply = send(request, maximumBytes, timeoutSeconds, client)
+
+    suspend fun send(
+      request: Request,
+      maximumBytes: Int,
+      timeoutSeconds: Long,
+      transport: OkHttpClient,
     ): Reply =
       suspendCancellableCoroutine { continuation ->
         val call =
-          client
+          transport
             .newBuilder()
             .callTimeout(timeoutSeconds, TimeUnit.SECONDS)
             .readTimeout(timeoutSeconds, TimeUnit.SECONDS)
-            .build()
+            .addNetworkInterceptor { chain ->
+              // A queued call retains its token. Recheck the captured grant at each
+              // exchange, after queueing/connect work and before writing HTTP headers.
+              chain
+                .request()
+                .tag(DiscoveryAuthorization::class.java)
+                ?.requireCurrent
+                ?.invoke()
+              chain.proceed(chain.request())
+            }.build()
             .newCall(request)
         continuation.invokeOnCancellation { call.cancel() }
         call.enqueue(
