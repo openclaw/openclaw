@@ -197,7 +197,7 @@ function selectWorkerWorkspaceHashMemoEntries(memo, maxEntries, maxBytes) {
   return selected.toSorted(compareIdentity);
 }`;
 
-export const {
+const {
   workspaceStatIdentity,
   selectWorkerWorkspaceHashMemoEntries,
 }: {
@@ -213,6 +213,8 @@ export const {
 } = compileFunction(
   `${WORKSPACE_HASH_MEMO_JS}\nreturn { workspaceStatIdentity, selectWorkerWorkspaceHashMemoEntries };`,
 )();
+
+export { workspaceStatIdentity };
 
 export function serializeRemoteWorkspaceHashMemo(
   memo: WorkspaceHashMemo,
