@@ -2021,7 +2021,8 @@ describe("subagent registry seam flow", () => {
     const settleRootWork = observeRootWork();
     disposed = true;
     pendingWait.resolve({ status: "ok", startedAt: 111, endedAt: 222 });
-    await announceStarted.promise.finally(settleRootWork);
+    await announceStarted.promise;
+    await settleRootWork();
 
     expect(findRequesterRun("run-detached-requester-owner")?.execution.status).toBe("terminal");
     expect(freshTranscriptWrite).toHaveBeenCalledOnce();
