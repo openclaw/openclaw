@@ -13,6 +13,10 @@ describe("chunkItems", () => {
     expect(chunkItems([1, 2, 3], -1)).toEqual([[1, 2, 3]]);
   });
 
+  it("returns a single chunk for a non-finite size", () => {
+    expect(chunkItems([1, 2, 3], Number.NaN)).toEqual([[1, 2, 3]]);
+  });
+
   it("returns empty array for empty input", () => {
     expect(chunkItems([], 5)).toEqual([]);
     expect(chunkItems([], 0)).toEqual([[]]);
