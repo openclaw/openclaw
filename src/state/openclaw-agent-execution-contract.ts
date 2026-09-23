@@ -38,6 +38,10 @@ export type AgentDatabaseExecutionOpen = {
 };
 
 export type AgentDatabaseOperations = AgentDatabaseDomainOperations & {
+  "session.transcript.initialize": {
+    input: { sessionKey: string; sessionId: string; cwd?: string };
+    output: void;
+  };
   "database.prepareWrite": { input: undefined; output: void };
   "session.entries.replace": {
     input: SessionEntryReplacementCommit;

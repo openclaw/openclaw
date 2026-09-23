@@ -24,8 +24,11 @@ import {
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
-import { createSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import {
+  createSessionRepositoryWorkspaceStore,
+  findSessionRepositoryWorkspaces,
+} from "../../state/session-repository-workspaces.js";
 import { resolveSessionStorePathCore } from "./paths.js";
 import { readSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
 import {
@@ -73,7 +76,7 @@ export async function runPreparedSqliteSessionWrite<T>(
   prepare: () => Promise<PreparedSessionWrite<T>>,
   operation: SqliteSessionWriteOperation,
   withCommit?: SessionEntryCreateWithTranscriptOptions["withCommit"],
-): Promise<{ deletedEntries: number; result: T }> {
+): Promise<{ deletedEntries: number; result: Awaited<T> }> {
   const prepared = await runExclusiveSqliteSessionWrite(
     scope,
     async () => {
@@ -185,13 +188,10 @@ async function withSqliteSessionMutations<T>(
     : captureAgentHarnessSessionDeletions();
   const repositories = options.contextReset
     ? undefined
-    : createSessionRepositoryWorkspaceStore({
-        database: openOpenClawStateDatabase({ env: scope.env }),
-      });
-  const repositoryWorkspaces = (options.contextReset ? [] : targets).flatMap((target) => {
-    const workspace = repositories?.find(target);
-    return workspace ? [workspace] : [];
-  });
+    : createSessionRepositoryWorkspaceStore({ path: resolveOpenClawStateSqlitePath(scope.env) });
+  const repositoryWorkspaces = repositories
+    ? await findSessionRepositoryWorkspaces(targets, { path: repositories.path, env: scope.env })
+    : [];
   const invoke = async (
     prepared: ReadonlyMap<string, readonly PreparedAgentHarnessSessionDeletion[]>,
   ) => {

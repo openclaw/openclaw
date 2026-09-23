@@ -11,6 +11,7 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "./session-accessor.js";
+import { readTranscriptStorageRows } from "./session-accessor.sqlite-read.js";
 import {
   getSessionKysely,
   resolveSqliteScope,
@@ -37,8 +38,11 @@ describe("fresh session creation with pending transcript archives", () => {
       getSessionKysely(database.db)
         .selectFrom("session_transcript_archives")
         .select([
+          "archive_blob",
           "archive_name",
           "archive_sha256",
+          "generation",
+          "publish_attempts",
           "last_publish_attempt_at",
           "last_publish_error",
           "published_at",
@@ -126,6 +130,74 @@ describe("fresh session creation with pending transcript archives", () => {
     });
     expect(readSessionArchiveContentSync(collisionPath)).toBe(`${JSON.stringify(archivedEvent)}\n`);
     expect(loadSessionEntry(freshScope())).toMatchObject(freshEntry);
+  });
+
+  it("adopts a metadata-archived session without retrying an unrelated export, preserving both for explicit deletion recovery", async () => {
+    const scope = {
+      sessionId: "adopted-session",
+      sessionKey: "agent:main:adopted-session",
+      storePath: fixture.storePath(),
+    };
+    const entry = {
+      sessionId: scope.sessionId,
+      updatedAt: freshEntry.updatedAt,
+      archivedAt: freshEntry.updatedAt - 1,
+      archivedBy: { type: "human" as const, id: "archiver" },
+      archiveReason: "manual" as const,
+    };
+    const transcript = [
+      { type: "session", id: scope.sessionId, version: 3, cwd: "/workspace" },
+      {
+        type: "message",
+        id: "retained-message",
+        parentId: null,
+        timestamp: "2026-07-15T21:23:03.698Z",
+        message: { role: "user", content: "Keep adopted history.\r\n  Preserve spacing." },
+      },
+    ];
+    await replaceSessionEntry(scope, entry);
+    await replaceTranscriptEvents(scope, transcript);
+    const database = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteScope(scope)));
+    const retainedRows = readTranscriptStorageRows(database, scope.sessionId);
+    expect(retainedRows).toHaveLength(transcript.length);
+    const collisionPath = await failUnrelatedArchiveExport();
+    const pendingArchive = readArchive();
+    const adoptedEntry = { ...entry, label: "adopted" };
+
+    await expect(
+      createSessionEntryWithTranscript(scope, ({ existingEntry }) => {
+        expect(existingEntry).toMatchObject(entry);
+        return { ok: true, entry: { ...existingEntry!, label: adoptedEntry.label } };
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      entry: adoptedEntry,
+      sessionFile: scope.sessionKey,
+    });
+    expect(readArchive()).toEqual(pendingArchive);
+    expect(fs.readFileSync(collisionPath, "utf8")).toBe("collision");
+    expect(loadSessionEntry(scope)).toMatchObject(adoptedEntry);
+    expect(readTranscriptStorageRows(database, scope.sessionId)).toEqual(retainedRows);
+
+    fs.rmSync(collisionPath);
+    await expect(
+      applySessionEntryLifecycleMutation({
+        storePath: fixture.storePath(),
+        removals: [{ sessionKey: archivedSessionKey, archiveRemovedTranscript: true }],
+        skipMaintenance: true,
+      }),
+    ).resolves.toMatchObject({ removedEntries: 0 });
+    expect(readArchive()).toEqual({
+      ...pendingArchive,
+      last_publish_attempt_at: expect.any(Number),
+      last_publish_error: null,
+      publish_attempts: pendingArchive.publish_attempts + 1,
+      published_at: expect.any(Number),
+    });
+    expect(fs.readFileSync(collisionPath)).toEqual(Buffer.from(pendingArchive.archive_blob));
+    expect(readSessionArchiveContentSync(collisionPath)).toBe(`${JSON.stringify(archivedEvent)}\n`);
+    expect(loadSessionEntry(scope)).toMatchObject(adoptedEntry);
+    expect(readTranscriptStorageRows(database, scope.sessionId)).toEqual(retainedRows);
   });
 
   it.each([

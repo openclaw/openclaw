@@ -248,6 +248,12 @@ function openAgentDatabaseBackend(
   let archivePruning:
     | typeof import("../config/sessions/session-history-archive-pruning.worker.js")
     | undefined;
+  let transcript:
+    | {
+        initialize: typeof import("../config/sessions/session-accessor.sqlite-transcript-header.js").ensureTranscriptHeader;
+        assertIdentity: typeof import("../config/sessions/session-accessor.sqlite-scope.js").assertSqliteTranscriptWriteIdentity;
+      }
+    | undefined;
   let replacements:
     | typeof import("../config/sessions/session-accessor.sqlite-replacement-state.js")
     | undefined;
@@ -280,6 +286,17 @@ function openAgentDatabaseBackend(
             archivePruning = module;
           },
         );
+      }
+      if (command.type === "session.transcript.initialize") {
+        return Promise.all([
+          import("../config/sessions/session-accessor.sqlite-transcript-header.js"),
+          import("../config/sessions/session-accessor.sqlite-scope.js"),
+        ]).then(([header, scope]) => {
+          transcript = {
+            initialize: header.ensureTranscriptHeader,
+            assertIdentity: scope.assertSqliteTranscriptWriteIdentity,
+          };
+        });
       }
       if (command.type === "session.entries.replace") {
         return import("../config/sessions/session-accessor.sqlite-replacement-state.js").then(
@@ -327,6 +344,29 @@ function openAgentDatabaseBackend(
       if (command.type === "database.prepareWrite") {
         openWriter();
         return undefined;
+      }
+      if (command.type === "session.transcript.initialize" && transcript) {
+        const assertIdentity: typeof import("../config/sessions/session-accessor.sqlite-scope.js").assertSqliteTranscriptWriteIdentity =
+          transcript.assertIdentity;
+        assertIdentity(command.input);
+        const initialize = transcript.initialize;
+        const opened = openWriter();
+        return runOpenClawAgentWriteTransaction(
+          (current) => {
+            if (current.db !== opened.db) {
+              throw new Error("Session transcript lost its canonical database owner");
+            }
+            admit("transaction");
+            initialize(
+              current,
+              { agentId: input.agentId, path: input.databasePath, ...command.input },
+              command.input.cwd,
+            );
+            admit("commit");
+          },
+          options,
+          { operationLabel: "session.entry.create-with-transcript" },
+        );
       }
       if (command.type === "session.entries.replace" && replacements) {
         const opened = openWriter();

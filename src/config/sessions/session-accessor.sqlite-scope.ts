@@ -349,8 +349,13 @@ function resolveSqliteDatabaseScope(
 export function resolveSqliteScope(
   scope: SqliteScopeInput & { sessionKey: string },
   targetCache?: SessionSqliteTargetResolutionCache,
+  preparedStoreTarget?: ResolvedSqliteStoreTarget,
 ): ResolvedSqliteScope {
-  const { agentId, ...database } = resolveSqliteDatabaseScope(scope, targetCache);
+  const { agentId, ...database } = resolveSqliteDatabaseScope(
+    scope,
+    targetCache,
+    preparedStoreTarget,
+  );
   if (!agentId) {
     throw new Error("Cannot resolve SQLite session scope without an agent id");
   }
@@ -463,22 +468,29 @@ export function resolveSqliteTranscriptArchiveDirectory(
   return resolveSessionArtifactDirectory(databasePath);
 }
 
+/** Validate prepared write identity without resolving or reopening its physical target. */
+export function assertSqliteTranscriptWriteIdentity(
+  scope: Pick<SessionTranscriptWriteScope, "sessionId" | "sessionKey">,
+): asserts scope is { sessionId: string; sessionKey: string } {
+  if (typeof scope.sessionId !== "string" || !scope.sessionId) {
+    throw new Error(
+      `Cannot resolve SQLite transcript scope without a session id: ${scope.sessionKey}`,
+    );
+  }
+  if (typeof scope.sessionKey !== "string" || !scope.sessionKey) {
+    throw new Error(
+      `Cannot resolve SQLite transcript scope without a session key: ${scope.sessionId}`,
+    );
+  }
+}
+
 export function resolveSqliteTranscriptScope(
   scope: Pick<
     SessionTranscriptWriteScope,
     "agentId" | "env" | "sessionId" | "sessionKey" | "storePath"
   >,
 ): ResolvedTranscriptScope {
-  if (!scope.sessionId) {
-    throw new Error(
-      `Cannot resolve SQLite transcript scope without a session id: ${scope.sessionKey}`,
-    );
-  }
-  if (!scope.sessionKey) {
-    throw new Error(
-      `Cannot resolve SQLite transcript scope without a session key: ${scope.sessionId}`,
-    );
-  }
+  assertSqliteTranscriptWriteIdentity(scope);
   return {
     ...resolveSqliteScope({ ...scope, sessionKey: scope.sessionKey }),
     sessionId: scope.sessionId,
@@ -510,26 +522,42 @@ export async function prepareSqliteTranscriptReadScope(
   if (isIncognitoSessionKey(readScope.sessionKey)) {
     return resolveSqliteTranscriptReadScope(readScope);
   }
-  const { effectiveAgentId, effectiveStorePath } = resolveSqliteDatabaseScopeIdentity(readScope);
-  const target = effectiveStorePath
-    ? await prepareSqliteTargetFromSessionStorePath(
-        effectiveStorePath,
-        {
-          agentId: effectiveAgentId,
-          defaultAgentId: readScope.defaultAgentId,
-          env: readScope.env,
-        },
-        signal,
-      )
-    : undefined;
+  const target = await prepareSqliteScopeTarget(readScope, signal);
   return {
     ...resolveSqliteReadScope(readScope, undefined, target),
     sessionId: readScope.sessionId,
   };
 }
 
+/** Writers resolve the same physical target in the existing read worker before admission. */
+export async function prepareSqliteScope(
+  scope: SqliteScopeInput & { sessionKey: string },
+): Promise<ResolvedSqliteScope> {
+  return resolveSqliteScope(scope, undefined, await prepareSqliteScopeTarget(scope));
+}
+
+async function prepareSqliteScopeTarget(scope: SqliteScopeInput, signal?: AbortSignal) {
+  if (isIncognitoSessionKey(scope.sessionKey)) {
+    return undefined;
+  }
+  const { effectiveAgentId, effectiveStorePath } = resolveSqliteDatabaseScopeIdentity(scope);
+  return effectiveStorePath
+    ? await prepareSqliteTargetFromSessionStorePath(
+        effectiveStorePath,
+        {
+          agentId: effectiveAgentId,
+          defaultAgentId: scope.defaultAgentId,
+          env: scope.env,
+        },
+        signal,
+      )
+    : undefined;
+}
+
 /** Pin the environment and database locator before lifecycle work yields. */
-export function captureLifecycleDatabaseScope<T extends ResolvedSqliteReadScope>(scope: T): T {
+export function captureLifecycleDatabaseScope<T extends ResolvedSqliteReadScope>(
+  scope: T,
+): T & { env: NodeJS.ProcessEnv; path: string } {
   const env = { ...(scope.env ?? process.env) };
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
   return {
