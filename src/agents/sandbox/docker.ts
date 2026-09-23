@@ -708,7 +708,13 @@ async function ensureSandboxContainerLifecycle(
   } else {
     params.assertCurrent?.();
     if (
-      await admitSandboxContainerSource({ engine, name: containerName, id: containerId, source })
+      await admitSandboxContainerSource({
+        engine,
+        name: containerName,
+        id: containerId,
+        running,
+        source,
+      })
     ) {
       running = false;
     }

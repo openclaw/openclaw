@@ -12,7 +12,11 @@ import type {
   SandboxBackendManager,
 } from "./backend.types.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
-import { removeSandboxContainerRuntime } from "./container-lifecycle.js";
+import { containerHasTerminated } from "./container-inspect.js";
+import {
+  captureSandboxContainerTermination,
+  removeSandboxContainerRuntime,
+} from "./container-lifecycle.js";
 import {
   containerState,
   bindPodmanSandboxEngine,
@@ -215,6 +219,11 @@ function createContainerSandboxBackendHandle(params: {
     },
     prepareProcessCleanup(env) {
       params.assertCurrent?.();
+      const wasTerminated = captureSandboxContainerTermination(
+        params.engine,
+        params.containerName,
+        params.containerId,
+      );
       const run = (command: SandboxBackendCommandParams, assertCurrent?: () => void) =>
         runContainerSandboxShellCommand({
           engine: params.engine,
@@ -227,25 +236,31 @@ function createContainerSandboxBackendHandle(params: {
         (command) => run(command, params.assertCurrent),
         env,
         async (command) => {
-          const result = await run(command);
-          if (result.code === 0) {
+          const settled = { code: 0, stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) };
+          try {
+            if (wasTerminated()) {
+              return settled;
+            }
+            const result = await run(command);
+            if (result.code === 0) {
+              return result;
+            }
+            // A fresh authorized request may already have restarted the same ID.
+            // Preserve the old lifetime's confirmed termination across either await.
+            if (
+              wasTerminated() ||
+              (await containerHasTerminated(params.engine, params.containerId, command.signal)) ||
+              wasTerminated()
+            ) {
+              return settled;
+            }
             return result;
+          } catch (error) {
+            if (wasTerminated()) {
+              return settled;
+            }
+            throw error;
           }
-          // A removed generation has no remaining processes. Never follow its
-          // reusable display name, or treat an unreachable engine as removal.
-          const inspected = await execContainer(
-            params.engine,
-            ["inspect", "--format", "{{.Id}}", params.containerId],
-            { allowFailure: true, signal: command.signal },
-          );
-          if (
-            inspected.code !== 0 &&
-            inspected.stderr.includes(params.containerId) &&
-            /no such (?:container|object)/iu.test(inspected.stderr)
-          ) {
-            return { code: 0, stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) };
-          }
-          return result;
         },
       );
     },

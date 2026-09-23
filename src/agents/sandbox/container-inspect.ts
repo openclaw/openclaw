@@ -1,9 +1,35 @@
 /** Read-only inspection of engine-owned container identities, state, labels and ports. */
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   DOCKER_SANDBOX_ENGINE,
   execContainer,
   type SandboxContainerEngine,
 } from "./container-engine.js";
+
+/** Termination proof is stricter than provisioning's best-effort existence probe. */
+export async function containerHasTerminated(
+  engine: SandboxContainerEngine,
+  id: string,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  const inspected = await execContainer(engine, ["inspect", "-f", "{{json .State}}", id], {
+    allowFailure: true,
+    signal,
+  });
+  if (inspected.code !== 0) {
+    if (
+      inspected.stderr.includes(id) &&
+      /no such (?:container|object)|container .* does not exist|no container with name or id .* found/iu.test(
+        inspected.stderr,
+      )
+    ) {
+      return true;
+    }
+    throw new Error(`Could not verify sandbox ${id} termination: ${inspected.stderr.trim()}`);
+  }
+  const state: unknown = JSON.parse(inspected.stdout);
+  return isRecord(state) && state.Running === false && state.Paused === false && state.Pid === 0;
+}
 
 export async function readDockerContainerLabel(
   containerName: string,

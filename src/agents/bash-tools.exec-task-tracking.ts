@@ -5,7 +5,7 @@ import { redactToolPayloadText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { BACKGROUND_EXEC_TASK_KIND } from "../tasks/background-exec-task-contract.js";
 import { createRunningTaskRun, finalizeTaskRunByRunId } from "../tasks/detached-task-runtime.js";
-import type { ExecProcessOutcome } from "./bash-tools.exec-runtime.js";
+import type { ExecProcessOutcome } from "./bash-tools.exec-types.js";
 
 const log = createSubsystemLogger("agents/bash-exec-task-tracking");
 

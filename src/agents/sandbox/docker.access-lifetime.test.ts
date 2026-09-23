@@ -1,8 +1,13 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
-import type { ExecContainerRawOptions } from "./container-engine.js";
-import { removeSandboxContainerRuntime } from "./container-lifecycle.js";
+import { execContainerRaw, type ExecContainerRawOptions } from "./container-engine.js";
+import {
+  removeSandboxContainerRuntime,
+  withSandboxContainerLifecycle,
+} from "./container-lifecycle.js";
+import { createDockerSandboxBackend } from "./docker-backend.js";
 import { DOCKER_SANDBOX_ENGINE, ensureSandboxContainer } from "./docker.js";
 
 type Container = { id: string; name: string; hash: string; running: boolean };
@@ -13,6 +18,12 @@ const fixture = vi.hoisted(() => ({
   removalFails: false,
   terminalState: "stopped" as "stopped" | "paused" | "unreachable",
   setup: undefined as undefined | ((signal: AbortSignal | undefined) => Promise<void>),
+  inspectState: undefined as
+    | undefined
+    | ((
+        container: Container,
+        format: string,
+      ) => Promise<{ code: number; stdout: string; stderr: string }>),
   logError: vi.fn(),
 }));
 
@@ -27,6 +38,7 @@ vi.mock("./registry.js", () => ({
 vi.mock("./mount-plan.js", () => ({
   prepareSandboxMountPlan: vi.fn(async () => ({ binds: [], skippedBinds: [] })),
   sandboxMountPlanMatchesContainer: vi.fn(async () => true),
+  resolveSandboxContainerOnlyMounts: vi.fn(async () => []),
 }));
 vi.mock("./container-engine.js", () => ({
   DOCKER_SANDBOX_ENGINE: { id: "docker", command: "docker", displayName: "Docker" },
@@ -41,7 +53,12 @@ vi.mock("./container-engine.js", () => ({
     if (args[0] === "create") {
       const name = args[args.indexOf("--name") + 1];
       const id = (++fixture.serial).toString(16).padStart(64, "0");
-      const hash = args.find((arg) => arg.startsWith("openclaw.configHash="))!.split("=")[1];
+      const hash = args
+        .find((arg) => arg.startsWith("openclaw.configHash="))
+        ?.slice("openclaw.configHash=".length);
+      if (!name || !hash) {
+        throw new Error("Container fixture requires its name and config hash");
+      }
       fixture.containers.set(name, { id, name, hash, running: false });
       return ok(id);
     }
@@ -53,6 +70,9 @@ vi.mock("./container-engine.js", () => ({
       return { code: 1, stdout: "", stderr: `No such container: ${target}` };
     }
     if (args[0] === "inspect") {
+      if (fixture.inspectState && args.at(-1) === container.id) {
+        return fixture.inspectState(container, args[2] ?? "");
+      }
       if (args[2] === "{{.Id}}") {
         return ok(container.id);
       }
@@ -151,6 +171,8 @@ beforeEach(() => {
   fixture.calls.length = 0;
   fixture.terminalState = "stopped";
   fixture.setup = undefined;
+  fixture.inspectState = undefined;
+  vi.mocked(execContainerRaw).mockReset();
   fixture.removalFails = false;
   fixture.logError.mockClear();
 });
@@ -159,6 +181,7 @@ afterEach(async () => {
   fixture.removalFails = false;
   fixture.terminalState = "stopped";
   fixture.setup = undefined;
+  fixture.inspectState = undefined;
   for (const name of fixture.containers.keys()) {
     await removeSandboxContainerRuntime(DOCKER_SANDBOX_ENGINE, name);
   }
@@ -188,6 +211,15 @@ it("retains original access after foreground close and stops only its private ge
   expect(fixture.containers.get(otherName)?.running).toBe(true);
   await expect(ensureSandboxContainer(params)).rejects.toThrow("original access revoked");
   expect(owner.release).toHaveBeenCalledTimes(2);
+  replacement.closeForeground();
+  expect(() => replacement.authority.assertCurrent()).not.toThrow();
+  replacement.controller.abort();
+  await withSandboxContainerLifecycle(name, undefined, async () => {});
+  expect(fixture.containers.get(name)?.running).toBe(false);
+  expect(fixture.calls.filter(([operation]) => operation === "kill")).toEqual([
+    ["kill", id],
+    ["kill", id],
+  ]);
 });
 
 it("preserves a valid same-grant source after device loss, then stops on full grant revocation", async () => {
@@ -218,8 +250,8 @@ it("preserves a valid same-grant source after device loss, then stops on full gr
 
 it("does not let a revoked queued caller discard another grant's private custody", async () => {
   const first = source();
-  const started = Promise.withResolvers<void>();
-  const setup = Promise.withResolvers<void>();
+  const started = createDeferred();
+  const setup = createDeferred();
   fixture.setup = () => {
     started.resolve();
     return setup.promise;
@@ -286,6 +318,13 @@ it.each(["staff", "different-grant", "unclassified"] as const)(
     expect(fixture.containers.get(name)?.running).toBe(true);
     expect(fixture.calls.some(([operation]) => operation === "kill")).toBe(false);
     expect(owner.release).toHaveBeenCalledOnce();
+    fixture.containers.get(name)!.running = false;
+    const later = source();
+    await ensureSandboxContainer(provision(later));
+    later.controller.abort();
+    await withSandboxContainerLifecycle(name, undefined, async () => {});
+    expect(fixture.containers.get(name)?.running).toBe(true);
+    expect(fixture.calls.some(([operation]) => operation === "kill")).toBe(false);
   },
 );
 
@@ -305,12 +344,19 @@ it.each(["preexisting", "shared", "no-signal", "no-retain"] as const)(
     await ensureSandboxContainer({ ...params, operatorAuthority: undefined });
     expect(fixture.containers.get(name)?.running).toBe(true);
     expect(fixture.calls.some(([operation]) => operation === "kill")).toBe(false);
+    fixture.containers.get(name)!.running = false;
+    const later = source();
+    await ensureSandboxContainer({ ...params, operatorAuthority: later.authority });
+    later.controller.abort();
+    await withSandboxContainerLifecycle(name, undefined, async () => {});
+    expect(fixture.containers.get(name)?.running).toBe(true);
+    expect(fixture.calls.some(([operation]) => operation === "kill")).toBe(false);
   },
 );
 
 it("settles revocation during setup before an already-queued replacement can start", async () => {
   const owner = source();
-  const started = Promise.withResolvers<void>();
+  const started = createDeferred();
   fixture.setup = async (signal) => {
     started.resolve();
     await new Promise<void>((_resolve, reject) => {
@@ -331,7 +377,84 @@ it("settles revocation during setup before an already-queued replacement can sta
   expect(fixture.calls.some(([operation]) => operation === "rm")).toBe(false);
   const operations = fixture.calls.map(([operation]) => operation);
   expect(operations.lastIndexOf("start")).toBeGreaterThan(operations.indexOf("wait"));
-  expect([...fixture.containers.values()][0].running).toBe(true);
+  expect([...fixture.containers.values()]).toEqual([expect.objectContaining({ running: true })]);
+  replacement.closeForeground();
+  expect(() => replacement.authority.assertCurrent()).not.toThrow();
+  replacement.controller.abort();
+  const [name] = fixture.containers.keys();
+  if (!name) {
+    throw new Error("Expected the retained private container");
+  }
+  await withSandboxContainerLifecycle(name, undefined, async () => {});
+  expect(fixture.calls.filter(([operation]) => operation === "kill")).toHaveLength(2);
+  expect(fixture.containers.get(name)?.running).toBe(false);
+});
+
+it("discards stopped custody when the generation was restarted outside its owner", async () => {
+  const first = source();
+  const { containerName } = await ensureSandboxContainer(provision(first));
+  first.controller.abort();
+  await withSandboxContainerLifecycle(containerName, undefined, async () => {});
+  expect(fixture.containers.get(containerName)?.running).toBe(false);
+  fixture.containers.get(containerName)!.running = true;
+  const next = source();
+  await ensureSandboxContainer(provision(next));
+  next.controller.abort();
+  await withSandboxContainerLifecycle(containerName, undefined, async () => {});
+  expect(fixture.calls.filter(([operation]) => operation === "kill")).toHaveLength(1);
+  expect(fixture.containers.get(containerName)?.running).toBe(true);
+});
+
+it("settles old targeted cleanup from its own termination receipt after same-ID restart", async () => {
+  const first = source();
+  const createBackend = (owner: ReturnType<typeof source>) => {
+    const { operatorAuthority, ...input } = provision(owner);
+    return createDockerSandboxBackend({ ...input, sessionKey: input.scopeKey }, operatorAuthority);
+  };
+  const backend = await createBackend(first);
+  const cleanup = backend.prepareProcessCleanup!({});
+  const inspected = createDeferred();
+  const delayed = createDeferred();
+  let inspections = 0;
+  fixture.inspectState = async (container, format) => {
+    if (++inspections === 1) {
+      inspected.resolve();
+      await delayed.promise;
+    }
+    return {
+      code: 0,
+      stdout:
+        format === "{{.Id}}"
+          ? container.id
+          : JSON.stringify({
+              Running: container.running,
+              Paused: false,
+              Pid: container.running ? 234 : 0,
+            }),
+      stderr: "",
+    };
+  };
+  vi.mocked(execContainerRaw).mockResolvedValue({
+    code: 125,
+    stdout: Buffer.alloc(0),
+    stderr: Buffer.from("exec failed"),
+  });
+  const pending = cleanup.terminate();
+  void pending.catch(() => {});
+  try {
+    await inspected.promise;
+    first.controller.abort();
+    await withSandboxContainerLifecycle(backend.runtimeId, undefined, async () => {});
+    const restarted = await createBackend(source({ grantId: "replacement" }));
+    expect(restarted.runtimeId).toBe(backend.runtimeId);
+    expect(fixture.containers.get(restarted.runtimeId)?.running).toBe(true);
+    delayed.resolve();
+    await expect(pending).resolves.toBeUndefined();
+    await expect(restarted.prepareProcessCleanup!({}).terminate()).rejects.toThrow("exec failed");
+  } finally {
+    delayed.resolve();
+    await pending.catch(() => {});
+  }
 });
 
 it.each(["paused", "unreachable"] as const)(
@@ -395,11 +518,10 @@ it.each(["partial-creation", "replacement", "manager"] as const)(
         ).rejects.toThrow("Sandbox replacement failed");
       }
     }
-    const container = [...fixture.containers.values()][0];
+    const retainedKills = [...fixture.containers.values()].map(({ id }) => ["kill", id]);
+    expect(retainedKills).toHaveLength(1);
     owner.controller.abort();
     await ensureSandboxContainer(provision(source({ grantId: "replacement" })));
-    expect(fixture.calls.filter(([operation]) => operation === "kill")).toEqual([
-      ["kill", container.id],
-    ]);
+    expect(fixture.calls.filter(([operation]) => operation === "kill")).toEqual(retainedKills);
   },
 );

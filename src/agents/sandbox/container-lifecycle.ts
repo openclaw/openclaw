@@ -1,5 +1,4 @@
 /** Serialized container admission, access custody, and physical retirement. */
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import {
@@ -7,6 +6,7 @@ import {
   type AdmittedRunOperatorAuthority,
 } from "../admitted-run-context.js";
 import { execContainer, type SandboxContainerEngine } from "./container-engine.js";
+import { containerHasTerminated } from "./container-inspect.js";
 
 const log = createSubsystemLogger("docker");
 const sandboxContainerLifecycleQueue = new KeyedAsyncQueue();
@@ -21,16 +21,18 @@ export type ContainerSourceLease = {
 };
 
 type PrivateContainer = {
+  kind: "active";
   id: string;
   profileId: string;
   grant: ContainerSourceLease["grant"];
   sources: Map<object, { lease: ContainerSourceLease; unsubscribe: () => void }>;
   revoked: boolean;
+  terminated: boolean;
 };
 
 // Live custody is established only at allocation. Registry rows and scope names
 // cannot prove exclusive access, including after a Gateway restart.
-const privateContainers = new Map<string, PrivateContainer>();
+const privateContainers = new Map<string, PrivateContainer | { kind: "stopped"; id: string }>();
 
 function containerAuthorityKey(engine: SandboxContainerEngine, name: string): string {
   return JSON.stringify([engine.command, ...(engine.globalArgs ?? []), name]);
@@ -40,11 +42,13 @@ function releasePrivateContainer(key: string): void {
   const container = privateContainers.get(key);
   if (container) {
     privateContainers.delete(key);
-    for (const { lease, unsubscribe } of container.sources.values()) {
-      unsubscribe();
-      lease.release();
+    if (container.kind === "active") {
+      for (const { lease, unsubscribe } of container.sources.values()) {
+        unsubscribe();
+        lease.release();
+      }
+      container.sources.clear();
     }
-    container.sources.clear();
   }
 }
 
@@ -76,9 +80,9 @@ async function stopRevokedPrivateContainer(
   engine: SandboxContainerEngine,
   key: string,
   container: PrivateContainer,
-): Promise<void> {
+): Promise<boolean> {
   if (privateContainers.get(key) !== container || !container.revoked) {
-    return;
+    return false;
   }
   const signal = AbortSignal.timeout(30_000);
   const killed = await execContainer(engine, ["kill", container.id], {
@@ -88,31 +92,23 @@ async function stopRevokedPrivateContainer(
   if (killed.code === 0) {
     await execContainer(engine, ["wait", container.id], { signal });
   }
-  // Do not use containerState here: an unreachable engine is not an absent or
-  // stopped generation. Keep custody and surface an unverified stop as failure.
-  const inspected = await execContainer(
-    engine,
-    ["inspect", "-f", "{{json .State}}", container.id],
-    { allowFailure: true, signal },
-  );
-  const absent =
-    inspected.code !== 0 &&
-    inspected.stderr.includes(container.id) &&
-    /no such (?:container|object)|container .* does not exist|no container with name or id .* found/iu.test(
-      inspected.stderr,
-    );
-  const state: unknown = inspected.code === 0 ? JSON.parse(inspected.stdout) : undefined;
-  const stopped =
-    isRecord(state) && state.Running === false && state.Paused === false && state.Pid === 0;
-  if (!absent && !stopped) {
+  if (!(await containerHasTerminated(engine, container.id, signal))) {
     throw new Error(
-      `Could not verify revoked sandbox ${container.id} stopped: ${inspected.stderr.trim() || killed.stderr.trim() || inspected.stdout.trim()}`,
+      `Could not verify revoked sandbox ${container.id} stopped: ${killed.stderr.trim() || "the generation is still active"}`,
     );
   }
+  container.terminated = true;
+  if (privateContainers.get(key) !== container) {
+    return false;
+  }
   releasePrivateContainer(key);
+  // Preserve only the proved physical fact. A fresh record fences callbacks
+  // from the ended authority while allowing ordinary authorized reuse.
+  privateContainers.set(key, { kind: "stopped", id: container.id });
   log.info(
     `Stopped private ${engine.displayName} sandbox ${container.id} after access revocation.`,
   );
+  return true;
 }
 
 function retainPrivateContainerSource(params: {
@@ -169,14 +165,28 @@ export function bindSandboxContainerSource(params: {
   const key = containerAuthorityKey(params.engine, params.name);
   releasePrivateContainer(key);
   const container: PrivateContainer = {
+    kind: "active",
     id: params.id,
     profileId: params.owner.authority.profileId,
     grant: params.owner.grant,
     sources: new Map(),
     revoked: false,
+    terminated: false,
   };
   privateContainers.set(key, container);
   retainPrivateContainerSource({ ...params, container });
+}
+
+/** Bound to one admitted lifetime; removal or a replacement never proves its termination. */
+export function captureSandboxContainerTermination(
+  engine: SandboxContainerEngine,
+  name: string,
+  id: string,
+): () => boolean {
+  const container = privateContainers.get(containerAuthorityKey(engine, name));
+  return container?.kind === "active" && container.id === id
+    ? () => container.terminated
+    : () => false;
 }
 
 export async function withSandboxContainerLifecycle<T>(
@@ -199,6 +209,7 @@ export async function admitSandboxContainerSource(params: {
   engine: SandboxContainerEngine;
   name: string;
   id: string;
+  running: boolean;
   source: ContainerSourceLease | undefined;
 }): Promise<boolean> {
   const key = containerAuthorityKey(params.engine, params.name);
@@ -210,10 +221,29 @@ export async function admitSandboxContainerSource(params: {
     releasePrivateContainer(key);
     return false;
   }
+  if (container.kind === "stopped") {
+    if (
+      !params.source ||
+      params.running ||
+      !(await containerHasTerminated(params.engine, container.id))
+    ) {
+      releasePrivateContainer(key);
+      return false;
+    }
+    bindSandboxContainerSource({ ...params, owner: params.source });
+    return true;
+  }
   if (container.revoked) {
     // A request queued before revocation must settle the old lifetime before
     // reusing its name. Awaiting a later queued callback here would deadlock.
-    await stopRevokedPrivateContainer(params.engine, key, container);
+    if (!(await stopRevokedPrivateContainer(params.engine, key, container))) {
+      return false;
+    }
+    if (params.source) {
+      bindSandboxContainerSource({ ...params, owner: params.source });
+    } else {
+      releasePrivateContainer(key);
+    }
     return true;
   } else if (
     !params.source ||

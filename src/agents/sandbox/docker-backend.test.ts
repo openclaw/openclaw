@@ -193,8 +193,8 @@ describe("docker sandbox backend manager", () => {
     expect(dockerMocks.execContainerRaw.mock.calls.at(-1)?.[1]?.[2]).toBe("a".repeat(64));
   });
 
-  it.each(["removed", "unreachable", "still present"] as const)(
-    "settles retained cleanup only for confirmed generation removal: %s",
+  it.each(["removed", "stopped", "paused", "unreachable", "still present"] as const)(
+    "settles retained cleanup only for confirmed generation termination: %s",
     async (state) => {
       const backend = await createDockerExecBackend();
       const cleanup = backend.prepareProcessCleanup!({});
@@ -204,20 +204,26 @@ describe("docker sandbox backend manager", () => {
         stderr: Buffer.from("exec failed"),
       });
       dockerMocks.execContainer.mockResolvedValueOnce({
-        code: state === "still present" ? 0 : 1,
-        stdout: state === "still present" ? "a".repeat(64) : "",
+        code: state === "removed" || state === "unreachable" ? 1 : 0,
+        stdout: JSON.stringify({
+          Running: state === "still present",
+          Paused: state === "paused",
+          Pid: state === "stopped" ? 0 : 123,
+        }),
         stderr:
           state === "removed" ? `Error: No such object: ${"a".repeat(64)}` : "engine unreachable",
       });
-      if (state === "removed") {
+      if (state === "removed" || state === "stopped") {
         await expect(cleanup.terminate()).resolves.toBeUndefined();
+      } else if (state === "unreachable") {
+        await expect(cleanup.terminate()).rejects.toThrow("engine unreachable");
       } else {
         await expect(cleanup.terminate()).rejects.toThrow("exec failed");
       }
       expect(dockerMocks.execContainer.mock.calls.at(-1)?.[1]).toEqual([
         "inspect",
-        "--format",
-        "{{.Id}}",
+        "-f",
+        "{{json .State}}",
         "a".repeat(64),
       ]);
     },
