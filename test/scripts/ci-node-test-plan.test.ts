@@ -112,12 +112,14 @@ describe("Control UI release-only inventories", () => {
   const entry = "ui/src/e2e/chat-session-entry.e2e.test.ts";
   const automationManagement =
     "extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts";
+  const reconnectContinuity = "ui/src/e2e/chat-reconnect-continuity.real-gateway.e2e.test.ts";
   const releaseOnlyRealGateway = new Set([
     "ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts",
     automationManagement,
     "ui/src/e2e/quota-reset-status.real-gateway.e2e.test.ts",
     "ui/src/e2e/session-pr-reader-lifetime.real-gateway.e2e.test.ts",
     "ui/src/e2e/chat-collaborator-scroll.real-gateway.e2e.test.ts",
+    reconnectContinuity,
     "ui/src/e2e/mcp-app-conformance.e2e.test.ts",
   ]);
   const tours = [
@@ -165,6 +167,7 @@ describe("Control UI release-only inventories", () => {
         entry,
         ...tours,
         automationManagement,
+        reconnectContinuity,
         "ui/src/components/app-sidebar.ts",
         "ui/src/e2e",
       ],
@@ -172,7 +175,7 @@ describe("Control UI release-only inventories", () => {
     expect(groups.e2e[0]?.includePatterns).toContain(entry);
     expect(
       groups.e2e[0]?.includePatterns?.filter((file) => releaseOnlyRealGateway.has(file)),
-    ).toEqual([automationManagement]);
+    ).toEqual([automationManagement, reconnectContinuity]);
     expect(groups.e2e[0]?.includePatterns).toEqual(expect.arrayContaining(tours));
     expect(groups.e2e[0]?.includePatterns).not.toContain(embed);
     expect(groups.ui[0]?.includePatterns).not.toContain(sidebar);

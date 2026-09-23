@@ -18,6 +18,7 @@ const parallelFiles = new Set([
   "ui/src/e2e/chat-flow.catalog-bootstrap.e2e.test.ts",
   "ui/src/e2e/chat-loading-performance.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-project-media.real-gateway.e2e.test.ts",
+  "ui/src/e2e/chat-reconnect-continuity.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-stop-finished-run.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-thinking-metadata.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-widget-sandbox.real-gateway.e2e.test.ts",

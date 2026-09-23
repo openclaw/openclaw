@@ -1,0 +1,32 @@
+title: Control UI streamed-turn reconnect continuity
+
+scenario:
+  id: control-ui-reconnect-continuity
+  surface: control-ui
+  coverage:
+    primary:
+      - control-ui.reconnect-continuity
+    secondary:
+      - control-ui.chat-history-projection
+      - control-ui.abort-partial-retention
+      - control-ui.send-and-abort
+  objective: Prove an authenticated Control UI reconstructs one in-progress assistant turn after its browser WebSocket drops, then aborts that run and completes a clean follow-up.
+  successCriteria:
+    - A real Gateway and loopback streaming provider deliver a partial assistant reply before the browser WebSocket is cut.
+    - Reconnect history reports the exact active run and accumulated tail, and Chromium renders one user message and one reconstructed assistant reply without duplicating either streamed section.
+    - Stop targets the reconstructed run exactly once, its partial reply remains in durable history, and a later turn produces one independent final reply after a page reload.
+  docsRefs:
+    - docs/web/control-ui/offline-and-reconnect.md
+    - docs/web/control-ui/chat.md
+    - docs/concepts/qa-e2e-automation.md
+    - docs/help/testing/writing-tests.md
+  codeRefs:
+    - ui/src/e2e/chat-reconnect-continuity.real-gateway.e2e.test.ts
+    - ui/src/pages/chat/chat-pane-state.ts
+    - ui/src/pages/chat/chat-gateway.ts
+    - ui/src/pages/chat/chat-history.ts
+  execution:
+    kind: playwright
+    path: ui/src/e2e/chat-reconnect-continuity.real-gateway.e2e.test.ts
+    testNamePattern: reconstructs one streamed turn after browser socket loss, then aborts and follows up cleanly
+    summary: Drive Chromium through a real Gateway and streaming provider, cut only the browser WebSocket, and verify exactly-once active-run reconstruction, abort, durable partial history, and a clean follow-up.
