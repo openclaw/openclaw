@@ -84,8 +84,9 @@ await runMainOrRootHelp(['node', 'openclaw', 'update', ${json ? "'--json'" : "'-
           !("stdout" in error) ||
           !("stderr" in error) ||
           !("code" in error)
-        )
+        ) {
           throw error;
+        }
         return { stdout: String(error.stdout), stderr: String(error.stderr), code: error.code };
       },
     );
