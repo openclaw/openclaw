@@ -568,11 +568,7 @@ it.each([
         log: silentLog,
         broadcast: vi.fn(),
         broadcastToConnIds: (event, payload) => {
-          if (
-            event === "sessions.changed" &&
-            isRecord(payload) &&
-            payload.runId === runId
-          ) {
+          if (event === "sessions.changed" && isRecord(payload) && payload.runId === runId) {
             terminalChanged.resolve();
           }
         },
