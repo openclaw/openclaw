@@ -120,6 +120,84 @@ not declare the current release-isolation contract or the `expected_sha`
 dispatch input; it never silently substitutes newer tooling. The workflow never
 creates or updates repository refs itself.
 
+### Automatic retries for declared flakes
+
+`known_flaky_jobs_json` accepts exact `child:job name` selectors, such as
+`normalCi:checks-node-agentic-control-plane-agent-chat`. An empty array disables
+automatic retries. Declare only diagnosed intermittent failures before dispatch;
+the immutable execution plan binds the allowance to the selected child and its
+original attempt.
+
+One retry owner per declared child waits for that child to finish. Exactly one
+declared failed or timed out job uses GitHub's targeted job-rerun API; other
+undeclared blockers remain. With multiple declared failures, the owner
+uses the failed-jobs API only when every failed job is declared. A mixture of
+multiple declared failures and undeclared failures records no automatic attempt
+for that child; required failures remain blockers.
+
+Automatic recovery permits at most one wave from child attempt 1 to attempt 2.
+Any earlier child rerun consumes that budget, including a manual or dependent
+rerun that did not execute the listed job. GitHub reruns dependent jobs and has
+no atomic operation for an arbitrary subset of failed jobs, so the controller
+never starts a third execution under this allowance. Release Decision and
+Diagnostic Drain wait for the retry owners to collect stable terminal
+replacement attempts and bind their records into the final validation evidence.
+Explicit operator retries remain separate and can run further attempts; they
+never replenish the automatic allowance.
+
+Manual retries wait for active automatic owners. If the child remains on
+attempt one after its owner finishes, the controller requires verified
+`not-attempted` evidence or an authenticated original rejection witness before another
+POST. A terminal owner alone does not prove rejection. Missing or unknown
+outcomes remain read-only until the original witness or a newer child attempt
+resolves them; explicit retries after an observed second attempt remain
+available.
+
+A failed pre-dispatch read or authority check records a confirmed rejection
+because no POST was sent. An ambiguous POST response keeps an unknown outcome
+and permits only reconciliation.
+
+A dedicated step on parent attempt one records the rejected intent's digest.
+Manual admission, later-parent recovery, and final verification authenticate
+that original step and its log interval. This proof survives loss of the
+original outcome artifact. A recovered rejection stays `rejected`; an operator
+may repair separate jobs in attempts two and three, and normal composite child
+evidence must still prove the final result.
+
+The hosted retry owner shares one 5.5-hour deadline across the original attempt
+and its retry, leaving 30 minutes for setup and artifact cleanup within the
+hosted six-hour job limit. An unusually long child can exhaust this automatic
+budget; retain any claim and use explicit continuation. A later parent attempt
+gets a fresh bounded read-only reconciliation window, never renewed mutation
+authority. Manual `frv` operations retain their existing 12-hour budget.
+
+Before sending a retry request, the owner uploads an immutable intent, records
+its digest after the successful upload, and saves the same bytes under an exact
+parent-run-and-child cache key. Each mutation is sent once. An uncertain API
+response triggers bounded read-only reconciliation, never another POST. The
+retry record reports the exact source jobs, requested operation, and observed
+replacement attempt in the manifest. A null `not-attempted` record means the
+original guarded mutation steps were explicitly skipped. Recovery revalidates
+selectors against the exact child attempt history before accepting that record;
+a failed preparation never renews mutation authority.
+
+`observed` means an authenticated replacement matches the original frozen
+intent. A later explicit operator retry may have produced it; this outcome does
+not assert that the automatic POST caused it. Child attempt provenance records
+the actor authority. Original attempt-one receipts retain their historical
+disposition while available.
+
+A parent rerun restores the intent from its cache or surviving artifact and
+authenticates it against the original upload witness. Recovery only reconciles
+the recorded operation; it cannot renew an allowance or replay a request. Missing
+or contradictory intent, changed child identity, and unobserved outcomes remain
+explicit recovery failures. Retain the original job logs and intent cache until
+validation is verified. Use explicit operator recovery for an exhausted or
+uncertain allowance. Retry-owner errors remain visible immediately in Release
+Decision while Diagnostic Drain keeps collecting independent children to
+terminal; existing API, provenance, and cancellation failures retain their
+original stopping rules.
+
 ### Read publication observations
 
 An optional publication selector adds a read-only view beside validation status:

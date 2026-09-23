@@ -20,6 +20,10 @@ import { parse } from "yaml";
 import { continueFailed, preflightContinuation } from "../../scripts/frv.mjs";
 import { buildFullReleaseCandidateRequest } from "../../scripts/full-release-candidate-contract.mjs";
 import {
+  releaseFlakeIntentSha256,
+  selectReleaseFlakeIntent,
+} from "../../scripts/full-release-flake-policy.mjs";
+import {
   createPublicationAdmission,
   createPublicationObservations,
   createPublicationSourceFact,
@@ -2716,6 +2720,157 @@ describe("release CI summary child correlation", () => {
       }
     },
   );
+
+  it("authenticates a rejected automatic retry after a manual repair in the strict summary", async () => {
+    const fixture = trustedMainNpmFixture();
+    const plannedChild = expectDefined(
+      fixture.executionPlan.children.find((child) => child.key === "normalCi"),
+      "normal CI plan",
+    );
+    const childRun = expectDefined(
+      fixture.runs.find((run) => String(run.id) === plannedChild.runId),
+      "normal CI run",
+    );
+    const originalRun = { ...childRun, conclusion: "failure" };
+    const originalParent = { ...fixture.parentRun, conclusion: "failure" };
+    const originalJob = {
+      ...fixture.parentJob,
+      id: 501,
+      name: "test",
+      conclusion: "failure",
+    };
+    const repairedJob = { ...originalJob, id: 502, run_attempt: 2, conclusion: "success" };
+    const knownFlakyJobs = ["normalCi:test"];
+    Object.assign(fixture.executionPlan, { knownFlakyJobs });
+    fixture.executionPlan.sha256 = releaseExecutionPlanSha256(fixture.executionPlan);
+    const intent = expectDefined(
+      selectReleaseFlakeIntent(fixture.executionPlan, plannedChild, originalRun, [originalJob]),
+      "automatic retry intent",
+    );
+    const composite = composeReleaseAttemptJobs(
+      [
+        { jobs: [originalJob], runAttempt: 1 },
+        { jobs: [repairedJob], runAttempt: 2 },
+      ],
+      { effectiveRunAttempt: 2, plannedRunAttempt: 1 },
+    );
+    childRun.run_attempt = 2;
+    childRun.triggering_actor = { login: "release-operator" };
+    Object.assign(expectDefined(fixture.manifest.childEvidence.normalCi, "normal CI evidence"), {
+      compositeJobsSha256: composite.sha256,
+      effectiveRunAttempt: 2,
+      jobs: composite.jobs,
+      observedRunAttempts: [1, 2],
+      triggeringActor: "release-operator",
+    });
+    Object.assign(fixture.manifest, {
+      knownFlakyJobs,
+      executionPlanSha256: fixture.executionPlan.sha256,
+      automaticRetries: [
+        {
+          child: "normalCi",
+          executionPlanSha256: fixture.executionPlan.sha256,
+          intent,
+          outcome: "rejected",
+          replacements: [],
+        },
+      ],
+    });
+    fixture.manifest.validationInputs.knownFlakyJobsJson = JSON.stringify(knownFlakyJobs);
+    fixture.manifest.runAttempt = "2";
+    fixture.parentRun.run_attempt = 2;
+    fixture.parentView.attempt = 2;
+    fixture.artifact.name = `full-release-validation-${fixture.runId}-2`;
+    const owner = {
+      id: 900,
+      name: "Automatic retry (normalCi)",
+      status: "completed",
+      steps: [
+        {
+          name: "Upload automatic retry intent",
+          status: "completed",
+          conclusion: "success",
+          number: 1,
+          started_at: "2026-07-10T01:10:01Z",
+          completed_at: "2026-07-10T01:10:02Z",
+        },
+        {
+          name: "Record automatic retry intent digest",
+          status: "completed",
+          conclusion: "success",
+          number: 2,
+          started_at: "2026-07-10T01:10:02Z",
+          completed_at: "2026-07-10T01:10:03Z",
+        },
+        {
+          name: "Execute automatic retry",
+          status: "completed",
+          conclusion: "failure",
+          number: 3,
+          started_at: "2026-07-10T01:10:03Z",
+          completed_at: "2026-07-10T01:10:04Z",
+        },
+        {
+          name: "Record automatic retry rejection digest",
+          status: "completed",
+          conclusion: "success",
+          number: 4,
+          started_at: "2026-07-10T01:10:04Z",
+          completed_at: "2026-07-10T01:10:05Z",
+        },
+      ],
+    };
+    const intentDigest = releaseFlakeIntentSha256(intent);
+    let rejectionDigest = intentDigest;
+    const client = {
+      ...fixture.client,
+      getParentJobs: (runId: string) => {
+        const jobs = fixture.client.getParentJobs(runId);
+        return runId === fixture.runId
+          ? jobs.flatMap((job) => [
+              job,
+              { ...job, id: job.id + 1000, run_attempt: 2, conclusion: "skipped" },
+            ])
+          : jobs;
+      },
+      getRunAttempt: (runId: string, attempt: number) => {
+        expect(attempt).toBe(1);
+        if (runId === fixture.runId) {
+          return originalParent;
+        }
+        expect(runId).toBe(plannedChild.runId);
+        return originalRun;
+      },
+      getRunAttemptJobs: (runId: string, attempt: number) => {
+        if (runId === fixture.runId) {
+          expect(attempt).toBe(1);
+          return [owner];
+        }
+        if (runId === plannedChild.runId) {
+          return attempt === 1 ? [originalJob] : [repairedJob];
+        }
+        return fixture.client.getRunAttemptJobs(runId);
+      },
+      getJobLog: (jobId: number) =>
+        jobId === owner.id
+          ? `2026-07-10T01:10:02.500Z FRV_AUTO_RETRY_INTENT_SHA256=${intentDigest}\n2026-07-10T01:10:04.500Z FRV_AUTO_RETRY_REJECTED_INTENT_SHA256=${rejectionDigest}\n`
+          : fixture.client.getJobLog(jobId),
+    };
+    const options = {
+      runId: fixture.runId,
+      verifierSourceContent: readFileSync(SCRIPT),
+      verifierSourceSha: "c".repeat(40),
+    };
+    const evidence = await validateReleaseRunEvidence(options, client);
+    expect(evidence.valid).toBe(true);
+    expect(evidence.children).toContainEqual(
+      expect.objectContaining({ role: "normalCi", plannedRunAttempt: 1, runAttempt: 2 }),
+    );
+    rejectionDigest = "f".repeat(64);
+    await expect(validateReleaseRunEvidence(options, client)).rejects.toThrow(
+      "automatic retry rejection is not bound to its original owner witness",
+    );
+  });
 
   it("retains blocking product performance in sealed npm stable evidence", async () => {
     const fixture = trustedMainNpmFixture("stable");
