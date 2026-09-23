@@ -51,6 +51,7 @@ type PromptCacheSnapshot = {
   toolDigest: string;
   toolCount: number;
   toolNames: string[];
+  toolFingerprints: PromptCacheToolSnapshot[];
 };
 
 type PromptCacheObservationStart = {
@@ -312,6 +313,11 @@ export function beginPromptCacheObservation(params: {
     toolDigest: buildToolDigest(tools),
     toolCount: tools.length,
     toolNames: tools.map((tool) => tool.name),
+    toolFingerprints: tools.map(({ name, descriptionDigest, schemaDigest }) => ({
+      name,
+      descriptionDigest,
+      schemaDigest,
+    })),
   };
   const previous = trackers.get(key);
   const changes = previous

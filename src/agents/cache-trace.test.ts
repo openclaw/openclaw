@@ -1,8 +1,11 @@
 /** Tests diagnostic cache-trace event writing, redaction, and stream wrapping. */
+import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { createCacheTrace } from "./cache-trace.js";
+import type { beginPromptCacheObservation } from "./embedded-agent-runner/prompt-cache-observability.js";
+import { createPromptCacheRequestObserver } from "./embedded-agent-runner/prompt-cache-request-observer.js";
 
 describe("createCacheTrace", () => {
   const bareAnthropicKey = "sk-ant-api03-AbCdEfGhIjKlMnOpQrStUvWx"; // pragma: allowlist secret
@@ -126,6 +129,77 @@ describe("createCacheTrace", () => {
     const event = JSON.parse(lines[0]?.trim() ?? "{}") as Record<string, unknown>;
     expect(event.stage).toBe("session:raw-model-run");
     expect(event.system).toBe("");
+  });
+
+  it("identifies per-tool descriptor changes in serialized cache snapshots without raw content", () => {
+    const { lines, trace } = createMemoryTraceForTest();
+    const observer = createPromptCacheRequestObserver(
+      { sessionId: "cache-trace-tool-fingerprints", streamStrategy: "test" },
+      () => undefined,
+      (request) => trace?.recordStage("cache:state", { options: request }),
+    );
+    const model = {
+      provider: "anthropic",
+      id: "claude-sonnet-4-6",
+      api: "anthropic-messages",
+    } as const;
+    const automations = {
+      name: "automations",
+      description: "synthetic private automation guidance",
+      parameters: { type: "object", properties: { action: { enum: ["list", "add"] } } },
+    };
+    const workshop = {
+      name: "skill_workshop",
+      description: "synthetic private workshop guidance",
+      parameters: { type: "object", properties: { action: { enum: ["inspect"] } } },
+    };
+    observer.onModelRequest(model, { tools: [workshop, automations] });
+    observer.onModelRequest(model, { tools: [automations, workshop] });
+    observer.onModelRequest(model, {
+      tools: [
+        {
+          ...automations,
+          parameters: { type: "object", properties: { action: { enum: ["list"] } } },
+        },
+        { ...workshop, description: "synthetic revised workshop guidance" },
+      ],
+    });
+
+    const snapshots = lines.map((line) => {
+      const event = JSON.parse(line) as {
+        options: { snapshot: ReturnType<typeof beginPromptCacheObservation>["snapshot"] };
+      };
+      return event.options.snapshot;
+    });
+    const [initial, reordered, changed] = snapshots;
+    assert(initial && changed);
+    expect(initial.toolFingerprints).toEqual([
+      {
+        name: "automations",
+        descriptionDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
+        schemaDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
+      },
+      {
+        name: "skill_workshop",
+        descriptionDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
+        schemaDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
+      },
+    ]);
+    expect(reordered).toEqual(initial);
+    expect(changed.toolNames).toEqual(initial.toolNames);
+    expect(changed.toolCount).toBe(initial.toolCount);
+    expect(changed.toolDigest).not.toBe(initial.toolDigest);
+    const [initialAutomations, initialWorkshop] = initial.toolFingerprints;
+    const [changedAutomations, changedWorkshop] = changed.toolFingerprints;
+    assert(initialAutomations && initialWorkshop && changedAutomations && changedWorkshop);
+    expect(changedAutomations.descriptionDigest).toBe(initialAutomations.descriptionDigest);
+    expect(changedAutomations.schemaDigest).not.toBe(initialAutomations.schemaDigest);
+    expect(changedWorkshop.descriptionDigest).not.toBe(initialWorkshop.descriptionDigest);
+    expect(changedWorkshop.schemaDigest).toBe(initialWorkshop.schemaDigest);
+    expect(lines.join("\n")).not.toContain("synthetic private");
+    expect(lines.join("\n")).not.toContain("synthetic revised");
+    expect(lines.join("\n")).not.toContain('"parameters"');
+    expect(lines.join("\n")).not.toContain('"properties"');
   });
 
   it("records stream context from systemPrompt when wrapping stream functions", () => {
