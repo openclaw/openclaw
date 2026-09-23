@@ -1,4 +1,8 @@
 // LM Studio embedding provider tests cover preload context-length precedence.
+import {
+  MEMORY_SEARCH_DEADLINE_CONTROL,
+  createMemorySearchDeadlineControl,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { lmstudioMemoryEmbeddingProviderAdapter } from "../memory-embedding-adapter.js";
@@ -173,6 +177,42 @@ describe("createLmstudioEmbeddingProvider preload context length", () => {
       expect(release).toHaveBeenCalledOnce();
     },
   );
+
+  it("reports managed local-service readiness waits to the search deadline owner", async () => {
+    const release = vi.fn();
+    const control = createMemorySearchDeadlineControl();
+    const reports: string[] = [];
+    control.subscribe((action) => reports.push(action));
+    const seenTargets: Array<Record<string, unknown>> = [];
+    const acquireLocalService = vi.fn(async (target: Record<string, unknown>) => {
+      seenTargets.push(target);
+      (target.onReadinessWait as ((w: boolean) => void) | undefined)?.(true);
+      (target.onReadinessWait as ((w: boolean) => void) | undefined)?.(false);
+      return { release };
+    });
+    const { provider } = await createLmstudioEmbeddingProvider({
+      config: buildConfig({
+        provider: {
+          params: { preload: false },
+          localService: { command: "/usr/bin/lms" },
+        },
+      }),
+      provider: "lmstudio",
+      model: EMBEDDING_MODEL,
+      fallback: "none",
+      acquireLocalService,
+    });
+
+    await expect(
+      provider.embed("hello", {
+        inputType: "query",
+        [MEMORY_SEARCH_DEADLINE_CONTROL]: control,
+      }),
+    ).resolves.toEqual([1, 0]);
+
+    expect(typeof seenTargets[0]?.onReadinessWait).toBe("function");
+    expect(reports).toEqual(["pause", "resume"]);
+  });
 
   it("keeps each query-batch service lease until its request settles", async () => {
     const firstRelease = vi.fn();

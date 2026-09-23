@@ -1,4 +1,8 @@
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  MEMORY_SEARCH_DEADLINE_CONTROL,
+  createMemorySearchDeadlineControl,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 // Ollama tests cover embedding provider plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -607,6 +611,45 @@ describe("ollama embedding provider", () => {
       undefined,
     );
     expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("reports managed local-service readiness waits to the search deadline owner", async () => {
+    const release = vi.fn();
+    // Capture the target the provider hands the acquire hook and drive the callback the
+    // same way the managed-service owner does, so the observed pauses are real reports.
+    const reports: string[] = [];
+    const control = createMemorySearchDeadlineControl();
+    control.subscribe((action) => reports.push(action));
+    const seenTargets: Array<Record<string, unknown>> = [];
+    const acquireLocalService = vi.fn(async (target: Record<string, unknown>) => {
+      seenTargets.push(target);
+      (target.onReadinessWait as ((w: boolean) => void) | undefined)?.(true);
+      (target.onReadinessWait as ((w: boolean) => void) | undefined)?.(false);
+      return { release };
+    });
+
+    const { provider } = await createEmbeddingProvider({
+      config: createProviderConfig(
+        {
+          baseUrl: "http://spark.local:11434/v1",
+          localService: { command: process.execPath },
+          models: [],
+        },
+        "ollama-spark",
+      ),
+      provider: "ollama-spark",
+      model: "ollama-spark/qwen3-embedding:4b",
+      acquireLocalService,
+    });
+    mockEmbeddingFetch([1, 0]);
+
+    await provider.embed("hello", {
+      inputType: "query",
+      [MEMORY_SEARCH_DEADLINE_CONTROL]: control,
+    });
+
+    expect(typeof seenTargets[0]?.onReadinessWait).toBe("function");
+    expect(reports).toEqual(["pause", "resume"]);
   });
 
   it("does not lease a configured local service for a remote endpoint override", async () => {
