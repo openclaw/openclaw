@@ -54,7 +54,7 @@ import {
 } from "./prepared-model-runtime.js";
 import { retainPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
 import { AuthStorage } from "./sessions/auth-storage.js";
-import { CREDENTIAL_ONLY_PROVIDER_ID } from "./test-helpers/prepared-model-catalog-credential-only-fixture.js";
+import { CREDENTIAL_ONLY_PROVIDER_ID } from "./test-helpers/prepared-model-catalog-credential-only.test-support.js";
 import { withHeldCatalogOAuthRefresh } from "./test-helpers/prepared-model-catalog-oauth-fixture.js";
 import { createStaticCatalogSnapshotFixture } from "./test-helpers/prepared-model-catalog-static-fixture.js";
 import {

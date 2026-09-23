@@ -4,7 +4,7 @@ import { preparePublishedModelCatalogOwnerIdentity } from "../prepared-model-cat
 import { createCatalogFixture } from "../prepared-model-catalog-worker.test-support.js";
 import { startSerializedSnapshotBuildBatch } from "../prepared-model-runtime.build.js";
 import { retainPreparedPluginGeneration } from "../prepared-model-runtime.plugin-lifetime.js";
-import { addCredentialOnlyProviderFixture } from "./prepared-model-catalog-credential-only-fixture.js";
+import { addCredentialOnlyProviderFixture } from "./prepared-model-catalog-credential-only.test-support.js";
 import { markPluginMetadataSnapshotProvided } from "./prepared-model-catalog-worker-fixture.js";
 
 export function createStaticCatalogSnapshotFixture(params: {
