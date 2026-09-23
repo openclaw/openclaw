@@ -76,6 +76,7 @@ export function evaluateWorkflowExpression(
     ref?: string;
     resolveTargetOutputs?: Record<string, string>;
     releaseGate?: boolean;
+    releasePriorityRun?: string;
     releaseScope?: string;
     repository: string;
     runCheck?: boolean;
@@ -203,6 +204,7 @@ export function evaluateWorkflowExpression(
     vars: {
       MAINTAINER_COMMAND_REACTIONS: context.maintainerCommands ?? "",
       OPENCLAW_CI_RUNNER_BACKEND: context.runnerBackend ?? "",
+      OPENCLAW_RELEASE_PRIORITY_RUN: context.releasePriorityRun ?? "",
     },
   });
 }

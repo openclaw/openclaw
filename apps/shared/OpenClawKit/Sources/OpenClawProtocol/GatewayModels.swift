@@ -95,6 +95,7 @@ public enum AuthProbeStatus: String, Codable, Sendable {
 }
 
 public enum ChatRunStartupPhase: String, Codable, Sendable {
+    case waitingForState = "waiting_for_state"
     case preparingWorkspace = "preparing_workspace"
     case namingWorktree = "naming_worktree"
     case creatingWorktree = "creating_worktree"

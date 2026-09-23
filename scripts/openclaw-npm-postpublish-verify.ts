@@ -424,6 +424,7 @@ export async function verifyNpmProvenanceAttestation(params: {
 
 export function collectInstalledPackageErrors(params: {
   additionalCompanionManifestRoots?: string[];
+  allowLegacyGeneratedOwnership?: boolean;
   expectedVersion: string;
   installedVersion: string;
   packageRoot: string;
@@ -451,6 +452,7 @@ export function collectInstalledPackageErrors(params: {
     ...collectInstalledRootDependencyManifestErrors(
       params.packageRoot,
       params.additionalCompanionManifestRoots,
+      params.allowLegacyGeneratedOwnership,
     ),
   );
 
@@ -658,6 +660,7 @@ function extractJavaScriptImportSpecifiers(source: string): ParsedImportSpecifie
 export function collectInstalledRootDependencyManifestErrors(
   packageRoot: string,
   additionalCompanionManifestRoots: string[] = [],
+  allowLegacyGeneratedOwnership = false,
 ): string[] {
   const packageJsonPath = join(packageRoot, "package.json");
   if (!existsSync(packageJsonPath)) {
@@ -700,6 +703,7 @@ export function collectInstalledRootDependencyManifestErrors(
     ];
   }
   const importsByFile = new Map<string, string[]>();
+  const sourceByFile = new Map<string, string>();
   const extensionsByFile = new Map<string, string[]>();
 
   for (const filePath of distFiles.files) {
@@ -714,6 +718,7 @@ export function collectInstalledRootDependencyManifestErrors(
       ];
     }
     importsByFile.set(file.relativePath, parsedSpecifiers.imports);
+    sourceByFile.set(file.relativePath, file.source);
     const owners = runtimeDependencyOwnership?.chunks[file.relativePath];
     if (owners) {
       if (owners.sha256 !== createHash("sha256").update(file.source).digest("hex")) {
@@ -772,7 +777,16 @@ export function collectInstalledRootDependencyManifestErrors(
                 manifestRoots: companionManifestRoots,
                 manifestCache: companionManifestCache,
               }),
-          ))
+          )) ||
+        (allowLegacyGeneratedOwnership &&
+          runtimeDependencyOwnership === null &&
+          isLegacyGeneratedExtensionOwnedRuntimeImport({
+            dependencyName,
+            manifestCache: companionManifestCache,
+            manifestRoots: companionManifestRoots,
+            ownersByDependency: bundledExtensionRuntimeDependencyOwners,
+            source: sourceByFile.get(file) ?? "",
+          }))
       ) {
         continue;
       }
@@ -788,6 +802,54 @@ export function collectInstalledRootDependencyManifestErrors(
       return `installed package root is missing declared runtime dependency '${dependencyName}' for dist importers: ${importerList.join(", ")}. Add it to package.json dependencies/optionalDependencies.`;
     })
     .toSorted((left, right) => left.localeCompare(right));
+}
+
+function isLegacyGeneratedExtensionOwnedRuntimeImport(params: {
+  dependencyName: string;
+  manifestCache: Map<string, InstalledPackageJson | null>;
+  manifestRoots: string[];
+  ownersByDependency: Map<string, Set<string>>;
+  source: string;
+}): boolean {
+  const dependencySpecifiers = collectPackageRootImports(params.source).filter(
+    (specifier) => packageNameFromSpecifier(specifier) === params.dependencyName,
+  );
+  const regionPattern =
+    /\/\/#region extensions\/([a-z0-9][a-z0-9-]*)\/[^\n]*\n([\s\S]*?)\/\/#endregion/gu;
+  const sourceOutsideRegions = params.source.replace(regionPattern, "");
+  if (
+    collectPackageRootImports(sourceOutsideRegions).some(
+      (specifier) => packageNameFromSpecifier(specifier) === params.dependencyName,
+    )
+  ) {
+    return false;
+  }
+  const owners = new Set<string>();
+  for (const match of params.source.matchAll(regionPattern)) {
+    const extensionId = match[1]!;
+    const region = match[2]!;
+    const ownsImport = dependencySpecifiers.some(
+      (specifier) =>
+        region.includes(JSON.stringify(specifier)) || region.includes(`'${specifier}'`),
+    );
+    if (!ownsImport) {
+      continue;
+    }
+    owners.add(extensionId);
+  }
+  return (
+    owners.size > 0 &&
+    [...owners].every(
+      (extensionId) =>
+        params.ownersByDependency.get(params.dependencyName)?.has(extensionId) ||
+        isInstalledCompanionExtensionOwnedRuntimeImport({
+          dependencyName: params.dependencyName,
+          extensionId,
+          manifestCache: params.manifestCache,
+          manifestRoots: params.manifestRoots,
+        }),
+    )
+  );
 }
 
 function isInstalledCompanionExtensionOwnedRuntimeImport(params: {
