@@ -417,7 +417,7 @@ export function parentReference(
   return selectSessionRowParent(cfg, key, fallbackAgentId, sourcePath, referenced).reference;
 }
 
-export function selectSessionRowParent(
+function selectSessionRowParent(
   cfg: Inputs["cfg"],
   key: string,
   fallbackAgentId: string,
