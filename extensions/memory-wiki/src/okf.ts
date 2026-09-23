@@ -631,6 +631,7 @@ export async function importMemoryWikiOkfBundle(params: {
     });
 
     const frontmatter = {
+      type: concept.type,
       pageType: "concept",
       id: page.pageId,
       title: concept.title,
