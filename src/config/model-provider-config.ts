@@ -116,7 +116,7 @@ function hasNonEmptyRecord(value: unknown): boolean {
   return record !== undefined && Object.keys(record).length > 0;
 }
 
-function hasRequestCompatOverrides(compat: ModelDefinitionConfig["compat"]): boolean {
+export function hasRequestCompatOverrides(compat: ModelDefinitionConfig["compat"]): boolean {
   return Object.entries(compat ?? {}).some(([key, value]) => {
     // Native runtimes consume affirmative reasoning capabilities as turn controls.
     // Disabling reasoning, custom labels, and payload shaping still require the authored adapter.

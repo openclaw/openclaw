@@ -19,6 +19,10 @@ import {
   replacePreparedModelCatalogAuth,
 } from "./prepared-model-runtime.catalog-auth.js";
 import type { PreparedModelRuntimeCatalogAccessParams } from "./prepared-model-runtime.catalog-contract.js";
+import {
+  resolvePreparedModelCatalogForegroundWaitMs,
+  waitForPreparedModelCatalogForeground,
+} from "./prepared-model-runtime.catalog-foreground-wait.js";
 import { createPreparedModelCatalogProjection } from "./prepared-model-runtime.catalog-projection.js";
 import {
   preparedProviderCatalogCredentials,
@@ -55,7 +59,6 @@ import type {
 
 export const MAX_CONCURRENT_FULL_MODEL_CATALOG_BUILDS = 1;
 const limitFullModelCatalogBuild = pLimit(MAX_CONCURRENT_FULL_MODEL_CATALOG_BUILDS);
-const MODEL_CATALOG_FOREGROUND_WAIT_MS = 5_000;
 
 export function createFullModelCatalogAccess(
   params: PreparedModelRuntimeCatalogAccessParams,
@@ -658,21 +661,11 @@ export function createFullModelCatalogAccess(
       if (options?.refresh && params.inventoryOwner.provenance === "standalone") {
         return await acquireCatalog(options);
       }
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      try {
-        return await Promise.race([
-          acquireCatalog(options),
-          new Promise<ModelCatalogSnapshot>((resolve) => {
-            timer = setTimeout(
-              () => resolve(published.catalog ?? staticCatalog),
-              MODEL_CATALOG_FOREGROUND_WAIT_MS,
-            );
-            timer.unref?.();
-          }),
-        ]);
-      } finally {
-        clearTimeout(timer);
-      }
+      return await waitForPreparedModelCatalogForeground({
+        acquisition: acquireCatalog(options),
+        waitMs: resolvePreparedModelCatalogForegroundWaitMs(options?.foregroundWaitMs),
+        fallback: () => published.catalog ?? staticCatalog,
+      });
     },
   };
 }
