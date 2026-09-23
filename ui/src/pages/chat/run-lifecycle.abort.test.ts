@@ -35,7 +35,8 @@ describe("hasAbortableSessionRun", () => {
   });
 });
 
-type AbortHost = Parameters<typeof replayPendingChatAbort>[0];
+type AbortHost = Parameters<typeof replayPendingChatAbort>[0] &
+  Parameters<typeof reconcileChatRunLifecycle>[0];
 
 function makeAbortHost(over: Partial<AbortHost> = {}): AbortHost {
   return {

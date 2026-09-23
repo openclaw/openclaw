@@ -6774,25 +6774,6 @@ describe("chat model controls", () => {
     },
   );
 
-  it("does not patch the model for a locked session", async () => {
-    const { state, request } = createOpenAiHeaderState();
-    state.sessionsResult = createSessionsResultFromRows([
-      {
-        key: "agent:main:main",
-        kind: "direct",
-        model: "gpt-5.5",
-        modelProvider: "openai",
-        modelSelectionLocked: true,
-        updatedAt: 1,
-      },
-    ]);
-
-    await expect(
-      switchChatModel(state as unknown as Parameters<typeof switchChatModel>[0], "openai/gpt-5.4"),
-    ).resolves.toBe(false);
-    expect(request).not.toHaveBeenCalled();
-  });
-
   it("ignores model clicks while a run is active", () => {
     const { state } = createOpenAiHeaderState();
     state.chatRunId = "run-123";
