@@ -220,6 +220,60 @@ async function handleProviderInventoryListResult(params: {
 }
 
 describe("handleToolExecutionEnd media emission", () => {
+  it("commits internal-ui source replies from successful message sends", async () => {
+    const ctx = createMockContext();
+    ctx.params.sourceReplyDeliveryMode = "message_tool_only";
+    ctx.consumeToolSendReceipt = () => ({
+      details: {
+        messageDelivery: {
+          status: "settled",
+          partialDelivery: false,
+          createdThreadIds: [],
+        },
+      },
+    });
+
+    const startEvt = {
+      type: "tool_execution_start" as const,
+      toolName: "message",
+      toolCallId: "tool-internal-source-reply",
+      args: { action: "send", message: "visible in tui" },
+    };
+    await handleToolExecutionStart(ctx, startEvt);
+
+    const endEvt = {
+      type: "tool_execution_end" as const,
+      toolName: "message",
+      toolCallId: "tool-internal-source-reply",
+      isError: false,
+      result: {
+        details: {
+          status: "ok",
+          deliveryStatus: "sent",
+          sourceReplySink: "internal-ui",
+          idempotencyKey: "stable-source-reply",
+          sourceReply: {
+            text: "visible in tui",
+            mediaUrls: ["file:///tmp/reply.png"],
+            channelData: { source: "tui" },
+          },
+        },
+      },
+    };
+    await handleToolExecutionEnd(ctx, endEvt);
+
+    expect(ctx.state.messagingToolSourceReplyPayloads).toEqual([
+      {
+        text: "visible in tui",
+        mediaUrl: "file:///tmp/reply.png",
+        mediaUrls: ["file:///tmp/reply.png"],
+        channelData: { source: "tui" },
+        idempotencyKey: "stable-source-reply",
+        sourceReplyFinal: true,
+      },
+    ]);
+  });
+
   it("does not warn for read tool when path is provided via file_path alias", async () => {
     const ctx = createMockContext();
 
