@@ -24,7 +24,7 @@ import type { ExecReviewerConfig } from "./exec-auto-reviewer.js";
 import type { PreparedGitHubToolEnvironment } from "./github-tool-identity.js";
 
 /** Failure categories used to explain exec process exits. */
-export type ExecProcessFailureKind =
+type ExecProcessFailureKind =
   | "shell-command-not-found"
   | "shell-not-executable"
   | "overall-timeout"
