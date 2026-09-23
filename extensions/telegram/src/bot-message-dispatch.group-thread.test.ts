@@ -1,3 +1,6 @@
+import { realpathSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { resolveGroupThreadMentionFacts } from "openclaw/plugin-sdk/channel-inbound";
 import { createStructuredOutboundPayloadPlan } from "openclaw/plugin-sdk/channel-outbound";
 import {
@@ -19,6 +22,9 @@ import {
   type TelegramBotDeps,
 } from "./bot-message-dispatch.test-harness.js";
 
+const workspaceRoot = path.join(realpathSync(tmpdir()), "telegram-group-thread");
+const participantWorkspace = (agentId: string) => path.join(workspaceRoot, `workspace-${agentId}`);
+
 describeTelegramDispatch("Telegram group-thread delivery identity", () => {
   it.each(
     [
@@ -36,12 +42,12 @@ describeTelegramDispatch("Telegram group-thread delivery identity", () => {
         agents: {
           ownership: "explicit",
           entries: {
-            root: { workspace: "/tmp/.openclaw/workspace-root" },
+            root: { workspace: participantWorkspace("root") },
             alice: {
-              workspace: "/tmp/.openclaw/workspace-alice",
+              workspace: participantWorkspace("alice"),
               identity: { name: "Alice [reviewer]" },
             },
-            bob: { workspace: "/tmp/.openclaw/workspace-bob", identity: { name: "Bob" } },
+            bob: { workspace: participantWorkspace("bob"), identity: { name: "Bob" } },
           },
         },
         session: { dmScope: "per-channel-peer" },
@@ -137,7 +143,7 @@ describeTelegramDispatch("Telegram group-thread delivery identity", () => {
             for (const sequence of [1, 2]) {
               const payload = {
                 text: `${source === "prepared" ? "[[reply_to:999]] [[audio_as_voice]] " : ""}Attachment ${sequence} from ${agentId}`,
-                mediaUrl: `/tmp/.openclaw/workspace-${agentId}/attachment.txt`,
+                mediaUrl: path.join(participantWorkspace(agentId), "attachment.txt"),
               };
               const [plan] = createStructuredOutboundPayloadPlan([payload]);
               const accepted =
@@ -169,7 +175,7 @@ describeTelegramDispatch("Telegram group-thread delivery identity", () => {
           expect(deliveredPayloads).toContainEqual(
             expect.objectContaining({
               text: `${label}${literalTags}Attachment ${sequence} from ${agentId}`,
-              mediaUrl: `/tmp/.openclaw/workspace-${agentId}/attachment.txt`,
+              mediaUrl: path.join(participantWorkspace(agentId), "attachment.txt"),
             }),
           );
         }
@@ -190,7 +196,7 @@ describeTelegramDispatch("Telegram group-thread delivery identity", () => {
                 SessionKey: `agent:${agentId}:telegram:direct:123`,
               }),
               payload: expect.objectContaining({
-                mediaUrl: `/tmp/.openclaw/workspace-${agentId}/attachment.txt`,
+                mediaUrl: path.join(participantWorkspace(agentId), "attachment.txt"),
               }),
             }),
           );
@@ -214,10 +220,10 @@ describeTelegramDispatch("Telegram group-thread delivery identity", () => {
         expect(deliverReplies).toHaveBeenCalledWith(
           expect.objectContaining({
             sessionKeyForInternalHooks: `agent:${agentId}:telegram:direct:123`,
-            mediaLocalRoots: expect.arrayContaining([`/tmp/.openclaw/workspace-${agentId}`]),
+            mediaLocalRoots: expect.arrayContaining([participantWorkspace(agentId)]),
             replies: [
               expect.objectContaining({
-                mediaUrl: `/tmp/.openclaw/workspace-${agentId}/attachment.txt`,
+                mediaUrl: path.join(participantWorkspace(agentId), "attachment.txt"),
               }),
             ],
           }),

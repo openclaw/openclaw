@@ -17,6 +17,9 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { WORKSPACE_TEMPLATE_PACK_PATHS } from "../../scripts/lib/workspace-bootstrap-smoke.mts";
+import { scriptModuleEntrypoints } from "../../scripts/script-module-runtime.test-support.mts";
+import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
+import { preparedScriptWrapperEnv } from "./prepared-script-wrapper.test-support.js";
 
 const CONTROL_UI_INDEX = "dist/control-ui/index.html";
 const CODE_MODE_WORKER_PATH = "dist/agents/code-mode.worker.js";
@@ -145,6 +148,12 @@ function withPackedPackage(
 
 function checkPackedPackage(tarball: string) {
   return spawnSync(process.execPath, [CHECK_SCRIPT, tarball], {
+    env: preparedScriptWrapperEnv([
+      [
+        new URL("../../scripts/check-openclaw-package-tarball.mts", import.meta.url),
+        resolveRuntimeWorkerUrl(scriptModuleEntrypoints.packageTarball),
+      ],
+    ]),
     encoding: "utf8",
     timeout: 30_000,
   });

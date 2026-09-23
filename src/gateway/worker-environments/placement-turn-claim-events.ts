@@ -1,5 +1,8 @@
 import type { WorkerLiveEventParams } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
-import type { OperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
+import type {
+  AdmittedRunOperatorAuthority,
+  OperationalRunInstanceRef,
+} from "../../agents/admitted-run-context.js";
 import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
 import {
@@ -47,6 +50,7 @@ export type WorkerTurnExecutionIdentity = Readonly<{
   delegatedAuthority: AgentRunDelegatedAuthority;
   executionIdentityToken?: ExecutionIdentityAdmissionToken;
   operationalRunInstance: OperationalRunInstanceRef;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
   receiptAuthority: () => void;
   sessionKey: string;
   turnClaim: WorkerSessionTurnClaim;
@@ -107,7 +111,7 @@ function claimKey(claim: WorkerSessionTurnClaim): string {
   ]);
 }
 
-/** Bind every worker to its live run; diagnostic provenance remains optional. */
+/** Bind every worker to its live run and original operator source when one exists. */
 export function bindWorkerTurnOwner(
   store: WorkerTurnExecutionIdentityStore,
   claim: WorkerSessionTurnClaim,
@@ -116,6 +120,7 @@ export function bindWorkerTurnOwner(
   source: { agentId: string; sessionKey: string },
   assertRunActive: () => void,
   prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage,
+  operatorAuthority?: AdmittedRunOperatorAuthority,
 ): (credentialHash: string) => WorkerTurnFinishingOutcome | undefined {
   const scope = captureGatewayRootWorkAdmissionContinuationScope();
   const path = store[WORKER_TURN_EXECUTION_IDENTITY_PATH];
@@ -127,6 +132,7 @@ export function bindWorkerTurnOwner(
   const owners = workerTurnOwners.get(path) ?? new Map();
   const assertActive = () => {
     assertRunActive();
+    operatorAuthority?.assertCurrent();
     if (
       owners.get(claim.sessionId) !== owner ||
       workerTurnOwners.get(path) !== owners ||
@@ -141,6 +147,7 @@ export function bindWorkerTurnOwner(
     delegatedAuthority,
     ...(token ? { executionIdentityToken: token } : {}),
     operationalRunInstance,
+    ...(operatorAuthority ? { operatorAuthority } : {}),
     receiptAuthority: assertActive,
     sessionKey: source.sessionKey,
     turnClaim: claim,

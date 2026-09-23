@@ -321,15 +321,14 @@ describe("memory index", () => {
     const manager = await getPersistentManager(
       createCfg({
         minScore: 0,
+        vectorEnabled: false,
       }),
     );
     await manager.sync({ reason: "test" });
 
     const fields = manager as unknown as {
       db: DatabaseSync;
-      ensureVectorReady: (dimensions?: number) => Promise<boolean>;
     };
-    fields.ensureVectorReady = async () => false;
     const insertChunk = fields.db.prepare(
       "INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     );
@@ -368,11 +367,15 @@ describe("memory index", () => {
     const healthyResults = await manager.search("alpha");
     expect(healthyResults.some((result) => result.path === "memory/2026-01-12.md")).toBe(true);
 
-    fields.ensureVectorReady = async () => {
-      throw new Error("vector store unavailable");
-    };
-    const degradedResults = await manager.search("alpha");
-    expect(degradedResults.some((result) => result.path === "memory/2026-01-12.md")).toBe(true);
+    const unavailable = vi
+      .spyOn(memoryCpuWorkerRuntime, "runMemoryVectorFallback")
+      .mockRejectedValueOnce(new Error("vector store unavailable"));
+    try {
+      const degradedResults = await manager.search("alpha");
+      expect(degradedResults.some((result) => result.path === "memory/2026-01-12.md")).toBe(true);
+    } finally {
+      unavailable.mockRestore();
+    }
   });
 
   it("supplements thin strict FTS results for conversational queries", async () => {

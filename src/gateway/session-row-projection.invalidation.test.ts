@@ -1,26 +1,36 @@
-import { setImmediate as nextTurn } from "node:timers/promises";
+import { renameSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import * as agentIdentity from "../agents/identity.js";
 import * as catalogLookup from "../agents/model-catalog-lookup.js";
 import {
   assignSessionOwner,
+  deleteSessionEntryLifecycle,
   loadSessionEntry,
-  recordSessionParticipant,
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
 import {
   readCommittedSessionEntryCache,
   readSessionEntryCache,
 } from "../config/sessions/session-accessor.sqlite-entry-cache.js";
+import { recordSessionParticipant } from "../config/sessions/session-accessor.sqlite-participants.native.js";
 import {
   createLifecycleArtifactReclamationPlan,
   createSessionMaintenanceFinalizationOperation,
   runSqliteSessionReclamation,
 } from "../config/sessions/session-accessor.sqlite-reclamation.js";
+import * as transcriptWorker from "../config/sessions/session-transcript-worker-runtime.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import * as databaseIdentity from "../state/openclaw-agent-db-identity.js";
+import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db-lifecycle.js";
+import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
+import {
+  openOpenClawAgentDatabase,
+  resolveOpenClawAgentSqlitePath,
+} from "../state/openclaw-agent-db.js";
 import { ensureProfileForEmail, linkEmail, setDisplayName } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as projectionWork from "./session-projection-work.js";
@@ -29,6 +39,223 @@ import { createSessionRowProjection } from "./session-row-projection.js";
 import { listProjectedSessions } from "./session-utils-list.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+it("reuses descendants after parent progress while keeping inherited models current", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = {
+      agents: {
+        list: [{ id: "main", default: true }],
+        defaults: { model: "unit-test/default" },
+      },
+    };
+    const parentKey = "agent:main:discord:channel:parent";
+    const children = ["agent:main:child", `${parentKey}:thread:child`];
+    const siblingKey = "agent:main:sibling";
+    const scope = { agentId: "main", sessionKey: parentKey };
+    const parent: SessionEntry = {
+      sessionId: "parent",
+      updatedAt: 1,
+      providerOverride: "unit-test",
+      modelOverride: "selected",
+      modelOverrideSource: "user",
+    };
+    replaceSessionEntrySync(scope, { ...parent });
+    for (const [index, sessionKey] of [...children, siblingKey].entries()) {
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey },
+        {
+          sessionId: `child-${index}`,
+          updatedAt: index + 2,
+          ...(sessionKey === children[0] ? { parentSessionKey: parentKey } : {}),
+        },
+      );
+    }
+    const release = projectionWork.retainSessionListForegroundWork();
+    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    const list = () => listProjectedSessions({ projection, opts: {} });
+    const sequence = (key: string) =>
+      projection.capture({ agentId: "main", key })?.materializedSequence;
+    try {
+      await list();
+      const original = children.map(sequence);
+      const siblingSequence = sequence(siblingKey);
+      for (const change of [undefined, { label: "Updated parent", updatedAt: 10 }]) {
+        if (change) {
+          Object.assign(parent, change);
+          replaceSessionEntrySync(scope, { ...parent });
+        } else {
+          sessionChanges.emit(scope);
+        }
+        await list();
+        expect(children.map(sequence)).toEqual(original);
+      }
+      const cases: Array<{ change: Partial<SessionEntry>; provider: string; model: string }> = [
+        { change: { providerOverride: "other-test" }, provider: "other-test", model: "selected" },
+        { change: { modelOverride: "changed" }, provider: "other-test", model: "changed" },
+        { change: { modelOverrideSource: "default" }, provider: "unit-test", model: "default" },
+        {
+          change: {
+            modelOverrideSource: "auto",
+            modelOverrideFallbackOriginProvider: "other-test",
+            modelOverrideFallbackOriginModel: "changed",
+          },
+          provider: "other-test",
+          model: "changed",
+        },
+        {
+          change: { modelOverrideFallbackOriginModel: "original" },
+          provider: "unit-test",
+          model: "default",
+        },
+        {
+          change: {
+            modelOverrideFallbackOriginModel: "changed",
+            modelOverrideFallbackOriginProvider: "original-test",
+          },
+          provider: "unit-test",
+          model: "default",
+        },
+      ];
+      for (const { change, provider, model } of cases) {
+        Object.assign(parent, change);
+        replaceSessionEntrySync(scope, { ...parent });
+        const result = await list();
+        for (const key of children) {
+          expect(result.sessions.find((row) => row.key === key)).toMatchObject({
+            modelProvider: provider,
+            model,
+          });
+        }
+        expect(sequence(siblingKey)).toBe(siblingSequence);
+      }
+      parent.modelOverrideSource = "user";
+      replaceSessionEntrySync(scope, { ...parent });
+      const pinned = await list();
+      for (const key of children) {
+        expect(pinned.sessions.find((row) => row.key === key)?.model).toBe("changed");
+      }
+      await deleteSessionEntryLifecycle({
+        ...scope,
+        storePath: projection.capture({ agentId: "main", key: parentKey })!.storeTarget.storePath,
+        archiveTranscript: false,
+        target: { canonicalKey: parentKey, storeKeys: [parentKey] },
+      });
+      const deleted = await list();
+      expect(deleted.sessions.some((row) => row.key === parentKey)).toBe(false);
+      expect(deleted.sessions.filter((row) => children.includes(row.key))).toEqual(
+        expect.arrayContaining(
+          children.map((key) => expect.objectContaining({ key, model: "default" })),
+        ),
+      );
+    } finally {
+      await projection.ensureMaterialized();
+      projection.dispose();
+      release();
+    }
+  });
+});
+
+it("hydrates a same-path replacement with a reused inode and retires its previous inventory", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+    const staged = state.statePath("imports", "replacement.sqlite");
+    const cfg = {
+      agents: { list: [{ id: "main", default: true }] },
+      session: { store: storePath },
+    };
+    replaceSessionEntrySync(
+      { agentId: "main", storePath, sessionKey: "agent:main:old" },
+      { sessionId: "old", updatedAt: 1, category: "old group" },
+    );
+    replaceSessionEntrySync(
+      { agentId: "main", storePath: staged, sessionKey: "agent:main:new" },
+      { sessionId: "new", updatedAt: 2, category: "new group" },
+    );
+    await closeOpenClawAgentDatabaseByPathAsync(staged, "main");
+    const projection = await createSessionRowProjection({ cfg });
+    await projection.ensureMaterialized();
+    try {
+      const readIdentity = databaseIdentity.readOpenClawAgentDatabaseIdentity;
+      const previousIdentity = readIdentity(
+        openOpenClawAgentDatabase({ agentId: "main", path: storePath }),
+      );
+      const reusedIdentity = previousIdentity.identity;
+      if (typeof reusedIdentity !== "string") {
+        throw new Error("Expected a persistent fixture database identity");
+      }
+      expect([...projection.sessionGroupTargets().keys()]).toEqual(["old group"]);
+      await closeOpenClawAgentDatabaseByPathAsync(storePath, "main");
+      renameSync(staged, storePath);
+      registerOpenClawAgentDatabase({ agentId: "main", path: storePath });
+      const replacementIdentity = readIdentity(
+        openOpenClawAgentDatabase({ agentId: "main", path: storePath }),
+      );
+      // Coarse filesystem clocks must not determine whether the inode-reuse case is covered.
+      const replacementBirthtime =
+        replacementIdentity.birthtime === previousIdentity.birthtime
+          ? (BigInt(previousIdentity.birthtime ?? "0") + 1n).toString()
+          : replacementIdentity.birthtime;
+      const identity = vi
+        .spyOn(databaseIdentity, "readOpenClawAgentDatabaseIdentity")
+        .mockImplementation((database) => {
+          const prepared = readIdentity(database);
+          return prepared.filename === replacementIdentity.filename
+            ? { ...prepared, identity: reusedIdentity, birthtime: replacementBirthtime }
+            : prepared;
+        });
+      const readDatabases = transcriptWorker.withSessionHistoryWorkerDatabases;
+      // Both observations must describe the same simulated inode reuse.
+      const workerIdentity = vi
+        .spyOn(transcriptWorker, "withSessionHistoryWorkerDatabases")
+        .mockImplementation((targets, consume) =>
+          readDatabases(targets, (owners) =>
+            consume(
+              owners.map((owner) => ({
+                ...owner,
+                async readMembershipFacts(input) {
+                  const reply = await owner.readMembershipFacts(input);
+                  return reply.identity === replacementIdentity.identity &&
+                    reply.birthtime === replacementIdentity.birthtime
+                    ? {
+                        ...reply,
+                        identity: reusedIdentity,
+                        birthtime: replacementBirthtime,
+                      }
+                    : reply;
+                },
+              })),
+            ),
+          ),
+        );
+      try {
+        expect(projection.snapshot({ agentId: "main", key: "agent:main:new" }).row?.sessionId).toBe(
+          "new",
+        );
+        expect(projection.selectEntries().map((row) => row.key)).toEqual(["agent:main:new"]);
+        await projection.ensureMaterialized();
+        expect(projection.selectEntries().map((row) => row.key)).toEqual(["agent:main:new"]);
+        expect([...projection.sessionGroupTargets()]).toEqual([
+          ["new group", [{ sessionKey: "agent:main:new", agentId: "main" }]],
+        ]);
+        const sql = vi.spyOn(DatabaseSync.prototype, "prepare");
+        try {
+          expect(projection.snapshot({ agentId: "main", key: "agent:main:old" }).row).toBeNull();
+          expect(
+            projection.snapshot({ agentId: "main", key: "agent:main:new" }).row?.sessionId,
+          ).toBe("new");
+          expect(sql).not.toHaveBeenCalled();
+        } finally {
+          sql.mockRestore();
+        }
+      } finally {
+        workerIdentity.mockRestore();
+        identity.mockRestore();
+      }
+    } finally {
+      projection.dispose();
+    }
+  });
+});
 
 it.each(["maintenance-finalize", "lifecycle-artifacts"] as const)(
   "publishes %s removals before row listeners recreate the key",
@@ -146,12 +373,31 @@ it.each([
         );
       }
       const release = projectionWork.retainSessionListForegroundWork();
+      const drain = createDeferredCore();
+      const entryWorkRequested = createDeferredCore<never>();
+      let holdEntryWork = false;
+      const createDrain = projectionWork.createSessionProjectionDrain;
+      const drainFactory = vi
+        .spyOn(projectionWork, "createSessionProjectionDrain")
+        .mockImplementationOnce((params) => {
+          const ensure = createDrain(params);
+          return () => {
+            if (holdEntryWork && params.needsYield()) {
+              entryWorkRequested.reject(
+                new Error("Presentation-only lists requested a session-entry drain"),
+              );
+              return drain.promise;
+            }
+            return ensure();
+          };
+        });
       const projection = await createSessionRowProjection({
         cfg,
         modelCatalog: [{ provider: "unit-test", id: "model", name: "Model" }],
       });
       const opts = { limit: 20, archived: "all", search: "unit-test/model" } as const;
-      const drain = createDeferredCore();
+      let lists: Array<ReturnType<typeof listProjectedSessions>> = [];
+      let stopWorkerReadGuard = () => {};
       try {
         await listProjectedSessions({ projection, opts });
         const catalogReads = vi.spyOn(catalogLookup, "findModelCatalogEntry");
@@ -159,21 +405,36 @@ it.each([
         const warmCatalogLookups = catalogReads.mock.calls.length;
         catalogReads.mockClear();
         const reads = vi.spyOn(materialization, "readSessionRowEntry");
-        vi.spyOn(projectionWork, "yieldSessionListWork").mockReturnValue(drain.promise);
+        const readRowFacts = vi.fn(async () => {
+          throw new Error("Presentation-only lists read stored session-row facts");
+        });
+        const readDatabases = transcriptWorker.withSessionHistoryWorkerDatabases;
+        const workerReads = vi
+          .spyOn(transcriptWorker, "withSessionHistoryWorkerDatabases")
+          .mockImplementation((databases, consume) =>
+            readDatabases(databases, (owners) =>
+              consume(owners.map((owner) => ({ ...owner, readRowFacts }))),
+            ),
+          );
+        stopWorkerReadGuard = () => workerReads.mockRestore();
+        holdEntryWork = true;
         sessionChanges.emit({ all: true, scope });
-        const lists = Promise.all(
-          Array.from({ length: 8 }, () => listProjectedSessions({ projection, opts })),
-        );
-        const result = await Promise.race([lists, nextTurn().then(() => undefined)]);
-        expect(result?.map((list) => list.count)).toEqual(Array.from({ length: 8 }, () => 20));
+        lists = Array.from({ length: 8 }, () => listProjectedSessions({ projection, opts }));
+        const result = await Promise.race([Promise.all(lists), entryWorkRequested.promise]);
+        expect(result.map((list) => list.count)).toEqual(Array.from({ length: 8 }, () => 20));
         expect(reads).not.toHaveBeenCalled();
+        expect(readRowFacts).not.toHaveBeenCalled();
         // Presentation changes must not add catalog work beyond the warm request's defaults.
         expect(catalogReads.mock.calls.length).toBeLessThanOrEqual(warmCatalogLookups * 8);
         expect(projection.dirtyRowCount).toBe(0);
       } finally {
+        holdEntryWork = false;
+        stopWorkerReadGuard();
         drain.resolve();
+        await Promise.allSettled(lists);
         await projection.ensureMaterialized();
         projection.dispose();
+        drainFactory.mockRestore();
         release();
       }
     });

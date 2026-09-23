@@ -1,4 +1,7 @@
 /** Typed Stop exercises the real chat.send pipeline and collector cancellation owners. */
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import { useChatAbortRegistryFixture } from "./chat.abort-registry.test-support.js";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
@@ -37,7 +40,6 @@ import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionRowProjection } from "../session-row-projection.js";
 import { handleChatAbortRequestWithLifecycle } from "./chat-abort-handler.js";
 import { handleChatSend } from "./chat-send-handler.js";
-import { useChatAbortRegistryFixture } from "./chat.abort-registry.test-support.js";
 import {
   createActiveRun,
   createChatAbortContext,

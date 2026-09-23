@@ -108,6 +108,8 @@ describe("CLI runtime admission", () => {
         "--config",
         "test/vitest/vitest.gateway-server.config.ts",
         "--exclude",
+        "server.acp-native-model.product.test.ts",
+        "--exclude",
         "server-sidecar-retention.test.ts",
         "--exclude",
         "server.config-patch.test.ts",
@@ -554,6 +556,12 @@ describe("full-suite timing metadata", () => {
 });
 
 describe("cache lease completion", () => {
+  beforeEach(() => {
+    // The enclosing CI test worker owns its PATH; these fixtures exercise a new scheduler.
+    vi.stubEnv("OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT", "");
+    vi.stubEnv("OPENCLAW_VITEST_FS_MODULE_CACHE_PATH", "");
+  });
+
   it.each([
     { platform: "linux", phase: "preflight" },
     { platform: "linux", phase: "retry" },
@@ -619,7 +627,7 @@ describe("cache lease completion", () => {
     async ({ platform, concurrency }) => {
       vi.spyOn(process, "platform", "get").mockReturnValue(platform);
       const cacheRoot = tempDirs.make("cache-policy-");
-      vi.stubEnv("OPENCLAW_VITEST_FS_MODULE_CACHE_PATH", cacheRoot);
+      vi.stubEnv("OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT", cacheRoot);
       vi.stubEnv("OPENCLAW_TEST_PROJECTS_PARALLEL", String(concurrency));
       vi.stubEnv("OPENCLAW_VITEST_NO_OUTPUT_RETRY", "1");
       const planner = await import("../../scripts/test-projects.test-support.mts");
@@ -687,12 +695,11 @@ describe("cache lease completion", () => {
       try {
         await withTestTimeout(started.promise, 5_000, "preflight and peer admission");
         expect(new Set(paths).size).toBe(concurrency);
-        if (concurrency === 2) {
-          for (const cache of paths) {
-            expect(path.relative(cacheRoot, cache).startsWith(`slots${path.sep}`)).toBe(
-              platform !== "win32",
-            );
-          }
+        for (const cache of paths) {
+          const relative = path.relative(cacheRoot, cache);
+          expect(relative).not.toBe("");
+          expect(path.isAbsolute(relative)).toBe(false);
+          expect(relative.split(path.sep)).not.toContain("..");
         }
         firstPreflight.resolve(joined);
         await withTestTimeout(retryStarted.promise, 5_000, "retry preflight admission");

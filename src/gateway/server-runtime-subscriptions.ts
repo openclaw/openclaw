@@ -28,7 +28,10 @@ import {
   onGatewaySuspendAdmissionChange,
   runWithRetainedGatewayRootWork,
 } from "../process/gateway-work-admission.js";
-import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
+import {
+  onSessionIdentityMutation,
+  onSessionLifecycleEvent,
+} from "../sessions/session-lifecycle-events.js";
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { createLazyPromise, createLazyPromiseLoader } from "../shared/lazy-runtime.js";
 import { onUserProfilesChanged } from "../state/user-profile-events.js";
@@ -42,6 +45,7 @@ import {
   removeChatAbortControllerEntry,
   type RestartRecoveryCandidate,
 } from "./chat-abort.js";
+import { bumpGatewayAccessRevision } from "./gateway-access-revision.js";
 import type { GatewayBroadcastFn } from "./server-broadcast-types.js";
 import type {
   ChatRunState,
@@ -665,6 +669,10 @@ export function startGatewayEventSubscriptions(params: {
     });
   });
 
+  // Committed resets/rotations can change access after the originating run is gone.
+  // Invalidate synchronously before any yielded reader can accept its old access snapshot.
+  // Each runtime owns its callback so late disposal cannot remove a replacement's listener.
+  const unsubscribeSessionIdentity = onSessionIdentityMutation(() => bumpGatewayAccessRevision());
   const unsubscribeProfileChanges = onUserProfilesChanged(() => {
     params.refreshConnectedUserProfiles();
     params.broadcastToConnIds(
@@ -697,6 +705,7 @@ export function startGatewayEventSubscriptions(params: {
     params.broadcast("gateway.suspension", { phase });
   });
   const lifecycleUnsub = () => {
+    unsubscribeSessionIdentity();
     unsubscribeSuspension();
     unsubscribeProfileChanges();
     unsubscribeLifecycle();

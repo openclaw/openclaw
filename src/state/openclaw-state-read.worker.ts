@@ -1,4 +1,5 @@
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
+import { selectAcpSessionRowForRead } from "../acp/runtime/session-meta-keys.js";
 import {
   countMcpOAuthPrincipalsInDatabase,
   listMcpOAuthStoreKeysInDatabase,
@@ -14,6 +15,7 @@ import {
 } from "../agents/sandbox/registry.kernel.js";
 import {
   loadSubagentRunsByRunIdsFromSqlite,
+  loadSubagentRunsForChildSessionFromSqlite,
   loadSubagentRunsForSessionFromSqlite,
   loadSubagentSessionListRunsFromSqlite,
 } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
@@ -31,6 +33,8 @@ import {
   readRepositoryGitHubPublicationInDatabase,
 } from "../gateway/github-repository-publication-store.js";
 import { listTerminalOperatorApprovalsInDatabase } from "../gateway/operator-approval-store.kernel.js";
+import { readSessionGroupCatalogSnapshot } from "../gateway/session-group-catalog.kernel.js";
+import { readSessionGroupMembership } from "../gateway/session-group-membership.read.js";
 import { readWorkerSessionPlacementProjectionInDatabase } from "../gateway/worker-environments/placement-read-projection.js";
 import { readWorkerPlacementChangeSnapshotInDatabase } from "../gateway/worker-environments/placement-row-codec.js";
 import {
@@ -58,6 +62,10 @@ import {
   selectSkillLibraryRevisionMetadataBatch,
   selectSkillLibraryRevisionManifestsBatch,
 } from "../skills/library/selection-read.kernel.js";
+import {
+  readTaskRegistryMutationSnapshotInDatabase,
+  readTaskRegistrySnapshot,
+} from "../tasks/task-registry.store.kernel.js";
 import { readConfigMachineStateRowInDatabase } from "./config-machine-state.js";
 import { readGitHubPublicationSessionLifecycle } from "./github-publication-session-lifecycles.js";
 import { readOnboardingRecommendationsInDatabase } from "./onboarding-recommendations.kernel.js";
@@ -172,6 +180,16 @@ serveOwnedWorkerTasks(
             return withOpenClawStateReadOnlyLocation(
               ({ db }) => {
                 sourceAdmitted = true;
+                if (command.type === "acpSessions.metadata") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    rows: command.entries.map(
+                      (entry) => selectAcpSessionRowForRead(db, entry) ?? null,
+                    ),
+                  };
+                }
                 if (command.type === "subagents.runs") {
                   const rows =
                     command.scope.kind === "session"
@@ -224,6 +242,22 @@ serveOwnedWorkerTasks(
                     value: countMcpOAuthPrincipalsInDatabase(db, command.input),
                   };
                 }
+                if (command.type === "sessionGroups.snapshot") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted: true,
+                    snapshot: readSessionGroupCatalogSnapshot(db),
+                  };
+                }
+                if (command.type === "sessionGroups.members") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted: true,
+                    snapshot: readSessionGroupMembership(command.cfg, input.context.environment),
+                  };
+                }
                 if (command.type === "conversationBindings.inspect") {
                   return {
                     ok: true,
@@ -250,6 +284,27 @@ serveOwnedWorkerTasks(
                   command.type === "devicePairing.bootstrapContext"
                 ) {
                   return executeDevicePairingRead(db, input.databasePath, command);
+                }
+                if (command.type === "tasks.mutationSnapshot") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    snapshot:
+                      command.input === undefined
+                        ? readTaskRegistrySnapshot({ db, path: input.databasePath })
+                        : readTaskRegistryMutationSnapshotInDatabase(db, command.input),
+                  };
+                }
+                if (command.type === "subagents.forChildSession") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    runs: loadSubagentRunsForChildSessionFromSqlite(command.childSessionKey, {
+                      db,
+                    }),
+                  };
                 }
                 if (command.type === "pluginBlob.lookup") {
                   return {

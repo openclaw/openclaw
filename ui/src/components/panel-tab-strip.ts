@@ -260,15 +260,20 @@ export function renderPanelTabStrip<T extends PanelTabStripTab>(params: {
 }) {
   const controlsFor = (tab: T) =>
     typeof params.ariaControls === "string" ? params.ariaControls : params.ariaControls(tab);
+  const newControlId = params.tabs[0] ? `${params.tabs[0].domId}-new` : undefined;
   const newButton = (slotted: boolean) =>
     params.newControl === nothing
       ? nothing
       : params.newControl
-        ? html`<span slot=${slotted ? "nav" : nothing} class="tabstrip-new-control"
+        ? html`<span
+            id=${newControlId ?? nothing}
+            slot=${slotted ? "nav" : nothing}
+            class="tabstrip-new-control"
             >${params.newControl}</span
           >`
         : html`
             <button
+              id=${newControlId ?? nothing}
               slot=${slotted ? "nav" : nothing}
               class="rail-header__action tabstrip-new"
               type="button"
@@ -462,6 +467,7 @@ export function renderPanelTabStrip<T extends PanelTabStripTab>(params: {
               }
             </wa-tab>
             <button
+              id=${`${tab.domId}-close`}
               slot="nav"
               class="rail-header__action tabstrip-tab__close"
               type="button"
@@ -525,6 +531,15 @@ export function renderPanelTabStrip<T extends PanelTabStripTab>(params: {
       )}
       ${newButton(true)}
     </wa-tab-group>
+    <!-- WA's nav slot owns visual layout; action buttons belong beside the tablist in the accessibility tree. -->
+    <span
+      role="group"
+      style="display: contents"
+      aria-owns=${[
+        ...params.tabs.map((tab) => `${tab.domId}-close`),
+        ...(params.newControl === nothing ? [] : [newControlId]),
+      ].join(" ")}
+    ></span>
   `;
 }
 

@@ -4,6 +4,7 @@ import { performance } from "node:perf_hooks";
 import { isDeepStrictEqual } from "node:util";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../../infra/sqlite-handle-lifecycle.js";
+import { sqliteReaderDatabasePathKey } from "../../infra/sqlite-reader-lifecycle.js";
 import {
   publishSqliteWalCheckpointObservation,
   type SqliteWalCheckpointSnapshot,
@@ -99,13 +100,22 @@ export type SqliteReclamationWorkerMessage =
   | ({ type: "closed" } & WorkerCleanup);
 
 const log = createSubsystemLogger("session-sqlite");
-type ReclamationWorkerSlot = { worker?: SqliteReclamationWorker; execution?: CanonicalWorkerPool };
-const retained = resolveGlobalSingleton<ReclamationWorkerSlot>(
-  Symbol.for("openclaw.sessionReclamationWorker"),
-  () => ({}),
+type ReclamationWorkerSlot = {
+  worker?: SqliteReclamationWorker;
+  execution?: CanonicalWorkerPool;
+  retain?: (worker: SqliteReclamationWorker) => void;
+  retire?: (worker: SqliteReclamationWorker) => void;
+};
+const retained = resolveGlobalSingleton(
+  Symbol.for("openclaw.sessionReclamationWorkers"),
+  () => new Map<string, SqliteReclamationWorker>(),
 );
 
-channel("openclaw.memory.critical").subscribe(() => retained.worker?.retireIfIdle());
+channel("openclaw.memory.critical").subscribe(() => {
+  for (const worker of retained.values()) {
+    worker.retireIfIdle();
+  }
+});
 
 /** The global archive FIFO bounds ordinary reclamation's whole-buffer heaps. */
 export function withSqliteReclamationWorker<T>(
@@ -115,10 +125,24 @@ export function withSqliteReclamationWorker<T>(
   assertRequestCurrent: () => void,
   signal?: AbortSignal,
 ): Promise<T> {
-  return runExclusiveSqliteTranscriptArchiveWorker(
-    () => useReclamationWorker(retained, options, claim, run, assertRequestCurrent),
-    signal,
-  );
+  return runExclusiveSqliteTranscriptArchiveWorker(() => {
+    const key = sqliteReaderDatabasePathKey(options.path);
+    return useReclamationWorker(
+      {
+        worker: retained.get(key),
+        retain: (worker) => retained.set(key, worker),
+        retire: (worker) => {
+          if (retained.get(key) === worker) {
+            retained.delete(key);
+          }
+        },
+      },
+      options,
+      claim,
+      run,
+      assertRequestCurrent,
+    );
+  }, signal);
 }
 
 /** Startup bounds these scopes; each keeps one worker through certification and native close. */
@@ -163,7 +187,9 @@ async function useReclamationWorker<T>(
     options,
     claim.identity,
     slot.execution,
+    slot.retire,
   ));
+  slot.retain?.(worker);
   try {
     return await worker.use(() => run(worker));
   } catch (error) {
@@ -213,6 +239,7 @@ export class SqliteReclamationWorker {
     private readonly options: DatabaseOptions,
     private readonly identity: OpenClawAgentDatabaseClaim["identity"],
     private readonly execution?: CanonicalWorkerPool,
+    private readonly onRetired?: (worker: SqliteReclamationWorker) => void,
   ) {
     this.options = structuredClone(options);
     this.stateContext = captureOpenClawStateWorkerContext({ env: options.env });
@@ -237,7 +264,8 @@ export class SqliteReclamationWorker {
       this.unregisterAgent();
       throw error;
     }
-    process.on("beforeExit", this.beforeExit);
+    // Failed exit cleanup retains custody for explicit retries without restarting the event loop.
+    process.once("beforeExit", this.beforeExit);
   }
 
   matches(options: DatabaseOptions, claim: OpenClawAgentDatabaseClaim): boolean {
@@ -642,6 +670,7 @@ export class SqliteReclamationWorker {
       if (this.transport?.kind === "pooled") {
         this.transport.channel.close();
       }
+      this.onRetired?.(this);
     })().finally(() => {
       this.closing = undefined;
     }));

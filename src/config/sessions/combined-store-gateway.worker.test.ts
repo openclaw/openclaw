@@ -30,17 +30,23 @@ vi.mock("../../infra/worker-task-pool.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../infra/worker-task-pool.js")>();
   return {
     ...actual,
-    WorkerTaskPool: class<Input, Output> extends actual.WorkerTaskPool<Input, Output> {
-      override run(...args: Parameters<WorkerTaskPool<Input, Output>["run"]>) {
-        const result = super.run(...args);
-        const observe = boundary.afterReply;
-        return observe
-          ? result.then(async (reply) => {
-              await observe(reply);
-              return reply;
-            })
-          : result;
-      }
+    createOwnedWorkerTaskPool: <Input, Output>(
+      ...poolArgs: Parameters<typeof actual.createOwnedWorkerTaskPool<Input, Output>>
+    ) => {
+      const pool = actual.createOwnedWorkerTaskPool<Input, Output>(...poolArgs);
+      return {
+        ...pool,
+        run(...args: Parameters<WorkerTaskPool<Input, Output>["run"]>) {
+          const result = pool.run(...args);
+          const observe = boundary.afterReply;
+          return observe
+            ? result.then(async (reply) => {
+                await observe(reply);
+                return reply;
+              })
+            : result;
+        },
+      };
     },
   };
 });
@@ -165,6 +171,53 @@ it("retains selection and sentinel options while the worker read is queued", asy
     options.preserveSentinelOwners = false;
     expect((await pending).store).toEqual(expected);
     expect(Object.keys(expected)).toEqual([JSON.stringify(["global", "main"])]);
+  });
+});
+
+it("keeps stored addresses and foreign lineage stable after main-alias changes", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const parents = ["agent:main:main", "agent:main:home", "agent:main:global"];
+    for (const [index, parent] of [...parents, "global"].entries()) {
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: parent },
+        { sessionId: `parent-${index}`, updatedAt: 1 },
+      );
+      if (index < parents.length) {
+        replaceSessionEntrySync(
+          { agentId: "work", sessionKey: `agent:work:child-${index}` },
+          {
+            sessionId: `child-${index}`,
+            updatedAt: 2,
+            parentSessionKey: parent,
+            spawnedBy: parent,
+          },
+        );
+      }
+    }
+    for (const scope of ["per-sender", "global"] as const) {
+      const cfg: OpenClawConfig = {
+        agents: { entries: { main: { default: true }, work: {} } },
+        session: { mainKey: "home", scope },
+      };
+      for (const options of [{}, { agentId: "work" }]) {
+        const expected = loadCombinedSessionStoreForGatewayCore(cfg, options);
+        const result = await loadCombinedSessionStoreForGatewayCoreAsync(cfg, options);
+        expect(result.store).toEqual(expected.store);
+        for (const [index, parent] of parents.entries()) {
+          const key = `agent:work:child-${index}`;
+          expect(result.store[key]).toMatchObject({
+            parentSessionKey: parent,
+            spawnedBy: parent,
+          });
+          expect(result.targetsBySessionKey.get(key)?.readSourceEntry(parent)).toMatchObject({
+            sessionId: `parent-${index}`,
+          });
+          if (!options.agentId) {
+            expect(result.store[parent]?.sessionId).toBe(`parent-${index}`);
+          }
+        }
+      }
+    }
   });
 });
 

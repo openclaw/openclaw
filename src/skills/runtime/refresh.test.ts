@@ -612,6 +612,8 @@ describe("ensureSkillsWatcher", () => {
       // ignoreInitial may suppress all/change events for content found by this scan.
       expect(read()).toEqual([]);
       content.emit("ready");
+      expect(read()).toEqual([]);
+      watchForSkillRoot(logicalRoot).watcher.emit("ready");
       if (lastFailedAncestor) {
         expect(read()).toEqual([]);
         lastFailedAncestor.emit(
@@ -667,6 +669,12 @@ describe("ensureSkillsWatcher", () => {
       }
       const beforeReady = getSkillsSourceVersion(fixtureWorkspaceDir);
       deeper.watcher.emit("ready");
+      expect(getSkillsSourceVersion(fixtureWorkspaceDir)).toBe(beforeReady);
+      watchForSkillRoot(logicalRoot).watcher.emit("ready");
+      if (scan === "error-then-ready") {
+        expect(getSkillsSourceVersion(fixtureWorkspaceDir)).toBe(beforeReady);
+        watchForSkillRoot(logicalRoot).watcher.emit("ready");
+      }
       expect(getSkillsSourceVersion(fixtureWorkspaceDir)).toBeGreaterThan(beforeReady);
 
       const seen: SkillsChangeEvent[] = [];
@@ -921,6 +929,8 @@ describe("ensureSkillsWatcher", () => {
     await vi.advanceTimersByTimeAsync(250);
     expect(seen).toEqual([]);
     replacement.emit("ready");
+    expect(seen).toEqual([]);
+    watchForSkillRoot(sharedB).watcher.emit("ready");
     await vi.advanceTimersByTimeAsync(250);
     expect(seen).toEqual([
       { workspaceDir: fixtureWorkspaceDir, reason: "watch", changedPath: undefined },
@@ -980,6 +990,8 @@ describe("ensureSkillsWatcher", () => {
         await vi.advanceTimersByTimeAsync(250);
         expect(seen).toEqual([]);
         watcher.emit("ready");
+        expect(seen).toEqual([]);
+        watchForSkillRoot(sharedRoot).watcher.emit("ready");
       } else {
         watcher.emit("all", event, changedPath);
       }

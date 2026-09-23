@@ -70,10 +70,11 @@ async function settleAgentRegistration<T>(
 export type AgentDatabaseExecutionScope = Pick<Store, "execute">;
 export type AgentDatabaseNativeGeneration = {
   failed(): boolean;
-  runExisting<T>(
+  run<T>(
     source: AgentDatabaseRequestExecutionSource,
     operation: (scope: AgentDatabaseExecutionScope) => Promise<T>,
     assertCallerCurrent?: () => void,
+    createIfMissing?: boolean,
   ): Promise<T | undefined>;
   close(): Promise<void>;
 };
@@ -281,28 +282,40 @@ export function createAgentDatabaseNativeGeneration(
   const open = (
     source: AgentDatabaseRequestExecutionSource,
     assertCallerCurrent?: () => void,
+    createIfMissing = false,
   ): Promise<Store | undefined> => {
     assertCurrent();
     source.assertCurrent();
     assertCallerCurrent?.();
     opening ??= (async () => {
-      const store = await openAgentDatabaseSqliteWorkerStore<AgentDatabaseOperations>(
-        {
-          moduleUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.agentDatabaseExecution),
-          databasePath: pathname,
-          input,
-          existingOnly: true,
-        },
-        {
-          stateContext: context,
-          stateDatabasePath: context.admission.databasePath,
-          assertCurrent,
-          createAdmission: admission(source, undefined, assertCallerCurrent),
-          onNativeStopped: (stopped) => {
-            nativeStopped = stopped;
+      const registration = createIfMissing
+        ? captureOpenClawAgentDatabaseRegistration({
+            agentId,
+            agentPath: pathname,
+            admission: context.admission,
+          })
+        : undefined;
+      const openStore = () =>
+        openAgentDatabaseSqliteWorkerStore<AgentDatabaseOperations>(
+          {
+            moduleUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.agentDatabaseExecution),
+            databasePath: pathname,
+            input,
+            existingOnly: !createIfMissing,
           },
-        },
-      );
+          {
+            stateContext: context,
+            stateDatabasePath: context.admission.databasePath,
+            assertCurrent,
+            createAdmission: admission(source, registration, assertCallerCurrent),
+            onNativeStopped: (stopped) => {
+              nativeStopped = stopped;
+            },
+          },
+        );
+      const store = registration
+        ? await settleAgentRegistration(registration, openStore)
+        : await openStore();
       if (!store) {
         return undefined;
       }
@@ -329,15 +342,19 @@ export function createAgentDatabaseNativeGeneration(
       if (!store && opening === attempt) {
         opening = undefined;
       }
+      if (!store && createIfMissing) {
+        return open(source, assertCallerCurrent, true);
+      }
       return store;
     });
   };
-  async function runExisting<T>(
+  async function run<T>(
     source: AgentDatabaseRequestExecutionSource,
     operation: (scope: AgentDatabaseExecutionScope) => Promise<T>,
     assertCallerCurrent?: () => void,
+    createIfMissing = false,
   ): Promise<T | undefined> {
-    const store = await open(source, assertCallerCurrent);
+    const store = await open(source, assertCallerCurrent, createIfMissing);
     assertCurrent();
     assertCallerCurrent?.();
     source.assertCurrent();
@@ -361,10 +378,10 @@ export function createAgentDatabaseNativeGeneration(
         assertCurrent();
         source.assertCurrent();
       });
-      if (quickCheckPending) {
-        quickCheckPending = false;
-        requestOpenClawAgentDatabaseQuickCheck({ path: pathname, env: input.environment });
-      }
+    }
+    if (quickCheckPending) {
+      quickCheckPending = false;
+      requestOpenClawAgentDatabaseQuickCheck({ path: pathname, env: input.environment });
     }
     return runSqliteWorkerStoreOperation(
       store,
@@ -377,8 +394,8 @@ export function createAgentDatabaseNativeGeneration(
   return {
     failed: () =>
       openingFailed || Boolean(openedStore && !isSqliteWorkerStoreAvailable(openedStore)),
-    runExisting: (source, operation, assertCallerCurrent) =>
-      runExisting(source, operation, assertCallerCurrent),
+    run: (source, operation, assertCallerCurrent, createIfMissing) =>
+      run(source, operation, assertCallerCurrent, createIfMissing),
     close() {
       retiring = true;
       closing ??= (async () => {

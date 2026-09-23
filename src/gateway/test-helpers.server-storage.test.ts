@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Worker } from "node:worker_threads";
 import { afterAll, expect, onTestFinished, test, vi } from "vitest";
+import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as archiveWorker from "../config/sessions/session-accessor.sqlite-archive.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.sqlite-entry.js";
@@ -10,6 +11,7 @@ import {
   createLifecycleArtifactReclamationPlan,
   runSqliteSessionReclamation,
 } from "../config/sessions/session-accessor.sqlite-reclamation.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -23,7 +25,11 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import * as stateReader from "../state/openclaw-state-read-worker.js";
 import { setTestEnvValue } from "../test-utils/env.js";
+import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
+import { initializeSessionReadContext } from "./server-methods/sessions-read-cache.test-support.js";
+import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { installGatewayTestHooks } from "./test-helpers.server.js";
 
 const roots = useAutoCleanupTempDirTracker(afterAll);
@@ -39,6 +45,56 @@ afterAll(async () => {
   }
 });
 installGatewayTestHooks();
+
+test("joins a direct history projection's accepted read before retiring the Gateway home", async () => {
+  const scope = { agentId: "main", sessionKey: "agent:main:fixture-history" };
+  ensureSessionEntrySync(scope, { sessionId: "fixture-history", updatedAt: 1 });
+  const shared = openOpenClawStateDatabase();
+  const context = createDirectChatContext();
+  await initializeSessionReadContext(context);
+  const projection = getSessionRowProjection(context)!;
+  await projection.ensureMaterialized();
+  const entered = createDeferred();
+  const release = createDeferred();
+  const createTransport = stateReader.createOpenClawStateReadTransport;
+  const reader = vi
+    .spyOn(stateReader, "createOpenClawStateReadTransport")
+    .mockImplementation((command) => {
+      const transport = createTransport(command);
+      if (command.type !== "acpSessions.metadata") {
+        return transport;
+      }
+      return {
+        ...transport,
+        async read(...args) {
+          const reply = await transport.read(...args);
+          entered.resolve();
+          await release.promise;
+          return reply;
+        },
+      };
+    });
+  const dispose = projection.dispose;
+  const disposing = vi.spyOn(projection, "dispose").mockImplementation(() => {
+    dispose();
+    release.resolve();
+  });
+  // Returning leaves a real native borrower pending until fixture disposal starts.
+  // Always release it after a failed hook so the proof itself cannot leak custody.
+  onTestFinished(async () => {
+    release.resolve();
+    try {
+      await projection.ensureMaterialized();
+      expect(shared.db.isOpen).toBe(false);
+    } finally {
+      reader.mockRestore();
+      disposing.mockRestore();
+    }
+  });
+  sessionChanges.emit(scope);
+  await withTestTimeout(entered.promise, 5_000, "Projection did not retain its shared-state read");
+  expect(shared.db.isOpen).toBe(true);
+});
 
 test("joins external-store workers before deleting their Gateway lease coordinator", async () => {
   externalRoot = fs.realpathSync(roots.make("gateway-external-store-"));

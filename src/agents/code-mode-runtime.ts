@@ -86,7 +86,7 @@ function readCodeModeRawConfig(
   model?: { provider: string; modelId: string },
 ): Record<string, unknown> {
   const tools = isRecord(config?.tools) ? config.tools : undefined;
-  const globalRaw = normalizeCodeModeRawConfig(tools?.codeMode) ?? {};
+  const globalRaw = normalizeCodeModeRawConfig(tools?.codeMode) ?? { enabled: "auto" };
   const agent = config && agentId ? resolveAgentConfig(config, agentId) : undefined;
   const agentRaw = normalizeCodeModeRawConfig(agent?.tools?.codeMode);
   const key = model
@@ -106,8 +106,7 @@ function readCodeModeRawConfig(
 }
 
 function readEnabled(value: unknown): boolean | "auto" {
-  // Stable option-bearing objects made `enabled` optional and defaulted it off.
-  // Automatic activation therefore requires an explicit `"auto"` selection.
+  // Authored option-bearing objects keep their historical opt-in behavior.
   return typeof value === "boolean" || value === "auto" ? value : false;
 }
 

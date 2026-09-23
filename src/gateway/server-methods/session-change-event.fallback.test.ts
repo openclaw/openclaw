@@ -144,7 +144,7 @@ it.each(["capture", "preparation", "canonical deferral"] as const)(
           catalogChanged: true,
         });
         await flushPendingSessionsChangedEvents(context);
-        await vi.advanceTimersByTimeAsync(200);
+        await vi.advanceTimersByTimeAsync(5_000);
         expect(reads).toEqual([
           { describe: 0, snapshot: 0, sql: 0 },
           { describe: 0, snapshot: 0, sql: 0 },

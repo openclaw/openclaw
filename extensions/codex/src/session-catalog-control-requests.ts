@@ -153,10 +153,12 @@ export function createCodexSessionCatalogControlFromRequests(params: {
       const query = readPageParams(pageParams);
       return await withCodexCatalogListRequest(async (request) => {
         const requests = params.createRequestSnapshot();
-        const deadline = request.deadline(requests.requestTimeoutMs);
+        // Release foreground admission while index-owned hydration continues.
+        const timeoutMs = Math.min(requests.requestTimeoutMs, 5_000);
+        const deadline = request.constrainDeadline(performance.now() + timeoutMs);
         const index = await withTimeout(
           requests.index(),
-          request.remaining(requests.requestTimeoutMs),
+          request.remaining(timeoutMs),
           "Codex session catalog is still loading",
           () => new CodexCatalogLoadingError(),
         );

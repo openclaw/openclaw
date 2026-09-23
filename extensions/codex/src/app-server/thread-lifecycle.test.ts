@@ -9,6 +9,7 @@ import {
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { codexCatalogHomeId } from "../session-catalog-home-id.js";
+import { CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS } from "./attempt-client-cleanup.js";
 import { resolveCodexAppServerHomeDir } from "./auth-start-options.js";
 import { CodexAppServerRpcError } from "./client.js";
 import { threadStartResult as nativeThreadStartResult } from "./codex-app-server.test-fixtures.js";
@@ -51,7 +52,11 @@ import {
   resolveCodexAppServerThreadModelSelection,
   startOrResumeThread as startOrResumeThreadImpl,
 } from "./thread-lifecycle.js";
-import { createLeasedCodexLifecycleHarness } from "./thread-lifecycle.test-fixtures.js";
+import {
+  createLeasedCodexLifecycleHarness,
+  disabledMcpServerStatus,
+  writeNativeCatalogFixture,
+} from "./thread-lifecycle.test-fixtures.js";
 import { attestCodexRestrictedToolSurfaceMcpServersDisabled } from "./thread-requests.js";
 
 type CodexThreadLifecycleTimingLogger = NonNullable<
@@ -1101,29 +1106,6 @@ function nativeThreadResult(threadId: string, model: string, modelProvider: stri
     model,
     modelProvider,
     thread: { ...response.thread, modelProvider },
-  };
-}
-
-async function writeNativeCatalogFixture(
-  rolloutPath: string,
-  threadId: string,
-  dynamicTools: unknown,
-) {
-  await fs.mkdir(path.dirname(rolloutPath), { recursive: true });
-  await fs.writeFile(
-    rolloutPath,
-    `${JSON.stringify({ type: "session_meta", payload: { id: threadId, dynamic_tools: dynamicTools } })}\n`,
-  );
-}
-
-function disabledMcpServerStatus(name: string) {
-  return {
-    name,
-    serverInfo: null,
-    tools: {},
-    resources: [],
-    resourceTemplates: [],
-    authStatus: "unsupported",
   };
 }
 
@@ -3691,6 +3673,9 @@ describe("Codex app-server supervised branch lifecycle", () => {
         return written;
       });
       try {
+        if (fault === "unsubscribe timeout") {
+          vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        }
         const outcome = startOrResumeThread({
           client: harness.client,
           abandonClient,
@@ -3703,6 +3688,13 @@ describe("Codex app-server supervised branch lifecycle", () => {
           (value) => ({ value }),
           (error: unknown) => ({ error }),
         );
+        if (fault === "unsubscribe timeout") {
+          expect(JSON.parse(await harness.waitForWrite(4))).toMatchObject({
+            method: "thread/unsubscribe",
+            params: { threadId: probeThreadId },
+          });
+          await vi.advanceTimersByTimeAsync(CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS);
+        }
         const settled = await outcome;
         const requests = harness.writes.map((line) => JSON.parse(line));
         expect(source).toEqual(before);
@@ -3756,7 +3748,13 @@ describe("Codex app-server supervised branch lifecycle", () => {
           modelProvider: "openai",
         });
       } finally {
-        harness.client.close();
+        try {
+          harness.client.close();
+        } finally {
+          if (fault === "unsubscribe timeout") {
+            vi.useRealTimers();
+          }
+        }
       }
     },
   );

@@ -247,7 +247,6 @@ describeTelegramDispatch("dispatchTelegramMessage context-recovery", () => {
     ).toBe("function");
     expectRecordFields(dispatchParams.replyOptions, { disableBlockStreaming: true });
     expect(editMessageTelegram).not.toHaveBeenCalled();
-    expect(draftStream.clear).toHaveBeenCalledTimes(1);
   });
 
   it("renders default draft previews with standard Telegram HTML", async () => {

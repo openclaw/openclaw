@@ -703,7 +703,7 @@ describe("supplemental session reconciliation", () => {
       current = { ...current, updatedAt: 30, label: "Current child" };
       await readDescription();
       request.mockClear();
-      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.advanceTimersByTimeAsync(5_000);
 
       expect(request).toHaveBeenCalledExactlyOnceWith(
         "sessions.list",
@@ -723,7 +723,7 @@ describe("supplemental session reconciliation", () => {
         model: "gpt-5.5",
         contextTokens: 128_000,
       });
-      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.advanceTimersByTimeAsync(5_000);
       expect(request).not.toHaveBeenCalled();
       expect(sessions.state.result?.sessions[0]?.label).toBe(current.label);
     } finally {

@@ -461,7 +461,8 @@ describe("worker environment service", () => {
   });
 
   it("allows a large bundle bootstrap to outlive the former service deadline", async () => {
-    vi.useFakeTimers();
+    // Keep the monotonic clock shared with real SQLite workers on its native epoch.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     support.testState.prepareInstallation = vi.fn(async () => ({
       ...support.BUNDLE_ARTIFACT,
       tarballBytes: 243_000_000,

@@ -147,6 +147,36 @@ async function writeUncertainLock(
 }
 
 describe("runGlobalPackageUpdateSteps lifecycle ownership", () => {
+  it("does not activate after a zero-exit output-limited postinstall", async () => {
+    const fixture = await createFixture();
+    const { result } = await runUpdate(
+      fixture,
+      async () => {},
+      async ({ name, argv, cwd }) => {
+        const outputLimitExceeded = name === "npm-package-postinstall";
+        if (outputLimitExceeded && cwd) {
+          await fs.rm(path.join(cwd, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH));
+        }
+        return {
+          name,
+          command: argv.join(" "),
+          cwd: cwd ?? fixture.packageRoot,
+          durationMs: 0,
+          exitCode: 0,
+          outputLimitExceeded,
+        };
+      },
+    );
+    expect(result.failedStep).toMatchObject({
+      name: "npm-package-postinstall",
+      exitCode: 0,
+      outputLimitExceeded: true,
+    });
+    expectNoActivation(fixture);
+    expect(await readPackageBytes(fixture.packageRoot)).toEqual(fixture.originalBytes);
+    await expectSiblingUntouched(fixture);
+  });
+
   it.each(["legacy directory", "malformed file"] as const)(
     "retains the exact pending candidate with an uncertain %s lock",
     async (shape) => {

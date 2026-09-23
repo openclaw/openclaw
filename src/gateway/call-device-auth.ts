@@ -18,6 +18,36 @@ import type { resolveGatewayAuth } from "./auth-resolve.js";
 import type { GatewayClientOptions } from "./client.js";
 import { isLoopbackGatewayUrl } from "./net.js";
 
+// Readiness and maintenance are the same local-control trust boundary. Shared
+// secrets/auth-none keep their local contracts; other modes reuse only a paired
+// identity from the service's state directory, without pairing or state writes.
+export async function resolveReadOnlyLocalGatewayAuth(params: {
+  auth?: { token?: string; password?: string };
+  authNone: boolean;
+  env?: NodeJS.ProcessEnv;
+}) {
+  const { auth, authNone, env } = params;
+  const identity =
+    authNone || auth?.token || auth?.password ? null : loadDeviceIdentityIfPresent({ env });
+  const preparedDeviceAuth = await loadStoredOperatorDeviceAuthToken(
+    identity,
+    undefined,
+    "read-only",
+    env,
+  );
+  return {
+    token: auth?.token,
+    password: auth?.password,
+    skipImplicitAuth: true,
+    clientName: authNone ? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT : GATEWAY_CLIENT_NAMES.CLI,
+    mode: authNone ? GATEWAY_CLIENT_MODES.BACKEND : GATEWAY_CLIENT_MODES.CLI,
+    requireLocalBackendSharedAuth: authNone,
+    deviceIdentity: preparedDeviceAuth ? identity : null,
+    preparedDeviceAuth: preparedDeviceAuth ?? undefined,
+    sharedStateMode: "read-only" as const,
+  };
+}
+
 export function resolveDeviceIdentityForGatewayCall(
   sharedStateMode?: "read-only",
 ): DeviceIdentity | null {

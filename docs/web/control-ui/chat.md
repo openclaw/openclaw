@@ -210,6 +210,8 @@ Collapsed tool rows keep the tool label visible and truncate long summaries with
 
 Tool activity summaries count the operations inside a workflow rather than counting its wrapper again. Execution calls show the agent-provided purpose when available; titles describe intended work, while results determine success or failure. Recorded child calls appear under their operation instead of as separate peer rows. Expand the operation to inspect its children, then expand a child for its command, full output, and reported exit status. **Tool input** retains the wrapper's source and output. Collapsed operations include failures from their children, even when the wrapper or later calls succeed. Error messages and diagnostic paths stay inside the expandable tool details. Nested relationships use recorded call metadata from the same run and survive reloading; calls without an available, unambiguous parent stay separate. Untitled command previews flatten line breaks and truncate long commands; expanded details retain the original source.
 
+Native Codex Code Mode calls show **run JavaScript** when no purpose is available. Expand **Tool input** to read the source. Captured text-block responses display their text directly, and completed command envelopes show readable output with nonzero exit codes kept visible. JSON output is indented without changing number or string values. **Raw details** retains the original response, including execution metadata. For long results, choose **Show full output** to inspect the complete response; copy and download preserve those captured bytes.
+
 A turn that fails before producing any reply leaves a durable notice in the thread. Failed and timed-out turns also show the available failure reason in the sidebar's compact summary and run-error tooltip, including while a session refresh is still catching up.
 
 Chat error banners, including cloud runner failures, show short messages in full. Use **Copy error** beside **Details** in the header to copy the complete diagnostic received by the UI, even while collapsed. **Details** appears only when the complete diagnostic adds information beyond the preview, such as additional lines or text shortened for the preview; repeated lines and whitespace-only differences do not add details. Open it to read and select the complete diagnostic. The disclosure works with Enter or Space; the expanded text wraps long lines and can be scrolled with the keyboard. Copying does not open or close the details, and neither copying nor expanding an error retries the failed operation. Retry and other recovery actions remain separate from the disclosure.
@@ -305,6 +307,7 @@ Run-error banners offer **Refresh** to reload the conversation without resending
     - When a run is aborted, partial assistant text can still be shown in the UI.
     - Gateway persists aborted partial assistant text into transcript history when buffered output exists.
     - Persisted entries include abort metadata so transcript consumers can tell abort partials from normal completion output.
+    - If a reply cannot be saved, stopping still succeeds and the chat shows a save warning. Copy any visible text you want to keep before leaving the chat; it may not be available when you reopen the conversation.
 
   </Accordion>
 </AccordionGroup>
@@ -396,6 +399,8 @@ in `strict` mode. This leaves the original file and **Source** unchanged; author
 base URLs, links targeting another window, and download links keep their behavior.
 
 Workspace file reads and edits retain their existing 256 KiB limit.
+Code previews and editors are named by their filename and reachable with Tab,
+including read-only previews. In-file search announces its result count.
 For workspace HTML, **Edit**, in-file search, and explicit `file:line` navigation
 open **Source**. Switching back to **Preview** renders the latest unsaved editor
 text without saving it. Switching views preserves the editor, undo history, and
@@ -609,9 +614,13 @@ When the message contains
 multiple images, use **Previous image** / **Next image**, the left and right arrow
 keys, or a horizontal swipe to move through that message's images. Navigation
 stops at either end and reverses direction in right-to-left layouts. Pinch or use
-the zoom controls to inspect details; dragging while zoomed pans the image.
+the zoom controls to inspect details; dragging or holding Shift while pressing
+an arrow key pans the zoomed image. The keyboard shortcuts dialog lists these controls.
 Press Escape, select **Close image preview**, or click outside the image to close
 and return focus to the tile you opened.
+
+Inline audio players support five-second seeking with the arrow keys, including
+when the seek slider has focus. The slider announces the current time and duration.
 
 Images attached to assistant progress messages appear inline while the task continues and remain visible after reloading the conversation. Remote attachment URLs do not need a filename extension: the Gateway detects the media type and serves the preview through the same authenticated media path used for final replies. Documents keep their file cards.
 

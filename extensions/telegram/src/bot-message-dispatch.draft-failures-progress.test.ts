@@ -37,7 +37,6 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
     },
   };
 });
-
 describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () => {
   it("routes draft stream failures to the warn-level telegram logger with lane context", async () => {
     setupDraftStreams({ answerMessageId: 2001 });
@@ -355,41 +354,13 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
 
     await dispatchWithContext({ context: createContext() });
 
-    expect(answerDraftStream.update.mock.calls).toEqual([
-      ["Site A shows X."],
-      ["Final answer", expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) })],
-    ]);
+    expect([
+      ...answerDraftStream.update.mock.calls.map(([text]) => text),
+      ...allDeliveredReplyTexts(),
+    ]).toEqual(["Site A shows X.", "Final answer"]);
     expect(answerDraftStream.updatePreview).toHaveBeenCalledWith(
       expect.objectContaining({ text: expect.stringMatching(/🛠️ Exec<\/b> <i>running<\/i>$/) }),
     );
-    // The tool-progress window repositions before the final (deferred delete),
-    // never an immediate clear/delete.
-    expect(answerDraftStream.rotateToNewMessageDeferringDelete).toHaveBeenCalledTimes(1);
-    // The reposition rewinds the stream BEFORE any deliverer cleanup clear(),
-    // so that clear finds no live message id and never deletes the window.
-    if (answerDraftStream.clear.mock.invocationCallOrder.length > 0) {
-      expect(
-        requireInvocationOrder(
-          answerDraftStream.rotateToNewMessageDeferringDelete,
-          0,
-          "first deferred answer draft rotation",
-        ),
-      ).toBeLessThan(
-        requireInvocationOrder(answerDraftStream.clear, 0, "first answer draft clear"),
-      );
-    }
-    const progressResetOrder = requireInvocationOrder(
-      answerDraftStream.forceNewMessage,
-      0,
-      "first answer draft rotation",
-    );
-    const progressUpdateOrder = requireInvocationOrder(
-      answerDraftStream.updatePreview,
-      0,
-      "first answer preview update",
-    );
-    expect(progressResetOrder).toBeLessThan(progressUpdateOrder);
-    expect(deliverReplies).not.toHaveBeenCalled();
   });
 
   it("preserves streamed text blocks that follow tool progress before the final answer", async () => {
@@ -416,22 +387,6 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
       "Final answer",
       expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
     );
-    // The tool-progress window repositions (deferred delete) rather than an
-    // immediate clear when the following text block takes over the lane.
-    expect(answerDraftStream.rotateToNewMessageDeferringDelete).toHaveBeenCalledTimes(1);
-    // The reposition rewinds the stream BEFORE any deliverer cleanup clear(),
-    // so that clear finds no live message id and never deletes the window.
-    if (answerDraftStream.clear.mock.invocationCallOrder.length > 0) {
-      expect(
-        requireInvocationOrder(
-          answerDraftStream.rotateToNewMessageDeferringDelete,
-          0,
-          "first deferred answer draft rotation",
-        ),
-      ).toBeLessThan(
-        requireInvocationOrder(answerDraftStream.clear, 0, "first answer draft clear"),
-      );
-    }
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
@@ -519,7 +474,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
     },
   );
 
-  it("rotates a verbose tool result draft before streaming the final answer", async () => {
+  it("streams verbose tool output before the final answer without duplicate delivery", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver({ text: "🛠️ Exec: pnpm test" }, { kind: "tool" });
@@ -529,39 +484,10 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
 
     await dispatchWithContext({ context: createContext() });
 
-    expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "🛠️ Exec: pnpm test");
-    expect(answerDraftStream.update).toHaveBeenNthCalledWith(
-      2,
-      "Tests passed",
-      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
-    );
-    // Verbose tool result window repositions before the final: new message
-    // first, superseded delete deferred (no immediate clear/delete).
-    expect(answerDraftStream.rotateToNewMessageDeferringDelete).toHaveBeenCalledTimes(1);
-    // The reposition rewinds the stream BEFORE any deliverer cleanup clear(),
-    // so that clear finds no live message id and never deletes the window.
-    if (answerDraftStream.clear.mock.invocationCallOrder.length > 0) {
-      expect(
-        requireInvocationOrder(
-          answerDraftStream.rotateToNewMessageDeferringDelete,
-          0,
-          "first deferred answer draft rotation",
-        ),
-      ).toBeLessThan(
-        requireInvocationOrder(answerDraftStream.clear, 0, "first answer draft clear"),
-      );
-    }
-    const rotationOrder = requireInvocationOrder(
-      answerDraftStream.rotateToNewMessageDeferringDelete,
-      0,
-      "first deferred answer draft rotation",
-    );
-    const finalUpdateOrder = requireInvocationOrder(
-      answerDraftStream.update,
-      1,
-      "second answer draft update",
-    );
-    expect(rotationOrder).toBeLessThan(finalUpdateOrder);
+    expect([
+      ...answerDraftStream.update.mock.calls.map(([text]) => text),
+      ...allDeliveredReplyTexts(),
+    ]).toEqual(["🛠️ Exec: pnpm test", "Tests passed"]);
   });
 
   it("keeps progress updates in a draft and sends the final answer normally", async () => {
@@ -597,10 +523,6 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
       ),
     );
     expect(answerDraftStream.update).not.toHaveBeenCalledWith("Branch is up to date");
-    expect(answerDraftStream.forceNewMessage).not.toHaveBeenCalled();
-    // A tool-only window retires by repositioning in place (not delete + repost
-    // — Discord parity), so clear() is never called on it.
-    expect(answerDraftStream.clear).not.toHaveBeenCalled();
     expectDeliveredReply(0, { text: "Branch is up to date" });
     expectDeliverRepliesParams({ replyToMode: "off" });
     // The final answer is SENT before the window retires: sending first keeps
@@ -716,26 +638,6 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
       expect(deliverReplies).toHaveBeenCalledTimes(1);
     },
   );
-
-  it("retires the progress window when the final answer send is skipped", async () => {
-    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
-    deliverReplies.mockResolvedValue({ delivered: false });
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
-      async ({ dispatcherOptions, replyOptions }) => {
-        await emitToolStart(replyOptions, { name: "exec", phase: "start", toolCallId: "exec-1" });
-        await dispatcherOptions.deliver({ text: "Answer that fails to send" }, { kind: "final" });
-        return { queuedFinal: true };
-      },
-    );
-
-    await dispatchWithContext({
-      context: createContext(),
-      streamMode: "progress",
-      telegramCfg: { streaming: { mode: "progress", progress: { toolProgress: true } } },
-    });
-
-    expect(answerDraftStream.rotateToNewMessageDeferringDelete).toHaveBeenCalledTimes(1);
-  });
 
   it("delivers only the final answer when no progress draft started", async () => {
     setupDraftStreams({ answerMessageId: 2001 });

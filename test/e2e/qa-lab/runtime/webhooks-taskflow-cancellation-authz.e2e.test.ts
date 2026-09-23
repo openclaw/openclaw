@@ -9,7 +9,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import acpxPlugin from "../../../../extensions/acpx/index.js";
 import webhooksPlugin from "../../../../extensions/webhooks/index.js";
 import {
@@ -22,7 +22,6 @@ import { getSubagentRunByRunId } from "../../../../src/agents/subagents/registry
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
-  testing as subagentRegistryTesting,
 } from "../../../../src/agents/subagents/registry/subagent-registry.test-helpers.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../../../src/config/config.js";
 import { resolveSessionStorePathCore } from "../../../../src/config/sessions/paths.js";
@@ -69,13 +68,17 @@ type WebhookResponse = {
   };
 };
 
-beforeEach(() => {
-  subagentRegistryTesting.setDepsForTest({
+vi.mock(
+  "../../../../src/agents/subagents/registry/subagent-registry-state.js",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("../../../../src/agents/subagents/registry/subagent-registry-state.js")
+    >()),
     persistSubagentRunsToDisk: () => {},
     persistSubagentRunsToDiskOrThrow: () => {},
     restoreSubagentRunsFromDisk: () => 0,
-  });
-});
+  }),
+);
 
 afterEach(() => {
   clearConfigCache();
@@ -86,7 +89,6 @@ afterEach(() => {
   resetTaskFlowRegistryForTests({ persist: false });
   resetPluginStateStoreForTests();
   resetPluginRuntimeStateForTest();
-  subagentRegistryTesting.setDepsForTest();
 });
 
 function registerRunningSubagent(params: {

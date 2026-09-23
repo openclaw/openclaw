@@ -16,7 +16,7 @@ import {
 import {
   addSessionMember,
   removeSessionMember,
-} from "../../config/sessions/session-sharing-store.js";
+} from "../../config/sessions/session-sharing-store.native.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";

@@ -3,7 +3,6 @@ import type { SessionsListParams } from "../../../packages/gateway-protocol/src/
 import { listAgentIds } from "../../agents/agent-scope-config.js";
 import {
   loadSessionEntry,
-  replaceSessionEntry,
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
 import { mergeSessionEntry } from "../../config/sessions/types.js";
@@ -15,32 +14,22 @@ import {
   resolveUserProfileId,
 } from "../../state/user-profiles.js";
 import {
+  disposeSessionReadContexts,
+  trackSessionReadProfileSubscription,
+  trackSessionReadProjection,
+} from "../session-read-contexts.test-support.js";
+import {
   bindSessionRowProjection,
   getSessionRowProjection,
 } from "../session-row-projection-access.js";
-import {
-  createSessionRowProjection,
-  type SessionRowProjection,
-} from "../session-row-projection.js";
+import { createSessionRowProjection } from "../session-row-projection.js";
 import type { GatewaySessionRow } from "../session-utils.types.js";
 import { readPreparedServerMethodModelCatalogs } from "./optional-model-catalog.js";
 import { sessionReadHandlers } from "./sessions-read.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
-export { sessionReadHandlers };
-const projections = new Set<SessionRowProjection>();
-const profileSubscriptions = new Set<() => void>();
+export { disposeSessionReadContexts, sessionReadHandlers };
 const initializing = new WeakMap<GatewayRequestContext, Promise<void>>();
-export function disposeSessionReadContexts() {
-  for (const projection of projections) {
-    projection.dispose();
-  }
-  for (const stop of profileSubscriptions) {
-    stop();
-  }
-  projections.clear();
-  profileSubscriptions.clear();
-}
 afterEach(disposeSessionReadContexts);
 export function initializeSessionReadContext(context: GatewayRequestContext) {
   if (getSessionRowProjection(context)) {
@@ -86,7 +75,7 @@ export function initializeSessionReadContext(context: GatewayRequestContext) {
           }
         : undefined,
     }).then((projection) => {
-      projections.add(projection);
+      trackSessionReadProjection(projection);
       bindSessionRowProjection(context, () => projection);
     });
     initializing.set(context, pending);
@@ -121,7 +110,7 @@ export function identifiedClient(profileId: string): GatewayClient {
     };
   };
   refresh();
-  profileSubscriptions.add(onUserProfilesChanged(refresh));
+  trackSessionReadProfileSubscription(onUserProfilesChanged(refresh));
   return client;
 }
 
@@ -196,7 +185,7 @@ export async function seedSessionsWithActivityTimes() {
     if (!entry) {
       throw new Error(`Missing seeded session ${scope.sessionKey}`);
     }
-    await replaceSessionEntry(scope, { ...entry, updatedAt });
+    replaceSessionEntrySync(scope, { ...entry, updatedAt });
     expect(loadSessionEntry(scope)?.updatedAt).toBe(updatedAt);
   }
   return { clock, config };

@@ -726,7 +726,7 @@ suite.define(() => {
 
     const sidebar = page.locator("openclaw-app-sidebar");
     await sidebar.locator(".sidebar-identity-card").click();
-    const buildLink = sidebar.getByRole("link", {
+    const buildLink = sidebar.getByRole("menuitem", {
       name: "Control UI build details",
       exact: true,
     });

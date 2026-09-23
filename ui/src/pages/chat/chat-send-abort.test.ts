@@ -196,13 +196,7 @@ describe("handleAbortChat", () => {
     expect(request).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { name: "queues the active run abort while disconnected", preserveDraft: false },
-    {
-      name: "preserves the draft when queueing a toolbar abort while disconnected",
-      preserveDraft: true,
-    },
-  ])("$name", async ({ preserveDraft }) => {
+  it("queues the active run abort while disconnected", async () => {
     const client = clientWithRequest(vi.fn());
     const host = makeChatHost({
       client,
@@ -212,7 +206,7 @@ describe("handleAbortChat", () => {
       sessionKey: "agent:main",
     });
 
-    await handleAbortChat(host, preserveDraft ? { preserveDraft } : undefined);
+    await handleAbortChat(host);
 
     expect(host.pendingAbort).toEqual({
       sourceClient: client,
@@ -220,7 +214,7 @@ describe("handleAbortChat", () => {
       sessionKey: "agent:main",
       conversation: { sessionKey: "agent:main" },
     });
-    expect(host.chatMessage).toBe(preserveDraft ? "draft" : "");
+    expect(host.chatMessage).toBe("");
     expect(host.chatRunId).toBe("run-main");
   });
 

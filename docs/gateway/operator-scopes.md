@@ -45,8 +45,13 @@ read-only behavior: `users.github.*` requires `operator.read` plus the exact
 authenticated durable profile. That person can connect, poll, cancel,
 reconnect, or disconnect only their own account. These methods do not expose
 team secrets, mutate shared configuration, or grant OpenClaw write/admin scopes. System
-and per-agent GitHub changes remain `operator.admin`. Publication remains
-`operator.write` plus current session authorization. See
+and per-agent GitHub changes remain `operator.admin`.
+
+With `operator.sessions.write`, a requester can publish ordinary changes from
+sessions they created through the shared GitHub account. Workflow definition
+changes require the original requester's current full `operator.write`
+authority. Personal publication also requires `operator.write`. Every publication
+still requires current session authorization. See
 [GitHub connections](/concepts/user-model#github-connections).
 
 Unknown future `operator.*` scopes require an exact match unless the caller
@@ -55,6 +60,15 @@ already holds `operator.admin`.
 RPCs, events, and background tools use the same scope rules. A continuation with
 `operator.write` can read its GitHub identity and session state without another
 interactive message. Session access and execution-lifetime checks still apply.
+
+`question.*` also accepts `operator.sessions.write` for ordinary questions
+bound to the caller's own admitted run and owned session. The Gateway records
+that binding from trusted run authority, never from caller-supplied session or
+run identifiers. The same ownership check filters question events and recovery
+reads. Session visibility or membership alone does not grant this access.
+`operator.sessions.read` alone cannot answer questions. Sessionless questions,
+secret prompts, and other privileged question workflows retain their existing
+`operator.questions` and administrative checks.
 
 ## Named operator roles
 
@@ -91,7 +105,9 @@ Use the administrator-scoped `users.setRole` Gateway method with
 `{ profileId, role }` to assign a configured role. Set `role: null` to clear an
 assignment. Assignment changes immediately invalidate and close that profile's
 active Gateway connections. Reconnecting applies the current role and scope
-ceiling. `gateway.roles.default` is required whenever roles are configured,
+ceiling. A committed change still retires the previous access if returning the
+result fails. An authorized self-downgrade receives its response before its
+connection closes. `gateway.roles.default` is required whenever roles are configured,
 must name an existing definition, and applies to profiles without a valid
 assigned role. Omitting `gateway.roles` entirely leaves solo and shared-secret
 deployments unchanged.

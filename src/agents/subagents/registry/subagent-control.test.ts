@@ -1,5 +1,6 @@
 // Subagent control tests cover listing, killing, and admin cleanup of
 // child runs recorded in the subagent registry and session store.
+import "./subagent-control.leaf-mocks.test-support.js";
 import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -8,6 +9,7 @@ import { stopSubagentsForRequester } from "../../../auto-reply/reply/abort-opera
 import { tryFastAbortFromMessage } from "../../../auto-reply/reply/abort.js";
 import { createReplyOperation } from "../../../auto-reply/reply/reply-run-registry.js";
 import { buildTestCtx } from "../../../auto-reply/reply/test-ctx.js";
+import { cleanupBrowserSessionsForLifecycleEnd } from "../../../browser-lifecycle-cleanup.js";
 import {
   loadSessionEntry,
   patchSessionEntryCore,
@@ -16,6 +18,8 @@ import {
 } from "../../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { ensureContextEnginesInitialized } from "../../../context-engine/init.js";
+import { resolveContextEngine } from "../../../context-engine/registry.js";
 import { rotateAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import {
   beginSessionWorkAdmission,
@@ -25,6 +29,7 @@ import {
 } from "../../../sessions/session-lifecycle-admission.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../../state/openclaw-agent-db.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "../../../tasks/detached-task-runtime-contract.js";
+import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import {
   enqueueSwarmRun,
@@ -41,6 +46,7 @@ import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
+import * as registryState from "./subagent-registry-state.js";
 import {
   replaceSubagentRunAfterSteerCore,
   markSubagentRunTerminated,
@@ -48,7 +54,6 @@ import {
   registerSubagentRun,
 } from "./subagent-registry.js";
 import {
-  testing as subagentRegistryTesting,
   addSubagentRunForTests,
   getSubagentRunByChildSessionKey,
   resetSubagentRegistryForTests,
@@ -166,28 +171,34 @@ async function writeSessionStoreFixture(label: string, store: Record<string, unk
   return storePath;
 }
 
+function resetRegistryLeafMocks() {
+  vi.mocked(cleanupBrowserSessionsForLifecycleEnd).mockReset();
+  vi.mocked(ensureContextEnginesInitialized).mockReset();
+  vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReset();
+  vi.mocked(registryState.persistSubagentRunsToDisk).mockReset();
+  vi.mocked(registryState.persistSubagentRunsToDiskOrThrow).mockReset();
+  vi.mocked(registryState.restoreSubagentRunsFromDisk).mockReset();
+  vi.mocked(resolveContextEngine).mockReset();
+}
+
 beforeEach(() => {
   detachedTaskRuntimeMocks.finalizeTaskRunByRunId.mockClear();
   setSubagentControlDepsForTest();
-  subagentRegistryTesting.setDepsForTest({
-    cleanupBrowserSessionsForLifecycleEnd: async () => {},
-    ensureContextEnginesInitialized: () => {},
-    loadAgentRuntimePluginRegistryHandle: () => undefined,
-    persistSubagentRunsToDisk: () => {},
-    persistSubagentRunsToDiskOrThrow: () => {},
-    restoreSubagentRunsFromDisk: () => 0,
-    resolveContextEngine: async () => ({
-      info: { id: "test", name: "Test" },
-      assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
-      compact: async () => ({ ok: true, compacted: false }),
-      ingest: async () => ({ ingested: false }),
-    }),
-  });
+  resetRegistryLeafMocks();
+  vi.mocked(cleanupBrowserSessionsForLifecycleEnd).mockResolvedValue(undefined);
+  vi.mocked(ensureContextEnginesInitialized).mockImplementation(() => {});
+  vi.mocked(registryState.persistSubagentRunsToDisk).mockImplementation(() => {});
+  vi.mocked(registryState.persistSubagentRunsToDiskOrThrow).mockImplementation(() => {});
+  vi.mocked(registryState.restoreSubagentRunsFromDisk).mockReturnValue(0);
+  vi.mocked(resolveContextEngine).mockImplementation(async () => ({
+    info: { id: "test", name: "Test" },
+    assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
+    compact: async () => ({ ok: true, compacted: false }),
+    ingest: async () => ({ ingested: false }),
+  }));
 });
 
-afterEach(() => {
-  subagentRegistryTesting.setDepsForTest();
-});
+afterEach(resetRegistryLeafMocks);
 
 describe("killSubagentRunAdmin", () => {
   afterEach(() => {
@@ -997,10 +1008,9 @@ describe("killSubagentRunAdmin", () => {
       startedAt: Date.now() - 4_000,
     });
 
-    subagentRegistryTesting.setDepsForTest({
-      persistSubagentRunsToDiskOrThrow: () => {
-        throw new Error("session store unavailable");
-      },
+    resetRegistryLeafMocks();
+    vi.mocked(registryState.persistSubagentRunsToDiskOrThrow).mockImplementation(() => {
+      throw new Error("session store unavailable");
     });
 
     const result = await killSubagentRunAdmin({
@@ -1753,13 +1763,12 @@ describe("controlled subagent cancellation races", () => {
       }
       return patch ? { ...current, ...patch } : current;
     });
-    subagentRegistryTesting.setDepsForTest({
-      persistSubagentRunsToDiskOrThrow: () => {
-        persistenceWrites += 1;
-        if (persistenceWrites === 2) {
-          throw new Error("sqlite busy");
-        }
-      },
+    resetRegistryLeafMocks();
+    vi.mocked(registryState.persistSubagentRunsToDiskOrThrow).mockImplementation(() => {
+      persistenceWrites += 1;
+      if (persistenceWrites === 2) {
+        throw new Error("sqlite busy");
+      }
     });
 
     await expect(
@@ -2154,26 +2163,25 @@ describe("killAllControlledSubagentRuns", () => {
       });
     reserve();
     let writes = 0;
-    subagentRegistryTesting.setDepsForTest({
-      persistSubagentRunsToDiskOrThrow: () => {
-        writes += 1;
-        if (
-          ["session replacement at intent", "session replacement release"].includes(failure) &&
-          writes === 1
-        ) {
-          replaceSessionEntrySync(
-            { storePath, sessionKey: entry.childSessionKey },
-            { sessionId: "new-session", updatedAt: 2 },
-          );
-        }
-        if (
-          (failure === "intent write" && writes === 1) ||
-          (["tombstone write", "claim release", "session replacement release"].includes(failure) &&
-            writes === 2)
-        ) {
-          throw new Error("sqlite busy");
-        }
-      },
+    resetRegistryLeafMocks();
+    vi.mocked(registryState.persistSubagentRunsToDiskOrThrow).mockImplementation(() => {
+      writes += 1;
+      if (
+        ["session replacement at intent", "session replacement release"].includes(failure) &&
+        writes === 1
+      ) {
+        replaceSessionEntrySync(
+          { storePath, sessionKey: entry.childSessionKey },
+          { sessionId: "new-session", updatedAt: 2 },
+        );
+      }
+      if (
+        (failure === "intent write" && writes === 1) ||
+        (["tombstone write", "claim release", "session replacement release"].includes(failure) &&
+          writes === 2)
+      ) {
+        throw new Error("sqlite busy");
+      }
     });
     setSubagentControlDepsForTest({
       isEmbeddedAgentRunActive: () => {
@@ -2410,25 +2418,12 @@ describe("killAllControlledSubagentRuns", () => {
     async (kind) => {
       let failNextPersistence = true;
       let persistedAfterFailure = false;
-      subagentRegistryTesting.setDepsForTest({
-        cleanupBrowserSessionsForLifecycleEnd: async () => {},
-        ensureContextEnginesInitialized: () => {},
-        loadAgentRuntimePluginRegistryHandle: () => undefined,
-        persistSubagentRunsToDisk: () => {},
-        persistSubagentRunsToDiskOrThrow: () => {
-          if (failNextPersistence) {
-            failNextPersistence = false;
-            throw new Error("sqlite busy");
-          }
-          persistedAfterFailure = true;
-        },
-        restoreSubagentRunsFromDisk: () => 0,
-        resolveContextEngine: async () => ({
-          info: { id: "test", name: "Test" },
-          assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
-          compact: async () => ({ ok: true, compacted: false }),
-          ingest: async () => ({ ingested: false }),
-        }),
+      vi.mocked(registryState.persistSubagentRunsToDiskOrThrow).mockImplementation(() => {
+        if (failNextPersistence) {
+          failNextPersistence = false;
+          throw new Error("sqlite busy");
+        }
+        persistedAfterFailure = true;
       });
       const first = createSubagentRunRecord({
         runId: "run-bulk-persistence-failure-first",

@@ -11,8 +11,7 @@ const MAX_JSON_DEPTH = 64;
 const MAX_CHOICE_OPTIONS = 255;
 const MAX_SCORE_LEVELS = 10;
 
-// Use additionalProperties, not patternProperties: tool declaration renderers can
-// expose the value type as an index signature rather than erasing it to {}.
+// Dynamic maps retain typed values for both schema validation and inferred types.
 function map<T extends TSchema>(value: T, options: Record<string, unknown> = {}) {
   return Type.Unsafe<Record<string, Static<T>>>({
     type: "object",
@@ -94,7 +93,7 @@ const scoreQuestion = Type.Object(
 const question = Type.Union([noulQuestion, choiceQuestion, scoreQuestion]);
 
 /** Explicit shared state; independently evaluated questions never see other answers. */
-export const EvaluateInput = Type.Object(
+const EvaluateInput = Type.Object(
   {
     state: Type.Union(entry.anyOf, {
       description:
@@ -109,7 +108,7 @@ export const EvaluateInput = Type.Object(
       Type.String({
         ...model,
         description:
-          "Optional System One model ID or alias for this explicit tool call; defaults to the plugin’s evaluation-tool model. Native decisions use the host-selected model. A local Kev server uses its loaded checkpoint regardless of this label.",
+          "Host-selected System One model ID or alias. A local Kev server uses its loaded checkpoint regardless of this label.",
       }),
     ),
   },
@@ -163,7 +162,6 @@ const VendorResult = Type.Object(
   },
   objectOptions,
 );
-export const EvaluateOutput = Type.Object({ evaluation: VendorResult }, objectOptions);
 export type Evaluation = Static<typeof VendorResult>;
 const resultValidator = Compile(VendorResult);
 

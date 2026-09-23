@@ -84,6 +84,11 @@ export const runtimeProcessEntrypoints = {
     sourceWorkerName: "../boards/sqlite-board-store.worker",
     distWorkerPath: "boards/sqlite-board-store.worker.js",
   },
+  sessionSharingStore: {
+    currentModuleUrl,
+    sourceWorkerName: "../config/sessions/session-sharing-store.worker",
+    distWorkerPath: "config/sessions/session-sharing-store.worker.js",
+  },
   heartbeatOutcomeStore: {
     currentModuleUrl,
     sourceWorkerName: "heartbeat-outcome-store.worker",
@@ -168,6 +173,11 @@ export const runtimeProcessEntrypoints = {
     currentModuleUrl,
     sourceWorkerName: "../agents/sessions/session-manager-metadata.worker",
     distWorkerPath: "agents/sessions/session-manager-metadata.worker.js",
+  },
+  sessionTranscriptReports: {
+    currentModuleUrl,
+    sourceWorkerName: "../config/sessions/session-accessor.sqlite-transcript-reports.worker",
+    distWorkerPath: "config/sessions/session-accessor.sqlite-transcript-reports.worker.js",
   },
   sessionTranscriptReconcile: {
     currentModuleUrl,

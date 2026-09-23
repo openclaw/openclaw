@@ -156,7 +156,9 @@ describe("plugin credential authoring controls", () => {
     input.focus();
     editInput(input, "synthetic-first-key");
     await first.editor.updateComplete;
-    first.editor.querySelector<HTMLButtonElement>('[aria-label="Show API key"]')!.focus();
+    first.editor
+      .querySelector<HTMLButtonElement>('[aria-label="Show API key: Example API key"]')!
+      .focus();
     expect(first.context.onCommit).not.toHaveBeenCalled();
     second.editor.querySelector<HTMLInputElement>("input")!.focus();
     await vi.waitFor(() => expect(first.context.onCommit).toHaveBeenCalledOnce());
@@ -167,7 +169,9 @@ describe("plugin credential authoring controls", () => {
   it("reveals a stored literal only on request without committing it, and clears it on hide", async () => {
     const { editor, scope, context } = await mount();
     const input = editor.querySelector<HTMLInputElement>("input")!;
-    const reveal = editor.querySelector<HTMLButtonElement>('[aria-label="Show API key"]')!;
+    const reveal = editor.querySelector<HTMLButtonElement>(
+      '[aria-label="Show API key: Example API key"]',
+    )!;
     expect(input.value).toBe("");
     expect(scope.client.request).toHaveBeenCalledWith("plugins.credentials.inspect", {
       pluginId: "example",
@@ -191,7 +195,9 @@ describe("plugin credential authoring controls", () => {
     input.focus();
     input.blur();
     expect(context.onCommit).not.toHaveBeenCalled();
-    editor.querySelector<HTMLButtonElement>('[aria-label="Hide API key"]')!.click();
+    editor
+      .querySelector<HTMLButtonElement>('[aria-label="Hide API key: Example API key"]')!
+      .click();
     await editor.updateComplete;
     expect(input.value).toBe("");
     expect(input.type).toBe("password");
@@ -206,7 +212,9 @@ describe("plugin credential authoring controls", () => {
         baseHash: "new-revision",
         credential: { kind: "literal" },
       });
-      editor.querySelector<HTMLButtonElement>('[aria-label="Show API key"]')!.click();
+      editor
+        .querySelector<HTMLButtonElement>('[aria-label="Show API key: Example API key"]')!
+        .click();
       await vi.waitFor(() => expect(scope.client.request).toHaveBeenCalledTimes(2));
       if (change === "revision") {
         context.baseHash = "new-revision";
@@ -250,7 +258,9 @@ describe("plugin credential authoring controls", () => {
     expect(context.onCommit).not.toHaveBeenCalled();
     editInput(field, "synthetic-new-key");
     await editor.updateComplete;
-    editor.querySelector<HTMLButtonElement>('[aria-label="Show API key"]')!.click();
+    editor
+      .querySelector<HTMLButtonElement>('[aria-label="Show API key: Example API key"]')!
+      .click();
     await editor.updateComplete;
     expect(field.type).toBe("text");
     expect(field.value).toBe("synthetic-new-key");

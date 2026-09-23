@@ -66,7 +66,8 @@ describe("worker environment service", () => {
   });
 
   it("maintains configured providers on the existing timer with no environments", async () => {
-    vi.useFakeTimers();
+    // Keep the monotonic clock shared with real SQLite workers on its native epoch.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
     const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
     const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval");
     const maintain = vi.fn(async () => {});
@@ -369,7 +370,8 @@ describe("worker environment service", () => {
   it("owns and clears one periodic reconciliation timer", async () => {
     const environmentId = "worker-guarded-reconcile";
     await support.seedReady(environmentId);
-    vi.useFakeTimers();
+    // Keep the monotonic clock shared with real SQLite workers on its native epoch.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
     const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
     const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval");
     const inspect = vi.fn(async () => ({ status: "active" as const }));

@@ -77,10 +77,12 @@ export async function startTelegramTestApiProxy({
   leaseHealth,
 } = {}) {
   let responseHold;
+  let requestRejection;
   let heldResponse;
   let leaseError;
   const upstreamControllers = new Set();
   const holdEvents = [];
+  const rejectionEvents = [];
   const methodOrdinals = new Map();
   const heldWaiters = new Set();
   const sockets = new Set();
@@ -95,6 +97,7 @@ export async function startTelegramTestApiProxy({
   const stop = (error) => {
     leaseError ??= error;
     responseHold = undefined;
+    requestRejection = undefined;
     heldResponse?.release.resolve();
     for (const waiter of heldWaiters) waiter.reject(error);
     for (const controller of upstreamControllers) controller.abort(error);
@@ -102,9 +105,7 @@ export async function startTelegramTestApiProxy({
   };
   leaseHealth?.whenUnhealthy.then(stop);
 
-  const claimResponseHold = (method) => {
-    const ordinal = (methodOrdinals.get(method) ?? 0) + 1;
-    methodOrdinals.set(method, ordinal);
+  const claimResponseHold = (method, ordinal) => {
     if (!responseHold || responseHold.method !== method) return undefined;
     if (responseHold.skip > 0) {
       responseHold.skip -= 1;
@@ -145,16 +146,54 @@ export async function startTelegramTestApiProxy({
       const upstreamUrl = new URL(upstream);
       upstreamUrl.pathname = telegramTestApiPath(incoming.pathname);
       upstreamUrl.search = incoming.search;
+      const method = telegramApiMethod(incoming.pathname);
+      const ordinal = (methodOrdinals.get(method) ?? 0) + 1;
+      methodOrdinals.set(method, ordinal);
       const hasBody = request.method !== "GET" && request.method !== "HEAD";
+      let body = hasBody ? request : undefined;
+      const rejection = requestRejection;
+      if (rejection && rejection.method === method) {
+        if (rejection.bodyIncludes !== undefined && hasBody) {
+          const chunks = [];
+          for await (const chunk of request) chunks.push(Buffer.from(chunk));
+          body = Buffer.concat(chunks);
+        }
+        const matches =
+          requestRejection === rejection &&
+          (rejection.bodyIncludes === undefined ||
+            (Buffer.isBuffer(body) && body.includes(rejection.bodyIncludes)));
+        if (matches && rejection.skip > 0) {
+          rejection.skip -= 1;
+        } else if (matches) {
+          assertLeaseHealthy();
+          requestRejection = undefined;
+          rejectionEvents.push({
+            method,
+            ordinal,
+            rejectedAt: Date.now(),
+            upstreamForwarded: false,
+            errorCode: 400,
+          });
+          request.resume();
+          response.writeHead(400, { "content-type": "application/json" });
+          response.end(
+            JSON.stringify({
+              ok: false,
+              error_code: 400,
+              description: "Bad Request: synthetic Telegram E2E rejection",
+            }),
+          );
+          return;
+        }
+      }
       const result = await fetchImpl(upstreamUrl, {
         method: request.method,
         headers: requestHeaders(request.headers),
-        ...(hasBody ? { body: request, duplex: "half" } : {}),
+        ...(hasBody ? { body, duplex: "half" } : {}),
         signal: upstreamController.signal,
       });
       assertLeaseHealthy();
-      const method = telegramApiMethod(incoming.pathname);
-      const hold = method ? claimResponseHold(method) : undefined;
+      const hold = method ? claimResponseHold(method, ordinal) : undefined;
       if (hold) {
         const body = result.body ? Buffer.from(await result.arrayBuffer()) : undefined;
         response.writeHead(result.status, responseHeaders(result.headers));
@@ -232,6 +271,11 @@ export async function startTelegramTestApiProxy({
   return {
     apiRoot,
     drainUpdates: (token) => drainTelegramTestUpdates(apiRoot, token),
+    rejectNextRequest({ method, skip = 0, bodyIncludes }) {
+      assertLeaseHealthy();
+      if (requestRejection) throw new Error("A Telegram API request rejection is active.");
+      requestRejection = { method, skip, bodyIncludes };
+    },
     holdNextResponse({ method, skip = 0 }) {
       assertLeaseHealthy();
       if (responseHold || heldResponse) throw new Error("A Telegram API response hold is active.");
@@ -271,6 +315,7 @@ export async function startTelegramTestApiProxy({
       return event;
     },
     getResponseHoldEvents: () => holdEvents.map((event) => ({ ...event })),
+    getRequestRejectionEvents: () => rejectionEvents.map((event) => ({ ...event })),
     close: () => {
       closing ??= (async () => {
         stop(new Error("Telegram Test Server proxy closed."));

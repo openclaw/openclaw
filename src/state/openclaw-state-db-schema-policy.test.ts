@@ -21,7 +21,7 @@ import {
   openOpenClawStateDatabase,
   repairOpenClawStateDatabaseReadabilityForDoctor,
   repairOpenClawStateDatabaseSchema,
-  repairOpenClawStateDatabaseSchemaIfNeeded,
+  prepareOpenClawStateDatabaseSchema,
   runOpenClawStateWriteTransaction,
   runWithOpenClawStateBusyTimeout,
   withOpenClawStateStartupMigrationCheckpointDatabase,
@@ -234,18 +234,20 @@ describe("existing shared-state schema admission", () => {
     expect(readPersistedSchema(options.path)).toEqual(before);
   });
 
-  it("refuses global repair and startup-checkpoint entry points inside the node scope", () => {
+  it("refuses global repair and startup-checkpoint entry points inside the node scope", async () => {
     const { options, before } = createExistingState();
-    withExistingOpenClawStateSchema(options, () => {
+    await withExistingOpenClawStateSchema(options, async () => {
       for (const run of [
         () => repairOpenClawStateDatabaseSchema(options),
-        () => repairOpenClawStateDatabaseSchemaIfNeeded(options),
         () => repairOpenClawStateDatabaseReadabilityForDoctor(options),
         () => initializeNativeOpenClawStateDatabase(options),
         () => withOpenClawStateStartupMigrationCheckpointDatabase(() => "checkpoint", options),
       ]) {
         expect(run).toThrow(/schema repair.*owned/i);
       }
+      await expect(prepareOpenClawStateDatabaseSchema(options)).rejects.toThrow(
+        /schema repair.*owned/i,
+      );
     });
     expect(readPersistedSchema(options.path)).toMatchObject(before);
   });

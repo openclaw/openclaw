@@ -14,12 +14,15 @@ import { prepareTranscriptPayload, transcriptEventJsonSql } from "./transcript-p
 export const historicalId = "cold-history-window";
 export const currentId = "current-window";
 
-export async function createSessionColdStorageFixture(storePath: string) {
+export async function createSessionColdStorageFixture(
+  storePath: string,
+  sessionKey = "agent:main:cold-roundtrip",
+) {
   const options = { agentId: "main", path: storePath };
   const scope = {
     agentId: "main",
     storePath,
-    sessionKey: "agent:main:cold-roundtrip",
+    sessionKey,
     sessionId: historicalId,
   };
   await replaceSessionEntry(scope, { sessionId: historicalId, updatedAt: 1 });

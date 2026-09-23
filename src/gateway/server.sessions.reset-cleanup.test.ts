@@ -21,6 +21,7 @@ import {
 } from "../sessions/session-lifecycle-admission.js";
 import { runExclusiveSessionLifecycle } from "../sessions/session-lifecycle-admission.test-support.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import { embeddedRunMock, testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsHandlerTestHarness,
@@ -45,7 +46,8 @@ const { createSessionStoreDir, seedActiveMainSession } = setupGatewaySessionsHan
 
 type ConfigFilePatch = Parameters<(typeof import("../config/config.js"))["writeConfigFile"]>[0];
 
-afterEach(() => {
+afterEach(async () => {
+  await disposeSessionReadContexts();
   closeOpenClawStateDatabaseForTest();
 });
 

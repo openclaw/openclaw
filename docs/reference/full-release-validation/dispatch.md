@@ -13,6 +13,14 @@ whole release. Run release preparation before freezing the Code SHA; it
 refreshes Control UI locale output when the background bot has not landed it
 yet, then enforces the same strict zero-fallback check used by release CI.
 
+Generated-locale drift is a warning before dispatch, not a reason to refuse
+validation. Source PRs and the serialized locale-refresh workflows land
+separately, so generated output can temporarily lag. Record any preflight drift
+against the frozen target SHA and continue dispatch. The normal-CI child still
+runs strict `control-ui-i18n` and `native-i18n` jobs; their failures remain visible
+in the run summary and fail validation. PR-side locale checks, release preparation,
+and publication requirements are unchanged.
+
 Linux (`ubuntu`) cross-OS fresh-install and upgrade lanes gate publication in
 the beta, stable, and full profiles. Windows and macOS cross-OS lanes run in
 parallel as **advisory** coverage: their pass/fail conclusions remain in the

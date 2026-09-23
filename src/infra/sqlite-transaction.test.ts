@@ -501,10 +501,37 @@ describe("runSqliteImmediateTransactionSync", () => {
       expect.objectContaining({
         async: false,
         database: "agent.sqlite",
-        elapsedMs: 1_500,
+        elapsedMs: 3_000,
         isMainThread,
         pid: process.pid,
         threadId,
+      }),
+    );
+  });
+
+  it("names a slow transaction holder that rolls back", () => {
+    const logger = { warn: vi.fn() };
+    let now = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const db = createDatabase();
+    expect(() =>
+      runSqliteImmediateTransactionSync(
+        db,
+        () => {
+          now += 5_100;
+          throw new Error("rejected mutation");
+        },
+        { databaseLabel: "agent.sqlite", operationLabel: "session.write", logger },
+      ),
+    ).toThrow("rejected mutation");
+    expect(db.isTransaction).toBe(false);
+    expect(logger.warn).toHaveBeenCalledWith(
+      "slow SQLite transaction hold",
+      expect.objectContaining({
+        database: "agent.sqlite",
+        elapsedMs: 5_100,
+        isMainThread,
+        operation: "session.write",
       }),
     );
   });

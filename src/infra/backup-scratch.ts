@@ -6,8 +6,8 @@ import { getChildLogger } from "../logging/logger.js";
 import { isMissingPathError } from "./errno.js";
 import { formatErrorMessage, hasErrnoCode } from "./errors.js";
 import { sameFileIdentity } from "./fs-safe-advanced.js";
-import { root as createRoot, type Root } from "./fs-safe.js";
-import { isSqliteLockError } from "./sqlite-error-diagnostics.js";
+import { FsSafeError, root as createRoot, type Root } from "./fs-safe.js";
+import { isSqliteLockError, isSqliteNativeOpenFailure } from "./sqlite-error-diagnostics.js";
 import { createPrivateSqliteTempDirectory } from "./sqlite-private-directory.js";
 import {
   acquireSqliteStagingToken,
@@ -17,7 +17,8 @@ import {
 } from "./sqlite-staging-token.js";
 
 const scratchName =
-  /^openclaw-backup-(?:retired-)?(?:[A-Za-z0-9]{6}|[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12})$/u;
+  /^openclaw-backup-(?:owned-|retired-)?(?:[A-Za-z0-9]{6}|[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12})$/u;
+const ownedPrefix = "openclaw-backup-owned-";
 const retiredPrefix = "openclaw-backup-retired-";
 
 export type BackupScratch = { directory: string; release: SqliteStagingToken; boundary: Root };
@@ -32,7 +33,7 @@ export type BackupScratchReport = {
 
 export async function createBackupScratchDirectory(root: string): Promise<BackupScratch> {
   for (let attempt = 0; ; attempt += 1) {
-    const directory = await createPrivateSqliteTempDirectory(root, "openclaw-backup-");
+    const directory = await createPrivateSqliteTempDirectory(root, ownedPrefix);
     let boundary: Root | undefined;
     try {
       boundary = await createRoot(directory);
@@ -47,7 +48,12 @@ export async function createBackupScratchDirectory(root: string): Promise<Backup
       if (
         isSqliteLockError(error) ||
         error instanceof SqliteStagingRetiredError ||
-        hasErrnoCode(error, "ENOENT")
+        isMissingPathError(error) ||
+        ((isSqliteNativeOpenFailure(error) ||
+          (error instanceof FsSafeError &&
+            error.code === "path-mismatch" &&
+            isMissingPathError(error.cause))) &&
+          (await wasScratchReclaimed(directory)))
       ) {
         if (attempt < 2) {
           continue;
@@ -292,8 +298,13 @@ export async function maintainBackupScratch(params: {
               }
               throw error;
             });
-          await inspectScratchPayload(directory);
-          if (!token && !entry.name.startsWith(retiredPrefix)) {
+          const owned = entry.name.startsWith(ownedPrefix);
+          // Live snapshots can remove journals while inspection awaits lstat.
+          // Token-backed and newly owned repair inspect after exclusive admission below.
+          if (!params.repair || (!token && !owned)) {
+            await inspectScratchPayload(directory);
+          }
+          if (!token && !owned && !entry.name.startsWith(retiredPrefix)) {
             report.warnings.push(
               `Legacy backup scratch at ${directory} has no lifetime token. Confirm older backup processes have stopped before removing it.`,
             );
@@ -303,8 +314,9 @@ export async function maintainBackupScratch(params: {
             report.unchecked.push(directory);
             continue;
           }
-          if (token) {
-            release = acquireSqliteStagingToken(directory, "reclaim");
+          if (token || owned) {
+            // New creators and reclaimers arbitrate the same token before payload admission.
+            release = acquireSqliteStagingToken(directory, "reclaim", { allowMissing: owned });
           }
           const boundary = await createRoot(directory);
           const current = await fs.lstat(directory);

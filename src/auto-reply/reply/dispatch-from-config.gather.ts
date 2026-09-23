@@ -169,6 +169,9 @@ export async function gatherDispatchRequest(
     messageId,
     sessionKey,
     sessionId: lifecycleSessionId,
+    // The target agent ingests the prompt for this turn even when a command
+    // retargets execution to another session's agent.
+    agentId: targetAgentId,
     source: "dispatch",
     processingReason: "message_start",
     startedAtMs: startTime,
@@ -270,7 +273,7 @@ export async function gatherDispatchRequest(
   };
 
   const boundAcpDispatchSessionKey = state.allowInboundHandlers
-    ? resolveBoundAcpDispatchSessionKey({ ctx, cfg })
+    ? await resolveBoundAcpDispatchSessionKey({ ctx, cfg })
     : undefined;
   const acpDispatchSessionKey =
     boundAcpDispatchSessionKey ?? initialSessionStoreEntry.sessionKey ?? sessionKey;

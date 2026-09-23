@@ -37,6 +37,30 @@ export function isServiceInstallationOnlyRepair(audit: ServiceConfigAudit): bool
   );
 }
 
+export function hasRepairableServiceDefinitionDrift(audit: ServiceConfigAudit): boolean {
+  return (
+    !audit.definitionDriftError &&
+    audit.definitionDrift?.some((finding) => finding.kind === "outdated") === true &&
+    !audit.definitionDrift.some((finding) => finding.kind === "unknown-edit")
+  );
+}
+
+/** Native policy repair must not auto-approve unrelated command or credential changes. */
+export function isServiceDefinitionOnlyRepair(audit: ServiceConfigAudit): boolean {
+  const policyCodes: ReadonlySet<string> = new Set([
+    SERVICE_AUDIT_CODES.systemdAfterNetworkOnline,
+    SERVICE_AUDIT_CODES.systemdWantsNetworkOnline,
+    SERVICE_AUDIT_CODES.systemdRestartSec,
+    SERVICE_AUDIT_CODES.systemdKillModeProcessOrNone,
+    SERVICE_AUDIT_CODES.systemdKillModeControlGroup,
+    SERVICE_AUDIT_CODES.systemdStopTimeout,
+    "launchd-run-at-load",
+    "launchd-keep-alive",
+    "launchd-env-wrapper-outdated",
+  ]);
+  return audit.issues.every((issue) => policyCodes.has(issue.code));
+}
+
 export function isOperatorOwnedEnvironmentIssue(
   issue: { code: string; environmentKeys?: readonly string[] },
   command: GatewayServiceCommandConfig,
