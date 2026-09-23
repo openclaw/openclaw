@@ -25,7 +25,6 @@ import {
   isReleaseGhArtifactMissingError,
   MAX_RELEASE_ARTIFACT_BYTES,
   releaseExecutionPlanSha256,
-  releaseWaivedJobs,
   terminalPolicyPass,
   validateReleaseChildDispatchBinding,
   validateReleaseCoveragePolicyBinding,
@@ -1325,7 +1324,7 @@ describe("release decision policy", () => {
   ].map((name) => ({ name, conclusion: "failure", status: "completed" }));
 
   it.each(["beta", "stable", "full"])(
-    "records Windows Node shard and macOS Swift failures of the CI child without blocking %s publication",
+    "blocks %s publication when Windows Node or macOS Swift CI jobs fail",
     (releaseProfile) => {
       const snapshot = child("normalCi", {
         conclusion: "success",
@@ -1341,21 +1340,9 @@ describe("release decision policy", () => {
         releaseProfile,
         workflowRef: "main",
       });
-      expect(result).toMatchObject({ blockers: [], blockerCount: 0, errors: [], state: "passed" });
-      expect(
-        formatReleaseStateOutcome(
-          buildReleaseStateArtifact({
-            children: [snapshot],
-            decision: result,
-            executionPlan: { parentRunAttempt: 1, sha256: "x" },
-            expected: { parentRunAttempt: 1, parentRunId: "77", targetSha: TARGET_SHA },
-            mode: "decision",
-            releaseProfile,
-            rerunGroup: "all",
-          }),
-        ),
-      ).toContain(
-        "- Advisory: normalCi advisory lane checks-windows-node-test-1 ended failure; fix it in parallel, it does not block npm/ClawHub publication",
+      expect(result.state).toBe("blocked_complete");
+      expect(result.blockers.map((blocker) => blocker.job)).toEqual(
+        nativeCiJobs.map((job) => job.name),
       );
     },
   );
@@ -1378,7 +1365,11 @@ describe("release decision policy", () => {
         releaseProfile: "stable",
         workflowRef: "main",
       });
-      expect(result.blockers.map((blocker) => blocker.job)).toEqual([name, "openclaw/ci-gate"]);
+      expect(result.blockers.map((blocker) => blocker.job)).toEqual([
+        ...nativeCiJobs.map((job) => job.name),
+        name,
+        "openclaw/ci-gate",
+      ]);
       expect(result.state).toBe("blocked_complete");
     },
   );
@@ -3977,10 +3968,16 @@ printf '%s\\n' '{"id":101,"event":"workflow_dispatch","path":".github/workflows/
         env,
         timeout: 10_000,
       });
+      if (childKey === "normalCi" && conclusion === "failure") {
+        expect(valid.status).toBe(2);
+        expect(valid.stderr).toContain("blocked_complete");
+        expect(valid.stderr).toContain(jobName);
+        return;
+      }
       expect(valid.status, valid.stderr).toBe(0);
 
       expect(JSON.parse(readFileSync(manifestPath, "utf8")).advisoryJobs).toEqual(
-        jobName === "test"
+        jobName === "test" || childKey === "normalCi"
           ? []
           : [
               {
@@ -4604,206 +4601,40 @@ printf '{"id":%s,"event":"workflow_dispatch","path":".github/workflows/%s@refs/h
   });
 });
 
-describe("operator lane waiver", () => {
+describe("release verifier completion", () => {
   const policy = { releaseProfile: "stable", workflowRef: "release-ci/tooling" };
   const job = (name: string, conclusion = "failure") => ({ conclusion, name, status: "completed" });
-  const failedCi = () =>
-    child("normalCi", {
-      conclusion: "failure",
-      jobs: [
-        job("checks-node-bundle-infra-small-runtime-2"),
-        job("checks-windows-node-test-1"),
-        job("openclaw/ci-gate"),
-      ],
-      status: "completed",
-    });
-  const releaseChecks = (jobs: Array<{ conclusion: string; name: string; status: string }>) =>
-    child("releaseChecksCandidate", {
-      conclusion: "failure",
-      jobs: [...jobs, job("Verify release checks")],
-      runId: "303",
-      status: "completed",
-    });
-
   it.each([
-    ["success", "passed", "passed", "passed"],
-    ["failure", "blocked_complete", "passed", "passed"],
-    ["skipped", "blocked_complete", "blocked_complete", "blocked_complete"],
-    ["neutral", "blocked_complete", "blocked_complete", "blocked_complete"],
-    ["cancelled", "blocked_complete", "blocked_complete", "blocked_complete"],
-    ["timed_out", "blocked_complete", "blocked_complete", "blocked_complete"],
+    ["success", "passed", "blocked_complete"],
+    ["failure", "blocked_complete", "blocked_complete"],
+    ["skipped", "blocked_complete", "blocked_complete"],
+    ["neutral", "blocked_complete", "blocked_complete"],
+    ["cancelled", "blocked_complete", "blocked_complete"],
+    ["timed_out", "blocked_complete", "blocked_complete"],
   ])(
     "requires a finished aggregator result for failed workflows: %s",
-    (conclusion, releaseState, waivedReleaseState, ciState) => {
-      for (const laneWaiver of ["", "ship"]) {
-        for (const [key, gate, lane, expectedState] of [
-          [
-            "releaseChecksCandidate",
-            "Verify release checks",
-            "cross_os_release_checks / macOS / packaged fresh",
-            laneWaiver ? waivedReleaseState : releaseState,
-          ],
-          ["normalCi", "openclaw/ci-gate", "checks-windows-node-test-5", ciState],
-        ] as const) {
-          const snapshot = child(key, {
-            conclusion: "failure",
-            jobs: [job(lane), job(gate, conclusion)],
-            status: "completed",
-          });
-          expect(
-            terminalPolicyPass(snapshot, policy.releaseProfile, policy.workflowRef, laneWaiver),
-          ).toBe(expectedState === "passed");
-          expect(
-            classifyReleaseSnapshot({ children: [snapshot], laneWaiver, ...policy }).state,
-          ).toBe(expectedState);
-        }
+    (conclusion, releaseState, ciState) => {
+      for (const [key, gate, lane, expectedState] of [
+        [
+          "releaseChecksCandidate",
+          "Verify release checks",
+          "cross_os_release_checks / macOS / packaged fresh",
+          releaseState,
+        ],
+        ["normalCi", "openclaw/ci-gate", "checks-windows-node-test-5", ciState],
+      ] as const) {
+        const snapshot = child(key, {
+          conclusion: "failure",
+          jobs: [job(lane), job(gate, conclusion)],
+          status: "completed",
+        });
+        expect(terminalPolicyPass(snapshot, policy.releaseProfile, policy.workflowRef)).toBe(
+          expectedState === "passed",
+        );
+        expect(classifyReleaseSnapshot({ children: [snapshot], ...policy }).state).toBe(
+          expectedState,
+        );
       }
     },
   );
-
-  it("keeps native app and UI lane failures advisory without a waiver", () => {
-    const ci = child("normalCi", {
-      conclusion: "failure",
-      jobs: [
-        job("checks-windows-node-test-5"),
-        job("macos-swift (build)"),
-        job("checks-ui (1/3)", "cancelled"),
-        job("openclaw/ci-gate"),
-      ],
-      status: "completed",
-    });
-    expect(classifyReleaseSnapshot({ children: [ci], ...policy })).toMatchObject({
-      blockers: [],
-      state: "passed",
-    });
-    expect(terminalPolicyPass(failedCi(), policy.releaseProfile, policy.workflowRef)).toBe(false);
-    expect(
-      classifyReleaseSnapshot({ children: [failedCi()], ...policy }).blockers.map((b) => b.job),
-    ).toEqual(["checks-node-bundle-infra-small-runtime-2", "openclaw/ci-gate"]);
-  });
-
-  it("admits waived non-proof lane failures and records them", () => {
-    const children = [
-      failedCi(),
-      releaseChecks([
-        job("Run package acceptance / Docker product acceptance (artifact-only) / Gateway E2E"),
-      ]),
-      child("productPerformance", {
-        conclusion: "failure",
-        jobs: [job("benchmark")],
-        runId: "505",
-        status: "completed",
-      }),
-    ];
-    const result = classifyReleaseSnapshot({ children, laneWaiver: "ship 2026.9.6", ...policy });
-    expect(result).toMatchObject({ blockers: [], errors: [], state: "passed" });
-    expect(releaseWaivedJobs(children, { ...policy, laneWaiver: "ship 2026.9.6" })).toEqual([
-      { child: "normalCi", conclusion: "failure", job: "checks-node-bundle-infra-small-runtime-2" },
-      { child: "normalCi", conclusion: "failure", job: "openclaw/ci-gate" },
-      {
-        child: "releaseChecksCandidate",
-        conclusion: "failure",
-        job: "Run package acceptance / Docker product acceptance (artifact-only) / Gateway E2E",
-      },
-      { child: "releaseChecksCandidate", conclusion: "failure", job: "Verify release checks" },
-      { child: "productPerformance", conclusion: "failure", job: "benchmark" },
-    ]);
-    expect(classifyReleaseSnapshot({ children, ...policy }).state).toBe("blocked_complete");
-  });
-
-  it.each([
-    "install_smoke_release_checks / installer_smoke",
-    "Run package acceptance / Docker product acceptance (artifact-only) / Docker E2E targeted lanes (upgrade-survivor)",
-    "Run package acceptance / Docker product acceptance (artifact-only) / Docker E2E targeted lanes (published-upgrade-survivor)",
-    "Qualify release npm artifacts",
-    "resolve_target",
-  ])("keeps the %s proof blocking under a waiver", (name) => {
-    const result = classifyReleaseSnapshot({
-      children: [releaseChecks([job(name)])],
-      laneWaiver: "ship",
-      ...policy,
-    });
-    expect(result.state).toBe("blocked_complete");
-    expect(result.blockers.map((blocker) => blocker.job)).toEqual([name, "Verify release checks"]);
-  });
-
-  it("waives a lost first-hop lane only behind green survivor lanes", () => {
-    const firstHop =
-      "Run package acceptance / Docker product acceptance (artifact-only) / Docker E2E targeted lanes (update-first-hop-compat-2026.9.5)";
-    const survivor = (conclusion: string) =>
-      job(
-        "Run package acceptance / Docker product acceptance (artifact-only) / Docker E2E targeted lanes (upgrade-survivor)",
-        conclusion,
-      );
-    const admitted = classifyReleaseSnapshot({
-      children: [releaseChecks([job(firstHop, "timed_out"), survivor("success")])],
-      laneWaiver: "ship",
-      ...policy,
-    });
-    expect(admitted).toMatchObject({ blockers: [], state: "passed" });
-    for (const jobs of [[job(firstHop, "timed_out")], [job(firstHop), survivor("failure")]]) {
-      const blocked = classifyReleaseSnapshot({
-        children: [releaseChecks(jobs)],
-        laneWaiver: "ship",
-        ...policy,
-      });
-      expect(blocked.state).toBe("blocked_complete");
-      expect(blocked.blockers.map((blocker) => blocker.job)).toContain(firstHop);
-    }
-  });
-
-  it("keeps a solitary gate failure and incomplete evidence blocking under a waiver", () => {
-    const lonelyGate = child("normalCi", {
-      conclusion: "failure",
-      jobs: [job("checks-node-fast", "success"), job("openclaw/ci-gate")],
-      status: "completed",
-    });
-    expect(terminalPolicyPass(lonelyGate, policy.releaseProfile, policy.workflowRef, "ship")).toBe(
-      false,
-    );
-    const running = child("pluginPrereleaseCandidate", {
-      conclusion: "failure",
-      jobs: [job("plugin-prerelease-node-shard"), { ...job("late"), status: "in_progress" }],
-      runId: "202",
-      status: "completed",
-    });
-    expect(terminalPolicyPass(running, policy.releaseProfile, policy.workflowRef, "ship")).toBe(
-      false,
-    );
-  });
-
-  it("keeps artifact gate failures blocking under a waiver", () => {
-    const result = classifyReleaseSnapshot({
-      children: [failedCi()],
-      laneWaiver: "ship",
-      localFailures: releasePlanGateFailures([
-        { name: "Qualify release npm artifacts", required: true, result: "failure" },
-      ]),
-      ...policy,
-    });
-    expect(result.state).toBe("blocked_complete");
-    expect(result.blockers.map((blocker) => blocker.job)).toEqual([
-      "Qualify release npm artifacts",
-    ]);
-  });
-
-  it("binds the waiver into the sealed plan digest and verification", () => {
-    const sealed = executionPlan({}, { laneWaiver: "  ship 2026.9.6 \n" });
-    expect(sealed.laneWaiver).toBe("ship 2026.9.6");
-    expect(sealed.sha256).not.toBe(executionPlan().sha256);
-    expect(
-      validateReleaseExecutionPlanArtifact(sealed, { laneWaiver: "ship 2026.9.6" }),
-    ).toMatchObject({
-      laneWaiver: "ship 2026.9.6",
-    });
-    expect(() => validateReleaseExecutionPlanArtifact(sealed, { laneWaiver: "" })).toThrow(
-      "lane waiver differs from the expected execution plan",
-    );
-    expect(() =>
-      validateReleaseExecutionPlanArtifact(executionPlan(), { laneWaiver: "ship" }),
-    ).toThrow("lane waiver differs from the expected execution plan");
-    expect(() => validateReleaseExecutionPlanArtifact({ ...sealed, laneWaiver: "edited" })).toThrow(
-      "release execution plan artifact digest is invalid",
-    );
-  });
 });

@@ -31,8 +31,7 @@ import {
   composeReleaseChildAttemptEvidence,
   formatReleaseStateOutcome,
   isReleaseCheckJobAdvisory,
-  normalizeReleaseLaneWaiver,
-  releaseJobAdvisoryReason,
+  isReleaseJobAdvisory,
   isReleaseGhArtifactMissingError,
   isSplitChangelogEvidenceDelta,
   classifyReleaseChangelogEvidenceComparison,
@@ -1124,60 +1123,33 @@ function normalizeManifestChildEvidence(value) {
   );
 }
 
-export function releaseAdvisoryJobEvidence(
-  childEvidence,
-  releaseProfile,
-  workflowRef,
-  laneWaiver = "",
-) {
-  const normalizedWaiver = normalizeReleaseLaneWaiver(laneWaiver);
+export function releaseAdvisoryJobEvidence(childEvidence, releaseProfile, workflowRef) {
   return Object.entries(childEvidence ?? {})
     .toSorted(([left], [right]) => left.localeCompare(right))
-    .flatMap(([child, evidence]) => {
-      const historical = /^releaseChecks(?:Independent|Candidate)?$/u.test(child)
-        ? evidence.jobs.filter((job) =>
-            isReleaseCheckJobAdvisory({ jobName: job.name, releaseProfile, workflowRef }),
-          )
-        : [];
-      const listed = new Set(historical.map((job) => job.name));
-      // Failed lanes that policy or the operator lane waiver keeps advisory.
-      const failed = evidence.jobs.filter(
-        (job) =>
-          !listed.has(job.name) &&
-          job.status === "completed" &&
-          !["neutral", "skipped", "success"].includes(String(job.conclusion ?? "")),
-      );
-      return [...historical, ...failed]
-        .map((job) => ({
-          job,
-          reason: listed.has(job.name)
-            ? "policy"
-            : releaseJobAdvisoryReason({
+    .flatMap(([child, evidence]) =>
+      evidence.jobs
+        .filter(
+          (job) =>
+            (/^releaseChecks(?:Independent|Candidate)?$/u.test(child) &&
+              isReleaseCheckJobAdvisory({ jobName: job.name, releaseProfile, workflowRef })) ||
+            (job.status === "completed" &&
+              !["neutral", "skipped", "success"].includes(String(job.conclusion ?? "")) &&
+              isReleaseJobAdvisory({
                 childKey: child,
                 jobName: job.name,
                 releaseProfile,
                 workflowRef,
-                laneWaiver: normalizedWaiver,
-                jobs: evidence.jobs,
-              }),
-        }))
-        .filter(({ reason }) => reason !== "")
-        .toSorted((left, right) => compareReleaseJobsByName(left.job, right.job))
-        .map(({ job, reason }) => {
-          /** @type {{ child: string, job: string, status: string, conclusion: string, policy: string, reason?: string }} */
-          const entry = {
-            child,
-            job: job.name,
-            status: job.status,
-            conclusion: job.conclusion,
-            policy: "advisory",
-          };
-          if (reason === "lane_waiver") {
-            entry.reason = reason;
-          }
-          return entry;
-        });
-    });
+              })),
+        )
+        .toSorted(compareReleaseJobsByName)
+        .map((job) => ({
+          child,
+          job: job.name,
+          status: job.status,
+          conclusion: job.conclusion,
+          policy: "advisory",
+        })),
+    );
 }
 
 function manifestEvidenceIdentity(manifest) {
@@ -1322,12 +1294,7 @@ export function validateParentManifest(value, expected) {
     );
   }
   const childEvidence = normalizeManifestChildEvidence(value.childEvidence);
-  const advisoryJobs = releaseAdvisoryJobEvidence(
-    childEvidence,
-    releaseProfile,
-    value.workflowRef,
-    validationInputs?.laneWaiver,
-  );
+  const advisoryJobs = releaseAdvisoryJobEvidence(childEvidence, releaseProfile, value.workflowRef);
   if (
     value.advisoryJobs !== undefined &&
     JSON.stringify(sortReleaseJsonValueKeys(value.advisoryJobs)) !==
@@ -2594,7 +2561,6 @@ async function validateStrictChildRun({
       },
       releaseProfile,
       parentEvidence.manifest.workflowRef,
-      parentEvidence.manifest.validationInputs?.laneWaiver,
     )
   ) {
     throw new Error(`manifest child run does not pass release policy: ${child.name}`);
@@ -2612,7 +2578,6 @@ async function validateStrictChildRun({
       { [child.manifestKey]: { jobs } },
       releaseProfile,
       parentEvidence.manifest.workflowRef,
-      parentEvidence.manifest.validationInputs?.laneWaiver,
     ),
     conclusion: run.conclusion,
     dispatchNonce: `full-release-validation-${parentEvidence.manifest.runId}-${originAttempt}${child.suffix}`,
@@ -3589,13 +3554,10 @@ async function main() {
     }
 
     const selectedKeys = requiredChildKeysForManifest(sourceManifest);
-    if (sourceManifest.validationInputs?.laneWaiver) {
-      console.log(`lane-waiver: ${sourceManifest.validationInputs.laneWaiver}`);
-    }
     for (const job of sourceManifest.advisoryJobs) {
       const failed = job.status === "completed" && job.conclusion !== "success";
       console.log(
-        `${failed ? "::warning title=Advisory lane failed::" : "advisory: "}${job.reason === "lane_waiver" ? "(lane waiver) " : ""}${job.child} ${job.status}/${job.conclusion || "none"} ${job.job}`,
+        `${failed ? "::warning title=Advisory lane failed::" : "advisory: "}${job.child} ${job.status}/${job.conclusion || "none"} ${job.job}`,
       );
     }
     const expectedChildren = expectedSelectedChildDispatches(

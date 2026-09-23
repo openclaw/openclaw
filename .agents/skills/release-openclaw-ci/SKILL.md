@@ -40,12 +40,9 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   instead of healing broader main.
 - Validate provider secrets before dispatching expensive full release matrices.
 - Linux (`ubuntu`) cross-OS lanes gate publication for beta, stable, and full.
-  Windows/macOS cross-OS lanes, the CI child's `checks-windows-node-test-*`
-  shards, and its `macos-swift (...)` app lanes run in parallel as advisory
-  coverage. Record their actual pass/fail conclusions (`advisoryJobs` in the
-  manifest, `::warning::` naming the lane in Release Decision); failures do not
-  block Release Decision, npm publication, the publish preflight, or
-  `pnpm release:candidate`. Fix them in parallel; never hold npm for them.
+  Windows/macOS cross-OS lanes run in parallel as advisory coverage. Record
+  their actual pass/fail conclusions. Selected normal CI lanes, including
+  Windows Node, macOS Swift, and Control UI, remain blocking.
 - Release priority: release runs always beat PR-side hosted-runner work. The
   repo variable `OPENCLAW_RELEASE_PRIORITY_RUN` names the active FRV parent;
   `pnpm ci:full-release` records the pause window, sets it on dispatch, and
@@ -480,10 +477,6 @@ publish workflow reads the effective profile from the full-validation manifest.
 Stable publication requires soak unless the operator supplies `stable_soak_waiver`
 with a reason; the publisher forwards and records that reason in release evidence
 without changing validation coverage or other publication gates.
-An operator lane waiver (repository variable `OPENCLAW_FRV_LANE_WAIVER="<target version> <reason>"`, cleared after the release) keeps
-non-proof lane failures advisory; install-smoke, upgrade-survivor, pack/qualify-npm,
-`resolve_target`, and artifact gates stay blocking, and publishing that manifest
-needs the same `lane_waiver` acknowledgement on the publish workflow.
 
 ### Extended-stable validation
 

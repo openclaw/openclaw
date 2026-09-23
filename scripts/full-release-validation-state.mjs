@@ -34,9 +34,6 @@ import {
   buildReleaseValidationManifest,
   classifyReleaseGhTransportError,
   classifyReleaseSnapshot,
-  normalizeReleaseLaneWaiver,
-  releaseWaivedJobs,
-  validateReleaseLaneWaiverBinding,
   composeReleaseChildAttemptEvidence,
   formatAdvisoryJobFailure,
   formatReleaseStateOutcome,
@@ -516,30 +513,6 @@ function appendSummary(mode, payload) {
   );
 }
 
-function reportLaneWaiver(children, policy) {
-  if (!policy.laneWaiver) {
-    return;
-  }
-  const waived = releaseWaivedJobs(children, policy);
-  for (const entry of waived) {
-    console.log(`::warning title=Lane waived::${entry.child} ${entry.job} (${entry.conclusion})`);
-  }
-  if (!process.env.GITHUB_STEP_SUMMARY) {
-    return;
-  }
-  appendFileSync(
-    process.env.GITHUB_STEP_SUMMARY,
-    [
-      "## Operator lane waiver",
-      "",
-      `- Reason: ${policy.laneWaiver}`,
-      ...waived.map((entry) => `- Waived: ${entry.child} ${entry.job} (${entry.conclusion})`),
-      ...(waived.length === 0 ? ["- Waived: none"] : []),
-      "",
-    ].join("\n"),
-  );
-}
-
 export function formatReleaseStateHeartbeat(mode, decision) {
   return `${mode} heartbeat: state=${decision.state} active=${decision.activeRunIds.length} blockers=${decision.blockers.length} errors=${decision.errors.length}`;
 }
@@ -593,7 +566,6 @@ function verifyMode() {
     targetSha: requiredString(process.env.TARGET_SHA, "target SHA"),
     workflowRef: requiredString(process.env.GITHUB_REF_NAME, "workflow ref"),
     workflowSha: requiredString(process.env.GITHUB_SHA, "workflow SHA"),
-    laneWaiver: normalizeReleaseLaneWaiver(process.env.LANE_WAIVER),
   };
   const verified = verifyReleaseStateArtifacts(
     readArtifact(
@@ -619,7 +591,6 @@ function planExpected() {
     ...(process.env.KNOWN_FLAKY_JOBS_JSON !== undefined
       ? { knownFlakyJobs: normalizeKnownFlakyJobs(process.env.KNOWN_FLAKY_JOBS_JSON) }
       : {}),
-    laneWaiver: normalizeReleaseLaneWaiver(process.env.LANE_WAIVER),
     ...(process.env.TARGET_VERSION ? { targetVersion: process.env.TARGET_VERSION } : {}),
     parentRunId: requiredString(process.env.GITHUB_RUN_ID, "parent run ID"),
     repository: requiredString(process.env.GITHUB_REPOSITORY, "GitHub repository"),
@@ -671,10 +642,6 @@ function manifestContextFromEnvironment(source) {
   const waiver = env.TELEGRAM_WAIVER ?? coverage.telegram_waiver ?? "";
   if (waiver) {
     inputs.telegramWaiver = waiver;
-  }
-  const laneWaiver = normalizeReleaseLaneWaiver(env.LANE_WAIVER);
-  if (laneWaiver) {
-    inputs.laneWaiver = laneWaiver;
   }
   return {
     runId: env.GITHUB_RUN_ID,
@@ -1080,7 +1047,6 @@ async function planMode() {
     evidenceReuse: evidenceReuseFromInputs(planInputs),
     expected: { ...expected, candidateRequest, parentRunAttempt: currentAttempt },
     gates: built.gates,
-    laneWaiver: expected.laneWaiver,
     releaseProfile: expected.releaseProfile,
     rerunGroup: expected.rerunGroup,
     telegramWaiver: planInputs.telegramWaiver,
@@ -1118,7 +1084,6 @@ async function planMode() {
         parentRunAttempt: currentAttempt,
       },
       gates: plan.gates,
-      laneWaiver: plan.laneWaiver,
       releaseProfile: expected.releaseProfile,
       rerunGroup: expected.rerunGroup,
       telegramWaiver: plan.telegramWaiver,
@@ -1151,7 +1116,6 @@ async function planMode() {
     evidenceReuse: evidenceReuseFromInputs(planInputs, reuse.sourceManifest),
     expected: { ...expected, candidateRequest, parentRunAttempt: currentAttempt },
     gates: built.gates,
-    laneWaiver: expected.laneWaiver,
     releaseProfile: expected.releaseProfile,
     rerunGroup: expected.rerunGroup,
     telegramWaiver: planInputs.telegramWaiver,
@@ -1229,11 +1193,6 @@ async function collectMode(mode) {
       message: "automatic retry intent has no verified replacement attempt; never replay it",
     });
   }
-  const policy = {
-    laneWaiver: normalizeReleaseLaneWaiver(executionPlan.laneWaiver),
-    releaseProfile,
-    workflowRef: expected.workflowRef,
-  };
   const gateFailures = releasePlanGateFailures(executionPlan.gates);
   const failFast = mode === "decision" && process.env.FAIL_FAST === "true";
   const pollIntervalMs =
@@ -1267,7 +1226,6 @@ async function collectMode(mode) {
     });
     writeResult(outputPath, payload);
     appendSummary(mode, payload);
-    reportLaneWaiver(snapshots, policy);
     return payload;
   };
   const stop = () => {
@@ -1290,7 +1248,8 @@ async function collectMode(mode) {
         },
       ],
       localFailures: gateFailures,
-      ...policy,
+      releaseProfile,
+      workflowRef: expected.workflowRef,
     });
     writePayload(decision, { cancelledRunIds, requested: true });
     finished = true;
@@ -1360,7 +1319,8 @@ async function collectMode(mode) {
         ...retryErrors,
       ],
       localFailures: gateFailures,
-      ...policy,
+      releaseProfile,
+      workflowRef: expected.workflowRef,
     });
     if (Date.now() >= nextHeartbeat) {
       console.log(formatReleaseStateHeartbeat(mode, decision));
@@ -1389,7 +1349,8 @@ async function collectMode(mode) {
             ...cancellationErrors,
           ],
           localFailures: gateFailures,
-          ...policy,
+          releaseProfile,
+          workflowRef: expected.workflowRef,
         });
       }
     }
@@ -1516,7 +1477,6 @@ async function validateManifestMode() {
     throw new Error("release manifest publication admission differs from its immutable plan");
   }
   validateReleaseTelegramWaiverBinding(executionPlan, manifest.validationInputs);
-  validateReleaseLaneWaiverBinding(executionPlan, manifest.validationInputs);
   validateReleaseCoveragePolicyBinding(executionPlan, manifest.validationInputs);
   if (
     JSON.stringify(rawManifest.knownFlakyJobs ?? []) !==
