@@ -486,6 +486,9 @@ function isInspectableChannelAccount(params: {
     if (!params.plugin.config.listAccountIds(params.config).includes(params.accountId)) {
       return false;
     }
+    if (!params.plugin.config.inspectAccount && params.plugin.config.resolveAccountAsync) {
+      return false;
+    }
     const inspectAccount =
       params.plugin.config.inspectAccount ?? params.plugin.config.resolveAccount;
     inspectAccount(params.config, params.accountId);

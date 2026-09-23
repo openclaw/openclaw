@@ -39,6 +39,7 @@ export interface FrvClient {
   getRun: (runId: string, options?: FrvReadOptions) => Promise<Record<string, unknown>>;
   getRunAttempt: (runId: string, runAttempt: number) => Promise<Record<string, unknown>>;
   rerunFailed?: (runId: string) => Promise<unknown>;
+  rerunJob?: (jobId: number) => Promise<unknown>;
   rerunParent?: (runId: string) => Promise<unknown>;
   verify?: (
     runId: string,
@@ -55,7 +56,7 @@ export interface FrvClient {
 }
 
 export type FrvConcreteClient = FrvClient &
-  Required<Pick<FrvClient, "rerunFailed" | "rerunParent" | "verify" | "verifySeal">>;
+  Required<Pick<FrvClient, "rerunFailed" | "rerunJob" | "rerunParent" | "verify" | "verifySeal">>;
 
 export function inspectContinuation(
   plan: Record<string, unknown>,
@@ -87,5 +88,6 @@ export function continueFailed(
 ): Promise<{
   action: string;
   finalRunId?: string;
+  reruns?: Record<string, unknown>[];
   status: FrvContinuationStatus;
 }>;

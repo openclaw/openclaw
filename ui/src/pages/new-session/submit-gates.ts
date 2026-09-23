@@ -111,13 +111,14 @@ export function requiresNewSessionModelSetup(options: {
 }): boolean {
   const { snapshot, gateway, place, pendingPlacement } = options;
   const selectedAgent = place.selectedAgent();
+  const agents = snapshot.context?.agents.state;
   return place.modelControl.requiresModelSetup({
     catalog:
       catalog.isTarget(snapshot.data) ||
       place.remotePlacement ||
       Boolean(pendingPlacement.sessionKey),
     connected: gateway.connected,
-    agentsLoaded: snapshot.context?.agents.state.agentsList !== null,
+    agentsLoaded: Boolean(agents?.agentsList && !agents.agentsListCached),
     selectedAgentFound: selectedAgent !== undefined,
     agentModel: selectedAgent?.model?.primary,
   });
@@ -248,6 +249,16 @@ export function resolveNewSessionSubmitBlock(
     return retryReady
       ? emptyDraftBlock(host, kind, pendingPlacementActive)
       : { gate: "placement-recovery", reason: t("newSession.placementNotReady") };
+  }
+  if (snapshot.context?.agents.state.agentsListCached) {
+    return {
+      gate: "agents",
+      reason: t(
+        snapshot.context.agents.state.agentsError
+          ? "newSession.agentDefaultsUnavailable"
+          : "newSession.loadingAgentDefaults",
+      ),
+    };
   }
   const modelUnavailableMessage =
     kind === "session" && place.modelControl.modelSelectionBlockedReason(place.selectedAgent());

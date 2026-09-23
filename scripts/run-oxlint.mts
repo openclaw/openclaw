@@ -96,21 +96,32 @@ function oxlintOption(args: string[], name: string, short: string) {
   };
 }
 
-function warnOnConfiguredLimits(rules: DummyRuleMap | undefined): boolean {
-  if (!rules) {
-    return false;
-  }
-  let changed = false;
-  for (const [name, rule] of Object.entries(rules)) {
+function advisoryLimitRules(rules: DummyRuleMap | undefined) {
+  const overrides: DummyRuleMap = {};
+  let enabled = false;
+  for (const [name, rule] of Object.entries(rules ?? {})) {
     const id = name.startsWith("eslint/") ? name.slice("eslint/".length) : name;
-    const severity = Array.isArray(rule) ? rule[0] : rule;
-    if (!LIMIT_RULES.has(id) || severity === "off" || severity === "allow" || severity === 0) {
+    if (!LIMIT_RULES.has(id)) {
       continue;
     }
-    rules[name] = Array.isArray(rule) ? ["warn", ...rule.slice(1)] : "warn";
-    changed = true;
+    overrides[name] = rule;
+    const severity = Array.isArray(rule) ? rule[0] : rule;
+    // Replay disabled scopes too: a later exclusion must still override an earlier limit.
+    if (
+      !(
+        severity === "warn" ||
+        severity === "error" ||
+        severity === "deny" ||
+        severity === 1 ||
+        severity === 2
+      )
+    ) {
+      continue;
+    }
+    overrides[name] = Array.isArray(rule) ? ["warn", ...rule.slice(1)] : "warn";
+    enabled = true;
   }
-  return changed;
+  return { rules: overrides, enabled };
 }
 
 async function runWithAdvisoryLimits(
@@ -134,16 +145,39 @@ async function runWithAdvisoryLimits(
     return await runManagedCommand(command);
   }
   const config = JSON5.parse<OxlintConfig>(fs.readFileSync(configPath, "utf8"));
-  const limitScopes = [config.rules, ...(config.overrides ?? []).map((override) => override.rules)];
-  const changed = limitScopes.map(warnOnConfiguredLimits).some(Boolean);
-  if (!changed) {
+  const rootRules = advisoryLimitRules(config.rules);
+  let enabled = rootRules.enabled;
+  const overrides = (config.overrides ?? []).flatMap((scope) => {
+    const scopedRules = advisoryLimitRules(scope.rules);
+    enabled ||= scopedRules.enabled;
+    return Object.keys(scopedRules.rules).length > 0
+      ? [{ files: scope.files, excludeFiles: scope.excludeFiles, rules: scopedRules.rules }]
+      : [];
+  });
+  if (!enabled) {
     return await runManagedCommand(command);
   }
 
   // CLI --warn cannot replace scoped severities and enables rules outside their file scopes.
   // Keep the transient config beside its owner so relative globs and plugin paths do not move.
   const advisoryConfig = path.join(path.dirname(configPath), `.oxlint-limits-${randomUUID()}.json`);
-  fs.writeFileSync(advisoryConfig, JSON.stringify(config), { flag: "wx" });
+  // Extending the original preserves native syntax/schema validation before the override.
+  fs.writeFileSync(
+    advisoryConfig,
+    JSON.stringify({
+      extends: [configPath],
+      rules: rootRules.rules,
+      overrides,
+      plugins: config.plugins,
+      categories: config.categories,
+      // Oxlint 1.82 keeps these fields from the child rather than inheriting them.
+      env: config.env,
+      globals: config.globals,
+      settings: config.settings,
+      ignorePatterns: config.ignorePatterns,
+    }),
+    { flag: "wx" },
+  );
   try {
     const configuredArgs = configOption.replace(advisoryConfig);
     const format = oxlintOption(configuredArgs, "--format", "-f");
@@ -166,7 +200,17 @@ async function runWithAdvisoryLimits(
       process.stdout.write(output);
       return status;
     }
-    const report = JSON5.parse<{ diagnostics: OxlintDiagnostic[] }>(output);
+    let report: { diagnostics: OxlintDiagnostic[] };
+    try {
+      report = JSON5.parse(output);
+    } catch (error) {
+      // Configuration failures can be plain text even when JSON output was requested.
+      process.stdout.write(output);
+      if (status !== 0) {
+        return status;
+      }
+      throw error;
+    }
     const limits = report.diagnostics.filter((diagnostic) =>
       LIMIT_RULES.has(/^eslint\(([^)]+)\)$/u.exec(diagnostic.code ?? "")?.[1] ?? ""),
     );

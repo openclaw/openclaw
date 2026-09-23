@@ -1152,6 +1152,10 @@ writing and committing. Token callbacks lock cancellation at commit admission
 and report saved credentials only after acknowledgement. Canonical close drains
 accepted lease work before releasing its exact owner; an uncertain write retains
 the lease barrier. Native maintenance and Doctor keep their existing owners.
+Lease verification releases each read snapshot before waiting for host admission,
+then rereads the exact unexpired owner from current committed state. Host scheduling
+does not pin the WAL; writes and renewals retain their transaction-held checks.
+Schemas, retention, durability, and update behavior are unchanged.
 
 Requester MCP setup reads its sorted authorization set in one current read-worker
 operation. The worker decodes selected rows in caller order and returns only
@@ -1279,9 +1283,15 @@ queries execute on the same worker. Canonical UTC dates parse there; other date
 formats request the caller's native parser through retained preparation, preserving
 temporary skill timezones. A timezone change during such a read rejects the result
 instead of mixing interpretations. The query retains its ordering, payload limits,
-and synchronous statement snapshot. Streamed chronological reads, export snapshots,
-and session and export-state writes retain their existing owners until their
-snapshot and write-drainage lifecycles move together.
+and synchronous statement snapshot. Session metadata, pending-export markers, and
+manifest updates also run in the existing worker. Preparation captures the physical
+database and serialized metadata before yielding; the write transaction rechecks
+the canonical selector and expected input revision while preserving admitted ID
+origin. Export bookkeeping retains the actual export lease through native
+settlement, including unknown outcomes, and validates that lease inside its write
+transaction. Pending markers commit before filesystem changes, and manifest updates
+settle before success returns. Streamed chronological reads, export snapshots, and
+host lease primitives retain their existing owners.
 
 Transcript artifact ownership recovery streams raw utterances in sequence order
 through the shared-state worker and returns their canonical JSONL SHA-256 digest.

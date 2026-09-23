@@ -2280,21 +2280,10 @@ function installControlUiMockGateway(
         return response;
       }
       case "sessions.list":
-        return sessions.listResponse(
-          {
-            count: sessions.list().length,
-            defaults: {
-              contextTokens: null,
-              model: "gpt-5.5",
-              modelProvider: "openai",
-            },
-            path: "",
-            sessions: sessions.list(),
-            ts: Date.now(),
-          },
-          params,
-          { renames: groupsState.renames, archiveFiltering: scenario.sessionArchiveFiltering },
-        );
+        return sessions.listResponse(responseFixtures.sessionList(), params, {
+          renames: groupsState.renames,
+          archiveFiltering: scenario.sessionArchiveFiltering,
+        });
       case "sessions.search":
         return { results: [] };
       case "sessions.patchMany":
@@ -2815,7 +2804,7 @@ function installControlUiMockGateway(
       } catch {
         // The current document still observes the canonical replacement.
       }
-      this.setMethodResponse("sessions.list", payload);
+      this.setMethodResponse("sessions.list", responseFixtures.sessionList(payload));
     },
     setSessionSharingPolicy(policy) {
       scenario.allowedSessionVisibilities = policy.allowedSessionVisibilities;
