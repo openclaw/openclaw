@@ -312,12 +312,7 @@ function beginChatMetadataRequest(
     notifyChatMetadataListeners(entry, { type: "loading" });
     return queued.promise;
   }
-  let resolve!: (result: ChatMetadataResult) => void;
-  let reject!: (error: unknown) => void;
-  const promise = new Promise<ChatMetadataResult>((accept, fail) => {
-    resolve = accept;
-    reject = fail;
-  });
+  const { promise, resolve, reject } = createDeferredCore<ChatMetadataResult>();
   let started = false;
   let retryDeadlineAt = startupRetryDeadlineAt;
   let queueDeadlineTimer: ReturnType<typeof setTimeout> | undefined;
