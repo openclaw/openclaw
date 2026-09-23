@@ -352,6 +352,37 @@ export function nativeCompletionNotification(
   };
 }
 
+/** Persists a native wait tool's output before a subsequent model sample. */
+export function nativeWaitOutput(
+  callId: string,
+  turnId = "parent-turn",
+  threadId = "parent-thread",
+): CodexServerNotification {
+  return {
+    method: "rawResponseItem/completed",
+    params: {
+      threadId,
+      turnId,
+      item: {
+        type: "function_call_output",
+        call_id: callId,
+        output: '{"status":{},"timed_out":false}',
+      },
+    },
+  };
+}
+
+/** Marks the response that sampled preceding native receipt inputs. */
+export function parentSampled(
+  turnId = "parent-turn",
+  threadId = "parent-thread",
+): CodexServerNotification {
+  return {
+    method: "rawResponse/completed",
+    params: { threadId, turnId, responseId: "response", usage: null, usageMetadata: null },
+  };
+}
+
 export function deliveredNativeCompletion() {
   return {
     method: "rawResponseItem/completed",

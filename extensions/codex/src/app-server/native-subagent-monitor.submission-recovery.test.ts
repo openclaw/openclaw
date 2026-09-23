@@ -18,6 +18,8 @@ import {
   childTurnCompletedNotification,
   createClient,
   notifyChildStarted,
+  parentSampled,
+  nativeWaitOutput,
   registerCodexNativeSubagentMonitor,
   successfulSendInputOutput,
   threadRead,
@@ -202,6 +204,7 @@ describe("CodexNativeSubagentMonitor", () => {
           turnId: "parent-turn-a",
           item: {
             type: "collabAgentToolCall",
+            id: "wait-a",
             tool: "wait",
             status: "completed",
             senderThreadId: binding.threadId,
@@ -210,6 +213,8 @@ describe("CodexNativeSubagentMonitor", () => {
           },
         },
       });
+      await first.notify(nativeWaitOutput("wait-a", "parent-turn-a"));
+      await first.notify(parentSampled("parent-turn-a"));
       const initialRunId = "codex-thread:child-thread";
       const followupRunId = "codex-thread:child-thread:turn:turn-b";
       const database = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"), {
@@ -283,6 +288,7 @@ describe("CodexNativeSubagentMonitor", () => {
                 turnId: "parent-turn-b",
                 item: {
                   type: "collabAgentToolCall",
+                  id: "wait-b",
                   tool: "wait",
                   status: "completed",
                   senderThreadId: binding.threadId,
@@ -291,6 +297,8 @@ describe("CodexNativeSubagentMonitor", () => {
                 },
               },
             });
+            await first.notify(nativeWaitOutput("wait-b", "parent-turn-b"));
+            await first.notify(parentSampled("parent-turn-b"));
             expect(readRows().find((row) => row.run_id === followupRunId)).toMatchObject({
               status: "succeeded",
               delivery_status: "delivered",

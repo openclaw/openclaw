@@ -62,6 +62,7 @@ export function createCodexNativeSubagentMonitorRuntime<T extends NativeMonitorC
     submissionStore?: ParentState["submissionStore"];
     agentId?: string;
     runtime?: NativeSubagentMonitorRuntime;
+    isTurnYielded?: () => boolean;
     retainClient?: () => (() => void) | undefined;
     retainParentThread?: (threadId: string) => (() => void) | undefined;
     claimDirectChild?: (threadId: string) => (() => void) | undefined;
@@ -154,6 +155,7 @@ export function createCodexNativeSubagentMonitorRuntime<T extends NativeMonitorC
       historyOwner: params.historyOwner,
       submissionStore: params.submissionStore,
       agentId: params.agentId,
+      isTurnYielded: params.isTurnYielded,
       claimDirectChild: params.claimDirectChild,
       rejectPendingDirectChild: params.rejectPendingDirectChild,
       onDirectChildAccepted: params.onDirectChildAccepted,

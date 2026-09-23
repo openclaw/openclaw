@@ -21,6 +21,13 @@ function completedWaitReceipt(message: string, id = "wait"): CodexServerNotifica
   };
 }
 
+function observeSampled(
+  receipts: CodexNativeSubagentDeliveryReceipts,
+  notification: CodexServerNotification,
+): string[] {
+  return receipts.capture(notification)?.() ?? [];
+}
+
 describe("native subagent delivery receipt restoration", () => {
   it.each([false, true])(
     "restores the whole ordered snapshot before matching a receipt (existing successor=%s)",
@@ -29,7 +36,7 @@ describe("native subagent delivery receipt restoration", () => {
       if (existingSuccessor) {
         receipts.track("second-run", ["unresolved-alias"]);
       }
-      expect(receipts.observe(completedWaitReceipt("second result"))).toEqual([]);
+      expect(observeSampled(receipts, completedWaitReceipt("second result"))).toEqual([]);
       expect(
         receipts.restore([
           { runId: "first-run", paths: ["child-thread"] },
@@ -55,18 +62,18 @@ describe("native subagent delivery receipt restoration", () => {
       const receipts = new CodexNativeSubagentDeliveryReceipts();
       receipts.track("first-run", ["child-thread"]);
       if (received) {
-        expect(receipts.observe(completedWaitReceipt("prior rendering", "initial"))).toEqual([
-          "first-run",
-        ]);
+        expect(
+          observeSampled(receipts, completedWaitReceipt("prior rendering", "initial")),
+        ).toEqual(["first-run"]);
       }
       receipts.track("second-run", ["child-thread"]);
       const acknowledged: string[] = [];
       if (order === "before") {
-        acknowledged.push(...receipts.observe(completedWaitReceipt("shared result")));
+        acknowledged.push(...observeSampled(receipts, completedWaitReceipt("shared result")));
       }
       acknowledged.push(...receipts.record("second-run", ["child-thread"], "shared result"));
       if (order === "after") {
-        acknowledged.push(...receipts.observe(completedWaitReceipt("shared result")));
+        acknowledged.push(...observeSampled(receipts, completedWaitReceipt("shared result")));
       }
       expect(acknowledged).toEqual([]);
       receipts.record(
@@ -89,12 +96,14 @@ describe("native subagent delivery receipt restoration", () => {
       const receipts = new CodexNativeSubagentDeliveryReceipts();
       receipts.record("first-run", ["child-thread"], "first result");
       if (received) {
-        expect(receipts.observe(completedWaitReceipt("first result", "initial"))).toEqual([
+        expect(observeSampled(receipts, completedWaitReceipt("first result", "initial"))).toEqual([
           "first-run",
         ]);
       }
       receipts.record("second-run", ["child-thread"], "second result");
-      expect(receipts.observe(completedWaitReceipt("second result"))).toEqual(["second-run"]);
+      expect(observeSampled(receipts, completedWaitReceipt("second result"))).toEqual([
+        "second-run",
+      ]);
     },
   );
 
@@ -103,10 +112,12 @@ describe("native subagent delivery receipt restoration", () => {
     (restored) => {
       const receipts = new CodexNativeSubagentDeliveryReceipts();
       receipts.track("first-run", ["child-thread"]);
-      expect(receipts.observe(completedWaitReceipt("first rendering", "first"))).toEqual([
+      expect(observeSampled(receipts, completedWaitReceipt("first rendering", "first"))).toEqual([
         "first-run",
       ]);
-      expect(receipts.observe(completedWaitReceipt("other rendering", "other"))).toEqual([]);
+      expect(observeSampled(receipts, completedWaitReceipt("other rendering", "other"))).toEqual(
+        [],
+      );
       receipts.record("first-run", ["child-thread"], "canonical result");
       if (restored) {
         expect(
@@ -118,7 +129,9 @@ describe("native subagent delivery receipt restoration", () => {
       } else {
         receipts.record("second-run", ["child-thread"], "other rendering");
       }
-      expect(receipts.observe(completedWaitReceipt("other rendering", "duplicate"))).toEqual([]);
+      expect(
+        observeSampled(receipts, completedWaitReceipt("other rendering", "duplicate")),
+      ).toEqual([]);
       expect(receipts.track("second-run", ["child-thread"])).toEqual([]);
     },
   );
@@ -126,14 +139,14 @@ describe("native subagent delivery receipt restoration", () => {
   it("does not acknowledge a known different result even when only one outcome is restored", () => {
     const receipts = new CodexNativeSubagentDeliveryReceipts();
     receipts.record("first-run", ["child-thread"], "first result");
-    expect(receipts.observe(completedWaitReceipt("second result"))).toEqual([]);
+    expect(observeSampled(receipts, completedWaitReceipt("second result"))).toEqual([]);
     expect(receipts.track("first-run", ["child-thread"])).toEqual([]);
   });
 
   it("retains a receipt matched before the child is registered", () => {
     const receipts = new CodexNativeSubagentDeliveryReceipts();
     receipts.record("child-run", ["child-thread"], "result");
-    expect(receipts.observe(completedWaitReceipt("result"))).toEqual(["child-run"]);
+    expect(observeSampled(receipts, completedWaitReceipt("result"))).toEqual(["child-run"]);
     expect(receipts.track("child-run", ["child-thread"])).toEqual(["child-run"]);
   });
 
@@ -146,11 +159,11 @@ describe("native subagent delivery receipt restoration", () => {
       receipts.track("second-run", ["child-thread"]);
       const acknowledged: string[] = [];
       if (order === "before") {
-        acknowledged.push(...receipts.observe(completedWaitReceipt(multilineResult)));
+        acknowledged.push(...observeSampled(receipts, completedWaitReceipt(multilineResult)));
       }
       acknowledged.push(...receipts.record("second-run", ["child-thread"], multilineResult));
       if (order === "after") {
-        acknowledged.push(...receipts.observe(completedWaitReceipt(multilineResult)));
+        acknowledged.push(...observeSampled(receipts, completedWaitReceipt(multilineResult)));
       }
       expect(acknowledged).toEqual(["first-run"]);
       expect(receipts.track("second-run", ["child-thread"])).toEqual([]);

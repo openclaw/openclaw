@@ -27,6 +27,8 @@ import {
   createTaskScope,
   nativeHistoryOwner,
   notifyChildStarted,
+  nativeWaitOutput,
+  parentSampled,
   registerCodexNativeSubagentMonitor,
   successfulSendInputOutput,
   turnStartedNotification,
@@ -683,8 +685,8 @@ it.each([
   let foreign: ReturnType<typeof codexNativeSubagentMonitorRuntime.register> | undefined;
   const firstRunId = "codex-thread:child-thread";
   const secondRunId = "codex-thread:child-thread:turn:turn-b";
-  const collab = (parentThreadId: string, tool: string, result?: string) =>
-    client.notify({
+  const collab = async (parentThreadId: string, tool: string, result?: string) => {
+    await client.notify({
       method: "item/completed",
       params: {
         threadId: parentThreadId,
@@ -704,6 +706,13 @@ it.each([
         },
       },
     });
+    if (tool === "wait") {
+      await client.notify(
+        nativeWaitOutput(`${tool}-${parentThreadId}`, "observer-turn", parentThreadId),
+      );
+      await client.notify(parentSampled("observer-turn", parentThreadId));
+    }
+  };
   try {
     initial.bindTurn("initial-turn");
     await notifyChildStarted(client);
@@ -785,6 +794,7 @@ it.each([
           },
         },
       });
+      await client.notify(parentSampled("parent-turn"));
     } else if (scenario === "foreign-observer") {
       receiptParent = "foreign-parent";
       foreign = codexNativeSubagentMonitorRuntime.register({

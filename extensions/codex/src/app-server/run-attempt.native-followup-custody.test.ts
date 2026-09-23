@@ -170,6 +170,29 @@ describe("native follow-up custody through the registered attempt", () => {
       await new Promise<void>((resolve) => {
         setImmediate(resolve);
       });
+      expect(taskRuntime.listTaskRecords().find((task) => task.runId === runA)).toMatchObject({
+        status: "succeeded",
+        deliveryStatus: "pending",
+      });
+      // Wait activity precedes its tool output; only a later parent response consumes it.
+      await parentItem(
+        {
+          type: "function_call_output",
+          call_id: "wait-a",
+          output: JSON.stringify({ status: { [childThreadId]: { completed: "A result" } } }),
+        },
+        "rawResponseItem/completed",
+      );
+      expect(taskRuntime.listTaskRecords().find((task) => task.runId === runA)).toMatchObject({
+        deliveryStatus: "pending",
+      });
+      await notify("rawResponse/completed", {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        responseId: "sample-a",
+        usage: null,
+        usageMetadata: null,
+      });
       const previous = taskRuntime.listTaskRecords().find((task) => task.runId === runA);
       expect(previous).toMatchObject({
         status: "succeeded",

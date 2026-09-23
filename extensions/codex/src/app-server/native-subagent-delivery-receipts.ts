@@ -98,19 +98,16 @@ export class CodexNativeSubagentDeliveryReceipts {
   private readonly pending: Receipt[] = [];
   private outcomes = new Map<string, Outcome>();
 
-  observe(notification: CodexServerNotification): string[] {
+  capture(notification: CodexServerNotification): (() => string[]) | undefined {
     const params = isJsonObject(notification.params) ? notification.params : undefined;
     const item = isJsonObject(params?.item) ? params.item : undefined;
     if (!item) {
-      return [];
+      return undefined;
     }
+    const receipts: Array<Receipt & { id: string }> = [];
     const nativeResults = codexNativeSubagentNotifications.fromNotification(notification);
     for (const agentPath of codexNativeSubagentNotifications.deliveredAgentPaths(notification)) {
       const id = `${notification.method}:${readString(item, "id") ?? JSON.stringify(item)}:${agentPath}`;
-      if (this.seen.has(id)) {
-        continue;
-      }
-      this.seen.add(id);
       let result = nativeResults.find((value) => value.agentPath === agentPath)?.result;
       if (item.type === "agent_message" && Array.isArray(item.content)) {
         const part = item.content[0];
@@ -120,9 +117,22 @@ export class CodexNativeSubagentDeliveryReceipts {
         const child = item.agentsStates[agentPath];
         result = isJsonObject(child) ? readString(child, "message") : result;
       }
-      this.pending.push({ agentPath, result: receiptResultKey(result) });
+      receipts.push({ id, agentPath, result: receiptResultKey(result) });
     }
-    return this.match();
+    if (receipts.length === 0) {
+      return undefined;
+    }
+    // Capture only receipt fields, not the full wire notification. The parent
+    // turn invokes this acceptance after its model has sampled the input.
+    return () => {
+      for (const { id, ...receipt } of receipts) {
+        if (!this.seen.has(id)) {
+          this.seen.add(id);
+          this.pending.push(receipt);
+        }
+      }
+      return this.match();
+    };
   }
 
   record(runId: string, paths: Iterable<string>, result: string): string[] {
@@ -303,15 +313,140 @@ export function restoreCodexNativeSubagentTaskReceipts<Parent extends ReceiptPar
   }
 }
 
-export function observeCodexNativeSubagentDeliveryReceipts<Parent extends ReceiptParent>(params: {
+/** Holds compact native receipts until a subsequent non-compaction parent response. */
+export class CodexNativeSubagentReceiptSampling {
+  private compacting = false;
+  private readonly pending: Array<{
+    accept: () => string[];
+    sampled: boolean;
+    waitCallId?: string;
+  }> = [];
+
+  observe(
+    notification: CodexServerNotification,
+    trackers: Iterable<CodexNativeSubagentDeliveryReceipts>,
+  ): void {
+    const params = isJsonObject(notification.params) ? notification.params : undefined;
+    const item = isJsonObject(params?.item) ? params.item : undefined;
+    if (item?.type === "contextCompaction") {
+      if (notification.method === "item/started" || notification.method === "item/completed") {
+        this.compacting = notification.method === "item/started";
+      }
+      return;
+    }
+    // A wait can finish while its producing response is still streaming. Its
+    // result enters model history only when the matching tool output is recorded.
+    const isWait = item?.type === "collabAgentToolCall" && item.tool === "wait";
+    const waitCallId = isWait ? readString(item, "id") : undefined;
+    if (isWait && !waitCallId) {
+      return;
+    }
+    if (
+      notification.method === "rawResponseItem/completed" &&
+      item?.type === "function_call_output"
+    ) {
+      const callId = readString(item, "call_id");
+      for (const receipt of this.pending) {
+        if (callId && receipt.waitCallId === callId) {
+          receipt.waitCallId = undefined;
+        }
+      }
+    }
+    for (const tracker of trackers) {
+      const accept = tracker.capture(notification);
+      if (accept) {
+        this.pending.push({ accept, sampled: false, waitCallId });
+      }
+    }
+    if (notification.method === "rawResponse/completed" && !this.compacting) {
+      for (const receipt of this.pending) {
+        if (!receipt.waitCallId) {
+          receipt.sampled = true;
+        }
+      }
+    }
+  }
+
+  consume(owner: ReceiptSamplingOwner | undefined): string[] {
+    if (!owner || owner.isTurnYielded?.() === true) {
+      return [];
+    }
+    const accepted: string[] = [];
+    for (let index = 0; index < this.pending.length;) {
+      const receipt = this.pending[index]!;
+      if (!receipt.sampled) {
+        index += 1;
+        continue;
+      }
+      this.pending.splice(index, 1);
+      accepted.push(...receipt.accept());
+    }
+    return [...new Set(accepted)];
+  }
+}
+
+type ReceiptSamplingOwner = { isTurnYielded?: () => boolean };
+type ReceiptSamplingParent = Omit<ReceiptParent, "deliveryReceipts"> & {
+  deliveryReceipts: CodexNativeSubagentDeliveryReceipts;
+  owners: ReadonlyMap<symbol, unknown>;
+  turns: Map<string, CodexNativeSubagentReceiptSampling>;
+};
+
+/** Binds a parent sampling boundary and applies any exact-owner pre-bind evidence. */
+export function bindCodexNativeSubagentReceiptSampling(
+  state: Pick<ReceiptSamplingParent, "turns">,
+  turnId: string,
+  owner?: ReceiptSamplingOwner,
+): string[] {
+  let sampling = state.turns.get(turnId);
+  if (!sampling) {
+    sampling = new CodexNativeSubagentReceiptSampling();
+    state.turns.set(turnId, sampling);
+  }
+  return sampling.consume(owner);
+}
+
+/** Drops foreground sampling without discarding retained assignment receipt owners. */
+export function releaseCodexNativeSubagentReceiptSampling(
+  state: ReceiptSamplingParent,
+  turnId: string | undefined,
+): void {
+  if (turnId) {
+    state.turns.delete(turnId);
+  }
+  if (state.owners.size === 0) {
+    state.turns.clear();
+    // Recovery retains the old owner; a later foreground run cannot inherit
+    // unmatched receipts merely because it reuses an agent path.
+    state.deliveryReceipts = new CodexNativeSubagentDeliveryReceipts();
+  }
+}
+
+export function observeCodexNativeSubagentDeliveryReceipts<
+  Parent extends ReceiptSamplingParent,
+>(params: {
   state: Parent;
   notification: CodexServerNotification;
+  resolveOwner: (turnId: string) => ReceiptSamplingOwner | undefined;
+  applyReceipts: (runIds: readonly string[]) => void;
   knownChildren: Iterable<KnownReceiptChild<Parent>>;
   candidates: Iterable<ReceiptRecoveryCandidate<Parent>>;
   isRetiredParent: (state: Parent) => boolean;
-  applyReceipts: (runIds: readonly string[]) => void;
 }): void {
-  const { state, notification, knownChildren, candidates, isRetiredParent, applyReceipts } = params;
+  const { state, notification, knownChildren, candidates, isRetiredParent } = params;
+  const fields = isJsonObject(notification.params) ? notification.params : undefined;
+  if (state.owners.size > 0 && notification.method === "turn/started") {
+    const turn = isJsonObject(fields?.turn) ? fields.turn : undefined;
+    const startedTurnId = readString(turn, "id");
+    if (startedTurnId) {
+      bindCodexNativeSubagentReceiptSampling(state, startedTurnId);
+    }
+  }
+  const turnId = readString(fields, "turnId") ?? "";
+  const sampling = state.turns.get(turnId);
+  if (!sampling) {
+    return;
+  }
   const trackers = new Set([state.deliveryReceipts]);
   // A fresh parent can consume a receipt before history reveals its alias.
   // Observe that current receipt in retained assignment owners too; never copy
@@ -330,9 +465,8 @@ export function observeCodexNativeSubagentDeliveryReceipts<Parent extends Receip
       trackers.add(candidate.deliveryReceipts);
     }
   }
-  for (const tracker of trackers) {
-    applyReceipts(tracker.observe(notification));
-  }
+  sampling.observe(notification, trackers);
+  params.applyReceipts(sampling.consume(params.resolveOwner(turnId)));
 }
 
 function receiptResultKey(result: string | undefined): string | undefined {

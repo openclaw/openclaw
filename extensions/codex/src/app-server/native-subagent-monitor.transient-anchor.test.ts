@@ -10,6 +10,8 @@ import {
   createRecordedRuntime,
   createTaskScope,
   notifyChildStarted,
+  parentSampled,
+  nativeWaitOutput,
   successfulSendInputOutput,
   taskRecord,
   threadRead,
@@ -86,6 +88,8 @@ async function deliverInitialResult(client: Client) {
     },
   });
   await collabCall(client, "wait", "wait-a");
+  await client.notify(nativeWaitOutput("wait-a"));
+  await client.notify(parentSampled());
 }
 
 async function submitFollowup(client: Client, submissionId = "turn-b") {

@@ -20,6 +20,8 @@ import {
   nativeCompletionNotification,
   nativeHistoryOwner,
   deliveredNativeCompletion,
+  parentSampled,
+  nativeWaitOutput,
   childTurnCompletedNotification,
   turnStartedNotification,
   threadRead,
@@ -111,6 +113,8 @@ describe("CodexNativeSubagentMonitor", () => {
         if (order === "wait-first") {
           await terminal();
         }
+        await client.notify(nativeWaitOutput("wait-call"));
+        await client.notify(parentSampled());
         await parent.unregister();
         await vi.waitFor(() => {
           expect(runtime.setDetachedTaskDeliveryStatusByRunId).toHaveBeenCalledWith(
@@ -189,6 +193,7 @@ describe("CodexNativeSubagentMonitor", () => {
             receipt === "contextual" ? contextualNativeCompletion() : deliveredNativeCompletion(),
           );
           await answer(final, "parent-answer");
+          await client.notify(parentSampled());
           if (order === "native-first") {
             await client.notify(completedChild());
           }
@@ -272,6 +277,7 @@ describe("CodexNativeSubagentMonitor", () => {
         await client.notify(completedChild());
         expect(runtime.deliverAgentHarnessTaskCompletion).not.toHaveBeenCalled();
         await client.notify(deliveredNativeCompletion());
+        await client.notify(parentSampled());
         owner.bindTurn("parent-turn");
         await owner.unregister();
         expect(runtime.deliverAgentHarnessTaskCompletion).not.toHaveBeenCalled();
@@ -352,6 +358,7 @@ describe("CodexNativeSubagentMonitor", () => {
       try {
         await client.notify(completedChild());
         await client.notify(receipt);
+        await client.notify(parentSampled());
         expect(runtime.deliverAgentHarnessTaskCompletion).not.toHaveBeenCalled();
         await owner.unregister();
         expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledOnce();
@@ -383,6 +390,7 @@ describe("CodexNativeSubagentMonitor", () => {
         owner.bindTurn("parent-turn");
         expect(client.request).toHaveBeenCalledOnce();
         await client.notify(deliveredNativeCompletion());
+        await client.notify(parentSampled());
         if (order === "after") {
           await owner.unregister();
         }
@@ -433,6 +441,7 @@ describe("CodexNativeSubagentMonitor", () => {
           const receipt = deliveredNativeCompletion();
           (receipt.params as JsonObject).turnId = "new-parent-turn";
           await client.notify(receipt);
+          await client.notify(parentSampled("new-parent-turn"));
           const history = threadRead({ agentPath: "/root/worker", result: "The build passed." });
           client.setThreadRead("child-thread", history);
           releaseRead(history);
@@ -504,6 +513,7 @@ describe("CodexNativeSubagentMonitor", () => {
       const receipt = deliveredNativeCompletion();
       (receipt.params as JsonObject).turnId = "new-parent-turn";
       await client.notify(receipt);
+      await client.notify(parentSampled("new-parent-turn"));
       await client.notify({
         method: "item/completed",
         params: {
@@ -614,6 +624,7 @@ describe("CodexNativeSubagentMonitor", () => {
             ];
           }
           await client.notify(receipt);
+          await client.notify(parentSampled());
           releaseRead();
           if (lineage === "history" || lineage === "metadata") {
             await owner.unregister();
@@ -698,6 +709,7 @@ describe("CodexNativeSubagentMonitor", () => {
       });
       owner.bindTurn("parent-turn");
       await client.notify(deliveredNativeCompletion());
+      await client.notify(parentSampled());
       const history = threadRead({
         agentPath: "/root/worker",
         previousResult: "The build passed.",
@@ -767,6 +779,7 @@ describe("CodexNativeSubagentMonitor", () => {
           (receipt.params as JsonObject).turnId = "old-turn";
         }
         await client.notify(receipt);
+        await client.notify(parentSampled());
         await owner.unregister();
         releaseRead(
           threadRead({
@@ -782,7 +795,7 @@ describe("CodexNativeSubagentMonitor", () => {
       },
     );
 
-    it("applies a native receipt immediately when active recovery learns its agent path", async () => {
+    it("applies a sampled native receipt when active recovery learns its agent path", async () => {
       const client = createClient();
       const runtime = createRuntime();
       const monitor = new CodexNativeSubagentMonitor(client as never, runtime, {
@@ -813,6 +826,7 @@ describe("CodexNativeSubagentMonitor", () => {
         successfulSendInputOutput({ callId: "followup", submissionId: "next-turn" }),
       );
       await client.notify(deliveredNativeCompletion());
+      await client.notify(parentSampled());
       const history = threadRead({
         agentPath: "/root/worker",
         previousResult: "The build passed.",
@@ -839,6 +853,7 @@ describe("CodexNativeSubagentMonitor", () => {
       first.bindTurn("parent-turn");
       await notifyChildStarted(client, "parent-thread", "waiting-child");
       await client.notify(deliveredNativeCompletion());
+      await client.notify(parentSampled());
       await first.unregister();
       const second = registerParent(monitor);
       second.bindTurn("next-turn");

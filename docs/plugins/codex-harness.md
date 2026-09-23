@@ -465,8 +465,11 @@ Codex owns native subagent execution and controls. Follow up through the parent
 session, which can use Codex's native collaboration tools. OpenClaw's task view
 observes those children and delivers results after a parent yields. The native
 foreground parent already receives completion messages, so OpenClaw does not
-send another continuation for a result it has consumed. Explicit OpenClaw or ACP
-delegation continues to use `sessions_spawn`.
+send another continuation for a result it has consumed. Receipt arrival alone is
+not consumption: the same foreground parent turn must finish a non-compaction
+model response after receiving the result, without having yielded. Results that
+arrive too late or remain unsampled stay pending for detached delivery. Native `wait` results additionally require the matching tool output to be recorded before a later response can confirm consumption.
+Explicit OpenClaw or ACP delegation continues to use `sessions_spawn`.
 
 For native Codex V1 agents, a completed `wait` result also records delivery to
 the foreground parent. OpenClaw does not start another continuation for that

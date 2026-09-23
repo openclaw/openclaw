@@ -25,6 +25,7 @@ import {
   successfulSendInputOutput,
   nativeCompletionNotification,
   notifyChildStarted,
+  parentSampled,
   registerParent,
   turnStartedNotification,
 } from "./native-subagent-monitor.test-support.js";
@@ -472,6 +473,7 @@ describe("same-monitor close assignment proof", () => {
             send(
               nativeCompletionNotification({ turnId: "parent-p1", result: "assignment A result" }),
             );
+            send(parentSampled("parent-p1"));
             await vi.waitFor(() => {
               expect(read(initialRunId)).toMatchObject({
                 status: "succeeded",

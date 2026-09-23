@@ -5,7 +5,10 @@ import type {
   AgentHarnessTaskRuntimeScope,
 } from "openclaw/plugin-sdk/agent-harness-task-runtime";
 import type { CodexAppServerClient } from "./client.js";
-import type { CodexNativeSubagentDeliveryReceipts } from "./native-subagent-delivery-receipts.js";
+import type {
+  CodexNativeSubagentDeliveryReceipts,
+  CodexNativeSubagentReceiptSampling,
+} from "./native-subagent-delivery-receipts.js";
 import type { CodexNativeSubagentHistoryOwner } from "./native-subagent-history-owner.js";
 import type { CodexNativeSubagentCompletion } from "./native-subagent-notification.js";
 import type {
@@ -27,6 +30,7 @@ export type NativeSubagentMonitorClient = Pick<
 
 export type ParentOwner = {
   turnId?: string;
+  isTurnYielded?: () => boolean;
   claimDirectChild?: (threadId: string) => (() => void) | undefined;
   rejectPendingDirectChild?: (threadId: string, reason: string) => void;
   onDirectChildAccepted?: () => void;
@@ -55,7 +59,7 @@ export type ParentState = {
   owners: Map<symbol, ParentOwner>;
   // turn/started can precede bindTurn; retain receipt ownership until the
   // foreground run has finalized its reply and releases this registration.
-  turnIds: Set<string>;
+  turns: Map<string, CodexNativeSubagentReceiptSampling>;
   deliveryReceipts: CodexNativeSubagentDeliveryReceipts;
   requesterSessionKey?: string;
   taskRuntimeScope?: AgentHarnessTaskRuntimeScope;

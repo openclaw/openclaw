@@ -15,6 +15,8 @@ import {
   createRecordedRuntime,
   createTaskScope,
   notifyChildStarted,
+  parentSampled,
+  nativeWaitOutput,
   registerCodexNativeSubagentMonitor,
   successfulSendInputOutput,
   threadRead,
@@ -121,6 +123,7 @@ async function createSubmissionFixture() {
       turnId: "parent-turn-a",
       item: {
         type: "collabAgentToolCall",
+        id: "wait-a",
         tool: "wait",
         status: "completed",
         senderThreadId: binding.threadId,
@@ -129,6 +132,8 @@ async function createSubmissionFixture() {
       },
     },
   });
+  await client.notify(nativeWaitOutput("wait-a", "parent-turn-a"));
+  await client.notify(parentSampled("parent-turn-a"));
   await vi.waitFor(() =>
     expect(isCodexAppServerLiveThreadClaimed(client as never, "child-thread")).toBe(false),
   );
