@@ -26,6 +26,7 @@ import type {
 } from "./subagent-registry-lifecycle-context.js";
 import { refreshFrozenResultFromSession } from "./subagent-registry-lifecycle-delivery.js";
 import {
+  cancelRequesterSettleWake,
   completeCleanupBookkeeping,
   scheduleRequesterSettleWake,
 } from "./subagent-registry-lifecycle-wake.js";
@@ -330,6 +331,9 @@ export class SubagentLifecycleController {
     }
     scheduleRequesterSettleWake(this, runId, entry);
   };
+
+  cancelRequesterSettleWake = (entry: SubagentRunRecord, assertCurrent: () => void) =>
+    cancelRequesterSettleWake(this, entry, assertCurrent);
 
   settleRequesterTurnAfterSessionSpawns = (
     args: {
