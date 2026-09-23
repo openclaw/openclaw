@@ -237,4 +237,68 @@ describe("real HTTP/SSE OpenAI-Responses continuation (loopback server, no SDK m
       await server.close();
     }
   });
+
+  // The unit/mocked continuation tests prove resolveOpenAIResponsesPayloadPolicy
+  // converts compat.responsesContinuationIdleMinutes to ms in isolation, and
+  // the live api.openai.com test proves the shipped 90-minute *default*
+  // survives a real gap -- neither drives an operator-configured minutes
+  // value through model resolution into a real claim()/commit() over the
+  // wire, so a broken wiring between the two (e.g. the option silently
+  // discarded before reaching the client) would pass both today. This test
+  // sets a real, short (3s) configured window on the one route that
+  // currently honors it, then uses genuine `setTimeout` gaps (not fake
+  // timers) around it, over the same real HTTP/SSE loopback server as the
+  // tests above, to prove the *configured* number -- not the 90-minute
+  // shipped default -- is what governs expiry end to end.
+  it("honors a configured responsesContinuationIdleMinutes over a real custom-route connection", async () => {
+    const IDLE_MINUTES = 0.05; // 3000ms: short enough to expire within a fast test
+    const server = new ScriptedResponsesServer([
+      () => completedFrame("resp_1", "first answer"),
+      () => completedFrame("resp_2", "second answer"),
+      () => completedFrame("resp_3", "third answer"),
+    ]);
+    const baseUrl = await server.listen();
+    try {
+      const model: Model<"openai-responses"> = {
+        ...customEndpointModel(baseUrl),
+        compat: {
+          supportsResponsesContinuation: true,
+          responsesContinuationIdleMinutes: IDLE_MINUTES,
+        },
+      };
+      const sessionId = "real-sse-configured-idle-ttl";
+      const firstUser = userMessage("first question", 1);
+      const first = await run(model, { messages: [firstUser], tools: [] }, sessionId);
+      const secondContext = {
+        messages: [firstUser, first, userMessage("second question", 2)],
+        tools: [],
+      };
+      // Immediately within the configured 3s window: the baseline must still
+      // be live, proving the short value isn't just being treated as "always
+      // expired" by some unrelated defect.
+      const second = await run(model, secondContext, sessionId);
+      expect(server.requests[1]).toMatchObject({ previous_response_id: "resp_1" });
+      expect((server.requests[1]?.input as unknown[] | undefined)?.length).toBe(1);
+
+      // Real wall-clock wait past the configured window (committed by the
+      // second turn above), comfortably short of the 90-minute shipped
+      // default -- a miss here only happens if the configured minutes value
+      // genuinely reached the real idle timer, not the default.
+      await new Promise((resolve) => setTimeout(resolve, IDLE_MINUTES * 60_000 + 500));
+      await run(
+        model,
+        {
+          messages: [...secondContext.messages, second, userMessage("third question", 3)],
+          tools: [],
+        },
+        sessionId,
+      );
+
+      expect(server.requests).toHaveLength(3);
+      expect(server.requests[2]).not.toHaveProperty("previous_response_id");
+      expect((server.requests[2]?.input as unknown[] | undefined)?.length).toBe(5);
+    } finally {
+      await server.close();
+    }
+  }, 15_000);
 });

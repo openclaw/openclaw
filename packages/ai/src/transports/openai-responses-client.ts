@@ -345,6 +345,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
             request: params as ResponsesContinuationRequest,
             restoreRequest: () =>
               restoreResponsesReasoningState(context, model, responsesOptions, params),
+            idleTtlMs: resolveOpenAIResponsesPayloadPolicy(model).httpContinuationIdleTtlMs,
           });
           if (continuationClaim) {
             // SAFETY: The owner preserves the request; SDK inputs predate configuration_update.

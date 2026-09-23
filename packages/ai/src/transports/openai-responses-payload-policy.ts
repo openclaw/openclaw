@@ -43,6 +43,7 @@ type OpenAIResponsesPayloadPolicy = {
   defaultManagedReasoningEffort: "none" | undefined;
   explicitContinuationOptIn: boolean;
   explicitStore: boolean | undefined;
+  httpContinuationIdleTtlMs: number;
   shouldStripDisabledReasoningPayload: boolean;
   shouldStripInputStatus: boolean;
   shouldStripPromptCache: boolean;
@@ -125,6 +126,34 @@ function readCompatPayloadBoolean(
   }
   const value = (compat as Record<string, unknown>)[key];
   return typeof value === "boolean" ? value : undefined;
+}
+
+/**
+ * Minutes an HTTP continuation baseline stays cached since its last use
+ * before eviction, once resolved from `compat.responsesContinuationIdleMinutes`
+ * (or the shipped default). A real chat conversation's turns are commonly
+ * minutes to hours apart, well past a short TTL, so this exists as a
+ * per-model override rather than a fixed constant.
+ */
+export const DEFAULT_HTTP_CONTINUATION_IDLE_MINUTES = 90;
+
+// The resolved value is converted to ms and passed straight to setTimeout,
+// whose delay argument overflows above 2^31-1 ms and fires almost
+// immediately instead of after the configured wait. The zod schema already
+// rejects an operator-configured value past this bound, but compat can also
+// arrive from a catalog entry that never passes through that schema, so
+// clamp here too rather than trusting every caller to validate first.
+const MAX_HTTP_CONTINUATION_IDLE_MINUTES = 35_791;
+
+function readCompatContinuationIdleMinutes(compat: unknown): number {
+  if (!compat || typeof compat !== "object") {
+    return DEFAULT_HTTP_CONTINUATION_IDLE_MINUTES;
+  }
+  // SAFETY: already checked above that compat is a non-null object; only reads an optional numeric field.
+  const value = (compat as Record<string, unknown>).responsesContinuationIdleMinutes;
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.min(value, MAX_HTTP_CONTINUATION_IDLE_MINUTES)
+    : DEFAULT_HTTP_CONTINUATION_IDLE_MINUTES;
 }
 
 function resolveOpenAIResponsesPayloadCapabilities(
@@ -341,6 +370,7 @@ export function resolveOpenAIResponsesPayloadPolicy(
         : undefined,
     explicitContinuationOptIn: capabilities.explicitContinuationOptIn,
     explicitStore,
+    httpContinuationIdleTtlMs: readCompatContinuationIdleMinutes(model.compat) * 60 * 1000,
     shouldStripDisabledReasoningPayload,
     shouldStripInputStatus,
     shouldStripPromptCache:

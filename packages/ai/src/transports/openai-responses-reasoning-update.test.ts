@@ -143,6 +143,12 @@ describe("cache-preserving Responses reasoning changes", () => {
 
   it("replays unstored HTTP input and resets to the chosen effort after cache expiry", () => {
     vi.useFakeTimers();
+    // An explicit short idleTtlMs, independent of the module's own shipped
+    // default -- this test only cares that expiry resets the reasoning
+    // effort, not what the current default TTL number is, so it must not
+    // silently stop covering that path (or start pointlessly waiting the
+    // full default) whenever the default changes.
+    const idleTtlMs = 5 * 60 * 1000;
     const claim = (request: ResponsesContinuationRequest) =>
       claimOpenAIResponsesHttpContinuation({
         sessionId: "reasoning-session",
@@ -150,6 +156,7 @@ describe("cache-preserving Responses reasoning changes", () => {
         baseUrl: "https://api.openai.com/v1",
         headers: {},
         request: { ...request, store: false },
+        idleTtlMs,
       });
     const first = claim(initial().lastRequest);
     assert(first);
@@ -160,7 +167,7 @@ describe("cache-preserving Responses reasoning changes", () => {
     expect(second.request.reasoning).toMatchObject({ effort: "low" });
     expect(second.request.input).toEqual([user("first"), answer, update("high"), user("second")]);
     second.commit(second.fullRequest, { id: "resp_2", output: [answer] });
-    vi.advanceTimersByTime(5 * 60 * 1000 + 1);
+    vi.advanceTimersByTime(idleTtlMs + 1);
     const third = claim({ ...next("medium"), input: [...next().input, answer, user("third")] });
     assert(third);
     expect(third.request.previous_response_id).toBeUndefined();
