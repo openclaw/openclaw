@@ -448,9 +448,21 @@ it.each([
   { name: "stops it", stopped: true },
   { name: "keeps the transferred state when the candidate cannot stop it", stopped: false },
   { name: "adopts the delegated Doctor's stop", stopped: false, doctorStopped: true },
+  {
+    name: "restarts a Gateway the Doctor stopped despite --no-restart",
+    stopped: false,
+    doctorStopped: true,
+    noRestart: true,
+  },
+  {
+    name: "refuses the Doctor's stop for a different service",
+    stopped: false,
+    doctorStopped: true,
+    reassigned: true,
+  },
 ])(
   "inspects an uninspected predecessor service from a legacy parent and $name",
-  async ({ stopped, doctorStopped }) => {
+  async ({ stopped, doctorStopped, noRestart, reassigned }) => {
     const transferred = {
       stopped: false,
       inspected: false,
@@ -466,7 +478,12 @@ it.each([
       running: !doctorStopped,
       servicePid: 631,
       serviceEnv: {},
-      serviceUpdateVerdict: { kind: "unresolved", root: "/synthetic", fingerprint: "f" },
+      serviceManagerUid: 1000,
+      serviceUpdateVerdict: {
+        kind: "unresolved",
+        root: "/synthetic",
+        fingerprint: reassigned ? "other" : "f",
+      },
     };
     const input = {
       executor: {},
@@ -474,7 +491,7 @@ it.each([
       resultPath: "/synthetic/result.json",
       params: {
         root: "/synthetic",
-        shouldRestart: true,
+        shouldRestart: !noRestart,
         updateStepTimeoutMs: 1_000,
         opts: { json: true, run: { runId: "synthetic-run", env: {}, activationTimeoutMs: 1_000 } },
         rollbackBlockedReason: "state-migrated-no-rollback",
@@ -496,7 +513,19 @@ it.each([
       runId: "synthetic-run",
       status: "succeeded",
       steps: doctorStopped
-        ? [{ step: "managed-service:candidate-stop", status: "completed", endedAtMs: 5 }]
+        ? [
+            {
+              step: "managed-service:candidate-stop",
+              status: "completed",
+              endedAtMs: 5,
+              detail: JSON.stringify({
+                pid: 631,
+                fingerprint: "f",
+                managerUid: 1000,
+                stoppedAtMs: 5,
+              }),
+            },
+          ]
         : [],
     });
     process.argv = [process.execPath, "update-migrated-finalize.worker.js"];
@@ -520,14 +549,18 @@ it.each([
     );
     const finished = fixture.finish.mock.calls[0]?.[0] as {
       preManagedServiceStop?: typeof candidate;
-      result: { steps: Array<{ name: string }> };
+      shouldRestart: boolean;
+      result: { steps: Array<{ name: string; advisory?: { message: string } }> };
     };
+    const adopted = doctorStopped && !reassigned;
     expect(finished.preManagedServiceStop).toEqual(
-      doctorStopped ? { ...candidate, stopped: true, stoppedAtMs: 5 } : candidate,
+      adopted ? { ...candidate, stopped: true, stoppedAtMs: 5 } : candidate,
     );
     expect(finished.result.steps.map((step) => step.name)).toEqual(
-      stopped || doctorStopped ? ["managed-service"] : [],
+      stopped || adopted ? ["managed-service"] : [],
     );
+    expect(finished.shouldRestart).toBe(true);
+    expect(Boolean(finished.result.steps[0]?.advisory)).toBe(Boolean(noRestart));
     expect(process.exitCode).toBe(originalExitCode);
   },
 );
@@ -548,13 +581,19 @@ it.each([
   const doctor = vi.fn();
   vi.doMock("../flows/doctor-health.js", () => ({ runDoctorHealthFlow: doctor }));
   fixture.ownerLease.mockReturnValue(owner);
-  fixture.stopService.mockResolvedValue({
+  const stoppedState = {
     stopped: true,
     stoppedAtMs: 7,
     inspected: true,
     runtimeInspected: true,
     running: true,
     servicePid: 631,
+    serviceManagerUid: 1000,
+    serviceUpdateVerdict: { kind: "owned", root: "/synthetic", fingerprint: "f" },
+  };
+  fixture.stopService.mockImplementation(async (params: { onStopped?: (s: unknown) => void }) => {
+    params.onStopped?.(stoppedState);
+    throw new Error("port still bound after bootout");
   });
   const settled = createDeferredCore();
   fixture.close.mockImplementation(async () => settled.resolve());
@@ -583,9 +622,14 @@ it.each([
     expect(fixture.stopService).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ root: "/synthetic", phase: "prepare", shouldRestart: true }),
     );
-    expect(fixture.recordStep).toHaveBeenCalledWith(
+    expect(fixture.recordStep).toHaveBeenCalledExactlyOnceWith(
       "synthetic-run",
-      expect.objectContaining({ step: "managed-service:candidate-stop", status: "completed" }),
+      expect.objectContaining({
+        step: "managed-service:candidate-stop",
+        status: "completed",
+        endedAtMs: 7,
+        detail: JSON.stringify({ pid: 631, fingerprint: "f", managerUid: 1000, stoppedAtMs: 7 }),
+      }),
     );
     expect(fixture.stopService.mock.invocationCallOrder[0]).toBeLessThan(
       doctor.mock.invocationCallOrder[0] ?? 0,

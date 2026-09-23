@@ -13,7 +13,7 @@ import type {
 } from "./service-types.js";
 import { execSystemctl, isSystemdUnitActive } from "./systemd-exec.js";
 import { resolveSystemdServiceName, resolveSystemdUnitPath } from "./systemd-service-files.js";
-import { assertNoSystemSystemdOwnership } from "./systemd-system.js";
+import { assertNoSystemSystemdOwnership, isSystemSystemdOwnershipError } from "./systemd-system.js";
 
 const SYSTEM_SYSTEMD_UNIT_DIRS = [
   "/etc/systemd/system",
@@ -120,6 +120,33 @@ export async function assertNoSystemGatewayOwnership(
     return;
   }
   await assertNoSystemSystemdOwnership(`${resolveSystemdServiceName(env)}.service`, timeoutMs);
+}
+
+/**
+ * Activation admission for a user unit. An unverifiable system-scope probe
+ * cannot make a loaded user unit whose artifacts this account owns a competing
+ * manager; a proven system owner and an unloaded or foreign user unit still refuse.
+ */
+export async function assertNoSystemGatewayOwnershipForActivation(
+  env: GatewayServiceEnv,
+  timeoutMs?: number,
+): Promise<void> {
+  try {
+    await assertNoSystemGatewayOwnership(env, timeoutMs);
+  } catch (error) {
+    if (!isSystemSystemdOwnershipError(error) || error.ownership.status !== "unverifiable") {
+      throw error;
+    }
+    const { readSystemdDefinitionMutationCapability } =
+      await import("./systemd-definition-mutation.js");
+    const capability = await readSystemdDefinitionMutationCapability(env, {
+      requireLoaded: true,
+      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+    }).catch(() => undefined);
+    if (capability?.kind !== "writable") {
+      throw error;
+    }
+  }
 }
 
 async function findMarkerOwnedSystemSystemdUnit(): Promise<{

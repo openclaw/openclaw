@@ -20,7 +20,7 @@ import {
   reloadSystemdUserManager,
 } from "./systemd-exec.js";
 import {
-  assertNoSystemGatewayOwnership,
+  assertNoSystemGatewayOwnershipForActivation,
   findInstalledSystemdGatewayScope,
 } from "./systemd-scope.js";
 import {
@@ -54,7 +54,7 @@ async function runSystemdServiceAction(params: {
   const env = params.env ?? process.env;
   if (params.systemdIdentity && params.action !== "stop") {
     if (params.systemdIdentity.scope === "user") {
-      await assertNoSystemGatewayOwnership({
+      await assertNoSystemGatewayOwnershipForActivation({
         ...env,
         OPENCLAW_SYSTEMD_UNIT: params.systemdIdentity.unitName,
       });
@@ -94,7 +94,7 @@ async function runSystemdServiceAction(params: {
   } else {
     await assertSystemdAvailable(env);
     if (params.action !== "stop") {
-      await assertNoSystemGatewayOwnership(env);
+      await assertNoSystemGatewayOwnershipForActivation(env);
     }
     runSystemctl = (args) => execSystemctlUser(env, args, undefined, params.assertCurrent);
   }

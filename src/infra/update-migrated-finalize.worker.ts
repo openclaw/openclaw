@@ -326,7 +326,7 @@ async function finalizeInput(
     executorFence?.assertCurrent();
     recordUpdateRunStep(run.runId, step, { env: run.env });
   }
-  const stopped = await adoptCandidateManagedServiceStop({
+  const { stopped, restartRequired } = await adoptCandidateManagedServiceStop({
     transferred: input.params.preManagedServiceStop,
     shouldRestart: input.params.shouldRestart,
     mode: input.params.result.mode,
@@ -343,6 +343,9 @@ async function finalizeInput(
     },
     onStep: (step) => input.params.result.steps.push(step),
   });
+  if (restartRequired) {
+    input.params.shouldRestart = true;
+  }
   if (input.windowsTaskAutoStartSuspended && !stopped?.serviceEnv) {
     throw new Error("Transferred Windows task suspension is missing its stopped service owner.");
   }
