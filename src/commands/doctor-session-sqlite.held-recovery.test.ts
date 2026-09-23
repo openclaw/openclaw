@@ -10,7 +10,7 @@ import { countBlockingSessionSqliteIssues } from "./doctor-session-sqlite-types.
 import { seedDeferredPluginSessionSource } from "./doctor-session-sqlite.deferred-plugin.test-support.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
 
-it.each(["missing", "reconstructed-held"] as const)(
+it.each(["missing", "reconstructed-held", "reconstructed-then-missing"] as const)(
   "preserves conflicting retained sources while deletion history is %s",
   async (history) => {
     await withOpenClawTestState({ label: `r16-recover-${history}` }, async (state) => {
@@ -37,17 +37,31 @@ it.each(["missing", "reconstructed-held"] as const)(
       runOpenClawStateWriteTransaction(
         (database) => {
           database.db.exec("DROP TABLE agent_deletion_journal");
-          if (history === "reconstructed-held") {
+          if (history !== "missing") {
             reconstructAgentDeletionJournal(database, [{ agentId: "main", path: sqlitePath }]);
+            if (history === "reconstructed-then-missing") {
+              database.db.exec("DROP TABLE agent_deletion_journal");
+            }
           }
         },
         { env: state.env },
       );
       expect(readAgentDatabaseDeletionSnapshot(state.env)?.retainedDeletions).toMatchObject(
-        history === "missing"
-          ? { status: "unavailable", cause: "missing" }
-          : { status: "present", held: [{ agentId: "main", path: sqlitePath }] },
+        history === "reconstructed-held"
+          ? { status: "present", held: [{ agentId: "main", path: sqlitePath }] }
+          : { status: "unavailable", cause: "missing" },
       );
+      if (history !== "missing") {
+        const allAgents = await runDoctorSessionSqlite({
+          cfg,
+          env: state.env,
+          allAgents: true,
+          mode: "import",
+        });
+        expect(allAgents.targets).toEqual([]);
+        expect(fs.readFileSync(transcript, "utf8")).toBe(changed);
+        expect(fs.readFileSync(storePath)).toEqual(indexBefore);
+      }
       for (const mode of ["recover", "import"] as const) {
         const recovered = await runDoctorSessionSqlite({
           cfg,

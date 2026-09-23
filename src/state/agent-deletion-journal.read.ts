@@ -16,10 +16,19 @@ import type { DB } from "./openclaw-state-db.generated.js";
 export type AgentDeletionJournalPurpose = "runtime" | "maintenance";
 
 type RetainedAgentDeletion = { agentId: string; agentDir: string; databasePaths: string[] };
+type KnownAgentDeletionFacts = {
+  entries: RetainedAgentDeletion[];
+  held: HeldAgentDatabase[];
+};
 export type AgentDeletionJournalDisposition =
-  | { status: "unavailable"; cause: "missing" | "unreadable"; reason: string }
+  | {
+      status: "unavailable";
+      cause: "missing" | "unreadable";
+      reason: string;
+      known?: KnownAgentDeletionFacts;
+    }
   | { status: "empty" }
-  | { status: "present"; entries: RetainedAgentDeletion[]; held: HeldAgentDatabase[] };
+  | ({ status: "present" } & KnownAgentDeletionFacts);
 
 export function parseAgentDeletionDatabasePaths(value: string): string[] {
   const parsed: unknown = JSON.parse(value);
@@ -38,49 +47,57 @@ export function readRetainedAgentDeletionsFromDatabase(
   statePath: string,
   purpose: AgentDeletionJournalPurpose = "maintenance",
 ): AgentDeletionJournalDisposition {
-  let entries: RetainedAgentDeletion[];
+  let entries: RetainedAgentDeletion[] = [];
+  let missing = false;
+  let unreadableReason: string | undefined;
   try {
-    if (!tableExists(database, "agent_deletion_journal")) {
-      return { status: "unavailable", cause: "missing", reason: "deletion journal missing" };
-    }
-    entries = executeSqliteQuerySync(
-      database,
-      getNodeSqliteKysely<Pick<DB, "agent_deletion_journal">>(database)
-        .selectFrom("agent_deletion_journal")
-        .select(["agent_id", "agent_dir", "database_paths_json"])
-        .where("cleanup_completed", "=", 1)
-        .where("delete_files", "=", 0)
-        .orderBy("agent_id", "asc"),
-    ).rows.map((row) => {
-      let databasePaths: string[] = [];
-      try {
-        databasePaths = parseAgentDeletionDatabasePaths(row.database_paths_json);
-      } catch (error) {
-        if (purpose === "maintenance") {
-          throw error;
+    missing = !tableExists(database, "agent_deletion_journal");
+    if (!missing) {
+      entries = executeSqliteQuerySync(
+        database,
+        getNodeSqliteKysely<Pick<DB, "agent_deletion_journal">>(database)
+          .selectFrom("agent_deletion_journal")
+          .select(["agent_id", "agent_dir", "database_paths_json"])
+          .where("cleanup_completed", "=", 1)
+          .where("delete_files", "=", 0)
+          .orderBy("agent_id", "asc"),
+      ).rows.map((row) => {
+        let databasePaths: string[] = [];
+        try {
+          databasePaths = parseAgentDeletionDatabasePaths(row.database_paths_json);
+        } catch (error) {
+          if (purpose === "maintenance") {
+            unreadableReason ??= formatErrorMessage(error);
+          }
+          // Unreadable path details cannot erase this row's known deleted identity.
         }
-        // Unreadable path details cannot erase this row's known deleted identity.
-      }
-      return {
-        agentId: row.agent_id,
-        agentDir: row.agent_dir,
-        databasePaths: [path.join(row.agent_dir, "openclaw-agent.sqlite"), ...databasePaths],
-      };
-    });
+        return {
+          agentId: row.agent_id,
+          agentDir: row.agent_dir,
+          databasePaths: [path.join(row.agent_dir, "openclaw-agent.sqlite"), ...databasePaths],
+        };
+      });
+    }
   } catch (error) {
     if (isSqliteCorruptionError(error)) {
       throw error;
     }
-    return {
-      status: "unavailable",
-      cause: "unreadable",
-      reason: `deletion journal unreadable: ${formatErrorMessage(error)}`,
-    };
+    unreadableReason = formatErrorMessage(error);
   }
   const held =
-    purpose === "maintenance"
+    purpose === "maintenance" && tableExists(database, "migration_sources")
       ? readAgentDeletionRecoveryHolds({ db: database, path: statePath })
       : [];
+  if (missing || unreadableReason !== undefined) {
+    return {
+      status: "unavailable",
+      cause: missing ? "missing" : "unreadable",
+      reason: missing
+        ? "deletion journal missing"
+        : `deletion journal unreadable: ${unreadableReason}`,
+      ...(entries.length || held.length ? { known: { entries, held } } : {}),
+    };
+  }
   return entries.length || held.length ? { status: "present", entries, held } : { status: "empty" };
 }
 

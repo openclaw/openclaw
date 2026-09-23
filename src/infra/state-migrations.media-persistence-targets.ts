@@ -90,7 +90,13 @@ export function discoverAgentDatabaseMigrationTargets(params: {
       cause: "missing",
       reason: "shared state database missing",
     };
-  const retainedDeletions = deletionJournal.status === "present" ? deletionJournal.entries : [];
+  const knownDeletions =
+    deletionJournal.status === "present"
+      ? deletionJournal
+      : deletionJournal.status === "unavailable"
+        ? deletionJournal.known
+        : undefined;
+  const retainedDeletions = knownDeletions?.entries ?? [];
   const classifyDeletion = createAgentDatabaseDeletionClassifier({
     ...params,
     retainedDeletions: deletionJournal,
@@ -129,7 +135,7 @@ export function discoverAgentDatabaseMigrationTargets(params: {
         source: "disk" as const,
       })),
     ),
-    ...(deletionJournal.status === "present" ? deletionJournal.held : []).map((target) => ({
+    ...(knownDeletions?.held ?? []).map((target) => ({
       agentId: target.agentId,
       path: target.path,
       source: "deletion" as const,

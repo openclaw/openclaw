@@ -36,10 +36,11 @@ export async function repairDoctorAgentDeletionJournal(params: {
         sanitizeForLog(
           `${resolveOpenClawStateSqlitePath(params.env)}: ${discovery.deletionJournal.reason}. Stores remain held; restore verified deletion history, then rerun openclaw doctor --fix.`,
         ),
-        ...discovery.unverifiedTargets.map(({ agentId, path: pathname }) =>
-          sanitizeForLog(
-            `Held agent ${agentId} database ${pathname}; deletion history needs repair.`,
-          ),
+        ...[...discovery.retainedTargets, ...discovery.unverifiedTargets].map(
+          ({ agentId, path: pathname }) =>
+            sanitizeForLog(
+              `Held agent ${agentId} database ${pathname}; deletion history needs repair.`,
+            ),
         ),
       ],
     };

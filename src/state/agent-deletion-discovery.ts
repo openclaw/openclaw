@@ -51,56 +51,59 @@ export function createAgentDatabaseDeletionClassifier(params: {
 }) {
   const artifactDirectories = params.artifactDirectories;
   const journal = params.retainedDeletions;
-  const entries = journal.status === "present" ? journal.entries : [];
+  const known =
+    journal.status === "present"
+      ? journal
+      : journal.status === "unavailable"
+        ? journal.known
+        : undefined;
+  const entries = known?.entries ?? [];
+  const unknown = journal.status === "unavailable" ? "unavailable" : undefined;
   const samePath = createOpenClawAgentDatabasePathMatcher();
   const recorded = artifactDirectories ?? [
     ...params.configuredAgentDatabaseTargets,
     ...params.registeredAgentDatabases,
   ];
-  const heldPaths =
-    journal.status !== "present"
-      ? []
-      : artifactDirectories
-        ? journal.held.flatMap((entry) => {
-            const defaultDirectory = path.dirname(
-              resolveOpenClawAgentSqlitePath({ agentId: entry.agentId, env: params.env }),
+  const heldPaths = !known
+    ? []
+    : artifactDirectories
+      ? known.held.flatMap((entry) => {
+          const defaultDirectory = path.dirname(
+            resolveOpenClawAgentSqlitePath({ agentId: entry.agentId, env: params.env }),
+          );
+          const recordedDirectory = path.dirname(entry.path);
+          const canonicalAgentFile = path.basename(entry.path) === "openclaw-agent.sqlite";
+          const directories = [
+            { agentId: entry.agentId, path: defaultDirectory },
+            ...artifactDirectories.filter(
+              (directory) =>
+                normalizeAgentId(directory.agentId) === entry.agentId ||
+                (canonicalAgentFile && samePath(directory.path, recordedDirectory)),
+            ),
+          ];
+          // Only directory bindings or the canonical agents tree identify adjacent artifacts.
+          const selectedByEnvironment =
+            canonicalAgentFile &&
+            [params.env.OPENCLAW_AGENT_DIR, params.env.PI_CODING_AGENT_DIR].some(
+              (directory) =>
+                directory?.trim() &&
+                samePath(resolveUserPath(directory, params.env), recordedDirectory),
             );
-            const recordedDirectory = path.dirname(entry.path);
-            const canonicalAgentFile = path.basename(entry.path) === "openclaw-agent.sqlite";
-            const directories = [
-              { agentId: entry.agentId, path: defaultDirectory },
-              ...artifactDirectories.filter(
-                (directory) =>
-                  normalizeAgentId(directory.agentId) === entry.agentId ||
-                  (canonicalAgentFile && samePath(directory.path, recordedDirectory)),
-              ),
-            ];
-            // Only directory bindings or the canonical agents tree identify adjacent artifacts.
-            const selectedByEnvironment =
-              canonicalAgentFile &&
-              [params.env.OPENCLAW_AGENT_DIR, params.env.PI_CODING_AGENT_DIR].some(
-                (directory) =>
-                  directory?.trim() &&
-                  samePath(resolveUserPath(directory, params.env), recordedDirectory),
-              );
-            if (
-              selectedByEnvironment ||
-              (canonicalAgentFile &&
-                path.basename(recordedDirectory) === "agent" &&
-                samePath(
-                  path.dirname(path.dirname(recordedDirectory)),
-                  path.dirname(path.dirname(defaultDirectory)),
-                ))
-            ) {
-              directories.push({ agentId: entry.agentId, path: recordedDirectory });
-            }
-            return directories;
-          })
-        : journal.held;
+          if (
+            selectedByEnvironment ||
+            (canonicalAgentFile &&
+              path.basename(recordedDirectory) === "agent" &&
+              samePath(
+                path.dirname(path.dirname(recordedDirectory)),
+                path.dirname(path.dirname(defaultDirectory)),
+              ))
+          ) {
+            directories.push({ agentId: entry.agentId, path: recordedDirectory });
+          }
+          return directories;
+        })
+      : known.held;
   return (pathname: string, agentId?: string) => {
-    if (journal.status === "unavailable") {
-      return "unavailable";
-    }
     let logicalTargets: readonly Target[] = [];
     if (!artifactDirectories && agentId !== undefined) {
       const ownerId = normalizeAgentId(agentId);
@@ -137,7 +140,7 @@ export function createAgentDatabaseDeletionClassifier(params: {
         ),
     );
     if (!deletion) {
-      return undefined;
+      return unknown;
     }
     const surviving = recorded.some(
       (target) =>
@@ -151,7 +154,7 @@ export function createAgentDatabaseDeletionClassifier(params: {
                 fs.realpathSync.native(target.path),
               )))),
     );
-    return agentId === deletion.agentId || !surviving ? deletion : undefined;
+    return agentId === deletion.agentId || !surviving ? deletion : unknown;
   };
 }
 
@@ -177,13 +180,19 @@ export function createRetainedAgentDatabaseMatcher(
       (agentDirectories &&
         readConfiguredTargets().some((target) => hasSqliteArtifacts(target.path)));
     return (pathname: string, _agentId?: string) =>
-      unavailable || (agentDirectories && hasSqliteArtifacts(pathname));
+      unavailable || (agentDirectories && hasSqliteArtifacts(pathname)) ? "unavailable" : undefined;
   }
   const retainedDeletions = snapshot?.retainedDeletions;
-  if (!retainedDeletions || retainedDeletions.status !== "present") {
+  if (
+    !retainedDeletions ||
+    (retainedDeletions.status !== "present" &&
+      !(retainedDeletions.status === "unavailable" && retainedDeletions.known))
+  ) {
     return (_pathname: string, _agentId?: string) =>
       purpose === "maintenance" &&
-      (!retainedDeletions || retainedDeletions.status === "unavailable");
+      (!retainedDeletions || retainedDeletions.status === "unavailable")
+        ? "unavailable"
+        : undefined;
   }
   const configured = readConfiguredTargets();
   return createAgentDatabaseDeletionClassifier({

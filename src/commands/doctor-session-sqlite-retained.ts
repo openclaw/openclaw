@@ -12,6 +12,7 @@ import {
 } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  hasDeferredPluginSessionImport,
   prepareSessionSourceVerification,
   readDeferredPluginSessionImport,
   rebuildDeferredPluginSessionSourceIndex,
@@ -40,6 +41,7 @@ import {
   readTranscriptFingerprint,
   resolveTargetSqlitePath,
 } from "../infra/session-sqlite-migration-readers.js";
+import { hasOrphanedSqliteSidecars } from "../infra/sqlite-files.js";
 import { createRetainedAgentDatabaseMatcher } from "../state/agent-deletion-discovery.js";
 import { planSessionJsonlArchiveMove } from "./doctor-session-sqlite-archive.js";
 import { countLegacyTranscript } from "./doctor-session-sqlite-diagnostics.js";
@@ -70,9 +72,18 @@ export function prepareRetainedSessionImport(
       () => resolveConfiguredAgentDatabaseTargets(params.cfg, { env: params.env }),
       { kind: "legacy-database", readDatabasePaths: () => [sqlitePath] },
     );
-    if (
+    const disposition =
       isHeld(params.target.storePath, params.target.agentId) ||
-      isHeld(sqlitePath, params.target.agentId)
+      isHeld(sqlitePath, params.target.agentId);
+    if (
+      disposition &&
+      (disposition !== "unavailable" ||
+        hasOrphanedSqliteSidecars(sqlitePath) ||
+        hasDeferredPluginSessionImport({
+          target: { ...params.target, sqlitePath },
+          sqlitePath,
+          env: params.env,
+        }))
     ) {
       issues.push({
         code: "plugin_migration_source_retained",
