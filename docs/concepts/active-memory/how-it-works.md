@@ -40,6 +40,9 @@ inference feature:
 | Generic internal `agent-command` paths                              | No                                                       |
 | Sub-agent/internal helper execution                                 | No                                                       |
 
+Incognito sessions skip both automatic recall lanes before memory lookup or
+Active Memory state writes. Explicit tools and commands remain available.
+
 Inter-session messages and child completion deliveries do not run Active
 Memory, even when they arrive in a visible conversation. OpenClaw uses their
 typed delivery origin to skip recall. Later human messages in that same

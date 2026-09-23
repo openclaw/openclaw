@@ -6,6 +6,7 @@ import {
   resolveLivePluginConfigObject,
 } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { isIncognitoSessionKey } from "openclaw/plugin-sdk/routing";
 import {
   applyCliRuntimeRecallTimeoutDefault,
   hasDeprecatedModelFallbackPolicy,
@@ -291,8 +292,12 @@ export default definePluginEntry({
                     api,
                     agentId: resolvedAgentId,
                     sessionId: ctx.sessionId,
+                    onLookupError: "throw",
                   })
                 : undefined);
+            if (isIncognitoSessionKey(resolvedSessionKey)) {
+              return undefined;
+            }
             const effectiveAgentId =
               resolvedAgentId || resolveStatusUpdateAgentId({ sessionKey: resolvedSessionKey });
             if (authorityAllowedRecallTools.length === 0) {

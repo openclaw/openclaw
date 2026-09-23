@@ -17,6 +17,7 @@ function resolveCanonicalSessionKeyFromSessionId(params: {
   api: OpenClawPluginApi;
   agentId: string;
   sessionId?: string;
+  onLookupError?: "throw";
 }): string | undefined {
   const sessionId = params.sessionId?.trim();
   if (!sessionId) {
@@ -42,7 +43,10 @@ function resolveCanonicalSessionKeyFromSessionId(params: {
       }
     }
     return bestMatch?.sessionKey?.trim() || undefined;
-  } catch {
+  } catch (error) {
+    if (params.onLookupError === "throw") {
+      throw error;
+    }
     return undefined;
   }
 }
