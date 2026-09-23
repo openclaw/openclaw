@@ -19,6 +19,10 @@ import type { ControlUiE2eBuildIdentity } from "../../ui/src/test-helpers/contro
 
 declare module "vitest" {
   export interface ProvidedContext {
+    controlUiE2ePrebuiltAssets: {
+      root: string;
+      buildInfo: ControlUiE2eBuildIdentity;
+    };
     controlUiE2ePrebuiltGeneration: string;
   }
 }
