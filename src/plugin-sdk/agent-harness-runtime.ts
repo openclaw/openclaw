@@ -130,7 +130,6 @@ export const agentHarnessAttemptTerminal = {
   setFailure: setAgentRunAttemptTerminalFailure,
 };
 export { projectAgentHarnessTranscriptMessageForDisplay } from "../agents/harness/transcript-visibility.js";
-export { buildCurrentInboundPrompt } from "../agents/embedded-agent-runner/run/runtime-context-prompt.js";
 export { isOpenClawRuntimeContextCustomMessage } from "../agents/internal-runtime-context.js";
 export { restorePreparedUserTurnOperationalMetaForRuntime } from "../sessions/user-turn-transcript.metadata.js";
 export { fingerprintResolvedAuthProfileCredential } from "../agents/execution-auth-binding.js";

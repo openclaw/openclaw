@@ -1,4 +1,5 @@
 /** Production-private attempt lifecycle mechanics for official harness plugins. */
+export { buildCurrentInboundPrompt } from "../agents/embedded-agent-runner/run/runtime-context-prompt.js";
 export {
   createAgentHarnessAttemptDeadlineController,
   type AgentHarnessAttemptTimeout,

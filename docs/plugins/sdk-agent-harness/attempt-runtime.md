@@ -113,8 +113,8 @@ When the capability is absent, this remote attachment preparation is unavailable
 
 ## Shared attempt mechanics
 
-Native harnesses can use `buildCurrentInboundPrompt` from
-`openclaw/plugin-sdk/agent-harness-runtime` to combine the prepared
+Official native harnesses use `buildCurrentInboundPrompt` from the private
+`openclaw/plugin-sdk/agent-harness-attempt-runtime` to combine the prepared
 `currentInboundContext` with the current prompt using the channel's joiner.
 Submit this context with each message, including resumed sessions. Steering
 receives its own `options.currentInboundContext`; do not reuse the initial

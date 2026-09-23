@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import {
+  buildCurrentInboundPrompt,
   createAgentHarnessAttemptCancellation,
   createAgentHarnessAttemptDeadlineController,
   createAgentHarnessAttemptLifecycle,
@@ -11,7 +12,6 @@ import {
   agentHarnessAttemptTerminal,
   awaitAgentEndSideEffects,
   buildAgentHookContextChannelFields,
-  buildCurrentInboundPrompt,
   buildEmbeddedForegroundPromptContext,
   clearActiveEmbeddedRun,
   embeddedAgentLog,
