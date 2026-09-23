@@ -47,6 +47,7 @@ function expectedHarnessSparseCheckoutArgs(linux: boolean) {
     "/scripts/lib/pnpm-lockfile-documents.mjs",
     "/scripts/ios-screenshot-evidence.mjs",
     "/scripts/lib/direct-run.mjs",
+    "/scripts/merge-ios-screenshot-captures.mjs",
     ...(linux
       ? ["/scripts/lib/release-upgrade-baseline.mjs", "/scripts/lib/release-version.mjs"]
       : ["/scripts/lib/swift-toolchain.sh"]),
@@ -343,6 +344,7 @@ it.concurrent.each([
     const evidenceScripts = {
       "scripts/ios-screenshot-evidence.mjs": "workflow evidence script\n",
       "scripts/lib/direct-run.mjs": "workflow direct-run script\n",
+      "scripts/merge-ios-screenshot-captures.mjs": "workflow merge script\n",
     };
     const nodeSetupScripts = {
       "scripts/lib/pnpm-lockfile-documents.mjs": readFileSync(

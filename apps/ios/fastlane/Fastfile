@@ -142,10 +142,27 @@ def validate_required_screenshots!(paths)
   UI.user_error!("DELIVER_SCREENSHOTS=1 but screenshots are missing for: #{missing_families.join(', ')}.")
 end
 
-def verify_release_ios_screenshot_manifest!(output_directory:, devices:)
+def release_ios_screenshot_tests
+  part_count = Integer(ENV.fetch("OPENCLAW_SNAPSHOT_PART_COUNT", "1"), 10)
+  part = Integer(ENV.fetch("OPENCLAW_SNAPSHOT_PART", "1"), 10)
+  unless part_count.positive? && part.between?(1, part_count)
+    UI.user_error!("Invalid screenshot partition #{part}/#{part_count}.")
+  end
+
+  RELEASE_IOS_SCREENSHOT_TESTS.each_with_index
+    .select { |_test, index| (index % part_count) == (part - 1) }
+    .map(&:first)
+    .tap do |tests|
+    UI.user_error!("Screenshot partition #{part}/#{part_count} selected no tests.") if tests.empty?
+  end
+rescue ArgumentError
+  UI.user_error!("Screenshot partition values must be positive integers.")
+end
+
+def verify_release_ios_screenshot_manifest!(output_directory:, devices:, screenshots:)
   locale_directory = File.join(output_directory, "en-US")
   expected_names = devices.flat_map do |device|
-    REQUIRED_IOS_SCREENSHOT_NAMES.map { |name| "#{device}-#{name}.png" }
+    screenshots.map { |entry| "#{device}-#{entry.fetch(:name)}.png" }
   end.sort
   actual_names = Dir[File.join(locale_directory, "*.png")].map { |path| File.basename(path) }.sort
   missing = expected_names - actual_names
@@ -2479,6 +2496,9 @@ platform :ios do
     result_bundle_archive_directory = File.join(ios_root, "build", "SnapshotTestResults")
     capture_attempts_path = File.join(result_bundle_archive_directory, "capture-attempts.json")
     derived_data_path = File.join(ios_root, "build", "SnapshotDerivedData")
+    build_only = ENV["OPENCLAW_SNAPSHOT_BUILD_ONLY"] == "1"
+    reuse_build = ENV["OPENCLAW_SNAPSHOT_REUSE_BUILD"] == "1"
+    UI.user_error!("Screenshot build-only and reuse-build modes are mutually exclusive.") if build_only && reuse_build
     FileUtils.rm_rf(result_bundle_archive_directory)
     FileUtils.mkdir_p(result_bundle_archive_directory)
     capture_attempts = []
@@ -2486,24 +2506,30 @@ platform :ios do
       attempts: capture_attempts,
       output_path: capture_attempts_path
     )
-    FileUtils.rm_rf(derived_data_path)
     devices = snapshot_devices
+    screenshots = release_ios_screenshot_tests
     project = File.join(ios_root, "OpenClaw.xcodeproj")
-    run_tests(
-      project: project,
-      scheme: "OpenClawUITests",
-      configuration: "Debug",
-      devices: [devices.first],
-      derived_data_path: derived_data_path,
-      build_for_testing: true,
-      clean: true,
-      number_of_retries: 0,
-      xcargs: "-allowProvisioningUpdates"
-    )
+    unless reuse_build
+      FileUtils.rm_rf(derived_data_path)
+      run_tests(
+        project: project,
+        scheme: "OpenClawUITests",
+        configuration: "Debug",
+        devices: [devices.first],
+        derived_data_path: derived_data_path,
+        build_for_testing: true,
+        clean: true,
+        number_of_retries: 0,
+        xcargs: "-allowProvisioningUpdates"
+      )
+    end
+    xctestrun_files = Dir[File.join(derived_data_path, "Build", "Products", "*.xctestrun")]
+    UI.user_error!("Screenshot build products omitted the xctestrun manifest.") if xctestrun_files.empty?
+    next if build_only
 
     capture_index = 0
     devices.each do |device|
-      RELEASE_IOS_SCREENSHOT_TESTS.each do |screenshot|
+      screenshots.each do |screenshot|
         capture_release_ios_screenshot!(
           project: project,
           device: device,
@@ -2521,7 +2547,8 @@ platform :ios do
     end
     verify_release_ios_screenshot_manifest!(
       output_directory: output_directory,
-      devices: devices
+      devices: devices,
+      screenshots: screenshots
     )
 
     # Snapshot fixes its result bundles under the screenshot root. Keep successful
