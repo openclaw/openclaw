@@ -32,6 +32,13 @@ class MarkdownBlocksDirective extends AsyncDirective {
           }
         });
   private readonly mutationObserver = new MutationObserver((records) => {
+    this.collectMutations(records);
+    if (this.pendingBlocks.size) {
+      this.scheduleScan();
+    }
+  });
+
+  private collectMutations(records: MutationRecord[]): void {
     for (const record of records) {
       const target = record.target instanceof Element ? record.target : record.target.parentElement;
       const block = target?.closest<HTMLElement>(blockSelector);
@@ -55,10 +62,7 @@ class MarkdownBlocksDirective extends AsyncDirective {
         }
       }
     }
-    if (this.pendingBlocks.size) {
-      this.scheduleScan();
-    }
-  });
+  }
 
   render(_active = true) {
     return nothing;
@@ -127,6 +131,9 @@ class MarkdownBlocksDirective extends AsyncDirective {
       });
       this.observedRoot = root;
     }
+    // Lit's post-commit scan can precede observer delivery. Wire new controls
+    // from this commit's records before consumers observe the rendered result.
+    this.collectMutations(this.mutationObserver.takeRecords());
     const blocks = [...this.pendingBlocks];
     this.pendingBlocks.clear();
     for (const wrapper of blocks) {

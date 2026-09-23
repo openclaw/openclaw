@@ -24,7 +24,9 @@ describe.skipIf(!hasBrowserLayout)("command palette input layout", () => {
 
   it("preserves the prompt without remeasuring result navigation and measures again on reconnect", async () => {
     host = document.body.appendChild(document.createElement("div"));
-    host.style.cssText = "width: 740px; max-width: 100%;";
+    // Reconnection must cross a wrapping boundary independently of the
+    // runner's viewport and platform font metrics.
+    host.style.cssText = "width: 740px; font-family: monospace;";
     const props = {
       value: "Keep this prompt and its caret while changing preferences.",
       placeholder: "Search or start a task…",
@@ -41,6 +43,8 @@ describe.skipIf(!hasBrowserLayout)("command palette input layout", () => {
     await nextFrame();
     const input = host.querySelector("textarea")!;
     const originalHeight = input.clientHeight;
+    expect(host.clientWidth).toBe(740);
+    expect(originalHeight).toBe(24);
     const measureContent = vi.spyOn(input, "scrollHeight", "get");
     const settings = host.querySelector("button")!;
     input.focus();
