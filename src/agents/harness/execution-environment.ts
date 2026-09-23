@@ -21,6 +21,18 @@ import {
   toolPolicyRestrictsTools,
 } from "../tool-policy.js";
 import { AgentHarnessPreflightError } from "./errors.js";
+import {
+  collectHarnessDeniedMcpServers,
+  resolveHarnessDeniableMcpServerPatterns,
+  type HarnessDeniableMcpServerPatterns,
+} from "./mcp-server-deny.js";
+import {
+  collectHarnessDeniedNativeAppPatterns,
+  harnessNativeAppDenyOverlapsMcpServer,
+  isHarnessNativeAppDenyPattern,
+  normalizeHarnessNativeAppDenyPrefix,
+  resolveHarnessNativeAppDenyReservedNamespaces,
+} from "./native-app-deny.js";
 import type { AgentHarness } from "./types.js";
 
 type ExecutionEnvironmentFacts = {
@@ -308,8 +320,48 @@ export type ResolvedPluginHarnessToolPolicies = {
   groupPolicy?: PluginHarnessToolPolicy;
   runtimePolicies: Array<PluginHarnessToolPolicy | undefined>;
   safeDeniedToolNames: string[];
+  deniedMcpServerNames: string[];
+  deniedNativeAppPatterns: string[];
   toolPolicyRestricted: boolean;
 };
+
+export type PluginHarnessToolPolicyEnforcement = {
+  safeDenyToolNames?: readonly string[];
+  /** Capabilities an indivisible native surface needs from effective profiles. */
+  nativeToolNames?: readonly string[];
+  deniableMcpServerPatterns?: HarnessDeniableMcpServerPatterns;
+  nativeAppDenyPrefix?: string;
+  /** Configured MCP namespaces an app-shaped deny must not be exempted for. */
+  nativeAppDenyReservedNamespaces?: readonly string[];
+};
+
+/** Resolves which denies a harness certifies it enforces against its native surface. */
+export function resolveHarnessToolPolicyEnforcement(
+  harness: AgentHarness,
+  config: OpenClawConfig | undefined,
+): PluginHarnessToolPolicyEnforcement {
+  // Profile checks apply to every harness that declares native requirements.
+  const nativeToolNames = harness.conversationToolPolicyNativeTools;
+  if (harness.conversationToolPolicySupport !== "exact") {
+    return { nativeToolNames };
+  }
+  const nativeAppDenyPrefix = normalizeHarnessNativeAppDenyPrefix(
+    harness.conversationToolPolicyNativeAppDenyPrefix,
+  );
+  return {
+    safeDenyToolNames: harness.conversationToolPolicySafeDenyTools,
+    nativeToolNames,
+    deniableMcpServerPatterns:
+      harness.conversationToolPolicyMcpServerDenySupport === "configured"
+        ? resolveHarnessDeniableMcpServerPatterns(config)
+        : undefined,
+    nativeAppDenyPrefix,
+    nativeAppDenyReservedNamespaces: resolveHarnessNativeAppDenyReservedNamespaces(
+      config,
+      nativeAppDenyPrefix,
+    ),
+  };
+}
 
 export function resolvePluginHarnessPolicyToolsAllow(
   params: PluginHarnessToolPolicyContext,
@@ -329,10 +381,7 @@ export function resolveAgentHarnessNativeToolPolicyRestricted(
 ): boolean {
   return resolvePluginHarnessToolPolicies(
     params,
-    harness.conversationToolPolicySupport === "exact"
-      ? harness.conversationToolPolicySafeDenyTools
-      : undefined,
-    harness.conversationToolPolicyNativeTools,
+    resolveHarnessToolPolicyEnforcement(harness, params.config),
   ).toolPolicyRestricted;
 }
 
@@ -355,9 +404,15 @@ export function resolvePluginHarnessDenyAllToolPolicyPrompt(
 
 export function resolvePluginHarnessToolPolicies(
   params: PluginHarnessToolPolicyContext,
-  safeDenyToolNames?: readonly string[],
-  nativeToolNames?: readonly string[],
+  enforcement: PluginHarnessToolPolicyEnforcement = {},
 ): ResolvedPluginHarnessToolPolicies {
+  const {
+    safeDenyToolNames,
+    nativeToolNames,
+    deniableMcpServerPatterns,
+    nativeAppDenyPrefix,
+    nativeAppDenyReservedNamespaces,
+  } = enforcement;
   const messageProvider = params.messageProvider ?? params.messageChannel;
   const sandboxSessionKey = params.sandboxSessionKey ?? params.sessionKey;
   const sandboxRuntime = resolveSandboxRuntimeStatus({
@@ -468,6 +523,14 @@ export function resolvePluginHarnessToolPolicies(
       requestedToolPolicy,
     ],
     safeDeniedToolNames: collectHarnessSafeDeniedToolNames(explicitPolicies, safeDenyToolNameSet),
+    deniedMcpServerNames: collectHarnessDeniedMcpServers(
+      explicitPolicies,
+      deniableMcpServerPatterns,
+    ),
+    deniedNativeAppPatterns: collectHarnessDeniedNativeAppPatterns(
+      explicitPolicies,
+      nativeAppDenyPrefix,
+    ),
     // Native tools bypass the collector's noninteractive OpenClaw wrappers.
     // Keep policy-allowed host replacements, without ambient input or approval surfaces.
     toolPolicyRestricted:
@@ -475,7 +538,13 @@ export function resolvePluginHarnessToolPolicies(
       nativeToolNames?.some((toolName) => !isToolAllowedByPolicies(toolName, profilePolicies)) ===
         true ||
       explicitPolicies.some((explicitPolicy) =>
-        toolPolicyRestrictsHarnessNativeTools(explicitPolicy, safeDenyToolNameSet),
+        toolPolicyRestrictsHarnessNativeTools(
+          explicitPolicy,
+          safeDenyToolNameSet,
+          deniableMcpServerPatterns,
+          nativeAppDenyPrefix,
+          nativeAppDenyReservedNamespaces,
+        ),
       ),
   };
 }
@@ -500,8 +569,11 @@ function collectHarnessSafeDeniedToolNames(
 function toolPolicyRestrictsHarnessNativeTools(
   policy: PluginHarnessToolPolicy | undefined,
   safeDenyToolNames: ReadonlySet<string> | undefined,
+  deniableMcpServerPatterns: HarnessDeniableMcpServerPatterns | undefined,
+  nativeAppDenyPrefix: string | undefined,
+  nativeAppDenyReservedNamespaces: readonly string[] | undefined,
 ): boolean {
-  if (!safeDenyToolNames) {
+  if (!safeDenyToolNames && !deniableMcpServerPatterns?.size && !nativeAppDenyPrefix) {
     return toolPolicyRestrictsTools(policy);
   }
   if (!policy || toolPolicyRestrictsTools({ allow: policy.allow })) {
@@ -509,6 +581,26 @@ function toolPolicyRestrictsHarnessNativeTools(
   }
   return expandToolGroups(policy.deny ?? []).some((deniedName) => {
     const normalized = normalizeToolPolicyName(deniedName);
+    if (!normalized) {
+      return false;
+    }
+    // Whole-server denies of configured MCP are enforced by omitting the server
+    // from the harness projection; they need not isolate the native surface.
+    if (deniableMcpServerPatterns?.has(normalized)) {
+      return false;
+    }
+    // Native app denies are applied to the harness's own app projection, unless
+    // the pattern could also reach a configured MCP server's tools.
+    if (
+      nativeAppDenyPrefix &&
+      isHarnessNativeAppDenyPattern(normalized, nativeAppDenyPrefix) &&
+      !harnessNativeAppDenyOverlapsMcpServer(normalized, nativeAppDenyReservedNamespaces ?? [])
+    ) {
+      return false;
+    }
+    if (!safeDenyToolNames) {
+      return true;
+    }
     return !isKnownCoreToolId(normalized) || !safeDenyToolNames.has(normalized);
   });
 }

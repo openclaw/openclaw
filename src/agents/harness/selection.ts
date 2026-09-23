@@ -44,6 +44,7 @@ import { AgentHarnessPreflightError } from "./errors.js";
 import {
   assertAgentHarnessExecutionEnvironment,
   resolvePluginHarnessDenyAllToolPolicyPrompt,
+  resolveHarnessToolPolicyEnforcement,
   resolvePluginHarnessToolPolicies,
   type ResolvedPluginHarnessToolPolicies,
 } from "./execution-environment.js";
@@ -630,15 +631,16 @@ function preparePluginHarnessParams(
       : { ...params, model, resolvedApiKey };
   const policies = resolvePluginHarnessToolPolicies(
     preparedParams,
-    harness.conversationToolPolicySupport === "exact"
-      ? harness.conversationToolPolicySafeDenyTools
-      : undefined,
-    harness.conversationToolPolicyNativeTools,
+    resolveHarnessToolPolicyEnforcement(harness, preparedParams.config),
   );
   const policyParams = {
     ...preparedParams,
     pluginHarnessToolPolicySafeDeniedTools:
       policies.safeDeniedToolNames.length > 0 ? policies.safeDeniedToolNames : undefined,
+    pluginHarnessToolPolicyDeniedMcpServers:
+      policies.deniedMcpServerNames.length > 0 ? policies.deniedMcpServerNames : undefined,
+    pluginHarnessToolPolicyDeniedAppPatterns:
+      policies.deniedNativeAppPatterns.length > 0 ? policies.deniedNativeAppPatterns : undefined,
     pluginHarnessToolPolicyRestricted: policies.toolPolicyRestricted,
   };
   return nativePermissionsConsented

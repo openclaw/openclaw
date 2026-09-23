@@ -70,10 +70,14 @@ export function resolveCodexPluginThreadConfigStartupPolicy(params: {
   pluginConfig: CodexPluginConfig;
   nativeToolSurfaceEnabled: boolean;
   scheduledRuntimeAuthority?: EmbeddedRunAttemptParams["scheduledRuntimeAuthority"];
+  deniedAppPatterns?: readonly string[];
 }) {
+  // Certified app denies must reach a builder even without a codexPlugins block;
+  // otherwise Codex's own default (apps enabled) would decide instead of policy.
   const pluginThreadConfigRequired =
     Boolean(params.scheduledRuntimeAuthority) ||
     !params.nativeToolSurfaceEnabled ||
+    (params.deniedAppPatterns?.length ?? 0) > 0 ||
     shouldBuildCodexPluginThreadConfig(params.pluginConfig);
   // Restricted runs disable the native apps feature without inventory discovery.
   const pluginThreadConfigPluginConfig =
@@ -156,6 +160,7 @@ async function buildCodexPluginThreadConfigWithinDeadline(
     return buildCodexPluginThreadConfigTimeoutFallback({
       pluginConfig: buildParams.pluginConfig,
       appCacheKey: buildParams.appCacheKey,
+      deniedAppPatterns: buildParams.deniedAppPatterns,
       message: `Codex plugin discovery exceeded its ${timeoutMs} ms startup budget; plugin apps were disabled for this turn.`,
     });
   }
@@ -175,6 +180,7 @@ export function createCodexPluginThreadConfigStartupProvider(params: {
   appCacheKey: string;
   metadataCache?: CodexPluginMetadataCache;
   scheduledRuntimeAuthority?: EmbeddedRunAttemptParams["scheduledRuntimeAuthority"];
+  deniedAppPatterns?: readonly string[];
 }) {
   const {
     client,

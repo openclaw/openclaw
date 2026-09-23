@@ -19,12 +19,16 @@ import {
   pluginSummary,
 } from "./plugin-inventory.test-helpers.js";
 import { CodexPluginMetadataCache } from "./plugin-metadata-cache.js";
-import { createCodexPluginThreadConfigStartupProvider } from "./plugin-thread-config-deadline.js";
+import {
+  createCodexPluginThreadConfigStartupProvider,
+  resolveCodexPluginThreadConfigStartupPolicy,
+} from "./plugin-thread-config-deadline.js";
 import {
   buildCodexPluginAppsConfigPatchFromPolicyContext,
   buildCodexPluginThreadConfig,
   buildCodexPluginThreadConfigInputFingerprint,
   buildCodexPluginThreadConfigTimeoutFallback,
+  buildDisabledAppsConfigPatch,
   isCodexPluginThreadBindingStale,
   mergeCodexThreadConfigs,
   shouldBuildCodexPluginThreadConfig,
@@ -1284,6 +1288,200 @@ describe("Codex plugin thread config", () => {
     });
     expect(config.provisionalAppIds).toEqual(["chatgpt-meetings", "disabled-account-app", "slack"]);
     expect(config.diagnostics).toStrictEqual([]);
+  });
+
+  it("drops account apps denied by harness tool policy and fingerprints the denies", async () => {
+    const pluginConfig = {
+      codexPlugins: { enabled: true, allow_all_plugins: true, allow_destructive_actions: false },
+    };
+    const accountApps = [
+      { ...appInfo("asdk_app_delta", true), name: "Delta Tools" },
+      { ...appInfo("asdk_app_gamma", true), name: "Gamma Mail" },
+    ];
+    const statusRequests: unknown[] = [];
+    const request = async (method: string, rawParams: unknown) => {
+      if (method === "config/read") {
+        return { config: {}, layers: [] };
+      }
+      if (method === "mcpServerStatus/list") {
+        statusRequests.push(rawParams);
+        return codexAppsStatusResponse();
+      }
+      return codexAppInventoryResponse(method as "app/installed", accountApps, rawParams as never);
+    };
+    const denied = await buildCodexPluginThreadConfig({
+      pluginConfig,
+      appCacheKey: "runtime",
+      request,
+      deniedAppPatterns: ["MCP__codex_apps__Gamma_*"],
+    });
+
+    expect(Object.keys(denied.configPatch?.apps as JsonObject)).toEqual([
+      "_default",
+      "asdk_app_delta",
+    ]);
+    expect(denied.provisionalAppIds).toEqual(["asdk_app_delta"]);
+    expect(Object.keys(denied.policyContext.apps)).toEqual(["asdk_app_delta"]);
+    expect(denied.diagnostics).toStrictEqual([
+      { code: "app_denied_by_policy", message: "asdk_app_gamma is denied by tool policy." },
+    ]);
+    expect(statusRequests).toEqual([{ detail: "toolsAndAuthOnly", limit: 100 }]);
+
+    const allowed = await buildCodexPluginThreadConfig({
+      pluginConfig,
+      appCacheKey: "runtime",
+      request,
+    });
+    expect(statusRequests).toHaveLength(1);
+    expect(Object.keys(allowed.policyContext.apps)).toEqual(["asdk_app_delta", "asdk_app_gamma"]);
+    expect(allowed.inputFingerprint).not.toBe(denied.inputFingerprint);
+    expect(
+      buildCodexPluginThreadConfigInputFingerprint({
+        pluginConfig,
+        appCacheKey: "runtime",
+        deniedAppPatterns: ["mcp__codex_apps__gamma_*"],
+      }),
+    ).toBe(denied.inputFingerprint);
+    expect(
+      isCodexPluginThreadBindingStale({
+        codexPluginsEnabled: true,
+        bindingFingerprint: allowed.fingerprint,
+        bindingInputFingerprint: allowed.inputFingerprint,
+        currentInputFingerprint: denied.inputFingerprint,
+        hasBindingPolicyContext: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("fails closed when a deny covers only part of an account app", async () => {
+    const config = await buildCodexPluginThreadConfig({
+      pluginConfig: {
+        codexPlugins: { enabled: true, allow_all_plugins: true, allow_destructive_actions: false },
+      },
+      appCacheKey: "runtime",
+      request: async (method, rawParams) => {
+        if (method === "config/read") {
+          return { config: {}, layers: [] };
+        }
+        if (method === "mcpServerStatus/list") {
+          return codexAppsStatusResponse();
+        }
+        return codexAppInventoryResponse(
+          method as "app/installed",
+          [
+            { ...appInfo("asdk_app_delta", true), name: "Delta Tools" },
+            { ...appInfo("asdk_app_gamma", true), name: "Gamma Mail" },
+          ],
+          rawParams as never,
+        );
+      },
+      deniedAppPatterns: ["mcp__codex_apps__gamma_send_*"],
+    });
+
+    expect(config.enabled).toBe(true);
+    expect(config.configPatch).toEqual(buildDisabledAppsConfigPatch());
+    expect(config.policyContext.apps).toEqual({});
+    expect(config.provisionalAppIds).toBeUndefined();
+    expect(config.diagnostics).toStrictEqual([
+      {
+        code: "app_policy_unenforceable",
+        message:
+          "Tool policy could not be applied to every tool of Codex app asdk_app_gamma; Codex apps were disabled for this turn. Deny the whole app (mcp__codex_apps__<app>_*) or allow it.",
+      },
+    ]);
+  });
+
+  it("requires the app-policy builder for certified app denies without a codexPlugins block", async () => {
+    const startup = resolveCodexPluginThreadConfigStartupPolicy({
+      pluginConfig: {},
+      nativeToolSurfaceEnabled: true,
+      deniedAppPatterns: ["mcp__codex_apps__gamma_*"],
+    });
+    expect(startup.pluginThreadConfigRequired).toBe(true);
+    expect(startup.resolvedPluginPolicy?.enabled).toBe(false);
+    expect(
+      resolveCodexPluginThreadConfigStartupPolicy({
+        pluginConfig: {},
+        nativeToolSurfaceEnabled: true,
+      }).pluginThreadConfigRequired,
+    ).toBe(false);
+
+    const config = await buildCodexPluginThreadConfig({
+      pluginConfig: {},
+      appCacheKey: "runtime",
+      request: async () => {
+        throw new Error("no inventory read expected");
+      },
+      deniedAppPatterns: ["mcp__codex_apps__gamma_*"],
+    });
+    expect(config.configPatch).toEqual(buildDisabledAppsConfigPatch());
+    expect(config.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
+      "app_policy_unenforceable",
+    ]);
+  });
+
+  it("fails closed when a policy deny matches no connected app tool", async () => {
+    const config = await buildCodexPluginThreadConfig({
+      pluginConfig: {
+        codexPlugins: { enabled: true, allow_all_plugins: true, allow_destructive_actions: false },
+      },
+      appCacheKey: "runtime",
+      request: async (method, rawParams) => {
+        if (method === "config/read") {
+          return { config: {}, layers: [] };
+        }
+        if (method === "mcpServerStatus/list") {
+          return codexAppsStatusResponse();
+        }
+        return codexAppInventoryResponse(
+          method as "app/installed",
+          [
+            { ...appInfo("asdk_app_delta", true), name: "Delta Tools" },
+            { ...appInfo("asdk_app_gamma", true), name: "Gamma Mail" },
+          ],
+          rawParams as never,
+        );
+      },
+      deniedAppPatterns: ["mcp__codex_apps__zeta_*", "mcp__codex_apps__gamma_*"],
+    });
+
+    expect(config.configPatch).toEqual(buildDisabledAppsConfigPatch());
+    expect(config.policyContext.apps).toEqual({});
+    expect(config.diagnostics).toStrictEqual([
+      {
+        code: "app_policy_unenforceable",
+        message:
+          "Tool policy denies mcp__codex_apps__zeta_* but no connected Codex app exposes a matching tool; Codex apps were disabled for this turn. Check the app namespace in the tool names Codex exposes, or remove the deny.",
+      },
+    ]);
+  });
+
+  it("fails closed when app tool names cannot be read for a policy deny", async () => {
+    const config = await buildCodexPluginThreadConfig({
+      pluginConfig: {
+        codexPlugins: { enabled: true, allow_all_plugins: true, allow_destructive_actions: false },
+      },
+      appCacheKey: "runtime",
+      request: async (method, rawParams) => {
+        if (method === "config/read") {
+          return { config: {}, layers: [] };
+        }
+        if (method === "mcpServerStatus/list") {
+          throw new Error("status unavailable");
+        }
+        return codexAppInventoryResponse(
+          method as "app/installed",
+          [{ ...appInfo("asdk_app_delta", true), name: "Delta Tools" }],
+          rawParams as never,
+        );
+      },
+      deniedAppPatterns: ["mcp__codex_apps__gamma_*"],
+    });
+
+    expect(config.configPatch).toEqual(buildDisabledAppsConfigPatch());
+    expect(config.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
+      "app_policy_unenforceable",
+    ]);
   });
 
   it("does not admit unauthorized or tool-blocked account apps", async () => {
@@ -3113,6 +3311,61 @@ describe("Codex plugin thread config", () => {
     expect(third).not.toBe(second);
   });
 
+  it("keeps the version-13 input fingerprint for bindings without app denies", () => {
+    // Captured from the pre-deny implementation (version 13, no deniedAppPatterns
+    // field). Native-owned and supervised bindings cannot be rotated, so a run
+    // without denies must reproduce this value exactly or the next turn after
+    // an upgrade is refused instead of rebuilt.
+    const legacyBindings = [
+      {
+        pluginConfig: { codexPlugins: { enabled: true } },
+        appCacheKey: "legacy-runtime",
+        inputFingerprint: "731f9cda3f7dcbb70164b36751285e045149ed90b7c9df17e2c9e0601af3c353",
+      },
+      {
+        pluginConfig: {
+          codexPlugins: {
+            enabled: true,
+            allow_all_plugins: true,
+            allow_destructive_actions: "ask",
+          },
+        },
+        appCacheKey: "legacy-runtime",
+        inputFingerprint: "eeeef7e874b93bd359268aed53353386aa7daeca7f08c60b36ada81fd2ba8d85",
+      },
+    ];
+    for (const binding of legacyBindings) {
+      const current = buildCodexPluginThreadConfigInputFingerprint({
+        pluginConfig: binding.pluginConfig,
+        appCacheKey: binding.appCacheKey,
+      });
+      expect(current).toBe(binding.inputFingerprint);
+      expect(
+        buildCodexPluginThreadConfigInputFingerprint({
+          pluginConfig: binding.pluginConfig,
+          appCacheKey: binding.appCacheKey,
+          deniedAppPatterns: [],
+        }),
+      ).toBe(binding.inputFingerprint);
+      expect(
+        isCodexPluginThreadBindingStale({
+          codexPluginsEnabled: true,
+          bindingFingerprint: "legacy-config",
+          bindingInputFingerprint: binding.inputFingerprint,
+          currentInputFingerprint: current,
+          hasBindingPolicyContext: true,
+        }),
+      ).toBe(false);
+      expect(
+        buildCodexPluginThreadConfigInputFingerprint({
+          pluginConfig: binding.pluginConfig,
+          appCacheKey: binding.appCacheKey,
+          deniedAppPatterns: ["mcp__codex_apps__gamma_*"],
+        }),
+      ).not.toBe(binding.inputFingerprint);
+    }
+  });
+
   it("uses app-level destructive policy for plugins without OpenClaw tool-name knowledge", async () => {
     const appCache = new CodexAppInventoryCache();
     await appCache.refreshNow({
@@ -3669,3 +3922,34 @@ async function buildReadyGoogleCalendarThreadConfig(
   });
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+
+function codexAppsStatusResponse(): JsonObject {
+  return {
+    data: [
+      {
+        name: "codex_apps",
+        tools: {
+          "delta.list_things": {
+            _meta: { connector_id: "asdk_app_delta", connector_name: "Delta" },
+          },
+          "gamma.list_items": {
+            _meta: { connector_id: "asdk_app_gamma", connector_name: "Gamma" },
+          },
+          "gamma.send_item": {
+            _meta: { connector_id: "asdk_app_gamma", connector_name: "Gamma" },
+          },
+          // App-only widget tool: Codex never declares it to the model, so it must
+          // not count toward deny coverage.
+          "gamma.widget_helper": {
+            _meta: {
+              connector_id: "asdk_app_gamma",
+              connector_name: "Gamma",
+              ui: { visibility: ["app"] },
+            },
+          },
+        },
+      },
+    ],
+    nextCursor: null,
+  };
+}
