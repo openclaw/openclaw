@@ -67,7 +67,7 @@ describe("native Ollama pre-tool narration", () => {
   it("delivers a permanent unphased Ollama answer as the final reply", async () => {
     const { session, emit } = createStubSessionHarness();
     const onBlockReply = vi.fn();
-    subscribeEmbeddedAgentSession({
+    const subscription = subscribeEmbeddedAgentSession({
       session: session as unknown as Parameters<typeof subscribeEmbeddedAgentSession>[0]["session"],
       runId: "run-ollama-answer",
       onBlockReply,
@@ -88,14 +88,14 @@ describe("native Ollama pre-tool narration", () => {
     });
     emit({ type: "message_end", message: ollamaAssistant("prefix suffix") });
 
-    await vi.waitFor(() => expect(onBlockReply).toHaveBeenCalled());
+    await subscription.waitForPendingEvents();
     expect(postedText(onBlockReply)).toContain("prefix suffix");
   });
 
   it("delivers length-limited Ollama output without treating it as commentary", async () => {
     const { session, emit } = createStubSessionHarness();
     const onBlockReply = vi.fn();
-    subscribeEmbeddedAgentSession({
+    const subscription = subscribeEmbeddedAgentSession({
       session: session as unknown as Parameters<typeof subscribeEmbeddedAgentSession>[0]["session"],
       runId: "run-ollama-length",
       onBlockReply,
@@ -119,7 +119,7 @@ describe("native Ollama pre-tool narration", () => {
       } as unknown as AssistantMessage,
     });
 
-    await vi.waitFor(() => expect(onBlockReply).toHaveBeenCalled());
+    await subscription.waitForPendingEvents();
     expect(postedText(onBlockReply)).toContain("Partial answer");
   });
 });
