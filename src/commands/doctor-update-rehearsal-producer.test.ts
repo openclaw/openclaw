@@ -83,7 +83,11 @@ it("admits real producer plugin host, dependency and basename links without trav
       const escaped = `${host.path}${path.sep}..${path.sep}live.sqlite`;
       const sentinel = path.join(root, "live.sqlite");
       await fs.writeFile(sentinel, "external state must not be admitted");
-      expect(await fs.realpath(escaped)).toBe(sentinel);
+      // Node's Win32 binding normalizes .. before realpath; only POSIX preserves
+      // this physical escape. The admission refusals below run on every platform.
+      if (process.platform !== "win32") {
+        expect(await fs.realpath(escaped)).toBe(sentinel);
+      }
       for (const overrides of [
         { canvasHost: { root: escaped } },
         { plugins: { entries: { "voice-call": { config: { store: escaped } } } } },
