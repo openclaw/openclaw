@@ -104,17 +104,8 @@ export function buildEmbeddedRunPayloads(params: {
     params.lastToolError.mutatingAction === true
       ? { toolName: params.lastToolError.toolName }
       : undefined;
-  if (
-    params.heartbeatToolResponse &&
-    (!heartbeatTerminalToolFailure || !params.heartbeatToolResponse.notify)
-  ) {
-    const payload = createHeartbeatToolResponsePayload(params.heartbeatToolResponse);
-    // A quiet outcome controls notification, not success. Keep the failure in
-    // scheduler diagnostics without replacing notify=false with a tool warning.
-    if (heartbeatTerminalToolFailure) {
-      setReplyPayloadMetadata(payload, { heartbeatTerminalToolFailure });
-    }
-    return [payload];
+  if (params.heartbeatToolResponse && !heartbeatTerminalToolFailure) {
+    return [createHeartbeatToolResponsePayload(params.heartbeatToolResponse)];
   }
   // Internal source replies always need transcript/UI mirrors. Only a
   // message_tool_only run suppresses the separate automatic final answer.

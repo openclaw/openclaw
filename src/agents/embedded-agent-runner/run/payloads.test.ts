@@ -5,7 +5,6 @@ import { describe, expect, it } from "vitest";
 import { resolveHeartbeatReplyPayload } from "../../../auto-reply/heartbeat-reply-payload.js";
 import { selectHeartbeatToolResponse } from "../../../auto-reply/heartbeat-tool-response.js";
 import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
-import { classifyHeartbeatAgentOutcome } from "../../../infra/heartbeat-delivery-normalization.js";
 import type { InteractiveReply, MessagePresentation } from "../../../interactive/payload.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import {
@@ -690,52 +689,39 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
   });
 
-  it.each(["message", "exec", "bash"])(
-    "keeps an explicitly quiet heartbeat silent after a %s failure",
-    (toolName) => {
-      const payloads = buildPayloads({
-        assistantTexts: ["Everything is fine."],
-        heartbeatToolResponse: {
-          outcome: "no_change",
-          notify: false,
-          summary: "Nothing needs attention.",
-        },
-        isHeartbeatTrigger: true,
-        lastToolError: {
-          toolName,
-          error: "operation failed",
-          mutatingAction: true,
-        },
-      });
-
-      expect(payloads).toHaveLength(1);
-      expect(payloads[0]?.text).toBe("HEARTBEAT_OK");
-      expect(selectHeartbeatToolResponse(payloads)?.response).toEqual({
+  it("keeps a quiet heartbeat response behind an unresolved mutating failure", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["Everything is fine."],
+      heartbeatToolResponse: {
         outcome: "no_change",
         notify: false,
         summary: "Nothing needs attention.",
+      },
+      isHeartbeatTrigger: true,
+      lastToolError: {
+        toolName: "message",
+        error: "cross-context messaging denied",
+        mutatingAction: true,
+      },
+    });
+
+    expect(payloads).toHaveLength(2);
+    expect(payloads[0]?.text).toBe("HEARTBEAT_OK");
+    expect(payloads[1]).toMatchObject({
+      isError: true,
+      text: expect.stringContaining("Message failed"),
+    });
+    expect(selectHeartbeatToolResponse(payloads)?.response).toEqual({
+      outcome: "no_change",
+      notify: false,
+      summary: "Nothing needs attention.",
+    });
+    for (const payload of payloads) {
+      expect(getReplyPayloadMetadata(payload)?.heartbeatTerminalToolFailure).toEqual({
+        toolName: "message",
       });
-      for (const payload of payloads) {
-        expect(getReplyPayloadMetadata(payload)?.heartbeatTerminalToolFailure).toEqual({
-          toolName,
-        });
-      }
-      expect(
-        classifyHeartbeatAgentOutcome({
-          agentRun: {
-            agentRunFailed: false,
-            heartbeatToolResponse: selectHeartbeatToolResponse(payloads)?.response,
-            heartbeatTerminalToolFailure: { toolName },
-            replyPayload: resolveHeartbeatReplyPayload(payloads),
-          },
-          hasRelayableExecCompletion: false,
-          suppressUnmarkedSourceReplies: false,
-          responsePrefix: undefined,
-          ackMaxChars: 300,
-        }),
-      ).toMatchObject({ kind: "failure", reason: "agent-tool-failure", shouldSkipMain: true });
-    },
-  );
+    }
+  });
 
   it("marks plain-text heartbeat replies with unresolved mutating failures", () => {
     const payloads = buildPayloads({

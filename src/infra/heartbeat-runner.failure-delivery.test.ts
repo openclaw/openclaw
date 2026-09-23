@@ -174,39 +174,46 @@ describe("runHeartbeatOnce failure delivery", () => {
     });
   });
 
-  it("delivers a terminal tool warning without recording successful delivery bookkeeping", async () => {
-    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
-      const cfg = createConfig({ tmpDir, storePath });
-      const sessionKey = await seedTelegramSession(storePath, cfg);
-      const warning = "⚠️ Message failed";
-      replySpy.mockResolvedValue(
-        createTerminalToolFailureReply(
-          {
-            outcome: "no_change",
-            notify: false,
-            summary: "Message delivery was denied.",
-          },
-          warning,
-        ),
-      );
-      const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1" });
+  it.each([false, true])(
+    "honors notify=%s for a terminal tool warning without recording successful delivery",
+    async (notify) => {
+      await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+        const cfg = createConfig({ tmpDir, storePath });
+        const sessionKey = await seedTelegramSession(storePath, cfg);
+        const warning = "⚠️ Message failed";
+        replySpy.mockResolvedValue(
+          createTerminalToolFailureReply(
+            {
+              outcome: "no_change",
+              notify,
+              summary: "Message delivery was denied.",
+            },
+            warning,
+          ),
+        );
+        const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1" });
 
-      const result = await runHeartbeat(cfg, replySpy, sendTelegram);
-      const sessionStore = readSessionStoreForTest<{
-        lastHeartbeatText?: string;
-      }>(storePath);
+        const result = await runHeartbeat(cfg, replySpy, sendTelegram);
+        const sessionStore = readSessionStoreForTest<{
+          lastHeartbeatText?: string;
+        }>(storePath);
 
-      expect(result).toEqual({ status: "failed", reason: "agent-tool-failure" });
-      expectTelegramSend(sendTelegram, { text: warning, cfg });
-      expect(sessionStore[sessionKey]?.lastHeartbeatText).toBeUndefined();
-      expect(getLastHeartbeatEvent()).toMatchObject({
-        status: "failed",
-        reason: "agent-tool-failure",
-        preview: warning,
-        channel: "telegram",
+        expect(result).toEqual({ status: "failed", reason: "agent-tool-failure" });
+        if (notify) {
+          expectTelegramSend(sendTelegram, { text: warning, cfg });
+        } else {
+          expect(sendTelegram).not.toHaveBeenCalled();
+        }
+        expect(sessionStore[sessionKey]?.lastHeartbeatText).toBeUndefined();
+        expect(getLastHeartbeatEvent()).toMatchObject({
+          status: "failed",
+          reason: "agent-tool-failure",
+          preview: warning,
+          channel: "telegram",
+        });
       });
-    });
-  });
+    },
+  );
 
   it.each([
     {
