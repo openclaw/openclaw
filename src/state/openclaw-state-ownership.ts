@@ -206,20 +206,16 @@ function inspectOwnershipWhileCoordinatorHeld(
   }
 }
 
-function acquireOpenClawStateOwnershipCoordinator(databasePath: string, busyTimeoutMs: number) {
-  return acquireStateDatabaseCoordinator({
-    databasePath,
-    busyTimeoutMs,
-  });
-}
-
 export function runWithOpenClawStateOwnershipCoordinator<T>(
   databasePath: string,
   operationLabel: string,
   operation: () => T,
 ): T {
   return runWithSqliteCoordinator(
-    acquireOpenClawStateOwnershipCoordinator(databasePath, OPENCLAW_SQLITE_BUSY_TIMEOUT_MS),
+    acquireStateDatabaseCoordinator({
+      databasePath,
+      busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+    }),
     operationLabel,
     operation,
   );
@@ -258,7 +254,7 @@ function acquireOpenClawStateWriteAccess(options: {
     options.busyTimeoutMs ?? OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
     "busyTimeoutMs",
   );
-  const access = acquireOpenClawStateOwnershipCoordinator(resolvedPath, busyTimeoutMs);
+  const access = acquireStateDatabaseCoordinator({ databasePath: resolvedPath, busyTimeoutMs });
   try {
     quarantineOrphanedSqliteSidecars(resolvedPath);
     assertOwnershipAllowsWrite(
@@ -272,15 +268,9 @@ function acquireOpenClawStateWriteAccess(options: {
     );
     return access;
   } catch (operationError) {
-    let releaseFailed = false;
-    let releaseError: unknown;
     try {
       access.release();
-    } catch (error) {
-      releaseFailed = true;
-      releaseError = error;
-    }
-    if (releaseFailed) {
+    } catch (releaseError) {
       throw createSqliteLifecycleAggregateError(
         [operationError, releaseError],
         "state ownership inspection and coordinator release both failed",

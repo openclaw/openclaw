@@ -2,21 +2,21 @@ import { vi } from "vitest";
 import { getTaskRegistryProcessState } from "../../../tasks/task-registry.process-state.js";
 import * as mod from "./subagent-registry.test-helpers.js";
 
-export function createLifecycleWaits(requesterSessionKey: string) {
-  const flushAsync = async () => {
+export async function flushLifecycleTaskWrites() {
+  await vi.dynamicImportSettled();
+  // Fake-time polling does not join native worker commits. Delivery can enqueue
+  // another task mutation after terminal settlement, so drain each accepted tail.
+  for (
+    let pending = getTaskRegistryProcessState().projection.mutationTail;
+    pending;
+    pending = getTaskRegistryProcessState().projection.mutationTail
+  ) {
+    await pending;
     await vi.dynamicImportSettled();
-    // Fake-time polling does not join native worker commits. Delivery can enqueue
-    // another task mutation after terminal settlement, so drain each accepted tail.
-    for (
-      let pending = getTaskRegistryProcessState().projection.mutationTail;
-      pending;
-      pending = getTaskRegistryProcessState().projection.mutationTail
-    ) {
-      await pending;
-      await vi.dynamicImportSettled();
-    }
-  };
+  }
+}
 
+export function createLifecycleWaits(requesterSessionKey: string) {
   const waitForCleanupHandledFalse = async (runId: string) => {
     // Cleanup can be released asynchronously after announce failure; poll fake
     // time until the retry-grace state is observable.
@@ -32,7 +32,7 @@ export function createLifecycleWaits(requesterSessionKey: string) {
         return;
       }
       await vi.advanceTimersByTimeAsync(1);
-      await flushAsync();
+      await flushLifecycleTaskWrites();
     }
     throw new Error(`run ${runId} did not reach cleanupHandled=false in time`);
   };
@@ -55,7 +55,7 @@ export function createLifecycleWaits(requesterSessionKey: string) {
         return;
       }
       await vi.advanceTimersByTimeAsync(1);
-      await flushAsync();
+      await flushLifecycleTaskWrites();
     }
     throw new Error(
       `run ${runId} did not finish delivered cleanup in time: ${JSON.stringify({
@@ -76,7 +76,7 @@ export function createLifecycleWaits(requesterSessionKey: string) {
         return run;
       }
       await vi.advanceTimersByTimeAsync(1);
-      await flushAsync();
+      await flushLifecycleTaskWrites();
     }
     throw new Error(`run ${runId} frozen result did not refresh`);
   };
@@ -85,7 +85,7 @@ export function createLifecycleWaits(requesterSessionKey: string) {
     waitForFrozenResult(runId, (resultText) => resultText === expectedText);
 
   return {
-    flushAsync,
+    flushAsync: flushLifecycleTaskWrites,
     waitForCleanupHandledFalse,
     waitForDeliveredCleanup,
     waitForFrozenResult,

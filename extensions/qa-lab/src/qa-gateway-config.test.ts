@@ -218,8 +218,16 @@ describe("buildQaGatewayConfig", () => {
     expect(cfg.models?.providers?.["mock-openai"]?.request).toEqual({ allowPrivateNetwork: true });
     expect(cfg.models?.providers?.["mock-openai"]?.models).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ id: "gpt-5.6-luna", reasoning: true }),
-        expect.objectContaining({ id: "gpt-5.6-luna-alt", reasoning: true }),
+        expect.objectContaining({
+          id: "gpt-5.6-luna",
+          reasoning: true,
+          compat: { sendSessionIdHeader: true },
+        }),
+        expect.objectContaining({
+          id: "gpt-5.6-luna-alt",
+          reasoning: true,
+          compat: { sendSessionIdHeader: true },
+        }),
       ]),
     );
     expect(cfg.models?.providers?.openai?.baseUrl).toBe("http://127.0.0.1:44080/v1");

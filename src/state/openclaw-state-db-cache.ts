@@ -5,7 +5,6 @@ import {
   registerNodeSqliteKyselyQueryErrorHandler,
 } from "../infra/kysely-sync-cache-state.js";
 import {
-  createSqliteLifecycleAggregateError,
   runWithSqliteCoordinator,
   throwSqliteLifecycleErrors,
 } from "../infra/sqlite-coordinator.js";
@@ -699,16 +698,7 @@ export async function acquireOpenClawStateDatabaseFileExclusion(pathname: string
       } catch (error) {
         errors.push(error);
       }
-      if (errors.length === 1) {
-        throw errors[0];
-      }
-      if (errors.length > 1) {
-        throw createSqliteLifecycleAggregateError(
-          errors,
-          "checkpoint binding or writer closure failed",
-          errors[0],
-        );
-      }
+      throwSqliteLifecycleErrors(errors, "checkpoint binding or writer closure failed");
     },
     release: () => {
       try {

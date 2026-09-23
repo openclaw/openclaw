@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   executeSqliteQuerySync,
@@ -40,13 +41,7 @@ function boundedText(value: string | undefined, maxLength: number): string | und
   return trimmed ? truncateUtf16Safe(trimmed, maxLength) : undefined;
 }
 
-function parseBackupRun(row: {
-  id: string;
-  created_at: number;
-  archive_path: string;
-  status: string;
-  manifest_json: string;
-}): BackupRunRecord | undefined {
+function parseBackupRun(row: BackupRunDatabase["backup_runs"]): BackupRunRecord | undefined {
   if (row.status !== "ok" && row.status !== "failed") {
     return undefined;
   }
@@ -56,11 +51,14 @@ function parseBackupRun(row: {
   } catch {
     return undefined;
   }
-  if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
+  if (!isRecord(manifest)) {
     return undefined;
   }
-  const value = manifest as Record<string, unknown>;
-  if (value.kind !== "archive" && value.kind !== "sqlite-snapshot" && value.kind !== "git") {
+  if (
+    manifest.kind !== "archive" &&
+    manifest.kind !== "sqlite-snapshot" &&
+    manifest.kind !== "git"
+  ) {
     return undefined;
   }
   return {
@@ -68,10 +66,10 @@ function parseBackupRun(row: {
     createdAt: row.created_at,
     archivePath: row.archive_path,
     status: row.status,
-    kind: value.kind,
-    ...(typeof value.target === "string" ? { target: value.target } : {}),
-    ...(typeof value.error === "string" ? { error: value.error } : {}),
-    ...(value.pushFailed === true ? { pushFailed: true } : {}),
+    kind: manifest.kind,
+    ...(typeof manifest.target === "string" ? { target: manifest.target } : {}),
+    ...(typeof manifest.error === "string" ? { error: manifest.error } : {}),
+    ...(manifest.pushFailed === true ? { pushFailed: true } : {}),
   };
 }
 
@@ -96,10 +94,8 @@ export async function recordBackupRunOutcome(params: {
   const context = captureOpenClawStateWorkerContext({ path: databasePath, env: params.env });
   const manifest = JSON.stringify({
     kind: params.kind,
-    ...(boundedText(params.target, 512) ? { target: boundedText(params.target, 512) } : {}),
-    ...(boundedText(params.error, BACKUP_RUN_ERROR_MAX_LENGTH)
-      ? { error: boundedText(params.error, BACKUP_RUN_ERROR_MAX_LENGTH) }
-      : {}),
+    target: boundedText(params.target, 512),
+    error: boundedText(params.error, BACKUP_RUN_ERROR_MAX_LENGTH),
     ...(params.pushFailed === true ? { pushFailed: true } : {}),
   });
   const row = {
