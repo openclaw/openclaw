@@ -195,7 +195,7 @@ export async function swapStagedPackageInstall(
         assertCurrent();
         packageRollbackVerified = false;
         return [
-          `${formatErrorMessage(error)}; installation and backups retained for manual recovery`,
+          `${error instanceof FreeBsdPkgOwnershipError ? error.message : formatErrorMessage(error)}; installation and backups retained for manual recovery`,
         ];
       }
     }

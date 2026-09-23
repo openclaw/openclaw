@@ -21,7 +21,7 @@ import {
   createSelectedNodeTestShardBundles,
   isExclusiveCompactShardName,
 } from "../../scripts/lib/ci-node-test-plan.mts";
-import { rebalanceRuntimeTestJobs } from "../../scripts/lib/ci-runtime-test-placement.mts";
+import * as runtimePlacement from "../../scripts/lib/ci-runtime-test-placement.mts";
 import { refitTestTimings, type CiTimingRun } from "../../scripts/lib/ci-test-timings-refit.mts";
 import {
   ciTestTimingsSchema,
@@ -351,6 +351,33 @@ describe("runtime placement observations", () => {
         runnerBackend: "hybrid",
         includeReleaseOnlyPluginShards: false,
       };
+      const rebalance = runtimePlacement.rebalanceRuntimeTestJobs;
+      // This fixture owns one Gateway receiver. Real inventory can add cheaper
+      // receivers; the full-inventory rows and headroom case cover that choice.
+      const placementSpy = gatewayRecipient
+        ? vi
+            .spyOn(runtimePlacement, "rebalanceRuntimeTestJobs")
+            .mockImplementation((jobs, policy) => {
+              const donors = jobs.filter((job) =>
+                job.groups.some(
+                  (group) =>
+                    group.pretestBuildMode === "runtime" && group.configs.includes(runtimeConfig),
+                ),
+              );
+              const recipients = jobs.filter((job) =>
+                job.groups.some((group) => group.configs.includes(gatewayFixtureConfig)),
+              );
+              expect(donors).toHaveLength(1);
+              expect(recipients).toHaveLength(1);
+              const donor = donors[0]!;
+              const recipient = recipients[0]!;
+              expect(donor).not.toBe(recipient);
+              expect(donor.pretestBuildMode).toBe("runtime");
+              expect(recipient.pretestBuildMode).toBeUndefined();
+              expect(recipient.planConcurrency).toBe(1);
+              rebalance([donor, recipient], policy);
+            })
+        : undefined;
       try {
         fullSuiteVitestShards.splice(
           0,
@@ -530,6 +557,7 @@ describe("runtime placement observations", () => {
         spy.mockRestore();
         compactSpy.mockRestore();
         gatewayConfigSpy?.mockRestore();
+        placementSpy?.mockRestore();
         fullSuiteVitestShards.splice(0, fullSuiteVitestShards.length, ...originalShards);
       }
     },
@@ -570,7 +598,7 @@ describe("runtime placement observations", () => {
       ];
       const cost = (groups: NodeTestShardGroup[]) =>
         100 + groups.reduce((sum, entry) => sum + (entry === spare ? 50 : 200), 0);
-      rebalanceRuntimeTestJobs(jobs, {
+      runtimePlacement.rebalanceRuntimeTestJobs(jobs, {
         cost,
         admits: (groups) => groups.length > 0 && cost(groups) <= 440,
         runnerRank: ({ runner }) => ["small", "medium", "strong"].indexOf(runner),
@@ -622,7 +650,7 @@ describe("runtime placement observations", () => {
     const weights: Record<string, number> = { moved: 100, retained: 330, spare: 80, ordinary: 50 };
     const cost = (groups: NodeTestShardGroup[]) =>
       100 + groups.reduce((sum, entry) => sum + weights[entry.shard_name]!, 0);
-    rebalanceRuntimeTestJobs(jobs, {
+    runtimePlacement.rebalanceRuntimeTestJobs(jobs, {
       cost,
       admits: (groups) => groups.length > 0 && cost(groups) <= 440,
       runnerRank: () => 0,

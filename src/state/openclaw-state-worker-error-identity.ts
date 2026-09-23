@@ -18,7 +18,7 @@ import {
   OpenClawStateExternalOwnershipError,
   OpenClawStateOwnershipError,
   OpenClawStateOwnershipMetadataError,
-} from "./openclaw-state-ownership.js";
+} from "./openclaw-state-ownership-error.js";
 import { SessionMetadataUnavailableError } from "./session-metadata-unavailable-error.js";
 
 type MaintenanceKind = ConstructorParameters<typeof StartupMaintenanceRequiredError>[0];

@@ -75,9 +75,40 @@ it.each([false, true])(
     closeOpenClawStateDatabaseForTest();
     const runUtf8 = processRunner.runUtf8CommandWithTimeout;
     let spawned = false;
+    let rootState: "current" | "pending" | "revoked" = "current";
+    const rootFailure = Object.assign(new Error("Fixture write authority revoked"), {
+      reason: "freebsd-update-ownership",
+    });
     await withUpdateCommandExecutor(runId, async (executor) => {
       const fence = await executor.enter(root, { serviceRoot });
-      const opts: UpdateCommandOptions = { run: { runId, env, executorFence: fence } };
+      const opts: UpdateCommandOptions = {
+        run: {
+          runId,
+          env,
+          executorFence: fence,
+          // This controlled latch proves composition with real Doctor migration,
+          // not native FreeBSD owner admission.
+          freebsdWriteAdmission: {
+            get canWrite() {
+              return rootState === "current";
+            },
+            get failure() {
+              return rootState === "revoked" ? rootFailure : undefined;
+            },
+            assertCurrent() {
+              if (rootState !== "current") {
+                throw rootFailure;
+              }
+            },
+            revoke(cause) {
+              return cause instanceof Error ? cause : new Error(String(cause));
+            },
+            async revalidate() {
+              throw new Error("Unexpected root revalidation in Doctor fixture");
+            },
+          },
+        },
+      };
       const guards = createUpdateCommandExecutionGuards(opts, root);
       vi.spyOn(processRunner, "runUtf8CommandWithTimeout").mockImplementation(
         async (_argv, options) => {
@@ -120,6 +151,11 @@ it.each([false, true])(
       guards.assertCurrent();
       if (migrated) {
         expect(() => loadUpdateRecovery(runId, { env })).toThrow(/newer schema version/);
+      }
+      for (const state of ["pending", "revoked"] as const) {
+        rootState = state;
+        expect(guards.assertCurrent).toThrow(rootFailure);
+        expect(guards.assertBoundChildCurrent).toThrow(rootFailure);
       }
       expect(fs.readFileSync(configPath, "utf8")).toBe("{}\n");
     });

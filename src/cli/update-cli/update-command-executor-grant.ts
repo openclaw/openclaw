@@ -3,7 +3,11 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveServiceManagerEnv } from "../../daemon/service-process-env.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import { captureManagedUpdateLeaseDatabaseIdentity } from "../../infra/update-managed-service-handoff-database.js";
-import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
+import {
+  createManagedHandoffLeaseStore,
+  type ManagedHandoffLease,
+  type ManagedHandoffParent,
+} from "../../infra/update-managed-service-handoff-lease.js";
 import {
   childLineageDigest,
   type UpdateCommandChildGrant,
@@ -146,4 +150,51 @@ export function resolveUpdateCommandChildBinding(
     retained: retained?.kind === "current" ? retained.lease : undefined,
     retainedChild: retainedChild?.kind === "current" ? retainedChild.lease : undefined,
   };
+}
+
+/** Recheck the admitted lineage without imposing the caller's operation deadline. */
+export function assertUpdateCommandChildBindingCurrent(
+  binding: ReturnType<typeof resolveUpdateCommandChildBinding>,
+): void {
+  const { original, parent, spawner, originalChild, child, retained, retainedChild, store } =
+    binding;
+  const isLive = (identity: ManagedHandoffLease["executor"]) =>
+    store.isProcessIdentityCurrent(identity);
+  // Several lineage roles can name the same full lease. Share only this
+  // assertion's successful checks; every later assertion reads live state.
+  const checkedParents: ManagedHandoffParent[] = [];
+  const checkedReceivers: ManagedHandoffLease[] = [];
+  const parentIsCurrent = (lease: ManagedHandoffParent) => {
+    if (checkedParents.some((checked) => isDeepStrictEqual(checked, lease))) {
+      return true;
+    }
+    if (!store.current(lease) || !isLive(lease.helper) || !isLive(lease.executor)) {
+      return false;
+    }
+    checkedParents.push(lease);
+    return true;
+  };
+  const receiverIsCurrent = (lease: ManagedHandoffLease) => {
+    if (checkedReceivers.some((checked) => isDeepStrictEqual(checked, lease))) {
+      return true;
+    }
+    if (!store.owns(lease, "executor")) {
+      return false;
+    }
+    checkedReceivers.push(lease);
+    return true;
+  };
+  if (
+    !parentIsCurrent(original) ||
+    !parentIsCurrent(parent) ||
+    !parentIsCurrent(spawner) ||
+    !receiverIsCurrent(originalChild) ||
+    !receiverIsCurrent(child) ||
+    (retained &&
+      (!retainedChild || !parentIsCurrent(retained) || !receiverIsCurrent(retainedChild)))
+  ) {
+    throw new UpdateCommandRecoveryPendingError(
+      "The update process no longer has permission to continue.",
+    );
+  }
 }

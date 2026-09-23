@@ -20,6 +20,7 @@ import { printResult } from "./progress.js";
 import { parseUpdateTimeoutMs, type UpdateCommandOptions } from "./shared.js";
 import { UpdateActivationTimeoutError } from "./update-command-activation.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
+import { updateCommandLedgerOptions } from "./update-command-ledger.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import {
   recordUpdateResultNextAction,
@@ -138,6 +139,22 @@ export async function withUpdateCommandTerminalResult<T>(
   if ("error" in outcome && hasCommandProcessCleanupError(outcome.error)) {
     throw outcome.error;
   }
+  if (run?.freebsdWriteAdmission?.canWrite === false) {
+    // The terminal owner outlives the executor, but not an authority refusal.
+    // Do not invoke a deferred publisher that can reopen history or sentinels.
+    throw new UpdateCommandPendingRecoveryFailure(
+      {
+        status: "error",
+        mode: "unknown",
+        reason: run.freebsdWriteAdmission.failure?.reason ?? "freebsd-update-ownership",
+        runId: run.runId,
+        steps: [],
+        durationMs: 0,
+      },
+      `${run.freebsdWriteAdmission.failure?.message ?? "Update ownership was not admitted."} Update history remains pending.`,
+      "error" in outcome ? { cause: outcome.error } : undefined,
+    );
+  }
   const activationTimeout =
     "error" in outcome
       ? collectNestedErrorCandidates(outcome.error).find(
@@ -241,6 +258,7 @@ export async function resolveSettledUpdateCommandResult(
   // The mutation owner is now closed. This is diagnostic publication only,
   // never authority to reopen displaced state or replace another terminal row.
   try {
+    params.opts.run?.freebsdWriteAdmission?.assertCurrent();
     if (failure === undefined && captured) {
       readUpdateCommandTerminalRecord(params, result, captured);
       return { result, settlementFailed, captured };
@@ -249,10 +267,12 @@ export async function resolveSettledUpdateCommandResult(
     // Keep the first target stable if selectors change during admission.
     const targetPath = resolveOpenClawStateSqlitePath(env);
     await assertUpdateRecoveryAdmission({ env, path: targetPath });
+    params.opts.run?.freebsdWriteAdmission?.assertCurrent();
     if (params.opts.run) {
       if (resolveOpenClawStateSqlitePath(params.opts.run.env) !== targetPath) {
         await assertUpdateRecoveryAdmission({ env: params.opts.run.env });
       }
+      params.opts.run.freebsdWriteAdmission?.assertCurrent();
       const prior = getUpdateRun(params.opts.run.runId, { env: params.opts.run.env });
       if (prior && prior.status !== "running" && settlementFailed) {
         throw new Error("Update history was already finalized by another owner.");
@@ -407,6 +427,7 @@ async function publishPreMutationUpdateOutcome(
   prepareOutcome: () => Promise<Pick<UpdateRunResult, "status" | "recovery">>,
 ): Promise<UpdateRunResult> {
   const run = params.opts.run;
+  run?.freebsdWriteAdmission?.assertCurrent();
   const active = run ? getUpdateRun(run.runId, { env: run.env }) : undefined;
   if (run && active && params.message) {
     recordUpdateRunPhase(
@@ -416,10 +437,11 @@ async function publishPreMutationUpdateOutcome(
         origin: { nextAction: params.message },
         ...(params.installKind !== "unknown" ? { target: { kind: params.installKind } } : {}),
       },
-      { env: run.env },
+      updateCommandLedgerOptions(run),
     );
   }
   const outcome = await prepareOutcome();
+  run?.freebsdWriteAdmission?.assertCurrent();
   const failedStep: UpdateStepResult | undefined =
     outcome.status === "error" || params.failureFacts?.length
       ? {
@@ -460,6 +482,7 @@ async function publishPreMutationUpdateOutcome(
       result,
       jsonMode: Boolean(params.opts.json),
       env: run?.env,
+      run,
     });
   }
   // Existing runs and dry runs keep the legacy stderr-only target refusal.

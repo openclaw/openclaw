@@ -29,6 +29,7 @@ const RETAINED_STEP_NAMES = [
   "reconcile:settle",
 ];
 export type UpdateRunLedgerOptions = OpenClawStateDatabaseOptions & {
+  assertWriteAdmission?: (runId: string, options: OpenClawStateDatabaseOptions) => void;
   busyTimeoutMs?: number;
   redactPaths?: readonly string[];
 };

@@ -27,6 +27,7 @@ const mocks = vi.hoisted(() => ({
   runGitUpdate: vi.fn(),
   runPackageUpdate: vi.fn(),
   runtimeError: vi.fn(),
+  runtimeWriteJson: vi.fn<typeof import("../../runtime.js").defaultRuntime.writeJson>(),
   revalidateSchemaContext:
     vi.fn<typeof import("./update-command-managed-context.js").revalidateUpdateDatabaseContext>(),
   validateCanary: vi.fn(),
@@ -74,8 +75,9 @@ vi.mock("../../infra/update-runner-git-recovery.js", () => ({
   readCurrentGitUpdateRecovery: mocks.readGitRecovery,
 }));
 
-vi.mock("../../runtime.js", () => ({
-  defaultRuntime: { error: mocks.runtimeError },
+vi.mock("../../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../runtime.js")>()),
+  defaultRuntime: { error: mocks.runtimeError, writeJson: mocks.runtimeWriteJson },
 }));
 
 vi.mock("./schema-preflight.js", () => ({

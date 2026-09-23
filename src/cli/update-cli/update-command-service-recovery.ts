@@ -22,6 +22,7 @@ import {
   recoverInstalledLaunchAgentAfterUpdate,
   type PostUpdateLaunchAgentRecoveryResult,
 } from "./update-command-launch-agent-recovery.js";
+import { updateCommandLedgerOptions } from "./update-command-ledger.js";
 import { restoreOriginalManagedServiceDefinition } from "./update-command-original-service-restore.js";
 import {
   originalServiceAuthority,
@@ -120,7 +121,7 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
           ? launchAgentRecovery.message
           : launchAgentRecovery.detail,
       },
-      { env },
+      updateCommandLedgerOptions(params.updateRun),
     );
   }
   if (!launchAgentRecovery.recovered) {

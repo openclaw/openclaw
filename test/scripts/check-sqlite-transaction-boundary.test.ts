@@ -91,6 +91,27 @@ describe("SQLite transaction boundary guard", () => {
     ]);
   });
 
+  it("guards the explicit-reporter core and its imported aliases", () => {
+    expect(
+      findSqliteTransactionBoundaryViolations(`
+        import { runSqliteTransactionSync as coreTransaction } from "./sqlite-transaction-core.js";
+        runSqliteTransactionSync(db, async () => undefined, "immediate", { logger });
+        coreTransaction(db, async () => undefined, "deferred", { logger });
+      `),
+    ).toEqual([
+      {
+        line: 3,
+        reason:
+          'passes an async callback to synchronous SQLite transaction helper "runSqliteTransactionSync"',
+      },
+      {
+        line: 4,
+        reason:
+          'passes an async callback to synchronous SQLite transaction helper "runSqliteTransactionSync"',
+      },
+    ]);
+  });
+
   it("allows asynchronous preparation followed by a synchronous commit callback", () => {
     expect(
       findSqliteTransactionBoundaryViolations(`

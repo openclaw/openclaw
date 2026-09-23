@@ -38,6 +38,7 @@ import {
   readUpdateConfigSnapshot,
   type UpdateConfigSnapshot,
 } from "./update-command-config-snapshot.js";
+import { updateCommandLedgerOptions } from "./update-command-ledger.js";
 import { readPackageUpdateIdentity } from "./update-command-package.js";
 import type {
   UpdateServiceDefinitionRecovery,
@@ -380,7 +381,7 @@ export async function rollbackFailedUpdate(params: {
               endedAtMs: Date.now(),
               ...(restored.reason ? { detail: restored.stderrTail ?? restored.reason } : {}),
             },
-            { env: opts.run.env },
+            updateCommandLedgerOptions(opts.run),
           );
         }
         if (restored.exitCode !== 0) {
@@ -528,7 +529,7 @@ export async function rollbackFailedUpdate(params: {
           status: "completed",
           endedAtMs: Date.now(),
         },
-        { env: opts.run.env },
+        updateCommandLedgerOptions(opts.run),
       );
     }
     failureReason = "restart-unhealthy";
@@ -627,7 +628,11 @@ export async function rollbackFailedUpdate(params: {
     if (run) {
       const endedAtMs = Date.now();
       for (const row of updateRunStepsFromResultStep(step)) {
-        recordUpdateRunStep(run.runId, { ...row, detail, endedAtMs }, { env: run.env });
+        recordUpdateRunStep(
+          run.runId,
+          { ...row, detail, endedAtMs },
+          updateCommandLedgerOptions(run),
+        );
       }
     }
     return failed(failureReason);

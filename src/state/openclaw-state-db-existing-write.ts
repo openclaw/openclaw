@@ -80,6 +80,8 @@ export function runExistingOpenClawStateWriteTransaction<T>(
     busyTimeoutMs?: number;
     initializeAdditiveSchema?: boolean;
     recoverTaskDeliveryOrphans?: true;
+    /** An invocation may pin an earlier generation than this synchronous call. */
+    assertCurrent?: () => void;
   },
 ): T {
   if (options.database || options.readOnly) {
@@ -88,6 +90,7 @@ export function runExistingOpenClawStateWriteTransaction<T>(
   const env = options.env ?? process.env;
   const busyTimeoutMs = contract.busyTimeoutMs ?? OPENCLAW_SQLITE_BUSY_TIMEOUT_MS;
   const pathname = path.resolve(options.path ?? resolveOpenClawStateSqlitePath(env));
+  contract.assertCurrent?.();
   const existingSchema = isExistingOpenClawStateSchema(pathname);
   if (contract.recoverTaskDeliveryOrphans) {
     assertOpenClawStateSchemaRepairAllowed(pathname);
@@ -97,6 +100,7 @@ export function runExistingOpenClawStateWriteTransaction<T>(
     throw new Error("Existing-state write requires a regular database file.");
   }
   const assertSameFile = () => {
+    contract.assertCurrent?.();
     const current = fs.lstatSync(pathname);
     if (!current.isFile() || current.dev !== original.dev || current.ino !== original.ino) {
       throw new Error("Existing-state database generation changed.");

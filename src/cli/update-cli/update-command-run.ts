@@ -5,10 +5,7 @@ import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config
 import { assertConfigWriteAllowedInCurrentMode } from "../../config/config.js";
 import { resolveConfigPath } from "../../config/paths.js";
 import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
-import { resolveGatewayNativeServiceIdentityConflict } from "../../daemon/constants.js";
 import { disableCurrentOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
-import { mergeGatewayServiceEnv } from "../../daemon/service-env-merge.js";
-import { resolveManagedGatewayServiceCommand } from "../../daemon/service-types.js";
 import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
@@ -32,6 +29,10 @@ import {
   createFreeBsdPkgOwnershipInspection,
   type FreeBsdPkgOwnershipInspection,
 } from "../../infra/update-freebsd-pkg-ownership.js";
+import {
+  createFreeBsdUpdateWriteAdmission,
+  type FreeBsdUpdateWriteAdmission,
+} from "../../infra/update-freebsd-write-admission.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import { cleanupStaleManagedServiceUpdateHandoffs } from "../../infra/update-managed-service-handoff-cleanup.js";
 import {
@@ -80,7 +81,10 @@ import { registerSignalExitBarrier, waitForSignalExitBarriers } from "../signal-
 import type { UpdateDisplayProgress } from "./progress.js";
 import { parseUpdateTimeoutMs, resolveUpdateRoot, type UpdateCommandOptions } from "./shared.js";
 import { suppressDeprecations } from "./suppress-deprecations.js";
+import { resolveUpdateCommandAdmissionEnv } from "./update-command-admission-env.js";
+import { assertFreeBsdUpdateCommandRunOrigin } from "./update-command-freebsd-policy.js";
 import { resolveForegroundUpdateAdmission } from "./update-command-handoff.js";
+import { admitUpdateCommandLedger, updateCommandLedgerOptions } from "./update-command-ledger.js";
 import { revalidateUpdateDatabaseContext } from "./update-command-managed-context.js";
 import {
   admitMutableUpdateSignalRun,
@@ -88,16 +92,9 @@ import {
   withMutableUpdateSignals,
 } from "./update-command-mutable-signals.js";
 import { UpdateCommandPendingRecoveryFailure } from "./update-command-result.js";
-import {
-  resolveOwnedManagedUpdateEnv,
-  withOwnedManagedUpdateEnv,
-  resolveServiceRefreshEnv,
-} from "./update-command-service-env.js";
+import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 import {
   GatewayServiceUpdateOwnershipError,
-  assertGatewayServiceManagementAllowedForUpdate,
-  isGatewayServiceManagementAllowedForUpdate,
-  readManagedGatewayServiceForUpdate,
   resolveManagedServicePackageUpdatePlan,
 } from "./update-command-service-plan.js";
 
@@ -116,12 +113,13 @@ export function recordUpdateCommandTarget(
   if (!run) {
     return;
   }
+  run.freebsdWriteAdmission?.assertCurrent();
   let before: UpdateRunRecord | undefined;
   const committed = recordUpdateRunPhase(
     run.runId,
     "requested",
     patch,
-    { env: run.env },
+    updateCommandLedgerOptions(run),
     (record) => {
       before = record;
     },
@@ -130,71 +128,6 @@ export function recordUpdateCommandTarget(
   if (admission && isDeepStrictEqual(before, admission.record)) {
     admission.record = committed;
   }
-}
-
-/** Admission follows the managed service root before a redirect or discovered install. */
-export function resolveUpdateCommandAdmissionRoot(
-  prepared: Pick<
-    Awaited<ReturnType<typeof prepareUpdateCommand>>,
-    "servicePlan" | "discoveredRoot"
-  >,
-): string {
-  return (
-    prepared.servicePlan?.serviceRoot ??
-    prepared.servicePlan?.rootRedirect?.root ??
-    prepared.discoveredRoot
-  );
-}
-
-export async function resolveUpdateCommandAdmissionEnv(params: {
-  opts: UpdateCommandOptions;
-  root: string;
-  invocationCwd?: string;
-  pkgOwnership?: FreeBsdPkgOwnershipInspection;
-  expectedForeground?: true;
-}): Promise<NodeJS.ProcessEnv> {
-  const pkgOwnership =
-    params.pkgOwnership ?? createFreeBsdPkgOwnershipInspection(UPDATE_RUNNER_TIMEOUT_MS);
-  await pkgOwnership.assertUnowned(params.root);
-  let env = resolveServiceRefreshEnv(process.env, params.invocationCwd);
-  if (
-    await resolveForegroundUpdateAdmission({
-      root: params.root,
-      env,
-      expectedForeground:
-        params.expectedForeground ||
-        params.opts.run?.completionOwner === "gateway-restart" ||
-        undefined,
-    })
-  ) {
-    return env;
-  }
-  // A preview belongs to its explicit state directory. Real updates follow the
-  // same owned service selectors as finalization, then freeze them for all writers.
-  if (
-    !params.opts.dryRun &&
-    !env[UPDATE_RUN_ID_ENV] &&
-    isGatewayServiceManagementAllowedForUpdate(env)
-  ) {
-    const inspected = await readManagedGatewayServiceForUpdate(
-      env,
-      params.root,
-      (await resolveUpdateInstallKind(params.root)) === "package",
-    );
-    if (inspected) {
-      env = resolveOwnedManagedUpdateEnv({
-        processEnv: env,
-        serviceEnv: mergeGatewayServiceEnv(env, inspected.command),
-        serviceDefinitionEnv: resolveManagedGatewayServiceCommand(inspected.command)?.environment,
-        invocationCwd: params.invocationCwd,
-      });
-      // Contradictory native identity must refuse before database or target selection.
-      if (resolveGatewayNativeServiceIdentityConflict(env)) {
-        assertGatewayServiceManagementAllowedForUpdate(env);
-      }
-    }
-  }
-  return env;
 }
 
 /** Package admission must not open history or launch diagnostics on a retained operation. */
@@ -233,123 +166,147 @@ export async function admitUpdateCommandRun(params: {
   serviceRoot?: string;
   invocationCwd?: string;
   pkgOwnership?: FreeBsdPkgOwnershipInspection;
+  freebsdWriteAdmission?: FreeBsdUpdateWriteAdmission;
   expectedForeground?: true;
   initialization?: {
     env: NodeJS.ProcessEnv;
     runId: string;
     databasePath: string;
     configPath: string;
+    freebsdPreflightFence?: UpdateRecoveryFence;
     target: {
       configSnapshot: ConfigFileSnapshot;
       legacyConfigPlan?: LegacyConfigUpdatePlan;
     };
   };
 }): Promise<NonNullable<UpdateCommandOptions["run"]>> {
-  assertUpdatePackageActivationAdmission(params.root, { serviceRoot: params.serviceRoot });
-  const env = await resolveUpdateCommandAdmissionEnv(params);
-  // A previous invocation may have died with a sealed restoration plan. Detect
-  // it before any writable owner open or history row creation changes that state.
-  // An inherited diagnostic run ID is not a durable continuation claim.
-  await assertUpdateRecoveryAdmission({ env });
-  assertUpdatePackageActivationAdmission(params.root, { serviceRoot: params.serviceRoot });
-  await assertOpenClawStateWriteAllowedAtPath({
-    databasePath: resolveOpenClawStateSqlitePath(env),
-    env,
-    recoverOrphanedSidecars: false,
-  });
-  if (params.initialization) {
-    const initialized = params.initialization;
-    if (
-      resolvePathViaExistingAncestorSync(resolveOpenClawStateSqlitePath(env)) !==
-        initialized.databasePath ||
-      resolvePathViaExistingAncestorSync(resolveConfigPath(env)) !== initialized.configPath
-    ) {
-      throw new GatewayServiceUpdateOwnershipError(
-        "Gateway state or configuration selectors changed during target initialization. Retry from the installation's current owning account.",
-        undefined,
-      );
-    }
-    await revalidateUpdateDatabaseContext({
-      env,
-      readEnv: env,
-      config: initialized.target.configSnapshot.sourceConfig,
-      configSnapshot: initialized.target.configSnapshot,
-      ...(initialized.target.legacyConfigPlan
-        ? { legacyConfigPlan: initialized.target.legacyConfigPlan }
-        : {}),
+  const freebsdWriteAdmission =
+    params.freebsdWriteAdmission ??
+    params.opts.run?.freebsdWriteAdmission ??
+    createFreeBsdUpdateWriteAdmission();
+  try {
+    assertUpdatePackageActivationAdmission(params.root, { serviceRoot: params.serviceRoot });
+    const env = await resolveUpdateCommandAdmissionEnv({
+      ...params,
     });
-  }
-  const meta = await readControlPlaneUpdateSentinelMeta(env);
-  await resolveForegroundUpdateAdmission({
-    root: params.root,
-    env,
-    meta,
-    expectedForeground:
-      params.expectedForeground ||
-      params.opts.run?.completionOwner === "gateway-restart" ||
-      undefined,
-  });
-  assertUpdatePackageActivationAdmission(params.root, { serviceRoot: params.serviceRoot });
-  const driver = readUpdateRunDriver();
-  const ledgerOptions = {
-    env,
-    busyTimeoutMs: parseUpdateTimeoutMs(params.opts.timeout) ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
-  };
-  const created = createUpdateRun(
-    {
-      runId: env[UPDATE_RUN_ID_ENV]?.trim() || params.initialization?.runId,
-      trigger: "cli",
-      preview: params.opts.dryRun === true,
-      origin: { driver },
-      supersedeStaleIdentityless:
-        !env[UPDATE_RUN_ID_ENV]?.trim() && env[POST_CORE_UPDATE_ENV] !== "1",
-      target: {
-        channel: params.opts.channel,
-        tag: params.opts.tag,
-        ...(params.installKind && params.installKind !== "unknown"
-          ? { kind: params.installKind }
+    // A previous invocation may have died with a sealed restoration plan. Detect
+    // it before any writable owner open or history row creation changes that state.
+    // An inherited diagnostic run ID is not a durable continuation claim.
+    await assertUpdateRecoveryAdmission({ env });
+    assertUpdatePackageActivationAdmission(params.root, { serviceRoot: params.serviceRoot });
+    await assertOpenClawStateWriteAllowedAtPath({
+      databasePath: resolveOpenClawStateSqlitePath(env),
+      env,
+      recoverOrphanedSidecars: false,
+    });
+    if (params.initialization) {
+      const initialized = params.initialization;
+      if (
+        resolvePathViaExistingAncestorSync(resolveOpenClawStateSqlitePath(env)) !==
+          initialized.databasePath ||
+        resolvePathViaExistingAncestorSync(resolveConfigPath(env)) !== initialized.configPath
+      ) {
+        throw new GatewayServiceUpdateOwnershipError(
+          "Gateway state or configuration selectors changed during target initialization. Retry from the installation's current owning account.",
+          undefined,
+        );
+      }
+      await revalidateUpdateDatabaseContext({
+        env,
+        readEnv: env,
+        config: initialized.target.configSnapshot.sourceConfig,
+        configSnapshot: initialized.target.configSnapshot,
+        ...(initialized.target.legacyConfigPlan
+          ? { legacyConfigPlan: initialized.target.legacyConfigPlan }
           : {}),
-        ...(params.installKind === "git" ? { installationMethod: "git-checkout" } : {}),
-      },
-      before: { version: VERSION },
-    },
-    ledgerOptions,
-  );
-  const record = adoptUpdateRun(created.runId, ledgerOptions);
-  const requester = resolveManagedUpdateRequester(record.origin.requester);
-  const requesterAuthority = requester?.authorizationSource?.startsWith("profile:")
-    ? Object.freeze({
-        requester: Object.freeze({ ...requester }),
-        isCurrent: () => {
-          throw new Error("Profile update continuation has not acquired its native owner.");
-        },
-      })
-    : requester
-      ? await createManagedUpdateRequesterAuthority(requester, env)
-      : undefined;
-  const run = {
-    runId: record.runId,
-    defaultStepTimeoutMs: record.trigger === "campaign" ? AUTO_UPDATE_STEP_TIMEOUT_MS : undefined,
-    env,
-    ...(record.trigger !== "cli" &&
-    meta?.runId === record.runId &&
-    meta.completionOwner === "gateway-restart"
-      ? { completionOwner: "gateway-restart" as const }
-      : {}),
-    ...(requesterAuthority ? { requesterAuthority } : {}),
-  };
-  if (
-    !env[UPDATE_RUN_ID_ENV] &&
-    env.OPENCLAW_UPDATE_RUN_HANDOFF !== "1" &&
-    env[POST_CORE_UPDATE_ENV] !== "1"
-  ) {
-    if (params.opts.dryRun === true) {
-      previewAdmissions.set(run, { record, env: { ...env } });
-    } else {
-      admitMutableUpdateSignalRun(run, record);
+      });
     }
+    // Selected-state admission, not platform-wide path ownership, owns ledger writes.
+    await freebsdWriteAdmission?.revalidate(
+      params.initialization?.freebsdPreflightFence?.assertCurrent ??
+        params.opts.run?.executorFence?.assertCurrent ??
+        (() => {}),
+    );
+    assertFreeBsdUpdateCommandRunOrigin(params.opts, env, params.initialization?.runId);
+    const meta = await readControlPlaneUpdateSentinelMeta(env);
+    await resolveForegroundUpdateAdmission({
+      root: params.root,
+      env,
+      meta,
+      expectedForeground:
+        params.expectedForeground ||
+        params.opts.run?.completionOwner === "gateway-restart" ||
+        undefined,
+    });
+    freebsdWriteAdmission?.assertCurrent();
+    assertUpdatePackageActivationAdmission(params.root, { serviceRoot: params.serviceRoot });
+    const driver = readUpdateRunDriver();
+    const ledgerOptions = {
+      env,
+      busyTimeoutMs: parseUpdateTimeoutMs(params.opts.timeout) ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
+    };
+    const created = createUpdateRun(
+      {
+        runId: env[UPDATE_RUN_ID_ENV]?.trim() || params.initialization?.runId,
+        trigger: "cli",
+        preview: params.opts.dryRun === true,
+        origin: { driver },
+        supersedeStaleIdentityless:
+          !env[UPDATE_RUN_ID_ENV]?.trim() && env[POST_CORE_UPDATE_ENV] !== "1",
+        target: {
+          channel: params.opts.channel,
+          tag: params.opts.tag,
+          ...(params.installKind && params.installKind !== "unknown"
+            ? { kind: params.installKind }
+            : {}),
+          ...(params.installKind === "git" ? { installationMethod: "git-checkout" } : {}),
+        },
+        before: { version: VERSION },
+      },
+      ledgerOptions,
+    );
+    const record = adoptUpdateRun(created.runId, ledgerOptions);
+    const requester = resolveManagedUpdateRequester(record.origin.requester);
+    const run: NonNullable<UpdateCommandOptions["run"]> = {
+      runId: record.runId,
+      defaultStepTimeoutMs: record.trigger === "campaign" ? AUTO_UPDATE_STEP_TIMEOUT_MS : undefined,
+      env,
+      ...(freebsdWriteAdmission ? { freebsdWriteAdmission } : {}),
+      ...(record.trigger !== "cli" &&
+      meta?.runId === record.runId &&
+      meta.completionOwner === "gateway-restart"
+        ? { completionOwner: "gateway-restart" as const }
+        : {}),
+    };
+    admitUpdateCommandLedger(run);
+    const requesterAuthority = requester?.authorizationSource?.startsWith("profile:")
+      ? Object.freeze({
+          requester: Object.freeze({ ...requester }),
+          isCurrent: () => {
+            throw new Error("Profile update continuation has not acquired its native owner.");
+          },
+        })
+      : requester
+        ? await createManagedUpdateRequesterAuthority(requester, env)
+        : undefined;
+    if (requesterAuthority) {
+      run.requesterAuthority = requesterAuthority;
+    }
+    if (
+      !env[UPDATE_RUN_ID_ENV] &&
+      env.OPENCLAW_UPDATE_RUN_HANDOFF !== "1" &&
+      env[POST_CORE_UPDATE_ENV] !== "1"
+    ) {
+      if (params.opts.dryRun === true) {
+        previewAdmissions.set(run, { record, env: { ...env } });
+      } else {
+        admitMutableUpdateSignalRun(run, record);
+      }
+    }
+    return run;
+  } catch (cause) {
+    throw freebsdWriteAdmission?.revoke(cause) ?? cause;
   }
-  return run;
 }
 
 /** Own diagnostics only for this freshly admitted invocation's lexical lifetime. */
@@ -362,6 +319,7 @@ export async function withUpdatePreviewSignals<T>(
     return await withMutableUpdateSignals(opts, operation);
   }
   admission.active = true;
+  const run = opts.run;
   const { env } = admission;
   let interrupted = false;
   let shutdown: Promise<void> | undefined;
@@ -375,11 +333,20 @@ export async function withUpdatePreviewSignals<T>(
     }
     // Missing/displaced canonical state, pending recovery, or a changed row is
     // not permission to open a writable runtime or dispose of another owner.
-    await assertUpdateRecoveryAdmission({ env });
+    try {
+      opts.run?.freebsdWriteAdmission?.assertCurrent();
+      await assertUpdateRecoveryAdmission({ env });
+      opts.run?.freebsdWriteAdmission?.assertCurrent();
+    } catch (cause) {
+      throw opts.run?.freebsdWriteAdmission?.revoke(cause) ?? cause;
+    }
     if (!isDeepStrictEqual(getUpdateRun(admission.record.runId, { env }), admission.record)) {
       return;
     }
-    finishInterruptedUpdatePreview(admission.record, { env });
+    finishInterruptedUpdatePreview(
+      admission.record,
+      run.freebsdWriteAdmission ? updateCommandLedgerOptions(run) : { env },
+    );
   });
   const onSignal = (code: number) => {
     interrupted = true;
@@ -418,12 +385,12 @@ export function createUpdateRunProgress(
   const driver = readUpdateRunDriver();
   const pendingSteps: UpdateRunStep[] = [];
   const record = (step: UpdateRunStep) => {
-    if (deferred) {
+    if (deferred || run.freebsdWriteAdmission?.canWrite === false) {
       pendingSteps.push(step);
       return undefined;
     }
     try {
-      return recordUpdateRunStep(run.runId, step, { env: run.env });
+      return recordUpdateRunStep(run.runId, step, updateCommandLedgerOptions(run));
     } catch (cause) {
       throw new Error(
         `Could not record update step "${step.step}" (${step.status}): ${formatErrorMessage(cause)}`,
@@ -434,13 +401,17 @@ export function createUpdateRunProgress(
   return {
     pendingSteps,
     onRollbackOutcome: (rollbackOutcome) => {
-      if (!deferred) {
-        recordUpdateRunVerification(run.runId, { rollbackOutcome }, { env: run.env });
+      if (!deferred && run.freebsdWriteAdmission?.canWrite !== false) {
+        recordUpdateRunVerification(
+          run.runId,
+          { rollbackOutcome },
+          updateCommandLedgerOptions(run),
+        );
       }
     },
     onHeartbeat() {
-      if (!deferred) {
-        heartbeatUpdateRun(run.runId, driver, { env: run.env });
+      if (!deferred && run.freebsdWriteAdmission?.canWrite !== false) {
+        heartbeatUpdateRun(run.runId, driver, updateCommandLedgerOptions(run));
       }
     },
     deferLedgerWrites() {
@@ -450,6 +421,9 @@ export function createUpdateRunProgress(
       retireMutableUpdateSignalRun(run);
     },
     flushLedgerWrites() {
+      if (run.freebsdWriteAdmission?.canWrite === false) {
+        return;
+      }
       deferred = false;
       for (const step of pendingSteps.splice(0)) {
         record(step);
@@ -483,6 +457,14 @@ export function completeUpdateCommandRun(
   const result = normalizeControlPlaneUpdateResult(input);
   if (!run) {
     return result;
+  }
+  if (run.freebsdWriteAdmission?.canWrite === false) {
+    return {
+      ...result,
+      status: "error",
+      reason: run.freebsdWriteAdmission.failure?.reason ?? "freebsd-update-ownership",
+      runId: run.runId,
+    };
   }
   // A process-local result cannot complete an operationally pending update or
   // authorize package retirement. Only the durable finalizer may close it.
@@ -519,7 +501,10 @@ export function completeUpdateCommandRun(
       runId: run.runId,
     };
   }
-  const recordOptions = { env: run.env, redactPaths: result.root ? [result.root] : [] };
+  const recordOptions = {
+    ...updateCommandLedgerOptions(run),
+    redactPaths: result.root ? [result.root] : [],
+  };
   // Both finalization and outer CLI unwind come here. A verified restored generation
   // stays with its helper until native recovery finishes; neither caller may close it early.
   const helperRecoveryPending =
@@ -582,6 +567,7 @@ export function readDevUpdateTarget(): DevUpdateTarget | undefined {
 }
 
 export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
+  const admissionEnv = { ...process.env };
   // Refuse before preflight can inspect write ownership or admit a live run ledger.
   const runtimeFailure = process.versions.bun
     ? null
@@ -626,6 +612,11 @@ export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
   // The shim can move during preparation; the loaded module owns the executing generation.
   const executingRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
   const discoveredRoot = opts.sourceUpdate?.root ?? (await resolveUpdateRoot());
+  // This local lifetime begins unadmitted. Canonical state and executor owners
+  // admit writes below; it cannot grant filesystem, process or service authority.
+  const freebsdWriteAdmission =
+    opts.run?.freebsdWriteAdmission ?? createFreeBsdUpdateWriteAdmission();
+  assertFreeBsdUpdateCommandRunOrigin(opts, admissionEnv);
   const installKind = await resolveUpdateInstallKind(discoveredRoot, { timeoutMs });
   if (opts.sourceUpdate && installKind !== "git") {
     throw new Error("Doctor source update requires the accepted Git checkout.");
@@ -701,6 +692,7 @@ export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
     installKind,
     servicePlan,
     pkgOwnership,
+    ...(freebsdWriteAdmission ? { freebsdWriteAdmission } : {}),
   };
 }
 

@@ -25,6 +25,10 @@ import {
 } from "./openclaw-state-db-contract.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import { normalizeOpenClawStateSchemaReadError } from "./openclaw-state-db-schema-migration-required.js";
+import {
+  OpenClawStateExternalOwnershipError,
+  OpenClawStateOwnershipMetadataError,
+} from "./openclaw-state-ownership-error.js";
 
 export const STATE_SUPERVISION_KEY = "gateway.supervision";
 const MAX_OWNERSHIP_TIMESTAMP_MS = 8_640_000_000_000_000;
@@ -37,36 +41,8 @@ export type OpenClawExternalStateOwnership = {
   version: 1;
 };
 
-export class OpenClawStateOwnershipError extends Error {}
-
 export function isOpenClawStateWriteContentionError(error: unknown): boolean {
   return error instanceof StateDatabaseCoordinatorContentionError || isSqliteLockError(error);
-}
-
-export class OpenClawStateOwnershipMetadataError extends OpenClawStateOwnershipError {
-  constructor(
-    readonly databasePath: string,
-    message: string,
-  ) {
-    super(
-      `OpenClaw shared state ownership metadata is invalid at ${databasePath}: ${message}. ` +
-        "Repair it with OPENCLAW_SUPERVISOR_MODE=external openclaw database ownership claim --manager <manager-id>.",
-    );
-    this.name = "OpenClawStateOwnershipMetadataError";
-  }
-}
-
-export class OpenClawStateExternalOwnershipError extends OpenClawStateOwnershipError {
-  constructor(
-    readonly databasePath: string,
-    readonly managerId: string,
-  ) {
-    super(
-      `OpenClaw shared state database ${databasePath} is externally supervised by ${managerId}. ` +
-        "Use that external supervisor with OPENCLAW_SUPERVISOR_MODE=external for writable operations.",
-    );
-    this.name = "OpenClawStateExternalOwnershipError";
-  }
 }
 
 export function normalizeOpenClawStateManagerId(managerId: string): string {

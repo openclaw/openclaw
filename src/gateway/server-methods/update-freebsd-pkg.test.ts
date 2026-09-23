@@ -9,6 +9,7 @@ import {
   adoptUpdateCampaignMock,
   captureUpdateRunPayload,
   detectRespawnSupervisorMock,
+  invokeUpdateRun,
   mockGlobalInstallSurface,
   resolveUpdateInstallSurfaceMock,
   scheduleGatewayRestartMock,
@@ -59,6 +60,47 @@ describe("FreeBSD pkg RPC admission", () => {
           origin: { nextAction: response.message },
         });
       });
+      expect(query).toHaveBeenCalledOnce();
+      expect(resolveUpdateInstallSurfaceMock).not.toHaveBeenCalled();
+      expect(adoptUpdateCampaignMock).not.toHaveBeenCalled();
+      expect(startManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
+      expect(scheduleGatewayRestartMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["EACCES", "PRIVATE_CUSTOM_CODE"])(
+    "keeps a caught pkg query cause private in RPC warnings (%s)",
+    async (code) => {
+      mockGlobalInstallSurface();
+      const cause = Object.assign(new Error("/private/fixture/database token=fixture-secret"), {
+        code,
+      });
+      const query = vi.spyOn(exec, "runCommandBuffered").mockRejectedValue(cause);
+      const warn = vi.fn();
+      const respond = vi.fn();
+      await withMockedPlatform("freebsd", async () => {
+        await invokeUpdateRun({}, respond, undefined, { logGateway: { warn, info: vi.fn() } });
+      });
+      const prefix = `FreeBSD pkg inspection failed during pkg query${code === "EACCES" ? " (EACCES)" : ""}.`;
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          ok: false,
+          message: expect.stringContaining(prefix),
+          result: expect.objectContaining({
+            status: "error",
+            reason: "pkg-ownership-unavailable",
+          }),
+          restart: null,
+        }),
+        undefined,
+      );
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining(`update.run failed error=${prefix}`),
+      );
+      expect(JSON.stringify([respond.mock.calls, warn.mock.calls])).not.toMatch(
+        /\/private\/fixture|fixture-secret|PRIVATE_CUSTOM_CODE/u,
+      );
       expect(query).toHaveBeenCalledOnce();
       expect(resolveUpdateInstallSurfaceMock).not.toHaveBeenCalled();
       expect(adoptUpdateCampaignMock).not.toHaveBeenCalled();

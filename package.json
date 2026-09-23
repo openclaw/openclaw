@@ -2300,6 +2300,7 @@
     "qrcode": "1.5.4",
     "rastermill": "0.3.3",
     "semver": "7.8.5",
+    "signal-exit": "4.1.0",
     "tar": "7.5.22",
     "tslog": "5.2.0",
     "typebox": "1.3.30",

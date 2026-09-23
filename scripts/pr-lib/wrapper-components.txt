@@ -748,6 +748,7 @@ src/infra/sqlite-staging-token.ts
 src/infra/sqlite-store.worker.ts
 src/infra/sqlite-strict.ts
 src/infra/sqlite-terminal-open-latch.ts
+src/infra/sqlite-transaction-core.ts
 src/infra/sqlite-transaction.ts
 src/infra/sqlite-user-version.ts
 src/infra/sqlite-wal-checkpoint.ts
@@ -1255,6 +1256,7 @@ src/state/openclaw-state-lease-worker-owner.ts
 src/state/openclaw-state-lease-worker-storage.ts
 src/state/openclaw-state-lease-worker.ts
 src/state/openclaw-state-lease.ts
+src/state/openclaw-state-ownership-error.ts
 src/state/openclaw-state-ownership.ts
 src/state/openclaw-state-read-error.ts
 src/state/openclaw-state-read-scope.ts

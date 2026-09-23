@@ -1,6 +1,7 @@
 import { UpdateRequesterRevokedError } from "../../infra/update-requester-authority.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
 import type { UpdateCommandOptions } from "./shared.js";
+import { UpdateActivationTimeoutError } from "./update-command-activation.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 
 /** Bind requester and executor identity across discovery and delegated child admission. */
@@ -20,7 +21,10 @@ export function createUpdateCommandAuthority(
   const requester = run?.requesterAuthority;
   let authorityFailure: { error: unknown } | undefined;
   const refuseAuthority = (error: unknown): never => {
-    authorityFailure ??= { error };
+    if (error instanceof UpdateActivationTimeoutError && !authorityFailure) {
+      throw run?.freebsdWriteAdmission?.failure ?? error;
+    }
+    authorityFailure ??= { error: run?.freebsdWriteAdmission?.revoke(error) ?? error };
     params.onAuthorityRefused?.();
     throw authorityFailure.error;
   };
@@ -29,6 +33,7 @@ export function createUpdateCommandAuthority(
       throw authorityFailure.error;
     }
     try {
+      run?.freebsdWriteAdmission?.assertCurrent();
       check();
     } catch (error) {
       refuseAuthority(error);

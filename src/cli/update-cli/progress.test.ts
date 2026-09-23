@@ -1,7 +1,10 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { writeUpdateRunReportArtifact } from "../../infra/update-failure-report-artifact.js";
 import { prepareUpdateFailureReport } from "../../infra/update-failure-report-prepare.js";
+import { FreeBsdPkgOwnershipError } from "../../infra/update-freebsd-pkg-ownership.js";
 import { getUpdateRun } from "../../infra/update-run-ledger.js";
 import type { UpdateRunRecord } from "../../infra/update-run-record.js";
 import { UPDATE_RUN_HEARTBEAT_MS } from "../../infra/update-run-timeouts.js";
@@ -11,7 +14,9 @@ import { formatCliJsonFailure } from "../failure-output.js";
 import { createUpdateProgress, printResult } from "./progress.js";
 import {
   reportUpdateCommandPendingRecovery,
+  resolveMutableUpdateFailure,
   UpdateCommandPendingRecoveryFailure,
+  withUpdateAdmissionReporting,
 } from "./update-command-result.js";
 
 vi.mock("../../infra/update-run-ledger.js", () => ({ getUpdateRun: vi.fn() }));
@@ -229,6 +234,164 @@ describe("update progress", () => {
     const text = log.mock.calls.flat().join("\n");
     expect(text).toContain("OpenClaw update failed: doctor-failed");
     expect(text).toContain(`Report: ${reportPath}`);
+  });
+
+  it.each([
+    { json: false, failure: "caught" },
+    { json: true, failure: "caught" },
+    { json: false, failure: "unknown-code" },
+    { json: true, failure: "unknown-code" },
+    { json: false, failure: "deadline" },
+    { json: true, failure: "deadline" },
+  ] as const)(
+    "reports pkg $failure admission through real rendering (JSON=$json)",
+    async ({ json, failure }) => {
+      const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+      const stderr = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+      const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+      vi.mocked(getUpdateRun)
+        .mockClear()
+        .mockImplementation(() => {
+          throw new Error("Rejected admission must not read history");
+        });
+      const cause = Object.assign(new Error("/private/fixture/database token=fixture-secret"), {
+        code: failure === "unknown-code" ? "PRIVATE_CUSTOM_CODE" : "EACCES",
+      });
+      const error = new FreeBsdPkgOwnershipError("pkg-ownership-unavailable", "paths", {
+        operation: "realpath",
+        ...(failure === "deadline" ? { budgetMs: 30_000 } : { cause }),
+      });
+      const discriminator =
+        failure === "deadline"
+          ? "exhausted its shared 30000 ms budget during realpath"
+          : `failed during realpath${failure === "caught" ? " (EACCES)" : ""}`;
+
+      await expect(
+        withUpdateAdmissionReporting({ json, dryRun: true, run: context }, async () => {
+          throw error;
+        }),
+      ).rejects.toMatchObject({ code: 1 });
+
+      expect(getUpdateRun).not.toHaveBeenCalled();
+      expect(writeUpdateRunReportArtifact).toHaveBeenCalledTimes(1);
+      const [saved] = expectDefined(
+        vi.mocked(writeUpdateRunReportArtifact).mock.calls[0],
+        "saved admission report",
+      );
+      expect(saved.detached).toBe(true);
+      expect(saved.result.reason).toBe("pkg-ownership-unavailable");
+      expect(saved.result.status).toBe("error");
+      const fact = expectDefined(saved.result.steps[0], "admission failure step").failureFacts?.[0];
+      expect(fact?.message).toContain(discriminator);
+      expect(fact?.message?.length).toBeLessThanOrEqual(200);
+      expect(JSON.stringify(saved.report)).toContain(discriminator);
+      if (json) {
+        expect(output).toHaveBeenCalledExactlyOnceWith({ ...saved.result, reportPath });
+        expect(log).not.toHaveBeenCalled();
+        expect(stderr).toHaveBeenCalledExactlyOnceWith(error.message);
+      } else {
+        expect(output).not.toHaveBeenCalled();
+        expect(log.mock.calls.flat().join("\n")).toContain(discriminator);
+        expect(log.mock.calls.flat().join("\n")).toContain(`Report: ${reportPath}`);
+      }
+      const published = JSON.stringify([
+        saved,
+        log.mock.calls,
+        stderr.mock.calls,
+        output.mock.calls,
+      ]);
+      expect(published).not.toMatch(/\/private\/fixture|fixture-secret|PRIVATE_CUSTOM_CODE/u);
+      expect(fact).not.toHaveProperty("cause");
+    },
+  );
+
+  it.each([
+    { json: false, failure: "caught" },
+    { json: true, failure: "caught" },
+    { json: false, failure: "unknown-code" },
+    { json: true, failure: "unknown-code" },
+    { json: false, failure: "deadline" },
+    { json: true, failure: "deadline" },
+  ] as const)(
+    "reports late pkg $failure without publishing its private cause (JSON=$json)",
+    async ({ json, failure }) => {
+      const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+      const stderr = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+      const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+      vi.mocked(getUpdateRun).mockClear();
+      const cause = Object.assign(new Error("/private/fixture/database token=fixture-secret"), {
+        code: failure === "unknown-code" ? "PRIVATE_CUSTOM_CODE" : "EACCES",
+      });
+      const error = new FreeBsdPkgOwnershipError("pkg-ownership-unavailable", "paths", {
+        operation: "realpath",
+        ...(failure === "deadline" ? { budgetMs: 30_000 } : { cause }),
+      });
+      const discriminator =
+        failure === "deadline"
+          ? "exhausted its shared 30000 ms budget during realpath"
+          : `failed during realpath${failure === "caught" ? " (EACCES)" : ""}`;
+      const originalRecovery = vi.fn();
+      const resolved = await resolveMutableUpdateFailure({
+        cause: error,
+        durationMs: 100,
+        mode: "npm",
+        root: "/isolated/openclaw",
+        originalRecovery,
+      });
+      expect(resolved.failure.cause).toBe(error);
+      expect(error.cause).toBe(failure === "deadline" ? undefined : cause);
+      expect(resolved.failure.detail).toBe(error.message);
+      expect(originalRecovery).not.toHaveBeenCalled();
+      expect(resolved.result).toMatchObject({
+        status: "error",
+        reason: "pkg-ownership-unavailable",
+        recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+        steps: [{ exitCode: 1, stderrTail: error.message }],
+      });
+      await printResult(resolved.result, { json }, { readHistory: false });
+
+      expect(getUpdateRun).not.toHaveBeenCalled();
+      expect(writeUpdateRunReportArtifact).toHaveBeenCalledOnce();
+      const [saved] = expectDefined(
+        vi.mocked(writeUpdateRunReportArtifact).mock.calls[0],
+        "saved mutable failure report",
+      );
+      expect(saved.result).toBe(resolved.result);
+      expect(saved.detached).toBe(true);
+      expect(JSON.stringify(saved.report)).toContain(discriminator);
+      const fact = expectDefined(saved.result.steps[0], "mutable failure step").failureFacts?.[0];
+      expect(fact?.message).toContain(discriminator);
+      expect(fact?.message?.length).toBeLessThanOrEqual(200);
+      expect(stderr).toHaveBeenCalledExactlyOnceWith(error.message);
+      if (json) {
+        expect(output).toHaveBeenCalledExactlyOnceWith({ ...saved.result, reportPath });
+        expect(log).not.toHaveBeenCalled();
+      } else {
+        expect(output).not.toHaveBeenCalled();
+        expect(log.mock.calls.flat().join("\n")).toContain(discriminator);
+      }
+      expect(
+        JSON.stringify([saved, log.mock.calls, stderr.mock.calls, output.mock.calls]),
+      ).not.toMatch(/\/private\/fixture|fixture-secret|PRIVATE_CUSTOM_CODE/u);
+    },
+  );
+
+  it("preserves the existing mutable failure formatter for non-pkg errors", async () => {
+    const stderr = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    const error = new Error("activation failed", { cause: new Error("candidate refused") });
+    const resolved = await resolveMutableUpdateFailure({
+      cause: error,
+      durationMs: 100,
+      mode: "git",
+      root: "/isolated/openclaw",
+      originalRecovery: vi.fn(),
+    });
+    expect(resolved.failure).toEqual({ cause: error, detail: formatErrorMessage(error) });
+    expect(resolved.result.reason).toBe("update-failed");
+    expect(expectDefined(resolved.result.steps[0], "mutable failure step").stderrTail).toBe(
+      formatErrorMessage(error),
+    );
+    expect(stderr).toHaveBeenCalledExactlyOnceWith(formatErrorMessage(error));
   });
 
   it("settles the pending report before exit without reopening retained history", async () => {

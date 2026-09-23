@@ -22,11 +22,10 @@ import { withEnvAsync } from "../../test-utils/env.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import * as shared from "./shared.js";
 import {
-  admitUpdateCommandRun,
-  prepareUpdateCommand,
   resolveUpdateCommandAdmissionEnv,
   resolveUpdateCommandAdmissionRoot,
-} from "./update-command-run.js";
+} from "./update-command-admission-env.js";
+import { admitUpdateCommandRun, prepareUpdateCommand } from "./update-command-run.js";
 import { maybeStopManagedServiceBeforeMutableUpdate } from "./update-command-service-maintenance.js";
 import { GatewayServiceUpdateOwnershipError } from "./update-command-service-plan.js";
 import { updateCommand } from "./update-command.js";

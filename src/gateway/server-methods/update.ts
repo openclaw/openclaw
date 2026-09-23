@@ -605,7 +605,9 @@ export const updateHandlers: GatewayRequestHandlers = {
       if (error instanceof FreeBsdPkgOwnershipError) {
         outcomeMessage = error.message;
       }
-      context?.logGateway?.warn(`update.run failed error=${formatErrorMessage(error)}`);
+      context?.logGateway?.warn(
+        `update.run failed error=${error instanceof FreeBsdPkgOwnershipError ? error.message : formatErrorMessage(error)}`,
+      );
       let recorded = run;
       try {
         recorded = getUpdateRun(runId) ?? run;

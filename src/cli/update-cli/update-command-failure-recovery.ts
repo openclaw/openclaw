@@ -9,6 +9,7 @@ import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { UpdateCommandOptions } from "./shared.js";
+import { updateCommandLedgerOptions } from "./update-command-ledger.js";
 import { appendPluginUpdateWarnings } from "./update-command-plugins-internals.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import {
@@ -182,7 +183,7 @@ export async function verifyUpdateFailureRecovery(params: {
         return result;
       },
       warnRecording,
-      { env: run.env },
+      updateCommandLedgerOptions(run),
     );
     // Unread history may still prohibit restart until the atomic merge confirms it.
     result.recovery =

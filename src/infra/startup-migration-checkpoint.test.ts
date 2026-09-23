@@ -11,10 +11,8 @@ import {
   withOpenClawStateStartupMigrationCheckpointDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import {
-  OpenClawStateOwnershipError,
-  STATE_SUPERVISION_KEY,
-} from "../state/openclaw-state-ownership.js";
+import { OpenClawStateOwnershipError } from "../state/openclaw-state-ownership-error.js";
+import { STATE_SUPERVISION_KEY } from "../state/openclaw-state-ownership.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,

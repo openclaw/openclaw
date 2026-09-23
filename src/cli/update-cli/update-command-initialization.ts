@@ -4,6 +4,7 @@ import { SQLITE_SIDECAR_SUFFIXES } from "../../infra/sqlite-files.js";
 import { acquireGatewayLifecycleCoordinator } from "../../infra/state-database-coordinator.js";
 import { compareSemverStrings } from "../../infra/update-check.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
+import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
 import { isFailedUpdateStep } from "../../infra/update-run-step.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
@@ -23,6 +24,7 @@ export type InitializedUpdate = {
   env: NodeJS.ProcessEnv;
   runId: string;
   executor: UpdateCommandExecutor;
+  freebsdPreflightFence?: UpdateRecoveryFence;
   registerRun: (run: NonNullable<UpdateCommandOptions["run"]>) => Promise<void>;
   target: NonNullable<Awaited<ReturnType<typeof resolveUpdateCommandTarget>>>;
   databasePath: string;

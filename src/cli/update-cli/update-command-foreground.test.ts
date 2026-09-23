@@ -18,9 +18,12 @@ import {
 } from "../../infra/update-post-core-context.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
 import * as updateRunLedger from "../../infra/update-run-ledger.js";
+import { ExitError } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import * as stateOwnership from "../../state/openclaw-state-ownership.js";
 import * as shared from "./shared.js";
+import * as admissionEnvOwner from "./update-command-admission-env.js";
+import { resolveUpdateCommandAdmissionEnv } from "./update-command-admission-env.js";
 import { inspectUpdateDatabaseContexts } from "./update-command-database-context.js";
 import { executeMutableUpdate } from "./update-command-execution.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
@@ -28,7 +31,7 @@ import * as managedContext from "./update-command-managed-context.js";
 import { finishAlreadyCurrentUpdate } from "./update-command-noop.js";
 import type { RefuseUpdate } from "./update-command-result.js";
 import * as commandRun from "./update-command-run.js";
-import { prepareUpdateCommand, resolveUpdateCommandAdmissionEnv } from "./update-command-run.js";
+import { prepareUpdateCommand } from "./update-command-run.js";
 import { preflightUpdateCommandSchemas } from "./update-command-schema.js";
 import type { PreManagedServiceStop } from "./update-command-service-context-types.js";
 import * as servicePlan from "./update-command-service-plan.js";
@@ -69,6 +72,17 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
   vi.unstubAllEnvs();
 });
+
+async function expectReportedAdmissionRefusal(operation: Promise<unknown>): Promise<void> {
+  await expect(operation).rejects.toBeInstanceOf(ExitError);
+  await expect(operation).rejects.toMatchObject({ code: 1 });
+  expect(mocks.runtimeWriteJson).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ status: "error", reason: "managed-service-preflight" }),
+  );
+  expect(mocks.runtimeError).toHaveBeenCalledWith(
+    expect.stringContaining("Retry the update from its current owner."),
+  );
+}
 
 it.each([
   ...(["prepare", "environment", "database"] as const).flatMap((boundary) =>
@@ -153,9 +167,14 @@ it.each([
                 timeoutMs: 1000,
                 managedServiceRootRedirect: null,
               });
-    await expect(operation.then(() => "admitted")).rejects.toMatchObject({
-      reason: "managed-service-preflight",
-    });
+    if (boundary === "command") {
+      await expectReportedAdmissionRefusal(operation);
+    } else {
+      await expect(operation.then(() => "admitted")).rejects.toMatchObject({
+        reason: "managed-service-preflight",
+      });
+      expect(mocks.runtimeWriteJson).not.toHaveBeenCalled();
+    }
     await Promise.resolve();
     expect(handoff.inspect).toHaveBeenCalledTimes(handshakeRefusal ? 1 : 0);
     expect(nativePlan).not.toHaveBeenCalled();
@@ -224,14 +243,16 @@ it.each(["preparation", "environment", "state preflight"] as const)(
       }
       return prepared;
     });
-    const resolveEnv = commandRun.resolveUpdateCommandAdmissionEnv;
-    vi.spyOn(commandRun, "resolveUpdateCommandAdmissionEnv").mockImplementation(async (params) => {
-      const env = await resolveEnv(params);
-      if (boundary === "environment") {
-        await expire();
-      }
-      return env;
-    });
+    const resolveEnv = admissionEnvOwner.resolveUpdateCommandAdmissionEnv;
+    vi.spyOn(admissionEnvOwner, "resolveUpdateCommandAdmissionEnv").mockImplementation(
+      async (params) => {
+        const env = await resolveEnv(params);
+        if (boundary === "environment") {
+          await expire();
+        }
+        return env;
+      },
+    );
     const admit = commandRun.admitUpdateCommandRun;
     vi.spyOn(commandRun, "admitUpdateCommandRun").mockImplementation(async (params) => {
       admitting = true;
@@ -245,9 +266,7 @@ it.each(["preparation", "environment", "state preflight"] as const)(
       },
     );
 
-    await expect(updateCommand({ json: true }).then(() => "admitted")).rejects.toMatchObject({
-      reason: "managed-service-preflight",
-    });
+    await expectReportedAdmissionRefusal(updateCommand({ json: true }));
     expect(expired).toBe(true);
     expect(handoff.inspect).toHaveBeenCalled();
     expect(nativePlan).not.toHaveBeenCalled();

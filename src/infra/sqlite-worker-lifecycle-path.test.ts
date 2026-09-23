@@ -1,7 +1,7 @@
 import { serialize } from "node:v8";
 import { Worker } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
-import { sqliteWriteAdmissionServicesForLocation } from "./sqlite-transaction.js";
+import { sqliteWriteAdmissionServicesForLocation } from "./sqlite-transaction-core.js";
 import { dispatchSqliteWorkerJob } from "./sqlite-worker-broker-reply.js";
 import type { Actor, Job, Slot } from "./sqlite-worker-broker.types.js";
 import { resolveStateDatabaseCoordinatorPath } from "./state-database-coordinator.js";

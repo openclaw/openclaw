@@ -70,6 +70,7 @@ export function mutateRunInTransaction(
   options: UpdateRunLedgerOptions,
   captureBefore?: (record: UpdateRunRecord) => void,
 ): UpdateRunRecord {
+  options.assertWriteAdmission?.(runId, options);
   const record = readUpdateRunRecord(db, runId);
   if (!record) {
     throw new Error(`Unknown update run: ${runId}`);
@@ -95,6 +96,7 @@ export function mutateRun(
       schemaSql: updateRunLedgerSchema,
       operationLabel: "update.run",
       busyTimeoutMs: options.busyTimeoutMs,
+      assertCurrent: () => options.assertWriteAdmission?.(runId, options),
     },
   );
 }

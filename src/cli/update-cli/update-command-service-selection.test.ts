@@ -14,10 +14,10 @@ import { withEnvAsync } from "../../test-utils/env.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import * as shared from "./shared.js";
 import {
-  prepareUpdateCommand,
   resolveUpdateCommandAdmissionEnv,
   resolveUpdateCommandAdmissionRoot,
-} from "./update-command-run.js";
+} from "./update-command-admission-env.js";
+import { prepareUpdateCommand } from "./update-command-run.js";
 import { maybeStopManagedServiceBeforeMutableUpdate } from "./update-command-service-maintenance.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);

@@ -47,8 +47,8 @@ vi.mock("../infra/sqlite-coordinator.js", () => ({
 vi.mock("../infra/sqlite-busy-timeout.js", () => ({
   runWithSqliteBusyTimeout: (_db: unknown, _ms: number, run: () => unknown) => run(),
 }));
-vi.mock("../infra/sqlite-transaction.js", () => ({
-  runSqliteImmediateTransactionSync: (_db: unknown, run: () => unknown) => run(),
+vi.mock("../infra/sqlite-transaction-core.js", () => ({
+  runSqliteTransactionSync: (_db: unknown, run: () => unknown) => run(),
 }));
 vi.mock("./openclaw-state-db-handle.js", () => ({
   openTrackedStateDatabase: () => ({}),

@@ -186,6 +186,9 @@ function resolveGatewayServiceOperationLockPath(env: GatewayServiceEnv): string 
       ? `launchd:${resolveLaunchAgentGuiDomain()}/${resolveLaunchAgentLabel(env)}`
       : process.platform === "win32"
         ? `schtasks:${resolveTaskName(env).toLowerCase()}`
-        : `systemd:${resolveSystemdServiceName(env)}`;
+        : process.platform === "freebsd"
+          ? // service(8) selects one global rc.d definition, independent of profile.
+            "rc.d:openclaw"
+          : `systemd:${resolveSystemdServiceName(env)}`;
   return path.join(resolvePreferredOpenClawTmpDir(), `service-lifecycle-${sha256Hex(identity)}`);
 }

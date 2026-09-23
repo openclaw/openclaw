@@ -52,6 +52,7 @@ import { printResult } from "./progress.js";
 import { UpdatePreMutationError, type UpdateCommandOptions } from "./shared.js";
 import type { UpdateConfigSnapshot } from "./update-command-config-snapshot.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
+import { updateCommandLedgerOptions } from "./update-command-ledger.js";
 import type { OwnedManagedUpdateContext } from "./update-command-managed-context.js";
 import type {
   OriginalManagedServiceRuntime,
@@ -65,7 +66,13 @@ export function failUpdateCommandRun(
   error: unknown,
   run: NonNullable<UpdateCommandOptions["run"]>,
 ): ReturnType<typeof createUpdateErrorFact> | undefined {
-  const options = { env: run.env };
+  if (run.freebsdWriteAdmission?.canWrite === false) {
+    defaultRuntime.error(
+      `${run.freebsdWriteAdmission.failure?.message ?? "Update ownership was not admitted."} Update history remains pending.`,
+    );
+    return undefined;
+  }
+  const options = updateCommandLedgerOptions(run);
   // Recovery owns failure/outcome publication; outer unwind must not rewrite a
   // database whose exact contents may still be needed to reconcile restoration.
   if (loadUpdateRecovery(run.runId, options)) {
@@ -157,7 +164,11 @@ export function recordServiceReconciliationWarnings(
   if (run) {
     try {
       for (const row of updateRunStepsFromResultStep(step)) {
-        recordUpdateRunStep(run.runId, { ...row, endedAtMs: Date.now() }, { env: run.env });
+        recordUpdateRunStep(
+          run.runId,
+          { ...row, endedAtMs: Date.now() },
+          updateCommandLedgerOptions(run),
+        );
       }
     } catch {
       assertCurrent();
@@ -286,7 +297,14 @@ export async function resolveMutableUpdateFailure(params: {
   ) {
     throw params.cause;
   }
-  const failure = { cause: params.cause, detail: formatErrorMessage(params.cause) };
+  // Keep native inspection causes internal; their messages can contain private paths.
+  const failure = {
+    cause: params.cause,
+    detail:
+      params.cause instanceof FreeBsdPkgOwnershipError
+        ? params.cause.message
+        : formatErrorMessage(params.cause),
+  };
   defaultRuntime.error(failure.detail);
   let phase: string | undefined;
   if (params.run) {
@@ -348,13 +366,14 @@ export async function withUpdateAdmissionReporting<T>(
       return reportUpdateCommandPendingRecovery(error, opts);
     }
     if (
+      !(error instanceof UpdatePreMutationError) &&
       !(error instanceof GatewayServiceUpdateOwnershipError) &&
       !(error instanceof FreeBsdPkgOwnershipError)
     ) {
       throw error;
     }
     const message =
-      error instanceof FreeBsdPkgOwnershipError
+      error instanceof UpdatePreMutationError || error instanceof FreeBsdPkgOwnershipError
         ? error.message
         : `${error.message} Run \`openclaw gateway status --deep\` from the service's owning account before retrying.`;
     if (opts.json) {
@@ -532,15 +551,21 @@ export async function writeControlPlaneUpdateRestartSentinelBestEffort(params: {
   result: UpdateRunResult;
   jsonMode: boolean;
   env: NodeJS.ProcessEnv | undefined;
+  run?: UpdateCommandOptions["run"];
 }): Promise<void> {
   if (!params.meta) {
     return;
   }
+  // Publication outlives the executor and can be the first write after an await.
+  // The sentinel commits synchronously, so check its admitted generation here.
+  let env = params.env;
+  if (params.run?.freebsdWriteAdmission) {
+    const options = updateCommandLedgerOptions(params.run);
+    options.assertWriteAdmission?.(params.run.runId, options);
+    env = options.env;
+  }
   try {
-    await writeControlPlaneUpdateRestartSentinel(
-      { meta: params.meta, result: params.result },
-      params.env,
-    );
+    await writeControlPlaneUpdateRestartSentinel({ meta: params.meta, result: params.result }, env);
   } catch (err) {
     if (params.meta.completionOwner === "gateway-restart") {
       // The replacement cannot finish its run from a pending sentinel.
@@ -560,12 +585,19 @@ export async function markControlPlaneUpdateRestartSentinelFailureBestEffort(par
   reason: string;
   jsonMode: boolean;
   env: NodeJS.ProcessEnv | undefined;
+  run?: UpdateCommandOptions["run"];
 }): Promise<void> {
   if (!params.meta) {
     return;
   }
+  let env = params.env;
+  if (params.run?.freebsdWriteAdmission) {
+    const options = updateCommandLedgerOptions(params.run);
+    options.assertWriteAdmission?.(params.run.runId, options);
+    env = options.env;
+  }
   try {
-    await markControlPlaneUpdateRestartSentinelFailure(params.reason, params.meta, params.env);
+    await markControlPlaneUpdateRestartSentinelFailure(params.reason, params.meta, env);
   } catch (err) {
     const message = `Failed to mark update.run restart sentinel failed: ${String(err)}`;
     if (params.jsonMode) {
@@ -582,6 +614,7 @@ export function recordUpdateResultNextAction(
   committed?: UpdateRunRecord,
 ) {
   const run = params.opts.run;
+  run?.freebsdWriteAdmission?.assertCurrent();
   const active = committed ?? (run ? getUpdateRun(run.runId, { env: run.env }) : undefined);
   const { verification, steps } = updateRunReportInputFromResult(result, active);
   const failedVerification = steps.findLast(
@@ -603,7 +636,12 @@ export function recordUpdateResultNextAction(
     env: run?.env ?? params.ownedManagedUpdateEnv ?? process.env,
   });
   if (run && active?.status === "running" && active.origin.nextAction !== nextAction) {
-    recordUpdateRunPhase(run.runId, active.phase, { origin: { nextAction } }, { env: run.env });
+    recordUpdateRunPhase(
+      run.runId,
+      active.phase,
+      { origin: { nextAction } },
+      updateCommandLedgerOptions(run),
+    );
   }
   return nextAction;
 }

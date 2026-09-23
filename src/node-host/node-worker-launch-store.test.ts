@@ -8,8 +8,8 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { OpenClawStateExternalOwnershipError } from "../state/openclaw-state-ownership-error.js";
 import { claimOpenClawStateOwnership } from "../state/openclaw-state-ownership-operations.js";
-import { OpenClawStateExternalOwnershipError } from "../state/openclaw-state-ownership.js";
 import { NodeWorkerJournalWorker } from "./node-worker-journal-worker.js";
 import { NodeWorkerLaunchStore } from "./node-worker-launch-store.js";
 import { NodeWorkerLaunchKernel } from "./node-worker-launch-store.kernel.js";

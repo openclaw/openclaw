@@ -702,10 +702,12 @@ caller without operation context is `unlabeled`. Hold warnings also include
 distinguish the main thread from Workers sharing the same process. `async: false`
 describes the synchronous transaction helper; it does not identify the thread.
 
-Hold time starts after `BEGIN` succeeds and includes the synchronous callback,
-result checks, and commit or rollback. It excludes database opening and the
-begin step. Host admission waits inside a transaction count toward its hold;
-overlapping deferred read holds do not establish that multiple writers held a lock.
+Hold time starts after `BEGIN` succeeds. It includes the synchronous callback,
+result checks, and settlement through `COMMIT` or rollback. JavaScript work and
+host admission waits inside the transaction count toward its hold. It excludes
+database opening and `BEGIN`, but overlaps the separately timed `COMMIT` step.
+Overlapping deferred read holds do not establish that multiple writers held a lock.
+
 Successful begin and commit step timings include native execution, storage work,
 and scheduling delays; they do not establish lock contention. The separate
 `SQLite transaction lock wait failed` warning identifies caught SQLite lock

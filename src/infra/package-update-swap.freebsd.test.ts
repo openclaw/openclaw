@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as exec from "../process/exec.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
@@ -17,38 +18,56 @@ import { pkgQueryResult } from "./update-freebsd-pkg-ownership.test-support.js";
 afterEach(() => vi.restoreAllMocks());
 
 describe("FreeBSD package replacement ownership", () => {
-  it("retains the installed candidate and recovery copy when pkg claims a launcher before rollback", async () => {
-    await withTestDir({ prefix: "openclaw-pkg-rollback-" }, async (base) => {
-      const { params, packageRoot, launcher } = await createPackageSwapFixture(base);
-      const query = vi.spyOn(exec, "runCommandBuffered").mockResolvedValue(pkgQueryResult());
-      let transaction: PackageUpdateTransaction | undefined;
-      await withMockedPlatform("freebsd", async () => {
-        await expect(
-          swapStagedPackageInstall({
-            ...params,
-            onTransaction: (value) => {
-              transaction = value;
-            },
-          }),
-        ).resolves.toMatchObject({ status: "committed" });
-        if (!transaction) {
-          throw new Error("Expected a retained package transaction");
-        }
-        query.mockResolvedValue(pkgQueryResult(`${launcher}\n`));
-        await expect(transaction.rollback(() => {})).resolves.toMatchObject({
-          exitCode: 1,
-          stderrTail: expect.stringContaining("retained for manual recovery"),
+  it.each(["owned", "unavailable"])(
+    "retains the installed candidate and recovery copy when pkg ownership becomes %s before rollback",
+    async (ownership) => {
+      await withTestDir({ prefix: "openclaw-pkg-rollback-" }, async (base) => {
+        const { params, packageRoot, launcher } = await createPackageSwapFixture(base);
+        const query = vi.spyOn(exec, "runCommandBuffered").mockResolvedValue(pkgQueryResult());
+        let transaction: PackageUpdateTransaction | undefined;
+        await withMockedPlatform("freebsd", async () => {
+          await expect(
+            swapStagedPackageInstall({
+              ...params,
+              onTransaction: (value) => {
+                transaction = value;
+              },
+            }),
+          ).resolves.toMatchObject({ status: "committed" });
+          if (!transaction) {
+            throw new Error("Expected a retained package transaction");
+          }
+          if (ownership === "owned") {
+            query.mockResolvedValue(pkgQueryResult(`${launcher}\n`));
+          } else {
+            query.mockRejectedValue(
+              Object.assign(new Error("/private/fixture/database token=fixture-secret"), {
+                code: "EACCES",
+              }),
+            );
+          }
+          const rollback = await transaction.rollback(() => {});
+          expect(rollback).toMatchObject({
+            exitCode: 1,
+            stderrTail: expect.stringContaining("retained for manual recovery"),
+          });
+          if (ownership === "unavailable") {
+            expect(rollback.stderrTail).toContain("failed during pkg query (EACCES)");
+            const fact = expectDefined(rollback.failureFacts?.[0], "rollback failure fact");
+            expect(fact.message).toContain("failed during pkg query (EACCES)");
+            expect(JSON.stringify(rollback)).not.toMatch(/\/private\/fixture|fixture-secret/u);
+          }
+          await expect(
+            fs.readFile(path.join(transaction.backupRoot, "package.json"), "utf8"),
+          ).resolves.toContain('"version":"1.0.0"');
         });
+        await expect(fs.readFile(launcher, "utf8")).resolves.toBe("candidate launcher\n");
         await expect(
-          fs.readFile(path.join(transaction.backupRoot, "package.json"), "utf8"),
-        ).resolves.toContain('"version":"1.0.0"');
+          fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
+        ).resolves.toContain('"version":"2.0.0"');
       });
-      await expect(fs.readFile(launcher, "utf8")).resolves.toBe("candidate launcher\n");
-      await expect(fs.readFile(path.join(packageRoot, "package.json"), "utf8")).resolves.toContain(
-        '"version":"2.0.0"',
-      );
-    });
-  });
+    },
+  );
   it("refuses an uninspectable in-place fallback instead of running the manager", async () => {
     await withTestDir({ prefix: "openclaw-pkg-in-place-" }, async (base) => {
       const target = createNpmTarget(path.join(base, "unrecognized-layout"));

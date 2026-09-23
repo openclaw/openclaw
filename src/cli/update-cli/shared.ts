@@ -49,6 +49,10 @@ import { pathExists } from "../../utils.js";
 import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../completion-runtime.js";
 import { isJsonOutputModeActive } from "../json-output-mode.js";
 import { resolveNodeRunner } from "./node-runner.js";
+import {
+  updateCommandLedgerOptions,
+  type UpdateCommandLedgerRun,
+} from "./update-command-ledger.js";
 
 export { resolveNodeRunner } from "./node-runner.js";
 
@@ -64,11 +68,9 @@ export type UpdateCommandOptions = {
   recovery?: unknown;
   reapplyLocalOverrides?: boolean;
   /** Internal orchestration context, shared across update phases and child processes. */
-  run?: {
-    runId: string;
+  run?: UpdateCommandLedgerRun & {
     defaultStepTimeoutMs?: number;
     activationTimeoutMs?: number;
-    env: NodeJS.ProcessEnv;
     /** Completion routing only; mutation authority remains with the live executor. */
     completionOwner?: "gateway-restart";
     /** The handoff helper acknowledged the foreground Gateway's closure. */
@@ -659,7 +661,7 @@ export async function confirmUpdateDowngrade(params: {
     finishUpdateRun(
       run.runId,
       { status: "skipped", reason: "downgrade-confirmation-required" },
-      { env: run.env },
+      updateCommandLedgerOptions(run),
     );
     defaultRuntime.error(
       "Downgrade confirmation required.\nDowngrading can break configuration. Re-run in a TTY to confirm.",
@@ -668,7 +670,11 @@ export async function confirmUpdateDowngrade(params: {
     return false;
   }
   if (decision === "cancelled") {
-    finishUpdateRun(run.runId, { status: "skipped", reason: "cancelled" }, { env: run.env });
+    finishUpdateRun(
+      run.runId,
+      { status: "skipped", reason: "cancelled" },
+      updateCommandLedgerOptions(run),
+    );
     if (!opts.json) {
       defaultRuntime.log(theme.muted("Update cancelled."));
     }

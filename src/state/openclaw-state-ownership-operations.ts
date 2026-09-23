@@ -20,10 +20,10 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
+import { OpenClawStateOwnershipMetadataError } from "./openclaw-state-ownership-error.js";
 import {
   inspectOpenClawStateOwnershipFromDatabase,
   normalizeOpenClawStateManagerId,
-  OpenClawStateOwnershipMetadataError,
   STATE_SUPERVISION_KEY,
   type OpenClawExternalStateOwnership,
   runWithOpenClawStateOwnershipCoordinator,

@@ -30,6 +30,7 @@ import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { defaultRuntime } from "../../runtime.js";
 import { UpdatePreMutationError, type UpdateCommandOptions } from "./shared.js";
 import { gatewayMaintenanceBlockMessage } from "./update-command-handoff.js";
+import { updateCommandLedgerOptions } from "./update-command-ledger.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import type {
   ManagedGatewayUpdateVerdict,
@@ -254,7 +255,7 @@ async function stopManagedServiceBeforeMutableUpdate(
             endedAtMs: Date.now(),
             detail: message,
           },
-          { env: updateRun?.env },
+          updateRun ? updateCommandLedgerOptions(updateRun) : { env: undefined },
         );
       } catch {
         (params.warn ?? defaultRuntime.error)(
@@ -600,9 +601,12 @@ async function stopManagedServiceBeforeMutableUpdate(
       }
       stoppedAtMs = Date.now();
       if (params.updateRun) {
-        recordUpdateRunPhase(params.updateRun.runId, "activating", undefined, {
-          env: params.updateRun.env,
-        });
+        recordUpdateRunPhase(
+          params.updateRun.runId,
+          "activating",
+          undefined,
+          updateCommandLedgerOptions(params.updateRun),
+        );
       }
       await service.stop({
         env: currentState.env,

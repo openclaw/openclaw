@@ -1,5 +1,6 @@
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveUpdateFinalizationTimeoutMs } from "../../infra/update-finalization-budget.js";
+import { assertUpdateWriteAuthority } from "../../infra/update-freebsd-write-admission.js";
 import type { RetainUpdateRuntime } from "../../infra/update-retained-runtime.js";
 import { finishUpdateRun, recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
 import { DEFAULT_UPDATE_STEP_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
@@ -13,11 +14,16 @@ import {
   type UpdateCommandOptions,
 } from "./shared.js";
 import {
+  resolveUpdateCommandAdmissionEnv,
+  resolveUpdateCommandAdmissionRoot,
+} from "./update-command-admission-env.js";
+import {
   captureUpdateCommandExecutorAuthority,
   type UpdateCommandExecutor,
   withUpdateCommandExecutor,
 } from "./update-command-executor.js";
 import type { InitializedUpdate } from "./update-command-initialization.js";
+import { updateCommandLedgerOptions } from "./update-command-ledger.js";
 import { admitUpdateRequesterContinuation } from "./update-command-managed-context.js";
 import { preparePackageUpdateRuntime } from "./update-command-node-runtime.js";
 import { UpdateCommandFailure, withUpdateAdmissionReporting } from "./update-command-result.js";
@@ -27,8 +33,6 @@ import {
   createUpdateRunProgress,
   prepareUpdateCommand,
   prepareMutableUpdateRuntime,
-  resolveUpdateCommandAdmissionEnv,
-  resolveUpdateCommandAdmissionRoot,
   withUpdatePreviewSignals,
 } from "./update-command-run.js";
 import { preflightUpdateCommandSchemas, previewUpdateCommand } from "./update-command-schema.js";
@@ -132,6 +136,7 @@ async function runAdmittedUpdate(
     invocationCwd,
     initialization,
     pkgOwnership: prepared.pkgOwnership,
+    freebsdWriteAdmission: prepared.freebsdWriteAdmission,
     expectedForeground:
       prepared.controlPlaneUpdateSentinelMeta?.completionOwner === "gateway-restart" || undefined,
     installKind: prepared.installKind,
@@ -185,7 +190,9 @@ async function runAdmittedUpdate(
             withUpdateInProgressEnv(invocationCwd, () =>
               withUpdateCommandTerminalResult((registerRun) => {
                 registerRun(run);
-                return withUpdateCommandExecutor(run.runId, executeWith);
+                return withUpdateCommandExecutor(run.runId, executeWith, {
+                  onAuthorityFailure: run.freebsdWriteAdmission?.revoke,
+                });
               }, opts),
             ),
           );
@@ -285,7 +292,7 @@ async function updateCommandInternal(
       },
       before: { version: currentVersion ?? VERSION },
     },
-    { env: run.env },
+    updateCommandLedgerOptions(run),
   );
   const schemaPreflight = await preflightUpdateCommandSchemas({
     ...target,
@@ -301,7 +308,11 @@ async function updateCommandInternal(
   }
 
   if (opts.dryRun) {
-    finishUpdateRun(run.runId, { status: "skipped", reason: "dry-run" }, { env: run.env });
+    finishUpdateRun(
+      run.runId,
+      { status: "skipped", reason: "dry-run" },
+      updateCommandLedgerOptions(run),
+    );
     return await previewUpdateCommand({
       target,
       prepared,
@@ -348,6 +359,9 @@ async function updateCommandInternal(
     });
     run.executorFence.assertCurrent();
     assertUpdatePackageActivationAdmission(root, { serviceRoot: managedServiceRoot });
+    if (run.freebsdWriteAdmission) {
+      await run.freebsdWriteAdmission.revalidate(run.executorFence.assertCurrent);
+    }
   };
   if (packageAlreadyCurrent) {
     await activateCurrentCore();
@@ -429,6 +443,9 @@ async function updateCommandInternal(
     admitExecutor(fence);
     run.activationTimeoutMs ??= activationTimeoutMs;
     fence.assertCurrent();
+    if (run.freebsdWriteAdmission) {
+      await run.freebsdWriteAdmission.revalidate(fence.assertCurrent);
+    }
     if (mutableUpdatePrepared) {
       if (managedServiceRoot) {
         assertUpdatePackageActivationAdmission(managedServiceRoot);
@@ -437,7 +454,14 @@ async function updateCommandInternal(
     }
     const installKey = captureUpdateCommandExecutorAuthority(fence).installKey;
     assertUpdatePackageActivationAdmission(installKey, { serviceRoot: managedServiceRoot });
-    preUpdatePluginInstallRecords = await prepareMutableUpdateRuntime(env, fence);
+    const mutableAuthority = run.freebsdWriteAdmission
+      ? {
+          assertCurrent() {
+            assertUpdateWriteAuthority(run.freebsdWriteAdmission, fence.assertCurrent);
+          },
+        }
+      : fence;
+    preUpdatePluginInstallRecords = await prepareMutableUpdateRuntime(env, mutableAuthority);
     // Retention can walk the full dependency tree before the first staging step.
     // Record that work so the completed capacity check does not look stalled.
     const retentionStep = {
@@ -453,7 +477,7 @@ async function updateCommandInternal(
       installTarget,
       env,
       timeoutMs: updateStepTimeoutMs,
-      assertCurrent: () => fence.assertCurrent(),
+      assertCurrent: () => mutableAuthority.assertCurrent(),
     });
     progress.onStepComplete?.({
       ...retentionStep,
@@ -487,7 +511,7 @@ async function updateCommandInternal(
       progress.deferLedgerWrites();
     },
   });
-  run.executorFence?.assertCurrent();
+  assertUpdateWriteAuthority(run.freebsdWriteAdmission, () => run.executorFence?.assertCurrent());
   if (!execution) {
     return;
   }
@@ -545,7 +569,7 @@ async function updateCommandInternal(
         env: ownedManagedUpdateContext?.env ?? run.env,
         timeoutMs: updateStepTimeoutMs,
       });
-  run.executorFence?.assertCurrent();
+  assertUpdateWriteAuthority(run.freebsdWriteAdmission, () => run.executorFence?.assertCurrent());
   if (opts.recovery || rollbackBlockedReason) {
     // Only candidate code may reopen migrated state, including during reporting and cleanup.
     recoveryState.ledgerHandoffOwned = true;

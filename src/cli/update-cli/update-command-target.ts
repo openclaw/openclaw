@@ -349,7 +349,7 @@ export async function resolveUpdateCommandTarget(
           : managedServiceNodeRunner;
       }
 
-      // Read-only native/root admission is complete. Own interruption settlement
+      // Read-only selected-state admission is complete. Own interruption settlement
       // before metadata can block, but defer mutable housekeeping until target admission.
       if (updateInstallKind === "package" && !opts.dryRun) {
         assertUpdatePackageActivationAdmission(root, { serviceRoot: managedServiceRoot });

@@ -1,7 +1,9 @@
 import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
+import { createFreeBsdUpdateWriteAdmission } from "../../infra/update-freebsd-write-admission.js";
 import type { ManagedHandoffLease } from "../../infra/update-managed-service-handoff-lease.js";
+import * as updateRunLedger from "../../infra/update-run-ledger.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
 import {
   CommandProcessCleanupError,
@@ -12,6 +14,7 @@ import {
   retainCommandProcessCleanup,
 } from "../../process/exec-spawn.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import { UpdateActivationTimeoutError } from "./update-command-activation.js";
 import {
   captureUpdateCommandExecutorAuthority,
@@ -22,6 +25,10 @@ import {
   type UpdateCommandExecutor,
 } from "./update-command-executor.js";
 import { resolvePackageRuntimePreflight } from "./update-command-service-plan.js";
+import {
+  deferUpdateCommandTerminalResult,
+  withUpdateCommandTerminalResult,
+} from "./update-command-terminal.js";
 import { createUpdateOperationDeadline } from "./update-operation-deadline.js";
 
 const boundaries = vi.hoisted(() => ({ store: vi.fn(), runtime: vi.fn() }));
@@ -92,10 +99,13 @@ function runWithExecutorFence<T>(
   kind: "direct" | "delegated",
   operation: (fence: UpdateRecoveryFence) => Promise<T>,
   activationTimeoutMs?: number,
+  onAuthorityFailure?: (cause: unknown) => void,
 ): Promise<T> {
   if (kind === "direct") {
-    return withUpdateCommandExecutor("run", async (executor) =>
-      operation(await executor.enter(root, { activationTimeoutMs })),
+    return withUpdateCommandExecutor(
+      "run",
+      async (executor) => operation(await executor.enter(root, { activationTimeoutMs })),
+      { onAuthorityFailure },
     );
   }
   const parent = lease(root, "parent", process.ppid);
@@ -107,7 +117,7 @@ function runWithExecutorFence<T>(
     "run",
     root,
     operation,
-    activationTimeoutMs === undefined ? undefined : { activationTimeoutMs },
+    { activationTimeoutMs, onAuthorityFailure },
   );
 }
 
@@ -176,6 +186,8 @@ it.each([
     const admitted = createDeferredCore();
     const cancelled = createDeferredCore();
     const cleanup = createDeferredCore<"forced" | "uncertain">();
+    const admission = withMockedPlatform("freebsd", () => createFreeBsdUpdateWriteAdmission()!);
+    await admission.revalidate(() => {});
     let signal: AbortSignal | undefined;
     let child: Promise<unknown> | undefined;
     let ended = false;
@@ -196,6 +208,7 @@ it.each([
         return "operation finished";
       },
       1000,
+      admission.revoke,
     )
       .catch((error: unknown) => error)
       .finally(() => {
@@ -225,14 +238,110 @@ it.each([
     expect(timeout).toBe(signal!.reason);
     expect(timeout).toMatchObject({ root, timeoutMs: 1000, reason: "update-activation-timeout" });
     expect(hasCommandProcessCleanupError(error)).toBe(cleanupResult === "uncertain");
+    expect(admission.canWrite).toBe(cleanupResult === "forced");
     if (cleanupResult === "forced") {
       expect(error).toBe(signal!.reason);
+      expect(admission.failure).toBeUndefined();
+    } else {
+      const first = admission.failure;
+      expect(first).toBeInstanceOf(Error);
+      expect(first).not.toBeInstanceOf(UpdateActivationTimeoutError);
+      expect(admission.revoke(signal!.reason)).toBe(first);
     }
     expect(rows.size).toBe(
       cleanupResult === "uncertain" ? (kind === "direct" ? 2 : 3) : kind === "direct" ? 0 : 2,
     );
   },
 );
+it.each(["direct", "delegated"] as const)(
+  "refuses diagnostics after the expired %s child's release is refused",
+  async (kind) => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const admission = withMockedPlatform("freebsd", () => createFreeBsdUpdateWriteAdmission()!);
+    await admission.revalidate(() => {});
+    const entered = createDeferredCore();
+    const cancelled = createDeferredCore();
+    const foreign = lease("/synthetic/foreign", "foreign-owner");
+    rows.set(foreign.key, foreign);
+    const store = boundaries.store();
+    const release = store.release;
+    let childKey: string | undefined;
+    // Model the real lease owner's two release constraints: failed child release
+    // retains that row, and a parent cannot delete itself above unsettled children.
+    store.release = (candidate: ManagedHandoffLease) => {
+      if (
+        candidate.key === childKey ||
+        [...rows.keys()].some((key) => key.startsWith(candidate.key + "/.openclaw-update-child-"))
+      ) {
+        return false;
+      }
+      return release(candidate);
+    };
+    const publish = vi.fn(async () => ({
+      status: "error" as const,
+      mode: "unknown" as const,
+      steps: [],
+      durationMs: 0,
+    }));
+    const historyRead = vi.spyOn(updateRunLedger, "getUpdateRun");
+    const historyWrite = vi.spyOn(updateRunLedger, "recordUpdateRunPhase");
+    const run = { runId: "run", env: {}, freebsdWriteAdmission: admission };
+    let child: Promise<unknown> | undefined;
+    let signal: AbortSignal | undefined;
+    let fence: UpdateRecoveryFence | undefined;
+    let admittedRows: [string, ManagedHandoffLease][] = [];
+    const work = withUpdateCommandTerminalResult(async (register) => {
+      register(run);
+      expect(deferUpdateCommandTerminalResult(run, publish)).toBe(true);
+      await runWithExecutorFence(
+        kind,
+        async (current) => {
+          fence = current;
+          child = withUpdateCommandExecutorChild(current, root, async (grant, bind) => {
+            childKey = grant.childKey;
+            bind(process.pid + 1);
+            signal = resolveCommandProcessSignal();
+            signal!.addEventListener("abort", () => cancelled.resolve(), { once: true });
+            entered.resolve();
+            await cancelled.promise;
+            throw signal!.reason;
+          });
+          void child.catch(() => {});
+          await entered.promise;
+        },
+        1000,
+        admission.revoke,
+      );
+    }).catch((error: unknown) => error);
+    try {
+      await entered.promise;
+      admittedRows = structuredClone([...rows]);
+      await vi.advanceTimersByTimeAsync(1000);
+      await cancelled.promise;
+    } finally {
+      cancelled.resolve();
+      await Promise.allSettled([work, child]);
+    }
+    const outcome = await work;
+    expect(signal!.reason).toBeInstanceOf(UpdateActivationTimeoutError);
+    expect(collectNestedErrorCandidates(outcome)).toContain(signal!.reason);
+    expect(fence!.assertCurrent).toThrow(UpdateActivationTimeoutError);
+    expect(admission.canWrite).toBe(false);
+    const first = admission.failure;
+    expect(first).toBeInstanceOf(Error);
+    expect(first).not.toBeInstanceOf(UpdateActivationTimeoutError);
+    expect(admission.revoke(signal!.reason)).toBe(first);
+    expect(admission.revoke(new Error("later failure"))).toBe(first);
+    expect([...rows]).toEqual(admittedRows);
+    expect(rows.get(foreign.key)).toBe(foreign);
+    expect(rows.has(root)).toBe(true);
+    expect(rows.has(childKey!)).toBe(true);
+    expect(publish).not.toHaveBeenCalled();
+    expect(historyRead).not.toHaveBeenCalled();
+    expect(historyWrite).not.toHaveBeenCalled();
+  },
+);
+
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();

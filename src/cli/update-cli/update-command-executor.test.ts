@@ -7,18 +7,12 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { resolveServiceManagerEnv } from "../../daemon/service-process-env.js";
 import * as sqliteLocation from "../../infra/node-sqlite.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
-import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../../infra/update-control-plane-sentinel.js";
-import {
-  captureManagedUpdateLeaseDatabaseIdentity,
-  createManagedHandoffLeaseDatabase,
-} from "../../infra/update-managed-service-handoff-database.js";
+import { createFreeBsdUpdateWriteAdmission } from "../../infra/update-freebsd-write-admission.js";
+import { captureManagedUpdateLeaseDatabaseIdentity } from "../../infra/update-managed-service-handoff-database.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
-import { MANAGED_HANDOFF_RUNTIME_ENTRY } from "../../infra/update-managed-service-handoff-runtime-assets.js";
-import { stageManagedHandoffRuntime } from "../../infra/update-managed-service-handoff-runtime.js";
 import { createUpdateRun, finishUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
@@ -27,6 +21,11 @@ import { isChildProcessTreeAlive } from "../../process/child-process-tree.js";
 import { runUtf8CommandWithTimeout } from "../../process/exec.js";
 import * as pidAlive from "../../shared/pid-alive.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
+import * as deadlines from "../../utils/absolute-deadline.js";
+import {
+  prepareStagedLeaseFixture,
+  registerExecutorHelperHandoffTests,
+} from "./update-command-executor-handoff.test-support.js";
 import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
 import { registerExecutorRootOwnershipTests } from "./update-command-executor-roots.test-support.js";
 import {
@@ -53,19 +52,6 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
-
-// The installed parent prepares the database before a sealed actor can acquire a lease.
-function prepareStagedLeaseFixture() {
-  const databasePath = path.join(temporary, "managed-update-handoffs.sqlite");
-  const existingIdentity = createManagedHandoffLeaseDatabase(databasePath)(true, () =>
-    captureManagedUpdateLeaseDatabaseIdentity(databasePath),
-  );
-  stageManagedHandoffRuntime(root);
-  return {
-    runtimeEntry: path.join(root, "runtime", MANAGED_HANDOFF_RUNTIME_ENTRY),
-    options: { databasePath, serviceManagerEnv: resolveServiceManagerEnv(), existingIdentity },
-  };
-}
 
 function replaceOwner(installationRoot = root) {
   const db = new DatabaseSync(path.join(temporary, "managed-update-handoffs.sqlite"));
@@ -254,7 +240,7 @@ describe("live update executor", () => {
   });
 
   it("reclaims a dead direct executor through the existing process-liveness owner", async () => {
-    const { runtimeEntry, options } = prepareStagedLeaseFixture();
+    const { runtimeEntry, options } = prepareStagedLeaseFixture(root, temporary);
     const result = spawnSync(
       process.execPath,
       [
@@ -276,123 +262,22 @@ describe("live update executor", () => {
     expect(createManagedHandoffLeaseStore().read(root)).toEqual({ kind: "absent" });
   });
 
-  it.each([false, true])(
-    "borrows the exact helper package owner with a separate service root: %s",
-    async (splitRoot) => {
-      const { runtimeEntry, options } = prepareStagedLeaseFixture();
-      const runId = randomUUID();
-      const owner = randomUUID();
-      const metadata = path.join(root, "handoff.json");
-      fs.writeFileSync(
-        metadata,
-        JSON.stringify({ version: 1, meta: { runId, handoffId: owner, root } }),
-      );
-      vi.stubEnv("OPENCLAW_UPDATE_RUN_HANDOFF", "1");
-      vi.stubEnv(CONTROL_PLANE_UPDATE_SENTINEL_META_ENV, metadata);
-      const child = spawn(
-        process.execPath,
-        [
-          "-e",
-          `
-      const {createManagedHandoffLeaseStore}=require(${JSON.stringify(runtimeEntry)});
-      const store=createManagedHandoffLeaseStore(${JSON.stringify(options)});
-      const acquired=store.acquire(${JSON.stringify(root)},${JSON.stringify(owner)},{kind:"update"});
-      if(acquired.kind!=="acquired")throw new Error("helper admission failed");
-      const assigned=store.bind(acquired.lease,${process.pid});
-      if(!assigned)throw new Error("helper assignment failed");
-      process.once("message",()=>{
-        const local=store.bind(assigned,process.pid);
-        if(!local||!store.release(local))throw new Error("helper release failed");
-        process.disconnect();
-      });
-      process.send("assigned");
-    `,
-        ],
-        { stdio: ["ignore", "ignore", "pipe", "ipc"] },
-      );
-      const exited = once(child, "exit");
-      let stderr = "";
-      child.stderr?.on("data", (data) => {
-        stderr += String(data);
-      });
-      try {
-        const ready = await Promise.race([
-          once(child, "message").then(([message]) => message),
-          exited.then(() => {
-            throw new Error(`helper exited before assignment: ${stderr}`);
-          }),
-        ]);
-        expect(ready).toBe("assigned");
-        const store = createManagedHandoffLeaseStore();
-        const serviceRoot = splitRoot ? path.join(root, "service-A") : undefined;
-        if (serviceRoot) {
-          fs.mkdirSync(serviceRoot);
-        }
-        await withUpdateCommandExecutor(runId, async (executor) => {
-          const fence = await executor.enter(root, { serviceRoot, preflight: true });
-          expect(captureUpdateCommandExecutorAuthority(fence).installKey).toBe(root);
-          if (serviceRoot) {
-            expect(store.read(serviceRoot).kind).toBe("current");
-          }
-          expect(() => releaseUpdateCommandPreflightForHandoff(fence)).toThrow("not current");
-          const result = await withUpdateCommandExecutorChild(
-            fence,
-            root,
-            (grant, beforeInput) =>
-              runUtf8CommandWithTimeout(
-                [
-                  process.execPath,
-                  "--input-type=module",
-                  "-e",
-                  `import {json} from "node:stream/consumers";
-               import {withDelegatedUpdateCommandExecutor,captureUpdateCommandExecutorAuthority} from ${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.executor).href)};
-               const grant=await json(process.stdin);
-               await withDelegatedUpdateCommandExecutor(grant,grant.runId,grant.root,async(fence)=>{
-                 fence.assertCurrent(); process.stdout.write(JSON.stringify(captureUpdateCommandExecutorAuthority(fence)));
-               });`,
-                ],
-                {
-                  input: JSON.stringify(grant),
-                  beforeInput,
-                  timeoutMs: 15_000,
-                  killProcessTree: true,
-                  requireProcessTreeExtinction: true,
-                },
-              ),
-            { auxiliaryPreflight: true },
-          );
-          expect(result.code, result.stderr).toBe(0);
-          expect(JSON.parse(result.stdout)).toEqual(captureUpdateCommandExecutorAuthority(fence));
-          expect(() => releaseUpdateCommandPreflightForHandoff(fence)).toThrow("not current");
-          fence.assertCurrent();
-        });
-        if (serviceRoot) {
-          expect(store.read(serviceRoot)).toEqual({ kind: "absent" });
-        }
-        const current = store.read(root);
-        expect(current.kind === "current" && current.lease.owner).toBe(owner);
-        await expect(
-          withUpdateCommandExecutor(randomUUID(), async (executor) => executor.enter(root)),
-        ).rejects.toThrow("changed during admission");
-        expect(store.read(root)).toEqual(current);
-      } finally {
-        if (child.connected) {
-          child.send("release");
-        }
-        const [code] = await exited;
-        expect(code, stderr).toBe(0);
-      }
-      expect(createManagedHandoffLeaseStore().read(root)).toEqual({ kind: "absent" });
-    },
-  );
+  registerExecutorHelperHandoffTests(() => ({
+    root,
+    prepareStagedLeaseFixture: () => prepareStagedLeaseFixture(root, temporary),
+  }));
 
   it("preserves an unreadable existing coordination database without repairing it", async () => {
     const database = path.join(temporary, "managed-update-handoffs.sqlite");
     fs.writeFileSync(database, "unreadable native owner", { mode: 0o600 });
     const before = fs.readFileSync(database);
+    const inventory = vi.fn(async () => 73_000);
     await expect(
-      withUpdateCommandExecutor(randomUUID(), async (executor) => executor.enter(root)),
+      withUpdateCommandExecutor(randomUUID(), async (executor) =>
+        executor.enter(root, { activationTimeoutMs: inventory }),
+      ),
     ).rejects.toThrow("state is unreadable");
+    expect(inventory).not.toHaveBeenCalled();
     expect(fs.readFileSync(database)).toEqual(before);
   });
 
@@ -400,6 +285,75 @@ describe("live update executor", () => {
     await withUpdateCommandExecutor(randomUUID(), async () => "preview");
     expect(fs.readdirSync(temporary)).toEqual([]);
   });
+
+  it.each(["numeric", "computed", "omitted", "computed omitted"])(
+    "starts the %s budget only after native admission and preserves its first value",
+    async (mode) => {
+      const cancel = vi.fn();
+      const schedule = vi.spyOn(deadlines, "scheduleAbsoluteDeadline").mockReturnValue(cancel);
+      const budget = mode.includes("omitted") ? undefined : 73_000;
+      const inventory = vi.fn(async (fence: UpdateRecoveryFence) => {
+        expect(captureUpdateCommandExecutorAuthority(fence).installKey).toBe(root);
+        expect(schedule).not.toHaveBeenCalled();
+        await Promise.resolve();
+        return budget;
+      });
+      const before = Date.now();
+      await withUpdateCommandExecutor(randomUUID(), async (executor) => {
+        const fence = await executor.enter(root, {
+          activationTimeoutMs: mode.startsWith("computed") ? inventory : budget,
+        });
+        fence.assertCurrent();
+        expect(inventory).toHaveBeenCalledTimes(mode.startsWith("computed") ? 1 : 0);
+        expect(schedule).toHaveBeenCalledTimes(budget === undefined ? 0 : 1);
+        if (budget !== undefined) {
+          const scheduled = schedule.mock.calls[0];
+          assert(scheduled);
+          expect(scheduled[0]).toBeGreaterThanOrEqual(before + budget);
+          expect(scheduled[0]).toBeLessThanOrEqual(Date.now() + budget);
+          await executor.enter(root, { activationTimeoutMs: 91_000 });
+          expect(schedule).toHaveBeenCalledTimes(1);
+        }
+      });
+      expect(cancel).toHaveBeenCalledTimes(budget === undefined ? 0 : 1);
+      expect(createManagedHandoffLeaseStore().read(root)).toEqual({ kind: "absent" });
+    },
+  );
+
+  it.each([false, true])(
+    "rechecks native ownership after deferred inventory (preflight owner: %s)",
+    async (preflight) => {
+      const admission = withMockedPlatform("freebsd", () => createFreeBsdUpdateWriteAdmission()!);
+      await admission.revalidate(() => {});
+      const effects = vi.fn();
+      const inventory = vi.fn(async () => {
+        await Promise.resolve();
+        replaceOwner();
+        return 73_000;
+      });
+      await expect(
+        withUpdateCommandExecutor(
+          randomUUID(),
+          async (executor) => {
+            if (preflight) {
+              await executor.enter(root, { preflight: true });
+            }
+            await executor.enter(root, { activationTimeoutMs: inventory });
+            effects();
+          },
+          { onAuthorityFailure: admission.revoke },
+        ),
+      ).rejects.toThrow();
+      expect(inventory).toHaveBeenCalledOnce();
+      expect(effects).not.toHaveBeenCalled();
+      expect(admission.canWrite).toBe(false);
+      expect(admission.failure?.message).toContain("no longer current");
+      expect(createManagedHandoffLeaseStore().read(root)).toMatchObject({
+        kind: "current",
+        lease: { owner: "replacement" },
+      });
+    },
+  );
 
   it("holds the existing owner across awaited execution and refuses a second local invocation", async () => {
     const admitted = createDeferred();
@@ -445,12 +399,20 @@ describe("live update executor", () => {
 
   it("preserves the primary error and releases only its own exact owner", async () => {
     const primary = new Error("package failed");
+    const admission = withMockedPlatform("freebsd", () => createFreeBsdUpdateWriteAdmission()!);
     await expect(
-      withUpdateCommandExecutor(randomUUID(), async (executor) => {
-        await executor.enter(root);
-        throw primary;
-      }),
+      withUpdateCommandExecutor(
+        randomUUID(),
+        async (executor) => {
+          const fence = await executor.enter(root);
+          await admission.revalidate(fence.assertCurrent);
+          throw primary;
+        },
+        { onAuthorityFailure: admission.revoke },
+      ),
     ).rejects.toBe(primary);
+    expect(admission.canWrite).toBe(true);
+    expect(admission.failure).toBeUndefined();
     expect(createManagedHandoffLeaseStore().read(root)).toEqual({ kind: "absent" });
   });
 
@@ -705,7 +667,10 @@ describe("candidate executor delegation", () => {
       await once(helper,'message');
       helper.disconnect();
       helper.unref();
-    });
+    },{activationTimeoutMs:async(fence)=>{
+      fence.assertCurrent(); await Promise.resolve();
+      process.stdout.write("inventoried\\n"); return undefined;
+    }});
   `;
   it.each([
     { changedRoot: false, revoked: false, splitService: false },
@@ -910,6 +875,9 @@ describe("candidate executor delegation", () => {
         );
         if (afterAdmission) {
           expect(result.stdout).toContain("admitted");
+          expect(result.stdout).toContain("inventoried");
+        } else {
+          expect(result.stdout).not.toContain("inventoried");
         }
         expect(fs.existsSync(output)).toBe(false);
         fence.assertCurrent();
@@ -920,7 +888,7 @@ describe("candidate executor delegation", () => {
   it.skipIf(process.platform === "win32")(
     "retains a candidate group after both the updater and its direct child exit",
     async () => {
-      const { runtimeEntry, options } = prepareStagedLeaseFixture();
+      const { runtimeEntry, options } = prepareStagedLeaseFixture(root, temporary);
       const command = `
         const {spawn}=require('node:child_process');
         process.stdin.once('data',()=>{
@@ -971,7 +939,7 @@ describe("candidate executor delegation", () => {
   );
 
   it("does not reclaim a dead parent while its delegated child is alive", async () => {
-    const { runtimeEntry, options } = prepareStagedLeaseFixture();
+    const { runtimeEntry, options } = prepareStagedLeaseFixture(root, temporary);
     const parent = spawnSync(
       process.execPath,
       [

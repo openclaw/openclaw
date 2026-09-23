@@ -221,7 +221,13 @@ export async function continueMigratedUpdateInFreshProcess(
     const handoff = createUpdateTimeoutHandoff(params.opts.timeout, params.updateStepTimeoutMs);
     assertCurrent();
     const resultPath = path.join(scratchDir, "result.json");
-    const { requesterAuthority, executorFence, ...runIdentity } = run;
+    const {
+      requesterAuthority,
+      executorFence,
+      freebsdWriteAdmission: _admission,
+      ledgerAdmission: _ledger,
+      ...runIdentity
+    } = run;
     const input: MigratedUpdateFinalizationInput = {
       ...handoff,
       params: {

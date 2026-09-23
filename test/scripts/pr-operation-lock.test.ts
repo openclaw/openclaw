@@ -1082,7 +1082,29 @@ describePosix("scripts/pr per-PR operation lock", () => {
         try {
           await once(controller, "close", { signal: AbortSignal.timeout(20_000) });
         } catch (error) {
-          console.error("PR controller output before close failure:\n", output);
+          try {
+            console.error("PR controller output before close failure:\n", output);
+            console.error("PR controller state before cleanup:", {
+              pid: controller.pid,
+              exitCode: controller.exitCode,
+              signalCode: controller.signalCode,
+              killed: controller.killed,
+            });
+            for (const [label, path] of [
+              ["Git events", eventsPath],
+              ["GitHub events", ghEventsPath],
+              ["handoff launches", join(homeDir, ".local/private-handoff/launches.txt")],
+              ["handoff observations", join(homeDir, ".local/private-handoff/observations.jsonl")],
+            ] as const) {
+              try {
+                console.error(`${label} before cleanup:\n`, readFileSync(path, "utf8"));
+              } catch (diagnosticError) {
+                console.error(`${label} unavailable before cleanup:`, diagnosticError);
+              }
+            }
+          } catch {
+            // Diagnostic failure must not replace the original close failure.
+          }
           throw error;
         }
         if (

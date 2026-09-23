@@ -4,9 +4,9 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import * as updateGlobal from "../../infra/update-global.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import * as admissionEnvOwner from "./update-command-admission-env.js";
 import { installFreshUpdateFixture } from "./update-command-fresh.test-support.js";
 import * as packageUpdate from "./update-command-package.js";
-import * as commandRun from "./update-command-run.js";
 import { updateCommand } from "./update-command.js";
 
 const { fixture } = installFreshUpdateFixture();
@@ -25,7 +25,7 @@ it("keeps the selected runtime ahead of service PATH during fresh-profile contin
     NPM_CONFIG_GLOBALCONFIG: path.join(home, "empty-global.npmrc"),
     PATH: oldRuntimeDir,
   };
-  vi.spyOn(commandRun, "resolveUpdateCommandAdmissionEnv").mockResolvedValue(admissionEnv);
+  vi.spyOn(admissionEnvOwner, "resolveUpdateCommandAdmissionEnv").mockResolvedValue(admissionEnv);
   vi.mocked(updateGlobal.createGlobalInstallEnv).mockRestore();
   const stopped = new Error("stop before package installation");
   vi.mocked(packageUpdate.stagePackageInstallUpdate).mockRejectedValue(stopped);

@@ -10,8 +10,8 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../../process/gateway-work-admission.js";
+import { OpenClawStateExternalOwnershipError } from "../../state/openclaw-state-ownership-error.js";
 import { claimOpenClawStateOwnership } from "../../state/openclaw-state-ownership-operations.js";
-import { OpenClawStateExternalOwnershipError } from "../../state/openclaw-state-ownership.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { captureDeliveryQueueStateContext } from "../delivery-queue-sqlite.js";
 import { deliverOutboundPayloads } from "./deliver.js";

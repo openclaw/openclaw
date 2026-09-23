@@ -258,6 +258,7 @@ async function fixture({
     "../../infra/update-run-step",
     ...(main
       ? [
+          "update-command-ledger",
           "update-command-verification",
           "update-command-terminal",
           "update-command-terminal-publication",

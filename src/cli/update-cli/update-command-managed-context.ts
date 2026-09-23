@@ -133,32 +133,36 @@ export async function admitUpdateRequesterContinuation(
   root: string,
   serviceRoot?: string,
 ): Promise<void> {
-  const original = run.requesterAuthority;
-  const requester = original?.requester;
-  if (!requester?.authorizationSource?.startsWith("profile:")) {
-    return;
-  }
-  const runId = run.runId;
-  const previousFence = run.executorFence;
-  const fence = await executor.enter(root, { preflight: true, serviceRoot });
-  const assertRunCurrent = () => {
-    if (
-      run.runId !== runId ||
-      run.requesterAuthority !== original ||
-      run.executorFence !== previousFence ||
-      (previousFence && previousFence !== fence)
-    ) {
-      throw new UpdateRequesterRevokedError();
+  try {
+    const original = run.requesterAuthority;
+    const requester = original?.requester;
+    if (!requester?.authorizationSource?.startsWith("profile:")) {
+      return;
     }
-    fence.assertCurrent();
-  };
-  assertRunCurrent();
-  const continued = await createManagedUpdateRequesterContinuationAuthority(
-    requester,
-    { runId, executor: fence },
-    run.env,
-  );
-  assertRunCurrent();
-  run.requesterAuthority = continued;
-  run.executorFence = fence;
+    const runId = run.runId;
+    const previousFence = run.executorFence;
+    const fence = await executor.enter(root, { preflight: true, serviceRoot });
+    const assertRunCurrent = () => {
+      if (
+        run.runId !== runId ||
+        run.requesterAuthority !== original ||
+        run.executorFence !== previousFence ||
+        (previousFence && previousFence !== fence)
+      ) {
+        throw new UpdateRequesterRevokedError();
+      }
+      fence.assertCurrent();
+    };
+    assertRunCurrent();
+    const continued = await createManagedUpdateRequesterContinuationAuthority(
+      requester,
+      { runId, executor: fence },
+      run.env,
+    );
+    assertRunCurrent();
+    run.requesterAuthority = continued;
+    run.executorFence = fence;
+  } catch (cause) {
+    throw run.freebsdWriteAdmission?.revoke(cause) ?? cause;
+  }
 }

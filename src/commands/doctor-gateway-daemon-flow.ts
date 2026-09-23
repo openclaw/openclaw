@@ -268,6 +268,10 @@ export async function maybeRepairGatewayDaemon(params: {
     await noteGatewayServiceInspectionFailure(serviceState.loadState);
     return;
   }
+  if (service.managementUnsupportedReason) {
+    note(service.managementUnsupportedReason, "Gateway");
+    return;
+  }
   let loaded = serviceState.loadState.status === "loaded";
   let serviceRuntime = serviceState.runtime;
   const serviceEnv = serviceState.env;

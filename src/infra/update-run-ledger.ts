@@ -626,7 +626,11 @@ export function finishInterruptedUpdatePreview(
       );
     },
     options,
-    { schemaSql: schema, operationLabel: "update.preview.interrupted" },
+    {
+      schemaSql: schema,
+      operationLabel: "update.preview.interrupted",
+      assertCurrent: () => options.assertWriteAdmission?.(expected.runId, options),
+    },
   );
 }
 
@@ -686,7 +690,11 @@ export function finishInterruptedUpdateBeforeActivation(
       assertCurrent();
     },
     options,
-    { schemaSql: schema, operationLabel: "update.interrupted" },
+    {
+      schemaSql: schema,
+      operationLabel: "update.interrupted",
+      assertCurrent: () => options.assertWriteAdmission?.(expected.runId, options),
+    },
   );
 }
 

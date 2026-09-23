@@ -37,6 +37,7 @@ import {
   printUpdateDryRun,
   type UpdateDryRunFailure,
 } from "./update-command-dry-run.js";
+import { updateCommandLedgerOptions } from "./update-command-ledger.js";
 import type { RefuseUpdate } from "./update-command-result.js";
 import type { prepareUpdateCommand } from "./update-command-run.js";
 import type { PreManagedServiceStop } from "./update-command-service-context-types.js";
@@ -155,7 +156,7 @@ export async function preflightUpdateCommandSchemas(params: {
   } = params;
   const run = opts.run;
   if (run) {
-    recordUpdateRunPhase(run.runId, "validating", undefined, { env: run.env });
+    recordUpdateRunPhase(run.runId, "validating", undefined, updateCommandLedgerOptions(run));
   }
   let packageSchemaPreflight: OpenClawDatabaseSchemaPreflight = {
     incompatible: [],

@@ -30,12 +30,14 @@ import {
   resolveOpenClawStateDirForDatabasePath,
   resolveOpenClawStateSqlitePath,
 } from "./openclaw-state-db.paths.js";
+import {
+  OpenClawStateOwnershipError,
+  OpenClawStateOwnershipMetadataError,
+} from "./openclaw-state-ownership-error.js";
 import { claimOpenClawStateOwnership } from "./openclaw-state-ownership-operations.js";
 import {
   assertOpenClawStateWriteAllowedAtPath,
   inspectOpenClawStateOwnershipAtPath,
-  OpenClawStateOwnershipError,
-  OpenClawStateOwnershipMetadataError,
   runWithOpenClawStateOwnershipCoordinator,
   runWithOpenClawStateWriteAccess,
   STATE_SUPERVISION_KEY,
