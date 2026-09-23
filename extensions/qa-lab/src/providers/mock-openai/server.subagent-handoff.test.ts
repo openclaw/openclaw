@@ -4,6 +4,7 @@ import {
   expectNonStreamingResponsesJson,
   getJson,
   makeToolOutputWithCallId,
+  outputItems,
   outputText,
   requireRecord,
   outputToolArgs,
@@ -338,7 +339,7 @@ describe("mock terminal subagents through structured Tool Search", () => {
       await server.stop();
     }
   });
-  it.each(["visible", "empty"] as const)(
+  it.each(["visible", "empty", "fallback"] as const)(
     "spawns and settles the %s worker through the exposed dispatcher",
     async (terminalCase) => {
       const server = await startQaMockOpenAiServer({ host: "127.0.0.1", port: 0 });
@@ -360,7 +361,7 @@ describe("mock terminal subagents through structured Tool Search", () => {
             task:
               terminalCase === "empty"
                 ? "Subagent terminal reply QA worker: empty. Return no assistant output after the write."
-                : "Subagent terminal reply QA worker: visible.",
+                : `Subagent terminal reply QA worker: ${terminalCase}.`,
             label: `qa-terminal-${terminalCase}`,
             thread: false,
             mode: "run",
@@ -413,6 +414,8 @@ describe("mock terminal subagents through structured Tool Search", () => {
         const completed = await expectNonStreamingResponsesJson(server, child);
         if (terminalCase === "visible") {
           expect(outputText(completed)).toBe("QA-SUBAGENT-TERMINAL-VISIBLE-OK");
+        } else if (terminalCase === "fallback") {
+          expect(outputText(completed)).toContain("QA-SUBAGENT-TERMINAL-FALLBACK-OK");
         } else {
           const write = outputToolCall(completed, "write");
           expect(outputToolArgs(completed)).toEqual({
@@ -429,6 +432,27 @@ describe("mock terminal subagents through structured Tool Search", () => {
           });
           expect(outputText(empty)).toBe("");
         }
+        const settledReply = await expectNonStreamingResponsesJson(server, {
+          ...parent,
+          input: [
+            ...input,
+            call,
+            receipt,
+            user(
+              `[Wed 2026-09-23 04:36 UTC] ${settled
+                .replace("qa-sidecar", `qa-terminal-${terminalCase}`)
+                .replace(
+                  result,
+                  terminalCase === "empty"
+                    ? "(no output)"
+                    : `QA-SUBAGENT-TERMINAL-${terminalCase.toUpperCase()}-OK`,
+                )}`,
+            ),
+            user(settleProvenance),
+          ],
+        });
+        expect(outputText(settledReply)).toBe("NO_REPLY");
+        expect(outputItems(settledReply).some((item) => item.type === "function_call")).toBe(false);
       } finally {
         await server.stop();
       }

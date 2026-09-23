@@ -6,7 +6,7 @@ import {
   QA_TOOL_SEARCH_PROMPT_RE,
   QA_TOOL_SEARCH_FAILURE_PROMPT_RE,
 } from "./mock-openai-contracts.js";
-import { extractInstructionsText } from "./mock-openai-input.js";
+import { extractInstructionsText, stripMockMessageTimestamp } from "./mock-openai-input.js";
 function extractLastCapture(text: string, pattern: RegExp) {
   let lastMatch: RegExpExecArray | null = null;
   const flags = pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`;
@@ -97,8 +97,6 @@ export function extractWhatsAppStickerMarkerDirective(text: string) {
   return extractLastCapture(text, /WhatsApp sticker marker:\s*([^\s`.,;:!?]+(?:-[^\s`.,;:!?]+)*)/i);
 }
 
-const QA_TIMESTAMPED_MESSAGE_PREFIX_RE =
-  /^\[[A-Z][a-z]{2} \d{4}-\d{2}-\d{2} \d{2}:\d{2}(?::\d{2})?(?: [^\]\r\n]+)?\]\s*/u;
 const QA_WHATSAPP_ENVELOPE_PREFIX_RE = /^\[WhatsApp(?: [^\]\r\n]+)?\]\s*/iu;
 const QA_WHATSAPP_SENDER_PREFIX_RE = /^(?:\(self\)|[^:\r\n]+):\s*/u;
 
@@ -109,7 +107,7 @@ function hasWhatsAppStructuredMessageBody(prompt: string, bodyPattern: RegExp) {
       return false;
     }
 
-    const timestampedBody = line.replace(QA_TIMESTAMPED_MESSAGE_PREFIX_RE, "");
+    const timestampedBody = stripMockMessageTimestamp(line);
     const envelopeBody = timestampedBody.replace(QA_WHATSAPP_ENVELOPE_PREFIX_RE, "");
     if (bodyPattern.test(envelopeBody)) {
       return true;

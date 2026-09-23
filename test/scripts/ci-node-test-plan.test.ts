@@ -10,7 +10,7 @@ import {
   createChangedExtensionFallbackShards,
   createChangedNodeTestShards,
 } from "../../scripts/lib/ci-changed-node-test-plan.mts";
-import { rebalanceMeasuredHybridJobs } from "../../scripts/lib/ci-measured-compact-packing.mts";
+import * as measuredPacking from "../../scripts/lib/ci-measured-compact-packing.mts";
 import {
   type CompactNodeTestShard,
   createNodeTestShardBundles,
@@ -355,13 +355,16 @@ function usesParallelPacking(job: CompactNodeTestShard | undefined) {
     (job?.planConcurrency === 1 &&
       job.runner === EXTRA_LARGE_NODE_TEST_RUNNER &&
       job.groups.length > 1 &&
-      job.groups.some(
-        (group) =>
-          (group.fallbackMaxWorkers === 2 &&
-            (group.configs.some(isExclusiveCiTestConfig) ||
-              fileParallelAgentGroupNames.has(group.shard_name.replace(/-hosted-\d+$/u, "")))) ||
-          group.configs.includes("test/vitest/vitest.commands.config.ts"),
-      ))
+      (job.groups.every((group) =>
+        ["1", "2"].includes(group.env?.OPENCLAW_VITEST_MAX_WORKERS ?? ""),
+      ) ||
+        job.groups.some(
+          (group) =>
+            (group.fallbackMaxWorkers === 2 &&
+              (group.configs.some(isExclusiveCiTestConfig) ||
+                fileParallelAgentGroupNames.has(group.shard_name.replace(/-hosted-\d+$/u, "")))) ||
+            group.configs.includes("test/vitest/vitest.commands.config.ts"),
+        )))
   );
 }
 function isNumberedToolingGroup(group: { shard_name: string }) {
@@ -428,16 +431,14 @@ function listAllToolingTestFiles(): string[] {
 
 describe("scripts/lib/ci-node-test-plan.mts", () => {
   it("packs ordinary work more densely while retaining the serial Gateway budget", () => {
+    vi.spyOn(measuredPacking, "getMeasuredCompactGroupSeconds").mockReturnValue(undefined);
     vi.spyOn(testTimings, "readCompactGroupTimings").mockReturnValue({
       "agentic-gateway-server-isolated": 200,
       "agentic-agents-core-models": 160,
-      "agentic-agents-core-runtime": 160,
-      "ordinary-a": 150,
-      "ordinary-b": 150,
-      "ordinary-c": 150,
-      "ordinary-d": 150,
-      "agentic-agents-core-auth": 150,
-      "agentic-agents-core-tools": 150,
+      "core-unit-fast-1": 170,
+      "core-unit-fast-2": 170,
+      "ordinary-a": 170,
+      "ordinary-b": 170,
     });
     vi.spyOn(testTimings, "readRuntimePlacementTimings").mockReturnValue([]);
     vi.spyOn(buildPrerequisites, "resolveVitestPretestBuildMode").mockReturnValue(undefined);
@@ -449,24 +450,22 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         ...[
           ["agentic-gateway-server-isolated", "gateway-server-isolated"],
           ["agentic-agents-core-models", "unit-support"],
-          ["agentic-agents-core-runtime", "unit-fast-isolated"],
+          ["core-unit-fast", "unit-fast"],
           ["ordinary-a", "hooks"],
           ["ordinary-b", "secrets"],
-          ["ordinary-c", "logging"],
-          ["ordinary-d", "unit-support"],
-          ["agentic-agents-core-auth", "hooks"],
-          ["agentic-agents-core-tools", "secrets"],
         ].map(([name, config]) => ({
           name: name!,
           config: `fixture-${name}.config.ts`,
           projects: [`test/vitest/vitest.${config}.config.ts`],
         })),
       );
-      const jobs = createNodeTestShardBundles({
-        compactMode: "push",
+      const options = {
+        compactMode: "pull-request" as const,
         runnerBackend: "blacksmith",
         includeReleaseOnlyPluginShards: false,
-      });
+      };
+      const declared = createNodeTestShards(options);
+      const jobs = createNodeTestShardBundles(options);
       const gateway = expectDefined(
         jobs.find((job) =>
           job.groups.some((group) =>
@@ -499,22 +498,26 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       );
       expect(ordinary.planConcurrency).toBe(2);
       expect(ordinary.groups.map((group) => group.shard_name).toSorted()).toEqual([
-        "agentic-agents-core-auth",
-        "agentic-agents-core-runtime",
+        "core-unit-fast-1",
+        "core-unit-fast-2",
         "ordinary-a",
+        "ordinary-b",
       ]);
       expect(new Set(ordinary.groups.map((group) => group.runner))).toEqual(
         new Set([BUNDLED_NODE_TEST_RUNNER, DEFAULT_NODE_TEST_RUNNER]),
       );
-      expect(ordinary.predictedSeconds).toBe(460);
-      expect(
-        jobs.find((job) => job.groups.some((group) => group.shard_name === "ordinary-d")),
-      ).toMatchObject({
-        planConcurrency: 2,
-        runner: EXTRA_LARGE_NODE_TEST_RUNNER,
-        predictedSeconds: 450,
-      });
-      expect(jobs).toHaveLength(4);
+      expect(ordinary.groups.filter((group) => group.includePatterns)).toEqual(
+        declared
+          .filter((shard) => shard.shardName.startsWith("core-unit-fast-"))
+          .map(({ checkName: _checkName, shardName, ...group }) =>
+            Object.assign({}, group, { shard_name: shardName }),
+          ),
+      );
+      // Keep the selected-file pair's 60-minute default when sharing with whole configs.
+      expect(ordinary.timeoutMinutes).toBe(60);
+      expect(ordinary.env).toBeUndefined();
+      expect(ordinary.predictedSeconds).toBe(540);
+      expect(jobs).toHaveLength(2);
     } finally {
       fullSuiteVitestShards.splice(0, fullSuiteVitestShards.length, ...original);
     }
@@ -560,7 +563,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         runnerBackend: "blacksmith",
         includeReleaseOnlyPluginShards: false,
       });
-      expect(jobs).toHaveLength(4);
+      expect(jobs).toHaveLength(3);
       const singleton = jobs.find((job) => job.groups.length === 1);
       expect(singleton).toMatchObject({
         runner: EXTRA_LARGE_NODE_TEST_RUNNER,
@@ -634,9 +637,9 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         "2",
       ]);
       expect(jobs.filter((job) => job !== gateway).map((job) => job.predictedSeconds)).toEqual([
-        440, 400,
+        668,
       ]);
-      expect(jobs).toHaveLength(3);
+      expect(jobs).toHaveLength(2);
     } finally {
       fullSuiteVitestShards.splice(0, fullSuiteVitestShards.length, ...original);
     }
@@ -685,6 +688,56 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       committedCompactPlans.set(key, snapshot);
     }
     return structuredClone(snapshot);
+  }
+
+  function createHybridPlanWithAdmissionProof(
+    options: NonNullable<Parameters<typeof createNodeTestShardBundles>[0]> & {
+      compactMode: "push" | "pull-request";
+      runnerBackend: "hybrid";
+    },
+  ) {
+    const rebalance = measuredPacking.rebalanceMeasuredHybridJobs;
+    let admission: CompactNodeTestShard[] | undefined;
+    const observer = vi
+      .spyOn(measuredPacking, "rebalanceMeasuredHybridJobs")
+      .mockImplementation((jobs, packingOptions) => {
+        admission = rebalance(jobs, { ...packingOptions, compactMode: undefined });
+        return rebalance(jobs, packingOptions);
+      });
+    try {
+      const after = createNodeTestShardBundles(options);
+      const before = expectDefined(admission, "measured packing admission");
+      expect(effectiveMeasuredGroups(after)).toEqual(effectiveMeasuredGroups(before));
+      for (const job of after) {
+        const previous = before.find((entry) => entry.checkName === job.checkName);
+        if (isDeepStrictEqual(job.groups, previous?.groups)) {
+          continue;
+        }
+        expect(job).toMatchObject({ planConcurrency: 1, requiresDist: false });
+        expect(job.pretestBuildMode).toBeUndefined();
+        expect(job.predictedSeconds).toBeLessThanOrEqual(
+          options.compactMode === "push" ? 720 : 600,
+        );
+        for (const group of job.groups) {
+          const owner = expectDefined(
+            before.find((entry) =>
+              entry.groups.some((child) => child.shard_name === group.shard_name),
+            ),
+            "original serial child owner",
+          );
+          expect(job.runner).toBe(owner.runner);
+          const nonWorkerEnv = (env: CompactNodeTestShard["env"]) =>
+            env?.OPENCLAW_VITEST_MAX_WORKERS === "2" && Object.keys(env).length === 1
+              ? undefined
+              : env;
+          expect(nonWorkerEnv(job.env)).toEqual(nonWorkerEnv(owner.env));
+          expect(job.timeoutMinutes ?? 60).toBeLessThanOrEqual(owner.timeoutMinutes ?? 60);
+        }
+      }
+      return before;
+    } finally {
+      observer.mockRestore();
+    }
   }
 
   beforeAll(() => {
@@ -753,226 +806,21 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     toolingTailJobs: CompactNodeTestShard[];
   };
 
-  function measuredToolingFixture(): CompactNodeTestShard[] {
-    return structuredClone(measuredCompactFixture.toolingJobs);
-  }
-
-  const measuredPackingOptions = {
-    runner: DEFAULT_NODE_TEST_RUNNER,
-    estimateGroup: () => ({ seconds: 0, complete: false }),
-    canShare: (groups: CompactNodeTestShard["groups"]) => {
-      const families = groups.map((group) => group.shard_name.replace(/-hosted-\d+$/u, ""));
-      return groups.length <= 10 && new Set(families).size === families.length;
-    },
-  };
-  const sortedMeasuredGroups = (jobs: CompactNodeTestShard[]) =>
-    jobs.flatMap((job) => job.groups).toSorted((a, b) => a.shard_name.localeCompare(b.shard_name));
-
-  it("packs the native-wall fixture into four while preserving every child and its supplied prices", () => {
-    const before = measuredToolingFixture();
-    const after = rebalanceMeasuredHybridJobs(before, measuredPackingOptions);
-    expect(after).toHaveLength(4);
-    expect(sortedMeasuredGroups(after)).toEqual(sortedMeasuredGroups(before));
-    expect(Math.max(...after.map((job) => job.predictedSeconds!))).toBeLessThanOrEqual(720);
-    expect(after.every((job) => job.predictedSeconds! > 360)).toBe(true);
-    expect(after.every((job) => job.planConcurrency === 1 && job.timeoutMinutes === 20)).toBe(true);
-    expect(after.every((job) => job.env?.OPENCLAW_VITEST_MAX_WORKERS === "2")).toBe(true);
-  });
-
-  it("splits the observed CLI pair with its measured wall floors and complete child contracts", () => {
-    const before = structuredClone(measuredCompactFixture.cliTailJob);
-    const after = rebalanceMeasuredHybridJobs([before], measuredPackingOptions);
-    expect(after).toHaveLength(2);
-    expect(after.flatMap((job) => job.groups)).toEqual(before.groups);
-    expect(new Set(after.map((job) => job.checkName)).size).toBe(2);
-    for (const [index, job] of after.entries()) {
-      expect(job).toMatchObject({
-        runner: before.runner,
-        planConcurrency: before.planConcurrency,
-        requiresDist: before.requiresDist,
-        timeoutMinutes: before.timeoutMinutes,
-      });
-      expect(job.env).toEqual(before.env);
-      expect(job.pretestBuildMode).toBeUndefined();
-      expect(job.predictedSeconds).toBeGreaterThanOrEqual(
-        measuredCompactFixture.cliChildJobWallSeconds[index]!,
-      );
-    }
-  });
-
-  it.each(measuredCompactFixture.toolingTailJobs)(
-    "splits observed tooling pair $shardName without transferring runtime preparation",
-    (fixture) => {
-      const before = structuredClone(fixture);
-      const after = rebalanceMeasuredHybridJobs([before], measuredPackingOptions);
-      expect(after).toHaveLength(2);
-      expect(after.flatMap((job) => job.groups)).toEqual(before.groups);
-      for (const [index, job] of after.entries()) {
-        expect(job).toMatchObject({
-          runner: before.runner,
-          planConcurrency: before.planConcurrency,
-          requiresDist: before.requiresDist,
-        });
-        expect(job.env).toEqual(before.env);
-        expect(job.timeoutMinutes).toBe(before.timeoutMinutes);
-        expect(job.pretestBuildMode).toBe(before.groups[index]!.pretestBuildMode);
-        expect(job.predictedSeconds).toBeGreaterThanOrEqual(before.predictedSeconds!);
-      }
-    },
-  );
-
-  it("expires a serial tail observation when the executed selectors change", () => {
-    const before = structuredClone(measuredCompactFixture.cliTailJob);
-    before.groups[0]!.includePatterns!.push("src/cli/unmeasured-fixture.test.ts");
-    const { timingKeys } = createCompactSplitTimingGeneration({
-      parentShardName: "agentic-cli-process",
-      configs: before.groups[0]!.configs,
-      env: before.groups[0]!.env,
-      stripes: before.groups.map((group) => group.includePatterns!),
-    });
-    before.groups.forEach((group, index) => {
-      group.timing_key = timingKeys[index]!;
-    });
-    expect(rebalanceMeasuredHybridJobs([before], measuredPackingOptions)).toEqual([before]);
-  });
-
-  it("retains observations when only a sibling's timing generation changes", () => {
-    const before = measuredToolingFixture();
-    const renamed = before.map((job) => ({
-      ...job,
-      groups: job.groups.map((group) => ({
-        ...group,
-        timing_key: `${group.timing_key ?? group.shard_name}#changed-sibling`,
-      })),
-    }));
-    const after = rebalanceMeasuredHybridJobs(renamed, measuredPackingOptions);
-    expect(after.map((job) => job.predictedSeconds)).toEqual(
-      rebalanceMeasuredHybridJobs(before, measuredPackingOptions).map(
-        (job) => job.predictedSeconds,
-      ),
-    );
-    expect(sortedMeasuredGroups(after)).toEqual(sortedMeasuredGroups(renamed));
-  });
-
-  it.each(["runner", "workers", "concurrency"] as const)(
-    "does not spend serial tooling observations after the %s contract changes",
-    (change) => {
-      const before = measuredToolingFixture();
-      if (change === "runner") {
-        before.forEach((job) => {
-          job.runner = EXTRA_LARGE_NODE_TEST_RUNNER;
-        });
-      } else if (change === "workers") {
-        before.forEach((job) => {
-          job.env = { OPENCLAW_VITEST_MAX_WORKERS: "1" };
-        });
-      } else if (change === "concurrency") {
-        before.forEach((job) => {
-          job.planConcurrency = 2;
-        });
-      }
-      expect(rebalanceMeasuredHybridJobs(before, measuredPackingOptions)).toEqual(before);
-    },
-  );
-
-  it("reprices changed selectors without spending their expired native observation", () => {
-    const observed = measuredToolingFixture().find((job) =>
-      job.groups.some((group) => group.shard_name === "core-tooling-7-hosted-1"),
-    )!;
-    const options = {
-      ...measuredPackingOptions,
-      estimateGroup: () => ({ seconds: 200, complete: true }),
-    };
-    expect(rebalanceMeasuredHybridJobs([observed], options)[0]!.predictedSeconds).toBe(336);
-    const changed = structuredClone(observed);
-    changed.groups[0]!.includePatterns!.push("test/scripts/unmeasured-fixture.test.ts");
-    const after = rebalanceMeasuredHybridJobs([changed], options);
-    expect(after[0]!.predictedSeconds).toBe(260);
-    expect(after[0]!.groups).toEqual(changed.groups);
-  });
-
-  it("keeps an observed short pair intact without discounting its canonical packing price", () => {
-    const before = measuredToolingFixture()[7]!;
-    const after = rebalanceMeasuredHybridJobs([before], {
-      ...measuredPackingOptions,
-      estimateGroup: (group) => ({
-        seconds: group.shard_name === "core-tooling-12-hosted-1" ? 218 : 351,
-        complete: true,
-      }),
-    });
-    expect(after).toHaveLength(1);
-    expect(after[0]!.groups).toEqual(before.groups);
-    expect(after[0]!.predictedSeconds).toBe(629);
-  });
-
-  it("splits newly expensive tooling pairs after their historical timing identities expire", () => {
-    const before = structuredClone(measuredCompactFixture.toolingTailJobs[1]!);
-    before.groups.forEach((group, index) => {
-      group.timing_key = `unmeasured-child-${index}`;
-      group.includePatterns!.push(`test/scripts/unmeasured-fixture-${index}.test.ts`);
-    });
-    const after = rebalanceMeasuredHybridJobs([before], {
-      ...measuredPackingOptions,
-      estimateGroup: () => ({ seconds: 320, complete: true }),
-    });
-    expect(after).toHaveLength(2);
-    expect(after.flatMap((job) => job.groups)).toEqual(before.groups);
-    expect(after.map((job) => job.predictedSeconds)).toEqual([380, 380]);
-  });
-
-  it("does not pack an unmeasured file using the canonical fallback as a wall observation", () => {
-    const before = measuredToolingFixture().slice(0, 2);
-    before.forEach((job, index) => {
-      job.groups[0]!.includePatterns!.push(`test/scripts/unmeasured-fixture-${index}.test.ts`);
-    });
-    const estimateGroup = () => ({ seconds: 80, complete: false });
-    const after = rebalanceMeasuredHybridJobs(before, { ...measuredPackingOptions, estimateGroup });
-    expect(after).toHaveLength(2);
-    expect(after.map((job) => job.groups)).toEqual(before.map((job) => job.groups));
-    expect(after.map((job) => job.predictedSeconds)).toEqual([266, 264]);
-    expect(
-      rebalanceMeasuredHybridJobs(before, {
-        ...measuredPackingOptions,
-        estimateGroup: () => ({ seconds: 80, complete: true }),
-      }),
-    ).toHaveLength(1);
-  });
-
-  it("preserves distinct job deadlines when considering measured tooling packing", () => {
-    const before = measuredToolingFixture();
-    before.forEach((job, index) => {
-      job.timeoutMinutes = 14 + index;
-    });
-    const after = rebalanceMeasuredHybridJobs(before, measuredPackingOptions);
-    expect(after).toHaveLength(before.length);
-    expect(after.map((job) => ({ groups: job.groups, timeout: job.timeoutMinutes }))).toEqual(
-      before.map((job) => ({ groups: job.groups, timeout: job.timeoutMinutes })),
-    );
-  });
-
-  it.each(["job", "file"] as const)(
-    "does not replace a higher %s price with a faster measured tooling wall",
-    (source) => {
-      const before = measuredToolingFixture();
-      if (source === "job") {
-        before[0]!.predictedSeconds = 900;
-      }
-      const after = rebalanceMeasuredHybridJobs(before, {
-        ...measuredPackingOptions,
-        estimateGroup: (group) => ({
-          seconds: source === "file" && group.shard_name === "core-tooling-1" ? 900 : 0,
-          complete: source === "file" && group.shard_name === "core-tooling-1",
+  const effectiveMeasuredGroups = (jobs: CompactNodeTestShard[]) =>
+    jobs
+      .flatMap((job) =>
+        job.groups.map((group) => {
+          const env = Object.assign({}, group.env);
+          const caps = [job.env?.OPENCLAW_VITEST_MAX_WORKERS, env.OPENCLAW_VITEST_MAX_WORKERS]
+            .filter((value): value is string => value !== undefined)
+            .map(Number);
+          if (caps.length > 0) {
+            env.OPENCLAW_VITEST_MAX_WORKERS = String(Math.min(...caps));
+          }
+          return Object.assign({}, group, { env: Object.keys(env).length ? env : undefined });
         }),
-      });
-      const expensive = expectDefined(
-        after.find((job) => job.checkName === before[0]!.checkName),
-        "expensive owner",
-      );
-      expect(expensive.groups).toEqual(before[0]!.groups);
-      expect(expensive.predictedSeconds).toBe(960);
-      expect(sortedMeasuredGroups(after)).toEqual(sortedMeasuredGroups(before));
-    },
-  );
+      )
+      .toSorted((a, b) => a.shard_name.localeCompare(b.shard_name));
 
   it("counts every placement stage against the compact cap", () => {
     const options = {
@@ -1228,6 +1076,12 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         readCompactGroupTimings: () => seconds,
         readRuntimePlacementTimings: () => [],
       }));
+      vi.doMock("../../scripts/lib/ci-measured-compact-packing.mts", async (importOriginal) => ({
+        ...(await importOriginal<
+          typeof import("../../scripts/lib/ci-measured-compact-packing.mts")
+        >()),
+        getMeasuredCompactGroupSeconds: () => undefined,
+      }));
       vi.doMock("../../scripts/lib/vitest-shard-metadata.mts", () => ({
         ...shardMetadata,
         estimateVitestTestFileSeconds: fileWeights,
@@ -1249,7 +1103,9 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           jobs.reduce((sum, job) => sum + (job.predictedSeconds ?? 0), 0);
         const baseline = createPlan(options);
         // The authentication fixture is indivisible; only the two models share work.
-        expect(predicted(baseline)).toBe(runnerBackend === "hybrid" ? 122 : 140);
+        expect(predicted(baseline)).toBe(
+          runnerBackend === "blacksmith" ? 237 : runnerBackend === "hybrid" ? 221 : 140,
+        );
         expect(
           baseline
             .flatMap((job) => job.groups)
@@ -1261,13 +1117,15 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         }
         // One model owns 75% of the serial work; two workers cannot halve it.
         fileWeights.mockImplementation((file) => (file === heavyModel ? 3 : 1));
-        expect(predicted(createPlan(options))).toBe(runnerBackend === "hybrid" ? 166 : 190);
+        expect(predicted(createPlan(options))).toBe(
+          runnerBackend === "blacksmith" ? 300 : runnerBackend === "hybrid" ? 276 : 190,
+        );
         fileWeights.mockReturnValue(1);
         seconds[`${models}-parallel`] = 200;
         const measured = createPlan(options);
         // Hosted splitting turns two concurrent 200s files into two 200s children.
         expect(predicted(measured)).toBe(
-          runnerBackend === "blacksmith" ? 240 : runnerBackend === "hybrid" ? 383 : 440,
+          runnerBackend === "blacksmith" ? 362 : runnerBackend === "hybrid" ? 504 : 440,
         );
         expect(
           measured
@@ -1296,7 +1154,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
             seconds[group.timing_key!] = index === 0 ? 180 : 190;
           });
           const childMeasured = createPlan(options);
-          expect(predicted(childMeasured)).toBe(runnerBackend === "hybrid" ? 357 : 410);
+          expect(predicted(childMeasured)).toBe(runnerBackend === "hybrid" ? 476 : 410);
           expect(
             childMeasured
               .flatMap((job) => job.groups)
@@ -1363,6 +1221,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         vi.doUnmock("../../scripts/lib/vitest-build-prerequisites.mts");
         vi.doUnmock("../../scripts/lib/vitest-shard-metadata.mts");
         vi.doUnmock("../../scripts/lib/ci-test-timings.mts");
+        vi.doUnmock("../../scripts/lib/ci-measured-compact-packing.mts");
         vi.doUnmock("../../scripts/lib/list-test-files.mts");
         vi.doUnmock("../vitest/vitest.test-shards.mjs");
         vi.doUnmock("../vitest/vitest.unit-fast-paths.mjs");
@@ -1540,13 +1399,24 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
   );
 
   it.each([
-    { profile: "blacksmith", owner: "auto-reply-reply-state-routing", fallback: 60, measured: 99 },
-    { profile: "hybrid", owner: "auto-reply-reply-state-routing", fallback: 52, measured: 86 },
+    {
+      profile: "blacksmith",
+      owner: "auto-reply-reply-state-routing",
+      fallback: 187,
+      measured: 236,
+    },
+    { profile: "hybrid", owner: "auto-reply-reply-state-routing", fallback: 177, measured: 220 },
     { profile: "github", owner: "auto-reply-reply-state-routing", fallback: 60, measured: 99 },
-    { profile: "blacksmith", owner: "auto-reply-reply-dispatch-core", fallback: 120, measured: 99 },
+    {
+      profile: "blacksmith",
+      owner: "auto-reply-reply-dispatch-core",
+      fallback: 262,
+      measured: 236,
+    },
   ])(
     "prices $owner on $profile at two workers without discounting new measurements",
     ({ profile, owner, fallback, measured }) => {
+      vi.spyOn(measuredPacking, "getMeasuredCompactGroupSeconds").mockReturnValue(undefined);
       const original = fullSuiteVitestShards.slice();
       const config = "test/vitest/vitest.auto-reply-reply.config.ts";
       fullSuiteVitestShards.splice(
@@ -1602,7 +1472,10 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           for (const scenario of [
             { observations: { [legacy.timingKeys[0]!]: 240 }, expected: fallback },
             { observations: { [mismatched.timingKeys[0]!]: 240 }, expected: fallback },
-            { observations: complete, expected: profile === "hybrid" ? 104 : 120 },
+            {
+              observations: complete,
+              expected: profile === "blacksmith" ? 262 : profile === "hybrid" ? 242 : 120,
+            },
           ]) {
             Object.assign(timings, scenario.observations);
             const plan = createNodeTestShardBundles(options);
@@ -2394,6 +2267,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
   ])(
     "prefers $profile measurements while retaining unmeasured hints and defaults",
     ({ profile, legacy, measured, defaultSeconds }) => {
+      vi.spyOn(measuredPacking, "getMeasuredCompactGroupSeconds").mockReturnValue(undefined);
       const timings = vi.spyOn(testTimings, "readCompactGroupTimings").mockReturnValue({});
       const options = {
         includeReleaseOnlyPluginShards: false,
@@ -2457,7 +2331,9 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         expect(packed[0]?.runner).toBe(
           profile === "github" ? base[0]?.runner : EXTRA_LARGE_NODE_TEST_RUNNER,
         );
-        expect(packed[0]?.predictedSeconds).toBe(profile === "hybrid" ? 296 : groupSeconds * 2);
+        expect(packed[0]?.predictedSeconds).toBe(
+          profile === "blacksmith" ? 325 : profile === "hybrid" ? 297 : groupSeconds * 2,
+        );
       } finally {
         fullSuiteVitestShards.splice(0, fullSuiteVitestShards.length, ...originalShards);
       }
@@ -2478,7 +2354,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           runner: EXTRA_LARGE_NODE_TEST_RUNNER,
         });
         expect(shard.pretestBuildMode).toBeUndefined();
-        expect(shard.predictedSeconds).toBeLessThanOrEqual(500);
+        expect(shard.predictedSeconds).toBeLessThanOrEqual(600);
       }
     },
   );
@@ -2514,9 +2390,9 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     const options = {
       includeReleaseOnlyPluginShards: false,
       compactMode: "push" as const,
-      runnerBackend: "hybrid",
+      runnerBackend: "hybrid" as const,
     };
-    const fallback = createNodeTestShardBundles(options);
+    const fallback = createHybridPlanWithAdmissionProof(options);
     const commandRuntimeJobs = fallback.filter((job) =>
       job.groups.some((group) => group.shard_name === "agentic-commands-runtime"),
     );
@@ -2563,7 +2439,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         .every(
           (shard) =>
             (shard.predictedSeconds ?? Infinity) <=
-            (usesParallelPacking(shard) ? 500 : isCombinedUnbuiltCliJob(shard) ? 250 : 210),
+            (usesParallelPacking(shard) ? 720 : isCombinedUnbuiltCliJob(shard) ? 250 : 210),
         ),
     ).toBe(true);
     // Slow process files retain singleton envelopes without inheriting the
@@ -2626,12 +2502,12 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           }
         : {},
     );
-    const updated = createNodeTestShardBundles(options);
+    const updated = createHybridPlanWithAdmissionProof(options);
     const tail = updated.find((shard) =>
       shard.groups.some((group) => group.shard_name === "agentic-gateway-core-3"),
     );
     expect(tail?.predictedSeconds).toBeGreaterThanOrEqual(140);
-    expect(tail?.predictedSeconds).toBeLessThanOrEqual(usesParallelPacking(tail) ? 500 : 210);
+    expect(tail?.predictedSeconds).toBeLessThanOrEqual(usesParallelPacking(tail) ? 720 : 210);
   });
 
   it("preserves unmeasured Gateway stripes when another cohort's measurement changes", async () => {
@@ -2905,10 +2781,10 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     const options = {
       includeReleaseOnlyPluginShards: false,
       compactMode: "pull-request" as const,
-      runnerBackend: "hybrid",
+      runnerBackend: "hybrid" as const,
     };
     try {
-      const plan = createNodeTestShardBundles(options);
+      const plan = createHybridPlanWithAdmissionProof(options);
       const combined = plan.filter(isCombinedUnbuiltCliJob);
       expect(combined).toHaveLength(2);
       const cliJobs = plan.filter((job) =>
@@ -2949,7 +2825,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       expect(new Set(processKeys).size).toBe(processKeys.length);
       // Each child still fits its 150s limit, but two no longer fit a 250s bin.
       timings.mockReturnValue(Object.fromEntries(processKeys.map((key) => [key, 160])));
-      const overBudget = createNodeTestShardBundles(options);
+      const overBudget = createHybridPlanWithAdmissionProof(options);
       expect(
         overBudget.every(
           (job) =>
@@ -2961,7 +2837,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         "agentic-cli": 3,
         ...Object.fromEntries(processKeys.map((key) => [key, 200])),
       });
-      const oversized = createNodeTestShardBundles(options).filter((job) =>
+      const oversized = createHybridPlanWithAdmissionProof(options).filter((job) =>
         job.groups.some((group) => processKeys.includes(group.timing_key ?? "")),
       );
       expect(oversized).toHaveLength(processKeys.length);
@@ -2989,7 +2865,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         "agentic-cli-process": profile === "github" ? 200 : 120,
         "core-tooling-isolated": 20,
       }));
-      const cheaper = createNodeTestShardBundles(options);
+      const cheaper = createHybridPlanWithAdmissionProof(options);
       const cliJob = cheaper.find((job) =>
         job.groups.some((group) =>
           group.configs.includes("test/vitest/vitest.cli-process.config.ts"),
@@ -3019,12 +2895,20 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     const pullRequestCompact = getCommittedCompactPlan("pull-request");
     const githubCompact = getCommittedCompactPlan("push", "github");
     const githubPullRequestCompact = getCommittedCompactPlan("pull-request", "github");
-    const hybridCompact = getCommittedCompactPlan("push", "hybrid");
-    const hybridPullRequestCompact = getCommittedCompactPlan("pull-request", "hybrid");
+    const hybridCompact = createHybridPlanWithAdmissionProof({
+      includeReleaseOnlyPluginShards: false,
+      compactMode: "push",
+      runnerBackend: "hybrid",
+    });
+    const hybridPullRequestCompact = createHybridPlanWithAdmissionProof({
+      includeReleaseOnlyPluginShards: false,
+      compactMode: "pull-request",
+      runnerBackend: "hybrid",
+    });
     const placementTimings = vi
       .spyOn(testTimings, "readRuntimePlacementTimings")
       .mockReturnValue([]);
-    const hybridBeforePlacement = createNodeTestShardBundles({
+    const hybridBeforePlacement = createHybridPlanWithAdmissionProof({
       includeReleaseOnlyPluginShards: false,
       compactMode: "pull-request",
       runnerBackend: "hybrid",
@@ -3380,7 +3264,22 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         expect(placements.length, owner).toBeGreaterThan(0);
         return placements;
       });
-      expect(new Set(jobs).size).toBe(jobs.length);
+      for (const index of new Set(jobs)) {
+        if (jobs.filter((candidate) => candidate === index).length < 2) {
+          continue;
+        }
+        const shared = expectDefined(compact[index], "co-located parallel stripes");
+        expect(shared).toMatchObject({
+          planConcurrency: 2,
+          runner: EXTRA_LARGE_NODE_TEST_RUNNER,
+          requiresDist: false,
+        });
+        expect(shared.pretestBuildMode).toBeUndefined();
+        expect(shared.predictedSeconds).toBeLessThanOrEqual(720);
+        expect(shared.groups.some((group) => group.configs.some(isExclusiveCiTestConfig))).toBe(
+          false,
+        );
+      }
     }
     // Cheap stripes may legally co-locate in one bin; only existence matters.
     for (const owner of ["core-unit-fast-1", "core-unit-fast-2"]) {
@@ -3620,6 +3519,18 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           const job = plan[jobIndex]!;
           const siblings = groups.filter((group) => job.groups.includes(group));
           if (siblings.length === 1) {
+            continue;
+          }
+          if (job.planConcurrency === 2) {
+            expect(job).toMatchObject({
+              runner: EXTRA_LARGE_NODE_TEST_RUNNER,
+              requiresDist: false,
+            });
+            expect(job.pretestBuildMode).toBeUndefined();
+            expect(job.predictedSeconds).toBeLessThanOrEqual(retainsProofTests ? 720 : 600);
+            expect(job.groups.some((group) => group.configs.some(isExclusiveCiTestConfig))).toBe(
+              false,
+            );
             continue;
           }
           expect(job).toMatchObject({ planConcurrency: 1, requiresDist: false });
@@ -3891,11 +3802,11 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(embeddedBaseFiles.toSorted((a, b) => a.localeCompare(b))).toEqual(
       embeddedBaseOwnerFiles.toSorted((a, b) => a.localeCompare(b)),
     );
-    expect(
-      compact
-        .filter((shard) => shard.groups.some((group) => !group.includePatterns))
-        .every((shard) => shard.timeoutMinutes === 120),
-    ).toBe(true);
+    for (const shard of compact.filter((job) =>
+      job.groups.some((group) => !group.includePatterns),
+    )) {
+      expect([60, 120]).toContain(shard.timeoutMinutes ?? 60);
+    }
     // Whole-config groups now pack into the same runtime-balanced bins as
     // include-pattern groups; the separate "-whole-" job class is gone.
     expect(compact.some((shard) => shard.checkName.includes("-whole-"))).toBe(false);
@@ -4808,7 +4719,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       ).toBe(true);
       // Preserve the worker/longest-file price independently of hybrid's
       // separately quoted, once-per-job setup allowance.
-      const setupSeconds = profile === "hybrid" ? 60 : 0;
+      const setupSeconds = profile === "hybrid" ? 110 : 0;
       expect(plan.reduce((seconds, job) => seconds + job.predictedSeconds! - setupSeconds, 0)).toBe(
         expectedSeconds,
       );
@@ -5641,6 +5552,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
   it.each(["blacksmith", "github", "hybrid"])(
     "prices parallel cron from serial work until %s has direct measurements",
     (runnerBackend) => {
+      vi.spyOn(measuredPacking, "getMeasuredCompactGroupSeconds").mockReturnValue(undefined);
       const original = fullSuiteVitestShards.slice();
       try {
         const cron = "test/vitest/vitest.cron.config.ts";
@@ -5660,7 +5572,9 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         const baseline = createNodeTestShardBundles(options);
         const totalSeconds = (plan: typeof baseline) =>
           plan.reduce((total, job) => total + job.predictedSeconds!, 0);
-        expect(totalSeconds(baseline)).toBe(runnerBackend === "hybrid" ? 122 : 140);
+        expect(totalSeconds(baseline)).toBe(
+          runnerBackend === "blacksmith" ? 202 : runnerBackend === "hybrid" ? 228 : 140,
+        );
         expect(baseline.flatMap((job) => job.groups)).toHaveLength(3);
         timings.mockReturnValue({
           "core-runtime-cron-core": 400,
@@ -5671,7 +5585,9 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           "core-runtime-cron-parallel-service": 80,
         });
         const measured = createNodeTestShardBundles(options);
-        expect(totalSeconds(measured)).toBe(runnerBackend === "hybrid" ? 139 : 160);
+        expect(totalSeconds(measured)).toBe(
+          runnerBackend === "blacksmith" ? 214 : runnerBackend === "hybrid" ? 247 : 160,
+        );
         const groups = measured.flatMap((job) => job.groups);
         expect(groups).toHaveLength(3);
         expect(groups.every((group) => group.env === undefined)).toBe(true);
@@ -6360,8 +6276,14 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       const changedOptions = { ...options, changedPaths: STORE_ALIAS_CHANGED_PATHS };
       // Each input has its own admission before runtime placement materializes caps.
       const observations = vi.spyOn(testTimings, "readRuntimePlacementTimings").mockReturnValue([]);
-      const beforeAdmission = createNodeTestShardBundles(options);
-      const afterAdmission = createNodeTestShardBundles(changedOptions);
+      const beforeAdmission =
+        runnerBackend === "hybrid"
+          ? createHybridPlanWithAdmissionProof({ ...options, runnerBackend })
+          : createNodeTestShardBundles(options);
+      const afterAdmission =
+        runnerBackend === "hybrid"
+          ? createHybridPlanWithAdmissionProof({ ...changedOptions, runnerBackend })
+          : createNodeTestShardBundles(changedOptions);
       observations.mockRestore();
       const before = getCommittedCompactPlan(options.compactMode, runnerBackend);
       const after = createNodeTestShardBundles(changedOptions);
@@ -6471,12 +6393,15 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       const inheritedGroupsFor = (admission: typeof before) => {
         const inherited = new Map(
           admission.flatMap((job) =>
-            job.planConcurrency === 2
+            job.planConcurrency === 2 ||
+            (job.planConcurrency === 1 &&
+              job.env?.OPENCLAW_VITEST_MAX_WORKERS === "2" &&
+              Object.keys(job.env).length === 1)
               ? job.groups
                   .filter(
                     (group) =>
                       group.env?.OPENCLAW_VITEST_MAX_WORKERS === undefined &&
-                      group.fallbackMaxWorkers === undefined,
+                      (job.planConcurrency === 1 || group.fallbackMaxWorkers === undefined),
                   )
                   .map((group): [string, Group] => [group.shard_name, group])
               : [],
@@ -6694,7 +6619,8 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       expectTimingFamilies(after, afterInherited);
       expect(policies(after, afterInherited)).toEqual(policies(before, beforeInherited));
       if (runnerBackend === "hybrid") {
-        const serial = structuredClone(before);
+        const serial = structuredClone(beforeAdmission);
+        const serialPolicies = policies(serial, beforeInherited);
         const serialGroup = expectDefined(
           serial
             .filter(
@@ -6705,9 +6631,10 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           "already-serial group using its job worker cap",
         );
         serialGroup.env = { ...serialGroup.env, OPENCLAW_VITEST_MAX_WORKERS: "2" };
-        expect(() =>
-          expect(policies(serial, beforeInherited)).toEqual(policies(before, beforeInherited)),
-        ).toThrow();
+        expect(policies(serial, beforeInherited)).toEqual(serialPolicies);
+        expectTimingFamilies(serial, beforeInherited);
+        serialGroup.env.OPENCLAW_VITEST_MAX_WORKERS = "1";
+        expect(() => expect(policies(serial, beforeInherited)).toEqual(serialPolicies)).toThrow();
         const promoted = structuredClone(before);
         const recipient = expectDefined(
           promoted.find(
@@ -6888,6 +6815,9 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
                 shard.runner === EXTRA_LARGE_NODE_TEST_RUNNER)),
         ),
       ).toBe(true);
+      for (const shard of after.filter((job) => job.groups.length > 10)) {
+        expect(shard.predictedSeconds).toBeLessThanOrEqual(600);
+      }
       expect(after.length).toBeLessThanOrEqual(90);
     },
   );

@@ -18,6 +18,57 @@ const workerConfig = "test/vitest/vitest.extension-database-workers.config.ts";
 afterEach(() => vi.restoreAllMocks());
 
 describe("extension executable test plans", () => {
+  it("retains native process costs only for the measured complete ordered selector", () => {
+    const files = [
+      "extensions/matrix/src/matrix/delivery-plan.test.ts",
+      "extensions/matrix/src/matrix/monitor/handler.active-turn-steering.test.ts",
+      "extensions/matrix/src/matrix/monitor/handler.binding-route.test.ts",
+      "extensions/matrix/src/matrix/monitor/inbound-dedupe.test.ts",
+      "extensions/matrix/src/matrix/monitor/index.credentials.test.ts",
+      "extensions/matrix/src/matrix/monitor/startup-verification.test.ts",
+      "extensions/matrix/src/matrix/sdk.test.ts",
+      "extensions/matrix/src/matrix/sdk/idb-persistence.test.ts",
+      "extensions/matrix/src/matrix/sdk/recovery-key-store.test.ts",
+      "extensions/matrix/src/matrix/send.authority.integration.test.ts",
+      "extensions/matrix/src/matrix/send.test.ts",
+      "extensions/matrix/src/matrix/thread-bindings.test.ts",
+    ];
+    // Run 35826932121 measured 436.610 seconds for this complete child process.
+    expect(
+      extensionTestPlan.estimateExtensionTestCost(workerConfig, files.length, files),
+    ).toBeGreaterThanOrEqual(483);
+    const unmeasured = extensionTestPlan.estimateExtensionTestCost(workerConfig, files.length);
+    expect(
+      extensionTestPlan.estimateExtensionTestCost(workerConfig, files.length, files.toReversed()),
+    ).toBe(unmeasured);
+    expect(
+      extensionTestPlan.estimateExtensionTestCost(
+        workerConfig,
+        files.length,
+        files.with(0, "extensions/matrix/src/matrix/new-owner.test.ts"),
+      ),
+    ).toBe(unmeasured);
+    expect(extensionTestPlan.estimateExtensionTestCost(workerConfig, files.length + 1, files)).toBe(
+      extensionTestPlan.estimateExtensionTestCost(workerConfig, files.length + 1),
+    );
+    expect(extensionTestPlan.estimateExtensionTestCost(telegramConfig, files.length, files)).toBe(
+      extensionTestPlan.estimateExtensionTestCost(telegramConfig, files.length),
+    );
+  });
+
+  it.each([
+    { name: "msteams", files: 97, nativeSeconds: 145.762 },
+    { name: "media", files: 27, nativeSeconds: 124.988 },
+    { name: "irc", files: 20, nativeSeconds: 90.347 },
+  ])("prices the complete $name process with native headroom", ({ name, files, nativeSeconds }) => {
+    expect(
+      extensionTestPlan.estimateExtensionTestCost(
+        `test/vitest/vitest.extension-${name}.config.ts`,
+        files,
+      ),
+    ).toBeGreaterThanOrEqual(Math.ceil(nativeSeconds * 1.1 + 2));
+  });
+
   it.each([
     { name: "matrix", limit: 40, workerLimit: 40 },
     { name: "codex", limit: 24, workerLimit: 12 },

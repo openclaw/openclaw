@@ -122,7 +122,7 @@ describe("compact node prerequisite admission", () => {
     ]);
     const jobs = plan();
     expect(jobs).toHaveLength(2);
-    expect(jobs.map((job) => job.predictedSeconds).toSorted((a, b) => a! - b!)).toEqual([220, 270]);
+    expect(jobs.map((job) => job.predictedSeconds).toSorted((a, b) => a! - b!)).toEqual([220, 300]);
     const runtime = jobs.find((job) => job.pretestBuildMode === "runtime");
     expect(runtime?.groups.map((group) => group.shard_name).toSorted()).toEqual([
       "runtime-a",
@@ -148,7 +148,7 @@ describe("compact node prerequisite admission", () => {
       if (jobs.length === 1) {
         expect(jobs[0]).toMatchObject({
           planConcurrency: 2,
-          predictedSeconds: profile === "hybrid" ? 261 : 300,
+          predictedSeconds: profile === "hybrid" ? 309 : 337,
           runner: "blacksmith-32vcpu-ubuntu-2404",
         });
         expect(jobs[0]?.pretestBuildMode).toBeUndefined();
@@ -180,7 +180,12 @@ it("keeps admitted caps when runtime sharing competes with test balancing", () =
   ]);
   const jobs = plan();
   expect(jobs).toHaveLength(2);
-  expect(jobs.every((job) => job.predictedSeconds! <= 276)).toBe(true);
+  const runtime = jobs.find((job) => job.pretestBuildMode === "runtime");
+  expect(runtime).toMatchObject({ planConcurrency: 1, predictedSeconds: 270 });
+  expect(runtime?.predictedSeconds).toBeLessThanOrEqual(276);
+  const ordinary = jobs.find((job) => job.pretestBuildMode === undefined);
+  expect(ordinary).toMatchObject({ planConcurrency: 2, predictedSeconds: 300 });
+  expect(ordinary?.predictedSeconds).toBeLessThanOrEqual(600);
   expect(jobs.flatMap((job) => job.groups.map((group) => group.shard_name)).toSorted()).toEqual([
     "plain-a",
     "plain-b",

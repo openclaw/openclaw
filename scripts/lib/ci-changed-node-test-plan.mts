@@ -105,7 +105,7 @@ const MAX_CHANGED_NODE_TEST_TARGETS = 96;
 const CHANGED_NODE_TEST_TARGETS_PER_JOB = 12;
 // Share the 45–60s runner setup across more unchanged serial envelopes.
 // Runtime preparation and native-worker file ceilings remain separate admission limits.
-const CHANGED_EXTENSION_JOB_SECONDS = 300;
+const CHANGED_EXTENSION_JOB_SECONDS = 500;
 const MAX_CHANGED_EXTENSION_FALLBACK_JOBS = 50;
 // Memory Core targets perform real SQLite/indexing work. Two concurrent Vitest
 // processes starve each other on 4-vCPU runners and push otherwise healthy
@@ -703,6 +703,9 @@ export function createChangedNodeTestShards(
         file === "config/ci-test-timings.json" ||
         file === "scripts/lib/ci-node-test-plan.mts" ||
         file === "scripts/lib/ci-measured-compact-packing.mts" ||
+        file === "scripts/lib/ci-measured-serial-timings.mts" ||
+        file === "scripts/lib/ci-measured-parallel-timings.mts" ||
+        file === "test/scripts/ci-measured-compact-packing.test.ts" ||
         file === "scripts/lib/ci-test-timings.mts" ||
         file === "scripts/lib/vitest-shard-metadata.mts" ||
         file === "test/scripts/ci-node-test-plan.test.ts",

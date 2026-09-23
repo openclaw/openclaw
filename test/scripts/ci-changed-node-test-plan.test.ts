@@ -597,7 +597,7 @@ describe("CI changed Node test plan", () => {
         "src/agents/embedded-agent-runner/run.incomplete-turn.classification.test.ts",
         "src/agents/embedded-agent-runner/run.overflow-compaction.test.ts",
       ];
-      // Precise plans inherit templates before whole-plan runtime relocation.
+      // Precise plans inherit templates before whole-plan runtime placement.
       const placement = vi.spyOn(testTimings, "readRuntimePlacementTimings").mockReturnValue([]);
       let full: CompactNodeTestShard[];
       try {
@@ -1427,9 +1427,14 @@ describe("CI changed Node test plan", () => {
       changedPath: "scripts/lib/ci-measured-compact-packing.mts",
       runnerBackend,
     })),
-    ...["scripts/lib/ci-test-timings.mts", "scripts/lib/vitest-shard-metadata.mts"].flatMap(
-      (changedPath) =>
-        ["blacksmith", "hybrid", "runson"].map((runnerBackend) => ({ changedPath, runnerBackend })),
+    ...[
+      "scripts/lib/ci-test-timings.mts",
+      "scripts/lib/vitest-shard-metadata.mts",
+      "scripts/lib/ci-measured-serial-timings.mts",
+      "scripts/lib/ci-measured-parallel-timings.mts",
+      "test/scripts/ci-measured-compact-packing.test.ts",
+    ].flatMap((changedPath) =>
+      ["blacksmith", "hybrid", "runson"].map((runnerBackend) => ({ changedPath, runnerBackend })),
     ),
   ])(
     "keeps $changedPath under the $runnerBackend full-plan policy",
@@ -1439,7 +1444,7 @@ describe("CI changed Node test plan", () => {
         expect(shards).not.toBeNull();
         expect(
           fallbackGroups(shards ?? []).flatMap((group) => group.includePatterns ?? []),
-        ).toContain("test/scripts/ci-node-test-plan.test.ts");
+        ).toContain("test/scripts/ci-measured-compact-packing.test.ts");
       } else {
         expect(shards).toBeNull();
       }
@@ -1722,7 +1727,7 @@ describe("CI changed Node test plan", () => {
     expect(bundles.length).toBeGreaterThan(0);
     for (const bundle of bundles) {
       expect(bundle.groups!.length).toBeGreaterThan(1);
-      expect(bundle.predictedSeconds).toBeLessThanOrEqual(300);
+      expect(bundle.predictedSeconds).toBeLessThanOrEqual(500);
       expect(bundle.configs).toEqual([]);
       expect(bundle.pretestBuildMode).toBeUndefined();
       expect(bundle.groups!.every((group) => !group.pretestBuildMode)).toBe(true);
@@ -1743,7 +1748,7 @@ describe("CI changed Node test plan", () => {
           !other.pretestBuildMode &&
           shard.runner === other.runner &&
           shard.requiresDist === other.requiresDist &&
-          shard.predictedSeconds! + other.predictedSeconds! <= 300 &&
+          shard.predictedSeconds! + other.predictedSeconds! <= 500 &&
           combinedWorkerFiles.length <= 20;
         expect(canShareJob, `${shard.shardName} and ${other.shardName} fit one job`).toBe(false);
       }
@@ -1813,7 +1818,7 @@ describe("CI changed Node test plan", () => {
             .filter((group) => group.configs.includes(workerConfig))
             .flatMap((group) => group.includePatterns ?? []);
           expect(workerFiles.length).toBeLessThanOrEqual(20);
-          if (job.predictedSeconds! > 300 || job.pretestBuildMode) {
+          if (job.predictedSeconds! > 500 || job.pretestBuildMode) {
             expect(fallbackGroups([job])).toHaveLength(1);
           }
         }
@@ -1823,8 +1828,8 @@ describe("CI changed Node test plan", () => {
     },
   );
 
-  it.each([60, 61])("exchanges extension groups within the 300-second budget, tail %s", (tail) => {
-    const costs = [180, 150, 90, tail, 120];
+  it.each([100, 101])("packs extension groups at the 500-second boundary, tail %s", (tail) => {
+    const costs = [310, 250, 150, tail, 190];
     const ids = costs.map((_, index) => `packing-fixture-${index}`);
     const configs = ids.map((id) => `test/vitest/vitest.${id}.config.ts`);
     const files = ids.map((id) => `extensions/${id}/index.test.ts`);
@@ -1847,9 +1852,9 @@ describe("CI changed Node test plan", () => {
         "scripts/lib/ci-changed-node-test-plan.mts",
       ]);
       const groups = fallbackGroups(shards);
-      // First-fit strands a third row for 180, 150, 90, 60, 60, 60.
+      // First-fit strands a third row for 310, 250, 150, 100, 95, 95.
       // One extra second makes two rows impossible without exceeding the budget.
-      expect(shards).toHaveLength(tail === 60 ? 2 : 3);
+      expect(shards).toHaveLength(tail === 100 ? 2 : 3);
       expect(groups).toHaveLength(6);
       expect(
         groups
@@ -1869,7 +1874,7 @@ describe("CI changed Node test plan", () => {
       expect(groups.every((group) => !group.includePatterns && !group.pretestBuildMode)).toBe(true);
       expect(new Set(groups.map((group) => group.shard_name)).size).toBe(6);
       expect(shards.every((shard) => shard.planConcurrency === 1)).toBe(true);
-      expect(shards.every((shard) => shard.predictedSeconds! <= 300)).toBe(true);
+      expect(shards.every((shard) => shard.predictedSeconds! <= 500)).toBe(true);
       expect(shards.reduce((seconds, shard) => seconds + shard.predictedSeconds!, 0)).toBe(
         costs.reduce((sum, cost) => sum + cost, 0),
       );
@@ -2029,7 +2034,7 @@ describe("CI changed Node test plan", () => {
 
       expect(shards.length).toBeLessThan(groups.length);
       expect(shards.every((shard) => shard.planConcurrency === 1)).toBe(true);
-      expect(shards.every((shard) => shard.predictedSeconds! <= 300)).toBe(true);
+      expect(shards.every((shard) => shard.predictedSeconds! <= 500)).toBe(true);
       expect(
         groups.every(
           (group) =>
@@ -2360,8 +2365,11 @@ describe("CI changed Node test plan", () => {
     expect(shards).not.toBeNull();
     expect(hasControlUiPerformanceAffectingChange([paths[2]!])).toBe(true);
     const full = createNodeTestShardBundles({
+      changedPaths: paths,
       compactMode: "pull-request",
       runnerBackend: "hybrid",
+      includeReleaseOnlyPluginShards: false,
+      includeReleaseOnlyToolingShards: true,
       includeReleaseOnlyRuntimeTests: false,
     });
     const uiOwners = full.filter((shard) =>

@@ -23,6 +23,12 @@ const QA_STREAMING_TOOL_PROGRESS_FAMILY_PROMPT_RE =
   /(?:partial|quiet) streaming qa check|final-only marker streaming qa check|block streaming qa check|tool progress(?: error)? qa check/i;
 const QA_STREAMING_TOOL_PROGRESS_CONTINUATION_RE =
   /^Continue with (?:the current Matrix QA scenario|the QA scenario plan and report worked, failed, and blocked items)\.$/i;
+const QA_TIMESTAMPED_MESSAGE_PREFIX_RE =
+  /^\[[A-Z][a-z]{2} \d{4}-\d{2}-\d{2} \d{2}:\d{2}(?::\d{2})?(?: [^\]\r\n]+)?\]\s*/u;
+
+export function stripMockMessageTimestamp(text: string): string {
+  return text.replace(QA_TIMESTAMPED_MESSAGE_PREFIX_RE, "");
+}
 
 function isStreamingToolProgressContinuationText(text: string) {
   const trimmed = text.trim();
@@ -146,7 +152,9 @@ export function resolveMockSubagentTurn(input: ResponsesInputItem[]):
     if (item.role !== "user") {
       continue;
     }
-    const current = splitMockConversationContext(extractInputText(item.content)).current.trim();
+    const current = stripMockMessageTimestamp(
+      splitMockConversationContext(extractInputText(item.content)).current.trim(),
+    );
     const event = extractCurrentTaskEvent(current);
     if (event) {
       return {

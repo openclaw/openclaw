@@ -1,7 +1,8 @@
 import os from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveShardPlans, runShardPlans } from "../../scripts/ci-run-node-test-shard.mts";
-import { estimateCommandWorkerSeconds } from "../../scripts/lib/ci-command-test-plan.mts";
+import * as commandTestPlan from "../../scripts/lib/ci-command-test-plan.mts";
+import * as measuredCompactPacking from "../../scripts/lib/ci-measured-compact-packing.mts";
 import {
   createNodeTestShardBundles,
   createNodeTestShards,
@@ -24,11 +25,53 @@ describe("command CI ownership and parallel timing", () => {
   it.each(["hybrid", "blacksmith", "github"])(
     "delivers each %s command row's allocation through the shard executor",
     async (runnerBackend) => {
+      let retainedAllocationPrices = 0;
+      if (runnerBackend === "hybrid") {
+        const withoutEightWorkerSamples = (profile: "blacksmith" | "github") =>
+          Object.fromEntries(
+            Object.entries(testTimings.readCompactGroupTimings(profile)).filter(
+              ([key]) => !key.includes("#file-parallel-8"),
+            ),
+          );
+        const timings = {
+          blacksmith: withoutEightWorkerSamples("blacksmith"),
+          github: withoutEightWorkerSamples("github"),
+        };
+        vi.spyOn(testTimings, "readCompactGroupTimings").mockImplementation(
+          (profile) => timings[profile],
+        );
+        const repricing = vi.spyOn(commandTestPlan, "estimateCommandWorkerSeconds");
+        const rebalance = measuredCompactPacking.rebalanceMeasuredHybridJobs;
+        vi.spyOn(measuredCompactPacking, "rebalanceMeasuredHybridJobs").mockImplementation(
+          (jobs, options) => {
+            const groups = jobs.flatMap((job) => job.groups);
+            for (const result of repricing.mock.results) {
+              if (
+                result.type !== "return" ||
+                !result.value.timingKey?.includes("#file-parallel-8") ||
+                !parseCompactSplitTimingKey(result.value.timingKey)
+              ) {
+                continue;
+              }
+              const group = groups.find((entry) => entry.timing_key === result.value.timingKey);
+              expect(group).toBeDefined();
+              expect(options.estimateSerialGroup?.(group!), group!.shard_name).toBe(
+                result.value.seconds,
+              );
+              retainedAllocationPrices += 1;
+            }
+            return rebalance(jobs, options);
+          },
+        );
+      }
       const plan = createNodeTestShardBundles({
         compactMode: "pull-request",
         runnerBackend,
         includeReleaseOnlyPluginShards: false,
       });
+      if (runnerBackend === "hybrid") {
+        expect(retainedAllocationPrices).toBeGreaterThan(0);
+      }
       let measuredGroups = 0;
       let fallbackGroups = 0;
       for (const job of plan) {
@@ -69,9 +112,13 @@ describe("command CI ownership and parallel timing", () => {
           }),
         ).resolves.toBe(0);
         for (const group of commands) {
-          expect(seen.get(group.shard_name), group.shard_name).toBe(String(expected));
-          expect(group.timing_key).toContain(`#file-parallel-${expected}`);
-          if (expected === 8) {
+          const childWorkers = Math.min(
+            expected,
+            Number(group.env?.OPENCLAW_VITEST_MAX_WORKERS ?? expected),
+          );
+          expect(seen.get(group.shard_name), group.shard_name).toBe(String(childWorkers));
+          expect(group.timing_key).toContain(`#file-parallel-${childWorkers}`);
+          if (childWorkers === 8) {
             measuredGroups += 1;
           } else {
             fallbackGroups += 1;
@@ -93,12 +140,12 @@ describe("command CI ownership and parallel timing", () => {
       timing_key: "fixture#file-parallel-2",
     };
     const observations = vi.spyOn(testTimings, "readCompactGroupTimings").mockReturnValue({});
-    expect(estimateCommandWorkerSeconds(group, 120, 8, "blacksmith")).toEqual({
+    expect(commandTestPlan.estimateCommandWorkerSeconds(group, 120, 8, "blacksmith")).toEqual({
       timingKey: "fixture#file-parallel-8",
       seconds: 30,
     });
     expect(
-      estimateCommandWorkerSeconds(
+      commandTestPlan.estimateCommandWorkerSeconds(
         { ...group, includePatterns: group.includePatterns.slice(0, 3) },
         120,
         8,
@@ -106,7 +153,7 @@ describe("command CI ownership and parallel timing", () => {
       ).seconds,
     ).toBe(80);
     expect(
-      estimateCommandWorkerSeconds(
+      commandTestPlan.estimateCommandWorkerSeconds(
         {
           ...group,
           includePatterns: ["src/commands/doctor-config-preflight.refusal.process.test.ts"],
@@ -117,7 +164,9 @@ describe("command CI ownership and parallel timing", () => {
       ).seconds,
     ).toBe(194.3);
     observations.mockReturnValue({ "fixture#file-parallel-8": 45 });
-    expect(estimateCommandWorkerSeconds(group, 120, 8, "blacksmith").seconds).toBe(45);
+    expect(commandTestPlan.estimateCommandWorkerSeconds(group, 120, 8, "blacksmith").seconds).toBe(
+      45,
+    );
   });
 
   it("projects serial timings once, retaining complete history and indivisible files", async () => {
@@ -211,7 +260,7 @@ describe("command CI ownership and parallel timing", () => {
       vi.resetModules();
     }
   });
-  it("keeps Doctor session SQLite owners complete and isolated", () => {
+  it("keeps Doctor session SQLite owners complete in separate child processes", () => {
     const ownerNames = [
       "agentic-commands-doctor-sessions-cron",
       "agentic-commands-doctor-sessions-cron-memory",
@@ -299,7 +348,35 @@ describe("command CI ownership and parallel timing", () => {
         plan.findIndex((shard) => shard.groups.some((group) => group.shard_name === name)),
       );
       expect(jobs.every((job) => job >= 0)).toBe(true);
-      expect(new Set(jobs).size).toBe(jobs.length);
+      expect(
+        plan
+          .flatMap((job) => job.groups)
+          .filter((group) => ownerNames.includes(group.shard_name))
+          .map((group) => group.shard_name)
+          .toSorted(),
+      ).toEqual(ownerNames.toSorted());
+      for (const index of new Set(jobs)) {
+        const job = plan[index]!;
+        if (
+          ownerNames.filter((name) => job.groups.some((group) => group.shard_name === name))
+            .length < 2
+        ) {
+          continue;
+        }
+        expect(job).toMatchObject({
+          runner: "blacksmith-32vcpu-ubuntu-2404",
+          planConcurrency: 2,
+          requiresDist: false,
+        });
+        expect(job.pretestBuildMode).toBeUndefined();
+        expect(job.predictedSeconds).toBeLessThanOrEqual(compactMode === "push" ? 720 : 600);
+        const children = resolveShardPlans({
+          OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify(job.groups),
+        });
+        expect(children.map((child) => child.name)).toEqual(
+          job.groups.map((group) => group.shard_name),
+        );
+      }
       expect(
         plan
           .flatMap((shard) => shard.groups)
@@ -323,8 +400,8 @@ describe("command CI ownership and parallel timing", () => {
       .filter((shard) => shard.projects.length > 0);
     fullSuiteVitestShards.splice(0, fullSuiteVitestShards.length, ...fixtureShards);
     try {
-      // Affordable descendants must also stay apart from their unsplit ancestors'
-      // siblings: an immediate-selector-only rule loses the Doctor/giant boundary.
+      // Final packing may share a runner; each descendant must retain its own
+      // process envelope and complete, disjoint file ownership.
       const fixtureTimings = Object.fromEntries(
         base
           .filter((shard) => shard.configs.some((config) => fixtureConfigs.has(config)))
@@ -355,9 +432,25 @@ describe("command CI ownership and parallel timing", () => {
         expect(
           placements.filter(({ group }) => group.shard_name.startsWith(`${family[0]}-hosted-`)),
         ).toHaveLength(family[0]!.startsWith("agentic-commands-") ? 2 : 3);
-        expect(new Set(placements.map(({ jobIndex }) => jobIndex)).size, family[0]).toBe(
-          placements.length,
-        );
+        for (const jobIndex of new Set(placements.map((entry) => entry.jobIndex))) {
+          const job = nestedPlan[jobIndex]!;
+          if (placements.filter((entry) => entry.jobIndex === jobIndex).length < 2) {
+            continue;
+          }
+          expect(job.requiresDist).toBe(false);
+          expect(job.pretestBuildMode).toBeUndefined();
+          expect(job.predictedSeconds).toBeLessThanOrEqual(600);
+          expect([1, 2]).toContain(job.planConcurrency);
+          if (job.planConcurrency === 2) {
+            expect(job.runner).toBe("blacksmith-32vcpu-ubuntu-2404");
+          }
+          const children = resolveShardPlans({
+            OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify(job.groups),
+          });
+          expect(children.map((child) => child.name)).toEqual(
+            job.groups.map((group) => group.shard_name),
+          );
+        }
         for (const name of family) {
           const actual = placements
             .filter(({ group }) => group.shard_name.replace(/-hosted-\d+$/u, "") === name)

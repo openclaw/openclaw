@@ -466,7 +466,7 @@ describe("release Telegram candidate archive guard", () => {
   it("rejects a socket entry", async () => {
     // Keep the socket path below macOS's 104-byte sockaddr_un buffer.
     const root = tempDirs.make("sock-");
-    const socketPath = path.join(root, "candidate.sock");
+    const socketPath = path.join(root, "s");
     const server = createServer();
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);

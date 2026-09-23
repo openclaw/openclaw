@@ -1,0 +1,103 @@
+{
+  "sourceRunIds": [
+    35810905247,
+    35811288334,
+    35811746607,
+    35811104672,
+    35826222393,
+    35826932121
+  ],
+  "jobs": [
+    {
+      "checkName": "checks-node-compact-large-20",
+      "groups": [
+        {
+          "configs": [
+            "test/vitest/vitest.cli-process.config.ts"
+          ],
+          "requiresDist": false,
+          "runner": "blacksmith-8vcpu-ubuntu-2404",
+          "shard_name": "agentic-cli-process-hosted-2",
+          "env": {
+            "OPENCLAW_VITEST_MAX_WORKERS": "2"
+          },
+          "includePatterns": [
+            "src/cli/gateway-backed-exit-health.process.test.ts"
+          ],
+          "timing_key": "agentic-cli-process#selector-54-f7826a9ef2c4#generation-8e36d2d43531#part-2-of-7#include-1-a9cb6450721e"
+        }
+      ],
+      "requiresDist": false,
+      "runner": "blacksmith-8vcpu-ubuntu-2404",
+      "shardName": "compact-large-20",
+      "planConcurrency": 1,
+      "predictedSeconds": 200
+    },
+    {
+      "checkName": "checks-node-compact-large-21",
+      "groups": [
+        {
+          "configs": [
+            "test/vitest/vitest.cli-process.config.ts"
+          ],
+          "requiresDist": false,
+          "runner": "blacksmith-8vcpu-ubuntu-2404",
+          "shard_name": "agentic-cli-process-hosted-3",
+          "env": {
+            "OPENCLAW_VITEST_MAX_WORKERS": "2"
+          },
+          "includePatterns": [
+            "src/cli/gateway-backed-exit.process.test.ts"
+          ],
+          "timing_key": "agentic-cli-process#selector-54-f7826a9ef2c4#generation-8e36d2d43531#part-3-of-7#include-1-479c1a04519b"
+        }
+      ],
+      "requiresDist": false,
+      "runner": "blacksmith-8vcpu-ubuntu-2404",
+      "shardName": "compact-large-21",
+      "planConcurrency": 1,
+      "predictedSeconds": 200
+    },
+    {
+      "checkName": "checks-node-compact-small-31",
+      "groups": [
+        {
+          "configs": [
+            "test/vitest/vitest.gateway-core.config.ts"
+          ],
+          "includePatterns": [
+            "src/gateway/worker-environments/workspace-large-inventory.test.ts"
+          ],
+          "requiresDist": false,
+          "runner": "blacksmith-4vcpu-ubuntu-2404",
+          "shard_name": "agentic-gateway-core-inventory"
+        }
+      ],
+      "requiresDist": false,
+      "runner": "blacksmith-8vcpu-ubuntu-2404",
+      "shardName": "compact-small-31",
+      "planConcurrency": 1,
+      "predictedSeconds": 35
+    }
+  ],
+  "largeJob": {
+    "checkName": "checks-node-compact-small-27",
+    "groups": [
+      {
+        "configs": [
+          "test/vitest/vitest.cli.config.ts"
+        ],
+        "requiresDist": false,
+        "runner": "blacksmith-4vcpu-ubuntu-2404",
+        "shard_name": "agentic-cli",
+        "fallbackMaxWorkers": 2
+      }
+    ],
+    "requiresDist": false,
+    "runner": "blacksmith-32vcpu-ubuntu-2404",
+    "shardName": "compact-small-27",
+    "timeoutMinutes": 120,
+    "planConcurrency": 1,
+    "predictedSeconds": 518
+  }
+}
