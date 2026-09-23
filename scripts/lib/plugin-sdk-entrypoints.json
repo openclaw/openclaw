@@ -113,6 +113,7 @@
   "channel-secret-owner-runtime",
   "channel-secret-tts-runtime",
   "secret-ref-runtime",
+  "secret-egress-runtime",
   "secret-file-runtime",
   "security-runtime",
   "gateway-config-runtime",

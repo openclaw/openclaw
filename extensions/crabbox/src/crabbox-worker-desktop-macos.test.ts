@@ -39,8 +39,10 @@ function desktopFixture(readiness: Readiness) {
     { mode: 0o700 },
   );
   const commands: Record<string, string> = {
+    // A tail larger than a pipe buffer exposes signature readers that close before printf finishes.
     codesign: `if [ "$1" = --verify ]; then [ "$FIXTURE_READINESS" != invalid-signature ]; exit; fi
-if [ "$FIXTURE_READINESS" = ad-hoc ]; then echo Signature=adhoc; else printf 'Authority=Developer ID Application: Fixture\\nTeamIdentifier=ABCDEFGHIJ\\n'; fi`,
+if [ "$FIXTURE_READINESS" = ad-hoc ]; then echo Signature=adhoc; else printf 'Authority=Developer ID Application: Fixture\\nTeamIdentifier=ABCDEFGHIJ\\n'; fi
+if [ "$FIXTURE_READINESS" = ready ]; then printf '%131072s\\n' 'synthetic codesign diagnostic'; fi`,
     PlistBuddy: `case "$2" in
   'Print :CFBundleExecutable') echo OpenClaw ;;
   'Print :CFBundleIdentifier') echo ai.openclaw.cloud-worker ;;

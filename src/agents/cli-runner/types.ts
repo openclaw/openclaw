@@ -267,6 +267,7 @@ export type PreparedCliRunContext = {
   promptForHooks?: string;
   modelId: string;
   normalizedModel: string;
+  providerThinkingLevel?: import("../../plugins/cli-backend.types.js").CliBackendThinkingLevel;
   contextWindowInfo?: ContextWindowInfo;
   systemPrompt: string;
   systemPromptReport: SessionSystemPromptReport;

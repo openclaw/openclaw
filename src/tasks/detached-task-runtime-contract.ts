@@ -6,7 +6,9 @@ import type {
   TaskDeliveryStatus,
   TaskNotifyPolicy,
   TaskRecord,
+  TaskPersistenceReceipt,
   TaskRuntime,
+  TaskRunTransition,
   TaskScopeKind,
   TaskStatus,
   TaskTerminalOutcome,
@@ -65,6 +67,7 @@ type DetachedTaskProgressParams = {
   lastEventAt?: number;
   progressSummary?: string | null;
   eventSummary?: string | null;
+  detail?: JsonValue;
 };
 
 type DetachedTaskFinalizeCommonParams = {
@@ -164,7 +167,32 @@ export type DetachedTaskFindResult =
   | { lookup: "available"; task?: TaskRecord }
   | { lookup: "unavailable"; task?: undefined };
 
+export type DetachedTaskAssignmentTransition = {
+  transition: TaskRunTransition;
+  expectedTask: TaskPersistenceReceipt;
+  /** Recheck the captured live owner immediately before persistence. */
+  assertCurrent: () => void;
+};
+
+export class DetachedTaskAssignmentUnsupportedError extends Error {
+  constructor() {
+    super(
+      "Detached task runtime must implement transitionTaskAssignment before accepting exact-assignment work. Upgrade the custom task runtime adapter.",
+    );
+    this.name = "DetachedTaskAssignmentUnsupportedError";
+  }
+}
+
+export class DetachedTaskRuntimeOwnerRetiredError extends Error {
+  constructor() {
+    super("Detached task runtime owner changed before task settlement.");
+    this.name = "DetachedTaskRuntimeOwnerRetiredError";
+  }
+}
+
 export type DetachedTaskLifecycleRuntime = {
+  /** Optional exact-assignment settlement; legacy run-scoped methods are unchanged. */
+  transitionTaskAssignment?: (params: DetachedTaskAssignmentTransition) => TaskRecord[];
   createQueuedTaskRun: (params: DetachedTaskCreateParams) => TaskRecord | null;
   createRunningTaskRun: (params: DetachedRunningTaskCreateParams) => TaskRecord | null;
   /**
