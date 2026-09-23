@@ -466,6 +466,31 @@ describe("Codex agent harness supports()", () => {
       }),
     ).resolves.toBe(false);
   });
+
+  it("revalidates remote inference against the harness's current configured endpoint", async () => {
+    const { resolveCodexAppServerRuntimeOptions } = await import("./src/app-server/config.js");
+    const { captureCodexConfiguredConnection, finalizeCodexConfiguredConnection } =
+      await import("./src/app-server/runtime-artifact-connection.js");
+    let pluginConfig = {
+      appServer: { transport: "websocket" as const, url: "ws://127.0.0.1:1234" },
+    };
+    const remoteHarness = createCodexAppServerAgentHarness({
+      bindingStore: testCodexAppServerBindingStore,
+      resolvePluginConfig: () => pluginConfig,
+    });
+    const startOptions = resolveCodexAppServerRuntimeOptions({ pluginConfig }).start;
+    const binding = finalizeCodexConfiguredConnection({
+      before: captureCodexConfiguredConnection(startOptions),
+      startOptions,
+      runtimeIdentity: { serverVersion: "0.153.4", userAgent: "codex-test" },
+    });
+    if (!remoteHarness.runtimeArtifact) {
+      throw new Error("expected Codex runtime artifact capability");
+    }
+    await expect(remoteHarness.runtimeArtifact.validate(binding)).resolves.toBe(true);
+    pluginConfig = { appServer: { transport: "websocket", url: "ws://127.0.0.1:5678" } };
+    await expect(remoteHarness.runtimeArtifact.validate(binding)).resolves.toBe(false);
+  });
 });
 
 describe("Codex agent harness reset()", () => {

@@ -214,7 +214,7 @@ function connectCodexAppServerUnixSocket(socketPath: string): net.Socket {
 }
 
 /** Resolves the canonical or explicitly configured Codex control socket. */
-function resolveCodexAppServerUnixSocketPath(
+export function resolveCodexAppServerUnixSocketPath(
   options: Pick<CodexAppServerStartOptions, "env" | "transport" | "url">,
 ): string | undefined {
   if (options.transport !== "unix") {

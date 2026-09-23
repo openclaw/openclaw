@@ -332,18 +332,21 @@ describe("Codex app-server runtime artifact", () => {
     });
   });
 
-  it("fails closed for remote WebSocket runtimes", async () => {
-    const options = startOptions("codex", {
-      transport: "websocket",
-      url: "ws://127.0.0.1:1234",
-    });
-    await expect(
-      captureCodexAppServerRuntimeArtifactBeforeStart({
-        startOptions: options,
-        spawnIdentity: spawnIdentity(options),
-      }),
-    ).rejects.toThrow("WebSocket attestation is unsupported");
-  });
+  it.each(["websocket", "unix"] as const)(
+    "verifies a configured %s service without a local executable",
+    async (transport) => {
+      const options = startOptions("codex", {
+        transport,
+        url: transport === "websocket" ? "ws://127.0.0.1:1234" : "unix:///tmp/codex.sock",
+      });
+      const { binding, client } = await captureBinding({ options });
+      expect(readCodexAppServerClientRuntimeArtifact(client)).toEqual(binding);
+      await expect(
+        validateCodexAppServerRuntimeArtifact(binding, undefined, options),
+      ).resolves.toBe(true);
+      await expect(validateCodexAppServerRuntimeArtifact(binding)).resolves.toBe(false);
+    },
+  );
 
   it.each([
     ["preload", "--require=/tmp/super-secret-inject.js", "--require"],
