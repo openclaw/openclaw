@@ -606,7 +606,6 @@ extensions/matrix/src/matrix/actions/messages.ts	8
 extensions/matrix/src/matrix/actions/polls.ts	1
 extensions/matrix/src/matrix/actions/reactions.ts	1
 extensions/matrix/src/matrix/actions/summary.ts	2
-extensions/matrix/src/matrix/actions/verification.ts	1
 extensions/matrix/src/matrix/client-bootstrap.ts	1
 extensions/matrix/src/matrix/client/config.ts	4
 extensions/matrix/src/matrix/client/logging.ts	3
@@ -629,13 +628,13 @@ extensions/matrix/src/matrix/monitor/inbound-dedupe-migration.ts	2
 extensions/matrix/src/matrix/monitor/index.ts	3
 extensions/matrix/src/matrix/monitor/reaction-events.ts	1
 extensions/matrix/src/matrix/monitor/reply-context.ts	1
-extensions/matrix/src/matrix/monitor/room-history.ts	2
+extensions/matrix/src/matrix/monitor/room-history.ts	1
 extensions/matrix/src/matrix/monitor/rooms.ts	1
 extensions/matrix/src/matrix/monitor/startup.ts	1
 extensions/matrix/src/matrix/monitor/thread-context.ts	2
 extensions/matrix/src/matrix/monitor/verification-events.ts	5
 extensions/matrix/src/matrix/poll-summary.ts	2
-extensions/matrix/src/matrix/poll-types.ts	10
+extensions/matrix/src/matrix/poll-types.ts	7
 extensions/matrix/src/matrix/probe.ts	1
 extensions/matrix/src/matrix/reaction-common.ts	1
 extensions/matrix/src/matrix/sdk.ts	8
