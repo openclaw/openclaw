@@ -80,6 +80,7 @@ import {
   isBoundaryTestFile,
   isBundledPluginDependentUnitTestFile,
   isUnitConfigTestFile,
+  filterUnitConfigTestFiles,
 } from "../test/vitest/vitest.unit-paths.mjs";
 import {
   detectChangedLanes,
@@ -1076,13 +1077,13 @@ function listUnitSrcFullSuiteTestTargets(cwd: string) {
   }
   const unitFastTargets = new Set(getUnitFastTestFiles());
   const srcDir = path.join(cwd, "src");
-  cachedUnitSrcFullSuiteTestTargets = (
-    fs.existsSync(srcDir) ? listRepoFilesRecursive(srcDir, cwd) : []
+  cachedUnitSrcFullSuiteTestTargets = filterUnitConfigTestFiles(
+    (fs.existsSync(srcDir) ? listRepoFilesRecursive(srcDir, cwd) : []).filter((file) =>
+      file.endsWith(".test.ts"),
+    ),
   )
     .filter(
       (file) =>
-        file.endsWith(".test.ts") &&
-        isUnitConfigTestFile(file) &&
         !unitFastTargets.has(file) &&
         !path.matchesGlob(file, "src/acp/**") &&
         !path.matchesGlob(file, "src/security/**"),

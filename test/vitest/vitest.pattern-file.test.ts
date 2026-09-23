@@ -2,10 +2,11 @@ import { spawnSync } from "node:child_process";
 import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { intersectIncludePatterns } from "./vitest.include-patterns.ts";
 import {
   collectVitestExcludePatterns,
+  filterVitestFiles,
   matchesVitestCliSelection,
   matchesVitestGlob,
   narrowIncludePatternsForCli,
@@ -30,13 +31,16 @@ describe("native CLI selection", () => {
         [
           "--input-type=module",
           "--eval",
-          `import { matchesVitestGlob } from './test/vitest/vitest.pattern-file.ts';
-           console.log(matchesVitestGlob('ui/src/example.test.ts', 'ui/src/**/!(*.browser).test.ts'));`,
+          `import { filterVitestFiles } from './test/vitest/vitest.pattern-file.ts';
+           console.log(JSON.stringify(filterVitestFiles(
+             ['ui/src/example.test.ts', 'ui/src/example.browser.test.ts'],
+             ['ui/src/**/!(*.browser).test.ts']
+           )));`,
         ],
         { cwd: root, encoding: "utf8", env: { ...process.env, NODE_OPTIONS: "", NODE_PATH: "" } },
       );
       expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout.trim()).toBe("true");
+      expect(result.stdout.trim()).toBe('["ui/src/example.test.ts"]');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -84,6 +88,69 @@ describe("native CLI selection", () => {
       "before",
     ]);
   });
+});
+
+describe("batch file selection", () => {
+  const files = Object.freeze([
+    "ui/src/b.test.ts",
+    "ui/src/a.browser.test.ts",
+    "ui/src/a.test.ts",
+    "ui/src/b.test.ts",
+    "ui/src/.hidden.test.ts",
+    "ui/src/../src/a.test.ts",
+    "ui//src/a.test.ts",
+    "ui\\src\\a.test.ts",
+    "UI/src/a.test.ts",
+    "!ui/src/a.test.ts",
+    "#ui/src/a.test.ts",
+  ]);
+
+  it.each([
+    { include: ["ui/src/**/!(*.browser).test.ts"], exclude: [] },
+    { include: ["ui/src/a*", "ui/src/b*"], exclude: ["**/*.browser.test.ts"] },
+    { include: ["{ui,UI}/src/[ab].test.ts"], exclude: ["ui/**/b.test.ts"] },
+    { include: ["!ui/**", "#ui/**"], exclude: [] },
+    { include: ["./ui/src/*.test.ts", "ui\\src\\*.test.ts"], exclude: ["**/.hidden*"] },
+    { include: [], exclude: [] },
+    { include: ["**"], exclude: ["**"] },
+  ])("retains single-file matcher semantics and input order: $include", ({ include, exclude }) => {
+    const expected = files.filter(
+      (file) =>
+        include.some((pattern) => matchesVitestGlob(file, pattern)) &&
+        !exclude.some((pattern) => matchesVitestGlob(file, pattern)),
+    );
+    expect(filterVitestFiles(files, Object.freeze(include), Object.freeze(exclude))).toEqual(
+      expected,
+    );
+  });
+
+  it.skipIf(Boolean(process.versions.bun))(
+    "keeps a large exclusion inventory within Node's compiled-pattern cache budget",
+    () => {
+      const candidates = Array.from({ length: 12 }, (_, index) => `src/keep-${index}.test.ts`);
+      const exclude = Array.from({ length: 260 }, (_, index) => `src/excluded-${index}.test.ts`);
+      const nativeMatch = path.matchesGlob;
+      // Node's matcher cache evicts the oldest entry when its size reaches 250.
+      const cache = new Set<string>();
+      let compilations = 0;
+      const matcher = vi.spyOn(path, "matchesGlob").mockImplementation((file, pattern) => {
+        if (!cache.has(pattern)) {
+          compilations += 1;
+          cache.add(pattern);
+          if (cache.size >= 250) {
+            cache.delete(cache.values().next().value!);
+          }
+        }
+        return nativeMatch(file, pattern);
+      });
+      try {
+        expect(filterVitestFiles(candidates, ["src/**/*.test.ts"], exclude)).toEqual(candidates);
+        expect(compilations).toBeLessThanOrEqual(exclude.length + 1);
+      } finally {
+        matcher.mockRestore();
+      }
+    },
+  );
 });
 
 describe("intersectIncludePatterns", () => {

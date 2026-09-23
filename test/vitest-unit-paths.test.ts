@@ -1,9 +1,25 @@
 // Vitest unit path tests validate unit test include and exclude paths.
-import { bundledPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
-import { isUnitConfigTestFile } from "./vitest/vitest.unit-paths.mjs";
+import { bundledPluginFile } from "../scripts/lib/bundled-plugin-paths.mjs";
+import { filterUnitConfigTestFiles, isUnitConfigTestFile } from "./vitest/vitest.unit-paths.mjs";
 
 describe("isUnitConfigTestFile", () => {
+  it("keeps bulk unit discovery ordered with shared exclusions", () => {
+    const packageFile = "packages/plugin-package-contract/src/index.test.ts";
+    const sourceFile = "src/unowned-fixture.test.ts";
+    expect(
+      filterUnitConfigTestFiles([
+        packageFile,
+        "src/state/openclaw-database-verify.process.test.ts",
+        sourceFile,
+        "src/unowned-fixture.live.test.ts",
+        "src/unowned-fixture.e2e.test.ts",
+        "src/vendor/unowned-fixture.test.ts",
+        packageFile,
+      ]),
+    ).toEqual([packageFile, sourceFile, packageFile]);
+  });
+
   it("accepts unit-config package tests", () => {
     expect(isUnitConfigTestFile("packages/plugin-package-contract/src/index.test.ts")).toBe(true);
   });

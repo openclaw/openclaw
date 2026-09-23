@@ -19,6 +19,7 @@ import {
   isGatewayServerBackedHttpTestFile,
   isGatewayServerTestFile,
 } from "../../test/vitest/vitest.gateway-server-paths.mjs";
+import { filterVitestFiles } from "../../test/vitest/vitest.pattern-file.ts";
 import { startupCorpusTestFiles } from "../../test/vitest/vitest.startup-corpus-paths.mjs";
 import { fullSuiteVitestShards } from "../../test/vitest/vitest.test-shards.mjs";
 import { toolingIsolatedTestFiles } from "../../test/vitest/vitest.tooling-isolated-paths.mjs";
@@ -40,7 +41,7 @@ import {
 import {
   boundaryTestFiles,
   bundledPluginDependentUnitTestFiles,
-  isUnitConfigTestFile,
+  filterUnitConfigTestFiles,
 } from "../../test/vitest/vitest.unit-paths.mjs";
 import {
   buildVitestRunPlans,
@@ -2233,12 +2234,13 @@ function createStripedSplitShards(params: {
 
 function createCoreUnitSrcSecuritySplitShards(): NodeTestSplitShard[] {
   const unitFastFiles = new Set(getUnitFastTestFiles());
-  const files = listTestFiles("src").filter(
-    (file) =>
-      isStripeEligibleTestFile(file, unitFastFiles) &&
-      !file.startsWith("src/acp/") &&
-      !file.startsWith("src/security/") &&
-      isUnitConfigTestFile(file),
+  const files = filterUnitConfigTestFiles(
+    listTestFiles("src").filter(
+      (file) =>
+        isStripeEligibleTestFile(file, unitFastFiles) &&
+        !file.startsWith("src/acp/") &&
+        !file.startsWith("src/security/"),
+    ),
   );
   return [
     ...createStripedSplitShards({
@@ -3109,11 +3111,10 @@ function listScopedOwnerTestFiles(owner: {
   // Scoped configs drop unit-fast files, so a lister that keeps them prices
   // stripes on files the shard never runs and hands Vitest inert patterns.
   const unitFastFiles = new Set(getUnitFastTestFiles());
-  return listTestFiles(owner.root).filter(
-    (file) =>
-      isStripeEligibleTestFile(file, unitFastFiles) &&
-      owner.include.some((pattern) => matchesGlob(file, pattern)) &&
-      !owner.exclude.some((pattern) => matchesGlob(file, pattern)),
+  return filterVitestFiles(
+    listTestFiles(owner.root).filter((file) => isStripeEligibleTestFile(file, unitFastFiles)),
+    owner.include,
+    owner.exclude,
   );
 }
 
