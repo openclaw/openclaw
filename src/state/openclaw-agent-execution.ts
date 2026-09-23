@@ -35,6 +35,8 @@ export type OpenClawAgentDatabaseExecution = {
   readonly agentId: string;
   readonly path: string;
   assertCurrent(): void;
+  /** Initialize first-use storage through the same admitted native owner. */
+  prepare(source: AgentDatabaseRequestExecutionSource): Promise<void>;
   /** Admit a write against existing storage; a missing store remains missing. */
   runExisting<T>(
     source: AgentDatabaseRequestExecutionSource,
@@ -192,6 +194,7 @@ export function captureOpenClawAgentDatabaseExecution(
     assertCallerCurrent?: () => void,
     expectedIdentity?: AgentDatabaseExecutionFileIdentity,
     retireNativeOnFailure = false,
+    createIfMissing = false,
   ): Promise<T | undefined> {
     assertCurrent();
     assertCallerCurrent?.();
@@ -242,7 +245,7 @@ export function captureOpenClawAgentDatabaseExecution(
     }
     const current = generation;
     try {
-      return await current.runExisting(source, operation, assertCallerCurrent);
+      return await current.run(source, operation, assertCallerCurrent, createIfMissing);
     } catch (error) {
       const nativeFailed = current.failed();
       if (generation === current && (nativeFailed || retireNativeOnFailure)) {
@@ -308,6 +311,20 @@ export function captureOpenClawAgentDatabaseExecution(
         agentId,
         path: pathname,
         assertCurrent: assertBorrowed,
+        async prepare(source) {
+          assertBorrowed();
+          const result = run(
+            source,
+            async () => undefined,
+            assertReferenceCurrent,
+            expectedIdentity,
+            false,
+            true,
+          );
+          pending.add(result);
+          void result.finally(() => pending.delete(result)).catch(() => undefined);
+          await result;
+        },
         async runExisting(source, operation, runOptions) {
           assertBorrowed();
           const result = run(

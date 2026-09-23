@@ -370,7 +370,10 @@ export function renderProviderProfiles(card: ModelProviderCard, props: ProviderP
   ];
   const additionalCredentialSource = apiKeySource(card);
   return html`
-    <section class="model-providers__profiles" aria-label=${t("modelProviders.profiles.title")}>
+    <section
+      class="model-providers__profiles"
+      aria-label=${`${t("modelProviders.profiles.title")}: ${card.displayName}`}
+    >
       <div class="model-providers__profiles-heading">
         <div class="model-providers__profiles-heading-copy">
           <strong>${t("modelProviders.profiles.title")}</strong>

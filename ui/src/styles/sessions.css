@@ -578,7 +578,7 @@
   flex: 0 1 auto;
   max-width: 140px;
   overflow: hidden;
-  color: var(--accent-2);
+  color: color-mix(in srgb, var(--accent-2) 65%, var(--text));
   font-size: var(--control-ui-text-xs);
   font-weight: 600;
   text-overflow: ellipsis;
@@ -595,7 +595,7 @@
 }
 
 .session-kind--direct {
-  color: var(--accent-2);
+  color: color-mix(in srgb, var(--accent-2) 65%, var(--text));
 }
 .session-kind--group {
   color: var(--info);

@@ -187,14 +187,26 @@ export async function prepareEmbeddedSessionState(params: {
     });
   }
   if (params.sessionKey && !params.isSubagentLaneTurn) {
-    recordSessionHumanDirectMessage({
-      sessionKey: params.sessionKey,
-      entry: sessionEntry,
-      agentId: params.sessionAgentId,
-      actor: params.sessionStateActor,
-      channel: params.opts.channel,
-      runId: params.runId,
-    });
+    const assertSignalCurrent = () => {
+      assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
+      params.opts.abortSignal?.throwIfAborted();
+      params.opts.assertSourceCurrent?.();
+      params.opts.operatorAuthority?.assertCurrent();
+    };
+    await recordSessionHumanDirectMessage(
+      {
+        sessionKey: params.sessionKey,
+        entry: sessionEntry,
+        agentId: params.sessionAgentId,
+        actor: params.sessionStateActor,
+        channel: params.opts.channel,
+        runId: params.runId,
+      },
+      {
+        assertCurrent: assertSignalCurrent,
+      },
+    );
+    assertSignalCurrent();
   }
 
   return {

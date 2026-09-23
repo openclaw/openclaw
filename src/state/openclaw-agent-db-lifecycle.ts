@@ -23,6 +23,7 @@ import type {
 } from "./openclaw-agent-db-contract.js";
 import {
   readOpenClawAgentDatabaseIdentity,
+  findOpenClawAgentDatabaseIdentity,
   isOpenClawAgentDatabasePathCurrent,
 } from "./openclaw-agent-db-identity.js";
 import {
@@ -414,6 +415,18 @@ export function settleOpenClawAgentDatabaseWorkerClose(
     errors,
     settled: !cache.databases.get(resolvedPath)?.db.isOpen && !cache.leases.has(resolvedPath),
   };
+}
+
+/** Commit receipts invalidate every current handle of the captured physical database. */
+export function invalidateOpenClawAgentWritableProjections(
+  databaseIdentity: string,
+  invalidate: (database: DatabaseSync) => void,
+): void {
+  for (const database of cache.databases.values()) {
+    if (findOpenClawAgentDatabaseIdentity(database)?.identity === databaseIdentity) {
+      invalidate(database.db);
+    }
+  }
 }
 
 /** Close cached agent handles, optionally restricted to one runtime root. */

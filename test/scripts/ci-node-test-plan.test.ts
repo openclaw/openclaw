@@ -89,7 +89,7 @@ import { createToolingIsolatedVitestConfig } from "../vitest/vitest.tooling-isol
 import { createToolingVitestConfig } from "../vitest/vitest.tooling.config.ts";
 import { createTuiVitestConfig } from "../vitest/vitest.tui.config.ts";
 import { createUiIsolatedVitestConfig } from "../vitest/vitest.ui-isolated.config.ts";
-import { uiTimingTestFiles } from "../vitest/vitest.ui-paths.mjs";
+import { uiE2eRealGatewayTestFiles, uiTimingTestFiles } from "../vitest/vitest.ui-paths.mjs";
 import { createUiTimingVitestConfig } from "../vitest/vitest.ui-timing.config.ts";
 import { createUiVitestConfig } from "../vitest/vitest.ui.config.ts";
 import {
@@ -108,12 +108,43 @@ describe("Control UI release-only inventories", () => {
   const sidebar = "ui/src/components/app-sidebar.stress.browser.test.ts";
   const embed = "ui/src/e2e/native-embed-settings.e2e.test.ts";
   const entry = "ui/src/e2e/chat-session-entry.e2e.test.ts";
+  const automationManagement =
+    "extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts";
+  const releaseOnlyRealGateway = new Set([
+    "ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts",
+    automationManagement,
+    "ui/src/e2e/quota-reset-status.real-gateway.e2e.test.ts",
+    "ui/src/e2e/session-pr-reader-lifetime.real-gateway.e2e.test.ts",
+    "ui/src/e2e/chat-collaborator-scroll.real-gateway.e2e.test.ts",
+    "ui/src/e2e/mcp-app-conformance.e2e.test.ts",
+  ]);
+  const tours = [
+    "ui/src/e2e/board-fixture.e2e.test.ts",
+    "ui/src/e2e/chat-attachment-menu.e2e.test.ts",
+    "ui/src/e2e/chat-mobile-bubble-margin.e2e.test.ts",
+    "ui/src/e2e/github-link-hovercard.e2e.test.ts",
+    "ui/src/e2e/settings-layout.e2e.test.ts",
+    "ui/src/e2e/theme-muted-contrast.e2e.test.ts",
+  ];
 
   it("omits only the named exhaustive matrices from ordinary UI owners", () => {
     const groups = createUiTestShardGroups({ includeReleaseOnlyTests: false });
     expect(groups.ui[0]?.includePatterns).not.toContain(sidebar);
     expect(groups.e2e[0]?.includePatterns).not.toContain(embed);
     expect(groups.e2e[0]?.includePatterns).not.toContain(entry);
+    expect(
+      uiE2eRealGatewayTestFiles.filter((file) => groups.e2e[0]?.includePatterns?.includes(file)),
+    ).toEqual(uiE2eRealGatewayTestFiles.filter((file) => !releaseOnlyRealGateway.has(file)));
+    for (const file of tours) {
+      expect(groups.e2e[0]?.includePatterns).not.toContain(file);
+    }
+    for (const file of [
+      "ui/src/e2e/board-mcp-app.e2e.test.ts",
+      "ui/src/e2e/chat-composer-redesign.e2e.test.ts",
+      "ui/src/e2e/chat-position-rail-layout.e2e.test.ts",
+    ]) {
+      expect(groups.e2e[0]?.includePatterns).toContain(file);
+    }
     expect(groups.ui[0]?.includePatterns).toContain(
       "ui/src/components/app-sidebar-row-identity.browser.test.ts",
     );
@@ -128,9 +159,19 @@ describe("Control UI release-only inventories", () => {
   it("retains directly edited matrices without widening from their source owner", () => {
     const groups = createUiTestShardGroups({
       includeReleaseOnlyTests: false,
-      changedPaths: [entry, "ui/src/components/app-sidebar.ts", "ui/src/e2e"],
+      changedPaths: [
+        entry,
+        ...tours,
+        automationManagement,
+        "ui/src/components/app-sidebar.ts",
+        "ui/src/e2e",
+      ],
     });
     expect(groups.e2e[0]?.includePatterns).toContain(entry);
+    expect(
+      groups.e2e[0]?.includePatterns?.filter((file) => releaseOnlyRealGateway.has(file)),
+    ).toEqual([automationManagement]);
+    expect(groups.e2e[0]?.includePatterns).toEqual(expect.arrayContaining(tours));
     expect(groups.e2e[0]?.includePatterns).not.toContain(embed);
     expect(groups.ui[0]?.includePatterns).not.toContain(sidebar);
   });
@@ -3044,6 +3085,9 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
               owner,
             );
             expect(job.planConcurrency).toBe(1);
+            if (measured && isolated) {
+              expect(job.runner, group.shard_name).toBe(EXTRA_LARGE_NODE_TEST_RUNNER);
+            }
             const effectiveWorkers = (entry: (typeof groups)[number]) =>
               Math.min(
                 8,
@@ -3343,6 +3387,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
             : blacksmithTooling ||
                 usesParallelPacking(shard) ||
                 nativeFullCli ||
+                shard.groups.some((group) => group.minTotalMemoryBytes !== undefined) ||
                 shard.groups[0]?.runner === EXTRA_LARGE_NODE_TEST_RUNNER
               ? EXTRA_LARGE_NODE_TEST_RUNNER
               : !githubPullRequestCompact.includes(shard) &&
@@ -4015,10 +4060,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
   });
 
   it("keeps lifecycle proofs on main while excluding PR and manual PR-fallback plans", () => {
-    const proofFiles = [
-      "src/commands/doctor-config-preflight.refusal.process.test.ts",
-      "src/gateway/server.codex-failure-recovery.test.ts",
-    ];
+    const proofFiles = ["src/gateway/server.codex-failure-recovery.test.ts"];
     const files = (mode: "push" | "pull-request") =>
       getCommittedCompactPlan(mode).flatMap((shard) =>
         shard.groups.flatMap((group) => group.includePatterns ?? []),
@@ -4060,6 +4102,16 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           plan.flatMap((shard) => shard.groups.flatMap((group) => group.includePatterns ?? []));
         const beforeFiles = files(before);
         const afterFiles = files(after);
+        const fullCommandTimingParents = new Set(
+          before.flatMap((shard) =>
+            shard.groups
+              .filter((group) => group.configs.includes("test/vitest/vitest.commands.config.ts"))
+              .map((group) => {
+                const key = group.timing_key ?? group.shard_name;
+                return parseCompactSplitTimingKey(key)?.parentShardName ?? key;
+              }),
+          ),
+        );
         expect(beforeFiles.filter((file) => !afterFiles.includes(file)).toSorted()).toEqual(
           [...RELEASE_ONLY_RUNTIME_TEST_FILES].toSorted(),
         );
@@ -4069,12 +4121,22 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           const owns = (group: { shard_name: string }) =>
             group.shard_name === owner || group.shard_name.startsWith(`${owner}-hosted-`);
           const reduced = after.flatMap((shard) => shard.groups).filter(owns);
-          expect(reduced.length, owner).toBeGreaterThan(0);
+          const retainedFiles = before
+            .flatMap((shard) => shard.groups)
+            .filter(owns)
+            .flatMap((group) => group.includePatterns ?? [])
+            .filter((file) => !isReleaseOnlyRuntimeTestFile(file));
+          expect(reduced.flatMap((group) => group.includePatterns ?? []).toSorted(), owner).toEqual(
+            retainedFiles.toSorted(),
+          );
           for (const group of reduced) {
             const timingKey = expectDefined(group.timing_key, "reduced runtime timing identity");
-            expect(parseCompactSplitTimingKey(timingKey)?.parentShardName ?? timingKey).toBe(
-              `changed-${owner}`,
+            const timingParent =
+              parseCompactSplitTimingKey(timingKey)?.parentShardName ?? timingKey;
+            expect(fullCommandTimingParents.has(timingParent), `${owner}: ${timingParent}`).toBe(
+              false,
             );
+            expect(timingParent.replace(/#file-parallel-(?:2|8)$/u, "")).toBe(`changed-${owner}`);
           }
         }
       }
@@ -6352,13 +6414,14 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           ),
         );
         for (const job of admission) {
-          // Runtime and dist rows were already serial; only ordinary 32-class
-          // Gateway rows transfer an admitted job cap onto unmeasured siblings.
+          // Memory-gated rows also preserve sibling caps when requesting more RAM,
+          // including runtime rows that were already serial before promotion.
           if (
             runnerBackend === "github" ||
             !usesParallelPacking(job) ||
             job.runner !== EXTRA_LARGE_NODE_TEST_RUNNER ||
-            job.pretestBuildMode !== undefined ||
+            (job.pretestBuildMode !== undefined &&
+              !job.groups.some((group) => group.minTotalMemoryBytes !== undefined)) ||
             job.requiresDist ||
             !job.groups.some((group) => group.fallbackMaxWorkers === 2) ||
             !job.groups.some((group) => group.configs.some(isExclusiveCiTestConfig))

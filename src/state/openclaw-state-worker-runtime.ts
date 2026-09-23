@@ -101,10 +101,7 @@ import {
   resolveRecordedProjectRootInDatabase,
 } from "../projects/project-registry.kernel.js";
 import { purgeExpiredSecretStoreEntriesInDatabase } from "../secrets/store/secret-store-expiry.kernel.js";
-import {
-  pruneSessionStateEventsInDatabase,
-  recordSessionStateEventInDatabase,
-} from "../sessions/session-state-events.kernel.js";
+import { executeSessionStateCommand } from "../sessions/session-state-events.worker.js";
 import { listWatchedSessionUpstreamLinksInDatabase } from "../sessions/session-upstream-links.kernel.js";
 import {
   isSkillUploadCommand,
@@ -571,18 +568,8 @@ export function executeSharedStateCommand(
       { operationLabel: "config-machine-state.update" },
     );
   }
-  if (command.type === "sessionState.recordGoalChange") {
-    return runOpenClawStateWriteTransaction(
-      ({ db }) =>
-        recordSessionStateEventInDatabase(db, command.input.event, command.input.now).notices,
-      writeOptions,
-    );
-  }
-  if (command.type === "sessionState.prune") {
-    return runOpenClawStateWriteTransaction(
-      ({ db }) => pruneSessionStateEventsInDatabase(db, command.input.now),
-      writeOptions,
-    );
+  if (command.type === "sessionState.record" || command.type === "sessionState.prune") {
+    return executeSessionStateCommand(command, writeOptions);
   }
   if (command.type === "plugins.catalogSnapshot.write") {
     try {

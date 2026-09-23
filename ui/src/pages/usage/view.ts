@@ -392,7 +392,6 @@ export function renderUsage(props: UsageProps) {
                 ${renderSettingsSegmented({
                   mode: "buttons",
                   variant: "accent",
-                  ariaPressed: false,
                   value: filters.scope,
                   onChange: filterActions.onScopeChange,
                   onReselect: filterActions.onScopeChange,
@@ -412,7 +411,6 @@ export function renderUsage(props: UsageProps) {
                 ${renderSettingsSegmented({
                   mode: "buttons",
                   variant: "accent",
-                  ariaPressed: false,
                   value: isTokenMode ? "tokens" : "cost",
                   onChange: displayActions.onChartModeChange,
                   onReselect: displayActions.onChartModeChange,
@@ -530,6 +528,7 @@ export function renderUsage(props: UsageProps) {
                   class="usage-query-input"
                   type="text"
                   .value=${filters.queryDraft}
+                  aria-label=${t("usage.query.placeholder")}
                   placeholder=${t("usage.query.placeholder")}
                   @input=${(e: Event) =>
                     filterActions.onQueryDraftChange((e.target as HTMLInputElement).value)}

@@ -406,13 +406,14 @@ test.each([false, true])(
       );
       expect(checksDuringMaintenance).toBe(0);
       expect(authorizationChecked).toBe(true);
-      expect(vacuumCalls).toEqual([
-        {
-          statement: "PRAGMA incremental_vacuum(512);",
-          authorizationChecked: true,
-          nativeSettled: true,
-        },
-      ]);
+      expect(vacuumCalls[0]).toEqual({
+        statement: "PRAGMA incremental_vacuum(8);",
+        authorizationChecked: true,
+        nativeSettled: true,
+      });
+      expect(vacuumCalls.every((call) => call.authorizationChecked && call.nativeSettled)).toBe(
+        true,
+      );
       expect(getOpenClawAgentDatabaseIfOpen(databaseOptions)?.db === database.db).toBe(true);
       maintenance.close({ checkpointMode: "PASSIVE" });
       vi.useRealTimers();

@@ -200,9 +200,32 @@ export async function runExclusiveSqliteSessionWrite<T>(
   writer: "foreground" | "worker" = "foreground",
 ): Promise<T> {
   const databaseOptions = toDatabaseOptions(scope);
+  const timing: StoreWriterTiming = {};
+  return observeSqliteSessionWrite(
+    scope,
+    () =>
+      writer === "worker"
+        ? runOpenClawAgentWorkerWrite(databaseOptions, fn, timing)
+        : runOpenClawAgentWriteAdmission(databaseOptions, fn, false, timing),
+    operation,
+    diagnostics,
+    writer,
+    timing,
+  );
+}
+
+/** Observe multi-unit maintenance without retaining foreground admission between units. */
+export async function observeSqliteSessionWrite<T>(
+  scope: Pick<ResolvedSqliteReadScope, "agentId" | "env" | "path">,
+  fn: () => Promise<T>,
+  operation: SqliteSessionWriteOperation,
+  diagnostics?: SqliteSessionWriteDiagnostics,
+  writer: "foreground" | "worker" = "foreground",
+  timing: StoreWriterTiming = {},
+): Promise<T> {
+  const databaseOptions = toDatabaseOptions(scope);
   const storePath = resolveOpenClawAgentSqlitePath(databaseOptions);
   const startedAt = performance.now();
-  const timing: StoreWriterTiming = {};
   const timingFields = (completedAt: number) => ({
     pid: process.pid,
     threadId,
@@ -243,9 +266,7 @@ export async function runExclusiveSqliteSessionWrite<T>(
       fn,
     );
   try {
-    const result = await (writer === "worker"
-      ? runOpenClawAgentWorkerWrite(databaseOptions, owned, timing)
-      : runOpenClawAgentWriteAdmission(databaseOptions, owned, false, timing));
+    const result = await owned();
     completedAt = performance.now();
     if (completedAt - startedAt >= SQLITE_SESSION_SLOW_WRITE_MS) {
       getChildLogger({ subsystem: "session-sqlite" }).warn(

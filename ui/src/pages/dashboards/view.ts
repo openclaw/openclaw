@@ -306,7 +306,7 @@ export function renderDashboards(
   return html`
     <section class="content-header dashboards-header">
       <div>
-        <div class="page-title">${titleForRoute("dashboards")}</div>
+        <h1 class="page-title">${titleForRoute("dashboards")}</h1>
         <div class="page-subtitle">${t("subtitles.dashboards")}</div>
       </div>
       ${

@@ -473,26 +473,7 @@ describe("watch node HTTP transport", () => {
       bootstrapToken: issued.token,
     });
     const connected = await readJson(connectResponse);
-    const invoke = nodeRegistry.invoke({
-      nodeId: identity.deviceId,
-      command: "device.info",
-      timeoutMs: 2_000,
-    });
-    const pollResponse = await fetch(`${baseUrl}/poll`, {
-      method: "POST",
-      headers: { authorization: `Bearer ${String(connected.sessionToken)}` },
-    });
-    const polled = await readJson(pollResponse);
-    const event = polled.event as { payload: { id: string } };
-    const currentCheck = vi.spyOn(nodeRegistry, "isConnectionCurrentPairingState");
-    currentCheck.mockClear();
-    const partial = startPartialJsonRequest({
-      url: `${baseUrl}/result`,
-      authorization: `Bearer ${String(connected.sessionToken)}`,
-    });
-    partial.request.write(`{"id":${JSON.stringify(event.payload.id)},"ok":`);
-    await vi.waitFor(() => expect(currentCheck).toHaveBeenCalledTimes(1));
-
+    // Prepare the pending request before starting the invoke's two-second budget.
     const paired = await getPairedDevice(identity.deviceId, baseDir);
     const repair = await requestDevicePairing(
       {
@@ -504,6 +485,33 @@ describe("watch node HTTP transport", () => {
       },
       baseDir,
     );
+    const invoke = nodeRegistry.invoke({
+      nodeId: identity.deviceId,
+      command: "device.info",
+      timeoutMs: 2_000,
+    });
+    const pollResponse = await fetch(`${baseUrl}/poll`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${String(connected.sessionToken)}` },
+    });
+    const polled = await readJson(pollResponse);
+    const event = polled.event as { payload: { id: string } };
+    const initialPairingCheck = createDeferred<boolean>();
+    const checkCurrentPairing = nodeRegistry.isConnectionCurrentPairingState.bind(nodeRegistry);
+    const currentCheck = vi
+      .spyOn(nodeRegistry, "isConnectionCurrentPairingState")
+      .mockImplementationOnce((connId) => {
+        const current = checkCurrentPairing(connId);
+        void current.then(initialPairingCheck.resolve, initialPairingCheck.reject);
+        return current;
+      });
+    const partial = startPartialJsonRequest({
+      url: `${baseUrl}/result`,
+      authorization: `Bearer ${String(connected.sessionToken)}`,
+    });
+    partial.request.write(`{"id":${JSON.stringify(event.payload.id)},"ok":`);
+    await expect(initialPairingCheck.promise).resolves.toBe(true);
+    expect(currentCheck).toHaveBeenCalledTimes(1);
     await approveDevicePairing(repair.request.requestId, { callerScopes: [] }, baseDir);
     partial.request.end(`true,"payloadJSON":"{\\"model\\":\\"stale\\"}"}`);
 

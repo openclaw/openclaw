@@ -41,7 +41,10 @@ import {
   runExclusiveSqliteSessionWrite,
 } from "./session-accessor.sqlite-scope.js";
 import { appendTranscriptMessage } from "./session-accessor.sqlite-transcript-write.js";
-import { pruneAllSessionTranscriptArchivesToHighWater } from "./session-history-archive-pruning.js";
+import {
+  pruneAllSessionTranscriptArchivesToHighWater,
+  reclaimSqliteFreePages,
+} from "./session-history-archive-pruning.js";
 import { withSessionHistoryBudgetSweepsForTest } from "./session-history-budget.test-support.js";
 import { enforceSqliteSessionHistoryDiskBudget } from "./session-history-eviction.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
@@ -274,8 +277,9 @@ it.each([false, true])(
       expect(blocked).toMatchObject({ checkpointCalls: 1, checkpointIncomplete: 1 });
       expect(database.db.prepare("PRAGMA busy_timeout").get()).toEqual(busyTimeout);
       reader.exec("ROLLBACK");
-      for (let pass = 0; pass <= Math.ceil(before / 512); pass++) {
+      for (let remaining = freePages(); remaining > 0; remaining = freePages()) {
         database.walMaintenance.reclaimFreePages();
+        expect(freePages()).toBeLessThan(remaining);
       }
       expect(freePages()).toBe(0);
       expect(
@@ -333,8 +337,9 @@ it("native vacuum defers when another writer acquires its lock after checkpoint"
     expect(freePages()).toBe(before);
     expect(database.db.prepare("PRAGMA busy_timeout").get()).toEqual(busyTimeout);
     writer.exec("ROLLBACK");
-    for (let pass = 0; pass <= Math.ceil(before / 512); pass++) {
+    for (let remaining = freePages(); remaining > 0; remaining = freePages()) {
       database.walMaintenance.reclaimFreePages();
+      expect(freePages()).toBeLessThan(remaining);
     }
     expect(freePages()).toBe(0);
     expect(database.db.prepare("PRAGMA busy_timeout").get()).toEqual(busyTimeout);
@@ -347,7 +352,7 @@ it("native vacuum defers when another writer acquires its lock after checkpoint"
   }
 });
 
-it("stops broker page reclamation when its owner is revoked between units", async () => {
+it("bounds broker page reclamation and stops when its owner is revoked between units", async () => {
   const options = { agentId: "main", env: state.env };
   const database = openOpenClawAgentDatabase(options);
   database.db
@@ -359,6 +364,10 @@ it("stops broker page reclamation when its owner is revoked between units", asyn
   database.walMaintenance.checkpoint();
   const before = Number(database.db.prepare("PRAGMA freelist_count").get()?.freelist_count);
   expect(before).toBeGreaterThan(512);
+  await own(reclaimSqliteFreePages(options, undefined, { maxPages: 31 }));
+  expect(before - Number(database.db.prepare("PRAGMA freelist_count").get()?.freelist_count)).toBe(
+    31,
+  );
   let remaining: number | null = null;
   const failure: unknown = await own(
     pageReclamation.withSqliteSessionPageReclamation(options, async (reclaim) => {

@@ -24,6 +24,7 @@ import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import * as transcriptBackfill from "./session-row-transcript-backfill.js";
+import { listProjectedSessions } from "./session-utils-list.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -131,7 +132,8 @@ it("publishes read-only transcript previews without acquiring stored row facts a
       const resident = projection.describe(query)!;
       const membership = [...resident.membership];
       const hasBoard = resident.hasBoard;
-      const revision = projection.state.revision;
+      await listProjectedSessions({ projection, opts: { includeLastMessage: true } });
+      const select = vi.spyOn(projection, "selectEntries");
       const materializedCount = projection.materializedCount;
       const sequence = resident.materializedSequence;
       reads.length = 0;
@@ -162,7 +164,9 @@ it("publishes read-only transcript previews without acquiring stored row facts a
       const current = projection.describe(query)!;
       expect(current.materialized.source.lastMessagePreview).toBe(after?.lastMessagePreview);
       expect(current.materialized.row.lastMessagePreview).toBe(after?.lastMessagePreview);
-      expect(projection.state.revision).not.toBe(revision);
+      const list = await listProjectedSessions({ projection, opts: { includeLastMessage: true } });
+      expect(list.sessions[0]?.lastMessagePreview).toBe("Read-only transcript preview");
+      expect(select).not.toHaveBeenCalled();
       expect(projection.materializedCount).toBe(materializedCount);
       expect(current.materializedSequence).toBe(sequence);
     } finally {

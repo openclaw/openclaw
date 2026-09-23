@@ -735,7 +735,7 @@ describe("session state events", () => {
     registerMainSessionGroupWatch({ sessionKey: group, agentId: "main" }, database);
 
     for (const actorId of ["human-1", "human-2"]) {
-      recordSessionHumanDirectMessage(
+      await recordSessionHumanDirectMessage(
         {
           sessionKey: group,
           entry: { sessionId: "session-group", updatedAt: Date.now(), chatType: "group" },
@@ -756,7 +756,7 @@ describe("session state events", () => {
     expect(wakes).not.toHaveBeenCalled();
   });
 
-  it("prunes dormant ambient cursors while retaining active cursors", () => {
+  it("prunes dormant ambient cursors while retaining active cursors", async () => {
     const database = createDatabaseOptions();
     const dormantGroup = "agent:main:slack:channel:dormant";
     const registeredAt = 100;
@@ -770,7 +770,7 @@ describe("session state events", () => {
     );
 
     const activeAt = registeredAt + SESSION_STATE_RETENTION_MS + 1;
-    recordSessionHumanDirectMessage(
+    await recordSessionHumanDirectMessage(
       {
         sessionKey: group,
         entry: { sessionId: "session-group", updatedAt: activeAt, chatType: "group" },
@@ -802,7 +802,7 @@ describe("session state events", () => {
       database,
     );
 
-    recordSessionHumanDirectMessage(
+    await recordSessionHumanDirectMessage(
       {
         sessionKey: group,
         entry: { sessionId: "session-group", updatedAt: Date.now(), chatType: "group" },
@@ -841,7 +841,7 @@ describe("session state events", () => {
     // Later inbound group registration must not downgrade the explicit watch.
     registerMainSessionGroupWatch({ sessionKey: group, agentId: "main" }, database);
 
-    recordSessionHumanDirectMessage(
+    await recordSessionHumanDirectMessage(
       {
         sessionKey: group,
         entry: { sessionId: "session-group", updatedAt: Date.now(), chatType: "group" },
@@ -857,10 +857,10 @@ describe("session state events", () => {
     expect(wakes).toHaveBeenCalledTimes(1);
   });
 
-  it("gates unparented human turns on registered watchers", () => {
+  it("gates unparented human turns on registered watchers", async () => {
     const database = createDatabaseOptions();
     const entry = { sessionId: "session-child", updatedAt: Date.now() };
-    recordSessionHumanDirectMessage({
+    await recordSessionHumanDirectMessage({
       sessionKey: child,
       entry,
       agentId: "main",
@@ -870,7 +870,7 @@ describe("session state events", () => {
     expect(listSessionStateEventsSince(child, "main", 0, 200, database).events).toHaveLength(0);
 
     registerSessionStateWatch({ watcherSessionKey: watcher, targetSessionKey: child }, database);
-    recordSessionHumanDirectMessage({
+    await recordSessionHumanDirectMessage({
       sessionKey: child,
       entry,
       agentId: "main",

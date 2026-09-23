@@ -1,5 +1,9 @@
 import type { SessionProviderReviewComparison } from "../config/sessions/provider-review.types.js";
 import type {
+  SessionEntryReplacementCommit,
+  SessionEntryReplacementCommitted,
+} from "../config/sessions/session-accessor.sqlite-replacement-state.js";
+import type {
   PublishedSessionTranscriptArchive,
   SessionLegacyArchiveRemovalResult,
 } from "../config/sessions/session-history-archive-pruning.types.js";
@@ -35,6 +39,10 @@ export type AgentDatabaseExecutionOpen = {
 
 export type AgentDatabaseOperations = AgentDatabaseDomainOperations & {
   "database.prepareWrite": { input: undefined; output: void };
+  "session.entries.replace": {
+    input: SessionEntryReplacementCommit;
+    output: SessionEntryReplacementCommitted;
+  };
   "session.providerReview.compare": {
     input: SessionProviderReviewComparison;
     output: SessionEntry;

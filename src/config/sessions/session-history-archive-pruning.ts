@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
-import { isMainThread } from "node:worker_threads";
 import { hasErrnoCode } from "../../infra/errno.js";
 import type {
   SqliteWalCheckpointSnapshot,
@@ -19,10 +18,7 @@ import {
   readSqliteSessionArchivePruning,
   withSqliteSessionPageReclamation,
 } from "./session-accessor.sqlite-page-reclamation.js";
-import {
-  runExclusiveSqliteSessionWrite,
-  withSqliteSessionDatabase,
-} from "./session-accessor.sqlite-scope.js";
+import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
 import {
   observeSessionArchivePruning,
   timeArchivePruningAsync,
@@ -74,9 +70,10 @@ export type SessionArchivePruningResult = {
 export async function reclaimSqliteFreePages(
   databaseOptions: OpenClawAgentDatabaseOptions,
   diagnostics?: SqliteSessionArchivePruningDiagnostics,
-  limits?: PageReclamation & { maxPasses?: number },
+  limits?: PageReclamation & { maxPasses?: number; maxPages?: number },
 ): Promise<boolean> {
-  if (!limits?.reclaimPages && isMainThread) {
+  const reclaimPages = limits?.reclaimPages;
+  if (!reclaimPages) {
     return withSqliteSessionPageReclamation(
       databaseOptions,
       (reclaimPages, assertCurrent, preparedOptions) =>
@@ -90,24 +87,14 @@ export async function reclaimSqliteFreePages(
         }),
     );
   }
-  let remaining: number | undefined;
+  let remaining = limits?.maxPages;
   const maxPasses = limits?.maxPasses ?? Infinity;
   for (let pass = 0; pass < maxPasses && (remaining === undefined || remaining > 0); pass++) {
-    if (remaining !== undefined) {
+    if (pass > 0) {
       await setImmediate();
     }
     limits?.assertCurrent?.();
-    // Cold mutations already execute inside their worker and keep that native owner.
-    const result = limits?.reclaimPages
-      ? await limits.reclaimPages(remaining)
-      : await withSqliteSessionDatabase(
-          databaseOptions,
-          (database) => {
-            limits?.assertCurrent?.();
-            return database.walMaintenance.reclaimFreePages({ maxPages: remaining });
-          },
-          limits?.assertCurrent,
-        );
+    const result = await reclaimPages(remaining);
     if (diagnostics) {
       for (const key of [
         "checkpointCalls",
