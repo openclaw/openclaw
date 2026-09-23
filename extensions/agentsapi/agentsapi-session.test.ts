@@ -25,7 +25,7 @@ describe("Agents API native session receipts", () => {
       if (request.init?.method === "POST") {
         return guardedResponse(request.url, Response.json({}));
       }
-      if (request.url.includes("/events?")) {
+      if (new URL(request.url).pathname.endsWith("/events")) {
         return guardedResponse(request.url, stream.response(request.signal));
       }
       return guardedResponse(
@@ -106,7 +106,7 @@ describe("Agents API native session receipts", () => {
           Response.json({ data: [], has_more: false, last_id: null }),
         );
       }
-      if (request.url.includes("/events?")) {
+      if (new URL(request.url).pathname.endsWith("/events")) {
         return guardedResponse(request.url, stream.response(request.signal));
       }
       idleRequested.resolve();
@@ -138,7 +138,7 @@ describe("Agents API native session receipts", () => {
     await idleRequested.promise;
     expect(inputTypes).toEqual(["agent.session.input.message", "agent.session.input.cancel"]);
     expect(cancellationSettled).toBe(false);
-    idleReceipt.resolve(Response.json({ status: "idle" }));
+    idleReceipt.resolve(Response.json({ id: "session-fixture", status: "idle", error: null }));
 
     await cancellation;
     await expect(run).rejects.toBe(interruption);
@@ -202,7 +202,7 @@ function createEventStream() {
       });
       return new Response(body, { headers: { "Content-Type": "text/event-stream" } });
     },
-    send(event: AgentsApiEvent) {
+    send(event: { type: string; [key: string]: unknown }) {
       const observed = deferred<void>();
       const callbacks = waiters.get(event.type) ?? [];
       callbacks.push(() => observed.resolve());
