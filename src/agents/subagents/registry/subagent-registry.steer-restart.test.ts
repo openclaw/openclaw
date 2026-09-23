@@ -515,11 +515,10 @@ describe("subagent registry steer restarts", () => {
 
       emitLifecycleEnd("run-terminal-state-new");
 
-      await waitForRegistrySideEffect(() => {
-        const hookCall = requireSubagentEndedHookCall("run-terminal-state-new");
-        expect(hookCall.event.runId).toBe("run-terminal-state-new");
-        expect(hookCall.ctx.runId).toBe("run-terminal-state-new");
-      });
+      await settleSubagentRegistryPersistenceWork();
+      const hookCall = requireSubagentEndedHookCall("run-terminal-state-new");
+      expect(hookCall.event.runId).toBe("run-terminal-state-new");
+      expect(hookCall.ctx.runId).toBe("run-terminal-state-new");
       const lifecycleEvent = requireSessionLifecycleEventCall("terminal-state lifecycle event");
       expect(lifecycleEvent.sessionKey).toBe("agent:main:subagent:terminal-state");
       expect(lifecycleEvent.reason).toBe("subagent-status");
