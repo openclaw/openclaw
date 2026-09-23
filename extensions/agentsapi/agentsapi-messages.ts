@@ -168,9 +168,9 @@ async function commitAgentsApiReply(
     throw new Error("Agents API requires a matching host-prepared session target");
   }
   const sessionTarget = { ...params.sessionTarget, agentId, sessionId, sessionKey, storePath };
-  const completedMessages = items.filter(
-    (item) => item.type === "message" && item.role === "assistant" && item.status === "completed",
-  );
+  const completedMessages = items
+    .filter((item) => item.type === "message")
+    .filter((item) => item.role === "assistant" && item.status === "completed");
   const finalItems = completedMessages.filter((item) => item.phase === "final_answer");
   const visibleItems = finalItems.length
     ? finalItems

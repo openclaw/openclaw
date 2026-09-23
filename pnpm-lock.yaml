@@ -656,6 +656,9 @@ importers:
 
   extensions/agentsapi:
     dependencies:
+      openai:
+        specifier: 7.15.0
+        version: 7.15.0
       zod:
         specifier: 4.6.5
         version: 4.6.5
