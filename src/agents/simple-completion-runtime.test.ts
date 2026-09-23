@@ -42,6 +42,7 @@ vi.mock("./prepared-model-runtime.js", () => ({
 
 vi.mock("../plugins/runtime/generation-scope.js", () => ({
   getPluginRuntimeGenerationRegistry: () => undefined,
+  runOutsidePluginRuntimeGenerationScope: (run: () => unknown) => run(),
   withPluginRuntimeGenerationScope: (_snapshot: unknown, run: () => unknown) => run(),
 }));
 
