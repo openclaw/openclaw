@@ -43,17 +43,19 @@ function installBrowserMocks() {
     newCDPSession: async () => ({ send: sessionSend, detach: async () => {} }),
   } as unknown as BrowserContext;
   const newContext = vi.fn(async () => context);
+  const browserClose = vi.fn();
   const browser = {
     newContext,
     contexts: () => [context],
     on: vi.fn(),
     off: vi.fn(),
-    close: vi.fn(),
+    close: browserClose,
   } as unknown as Browser;
   connectOverCdpSpy.mockResolvedValue(browser);
   getChromeWebSocketUrlSpy.mockResolvedValue(null);
   return {
     browser,
+    browserClose,
     context,
     page,
     pageGoto,
@@ -68,6 +70,39 @@ function installBrowserMocks() {
 }
 
 describe("Playwright created-page ownership", () => {
+  it("closes the captured Lightpanda connection when its created page is released", async () => {
+    const fixture = installBrowserMocks();
+    const created = await createPageViaPlaywright({
+      cdpUrl: "ws://127.0.0.1:18792/",
+      engine: "lightpanda",
+      url: "about:blank",
+    });
+    expect(created.targetId).toMatch(/^connection:[^:]+:TARGET_1$/);
+    expect(fixture.newContext).not.toHaveBeenCalled();
+    await created.close();
+    expect(fixture.browserClose).toHaveBeenCalledOnce();
+    expect(fixture.pageClose).not.toHaveBeenCalled();
+    expect(fixture.contextClose).not.toHaveBeenCalled();
+  });
+
+  it("refuses a second Lightpanda page without closing the existing page or connection", async () => {
+    const fixture = installBrowserMocks();
+    await fixture.newPage();
+    fixture.newPage.mockClear();
+    await expect(
+      createPageViaPlaywright({
+        cdpUrl: "ws://127.0.0.1:18792/",
+        engine: "lightpanda",
+        url: "about:blank",
+      }),
+    ).rejects.toThrow("Lightpanda supports one page per connection");
+    expect(fixture.newContext).not.toHaveBeenCalled();
+    expect(fixture.newPage).not.toHaveBeenCalled();
+    expect(fixture.browserClose).not.toHaveBeenCalled();
+    expect(fixture.pageClose).not.toHaveBeenCalled();
+    expect(fixture.context.pages()).toEqual([fixture.page]);
+  });
+
   it.each(["connect", "context", "page", "target", "route"] as const)(
     "rejects an unsignalled authority revocation during %s before navigation",
     async (stage) => {

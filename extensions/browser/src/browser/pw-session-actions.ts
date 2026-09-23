@@ -559,6 +559,8 @@ export async function createPageViaPlaywright(
     opts.engine,
   );
   assertCurrent();
+  // Refusing a second connection-scoped page must not close the existing one.
+  // Keep this check before allocation and outside the new-page cleanup owner.
   if (engine === "lightpanda" && (await getAllPages(browser)).length > 0) {
     throw new Error(
       "Lightpanda supports one page per connection. Navigate the existing tab, or close it before opening another.",

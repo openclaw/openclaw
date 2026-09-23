@@ -234,6 +234,20 @@ describe("isolated session browser owner", () => {
     expect(mocked.create).not.toHaveBeenCalled();
   });
 
+  it("rejects a Lightpanda default profile through managed-profile admission", async () => {
+    mocked.profile = makeBrowserProfile({
+      engine: "lightpanda",
+      attachOnly: true,
+      cdpUrl: "ws://127.0.0.1:9222/",
+    });
+    await expect(
+      accessSessionBrowserDashboard(request, authority().value, { operation: "open" }),
+    ).rejects.toThrow("local managed browser");
+    expect(mocked.ensure).not.toHaveBeenCalled();
+    expect(mocked.create).not.toHaveBeenCalled();
+    expect(getBrowserStateRuntime().sessionDashboards?.size).toBe(0);
+  });
+
   it("carries invocation and resource authority into the page creation effect boundary", async () => {
     const owner = authority();
     mocked.create.mockImplementationOnce(async ({ assertCurrent }) => {
