@@ -673,6 +673,18 @@ export type DiagnosticHarnessRunStartedEvent = DiagnosticHarnessRunBaseEvent & {
   type: "harness.run.started";
 };
 
+export type DiagnosticAgentCommentaryEvent = DiagnosticRunBaseEvent & {
+  type: "agent.commentary";
+  harnessId: string;
+  pluginId?: string;
+  itemId?: string;
+  sourceSequence: number;
+  sourceTimestampMs: number;
+  textLength: number;
+  contentCaptured: boolean;
+  contentTruncated: boolean;
+};
+
 export type DiagnosticHarnessRunCompletedEvent = DiagnosticHarnessRunBaseEvent & {
   type: "harness.run.completed";
   durationMs: number;
@@ -889,6 +901,7 @@ export type DiagnosticEventPayload =
   | DiagnosticRunStartedEvent
   | DiagnosticRunCompletedEvent
   | DiagnosticHarnessRunStartedEvent
+  | DiagnosticAgentCommentaryEvent
   | DiagnosticHarnessRunCompletedEvent
   | DiagnosticHarnessRunErrorEvent
   | DiagnosticModelCallStartedEvent
@@ -1043,6 +1056,7 @@ const ASYNC_DIAGNOSTIC_EVENT_TYPES = new Set<DiagnosticEventPayload["type"]>([
   "model.call.error",
   "run.progress",
   "run.execution_phase",
+  "agent.commentary",
   "harness.run.completed",
   "harness.run.error",
   "context.assembled",
