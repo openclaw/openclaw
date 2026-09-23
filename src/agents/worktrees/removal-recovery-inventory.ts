@@ -19,7 +19,7 @@ export async function createRemovalRecoveryInventory(params: {
   refuse: (reason: string) => Error;
 }) {
   const { record, snapshot, gitdir, options, assertIdentity, refuse: preserved } = params;
-  const readBoolean = async (key: string, fallback: boolean) => {
+  const readRetainedGitBoolean = async (key: string, fallback: boolean) => {
     const result = await runGit(record.repoRoot, ["config", "--type=bool", "--get", key], {
       ...options,
       beforeRun: assertIdentity,
@@ -31,7 +31,8 @@ export async function createRemovalRecoveryInventory(params: {
     return result.code === 1 ? fallback : result.stdout.trim() === "true";
   };
   const precompose =
-    process.platform === "darwin" && (await readBoolean("core.precomposeunicode", false));
+    process.platform === "darwin" &&
+    (await readRetainedGitBoolean("core.precomposeunicode", false));
   const pathKey = (filename: string) => (precompose ? filename.normalize("NFC") : filename);
   const entries = new Map<string, Entry>();
   for (const item of splitNullBuffer(
@@ -58,7 +59,7 @@ export async function createRemovalRecoveryInventory(params: {
   }
   const materializedSymlinks =
     [...entries.values()].some((entry) => entry.mode === "120000") &&
-    !(await readBoolean("core.symlinks", process.platform !== "win32"));
+    !(await readRetainedGitBoolean("core.symlinks", process.platform !== "win32"));
   // Each four-byte $Id$ can expand to OID length + 8 bytes; encoding
   // conversion can then use four bytes per character. Include BOM slack.
   const checkoutBytes = (entry: Entry) => entry.size * (snapshot.length + 8) + 65536;
