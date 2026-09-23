@@ -261,7 +261,7 @@ export async function buildPreparedCompactionRuntime(
         workspaceDir: effectiveWorkspace,
         agentDir,
         agentId: sessionAgentId,
-        thinkingLevel: mapThinkingLevelForProvider(thinkLevel),
+        thinkingLevel: mapThinkingLevelForProvider(thinkLevel, effectiveModel),
       });
     const runtimePlan = reuseFullRuntimePlan
       ? preparedRuntimePlan

@@ -206,6 +206,12 @@ const runtimeConsumers = [
     mode: "runtime" as const,
     dir: "extensions",
   })),
+  {
+    file: "extensions/telegram/src/bot.create-telegram-bot.native-pipeline.test.ts",
+    configs: ["test/vitest/vitest.extension-database-workers.config.ts"],
+    mode: "runtime",
+    dir: "extensions",
+  },
   ...[
     "src/cli/acp-cli-exit.process.test.ts",
     "src/cli/update-dry-run-state.process.test.ts",

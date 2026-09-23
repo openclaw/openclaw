@@ -13,49 +13,15 @@ import {
 } from "./task-registry-records.js";
 import {
   isTerminalTaskStatus,
-  type JsonValue,
-  type TaskDeliveryStatus,
   type TaskEventRecord,
   type TaskRecord,
   type TaskExecutionOwner,
   type TaskPersistenceReceipt,
-  type TaskRuntime,
-  type TaskStatus,
-  type TaskTerminalOutcome,
+  type TaskRunStateTransitionParams,
+  type TaskRunTransition,
 } from "./task-registry.types.js";
 
-export type TaskRunStateTransitionParams = {
-  runId: string;
-  taskId?: string;
-  runtime?: TaskRuntime;
-  sessionKey?: string;
-  childSessionKey?: string | null;
-  status?: TaskStatus;
-  startedAt?: number;
-  endedAt?: number;
-  lastEventAt?: number;
-  error?: string;
-  clearError?: boolean;
-  progressSummary?: string | null;
-  terminalSummary?: string | null;
-  preserveTerminalSummary?: boolean;
-  terminalOutcome?: TaskTerminalOutcome | null;
-  detail?: JsonValue;
-  eventSummary?: string | null;
-  suppressDelivery?: boolean;
-};
-
-type TaskRunDeliveryTransitionParams = {
-  runId: string;
-  runtime?: TaskRuntime;
-  sessionKey?: string;
-  deliveryStatus: TaskDeliveryStatus;
-  error?: string;
-};
-
-export type TaskRunTransition =
-  | { kind: "state"; params: TaskRunStateTransitionParams }
-  | { kind: "delivery"; params: TaskRunDeliveryTransitionParams };
+export class TaskRunTransitionUnsettledError extends Error {}
 
 type TaskRunOwnerTransition = {
   kind: "run-owner";

@@ -17,6 +17,7 @@ import {
 import { resolveOpenAIProviderConfigRecord } from "./realtime-provider-shared.js";
 import {
   DEFAULT_OPENAI_BASE_URL,
+  isCustomOpenAITtsBaseUrl,
   isValidOpenAIModel,
   isValidOpenAIVoice,
   normalizeOpenAITtsBaseUrl,
@@ -88,19 +89,6 @@ function resolveSpeechResponseFormat(
     return "wav";
   }
   return target === "voice-note" ? "opus" : "mp3";
-}
-
-function responseFormatToFileExtension(
-  format: OpenAiSpeechResponseFormat,
-): ".mp3" | ".opus" | ".wav" {
-  switch (format) {
-    case "opus":
-      return ".opus";
-    case "wav":
-      return ".wav";
-    default:
-      return ".mp3";
-  }
 }
 
 function readExtraBody(value: unknown): Record<string, unknown> | undefined {
@@ -178,13 +166,6 @@ function readOpenAIOverrides(
     voice: normalizeOptionalString(overrides.voice),
     speed: normalizeOpenAISpeechSpeed(overrides.speed, baseUrl),
   };
-}
-
-function isCustomOpenAITtsBaseUrl(baseUrl: string | undefined): boolean {
-  if (baseUrl !== undefined) {
-    return normalizeOpenAITtsBaseUrl(baseUrl) !== DEFAULT_OPENAI_BASE_URL;
-  }
-  return normalizeOpenAITtsBaseUrl(process.env.OPENAI_TTS_BASE_URL) !== DEFAULT_OPENAI_BASE_URL;
 }
 
 function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext): {
@@ -311,7 +292,7 @@ export function buildOpenAISpeechProvider(): SpeechProviderPlugin {
         timeoutMs: req.timeoutMs,
         maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "audio"),
       });
-      const fileExtension = responseFormatToFileExtension(responseFormat);
+      const fileExtension = `.${responseFormat}`;
       const { isVoiceMessageCompatibleAudio } = await import("openclaw/plugin-sdk/media-runtime");
       return {
         audioBuffer,

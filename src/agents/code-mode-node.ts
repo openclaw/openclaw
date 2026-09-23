@@ -108,7 +108,7 @@ async function releasePool(owner: NodePool): Promise<void> {
       onError: (error) =>
         process.emitWarning(`Code Mode worker retirement failed: ${formatErrorMessage(error)}`),
     });
-  }, 60_000);
+  }, 5 * 60_000);
   timer.unref();
   idle = { owner, timer };
 }

@@ -209,6 +209,7 @@ export type ChatItem =
       kind: "reading-indicator";
       key: string;
       startedAt: number;
+      preamble?: string;
       runId?: string;
       boundaryId?: string;
     }

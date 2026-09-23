@@ -2,13 +2,18 @@ import { randomUUID } from "node:crypto";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { SKILL_RESOURCE_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/skill-resources.js";
 import { WORKER_SKILL_WORKSHOP_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-skill-workshop.js";
-import { mapThinkingLevelForProvider } from "../../agents/embedded-agent-runner/utils.js";
 import { recordModelFallbackStop } from "../../agents/failover-error.js";
+import {
+  loadManifestModelCatalog,
+  overlayConfiguredModelCatalog,
+} from "../../agents/model-catalog.js";
 import { convertToLlm } from "../../agents/sessions/messages.js";
 import { withSessionManagerWrite } from "../../agents/sessions/session-manager-write-admission.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { createLibrarySkillWorkshopTool } from "../../agents/tools/skill-workshop-tool-library.js";
+import { buildProactiveSubagentOrchestrationSection } from "../../agents/ultra-orchestration.js";
+import { resolveProviderThinkingLevel } from "../../auto-reply/thinking.js";
 import {
   buildActiveNodeContextText,
   prepareActiveNodeContext,
@@ -178,7 +183,23 @@ export async function executeWorkerTurn(
       placement.environmentId,
       placement.activeOwnerEpoch,
     )) === true;
-  const reasoning = mapThinkingLevelForProvider(turn.thinkLevel);
+  const reasoning = resolveProviderThinkingLevel({
+    provider: modelRef.provider,
+    model: modelRef.model,
+    catalog:
+      turn.thinkLevel === "ultra"
+        ? overlayConfiguredModelCatalog({
+            catalog: loadManifestModelCatalog({
+              config: turn.config ?? {},
+              workspaceDir: turn.workspaceDir,
+            }),
+            config: turn.config ?? {},
+            workspaceDir: turn.workspaceDir,
+          })
+        : undefined,
+    agentRuntime: "openclaw",
+    level: turn.thinkLevel,
+  });
   const { browser, computer, preparedComputer, toolAuthority } =
     await prepareWorkerDesktopLaunchPlan({
       desktop: environment.desktop,
@@ -195,6 +216,8 @@ export async function executeWorkerTurn(
       runtimeInstanceId: placement.environmentId,
       placements: params.placements,
       sessionKey: placement.sessionKey,
+      sessionTarget: transcriptTarget,
+      assertSourceCurrent: assertContextCurrent,
       turn,
       turnClaim: params.turnClaim,
     });
@@ -348,7 +371,14 @@ export async function executeWorkerTurn(
     // Presence belongs to the Gateway; workers cannot read its process-local node registry.
     await prepareActiveNodeContext();
     assertContextCurrent();
-    const systemPrompt = [turn.extraSystemPrompt, buildActiveNodeContextText()]
+    const systemPrompt = [
+      turn.extraSystemPrompt,
+      buildActiveNodeContextText(),
+      ...buildProactiveSubagentOrchestrationSection({
+        enabled: turn.thinkLevel === "ultra",
+        hasSessionsSpawn: toolAuthority.allowedToolNames.includes("sessions_spawn"),
+      }),
+    ]
       .filter(Boolean)
       .join("\n\n");
     const launchPlan = await fitLaunchDescriptorWithRuntimeIdentity({

@@ -42,7 +42,7 @@ describe("appendRawStream", () => {
     fs.mkdirSync(directoryTarget);
     vi.stubEnv("OPENCLAW_RAW_STREAM_PATH", directoryTarget);
 
-    expect(() => appendRawStream(() => ({ event: "test", ts: 1 }))).not.toThrow();
+    expect(() => appendRawStream(() => ({ event: "test", ts: 1 }), undefined)).not.toThrow();
     await drainAsyncWrites();
 
     expect(unhandledRejections).toHaveLength(0);
@@ -53,7 +53,7 @@ describe("appendRawStream", () => {
     vi.stubEnv("OPENCLAW_RAW_STREAM_PATH", rawStreamPath);
 
     const payload = { event: "test", ts: 1 };
-    appendRawStream(() => payload);
+    appendRawStream(() => payload, undefined);
     payload.ts = 2;
     // The async writer creates the file before its append completes.
     await vi.waitFor(() => {
@@ -71,7 +71,7 @@ describe("appendRawStream", () => {
     appendRawStream(() => {
       evaluated = true;
       return { event: "test", ts: 1 };
-    });
+    }, undefined);
     await drainAsyncWrites();
 
     expect(evaluated).toBe(false);
@@ -80,17 +80,29 @@ describe("appendRawStream", () => {
     expect(unhandledRejections).toHaveLength(0);
   });
 
+  it.each(["dashboard", "subagent", "internal-session-effects"])(
+    "does not evaluate Incognito %s stream content or create a log file",
+    (surface) => {
+      const rawStreamPath = path.join(tmpDir, `incognito-${surface}.jsonl`);
+      vi.stubEnv("OPENCLAW_RAW_STREAM_PATH", rawStreamPath);
+      const createPayload = vi.fn(() => ({ rawText: "synthetic private reply" }));
+      appendRawStream(createPayload, `agent:main:${surface}:incognito-private`);
+      expect(createPayload).not.toHaveBeenCalled();
+      expect(fs.existsSync(rawStreamPath)).toBe(false);
+    },
+  );
+
   it("contains synchronous factory and JSON serialization failures", () => {
     const rawStreamPath = path.join(tmpDir, "cyclic.jsonl");
     const payload: Record<string, unknown> = {};
     payload.self = payload;
     vi.stubEnv("OPENCLAW_RAW_STREAM_PATH", rawStreamPath);
 
-    expect(() => appendRawStream(() => payload)).not.toThrow();
+    expect(() => appendRawStream(() => payload, undefined)).not.toThrow();
     expect(() =>
       appendRawStream(() => {
         throw new Error("payload unavailable");
-      }),
+      }, undefined),
     ).not.toThrow();
     expect(fs.existsSync(rawStreamPath)).toBe(false);
     expect(unhandledRejections).toHaveLength(0);

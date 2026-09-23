@@ -319,6 +319,10 @@ function createTrackedThreadLifecycleHostCapability(): ThreadLifecycleTestHostCa
     kind: "agent-harness-host-capability",
     version: 1,
     assertActive,
+    retainSourceAuthority: () => {
+      assertActive();
+      return undefined;
+    },
     bindToolSurface: (tools) => {
       assertActive();
       return tools.map((tool) => {

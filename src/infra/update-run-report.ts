@@ -326,7 +326,7 @@ export function renderUpdateRunReport(
       ),
     );
   }
-  for (const message of updateRunWarningMessages(run.steps).slice(-3)) {
+  for (const message of updateRunWarningMessages(run.steps, 3)) {
     lines.push(`Warning: ${bounded(message, 500)}`);
   }
   const verification: string[] = [];

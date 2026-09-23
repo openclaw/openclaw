@@ -218,14 +218,27 @@ describe("Git database admission", () => {
         // Activation must consume staged objects, even if upstream goes offline.
         fs.renameSync(state.source, `${state.source}.offline`);
       });
+      let stagedRoot: string | undefined;
       const result = await state.run({
         channel,
         ...(downgrade ? { devTarget: { mode: "detached" as const, ref: target } } : {}),
         beforeGitMutation: admission,
         ...(publish
           ? {
+              gitArtifactStorageRoot: state.root,
+              validateCandidate: async (candidateRoot) => {
+                stagedRoot = candidateRoot;
+                const artifacts =
+                  process.platform === "win32"
+                    ? path.win32.join(process.env.SystemDrive ?? "C:", "ocu")
+                    : path.join(fs.realpathSync(state.root), ".artifacts");
+                expect(fs.realpathSync(candidateRoot).startsWith(artifacts + path.sep)).toBe(true);
+                expect(fs.statSync(candidateRoot).dev).toBe(fs.statSync(artifacts).dev);
+              },
               publishGitCheckout: async () => {
                 fs.renameSync(state.install, published);
+                assert(stagedRoot);
+                expect(fs.statSync(path.join(stagedRoot, "dist", "entry.js")).isFile()).toBe(true);
                 return published;
               },
             }
@@ -233,6 +246,9 @@ describe("Git database admission", () => {
       });
       expect(result.status, JSON.stringify(result)).toBe("ok");
       expect(admission).toHaveBeenCalledOnce();
+      if (stagedRoot) {
+        expect(fs.existsSync(stagedRoot)).toBe(false);
+      }
       const installed = publish ? published : state.install;
       expect(state.git(installed, "rev-parse", "HEAD")).toBe(target);
       expect(
@@ -263,6 +279,7 @@ describe("Git database admission", () => {
       const result = await state.run(
         publish
           ? {
+              gitArtifactStorageRoot: state.root,
               publishGitCheckout: async () => {
                 fs.renameSync(state.install, published);
                 return published;
@@ -279,6 +296,42 @@ describe("Git database admission", () => {
       expect(state.git(installed, "rev-parse", "HEAD")).toBe(state.target);
       const packs = path.join(installed, ".git", "objects", "pack");
       expect(fs.readdirSync(packs).filter((name) => name.endsWith(".keep"))).toEqual([]);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "refuses exhausted clone artifact storage before stopping the Gateway",
+    async () => {
+      const state = fixture();
+      const before = state.git(state.install, "rev-parse", "HEAD");
+      const artifacts = path.join(state.root, ".artifacts");
+      const prepareMutation = vi.fn();
+      const publish = vi.fn(async () => state.install);
+      const mkdir = fsPromises.mkdir.bind(fsPromises);
+      const allocation = vi
+        .spyOn(fsPromises, "mkdir")
+        .mockImplementation(async (target, options) => {
+          if (String(target) === artifacts) {
+            throw Object.assign(new Error("ENOSPC: no space left on device, mkdir"), {
+              code: "ENOSPC",
+            });
+          }
+          return mkdir(target, options);
+        });
+      try {
+        const result = await state.run({
+          gitArtifactStorageRoot: state.root,
+          beforeGitMutation: prepareMutation,
+          publishGitCheckout: publish,
+        });
+        expect(result).toMatchObject({ status: "error", reason: "preflight-insufficient-space" });
+        expect(allocation).toHaveBeenCalledWith(artifacts, { recursive: true });
+        expect(prepareMutation).not.toHaveBeenCalled();
+        expect(publish).not.toHaveBeenCalled();
+        expect(state.git(state.install, "rev-parse", "HEAD")).toBe(before);
+      } finally {
+        allocation.mockRestore();
+      }
     },
   );
 
@@ -771,6 +824,7 @@ process.exit(result.status ?? 93);
         }
       },
       publishGitCheckout: publish,
+      gitArtifactStorageRoot: state.root,
     });
     if (refuse) {
       await expect(result).rejects.toBe(complete);

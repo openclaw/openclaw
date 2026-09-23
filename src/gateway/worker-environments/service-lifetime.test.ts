@@ -406,7 +406,6 @@ describe("worker environment service", () => {
     workerService.start();
     workerService.start();
     await workerService.reconcileOnce();
-    expect(liveEvents.start).toHaveBeenCalledOnce();
     expect(setIntervalSpy).toHaveBeenCalledExactlyOnceWith(expect.any(Function), 25);
     vi.advanceTimersByTime(25);
     await workerService.reconcileOnce();

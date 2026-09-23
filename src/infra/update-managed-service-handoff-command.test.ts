@@ -6,6 +6,8 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { findSystemdGatewayInstallation } from "../daemon/systemd-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { parseDevUpdateTargetEnv, type DevUpdateTarget } from "./update-dev-target.js";
 import type { ManagedHandoffLease } from "./update-managed-service-handoff-lease.js";
@@ -18,6 +20,7 @@ const forceKillChildProcessTreeMock = vi.hoisted(() => vi.fn());
 const tempDirs = new Set<string>();
 const mockedHandoffLeaseCleanups = new Set<() => void>();
 const MOCK_INSTALL_ROOT = path.join(os.tmpdir(), `openclaw-handoff-command-${process.pid}`);
+const systemRoots = useAutoCleanupTempDirTracker(afterEach);
 
 function createReadyChild(_command: string, args: string[], readyDelayMs = 0) {
   const child = Object.assign(new EventEmitter(), {
@@ -60,7 +63,7 @@ vi.mock("../process/child-process-tree.js", async (importOriginal) => ({
 
 vi.mock("../daemon/systemd-scope.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../daemon/systemd-scope.js")>()),
-  findInstalledSystemdGatewayScope: vi.fn(async () => null),
+  findSystemdGatewayInstallation: vi.fn(async () => ({ kind: "none" })),
 }));
 
 vi.mock("./tmp-openclaw-dir.js", async (importOriginal) => ({
@@ -69,6 +72,7 @@ vi.mock("./tmp-openclaw-dir.js", async (importOriginal) => ({
 }));
 
 beforeEach(async () => {
+  vi.mocked(findSystemdGatewayInstallation).mockResolvedValue({ kind: "none" });
   // Helpers in one fixture share a coordinator without touching the operator's database.
   const coordinatorDir = await fs.realpath(
     await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-handoff-coordinator-")),
@@ -88,6 +92,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   for (const cleanup of mockedHandoffLeaseCleanups) {
     mockedHandoffLeaseCleanups.delete(cleanup);
     cleanup();
@@ -163,6 +168,90 @@ async function startHandoffAndReadCommand(params: {
 }
 
 describe("managed service update handoff command", () => {
+  it.each([
+    { writable: false, signal: null },
+    { writable: true, signal: null },
+    { writable: true, signal: "SIGKILL" },
+  ])(
+    "admits writable=$writable system updates and joins helper settlement (signal=$signal)",
+    async ({ writable, signal }) => {
+      const root = systemRoots.make("openclaw-system-update-");
+      const unitName = "openclaw-custom.service";
+      vi.mocked(findSystemdGatewayInstallation).mockResolvedValue({
+        kind: "system",
+        system: {
+          scope: "system",
+          unitName,
+          unitPath: `/etc/systemd/system/${unitName}`,
+        },
+      });
+      if (!writable) {
+        const access = fs.access.bind(fs);
+        vi.spyOn(fs, "access").mockImplementation(async (file, mode) => {
+          if (
+            String(file) === (await fs.realpath(root)) &&
+            mode === (fs.constants.W_OK | fs.constants.X_OK)
+          ) {
+            throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+          }
+          return access(file, mode);
+        });
+      }
+      const { startManagedServiceUpdateHandoff, waitForSystemServiceUpdateHandoffs } =
+        await import("./update-managed-service-handoff.js");
+      expect(waitForSystemServiceUpdateHandoffs()).toBeUndefined();
+      const spawned = createDeferredCore<ReturnType<typeof createReadyChild>>();
+      spawnMock.mockImplementationOnce((command: string, args: string[]) => {
+        const child = createReadyChild(command, args);
+        spawned.resolve(child);
+        return child;
+      });
+      const started = startManagedServiceUpdateHandoff({
+        root,
+        restartDrainTimeoutMs: 300_000,
+        supervisor: "systemd",
+        env: { ...process.env, OPENCLAW_STATE_DIR: root },
+        execPath: process.execPath,
+        argv1: path.join(root, "openclaw.mjs"),
+        meta: {},
+      });
+      if (!writable) {
+        await expect(started).rejects.toMatchObject({
+          reason: "managed-service-handoff-failed",
+          message: expect.stringContaining(`sudo systemctl restart ${unitName}`),
+        });
+        expect(spawnMock).not.toHaveBeenCalled();
+        return;
+      }
+      await expect(started).resolves.toMatchObject({ status: "started" });
+      const [command, args] = spawnMock.mock.calls[0] as [string, string[]];
+      tempDirs.add(path.dirname(args.at(-1)!));
+      const prepared = JSON.parse(await fs.readFile(args.at(-1)!, "utf8"));
+      expect(command).toBe(process.execPath);
+      expect(prepared.commandArgv).toContain("--no-restart");
+      expect(prepared.serviceRecovery).toBeUndefined();
+      expect(prepared.operatorRestartWarning).toBe(
+        `System-scope Gateway service ${unitName} requires an operator restart. Package updates do not stop or restart this service. After the update, run: sudo systemctl restart ${unitName}`,
+      );
+      const barrier = waitForSystemServiceUpdateHandoffs();
+      expect(barrier).toBeDefined();
+      const settled = vi.fn();
+      const observed = barrier?.then(settled, settled);
+      const child = await spawned.promise;
+      Object.assign(child, { exitCode: signal ? null : 0, signalCode: signal });
+      child.emit("exit", signal ? null : 0, signal);
+      await Promise.resolve();
+      expect(settled).not.toHaveBeenCalled();
+      child.emit("close", signal ? null : 0, signal);
+      if (signal) {
+        await expect(barrier).rejects.toThrow("settlement could not be confirmed");
+      } else {
+        await expect(barrier).resolves.toBeUndefined();
+      }
+      await observed;
+    },
+  );
+
   it.each(
     (["readiness", "park"] as const).flatMap((phase) =>
       [30_000, 120_000].map((budgetMs) => ({ phase, budgetMs })),

@@ -225,6 +225,7 @@ async function requestChatMetadata(
 function catalogProjectionKey(
   models: ModelCatalogResult["models"],
   accountSelection: ModelCatalogResult["accountSelection"],
+  modelSelectionPolicy: ModelCatalogResult["modelSelectionPolicy"],
 ) {
   // Metadata omits direct-picker policy, including on alternate runtime choices.
   return stableStringify([
@@ -239,6 +240,7 @@ function catalogProjectionKey(
         : {}),
     })),
     accountSelection,
+    modelSelectionPolicy,
   ]);
 }
 
@@ -253,7 +255,7 @@ function preparePublication(
     isCurrent,
     publish: (result) => {
       // Legacy/startup responses can carry models. The direct catalog is their only UI owner.
-      const { models, accountSelection, ...metadata } = result;
+      const { models, accountSelection, modelSelectionPolicy, ...metadata } = result;
       if (isCurrent()) {
         let catalogChanged = false;
         if (entry.validateCatalog) {
@@ -264,8 +266,12 @@ function preparePublication(
           if (
             !catalog ||
             models === undefined ||
-            catalogProjectionKey(models, accountSelection) !==
-              catalogProjectionKey(catalog.models, catalog.accountSelection)
+            catalogProjectionKey(models, accountSelection, modelSelectionPolicy) !==
+              catalogProjectionKey(
+                catalog.models,
+                catalog.accountSelection,
+                catalog.modelSelectionPolicy,
+              )
           ) {
             invalidateModelCatalogCache(client, entry.scope);
             catalogChanged = true;

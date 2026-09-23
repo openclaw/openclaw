@@ -384,6 +384,7 @@ export function createCrabboxWorkerProvider(
               assertCurrent,
               projectCaptureRequired:
                 preparedProject?.captureRequired || preparedReplay ? true : undefined,
+              projectCaptureReplay: preparedReplay ? true : undefined,
               ...(allocationChoice.kind === "checkpoint"
                 ? { forkedCheckpointId: allocationChoice.checkpointId }
                 : {}),

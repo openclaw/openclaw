@@ -115,7 +115,10 @@ class ActivityPage extends OpenClawLightDomElement {
       (agents, notify) => agents.subscribe(notify),
     )
     .watch(
-      () => this.context?.liveActivity,
+      () =>
+        (this.routeData ?? this.presentedRoute?.data)?.mode === "live"
+          ? this.context?.liveActivity
+          : null,
       (activity, notify) => activity.subscribe(notify),
       (activity) => {
         const snapshot = activity.snapshot;

@@ -3,7 +3,14 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeEach, vi } from "vitest";
+import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
+import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
 import type { OpenClawConfig } from "../../config/types.js";
+import {
+  claimAgentRunDelegatedAuthority,
+  registerAgentRunContext,
+  releaseAgentRunDelegatedAuthority,
+} from "../../infra/agent-run-registry.js";
 import type {
   WorkerDesktopEndpoint,
   WorkerNodeEnrollment,
@@ -21,6 +28,13 @@ import type { WorkerInstallationArtifact } from "./bundle.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { hashWorkerCredential } from "./credential.js";
 import { createWorkerInferenceStore } from "./inference-store.js";
+import type { WorkerSessionTurnClaim } from "./placement-record.js";
+import {
+  attachWorkerTurnExecutionIdentityStore,
+  bindWorkerTurnOwner,
+  getWorkerTurnExecutionIdentityCapability,
+  signalWorkerTurnClaimClosed,
+} from "./placement-turn-claim-events.js";
 import { createWorkerEnvironmentService, type WorkerEnvironmentService } from "./service.js";
 import {
   createWorkerEnvironmentStore,
@@ -114,6 +128,7 @@ export const testState = {} as {
   nowMs: number;
   providersEnabled: boolean;
   reuseReadWorkers: boolean;
+  releaseTurnOwners: Array<() => void>;
   prepareInstallation: WorkerEnvironmentServiceOptions["prepareInstallation"];
   bootstrapWorker: WorkerEnvironmentServiceOptions["bootstrapWorker"];
 };
@@ -121,6 +136,7 @@ export const testState = {} as {
 export function setupWorkerEnvironmentServiceSuite(options: { reuseReadWorkers?: boolean } = {}) {
   beforeEach(async () => {
     testState.reuseReadWorkers = options.reuseReadWorkers === true;
+    testState.releaseTurnOwners = [];
     testState.root = await fs.mkdtemp(
       path.join(await fs.realpath(os.tmpdir()), "openclaw-worker-service-"),
     );
@@ -157,7 +173,13 @@ export function setupWorkerEnvironmentServiceSuite(options: { reuseReadWorkers?:
   afterEach(async () => {
     // Shutdown may schedule cleanup after a test leaves fake timers installed.
     vi.useRealTimers();
-    await testState.service?.stop();
+    try {
+      await testState.service?.stop();
+    } finally {
+      for (const release of testState.releaseTurnOwners) {
+        release();
+      }
+    }
     await closeWorkerEnvironmentDatabase();
     await fs.rm(testState.root, { recursive: true, force: true });
   });
@@ -284,7 +306,6 @@ export function createLiveEvents(overrides: Record<string, unknown> = {}) {
     clear: vi.fn(),
     clearEnvironment: vi.fn(),
     rotateCredential: vi.fn(() => true),
-    start: vi.fn(),
     ...overrides,
   };
 }
@@ -550,6 +571,7 @@ export async function placementHarness(
   environmentId: string,
   sessionId: string,
   serviceOptions: Parameters<typeof createService>[1] = {},
+  sessionTarget?: BoundAgentRunSessionTarget,
 ) {
   const identity = await seedAttachedIdentity(environmentId, sessionId);
   const claim = identity.turnClaim!;
@@ -566,18 +588,70 @@ export async function placementHarness(
     expiresAtMs: identity.credentialExpiresAtMs,
   });
   identity.credentialHash = credentialHash;
+  return bindPlacementHarness(identity, serviceOptions, sessionTarget);
+}
+
+export function bindPlacementHarness(
+  identity: WorkerConnectionIdentity,
+  serviceOptions: Parameters<typeof createService>[1] = {},
+  target?: BoundAgentRunSessionTarget,
+) {
+  const sessionId = expectDefined(identity.sessionId, "worker fixture session identity");
+  const claim = expectDefined(identity.turnClaim, "worker fixture turn claim");
+  const sessionTarget = target ?? {
+    agentId: "main",
+    sessionId,
+    sessionKey: `agent:main:${sessionId}`,
+    storePath: path.join(testState.root, "sessions.json"),
+  };
+  const validateWorkerTurn = vi.fn<(claim: WorkerSessionTurnClaim) => boolean>(() => true);
+  const executionStore = { validateTurnClaim: validateWorkerTurn };
+  const databasePath = testState.stateDb.path;
+  attachWorkerTurnExecutionIdentityStore(executionStore, databasePath);
   const placementStore = {
     assertWorkerRuntimeRefresh: vi.fn(() => {
       throw new Error("Cannot refresh a worker runtime while its turn is active");
     }),
     readWorkerTurnClaim: vi.fn(() => claim),
     readWorkerTurnLiveAckCursor: vi.fn(() => 0),
-    validateWorkerTurn: vi.fn(() => true),
+    validateWorkerTurn,
+    getExecutionIdentityCapability: (current: WorkerSessionTurnClaim) =>
+      getWorkerTurnExecutionIdentityCapability(executionStore, current),
     isWorkerTurnToolAuthorized: vi.fn(() => true),
     updateAckCursors: vi.fn(),
     prepareWorkspaceResultOwnerRevocation: vi.fn(),
     registerTurnClaimClosedHandler: vi.fn(() => () => {}),
   };
+  const instance = createOperationalRunInstanceRef(claim.runId);
+  const authority = claimAgentRunDelegatedAuthority(instance);
+  registerAgentRunContext(
+    claim.runId,
+    {
+      agentId: sessionTarget.agentId,
+      sessionId: sessionTarget.sessionId,
+      sessionKey: sessionTarget.sessionKey,
+    },
+    authority.claimId,
+  );
+  let sourceReleased = false;
+  const releaseSource = () => {
+    if (sourceReleased) {
+      return;
+    }
+    sourceReleased = true;
+    signalWorkerTurnClaimClosed(databasePath, claim);
+    releaseAgentRunDelegatedAuthority(authority);
+  };
+  testState.releaseTurnOwners.push(releaseSource);
+  bindWorkerTurnOwner(executionStore, claim, undefined, instance, sessionTarget, () => {
+    if (!validateWorkerTurn(claim)) {
+      throw new Error("Worker fixture claim is no longer current");
+    }
+  });
+  const source = expectDefined(
+    getWorkerTurnExecutionIdentityCapability(executionStore, claim),
+    "worker fixture source capability",
+  );
   const workerService = createService(createProvider(), { ...serviceOptions, placementStore });
-  return { identity, placementStore, workerService };
+  return { identity, placementStore, workerService, source, releaseSource };
 }

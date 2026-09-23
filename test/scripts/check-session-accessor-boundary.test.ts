@@ -175,7 +175,6 @@ describe("session accessor boundary guard", () => {
         "src/auto-reply/reply/agent-runner-cli-dispatch.ts",
         "src/auto-reply/reply/agent-runner-execution.ts",
         "src/auto-reply/reply/agent-runner-memory.ts",
-        "src/auto-reply/reply/agent-runner-session-reset.ts",
         "src/auto-reply/reply/agent-runner.ts",
         "src/auto-reply/reply/body.ts",
         "src/auto-reply/reply/commands-acp/lifecycle.ts",

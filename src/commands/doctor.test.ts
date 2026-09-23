@@ -88,7 +88,7 @@ function createDoctorRuntime() {
 }
 
 function createRecoveryReport(
-  supportIssue: NonNullable<DoctorSessionSqliteReport["supportIssue"]>,
+  supportIssue?: NonNullable<DoctorSessionSqliteReport["supportIssue"]>,
 ): DoctorSessionSqliteReport {
   return {
     migrationRun: { manifestPath: "/tmp/run-1.json", runId: "run-1" },
@@ -139,6 +139,24 @@ describe("doctorCommand", () => {
       async (params: { run: (authority: { assertCurrent(): void }) => unknown }) =>
         await params.run({ assertCurrent() {} }),
     );
+  });
+
+  it("prints the intentional non-outcome instead of filing an empty recovery", async () => {
+    mocks.runDoctorSessionSqlite.mockResolvedValueOnce(createRecoveryReport());
+    const runtime = createDoctorRuntime();
+    await expect(
+      doctorCommand(runtime, {
+        sessionSqlite: "recover",
+        sessionSqliteGithubIssue: true,
+        yes: true,
+      }),
+    ).rejects.toThrow("exit:0");
+    expect(runtime.log).toHaveBeenCalledWith(
+      "session-sqlite recover: nothing to recover; no report filed",
+    );
+    expect(mocks.submitGithubIssue).not.toHaveBeenCalled();
+    expect(mocks.promptYesNo).not.toHaveBeenCalled();
+    expect(mocks.openUrl).not.toHaveBeenCalled();
   });
 
   it("writes post-upgrade JSON through the runtime before exiting with findings", async () => {

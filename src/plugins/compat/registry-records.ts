@@ -121,7 +121,7 @@ export const PLUGIN_COMPAT_RECORDS = [
       "src/plugins/compat/registry.test.ts",
       "src/plugin-state/plugin-state-store.test.ts",
       "src/plugin-state/plugin-state-store.runtime.test.ts",
-      "src/plugin-sdk/plugin-state-store-runtime.test.ts",
+      "test/type-contracts/plugin-state-store-runtime.ts",
       "src/plugins/loader.runtime-registry.test.ts",
     ],
     releaseNote:
