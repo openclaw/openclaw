@@ -25,13 +25,14 @@ const catalog = (entries: ModelCatalogEntry[]): ModelCatalogSnapshot => ({
 
 function fixture(
   params: {
+    config?: OpenClawConfig;
     entries?: ModelCatalogEntry[];
     current?: () => boolean;
     ready?: boolean;
     load?: PreparedModelRuntimeSnapshot["loadFullModelCatalog"];
   } = {},
 ) {
-  const config: OpenClawConfig = {
+  const config: OpenClawConfig = params.config ?? {
     agents: {
       defaults: {
         model: "openai/gpt-6-luna",
@@ -80,6 +81,34 @@ function fixture(
 }
 
 describe("first-turn native model catalog resolution", () => {
+  it("resolves a ready Codex row when an unpinned OpenAI auth profile is configured", async () => {
+    const { harness, snapshot } = fixture({
+      entries: [luna],
+      config: {
+        agents: {
+          defaults: {
+            model: "openai/gpt-6-luna",
+            models: { "openai/gpt-6-luna": { agentRuntime: { id: "codex" } } },
+          },
+        },
+        auth: {
+          profiles: {
+            "openai:work": { provider: "openai", mode: "oauth" },
+          },
+        },
+      },
+    });
+
+    await expect(
+      resolveReadyNativeModelCatalogEntry({
+        snapshot,
+        harness,
+        provider: "openai",
+        modelId: "gpt-6-luna",
+      }),
+    ).resolves.toEqual(luna);
+  });
+
   it("loads a cold exact Luna row and returns it only after readiness", async () => {
     const load = vi.fn(async () => catalog([luna]));
     const { harness, snapshot } = fixture({ load });
