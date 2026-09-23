@@ -4,6 +4,7 @@ import {
 } from "../../config/config.js";
 import { resolveGatewayPort } from "../../config/paths.js";
 import { readPackageVersion } from "../../infra/package-json.js";
+import { tryProcessCwd } from "../../infra/safe-cwd.js";
 import {
   normalizeUpdateChannel,
   resolveEffectiveUpdateChannel,
@@ -43,7 +44,6 @@ import {
   parseTimeoutMsOrExit,
   resolveUpdateRoot,
   resolveTargetVersion,
-  tryResolveInvocationCwd,
   type UpdateFinalizeOptions,
 } from "./shared.js";
 import { updateFinalizeCommand } from "./update-command-finalize.js";
@@ -87,7 +87,7 @@ export async function updateRepairCommand(opts: UpdateFinalizeOptions): Promise<
   if (timeoutMs === null) {
     return;
   }
-  const env = resolveServiceRefreshEnv(process.env, tryResolveInvocationCwd());
+  const env = resolveServiceRefreshEnv(process.env, tryProcessCwd());
   const options = { env, busyTimeoutMs: timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS };
   assertConfigWriteAllowedInCurrentMode({ env });
   await assertOpenClawStateWriteAllowedAtPath({
