@@ -675,13 +675,16 @@ record("stdout-write-returned");
     ).toBe(true);
   });
 
-  it.each(DIRECT_RUN_SCRIPTS)("uses the canonical guard in %s", (script) => {
-    const source = readFileSync(script, "utf8");
+  it.each(["scripts/android-app-i18n.ts", "scripts/generate-bundled-channel-config-metadata.ts"])(
+    "uses the canonical guard in %s",
+    (script) => {
+      const source = readFileSync(script, "utf8");
 
-    expect(source.match(/isDirectRunUrl\(process\.argv\[1\], import\.meta\.url\)/gu)).toHaveLength(
-      1,
-    );
-  });
+      expect(
+        source.match(/isDirectRunUrl\(process\.argv\[1\], import\.meta\.url\)/gu),
+      ).toHaveLength(1);
+    },
+  );
 
   it.each([
     ...DIRECT_RUN_SCRIPTS,

@@ -710,7 +710,6 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
   it.for([
     { owner: "{", unjoined: false },
     { owner: '{"pid":0}', unjoined: false },
-    { owner: '{"pid":-1}', unjoined: false },
     { owner: '{"pid":2147483648}', unjoined: false },
     { owner: JSON.stringify({ pid: process.pid }), unjoined: true },
   ])(

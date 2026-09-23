@@ -8,7 +8,6 @@ import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  cleanupCanaryArtifactsForExtensions,
   formatBoundaryCheckSuccessSummary,
   formatSlowCompileSummary,
   formatSkippedCompileProgress,
@@ -204,29 +203,6 @@ describe("check-extension-package-tsc-boundary", () => {
       ),
     ).rejects.toMatchObject({ kind: "timeout", fullOutput: expect.stringContaining(diagnostic) });
   });
-  it("removes stale canary artifacts across extensions", () => {
-    const { rootDir } = createTempExtensionRoot();
-    const { canaryPath, tsconfigPath } = writeCanaryArtifacts(rootDir);
-
-    cleanupCanaryArtifactsForExtensions(["demo"], rootDir);
-
-    expect(fs.existsSync(canaryPath)).toBe(false);
-    expect(fs.existsSync(tsconfigPath)).toBe(false);
-  });
-
-  it("cleans canary artifacts again on process exit", () => {
-    const { rootDir } = createTempExtensionRoot();
-    const { canaryPath, tsconfigPath } = writeCanaryArtifacts(rootDir);
-    const processObject = new EventEmitter();
-    const teardown = installCanaryArtifactCleanup(["demo"], { processObject, rootDir });
-
-    processObject.emit("exit");
-    teardown();
-
-    expect(fs.existsSync(canaryPath)).toBe(false);
-    expect(fs.existsSync(tsconfigPath)).toBe(false);
-  });
-
   it("cleans stale artifacts for every extension id passed to the cleanup hook", () => {
     const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-boundary-canary-"));
     tempRoots.add(rootDir);

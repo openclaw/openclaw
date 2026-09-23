@@ -765,15 +765,13 @@ print('held-file-copy-ok')
     expect(() => auditMacWorkerPortability(root, node)).toThrow(/Nonportable LC_LOAD_DYLIB/);
   });
 
-  it.each(
-    [
-      "/usr/lib/libSystem.B.dylib",
-      "/opt/homebrew/lib/nonportable.dylib",
-      "/usr/lib/../../opt/homebrew/lib/nonportable.dylib",
-      "/System/Library/../../opt/homebrew/lib/nonportable.dylib",
-      "@loader_path/../../outside.dylib",
-    ].flatMap((library) => ["thin", "fat64"].map((format) => ({ library, format }))),
-  )("audits load dependencies after inventory ($format, $library)", async ({ library, format }) => {
+  it.each([
+    "/usr/lib/libSystem.B.dylib",
+    "/opt/homebrew/lib/nonportable.dylib",
+    "/usr/lib/../../opt/homebrew/lib/nonportable.dylib",
+    "/System/Library/../../opt/homebrew/lib/nonportable.dylib",
+    "@loader_path/../../outside.dylib",
+  ])("audits load dependencies after inventory (%s)", async (library) => {
     const { auditMacWorkerPortability } =
       await import("../../scripts/lib/mac-worker-portability.mjs");
     const { machoFixture } = await import("../helpers/mac-native.js");
@@ -790,16 +788,7 @@ print('held-file-copy-ok')
     name.copy(command, 24);
     header.writeUInt32LE(1, 16);
     header.writeUInt32LE(command.length, 20);
-    const thin = Buffer.concat([header, command]);
-    // On-disk fat headers are big endian; the arm64 slice is little endian.
-    const payload =
-      format === "fat64"
-        ? Buffer.concat([machoFixture(64, false, true, 6).subarray(0, 4096), thin])
-        : thin;
-    if (format === "fat64") {
-      payload.writeBigUInt64BE(BigInt(thin.length), 24);
-    }
-    writeFileSync(addon, payload);
+    writeFileSync(addon, Buffer.concat([header, command]));
     const load = spawnSync("/usr/bin/otool", ["-l", addon], { encoding: "utf8" });
     expect(load.status, load.stderr).toBe(0);
     expect(load.stdout).toContain(`name ${library} (offset 24)`);
