@@ -4,7 +4,6 @@ import {
   createChannelIngressError,
   createChannelIngressMonitor,
   type ChannelIngressQueue,
-  type ChannelIngressMonitorLifecycle,
 } from "openclaw/plugin-sdk/channel-outbound";
 import {
   collectErrorGraphCandidates,
@@ -15,6 +14,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { PluginJsonValue } from "openclaw/plugin-sdk/plugin-entry";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getSlackRuntime } from "../runtime.js";
+import type { SlackIngressTurnLifecycle } from "./ingress.types.js";
 import { isNonRecoverableSlackAuthError } from "./reconnect-policy.js";
 import { isTransientSlackThreadLookupError } from "./thread-resolution.js";
 
@@ -23,15 +23,6 @@ const SLACK_INGRESS_POLL_INTERVAL_MS = 1_000;
 const SLACK_BOLT_AUTHORIZATION_ERROR = "slack_bolt_authorization_error";
 
 const SLACK_INGRESS_LIFECYCLE_CONTEXT_KEY = "openclawIngressLifecycle";
-
-export type SlackIngressTurnLifecycle = Omit<
-  ChannelIngressMonitorLifecycle,
-  "onAdoptionFinalizing"
-> & {
-  onSessionRouted?: (sessionKey: string) => Promise<void>;
-  /** A logical duplicate awaits its existing owner before session routing. */
-  onDispatchWaiting?: () => void;
-};
 
 type SlackIngressPayload = {
   version: number;
