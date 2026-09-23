@@ -119,10 +119,9 @@ describe("incomplete-turn recovery policy", () => {
       { name: "a timed-out turn", aborted: false, timedOut: true, yielded: false, error: false },
       { name: "pending work", aborted: false, timedOut: false, yielded: true, error: false },
     ].flatMap((scenario) =>
-      (["required", "optional"] as const).map((terminalReplyExpectation) => ({
-        ...scenario,
-        terminalReplyExpectation,
-      })),
+      (["required", "optional"] as const).map((terminalReplyExpectation) =>
+        Object.assign({}, scenario, { terminalReplyExpectation }),
+      ),
     ),
   )(
     "classifies NO_REPLY after $name without replay (reply=$terminalReplyExpectation)",
