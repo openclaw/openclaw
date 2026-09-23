@@ -18,7 +18,7 @@ The table compares eleven successful B1/R1 main runs with five later successful 
 | `security-fast`                                            |                     — |                                     45 [66] | Hosted when admitted           |
 | `build-artifacts`                                          |             280 [314] |                                   599 [898] | Blacksmith 16-class            |
 | `check-lint`                                               |             461 [499] |                                   624 [631] | Hosted on admitted main pushes |
-| `check-lint-core-1` / `-2`                                 |                     — |                       311 [377] / 332 [358] | Hosted                         |
+| `check-lint-core-1` / `-2`                                 |                     — |                       311 [377] / 332 [358] | Blacksmith 16/8-class          |
 | `check-prod-types`                                         |                     — |                                   240 [282] | Hosted                         |
 | `check-test-types`                                         |             358 [387] |                                   608 [664] | Hosted on admitted main pushes |
 | `check-test-types-core-1` / `-2`                           | 281 [321] / 257 [329] |                       521 [572] / 496 [524] | Hosted when admitted           |
@@ -33,7 +33,7 @@ The table compares eleven successful B1/R1 main runs with five later successful 
 | Fast channel / plugin contracts                            |                     — |                       322 [325] / 225 [248] | Hosted                         |
 | `control-ui-performance`                                   |                     — |                                   120 [130] | Hosted                         |
 | Docs / Python skills / native and Control UI i18n          |                     — |                        No comparable sample | Retain existing hosted routes  |
-| `openclaw/ci-gate`                                         |                     — |                                       3 [6] | Hosted                         |
+| `openclaw/ci-gate`                                         |                     — |                                       3 [6] | Blacksmith 4-class             |
 
 Independent hosted checks reached at most 664 seconds in this sample. Artifact builds reached 898 seconds before the shared preflight and gate; they retain Blacksmith. Only the gate depends on `build-artifacts`: the workflow does not contain a serial build-to-test job dependency.
 
@@ -107,15 +107,31 @@ costs about $0.2984 instead of $0.1923 for two 8-class rows. These unrounded
 estimates exclude minimum billing and ancillary charges; native measurements,
 rather than that forecast, own the final cost and wall comparison.
 
-The change adds three actual Blacksmith registrations to an eligible hybrid
-run. The two lint rows already occur in the conservative potentially eligible
-non-Node inventory; adding the previously always-hosted gate changes that
-upper bound from 80 to 81. With the existing 70/130 Node caps and four-main,
-21-PR arrival envelope, the bound becomes `4 × 151 + 21 × 211 = 5,035` before
-the separately documented three-row Windows reserve, or 5,110 with that reserve.
-The latter leaves 890 registrations below the 6,000 operating target from the
-observed 10,000-per-five-minute registration limit. This conditional bound does
-not establish organization-wide usage.
+The revised PR run `35814962786` measured core lint 1 at 275 seconds on the
+16-class and core lint 2 at 385 seconds on the 8-class. The heavier row's
+reference compute was about $0.1467, versus $0.1469 for its 551-second 8-class
+main-shaped observation and $0.1656 for the earlier 621-second PR observation.
+These are unrounded complete-job costs across different CI contexts, excluding
+minimum billing and ancillary charges. The revised workflow still failed a UI
+test and had a 118-second hosted median wait; it is not a complete fifteen-minute
+qualification.
+
+The change adds three actual Blacksmith registrations on ordinary hybrid main
+and same-repository PRs. Trusted fork PRs using the logical GitHub profile emit
+five core-lint rows, so their increase can be six including the gate. A fresh
+current-source audit totals 70 potentially self-hosted non-Node rows across the
+supported automatic main/PR profiles. This conservative union includes five
+core-lint rows, five core-type rows, five Windows rows, and thirteen UI E2E rows;
+its profile maxima do not all coexist. The six extension-lint rows stay hosted.
+
+Retain an 84-row non-Node allowance, leaving fourteen rows reserved above that
+union. With the unchanged 70/130 Node caps and four-main/21-PR arrival envelope,
+`4 × (70 + 84) + 21 × (130 + 84) = 5,110`. That leaves 890 below the 6,000
+operating target from the reported 10,000-per-five-minute registration limit.
+This replaces the stale historical `80 + 3 + 1` explanation without spending
+headroom or changing matrix caps. Manual/frozen release jobs and other workflows
+are outside this conditional arrival envelope; it does not establish complete
+organization-wide usage.
 
 ## RunsOn remains unqualified
 

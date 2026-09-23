@@ -8,11 +8,13 @@ read_when:
 
 ## Runner registration budget
 
-The latest critical-path routing adds the formerly hosted gate to the potentially
-eligible Blacksmith inventory. Including the separate three-row Windows reserve,
-the existing four-main/21-PR envelope is now **5,110 registrations**, leaving 890
-below the 6,000 operating target. Earlier 5,010 and 5,085 calculations below
-predate that gate reserve. See [critical-path routing](/ci/routing-costs#hosted-assignment-on-the-critical-path).
+The current automatic main/PR inventory has a conservative union of 70 potentially
+self-hosted non-Node rows. Retain an 84-row allowance, including fourteen reserved
+rows, alongside the unchanged 70/130 Node caps. The four-main/21-PR arrival
+envelope is **5,110 registrations**, leaving 890 below the 6,000 operating target.
+Historical 5,010/5,085/5,160 calculations below describe earlier inventories;
+this fresh count includes the five type stripes and five Windows rows.
+See [critical-path routing](/ci/routing-costs#hosted-assignment-on-the-critical-path).
 
 OpenClaw's current GitHub runner-registration bucket reports 10,000 self-hosted
 runner registrations per 5 minutes in `gh api rate_limit`. Re-check
@@ -33,20 +35,19 @@ concurrent repositories, retries, and burst overlap.
 Trusted automatic hybrid first-attempt preflight jobs request the existing
 16-class after three nearby hosted preflights remained unassigned while their
 Blacksmith security jobs completed. Each eligible hybrid run admits one
-Blacksmith preflight plus security when optional hosted admission is closed,
-for at most two control registrations; default Blacksmith retains one. Both jobs already
-belong to the conservative 80 non-Node allowance, so the retained
-`4 × 150 + 21 × 210 = 5,010` ceiling is unchanged. The exposed live bucket still
-reported 10,000 on 2026-09-16; its pooled reader's unused quota does not establish
-organization-wide free capacity. The remaining 990 allowance must still cover
+Blacksmith preflight and gate, plus security when optional hosted admission is
+closed, for at most three control registrations; default Blacksmith retains one.
+All three occur in the current non-Node union and reserved 5,110 envelope.
+The exposed live bucket still reported 10,000; its pooled reader's unused quota
+does not establish organization-wide free capacity. The remaining 890 allowance must cover
 adjacent repositories, releases, retries and carryover. This routing trial does
 not prove available physical capacity or faster preflight execution.
 
 The protected cache warmer has two platform rows: the existing Linux workload and one hosted macOS pnpm-store publisher. Its per-ref concurrency and pending-run coalescing are unchanged. Each admitted warmer run adds one hosted macOS job and no Blacksmith registrations; pull-request CI adds no writers or jobs. Native producer and consumer measurements must include cache transfer, extraction, installation, and archive size before claiming a setup-time saving.
 
 Every admitted canonical main run selects the published-upgrade tripwire in the
-reserved `docker-seed-e2e` job, so the retained peak envelope stays
-`4 × 150 + 21 × 210 = 5,010` registrations.
+reserved `docker-seed-e2e` job, already included in the current 5,110-registration
+arrival envelope.
 Docs-only main tips remain excluded by the `**/*.md` and `docs/**` push filters.
 Admitted main pushes retain the same two non-canceling parity slots; the bound
 includes both active runs and both coalesced successors. It does not assume

@@ -159,11 +159,16 @@ live bucket. With the current 10,000-registration bucket, keep planned
 Blacksmith burst load under 6,000 registrations per 5 minutes with headroom for
 ClawSweeper, ClawHub, Clownfish, OpenClaw RTT, and Clawbench.
 
-The compact cap is 90 rows; the final Node matrix caps are 70 push and 130 PR rows. With the conservative 80 potentially eligible non-Node jobs, this bounds main at 150 registrations and PRs at 210. The retained four-main/21-PR arrival envelope is `4 × 150 + 21 × 210 = 5,010`, leaving 990 below the 6,000 reference target for adjacent repositories, releases and carryover. Relative to the former 64/120 Node caps, this reserves six additional registrations per push or ten per PR: `4 × 6 + 21 × 10 = 234` per envelope. Compact rows are part of the final Node matrix, so do not count their ten-row increase again. This is a conditional arrival bound, not live organization-wide capacity proof.
-
-The critical-path gate placement adds one registration per eligible run to the
-older counts below. With the three-row Windows reserve, use **5,110**, leaving
-890 below 6,000; earlier 5,010/5,085 examples predate these reserves.
+The compact cap is 90 rows; final Node caps are 70 push and 130 PR rows.
+The current automatic main/PR source has a conservative union of 70 potentially
+self-hosted non-Node rows, including five core-lint stripes for trusted forks,
+five type stripes, five Windows rows, and thirteen UI E2E rows. Retain an 84-row
+allowance with fourteen rows reserved: `4 × 154 + 21 × 214 = 5,110` for the
+four-main/21-PR arrival envelope, leaving 890 below the 6,000 reference target.
+The six extension-lint rows remain hosted. Manual/frozen releases and other
+workflows are outside this envelope. This is conditional planning, not live
+organization-wide capacity proof; older 5,010/5,085/5,160 examples below describe
+historical inventories and do not replace this source-audited reserve.
 
 ## Safe Levers
 
@@ -218,10 +223,10 @@ These are intentionally guarded by the `ci-workflow-guards`,
   same route. The first packed lint row took 621s on the 8-class; retain four
   actual CPUs for that row. The gate has no checkout or dependency setup; retries, ordinary
   manual dispatches, untrusted contexts, and the GitHub override stay hosted.
-  Core lint additionally retains hosted routing for frozen targets. The gate adds
-  one registration to the conservative potentially eligible inventory; the two
-  lint rows are already included. With the Windows reserve, the existing arrival
-  envelope becomes 5,110, leaving 890 below the 6,000 operating target.
+  Core lint additionally retains hosted routing for frozen targets. Normal hybrid
+  main/same-repository PRs add three assignments; trusted fork PRs can add six
+  because their logical GitHub profile emits five lint rows. These fit the fresh
+  70-row union and reserved 84-row non-Node allowance described above.
   Trusted automatic hybrid first-attempt `preflight` requests the existing
   16-class after hosted assignment stalled across three nearby runs while
   Blacksmith security jobs succeeded. Its logical planner profile, cache trust,
@@ -230,10 +235,9 @@ These are intentionally guarded by the `ci-workflow-guards`,
   and the `github` override retain hosted routing. `security-fast` stays hosted
   outside eligible hybrid first attempts and when the bounded hosted plan is admitted. Security hooks use pinned installed packages
   and local hook definitions, without remote Git initialization. The `github`
-  outage override remains intact. Budget two control-job registrations per eligible
-  hybrid first attempt when optional hosted admission is closed, one when admitted,
-  and one per normal Blacksmith run. Both jobs already occur in the retained
-  conservative non-Node inventory, preserving the 5,010-registration cap model.
+  outage override remains intact. Budget three control-job registrations per eligible
+  hybrid first attempt when optional hosted admission is closed, two when admitted,
+  and one per normal Blacksmith run. All occur in the reserved non-Node inventory.
   Optional compiler/check offloads reject observed hosted assignment waits at
   sixty seconds; the former three-minute cutoff exceeded the latency objective.
   API and job deadlines remain unchanged.
