@@ -27,7 +27,6 @@ import {
   canonicalizeSessionStore,
   distinctSessionStoreAliasWarning,
   isAmbiguousSharedStoreKey,
-  isLegacyDefaultMainAliasKey,
   selectNewerSessionEntry,
   normalizeSessionEntry,
   pickLatestLegacyDirectEntry,
@@ -36,7 +35,10 @@ import {
   saveSessionStoreStrict,
   unresolvedSessionStoreIdentityWarning,
 } from "./state-migrations.session-store.js";
-import type { PreparedLegacySessionSurfaces } from "./state-migrations.session-surfaces.js";
+import {
+  isLegacyDefaultMainAliasKey,
+  type PreparedLegacySessionSurfaces,
+} from "./state-migrations.session-surfaces.js";
 import type { LegacyStateDetection, MigrationMessages } from "./state-migrations.types.js";
 
 const LEGACY_AGENT_DATABASE_BASENAME = "openclaw-agent.sqlite";
