@@ -342,7 +342,8 @@ export async function resolveEmbeddedRunTerminal(input: {
     input.activateInternalPrompt(nextEmptyResponseRetryInstruction);
     log.warn(
       `empty response detected: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
-        `provider=${input.activeErrorContext.provider}/${input.activeErrorContext.model} — retrying ${retryState.emptyResponseAttempts}/${input.maxEmptyResponseRetryAttempts} ` +
+        `provider=${input.activeErrorContext.provider}/${input.activeErrorContext.model} ` +
+        `stopReason=${input.attemptAssistant?.stopReason ?? "missing"} — retrying ${retryState.emptyResponseAttempts}/${input.maxEmptyResponseRetryAttempts} ` +
         `with visible-answer continuation`,
     );
     return { action: "retry" };
