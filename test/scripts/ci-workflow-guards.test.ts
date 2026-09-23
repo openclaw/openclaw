@@ -3944,6 +3944,7 @@ setImmediate(() => {
     const expectedHostedTimeouts = {
       android: 35,
       "build-artifacts": 35,
+      "checks-ui": 35,
       "checks-ui-e2e-real-gateway": 40,
     } as const;
     const routeDependentTimeoutJobs = Object.entries(jobs)
@@ -9151,7 +9152,28 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(ui.needs).toEqual(["preflight"]);
     expect(ui.if).toBe("needs.preflight.outputs.run_ui_tests == 'true'");
     expect(ui.permissions).toEqual({ contents: "read" });
-    expect(ui["timeout-minutes"]).toBe(20);
+    // Hosted rows (full-release dispatches, github backend, hybrid retries,
+    // fork PRs) run the Control UI suites slower than Blacksmith; a frozen
+    // full-release dispatch measured 15-20 min per shard against a 20 min cap.
+    expect(evaluateWorkflowExpression(ui["timeout-minutes"], context)).toBe(
+      scenario.frozenTarget ? 35 : 20,
+    );
+    for (const override of [
+      { runnerBackend: "github" },
+      { runnerBackend: "hybrid", runAttempt: 2 },
+      { eventName: "pull_request", headRepository: "contributor/openclaw" },
+    ] as const) {
+      expect(evaluateWorkflowExpression(ui["timeout-minutes"], { ...context, ...override })).toBe(
+        35,
+      );
+    }
+    expect(
+      evaluateWorkflowExpression(ui["timeout-minutes"], {
+        ...context,
+        eventName: "workflow_dispatch",
+        preflightOutputs: { ...context.preflightOutputs, ci_shape: "main" },
+      }),
+    ).toBe(20);
     expect(workflow.jobs["ci-gate"].needs).toContain("checks-ui");
 
     const root = tempDirs.make("openclaw-ui-workflow-");

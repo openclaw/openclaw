@@ -3682,6 +3682,7 @@ describe("ci workflow guards", () => {
         ["android", "ubuntu-24.04", 35],
         ["checks-ui-e2e-real-gateway", "ubuntu-24.04", 40],
         ["build-artifacts", "ubuntu-24.04", 35],
+        ["checks-ui", "ubuntu-24.04", 35],
       ] as const) {
         const job = workflow.jobs[jobName];
         const retainedRetry = { ...context, runAttempt: 2, preflightOutputs: admitted.outputs };
@@ -3982,7 +3983,7 @@ describe("ci workflow guards", () => {
       }
     }
     expect(workflow.jobs["build-artifacts"]["timeout-minutes"]).toBe(
-      "${{ ((needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' || (contains(fromJSON('[\"hybrid\",\"runson\"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt > 1) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository)) && 35 || 20 }}",
+      "${{ ((needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' || (contains(fromJSON('[\"hybrid\",\"runson\"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt > 1) || (github.event_name == 'workflow_dispatch' && needs.preflight.outputs.ci_shape != 'main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository)) && 35 || 20 }}",
     );
     // PR events validate the artifact build on hosted runners (landing gate
     // stays satisfiable during Blacksmith outages); Testbox leases are
