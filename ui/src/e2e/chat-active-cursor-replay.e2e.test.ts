@@ -171,9 +171,20 @@ suite.define(() => {
         segmentTexts: expect.arrayContaining([commentary]),
       });
       await page
-        .locator('openclaw-chat-pane[aria-hidden="false"] .chat-thread p')
+        .locator('openclaw-chat-pane[aria-hidden="false"] .chat-working-indicator__preamble')
         .getByText(commentary, { exact: true })
         .waitFor({ timeout: 10_000 });
+      expect(
+        await page
+          .locator('openclaw-chat-pane[aria-hidden="false"] .chat-working-indicator__preamble')
+          .allTextContents(),
+      ).toEqual([commentary]);
+      expect(
+        await page
+          .locator('openclaw-chat-pane[aria-hidden="false"] .chat-bubble')
+          .getByText(commentary, { exact: true })
+          .count(),
+      ).toBe(0);
       expect((await cursorRequests()).at(-1)).toMatchObject({
         cursor: "cursor-b",
         sessionKey: sessionB,
