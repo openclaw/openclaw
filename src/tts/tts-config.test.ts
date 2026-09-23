@@ -1,5 +1,5 @@
 // TTS config tests cover text-to-speech config loading and overrides.
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -11,6 +11,7 @@ import {
   shouldAttemptTtsPayload,
 } from "./tts-config.js";
 import { readBoundedTtsPrefsTextSync } from "./tts-prefs-read.js";
+import { setTtsMaxLength, setTtsPersona } from "./tts-settings-writes.js";
 import { readTtsPrefs, resolveTtsSettingsSnapshot } from "./tts-settings.js";
 
 describe("shouldAttemptTtsPayload", () => {
@@ -310,5 +311,64 @@ describe("TTS prefs reads are bounded", () => {
     } finally {
       envSnapshot.restore();
     }
+  });
+});
+
+// The write path must never replace a file it refused to read: doing so would erase
+// every setting the oversized file still holds.
+describe("TTS prefs updates preserve an unreadable file", () => {
+  let root = "";
+  let prefsPath = "";
+
+  beforeAll(() => {
+    root = mkdtempSync(path.join(tmpdir(), "openclaw-tts-prefs-write-"));
+  });
+
+  afterAll(() => {
+    if (root) {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  beforeEach(() => {
+    prefsPath = path.join(root, `wprefs-${Date.now()}-${Math.random().toString(36).slice(2)}.json`);
+  });
+
+  it("refuses a setting update when the file is oversized, leaving it byte-identical", () => {
+    const pad = "x".repeat(2 * 1024 * 1024);
+    const oversized = `{"tts":{"provider":"openai","auto":"always"},"pad":"${pad}"}`;
+    writeFileSync(prefsPath, oversized, "utf8");
+    const before = readFileSync(prefsPath);
+
+    expect(() => setTtsMaxLength(prefsPath, 2000)).toThrow(/could not be read/);
+
+    // The operator's file is untouched: same bytes, so no silent settings loss.
+    expect(readFileSync(prefsPath)).toEqual(before);
+    expect(readFileSync(prefsPath).toString("utf8")).toBe(oversized);
+  });
+
+  it("refuses a persona update when the file is oversized", () => {
+    const pad = "x".repeat(2 * 1024 * 1024);
+    writeFileSync(prefsPath, `{"tts":{"persona":"alfred"},"pad":"${pad}"}`, "utf8");
+    const before = readFileSync(prefsPath);
+
+    expect(() => setTtsPersona(prefsPath, "nova")).toThrow(/could not be read/);
+    expect(readFileSync(prefsPath)).toEqual(before);
+  });
+
+  it("still updates a normal prefs file", () => {
+    writeFileSync(prefsPath, '{"tts":{"provider":"openai"}}', "utf8");
+
+    setTtsMaxLength(prefsPath, 2000);
+
+    expect(JSON.parse(readFileSync(prefsPath, "utf8"))).toEqual({
+      tts: { provider: "openai", maxLength: 2000 },
+    });
+  });
+
+  it("creates the file when it does not exist yet", () => {
+    expect(() => setTtsMaxLength(prefsPath, 1234)).not.toThrow();
+
+    expect(JSON.parse(readFileSync(prefsPath, "utf8"))).toEqual({ tts: { maxLength: 1234 } });
   });
 });

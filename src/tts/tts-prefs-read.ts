@@ -11,17 +11,35 @@ import { readFileWindowFullySync } from "../infra/file-read.js";
 const TTS_PREFS_MAX_BYTES = 1024 * 1024;
 
 /**
+ * Outcome of a bounded prefs read.
+ *
+ * `oversized` is distinct from a missing file on purpose: a read-only caller may
+ * fall back to defaults, but the write path must not replace a file it refused to
+ * read, or a setting update would silently erase the operator's existing prefs.
+ */
+export type TtsPrefsReadResult =
+  | { status: "ok"; text: string }
+  | { status: "missing" }
+  | { status: "oversized" };
+
+/**
  * Read a TTS prefs file without letting an oversized file be slurped whole.
  *
- * Returns `undefined` when the file is larger than `maxBytes`; callers treat that
- * like an unreadable file and keep their defaults. Only the bounded window is
- * allocated and decoded, via the shared windowed-read owner.
+ * Only the bounded window is ever allocated and decoded, via the shared
+ * windowed-read owner. A file larger than `maxBytes` is reported as `oversized`
+ * rather than parsed, so readers fall back to defaults *without* claiming the
+ * file is empty.
  */
-export function readBoundedTtsPrefsTextSync(
+export function readBoundedTtsPrefsSync(
   prefsPath: string,
   maxBytes: number = TTS_PREFS_MAX_BYTES,
-): string | undefined {
-  const fd = openSync(prefsPath, "r");
+): TtsPrefsReadResult {
+  let fd: number;
+  try {
+    fd = openSync(prefsPath, "r");
+  } catch {
+    return { status: "missing" };
+  }
   try {
     const buf = Buffer.alloc(maxBytes);
     const bytesRead = readFileWindowFullySync(fd, buf, 0);
@@ -31,11 +49,24 @@ export function readBoundedTtsPrefsTextSync(
       const overflow = Buffer.alloc(1);
       const extra = readFileWindowFullySync(fd, overflow, maxBytes);
       if (extra > 0) {
-        return undefined;
+        return { status: "oversized" };
       }
     }
-    return buf.subarray(0, bytesRead).toString("utf8");
+    return { status: "ok", text: buf.subarray(0, bytesRead).toString("utf8") };
   } finally {
     closeSync(fd);
   }
+}
+
+/**
+ * Bounded read returning just the text, or `undefined` when the file is absent or
+ * oversized. Read-only callers that keep defaults in both cases use this; the write
+ * path uses {@link readBoundedTtsPrefsSync} so it can tell the two apart.
+ */
+export function readBoundedTtsPrefsTextSync(
+  prefsPath: string,
+  maxBytes: number = TTS_PREFS_MAX_BYTES,
+): string | undefined {
+  const result = readBoundedTtsPrefsSync(prefsPath, maxBytes);
+  return result.status === "ok" ? result.text : undefined;
 }

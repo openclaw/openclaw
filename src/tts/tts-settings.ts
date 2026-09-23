@@ -1,5 +1,4 @@
 // Lightweight TTS settings resolution shared by agent prompts, status, and speech runtime.
-import { existsSync } from "node:fs";
 import path from "node:path";
 import { asNonArrayRecord, isRecord } from "../../packages/normalization-core/src/record-coerce.js";
 import {
@@ -25,7 +24,7 @@ import type { SpeechProviderConfig } from "./provider-types.js";
 import { withSpeakerSelectionCompat } from "./speaker.js";
 import { normalizeTtsAutoMode } from "./tts-auto-mode.js";
 import { resolveEffectiveTtsConfig, type TtsConfigResolutionContext } from "./tts-config.js";
-import { readBoundedTtsPrefsTextSync } from "./tts-prefs-read.js";
+import { readBoundedTtsPrefsSync } from "./tts-prefs-read.js";
 import type { ResolvedTtsConfig, ResolvedTtsModelOverrides } from "./tts-types.js";
 
 export type { ResolvedTtsConfig, ResolvedTtsModelOverrides };
@@ -235,15 +234,35 @@ export function resolveTtsPrefsPath(config: ResolvedTtsConfig): string {
 }
 
 export function readTtsPrefs(prefsPath: string): TtsUserPrefs {
+  const result = readBoundedTtsPrefsSync(prefsPath);
+  if (result.status !== "ok") {
+    return {};
+  }
   try {
-    if (!existsSync(prefsPath)) {
-      return {};
-    }
-    const raw = readBoundedTtsPrefsTextSync(prefsPath);
-    if (raw === undefined) {
-      return {};
-    }
-    const parsed: unknown = JSON.parse(raw);
+    const parsed: unknown = JSON.parse(result.text);
+    return asNonArrayRecord(parsed) as TtsUserPrefs;
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Read prefs for a mutation.
+ *
+ * Returns `undefined` when an existing file could not be read (oversized). The
+ * caller must then leave the file untouched: writing a fresh object would silently
+ * drop every setting the unreadable file still holds.
+ */
+export function readTtsPrefsForUpdate(prefsPath: string): TtsUserPrefs | undefined {
+  const result = readBoundedTtsPrefsSync(prefsPath);
+  if (result.status === "oversized") {
+    return undefined;
+  }
+  if (result.status === "missing") {
+    return {};
+  }
+  try {
+    const parsed: unknown = JSON.parse(result.text);
     return asNonArrayRecord(parsed) as TtsUserPrefs;
   } catch {
     return {};
