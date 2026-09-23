@@ -511,6 +511,7 @@ describe("prepared native catalog readiness", () => {
   });
 
   it("uses native readiness when an OpenAI profile is present but not selected", () => {
+    const openaiNativeEntry = { ...nativeEntry, provider: "openai" };
     const cfg: OpenClawConfig = {
       auth: {
         profiles: {
@@ -520,13 +521,13 @@ describe("prepared native catalog readiness", () => {
     };
     const view = prepareModelCatalogView({
       ...facts(cfg),
-      snapshot: snapshot([nativeEntry]),
+      snapshot: snapshot([openaiNativeEntry]),
       observationConfig: cfg,
       isCurrent: () => true,
       pluginRegistry: nativeRegistry(() => ({ accountType: "chatgpt", authMode: "oauth" })),
     });
 
-    expect(view.evaluateNative(nativeEntry, host, "native-test")).toMatchObject({
+    expect(view.evaluateNative(openaiNativeEntry, host, "native-test")).toMatchObject({
       availability: true,
       availabilityAuthoritative: true,
       runtimeAuth: { id: "native-test", source: "native" },
