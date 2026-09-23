@@ -33,7 +33,7 @@ internal fun segmentChatMarkdown(
     return listOf(ChatMarkdownSourceBlock.Markdown(source))
   }
 
-  val document = parseChatMarkdown(source)
+  val document = parseChatMarkdownWithSourceSpans(source)
   val topLevelParagraphLines = mutableSetOf<Int>()
   val protectedInlineLines = mutableSetOf<Int>()
   var child = document.firstChild
