@@ -55,7 +55,7 @@ test selections. Targets without that capability retain their original flat
 fields or projected legacy `groups` JSON. Workflow tests keep the complete
 generated output under half of the cap. The smaller
 fast/check lanes remain capped at 12; Windows is capped at two
-and Android at three for normal same-repository Blacksmith first attempts, two otherwise. Compact whole-config batches run
+and Android at four for normal same-repository Blacksmith first attempts, two otherwise. Compact whole-config batches run
 with a 120-minute batch timeout, while include-pattern groups share the same
 bounded job budget.
 

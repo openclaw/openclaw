@@ -2490,9 +2490,9 @@ AFTER_CD
     expect(workflow.jobs["check-additional-shard"].strategy["max-parallel"]).toBe(12);
     expect(workflow.jobs["checks-windows"].strategy["max-parallel"]).toBe(5);
     for (const [context, expected] of [
-      [{ eventName: "push" }, 3],
-      [{ eventName: "pull_request", runnerBackend: "blacksmith" }, 3],
-      [{ eventName: "pull_request", runnerBackend: "hybrid" }, 3],
+      [{ eventName: "push" }, 4],
+      [{ eventName: "pull_request", runnerBackend: "blacksmith" }, 4],
+      [{ eventName: "pull_request", runnerBackend: "hybrid" }, 4],
       [{ eventName: "push", runnerBackend: "github" }, 2],
       [{ eventName: "push", runnerBackend: "blacksmith", runAttempt: 2 }, 2],
       [{ eventName: "workflow_dispatch", runnerBackend: "blacksmith" }, 2],
