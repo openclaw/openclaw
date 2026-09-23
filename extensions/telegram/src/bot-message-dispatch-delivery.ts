@@ -341,6 +341,11 @@ export async function sendPayload(
       if (!result.receipt?.platformMessageIds.length) {
         throw error;
       }
+      // Telegram accepted every part; a later prompt-context write failure cannot
+      // turn that receipt into an uncertain send or authorize a delivery warning.
+      if (options?.durable) {
+        await observeFinalDelivery(turn, { visibleReplySent: true, receipt: result.receipt });
+      }
       throw mergeTelegramPartialDeliveryError(error, {
         receipt: result.receipt,
         messageIds: result.receipt.platformMessageIds,
