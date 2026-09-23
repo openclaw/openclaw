@@ -339,6 +339,56 @@ describe("Slack read actions", () => {
     });
   });
 
+  it("unwraps JSON-escaped Slack timestamp strings before applying history bounds", async () => {
+    const client = createClient();
+
+    await readSlackMessages("C1", {
+      client,
+      before: '"1712345678.654321"',
+      after: '"1712340000.000001"',
+      token: "xoxb-test",
+    });
+
+    expect(client.conversations.history).toHaveBeenCalledWith({
+      channel: "C1",
+      limit: undefined,
+      latest: "1712345678.654321",
+      oldest: "1712340000.000001",
+    });
+  });
+
+  it("unwraps JSON-escaped ISO date strings before applying history bounds", async () => {
+    const client = createClient();
+
+    await readSlackMessages("C1", {
+      client,
+      before: '"2024-04-05T12:34:56.000Z"',
+      token: "xoxb-test",
+    });
+
+    expect(client.conversations.history).toHaveBeenCalledWith({
+      channel: "C1",
+      limit: undefined,
+      latest: "1712320496",
+      oldest: undefined,
+    });
+  });
+
+  it("rejects a JSON-escaped value that is still not a valid history bound", async () => {
+    const client = createClient();
+
+    await expect(
+      readSlackMessages("C1", {
+        client,
+        before: '"not-a-timestamp"',
+        token: "xoxb-test",
+      }),
+    ).rejects.toThrow(
+      `Invalid Slack read before timestamp "not-a-timestamp": expected a Slack timestamp or ISO-8601 date string`,
+    );
+    expect(client.conversations.history).not.toHaveBeenCalled();
+  });
+
   it.each(["not-a-timestamp", "2024-02-30T00:00:00.000Z", "04/05/2024", "2024-04-05T12:34:56"])(
     "rejects invalid history bound %s with a clear timestamp error",
     async (before) => {
