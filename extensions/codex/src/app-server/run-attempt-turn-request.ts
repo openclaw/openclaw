@@ -53,6 +53,7 @@ export async function prepareCodexAttemptTurnRequest(
   const { tools, toolBridge } = attemptTools;
   const {
     params,
+    sessionAgentId,
     usesSupervisionConnection,
     codexModelCallId,
     codexModelCallTrace,
@@ -74,6 +75,7 @@ export async function prepareCodexAttemptTurnRequest(
   const codexModelCallDiagnostics = createCodexModelCallDiagnosticEmitter({
     baseFields: {
       runId: params.runId,
+      agentId: sessionAgentId,
       callId: codexModelCallId,
       ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
       sessionId: params.sessionId,

@@ -318,23 +318,41 @@ export function prepareSqliteWorkerLifecycle(
         job.maintenanceSchemaFence = { actor, delegate: schemaFence };
         job.request.maintenanceSchemaFence = schemaFence.port;
       }
-      const delegate = tryCreateStateLifecycleDelegate({
-        databasePath: job.request.stateDatabasePath ?? actor.databasePath,
-        actorId: `${actor.id}:${job.request.id}`,
-      });
-      if (!delegate && job.requireStateLifecycle) {
+      const stateLifecycle = borrowSqliteWorkerLifecycle(job, actor);
+      if (!stateLifecycle && job.requireStateLifecycle) {
         job.request.workerStateLifecycle = {
           deadlineNs:
             process.hrtime.bigint() + BigInt(OPENCLAW_SQLITE_BUSY_TIMEOUT_MS) * 1_000_000n,
         };
       }
-      if (delegate) {
-        job.stateLifecycle = { actor, delegate };
-        job.request.stateLifecycle = delegate.port;
-      }
+      job.request.stateLifecycle = stateLifecycle;
     };
     prepare();
   });
+}
+
+/** A parent can acquire custody after dispatch but before the worker's native acquisition. */
+export function borrowSqliteWorkerLifecycle(job: Job, actor: Actor) {
+  const context = job.request.stateContext;
+  if (!context) {
+    throw new Error("SQLite lifecycle preparation lost its captured state owner");
+  }
+  return withStateDatabaseCoordinatorRuntimeDirectory(
+    job.request.type === "close"
+      ? { ...context.coordinatorRuntime, keepAlive: false }
+      : context.coordinatorRuntime,
+    () => {
+      const delegate = tryCreateStateLifecycleDelegate({
+        databasePath: job.request.stateDatabasePath ?? actor.databasePath,
+        actorId: `${actor.id}:${job.request.id}`,
+      });
+      if (delegate) {
+        job.stateLifecycle = { actor, delegate };
+        return delegate.port;
+      }
+      return undefined;
+    },
+  );
 }
 
 export function releaseSqliteWorkerLifecycle(job: Job): void {

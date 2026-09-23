@@ -8,25 +8,21 @@ import {
   captureSessionStoreReadCandidate,
 } from "../config/sessions/session-store-read-candidates.js";
 import { withSessionHistoryWorkerDatabases } from "../config/sessions/session-transcript-worker-runtime.js";
-import {
-  MAX_SESSION_ROW_FACTS_KEYS,
-  type SessionRowDatabaseFacts,
-} from "../config/sessions/session-transcript-worker.types.js";
-import type { SessionAcpMeta } from "../config/sessions/types.js";
+import { MAX_SESSION_ROW_FACTS_KEYS } from "../config/sessions/session-transcript-worker.types.js";
 import { resolveStateDir } from "../config/state-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { retainOpenClawAgentDatabaseReadCandidates } from "../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { isColdArchivedSessionRow } from "./session-row-projection-archive.js";
-import { identity, isCurrentGeneration, type Row } from "./session-row-projection-record.js";
-import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
+import {
+  identity,
+  isCurrentGeneration,
+  type PreparedSessionRowDatabaseFacts,
+  type Row,
+} from "./session-row-projection-record.js";
 
-export type PreparedSessionRowDatabaseFacts = SessionRowDatabaseFacts & {
-  acpMeta: SessionAcpMeta | null;
-};
-
-/** Retain each selected store until its prepared rows have been consumed by the projection. */
+/** Retain each selected store until its prepared facts have entered the resident row owner. */
 export async function withSessionRowDatabaseFacts(
   owner: {
     rows: ReadonlyMap<string, Row>;
@@ -35,10 +31,13 @@ export async function withSessionRowDatabaseFacts(
     cfg: OpenClawConfig;
     selected?: ReadonlySet<string>;
   },
-  consume: (
-    ids: readonly string[],
-    facts: ReadonlyMap<string, PreparedSessionRowDatabaseFacts>,
-  ) => void,
+  consume: {
+    refreshPending: (ids: readonly string[]) => boolean;
+    accept: (
+      ids: readonly string[],
+      facts: ReadonlyMap<string, PreparedSessionRowDatabaseFacts>,
+    ) => void;
+  },
 ): Promise<void> {
   const revision = owner.revision();
   const registrySnapshot = getSubagentSessionListReadSnapshotIdentity();
@@ -49,7 +48,12 @@ export async function withSessionRowDatabaseFacts(
       break;
     }
   }
+  // New dirty keys append after this batch; finish its accepted rows before another read.
+  if (consume.refreshPending(ids)) {
+    return;
+  }
   const rows = ids.flatMap((id) => owner.rows.get(id) ?? []);
+  const rowRevisions = new Map(rows.map((row) => [identity(row), row.databaseFactsRevision]));
   const env = cloneEnvWithPlatformSemantics(process.env);
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
   const groups = new Map<
@@ -148,11 +152,7 @@ export async function withSessionRowDatabaseFacts(
           cfg: owner.cfg,
           entries: acpRows.map(({ row, entry }) => ({
             agentId: row.agentId,
-            sessionKey: resolveStoredSessionKeyForAgentStore({
-              cfg: owner.cfg,
-              agentId: row.agentId,
-              sessionKey: row.key,
-            }),
+            sessionKey: row.key,
             entry,
           })),
         });
@@ -174,10 +174,12 @@ export async function withSessionRowDatabaseFacts(
                 (owner.dirty.has(identity(row)) ||
                   (owner.selected?.has(identity(row)) &&
                     isColdArchivedSessionRow(owner.rows.get(identity(row)) ?? row))) &&
-                isCurrentGeneration(row, owner.rows.get(identity(row))),
+                isCurrentGeneration(row, owner.rows.get(identity(row))) &&
+                owner.rows.get(identity(row))?.databaseFactsRevision ===
+                  rowRevisions.get(identity(row)),
             )
             .map(identity);
-          consume(currentIds, facts);
+          consume.accept(currentIds, facts);
           assertCurrent();
         }
       },

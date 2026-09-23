@@ -130,8 +130,15 @@ join native reader cleanup before returning. Doctor imports legacy registry rows
 through the shared-state writer, with host transaction and commit admission under
 the captured maintenance scope. Imports retain sequential per-row transactions,
 existing-row precedence, and sharded-before-monolithic ordering; source cleanup
-waits for durable acknowledgement. Runtime registry writes, reservations, and
-currentness callbacks retain their synchronous owners.
+waits for durable acknowledgement. Container registry updates, completion, and
+removal execute through the same writer, preserving captured inputs, immutable
+fields, update/remove ordering, and removal-intent guards. Docker and Podman use
+the existing pending/ready state for one-time setup; interrupted setup retains
+its container and data and cannot be reused as ready. Legacy entries without a
+readiness marker keep their existing behavior. Browser writes, reservation/lock
+primitives, removal-intent admission, and currentness callbacks retain their
+existing synchronous owners. Existing records need no schema or data migration,
+and retention is unchanged.
 
 Shared-state operations that request host transaction or commit admission acquire
 fresh lifecycle coordinator custody on their executing SQLite worker. A live
@@ -272,6 +279,11 @@ outcomes, removed records, and the existing creating-open behavior. It does not
 probe checkouts or reconcile lifecycle state. Creation, removal, restoration,
 run leases, and cloned-project deletion checks retain their existing owners;
 these observational reads do not establish that a checkout is unreferenced.
+Provisioned snapshot path ledgers, file-state metadata, and individual binary
+chunks also read through that worker. Removal and restoration await the data and
+retain their current guards after those waits. Missing and malformed metadata,
+chunk ordering, schema, snapshot writes, and recovery policy are unchanged;
+these data reads do not move the entire cleanup or restoration flow off-thread.
 
 Profile enumeration for user lists, session-member pickers, and human-mention
 directories runs in the same shared-state worker. Ordered profile metadata,
@@ -770,6 +782,14 @@ it does not become a permanent restore failure.
 Task observation waits for each acknowledged row's required flow effects.
 Acknowledged task mutations are never replayed.
 
+Modern run-owner binding also awaits the shared-state worker. Its original creation
+receipt follows only matching committed lifecycle timestamp changes; replacement
+rows and rolled-back events cannot advance that identity. Binding joins accepted
+events and required publication, then rechecks the original run before installing
+its live cancellation owner. The receipt releases its lineage listener on failure
+or settlement. A confirmed no-op may reselect after a matching committed event;
+failed or uncertain writes are never replayed.
+
 Active core Gateway task completion retains the creation-time registry owners and
 updates its original run/runtime/session selection through the shared-state worker.
 Each selected task is reread against its exact receipt and current Gateway/run
@@ -1132,6 +1152,10 @@ writing and committing. Token callbacks lock cancellation at commit admission
 and report saved credentials only after acknowledgement. Canonical close drains
 accepted lease work before releasing its exact owner; an uncertain write retains
 the lease barrier. Native maintenance and Doctor keep their existing owners.
+Lease verification releases each read snapshot before waiting for host admission,
+then rereads the exact unexpired owner from current committed state. Host scheduling
+does not pin the WAL; writes and renewals retain their transaction-held checks.
+Schemas, retention, durability, and update behavior are unchanged.
 
 Requester MCP setup reads its sorted authorization set in one current read-worker
 operation. The worker decodes selected rows in caller order and returns only
@@ -1312,7 +1336,11 @@ Read-only callbacks made while a cached agent writer holds a transaction use a
 separate read-only companion connection. Each call rereads committed rows and
 checks the current schema, agent owner, and physical file identity. The companion
 retains prepared statements, never an authorization result or an open read
-transaction. Canonical validation belongs to the admitted physical database:
+transaction. On connections whose owner enables statement caching, schema-version
+checks reuse the prepared `PRAGMA user_version` statement but read its current
+value on every call. Authorizer changes, database replacement, and close retain
+the existing statement-cache invalidation rules.
+Canonical validation belongs to the admitted physical database:
 first admission requires full proof, then the schema-21 pending-key projection
 records changes independently of connection lifetime. Startup and initial Gateway
 authorization of an unadmitted reader use the existing mutation worker for pending
@@ -1347,6 +1375,18 @@ exit before closing the database. Cold restoration carries the request's same
 authority through queue waits and its native commit, so a revoked read cannot
 restore rows after database cleanup. These lifetimes change no schema or
 migration requirement.
+
+RPC and HTTP history pages, cursor deltas, recent messages, and exact message lookups prepare their
+physical target asynchronously and read cold-archive metadata through that same
+retained history worker only after a typed cold read requires restoration. Hot
+reads keep the atomic reader's existing cold check without a metadata preflight.
+Initial metadata
+probes share only in-flight work; every queued restoration rereads the metadata
+after earlier cold operations settle. The existing restoration owner still
+verifies and materializes the archive and retains the 24-hour hot-history cooldown.
+Write-side callers keep their existing native metadata preparation and writer
+admission rather than competing for foreground history capacity. Cold maintenance
+inventory and mutation control SQL also remain with their current owners.
 
 Correlated conversation replies retain their original store and state environment
 while waiting for write admission. Capture rechecks the live reply claim and
@@ -1622,8 +1662,11 @@ the parent synchronously joins transaction settlement before allowing owner reti
 that mandatory join cannot be abandoned at the append deadline.
 
 Periodic incremental vacuum uses the same write-admission boundary, so it can
-service reclamation approval before taking the writer lock. Its 512-page limit
-is unchanged; passive checkpoints remain outside the write transaction.
+service reclamation approval before taking the writer lock. Each connection starts
+with eight-page units and adjusts toward a 25 ms hold target, growing at most twice
+per unit up to 512 pages. The scheduling estimate expires with the connection.
+Periodic maintenance retains its 512-page total budget per tick, reacquiring
+admission between units; passive checkpoints remain outside the write transaction.
 
 The WAL owner supplies one checkpoint-before-vacuum operation for periodic,
 reclamation, and archive maintenance. An incomplete checkpoint skips vacuum.
@@ -1641,17 +1684,44 @@ maintenance also waits for the parent's commit-settlement probe to release its
 writer lock. Child transaction settlement and parent probe release are distinct
 facts in the existing commit gate; failed release cannot acknowledge success.
 
-Queued archive pruning prepares cold connections through the same asynchronous
-admission owner while retaining its existing writer section. File-backed page
-drains use the existing reclamation worker, acquired before the caller's writer
-section. Each unit checks current authority before checkpointing and vacuum,
-authorizes commit, and joins native settlement. Cache eviction between units can
-refresh the host claim only for the same physical database; no dispatched mutation
-is replayed. Incognito maintenance retains its in-process owner.
-Archive-row and unpublished-name reads follow
-validation. After removing a derived archive file, pruning reacquires before the
-canonical row-deletion transaction; an acquisition failure propagates without
-deleting that recovery row.
+Archive pruning retains its maintenance reader and execution lifetimes while each page-reclamation unit
+acquires and releases the physical writer separately. Each archive removal acquires
+archive admission before its physical writer and releases both after the item settles.
+Foreground session writes and cold history restoration in unrelated stores can run
+between reclamation units. Durable archive metadata reads
+use the existing history worker; conditional deletions, legacy file removal, and
+page reclamation use the agent database execution broker.
+The host captures the physical file before
+waiting and rechecks the original path alias and live authority before effects
+and at worker admission. Each write joins native settlement without replaying a
+dispatched mutation. Host connection eviction does not redirect work or require
+a synchronous database reopen. Process-held incognito maintenance retains its
+existing in-process owner and remains a separate worker migration. Explicit
+Doctor/cleanup scopes also retain their native owner.
+
+Canonical archive removal holds archive admission and one writer section through
+selection, derived-file removal, and conditional row deletion. It rechecks pressure,
+authority, and the selected published row before deleting the canonical recovery copy. A failed
+admission or changed row preserves that copy and stops the current
+cleanup attempt. Legacy file removal checks exact canonical filename ownership,
+stats the file, and unlinks it in one synchronous worker write transaction. It
+preserves files owned by published or unpublished rows and holds the SQLite writer
+lock through unlink. Since file removal cannot roll back, the host grants commit
+immediately before unlink; no-effect outcomes also require current commit authority.
+Native settlement finishes before the item writer is released. Filesystem inventory
+and successive page drains run outside both archive admission and the item writer.
+Aggregate pruning diagnostics report the whole operation separately from actual
+writer waits.
+Archive order, retention policy, schemas, and update behavior are unchanged.
+
+Worker retirement preserves the original operation failure without reporting it
+again as a cleanup failure. A successfully retired execution owner is released for
+later requests; genuine native-close and lease-cleanup failures retain their
+existing retry custody.
+Successful pooled-agent close relays its recorded WAL checkpoint after native and
+lease cleanup settle. The original generation and physical database identities
+fence that observation, and the budget owner releases deferral only for a newer
+completed checkpoint.
 
 Usage-cache rollup writes, pruning, and refresh-lock changes use the same async
 agent-database admission. A cold mutation waits for the existing integrity worker;
@@ -1832,6 +1902,18 @@ lifecycle owner. A future backend must supply equivalent product behavior or
 an explicit capability boundary; a second SQL dialect alone cannot replace
 these features. Schema, retention, migration, and multi-host changes still use
 the review checkpoint below.
+
+Prepared node-workspace registration, binding, mutation completion, and retirement
+run in the same shared-state worker as the node launch journal. Existing-only
+reads do not create a database or run schema opening. Filesystem preparation and
+workspace serialization stay on the host; writes recheck cancellation and host
+ownership at transaction admission. Retiring rows remain cleanup-only after a
+lost mutation permit, and successful overlays return only after durable
+completion. Retention fences legacy synchronous acquisitions while awaiting the
+retirement tombstone, then preserves the existing path checks before removal.
+The deprecated public synchronous workspace capability retains its read path;
+internal callers and bundled plugins use its async companion. Table shape,
+identifiers, transaction boundaries, and retained recovery state are unchanged.
 
 Session membership, participant display facts, and category membership are prepared
 in the existing session read worker and retained by the session-row projection.

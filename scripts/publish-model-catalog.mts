@@ -501,7 +501,12 @@ export async function hydrateModelCatalogFromModelsDev(options: {
       upstreamProvider.id !== upstreamProviderId ||
       !isRecord(upstreamProvider.models)
     ) {
-      throw new Error(`models.dev catalog missing or malformed for provider ${upstreamProviderId}`);
+      // One renamed or broken upstream provider must not freeze every other
+      // provider's catalog updates. Its manifest rows still publish as authored.
+      process.stderr.write(
+        `[${SCRIPT_LABEL}] warning: models.dev catalog missing or malformed for provider ${upstreamProviderId}; publishing ${providerId} without models.dev hydration\n`,
+      );
+      continue;
     }
     if (provider.models.some((model) => model.api !== undefined)) {
       process.stderr.write(

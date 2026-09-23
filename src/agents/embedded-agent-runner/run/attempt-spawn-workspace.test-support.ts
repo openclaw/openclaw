@@ -28,7 +28,7 @@ import type { EmbeddedContextFile } from "../../embedded-agent-helpers.js";
 import type { Agent, AgentMessage, StreamFn } from "../../runtime/index.js";
 import { agentSessionSetContextReplacementHook } from "../../sessions/agent-session-compaction.js";
 import { agentSessionSetPromptPreparation } from "../../sessions/agent-session-prompting.js";
-import type { CreateAgentSessionOptions } from "../../sessions/index.js";
+import type { AgentSession, CreateAgentSessionOptions } from "../../sessions/index.js";
 import {
   getModelRegistryRuntime,
   initializeModelRegistryRuntime,
@@ -855,6 +855,7 @@ type MutableSession = {
   messages: unknown[];
   isCompacting: boolean;
   isStreaming: boolean;
+  subscribe: AgentSession["subscribe"];
   agent: {
     convertToLlm?: (messages: AgentMessage[]) => AgentMessage[] | Promise<AgentMessage[]>;
     prompt?: (...args: unknown[]) => Promise<unknown>;
@@ -1081,14 +1082,12 @@ export function createDefaultEmbeddedSession(params?: {
     messages: [...(params?.initialMessages ?? [])],
     isCompacting: false,
     isStreaming: false,
+    subscribe: () => () => {},
     agent: {
       prompt: async (prompt, options) => {
         pendingPrompt = {
           prompt: String(prompt),
-          options: options as {
-            images?: unknown[];
-            preflightResult?: (submitted: boolean) => void;
-          },
+          options: options as Parameters<MutableSession["prompt"]>[1],
         };
         await session.agent.streamFn?.(
           testModel,

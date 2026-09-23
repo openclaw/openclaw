@@ -6,6 +6,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { inspectChannelAccount } from "../account-inspection.js";
+import { resolveChannelAccount } from "../account-resolution.js";
 import {
   projectSafeChannelAccountSnapshotFields,
   redactChannelAccountSnapshotBaseUrl,
@@ -120,6 +121,6 @@ export async function resolveChannelAccountSnapshot<ResolvedAccount>(params: {
   }
   return await buildChannelAccountSnapshotFromAccount({
     ...params,
-    account: params.plugin.config.resolveAccount(params.cfg, params.accountId),
+    account: await resolveChannelAccount(params),
   });
 }

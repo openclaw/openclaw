@@ -398,7 +398,9 @@ Authored in-page HTML links such as `href="#section"` scroll within the preview,
 in `strict` mode. This leaves the original file and **Source** unchanged; authored
 base URLs, links targeting another window, and download links keep their behavior.
 
-Workspace file reads and edits retain their existing 256 KiB limit.
+Workspace file reads and edits retain their existing 256 KiB limit. After a successful save, Files refreshes its metadata and Review refreshes its diff without switching the active panel or clearing the current Files search.
+Code previews and editors are named by their filename and reachable with Tab,
+including read-only previews. In-file search announces its result count.
 For workspace HTML, **Edit**, in-file search, and explicit `file:line` navigation
 open **Source**. Switching back to **Preview** renders the latest unsaved editor
 text without saving it. Switching views preserves the editor, undo history, and
@@ -612,9 +614,13 @@ When the message contains
 multiple images, use **Previous image** / **Next image**, the left and right arrow
 keys, or a horizontal swipe to move through that message's images. Navigation
 stops at either end and reverses direction in right-to-left layouts. Pinch or use
-the zoom controls to inspect details; dragging while zoomed pans the image.
+the zoom controls to inspect details; dragging or holding Shift while pressing
+an arrow key pans the zoomed image. The keyboard shortcuts dialog lists these controls.
 Press Escape, select **Close image preview**, or click outside the image to close
 and return focus to the tile you opened.
+
+Inline audio players support five-second seeking with the arrow keys, including
+when the seek slider has focus. The slider announces the current time and duration.
 
 Images attached to assistant progress messages appear inline while the task continues and remain visible after reloading the conversation. Remote attachment URLs do not need a filename extension: the Gateway detects the media type and serves the preview through the same authenticated media path used for final replies. Documents keep their file cards.
 

@@ -137,11 +137,11 @@ function getCommandPaletteBaseItems(
       action: "nav:apps",
     },
     {
-      id: "nav-config",
+      id: "nav-settings",
       label: t("palette.items.settings"),
       icon: "settings",
       category: "navigation",
-      action: "nav:config",
+      action: "nav:appearance",
     },
     {
       id: "nav-agents",

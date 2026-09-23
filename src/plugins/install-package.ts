@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import type { ExtractedArchiveVerification } from "../infra/install-flow.js";
 import { resolveUserPath } from "../utils.js";
 import {
   inspectBundlePluginArtifact,
@@ -360,11 +361,14 @@ async function installPluginFromPackageDir(
   );
 }
 
-export async function installPluginFromArchive(
+export async function installPluginFromArchive<
+  TFailure extends { ok: false; error: string; code?: string } = never,
+>(
   params: {
     archivePath: string;
+    verification?: ExtractedArchiveVerification<TFailure>;
   } & PackageInstallCommonParams,
-): Promise<InstallPluginResult> {
+): Promise<InstallPluginResult | NoInfer<TFailure>> {
   const runtime = await loadPluginInstallRuntime();
   const { logger, timeoutMs, workTimeoutMs, mode } = runtime.resolveTimedInstallModeOptions(
     params,
@@ -388,6 +392,7 @@ export async function installPluginFromArchive(
     timeoutMs,
     workTimeoutMs,
     logger,
+    verification: params.verification,
     rootMarkers: PLUGIN_ARCHIVE_ROOT_MARKERS,
     onExtracted: async (sourceDir) =>
       await installPluginFromSourceDir({
@@ -415,12 +420,14 @@ export async function installPluginFromArchive(
         ),
       }),
   });
-  emitSuccessfulPluginInstallSecurityEvent(result, {
-    dryRun: params.dryRun,
-    mode: effectiveMode,
-    sourceFamily: "archive",
-    trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
-  });
+  if (result.ok) {
+    emitSuccessfulPluginInstallSecurityEvent(result, {
+      dryRun: params.dryRun,
+      mode: effectiveMode,
+      sourceFamily: "archive",
+      trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
+    });
+  }
   return result;
 }
 

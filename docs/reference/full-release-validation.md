@@ -16,6 +16,11 @@ This page is an index. The reference is documented on seven pages, one per
 reader job. Open the page that matches your task and complete that validation
 pass there.
 
+For a frozen target, declare exact test omissions in the initial request; see
+[exact frozen-target test omissions](/reference/full-release-validation/dispatch#exact-frozen-target-test-omissions).
+The Node and extension inputs validate the selected inventory and remain bound
+to the immutable coverage identity.
+
 | Page                                                                                                | Read it when                                                                              |
 | --------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
 | [Dispatch a validation run](/reference/full-release-validation/dispatch)                            | Starting a run: Code SHA, Tooling SHA, helper inputs, and the immutable execution plan.   |

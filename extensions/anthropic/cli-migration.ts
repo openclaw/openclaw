@@ -2,12 +2,17 @@
  * Claude CLI setup migration helpers. They rewrite legacy Claude CLI model refs
  * to Anthropic refs while preserving runtime allowlist entries for CLI execution.
  */
+import { buildModelAliasIndex, resolveModelRefFromString } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig, ProviderAuthResult } from "openclaw/plugin-sdk/provider-auth";
 import {
   isRecord,
   normalizeLowercaseStringOrEmpty,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveClaudeCliAnthropicModelRefs } from "./claude-model-refs.js";
+import {
+  resolveClaudeCliAnthropicModelRefs,
+  splitTrailingModelAuthProfile,
+} from "./claude-model-refs.js";
+import { CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF } from "./cli-constants.js";
 import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS } from "./cli-shared.js";
 
 type AgentDefaultsModel = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["model"];
@@ -26,66 +31,65 @@ function toAnthropicSelectedModelRef(raw: string): string | undefined {
   return resolved?.rewriteRef ?? resolved?.selectedRef;
 }
 
-function rewriteModelSelection(model: AgentDefaultsModel): {
+function rewriteModelSelection(config: OpenClawConfig): {
   value: AgentDefaultsModel;
   primary?: string;
   runtimeRefs: string[];
   changed: boolean;
 } {
+  const model = config.agents?.defaults?.model;
+  const selection = {
+    cfg: config,
+    defaultProvider: "anthropic",
+    allowManifestNormalization: false,
+    allowPluginNormalization: false,
+  };
+  const aliasIndex = buildModelAliasIndex(selection);
+  const runtimeRefs: string[] = [];
+  function rewrite(raw: string): { value: string; primary?: string; changed?: boolean } {
+    const configured = resolveModelRefFromString({ ...selection, aliasIndex, raw });
+    if (configured?.alias) {
+      // Resolve before migrating the entry map: a legacy alias row can disappear
+      // when its canonical target already exists with different metadata.
+      const target = configured.ref.provider + "/" + configured.ref.model;
+      runtimeRefs.push(...toAnthropicRuntimeRefs(target));
+      const selected = toAnthropicSelectedModelRef(target);
+      if (!selected) {
+        return { value: raw, primary: raw };
+      }
+      const { profile } = splitTrailingModelAuthProfile(raw);
+      const value = profile ? selected + "@" + profile : selected;
+      return { value, primary: value, changed: value !== raw };
+    }
+    runtimeRefs.push(...toAnthropicRuntimeRefs(raw));
+    const converted = toAnthropicModelRef(raw);
+    return {
+      value: converted ?? raw,
+      primary: converted ?? toAnthropicSelectedModelRef(raw),
+      changed: Boolean(converted),
+    };
+  }
   if (typeof model === "string") {
-    const runtimeRefs = toAnthropicRuntimeRefs(model);
-    const converted = toAnthropicModelRef(model);
-    const selectedRef = converted ?? toAnthropicSelectedModelRef(model);
-    return converted
-      ? { value: converted, primary: converted, runtimeRefs, changed: true }
-      : {
-          value: model,
-          ...(selectedRef ? { primary: selectedRef } : {}),
-          runtimeRefs,
-          changed: false,
-        };
+    const rewritten = rewrite(model);
+    return { ...rewritten, runtimeRefs, changed: Boolean(rewritten.changed) };
   }
   if (!model || typeof model !== "object" || Array.isArray(model)) {
-    return { value: model, runtimeRefs: [], changed: false };
+    return { value: model, runtimeRefs, changed: false };
   }
-
-  const current = model as Record<string, unknown>;
-  const next: Record<string, unknown> = { ...current };
-  const runtimeRefs: string[] = [];
-  let changed = false;
-  let primary: string | undefined;
-
-  if (typeof current.primary === "string") {
-    runtimeRefs.push(...toAnthropicRuntimeRefs(current.primary));
-    const converted = toAnthropicModelRef(current.primary);
-    if (converted) {
-      next.primary = converted;
-      primary = converted;
-      changed = true;
-    } else {
-      primary = toAnthropicSelectedModelRef(current.primary);
-    }
-  }
-
-  const currentFallbacks = current.fallbacks;
-  if (Array.isArray(currentFallbacks)) {
-    const nextFallbacks = currentFallbacks.map((entry) => {
-      if (typeof entry !== "string") {
-        return entry;
-      }
-      runtimeRefs.push(...toAnthropicRuntimeRefs(entry));
-      const converted = toAnthropicModelRef(entry);
-      return converted ?? entry;
-    });
-    if (nextFallbacks.some((entry, index) => entry !== currentFallbacks[index])) {
-      next.fallbacks = nextFallbacks;
-      changed = true;
-    }
-  }
-
+  const primary = typeof model.primary === "string" ? rewrite(model.primary) : undefined;
+  const fallbacks = model.fallbacks?.map((entry) => rewrite(entry).value);
+  const changed =
+    Boolean(primary?.changed) ||
+    Boolean(fallbacks?.some((entry, index) => entry !== model.fallbacks?.[index]));
   return {
-    value: changed ? next : model,
-    ...(primary ? { primary } : {}),
+    value: changed
+      ? {
+          ...model,
+          ...(primary ? { primary: primary.value } : {}),
+          ...(fallbacks ? { fallbacks } : {}),
+        }
+      : model,
+    primary: primary?.primary,
     runtimeRefs,
     changed,
   };
@@ -177,7 +181,7 @@ function modelEntryWithClaudeCliRuntime(entry: unknown): Record<string, unknown>
 /** Build the config migration result for adopting Claude CLI-backed Anthropic defaults. */
 export function buildAnthropicCliMigrationResult(config: OpenClawConfig): ProviderAuthResult {
   const defaults = config.agents?.defaults;
-  const rewrittenModel = rewriteModelSelection(defaults?.model);
+  const rewrittenModel = rewriteModelSelection(config);
   const rewrittenModels = rewriteModelEntryMap(defaults?.models);
   const existingModels = (rewrittenModels.value ??
     defaults?.models ??
@@ -187,7 +191,7 @@ export function buildAnthropicCliMigrationResult(config: OpenClawConfig): Provid
     ...rewrittenModels.runtimeRefs,
     ...rewrittenModels.migrated,
   ]);
-  const defaultModel = rewrittenModel.primary ?? "anthropic/claude-opus-5";
+  const defaultModel = rewrittenModel.primary ?? CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF;
 
   return {
     profiles: [],

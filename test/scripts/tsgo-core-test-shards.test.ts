@@ -12,6 +12,7 @@ import {
   selectTsgoCoreTestStripe,
   TSGO_CORE_TEST_SHARDS,
 } from "../../scripts/lib/tsgo-core-test-shards.mts";
+import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import { isProcessAlive, waitForPidFile } from "../helpers/process-wait.js";
 import { runNodeScript } from "../helpers/run-node-script.js";
@@ -19,6 +20,8 @@ import {
   materializeNativeCompiler,
   overrideNativeFixtureExecutable,
 } from "./native-boundary-fixture.js";
+import { preparedScriptWrapperEnv } from "./prepared-script-wrapper.test-support.js";
+import { toolingMtsEntrypoints } from "./tooling-mts-runtime.test-support.mts";
 
 describe("tsgo core test shards", () => {
   it("covers the repository test roots exactly once", () => {
@@ -408,6 +411,27 @@ process.exit(result.status??1);
       fs.chmodSync(compiler, 0o755);
       overrideNativeFixtureExecutable(root, compiler);
       const driver = path.join(root, "scripts/run-tsgo-core-test-shards.mts");
+      const preparedDriver = resolveRuntimeWorkerUrl(toolingMtsEntrypoints.tsgoCoreTestShards);
+      const env = preparedScriptWrapperEnv(
+        (
+          [
+            ["run-tsgo-core-test-shards.mts", toolingMtsEntrypoints.tsgoCoreTestShards],
+            ["check-tsgo-core-boundary.mts", toolingMtsEntrypoints.tsgoCoreBoundary],
+            ["run-tsgo.mts", toolingMtsEntrypoints.tsgo],
+          ] as const
+        ).map(([name, entry]): readonly [URL, URL] => {
+          const source = pathToFileURL(path.join(root, "scripts", name));
+          const prepared = resolveRuntimeWorkerUrl(entry);
+          return [source, prepared.pathname.endsWith(".mts") ? source : prepared];
+        }),
+        { ...process.env, OPENCLAW_LOCAL_CHECK: "0" },
+        [
+          [
+            new URL("./lib/tsdown-declaration-boundary.mts", preparedDriver),
+            resolveRuntimeWorkerUrl(toolingMtsEntrypoints.tsdownDeclarationBoundary),
+          ],
+        ],
+      );
       const changedArgs = (paths: string[]) => ["--changed-paths-json", JSON.stringify(paths)];
       const check = async (paths = [leaf]) => {
         write("compiler-events.jsonl", "");
@@ -419,7 +443,7 @@ process.exit(result.status??1);
               driver,
               ...changedArgs(paths),
             ],
-            { ...process.env, OPENCLAW_LOCAL_CHECK: "0" },
+            env,
             undefined,
             { cwd: root, signal, requireProcessTreeExit: true },
           ),
@@ -486,7 +510,7 @@ setInterval(()=>{},1000);
             driver,
             ...changedArgs([leaf]),
           ],
-          { ...process.env, OPENCLAW_LOCAL_CHECK: "0" },
+          env,
           undefined,
           {
             cwd: root,

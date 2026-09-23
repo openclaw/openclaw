@@ -27,6 +27,27 @@ export function codexTestTurnIds(threadId = "thread-1", turnId = "turn-1") {
   return { threadId, turnId };
 }
 
+export function buildConnectorPluginApprovalElicitation(overrides: Record<string, unknown> = {}) {
+  return {
+    ...codexTestTurnIds(),
+    serverName: "codex_apps",
+    mode: "form",
+    message: "Allow Google Calendar to create an event?",
+    _meta: {
+      codex_approval_kind: "mcp_tool_call",
+      source: "connector",
+      connector_id: "connector_google_calendar",
+      connector_name: "Google Calendar",
+      tool_title: "create_event",
+    },
+    requestedSchema: {
+      type: "object",
+      properties: {},
+    },
+    ...overrides,
+  };
+}
+
 export function mockClientRuntimeMethods() {
   const getServerVersion = () => CODEX_APP_SERVER_VERSION;
   const closeAndWait: CodexAppServerClient["closeAndWait"] = async () => ({

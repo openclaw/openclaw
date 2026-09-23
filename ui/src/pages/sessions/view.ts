@@ -22,10 +22,9 @@ import {
   renderSettingsStatus,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
-import { formatAgentRuntimeLabel } from "../../lib/agents/display.ts";
 import "../../components/tooltip.ts";
 import "../../components/web-awesome.ts";
-import "../../components/web-awesome-popover.ts";
+import { formatAgentRuntimeLabel } from "../../lib/agents/display.ts";
 import {
   formatThinkingOverrideLabel,
   normalizeThinkingOptionValue,
@@ -44,9 +43,7 @@ import { resolveSessionContextLimit } from "../../lib/sessions/context-budget.ts
 import { SESSION_DRAG_MIME } from "../../lib/sessions/drag.ts";
 import {
   groupSessionRows,
-  SESSION_GROUP_MODES,
   type SessionRowGroup,
-  type SessionsGroupBy,
   UNGROUPED_ID,
 } from "../../lib/sessions/grouping.ts";
 import type { SessionArchivedFilter } from "../../lib/sessions/index.ts";
@@ -56,19 +53,17 @@ import {
 } from "../../lib/sessions/route-navigation.ts";
 import { formatSessionArchiveReason } from "../../lib/sessions/session-archive-reason.ts";
 import { parseAgentSessionKey, parseSessionKeyParts } from "../../lib/sessions/session-key.ts";
-import { SESSIONS_PAGE_DEFAULT_LIMIT } from "../../lib/sessions/session-requests.ts";
+import {
+  renderSessionsAdvancedFilters,
+  type SessionsAdvancedFiltersProps,
+} from "./sessions-filters.ts";
 import { renderTranscriptSearch, type TranscriptSearchProps } from "./transcript-search-view.ts";
 
-export type SessionsProps = TranscriptSearchProps & {
+export type SessionsProps = {
   loading: boolean;
   refreshing: boolean;
   result: SessionsListResult | null;
   error: string | null;
-  activeMinutes: string;
-  limit: string;
-  includeGlobal: boolean;
-  includeUnknown: boolean;
-  statusFilter: SessionArchivedFilter;
   basePath: string;
   agentId: string;
   mainKey: string;
@@ -76,9 +71,6 @@ export type SessionsProps = TranscriptSearchProps & {
   agentIdentityById: Record<string, AgentIdentityResult>;
   sortColumn: "key" | "kind" | "updated" | "tokens";
   sortDir: "asc" | "desc";
-  groupBy: SessionsGroupBy;
-  /** Multi-identity gateways only; hides the Person mode elsewhere. */
-  personGroupingAvailable: boolean;
   knownCategories: string[];
   page: number;
   pageSize: number;
@@ -87,21 +79,12 @@ export type SessionsProps = TranscriptSearchProps & {
   expandedSessionKey: string | null;
   patchWriteDisabledReason?: string;
   patchAdminDisabledReason?: string;
-  groupWriteDisabledReason?: string;
   deleteArchivedDisabledReason?: string;
   deleteSelectedDisabledReason?: string;
-  onFiltersChange: (next: {
-    activeMinutes: string;
-    limit: string;
-    includeGlobal: boolean;
-    includeUnknown: boolean;
-  }) => void;
   onClearFilters: () => void;
   onSearchChange: (query: string) => void;
   onSortChange: (column: "key" | "kind" | "updated" | "tokens", dir: "asc" | "desc") => void;
-  onGroupByChange: (mode: SessionsGroupBy) => void;
   onAssignCategory: (key: string, category: string | null) => void;
-  onRequestNewCategory: (sessionKey?: string) => void;
   onLoadMore: () => void;
   onPageChange: (page: number) => void;
   onPageSizeChange: (size: number) => void;
@@ -135,7 +118,8 @@ export type SessionsProps = TranscriptSearchProps & {
     trigger: HTMLElement | null,
   ) => void;
   onToggleDetails: (sessionKey: string) => void;
-};
+} & TranscriptSearchProps &
+  SessionsAdvancedFiltersProps;
 
 const VERBOSE_LEVEL_VALUES = ["", "off", "on", "full"] as const;
 const FAST_LEVEL_VALUES = ["", "auto", "on", "off"] as const;
@@ -459,20 +443,6 @@ function sessionsTableColumnCount(props: SessionsProps): number {
   return props.groupBy === "category" ? 8 : 7;
 }
 
-const SESSION_GROUP_MODE_LABELS = {
-  none: "sessionsView.groupByNone",
-  category: "sessionsView.groupByCategory",
-  person: "sessionsView.groupByPerson",
-  channel: "sessionsView.groupByChannel",
-  kind: "sessionsView.groupByKind",
-  agent: "sessionsView.groupByAgent",
-  date: "sessionsView.groupByDate",
-} as const satisfies Record<SessionsGroupBy, string>;
-
-function groupModeLabel(mode: SessionsGroupBy): string {
-  return t(SESSION_GROUP_MODE_LABELS[mode] ?? SESSION_GROUP_MODE_LABELS.none);
-}
-
 function sessionGroupLabel(group: SessionRowGroup, props: SessionsProps): string {
   const { id } = group;
   if (props.groupBy === "date") {
@@ -612,39 +582,6 @@ function isRowControlTarget(target: EventTarget | null): boolean {
     target instanceof Element &&
     Boolean(target.closest("a, button, input, label, select, textarea"))
   );
-}
-
-function renderFilterToggle(params: {
-  name: string;
-  checked: boolean;
-  label: string;
-  title: string;
-  extraClass?: string;
-  onChange: (checked: boolean) => void;
-}) {
-  const className = [
-    "session-filter-check",
-    "session-filter-toggle",
-    params.extraClass ?? "",
-    params.checked ? "session-filter-check--active" : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
-  return html`
-    <openclaw-tooltip .content=${params.title}>
-      <label class=${className}>
-        <input
-          name=${params.name}
-          class="session-filter-check__input"
-          type="checkbox"
-          .checked=${params.checked}
-          @change=${(e: Event) => params.onChange((e.target as HTMLInputElement).checked)}
-        />
-        <span class="session-filter-check__mark" aria-hidden="true">${icons.check}</span>
-        <span class="session-filter-check__label">${params.label}</span>
-      </label>
-    </openclaw-tooltip>
-  `;
 }
 
 function renderOverrideSelect(params: {
@@ -819,132 +756,6 @@ type SessionsTableContext = {
   ) => unknown;
 };
 
-function setPreviousSiblingExpanded(event: Event, expanded: boolean) {
-  if (event.currentTarget instanceof Element) {
-    event.currentTarget.previousElementSibling?.setAttribute("aria-expanded", String(expanded));
-  }
-}
-
-function renderSessionsAdvancedFilters(props: SessionsProps) {
-  // Archived timestamps are intentionally stale, so recency only applies to the active view.
-  const filterInputs = [
-    [
-      "activeMinutes",
-      "minutes",
-      t("sessionsView.active"),
-      t("sessionsView.activeTooltip", { count: props.activeMinutes.trim() }),
-      t("sessionsView.minutesPlaceholder"),
-      props.statusFilter !== "active",
-    ],
-    ["limit", "limit", t("sessionsView.limit"), t("sessionsView.limitTooltip"), nothing, false],
-  ] as const;
-  const sourceFilters = [
-    ["includeGlobal", t("sessionsView.global"), t("sessionsView.globalTooltip")],
-    ["includeUnknown", t("sessionsView.unknown"), t("sessionsView.unknownTooltip")],
-  ] as const;
-  const { activeMinutes, limit, includeGlobal, includeUnknown } = props;
-  const updateFilter = (
-    key: keyof Parameters<SessionsProps["onFiltersChange"]>[0],
-    value: string | boolean,
-  ) => props.onFiltersChange({ activeMinutes, limit, includeGlobal, includeUnknown, [key]: value });
-  const active =
-    activeMinutes.trim() !== "" ||
-    limit.trim() !== String(SESSIONS_PAGE_DEFAULT_LIMIT) ||
-    !includeGlobal ||
-    includeUnknown ||
-    props.groupBy !== "none";
-  return html`
-    <button
-      id="sessions-filter-popover-trigger"
-      type="button"
-      class="btn btn--sm sessions-filter-popover__trigger ${active ? "active" : ""}"
-      title=${t("sessionsView.filters")}
-      aria-label=${t("sessionsView.filters")}
-      aria-haspopup="dialog"
-      aria-expanded="false"
-    >
-      ${icons.listFilter}
-    </button>
-    <wa-popover
-      class="sessions-filter-popover"
-      for="sessions-filter-popover-trigger"
-      placement="bottom-end"
-      without-arrow
-      @wa-show=${(event: Event) => setPreviousSiblingExpanded(event, true)}
-      @wa-hide=${(event: Event) => setPreviousSiblingExpanded(event, false)}
-    >
-      <div class="sessions-filter-popover__panel">
-        <div class="sessions-filter-popover__fields">
-          ${filterInputs.map(
-            ([key, suffix, label, tooltip, placeholder, disabled]) => html`
-              <openclaw-tooltip .content=${tooltip}>
-                <label class="session-filter-field">
-                  <span class="session-filter-label">${label}</span>
-                  <input
-                    class="session-filter-input session-filter-input--${suffix}"
-                    placeholder=${placeholder}
-                    .value=${props[key]}
-                    ?disabled=${disabled}
-                    @input=${(event: Event) =>
-                      updateFilter(key, (event.target as HTMLInputElement).value)}
-                  />
-                </label>
-              </openclaw-tooltip>
-            `,
-          )}
-        </div>
-        <div
-          class="session-filter-toggle-group"
-          role="group"
-          aria-label=${t("sessionsView.sourceFilters")}
-        >
-          ${sourceFilters.map(([key, label, tooltip]) =>
-            renderFilterToggle({
-              name: key,
-              checked: props[key],
-              label,
-              title: tooltip,
-              onChange: (checked) => updateFilter(key, checked),
-            }),
-          )}
-        </div>
-        <label class="session-groupby">
-          <span class="session-groupby__label">${t("sessionsView.groupBy")}</span>
-          <select
-            class="session-groupby__select"
-            @change=${(event: Event) =>
-              props.onGroupByChange((event.target as HTMLSelectElement).value as SessionsGroupBy)}
-          >
-            ${SESSION_GROUP_MODES.filter(
-              (mode) => mode !== "person" || props.personGroupingAvailable,
-            ).map(
-              (mode) => html`
-                <option value=${mode} ?selected=${props.groupBy === mode}>
-                  ${groupModeLabel(mode)}
-                </option>
-              `,
-            )}
-          </select>
-        </label>
-        ${
-          props.groupBy === "category"
-            ? html`
-                <button
-                  class="btn btn--sm"
-                  ?disabled=${Boolean(props.groupWriteDisabledReason)}
-                  title=${props.groupWriteDisabledReason ?? nothing}
-                  @click=${() => props.onRequestNewCategory()}
-                >
-                  ${icons.plus} ${t("sessionsView.newGroup")}
-                </button>
-              `
-            : nothing
-        }
-      </div>
-    </wa-popover>
-  `;
-}
-
 function renderSessionsTable(props: SessionsProps, ctx: SessionsTableContext) {
   const { paginated, groups, emptyBecauseFiltered, emptyMessage, totalRows, totalPages, page } =
     ctx;
@@ -956,12 +767,14 @@ function renderSessionsTable(props: SessionsProps, ctx: SessionsTableContext) {
   return html`
     <div
       class="sessions-toolbar sessions-filter-bar"
+      role="group"
       aria-label=${t("sessionsView.filterControls")}
     >
       <div class="data-table-search sessions-toolbar__search">
         ${icons.search}
         <input
           type="text"
+          aria-label=${t("sessionsView.searchPlaceholder")}
           placeholder=${t("sessionsView.searchPlaceholder")}
           .value=${props.searchQuery}
           @input=${(e: Event) => props.onSearchChange((e.target as HTMLInputElement).value)}
@@ -1208,8 +1021,7 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
     html`<tr
       class=${rowClass}
       tabindex="0"
-      aria-expanded=${String(isExpanded)}
-      aria-controls=${detailsId}
+      aria-controls=${isExpanded ? detailsId : nothing}
       draggable=${categoryMode ? "true" : nothing}
       aria-description=${categoryMode ? t("sessionsView.dragSessionHint") : nothing}
       @dragstart=${
@@ -1327,7 +1139,7 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
             class="session-details-toggle"
             type="button"
             aria-expanded=${String(isExpanded)}
-            aria-controls=${detailsId}
+            aria-controls=${isExpanded ? detailsId : nothing}
             aria-label=${detailsToggleLabel}
             @click=${(e: MouseEvent) => {
               e.stopPropagation();

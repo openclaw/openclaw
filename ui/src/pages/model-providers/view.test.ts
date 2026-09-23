@@ -178,26 +178,12 @@ describe("renderModelProviders", () => {
     expect(text(thinkingRow)).toContain("Adaptive");
     expect(text(thinkingRow)).not.toContain("Default: Model policy");
     expect(text(fastRow)).not.toContain("Default: Model policy");
-    const thinkingDefaultHelp = thinkingRow.querySelector(
-      'wa-radio[value=""] .model-providers__segment-info',
-    );
-    const fastModeDefaultHelp = fastRow.querySelector(
-      'wa-radio[value=""] .model-providers__segment-info',
-    );
-    expect(
-      (
-        thinkingDefaultHelp?.closest("openclaw-tooltip") as
-          | (HTMLElement & { content?: string })
-          | null
-      )?.content,
-    ).toContain("model's thinking policy");
-    expect(
-      (
-        fastModeDefaultHelp?.closest("openclaw-tooltip") as
-          | (HTMLElement & { content?: string })
-          | null
-      )?.content,
-    ).toContain("Unlike Auto");
+    const thinkingHelp = thinkingRow.querySelector('openclaw-tooltip [slot="content"]');
+    const fastModeHelp = fastRow.querySelector('openclaw-tooltip [slot="content"]');
+    expect(thinkingHelp?.textContent).toContain("model's thinking policy");
+    expect(fastModeHelp?.textContent).toContain("Unlike Auto");
+    expect(thinkingRow.querySelector("wa-radio button")).toBeNull();
+    expect(fastRow.querySelector("wa-radio button")).toBeNull();
     expect(thinkingRow.querySelector('wa-radio[value=""]')?.hasAttribute("title")).toBe(false);
     expect(fastRow.querySelector('wa-radio[value=""]')?.hasAttribute("title")).toBe(false);
 

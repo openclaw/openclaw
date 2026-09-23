@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
+import * as sessionGroupCategories from "../config/sessions/session-group-categories.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
@@ -685,26 +686,23 @@ describe("session groups catalog", () => {
     const storePath = await seedSessionStore({
       [sessionKey]: { sessionId: "changed-group", updatedAt: Date.now(), category: "Old" },
     });
+    const updateCategories = sessionGroupCategories.updateSessionGroupCategoriesInWorker;
+    vi.spyOn(sessionGroupCategories, "updateSessionGroupCategoriesInWorker").mockImplementationOnce(
+      async (params) => {
+        const updated = await updateCategories(params);
+        // Interleave after member custody settles, before the rename retires its source.
+        await updateSessionGroupDefaults("Old", { cwd: "/repos/after", worktree: true }, env);
+        return updated;
+      },
+    );
     await expect(
       renameSessionGroup({
         cfg,
         name: "Old",
         to: "New",
         env,
-        assertTargetCurrent: () => {
-          stateDatabase.runOpenClawStateWriteTransaction(
-            ({ db }) => {
-              db.prepare("UPDATE session_groups SET cwd = ?, worktree = ? WHERE name = ?").run(
-                "/repos/after",
-                1,
-                "Old",
-              );
-            },
-            { env },
-          );
-        },
       }),
-    ).rejects.toThrow(/changed/);
+    ).rejects.toThrow('session group "Old" changed before completion');
     expect(loadSessionEntry({ agentId: "main", storePath, sessionKey })?.category).toBe("New");
     expect(listSessionGroupDefaults(env)).toEqual(
       expect.arrayContaining([

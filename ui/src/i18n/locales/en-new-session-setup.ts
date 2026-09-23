@@ -173,6 +173,8 @@ const enNewSessionSetup = {
     restoringPreferences: "Restoring your last session setup…",
     checkingPlace: "Checking the selected place…",
     agentsUnavailable: "No agents are available on this Gateway yet.",
+    loadingAgentDefaults: "Refreshing agent defaults…",
+    agentDefaultsUnavailable: "Could not refresh agent defaults. Reload to try again.",
     terminalHostUnavailable:
       "Native CLI host unavailable. Check that the CLI is installed and the node is connected with its fresh-start command approved, then retry the catalog.",
     terminalDisabled: "Enable CLI agents and terminals in Gateway settings to start a native CLI.",

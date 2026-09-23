@@ -9,10 +9,8 @@ import { isPathInside } from "./path-guards.js";
 import { withRuntimeWorkerGeneration } from "./runtime-worker-generation.js";
 import { removeTemporaryArtifacts } from "./temp-artifact-cleanup.js";
 import { withUpdateCandidateIoBudget } from "./update-candidate-io.js";
-import {
-  copyUpdateCandidatePluginTrees,
-  prepareUpdateCandidatePluginTrees,
-} from "./update-candidate-plugin-tree.js";
+import { prepareUpdateCandidatePluginTrees } from "./update-candidate-plugin-tree.js";
+import { linkUpdateCandidatePluginTrees } from "./update-retained-runtime-tree.js";
 import { relocateRuntimePath } from "./update-runtime-relocation.js";
 
 export type RetainUpdateRuntime = (params: {
@@ -86,7 +84,7 @@ export async function withRetainedUpdateRuntime<T>(
         await withUpdateCandidateIoBudget(
           { directory: privateRoot, bytes: plan.bytes, timeoutMs },
           async (signal) =>
-            await copyUpdateCandidatePluginTrees(plan, {
+            await linkUpdateCandidatePluginTrees(plan, {
               targetStateDir: privateRoot,
               candidateRoot,
               onProgress: () => {

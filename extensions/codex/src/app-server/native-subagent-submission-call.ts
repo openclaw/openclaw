@@ -1,3 +1,4 @@
+import type { AgentHarnessCompletionCustody } from "openclaw/plugin-sdk/agent-harness-task-runtime";
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { readNativeTurnEnd } from "./native-subagent-history-recovery.js";
 import type {
@@ -21,6 +22,7 @@ export type NativeSubagentSubmissionCall = {
   submissionId?: string;
   closed?: true;
   accepted?: true;
+  completionCustody?: AgentHarnessCompletionCustody;
 };
 
 export function hasSubmissionCallCustody(
@@ -130,5 +132,33 @@ export function observeSubmissionPredecessor(params: {
   });
   if (call.targets.length === 0) {
     call.owner = undefined;
+    call.completionCustody?.release();
+    call.completionCustody = undefined;
+  }
+}
+
+export function pruneSubmissionCalls(
+  state: ParentState,
+  calls: Map<string, NativeSubagentSubmissionCall> | undefined,
+  dependencies: {
+    parentOwner: (state: ParentState, turnId: string) => ParentOwner | undefined;
+    hasObservationBacking?: (parentThreadId: string, childThreadId: string) => boolean;
+  },
+): void {
+  const hasUnboundOwner = [...state.owners.values()].some((owner) => !owner.turnId);
+  for (const [key, call] of calls ?? []) {
+    if (hasSubmissionCallCustody(state, call, dependencies.hasObservationBacking)) {
+      if (!call.owner || ![...state.owners.values()].includes(call.owner)) {
+        call.owner = undefined;
+      }
+      continue;
+    }
+    if (
+      (call.owner && ![...state.owners.values()].includes(call.owner)) ||
+      (!dependencies.parentOwner(state, call.parentTurnId) && !hasUnboundOwner)
+    ) {
+      calls!.delete(key);
+      call.completionCustody?.release();
+    }
   }
 }

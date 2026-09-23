@@ -166,7 +166,7 @@ function mergeSessionEntryIntoCombined(params: {
   canonicalKey: string;
   projectedKey?: string;
 }) {
-  const { cfg, combined, entry, target, canonicalKey } = params;
+  const { combined, entry, target, canonicalKey } = params;
   const projectedKey = params.projectedKey ?? canonicalKey;
   const existing = combined[projectedKey];
   if (existing && (canonicalKey === "global" || canonicalKey === "unknown")) {
@@ -178,24 +178,26 @@ function mergeSessionEntryIntoCombined(params: {
       `duplicate rows resolve to canonical session key ${canonicalKey}`,
     );
   }
-  combined[projectedKey] = projectGatewaySessionEntry(cfg, entry);
+  combined[projectedKey] = entry;
   params.targetsBySessionKey.set(projectedKey, target);
 }
 
-export function projectGatewaySessionEntry(cfg: OpenClawConfig, entry: SessionEntry): SessionEntry {
+export function projectGatewaySessionEntry(
+  cfg: OpenClawConfig,
+  entry: SessionEntry,
+  resolveSourceKey?: (key: string) => string,
+): SessionEntry {
   const projected = { ...entry };
-  // SQLite validates lineage shape; qualified global aliases still depend on config.
-  // Keep reserved sentinels intact and resolve each alias with its own agent.
+  // Global display uses the captured parent selection; per-sender lineage stays literal.
+  // Raw sentinels keep their physical owner and are never reinterpreted here.
   if (cfg.session?.scope === "global") {
     for (const field of ["parentSessionKey", "spawnedBy"] as const) {
       const sessionKey = projected[field];
       const parsed = sessionKey ? parseAgentSessionKey(sessionKey) : null;
       if (sessionKey && parsed) {
-        projected[field] = canonicalizeMainSessionAlias({
-          cfg,
-          agentId: parsed.agentId,
-          sessionKey,
-        });
+        projected[field] =
+          resolveSourceKey?.(sessionKey) ??
+          canonicalizeMainSessionAlias({ cfg, agentId: parsed.agentId, sessionKey });
       }
     }
   }
@@ -233,7 +235,7 @@ function mergeOpenIncognitoStores(params: {
         target: {
           ...modelTarget,
           entry,
-          readSourceEntry: addModelEntry(target.agentId, sessionKey, entry),
+          ...addModelEntry(target.agentId, sessionKey, entry),
         },
         canonicalKey: sessionKey,
       });
@@ -606,6 +608,7 @@ function mergeCombinedSessionStore(
         // Qualified retired-owner keys keep their physical store's canonicalization context.
         agentId: parsed ? storeTarget.agentId : rowAgentId,
         sessionKey: key,
+        preserveQualifiedAddress: true,
       });
       if (key !== canonicalKey) {
         throw canonicalSessionKeyMigrationRequiredError(
@@ -615,7 +618,7 @@ function mergeCombinedSessionStore(
       const canonicalAgentId = normalizeAgentId(parsed?.agentId ?? rowAgentId);
       preparedAgentIds?.add(canonicalAgentId);
       // A scoped row can inherit a differently owned parent from this same physical store.
-      const readSourceEntry = addModelEntry(canonicalAgentId, canonicalKey, entry);
+      const source = addModelEntry(canonicalAgentId, canonicalKey, entry);
       if (requestedAgentId && canonicalAgentId !== requestedAgentId) {
         continue;
       }
@@ -639,7 +642,7 @@ function mergeCombinedSessionStore(
           agentId: canonicalAgentId,
           storeTarget,
           entry,
-          readSourceEntry,
+          ...source,
           ...(projectedKey !== canonicalKey ? { storeKey: canonicalKey } : {}),
         },
         canonicalKey,
@@ -664,6 +667,11 @@ function mergeCombinedSessionStore(
       targetsBySessionKey,
       modelSources,
     });
+  }
+
+  // Parent selection must see later stores too, before display/filter lineage is projected.
+  for (const [key, target] of targetsBySessionKey) {
+    combined[key] = projectGatewaySessionEntry(cfg, combined[key]!, target.resolveSourceKey);
   }
 
   const durableStorePaths = durableTargets.map((target) => target.storePath);

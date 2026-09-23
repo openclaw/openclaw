@@ -10,7 +10,10 @@ import {
   revokePluginRecord,
 } from "../plugins/registry-lifecycle.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
-import type { CreatedDetachedTaskRun } from "./detached-task-runtime-contract.js";
+import {
+  DetachedTaskRuntimeOwnerRetiredError,
+  type CreatedDetachedTaskRun,
+} from "./detached-task-runtime-contract.js";
 import {
   completeTaskRunByRunId,
   createQueuedTaskRun,
@@ -23,8 +26,10 @@ import {
   recordTaskRunProgressByRunId,
   setDetachedTaskDeliveryStatusByRunId,
   startTaskRunByRunId,
+  transitionTaskAssignment,
   tryRecoverTaskBeforeMarkLost,
 } from "./detached-task-runtime.js";
+import { captureTaskPersistenceReceipt } from "./task-registry-records.js";
 import type { TaskRecord } from "./task-registry.types.js";
 import {
   resetDetachedTaskLifecycleRuntimeForTests,
@@ -112,7 +117,14 @@ function createPreparedRunningTask(...args: Parameters<typeof prepareRunningTask
 }
 
 function createFakeTaskReceipt(task: TaskRecord): CreatedDetachedTaskRun {
-  return { task, settleUnstarted: async () => false, finalizeActive: async () => undefined };
+  return {
+    task,
+    bindRunOwner: async () => {
+      throw new Error("This fixture does not bind task owners");
+    },
+    settleUnstarted: async () => false,
+    finalizeActive: async () => undefined,
+  };
 }
 
 function findWarningPayload(message: string): Record<string, unknown> | undefined {
@@ -136,6 +148,68 @@ function requireFirstCallArg(
 }
 
 describe("detached-task-runtime", () => {
+  it("rejects unsupported exact settlement without bypassing the legacy adapter", () => {
+    const task = createFakeTaskRecord();
+    const complete = vi.fn(() => [task]);
+    setDetachedTaskLifecycleRuntime({
+      ...getDetachedTaskLifecycleRuntime(),
+      transitionTaskAssignment: undefined,
+      finalizeTaskRunByRunId: undefined,
+      completeTaskRunByRunId: complete,
+    });
+    expect(() =>
+      transitionTaskAssignment({
+        expectedTask: captureTaskPersistenceReceipt(task),
+        transition: {
+          kind: "state",
+          params: { runId: task.runId!, status: "succeeded", endedAt: 2 },
+        },
+        assertCurrent: () => {},
+      }),
+    ).toThrow("must implement transitionTaskAssignment");
+    expect(complete).not.toHaveBeenCalled();
+    expect(mockCreateRunningTaskRunCore).not.toHaveBeenCalled();
+    finalizeTaskRunByRunId({ runId: task.runId!, status: "succeeded", endedAt: 2 });
+    expect(complete).toHaveBeenCalledOnce();
+  });
+
+  it.each([false, true])(
+    "rechecks a registered exact-transition owner before commit (replace=%s)",
+    (replace) => {
+      const task = createFakeTaskRecord();
+      const expectedTask = captureTaskPersistenceReceipt(task);
+      const committed = vi.fn();
+      const adapter = {
+        ...getDetachedTaskLifecycleRuntime(),
+        transitionTaskAssignment: vi.fn((input: Parameters<typeof transitionTaskAssignment>[0]) => {
+          expect(input.expectedTask).toBe(expectedTask);
+          if (replace) {
+            setDetachedTaskLifecycleRuntime({ ...adapter });
+          }
+          input.assertCurrent();
+          committed();
+          return [task];
+        }),
+      };
+      setDetachedTaskLifecycleRuntime(adapter);
+      const settle = () =>
+        transitionTaskAssignment({
+          expectedTask,
+          transition: {
+            kind: "delivery",
+            params: { runId: task.runId!, deliveryStatus: "delivered" },
+          },
+          assertCurrent: () => {},
+        });
+      if (replace) {
+        expect(settle).toThrow(DetachedTaskRuntimeOwnerRetiredError);
+      } else {
+        expect(settle()).toEqual([task]);
+      }
+      expect(committed).toHaveBeenCalledTimes(replace ? 0 : 1);
+    },
+  );
+
   afterEach(() => {
     resetDetachedTaskLifecycleRuntimeForTests();
     mockFindTaskByRunIdForStatus.mockReset();

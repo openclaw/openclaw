@@ -499,6 +499,7 @@ internal val nativeStringResourceIds: Map<String, Int> =
     "Dark" to R.string.native_60acc53f13a5d1bf,
     "Dashboard" to R.string.native_67b696468610b879,
     "Dashboard needs a connected gateway" to R.string.native_5a71fb83d16829a7,
+    "Decision Evaluation" to R.string.native_17edda6ed6346e3a,
     "Default" to R.string.native_21b111cbfe6e8fca,
     "Default Agent" to R.string.native_0349070711a2323d,
     "Default agent" to R.string.native_94da52ecd6c5c3b7,

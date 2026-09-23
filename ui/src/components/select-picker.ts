@@ -25,6 +25,8 @@ export type PickerParams<Option extends PickerOption> = {
   value: string | null;
   options: readonly Option[];
   disabled?: boolean;
+  invalid?: boolean;
+  describedBy?: string;
   className?: string;
   title?: string;
   placement?: "top" | "bottom";
@@ -353,6 +355,8 @@ export class SelectPicker<
           aria-haspopup="listbox"
           aria-expanded=${String(open)}
           aria-controls=${controls}
+          aria-invalid=${this.params.invalid ? "true" : nothing}
+          aria-describedby=${this.params.describedBy ?? nothing}
           title=${this.params.title ?? nothing}
           ?disabled=${this.params.disabled}
           @click=${() => (open ? this.closeMenu() : this.openMenu())}
@@ -387,6 +391,8 @@ export class SelectPicker<
                     aria-autocomplete="list"
                     aria-expanded="true"
                     aria-controls=${controls}
+                    aria-invalid=${this.params.invalid ? "true" : nothing}
+                    aria-describedby=${this.params.describedBy ?? nothing}
                     aria-activedescendant=${active >= 0 ? `${this.listboxId}-${active}` : nothing}
                     .value=${live(this.query)}
                     @input=${(event: InputEvent) => {

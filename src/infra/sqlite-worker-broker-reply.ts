@@ -10,6 +10,7 @@ import {
 import { SqliteCoordinatorError } from "./sqlite-coordinator.js";
 import { retainSqliteWriteAdmissionService } from "./sqlite-transaction.js";
 import {
+  borrowSqliteWorkerLifecycle,
   prepareSqliteWorkerLifecycle,
   releaseSqliteWorkerLifecycle,
 } from "./sqlite-worker-broker-admission.js";
@@ -19,6 +20,7 @@ import {
   retainSqliteWorkerErrorCode,
   SqliteWorkerError,
   type SqliteWorkerReply,
+  type SqliteWorkerCloseReceipt,
   type SqliteWorkerRequest,
 } from "./sqlite-worker-contract.js";
 import { createSqliteWorkerLifecyclePreparation } from "./sqlite-worker-lifecycle-preparation.js";
@@ -67,6 +69,12 @@ export function dispatchSqliteWorkerJob(
     onRejected(failure, retire);
   };
   job.rejectPreparation = (error) => reject(error, true);
+  const actor = [...slot.actors].find((candidate) => candidate.id === job.request.actor);
+  // Host grants must remain serviceable while a native caller waits on lifecycle custody.
+  job.requireStateLifecycle ||=
+    (job.request.stateContext ?? actor?.stateContext) !== undefined &&
+    (job.request.type === "close" ||
+      (job.request.type === "execute" && job.createAdmission !== undefined));
   if (job.requireStateLifecycle) {
     job.cancelPreparation = new AbortController();
   }
@@ -81,7 +89,6 @@ export function dispatchSqliteWorkerJob(
   };
   try {
     assertDispatchable();
-    const actor = [...slot.actors].find((candidate) => candidate.id === job.request.actor);
     const dispatch = () => {
       try {
         assertDispatchable();
@@ -123,6 +130,7 @@ function postSqliteWorkerJob(
     const preparation = createSqliteWorkerLifecyclePreparation({
       assertCurrent: assertDispatchable,
       signal: job.cancelPreparation.signal,
+      borrow: () => borrowSqliteWorkerLifecycle(job, actor),
       admit: () => prepareSqliteWorkerOperationAdmission(job, actor),
       dispatch: dispatched,
       receiveResult(reply, pumping) {
@@ -336,6 +344,7 @@ export type SqliteWorkerReplyOwner = {
     error?: unknown,
     value?: unknown,
     settlement?: SqliteWorkerOperationSettlement,
+    closeReceipt?: SqliteWorkerCloseReceipt,
   ): void;
   dispatch(): void;
 };
@@ -436,7 +445,11 @@ export function receiveSqliteWorkerReply(
   }
   settle(() => {
     slot.current = undefined;
-    owner.finish(job, undefined, value);
+    if (job.request.type === "close") {
+      owner.finish(job, undefined, value, undefined, reply.closeReceipt);
+    } else {
+      owner.finish(job, undefined, value);
+    }
     owner.dispatch();
   });
 }

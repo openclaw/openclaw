@@ -537,8 +537,14 @@ describe("renderUsage", () => {
         )!
         .querySelectorAll<HTMLElement & { checked: boolean }>(".usage-filter-option");
     const values = () => [...providerOptions()].map((option) => option.textContent?.trim());
+    const chartModeButton = (label: string) =>
+      [...container.querySelectorAll<HTMLButtonElement>(".usage-view-options button")].find(
+        (button) => button.textContent?.trim() === label,
+      );
 
     render(renderUsage(props), container);
+    expect(chartModeButton("Tokens")?.getAttribute("aria-pressed")).toBe("true");
+    expect(chartModeButton("Cost")?.getAttribute("aria-pressed")).toBe("false");
     expect(values()).toEqual(["first", "second"]);
     expect([...providerOptions()].find((option) => option.checked)?.textContent?.trim()).toBe(
       "second",
@@ -549,6 +555,8 @@ describe("renderUsage", () => {
 
     props.display.chartMode = "cost";
     render(renderUsage(props), container);
+    expect(chartModeButton("Tokens")?.getAttribute("aria-pressed")).toBe("false");
+    expect(chartModeButton("Cost")?.getAttribute("aria-pressed")).toBe("true");
     expect(values()).toEqual(["second", "first"]);
     props.filters.agentId = "main";
     // The replacement report is already scoped by the Gateway.

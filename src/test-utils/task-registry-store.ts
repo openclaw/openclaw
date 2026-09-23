@@ -189,6 +189,7 @@ export function createInMemoryTaskRegistryStore(
           input: TaskInitialWorkerOperations[Key]["input"],
         ) => TaskInitialWorkerOperations[Key]["output"];
       } = {
+        "tasks.bindRunOwner": (input) => transitionRecord({ kind: "run-owner", ...input }),
         "tasks.acknowledgeStateChange": (input) =>
           acknowledgeTaskStateNotification(input, {
             readCurrent: () => ({

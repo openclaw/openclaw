@@ -156,10 +156,13 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
           { includeApprovals: true, provisional: true },
         );
         try {
-          let prepared;
-          do {
+          let prepared = await context.listSessionPendingApprovals?.(subscriptionKey, client);
+          if (prepared && !prepared.isCurrent()) {
             prepared = await context.listSessionPendingApprovals?.(subscriptionKey, client);
-          } while (prepared && !prepared.isCurrent());
+          }
+          if (prepared && !prepared.isCurrent()) {
+            throw new Error("session approval replay changed during preparation");
+          }
           approvalReplay = prepared?.replay;
           sessionMutationAuthorization?.assertCurrent();
           if (

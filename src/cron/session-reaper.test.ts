@@ -11,7 +11,7 @@ import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/
 import { loadCombinedSessionStoreForGatewayCore } from "../config/sessions/combined-store-gateway.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import * as sessionEntryReader from "../config/sessions/session-entry-read-runtime.js";
-import { historyPages } from "../config/sessions/session-transcript-worker-resources.js";
+import { maintenanceLane } from "../config/sessions/session-transcript-worker-resources.js";
 import {
   listKnownSessionStoreAgentIds,
   resolveExistingAgentSessionStoreTargetsSync,
@@ -423,13 +423,13 @@ describe("sweepCronRunSessions", () => {
         log,
       }),
     ).toEqual({ swept: true, pruned: 0 });
-    const workersCreated = historyPages.getSnapshot().workersCreated;
+    const workersCreated = maintenanceLane.pool.getSnapshot().workersCreated;
     let foregroundRead:
       | ReturnType<typeof sessionEntryReader.readSessionEntriesFromStoreInWorker>
       | undefined;
     if (!process.versions.bun) {
-      const closeResources = historyPages.closeResources.bind(historyPages);
-      vi.spyOn(historyPages, "closeResources").mockImplementationOnce((key) => {
+      const closeResources = maintenanceLane.pool.closeResources.bind(maintenanceLane.pool);
+      vi.spyOn(maintenanceLane.pool, "closeResources").mockImplementationOnce((key) => {
         const closing = closeResources(key);
         foregroundRead = sessionEntryReader.readSessionEntriesFromStoreInWorker({
           agentId: "main",
@@ -460,7 +460,7 @@ describe("sweepCronRunSessions", () => {
           },
         ],
       });
-      expect(historyPages.getSnapshot().workersCreated).toBe(workersCreated);
+      expect(maintenanceLane.pool.getSnapshot().workersCreated).toBe(workersCreated);
     }
     expect(
       sessionAccessor.loadSessionEntry({

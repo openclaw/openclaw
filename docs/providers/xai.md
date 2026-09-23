@@ -85,7 +85,11 @@ bundled xAI model provider reuses it as a fallback too.
 `openclaw status --usage`, `/status`, and the Control UI usage cards show
 SuperGrok quota when the xAI provider is signed in with OAuth. OpenClaw fetches
 the Grok billing window for that subscription and reports its reset time through
-the normal provider-usage surface. API-key-only xAI setups are intentionally not
+the normal provider-usage surface. When xAI omits an included-usage percent on an
+otherwise valid weekly or monthly billing period, OpenClaw reports that included
+usage was omitted instead of inventing a percentage or showing generic
+"No usage data". Pay-as-you-go on-demand counters are not treated as SuperGrok
+subscription quota. API-key-only xAI setups are intentionally not
 shown as SuperGrok usage because xAI Console API credits and SuperGrok
 subscription quota are separate billing buckets.
 

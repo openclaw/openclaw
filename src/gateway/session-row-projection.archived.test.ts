@@ -1,12 +1,19 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
-import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
-import * as history from "../config/sessions/session-transcript-worker-runtime.js";
+import {
+  deleteSessionEntryLifecycle,
+  replaceSessionEntrySync,
+} from "../config/sessions/session-accessor.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { retainSessionListForegroundWork } from "./session-projection-work.js";
+import * as placementRead from "./server-methods/session-placement-read-projection.js";
+import {
+  canRunSessionListBackgroundWork,
+  retainSessionListForegroundWork,
+} from "./session-projection-work.js";
 import * as materialization from "./session-row-projection-materialize.js";
+import * as databaseFactsRead from "./session-row-projection-read.js";
 import { ready } from "./session-row-projection-record.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import * as transcriptBackfill from "./session-row-transcript-backfill.js";
@@ -80,6 +87,110 @@ it("keeps archived rows cold at hydration and across broad refreshes", async () 
   });
 });
 
+it("reindexes cold lineage when a literal parent appears and disappears", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const cfg = {
+      agents: { entries: { alpha: { default: true }, main: {} } },
+      session: { scope: "global" as const },
+    };
+    await state.writeConfig(cfg);
+    state.applyEnv();
+    const parent = "agent:main:main";
+    const child = "agent:alpha:dashboard:cold-child";
+    const writeParent = (sessionKey: string, model: string) =>
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey },
+        {
+          sessionId: sessionKey,
+          updatedAt: 1,
+          providerOverride: "ollama",
+          modelOverride: model,
+          modelOverrideSource: "user",
+          modelOverrideRouteResolution: "resolved",
+        },
+      );
+    writeParent("global", "qwen3:8b");
+    replaceSessionEntrySync(
+      { agentId: "alpha", sessionKey: child },
+      {
+        sessionId: "cold-child",
+        updatedAt: 1,
+        status: "running",
+        archivedAt: 1,
+        parentSessionKey: parent,
+        spawnedBy: parent,
+      },
+    );
+    const release = retainSessionListForegroundWork();
+    let projection: Awaited<ReturnType<typeof createSessionRowProjection>> | undefined;
+    try {
+      projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+      const initial = projection
+        .selectEntries({ parentSessionKey: "global" })
+        .find((row) => row.key === child)!;
+      expect(initial).toBeDefined();
+      expect(ready(initial)).toBe(false);
+      const boardReads = vi.spyOn(placementRead, "readSessionRowHasBoard");
+      const check = async (literal: boolean) => {
+        if (!projection) {
+          throw new Error("Expected a live projection");
+        }
+        // Query the parent index first: describing the child would hide a stale cold edge.
+        const selected = projection.selectEntries({
+          parentSessionKey: literal ? parent : "global",
+        });
+        const row = selected.find((entry) => entry.key === child);
+        expect(row).toMatchObject({
+          entry: {
+            parentSessionKey: literal ? parent : "global",
+            spawnedBy: literal ? parent : "global",
+          },
+        });
+        expect(row?.generation).toBe(initial.generation);
+        expect(row?.membership).toBe(initial.membership);
+        expect(row?.hasBoard).toBe(initial.hasBoard);
+        expect(row?.materialized).toBeUndefined();
+        expect(boardReads).not.toHaveBeenCalled();
+        if (literal) {
+          expect(
+            projection.selectEntries({ parentSessionKey: "global" }).map((entry) => entry.key),
+          ).not.toContain(child);
+        }
+        await projection.ensureMaterialized();
+        expect(
+          projection.snapshot({ agentId: "main", key: literal ? parent : "global" }).row
+            ?.childSessions,
+        ).toContain(child);
+        if (literal) {
+          expect(
+            projection.snapshot({ agentId: "main", key: "global" }).row?.childSessions ?? [],
+          ).not.toContain(child);
+        }
+        expect(projection.selectEntries({ key: child })[0]?.materialized).toBeUndefined();
+      };
+      await check(false);
+      writeParent("global", "qwen3:14b");
+      await check(false);
+      writeParent(parent, "qwen3:32b");
+      await check(true);
+      await deleteSessionEntryLifecycle({
+        agentId: "main",
+        storePath: projection.capture({ agentId: "main", key: parent })!.storeTarget.storePath,
+        archiveTranscript: false,
+        target: { canonicalKey: parent, storeKeys: [parent] },
+      });
+      await check(false);
+      const listed = await listProjectedSessions({ projection, opts: { archived: true } });
+      expect(listed.sessions).toEqual([
+        expect.objectContaining({ key: child, model: "qwen3:14b" }),
+      ]);
+    } finally {
+      projection?.dispose();
+      release();
+    }
+  });
+});
+
 it("promotes unarchived rows, demotes archived rows, and refreshes only requested archives", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = { agents: { list: [{ id: "main", default: true }] } };
@@ -129,8 +240,11 @@ it("promotes unarchived rows, demotes archived rows, and refreshes only requeste
   });
 });
 
-it("bounds archived residency across pages and evicts the least recently read rows", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+it("bounds archived residency across pages and evicts the least recently read rows", ({
+  signal,
+  onTestFinished,
+}) => {
+  const run = withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = { agents: { list: [{ id: "main", default: true }] } };
     for (let index = 0; index < 128; index++) {
       replaceSessionEntrySync(
@@ -163,30 +277,37 @@ it("bounds archived residency across pages and evicts the least recently read ro
       expect(projection.selectEntries().filter(ready)).toHaveLength(100);
       const pagePrepared = createDeferredCore();
       const releasePage = createDeferredCore();
-      const readDatabases = history.withSessionHistoryWorkerDatabases;
+      const readFacts = databaseFactsRead.withSessionRowDatabaseFacts;
       let wholePagePaused = false;
       const prepare = vi
-        .spyOn(history, "withSessionHistoryWorkerDatabases")
-        .mockImplementation((databases, consume) =>
-          readDatabases(databases, async (owners) => {
-            const result = await consume(owners);
-            if (!wholePagePaused && projection.selectEntries().filter(ready).length === 128) {
-              wholePagePaused = true;
-              pagePrepared.resolve();
-              await releasePage.promise;
-            }
-            return result;
-          }),
-        );
+        .spyOn(databaseFactsRead, "withSessionRowDatabaseFacts")
+        .mockImplementation(async (...args) => {
+          // Prepared suffixes may finish without another Worker read; pause after either path.
+          await readFacts(...args);
+          if (!wholePagePaused && projection.selectEntries().filter(ready).length === 128) {
+            wholePagePaused = true;
+            pagePrepared.resolve();
+            await releasePage.promise;
+          }
+        });
       const pendingPage = listProjectedSessions({
         projection,
         opts: { archived: true, limit: 128, includeLastMessage: true },
       });
+      const abortPage = () => pagePrepared.reject(signal.reason);
       try {
+        signal.addEventListener("abort", abortPage, { once: true });
+        signal.throwIfAborted();
+        void pendingPage.then(
+          () =>
+            pagePrepared.reject(new Error("Archive page settled before its preparation barrier")),
+          pagePrepared.reject,
+        );
         await pagePrepared.promise;
         await listProjectedSessions({ projection, opts: { archived: true, limit: 1 } });
         expect(projection.selectEntries().filter(ready)).toHaveLength(128);
       } finally {
+        signal.removeEventListener("abort", abortPage);
         releasePage.resolve();
         await pendingPage;
         prepare.mockRestore();
@@ -207,26 +328,24 @@ it("bounds archived residency across pages and evicts the least recently read ro
         resume: createDeferredCore(),
       }));
       const reads = vi
-        .spyOn(history, "withSessionHistoryWorkerDatabases")
-        .mockImplementation((databases, consume) =>
-          readDatabases(databases, async (owners) => {
-            const result = await consume(owners);
-            const readyKeys = new Set(
-              projection
-                .selectEntries()
-                .filter(ready)
-                .map((row) => row.key),
-            );
-            for (const barrier of barriers) {
-              if (!barrier.paused && barrier.keys.every((key) => readyKeys.has(key))) {
-                barrier.paused = true;
-                barrier.prepared.resolve();
-                await barrier.resume.promise;
-              }
+        .spyOn(databaseFactsRead, "withSessionRowDatabaseFacts")
+        .mockImplementation(async (...args) => {
+          // Prepared suffixes may finish without another Worker read; pause after either path.
+          await readFacts(...args);
+          const readyKeys = new Set(
+            projection
+              .selectEntries()
+              .filter(ready)
+              .map((row) => row.key),
+          );
+          for (const barrier of barriers) {
+            if (!barrier.paused && barrier.keys.every((key) => readyKeys.has(key))) {
+              barrier.paused = true;
+              barrier.prepared.resolve();
+              await barrier.resume.promise;
             }
-            return result;
-          }),
-        );
+          }
+        });
       const pages: Array<ReturnType<typeof listProjectedSessions>> = [];
       try {
         for (const [index, barrier] of barriers.entries()) {
@@ -235,8 +354,21 @@ it("bounds archived residency across pages and evicts the least recently read ro
             opts: { archived: true, limit: 64, offset: index * 64 },
           });
           pages.push(page);
-          void page.catch(barrier.prepared.reject);
-          await barrier.prepared.promise;
+          const abortDisjointPage = () => barrier.prepared.reject(signal.reason);
+          try {
+            signal.addEventListener("abort", abortDisjointPage, { once: true });
+            signal.throwIfAborted();
+            void page.then(
+              () =>
+                barrier.prepared.reject(
+                  new Error("Archive page settled before its preparation barrier"),
+                ),
+              barrier.prepared.reject,
+            );
+            await barrier.prepared.promise;
+          } finally {
+            signal.removeEventListener("abort", abortDisjointPage);
+          }
         }
         expect(projection.selectEntries().filter(ready)).toHaveLength(128);
       } catch (error) {
@@ -258,8 +390,12 @@ it("bounds archived residency across pages and evicts the least recently read ro
     } finally {
       projection.dispose();
       release();
+      expect(canRunSessionListBackgroundWork()).toBe(true);
     }
   });
+  // Vitest timeout cancels the waits; retain the fixture until its pages and state finish cleanup.
+  onTestFinished(() => run);
+  return run;
 });
 
 it("backfills only requested archives and discards enrichment after demotion", async () => {

@@ -1,5 +1,6 @@
 // Zalouser tests cover zalo js.credentials plugin behavior.
 import { access, mkdtemp, rm } from "node:fs/promises";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -20,6 +21,8 @@ import {
   createTestWizardPrompter,
   runSetupWizardConfigure,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker, withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { API, LoginQRCallbackEvent } from "./zca-client.js";
@@ -339,7 +342,7 @@ describe("zalouser credential persistence", () => {
     });
   });
 
-  it("persists the final API cookie jar after QR login", async () => {
+  it("persists the final API cookie jar and logs out without parent SQLite work", async () => {
     const registered = createDeferred<void>();
     afterCredentialRegister = () => registered.resolve();
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-zalouser-credentials-"));
@@ -380,7 +383,34 @@ describe("zalouser credential persistence", () => {
       },
     });
 
+    const native = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
+    const Database = native.DatabaseSync;
+    const sql = [
+      vi.spyOn(native, "DatabaseSync"),
+      ...(["close", "prepare", "exec"] as const).map((method) =>
+        vi.spyOn(Database.prototype, method),
+      ),
+      ...(["get", "all", "run", "iterate"] as const).map((method) =>
+        vi.spyOn(native.StatementSync.prototype, method),
+      ),
+    ];
     try {
+      // Calibrate every observer and finish runtime capability checks before the cold flow.
+      const calibration = openNodeSqliteDatabase(":memory:");
+      calibration.exec("CREATE TABLE calibration (value INTEGER)");
+      calibration.prepare("INSERT INTO calibration VALUES (?)").run(1);
+      const query = calibration.prepare("SELECT value FROM calibration");
+      query.get();
+      query.all();
+      Array.from(query.iterate());
+      calibration.close();
+      for (const call of sql) {
+        expect(call).toHaveBeenCalled();
+        call.mockClear();
+      }
+      await expect(access(path.join(stateDir, "state", "openclaw.sqlite"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
       await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
         await startZaloQrLogin({ profile, timeoutMs: 1000 });
         await registered.promise;
@@ -393,8 +423,18 @@ describe("zalouser credential persistence", () => {
         expect(stored.userAgent).toBe("api-user-agent");
         expect(stored.language).toBe("vi");
         expect(stored.cookie).toEqual(refreshedCookie);
+        await expect(logoutZaloProfile(profile)).resolves.toMatchObject({
+          cleared: true,
+          loggedOut: true,
+        });
+        expect(await loadStoredZaloCredentials(profile)).toBeNull();
+        await closeOpenClawStateDatabaseAsync();
+        for (const call of sql) {
+          expect(call).not.toHaveBeenCalled();
+        }
       });
     } finally {
+      sql.forEach((call) => call.mockRestore());
       await removeCredentialStateDir(stateDir);
     }
   });

@@ -43,6 +43,10 @@ updates the sidebar without renaming an existing branch.
 
 ## New-session preferences and recents
 
+In **Project → Browse**, keyboard focus moves to the folder path. Escape returns
+focus to **Browse**. Loading and folder errors are announced without moving focus
+away from the path field.
+
 For connections with a durable user profile, the Gateway stores each agent's latest folder, worktree, model, thinking, and fast-mode choices. New sessions restore the last fast-mode choice, including an explicit off choice, for supported providers. The new-session picker also shows recent projects and folders derived only from sessions created by that profile. These conveniences follow the person across browsers; they do not grant access to a project or path.
 
 A custom worktree **Name** applies to the submitted session. Once its start is
@@ -126,6 +130,13 @@ unavailable plugin keeps its saved position for when it returns. **Home** stays
 at the top in chip mode. Plugin links shown by default can be reordered but not
 dragged out of Pages to unpin them; optional plugin destinations can still be unpinned.
 
+To reorder without dragging, focus or hover a page, pinned session, or stored
+session-section header and open its **Reorder** grip menu. Choose **Move up** or
+**Move down**; the same menu is available on touch screens. Keyboard focus stays
+with the moved item, and the order uses the same saved preferences or Gateway
+group order as dragging. Home and sections derived from people, projects, or
+agents keep their existing fixed order.
+
 To inspect Home’s subagents, open **Home**, choose **Show background tasks**, and use the right-hand **Tasks** panel. Expand **Finished** for recent completed runs; selecting a task opens its details and available transcript.
 
 Follow-up turns in an existing subagent session keep the parent’s activity ring running, even after the original task has finished. Opening the parent refreshes its hidden subagent activity without adding subagent rows to the sidebar. The ring clears when no work remains active.
@@ -156,7 +167,7 @@ Each group contains the agent's pinned and recent sessions, with the usual sessi
 
 Groups share a window of at most 300 sessions across agents with [Agents home](/web/control-ui#agents-home), loading pinned sessions first and then the most recent sessions. Pinned sessions count toward that limit, so more than 300 pinned sessions cannot all appear in this view. The open conversation can remain visible outside this window. **Involving me** loads the same bounded window filtered by the Gateway; the other filters apply to the loaded sessions across groups.
 
-The active session list applies Gateway lifecycle row snapshots to existing members without reloading the whole list. Membership changes, mutation events, missing row snapshots, and Gateway-owned filters still require an authoritative list read. Automatic roster refreshes debounce the first event after idle by 200 ms and coalesce continuous events within one second. After an automatic refresh completes, the next waits three times its duration, bounded between one and 15 seconds. Explicit refreshes, filter or agent changes, reconnects, and foreground replacements bypass that delay.
+The active session list applies Gateway lifecycle row snapshots to existing members without reloading the whole list. Membership changes, missing or incomplete row snapshots, and Gateway-owned filters still require an authoritative list read. Automatic roster refreshes collect events in a fixed five-second window that later events cannot postpone. After an automatic refresh completes, the next waits three times its duration, bounded between five and 15 seconds. Explicit refreshes, filter or agent changes, reconnects, and foreground replacements bypass that delay.
 
 Activity refreshes pause while the browser tab is hidden and catch up once when you return, respecting the automatic refresh delay. Changes that arrive during a roster read share one follow-up refresh; switching filters never combines pages from different filters.
 

@@ -27,6 +27,7 @@ import {
   quoteSqliteIdentifier,
   readSqlToken,
 } from "./sqlite-schema-sql.js";
+import { runSqlitePinnedReadSnapshotSync } from "./sqlite-transaction.js";
 
 export type { SqliteSchemaCompatibility, SqliteSchemaIssue } from "./sqlite-schema-issues.js";
 
@@ -78,6 +79,17 @@ export function collectSqliteSchemaIssues(
   schemaSql: string,
   compatibility: SqliteSchemaCompatibility = {},
   readTable?: SqliteTableContractReader,
+): SqliteSchemaIssue[] {
+  return runSqlitePinnedReadSnapshotSync(database, () =>
+    collectSqliteSchemaIssuesInSnapshot(database, schemaSql, compatibility, readTable),
+  );
+}
+
+function collectSqliteSchemaIssuesInSnapshot(
+  database: DatabaseSync,
+  schemaSql: string,
+  compatibility: SqliteSchemaCompatibility,
+  readTable: SqliteTableContractReader | undefined,
 ): SqliteSchemaIssue[] {
   const expected = getSqliteSchemaContract(schemaSql);
   const allowedMissingTables = new Set(compatibility.allowedMissingTables ?? []);

@@ -432,12 +432,7 @@ export class ChatPage extends OpenClawLightDomElement implements SessionSplitHos
   }
 
   private updateRouteToPane(pane: ChatSplitPane): void {
-    const mounted = [...this.querySelectorAll<ChatPaneElement>("openclaw-chat-pane")].find(
-      (candidate) =>
-        candidate.paneId === pane.id &&
-        candidate.sessionKey !== undefined &&
-        areUiSessionKeysEquivalent(candidate.sessionKey, pane.sessionKey),
-    );
+    const mounted = this.retainedSessions.findPane(pane.id, pane.sessionKey);
     this.updateRoute(pane.sessionKey, true, mounted?.captureNavigationFace?.());
   }
 
@@ -590,14 +585,11 @@ export class ChatPage extends OpenClawLightDomElement implements SessionSplitHos
     if (this.mcpAppUnmountGate.retiring) {
       return;
     }
-    const pane = [...this.querySelectorAll<ChatPaneElement>("openclaw-chat-pane")].find(
-      (candidate) =>
-        candidate.paneId === pending.paneId &&
-        candidate.active &&
-        candidate.presented &&
-        areUiSessionKeysEquivalent(candidate.sessionKey, pending.sessionKey),
-    );
-    const header = pane?.querySelector<HTMLElement>(".chat-pane__header");
+    const pane = this.retainedSessions.findPane(pending.paneId, pending.sessionKey);
+    const header =
+      pane?.active && pane.presented
+        ? pane.querySelector<HTMLElement>(".chat-pane__header")
+        : undefined;
     if (!header) {
       return;
     }

@@ -391,7 +391,7 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
               .value=${guard([visibleMessage], () => live(visibleMessage))}
               aria-autocomplete="list"
               aria-controls=${ifDefined(menuVisible ? menuListboxId : undefined)}
-              aria-expanded=${ifDefined(menuVisible ? "true" : undefined)}
+              aria-haspopup=${ifDefined(menuVisible ? "listbox" : undefined)}
               aria-activedescendant=${ifDefined(activeMenuOptionId ?? undefined)}
               aria-describedby=${menuAnnouncementId}
               @input=${(event: InputEvent) => {
