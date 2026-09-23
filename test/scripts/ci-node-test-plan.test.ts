@@ -6102,7 +6102,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     "package.json",
     "pnpm-lock.yaml",
     "pnpm-workspace.yaml",
-    "patches/vitest@5.0.0.patch",
+    "patches/vitest@5.0.1.patch",
     ".github/workflows/ci.yml",
     ".github/ISSUE_TEMPLATE/bug_report.md",
     ".crabbox.yaml",
