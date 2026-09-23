@@ -4,7 +4,6 @@ import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { resolveStateDir } from "../config/state-dir.js";
 import { isGatewayExternallySupervised } from "../infra/gateway-supervision.js";
 import { mergeProcessEnv } from "../infra/process-env.js";
-import type { SqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import { captureStateDatabaseCoordinatorRuntime } from "../infra/state-database-coordinator.js";
 import { getOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import { captureOpenClawStateDatabaseReadAdmission } from "./openclaw-state-db-cache.js";
@@ -20,14 +19,9 @@ export function captureOpenClawStateWorkerContext(
   options: { path?: string; env?: NodeJS.ProcessEnv } = {},
 ): OpenClawStateWorkerContext {
   const env = cloneEnvWithPlatformSemantics(options.env ?? process.env);
-  // Keep config inputs, but replace every Windows alias of these canonical owner facts.
-  const environment: SqliteWorkerStateContext["environment"] = {
-    ...mergeProcessEnv([
-      env,
-      { OPENCLAW_STATE_DIR: undefined, OPENCLAW_SUPERVISOR_MODE: undefined },
-    ]),
+  const environment: OpenClawStateWorkerContext["environment"] = {
     OPENCLAW_STATE_DIR: resolveStateDir(env),
-    OPENCLAW_SUPERVISOR_MODE: isGatewayExternallySupervised(env) ? "external" : undefined,
+    ...(isGatewayExternallySupervised(env) ? { OPENCLAW_SUPERVISOR_MODE: "external" } : {}),
   };
   const databasePath = path.resolve(options.path ?? resolveOpenClawStateSqlitePath(environment));
   isExistingOpenClawStateSchema(databasePath);
@@ -52,6 +46,11 @@ export function captureOpenClawStateWorkerContext(
     maintenanceScope: getOpenClawDatabaseMaintenanceScope(),
     admission,
     environment,
+    initializationEnvironment: mergeProcessEnv([
+      env,
+      { OPENCLAW_STATE_DIR: undefined, OPENCLAW_SUPERVISOR_MODE: undefined },
+      environment,
+    ]),
     coordinatorRuntime: captureStateDatabaseCoordinatorRuntime(),
     existingSchemaPath,
     runInCapturedSchemaScope,

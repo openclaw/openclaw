@@ -104,7 +104,6 @@ beforeEach(() => {
 it("keeps the selector's Windows state snapshot through a caller environment change", async () => {
   const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
   const env = callerEnvironment();
-  const originalEnv = { ...env };
   const entered = createDeferredCore();
   const projectRead = createDeferredCore<ProjectRegistryRecord>();
   let captured: OpenClawStateWorkerContext | undefined;
@@ -127,15 +126,10 @@ it("keeps the selector's Windows state snapshot through a caller environment cha
     ]);
     env.OpenClaw_State_Dir = path.resolve("/changed-project-state");
     env.OpenClaw_Supervisor_Mode = "other";
-    env.HOME = path.resolve("/changed-home");
     projectRead.resolve(project);
     const selected = await selection;
     expect(selected?.project).toEqual(project);
     expect(captured?.environment).toEqual({
-      HOME: originalEnv.HOME,
-      USERPROFILE: originalEnv.USERPROFILE,
-      NODE_ENV: originalEnv.NODE_ENV,
-      OPENCLAW_TEST_FAST: originalEnv.OPENCLAW_TEST_FAST,
       OPENCLAW_STATE_DIR: root,
       OPENCLAW_SUPERVISOR_MODE: "external",
     });

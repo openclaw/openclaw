@@ -9,6 +9,8 @@ export type SqliteWorkerStateContext = {
     OPENCLAW_STATE_DIR: string;
     OPENCLAW_SUPERVISOR_MODE?: "external";
   };
+  /** Selected config inputs for native shared-state initialization, not command environment. */
+  initializationEnvironment?: NodeJS.ProcessEnv;
   coordinatorRuntime: StateDatabaseCoordinatorRuntime;
   existingSchemaPath?: string;
 };
@@ -19,9 +21,13 @@ export function sqliteWorkerRequestBytes(
   context?: SqliteWorkerStateContext,
   preparation?: Uint8Array,
 ): number {
-  return Object.entries(context?.environment ?? {}).reduce(
-    (bytes, [key, value]) =>
-      bytes + Buffer.byteLength(key, "utf8") + Buffer.byteLength(value ?? "", "utf8"),
+  return [context?.environment, context?.initializationEnvironment].reduce(
+    (bytes, environment) =>
+      Object.entries(environment ?? {}).reduce(
+        (total, [key, value]) =>
+          total + Buffer.byteLength(key, "utf8") + Buffer.byteLength(value ?? "", "utf8"),
+        bytes,
+      ),
     input.byteLength + (preparation?.byteLength ?? 0),
   );
 }

@@ -148,7 +148,6 @@ it.each(
       };
       const caller =
         environment === "precloned" ? cloneEnvWithPlatformSemantics(supplied) : supplied;
-      const originalEnv = { ...caller };
       const options = { env: caller };
       const entered = createDeferredCore();
       const resume = createDeferredCore();
@@ -217,14 +216,12 @@ it.each(
         ]);
         caller.OpenClaw_State_Dir = path.resolve("/mutated-project-state");
         caller.OpenClaw_Supervisor_Mode = "internal";
-        caller.HOME = path.resolve("/mutated-home");
         options.env = { ...caller, OpenClaw_State_Dir: path.resolve("/replaced-project-state") };
         resume.resolve();
         const result = await pending;
         expect(mocks.execute).toHaveBeenCalled();
         for (const [context] of mocks.execute.mock.calls) {
           expect(context.environment).toEqual({
-            ...originalEnv,
             OPENCLAW_STATE_DIR: root,
             OPENCLAW_SUPERVISOR_MODE: "external",
           });
