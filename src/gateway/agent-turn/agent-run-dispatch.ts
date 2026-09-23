@@ -33,6 +33,7 @@ import {
 import { formatErrorMessage, readErrorName, toErrorObject } from "../../infra/errors.js";
 import { withTimeout } from "../../infra/fs-safe.js";
 import { defaultRuntime } from "../../runtime.js";
+import type { KeyedFifoLease } from "../../shared/keyed-fifo-lease.js";
 import type { CreatedDetachedTaskRun } from "../../tasks/detached-task-runtime-contract.js";
 import {
   prepareRunningTaskRun,
@@ -55,6 +56,7 @@ import { captureAgentJobSession } from "./agent-job.js";
 import { readAgentRunDispatchExecutionIdentity } from "./agent-run-dispatch-execution-identity.js";
 import { createGatewayTaskExecutionBinding } from "./agent-run-task-binding.js";
 import type { GatewayAgentDispatchTaskTracking } from "./agent-run-task-tracking.js";
+import { waitForAgentSessionExecution } from "./agent-session-execution-order.js";
 import type { AgentTurnContext, AgentTurnIo } from "./types.js";
 
 function resolveResolvedAgentTimeoutStopReason(
@@ -143,6 +145,7 @@ type TaskSettlementAdmission =
 
 export function dispatchAgentRunFromGateway(
   params: {
+    executionOrder?: KeyedFifoLease;
     assertCurrent?: () => void;
     admittedRunEntry: ChatAbortControllerEntry | undefined;
     ingressOpts: Parameters<typeof agentCommandFromGatewayIngress>[0];
@@ -374,8 +377,9 @@ export function dispatchAgentRunFromGateway(
           },
         }
       : ingressOptsWithSpawnFacts;
-    const invoke = () =>
-      runWithCanonicalSkillWorkspace(params.canonicalSkillWorkspaceDir, () =>
+    const invoke = () => {
+      assertCurrent();
+      return runWithCanonicalSkillWorkspace(params.canonicalSkillWorkspaceDir, () =>
         agentCommandFromGatewayIngress(
           cronCreatorAuthorityCapability
             ? { ...ingressOptsWithTaskBinding, cronCreatorAuthorityCapability }
@@ -388,6 +392,13 @@ export function dispatchAgentRunFromGateway(
           params.commandRuntimeContext,
         ),
       );
+    };
+    // Bind cancellation before waiting, then recheck authority inside invoke.
+    // Unordered legacy entry keeps its synchronous startup/error contract.
+    const invokeWhenReady = () =>
+      params.executionOrder
+        ? waitForAgentSessionExecution(params.executionOrder, params).then(invoke)
+        : invoke();
     const cancel = task && createTrackedTaskCancellation(task);
     if (createdTask && task && cancel) {
       const assertTaskOwnerCurrent = () => {
@@ -406,10 +417,10 @@ export function dispatchAgentRunFromGateway(
         if (getTaskRunOwner(task) !== binding.owner) {
           throw new Error("Task run owner was replaced before Gateway activation.");
         }
-        return invoke();
+        return invokeWhenReady();
       });
     }
-    return invoke();
+    return invokeWhenReady();
   };
   const runAgent = () => {
     try {

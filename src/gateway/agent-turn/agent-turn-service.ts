@@ -611,6 +611,7 @@ export function createAgentTurnService(
           }),
         )
         .catch((error: unknown) => {
+          preparedDispatch.executionOrder?.release();
           preparedDispatch.releaseCallerAuthority?.();
           context.logGateway.warn(`agent execution cleanup failed: ${String(error)}`);
         });

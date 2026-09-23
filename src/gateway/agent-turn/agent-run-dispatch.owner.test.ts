@@ -297,6 +297,66 @@ describe("Gateway dispatch task creation ownership", () => {
     expect(emitFinal).toHaveBeenCalledOnce();
   });
 
+  it("rechecks source authority after the accepted execution barrier", async () => {
+    const { runId, sessionKey, context, entry, task } = createTrackedDispatch();
+    const entered = createDeferred();
+    const resume = createDeferred<boolean>();
+    let sourceCurrent = true;
+    const settleUnstarted = vi.fn<CreatedDetachedTaskRun["settleUnstarted"]>(
+      async (terminal, canSettle) => {
+        if (!canSettle(task)) {
+          return false;
+        }
+        Object.assign(task, terminal);
+        return true;
+      },
+    );
+    mocks.createTaskReceipt.mockResolvedValue(taskReceipt(task, settleUnstarted));
+    const emitFinal = vi.fn();
+    const completion = dispatchAgentRunFromGateway({
+      executionOrder: {
+        async wait() {
+          entered.resolve();
+          return await resume.promise;
+        },
+        release() {},
+      },
+      assertCurrent() {
+        if (!sourceCurrent) {
+          throw new Error("operator source authority is no longer active");
+        }
+      },
+      assertSettlementCurrent() {},
+      ingressOpts: { message: task.task, sessionKey, allowModelOverride: false },
+      runId,
+      dedupeKeys: [`agent:${runId}`],
+      admittedRunEntry: entry,
+      abortController: entry.controller,
+      cleanupAbortController: vi.fn(),
+      io: { emitAcceptance: vi.fn(), emitFinal },
+      context,
+      taskTrackingMode: "cli",
+    });
+    try {
+      await Promise.race([entered.promise, completion]);
+      expect(mocks.bindTaskRunOwner).toHaveBeenCalledOnce();
+      expect(mocks.agentCommand).not.toHaveBeenCalled();
+      sourceCurrent = false;
+      resume.resolve(true);
+      await completion;
+      expect(mocks.agentCommand).not.toHaveBeenCalled();
+      expect(settleUnstarted).toHaveBeenCalledOnce();
+      expect(task.status).toBe("failed");
+      expect(emitFinal).toHaveBeenCalledWith(
+        [false, expect.objectContaining({ status: "error" }), expect.any(Object)],
+        { runId, error: "operator source authority is no longer active" },
+      );
+    } finally {
+      resume.resolve(true);
+      await completion;
+    }
+  });
+
   it("settles cancellation when source retirement races committed task creation", async () => {
     const { runId, sessionKey, context, entry, task } = createTrackedDispatch();
     const creation = createDeferred<CreatedDetachedTaskRun>();

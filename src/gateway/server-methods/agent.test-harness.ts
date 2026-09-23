@@ -39,10 +39,10 @@ import {
   waitForAssertion,
 } from "./agent-clock.test-helpers.js";
 import { agentIdentityHandlers } from "./agent-identity.js";
+import { drainAgentHandlerTestRuntime } from "./agent-runtime-lifecycle.test-support.js";
 import { createAgentTestSessionRowProjection } from "./agent-session-projection.test-support.js";
 import { agentHandlers } from "./agent.js";
 import { createAgentTestUserTurnRecorder } from "./agent.user-turn-recorder.test-support.js";
-import { flushPendingSessionsChangedEvents } from "./session-change-event.js";
 import { suspendHandlers } from "./suspend.js";
 import type { GatewayRequestContext } from "./types.js";
 export {
@@ -1089,8 +1089,7 @@ export function restoreAgentTaskRegistryRuntimeAfterTests(): void {
 
 export const describe0AfterEach0 = async () => {
   mocks.userTurnStorePath = undefined;
-  // Drain deferred broadcasts before retiring the test-owned row and runtime state.
-  await flushPendingSessionsChangedEvents();
+  await drainAgentHandlerTestRuntime();
   envSnapshot.restore();
   resetDetachedTaskLifecycleRuntimeForTests();
   resetDiagnosticEventsForTest();
@@ -1124,7 +1123,7 @@ export const describe0AfterEach0 = async () => {
 };
 
 async function resetIntegrationState() {
-  await flushPendingSessionsChangedEvents();
+  await drainAgentHandlerTestRuntime();
   envSnapshot.restore();
   resetDetachedTaskLifecycleRuntimeForTests();
   resetAgentTaskRegistryForTests();
