@@ -15,6 +15,13 @@ import {
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { getPluginRegistryState } from "../plugins/runtime-state.js";
 import { getPluginRegistryForContext } from "../plugins/runtime/gateway-request-scope.js";
+import {
+  assertAllowedCompletionModel,
+  resolveAllowAgentIdOverride,
+  resolvePluginLlmPolicy,
+  resolveRequestedRuntimeAgentId,
+} from "../plugins/runtime/runtime-model-policy.js";
+import { modelKey } from "../shared/model-key.js";
 import type { DecisionProviderHost } from "./provider-host.js";
 import type { DecisionBatch, DecisionOutcome, DecisionRuntimeV1 } from "./types.js";
 import { DecisionContractError, validateDecisionBatch } from "./validation.js";
@@ -61,7 +68,17 @@ export async function evaluateDecisionInRegistry(
   if (!validateDecisionBatch(batch)) {
     return { status: "unavailable", reason: "unsupported-input" };
   }
-  const selected = resolveDecisionModelSetting(config, options.agentId);
+  // Only the registry wrapper supplies consumer identity. Request options cannot
+  // opt out of plugin policy or choose another plugin's policy entry.
+  const pluginPolicy = resolvePluginLlmPolicy(config, consumerId);
+  const agentId = consumerId
+    ? resolveRequestedRuntimeAgentId({
+        agentId: options.agentId,
+        allowAgentIdOverride: resolveAllowAgentIdOverride({ pluginPolicy }),
+      })
+    : options.agentId;
+  // Omission intentionally selects the global decision role, not the ambient agent.
+  const selected = resolveDecisionModelSetting(config, agentId);
   if (!selected) {
     return { status: "unavailable", reason: "disabled" };
   }
@@ -84,13 +101,18 @@ export async function evaluateDecisionInRegistry(
       missingBindingError: () =>
         new Error("Decision evaluation requires its current Gateway binding."),
     });
-    modelExecution = bindOperatorModelExecution(
-      capturedOperator.authority,
-      normalizeModelRef(selected.provider, selected.model, {
-        allowPluginNormalization: false,
-        manifestPlugins: getProcessGatewayPluginMetadataSnapshot() ?? [],
-      }),
-    );
+    const normalizedSelection = normalizeModelRef(selected.provider, selected.model, {
+      allowPluginNormalization: false,
+      manifestPlugins: getProcessGatewayPluginMetadataSnapshot() ?? [],
+    });
+    modelExecution = bindOperatorModelExecution(capturedOperator.authority, normalizedSelection);
+    // A configured role is not a caller model override. Only all-completion
+    // restrictions apply; the operator guard remains an independent boundary.
+    assertAllowedCompletionModel({
+      resolvedModelRef: modelKey(normalizedSelection.provider, normalizedSelection.model),
+      pluginPolicyId: consumerId,
+      pluginPolicy,
+    });
     const modelSignal = modelExecution
       ? AbortSignal.any([options.signal, modelExecution.signal])
       : options.signal;
@@ -105,7 +127,7 @@ export async function evaluateDecisionInRegistry(
     if (getPluginRegistryResourceOwner(registry) === getPluginRegistryState()?.activeRegistry) {
       const result = await entry.host.evaluate(
         batch,
-        { ...options, signal: modelSignal },
+        { ...options, agentId, signal: modelSignal },
         selected.model,
         config,
         registry,
@@ -126,7 +148,7 @@ export async function evaluateDecisionInRegistry(
     const signal = AbortSignal.any([modelSignal, lifetime]);
     const result = await entry.host.evaluate(
       batch,
-      { ...options, signal },
+      { ...options, agentId, signal },
       selected.model,
       config,
       registry,

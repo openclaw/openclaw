@@ -17,6 +17,7 @@ import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.
 import { createTestPluginRegistry } from "../plugins/registry-runtime.test-helpers.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { evaluateDecisionInRegistry, prepareDecisionProviderReload } from "./runtime.js";
 import type {
   DecisionBatch,
@@ -96,6 +97,221 @@ afterEach(() => {
 });
 
 describe("registered decision capability", () => {
+  it.each([
+    { agentId: "specialist", llm: {}, reason: "cannot override the target agent" },
+    {
+      agentId: undefined,
+      llm: { allowedCompletionModels: ["fixture/other"] },
+      reason: "not allowlisted",
+    },
+    { agentId: undefined, llm: { allowedCompletionModels: [] }, reason: "no valid models" },
+  ])("denies SDK policy before dispatch: $reason", async ({ agentId, llm, reason }) => {
+    const evaluate = vi.fn<DecisionProviderV1["evaluate"]>(async () => answer);
+    const host = registered(evaluate);
+    setRuntimeConfigSnapshot({
+      ...config,
+      plugins: { entries: { owner: { llm } } },
+    });
+    await expect(
+      host.api.runtime.decisions.evaluate(batch, { ...options(), agentId }),
+    ).rejects.toThrow(reason);
+    expect(evaluate).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, ["fixture/fixture-v1"], ["*"]])(
+    "keeps global role selection independent of override-only policy (%j)",
+    async (allowedCompletionModels) => {
+      const evaluate = vi.fn<DecisionProviderV1["evaluate"]>(async () => answer);
+      const host = registered(evaluate);
+      setRuntimeConfigSnapshot({
+        agents: {
+          defaults: {
+            decisionModel: "fixture/fixture-v1",
+            modelPolicy: { allow: ["fixture/conversation-only"] },
+          },
+          entries: { main: { decisionModel: "fixture/main-role" } },
+        },
+        plugins: {
+          entries: {
+            owner: {
+              llm: { allowModelOverride: false, allowedModels: [], allowedCompletionModels },
+            },
+          },
+        },
+      });
+      const result = await withGatewayToolCallerIdentity(
+        { agentId: "main", sessionKey: "agent:main:fixture" },
+        () => host.api.runtime.decisions.evaluate(batch, options()),
+      );
+      expect(result).toMatchObject({ status: "ok" });
+      expect(evaluate).toHaveBeenCalledOnce();
+      expect(evaluate.mock.calls[0]?.[1]).toMatchObject({ model: "fixture-v1" });
+      expect(evaluate.mock.calls[0]?.[1].agentId).toBeUndefined();
+    },
+  );
+
+  it("authorizes explicit SDK agents without creating a primary-model fallback", async () => {
+    const evaluate = vi.fn<DecisionProviderV1["evaluate"]>(async () => answer);
+    const host = registered(evaluate);
+    setRuntimeConfigSnapshot({
+      agents: {
+        defaults: { model: "fixture/primary" },
+        entries: {
+          specialist: { decisionModel: "fixture/specialist-v1" },
+          disabled: { decisionModel: "" },
+        },
+      },
+      plugins: {
+        entries: {
+          owner: {
+            llm: {
+              allowAgentIdOverride: true,
+              allowedCompletionModels: ["fixture/specialist-v1"],
+            },
+          },
+        },
+      },
+    });
+    expect(
+      await host.api.runtime.decisions.evaluate(batch, { ...options(), agentId: " Specialist " }),
+    ).toMatchObject({ status: "ok" });
+    expect(evaluate.mock.calls[0]?.[1]).toMatchObject({
+      model: "specialist-v1",
+      agentId: "specialist",
+    });
+    for (const agentId of [undefined, "disabled"]) {
+      expect(await host.api.runtime.decisions.evaluate(batch, { ...options(), agentId })).toEqual({
+        status: "unavailable",
+        reason: "disabled",
+      });
+    }
+    expect(evaluate).toHaveBeenCalledOnce();
+  });
+
+  it("uses the registered consumer policy, not provider, ambient plugin or option identity", async () => {
+    const evaluate = vi.fn<DecisionProviderV1["evaluate"]>(async () => answer);
+    const host = registered(evaluate);
+    const consumer = createPluginRecord({
+      id: "consumer",
+      source: "/synthetic/consumer.ts",
+      origin: "global",
+      enabled: true,
+      configSchema: false,
+    });
+    const api = host.createApi(consumer, { config });
+    host.registry.plugins.push(consumer);
+    onTestFinished(async () => {
+      await getPluginInstance(consumer)?.dispose();
+    });
+    setRuntimeConfigSnapshot({
+      ...config,
+      plugins: {
+        entries: {
+          owner: { llm: { allowAgentIdOverride: true, allowedCompletionModels: ["*"] } },
+          consumer: { llm: { allowedCompletionModels: ["fixture/other"] } },
+        },
+      },
+    });
+    const spoofed = {
+      ...options(),
+      consumerId: "owner",
+      pluginIdForPolicy: "owner",
+      caller: { kind: "context-engine", id: "owner" },
+      authority: { allowAgentIdOverride: true },
+    };
+    await expect(
+      withPluginRuntimeGatewayRequestScope(
+        { pluginId: "owner", isWebchatConnect: () => false },
+        () => api.runtime.decisions.evaluate(batch, spoofed),
+      ),
+    ).rejects.toThrow('not allowlisted for completions for plugin "consumer"');
+    await expect(
+      api.runtime.decisions.evaluate(batch, { ...spoofed, agentId: "specialist" }),
+    ).rejects.toThrow("cannot override the target agent");
+    expect(evaluate).not.toHaveBeenCalled();
+    // Provider configuration is not consumer authorization either.
+    expect(await host.api.runtime.decisions.evaluate(batch, options())).toMatchObject({
+      status: "ok",
+    });
+  });
+
+  it.each(["caller", "operator", "consumer"] as const)(
+    "joins SDK provider settlement and releases authority on %s cancellation",
+    async (source) => {
+      const started = createDeferredCore();
+      const finish = createDeferredCore();
+      let providerSignal: AbortSignal | undefined;
+      const evaluate = vi.fn<DecisionProviderV1["evaluate"]>(async (_batch, { signal }) => {
+        providerSignal = signal;
+        started.resolve();
+        await finish.promise;
+        return answer;
+      });
+      const host = registered(evaluate);
+      setRuntimeConfigSnapshot(config);
+      const caller = new AbortController();
+      const release = vi.fn();
+      const retain = vi.fn(() => release);
+      const unsubscribe = vi.fn();
+      let changed: (() => void) | undefined;
+      let allowed = true;
+      const authority = createAdmittedRunOperatorAuthority({
+        profileId: "decision-reader",
+        scopes: ["operator.write"],
+        retain,
+        assertCurrent: () => {},
+        get modelPolicy() {
+          return prepareOperatorModelPolicy({
+            cfg: config,
+            manifestPlugins: [],
+            policy: {
+              sourceAgent: "main",
+              allow: [allowed ? "fixture/fixture-v1" : "fixture/other"],
+            },
+          });
+        },
+        onModelPolicyChanged: (listener) => {
+          changed = listener;
+          return unsubscribe;
+        },
+      });
+      const pending = withGatewayToolCallerIdentity(
+        { agentId: "main", sessionKey: "agent:main:reader", operatorAuthority: authority },
+        () => host.api.runtime.decisions.evaluate(batch, { ...options(), signal: caller.signal }),
+      );
+      await started.promise;
+      if (source === "caller") {
+        caller.abort(new Error("caller canceled"));
+      } else if (source === "operator") {
+        allowed = false;
+        changed!();
+      } else {
+        prepareDecisionProviderReload(host.registry, new Set([host.record.id]));
+      }
+      expect(providerSignal?.aborted).toBe(true);
+      expect(release).not.toHaveBeenCalled();
+      finish.resolve();
+      await expect(pending).rejects.toThrow(
+        source === "caller"
+          ? "caller canceled"
+          : source === "operator"
+            ? "cannot use this model"
+            : "consumer authority closed",
+      );
+      expect(release).toHaveBeenCalledTimes(retain.mock.calls.length);
+      expect(unsubscribe).toHaveBeenCalledOnce();
+      expect(host.registry.decisionProviders[0]!.host.inspect(config).activeRequests).toBe(0);
+      if (source === "consumer") {
+        // Reload preparation pauses admission; actual disposal closes the retained consumer.
+        await getPluginInstance(host.record)?.dispose();
+        await expect(host.api.runtime.decisions.evaluate(batch, options())).rejects.toThrow(
+          "runtime is no longer active",
+        );
+        expect(evaluate).toHaveBeenCalledOnce();
+      }
+    },
+  );
+
   it("requires a current Gateway binding for scoped operator decisions", async () => {
     const evaluate = vi.fn<DecisionProviderV1["evaluate"]>(async () => answer);
     const host = registered(evaluate);

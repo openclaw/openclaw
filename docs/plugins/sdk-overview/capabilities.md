@@ -175,6 +175,21 @@ their feature's activation, evidence selection, and permission to send that
 evidence. Having credentials alone must not activate background collection or
 spending.
 
+The host applies the registered consumer plugin's policy from
+`plugins.entries.<consumer-id>.llm`. An explicit `agentId`
+requires `allowAgentIdOverride: true`; omitting it selects the global decision
+role, even inside an agent operation. `allowedCompletionModels` restricts the
+configured selected model before provider dispatch. An empty or invalid-only
+list denies all models; `["*"]` permits any model at this policy layer.
+
+A configured decision role is not a caller model override, so `allowModelOverride`
+and the override-only `allowedModels` do not gate it. The agent's conversational
+`modelPolicy.allow` is not an all-completion restriction. Current Gateway operator
+model policy remains independently enforced, including revocation and cancellation.
+Request fields cannot substitute consumer identity or another plugin's policy.
+Authorization failures throw rather than return an `unavailable` fallback outcome.
+The built-in decision tool uses its host-bound agent rather than a public override.
+
 Call from a live plugin tool, hook, or other owned operation, carrying its
 cancellation signal:
 
@@ -194,7 +209,7 @@ const outcome = await api.runtime.decisions.evaluate(
     },
   },
   {
-    agentId, // The agent that owns this operation; omit only for global-default selection.
+    agentId, // Requires allowAgentIdOverride; omit for global-default selection.
     purpose: "example-plugin.response-eligibility",
     rubricVersion: "1",
     timeoutMs: 1500,
