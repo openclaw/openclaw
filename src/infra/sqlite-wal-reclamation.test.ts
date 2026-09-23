@@ -78,11 +78,18 @@ it("reports bounded page progress and retains the native checkpoint outcome", ()
       maxPages: 31,
       beforeMutation: () => observed.push(`before:${database.isTransaction}`),
       onCommit: () => observed.push(`commit:${database.isTransaction}`),
+      afterCommit: () => observed.push(`settled:${database.isTransaction}`),
     });
-    expect(observed).toEqual(["before:false", "before:true", "commit:true", "before:false"]);
+    expect(observed).toEqual([
+      "before:false",
+      "before:true",
+      "commit:true",
+      "settled:false",
+      "before:false",
+    ]);
     expect(result).toMatchObject({
       checkpointCompleted: true,
-      checkpoint: { state: "complete", walBytes: 0 },
+      checkpoint: { health: { state: "complete", walBytes: 0 } },
       checkpointCalls: 2,
       checkpointIncomplete: 0,
       vacuumPasses: 1,

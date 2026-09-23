@@ -12,7 +12,6 @@ import { findAgentRunTerminalOutcome } from "../agents/agent-run-terminal-error.
 import {
   AGENT_RUN_TERMINAL_RETRY_GRACE_MS,
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
-  classifyAgentRunTerminalOutcome,
   isDefinitiveRunLifecycle,
   type AgentRunTerminalOutcome,
 } from "../agents/agent-run-terminal-outcome.js";
@@ -38,6 +37,10 @@ import {
 } from "../agents/prepared-model-catalog.js";
 import { getPreparedModelRuntimeAuthMaterializations } from "../agents/prepared-model-runtime-auth.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../agents/runtime-plugins.js";
+import {
+  getSubagentSessionListReadSnapshotIdentity,
+  prepareOptionalSubagentSessionListReadCache,
+} from "../agents/subagents/registry/subagent-registry-state.js";
 import { readToolValidationErrorSummary } from "../agents/tool-error-summary.js";
 import { bindEmbeddedSessionRowProjection } from "../agents/tools/embedded-gateway-stub.js";
 import { resolveTextCommand } from "../auto-reply/commands-registry.js";
@@ -120,10 +123,16 @@ import {
 import { defaultRuntime } from "../runtime.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import { applyQueueDropPolicy, waitForQueueDebounce } from "../utils/queue-helpers.js";
-import { payloadText, resolveDeltaPayload } from "./embedded-chat-projection.js";
+import {
+  assistantChatMessage,
+  payloadText,
+  resolveDeltaPayload,
+  resolveTerminalChatState,
+} from "./embedded-chat-projection.js";
 import {
   buildLocalQueuedPrompt,
   createQueuedRunReadiness,
+  timeoutSecondsFromMs,
   waitForLocalRunShutdown,
   waitForQueuedLocalRun,
   type LocalRunState,
@@ -144,13 +153,6 @@ import type {
   TuiImageData,
 } from "./tui-backend.js";
 import { formatTuiErrorMessage } from "./tui-formatters.js";
-
-const TUI_STATE_BY_TERMINAL_CLASSIFICATION = {
-  success: undefined,
-  timeout: "error",
-  cancellation: "aborted",
-  failure: "error",
-} as const;
 
 type LocalPendingMessage = {
   run: LocalRunState;
@@ -191,17 +193,6 @@ function resolveBtwQuestion(message: string): string | undefined {
   const match = /^\/(?:btw|side)(?::|\s)+(.*)$/i.exec(message.trim());
   const question = match?.[1]?.trim();
   return question ? question : undefined;
-}
-
-function assistantChatMessage(text: string) {
-  return { role: "assistant", content: [{ type: "text", text }], timestamp: Date.now() };
-}
-
-function timeoutSecondsFromMs(timeoutMs?: number): string | undefined {
-  if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs) || timeoutMs < 0) {
-    return undefined;
-  }
-  return String(Math.max(0, Math.ceil(timeoutMs / 1000)));
 }
 
 export class EmbeddedTuiBackend implements TuiBackend {
@@ -513,6 +504,9 @@ export class EmbeddedTuiBackend implements TuiBackend {
   async loadHistory(opts: { sessionKey: string; agentId?: string; limit?: number }) {
     await this.ready;
     await this.preparedModelRuntime.waitUntilReady();
+    if (!getSubagentSessionListReadSnapshotIdentity()) {
+      await prepareOptionalSubagentSessionListReadCache();
+    }
     const loadOptions = opts.agentId ? { agentId: opts.agentId } : undefined;
     const selected = loadGatewaySessionEntryReadOnly(opts.sessionKey, {
       ...loadOptions,
@@ -1187,7 +1181,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
         },
         abortSignal: run.controller.signal,
       });
-    const state = TUI_STATE_BY_TERMINAL_CLASSIFICATION[classifyAgentRunTerminalOutcome(outcome)];
+    const state = resolveTerminalChatState(outcome);
     if (!state) {
       return false;
     }

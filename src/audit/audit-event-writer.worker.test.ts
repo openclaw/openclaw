@@ -72,7 +72,10 @@ describe("audit writer shared worker", () => {
       ];
       const startedAt = performance.now();
       const writer = createAuditEventWriter({ stateDir, onError: (error) => errors.push(error) });
-      const recorder = createAuditEventRecorder({ messageMode: "all", writer });
+      const recorder = createAuditEventRecorder({
+        getConfig: () => ({ logging: { audit: { messages: "all" } } }),
+        writer,
+      });
       const clearSink = configureExecutionIdentityAdmissionSink(writer.recordExecutionIdentity);
       let hostSqlCounts: number[];
       let readyMs = 0;

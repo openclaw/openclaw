@@ -336,18 +336,96 @@ export function createDesktopSessionRegistry(
     entry.observerReservations.add(reservationId);
     clearTimeout(entry.lingerTimer);
     entry.lingerTimer = undefined;
-    let released = false;
     return {
-      sourceKey,
-      ownerEpoch,
       release() {
-        if (released) {
-          return;
+        if (entry.observerReservations.delete(reservationId)) {
+          scheduleLinger(entry);
         }
-        released = true;
-        entry.observerReservations.delete(reservationId);
-        scheduleLinger(entry);
       },
+    };
+  }
+
+  function createStream(params: { sourceKey: string; ownerEpoch: number; onStopped(): void }) {
+    const controller = new AbortController();
+    let ticket: { cancel(): void } | undefined;
+    let invocation: Promise<unknown> | undefined;
+    let reservation: ReturnType<typeof reserveObserver>;
+    let attachment: ReturnType<typeof publishStream>;
+    let stream: ConnectedRfbStream | undefined;
+    let unclaimedTimer: ReturnType<typeof setTimeout> | undefined;
+    let stopped = false;
+    const retire = () => {
+      if (stopped) {
+        return;
+      }
+      stopped = true;
+      clearTimeout(unclaimedTimer);
+      ticket?.cancel();
+      controller.abort();
+      if (!attachment) {
+        reservation?.release();
+      }
+      stream?.destroy();
+    };
+    const stopStream = async () => {
+      retire();
+      await invocation?.catch(() => undefined);
+      params.onStopped();
+    };
+    return {
+      signal: controller.signal,
+      get stopped() {
+        return stopped;
+      },
+      reserve() {
+        reservation = reserveObserver(params.sourceKey, params.ownerEpoch);
+        return reservation !== undefined;
+      },
+      async connect<T extends { stream: ConnectedRfbStream }>(
+        pending: { attached: Promise<T>; cancel(): void },
+        invoke: () => Promise<{ error?: { message?: string } | null }>,
+      ): Promise<T> {
+        ticket = pending;
+        const operation = invoke();
+        invocation = operation;
+        // A stream invocation settles only after its splice closes; it cannot signal readiness.
+        const finished = operation.then((result) => {
+          throw new Error(
+            result.error?.message?.trim() || "node desktop stream closed before attachment",
+          );
+        });
+        void finished.catch(() => undefined);
+        void operation
+          .finally(() => {
+            retire();
+            params.onStopped();
+          })
+          .catch(() => undefined);
+        const attached = await Promise.race([pending.attached, finished]);
+        stream = attached.stream;
+        if (stopped) {
+          stream.destroy();
+        }
+        return attached;
+      },
+      publish() {
+        if (reservation && stream) {
+          attachment = publishStream({ ...params, reservation, stream });
+        }
+        return attachment;
+      },
+      expireAt(expiresAtMs: number) {
+        unclaimedTimer = setTimeout(
+          () => {
+            if (attachment && hasPendingStream(params.sourceKey, attachment)) {
+              void stopStream();
+            }
+          },
+          Math.max(0, expiresAtMs - Date.now()),
+        );
+        unclaimedTimer.unref?.();
+      },
+      stop: stopStream,
     };
   }
 
@@ -382,8 +460,6 @@ export function createDesktopSessionRegistry(
       !entry ||
       entry.stopped ||
       entry.ownerEpoch !== params.ownerEpoch ||
-      params.reservation.sourceKey !== params.sourceKey ||
-      params.reservation.ownerEpoch !== params.ownerEpoch ||
       params.stream.destroyed ||
       params.stream.readableEnded ||
       params.stream.writableEnded
@@ -452,10 +528,8 @@ export function createDesktopSessionRegistry(
     acquire,
     activate,
     attachObserver,
-    publishStream,
     claimStream,
-    hasPendingStream,
-    reserveObserver,
+    createStream,
     retainActivity,
     hasActivity: (sourceKey: string, ownerEpoch: number) => {
       const entry = entries.get(sourceKey);

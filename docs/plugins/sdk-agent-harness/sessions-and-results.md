@@ -59,6 +59,39 @@ mutating native state. The callback belongs to one registered harness lifetime;
 retaining it after the operation closes does not retain authority. Post-delete
 hooks are notifications, not the owner of durable binding removal.
 
+Implement `withSessionContextReset(params, run)` when a native binding must be
+invalidated by a successful same-key rewind or branch switch. This optional hook
+uses the same prepared `commit`/`rollback` contract, but keeps the session key and
+retained history. Core commits invalidation only after validating the requested
+cut and restores it if the transcript transaction fails. Release subscriptions
+after the committed mutation settles. The optional `previousSessionId` is the
+recorded predecessor, allowing retirement of a binding not yet transferred after
+compaction without adopting it during preparation. Ordinary compaction does not
+invoke this hook and continues to preserve native thread continuity.
+
+## Shared native binding lifecycle
+
+Official harnesses use the JavaScript-only private
+`openclaw/plugin-sdk/agent-harness-session-runtime`; it is not a third-party
+Plugin SDK contract and uses the existing synchronous plugin-state store.
+`createNativeSessionBindingLifecycle` owns exact-token lease acquisition,
+renewal, mutation fences, and transactional deletion/rollback. The backend
+supplies its record codec, acquisition/retention policy, errors, and timing.
+Pass host authority through `assertCurrent` and validate the expected generation
+in `assertRecordCurrent`. Leases coordinate storage; they grant no execution
+authority. Keep native cleanup after the host transaction commits.
+
+`captureNativeSessionGenerationAuthority`, `reclaimNativeSessionGeneration`,
+and `resolveNativeSessionBinding` preserve the host generation and predecessor
+across waits, adopting a verified predecessor before stale reclamation. A missing
+host entry permits an ephemeral session; a failed read cannot authorize a binding.
+
+`createNativeSessionInitializationOwner` associates binding and upstream-link
+writes with the exact host creation handle. Rollback requires the matching
+store, identity, binding, and live authority, removes only the exact upstream
+link, then invokes backend cleanup. Queue selection, native protocol/policy,
+and resource cleanup remain with the backend; core owns host session lifecycle.
+
 ## Subagent task history
 
 Native subagents can expose the shared task transcript view through the optional

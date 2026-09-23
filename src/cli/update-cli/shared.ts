@@ -277,10 +277,11 @@ export async function runUpdateStep(params: {
   name: string;
   argv: string[];
   cwd?: string;
-  timeoutMs: number;
+  timeoutMs?: number;
   progress?: UpdateStepProgress;
   env?: NodeJS.ProcessEnv;
   runCommand?: Parameters<typeof runStep>[0]["runCommand"];
+  results?: UpdateStepResult[];
 }): Promise<UpdateStepResult> {
   return await runStep({
     ...params,

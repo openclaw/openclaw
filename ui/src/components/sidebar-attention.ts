@@ -49,7 +49,7 @@ class SidebarAttention extends OpenClawLightDomElement {
   @state() private overflowBelow = false;
 
   @property({ attribute: false }) activeRouteId?: NavigationRouteId;
-  @property({ attribute: false }) onNavigate?: (routeId: NavigationRouteId) => void;
+  @property({ attribute: false }) onNavigate?: ApplicationContext["navigate"];
   @property({ attribute: false }) watchUpdateProgress?: UpdateProgressWatcher;
 
   private panelTrigger: HTMLElement | null = null;
@@ -347,9 +347,9 @@ class SidebarAttention extends OpenClawLightDomElement {
               onClose: (restoreFocus) => this.closePanel(restoreFocus),
               onDismiss: (dismissal) => this.dismiss(dismissal),
               onKeydown: this.handlePanelKeydown,
-              onNavigate: (routeId) => {
+              onNavigate: (routeId, options) => {
                 this.closePanel(false);
-                (this.onNavigate ?? ((nextRoute) => this.context?.navigate(nextRoute)))(routeId);
+                (this.onNavigate ?? this.context?.navigate)?.(routeId, options);
               },
               onOpen: (item) => void this.open(item),
               onScroll: this.syncOverflowCue,

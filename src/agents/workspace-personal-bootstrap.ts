@@ -8,7 +8,7 @@ import {
 } from "./workspace-file-read.js";
 import { DEFAULT_USER_FILENAME, type WorkspaceBootstrapFile } from "./workspace.js";
 
-/** Optional personal overlay; the caller supplies only the admitted ingress profile. */
+/** Optional personal overlay; the caller supplies the session-selected human profile. */
 export async function loadPersonalUserBootstrapFile(
   dir: string,
   profileId?: string,
@@ -40,6 +40,7 @@ export async function loadPersonalUserBootstrapFile(
     path: filePath,
     content: loaded.content,
     missing: false,
+    personalUser: true,
   };
   setWorkspaceFileSourceIdentity(file, loaded.sourceIdentity);
   return file;

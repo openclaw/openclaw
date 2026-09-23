@@ -3,7 +3,6 @@ import type { SessionsListParams } from "../../../packages/gateway-protocol/src/
 import { listAgentIds } from "../../agents/agent-scope-config.js";
 import {
   loadSessionEntry,
-  replaceSessionEntry,
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
 import { mergeSessionEntry } from "../../config/sessions/types.js";
@@ -31,8 +30,9 @@ export { sessionReadHandlers };
 const projections = new Set<SessionRowProjection>();
 const profileSubscriptions = new Set<() => void>();
 const initializing = new WeakMap<GatewayRequestContext, Promise<void>>();
-export function disposeSessionReadContexts() {
-  for (const projection of projections) {
+export async function disposeSessionReadContexts() {
+  const disposing = [...projections];
+  for (const projection of disposing) {
     projection.dispose();
   }
   for (const stop of profileSubscriptions) {
@@ -40,6 +40,14 @@ export function disposeSessionReadContexts() {
   }
   projections.clear();
   profileSubscriptions.clear();
+  // Disposal stops publications; accepted reads still own native database custody.
+  const settled = await Promise.allSettled(
+    disposing.map((projection) => projection.ensureMaterialized()),
+  );
+  const errors = settled.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
+  if (errors.length) {
+    throw new AggregateError(errors, "Session read fixture cleanup failed");
+  }
 }
 afterEach(disposeSessionReadContexts);
 export function initializeSessionReadContext(context: GatewayRequestContext) {
@@ -196,7 +204,7 @@ export async function seedSessionsWithActivityTimes() {
     if (!entry) {
       throw new Error(`Missing seeded session ${scope.sessionKey}`);
     }
-    await replaceSessionEntry(scope, { ...entry, updatedAt });
+    replaceSessionEntrySync(scope, { ...entry, updatedAt });
     expect(loadSessionEntry(scope)?.updatedAt).toBe(updatedAt);
   }
   return { clock, config };

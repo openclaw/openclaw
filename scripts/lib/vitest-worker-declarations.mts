@@ -16,6 +16,8 @@ export const runtimeProcessDeclarationEntries = {
 };
 export const vitestWorkerDeclarationEntries = {
   ...runtimeProcessDeclarationEntries,
+  "test-support/bench-session-history-runtime":
+    "scripts/bench-session-history-runtime.test-support.ts",
   "extensions/discord/src/voice/audio-worker-entrypoints.test-support":
     "extensions/discord/src/voice/audio-worker-entrypoints.test-support.ts",
   // Codex is package-owned and excluded from the root runtime bundle.
@@ -27,6 +29,8 @@ export const vitestWorkerDeclarationEntries = {
     "src/state/openclaw-agent-worker-store.runtime.test-support.ts",
   "cli/update-cli/update-command-legacy-finalize-entrypoint.test-support":
     "src/cli/update-cli/update-command-legacy-finalize-entrypoint.test-support.ts",
+  "cli/update-cli/update-command-migrated-fixture-entrypoint.test-support":
+    "src/cli/update-cli/update-command-migrated-fixture-entrypoint.test-support.ts",
   "extensions/logbook/sqlite-backend-entrypoint.test-support":
     "extensions/logbook/src/sqlite-backend-entrypoint.test-support.ts",
   "extensions/team-reports/sqlite-backend-entrypoint.test-support":
@@ -36,6 +40,10 @@ export const vitestWorkerDeclarationEntries = {
   "infra/update-managed-service-handoff-runtime-assets":
     "src/infra/update-managed-service-handoff-runtime-assets.ts",
   "infra/triage-runtime.test-support": "src/infra/triage-runtime.test-support.ts",
+  "infra/sqlite-readonly-worker.compile-cache-runtime.test-support":
+    "src/infra/sqlite-readonly-worker.compile-cache-runtime.test-support.ts",
+  "infra/sqlite-snapshot-staging-runtime.test-support":
+    "src/infra/sqlite-snapshot-staging-runtime.test-support.ts",
   "cli/cli-entrypoint.test-support": "src/cli/cli-entrypoint.test-support.ts",
   ...(nativeSchtasksIntegrationEnabled
     ? {
@@ -59,18 +67,24 @@ export const vitestWorkerDeclarationEntries = {
     "src/system-agent/setup-inference-groq-sdk.test-support.ts",
   "agents/auth-profiles/store-scope-cwd-runtime.test-support":
     "src/agents/auth-profiles/store-scope-cwd-runtime.test-support.ts",
+  "agents/bash-tools.process-liveness-runtime.test-support":
+    "src/agents/bash-tools.process-liveness-runtime.test-support.ts",
   "agents/code-mode-retention-entrypoint.test-support":
     "src/agents/code-mode-retention-entrypoint.test-support.ts",
   "agents/command/cli-compaction-runtime.test-support":
     "src/agents/command/cli-compaction-runtime.test-support.ts",
   "agents/sessions/bash-output-spill-entrypoints.test-support":
     "src/agents/sessions/bash-output-spill-entrypoints.test-support.ts",
+  "agents/worktrees/service-gc-runtime.test-support":
+    "src/agents/worktrees/service-gc-runtime.test-support.ts",
   "cron/owner-hardening-runtime.test-support": "src/cron/owner-hardening-runtime.test-support.ts",
   "gateway/session-child-cache-retention-entrypoint.test-support":
     "src/gateway/session-child-cache-retention-entrypoint.test-support.ts",
   "gateway/session-title-retention.test-support":
     "src/gateway/session-title-retention.test-support.ts",
   "node-host/config-runtime.test-support": "src/node-host/config-runtime.test-support.ts",
+  "worker/worker-runtime-background-exec-entrypoints.test-support":
+    "src/worker/worker-runtime-background-exec-entrypoints.test-support.ts",
   "skills/library/persistence-runtime.test-support":
     "src/skills/library/persistence-runtime.test-support.ts",
   "snapshot/git-backup-command-runtime.test-support":
@@ -79,6 +93,8 @@ export const vitestWorkerDeclarationEntries = {
     "src/state/openclaw-database-verify-runtime.test-support.ts",
   "state/openclaw-state-lease-runtime.test-support":
     "src/state/openclaw-state-lease-runtime.test-support.ts",
+  "transcripts/library-timezone-runtime.test-support":
+    "src/transcripts/library-timezone-runtime.test-support.ts",
   "state/openclaw-agent-db-module-identity-runtime.test-support":
     "src/state/openclaw-agent-db-module-identity-runtime.test-support.ts",
   "tui/tui-pty-runtime-test-support": "src/tui/tui-pty-runtime-test-support.ts",

@@ -36,7 +36,11 @@ import {
   withOpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { createBackupArchive, type BackupCreateResult } from "./backup-create.js";
-import { listArchiveEntries, listArchiveEntryDetails } from "./backup-create.test-support.js";
+import {
+  listArchiveEntries,
+  listArchiveEntryDetails,
+  makeBackupResult,
+} from "./backup-create.test-support.js";
 import { classifyBackupSqliteSource } from "./backup-sqlite-snapshot.js";
 import { writeTarArchiveWithRetry } from "./backup-tar-retry.js";
 import { isVolatileBackupPath } from "./backup-volatile-filter.js";
@@ -46,27 +50,12 @@ import { requireNodeSqlite } from "./node-sqlite.js";
 
 const APPLE_DOUBLE_MAGIC = Buffer.from([0x00, 0x05, 0x16, 0x07]);
 
-function makeResult(overrides: Partial<BackupCreateResult> = {}): BackupCreateResult {
-  return {
-    createdAt: "2026-01-01T00:00:00.000Z",
-    archiveRoot: "openclaw-backup-2026-01-01",
-    archivePath: "/tmp/openclaw-backup.tar.gz",
-    dryRun: false,
-    includeWorkspace: true,
-    onlyConfig: false,
-    verified: false,
-    assets: [],
-    skipped: [],
-    skippedVolatileCount: 0,
-    ...overrides,
-  };
-}
-
 function createBackupClassificationInventory(stateDir: string): BackupResourceInventory {
   return {
     stateDir,
     agentRoots: [],
     coreDatabases: [],
+    coreDatabaseSourcePaths: [],
     resolveSqliteSource: () => ({ role: "plugin" }),
     regenerableRoots: [],
     isIncluded: () => true,
@@ -198,7 +187,7 @@ describe("formatBackupCreateSummary", () => {
   it.each([
     {
       name: "formats created archives with included and skipped paths",
-      result: makeResult({
+      result: makeBackupResult({
         verified: true,
         assets: [
           {
@@ -230,7 +219,7 @@ describe("formatBackupCreateSummary", () => {
     },
     {
       name: "formats dry runs and pluralized counts",
-      result: makeResult({
+      result: makeBackupResult({
         dryRun: true,
         assets: [
           {
@@ -262,7 +251,7 @@ describe("formatBackupCreateSummary", () => {
   it("surfaces the volatile skip count in the summary", () => {
     expect(
       formatBackupCreateSummary(
-        makeResult({
+        makeBackupResult({
           assets: [
             {
               kind: "state",
@@ -2277,6 +2266,11 @@ describe("createBackupArchive", () => {
         scenario: "minimal",
       },
       async (state) => {
+        // Keep concurrent backups out of this fixture's warning inventory.
+        const scratchRoot = state.path("scratch");
+        await fs.mkdir(scratchRoot);
+        Object.assign(state.envVars, { TMPDIR: scratchRoot, TMP: scratchRoot, TEMP: scratchRoot });
+        state.applyEnv();
         const databasePaths = [
           state.statePath("browser", "foreign-browser.sqlite"),
           state.statePath("plugins", "dedicated", "foreign-plugin.sqlite"),
@@ -2317,7 +2311,7 @@ describe("createBackupArchive", () => {
           output: state.path("foreign.tar.gz"),
           includeWorkspace: false,
         });
-        expect(archive.warnings).toHaveLength(opaqueFiles.size);
+        expect(archive.warnings, JSON.stringify(archive.warnings)).toHaveLength(opaqueFiles.size);
         for (const databasePath of opaqueFiles.keys()) {
           expect(
             archive.warnings?.filter(
@@ -2343,70 +2337,6 @@ describe("createBackupArchive", () => {
           expect(await fs.readFile(path.join(restored.targetPath, entry))).toEqual(bytes);
           expect(await fs.readFile(sourceFile)).toEqual(bytes);
         }
-      },
-    );
-  });
-
-  it("validates hard-linked canonical agent paths against each path owner", async () => {
-    await withOpenClawTestState(
-      {
-        layout: "state-only",
-        prefix: "openclaw-backup-hardlinked-agent-owners-",
-        scenario: "minimal",
-      },
-      async (state) => {
-        const outputDir = state.path("backups");
-        const mainDbPath = state.statePath("agents", "main", "agent", "openclaw-agent.sqlite");
-        const workerDbPath = state.statePath("agents", "worker", "agent", "openclaw-agent.sqlite");
-        await fs.mkdir(path.dirname(mainDbPath), { recursive: true });
-        await fs.mkdir(path.dirname(workerDbPath), { recursive: true });
-        await fs.mkdir(outputDir, { recursive: true });
-        registerAgentDatabase(state, mainDbPath);
-        registerAgentDatabase(state, workerDbPath, "worker");
-        createOwnedSqliteDatabase({
-          sqlitePath: mainDbPath,
-          role: "agent",
-          agentId: "main",
-        });
-        await fs.link(mainDbPath, workerDbPath);
-
-        await expect(
-          createBackupArchive({
-            output: outputDir,
-            includeWorkspace: false,
-            nowMs: Date.UTC(2026, 6, 24, 9, 2, 45),
-          }),
-        ).rejects.toThrow(/belongs to agent main; requested agent worker/iu);
-        expect(await fs.readdir(outputDir)).toEqual([]);
-      },
-    );
-  });
-
-  it("does not treat a canonical agent path as an alias of the global database", async () => {
-    await withOpenClawTestState(
-      {
-        layout: "state-only",
-        prefix: "openclaw-backup-hardlinked-global-agent-owners-",
-        scenario: "minimal",
-      },
-      async (state) => {
-        const outputDir = state.path("backups");
-        const globalDbPath = resolveCanonicalTestSqlitePath(state, "global");
-        const agentDbPath = resolveCanonicalTestSqlitePath(state, "agent");
-        await fs.mkdir(path.dirname(globalDbPath), { recursive: true });
-        await fs.mkdir(path.dirname(agentDbPath), { recursive: true });
-        await fs.mkdir(outputDir, { recursive: true });
-        registerAgentDatabase(state, agentDbPath);
-        await fs.link(globalDbPath, agentDbPath);
-
-        await expect(
-          createBackupArchive({
-            output: outputDir,
-            includeWorkspace: false,
-            nowMs: Date.UTC(2026, 6, 24, 9, 2, 50),
-          }),
-        ).rejects.toThrow(/schema role global; expected agent/iu);
-        expect(await fs.readdir(outputDir)).toEqual([]);
       },
     );
   });

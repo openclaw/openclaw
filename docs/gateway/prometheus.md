@@ -105,6 +105,8 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_gateway_rpc_handler_seconds`               | histogram | `method`                                                                                  |
 | `openclaw_gateway_rpc_admission_seconds`             | histogram | `method`                                                                                  |
 | `openclaw_gateway_rpc_queue_wait_seconds`            | histogram | `method`                                                                                  |
+| `openclaw_gateway_rpc_stage_seconds`                 | histogram | `method`, `phase`                                                                         |
+| `openclaw_gateway_rpc_stage_thread_cpu_seconds`      | histogram | `method`, `phase`                                                                         |
 | `openclaw_gateway_rpc_outcomes_total`                | counter   | `phase`, `outcome`                                                                        |
 | `openclaw_run_completed_total`                       | counter   | `channel`, `model`, `outcome`, `provider`, `trigger`                                      |
 | `openclaw_run_duration_seconds`                      | histogram | `channel`, `model`, `outcome`, `provider`, `trigger`                                      |
@@ -199,6 +201,45 @@ and increment `openclaw_prometheus_series_dropped_total`. Monitor that counter:
 coverage of every core method can fill the cap, so a zero value matters when
 interpreting totals or latency percentiles. Async diagnostic queue saturation can
 also drop observations, reported by `openclaw_diagnostic_async_queue_dropped_total`.
+
+### Catalog list stages
+
+The stage histograms currently cover only `sessions.catalog.list`. They use
+six fixed phase labels:
+
+| Phase                | Observation                                                                          |
+| -------------------- | ------------------------------------------------------------------------------------ |
+| `projection_initial` | Initial shared projection readiness, when the request must await it                  |
+| `planning`           | Synchronous creation and freezing of the leader's provider-planning snapshot         |
+| `provider`           | Leader enumeration, including provider admission, awaited source work and completion |
+| `coalesced`          | A follower awaiting the existing enumeration for the same caller and request         |
+| `projection_final`   | Shared projection readiness required after enumeration                               |
+| `delivery`           | Synchronous final projection, visibility filtering and response callback             |
+
+Each entered phase contributes one completed elapsed observation, including when
+that phase throws. Unvisited phases are absent. Metadata-only requests do not
+enter these phases. Provider and projection durations include awaited work and
+scheduling; they are not CPU time or exclusive ownership of shared work.
+
+The thread-CPU histogram records only `planning` and `delivery`. Its intervals
+never cross an await and finish before telemetry emission. They include
+same-thread native work and garbage collection, but exclude worker CPU,
+background materialization and progress publications. They are selected CPU
+intervals, not a complete request CPU total. If a CPU counter read fails, that
+CPU observation is omitted while elapsed timing and the request outcome remain
+available. Compare each metric's own count when computing means.
+
+These trusted, payload-free observations use the existing bounded diagnostic
+queue and exporter endpoint whenever diagnostics and an interested trusted
+consumer are active. They have no slow-log threshold and add no request, session,
+provider or host labels. The six elapsed and two CPU populations consume at most
+eight aggregate samples, or 152 exposed histogram series, under the existing
+2,048-sample cap. Startup-phase emission and its whole-process CPU semantics are
+unchanged.
+
+An OpenTelemetry exporter with traces disabled does not request phase events.
+A configured Prometheus exporter records these observations as metrics without
+requiring OpenTelemetry traces.
 
 ### Runtime identity
 

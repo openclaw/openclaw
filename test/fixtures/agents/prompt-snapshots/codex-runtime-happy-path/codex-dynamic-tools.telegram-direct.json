@@ -914,7 +914,7 @@
       },
       {
         "deferLoading": true,
-        "description": "Read gateway config/schema. update.run: owner-only update on explicit user request; restart + completion notice automatic. Never via shell. Other system changes: use openclaw tool.",
+        "description": "Read gateway config/schema. update.run: owner request or operator schedule; automatic restart + completion notice. Never via shell. Other system changes: use openclaw tool.",
         "inputSchema": {
           "properties": {
             "action": {

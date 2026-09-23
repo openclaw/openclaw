@@ -20,21 +20,21 @@ describe("worker environment service", () => {
 
   it("warms machine catalogs at startup only for nonterminal environment profiles", async () => {
     const { store } = support.testState;
-    const active = store.createIntent({
+    const active = await store.createIntent({
       environmentId: "startup-worker",
       providerId: "fake",
       profileId: "development",
       profileSnapshot: { settings: { region: "test" } },
       provisionOperationId: "provision:startup",
     });
-    store.createIntent({
+    await store.createIntent({
       environmentId: "terminal-worker",
       providerId: "fake",
       profileId: "terminal",
       profileSnapshot: { settings: { region: "terminal" } },
       provisionOperationId: "provision:terminal",
     });
-    store.transition({ environmentId: "terminal-worker", from: "requested", to: "failed" });
+    await store.transition({ environmentId: "terminal-worker", from: "requested", to: "failed" });
     support.testState.config.cloudWorkers!.profiles!.terminal = {
       provider: "fake",
       settings: { region: "terminal" },
@@ -66,7 +66,8 @@ describe("worker environment service", () => {
   });
 
   it("maintains configured providers on the existing timer with no environments", async () => {
-    vi.useFakeTimers();
+    // Keep the monotonic clock shared with real SQLite workers on its native epoch.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
     const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
     const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval");
     const maintain = vi.fn(async () => {});
@@ -137,8 +138,8 @@ describe("worker environment service", () => {
   });
 
   it("reconciles unrelated leases concurrently", async () => {
-    support.seedReady("worker-concurrent-a");
-    support.seedReady("worker-concurrent-b");
+    await support.seedReady("worker-concurrent-a");
+    await support.seedReady("worker-concurrent-b");
     const { promise: blocked, resolve: release } = createDeferred();
     const inspected: WorkerLifecycleLease[] = [];
     const provider = support.createProvider({
@@ -173,8 +174,8 @@ describe("worker environment service", () => {
   it("coalesces targeted and full inspection while retaining full-sweep maintenance", async () => {
     const targetId = "worker-targeted-overlap";
     const siblingId = "worker-full-sweep-sibling";
-    support.seedReady(targetId);
-    support.seedReady(siblingId);
+    await support.seedReady(targetId);
+    await support.seedReady(siblingId);
     const targetStarted = createDeferred();
     const siblingStarted = createDeferred();
     const finishTarget = createDeferred();
@@ -247,13 +248,79 @@ describe("worker environment service", () => {
     expect(prune).toHaveBeenCalledOnce();
   });
 
+  it.each([false, true])(
+    "settles provisioning before reporting a timeout (committed=%s)",
+    async (committed) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const transitionEntered = createDeferred();
+      const releaseTransition = createDeferred();
+      const store = support.testState.store;
+      const transition = store.transition.bind(store);
+      vi.spyOn(store, "transition").mockImplementation(async (input) => {
+        if (input.from !== "requested" || input.to !== "provisioning") {
+          return transition(input);
+        }
+        if (committed) {
+          const record = await transition(input);
+          transitionEntered.resolve();
+          await releaseTransition.promise;
+          return record;
+        }
+        transitionEntered.resolve();
+        await releaseTransition.promise;
+        return transition(input);
+      });
+      const provision = vi.fn(support.createProvider().provision);
+      const workerService = support.createService(support.createProvider({ provision }), {
+        providerCallTimeoutMs: 5,
+      });
+      const creationResult = workerService
+        .createWithRequest({
+          profileId: "development",
+          idempotencyKey: "request-provision-transition-timeout",
+        })
+        .then(
+          (value) => ({ ok: true as const, value }),
+          (error: unknown) => ({ ok: false as const, error }),
+        );
+      try {
+        await Promise.race([
+          transitionEntered.promise,
+          creationResult.then((result) => {
+            throw new Error("Creation ended before provisioning transition", { cause: result });
+          }),
+        ]);
+        await vi.advanceTimersByTimeAsync(5);
+      } finally {
+        releaseTransition.resolve();
+        await creationResult;
+      }
+
+      expect(await creationResult).toMatchObject({
+        ok: false,
+        error: { code: "provider_failure" } satisfies Partial<WorkerEnvironmentServiceError>,
+      });
+      expect(provision).not.toHaveBeenCalled();
+      expect(store.list()[0]).toMatchObject({
+        state: committed ? "provisioning" : "failed",
+        lastError: "Worker provider operation timed out after 5ms",
+      });
+    },
+  );
+
   it("waits for timed-out provider work during shutdown", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const provisionStarted = createDeferred();
+    const tunnelsStopped = createDeferred();
     const { promise: provisionPending, resolve: finishProvision } = createDeferred();
     const provision = vi.fn(async () => {
+      provisionStarted.resolve();
       await provisionPending;
       return { leaseId: "lease-stop-timeout", ssh: support.SSH_ENDPOINT };
     });
-    const stopAll = vi.fn(async () => {});
+    const stopAll = vi.fn(async () => {
+      tunnelsStopped.resolve();
+    });
     const tunnelManager = {
       stopAll,
     } as unknown as WorkerTunnelManager;
@@ -261,39 +328,52 @@ describe("worker environment service", () => {
       providerCallTimeoutMs: 5,
       tunnelManager,
     });
-    const creation = workerService.createWithRequest({
-      profileId: "development",
-      idempotencyKey: "request-stop-provider-timeout",
-    });
-    const creationResult = expect(creation).rejects.toMatchObject({
-      code: "provider_failure",
-    } satisfies Partial<WorkerEnvironmentServiceError>);
+    const creationResult = workerService
+      .createWithRequest({
+        profileId: "development",
+        idempotencyKey: "request-stop-provider-timeout",
+      })
+      .then(
+        (value) => ({ ok: true as const, value }),
+        (error: unknown) => ({ ok: false as const, error }),
+      );
     let stopped = false;
     let stopping: Promise<void> | undefined;
 
     try {
-      await support.waitForFast(() => expect(provision).toHaveBeenCalledOnce());
-      await creationResult;
+      await Promise.race([
+        provisionStarted.promise,
+        creationResult.then((result) => {
+          throw new Error("Creation ended before provider entry", { cause: result });
+        }),
+      ]);
+      await vi.advanceTimersByTimeAsync(5);
+      expect(await creationResult).toMatchObject({
+        ok: false,
+        error: { code: "provider_failure" } satisfies Partial<WorkerEnvironmentServiceError>,
+      });
       stopping = workerService.stop().then(() => {
         stopped = true;
       });
-      await support.waitForFast(() => expect(stopAll).toHaveBeenCalledOnce());
-      await Promise.resolve();
+      await tunnelsStopped.promise;
+      expect(stopAll).toHaveBeenCalledOnce();
       expect(stopped).toBe(false);
     } finally {
-      finishProvision?.();
+      finishProvision();
+      await creationResult;
+      await stopping;
     }
 
-    await stopping;
     expect(stopped).toBe(true);
   });
 
   it("owns and clears one periodic reconciliation timer", async () => {
-    vi.useFakeTimers();
+    const environmentId = "worker-guarded-reconcile";
+    await support.seedReady(environmentId);
+    // Keep the monotonic clock shared with real SQLite workers on its native epoch.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
     const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
     const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval");
-    const environmentId = "worker-guarded-reconcile";
-    support.seedReady(environmentId);
     const inspect = vi.fn(async () => ({ status: "active" as const }));
     const liveEvents = support.createLiveEvents();
     const unsubscribeTurnClaimClosed = vi.fn();
@@ -325,10 +405,11 @@ describe("worker environment service", () => {
     await workerService.reconcileEnvironment(environmentId);
     workerService.start();
     workerService.start();
-    await vi.advanceTimersByTimeAsync(0);
+    await workerService.reconcileOnce();
     expect(liveEvents.start).toHaveBeenCalledOnce();
     expect(setIntervalSpy).toHaveBeenCalledExactlyOnceWith(expect.any(Function), 25);
-    await vi.advanceTimersByTimeAsync(25);
+    vi.advanceTimersByTime(25);
+    await workerService.reconcileOnce();
     expect(guardedEnvironmentIds).toEqual([environmentId, environmentId, environmentId]);
     expect(inspect).toHaveBeenCalledTimes(3);
     await uninstallGuard();
@@ -346,7 +427,7 @@ describe("worker environment service", () => {
 
   it("closes new guarded reconciliation and drains the admitted operation on uninstall", async () => {
     const environmentId = "worker-guard-uninstall";
-    support.seedReady(environmentId);
+    await support.seedReady(environmentId);
     const inspect = vi.fn(async () => ({ status: "active" as const }));
     const workerService = support.createService(support.createProvider({ inspect }));
     const { promise: guardPending, resolve: releaseGuard } = createDeferred();
@@ -380,7 +461,7 @@ describe("worker environment service", () => {
     "closes guarded reconciliation admission and drains admitted %s recovery during stop",
     async (method) => {
       const environmentId = "worker-guard-stop";
-      support.seedReady(environmentId);
+      await support.seedReady(environmentId);
       const inspect = vi.fn(async () => ({ status: "active" as const }));
       const workerService = support.createService(support.createProvider({ inspect }));
       const { promise: guardPending, resolve: releaseGuard } = createDeferred();
@@ -518,7 +599,7 @@ describe("worker environment service", () => {
   });
 
   it("starts without blocking gateway startup and drains reconciliation on stop", async () => {
-    support.seedReady("worker-slow-inspection");
+    await support.seedReady("worker-slow-inspection");
     const { promise: inspectionPending, resolve: finishInspection } = createDeferred();
     const inspect = vi.fn(async () => {
       await inspectionPending;

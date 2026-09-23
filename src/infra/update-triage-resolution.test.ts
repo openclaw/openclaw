@@ -286,6 +286,8 @@ describe("saved update failure resolution", () => {
   ])(
     "does not certify pending plugin migrations %s despite updater completion",
     async (when, marker) => {
+      vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", undefined);
+      vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_CONVERGENCE", undefined);
       const pending = [
         {
           pluginId: "codex",
@@ -308,7 +310,7 @@ describe("saved update failure resolution", () => {
       });
       expect(result).toMatchObject({
         ok: false,
-        summary: expect.stringContaining('Plugin "codex" state migration is pending'),
+        summary: expect.stringContaining('Plugin "codex" data/settings upgrade is unfinished'),
       });
       expect(result.summary).toContain("Let the current update or repair finish.");
     },

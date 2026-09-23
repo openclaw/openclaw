@@ -23,6 +23,7 @@ import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.
 import {
   acquireStateDatabaseHandleLease,
   hasStateDatabaseSourceExclusion,
+  withStateDatabaseCoordinatorRuntimeDirectory,
 } from "../infra/state-database-coordinator.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -72,6 +73,7 @@ import type {
   RetainedReadScope,
 } from "./openclaw-state-read.types.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
+import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 
 const artifactPreservingReads = resolveGlobalSingleton(
   Symbol.for("openclaw.artifactPreservingStateReads"),
@@ -402,11 +404,19 @@ export function withExistingOpenClawStateDatabaseReadOnly<T>(
 export function executeExistingOpenClawStateRead(
   options: OpenClawStateDatabaseOptions,
   command: OpenClawStateReadCommand,
-  readOptions: OpenClawStateReadOptions = {},
+  { context, current, mapError }: OpenClawStateReadOptions = {},
 ): Promise<OpenClawStateReadReply | undefined> {
-  return mapOpenClawStateReadError(readOptions.mapError, (receipt) => {
-    const read = () => executeRetainedOpenClawStateRead(options, command, receipt);
-    return readOptions.current ? stateSnapshotReads.exit(read) : read();
+  return mapOpenClawStateReadError(mapError, (receipt) => {
+    context?.admission.assertCurrent();
+    const read = () => {
+      const execute = () => executeRetainedOpenClawStateRead(options, command, receipt, context);
+      return current ? stateSnapshotReads.exit(execute) : execute();
+    };
+    const run = () =>
+      context
+        ? withStateDatabaseCoordinatorRuntimeDirectory(context.coordinatorRuntime, read)
+        : read();
+    return context?.runInCapturedSchemaScope ? context.runInCapturedSchemaScope(run) : run();
   });
 }
 
@@ -414,6 +424,7 @@ function executeRetainedOpenClawStateRead(
   options: OpenClawStateDatabaseOptions,
   command: OpenClawStateReadCommand,
   receipt: OpenClawStateReadReceipt,
+  capturedContext?: OpenClawStateWorkerContext,
 ): Promise<OpenClawStateReadReply | undefined> {
   const pathname = resolveReadOnlyPath(options);
   const current = stateSnapshotReads.getStore();
@@ -424,10 +435,15 @@ function executeRetainedOpenClawStateRead(
       (scope) => scope.active && scope.path === pathname,
     ),
   ];
-  const context = captureOpenClawStateWorkerContext({
-    path: pathname,
-    env: snapshot?.env ?? options.env,
-  });
+  const env = snapshot?.env ?? options.env;
+  const context = capturedContext ?? captureOpenClawStateWorkerContext({ path: pathname, env });
+  if (capturedContext) {
+    if (context.admission.databasePath !== pathname) {
+      throw new Error("Shared-state read context does not match its selected source");
+    }
+    context.maintenanceScope?.assertAdmission();
+    context.admission.assertCurrent();
+  }
   const excluded = hasStateDatabaseSourceExclusion(pathname);
   const preserveArtifacts = requiresArtifactPreservingSnapshot(pathname);
   const controller = new AbortController();

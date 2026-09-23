@@ -16,7 +16,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { holdStateDatabaseCoordinator } from "../test-utils/state-database-contention.js";
 import * as acpCleanup from "./task-registry-acp-cleanup.js";
 import {
-  resetTaskRegistryMaintenanceRuntimeForTests,
+  configureTaskRegistryMaintenance,
   runTaskRegistryMaintenance,
 } from "./task-registry.maintenance.js";
 import { configureTaskRegistryRuntime, getTaskRegistryStore } from "./task-registry.store.js";
@@ -24,7 +24,7 @@ import { resetTaskRegistryForTests } from "./task-runtime.test-helpers.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
-  resetTaskRegistryMaintenanceRuntimeForTests();
+  configureTaskRegistryMaintenance({ runtimeAuthoritative: false });
   resetTaskRegistryForTests({ persist: false });
   pluginState.resetPluginStateStoreForTests({ closeDatabase: false });
 });

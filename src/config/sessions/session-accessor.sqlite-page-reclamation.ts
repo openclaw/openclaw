@@ -1,4 +1,4 @@
-import { publishSqliteWalCheckpointHealth } from "../../infra/sqlite-wal-checkpoint.js";
+import { publishSqliteWalCheckpointObservation } from "../../infra/sqlite-wal-checkpoint.js";
 import type { SqliteWalReclamationResult } from "../../infra/sqlite-wal.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { retainOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
@@ -30,7 +30,7 @@ export async function withSqliteSessionPageReclamation<T>(
       ),
     );
   }
-  return withSqliteMutationWorkerLifetime(options, async ({ assertCurrent }) => {
+  return withSqliteMutationWorkerLifetime(options, async ({ assertCurrent, signal }) => {
     const retained = await runExclusiveSqliteSessionWrite(
       options,
       async () => {
@@ -94,7 +94,7 @@ export async function withSqliteSessionPageReclamation<T>(
                 throw new Error("SQLite page reclamation returned another operation's result");
               }
               if (result.value.checkpoint) {
-                result.value.checkpoint = publishSqliteWalCheckpointHealth(
+                result.value.checkpoint = publishSqliteWalCheckpointObservation(
                   databaseOptions.path,
                   result.value.checkpoint,
                 );
@@ -103,6 +103,7 @@ export async function withSqliteSessionPageReclamation<T>(
             }),
           ),
         assertCurrent,
+        signal,
       );
     } finally {
       claim.release();

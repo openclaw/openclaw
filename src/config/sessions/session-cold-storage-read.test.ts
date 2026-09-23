@@ -12,6 +12,45 @@ const scope = { agentId: "main", sessionId: "retained-transcript" };
 beforeEach(() => vi.clearAllMocks());
 
 describe("readRestoredSessionTranscript", () => {
+  it("returns hot transcript reads without probing restoration", async () => {
+    await expect(readRestoredSessionTranscript(scope, () => "hot text")).resolves.toBe("hot text");
+    expect(restoreSessionColdTranscript).not.toHaveBeenCalled();
+  });
+
+  it("leaves restoration to the host for read-only workers", async () => {
+    const cold = new SessionTranscriptColdError(scope.sessionId);
+    await expect(
+      readRestoredSessionTranscript(
+        scope,
+        () => {
+          throw cold;
+        },
+        { readOnly: true },
+      ),
+    ).rejects.toBe(cold);
+    expect(restoreSessionColdTranscript).not.toHaveBeenCalled();
+  });
+
+  it("rechecks authority after restoration before reading again", async () => {
+    const revoked = new Error("reader revoked");
+    let current = true;
+    const assertCurrent = () => {
+      if (!current) {
+        throw revoked;
+      }
+    };
+    vi.mocked(restoreSessionColdTranscript).mockImplementationOnce(async () => {
+      current = false;
+    });
+    const read = vi.fn(() => {
+      throw new SessionTranscriptColdError(scope.sessionId);
+    });
+    await expect(readRestoredSessionTranscript(scope, read, { assertCurrent })).rejects.toBe(
+      revoked,
+    );
+    expect(read).toHaveBeenCalledOnce();
+  });
+
   it.each([false, true])("restores a cold read once (async=%s)", async (asynchronous) => {
     const cold = new SessionTranscriptColdError(scope.sessionId);
     const read = vi
@@ -26,9 +65,7 @@ describe("readRestoredSessionTranscript", () => {
 
     await expect(readRestoredSessionTranscript(scope, read)).resolves.toBe("retained text");
     expect(read).toHaveBeenCalledTimes(2);
-    expect(restoreSessionColdTranscript).toHaveBeenCalledTimes(2);
-    expect(restoreSessionColdTranscript).toHaveBeenNthCalledWith(1, scope, undefined);
-    expect(restoreSessionColdTranscript).toHaveBeenNthCalledWith(2, scope, undefined);
+    expect(restoreSessionColdTranscript).toHaveBeenCalledExactlyOnceWith(scope, undefined);
   });
 
   it.each([new Error("read unavailable"), new SessionTranscriptColdError("another-transcript")])(
@@ -40,18 +77,18 @@ describe("readRestoredSessionTranscript", () => {
 
       await expect(readRestoredSessionTranscript(scope, read)).rejects.toBe(failure);
       expect(read).toHaveBeenCalledOnce();
-      expect(restoreSessionColdTranscript).toHaveBeenCalledExactlyOnceWith(scope, undefined);
+      expect(restoreSessionColdTranscript).not.toHaveBeenCalled();
     },
   );
 
-  it("propagates a second cold rejection without repeating restoration", async () => {
+  it("bounds restoration when a peer repeatedly archives the transcript", async () => {
     const cold = new SessionTranscriptColdError(scope.sessionId);
     const read = vi.fn(async () => {
       throw cold;
     });
 
     await expect(readRestoredSessionTranscript(scope, read)).rejects.toBe(cold);
-    expect(read).toHaveBeenCalledTimes(2);
+    expect(read).toHaveBeenCalledTimes(3);
     expect(restoreSessionColdTranscript).toHaveBeenCalledTimes(2);
   });
 });

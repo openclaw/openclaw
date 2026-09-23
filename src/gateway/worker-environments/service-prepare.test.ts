@@ -117,7 +117,7 @@ describe("on-demand prepared worker admission", () => {
         executionMode: "worker-turn",
         setupAuthorized: true,
       });
-      const existing = support.testState.store.createIntent({
+      const existing = await support.testState.store.createIntent({
         environmentId: "existing-prepared",
         provisionOperationId: "existing-operation",
         providerId: intent.providerId,
@@ -204,7 +204,7 @@ describe("on-demand prepared worker admission", () => {
           executionMode: "worker-turn",
           setupAuthorized: true,
         });
-        ({ environmentId } = support.testState.store.createIntent({
+        ({ environmentId } = await support.testState.store.createIntent({
           environmentId: "automatic-reserve",
           provisionOperationId: "automatic-reserve-operation",
           providerId: intent.providerId,
@@ -223,8 +223,12 @@ describe("on-demand prepared worker admission", () => {
       if (purpose === "expired reserve") {
         support.testState.nowMs = 11_001;
       }
+      const cancelled = new Promise<void>((resolve) => {
+        signal.addEventListener("abort", () => resolve(), { once: true });
+      });
       const destroyed = f.service.destroyUnattached(environmentId);
       try {
+        await cancelled;
         expect(support.testState.store.get(environmentId)?.destroyRequestedAtMs).toBe(
           support.testState.nowMs,
         );

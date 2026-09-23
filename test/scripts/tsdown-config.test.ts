@@ -51,6 +51,8 @@ const isWorkerImageProcessorConfig = (config: TsdownConfig) =>
     "worker/image-processor.worker",
     "src/worker/worker-deploy-image-processor.ts",
   );
+const isWorkerSqliteStoreConfig = (config: TsdownConfig) =>
+  hasWorkerEntry(config, "worker/sqlite-store.worker", "src/worker/worker-deploy-sqlite-store.ts");
 const isWorkerRsyncReceiverConfig = (config: TsdownConfig) =>
   hasWorkerEntry(
     config,
@@ -74,6 +76,7 @@ const isWorkerServiceChildGroupAnchorConfig = (config: TsdownConfig) =>
 const workerBuildTargets = [
   ["worker", isWorkerDeployConfig],
   ["image-processor", isWorkerImageProcessorConfig],
+  ["sqlite-store", isWorkerSqliteStoreConfig],
   ["receiver", isWorkerRsyncReceiverConfig],
   ["github-launcher", isWorkerGitHubExecLauncherConfig],
   ["service-relay", isWorkerServiceChildRelayConfig],
@@ -1155,6 +1158,7 @@ console.log("relocated Bash parser works without native grammar package");
   it("builds self-contained worker deploy executables with every dependency bundled", () => {
     const workerConfig = configs.find(isWorkerDeployConfig);
     const imageProcessorConfig = configs.find(isWorkerImageProcessorConfig);
+    const sqliteStoreConfig = configs.find(isWorkerSqliteStoreConfig);
     const receiverConfig = configs.find(isWorkerRsyncReceiverConfig);
     const launcherConfig = configs.find(isWorkerGitHubExecLauncherConfig);
     const relayConfig = configs.find(isWorkerServiceChildRelayConfig);
@@ -1164,6 +1168,9 @@ console.log("relocated Bash parser works without native grammar package");
     });
     expect(imageProcessorConfig?.entry).toEqual({
       "worker/image-processor.worker": "src/worker/worker-deploy-image-processor.ts",
+    });
+    expect(sqliteStoreConfig?.entry).toEqual({
+      "worker/sqlite-store.worker": "src/worker/worker-deploy-sqlite-store.ts",
     });
     expect(receiverConfig?.entry).toEqual({
       "worker/workspace-rsync-receiver": "src/worker/workspace-rsync-receiver.ts",
@@ -1228,6 +1235,7 @@ console.log("relocated Bash parser works without native grammar package");
     for (const config of [
       workerConfig,
       imageProcessorConfig,
+      sqliteStoreConfig,
       receiverConfig,
       launcherConfig,
       relayConfig,

@@ -1,3 +1,4 @@
+mod chrome_setup;
 mod cli;
 #[cfg(target_os = "linux")]
 mod desktop_bridge;
@@ -600,6 +601,7 @@ impl NavigationState {
 
 struct DesktopInner {
     cli: Mutex<Option<OpenClawCli>>,
+    chrome_setup: chrome_setup::ChromeSetup,
     navigation: Mutex<NavigationState>,
     operation: Mutex<()>,
     pending_approvals: Mutex<pending_approvals::PendingApprovalState>,
@@ -620,6 +622,7 @@ impl DesktopState {
         Self {
             inner: Arc::new(DesktopInner {
                 cli: Mutex::new(None),
+                chrome_setup: chrome_setup::ChromeSetup::default(),
                 navigation: Mutex::new(NavigationState::default()),
                 operation: Mutex::new(()),
                 pending_approvals: Mutex::new(pending_approvals::PendingApprovalState::default()),
@@ -804,6 +807,8 @@ impl DesktopState {
                 );
             }
         }
+
+        self.inner.chrome_setup.installed(app.clone(), cli.clone());
 
         self.inner
             .navigation
@@ -1578,18 +1583,12 @@ impl DesktopState {
     }
 
     pub(crate) fn resolve_cli(&self) -> Result<OpenClawCli, CliError> {
-        if let Some(cli) = self
-            .inner
-            .cli
-            .lock()
-            .expect("CLI mutex poisoned")
-            .clone()
-            .filter(OpenClawCli::is_available)
-        {
+        let mut cached = self.inner.cli.lock().expect("CLI mutex poisoned");
+        if let Some(cli) = cached.clone().filter(OpenClawCli::is_available) {
             return Ok(cli);
         }
         let cli = OpenClawCli::discover()?;
-        *self.inner.cli.lock().expect("CLI mutex poisoned") = Some(cli.clone());
+        *cached = Some(cli.clone());
         Ok(cli)
     }
 
@@ -3334,6 +3333,8 @@ fn main() {
         #[cfg(target_os = "linux")]
         desktop_bridge::start(app.handle().clone());
         state.start_tunnel_monitor(app.handle().clone());
+        // Single-instance admission is complete; Chrome setup never follows a remote dashboard.
+        state.inner.chrome_setup.start(app.handle().clone());
         Ok(())
     });
     let builder = builder.invoke_handler(tauri::generate_handler![

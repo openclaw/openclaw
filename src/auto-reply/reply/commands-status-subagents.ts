@@ -1,10 +1,7 @@
 // Formats subagent status rows for the status command response.
 import type { TaskSummary } from "../../../packages/gateway-protocol/src/schema/tasks.js";
 import type { ControlledSubagentRunsReadContext } from "../../agents/subagents/registry/subagent-control-scope.js";
-import {
-  hasSubagentRunEnded,
-  isRetainedUnendedSubagentRun,
-} from "../../agents/subagents/registry/subagent-run-liveness.js";
+import { hasSubagentRunEnded } from "../../agents/subagents/registry/subagent-run-liveness.js";
 import { formatDurationCompact } from "../../infra/format-time/format-duration.ts";
 import { sanitizeTaskStatusText } from "../../tasks/task-status.js";
 import { formatRunLabel } from "./subagents-utils.js";
@@ -48,12 +45,13 @@ export function buildSubagentsStatusLine(params: {
     return undefined;
   }
   const now = params.now ?? Date.now();
+  const activeRuns = new Set(context.list.view.active);
   let active = 0;
   let done = 0;
   const detailLines: string[] = [];
   for (const entry of context.runs) {
-    const pendingDescendants = context.countPendingDescendantRuns(entry.childSessionKey);
-    if (isRetainedUnendedSubagentRun(entry, now) || pendingDescendants > 0) {
+    const pendingDescendants = context.list.pendingDescendants.get(entry.childSessionKey) ?? 0;
+    if (activeRuns.has(entry)) {
       active += 1;
       if (detailLines.length >= 3) {
         continue;

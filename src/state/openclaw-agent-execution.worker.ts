@@ -179,6 +179,16 @@ export function openExistingSqliteWorkerBackend(
     requestSqliteWorkerOperationAdmission({ stage: "prepare", facts: { identity, validation } });
     return database;
   };
+  const admit = (stage: "transaction" | "commit") => {
+    assertFileIdentity();
+    requestSqliteWorkerOperationAdmission({ stage, facts: { identity } });
+    if (stage === "commit") {
+      ensureOpenClawAgentDatabasePermissions(input.databasePath, options);
+    }
+  };
+  let providerReview:
+    | typeof import("../config/sessions/provider-review-store.worker.js")
+    | undefined;
   const domain = createAgentDatabaseDomainOwner({
     databasePath: input.databasePath,
     assertCurrent() {
@@ -187,13 +197,7 @@ export function openExistingSqliteWorkerBackend(
       assertFileIdentity();
       return current.db;
     },
-    admit(stage) {
-      assertFileIdentity();
-      requestSqliteWorkerOperationAdmission({ stage, facts: { identity } });
-      if (stage === "commit") {
-        ensureOpenClawAgentDatabasePermissions(input.databasePath, options);
-      }
-    },
+    admit,
   });
   let closed = false;
   const assertOpen = () => {
@@ -203,6 +207,11 @@ export function openExistingSqliteWorkerBackend(
   };
   return {
     prepare(command) {
+      if (command.type === "session.providerReview.compare") {
+        return import("../config/sessions/provider-review-store.worker.js").then((module) => {
+          providerReview = module;
+        });
+      }
       if (
         command.type === "database.domain.bind" ||
         command.type === "database.domain.execute" ||
@@ -237,6 +246,14 @@ export function openExistingSqliteWorkerBackend(
       if (command.type === "database.prepareWrite") {
         openWriter();
         return undefined;
+      }
+      if (command.type === "session.providerReview.compare" && providerReview) {
+        return providerReview.compareSessionProviderReviewInWorker(
+          openWriter(),
+          options,
+          command.input,
+          admit,
+        );
       }
       throw new Error("Unknown agent database operation");
     },

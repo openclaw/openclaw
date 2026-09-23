@@ -4,7 +4,7 @@ import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
-import { resolveConfigWidePluginMetadataSnapshot } from "../config/io.plugin-metadata.js";
+import { resolveConfigWidePluginMetadataSnapshotAsync } from "../config/io.plugin-metadata.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { validateConfigObjectWithPlugins } from "../config/validation.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -16,6 +16,7 @@ import { refreshManagedPlugins } from "../plugins/management-mutations.js";
 import { resolvePluginManifestInstallOwner } from "../plugins/manifest-install-owner.js";
 import { PluginInstanceDrainTimeoutError } from "../plugins/plugin-instance-error.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
+import { loadPluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import {
   clearPluginMetadataLifecycleCaches,
   retainGatewayPluginMetadata,
@@ -97,13 +98,20 @@ async function verifyInstalledPackageRetention(
     OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(root, "bundled"),
   };
   fs.mkdirSync(env.OPENCLAW_BUNDLED_PLUGINS_DIR, { recursive: true });
-  const writePackage = (id: string) => {
-    const packageDir = writeManagedNpmPlugin({
+  const writePackage = (
+    id: string,
+    packageDir = writeManagedNpmPlugin({
       stateDir,
       packageName: id,
       pluginId: id,
       version: "1.0.0",
-    });
+    }),
+  ) => {
+    fs.mkdirSync(path.join(packageDir, "dist"), { recursive: true });
+    fs.writeFileSync(
+      path.join(packageDir, "package.json"),
+      JSON.stringify({ name: id, version: "1.0.0", openclaw: { extensions: ["./dist/index.js"] } }),
+    );
     fs.writeFileSync(
       path.join(packageDir, "openclaw.plugin.json"),
       JSON.stringify({
@@ -159,19 +167,32 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
   await withEnvAsync(env, async () => {
     const siblingDir = writePackage("sibling");
     const healthyDir = cleanupRetry === "mixed-recovery" ? writePackage("healthy") : undefined;
+    const secondaryWorkspace = path.join(root, "secondary-workspace");
+    const hasWorkspacePlugin = settings === "defaulted";
+    if (hasWorkspacePlugin) {
+      writePackage(
+        "workspace-probe",
+        path.join(secondaryWorkspace, ".openclaw", "extensions", "workspace-probe"),
+      );
+    }
     const initialConfig: OpenClawConfig = {
       agents: {
         ownership: "explicit",
         entries: {
           main: { workspace: workspaceDir },
-          secondary: { workspace: path.join(root, "secondary-workspace") },
+          secondary: { workspace: secondaryWorkspace },
         },
       },
       plugins: {
-        allow: healthyDir ? ["sibling", "healthy"] : ["sibling"],
+        allow: [
+          "sibling",
+          ...(healthyDir ? ["healthy"] : []),
+          ...(hasWorkspacePlugin ? ["workspace-probe"] : []),
+        ],
         entries: {
           sibling: { enabled: true },
           ...(healthyDir ? { healthy: { enabled: true } } : {}),
+          ...(hasWorkspacePlugin ? { "workspace-probe": { enabled: true } } : {}),
         },
         load: { paths: healthyDir ? [siblingDir, healthyDir] : [siblingDir] },
         slots: { memory: "none" },
@@ -179,15 +200,26 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     };
     setRuntimeConfigSnapshot(initialConfig);
     const log = { ...createSubsystemLogger("gateway/plugins"), ...logs };
-    const initialMetadata = resolveConfigWidePluginMetadataSnapshot({
+    const initialMetadata = await resolveConfigWidePluginMetadataSnapshotAsync({
       config: initialConfig,
       env,
     });
     expect(initialMetadata.manifestRegistry.plugins.map((plugin) => plugin.id).toSorted()).toEqual(
-      healthyDir ? ["healthy", "sibling"] : ["sibling"],
+      [
+        "sibling",
+        ...(healthyDir ? ["healthy"] : []),
+        ...(hasWorkspacePlugin ? ["workspace-probe"] : []),
+      ].toSorted(),
     );
     const initial = bootstrap.prepareGatewayPluginLoad({
       pluginMetadataSnapshot: initialMetadata,
+      pluginLookUpTable: loadPluginLookUpTable({
+        config: initialConfig,
+        workspaceDir,
+        env,
+        metadataSnapshot: initialMetadata,
+        ambientEnvTriggers: "suppress",
+      }),
       cfg: initialConfig,
       workspaceDir,
       env,
@@ -277,6 +309,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
       assert.ok(response);
       return response[1];
     };
+    const workspacePlugin = hasWorkspacePlugin ? await probe("workspace-probe") : undefined;
     const sibling = await probe("sibling");
     expect(sibling.settings).toEqual(settings === "defaulted" ? { mode: "auto" } : {});
     const siblingRecord = initial.pluginRegistry.plugins.find((record) => record.id === "sibling");
@@ -316,6 +349,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
       pluginIds = ["installed-probe"],
       reason: PluginLifecycleReason = "reload",
       assertInvokerOwned?: () => void,
+      sourceConfig = nextConfig,
     ) =>
       await reloadGatewayPlugins(
         {
@@ -343,7 +377,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
         },
         {
           nextConfig,
-          sourceConfig: nextConfig,
+          sourceConfig,
           changedPaths: [],
           prepareConfigEffects: () => async () => {},
           assertInvokerOwned,
@@ -376,12 +410,21 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     const releaseSiblingWork = siblingInstance.retainWork();
     let firstReceipt: Awaited<ReturnType<typeof reload>>;
     try {
-      firstReceipt = await reload(validated.config, ["installed-probe"], "install");
+      firstReceipt = await reload(
+        validated.config,
+        ["installed-probe"],
+        "install",
+        undefined,
+        config,
+      );
     } finally {
       releaseSiblingWork();
     }
     expect(firstReceipt.runtime.pluginIds).toEqual(["installed-probe"]);
     expect(await probe("sibling")).toEqual(sibling);
+    if (workspacePlugin) {
+      expect(await probe("workspace-probe")).toEqual(workspacePlugin);
+    }
     const first = await probe("installed-probe");
     expect(first.helper).toBe("A");
     if (cleanupRetry === "mixed-recovery") {
@@ -784,6 +827,9 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     expect(configured.instance).not.toBe(current.instance);
     expect(configured.settings).toEqual({ label: "changed" });
     expect(await probe("sibling")).toEqual(sibling);
+    if (workspacePlugin) {
+      expect(await probe("workspace-probe")).toEqual(workspacePlugin);
+    }
   });
 }
 

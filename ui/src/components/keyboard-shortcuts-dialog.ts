@@ -172,7 +172,9 @@ class KeyboardShortcutsDialog extends OpenClawLitElement {
     if (!this.open) {
       return nothing;
     }
-    const close = () => {
+    const close = (event: Event) => {
+      // Removal owns focus restoration; do not also queue Web Awesome's close callback.
+      event.preventDefault();
       this.open = false;
     };
     return html`

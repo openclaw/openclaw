@@ -37,10 +37,10 @@ describe("Code Mode catalog and model-visible surface", () => {
     vi.useRealTimers();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.useRealTimers();
     vi.restoreAllMocks();
-    resetCodeModeTestState();
+    await resetCodeModeTestState();
   });
 
   const runTerminalNestedCall = async (

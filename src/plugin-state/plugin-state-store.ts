@@ -207,6 +207,7 @@ function createAsyncKeyedStore<T>(
       await registerPluginStateInWorker({
         ...scope,
         ...entry,
+        assertCurrent: opts?.assertCurrent,
         maxEntries: prepared.maxEntries,
         overflowPolicy: prepared.overflowPolicy,
       });
@@ -263,9 +264,13 @@ function createAsyncKeyedStore<T>(
       // SAFETY: The atomically consumed value has this namespace's caller-selected JSON type.
       return (await consumePluginStateInWorker({ ...scope, key: normalizedKey })) as T | undefined;
     },
-    delete: async (key) => {
+    delete: async (key, opts) => {
       const normalizedKey = validateKey(key, "delete");
-      return await deletePluginStateInWorker({ ...scope, key: normalizedKey });
+      return await deletePluginStateInWorker({
+        ...scope,
+        key: normalizedKey,
+        assertCurrent: opts?.assertCurrent,
+      });
     },
     entries: async () => {
       // SAFETY: Entries come from this namespace and retain the caller's JSON value type.

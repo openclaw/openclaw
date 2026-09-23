@@ -163,16 +163,19 @@ describe("conversation position rail", () => {
     "resize",
     "resize-jump",
     "composer-resize-reversal",
+    "composer-resize-reversal-current",
     "end",
     "focus",
     "focus-resize",
     "pointer",
     "reader",
+    "composer-resize-reversal-navigation",
   ] as const;
 
   it.each(railUpdateScenarios)(
     "keeps the reader's rail position through %s updates",
     (scenario) => {
+      const navigatesBeforeResize = scenario === "composer-resize-reversal-navigation";
       const flushFrame = stubAnimationFrames();
       const publishVisibility = stubRailVisibility();
       const transcript = createTestTranscript();
@@ -284,7 +287,7 @@ describe("conversation position rail", () => {
           expect(Number.parseFloat(marker(79).style.top) + 12).toBeLessThanOrEqual(
             marks.scrollTop + marks.clientHeight,
           );
-        } else if (scenario === "composer-resize-reversal") {
+        } else if (scenario.startsWith("composer-resize-reversal")) {
           publishVisibility(root.querySelector(".chat-bubble")!);
           flush();
           height = 512;
@@ -314,12 +317,26 @@ describe("conversation position rail", () => {
               },
             },
           });
+          if (navigatesBeforeResize) {
+            root.scrollTop = 0;
+            activeMessage.mockReturnValue("message-0");
+          }
           adjustTextareaHeight(textarea);
-          expect(root.scrollTop).toBe(8315);
+          expect(root.scrollTop).toBe(navigatesBeforeResize ? 0 : 8315);
           // The goal header regrows the composer before any observer or frame runs.
           height = 576;
           marksHeight = 262;
+          if (scenario === "composer-resize-reversal-current") {
+            activeMessage.mockReturnValue("message-76");
+          }
           publishVisibility(root.querySelector(".chat-bubble")!);
+          flush();
+          if (navigatesBeforeResize) {
+            expect(marks.scrollTop).toBe(0);
+            return;
+          }
+          expect(marks.scrollTop).toBe(677);
+          root.scrollTop = scrollHeight - height;
           flush();
           expect(marks.scrollTop).toBe(677);
         } else if (scenario === "resize") {

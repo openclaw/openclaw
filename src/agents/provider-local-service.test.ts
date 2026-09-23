@@ -16,6 +16,7 @@ import type { ProviderPlugin } from "../plugins/provider-plugin.types.js";
 import { mintSecretSentinel } from "../secrets/sentinel.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { killPidIfAlive, readPidFile, waitForPidToExit } from "../test-utils/process-tree.js";
+import { hasLocalServiceProcessExited } from "./provider-local-service-process.js";
 import {
   attachModelProviderLocalService,
   createConfiguredProviderLocalServiceAcquirer,
@@ -23,7 +24,6 @@ import {
   ensureProviderLocalService,
   getManagedProviderLocalServiceDiagnosticsForTest,
   getModelProviderLocalService,
-  hasLocalServiceProcessExited,
   stopManagedProviderLocalServices,
 } from "./provider-local-service.js";
 import { createProviderLocalServiceTestFixture } from "./provider-local-service.test-support.js";

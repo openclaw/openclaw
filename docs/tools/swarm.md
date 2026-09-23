@@ -451,7 +451,7 @@ calls. Both tools must be allowed by the effective tool policy. Default-on
 Swarm does not add them to a restrictive tool profile or allowlist.
 
 Codex Code Mode automatically exposes eligible dynamic OpenClaw tools under
-`tools.*`. It does not use OpenClaw's QuickJS guest API or require
+`tools.*`. It does not use OpenClaw's guest API or require
 `tools.codeMode`, but `tools.swarm` must still be enabled. Codex harness
 `agents_wait` calls support the full 600-second timeout.
 
@@ -595,7 +595,7 @@ of Swarm's current direction.
 
 ## Related
 
-- [Code Mode](/tools/code-mode) for the QuickJS guest runtime and activation rules
+- [Code Mode](/tools/code-mode) for JavaScript executors and activation rules
 - [Sub-agents](/tools/subagents) for child policy, isolation, and session behavior
 - [Multi-agent sandbox tools](/tools/multi-agent-sandbox-tools) for per-agent restrictions
 - [Tools overview](/tools) for tool profiles and policy routing

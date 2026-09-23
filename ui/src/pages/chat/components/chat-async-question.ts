@@ -2,6 +2,7 @@ import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { asNullableRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveAssistantMessagePhase } from "../../../../../src/shared/chat-message-content.js";
 import { t } from "../../../i18n/index.ts";
+import type { ChatQueueItem } from "../../../lib/chat/chat-types.ts";
 import type { DurableComposerDraftScope } from "../../../lib/chat/composer-draft-store.runtime.ts";
 import { extractTextCached } from "../../../lib/chat/message-extract.ts";
 import { shouldHideAssistantChatMessage } from "../../../lib/chat/message-visibility.ts";
@@ -121,7 +122,8 @@ function questionHistory(messages: readonly unknown[]) {
     ) {
       const text = extractTextCached(message);
       if (text) {
-        // Only canonical saved answers resolve a question; duplicate titles stay ambiguous.
+        // A canonical reply identifies the question even when edited text or quoted
+        // headings prevent splitting its answers. Unlinked duplicate titles stay ambiguous.
         const rawReplyToId = asNullableRecord(record?.["__openclaw"])?.replyToId;
         const replyToId = typeof rawReplyToId === "string" ? rawReplyToId.trim() : "";
         const matches = [...questions.values()]
@@ -134,10 +136,14 @@ function questionHistory(messages: readonly unknown[]) {
             question: candidate,
             answers: parseGeneratedAsyncAnswer(candidate, text),
           }))
-          .filter((match) => match.answers !== null);
+          .filter((match) => match.answers !== null || Boolean(replyToId && text.trim()));
         const match = matches.length === 1 ? matches[0] : undefined;
-        if (match?.answers) {
-          resolved.set(match.question.itemId, { status: "submitted", answers: match.answers });
+        if (match) {
+          resolved.set(match.question.itemId, {
+            status: "submitted",
+            answers: match.answers ?? new Map(),
+            ...(match.answers ? {} : { unparsedText: text }),
+          });
         }
       }
     }
@@ -220,6 +226,8 @@ export function createAsyncQuestionPresentation(
   },
   props: {
     messages?: readonly unknown[];
+    queue?: readonly ChatQueueItem[];
+    onQueueRetry?: (id: string) => void;
     sessionKey: string;
     currentAgentId?: string;
     connectionEpoch?: number;
@@ -290,6 +298,13 @@ export function createAsyncQuestionPresentation(
     state.asyncQuestionGeneration === generation &&
     state.asyncQuestionDrafts === drafts;
   const { history: questions, resolved } = questionHistory(props.messages ?? []);
+  // This is a projection, never another sender: a recovered outbox row retains
+  // the question association and is the only owner of retry and delivery state.
+  const delivery = new Map(
+    (props.queue ?? []).flatMap((item) =>
+      item.asyncQuestionItemId ? [[item.asyncQuestionItemId, item] as const] : [],
+    ),
+  );
   const notify = () => {
     if (isCurrent()) {
       state.asyncQuestionRevision += 1;
@@ -310,8 +325,18 @@ export function createAsyncQuestionPresentation(
   }
   const archived = new Map<string, string>();
   const pending = questions.flatMap(({ question, boundary }) => {
+    const queued = delivery.get(question.itemId);
+    if (queued && !resolved.has(question.itemId)) {
+      // A recovered outbox already owns this answer. Remember its admission in
+      // the local presentation even if ACK retires the row before history arrives.
+      // This prevents reopening a second submit form; only history confirms Sent.
+      const admitted = getQuestionDraft(question, drafts);
+      admitted.status = "submitted";
+      admitted.admittedQueueId = queued.id;
+      admitted.answers = parseGeneratedAsyncAnswer(question, queued.text) ?? admitted.answers;
+    }
     const draft = resolved.get(question.itemId) ?? drafts.get(question.itemId);
-    if (draft?.status === "submitted") {
+    if (delivery.has(question.itemId) || draft?.status === "submitted") {
       return [];
     }
     if (draft?.status === "skipped" || draft?.status === "reopening") {
@@ -403,11 +428,50 @@ export function createAsyncQuestionPresentation(
       [...archived],
       [...resolved].map(([itemId, draft]) => [
         itemId,
+        draft.unparsedText,
         [...draft.answers].map(([questionId, answer]) => [questionId, questionDraftValues(answer)]),
       ]),
+      [...delivery].map(([itemId, item]) => [
+        itemId,
+        item.id,
+        item.text,
+        item.sendState,
+        item.sendError,
+      ]),
+      Boolean(props.onAsyncQuestionSubmit && props.onQueueRetry),
     ]),
     drafts,
     resolved,
+    delivery,
+    discard: (item) => {
+      if (!isCurrent()) {
+        return;
+      }
+      const itemId = item.asyncQuestionItemId;
+      const draft = itemId ? drafts.get(itemId) : undefined;
+      if (!itemId || draft?.admittedQueueId !== item.id || resolved.has(itemId)) {
+        return;
+      }
+      // Only the outbox owner's successful explicit removal retires admission.
+      // Replace the draft so a late completion cannot mark it submitted again.
+      drafts.set(itemId, {
+        ...draft,
+        status: undefined,
+        admittedQueueId: undefined,
+        error: undefined,
+        reopenedAfterBoundary: questions.find(({ question }) => question.itemId === itemId)
+          ?.boundary,
+      });
+      onChange();
+    },
+    retry:
+      props.onAsyncQuestionSubmit && props.onQueueRetry
+        ? (id) => {
+            if (isCurrent() && state.transcriptRenderContext.onAsyncQuestionSubmit) {
+              props.onQueueRetry?.(id);
+            }
+          }
+        : undefined,
     storageError: storageError(),
     onChange,
     reopen,
@@ -445,11 +509,17 @@ export function createAsyncQuestionPresentation(
       }
     },
     submit: props.onAsyncQuestionSubmit
-      ? async (message) => {
+      ? async (message, itemId, sourceMessageId) => {
           if (!isCurrent()) {
             return false;
           }
-          return (await state.transcriptRenderContext.onAsyncQuestionSubmit?.(message)) === true;
+          return (
+            (await state.transcriptRenderContext.onAsyncQuestionSubmit?.(
+              message,
+              itemId,
+              sourceMessageId,
+            )) === true
+          );
         }
       : undefined,
   };
@@ -572,7 +642,7 @@ export function createAsyncQuestionPanelProps(
         )
         .join("\n\n");
       try {
-        if (!(await presentation.submit?.(message))) {
+        if (!(await presentation.submit?.(message, questions.itemId, questions.sourceMessageId))) {
           throw new Error(t("chat.asyncQuestions.sendFailed"));
         }
         draft.status = "submitted";

@@ -1,7 +1,10 @@
 // Creates private temporary workspaces for downloads.
 import "./fs-safe-defaults.js";
-import crypto from "node:crypto";
 import path from "node:path";
+import {
+  buildRandomTempFilePath as buildRandomTempFilePathBase,
+  sanitizeTempFileName,
+} from "@openclaw/fs-safe/advanced";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { tempWorkspace } from "./private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
@@ -9,6 +12,7 @@ import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 const logger = createSubsystemLogger("infra:temp-download");
 
 export { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
+export { sanitizeTempFileName };
 
 // Download targets expose both a default path and a name-safe file builder so
 // callers can keep all transient files inside the same workspace.
@@ -29,24 +33,6 @@ function sanitizeTempPrefix(prefix: string): string {
   return normalized || "tmp";
 }
 
-function sanitizeTempExtension(extension?: string): string {
-  if (!extension) {
-    return "";
-  }
-  const normalized = extension.startsWith(".") ? extension : `.${extension}`;
-  const suffix = normalized.match(/[a-zA-Z0-9._-]+$/)?.[0] ?? "";
-  const token = suffix.replace(/^[._-]+/, "");
-  return token ? `.${token}` : "";
-}
-
-export function sanitizeTempFileName(fileName: string): string {
-  const base = path.basename(fileName).replace(/[^a-zA-Z0-9._-]+/g, "-");
-  const normalized = base.replace(/^-+|-+$/g, "");
-  // "." and ".." pass the character class above but are rejected as workspace
-  // leaf names, so returning them hands callers a throw instead of a safe name.
-  return !normalized || normalized === "." || normalized === ".." ? "download.bin" : normalized;
-}
-
 /** Build a stable temp path shape while keeping caller-controlled text filename-safe. */
 export function buildRandomTempFilePath(params: {
   prefix: string;
@@ -55,16 +41,13 @@ export function buildRandomTempFilePath(params: {
   now?: number;
   uuid?: string;
 }): string {
-  const nowCandidate = params.now;
-  const now =
-    typeof nowCandidate === "number" && Number.isFinite(nowCandidate)
-      ? Math.trunc(nowCandidate)
-      : Date.now();
-  const uuid = params.uuid?.trim() || crypto.randomUUID();
-  return path.join(
-    resolveTempRoot(params.tmpDir),
-    `${sanitizeTempPrefix(params.prefix)}-${now}-${uuid}${sanitizeTempExtension(params.extension)}`,
-  );
+  const rootDir = resolveTempRoot(params.tmpDir);
+  const filePath = buildRandomTempFilePathBase({
+    ...params,
+    rootDir,
+    uuid: params.uuid?.trim() || undefined,
+  });
+  return path.join(rootDir, path.basename(filePath));
 }
 
 export async function createTempDownloadTarget(params: {

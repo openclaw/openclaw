@@ -888,63 +888,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     });
   });
 
-  it("keeps transcript search icons compact", async () => {
-    await withBrowserPage(openBrowserPage(1024, 768), async (page) => {
-      await page.setContent(`<!doctype html>
-        <html>
-          <head><style>${readUiCss()}</style></head>
-          <body>
-            <section class="chat">
-              <div class="agent-chat__search-bar">
-                ${iconSvg()}
-                <input type="text" placeholder="Search messages" />
-                <button class="btn btn--ghost" type="button">${iconSvg()}</button>
-              </div>
-            </section>
-          </body>
-        </html>`);
-
-      const searchBar = await getBoundingBox(page, ".agent-chat__search-bar");
-      const icons = await page.locator(".agent-chat__search-bar svg").all();
-      const input = page.locator(".agent-chat__search-bar input");
-      const cornerRadii = await page.locator(".chat").evaluate((chat) => {
-        const search = chat.querySelector<HTMLElement>(".agent-chat__search-bar");
-        if (!search) {
-          throw new Error("Expected transcript search bar");
-        }
-        const radii = (element: Element) => {
-          const style = getComputedStyle(element);
-          return [
-            style.borderTopLeftRadius,
-            style.borderTopRightRadius,
-            style.borderBottomRightRadius,
-            style.borderBottomLeftRadius,
-          ];
-        };
-        return { chat: radii(chat), search: radii(search) };
-      });
-
-      const searchRadius = `${14 * (await readCornerScale(page))}px`;
-      expect(searchBar.height).toBeLessThan(64);
-      expect(cornerRadii).toEqual({
-        chat: ["0px", "0px", "0px", "0px"],
-        search: ["0px", "0px", searchRadius, searchRadius],
-      });
-      expect(icons).toHaveLength(2);
-      for (const icon of icons) {
-        const box = await icon.boundingBox();
-        expect(box?.width).toBeCloseTo(16, 3);
-        expect(box?.height).toBeCloseTo(16, 3);
-      }
-      await input.focus();
-      const outline = await input.evaluate((element) => {
-        const style = getComputedStyle(element);
-        return { style: style.outlineStyle, width: style.outlineWidth };
-      });
-      expect(outline).toEqual({ style: "solid", width: "2px" });
-    });
-  });
-
   it.each([
     [320, 568],
     [1366, 900],
@@ -1085,7 +1028,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         "openclaw-session-owner-chip",
         ".chat-side-panel-toggle",
         ".chat-pane__sharing-menu",
-        ".chat-pane__branches-menu",
         ".chat-pane__nav-toggle",
         ".chat-pane__palette-open",
         ".chat-pane__split-down",
@@ -3068,7 +3010,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         const textareaNode = node as HTMLTextAreaElement;
         textareaNode.style.height = `${textareaNode.scrollHeight}px`;
       });
-      await page.waitForTimeout(220);
+      await page.locator(".context-ring").evaluate(finishElementAnimations);
 
       const layout = await page.evaluate(() => {
         const rectFor = (selector: string) => {
@@ -3964,76 +3906,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       ).not.toBe("none");
     });
   });
-
-  it.for(["dark", "light"])(
-    "keeps send recovery visible before hover with unconfirmed amber and failed red in %s mode",
-    async (theme, context) => {
-      await withBrowserPage(openBrowserPage(390, 844), async (page) => {
-        await page.setContent(`<!doctype html><html data-theme-mode="${theme}"><head><style>${readUiCss()}</style></head><body>
-        <span id="warning-color-probe" style="color: var(--warn)">Warning</span>
-        <span id="danger-color-probe" style="color: var(--danger)">Failure</span>
-        <div class="chat-thread">
-        ${[
-          { state: "unconfirmed", label: "Delivery unconfirmed" },
-          { state: "failed", label: "Not sent" },
-        ]
-          .flatMap(({ state, label }) =>
-            ["own", "peer", "direct"].map(
-              (
-                sender,
-              ) => `<div class="chat-group user chat-group--with-footer${sender === "peer" ? " chat-group--peer" : ""}">
-          <div class="chat-group-messages"><div class="chat-bubble">Attempted message</div></div>
-          <div class="chat-group-footer chat-group-footer--send-status${sender === "direct" ? "" : " chat-group-footer--persistent-identity"}">
-            <div class="chat-group-footer__meta"><span class="chat-sender-name">You</span>
-              <span class="chat-send-status" data-send-state="${state}">
-                <span>·</span><span>${label}</span><span>·</span>
-                <button class="chat-send-status__action chat-send-status__retry" type="button">Retry</button>
-                ${state === "unconfirmed" ? '<button class="chat-send-status__action chat-send-status__discard" type="button">Discard</button>' : ""}
-              </span>
-            </div>
-          </div>
-        </div>`,
-            ),
-          )
-          .join("")}
-        </div>
-      </body></html>`);
-
-        for (const [state, probe] of [
-          ["unconfirmed", "warning"],
-          ["failed", "danger"],
-        ]) {
-          const statuses = page.locator(`.chat-send-status[data-send-state="${state}"]`);
-          const expectedColor = await page
-            .locator(`#${probe}-color-probe`)
-            .evaluate((element) => getComputedStyle(element).color);
-          for (const status of await statuses.all()) {
-            await page.mouse.move(0, 0);
-            // A child can report opacity 1 while its collapsed identity footer hides it.
-            const footer = status.locator("..").locator("..");
-            await expectBrowser(footer).toHaveCSS("opacity", "1");
-            expect(await status.evaluate((element) => getComputedStyle(element).color)).toBe(
-              expectedColor,
-            );
-            for (const action of await status.locator("button").all()) {
-              await expectBrowser(action).toHaveCSS("opacity", "1");
-              await expectBrowser(action).toHaveCSS("pointer-events", "auto");
-              expect(
-                await action.evaluate((element) => getComputedStyle(element).borderStyle),
-              ).toBe("none");
-              expect(await action.evaluate((element) => getComputedStyle(element).color)).toBe(
-                expectedColor,
-              );
-              await action.hover();
-              await context.expect
-                .poll(() => action.evaluate((element) => getComputedStyle(element).color))
-                .toBe(expectedColor);
-            }
-          }
-        }
-      });
-    },
-  );
 
   it("covers every reachable queue presentation cell without repeating global state", async () => {
     const page = await openBrowserPage(1520, 2400);

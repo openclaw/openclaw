@@ -562,17 +562,49 @@ describe("recoverEmbeddedRunOverflow", () => {
     },
   );
 
-  it("caps overflow compaction at three attempts across shared recovery state", async () => {
+  it.each([
+    { successful: false, tokensAfter: 80_000 },
+    { successful: false, tokensAfter: 150_000 },
+    { successful: false, tokensAfter: 160_000 },
+    { successful: true, tokensAfter: 150_000 },
+  ])("bounds recovery until completed progress ($successful, $tokensAfter)", async (testCase) => {
+    mocks.compact.mockResolvedValue({
+      ok: true,
+      compacted: true,
+      result: {
+        summary: "Committed summary",
+        tokensBefore: 150_000,
+        tokensAfter: testCase.tokensAfter,
+      },
+    });
     const state = createEmbeddedRunContextRecoveryState();
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      expect(await recoverEmbeddedRunOverflow(makeInput({ state }))).toEqual({ action: "retry" });
+    let committedCompactions = 0;
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const input = makeInput({ state });
+      input.runParams.onAutoCompactionSucceeded = () => committedCompactions++;
+      const result = await recoverEmbeddedRunOverflow(input);
+      expect(result).toMatchObject(
+        attempt < 3 || testCase.successful
+          ? { action: "retry" }
+          : { action: "surface", kind: "context_overflow" },
+      );
+      state.observeContextAccounting({
+        kind: "model",
+        contextTokens: 20,
+        successful: testCase.successful,
+      });
     }
+    expect(committedCompactions).toBe(testCase.successful ? 4 : 3);
+  });
 
-    const exhausted = await recoverEmbeddedRunOverflow(makeInput({ state }));
-
-    expect(exhausted).toMatchObject({ action: "surface", kind: "context_overflow" });
-    expect(state.overflowCompactionAttempts).toBe(3);
-    expect(mocks.compact).toHaveBeenCalledTimes(3);
+  it("permits truncation again after completed model progress", async () => {
+    mocks.compact.mockResolvedValue({ ok: false, compacted: false, reason: "nothing to compact" });
+    mocks.sessionLikelyHasOversizedToolResults.mockReturnValue(true);
+    mocks.truncateOversizedToolResults.mockReturnValue({ truncated: true, truncatedCount: 1 });
+    const input = makeInput({ attempt: { messagesSnapshot: [] } });
+    expect(await recoverEmbeddedRunOverflow(input)).toEqual({ action: "retry" });
+    input.state.observeContextAccounting({ kind: "model", contextTokens: 20, successful: true });
+    expect(await recoverEmbeddedRunOverflow(input)).toEqual({ action: "retry" });
   });
 
   it("bypasses compaction for a compaction_failure overflow", async () => {

@@ -27,9 +27,18 @@ describePosix("native accepted auto-merge recovery", () => {
         cancellation: { state: "confirmed", outcome: accepted, actor: "fixture-operator" },
       });
       const retired = f.git(["rev-parse", outcomeRef]);
+      const retiredRecord = f.record();
+      expect(retiredRecord).not.toHaveProperty("transport");
       const requested = f.git(["rev-list", "--parents", "-n", "1", retired]).split(" ").at(-1)!;
       const replacement = f.replacePreparedHead();
-      f.save({ ...f.state(), mode: "success", pr: { ...f.state().pr, mergeStateStatus: "CLEAN" } });
+      f.save({
+        ...f.state(),
+        mode: "success",
+        pooledMergeBlocked: true,
+        quotaAt: "observe",
+        quotaFailuresRemaining: 0,
+        pr: { ...f.state().pr, mergeStateStatus: "CLEAN" },
+      });
       const recovered = f.run(false, f.repo, "squash", retired, replacement);
       expect(recovered.status, recovered.output).toBe(0);
       expect(f.state()).toMatchObject({ mutations: 2, cancellations: 1, posts: 1 });
@@ -38,6 +47,18 @@ describePosix("native accepted auto-merge recovery", () => {
         head: replacement,
         recovery: { outcome: retired, replacementHead: replacement },
       });
+      expect(f.record()).not.toHaveProperty("transport");
+      expect(JSON.parse(f.git(["show", `${retired}:outcome.json`]))).toEqual(retiredRecord);
+      expect(f.state().restMergePayload).toBeNull();
+      expect(f.state().graphqlMergePayloads).toEqual([
+        {
+          pullRequestId: "fixture-pr",
+          expectedHeadOid: replacement,
+          mergeMethod: "SQUASH",
+          commitBody: f.state().mergeBody,
+        },
+      ]);
+      expect(f.state().mergeBody).toContain(f.state().previewBody);
       expect(f.git(["merge-base", "--is-ancestor", accepted, outcomeRef])).toBe("");
       for (const [name, contents] of captures) {
         expect(f.git(["show", `${requested}:${name}`])).toBe(contents.trim());

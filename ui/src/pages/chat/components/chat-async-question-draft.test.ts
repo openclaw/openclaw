@@ -660,3 +660,77 @@ it("keeps answering available with an unsaved warning when restoring a dismissal
   expect(reopened.storageError).toContain("not saved");
   expect(reopened.drafts.get(question.itemId)?.answers.get("0")?.freeText).toBe("Saved answer");
 });
+
+it.each(["mounted", "reloaded"] as const)(
+  "preserves ambiguous free-text answers when a failed queued answer is discarded (%s)",
+  async (mount) => {
+    const multiQuestion = {
+      itemId: "free-text",
+      questions: [{ title: "Audience?" }, { title: "Format?" }],
+    };
+    const answers = ["Include this example:\n\n> Format?\n\nKeep quoted text", "Detailed"];
+    let stored: unknown;
+    storage.read.mockImplementation(async () =>
+      stored ? { status: "found", draft: stored } : { status: "not-found" },
+    );
+    storage.write.mockImplementation(async (_scope, draft, options) => {
+      stored = { ...draft, writeId: options.writeId };
+      return { status: "persisted" };
+    });
+    const current = state();
+    const submit = vi.fn(async (_message: string) => true);
+    current.transcriptRenderContext.onAsyncQuestionSubmit = submit;
+    const activeProps = {
+      ...props,
+      onAsyncQuestionSubmit: submit,
+      messages: [{ role: "assistant", openclawAsyncDelivery: multiQuestion }],
+    };
+    const initial = createAsyncQuestionPresentation(current, activeProps);
+    const panel = createAsyncQuestionPanelProps(multiQuestion, initial, {});
+    for (const [index, freeText] of answers.entries()) {
+      panel.model.drafts.set(String(index), { selected: new Set(), freeText });
+    }
+    panel.onChange?.();
+    await panel.onSubmit?.({ "0": [answers[0]!], "1": [answers[1]!] });
+    await settled(current);
+    const queued = {
+      id: "failed-free-text",
+      asyncQuestionItemId: multiQuestion.itemId,
+      text: submit.mock.calls[0]![0],
+      createdAt: 1,
+      sendState: "failed" as const,
+    };
+    const recoveredState = mount === "reloaded" ? state() : current;
+    const deliveryProps = { ...activeProps, queue: [queued] };
+    createAsyncQuestionPresentation(recoveredState, deliveryProps);
+    await settled(recoveredState);
+    const delivered = createAsyncQuestionPresentation(recoveredState, deliveryProps);
+    expect(delivered.pending).toEqual([]);
+    const summary = document.createElement("div");
+    render(renderAsyncQuestionSummary(multiQuestion, delivered), summary);
+    expect(summary.textContent).toContain(queued.text);
+    const revisedText = queued.text.replace("Include this example:", "Updated in the outbox:");
+    render(
+      renderAsyncQuestionSummary(
+        multiQuestion,
+        createAsyncQuestionPresentation(recoveredState, {
+          ...deliveryProps,
+          queue: [{ ...queued, text: revisedText }],
+        }),
+      ),
+      summary,
+    );
+    expect(summary.textContent).toContain(revisedText);
+    expect(summary.textContent).not.toContain("Include this example:");
+    render(null, summary);
+    delivered.discard(queued);
+    const reopened = createAsyncQuestionPresentation(recoveredState, activeProps);
+    expect(reopened.pending.map((entry) => entry.itemId)).toEqual([multiQuestion.itemId]);
+    expect(
+      [...createAsyncQuestionPanelProps(multiQuestion, reopened, {}).model.drafts.values()].map(
+        (answer) => answer.freeText,
+      ),
+    ).toEqual(answers);
+    await settled(recoveredState);
+  },
+);

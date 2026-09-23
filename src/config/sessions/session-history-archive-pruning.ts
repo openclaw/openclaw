@@ -2,7 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
-import type { SqliteWalHealth } from "../../infra/sqlite-wal-checkpoint.js";
+import type {
+  SqliteWalCheckpointSnapshot,
+  SqliteWalHealth,
+} from "../../infra/sqlite-wal-checkpoint.js";
 import type { SqliteWalReclamationResult } from "../../infra/sqlite-wal-reclamation.js";
 import {
   openOpenClawAgentDatabase,
@@ -49,7 +52,7 @@ async function withArchivePruningDatabase<T>(
 
 type PageReclamation = {
   reclaimPages?: (maxPages?: number) => Promise<SqliteWalReclamationResult>;
-  onCheckpointIncomplete?: (checkpoint: SqliteWalHealth | undefined) => void;
+  onCheckpointIncomplete?: (checkpoint: SqliteWalCheckpointSnapshot | undefined) => void;
 };
 
 export type SessionArchivePruningResult = {
@@ -94,7 +97,7 @@ export async function reclaimSqliteFreePages(
         diagnostics.checkpointMaxMs ?? 0,
         result.checkpointMaxMs,
       );
-      diagnostics.checkpoint = result.checkpoint;
+      diagnostics.checkpoint = result.checkpoint?.health;
     }
     if (!result.checkpointCompleted) {
       limits?.onCheckpointIncomplete?.(result.checkpoint);

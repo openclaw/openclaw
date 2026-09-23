@@ -1,7 +1,6 @@
 /** Executes isolated cron prompts with model fallbacks and interim-ack retries. */
 import { createHash } from "node:crypto";
-import { resolveGroupToolPolicyOutcome } from "../../agents/agent-tools.policy.js";
-import type { BootstrapContextMode } from "../../agents/bootstrap-files.js";
+import { resolveGroupToolPolicy } from "../../agents/agent-tools.policy.js";
 import { resolveCliBackendConfig } from "../../agents/cli-backends.js";
 import {
   cliBackendAcceptsAuthProfileForwarding,
@@ -20,7 +19,10 @@ import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook
 import { findModelInCatalog, modelSupportsInput } from "../../agents/model-catalog-lookup.js";
 import { resolveConfiguredThinkingDefault } from "../../agents/model-thinking-default.js";
 import { rootedAgentRunParams } from "../../agents/rooted-run-params.js";
-import { resolveScheduledToolPolicyContext } from "../../agents/scheduled-tool-policy.js";
+import {
+  resolveScheduledToolCallerContext,
+  resolveScheduledToolPolicyContext,
+} from "../../agents/scheduled-tool-policy.js";
 import { withLocalSessionPlacementTurnSettlement } from "../../agents/session-placement-admission.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
 import { needsThinkHydration } from "../../agents/thinking-runtime.js";
@@ -77,7 +79,6 @@ import {
 } from "./run-session-state.js";
 import { resolveThinkingSelection } from "./run.runtime.js";
 import type {
-  AgentTurnPayload,
   CronCompletedPromptRun,
   CronExecutionResult,
   CronRunnerStartedInfo,
@@ -131,15 +132,6 @@ function isCommandStyleCronMessage(message: string): boolean {
   return !message.trim().includes("\n") && COMMAND_STYLE_CRON_PREFIX.test(message.trim());
 }
 
-function resolveCronBootstrapContextMode(
-  payload: AgentTurnPayload,
-): BootstrapContextMode | undefined {
-  // Command-like cron prompts benefit from lightweight bootstrap context so
-  // simple scheduled command tasks do not spend budget on full repo context.
-  const lightweight = payload?.lightContext ?? isCommandStyleCronMessage(payload?.message ?? "");
-  return lightweight ? "lightweight" : undefined;
-}
-
 /** Creates the model-fallback executor for one isolated cron prompt run. */
 function createCronPromptExecutor(
   params: Omit<
@@ -168,15 +160,18 @@ function createCronPromptExecutor(
   let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
     params.cronSession.sessionEntry.systemPromptReport,
   );
-  const bootstrapContextMode = resolveCronBootstrapContextMode(params.agentPayload);
-  const validatedScheduledToolPolicy = resolveCronScheduledToolPolicy({
-    toolsAllow: params.agentPayload?.toolsAllow,
-    scheduledToolPolicy: params.job.scheduledToolPolicy,
-    owner: params.job.owner,
-  });
+  const bootstrapContextMode =
+    (params.agentPayload?.lightContext ??
+    isCommandStyleCronMessage(params.agentPayload?.message ?? ""))
+      ? "lightweight"
+      : undefined;
   const scheduledToolPolicy = resolveScheduledToolPolicyContext({
     toolsAllow: params.agentPayload?.toolsAllow,
-    scheduledToolPolicy: validatedScheduledToolPolicy,
+    scheduledToolPolicy: resolveCronScheduledToolPolicy({
+      toolsAllow: params.agentPayload?.toolsAllow,
+      scheduledToolPolicy: params.job.scheduledToolPolicy,
+      owner: params.job.owner,
+    }),
     callerOrigin: params.job.toolsAllowProvenance?.callerOrigin,
     execTarget: params.job.toolsAllowExecTarget,
   });
@@ -184,17 +179,15 @@ function createCronPromptExecutor(
   const sourceReplyDeliveryMode = sourceDelivery.sourceReplyDeliveryMode;
   const messageChannel = sourceDelivery.target.channel ?? params.resolvedDelivery.channel;
   if (scheduledToolPolicy?.mode === "account") {
-    const policyOutcome = resolveGroupToolPolicyOutcome({
+    const callerContext = resolveScheduledToolCallerContext({ scheduledToolPolicy });
+    resolveGroupToolPolicy({
       config: params.cfgWithAgentDefaults,
       sessionKey: scheduledToolPolicy.ownerSessionKey,
-      messageProvider: messageChannel,
+      messageProvider: callerContext.local ? messageChannel : (callerContext.channel ?? undefined),
       accountId: scheduledToolPolicy.ownerAccountId,
       requireConfiguredAccount: true,
       senderPolicyMode: "never",
     });
-    if (policyOutcome.kind === "account-unavailable") {
-      throw new Error(policyOutcome.message);
-    }
   }
   const finalizePromptForResolvedTools = ({
     prompt,
@@ -269,6 +262,7 @@ function createCronPromptExecutor(
       messageActionTurnCapability,
       close: closePromptAdmission,
     } = prepareCronPromptRunAdmission({
+      admissionSource: params.admissionSource,
       cfg: params.cfgWithAgentDefaults,
       agentId: params.agentId,
       runId,

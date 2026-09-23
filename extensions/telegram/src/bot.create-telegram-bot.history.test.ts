@@ -50,6 +50,7 @@ describe("createTelegramBot group history", () => {
     async (senderSource) => {
       const chat = { id: -100777111222, type: "channel", title: "Private Channel" } as const;
       loadConfig.mockReturnValue({
+        messages: { inbound: { debounceMs: 0 } },
         channels: {
           telegram: {
             groupPolicy: "open",
@@ -98,6 +99,7 @@ describe("createTelegramBot group history", () => {
 
   it("keeps a bounded automatic window while retaining quiet earlier discussion after reopen", async () => {
     loadConfig.mockReturnValue({
+      messages: { inbound: { debounceMs: 0 } },
       channels: {
         telegram: {
           groupPolicy: "allowlist",

@@ -27,11 +27,52 @@ import {
 } from "./components/chat-transcript.test-support.ts";
 import { reduceChatSessionProjection } from "./history-merge.ts";
 import { adoptStartedChatRun } from "./run-lifecycle.ts";
+import { RealtimeTalkSession } from "./talk/session.ts";
 
 beforeEach(installTranscriptDomMocks);
 afterEach(resetTranscriptTestDom);
 
 describe("mounted pane session event ownership", () => {
+  it("retires Talk on a provider pause and prevents it from starting again", async () => {
+    const row: GatewaySessionRow = {
+      key: "agent:main:provider-pause",
+      agentId: "main",
+      sessionId: "provider-pause",
+      kind: "direct",
+      updatedAt: 1,
+    };
+    const { sessions, mount, emitGatewayEvent } = createMountedPanes([row]);
+    await sessions.refresh({ agentId: "main", force: true });
+    const pane = mount(row.key);
+    await refreshPane(pane);
+    const client = pane.state.client;
+    if (!client) {
+      throw new Error("Expected connected pane");
+    }
+    const talk = new RealtimeTalkSession(client, row.key);
+    const stop = vi.spyOn(talk, "stop").mockResolvedValue(undefined);
+    pane.state.realtimeTalkSession = talk;
+    pane.state.realtimeTalkActive = true;
+    emitGatewayEvent("sessions.changed", {
+      sessionKey: row.key,
+      agentId: "main",
+      session: {
+        ...row,
+        updatedAt: 2,
+        providerReview: {
+          id: "provider-review",
+          runId: "stopped-run",
+          canContinue: false,
+        },
+      },
+    });
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(pane.state.realtimeTalkSession).toBeNull();
+    expect(pane.state.realtimeTalkActive).toBe(false);
+    await pane.state.toggleRealtimeTalk();
+    expect(pane.state.realtimeTalkSession).toBeNull();
+  });
+
   it("publishes one shared event and applies its message to every mounted pane", async () => {
     const row: GatewaySessionRow = {
       key: "agent:main:shared",
@@ -144,7 +185,7 @@ describe("mounted pane session event ownership", () => {
   );
 
   it.each([false, true])(
-    "keeps a same-key successor and its first message after retirement (reentrant publication: %s)",
+    "keeps a same-key successor when its old descriptor retires (reentrant publication: %s)",
     async (reentrant) => {
       const previous: GatewaySessionRow = {
         key: "agent:main:replaced",
@@ -160,8 +201,21 @@ describe("mounted pane session event ownership", () => {
         updatedAt: 3,
         label: "Newest session",
       };
+      const message = {
+        role: "user",
+        content: "First message in the successor session",
+        __openclaw: { id: "successor-first-message", seq: 1 },
+      };
       const listed = [previous];
-      const { sessions, mount, emitGatewayEvent } = createMountedPanes(listed);
+      const history = () => ({
+        messages: listed[0]?.sessionId === next.sessionId ? [message] : [],
+        sessionInfo: listed[0],
+        sessionId: listed[0]?.sessionId,
+      });
+      const { sessions, mount, emitGatewayEvent } = createMountedPanes(listed, "main", undefined, {
+        "chat.history": history,
+        "chat.startup": history,
+      });
       let armed = false;
       const unsubscribe = sessions.subscribe((state) => {
         if (armed && state.result?.sessions.some((row) => row.sessionId === next.sessionId)) {
@@ -179,25 +233,20 @@ describe("mounted pane session event ownership", () => {
       listed.splice(0, 1, next);
       await sessions.refresh({ agentId: "main", force: true });
       expect(selectedChatSessionRow(pane.state)).toMatchObject(reentrant ? newest : next);
-      await pane.updateComplete;
-
       emitGatewayEvent("session.message", {
         sessionKey: next.key,
         agentId: "main",
         sessionId: next.sessionId,
-        hasActiveRun: true,
-        messageId: "successor-user",
+        messageId: "successor-first-message",
         messageSeq: 1,
-        message: {
-          role: "user",
-          content: "First successor prompt",
-          __openclaw: { id: "successor-user", seq: 1 },
-        },
-        session: { ...next, updatedAt: 4, hasActiveRun: true, status: "running" },
+        message,
+        session: { ...(reentrant ? newest : next), updatedAt: 4 },
       });
-      expect(pane.state.chatMessages).toContainEqual(
-        expect.objectContaining({ role: "user", content: "First successor prompt" }),
-      );
+      expect.soft(pane.state.currentSessionId).toBe(previous.sessionId);
+      expect.soft(pane.state.chatMessages).toEqual([]);
+      await refreshPane(pane);
+      expect(pane.state.currentSessionId).toBe(next.sessionId);
+      expect(pane.state.chatMessages).toContainEqual(expect.objectContaining(message));
     },
   );
 
@@ -259,8 +308,8 @@ describe("mounted pane session event ownership", () => {
     vi.spyOn(sessions, "observeRow").mockImplementation((target, listener, options) => {
       const observation = observeRow(
         target,
-        (row) => {
-          listener(row);
+        (row, notification) => {
+          listener(row, notification);
           if (
             options?.onEvent &&
             row !== null &&
@@ -909,13 +958,14 @@ describe("mounted pane session event ownership", () => {
           }
         };
         assertProjection();
+        expect(delivered).toHaveBeenCalledOnce();
         if (generation === "stale") {
-          expect(delivered).not.toHaveBeenCalled();
-        } else {
-          expect(delivered).toHaveBeenCalledOnce();
-          if (generation === "rowless" || reentrant) {
-            expect(delivered.mock.calls[0]?.[1]).toEqual({ applied: false });
-          }
+          expect(delivered.mock.calls[0]?.[1]).toEqual({
+            applied: false,
+            generationRejected: true,
+          });
+        } else if (generation === "rowless" || reentrant) {
+          expect(delivered.mock.calls[0]?.[1]).toEqual({ applied: false });
         }
         laterHistory.reject(new Error("Incarnation history temporarily unavailable"));
         await refresh;

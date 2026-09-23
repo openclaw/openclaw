@@ -13,8 +13,8 @@ import {
   splitSkillSourcePlan,
   type WorkspaceSkillSourcePlan,
 } from "../loading/workspace-skill-sources.js";
-import { areOrderedArraysEqual } from "./ordered-array-equality.js";
 import { acquireSkillsAncestorWatcher } from "./refresh-ancestor-watch.js";
+import { createSkillsContentWatcher } from "./refresh-content-watch.js";
 import { createRawSkillFileScheduler } from "./refresh-file-stability.js";
 import {
   closeRemoteSkillsWatchers,
@@ -29,7 +29,7 @@ import {
   suspendSkillsSnapshotSources,
   type SkillsSourceScope,
 } from "./refresh-state.js";
-import { joinSkillsWatcherCloses, teardownSkillsPathWatcher } from "./refresh-watch-close.js";
+import { joinSkillsWatcherCloses } from "./refresh-watch-close.js";
 import {
   createSkillsWatchPathFilter,
   getRawWatchedPath,
@@ -41,6 +41,7 @@ import {
   toWatchRoot,
 } from "./refresh-watch-path.js";
 import {
+  compareSkillsWatchTargets,
   resolveSkillsWatchTargets,
   type SkillsWatchTargetCacheEntry,
   type WatchTarget,
@@ -103,7 +104,7 @@ type PendingSkillsWatchChange = {
   state: SkillsPathWatchState;
   watcherKeys: Iterable<string>;
   changedPath?: string;
-  change: SkillsWatchChange | "initial-scan";
+  change: SkillsWatchChange | "initial-scan" | "unavailable";
 };
 
 function publishSkillsWatchChanges(changes: PendingSkillsWatchChange[]): void {
@@ -129,6 +130,7 @@ function publishSkillsWatchChanges(changes: PendingSkillsWatchChange[]): void {
   for (const [workspaceDir, entries] of affected) {
     const scopes = new Map<SkillsWatchChange, SkillsSourceScope[] | undefined>();
     let changedPath: string | undefined;
+    let unavailable = false;
     for (const { pending, watcherKey, targets } of entries) {
       const owner = workspaceWatchOwners.get(watcherKey);
       const { targetPath, state, change } = pending;
@@ -146,6 +148,7 @@ function publishSkillsWatchChanges(changes: PendingSkillsWatchChange[]): void {
         workspaceWatchTargetCache.delete(watcherKey);
         changedPath = pending.changedPath;
       }
+      unavailable ||= change === "unavailable";
       const initialScan = change === "initial-scan";
       const shared = initialScan
         ? owner.sharedScanPending
@@ -179,7 +182,7 @@ function publishSkillsWatchChanges(changes: PendingSkillsWatchChange[]): void {
       bumpSkillsSnapshotVersion({
         workspaceDir,
         sourceScopes: scopes.get("skills"),
-        reason: "watch",
+        reason: unavailable ? "watch-unavailable" : "watch",
         changedPath,
       });
     }
@@ -242,23 +245,7 @@ function createSkillsPathWatcher(
   }
   const pendingAncestors = new Set(ancestorRoots);
   let contentReady = target.path !== target.watchRoot;
-  const watcher =
-    target.path === target.watchRoot
-      ? runInSkillsWatcherContext(() =>
-          chokidar.watch(target.path, {
-            ignoreInitial: true,
-            followSymlinks: false,
-            usePolling,
-            // Identity metadata sits one level below the deepest admitted skill.
-            depth: target.depth + 1,
-            awaitWriteFinish: {
-              stabilityThreshold: SKILLS_WATCH_DEBOUNCE_MS,
-              pollInterval: 100,
-            },
-            ignored: pathFilter.ignored,
-          }),
-        )
-      : undefined;
+  let content: ReturnType<typeof createSkillsContentWatcher> | undefined;
   const releaseAncestors: (() => void)[] = [];
   const state: SkillsPathWatchState = {
     closed: false,
@@ -268,9 +255,7 @@ function createSkillsPathWatcher(
       }
       state.closed = true;
       clearTimeout(state.timer);
-      if (watcher) {
-        void teardownSkillsPathWatcher({ watcher });
-      }
+      content?.close();
       for (const release of releaseAncestors) {
         release();
       }
@@ -318,6 +303,7 @@ function createSkillsPathWatcher(
     for (const watcherKey of state.subscribers) {
       const targets = workspaceWatchTargets.get(watcherKey);
       if (
+        result === "error" ||
         targets?.every((entry) => {
           const current = pathWatchers.get(entry.path);
           return current && !current.closed && current.initialScan !== "pending";
@@ -327,7 +313,12 @@ function createSkillsPathWatcher(
       }
     }
     publishSkillsWatchChanges([
-      { targetPath: target.path, state, watcherKeys: readySubscribers, change: "initial-scan" },
+      {
+        targetPath: target.path,
+        state,
+        watcherKeys: readySubscribers,
+        change: result === "error" ? "unavailable" : "initial-scan",
+      },
     ]);
   };
 
@@ -359,27 +350,28 @@ function createSkillsPathWatcher(
       settleInitialScan("ready");
     }
   };
-  watcher?.on("ready", () => {
-    contentReady = true;
-    ready();
-  });
   const onChange = (event: string, changedPath: string) => {
     const ancestorChanged = event === "ancestor";
     if (
       !isCurrent() ||
-      ((!watcher || ancestorChanged || event === "addDir" || event === "unlinkDir") &&
+      ((!content || ancestorChanged || event === "addDir" || event === "unlinkDir") &&
         // A coalesced native rename can replace an ancestor and recreate this
         // same path before delivery, leaving the content watch on the old inode.
-        reconcileRoot(changedPath, ancestorChanged && Boolean(watcher)))
+        reconcileRoot(changedPath, ancestorChanged && Boolean(content)))
     ) {
       return;
     }
     const skillsRelevant = ancestorChanged || pathFilter.isRelevant(event, changedPath);
+    if (skillsRelevant && (event === "addDir" || event === "unlinkDir")) {
+      content?.structureChanged();
+      if (event === "addDir") {
+        content?.rescan();
+      }
+    }
     if (skillsRelevant || pathFilter.isSupportingPath(changedPath)) {
       schedule(changedPath, skillsRelevant ? "skills" : "supporting");
     }
   };
-  watcher?.on("all", onChange);
   const handleRaw = (_eventName: string, rawPath: unknown, details: unknown) => {
     if (!isCurrent()) {
       return;
@@ -421,8 +413,7 @@ function createSkillsPathWatcher(
       handleRaw(...args);
     }
   };
-  watcher?.on("raw", onRaw);
-  const onError = (err: unknown) => {
+  const onError = (err: unknown, rescan = false) => {
     if (!isCurrent()) {
       return;
     }
@@ -446,10 +437,43 @@ function createSkillsPathWatcher(
     }
     log.warn(`skills watcher error (${target.path}): ${String(err)}`);
     // A failed scan may never emit ready. Let healthy roots reconcile; if the
-    // failed scan continues, its eventual ready still closes that read gap.
+    // failed content scan recovers, verified coverage closes that read gap.
     settleInitialScan("error");
+    if (rescan) {
+      schedule();
+    }
   };
-  watcher?.on("error", onError);
+  if (target.path === target.watchRoot) {
+    content = createSkillsContentWatcher({
+      watch: () =>
+        runInSkillsWatcherContext(() =>
+          chokidar.watch(target.path, {
+            ignoreInitial: true,
+            followSymlinks: false,
+            usePolling,
+            // Identity metadata sits one level below the deepest admitted skill.
+            depth: target.depth + 1,
+            awaitWriteFinish: { stabilityThreshold: SKILLS_WATCH_DEBOUNCE_MS, pollInterval: 100 },
+            ignored: pathFilter.ignored,
+          }),
+        ),
+      isCurrent,
+      isStructuralRaw: pathFilter.isStructuralRaw,
+      ready: (rescan) => {
+        contentReady = true;
+        if (rescan) {
+          publishSkillsWatchChanges([
+            { targetPath: target.path, state, watcherKeys: state.subscribers, change: "skills" },
+          ]);
+        } else {
+          ready();
+        }
+      },
+      changed: onChange,
+      raw: onRaw,
+      error: onError,
+    });
+  }
   for (const root of ancestorRoots) {
     releaseAncestors.push(
       acquireSkillsAncestorWatcher(root, usePolling, {
@@ -465,7 +489,7 @@ function createSkillsPathWatcher(
           pendingAncestors.delete(root);
           onError(error);
           // Missing roots still need the ancestor's recovery scan.
-          if (watcher) {
+          if (content) {
             ready();
           }
         },
@@ -493,6 +517,7 @@ function subscribeWorkspaceToPath(
   }
   if (existing) {
     // A changed ancestor or deeper target needs a rebuilt watcher, preserving subscribers.
+    existing.close();
     const next = createSkillsPathWatcher(
       {
         ...watchTarget,
@@ -513,7 +538,6 @@ function subscribeWorkspaceToPath(
       }
     }
     next.subscribers.add(workspaceDir);
-    existing.close();
     pathWatchers.set(watchTarget.path, next);
     return;
   }
@@ -655,6 +679,14 @@ export function ensureSkillsWatcher(params: {
     bumpSkillsSnapshotVersion({ workspaceDir, refreshInputs, reason: "watch" });
     return;
   }
+  const failedTargets = previousTargets.filter(
+    (target) => pathWatchers.get(target.path)?.initialScan === "error",
+  );
+  if (failedTargets.length > 0) {
+    // A failed verifier leaves observation incomplete. Preparation must rescan
+    // filesystem-derived targets before reconciling only the affected sources.
+    workspaceWatchTargetCache.delete(watcherKey);
+  }
   const cachedTargets = workspaceWatchTargetCache.get(watcherKey);
   const resolvedTargets = resolveSkillsWatchTargets(
     workspaceDir,
@@ -669,33 +701,18 @@ export function ensureSkillsWatcher(params: {
     workspaceWatchTargetCache.set(watcherKey, resolvedTargets);
   }
   const watchTargets = resolvedTargets.targets;
-  // Resolved targets have stable sorted order, so positional equality is intentional.
-  const targetsMatch = (previous: WatchTarget, next: WatchTarget) =>
-    previous.path === next.path &&
-    previous.watchRoot === next.watchRoot &&
-    previous.depth === next.depth &&
-    previous.executionOnly === next.executionOnly;
-  const targetsUnchanged = areOrderedArraysEqual(previousTargets, watchTargets, targetsMatch);
-  const watcherDepthsCoverTargets = watchTargets.every(
-    (watchTarget) => (pathWatchers.get(watchTarget.path)?.depth ?? -1) >= watchTarget.depth,
-  );
-  if (targetsUnchanged && watcherDepthsCoverTargets) {
-    return;
-  }
   const coveredTargets = previousTargets.length
     ? previousTargets
     : Array.from(workspaceWatchOwners).flatMap(([key, other]) =>
         other.workspaceDir === workspaceDir ? (workspaceWatchTargets.get(key) ?? []) : [],
       );
-  const sharedTargetsChanged =
-    watchTargets.some(
-      (target) =>
-        !target.executionOnly && !coveredTargets.some((previous) => targetsMatch(previous, target)),
-    ) ||
-    previousTargets.some(
-      (previous) =>
-        !previous.executionOnly && !watchTargets.some((target) => targetsMatch(previous, target)),
-    );
+  const targetChanges = compareSkillsWatchTargets(previousTargets, watchTargets, coveredTargets);
+  const watcherDepthsCoverTargets = watchTargets.every(
+    (watchTarget) => (pathWatchers.get(watchTarget.path)?.depth ?? -1) >= watchTarget.depth,
+  );
+  if (targetChanges.targetsUnchanged && watcherDepthsCoverTargets && failedTargets.length === 0) {
+    return;
+  }
   const nextTargetKeys = new Set(watchTargets.map((target) => target.path));
   for (const watchTarget of previousTargets) {
     if (!nextTargetKeys.has(watchTarget.path)) {
@@ -709,15 +726,25 @@ export function ensureSkillsWatcher(params: {
   owner.sharedScanPending ||= watchTargets.some(
     (target) => !target.executionOnly && pathWatchers.get(target.path)?.initialScan !== "ready",
   );
+  const joinedUnavailable = watchTargets.some(
+    (target) =>
+      pathWatchers.get(target.path)?.initialScan === "error" &&
+      !previousTargets.some((previous) => previous.path === target.path),
+  );
 
   // Acquisition must invalidate reads cached during an unwatched interval,
   // before the first consumer runs or the asynchronous initial scan completes.
-  if (!targetsUnchanged) {
+  if (!targetChanges.targetsUnchanged || failedTargets.length > 0) {
     bumpSkillsSnapshotVersion({
       workspaceDir,
-      sourceScopes: sharedTargetsChanged ? undefined : [sourceScope],
+      sourceScopes:
+        targetChanges.sharedTargetsChanged || failedTargets.some((target) => !target.executionOnly)
+          ? undefined
+          : [sourceScope],
       refreshInputs,
-      reason: "watch-targets",
+      // New subscribers need the existing availability fact once. Repeated
+      // preparation reconciles content without requeueing a watch-only worker.
+      reason: joinedUnavailable ? "watch-unavailable" : "watch-targets",
       changedPath: watchTargets.map((target) => target.path).join("|"),
     });
   }

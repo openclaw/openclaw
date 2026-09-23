@@ -25,6 +25,8 @@ type PluginRegistryLifecycleState = {
   controller?: AbortController;
 };
 
+type PluginRegistryLifetime = { retain: () => () => void | Promise<void> };
+
 type PluginRegistryLifecycleStore = {
   loadRegistryDisposer?: () => Promise<
     typeof import("./runtime.js").disposePluginRegistryInstances
@@ -36,6 +38,7 @@ type PluginRegistryLifecycleStore = {
   loaderCaches?: WeakMap<PluginRegistry, Set<PluginLoaderCacheState<PluginRegistry>>>;
   registryLoads?: WeakMap<PluginCache, PluginLoaderCacheState<PluginRegistry>>;
   registryResourceOwners?: WeakMap<PluginRegistry, PluginRegistry>;
+  registryLifetimes?: WeakMap<PluginRegistry, PluginRegistryLifetime>;
 };
 
 const lifecycle = resolveGlobalSingleton<PluginRegistryLifecycleStore>(
@@ -53,6 +56,7 @@ const preparation = (lifecycle.preparation ??= new AsyncLocalStorage());
 const loaderCaches = (lifecycle.loaderCaches ??= new WeakMap());
 const registryLoads = (lifecycle.registryLoads ??= new WeakMap());
 const registryResourceOwners = (lifecycle.registryResourceOwners ??= new WeakMap());
+const registryLifetimes = (lifecycle.registryLifetimes ??= new WeakMap());
 const loadRegistryDisposer = (lifecycle.loadRegistryDisposer ??= createLazyRuntimeNamedExport(
   () => import("./runtime.js"),
   "disposePluginRegistryInstances",
@@ -77,6 +81,18 @@ export function bindPluginRegistryResourceOwner(
 
 export function getPluginRegistryResourceOwner(registry: PluginRegistry): PluginRegistry {
   return registryResourceOwners.get(registry) ?? registry;
+}
+
+/** The creation owner lends existing custody; lookup never takes ownership of an external host. */
+export function getPluginRegistryLifetime(registry: PluginRegistry) {
+  return registryLifetimes.get(getPluginRegistryResourceOwner(registry));
+}
+
+export function bindPluginRegistryLifetime(
+  registry: PluginRegistry,
+  lifetime: PluginRegistryLifetime,
+): void {
+  registryLifetimes.set(getPluginRegistryResourceOwner(registry), lifetime);
 }
 
 export function getPluginLoaderCacheState(cache = getPluginCache()) {

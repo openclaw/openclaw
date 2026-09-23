@@ -20,6 +20,11 @@ export const cliRecoveryEntrypoints = {
     sourceWorkerName: "../commands/doctor-lint-process",
     distWorkerPath: "commands/doctor-lint-process.js",
   },
+  doctorHealth: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../../extensions/memory-core/doctor-health-api",
+    distWorkerPath: "extensions/memory-core/doctor-health-api.js",
+  },
   signalExitBarrier: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "signal-exit-barrier",
@@ -43,6 +48,25 @@ export const doctorOutputEntrypoints = {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "one-shot-exit",
     distWorkerPath: "legacy-finalizer/src/cli/one-shot-exit.js",
+  },
+} as const;
+
+// Import guards need physical module boundaries in the prepared fixture graph.
+export const mcpImportBoundaryEntrypoints = {
+  cli: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "mcp-cli",
+    distWorkerPath: "legacy-finalizer/src/cli/mcp-cli.js",
+  },
+  catalog: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../agents/agent-bundle-mcp-materialize",
+    distWorkerPath: "legacy-finalizer/src/agents/agent-bundle-mcp-materialize.js",
+  },
+  metadata: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../plugins/tool-metadata",
+    distWorkerPath: "legacy-finalizer/src/plugins/tool-metadata.js",
   },
 } as const;
 

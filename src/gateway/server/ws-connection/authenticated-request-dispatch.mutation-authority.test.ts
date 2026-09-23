@@ -1,27 +1,33 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  getRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resetGatewayWorkAdmission } from "../../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
-import { readUserProfileIdentity } from "../../../state/user-profile-list.js";
+import { prepareUserProfileSelectionAuthority } from "../../../state/user-channel-identity-operations.js";
+import { resolveGatewayAuthPolicyGeneration } from "../../auth-policy.js";
+import { publishOperatorRoleConfigChange } from "../../operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "../../operator-run-authority.js";
 import { createDirectChatContext } from "../../server-chat.agent-events.test-helpers.js";
 import { readGatewayRequestMutationAuthority } from "../../server-methods/session-mutation-guards.js";
 import type { GatewayRequestHandlerOptions } from "../../server-methods/types.js";
 import {
-  captureSharedGatewaySessionGenerationOwnership,
-  claimSharedGatewaySessionGenerationIfOwned,
-  createRequiredSharedGatewaySessionGenerationReader,
   disconnectStaleSharedGatewayAuthClients,
-  finalizeOwnedSharedGatewaySessionGeneration,
-  replaceOwnedSharedGatewaySessionGenerationState,
-  type SharedGatewaySessionGenerationState,
+  SharedGatewaySessionGenerationState,
 } from "../../server-shared-auth-generation.js";
 import {
   createDispatchTestHarness,
   createOperatorWsClient,
 } from "./authenticated-request-dispatch.test-support.js";
 
-vi.mock("../../../state/user-profile-list.js", () => ({ readUserProfileIdentity: vi.fn() }));
+vi.mock("../../../state/user-channel-identity-operations.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../state/user-channel-identity-operations.js")>()),
+  prepareUserProfileSelectionAuthority: vi.fn(),
+}));
 vi.mock("../../session-sharing.js", async () => ({
   // The probe has no session target; its request and selection owners remain real.
   resolveSessionMutationAuthorization: vi.fn(() => ({ error: null })),
@@ -35,14 +41,20 @@ beforeEach(() => {
   resetGatewayWorkAdmission();
 });
 
+afterEach(() => clearRuntimeConfigSnapshot());
+
 describe("authenticated request mutation custody", () => {
-  it.each(["commit", "rollback"] as const)(
+  it.each(["commit", "rollback", "revoke all", "policy commit", "policy rollback"] as const)(
     "retains the accepted source through tentative transport fencing until %s",
     async (outcome) => {
-      const generation: SharedGatewaySessionGenerationState = {
+      const generation = new SharedGatewaySessionGenerationState({
         current: "generation-a",
         required: null,
-      };
+      });
+      let committedConfig: OpenClawConfig = { gateway: { auth: { allowTailscale: true } } };
+      const nextConfig: OpenClawConfig = { gateway: { auth: { allowTailscale: false } } };
+      const changesPolicy = outcome === "policy commit" || outcome === "policy rollback";
+      setRuntimeConfigSnapshot(committedConfig);
       const connection = new AbortController();
       const access = new AbortController();
       const client = createOperatorWsClient({
@@ -50,9 +62,13 @@ describe("authenticated request mutation custody", () => {
       });
       client.usesSharedGatewayAuth = true;
       client.sharedGatewaySessionGeneration = "generation-a";
+      client.authPolicyGeneration = resolveGatewayAuthPolicyGeneration(committedConfig);
       client.connectionSignal = connection.signal;
       client.internal = { operatorRoleActor: { kind: "operator", profileId: "profile-owner" } };
-      const context = createDirectChatContext();
+      const context = createDirectChatContext({
+        getRuntimeConfig: () => getRuntimeConfigSnapshot() ?? committedConfig,
+        getCommittedRuntimeConfig: () => committedConfig,
+      });
       context.resolveGatewayContext = () => context;
       let captured: ReturnType<typeof captureGatewayOperatorRunAuthority>;
       const handler = vi.fn<(options: GatewayRequestHandlerOptions) => void>((options) => {
@@ -68,11 +84,11 @@ describe("authenticated request mutation custody", () => {
         options.respond(true, { accepted: true });
       });
       const harness = createDispatchTestHarness({
-        getRequiredSharedGatewaySessionGeneration:
-          createRequiredSharedGatewaySessionGenerationReader(generation),
+        getRequiredSharedGatewaySessionGeneration: generation.reader,
         buildRequestContext: () => context,
         extraHandlers: { "test.source-custody": handler },
       });
+      harness.close.mockImplementation(() => connection.abort());
       const dispatch = (id: string) =>
         harness.dispatcher.dispatch(
           { type: "req", id, method: "test.source-custody", params: {} },
@@ -83,42 +99,60 @@ describe("authenticated request mutation custody", () => {
       const releaseQueued = expectDefined(accepted.authority.retain, "source retention")();
       accepted.release();
       try {
-        const ownership = expectDefined(
-          claimSharedGatewaySessionGenerationIfOwned(
-            generation,
-            captureSharedGatewaySessionGenerationOwnership(generation),
-            "generation-b",
-          ),
-          "candidate generation owner",
-        );
-        disconnectStaleSharedGatewayAuthClients({
-          state: generation,
-          clients: [client],
-          expectedGeneration: "generation-b",
-          revokeSource: false,
-        });
-        expect(connection.signal.aborted).toBe(true);
+        let ownership = generation.capture();
+        if (changesPolicy) {
+          setRuntimeConfigSnapshot(nextConfig);
+        } else {
+          ownership = expectDefined(
+            generation.claim(ownership, "generation-b"),
+            "candidate generation owner",
+          );
+          disconnectStaleSharedGatewayAuthClients({
+            state: generation,
+            clients: [client],
+            expectedGeneration: "generation-b",
+            revokeSource: false,
+          });
+        }
         await dispatch("buffered-after-fence");
+        expect(connection.signal.aborted).toBe(true);
         expect(handler).toHaveBeenCalledOnce();
+        publishOperatorRoleConfigChange({});
         expect(accepted.authority.signal?.aborted).toBe(false);
         expect(() => accepted.authority.assertCurrent()).not.toThrow();
 
         if (outcome === "commit") {
-          expect(finalizeOwnedSharedGatewaySessionGeneration(generation, ownership)).toBe(true);
+          expect(generation.finalize(ownership)).toBe(true);
           expect(accepted.authority.signal?.aborted).toBe(true);
-        } else {
-          expect(
-            replaceOwnedSharedGatewaySessionGenerationState(generation, ownership, {
-              current: "generation-a",
-              required: null,
-            }),
-          ).toBe(true);
-          // The original connection has left the socket set; rollback preserves its old source.
+        } else if (outcome === "revoke all") {
           disconnectStaleSharedGatewayAuthClients({
             state: generation,
             clients: [],
-            expectedGeneration: "generation-a",
+            expectedGeneration: null,
           });
+          expect(accepted.authority.signal?.aborted).toBe(true);
+        } else if (outcome === "policy commit") {
+          committedConfig = nextConfig;
+          publishOperatorRoleConfigChange(context);
+          expect(accepted.authority.signal?.aborted).toBe(true);
+        } else {
+          if (changesPolicy) {
+            setRuntimeConfigSnapshot(committedConfig);
+            publishOperatorRoleConfigChange(context);
+          } else {
+            expect(
+              generation.replace(ownership, {
+                current: "generation-a",
+                required: null,
+              }),
+            ).toBe(true);
+            // The original connection has left the socket set; rollback preserves its old source.
+            disconnectStaleSharedGatewayAuthClients({
+              state: generation,
+              clients: [],
+              expectedGeneration: "generation-a",
+            });
+          }
           expect(accepted.authority.signal?.aborted).toBe(false);
           expect(() => accepted.authority.assertCurrent()).not.toThrow();
           access.abort(new Error("original access source revoked"));
@@ -136,17 +170,22 @@ describe("authenticated request mutation custody", () => {
     "transport retirement",
     "client invalidated",
     "generation rotated",
+    "policy changed",
     "selection mismatch",
     "opaque generation reader",
+    "copied generation reader",
+    "reminted generation reader",
   ] as const)("retains the admitted authority for %s", async (scenario) => {
-    const generation: SharedGatewaySessionGenerationState = {
+    const generation = new SharedGatewaySessionGenerationState({
       current: "generation-a",
       required: null,
-    };
+    });
     const connection = new AbortController();
     const client = createOperatorWsClient();
     client.usesSharedGatewayAuth = true;
     client.sharedGatewaySessionGeneration = "generation-a";
+    setRuntimeConfigSnapshot({});
+    client.authPolicyGeneration = resolveGatewayAuthPolicyGeneration({});
     client.connectionSignal = connection.signal;
     client.authenticatedUserProfile = {
       profileId: "profile-owner",
@@ -159,40 +198,88 @@ describe("authenticated request mutation custody", () => {
     const release = createDeferredCore();
     const persisted = vi.fn();
     const grantProfileReads = vi.fn();
+    const compatibilityReader =
+      scenario === "opaque generation reader" ||
+      scenario === "copied generation reader" ||
+      scenario === "reminted generation reader";
+    const generationReader = generation.reader;
+    const unboundReader = () => generation.current;
+    if (scenario === "reminted generation reader") {
+      for (const key of Object.getOwnPropertySymbols(generationReader)) {
+        const value = Object.getOwnPropertyDescriptor(generationReader, key)?.value;
+        const Issuer = value.constructor;
+        if (typeof Issuer === "function") {
+          Object.defineProperty(unboundReader, key, {
+            value: new Issuer(unboundReader, generation),
+          });
+        }
+      }
+    }
     let inGrant = false;
     let grantError: unknown;
-    vi.mocked(readUserProfileIdentity).mockImplementation((profile) => {
+    vi.mocked(prepareUserProfileSelectionAuthority).mockImplementation(async (profile) => {
       if (inGrant) {
         grantProfileReads();
         throw new Error("host profile storage entered during worker admission");
       }
-      return { profileId: profile, role: null, aliases: new Set([profile]) };
+      return { profileId: profile, isCurrent: () => true };
     });
     const harness = createDispatchTestHarness({
       getRequiredSharedGatewaySessionGeneration:
-        scenario === "opaque generation reader"
-          ? () => generation.current
-          : createRequiredSharedGatewaySessionGenerationReader(generation),
+        scenario === "copied generation reader"
+          ? Object.defineProperties(
+              () => generation.current,
+              Object.getOwnPropertyDescriptors(generationReader),
+            )
+          : compatibilityReader
+            ? unboundReader
+            : generationReader,
       buildRequestContext: () => createDirectChatContext(),
       extraHandlers: {
         "test.mutation-custody": async (options) => {
           const authority = readGatewayRequestMutationAuthority(options);
-          expect(authority.family).toBe(
-            scenario === "opaque generation reader" ? "native-compatibility" : "worker",
-          );
+          expect(authority.family).toBe(compatibilityReader ? "native-compatibility" : "worker");
           entered.resolve();
           await release.promise;
           try {
-            if (scenario === "opaque generation reader") {
+            if (compatibilityReader) {
               authority.assertCurrent();
             } else {
               if (authority.family !== "worker") {
                 throw new Error("WS request lost its worker custody before handler invocation");
               }
-              // A copied options object cannot acquire the invocation's private grant.
-              expect(readGatewayRequestMutationAuthority({ ...options }).family).toBe(
-                "native-compatibility",
-              );
+              const forged = { ...options };
+              const reminted = { ...options };
+              const forgedReader = vi.fn(() => authority);
+              for (const key of Object.getOwnPropertySymbols(options)) {
+                const value = Object.getOwnPropertyDescriptor(options, key)?.value;
+                const Issuer = value.constructor;
+                if (typeof Issuer === "function") {
+                  Object.defineProperty(reminted, key, {
+                    value: new Issuer(reminted, authority),
+                    configurable: true,
+                  });
+                }
+                Object.defineProperty(forged, key, {
+                  value: Object.assign(Object.create(Object.getPrototypeOf(value)), {
+                    read: forgedReader,
+                  }),
+                  configurable: true,
+                });
+              }
+              // Neither ordinary copies nor copied private descriptors transfer invocation custody.
+              for (const copy of [
+                { ...options },
+                Object.assign(Object.create(options), options),
+                Object.defineProperties({}, Object.getOwnPropertyDescriptors(options)),
+                forged,
+                reminted,
+              ]) {
+                expect(readGatewayRequestMutationAuthority(copy).family).toBe(
+                  "native-compatibility",
+                );
+              }
+              expect(forgedReader).not.toHaveBeenCalled();
               inGrant = true;
               authority.assertWorkerCurrent();
               expect(authority.expectedProfileBinding).toBeDefined();
@@ -231,8 +318,10 @@ describe("authenticated request mutation custody", () => {
         connection.abort();
       } else if (scenario === "client invalidated") {
         client.invalidated = true;
-      } else if (scenario === "generation rotated" || scenario === "opaque generation reader") {
-        generation.current = "generation-b";
+      } else if (scenario === "generation rotated" || compatibilityReader) {
+        generation.publish({ current: "generation-b", required: generation.required });
+      } else if (scenario === "policy changed") {
+        setRuntimeConfigSnapshot({ gateway: { auth: { allowTailscale: true } } });
       }
     } finally {
       release.resolve();

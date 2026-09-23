@@ -3,7 +3,6 @@ import type {
   WorkboardBoardMetadata,
   WorkboardCard,
   WorkboardDeleteResult,
-  WorkboardEvent,
   WorkboardLink,
   WorkboardMetadata,
   WorkboardStatus,
@@ -15,6 +14,7 @@ import type {
   WorkboardCardStore,
   WorkboardKeyedStore,
   WorkboardSubscriptionStore,
+  WorkboardWriteAuthority,
 } from "./persistence-types.js";
 import { normalizeAutomationPatch, normalizeCardAutomation } from "./store-automation.js";
 import {
@@ -47,6 +47,7 @@ import type {
   WorkboardListOptions,
   WorkboardMutationScope,
   WorkboardStatsResult,
+  WorkboardUpdateCardOptions,
 } from "./store-inputs.js";
 import {
   appendLinkPreservingDependencies,
@@ -74,17 +75,6 @@ import {
 import { readCards } from "./store-read.js";
 import { WorkboardStoreRuntime } from "./store-runtime.js";
 
-type WorkboardUpdateCardOptions = {
-  allowAutomationLaunch?: boolean;
-  allowMetadataDependencyLinks?: boolean;
-  enforceStatusHolds?: boolean;
-  event?: Omit<WorkboardEvent, "id" | "at">;
-  eventAt?: number;
-  expectedUpdatedAt?: number;
-  ownerSlot?: { ownerId: string; now: number };
-  preserveProofId?: string;
-};
-
 type WorkboardMutationJournalEntry = {
   before?: WorkboardCard;
   after: WorkboardCard;
@@ -109,9 +99,10 @@ export class WorkboardCoreStore extends WorkboardStoreRuntime {
       ready?: Promise<number>;
       dataVersion?: () => number | Promise<number>;
       close?: () => void | Promise<void>;
+      runWithWriteAuthority?: WorkboardWriteAuthority;
     },
   ) {
-    super(stores.dataVersion, stores.close, stores.ready);
+    super(stores.dataVersion, stores.close, stores.ready, stores.runWithWriteAuthority);
     this.store = this.trackCardStore(store);
     this.boardStore = this.track(stores.boards);
     this.subscriptionStore = {
@@ -468,10 +459,12 @@ export class WorkboardCoreStore extends WorkboardStoreRuntime {
   async create(
     input: WorkboardLinkedCreateInput,
     scope?: WorkboardMutationScope,
+    assertOwnerCurrent?: () => void,
   ): Promise<WorkboardCard> {
     return await this.enqueueMutation(
       async () =>
         await this.withCardCompensation(async () => await this.createDirect(input, scope)),
+      assertOwnerCurrent,
     );
   }
 

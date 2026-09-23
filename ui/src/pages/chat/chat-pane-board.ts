@@ -24,6 +24,7 @@ import {
 } from "../../lib/gateway-methods.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { resolveSessionKey } from "../../lib/sessions/index.ts";
+import { resolveSessionPreferredFace } from "../../lib/sessions/route-navigation.ts";
 import {
   buildAgentMainSessionKey,
   canonicalUiSessionKeyForPersistence,
@@ -73,8 +74,15 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       }) &&
       readSessionMethodAccess(this.context.gateway.snapshot, {
         method: "sessions.patch",
-        params: { key: row.key, boardPresentation: "split" },
+        params: { key: row.key, boardFace: "dashboard", boardPresentation: "split" },
       }).allowed,
+    );
+  }
+
+  private isDashboardDefault(row: GatewaySessionRow, presentation: "split" | "expanded"): boolean {
+    return (
+      resolveSessionPreferredFace(row) === "dashboard" &&
+      presentation === (row.boardPresentation ?? "split")
     );
   }
 
@@ -87,7 +95,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       return undefined;
     }
     const description = t("chat.sidePanel.defaultViewDescription");
-    if (presentation === (row.boardPresentation ?? "split")) {
+    if (this.isDashboardDefault(row, presentation)) {
       return {
         kind: "status" as const,
         label: t("chat.sidePanel.currentViewIsDefault"),
@@ -124,7 +132,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       this.resolveBoardConversation().agentId !== agentId ||
       !presentation ||
       !this.canSaveDashboardDefault(currentRow) ||
-      presentation === (currentRow.boardPresentation ?? "split") ||
+      this.isDashboardDefault(currentRow, presentation) ||
       this.dashboardDefaultWrite?.owner === this.dashboardDefaultWriteOwner
     ) {
       return;
@@ -141,7 +149,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     try {
       const result = await scope.sessions.patch(
         row.key,
-        { boardPresentation: presentation },
+        { boardFace: "dashboard", boardPresentation: presentation },
         {
           agentId,
           expectedSessionId: row.sessionId,
@@ -308,6 +316,24 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
           canonicalUiSessionKeyForPersistence(this.state, this.state.sessionKey)
         ]
       : undefined;
+  }
+
+  captureNavigationFace(): "chat" | "dashboard" | undefined {
+    const state = this.state;
+    if (!state) {
+      return this.routeFace;
+    }
+    if (!isSidebarSlotVisible(state.sidebarLayout, "dashboard")) {
+      return this.readSavedDashboardLayout() !== undefined ? "chat" : this.routeFace;
+    }
+    // Focusing an open pane adopts its live layout instead of reopening its shared default.
+    this.dashboardPresentationActivation = {
+      client: state.client,
+      key: boardProviderCacheKey(this.resolveBoardConversation()),
+      expanded: this.dashboardExpanded,
+      pendingRoute: this.routeFace !== "dashboard",
+    };
+    return "dashboard";
   }
 
   protected syncRetainedBoardSession(board: ResolvedBoardView): void {
@@ -517,7 +543,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
         Boolean(this.boardProvider) ||
         isGatewayMethodAdvertised(this.context.gateway.snapshot, "board.get") !== false,
       hasBoard,
-      face: this.routeFace,
+      face: this.routeFace ?? "chat",
       activeTabId,
     };
   }

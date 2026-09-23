@@ -29,9 +29,9 @@ const runtimeFixture = usePreparedModelRuntimeHarness({ label: "native-picker" }
 const { mocks } = runtimeFixture;
 
 async function fixture(standalone = false, cold = false) {
-  const { resolveAgentEffectiveModelPrimary } =
+  const { resolveNativeModelPrimary } =
     await vi.importActual<typeof import("./agent-scope.js")>("./agent-scope.js");
-  mocks.resolveAgentEffectiveModelPrimary.mockImplementation(resolveAgentEffectiveModelPrimary);
+  mocks.resolveNativeModelPrimary.mockImplementation(resolveNativeModelPrimary);
   const a = { provider: "provider-a", id: "model", name: "A", nativeRuntime: "native-a" };
   const b = { provider: "provider-b", id: "model", name: "B", nativeRuntime: "native-b" };
   const loadA = vi.fn(async () => [a]);

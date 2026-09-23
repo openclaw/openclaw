@@ -174,7 +174,7 @@ export function createDiagnosticsEventHandler(params: {
           recordLivenessWarning(evt);
           return;
         case "diagnostic.phase.completed":
-          recordDiagnosticPhaseCompleted(evt);
+          recordDiagnosticPhaseCompleted(evt, metadata);
           return;
         case "run.started":
           recordRunStarted(evt, metadata);

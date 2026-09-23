@@ -34,6 +34,7 @@ import type { SqliteSessionReclamationPlan } from "./session-accessor.sqlite-lif
 import {
   markSqliteReclamationSettled,
   waitForSqliteReclamationCommit,
+  waitForSqliteReclamationParentRelease,
 } from "./session-accessor.sqlite-reclamation-commit.js";
 import type {
   SqliteCanonicalValidationWorkerRequest,
@@ -130,8 +131,7 @@ async function runColdMutationWorker(port: MessagePort, data: SessionColdWorkerD
               );
             },
           );
-          // The parent joins the cold transaction, not the subsequent bounded page drain.
-          markSqliteReclamationSettled(commitGate);
+          waitForSqliteReclamationParentRelease(commitGate);
           if (data.plan.kind !== "cold-restore") {
             await reclaimSqliteFreePages(data.plan.databaseOptions, undefined, { maxPasses: 64 });
           }
@@ -189,12 +189,12 @@ export async function runReclamationWorkerPort(
   let failureCleanup: Awaited<ReturnType<typeof settleReclamationDatabase>> | undefined;
   let checkpointResultOwnedByRequest = false;
   const checkpointPath = sqliteReaderDatabasePathKey(databaseOptions.path);
-  const stopCheckpointRelay = onSqliteWalCheckpoint(({ databasePath, health }) => {
+  const stopCheckpointRelay = onSqliteWalCheckpoint(({ databasePath, ...snapshot }) => {
     if (!checkpointResultOwnedByRequest && databasePath === checkpointPath && claim?.isCurrent()) {
       port.postMessage({
         type: "checkpoint",
         operationId,
-        health,
+        snapshot,
       } satisfies SqliteReclamationWorkerMessage);
     }
   });
@@ -378,6 +378,8 @@ export async function runReclamationWorkerPort(
                           {
                             beforeMutation: currentClaim.assertCurrent,
                             onCommit: authorizeCommit,
+                            afterCommit: () =>
+                              waitForSqliteReclamationParentRelease(request.commitGate),
                           },
                         );
                   // Warm results must not revive proof invalidated by the parent between requests.

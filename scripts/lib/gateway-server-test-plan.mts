@@ -5,7 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { isGatewayServerTestFile } from "../../test/vitest/vitest.gateway-server-paths.mjs";
 
-export const GATEWAY_SERVER_TEST_PROCESS_COUNT = 4;
+const GATEWAY_SERVER_TEST_FILE_LIMIT = 50;
 
 function normalizePath(value: string): string {
   return value.replaceAll("\\", "/");
@@ -37,7 +37,7 @@ function listGatewayFilesFromGit(cwd: string): string[] | null {
     .filter((line) => line.length > 0);
 }
 
-export function listGatewayServerTestTargets(cwd = process.cwd()): string[] {
+function listGatewayServerTestTargets(cwd = process.cwd()): string[] {
   const gatewayDir = path.join(cwd, "src/gateway");
   if (!fs.existsSync(gatewayDir)) {
     return [];
@@ -65,8 +65,6 @@ export function splitTestTargetChunks(targets: string[], chunkCount: number): st
 }
 
 export function createGatewayServerTestTargetChunks(cwd = process.cwd()): string[][] {
-  return splitTestTargetChunks(
-    listGatewayServerTestTargets(cwd),
-    GATEWAY_SERVER_TEST_PROCESS_COUNT,
-  );
+  const targets = listGatewayServerTestTargets(cwd);
+  return splitTestTargetChunks(targets, Math.ceil(targets.length / GATEWAY_SERVER_TEST_FILE_LIMIT));
 }

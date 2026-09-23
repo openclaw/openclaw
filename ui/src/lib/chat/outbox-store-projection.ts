@@ -100,7 +100,11 @@ export function summarizeStoredChatOutboxes(state: ChatComposerScope) {
     for (const item of session.queue ?? []) {
       if (!item.pendingRunId) {
         ids.all.add(item.id);
-        if (item.sendState === "failed" || item.sendState === "unconfirmed") {
+        if (
+          item.sendState === "failed" ||
+          item.sendState === "unconfirmed" ||
+          item.sendState === "held"
+        ) {
           ids.attention.add(item.id);
         }
       }

@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getUpdateRun, listUpdateRuns } from "../../infra/update-run-ledger.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGatewayScopedTools } from "../tool-resolution.js";
+import { summarizeUpdateRunResponse } from "../update-run-summary.js";
 import type { GatewayRequestContext } from "./types.js";
 import {
   adoptUpdateCampaignMock,
@@ -31,7 +32,11 @@ vi.mock("../../agents/tools/gateway.js", () => ({
 }));
 vi.mock("../server-plugin-in-process-dispatch.js", () => ({
   getInProcessGatewayRequestContext: () => host.context,
-  dispatchGatewayMethodInProcess: async (_method: string, params: Record<string, unknown>) => {
+  dispatchGatewayMethodInProcess: async (
+    _method: string,
+    params: Record<string, unknown>,
+    options?: { sessionMutationCommitGuard?: () => void },
+  ) => {
     const { updateHandlers } = await import("./update.js");
     let response: unknown;
     await expectDefined(
@@ -39,6 +44,7 @@ vi.mock("../server-plugin-in-process-dispatch.js", () => ({
       "update.run handler",
     )({
       params,
+      sessionMutationCommitGuard: options?.sessionMutationCommitGuard,
       context: host.context,
       respond: (_ok: boolean, result: unknown) => {
         response = result;
@@ -161,13 +167,23 @@ describe("update.run current owner authority", () => {
     expect(listUpdateRuns()).toEqual([
       expect.objectContaining({
         origin: expect.objectContaining({
-          requester: { channel: "slack", accountId: "primary", senderId: "owner" },
+          requester: {
+            channel: "slack",
+            accountId: "primary",
+            senderId: "owner",
+            authorizationSource: "configured-owner",
+          },
         }),
       }),
     ]);
     expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        requester: { channel: "slack", accountId: "primary", senderId: "owner" },
+        requester: {
+          channel: "slack",
+          accountId: "primary",
+          senderId: "owner",
+          authorizationSource: "configured-owner",
+        },
       }),
     );
   });
@@ -206,7 +222,12 @@ describe("update.run current owner authority", () => {
       );
       expect(handoff).toMatchObject({
         supervisor,
-        requester: { channel, accountId: "primary", senderId: "owner" },
+        requester: {
+          channel,
+          accountId: "primary",
+          senderId: "owner",
+          authorizationSource: "configured-owner",
+        },
       });
       expect(transferManagedServiceUpdateHandoffMock).toHaveBeenCalledExactlyOnceWith({
         kind: "managed-update-handoff",
@@ -312,6 +333,51 @@ describe("update.run current owner authority", () => {
     expect(scheduleGatewayRestartMock).not.toHaveBeenCalled();
     expect(sentinelState.capturedPayload).toBeUndefined();
     expect(sendGatewayLifecycleNoticeMock).toHaveBeenCalledOnce();
+  });
+
+  it("rechecks scheduled admission after discovery before starting the update handoff", async () => {
+    let active = true;
+    resolveStartupInstallStatusMock.mockImplementationOnce(async () => {
+      active = false;
+      return {
+        root: "/tmp/openclaw",
+        status: { root: "/tmp/openclaw", installKind: "git", packageManager: "pnpm" },
+        installReceipt: null,
+      };
+    });
+    const { updateHandlers } = await import("./update.js");
+    const respond = vi.fn();
+    await expectDefined(
+      updateHandlers["update.run"],
+      "update.run handler",
+    )({
+      params: {},
+      context: host.context,
+      respond,
+      sessionMutationCommitGuard: () => {
+        if (!active) {
+          throw new Error("cron update authority is no longer active");
+        }
+      },
+    } as never);
+    const summary = summarizeUpdateRunResponse(respond.mock.calls[0]?.[1]);
+    expect(summary).toMatchObject({
+      ok: false,
+      reason: "owner_required",
+      message: expect.stringContaining(
+        "no longer has a live requester principal or scheduled operator admission",
+      ),
+    });
+    expect(listUpdateRuns()).toEqual([
+      expect.objectContaining({
+        status: "failed",
+        reason: "owner_required",
+        origin: expect.objectContaining({ nextAction: summary.message }),
+      }),
+    ]);
+    expect(startManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
+    expect(transferManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
+    expect(scheduleGatewayRestartMock).not.toHaveBeenCalled();
   });
 });
 

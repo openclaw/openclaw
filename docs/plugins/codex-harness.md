@@ -101,8 +101,9 @@ pages. Progressive lists serve resident rows immediately. If a local home is sti
 loading after 250 ms, the list returns that host as pending, preserving previously
 displayed rows; the existing progress callback publishes its page or error when ready.
 The page producer and publication remain owned by the list's background completion.
-One-shot lists, host-specific lookups, and pagination still wait for a usable native
-page or confirmed empty inventory within the existing app-server request timeout.
+One-shot lists, host-specific lookups, and pagination wait for a usable native
+page or confirmed empty inventory for at most five seconds (or the configured
+app-server request timeout when shorter).
 That single request budget also
 covers loading saved state and draining earlier cache writes after a configuration
 reload. A timed-out caller leaves the shared write drain running. Partial results carry an opaque continuation cursor;
@@ -405,8 +406,9 @@ Store environment values never enter the Codex app-server process, native
 shell, sandbox exec-server, ACP children, sandbox exec, or node exec.
 
 This Codex-native feature is separate from
-[OpenClaw Code Mode](/tools/code-mode), an opt-in QuickJS-WASI runtime
-for generic OpenClaw runs with a different `exec` input shape. For the
+[OpenClaw Code Mode](/tools/code-mode), a separate JavaScript runtime with its
+own automatic per-model activation and explicit overrides. It has a different
+`exec` input shape. For the
 broader model/provider/runtime split, start with
 [Agent runtimes](/concepts/agent-runtimes): `openai/gpt-6-astra` is the model
 ref, `codex` is the runtime, and Telegram, Discord, Slack, or another
@@ -474,8 +476,8 @@ same child result after the parent replies.
 
 - The official `@openclaw/codex` plugin installed. Include `codex` in
   `plugins.allow` if your config uses an allowlist.
-- Managed Codex app-server `0.154.0`. The plugin ships and manages
-  `@openai/codex` `0.154.0` by default, so a `codex` command on `PATH` does not
+- Managed Codex app-server `0.155.1`. The plugin ships and manages
+  `@openai/codex` `0.155.1` by default, so a `codex` command on `PATH` does not
   affect normal startup. Explicit custom, remote, and macOS desktop-owned
   app-servers must report a parseable semantic version of `0.149.0` or newer.
   Newer versions continue with a compatibility warning and normal runtime

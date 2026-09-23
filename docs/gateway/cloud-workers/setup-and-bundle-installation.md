@@ -12,6 +12,8 @@ What runs on the leased box before enrollment, how the Gateway prepares and veri
 
 The example profile supports both OpenClaw and Codex. Keep setup focused on machine prerequisites and project tools. You do not need to install OpenClaw globally, append a versioned Codex plugin install, or maintain a package URL in the profile. Remove those old runtime-install steps when updating an existing profile; bootstrap supplies the running Gateway's runtime automatically.
 
+When an agent tool waits for a bounded in-process Gateway request, stalled-run recovery honors the active response deadline, including nested Crabbox creation calls. Completing, failing, canceling, or timing out the wait removes its allowance; a prior run's pending request cannot extend the current run's budget. A response timeout does not by itself cancel provisioning. Inspect the environment's state before retrying an uncertain creation request.
+
 ### Native Windows prerequisites
 
 For `windows/normal`, Crabbox executes `settings.setup` with Windows PowerShell. Write setup commands for PowerShell; Linux, macOS, and Windows (WSL2) continue to use POSIX scripts. For example, this prerequisite check uses the machine's existing Node and npm installation:
@@ -26,9 +28,9 @@ exit $LASTEXITCODE
 
 Use a Crabbox bootstrap or image that supplies a supported Node.js release and npm on the machine `PATH`, with npm's CLI installed beside `node.exe` under `node_modules/npm`. OpenClaw fails enrollment with a prerequisite message if Node or that npm installation is missing; it does not install Node. npm installs the node runtime archive, and OpenClaw extracts worker bundles with its Node archive library.
 
-The guest must include Crabbox's managed launcher at `C:\Program Files\Crabbox\bin\Start-CrabboxDetachedProcess.ps1`. It keeps the node alive after Crabbox closes its SSH command. Enrollment fails with guidance if the launcher is absent. A hidden PowerShell parent redirects node output to `node.log` under its isolated state directory because the launcher does not inherit SSH output handles.
+Headless Windows guests must include Crabbox's managed launcher at `C:\Program Files\Crabbox\bin\Start-CrabboxDetachedProcess.ps1`. It keeps the node alive after Crabbox closes its SSH command. Enrollment fails with guidance if the launcher is absent. A hidden PowerShell parent redirects node output to `node.log` under its isolated state directory because the launcher does not inherit SSH output handles.
 
-Restart replay verifies the actual `node.exe` child's PID, creation time, executable, and command line. Windows does not expose a cheap working-directory probe, so the launch record binds the runtime and state directories to that verified creation time. Missing or mismatched identity rejects replay and requires reprovisioning.
+Restart replay verifies the actual `node.exe` child's PID, creation time, executable, and command line. Windows does not expose a cheap working-directory probe, so the launch record binds the runtime and state directories to that verified creation time. Missing or mismatched identity rejects replay and requires reprovisioning. Desktop-enabled Windows workers instead use Crabbox's interactive desktop service and also bind the account SID and interactive session; see [native desktop prerequisites](/gateway/cloud-workers/desktop#native-windows-prerequisites).
 
 ## Bundle installation
 
@@ -45,6 +47,8 @@ Native dependencies are installed by npm for the cloud machine's operating syste
 Bootstrap emits `CRABBOX_PHASE:openclaw-bootstrap-*` markers into the Crabbox command stream for download, installation, verification, plugin activation, and node launch. Crabbox records these as command phase timings; cached runs emit only the work they perform.
 
 Enrollment enables its required plugins in one CLI invocation, in order, before publishing the runtime pointer or launching the node. Each plugin retains its normal policy and capability-consent checks; a failed enable stops enrollment. This avoids repeated CLI startup when a cloud desktop needs both an execution plugin and the computer-use plugin.
+
+If enrollment was interrupted after publishing its runtime pointer but before recording the node PID, replay requires releasing and reprovisioning that worker. A detached process may still be running, so a missing PID does not authorize another launch. A retained launch receipt without a PID has the same recovery requirement.
 
 During project image preparation, npm installation and the optional worker archive download overlap after the runtime archive has passed size and digest verification. Both operations must finish before the runtime is published or temporary files are removed, including on failure. The combined `installation-and-worker-download` phase measures that shared interval; its duration is not an exclusive npm or download time. Download failures still identify the failed transport stage.
 

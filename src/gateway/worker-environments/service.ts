@@ -14,7 +14,7 @@ import {
   createWorkerEnvironmentTransportLifecycle,
   type WorkerEnvironmentNodeTunnel,
 } from "./environment-access.js";
-import { registerWorkerInferenceSessionDrain } from "./inference-control-internal.js";
+import { registerWorkerInferenceSessionControl } from "./inference-control-internal.js";
 import type { WorkerInferenceStore } from "./inference-store.js";
 import { createWorkerInferenceManager, type WorkerInferenceExecutor } from "./inference.js";
 import type { WorkerLiveEventReceiver } from "./live-events.js";
@@ -225,17 +225,19 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     }
   };
 
-  const move = (
+  const move = async (
     record: WorkerEnvironmentRecord,
     to: WorkerEnvironmentState,
     patch?: TransitionPatch,
+    assertCurrent?: () => void,
   ) => {
-    const next = store.transition({
+    const next = await store.transition({
       environmentId: record.environmentId,
       from: record.state,
       expectedOwnerEpoch: record.ownerEpoch,
       to,
       patch,
+      assertCurrent,
     });
     if (to !== "ready" && to !== "idle" && to !== "attached") {
       credentialBroker.clearEnvironment(record.environmentId);
@@ -247,7 +249,12 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     return next;
   };
 
-  const saveError = (record: WorkerEnvironmentRecord, error: unknown) => {
+  const saveError = async (
+    record: WorkerEnvironmentRecord,
+    error: unknown,
+    assertCurrent?: () => void,
+  ) => {
+    assertCurrent?.();
     // Once bootstrap failure owns the terminal outcome, preserve that causal error across
     // transient provider/inspection failures so the final failed row stays actionable.
     if (record.teardownTerminalState === "failed" && record.lastError) {
@@ -257,6 +264,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       environmentId: record.environmentId,
       state: record.state,
       error: boundedError(error),
+      assertCurrent,
     });
   };
 
@@ -354,6 +362,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       return;
     }
     await withLock(environmentId, async () => {
+      await store.ready();
       const current = store.get(environmentId);
       if (!current || inState(current, "destroyed", "failed", "orphaned")) {
         return;
@@ -417,6 +426,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   };
 
   const reconcilePass = async (environmentId?: string) => {
+    await store.ready();
     if (environmentId === undefined) {
       await sessionAttachments.reconcileSessionAttachments();
     }
@@ -437,7 +447,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       return;
     }
     try {
-      store.pruneTerminalEnvironments({ canPruneDemand: preparedPool.canPruneDemand });
+      await store.pruneTerminalEnvironments({ canPruneDemand: preparedPool.canPruneDemand });
     } catch (error) {
       // Pruning is opportunistic and retries on the next sweep; lock contention must not
       // turn a healthy worker reconciliation into a startup or periodic-reconcile failure.
@@ -689,7 +699,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
         await providerLifecycle.destroy(environmentId, { retryRequested: false }),
       ),
     destroyUnattached: async (environmentId: string) => {
-      preparedPool.cancelPreparation(environmentId);
+      await preparedPool.cancelPreparation(environmentId);
       return environmentAccess.project(
         await providerLifecycle.destroy(environmentId, { requireUnattached: true }),
       );
@@ -729,7 +739,10 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     start,
     stop,
   };
-  registerWorkerInferenceSessionDrain(service, inference.beginSessionDrain);
+  registerWorkerInferenceSessionControl(service, {
+    beginDrain: inference.beginSessionDrain,
+    captureCancel: inference.captureSessionCancellation,
+  });
   return service;
 }
 

@@ -29,8 +29,8 @@ declare function yield_control(reason?: string): Promise<void>;
 ```
 
 `TextEncoder` and `TextDecoder` are available for local text and byte transforms.
-Encoder and decoder instances survive `wait` snapshot restoration. They run
-inside the QuickJS sandbox and grant no filesystem, module, or network access.
+Encoder and decoder instances survive `wait` under either executor. These APIs
+provide local byte conversion, not filesystem, module, or network access.
 Returned values still use the JSON-only bridge; emit decoded text or an array of
 byte values rather than a binary attachment.
 
@@ -58,7 +58,8 @@ and model-result caps still apply to console output together with `text`,
 `json`, and the final value or error. Use explicit `text`/`json` with narrower
 inputs when diagnostic inspection is insufficient.
 
-Guest timers are bridged through the host, so they survive QuickJS snapshot/resume and remain bounded by the Code Mode execution and snapshot limits.
+Guest timers are bridged through the host, so they survive `wait` under either
+executor and remain bounded by the Code Mode execution and continuation limits.
 `clearTimeout` also cancels a timer created before an earlier suspension; this
 applies to interactive Code Mode and headless automation scripts.
 

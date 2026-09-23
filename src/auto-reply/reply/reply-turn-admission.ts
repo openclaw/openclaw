@@ -172,6 +172,7 @@ function resolveVisibleActiveWaitMs(operation: ReplyOperation | undefined): numb
 }
 
 type ReplyTurnAdmissionParams = {
+  providerReviewAcknowledgment?: import("../../sessions/provider-review.js").ProviderReviewAcknowledgment;
   agentId?: string;
   sessionKey: string;
   sessionId: string;
@@ -363,6 +364,7 @@ export async function admitReplyTurn(
                   params.sessionKey || sessionId,
                   currentEntry,
                   {
+                    providerReviewAcknowledgment: params.providerReviewAcknowledgment,
                     allowRestartTombstoneReplacement:
                       (params.resetTriggered && params.allowRestartTombstoneReset === true) ||
                       params.allowRestartTombstoneParentFork === true,

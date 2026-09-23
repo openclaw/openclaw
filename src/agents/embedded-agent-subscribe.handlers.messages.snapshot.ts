@@ -281,6 +281,6 @@ export function reconcileBlockReplySnapshot(
     contentIndex: restartIndex,
     itemId: resolveAssistantStreamItemId({ contentIndex: restartIndex, message: next.message }),
   };
-  ctx.blockChunker.reset(sourceBreaks);
+  ctx.blockChunker.reset(sourceBreaks, restartPrefix.length);
   ctx.blockChunker.append(next.blockText.slice(restartPrefix.length));
 }

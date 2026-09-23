@@ -302,6 +302,18 @@ starting a sibling. The requester is announced once such a follow-up finishes
 normally; a follow-up that yields again leaves the run paused and the requester
 waiting.
 
+A yield claim belongs to the turn that spawned the children. When a later turn
+of the same session calls `sessions_yield` while children spawned by an earlier
+turn are still running or still owe their completion, the tool returns
+`status: "already_pending"` with the pending children (session key, label,
+start time, `running`/`completing`/`paused` state, and whether an earlier
+yield already armed the wake) instead of an error. For running or completing
+children nothing else is required: end that turn normally, and the child's
+completion arrives in the session as a later turn. Do not re-spawn, re-send,
+or poll to wake them. A `paused` child yielded with `waitFor: "message"` and
+will not complete until it receives a continuation; send one with
+`sessions_send` if this session owns that follow-up.
+
 The controlling parent resumes a paused native child with an ordinary
 `sessions_send` continuation. The runtime preserves the original task and its
 completion recipient without requiring `mode: "resume"`. An explicit

@@ -198,23 +198,32 @@ merge_verify() {
     echo "merge_verify requires a PR number and verification options." >&2
     return 2
   fi
-  local pr="$1" options="$2" replacement_head auto_merge_requested json
+  local pr="$1" options="$2" replacement_head auto_merge_requested qualified_refusal json
   if ! printf '%s\n' "$options" | jq -e '
-    type == "object" and keys == ["autoMergeRequested","observation","replacementHead"] and
+    type == "object" and keys == ["autoMergeRequested","observation","qualifiedRefusal","replacementHead"] and
     (.replacementHead | type == "string") and (.autoMergeRequested | type == "boolean") and
+    (.qualifiedRefusal | type == "boolean") and
     (.observation == null or (.observation | type == "object"))
   ' >/dev/null; then
-    echo "Invalid merge verification options: require replacementHead, autoMergeRequested, and observation." >&2
+    echo "Invalid merge verification options: require replacementHead, autoMergeRequested, qualifiedRefusal, and observation." >&2
     return 2
   fi
   replacement_head=$(printf '%s\n' "$options" | jq -r .replacementHead) || return 1
   auto_merge_requested=$(printf '%s\n' "$options" | jq -r .autoMergeRequested) || return 1
+  qualified_refusal=$(printf '%s\n' "$options" | jq -r .qualifiedRefusal) || return 1
   json=$(printf '%s\n' "$options" | jq -c '.observation // empty') || return 1
   MERGE_USE_CRABBOX_ADMIN_BYPASS=false
   enter_worktree "$pr" false || return 1
 
   require_artifact .local/prep.env || return 1
   require_artifact .local/gates.env || return 1
+  require_prepared_review "$pr" || return 1
+  local correction_authority correction_gate_oid=""
+  correction_authority=$(correction_review_snapshot "$pr") || return 1
+  if [ -n "$correction_authority" ]; then
+    require_correction_publication_gates "$pr" "$(pr_git rev-parse HEAD)" || return 1
+    correction_gate_oid=$(pr_git hash-object --no-filters .local/gates.env) || return 1
+  fi
   # shellcheck disable=SC1091
   source .local/gates.env || return 1
   # shellcheck disable=SC1091
@@ -222,7 +231,7 @@ merge_verify() {
   if [ "${GATES_MODE:-}" = remote_crabbox_aws ]; then MERGE_TRANSPORT=graphql; fi
   local github_pending=false
   if [ "${GATES_MODE:-}" = github_pending ]; then
-    if [ "$auto_merge_requested" != true ] || [ -n "$replacement_head" ] ||
+    if { [ "$qualified_refusal" != true ] && { [ "$auto_merge_requested" != true ] || [ -n "$replacement_head" ]; }; } ||
       [ "${HOSTED_GATES_TARGET_HEAD_SHA:-}" != "$PREP_HEAD_SHA" ] ||
       [ "${MERGE_TRANSPORT:-graphql}" != graphql ]; then
       echo "Deferred GitHub gates require --auto-merge at the exact prepared head, without recovery or REST fallback." >&2
@@ -344,7 +353,7 @@ merge_verify() {
   local pending_required
   pending_required=$(printf '%s\n' "$checks_json" | jq '[.[] | select(.bucket=="pending")] | length') || return 1
 
-  if [ "$pending_required" -gt 0 ] && [ "$github_pending" != true ]; then
+  if [ "$pending_required" -gt 0 ] && { [ "$github_pending" != true ] || [ "$qualified_refusal" = true ]; }; then
     echo "Required checks are still pending."
     exit 1
   fi
@@ -391,6 +400,10 @@ merge_verify() {
     fi
   fi
 
+  verify_correction_review_snapshot "$pr" "$correction_authority" || return 1
+  if [ -n "$correction_authority" ]; then
+    [ "$correction_gate_oid" = "$(pr_git hash-object --no-filters .local/gates.env)" ] || return 1
+  fi
   echo "merge-verify passed for PR #$pr"
 }
 
@@ -464,15 +477,36 @@ prepare_squash_merge_body() {
     MERGE_BODY_FILE=""
     return 0
   fi
+  MERGE_SUBJECT=""
+  if [ "$MERGE_TRANSPORT" = graphql ]; then
+    MERGE_SUBJECT=$(printf '%s\n' "$preview" | jq -er '.data.repository.pullRequest.viewerMergeHeadlineText | select(type == "string" and length > 0 and (test("[\\r\\n]") | not))') || {
+      echo "Cannot prepare squash subject: require the current-head merge headline." >&2; return 1;
+    }
+  fi
   MERGE_BODY_FILE="$body_file"
   MERGE_BODY_TRANSPORT="$MERGE_TRANSPORT"
   printf '%s\n' "$body_file"
 }
 
-# Replacement approval names a reviewed head, not permission to reuse another
+# Recovery approval names a reviewed head, not permission to reuse another
 # head's artifacts. Subshell isolation prevents sourced stamps from changing admission.
-verify_merge_replacement_artifacts() (
-  local pr="$1" head="$2"
+verify_merge_recovery_artifacts() (
+  local pr="$1" head="$2" qualified_refusal="${3:-false}"
+  local HOSTED_GATES_TARGET_HEAD_SHA=""
+  local PREP_REVIEW_MODE=""
+  source .local/prep-context.env || return 1
+  if [ "$PREP_REVIEW_MODE" = correction ]; then
+    # Incoming H remains the truthful NEEDS WORK identity. The correction
+    # owner verifies H -> local C; the publication receipt binds C -> hosted P.
+    require_prepared_review "$pr" || return 1
+    local PR_NUMBER="" PREP_HEAD_SHA="" LOCAL_PREP_HEAD_SHA=""
+    source .local/prep.env || return 1
+    [ "$PR_NUMBER" = "$pr" ] && [ "$PREP_HEAD_SHA" = "$head" ] &&
+      [ "$LOCAL_PREP_HEAD_SHA" = "$(pr_git rev-parse HEAD)" ] &&
+      [ "$(pr_git rev-parse "$LOCAL_PREP_HEAD_SHA^{tree}")" = "$(pr_git rev-parse "$head^{tree}")" ] || return 1
+    require_correction_publication_gates "$pr" "$LOCAL_PREP_HEAD_SHA" || return 1
+    return 0
+  fi
   local PR_NUMBER="" PR_HEAD_SHA="" PR_HEAD_SHA_BEFORE=""
   local PREP_HEAD_SHA="" LOCAL_PREP_HEAD_SHA="" LAST_VERIFIED_HEAD_SHA="" GATES_MODE=""
   source .local/pr-meta.env || return 1
@@ -487,7 +521,12 @@ verify_merge_replacement_artifacts() (
   [ "$(pr_git rev-parse "$LOCAL_PREP_HEAD_SHA^{tree}")" = "$(pr_git rev-parse "$head^{tree}")" ] || return 1
   PR_NUMBER=""
   source .local/gates.env || return 1
-  [ "$PR_NUMBER" = "$pr" ] && [ "$LAST_VERIFIED_HEAD_SHA" = "$LOCAL_PREP_HEAD_SHA" ] || return 1
+  [ "$PR_NUMBER" = "$pr" ] || return 1
+  if [ "$qualified_refusal" = true ] && [ "$GATES_MODE" = github_pending ]; then
+    [ "$HOSTED_GATES_TARGET_HEAD_SHA" = "$head" ]
+    return
+  fi
+  [ "$LAST_VERIFIED_HEAD_SHA" = "$LOCAL_PREP_HEAD_SHA" ] || return 1
   case "$GATES_MODE" in
     full|docs_only|reused_docs_only|remote_testbox|remote_crabbox_aws|hosted_exact_or_recent_parent) ;;
     *) return 1 ;;
@@ -498,10 +537,14 @@ merge_run() {
   local pr="$1"
   local auto_merge_requested="${2:-false}"
   local recovery_oid="${3:-}" recovery_record="" recovery_actor=""
-  local replacement_head="${4:-}" replacement_artifacts="" recovery_captures=()
+  local replacement_head="${4:-}" recovery_artifacts="" recovery_captures=()
+  local recovery_artifact_head="$replacement_head"
   local body_path="${5:-}" captured_body="" merge_body_snapshot=""
   local legacy_directory="${6:-}" legacy_refusal="" legacy_captures=()
   local cancel_auto="${7:-false}"
+  local refusal_directory="${8:-}" refusal="" qualified_refusal=false
+  local MERGE_REFUSAL_DIRECTORY=""
+  [ -z "$refusal_directory" ] || refusal_directory=$(node -e 'process.stdout.write(require("node:path").resolve(process.argv[1]))' -- "$refusal_directory") || return 1
   [ -z "$body_path" ] || body_path=$(node -e 'process.stdout.write(require("node:path").resolve(process.argv[1]))' -- "$body_path") || return 1
   if [ -n "$replacement_head" ] &&
     { [ -z "$recovery_oid" ] || ! [[ "$replacement_head" =~ ^[0-9a-f]{40}$ ]]; }; then
@@ -512,7 +555,7 @@ merge_run() {
   local MERGE_REPO_URL MERGE_REPO_HOST MERGE_REPO_NAME MERGE_OBSERVATION MERGE_ENTRY_OBSERVATION MERGE_TRANSPORT=rest
   merge_outcome_init "$pr" || return 1
   if [ "$cancel_auto" = true ]; then
-    [ -n "$recovery_oid" ] && [ -z "$replacement_head$body_path$legacy_directory" ] && [ "$auto_merge_requested" = false ] || return 2
+    [ -n "$recovery_oid" ] && [ -z "$replacement_head$body_path$legacy_directory$refusal_directory" ] && [ "$auto_merge_requested" = false ] || return 2
     merge_outcome_cancel_auto "$pr" "$recovery_oid"
     return
   fi
@@ -522,15 +565,17 @@ merge_run() {
     }
   elif [ -n "$recovery_oid" ]; then
     if [ "$recovery_oid" != "$MERGE_OUTCOME_OID" ] ||
-      ! printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e '
+      ! printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e --arg refusal "$refusal_directory" '
         .phase == "intent" and
-        ((.accepted == false and .route == "immediate") or
+        ((.accepted == false and (.route == "immediate" or ($refusal != "" and .route == "auto" and .method == "squash"))) or
          (.accepted == true and .route == "auto" and .cancellation.state == "confirmed"))
       ' >/dev/null; then
       merge_outcome_stop "operator recovery requires the exact unaccepted immediate intent or confirmed auto cancellation; no attempt was authorized"
       return 1
     fi
     recovery_record="$MERGE_OUTCOME_RECORD"
+  elif [ -n "$refusal_directory" ]; then
+    merge_outcome_stop "pre-dispatch qualification requires explicit operator recovery"; return 1
   elif [ -n "$MERGE_OUTCOME_OID" ]; then
     # Reconciliation needs neither the old worktree nor its prepare artifacts.
     merge_outcome_resume "$pr"
@@ -539,7 +584,7 @@ merge_run() {
   if [ "$auto_merge_requested" = true ] || [ "${OPENCLAW_PR_MERGE_METHOD:-squash}" != squash ]; then
     MERGE_TRANSPORT=graphql
   fi
-  review_artifact_preflight "$pr" true || return 1
+  review_artifact_preflight "$pr" prepared || return 1
   # Capture before gates or cwd changes; retained outcomes above reconcile even
   # when the original operator file no longer exists.
   if [ -n "$body_path" ]; then
@@ -556,6 +601,17 @@ merge_run() {
     return 1
   fi
 
+  if [ -n "$refusal_directory" ]; then
+    [ -z "$legacy_directory" ] || return 2
+    refusal=$(node "$script_parent_dir/pr-lib/merge-pre-dispatch-refusal.mjs" "$refusal_directory" "$recovery_oid" "$recovery_record") || return 1
+    qualified_refusal=true
+    MERGE_REFUSAL_DIRECTORY="$refusal_directory"
+    MERGE_TRANSPORT=graphql
+    if [ -z "$recovery_artifact_head" ]; then
+      recovery_artifact_head=$(printf '%s\n' "$recovery_record" | jq -er .head) || return 1
+    fi
+  fi
+
   local required required_artifacts=(
     .local/review.json
     .local/pr-meta.env
@@ -563,7 +619,15 @@ merge_run() {
     .local/prep.md
     .local/prep.env
   )
-  [ -z "$replacement_head" ] || required_artifacts+=(.local/prep-context.env .local/gates.env)
+  [ -z "$recovery_artifact_head" ] || required_artifacts+=(.local/prep-context.env .local/gates.env)
+  local correction_authority="" correction_gates_oid=""
+  correction_authority=$(correction_review_snapshot "$pr") || return 1
+  if [ -n "$correction_authority" ]; then
+    required_artifacts+=(.local/prep-context.env .local/gates.env
+      .local/correction-review.json
+      .local/correction-incoming-review.json)
+    correction_gates_oid=$(pr_git hash-object --no-filters .local/gates.env) || return 1
+  fi
   for required in "${required_artifacts[@]}"; do
     require_artifact "$required" || return 1
   done
@@ -576,9 +640,11 @@ merge_run() {
       recovery_captures+=("$capture")
       required_artifacts+=("$capture")
     done
-    replacement_artifacts=$(pr_git hash-object --no-filters -- "${required_artifacts[@]}") || return 1
-    if ! verify_merge_replacement_artifacts "$pr" "$replacement_head"; then
-      merge_outcome_stop "replacement head requires matching PR, freshly reviewed prepare context, prepared tree, and completed gate stamps; re-run review and prepare"
+  fi
+  if [ -n "$recovery_artifact_head" ]; then
+    recovery_artifacts=$(pr_git hash-object --no-filters -- "${required_artifacts[@]}") || return 1
+    if ! verify_merge_recovery_artifacts "$pr" "$recovery_artifact_head" "$qualified_refusal"; then
+      merge_outcome_stop "recovery requires matching PR, freshly reviewed prepare context, prepared tree, and valid gate bindings; re-run review and prepare"
       return 1
     fi
   fi
@@ -591,11 +657,12 @@ merge_run() {
     done
   fi
   validate_review_artifact_data || return 1
-  require_ready_review_recommendation || return 1
+  require_prepared_review "$pr" || return 1
   local verify_options
   verify_options=$(jq -cn --arg replacementHead "$replacement_head" \
     --argjson autoMergeRequested "$auto_merge_requested" --argjson observation "$MERGE_ENTRY_OBSERVATION" \
-    '{replacementHead:$replacementHead,autoMergeRequested:$autoMergeRequested,observation:$observation}') || return 1
+    --argjson qualifiedRefusal "$qualified_refusal" \
+    '{replacementHead:$replacementHead,autoMergeRequested:$autoMergeRequested,qualifiedRefusal:$qualifiedRefusal,observation:$observation}') || return 1
   merge_verify "$pr" "$verify_options" || return 1
   MERGE_ENTRY_OBSERVATION="$PR_HEAD_OBSERVATION"
   # shellcheck disable=SC1091
@@ -662,7 +729,7 @@ merge_run() {
   fi
 
   local merge_args=(--match-head-commit "$PREP_HEAD_SHA")
-  local MERGE_BODY_FILE="" MERGE_BODY_TRANSPORT=graphql
+  local MERGE_BODY_FILE="" MERGE_BODY_TRANSPORT=graphql MERGE_SUBJECT=""
   if [ "$merge_method" = "squash" ]; then
     local merge_body_file
     prepare_squash_merge_body "$pr" "$captured_body" >/dev/null || return 1
@@ -779,6 +846,9 @@ merge_run() {
     merge_outcome_stop "ordinary squash requires the captured merge body; queue policy changed during admission"
     return 1
   fi
+  if [ "$qualified_refusal" = true ] && ! printf '%s\n' "$MERGE_OBSERVATION" | jq -e '.pr.mergeable == "MERGEABLE" and .pr.mergeStateStatus == "CLEAN"' >/dev/null; then
+    merge_outcome_stop "qualified refusal recovery requires MERGEABLE/CLEAN immediate admission"; return 1
+  fi
   # gh skips local status refusals for queue-enabled PRs; admin bypasses BLOCKED/BEHIND.
   # Reject known client-side refusals before recording non-retryable intent.
   if printf '%s\n' "$MERGE_OBSERVATION" | jq -e --arg route "$route" '
@@ -824,9 +894,9 @@ merge_run() {
     return 1
   fi
   validate_clawsweeper_review_comments "$pr" "$PREP_HEAD_SHA" || return 1
-  if [ -n "$replacement_head" ]; then
-    if [ "$replacement_artifacts" != "$(pr_git hash-object --no-filters -- "${required_artifacts[@]}")" ]; then
-      merge_outcome_stop "replacement artifacts changed during admission"
+  if [ -n "$recovery_artifact_head" ]; then
+    if [ "$recovery_artifacts" != "$(pr_git hash-object --no-filters -- "${required_artifacts[@]}")" ]; then
+      merge_outcome_stop "recovery artifacts changed during admission"
       return 1
     fi
     verify_prep_branch_matches_prepared_head "$pr" "$LOCAL_PREP_HEAD_SHA" || return 1
@@ -855,9 +925,21 @@ merge_run() {
       return 1
     fi
   fi
+  if [ -n "$refusal_directory" ] &&
+    [ "$refusal" != "$(node "$script_parent_dir/pr-lib/merge-pre-dispatch-refusal.mjs" "$refusal_directory" "$recovery_oid" "$recovery_record")" ]; then
+    merge_outcome_stop "pre-dispatch evidence changed during admission"; return 1
+  fi
   # A quota-driven transport change can replace the prepared body file. Bind
   # GraphQL dispatch to the final file, after all admission reads have settled.
   [ -z "${merge_body_file:-}" ] || merge_args+=(--body-file "$merge_body_file")
+  if [ "$MERGE_TRANSPORT" = graphql ] && [ "$merge_method" = squash ] && [ "$route" != queue ]; then
+    merge_args+=(--subject "$MERGE_SUBJECT")
+  fi
+  verify_correction_review_snapshot "$pr" "$correction_authority" || return 1
+  if [ -n "$correction_authority" ]; then
+    [ "$correction_gates_oid" = "$(pr_git hash-object --no-filters .local/gates.env)" ] || return 1
+    require_correction_publication_gates "$pr" "$(pr_git rev-parse HEAD)" || return 1
+  fi
   local intent attempt
   attempt=$(node -e 'process.stdout.write(require("node:crypto").randomUUID())') || return 1
   intent=$(printf '%s\n' "$MERGE_OBSERVATION" | jq -c --argjson repo "$MERGE_REPO" \
@@ -879,6 +961,9 @@ merge_run() {
       '.recovery=({outcome:$outcome,attempt:$previous.attempt,actor:$actor,reason:"explicit-operator-recovery"} +
         if $replacement == "" then {} else {replacementHead:$replacement} end)') || return 1
   fi
+  if [ -n "$refusal" ]; then
+    intent=$(printf '%s\n' "$intent" | jq -c --argjson refusal "$refusal" '.recovery.preDispatchRefusal=$refusal') || return 1
+  fi
   mark_pr_operation_side_effects_started
   MERGE_ADMISSION_ACTIVE=false
   if [ -n "$legacy_directory" ]; then
@@ -894,6 +979,7 @@ merge_run() {
     set -o noclobber
     exec >"$merge_output" || exit 125
     exec 2>&1
+    export OCTOPOOL_DIAGNOSTICS=1
     if [ "$MERGE_TRANSPORT" = rest ]; then
       merge_rest merge "$pr" "$PREP_HEAD_SHA" "$merge_body_snapshot" "$MERGE_OBSERVATION"
     elif [ "$route" = immediate ] && [ "$merge_method" = squash ]; then

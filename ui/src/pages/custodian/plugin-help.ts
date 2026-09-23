@@ -17,7 +17,7 @@ import {
 
 registerPluginManagementEnglish();
 
-export type PluginHelpReference = Pick<SystemAgentPluginReference, "id" | "name">;
+export type PluginHelpReference = Pick<SystemAgentPluginReference, "id" | "name" | "declared">;
 export type PluginHelpSetting = {
   /** Structural path from the configuration owner, including dynamic keys. */
   path: Array<string | number>;
@@ -35,18 +35,16 @@ export function publishPluginHelpContext(
   options: { overview: boolean; installed: boolean },
 ): () => void {
   const state = pluginHelpState(context);
+  const previous = state.publication;
   const reference = normalizeSystemAgentPluginReference({
     ...plugin,
     installed: options.installed,
     name: truncateUtf16Safe(plugin.name, 96),
+    setting: previous?.reference.id === plugin.id ? previous.reference.setting : undefined,
   });
   if (!reference) {
     clearPluginHelpContext(context, owner);
     return () => undefined;
-  }
-  const previous = state.publication;
-  if (previous?.reference.id === reference.id) {
-    reference.setting = previous.reference.setting;
   }
   const publication: Publication = {
     owner,
@@ -91,17 +89,20 @@ function clearPluginHelpContext(context: PluginHelpContext, owner: object): void
 export function createPluginHelpRequest(
   context: PluginHelpContext,
   plugin: PluginHelpReference,
-): (setting?: PluginHelpSetting) => Promise<void> {
+): (intent?: PluginHelpSetting | { question: string }) => Promise<void> {
   const state = pluginHelpState(context);
   const scope = state.scope;
   const selectionEpoch = state.selectionEpoch;
   // Capture the rendered selection before an action can outlive its page or Gateway.
-  return async (setting) => {
+  return async (intent) => {
     if (pluginHelpState(context).scope !== scope || state.selectionEpoch !== selectionEpoch) {
       return;
     }
     window.dispatchEvent(new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT, { detail: { open: true } }));
-    if (setting) {
+    if (intent && "question" in intent) {
+      state.pendingDraft = [state.pendingDraft, intent.question].filter(Boolean).join("\n\n");
+    } else if (intent) {
+      const setting = intent;
       // Config rendering stays lazy; stale imports cannot attach a question to a
       // replacement Gateway or a newer page selection.
       let formatPluginHelpValue: typeof import("./plugin-help-value.ts").formatPluginHelpValue;
@@ -119,7 +120,6 @@ export function createPluginHelpRequest(
       const value = formatPluginHelpValue(setting.value, setting.sensitive);
       const question = t("custodian.pluginHelpQuestion", {
         setting: truncateUtf16Safe(setting.label, 96),
-        plugin: truncateUtf16Safe(plugin.name, 96),
       });
       const draft = `${question}\n\n${t("custodian.pluginHelpValue", { value })}`;
       state.pendingDraft = [state.pendingDraft, draft].filter(Boolean).join("\n\n");
@@ -147,10 +147,6 @@ export function currentPluginHelpReference(
   return state.publication?.pathname === pluginHelpPathname(context)
     ? state.publication.reference
     : undefined;
-}
-
-export function pendingPluginHelpDraft(context: PluginHelpContext): boolean {
-  return Boolean(pluginHelpState(context).pendingDraft);
 }
 
 export function takePluginHelpDraft(context: PluginHelpContext): string {

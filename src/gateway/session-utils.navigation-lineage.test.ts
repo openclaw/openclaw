@@ -1,6 +1,8 @@
 /** Tests persisted navigation lineage independently of live subagent control. */
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
@@ -12,9 +14,12 @@ import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.j
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import { listSessionFixture } from "./session-list.test-support.js";
 
-afterEach(() => {
-  closeOpenClawAgentDatabasesForTest();
-});
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(() => {
+    closeOpenClawAgentDatabasesForTest();
+    cleanup();
+  }),
+);
 
 describe("session list navigation lineage", () => {
   afterEach(async () => {
@@ -33,6 +38,7 @@ describe("session list navigation lineage", () => {
   } as OpenClawConfig;
 
   test("keeps persisted navigation lineage separate from live registry control", async () => {
+    const storePath = path.join(tempDirs.make("session-navigation-lineage-"), "sessions.json");
     const now = Date.now();
     const childSessionKey = "agent:main:subagent:controlled-child";
     const entry = {
@@ -66,7 +72,7 @@ describe("session list navigation lineage", () => {
 
     const result = await listSessionFixture({
       cfg,
-      storePath: "/tmp/sessions.json",
+      storePath,
       store: { [childSessionKey]: entry },
       opts: {},
     });
@@ -92,7 +98,7 @@ describe("session list navigation lineage", () => {
 
     const homeLinkedResult = await listSessionFixture({
       cfg,
-      storePath: "/tmp/sessions.json",
+      storePath,
       store: {
         "agent:main:main": { sessionId: "sess-home", updatedAt: now - 1 },
         "agent:main:dashboard:conversation": {

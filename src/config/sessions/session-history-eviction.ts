@@ -101,7 +101,7 @@ export async function inspectSqliteSessionHistoryDiskBudget(
       diskBudget: {
         ...diskBudget,
         deferredReason: "checkpoint-incomplete",
-        checkpoint: blocked.checkpoint,
+        checkpoint: blocked.checkpoint?.health,
         walBytesBefore: usage.databaseWalBytes,
         walBytesAfter: usage.databaseWalBytes,
       },
@@ -392,7 +392,7 @@ async function enforceSessionHistoryMaintenanceSerialized(
       maxBytes: maxDiskBytes,
       highWaterBytes,
       deferred: {
-        checkpoint: blocked.checkpoint,
+        checkpoint: blocked.checkpoint?.health,
         walBytesBefore: initialUsage.databaseWalBytes,
         walBytesAfter: initialUsage.databaseWalBytes,
       },

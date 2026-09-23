@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -17,14 +19,10 @@ import type {
 import { TranscriptsStore, transcriptSessionSelector } from "../../transcripts/store.js";
 import { createTranscriptsTool } from "./transcripts-tool.js";
 
-const { getProvider } = vi.hoisted(() => ({ getProvider: vi.fn() }));
-vi.mock("../../transcripts/provider-registry.js", () => ({
-  getTranscriptSourceProvider: getProvider,
-  listTranscriptSourceProviders: () => [],
-}));
 const tempDirs = createTempDirTracker();
 afterEach(async () => {
   await clearTranscriptCapturesForTest();
+  setActivePluginRegistry(createEmptyPluginRegistry());
   vi.restoreAllMocks();
   vi.useRealTimers();
   await closeOpenClawStateDatabaseAsync();
@@ -64,7 +62,13 @@ function harness() {
     },
     stop,
   };
-  getProvider.mockReturnValue(provider);
+  const registry = createEmptyPluginRegistry();
+  registry.transcriptSourceProviders.push({
+    pluginId: provider.id,
+    provider,
+    source: import.meta.url,
+  });
+  setActivePluginRegistry(registry);
   const ctx = {
     stateDir,
     agentId: "research",

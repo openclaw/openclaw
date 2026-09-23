@@ -110,6 +110,11 @@ Invite results identify the visitor, email, grant expiry, Gateway access, and lo
 URL. A repeat invite for the same email refreshes its expiry rather than creating
 a second grant, and checks the current role again even when the email is already
 in the Access policy.
+Renewal before expiry preserves the grant attached to accepted shared GitHub
+publication requests. After expiry or revocation, a new invitation cannot revive
+those old requests, even if the person later receives a staff role. Request
+publication again with current access after checking any recorded or unconfirmed
+GitHub result; saved work and existing pull requests are retained.
 Permanent access requires `forever: true`. Invites beyond `maxVisitors` are
 refused; revoke an existing visitor or deliberately raise the configured cap.
 
@@ -141,6 +146,10 @@ using the person's canonical email aliases. Known non-default staff roles and
 the Gateway owner remain independent of visitor grants. The store has a fixed
 cap of 500 records and does not automatically expire them: a record must remain
 until policy cleanup succeeds.
+Each uninterrupted grant has an internal UUID. Startup assigns one to active
+legacy grants before admitting visitors; expired grants do not acquire new
+authority. The UUID remains with continuously renewed access and changes after
+expiry or revocation. It is not a login credential.
 
 Records from older versions need confirmed Cloudflare policy membership before
 they can admit a guest. Startup and the existing hourly sweep perform that check;

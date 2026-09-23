@@ -47,7 +47,7 @@ export async function dispatchDiscordNativeAgentReply(params: {
   discordConfig: DiscordConfig;
   accountId: string;
   interaction: CommandInteraction | ButtonInteraction | StringSelectMenuInteraction;
-  ctxPayload: ReturnType<typeof buildDiscordNativeCommandContext>;
+  ctxPayload: Awaited<ReturnType<typeof buildDiscordNativeCommandContext>>;
   effectiveRoute: NativeCommandEffectiveRoute;
   channelConfig: DiscordChannelConfigResolved | null;
   mediaLocalRoots: ReturnType<typeof getAgentScopedMediaLocalRoots>;

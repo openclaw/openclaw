@@ -23,10 +23,8 @@ import {
   acquireStateDatabaseHandleExclusion,
 } from "../infra/state-database-coordinator.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import {
-  assertOpenClawStateDatabaseNotQuarantined,
-  type OpenClawQuarantineReadCleanupError,
-} from "./openclaw-quarantine-store.js";
+import type { OpenClawQuarantineReadCleanupError } from "./openclaw-quarantine-error.js";
+import { assertOpenClawStateDatabaseNotQuarantined } from "./openclaw-quarantine-store.js";
 import {
   createOpenClawStateDatabaseAsyncLifecycle,
   getOpenClawDatabaseMaintenanceScope,
@@ -116,7 +114,7 @@ function notifyOpenClawStateDatabaseClosed(database: StateDatabaseHandle): void 
 }
 
 export function requireOpenClawStateDatabaseIdentity(
-  database: StateDatabaseHandle,
+  database: Pick<StateDatabaseHandle, "db">,
 ): DatabasePathIdentity {
   const identity = databaseIdentities.get(database.db);
   if (!identity) {

@@ -21,7 +21,11 @@ import { createSessionsHistoryTool } from "../agents/tools/sessions-history-tool
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.types.js";
-import { getRuntimeConfig, resetConfigRuntimeState } from "../config/config.js";
+import {
+  getRuntimeConfig,
+  resetConfigRuntimeState,
+  setRuntimeConfigSnapshot,
+} from "../config/config.js";
 import { resolveSessionRoutingContract } from "../config/sessions/main-session.js";
 import {
   appendTranscriptEvent,
@@ -84,6 +88,11 @@ import type {
   RespondFn,
 } from "./server-methods/shared-types.js";
 import { pendingChatSendDedupeKey } from "./server-shared.js";
+import {
+  captureChatResponse,
+  captureChatResult,
+  type CapturedChatResponse,
+} from "./server.chat-response.test-support.js";
 import { releaseSessionTestDirectories } from "./session-test-directories.test-support.js";
 import type { GatewaySessionsDefaults } from "./session-utils.types.js";
 import {
@@ -522,21 +531,6 @@ function makeDoneSessionEntry(overrides: StoredSessionEntry = {}): StoredSession
   return { status: "done", ...overrides };
 }
 
-type CapturedChatResult = { ok: boolean; payload?: unknown };
-type CapturedChatResponse = CapturedChatResult & { error?: unknown };
-
-function captureChatResult(results: CapturedChatResult[]): RespondFn {
-  return (ok, payload) => {
-    results.push({ ok, payload });
-  };
-}
-
-function captureChatResponse(responses: CapturedChatResponse[]): RespondFn {
-  return (ok, payload, error) => {
-    responses.push({ ok, payload, error });
-  };
-}
-
 async function sendControlUiChat(params: {
   authenticatedUserId?: string;
   authenticatedUserProfile?: {
@@ -655,7 +649,7 @@ async function fetchHistoryMessages(
       ...(typeof params?.maxChars === "number" ? { maxChars: params.maxChars } : {}),
     }),
   );
-  expect(historyRes.ok).toBe(true);
+  expect(historyRes.ok, JSON.stringify(historyRes.error)).toBe(true);
   return historyRes.payload?.messages ?? [];
 }
 
@@ -1550,30 +1544,28 @@ describe("gateway server chat", () => {
   });
 
   test("chat.startup omits model metadata from a fallback owner", async () => {
-    const config = {
-      agents: {
-        defaults: {},
-        list: [{ id: "main", default: true }, { id: "work" }],
-      },
-    } as OpenClawConfig;
-    const context = createDirectChatContext({
-      getRuntimeConfig: () => config,
-      loadGatewayModelCatalogSnapshot: vi.fn(async () => ({
-        agentId: "main",
-        agentDir: "/tmp/chat-main-agent",
-        catalogComplete: false,
-        workspaceDir: "/tmp/chat-main-workspace",
-        config,
-        entries: [{ id: "main-only", name: "Main only", provider: "test" }],
-        routeVariants: [],
-      })),
-    });
-    testState.agentsConfig = config.agents;
+    testState.agentsConfig = {
+      defaults: {},
+      list: [{ id: "main", default: true }, { id: "work" }],
+    };
     openDirectChatSession();
     try {
       await writeSessionStore({
         agentId: "work",
         entries: { "agent:work:main": { sessionId: "sess-work", updatedAt: Date.now() } },
+      });
+      const config = getRuntimeConfig();
+      const context = createDirectChatContext({
+        getRuntimeConfig: () => config,
+        loadGatewayModelCatalogSnapshot: vi.fn(async () => ({
+          agentId: "main",
+          agentDir: "/tmp/chat-main-agent",
+          catalogComplete: false,
+          workspaceDir: "/tmp/chat-main-workspace",
+          config,
+          entries: [{ id: "main-only", name: "Main only", provider: "test" }],
+          routeVariants: [],
+        })),
       });
       const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
       await callDirectChat("chat.startup", {
@@ -1604,7 +1596,6 @@ describe("gateway server chat", () => {
       const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
       const context = createDirectChatContext({
         loadGatewayModelCatalogSnapshot: vi.fn(),
-        getRuntimeConfig: () => ({}),
       });
       await callDirectChat("chat.startup", {
         id: "startup-slow-catalog",
@@ -1655,7 +1646,8 @@ describe("gateway server chat", () => {
           createTextTranscriptEvent("user", "paint without metadata"),
         ]);
         const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
-        const context = createDirectChatContext({ getRuntimeConfig: () => ({}) });
+        const context = createDirectChatContext();
+        await initializeSessionReadContext(context);
         let cursor: string | undefined;
         if (delta) {
           const initial: CapturedChatResponse[] = [];
@@ -1673,7 +1665,7 @@ describe("gateway server chat", () => {
           expect(cursor).toEqual(expect.any(String));
         }
         const metadataRuntime = createGatewayChatMetadataRuntime({
-          getConfig: () => ({}),
+          getConfig: context.getRuntimeConfig,
           getContext: () => context,
           log: context.logGateway,
         });
@@ -1833,13 +1825,12 @@ describe("gateway server chat", () => {
         defaults: testState.agentConfig,
         entries: { main: { thinkingDefault: fixture.configured?.agent } },
       };
-      const config = { agents: testState.agentsConfig };
-
       await writeStoredMainSession({
         modelProvider: "test-provider",
         model: "slow-catalog-model",
         ...(fixture.thinkingLevel ? { thinkingLevel: fixture.thinkingLevel } : {}),
       });
+      const config = getRuntimeConfig();
       await appendTranscriptMessage(makeMainSessionScope(storePath), {
         eventId: "reasoning-projection-message",
         parentId: null,
@@ -2070,14 +2061,14 @@ describe("gateway server chat", () => {
           await withPluginMetadataSnapshotScope(
             pluginMetadataSnapshot,
             async () => {
-              const persistedConfig = getRuntimeConfig();
-              expect(persistedConfig.auth?.order?.openai).toEqual([
+              const initialConfig = getRuntimeConfig();
+              expect(initialConfig.auth?.order?.openai).toEqual([
                 "openai:api",
                 "openai:chatgpt",
                 "openai:expired",
               ]);
-              testState.agentsConfig = persistedConfig.agents;
-              testState.agentConfig = persistedConfig.agents?.defaults;
+              testState.agentsConfig = initialConfig.agents;
+              testState.agentConfig = initialConfig.agents?.defaults;
               await writeSessionStore({
                 entries: {
                   "agent:work:main": {
@@ -2115,6 +2106,8 @@ describe("gateway server chat", () => {
                 },
               });
               const { loadGatewaySessionEntryReadOnly } = await import("./session-utils.js");
+              const persistedConfig = { ...initialConfig, session: getRuntimeConfig().session };
+              setRuntimeConfigSnapshot(persistedConfig);
               const loaded = loadGatewaySessionEntryReadOnly("agent:work:main");
               expect(loaded.cfg.agents?.defaults?.model).toEqual(config.agents.defaults.model);
               expect(loaded.cfg.agents?.entries).toEqual(config.agents.entries);
@@ -2554,7 +2547,7 @@ describe("gateway server chat", () => {
     async (method) => {
       openDirectChatSession();
       try {
-        const config = {
+        const fileConfig = {
           agents: {
             defaults: {
               model: {
@@ -2589,7 +2582,7 @@ describe("gateway server chat", () => {
             },
           },
         } as unknown as OpenClawConfig;
-        await writeGatewayConfig(config);
+        await writeGatewayConfig(fileConfig);
         await writeSessionStore({
           entries: {
             "agent:work:main": {
@@ -2598,6 +2591,7 @@ describe("gateway server chat", () => {
             },
           },
         });
+        const config = getRuntimeConfig();
         const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
         const metadata = {
           models: [
@@ -2858,7 +2852,6 @@ describe("gateway server chat", () => {
           .fn<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>()
           .mockImplementationOnce(() => firstCatalogSnapshot.promise)
           .mockResolvedValue(createChatVisionModelCatalogSnapshot()),
-        getRuntimeConfig: () => ({}),
       });
       dispatchInboundMessageMock.mockImplementation(async () => dispatchRelease.promise);
 
@@ -2937,7 +2930,7 @@ describe("gateway server chat", () => {
         modelProvider: "test-provider",
         model: "vision-model",
       });
-      const context = createDirectChatContext({ getRuntimeConfig: () => ({}) });
+      const context = createDirectChatContext();
       const inboundDir = path.join(getMediaDir(), "inbound");
       const inboundBaseline = new Set(await fs.readdir(inboundDir).catch(() => []));
       // A before_agent_run block persists only the redacted reason — no media
@@ -3000,7 +2993,6 @@ describe("gateway server chat", () => {
         addChatRun: vi.fn(() => {
           throw new Error("setup exploded before ack");
         }),
-        getRuntimeConfig: () => ({}),
       });
       const inboundDir = path.join(getMediaDir(), "inbound");
       const inboundBaseline = new Set(await fs.readdir(inboundDir).catch(() => []));
@@ -3094,7 +3086,6 @@ describe("gateway server chat", () => {
         loadGatewayModelCatalogSnapshot: vi
           .fn<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>()
           .mockImplementationOnce(() => firstCatalogSnapshot.promise),
-        getRuntimeConfig: () => ({}),
       });
 
       const inboundDir = path.join(getMediaDir(), "inbound");
@@ -5318,7 +5309,6 @@ describe("gateway server chat", () => {
         loadGatewayModelCatalog: vi.fn<GatewayRequestContext["loadGatewayModelCatalog"]>(),
         chatQueuedTurns: new Map(),
         broadcast,
-        getRuntimeConfig: () => ({}),
       });
       let turnAdoptionLifecycle: GetReplyOptions["turnAdoptionLifecycle"];
       let onQueueDisposition: InternalGetReplyOptions["onFollowupQueueDisposition"];
@@ -5779,7 +5769,7 @@ describe("gateway server chat", () => {
           totalMessages?: number;
           completeSnapshot?: boolean;
         }>(ws, "chat.history", makeMainSessionParams({ limit: 100 }));
-        expect(history.ok).toBe(true);
+        expect(history.ok, JSON.stringify(history.error)).toBe(true);
         const messages = history.payload?.messages ?? [];
         expect(messages).toHaveLength(107);
         const userMessage = expectDefined(messages[0], "oldest imported user message") as {
@@ -5870,7 +5860,7 @@ describe("gateway server chat", () => {
             };
           }>;
         }>(ws, "chat.history", makeMainSessionParams({ limit: 100 }));
-        expect(history.ok).toBe(true);
+        expect(history.ok, JSON.stringify(history.error)).toBe(true);
         const assistantMessages = (history.payload?.messages ?? []).filter(
           (message) => message.role === "assistant",
         );

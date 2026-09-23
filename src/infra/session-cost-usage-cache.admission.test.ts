@@ -53,6 +53,7 @@ it.each(["acquire", "release", "rollup", "prune"] as const)(
             rollupId: "session.jsonl",
             previousValueJson: null,
             valueJson: Buffer.from('{"totalTokens":1}'),
+            blob: null,
             updatedAt: 1,
           }),
         { agentId, path: databasePath },
@@ -95,6 +96,7 @@ it.each(["acquire", "release", "rollup", "prune"] as const)(
                 rollupId: "session.jsonl",
                 previousValueJson: Buffer.from(before.rows[0]!.valueJson),
                 valueJson: Buffer.from('{"totalTokens":2}'),
+                blob: null,
                 updatedAt: 2,
               }),
             ).toBe(true);
@@ -210,6 +212,7 @@ it.each([
               rollupId: "session.jsonl",
               previousValueJson: null,
               valueJson: Buffer.from('{"totalTokens":7}'),
+              blob: null,
               updatedAt: 1,
             });
           } finally {

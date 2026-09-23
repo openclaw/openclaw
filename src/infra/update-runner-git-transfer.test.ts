@@ -119,14 +119,17 @@ it
   .each([
     "none",
     "inventory",
+    "inventory-closed",
     "missing-pack",
+    "large-pack",
     "retry",
     "missing-before",
     "legacy-git",
     "configured-limit",
-  ] as const)("stages complete Git transfers (failure=%s)", async (failure) => {
-  const overflow = failure === "inventory";
+  ] as const)("transfers Git objects without buffering the pack (scenario=%s)", async (failure) => {
+  const overflow = failure === "inventory" || failure === "inventory-closed";
   const missingPack = failure === "missing-pack";
+  const largePack = failure === "large-pack";
   const root = temporary.make("git-transfer-bounds-");
   const source = path.join(root, "source");
   const install = path.join(root, "install");
@@ -179,6 +182,13 @@ it
     );
     fs.writeFileSync(path.join(source, `object-${index}`), bytes);
   }
+  if (largePack) {
+    // Uncompressed Git objects keep this sparse fixture above the old pack cap.
+    await git(source, "config", "core.compression", "0");
+    const payload = path.join(source, "large-payload");
+    fs.writeFileSync(payload, "");
+    fs.truncateSync(payload, 257 * 1024 * 1024);
+  }
   await git(source, "add", ".");
   await git(source, "commit", "-m", "candidate");
   const candidateSha = await git(source, "rev-parse", "HEAD");
@@ -197,7 +207,20 @@ it
     if (failure === "legacy-git" && argv.includes("--no-lazy-fetch") && argv.includes("version")) {
       return { code: 129, stdout: "", stderr: "unknown option: --no-lazy-fetch" };
     }
-    if (overflow && argv.includes("rev-list")) {
+    if (overflow && argv.includes("rev-list") && argv.includes(candidateSha)) {
+      if (failure === "inventory-closed") {
+        const result = await runCommandWithTimeout(argv, {
+          ...options,
+          env,
+          maxOutputBytes: 1024 * 1024,
+          terminateOnOutputLimit: false,
+        });
+        expect(result.code).toBe(0);
+        expect(result.stdout.length).toBeGreaterThan(41 * 12);
+        boundedExitObserved = true;
+        // A bounded transport may report incomplete output after normal child closure.
+        return { ...result, stdout: result.stdout.slice(0, 41 * 12), outputLimitExceeded: true };
+      }
       // The child emits real Git output and handles termination with exit zero.
       // This is legal process behavior; exit status alone cannot admit its tail.
       const script = `const { spawnSync } = require("node:child_process");
@@ -239,7 +262,7 @@ it
     totalSteps: 1,
     results,
   });
-  await using initialTransfer = await prepareGitCandidateTransfer({
+  const initialTransfer = await prepareGitCandidateTransfer({
     candidateSha,
     beforeSha,
     installedRoot: install,
@@ -266,15 +289,28 @@ it
     expect(await git(install, "rev-parse", "HEAD")).toBe(beforeSha);
     return;
   }
-  expect(transfer).toBeDefined();
+  expect(transfer, JSON.stringify(results.filter((entry) => entry.exitCode !== 0))).toBeDefined();
+  if (transfer?.status !== "ok") {
+    throw new Error("Git transfer preparation failed");
+  }
+  await using admittedTransfer = transfer;
   expect(inventoryBytes).toBeGreaterThan(8000);
   if (failure === "none") {
     // The pinned descriptor survives removal of the staging pathname.
     const packName = fs.readdirSync(source).find((name) => name.endsWith(".pack"))!;
     fs.unlinkSync(path.join(source, packName));
   }
-  expect(await transfer!.importInto(step(install))).toBe(true);
+  expect(await admittedTransfer.importInto(step(install))).toBe(true);
   expect(packBytes).toBeGreaterThan(8000);
+  if (largePack) {
+    expect(packBytes).toBeGreaterThan(256 * 1024 * 1024);
+    expect(results).toContainEqual(
+      expect.objectContaining({
+        exitCode: 0,
+        warnings: [expect.stringContaining("Large Git update pack")],
+      }),
+    );
+  }
   if (failure === "none") {
     expect(packBytes).toBeLessThan(baseBytes.length);
   }
@@ -286,7 +322,7 @@ it
     const inspection = path.join(root, "inspection.git");
     await git(root, "clone", "--mirror", "--shared", install, inspection);
     await git(inspection, "update-ref", "refs/heads/candidate", candidateSha);
-    await using retryTransfer = await prepareGitCandidateTransfer({
+    const retryTransfer = await prepareGitCandidateTransfer({
       candidateSha,
       beforeSha,
       installedRoot: install,
@@ -295,8 +331,12 @@ it
       step: step(inspection),
     });
     transfer = retryTransfer;
-    expect(transfer).toBeDefined();
-    expect(await transfer!.importInto(step(install))).toBe(true);
+    expect(transfer, JSON.stringify(results.filter((entry) => entry.exitCode !== 0))).toBeDefined();
+    if (transfer?.status !== "ok") {
+      throw new Error("Git transfer retry preparation failed");
+    }
+    await using admittedRetryTransfer = transfer;
+    expect(await admittedRetryTransfer.importInto(step(install))).toBe(true);
     await git(install, "repack", "-a", "-d");
   }
   await git(install, "checkout", "--detach", candidateSha);
@@ -304,6 +344,12 @@ it
   if (failure === "configured-limit") {
     expect(packBytes).toBeGreaterThan(1024 * 1024);
     expect(await git(source, "config", "pack.packSizeLimit")).toBe("1m");
+  }
+  if (largePack) {
+    expect(fs.statSync(path.join(install, "large-payload")).size).toBe(257 * 1024 * 1024);
+    expect(await git(install, "rev-parse", "HEAD:large-payload")).toBe(
+      await git(source, "rev-parse", "HEAD:large-payload"),
+    );
   }
   expect(fs.readFileSync(path.join(install, "base"))).toEqual(baseBytes);
   for (let index = 0; index < 250; index++) {

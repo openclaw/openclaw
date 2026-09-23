@@ -4,6 +4,7 @@
 // lockfile-only PR changes without executing contributor code.
 import { appendFile } from "node:fs/promises";
 import {
+  SupersededReviewError,
   assertGuardUnchanged,
   findMaintainerApproval,
   finishGuard,
@@ -14,6 +15,8 @@ import {
   GITHUB_API_REQUEST_TIMEOUT_MS,
   GITHUB_ERROR_BODY_MAX_BYTES,
   GITHUB_RESPONSE_BODY_MAX_BYTES,
+  GitHubDiffDataError,
+  GitHubRateLimitError,
   createGitHubApi,
   createIssueMutationHelpers,
   normalizeGuardLoginSet,
@@ -440,14 +443,12 @@ async function collectDependencyManifestChanges(api, { owner, repo, pullRequest,
     if (!isDependencyManifest(basePath) && !isDependencyManifest(headPath)) {
       continue;
     }
-    const [baseManifest, headManifest] = await Promise.all([
-      isDependencyManifest(basePath)
-        ? readJsonFileAtRef(api, { owner, repo, path: basePath, ref: pullRequest.base?.sha })
-        : null,
-      isDependencyManifest(headPath)
-        ? readJsonFileAtRef(api, { owner, repo, path: headPath, ref: pullRequest.head?.sha })
-        : null,
-    ]);
+    const baseManifest = isDependencyManifest(basePath)
+      ? await readJsonFileAtRef(api, { owner, repo, path: basePath, ref: pullRequest.base?.sha })
+      : null;
+    const headManifest = isDependencyManifest(headPath)
+      ? await readJsonFileAtRef(api, { owner, repo, path: headPath, ref: pullRequest.head?.sha })
+      : null;
     const fields = dependencyFieldChanges(baseManifest, headManifest);
     if (fields.length > 0 || basePath !== headPath) {
       changes.push({
@@ -609,10 +610,8 @@ export async function reviewDependencyChanges(
     return true;
   }
 
-  const [comments, labels] = await Promise.all([
-    api.paginate(`${issuePath}/comments`),
-    api.paginate(`${issuePath}/labels`),
-  ]);
+  const comments = await api.paginate(`${issuePath}/comments`);
+  const labels = await api.paginate(`${issuePath}/labels`);
   const trustedCommentAuthors = dependencyGuardCommentAuthors(
     process.env.OPENCLAW_DEPENDENCY_GUARD_COMMENT_BOTS,
   );
@@ -653,7 +652,12 @@ export async function reviewDependencyChanges(
       try {
         const token = process.env.OPENCLAW_DEPENDENCY_GUARD_AUTOSCRUB_TOKEN;
         if (!token) {
-          throw new Error("autoscrub app token was unavailable");
+          await writeSummary(
+            "## Dependency Guard\n\nAutomatic lockfile cleanup is unavailable because no write token could be created. Remove the lockfile changes manually or request maintainer approval. Final dependency review remains required.",
+          );
+          // Optional cleanup cannot grant approval; the final enforcement step
+          // still evaluates these unchanged dependency files.
+          return false;
         }
         const commit = await createAutoscrubCommit(
           { baseApi: api, writeApi: githubApi(token), guard },
@@ -675,6 +679,13 @@ export async function reviewDependencyChanges(
         await writeSummary(body);
         return true;
       } catch (error) {
+        if (
+          error instanceof GitHubRateLimitError ||
+          error instanceof GitHubDiffDataError ||
+          error instanceof SupersededReviewError
+        ) {
+          throw error;
+        }
         autoscrubStatus = {
           kind: "failed",
           reason: error instanceof Error ? error.message : String(error),
@@ -749,6 +760,10 @@ export async function reviewDependencyChanges(
 if (import.meta.url === `file://${process.argv[1]}`) {
   reviewDependencyChanges().catch(
     /** @param {unknown} error */ (error) => {
+      if (error instanceof SupersededReviewError) {
+        console.log(error.message);
+        return;
+      }
       console.error(error instanceof Error ? error.message : error);
       process.exitCode = 1;
     },

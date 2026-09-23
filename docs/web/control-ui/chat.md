@@ -90,11 +90,11 @@ an invalid source folder.
 Select **+** beside the chat composer to open attachments and session capabilities in one menu:
 
 - **Skills** enables or disables individual skills for this session.
-- **Connectors** enables or disables configured MCP servers for this session. A **session** tag marks values that differ from the inherited configuration. **Browse connectors** opens the Plugins page on **Discover**.
+- **Connectors** enables or disables configured MCP servers for this session. A **session** tag marks values that differ from the inherited configuration.
 - **Web search** enables or disables managed web search plus native OpenAI and Codex search for this session.
 - **Manage plugins** opens the Plugins page.
 
-These controls are sparse session overrides, like the model and thinking settings in the chat header. A capability with no override inherits the current agent or global configuration, and OpenClaw applies the resolved values when the next run materializes its tools and skills. The **N session overrides** pill in the composer footer reopens the menu; select its clear action to remove all capability overrides in one click.
+These controls are sparse session overrides, like the model and thinking settings in the chat header. A capability with no override inherits the current agent or global configuration, and OpenClaw applies the resolved values when the next run materializes its tools and skills. When overrides are set, open **+** and select **1 override** or **N overrides** at the bottom of the menu to clear all capability overrides for this session and return to inherited settings.
 
 When `tools.web.search.enabled` is `false`, **Web search** stays off in Chat and New Session. The disabled control explains the global setting. If a session has an older enable override, selecting the control clears that override while search stays off. An explicit session disable remains saved.
 
@@ -210,6 +210,8 @@ Collapsed tool rows keep the tool label visible and truncate long summaries with
 
 Tool activity summaries count the operations inside a workflow rather than counting its wrapper again. Execution calls show the agent-provided purpose when available; titles describe intended work, while results determine success or failure. Recorded child calls appear under their operation instead of as separate peer rows. Expand the operation to inspect its children, then expand a child for its command, full output, and reported exit status. **Tool input** retains the wrapper's source and output. Collapsed operations include failures from their children, even when the wrapper or later calls succeed. Error messages and diagnostic paths stay inside the expandable tool details. Nested relationships use recorded call metadata from the same run and survive reloading; calls without an available, unambiguous parent stay separate. Untitled command previews flatten line breaks and truncate long commands; expanded details retain the original source.
 
+Native Codex Code Mode calls show **run JavaScript** when no purpose is available. Expand **Tool input** to read the source. Captured text-block responses display their text directly, and completed command envelopes show readable output with nonzero exit codes kept visible. JSON output is indented without changing number or string values. **Raw details** retains the original response, including execution metadata. For long results, choose **Show full output** to inspect the complete response; copy and download preserve those captured bytes.
+
 A turn that fails before producing any reply leaves a durable notice in the thread. Failed and timed-out turns also show the available failure reason in the sidebar's compact summary and run-error tooltip, including while a session refresh is still catching up.
 
 Chat error banners, including cloud runner failures, show short messages in full. Use **Copy error** beside **Details** in the header to copy the complete diagnostic received by the UI, even while collapsed. **Details** appears only when the complete diagnostic adds information beyond the preview, such as additional lines or text shortened for the preview; repeated lines and whitespace-only differences do not add details. Open it to read and select the complete diagnostic. The disclosure works with Enter or Space; the expanded text wraps long lines and can be scrolled with the keyboard. Copying does not open or close the details, and neither copying nor expanding an error retries the failed operation. Retry and other recovery actions remain separate from the disclosure.
@@ -305,6 +307,7 @@ Run-error banners offer **Refresh** to reload the conversation without resending
     - When a run is aborted, partial assistant text can still be shown in the UI.
     - Gateway persists aborted partial assistant text into transcript history when buffered output exists.
     - Persisted entries include abort metadata so transcript consumers can tell abort partials from normal completion output.
+    - If a reply cannot be saved, stopping still succeeds and the chat shows a save warning. Copy any visible text you want to keep before leaving the chat; it may not be available when you reopen the conversation.
 
   </Accordion>
 </AccordionGroup>
@@ -323,8 +326,10 @@ If you use the `coding` tool profile, include `"message"` in `tools.alsoAllow`
 deny rules still apply. See [Tool access configuration](/gateway/config-tools).
 
 Select a card to open its listing inside the Control UI: plugins open in
-**Plugins**, and skills open in **Skills**. A plugin's **Install** button opens
-the existing installation review; a skill's **Install** button opens its details.
+**Plugins**, and skills open in **Skills**. A card's **Install** button opens
+the capability details. Select **Install** on a plugin overview to start installation
+immediately. Configured install-policy warnings still require an explicit
+acknowledgment; see [Manage plugins](/web/control-ui/settings#manage-plugins).
 **Dismiss** dismisses the card from the current view.
 
 An installed capability shows a green checkmark and **Installed**. This means the
@@ -530,8 +535,10 @@ Task progress cards are enabled by default. Toggle **Show task progress cards** 
 **Settings → Appearance → Chat** to hide or show the composer card in this browser.
 Hiding it does not stop agent work or clear saved progress.
 
-The task progress card above the composer collapses after deliberate upward
-scrolling settles. Returning to the end and progress updates leave it collapsed;
+On mobile, the task progress card above the composer starts collapsed and stays
+collapsed when you send a new message or the run completes. You can still open it
+manually. The card also collapses after deliberate upward scrolling settles.
+Returning to the end and progress updates leave it collapsed; on desktop,
 completion can reopen it only while you are already at the end. Manual choices
 are remembered per session. Continued scrolling after a manual reopen uses a
 higher threshold, and a second reopen keeps it open for that visit and task.
@@ -546,6 +553,16 @@ browser, including one signed in as you, does not count as a local send. Scroll
 back to the end or select **Latest** to resume following explicitly. Assistant
 text stays visible as it streams and becomes saved history, without a reply
 entry fade or slide.
+
+Hover an external web link, or focus it with the keyboard, to see its page title,
+description, and social image when available. GitHub repository and public
+landing-page links use the same card; issue and pull-request links keep their
+dedicated previews. The card uses
+OpenClaw's theme and includes **Open in your browser**. Press Escape to dismiss it.
+Pages without metadata keep the link label and destination. Touch taps open links
+normally. GitHub sign-in, account, and profile links do not trigger page previews.
+These anonymous previews respect **Automatically Fetch Link Favicons**; see
+[the request and privacy details](/web/control-ui/security-model#content-security-policy).
 
 Completed replies can show a compact **Sources** strip when their web links match
 recorded `web_search` or `web_fetch` results from the same run. Select a title and
@@ -578,6 +595,8 @@ markers. Enter or Space jumps to the focused message. Tab or Shift+Tab leaves th
 rail in one step, and Escape closes the preview and returns focus to the transcript.
 In split view, Escape handles the focused pane before a hovered preview in another pane.
 Focusing a marker also shows its preview without jumping to the message.
+Changing the draft height or entering Goal mode keeps the rail's scroll position
+stable. Navigation and keyboard focus still reveal the selected marker.
 
 The chat transcript uses a centered readable frame aligned with the composer. Assistant and tool output stay left-aligned while your own messages stay right-aligned inside that frame. In multi-user sessions (for example a group chat relayed from a channel plugin), messages from other attributed participants render left-aligned with the author's avatar, name, and a stable per-identity color, so only the signed-in viewer's messages read as "mine". When two or more attributed participants are present, assistant replies carry a small "Replying to name" marker naming the participant whose message triggered the turn. System entries such as local slash-command output render as centered notice rows without an avatar.
 
@@ -641,6 +660,20 @@ The full Tasks page displays the supplied transcript. Core session transcripts
 are currently capped at 8,000 characters per text block. The Chat panel's full-text recovery may be unavailable
 after a temporary session is removed; loading earlier messages does not recover
 a capped reply's missing text.
+
+## Conversations stopped for review
+
+When a provider stops a conversation as a misalignment precaution, chat holds
+ordinary sends, queued input, and Talk. **Review findings** opens the available
+explanation. If the provider and runtime support continuation, the dialog shows
+the exact continuation message and asks you to **Acknowledge findings and
+continue**. Sending that request keeps the chat paused until the provider accepts
+it; a refresh, another session, or newer findings cannot confirm an older review.
+
+Queued messages remain held after continuation. Review and retry each one
+separately if it is still needed. Without a supported continuation, the
+conversation remains stopped. See [misalignment precautions](/concepts/model-failover#misalignment-precautions)
+for runtime support and recovery limits.
 
 ## Chat message width
 

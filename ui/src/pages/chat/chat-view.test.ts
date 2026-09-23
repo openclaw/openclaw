@@ -7354,12 +7354,12 @@ describe("chat model controls", () => {
     },
   );
 
-  it("matches the default model by its localized marker", () => {
+  it("matches the default model by its localized marker and canonical reference", () => {
     const { state } = createChatHeaderState({
       model: "gpt-5.5",
       modelProvider: "openai",
       models: [
-        { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
+        { id: "gpt-5.5", name: "Chat Model", provider: "openai" },
         { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", provider: "anthropic" },
       ],
     });
@@ -7372,14 +7372,14 @@ describe("chat model controls", () => {
     const container = renderModelControls(state);
     const search = container.querySelector<HTMLInputElement>("[data-chat-model-search]");
 
-    search!.value = "default";
-    search!.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    for (const query of ["default", "gpt-5.5", "OPENAI/GPT-5.5"]) {
+      search!.value = query;
+      search!.dispatchEvent(new InputEvent("input", { bubbles: true }));
 
-    const visibleOptions = Array.from(
-      container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]"),
-    ).filter((option) => !option.hidden);
-    expect(visibleOptions).toHaveLength(1);
-    expect(visibleOptions[0]?.dataset.chatModelDefault).toBe("true");
+      const visibleOptions = container.querySelectorAll("[data-chat-model-option]:not([hidden])");
+      expect(visibleOptions, query).toHaveLength(1);
+      expect(visibleOptions[0]?.getAttribute("data-chat-model-default")).toBe("true");
+    }
   });
 
   it("leaves digit keys to nested controls and selects the numbered row from the picker", () => {

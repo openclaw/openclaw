@@ -16,8 +16,6 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
 import { getMemoryEmbeddingProvider } from "../plugins/memory-embedding-provider-runtime.js";
 import type { MemoryEmbeddingProvider } from "../plugins/memory-embedding-providers.js";
-import type { AuthRateLimiter } from "./auth-rate-limit.js";
-import type { ResolvedGatewayAuth } from "./auth.js";
 import {
   acquireEmbeddingProviderLease,
   closeEmbeddingProvider,
@@ -30,6 +28,7 @@ import {
   watchClientDisconnect,
 } from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
+import type { GatewayHttpRequestAuthOptions } from "./http-request-authority.js";
 import {
   authorizeOpenAiCompatibleHttpModelOverride,
   getHeader,
@@ -37,18 +36,14 @@ import {
   isOpenClawAgentModelId,
   isUnknownGatewayAgentError,
   resolveAgentIdForRequest,
-  resolveOpenAiCompatibleHttpOperatorScopes,
+  resolveSharedSecretHttpOperatorScopes,
 } from "./http-utils.js";
 
 // OpenAI-compatible `/v1/embeddings` bridge. It maps OpenClaw agent/model
 // routing onto configured memory embedding providers while preserving the
 // response shape expected by OpenAI SDK clients.
-type OpenAiEmbeddingsHttpOptions = {
-  auth: ResolvedGatewayAuth;
+type OpenAiEmbeddingsHttpOptions = GatewayHttpRequestAuthOptions & {
   maxBodyBytes?: number;
-  trustedProxies?: string[];
-  allowRealIpFallback?: boolean;
-  rateLimiter?: AuthRateLimiter;
 };
 
 const EmbeddingsRequestSchema = z.object({
@@ -204,13 +199,10 @@ export async function handleOpenAiEmbeddingsHttpRequest(
   opts: OpenAiEmbeddingsHttpOptions,
 ): Promise<boolean> {
   const handled = await handleGatewayPostJsonEndpoint(req, res, {
+    ...opts,
     pathname: "/v1/embeddings",
     requiredOperatorMethod: "chat.send",
-    resolveOperatorScopes: resolveOpenAiCompatibleHttpOperatorScopes,
-    auth: opts.auth,
-    trustedProxies: opts.trustedProxies,
-    allowRealIpFallback: opts.allowRealIpFallback,
-    rateLimiter: opts.rateLimiter,
+    resolveOperatorScopes: resolveSharedSecretHttpOperatorScopes,
     maxBodyBytes: opts.maxBodyBytes ?? DEFAULT_EMBEDDINGS_BODY_BYTES,
   });
   if (handled === false) {
@@ -307,6 +299,10 @@ export async function handleOpenAiEmbeddingsHttpRequest(
         isLocalEmbeddingProvider({ cfg, provider: createdProvider.id }),
     );
     try {
+      if (handled.requestAuth.hasCurrentClientAuthority?.() === false) {
+        await handled.requestAuth.revalidate?.();
+        return true;
+      }
       const embeddings = await provider.embedBatch(texts, {
         signal: abortController.signal,
         inputType: "document",
@@ -337,7 +333,7 @@ export async function handleOpenAiEmbeddingsHttpRequest(
       }
     }
   } catch (err) {
-    if (!abortController.signal.aborted) {
+    if (!abortController.signal.aborted && !res.writableEnded && !res.destroyed) {
       logWarn(`openai-compat: embeddings request failed: ${formatErrorMessage(err)}`);
       sendJson(res, 500, {
         error: {

@@ -8,6 +8,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { loadTranscriptEvents, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { clearAgentRunContext } from "../infra/agent-run-registry.js";
+import { runCommandWithTimeout } from "../process/exec.js";
 import { runExclusiveSessionLifecycleMutation } from "../sessions/session-lifecycle-admission.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import {
@@ -64,6 +65,11 @@ async function scenario(
   const storePath = path.join(root, "sessions.sqlite");
   const worktreePath = path.join(root, "workspace");
   await fs.mkdir(worktreePath);
+  // Recovery reads real result refs, so this managed-worktree fixture owns its Git root.
+  const initialized = await runCommandWithTimeout(["git", "-C", worktreePath, "init", "--quiet"], {
+    timeoutMs: 10_000,
+  });
+  expect(initialized.code).toBe(0);
   const entry = {
     sessionId: REQUEST.sessionId,
     worktree: { id: "task-worktree", branch: "test", repoRoot: worktreePath },

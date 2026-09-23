@@ -373,10 +373,34 @@
   color: var(--muted);
 }
 
-/* One ellipsized line while empty: long agent names otherwise wrap the
-   placeholder, grow the box, and surface the overlay scrollbar as a stray
-   gray pill. On the control (not ::placeholder) so Firefox honors it too;
-   typing unsets :placeholder-shown, restoring normal wrapping. */
+/* Chromium forces native placeholders to clip while focused. A noneditable
+   sibling keeps the ellipsis while the native placeholder supplies semantics. */
+.agent-chat__composer-combobox:has(> .agent-chat__composer-placeholder)
+  > :is(textarea, input)::placeholder {
+  color: transparent;
+}
+
+.agent-chat__composer-placeholder {
+  display: none;
+  position: absolute;
+  inset: 0 0 auto;
+  padding-block: var(--chat-composer-editor-inset-block);
+  color: var(--muted);
+  font-size: var(--chat-composer-editor-size);
+  line-height: var(--chat-composer-editor-line);
+  font-variant-ligatures: no-contextual;
+  letter-spacing: normal;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+
+.agent-chat__composer-combobox > :placeholder-shown ~ .agent-chat__composer-placeholder {
+  display: block;
+}
+
+/* Keep an empty editor one line tall; typed drafts retain normal wrapping. */
 .agent-chat__composer-combobox > :is(textarea, input):placeholder-shown {
   white-space: nowrap;
   overflow: hidden;
@@ -596,13 +620,6 @@
 .agent-chat__attach-menu[open] > button {
   color: var(--text);
   background: var(--bg-hover);
-}
-
-.agent-chat__attach-menu::part(menu) {
-  width: 176px;
-  min-width: 176px;
-  max-width: min(176px, calc(100vw - 24px));
-  padding: var(--menu-padding);
 }
 
 /* Send is the primary action of the whole surface, so it gets the same solid
@@ -919,7 +936,7 @@
     align-self: stretch;
   }
 
-  .agent-chat__composer-combobox > :is(textarea, input) {
+  .agent-chat__composer-combobox > :is(textarea, input, .agent-chat__composer-placeholder) {
     flex: 1 1 auto;
     padding-top: 10px;
     padding-bottom: 10px;

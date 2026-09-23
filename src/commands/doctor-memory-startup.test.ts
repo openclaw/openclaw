@@ -4,7 +4,10 @@ import { afterEach, assert, beforeEach, describe, expect, it } from "vitest";
 import { resolveApiKeyForProfile } from "../agents/auth-profiles/oauth.js";
 import { loadAuthProfileStoreForSecretsRuntime } from "../agents/auth-profiles/store-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { ensureMemoryIndexSchema } from "../plugin-sdk/memory-core-host-engine-storage.js";
+import {
+  encodeMemoryEmbedding,
+  ensureMemoryIndexSchema,
+} from "../plugin-sdk/memory-core-host-engine-storage.js";
 import { createPluginStateKeyedStoreForTests } from "../plugin-sdk/plugin-state-test-runtime.js";
 import { createTestPluginApi } from "../plugin-sdk/plugin-test-api.js";
 import { createPluginRuntimeMock } from "../plugin-sdk/test-helpers/plugin-runtime-mock.js";
@@ -99,7 +102,7 @@ describe("Memory Core cold startup migrations", () => {
             "chunk-hash",
             "text-embedding-3-small",
             "Keep this semantic memory.",
-            "[1,0,0]",
+            encodeMemoryEmbedding([1, 0, 0]),
             1,
           );
           const readSemanticData = () => ({

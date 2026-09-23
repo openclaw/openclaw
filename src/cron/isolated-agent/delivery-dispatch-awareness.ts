@@ -635,7 +635,9 @@ export async function appendAdmittedDirectCronDeliveryTranscriptMirror(params: {
             `Session "${params.mirror.sessionKey}" changed before transcript mirror.`,
           );
         }
-        const archivedError = resolveSessionWorkStartError(params.mirror.sessionKey, latest);
+        const archivedError = resolveSessionWorkStartError(params.mirror.sessionKey, latest, {
+          purpose: "accepted-result-settlement",
+        });
         if (archivedError) {
           throw new Error(archivedError);
         }

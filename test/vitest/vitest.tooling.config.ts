@@ -1,6 +1,9 @@
 // Vitest tooling config wires the tooling test shard.
 import { databaseWorkerCoreTestFiles } from "./vitest.database-worker-core-paths.mjs";
-import { gatewayPluginTestFiles } from "./vitest.gateway-server-paths.mjs";
+import {
+  gatewayDatabaseWorkerTestFiles,
+  gatewayPluginTestFiles,
+} from "./vitest.gateway-server-paths.mjs";
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 import { toolingDockerTestFiles } from "./vitest.tooling-docker.config.ts";
 import { toolingIsolatedTestFiles } from "./vitest.tooling-isolated-paths.mjs";
@@ -11,6 +14,7 @@ export function createToolingVitestConfig(env?: Record<string, string | undefine
     env,
     exclude: [
       ...databaseWorkerCoreTestFiles,
+      ...gatewayDatabaseWorkerTestFiles,
       ...boundaryTestFiles,
       ...toolingDockerTestFiles,
       ...toolingIsolatedTestFiles,

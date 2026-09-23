@@ -1,6 +1,15 @@
 // Telegram tests cover bot message context.body plugin behavior.
-import { describe, expect, it, vi } from "vitest";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeAllowFrom } from "./bot-access.js";
+import {
+  GROUP_ID,
+  photoMessage,
+  stickerMessage,
+  voiceMessage,
+  forumMessage,
+} from "./bot-message-context.body.test-support.js";
+import { setTelegramRuntime } from "./runtime.js";
 
 const {
   resolveStickerVisionSupportRuntimeMock,
@@ -35,10 +44,12 @@ type BodyParams = Parameters<typeof resolveTelegramInboundBody>[0];
 type BodyResult = Awaited<ReturnType<typeof resolveTelegramInboundBody>>;
 type Message = Record<string, unknown>;
 type LogInfo = (obj: Record<string, unknown>, msg: string) => void;
-const GROUP_ID = -1_001_234_567_890;
 const BOT_PATTERN = ["\\bbot\\b"];
 const SKIPPED_GROUP = { chatId: -1001234567890, reason: "no-mention" };
-const FORUM_CHAT = { id: GROUP_ID, type: "supergroup", title: "Test Forum", is_forum: true };
+
+beforeEach(() => {
+  setTelegramRuntime(createPluginRuntimeMock());
+});
 
 const createLogger = () => ({ info: vi.fn<LogInfo>() });
 type TestLogger = ReturnType<typeof createLogger>;
@@ -90,51 +101,6 @@ function cachedSticker(stickerMetadata: Record<string, unknown>) {
 }
 
 const richMessage = (value: Message): Message => ({ rich_message: value });
-
-function photoMessage(messageId: number, id: string, extra: Message = {}): Message {
-  return {
-    message_id: messageId,
-    photo: [{ file_id: id, file_unique_id: `${id}-unique`, width: 120, height: 80 }],
-    ...extra,
-  };
-}
-
-function stickerMessage(messageId: number, id: string, extra: Message = {}): Message {
-  return {
-    message_id: messageId,
-    sticker: {
-      file_id: id,
-      file_unique_id: `${id}-unique`,
-      type: "regular",
-      width: 256,
-      height: 256,
-      is_animated: false,
-      is_video: false,
-      ...extra,
-    },
-  };
-}
-
-function voiceMessage(fileId: string, messageId = 1, extra: Message = {}): Message {
-  return {
-    message_id: messageId,
-    date: 1_700_000_000 + messageId,
-    voice: { file_id: fileId },
-    entities: [],
-    ...extra,
-  };
-}
-
-function forumMessage(messageId: number, extra: Message = {}) {
-  return {
-    message_id: messageId,
-    date: 1_700_000_000 + messageId,
-    message_thread_id: 99,
-    chat: FORUM_CHAT,
-    entities: [],
-    ...extra,
-  };
-}
 
 async function resolveBody(overrides: Partial<BodyParams> = {}) {
   const chatId = overrides.chatId ?? 42;

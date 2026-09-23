@@ -73,8 +73,31 @@ export type SessionListFilterParams = {
   shouldYield?: () => boolean;
 };
 
+/** The predicate and its cache key consume the same membership dependencies. */
+export function projectSessionListCandidateOptions(opts: SessionsListParams) {
+  return {
+    includeGlobal: opts.includeGlobal,
+    includeUnknown: opts.includeUnknown,
+    spawnedBy: opts.spawnedBy,
+    label: opts.label,
+    boardFace: opts.boardFace,
+    agentId: opts.agentId,
+    excludeCron: opts.excludeCron,
+    excludeSystem: opts.excludeSystem,
+    excludeSubagents: opts.excludeSubagents,
+    archived: opts.archived,
+    requireLastInteraction: opts.requireLastInteraction,
+    projectId: opts.projectId,
+    workspaceDir: opts.workspaceDir,
+    group: opts.group,
+    pinned: opts.pinned,
+  };
+}
+
 export function* filterSessionCandidateEntries(
-  params: SessionListFilterParams,
+  params: Omit<SessionListFilterParams, "opts"> & {
+    opts: ReturnType<typeof projectSessionListCandidateOptions>;
+  },
 ): SynchronousWork<SessionEntryPair[]> {
   const { opts, now, shouldYield } = params;
   let rowContext: SessionListRowContext | undefined;
@@ -221,7 +244,7 @@ export function* filterSessionEntries(
   // The caller owns these resident entries and their prepared visibility filter.
   const visibleEntries: SessionEntryPair[] = [];
   for (const pair of params.entries) {
-    if (params.entryFilter?.(...pair) ?? true) {
+    if (params.entryFilter?.(pair[0], pair[1]) ?? true) {
       visibleEntries.push(pair);
     }
     if (shouldYield?.()) {
@@ -257,7 +280,12 @@ export function* filterSessionEntries(
 
   const candidateEntries = params.candidatesPrepared
     ? visibleEntries
-    : yield* filterSessionCandidateEntries({ ...params, entries: visibleEntries, getRowContext });
+    : yield* filterSessionCandidateEntries({
+        ...params,
+        opts: projectSessionListCandidateOptions(opts),
+        entries: visibleEntries,
+        getRowContext,
+      });
   // Excluded rows must not participate in search or ownership resolution.
   const matchesSearch = search
     ? createSessionListSearchMatcher({
@@ -270,12 +298,30 @@ export function* filterSessionEntries(
         projectActiveRun: params.projectActiveRun,
       })
     : undefined;
+  const matchesInvolvement = (
+    entry: SessionEntry,
+    effectiveOwner: NonNullable<ReturnType<typeof projectOwner>>["actor"] | undefined,
+    profileId: string,
+    personal: boolean,
+  ) => {
+    const state = projectSessionProfileInvolvement(entry, profileId, identities);
+    return (
+      !(personal && state?.hidden) &&
+      (Boolean(state?.lastMention || (personal && state?.hidden === false)) ||
+        (effectiveOwner?.identity?.type === "profile" &&
+          effectiveOwner.identity.id === profileId) ||
+        projectParticipants(entry, identities, cfg).has(
+          JSON.stringify({ type: "profile", id: profileId }),
+        ))
+    );
+  };
 
   for (const pair of candidateEntries) {
     if (shouldYield?.()) {
       yield;
     }
-    const [key, entry] = pair;
+    const key = pair[0];
+    const entry = pair[1];
     if (matchesSearch && !matchesSearch(key, entry)) {
       continue;
     }
@@ -304,22 +350,9 @@ export function* filterSessionEntries(
         continue;
       }
     }
-    let participants: ReturnType<typeof projectParticipants> | undefined;
-    const matchesInvolvement = (profileId: string, personal: boolean) => {
-      const state = projectSessionProfileInvolvement(entry, profileId, identities);
-      return (
-        !(personal && state?.hidden) &&
-        (Boolean(state?.lastMention || (personal && state?.hidden === false)) ||
-          (effectiveOwner?.identity?.type === "profile" &&
-            effectiveOwner.identity.id === profileId) ||
-          (participants ??= projectParticipants(entry, identities, cfg)).has(
-            JSON.stringify({ type: "profile", id: profileId }),
-          ))
-      );
-    };
     if (
       profileRelation?.relationship === "involving" &&
-      !matchesInvolvement(profileRelation.profileId, false)
+      !matchesInvolvement(entry, effectiveOwner, profileRelation.profileId, false)
     ) {
       continue;
     }
@@ -333,7 +366,7 @@ export function* filterSessionEntries(
       continue;
     }
     // Preserve the existing viewer-independent owner facet; explicit relations still narrow it.
-    if (involvingActorId && !matchesInvolvement(involvingActorId, true)) {
+    if (involvingActorId && !matchesInvolvement(entry, effectiveOwner, involvingActorId, true)) {
       continue;
     }
     if (opts.includePeople || opts.involvingProfileId) {

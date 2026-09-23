@@ -24,6 +24,9 @@ const transport = vi.hoisted(() => ({
   socketThreads: new WeakMap<object, string>(),
   closedSockets: new WeakSet<object>(),
   closedThreads: new Set<string>(),
+  httpSockets: new Set<object>(),
+  httpClosed: 0,
+  fetch: vi.fn(),
   changed: undefined as (() => void) | undefined,
 }));
 vi.unmock("node:child_process");
@@ -37,6 +40,15 @@ vi.mock("node:http", async (original) => {
     createServer(...args: Parameters<typeof actual.createServer>) {
       const server = actual.createServer(...args);
       if (typeof args[0] === "function") {
+        server.on("request", (request) => {
+          if (!transport.httpSockets.has(request.socket)) {
+            transport.httpSockets.add(request.socket);
+            request.socket.once("close", () => {
+              transport.httpClosed++;
+              transport.changed?.();
+            });
+          }
+        });
         server.on("upgrade", (request, socket) => {
           const threadId = request.headers["thread-id"];
           if (typeof threadId === "string") {
@@ -68,9 +80,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (original) =>
     : {
         isBlockedHostnameOrIp: () => false,
         resolvePinnedHostnameWithPolicy: async () => ({ lookup: undefined }),
-        fetchWithSsrFGuard: async () => {
-          throw new Error("Native fixture unexpectedly fell back to HTTP");
-        },
+        fetchWithSsrFGuard: transport.fetch,
       },
 );
 vi.mock("openclaw/plugin-sdk/websocket-runtime", async (original) => {
@@ -98,12 +108,11 @@ vi.mock("openclaw/plugin-sdk/websocket-runtime", async (original) => {
   };
 });
 
-// Native proof complements the deterministic queue/clock tests. It deliberately
-// spans the relay's real handshake deadline so the pinned native connect/retry
-// contract is exercised; it never reaches a provider or the operator's HOME.
+// One real app-server complements the deterministic admission/clock tests.
+// It never reaches a provider or the operator's HOME.
 describe.skipIf(process.platform === "win32")("native inference admission", () => {
   it.skipIf(process.env.OPENCLAW_LIVE_CODEX_INFERENCE === "1")(
-    "keeps native roots and delegated work progressing across saturation and cancellation",
+    "starts native roots and delegated work beyond 16 active responses",
     { timeout: 90_000 },
     async (context) => {
       const tempDirs = useAutoCleanupTempDirTracker(context.onTestFinished);
@@ -121,6 +130,9 @@ describe.skipIf(process.platform === "win32")("native inference admission", () =
       transport.dials = 0;
       transport.upgrades.clear();
       transport.closedThreads.clear();
+      transport.httpSockets.clear();
+      transport.httpClosed = 0;
+      transport.fetch.mockReset().mockRejectedValue(new Error("Unexpected native HTTP fallback"));
       transport.rejected = [];
       transport.changed = () => changed.emit("changed");
       const waitFor = <T>(read: () => T | undefined): Promise<T> => {
@@ -175,7 +187,15 @@ describe.skipIf(process.platform === "win32")("native inference admission", () =
         });
         changed.emit("changed");
       };
-      wss.on("connection", (socket) =>
+      wss.on("connection", (socket) => {
+        socket.once("close", () => {
+          for (const [threadId, owner] of held) {
+            if (owner === socket) {
+              held.delete(threadId);
+            }
+          }
+          changed.emit("changed");
+        });
         socket.on("message", (raw) => {
           if (!Buffer.isBuffer(raw)) {
             throw new Error("Expected a native WebSocket text buffer");
@@ -217,8 +237,8 @@ describe.skipIf(process.platform === "win32")("native inference admission", () =
             held.set(info.thread_id, socket);
           }
           changed.emit("changed");
-        }),
-      );
+        });
+      });
       await new Promise<void>((resolve) => {
         upstream.listen(0, "127.0.0.1", resolve);
       });
@@ -268,6 +288,13 @@ describe.skipIf(process.platform === "win32")("native inference admission", () =
           'wire_api="responses"',
           "requires_openai_auth=false",
           "supports_websockets=true",
+          "[model_providers.http-fixture]",
+          'name="Synthetic HTTP provider"',
+          `base_url=${JSON.stringify(proxy.baseUrl)}`,
+          'wire_api="responses"',
+          "requires_openai_auth=false",
+          "supports_websockets=false",
+          "request_max_retries=1",
         ].join("\n"),
       );
       const childEnv = Object.fromEntries(
@@ -290,24 +317,31 @@ describe.skipIf(process.platform === "win32")("native inference admission", () =
       });
       await client.initialize();
       expect(client.getRuntimeIdentity()?.serverVersion).toBe(CODEX_APP_SERVER_VERSION);
+      const started = new Map<string, string>();
       const terminals = new Map<string, string>();
       client.addNotificationHandler((event) => {
         if (
-          event.method !== "turn/completed" ||
+          (event.method !== "turn/started" && event.method !== "turn/completed") ||
           !isJsonObject(event.params) ||
           typeof event.params.threadId !== "string" ||
           !isJsonObject(event.params.turn) ||
+          typeof event.params.turn.id !== "string" ||
           typeof event.params.turn.status !== "string"
         ) {
           return;
         }
-        terminals.set(event.params.threadId, event.params.turn.status);
+        if (event.method === "turn/started") {
+          started.set(event.params.threadId, event.params.turn.id);
+        } else {
+          terminals.set(event.params.threadId, event.params.turn.status);
+        }
         changed.emit("changed");
       });
-      const begin = async (parent = false) => {
+      const begin = async (parent = false, modelProvider?: string) => {
         const { thread } = await client.request("thread/start", {
           cwd: native.cwd,
           experimentalRawEvents: true,
+          ...(modelProvider ? { modelProvider } : {}),
         });
         if (parent) {
           parentId = thread.id;
@@ -337,52 +371,92 @@ describe.skipIf(process.platform === "win32")("native inference admission", () =
         roots.push(await begin());
       }
       await waitFor(() => (held.size === 16 ? true : undefined));
-      const activeDials = transport.dials;
       const cancelled = await begin();
-      await waitFor(() => (transport.upgrades.has(cancelled.threadId) ? true : undefined));
+      await waitFor(() => (held.has(cancelled.threadId) ? true : undefined));
+      expect(held.size).toBe(17);
+      expect(roots.every((rootTurn) => held.has(rootTurn.threadId))).toBe(true);
+      // Native prewarm can open the socket before turn/started establishes the active turn.
+      await waitFor(() =>
+        started.get(cancelled.threadId) === cancelled.turnId ? true : undefined,
+      );
       await client.request("turn/interrupt", {
         threadId: cancelled.threadId,
         turnId: cancelled.turnId,
       });
       expect(await waitFor(() => terminals.get(cancelled.threadId))).toBe("interrupted");
+      // The host releases the admitted generation when native interruption settles.
+      cancelled.controller.abort();
       await waitFor(() => (transport.closedThreads.has(cancelled.threadId) ? true : undefined));
       expect(transport.rejected.some((entry) => entry.threadId === cancelled.threadId)).toBe(false);
-      expect(transport.dials).toBe(activeDials);
+      await waitFor(() => (!held.has(cancelled.threadId) ? true : undefined));
       expect(held.has(cancelled.threadId)).toBe(false);
-      const waiting = await begin();
-      const rejection = await waitFor(() =>
-        transport.rejected.find((entry) => entry.threadId === waiting.threadId),
-      );
-      expect(rejection).toMatchObject({ status: 503, connected: true });
-      expect(transport.dials).toBe(activeDials);
-      expect(terminals.has(waiting.threadId)).toBe(false);
-      finish(roots[0]!.threadId);
-      await waitFor(() => (held.has(waiting.threadId) ? true : undefined));
-      finish(waiting.threadId);
-      expect(await waitFor(() => terminals.get(waiting.threadId))).toBe("completed");
-      expect(held.size).toBe(15);
       const parent = await begin(true);
       const childId = await waitFor(
         () => [...metadata].find(([, info]) => info.parent_thread_id === parent.threadId)?.[0],
       );
       await waitFor(() => (held.has(childId) ? true : undefined));
-      expect(held.size).toBe(16);
+      expect(held.size).toBe(17);
       const quick = await begin();
-      await waitFor(() => (transport.upgrades.has(quick.threadId) ? true : undefined));
-      const rejectedBeforeDrain = transport.rejected.length;
-      finish(childId);
       await waitFor(() => (held.has(quick.threadId) ? true : undefined));
+      expect(held.size).toBe(18);
+      expect(roots.every((rootTurn) => held.has(rootTurn.threadId))).toBe(true);
+      finish(childId);
       finish(quick.threadId);
-      // Child and queued root may run before the parent's follow-up request.
       expect(await waitFor(() => terminals.get(parent.threadId))).toBe("completed");
       expect(await waitFor(() => terminals.get(quick.threadId))).toBe("completed");
-      expect(transport.rejected).toHaveLength(rejectedBeforeDrain);
+      expect(transport.rejected).toHaveLength(0);
       for (const threadId of held.keys()) {
         finish(threadId);
       }
       for (const rootTurn of roots) {
         expect(await waitFor(() => terminals.get(rootTurn.threadId))).toBe("completed");
       }
+      let httpAttempts = 0;
+      transport.fetch.mockImplementation(async (args) => {
+        const requestBody: unknown = await new Response(args.init.body).json();
+        expect(requestBody).toMatchObject({
+          instructions: expect.stringContaining("synthetic root context"),
+        });
+        if (++httpAttempts === 1) {
+          return {
+            response: new Response('{"error":{"type":"server_error","message":"retry fixture"}}', {
+              status: 503,
+            }),
+            release: async () => {},
+          };
+        }
+        const id = "http-retry-response";
+        const events = [
+          { type: "response.created", response: { id } },
+          {
+            type: "response.output_item.done",
+            item: {
+              type: "message",
+              role: "assistant",
+              id: "http-answer",
+              content: [{ type: "output_text", text: "synthetic HTTP complete" }],
+            },
+          },
+          {
+            type: "response.completed",
+            response: { id, usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } },
+          },
+        ];
+        return {
+          response: new Response(
+            events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""),
+            {
+              headers: { "content-type": "text/event-stream" },
+            },
+          ),
+          release: async () => {},
+        };
+      });
+      const httpTurn = await begin(false, "http-fixture");
+      expect(await waitFor(() => terminals.get(httpTurn.threadId))).toBe("completed");
+      await waitFor(() => (transport.httpClosed === 2 ? true : undefined));
+      expect(httpAttempts).toBe(2);
+      expect(transport.httpSockets.size).toBe(2);
     },
   );
   it.skipIf(process.env.OPENCLAW_LIVE_CODEX_INFERENCE !== "1")(

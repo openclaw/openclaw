@@ -286,6 +286,7 @@ ${invocation}
     for (const [invocation, contents] of [
       ["review_validate_artifacts 42", "invalid JSON"],
       ["prepare_init 42", JSON.stringify(f.review)],
+      ["prepare_init 42 '' correction", JSON.stringify(f.review)],
     ]) {
       writeFileSync(join(local, "review.json"), contents);
       writeFileSync(

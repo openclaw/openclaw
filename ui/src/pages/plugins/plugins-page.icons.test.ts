@@ -12,6 +12,8 @@ import { PluginsPageIcons } from "./plugins-page-icons.ts";
 import {
   createClient,
   createContext,
+  createDiscoveryDetail,
+  createInspectResult,
   createGateway,
   createPlugin,
   createPluginsRouteData,
@@ -37,6 +39,149 @@ describe("PluginsPage icon routing", () => {
     }
     return createResult();
   };
+
+  it("loads artwork for rendered category cards and expands without per-card metadata reads", async () => {
+    vi.stubGlobal(
+      "URL",
+      class extends URL {
+        static override createObjectURL = vi.fn(() => "blob:publisher");
+        static override revokeObjectURL = vi.fn();
+      },
+    );
+    const fetchMock = vi.fn(
+      async () =>
+        new Response("image", {
+          headers: { "content-type": "image/png" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const items: PluginDiscoveryEntry[] = Array.from({ length: 12 }, (_, index) => ({
+      id: `catalog-${index}`,
+      catalog: {
+        name: `Plugin ${index}`,
+        official: false,
+        categories: ["web"],
+        imageUrl: `https://cdn.example.com/publisher-${index}.png`,
+      },
+      local: {
+        present: false,
+        installed: false,
+        enabled: false,
+        state: "not-installed",
+        action: "install",
+      },
+    }));
+    const { client, request } = createClient(async (method) => {
+      if (method === "plugins.catalog.browse") {
+        return { items, categories: [{ slug: "web", label: "Web", icon: "globe", order: 1 }] };
+      }
+      return requestResult(method);
+    });
+    const harness = createGateway(client);
+    harness.gateway.connection.gatewayUrl = window.location.origin.replace(/^http/u, "ws");
+    const { page } = await mountPage(
+      createContext(harness.gateway),
+      createPluginsRouteData(
+        harness.gateway,
+        createResult(),
+        createPluginsRouteLocation("/plugins"),
+      ),
+    );
+    await waitForFast(() =>
+      expect(page.querySelectorAll(".plugin-catalog-card").length).toBeGreaterThan(0),
+    );
+    const visible = page.querySelectorAll(".plugin-catalog-card").length;
+    expect(visible).toBeLessThan(items.length);
+    await waitForFast(() => expect(fetchMock).toHaveBeenCalledTimes(visible));
+    await waitForFast(() =>
+      expect(page.querySelectorAll(".plugin-catalog-card img")).toHaveLength(visible),
+    );
+    page
+      .querySelector<HTMLButtonElement>(
+        '[data-catalog-section="web"] .plugin-catalog-section__view-all',
+      )!
+      .click();
+    await waitForFast(() =>
+      expect(page.querySelectorAll(".plugin-catalog-card")).toHaveLength(items.length),
+    );
+    await waitForFast(() =>
+      expect(page.querySelectorAll(".plugin-catalog-card img")).toHaveLength(items.length),
+    );
+    expect(request.mock.calls.map(([method]) => method)).not.toContain("plugins.catalog.get");
+  });
+
+  it.each([404, 200])(
+    "uses late publisher enrichment after package status %s without retrying the package",
+    async (status) => {
+      vi.stubGlobal(
+        "URL",
+        class extends URL {
+          static override createObjectURL = vi.fn((blob: Blob) =>
+            blob.size === 1 ? "blob:package" : "blob:author",
+          );
+          static override revokeObjectURL = vi.fn();
+        },
+      );
+      const authorUrl = "https://cdn.example.com/publisher.png";
+      const fetchMock = vi.fn(async (url: string) =>
+        url.includes("/plugin-icon/")
+          ? new Response(status === 200 ? "p" : null, {
+              status,
+              headers: { "content-type": "image/png" },
+            })
+          : new Response("author", { headers: { "content-type": "image/png" } }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const plugin = createPlugin({ hasIcon: true, catalogId: "catalog:workboard" });
+      const detail = createDiscoveryDetail(plugin);
+      detail.detail.author = { handle: "publisher", imageUrl: authorUrl };
+      const catalog = deferred<typeof detail>();
+      const result = createResult(plugin);
+      const { client } = createClient(async (method) => {
+        if (method === "plugins.inspect") {
+          return createInspectResult();
+        }
+        if (method === "plugins.catalog.get") {
+          return catalog.promise;
+        }
+        if (method === "plugins.list") {
+          return result;
+        }
+        throw new Error(`Unexpected method: ${method}`);
+      });
+      const harness = createGateway(client);
+      harness.gateway.connection.gatewayUrl = window.location.origin.replace(/^http/u, "ws");
+      const { page } = await mountPage(
+        createContext(harness.gateway),
+        createPluginsRouteData(
+          harness.gateway,
+          result,
+          createPluginsRouteLocation("/settings/plugins/workboard"),
+        ),
+      );
+      const image = () => page.querySelector(".plugin-catalog-detail__hero img");
+      await waitForFast(() => expect(fetchMock).toHaveBeenCalledOnce());
+      await waitForFast(() =>
+        status === 200
+          ? expect(image()?.getAttribute("src")).toBe("blob:package")
+          : expect(
+              page
+                .querySelector(".plugin-catalog-detail__hero .plugins-tile--fallback")
+                ?.textContent?.trim(),
+            ).toBe("WO"),
+      );
+      catalog.resolve(detail);
+      await waitForFast(() =>
+        expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+          "/__openclaw__/plugin-icon/workboard",
+          `/__openclaw__/catalog-icon/${encodeURIComponent(authorUrl)}`,
+        ]),
+      );
+      await waitForFast(() =>
+        expect(image()?.getAttribute("src")).toBe(status === 200 ? "blob:package" : "blob:author"),
+      );
+    },
+  );
 
   it("fetches proxied icons with auth fallback and revokes their blob URLs", async () => {
     const createObjectURL = vi.fn(() => "blob:firecrawl-icon");
@@ -220,8 +365,10 @@ describe("PluginsPage icon routing", () => {
     );
     expect(page.querySelector('[data-plugin-id="ch_discord"] img')).toBeNull();
     expect(
-      page.querySelector('[data-plugin-id="ch_discord"] .plugin-catalog-card__art svg'),
-    ).not.toBeNull();
+      page
+        .querySelector('[data-plugin-id="ch_discord"] .plugins-tile--fallback')
+        ?.textContent?.trim(),
+    ).toBe("DI");
   });
 
   it("fetches package icons for installed settings rows", async () => {

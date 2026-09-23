@@ -91,7 +91,7 @@ describe("cloud transcript write admission", () => {
           ...unusedEnvironments(),
           get: () => environment,
           acquireTurnCredential: async () => credential(),
-          acknowledgeCredentialDelivery: () => true,
+          acknowledgeCredentialDelivery: async () => true,
           startTunnel: async () => tunnel,
         },
       });

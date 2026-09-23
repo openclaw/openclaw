@@ -82,7 +82,7 @@ export function registerCatalogPageHostTests() {
       expect(retainedHost()).toEqual(exhaustedHost);
 
       gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
-      await vi.advanceTimersByTimeAsync(200);
+      await vi.advanceTimersByTimeAsync(5_000);
       await sidebar.updateComplete;
       expect(request).toHaveBeenNthCalledWith(3, "sessions.catalog.list", {
         agentId: "main",
@@ -150,7 +150,7 @@ export function registerCatalogPageHostTests() {
       sidebar.querySelector<HTMLButtonElement>('[data-session-catalog-load-more="codex"]')?.click();
       await vi.advanceTimersByTimeAsync(0);
       gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
-      await vi.advanceTimersByTimeAsync(200);
+      await vi.advanceTimersByTimeAsync(5_000);
       expect(request).toHaveBeenCalledTimes(4);
 
       const progressId = (request.mock.calls[2]?.[1] as { progressId?: string })?.progressId;

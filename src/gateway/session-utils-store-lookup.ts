@@ -422,6 +422,38 @@ export function resolveGatewaySessionStoreTargetWithStore(
   );
 }
 
+/** Worker readers fill the same ordered lookup plan before its synchronous selection. */
+export async function prepareGatewaySessionStoreTargetReadOnly(
+  params: GatewaySessionStoreLookupParams & {
+    agentId: string;
+    targetDiscoveryCache: GatewaySessionStoreDiscoveryCache;
+  },
+  prepareReads: (reads: readonly GatewaySessionStoreRead[]) => Promise<void>,
+): Promise<GatewaySessionStoreTargetWithStore> {
+  const normalized = {
+    ...params,
+    key: normalizeOptionalString(params.key) ?? "",
+    exactRead: true,
+    readOnly: true,
+    projection: "list" as const,
+  };
+  const resolve = async <T>(plan: GatewaySessionStorePlan<T>) => {
+    await prepareReads(plan.reads);
+    if (plan.reads.some((read) => read.result === undefined)) {
+      throw new Error("Session lookup facts were not prepared");
+    }
+    return plan.resolve();
+  };
+  const deletedMain = prepareExplicitDeletedLegacyMainStoreTarget(normalized);
+  if (deletedMain) {
+    const target = await resolve(deletedMain);
+    if (target) {
+      return target;
+    }
+  }
+  return await resolve(prepareGatewaySessionStoreTarget(normalized));
+}
+
 /** Exact row owners supply missing parent facts without expanding their selected store. */
 export function createGatewaySessionEntryReader(params: {
   cfg: OpenClawConfig;

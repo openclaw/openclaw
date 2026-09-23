@@ -4,6 +4,7 @@ import { hashConfigRaw } from "../config/io.read-helpers.js";
 import type { DoctorHealthFlowContext } from "../flows/doctor-health-contribution-types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createDoctorPrompter } from "./doctor-prompter.js";
+import { prepareDoctorConfigReferenceSource } from "./doctor/shared/config-flow-steps.js";
 
 /** Start at the config-flow output contract; state migrations are not this writer's owner. */
 export async function prepareWriterContext(configPath: string): Promise<DoctorHealthFlowContext> {
@@ -31,7 +32,7 @@ export async function prepareWriterContext(configPath: string): Promise<DoctorHe
         path: snapshot.path,
         hash: snapshot.hash ?? hashConfigRaw(snapshot.raw),
       },
-      sourceConfigForWrite: snapshot.sourceConfig,
+      referenceSource: prepareDoctorConfigReferenceSource(snapshot),
       sourceConfigValid: true,
       sourceLastTouchedVersion: snapshot.sourceConfig.meta?.lastTouchedVersion,
     },

@@ -74,7 +74,8 @@ extension DashboardWindowController {
             desktopAvailability: .init(state: MacDesktopAvailabilityCoordinator.shared.refresh()),
             browser: .init(
                 importAvailable: state.connectionMode == .local && BrowserProfileImportModel.shared.importAvailable,
-                cookieSync: Self.deviceCookieSyncSnapshot(state: state)),
+                cookieSync: Self.deviceCookieSyncSnapshot(state: state),
+                chromeSetupActions: ChromeExtensionSetupAction.allCases),
             permissions: .init(
                 entries: permissions,
                 location: .init(

@@ -4,24 +4,26 @@ import { Worker } from "node:worker_threads";
 import * as tar from "tar";
 import { describe, expect, it } from "vitest";
 import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../infra/runtime-worker-url.js";
+import { sqliteWorkerPreloadEnv } from "../../infra/sqlite-worker-preload.test-support.js";
+import {
   closeOpenClawStateDatabase,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { cliRecoveryEntrypoints } from "../cli-entrypoint.test-support.js";
 import { runCliProcessChild } from "../cli-process-child.test-helpers.js";
 
 function runBackupCli(params: {
   env: NodeJS.ProcessEnv;
   outputPath: string;
-  preloadPath?: string;
   includeWorkspace?: boolean;
 }): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return runCliProcessChild({
     nodeArgs: [
-      ...(params.preloadPath ? ["--import", params.preloadPath] : []),
-      "--import",
-      "tsx",
-      path.resolve("src/entry.ts"),
+      ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.cli)),
       "backup",
       "create",
       "--output",
@@ -170,18 +172,19 @@ describe("backup create CLI", () => {
         );
         const markerPath = state.path("sqlite-backup-entered");
         const preloadPath = await state.writeText(
-          "stall-at-sqlite-backup.mjs",
+          "shift-clock-at-sqlite-backup.cjs",
           `
-            import fs from "node:fs";
-            import { syncBuiltinESMExports } from "node:module";
+            const fs = require("node:fs");
+            const { syncBuiltinESMExports } = require("node:module");
             const sqlite = process.getBuiltinModule("node:sqlite");
             const originalBackup = sqlite.backup.bind(sqlite);
-            let stalled = false;
+            const markerPath = process.env.PROOF_SNAPSHOT_MARKER;
+            const realNow = Date.now.bind(Date);
+            // Acquisition runs in a worker; every isolate must observe the same elapsed time.
+            Date.now = () => realNow() + (fs.existsSync(markerPath) ? 61_000 : 0);
             sqlite.backup = async (...args) => {
-              if (!stalled) {
-                stalled = true;
-                fs.writeFileSync(process.env.PROOF_SNAPSHOT_MARKER, "entered\\n", { mode: 0o600 });
-                Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 61_000);
+              if (!fs.existsSync(markerPath)) {
+                fs.writeFileSync(markerPath, "entered\\n", { mode: 0o600 });
               }
               return await originalBackup(...args);
             };
@@ -194,11 +197,11 @@ describe("backup create CLI", () => {
           env: {
             ...process.env,
             ...state.env,
+            ...sqliteWorkerPreloadEnv(preloadPath),
             OPENCLAW_TEST_CONSOLE: "1",
             PROOF_SNAPSHOT_MARKER: markerPath,
           },
           outputPath,
-          preloadPath,
         });
 
         expect(result.code, result.stderr).toBe(0);

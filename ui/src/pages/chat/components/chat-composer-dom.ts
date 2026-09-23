@@ -152,9 +152,7 @@ export function adjustTextareaHeight(el: HTMLTextAreaElement) {
     return;
   }
   const thread = el.closest(".chat")?.querySelector<HTMLElement>(".chat-thread") ?? null;
-  const preserveBottomAnchor = thread
-    ? captureChatSessionScrollPosition(thread).anchorToEnd
-    : false;
+  const scrollPosition = thread ? captureChatSessionScrollPosition(thread) : null;
   // Hide the browser's scrollbar while measuring; restore it only when the
   // final CSS-constrained height actually clips the draft.
   el.style.overflowY = "hidden";
@@ -173,11 +171,17 @@ export function adjustTextareaHeight(el: HTMLTextAreaElement) {
   // Once capped, the textarea can perturb the sibling transcript without
   // resizing its viewport, so ResizeObserver has no correction to apply.
   if (thread) {
-    if (preserveBottomAnchor) {
+    if (scrollPosition?.anchorToEnd) {
       thread.scrollTop = thread.scrollHeight;
     }
     // A following composer commit can hide this viewport from browser observers.
-    publishTranscriptScroll(thread, { type: "resize" });
+    const after = thread.scrollTop;
+    publishTranscriptScroll(thread, {
+      type: "resize",
+      ...(scrollPosition?.anchorToEnd && scrollPosition.scrollTop !== after
+        ? { scrollCorrection: { before: scrollPosition.scrollTop, after } }
+        : {}),
+    });
   }
 }
 

@@ -24,14 +24,11 @@ import { reloadTaskRegistryFromStoreAsync } from "./task-registry-state.js";
 import { createTaskRecord, getTaskById } from "./task-registry.js";
 import {
   configureTaskRegistryMaintenance,
-  resetTaskRegistryMaintenanceRuntimeForTests,
   stopTaskRegistryMaintenance,
 } from "./task-registry.maintenance.js";
 import {
   resetDetachedTaskLifecycleRuntimeForTests,
   resetTaskFlowRegistryForTests,
-  resetTaskRegistryControlRuntimeForTests,
-  resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
 } from "./task-runtime.test-helpers.js";
 
@@ -79,10 +76,8 @@ function requireTask(taskId: string) {
 
 async function resetTaskOperationsRuntime(): Promise<void> {
   await stopTaskRegistryMaintenance();
-  resetTaskRegistryMaintenanceRuntimeForTests();
+  configureTaskRegistryMaintenance({ runtimeAuthoritative: false });
   resetDetachedTaskLifecycleRuntimeForTests();
-  resetTaskRegistryControlRuntimeForTests();
-  resetTaskRegistryDeliveryRuntimeForTests();
   resetTaskRegistryForTests({ persist: false });
   resetTaskFlowRegistryForTests({ persist: false });
   resetSystemEventsForTest();

@@ -348,7 +348,7 @@ suite.define(() => {
                   expect.objectContaining(updatedJob),
                 );
               } else if (action === "run") {
-                expect(result).toMatchObject({ ok: true });
+                expect(result).toMatchObject({ ok: true, enqueued: true });
                 await expect
                   .poll(
                     async () => {

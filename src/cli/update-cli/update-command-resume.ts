@@ -7,6 +7,7 @@ import {
   UPDATE_RUN_ID_ENV,
   readControlPlaneUpdateSentinelMeta,
 } from "../../infra/update-control-plane-sentinel.js";
+import { DoctorMaintenanceRefusalError } from "../../infra/update-doctor-result.js";
 import { writeUpdateRunReportArtifact } from "../../infra/update-failure-report-artifact.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import { createManagedHandoffProcessIdentityReader } from "../../infra/update-managed-service-handoff-process.js";
@@ -22,6 +23,7 @@ import {
 } from "../../infra/update-post-core-context.js";
 import {
   createManagedUpdateRequesterAuthority,
+  createManagedUpdateRequesterContinuationAuthority,
   resolveManagedUpdateRequester,
 } from "../../infra/update-requester-authority.js";
 import { recordPostCoreUpdateEvidence } from "../../infra/update-run-interruption.js";
@@ -48,7 +50,10 @@ import {
   runUpdateFinalizationDoctorInFreshProcess,
 } from "./update-command-fresh-doctor.js";
 import { readPackageUpdateIdentity } from "./update-command-package.js";
-import { collectPostCorePluginAdvisories } from "./update-command-plugins-internals.js";
+import {
+  collectPostCorePluginAdvisories,
+  type PluginUpdateWarning,
+} from "./update-command-plugins-internals.js";
 import {
   updatePluginsAfterCoreUpdate,
   type PostCorePluginUpdateResult,
@@ -152,9 +157,15 @@ export async function resumePostCoreUpdate(params: ResumePostCoreUpdateParams): 
         async (executor) => {
           const fence = await executor.enter(root);
           const requester = resolveManagedUpdateRequester(record.origin.requester);
-          const requesterAuthority = requester
-            ? await createManagedUpdateRequesterAuthority(requester, env)
-            : undefined;
+          const requesterAuthority = requester?.authorizationSource?.startsWith("profile:")
+            ? await createManagedUpdateRequesterContinuationAuthority(
+                requester,
+                { runId, executor: fence },
+                env,
+              )
+            : requester
+              ? await createManagedUpdateRequesterAuthority(requester, env)
+              : undefined;
           fence.assertCurrent();
           const current = getUpdateRun(runId, { env });
           if (!inPostCore(current) || current?.createdAtMs !== record.createdAtMs) {
@@ -188,9 +199,10 @@ export async function resumePostCoreUpdate(params: ResumePostCoreUpdateParams): 
     } else {
       completed = await resumePostCoreUpdateInternal(resumed);
     }
-    const { pluginUpdate, result } = completed;
+    const { pluginUpdate, result, assertRequesterCurrent } = completed;
     // Shipped parents may stop this child as soon as this file appears. Publish
     // only after the executor has joined its Doctor and released native custody.
+    assertRequesterCurrent();
     if (process.env[POST_CORE_UPDATE_RESULT_PATH_ENV]) {
       await writePostCorePluginUpdateResultFile(
         process.env[POST_CORE_UPDATE_RESULT_PATH_ENV],
@@ -214,10 +226,17 @@ export async function resumePostCoreUpdate(params: ResumePostCoreUpdateParams): 
   defaultRuntime.exit(0);
 }
 
-async function resumePostCoreUpdateInternal(
-  params: ResumePostCoreUpdateParams,
-): Promise<{ pluginUpdate: PostCorePluginUpdateResult; result: UpdateRunResult }> {
-  const { assertCurrent } = createUpdateCommandAuthority({ opts: params.opts }, "Post-core update");
+async function resumePostCoreUpdateInternal(params: ResumePostCoreUpdateParams): Promise<{
+  pluginUpdate: PostCorePluginUpdateResult;
+  result: UpdateRunResult;
+  assertRequesterCurrent: () => void;
+}> {
+  const runId = process.env[UPDATE_RUN_ID_ENV]?.trim();
+  const postCoreUpdate = process.env[POST_CORE_UPDATE_ENV] === "1";
+  const { assertCurrent, assertRequesterCurrent } = createUpdateCommandAuthority(
+    { opts: params.opts },
+    "Post-core update",
+  );
   assertCurrent?.();
   if (
     params.channel !== "stable" &&
@@ -245,36 +264,67 @@ async function resumePostCoreUpdateInternal(
     process.env[POST_CORE_UPDATE_RESULT_PATH_ENV],
   );
   assertCurrent?.();
-  await withPluginLifecycleLease({ assertCurrent }, async (lease) => {
-    await completeSourceUpdateRuntime({
-      root: params.root,
-      timeoutMs: params.timeoutMs,
-      lease,
-      beforePersistentEffect: assertCurrent,
-    });
-  });
-  assertCurrent?.();
   let maintenance: Awaited<
     ReturnType<typeof import("../../commands/doctor-maintenance.js").beginDoctorMaintenance>
   >;
   let outcome: { pluginUpdate: PostCorePluginUpdateResult } | { error: unknown };
+  let producedPluginUpdate: PostCorePluginUpdateResult | undefined;
   try {
     outcome = {
       pluginUpdate: await withCommandProcessScope(async () => {
-        if (!parentOwnsCompletion) {
-          const { beginDoctorMaintenance } = await import("../../commands/doctor-maintenance.js");
-          assertCurrent?.();
-          maintenance = await beginDoctorMaintenance({
+        const doctorWarnings: PluginUpdateWarning[] = [];
+        const recordDoctorWarnings = (additionalWarnings: string[] = []) => {
+          const warnings = [
+            ...additionalWarnings,
+            ...doctorWarnings.map((warning) => warning.message),
+          ];
+          if (!postCoreUpdate || !runId || warnings.length === 0) {
+            return;
+          }
+          try {
+            // Settled diagnostics survive later failure without claiming candidate completion.
+            recordPostCoreUpdateEvidence(runId, { warnings });
+          } catch (error) {
+            defaultRuntime.error(
+              `Post-core update evidence could not be saved: ${formatErrorMessage(error)} Update completion may require Doctor verification.`,
+            );
+          }
+        };
+        const onDoctorWarnings = (warnings: string[]) => {
+          doctorWarnings.push(
+            ...warnings.map((message) => ({
+              reason: "doctor-advisory",
+              message,
+              guidance: ["Run `openclaw doctor --fix` after repairing the plugin."],
+            })),
+          );
+          recordDoctorWarnings();
+        };
+        const { beginDoctorMaintenance } = await import("../../commands/doctor-maintenance.js");
+        assertCurrent?.();
+        maintenance = await beginDoctorMaintenance({
+          // Parent-owned completion retains native service custody, not state admission.
+          root: parentOwnsCompletion ? null : params.root,
+          options: { repair: true, nonInteractive: true, json: params.opts.json },
+          runtime: { ...defaultRuntime, log: defaultRuntime.error },
+          ...(params.opts.run ? { assertCurrent } : {}),
+        });
+        assertCurrent?.();
+        // Each fresh Doctor holds its own database fences after admission.
+        await maintenance?.releaseState();
+        await withPluginLifecycleLease({ assertCurrent }, async (lease) => {
+          await completeSourceUpdateRuntime({
             root: params.root,
-            options: { repair: true, nonInteractive: true, json: params.opts.json },
-            runtime: { ...defaultRuntime, log: defaultRuntime.error },
+            timeoutMs: params.timeoutMs,
+            lease,
+            beforePersistentEffect: assertCurrent,
           });
-          assertCurrent?.();
-          // The parent parks the service; each fresh Doctor holds its own database fences.
-          await maintenance?.releaseState();
+        });
+        assertCurrent?.();
+        if (!parentOwnsCompletion) {
           // Shipped parents expect the child to prepare migration plugins and settle
           // Doctor before plugin config writes; Doctor owns that preparation and its guards.
-          await runUpdateFinalizationDoctorInFreshProcess({
+          const warning = await runUpdateFinalizationDoctorInFreshProcess({
             opts: params.opts,
             phase: "post-plugin",
             assertCurrent,
@@ -282,7 +332,12 @@ async function resumePostCoreUpdateInternal(
             yes: params.opts.yes === true,
             json: params.opts.json === true,
             timeoutMs: params.timeoutMs,
+            onWarnings: onDoctorWarnings,
           });
+          if (warning) {
+            doctorWarnings.push(warning);
+            recordDoctorWarnings();
+          }
         }
 
         const configSnapshot = await readConfigFileSnapshot({
@@ -311,6 +366,7 @@ async function resumePostCoreUpdateInternal(
             : undefined,
           assertCurrent,
         });
+        producedPluginUpdate = pluginUpdate;
         // Shipped parents can stop the child as soon as its result appears.
         // Their completion stays here, after the producer releases its lease.
         if (!parentOwnsCompletion) {
@@ -323,19 +379,56 @@ async function resumePostCoreUpdateInternal(
             yes: params.opts.yes === true,
             json: params.opts.json === true,
             timeoutMs: params.timeoutMs,
+            onWarnings: onDoctorWarnings,
           });
           pluginUpdate = completed.pluginUpdate;
+          recordDoctorWarnings(collectPostCorePluginAdvisories(pluginUpdate));
         }
         // Only the target process may restamp an unchanged downgrade config.
         const finalSnapshot = await readConfigFileSnapshot({ observe: false });
         assertCurrent?.();
         await persistValidatedDowngradeConfig(finalSnapshot, assertCurrent);
         assertCurrent?.();
-        return pluginUpdate;
+        return doctorWarnings.length
+          ? {
+              ...pluginUpdate,
+              status: pluginUpdate.status === "error" ? "error" : "warning",
+              warnings: [...(pluginUpdate.warnings ?? []), ...doctorWarnings],
+            }
+          : pluginUpdate;
       }),
     };
   } catch (error) {
-    outcome = { error };
+    outcome =
+      error instanceof DoctorMaintenanceRefusalError && error.refusal.kind === "deferred"
+        ? {
+            pluginUpdate: {
+              ...(producedPluginUpdate ?? {
+                changed: false,
+                sync: {
+                  changed: false,
+                  switchedToBundled: [],
+                  switchedToNpm: [],
+                  warnings: [],
+                  errors: [],
+                },
+                npm: { changed: false, outcomes: [] },
+                integrityDrifts: [],
+              }),
+              status: "warning",
+              warnings: [
+                ...(producedPluginUpdate?.warnings ?? []),
+                {
+                  reason: "doctor-advisory",
+                  message: error.message,
+                  guidance: [
+                    "After other OpenClaw processes release state, run `openclaw doctor --fix`.",
+                  ],
+                },
+              ],
+            },
+          }
+        : { error };
   }
   // A legacy parent can terminate this child as soon as its result appears.
   // Settle child work and restore service custody before publishing either outcome.
@@ -344,7 +437,9 @@ async function resumePostCoreUpdateInternal(
     const failures = "error" in outcome ? [outcome.error] : [];
     for (const restore of [
       async () =>
-        owned.finish((await readConfigFileSnapshot({ skipPluginValidation: true })).config),
+        owned.finish(
+          (await readConfigFileSnapshot({ skipPluginValidation: true, observe: false })).config,
+        ),
       () => owned.release(),
     ]) {
       if (failures.some(hasCommandProcessCleanupError)) {
@@ -374,7 +469,6 @@ async function resumePostCoreUpdateInternal(
   }
   const { pluginUpdate } = outcome;
   assertCurrent?.();
-  const runId = process.env[UPDATE_RUN_ID_ENV]?.trim();
   const result: UpdateRunResult = {
     status: pluginUpdate.status === "error" ? "error" : "ok",
     mode: "unknown",
@@ -384,7 +478,7 @@ async function resumePostCoreUpdateInternal(
     durationMs: 0,
     postUpdate: { plugins: pluginUpdate },
   };
-  if (process.env[POST_CORE_UPDATE_ENV] === "1" && runId) {
+  if (postCoreUpdate && runId) {
     try {
       recordPostCoreUpdateEvidence(runId, {
         candidate:
@@ -414,7 +508,7 @@ async function resumePostCoreUpdateInternal(
     }
   }
   assertCurrent?.();
-  return { pluginUpdate, result };
+  return { pluginUpdate, result, assertRequesterCurrent };
 }
 
 /** Shared plugin producer; entry points retain runtime preparation and completion ownership. */

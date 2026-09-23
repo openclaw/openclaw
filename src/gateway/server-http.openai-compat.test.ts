@@ -313,7 +313,7 @@ describe("HTTP media preparation cancellation", () => {
   it.each(
     inputCases.flatMap(({ name, path, kind }) =>
       [false, true].flatMap((stream) =>
-        (["complete", "before headers", "during body"] as const).map((phase) => ({
+        (["complete", "before headers", "during body", "policy changed"] as const).map((phase) => ({
           name,
           path,
           kind,
@@ -386,19 +386,37 @@ describe("HTTP media preparation cancellation", () => {
             headers: { authorization: "Bearer test-token", "content-type": "application/json" },
           });
           client.on("error", () => {});
-          const completed = testCase.phase === "complete" ? once(client, "response") : undefined;
+          const completed =
+            testCase.phase === "complete" || testCase.phase === "policy changed"
+              ? once(client, "response")
+              : undefined;
           client.end(JSON.stringify(requestBody(testCase, testCase.stream)));
           try {
+            if (testCase.phase === "policy changed") {
+              await firstStarted.promise;
+              const changed: OpenClawConfig = {
+                ...config,
+                gateway: { ...config.gateway, allowRealIpFallback: true },
+              };
+              setRuntimeConfigSnapshot(changed, changed);
+              firstResponse?.end(bytes);
+            }
             if (completed) {
               const [response] = await completed;
               const chunks: Buffer[] = [];
               for await (const chunk of response) {
                 chunks.push(Buffer.from(chunk));
               }
-              expect(response.statusCode).toBe(200);
-              expect(Buffer.concat(chunks).toString()).toContain("image accepted");
-              expect(requestedSources).toEqual(["/first", "/second"]);
-              expect(agentCommandFromGatewayIngress).toHaveBeenCalledTimes(1);
+              if (testCase.phase === "policy changed") {
+                expect(response.statusCode).toBe(401);
+                expect(requestedSources).toEqual(["/first"]);
+                expect(agentCommandFromGatewayIngress).not.toHaveBeenCalled();
+              } else {
+                expect(response.statusCode).toBe(200);
+                expect(Buffer.concat(chunks).toString()).toContain("image accepted");
+                expect(requestedSources).toEqual(["/first", "/second"]);
+                expect(agentCommandFromGatewayIngress).toHaveBeenCalledTimes(1);
+              }
             } else {
               await firstStarted.promise;
               if (testCase.phase === "during body") {

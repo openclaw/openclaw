@@ -33,6 +33,7 @@ export type ReclamationDatabaseOptions = OpenClawAgentDatabaseOptions & {
 export type SqliteSessionReclamationCallbacks = {
   beforeMutation?: () => void;
   onCommit?: (database: OpenClawAgentDatabase, result?: SqliteSessionReclamationResult) => void;
+  afterCommit?: () => void;
 };
 
 export type ReclamationDeleteParams = Omit<DeleteSessionEntryLifecycleParams, "commitGuard">;

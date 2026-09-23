@@ -1,5 +1,6 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
+import type { Response } from "playwright";
 import { expect, it } from "vitest";
 import type { CronJob } from "../api/types.ts";
 import { pathForRoute, type RouteId } from "../app-route-paths.ts";
@@ -235,8 +236,9 @@ suite.define(() => {
       async ({ context, page: firstPage }) => {
         const errors: string[] = [];
         const failedScripts: string[] = [];
-        const startupScripts: string[] = [];
-        const settingsScripts: string[] = [];
+        const startupResponses: Response[] = [];
+        const settingsResponses: Response[] = [];
+        const stopCapturing: Array<() => void> = [];
         const settingsOnlyCopy = [
           "Global model defaults and provider access for your agents.",
           "Find existing connections or prepare a local model for {agent}.",
@@ -246,7 +248,7 @@ suite.define(() => {
         for (const pathname of ["new", "chat", "settings/model-providers"]) {
           const page = pathname === "new" ? firstPage : await context.newPage();
           const isSettings = pathname === "settings/model-providers";
-          const scripts = isSettings ? settingsScripts : startupScripts;
+          const responses = isSettings ? settingsResponses : startupResponses;
           page.on("pageerror", (error) => errors.push(error.message));
           page.on("console", (message) => {
             if (message.type() === "error") {
@@ -259,19 +261,17 @@ suite.define(() => {
             }
           });
           await installMockGateway(page);
-          // Capture before delivery so copy assertions include every script that can execute.
-          await page.route("**/*", async (route) => {
-            if (route.request().resourceType() !== "script") {
-              await route.fallback();
+          const captureScript = (response: Response) => {
+            if (response.request().resourceType() !== "script") {
               return;
             }
-            const response = await route.fetch();
             if (!response.ok()) {
               failedScripts.push(`${pathname}: ${response.url()} (HTTP ${response.status()})`);
             }
-            scripts.push(await response.text());
-            await route.fulfill({ response });
-          });
+            responses.push(response);
+          };
+          page.on("response", captureScript);
+          stopCapturing.push(() => page.off("response", captureScript));
 
           await page.goto(`${suite.server.baseUrl}${pathname}`);
           const ready = isSettings
@@ -279,17 +279,11 @@ suite.define(() => {
             : page.locator(".agent-chat__composer-combobox textarea");
           await ready.waitFor();
           if (isSettings) {
-            expect(settingsScripts.join("\n")).toContain(settingsOnlyCopy[0]);
             expect(await page.locator(".model-providers__defaults").textContent()).toContain(
               "Utility Model",
             );
             await openModelSetup(page);
             await page.getByText(/Find existing connections or prepare a local model/).waitFor();
-            expect(settingsScripts.join("\n")).toContain(settingsOnlyCopy[1]);
-          } else {
-            for (const copy of settingsOnlyCopy) {
-              expect(startupScripts.join("\n")).not.toContain(copy);
-            }
           }
           if (recordVisuals) {
             await page.screenshot({
@@ -298,14 +292,20 @@ suite.define(() => {
             });
           }
         }
+        // Observe without intercepting requests; keep documents alive until every
+        // captured body is read, so teardown cannot cancel the work being asserted.
+        stopCapturing.forEach((stop) => stop());
+        const [startupScripts, settingsScripts] = await Promise.all(
+          [startupResponses, settingsResponses].map(async (responses) =>
+            (await Promise.all(responses.map((response) => response.text()))).join("\n"),
+          ),
+        );
         for (const copy of settingsOnlyCopy) {
-          expect(startupScripts.join("\n")).not.toContain(copy);
+          expect(startupScripts).not.toContain(copy);
+          expect(settingsScripts).toContain(copy);
         }
         expect(errors).toEqual([]);
         expect(failedScripts).toEqual([]);
-      },
-      async ({ context }) => {
-        await Promise.all(context.pages().map((page) => page.unrouteAll({ behavior: "wait" })));
       },
     );
   });

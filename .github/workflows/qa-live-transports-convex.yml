@@ -148,6 +148,7 @@ env:
 
 jobs:
   authorize_actor:
+    if: github.repository == 'openclaw/openclaw'
     name: Authorize workflow actor
     runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
     timeout-minutes: 10

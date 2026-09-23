@@ -18,8 +18,8 @@ minimumReleaseAgeExclude:
   - "@trycua/cua-driver-linux-x64-gnu@0.28.2"
   - "@trycua/cua-driver-win32-arm64-msvc@0.28.2"
   - "@trycua/cua-driver-win32-x64-msvc@0.28.2"
-  # Reviewed ACPX release; remove after 2026-09-27T20:56:00Z.
-  - acpx@0.18.0
+  # Reviewed ACPX release; remove after 2026-09-29T10:05:37.124Z.
+  - acpx@0.19.1
   # Published ACPX runtime dependencies; remove after 2026-09-22T12:38:43Z.
   - "@openclaw/fs-safe@0.12.0"
   - "@openclaw/fs-safe-darwin-arm64@0.12.0"
@@ -43,15 +43,15 @@ minimumReleaseAgeExclude:
   - "@openclaw/proxyline@0.3.12"
   - "@openai/codex"
   - "@openai/codex-*"
-  # Reviewed fs-safe 0.17.0 release and native helpers; remove after 2026-09-27T16:54:36Z.
-  - "@openclaw/fs-safe@0.17.0"
-  - "@openclaw/fs-safe-darwin-arm64@0.17.0"
-  - "@openclaw/fs-safe-darwin-x64@0.17.0"
-  - "@openclaw/fs-safe-linux-arm64-gnu@0.17.0"
-  - "@openclaw/fs-safe-linux-arm64-musl@0.17.0"
-  - "@openclaw/fs-safe-linux-x64-gnu@0.17.0"
-  - "@openclaw/fs-safe-linux-x64-musl@0.17.0"
-  - "@openclaw/fs-safe-win32-x64-msvc@0.17.0"
+  # Reviewed fs-safe 0.18.1 release and native helpers; remove after 2026-09-29T12:41:53.020Z.
+  - "@openclaw/fs-safe@0.18.1"
+  - "@openclaw/fs-safe-darwin-arm64@0.18.1"
+  - "@openclaw/fs-safe-darwin-x64@0.18.1"
+  - "@openclaw/fs-safe-linux-arm64-gnu@0.18.1"
+  - "@openclaw/fs-safe-linux-arm64-musl@0.18.1"
+  - "@openclaw/fs-safe-linux-x64-gnu@0.18.1"
+  - "@openclaw/fs-safe-linux-x64-musl@0.18.1"
+  - "@openclaw/fs-safe-win32-x64-msvc@0.18.1"
   # fs-safe archive dependency; remove after 2026-09-16.
   - "jszip@3.10.2"
   # GHSA-prgh-xp8r-p3m5 / GHSA-v53p-9fqp-m79j security fixes; remove after 2026-09-18.
@@ -69,14 +69,14 @@ overrides:
   # Memory LanceDB supplies vectors; WhatsApp prepares thumbnails with Rastermill.
   "@lancedb/lancedb>@huggingface/transformers": "-"
   "baileys>sharp": "-"
-  "@agentclientprotocol/codex-acp@1.10.0>@openai/codex": 0.154.0
+  "@agentclientprotocol/codex-acp@1.11.0>@openai/codex": 0.155.1
   "@codemirror/commands@6.11.0>@codemirror/view": 6.43.11
-  "@anthropic-ai/sdk": 0.124.0
-  "@anthropic-ai/vertex-sdk@0.19.7>google-auth-library": 11.0.2
+  "@anthropic-ai/sdk": 0.125.0
+  "@anthropic-ai/vertex-sdk@0.19.8>google-auth-library": 11.0.2
   "@opentelemetry/core": 2.11.0
   "@opentelemetry/propagator-jaeger": 2.11.0
-  "@aws-sdk/core": 3.977.9
-  "@aws-sdk/credential-provider-node": 3.972.82
+  "@aws-sdk/core": 3.978.0
+  "@aws-sdk/credential-provider-node": 3.972.83
   "@aws-sdk/xml-builder": 3.972.40
   "@hono/node-server": 2.1.1
   axios: 1.20.0
@@ -88,14 +88,13 @@ overrides:
   request-promise: "npm:@cypress/request-promise@5.0.0"
   basic-ftp: 6.2.1
   brace-expansion: 5.0.9
-  file-type: 22.0.2
+  file-type: 22.1.0
   form-data: 4.0.6
   "werift-ice@0.2.2>ip": "npm:neoip@3.1.0"
   ip-address: 10.7.0
-  "mailauth@5.0.3>nodemailer": 10.0.8
+  "mailauth@5.0.3>nodemailer": 10.0.9
   # Mailauth pins vulnerable Undici; remove when its direct dependency is fixed.
   "mailauth@5.0.3>undici": 8.10.2
-  "mailparser@3.9.23>nodemailer": 10.0.8
   minimatch: 10.2.6
   path-to-regexp: 8.4.2
   proxy-addr: 2.0.8
