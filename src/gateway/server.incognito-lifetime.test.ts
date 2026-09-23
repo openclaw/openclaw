@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { replyRunRegistry } from "../auto-reply/reply/reply-run-registry.js";
 import { resolveSessionWorkStartError } from "../config/sessions/lifecycle.js";
@@ -40,6 +41,7 @@ async function withLifetime(
     context: ReturnType<typeof createDirectChatContext>;
     logWarning: ReturnType<typeof vi.fn>;
     scope: { agentId: string; sessionKey: string; sessionId: string; storePath: string };
+    stateDir: string;
   }) => Promise<void>,
 ) {
   await withOpenClawTestState({ label: "incognito-lifetime" }, async (state) => {
@@ -74,7 +76,7 @@ async function withLifetime(
         updatedAt: Date.now(),
         incognito: true,
       });
-      await run({ owner, context, logWarning, scope });
+      await run({ owner, context, logWarning, scope, stateDir: state.stateDir });
     } finally {
       await owner.stop();
       vi.useRealTimers();
@@ -127,6 +129,67 @@ it("expires Incognito at creation plus 24 hours, cancels work, and deletes witho
       );
     } finally {
       active.complete();
+    }
+  });
+});
+
+it("does not replace its deadline or delete another Gateway's Incognito publication", async () => {
+  await withLifetime(async ({ scope, stateDir, logWarning }) => {
+    const foreign = {
+      agentId: scope.agentId,
+      sessionKey: scope.sessionKey,
+      env: { ...process.env, OPENCLAW_STATE_DIR: path.join(stateDir, "other-gateway") },
+    };
+    const foreignPath = resolveIncognitoOpenClawAgentSqlitePath(foreign);
+    expect(foreignPath).not.toBe(scope.storePath);
+    const deletes = vi.spyOn(deletion, "deleteGatewaySession");
+    try {
+      await upsertSessionEntryCore(foreign, {
+        sessionId: "foreign-incognito",
+        createdAt: Date.now() - DAY_MS + 1,
+        updatedAt: Date.now(),
+        incognito: true,
+      });
+      expect(loadSessionEntryReadOnly(scope)?.sessionId).toBe(scope.sessionId);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(deletes).not.toHaveBeenCalled();
+      expect(logWarning).not.toHaveBeenCalled();
+      expect(loadSessionEntryReadOnly(foreign)?.sessionId).toBe("foreign-incognito");
+      await vi.advanceTimersByTimeAsync(DAY_MS - 1);
+      await Promise.allSettled(deletes.mock.results.map((result) => result.value));
+      expect(deletes).toHaveBeenCalledOnce();
+      expect(loadSessionEntryReadOnly(scope)).toBeUndefined();
+      expect(loadSessionEntryReadOnly(foreign)?.sessionId).toBe("foreign-incognito");
+    } finally {
+      closeOpenClawAgentDatabaseByPath(foreignPath);
+    }
+  });
+});
+
+it("inherits existing Incognito deadlines when a later sibling Gateway outlives the creator", async () => {
+  await withLifetime(async ({ owner, scope, logWarning }) => {
+    const sibling = createGatewaySidecarStopOwner();
+    const context = createDirectChatContext({ getRuntimeConfig: () => config });
+    const deletes = vi.spyOn(deletion, "deleteGatewaySession");
+    await vi.advanceTimersByTimeAsync(DAY_MS - 1);
+    await attachInitialGatewayLifetimeSidecars({
+      chatMetadataLifecycle: { attachContext: vi.fn(async () => {}) } as never,
+      gatewayRequestContext: context,
+      flushPendingSessionsChangedEvents,
+      minimalTestGateway: true,
+      logWarning,
+      publishSidecars: sibling.publish,
+    });
+    try {
+      await owner.stop();
+      expect(loadSessionEntryReadOnly(scope)?.sessionId).toBe(scope.sessionId);
+      await vi.advanceTimersByTimeAsync(1);
+      await Promise.allSettled(deletes.mock.results.map((result) => result.value));
+      expect(deletes).toHaveBeenCalledOnce();
+      expect(loadSessionEntryReadOnly(scope)).toBeUndefined();
+      expect(logWarning).not.toHaveBeenCalled();
+    } finally {
+      await sibling.stop();
     }
   });
 });

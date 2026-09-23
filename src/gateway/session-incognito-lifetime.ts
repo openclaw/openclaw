@@ -1,12 +1,21 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { DatabaseSync } from "node:sqlite";
+import { resolveStateDir } from "../config/paths.js";
+import {
+  listSessionEntriesReadOnly,
+  loadSessionEntryReadOnly,
+} from "../config/sessions/session-accessor.js";
 import { getGatewayRestartDrainSignal } from "../process/gateway-work-admission.js";
-import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import { sessionChanges, type SessionRowChange } from "../sessions/session-row-changes.js";
 import {
   INCOGNITO_SESSION_LIFETIME_MS,
   isIncognitoSessionKey,
 } from "../shared/incognito-session-key.js";
+import {
+  getOpenClawAgentDatabaseIfOpen,
+  listOpenIncognitoAgentDatabases,
+  resolveIncognitoOpenClawAgentSqlitePath,
+} from "../state/openclaw-agent-db.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import type { GatewayPostReadySidecarHandle } from "./server-startup-sidecar-scheduler.js";
 
@@ -27,6 +36,7 @@ export function startIncognitoSessionLifetime(params: {
     timer?: ReturnType<typeof setTimeout>;
   };
   const runInOwner = AsyncLocalStorage.snapshot();
+  const env = { ...process.env, OPENCLAW_STATE_DIR: resolveStateDir() };
   const restartSignal = getGatewayRestartDrainSignal();
   const deadlines = new Map<string, Deadline>();
   const pending = new Set<Promise<void>>();
@@ -98,10 +108,27 @@ export function startIncognitoSessionLifetime(params: {
       return;
     }
     const { sessionKey, agentId, storePath, incognitoEntry: entry } = change;
-    if (!isIncognitoSessionKey(sessionKey) || !agentId || !storePath || !entry) {
+    if (
+      !isIncognitoSessionKey(sessionKey) ||
+      !agentId ||
+      storePath !== resolveIncognitoOpenClawAgentSqlitePath({ agentId, env })
+    ) {
       return;
     }
     const existing = deadlines.get(sessionKey);
+    if (!entry) {
+      // Metadata-only and deletion publications both omit entry facts. Read only
+      // this process-held key to distinguish them, never scan or open a store.
+      if (
+        existing &&
+        (!existing.source.isOpen ||
+          loadSessionEntryReadOnly({ agentId, sessionKey, storePath, env })?.sessionId !==
+            existing.sessionId)
+      ) {
+        retire(existing);
+      }
+      return;
+    }
     if (existing && existing.source === entry.source && existing.sessionId === entry.sessionId) {
       // Activity, archive, rewind, and metadata edits never renew a lifetime.
       return;
@@ -127,27 +154,40 @@ export function startIncognitoSessionLifetime(params: {
   const unsubscribe = sessionChanges.subscribeProjection((change) =>
     runInOwner(() => observe(change)),
   );
-  const unsubscribeIdentity = onSessionIdentityMutation((mutation) => {
-    for (const key of mutation.previous.sessionKeys) {
-      const deadline = deadlines.get(key);
-      if (
-        deadline &&
-        deadline.sessionId === mutation.previous.sessionId &&
-        !(
-          "current" in mutation &&
-          mutation.current.sessionId === deadline.sessionId &&
-          mutation.current.sessionKeys.includes(key)
-        )
-      ) {
-        retire(deadline);
-      }
+  // A sibling Gateway can start after creation and outlive the first scheduler.
+  // Hydrate only this owner's already-open memory stores, then follow publications.
+  for (const target of listOpenIncognitoAgentDatabases()) {
+    if (target.storePath !== resolveIncognitoOpenClawAgentSqlitePath({ ...target, env })) {
+      continue;
     }
-  });
+    const database = getOpenClawAgentDatabaseIfOpen({
+      agentId: target.agentId,
+      path: target.storePath,
+      env,
+    });
+    if (!database) {
+      continue;
+    }
+    for (const { sessionKey, entry } of listSessionEntriesReadOnly({
+      ...target,
+      env,
+      clone: false,
+    })) {
+      observe({
+        ...target,
+        sessionKey,
+        incognitoEntry: {
+          sessionId: entry.sessionId,
+          createdAt: entry.createdAt,
+          source: database.db,
+        },
+      });
+    }
+  }
   return {
     stop: async () => {
       stopped = true;
       unsubscribe();
-      unsubscribeIdentity();
       for (const deadline of deadlines.values()) {
         retire(deadline);
       }
