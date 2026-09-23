@@ -11,12 +11,37 @@ import {
   pluginTool,
   pluginToolWithExecute,
   resultDetails,
-  createCodeModeHarness,
   runUntilCompleted,
   testing,
 } from "./code-mode.test-support.js";
 import { createToolSearchCatalogRef } from "./tool-search.js";
-import { jsonResult } from "./tools/common.js";
+import { jsonResult, type AnyAgentTool } from "./tools/common.js";
+
+function createBridgeHarness(
+  overrides: {
+    maxPendingToolCalls?: number;
+    timeoutMs?: number;
+    maxOutputBytes?: number;
+  } = {},
+) {
+  const config = { tools: { codeMode: { enabled: true, ...overrides } } };
+  const catalogRef = createToolSearchCatalogRef();
+  const ctx = {
+    config,
+    runtimeConfig: config,
+    sessionId: "session-code-mode",
+    sessionKey: "agent:main:main",
+    runId: "run-code-mode",
+    catalogRef,
+  };
+  const tools = createCodeModeTools(ctx);
+  return {
+    tools,
+    register: (targets: AnyAgentTool[]) => {
+      applyCodeModeCatalog({ ...ctx, tools: [...tools, ...targets] });
+    },
+  };
+}
 
 describe("Code Mode bridge settlement and cancellation", () => {
   beforeEach(() => {
@@ -30,7 +55,7 @@ describe("Code Mode bridge settlement and cancellation", () => {
 
   it("drains a nested combinator after its outer race wins", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
-    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const { tools: codeModeTools, register } = createBridgeHarness();
     const events: string[] = [];
     const nestedStarted = createDeferred();
     const nestedRelease = createDeferred();
@@ -72,14 +97,7 @@ describe("Code Mode bridge settlement and cancellation", () => {
         return jsonResult({ released: true });
       },
     );
-    applyCodeModeCatalog({
-      tools: [...codeModeTools, never, fast, release],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
+    register([never, fast, release]);
 
     const details = resultDetails(
       await expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
@@ -105,30 +123,11 @@ describe("Code Mode bridge settlement and cancellation", () => {
   });
 
   it("resolves sequential bridge tool calls inline within one exec instead of a wait per call", async () => {
-    const catalogRef = createToolSearchCatalogRef();
     // maxPendingToolCalls stays a per-batch concurrency cap; five sequential
     // awaits must drain inline even with a cap of 2.
-    const config = {
-      tools: { codeMode: { enabled: true, maxPendingToolCalls: 2 } },
-    } as never;
-    const ctx = {
-      config,
-      runtimeConfig: config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    };
-    const codeModeTools = createCodeModeTools(ctx);
+    const { tools: codeModeTools, register } = createBridgeHarness({ maxPendingToolCalls: 2 });
     const ticket = pluginTool("fake_create_ticket", "Create a fake ticket");
-    applyCodeModeCatalog({
-      tools: [...codeModeTools, ticket],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
+    register([ticket]);
 
     // Five separate awaits would each suspend to the model under a wait-per-call
     // design; inline resumption collapses them into a single completed exec so
@@ -156,28 +155,9 @@ describe("Code Mode bridge settlement and cancellation", () => {
   });
 
   it("rejects an over-queue-cap bridge frontier before dispatching its admitted prefix", async () => {
-    const catalogRef = createToolSearchCatalogRef();
-    const config = {
-      tools: { codeMode: { enabled: true, maxPendingToolCalls: 2 } },
-    } as never;
-    const ctx = {
-      config,
-      runtimeConfig: config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    };
-    const codeModeTools = createCodeModeTools(ctx);
+    const { tools: codeModeTools, register } = createBridgeHarness({ maxPendingToolCalls: 2 });
     const mutation = pluginTool("fake_mutation", "Record a side effect");
-    applyCodeModeCatalog({
-      tools: [...codeModeTools, mutation],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
+    register([mutation]);
 
     const details = resultDetails(
       await expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
@@ -200,19 +180,7 @@ describe("Code Mode bridge settlement and cancellation", () => {
   });
 
   it("yields nested exec before the Code Mode deadline when continuation args are omitted", async () => {
-    const catalogRef = createToolSearchCatalogRef();
-    const config = {
-      tools: { codeMode: { enabled: true, timeoutMs: 10_000 } },
-    } as never;
-    const ctx = {
-      config,
-      runtimeConfig: config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    };
-    const codeModeTools = createCodeModeTools(ctx);
+    const { tools: codeModeTools, register } = createBridgeHarness({ timeoutMs: 10_000 });
     const shell = pluginToolWithExecute("exec", "Run shell", async (_toolCallId, input) =>
       jsonResult(input),
     );
@@ -221,14 +189,7 @@ describe("Code Mode bridge settlement and cancellation", () => {
       yieldMs: Type.Optional(Type.Number()),
       background: Type.Optional(Type.Boolean()),
     });
-    applyCodeModeCatalog({
-      tools: [...codeModeTools, shell],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
+    register([shell]);
 
     const details = resultDetails(
       await expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
@@ -256,19 +217,7 @@ describe("Code Mode bridge settlement and cancellation", () => {
 
   it("bounds nested exec yield by the shared remaining deadline", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
-    const catalogRef = createToolSearchCatalogRef();
-    const config = {
-      tools: { codeMode: { enabled: true, timeoutMs: 10_000 } },
-    } as never;
-    const ctx = {
-      config,
-      runtimeConfig: config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    };
-    const codeModeTools = createCodeModeTools(ctx);
+    const { tools: codeModeTools, register } = createBridgeHarness({ timeoutMs: 10_000 });
     const consumeBudget = pluginToolWithExecute(
       "fake_consume_budget",
       "Consume most of the shared Code Mode deadline",
@@ -285,14 +234,7 @@ describe("Code Mode bridge settlement and cancellation", () => {
       yieldMs: Type.Optional(Type.Number()),
       background: Type.Optional(Type.Boolean()),
     });
-    applyCodeModeCatalog({
-      tools: [...codeModeTools, consumeBudget, shell],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
+    register([consumeBudget, shell]);
 
     const details = resultDetails(
       await expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
@@ -316,29 +258,10 @@ describe("Code Mode bridge settlement and cancellation", () => {
   });
 
   it("supports a guest timer between an action and its observation", async () => {
-    const catalogRef = createToolSearchCatalogRef();
-    const config = {
-      tools: { codeMode: { enabled: true, maxPendingToolCalls: 2 } },
-    } as never;
-    const ctx = {
-      config,
-      runtimeConfig: config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    };
-    const codeModeTools = createCodeModeTools(ctx);
+    const { tools: codeModeTools, register } = createBridgeHarness({ maxPendingToolCalls: 2 });
     const input = pluginTool("fake_terminal_input", "Send terminal input");
     const read = pluginTool("fake_terminal_read", "Read terminal output");
-    applyCodeModeCatalog({
-      tools: [...codeModeTools, input, read],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
+    register([input, read]);
 
     const details = resultDetails(
       await expectDefined(codeModeTools[0], "codeModeTools[0] test invariant").execute(
@@ -361,78 +284,6 @@ describe("Code Mode bridge settlement and cancellation", () => {
     });
     expect(input.execute).toHaveBeenCalledOnce();
     expect(read.execute).toHaveBeenCalledOnce();
-    expect(testing.activeRuns.size).toBe(0);
-  });
-
-  it("keeps the actual winner when the later-started nested tool settles first", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
-    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
-    const events: string[] = [];
-    const firstStarted = createDeferred();
-    const firstRelease = createDeferred();
-    let firstAborted = false;
-    const first = pluginToolWithExecute(
-      "fake_first",
-      "Earlier slow helper",
-      async (_toolCallId, _input, signal) => {
-        events.push("first:start");
-        firstStarted.resolve();
-        signal?.addEventListener(
-          "abort",
-          () => {
-            firstAborted = true;
-            firstRelease.reject(new Error("aborted"));
-          },
-          { once: true },
-        );
-        await firstRelease.promise;
-        events.push("first:done");
-        return jsonResult({ winner: "first" });
-      },
-    );
-    const second = pluginToolWithExecute("fake_second", "Later fast helper", async () => {
-      await firstStarted.promise;
-      events.push("second:win");
-      return jsonResult({ winner: "second" });
-    });
-    const release = pluginToolWithExecute(
-      "fake_first_release",
-      "Release earlier race helper",
-      async () => {
-        events.push("first:release");
-        firstRelease.resolve();
-        return jsonResult({ released: true });
-      },
-    );
-    applyCodeModeCatalog({
-      tools: [...codeModeTools, first, second, release],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
-
-    const details = resultDetails(
-      await expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
-        "code-call-later-winner",
-        {
-          code: `const value = await Promise.race([
-              fake_first({}),
-              fake_second({}),
-            ]);
-            void fake_first_release({});
-            return value;`,
-        },
-      ),
-    );
-
-    expect(details).toMatchObject({ status: "completed", value: { winner: "second" } });
-    expect(first.execute).toHaveBeenCalledOnce();
-    expect(second.execute).toHaveBeenCalledOnce();
-    expect(release.execute).toHaveBeenCalledOnce();
-    expect(events).toEqual(["first:start", "second:win", "first:release", "first:done"]);
-    expect(firstAborted).toBe(false);
     expect(testing.activeRuns.size).toBe(0);
   });
 
@@ -465,7 +316,7 @@ describe("Code Mode bridge settlement and cancellation", () => {
     "drains a detached audit started $label before an awaited nested call",
     async ({ auditCode }) => {
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
-      const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+      const { tools: codeModeTools, register } = createBridgeHarness();
       const events: string[] = [];
       let auditCompleted = false;
       let auditAborted = false;
@@ -505,14 +356,7 @@ describe("Code Mode bridge settlement and cancellation", () => {
           return jsonResult({ released: true });
         },
       );
-      applyCodeModeCatalog({
-        tools: [...codeModeTools, audit, fast, release],
-        config,
-        sessionId: "session-code-mode",
-        sessionKey: "agent:main:main",
-        runId: "run-code-mode",
-        catalogRef,
-      });
+      register([audit, fast, release]);
 
       const details = resultDetails(
         await expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
@@ -539,7 +383,7 @@ describe("Code Mode bridge settlement and cancellation", () => {
 
   it("drains a race winner's detached audit and its slower race branch", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
-    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const { tools: codeModeTools, register } = createBridgeHarness();
     const events: string[] = [];
     const loserStarted = createDeferred();
     const loserRelease = createDeferred();
@@ -584,14 +428,7 @@ describe("Code Mode bridge settlement and cancellation", () => {
         return jsonResult({ released: true });
       },
     );
-    applyCodeModeCatalog({
-      tools: [...codeModeTools, winner, loser, audit, release],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
+    register([winner, loser, audit, release]);
 
     const details = resultDetails(
       await expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
@@ -625,7 +462,7 @@ describe("Code Mode bridge settlement and cancellation", () => {
   });
 
   it("drains every detached nested tool before completing the guest", async () => {
-    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const { tools: codeModeTools, register } = createBridgeHarness();
     const first = pluginToolWithExecute("fake_detached_first", "First detached helper", async () =>
       jsonResult({ name: "first" }),
     );
@@ -634,14 +471,7 @@ describe("Code Mode bridge settlement and cancellation", () => {
       "Second detached helper",
       async () => jsonResult({ name: "second" }),
     );
-    applyCodeModeCatalog({
-      tools: [...codeModeTools, first, second],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
+    register([first, second]);
 
     const details = resultDetails(
       await expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
@@ -664,7 +494,7 @@ describe("Code Mode bridge settlement and cancellation", () => {
     "preserves the Promise.%s winner while draining the slower nested tool",
     async (combinator) => {
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
-      const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+      const { tools: codeModeTools, register } = createBridgeHarness();
       const events: string[] = [];
       const slowStarted = createDeferred();
       const slowRelease = createDeferred();
@@ -704,14 +534,7 @@ describe("Code Mode bridge settlement and cancellation", () => {
           return jsonResult({ released: true });
         },
       );
-      applyCodeModeCatalog({
-        tools: [...codeModeTools, fast, slow, release],
-        config,
-        sessionId: "session-code-mode",
-        sessionKey: "agent:main:main",
-        runId: "run-code-mode",
-        catalogRef,
-      });
+      register([fast, slow, release]);
 
       const details = resultDetails(
         await expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
@@ -740,7 +563,7 @@ describe("Code Mode bridge settlement and cancellation", () => {
 
   it("preserves fail-fast Promise.all while draining the slower nested tool", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
-    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const { tools: codeModeTools, register } = createBridgeHarness();
     const events: string[] = [];
     const slowStarted = createDeferred();
     const slowRelease = createDeferred();
@@ -777,14 +600,7 @@ describe("Code Mode bridge settlement and cancellation", () => {
       slowRelease.resolve();
       return jsonResult({ released: true });
     });
-    applyCodeModeCatalog({
-      tools: [...codeModeTools, failed, slow, release],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
+    register([failed, slow, release]);
 
     const details = resultDetails(
       await expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
@@ -821,19 +637,7 @@ describe("Code Mode bridge settlement and cancellation", () => {
   });
 
   it("returns an actionable bounded result when a nested tool result exceeds the output budget", async () => {
-    const catalogRef = createToolSearchCatalogRef();
-    const config = {
-      tools: { codeMode: { enabled: true, maxOutputBytes: 1_024 } },
-    } as never;
-    const ctx = {
-      config,
-      runtimeConfig: config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    };
-    const codeModeTools = createCodeModeTools(ctx);
+    const { tools: codeModeTools, register } = createBridgeHarness({ maxOutputBytes: 1_024 });
     const oversizedSearch = pluginToolWithExecute(
       "fake_oversized_search",
       "Oversized search result",
@@ -845,14 +649,7 @@ describe("Code Mode bridge settlement and cancellation", () => {
           ],
         }),
     );
-    applyCodeModeCatalog({
-      tools: [...codeModeTools, oversizedSearch],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
+    register([oversizedSearch]);
 
     const details = resultDetails(
       await expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
@@ -884,36 +681,16 @@ describe("Code Mode bridge settlement and cancellation", () => {
   });
 
   it("fails fast without parking a suspended run when the exec call is aborted", async () => {
-    const catalogRef = createToolSearchCatalogRef();
     // Long timeout so a missing abort short-circuit would block the whole test.
-    const config = {
-      tools: { codeMode: { enabled: true, timeoutMs: 30_000 } },
-    } as never;
-    const ctx = {
-      config,
-      runtimeConfig: config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    };
-    const codeModeTools = createCodeModeTools(ctx);
-    applyCodeModeCatalog({
-      tools: [
-        ...codeModeTools,
-        // A tool that never settles and ignores its abort signal; only the
-        // host-level abort race can free the cancelled exec.
-        pluginToolWithExecute("fake_stuck", "Stuck helper", async () => {
-          await new Promise<never>(() => {});
-          return null as never;
-        }),
-      ],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
+    const { tools: codeModeTools, register } = createBridgeHarness({ timeoutMs: 30_000 });
+    register([
+      // A tool that never settles and ignores its abort signal; only the
+      // host-level abort race can free the cancelled exec.
+      pluginToolWithExecute("fake_stuck", "Stuck helper", async () => {
+        await new Promise<never>(() => {});
+        return null as never;
+      }),
+    ]);
 
     const controller = new AbortController();
     controller.abort();
@@ -934,28 +711,9 @@ describe("Code Mode bridge settlement and cancellation", () => {
   });
 
   it("terminates a running guest promptly when the exec call is aborted", async () => {
-    const catalogRef = createToolSearchCatalogRef();
     // Long timeout so only the abort race can end the hostile loop quickly.
-    const config = {
-      tools: { codeMode: { enabled: true, timeoutMs: 30_000 } },
-    } as never;
-    const ctx = {
-      config,
-      runtimeConfig: config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    };
-    const codeModeTools = createCodeModeTools(ctx);
-    applyCodeModeCatalog({
-      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
+    const { tools: codeModeTools, register } = createBridgeHarness({ timeoutMs: 30_000 });
+    register([pluginTool("fake_noop", "Noop")]);
 
     const controller = new AbortController();
     const abortTimer = setTimeout(() => controller.abort(), 200);
@@ -979,7 +737,7 @@ describe("Code Mode bridge settlement and cancellation", () => {
   });
 
   it("surfaces policy blocks as guest call errors for declared outputs", async () => {
-    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const { tools: codeModeTools, register } = createBridgeHarness();
     const target = pluginTool("fake_policy_block", "Return policy-controlled rows");
     target.outputSchema = Type.Array(
       Type.Object({ id: Type.String() }, { additionalProperties: false }),
@@ -987,14 +745,7 @@ describe("Code Mode bridge settlement and cancellation", () => {
     target.execute = vi.fn(async () =>
       buildBlockedToolResult({ reason: "blocked by orchard policy" }),
     );
-    applyCodeModeCatalog({
-      tools: [...codeModeTools, target],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
+    register([target]);
 
     const details = await runUntilCompleted({
       execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),

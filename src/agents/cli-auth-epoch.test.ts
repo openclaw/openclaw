@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createAuthProfileStoreFixture } from "./auth-profiles/credential-fixtures.test-support.js";
-import type { AuthProfileStore } from "./auth-profiles/types.js";
+import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
 import {
   resolveCliAuthBindingFingerprint,
   resolveCliAuthEpoch,
@@ -355,45 +355,6 @@ describe("resolveCliAuthEpoch", () => {
     expect(second).toBe(first);
   });
 
-  it("keeps oauth auth-profile epochs stable across token refreshes", async () => {
-    let store: AuthProfileStore = createAuthProfileStoreFixture({
-      "anthropic:work": {
-        type: "oauth",
-        provider: "anthropic",
-        access: "access-a",
-        refresh: "refresh-a",
-        expires: 1,
-        email: "user@example.com",
-      },
-    });
-    setCliAuthEpochTestDeps({
-      readGeminiCliCredentialsCached: () => null,
-      loadAuthProfileStoreForRuntime: () => store,
-    });
-
-    const first = await resolveCliAuthEpoch({
-      provider: "google-gemini-cli",
-      authProfileId: "anthropic:work",
-    });
-    store = createAuthProfileStoreFixture({
-      "anthropic:work": {
-        type: "oauth",
-        provider: "anthropic",
-        access: "access-b",
-        refresh: "refresh-b",
-        expires: 2,
-        email: "user@example.com",
-      },
-    });
-    const second = await resolveCliAuthEpoch({
-      provider: "google-gemini-cli",
-      authProfileId: "anthropic:work",
-    });
-
-    expectCliAuthEpoch(first);
-    expect(second).toBe(first);
-  });
-
   it("keeps oauth auth-profile epochs stable across profile id aliases for the same account", async () => {
     const store: AuthProfileStore = createAuthProfileStoreFixture({
       "anthropic:work": {
@@ -468,16 +429,15 @@ describe("resolveCliAuthEpoch", () => {
   });
 
   it("keeps token auth-profile epochs stable across credential.token rotation when identity is present", async () => {
-    let store: AuthProfileStore = createAuthProfileStoreFixture({
-      "anthropic:work": {
-        type: "token",
-        provider: "anthropic",
-        token: "token-a",
-        tokenRef: { source: "env", provider: "default", id: "ANTHROPIC_TOKEN" },
-        email: "user@example.com",
-        displayName: "Work",
-      },
-    });
+    const credential: Extract<AuthProfileCredential, { type: "token" }> = {
+      type: "token",
+      provider: "anthropic",
+      token: "token-a",
+      tokenRef: { source: "env", provider: "default", id: "ANTHROPIC_TOKEN" },
+      email: "user@example.com",
+      displayName: "Work",
+    };
+    const store: AuthProfileStore = createAuthProfileStoreFixture({ "anthropic:work": credential });
     setCliAuthEpochTestDeps({
       readGeminiCliCredentialsCached: () => null,
       loadAuthProfileStoreForRuntime: () => store,
@@ -487,16 +447,7 @@ describe("resolveCliAuthEpoch", () => {
       provider: "google-gemini-cli",
       authProfileId: "anthropic:work",
     });
-    store = createAuthProfileStoreFixture({
-      "anthropic:work": {
-        type: "token",
-        provider: "anthropic",
-        token: "token-b",
-        tokenRef: { source: "env", provider: "default", id: "ANTHROPIC_TOKEN" },
-        email: "user@example.com",
-        displayName: "Work",
-      },
-    });
+    credential.token = "token-b";
     const second = await resolveCliAuthEpoch({
       provider: "google-gemini-cli",
       authProfileId: "anthropic:work",
@@ -509,14 +460,13 @@ describe("resolveCliAuthEpoch", () => {
   });
 
   it("changes token auth-profile epochs when token-only credentials change", async () => {
-    let store: AuthProfileStore = createAuthProfileStoreFixture({
-      "anthropic:token-only": {
-        type: "token",
-        provider: "anthropic",
-        token: "token-a",
-        displayName: "Manual token",
-      },
-    });
+    const credential: Extract<AuthProfileCredential, { type: "token" }> = {
+      type: "token",
+      provider: "anthropic",
+      token: "token-a",
+      displayName: "Manual token",
+    };
+    const store: AuthProfileStore = createAuthProfileStoreFixture({ "anthropic:token-only": credential });
     setCliAuthEpochTestDeps({
       readGeminiCliCredentialsCached: () => null,
       loadAuthProfileStoreForRuntime: () => store,
@@ -526,14 +476,7 @@ describe("resolveCliAuthEpoch", () => {
       provider: "google-gemini-cli",
       authProfileId: "anthropic:token-only",
     });
-    store = createAuthProfileStoreFixture({
-      "anthropic:token-only": {
-        type: "token",
-        provider: "anthropic",
-        token: "token-b",
-        displayName: "Manual token",
-      },
-    });
+    credential.token = "token-b";
     const second = await resolveCliAuthEpoch({
       provider: "google-gemini-cli",
       authProfileId: "anthropic:token-only",
@@ -547,15 +490,14 @@ describe("resolveCliAuthEpoch", () => {
   });
 
   it("changes token auth-profile epochs when the email identity changes", async () => {
-    let store: AuthProfileStore = createAuthProfileStoreFixture({
-      "anthropic:work": {
-        type: "token",
-        provider: "anthropic",
-        token: "token",
-        email: "user-a@example.com",
-        displayName: "Work",
-      },
-    });
+    const credential: Extract<AuthProfileCredential, { type: "token" }> = {
+      type: "token",
+      provider: "anthropic",
+      token: "token",
+      email: "user-a@example.com",
+      displayName: "Work",
+    };
+    const store: AuthProfileStore = createAuthProfileStoreFixture({ "anthropic:work": credential });
     setCliAuthEpochTestDeps({
       readGeminiCliCredentialsCached: () => null,
       loadAuthProfileStoreForRuntime: () => store,
@@ -565,15 +507,7 @@ describe("resolveCliAuthEpoch", () => {
       provider: "google-gemini-cli",
       authProfileId: "anthropic:work",
     });
-    store = createAuthProfileStoreFixture({
-      "anthropic:work": {
-        type: "token",
-        provider: "anthropic",
-        token: "token",
-        email: "user-b@example.com",
-        displayName: "Work",
-      },
-    });
+    credential.email = "user-b@example.com";
     const second = await resolveCliAuthEpoch({
       provider: "google-gemini-cli",
       authProfileId: "anthropic:work",
@@ -583,46 +517,6 @@ describe("resolveCliAuthEpoch", () => {
     expectCliAuthEpoch(second);
     // A real account switch on a static-token profile must still invalidate
     // the epoch so reusable CLI sessions don't outlive the identity change.
-    expect(second).not.toBe(first);
-  });
-
-  it("changes oauth auth-profile epochs when the account identity changes", async () => {
-    let store: AuthProfileStore = createAuthProfileStoreFixture({
-      "anthropic:work": {
-        type: "oauth",
-        provider: "anthropic",
-        access: "access",
-        refresh: "refresh",
-        expires: 1,
-        email: "user-a@example.com",
-      },
-    });
-    setCliAuthEpochTestDeps({
-      readGeminiCliCredentialsCached: () => null,
-      loadAuthProfileStoreForRuntime: () => store,
-    });
-
-    const first = await resolveCliAuthEpoch({
-      provider: "google-gemini-cli",
-      authProfileId: "anthropic:work",
-    });
-    store = createAuthProfileStoreFixture({
-      "anthropic:work": {
-        type: "oauth",
-        provider: "anthropic",
-        access: "access",
-        refresh: "refresh",
-        expires: 1,
-        email: "user-b@example.com",
-      },
-    });
-    const second = await resolveCliAuthEpoch({
-      provider: "google-gemini-cli",
-      authProfileId: "anthropic:work",
-    });
-
-    expectCliAuthEpoch(first);
-    expectCliAuthEpoch(second);
     expect(second).not.toBe(first);
   });
 

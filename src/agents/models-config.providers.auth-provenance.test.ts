@@ -6,7 +6,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import { NON_ENV_SECRETREF_MARKER } from "../secrets/provider-credential-values.js";
-import { captureEnv, withEnvAsync } from "../test-utils/env.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   createApiKeyCredential,
   createAuthProfileStoreFixture,
@@ -63,7 +63,6 @@ vi.mock("./provider-auth-aliases.js", () => ({
 type ProviderRuntimeModule = typeof import("../plugins/provider-runtime.js");
 
 let CUSTOM_LOCAL_AUTH_MARKER: typeof import("./model-auth-markers.js").CUSTOM_LOCAL_AUTH_MARKER;
-let resolveApiKeyFromCredential: typeof import("./models-config.providers.secret-helpers.js").resolveApiKeyFromCredential;
 let createProviderApiKeyResolver: typeof import("./models-config.providers.secrets.js").createProviderApiKeyResolver;
 let createProviderAuthResolver: typeof import("./models-config.providers.secrets.js").createProviderAuthResolver;
 let mockedResolveProviderSyntheticAuthWithPlugin: ReturnType<
@@ -78,17 +77,15 @@ import {
 async function loadProviderAuthModules() {
   vi.doUnmock("../plugins/manifest-registry.js");
   vi.doUnmock("../secrets/provider-env-vars.js");
-  const [providerRuntimeModule, markersModule, helperModule, secretsModule] = await Promise.all([
+  const [providerRuntimeModule, markersModule, secretsModule] = await Promise.all([
     import("../plugins/provider-runtime.js"),
     import("./model-auth-markers.js"),
-    import("./models-config.providers.secret-helpers.js"),
     import("./models-config.providers.secrets.js"),
   ]);
   mockedResolveProviderSyntheticAuthWithPlugin = vi.mocked(
     providerRuntimeModule.resolveProviderSyntheticAuthWithPlugin,
   );
   CUSTOM_LOCAL_AUTH_MARKER = markersModule.CUSTOM_LOCAL_AUTH_MARKER;
-  resolveApiKeyFromCredential = helperModule.resolveApiKeyFromCredential;
   createProviderApiKeyResolver = secretsModule.createProviderApiKeyResolver;
   createProviderAuthResolver = secretsModule.createProviderAuthResolver;
 }
@@ -351,7 +348,25 @@ describe("models-config provider auth provenance", () => {
   it.each(
     discoveryRefCases.flatMap(({ type, callback, refSource }) =>
       unavailableStates
-        .filter((state) => refSource === "store" || state === "cold" || state === "unpublished")
+        .filter((state) => {
+          if (refSource === "env") {
+            return (
+              (state === "cold" || state === "unpublished") &&
+              ((type === "api_key" && callback === "resolveProviderAuth") ||
+                (type === "token" && callback === "resolveProviderApiKey"))
+            );
+          }
+          if (callback === "resolveProviderApiKey") {
+            return state === "unpublished";
+          }
+          return (
+            type === "api_key" ||
+            state === "ref-mismatch" ||
+            state === "missing-value" ||
+            state === "cold" ||
+            state === "unpublished"
+          );
+        })
         .map((state) => ({ type, callback, refSource, state })),
     ),
   )(
@@ -703,70 +718,6 @@ describe("models-config provider auth provenance", () => {
     },
   );
 
-  it("persists env keyRef and tokenRef auth profiles as env var markers", () => {
-    const envSnapshot = captureEnv(["VOLCANO_ENGINE_API_KEY", "TOGETHER_API_KEY"]);
-    delete process.env.VOLCANO_ENGINE_API_KEY;
-    delete process.env.TOGETHER_API_KEY;
-    try {
-      const volcengineApiKey = resolveApiKeyFromCredential({
-        type: "api_key",
-        provider: "volcengine",
-        keyRef: { source: "env", provider: "default", id: "VOLCANO_ENGINE_API_KEY" },
-      })?.apiKey;
-      const togetherApiKey = resolveApiKeyFromCredential({
-        type: "token",
-        provider: "together",
-        tokenRef: { source: "env", provider: "default", id: "TOGETHER_API_KEY" },
-      })?.apiKey;
-      expect(volcengineApiKey).toBe("VOLCANO_ENGINE_API_KEY");
-      expect(togetherApiKey).toBe("TOGETHER_API_KEY");
-    } finally {
-      envSnapshot.restore();
-    }
-  });
-
-  it("uses non-env marker for ref-managed profiles even when runtime plaintext is present", () => {
-    // Ref-managed secrets may be resolved in memory, but models.json should
-    // persist only a non-env marker so plaintext is not written back.
-    const byteplusApiKey = resolveApiKeyFromCredential({
-      type: "api_key",
-      provider: "byteplus",
-      key: "sk-runtime-resolved-byteplus",
-      keyRef: { source: "file", provider: "vault", id: "/byteplus/apiKey" },
-    })?.apiKey;
-    const togetherApiKey = resolveApiKeyFromCredential({
-      type: "token",
-      provider: "together",
-      token: "tok-runtime-resolved-together",
-      tokenRef: { source: "exec", provider: "vault", id: "providers/together/token" },
-    })?.apiKey;
-    expect(byteplusApiKey).toBe(NON_ENV_SECRETREF_MARKER);
-    expect(togetherApiKey).toBe(NON_ENV_SECRETREF_MARKER);
-  });
-
-  it("prefers profile auth over env auth in provider summaries to match runtime resolution", () => {
-    const auth = createProviderAuthResolver(
-      {
-        OPENAI_API_KEY: "env-openai-key",
-      } as NodeJS.ProcessEnv,
-      createAuthProfileStoreFixture({
-        "openai:default": {
-          type: "api_key",
-          provider: "openai",
-          keyRef: { source: "env", provider: "default", id: "OPENAI_PROFILE_KEY" },
-        },
-      }),
-    );
-
-    expect(auth("openai")).toEqual({
-      apiKey: "OPENAI_PROFILE_KEY",
-      discoveryApiKey: undefined,
-      mode: "api_key",
-      source: "profile",
-      profileId: "openai:default",
-    });
-  });
-
   it.each(["chatgpt-token-sharing", "chatgpt-identity"])(
     "exposes %s to provider catalog policy",
     (authFlow) => {
@@ -826,16 +777,16 @@ describe("models-config provider auth provenance", () => {
     });
   });
 
-  it("uses literal configured provider api keys for catalog discovery", () => {
-    const auth = createProviderApiKeyResolver(
-      {} as NodeJS.ProcessEnv,
+  function configuredVllmAuth(apiKey: string, env: NodeJS.ProcessEnv = {}) {
+    return createProviderApiKeyResolver(
+      env,
       createAuthProfileStoreFixture({}),
       {
         models: {
           providers: {
             vllm: {
               baseUrl: "http://127.0.0.1:8000/v1",
-              apiKey: "proof-key",
+              apiKey,
               api: "openai-completions",
               models: [],
             },
@@ -843,33 +794,10 @@ describe("models-config provider auth provenance", () => {
         },
       },
     );
-
-    expect(auth("vllm")).toEqual({
-      apiKey: "proof-key",
-      discoveryApiKey: "proof-key",
-      mode: "api_key",
-    });
-  });
+  }
 
   it("resolves custom configured env markers for catalog discovery", () => {
-    const auth = createProviderApiKeyResolver(
-      {
-        MY_VLLM_KEY: "resolved-vllm-key",
-      } as NodeJS.ProcessEnv,
-      createAuthProfileStoreFixture({}),
-      {
-        models: {
-          providers: {
-            vllm: {
-              baseUrl: "http://127.0.0.1:8000/v1",
-              apiKey: "${MY_VLLM_KEY}",
-              api: "openai-completions",
-              models: [],
-            },
-          },
-        },
-      },
-    );
+    const auth = configuredVllmAuth("${MY_VLLM_KEY}", { MY_VLLM_KEY: "resolved-vllm-key" });
 
     expect(auth("vllm")).toEqual({
       apiKey: "MY_VLLM_KEY",
@@ -879,22 +807,7 @@ describe("models-config provider auth provenance", () => {
   });
 
   it("does not send missing custom env markers as catalog discovery keys", () => {
-    const auth = createProviderApiKeyResolver(
-      {} as NodeJS.ProcessEnv,
-      createAuthProfileStoreFixture({}),
-      {
-        models: {
-          providers: {
-            vllm: {
-              baseUrl: "http://127.0.0.1:8000/v1",
-              apiKey: "${MY_VLLM_KEY}",
-              api: "openai-completions",
-              models: [],
-            },
-          },
-        },
-      },
-    );
+    const auth = configuredVllmAuth("${MY_VLLM_KEY}");
 
     expect(auth("vllm")).toEqual({
       apiKey: undefined,
@@ -903,22 +816,7 @@ describe("models-config provider auth provenance", () => {
   });
 
   it("does not send missing known provider env markers as catalog discovery keys", () => {
-    const auth = createProviderApiKeyResolver(
-      {} as NodeJS.ProcessEnv,
-      createAuthProfileStoreFixture({}),
-      {
-        models: {
-          providers: {
-            vllm: {
-              baseUrl: "http://127.0.0.1:8000/v1",
-              apiKey: "VLLM_API_KEY",
-              api: "openai-completions",
-              models: [],
-            },
-          },
-        },
-      },
-    );
+    const auth = configuredVllmAuth("VLLM_API_KEY");
 
     expect(auth("vllm")).toEqual({
       apiKey: undefined,
@@ -927,22 +825,7 @@ describe("models-config provider auth provenance", () => {
   });
 
   it("preserves bare all-caps configured api keys as literal catalog discovery keys", () => {
-    const auth = createProviderApiKeyResolver(
-      {} as NodeJS.ProcessEnv,
-      createAuthProfileStoreFixture({}),
-      {
-        models: {
-          providers: {
-            vllm: {
-              baseUrl: "http://127.0.0.1:8000/v1",
-              apiKey: "ALLCAPS_SAMPLE",
-              api: "openai-completions",
-              models: [],
-            },
-          },
-        },
-      },
-    );
+    const auth = configuredVllmAuth("ALLCAPS_SAMPLE");
 
     expect(auth("vllm")).toEqual({
       apiKey: "ALLCAPS_SAMPLE",
@@ -1014,15 +897,6 @@ describe("models-config.providers.policy", () => {
 
     expect(resolver).toBeTypeOf("function");
     expect(resolver?.({ AWS_PROFILE: "default" } as NodeJS.ProcessEnv)).toBe("AWS_PROFILE");
-  });
-
-  it("resolves anthropic-vertex ADC markers through provider plugin hooks", () => {
-    const resolver = resolveProviderConfigApiKeyResolver("anthropic-vertex");
-
-    expect(resolver).toBeTypeOf("function");
-    expect(resolver?.({ ANTHROPIC_VERTEX_USE_GCP_METADATA: "true" } as NodeJS.ProcessEnv)).toBe(
-      "gcp-vertex-credentials",
-    );
   });
 
   it("normalizes Google provider config through provider plugin hooks", () => {

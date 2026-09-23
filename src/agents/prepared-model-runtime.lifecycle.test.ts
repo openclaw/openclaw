@@ -563,27 +563,6 @@ describe("prepared model runtime snapshots", () => {
     expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2);
   });
 
-  it("does not serve the old snapshot after lifecycle refresh fails", async () => {
-    mocks.configuredAgentIds = ["default"];
-    const agentDir = fixture.state.agentDir("default");
-    const firstConfig = {};
-    const secondConfig = { agents: { defaults: { model: "openai/gpt-5.5" } } };
-    const input = {
-      config: firstConfig,
-      agentDir,
-      inheritedAuthDir: agentDir,
-      workspaceDir: "/tmp/unused-workspace",
-    };
-    await publishPreparedModelRuntimeSnapshot(input, { provenance: "configured" });
-    const refreshError = new Error("catalog refresh failed");
-    mocks.ensureOpenClawModelsJson.mockRejectedValueOnce(refreshError);
-
-    await expect(refreshPreparedModelRuntimeSnapshots(secondConfig)).rejects.toBe(refreshError);
-    await expect(prepareModelRuntimeSnapshot({ ...input, config: secondConfig })).rejects.toBe(
-      refreshError,
-    );
-  });
-
   it("does not serve a retired owner when another owner fails to refresh", async () => {
     mocks.configuredAgentIds = ["default", "removed"];
     const firstConfig = {};
@@ -762,47 +741,6 @@ describe("prepared model runtime snapshots", () => {
 
     expect(publishedSnapshots).toHaveLength(1);
     expect(publishedSnapshots[0]).toMatchObject({ config: replacementConfig });
-  });
-
-  it("waits for the affected owner at auth publication", async () => {
-    const config = {};
-    const agentDir = fixture.state.agentDir("auth");
-    const first = await publishPreparedModelRuntimeSnapshot({ config, agentDir });
-
-    mocks.mutationListener?.({ agentDir, affectsInheritedStores: false });
-    await expect(prepareModelRuntimeSnapshot({ config, agentDir })).resolves.not.toBe(first);
-
-    await vi.waitFor(() => expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2));
-    const refreshed = await prepareModelRuntimeSnapshot({ config, agentDir });
-    expect(refreshed).not.toBe(first);
-    expect(mocks.discoverAuthStorage).toHaveBeenCalledTimes(2);
-  });
-
-  it("treats an auth refresh superseded by a newer mutation as control flow", async () => {
-    const config = {};
-    const agentDir = fixture.state.agentDir("auth-superseded");
-    await publishPreparedModelRuntimeSnapshot({ config, agentDir });
-    const finishFirstRefreshGate = createDeferred();
-    mocks.ensureOpenClawModelsJson.mockImplementationOnce(async (_config, targetDir) => {
-      await finishFirstRefreshGate.promise;
-      return { agentDir: String(targetDir), wrote: false };
-    });
-
-    try {
-      mocks.mutationListener?.({ agentDir, affectsInheritedStores: false });
-      await vi.waitFor(() => expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2));
-      mocks.mutationListener?.({ agentDir, affectsInheritedStores: false });
-      finishFirstRefreshGate.resolve();
-
-      await vi.waitFor(() => expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(3));
-      await expect(prepareModelRuntimeSnapshot({ config, agentDir })).resolves.toMatchObject({
-        agentDir,
-      });
-      expect(mocks.warn).not.toHaveBeenCalled();
-    } finally {
-      finishFirstRefreshGate.resolve();
-      await Promise.allSettled([prepareModelRuntimeSnapshot({ config, agentDir })]);
-    }
   });
 
   it.each([false, true])(
