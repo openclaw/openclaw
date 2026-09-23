@@ -226,6 +226,7 @@ async function runPdfPrompt(params: {
     run: async (provider, modelId) => {
       // Static snapshots serve configured models through prepared facts; a fresh registry can be empty.
       const resolved = await resolveModelAsync(provider, modelId, runtimeAgentDir, effectiveCfg, {
+        abortSignal: params.signal,
         modelIdSource: "selected",
         allowBundledStaticCatalogFallback: true,
         ...preparedStores,
@@ -328,7 +329,7 @@ async function runPdfPrompt(params: {
         const completion = params.work.track(() =>
           providerStreamFn
             ? (async () => await (await providerStreamFn(model, context, streamOptions)).result())()
-            : complete(model, context, streamOptions),
+            : complete(model, context, streamOptions, params.assertResourcesOpen),
         );
         return params.signal ? await abortable(params.signal, completion) : await completion;
       };

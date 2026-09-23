@@ -2,10 +2,7 @@
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { normalizePluginGatewayMethodScope } from "../../shared/gateway-method-policy.js";
 import { ADMIN_SCOPE, type OperatorScope } from "../operator-scopes.js";
-import {
-  createCoreGatewayMethodDescriptors,
-  isCoreGatewayMethodClassified,
-} from "./core-method-policy.js";
+import "./core-method-policy.js";
 import {
   DYNAMIC_GATEWAY_METHOD_SCOPE,
   type GatewayMethodDescriptor,
@@ -15,9 +12,12 @@ import {
   type GatewayMethodRegistryView,
   NODE_GATEWAY_METHOD_SCOPE,
 } from "./descriptor.js";
+export {
+  createCoreGatewayMethodDescriptors,
+  isCoreGatewayMethodClassified,
+} from "./core-method-policy.js";
 
 export type GatewayMethodRegistry = GatewayMethodRegistryView;
-export { createCoreGatewayMethodDescriptors, isCoreGatewayMethodClassified };
 
 function normalizeMethodName(name: string): string {
   return name.trim();

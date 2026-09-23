@@ -8,6 +8,7 @@ import { GatewayRequestError } from "../api/gateway.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { resolveUiSessionRowAgentId } from "../lib/sessions/session-key.ts";
+import { requestSessionInvolvement } from "../lib/sessions/session-requests.ts";
 import type {
   SidebarRecentSession,
   SidebarSessionMutationResult,
@@ -196,4 +197,49 @@ export async function patchSessionRows(
     host.sessionData.publishSessionMutationError(scope, errors.join("; "));
   }
   return successful;
+}
+
+/** A personal list choice is not an archive or a shared-session mutation. */
+export async function setSessionInvolvement(
+  host: SessionActionHost,
+  session: SessionActionRow,
+  hidden: boolean,
+  scope: SidebarSessionMutationScope,
+): Promise<void> {
+  if (!host.sessionData.isSessionMutationScopeCurrent(scope) || !session.sessionId) {
+    return;
+  }
+  const agentId = sessionRowAgentId(session, scope);
+  const access = readSessionMethodAccess(scope.gateway.snapshot, {
+    method: "sessions.setInvolvement",
+    requiredScope: "operator.read",
+  });
+  if (!access.allowed) {
+    host.sessionData.publishSessionMutationError(scope, access.reason);
+    return;
+  }
+  try {
+    await requestSessionInvolvement(scope.client, {
+      key: session.key,
+      agentId,
+      expectedSessionId: session.sessionId,
+      hidden,
+    });
+    if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+      return;
+    }
+    scope.sessions.patchRowLocal(
+      session.key,
+      { hiddenFromInvolvingMe: hidden },
+      {
+        agentId,
+        sessionId: session.sessionId,
+      },
+    );
+    await host.sessionData.refreshSidebarSessions(agentId);
+  } catch (error) {
+    if (host.sessionData.isSessionMutationScopeCurrent(scope)) {
+      host.sessionData.publishSessionMutationError(scope, error);
+    }
+  }
 }

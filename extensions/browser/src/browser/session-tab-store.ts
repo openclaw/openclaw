@@ -148,25 +148,28 @@ export function deleteBrowserDashboardStopIntent(intent: BrowserDashboardStopInt
 }
 
 type BrowserSessionTabStoreRuntime = {
-  state: Pick<PluginRuntime["state"], "openSyncKeyedStore">;
+  state: Pick<PluginRuntime["state"], "openSyncKeyedStore" | "openKeyedStore">;
   gateway?: PluginRuntime["gateway"];
 };
 
 /** Opens and publishes Browser's canonical durable tab store during plugin registration. */
-export function initializeBrowserSessionTabStore(runtime: BrowserSessionTabStoreRuntime): void {
-  const sessionTabs = runtime.state.openSyncKeyedStore<unknown>({
+export function initializeBrowserSessionTabStore(runtime: BrowserSessionTabStoreRuntime) {
+  const options = {
     namespace: BROWSER_SESSION_TABS_NAMESPACE,
     maxEntries: BROWSER_SESSION_TABS_MAX_ENTRIES,
-    overflowPolicy: "reject-new",
-  });
-  setBrowserStateRuntime({
+    overflowPolicy: "reject-new" as const,
+  };
+  const sessionTabs = runtime.state.openSyncKeyedStore<unknown>(options);
+  const state: ReturnType<typeof getBrowserStateRuntime> = {
     sessionTabs,
+    sessionTabDiscovery: runtime.state.openKeyedStore<unknown>(options),
     // Metadata registration must not materialize the broad host runtime.
     get gateway() {
       return runtime.gateway;
     },
     dashboardOperations: new Map(),
-  });
+  };
+  setBrowserStateRuntime(state);
   resetDurableTabAliases();
   for (const entry of sessionTabs.entries()) {
     const record = parseBrowserSessionTabRecord(entry.value);
@@ -184,6 +187,7 @@ export function initializeBrowserSessionTabStore(runtime: BrowserSessionTabStore
       record.profileAliases,
     );
   }
+  return state;
 }
 
 export function getBrowserSessionTabStore() {
@@ -216,11 +220,13 @@ function parseBrowserDashboardTab(key: string, value: unknown) {
 }
 
 /** Discovery only; reconciliation rereads current authority after awaited work. */
-export function readBrowserDashboardSessionOwners(): Array<{
-  sessionKey: string;
-  agentId?: string;
-}> {
-  const entries = getOptionalBrowserSessionTabStore()?.entries() ?? [];
+export async function readBrowserDashboardSessionOwners(): Promise<
+  Array<{
+    sessionKey: string;
+    agentId?: string;
+  }>
+> {
+  const entries = (await getOptionalBrowserStateRuntime()?.sessionTabDiscovery.entries()) ?? [];
   const dashboards = entries.flatMap(({ key, value }) => {
     const tab = parseBrowserDashboardTab(key, value);
     return tab?.dashboard ? [tab.dashboard] : [];

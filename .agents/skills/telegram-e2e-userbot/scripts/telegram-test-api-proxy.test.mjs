@@ -117,6 +117,76 @@ test("holds one upstream-accepted method response until explicit release", async
   await new Promise((resolve) => upstreamServer.close(resolve));
 });
 
+test("rejects only the selected matching request before forwarding and then resumes", async (t) => {
+  const forwarded = [];
+  const proxy = await startTelegramTestApiProxy({
+    fetchImpl: async (_url, init) => {
+      forwarded.push(JSON.parse(await new Response(init.body).text()).text);
+      return new Response('{"ok":true}', {
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+  t.after(() => proxy.close());
+  proxy.rejectNextRequest({ method: "sendMessage", bodyIncludes: "FINAL", skip: 1 });
+  for (const [method, text, expectedStatus] of [
+    ["editMessageText", "FINAL from another method", 200],
+    ["sendMessage", "preview", 200],
+    ["sendMessage", "FINAL first match", 200],
+    ["sendMessage", "FINAL rejected", 400],
+    ["sendMessage", "FINAL next request", 200],
+  ]) {
+    const response = await fetch(`${proxy.apiRoot}/bot123:ABC/${method}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
+    assert.equal(response.status, expectedStatus);
+    assert.equal((await response.json()).ok, expectedStatus === 200);
+  }
+  assert.deepEqual(forwarded, [
+    "FINAL from another method",
+    "preview",
+    "FINAL first match",
+    "FINAL next request",
+  ]);
+  assert.deepEqual(
+    proxy.getRequestRejectionEvents().map(({ method, upstreamForwarded }) => ({
+      method,
+      upstreamForwarded,
+    })),
+    [{ method: "sendMessage", upstreamForwarded: false }],
+  );
+});
+
+test("forwards file downloads before, during, and after a one-shot rejection", async (t) => {
+  const upstreamPaths = [];
+  const proxy = await startTelegramTestApiProxy({
+    fetchImpl: async (url) => {
+      upstreamPaths.push(new URL(url).pathname);
+      return new Response("synthetic-file-bytes", { status: 200 });
+    },
+  });
+  t.after(() => proxy.close());
+  const filePath = "/file/bot123:ABC/photos/current.jpg";
+  const download = async () => {
+    const response = await fetch(`${proxy.apiRoot}${filePath}`);
+    assert.equal(response.status, 200);
+    assert.equal(await response.text(), "synthetic-file-bytes");
+  };
+
+  await download();
+  proxy.rejectNextRequest({ method: "sendMessage" });
+  await download();
+  const rejected = await fetch(`${proxy.apiRoot}/bot123:ABC/sendMessage`, {
+    method: "POST",
+    body: "{}",
+  });
+  assert.equal(rejected.status, 400);
+  await download();
+  assert.deepEqual(upstreamPaths, Array(3).fill("/file/bot123:ABC/test/photos/current.jpg"));
+  assert.equal(proxy.getRequestRejectionEvents().length, 1);
+});
 test("proxy close aborts the in-flight Test Server request", async () => {
   let upstreamStarted;
   let upstreamAborted = false;
@@ -148,7 +218,7 @@ test("proxy close aborts the in-flight Test Server request", async () => {
   assert.equal(upstreamAborted, true);
 });
 
-test("lease revocation blocks every later Bot API request", async () => {
+test("lease revocation blocks every later Bot API request", async (t) => {
   const leaseError = new Error("lease revoked");
   let healthy = true;
   let revoke;
@@ -175,8 +245,13 @@ test("lease revocation blocks every later Bot API request", async () => {
     },
   });
 
-  const before = await fetch(`${proxy.apiRoot}/bot123:ABC/getMe`);
+  t.after(() => proxy.close());
+  // Revocation destroys existing sockets; the later request needs a fresh connection.
+  const before = await fetch(`${proxy.apiRoot}/bot123:ABC/getMe`, {
+    headers: { connection: "close" },
+  });
   assert.equal(before.status, 200);
+  assert.deepEqual(await before.json(), { ok: true });
   revoke();
   await new Promise((resolve) => setImmediate(resolve));
   const after = await fetch(`${proxy.apiRoot}/bot123:ABC/sendMessage`, {
@@ -185,5 +260,4 @@ test("lease revocation blocks every later Bot API request", async () => {
   });
   assert.equal(after.status, 502);
   assert.equal(upstreamRequests, 1);
-  await proxy.close();
 });

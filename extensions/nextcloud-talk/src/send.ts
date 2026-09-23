@@ -57,7 +57,10 @@ type NextcloudTalkSendOpts = {
 
 function resolveCredentials(
   explicit: { baseUrl?: string; secret?: string },
-  account: { baseUrl: string; secret: string; accountId: string },
+  account: Pick<
+    ReturnType<typeof resolveNextcloudTalkAccount>,
+    "accountId" | "baseUrl" | "secret" | "tokenStatus"
+  >,
 ): { baseUrl: string; secret: string } {
   const baseUrl = explicit.baseUrl?.trim() ?? account.baseUrl;
   const secret = explicit.secret?.trim() ?? account.secret;
@@ -69,7 +72,9 @@ function resolveCredentials(
   }
   if (!secret) {
     throw new Error(
-      `Nextcloud Talk bot secret missing for account "${account.accountId}" (set channels.nextcloud-talk.botSecret/botSecretFile or NEXTCLOUD_TALK_BOT_SECRET for default).`,
+      account.tokenStatus === "configured_unavailable"
+        ? `Nextcloud Talk bot secret is configured but unavailable for account "${account.accountId}" (check the configured channels.nextcloud-talk.botSecret/botSecretFile).`
+        : `Nextcloud Talk bot secret missing for account "${account.accountId}" (set channels.nextcloud-talk.botSecret/botSecretFile or NEXTCLOUD_TALK_BOT_SECRET for default).`,
     );
   }
 

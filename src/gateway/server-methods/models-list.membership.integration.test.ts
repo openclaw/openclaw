@@ -26,7 +26,7 @@ it.each([
     expected: ["account-only", "manual", "sibling-only"],
   },
 ])(
-  "models.list recomposes fetched membership after config.patch from $allow (agent override: $agentPolicy, second hook: $secondHook) without discovery",
+  "models.list applies policy to retained discovery from $allow (agent override: $agentPolicy, second hook: $secondHook)",
   async ({ allow, agentPolicy, secondHook, expected }) => {
     const state = await createOpenClawTestState({
       label: "catalog-membership",
@@ -42,12 +42,13 @@ it.each([
     });
     const provider = "membership-fixture";
     let requests = 0;
+    const advertisedModelIds = ["manual", "account-only"];
     const endpoint = createServer((request, response) => {
       requests++;
       response.writeHead(200, { "content-type": "application/json" });
       response.end(
         JSON.stringify(
-          request.url === "/sibling" ? ["manual", "sibling-only"] : ["manual", "account-only"],
+          request.url === "/sibling" ? ["manual", "sibling-only"] : advertisedModelIds,
         ),
       );
     });
@@ -153,10 +154,11 @@ it.each([
           });
           return result.models.filter((row) => row.provider === provider).map((row) => row.id);
         };
-        expect(await list(true)).toEqual(["manual"]);
+        const initial = allow.length === 0 ? expected : ["manual"];
+        expect(await list(true)).toEqual(initial);
         expect(requests).toBeGreaterThan(0);
         const acquired = requests;
-        expect(await list()).toEqual(["manual"]);
+        expect(await list()).toEqual(initial);
         expect(requests).toBe(acquired);
 
         const setPolicy = async (refs: string[]) => {
@@ -176,6 +178,29 @@ it.each([
         await setPolicy([`${provider}/manual`]);
         await expect.poll(() => list(), { timeout: 15_000 }).toEqual(["manual"]);
         expect(requests).toBe(acquired);
+
+        await setPolicy([`${provider}/account-only`]);
+        await expect
+          .poll(() => list(), { timeout: 15_000 })
+          .toEqual(agentPolicy ? ["manual"] : ["account-only"]);
+        expect(requests).toBe(acquired);
+
+        await setPolicy([]);
+        await expect.poll(() => list(), { timeout: 15_000 }).toEqual(expected);
+        expect(requests).toBe(acquired);
+
+        if (allow.length === 0) {
+          const previousConfig = await client.request<{ config: typeof cfg }>("config.get", {});
+          advertisedModelIds.push("next-release");
+          await list(true);
+          await expect
+            .poll(() => list(), { timeout: 15_000 })
+            .toEqual(["account-only", "manual", "next-release"]);
+          const currentConfig = await client.request<{ config: typeof cfg }>("config.get", {});
+          expect(currentConfig.config.models.providers[provider].models).toEqual(
+            previousConfig.config.models.providers[provider].models,
+          );
+        }
       } finally {
         await disconnectGatewayClient(client);
         await server.close({ reason: "catalog membership test complete" });

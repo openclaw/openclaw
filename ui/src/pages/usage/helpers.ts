@@ -35,9 +35,14 @@ type UsageSessionQueryTarget = {
   } | null;
 };
 
-export function currentLocalDate(): string {
-  const date = new Date();
+export function currentLocalDate(date = new Date()): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+export function createDefaultUsageDateRange(date = new Date()) {
+  const start = new Date(date);
+  start.setDate(start.getDate() - 29);
+  return { startDate: currentLocalDate(start), endDate: currentLocalDate(date) };
 }
 
 export function toUsageErrorMessage(error: unknown): string {

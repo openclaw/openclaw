@@ -6,7 +6,10 @@ import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
 import { waitForActiveCronTaskRuns } from "./service/active-run-cancellation.js";
 import { computeJobNextRunAtMs } from "./service/jobs-scheduling.js";
-import { proposeCronRunRecovery, recoverCronRunProposal } from "./service/run-recovery.js";
+import {
+  observeCronRecoveryForTest,
+  recoverCronRunForTest,
+} from "./service/run-recovery.test-support.js";
 import { createCronServiceState, type CronServiceDeps } from "./service/state.js";
 import { loadCronStore } from "./store.js";
 import { cronStoreKey } from "./store/key.js";
@@ -144,7 +147,7 @@ async function finishWatcherRun(params: {
     ? createCronServiceState(harness.deps)
     : undefined;
   const proposal = recoveryState
-    ? proposeCronRunRecovery(recoveryState, jobId, undefined, receipt.startedAtMs)
+    ? await observeCronRecoveryForTest(recoveryState, jobId, undefined, receipt.startedAtMs)
     : undefined;
   await params.editAfterTask?.();
   if (params.expectedReceiptStatus === "interrupted") {
@@ -156,7 +159,7 @@ async function finishWatcherRun(params: {
   }
   if (recoveryState && proposal) {
     expect(proposal.receipt?.receiptId).toBe(receipt.receiptId);
-    expect(recoverCronRunProposal(recoveryState, proposal, "startup")).toMatchObject({
+    expect(await recoverCronRunForTest(recoveryState, proposal, "startup")).toMatchObject({
       kind: "repaired",
     });
   }

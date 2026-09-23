@@ -1,16 +1,16 @@
 import type { PropertyValues } from "lit";
 import { property, query, state } from "lit/decorators.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../api/gateway.ts";
-import "../components/app-topbar.ts";
-import "../components/assistant-panel.ts";
-import "../components/modal-dialog.ts";
 import {
   formatDocumentTitle,
   isSettingsNavigationRoute,
   titleForRoute,
 } from "../app-navigation.ts";
-import "../components/resizable-divider.ts";
+import "../components/app-topbar.ts";
+import "../components/assistant-panel.ts";
+import "../components/modal-dialog.ts";
 import { isSessionRouteId } from "../app-route-paths.ts";
+import "../components/resizable-divider.ts";
 import { APP_ROUTE_IDS, type RouteId } from "../app-routes.ts";
 import type {
   CommandPaletteElement,
@@ -53,41 +53,34 @@ import {
   type StoredOutboxScopeHost,
 } from "./app-shell-gateway.ts";
 import { ShellNavigationOwner, type ShellNavigationHost } from "./app-shell-navigation.ts";
+import { createShellViewCallbacks } from "./app-shell-view-callbacks.ts";
 import { renderApplicationShell, type ShellViewHost } from "./app-shell-view.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "./context.ts";
 import { syncControlUiSystemChrome } from "./control-ui-presentation.ts";
 import { createGatewayControlUiReloadOptions } from "./gateway-control-ui-reload.ts";
 import {
+  APP_SIDEBAR_ELEMENT,
   BROWSER_PANEL_ELEMENT,
   COMMAND_PALETTE_ELEMENT,
   DESKTOP_PANEL_ELEMENT,
   EXEC_APPROVAL_ELEMENT,
   LazyCustomElementRequestController,
+  LINK_READER_PANEL_ELEMENT,
   type OptionalCustomElement,
   TERMINAL_PANEL_ELEMENT,
 } from "./lazy-custom-element.ts";
 import { postNativeNavState, type NativeNavState } from "./native-nav-state.ts";
 import { readNativeHistoryState, type NativeHistoryState } from "./native-web-chrome.ts";
 import { resolveOnboardingMode } from "./onboarding-mode.ts";
-import {
-  changedServerUiPrefs,
-  isApplyingServerUiPrefs,
-  pushServerUiPrefs,
-} from "./server-prefs.ts";
+import { changedServerUiPrefs } from "./server-prefs-intent.ts";
+import { isApplyingServerUiPrefs, pushServerUiPrefs } from "./server-prefs.ts";
 import { setSettingsChangeListener } from "./settings.ts";
 import {
   isStaleChunkImportError,
   retryStaleChunkReloadWhenReachable,
   scheduleStaleChunkReload,
 } from "./stale-chunk-reload.ts";
-
-const APP_SIDEBAR_TAG = "openclaw-app-sidebar";
-const APP_SIDEBAR_ELEMENT = {
-  tagName: APP_SIDEBAR_TAG,
-  label: APP_SIDEBAR_TAG,
-  loadModule: () => import("../components/app-sidebar.ts"),
-} satisfies OptionalCustomElement;
 
 i18n.setLocaleLoadRecovery({
   isUnrecoverableError: isStaleChunkImportError,
@@ -115,6 +108,7 @@ class OpenClawShell
   readonly commandPaletteElement = COMMAND_PALETTE_ELEMENT;
   readonly terminalPanelElement = TERMINAL_PANEL_ELEMENT;
   readonly browserPanelElement = BROWSER_PANEL_ELEMENT;
+  readonly linkReaderPanelElement = LINK_READER_PANEL_ELEMENT;
   readonly desktopPanelElement = DESKTOP_PANEL_ELEMENT;
   readonly execApprovalElement = EXEC_APPROVAL_ELEMENT;
   readonly onboardingMemoryImportElement = {
@@ -139,7 +133,9 @@ class OpenClawShell
   // Desktop and modal navigation are two slots for the same live sidebar.
   // Moving its element preserves session controllers and the resident pet
   // instead of resetting their lifecycle at every responsive breakpoint.
-  readonly navigationSidebar = document.createElement(APP_SIDEBAR_TAG);
+  readonly navigationSidebar: HTMLElement & { requestUpdate?: () => void } = document.createElement(
+    APP_SIDEBAR_ELEMENT.tagName,
+  );
   // Where "Back to app" / Escape leaves the settings takeover; falls back to
   // chat (the app default route) when settings was the entry point.
   lastWorkspaceLocation: ShellNavigationHost["lastWorkspaceLocation"] = null;
@@ -154,6 +150,7 @@ class OpenClawShell
   previousGatewayPhase: ApplicationContext["gateway"]["snapshot"]["phase"] | null = null;
   agentRosterRefreshTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   outboxStoreRuntime: OutboxStoreRuntime | null = null;
+  storedOutboxes: ReturnType<OutboxStoreRuntime["summarizeStoredChatOutboxes"]> | undefined;
   private outboxStoreUnsubscribe: (() => void) | null = null;
   private lastDeletedSessions: ApplicationContext["sessions"]["state"]["deletedSessions"] | null =
     null;
@@ -232,8 +229,9 @@ class OpenClawShell
   private readonly shellNavigation = new ShellNavigationOwner(this);
   private readonly shellChrome = new ShellChromeOwner(this);
   private readonly shellGateway = new ShellGatewayOwner(this);
+  readonly viewCallbacks = createShellViewCallbacks(this);
 
-  get context(): ApplicationContext<RouteId> | undefined {
+  get context(): ApplicationContext | undefined {
     return this.runtime?.context;
   }
 
@@ -248,7 +246,7 @@ class OpenClawShell
     return routeId !== undefined && !isSettingsNavigationRoute(routeId) && !this.onboardingMode;
   }
 
-  storedOutboxScopeHost(context: ApplicationContext<RouteId>): StoredOutboxScopeHost {
+  storedOutboxScopeHost(context: ApplicationContext): StoredOutboxScopeHost {
     const gatewaySnapshot = context.gateway.snapshot;
     return {
       settings: { gatewayUrl: context.gateway.connection.gatewayUrl },
@@ -259,7 +257,7 @@ class OpenClawShell
   }
 
   private chatTitleContext(
-    context: ApplicationContext<RouteId>,
+    context: ApplicationContext,
     outboxScopeHost: StoredOutboxScopeHost,
   ): string {
     const sessionKey = this.activeSessionKey;
@@ -351,7 +349,11 @@ class OpenClawShell
       .watch(
         () => this.context?.gateway,
         (gateway, notify) => gateway.subscribe(notify),
-        (gateway) => this.shellGateway.synchronizeGateway(gateway.snapshot),
+        (gateway) => {
+          this.shellChrome.synchronizeCommandPaletteScope();
+          this.shellGateway.synchronizeGateway(gateway.snapshot);
+          this.refreshStoredOutboxSummary();
+        },
       )
       .effect(
         () => this.context?.gateway,
@@ -369,6 +371,7 @@ class OpenClawShell
         () => this.context?.agents,
         (agents, notify) => agents.subscribe(notify),
         (agents) => {
+          this.refreshStoredOutboxSummary();
           const snapshot = this.context?.gateway.snapshot;
           if (snapshot) {
             this.ensureAgentsList(snapshot, agents);
@@ -398,6 +401,15 @@ class OpenClawShell
           this.recoverDeletedActiveSession(sessions.state);
         },
         () => this.performUpdate(),
+      )
+      .watch(
+        () => this.context?.placementStartup,
+        (startup, notify) => startup.subscribe(notify),
+        () => {
+          if (this.context) {
+            this.recoverDeletedActiveSession(this.context.sessions.state);
+          }
+        },
       )
       .watch(
         () => this.context?.runtimeConfig,
@@ -477,11 +489,25 @@ class OpenClawShell
       return;
     }
     this.outboxStoreUnsubscribe?.();
-    this.outboxStoreUnsubscribe = runtime.subscribeStoredChatOutboxChanges(() =>
-      this.requestUpdate(),
+    this.outboxStoreUnsubscribe = runtime.subscribeStoredChatOutboxChanges(
+      this.refreshStoredOutboxPresentation,
     );
-    this.requestUpdate();
+    this.refreshStoredOutboxPresentation();
   }
+
+  private refreshStoredOutboxSummary() {
+    const context = this.context;
+    this.storedOutboxes = context
+      ? this.outboxStoreRuntime?.summarizeStoredChatOutboxes(this.storedOutboxScopeHost(context))
+      : undefined;
+  }
+
+  private readonly refreshStoredOutboxPresentation = () => {
+    // A sidebar update may already be queued when the outbox publishes.
+    this.refreshStoredOutboxSummary();
+    this.requestUpdate();
+    this.navigationSidebar.requestUpdate?.();
+  };
 
   private resetForContextEpoch() {
     this.shellChrome.abandonPendingLazyActionForContext();
@@ -502,6 +528,7 @@ class OpenClawShell
     this.settingsSearchQuery = "";
     this.commandPaletteTarget = undefined;
     this.lastDeletedSessions = null;
+    this.storedOutboxes = undefined;
     this.shellGateway.reset();
     for (const timer of this.settingsPreloadTimers.values()) {
       globalThis.clearTimeout(timer);
@@ -558,9 +585,7 @@ class OpenClawShell
     return this.shellNavigation.chatNavigationOptions(face, options);
   }
 
-  navigate(routeId: string, options?: ApplicationNavigationOptions) {
-    this.shellNavigation.navigate(routeId, options);
-  }
+  readonly navigate = this.shellNavigation.navigate;
 
   readonly recoverNotFoundRoute = () => {
     return this.shellNavigation.recoverNotFoundRoute();
@@ -614,6 +639,10 @@ class OpenClawShell
   }
   readonly togglePendingDebugOverlayMode = () => this.shellChrome.togglePendingDebugOverlayMode();
   readonly openPalette = this.shellChrome.openPalette;
+  readonly closePendingPalette = this.shellChrome.closePendingPalette;
+  get commandPaletteLoading() {
+    return this.shellChrome.commandPaletteLoading;
+  }
   readonly refreshControlUi = (): Promise<boolean> => {
     const context = this.context;
     if (!context) {
@@ -651,9 +680,6 @@ class OpenClawShell
       context: primaryContext,
       attentionCount: context.overlays.snapshot.approvalQueue.length,
       gatewayDisconnected,
-      ...(gatewayDisconnected && {
-        queuedCount: this.outboxStoreRuntime?.summarizeStoredChatOutboxes(outboxScopeHost).total,
-      }),
     });
     const environment = context.config?.current.environment;
     if (environment) {
@@ -741,6 +767,7 @@ class OpenClawShell
   }
 
   override render() {
+    this.refreshStoredOutboxSummary();
     if (this.workspaceChromeVisible) {
       this.lazyCustomElements.preload(APP_SIDEBAR_ELEMENT);
     }

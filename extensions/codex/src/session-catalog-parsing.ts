@@ -465,6 +465,11 @@ export function parseCatalogPage(
     throw new Error("Codex session catalog returned an invalid page");
   }
   const nextCursor = parseOptionalCatalogString(value.nextCursor, "next cursor", MAX_CURSOR_LENGTH);
+  const sourceHomeId = parseOptionalCatalogString(
+    value.sourceHomeId,
+    "source home id",
+    MAX_SESSION_ID_LENGTH,
+  );
   const backwardsCursor = parseOptionalCatalogString(
     value.backwardsCursor,
     "backwards cursor",
@@ -472,6 +477,10 @@ export function parseCatalogPage(
   );
   return {
     sessions: value.sessions.map((session) => parseCatalogSession(session, options)),
+    ...(sourceHomeId ? { sourceHomeId } : {}),
+    ...(typeof value.canContinueCodex === "boolean"
+      ? { canContinueCodex: value.canContinueCodex }
+      : {}),
     ...(nextCursor ? { nextCursor } : {}),
     ...(backwardsCursor ? { backwardsCursor } : {}),
   };

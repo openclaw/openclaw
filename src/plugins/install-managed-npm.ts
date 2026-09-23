@@ -1,11 +1,13 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { resolveInstallWorkTimeoutMs } from "../infra/install-mode-options.js";
 import {
   installPackageDir,
   requestDeferredPackageDirInstall,
   resolvePackageDirInstallTransaction,
 } from "../infra/install-package-dir.js";
+import { withInstallActivity } from "../infra/install-progress.js";
 import {
   buildNpmResolutionFields,
   formatNpmCommandFailureOutput,
@@ -72,6 +74,10 @@ import {
   auditDeclaredOpenClawHostDependency,
   relinkOpenClawPeerDependenciesInManagedNpmRoot,
 } from "./plugin-peer-link.js";
+import {
+  findMissingRequiredPluginDependencies,
+  normalizePluginDependencySpecs,
+} from "./status-dependencies-core.js";
 
 export async function installPluginFromManagedNpmRoot(
   params: InstallSafetyOverrides & {
@@ -87,6 +93,7 @@ export async function installPluginFromManagedNpmRoot(
     extensionsDir?: string;
     npmDir?: string;
     timeoutMs?: number;
+    workTimeoutMs?: number | null;
     signal?: AbortSignal;
     logger?: PluginInstallLogger;
     mode?: "install" | "update";
@@ -99,7 +106,7 @@ export async function installPluginFromManagedNpmRoot(
   },
 ): Promise<InstallPluginResult> {
   const runtime = await loadPluginInstallRuntime();
-  const { logger, timeoutMs, mode, dryRun } = runtime.resolveTimedInstallModeOptions(
+  const { logger, timeoutMs, workTimeoutMs, mode, dryRun } = runtime.resolveTimedInstallModeOptions(
     params,
     defaultLogger,
   );
@@ -185,6 +192,7 @@ export async function installPluginFromManagedNpmRoot(
       const repairedOpenClawPeer = await repairManagedNpmRootOpenClawPeer({
         npmRoot,
         timeoutMs,
+        workTimeoutMs,
         signal: params.signal,
         logger,
       });
@@ -222,6 +230,7 @@ export async function installPluginFromManagedNpmRoot(
             managedOverrides,
             omitNpmAliasOverrides,
             timeoutMs,
+            workTimeoutMs,
             signal: params.signal,
           }),
         };
@@ -256,7 +265,7 @@ export async function installPluginFromManagedNpmRoot(
     ];
     const npmInstallOptions = {
       cwd: npmRoot,
-      timeoutMs: Math.max(timeoutMs, 300_000),
+      timeoutMs: resolveInstallWorkTimeoutMs(workTimeoutMs, Math.max(timeoutMs, 300_000)),
       signal: params.signal,
       killProcessTree: true,
       env: createSafeNpmInstallEnv(process.env, {
@@ -437,6 +446,7 @@ export async function installPluginFromManagedNpmRoot(
       const repairedOpenClawPeer = await repairManagedNpmRootOpenClawPeer({
         npmRoot,
         timeoutMs,
+        workTimeoutMs,
         signal: params.signal,
         logger,
       });
@@ -499,6 +509,18 @@ export async function installPluginFromManagedNpmRoot(
       return {
         ok: false,
         error: `npm install metadata remained incomplete after managed npm project recovery (quarantine: ${recovery.quarantine.quarantineDir}): ${resolutionVerification.error}`,
+      };
+    }
+
+    const missingRequired = await findMissingRequiredPluginDependencies({
+      rootDir: installRoot,
+      dependencyRootDir: npmRoot,
+      ...normalizePluginDependencySpecs(packageManifestResult.manifest ?? {}),
+    });
+    if (missingRequired.length > 0) {
+      return {
+        ok: false,
+        error: `npm install reported success but left required dependencies missing for ${params.packageName}: ${missingRequired.join(", ")}`,
       };
     }
 
@@ -586,7 +608,9 @@ export async function installPluginFromManagedNpmRoot(
         afterCopy: (stageDir) => copyManagedNpmProjectInputs({ npmRoot: targetNpmRoot, stageDir }),
         afterInstall: async (stageDir) => {
           try {
-            staged.result = await runManagedNpmInstall(stageDir);
+            staged.result = await withInstallActivity(logger, "dependencies", () =>
+              runManagedNpmInstall(stageDir),
+            );
             return staged.result;
           } catch (error) {
             // The directory owner cleans its stage before the original consent/policy error escapes.

@@ -17,6 +17,7 @@ import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   isMainSessionRestartRecoveryInputProvenance,
+  isProgressCardRefreshInputProvenance,
   normalizeInputProvenance,
   shouldPreserveUserFacingSessionStateForInputProvenance,
 } from "../../sessions/input-provenance.js";
@@ -259,6 +260,17 @@ export function prepareAgentRequestPreflight(params: {
     return undefined;
   }
   const inputProvenance = normalizeInputProvenance(request.inputProvenance);
+  if (isProgressCardRefreshInputProvenance(inputProvenance) && !canUseInternalRuntimeHandoff) {
+    params.io.emitAcceptance([
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        "Progress refresh input is reserved for progressCard.refresh.",
+      ),
+    ]);
+    return undefined;
+  }
   if (inputProvenance?.kind === "inter_session" && inputProvenance.sourceTool === "sessions_send") {
     const sourceSessionKey = inputProvenance.sourceSessionKey;
     const sourceAgentId = parseAgentSessionKey(sourceSessionKey)?.agentId;

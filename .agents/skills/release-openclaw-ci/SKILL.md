@@ -229,9 +229,14 @@ until their dependent enforcement changes land.
 
 Before full matrix dispatch, run both `pnpm ui:i18n:check` and
 `pnpm native:i18n:check` against the frozen trusted target in approved isolation.
-Bind both results to that exact SHA; either generated-locale drift blocks
-dispatch. Keep target execution outside the trusted dispatch helper—do not
-execute an arbitrary target checkout as helper code.
+Bind both results to that exact SHA. Report generated-locale drift as a warning
+and continue dispatch; source changes and the serialized locale-refresh workflows
+can temporarily leave generated output behind. Do not require regeneration before
+starting validation. FRV's normal-CI child retains the strict `control-ui-i18n`
+and `native-i18n` jobs and reports their actual results in the run summary;
+a failed locale job still fails validation. PR-side checks and release-prep and
+publication gates stay unchanged. Keep target execution outside the trusted
+dispatch helper—do not execute an arbitrary target checkout as helper code.
 
 Before expensive full validation, also run `pnpm ui:build` on the same frozen
 trusted target with its frozen dependencies in approved isolation, outside the
@@ -269,6 +274,28 @@ ambient env only when it was already intentionally injected for this release.
 The script prints only provider status and HTTP class, never tokens.
 The Anthropic check performs a tiny message completion so exhausted or
 non-billable credentials fail before the expensive release matrix.
+
+### Before publication
+
+For regular beta/stable protected publication, after evidence validation run
+`pnpm release:publish-preflight` with the intended tag, exact Full Release
+Validation run and attempt, npm dist-tag, plugin scope, approved soak waiver when
+applicable, and protected publication tooling ref. `pnpm release:candidate`
+invokes this check with its downloaded manifests; do not redownload them or
+replace the selected attempt. Use the report's exact dispatch command for the
+chosen publication route only after resolving every `FAIL` and owner-action
+`WARN`. Alpha uses its matching Tideclaw branch; extended-stable retains its
+separate owner workflows and is not admitted by this preflight.
+
+Check the report before retrying a failed publication: preserve the verified
+`openclaw_npm_resume_run_id` for already-published core bytes, inspect matching
+draft/published release state, and identify exact orphaned plugin/ClawHub children
+before cancellation. Preflight is read-only and does not authorize publication,
+cancel children, or prove a repository secret from local credentials. Bootstrap
+candidates need a read-only `npm whoami` probe using the repository's actual
+`NPM_TOKEN`; follow the secret-isolated step in
+[Release policy](https://docs.openclaw.ai/reference/RELEASING#probe-the-bootstrap-token)
+and retain its run URL. Do not rotate credentials as part of a diagnostic check.
 
 ## Dispatch
 

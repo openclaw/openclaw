@@ -1,3 +1,4 @@
+import { channel } from "node:diagnostics_channel";
 import { totalmem } from "node:os";
 // Diagnostic memory helpers capture process memory facts for support diagnostics.
 import { getHeapStatistics } from "node:v8";
@@ -6,6 +7,7 @@ import {
   type DiagnosticMemoryPressureEvent,
   type DiagnosticMemoryUsage,
 } from "../infra/diagnostic-events.js";
+import { sampleTrackedWorkerMemory } from "../infra/worker-cpu.js";
 import { createSubsystemLogger } from "./subsystem.js";
 
 // Diagnostic memory sampler with threshold/growth pressure detection and repeat suppression.
@@ -96,6 +98,7 @@ function normalizeMemoryUsage(memory: NodeJS.MemoryUsage): DiagnosticMemoryUsage
     heapUsedBytes: memory.heapUsed,
     externalBytes: memory.external,
     arrayBuffersBytes: memory.arrayBuffers,
+    ...sampleTrackedWorkerMemory(),
   };
 }
 
@@ -374,6 +377,17 @@ function logMemoryPressure(
     ` ${formatPressureSummary(pressure)}` +
     ` rssBytes=${pressure.memory.rssBytes}` +
     ` heapUsedBytes=${pressure.memory.heapUsedBytes}` +
+    ` externalBytes=${pressure.memory.externalBytes}` +
+    ` arrayBuffersBytes=${pressure.memory.arrayBuffersBytes}` +
+    formatOptionalPressureMetric("workerHeapTotalBytes", pressure.memory.workerHeapTotalBytes) +
+    formatOptionalPressureMetric("workerHeapUsedBytes", pressure.memory.workerHeapUsedBytes) +
+    formatOptionalPressureMetric("workerCount", pressure.memory.workerCount) +
+    formatOptionalPressureMetric("workerHeapSampledCount", pressure.memory.workerHeapSampledCount) +
+    (pressure.memory.workerHeaps?.length
+      ? ` workerHeaps=${JSON.stringify(
+          pressure.memory.workerHeaps.toSorted((a, b) => b.heapUsed - a.heapUsed).slice(0, 5),
+        )}`
+      : "") +
     formatOptionalPressureMetric("thresholdBytes", pressure.thresholdBytes) +
     formatOptionalPressureMetric("rssGrowthBytes", pressure.rssGrowthBytes) +
     formatOptionalPressureMetric("windowMs", pressure.windowMs) +
@@ -414,6 +428,9 @@ export function emitDiagnosticMemorySample(options?: {
 
   const growthPressure = pickGrowthPressure({ current, thresholds });
   const pressure = pickThresholdPressure({ memory, thresholds }) ?? growthPressure;
+  if (pressure?.level === "critical") {
+    channel("openclaw.memory.critical").publish(undefined);
+  }
   if (pressure && shouldEmitPressure(pressure, now, thresholds.pressureRepeatMs)) {
     emitDiagnosticEvent({
       type: "diagnostic.memory.pressure",
@@ -429,3 +446,13 @@ export function resetDiagnosticMemoryForTest(): void {
   state.growth = null;
   state.lastPressureAtByKey.clear();
 }
+
+// The logging-core SDK shipped these optional inputs before automatic bundles retired.
+export type EmitDiagnosticMemorySample = (
+  options?: NonNullable<Parameters<typeof emitDiagnosticMemorySample>[0]> & {
+    writeCriticalBundle?: boolean;
+    stateDir?: string;
+    sessionStorePaths?: string[];
+    resolveSessionStorePaths?: () => string[] | undefined;
+  },
+) => ReturnType<typeof emitDiagnosticMemorySample>;

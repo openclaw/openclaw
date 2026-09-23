@@ -5,6 +5,7 @@ import {
   restoreNativeErrorResponse,
   serializeNativeErrorResponse,
 } from "../infra/native-error-response.js";
+import { formatSqliteReadOnlyInspectionFailure } from "../infra/sqlite-error-diagnostics.js";
 import {
   encodeOpenClawStateWorkerError,
   hydrateOpenClawStateWorkerError,
@@ -21,6 +22,7 @@ export function serializeAgentSchemaInspectionError(value: unknown): InspectionE
   const error = toStringifiedError(value);
   return {
     ...serializeNativeErrorResponse(error),
+    message: formatSqliteReadOnlyInspectionFailure(error),
     stateError: encodeOpenClawStateWorkerError(error),
   };
 }
@@ -30,5 +32,7 @@ export function restoreAgentSchemaInspectionError(value: InspectionError): Error
   if (value.stateError) {
     retainOpenClawStateWorkerErrorPayload(error, value.stateError);
   }
-  return hydrateOpenClawStateWorkerError(error);
+  const restored = hydrateOpenClawStateWorkerError(error);
+  restored.message = value.message;
+  return restored;
 }

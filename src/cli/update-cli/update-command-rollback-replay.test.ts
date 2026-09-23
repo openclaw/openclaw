@@ -52,6 +52,7 @@ async function fixture(sealed = true) {
     preManagedServiceStop?: Parameters<typeof rollbackFailedUpdate>[0]["preManagedServiceStop"],
   ) =>
     rollbackFailedUpdate({
+      definitionRecovery: {},
       result: {
         status: "error",
         mode: "npm",

@@ -63,15 +63,15 @@ import {
 describe("worker finishing admission", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
-  it("revalidates a credential replaced during synchronous live publication before terminal ACK", async () => {
+  it("revalidates a credential replaced during live publication before terminal ACK", async () => {
     const { apply, liveEvents } = support.sequencedLiveEvents();
-    const { identity, placementStore, workerService } = support.placementHarness(
+    const { identity, placementStore, workerService } = await support.placementHarness(
       "worker-live-reentrant-credential",
       "session-live-reentrant-credential",
       { liveEvents },
     );
     apply.mockImplementationOnce(async () => {
-      support.testState.store.renewCredential({
+      await support.testState.store.renewCredential({
         environmentId: identity.environmentId,
         expectedOwnerEpoch: identity.ownerEpoch,
         sessionId: identity.sessionId,
@@ -131,7 +131,7 @@ describe("worker turn launcher terminal results", () => {
       });
       const service = createWorkerEnvironmentService({
         store: {
-          ...createWorkerEnvironmentStore({ database }),
+          ...(await createWorkerEnvironmentStore({ database })),
           get: () => environment,
           getCredential: () => ({
             environmentId: ENVIRONMENT_ID,
@@ -301,7 +301,7 @@ describe("worker turn launcher terminal results", () => {
           grant.deliveryId = hashWorkerCredential(grant.credential, claim);
           return grant;
         }),
-        acknowledgeCredentialDelivery: vi.fn(() => true),
+        acknowledgeCredentialDelivery: vi.fn(async () => true),
         startTunnel: vi.fn(async () => tunnel),
         destroy: vi.fn(async () => environment),
       };
@@ -520,7 +520,7 @@ describe("worker turn launcher terminal results", () => {
       ...unusedEnvironments(),
       get: vi.fn(() => attachedEnvironment()),
       acquireTurnCredential: vi.fn(async () => credential()),
-      acknowledgeCredentialDelivery: vi.fn(() => true),
+      acknowledgeCredentialDelivery: vi.fn(async () => true),
       startTunnel: vi.fn(async () => tunnel),
       destroy,
     };
@@ -630,7 +630,7 @@ describe("worker turn launcher terminal results", () => {
       const environments: WorkerTurnEnvironmentService = {
         get: vi.fn(() => attachedEnvironment()),
         acquireTurnCredential: vi.fn(async () => credential()),
-        acknowledgeCredentialDelivery: vi.fn(() => true),
+        acknowledgeCredentialDelivery: vi.fn(async () => true),
         startTunnel: vi.fn(async () => ({
           environmentId: ENVIRONMENT_ID,
           ownerEpoch: OWNER_EPOCH,

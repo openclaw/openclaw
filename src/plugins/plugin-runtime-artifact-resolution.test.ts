@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { withEnv } from "../test-utils/env.js";
 import { clearPluginRegistryLoadCache, loadOpenClawPlugins } from "./loader.js";
 import { resetPluginLoaderTestStateForTest } from "./loader.test-fixtures.js";
@@ -72,6 +72,7 @@ function resolveFixture(params: {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   resetPluginLoaderTestStateForTest();
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -79,6 +80,43 @@ afterEach(() => {
 });
 
 describe("resolvePluginRuntimeArtifact", () => {
+  it.each(["disabled", "metadata-only"])(
+    "does not inspect built runtime files for %s plugins",
+    (mode) => {
+      const fixture = createBundledPluginFixture();
+      const open = vi.spyOn(fs, "openSync");
+      const registry = withEnv(
+        {
+          OPENCLAW_BUNDLED_PLUGINS_DIR: path.dirname(fixture.rootDir),
+          OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+        },
+        () =>
+          loadOpenClawPlugins({
+            cache: false,
+            config: {
+              plugins: {
+                allow: ["fixture"],
+                entries: { fixture: { enabled: mode !== "disabled" } },
+              },
+            },
+            onlyPluginIds: ["fixture"],
+            loadModules: mode !== "metadata-only",
+            preferBuiltPluginArtifacts: true,
+          }),
+      );
+      expect(registry.plugins).toHaveLength(1);
+      expect(registry.plugins[0]?.id).toBe("fixture");
+      expect(registry.plugins[0]?.enabled).toBe(mode !== "disabled");
+      const builtRoot = path.dirname(fixture.builtSource);
+      expect(
+        open.mock.calls.filter(
+          ([file]) => typeof file === "string" && file.startsWith(`${builtRoot}${path.sep}`),
+        ),
+      ).toEqual([]);
+    },
+  );
+
   it.each(["source", "package-local", "root-bundled"])(
     "exposes the selected %s runtime entry to registration",
     (layout) => {

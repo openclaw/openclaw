@@ -41,6 +41,7 @@ import {
   isNodeHostLauncherChild,
   notifyNodeHostLauncherReady,
   setNodeHostLauncherRestartArguments,
+  watchNodeHostParentStdin,
 } from "./launcher-client.js";
 import { prepareNodeHostRuntime } from "./runtime.js";
 import { runStartupMigrations } from "./startup-state-migrations.js";
@@ -65,6 +66,9 @@ type NodeHostRunOptions = {
   nodeId?: string;
   displayName?: string;
   installedAppsSharing?: boolean;
+  desktopSharingEnabled?: boolean;
+  gatewayAuthFromEnv?: boolean;
+  parentStdin?: boolean;
   commands?: string[];
   allCommands?: boolean;
 };
@@ -122,8 +126,15 @@ async function resolveNodeHostGatewayCredentials(params: {
   gatewayCandidates: readonly NodeHostGatewayConfig[];
   deviceId: string;
   env?: NodeJS.ProcessEnv;
+  envOnly?: boolean;
 }): Promise<{ token?: string; password?: string }> {
   const env = params.env ?? process.env;
+  if (params.envOnly) {
+    return resolveExplicitGatewayAuth({
+      token: env.OPENCLAW_GATEWAY_TOKEN,
+      password: env.OPENCLAW_GATEWAY_PASSWORD,
+    });
+  }
   const savedGatewayScope = params.savedGateway
     ? gatewayOriginScope(formatGatewayCandidateUrl(params.savedGateway))
     : undefined;
@@ -132,7 +143,7 @@ async function resolveNodeHostGatewayCredentials(params: {
     params.gatewayCandidates.every(
       (candidate) => gatewayOriginScope(formatGatewayCandidateUrl(candidate)) === savedGatewayScope,
     ) &&
-    loadDeviceAuthTokenReadOnly({ deviceId: params.deviceId, role: "node", env })?.token
+    (await loadDeviceAuthTokenReadOnly({ deviceId: params.deviceId, role: "node", env }))?.token
   ) {
     // A co-located Gateway's shared password must not displace the paired node
     // credential. GatewayClient rereads the current token when connecting.
@@ -240,6 +251,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     forceWorkerRuns: opts.forceWorkerRuns,
     ephemeral: opts.ephemeral,
     installedAppsSharingEnabled: config.installedAppsSharing,
+    desktopSharingEnabled: opts.desktopSharingEnabled,
     commands: config.commands,
   });
   logInfo(`node-host: advertised commands: ${preparedRuntime.manifest.commands.join(", ")}`);
@@ -248,6 +260,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     ? {}
     : await resolveNodeHostGatewayCredentials({
         config: cfg,
+        envOnly: opts.gatewayAuthFromEnv,
         savedGateway: savedConfig?.gateway,
         gatewayCandidates,
         deviceId: deviceIdentity.deviceId,
@@ -425,6 +438,15 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     if (opts.forceWorkerRuns) {
       args.push("--session-host");
     }
+    if (opts.desktopSharingEnabled !== undefined) {
+      args.push(opts.desktopSharingEnabled ? "--desktop-sharing" : "--no-desktop-sharing");
+    }
+    if (opts.gatewayAuthFromEnv) {
+      args.push("--auth-from-env");
+    }
+    if (opts.parentStdin) {
+      args.push("--parent-stdin");
+    }
     // One-use pairing credentials are replaced by the authenticated device state.
     await setNodeHostLauncherRestartArguments(args);
     if (autoUpdateAbort.signal.aborted) {
@@ -454,7 +476,9 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   // A pending Promise alone does not keep Node alive. Pairing pauses can close
   // the last socket, so retain a handle until a signal finishes the foreground host.
   const lifetimeInterval = setInterval(() => {}, 1_000_000);
+  let stopWatchingParent = () => {};
   const removeSignalHandlers = () => {
+    stopWatchingParent();
     process.off("SIGINT", onSigint);
     process.off("SIGTERM", onSigterm);
   };
@@ -492,6 +516,9 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   const onSigterm = AsyncLocalStorage.bind(() => void finish(143));
   process.on("SIGINT", onSigint);
   process.on("SIGTERM", onSigterm);
+  if (opts.parentStdin && !isNodeHostLauncherChild()) {
+    stopWatchingParent = watchNodeHostParentStdin(onSigterm);
+  }
 
   const readinessPromise = startGatewayClientWhenEventLoopReady(client);
   let readiness;

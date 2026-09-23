@@ -307,7 +307,10 @@ function listCurrentRemoteConnectionKeys(): ReadonlySet<string> | undefined {
 
 export function setSkillsRemoteRegistry(registry: NodeRegistry | null) {
   remoteRegistry = registry;
-  setRemoteSkillConnectionReconciler(registry ? () => listCurrentRemoteConnectionKeys() : null);
+  setRemoteSkillConnectionReconciler(
+    registry ? () => listCurrentRemoteConnectionKeys() : null,
+    registry ? () => registry.listCurrentConnected() : undefined,
+  );
   if (!registry) {
     remoteNodeProbeStates.clear();
   }
@@ -647,10 +650,13 @@ async function refreshRemoteNodeBinsUncoalesced(params: RemoteNodeBinRefreshPara
     const nextBins = new Set(bins);
     const hasChanged = !areBinSetsEqual(existingBins, nextBins);
     if (hasChanged) {
-      const persisted = await updatePairedNodeBins(params.nodeId, bins, {
-        nodeId: params.nodeId,
-        key: probeOwner.pairingGeneration,
-      });
+      const persisted = await updatePairedNodeBins(
+        params.nodeId,
+        bins,
+        { nodeId: params.nodeId, key: probeOwner.pairingGeneration },
+        undefined,
+        () => isCurrentRemoteNodeOwner(params.nodeId, probeOwner),
+      );
       if (!persisted) {
         return;
       }
@@ -724,7 +730,7 @@ export async function refreshRemoteBinsForConnectedNodes(cfg: OpenClawConfig) {
   if (!remoteRegistry) {
     return;
   }
-  const connected = listCurrentRemoteSessions();
+  const connected = await remoteRegistry.listCurrentConnected();
   for (const node of connected) {
     try {
       await refreshRemoteNodeBins({

@@ -294,7 +294,7 @@ describe("routeReply", () => {
       payload: { text: "private reply" },
       channel: "slack",
       to: "channel:C123",
-      sessionKey: "agent:test",
+      sessionKey: "agent:main:test",
     });
 
     expect(result).toEqual({
@@ -326,7 +326,7 @@ describe("routeReply", () => {
       channel: "telegram",
       to: "chat-1",
       accountId: "acct-1",
-      sessionKey: "agent:test",
+      sessionKey: "agent:main:test",
       requesterSenderId: "sender-1",
       replyKind: "block",
       runId: "run-1",
@@ -339,13 +339,13 @@ describe("routeReply", () => {
     expect(lastDelivery().replyPayloadSendingHook).toMatchObject({
       kind: "block",
       channel: "telegram",
-      sessionKey: "agent:test",
+      sessionKey: "agent:main:test",
       runId: "run-1",
       context: {
         channelId: "telegram",
         accountId: "acct-1",
         conversationId: "chat-1",
-        sessionKey: "agent:test",
+        sessionKey: "agent:main:test",
         senderId: "sender-1",
         runId: "run-1",
       },

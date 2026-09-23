@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -13,8 +14,8 @@ import {
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 
-it.each(["malformed", "nonregular-wal"])(
-  "refuses an indeterminate agent family: %s",
+it.each(["malformed", "nonregular-wal", "empty-worker"])(
+  "reports an actionable schema inspection failure: %s",
   async (kind) => {
     const stateDir = fs.realpathSync(dirs.make("update-schema-invalid-"));
     const file = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
@@ -25,12 +26,43 @@ it.each(["malformed", "nonregular-wal"])(
       const db = openNodeSqliteDatabase(file);
       db.exec("PRAGMA journal_mode=WAL; PRAGMA user_version=3;");
       db.close();
-      fs.mkdirSync(`${file}-wal`);
+      if (kind === "nonregular-wal") {
+        fs.mkdirSync(`${file}-wal`);
+      }
+    }
+    const candidateRoot = path.join(stateDir, "candidate-package");
+    if (kind === "empty-worker") {
+      const worker = path.join(
+        candidateRoot,
+        "dist",
+        runtimeProcessEntrypoints.updateCandidateState.distWorkerPath,
+      );
+      fs.mkdirSync(path.dirname(worker), { recursive: true });
+      fs.writeFileSync(worker, "process.exitCode = 1;\n");
     }
     const before = fs.readFileSync(file);
-    await expect(readUpdateStateSchemaVersions({ stateDir, config: {} })).rejects.toThrow(
-      /State schema inspection failed/,
+    const failure = await readUpdateStateSchemaVersions({
+      stateDir,
+      config: {},
+      ...(kind === "empty-worker" ? { root: candidateRoot } : {}),
+    }).catch((error: unknown) => error);
+    assert(failure instanceof Error);
+    expect(failure).toHaveProperty(
+      "message",
+      expect.stringContaining("State schema inspection failed"),
     );
+    const message = failure.message;
+    expect
+      .soft(message)
+      .toContain(kind === "empty-worker" ? path.join(stateDir, "state", "openclaw.sqlite") : file);
+    expect
+      .soft(message)
+      .toContain(kind === "empty-worker" ? "shared database discovery" : "agent schema inspection");
+    expect.soft(message).toMatch(/after \d+(?:\.\d+)? seconds/);
+    expect.soft(message).toContain("then retry the update");
+    if (kind === "empty-worker") {
+      expect.soft(message).toContain("Worker exited without diagnostic output");
+    }
     expect(fs.readFileSync(file)).toEqual(before);
     if (kind === "nonregular-wal") {
       expect(fs.statSync(`${file}-wal`).isDirectory()).toBe(true);

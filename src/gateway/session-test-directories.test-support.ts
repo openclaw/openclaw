@@ -1,4 +1,4 @@
-import fs from "node:fs/promises";
+import { removeSessionFixtureDirectory } from "./session-fixture-directory.test-support.js";
 import { releaseGatewaySessionStoreFixture } from "./test/server-sessions-resources.test-helpers.js";
 
 export async function releaseSessionTestDirectories(roots: readonly string[]) {
@@ -9,10 +9,10 @@ export async function releaseSessionTestDirectories(roots: readonly string[]) {
 
 export async function removeSessionTestDirectories(roots: readonly string[]) {
   await releaseSessionTestDirectories(roots);
-  await Promise.all(roots.map((dir) => fs.rm(dir, { recursive: true, force: true })));
+  await Promise.all(roots.map((dir) => removeSessionFixtureDirectory(dir)));
 }
 
 export async function removeChatTestDirectory(dir: string): Promise<void> {
   await releaseSessionTestDirectories([dir]);
-  await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  await removeSessionFixtureDirectory(dir, { maxRetries: 5, retryDelay: 50 });
 }

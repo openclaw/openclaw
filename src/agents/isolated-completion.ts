@@ -11,8 +11,7 @@ import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withTempWorkspace } from "../infra/private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
-import type { AssistantMessage, Model } from "../llm/types.js";
-import { isTerminalAssistantError } from "../llm/utils/retry.js";
+import type { Model } from "../llm/types.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
 import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
@@ -20,7 +19,6 @@ import { resolveAgentDir, resolveAgentWorkspaceDir, resolveDefaultAgentId } from
 import { reconcileAuthProfileQuotaBlocks } from "./auth-profiles/usage.js";
 import { resolveCliBackendConfig, resolveCliRuntimeCanonicalProvider } from "./cli-backends.js";
 import { normalizeCliModel } from "./cli-runner/helpers.js";
-import { buildAssistantFailoverSignal } from "./embedded-agent-helpers/assistant-message-failures.js";
 import { resolveEmbeddedCliBackendDispatchEligibility } from "./embedded-agent-runner/cli-backend-dispatch-eligibility.js";
 import { resolveModelAsync } from "./embedded-agent-runner/model.js";
 import { ensureSelectedAgentHarnessPlugin } from "./harness/runtime-plugin.js";
@@ -31,6 +29,11 @@ import type {
   AgentHarnessIsolatedCompletionParamsV2,
   AgentHarnessIsolatedCompletionResult,
 } from "./harness/types.js";
+import {
+  IsolatedCompletionError,
+  isRetryableIsolatedQuotaFailure,
+  requireIsolatedAssistantText,
+} from "./isolated-completion-output.js";
 import { ensureAuthProfileStore } from "./model-auth.js";
 import {
   isCliRuntimeAliasForProvider,
@@ -83,22 +86,6 @@ export type IsolatedCompletionResult = {
   usage?: UsageLike;
 };
 
-type IsolatedCompletionErrorCode =
-  | "unsupported"
-  | "runtime-unavailable"
-  | "input-rejected"
-  | "output-rejected";
-
-class IsolatedCompletionError extends Error {
-  readonly code: IsolatedCompletionErrorCode;
-
-  constructor(code: IsolatedCompletionErrorCode, message: string, options?: ErrorOptions) {
-    super(message, options);
-    this.name = "IsolatedCompletionError";
-    this.code = code;
-  }
-}
-
 type AgentHarnessIsolatedCompletionParams = Parameters<
   NonNullable<AgentHarness["runIsolatedCompletion"]>
 >[0];
@@ -124,33 +111,6 @@ function selectIsolatedHarnessAuthPlan(attempt: PreparedAgentRuntimeAuthAttempt)
     // snapshot per call so it cannot inspect or reorder fallback profiles.
     forwardedAuthProfileCandidateIds: [attempt.profileId],
   };
-}
-
-function requireIsolatedAssistantText(assistant: AssistantMessage): string {
-  if (assistant.stopReason !== "stop" && assistant.stopReason !== "length") {
-    throw new IsolatedCompletionError(
-      "output-rejected",
-      `Isolated completion failed with stop reason ${assistant.stopReason}.`,
-      assistant.stopReason === "error" && !isTerminalAssistantError(assistant)
-        ? { cause: buildAssistantFailoverSignal(assistant) }
-        : undefined,
-    );
-  }
-  const textParts: string[] = [];
-  for (const block of assistant.content) {
-    if (block.type === "text") {
-      textParts.push(block.text);
-      continue;
-    }
-    if (block.type === "thinking") {
-      continue;
-    }
-    throw new IsolatedCompletionError(
-      "output-rejected",
-      "Isolated completion returned a tool call; the result was rejected.",
-    );
-  }
-  return textParts.join("").trim();
 }
 
 function hasCliSideEffectEvidence(result: {
@@ -521,6 +481,7 @@ async function runIsolatedCompletionOwned(
           | undefined;
         if (harness.authBootstrap === "harness") {
           const resolution = await resolveModelAsync(provider, request.model, agentDir, config, {
+            abortSignal: request.abortSignal,
             assertCurrent,
             ...lease.snapshot.createStores(),
             preparedModelRuntime: lease.snapshot,
@@ -554,6 +515,7 @@ async function runIsolatedCompletionOwned(
             authProfileStore,
             sessionAuthProfileId: request.authProfileId,
             sessionAuthProfileSource: request.authProfileId ? "user" : undefined,
+            ...(request.authProfileId ? { allowAuthProfileFallback: false } : {}),
             harnessId: harness.id,
             harnessRuntime: harness.id,
             harnessAuthBootstrap: harness.authBootstrap,
@@ -563,10 +525,23 @@ async function runIsolatedCompletionOwned(
           const authAttempts = prepareAgentRuntimeAuth(authParams).attempts;
           harnessAuth = { model: runtimeModel, store: authProfileStore, attempts: authAttempts };
         }
+        // Profile rotation shares one inference budget instead of restarting it per account.
+        let deadline: number | undefined;
+        const remainingTimeoutMs = () => {
+          const remaining = deadline === undefined ? request.timeoutMs : deadline - Date.now();
+          if (remaining <= 0) {
+            throw new IsolatedCompletionError(
+              "runtime-unavailable",
+              "Isolated completion timed out.",
+            );
+          }
+          return remaining;
+        };
         let firstError: unknown;
         let priorProfileAttempted = false;
         for (const preparedAttempt of harnessAuth?.attempts ?? [undefined]) {
           assertCurrent();
+          remainingTimeoutMs();
           const attempt: PreparedAgentRuntimeAuthAttempt | undefined =
             preparedAttempt?.kind === "profile"
               ? { ...preparedAttempt, plan: selectIsolatedHarnessAuthPlan(preparedAttempt) }
@@ -613,6 +588,7 @@ async function runIsolatedCompletionOwned(
                 metadataSnapshot: lease.snapshot.metadataSnapshot,
                 resolveModel: ({ config: modelConfig, authProfileId, authProfileMode }) =>
                   resolveModelAsync(runtimeModel.provider, runtimeModel.id, agentDir, modelConfig, {
+                    abortSignal: request.abortSignal,
                     assertCurrent,
                     modelIdSource: "selected",
                     preparedModelRuntime: lease.snapshot,
@@ -648,8 +624,10 @@ async function runIsolatedCompletionOwned(
               throw new Error("Prepared runtime auth candidates are temporarily unavailable.");
             }
             assertCurrent();
+            deadline ??= Date.now() + request.timeoutMs;
             const pending = harness.runIsolatedCompletionV2({
               ...commonParams,
+              timeoutMs: remainingTimeoutMs(),
               authorization:
                 authorization.owner === "host"
                   ? prepareIsolatedHostAuthorization(harness, authorization)
@@ -657,7 +635,14 @@ async function runIsolatedCompletionOwned(
               streamParams: clampIsolatedStreamParams(request.streamParams, modelMaxTokens),
             });
             priorProfileAttempted ||= attempt?.kind === "profile";
-            result = await pending;
+            const candidate = await pending;
+            assertCurrent();
+            if (isRetryableIsolatedQuotaFailure(candidate.assistant)) {
+              // Returned quota failures must enter the same core-owned profile loop as throws.
+              // Terminal errors and tool-bearing output never authorize another attempt.
+              requireIsolatedAssistantText(candidate.assistant);
+            }
+            result = candidate;
             break;
           } catch (error) {
             // A retired caller cannot authorize another credential attempt.

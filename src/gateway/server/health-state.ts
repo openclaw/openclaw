@@ -18,6 +18,7 @@ import type { HealthSummary } from "../health/types.js";
 import { createPresenceRecipientProjection } from "../presence-projection.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import type { GatewayClient } from "../server-methods/types.js";
+import type { SessionRowProjection } from "../session-row-projection.js";
 import type { GatewayEventLoopHealth } from "./event-loop-health.js";
 
 let presenceVersion = 1;
@@ -132,6 +133,7 @@ export async function refreshGatewayHealthSnapshot(opts?: {
   getRuntimeSnapshot?: () => ChannelRuntimeSnapshot;
   getEventLoopHealth?: () => GatewayEventLoopHealth | undefined;
   getConfigReloaderHotReloadStatus?: () => GatewayHotReloadStatus | undefined;
+  getSessionRowProjection?: () => SessionRowProjection | undefined;
 }) {
   const includeSensitive = opts?.includeSensitive === true;
   const audience: HealthAudience = includeSensitive ? "admin" : "public";
@@ -157,15 +159,22 @@ export async function refreshGatewayHealthSnapshot(opts?: {
     } catch {
       runtimeSnapshot = undefined;
     }
-    const eventLoop = opts?.getEventLoopHealth?.();
     const configReloadHotReloadStatus = opts?.getConfigReloaderHotReloadStatus?.();
     const snap = await collectGatewayHealthSnapshot({
       audience,
       probe: strength === "probe",
       runtimeSnapshot,
-      ...(eventLoop ? { eventLoop } : {}),
       ...(configReloadHotReloadStatus ? { configReloadHotReloadStatus } : {}),
+      ...(opts?.getSessionRowProjection
+        ? { sessionRowProjection: opts.getSessionRowProjection() }
+        : {}),
     });
+    // Channel collection can outlive several sampling windows. Read diagnostics
+    // only when this new snapshot is ready to return, cache, or broadcast.
+    const eventLoop = opts?.getEventLoopHealth?.();
+    if (eventLoop) {
+      snap.eventLoop = eventLoop;
+    }
     if (
       strength === "probe" &&
       state.inFlight.passive &&

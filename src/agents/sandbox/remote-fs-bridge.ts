@@ -102,6 +102,12 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
   }
 
   async readFile(params: Parameters<SandboxFsBridge["readFile"]>[0]): Promise<Buffer> {
+    return (await this.readFileWithSource(params)).data;
+  }
+
+  async readFileWithSource(
+    params: Parameters<SandboxFsBridge["readFile"]>[0],
+  ): ReturnType<NonNullable<SandboxFsBridge["readFileWithSource"]>> {
     if (
       params.maxBytes !== undefined &&
       (!Number.isSafeInteger(params.maxBytes) || params.maxBytes < 0)
@@ -142,7 +148,24 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
         `Sandbox read failed (${result.code}): ${result.stderr.toString("utf8").trim()}`,
       );
     }
-    return result.stdout;
+    const logicalPath = path.posix.join(
+      target.mountRootPath,
+      pinned.relativeParentPath,
+      pinned.basename,
+    );
+    // Parent aliases can enter a more specific agent or protected mount.
+    const source = resolveRemoteMountByContainerPath(this.getMounts(), logicalPath);
+    return {
+      data: result.stdout,
+      canonicalPath: path.posix.join(
+        pinned.mountRootPath,
+        pinned.relativeParentPath,
+        pinned.basename,
+      ),
+      ...(source?.source === "workspace"
+        ? { workspaceRelativePath: path.posix.relative(source.containerRoot, logicalPath) }
+        : {}),
+    };
   }
 
   async readDirectory(

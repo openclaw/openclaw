@@ -44,16 +44,6 @@ const loadChannelBootstrapRuntime = createLazyRuntimeModule(
   () => import("./channel-bootstrap.runtime.js"),
 );
 const loadChannelPluginFromRegistry = createChannelRegistryLoader((entry) => entry.plugin);
-export async function resolveChannelOutboundDirectiveOptions(params: {
-  cfg: OpenClawConfig;
-  agentId?: string;
-  channel: string;
-}): Promise<{ extractMarkdownImages?: boolean }> {
-  const { plugin } = await loadBootstrappedChannelPlugin(params);
-  return {
-    extractMarkdownImages: plugin?.outbound?.extractMarkdownImages === true ? true : undefined,
-  };
-}
 
 export async function createChannelHandler(params: ChannelHandlerParams): Promise<ChannelHandler> {
   const { plugin, pluginRegistry } = await loadBootstrappedChannelPlugin(params);
@@ -322,6 +312,7 @@ function createPluginHandler(
     chunkerMode,
     chunkedTextFormatting: outbound?.chunkedTextFormatting,
     textChunkLimit: outbound?.textChunkLimit,
+    extractMarkdownImages: outbound?.extractMarkdownImages === true ? true : undefined,
     preserveMarkdownDetails:
       outbound?.preserveMarkdownDetails?.({
         cfg: params.cfg,

@@ -304,7 +304,7 @@ describe("session.message websocket events", () => {
       const declaredEvent = await declaredPresence;
       const declaredEntry = findWatchedEntry(declaredEvent);
       expect(declaredEntry?.watchedSessions).toEqual(declaredKeys);
-      const ownerProfile = listProfiles().find((profile) => profile.emails.length === 0);
+      const ownerProfile = (await listProfiles()).find((profile) => profile.emails.length === 0);
       expect(ownerProfile).toBeDefined();
       expect(declaredEntry?.user).toEqual({
         id: ownerProfile!.id,
@@ -429,6 +429,11 @@ describe("session.message websocket events", () => {
     const mainWs = await harness.openWs({ origin: copilotOrigin });
     const otherWs = await harness.openWs();
     const legacyWs = await harness.openWs();
+    let otherReceived = false;
+    const observeOtherChat = (data: RawData) => {
+      const message = requireRecord(JSON.parse(rawDataToString(data)), "gateway message");
+      otherReceived ||= message.type === "event" && message.event === "chat";
+    };
     try {
       const scopedCaps = [GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS];
       const unpaired = await connectReq(unpairedWs, {
@@ -479,49 +484,43 @@ describe("session.message websocket events", () => {
       await rpcReq(mainWs, "sessions.messages.subscribe", { key: "main" });
       await rpcReq(otherWs, "sessions.messages.subscribe", { key: "other" });
 
-      const mainEvent = onceMessage(
-        mainWs,
-        (message) =>
-          message.type === "event" &&
-          message.event === "chat" &&
-          (message.payload as { sessionKey?: string } | undefined)?.sessionKey ===
-            "agent:main:main",
-      );
-      const legacyEvent = onceMessage(
-        legacyWs,
-        (message) =>
-          message.type === "event" &&
-          message.event === "chat" &&
-          (message.payload as { sessionKey?: string } | undefined)?.sessionKey ===
-            "agent:main:main",
-      );
-      const otherReceived = onceMessage(
-        otherWs,
-        (message) => message.type === "event" && message.event === "chat",
-        300,
-      ).then(
-        () => true,
-        () => false,
+      otherWs.on("message", observeOtherChat);
+      const chatEvents = [mainWs, legacyWs].map((ws) =>
+        onceMessage(
+          ws,
+          (message) =>
+            message.type === "event" &&
+            message.event === "chat" &&
+            (message.payload as { sessionKey?: string } | undefined)?.sessionKey ===
+              "agent:main:main",
+        ),
       );
 
-      const send = await rpcReq(mainWs, "chat.send", {
-        sessionKey: "main",
-        message: "/status",
-        toolBindings: {
-          browser: {
-            kind: "tab",
-            tabId: 7,
-            target: "host",
-            profile: "chrome",
-            targetId: "target-7",
+      const [send, ...delivered] = await Promise.all([
+        rpcReq(mainWs, "chat.send", {
+          sessionKey: "main",
+          message: "/status",
+          toolBindings: {
+            browser: {
+              kind: "tab",
+              tabId: 7,
+              target: "host",
+              profile: "chrome",
+              targetId: "target-7",
+            },
           },
-        },
-        idempotencyKey: "scoped-delivery-proof",
-      });
+          idempotencyKey: "scoped-delivery-proof",
+        }),
+        ...chatEvents,
+      ]);
       expect(send.ok, JSON.stringify(send)).toBe(true);
-      await expect(Promise.all([mainEvent, legacyEvent])).resolves.toHaveLength(2);
-      await expect(otherReceived).resolves.toBe(false);
+      expect(delivered).toHaveLength(2);
+      // Reasserting existing membership replies after any chat frame already queued on this socket.
+      const barrier = rpcReq(otherWs, "sessions.messages.subscribe", { key: "other" });
+      await expect(barrier).resolves.toMatchObject({ ok: true });
+      expect(otherReceived).toBe(false);
     } finally {
+      otherWs.off("message", observeOtherChat);
       unpairedWs.close();
       pairingWs.close();
       wrongOriginWs.close();
@@ -1038,7 +1037,6 @@ describe("session.message websocket events", () => {
       };
       const liveEventPromise = waitForSessionMessageEvent(webWs, sessionKey);
       const dispatched = await dispatchCronDelivery({
-        cfg: { session: { store: storePath } },
         cfgWithAgentDefaults: { session: { store: storePath } },
         deps: {},
         job,
@@ -1054,7 +1052,6 @@ describe("session.message websocket events", () => {
         lifecycleRevision: "detached-cron-revision",
         sessionUpdatedAt: 3_000,
         runStartedAt: 3_000,
-        runEndedAt: 3_001,
         timeoutMs: 30_000,
         resolvedDelivery: {
           ok: false,
@@ -1080,11 +1077,6 @@ describe("session.message websocket events", () => {
         outputText: "The detached cron finished without another user message.",
         isAborted: () => false,
         abortReason: () => "aborted",
-        withRunSession: (result) => ({
-          ...result,
-          sessionId: "detached-cron-session",
-          sessionKey: "cron:job-webchat:run:3000",
-        }),
       });
       expect(dispatched).toMatchObject({ delivered: true, deliveryAttempted: true });
 

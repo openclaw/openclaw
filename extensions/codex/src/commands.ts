@@ -34,8 +34,9 @@ export function createCodexCommand(options: CodexCommandOptions): OpenClawPlugin
     acceptsArgs: true,
     requireAuth: true,
     handler: async (ctx) => {
+      const commandContext = { ...ctx, gatewayClientScopes: ctx.gatewayClientScopes?.slice() };
       const { handleCodexCommand } = await import("./command-dispatch.js");
-      return handleCodexCommand(ctx, options);
+      return handleCodexCommand(commandContext, options);
     },
   };
 }

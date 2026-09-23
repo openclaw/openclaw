@@ -4,6 +4,7 @@ set -euo pipefail
 
 openclaw_npm_expected_workflow_ref="${GITHUB_REF}"
 openclaw_npm_expected_workflow_sha="${PARENT_WORKFLOW_SHA}"
+openclaw_npm_run_attempt=""
 
 record_postpublish_diagnostics() {
   CHILD_PLUGIN_NPM_RUN_ID="${plugin_npm_run_id:-${CHILD_PLUGIN_NPM_RUN_ID:-}}" \
@@ -14,12 +15,24 @@ record_postpublish_diagnostics() {
     || echo "Warning: postpublish diagnostics unavailable; primary result unchanged." >&2
 }
 
+print_release_resume_command() {
+  local inputs_json command
+  inputs_json="$(jq -ce '.inputs | select(type == "object")' "$GITHUB_EVENT_PATH")" || return 1
+  printf -v command 'printf %%s %q | gh workflow run openclaw-release-publish.yml --repo %q --ref %q --json' \
+    "$inputs_json" "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME"
+  {
+    printf '\n### Resume publication\n\n'
+    printf 'Prepared button releases recover through a new Release Button run with the same prepared artifact. For direct publication, reconcile failed stages, then resume with these frozen inputs; the original successful npm publisher is recovered automatically.\n\n'
+    printf '```bash\n%s\n```\n' "$command"
+  } >> "$GITHUB_STEP_SUMMARY"
+}
+
 is_stable_release() {
-  [[ "${RELEASE_TAG}" != *"-alpha."* && "${RELEASE_TAG}" != *"-beta."* ]]
+  [[ "${RELEASE_NPM_DIST_TAG}" != "extended-stable" && "${RELEASE_TAG}" != *"-alpha."* && "${RELEASE_TAG}" != *"-beta."* ]]
 }
 
 is_android_release() {
-  [[ "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*)?$ ]]
+  [[ "${RELEASE_NPM_DIST_TAG}" != "extended-stable" && "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*)?$ ]]
 }
 
 resolve_child_workflow_ref() {
@@ -69,23 +82,96 @@ verify_child_run_sha() {
   fi
 }
 
+cleanup_clawhub_children() {
+  local run_id run_json failed=0
+  for run_id in "${RELEASE_CLAWHUB_RUN_ID:-${CHILD_PLUGIN_CLAWHUB_RUN_ID:-}}" "${RELEASE_CLAWHUB_BOOTSTRAP_RUN_ID:-${CHILD_PLUGIN_CLAWHUB_BOOTSTRAP_RUN_ID:-}}"; do
+    [[ -n "$run_id" ]] || continue
+    run_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}")" || { failed=1; continue; }
+    [[ "$(jq -r '.status' <<< "$run_json")" != completed ]] || continue
+    if ! gh run cancel --repo "$GITHUB_REPOSITORY" "$run_id"; then
+      echo "::warning::Could not cancel ClawHub child ${run_id}; inspect https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}." >&2
+      failed=1
+    fi
+  done
+  return "$failed"
+}
+
+cancel_superseded_clawhub_child() {
+  local workflow="$1" run_id="$2" title="$3"
+  local parent_tuple parent_run_id parent_attempt run_json pending_json jobs_json parent_json deadline
+  parent_tuple="${title#"${workflow} [${RELEASE_TAG:-}] publish parent="}"
+  [[ "$parent_tuple" =~ ^([1-9][0-9]*)/([1-9][0-9]*)$ ]] || return 1
+  parent_run_id="${BASH_REMATCH[1]}"
+  parent_attempt="${BASH_REMATCH[2]}"
+  run_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}")" || return 1
+  jq -e --arg repo "$GITHUB_REPOSITORY" --arg workflow ".github/workflows/${workflow}" --arg title "$title" --arg id "$run_id" '
+    (.id | tostring) == $id and .repository.full_name == $repo and .head_repository.full_name == $repo and
+    .event == "workflow_dispatch" and (.path | split("@")[0]) == $workflow and
+    .actor.login == "github-actions[bot]" and .display_title == $title
+  ' <<< "$run_json" >/dev/null || return 1
+  [[ "$(jq -r '.status' <<< "$run_json")" != completed ]] || return 0
+  pending_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/pending_deployments")" || return 1
+  jq -e 'length > 0' <<< "$pending_json" >/dev/null || return 1
+  jobs_json="$(gh run view --repo "$GITHUB_REPOSITORY" "$run_id" --json jobs)" || return 1
+  jq -e '.jobs | length > 0 and all(.status != "in_progress")' <<< "$jobs_json" >/dev/null || return 1
+  # A title is correlation, not authority. Re-read the owning parent after the
+  # child/gate queries; successful detached children and live publishers survive.
+  parent_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${parent_run_id}")" || return 1
+  jq -e --arg repo "$GITHUB_REPOSITORY" --arg id "$parent_run_id" --arg attempt "$parent_attempt" '
+    (.id | tostring) == $id and (.run_attempt | tostring) == $attempt and
+    .repository.full_name == $repo and .head_repository.full_name == $repo and
+    .event == "workflow_dispatch" and (.path | split("@")[0]) == ".github/workflows/openclaw-release-publish.yml" and
+    .status == "completed" and (.conclusion == "failure" or .conclusion == "cancelled" or .conclusion == "timed_out")
+  ' <<< "$parent_json" >/dev/null || return 1
+  # Cancellation uses the parent's actions:write permission; rejecting a gate
+  # would additionally require membership in its environment reviewer list.
+  gh run cancel --repo "$GITHUB_REPOSITORY" "$run_id" >&2 || return 1
+  # Cancellation is asynchronous. Keep target concurrency occupied until GitHub
+  # confirms terminal state; dispatching early can cancel the replacement run.
+  deadline=$((SECONDS + 60))
+  while (( SECONDS < deadline )); do
+    run_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}")" || return 1
+    if [[ "$(jq -r '.status' <<< "$run_json")" == completed ]]; then
+      echo "- Reclaimed superseded ClawHub child: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}" >> "$GITHUB_STEP_SUMMARY"
+      return 0
+    fi
+    sleep 5
+  done
+  return 1
+}
+
 require_clawhub_dispatch_available() {
-  local workflow_ref="$1"
-  local run_state runs run_id run_url endpoint
+  local workflow_ref="$1" workflow="${2:-plugin-clawhub-release.yml}"
+  local run_state runs run run_id run_url title branch endpoint
   # Query each non-completed status separately so recent completed runs cannot
   # hide an older environment-gated child on the same workflow ref; `requested`
   # and `action_required` precede `queued`/`waiting` and are just as active.
   for run_state in requested action_required waiting pending queued in_progress; do
-    runs="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow plugin-clawhub-release.yml \
-      --branch "$workflow_ref" --status "$run_state" --limit 1 --json databaseId,url)" || return 1
-    run_id="$(jq -r '.[0].databaseId // empty' <<< "$runs")" || return 1
-    if [[ -n "$run_id" ]]; then
-      run_url="$(jq -r '.[0].url' <<< "$runs")"
+    runs="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$workflow" \
+      --status "$run_state" --limit 1000 --json databaseId,displayTitle,headBranch,url)" || return 1
+    # GitHub caps filtered run searches at 1,000; an incomplete inventory cannot
+    # prove that a new publisher will not collide with a waiting child.
+    [[ "$(jq 'length' <<< "$runs")" -lt 1000 ]] || return 1
+    while IFS= read -r run; do
+      run_id="$(jq -r '.databaseId' <<< "$run")"
+      run_url="$(jq -r '.url' <<< "$run")"
+      title="$(jq -r '.displayTitle // ""' <<< "$run")"
+      branch="$(jq -r '.headBranch // ""' <<< "$run")"
+      if [[ -n "${RELEASE_TAG:-}" && "$title" == "${workflow} [${RELEASE_TAG}] publish parent="* ]]; then
+        if cancel_superseded_clawhub_child "$workflow" "$run_id" "$title"; then
+          continue
+        fi
+      elif [[ "$title" == "${workflow} ["*"] publish parent="* || "$title" == "${workflow} ["*"] validation parent="* || "$branch" != "$workflow_ref" || "$workflow" == plugin-clawhub-new.yml ]]; then
+        # Validation and different targets have independent concurrency slots.
+        # Preserve the normal publisher's legacy same-ref guard only; bootstrap
+        # main can also host unidentified validation runs from older tooling.
+        continue
+      fi
       endpoint="repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/pending_deployments"
-      echo "ClawHub dispatch blocked by ${run_state} run on ${workflow_ref}: ${run_url}" >&2
+      echo "ClawHub dispatch blocked by ${run_state} run: ${run_url}" >&2
       echo "Either wait for that run, or reject its pending deployment: GET ${endpoint} for environment IDs, then gh api -X POST ${endpoint} -F 'environment_ids[]=<id>' -f state=rejected -f comment='Reject stale release gate'." >&2
       return 1
-    fi
+    done < <(jq -c '.[]' <<< "$runs")
   done
 }
 
@@ -138,8 +224,8 @@ dispatch_workflow_at_ref() {
     node "${BASH_SOURCE[0]%/*}/../android-native-ci.mjs" \
       "${RUNNER_TEMP}/android-release-approval/approval.json" || return 1
   fi
-  if [[ "$workflow" == "plugin-clawhub-release.yml" && "$(jq -r '.dry_run // "false"' <<< "$inputs_json")" != "true" ]]; then
-    require_clawhub_dispatch_available "$workflow_ref" || return 1
+  if [[ ( "$workflow" == "plugin-clawhub-release.yml" || "$workflow" == "plugin-clawhub-new.yml" ) && "$(jq -r '.dry_run // "false"' <<< "$inputs_json")" != "true" ]]; then
+    require_clawhub_dispatch_available "$workflow_ref" "$workflow" || return 1
   fi
   # API 2026-03-10 removed return_run_details and always returns the
   # workflow_run_id, API run_url, and browser html_url in a 200 response.
@@ -152,6 +238,14 @@ dispatch_workflow_at_ref() {
   run_id="$(printf '%s' "$dispatch_response" | jq -er '.workflow_run_id | tostring | select(test("^[1-9][0-9]*$"))')" || return 1
   run_url="$(printf '%s' "$dispatch_response" | jq -er '.html_url | select(type == "string" and length > 0)')" || return 1
   verify_child_run_sha "$workflow" "$run_id" "$expected_sha" || return 1
+  # Persist each child before the next dispatch can fail. Step outputs written
+  # only after the whole batch leave partially dispatched children unowned.
+  if [[ -n "${GITHUB_ENV:-}" ]]; then
+    case "$workflow" in
+      plugin-clawhub-release.yml) echo "RELEASE_CLAWHUB_RUN_ID=${run_id}" >> "$GITHUB_ENV" ;;
+      plugin-clawhub-new.yml) echo "RELEASE_CLAWHUB_BOOTSTRAP_RUN_ID=${run_id}" >> "$GITHUB_ENV" ;;
+    esac
+  fi
 
   echo "Dispatched ${workflow} from ${workflow_ref} at ${expected_sha}: ${run_url}" >&2
   {
@@ -520,65 +614,39 @@ approve_clawhub_bootstrap_environments() {
 }
 
 guard_existing_public_release() {
-  local release_version asset_name release_json is_draft has_sha has_proof has_asset has_canonical_body release_url release_body release_body_file
+  local release_json release_body release_body_file
 
   if [[ "${PUBLISH_OPENCLAW_NPM}" != "true" ]]; then
     return 0
   fi
-
-  if ! release_json="$(gh release view "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" --json isDraft,assets,body,url 2>/dev/null)"; then
+  if ! release_json="$(gh release view "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" --json isDraft,body 2>/dev/null)"; then
     return 0
   fi
   release_body="$(printf '%s' "${release_json}" | jq -er '.body | strings')" || return 1
   assert_initial_release_body "${release_body}" || return 1
-
-  is_draft="$(printf '%s' "${release_json}" | jq -r '.isDraft')"
-  if [[ "${is_draft}" == "true" ]]; then
+  if [[ "$(printf '%s' "${release_json}" | jq -r '.isDraft')" == "true" ]]; then
     return 0
   fi
 
-  release_version="${RELEASE_TAG#v}"
-  asset_name="openclaw-${release_version}-dependency-evidence.zip"
-  has_sha="$(printf '%s' "${release_json}" | jq --arg sha "${TARGET_SHA}" -r '.body | contains($sha)')"
-  has_proof="$(printf '%s' "${release_json}" | jq -r '.body | contains("### Release verification")')"
-  has_asset="$(printf '%s' "${release_json}" | jq --arg name "${asset_name}" -r 'any(.assets[]?; .name == $name)')"
-  release_url="$(printf '%s' "${release_json}" | jq -r '.url')"
-  release_body="$(printf '%s' "${release_json}" | jq -r '.body')"
   release_body_file="${RUNNER_TEMP}/existing-public-release-body.md"
   printf '%s' "${release_body}" > "${release_body_file}"
-  has_canonical_body="false"
-  if canonical_release_body_matches "${release_body_file}"; then
-    has_canonical_body="true"
+  if ! canonical_release_body_matches "${release_body_file}"; then
+    echo "Public release notes are no longer canonical; refusing to overwrite them." >&2
+    return 1
   fi
-
-  if [[ "${has_asset}" == "true" &&
-    "${has_sha}" == "true" &&
-    "${has_proof}" == "true" &&
-    "${has_canonical_body}" == "true" ]]; then
-    return 0
+  if [[ "${release_body}" != "$(cat "${prepared_release_notes_file}")" ]] &&
+    ! grep -Fqx -- "- release SHA: \`${TARGET_SHA}\`" "${release_body_file}"; then
+    echo "Public release verification does not match release SHA ${TARGET_SHA}." >&2
+    return 1
   fi
-
-  # The renderer omits the verification tail when the canonical body
-  # already reaches GitHub's limit. A canonical proofless body with
-  # intact dependency evidence is retry-safe: postpublish re-attempts
-  # the proof append on this run.
-  if [[ "${has_asset}" == "true" &&
-    "${has_canonical_body}" == "true" &&
-    "${has_proof}" != "true" ]]; then
-    return 0
-  fi
-
-  {
-    echo "Release ${RELEASE_TAG} already has a public GitHub release page without complete postpublish evidence for ${TARGET_SHA}."
-    echo "Refusing to reuse a public prerelease tag after publication started: ${release_url}"
-    echo "Create a new beta tag or delete/draft the incomplete public release before retrying."
-  } >&2
-  exit 1
+  # A partial public release is resumable. The upload owner compares existing
+  # immutable evidence and attaches missing assets after registry verification.
+  echo "- GitHub release: resuming canonical public page; evidence will be verified and completed" >> "$GITHUB_STEP_SUMMARY"
 }
 
 resolve_openclaw_npm_publish_state() {
   local artifact_name manifest_dir manifest_path manifest_sha manifest_tarball_sha published_sha published_tarball_path published_tarball_url release_version
-  local resume_state resume_url
+  local resume_state resume_url provenance_path published_sha512
 
   openclaw_npm_already_published="false"
   if [[ "${PUBLISH_OPENCLAW_NPM}" != "true" ]]; then
@@ -630,15 +698,21 @@ resolve_openclaw_npm_publish_state() {
     exit 1
   fi
 
-  if [[ -z "${OPENCLAW_NPM_RESUME_RUN_ID//[[:space:]]/}" ]]; then
-    echo "openclaw@${release_version} is already published; openclaw_npm_resume_run_id is required to bind postpublish proof to the original workflow identity." >&2
-    exit 1
-  fi
+  provenance_path="${manifest_dir}/npm-provenance.json"
+  curl -fsSL --connect-timeout 10 --max-time 60 --max-filesize 4194304 \
+    "https://registry.npmjs.org/-/npm/v1/attestations/openclaw@${release_version}" \
+    -o "${provenance_path}"
+  published_sha512="$(sha512sum "${published_tarball_path}" | awk '{print $1}')"
   resume_state="$(node --import tsx "${GITHUB_WORKSPACE}/.release-harness/scripts/openclaw-npm-resume-run.mts" \
     --repo "${GITHUB_REPOSITORY}" \
     --run-id "${OPENCLAW_NPM_RESUME_RUN_ID}" \
-    --trusted-workflow-ref "${PARENT_WORKFLOW_BRANCH}" \
-    --trusted-workflow-full-ref "${GITHUB_REF}")"
+    --version "${release_version}" \
+    --tarball-sha512 "${published_sha512}" \
+    --provenance-file "${provenance_path}")"
+  OPENCLAW_NPM_RESUME_RUN_ID="$(printf '%s' "${resume_state}" | jq -er '.runId')"
+  echo "openclaw_npm_resume_run_id=${OPENCLAW_NPM_RESUME_RUN_ID}" >> "$GITHUB_OUTPUT"
+  openclaw_npm_run_attempt="$(printf '%s' "${resume_state}" | jq -er '.runAttempt')"
+  echo "openclaw_npm_resume_run_attempt=${openclaw_npm_run_attempt}" >> "$GITHUB_OUTPUT"
   resume_url="$(printf '%s' "${resume_state}" | jq -er '.url')"
   openclaw_npm_expected_workflow_ref="$(printf '%s' "${resume_state}" | jq -er '.workflowRef')"
   openclaw_npm_expected_workflow_sha="$(printf '%s' "${resume_state}" | jq -er '.workflowSha')"
@@ -691,7 +765,7 @@ write_clawhub_runtime_state() {
   local output_path="$1"
   local force_skip_clawhub=false
   # Verification and release notes project the same joined child outcomes.
-  if [[ "${clawhub_failed}" != "0" ]]; then
+  if [[ "${RELEASE_NPM_DIST_TAG}" == "extended-stable" || "${clawhub_failed}" != "0" ]]; then
     force_skip_clawhub=true
   fi
   node --import tsx \
@@ -709,6 +783,7 @@ render_github_release_notes() {
   local output_file="$1"
   local verification_file="${2:-}"
   local metadata_file="${3:-}"
+  local regular_stable_version=""
   local -a render_args=(
     node --import tsx "${GITHUB_WORKSPACE}/.release-harness/scripts/render-github-release-notes.mts"
     --root "${GITHUB_WORKSPACE}" --ref "${TARGET_SHA}"
@@ -722,6 +797,10 @@ render_github_release_notes() {
   fi
   if [[ -n "${metadata_file}" ]]; then
     render_args+=(--metadata-output "${metadata_file}")
+  fi
+  if [[ "${RELEASE_NPM_DIST_TAG:-}" == "extended-stable" ]]; then
+    regular_stable_version="$(jq -er '.version | strings' "${GITHUB_WORKSPACE}/.release-harness/package.json")"
+    render_args+=(--regular-stable-version "${regular_stable_version}")
   fi
   "${render_args[@]}"
 }
@@ -884,6 +963,7 @@ dispatch_linux_mirror() {
 
 dispatch_linux_release_assets() {
   local release_train release_json workflow_sha request_run_id publication_state
+  local request_page requests existing_request
   release_train="$(node --input-type=module - "${BASH_SOURCE[0]%/*}/release-version.mjs" "${RELEASE_TAG}" <<'NODE'
 import { pathToFileURL } from "node:url";
 const { parseReleaseVersion, classifyReleaseTrain } = await import(pathToFileURL(process.argv[2]).href);
@@ -912,6 +992,28 @@ NODE
     jq -n --arg tag "$RELEASE_TAG" '{tag: $tag, state: "published-assets-reused"}' \
       > "$RUNNER_TEMP/linux-dispatch.json"
     echo "- Linux: existing same-tag AppImage, Debian package, signed updater manifest, and checksums verified; no build requested." >> "$GITHUB_STEP_SUMMARY"
+    return 0
+  fi
+  # A successful request hands ownership to the independent Linux builder.
+  # Search every page without API filters, whose results stop at 1,000 runs.
+  for ((request_page=1; ; request_page++)); do
+    requests="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/linux-app-release-request.yml/runs?per_page=100&page=${request_page}")" || return 1
+    existing_request="$(jq -c --arg title "Linux App Release Request [${RELEASE_TAG}] desktop=" '
+      first(.workflow_runs[] | select(
+        .head_branch == "main" and .event == "workflow_dispatch" and
+        (.display_title == ($title + "false") or .display_title == ($title + "true")) and
+        (.status != "completed" or .conclusion == "success")
+      )) // empty' <<< "$requests")" || return 1
+    if [[ -n "$existing_request" || "$(jq '.workflow_runs | length' <<< "$requests")" -lt 100 ]]; then
+      break
+    fi
+  done
+  if [[ -n "$existing_request" ]]; then
+    request_run_id="$(jq -r '.id' <<< "$existing_request")"
+    jq --arg tag "$RELEASE_TAG" \
+      '{tag: $tag, state: "request-reused", requestRunId: (.id | tostring), workflowSha: .head_sha}' \
+      <<< "$existing_request" > "$RUNNER_TEMP/linux-dispatch.json"
+    echo "- Linux: existing same-tag request reused; no duplicate build requested. Request: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${request_run_id}; inspect Linux App Release for publication status and recovery." >> "$GITHUB_STEP_SUMMARY"
     return 0
   fi
   workflow_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" \
@@ -1100,7 +1202,7 @@ upload_release_evidence_assets() {
 verify_published_release() {
   local release_version evidence_path canonical_evidence_path clawhub_runtime_state_path bootstrap_run_arg_present
   local expected_attempt expected_id run_attempt run_id run_label run_url target_sha
-  local validation_file workflow_ref telegram_waiver
+  local validation_file workflow_ref telegram_waiver verifier
   local -a verify_args
 
   release_version="${RELEASE_TAG#v}"
@@ -1124,8 +1226,8 @@ verify_published_release() {
     --evidence-out "${evidence_path}"
     --skip-github-release
   )
-  # Resumed publishes have no core npm run of their own; the
-  # registry package check still verifies the published state.
+  # Resumed publications retain the original publisher, whose tooling identity
+  # can differ from the current parent and plugin workflows.
   if [[ -n "${openclaw_npm_run_id// }" ]]; then
     verify_args+=(--openclaw-npm-run "${openclaw_npm_run_id}")
   fi
@@ -1149,7 +1251,9 @@ verify_published_release() {
     verify_args+=(--npm-telegram-run "${NPM_TELEGRAM_RUN_ID}")
   fi
 
+  verifier="release-verify-beta.ts"
   if [[ "${PUBLISH_OPENCLAW_NPM}" == "true" ]]; then
+    verifier="release-verify-publish.ts"
     verify_args+=(
       --postpublish-verifier
       "${GITHUB_WORKSPACE}/.release-harness/scripts/openclaw-npm-postpublish-verify.ts"
@@ -1158,8 +1262,9 @@ verify_published_release() {
 
   OPENCLAW_NPM_EXPECTED_WORKFLOW_REF="${openclaw_npm_expected_workflow_ref}" \
     OPENCLAW_NPM_EXPECTED_WORKFLOW_SHA="${openclaw_npm_expected_workflow_sha}" \
+    OPENCLAW_NPM_EXPECTED_RUN_ATTEMPT="${openclaw_npm_run_attempt}" \
     node --import tsx \
-      "${GITHUB_WORKSPACE}/.release-harness/scripts/release-verify-beta.ts" \
+      "${GITHUB_WORKSPACE}/.release-harness/scripts/${verifier}" \
       "${verify_args[@]}"
 
   record_postpublish_diagnostics binding-start
@@ -1273,6 +1378,7 @@ append_release_proof_to_github_release() {
     RELEASE_VALIDATION_RUN_ID="${proof_run_id}" \
     PLUGIN_NPM_RUN_ID="${plugin_npm_run_id}" \
     OPENCLAW_NPM_RUN_ID="${openclaw_npm_run_id}" \
+    OPENCLAW_NPM_RUN_ATTEMPT="${openclaw_npm_run_attempt}" \
     CLAWHUB_LINE="${clawhub_line}" \
     CLAWHUB_BOOTSTRAP_LINE="${clawhub_bootstrap_line}" \
     TELEGRAM_LINE="${telegram_line}" \
@@ -1300,11 +1406,10 @@ const section = [
   `- plugin npm publish: https://github.com/${process.env.RELEASE_REPO}/actions/runs/${process.env.PLUGIN_NPM_RUN_ID}`,
   process.env.CLAWHUB_LINE,
   process.env.CLAWHUB_BOOTSTRAP_LINE,
-  // Resumed publishes reuse the already-published npm package and
-  // have no core npm run of their own to cite.
+  // Resumed publishes cite the original npm publisher.
   ...(process.env.OPENCLAW_NPM_RUN_ID
     ? [
-        `- OpenClaw npm publish: https://github.com/${process.env.RELEASE_REPO}/actions/runs/${process.env.OPENCLAW_NPM_RUN_ID}`,
+        `- OpenClaw npm publish: https://github.com/${process.env.RELEASE_REPO}/actions/runs/${process.env.OPENCLAW_NPM_RUN_ID}${process.env.OPENCLAW_NPM_RUN_ATTEMPT ? `/attempts/${process.env.OPENCLAW_NPM_RUN_ATTEMPT}` : ""}`,
       ]
     : []),
   ...(process.env.STABLE_SOAK_WAIVER

@@ -1,10 +1,16 @@
-import type { Mock } from "vitest";
+import { expect, it, vi, type Mock } from "vitest";
 import type { setDetachedTaskDeliveryStatusByRunId } from "../../../tasks/detached-task-runtime.js";
 import type {
   blockSubagentCompletionDelivery,
   settleRequesterCompletionBatch,
 } from "../completion/subagent-completion-admission.store.js";
+import { SUBAGENT_ENDED_REASON_COMPLETE } from "./subagent-lifecycle-events.js";
 import { clearSubagentPendingDelivery } from "./subagent-registry-lifecycle-delivery.js";
+import type {
+  SubagentLifecycleController,
+  SubagentLifecycleOptions,
+} from "./subagent-registry-lifecycle.js";
+import { markRequesterTurnYieldedInRuns } from "./subagent-registry-requester-yield.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 export function mockBlockedCompletionDeliveryOwner(
@@ -98,6 +104,117 @@ export function mockBlockedCompletionDeliveryOwner(
         subagent.suppressCompletionDelivery = true;
       }
       return true;
+    },
+  );
+}
+
+export function registerPrivateCompletionSettlementTests({
+  createRunEntry,
+  createLifecycleController,
+  waitForLifecycleState,
+  completionDeliveryMocks,
+}: {
+  createRunEntry: (
+    overrides: Partial<SubagentRunRecord> & {
+      endedAt?: number;
+      outcome?: SubagentRunRecord["execution"]["outcome"];
+    },
+  ) => SubagentRunRecord;
+  createLifecycleController: (
+    options: {
+      entry: SubagentRunRecord;
+      runs?: Map<string, SubagentRunRecord>;
+    } & Partial<SubagentLifecycleOptions>,
+  ) => SubagentLifecycleController;
+  waitForLifecycleState: (assertion: () => void) => Promise<unknown>;
+  completionDeliveryMocks: {
+    blockSubagentCompletionDelivery: Mock<typeof blockSubagentCompletionDelivery>;
+  };
+}): void {
+  it.each([false, true])(
+    "delivers private results held past the individual deadline until requester settlement (yielded: %s)",
+    async (requesterYielded) => {
+      const entry = createRunEntry({
+        endedAt: Date.now() - 31 * 60_000,
+        outcome: { status: "ok" },
+        endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
+        requesterTurnRunId: "run-requester",
+        completionTarget: "parent",
+        expectsCompletionMessage: true,
+        retainAttachmentsOnKeep: true,
+        completion: { required: true, resultText: "private child result" },
+        delivery: { status: "pending" },
+      });
+      const sibling = createRunEntry({
+        runId: "slow-sibling",
+        childSessionKey: "agent:main:subagent:slow-sibling",
+        requesterSessionKey: entry.requesterSessionKey,
+        requesterTurnRunId: "run-requester",
+        expectsCompletionMessage: true,
+      });
+      const runSubagentAnnounceFlow = vi.fn<SubagentLifecycleOptions["runSubagentAnnounceFlow"]>(
+        async (params) => {
+          if (params.signal?.aborted) {
+            params.onDeliveryResult?.({ delivered: false, path: "none" });
+            return "retryable";
+          }
+          return params.isCompletionOwnedByRequesterYield?.()
+            ? "intentional_non_delivery"
+            : "delivered";
+        },
+      );
+      const runs = new Map([
+        [entry.runId, entry],
+        [sibling.runId, sibling],
+      ]);
+      const controller = createLifecycleController({
+        entry,
+        runs,
+        runSubagentAnnounceFlow,
+        resumeSubagentRun: (runId) => {
+          controller.startSubagentAnnounceCleanupFlow(runId, runs.get(runId)!);
+        },
+        maybeWakeRequesterAfterAllChildrenSettled: async () => false,
+      });
+      try {
+        expect(controller.startSubagentAnnounceCleanupFlow(entry.runId, entry)).toBe(false);
+        expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
+        expect(entry.cleanupHandled).not.toBe(true);
+        expect(entry.completion?.resultText).toBe("private child result");
+        if (requesterYielded) {
+          markRequesterTurnYieldedInRuns({
+            requesterSessionKey: entry.requesterSessionKey,
+            requesterTurnRunId: "run-requester",
+            runs,
+            persistOrThrow: () => undefined,
+          });
+        }
+        expect(
+          controller.settleRequesterTurnAfterSessionSpawns({
+            requesterSessionKey: entry.requesterSessionKey,
+            requesterTurnRunId: "run-requester",
+            requesterYielded,
+            acceptedSessionSpawns: [entry, sibling].map((child) => ({
+              runId: child.runId,
+              childSessionKey: child.childSessionKey,
+              expectsCompletionMessage: true,
+            })),
+          }),
+        ).toBe(true);
+        await waitForLifecycleState(() => expect(entry.cleanupCompletedAt).toBeTypeOf("number"));
+        expect(entry.requesterTurnRunId).toBeUndefined();
+        expect(entry.delivery?.status).toBe(requesterYielded ? "pending" : "delivered");
+        expect(entry.requesterSettleWake?.requesterYieldBatch).toBe(
+          requesterYielded ? true : undefined,
+        );
+        expect(sibling.execution.endedAt).toBeUndefined();
+        expect(runSubagentAnnounceFlow).toHaveBeenCalledOnce();
+        expect(completionDeliveryMocks.blockSubagentCompletionDelivery).not.toHaveBeenCalled();
+        expect(entry.delivery?.lastError).toBeUndefined();
+        expect(entry.delivery?.lastDropReason).toBeUndefined();
+      } finally {
+        controller.clearScheduledResumeTimers();
+      }
     },
   );
 }

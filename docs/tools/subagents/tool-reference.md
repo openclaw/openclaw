@@ -43,6 +43,7 @@ session to confirm the effective tool list.
 
 - **Model:** same-agent native sub-agents inherit the caller's active model, including session and one-shot overrides, unless you set `agents.defaults.subagents.model` (or per-agent `agents.entries.*.subagents.model`). The inherited model ID is preserved exactly, even when it contains a provider prefix. Cross-agent spawns use the target agent's configured model. ACP runtime spawns use the same configured subagent model when present; otherwise the ACP harness keeps its own default. An explicit `sessions_spawn.model` still wins.
 - **Thinking:** native sub-agents inherit the caller's active turn, including one-shot thinking overrides, unless you set `agents.defaults.subagents.thinking` (or per-agent `agents.entries.*.subagents.thinking`). ACP runtime spawns also apply the target agent's `thinkingDefault`, then its per-model `agents.entries.*.models["provider/model"].params.thinking` or the shared `agents.defaults.models["provider/model"].params.thinking`. An explicit `sessions_spawn.thinking` still wins.
+- **Fast mode:** with swarm enabled, native sub-agents inherit the requester's setting only when the resolved child provider and model match the requester's active model. A different child model uses its own defaults. Explicit `sessions_spawn.fastMode` values (`true`, `false`, or `"auto"`) take precedence; aliases resolving to the same model preserve inheritance.
 - **Run timeout:** pass `runTimeoutSeconds` to set a timeout for a specific native, ACP, or visible sub-agent run. When omitted, OpenClaw uses `agents.defaults.subagents.runTimeoutSeconds` if configured; otherwise it falls back to `0` (no timeout). An explicit `0` disables the timeout for that run.
 - **Process lifetime:** a detached OpenClaw sub-agent has its own run lifecycle. A background task created inside an external CLI backend is different: it shares the parent CLI subprocess and stops if that parent reaches `agents.defaults.timeoutSeconds`.
 - **Task delivery:** hidden and visible native sub-agents receive their delegated task in a `[Subagent Task]` message appended after any forked history. The message identifies the current child assignment and treats inherited conversation as background context. The hidden sub-agent system prompt carries runtime rules and routing context, not a duplicate of the task.
@@ -60,6 +61,29 @@ also include resolved child model metadata:
 the provider prefix when the ref has one.
 
 ### Cloud placement
+
+`placement` is optional. Omit it to default to local execution, or select local
+execution explicitly with `{ "kind": "local" }`. Both forms support native
+subagents (including hidden review and test workers), visible sessions, and ACP
+runs under their existing runtime and visibility rules. Local placement does not
+accept cloud selectors. Do not supply dummy profile, OS, or machine identifiers.
+An existing local worktree needs only `cwd`, not `worktree: true`:
+
+```json
+{
+  "task": "Review the current changes and report findings",
+  "runtime": "subagent",
+  "mode": "run",
+  "cwd": "/path/to/existing/worktree",
+  "placement": { "kind": "local" },
+  "completionTarget": "parent"
+}
+```
+
+Omitting `placement` in this example has the same local behavior. For intentional
+cloud execution, use `visible: true`, `worktree: true`, and a real configured
+profile. Invalid placement, mixed local/cloud selectors, and failed cloud
+placement do not fall back to local execution.
 
 Discover configured profiles with `sessions({ action: "cloud_profiles" })`. The list returns at most 32 summaries and supplies `nextOffset` when another page is available. Pass that value as `offset`. Request `sessions({ action: "cloud_profiles", profileId: "build" })` for that profile's operating systems, availability, defaults, and per-OS machine classes. Discovery reads the same provider-authored catalog as the Control UI, not profile settings or credentials.
 
@@ -83,7 +107,7 @@ Cloud placement requires a live hosted Gateway session; standalone and local-emb
 
 An error with `childSessionKey` means the child was retained. `initialTaskStatus: "not-sent"` means the tool did not submit its initial task; `"unknown"` means task admission was attempted but not confirmed. Inspect that child and its placement before retrying. Do not repeat the spawn merely because provisioning or the initial reply timed out. An attempted task that cannot be registered is settled through exact-run cancellation; its session and worker are preserved for inspection.
 
-This option is for Gateway-side visible spawns. The restricted cloud-worker spawn tool keeps its existing parent-profile inheritance contract; it does not accept a different profile, OS, or size.
+Selecting a cloud profile is available only to Gateway-side visible spawns. The restricted cloud-worker spawn tool keeps its existing parent-profile inheritance contract; it does not accept a different profile, OS, or size.
 
 ### Delegation prompt mode
 
@@ -184,7 +208,7 @@ In either mode, internal QA, research, coding, review, and test lanes use ordina
   Create a persistent dashboard session only when the user requests a separate session or needs to return to and steer the work independently. Omit this flag or use `false` for internal QA, research, coding, review, and test workers supporting the parent task. Visible spawns support only `runtime: "subagent"` and always keep the created session.
 </ParamField>
 <ParamField path="placement" type="object">
-  Run a visible worktree session on a configured cloud profile. Requires `visible: true` and `worktree: true`. Use `{ kind: "profile", profileId, os?, machineClass? }`; OS and machine IDs come from cloud profile discovery. Omitted selectors use the profile defaults. The Gateway creates the child without starting its task, dispatches it, then admits its first task on the cloud worker. A failed or uncertain cloud start retains the child for inspection; it never starts the task locally or silently provisions a replacement.
+  Omit to default to local execution, or use `{ kind: "local" }` explicitly without cloud selectors. For a visible worktree session on a configured cloud profile, use `{ kind: "profile", profileId, os?, machineClass? }` with `visible: true` and `worktree: true`; OS and machine IDs come from cloud profile discovery. Omitted cloud selectors use the profile defaults. The Gateway creates the cloud child without starting its task, dispatches it, then admits its first task on the worker. Invalid placement and failed or uncertain cloud starts never silently fall back to local execution; a failed cloud start retains the child for inspection.
 </ParamField>
 <ParamField path="group" type="string">
   Optional custom sidebar group for a visible session; a new name creates the group. Omitted, empty, and whitespace-only values mean ungrouped and are also accepted for hidden or ACP runs. A nonempty group requires `visible: true`.
@@ -278,6 +302,24 @@ starting a sibling. The requester is announced once such a follow-up finishes
 normally; a follow-up that yields again leaves the run paused and the requester
 waiting.
 
+A yield claim belongs to the turn that spawned the children. When a later turn
+of the same session calls `sessions_yield` while children spawned by an earlier
+turn are still running or still owe their completion, the tool returns
+`status: "already_pending"` with the pending children (session key, label,
+start time, `running`/`completing`/`paused` state, and whether an earlier
+yield already armed the wake) instead of an error. For running or completing
+children nothing else is required: end that turn normally, and the child's
+completion arrives in the session as a later turn. Do not re-spawn, re-send,
+or poll to wake them. A `paused` child yielded with `waitFor: "message"` and
+will not complete until it receives a continuation; send one with
+`sessions_send` if this session owns that follow-up.
+
+The controlling parent resumes a paused native child with an ordinary
+`sessions_send` continuation. The runtime preserves the original task and its
+completion recipient without requiring `mode: "resume"`. An explicit
+`mode: "followup"` deliberately starts a separate turn instead. Return completed
+work normally after resuming; yielding again keeps the task waiting.
+
 An operator can also resume the existing child with the `sessions.send` Gateway
 method and its paused session key. This preserves the original task, requester,
 and parent completion batch, so the parent continues when the child finishes.
@@ -359,9 +401,9 @@ means the runtime has no child completion to await; it does not prove that a
 remote job or timer was scheduled. Child dependency lists are bounded to 32
 entries and `pendingCount` retains the total. A finished child with pending
 delivery has produced a result that has not yet reached its requester.
-For an external wait, `resume` names the supported Gateway method and exact
-child session key. An authorized operator or integration must send that
-continuation; merely yielding does not schedule one.
+For an external wait, the controlling parent can send a continuation to the
+listed child session key with `sessions_send`; merely yielding does not schedule
+one. The task owner delivers completion when the resumed child finishes.
 
 Use `action: "cancel"` with a `taskId` returned by `action: "list"` to stop
 a task. Native subagent cancellation requires current controller authority;

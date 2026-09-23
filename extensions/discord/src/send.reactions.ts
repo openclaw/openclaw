@@ -1,4 +1,3 @@
-// Discord plugin module implements send.reactions behavior.
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import {
   createOwnMessageReaction,

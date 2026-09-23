@@ -1,4 +1,3 @@
-// Feishu plugin module implements docx behavior.
 import { resolve } from "node:path";
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";

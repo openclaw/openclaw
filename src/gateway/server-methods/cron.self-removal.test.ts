@@ -42,7 +42,7 @@ describe.each(
       });
       try {
         const admitted = await admission.admit("embedded");
-        executionIdentity?.onPostAdmission?.(admitted);
+        await executionIdentity?.onPostAdmission?.(admitted);
         const delegatedAuthority = expectDefined(
           getAdmittedRunDelegatedAuthority(admitted),
           "live scheduled admission",

@@ -12,8 +12,16 @@ import type { CodexServerNotification, CodexThread } from "./app-server/protocol
 import { defineCodexBuildState } from "./build-state.js";
 import { codexCatalogHomeIdFromCanonicalPath } from "./session-catalog-home-id.js";
 import { projectCodexCatalogNativeThread } from "./session-catalog-native-projection.js";
-import { boundedCatalogString, MAX_CWD_LENGTH } from "./session-catalog-parsing.js";
-import { codexCatalogSourceForClient, type CodexCatalogSource } from "./session-catalog-source.js";
+import {
+  boundedCatalogString,
+  MAX_CWD_LENGTH,
+  MAX_SESSION_ID_LENGTH,
+} from "./session-catalog-parsing.js";
+import {
+  codexCatalogSourceForClient,
+  observeCodexCatalogEphemeralThreads,
+  type CodexCatalogSource,
+} from "./session-catalog-source.js";
 
 type CodexCatalogEventListener = (
   event: CodexServerNotification,
@@ -31,6 +39,7 @@ type CodexCatalogSubscription = {
 type CodexCatalogLifecycleCallbacks = {
   onRemoteReady?: (source: CodexCatalogSource) => void;
   onClose?: (source: CodexCatalogSource) => void;
+  onEphemeralThread?: (threadId: string) => void;
   onResume?: (response: CodexCatalogResumeMetadata, source: CodexCatalogSource) => Promise<void>;
 };
 type CodexCatalogClientBinding = { homeKey: string; source: CodexCatalogSource };
@@ -52,6 +61,20 @@ const CATALOG_NOTIFICATION_METHODS = new Set([
   "thread/status/changed",
   "thread/settings/updated",
 ]);
+
+function notifyEphemeralThread(homeKey: string, rawId: string): void {
+  const id = boundedCatalogString(rawId, MAX_SESSION_ID_LENGTH);
+  if (!id) {
+    return;
+  }
+  for (const listener of getCatalogEvents().listeners.get(homeKey) ?? []) {
+    try {
+      listener.onEphemeralThread?.(id);
+    } catch (error) {
+      embeddedAgentLog.warn("Codex catalog ephemeral observer failed", { error });
+    }
+  }
+}
 
 /** Uses prepared local identity or resolves it once during client/index startup. */
 export async function codexCatalogResidentHomeKey(params: {
@@ -117,6 +140,8 @@ export function observeCodexCatalogClient(
       return undefined;
     }
     const source = codexCatalogSourceForClient(client);
+    // Retain only the home key, never the client or its lease, in the source callback.
+    observeCodexCatalogEphemeralThreads(source, notifyEphemeralThread.bind(undefined, homeKey));
     const notifyLifecycle = (callback: "onRemoteReady" | "onClose") => {
       for (const listener of state.listeners.get(homeKey) ?? []) {
         try {
@@ -132,7 +157,7 @@ export function observeCodexCatalogClient(
         await client.request(
           "thread/read",
           { threadId, includeTurns: false },
-          { timeoutMs: 60_000 },
+          { timeoutMs: 60_000, catalogPreview: true },
         )
       ).thread;
     const stopNotifications = client.addNotificationHandler((event) => {

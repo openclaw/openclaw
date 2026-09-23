@@ -1,10 +1,20 @@
-import type { GatewayAgentRow, ModelCatalogEntry, SessionsListResult } from "../../api/types.ts";
+import type {
+  FastMode,
+  GatewayAgentRow,
+  ModelCatalogEntry,
+  SessionsListResult,
+} from "../../api/types.ts";
+import { t } from "../../i18n/index.ts";
+import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import {
   buildQualifiedChatModelValue,
   normalizeChatModelProviderId,
   resolvePreferredServerChatModelValue,
 } from "../../lib/chat/model-ref.ts";
-import { resolveChatModelUnavailableReason } from "../../lib/chat/model-select-state.ts";
+import {
+  isChatFastModeProviderSupported,
+  resolveChatModelUnavailableReason,
+} from "../../lib/chat/model-select-state.ts";
 import {
   normalizeThinkingOptionValue,
   resolveThinkingProfileForSession,
@@ -14,6 +24,9 @@ import {
   resolveModelRuntimeEntry,
   type ModelRuntimeEntry,
 } from "../../lib/model-runtime-choice.ts";
+import { draftCloudProfileSupportsExecutionMode, type DraftCloudProfile } from "./discovery.ts";
+
+registerNewSessionSetupEnglish();
 
 type DraftModelTarget = {
   entry?: ModelRuntimeEntry;
@@ -154,10 +167,17 @@ export function reconcileDraftModelSelection(params: {
   model: string;
   agentRuntime?: string;
   thinkingLevel: string;
+  fastMode?: FastMode;
   agent?: GatewayAgentRow;
   defaults?: SessionsListResult["defaults"];
   catalog: ModelCatalogEntry[];
-}): { model: string; agentRuntime?: string; thinkingLevel: string; repaired: boolean } {
+}): {
+  model: string;
+  agentRuntime?: string;
+  thinkingLevel: string;
+  fastMode?: FastMode;
+  repaired: boolean;
+} {
   const requestedModel = params.model.trim();
   const selectedTarget = requestedModel
     ? resolveDraftModelTarget(requestedModel, undefined, params.catalog, params.agentRuntime)
@@ -173,11 +193,6 @@ export function reconcileDraftModelSelection(params: {
   const selected = selectedTarget?.entry
     ? buildQualifiedChatModelValue(selectedTarget.entry.id, selectedTarget.entry.provider)
     : "";
-  const runtimeSelection =
-    selected && params.agentRuntime ? { agentRuntime: params.agentRuntime } : {};
-  if (!params.thinkingLevel) {
-    return { model: selected, ...runtimeSelection, thinkingLevel: "", repaired: false };
-  }
   const agentDefaultModel = params.agent?.model?.primary;
   const defaultTarget = selected
     ? null
@@ -186,7 +201,21 @@ export function reconcileDraftModelSelection(params: {
         agentDefaultModel ? undefined : params.defaults?.modelProvider,
         params.catalog,
       );
+  const provider = (selectedTarget ?? defaultTarget)?.provider;
   const targetEntry = selectedTarget?.entry ?? defaultTarget?.entry;
+  const fastMode =
+    (targetEntry?.supportsFastMode ?? (!provider || isChatFastModeProviderSupported(provider)))
+      ? params.fastMode
+      : undefined;
+  const selection = {
+    model: selected,
+    ...(selected && params.agentRuntime ? { agentRuntime: params.agentRuntime } : {}),
+    fastMode,
+  };
+  const repaired = fastMode !== params.fastMode;
+  if (!params.thinkingLevel) {
+    return { ...selection, thinkingLevel: "", repaired };
+  }
   const thinkingProfile = resolveThinkingProfileForSession(
     resolveDraftThinkingTarget(
       selectedTarget ?? defaultTarget,
@@ -202,12 +231,32 @@ export function reconcileDraftModelSelection(params: {
     (level) => normalizeThinkingOptionValue(level.id) === normalizedThinking,
   );
   if (targetEntry?.reasoning === false || (authoritativeLevels !== undefined && !supported)) {
-    return { model: selected, ...runtimeSelection, thinkingLevel: "", repaired: true };
+    return { ...selection, thinkingLevel: "", repaired: true };
   }
   return {
-    model: selected,
-    ...runtimeSelection,
+    ...selection,
     thinkingLevel: params.thinkingLevel,
-    repaired: false,
+    repaired,
   };
+}
+
+export function resolveDraftDevicePlacementUnsupportedReason(
+  runtime: ReturnType<typeof resolveDraftAgentRuntime>,
+): string | undefined {
+  return runtime && !runtime.devicePlacement ? t("newSession.deviceRuntimeUnsupported") : undefined;
+}
+
+export function resolveDraftCloudRuntimeUnsupportedReason(
+  runtime: ReturnType<typeof resolveDraftAgentRuntime>,
+  profile?: DraftCloudProfile,
+): string | undefined {
+  if (runtime?.cloudPlacementSupported === false) {
+    return t("newSession.cloudRuntimeUnsupported", { runtime: runtime.id });
+  }
+  return runtime &&
+    profile &&
+    runtime.cloudPlacementExecutionMode &&
+    !draftCloudProfileSupportsExecutionMode(profile, runtime.cloudPlacementExecutionMode)
+    ? t("newSession.cloudProfileRuntimeUnsupported", { runtime: runtime.id })
+    : undefined;
 }

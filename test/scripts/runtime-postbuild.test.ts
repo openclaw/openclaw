@@ -18,6 +18,7 @@ import {
   type UpdateCompatibilityInventory,
   type UpdateCompatibilityRelease,
 } from "../../scripts/lib/update-compat-chunks.mts";
+import { buildUpdateConfigRuntimeAlias } from "../../scripts/lib/update-config-runtime-compat.mts";
 import {
   rewriteRootRuntimeImportsToStableAliases,
   runRuntimePostBuild,
@@ -130,6 +131,8 @@ describe("runtime postbuild static assets", () => {
       "dist/extensions/acpx/mcp-command-line.mjs",
       "dist/extensions/acpx/mcp-proxy.mjs",
       "dist/extensions/apple-fm/assets/AppleFoundationModels.swift",
+      "dist/extensions/code-mode-quickjs/assets/encoding.so",
+      "dist/extensions/code-mode-quickjs/assets/quickjs.wasm",
       "dist/extensions/crabbox/assets/openclaw-worker-wallpaper.png",
       "dist/extensions/onepassword/onepassword-op-path.js",
       "dist/extensions/onepassword/onepassword-secret-id.js",
@@ -313,22 +316,47 @@ describe("runtime postbuild static assets", () => {
     expect(await fs.readFile(destPath, "utf8")).toBe("proxy-data\n");
   });
 
-  it("stages copied static assets byte-for-byte during the same postbuild run", async () => {
+  it.each([
+    { name: "package-relative source", dependency: "", local: false, missing: false },
+    { name: "hoisted dependency", dependency: "engine", local: false, missing: false },
+    {
+      name: "hoisted scoped dependency",
+      dependency: "@fixture/engine",
+      local: false,
+      missing: false,
+    },
+    {
+      name: "plugin-local dependency precedence",
+      dependency: "@fixture/engine",
+      local: true,
+      missing: false,
+    },
+    {
+      name: "missing asset in selected dependency",
+      dependency: "@fixture/engine",
+      local: true,
+      missing: true,
+    },
+  ])("stages $name during the same postbuild run", async ({ dependency, local, missing }) => {
     const rootDir = createTempDir("openclaw-runtime-postbuild-");
-    const source = "extensions/diffs/assets/viewer-runtime.js";
     const output = "assets/viewer-runtime.js";
+    const source = dependency ? `node_modules/${dependency}/private/runtime.js` : output;
+    const packageDir = path.join(rootDir, "extensions", "diffs");
     const distAsset = "dist/extensions/diffs/assets/viewer-runtime.js";
     const runtimeAsset = "dist-runtime/extensions/diffs/assets/viewer-runtime.js";
+    const contents = "export const viewer = true;\n";
+    const warn = vi.fn();
 
     await fs.mkdir(path.join(rootDir, "extensions", "diffs", "assets"), { recursive: true });
     await fs.writeFile(
       path.join(rootDir, "extensions", "diffs", "package.json"),
       JSON.stringify({
         name: "@openclaw/diffs",
+        ...(dependency ? { dependencies: { [dependency]: "1.0.0" } } : {}),
         openclaw: {
           extensions: ["./index.ts"],
           build: {
-            staticAssets: [{ source: `./${output}`, output }],
+            staticAssets: [{ source: `./${source}`, output }],
           },
         },
       }),
@@ -339,7 +367,24 @@ describe("runtime postbuild static assets", () => {
       '{"id":"diffs"}\n',
       "utf8",
     );
-    await fs.writeFile(path.join(rootDir, source), "export const viewer = true;\n", "utf8");
+    if (dependency) {
+      for (const base of local ? [rootDir, packageDir] : [rootDir]) {
+        const dependencyDir = path.join(base, "node_modules", dependency);
+        await fs.mkdir(path.join(dependencyDir, "private"), { recursive: true });
+        await fs.writeFile(
+          path.join(dependencyDir, "package.json"),
+          JSON.stringify({ name: dependency, exports: { "./runtime": "./private/runtime.js" } }),
+        );
+        if (!(missing && base === packageDir)) {
+          await fs.writeFile(
+            path.join(dependencyDir, "private/runtime.js"),
+            local && base === rootDir ? "wrong ancestor version\n" : contents,
+          );
+        }
+      }
+    } else {
+      await fs.writeFile(path.join(packageDir, source), contents);
+    }
 
     writeUpdateCompatibilityBuildFixture(rootDir);
     runRuntimePostBuild({
@@ -347,14 +392,19 @@ describe("runtime postbuild static assets", () => {
       repoRoot: rootDir,
       rootDir,
       timings: false,
+      warn,
     });
 
-    await expect(fs.readFile(path.join(rootDir, distAsset), "utf8")).resolves.toBe(
-      "export const viewer = true;\n",
-    );
-    await expect(fs.readFile(path.join(rootDir, runtimeAsset), "utf8")).resolves.toBe(
-      "export const viewer = true;\n",
-    );
+    for (const asset of [distAsset, runtimeAsset]) {
+      if (missing) {
+        await expectPathMissing(path.join(rootDir, asset));
+      } else {
+        await expect(fs.readFile(path.join(rootDir, asset), "utf8")).resolves.toBe(contents);
+      }
+    }
+    if (missing) {
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("static asset not found"));
+    }
   });
 
   it("writes every phase beneath the cwd-only caller root", async () => {
@@ -1369,6 +1419,7 @@ describe("previous release update compatibility", () => {
       commit: "0".repeat(40),
       integrity,
     },
+    owner = "src/cli/update-cli/update-command-service-command.ts",
   ) {
     const root = createTempDir("update-compat-import-graph-");
     write(
@@ -1380,10 +1431,9 @@ describe("previous release update compatibility", () => {
     write(
       root,
       "dist/command.js",
-      [
-        "//#region src/cli/update-cli/update-command-service-command.ts",
-        `export async function restart() { return ${expression}; }`,
-      ].join("\n"),
+      [`//#region ${owner}`, `export async function restart() { return ${expression}; }`].join(
+        "\n",
+      ),
     );
     for (const [file, source] of Object.entries(modules)) {
       write(root, `dist/${file}`, source);
@@ -1397,12 +1447,85 @@ describe("previous release update compatibility", () => {
     return { root, inventory };
   }
 
+  it.each(["generated", "changed delegation", "missing source region"])(
+    "traces only verified delegating config aliases (%s)",
+    (variant) => {
+      const facade =
+        'export { createConfigIO, readConfigFileSnapshot } from "./config-abcdefgh.mjs";\nexport * from "./extra.mjs";\n';
+      const alias = buildUpdateConfigRuntimeAlias("io.runtime-abcdefgh.mjs", facade);
+      const record = () =>
+        recordImportedFixture('(await import("./io.runtime.js"))', {
+          "io.runtime.js":
+            variant === "changed delegation"
+              ? alias.replace("return runtime[name]", "return undefined")
+              : alias,
+          "io.runtime-abcdefgh.mjs": facade,
+          "extra.mjs": "//#region src/config/extra.ts\nexport const targetOnly = true;\n",
+          "config-abcdefgh.mjs": [
+            'throw new Error("The recorder must not execute release code");',
+            ...(variant === "missing source region" ? [] : ["//#region src/config/io.ts"]),
+            "export function createConfigIO() {}",
+            "export function readConfigFileSnapshot() {}",
+          ].join("\n"),
+        });
+      if (variant !== "generated") {
+        expect(record).toThrow("Cannot trace io.runtime.js export createConfigIO");
+        return;
+      }
+      expect(record().inventory.releases[0]?.chunks).toMatchObject([
+        {
+          path: "io.runtime.js",
+          exports: ["createConfigIO", "readConfigFileSnapshot"].map((exported) => ({
+            exported,
+            origin: { module: "src/config/io.ts", symbol: exported },
+          })),
+        },
+      ]);
+    },
+  );
+
+  it.each(["source scripts", "different owner", "mutable binding", "dist path", "unknown script"])(
+    "distinguishes source completion contracts from unknown dynamic imports (%s)",
+    (variant) => {
+      const declaration = variant === "mutable binding" ? "let" : "const";
+      const directory = variant === "dist path" ? "dist" : "scripts";
+      const script =
+        variant === "unknown script" ? "unknown.mts" : "stage-bundled-plugin-runtime.mts";
+      const expression = `await (async () => {
+        ${declaration} stagingFile = path.join(root, "${directory}", "${script}");
+        await import(pathToFileURL(stagingFile).href);
+        await import(pathToFileURL(path.join(root, "scripts", "lib", "dist-artifact-ownership.mts")).href);
+        return (await import("./surface-abcdefgh.js")).x;
+      })()`;
+      const record = () =>
+        recordImportedFixture(
+          expression,
+          {
+            "surface-abcdefgh.js": "//#region src/infra/value.ts\nexport const x = 1;\n",
+          },
+          undefined,
+          variant === "different owner"
+            ? undefined
+            : "src/cli/update-cli/update-command-runtime.ts",
+        );
+      if (variant !== "source scripts") {
+        expect(record).toThrow("Nonliteral post-swap import");
+        return;
+      }
+      expect(record().inventory.releases[0]?.chunks.map((chunk) => chunk.path)).toEqual([
+        "surface-abcdefgh.js",
+      ]);
+    },
+  );
+
   it.each(
-    previousReleaseInventory.releases.flatMap((release) =>
-      ["exact", "version", "buildId", "commit", "integrity", "chunk", "owner", "symbol"].map(
-        (changed) => ({ release, changed }),
+    previousReleaseInventory.releases
+      .filter(({ version }) => ["2026.9.1", "2026.9.2", "2026.9.3", "2026.9.4"].includes(version))
+      .flatMap((release) =>
+        ["exact", "version", "buildId", "commit", "integrity", "chunk", "owner", "symbol"].map(
+          (changed) => ({ release, changed }),
+        ),
       ),
-    ),
   )(
     "corrects only verified coalesced release provenance ($release.version, $changed)",
     async ({ release, changed }) => {

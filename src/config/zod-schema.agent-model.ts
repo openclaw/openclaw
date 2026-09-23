@@ -1,5 +1,16 @@
 // Defines agent model selection schema fragments.
+import { parseProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { z } from "zod";
+
+/** Decision providers require an explicit model; an empty value disables the role. */
+export const DecisionModelSchema = z
+  .string()
+  .trim()
+  .max(512)
+  .refine(
+    (value) => value === "" || parseProviderModelRef(value) !== null,
+    "Expected provider/model, or an empty string to disable decision models.",
+  );
 
 /** Schema for agent model config accepting a string or fallback object. */
 export const AgentModelSchema = z.union([

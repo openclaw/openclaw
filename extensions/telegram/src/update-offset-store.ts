@@ -1,4 +1,3 @@
-// Telegram plugin module implements update offset store behavior.
 import { readJsonFileWithFallback } from "openclaw/plugin-sdk/json-store";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { getTelegramRuntime } from "./runtime.js";

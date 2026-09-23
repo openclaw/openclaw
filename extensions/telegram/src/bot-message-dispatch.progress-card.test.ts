@@ -9,6 +9,8 @@ import {
   createTelegramDraftStream,
   deliverReplies,
   describeTelegramDispatch,
+  emitToolStart,
+  expectDeliveredReply,
   dispatchReplyWithBufferedBlockDispatcher,
   dispatchWithContext,
   editMessageTelegram,
@@ -17,6 +19,94 @@ import { asTelegramClientFetch } from "./client-fetch.js";
 import type { TelegramDraftStream } from "./draft-stream.js";
 
 describeTelegramDispatch("dispatchTelegramMessage progress cards", () => {
+  it.each(["confirmed", "staged", "unconfirmed", "absent"] as const)(
+    "requires a confirmed visible receipt for continuation custody (%s)",
+    async (receipt) => {
+      const draft = createSequencedDraftStream(2001);
+      createTelegramDraftStream.mockReturnValue(draft);
+      const adopt = vi.fn(async () => true);
+      const waitingText = "Waiting for delegated work.";
+      const payload = { text: waitingText };
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+        async ({ dispatcherOptions, replyOptions }) => {
+          if (receipt !== "absent") {
+            await emitToolStart(replyOptions, {
+              name: "exec",
+              phase: "start",
+              toolCallId: "delegate",
+            });
+          }
+          if (receipt === "staged") {
+            draft.lastDeliveredText.mockReturnValue("");
+          } else if (receipt === "unconfirmed") {
+            draft.messageId.mockReturnValue(undefined);
+            draft.sendMayHaveLanded.mockReturnValue(true);
+          }
+          // Earlier skipped output must not cause a fallback after a retained card.
+          dispatcherOptions.onSkip?.({}, { kind: "block", reason: "empty" });
+          await dispatcherOptions.deliver(payload, {
+            kind: "final",
+            adoptProgressContinuation: adopt,
+          });
+          return { queuedFinal: true };
+        },
+      );
+      await dispatchWithContext({
+        context: createContext(),
+        streamMode: "progress",
+        telegramCfg: { streaming: { mode: "progress", progress: { toolProgress: true } } },
+      });
+
+      if (receipt === "confirmed") {
+        expect(adopt).toHaveBeenCalledOnce();
+        expect(deliverReplies).not.toHaveBeenCalled();
+        expect(draft.clear).not.toHaveBeenCalled();
+      } else {
+        expect(adopt).not.toHaveBeenCalled();
+        expectDeliveredReply(0, { text: waitingText });
+      }
+    },
+  );
+
+  it.each([
+    { kind: "media", content: { mediaUrl: "https://example.com/report.pdf" } },
+    {
+      kind: "buttons",
+      content: {
+        channelData: { telegram: { buttons: [[{ text: "Continue", callback_data: "go" }]] } },
+      },
+    },
+  ])(
+    "delivers $kind alongside a waiting payload instead of adopting only its card",
+    async ({ content }) => {
+      createTelegramDraftStream.mockReturnValue(createSequencedDraftStream(2001));
+      const adopt = vi.fn(async () => true);
+      const payload = { text: "Waiting for delegated work.", ...content };
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+        async ({ dispatcherOptions, replyOptions }) => {
+          await emitToolStart(replyOptions, {
+            name: "exec",
+            phase: "start",
+            toolCallId: "delegate",
+          });
+          await dispatcherOptions.deliver(payload, {
+            kind: "final",
+            adoptProgressContinuation: adopt,
+          });
+          return { queuedFinal: true };
+        },
+      );
+      await dispatchWithContext({
+        context: createContext(),
+        streamMode: "progress",
+        telegramCfg: { streaming: { mode: "progress", progress: { toolProgress: true } } },
+      });
+
+      expect(adopt).not.toHaveBeenCalled();
+      expectDeliveredReply(0, { text: payload.text, ...content });
+    },
+  );
+
   it.each([
     { commentary: false, richMessages: false },
     { commentary: false, richMessages: true },
@@ -252,9 +342,14 @@ describeTelegramDispatch("dispatchTelegramMessage progress cards", () => {
 
   // The real compositor, renderer and transport expose short sends, stopped
   // streams and lifecycle resets at Telegram's stubbed network boundary.
-  it.each(["progress", "partial", "block"] as const)(
-    "replaces, clears and resumes a short card before the final reply in %s mode",
-    async (mode) => {
+  it.each([
+    { mode: "progress", finalDelivery: "dispatcher" },
+    { mode: "partial", finalDelivery: "dispatcher" },
+    { mode: "block", finalDelivery: "dispatcher" },
+    { mode: "progress", finalDelivery: "message-tool" },
+  ] as const)(
+    "replaces, clears and resumes a short card before the $finalDelivery final in $mode mode",
+    async ({ mode, finalDelivery }) => {
       vi.useFakeTimers();
       try {
         const actualDraft =
@@ -263,7 +358,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress cards", () => {
           "./bot/delivery.replies.js",
         );
         const actualEdit = await vi.importActual<typeof import("./send-edit.js")>("./send-edit.js");
-        deliverReplies.mockImplementation(actualDelivery.deliverReplies);
+        deliverReplies.mockImplementation(actualDelivery.deliverStructuredReplies);
         editMessageTelegram.mockImplementation(actualEdit.editMessageTelegram);
         let draft: TelegramDraftStream | undefined;
         createTelegramDraftStream.mockImplementation((params) => {
@@ -388,7 +483,15 @@ describeTelegramDispatch("dispatchTelegramMessage progress cards", () => {
             expect(send).toHaveBeenCalledTimes(2);
 
             await replyOptions?.onAssistantMessageStart?.();
-            await dispatcherOptions.deliver({ text: "Done" }, { kind: "final" });
+            if (finalDelivery === "message-tool") {
+              await bot.api.sendMessage(123, "Done");
+              await replyOptions?.onObservedReplyDelivery?.();
+              await vi.advanceTimersByTimeAsync(4_000);
+              // NO_REPLY never enters the final dispatcher; retire before turn settlement.
+              expect.soft([...visible.values()]).toEqual(["Done"]);
+            } else {
+              await dispatcherOptions.deliver({ text: "Done" }, { kind: "final" });
+            }
             expect([...visible.values()]).toContain("Done");
             const finalMessages = [...visible.entries()];
             const sendsAfterFinal = send.mock.calls.length;
@@ -403,7 +506,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress cards", () => {
             expect(send).toHaveBeenCalledTimes(sendsAfterFinal);
             expect(edit).toHaveBeenCalledTimes(editsAfterFinal);
             expect([...visible.entries()]).toEqual(finalMessages);
-            return { queuedFinal: true };
+            return { queuedFinal: finalDelivery === "dispatcher" };
           },
         );
 

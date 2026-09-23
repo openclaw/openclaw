@@ -1,7 +1,9 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString as normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeQueueMode } from "../../../../src/auto-reply/reply/queue/normalize.js";
+import { readChatWorkContext } from "../../../../src/chat/work-context.js";
 import { t } from "../../i18n/index.ts";
+import { registerChatMessageMetadataEnglish } from "../../i18n/locales/en-chat-message-metadata.ts";
 import { normalizeAgentId } from "../sessions/session-key.ts";
 import type {
   ChatAttachment,
@@ -13,6 +15,8 @@ import { isChatGoalDraftMode } from "./goal-draft.ts";
 import { readHumanMentions } from "./human-mentions.ts";
 import { readChatSelectionAnnotation } from "./selection-annotation.ts";
 import { normalizeSenderIdentity } from "./sender-label.ts";
+
+registerChatMessageMetadataEnglish();
 
 export const MAX_STORED_SESSIONS = 20;
 export const MAX_STORED_QUEUE_ITEMS = 50;
@@ -36,7 +40,10 @@ export type StoredComposerSession = {
 export function sameQueuedDeliveryVersion(left: ChatQueueItem, right: ChatQueueItem): boolean {
   return (
     left.id === right.id &&
+    left.asyncQuestionItemId === right.asyncQuestionItemId &&
     left.text === right.text &&
+    left.workContextUnavailable === right.workContextUnavailable &&
+    JSON.stringify(left.workContext) === JSON.stringify(right.workContext) &&
     JSON.stringify(left.mentions ?? []) === JSON.stringify(right.mentions ?? []) &&
     left.sendRunId === right.sendRunId &&
     left.sendAttempts === right.sendAttempts &&
@@ -63,6 +70,9 @@ function normalizeChatAttachment(value: unknown): ChatAttachment | null {
     return null;
   }
   const restored: ChatAttachment = { id, mimeType };
+  if (entry.origin === "paste" || entry.origin === "file") {
+    restored.origin = entry.origin;
+  }
   const selectionAnnotation = readChatSelectionAnnotation(entry.selectionAnnotation);
   if (selectionAnnotation) {
     restored.selectionAnnotation = selectionAnnotation;
@@ -107,6 +117,16 @@ export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
         .filter((item): item is ChatAttachment => item !== null)
     : [];
   const item: ChatQueueItem = { id, text, createdAt };
+  const asyncQuestionItemId = normalizeOptionalString(entry.asyncQuestionItemId);
+  if (asyncQuestionItemId && asyncQuestionItemId.length <= 256) {
+    item.asyncQuestionItemId = asyncQuestionItemId;
+  }
+  if (entry.workContext !== undefined) {
+    item.workContext = readChatWorkContext(entry.workContext);
+    if (!item.workContext) {
+      item.workContextUnavailable = true;
+    }
+  }
   const mentions = readHumanMentions(text, entry.mentions);
   if (mentions) {
     item.mentions = mentions;
@@ -202,6 +222,7 @@ export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
   } else if (
     entry.sendState === "failed" ||
     entry.sendState === "unconfirmed" ||
+    entry.sendState === "held" ||
     entry.sendState === "waiting-idle" ||
     entry.sendState === "waiting-reconnect"
   ) {
@@ -242,8 +263,13 @@ export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
     (!Array.isArray(entry.mentions) || entry.mentions.length !== (mentions?.length ?? 0))
   ) {
     // A reconnect must not send a different recipient selection after losing its binding.
-    item.sendState = "failed";
+    item.sendState = item.sendState === "held" ? "held" : "failed";
     item.sendError = t("chat.mentions.restoreFailed");
+  }
+  if (entry.workContextUnavailable === true || item.workContextUnavailable) {
+    item.workContextUnavailable = true;
+    item.sendState = item.sendState === "held" ? "held" : "failed";
+    item.sendError = t("chat.messages.attachedContext.restoreFailed");
   }
   return item;
 }

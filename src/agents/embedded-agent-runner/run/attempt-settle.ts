@@ -13,10 +13,6 @@ import { sanitizeCompactionReplayMessages } from "../../compaction-replay.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { SessionManager } from "../../sessions/index.js";
 import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
-import {
-  markRequesterTurnYielded,
-  settleRequesterAfterSessionSpawns,
-} from "../../subagents/registry/subagent-registry.js";
 import { log } from "../logger.js";
 import { clearActiveEmbeddedRun } from "../runs.js";
 import { joinWithRunLivenessDeadline, RUN_LIVENESS_JOIN_TIMEOUT_MS } from "./abortable.js";
@@ -32,7 +28,6 @@ import {
 } from "./attempt-result.js";
 import type { PreparedStreamRuntime } from "./attempt-stream-runtime.types.js";
 import { settleEmbeddedAttemptStream } from "./attempt-stream-settle.js";
-import { shouldContinueInteractiveAcceptedSessionSpawns } from "./attempt-terminal-evidence.js";
 import type { EmbeddedAttemptDeferredLifecycleOwner } from "./deferred-lifecycle-owner.js";
 import { buildPromptImageFailureNotice } from "./images.js";
 import type { EmbeddedAttemptExecutionState, EmbeddedRunAttemptParams } from "./types.js";
@@ -369,32 +364,5 @@ export async function runEmbeddedAttemptSettledPhase(
     ...(beforeAgentFinalizeRevisionReason ? { beforeAgentFinalizeRevisionReason } : {}),
   });
   state.trajectoryEndRecorded = true;
-  if (attempt.sessionKey && result.acceptedSessionSpawns?.length) {
-    const implicitContinuation = shouldContinueInteractiveAcceptedSessionSpawns({
-      attempt: result,
-      run: attempt,
-    });
-    if (implicitContinuation) {
-      const marked = markRequesterTurnYielded({
-        requesterSessionKey: attempt.sessionKey,
-        requesterAgentId: input.setup.sessionAgentId,
-        requesterTurnRunId: attempt.runId,
-      });
-      if (marked === 0) {
-        throw new Error("accepted continuation children were not durably registered");
-      }
-    } else {
-      const settled = settleRequesterAfterSessionSpawns({
-        requesterSessionKey: attempt.sessionKey,
-        requesterAgentId: input.setup.sessionAgentId,
-        requesterTurnRunId: attempt.runId,
-        requesterYielded: result.yieldDetected === true,
-        acceptedSessionSpawns: result.acceptedSessionSpawns,
-      });
-      if (result.yieldDetected === true && settled) {
-        result.requesterContinuationSettled = true;
-      }
-    }
-  }
   return result;
 }

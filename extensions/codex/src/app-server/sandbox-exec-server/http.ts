@@ -3,15 +3,16 @@
  * access through the active OpenClaw sandbox backend.
  */
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import {
+  prepareSandboxProcessCleanup,
+  SANDBOX_COMMAND_MAX_BUFFER_BYTES,
+} from "openclaw/plugin-sdk/sandbox";
 import { SsrFBlockedError, isBlockedHostnameOrIp } from "openclaw/plugin-sdk/ssrf-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { JsonObject, JsonValue } from "../protocol.js";
 import { readHttpHeaders, requireNumber, requireObject, requireString } from "./json-rpc.js";
-import {
-  prepareSandboxChildExec,
-  spawnSandboxChild,
-  type SandboxChildOwner,
-} from "./sandbox-child.js";
+import { spawnSandboxChild, type SandboxPipeChildOwner } from "./sandbox-child.js";
 import type {
   CodexSandboxExecSessionNotifications,
   HttpHeader,
@@ -26,6 +27,7 @@ export async function httpRequest(
   execServer: OpenClawExecServer,
   notifications: CodexSandboxExecSessionNotifications,
   params: JsonValue | undefined,
+  operations: Set<Promise<void>>,
 ): Promise<JsonObject> {
   const record = requireObject(params, "http/request params");
   const requestId = requireString(record.requestId, "requestId");
@@ -47,14 +49,17 @@ export async function httpRequest(
     redirectPolicy,
     streamResponse: record.streamResponse === true,
   };
-  if (request.streamResponse) {
-    return await runStreamingSandboxHttpRequest(execServer, notifications, requestId, request);
-  }
-  const result = await runSandboxHttpRequest(execServer, {
-    ...request,
-    streamResponse: false,
-  });
-  return result;
+  const response = createDeferred<JsonObject>();
+  const operation = runSandboxHttpRequest(execServer, notifications, requestId, request, response);
+  operations.add(operation);
+  void operation.then(
+    () => operations.delete(operation),
+    (error: unknown) => {
+      operations.delete(operation);
+      response.reject(error);
+    },
+  );
+  return await response.promise;
 }
 
 type SandboxHttpRequest = {
@@ -88,64 +93,59 @@ function assertSandboxHttpRequestTargetAllowed(url: string): void {
 
 async function runSandboxHttpRequest(
   execServer: OpenClawExecServer,
-  params: SandboxHttpRequest,
-): Promise<JsonObject & { status: number; headers: HttpHeader[]; bodyBase64: string }> {
-  const result = await execServer.backend.runShellCommand({
-    script: SANDBOX_HTTP_REQUEST_SCRIPT,
-    stdin: JSON.stringify(params),
-    allowFailure: true,
-  });
-  if (result.code !== 0) {
-    const stderr = result.stderr.toString("utf8").trim();
-    throw new Error(stderr || `sandbox http/request failed with code ${result.code}`);
-  }
-  const parsed = JSON.parse(result.stdout.toString("utf8")) as {
-    status?: unknown;
-    headers?: unknown;
-    bodyBase64?: unknown;
-  };
-  if (typeof parsed.status !== "number" || !Array.isArray(parsed.headers)) {
-    throw new Error("sandbox http/request returned an invalid response envelope");
-  }
-  return {
-    status: parsed.status,
-    headers: readHttpHeaders(parsed.headers),
-    bodyBase64: typeof parsed.bodyBase64 === "string" ? parsed.bodyBase64 : "",
-  };
-}
-
-async function runStreamingSandboxHttpRequest(
-  execServer: OpenClawExecServer,
   notifications: CodexSandboxExecSessionNotifications,
   requestId: string,
   params: SandboxHttpRequest,
-): Promise<JsonObject> {
-  const backend = execServer.backend;
-  const remoteExec = prepareSandboxChildExec(backend, {});
-  const execSpec = await backend.buildExecSpec({
-    command: SANDBOX_HTTP_REQUEST_SCRIPT,
-    workdir: execServer.sandbox.containerWorkdir,
-    env: remoteExec.env,
-    usePty: false,
-  });
+  response: Pick<ReturnType<typeof createDeferred<JsonObject>>, "resolve" | "reject">,
+): Promise<void> {
   const lifecycle = { failed: false };
-  const owner = await spawnSandboxChild({
-    argv: execSpec.argv,
-    env: execSpec.env,
-    finalizeExec: backend.finalizeExec,
-    finalizeToken: execSpec.finalizeToken,
-    finalizeStatus: (outcome) =>
-      lifecycle.failed || outcome.exitCode !== 0 ? "failed" : "completed",
-    onFinalizeError: (error) => {
-      embeddedAgentLog.warn("codex sandbox http/request finalize failed", { error });
-    },
-    owners: execServer.children,
-    terminateRemote: remoteExec.terminate,
-  });
+  let owner: SandboxPipeChildOwner;
+  try {
+    notifications.signal.throwIfAborted();
+    const backend = execServer.backend;
+    const remoteExec = prepareSandboxProcessCleanup(backend, {});
+    const execSpec = await backend.buildExecSpec({
+      command: SANDBOX_HTTP_REQUEST_SCRIPT,
+      workdir: execServer.sandbox.containerWorkdir,
+      env: remoteExec.env,
+      usePty: false,
+    });
+    owner = await spawnSandboxChild({
+      argv: execSpec.argv,
+      env: execSpec.env,
+      cwd: execSpec.cwd,
+      assertCurrent: () => {
+        notifications.signal.throwIfAborted();
+        execSpec.assertCurrent?.();
+      },
+      finalizeExec: backend.finalizeExec,
+      finalizeToken: execSpec.finalizeToken,
+      finalizeStatus: (outcome) =>
+        lifecycle.failed || outcome.exitCode !== 0 ? "failed" : "completed",
+      onFinalizeError: (error) => {
+        embeddedAgentLog.warn("codex sandbox http/request finalize failed", { error });
+      },
+      owners: execServer.children,
+      terminateRemote: remoteExec.terminate,
+    });
+  } catch (error) {
+    response.reject(error);
+    return;
+  }
   const child = owner.process;
+  const completion = createDeferred<void>();
+  void owner.settled.then(() => completion.resolve(), completion.reject);
+  let termination: Promise<void> | undefined;
+  const terminate = () => {
+    if (!termination) {
+      termination = owner.terminate().then(() => undefined);
+      void termination.then(completion.resolve, completion.reject);
+    }
+    return termination;
+  };
   const abortOnSessionClose = () => {
     lifecycle.failed = true;
-    void owner.terminate().catch((error: unknown) => {
+    void terminate().catch((error: unknown) => {
       embeddedAgentLog.warn("codex sandbox http/request cleanup failed", { error });
     });
   };
@@ -153,31 +153,49 @@ async function runStreamingSandboxHttpRequest(
   child.once("close", () => {
     notifications.signal.removeEventListener("abort", abortOnSessionClose);
   });
-  if (notifications.signal.aborted) {
-    abortOnSessionClose();
-  }
   child.stdin.on("error", (error: NodeJS.ErrnoException) => {
     if (error.code === "EPIPE" || error.code === "ERR_STREAM_DESTROYED") {
       return;
     }
     embeddedAgentLog.warn("codex sandbox http/request stdin write failed", { error });
   });
-  child.stdin.end(JSON.stringify(params));
-  return await readStreamingSandboxHttpResponse({
+  void readSandboxHttpResponse({
     child,
     lifecycle,
-    owner,
+    terminate,
     requestId,
     notifications,
-  });
+    streamResponse: params.streamResponse,
+  }).then(response.resolve, response.reject);
+  try {
+    if (notifications.signal.aborted) {
+      abortOnSessionClose();
+    } else {
+      owner.assertCurrent();
+      child.stdin.end(JSON.stringify(params));
+    }
+    // Headers can finish the RPC while its body or backend finalization is still running.
+    await completion.promise;
+    await termination;
+  } catch (error) {
+    lifecycle.failed = true;
+    response.reject(error);
+    await terminate().catch((cleanupError: unknown) => {
+      embeddedAgentLog.warn("codex sandbox http/request cleanup failed", { error: cleanupError });
+    });
+    throw error;
+  } finally {
+    notifications.signal.removeEventListener("abort", abortOnSessionClose);
+  }
 }
 
-function readStreamingSandboxHttpResponse(params: {
-  child: SandboxChildOwner["process"];
+function readSandboxHttpResponse(params: {
+  child: SandboxPipeChildOwner["process"];
   lifecycle: { failed: boolean };
-  owner: SandboxChildOwner;
+  terminate: () => Promise<void>;
   requestId: string;
   notifications: CodexSandboxExecSessionNotifications;
+  streamResponse: boolean;
 }): Promise<JsonObject> {
   return new Promise((resolve, reject) => {
     let headerResolved = false;
@@ -186,13 +204,17 @@ function readStreamingSandboxHttpResponse(params: {
     let lastBodySeq = 0;
     let stdoutBuffer = "";
     let stderr = "";
-    const fail = (message: string, _exitCode: number | null) => {
+    const buffered: Record<"stdout" | "stderr", { chunks: Buffer[]; bytes: number }> = {
+      stdout: { chunks: [], bytes: 0 },
+      stderr: { chunks: [], bytes: 0 },
+    };
+    const fail = (message: string) => {
       if (failed) {
         return;
       }
       failed = true;
       params.lifecycle.failed = true;
-      void params.owner.terminate().catch((error: unknown) => {
+      void params.terminate().catch((error: unknown) => {
         embeddedAgentLog.warn("codex sandbox http/request cleanup failed", { error });
       });
       if (headerResolved) {
@@ -209,9 +231,30 @@ function readStreamingSandboxHttpResponse(params: {
       }
       reject(new Error(message));
     };
-    params.child.stdout.setEncoding("utf8");
-    params.child.stdout.on("data", (chunk: string) => {
-      stdoutBuffer += chunk;
+    const bufferOutput = (stream: "stdout" | "stderr", chunk: Buffer | string) => {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      const output = buffered[stream];
+      output.bytes += buffer.byteLength;
+      if (output.bytes > SANDBOX_COMMAND_MAX_BUFFER_BYTES) {
+        fail(`sandbox http/request ${stream} exceeded ${SANDBOX_COMMAND_MAX_BUFFER_BYTES} bytes`);
+        return;
+      }
+      output.chunks.push(buffer);
+    };
+    if (params.streamResponse) {
+      params.child.stdout.setEncoding("utf8");
+      params.child.stderr.setEncoding("utf8");
+    }
+    params.child.stdout.on("data", (chunk: Buffer | string) => {
+      if (failed) {
+        return;
+      }
+      if (!params.streamResponse) {
+        bufferOutput("stdout", chunk);
+        return;
+      }
+      const text = typeof chunk === "string" ? chunk : chunk.toString("utf8");
+      stdoutBuffer += text;
       let newline = stdoutBuffer.indexOf("\n");
       while (newline >= 0) {
         const line = stdoutBuffer.slice(0, newline).trim();
@@ -241,7 +284,7 @@ function readStreamingSandboxHttpResponse(params: {
               }
             }
           } catch (error) {
-            fail(error instanceof Error ? error.message : String(error), null);
+            fail(error instanceof Error ? error.message : String(error));
           }
         }
         newline = stdoutBuffer.indexOf("\n");
@@ -249,13 +292,19 @@ function readStreamingSandboxHttpResponse(params: {
       if (stdoutBuffer.length > SANDBOX_HTTP_STREAM_LINE_MAX_CHARS) {
         fail(
           `sandbox http/request produced an unterminated stdout line longer than ${SANDBOX_HTTP_STREAM_LINE_MAX_CHARS} characters`,
-          null,
         );
       }
     });
-    params.child.stderr.setEncoding("utf8");
-    params.child.stderr.on("data", (chunk: string) => {
-      stderr = sliceUtf16Safe(`${stderr}${chunk}`, -4096);
+    params.child.stderr.on("data", (chunk: Buffer | string) => {
+      if (failed) {
+        return;
+      }
+      if (!params.streamResponse) {
+        bufferOutput("stderr", chunk);
+        return;
+      }
+      const text = typeof chunk === "string" ? chunk : chunk.toString("utf8");
+      stderr = sliceUtf16Safe(`${stderr}${text}`, -4096);
     });
     params.child.once("error", (error) => {
       // ChildProcess error can precede close while the helper is still alive.
@@ -269,17 +318,40 @@ function readStreamingSandboxHttpResponse(params: {
         return;
       }
       if (childFailure) {
-        fail(childFailure, exitCode);
+        fail(childFailure);
         return;
       }
       if (exitCode === 0) {
+        if (!params.streamResponse) {
+          try {
+            const parsed = JSON.parse(Buffer.concat(buffered.stdout.chunks).toString("utf8")) as {
+              status?: unknown;
+              headers?: unknown;
+              bodyBase64?: unknown;
+            };
+            if (typeof parsed.status !== "number" || !Array.isArray(parsed.headers)) {
+              throw new Error("sandbox http/request returned an invalid response envelope");
+            }
+            resolve({
+              status: parsed.status,
+              headers: readHttpHeaders(parsed.headers),
+              bodyBase64: typeof parsed.bodyBase64 === "string" ? parsed.bodyBase64 : "",
+            });
+          } catch (error) {
+            fail(error instanceof Error ? error.message : String(error));
+          }
+          return;
+        }
         if (!headerResolved) {
           params.lifecycle.failed = true;
           reject(new Error("sandbox http/request exited before returning headers"));
         }
         return;
       }
-      fail(stderr.trim() || `sandbox http/request failed with code ${exitCode}`, exitCode);
+      if (!params.streamResponse) {
+        stderr = Buffer.concat(buffered.stderr.chunks).toString("utf8");
+      }
+      fail(stderr.trim() || `sandbox http/request failed with code ${exitCode}`);
     });
   });
 }

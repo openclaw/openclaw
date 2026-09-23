@@ -12,9 +12,13 @@ const hash = (path) => {
   if (!lstatSync(path).isFile()) {
     throw new Error("legacy evidence must be regular files");
   }
-  return execFileSync("git", ["hash-object", "--no-filters", "--", path], {
-    encoding: "utf8",
-  }).trim();
+  return execFileSync(
+    process.env.OPENCLAW_PR_GIT || process.env.GIT_EXEC || "git",
+    ["hash-object", "--no-filters", "--", path],
+    {
+      encoding: "utf8",
+    },
+  ).trim();
 };
 
 try {

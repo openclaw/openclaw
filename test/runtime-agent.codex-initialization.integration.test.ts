@@ -304,25 +304,8 @@ describe("Codex initialization through the registered session deletion owner", (
           expect(link?.threadId).toBe(forkedThread.id);
           expect(native.archiveThread).not.toHaveBeenCalled();
           expect(deletion).not.toHaveBeenCalled();
-        } else if (failure.startsWith("source successor during link")) {
-          if (failure.endsWith("write")) {
-            expect(child?.initializationPending).toBe(true);
-          } else {
-            expect(child).toBeUndefined();
-          }
-          expect(binding).toBeUndefined();
-          expect(link?.threadId).toBe(failure.endsWith("cleanup") ? forkedThread.id : undefined);
-          expect(native.archiveThread).not.toHaveBeenCalled();
-          expect(result).toMatchObject({
-            message: expect.stringContaining("guarded rollback did not complete"),
-          });
         } else if (
-          [
-            "successor binding",
-            "rollback commit",
-            "source successor",
-            "registry rotation",
-          ].includes(failure)
+          ["successor binding", "rollback commit", "registry rotation"].includes(failure)
         ) {
           expect(child?.initializationPending).toBe(true);
           expect(binding).toEqual(

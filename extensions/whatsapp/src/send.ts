@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements send behavior.
 import type { ChannelOutboundContext } from "openclaw/plugin-sdk/channel-contract";
 import {
   createMessageReceiptFromOutboundResults,

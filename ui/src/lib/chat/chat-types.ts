@@ -1,5 +1,6 @@
 import type { HumanMention } from "@openclaw/gateway-protocol";
 import type { MediaKind } from "@openclaw/media-core/constants";
+import type { ChatWorkContext } from "../../../../packages/gateway-protocol/src/chat-work-context.js";
 /**
  * Chat message types for the UI layer.
  */
@@ -43,6 +44,7 @@ export type ChatAttachment = {
   dataUrl?: string;
   previewUrl?: string;
   mimeType: string;
+  origin?: "paste" | "file";
   fileName?: string;
   sizeBytes?: number;
   /** UI-local context that must remain coupled to its annotated screenshot. */
@@ -54,6 +56,7 @@ export type ChatAttachment = {
 export type DurableComposerDraftAttachment = {
   blob: Blob;
   mimeType: string;
+  origin?: "paste" | "file";
   fileName?: string;
   sizeBytes?: number;
   browserAnnotation?: BrowserAnnotationAttachment;
@@ -76,6 +79,12 @@ export type ChatGoalDraft = { sessionId?: string } & (
 );
 
 export type ChatGoalAction = "pause" | "resume" | "clear";
+
+export type ChatGoalRecovery = {
+  pending: boolean;
+  retired?: "expired" | "invalid";
+  onCheck: () => Promise<boolean>;
+};
 
 export type ChatComposerMemoryFallback = {
   awaitingDefaults?: true;
@@ -111,6 +120,10 @@ export type ToolApprovalReview = {
 
 export type ChatQueueItem = {
   id: string;
+  /** UI question associated with this input; delivery and retry stay outbox-owned. */
+  asyncQuestionItemId?: string;
+  workContext?: ChatWorkContext;
+  workContextUnavailable?: true;
   text: string;
   mentions?: readonly HumanMention[];
   createdAt: number;
@@ -145,6 +158,8 @@ export type ChatQueueItem = {
     | "sending"
     | "waiting-reconnect"
     | "unconfirmed"
+    // Provider review requires a new operator decision even if delivery has prior attempts.
+    | "held"
     | "failed";
   sendSubmittedAtMs?: number;
   sendRequestStartedAtMs?: number;
@@ -178,7 +193,6 @@ export type ChatItem =
       icon?: keyof typeof toolIcons;
       metric?: string;
       description?: string;
-      action?: { kind: "session-checkpoints"; label: string };
       timestamp: number;
     }
   | {
@@ -187,6 +201,7 @@ export type ChatItem =
       text: string;
       startedAt: number;
       isStreaming: boolean;
+      replyToSender?: SenderIdentity;
       runId?: string;
       boundaryId?: string;
     }
@@ -336,6 +351,7 @@ export type MessageContentItem =
         kind: Exclude<MediaKind, "sticker" | "unknown">;
         label: string;
         mimeType?: string;
+        origin?: "paste" | "file";
         isVoiceNote?: boolean;
         artifactId?: string;
         playback?: "native" | "transcode";
@@ -383,6 +399,13 @@ export type NormalizedMessage = {
     | null;
 };
 
+export type ToolOutputMetadata = {
+  source: "provider-response" | "execution";
+  modelInput: "unverified";
+  outcome?: "unknown";
+  captureTruncated?: true;
+};
+
 /** Tool card representation for inline tool call/result rendering */
 export type ToolCard = {
   id: string;
@@ -393,6 +416,11 @@ export type ToolCard = {
   args?: unknown;
   inputText?: string;
   outputText?: string;
+  /** Result identity stays distinct from the assistant call after presentation grouping. */
+  resultMessageId?: string;
+  /** Gateway display projection omitted content; the durable result may still be complete. */
+  outputTruncated?: boolean;
+  toolOutput?: ToolOutputMetadata;
   /** Structured tool result details (e.g. the edit tool's precomputed diff). */
   details?: unknown;
   /** Monotonic edit counts while a live tool call is still receiving input. */
@@ -433,7 +461,7 @@ export type ToolCard = {
           originSessionKey?: string;
         };
       }
-    | (BrowserTabTarget & { kind: "browser-tab"; url?: string; title?: string });
+    | (BrowserTabTarget & { kind: "browser-tab"; url: string; title?: string });
 };
 
 export type ToolCardOutcome =

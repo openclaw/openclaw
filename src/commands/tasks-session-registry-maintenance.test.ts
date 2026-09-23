@@ -78,10 +78,10 @@ async function withMaintenanceState(run: (state: OpenClawTestState) => Promise<v
 }
 
 describe("runSessionRegistryMaintenance", () => {
-  afterEach(() => {
+  afterEach(async () => {
     mocks.cronStoreLoadError = undefined;
-    taskRegistryMaintenance.stopTaskRegistryMaintenance();
-    taskRegistryMaintenance.resetTaskRegistryMaintenanceRuntimeForTests();
+    await taskRegistryMaintenance.stopTaskRegistryMaintenance();
+    taskRegistryMaintenance.configureTaskRegistryMaintenance({ runtimeAuthoritative: false });
     resetConfigRuntimeState();
     closeOpenClawAgentDatabasesForTest();
   });

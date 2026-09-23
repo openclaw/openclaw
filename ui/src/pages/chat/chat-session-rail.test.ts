@@ -535,6 +535,83 @@ describe("ChatSessionRailElement", () => {
     expect(onSubmit.mock.calls[0]?.[0]).toBe(element.companion.turns[0]);
   });
 
+  it.each(["answered", "failed"] as const)(
+    "keeps a follow-up editable while answering and retains it when %s",
+    async (outcome) => {
+      const threads = new ChatSessionCompanionThreads(() => {
+        element.companion = { ...threads.view("one") };
+      });
+      const ask = vi.fn<() => Promise<{ answer: string; ts: number }>>();
+      let resolveAnswer!: (value: { answer: string; ts: number }) => void;
+      let rejectAnswer!: (error: Error) => void;
+      ask.mockImplementation(
+        () =>
+          new Promise((resolve, reject) => {
+            resolveAnswer = resolve;
+            rejectAnswer = reject;
+          }),
+      );
+      let submission: Promise<void> | undefined;
+      const element = await mount({
+        companion: threads.view("one"),
+        onDraftChange: (draft) => threads.setDraft("one", draft),
+        onSubmit: (question) => {
+          submission = threads.submit("one", question, ask);
+        },
+      });
+      const textarea = element.querySelector<HTMLTextAreaElement>("textarea")!;
+      const send = element.querySelector<HTMLButtonElement>(".chat-send-btn")!;
+      const type = async (draft: string) => {
+        textarea.value = draft;
+        textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
+        await element.updateComplete;
+      };
+      const enter = () =>
+        textarea.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            key: "Enter",
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+      expect(send.disabled).toBe(true);
+      await type("What changed?");
+      expect(send.disabled).toBe(false);
+      enter();
+      await element.updateComplete;
+      expect(textarea.disabled).toBe(false);
+      expect(textarea.value).toBe("");
+      expect(textarea.placeholder).toBe("Ask a question");
+      await type("What should I verify next?");
+      expect(send.disabled).toBe(true);
+      enter();
+      element.querySelector("form")!.dispatchEvent(new SubmitEvent("submit", { bubbles: true }));
+      expect(ask).toHaveBeenCalledTimes(1);
+      expect(textarea.value).toBe("What should I verify next?");
+      if (outcome === "answered") {
+        resolveAnswer({ answer: "The composer changed.", ts: 42 });
+      } else {
+        rejectAnswer(new Error("Side chat timed out."));
+      }
+      await submission;
+      await element.updateComplete;
+      expect(threads.view("one").turns[0]?.status).toBe(outcome);
+      expect(textarea.value).toBe("What should I verify next?");
+      expect(send.disabled).toBe(false);
+      element.connected = false;
+      await element.updateComplete;
+      expect(textarea.disabled).toBe(true);
+      expect(send.disabled).toBe(true);
+      element.querySelector("form")!.dispatchEvent(new SubmitEvent("submit", { bubbles: true }));
+      expect(ask).toHaveBeenCalledTimes(1);
+      element.connected = true;
+      await element.updateComplete;
+      expect(textarea.disabled).toBe(false);
+      expect(textarea.value).toBe("What should I verify next?");
+      expect(send.disabled).toBe(false);
+    },
+  );
+
   it("freezes terminal relative time from digest.updatedAt", async () => {
     const element = await mount({
       digest: digest("done"),

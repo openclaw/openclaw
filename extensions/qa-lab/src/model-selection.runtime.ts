@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements model selection behavior.
 import {
   defaultQaModelForMode,
   normalizeQaProviderMode,

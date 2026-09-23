@@ -51,10 +51,6 @@ import {
   createProviderAuthResolver,
   resolveMissingProviderApiKey,
 } from "./models-config.providers.secrets.js";
-import {
-  createProviderModelMembership,
-  type ProviderCatalogInventoryCapture,
-} from "./provider-model-membership.js";
 
 const log = createSubsystemLogger("agents/model-providers");
 
@@ -87,7 +83,6 @@ type ImplicitProviderParams = {
   providerDiscoveryEntriesOnly?: boolean;
   onProviderCatalogOutcome?: (outcome: ProviderCatalogOutcome) => void;
   sourceModelFields?: SourceModelFields;
-  providerCatalogInventory?: ProviderCatalogInventoryCapture;
 };
 
 type ImplicitProviderContext = ImplicitProviderParams & {
@@ -128,8 +123,6 @@ function mergeImplicitProviderConfig(params: {
   providerId: string;
   existing: ProviderConfig | undefined;
   implicit: ProviderConfig;
-  resolveMembership: ReturnType<typeof createProviderModelMembership>;
-  providerCatalogInventory?: ProviderCatalogInventoryCapture;
   sourceModelFields?: SourceModelFields;
 }): ProviderConfig {
   const { providerId, existing, implicit } = params;
@@ -140,16 +133,9 @@ function mergeImplicitProviderConfig(params: {
   if (merge) {
     return merge({ existing, implicit });
   }
-  const capturedIds = params.providerCatalogInventory?.configuredProviderModelIds.get(providerId);
-  const configuredModelIds =
-    capturedIds ?? (Array.isArray(existing.models) ? existing.models.map(({ id }) => id) : []);
-  params.providerCatalogInventory?.configuredProviderModelIds.set(providerId, configuredModelIds);
   return mergeProviderModels(implicit, existing, {
     providerId,
     sourceModelFields: params.sourceModelFields,
-    preserveConfiguredModelMembership:
-      params.resolveMembership(providerId, configuredModelIds) !== undefined,
-    retainDiscoveredModels: params.providerCatalogInventory !== undefined,
   });
 }
 
@@ -215,10 +201,6 @@ async function resolvePluginImplicitProviders(
 ): Promise<Record<string, ProviderConfig> | undefined> {
   const byOrder = groupPluginDiscoveryProvidersByOrder(providers);
   const discovered: Record<string, ProviderConfig> = {};
-  const resolveMembership = createProviderModelMembership({
-    cfg: ctx.config,
-    agentId: ctx.providerCatalogInventory?.agentId,
-  });
   const selectedProviderIds = ctx.providerDiscoveryScope
     ? new Set([...ctx.providerDiscoveryScope.values()].flat())
     : undefined;
@@ -365,8 +347,6 @@ async function resolvePluginImplicitProviders(
             ],
           }),
         implicit: implicitProvider,
-        resolveMembership,
-        providerCatalogInventory: ctx.providerCatalogInventory,
         sourceModelFields: ctx.sourceModelFields,
       });
       discovered[providerId] = resolveImplicitProviderAuthMarker({
@@ -537,17 +517,23 @@ export async function prepareImplicitProviderStaticCatalog(
         const plugin = params.pluginMetadataSnapshot?.manifestRegistry.plugins.find(
           (candidate) => candidate.id === (entry.provider.pluginId ?? entry.provider.id),
         );
-        const providerEntries = Object.entries(normalizePluginDiscoveryResult(entry));
+        const providerEntries = Object.entries(entry.providerConfigs);
         const eligible = providerEntries.filter(([provider]) =>
           isProviderCatalogSourceAllowed({ provider, config: params.config, plugin }),
         );
-        return eligible.length === providerEntries.length
-          ? entry
-          : { provider: entry.provider, result: { providers: Object.fromEntries(eligible) } };
+        if (eligible.length === providerEntries.length) {
+          return entry;
+        }
+        const providerConfigs = Object.fromEntries(eligible);
+        return {
+          provider: entry.provider,
+          result: { providers: providerConfigs },
+          providerConfigs,
+        };
       }),
       ...providers
         .filter((provider) => provider.staticCatalog && !eligibleProviders.includes(provider))
-        .map((provider) => ({ provider, result: { providers: {} } })),
+        .map((provider) => ({ provider, result: { providers: {} }, providerConfigs: {} })),
     ]),
   });
 }

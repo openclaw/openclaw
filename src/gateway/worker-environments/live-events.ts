@@ -19,7 +19,6 @@ import {
   getAgentRunContextOwnership,
   getAgentRunContextOwnerStatus,
   registerAgentRunContext,
-  releaseAgentRunContext,
 } from "../../infra/agent-run-registry.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
@@ -37,6 +36,9 @@ import {
   type WorkerLiveSessionBinding,
 } from "./live-event-session-binding.js";
 import {
+  fenceReleasedWorkerLiveRun,
+  hasReachableBufferedTerminal,
+  releaseWorkerLiveRun,
   rotateWorkerLiveEventCredential,
   type LiveEventWindow,
   type OwnedLiveRun,
@@ -44,7 +46,7 @@ import {
   type WorkerLiveCredentialRotation,
 } from "./live-event-window.js";
 import { captureWorkerTurnFinishing } from "./placement-turn-claim-events.js";
-import { captureWorkerTurnDiagnosticRecorder } from "./worker-turn-run-owner.js";
+import { captureWorkerTurnLiveEventOwner } from "./worker-turn-run-owner.js";
 
 const DEFAULT_WINDOW_SIZE = 128;
 const DEFAULT_MAX_PENDING_BYTES = 512 * 1024;
@@ -131,26 +133,10 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
   const rotateCredential = (rotation: WorkerLiveCredentialRotation): boolean =>
     rotateWorkerLiveEventCredential(windows.get(rotation.sessionId), rotation);
 
-  const releaseRun = (window: LiveEventWindow, runId: string): void => {
-    const owned = window.activeRuns.get(runId);
-    if (!owned) {
-      return;
-    }
-    window.activeRuns.delete(runId);
-    releaseAgentRunContext(runId, owned.claimId);
-  };
-
-  const fenceReleasedRun = (window: LiveEventWindow, runId: string): void => {
-    if (!window.terminalRuns.has(runId)) {
-      window.terminalRuns.set(runId, window.ackedSeq);
-    }
-    releaseRun(window, runId);
-  };
-
   const clearWindow = (window: LiveEventWindow): void => {
     windows.delete(window.sessionId);
     for (const runId of window.activeRuns.keys()) {
-      releaseRun(window, runId);
+      releaseWorkerLiveRun(window, runId);
     }
     window.pending.clear();
     window.pendingBytes = 0;
@@ -362,37 +348,10 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
         return resyncRequired(0);
       }
       if (ownerStatus !== "active") {
-        fenceReleasedRun(window, runId);
+        fenceReleasedWorkerLiveRun(window, runId);
       }
     }
     return undefined;
-  };
-
-  const hasReachableBufferedTerminal = (
-    window: LiveEventWindow,
-    admittedRunId: string,
-    countedRunIds: ReadonlySet<string>,
-  ): boolean => {
-    // Borrow one source-ended slot only when this ordered drain can reach that
-    // active run's terminal without claiming another new run first.
-    for (let seq = window.ackedSeq + 2; seq <= window.ackedSeq + windowSize; seq += 1) {
-      const pending = window.pending.get(seq);
-      if (!pending) {
-        return false;
-      }
-      const pendingRunId = pending.request.runId;
-      if (countedRunIds.has(pendingRunId)) {
-        if (isDefinitiveWorkerTerminalEvent(pending.request.event)) {
-          return true;
-        }
-        continue;
-      }
-      if (pendingRunId !== admittedRunId) {
-        // Another new run would consume the borrowed slot before the terminal.
-        return false;
-      }
-    }
-    return false;
   };
 
   const claimRun = (
@@ -424,7 +383,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
         context.lifecycleGeneration !== owned.lifecycleGeneration ||
         context.isControlUiVisible !== owned.controlUiVisible
       ) {
-        fenceReleasedRun(window, runId);
+        fenceReleasedWorkerLiveRun(window, runId);
         return invalidEvent();
       }
       return owned;
@@ -442,7 +401,10 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     }
     if (
       countedRunIds.size >= maxActiveRuns &&
-      !(allowBufferedTerminalCapacity && hasReachableBufferedTerminal(window, runId, countedRunIds))
+      !(
+        allowBufferedTerminalCapacity &&
+        hasReachableBufferedTerminal(window, runId, countedRunIds, windowSize)
+      )
     ) {
       return capacityExceeded();
     }
@@ -478,7 +440,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
         exclusive: existingContext === undefined,
         onClearRequested: (clearedClaimId) => {
           if (window.activeRuns.get(runId)?.claimId === clearedClaimId) {
-            fenceReleasedRun(window, runId);
+            fenceReleasedWorkerLiveRun(window, runId);
           }
         },
         ownsContext: !hasExistingTrackedOwner,
@@ -505,7 +467,22 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     request: WorkerLiveEventParams,
     allowBufferedTerminalCapacity: boolean,
     recordApplied: PendingLiveEvent["recordApplied"],
+    runOwner: PendingLiveEvent["runOwner"],
   ): WorkerLiveEventFailure | undefined => {
+    if (runOwner?.isCancelled()) {
+      if (
+        request.event.kind !== "lifecycle" ||
+        request.event.payload.phase !== "finishing" ||
+        request.event.payload.aborted !== true
+      ) {
+        return invalidEvent();
+      }
+      // Cancellation retires live publication before the worker finishes.
+      // Its exact owner can still settle the ACK without recreating a run claim.
+      window.terminalRuns.set(request.runId, request.seq);
+      releaseWorkerLiveRun(window, request.runId);
+      return undefined;
+    }
     const owned = claimRun(window, request.runId, allowBufferedTerminalCapacity);
     if ("ok" in owned) {
       return owned;
@@ -580,14 +557,16 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     window: LiveEventWindow,
     first: WorkerLiveEventParams,
     firstApplied: PendingLiveEvent["recordApplied"],
+    firstOwner: PendingLiveEvent["runOwner"],
     firstPending?: PendingLiveEvent,
   ): WorkerLiveEventApplicationResult => {
     let request: WorkerLiveEventParams | undefined = first;
     let buffered = firstPending;
     let recordApplied = firstPending ? firstPending.recordApplied : firstApplied;
+    let runOwner = firstPending ? firstPending.runOwner : firstOwner;
     let publishedPrefix = false;
     while (request) {
-      const failed = publish(window, request, buffered !== undefined, recordApplied);
+      const failed = publish(window, request, buffered !== undefined, recordApplied, runOwner);
       if (failed) {
         if (failed.details.reason === "capacity-exceeded" && buffered) {
           // Keep the ordered tail retryable while the active prefix claim drains.
@@ -628,6 +607,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       request = next.request;
       buffered = next;
       recordApplied = next.recordApplied;
+      runOwner = next.runOwner;
     }
     return { ok: true, result: { ackedSeq: window.ackedSeq } };
   };
@@ -642,10 +622,10 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     if (params.request.lastAckedSeq > window.ackedSeq) {
       return resyncWindow(window);
     }
-    const recordDiagnostic = captureWorkerTurnDiagnosticRecorder(params.identity);
+    const runOwner = captureWorkerTurnLiveEventOwner(params.identity);
     const recordFinishing = captureWorkerTurnFinishing(params.identity, params.request);
     const recordApplied: PendingLiveEvent["recordApplied"] = (event) => {
-      recordDiagnostic?.(event);
+      runOwner?.record(event);
       recordFinishing?.();
     };
     const { seq } = params.request;
@@ -655,7 +635,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     }
     if (seq === expectedSeq) {
       const pending = window.pending.get(seq);
-      return drain(window, pending?.request ?? params.request, recordApplied, pending);
+      return drain(window, pending?.request ?? params.request, recordApplied, runOwner, pending);
     }
     if (window.pending.has(seq)) {
       return { ok: true, result: { ackedSeq: window.ackedSeq } };
@@ -664,7 +644,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     if (window.pendingBytes + sizeBytes > maxPendingBytes) {
       return resyncWindow(window);
     }
-    window.pending.set(seq, { request: params.request, sizeBytes, recordApplied });
+    window.pending.set(seq, { request: params.request, sizeBytes, recordApplied, runOwner });
     window.pendingBytes += sizeBytes;
     return { ok: true, result: { ackedSeq: window.ackedSeq } };
   };

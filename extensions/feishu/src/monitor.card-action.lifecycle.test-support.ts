@@ -21,6 +21,7 @@ import {
   restoreFeishuLifecycleStateDir,
   setFeishuLifecycleStateDir,
   setupFeishuLifecycleHandler,
+  stopFeishuLifecycleMonitors,
 } from "./test-support/lifecycle-test-support.js";
 
 const {
@@ -182,11 +183,15 @@ describe("Feishu card-action lifecycle", () => {
     });
   });
 
-  afterEach(() => {
-    vi.useRealTimers();
-    processedCardActions.clear();
-    resolvedCardActionChatTypes.clear();
-    restoreFeishuLifecycleStateDir(originalStateDir);
+  afterEach(async () => {
+    try {
+      await stopFeishuLifecycleMonitors();
+      processedCardActions.clear();
+      resolvedCardActionChatTypes.clear();
+      restoreFeishuLifecycleStateDir(originalStateDir);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("routes one reply across duplicate callback delivery", async () => {

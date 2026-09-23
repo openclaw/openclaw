@@ -15,6 +15,9 @@ import {
   WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
 } from "../../scripts/lib/worker-deploy-build-plugin.mts";
 import { createWorkerBundleProducer } from "../../src/gateway/worker-environments/bundle.js";
+import { WORKER_BUNDLE_ARTIFACT_PATHS } from "../../src/shared/worker-bundle-hash.js";
+import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
+import { runNodeScript } from "../helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 vi.mock("tsdown", async (importOriginal) => {
@@ -53,8 +56,14 @@ describe("worker deploy build plugin", () => {
 
   describe("portable output", () => {
     const fixtureDirs = useAutoCleanupTempDirTracker(afterAll);
+    const fixtureLifetime = createFixtureLifetime();
+    const workerEntryNames = WORKER_BUNDLE_ARTIFACT_PATHS.map(
+      (artifact) => `worker/${artifact.replace(/\.mjs$/u, "")}`,
+    );
     let preparedDist: string;
     let preparedArchive: string;
+
+    afterEach(() => fixtureLifetime.cleanup());
 
     beforeAll(async () => {
       const { default: configs } = await import("../../tsdown.config.ts");
@@ -73,12 +82,17 @@ describe("worker deploy build plugin", () => {
       const highlightSource = fs.realpathSync(
         path.resolve("node_modules/highlight.js/lib/index.js"),
       );
+      const activationSource = fs.realpathSync(
+        path.resolve("src/plugin-sdk/facade-activation-check.runtime.ts"),
+      );
+      // Mixed runtime/declaration graphs also contain worker paths, but are not archived.
       for (const sibling of configs.filter(
         (candidate) =>
           candidate !== config &&
           typeof candidate.entry === "object" &&
           !Array.isArray(candidate.entry) &&
-          Object.keys(candidate.entry).some((entry) => entry.startsWith("worker/")),
+          Object.keys(candidate.entry).length > 0 &&
+          Object.keys(candidate.entry).every((entry) => workerEntryNames.includes(entry)),
       )) {
         const { bundles } = await build({
           ...sibling,
@@ -102,22 +116,31 @@ describe("worker deploy build plugin", () => {
         plugins: [
           config.plugins,
           {
-            name: "test:worker-highlight-initialization",
+            name: "test:worker-runtime-initialization",
             transform(code, id) {
               if (id === entrySource) {
                 return `${code}
 export { highlight, supportsLanguage } from "../agents/utils/syntax-highlight.js";
+export { createOwnedStdioProcess, closeOwnedStdioProcess } from "../process/owned-stdio.js";
 export { explainShellCommand } from "../infra/command-explainer/extract.js";
 export { planShellAuthorization } from "../infra/exec-authorization-plan.js";
+export { commitExecAuthorizationLocked } from "../infra/exec-approvals-authorization.js";
+export { saveExecApprovals, readExecApprovalsSnapshot } from "../infra/exec-approvals-store.js";
+export { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 export { rejectUnsafeExecControlShellCommand } from "../infra/exec-control-command-guard.js";
 export { WebSocket } from "../../packages/gateway-client/src/websocket.js";
 export { projectComputerActResult } from "../agents/tools/computer-tool-result.js";
 export { createImageProcessor, convertBmpToPngWithWorker } from "../media/image-processor.js";
 export { createRealtimeTranscriptionWebSocketSession } from "../realtime-transcription/websocket-session.js";
-export { runDesktopWebSocketRuntimeProbe } from "../gateway/desktop/websocket-runtime.test-support.js";`;
+export { runDesktopWebSocketRuntimeProbe } from "../gateway/desktop/websocket-runtime.test-support.js";
+export { loadActivatedBundledPluginPublicSurfaceModuleSync, listImportedBundledPluginFacadeIds } from "../plugin-sdk/facade-runtime.js";
+export { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";`;
               }
               if (id === highlightSource) {
                 return `globalThis[Symbol.for("worker-highlight-initializations")] = (globalThis[Symbol.for("worker-highlight-initializations")] ?? 0) + 1;\n${code}`;
+              }
+              if (id === activationSource) {
+                return `globalThis[Symbol.for("worker-activation-initializations")] = (globalThis[Symbol.for("worker-activation-initializations")] ?? 0) + 1;\n${code}`;
               }
               return null;
             },
@@ -125,6 +148,11 @@ export { runDesktopWebSocketRuntimeProbe } from "../gateway/desktop/websocket-ru
         ],
       });
       try {
+        const builtEntries = vi
+          .mocked(build)
+          .mock.calls.flatMap(([options]) => Object.keys(options?.entry ?? {}));
+        expect(builtEntries.length).toBe(workerEntryNames.length);
+        expect(builtEntries.toSorted()).toEqual(workerEntryNames.toSorted());
         // A dynamic import cycle can leave an unstaged root facade even with code splitting off.
         expect(bundles.flatMap((bundle) => bundle.chunks.map((chunk) => chunk.fileName))).toEqual([
           "worker/worker.mjs",
@@ -148,6 +176,206 @@ export { runDesktopWebSocketRuntimeProbe } from "../gateway/desktop/websocket-ru
         }
       }
     });
+
+    it("commits exec authorization through the SQLite worker in a relocated archive", ({
+      signal,
+    }) =>
+      fixtureLifetime.run(async () => {
+        const root = fixtureLifetime.createTempDir("openclaw-worker-exec-authorization-");
+        const relocated = path.join(root, "bundles", "installed");
+        fs.mkdirSync(relocated, { recursive: true });
+        await tar.extract({ file: preparedArchive, cwd: relocated });
+        const result = await fixtureLifetime.track(
+          runNodeScript(
+            [
+              "--input-type=module",
+              "--eval",
+              `
+import assert from "node:assert/strict";
+import { pathToFileURL } from "node:url";
+const entry = process.argv[1];
+process.argv = [process.execPath, entry, "--internal-worker-prewarm"];
+const {
+  commitExecAuthorizationLocked,
+  saveExecApprovals,
+  readExecApprovalsSnapshot,
+  closeOpenClawStateDatabaseAsync,
+} = await import(pathToFileURL(entry).href);
+const match = { id: "portable-exec", pattern: process.execPath };
+const command = "portable exec authorization";
+saveExecApprovals({ version: 1, defaults: { security: "full", ask: "off" }, agents: { main: { allowlist: [match] } } });
+try {
+  const assertCurrent = await commitExecAuthorizationLocked({
+    agentId: "main", matches: [match], command, resolvedPath: process.execPath,
+    authorization: { source: "current-policy", security: "full", ask: "off", allowlistSatisfied: true },
+  });
+  assertCurrent();
+  await closeOpenClawStateDatabaseAsync();
+  const stored = readExecApprovalsSnapshot().file.agents.main.allowlist[0];
+  assert.equal(stored.lastUsedCommand, command);
+  assert.equal(stored.lastResolvedPath, process.execPath);
+  assert.ok(stored.lastUsedAt > 0);
+} finally {
+  await closeOpenClawStateDatabaseAsync();
+}
+console.log("relocated exec authorization persisted");
+`,
+              path.join(relocated, "worker.mjs"),
+            ],
+            {
+              PATH: process.env.PATH,
+              SystemRoot: process.env.SystemRoot,
+              WINDIR: process.env.WINDIR,
+              HOME: root,
+              USERPROFILE: root,
+              OPENCLAW_STATE_DIR: path.join(root, "state"),
+              TMPDIR: root,
+              TMP: root,
+              TEMP: root,
+            },
+            30_000,
+            { cwd: root, signal },
+          ),
+        );
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout).toContain("relocated exec authorization persisted");
+      }));
+
+    it("keeps activated plugin facades lazy and config-aware in a relocated archive", ({
+      signal,
+    }) =>
+      fixtureLifetime.run(async () => {
+        const root = fixtureLifetime.createTempDir("openclaw-worker-facade-");
+        const packageRoot = path.join(root, "pkg");
+        const relocated = path.join(packageRoot, "dist/worker");
+        const bundledRoot = path.join(packageRoot, "dist/extensions");
+        const pluginRoot = path.join(bundledRoot, "fixture");
+        fs.mkdirSync(relocated, { recursive: true });
+        fs.mkdirSync(pluginRoot, { recursive: true });
+        fs.writeFileSync(
+          path.join(packageRoot, "package.json"),
+          JSON.stringify({ name: "openclaw", version: "0.0.0", type: "module" }),
+        );
+        await tar.extract({ file: preparedArchive, cwd: relocated });
+        fs.writeFileSync(
+          path.join(pluginRoot, "package.json"),
+          JSON.stringify({
+            name: "@openclaw/worker-facade-fixture",
+            version: "0.0.0",
+            type: "module",
+            openclaw: { extensions: ["./index.js"] },
+          }),
+        );
+        fs.writeFileSync(
+          path.join(pluginRoot, "openclaw.plugin.json"),
+          JSON.stringify({
+            id: "worker-facade-owner",
+            enabledByDefault: true,
+            channels: [],
+            configSchema: { type: "object", additionalProperties: false, properties: {} },
+          }),
+        );
+        fs.writeFileSync(
+          path.join(pluginRoot, "index.js"),
+          'export default { id: "worker-facade-owner", register() {} };\n',
+        );
+        fs.writeFileSync(
+          path.join(pluginRoot, "api.js"),
+          `globalThis[Symbol.for("worker-facade-evaluations")] = (globalThis[Symbol.for("worker-facade-evaluations")] ?? 0) + 1;
+export const marker = "relocated";`,
+        );
+        const result = await fixtureLifetime.track(
+          runNodeScript(
+            [
+              "--input-type=module",
+              "--eval",
+              `
+import assert from "node:assert/strict";
+import { pathToFileURL } from "node:url";
+const entry = process.argv[1];
+process.argv = [process.execPath, entry, "--internal-worker-prewarm"];
+const {
+  loadActivatedBundledPluginPublicSurfaceModuleSync: load,
+  listImportedBundledPluginFacadeIds,
+  setRuntimeConfigSnapshot,
+} = await import(pathToFileURL(entry).href);
+const initializations = () => globalThis[Symbol.for("worker-activation-initializations")] ?? 0;
+const evaluations = () => globalThis[Symbol.for("worker-facade-evaluations")] ?? 0;
+assert.equal(initializations(), 0, "worker bootstrap must not initialize facade activation");
+const params = { dirName: "fixture", artifactBasename: "api.js" };
+const disabled = { plugins: { entries: { "worker-facade-owner": { enabled: false } } } };
+setRuntimeConfigSnapshot(disabled);
+assert.throws(() => load(params), /disabled in config/);
+assert.equal(initializations(), 1, "first access must initialize bundled facade activation once");
+assert.equal(evaluations(), 0, "disabled facade must not evaluate its public artifact");
+assert.deepEqual(listImportedBundledPluginFacadeIds(), []);
+setRuntimeConfigSnapshot({});
+const loaded = load(params);
+assert.equal(loaded.marker, "relocated");
+assert.strictEqual(load(params), loaded);
+assert.equal(evaluations(), 1);
+assert.deepEqual(listImportedBundledPluginFacadeIds(), ["worker-facade-owner"]);
+setRuntimeConfigSnapshot(disabled);
+assert.throws(() => load(params), /disabled in config/);
+assert.equal(initializations(), 1);
+assert.equal(evaluations(), 1);
+console.log("relocated worker facade activation follows the shared config snapshot");
+`,
+              path.join(relocated, "worker.mjs"),
+            ],
+            {
+              PATH: process.env.PATH,
+              SystemRoot: process.env.SystemRoot,
+              WINDIR: process.env.WINDIR,
+              HOME: root,
+              USERPROFILE: root,
+              TMPDIR: root,
+              TMP: root,
+              TEMP: root,
+              OPENCLAW_HOME: root,
+              OPENCLAW_STATE_DIR: path.join(root, "state"),
+              OPENCLAW_CONFIG_PATH: path.join(root, "missing-config.json"),
+              OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
+              XDG_CONFIG_HOME: path.join(root, "config"),
+              XDG_CACHE_HOME: path.join(root, "cache"),
+              XDG_DATA_HOME: path.join(root, "data"),
+              JITI_FS_CACHE: "0",
+              NODE_DISABLE_COMPILE_CACHE: "1",
+            },
+            30_000,
+            {
+              cwd: packageRoot,
+              signal,
+              requireProcessTreeExit: process.platform !== "win32",
+              maxBuffer: 64 * 1024,
+            },
+          ),
+        );
+        expect(result.error, `${root}\n${result.stderr}`).toBeUndefined();
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout.trim()).toBe(
+          "relocated worker facade activation follows the shared config snapshot",
+        );
+
+        const { collectPackageDistImportErrors } =
+          await import("../../scripts/lib/package-dist-imports.mjs");
+        const preparedRoot = path.dirname(preparedDist);
+        const files = fs
+          .readdirSync(preparedDist, { recursive: true, withFileTypes: true })
+          .filter((entry) => entry.isFile())
+          .map((entry) =>
+            path
+              .relative(preparedRoot, path.join(entry.parentPath, entry.name))
+              .replaceAll("\\", "/"),
+          );
+        expect(
+          collectPackageDistImportErrors({
+            files,
+            readText: (relativePath) =>
+              fs.readFileSync(path.join(preparedRoot, relativePath), "utf8"),
+          }),
+        ).toEqual([]);
+      }));
 
     it("delivers resized computer observations and image operations from a relocated archive", async () => {
       const root = tempDirs.make("openclaw-worker-images-");
@@ -231,7 +459,7 @@ console.log("relocated computer observations and image operations passed");
       );
     });
 
-    it("keeps worker bootstrap portable with lazy highlighting and complete shell analysis", async () => {
+    it("keeps worker bootstrap, shell analysis, and Windows child spawning portable", async () => {
       const root = tempDirs.make("openclaw-worker-portable-");
       fs.cpSync(preparedDist, path.join(root, "dist"), { recursive: true });
       const result = await promisify(execFile)(
@@ -249,7 +477,7 @@ for (const dependency of ["highlight.js", "web-tree-sitter", "tree-sitter-bash"]
   assert.throws(() => createRequire(pathToFileURL(entry)).resolve(dependency), { code: "MODULE_NOT_FOUND" });
 }
 process.argv = [process.execPath, entry, "--internal-worker-prewarm"];
-const { highlight, supportsLanguage, explainShellCommand, planShellAuthorization, rejectUnsafeExecControlShellCommand } = await import(pathToFileURL(entry).href);
+const { highlight, supportsLanguage, explainShellCommand, planShellAuthorization, rejectUnsafeExecControlShellCommand, createOwnedStdioProcess, closeOwnedStdioProcess } = await import(pathToFileURL(entry).href);
 const initializations = () => globalThis[Symbol.for("worker-highlight-initializations")] ?? 0;
 assert.equal(initializations(), 0, "headless worker bootstrap must not initialize syntax highlighting");
 assert.equal(supportsLanguage("abnf"), true);
@@ -268,6 +496,25 @@ await assert.rejects(
   () => rejectUnsafeExecControlShellCommand('echo $(/approve synthetic allow-once)'),
   /exec cannot run \\/approve commands/,
 );
+if (process.platform === "win32") {
+  assert.throws(() => createRequire(pathToFileURL(entry)).resolve("koffi"), { code: "MODULE_NOT_FOUND" });
+  const owned = await createOwnedStdioProcess({
+    argv: [process.execPath, "-e", "process.stdin.pipe(process.stdout)"], exactEnv: true,
+  });
+  let output = "";
+  owned.onStdout(chunk => { output += chunk; });
+  owned.onStderr(() => {});
+  owned.stdin.write("portable echo");
+  owned.stdin.end();
+  try {
+    assert.equal((await owned.wait()).code, 0);
+    assert.equal(output, "portable echo");
+    assert.deepEqual(await owned.waitForExtinction(), { status: "uncertain", reason: "job-unavailable" });
+    await closeOwnedStdioProcess(owned);
+  } finally {
+    owned.dispose();
+  }
+}
 console.log("portable worker highlighting and shell analysis passed");
 `,
           path.join(root, "dist/worker/worker.mjs"),

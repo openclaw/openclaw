@@ -1,3 +1,5 @@
+import { expectDefined } from "@openclaw/normalization-core";
+import { createStructuredOutboundPayloadPlan } from "openclaw/plugin-sdk/channel-outbound";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { expect, it } from "vitest";
 import {
@@ -20,7 +22,6 @@ import type {
   DispatchReplyWithBufferedBlockDispatcherArgs,
   TelegramMessageContext,
 } from "./bot-message-dispatch.test-harness.js";
-import { telegramInboundEventDelivery } from "./inbound-event-delivery.js";
 
 const GROUP_CHAT_ID = -100123;
 const GROUP_SESSION_KEY = "agent:main:telegram:group:-100123";
@@ -45,17 +46,37 @@ function mockTurn(
   });
 }
 
+function createReasoningFinalDelivery(
+  source: "raw" | "prepared",
+): (params: DispatchReplyWithBufferedBlockDispatcherArgs) => Promise<void> {
+  const payload = {
+    text: source === "raw" ? "<think>hidden</think>" : "hidden",
+    isReasoning: true,
+  };
+  if (source === "raw") {
+    return async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(payload, { kind: "final" });
+    };
+  }
+  const plan = expectDefined(
+    createStructuredOutboundPayloadPlan([payload])[0],
+    "prepared reasoning payload",
+  );
+  return async ({ dispatcherOptions }) => {
+    const deliverPrepared = expectDefined(
+      dispatcherOptions.deliverPrepared,
+      "prepared Telegram delivery",
+    );
+    await deliverPrepared(plan, { kind: "final" });
+  };
+}
+
 function createGroupFixture(
   params: {
     commandAuthorized?: boolean;
-    entries?: Array<{ sender: string; body: string; timestamp: number }>;
-    topicId?: number;
   } = {},
 ) {
-  const { commandAuthorized, topicId } = params;
-  const entries = params.entries ?? [{ sender: "Alice", body: "lunch at two", timestamp: 1 }];
-  const historyKey = `telegram:group:${GROUP_CHAT_ID}${topicId ? `:topic:${topicId}` : ""}`;
-  const groupHistories = new Map([[historyKey, entries]]);
+  const { commandAuthorized } = params;
   const context = (
     messageId: number,
     body: string,
@@ -75,39 +96,17 @@ function createGroupFixture(
         ...(commandAuthorized ? { CommandAuthorized: true } : {}),
       } as unknown as TelegramMessageContext["ctxPayload"],
       msg: {
-        chat: { id: GROUP_CHAT_ID, type: "supergroup", ...(topicId ? { is_forum: true } : {}) },
+        chat: { id: GROUP_CHAT_ID, type: "supergroup" },
         message_id: messageId,
-        ...(topicId ? { message_thread_id: topicId } : {}),
+        message_thread_id: undefined,
       } as unknown as TelegramMessageContext["msg"],
       chatId: GROUP_CHAT_ID,
       isGroup: true,
-      historyKey,
+      historyKey: `telegram:group:${GROUP_CHAT_ID}`,
       historyLimit: 10,
-      groupHistories,
-      threadSpec: topicId ? { id: topicId, scope: "forum" } : { id: undefined, scope: "none" },
+      threadSpec: { id: undefined, scope: "none" },
     });
-  return { context, groupHistories, historyKey };
-}
-
-function mockSupersedingRoomEvents() {
-  const firstStarted = createDeferred<void>();
-  const firstRelease = createDeferred<void>();
-  const secondStarted = createDeferred<void>();
-  dispatchReplyWithBufferedBlockDispatcher
-    .mockImplementationOnce(async () => {
-      firstStarted.resolve();
-      await firstRelease.promise;
-      return messageToolOnlyDispatchResult;
-    })
-    .mockImplementationOnce(async () => {
-      secondStarted.resolve();
-      return messageToolOnlyDispatchResult;
-    });
-  return {
-    firstStarted: firstStarted.promise,
-    releaseFirst: firstRelease.resolve,
-    secondStarted: secondStarted.promise,
-  };
+  return { context };
 }
 
 describeTelegramDispatch("dispatchTelegramMessage reasoning-room-events", () => {
@@ -152,41 +151,43 @@ describeTelegramDispatch("dispatchTelegramMessage reasoning-room-events", () => 
     expect(dispatchParams.replyOptions?.reasoningPayloadsEnabled).toBe(false);
   });
 
-  it("suppresses typed reasoning-only finals without raw text fallback", async () => {
-    setupDraftStreams({ answerMessageId: 2001, reasoningMessageId: 3001 });
-    mockTurn(async ({ dispatcherOptions }) => {
-      await dispatcherOptions.deliver(
-        { text: "<think>hidden</think>", isReasoning: true },
-        { kind: "final" },
+  it.each(["raw", "prepared"] as const)(
+    "suppresses %s typed reasoning-only finals without raw text fallback",
+    async (source) => {
+      const { answerDraftStream, reasoningDraftStream } = setupDraftStreams({
+        answerMessageId: 2001,
+        reasoningMessageId: 3001,
+      });
+      mockTurn(createReasoningFinalDelivery(source));
+
+      await dispatchWithContext({ context: createContext() });
+
+      expect(deliverReplies).not.toHaveBeenCalled();
+      expect(editMessageTelegram).not.toHaveBeenCalled();
+      expect(answerDraftStream.update).not.toHaveBeenCalled();
+      expect(reasoningDraftStream.update).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["raw", "prepared"] as const)(
+    "routes %s typed reasoning-only finals to the reasoning lane when reasoning streams",
+    async (source) => {
+      const { answerDraftStream, reasoningDraftStream } = setupDraftStreams({
+        answerMessageId: 2001,
+        reasoningMessageId: 3001,
+      });
+      mockTurn(createReasoningFinalDelivery(source));
+
+      await dispatchWithContext({ context: createReasoningStreamContext() });
+
+      expect(reasoningDraftStream.update).toHaveBeenCalledWith(
+        "🧠 _hidden_",
+        expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
       );
-    });
-
-    await dispatchWithContext({ context: createContext() });
-
-    expect(deliverReplies).not.toHaveBeenCalled();
-    expect(editMessageTelegram).not.toHaveBeenCalled();
-  });
-
-  it("routes typed reasoning-only finals to the reasoning lane when reasoning streams", async () => {
-    const { reasoningDraftStream } = setupDraftStreams({
-      answerMessageId: 2001,
-      reasoningMessageId: 3001,
-    });
-    mockTurn(async ({ dispatcherOptions }) => {
-      await dispatcherOptions.deliver(
-        { text: "<think>hidden</think>", isReasoning: true },
-        { kind: "final" },
-      );
-    });
-
-    await dispatchWithContext({ context: createReasoningStreamContext() });
-
-    expect(reasoningDraftStream.update).toHaveBeenCalledWith(
-      "🧠 _hidden_",
-      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
-    );
-    expect(deliverReplies).not.toHaveBeenCalled();
-  });
+      expect(answerDraftStream.update).not.toHaveBeenCalled();
+      expect(deliverReplies).not.toHaveBeenCalled();
+    },
+  );
 
   it("suppresses whitespace-form internal prefixes until one visible final", async () => {
     const { answerDraftStream, reasoningDraftStream } = setupDraftStreams({
@@ -220,26 +221,29 @@ describeTelegramDispatch("dispatchTelegramMessage reasoning-room-events", () => 
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
-  it("routes typed reasoning-only finals to durable delivery when reasoning is persistent", async () => {
-    loadSessionStore.mockReturnValue({
-      s1: { reasoningLevel: "on" },
-    });
-    mockTurn(async ({ dispatcherOptions }) => {
-      await dispatcherOptions.deliver(
-        { text: "<think>hidden</think>", isReasoning: true },
-        { kind: "final" },
-      );
-    });
+  it.each(["raw", "prepared"] as const)(
+    "routes %s typed reasoning-only finals to durable delivery when reasoning is persistent",
+    async (source) => {
+      loadSessionStore.mockReturnValue({
+        s1: { reasoningLevel: "on" },
+      });
+      mockTurn(createReasoningFinalDelivery(source));
 
-    await dispatchWithContext({
-      context: createContext({
-        ctxPayload: { SessionKey: "s1" } as unknown as TelegramMessageContext["ctxPayload"],
-      }),
-    });
+      await dispatchWithContext({
+        context: createContext({
+          ctxPayload: { SessionKey: "s1" } as unknown as TelegramMessageContext["ctxPayload"],
+        }),
+      });
 
-    const delivered = expectDeliveredReply(0, { text: "🧠 _hidden_" });
-    expect(delivered).not.toHaveProperty("isReasoning");
-  });
+      const delivered = expectDeliveredReply(0, { text: "🧠 _hidden_" });
+      if (source === "raw") {
+        expect(delivered).not.toHaveProperty("isReasoning");
+      } else {
+        expect(delivered).toHaveProperty("isReasoning", true);
+      }
+      expect(deliverReplies).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("does not persist typed reasoning-only finals in progress stream mode", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
@@ -308,9 +312,7 @@ describeTelegramDispatch("dispatchTelegramMessage reasoning-room-events", () => 
   });
 
   it("runs ambient room events as tool-only invisible turns", async () => {
-    const { context, groupHistories, historyKey } = createGroupFixture({
-      entries: [{ sender: "Alice", body: "side chatter", timestamp: 1 }],
-    });
+    const { context } = createGroupFixture();
     const statusReactionController = createStatusReactionController();
     loadSessionStore.mockReturnValue({
       [GROUP_SESSION_KEY]: { reasoningLevel: "stream" },
@@ -352,86 +354,10 @@ describeTelegramDispatch("dispatchTelegramMessage reasoning-room-events", () => 
     expect(statusReactionController.setCompacting).not.toHaveBeenCalled();
     expect(statusReactionController.setThinking).not.toHaveBeenCalled();
     expect(deliverReplies).not.toHaveBeenCalled();
-    expect(groupHistories.get(historyKey)).toHaveLength(1);
-  });
-
-  it("keeps room-event history when a newer turn supersedes dispatch", async () => {
-    const { context, groupHistories, historyKey } = createGroupFixture();
-    const { releaseFirst, secondStarted } = mockSupersedingRoomEvents();
-
-    const firstPromise = dispatchWithContext({
-      context: context(99, "ambient one"),
-      streamMode: "partial",
-    });
-    const secondPromise = dispatchWithContext({
-      context: context(100, "ambient two"),
-      streamMode: "partial",
-    });
-
-    await secondStarted;
-    releaseFirst();
-    await Promise.all([firstPromise, secondPromise]);
-
-    expect(groupHistories.get(historyKey)).toHaveLength(1);
-  });
-
-  it("keeps delivered room-event history when a newer turn supersedes dispatch", async () => {
-    const { context, groupHistories, historyKey } = createGroupFixture();
-    const { firstStarted, releaseFirst, secondStarted } = mockSupersedingRoomEvents();
-
-    const firstPromise = dispatchWithContext({
-      context: context(99, "ambient one"),
-      streamMode: "partial",
-    });
-    await firstStarted;
-    telegramInboundEventDelivery.notify({
-      sessionKey: GROUP_SESSION_KEY,
-      to: "telegram:-100123",
-      inboundEventKind: "room_event",
-    });
-    const secondPromise = dispatchWithContext({
-      context: context(100, "ambient two"),
-      streamMode: "partial",
-    });
-
-    await secondStarted;
-    releaseFirst();
-    await Promise.all([firstPromise, secondPromise]);
-
-    expect(groupHistories.get(historyKey)).toHaveLength(1);
-  });
-
-  it("keeps topic room-event history for a send to another topic", async () => {
-    const { context, groupHistories, historyKey } = createGroupFixture({
-      entries: [{ sender: "Alice", body: "topic 77 context", timestamp: 1 }],
-      topicId: 77,
-    });
-    const { firstStarted, releaseFirst, secondStarted } = mockSupersedingRoomEvents();
-
-    const firstPromise = dispatchWithContext({
-      context: context(99, "ambient one"),
-      streamMode: "partial",
-    });
-    await firstStarted;
-    telegramInboundEventDelivery.notify({
-      sessionKey: GROUP_SESSION_KEY,
-      to: "telegram:group:-100123:topic:88",
-      inboundEventKind: "room_event",
-    });
-    const secondPromise = dispatchWithContext({
-      context: context(100, "ambient two"),
-      streamMode: "partial",
-    });
-
-    await secondStarted;
-    releaseFirst();
-    await Promise.all([firstPromise, secondPromise]);
-
-    expect(groupHistories.get(historyKey)).toHaveLength(1);
   });
 
   it("does not let room events supersede active user-request dispatch", async () => {
-    const { context } = createGroupFixture({ commandAuthorized: true, entries: [] });
+    const { context } = createGroupFixture({ commandAuthorized: true });
     const firstStarted = createDeferred<void>();
     const firstRelease = createDeferred<void>();
     const roomEventStarted = createDeferred<void>();

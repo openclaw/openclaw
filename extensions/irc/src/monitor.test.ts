@@ -204,30 +204,23 @@ function installMonitorRuntime() {
 function installPairingMonitorRuntime(
   upsertPairingRequest: () => Promise<{ code: string; created: boolean }>,
 ) {
-  setIrcRuntime({
-    logging: {
-      shouldLogVerbose: vi.fn(() => false),
-      getChildLogger: vi.fn(() => ({
-        debug: vi.fn(),
-        info: vi.fn(),
-        warn: vi.fn(),
-        error: vi.fn(),
-      })),
-    },
-    channel: {
-      activity: { record: vi.fn() },
-      pairing: {
-        readAllowFromStore: vi.fn(async () => []),
-        upsertPairingRequest: vi.fn(upsertPairingRequest),
+  setIrcRuntime(
+    createPluginRuntimeMock({
+      channel: {
+        activity: { record: vi.fn() },
+        pairing: {
+          readAllowFromStore: vi.fn(async () => []),
+          upsertPairingRequest: vi.fn(upsertPairingRequest),
+        },
+        commands: { shouldHandleTextCommands: vi.fn(() => false) },
+        text: { hasControlCommand: vi.fn(() => false) },
+        mentions: {
+          buildMentionRegexes: vi.fn(() => []),
+          matchesMentionPatterns: vi.fn(() => false),
+        },
       },
-      commands: { shouldHandleTextCommands: vi.fn(() => false) },
-      text: { hasControlCommand: vi.fn(() => false) },
-      mentions: {
-        buildMentionRegexes: vi.fn(() => []),
-        matchesMentionPatterns: vi.fn(() => false),
-      },
-    },
-  } as never);
+    }),
+  );
 }
 
 describe("IRC automatic reply outcomes", () => {

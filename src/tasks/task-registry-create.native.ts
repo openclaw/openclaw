@@ -30,6 +30,7 @@ import {
   addParentFlowIdIndex,
   addRelatedSessionKeyIndex,
   addRunIdIndex,
+  recordTaskRegistryProjectionWrite,
 } from "./task-registry.process-state.js";
 import { tryPersistTaskDeliveryStateUpsert, tryPersistTaskUpsert } from "./task-registry.store.js";
 import { isTerminalTaskStatus, type TaskRecord } from "./task-registry.types.js";
@@ -101,6 +102,7 @@ export function createTaskRecord(params: CreateTaskRecordParams): TaskRecord | n
             onCommitted(commit) {
               if (commit.kind === "delivery") {
                 taskDeliveryStates.set(commit.task.taskId, commit.deliveryState);
+                recordTaskRegistryProjectionWrite("delivery", commit.task.taskId);
                 bumpTaskRegistryRevision();
                 return;
               }
@@ -115,6 +117,7 @@ export function createTaskRecord(params: CreateTaskRecordParams): TaskRecord | n
               const record = result.task;
               const taskId = record.taskId;
               tasks.set(taskId, record);
+              recordTaskRegistryProjectionWrite("task", taskId);
               bumpTaskRegistryRevision();
               if (result.deliveryState) {
                 taskDeliveryStates.set(taskId, result.deliveryState);

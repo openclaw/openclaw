@@ -14,9 +14,9 @@ import type { WorkerEnvironmentService } from "./service.js";
 import * as support from "./service.test-support.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 
-function seedAttached(environmentId: string) {
-  support.seedBootstrapping(environmentId);
-  support.testState.store.transition({
+async function seedAttached(environmentId: string) {
+  await support.seedBootstrapping(environmentId);
+  await support.testState.store.transition({
     environmentId,
     from: "bootstrapping",
     to: "ready",
@@ -79,8 +79,8 @@ describe("targeted worker placement recovery", () => {
   it("does not wait for a sibling provider inspection; full sweeps still inspect and maintain it", async () => {
     const targetId = "worker-target";
     const siblingId = "worker-sibling";
-    const identity = seedAttached(targetId);
-    support.seedReady(siblingId);
+    const identity = await seedAttached(targetId);
+    await support.seedReady(siblingId);
     const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
     seedActivePlacement(placements, {
       environmentId: targetId,
@@ -188,7 +188,7 @@ describe("targeted worker placement recovery", () => {
     async (match) => {
       const sourceId = "worker-move-source";
       const destinationId = "worker-move-destination";
-      const sourceIdentity = seedAttached(sourceId);
+      const sourceIdentity = await seedAttached(sourceId);
       const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
       const active = seedActivePlacement(placements, {
         environmentId: sourceId,
@@ -218,7 +218,7 @@ describe("targeted worker placement recovery", () => {
       const environments = support.createService(support.createProvider());
       await environments.destroy(sourceId);
       if (match === "destination") {
-        const destination = seedAttached(destinationId);
+        const destination = await seedAttached(destinationId);
         seedActivePlacement(placements, {
           environmentId: destinationId,
           ownerEpoch: destination.ownerEpoch,

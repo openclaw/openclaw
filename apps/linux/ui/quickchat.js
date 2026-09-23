@@ -257,8 +257,8 @@ const elements = {
   composer: document.querySelector("#composer"),
   input: document.querySelector("#message"),
   reply: document.querySelector("#reply"),
-  replyAgentAvatar: document.querySelector("#reply-agent-avatar"),
   replyAgentName: document.querySelector("#reply-agent-name"),
+  replyPrompt: document.querySelector("#reply-prompt"),
   replyError: document.querySelector("#reply-error"),
   replyScroll: document.querySelector("#reply-scroll"),
   replyState: document.querySelector("#reply-state"),
@@ -267,6 +267,8 @@ const elements = {
   replyWidgets: document.querySelector("#reply-widgets"),
   send: document.querySelector("#send"),
   sendIcon: document.querySelector("#send-icon"),
+  toggleReply: document.querySelector("#toggle-reply"),
+  openDashboard: document.querySelector("#open-dashboard"),
   shortcutCapture: document.querySelector("#shortcut-capture"),
   shortcutError: document.querySelector("#shortcut-error"),
   shortcutReset: document.querySelector("#shortcut-reset"),
@@ -280,6 +282,7 @@ const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 let agents = [];
 let activeIdentity = { id: "", name: "Agent", isDefault: true };
 let selectingAgent = false;
+let identityRequestSequence = 0;
 let sending = false;
 let accepted = false;
 let hiding = false;
@@ -307,6 +310,8 @@ let openPopover = null;
 let menuIndex = 0;
 let capturingShortcut = false;
 let activeReply = null;
+let replyExpanded = false;
+let disclosureRevision = 0;
 let pendingChatEvents = [];
 
 const MAX_PENDING_CHAT_EVENTS = 64;
@@ -393,7 +398,8 @@ function updateSendButton() {
   elements.send.classList.toggle("sending", sending);
   elements.send.classList.toggle("accepted", accepted);
   elements.sendIcon.textContent = sending ? "" : accepted ? "✓" : "↑";
-  elements.input.readOnly = sending || accepted || streaming;
+  elements.input.readOnly = sending || accepted;
+  elements.agentChip.disabled = sending || accepted || selectingAgent || streaming;
 }
 
 function nameHue(name) {
@@ -438,15 +444,38 @@ function resetAccepted() {
 
 function clearReply() {
   activeReply = null;
-  elements.reply.hidden = true;
+  replyExpanded = false;
+  renderReplyPresentation();
   elements.reply.classList.remove("has-error", "has-widgets", "is-terminal");
   elements.replyError.textContent = "";
   elements.replyState.textContent = "";
   elements.replyText.textContent = "";
+  elements.replyPrompt.textContent = "";
   elements.replyWidgets.replaceChildren();
   elements.replyWidgets.hidden = true;
   elements.replyThinking.hidden = true;
   scheduleWidgetSync();
+}
+
+function renderReplyPresentation() {
+  const expanded = activeReply !== null && replyExpanded;
+  elements.reply.hidden = !expanded;
+  elements.composer.classList.toggle("has-reply", expanded);
+  elements.toggleReply.disabled = activeReply === null;
+  elements.toggleReply.setAttribute("aria-expanded", String(expanded));
+  elements.toggleReply.setAttribute("aria-label", expanded ? "Collapse reply" : "Expand reply");
+  elements.toggleReply.title = expanded ? "Collapse reply" : "Expand reply";
+}
+
+function toggleReply() {
+  if (!activeReply) return;
+  disclosureRevision += 1;
+  replyExpanded = !replyExpanded;
+  closePopover(false, false);
+  renderReplyPresentation();
+  void invoke("quickchat_set_expanded", { expanded: replyExpanded });
+  scheduleWidgetSync();
+  elements.input.focus();
 }
 
 function scrollReplyToEnd() {
@@ -610,7 +639,14 @@ function scheduleWidgetSync() {
     const widgets = activeReply?.widgets || [];
     const activeKey = activeReply?.activeWidgetKey ?? null;
     const host = elements.replyWidgets.querySelector(".inline-widget-host");
-    const rect = host?.getBoundingClientRect();
+    const measured = host?.getBoundingClientRect();
+    if (activeReply && !elements.reply.hidden && measured?.width > 0 && measured.height > 0) {
+      activeReply.widgetRect = {
+        x: measured.x, y: measured.y, width: measured.width, height: measured.height,
+      };
+    }
+    // Native child WebViews retain their document state while the reply is collapsed.
+    const rect = activeReply?.widgetRect;
     const layouts = [];
     const owner = gatewayGeneration;
     const surface = canvasSurfaceUrl;
@@ -629,7 +665,7 @@ function scheduleWidgetSync() {
           y: rect.y,
           width: rect.width,
           height: rect.height,
-          visible: widget.key === activeKey && !openPopover,
+          visible: widget.key === activeKey && !openPopover && !elements.reply.hidden,
         });
       }
     }
@@ -761,7 +797,7 @@ function replyTargetMatches(target, payload) {
   return target.agentId == null || payload?.agentId === target.agentId;
 }
 
-function startReply(target, identity, runId) {
+function startReply(target, identity, runId, prompt, expanded) {
   activeReply = {
     runId,
     gatewayGeneration: target.gatewayGeneration,
@@ -773,19 +809,22 @@ function startReply(target, identity, runId) {
     text: null,
     widgets: [],
     activeWidgetKey: null,
+    widgetRect: null,
   };
-  elements.reply.hidden = false;
+  replyExpanded = expanded;
+  renderReplyPresentation();
   elements.reply.classList.remove("has-error", "has-widgets", "is-terminal");
   elements.replyError.textContent = "";
   elements.replyState.textContent = "";
   elements.replyText.textContent = "";
+  elements.replyPrompt.textContent = prompt;
   elements.replyWidgets.replaceChildren();
   elements.replyWidgets.hidden = true;
   elements.replyThinking.textContent = reducedMotion.matches ? "…" : "Thinking…";
   elements.replyThinking.hidden = false;
-  renderAvatar(elements.replyAgentAvatar, identity);
   elements.replyAgentName.textContent = identity?.name?.trim() || "Agent";
-  void invoke("quickchat_set_expanded", { expanded: true });
+  void invoke("quickchat_set_expanded", { expanded });
+  scheduleWidgetSync();
 }
 
 function applyChatEvent(payload) {
@@ -827,7 +866,7 @@ function applyChatEvent(payload) {
   stopReplyThinking();
   elements.reply.classList.add("is-terminal");
   if (payload.state === "final") {
-    elements.replyState.textContent = "Done";
+    elements.replyState.textContent = "";
   } else if (payload.state === "aborted") {
     activeReply.text = `${activeReply.text || ""}${activeReply.text ? "\n\n" : ""}(stopped)`;
     elements.replyState.textContent = "Stopped";
@@ -868,10 +907,6 @@ function applyRecoveredReply(result) {
 }
 
 function handleChatEvent(payload) {
-  if (activeReply) {
-    applyChatEvent(payload);
-    return;
-  }
   if (sending) {
     // The Gateway may stream before the chat.send ack reaches invoke; replay only after the native
     // command returns the accepted routing target, then apply the same session/run filters.
@@ -879,6 +914,10 @@ function handleChatEvent(payload) {
       pendingChatEvents.shift();
     }
     pendingChatEvents.push(payload);
+    return;
+  }
+  if (activeReply) {
+    applyChatEvent(payload);
   }
 }
 
@@ -923,11 +962,14 @@ function renderAgentList() {
 }
 
 async function refreshIdentity(owner = gatewayGeneration) {
+  const sequence = ++identityRequestSequence;
   try {
     const identity = await invoke("quickchat_identity");
-    if (gatewayGeneration === owner) renderIdentity(identity);
+    if (gatewayGeneration === owner && sequence === identityRequestSequence) renderIdentity(identity);
   } catch {
-    if (gatewayGeneration === owner) renderIdentity({ id: "", name: "Agent", isDefault: true });
+    if (gatewayGeneration === owner && sequence === identityRequestSequence) {
+      renderIdentity({ id: "", name: "Agent", isDefault: true });
+    }
   }
 }
 
@@ -945,17 +987,19 @@ async function refreshAgents() {
 }
 
 async function selectAgent(agentId) {
-  if (selectingAgent) {
+  if (selectingAgent || sending || accepted || (activeReply && !activeReply.terminal)) {
     return;
   }
   selectingAgent = true;
+  identityRequestSequence += 1;
   const owner = gatewayGeneration;
   updateSendButton();
   try {
-    await invoke("quickchat_select_agent", { agentId });
+    const identity = await invoke("quickchat_select_agent", { agentId });
     if (gatewayGeneration !== owner) return;
-    await refreshIdentity(owner);
-    if (gatewayGeneration !== owner) return;
+    identityRequestSequence += 1;
+    if (activeIdentity.id !== identity.id) clearReply();
+    renderIdentity(identity);
     closePopover();
   } catch (error) {
     if (gatewayGeneration !== owner) return;
@@ -1004,6 +1048,7 @@ async function openNamedPopover(kind) {
     return;
   }
   setPopoverVisibility(kind);
+  positionPopover(kind);
   if (kind === "agents") {
     const selectedIndex = agents.findIndex((agent) => agent.id === activeIdentity.id);
     menuIndex = Math.max(selectedIndex, 0);
@@ -1013,6 +1058,19 @@ async function openNamedPopover(kind) {
     elements.shortcutError.textContent = "";
     elements.shortcutCapture.focus();
   }
+}
+
+function positionPopover(kind) {
+  const popover = kind === "agents" ? elements.agentMenu : elements.shortcutSettings;
+  const anchor = kind === "agents" ? elements.agentChip : elements.shortcutSettingsButton;
+  const bounds = anchor.getBoundingClientRect();
+  const below = elements.reply.hidden
+    ? elements.composer.getBoundingClientRect().bottom + 8
+    : bounds.bottom + 8;
+  const height = popover.getBoundingClientRect().height;
+  const above = below + height > window.innerHeight - 8 && bounds.top > height + 8;
+  popover.style.top = above ? "auto" : `${below}px`;
+  popover.style.bottom = above ? `${window.innerHeight - bounds.top + 8}px` : "auto";
 }
 
 function closePopover(focusInput = true, compact = true) {
@@ -1191,16 +1249,16 @@ function reveal() {
 
 async function send(openDashboard) {
   const message = elements.input.value.trim();
-  if (gatewayState !== "up" || !message || selectingAgent || sending || accepted) {
+  if (gatewayState !== "up" || !message || selectingAgent || sending || accepted ||
+      (activeReply && !activeReply.terminal)) {
     return;
   }
   sending = true;
   const sendDisconnectSequence = gatewayDisconnectSequence;
   const sendVisibilitySequence = visibilitySequence;
   const sendGeneration = gatewayGeneration;
-  clearReply();
+  const sendDisclosureRevision = disclosureRevision;
   pendingChatEvents = [];
-  void invoke("quickchat_set_expanded", { expanded: false });
   sendError = "";
   renderStatus();
   updateSendButton();
@@ -1225,7 +1283,8 @@ async function send(openDashboard) {
       return;
     }
     accepted = true;
-    startReply(result, sentIdentity, result.runId);
+    startReply(result, sentIdentity, result.runId, message,
+      sendDisclosureRevision === disclosureRevision ? true : replyExpanded);
     const bufferedEvents = pendingChatEvents;
     pendingChatEvents = [];
     for (const payload of bufferedEvents) {
@@ -1237,7 +1296,7 @@ async function send(openDashboard) {
     }
     updateSendButton();
     if (openDashboard) {
-      void invoke("quickchat_show_dashboard");
+      void showDashboard();
     }
     acceptedTimer = window.setTimeout(() => {
       accepted = false;
@@ -1257,6 +1316,15 @@ async function send(openDashboard) {
     elements.input.focus();
     // A strict send failure can mean the pinned agent vanished; re-sync the chip.
     void refreshAgents();
+  }
+}
+
+async function showDashboard() {
+  try {
+    await invoke("quickchat_show_dashboard");
+  } catch (error) {
+    sendError = friendlyError(error, "Could not open the dashboard.");
+    renderStatus();
   }
 }
 
@@ -1280,7 +1348,7 @@ elements.input.addEventListener("keydown", (event) => {
     }
     return;
   }
-  if (event.key === "Enter" && !openPopover) {
+  if (event.key === "Enter" && !event.shiftKey && !openPopover) {
     event.preventDefault();
     void send(event.ctrlKey || event.metaKey);
   }
@@ -1288,6 +1356,8 @@ elements.input.addEventListener("keydown", (event) => {
 elements.agentChip.addEventListener("click", () => {
   void openNamedPopover("agents");
 });
+elements.toggleReply.addEventListener("click", toggleReply);
+elements.openDashboard.addEventListener("click", () => { void showDashboard(); });
 elements.shortcutSettingsButton.addEventListener("click", () => {
   void openNamedPopover("shortcut");
 });

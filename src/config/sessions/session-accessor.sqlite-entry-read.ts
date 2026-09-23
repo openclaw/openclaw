@@ -8,6 +8,7 @@ import {
   prepareSqliteQueryTakeFirstSync,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { SessionEntrySummary } from "./session-accessor.sqlite-contract.js";
@@ -168,6 +169,27 @@ export function parseReadableSqliteSessionEntryRow(
     : null;
 }
 
+/** Decode supplied rows in caller order while sharing their lazy participant acquisition. */
+export function prepareSqliteSessionEntryRowDecoder(
+  database: Pick<OpenClawAgentDatabase, "db">,
+  rows: readonly ResolvedSessionEntryRow["row"][],
+  projection: "full" | "list" = "full",
+): (row: ResolvedSessionEntryRow["row"]) => SessionEntry | null {
+  const projectParticipants = prepareSqliteSessionParticipantProjection(
+    database.db,
+    rows.filter((row) => row.entry_json !== "{}").map((row) => row.session_key),
+  );
+  return (row) => {
+    const parsed = parseReadableSessionEntryData(database, row, projection);
+    return parsed
+      ? validateDeliveryCanonicalSessionEntry(
+          row.session_key,
+          projectParticipants(row.session_key, parsed),
+        )
+      : null;
+  };
+}
+
 /** Projects one selected row set without repeating participant reads for each entry. */
 export function parseReadableSqliteSessionEntryRows(
   database: Pick<OpenClawAgentDatabase, "db">,
@@ -295,25 +317,15 @@ export function prepareExactSessionEntryRowReads(
     return (sessionKey) => readExactSessionEntryRow(database, sessionKey, projection);
   }
   const byKey = new Map(rows.map((row) => [row.session_key, row]));
-  const projectParticipants = prepareSqliteSessionParticipantProjection(
-    database.db,
-    rows.filter((row) => row.entry_json !== "{}").map((row) => row.session_key),
-  );
+  const decodeRow = prepareSqliteSessionEntryRowDecoder(database, rows, projection);
   return (sessionKey) => {
     // Match node:sqlite parameter binding before looking up the returned row.
     const row = byKey.get(toUSVString(sessionKey));
     if (!row) {
       return undefined;
     }
-    const parsed = parseReadableSessionEntryData(database, row, projection);
-    if (!parsed) {
-      return undefined;
-    }
-    const entry = validateDeliveryCanonicalSessionEntry(
-      row.session_key,
-      projectParticipants(row.session_key, parsed),
-    );
-    return { entry, row };
+    const entry = decodeRow(row);
+    return entry ? { entry, row } : undefined;
   };
 }
 
@@ -331,4 +343,62 @@ export function readExactSessionEntryRowValidated(
 ): ResolvedSessionEntryRow | undefined {
   assertCanonicalSqliteSessionKeysCurrent(database);
   return readExactSessionEntryRow(database, sessionKey, projection);
+}
+
+/** Select a physical row while refusing any other admitted spelling. */
+export function readSessionEntryTargetRow(
+  database: OpenClawAgentDatabaseReader,
+  target: { canonicalKey: string; storeKeys: readonly string[] },
+  options: {
+    allowCanonicalMove?: boolean;
+    guardRetainedWindows?: boolean;
+    projection?: "full" | "list";
+  } = {},
+): { entry: SessionEntry | null; row: ResolvedSessionEntryRow["row"] } | undefined {
+  assertCanonicalSqliteSessionKeysCurrent(database);
+  const queries = getExactSessionEntryQueries(database.db);
+  const rows = target.storeKeys.flatMap((key) => {
+    const row =
+      options.projection === "list" ? queries.metadata(key.trim()) : queries.row(key.trim());
+    if (!row) {
+      return [];
+    }
+    const entry = parseReadableSqliteSessionEntryRow(database, row, options.projection);
+    return entry || options.guardRetainedWindows ? [{ entry, row }] : [];
+  });
+  if (rows.length > 1) {
+    throw canonicalSessionKeyMigrationRequiredError(
+      `duplicate rows resolve to canonical session key ${target.canonicalKey}`,
+    );
+  }
+  const selected = rows[0];
+  if (selected && selected.row.session_key !== target.canonicalKey && !options.allowCanonicalMove) {
+    throw canonicalSessionKeyMigrationRequiredError(
+      `non-canonical persisted row resolves to session key ${target.canonicalKey}`,
+    );
+  }
+  return selected;
+}
+
+/** Only sentinel aliases share a logical identity with a different physical key. */
+export function readQualifiedSessionEntryRow(
+  database: OpenClawAgentDatabaseReader,
+  agentId: string,
+  sessionKey: string,
+  options: { allowCanonicalMove?: boolean; projection?: "full" | "list" } = {},
+) {
+  const parsed = parseAgentSessionKey(sessionKey);
+  const sentinel = parsed?.rest ?? sessionKey;
+  if (
+    agentId !== database.agentId ||
+    (parsed && parsed.agentId !== agentId) ||
+    (sentinel !== "global" && sentinel !== "unknown")
+  ) {
+    return readSessionEntryRow(database, sessionKey, options.projection);
+  }
+  return readSessionEntryTargetRow(
+    database,
+    { canonicalKey: sessionKey, storeKeys: [sentinel, `agent:${agentId}:${sentinel}`] },
+    { ...options, guardRetainedWindows: true },
+  );
 }

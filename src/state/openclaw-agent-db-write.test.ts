@@ -3,10 +3,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { drainStoreWriterQueuesForTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withOpenClawAgentDatabaseWrite } from "../plugin-sdk/sqlite-runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { drainStoreWriterQueuesForTest } from "../shared/store-writer-queue.js";
 import {
   borrowOpenClawAgentDatabase,
   closeOpenClawAgentDatabasesForTest,

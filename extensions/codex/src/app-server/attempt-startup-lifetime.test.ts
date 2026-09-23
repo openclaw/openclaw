@@ -15,7 +15,7 @@ import {
 import { CodexAppServerClient } from "./client.js";
 import { threadStartResult as createThreadStartResult } from "./codex-app-server.test-fixtures.js";
 import { type CodexPluginConfig, resolveCodexAppServerRuntimeOptions } from "./config.js";
-import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
+import { setCodexTestToolFactory } from "./host-capability.test-support.js";
 import { setManagedCodexPluginRoot } from "./managed-binary.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import { defaultCodexPluginMetadataCache } from "./plugin-metadata-cache.js";
@@ -177,7 +177,7 @@ describe("Codex runtime startup resource lifetime", () => {
     params.sandbox = createSandboxContext({});
     params.runtimePlan = createCodexRuntimePlanFixture();
     setCodexTestModelSupportsTools(params, true);
-    dynamicToolBuildState.openClawCodingToolsFactory = () => [createRuntimeDynamicTool("message")];
+    setCodexTestToolFactory(params, () => [createRuntimeDynamicTool("message")]);
     const resourcesSpy = vi.spyOn(runAttemptResources, "prepareCodexAttemptResources");
     const releaseSandbox = vi.spyOn(sandboxExecServer, "releaseCodexSandboxExecServerEnvironment");
     const allocated: Array<

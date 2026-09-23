@@ -285,6 +285,19 @@ export function emitAgentEventCallbackBestEffort(
   });
 }
 
+type ActivityWithoutOwner<T = Parameters<typeof emitAgentActivityEvent>[0]> = T extends unknown
+  ? Omit<T, "runId" | "sessionKey">
+  : never;
+
+export function emitToolActivityEvent(ctx: ToolHandlerContext, event: ActivityWithoutOwner): void {
+  emitAgentActivityEvent({
+    runId: ctx.params.runId,
+    ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
+    ...event,
+  });
+  emitAgentEventCallbackBestEffort(ctx, { stream: event.stream, data: event.data });
+}
+
 function extendExecMeta(toolName: string, args: unknown, meta?: string): string | undefined {
   const normalized = normalizeOptionalLowercaseString(toolName);
   if (normalized !== "exec" && normalized !== "bash") {

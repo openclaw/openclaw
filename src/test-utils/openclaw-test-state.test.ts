@@ -24,6 +24,7 @@ import {
   snapshotGatewayStartupEnv,
 } from "../gateway/test-helpers.env.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
+import { acquireStateDatabaseCoordinator } from "../infra/state-database-coordinator.js";
 import { createOpenClawTestState, withOpenClawTestState } from "../plugin-sdk/test-state.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -165,6 +166,35 @@ describe("openclaw test state", () => {
       // The injected synchronous failure owns no pending work. Only this outer
       // test disposes the deliberately retained root and failed claim.
       await fs.rm(parent, { recursive: true, force: true });
+    }
+  });
+
+  it("closes released fixture coordinator handles before directory removal", async () => {
+    nodeSqlite.requireNodeSqlite();
+    const opened = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
+    let root: string | undefined;
+    try {
+      await withOpenClawTestState({ label: "coordinator-retention" }, async (state) => {
+        root = state.root;
+        const databasePath = state.statePath("openclaw.sqlite");
+        // The first acquisition creates the file; only an existing verified identity can pool.
+        acquireStateDatabaseCoordinator({ databasePath }).release();
+        opened.mockClear();
+        const lease = acquireStateDatabaseCoordinator({ databasePath });
+        const index = opened.mock.calls.findIndex((args) => args[0] === lease.path);
+        const database = opened.mock.results[index]?.value as DatabaseSync | undefined;
+        lease.release();
+        try {
+          expect(database).toBeDefined();
+          expect(database!.isOpen).toBe(false);
+        } finally {
+          // Settle the real idle owner even when proving the pre-fix failure.
+          acquireStateDatabaseCoordinator({ databasePath, keepAlive: false }).release();
+        }
+      });
+      await expectPathMissing(root!);
+    } finally {
+      opened.mockRestore();
     }
   });
 
@@ -768,11 +798,15 @@ describe("openclaw test state", () => {
       const runOperation = reconcilePool.runSessionTranscriptReconcileOperation;
       const operationSpy = vi
         .spyOn(reconcilePool, "runSessionTranscriptReconcileOperation")
-        .mockImplementationOnce((generation, run) =>
-          runOperation(generation, async (operation) => {
-            await resumeReconcile.promise;
-            return run(operation);
-          }),
+        .mockImplementationOnce((generation, run, owner) =>
+          runOperation(
+            generation,
+            async (operation) => {
+              await resumeReconcile.promise;
+              return run(operation);
+            },
+            owner,
+          ),
         );
       const originalRm = fs.rm;
       let removalStarted = false;

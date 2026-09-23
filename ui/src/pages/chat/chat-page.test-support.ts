@@ -38,6 +38,7 @@ export function createChatPageNavigationContext() {
     basePath: "",
     sessions: { ...createChatPageSessions(), patch },
     chatSubmissions: createChatSubmissions(),
+    placementStartup: { get: vi.fn(() => null), subscribe: () => () => undefined },
     agents: { state: { agentsList: { defaultId: "main", mainKey: "main" } } },
     gateway: {
       snapshot: { hello: null },

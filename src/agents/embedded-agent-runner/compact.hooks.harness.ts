@@ -14,12 +14,14 @@ import {
   agentSessionAutomaticCompaction,
   agentSessionSetContextReplacementHook,
 } from "../sessions/agent-session-compaction.js";
-import type { SessionManager } from "../sessions/session-manager.js";
 import {
   acquireCompactHooksPreparedModelRuntime,
   emptyPluginMetadataSnapshot,
+  getCurrentPluginMetadataSnapshotMock,
+  mockCompactHooksPluginMetadata,
 } from "./compact.hooks.metadata.test-support.js";
 import { createMockToolDefinitions } from "./compact.hooks.tools.test-support.js";
+import { createCompactionSessionManagerMock } from "./compact.session-manager.test-support.js";
 import type { resolveModelAsync } from "./model.js";
 import type { attemptServerEndpointCompaction } from "./server-endpoint-compaction.js";
 import type { buildEmbeddedSystemPrompt } from "./system-prompt.js";
@@ -424,9 +426,6 @@ export const buildAgentRuntimePlanMock = vi.fn((params: BuildAgentRuntimePlanPar
 export const acquireAgentRunPreparedModelRuntimeMock = vi.fn(
   acquireCompactHooksPreparedModelRuntime,
 );
-const getCurrentPluginMetadataSnapshotMock: Mock<
-  typeof import("../../plugins/current-plugin-metadata-snapshot.js").getCurrentPluginMetadataSnapshot
-> = vi.fn(() => emptyPluginMetadataSnapshot);
 
 export function resetCompactSessionStateMocks(): void {
   sanitizeSessionHistoryMock.mockReset();
@@ -668,12 +667,7 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
     runGlobalGatewayStopSafely: vi.fn(async () => undefined),
   }));
 
-  vi.doMock("../../plugins/current-plugin-metadata-snapshot.js", () => ({
-    getCurrentPluginMetadataSnapshot: getCurrentPluginMetadataSnapshotMock,
-    isCurrentPluginMetadataSnapshotRuntimeGeneration: () => false,
-    resolvePluginMetadataControlPlaneFingerprint: vi.fn(() => "test-plugin-fingerprint"),
-    withPluginMetadataSnapshotScope: (_snapshot: unknown, run: () => unknown) => run(),
-  }));
+  mockCompactHooksPluginMetadata();
 
   vi.doMock("../../plugins/command-registry-state.js", () => ({
     clearPluginCommands: vi.fn(),
@@ -751,12 +745,7 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
     vi.doMock("../sessions/index.js", () => ({
       AuthStorage: function AuthStorage() {},
       ModelRegistry: function ModelRegistry() {},
-      SessionManager: {
-        open: vi.fn((target: Parameters<typeof SessionManager.open>[0]) => ({
-          getSessionTarget: () => ({ ...target }),
-          buildSessionContext: vi.fn(() => ({ messages: sessionMessages })),
-        })),
-      },
+      SessionManager: createCompactionSessionManagerMock(sessionMessages),
       SettingsManager: {
         create: vi.fn(() => ({})),
       },

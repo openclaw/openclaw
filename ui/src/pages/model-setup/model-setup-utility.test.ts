@@ -276,6 +276,71 @@ describe("ModelSetupPage utility roles", () => {
     ]);
   });
 
+  it.each([true, false])(
+    "keeps the primary while utility preparation redetects its model (usable: %s)",
+    async (usable) => {
+      const { context, client, request } = createFirstRunContext();
+      const prepared = {
+        ...detection,
+        configuredModel: "cloud/primary",
+        setupComplete: true,
+        prepareOptions: [{ id: "local", label: "Local utility", modelTarget: "utility" as const }],
+      };
+      request.mockImplementation(async (method) => {
+        if (method === "openclaw.setup.prepare.start") {
+          return { done: true, status: "done" };
+        }
+        if (method === "openclaw.setup.detect") {
+          return {
+            ...prepared,
+            utilityModel: utility.modelRef,
+            candidates: usable ? [utility] : [],
+          };
+        }
+        if (method === "openclaw.setup.activate.start") {
+          return {
+            done: true,
+            status: "done",
+            modelActivation: { modelRef: utility.modelRef, modelTarget: "utility" },
+          };
+        }
+        throw new Error("Unexpected method " + method);
+      });
+      const { page } = await mountPage(context, {
+        state: { phase: "ready", result: prepared },
+        client,
+        firstRun: false,
+      });
+      page.querySelector<HTMLButtonElement>('[data-prepare-choice="local"] button')!.click();
+      await waitForFast(() =>
+        expect(page.textContent).toContain(
+          usable
+            ? "Setup & utility model ready"
+            : "Local utility did not expose a usable local model",
+        ),
+      );
+      expect(page.querySelector(".model-setup__current")?.textContent).toContain("primary");
+      expect(page.querySelector(".model-setup__utility")).toBeNull();
+      expect(request.mock.calls.map(([method]) => method)).toEqual([
+        "openclaw.setup.prepare.start",
+        "openclaw.setup.detect",
+        ...(usable ? ["openclaw.setup.activate.start"] : []),
+      ]);
+      if (usable) {
+        expect(request).toHaveBeenCalledWith(
+          "openclaw.setup.activate.start",
+          expect.objectContaining({
+            agentId: "main",
+            kind: utility.kind,
+            modelRef: utility.modelRef,
+            modelTarget: "utility",
+          }),
+          expect.anything(),
+        );
+      }
+    },
+  );
+
   it.each([
     { primary: false, replyTarget: "utility" as const, expected: true },
     { primary: true, replyTarget: "utility" as const, expected: true },

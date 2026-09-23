@@ -286,8 +286,12 @@ export function retainQueuedAgentRunContext(
     return undefined;
   }
 
+  const wasLive = hasLiveAgentRunContext(runId);
   const leases = (state.queuedRunContextLeases ??= new WeakMap<AgentRunContext, number>());
   leases.set(context, (leases.get(context) ?? 0) + 1);
+  if (!wasLive) {
+    bumpAgentRunIndexVersion(context);
+  }
   let released = false;
 
   return (outcome) => {
@@ -304,12 +308,16 @@ export function retainQueuedAgentRunContext(
 
     // A recycled run id or rotated lifecycle must not inherit the old queue's activity.
     if (
-      outcome === "admitted" &&
       state.contexts.get(runId) === context &&
       context.lifecycleGeneration === lifecycleGeneration &&
       state.lifecycleGeneration === lifecycleGeneration
     ) {
-      context.lastActiveAt = Date.now();
+      if (outcome === "admitted") {
+        context.lastActiveAt = Date.now();
+      }
+      if (!hasLiveAgentRunContext(runId)) {
+        bumpAgentRunIndexVersion(context);
+      }
     }
   };
 }

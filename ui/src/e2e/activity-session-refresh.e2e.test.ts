@@ -2,6 +2,7 @@ import path from "node:path";
 import type { ElementHandle } from "playwright";
 import { expect, it } from "vitest";
 import {
+  pauseVirtualClock,
   waitForControlUiRoute,
   type MockGatewayControls,
   type MockGatewayRequest,
@@ -174,8 +175,9 @@ suite.define(() => {
               "includePeople" in request.params &&
               request.params.includePeople === true,
           ).length;
-        const initialRequests = await activityRequests();
         await page.clock.install();
+        await pauseVirtualClock(page);
+        const initialRequests = await activityRequests();
         await page.evaluate(() => {
           Object.defineProperty(document, "visibilityState", {
             configurable: true,
@@ -199,7 +201,8 @@ suite.define(() => {
           document.dispatchEvent(new Event("visibilitychange"));
           globalThis.dispatchEvent(new Event("pageshow"));
         });
-        await page.clock.runFor(0);
+        // Deliver the catch-up request and its nested mock response timer.
+        await page.clock.runFor(1);
         await expect.poll(() => row.textContent()).toContain("Caught up activity");
         expect(await activityRequests()).toBe(initialRequests + 1);
         await page.screenshot({ path: path.join(suite.artifactDir, "02-caught-up.png") });
@@ -210,10 +213,16 @@ suite.define(() => {
           await page.clock.runFor(10);
         }
         expect(await activityRequests()).toBe(initialRequests + 1);
-        await page.clock.runFor(200);
+        // The first visible event starts a five-second window; the burst consumed 100 ms.
+        await page.clock.runFor(4_899);
+        expect(await activityRequests()).toBe(initialRequests + 1);
+        expect(await row.textContent()).toContain("Caught up activity");
+        // Cross the event window and deliver the queued mock response.
+        await page.clock.runFor(2);
         await expect.poll(() => row.textContent()).toContain("Latest activity");
         expect(await activityRequests()).toBe(initialRequests + 2);
         await page.screenshot({ path: path.join(suite.artifactDir, "03-visible-burst.png") });
+        await page.clock.resume();
 
         await gateway.emitGatewayEvent("agent", {
           runId: "run-activity",

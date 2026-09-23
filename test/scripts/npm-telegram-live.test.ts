@@ -825,56 +825,59 @@ for (const subpath of ${JSON.stringify(privateQaSubpaths)}) {
     ).toBeUndefined();
   });
 
-  it.each(["2026.6.35", "2026.7.33"])("preserves the frozen %s package projection", (version) => {
-    const mutateConfig = testing.resolvePackageConfigMutation({
-      OPENCLAW_NPM_TELEGRAM_PACKAGE_VERSION: version,
-    });
-    const config = {
-      agents: {
-        defaults: {
-          mediaModels: {
-            image: "mock-openai/image",
-            audio: "mock-openai/audio",
+  it.each(["2026.6.35", "2026.7.33", "2026.7.34", "2026.7.35"])(
+    "preserves the frozen %s package projection",
+    (version) => {
+      const mutateConfig = testing.resolvePackageConfigMutation({
+        OPENCLAW_NPM_TELEGRAM_PACKAGE_VERSION: version,
+      });
+      const config = {
+        agents: {
+          defaults: {
+            mediaModels: {
+              image: "mock-openai/image",
+              audio: "mock-openai/audio",
+            },
+            modelPolicy: { allow: ["mock-openai/qa"] },
+            workspace: "/tmp/qa",
           },
-          modelPolicy: { allow: ["mock-openai/qa"] },
-          workspace: "/tmp/qa",
-        },
-        entries: {
-          qa: {
-            default: true,
-            model: "mock-openai/qa",
+          entries: {
+            qa: {
+              default: true,
+              model: "mock-openai/qa",
+            },
           },
         },
-      },
-      memory: {
-        search: { enabled: false },
-      },
-      plugins: {
-        enabled: true,
-      },
-    } as Parameters<NonNullable<typeof mutateConfig>>[0];
+        memory: {
+          search: { enabled: false },
+        },
+        plugins: {
+          enabled: true,
+        },
+      } as Parameters<NonNullable<typeof mutateConfig>>[0];
 
-    expect(mutateConfig?.(config)).toEqual({
-      agents: {
-        defaults: {
-          imageGenerationModel: "mock-openai/image",
-          workspace: "/tmp/qa",
-        },
-        list: [
-          {
-            default: true,
-            id: "qa",
-            model: "mock-openai/qa",
+      expect(mutateConfig?.(config)).toEqual({
+        agents: {
+          defaults: {
+            imageGenerationModel: "mock-openai/image",
+            workspace: "/tmp/qa",
           },
-        ],
-      },
-      memory: { backend: "builtin" },
-      plugins: {
-        bundledDiscovery: "compat",
-        enabled: true,
-      },
-    });
-  });
+          list: [
+            {
+              default: true,
+              id: "qa",
+              model: "mock-openai/qa",
+            },
+          ],
+        },
+        memory: { backend: "builtin" },
+        plugins: {
+          bundledDiscovery: "compat",
+          enabled: true,
+        },
+      });
+    },
+  );
 
   it.each(["fail", "skip", "skipped", "timeout"])(
     "fails package Telegram QA when a scenario has %s status",

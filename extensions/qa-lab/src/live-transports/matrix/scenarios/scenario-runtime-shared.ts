@@ -1,4 +1,3 @@
-// QA Lab Matrix plugin module implements scenario runtime shared behavior.
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { createMatrixQaClient, type MatrixQaRoomObserver } from "../substrate/client.js";
 import type { MatrixQaObservedEvent } from "../substrate/events.js";

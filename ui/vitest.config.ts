@@ -12,7 +12,10 @@ import {
   matchesVitestGlob,
   relativizeScopedPatterns,
 } from "../test/vitest/vitest.pattern-file.ts";
-import { loadVitestPerformanceConfig } from "../test/vitest/vitest.performance-config.ts";
+import {
+  createVitestProjectCachePlugin,
+  loadVitestPerformanceConfig,
+} from "../test/vitest/vitest.performance-config.ts";
 import { createRedactingReporterPlugin } from "../test/vitest/vitest.reporters.ts";
 import {
   jsdomOptimizedDeps,
@@ -24,6 +27,7 @@ import {
   uiNodeDrivenBrowserTestFiles,
   uiTimingTestFiles,
 } from "../test/vitest/vitest.ui-paths.mjs";
+import { UiRuntimePartitionSequencer } from "../test/vitest/vitest.ui-runtime-sequencer.ts";
 import { controlUiLocaleModulesPlugin } from "./config/control-ui-locales.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -89,6 +93,13 @@ const workspaceSourceAliases = [
     replacement: path.resolve(repoRoot, "packages/session-url-contract/src/public-share.ts"),
   },
   {
+    find: "@openclaw/session-url-contract/session-key-normalization",
+    replacement: path.resolve(
+      repoRoot,
+      "packages/session-url-contract/src/session-key-normalization.ts",
+    ),
+  },
+  {
     find: "@openclaw/session-url-contract",
     replacement: path.resolve(repoRoot, "packages/session-url-contract/src/index.ts"),
   },
@@ -116,6 +127,7 @@ function includeUiTests(patterns: string[], env = process.env): string[] {
 
 const sharedUiTestConfig = {
   ...loadVitestPerformanceConfig(process.env, process.platform, here),
+  server: sharedVitestConfig.test.server,
   // Preserve calls recorded during shared setup and beforeAll hooks.
   clearMocks: false,
   isolate: false,
@@ -125,6 +137,10 @@ const sharedUiTestConfig = {
   testTimeout: 60_000,
   hookTimeout: 60_000,
 } as const;
+const nodeSetupFiles = [
+  "./src/test-helpers/bun-css-tokenizer.setup.ts",
+  "./src/test-helpers/lit-warnings.setup.ts",
+];
 const nodeDrivenBrowserLayoutTests = relativizeScopedPatterns(uiNodeDrivenBrowserTestFiles, "ui");
 const timingTests = relativizeScopedPatterns(uiTimingTestFiles, "ui");
 const mockRegistryUnitTests = uiIsolatedTestFiles.map((testFile) => testFile.slice("ui/".length));
@@ -164,7 +180,11 @@ const chromiumLaunchOptions = resolveChromiumLaunchOptions();
 export function createUiBrowserVitestConfig(env = process.env): ViteUserConfig {
   return defineProject({
     root: here,
-    plugins: [controlUiLocaleModulesPlugin(), createRedactingReporterPlugin()],
+    plugins: [
+      controlUiLocaleModulesPlugin(),
+      createVitestProjectCachePlugin(),
+      createRedactingReporterPlugin(),
+    ],
     optimizeDeps: {
       include: [
         // These controls share wa-popup's eager registration. Optimize them together
@@ -178,6 +198,7 @@ export function createUiBrowserVitestConfig(env = process.env): ViteUserConfig {
         "@awesome.me/webawesome/dist/components/dropdown/dropdown.js",
         "@awesome.me/webawesome/dist/components/dropdown-item/dropdown-item.js",
         "@awesome.me/webawesome/dist/components/popover/popover.js",
+        "@awesome.me/webawesome/dist/components/popup/popup.js",
         "@lit/context",
         "@lit/task",
         "@noble/ed25519",
@@ -241,19 +262,22 @@ export function createUiBrowserVitestConfig(env = process.env): ViteUserConfig {
 
 export default defineConfig({
   root: here,
-  plugins: [createRedactingReporterPlugin()],
+  plugins: [createVitestProjectCachePlugin(), createRedactingReporterPlugin()],
   resolve: {
     alias: workspaceSourceAliases,
   },
   test: {
     ...sharedUiTestConfig,
+    ...(process.env.OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE
+      ? { sequence: { sequencer: UiRuntimePartitionSequencer } }
+      : {}),
     maxWorkers: sharedVitestConfig.test.maxWorkers,
     reporters: sharedVitestConfig.test.reporters,
     // These projects already own their complete plugins, aliases, and test config.
     projects: [
       {
         extends: false,
-        plugins: [controlUiLocaleModulesPlugin()],
+        plugins: [controlUiLocaleModulesPlugin(), createVitestProjectCachePlugin()],
         resolve: {
           alias: workspaceSourceAliases,
         },
@@ -278,12 +302,12 @@ export default defineConfig({
             ...mockRegistryUnitTests,
           ],
           environment: "jsdom",
-          setupFiles: ["./src/test-helpers/lit-warnings.setup.ts"],
+          setupFiles: nodeSetupFiles,
         },
       },
       {
         extends: false,
-        plugins: [controlUiLocaleModulesPlugin()],
+        plugins: [controlUiLocaleModulesPlugin(), createVitestProjectCachePlugin()],
         resolve: {
           alias: workspaceSourceAliases,
         },
@@ -296,12 +320,12 @@ export default defineConfig({
           name: "unit-mock-registry",
           include: includeUiTests([...mockRegistryUnitTests]),
           environment: "jsdom",
-          setupFiles: ["./src/test-helpers/lit-warnings.setup.ts"],
+          setupFiles: nodeSetupFiles,
         },
       },
       {
         extends: false,
-        plugins: [controlUiLocaleModulesPlugin()],
+        plugins: [controlUiLocaleModulesPlugin(), createVitestProjectCachePlugin()],
         resolve: {
           alias: workspaceSourceAliases,
         },
@@ -319,13 +343,13 @@ export default defineConfig({
             ...nodeDrivenBrowserLayoutTests,
           ]),
           environment: "jsdom",
-          setupFiles: ["./src/test-helpers/lit-warnings.setup.ts"],
+          setupFiles: nodeSetupFiles,
         },
       },
       { ...createUiBrowserVitestConfig(), extends: false },
       {
         extends: false,
-        plugins: [controlUiLocaleModulesPlugin()],
+        plugins: [controlUiLocaleModulesPlugin(), createVitestProjectCachePlugin()],
         resolve: { alias: workspaceSourceAliases },
         test: {
           ...sharedUiTestConfig,
@@ -336,7 +360,7 @@ export default defineConfig({
           sequence: { groupOrder: 1 },
           include: includeUiTests(timingTests),
           environment: "jsdom",
-          setupFiles: ["./src/test-helpers/lit-warnings.setup.ts"],
+          setupFiles: nodeSetupFiles,
         },
       },
     ],

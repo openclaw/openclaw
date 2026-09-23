@@ -42,6 +42,10 @@ export async function createCodexSessionInitializationFixtureForTest(params: {
   return await createCodexSessionInitializationFixture(params);
 }
 
+// Host finalizer fixtures opt into Vitest hooks without affecting snapshot consumers.
+export const loadCodexSettledFinalizerTestFixture = () =>
+  import("./src/app-server/settled-turn-finalizer.test-support.js");
+
 type CodexHarnessPromptSnapshot = {
   developerInstructions: string;
   parentLocalInstructions: string | null;

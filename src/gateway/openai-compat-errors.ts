@@ -1,7 +1,8 @@
-import { describeFailoverError, resolveFailoverStatus } from "../agents/failover-error.js";
 // OpenAI-compatible error helpers.
 // Converts OpenClaw failover/sampling errors to OpenAI-style HTTP responses.
+import { describeFailoverError, resolveFailoverStatus } from "../agents/failover-error.js";
 import type { FailoverReason } from "../agents/failover/signal.js";
+import { ToolAuthorizationError } from "../agents/tool-input-error.js";
 
 type OpenAiCompatError = {
   status: number;
@@ -60,6 +61,9 @@ function messageForReason(params: {
 
 /** Converts a provider failover error into an OpenAI-compatible error envelope. */
 export function resolveOpenAiCompatError(err: unknown): OpenAiCompatError | undefined {
+  if (err instanceof ToolAuthorizationError) {
+    return { status: 403, error: { message: err.message, type: "permission_error" } };
+  }
   const described = describeFailoverError(err);
   const reason = described.reason;
   if (!reason) {

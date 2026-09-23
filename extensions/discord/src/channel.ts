@@ -1,4 +1,3 @@
-// Discord plugin module implements channel behavior.
 import {
   buildLegacyDmAccountAllowlistAdapter,
   createAccountScopedAllowlistNameResolver,

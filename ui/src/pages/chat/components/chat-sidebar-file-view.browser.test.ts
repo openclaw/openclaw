@@ -180,7 +180,56 @@ describe.runIf(browserMode)("chat file editor", () => {
     await expect.poll(() => lineIndexes(".file-view__line--current")).toEqual([matchLines[0]]);
   });
 
-  it("enables save after an edit and keeps the saved content", async () => {
+  it("closes file search from every search control and preserves keyboard navigation", async () => {
+    const panel = await mountFile({
+      kind: "file",
+      path: "search.json",
+      name: "search.json",
+      content: '{\n"first":"雪",\n"second":"雪",\n"third":"雪"\n}\n',
+    });
+    const searchToggle = button(panel, "Search in file");
+    const counter = () => panel.querySelector(".file-view__search-counter")?.textContent?.trim();
+    for (const control of ["input", "Previous match", "Next match"]) {
+      await userEvent.click(searchToggle);
+      const input = panel.querySelector<HTMLInputElement>('input[type="search"]')!;
+      await expect.poll(() => document.activeElement).toBe(input);
+      expect(input.value).toBe("");
+      await userEvent.fill(input, "雪");
+      expect(counter()).toBe("1/3");
+
+      if (control === "input") {
+        await userEvent.keyboard("{Enter}");
+        expect(counter()).toBe("2/3");
+        await userEvent.keyboard("{Shift>}{Enter}{/Shift}");
+        expect(counter()).toBe("1/3");
+      } else {
+        const navigation = button(panel, control);
+        await userEvent.click(navigation);
+        expect(document.activeElement).toBe(navigation);
+        expect(counter()).toBe(control === "Previous match" ? "3/3" : "2/3");
+        await userEvent.keyboard("{Enter}");
+        expect(counter()).toBe(control === "Previous match" ? "2/3" : "3/3");
+        await userEvent.keyboard(" ");
+        expect(counter()).toBe("1/3");
+      }
+
+      await userEvent.keyboard("{Escape}");
+      await expect.poll(() => panel.querySelector('input[type="search"]')).toBeNull();
+      expect(document.activeElement).toBe(searchToggle);
+      expect(searchToggle.getAttribute("aria-pressed")).toBe("false");
+    }
+
+    await userEvent.keyboard("{Enter}");
+    await expect
+      .poll(() => document.activeElement === panel.querySelector('input[type="search"]'))
+      .toBe(true);
+    expect(panel.querySelector<HTMLInputElement>('input[type="search"]')?.value).toBe("");
+    await userEvent.click(searchToggle);
+    await expect.poll(() => panel.querySelector('input[type="search"]')).toBeNull();
+    expect(document.activeElement).toBe(searchToggle);
+  });
+
+  it("keeps the named file view keyboard accessible through editing and saving", async () => {
     const save = vi.fn().mockResolvedValue({ ok: true, hash: "hash-2" });
     const panel = await mountFile({
       kind: "file",
@@ -190,9 +239,19 @@ describe.runIf(browserMode)("chat file editor", () => {
       edit: { hash: "hash-1", save, fetchLatest: vi.fn() },
     });
 
-    await userEvent.click(button(panel, "Edit file"));
     const editor = panel.querySelector<HTMLElement>(".cm-content");
     expect(editor).not.toBeNull();
+    button(panel, "Copy file contents").focus();
+    await userEvent.tab();
+    await expect.element(editor!).toHaveFocus();
+    await expect.element(editor!).toHaveAccessibleName("notes.txt");
+    expect(editor!.getAttribute("aria-readonly")).toBe("true");
+
+    button(panel, "Edit file").focus();
+    await userEvent.keyboard("{Enter}");
+    await expect.element(editor!).toHaveFocus();
+    await expect.element(editor!).toHaveAccessibleName("notes.txt");
+    expect(editor!.hasAttribute("aria-readonly")).toBe(false);
     await userEvent.fill(editor!, "after");
     const saveButton = button(panel, "Save");
     expect(saveButton.disabled).toBe(false);
@@ -202,6 +261,13 @@ describe.runIf(browserMode)("chat file editor", () => {
     expect(save).toHaveBeenCalledWith({ content: "after", expectedHash: "hash-1" });
     await expect.poll(() => button(panel, "Save").disabled).toBe(true);
     expect(panel.querySelector(".cm-content")?.textContent).toContain("after");
+
+    await userEvent.click(button(panel, "Discard"));
+    button(panel, "Copy file contents").focus();
+    await userEvent.tab();
+    await expect.element(editor!).toHaveFocus();
+    await expect.element(editor!).toHaveAccessibleName("notes.txt");
+    expect(editor!.getAttribute("aria-readonly")).toBe("true");
   });
 
   it.each(["\n", "\r\n", "\r"])(

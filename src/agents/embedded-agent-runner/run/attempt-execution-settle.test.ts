@@ -78,6 +78,7 @@ function createFixture() {
     getMessagingToolSentTexts: vi.fn(() => []),
     getMessagingToolSourceReplyPayloads: vi.fn(() => []),
     getSourceReplyDelivered: vi.fn(() => undefined),
+    getSourceReplyDeliveryState: vi.fn(() => undefined),
     getPendingToolMediaReply: vi.fn(() => undefined),
     getToolAutoDeliveryMediaUrls: vi.fn(() => []),
     getReplayState: vi.fn(() => ({ replayInvalid: false, hadPotentialSideEffects: false })),
@@ -130,6 +131,7 @@ function createFixture() {
     appendMessage: vi.fn((message) => messages.push(message)),
     buildSessionContext: vi.fn(() => ({ messages: [] })),
     getSessionTarget: vi.fn(() => undefined),
+    getSessionId: () => "active-session",
   };
   const hookRunner = { hasHooks: vi.fn(() => false) };
   const cacheTrace = { recordStage: vi.fn() };
@@ -557,47 +559,32 @@ describe("runEmbeddedAttemptSettledPhase", () => {
     expect(fixture.detachBackend).toHaveBeenCalledOnce();
   });
 
-  it("re-arms delivered children only after a yielded requester becomes idle", async () => {
-    const fixture = createFixture();
-    mocks.completeResult.mockImplementationOnce(() => {
-      fixture.order.push("result");
-      return {
-        ...fixture.result,
-        terminal: { kind: "ok" },
-        yieldDetected: true,
-        acceptedSessionSpawns: [
-          {
-            runId: "child-run",
-            childSessionKey: "agent:main:subagent:child",
-            expectsCompletionMessage: true,
-          },
-        ],
-      };
-    });
-    mocks.settleRequesterAfterSessionSpawns.mockImplementationOnce(() => {
-      fixture.order.push("resume-requester");
-      return true;
-    });
-
-    await runEmbeddedAttemptSettledPhase(fixture.input);
-
-    expect(mocks.settleRequesterAfterSessionSpawns).toHaveBeenCalledWith({
-      requesterSessionKey: "agent:main",
-      requesterAgentId: "main",
-      requesterTurnRunId: "run-1",
-      requesterYielded: true,
-      acceptedSessionSpawns: [
+  it.each([false, true])(
+    "retains child receipts for logical-run settlement (yielded: %s)",
+    async (yieldDetected) => {
+      const fixture = createFixture();
+      const acceptedSessionSpawns = [
         {
           runId: "child-run",
           childSessionKey: "agent:main:subagent:child",
           expectsCompletionMessage: true,
         },
-      ],
-    });
-    expect(fixture.order.indexOf("clear-active-run")).toBeLessThan(
-      fixture.order.indexOf("resume-requester"),
-    );
-  });
+      ];
+      mocks.completeResult.mockReturnValueOnce({
+        ...fixture.result,
+        terminal: { kind: "ok" },
+        yieldDetected,
+        acceptedSessionSpawns,
+      });
+
+      const result = await runEmbeddedAttemptSettledPhase(fixture.input);
+
+      expect(result.acceptedSessionSpawns).toEqual(acceptedSessionSpawns);
+      expect(fixture.order).toContain("clear-active-run");
+      expect(mocks.markRequesterTurnYielded).not.toHaveBeenCalled();
+      expect(mocks.settleRequesterAfterSessionSpawns).not.toHaveBeenCalled();
+    },
+  );
 
   it("defaults a source-less settlement failure without dropping it", async () => {
     const fixture = createFixture();
@@ -626,106 +613,5 @@ describe("runEmbeddedAttemptSettledPhase", () => {
       error: failure,
       timeoutObservation: "compaction",
     });
-  });
-
-  it("releases requester-turn retention after a normal final answer", async () => {
-    const fixture = createFixture();
-    mocks.completeResult.mockReturnValueOnce({
-      ...fixture.result,
-      assistantTexts: ["done"],
-      terminal: { kind: "ok" },
-      yieldDetected: false,
-      acceptedSessionSpawns: [{ runId: "child-run", childSessionKey: "agent:main:subagent:child" }],
-    });
-
-    await runEmbeddedAttemptSettledPhase(fixture.input);
-
-    expect(mocks.settleRequesterAfterSessionSpawns).toHaveBeenCalledWith({
-      requesterSessionKey: "agent:main",
-      requesterAgentId: "main",
-      requesterTurnRunId: "run-1",
-      requesterYielded: false,
-      acceptedSessionSpawns: [{ runId: "child-run", childSessionKey: "agent:main:subagent:child" }],
-    });
-  });
-
-  it("marks an empty visible requester for status-gated continuation delivery", async () => {
-    const fixture = createFixture();
-    mocks.completeResult.mockReturnValueOnce({
-      ...fixture.result,
-      assistantTexts: [],
-      messagingToolSentMediaUrls: [],
-      messagingToolSentTargets: [],
-      messagingToolSentTexts: [],
-      terminal: { kind: "ok" },
-      toolMetas: [],
-      yieldDetected: false,
-      acceptedSessionSpawns: [
-        {
-          runId: "child-run",
-          childSessionKey: "agent:main:subagent:child",
-          expectsCompletionMessage: true,
-        },
-      ],
-    });
-
-    await runEmbeddedAttemptSettledPhase(fixture.input);
-
-    expect(mocks.markRequesterTurnYielded).toHaveBeenCalledWith({
-      requesterSessionKey: "agent:main",
-      requesterAgentId: "main",
-      requesterTurnRunId: "run-1",
-    });
-    expect(mocks.settleRequesterAfterSessionSpawns).not.toHaveBeenCalled();
-  });
-
-  it("does not yield an empty visible requester to a collector", async () => {
-    const fixture = createFixture();
-    const acceptedSessionSpawns = [
-      {
-        runId: "collector-run",
-        childSessionKey: "agent:main:subagent:collector",
-        expectsCompletionMessage: false,
-      },
-    ];
-    mocks.completeResult.mockReturnValueOnce({
-      ...fixture.result,
-      assistantTexts: [],
-      messagingToolSentMediaUrls: [],
-      messagingToolSentTargets: [],
-      messagingToolSentTexts: [],
-      terminal: { kind: "ok" },
-      toolMetas: [],
-      yieldDetected: false,
-      acceptedSessionSpawns,
-    });
-
-    await runEmbeddedAttemptSettledPhase(fixture.input);
-
-    expect(mocks.markRequesterTurnYielded).not.toHaveBeenCalled();
-    expect(mocks.settleRequesterAfterSessionSpawns).toHaveBeenCalledWith({
-      requesterSessionKey: "agent:main",
-      requesterAgentId: "main",
-      requesterTurnRunId: "run-1",
-      requesterYielded: false,
-      acceptedSessionSpawns,
-    });
-  });
-
-  it("surfaces durable yield-settlement failures after releasing the active requester", async () => {
-    const fixture = createFixture();
-    const failure = new Error("sqlite unavailable");
-    mocks.completeResult.mockReturnValueOnce({
-      ...fixture.result,
-      terminal: { kind: "ok" },
-      yieldDetected: true,
-      acceptedSessionSpawns: [{ runId: "child-run", childSessionKey: "agent:main:subagent:child" }],
-    });
-    mocks.settleRequesterAfterSessionSpawns.mockImplementationOnce(() => {
-      throw failure;
-    });
-
-    await expect(runEmbeddedAttemptSettledPhase(fixture.input)).rejects.toThrow(failure);
-    expect(fixture.order).toContain("clear-active-run");
   });
 });

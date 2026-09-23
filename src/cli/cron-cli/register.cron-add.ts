@@ -150,7 +150,7 @@ export function registerCronAddCommand(cron: Command) {
               const systemEvent = normalizeOptionalString(opts.systemEvent) ?? "";
               const optionMessage = normalizeOptionalString(opts.message);
               const positionalMessage = normalizeOptionalString(messageArg);
-              const commandShell = normalizeOptionalString(opts.command);
+              const commandShell = readNonBlankString(opts.command);
               const commandArgv = parseCronCommandArgv(opts.commandArgv);
               // File arguments identify exact local paths; trimming can select another file.
               const scriptPath = readNonBlankString(opts.script);

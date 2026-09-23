@@ -240,8 +240,7 @@ function appendCatalogAdvancedThinkingLevels(
     }
   }
   let supportsMax = profile.levels.some(({ id }) => id === "max");
-  for (const effort of compat?.supportedReasoningEfforts ?? []) {
-    const level = normalizeThinkLevel(effort);
+  for (const level of compat?.supportedReasoningEfforts ?? []) {
     if (
       level === "ultra" ||
       ((level === "adaptive" || level === "xhigh" || level === "max") &&

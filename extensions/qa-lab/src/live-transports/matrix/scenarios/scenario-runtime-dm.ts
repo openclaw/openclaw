@@ -1,4 +1,3 @@
-// QA Lab Matrix plugin module implements scenario runtime dm behavior.
 import {
   MATRIX_QA_DRIVER_DM_ROOM_KEY,
   resolveMatrixQaScenarioRoomId,

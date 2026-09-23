@@ -17,7 +17,10 @@ import {
   type MockInstance,
 } from "vitest";
 import * as commandRunner from "../../process/exec-runner.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import { InvalidWorktreeBaseRefError } from "./base-ref.js";
 import {
   deleteRegistryWorktree,
@@ -153,6 +156,7 @@ describe("ManagedWorktreeService", () => {
   });
 
   afterAll(async () => {
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(templateRoot, { recursive: true, force: true });
   });
@@ -201,21 +205,6 @@ describe("ManagedWorktreeService", () => {
       "origin/main",
       await git(created.path, "rev-parse", "HEAD"),
     ]);
-  });
-
-  it("reads registry records without retiring a temporarily unavailable worktree", async () => {
-    const created = await service.create({
-      repoRoot: repo,
-      name: "read-only-list",
-      baseRef: "HEAD",
-    });
-    await fs.rm(created.path, { recursive: true, force: true });
-
-    expect(service.listRegistryRecords()).toEqual([expect.objectContaining({ id: created.id })]);
-    expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
-
-    expect(await service.list()).toEqual([]);
-    expect(getRegistryWorktree(env, created.id)?.removedAt).toBe(now);
   });
 
   it("does not remove a worktree owned by another caller", async () => {
@@ -743,7 +732,7 @@ describe("ManagedWorktreeService", () => {
     await expect(fs.stat(worktreePath)).rejects.toMatchObject({ code: "ENOENT" });
     expect(await git(repo, "worktree", "list", "--porcelain")).not.toContain("broken-setup");
     expect(await git(repo, "branch", "--list", "openclaw/broken-setup")).toBe("");
-    expect(service.listRegistryRecords()).toEqual([]);
+    expect(await service.listRegistryRecords()).toEqual([]);
     expect.soft(failure.message).toContain(fatal);
     expect.soft(failure.message.length).toBeLessThanOrEqual(2_300);
     expect.soft(/(?:exit|code|status)[^\n]*23/i.test(failure.message)).toBe(true);

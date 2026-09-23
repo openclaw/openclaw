@@ -88,14 +88,13 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
     milestone: "before_model_fallback",
   });
   const selection = resolveModelFallbackOptions(params.effectiveRun, params.runtimeConfig);
-  const resolveCandidateRuntime = (provider: string, model: string) => {
+  const resolveCandidateRuntime = (
+    provider: string,
+    model: string,
+    sessionRuntimeOverride: string | undefined,
+  ) => {
     const candidateRun = resolveFallbackCandidateRun(params.effectiveRun, provider, model);
     const activeEntry = params.liveModelSwitchRuntimeEntry ?? turn.getActiveSessionEntry();
-    const sessionRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
-      provider,
-      entry: activeEntry,
-      cfg: params.runtimeConfig,
-    });
     const pinnedHarnessId = resolveSessionPinnedHarnessId(activeEntry);
     const locksPersistedHarness =
       pinnedHarnessId !== undefined && pinnedHarnessId === sessionRuntimeOverride;
@@ -131,6 +130,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
   };
   return params.timing.measure("model_fallback", () =>
     runEmbeddedAgentEntry<EmbeddedAgentRunResult>({
+      preparedRunAdmission: params.preparedRunAdmission,
       selection: {
         cfg: selection.cfg,
         provider: selection.provider,
@@ -147,7 +147,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
         runId: params.runId,
         agentId: turn.followupRun.run.agentId,
         sessionId: turn.followupRun.run.sessionId,
-        sessionKey: selection.sessionKey,
+        sessionKey: turn.sessionKey,
         lane: runLane,
       },
       harness: {
@@ -163,8 +163,8 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
             entry: params.liveModelSwitchRuntimeEntry ?? turn.getActiveSessionEntry(),
             cfg: params.runtimeConfig,
           }),
-        resolveContextEngineHost: (provider, model) => {
-          const runtime = resolveCandidateRuntime(provider, model);
+        resolveContextEngineHost: (provider, model, runtimeOverride) => {
+          const runtime = resolveCandidateRuntime(provider, model, runtimeOverride);
           if (!runtime.useCliExecution) {
             return undefined;
           }
@@ -187,7 +187,9 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
           hasRetryBlockedDelivery:
             turn.blockReplyPipeline?.hasRetryBlockedDelivery() === true ||
             params.directBlockDeliveries.some(hasBlockReplyDeliveryCustody),
-          hasDirectlySentBlockReply: params.directlySentBlockKeys.size > 0,
+          hasDirectlySentBlockReply: params.directBlockDeliveries.some(
+            (delivery) => delivery.terminalDeliveryConfirmed === true,
+          ),
           hasBlockReplyPipelineOutput: Boolean(
             turn.blockReplyPipeline?.hasBuffered() || turn.blockReplyPipeline?.didStream(),
           ),
@@ -215,7 +217,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
         params.state.attemptedRuntimeProvider = provider;
         params.state.attemptedRuntimeModel = model;
         const runtime = params.timing.measureSync("fallback_resolve_runtime", () =>
-          resolveCandidateRuntime(provider, model),
+          resolveCandidateRuntime(provider, model, runOptions.agentHarnessRuntimeOverride),
         );
         const candidateRun = runtime.candidateRun;
         bindSourceReplyDeliveryRuntime(candidateRun, sourceReplyDeliveryRuntime);
@@ -239,6 +241,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
           agentId: turn.followupRun.run.agentId,
           sessionKey: turn.followupRun.run.runtimePolicySessionKey ?? turn.sessionKey,
           sessionEntry: params.liveModelSwitchRuntimeEntry ?? turn.getActiveSessionEntry(),
+          agentRuntime: runtime.sessionRuntimeOverride,
         });
         const candidateFastMode = resolveRunFastModeForFallbackCandidate({
           run: candidateRun,
@@ -322,6 +325,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
           const candidate = await runEmbeddedFallbackCandidate({
             ...common,
             effectiveRun: params.effectiveRun,
+            directBlockDeliveries: params.directBlockDeliveries,
             sessionRuntimeOverride: runtime.sessionRuntimeOverride,
             getLifecycleGeneration: () => params.state.lifecycleGeneration,
             onLifecycleGeneration: (generation) => {

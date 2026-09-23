@@ -1,18 +1,17 @@
 import { consume } from "@lit/context";
 import { property, state } from "lit/decorators.js";
 import { DEFAULT_SIDEBAR_ENTRIES, type NavigationRouteId } from "../app-navigation.ts";
-import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationRouter } from "../app-routes.ts";
 import { selectApplicationSession } from "../app/agent-selection.ts";
 import {
   applicationContext,
   type ApplicationContext,
-  type ApplicationGatewaySnapshot,
   type ApplicationNavigationOptions,
 } from "../app/context.ts";
 import type { CatalogOpenTarget } from "../app/settings.ts";
 import type { ThemeMode } from "../app/theme.ts";
 import type { UpdateProgress } from "../app/update-confirmation.ts";
+import type { GatewayStatus } from "../lib/gateway-status.ts";
 import { readSessionMethodAccess, type SessionMethodAccess } from "../lib/session-method-access.ts";
 import { prepareSessionNavigationHandoff } from "../lib/sessions/navigation-handoff.ts";
 import { SESSION_NAVIGATION_KEY_PARAM } from "../lib/sessions/route-navigation.ts";
@@ -33,10 +32,7 @@ export abstract class AppSidebarBase extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) activePluginTabId = "";
   @property({ attribute: false }) enabledRouteIds?: readonly NavigationRouteId[];
   @property({ attribute: false }) connected = false;
-  @property({ attribute: false }) offline = false;
-  @property({ attribute: false }) restartPending = false;
-  @property({ attribute: false }) suspensionPhase: ApplicationGatewaySnapshot["suspensionPhase"];
-  @property({ attribute: false }) queuedOutboxCount = 0;
+  @property({ attribute: false }) connectionStatus: GatewayStatus | null = null;
   @property({ attribute: false }) lastError: string | null = null;
   @property({ attribute: false }) outboxAttentionCountForSession = (_sessionKey: string) => 0;
   @property({ attribute: false }) hasSessionDraft: (sessionKey: string) => boolean = () => false;
@@ -57,7 +53,6 @@ export abstract class AppSidebarBase extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) watchUpdateProgress:
     | ((listener: (progress: UpdateProgress) => void) => () => void)
     | undefined = undefined;
-  @property({ attribute: false }) onOpenApprovals?: () => void;
   @property({ attribute: false }) onOpenPalette?: () => void;
   @property({ attribute: false }) onRetryConnect?: () => void;
   @property({ attribute: false }) onToggleSidebar?: () => void;
@@ -72,7 +67,7 @@ export abstract class AppSidebarBase extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) onPreloadRoute?: (routeId: NavigationRouteId) => Promise<void>;
 
   @consume({ context: applicationContext, subscribe: true })
-  protected context?: ApplicationContext<RouteId>;
+  protected context?: ApplicationContext;
 
   pluginNavigation() {
     return this.context?.plugins?.registrations("navigation") ?? [];

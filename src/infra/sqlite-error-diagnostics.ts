@@ -1,5 +1,6 @@
-import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
+import { coerceErrorMessage, extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 const STORAGE_ERRORS = [
   ["SQLITE_BUSY", "database is locked", 5],
@@ -34,11 +35,84 @@ export function classifyGatewayStorageFailure(error: unknown): GatewayStorageFai
     ))?.[0];
 }
 
+const SQLITE_INSPECTION_OPERATIONS = {
+  coordinator: "acquiring its state-handles coordinator",
+  source: "opening the source database",
+  snapshot: "creating its private snapshot",
+} as const;
+type SqliteInspectionOperation = keyof typeof SQLITE_INSPECTION_OPERATIONS;
+
+const inspectionOperations = resolveGlobalSingleton(
+  Symbol.for("openclaw.sqliteInspectionOperations"),
+  () => new WeakMap<object, SqliteInspectionOperation>(),
+);
+
+const nativeOpenFailures = resolveGlobalSingleton(
+  Symbol.for("openclaw.sqliteNativeOpenFailures"),
+  () => new WeakSet<object>(),
+);
+
+export function markSqliteNativeOpenFailure(error: unknown): void {
+  if (error !== null && typeof error === "object") {
+    nativeOpenFailures.add(error);
+  }
+}
+
+/** Record the native effect without changing its error or tagging surrounding authority checks. */
+export function withSqliteNativeOpen<T>(open: () => T): T {
+  try {
+    return open();
+  } catch (error) {
+    markSqliteNativeOpenFailure(error);
+    throw error;
+  }
+}
+
+export function isSqliteNativeOpenFailure(error: unknown): boolean {
+  return error !== null && typeof error === "object" && nativeOpenFailures.has(error);
+}
+
+export function markSqliteInspectionOperation(
+  error: unknown,
+  operation: SqliteInspectionOperation,
+): unknown {
+  if (error !== null && typeof error === "object" && !inspectionOperations.has(error)) {
+    inspectionOperations.set(error, operation);
+  }
+  return error;
+}
+
+export function withSqliteInspectionOperation<T>(
+  operation: SqliteInspectionOperation,
+  run: () => T,
+): T {
+  try {
+    return run();
+  } catch (error) {
+    throw markSqliteInspectionOperation(error, operation);
+  }
+}
+
+export function formatSqliteReadOnlyInspectionFailure(error: unknown): string {
+  const message = coerceErrorMessage(error);
+  const { suffix, operation } = readSqliteErrorDetails(error);
+  const details = `${message}${suffix}`;
+  return operation === undefined
+    ? details
+    : `failed while ${SQLITE_INSPECTION_OPERATIONS[operation]}: ${details}`;
+}
+
 export function formatSqliteErrorCodeSuffix(error: unknown): string {
+  return readSqliteErrorDetails(error).suffix;
+}
+
+function readSqliteErrorDetails(error: unknown) {
   const details = new Set<string>();
+  let operation: SqliteInspectionOperation | undefined;
   // Preserve native codes through wrappers without exposing cause prose or metadata.
   // The depth cap also bounds cyclic causes; Node's SQLite errcode is a signed int.
   for (let current = error, depth = 0; depth < 8 && isRecord(current); depth += 1) {
+    operation = inspectionOperations.get(current) ?? operation;
     const code = extractErrorCode(current);
     if (code && /^[A-Z0-9_]{1,64}$/u.test(code)) {
       details.add(`code=${code}`);
@@ -54,7 +128,7 @@ export function formatSqliteErrorCodeSuffix(error: unknown): string {
     }
     current = current.cause;
   }
-  return details.size > 0 ? ` (${[...details].join(", ")})` : "";
+  return { suffix: details.size > 0 ? ` (${[...details].join(", ")})` : "", operation };
 }
 
 // Native snapshot coordination needs classification without loading transaction logging.

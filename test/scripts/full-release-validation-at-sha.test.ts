@@ -1,6 +1,8 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import {
   chmodSync,
+  constants as fsConstants,
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -14,7 +16,7 @@ import {
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { parse as parseYaml } from "yaml";
 import {
   assertTrustedWorkflowHarness,
@@ -35,6 +37,7 @@ import {
 } from "../../scripts/full-release-validation-at-sha.mts";
 import { resolveReleaseContextIdentity } from "../../scripts/lib/release-context.mjs";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const SCRIPT_PATH = resolve("scripts/full-release-validation-at-sha.mjs");
 const testNodeExecPath = resolveTestNodeExecPath();
@@ -55,11 +58,121 @@ on:
 `;
 
 function runGit(cwd: string, args: string[]): string {
-  return execFileSync("git", args, {
+  return execFileSync("git", ["-c", "maintenance.auto=false", "-c", "gc.auto=0", ...args], {
     cwd,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
   }).trim();
+}
+
+type DispatchRepositoryOptions = {
+  releaseRef?: string;
+  workflowSource?: string;
+  targetSource?: Record<string, string>;
+  targetAlreadyRemote?: boolean;
+};
+const repositoryTemplateDirs = useAutoCleanupTempDirTracker(afterAll);
+const dispatchRepositoryTemplates = new Map<string, ReturnType<typeof createDispatchRepository>>();
+type DispatchWorkflow = { on?: { workflow_dispatch?: { inputs?: Record<string, unknown> } } };
+const dispatchWorkflows = new Map<string, DispatchWorkflow>();
+
+function createDispatchRepository(root: string, options: DispatchRepositoryOptions = {}) {
+  const origin = join(root, "origin.git");
+  const checkout = join(root, "checkout");
+  const releaseRef = options.releaseRef ?? "release/2026.8.1";
+  mkdirSync(checkout);
+  execFileSync("git", ["init", "--bare", origin], { stdio: "ignore" });
+  execFileSync("git", ["init", "-b", "main"], { cwd: checkout, stdio: "ignore" });
+  runGit(checkout, ["config", "user.email", "release-test@openclaw.invalid"]);
+  runGit(checkout, ["config", "user.name", "OpenClaw Release Test"]);
+  mkdirSync(join(checkout, ".github", "workflows"), { recursive: true });
+  mkdirSync(join(checkout, "scripts"), { recursive: true });
+  writeFileSync(join(checkout, "package.json"), '{"version":"2026.7.9"}\n');
+  writeFileSync(
+    join(checkout, "CHANGELOG.md"),
+    "## 2026.8.1\n\nRelease notes for the complete selected candidate and its user-facing fixes.\n",
+  );
+  writeFileSync(
+    join(checkout, ".github", "workflows", "full-release-validation.yml"),
+    LEGACY_WORKFLOW_SOURCE,
+  );
+  writeFileSync(
+    join(checkout, "scripts", "release-ci-summary.mjs"),
+    `const expected = [
+  "--validate-run", "123",
+	  "--trusted-workflow-ref", process.env.MOCK_TRUSTED_WORKFLOW_REF,
+  "--trusted-workflow-full-ref", process.env.MOCK_TRUSTED_WORKFLOW_FULL_REF,
+  "--trusted-workflow-sha", process.env.MOCK_WORKFLOW_SHA,
+	  "--json",
+  "--verifier-source-sha", process.env.MOCK_WORKFLOW_SHA,
+  "--verifier-source-file", process.argv[1],
+];
+if (JSON.stringify(process.argv.slice(2)) !== JSON.stringify(expected)) {
+  console.error("unexpected verifier args: " + JSON.stringify(process.argv.slice(2)));
+  process.exit(2);
+}
+console.log(JSON.stringify({ valid: true, current: { runId: "123" }, root: { runId: "123" }, evidenceReuse: false }));
+`,
+  );
+  runGit(checkout, ["add", "."]);
+  runGit(checkout, ["commit", "-m", "test: legacy workflow"]);
+  const oldWorkflowSha = runGit(checkout, ["rev-parse", "HEAD"]);
+  writeFileSync(
+    join(checkout, ".github", "workflows", "full-release-validation.yml"),
+    options.workflowSource ?? CURRENT_WORKFLOW_SOURCE,
+  );
+  writeFileSync(join(checkout, "package.json"), '{"version":"2026.8.1"}\n');
+  runGit(checkout, ["add", ".github/workflows/full-release-validation.yml", "package.json"]);
+  runGit(checkout, ["commit", "-m", "test: trusted workflow contract"]);
+  const workflowSha = runGit(checkout, ["rev-parse", "HEAD"]);
+  const trustedWorkflowTag = `release-publish/${workflowSha.slice(0, 12)}-123`;
+  runGit(checkout, ["remote", "add", "origin", origin]);
+  runGit(checkout, ["push", "-u", "origin", "main"]);
+  runGit(checkout, ["tag", trustedWorkflowTag, workflowSha]);
+  runGit(checkout, ["push", "origin", `refs/tags/${trustedWorkflowTag}`]);
+  runGit(checkout, ["checkout", "-b", releaseRef]);
+  writeFileSync(join(checkout, "target.txt"), "release target\n");
+  for (const [relativePath, content] of Object.entries(options.targetSource ?? {})) {
+    mkdirSync(join(checkout, relativePath, ".."), { recursive: true });
+    writeFileSync(join(checkout, relativePath), content);
+  }
+  runGit(checkout, ["add", "."]);
+  runGit(checkout, ["commit", "-m", "test: release target"]);
+  const targetSha = runGit(checkout, ["rev-parse", "HEAD"]);
+  if (options.targetAlreadyRemote !== false) {
+    runGit(checkout, ["push", "-u", "origin", releaseRef]);
+  }
+  runGit(checkout, ["checkout", "main"]);
+
+  return { origin, checkout, oldWorkflowSha, workflowSha, trustedWorkflowTag, targetSha };
+}
+
+function prepareDispatchRepository(root: string, options: DispatchRepositoryOptions) {
+  const key = JSON.stringify([
+    options.releaseRef ?? "release/2026.8.1",
+    options.workflowSource ?? CURRENT_WORKFLOW_SOURCE,
+    options.targetSource ?? {},
+    options.targetAlreadyRemote !== false,
+  ]);
+  let template = dispatchRepositoryTemplates.get(key);
+  if (!template) {
+    template = createDispatchRepository(
+      repositoryTemplateDirs.make("openclaw-release-dispatch-template-"),
+      options,
+    );
+    // Copy packed immutable history, while every case retains its own object store.
+    runGit(template.origin, ["repack", "-ad"]);
+    runGit(template.checkout, ["repack", "-ad"]);
+    dispatchRepositoryTemplates.set(key, template);
+  }
+  const origin = join(root, "origin.git");
+  const checkout = join(root, "checkout");
+  // Each case can change refs, config and objects without touching the prepared history.
+  const copyOptions = { recursive: true, mode: fsConstants.COPYFILE_FICLONE };
+  cpSync(template.origin, origin, copyOptions);
+  cpSync(template.checkout, checkout, copyOptions);
+  runGit(checkout, ["remote", "set-url", "origin", origin]);
+  return { ...template, origin, checkout };
 }
 
 function createDispatchFixture(
@@ -131,7 +244,6 @@ function createDispatchFixture(
   const preloadPath = join(root, "immediate-poll.mjs");
   const waitCallsPath = join(root, "wait-calls.txt");
   const releaseRef = options.releaseRef ?? "release/2026.8.1";
-  mkdirSync(checkout);
   mkdirSync(binDir);
   writeFileSync(gitCallsPath, "");
   writeFileSync(ghCallsPath, "");
@@ -225,51 +337,19 @@ Atomics.wait = (array, index, value, timeout) => {
 `,
   );
 
-  execFileSync("git", ["init", "--bare", origin], { stdio: "ignore" });
-  execFileSync("git", ["init", "-b", "main"], { cwd: checkout, stdio: "ignore" });
-  runGit(checkout, ["config", "user.email", "release-test@openclaw.invalid"]);
-  runGit(checkout, ["config", "user.name", "OpenClaw Release Test"]);
-  mkdirSync(join(checkout, ".github", "workflows"), { recursive: true });
-  mkdirSync(join(checkout, "scripts"), { recursive: true });
-  writeFileSync(join(checkout, "package.json"), '{"version":"2026.7.9"}\n');
-  writeFileSync(
-    join(checkout, "CHANGELOG.md"),
-    "## 2026.8.1\n\nRelease notes for the complete selected candidate and its user-facing fixes.\n",
+  const { oldWorkflowSha, workflowSha, trustedWorkflowTag, targetSha } = prepareDispatchRepository(
+    root,
+    options,
   );
-  writeFileSync(
+  const workflowSource = readFileSync(
     join(checkout, ".github", "workflows", "full-release-validation.yml"),
-    LEGACY_WORKFLOW_SOURCE,
+    "utf8",
   );
-  writeFileSync(
-    join(checkout, "scripts", "release-ci-summary.mjs"),
-    `const expected = [
-  "--validate-run", "123",
-	  "--trusted-workflow-ref", process.env.MOCK_TRUSTED_WORKFLOW_REF,
-  "--trusted-workflow-full-ref", process.env.MOCK_TRUSTED_WORKFLOW_FULL_REF,
-  "--trusted-workflow-sha", process.env.MOCK_WORKFLOW_SHA,
-	  "--json",
-  "--verifier-source-sha", process.env.MOCK_WORKFLOW_SHA,
-  "--verifier-source-file", process.argv[1],
-];
-if (JSON.stringify(process.argv.slice(2)) !== JSON.stringify(expected)) {
-  console.error("unexpected verifier args: " + JSON.stringify(process.argv.slice(2)));
-  process.exit(2);
-}
-console.log(JSON.stringify({ valid: true, current: { runId: "123" }, root: { runId: "123" }, evidenceReuse: false }));
-`,
-  );
-  runGit(checkout, ["add", "."]);
-  runGit(checkout, ["commit", "-m", "test: legacy workflow"]);
-  const oldWorkflowSha = runGit(checkout, ["rev-parse", "HEAD"]);
-  writeFileSync(
-    join(checkout, ".github", "workflows", "full-release-validation.yml"),
-    options.workflowSource ?? CURRENT_WORKFLOW_SOURCE,
-  );
-  const workflow = parseYaml(
-    readFileSync(join(checkout, ".github", "workflows", "full-release-validation.yml"), "utf8"),
-  ) as {
-    on?: { workflow_dispatch?: { inputs?: Record<string, unknown> } };
-  };
+  let workflow = dispatchWorkflows.get(workflowSource);
+  if (!workflow) {
+    workflow = parseYaml(workflowSource) as DispatchWorkflow;
+    dispatchWorkflows.set(workflowSource, workflow);
+  }
   const declaredWorkflowInputs = Object.keys(workflow.on?.workflow_dispatch?.inputs ?? {});
   writeFileSync(
     artifactFixturePath,
@@ -314,29 +394,6 @@ module.exports = async () => {
 };
 `,
   );
-  writeFileSync(join(checkout, "package.json"), '{"version":"2026.8.1"}\n');
-  runGit(checkout, ["add", ".github/workflows/full-release-validation.yml", "package.json"]);
-  runGit(checkout, ["commit", "-m", "test: trusted workflow contract"]);
-  const workflowSha = runGit(checkout, ["rev-parse", "HEAD"]);
-  const trustedWorkflowTag = `release-publish/${workflowSha.slice(0, 12)}-123`;
-  runGit(checkout, ["remote", "add", "origin", origin]);
-  runGit(checkout, ["push", "-u", "origin", "main"]);
-  runGit(checkout, ["tag", trustedWorkflowTag, workflowSha]);
-  runGit(checkout, ["push", "origin", `refs/tags/${trustedWorkflowTag}`]);
-  runGit(checkout, ["checkout", "-b", releaseRef]);
-  writeFileSync(join(checkout, "target.txt"), "release target\n");
-  for (const [relativePath, content] of Object.entries(options.targetSource ?? {})) {
-    mkdirSync(join(checkout, relativePath, ".."), { recursive: true });
-    writeFileSync(join(checkout, relativePath), content);
-  }
-  runGit(checkout, ["add", "."]);
-  runGit(checkout, ["commit", "-m", "test: release target"]);
-  const targetSha = runGit(checkout, ["rev-parse", "HEAD"]);
-  if (options.targetAlreadyRemote !== false) {
-    runGit(checkout, ["push", "-u", "origin", releaseRef]);
-  }
-  runGit(checkout, ["checkout", "main"]);
-
   const gitPath = join(binDir, "git");
   writeFileSync(
     gitPath,

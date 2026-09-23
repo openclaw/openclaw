@@ -15,6 +15,8 @@ import {
   readSessionChangedEvent,
   reconcileSessionChangedRow,
   reconcileSessionRow,
+  sessionChangedSnapshots,
+  type SessionChangedEventInfo,
   type SessionChangedRowProjection,
   type SessionChangedRowResult,
   type SessionReconcileOptions,
@@ -33,7 +35,7 @@ export type { SessionReconcileOptions, SessionRowObservation } from "./session-r
 export type SessionChangedResult = Omit<
   SessionChangedRowResult,
   "reconciled" | "eventTs" | "ownershipChanged" | "disposition"
-> & { result: SessionsListResult | null };
+> & { result: SessionsListResult | null; admittedRows?: GatewaySessionRow[] };
 
 /** Retain result identity when a membership-preserving projection leaves every row unchanged. */
 export function projectSessionResultRows(
@@ -43,6 +45,19 @@ export function projectSessionResultRows(
   return result && sessions.some((row, index) => row !== result.sessions[index])
     ? { ...result, sessions }
     : result;
+}
+
+function replaceSessionResultRow(
+  result: SessionsListResult,
+  key: string,
+  row: GatewaySessionRow | undefined,
+): SessionsListResult {
+  const sessions = result.sessions.filter((candidate) => candidate.key !== key);
+  if (row) {
+    sessions.push(row);
+    sessions.sort(compareSessionRowsByUpdatedAt);
+  }
+  return { ...result, count: sessions.length, sessions };
 }
 
 /** Merge canonical and filtered pages with the same cursor/deduplication contract. */
@@ -121,7 +136,7 @@ export function preserveCurrentSessionRow(
   return result;
 }
 
-export function reconcileSessionChanged(
+function reconcileSessionChangedSnapshot(
   result: SessionsListResult | null,
   payload: unknown,
   options: SessionReconcileOptions = {},
@@ -154,24 +169,49 @@ export function reconcileSessionChanged(
   if (!result || !existing) {
     return { applied: false, result };
   }
-  let next = result;
-  if (row !== existing) {
-    const sessions = row
-      ? [...result.sessions.filter((candidate) => candidate.key !== existing.key), row].toSorted(
-          compareSessionRowsByUpdatedAt,
-        )
-      : result.sessions.filter((candidate) => candidate.key !== existing.key);
-    next = { ...result, count: sessions.length, sessions };
-  }
+  const next = row === existing ? result : replaceSessionResultRow(result, existing.key, row);
   const timestamped = eventTs !== undefined && eventTs > next.ts ? { ...next, ts: eventTs } : next;
   // Facets describe the whole query, so the list adapter owns their invalidation.
   const published = ownershipChanged ? { ...timestamped, owners: undefined } : timestamped;
-  const retainedRow = info
-    ? published.sessions.find((candidate) =>
-        matchesExistingSession(candidate, info.key, selectedGlobalAgentId),
-      )
-    : undefined;
-  return { ...eventResult, row: retainedRow, admittedRow, result: published };
+  return { ...eventResult, row, admittedRow, result: published };
+}
+
+export function reconcileSessionChanged(
+  result: SessionsListResult | null,
+  payload: unknown,
+  options: SessionReconcileOptions = {},
+  project?: SessionChangedRowProjection,
+  accepts: (info: SessionChangedEventInfo) => boolean = () => true,
+): SessionChangedResult {
+  let nextResult = result;
+  let primary: SessionChangedResult | undefined;
+  const admittedRows: GatewaySessionRow[] = [];
+  for (const snapshot of sessionChangedSnapshots(payload)) {
+    const info = readSessionChangedEvent(snapshot);
+    if (
+      info &&
+      (!accepts(info) ||
+        (snapshot !== payload &&
+          nextResult?.sessions.some(
+            (row) =>
+              matchesExistingSession(row, info.key, info.agentId) &&
+              row.sessionId !== info.sessionId,
+          )))
+    ) {
+      continue;
+    }
+    const changed = reconcileSessionChangedSnapshot(nextResult, snapshot, options, project);
+    primary ??= changed;
+    nextResult = changed.result;
+    if (changed.admittedRow) {
+      admittedRows.push(changed.admittedRow);
+    }
+  }
+  return {
+    ...(primary ?? { applied: false }),
+    ...(admittedRows.length ? { applied: true, admittedRows } : {}),
+    result: nextResult,
+  };
 }
 
 export function reconcileSessionHistory(
@@ -232,12 +272,5 @@ export function reconcileSessionHistory(
   if (reduced.disposition !== "accepted") {
     return resultWithDefaults;
   }
-  const visibleKey = matching?.key ?? row.key;
-  const sessions = reduced.row
-    ? [
-        ...result.sessions.filter((candidate) => candidate.key !== visibleKey),
-        reduced.row,
-      ].toSorted(compareSessionRowsByUpdatedAt)
-    : result.sessions.filter((candidate) => candidate.key !== visibleKey);
-  return { ...result, defaults: nextDefaults, count: sessions.length, sessions };
+  return replaceSessionResultRow(resultWithDefaults, matching?.key ?? row.key, reduced.row);
 }

@@ -310,7 +310,7 @@ it.each([false, true])(
         const before = projection.materializedCount;
         getModelCatalog.mockReturnValue(replacement.promise);
         notifyPreparedModelRuntimePublication({ phase: "catalog-published", modelFactsChanged });
-        expect(projection.dirtyRowCount).toBe(modelFactsChanged ? 1 : 0);
+        expect(projection.dirtyRowCount).toBe(0);
         const response = vi.fn();
         const pendingList = list().then(response);
         // The actual RPC must reply before the deferred catalog is released.

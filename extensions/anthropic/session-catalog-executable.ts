@@ -129,11 +129,14 @@ function resolveNativeReplacement(env: NodeJS.ProcessEnv): string | undefined {
 // Anthropic's failed npm postinstall leaves an executable placeholder that can
 // never launch. Keep normal shell wrappers, but replace that known failure with
 // a native installer or Claude Desktop binary and retain the user's shell PATH.
-export function resolveClaudeTerminalExecutable(env: NodeJS.ProcessEnv = process.env) {
+export function resolveClaudeTerminalExecutable(
+  env: NodeJS.ProcessEnv = process.env,
+  options: { pathStrategy?: "direct" | "prefer" } = {},
+) {
   const shellResolution = resolveNodeHostExecutable("claude", {
     env,
     pathEnv: env.PATH ?? env.Path ?? "",
-    strategy: "prefer",
+    strategy: options.pathStrategy ?? "prefer",
   });
   if (shellResolution && !isBrokenClaudeNpmShim(shellResolution.executable)) {
     return shellResolution;

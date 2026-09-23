@@ -7,13 +7,13 @@ import { DEFAULT_UNDICI_STREAM_TIMEOUT_MS } from "../../../infra/net/undici-glob
 import type { DiagnosticEmbeddedRunOwner } from "../../../logging/diagnostic-run-activity.js";
 import { resolveToolCallArgumentsEncoding } from "../../../plugins/provider-model-compat.js";
 import { captureAsyncWorkTracker } from "../../../shared/async-work-scope.js";
+import { shouldAllowProviderOwnedThinkingReplay } from "../../embedded-agent-helpers/turns.js";
 import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
 import type { StreamFn } from "../../runtime/index.js";
 import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
 import { UNKNOWN_TOOL_THRESHOLD } from "../../tool-loop-detection.js";
 import { wrapStreamFnCodeModeSource } from "../../transcript-code-mode-source.js";
-import { shouldAllowProviderOwnedThinkingReplay } from "../../transcript-policy.js";
 import type { NormalizedUsage } from "../../usage.js";
 import { log } from "../logger.js";
 import { createPromptCacheRequestObserver } from "../prompt-cache-request-observer.js";
@@ -138,7 +138,7 @@ export function installEmbeddedAttemptStreamGuards(
         sessionKey: attempt.sessionKey,
         agentId: sessionAgentId,
       };
-      await withSessionManagerWrite(sessionManager, () => {
+      await withSessionManagerWrite(sessionManager, async () => {
         abortSignal.throwIfAborted();
         let repair;
         if (kind === "compaction") {
@@ -149,9 +149,12 @@ export function installEmbeddedAttemptStreamGuards(
             );
             return;
           }
-          repair = repairRejectedCompactionReplayInSessionManager({ ...repairParams, checkpoint });
+          repair = await repairRejectedCompactionReplayInSessionManager({
+            ...repairParams,
+            checkpoint,
+          });
         } else {
-          repair = repairRejectedThinkingReplayInSessionManager(repairParams);
+          repair = await repairRejectedThinkingReplayInSessionManager(repairParams);
         }
         if (repair.repaired) {
           callbacks.onRejectedProviderReplayRepaired();
@@ -399,7 +402,9 @@ export function installEmbeddedAttemptStreamGuards(
   let diagnosticModelCallSeq = 0;
   let modelResponseTerminal = false;
   session.agent.streamFn = wrapStreamFnWithDiagnosticModelCallEvents(session.agent.streamFn, {
+    config: attempt.config,
     runId: attempt.runId,
+    agentId: sessionAgentId,
     ...(attempt.sessionKey && { sessionKey: attempt.sessionKey }),
     ...(attempt.sessionId && { sessionId: attempt.sessionId }),
     provider: attempt.provider,

@@ -57,6 +57,16 @@ const LOBSTER_PET_PALETTE_IDS: LobsterPetPaletteId[] = [
 
 const SPOT_ZONES = { left: [12, 38], right: [60, 84] } as const;
 
+function findLobsterLook(paletteId: LobsterPetPaletteId, now: Date) {
+  for (let seed = 0; seed < 20_000; seed++) {
+    const look = createLobsterPetLook(seed, now);
+    if (look.palette.id === paletteId) {
+      return look;
+    }
+  }
+  return undefined;
+}
+
 describe("lobster pet variants", () => {
   it("is deterministic per seed", () => {
     expect(createLobsterPetLook(1234)).toEqual(createLobsterPetLook(1234));
@@ -237,17 +247,13 @@ describe("lobster pet variants", () => {
 
   it("keeps Clawtron's LED on the perky antenna", () => {
     const neutralDate = new Date("2026-07-15T12:00:00");
-    const clawtron = Array.from({ length: 20_000 }, (_, seed) =>
-      createLobsterPetLook(seed, neutralDate),
-    ).find((look) => look.palette.id === "clawtron");
+    const clawtron = findLobsterLook("clawtron", neutralDate);
     expect(clawtron?.antennae).toBe("perky");
   });
 
   it("keeps zombies' antennae droopy", () => {
     const neutralDate = new Date("2026-07-15T12:00:00");
-    const zombie = Array.from({ length: 20_000 }, (_, seed) =>
-      createLobsterPetLook(seed, neutralDate),
-    ).find((look) => look.palette.id === "zombie");
+    const zombie = findLobsterLook("zombie", neutralDate);
     expect(zombie?.antennae).toBe("droopy");
   });
 

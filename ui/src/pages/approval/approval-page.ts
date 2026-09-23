@@ -12,7 +12,6 @@ import {
   type ApprovalSnapshot,
 } from "../../../../packages/gateway-protocol/src/approval-result-validators.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
-import type { RouteId } from "../../app-route-paths.ts";
 import {
   applicationContext,
   type ApplicationContext,
@@ -133,7 +132,7 @@ function terminalDescription(approval: ApprovalSnapshot, origin: ResolutionOrigi
 
 export class ApprovalPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: false })
-  context!: ApplicationContext<RouteId>;
+  context!: ApplicationContext;
 
   @property({ attribute: "approval-id" }) approvalId = "";
 

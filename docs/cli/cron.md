@@ -132,6 +132,8 @@ If session cleanup fails, the error is logged. A removal with no active run also
 
 `openclaw automations add`, `openclaw automations list`, and `openclaw automations show <job-id>` preview the resolved delivery route. For `channel: "last"`, the preview shows whether the route resolved from the main or current session, or will fail closed.
 
+If an existing session metadata store cannot be read or its schema is not ready, the preview keeps the requested destination and reports why it is unavailable without blocking job creation or listing. An absent database has no session routing history and uses the normal delivery fallback.
+
 Provider-prefixed targets can disambiguate unresolved announce channels. For example, `to: "telegram:123"` selects Telegram when `delivery.channel` is omitted or `last`. Only prefixes advertised by the loaded plugin are provider selectors. If `delivery.channel` is explicit, the prefix must match that channel. `channel: "whatsapp"` with `to: "telegram:123"` is rejected. Service prefixes such as `imessage:` and `sms:` remain channel-owned target syntax.
 
 <Note>
@@ -207,7 +209,7 @@ Automation jobs, pending runtime state, and run history live in the shared SQLit
 
 Manually running a disabled job does not enable its schedule or create automatic retries. Use `openclaw automations enable <job-id>` to resume scheduled runs.
 
-`openclaw automations run <job-id>` force-runs by default and returns after the Gateway accepts the run into its execution lane. Successful responses include `{ ok: true, enqueued: true, runId }`; the job may still be waiting for a slot. If admission or caller checks fail before queue acceptance, the request fails without reporting a queued run. Use the returned `runId` to inspect the later result:
+`openclaw automations run <job-id>` force-runs by default and returns after the Gateway durably reserves the run and accepts it into its execution lane. Successful responses include `{ ok: true, enqueued: true, runId }`; the job may still be waiting for a slot. If admission or caller checks fail before queue acceptance, the request fails without reporting a queued run. If the Gateway exits before dispatch, startup records an interrupted receipt for that exact request in the state database. Such pre-dispatch interruptions do not appear in task-backed run history. Use the returned `runId` to inspect an executed run's result:
 
 ```bash
 openclaw automations run <job-id>

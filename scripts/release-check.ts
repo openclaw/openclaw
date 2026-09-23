@@ -43,6 +43,8 @@ import {
 } from "./openclaw-npm-postpublish-verify.ts";
 import { assertPreparedOpenClawAiDependency } from "./openclaw-npm-prepublish-verify.ts";
 import { parseNpmPackJsonOutput, type NpmPackResult } from "./openclaw-npm-release-check.ts";
+import type * as OpenClawPrepack from "./openclaw-prepack.ts";
+import type * as OpenClawPackage from "./package-openclaw-for-docker.mts";
 import { resolvePnpmRunner } from "./pnpm-runner.mts";
 import { sparkleBuildFloorsFromShortVersion, type SparkleBuildFloors } from "./sparkle-build.ts";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
@@ -125,7 +127,11 @@ const PACKED_PLUGIN_SDK_PROGRESS_CONSUMER_FIXTURE = new URL(
   "./fixtures/packed-plugin-sdk-progress-consumer.ts",
   import.meta.url,
 );
-const PACKED_PLUGIN_SDK_SETUP_SURFACE_OMISSION_VERSIONS = new Set(["2026.7.33"]);
+const PACKED_PLUGIN_SDK_SETUP_SURFACE_OMISSION_VERSIONS = new Set([
+  "2026.7.33",
+  "2026.7.34",
+  "2026.7.35",
+]);
 
 export function packedPluginSdkMayOmitSetupSurface(packageVersion: string): boolean {
   return PACKED_PLUGIN_SDK_SETUP_SURFACE_OMISSION_VERSIONS.has(packageVersion);
@@ -342,18 +348,6 @@ function execPnpm(
   return runReleaseCheckCommand(invocation, options);
 }
 
-function inspectPackedTarball(tarballPath: string): NpmPackResult[] {
-  const raw = execNpm(
-    ["pack", tarballPath, "--dry-run", "--json", "--ignore-scripts", "--offline"],
-    {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-      maxBuffer: 1024 * 1024 * 100,
-    },
-  );
-  return expectDefined(parseNpmPackJsonOutput(raw), "npm pack tarball contents receipt");
-}
-
 function runPack(packDestination: string, cwd?: string): NpmPackResult[] {
   const raw = execPnpm(["pack", "--json", "--pack-destination", packDestination], {
     cwd,
@@ -363,6 +357,30 @@ function runPack(packDestination: string, cwd?: string): NpmPackResult[] {
     maxBuffer: 1024 * 1024 * 100,
   });
   return expectDefined(parseNpmPackJsonOutput(raw), "pnpm pack package receipt");
+}
+
+async function packRootPackage(packDestination: string): Promise<string> {
+  // Supplied-tarball tooling must not load the source packer's lifecycle or signal handlers.
+  const { collectPreparedPrepackErrorsFromDisk, resolvePrepackAllowUnreleasedChangelog } =
+    (await importToolingTypeScript(
+      new URL("./openclaw-prepack.ts", import.meta.url).href,
+      import.meta.url,
+    )) as typeof OpenClawPrepack;
+  // The canonical packer skips package hooks; retain prepared prepack's compatibility gate.
+  execPnpm(["update:compat:check"], { encoding: "utf8", stdio: "inherit" });
+  const errors = collectPreparedPrepackErrorsFromDisk();
+  if (errors.length > 0) {
+    throw new Error(
+      `release-check: prepared artifact validation failed:\n- ${errors.join("\n- ")}`,
+    );
+  }
+  const { packOpenClawPackageForDocker } = (await importToolingTypeScript(
+    new URL("./package-openclaw-for-docker.mts", import.meta.url).href,
+    import.meta.url,
+  )) as typeof OpenClawPackage;
+  return await packOpenClawPackageForDocker(process.cwd(), packDestination, {
+    allowUnreleasedChangelog: resolvePrepackAllowUnreleasedChangelog(),
+  });
 }
 
 export function resolvePackedTarballPath(
@@ -1331,11 +1349,24 @@ async function main() {
   try {
     const tarballPath = values.tarball
       ? resolve(values.tarball)
-      : resolvePackedTarballPath(temporaryDir, runPack(temporaryDir));
-    const results = inspectPackedTarball(tarballPath);
+      : await packRootPackage(temporaryDir);
     const packedDir = join(temporaryDir, "unpacked");
     mkdirSync(packedDir);
-    await extract({ cwd: packedDir, file: tarballPath, strict: true, preservePaths: false });
+    const files: { path: string }[] = [];
+    let unpackedSize = 0;
+    await extract({
+      cwd: packedDir,
+      file: tarballPath,
+      strict: true,
+      preservePaths: false,
+      // npm derives this receipt from tar entries too. Reuse extraction so
+      // prepared-artifact inspection cannot stall in an extra npm process.
+      onReadEntry(entry) {
+        files.push({ path: entry.path.replace(/^package\//u, "") });
+        unpackedSize += entry.size;
+      },
+    });
+    const results: NpmPackResult[] = [{ filename: basename(tarballPath), files, unpackedSize }];
     const packedRoot = join(packedDir, "package");
     const rootPackage = JSON.parse(readFileSync(resolve("package.json"), "utf8"));
     const packedPackage = JSON.parse(readFileSync(join(packedRoot, "package.json"), "utf8"));
@@ -1350,52 +1381,69 @@ async function main() {
   }
 }
 
-async function verifyPackedContents(
-  results: NpmPackResult[],
+export async function checkPackedTargetBootstrap(
+  targetRoot: string,
   packedRoot: string,
-  tarballPath: string,
 ): Promise<void> {
-  // WORKER_BUNDLE_*_PATH exports declare the target's sealed deploy artifacts.
-  // Trusted tooling may be newer than the frozen target in the working directory.
-  // The producer owns this contract; shared worker helpers can predate deploy output.
-  const workerProducerPath = resolve("src/worker/worker-deploy-entry.ts");
-  const workerBundlePath = resolve("src/shared/worker-bundle-hash.ts");
-  const workerDeployEntrypoints = existsSync(workerProducerPath)
-    ? Object.entries(
-        await importToolingTypeScript(pathToFileURL(workerBundlePath).href, import.meta.url),
-      )
-        .filter(([name]) => /^WORKER_BUNDLE_.*_PATH$/u.test(name))
-        .map(([name, value]) => {
-          if (typeof value !== "string" || !value.trim()) {
-            throw new Error(
-              `release-check: target worker artifact ${name} must be a non-empty path string.`,
-            );
-          }
-          const normalizedPath = posix.normalize(value);
-          const workerPath = posix.join("dist/worker", normalizedPath);
-          if (
-            value !== value.trim() ||
-            value !== normalizedPath ||
-            value.includes("\\") ||
-            normalizedPath.split("/").includes("..") ||
-            win32.isAbsolute(value) ||
-            !workerPath.startsWith("dist/worker/")
-          ) {
-            throw new Error(
-              `release-check: target worker artifact ${name} must be a normalized relative path within dist/worker.`,
-            );
-          }
-          return workerPath;
-        })
-    : [];
-  if (existsSync(workerProducerPath) && workerDeployEntrypoints.length === 0) {
+  const workerProducerPath = resolve(targetRoot, "src/worker/worker-deploy-entry.ts");
+  const workerBundlePath = resolve(targetRoot, "src/shared/worker-bundle-hash.ts");
+  // Frozen targets can have shared hash helpers without a deploy entrypoint.
+  const hasWorkerProducer = existsSync(workerProducerPath);
+  let workerArtifactDeclarations: Array<[string, unknown]> = [];
+  if (hasWorkerProducer) {
+    const target = await importToolingTypeScript(
+      pathToFileURL(workerBundlePath).href,
+      import.meta.url,
+    );
+    if (Object.hasOwn(target, "WORKER_BUNDLE_ARTIFACT_PATHS")) {
+      const paths = target.WORKER_BUNDLE_ARTIFACT_PATHS;
+      if (!Array.isArray(paths) || paths.length === 0) {
+        throw new Error(
+          "release-check: target WORKER_BUNDLE_ARTIFACT_PATHS must be a non-empty array.",
+        );
+      }
+      workerArtifactDeclarations = paths.map((value, index): [string, unknown] => [
+        `WORKER_BUNDLE_ARTIFACT_PATHS[${index}]`,
+        value,
+      ]);
+    } else {
+      // v2026.9.4 deploy targets expose individual paths. Remove this fallback once
+      // every supported frozen release target declares the canonical array.
+      workerArtifactDeclarations = Object.entries(target).filter(([name]) =>
+        /^WORKER_BUNDLE_.*_PATH$/u.test(name),
+      );
+    }
+  }
+  const workerDeployEntrypoints = workerArtifactDeclarations.map(([name, value]) => {
+    if (typeof value !== "string" || !value.trim()) {
+      throw new Error(
+        `release-check: target worker artifact ${name} must be a non-empty path string.`,
+      );
+    }
+    const normalizedPath = posix.normalize(value);
+    const workerPath = posix.join("dist/worker", normalizedPath);
+    if (
+      value !== value.trim() ||
+      value !== normalizedPath ||
+      value.includes("\\") ||
+      normalizedPath.split("/").includes("..") ||
+      win32.isAbsolute(value) ||
+      !workerPath.startsWith("dist/worker/")
+    ) {
+      throw new Error(
+        `release-check: target worker artifact ${name} must be a normalized relative path within dist/worker.`,
+      );
+    }
+    return workerPath;
+  });
+  if (hasWorkerProducer && workerDeployEntrypoints.length === 0) {
     throw new Error(
       "release-check: target worker producer is missing WORKER_BUNDLE_*_PATH declarations.",
     );
   }
   // New tooling may qualify a frozen target without the build-owned locator generator.
   // Never infer legacy mode from missing output: current targets must rebuild missing metadata.
-  const locatorModulePath = resolve("scripts/lib/gateway-run-chunk-metadata.mts");
+  const locatorModulePath = resolve(targetRoot, "scripts/lib/gateway-run-chunk-metadata.mts");
   const locatorModule = existsSync(locatorModulePath)
     ? await importToolingTypeScript(pathToFileURL(locatorModulePath).href, import.meta.url)
     : undefined;
@@ -1413,6 +1461,14 @@ async function verifyPackedContents(
       error: (message: string) => console.error(`release-check: ${message}`),
     },
   });
+}
+
+async function verifyPackedContents(
+  results: NpmPackResult[],
+  packedRoot: string,
+  tarballPath: string,
+): Promise<void> {
+  await checkPackedTargetBootstrap(process.cwd(), packedRoot);
   checkPluginSdkExports(packedRoot);
   const criticalPluginSdkEntrypointErrors =
     collectCriticalPluginSdkEntrypointSizeErrors(packedRoot);

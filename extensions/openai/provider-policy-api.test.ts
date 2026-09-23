@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   isResponseModelEquivalent,
   normalizeModelCatalogId,
-  projectRealtimeVoicePublicProjection,
   resolveModelRoutes,
   resolveThinkingProfile,
 } from "./provider-policy-api.js";
@@ -15,34 +14,6 @@ describe("OpenAI provider policy artifact", () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
-  });
-
-  it("projects private realtime model routing without exposing the model", () => {
-    const config = { model: "gpt-live-test-canary", voice: "marin" };
-
-    expect(projectRealtimeVoicePublicProjection({ providerConfig: config, config })).toEqual({
-      config: { voice: "marin" },
-      clientHints: {
-        modelSource: "gateway",
-        gatewayRelaySupported: false,
-      },
-    });
-  });
-
-  it("does not add routing hints for public realtime models", () => {
-    const config = { model: "gpt-realtime", voice: "marin" };
-
-    expect(projectRealtimeVoicePublicProjection({ providerConfig: config, config })).toEqual({
-      config,
-    });
-  });
-
-  it("preserves the released realtime route without routing hints", () => {
-    const config = { model: "gpt-live-1-codex", voice: "spruce" };
-
-    expect(projectRealtimeVoicePublicProjection({ providerConfig: config, config })).toEqual({
-      config,
-    });
   });
 
   it.each([
@@ -298,7 +269,7 @@ describe("OpenAI provider policy artifact", () => {
           baseUrl: "https://api.openai.com/v1",
           authRequirement: "api-key",
           requestTransportOverrides: "none",
-          runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
+          runtimePolicy: { compatibleIds: ["openclaw", "codex", "agentsapi"] },
         },
         {
           api: "openai-chatgpt-responses",

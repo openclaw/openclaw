@@ -1,4 +1,3 @@
-// Msteams plugin module implements download behavior.
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   normalizeLowercaseStringOrEmpty,

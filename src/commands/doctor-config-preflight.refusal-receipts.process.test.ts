@@ -102,6 +102,11 @@ describe("Doctor preflight refusal receipts", () => {
       expect(receipt).toMatchObject({
         outcome: "refused",
         refusal: { code: "blocked-by-prior-refusal" },
+        originatingRefusal: {
+          stepId: "tui-last-session",
+          code: "step-refused",
+          message: receipts[blocker]?.refusal?.message,
+        },
       });
     }
     expect(new Set(receipts.map((receipt) => receipt.id)).size).toBe(receipts.length);

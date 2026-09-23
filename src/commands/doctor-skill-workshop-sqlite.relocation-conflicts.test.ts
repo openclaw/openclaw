@@ -20,7 +20,7 @@ import {
   type SkillProposalRecord,
   type SkillProposalRollback,
 } from "../skills/workshop/types.js";
-import { repairOpenClawStateDatabaseSchemaIfNeeded } from "../state/openclaw-state-db.js";
+import { prepareOpenClawStateDatabaseSchema } from "../state/openclaw-state-db.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -590,7 +590,7 @@ describe("doctor Skill Workshop SQLite relocation conflicts and recovery", () =>
     );
 
     const workshopRoot = resolveWorkshopSkillsDir({}, "main", testState.env);
-    repairOpenClawStateDatabaseSchemaIfNeeded({ env: testState.env });
+    await prepareOpenClawStateDatabaseSchema({ env: testState.env });
     await expectRelocationWriteFailure({
       env: testState.env,
       proposalId: records[0]!.record.id,

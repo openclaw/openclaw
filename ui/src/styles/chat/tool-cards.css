@@ -12,7 +12,7 @@
   width: fit-content;
   max-width: 100%;
   min-width: 0;
-  padding: 4px 0;
+  padding: 4px;
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -28,10 +28,13 @@
   color: var(--text);
 }
 
+/* Keep the focus ring inside its control so virtual-row paint containment
+   cannot clip it. Changing row containment during focus transfer can crash
+   Chromium when a transcript context menu receives focus. */
 .chat-inline-disclosure:focus-visible {
   color: var(--text);
   outline: 2px solid var(--ring);
-  outline-offset: 2px;
+  outline-offset: -2px;
 }
 
 .chat-inline-disclosure__chevron {
@@ -97,7 +100,7 @@
   gap: 7px;
   width: fit-content;
   max-width: 100%;
-  padding: 3px 0;
+  padding-block: 3px;
   list-style: none;
   appearance: none;
   -webkit-appearance: none;
@@ -986,11 +989,7 @@
   width: 100%;
   min-height: 420px;
   border: 0;
-  /* Widget documents keep a transparent body; the host provides the themed
-     backdrop so transparent regions match the active theme instead of
-     flashing white in dark mode. Documents from the pre-token wrapper assumed
-     white; accepted tradeoff — they are transient (32-doc LRU) and age out. */
-  background: var(--card);
+  background: transparent;
 }
 
 .chat-tool-card__widget-raw {
@@ -1015,6 +1014,18 @@
 
 .chat-tool-card__raw-body {
   margin-top: 4px;
+}
+
+.chat-tool-card__input > summary {
+  margin-inline: 12px;
+  padding-block: 6px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  cursor: default;
+}
+
+.chat-tool-card--flush > .chat-tool-card__raw {
+  margin-inline: 12px;
 }
 
 /* ── Activity group (a turn's run of tool rows) ── */
@@ -1097,8 +1108,7 @@
 .chat-activity-group__body .chat-tool-term__out,
 .chat-activity-group__body .chat-tool-card__block-content,
 .chat-activity-group__body .chat-diff,
-.chat-activity-group__body .chat-tool-msg-body > .chat-text,
-.chat-activity-group__body .chat-json-content {
+.chat-activity-group__body .chat-tool-msg-body > .chat-text {
   max-height: none;
 }
 
@@ -1350,51 +1360,12 @@ openclaw-tooltip.chat-tasks-status__preview {
   color: var(--accent);
 }
 
-.chat-subagent-activity__indicator--completed {
-  animation: chatSubagentCompleted 3s ease-out;
-}
-
-.chat-subagent-activity__indicator--cancelled {
-  opacity: 0.55;
-}
-
-.chat-subagent-activity__badge {
-  position: absolute;
-  right: -2px;
-  bottom: -1px;
-  display: inline-flex;
-  padding: 1px;
-  border-radius: 50%;
-  background: var(--bg);
-  color: var(--warn);
-}
-
-.chat-subagent-activity__badge > svg {
-  width: 9px;
-  height: 9px;
-}
-
-.chat-subagent-activity__indicator--failed .chat-subagent-activity__badge {
-  color: var(--destructive);
-}
-
 .chat-subagent-activity__label {
   min-width: 0;
   overflow: hidden;
   color: var(--text);
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-@keyframes chatSubagentCompleted {
-  0%,
-  50% {
-    color: var(--ok);
-  }
-
-  100% {
-    color: var(--muted);
-  }
 }
 
 .chat-subagent-activity__snippet--updated {
@@ -1520,4 +1491,27 @@ openclaw-tooltip.chat-tasks-status__preview {
 .chat-tool-skipped {
   flex: none;
   white-space: nowrap;
+}
+
+openclaw-chat-tool-output {
+  display: block;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+}
+
+.chat-tool-output {
+  padding: 12px;
+}
+
+.chat-tool-output__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.chat-tool-output__text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--mono);
 }

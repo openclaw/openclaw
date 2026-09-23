@@ -869,18 +869,30 @@ describe("createVerifiedSqliteSnapshot", () => {
 
   it("removes its published target when final directory sync fails", async () => {
     const originalOpen = fs.open.bind(fs);
-    let targetDirectoryOpenCount = 0;
+    let published = false;
+    let failedSync = false;
+    durabilityTestState.publish = async (options, publish) => {
+      const result = await publish(options);
+      published = true;
+      return result;
+    };
     vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
-      if (isDirectoryOpen(flags) && path.resolve(String(filePath)) === tempDir) {
-        targetDirectoryOpenCount += 1;
-      }
-      if (targetDirectoryOpenCount === 2 && path.resolve(String(filePath)) === tempDir) {
+      if (
+        published &&
+        !failedSync &&
+        isDirectoryOpen(flags) &&
+        path.resolve(String(filePath)) === tempDir
+      ) {
+        expect((await fs.lstat(targetPath)).isFile()).toBe(true);
+        failedSync = true;
         throw Object.assign(new Error("directory sync failed"), { code: "EIO" });
       }
       return await originalOpen(filePath, flags, mode);
     });
 
     await expectSnapshotFailureWithoutTarget({ sourcePath, targetPath }, /directory sync failed/u);
+    expect(published).toBe(true);
+    expect(failedSync).toBe(true);
   });
 
   it.runIf(process.platform !== "win32")(
@@ -901,29 +913,35 @@ describe("createVerifiedSqliteSnapshot", () => {
       const displacedPath = `${tempDir}.displaced`;
       const replacementPath = `${tempDir}.replacement`;
       const originalOpen = fs.open.bind(fs);
-      let targetDirectoryOpenCount = 0;
+      let published = false;
       let replaced = false;
+      durabilityTestState.publish = async (options, publish) => {
+        const result = await publish(options);
+        published = true;
+        return result;
+      };
       vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
         const resolvedPath = path.resolve(String(filePath));
-        if (isDirectoryOpen(flags) && resolvedPath === tempDir) {
-          targetDirectoryOpenCount += 1;
-          if (targetDirectoryOpenCount === 2) {
-            replaced = true;
-            await fs.rename(tempDir, displacedPath);
-            await fs.mkdir(tempDir);
-            const replacementHandle = await originalOpen(filePath, flags, mode);
-            await fs.rename(tempDir, replacementPath);
-            await fs.rename(displacedPath, tempDir);
-            return replacementHandle;
-          }
+        if (published && !replaced && isDirectoryOpen(flags) && resolvedPath === tempDir) {
+          expect((await fs.lstat(targetPath)).isFile()).toBe(true);
+          replaced = true;
+          await fs.rename(tempDir, displacedPath);
+          await fs.mkdir(tempDir);
+          const replacementHandle = await originalOpen(filePath, flags, mode);
+          await fs.rename(tempDir, replacementPath);
+          await fs.rename(displacedPath, tempDir);
+          return replacementHandle;
         }
         return await originalOpen(filePath, flags, mode);
       });
 
       try {
-        await expect(createVerifiedSqliteSnapshot({ sourcePath, targetPath })).rejects.toThrow(
-          /handle changed during directory sync/u,
-        );
+        await expect(
+          createVerifiedSqliteSnapshot({ sourcePath, targetPath }),
+        ).rejects.toMatchObject({
+          cause: { name: "FsSafeError", code: "path-mismatch" },
+        });
+        expect(published).toBe(true);
         expect(replaced).toBe(true);
         await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
       } finally {

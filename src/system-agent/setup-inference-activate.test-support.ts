@@ -256,24 +256,23 @@ export async function fixture(
   const run = vi.fn<NonNullable<ActivateSetupInferenceDeps["runEmbeddedAgent"]>>(async (params) =>
     reply(params),
   );
+  // Revalidation must reload the same prepared provider used by login and the probe.
+  vi.spyOn(runtimePlugins, "loadAgentRuntimePluginRegistryHandle").mockReturnValue(pluginRegistry);
   const deps: ActivateSetupInferenceDeps = {
     resolvePluginProviders: () => [provider],
     resolveManifestProviderAuthChoice: () => choice,
     resolveManifestProviderAuthChoices: () => [choice],
     resolvePluginMetadataSnapshot: metadata.bind,
+    resolveApiKeyForProvider: resolveAuth,
     runEmbeddedAgent: run,
   };
   if (options.codex) {
-    vi.spyOn(runtimePlugins, "loadAgentRuntimePluginRegistryHandle").mockReturnValue(
-      pluginRegistry,
-    );
     deps.readCodexCliActiveApiKey = () => null;
     deps.ensureCodexRuntimePlugin = async ({ cfg: candidateConfig }) => ({
       ok: true,
       cfg: candidateConfig,
       required: false,
     });
-    deps.resolveApiKeyForProvider = resolveAuth;
     deps.loadPluginRegistrySnapshot = () => ({
       plugins: [pluginRecord("openai"), pluginRecord("codex")],
     });
@@ -326,7 +325,6 @@ export async function fixture(
         resolveManifestProviderAuthChoices: () => [choice],
         resolvePluginProviders: () => [provider],
         detectInferenceBackends: async () => [],
-        probeLocalCommand: async (command) => ({ command, found: false }),
       }),
     );
   return {

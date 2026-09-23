@@ -9,6 +9,7 @@ import { getCachedPluginModuleLoader } from "../../../plugins/plugin-module-load
 import { applyChannelDoctorCompatibilityMigrations } from "./channel-legacy-config-migrate.js";
 import { resolveChannelAccountBindingRepairInput } from "./legacy-config-binding-repair-input.js";
 import { LEGACY_CONFIG_MIGRATIONS } from "./legacy-config-migrations.js";
+import { collectToolPolicyConflictWarnings } from "./legacy-config-migrations.runtime.tool-policy-conflicts.js";
 
 const require = createRequire(import.meta.url);
 
@@ -73,11 +74,16 @@ export function applyLegacyDoctorMigrations(
         })
       : { config: compat.next, changes: [] };
   changes.push(...ownership.changes);
+  const warnings = [
+    ...(compat.warnings ?? []),
+    ...(ownership.warnings ?? []),
+    ...collectToolPolicyConflictWarnings(ownership.config),
+  ];
   // The config reader keeps the retired default-agent marker outside the object.
   // Cloning must retain that owner so validation does not roll back a repairable roster.
   return {
     next: changes.length > 0 ? inheritLegacyDefaultAgentId(original, ownership.config) : null,
     changes,
-    ...(ownership.warnings?.length ? { warnings: ownership.warnings } : {}),
+    ...(warnings.length ? { warnings } : {}),
   };
 }

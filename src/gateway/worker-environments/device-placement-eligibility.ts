@@ -1,16 +1,56 @@
 import type { DevicePlacementRequirement } from "../../agents/harness/types.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { getRuntimeConfig, type OpenClawConfig } from "../../config/config.js";
+import {
+  resolveNodeWorkerExecutionIssue,
+  type NodeRunnerInventoryIssue,
+} from "../../infra/node-runner-inventory.js";
 import {
   resolveNodeCommandAllowlist,
   resolveRequiredNodeCommandAuthority,
+  isNodeCommandAllowed,
 } from "../node-command-policy.js";
-import type { NodeWorkerSupervisorNodeProof } from "../node-registry-private.js";
+import type {
+  NodeWorkerSupervisorNodeProof,
+  NodeWorkerSupervisorTransport,
+} from "../node-registry-private.js";
 import { readNodeSessionWithheldCommands } from "../node-registry.js";
 import { deviceUnavailableText, resolveDeviceWorkerAvailability } from "./device-provider.js";
 
 type DevicePlacementEligibility =
   | { ok: true; availableSlots: number; node: NodeWorkerSupervisorNodeProof }
-  | { ok: false; error: string };
+  | { ok: false; error: string; issue?: NodeRunnerInventoryIssue };
+
+export type WorkerNodePlacementAuthority = (
+  node: NodeWorkerSupervisorNodeProof,
+  requirement: DevicePlacementRequirement,
+  executionMode: "worker-turn" | "remote-exec",
+) => boolean;
+
+/** Revalidates the admitted connection and execution mode immediately before a placement write. */
+export function createDevicePlacementAuthority(
+  getTransport: () => NodeWorkerSupervisorTransport | undefined,
+): WorkerNodePlacementAuthority {
+  return (node, requirement, executionMode) => {
+    if (
+      getTransport()?.isCurrent(
+        node,
+        requirement.consumesWorkerSlot,
+        requirement.requiredNodeCommands,
+        executionMode === "worker-turn",
+      ) !== true
+    ) {
+      return false;
+    }
+    const declaredCommands = [...node.commands];
+    const allowlist = resolveNodeCommandAllowlist(getRuntimeConfig(), {
+      commands: declaredCommands,
+      approvedCommands: declaredCommands,
+    });
+    return requirement.requiredNodeCommands.every(
+      (command) => isNodeCommandAllowed({ command, declaredCommands, allowlist }).ok,
+    );
+  };
+}
 
 /** Raised only before a dispatch begins workspace preparation. */
 export class DevicePlacementUnavailableError extends Error {
@@ -26,6 +66,7 @@ export async function resolveDevicePlacementEligibility(params: {
   environmentService: object | undefined;
   deviceId: string;
   runtimeId?: string;
+  executionMode: "worker-turn" | "remote-exec";
   requirement: DevicePlacementRequirement | undefined;
   config: OpenClawConfig;
   currentNode?: {
@@ -50,6 +91,17 @@ export async function resolveDevicePlacementEligibility(params: {
     return { ok: false, error: deviceUnavailableText(deviceId, availability) };
   }
   const node = availability.node;
+  const issue =
+    params.executionMode === "worker-turn"
+      ? resolveNodeWorkerExecutionIssue(node.workerHost)
+      : undefined;
+  if (issue) {
+    return {
+      ok: false,
+      error: deviceUnavailableText(deviceId, { available: false, issue }),
+      issue,
+    };
+  }
   if (
     node.nodeId !== deviceId ||
     (params.currentNode &&

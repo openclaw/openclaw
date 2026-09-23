@@ -6,10 +6,10 @@ import type {
   WorkboardCard,
   WorkboardStatus,
 } from "@openclaw/workboard-contract";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import type { BrowserContext, Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { WORKBOARD_CHANGED_EVENT } from "../../../../packages/workboard-contract/src/index.js";
+import { createRequireRecord } from "../../../../test/helpers/record.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-support.ts";
 import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";

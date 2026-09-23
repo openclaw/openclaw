@@ -155,7 +155,7 @@
     "type": "function"
   },
   {
-    "description": "Spawn child session; default `runtime=\"subagent\"`. `mode=\"run\"` one-shot; `mode=\"session\"` persistent/thread-bound only on supporting requester channel. `agentId` targets a configured agent (see agents_list); `model` overrides its model; `cleanup` delete|keep hidden child session; `sandbox` inherit|require. Default to a hidden subagent for internal QA, research, coding, review, tests, and parallel work supporting the current task; omit `visible` or set it false, and report results through the parent. `visible=true`: durable visible session. Use only when the user requests a separate session or needs to revisit and steer the work independently. Shows in web UI sidebar; works without UI: announcing runs report back, progress checkable. `group` places it in a custom sidebar group (a new name creates the group); omission or an empty string leaves it ungrouped. Subagent only; omit `mode` (`mode=\"run\"` is also accepted), `thread`, `thinking`, and `lightContext`; `attachments=[]` and omitted/blank `attachAs.mountPath` are accepted, but nonempty attachment staging is unsupported; inherits the caller tool-policy ceiling; select a registered project with `projectId` or a managed GitHub clone with `projectGitUrl` (mutually exclusive with each other and `cwd`); may check out a git worktree via `worktree`/`worktreeName`/`worktreeBaseRef`. When its accepted result includes `sessionUrl`, channel acknowledgements put the session URL on the first line and `Owner: <label>` on the second line. `placement` selects a configured cloud profile with optional `os`/`machineClass`; requires `visible=true` and `worktree=true`. Creates first, dispatches, then starts the task; cloud failures retain the child for inspection, never fall back locally. Session listing/addressing obeys `tools.sessions.visibility` (all: all sessions, cross-agent per tools.agentToAgent).  Inherits parent workspace. Native task arrives in the child's initial `[Subagent Task]` message. Native: explicit context=\"isolated\" starts clean; context=\"fork\" copies requester transcript and requires the same agent. Omitted context follows configured threadBindings.defaultSpawnContext policy (fork by default) with thread=true; without a thread it is isolated. A PR/report, long runtime, or isolated worktree alone does not justify a sidebar session. A request for a subagent does not request a separate session. No spawn for quick lookup/single read. Check spawns via `subagents`/`sessions_history`. After spawn, do non-overlap work; follow the receipt's completion mode.",
+    "description": "Spawn child session; default `runtime=\"subagent\"`. `mode=\"run\"` one-shot; `mode=\"session\"` persistent/thread-bound only on supporting requester channel. `agentId` targets a configured agent (see agents_list); `model` overrides its model; `cleanup` delete|keep hidden child session; `sandbox` inherit|require. Default to a hidden subagent for internal QA, research, coding, review, tests, and parallel work supporting the current task; omit `visible` or set it false, and report results through the parent. `visible=true`: durable visible session. Use only when the user requests a separate session or needs to revisit and steer the work independently. Shows in web UI sidebar; works without UI: announcing runs report back, progress checkable. `group` places it in a custom sidebar group (a new name creates the group); omission or an empty string leaves it ungrouped. Subagent only; omit `mode` (`mode=\"run\"` is also accepted), `thread`, `thinking`, and `lightContext`; `attachments=[]` and omitted/blank `attachAs.mountPath` are accepted, but nonempty attachment staging is unsupported; inherits the caller tool-policy ceiling; select a registered project with `projectId` or a managed GitHub clone with `projectGitUrl` (mutually exclusive with each other and `cwd`); may check out a git worktree via `worktree`/`worktreeName`/`worktreeBaseRef`. When its accepted result includes `sessionUrl`, channel acknowledgements put the session URL on the first line and `Owner: <label>` on the second line. Omit `placement` or use `{kind:\"local\"}` for local execution. `{kind:\"profile\",profileId,os?,machineClass?}` selects a configured cloud profile and requires `visible=true` and `worktree=true`. Cloud placement creates first, dispatches, then starts the task; failures retain the child for inspection, never fall back locally. Session listing/addressing obeys `tools.sessions.visibility` (all: all sessions, cross-agent per tools.agentToAgent).  Inherits parent workspace. Native task arrives in the child's initial `[Subagent Task]` message. Native: explicit context=\"isolated\" starts clean; context=\"fork\" copies requester transcript and requires the same agent. Omitted context follows configured threadBindings.defaultSpawnContext policy (fork by default) with thread=true; without a thread it is isolated. A PR/report, long runtime, or isolated worktree alone does not justify a sidebar session. A request for a subagent does not request a separate session. No spawn for quick lookup/single read. Check spawns via `subagents`/`sessions_history`. After spawn, do non-overlap work; follow the receipt's completion mode.",
     "inputSchema": {
       "properties": {
         "agentId": {
@@ -250,32 +250,47 @@
         },
         "placement": {
           "~optional": true,
-          "additionalProperties": false,
-          "description": "Cloud destination: kind=profile, profileId, optional os and machineClass. Requires visible=true and worktree=true. Omitted selectors use profile defaults; first task starts only after cloud dispatch.",
-          "properties": {
-            "kind": {
-              "const": "profile",
-              "type": "string"
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "const": "local",
+                  "type": "string"
+                }
+              },
+              "required": ["kind"],
+              "type": "object"
             },
-            "machineClass": {
-              "maxLength": 128,
-              "minLength": 1,
-              "type": "string"
-            },
-            "os": {
-              "maxLength": 64,
-              "minLength": 1,
-              "type": "string"
-            },
-            "profileId": {
-              "maxLength": 256,
-              "minLength": 1,
-              "pattern": "^\\S(?:.*\\S)?$",
-              "type": "string"
+            {
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "const": "profile",
+                  "type": "string"
+                },
+                "machineClass": {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "os": {
+                  "maxLength": 64,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "profileId": {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "pattern": "^\\S(?:.*\\S)?$",
+                  "type": "string"
+                }
+              },
+              "required": ["kind", "profileId"],
+              "type": "object"
             }
-          },
-          "required": ["kind", "profileId"],
-          "type": "object"
+          ],
+          "description": "Execution placement: omitted or {kind: \"local\"} uses local execution for native and ACP runs. {kind: \"profile\", profileId, os?, machineClass?} selects a configured cloud profile and requires visible=true and worktree=true. Never supply placeholder selectors. Omitted cloud selectors use profile defaults; the first task starts only after cloud dispatch."
         },
         "projectGitUrl": {
           "description": "GitHub HTTPS or git@github.com repository URL for a visible session's managed clone; mutually exclusive with projectId and cwd. Local paths and file URLs are not accepted.",
@@ -345,7 +360,7 @@
     "tools": [
       {
         "deferLoading": true,
-        "description": "Gateway scheduler: reminders, delayed self-wakeups, loops, recurring work, event watchers. Never exec sleep/poll as timer.\n\nACTIONS: status | list [includeDisabled,limit?,offset?] (compact summaries with timing; use nextOffset for the next page) | get jobId (full schedule, payload, and delivery details) | add job | update jobId job (partial: only supplied fields change; null clears) | remove jobId | run jobId (runMode \"force\"=now) | runs jobId = history | next_check in:\"30m\" (own paced run only) | wake text mode?:\"now\"|\"next-heartbeat\"(default) nudges a caller-owned lane (sessionKey/agentId to pick another).\n\nSCOPE: Authenticated configured channel owner and Control UI administrator turns can list/get/update/run/remove any Gateway automation. Other turns see only caller-visible jobs; totals/counts and hasMore describe that scoped view, not global inventory. In that restricted view, an empty list or failed list/get/update/remove (including not-found) does not establish global absence, whatever the source of a known job id (including your own history). Never recreate or replace a known automation to satisfy an update/remove or reconciliation request solely because of these results. Report that you cannot establish global absence and ask an authorized administrator to check through a fresh authenticated configured channel owner or Control UI administrator turn or the Automations page; do not bypass caller scope. Genuinely new, requested automations can still be created.\n\nADD: {name?,schedule,payload,sessionTarget?,pacing?,trigger?,delivery?,enabled?}. Required: schedule+payload.\n\nSCHEDULE:\n- {kind:\"at\",at:\"ISO-8601\"} one-shot; no tz=UTC; auto-deletes after successful completion: delivery confirmed, not requested, intentionally silent, or explicitly bestEffort. Failed/unknown required delivery retains it disabled.\n- {kind:\"every\",everyMs}.\n- {kind:\"cron\",expr,tz?:\"IANA\"}: expr is wall time in tz; never pre-convert to UTC; no tz=gateway host local. 18:00 Shanghai => {expr:\"0 18 * * *\",tz:\"Asia/Shanghai\"}.\n- {kind:\"stream\",command:[argv],mode?:\"line\"|\"match\",match?}: fires on supervised process output; disabled only when cron.triggers.enabled=false.\n\nTARGET+PAYLOAD:\n- \"current\" (agentTurn default) = this conversation: the run stays detached, reads bounded chat context, then commits its final visible assistant result to this conversation's durable history. Self-wakeup/\"continue later\"/loop = at|every + agentTurn + current.\n- \"isolated\" = fresh detached session (shows in `openclaw tasks`); standalone background work.\n- \"main\" = heartbeat lane; payload {kind:\"systemEvent\",text} (systemEvent default target).\n- \"session:<key>\" = named session.\n- agentTurn {kind:\"agentTurn\",message,model?,thinking?,timeoutSeconds?}; timeoutSeconds 0=none.\n- Inherited configured MCP authority includes only model-callable tools; interactive app-view-only capabilities are excluded from headless jobs.\n- script {kind:\"script\",script,timeoutSeconds?,toolBudget?}: main|isolated only; disabled only when cron.triggers.enabled=false.\n\nPACED LOOP: recurring job + pacing{min?,max?} durations (\"15m\",\"4h\"; at least one). Inside its run, job calls next_check in:\"<dur>\" to set the next delay (clamped to bounds, measured from run end; failed runs keep normal backoff). Adaptive polling: tighten when active, back off when quiet.\n\nTRIGGER (condition watcher on every/cron): {script,once?}; available unless cron.triggers.enabled=false — if off, say so; never model-poll instead. Quiet headless check, no model; 30s/5 tool calls/16KB state. Read frozen trigger.state, return json({fire,message?,state?}) with NEW state; dedupe via state, never memory. fire:false saves state only. fire:true runs payload; message is that run's entire context — self-contained. Fire on failures/timeouts too; success-only watchers look healthy when broken. Script stays read-only; actions belong in payload. once:true disables after first fire. Code Mode: await exec({command:\"...\"}).\n\nDELIVERY {mode:\"none\"|\"announce\"|\"webhook\",channel?,to?,threadId?,bestEffort?,completionDestination?}: where detached run output goes. Omitted=announce (current=>canonical session commit, plus one normal channel send for external chats; isolated=>last route; set channel/to for a specific chat — no messaging tool inside the run). A current announce succeeds only after its history commit; WebChat observes that commit live and after reconnect without another user message. Silent watcher=>mode:\"none\". webhook posts finished-run event (successful empty summary is intentional silence, no POST) to URL in `to`. To keep announce delivery and also POST completion, use mode:\"announce\" with completionDestination:{mode:\"webhook\",to:\"https://...\"}.\n\nFAILURE ALERTS: jobs with a failure route default to alerting after 2 consecutive execution failures with a 1h cooldown. Route order: job failureAlert fields, delivery.failureDestination over global cron.failureAlert destination fields, then primary announce. failureAlert:false disables execution/delivery alerts, not the auto-disable safety notice; a failureAlert object activates/tunes. bestEffort suppresses inherited execution alerts. Required completion-delivery failure uses only an alternate route, bypasses after, and shares the execution-alert cooldown from the first failure; it does not increment the execution streak.\n\nJob wakeMode (main jobs): \"now\"(default)|\"next-heartbeat\". Restricted automation-run sessions: self status/list/get/runs/remove + own next_check only. jobId canonical (id=compat). contextMessages 0-10 embeds recent chat lines into reminder text.",
+        "description": "Gateway scheduler: reminders, delayed self-wakeups, loops, recurring work, event watchers. Never exec sleep/poll as timer.\n\nACTIONS: status | list [includeDisabled,limit?,offset?] (compact summaries with timing; use nextOffset for the next page) | get jobId (full schedule, payload, and delivery details) | add job | update jobId job (partial: only supplied fields change; null clears) | remove jobId | run jobId (runMode \"force\"=now) | runs jobId = history | next_check in:\"30m\" (own paced run only) | wake text mode?:\"now\"|\"next-heartbeat\"(default) nudges a caller-owned lane (sessionKey/agentId to pick another).\n\nSCOPE: Authenticated configured channel owner and Control UI administrator turns can list/get/update/run/remove any Gateway automation. Other turns see only caller-visible jobs; totals/counts and hasMore describe that scoped view, not global inventory. In that restricted view, an empty list or failed list/get/update/remove (including not-found) does not establish global absence, whatever the source of a known job id (including your own history). Never recreate or replace a known automation to satisfy an update/remove or reconciliation request solely because of these results. Report that you cannot establish global absence and ask an authorized administrator to check through a fresh authenticated configured channel owner or Control UI administrator turn or the Automations page; do not bypass caller scope. Genuinely new, requested automations can still be created.\n\nADD: job requires schedule+payload.\n\nSCHEDULE:\n- {kind:\"at\",at:\"ISO-8601\"} one-shot; no tz=UTC; auto-deletes after successful completion: delivery confirmed, not requested, intentionally silent, or explicitly bestEffort. Failed/unknown required delivery retains it disabled.\n- {kind:\"every\",everyMs}.\n- {kind:\"cron\",expr,tz?:\"IANA\"}: expr is wall time in tz; never pre-convert to UTC; no tz=gateway host local. 18:00 Shanghai => {expr:\"0 18 * * *\",tz:\"Asia/Shanghai\"}.\n- {kind:\"stream\",command:[argv]}: fires on supervised process output; disabled only when cron.triggers.enabled=false.\n\nTARGET+PAYLOAD:\n- \"current\" (agentTurn default) = this conversation: the run stays detached, reads bounded chat context, then commits its final visible assistant result to this conversation's durable history. Self-wakeup/\"continue later\"/loop = at|every + agentTurn + current.\n- \"isolated\" = fresh detached session (shows in `openclaw tasks`); standalone background work.\n- \"main\" = heartbeat lane; payload {kind:\"systemEvent\",text} (systemEvent default target).\n- \"session:<key>\" = named session.\n- {kind:\"agentTurn\",message}; timeoutSeconds 0=none.\n- Inherited configured MCP authority includes only model-callable tools; interactive app-view-only capabilities are excluded from headless jobs.\n- {kind:\"script\",script}: main|isolated only; disabled only when cron.triggers.enabled=false.\n\nPACED LOOP: recurring job + pacing{min?,max?} durations (\"15m\",\"4h\"; at least one). Inside its run, job calls next_check in:\"<dur>\" to set the next delay (clamped to bounds, measured from run end; failed runs keep normal backoff). Adaptive polling: tighten when active, back off when quiet.\n\nTRIGGER (condition watcher on every/cron): {script}; available unless cron.triggers.enabled=false — if off, say so; never model-poll instead. Quiet headless check, no model; 30s/5 tool calls/16KB state. Read frozen trigger.state, return json({fire,message?,state?}) with NEW state; dedupe via state, never memory. fire:false saves state only. fire:true runs payload; message is that run's entire context — self-contained. Fire on failures/timeouts too; success-only watchers look healthy when broken. Script stays read-only; actions belong in payload. once:true disables after first fire. Code Mode: await exec({command:\"...\"}).\n\nDELIVERY: where detached run output goes. Omitted=announce (current=>canonical session commit, plus one normal channel send for external chats; isolated=>last route; set channel/to for a specific chat — no messaging tool inside the run). A current announce succeeds only after its history commit; WebChat observes that commit live and after reconnect without another user message. Silent watcher=>mode:\"none\". webhook posts finished-run event (successful empty summary is intentional silence, no POST) to URL in `to`. To keep announce delivery and also POST completion, use mode:\"announce\" with completionDestination:{mode:\"webhook\",to:\"https://...\"}.\n\nFAILURE ALERTS: jobs with a failure route default to alerting after 2 consecutive execution failures with a 1h cooldown. Route order: job failureAlert fields, delivery.failureDestination over global cron.failureAlert destination fields, then primary announce. failureAlert:false disables execution/delivery alerts, not the auto-disable safety notice; a failureAlert object activates/tunes. bestEffort suppresses inherited execution alerts. Required completion-delivery failure uses only an alternate route, bypasses after, and shares the execution-alert cooldown from the first failure; it does not increment the execution streak.\n\nJob wakeMode (main jobs): \"now\"(default)|\"next-heartbeat\". Restricted automation-run sessions: self status/list/get/runs/remove + own next_check only. jobId canonical (id=compat). contextMessages 0-10 embeds recent chat lines into reminder text.",
         "inputSchema": {
           "additionalProperties": true,
           "properties": {
@@ -899,7 +914,7 @@
       },
       {
         "deferLoading": true,
-        "description": "Read gateway config/schema. update.run: owner-only update on explicit user request; restart + completion notice automatic. Never via shell. Other system changes: use openclaw tool.",
+        "description": "Read gateway config/schema. update.run: owner request or operator schedule; automatic restart + completion notice. Never via shell. Other system changes: use openclaw tool.",
         "inputSchema": {
           "properties": {
             "action": {
@@ -1135,7 +1150,7 @@
       },
       {
         "deferLoading": true,
-        "description": "Read sanitized visible-session history. Before reply/debug/resume. Use messageId (optionally sessionId) for anchored history; offset is ignored when messageId is set. Without messageId, use offset for plain pagination. limit bounds either mode. Include tool messages with includeTools. pendingInputs are accepted inputs outside model history; page with pendingBefore=nextBefore. Cancelled/interrupted inputs never replay automatically. Lower limit for richer pending previews.",
+        "description": "Read sanitized visible-session history. Before reply/debug/resume. Use messageId for anchored history; sessionId selects its transcript and requires messageId. Omit both for the latest tail. offset pages unanchored history and is ignored with messageId. limit bounds either mode. Include tool messages with includeTools. pendingInputs are accepted inputs outside model history; page with pendingBefore=nextBefore. Cancelled/interrupted inputs never replay automatically. Lower limit for richer pending previews.",
         "inputSchema": {
           "properties": {
             "includeTools": {
@@ -1147,10 +1162,12 @@
               "type": "integer"
             },
             "messageId": {
+              "description": "Return history around this message id. Ignores offset; limit bounds the window.",
               "minLength": 1,
               "type": "string"
             },
             "offset": {
+              "description": "Plain-pagination offset. Ignored when messageId is set; limit still bounds anchored history.",
               "minimum": 0,
               "type": "integer"
             },
@@ -1159,6 +1176,7 @@
               "type": "integer"
             },
             "sessionId": {
+              "description": "Transcript session id that owns messageId. Requires messageId; omit for the latest tail.",
               "minLength": 1,
               "type": "string"
             },
@@ -1297,7 +1315,7 @@
       },
       {
         "deferLoading": true,
-        "description": "Run a visible session on this Gateway by sessionKey/label, or a configured local agent by agentId; sessionKey wins redundant label. A session identifies model context, not an external address; its reply may still announce through established delivery context. Accepted results report target admission as `targetDisposition: \"queued\"` or `\"steered\"`; `delivery.status` is only later announcement state, and neither proves target completion. mode:notify queues ephemeral context for the next turn without waking or starting work (bounded process memory, not a durable inbox). mode:steer injects guidance into an active supported run and never starts idle work; mode:followup starts or queues a later turn without steering. mode:resume continues your paused native child task; returns runId/taskRunId, with completion from the task owner, not inline. Resume rejects watch:true and positive timeoutSeconds. Omit mode for existing automatic routing. For an exact external destination, use `conversations_list` plus `conversations_send`/`conversations_turn`. Thread chats rejected: target parent channel. Missing configured-agent main created. Waits for reply when available; status \"no_reply\" is terminal, so do not wait for an announcement. watch:true: notice arrives when others later change target session.",
+        "description": "Run a visible session on this Gateway by sessionKey/label, or a configured local agent by agentId; sessionKey wins redundant label. A session identifies model context, not an external address; its reply may still announce through established delivery context. Accepted results report target admission as `targetDisposition: \"queued\"` or `\"steered\"`; `delivery.status` is only later announcement state, and neither proves target completion. Omit mode to automatically continue your paused native child task; returns runId/taskRunId with task-owned completion instead of an inline wait or watch. Other sessions use ordinary message delivery. mode:notify queues ephemeral context for the next turn without waking or starting work (bounded process memory, not a durable inbox). mode:steer injects guidance into an active supported run and never starts idle work. mode:followup starts a separate turn without steering or resuming a paused task. mode:resume requires a paused native child task and rejects watch:true and positive timeoutSeconds. For an exact external destination, use `conversations_list` plus `conversations_send`/`conversations_turn`. Thread chats rejected: target parent channel. Missing configured-agent main created. Waits for reply when available; status \"no_reply\" is terminal, so do not wait for an announcement. watch:true: notice arrives when others later change target session.",
         "inputSchema": {
           "properties": {
             "agentId": {

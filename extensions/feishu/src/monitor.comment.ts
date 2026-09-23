@@ -1,4 +1,3 @@
-// Feishu plugin module implements monitor.comment behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   asBoolean as readBoolean,

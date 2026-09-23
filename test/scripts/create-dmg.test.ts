@@ -127,9 +127,11 @@ esac
   const osascript = path.join(bin, "osascript");
   writeFileSync(osascript, '#!/usr/bin/env bash\ncat > "$OSASCRIPT_LOG"\nexit 0\n', "utf8");
   chmodSync(osascript, 0o755);
-  const sleep = path.join(bin, "sleep");
-  writeFileSync(sleep, "#!/usr/bin/env bash\nexit 0\n", "utf8");
-  chmodSync(sleep, 0o755);
+  for (const command of ["sleep", "sync"]) {
+    const tool = path.join(bin, command);
+    writeFileSync(tool, `#!/bin/bash\nprintf '${command} %s\\n' "$*" >> "$HDIUTIL_LOG"\n`, "utf8");
+    chmodSync(tool, 0o755);
+  }
   return {
     env: {
       HDIUTIL_LOG: hdiutilLog,
@@ -396,12 +398,14 @@ describe.runIf(process.platform === "darwin")("create-dmg ownership boundaries",
     const log = readFileSync(tools.hdiutilLog, "utf8");
     expect(log).not.toContain("resize");
     expect(log).not.toContain("convert");
+    // Ten packaging attempts plus the EXIT trap's last cleanup attempt.
+    expect(log.match(/^detach /gm)).toHaveLength(11);
     const mountPoint = expectPrivateDmgMount(log);
     expect(readFileSync(path.join(mountPoint, "live-volume-file"), "utf8")).toBe("mounted");
     rmSync(path.dirname(mountPoint), { recursive: true, force: true });
   });
 
-  it("retries a delayed DMG detach before finalizing the artifact", () => {
+  it.each([6, 9])("retries %i failed DMG detaches before finalizing the artifact", (failures) => {
     const app = makeValidApp();
     const outputDir = mkdtempSync(path.join(tmpdir(), "openclaw-create-dmg-output-"));
     tempDirs.push(outputDir);
@@ -410,15 +414,21 @@ describe.runIf(process.platform === "darwin")("create-dmg ownership boundaries",
 
     const result = runScript([app, output], {
       ...tools.env,
-      HDIUTIL_DETACH_FAIL_COUNT: "6",
+      HDIUTIL_DETACH_FAIL_COUNT: String(failures),
     });
 
     expect(result.status).toBe(0);
     expect(readFileSync(output, "utf8")).toBe("converted");
     const log = readFileSync(tools.hdiutilLog, "utf8");
-    expect(log.match(/^detach /gm)).toHaveLength(7);
-    expect(log).toContain("detach ");
-    expect(log).toContain("-force");
+    const detaches = log.split("\n").filter((line) => line.startsWith("detach "));
+    expect(detaches).toHaveLength(failures + 1);
+    expect(detaches.slice(0, -1).every((line) => line.endsWith("-quiet"))).toBe(true);
+    expect(detaches.at(-1)).toMatch(failures === 9 ? /-force$/ : /-quiet$/);
+    expect(log.indexOf("sync ")).toBeGreaterThan(log.indexOf("attach "));
+    expect(log.indexOf("sync ")).toBeLessThan(log.indexOf("sleep "));
+    const delays = Array.from(log.matchAll(/^sleep (\d+)$/gm), ([, delay]) => Number(delay));
+    expect(delays).toHaveLength(Math.min(failures + 1, 9));
+    expect(delays.reduce((sum, delay) => sum + delay, 0)).toBe(failures === 9 ? 54 : 35);
     expect(log).toContain("resize");
     expect(log).toContain("convert ");
   });

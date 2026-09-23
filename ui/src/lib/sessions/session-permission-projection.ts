@@ -11,6 +11,7 @@ export type SessionPermissionClaim = {
 
 type PermissionProjectionRoster = {
   readonly requestRevision: number;
+  rowRevision: (row: GatewaySessionRow) => number;
   inheritRow: (row: GatewaySessionRow, source: GatewaySessionRow) => GatewaySessionRow;
   publishedRow: (
     matches: (row: GatewaySessionRow, agentId?: string | null) => boolean,
@@ -50,13 +51,20 @@ export function createSessionPermissionProjection(
   ): SessionPermissionClaim => {
     const identity = permissionIdentity(key, agentId);
     const expectedId = expectedSessionId?.trim() || undefined;
-    const sessionId =
-      expectedId ??
-      getRoster().publishedRow(
-        (row, ownerAgentId) =>
-          permissionIdentity(row.key, row.agentId ?? ownerAgentId) === identity,
-      )?.sessionId;
+    const roster = getRoster();
+    const published = roster.publishedRow(
+      (row, ownerAgentId) => permissionIdentity(row.key, row.agentId ?? ownerAgentId) === identity,
+    );
+    const sessionId = expectedId ?? published?.sessionId;
     const projection = createProjection(identity, sessionId);
+    if (!projection.fact && published && published.sessionId === sessionId) {
+      // An unchanged read during the write must not look like a competing permission edit.
+      projection.fact = {
+        permissionMode: published.permissionMode,
+        updatedAt: published.updatedAt,
+        revision: roster.rowRevision(published),
+      };
+    }
     const initialFact = projection.fact;
     const ownsClaim = () => permissionProjections.get(identity) === projection;
     let confirmed = false;

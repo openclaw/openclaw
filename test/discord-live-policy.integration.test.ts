@@ -20,6 +20,7 @@ import {
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
 } from "../src/plugins/runtime.js";
+import { createPluginRuntime } from "../src/plugins/runtime/index.js";
 import {
   getActiveGatewayRootWorkCount,
   tryBeginGatewayRootWorkAdmission,
@@ -62,6 +63,7 @@ describe("Discord admission through Gateway policy publication", () => {
         deactivate: () => Promise<void>;
       };
       createNoopThreadBindingManager: (accountId: string) => object;
+      setDiscordRuntime: (runtime: ReturnType<typeof createPluginRuntime>) => void;
     }>({ pluginId: "discord", artifactBasename: "runtime-api.js" });
     const { discordPlugin } = await loadBundledPluginFacade<{ discordPlugin: ChannelPlugin }>({
       pluginId: "discord",
@@ -76,6 +78,7 @@ describe("Discord admission through Gateway policy publication", () => {
     ]);
     setActivePluginRegistry(registry);
     setRuntimeConfigSnapshot(cfg, cfg);
+    discord.setDiscordRuntime(createPluginRuntime());
     let channelId = "456";
     let pendingChannelLookup: Promise<void> | undefined;
     let channelLookupStarted = false;

@@ -114,12 +114,19 @@ suite.define(() => {
       });
       await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
       await expect.poll(() => composer.inputValue()).toBe("");
+      await captureProof(page, `background-${label}-running.png`);
+      await expect
+        .poll(() => page.locator(".new-session-page__starting").textContent())
+        .toContain(`run this separately on ${label}`);
+      await expect
+        .poll(() => page.locator(".new-session-page__starting").textContent())
+        .toContain("Session created");
+      await page.getByRole("button", { name: "Open session", exact: true }).waitFor();
       await expect
         .poll(() =>
           page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`).count(),
         )
         .toBe(1);
-      await captureProof(page, `background-${label}-running.png`);
       if (captureProofEnabled) {
         await page.waitForTimeout(600);
       }
@@ -617,9 +624,11 @@ suite.define(() => {
           expect(await gateway.getRequests("chat.startup")).toHaveLength(0);
           await expect.poll(() => submittedPrompt.isVisible()).toBe(true);
           if (content === "json") {
-            await submittedPrompt.locator(".chat-json-summary").click();
-            await pollLocatorText(submittedPrompt.locator(".chat-json-content")).toBe(
-              submittedMessage,
+            const pendingJson = submittedPrompt.locator(".chat-text");
+            await pendingJson.locator("pre code").waitFor({ state: "visible" });
+            await pollLocatorText(pendingJson.locator("pre code")).toBe(submittedMessage);
+            expect(await pendingJson.locator("button, details, .code-block-wrapper").count()).toBe(
+              0,
             );
           } else {
             const pendingMarkdown = submittedPrompt.locator(".chat-text");
@@ -733,9 +742,11 @@ suite.define(() => {
               .click();
             await expandedTable.waitFor({ state: "detached" });
           } else {
-            await acceptedPrompt.locator(".chat-json-summary").click();
-            await pollLocatorText(acceptedPrompt.locator(".chat-json-content")).toBe(
-              submittedMessage,
+            const acceptedJson = acceptedPrompt.locator(".chat-text");
+            await acceptedJson.locator("pre code").waitFor({ state: "visible" });
+            await pollLocatorText(acceptedJson.locator("pre code")).toBe(submittedMessage);
+            expect(await acceptedJson.locator("button, details, .code-block-wrapper").count()).toBe(
+              0,
             );
           }
           await expectDecodedThumbnail(acceptedPrompt.locator("img.chat-message-image"));

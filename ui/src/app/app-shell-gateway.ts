@@ -1,13 +1,17 @@
 import type { UiCommandParams } from "@openclaw/gateway-protocol";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../api/gateway.ts";
 import type { GatewayAgentRow } from "../api/types.ts";
-import type { RouteId } from "../app-routes.ts";
+import { isSessionRouteId } from "../app-route-paths.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
+  DESKTOP_PANEL_TOGGLE_EVENT,
+  PORTAL_PANEL_TOGGLE_EVENT,
   TERMINAL_PANEL_TOGGLE_EVENT,
   UI_COMMAND_EVENT,
 } from "../components/panel-toggle-contract.ts";
+import { rememberSessionPanelToggle } from "../components/session-panel-toggle-buffer.ts";
 import { i18n, isSupportedLocale } from "../i18n/index.ts";
+import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
 import type { ApplicationContext } from "./context.ts";
 import { hasOperatorWriteAccess } from "./operator-access.ts";
@@ -35,7 +39,7 @@ export type OutboxStoreRuntime = Pick<
 >;
 
 export interface ShellGatewayHost {
-  readonly context: ApplicationContext<RouteId> | undefined;
+  readonly context: ApplicationContext | undefined;
   routeState: ShellRouteState;
   activeSessionKey: string;
   desktopNavigationExpanded: boolean;
@@ -157,15 +161,9 @@ export class ShellGatewayOwner {
     if (event.event === "users.prefs.changed") {
       const context = this.host.context;
       const profileId = context?.gateway.snapshot.selfUser?.id;
-      const payload = event.payload;
-      if (
-        context &&
-        profileId &&
-        payload &&
-        typeof payload === "object" &&
-        "profileId" in payload &&
-        payload.profileId === profileId
-      ) {
+      // The server routes this invalidation to the current profile and its aliases;
+      // the payload can name the canonical profile while this connection holds an alias.
+      if (context && profileId) {
         if (context.gateway.snapshot.client) {
           invalidateUserPreferences(context.gateway.snapshot.client);
         }
@@ -191,20 +189,42 @@ export class ShellGatewayOwner {
       return;
     }
     if (command.kind === "panel") {
-      window.dispatchEvent(
-        new CustomEvent(
-          command.panel === "terminal" ? TERMINAL_PANEL_TOGGLE_EVENT : BROWSER_PANEL_TOGGLE_EVENT,
-          {
-            detail: {
-              open: command.open,
-              ...(command.dock ? { dock: command.dock } : {}),
-              ...(command.panel === "terminal" && command.terminalSessionId
-                ? { terminalSessionId: command.terminalSessionId }
-                : {}),
-            },
+      const sessionKey =
+        commandParams.sessionKey ??
+        (command.panel === "portal" ? this.host.activeSessionKey : undefined);
+      if (
+        sessionKey &&
+        (!areUiSessionKeysEquivalent(sessionKey, this.host.activeSessionKey) ||
+          !isSessionRouteId(this.host.routeState.routeId))
+      ) {
+        this.host.selectChatSession(sessionKey, commandParams.agentId);
+      }
+      const panelEvent = new CustomEvent(
+        {
+          terminal: TERMINAL_PANEL_TOGGLE_EVENT,
+          browser: BROWSER_PANEL_TOGGLE_EVENT,
+          desktop: DESKTOP_PANEL_TOGGLE_EVENT,
+          portal: PORTAL_PANEL_TOGGLE_EVENT,
+        }[command.panel],
+        {
+          detail: {
+            open: command.open,
+            ...(sessionKey ? { sessionKey } : {}),
+            ...(command.dock ? { dock: command.dock } : {}),
+            ...(command.panel === "terminal" && command.terminalSessionId
+              ? { terminalSessionId: command.terminalSessionId }
+              : {}),
+            ...("environmentId" in command && command.environmentId
+              ? { environmentId: command.environmentId }
+              : {}),
+            ...("portalId" in command && command.portalId ? { portalId: command.portalId } : {}),
           },
-        ),
+        },
       );
+      if (sessionKey) {
+        rememberSessionPanelToggle(command.panel, panelEvent);
+      }
+      window.dispatchEvent(panelEvent);
       return;
     }
 
@@ -262,6 +282,9 @@ export class ShellGatewayOwner {
     this.host.previousGatewayPhase = snapshot.phase;
     this.updateGatewaySessionKey(snapshot);
     const context = this.host.context;
+    if (context) {
+      this.host.recoverDeletedActiveSession(context.sessions.state);
+    }
     if (snapshot.phase === "connected" && context) {
       const connectionBootstrap = context.connectionBootstrap;
       void connectionBootstrap.run("runtime-config", async () => {
@@ -351,10 +374,7 @@ export class ShellGatewayOwner {
     }
   }
 
-  private refreshProfileAppearancePrefs(
-    context: ApplicationContext<RouteId>,
-    force = false,
-  ): Promise<void> {
+  private refreshProfileAppearancePrefs(context: ApplicationContext, force = false): Promise<void> {
     const snapshot = context.gateway.snapshot;
     const profileId = snapshot?.selfUser?.id;
     if (!profileId) {

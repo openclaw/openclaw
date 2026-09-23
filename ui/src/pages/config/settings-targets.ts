@@ -37,6 +37,19 @@ export type SettingsSearchTarget = {
 // Keep destinations and translation keys together without importing page
 // renderers: settings search runs before the destination page is loaded.
 export const SETTINGS_SEARCH_TARGETS = {
+  webSearch: {
+    routeId: "search",
+    labelKey: "tabs.search",
+    hash: "",
+    searchKeys: [
+      "searchPage.enabled",
+      "searchPage.provider",
+      "searchPage.test",
+      "searchPage.setup",
+    ],
+    aliases:
+      "web internet native hosted automatic provider brave parallel google gemini searxng codex openai api key endpoint",
+  },
   sessionStorage: {
     routeId: "ai-agents",
     labelKey: "configView.sessionStorage.title",
@@ -93,6 +106,8 @@ export const SETTINGS_SEARCH_TARGETS = {
       "configPage.deviceSettings.panels.watch": (snapshot) => snapshot.device.platform === "ios",
       "configPage.deviceSettings.computerControl": (snapshot) =>
         snapshot.capabilities?.computerControlEnabled !== undefined,
+      "configPage.deviceSettings.desktopSharing": (snapshot) =>
+        snapshot.capabilities?.desktopSharingEnabled !== undefined,
       "configPage.deviceSettings.browser": (snapshot) => snapshot.browser !== undefined,
       "configPage.deviceSettings.cookieSync": (snapshot) => snapshot.browser !== undefined,
       "configPage.deviceSettings.developer": (snapshot) =>
@@ -103,12 +118,14 @@ export const SETTINGS_SEARCH_TARGETS = {
     routeId: "device-permissions",
     labelKey: "tabs.devicePermissions",
     hash: "",
-    searchKeys: [
-      "configPage.deviceSettings.systemAccess",
-      "configPage.deviceSettings.location",
-      "configPage.deviceSettings.preciseLocation",
-    ],
+    searchKeys: [],
     nativeSearchKeys: {
+      "configPage.deviceSettings.systemAccess": (snapshot) =>
+        snapshot.permissions.entries.length > 0,
+      "configPage.deviceSettings.location": (snapshot) =>
+        snapshot.permissions.location !== undefined,
+      "configPage.deviceSettings.preciseLocation": (snapshot) =>
+        snapshot.permissions.location !== undefined,
       "configPage.deviceSettings.permissions.contacts.title": (snapshot) =>
         snapshot.permissions.entries.some((entry) => entry.id === "contacts"),
       "configPage.deviceSettings.permissions.calendars.title": (snapshot) =>
@@ -329,6 +346,8 @@ export const SETTINGS_SEARCH_TARGETS = {
     searchKeys: [
       "configView.chatPrefs.messageWidth",
       "configView.chatPrefs.messageWidthHint",
+      "configView.chatPrefs.showTaskProgress",
+      "configView.chatPrefs.showTaskProgressHint",
       "configView.chatPrefs.collapseTaskProgress",
       "configView.chatPrefs.collapseTaskProgressHint",
       "chat.sendShortcut",
@@ -339,7 +358,6 @@ export const SETTINGS_SEARCH_TARGETS = {
       "chat.followUpModeQueue",
       "chat.followUpModeServer",
       "chat.followUpModeLoading",
-      "chat.followUpModeUsingServer",
       "chat.followUpModeOverriding",
       "chat.followUpModeReset",
       "chat.catalogOpenTarget",

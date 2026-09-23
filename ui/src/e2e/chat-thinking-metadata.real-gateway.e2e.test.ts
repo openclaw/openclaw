@@ -114,7 +114,7 @@ suite.define(() => {
       const { browserUrl }: { browserUrl: string } = JSON.parse(handoff.stdout);
       const url = new URL(browserUrl);
       url.pathname = "/chat/main/thinking-saved-off";
-      url.search = "?nav=collapsed";
+      url.search = "";
       await suite.withPage(
         { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 900 } },
         async ({ page }) => {
@@ -281,7 +281,7 @@ suite.define(() => {
       const { browserUrl }: { browserUrl: string } = JSON.parse(handoff.stdout);
       const url = new URL(browserUrl);
       url.pathname = "/chat/main/thinking-status";
-      url.search = "?nav=collapsed";
+      url.search = "";
       await suite.withPage(
         { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 900 } },
         async ({ page }) => {
@@ -331,9 +331,7 @@ suite.define(() => {
             stage = "open Sessions";
             await page.goto(new URL("/sessions", url).href);
             await waitForControlUiGatewayReady(page);
-            const session = page
-              .locator("tr[aria-controls]")
-              .filter({ hasText: "Thinking status" });
+            const session = page.getByRole("row").filter({ hasText: "Thinking status" });
             await session.waitFor({ state: "visible" });
             await session.press("Enter");
             const thinking = page.locator(".session-details-row select").first();

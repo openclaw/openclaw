@@ -21,7 +21,7 @@ The Gateway serves static files from `dist/control-ui`:
 pnpm ui:build
 ```
 
-For bundled builds, the Gateway retains manifest-verified assets so already-open tabs can fetch older asset URLs after an update. The cache keeps at most three generations and 96 MiB total, preferring the current generation; older generations can be pruned sooner to meet the byte budget. Background startup preparation reuses verified inventories through publication and pruning instead of rereading unchanged retained assets at each step. Newly published assets are verified before reuse, including a concurrent publisher's winning copy. Configured `gateway.controlUi.root` builds do not use this cache.
+For bundled builds, the Gateway retains manifest-verified assets so already-open tabs can fetch older asset URLs after an update. The cache serves at most three generations and 96 MiB total, preferring the current generation; older generations can be pruned sooner to meet the byte budget. Background startup preparation reuses verified inventories through publication and pruning instead of rereading unchanged retained assets at each step. Newly published assets are verified before reuse, including a concurrent publisher's winning copy. Each pruner claims an old directory before removing it so concurrent publishers do not delete the same tree. Cleanup failures log a warning and may temporarily leave extra files on disk, without discarding a successfully published generation. Later preparation can reclaim abandoned staging directories after one hour. Configured `gateway.controlUi.root` builds do not use this cache.
 
 Bundled public assets (themes, fonts, icons, and artwork) use `?v=<build-id>` URLs with a one-year immutable HTTP cache. The ID includes a digest of the public files, so rebuilding changed files at the same commit also changes their URLs. The Gateway snapshots this identity at startup; restart it after rebuilding an in-place installation. Unversioned requests, stale IDs, documents, `sw.js`, and custom `gateway.controlUi.root` installs keep `Cache-Control: no-cache`. The service worker keeps its network-first policy for public assets, allowing the browser's HTTP cache to satisfy matching versioned requests.
 
@@ -101,6 +101,16 @@ navigation outside the app is outside its control. Production connection setting
 and `pnpm ui:dev` behavior are unchanged; use that command when you intentionally
 need a real Gateway or external integration.
 
+## Chat input ownership
+
+`ChatOutboxGatewayOwner` owns queued-input admission, updates, removal, and the
+matching pane projections. Single-row changes and reordering share one durable
+compare-and-set operation; queue callers do not publish separate storage and
+display updates. Command completion uses the composer recovery owner to retain
+or release draft attachments. Delivery waits for the full settings-update chain,
+then continues admission synchronously so another picker update cannot enter
+between settlement and transport.
+
 ## Chat render scheduling
 
 Streaming deltas and session-roster notifications must not trigger a render for
@@ -113,6 +123,18 @@ documents retain immediate invalidation because animation frames may be suspende
 
 The `chat-stream-runtime-budgets.e2e.test.ts` suite protects streaming with
 structural update counts; chat-page unit tests cover intervening roster publications.
+
+Shell callbacks retain their identity across renders so a background session update
+does not redraw navigation twice. The outbox subscription still invalidates draft
+and attention badges when their underlying facts change. Session-link decoration
+preserves unchanged attributes instead of rewriting them on each roster update.
+
+Transcript enhancement inspects inserted or changed Markdown blocks; settled code
+blocks and tables do not need another scan when neighboring prose streams. Resize
+observers own geometry changes. The command palette likewise retains its measured
+input layout while navigating results, and remeasures edits, width changes, and
+reconnected fields. Status clocks pause in hidden tabs and render only when their
+displayed value or properties change.
 
 ## Talk live smoke test
 

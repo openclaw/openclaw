@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements model selection behavior.
 const QA_LIVE_DEFAULT_MODEL = "openai/gpt-5.6-luna";
 
 export function resolveQaLiveFrontierAlternateModel(primaryModel: string) {

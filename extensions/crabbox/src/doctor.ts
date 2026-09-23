@@ -1,5 +1,8 @@
 import type { HealthCheck, HealthFinding } from "openclaw/plugin-sdk/health";
-import { createPluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-store-runtime";
+import type {
+  OpenKeyedStoreOptions,
+  PluginStateEntry,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   asOptionalRecord as readRecord,
   normalizeOptionalString as nonEmptyString,
@@ -19,10 +22,13 @@ import {
 export const CRABBOX_CLOUD_WORKER_PROFILE_CHECK_ID = "crabbox/cloud-worker-profiles";
 const CRABBOX_WARM_IMAGES_CHECK_ID = "crabbox/warm-images";
 
-type CrabboxDoctorRegistrationHost = {
+export type CrabboxDoctorRegistrationHost = {
   readonly openclawRoot: string;
   readonly getHealthCheck: (id: string) => HealthCheck | undefined;
   readonly registerHealthCheck: (check: HealthCheck) => void;
+  readonly listPluginStateEntries: <T>(
+    options: OpenKeyedStoreOptions,
+  ) => Promise<PluginStateEntry<T>[]>;
 };
 
 function createCrabboxCloudWorkerProfileCheck(openclawRoot: string): HealthCheck {
@@ -137,13 +143,12 @@ export function registerCrabboxWorkerProviderDoctorChecks(
       source: "crabbox",
       async detect(ctx) {
         const findings: HealthFinding[] = [];
-        // The standalone Doctor artifact has no runtime state capability yet.
-        const entries = createPluginStateSyncKeyedStore<WarmProfileRecord>("crabbox", {
+        const entries = await host.listPluginStateEntries<WarmProfileRecord>({
           namespace: "warm-images",
           maxEntries: WARM_IMAGE_MAX_ENTRIES,
           overflowPolicy: "reject-new",
           ...(ctx.env ? { env: ctx.env } : {}),
-        }).entries();
+        });
         for (const { key, value } of entries) {
           const image = projectCrabboxWarmImage(key, value);
           const facts = [

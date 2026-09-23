@@ -136,6 +136,10 @@ Check its group on the source, the exact `share.groups` spelling, and whether it
 
 Refresh the catalog. The source may be offline, the session may have been deleted, or its group may no longer be shared. Reconnect the source node for an offline-host error; do not broaden its command allowlist.
 
+**Catalog refreshes sometimes take 30 seconds**
+
+When receiver diagnostics and warning logs are enabled, `gateway/session-catalog` logs discovery and node invocation phases that take at least one second. A `TIMEOUT` with `nodeCommandDispatched: false` occurred before dispatch; `true` means the receiver dispatched the command, so inspect the source node and its connection. It does not prove that the source handler started. An absent field leaves dispatch unknown. These records include bounded node error codes and durations, without node identifiers, request parameters, or error messages.
+
 **Names do not link to local profiles**
 
 Check the configured node ID and `linkGitHubIdentities`. Both profiles need the same verified numeric GitHub account ID; matching names or unverified logins do not link them.

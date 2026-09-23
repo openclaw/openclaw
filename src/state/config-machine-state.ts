@@ -19,6 +19,20 @@ export function normalizeConfigMachineStateKey(key: string): string {
   return normalized;
 }
 
+export function readConfigMachineStateRowInDatabase(database: DatabaseSync, key: string) {
+  if (!tableExists(database, "config_machine_state")) {
+    return undefined;
+  }
+  const db = getNodeSqliteKysely<ConfigMachineStateDatabase>(database);
+  return executeSqliteQueryTakeFirstSync(
+    database,
+    db
+      .selectFrom("config_machine_state")
+      .select(["value_json", "updated_at_ms"])
+      .where("state_key", "=", normalizeConfigMachineStateKey(key)),
+  );
+}
+
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Callers own the JSON shape for open-ended state keys.
 export function readConfigMachineStateWithMetadata<T>(
   key: string,
@@ -26,17 +40,7 @@ export function readConfigMachineStateWithMetadata<T>(
   behavior: { artifactPreservingReadOnly?: boolean } = {},
 ): { value: T; updatedAtMs: number } | undefined {
   const read = ({ db: database }: { db: DatabaseSync }) => {
-    if (!tableExists(database, "config_machine_state")) {
-      return undefined;
-    }
-    const db = getNodeSqliteKysely<ConfigMachineStateDatabase>(database);
-    const row = executeSqliteQueryTakeFirstSync(
-      database,
-      db
-        .selectFrom("config_machine_state")
-        .select(["value_json", "updated_at_ms"])
-        .where("state_key", "=", normalizeConfigMachineStateKey(key)),
-    );
+    const row = readConfigMachineStateRowInDatabase(database, key);
     return row
       ? { value: JSON.parse(row.value_json) as T, updatedAtMs: row.updated_at_ms }
       : undefined;

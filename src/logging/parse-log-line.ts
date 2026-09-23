@@ -69,7 +69,7 @@ export function parseLogLine(raw: string): ParsedLogLine | null {
     }
     const meta = isRecord(parsed["_meta"]) ? parsed["_meta"] : undefined;
     const context = resolveContext(parsed, meta);
-    const levelRaw = typeof meta?.logLevelName === "string" ? meta.logLevelName : undefined;
+    const levelRaw = typeof meta?.logLevelName === "string" ? meta.logLevelName : parsed.level;
     return {
       time:
         typeof parsed.time === "string"
@@ -78,7 +78,8 @@ export function parseLogLine(raw: string): ParsedLogLine | null {
             ? meta.date
             : undefined,
       level: normalizeOptionalLowercaseString(levelRaw),
-      subsystem: context.subsystem,
+      subsystem:
+        context.subsystem ?? (typeof parsed.subsystem === "string" ? parsed.subsystem : undefined),
       module: context.module,
       plugin: context.plugin,
       message: typeof parsed.message === "string" ? parsed.message : extractMessage(parsed),

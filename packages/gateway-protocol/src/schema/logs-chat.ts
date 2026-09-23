@@ -3,6 +3,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { Static } from "typebox";
 import { Type } from "typebox";
+import { CHAT_WORK_CONTEXT_LIMITS } from "../chat-work-context.js";
 import {
   CHAT_HISTORY_MAX_ENTRIES,
   CHAT_INPUT_RECEIPT_MAX_RUN_IDS,
@@ -246,6 +247,7 @@ export const ChatAttachmentSchema = Type.Object(
     type: Type.Optional(Type.String()),
     mimeType: Type.Optional(Type.String()),
     fileName: Type.Optional(Type.String()),
+    origin: Type.Optional(Type.Union([Type.Literal("paste"), Type.Literal("file")])),
     // Runtime normalization also accepts ArrayBuffer views from native/browser callers.
     content: Type.Optional(Type.Unknown()),
     sizeBytes: Type.Optional(Type.Number()),
@@ -276,6 +278,17 @@ export const ChatSendIntentSchema = closedObject({
 });
 export type ChatSendIntent = Static<typeof ChatSendIntentSchema>;
 
+const ChatWorkContextSchema = closedObject({
+  page: Type.String({ minLength: 1, maxLength: CHAT_WORK_CONTEXT_LIMITS.page }),
+  title: Type.Optional(Type.String({ maxLength: CHAT_WORK_CONTEXT_LIMITS.title })),
+  sessionKey: Type.Optional(Type.String({ maxLength: CHAT_WORK_CONTEXT_LIMITS.sessionKey })),
+  sessionId: Type.Optional(Type.String({ maxLength: CHAT_WORK_CONTEXT_LIMITS.sessionId })),
+  agentId: Type.Optional(Type.String({ maxLength: CHAT_WORK_CONTEXT_LIMITS.agentId })),
+  workspace: Type.Optional(Type.String({ maxLength: CHAT_WORK_CONTEXT_LIMITS.workspace })),
+  file: Type.Optional(Type.String({ maxLength: CHAT_WORK_CONTEXT_LIMITS.file })),
+  selection: Type.Optional(Type.String({ maxLength: CHAT_WORK_CONTEXT_LIMITS.selection })),
+});
+
 /** User-to-agent send request; idempotency key lets clients safely retry transport failures. */
 export const ChatSendParamsSchema = closedObject({
   sessionKey: ChatSendSessionKeyString,
@@ -283,6 +296,7 @@ export const ChatSendParamsSchema = closedObject({
   sessionId: Type.Optional(NonEmptyString),
   message: Type.String(),
   mentions: Type.Optional(HumanMentionsSchema),
+  workContext: Type.Optional(ChatWorkContextSchema),
   intent: Type.Optional(ChatSendIntentSchema),
   thinking: Type.Optional(Type.String()),
   fastMode: Type.Optional(Type.Union([Type.Boolean(), Type.Literal("auto")])),

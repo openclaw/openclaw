@@ -73,8 +73,6 @@ enum PermissionManager {
         switch cap {
         case .notifications:
             await self.ensureNotifications(interactive: interactive)
-        case .appleScript:
-            await self.ensureAppleScript(interactive: interactive)
         case .accessibility:
             await self.ensureAccessibility(interactive: interactive)
         case .screenRecording:
@@ -107,13 +105,6 @@ enum PermissionManager {
             SystemSettingsURLSupport.openFirst(SystemSettingsURLSupport.settingsCandidates(for: .notifications))
         }
         return false
-    }
-
-    private static func ensureAppleScript(interactive: Bool) async -> Bool {
-        if interactive {
-            return await TerminalAutomationPermission.requestAuthorization()
-        }
-        return await TerminalAutomationPermission.isAuthorized()
     }
 
     private static func ensureAccessibility(interactive: Bool) async -> Bool {
@@ -241,9 +232,6 @@ enum PermissionManager {
                 let settings = await center.notificationSettings()
                 results[cap] = self.isNotificationAuthorized(status: settings.authorizationStatus)
                     ? .granted : .notGranted
-
-            case .appleScript:
-                results[cap] = await TerminalAutomationPermission.authorizationStatus()
 
             case .accessibility:
                 results[cap] = await MainActor.run { AXIsProcessTrusted() } ? .granted : .notGranted

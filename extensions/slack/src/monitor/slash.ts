@@ -1,4 +1,3 @@
-// Slack plugin module implements slash behavior.
 import type {
   AllMiddlewareArgs,
   BlockAction,

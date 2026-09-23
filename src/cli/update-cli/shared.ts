@@ -27,15 +27,19 @@ import {
   detectGlobalInstallManagerForRoot,
   type GlobalInstallManager,
 } from "../../infra/update-global.js";
+import { createUpdatePreflightFailure } from "../../infra/update-preflight-details.js";
 import type { UpdateRequesterAuthority } from "../../infra/update-requester-authority.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
 import { runStep } from "../../infra/update-runner-command.js";
-import { resolveUnmanagedUpdateInstallReason } from "../../infra/update-runner-install-surface.js";
+import {
+  describeUpdateInstallRoot,
+  resolveUnmanagedUpdateInstallReason,
+} from "../../infra/update-runner-install-surface.js";
 import type {
   UpdateRunResult,
   UpdateStepProgress,
   UpdateStepResult,
-} from "../../infra/update-runner.js";
+} from "../../infra/update-runner-types.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { UpdateRecoveryStep } from "../../shared/update-outcome.js";
@@ -52,6 +56,9 @@ export type UpdateCommandOptions = {
   sourceUpdate?: { root: string };
   /** In-process reporting only, after the update owner settles. Never serialized. */
   onResult?: (result: UpdateRunResult) => void;
+  /** Captured before dotenv; only inherited selectors may choose a Node executable. */
+  runtimeRecoveryEnv?: NodeJS.ProcessEnv;
+  /** In-process executor only; workers must reacquire authority, never deserialize this. */
   /** Legacy live context is unsupported; its presence is refusal-only. */
   recovery?: unknown;
   reapplyLocalOverrides?: boolean;
@@ -61,6 +68,10 @@ export type UpdateCommandOptions = {
     defaultStepTimeoutMs?: number;
     activationTimeoutMs?: number;
     env: NodeJS.ProcessEnv;
+    /** Completion routing only; mutation authority remains with the live executor. */
+    completionOwner?: "gateway-restart";
+    /** The handoff helper acknowledged the foreground Gateway's closure. */
+    gatewayRestartRequired?: true;
     /** Prepared before replacement; never load the old authority graph after activation. */
     requesterAuthority?: UpdateRequesterAuthority;
     /** Live local executor only. A child must independently acquire its owner. */
@@ -93,6 +104,7 @@ export type UpdateFinalizeOptions = {
 };
 
 export type UpdateWizardOptions = {
+  runtimeRecoveryEnv?: NodeJS.ProcessEnv;
   acceptCapabilities?: boolean;
   timeout?: string;
 };
@@ -265,10 +277,11 @@ export async function runUpdateStep(params: {
   name: string;
   argv: string[];
   cwd?: string;
-  timeoutMs: number;
+  timeoutMs?: number;
   progress?: UpdateStepProgress;
   env?: NodeJS.ProcessEnv;
   runCommand?: Parameters<typeof runStep>[0]["runCommand"];
+  results?: UpdateStepResult[];
 }): Promise<UpdateStepResult> {
   return await runStep({
     ...params,
@@ -304,13 +317,34 @@ async function cloneGitCheckoutTransactionally(params: {
   const targetDir = preserveDir
     ? await fs.realpath(params.dir)
     : path.join(canonicalParentDir, path.basename(params.dir));
+  const targetIdentity = preserveDir ? await fs.lstat(targetDir, { bigint: true }) : undefined;
   const stagingParent = preserveDir ? targetDir : canonicalParentDir;
   const stagingDir = await fs.mkdtemp(path.join(stagingParent, ".openclaw-clone-"));
+  const stagingIdentity = await fs.lstat(stagingDir, { bigint: true });
   let cleanupStaging = true;
+
+  async function ownsDirectory(directory: string, identity: typeof stagingIdentity) {
+    try {
+      const current = await fs.lstat(directory, { bigint: true });
+      // Unknown Windows identities cannot authorize publication or recursive cleanup.
+      return (
+        current.isDirectory() &&
+        current.ino !== 0n &&
+        (process.platform !== "win32" || current.dev !== 0n) &&
+        current.ino === identity.ino &&
+        current.dev === identity.dev
+      );
+    } catch (error) {
+      if (hasErrnoCode(error, "ENOENT")) {
+        return false;
+      }
+      throw error;
+    }
+  }
 
   try {
     const result = await runUpdateStep({
-      name: "git clone",
+      name: "git-clone",
       argv: ["git", "clone", GIT_CLONE_BLOB_FILTER, UPSTREAM_REPOSITORY_URL, stagingDir],
       env: params.env,
       timeoutMs: params.timeoutMs,
@@ -321,6 +355,14 @@ async function cloneGitCheckoutTransactionally(params: {
     }
 
     const publish = async (): Promise<string> => {
+      if (
+        !(await ownsDirectory(stagingDir, stagingIdentity)) ||
+        (targetIdentity && !(await ownsDirectory(targetDir, targetIdentity)))
+      ) {
+        throw new Error(
+          `The clone destination or staging directory changed before publication: ${targetDir}. The replacement was left unchanged; choose an empty OPENCLAW_GIT_DIR and retry.`,
+        );
+      }
       if (!preserveDir) {
         try {
           await fs.lstat(targetDir);
@@ -387,7 +429,7 @@ async function cloneGitCheckoutTransactionally(params: {
     }
     return { checkoutDir: targetDir, step: result };
   } finally {
-    if (cleanupStaging) {
+    if (cleanupStaging && (await ownsDirectory(stagingDir, stagingIdentity))) {
       await fs.rm(stagingDir, { recursive: true, force: true });
     }
   }
@@ -447,16 +489,18 @@ export async function resolveGlobalManager(params: {
   installKind: "git" | "package" | "unknown";
   timeoutMs: number;
   pkgOwnership?: FreeBsdPkgOwnershipInspection;
+  serviceUnitTarget?: string;
 }): Promise<GlobalInstallManager> {
   await (
     params.pkgOwnership ?? createFreeBsdPkgOwnershipInspection(params.timeoutMs)
   ).assertUnowned(params.root);
-  if (params.installKind === "package") {
+  if (params.installKind !== "git") {
     if (await resolveBrewOpenClawPath(params.root)) {
       const reason = resolveUnmanagedUpdateInstallReason();
       throw new UpdatePreMutationError(
         reason,
         "This OpenClaw installation is managed by Homebrew. To update OpenClaw, run:\n\n  brew upgrade openclaw-cli\n\nThen restart the gateway:\n\n  openclaw gateway restart",
+        { failureFacts: [] },
       );
     }
     const diagnostics: string[] = [];
@@ -468,10 +512,13 @@ export async function resolveGlobalManager(params: {
     );
     if (!detected) {
       const reason = resolveUnmanagedUpdateInstallReason();
-      throw new UpdatePreMutationError(
-        reason,
-        `${UPDATE_INSTALL_SKIP_GUIDANCE[reason]} Inspected: ${diagnostics.join("; ")}.`,
+      const failure = createUpdatePreflightFailure(
+        "installation-unclassified",
+        `${await describeUpdateInstallRoot(params.root)} Service unit target: ${params.serviceUnitTarget ?? "not inspected"}. Inspected package-manager owners: ${diagnostics.join("; ")}. ${UPDATE_INSTALL_SKIP_GUIDANCE[reason]}`,
       );
+      throw new UpdatePreMutationError(reason, failure.message, {
+        failureFacts: failure.failureFacts,
+      });
     }
     return detected;
   }

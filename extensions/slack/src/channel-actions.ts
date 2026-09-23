@@ -1,4 +1,3 @@
-// Slack plugin module implements channel actions behavior.
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import type {
   ChannelMessageActionAdapter,

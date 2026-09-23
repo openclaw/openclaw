@@ -2,7 +2,7 @@
 // the core system prompt advertises for rich-enabled Telegram accounts.
 import stringWidth from "string-width";
 import { describe, expect, it } from "vitest";
-import { countInputRichBlockChars, type InputRichBlock } from "./rich-block-model.js";
+import { measureInputRichBlocks, type InputRichBlock } from "./rich-block-model.js";
 import { splitTelegramRichBlocks } from "./rich-block-split.js";
 import { markdownToTelegramRichBlocks } from "./rich-blocks.js";
 
@@ -661,7 +661,7 @@ describe("block HTML islands", () => {
       expect(table?.type).toBe("table");
       return;
     }
-    expect(countInputRichBlockChars(table)).toBe("Stats".length + 2);
+    expect(measureInputRichBlocks([table])).toEqual({ chars: 7, blocks: 3, media: 0, nesting: 1 });
     const pieces = splitTelegramRichBlocks([table], { textLimit: 6 }).flat();
     expect(pieces.length).toBeGreaterThan(1);
     const captioned = pieces.filter((piece) => piece.type === "table" && piece.caption);
@@ -757,7 +757,7 @@ describe("block HTML islands", () => {
     expect(quotes.filter((quote) => quote.credit !== undefined)).toHaveLength(1);
     expect(quotes.at(-1)?.credit).toBe("Author");
     for (const chunk of pieces) {
-      const chars = chunk.reduce((total, piece) => total + countInputRichBlockChars(piece), 0);
+      const { chars } = measureInputRichBlocks(chunk);
       expect(chars).toBeLessThanOrEqual(64);
     }
   });

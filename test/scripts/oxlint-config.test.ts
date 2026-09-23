@@ -362,6 +362,99 @@ describe("oxlint config", () => {
     );
   });
 
+  it("keeps source and UI lint projects bounded with imported and ambient types", () => {
+    const tempRoot = fs.realpathSync(createTempDir("openclaw-oxlint-core-projects-"));
+    for (const file of [
+      ".oxlintrc.json",
+      "tsconfig.json",
+      "src/tsconfig.json",
+      "ui/tsconfig.json",
+    ]) {
+      if (fs.existsSync(file)) {
+        const target = path.join(tempRoot, file);
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        fs.copyFileSync(file, target);
+      }
+    }
+    fs.symlinkSync(path.resolve("node_modules"), path.join(tempRoot, "node_modules"), "junction");
+    const source = [
+      'import { work } from "../packages/imported.js";',
+      "work(); fromCore(); fromUi(); fromPackage(); fromPlugin(); fromMts(); fromCts();",
+    ].join("\n");
+    for (const [file, content] of Object.entries({
+      "src/owner.ts": source,
+      "ui/owner.ts": source,
+      "packages/imported.ts": "export function work(): Promise<void> { return Promise.resolve(); }",
+      "src/contracts.d.ts": "declare function fromCore(): Promise<void>;",
+      "ui/contracts.d.ts": "declare function fromUi(): Promise<void>;",
+      "packages/contracts.d.ts": "declare function fromPackage(): Promise<void>;",
+      "extensions/contracts.d.ts": "declare function fromPlugin(): Promise<void>;",
+      "packages/contracts.d.mts":
+        "export {}; declare global { function fromMts(): Promise<void>; }",
+      "packages/contracts.d.cts":
+        "export {}; declare global { function fromCts(): Promise<void>; }",
+    })) {
+      const target = path.join(tempRoot, file);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, content);
+    }
+    const selected = ["src/owner.ts", "ui/owner.ts"];
+    const result = spawnSync(
+      process.execPath,
+      [
+        path.resolve("node_modules/oxlint/bin/oxlint"),
+        "--type-aware",
+        "--format",
+        "json",
+        "--threads=1",
+        ...selected,
+      ],
+      {
+        cwd: tempRoot,
+        encoding: "utf8",
+        timeout: 10_000,
+        env: {
+          ...process.env,
+          OXC_LOG: "debug",
+          GOMAXPROCS: "2",
+          OXLINT_TSGOLINT_PATH: path.resolve(
+            "node_modules/.bin",
+            process.platform === "win32" ? "tsgolint.CMD" : "tsgolint",
+          ),
+        },
+      },
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stderr).toBe(1);
+    const report = JSON.parse(result.stdout) as {
+      diagnostics: Array<{ filename: string; code: string }>;
+    };
+    for (const file of selected) {
+      expect(
+        report.diagnostics
+          .filter((diagnostic) => diagnostic.filename.replaceAll("\\", "/") === file)
+          .map((diagnostic) => diagnostic.code),
+      ).toEqual(Array.from({ length: 7 }, () => "typescript(no-floating-promises)"));
+      const owner = path.dirname(file);
+      expect(result.stderr.replaceAll("\\", "/")).toContain(
+        `Got tsconfig for file ${path.join(tempRoot, file).replaceAll("\\", "/")}: ${path.join(tempRoot, owner, "tsconfig.json").replaceAll("\\", "/")}`,
+      );
+      const project = spawnSync(
+        process.execPath,
+        [
+          path.resolve("node_modules/typescript-native/bin/tsc"),
+          "--showConfig",
+          "-p",
+          `${owner}/tsconfig.json`,
+        ],
+        { cwd: tempRoot, encoding: "utf8", timeout: 10_000 },
+      );
+      expect(project.status, project.stdout + project.stderr).toBe(0);
+      const parsed = JSON.parse(project.stdout) as { files: string[] };
+      expect(parsed.files).not.toContain(`../${owner === "src" ? "ui" : "src"}/owner.ts`);
+    }
+  });
+
   it("checks unbound methods in TypeScript and CommonJS source test support", () => {
     const tempRoot = fs.realpathSync(createTempDir("openclaw-oxlint-source-support-"));
     for (const file of [".oxlintrc.json", "tsconfig.json", "src/tsconfig.json"]) {

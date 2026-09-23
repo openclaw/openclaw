@@ -1,6 +1,7 @@
 /** Runs ACP turns, failover, timeout cleanup, and detached-task progress mirroring. */
 import type { AcpRuntime, AcpRuntimeHandle } from "@openclaw/acp-core/runtime/types";
 import { expectDefined } from "@openclaw/normalization-core";
+import { resolveAdmittedRunActiveAssertion } from "../../agents/admitted-run-context.js";
 import { logVerbose } from "../../globals.js";
 import {
   recordSessionHumanDirectMessage,
@@ -97,7 +98,7 @@ export async function runManagerTurn(params: {
         input.admittedRunContext.operationalRunInstance.instanceId,
       )
     : undefined;
-  let taskExecutionBound = false;
+  let taskExecutionBinding: Promise<void> | undefined;
   let taskProgressSummary = "";
   const initialResolution = params.resolveSession({
     cfg: input.cfg,
@@ -105,13 +106,29 @@ export async function runManagerTurn(params: {
     agentId,
   });
   const initialMeta = requireReadySessionMeta(initialResolution);
-  recordSessionHumanDirectMessage({
-    sessionKey,
-    entry: initialResolution.kind === "ready" ? initialResolution.entry : undefined,
-    actor: { actorType: input.provenance },
-    channel: "acp",
-    runId: input.requestId,
-  });
+  const assertSignalAdmission = resolveAdmittedRunActiveAssertion(
+    input.admittedRunContext,
+    input.signal,
+  );
+  const assertSignalCurrent = () => {
+    if (!params.isCurrentActor()) {
+      throw createSupersededActorError(sessionKey);
+    }
+    input.signal?.throwIfAborted();
+    assertSignalAdmission?.();
+  };
+  await recordSessionHumanDirectMessage(
+    {
+      sessionKey,
+      agentId,
+      entry: initialResolution.kind === "ready" ? initialResolution.entry : undefined,
+      actor: { actorType: input.provenance },
+      channel: "acp",
+      runId: input.requestId,
+    },
+    { assertCurrent: assertSignalCurrent },
+  );
+  assertSignalCurrent();
   // ACP children bypass the subagent registry; terminal outcomes are projected into
   // the signal log here so changesSince histories are not spawn-only for ACP runs.
   const spawnedByWatcher =
@@ -125,6 +142,10 @@ export async function runManagerTurn(params: {
   });
   const backendAttempts: BackendAttempt[] = [];
   const recordBackendFailure = async (error: AcpRuntimeError) => {
+    await taskExecutionBinding;
+    if (!params.isCurrentActor()) {
+      throw createSupersededActorError(sessionKey);
+    }
     const failedBackends = backendAttempts
       .map((attempt) => `${attempt.backend}: ${attempt.error}`)
       .join(" | ");
@@ -305,9 +326,29 @@ export async function runManagerTurn(params: {
                 return;
               }
               promptStarted = authoritative;
-              if (authoritative && taskRecord && !taskExecutionBound) {
-                taskExecutionBound = true;
-                bindBackgroundTaskExecution(taskRecord, input.admittedRunContext);
+              if (authoritative && taskRecord) {
+                const assertAdmitted = resolveAdmittedRunActiveAssertion(input.admittedRunContext);
+                taskExecutionBinding ??= bindBackgroundTaskExecution(
+                  taskRecord,
+                  input.admittedRunContext,
+                  () => {
+                    if (!params.isCurrentActor()) {
+                      throw createSupersededActorError(sessionKey);
+                    }
+                    if (!assertAdmitted) {
+                      throw new Error("ACP execution authority closed before owner binding");
+                    }
+                    assertAdmitted();
+                  },
+                );
+                await taskExecutionBinding;
+                if (!params.isCurrentActor()) {
+                  return;
+                }
+                if (!assertAdmitted) {
+                  throw new Error("ACP execution authority closed before owner binding");
+                }
+                assertAdmitted();
               }
               try {
                 await input.onLifecycle?.({
@@ -546,6 +587,10 @@ export async function runManagerTurn(params: {
       }
     }
   } finally {
-    releaseActiveTurn?.();
+    try {
+      await taskExecutionBinding;
+    } finally {
+      releaseActiveTurn?.();
+    }
   }
 }

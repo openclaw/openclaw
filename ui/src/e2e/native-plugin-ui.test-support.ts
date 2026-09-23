@@ -1,4 +1,18 @@
-import type { Page } from "playwright";
+import path from "node:path";
+import type { Locator, Page } from "playwright";
+import { expect } from "vitest";
+
+export async function captureNativePluginUiProof(
+  owner: { readonly artifactDir: string },
+  page: Page,
+  name: string,
+  options: { fullPage?: boolean } = {},
+): Promise<void> {
+  if (process.env.OPENCLAW_CAPTURE_UI_PROOF !== "1") {
+    return;
+  }
+  await page.screenshot({ ...options, path: path.join(owner.artifactDir, name) });
+}
 
 export type NativePluginWindow = Window & {
   nativePluginProof?: { release?: () => void };
@@ -118,4 +132,45 @@ export function pluginModule(revision: string, replacements = true) {
       return () => { proof.disposed = (proof.disposed ?? 0) + 1; };
     }
   };`;
+}
+
+export async function expectComposerFooterLayout(page: Page, composer: Locator, variant: string) {
+  for (const width of [1280, 640]) {
+    await page.setViewportSize({ width, height: 900 });
+    const geometry = await composer.evaluate((element) => {
+      const footer = element.closest(".chat-footer");
+      const thread = element.closest(".chat-main__conversation")?.querySelector(".chat-thread");
+      if (!thread || !footer) {
+        throw new Error("Expected the composer in the footer beside the transcript.");
+      }
+      const shellBounds = element.getBoundingClientRect();
+      const footerBounds = footer.getBoundingClientRect();
+      const threadBounds = thread.getBoundingClientRect();
+      const style = getComputedStyle(footer, "::before");
+      const input = element.querySelector(".agent-chat__input");
+      return {
+        inputOutsideContext: Boolean(input) && !input?.closest(".chat-footer__context"),
+        composerTop: shellBounds.top,
+        composerBottom: shellBounds.bottom,
+        footerTop: footerBounds.top,
+        footerBottom: footerBounds.bottom,
+        transcriptBottom: threadBounds.bottom,
+        content: style.content,
+        background: style.backgroundImage,
+        left: footerBounds.left + Number.parseFloat(style.left) - threadBounds.left,
+        right: threadBounds.right - (footerBounds.right - Number.parseFloat(style.right)),
+        scrollbar: (threadBounds.width - thread.clientWidth) / 2,
+      };
+    });
+    const description = `${variant} at ${width}px`;
+    expect.soft(geometry.transcriptBottom, description).toBeLessThanOrEqual(geometry.footerTop);
+    expect.soft(geometry.composerTop, description).toBeGreaterThanOrEqual(geometry.footerTop);
+    expect.soft(geometry.composerBottom, description).toBeLessThanOrEqual(geometry.footerBottom);
+    expect.soft(geometry.inputOutsideContext, description).toBe(true);
+    expect.soft(geometry.content, description).toBe('""');
+    expect.soft(geometry.background, description).toContain("linear-gradient");
+    expect.soft(geometry.left, description).toBeGreaterThanOrEqual(geometry.scrollbar);
+    expect.soft(geometry.right, description).toBeGreaterThanOrEqual(geometry.scrollbar);
+  }
+  await page.setViewportSize({ width: 1280, height: 900 });
 }

@@ -1,347 +1,286 @@
 import fs from "node:fs";
 import path from "node:path";
-import { performance } from "node:perf_hooks";
 import { setImmediate } from "node:timers/promises";
-import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
-import { runWithSqliteBusyTimeout } from "../../infra/sqlite-busy-timeout.js";
-import { isSqliteLockError } from "../../infra/sqlite-error-diagnostics.js";
-import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
-import {
-  openOpenClawAgentDatabase,
-  runOpenClawAgentWriteTransaction,
-  type OpenClawAgentDatabase,
-  type OpenClawAgentDatabaseOptions,
-} from "../../state/openclaw-agent-db.js";
+import { hasErrnoCode } from "../../infra/errno.js";
+import type {
+  SqliteWalCheckpointSnapshot,
+  SqliteWalHealth,
+} from "../../infra/sqlite-wal-checkpoint.js";
+import type { SqliteWalReclamationResult } from "../../infra/sqlite-wal-reclamation.js";
+import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db.js";
 import {
   measureSessionPhysicalDiskUsage,
   pruneSessionTranscriptArchivesToHighWater,
   type SessionPhysicalDiskUsage,
 } from "./disk-budget.js";
-import type {
-  SqliteSessionArchivePruningDiagnostics,
-  SqliteSessionDatabaseAdmissionDiagnostics,
-} from "./session-accessor.sqlite-contract.js";
-import { getSessionKysely, withSqliteSessionDatabase } from "./session-accessor.sqlite-scope.js";
+import type { SqliteSessionArchivePruningDiagnostics } from "./session-accessor.sqlite-contract.js";
 import {
+  readSqliteSessionArchivePruning,
+  withSqliteSessionPageReclamation,
+} from "./session-accessor.sqlite-page-reclamation.js";
+import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
+import {
+  observeSessionArchivePruning,
   timeArchivePruningAsync,
-  timeArchivePruningSync,
 } from "./session-history-archive-pruning-diagnostics.js";
+import type { SessionArchivePruningOperations } from "./session-history-archive-pruning.types.js";
 
-async function withArchivePruningDatabase<T>(
-  options: OpenClawAgentDatabaseOptions,
-  diagnostics: SqliteSessionArchivePruningDiagnostics | undefined,
-  operation: (database: OpenClawAgentDatabase) => T,
+type PageReclamation = {
+  reclaimPages?: (maxPages?: number) => Promise<SqliteWalReclamationResult>;
+  onCheckpointIncomplete?: (checkpoint: SqliteWalCheckpointSnapshot | undefined) => void;
+  assertCurrent?: () => void;
+};
+
+type ArchivePruningParams = Pick<PageReclamation, "onCheckpointIncomplete"> & {
+  archiveDirectory: string;
+  databaseOptions: OpenClawAgentDatabaseOptions;
+  diagnostics?: SqliteSessionArchivePruningDiagnostics;
+  highWaterBytes: number;
+  storePath: string;
+};
+
+type OwnedArchivePruningParams = ArchivePruningParams & {
+  reclaimPages: NonNullable<PageReclamation["reclaimPages"]>;
+  assertCurrent: () => void;
+  archives: SessionArchivePruningOperations;
+};
+
+function withArchivePruningWriter<T>(
+  params: OwnedArchivePruningParams,
+  run: () => Promise<T>,
 ): Promise<T> {
-  const admission: SqliteSessionDatabaseAdmissionDiagnostics | undefined = diagnostics
-    ? {}
-    : undefined;
-  try {
-    return await withSqliteSessionDatabase(options, operation, undefined, admission);
-  } finally {
-    if (diagnostics && admission?.admissionMs !== undefined) {
-      diagnostics.admissionMs = (diagnostics.admissionMs ?? 0) + admission.admissionMs;
-      if (admission.admissionMode === "cached") {
-        diagnostics.cachedAdmissions = (diagnostics.cachedAdmissions ?? 0) + 1;
-      } else if (admission.admissionMode === "async") {
-        diagnostics.asyncAdmissions = (diagnostics.asyncAdmissions ?? 0) + 1;
-      }
-    }
-  }
+  return runExclusiveSqliteSessionWrite(
+    params.databaseOptions,
+    async () => {
+      params.assertCurrent();
+      return run();
+    },
+    "session.history.archive-prune",
+  );
 }
 
-function checkpointArchivePruning(
-  database: OpenClawAgentDatabase,
-  diagnostics: SqliteSessionArchivePruningDiagnostics | undefined,
-): boolean {
-  const startedAt = performance.now();
-  try {
-    // Online cleanup must leave readers serviceable instead of holding the writer
-    // lock while their release waits for this same event loop. Retirement keeps its policy.
-    const completed = runWithSqliteBusyTimeout(database.db, 0, () =>
-      database.walMaintenance.checkpoint(),
-    );
-    if (diagnostics) {
-      diagnostics.checkpointCalls = (diagnostics.checkpointCalls ?? 0) + 1;
-      diagnostics.checkpointIncomplete =
-        (diagnostics.checkpointIncomplete ?? 0) + Number(!completed);
-    }
-    return completed;
-  } finally {
-    if (diagnostics) {
-      const elapsedMs = performance.now() - startedAt;
-      diagnostics.checkpointMs = (diagnostics.checkpointMs ?? 0) + elapsedMs;
-      diagnostics.checkpointMaxMs = Math.max(diagnostics.checkpointMaxMs ?? 0, elapsedMs);
-    }
-  }
-}
+export type SessionArchivePruningResult = {
+  removedFiles: number;
+  usage: SessionPhysicalDiskUsage;
+  completed: boolean;
+  checkpointIncomplete: number;
+  checkpoint?: SqliteWalHealth;
+};
 
 export async function reclaimSqliteFreePages(
   databaseOptions: OpenClawAgentDatabaseOptions,
   diagnostics?: SqliteSessionArchivePruningDiagnostics,
-  limits?: { maxPasses?: number; assertCurrent?: () => void },
-): Promise<void> {
-  let remaining: number | undefined;
+  limits?: PageReclamation & { maxPasses?: number; maxPages?: number },
+): Promise<boolean> {
+  const reclaimPages = limits?.reclaimPages;
+  if (!reclaimPages) {
+    return withSqliteSessionPageReclamation(
+      databaseOptions,
+      (reclaim, assertCurrent, preparedOptions) =>
+        reclaimSqliteFreePages(preparedOptions, diagnostics, {
+          ...limits,
+          reclaimPages: reclaim,
+          assertCurrent: () => {
+            limits?.assertCurrent?.();
+            assertCurrent();
+          },
+        }),
+    );
+  }
+  let remaining = limits?.maxPages;
   const maxPasses = limits?.maxPasses ?? Infinity;
   for (let pass = 0; pass < maxPasses && (remaining === undefined || remaining > 0); pass++) {
-    if (remaining !== undefined) {
+    if (pass > 0) {
       await setImmediate();
     }
-    // Reacquire after yielding while the caller retains its writer section.
-    const nextRemaining = await withArchivePruningDatabase(
-      databaseOptions,
-      diagnostics,
-      (database) => {
-        limits?.assertCurrent?.();
-        if (!checkpointArchivePruning(database, diagnostics)) {
-          return undefined;
-        }
-        const freePages = () =>
-          timeArchivePruningSync(
-            diagnostics,
-            "queryMs",
-            () => Number(database.db.prepare("PRAGMA freelist_count").get()?.freelist_count ?? 0), // sqlite-allow-raw -- Physical page accounting.
-          );
-        const before = freePages();
-        if (!Number.isSafeInteger(before) || before <= 0) {
-          return undefined;
-        }
-        // Bound the entire drain to its initial freelist, even if other writers free more pages.
-        const passRemaining = Math.min(remaining ?? before, before);
-        const pages = Math.min(512, passRemaining);
-        if (diagnostics) {
-          diagnostics.vacuumPasses = (diagnostics.vacuumPasses ?? 0) + 1;
-          diagnostics.vacuumPagesRequested = (diagnostics.vacuumPagesRequested ?? 0) + pages;
-        }
-        let entered = false;
-        try {
-          timeArchivePruningSync(diagnostics, "vacuumMs", () =>
-            runWithSqliteBusyTimeout(database.db, 0, () =>
-              runSqliteImmediateTransactionSync(
-                database.db,
-                () => {
-                  entered = true;
-                  database.db.exec(`PRAGMA incremental_vacuum(${pages});`); // sqlite-allow-raw -- Bounded physical maintenance in one synchronous commit section.
-                },
-                { busyTimeoutMs: 0, operationLabel: "incremental-vacuum" },
-              ),
-            ),
-          );
-        } catch (error) {
-          // A writer can win after checkpointing. Defer only refused admission;
-          // failures after vacuum starts still belong to the transaction owner.
-          if (entered || !isSqliteLockError(error)) {
-            throw error;
-          }
-          return undefined;
-        }
-        if (!checkpointArchivePruning(database, diagnostics)) {
-          return undefined;
-        }
-        if (freePages() >= before) {
-          return undefined;
-        }
-        return passRemaining - pages;
-      },
-    );
-    if (nextRemaining === undefined) {
-      return;
-    }
-    remaining = nextRemaining;
-  }
-}
-
-export function hasCanonicalSessionTranscriptArchives(
-  databaseOptions: OpenClawAgentDatabaseOptions,
-): boolean {
-  // openclaw-agent-db.ts cache rule: LRU eviction closes idle handles across awaits.
-  return hasCanonicalSessionTranscriptArchivesInDatabase(
-    openOpenClawAgentDatabase(databaseOptions),
-  );
-}
-
-function hasCanonicalSessionTranscriptArchivesInDatabase(database: OpenClawAgentDatabase): boolean {
-  const db = getSessionKysely(database.db);
-  const table = executeSqliteQuerySync(
-    database.db,
-    db
-      .selectFrom("sqlite_schema")
-      .select("name")
-      .where("type", "=", "table")
-      .where("name", "=", "session_transcript_archives"),
-  ).rows[0];
-  if (!table) {
-    return false;
-  }
-  return (
-    executeSqliteQuerySync(
-      database.db,
-      db
-        .selectFrom("session_transcript_archives")
-        .select("session_id")
-        .where("published_at", "is not", null)
-        .limit(1),
-    ).rows.length > 0
-  );
-}
-
-function readUnpublishedSessionTranscriptArchiveNames(
-  database: OpenClawAgentDatabase,
-): Set<string> {
-  const db = getSessionKysely(database.db);
-  const table = executeSqliteQuerySync(
-    database.db,
-    db
-      .selectFrom("sqlite_schema")
-      .select("name")
-      .where("type", "=", "table")
-      .where("name", "=", "session_transcript_archives"),
-  ).rows[0];
-  if (!table) {
-    return new Set();
-  }
-  return new Set(
-    executeSqliteQuerySync(
-      database.db,
-      db
-        .selectFrom("session_transcript_archives")
-        .select("archive_name")
-        .where("published_at", "is", null),
-    ).rows.map((row) => row.archive_name),
-  );
-}
-
-async function pruneCanonicalSessionTranscriptArchivesToHighWater(params: {
-  archiveDirectory: string;
-  databaseOptions: OpenClawAgentDatabaseOptions;
-  diagnostics?: SqliteSessionArchivePruningDiagnostics;
-  highWaterBytes: number;
-  storePath: string;
-}): Promise<{ removedFiles: number; usage: SessionPhysicalDiskUsage }> {
-  const { diagnostics } = params;
-  let usage = await timeArchivePruningAsync(diagnostics, "measurementMs", () =>
-    measureSessionPhysicalDiskUsage(params.storePath),
-  );
-  let removedFiles = 0;
-  while (usage.totalBytes > params.highWaterBytes) {
-    const row = await withArchivePruningDatabase(params.databaseOptions, diagnostics, (database) =>
-      timeArchivePruningSync(diagnostics, "queryMs", () => {
-        const db = getSessionKysely(database.db);
-        return executeSqliteQuerySync(
-          database.db,
-          db
-            .selectFrom("session_transcript_archives")
-            .select(["archive_name", "generation", "session_id"])
-            .where("published_at", "is not", null)
-            .orderBy("created_at", "asc")
-            .orderBy("session_id", "asc")
-            .orderBy("generation", "asc")
-            .limit(1),
-        ).rows[0];
-      }),
-    );
-    if (!row) {
-      break;
-    }
-    const archivePath = path.resolve(params.archiveDirectory, row.archive_name);
-    if (
-      path.dirname(archivePath) !== path.resolve(params.archiveDirectory) ||
-      path.basename(archivePath) !== row.archive_name
-    ) {
-      throw new Error(`Invalid canonical session archive name for ${row.session_id}`);
-    }
-    try {
-      await timeArchivePruningAsync(diagnostics, "fileRemovalMs", () =>
-        fs.promises.rm(archivePath),
+    limits?.assertCurrent?.();
+    const result = await reclaimPages(remaining);
+    if (diagnostics) {
+      for (const key of [
+        "checkpointCalls",
+        "checkpointIncomplete",
+        "checkpointMs",
+        "queryMs",
+        "vacuumMs",
+        "vacuumPasses",
+        "vacuumPagesRequested",
+      ] as const) {
+        diagnostics[key] = (diagnostics[key] ?? 0) + result[key];
+      }
+      diagnostics.checkpointMaxMs = Math.max(
+        diagnostics.checkpointMaxMs ?? 0,
+        result.checkpointMaxMs,
       );
-      removedFiles += 1;
-      if (diagnostics) {
-        diagnostics.removedFiles = (diagnostics.removedFiles ?? 0) + 1;
-      }
-    } catch (error) {
-      // SAFETY: Node filesystem failures expose the documented errno code field.
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-        // The database is the recovery copy. Retain it unless its derived file
-        // is gone, otherwise retention could leave an undeletable orphan.
-        if (diagnostics) {
-          diagnostics.failedRemovals = (diagnostics.failedRemovals ?? 0) + 1;
-        }
-        break;
-      }
-      if (diagnostics) {
-        diagnostics.missingFiles = (diagnostics.missingFiles ?? 0) + 1;
-      }
+      diagnostics.checkpoint = result.checkpoint?.health;
     }
-    await withArchivePruningDatabase(params.databaseOptions, diagnostics, () =>
-      timeArchivePruningSync(diagnostics, "rowDeletionMs", () =>
-        runOpenClawAgentWriteTransaction((transactionDb) => {
-          const transactionKysely = getSessionKysely(transactionDb.db);
-          executeSqliteQuerySync(
-            transactionDb.db,
-            transactionKysely
-              .deleteFrom("session_transcript_archives")
-              .where("session_id", "=", row.session_id)
-              .where("generation", "=", row.generation),
-          );
-        }, params.databaseOptions),
-      ),
-    );
-    await reclaimSqliteFreePages(params.databaseOptions, diagnostics);
-    usage = await timeArchivePruningAsync(diagnostics, "measurementMs", () =>
+    if (!result.checkpointCompleted) {
+      limits?.onCheckpointIncomplete?.(result.checkpoint);
+      return false;
+    }
+    const before = result.freePagesBefore;
+    const after = result.remainingFreePages;
+    if (before === null || after === null || before <= 0 || after >= before) {
+      return true;
+    }
+    remaining = Math.min(remaining ?? before, before) - (before - after);
+  }
+  return true;
+}
+
+export async function hasCanonicalSessionTranscriptArchives(
+  databaseOptions: OpenClawAgentDatabaseOptions,
+): Promise<boolean> {
+  return (await readSqliteSessionArchivePruning(databaseOptions)) !== null;
+}
+
+async function pruneCanonicalSessionTranscriptArchivesToHighWater(
+  params: OwnedArchivePruningParams,
+): Promise<{ removedFiles: number; usage: SessionPhysicalDiskUsage }> {
+  const { diagnostics } = params;
+  const measure = () =>
+    timeArchivePruningAsync(diagnostics, "measurementMs", () =>
       measureSessionPhysicalDiskUsage(params.storePath),
     );
+  let usage = await measure();
+  let removedFiles = 0;
+  while (usage.totalBytes > params.highWaterBytes) {
+    const removed = await withArchivePruningWriter(params, async () => {
+      // A foreground writer may have freed space while this item waited for admission.
+      usage = await measure();
+      params.assertCurrent();
+      if (usage.totalBytes <= params.highWaterBytes) {
+        return false;
+      }
+      const row = await timeArchivePruningAsync(diagnostics, "queryMs", () =>
+        params.archives.read(),
+      );
+      params.assertCurrent();
+      if (!row) {
+        return false;
+      }
+      const archivePath = path.resolve(params.archiveDirectory, row.archive_name);
+      if (
+        path.dirname(archivePath) !== path.resolve(params.archiveDirectory) ||
+        path.basename(archivePath) !== row.archive_name
+      ) {
+        throw new Error(`Invalid canonical session archive name for ${row.session_id}`);
+      }
+      params.assertCurrent();
+      try {
+        await timeArchivePruningAsync(diagnostics, "fileRemovalMs", () =>
+          fs.promises.rm(archivePath),
+        );
+        removedFiles += 1;
+        if (diagnostics) {
+          diagnostics.removedFiles = (diagnostics.removedFiles ?? 0) + 1;
+        }
+      } catch (error) {
+        // Keep the canonical recovery copy if its derived file could not be removed.
+        if (!hasErrnoCode(error, "ENOENT")) {
+          if (diagnostics) {
+            diagnostics.failedRemovals = (diagnostics.failedRemovals ?? 0) + 1;
+          }
+          return false;
+        }
+        if (diagnostics) {
+          diagnostics.missingFiles = (diagnostics.missingFiles ?? 0) + 1;
+        }
+      }
+      await timeArchivePruningAsync(diagnostics, "rowDeletionMs", () =>
+        params.archives.deletePublished(row),
+      );
+      return true;
+    });
+    if (!removed) {
+      break;
+    }
+    // Each page unit owns separate FIFO admission after this item's writer settles.
+    const checkpointCompleted = await reclaimSqliteFreePages(
+      params.databaseOptions,
+      diagnostics,
+      params,
+    );
+    usage = await measure();
+    if (!checkpointCompleted) {
+      break;
+    }
   }
   return { removedFiles, usage };
 }
 
-export async function pruneAllSessionTranscriptArchivesToHighWater(params: {
-  archiveDirectory: string;
-  databaseOptions: OpenClawAgentDatabaseOptions;
-  diagnostics?: SqliteSessionArchivePruningDiagnostics;
-  highWaterBytes: number;
-  storePath: string;
-}): Promise<{ removedFiles: number; usage: SessionPhysicalDiskUsage }> {
+export function pruneAllSessionTranscriptArchivesToHighWater(
+  input: ArchivePruningParams,
+): Promise<SessionArchivePruningResult> {
+  const diagnostics = input.diagnostics ?? { trigger: "initial" };
+  return observeSessionArchivePruning(diagnostics, () =>
+    withSqliteSessionPageReclamation(
+      input.databaseOptions,
+      (reclaimPages, assertCurrent, databaseOptions, archives) =>
+        pruneSessionArchivesWithOwner({
+          ...input,
+          diagnostics,
+          reclaimPages,
+          assertCurrent,
+          databaseOptions,
+          archives,
+        }),
+    ),
+  );
+}
+
+async function pruneSessionArchivesWithOwner(
+  params: OwnedArchivePruningParams & { diagnostics: SqliteSessionArchivePruningDiagnostics },
+): Promise<SessionArchivePruningResult> {
   const { diagnostics } = params;
-  // Reclaim committed free pages before pressure can destroy a retained archive.
-  await reclaimSqliteFreePages(params.databaseOptions, diagnostics);
-  const canonical = (await withArchivePruningDatabase(
-    params.databaseOptions,
-    diagnostics,
-    (database) =>
-      timeArchivePruningSync(diagnostics, "queryMs", () =>
-        hasCanonicalSessionTranscriptArchivesInDatabase(database),
-      ),
-  ))
-    ? await pruneCanonicalSessionTranscriptArchivesToHighWater(params)
-    : {
-        removedFiles: 0,
-        usage: await timeArchivePruningAsync(diagnostics, "measurementMs", () =>
-          measureSessionPhysicalDiskUsage(params.storePath),
-        ),
-      };
-  if (canonical.usage.totalBytes <= params.highWaterBytes) {
-    if (diagnostics) {
-      diagnostics.completed = true;
-    }
-    return canonical;
+  const measure = () =>
+    timeArchivePruningAsync(diagnostics, "measurementMs", () =>
+      measureSessionPhysicalDiskUsage(params.storePath),
+    );
+  const before = await measure();
+  diagnostics.totalBytesBefore = before.totalBytes;
+  diagnostics.walBytesBefore = before.databaseWalBytes;
+  const finish = (result: {
+    removedFiles: number;
+    usage: SessionPhysicalDiskUsage;
+  }): SessionArchivePruningResult => {
+    params.assertCurrent();
+    diagnostics.totalBytesAfter = result.usage.totalBytes;
+    diagnostics.walBytesAfter = result.usage.databaseWalBytes;
+    const checkpointIncomplete = diagnostics.checkpointIncomplete ?? 0;
+    diagnostics.completed = checkpointIncomplete === 0 && !diagnostics.failedRemovals;
+    return {
+      ...result,
+      completed: diagnostics.completed,
+      checkpointIncomplete,
+      checkpoint: diagnostics.checkpoint,
+    };
+  };
+  // Unreclaimable WAL pressure must not destroy archives or create more WAL frames.
+  if (!(await reclaimSqliteFreePages(params.databaseOptions, diagnostics, params))) {
+    return finish({ removedFiles: 0, usage: await measure() });
+  }
+  const canonical = await pruneCanonicalSessionTranscriptArchivesToHighWater(params);
+  if (diagnostics.checkpointIncomplete || canonical.usage.totalBytes <= params.highWaterBytes) {
+    return finish(canonical);
   }
   const legacy = await pruneSessionTranscriptArchivesToHighWater({
     diagnostics,
-    excludeNames: await withArchivePruningDatabase(
-      params.databaseOptions,
-      diagnostics,
-      (database) =>
-        timeArchivePruningSync(diagnostics, "queryMs", () =>
-          readUnpublishedSessionTranscriptArchiveNames(database),
-        ),
-    ),
     highWaterBytes: params.highWaterBytes,
     storePath: params.storePath,
+    removeFile: (file) =>
+      withArchivePruningWriter(params, async () => {
+        const usage = await measure();
+        params.assertCurrent();
+        if (usage.totalBytes <= params.highWaterBytes) {
+          return "preserved";
+        }
+        return timeArchivePruningAsync(diagnostics, "fileRemovalMs", () =>
+          params.archives.removeLegacy(file.path),
+        );
+      }),
   });
-  if (diagnostics) {
-    diagnostics.completed = true;
-  }
-  return {
+  return finish({
     removedFiles: canonical.removedFiles + legacy.removedFiles,
     usage: legacy.usage,
-  };
+  });
 }

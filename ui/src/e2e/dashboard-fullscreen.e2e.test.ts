@@ -566,9 +566,10 @@ suite.define(() => {
             left: inner.left - outer.left,
             right: outer.right - inner.right,
             top: inner.top - outer.top,
+            bottom: outer.bottom - inner.bottom,
           };
         });
-      await expect.poll(frameInsets).toEqual({ left: 0, right: 0, top: 0 });
+      await expect.poll(frameInsets).toEqual({ left: 0, right: 0, top: 0, bottom: 0 });
       expect(await widget.evaluate((element) => getComputedStyle(element).borderTopWidth)).toBe(
         "0px",
       );
@@ -588,7 +589,7 @@ suite.define(() => {
       expect(await note.inputValue()).toBe("Keep this draft");
       await page.getByRole("button", { name: "Focus", exact: true }).click();
       await frame.waitFor({ state: "visible" });
-      await expect.poll(frameInsets).toEqual({ left: 0, right: 0, top: 0 });
+      await expect.poll(frameInsets).toEqual({ left: 0, right: 0, top: 0, bottom: 0 });
       await gateway.setMethodResponse("board.get", {
         ...singleWidget,
         revision: 2,

@@ -45,10 +45,8 @@ import {
   prepareSessionWorkerPlacementMutationCheck,
   prepareSessionWorkerPlacementStop,
 } from "../worker-environments/session-placement-lifecycle.js";
-import {
-  abortChatRunsForSessionKeyWithPartials,
-  hasGatewaySessionAbortOwner,
-} from "./chat-abort-runtime.js";
+import { hasGatewaySessionAbortOwner } from "./chat-abort-authorization.js";
+import { abortChatRunsForSessionKeyWithPartials } from "./chat-abort-runtime.js";
 import type { GatewayRequestContext } from "./types.js";
 
 type LifecyclePlacementService = NonNullable<

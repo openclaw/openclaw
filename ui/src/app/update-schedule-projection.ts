@@ -142,6 +142,37 @@ export function formatUpdateTargetLabel(
   return version ? t("updates.target.version", { version }) : null;
 }
 
+export function getUpdateGitRevisions(
+  schedule: UpdateScheduleState | null | undefined,
+  updateAvailable: UpdateAvailable | null | undefined,
+): { currentSha?: string; targetSha: string; compareUrl?: string } | null {
+  const target = schedule?.target;
+  if (
+    target?.kind === "package" ||
+    schedule?.install?.kind === "package" ||
+    resolveComparedGitCommitsBehind(schedule) === false
+  ) {
+    return null;
+  }
+  const targetSha = target?.kind === "git" ? target.upstreamSha : updateAvailable?.upstreamSha;
+  if (!targetSha) {
+    return null;
+  }
+  const currentSha = schedule?.install?.git?.currentSha ?? updateAvailable?.currentSha;
+  const repositoryUrl = updateAvailable?.repositoryUrl;
+  // Repository identity belongs to the announcement, not an unrelated cached target.
+  const compareUrl =
+    repositoryUrl &&
+    /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+$/u.test(repositoryUrl) &&
+    targetSha === updateAvailable?.upstreamSha &&
+    currentSha &&
+    /^[a-f\d]{7,40}$/iu.test(currentSha) &&
+    /^[a-f\d]{7,40}$/iu.test(targetSha)
+      ? `${repositoryUrl}/compare/${currentSha}...${targetSha}`
+      : undefined;
+  return { currentSha, targetSha, compareUrl };
+}
+
 export function isUpdateActionable(
   updateAvailable: UpdateAvailable | null | undefined,
   updateSchedule: UpdateScheduleState | null | undefined,

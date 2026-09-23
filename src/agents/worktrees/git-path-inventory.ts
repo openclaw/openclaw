@@ -21,6 +21,24 @@ export function splitNullBuffer(input: Uint8Array): Buffer[] {
   return fields;
 }
 
+/** Emits only nonempty batches using the existing soft count/byte thresholds. */
+export function* gitPathspecBatches(paths: readonly string[]): Generator<string[]> {
+  let offset = 0;
+  while (offset < paths.length) {
+    const batch: string[] = [];
+    let bytes = 0;
+    while (
+      offset < paths.length &&
+      (batch.length === 0 || (batch.length < 128 && bytes < 16_384))
+    ) {
+      const entry = paths[offset++]!;
+      batch.push(entry);
+      bytes += Buffer.byteLength(entry) + 1;
+    }
+    yield batch;
+  }
+}
+
 export function gitPathKey(gitPath: Uint8Array): string {
   return Buffer.from(gitPath.buffer, gitPath.byteOffset, gitPath.byteLength).toString("hex");
 }

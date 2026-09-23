@@ -7,6 +7,7 @@ import type {
   WorkerLiveEventErrorDetails as ErrorDetails,
   WorkerLiveEventParams as Params,
 } from "../../../packages/gateway-protocol/src/schema.js";
+import { drainStoreWriterQueuesForTest } from "../../../test/helpers/promise.js";
 import * as sessions from "../../config/sessions/session-accessor.js";
 import {
   resolveSqliteReadScope,
@@ -29,7 +30,6 @@ import {
   sweepStaleRunContexts,
 } from "../../infra/agent-run-registry.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { drainStoreWriterQueuesForTest } from "../../shared/store-writer-queue.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import {
   runOpenClawAgentWorkerWrite,
@@ -339,11 +339,12 @@ describe("worker live events", () => {
 
   it("settles accepted writes before returning a synchronous diagnostic failure", async () => {
     const failure = new Error("synthetic diagnostic failure");
-    const diagnostic = vi
-      .spyOn(workerRunOwner, "captureWorkerTurnDiagnosticRecorder")
-      .mockReturnValue(() => {
+    const diagnostic = vi.spyOn(workerRunOwner, "captureWorkerTurnLiveEventOwner").mockReturnValue({
+      record: () => {
         throw failure;
-      });
+      },
+      isCancelled: () => false,
+    });
     const writer = holdWriter();
     await writer.entered;
     let settled = false;
@@ -715,8 +716,8 @@ describe("worker live events", () => {
       }
       const diagnostic = vi.fn();
       const recorder = vi
-        .spyOn(workerRunOwner, "captureWorkerTurnDiagnosticRecorder")
-        .mockReturnValue(diagnostic);
+        .spyOn(workerRunOwner, "captureWorkerTurnLiveEventOwner")
+        .mockReturnValue({ record: diagnostic, isCancelled: () => false });
       const stop = onAgentRuntimeEvent((event) => {
         if (event.runId === RUN && event.stream === stream) {
           rx.clearEnvironment(ID.environmentId);

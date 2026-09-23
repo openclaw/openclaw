@@ -10,9 +10,11 @@ import {
   type SessionsCreateParams,
 } from "../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import { resolveSandboxRuntimeStatus } from "../agents/sandbox/runtime-status.js";
 import { InvalidWorktreeBaseRefError, resolveWorktreeBase } from "../agents/worktrees/base-ref.js";
 import { insideGitCheckout } from "../agents/worktrees/git.js";
 import { slugifyWorktreeTitle } from "../agents/worktrees/name.js";
+import { getRegistryWorktree } from "../agents/worktrees/registry.js";
 import { managedWorktrees, WorktreeRepositoryError } from "../agents/worktrees/service.js";
 import type {
   CreateManagedWorktreeParams,
@@ -72,8 +74,13 @@ export function validateSessionWorktreeSelection(
   return undefined;
 }
 
+type AcceptedWorktreeSource = NonNullable<
+  PreparedGatewaySessionLifecycle["pendingWorktree"]
+>["source"];
+
 type SpawnParentWorktreeSource = {
   workspace: string;
+  source?: AcceptedWorktreeSource;
   withCurrent: WorktreeSourceStage;
   withRollback?: <T>(run: (assertCurrent: () => void) => Promise<T>) => Promise<T>;
 };
@@ -126,6 +133,7 @@ async function resolveSpawnParentWorktreeSource(
     if (selection) {
       return {
         workspace: project.repoRoot,
+        source: { kind: "project", id: projectId },
         withRollback: selection.withRollback,
         withCurrent: async (run) =>
           await selection.withCurrent((current) => {
@@ -143,6 +151,7 @@ async function resolveSpawnParentWorktreeSource(
     assertCurrent();
     return {
       workspace: project.repoRoot,
+      source: { kind: "project", id: projectId },
       withCurrent: async (run) => {
         return await run({ assertCurrent, signal: options.signal });
       },
@@ -179,6 +188,7 @@ async function resolveSpawnParentWorktreeSource(
   };
   return {
     workspace: worktree.repoRoot,
+    source: { kind: "worktree", id: worktree.id },
     withCurrent: async (run) => {
       return await run({ assertCurrent, signal: options.signal });
     },
@@ -220,13 +230,24 @@ export async function prepareSessionWorktree(params: {
   signal?: AbortSignal;
   commitGuard?: () => void;
   withSource?: WorktreeSourceStage;
+  acceptedSource?: AcceptedWorktreeSource;
   withRollback?: SpawnParentWorktreeSource["withRollback"];
   onProgress?: CreateManagedWorktreeParams["onProgress"];
 }): ReturnType<PrepareGatewaySessionLifecycle> {
   const { target, commitGuard } = params;
+  const sandboxRequired =
+    target.sandboxRequired === true ||
+    target.entry?.sandbox === "required" ||
+    resolveSandboxRuntimeStatus({
+      cfg: params.cfg,
+      agentId: target.agentId,
+      sessionKey: target.key,
+    }).sandboxed;
+  let withSource = params.withSource;
+  let withRollback = params.withRollback;
   const checkSource = async () => {
     commitGuard?.();
-    await params.withSource?.((current) => {
+    await withSource?.((current) => {
       commitGuard?.();
       current.assertCurrent();
     });
@@ -234,9 +255,71 @@ export async function prepareSessionWorktree(params: {
   try {
     await checkSource();
     const workspace = typeof params.workspace === "string" ? params.workspace : undefined;
-    // The empty source contributes no host files; caller-selected sources still
-    // require the inherited workspace containment check.
-    if (target.sandboxRequired && workspace) {
+    if (sandboxRequired && workspace && !withSource && params.acceptedSource?.kind === "worktree") {
+      const source = getRegistryWorktree(process.env, params.acceptedSource.id);
+      const root = fs.realpathSync(workspace);
+      if (!source || source.ownerKind !== "session" || source.repoRoot !== root) {
+        throw new SessionWorktreeSourceChangedError(
+          "Accepted managed source is no longer available",
+        );
+      }
+      const assertCurrent = () => {
+        commitGuard?.();
+        const current = getRegistryWorktree(process.env, source.id);
+        if (
+          current?.ownerId !== source.ownerId ||
+          current?.repoRoot !== root ||
+          current?.repoFingerprint !== source.repoFingerprint ||
+          fs.realpathSync(workspace) !== root
+        ) {
+          throw new SessionWorktreeSourceChangedError(
+            "Accepted managed source changed during preparation",
+          );
+        }
+      };
+      // An archived parent retains this registry/snapshot owner. Its session is
+      // no longer the child's authority once the locked creation accepted intent.
+      withSource = async (run) => {
+        assertCurrent();
+        return await run({ assertCurrent, signal: params.signal });
+      };
+    }
+    // Registry custody authorizes source-only preparation, not direct host access.
+    // The resulting session is executed through its private sandbox projection.
+    if (sandboxRequired && workspace && !withSource) {
+      const projectId =
+        target.projectId ??
+        target.entry?.projectId ??
+        (params.acceptedSource?.kind === "project" ? params.acceptedSource.id : undefined);
+      const selected =
+        projectId && !projectId.startsWith("workspace:")
+          ? await selectStoredProjectRegistry(projectId, { signal: params.signal })
+          : undefined;
+      if (selected) {
+        const expectedRoot = fs.realpathSync(workspace);
+        withSource = async (run) =>
+          await selected.withCurrent((current) => {
+            const assertCurrent = () => {
+              commitGuard?.();
+              current.assertCurrent();
+              if (
+                !current.project ||
+                current.project.repoRoot !== expectedRoot ||
+                fs.realpathSync(workspace) !== expectedRoot
+              ) {
+                throw new SessionWorktreeSourceChangedError(
+                  "Selected project changed during guest workspace preparation",
+                );
+              }
+            };
+            assertCurrent();
+            return run({ ...current, assertCurrent });
+          });
+        withRollback = selected.withRollback;
+      }
+    }
+    // Raw paths and workspace aliases retain the selected-agent boundary.
+    if (sandboxRequired && workspace && !withSource) {
       const root = prepareSessionCreateFilesystemRoot({
         cfg: params.cfg,
         enforceSandboxContainment: true,
@@ -300,8 +383,8 @@ export async function prepareSessionWorktree(params: {
       suggestedName: slugifyWorktreeTitle(params.label ?? ""),
       signal: params.signal,
       commitGuard,
-      withSource: params.withSource,
-      withRollback: params.withRollback,
+      withSource,
+      withRollback,
       onProgress: params.onProgress,
     };
     const { record: worktree, materialized } = workspace
@@ -310,11 +393,12 @@ export async function prepareSessionWorktree(params: {
           repoRoot: workspace,
           baseRef: params.baseRef,
           checkoutCommit: params.checkoutCommit,
-          runSetupScript: params.runSetupScript,
+          runSetupScript: sandboxRequired ? false : params.runSetupScript,
+          provisionIgnoredFiles: !sandboxRequired,
         })
       : await managedWorktrees.createEmptyWithOutcome(createParams);
     const rollback = materialized
-      ? async () => await managedWorktrees.rollbackPreparation(worktree, params.withRollback)
+      ? async () => await managedWorktrees.rollbackPreparation(worktree, withRollback)
       : undefined;
     const accept = (
       assertSourceCurrent?: () => void,
@@ -342,12 +426,16 @@ export async function prepareSessionWorktree(params: {
           canonicalWorkspaceDir: workspace ?? worktree.repoRoot,
         },
         ...(rollback ? { rollback } : {}),
+        ...(withSource
+          ? {
+              withCommit: async <T>(run: (assertCurrent: () => void) => Promise<T>) =>
+                await withSource!((current) => run(current.assertCurrent)),
+            }
+          : {}),
       });
     };
     try {
-      return params.withSource
-        ? await params.withSource((current) => accept(current.assertCurrent))
-        : accept();
+      return withSource ? await withSource((current) => accept(current.assertCurrent)) : accept();
     } catch (error) {
       const failures = [error];
       try {
@@ -488,6 +576,9 @@ export async function prepareSessionWorktreeCreation(params: {
         withCommit,
         pendingWorktree: {
           ...(params.projectGitUrl ? {} : { workspace }),
+          ...(inheritedSource?.source || acceptedPending?.source
+            ? { source: inheritedSource?.source ?? acceptedPending?.source }
+            : {}),
           name,
           baseRef,
           baseCommit,
@@ -525,7 +616,7 @@ export async function prepareSessionWorktreeCreation(params: {
     name,
     baseRef,
     checkoutCommit: baseCommit,
-    label: params.label ?? title ?? resolveExplicitSessionName(lifecycleTarget.entry) ?? source,
+    label: params.label ?? title ?? resolveExplicitSessionName(lifecycleTarget.entry),
     runSetupScript: params.runSetupScript,
     signal,
     commitGuard,
@@ -533,7 +624,7 @@ export async function prepareSessionWorktreeCreation(params: {
     withRollback: inheritedSource?.withRollback,
   });
   if (prepared.ok) {
-    return { ok: true, value: { ...prepared.value, withCommit } };
+    return { ok: true, value: { ...prepared.value, ...(withCommit ? { withCommit } : {}) } };
   }
   return prepared;
 }

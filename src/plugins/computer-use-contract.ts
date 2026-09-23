@@ -86,8 +86,8 @@ const optionalReferenceFields = {
   deliveryMode: Type.Optional(Type.Enum(DELIVERY_MODES, { type: "string" })),
 };
 
-function actionObject<const Properties extends object>(
-  actions: readonly string[],
+function actionObject<const Actions extends string[], const Properties extends object>(
+  actions: readonly [...Actions],
   properties: Properties,
 ) {
   return Type.Object(

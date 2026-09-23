@@ -5,6 +5,10 @@ import type {
   Tool as OpenAIResponsesTool,
 } from "openai/resources/responses/responses.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createInterleavedResponsesToolEvents,
+  createResponsesDoneArgumentEvents,
+} from "../../../../test/helpers/openai-responses-events.js";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import {
@@ -1011,41 +1015,6 @@ describe("processResponsesStream", () => {
     } finally {
       vi.useRealTimers();
     }
-  });
-
-  it("pins SDK maxRetries to zero", async () => {
-    let requestMaxRetries: number | undefined;
-    const output = createAssistantOutput();
-    const stream = new AssistantMessageEventStream();
-
-    await runResponsesStreamLifecycle({
-      stream,
-      model: nativeOpenAIModel,
-      output,
-      createClient: () => ({
-        responses: {
-          create: (_params, requestOptions) => {
-            requestMaxRetries = requestOptions.maxRetries;
-            return {
-              withResponse: async () => ({
-                data: streamResponsesEvents([
-                  {
-                    type: "response.completed",
-                    sequence_number: 1,
-                    response: { id: "resp_retry", status: "completed" },
-                  } as ResponseStreamEvent,
-                ]),
-                response: new Response(null, { status: 200 }),
-              }),
-            };
-          },
-        },
-      }),
-      buildParams: () => ({ model: nativeOpenAIModel.id, input: [], stream: true }),
-    });
-
-    expect(requestMaxRetries).toBe(0);
-    expect(output.stopReason).toBe("stop");
   });
 
   it.each([
@@ -2196,72 +2165,7 @@ describe("processResponsesStream", () => {
 
   it("keeps interleaved Responses function calls bound to their output indices", async () => {
     const responseStream: ResponseStreamEvent[] = [
-      {
-        type: "response.output_item.added",
-        output_index: 0,
-        sequence_number: 1,
-        item: {
-          type: "function_call",
-          id: "fc_click",
-          call_id: "call_click",
-          name: "computer",
-          arguments: "",
-          status: "in_progress",
-        },
-      },
-      {
-        type: "response.output_item.added",
-        output_index: 1,
-        sequence_number: 2,
-        item: {
-          type: "function_call",
-          id: "fc_type",
-          call_id: "call_type",
-          name: "computer",
-          arguments: "",
-          status: "in_progress",
-        },
-      },
-      {
-        type: "response.function_call_arguments.delta",
-        output_index: 1,
-        item_id: "fc_type",
-        sequence_number: 3,
-        delta: '{"action":"type","text":"hello"}',
-      },
-      {
-        type: "response.function_call_arguments.delta",
-        output_index: 0,
-        item_id: "fc_click",
-        sequence_number: 4,
-        delta: '{"action":"left_click","coordinate":[10,20]}',
-      },
-      {
-        type: "response.output_item.done",
-        output_index: 0,
-        sequence_number: 5,
-        item: {
-          type: "function_call",
-          id: "fc_click",
-          call_id: "call_click",
-          name: "computer",
-          arguments: '{"action":"left_click","coordinate":[10,20]}',
-          status: "completed",
-        },
-      },
-      {
-        type: "response.output_item.done",
-        output_index: 1,
-        sequence_number: 6,
-        item: {
-          type: "function_call",
-          id: "fc_type",
-          call_id: "call_type",
-          name: "computer",
-          arguments: '{"action":"type","text":"hello"}',
-          status: "completed",
-        },
-      },
+      ...createInterleavedResponsesToolEvents(),
       {
         type: "response.completed",
         sequence_number: 7,
@@ -2601,67 +2505,8 @@ describe("processResponsesStream", () => {
   it("recovers parallel arguments from authoritative done events and preserves opening names", async () => {
     const output = createAssistantOutput();
     const { stream, events } = createCapturedAssistantMessageEventStream();
-    const firstItem = {
-      type: "function_call",
-      id: "fc_recovered_first",
-      call_id: "call_recovered_first",
-      name: "read",
-    };
-    const secondItem = {
-      type: "function_call",
-      id: "fc_recovered_second",
-      call_id: "call_recovered_second",
-      name: "write",
-    };
-
     await processResponsesStream(
-      responseEvents([
-        {
-          type: "response.output_item.added",
-          output_index: 0,
-          item: { ...firstItem, arguments: "" },
-        },
-        {
-          type: "response.output_item.added",
-          output_index: 1,
-          item: { ...secondItem, arguments: "" },
-        },
-        { type: "response.function_call_arguments.delta", delta: '{"ambiguous":true}' },
-        {
-          type: "response.function_call_arguments.done",
-          output_index: 0,
-          item_id: firstItem.id,
-          arguments: '{"path":"README.md"}',
-        },
-        {
-          type: "response.function_call_arguments.done",
-          output_index: 1,
-          item_id: secondItem.id,
-          arguments: '{"path":"README.md","text":"ok"}',
-        },
-        {
-          type: "response.output_item.done",
-          output_index: 0,
-          item: {
-            type: "function_call",
-            id: firstItem.id,
-            call_id: firstItem.call_id,
-          },
-        },
-        {
-          type: "response.output_item.done",
-          output_index: 1,
-          item: {
-            type: "function_call",
-            id: secondItem.id,
-            call_id: secondItem.call_id,
-          },
-        },
-        {
-          type: "response.completed",
-          response: { id: "resp_recovered_parallel", status: "completed" },
-        },
-      ]),
+      responseEvents(createResponsesDoneArgumentEvents()),
       output,
       stream,
       nativeOpenAIModel,

@@ -97,16 +97,16 @@ Equivalent config:
 
 When enabled, OpenClaw adds these values to Gateway-hosted exec environments:
 
-- `HTTPS_PROXY` and `HTTP_PROXY`, with per-run credentials embedded in the loopback proxy URL
+- `HTTPS_PROXY` and `HTTP_PROXY`, with per-process credentials embedded in the loopback proxy URL
 - `NODE_USE_ENV_PROXY=1`, which makes supported Node.js global `fetch` clients honor `HTTP_PROXY` and `HTTPS_PROXY` without using `NODE_OPTIONS`
-- `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `REQUESTS_CA_BUNDLE`, and `GIT_SSL_CAINFO`, pointing at the trusted certificate bundle for the run
+- `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `REQUESTS_CA_BUNDLE`, and `GIT_SSL_CAINFO`, pointing at the Gateway's trusted certificate bundle
 - each team-store `secret` entry as an `oc-sent-v2...end` sentinel; `env` entries keep their existing behavior and precedence
 
-Proxy authentication uses standard Basic proxy auth with username `openclaw` and a random per-run password. The token expires when the exact agent run closes, including cancellation and replacement. Base64 is not treated as encryption: the listener binds only to loopback, and a process that can read the proxy token from the agent environment can already read the sentinels in that environment. Missing, wrong, or expired credentials receive `407 Proxy Authentication Required` and are never forwarded.
+Proxy authentication uses standard Basic proxy auth with username `openclaw` and a random password for each managed exec process. OpenClaw creates the grant after approval and launch checks. A background command retains its grant when the originating agent turn ends; its process supervisor owns both execution and proxy access. Base64 is not treated as encryption: the listener binds only to loopback, and a process that can read the proxy token from the agent environment can already read the sentinels in that environment. Missing, wrong, or revoked credentials receive `407 Proxy Authentication Required` and are never forwarded.
 
-Run closure also tears down existing proxy connections, upstream requests, and bypass tunnels. Reusing the run id or registering a new token cannot revive the old connections or bindings. Bytes already handed to the upstream transport before closure cannot be recalled.
+Process exit, failed startup, cancellation, and timeout revoke that process's grant and tear down its proxy connections, upstream requests, and bypass tunnels. Cancellation revokes access before native process termination. Stopping one command does not revoke a sibling command's grant. Gateway shutdown revokes every grant; restarting requires starting new commands. New grants cannot revive revoked connections or bindings. Bytes already handed to the upstream transport before revocation cannot be recalled.
 
-The run snapshot registers each sentinel together with its secret name and allowed hosts. After proxy authentication, the proxy looks up the matched sentinel in that run's registration and authorizes the normalized destination hostname before decrypting the sentinel. A sentinel that is unregistered, unresolved, unbound, or bound to another host is refused before its plaintext is forwarded.
+Each process receives a fixed copy of the owning run's secret snapshot, including each sentinel's secret name and allowed hosts. Later commands cannot change an existing process's grant. After proxy authentication, the proxy looks up the matched sentinel in that process's registration and authorizes the normalized destination hostname before decrypting the sentinel. A sentinel that is unregistered, unresolved, unbound, or bound to another host is refused before its plaintext is forwarded.
 
 <Warning>
 Destination binding does not make an allowed host trustworthy. A bound service that reflects request credentials can still return the plaintext to the agent. DNS-level compromise can redirect a permitted hostname because policy is hostname-based, not an IP pin. Non-HTTPS requests are refused rather than protected, and HTTPS interception still has the protocol limits below. Use external network policy or process isolation when those threats are in scope.
@@ -118,7 +118,7 @@ The CA is generated once per Gateway start under the state directory with a ten-
 
 For an HTTP request with a valid `Content-Length` of at most 100 MiB, the proxy collects the original bytes in one process-memory buffer. It then checks current destination and sentinel bindings, substitutes in place, and sends the measured byte length upstream. This preserves fixed-length binary uploads without retaining one object per incoming chunk. Sentinel replacements cannot expand the body; no MIME type is exempt from scanning and no request-body temporary files are written.
 
-Each proxy shares a 128 MiB reservation budget across runs, charging the declared body length plus 256 KiB of per-request headroom, with at most 64 buffered uploads being prepared or sent. This bounds staged payload and request count, not total process RSS. A busy proxy refuses additional buffered uploads with `503`; retry after in-flight requests finish. Each buffered upload has a five-minute preparation/send deadline, including upstream connection setup. Timeout, cancellation, run revocation, and transport failure release its resources. No upstream connection is opened while collecting, and a forwarded audit records upstream send completion rather than buffer preparation.
+Each proxy shares a 128 MiB reservation budget across commands, charging the declared body length plus 256 KiB of per-request headroom, with at most 64 buffered uploads being prepared or sent. This bounds staged payload and request count, not total process RSS. A busy proxy refuses additional buffered uploads with `503`; retry after in-flight requests finish. Each buffered upload has a five-minute preparation/send deadline, including upstream connection setup. Timeout, cancellation, grant revocation, and transport failure release its resources. No upstream connection is opened while collecting, and a forwarded audit records upstream send completion rather than buffer preparation.
 
 The 100 MiB envelope is a per-request staging limit, not a destination upload-size limit. Larger requests and requests without a known length keep streaming with chunked framing and backpressure; destinations that require `Content-Length` can still reject those requests. Bytes already handed to the upstream transport cannot be recalled.
 
@@ -126,13 +126,13 @@ The 100 MiB envelope is a per-request staging limit, not a destination upload-si
 
 ### Traffic allowlist
 
-Destination binding protects secrets, not traffic: a request that carries no sentinel can reach any host once a run holds proxy credentials. Set `secrets.egressProxy.allowedHosts` to also restrict where non-sentinel traffic may go:
+Destination binding protects secrets, not traffic: a request that carries no sentinel can reach any host once a command holds proxy credentials. Set `secrets.egressProxy.allowedHosts` to also restrict where non-sentinel traffic may go:
 
 ```bash
 openclaw config set secrets.egressProxy.allowedHosts '["api.openai.com"]' --strict-json
 ```
 
-When the list is present, the proxy forwards only to hostnames in the list, hosts bound to a secret registered for the current agent run, and `bypassHosts`, so an existing `--allow-host` binding keeps working without listing its host twice. A request or CONNECT tunnel to any other host is refused with `Host "<host>" is not in the secret egress proxy traffic allowlist. Add it to secrets.egressProxy.allowedHosts or bind a store secret to it with: openclaw secrets store set <NAME> --allow-host <host>, then restart the Gateway.`
+When the list is present, the proxy forwards only to hostnames in the list, hosts bound to a secret registered for the requesting process, and `bypassHosts`, so an existing `--allow-host` binding keeps working without listing its host twice. A request or CONNECT tunnel to any other host is refused with `Host "<host>" is not in the secret egress proxy traffic allowlist. Add it to secrets.egressProxy.allowedHosts or bind a store secret to it with: openclaw secrets store set <NAME> --allow-host <host>, then restart the Gateway.`
 
 An empty array is lockdown mode: only per-secret bound hosts and `bypassHosts` remain reachable. Omitting `allowedHosts` leaves traffic unrestricted. Hostnames follow the same rules as secret bindings: exact lowercase ASCII/punycode match, no wildcards or ports. Restart the Gateway after changing the allowlist.
 
@@ -146,7 +146,7 @@ Current limits:
 - Allowed-host policy is exact-hostname authorization only. It does not validate the resolved IP or prevent an allowed origin from reflecting credentials.
 - Plain HTTP is refused; it is not upgraded or substituted.
 - Secret egress applies only to Gateway-hosted exec. Sandbox and remote `node` exec receive neither proxy variables nor sentinels, so shared-store `secret` entries are unavailable there. Provider-native harness subprocesses also do not use this proxy.
-- Background subprocesses lose proxy authorization when their owning agent run ends, even if the process itself is still alive.
+- Background subprocesses retain their original secret snapshot until they exit or are stopped. Changes to stored credentials or destination bindings require a new run and a new command; stop existing commands to revoke their older grants immediately.
 
 ## File-backed API keys
 

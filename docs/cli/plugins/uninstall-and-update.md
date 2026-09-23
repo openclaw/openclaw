@@ -137,6 +137,11 @@ and source digests when available. Multiple IDs use one Gateway reload request
 and one applied runtime generation. Repeated IDs are collapsed, and the Gateway
 resolves package siblings together. The request supports up to 64 distinct IDs.
 
+Before stopping a plugin's services or channels, replacement waits up to 60 seconds
+for its in-flight work to finish. If that work does not finish, the reload fails
+once and the previous plugin generation keeps serving. Retry
+`openclaw plugins reload <id>` after the work finishes.
+
 Cleanup is best effort. A successful replacement can return `warnings` when an
 old service or cleanup hook could not stop. Modules and native libraries may
 remain loaded after their registrations are removed. Inspect the warning before

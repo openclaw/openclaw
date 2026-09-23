@@ -47,9 +47,9 @@ describe("chat placement composer presentation", () => {
   it.each([
     ["active", "ready", undefined],
     ["reclaimed", "ready", undefined],
-    ["provisioning", "busy", "Provisioning environment…"],
-    ["syncing", "busy", "Preparing workspace…"],
-    ["starting", "busy", "Starting…"],
+    ["provisioning", "setup", undefined],
+    ["syncing", "setup", undefined],
+    ["starting", "setup", undefined],
     ["draining", "busy", "Finishing session move…"],
     ["reconciling", "busy", "Finishing session move…"],
   ] as const)("projects %s placement into a %s composer", (state, kind, busyMessage) => {

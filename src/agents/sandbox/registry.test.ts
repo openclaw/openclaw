@@ -18,10 +18,14 @@ const { TEST_STATE_DIR, PREVIOUS_OPENCLAW_STATE_DIR, SANDBOX_REGISTRY_PATH } = v
   };
 });
 
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import {
   readBrowserRegistry,
+  assertSandboxBrowserRegistryEntryCurrent,
   readRegisteredSandboxRuntimeIds,
   readRegistry,
   readRegistryEntry,
@@ -35,12 +39,14 @@ type SandboxBrowserRegistryEntry = import("./registry.js").SandboxBrowserRegistr
 type SandboxRegistryEntry = import("./registry.js").SandboxRegistryEntry;
 
 afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   await fs.rm(path.join(TEST_STATE_DIR, "state"), { recursive: true, force: true });
   await fs.rm(SANDBOX_REGISTRY_PATH, { force: true });
 });
 
 afterAll(async () => {
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   await fs.rm(TEST_STATE_DIR, { recursive: true, force: true });
   if (PREVIOUS_OPENCLAW_STATE_DIR === undefined) {
@@ -86,6 +92,16 @@ async function expectPathMissing(targetPath: string): Promise<void> {
 }
 
 describe("registry race safety", () => {
+  it("retains exact browser workspace custody and rejects a rebound owner", async () => {
+    await updateBrowserRegistry(browserEntry({ workspaceDir: "/private/workspace" }));
+    await updateBrowserRegistry(browserEntry({ lastUsedAtMs: 2 }));
+    const [selected] = (await readBrowserRegistry()).entries;
+    expect(selected?.workspaceDir).toBe("/private/workspace");
+    expect(() => assertSandboxBrowserRegistryEntryCurrent(selected!)).not.toThrow();
+    await updateBrowserRegistry(browserEntry({ workspaceDir: "/other/workspace" }));
+    expect(() => assertSandboxBrowserRegistryEntryCurrent(selected!)).toThrow("owner changed");
+  });
+
   it("does not migrate legacy registry files from runtime reads", async () => {
     // Runtime reads should ignore old monolithic files; explicit doctor/repair
     // owns migration so normal startup cannot mutate registry layout.

@@ -6,20 +6,22 @@ import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.j
 import {
   addSessionMember,
   removeSessionMember,
-} from "../../config/sessions/session-sharing-store.js";
+} from "../../config/sessions/session-sharing-store.native.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
 import {
-  closeOpenClawAgentDatabaseByPath,
+  closeOpenClawAgentDatabaseByPathAsync,
+  openOpenClawAgentDatabase,
   disposeOpenClawAgentDatabaseByPath,
 } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseByPath } from "../../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import * as profileAliases from "../../state/user-profile-list.js";
 import { ensureProfileForEmail, linkEmail } from "../../state/user-profiles.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { createGatewayBroadcaster } from "../server-broadcast.js";
 import { createSessionMessageSubscriberRegistry } from "../server-chat-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
@@ -249,7 +251,7 @@ describe("creator preparation at synchronous fan-out boundaries", () => {
       });
       expect(receive()).toBe(true);
       const pathname = `${stateDir}/state/openclaw.sqlite`;
-      closeOpenClawStateDatabaseByPath(pathname);
+      await cleanupSessionStateForTest({ stateDir });
       const reopened = openOpenClawStateDatabase({ path: pathname }).db;
       reopened.prepare("DELETE FROM user_profiles WHERE id = ?").run(creatorId);
       expect(receive()).toBe(false);
@@ -416,7 +418,7 @@ describe("creator preparation at synchronous fan-out boundaries", () => {
       expect(recipients.map(({ socket }) => socket.send.mock.calls.length)).toEqual([2, 1]);
       removeSessionMember(scope, callerId);
       emit();
-      closeOpenClawAgentDatabaseByPath(
+      await closeOpenClawAgentDatabaseByPathAsync(
         path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite"),
       );
       emit();
@@ -440,11 +442,33 @@ describe("creator preparation at synchronous fan-out boundaries", () => {
           payload: { suggestion: { author: { id: "someone-else" } } },
         });
       expect(receive()).toBe(true);
+      const agent = openOpenClawAgentDatabase({ agentId: "main" });
+      const state = openOpenClawStateDatabase();
+      const closing: unknown[] = [];
+      registerOpenClawAgentDatabaseAsyncResource({
+        agentId: "main",
+        path: agent.path,
+        revoke: () => {},
+        close: async () => {
+          await Promise.resolve();
+          closing.push({
+            agentOpen: agent.db.isOpen,
+            stateOpen: state.db.isOpen,
+            rootExists: fs.existsSync(stateDir),
+            selector: process.env.OPENCLAW_STATE_DIR,
+          });
+        },
+      });
+      await cleanupSessionStateForTest({ stateDir });
       // This fixture moves/recreates the file, so release path validation as well as the handle.
       disposeOpenClawAgentDatabaseByPath(
         path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite"),
       );
-      closeOpenClawStateDatabaseByPath(path.join(stateDir, "state", "openclaw.sqlite"));
+      expect(closing).toEqual([
+        { agentOpen: true, stateOpen: true, rootExists: true, selector: undefined },
+      ]);
+      expect(agent.db.isOpen).toBe(false);
+      expect(state.db.isOpen).toBe(false);
       const legacyRoot = path.join(path.dirname(stateDir), ".clawdbot");
       fs.renameSync(stateDir, legacyRoot);
       expect(receive()).toBe(true);
@@ -549,6 +573,7 @@ describe("creator preparation at synchronous fan-out boundaries", () => {
           },
         },
       });
+      await initializeSessionReadContext(context);
       const pending = sessionReadHandlers["sessions.preview"]?.({
         params: { keys: keys.slice(0, 2) },
         client: identifiedClient(callerId),

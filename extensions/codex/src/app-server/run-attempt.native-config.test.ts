@@ -10,7 +10,7 @@ import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtim
 import { describe, expect, it, vi } from "vitest";
 import { CodexAppServerClient } from "./client.js";
 import { resolveCodexSupervisionAppServerRuntimeOptions } from "./config.js";
-import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
+import { setCodexTestToolFactory } from "./host-capability.test-support.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import { isJsonObject } from "./protocol.js";
 import {
@@ -192,11 +192,13 @@ describe("Codex native configuration", () => {
       });
       const start = vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
       const clientFactory = vi.fn(sharedClientModule.getLeasedSharedCodexAppServerClient);
-      dynamicToolBuildState.openClawCodingToolsFactory = () =>
-        nativeSearchEnabled ? [createRuntimeDynamicTool("web_search")] : [];
+
       // This test owns review-policy projection, not requester-scoped MCP discovery.
       agentHarnessRuntimeMocks.forceModelToolsUnsupported = !nativeSearchEnabled;
       const params = createParams(sessionFile, workspaceDir);
+      setCodexTestToolFactory(params, () =>
+        nativeSearchEnabled ? [createRuntimeDynamicTool("web_search")] : [],
+      );
       params.registerPluginRuntimeRefreshConsumer = vi.fn();
       params.agentDir = agentDir;
       params.provider = "anthropic";
@@ -318,7 +320,7 @@ describe("Codex native configuration", () => {
             isError: false,
             content: expect.arrayContaining([
               expect.objectContaining({
-                type: "toolResult",
+                type: "text",
                 text: "synthetic-completed-work",
               }),
             ]),

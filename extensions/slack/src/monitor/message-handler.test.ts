@@ -5,7 +5,9 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { observeRetryBackoffs } from "./message-handler.retry.test-support.js";
 
 type InboundDebounceFlush = { admission: Promise<void>; completion: Promise<void> };
 
@@ -915,7 +917,8 @@ describe("createSlackMessageHandler", () => {
     );
     const cfg: OpenClawConfig = { messages: { ackReactionScope: "off" } };
     setRuntimeConfigSnapshot(cfg, cfg);
-    const { handler } = createHandlerWithTracker({ cfg });
+    const abort = new AbortController();
+    const { handler } = createHandlerWithTracker({ cfg, abortSignal: abort.signal });
     await handler(
       {
         type: "message",
@@ -929,24 +932,28 @@ describe("createSlackMessageHandler", () => {
 
     const entry = enqueueMock.mock.calls[0]?.[0] as Record<string, unknown>;
     enqueueMock.mockImplementation(async (retry) => runOnFlush([retry as Record<string, unknown>]));
+    const backoffs = observeRetryBackoffs(1);
     vi.useFakeTimers();
+    const flush = runOnFlush([entry]).then(
+      () => "completed",
+      () => "failed",
+    );
     try {
-      const flush = runOnFlush([entry]).then(
-        () => "completed",
-        () => "failed",
-      );
-      await vi.advanceTimersByTimeAsync(0);
+      await backoffs.entered[0]!.promise;
       const next: OpenClawConfig = { messages: { ackReactionScope: "all" } };
       setRuntimeConfigSnapshot(next, next);
       await vi.advanceTimersByTimeAsync(1000);
+      expect(await flush).toBe("completed");
       expect(
         prepareSlackMessageMock.mock.calls.map(
           ([params]) => params?.ctx.cfg.messages?.ackReactionScope,
         ),
       ).toEqual(["off", "off"]);
-      expect(await flush).toBe("completed");
       expect(enqueueMock).toHaveBeenCalledTimes(1);
     } finally {
+      abort.abort();
+      await flush;
+      backoffs.restore();
       vi.useRealTimers();
       enqueueMock.mockImplementation(async () => {});
     }
@@ -958,6 +965,7 @@ describe("createSlackMessageHandler", () => {
     setRuntimeConfigSnapshot(cfg, cfg);
     const abort = new AbortController();
     const { handler } = createHandlerWithTracker({ cfg, abortSignal: abort.signal });
+    const backoffs = observeRetryBackoffs(1);
     dispatchPreparedSlackMessageMock.mockRejectedValueOnce(
       new Error("reply session initialization conflicted for agent:main:main"),
     );
@@ -971,7 +979,7 @@ describe("createSlackMessageHandler", () => {
     vi.useFakeTimers();
     try {
       const first = handler(message, { source: "message" });
-      await vi.advanceTimersByTimeAsync(0);
+      await backoffs.entered[0]!.promise;
       expect(prepareSlackMessageMock).toHaveBeenCalledTimes(1);
       const next: OpenClawConfig = { messages: { ackReactionScope: "all" } };
       setRuntimeConfigSnapshot(next, next);
@@ -988,6 +996,7 @@ describe("createSlackMessageHandler", () => {
     } finally {
       abort.abort();
       await Promise.all(realDebouncers.map((debouncer) => debouncer.drain()));
+      backoffs.restore();
       vi.useRealTimers();
     }
   });
@@ -998,6 +1007,7 @@ describe("createSlackMessageHandler", () => {
     const { handler, ctx } = createHandlerWithTracker({ abortSignal: abort.signal });
     const onError = vi.fn();
     ctx.runtime.error = onError;
+    const backoffs = observeRetryBackoffs(outcome === "stop" ? 1 : 3);
     for (let attempt = 0; attempt < (outcome === "stop" ? 1 : 4); attempt += 1) {
       dispatchPreparedSlackMessageMock.mockRejectedValueOnce(
         new Error("reply session initialization conflicted for agent:main:main"),
@@ -1009,12 +1019,17 @@ describe("createSlackMessageHandler", () => {
         { type: "message", channel: "D1", user: "U1", ts: "123.003", text: "retry" },
         { source: "message" },
       );
-      await vi.advanceTimersByTimeAsync(0);
+      await backoffs.entered[0]!.promise;
       expect(prepareSlackMessageMock).toHaveBeenCalledTimes(1);
       if (outcome === "stop") {
         abort.abort(new Error("monitor stopped"));
       }
-      await vi.advanceTimersByTimeAsync(3000);
+      if (outcome === "exhaust") {
+        for (const backoff of backoffs.entered) {
+          await backoff.promise;
+          await vi.advanceTimersByTimeAsync(1000);
+        }
+      }
       await handled;
       await Promise.all(realDebouncers.map((debouncer) => debouncer.drain()));
       expect(prepareSlackMessageMock).toHaveBeenCalledTimes(outcome === "stop" ? 1 : 4);
@@ -1023,10 +1038,12 @@ describe("createSlackMessageHandler", () => {
           outcome === "stop" ? "aborted" : "reply session initialization conflicted",
         ),
       );
+      await closeOpenClawStateDatabaseAsync();
       expect(vi.getTimerCount()).toBe(0);
     } finally {
       abort.abort();
       await Promise.all(realDebouncers.map((debouncer) => debouncer.drain()));
+      backoffs.restore();
       vi.useRealTimers();
     }
   });

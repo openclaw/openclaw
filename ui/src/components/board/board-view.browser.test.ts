@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { applyBoardOps } from "../../../../src/boards/board-layout.js";
 import { buildWidgetDocument } from "../../../../src/canvas/wrap.js";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { BOARD_GRID_GAP, BOARD_GRID_ROW_HEIGHT } from "../../lib/board/grid.ts";
 import type { BoardSnapshot } from "../../lib/board/types.ts";
 import "../../styles/base.css";
@@ -84,7 +86,7 @@ afterEach(() => {
 });
 
 describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
-  it("retains loaded tab documents and their local state while switching tabs", async () => {
+  it.each(["switch", "move"])("retains loaded widget state during %s", async (action) => {
     const view = await mount();
     const cell = view.querySelector("openclaw-board-widget-cell")!;
     const frame = cell.querySelector("iframe")!;
@@ -147,7 +149,17 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
       frame.contentWindow!.postMessage("visit", "*");
       await vi.waitFor(() => expect(messages.at(-1)).toBe("Last 30 days:1"));
 
-      view.callbacks = { ...view.callbacks!, selectTab: (tabId) => (view.activeTabId = tabId) };
+      view.callbacks = {
+        ...view.callbacks!,
+        applyOps: async (ops) => {
+          view.snapshot = {
+            ...view.snapshot!,
+            ...applyBoardOps(view.snapshot!, ops),
+            revision: view.snapshot!.revision + 1,
+          };
+        },
+        selectTab: (tabId) => (view.activeTabId = tabId),
+      };
       const switchTab = async (tabId: string) => {
         view
           .querySelector(".board-tabs__track")!
@@ -157,14 +169,30 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
         await view.updateComplete;
         await cell.updateComplete;
       };
-      await switchTab("ops");
-      expect(view.querySelector('[data-test-id="board-empty"]')).not.toBeNull();
+      if (action === "move") {
+        const { page } = await import("vitest/browser");
+        cell.querySelector<HTMLElement>(".board-widget")!.focus();
+        await page.elementLocator(cell.querySelector(".board-widget__menu-trigger")!).click();
+        await page
+          .elementLocator(cell.querySelector('wa-dropdown-item[value="move:ops"]')!)
+          .click();
+        await vi.waitFor(() =>
+          expect(view.snapshot?.widgets.find((widget) => widget.name === "first")?.tabId).toBe(
+            "ops",
+          ),
+        );
+        await view.updateComplete;
+        await cell.updateComplete;
+      } else {
+        await switchTab("ops");
+        expect(view.querySelector('[data-test-id="board-empty"]')).not.toBeNull();
+      }
       expect(frame.isConnected).toBe(true);
       expect(cell.active).toBe(false);
       expect(cell.inert).toBe(true);
       expect(frame.getBoundingClientRect().height).toBe(0);
 
-      await switchTab("main");
+      await switchTab(action === "move" ? "ops" : "main");
       expect(cell.querySelector("iframe")).toBe(frame);
       expect(cell.active).toBe(true);
       expect(frame.getBoundingClientRect().height).toBeGreaterThan(0);
@@ -577,7 +605,14 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
       const frame = cell.querySelector("iframe")!;
       const initialHeight = frame.getBoundingClientRect().height;
       const reports: number[] = [];
+      const ready = createDeferred();
       const recordSize = (event: MessageEvent) => {
+        if (
+          event.source === frame.contentWindow &&
+          event.data?.type === "openclaw:widget-bridge-ready"
+        ) {
+          ready.resolve();
+        }
         if (event.source === frame.contentWindow && event.data?.type === "openclaw:widget-size") {
           reports.push(event.data.height);
         }
@@ -588,6 +623,9 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
           "Viewport-sized dashboard",
           "<style>body{min-height:100vh}</style><main>Dashboard content</main>",
         );
+        // Start the size-report check after this document's bridge is running;
+        // assigning srcdoc does not mean Chromium has started the navigation.
+        await ready.promise;
         await vi.waitFor(() => expect(reports.length).toBeGreaterThan(0));
         for (const expanded of focused ? [true, false, true] : [false]) {
           if (focused) {

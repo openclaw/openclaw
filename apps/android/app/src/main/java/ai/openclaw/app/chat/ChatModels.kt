@@ -93,6 +93,7 @@ data class ChatMessageUsage(
   val input: Long? = null,
   val output: Long? = null,
   val cacheRead: Long? = null,
+  val cacheWrite: Long? = null,
 )
 
 @Serializable
@@ -249,6 +250,9 @@ data class ChatPendingToolCall(
   val liveDiff: ChatDiffStat? = null,
   val activity: ChatAgentActivity? = null,
   val isComplete: Boolean = false,
+  val runId: String? = null,
+  /** Stable across provisional-to-canonical run ownership changes. */
+  val presentationId: String? = null,
 )
 
 data class ChatDiffStat(

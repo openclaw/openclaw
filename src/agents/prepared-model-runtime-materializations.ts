@@ -29,14 +29,14 @@ export function configuredOwnersAreRequestVisible(
 
 export function registerPreparedRuntimeAuthMaterializationPublisher(
   owners: ReadonlyMap<string, PreparedModelRuntimeOwner>,
-  notify: (event: { phase: "invalidated" | "published" }) => void,
+  notify: (event: { phase: "invalidated" | "published"; modelFactsChanged: false }) => void,
 ): () => void {
   return registerRuntimeAuthMaterializationMutationListener((event) => {
     publishPreparedRuntimeAuthMaterializations({
       event,
       owners,
-      onInvalidated: () => notify({ phase: "invalidated" }),
-      onPublished: () => notify({ phase: "published" }),
+      onInvalidated: () => notify({ phase: "invalidated", modelFactsChanged: false }),
+      onPublished: () => notify({ phase: "published", modelFactsChanged: false }),
     });
   });
 }

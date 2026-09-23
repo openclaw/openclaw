@@ -311,6 +311,52 @@ describe("ensureSandboxContainer config-hash recreation", () => {
     expect(registryUpdate?.configHash).toBe(newHash);
   });
 
+  it("reports a missing Podman init dependency without weakening or completing provisioning", async () => {
+    const workspaceDir = tempDirs.make("openclaw-podman-init-");
+    const cfg = createSandboxConfig([], [], "rw", {});
+    cfg.backend = "podman";
+    cfg.docker.setupCommand = "echo setup-must-not-run";
+    spawnState.containerExists = false;
+    spawnState.inspectRunning = false;
+    spawnState.createError =
+      'Error: lookup init binary: exec: "catatonit": executable file not found in $PATH\n';
+    registryMocks.readRegistryEntry.mockResolvedValue(null);
+
+    const error = await harness
+      .ensureSandboxContainer({
+        engine: harness.PODMAN_SANDBOX_ENGINE,
+        scopeKey: "shared",
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
+        cfg,
+      })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error).toMatchObject({
+      message: expect.stringContaining("Install catatonit on the Podman engine host"),
+      code: 125,
+      stderr: Buffer.from(spawnState.createError),
+    });
+    const creates = spawnState.calls.filter((call) => call.args[0] === "create");
+    expect(creates).toHaveLength(1);
+    const create = creates[0]!;
+    expect(create.command).toBe("podman");
+    expect(create.args.filter((arg) => arg === "--init")).toHaveLength(1);
+    expect(create.args).toContain("--read-only");
+    expect(collectDockerFlagValues(create.args, "--network")).toEqual(["none"]);
+    expect(collectDockerFlagValues(create.args, "--cap-drop")).toEqual(["ALL"]);
+    expect(collectDockerFlagValues(create.args, "--security-opt")).toContain("no-new-privileges");
+    expect(
+      spawnState.calls.some((call) => ["start", "exec", "rm"].includes(call.args[0] ?? "")),
+    ).toBe(false);
+    expect(registryMocks.updateRegistry).not.toHaveBeenCalled();
+    expect(registryMocks.removeRegistryEntry).not.toHaveBeenCalled();
+    const envFile = collectDockerFlagValues(create.args, "--env-file")[0];
+    expect(envFile).toBeDefined();
+    expect(fs.existsSync(envFile!)).toBe(false);
+  });
+
   it("uses the shared lifecycle with rootless Podman workspace ownership", async () => {
     const workspaceDir = "/tmp/workspace";
     const cfg = createSandboxConfig([], []);

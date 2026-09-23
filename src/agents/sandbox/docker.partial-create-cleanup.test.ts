@@ -106,6 +106,90 @@ async function expectPartialRuntimeCleanup(params: {
 }
 
 describe("fresh sandbox container cleanup", () => {
+  it.each(["image", "create", "start"])(
+    "fences later runtime effects when authority closes after %s",
+    async (stage) => {
+      const workspaceDir = tempDirs.make("openclaw-runtime-revoked-");
+      let current = true;
+      containerMocks.execContainer.mockImplementation(async (_engine, args: string[]) => {
+        if (args[0] === "inspect") {
+          return { code: 1, stdout: "", stderr: "No such object" };
+        }
+        if (args[0] === stage) {
+          await Promise.resolve();
+          current = false;
+        }
+        return { code: 0, stdout: "", stderr: "" };
+      });
+      await expect(
+        ensureSandboxContainer({
+          scopeKey: "revoked",
+          workspaceDir,
+          agentWorkspaceDir: workspaceDir,
+          workspaceSource: "managed-worktree",
+          cfg: config(workspaceDir, "echo should-not-run"),
+          assertCurrent: () => {
+            if (!current) {
+              throw new Error("runtime revoked");
+            }
+          },
+        }),
+      ).rejects.toThrow("runtime revoked");
+      const effects = containerMocks.execContainer.mock.calls.map(([, args]) => args[0]);
+      expect(effects).not.toContain("exec");
+      if (stage === "image") {
+        expect(effects).not.toContain("create");
+        expect(effects).not.toContain("start");
+      }
+      if (stage === "create") {
+        expect(effects).not.toContain("start");
+      }
+    },
+  );
+
+  it("persists a managed mount before allocation and retains ambiguous failures", async () => {
+    const workspaceDir = tempDirs.make("openclaw-managed-runtime-custody-");
+    containerMocks.execContainer.mockImplementation(async (_engine, args: string[]) => {
+      if (args[0] === "inspect") {
+        return { code: 1, stdout: "", stderr: "No such object" };
+      }
+      if (args[0] === "create") {
+        expect(registryMocks.updateRegistry).toHaveBeenLastCalledWith(
+          expect.objectContaining({ workspaceDir }),
+        );
+        throw new Error("allocation response lost");
+      }
+      return { code: 0, stdout: "", stderr: "" };
+    });
+    await expect(
+      ensureSandboxContainer({
+        scopeKey: "managed-custody",
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
+        workspaceSource: "managed-worktree",
+        cfg: config(workspaceDir),
+      }),
+    ).rejects.toThrow("allocation response lost");
+    expect(registryMocks.removeRegistryEntry).not.toHaveBeenCalled();
+  });
+
+  it("never allocates a managed writer if its durable binding cannot be saved", async () => {
+    const workspaceDir = tempDirs.make("openclaw-managed-binding-failure-");
+    registryMocks.updateRegistry.mockRejectedValueOnce(new Error("binding unavailable"));
+    await expect(
+      ensureSandboxContainer({
+        scopeKey: "managed-custody",
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
+        workspaceSource: "managed-worktree",
+        cfg: config(workspaceDir),
+      }),
+    ).rejects.toThrow("binding unavailable");
+    expect(containerMocks.execContainer.mock.calls.some(([, args]) => args[0] === "create")).toBe(
+      false,
+    );
+  });
+
   it("removes a newly allocated runtime when setup fails before publication", async () => {
     const workspaceDir = tempDirs.make("openclaw-docker-partial-start-");
     await expectPartialRuntimeCleanup({

@@ -186,11 +186,10 @@ function buildPluginGroups(params: {
       groups.set(groupId, existing);
     }
   }
-  return [...groups.values()]
-    .map((group) =>
-      Object.assign({}, group, { tools: group.tools.toSorted((a, b) => a.id.localeCompare(b.id)) }),
-    )
-    .toSorted((a, b) => a.label.localeCompare(b.label));
+  return Array.from(groups.values(), (group) => {
+    group.tools = group.tools.toSorted((a, b) => a.id.localeCompare(b.id));
+    return group;
+  }).toSorted((a, b) => a.label.localeCompare(b.label));
 }
 
 /** Build the merged core/plugin tool catalog for one agent. */

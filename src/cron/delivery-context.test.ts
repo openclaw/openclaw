@@ -123,4 +123,58 @@ describe("cron delivery context", () => {
       }),
     ).toBeNull();
   });
+
+  it.each(["webchat", " WebChat ", "heartbeat", "cron", "webhook", "voice", "sessions_send"])(
+    "does not turn internal %s context into an external announce route",
+    (channel) => {
+      expect(
+        resolveCronCreationDelivery({
+          cfg,
+          currentDeliveryContext: {
+            channel,
+            to: "agent:main:dashboard:conversation",
+            accountId: "internal-account",
+            threadId: "internal-thread",
+          },
+        }),
+      ).toBeNull();
+    },
+  );
+
+  it("does not copy a stored internal route into announce delivery", () => {
+    extractDeliveryInfoMock.mockReturnValueOnce({
+      deliveryContext: { channel: "webchat", to: "agent:main:dashboard:conversation" },
+      threadId: undefined,
+    });
+    expect(
+      resolveCronCreationDelivery({ cfg, agentSessionKey: "agent:main:dashboard:conversation" }),
+    ).toBeNull();
+  });
+
+  it.each(["agent:main:dashboard:conversation", undefined])(
+    "does not replace live internal context with a stored external route (to: %s)",
+    (to) => {
+      extractDeliveryInfoMock.mockReturnValueOnce({
+        deliveryContext: { channel: "discord", to: "channel:stored" },
+        threadId: undefined,
+      });
+      expect(
+        resolveCronCreationDelivery({
+          cfg,
+          agentSessionKey: "agent:main:dashboard:conversation",
+          currentDeliveryContext: { channel: " WebChat ", to },
+        }),
+      ).toBeNull();
+      expect(extractDeliveryInfoMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("preserves custom external channels for Gateway-owned validation", () => {
+    expect(
+      resolveCronCreationDelivery({
+        cfg,
+        currentDeliveryContext: { channel: "custom-plugin", to: "CaseSensitiveRecipient" },
+      }),
+    ).toEqual({ mode: "announce", channel: "custom-plugin", to: "CaseSensitiveRecipient" });
+  });
 });

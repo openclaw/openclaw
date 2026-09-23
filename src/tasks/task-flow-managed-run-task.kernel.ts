@@ -28,6 +28,10 @@ export type ManagedTaskInFlowInput = {
   now: number;
 };
 
+export type ManagedTaskInFlowReceipt = RunTaskInFlowResult & {
+  taskMutation?: TaskCreateResult["mutation"];
+};
+
 class ManagedTaskCreationRefused extends Error {
   constructor(readonly result: RunTaskInFlowResult) {
     super(result.reason);
@@ -39,8 +43,9 @@ export function runManagedTaskInFlowInDatabase(
   db: DatabaseSync,
   input: ManagedTaskInFlowInput,
   write: <T>(operation: () => T) => T,
-  onCommitted: (result: RunTaskInFlowResult) => void,
-): RunTaskInFlowResult {
+  onCommitted: (result: ManagedTaskInFlowReceipt) => void,
+  admission?: { assertCurrent: () => void; retainTaskCommit: (taskId: string) => void },
+): ManagedTaskInFlowReceipt {
   const { params } = input;
   const readManagedFlow = () => {
     const storedFlow = readTaskFlowRecord(db, params.flowId);
@@ -131,13 +136,15 @@ export function runManagedTaskInFlowInDatabase(
           }
         : {}),
     };
-    const resultForTask = (receipt: TaskCreateResult): RunTaskInFlowResult => ({
+    const resultForTask = (receipt: TaskCreateResult): ManagedTaskInFlowReceipt => ({
       found: true,
       created: true,
       flow,
       task: receipt.task,
+      taskMutation: receipt.mutation,
     });
     const created = createTaskRecordInDatabase(db, { ...input, params: createParams }, write, {
+      retainTaskCommit: admission?.retainTaskCommit,
       assertCurrent: (existing) => {
         readManagedFlow();
         const currentBacking = readBacking();
@@ -157,6 +164,7 @@ export function runManagedTaskInFlowInDatabase(
             flow,
           });
         }
+        admission?.assertCurrent();
       },
       onCommitted: (commit) => {
         if (commit.kind === "task") {

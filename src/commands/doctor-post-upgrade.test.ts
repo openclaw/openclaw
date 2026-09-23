@@ -2,17 +2,32 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { fetchClawHubPackageDetail } from "../infra/clawhub-packages.js";
 import { resetLogger, setLoggerOverride } from "../logging.js";
 import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store-write.js";
-import { resolveInstalledPluginIndexStorePath } from "../plugins/installed-plugin-index-store.js";
+import {
+  readPersistedInstalledPluginIndex,
+  resolveInstalledPluginIndexStorePath,
+} from "../plugins/installed-plugin-index-store.js";
 import type { InstalledPluginIndex } from "../plugins/installed-plugin-index.js";
+import { pluginCacheExistsSync } from "../plugins/plugin-cache-files.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { VERSION } from "../version.js";
 import { runPostUpgradeProbes } from "./doctor-post-upgrade.js";
+
+vi.mock("../version.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../version.js")>()),
+  VERSION: "2026.9.4",
+}));
+
+vi.mock("../infra/clawhub-packages.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/clawhub-packages.js")>()),
+  fetchClawHubPackageDetail: vi.fn(),
+}));
 
 async function makeFixtureRoot(prefix: string): Promise<string> {
   return await fs.mkdtemp(path.join(os.tmpdir(), `doctor-post-upgrade-${prefix}-`));
@@ -76,6 +91,8 @@ async function writePluginFixture(
     manifest?: Record<string, unknown> | false;
     manifestHash?: string;
     enabled?: boolean;
+    format?: InstalledPluginIndex["plugins"][number]["format"];
+    bundleFormat?: InstalledPluginIndex["plugins"][number]["bundleFormat"];
     installRecord?: PluginInstallRecord;
   },
 ) {
@@ -114,12 +131,15 @@ async function writePluginFixture(
             : {}),
           manifestPath: params.manifest === false ? "" : manifestPath,
           manifestHash: params.manifestHash ?? "",
+          ...(params.format ? { format: params.format } : {}),
+          ...(params.bundleFormat ? { bundleFormat: params.bundleFormat } : {}),
         },
       ],
       params.installRecord ? { [params.id]: params.installRecord } : {},
     ),
     { stateDir: root },
   );
+  return { manifestPath };
 }
 
 async function writeDeclaredPackageFixture(root: string, packageContents: string): Promise<void> {
@@ -621,6 +641,74 @@ describe("runPostUpgradeProbes — plugin.manifest_drift", () => {
 });
 
 describe("runPostUpgradeProbes — plugin.version_drift", () => {
+  beforeEach(() => {
+    vi.mocked(fetchClawHubPackageDetail).mockReset();
+    vi.mocked(fetchClawHubPackageDetail).mockResolvedValue({
+      package: {
+        name: "@openclaw/whatsapp",
+        displayName: "WhatsApp",
+        family: "code-plugin",
+        channel: "official",
+        isOfficial: true,
+        createdAt: 0,
+        updatedAt: 0,
+        latestVersion: "2026.9.3",
+        compatibility: { pluginApiRange: ">=2026.9.3", minGatewayVersion: ">=2026.9.3" },
+      },
+    });
+  });
+
+  it.each([
+    // A stable host reaches the registry, finds nothing newer, and says so
+    // instead of dropping the plugin from the report.
+    {
+      channel: "stable",
+      enabled: true,
+      expected: "The registry already serves 2026.9.3",
+      lookup: true,
+    },
+    { channel: "beta", enabled: true, expected: "No confirmed repair target", lookup: false },
+    {
+      channel: "extended-stable",
+      enabled: true,
+      expected: "No confirmed repair target",
+      lookup: false,
+    },
+    { channel: "beta", enabled: false, expected: undefined, lookup: false },
+  ] as const)(
+    "preserves $channel intent and persisted enablement=$enabled on a stable host",
+    async ({ channel, enabled, expected, lookup }) => {
+      await withFixtureRoot("clawhub-version-drift", async (root) => {
+        await writePluginFixture(root, {
+          id: "whatsapp",
+          enabled,
+          installRecord: {
+            source: "clawhub",
+            spec: "clawhub:@openclaw/whatsapp",
+            clawhubPackage: "@openclaw/whatsapp",
+            resolvedVersion: "2026.9.3",
+          },
+        });
+
+        const report = await runPostUpgradeProbes({ stateDir: root, updateChannel: channel });
+
+        expect(report.findings).toEqual(
+          expected
+            ? [
+                expect.objectContaining({
+                  code: "plugin.version_drift",
+                  level: "warn",
+                  plugin: "whatsapp",
+                  message: expect.stringContaining(expected),
+                }),
+              ]
+            : [],
+        );
+        expect(fetchClawHubPackageDetail).toHaveBeenCalledTimes(lookup ? 1 : 0);
+      });
+    },
+  );
+
   it.each([
     {
       label: "outdated official install",
@@ -678,4 +766,169 @@ describe("runPostUpgradeProbes — plugin.version_drift", () => {
       }
     });
   });
+});
+
+describe("runPostUpgradeProbes — manifest availability", () => {
+  it.for([
+    { label: "missing required", kind: "missing", claude: false, enabled: true, error: true },
+    { label: "directory required", kind: "directory", claude: false, enabled: true, error: true },
+    { label: "unreadable required", kind: "unreadable", claude: false, enabled: true, error: true },
+    { label: "missing disabled", kind: "missing", claude: false, enabled: false, error: false },
+    { label: "missing Claude", kind: "missing", claude: true, enabled: true, error: false },
+    { label: "directory Claude", kind: "directory", claude: true, enabled: true, error: true },
+    { label: "matching required", kind: "matching", claude: false, enabled: true, error: false },
+    {
+      label: "missing required without hash",
+      kind: "missing",
+      claude: false,
+      enabled: true,
+      error: true,
+      emptyHash: true,
+    },
+    {
+      label: "directory required without hash",
+      kind: "directory",
+      claude: false,
+      enabled: true,
+      error: true,
+      emptyHash: true,
+    },
+    {
+      label: "unreadable required without hash",
+      kind: "unreadable",
+      claude: false,
+      enabled: true,
+      error: true,
+      emptyHash: true,
+    },
+    {
+      label: "matching required without hash",
+      kind: "matching",
+      claude: false,
+      enabled: true,
+      error: false,
+      emptyHash: true,
+    },
+    {
+      label: "missing disabled without hash",
+      kind: "missing",
+      claude: false,
+      enabled: false,
+      error: false,
+      emptyHash: true,
+    },
+    {
+      label: "missing Claude without hash",
+      kind: "missing",
+      claude: true,
+      enabled: true,
+      error: false,
+      emptyHash: true,
+    },
+    {
+      label: "directory Claude without hash",
+      kind: "directory",
+      claude: true,
+      enabled: true,
+      error: true,
+      emptyHash: true,
+    },
+    {
+      label: "matching Claude without hash",
+      kind: "matching",
+      claude: true,
+      enabled: true,
+      error: false,
+      emptyHash: true,
+    },
+  ])(
+    "reports $label manifests without changing the index",
+    async ({ kind, claude, enabled, error, emptyHash }, context) => {
+      // Windows chmod and privileged users cannot make a file unreadable this way.
+      if (kind === "unreadable" && (process.platform === "win32" || process.getuid?.() === 0)) {
+        context.skip();
+      }
+      await withFixtureRoot("manifest-availability", async (root) => {
+        const id = "manifest-probe";
+        const raw = JSON.stringify({ id });
+        const { manifestPath } = await writePluginFixture(root, {
+          id,
+          enabled,
+          manifestHash: emptyHash ? "" : crypto.createHash("sha256").update(raw).digest("hex"),
+          ...(claude ? { format: "bundle", bundleFormat: "claude" } : {}),
+        });
+        const before = await readPersistedInstalledPluginIndex({ stateDir: root });
+        if (kind === "missing" || kind === "directory") {
+          await fs.unlink(manifestPath);
+        }
+        if (kind === "directory") {
+          await fs.mkdir(manifestPath);
+        }
+        if (kind === "unreadable") {
+          await fs.chmod(manifestPath, 0);
+        }
+        try {
+          const report = await runPostUpgradeProbes({ stateDir: root });
+          expect(report.probesRun).toContain("plugin.manifest_unavailable");
+          expect(report.findings).toEqual(
+            error
+              ? [
+                  expect.objectContaining({
+                    level: "error",
+                    code: "plugin.manifest_unavailable",
+                    plugin: id,
+                    message: expect.stringContaining(manifestPath),
+                  }),
+                ]
+              : [],
+          );
+          if (error) {
+            expect(report.findings[0]?.message).toContain("Reinstall the plugin");
+            expect(report.findings[0]?.message).toContain("openclaw plugins registry --refresh");
+          }
+          expect(await readPersistedInstalledPluginIndex({ stateDir: root })).toEqual(before);
+        } finally {
+          if (kind === "unreadable") {
+            await fs.chmod(manifestPath, 0o600);
+          }
+        }
+      });
+    },
+  );
+
+  it.each([true, false])(
+    "uses actual Claude file state after cached existence=%s",
+    async (existed) => {
+      await withFixtureRoot("manifest-cache-transition", async (root) => {
+        const { manifestPath } = await writePluginFixture(root, {
+          id: "claude-transition",
+          format: "bundle",
+          bundleFormat: "claude",
+          manifestHash: "derived-bundle-hash",
+        });
+        if (!existed) {
+          await fs.unlink(manifestPath);
+        }
+        expect(pluginCacheExistsSync(manifestPath)).toBe(existed);
+        if (existed) {
+          await fs.unlink(manifestPath);
+        } else {
+          await fs.mkdir(manifestPath);
+        }
+        const report = await runPostUpgradeProbes({ stateDir: root });
+        expect(report.findings).toEqual(
+          existed
+            ? []
+            : [
+                expect.objectContaining({
+                  level: "error",
+                  code: "plugin.manifest_unavailable",
+                  plugin: "claude-transition",
+                  message: expect.stringContaining(manifestPath),
+                }),
+              ],
+        );
+      });
+    },
+  );
 });

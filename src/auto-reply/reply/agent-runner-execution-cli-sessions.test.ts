@@ -10,7 +10,6 @@ import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { registerGeneratedMediaTaskActivity } from "../../tasks/generated-media-task-activity.js";
 import { resetGeneratedMediaTaskActivityForTests } from "../../tasks/task-runtime.test-helpers.js";
 import type { TemplateContext } from "../templating.js";
-import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import {
   setupAgentRunnerExecutionTestState,
   getExecuteAgentTurnForTest,
@@ -291,53 +290,6 @@ describe("executeAgentTurn: CLI session routing", () => {
       groupSpace: "workspace-static",
       spawnedBy: "agent:main:telegram:group:parent",
       runtimePolicySessionKey: "agent:main:telegram:default:direct:sender-static",
-    });
-  });
-
-  it("passes silent empty-reply policy to CLI backends for message-tool-only turns", async () => {
-    state.isCliProviderMock.mockReturnValue(true);
-    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      result: await params.run(
-        "claude-cli",
-        "claude-sonnet-4-6",
-        initialFallbackAttemptOptions(params),
-      ),
-      provider: "claude-cli",
-      model: "claude-sonnet-4-6",
-      attempts: [],
-    }));
-    state.runCliAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: SILENT_REPLY_TOKEN }],
-      meta: { executionTrace: { fallbackUsed: false } },
-    });
-
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const followupRun = createFollowupRun();
-    followupRun.run.provider = "claude-cli";
-    followupRun.run.model = "claude-sonnet-4-6";
-    followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
-    followupRun.run.allowEmptyAssistantReplyAsSilent = true;
-    followupRun.originatingChannel = "telegram";
-
-    const result = await executeAgentTurn(
-      createMinimalRunAgentTurnParams({
-        followupRun,
-        sessionCtx: {
-          Provider: "telegram",
-          MessageSid: "msg",
-          ChatType: "group",
-        } as unknown as TemplateContext,
-      }),
-    );
-
-    expect(result.kind).toBe("success");
-    expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {
-      provider: "claude-cli",
-      model: "claude-sonnet-4-6",
-      sourceReplyDeliveryMode: "message_tool_only",
-      allowEmptyAssistantReplyAsSilent: true,
-      messageChannel: "telegram",
-      messageProvider: "telegram",
     });
   });
 

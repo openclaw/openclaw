@@ -281,9 +281,13 @@ Slack-only:
   command exits are hidden. The same default applies on
   other shared progress-card renderers; `streaming.progress.toolProgress: true` adds
   the rolling tool log with its icons.
-- `progress` mode deletes the status draft once the final answer is delivered,
-  so busy channels keep no orphaned tool log above the reply. Error finals keep
-  the draft as the record of the failed turn.
+- When a parent yields to accepted subagents, `progress` mode can transfer its
+  confirmed card to core. The same message keeps its checklist and receives
+  child activity and terminal updates; the final answer is separate. See
+  [Subagent yield handoff](/concepts/subagent-yield-handoff#progress-after-yield).
+- Without that handoff, `progress` mode deletes the status draft once the final
+  answer is delivered, so busy channels keep no orphaned tool log above the
+  reply. Error finals keep the draft as the record of the failed turn.
 - Final media, error, and explicit-reply payloads cancel pending previews
   without flushing a new draft, then use normal delivery.
 

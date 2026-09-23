@@ -1,3 +1,4 @@
+import { PassThrough } from "node:stream";
 /** Tests node-host runner startup, connection configuration, and lifecycle. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -78,6 +79,39 @@ describe("runNodeHost", () => {
       await running;
       process.exitCode = previousExitCode;
       on.mockRestore();
+    }
+  });
+
+  it("joins the source node runtime when its companion stdin closes", async () => {
+    mocks.useFakeRuntime = true;
+    mocks.startGatewayClientWhenEventLoopReady.mockResolvedValueOnce({
+      ready: true,
+      aborted: false,
+      elapsedMs: 0,
+    });
+    const input = new PassThrough();
+    const previous = Object.getOwnPropertyDescriptor(process, "stdin");
+    const previousExit = process.exitCode;
+    Object.defineProperty(process, "stdin", { configurable: true, value: input });
+    const running = runNodeHost({
+      gatewayHost: "127.0.0.1",
+      gatewayPort: 18789,
+      parentStdin: true,
+    });
+    try {
+      await vi.waitFor(() => expect(input.listenerCount("end")).toBe(1));
+      input.end();
+      await running;
+      expect(mocks.activeRuntime.close).toHaveBeenCalledOnce();
+      expect(mocks.capturedGatewayClients[0]?.stop).toHaveBeenCalledOnce();
+      expect(input.listenerCount("end")).toBe(0);
+    } finally {
+      input.end();
+      await running;
+      if (previous) {
+        Object.defineProperty(process, "stdin", previous);
+      }
+      process.exitCode = previousExit;
     }
   });
 
@@ -305,6 +339,35 @@ describe("runNodeHost", () => {
     });
   });
 
+  it.each([undefined, "selected-gateway-token"])(
+    "uses only selected companion bootstrap credentials: %s",
+    async (token) => {
+      mocks.getRuntimeConfig.mockReturnValue({
+        gateway: {
+          mode: "remote",
+          remote: { token: "other-gateway-token", password: "other-gateway-password" },
+        },
+      });
+      vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", token);
+      vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", undefined);
+      try {
+        await expect(
+          runNodeHost({
+            gatewayHost: "selected.example",
+            gatewayPort: 443,
+            gatewayTls: true,
+            gatewayAuthFromEnv: true,
+          }),
+        ).rejects.toThrow("event loop readiness timeout");
+        expect(lastCapturedOptions()?.token).toBe(token);
+        expect(lastCapturedOptions()?.password).toBeUndefined();
+        expect(mocks.resolveGatewayCredentialsWithSecretInputs).not.toHaveBeenCalled();
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    },
+  );
+
   describe("saved node gateway authentication", () => {
     const gateway = { host: "paired.example", port: 443, tls: true, contextPath: "/node" };
     const runOptions = {
@@ -319,7 +382,7 @@ describe("runNodeHost", () => {
       vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", undefined);
       vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", undefined);
       mocks.loadNodeHostConfig.mockResolvedValue({ version: 1, nodeId: "node-test", gateway });
-      mocks.loadDeviceAuthTokenReadOnly.mockImplementation(({ role }) =>
+      mocks.loadDeviceAuthTokenReadOnly.mockImplementation(async ({ role }) =>
         role === "node" ? { role, token: "paired-node-token", scopes: [], updatedAtMs: 1 } : null,
       );
       mocks.getRuntimeConfig.mockReturnValue({
@@ -405,7 +468,7 @@ describe("runNodeHost", () => {
         if (missing === "no saved endpoint") {
           mocks.loadNodeHostConfig.mockResolvedValue(null);
         } else {
-          mocks.loadDeviceAuthTokenReadOnly.mockImplementation(({ role }) =>
+          mocks.loadDeviceAuthTokenReadOnly.mockImplementation(async ({ role }) =>
             missing === "operator token only" && role === "operator"
               ? { role, token: "operator-token", scopes: [], updatedAtMs: 1 }
               : null,

@@ -321,7 +321,9 @@ export async function bindConversationNow(params: {
   detachHint?: string;
   data?: Record<string, unknown>;
   bindingAttemptId?: string;
+  assertCurrent?: () => void;
 }): Promise<PluginConversationBinding> {
+  const assertCurrent = params.assertCurrent;
   const ref = toConversationRef(params.conversation);
   const targetSessionKey =
     normalizeOptionalString(params.targetSessionKey) ??
@@ -336,6 +338,7 @@ export async function bindConversationNow(params: {
     targetKind: "session",
     conversation: ref,
     placement: "current",
+    ...(assertCurrent ? { assertCurrent } : {}),
     metadata: buildBindingMetadata({
       pluginId: params.identity.pluginId,
       pluginName: params.identity.pluginName,
@@ -500,7 +503,9 @@ export async function requestPluginConversationBinding(params: {
   conversation: PluginBindingConversation;
   requestedBySenderId?: string;
   binding: PluginConversationBindingRequestParams | undefined;
+  assertCurrent?: () => void;
 }): Promise<PluginConversationBindingRequestResult> {
+  const assertCallerCurrent = params.assertCurrent;
   const requestParams = {
     ...params,
     binding: params.binding
@@ -508,6 +513,11 @@ export async function requestPluginConversationBinding(params: {
       : undefined,
   };
   return await withPluginBindingApprovalOperation(async (assertCurrent) => {
+    const assertBindingCurrent = () => {
+      assertCurrent();
+      assertCallerCurrent?.();
+    };
+    assertBindingCurrent();
     const conversation = normalizeConversation(requestParams.conversation);
     let state = resolvePluginConversationBindingState(conversation);
     const initialConflict = pluginBindingOwnershipConflict(state, requestParams.pluginRoot);
@@ -521,7 +531,7 @@ export async function requestPluginConversationBinding(params: {
           channel: state.ref.channel,
           accountId: state.ref.accountId,
         });
-    assertCurrent();
+    assertBindingCurrent();
     if (!state.binding) {
       state = resolvePluginConversationBindingState(conversation);
       const conflict = pluginBindingOwnershipConflict(state, requestParams.pluginRoot);
@@ -544,6 +554,7 @@ export async function requestPluginConversationBinding(params: {
         summary: requestParams.binding?.summary,
         detachHint: requestParams.binding?.detachHint,
         data: requestParams.binding?.data,
+        ...(assertCallerCurrent ? { assertCurrent: assertBindingCurrent } : {}),
       });
       logPluginBindingLifecycleEvent({
         event: state.binding ? "auto-refresh" : "auto-approved",
@@ -564,6 +575,7 @@ export async function requestPluginConversationBinding(params: {
       detachHint: normalizeOptionalString(requestParams.binding?.detachHint),
       data: normalizeBindingData(requestParams.binding?.data),
     };
+    assertBindingCurrent();
     addPendingPluginBindingRequest(request);
     logPluginBindingLifecycleEvent({
       event: "requested",

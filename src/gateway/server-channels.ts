@@ -1,6 +1,5 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { RetrySupervisor } from "../../packages/retry/src/index.js";
-import { AgentSelectionRequiredError } from "../agents/agent-scope-config.js";
 import { isChannelAccountExplicitlyDisabled } from "../channels/account-config-enabled.js";
 import {
   getCredentialUnavailableDiagnostics,
@@ -10,7 +9,6 @@ import {
   buildChannelAccountSnapshotFromInspection,
   buildChannelAccountSnapshotFromRuntime,
 } from "../channels/account-summary.js";
-import { isChannelIngressUnavailableError } from "../channels/message/ingress-unavailable.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import {
   getLoadedChannelPluginEntryById,
@@ -73,7 +71,7 @@ import {
 import { isAccountEnabled } from "../shared/account-enabled.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
-import { channelBlockedPatch } from "./channel-status-patches.js";
+import { channelStartFailurePatch } from "./channel-status-patches.js";
 import type {
   ChannelAccountStartOutcome,
   ChannelRuntimeSnapshot,
@@ -81,6 +79,10 @@ import type {
   StartChannelOptions,
 } from "./server-channel-runtime.types.js";
 import { pauseChannelStarts, type ChannelStartFence } from "./server-channel-start-fence.js";
+import {
+  runChannelAccountMonitor,
+  waitForChannelStartupHandoff,
+} from "./server-channel-startup.js";
 
 const RESTART_POLICY: BackoffPolicy = {
   initialMs: 5_000,
@@ -95,12 +97,6 @@ const CHANNEL_STARTUP_CONCURRENCY = 4;
 // Private context key carried through the generic Plugin SDK registry. This is
 // not a new public capability surface; only the host installs its authority.
 const CHANNEL_APPROVAL_GATEWAY_RUNTIME_CONTEXT_CAPABILITY = "approval.gateway";
-function waitForChannelStartupHandoff(): Promise<void> {
-  return new Promise((resolve) => {
-    const handle = setImmediate(resolve);
-    handle.unref?.();
-  });
-}
 
 type ChannelAccountLifetime = {
   plugin: ChannelPlugin;
@@ -910,6 +906,9 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             // must not poison a new lifecycle before its plugin reports status.
             ingressUnavailable: undefined,
             terminalDisconnect: undefined,
+            ...(getRuntime(channelId, id).healthState === "plugin-trust-refused"
+              ? { healthState: undefined }
+              : {}),
             reconnectAttempts: preserveRestartAttempts ? (restarts.get(rKey)?.attempts ?? 0) : 0,
           });
           const task = Promise.resolve().then(async () => {
@@ -978,7 +977,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               };
               startAccountTask = withPluginHttpRouteRegistry(
                 registry,
-                runStartAccount,
+                () => runChannelAccountMonitor(registry, registration?.pluginId, runStartAccount),
                 capabilityLease,
               );
             });
@@ -1013,16 +1012,9 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               if (!isCurrentTask() || store.stops.has(id) || opts.isClosing?.()) {
                 return;
               }
-              const message = formatErrorMessage(err);
-              setRuntime(channelId, id, {
-                lastError: message,
-                ...(err instanceof AgentSelectionRequiredError ? channelBlockedPatch(message) : {}),
-                // A channel that never armed its ingress admission is not "crashed":
-                // outbound may work fine while inbound is silently dead. Record the
-                // distinct dimension so health stops reading a live socket as healthy.
-                ...(isChannelIngressUnavailableError(err) ? { ingressUnavailable: true } : {}),
-              });
-              log.error?.(`[${id}] channel exited: ${message}`);
+              const failure = channelStartFailurePatch(err);
+              setRuntime(channelId, id, failure);
+              log.error?.(`[${id}] channel exited: ${failure.lastError}`);
             })
             .then(async () => {
               await cleanupTaskScopedApprovalRuntime("channel cleanup failed");

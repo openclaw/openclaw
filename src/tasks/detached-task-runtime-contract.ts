@@ -11,6 +11,7 @@ import type {
   TaskStatus,
   TaskTerminalOutcome,
 } from "./task-registry.types.js";
+import type { TaskRunOwner, TaskRunOwnerBinding } from "./task-run-owner.types.js";
 
 // A killed subagent can still report a completion that raced the kill marker.
 // Task cancellation replaces this marker once the operator request is accepted.
@@ -101,6 +102,22 @@ export type DetachedTaskTerminalState = Omit<
   DetachedTaskFinalizeParams,
   "runId" | "taskId" | "runtime" | "sessionKey"
 >;
+
+export type CreatedDetachedTaskRun = {
+  task: TaskRecord;
+  bindRunOwner: (
+    cancel: TaskRunOwner["cancel"],
+    assertCurrent: () => void,
+  ) => Promise<TaskRunOwnerBinding>;
+  finalizeActive: (
+    terminal: Pick<DetachedTaskTerminalState, "status" | "endedAt" | "error" | "terminalSummary">,
+    canSettle: (task: TaskRecord) => boolean,
+  ) => Promise<void>;
+  settleUnstarted: (
+    terminal: Pick<DetachedTaskTerminalState, "status" | "endedAt" | "error" | "terminalSummary">,
+    canSettle: (task: TaskRecord) => boolean,
+  ) => Promise<boolean>;
+};
 
 type DetachedTaskDeliveryStatusParams = {
   runId: string;

@@ -76,6 +76,7 @@ COPY node-version.mjs ./
 COPY node-sqlite.mjs ./
 COPY node-runtime-update.mjs ./
 COPY node-runtime-recovery.mjs ./
+COPY cli-root-options.mjs gateway-run-argv.mjs gateway-shutdown-budget.mjs ./
 COPY node-host-launcher.mjs ./
 COPY openclaw.mjs ./
 COPY ui/package.json ./ui/package.json
@@ -84,6 +85,7 @@ COPY scripts/postinstall-bundled-plugins.mjs scripts/preinstall-package-manager-
 COPY scripts/lib/guard-inventory-utils.mjs ./scripts/lib/guard-inventory-utils.mjs
 COPY scripts/lib/package-dist-imports.mjs ./scripts/lib/package-dist-imports.mjs
 COPY scripts/lib/package-lifecycle-marker.mjs ./scripts/lib/package-lifecycle-marker.mjs
+COPY scripts/lib/fs-safe-prebuild.mjs ./scripts/lib/fs-safe-prebuild.mjs
 COPY scripts/docker/verify-fs-safe-native.mjs ./scripts/docker/verify-fs-safe-native.mjs
 COPY scripts/docker/verify-native-addons.sh ./scripts/docker/verify-native-addons.sh
 
@@ -280,6 +282,7 @@ COPY --from=runtime-assets --chown=node:node /app/node-version.mjs .
 COPY --from=runtime-assets --chown=node:node /app/node-sqlite.mjs .
 COPY --from=runtime-assets --chown=node:node /app/node-runtime-update.mjs .
 COPY --from=runtime-assets --chown=node:node /app/node-runtime-recovery.mjs .
+COPY --from=runtime-assets --chown=node:node /app/cli-root-options.mjs /app/gateway-run-argv.mjs /app/gateway-shutdown-budget.mjs ./
 COPY --from=runtime-assets --chown=node:node /app/node-host-launcher.mjs .
 COPY --from=runtime-assets --chown=node:node /app/openclaw.mjs .
 COPY --from=runtime-assets --chown=node:node /app/${OPENCLAW_BUNDLED_PLUGIN_DIR} ./${OPENCLAW_BUNDLED_PLUGIN_DIR}

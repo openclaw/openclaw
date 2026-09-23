@@ -14,7 +14,7 @@ import {
 } from "openclaw/plugin-sdk/text-chunking";
 import {
   inputRichBlocksToPlainText,
-  maxInputRichBlockNesting,
+  measureInputRichBlocks,
   normalizeRichText,
   type InputRichBlock,
   type InputRichBlockParagraph,
@@ -223,7 +223,8 @@ function irRangeToRichText(ir: MarkdownIR, rangeStart: number, rangeEnd: number)
   const root: RichText[] = [];
   const frameStack: RichText[][] = [root];
   let leafIndex = 0;
-  let firstSpanIndex = 0;
+  let nextSpanIndex = 0;
+  let pendingSpans: Active[] = [];
 
   for (let i = 0; i < points.length - 1; i += 1) {
     const start = points[i] ?? 0;
@@ -236,19 +237,11 @@ function irRangeToRichText(ir: MarkdownIR, rangeStart: number, rangeEnd: number)
       continue;
     }
     const end = leaf.kind === "atom" ? leaf.end : (points[i + 1] ?? start);
-    while (firstSpanIndex < spans.length && spans[firstSpanIndex]!.end <= start) {
-      firstSpanIndex += 1;
+    while (nextSpanIndex < spans.length && spans[nextSpanIndex]!.start <= start) {
+      pendingSpans.push(spans[nextSpanIndex++]!);
     }
-    const covering: Active[] = [];
-    for (let spanIndex = firstSpanIndex; spanIndex < spans.length; spanIndex += 1) {
-      const span = spans[spanIndex]!;
-      if (span.start > start) {
-        break;
-      }
-      if (span.end >= end) {
-        covering.push(span);
-      }
-    }
+    pendingSpans = pendingSpans.filter((span) => span.end > start);
+    const covering = pendingSpans.filter((span) => span.end >= end);
     const annotation = covering.find((span) => span.kind === "annotation");
     // Dominance applies only to the covered range. Surrounding formatting resumes
     // after a transcript header. Code is already literal in IR; its merged range
@@ -650,7 +643,7 @@ export function markdownToTelegramRichBlocks(
   const hasMarkdownLists = segments.some((segment) => segment.kind === "list");
   const flattenedSegments = segments.filter((segment) => segment.kind !== "list");
   let blocks = emitSegments(ir, segments, 0, ir.text.length, degradationReasons, htmlNodes);
-  if (hasMarkdownLists && maxInputRichBlockNesting(blocks) > 16) {
+  if (hasMarkdownLists && measureInputRichBlocks(blocks).nesting > 16) {
     degradationReasons = new Set<TelegramRichBlocksDegradationReason>();
     degradationReasons.add("list-limit");
     blocks = emitSegments(ir, flattenedSegments, 0, ir.text.length, degradationReasons, htmlNodes);

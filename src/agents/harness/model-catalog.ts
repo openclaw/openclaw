@@ -2,10 +2,11 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { dedupeByKey } from "../../shared/dedupe-by-key.js";
 import { normalizeOptionalAgentRuntimeId, isDefaultAgentRuntimeId } from "../agent-runtime-id.js";
 import {
-  resolveAgentEffectiveModelPrimary,
+  resolveNativeModelPrimary,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../agent-scope.js";
@@ -22,10 +23,15 @@ import {
   resolveModelCatalogIdentityKey,
 } from "../openai-model-routes.js";
 import { collectPreparedModelRuntimeConfiguredRefs } from "../prepared-model-runtime.configured.js";
-import type { PreparedModelRuntimeInput } from "../prepared-model-runtime.types.js";
+import type {
+  PreparedModelRuntimeInput,
+  PreparedModelRuntimePluginGeneration,
+  PreparedNativeModelSelection,
+} from "../prepared-model-runtime.types.js";
 import { resolveDefaultAgentWorkspaceDir } from "../workspace.js";
 import { resolveAgentHarnessPolicy } from "./policy.js";
 import { getRegisteredAgentHarness } from "./registry.js";
+import type { AgentHarnessModelCatalogParams } from "./types.js";
 
 function normalizeRouteBaseUrl(value: string | undefined): string {
   if (!value) {
@@ -128,6 +134,7 @@ export async function augmentModelCatalogWithAgentHarness(params: {
   defaultModel?: string;
   /** Concrete runtime already selected for a turn; omitted for configured inventory reads. */
   agentRuntime?: string;
+  nativeSelection?: PreparedNativeModelSelection;
   snapshot: ModelCatalogSnapshot;
   /** Current route and donor facts stay separate from retained raw inventory. */
   preparedSnapshot?: ModelCatalogSnapshot;
@@ -145,12 +152,7 @@ export async function augmentModelCatalogWithAgentHarness(params: {
   const runtimeProviders = new Map<string, Set<string>>();
   const addRuntime = (value: string, provider: string) => {
     const runtime = normalizeOptionalAgentRuntimeId(value);
-    if (
-      !runtime ||
-      isDefaultAgentRuntimeId(runtime) ||
-      runtime === "openclaw" ||
-      (params.includesProvider && !params.includesProvider(provider))
-    ) {
+    if (!runtime || isDefaultAgentRuntimeId(runtime) || runtime === "openclaw") {
       return;
     }
     const providers = runtimeProviders.get(runtime) ?? new Set<string>();
@@ -158,15 +160,17 @@ export async function augmentModelCatalogWithAgentHarness(params: {
     runtimeProviders.set(runtime, providers);
   };
   const rawDefaultModel = params.defaultModel?.trim();
-  const ref = rawDefaultModel
-    ? resolveModelRefFromString({
-        cfg: params.cfg,
-        raw: rawDefaultModel,
-        defaultProvider: params.defaultProvider,
-        allowManifestNormalization: true,
-        allowPluginNormalization: true,
-      })?.ref
-    : undefined;
+  const ref = params.nativeSelection
+    ? { provider: params.nativeSelection.provider, model: params.nativeSelection.modelId }
+    : rawDefaultModel
+      ? resolveModelRefFromString({
+          cfg: params.cfg,
+          raw: rawDefaultModel,
+          defaultProvider: params.defaultProvider,
+          allowManifestNormalization: true,
+          allowPluginNormalization: true,
+        })?.ref
+      : undefined;
   let defaultRuntime: string | undefined;
   if (ref) {
     const routeKeyOf = createModelCatalogIdentityKeyResolver();
@@ -175,6 +179,7 @@ export async function augmentModelCatalogWithAgentHarness(params: {
       (entry) => routeKeyOf(entry) === refKey,
     );
     defaultRuntime =
+      params.nativeSelection?.runtime ??
       params.agentRuntime ??
       resolveAgentHarnessPolicy({
         provider: ref.provider,
@@ -198,13 +203,23 @@ export async function augmentModelCatalogWithAgentHarness(params: {
       }
     }
   }
-  if (runtimeProviders.size === 0) {
-    return params.snapshot;
-  }
   const pluginRegistry = params.observationConfig
     ? params.pluginRegistry
     : (params.pluginRegistry ?? getActivePluginRegistry());
   if (!pluginRegistry || params.isCurrent?.() === false) {
+    return params.snapshot;
+  }
+  const isCurrent = () =>
+    params.isCurrent?.() !== false &&
+    (Boolean(params.pluginRegistry) || getActivePluginRegistry() === pluginRegistry);
+  if (params.includePickerRuntimes) {
+    for (const { harness } of pluginRegistry.agentHarnesses) {
+      if (harness.loadModelCatalog && !runtimeProviders.has(harness.id)) {
+        runtimeProviders.set(harness.id, new Set());
+      }
+    }
+  }
+  if (runtimeProviders.size === 0) {
     return params.snapshot;
   }
   let configuredModelRefs: ModelRef[];
@@ -227,10 +242,16 @@ export async function augmentModelCatalogWithAgentHarness(params: {
     params.onError?.(error);
     return params.snapshot;
   }
-  const result = { ...params.snapshot };
+  let result = params.snapshot;
   const completedRows: ModelCatalogEntry[] = [];
   let discovered = false;
   for (const [runtime, providers] of runtimeProviders) {
+    const scopedProviders = [...providers].filter(
+      (provider) => !params.includesProvider || params.includesProvider(provider),
+    );
+    if (providers.size > 0 && scopedProviders.length === 0) {
+      continue;
+    }
     // The scoped lookup retains transient catalog resources for executable CLI cleanup.
     const harness = withPluginRuntimeRegistryScope(
       pluginRegistry,
@@ -242,7 +263,7 @@ export async function augmentModelCatalogWithAgentHarness(params: {
     if (params.isCurrent?.() === false) {
       return params.snapshot;
     }
-    for (const provider of providers) {
+    for (const provider of scopedProviders) {
       params.onDiscoveryStarted?.(provider);
     }
     let listedRows: readonly ModelCatalogEntry[];
@@ -255,19 +276,13 @@ export async function augmentModelCatalogWithAgentHarness(params: {
         configuredModelRefs,
       });
     } catch (error) {
-      if (
-        params.isCurrent?.() === false ||
-        (!params.pluginRegistry && getActivePluginRegistry() !== pluginRegistry)
-      ) {
+      if (!isCurrent()) {
         return params.snapshot;
       }
-      params.onError?.(error, [...providers]);
+      params.onError?.(error, scopedProviders);
       continue;
     }
-    if (
-      params.isCurrent?.() === false ||
-      (!params.pluginRegistry && getActivePluginRegistry() !== pluginRegistry)
-    ) {
+    if (!isCurrent()) {
       return params.snapshot;
     }
     const includesProvider = params.includesProvider;
@@ -293,30 +308,91 @@ export async function augmentModelCatalogWithAgentHarness(params: {
       configuredKeys.has(resolveModelCatalogIdentityKey(entry)) ||
       (includesProvider !== undefined && !includesProvider(entry.provider));
     const retainedEntries = result.entries.filter(retain);
-    // An optional native inventory must not replace the configured base's logical row.
+    const retainedVariants = result.routeVariants.filter(retain);
+    if (
+      rows.length === 0 &&
+      retainedEntries.length === result.entries.length &&
+      retainedVariants.length === result.routeVariants.length
+    ) {
+      continue;
+    }
+    if (result === params.snapshot) {
+      result = { ...params.snapshot };
+    }
+    // Optional native inventory must not replace the configured base's logical row.
     result.entries = dedupeByKey(
       runtime === defaultRuntime ? [...rows, ...retainedEntries] : [...retainedEntries, ...rows],
       createModelCatalogIdentityKeyResolver(),
     );
     const variantKeyOf = createModelCatalogIdentityKeyResolver();
-    result.routeVariants = dedupeByKey([...rows, ...result.routeVariants.filter(retain)], (entry) =>
+    result.routeVariants = dedupeByKey([...rows, ...retainedVariants], (entry) =>
       routeVariantKey(entry, variantKeyOf(entry)),
     );
   }
-  if (
-    params.isCurrent?.() === false ||
-    (!params.pluginRegistry && getActivePluginRegistry() !== pluginRegistry)
-  ) {
+  if (!isCurrent()) {
     return params.snapshot;
   }
   if (discovered) {
     params.onDiscoveryCompleted?.(completedRows);
   }
-  return discovered ? result : params.snapshot;
+  return result;
+}
+
+function preparedHarnessCatalogScope(
+  input: PreparedModelRuntimeInput,
+): AgentHarnessModelCatalogParams {
+  const agentId = input.agentId ?? resolveDefaultAgentId(input.config);
+  return {
+    config: input.config,
+    agentId,
+    agentDir: input.agentDir,
+    workspaceDir:
+      input.workspaceDir ??
+      resolveAgentWorkspaceDir(input.config, agentId) ??
+      resolveDefaultAgentWorkspaceDir(),
+  };
+}
+
+export function isPreparedNativeModelCatalogReady(params: {
+  input: PreparedModelRuntimeInput;
+  pluginGeneration: PreparedModelRuntimePluginGeneration;
+  snapshot: ModelCatalogSnapshot;
+  selection: PreparedNativeModelSelection;
+}): boolean {
+  const { selection, snapshot, pluginGeneration } = params;
+  if (
+    ![...snapshot.entries, ...snapshot.routeVariants].some(
+      (entry) =>
+        entry.provider === selection.provider &&
+        entry.id === selection.modelId &&
+        entry.nativeRuntime === selection.runtime,
+    )
+  ) {
+    return false;
+  }
+  const harness = pluginGeneration.pluginRegistry?.agentHarnesses.find(
+    (registration) => registration.harness.id === selection.runtime,
+  )?.harness;
+  return (
+    !harness?.readModelCatalogReadiness ||
+    withPluginRuntimeGenerationScope(
+      {
+        metadataSnapshot: pluginGeneration.pluginMetadataSnapshot,
+        pluginRegistry: pluginGeneration.pluginRegistry,
+      },
+      () =>
+        harness.readModelCatalogReadiness?.({
+          ...preparedHarnessCatalogScope(params.input),
+          provider: selection.provider,
+          modelId: selection.modelId,
+        }),
+    ) !== undefined
+  );
 }
 
 export function augmentPreparedModelCatalogWithAgentHarness(params: {
   input: PreparedModelRuntimeInput;
+  nativeSelection?: PreparedNativeModelSelection;
   snapshot: ModelCatalogSnapshot;
   preparedSnapshot?: ModelCatalogSnapshot;
   pluginRegistry?: PluginRegistry;
@@ -326,20 +402,18 @@ export function augmentPreparedModelCatalogWithAgentHarness(params: {
   onDiscoveryCompleted?: (rows: readonly ModelCatalogEntry[]) => void;
   onError?: (error: unknown, providers?: readonly string[]) => void;
 }): Promise<ModelCatalogSnapshot> {
-  const agentId = params.input.agentId ?? resolveDefaultAgentId(params.input.config);
+  const { config, agentId, agentDir, workspaceDir } = preparedHarnessCatalogScope(params.input);
   return augmentModelCatalogWithAgentHarness({
-    cfg: params.input.config,
+    cfg: config,
     agentId,
-    agentDir: params.input.agentDir,
-    workspaceDir:
-      params.input.workspaceDir ??
-      resolveAgentWorkspaceDir(params.input.config, agentId) ??
-      resolveDefaultAgentWorkspaceDir(),
+    agentDir,
+    workspaceDir,
     defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: resolveAgentEffectiveModelPrimary(params.input.config, agentId),
+    defaultModel: resolveNativeModelPrimary(params.input.config, agentId),
+    nativeSelection: params.nativeSelection,
     snapshot: params.snapshot,
     preparedSnapshot: params.preparedSnapshot,
-    includePickerRuntimes: true,
+    includePickerRuntimes: params.nativeSelection === undefined,
     pluginRegistry: params.pluginRegistry,
     isCurrent: params.isCurrent,
     observationConfig: params.input.config,

@@ -1,4 +1,3 @@
-// Line plugin module implements download behavior.
 import { setTimeout as delay } from "node:timers/promises";
 import { MediaFetchError } from "openclaw/plugin-sdk/media-runtime";
 import { saveMediaStream } from "openclaw/plugin-sdk/media-store";

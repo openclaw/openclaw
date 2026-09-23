@@ -30,7 +30,9 @@ Outside onboarding, this page can show at most one dismissible event chip per vi
 
 Use the **Home** button in the sidebar footer, or in the toolbar when the sidebar is collapsed, to open the selected agent's main conversation alongside your current page. Select the **Ask OpenClaw** tab in the same dock for system setup and repair. When the same Home conversation is already open as the page, the dock stays hidden rather than showing it twice.
 
-Home can include a bounded, quoted work-context reference with your message. That reference belongs to the page's agent and session, not merely the Home conversation receiving it, and stays current when session titles or visible files change. It is reference data, not permission to access another conversation; you can remove it before sending.
+Home can include a bounded, quoted work-context reference with your message. Before sending, that reference follows the page's agent, session, title, and visible file, not merely the Home conversation receiving it. You can remove it before sending.
+
+Sent messages show **Context attached** below your words instead of displaying the generated context as message text. Open it to inspect the captured session, page, agent, workspace, file, or selection; **Technical details** shows the snapshot as JSON. The snapshot is frozen when you send, including through queues and retries. Copying or editing your message does not include the generated reference. It remains reference data, not instructions or permission to access another conversation. Older messages without a recorded attachment are left unchanged.
 
 ## Operator terminal
 
@@ -55,7 +57,9 @@ Use **Ctrl + backtick** to toggle the **Terminal** tab in the selected Chat pane
 
 Terminal sessions appear as tabs in the Chat side-panel header; choosing **Terminal** again in the panel's **+** menu opens another shell, while sessions, upload, and dock-to-bottom actions sit in the header. A Terminal moved to the main area keeps its own tab strip.
 
-The unified panel also hosts **Browser**, **Files**, **Tasks**, **Review**, **Side chat**, and capability-dependent **Desktop** and **Discussion** tabs. Its open or minimized state, active tab, tab order, width, dock, and expanded state are stored per session in the current browser profile, so switching sessions restores each session's own working layout. Drag tabs to reorder them, close a tab without closing the other tools, or use the panel close button to minimize the whole panel.
+The unified panel also hosts **Browser**, **Files**, **Tasks**, **Review**, **Side chat**, and capability-dependent **Desktop** and **Discussion** tabs. Its open or minimized state, active tab, tab order, width, dock, and expanded state are stored per session in the current browser profile, so switching sessions or reloading restores each session's own working layout. A chat conversation without a saved panel layout does not inherit panels open in another session. Drag tabs to reorder them, close a tab without closing the other tools, or use the panel close button to minimize the whole panel.
+
+Chat and each tool have their own named region for assistive navigation. Swapping Chat with a tool keeps each tab associated with its own content, including when the same conversation is open in multiple split panes.
 
 A connected **Desktop** viewer stays connected for 30 seconds while its tab is hidden, so a quick switch to Chat and back restores the same desktop and sizing mode. Input and remote resizing pause while hidden. After 30 seconds, the viewer disconnects and reconnects when reopened. Closing the Desktop tab, changing its session or machine, or losing the Gateway connection releases it immediately. Hiding Desktop during a mouse or touch drag also disconnects it so pressed remote buttons cannot linger. **Disconnect** keeps it disconnected until you choose **Reconnect**. Desktop uses one centered loading indicator while resolving its source and connecting.
 
@@ -128,3 +132,39 @@ Two capture modes package page context for the agent. For Mac tabs, either mode 
 One composer accepts up to four browser annotation cards and 8,000 total characters of generated annotation context. When it reaches either limit, the browser panel keeps the current capture so you can remove a card and retry; Undo also preserves the limit instead of evicting another card.
 
 Staged images, files, pasted images, large pasted text, browser annotations, and mixed attachment packages stay with their composer and session across route changes, split-pane remounts, hard reloads, and application restarts. The browser-local retention, scope, and disposal rules described under [New session page](/web/control-ui/sessions-and-sidebar#new-session-page) also apply to existing-session composers. If attachments exceed the durable cap, the current tab keeps them and shows the storage warning; the text remains restart-recoverable, but those attachments do not. If the browser refuses storage entirely, the current tab keeps the live composer and shows the same warning, but that draft cannot be recovered after restart.
+
+## GitHub side panel
+
+The bundled [GitHub plugin](/plugins/github) contributes this reader and its
+hover previews. It is enabled by default. Disabling the plugin removes these
+contributions and leaves GitHub links as ordinary external links. Other plugins
+can contribute the same docked reader surface through the
+[Plugin SDK](/plugins/sdk-overview).
+
+Click a GitHub issue, pull request, or commit link to read it in a browser-style
+tab beside the conversation. Each tab has a GitHub icon, a title, and a close
+control; the address bar and **Open on GitHub** link stay visible. Opening the
+same item from chat selects its existing tab. Links inside the reader and URLs
+entered in the address bar navigate the current tab, with independent Back and
+Forward history. The **+** button opens a new tab. Up to ten tabs stay in memory,
+including their loaded documents while you switch between them.
+
+The reader shows descriptions, issue and pull-request discussion comments,
+commit comments, published inline PR review comments with file/line and diff
+context, and expandable file diffs. Comment timestamps link to their source on
+GitHub. Markdown images and standalone HTML image attachments display inline;
+full-size links remain available when an image cannot load. Inline image
+requests use the reader plugin's anonymous image resolver when available; GitHub
+attachments therefore work without browser CORS headers. Readers without an
+image resolver use anonymous CORS and omit cross-origin credentials and referrers.
+Scripts and embedded app widgets never run in these
+documents.
+
+The resizable panel is read-only and supports public repositories. Long
+discussions and large patches are bounded and marked as incomplete. Refresh
+fetches the current item again. On phones, the reader follows the shared panel’s
+responsive layout and expansion controls. Use **Open on GitHub** for the full page, private repositories, or
+actions such as posting a comment and merging. Cmd/Ctrl-click and middle-click
+on document links retain normal browser behavior; middle-clicking a tab closes
+it. Connections that do not advertise the detail capability keep opening links
+normally.

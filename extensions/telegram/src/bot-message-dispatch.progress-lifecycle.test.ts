@@ -45,7 +45,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-lifecycle", () => {
     expectDeliveredReply(0, { text: "Done" });
   });
 
-  it("retires a tool-progress-only window after durable reasoning and a mid-turn boundary", async () => {
+  it("keeps tool progress and the final answer after durable reasoning and an assistant boundary", async () => {
     loadSessionStore.mockReturnValue({ s1: { reasoningLevel: "on" } });
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
@@ -70,12 +70,13 @@ describeTelegramDispatch("dispatchTelegramMessage progress-lifecycle", () => {
       telegramCfg: { streaming: { mode: "progress", progress: { toolProgress: true } } },
     });
 
-    expect(answerDraftStream.clear).not.toHaveBeenCalled();
+    expect(answerDraftStream.updatePreview).toHaveBeenCalledWith(
+      expect.objectContaining({ text: expect.stringContaining("Exec") }),
+    );
     expect(allDeliveredReplyTexts()).toContain("Done");
   });
 
-  it("keeps a single stationary window when text follows durable reasoning (no mid-turn rotation)", async () => {
-    // Interim answer text must not rotate or render into the progress window.
+  it("delivers the final rather than interim answer text after durable reasoning", async () => {
     loadSessionStore.mockReturnValue({ s1: { reasoningLevel: "on" } });
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
@@ -99,11 +100,13 @@ describeTelegramDispatch("dispatchTelegramMessage progress-lifecycle", () => {
       telegramCfg: { streaming: { mode: "progress", progress: { toolProgress: true } } },
     });
 
-    expect(answerDraftStream.rotateToNewMessageDeferringDelete).not.toHaveBeenCalled();
-    expect(answerDraftStream.clear).toHaveBeenCalledTimes(1);
+    expect(answerDraftStream.update).not.toHaveBeenCalledWith("Here is the answer");
+    expect(allDeliveredReplyTexts().filter((text) => text === "Here is the answer.")).toEqual([
+      "Here is the answer.",
+    ]);
   });
 
-  it("uses one stationary window message across a multi-boundary turn (commentary→tool→commentary→tool→final)", async () => {
+  it("preserves commentary and tool progress across multiple assistant boundaries before the final", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
@@ -124,15 +127,10 @@ describeTelegramDispatch("dispatchTelegramMessage progress-lifecycle", () => {
       },
     });
 
-    const windowMessageIds = new Set(
-      answerDraftStream.updatePreview.mock.calls
-        .map(() => answerDraftStream.messageId())
-        .filter((id) => id != null),
-    );
-    expect(windowMessageIds).toEqual(new Set([2001]));
-    expect(answerDraftStream.updatePreview.mock.calls.length).toBeGreaterThan(1);
-    expect(answerDraftStream.clear).not.toHaveBeenCalled();
-    expect(answerDraftStream.rotateToNewMessageDeferringDelete).toHaveBeenCalledTimes(1);
+    const previews = answerDraftStream.updatePreview.mock.calls.map(([preview]) => preview.text);
+    for (const text of ["Look", "Exec", "Now", "Read"]) {
+      expect(previews).toContainEqual(expect.stringContaining(text));
+    }
     expectDeliveredReply(0, { text: "Final answer" });
     expectWindowRetiredAfterFinal(answerDraftStream, deliverReplies);
   });

@@ -44,6 +44,31 @@ describe("repository Telegram E2E skill", () => {
     requireSuccess(testNodeExecPath, ["--test", ...tests]);
   });
 
+  it.each(["pending", "exited"])("settles a %s triage fixture after readiness fails", (mode) => {
+    const preload = new URL("../fixtures/triage-fixture-startup.mjs", import.meta.url);
+    preload.searchParams.set("mode", mode);
+    const result = spawnSync(
+      testNodeExecPath,
+      [
+        "--import",
+        preload.href,
+        "--test",
+        "--test-isolation=none",
+        "--test-name-pattern=^emits interleaved visible and reasoning blocks$",
+        path.join(scriptsDir, "triage-mock-openai.test.mjs"),
+      ],
+      { cwd: process.cwd(), encoding: "utf8", timeout: 120_000 },
+    );
+    const output = `${result.stdout}${result.stderr}`;
+    expect(result.error, output).toBeUndefined();
+    expect(result.status, output).toBe(1);
+    expect(output).toContain("AssertionError");
+    expect(output).toContain("mock-openai listening");
+    expect(result.stderr).toContain(
+      `triage-fixture-exited:${mode === "exited" ? "42" : "SIGTERM"}`,
+    );
+  });
+
   it("passes its Python test suite", () => {
     const tests = fs
       .readdirSync(scriptsDir)

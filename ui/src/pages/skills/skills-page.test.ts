@@ -86,7 +86,6 @@ function mountSkills(
     gateway: connection.gateway,
     gatewaySnapshot: connection.gateway.snapshot,
     agents,
-    agentsList,
     selectedAgentId: "main",
     selectionIntentRevision: selection.intentRevision,
     report: { workspaceDir: "/workspace", managedSkillsDir: "/managed", skills: [] },

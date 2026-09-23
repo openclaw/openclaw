@@ -27,7 +27,7 @@ import {
 import {
   sessionDeliveryChannel,
   sessionDeliveryOrigin,
-} from "../../utils/delivery-context.shared.js";
+} from "../../utils/delivery-context.read.js";
 import { isDeliverableMessageChannel } from "../../utils/message-channel.js";
 import {
   clearAutoFallbackPrimaryProbeSelection,
@@ -36,7 +36,7 @@ import {
   resolveAutoFallbackPrimaryProbe,
   resolveAgentConfig,
   resolveAgentDir,
-  resolveAgentEffectiveModelPrimary,
+  resolveNativeModelPrimary,
 } from "../agent-scope.js";
 import { isStoredCredentialCompatibleWithAuthProvider } from "../auth-profiles/order.js";
 import { clearSessionAuthProfileOverride } from "../auth-profiles/session-override.js";
@@ -48,7 +48,6 @@ import { findModelInCatalog } from "../model-catalog-lookup.js";
 import type { ModelCatalogEntry } from "../model-catalog.types.js";
 import { splitTrailingAuthProfile } from "../model-ref-profile.js";
 import type { ModelManifestNormalizationContext } from "../model-ref-shared.js";
-import { resolveCliBoundModelRef } from "../model-runtime-aliases.js";
 import { dedupeModelCatalogEntries } from "../model-selection-shared.js";
 import { resolveDefaultModelForAgent, resolveModelAliasFromPair } from "../model-selection.js";
 import {
@@ -102,7 +101,7 @@ export async function resolveEmbeddedModelSelection(params: {
     ...params.modelManifestContext,
   });
   const configuredDefaultAuthProfileId = splitTrailingAuthProfile(
-    resolveAgentEffectiveModelPrimary(params.cfg, params.sessionAgentId) ?? "",
+    resolveNativeModelPrimary(params.cfg, params.sessionAgentId) ?? "",
   ).profile;
   const { provider: defaultProvider, model: defaultModel } = configuredDefaultRef;
   let provider = defaultProvider;
@@ -184,11 +183,10 @@ export async function resolveEmbeddedModelSelection(params: {
       ...params.modelManifestContext,
     });
     if (directOverride) {
-      const normalizedOverride = resolveCliBoundModelRef(
-        { provider: directOverride.provider ?? defaultProvider, model: directOverride.model },
-        params.cfg,
-        entry,
-      );
+      const normalizedOverride = {
+        provider: directOverride.provider ?? defaultProvider,
+        model: directOverride.model,
+      };
       if (!hasSessionAutoModelSelection(entry) && !visibilityPolicy.allows(normalizedOverride)) {
         const { updated } = applyModelOverrideToSessionEntry({
           entry,
@@ -199,6 +197,7 @@ export async function resolveEmbeddedModelSelection(params: {
     }
     if (entryUpdated) {
       sessionEntry = await persistAgentSession({
+        agentId: params.sessionAgentId,
         sessionStore: params.sessionStore,
         sessionKey: params.sessionKey,
         storePath: params.storePath,
@@ -312,11 +311,10 @@ export async function resolveEmbeddedModelSelection(params: {
             ...params.modelManifestContext,
           })
         : null;
-    const normalizedStored = resolveCliBoundModelRef(
-      storedAlias ?? { provider: candidateProvider, model: storedModelOverride },
-      params.cfg,
-      sessionEntry,
-    );
+    const normalizedStored = storedAlias ?? {
+      provider: candidateProvider,
+      model: storedModelOverride,
+    };
     if (
       isModelSelectionLocked(sessionEntry) ||
       hasStoredAutomaticSelection ||
@@ -491,6 +489,7 @@ export async function resolveEmbeddedModelSelection(params: {
         !params.suppressVisibleSessionEffects
       ) {
         await clearSessionAuthProfileOverride({
+          agentId: params.sessionAgentId,
           sessionEntry: entry,
           sessionStore: params.sessionStore,
           sessionKey: params.sessionKey,
@@ -594,6 +593,7 @@ export async function resolveEmbeddedModelSelection(params: {
     };
     sessionEntry =
       (await persistAgentSession({
+        agentId: params.sessionAgentId,
         sessionStore: params.sessionStore,
         sessionKey: params.sessionKey,
         storePath: params.storePath,

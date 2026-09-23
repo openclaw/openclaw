@@ -13,6 +13,7 @@ import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import type { ChannelAccountKeyPolicy } from "../routing/account-lookup.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import { isRecord } from "../utils.js";
+import { normalizeManifestPlatforms } from "./manifest-platforms.js";
 import type {
   PluginManifestActivation,
   PluginManifestActivationCapability,
@@ -23,7 +24,6 @@ import type {
   PluginManifestDashboard,
   PluginManifestDashboardActionVerb,
   PluginManifestDashboardDataBinding,
-  PluginManifestDefaultPlatform,
   PluginManifestOnboardingScope,
   PluginManifestProviderAuthChoice,
   PluginManifestQaRunner,
@@ -116,27 +116,6 @@ export function normalizeManifestCliCommands(
     commands.push({ name, description, hasSubcommands: entry.hasSubcommands });
   }
   return commands;
-}
-
-const MANIFEST_PLATFORMS = new Set<PluginManifestDefaultPlatform>([
-  "aix",
-  "android",
-  "darwin",
-  "freebsd",
-  "haiku",
-  "linux",
-  "openbsd",
-  "sunos",
-  "win32",
-  "cygwin",
-  "netbsd",
-]);
-
-export function normalizeManifestPlatforms(value: unknown): PluginManifestDefaultPlatform[] {
-  return normalizeTrimmedStringList(value).filter(
-    (platform): platform is PluginManifestDefaultPlatform =>
-      MANIFEST_PLATFORMS.has(platform as PluginManifestDefaultPlatform),
-  );
 }
 
 function normalizeManifestSetupProviders(

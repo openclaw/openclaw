@@ -177,8 +177,7 @@ describe("buildTelegramMessageContext media carriers", () => {
     expect(context?.ctxPayload.media?.map((fact) => fact.kind)).toEqual(["image"]);
   });
 
-  it("keeps primary media bodies empty while recording formatted group history", async () => {
-    const groupHistories = new Map();
+  it("keeps group primary media in its typed carrier rather than command text", async () => {
     const context = await buildTelegramMessageContextForTest({
       message: {
         chat: { id: -1001, type: "supergroup", title: "Ops" },
@@ -186,7 +185,6 @@ describe("buildTelegramMessageContext media carriers", () => {
         photo: [{ file_id: "photo-1", file_unique_id: "photo-u1", width: 1, height: 1 }],
       },
       allMedia: [{ kind: "image" }],
-      groupHistories,
       historyLimit: 5,
     });
 
@@ -195,7 +193,6 @@ describe("buildTelegramMessageContext media carriers", () => {
     expect(context?.ctxPayload.CommandBody).toBe("");
     expect(context?.ctxPayload.CommandSource).toBeUndefined();
     expect(context?.ctxPayload.media?.map((fact) => fact.kind)).toEqual(["image"]);
-    expect([...groupHistories.values()].flat().at(-1)?.body).toBe("<media:image>");
   });
 
   it.each([
@@ -240,9 +237,8 @@ describe("buildTelegramMessageContext media carriers", () => {
     },
   );
 
-  it("preserves cached sticker descriptions in group history", async () => {
-    const groupHistories = new Map();
-    await buildTelegramMessageContextForTest({
+  it("preserves cached sticker descriptions in the current message", async () => {
+    const context = await buildTelegramMessageContextForTest({
       message: {
         chat: { id: -1002, type: "supergroup", title: "Stickers" },
         text: undefined,
@@ -264,10 +260,9 @@ describe("buildTelegramMessageContext media carriers", () => {
           stickerMetadata: { cachedDescription: "A waving sticker" },
         },
       ],
-      groupHistories,
       historyLimit: 5,
     });
 
-    expect([...groupHistories.values()].flat().at(-1)?.body).toBe("[Sticker] A waving sticker");
+    expect(context?.ctxPayload.BodyForAgent).toBe("[Sticker] A waving sticker");
   });
 });

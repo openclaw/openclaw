@@ -735,7 +735,7 @@ describe("qa suite runtime flow", () => {
 
       expect(result).toMatchObject({ status: "fail", details: expect.stringContaining("30ms") });
       expect(preparationSignal).not.toBe(actionSignal);
-      expect(preparationSignal?.aborted).toBe(false);
+      expect(preparationSignal?.aborted).toBe(true);
       expect(actionSignal?.aborted).toBe(true);
       expect(vi.getTimerCount()).toBe(0);
     } finally {
@@ -743,6 +743,63 @@ describe("qa suite runtime flow", () => {
       vi.useRealTimers();
     }
   });
+
+  it.each(["preparation", "action"])(
+    "stops %s on transport loss and rejects later actions",
+    async (phase) => {
+      const failure = Promise.withResolvers<Error>();
+      const entered = Promise.withResolvers<void>();
+      let nativeSignal: AbortSignal | undefined;
+      const laterAction = vi.fn();
+      const prepareFlow = async (input: { signal?: AbortSignal }) => {
+        nativeSignal = input.signal;
+        if (phase === "preparation") {
+          entered.resolve();
+          await new Promise<void>(() => {});
+        }
+      };
+      const env = createQaSuiteRuntimeFlowTestEnv({
+        prepareFlow,
+        whenUnhealthy: failure.promise,
+      });
+      createQaScenarioRuntimeApi.mockImplementationOnce(
+        (params: { deps: { runScenario: typeof runQaSuiteScenarioSteps } }) => ({
+          runScenario: params.deps.runScenario,
+        }),
+      );
+      runScenarioFlow.mockImplementationOnce(async (params) => {
+        const api = params.api as { runScenario: typeof runQaSuiteScenarioSteps };
+        return api.runScenario("Transport loss", [
+          {
+            name: "Pending native action",
+            run: async () => {
+              entered.resolve();
+              await new Promise<void>(() => {});
+            },
+          },
+          { name: "Must not send", run: laterAction },
+        ]);
+      });
+      const pending = runQaSuiteScenarioDefinition({
+        env,
+        scenario: makeQaSuiteTestScenario("transport-loss", { config: {} }),
+        runScenario: runQaSuiteScenarioSteps,
+        splitModelRef: (raw) => parseModelRef(raw, "openai"),
+        formatErrorMessage: String,
+        liveTurnTimeoutMs: () => 60_000,
+        resolveQaLiveTurnTimeoutMs: () => 60_000,
+        constants: qaSuiteRuntimeFlowTestConstants,
+      });
+      await entered.promise;
+      failure.resolve(new Error("owned lease lost"));
+      expect(await pending).toMatchObject({
+        status: "fail",
+        details: expect.stringContaining("owned lease lost"),
+      });
+      expect(nativeSignal?.aborted).toBe(true);
+      expect(laterAction).not.toHaveBeenCalled();
+    },
+  );
 
   it("lets a scenario-owned timeout settle before the lifecycle watchdog", async () => {
     vi.useFakeTimers();

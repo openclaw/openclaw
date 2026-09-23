@@ -245,6 +245,7 @@ describe("managed worktree registry", () => {
     const legacy = new DatabaseSync(databasePath);
     legacy.exec(`
       ALTER TABLE worktrees DROP COLUMN provisioned_paths_json;
+      DROP INDEX idx_worker_session_placements_environment;
       PRAGMA user_version = 5;
       UPDATE schema_meta SET schema_version = 5 WHERE meta_key = 'primary';
     `);

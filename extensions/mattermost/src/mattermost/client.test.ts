@@ -929,11 +929,11 @@ describe("createMattermostPost", () => {
 // ── updateMattermostPost ─────────────────────────────────────────────
 
 describe("updateMattermostPost", () => {
-  it("sends PUT to /posts/{id}", async () => {
+  it("sends PUT to /posts/{id}/patch", async () => {
     const { calls } = await updatePostAndCapture({ message: "Updated" });
 
     const firstCall = requireRequestCall(calls);
-    expect(firstCall.url).toContain("/posts/post1");
+    expect(new URL(firstCall.url).pathname).toBe("/api/v4/posts/post1/patch");
     if (!firstCall.init) {
       throw new Error("expected Mattermost update post request init");
     }

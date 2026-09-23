@@ -66,13 +66,13 @@ export const LoggingConfigSchema = z
         /**
          * Record metadata-only run, tool, and enabled message lifecycle events into
          * the shared state database. Content is never stored. Default: true. This is
-         * startup-scoped; disabling stops new event inserts after restart while retained
+         * applied live; disabling stops new collection while accepted writes drain and retained
          * records stay readable until they expire.
          */
         enabled: z.boolean().optional(),
         /**
          * Retain bounded execution-identity attribution for exact-run inspection.
-         * Default: false. Requires the audit ledger and takes effect after Gateway restart.
+         * Default: false. Requires the audit ledger and applies to newly admitted runs.
          */
         executionIdentity: z.boolean().optional(),
         /**

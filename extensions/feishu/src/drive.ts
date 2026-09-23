@@ -1,4 +1,3 @@
-// Feishu plugin module implements drive behavior.
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import {
   formatErrorMessage,

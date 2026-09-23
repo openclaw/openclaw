@@ -1,4 +1,3 @@
-// Matrix plugin module implements crypto bootstrap behavior.
 import { setTimeout as sleep } from "node:timers/promises";
 import { CryptoEvent } from "matrix-js-sdk/lib/crypto-api/CryptoEvent.js";
 import { toStringifiedError } from "openclaw/plugin-sdk/error-runtime";

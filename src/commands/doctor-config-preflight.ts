@@ -7,6 +7,7 @@ import type { ConfigFileSnapshot } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   MigrationCheckpointIdentity,
+  MigrationCheckpointStatus,
   StartupMigrationLease,
 } from "../infra/startup-migration-checkpoint.js";
 import { throwIfDoctorStateMigrationRefused } from "../infra/state-migrations.messages.js";
@@ -21,7 +22,10 @@ import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-rea
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowedAtPath } from "../state/openclaw-state-ownership.js";
 import { noteDoctorConfigPreflightIssues } from "./doctor-config-analysis.js";
-import { resolveMigrationCheckpointIdentity } from "./doctor-config-preflight-checkpoint.js";
+import {
+  keepStartupMigrationLeaseAlive,
+  checkpointIdentityForSnapshot,
+} from "./doctor-config-preflight-checkpoint.js";
 import {
   createDoctorConfigRepairPlanner,
   createDoctorLegacyConfigMigration,
@@ -38,7 +42,8 @@ import {
 } from "./doctor-config-preflight-plugin-index.js";
 import { createDoctorPluginMigrationPreparation } from "./doctor-config-preflight-plugin-migrations.js";
 import {
-  assertDoctorPreflightMigrationsComplete,
+  completeDoctorPreflightMigrations,
+  backupStartupMigrationDatabases,
   readStartupMigrationSnapshot,
   completeStartupMigrationPreflight,
   noteStateMigrationResult,
@@ -79,9 +84,7 @@ const loadCronRepair = createLazyRuntimeModule(() => import("./doctor/cron/legac
 export async function runDoctorConfigPreflight(
   options: DoctorConfigPreflightOptions = {},
 ): Promise<DoctorConfigPreflightResult> {
-  return await withDoctorConfigPreflightWorkerScope(options, () =>
-    runDoctorConfigPreflightOperation(options),
-  );
+  return await withDoctorConfigPreflightWorkerScope(options, runDoctorConfigPreflightOperation);
 }
 
 async function runDoctorConfigPreflightOperation(
@@ -119,8 +122,7 @@ async function runDoctorConfigPreflightOperation(
   let skipPristineCoreStateMigrations =
     skipPristineStartupStateMigrations || options.skipPristineCoreStateMigrations === true;
   let startupMigrationLease: StartupMigrationLease | undefined;
-  let startupMigrationHeartbeat: ReturnType<typeof setInterval> | undefined;
-  let startupMigrationHeartbeatError: Error | undefined;
+  let startupMigrationHeartbeat: ReturnType<typeof keepStartupMigrationLeaseAlive> | undefined;
   const startupMigrationWarnings: string[] = [];
   let modelBillingRouteMigrationSource: OpenClawConfig | undefined;
   const cronCodexRuntimePolicyTargets: CronCodexRuntimePolicyTarget[] = [];
@@ -152,21 +154,20 @@ async function runDoctorConfigPreflightOperation(
   const refreshMigrationCheckpoint = (
     checkpoint: NonNullable<typeof migrationCheckpoint>,
     snapshotRead: DoctorConfigPreflightPluginSnapshotRead,
+    inspectedStatus?: MigrationCheckpointStatus,
   ) => {
-    const { snapshot, pluginMigrationFingerprint } = snapshotRead;
-    migrationCheckpointIdentity = resolveMigrationCheckpointIdentity({
-      snapshot,
-      baseConfig: snapshot.sourceConfig ?? snapshot.config ?? {},
-      pluginMigrationFingerprint,
-    });
+    const { snapshot } = snapshotRead;
+    migrationCheckpointIdentity = checkpointIdentityForSnapshot(snapshotRead);
     shouldRecordStateCheckpoint = stateMigrationsRequested;
     shouldRecordStartupCheckpoint = gatewayStartupCheckpointRequired;
     if (shouldRecordStateCheckpoint || shouldRecordStartupCheckpoint) {
       // One admitted read supplies both decisions; each physical open scans the whole database.
-      const checkpointStatus = checkpoint.readMigrationCheckpointStatus({
-        env: startupMigrationEnv,
-        identity: migrationCheckpointIdentity,
-      });
+      const checkpointStatus =
+        inspectedStatus ??
+        checkpoint.readMigrationCheckpointStatus({
+          env: startupMigrationEnv,
+          identity: migrationCheckpointIdentity,
+        });
       shouldRecordStateCheckpoint &&= checkpointStatus === "stale";
       shouldRecordStartupCheckpoint &&= checkpointStatus !== "startup-current";
     }
@@ -176,24 +177,17 @@ async function runDoctorConfigPreflightOperation(
     shouldPersistRefreshedPluginIndex = needsRefreshedPluginIndexPersistence(snapshotRead);
   };
   const ensureStartupMigrationLease = async () => {
-    if (startupMigrationLease || !migrationCheckpoint) {
+    if (startupMigrationHeartbeat || !migrationCheckpoint) {
       return;
     }
-    startupMigrationLease = await migrationCheckpoint.acquireStartupMigrationLeaseWithWait({
+    startupMigrationLease ??= await migrationCheckpoint.acquireStartupMigrationLeaseWithWait({
       env: startupMigrationEnv,
     });
     // Database admission can outlast the lease TTL; renew throughout the awaited reread.
-    startupMigrationHeartbeat = setInterval(() => {
-      try {
-        startupMigrationLease?.heartbeat();
-      } catch (error) {
-        startupMigrationHeartbeatError =
-          error instanceof Error
-            ? error
-            : new Error("OpenClaw startup migration lease heartbeat failed.");
-      }
-    }, 60_000);
-    startupMigrationHeartbeat.unref?.();
+    startupMigrationHeartbeat = keepStartupMigrationLeaseAlive(
+      startupMigrationLease,
+      migrationCheckpoint.STARTUP_MIGRATION_HEARTBEAT_INTERVAL_MS,
+    );
     // Another process may have completed the same work between our pre-lease read and acquisition.
     // Refresh every checkpoint input under the lease so only work still missing from state runs.
     configSnapshotRead = gatewayStartupCheckpointRequired
@@ -207,11 +201,20 @@ async function runDoctorConfigPreflightOperation(
       !hasPendingPluginInstallConfig(configSnapshotRead.snapshot) &&
       !configSnapshotRead.recovery
     ) {
-      clearInterval(startupMigrationHeartbeat);
+      startupMigrationHeartbeat.stop();
       startupMigrationHeartbeat = undefined;
       startupMigrationLease.release();
       startupMigrationLease = undefined;
       return;
+    }
+    if (gatewayStartupCheckpointRequired) {
+      noteStartupStateMigrationResult(
+        await backupStartupMigrationDatabases({
+          env: startupMigrationEnv,
+          lease: startupMigrationLease,
+          pendingDatabasePaths: configSnapshotRead.pendingDatabasePaths ?? [],
+        }),
+      );
     }
     // Restore only the backup admitted under this lease, before any other repair.
     await configSnapshotRead.recovery?.apply(startupMigrationLease.heartbeat);
@@ -236,7 +239,7 @@ async function runDoctorConfigPreflightOperation(
     measure: measurePreflightStep,
   });
   const readConfigSnapshotForPreflight = async (allowCurrentPluginMetadata = true) =>
-    await measurePreflightStep("config-snapshot", () =>
+    await measurePreflightStep("config-snapshot", async () =>
       readDoctorConfigPreflightSnapshot({
         allowCurrentPluginMetadata,
         includePluginMetadata:
@@ -246,10 +249,10 @@ async function runDoctorConfigPreflightOperation(
         preparePluginMetadataSnapshot: options.preparePluginMetadataSnapshot === true,
         skipPluginValidation: shouldSkipPluginValidationForDoctorConfigPreflight(),
         prepareSnapshot: getSnapshotPreparation(options.doctorOnlyStateMigrations === true),
-        ...pluginMigrations.snapshotOptions(),
+        ...(await pluginMigrations.snapshotOptions()),
       }),
     );
-  const readAdmittedStartupSnapshot = () =>
+  const readAdmittedStartupSnapshot = async () =>
     readStartupMigrationSnapshot({
       env: startupMigrationEnv,
       readSnapshot: () => readConfigSnapshotForPreflight(false),
@@ -262,7 +265,7 @@ async function runDoctorConfigPreflightOperation(
       validateConfig: options.validateStartupConfig,
       beforeStateMigrations: options.beforeStateMigrations,
       preparePluginMigrations: pluginMigrations.prepare,
-      deferredPluginMigrations: pluginMigrations.snapshotOptions().deferredPluginMigrations,
+      deferredPluginMigrations: (await pluginMigrations.snapshotOptions()).deferredPluginMigrations,
     });
   try {
     if (migrationCheckpoint && !skipPristineStartupStateMigrations) {
@@ -299,14 +302,20 @@ async function runDoctorConfigPreflightOperation(
         : await readConfigSnapshotForPreflight();
       // Later config reads can apply state selectors. Pin the accepted lease target for its lifetime.
       startupMigrationEnv = cloneEnvWithPlatformSemantics(process.env);
-      refreshMigrationCheckpoint(migrationCheckpoint, configSnapshotRead);
-      if (
-        shouldRecordStateCheckpoint ||
-        shouldRecordStartupCheckpoint ||
-        shouldPersistRefreshedPluginIndex ||
-        hasPendingPluginInstallConfig(configSnapshotRead.snapshot) ||
-        configSnapshotRead.recovery
-      ) {
+      const inspected = await migrationCheckpoint.inspectStartupMigrationCheckpointWithLease({
+        env: startupMigrationEnv,
+        identity: checkpointIdentityForSnapshot(configSnapshotRead),
+        stateMigrations: stateMigrationsRequested,
+        startupMigrations: gatewayStartupCheckpointRequired,
+        forceLease:
+          needsRefreshedPluginIndexPersistence(configSnapshotRead) ||
+          hasPendingPluginInstallConfig(configSnapshotRead.snapshot) ||
+          Boolean(configSnapshotRead.recovery),
+      });
+      // Take custody before refreshing caller decisions so every later failure releases the lease.
+      startupMigrationLease = inspected.lease;
+      refreshMigrationCheckpoint(migrationCheckpoint, configSnapshotRead, inspected.status);
+      if (startupMigrationLease) {
         await ensureStartupMigrationLease();
       }
     }
@@ -467,16 +476,13 @@ async function runDoctorConfigPreflightOperation(
     }
     const stateMigrationInput = resolveStateMigrationConfigInput({ snapshot, baseConfig });
     if (migrationCheckpoint) {
-      migrationCheckpointIdentity = resolveMigrationCheckpointIdentity({
-        snapshot,
+      migrationCheckpointIdentity = checkpointIdentityForSnapshot(
+        { ...configSnapshotRead, snapshot },
         baseConfig,
-        pluginMigrationFingerprint: configSnapshotRead.pluginMigrationFingerprint,
-      });
+      );
     }
     // Package convergence and its guarded reread may outlive the admitted lease.
-    if (startupMigrationHeartbeatError) {
-      throw startupMigrationHeartbeatError;
-    }
+    startupMigrationHeartbeat?.throwIfFailed();
     startupMigrationLease?.heartbeat();
     if (stateDirMigrations && stateMigrationsAllowed && freshConfigGuardAllowed) {
       const pluginDoctorOnlyConfig =
@@ -562,6 +568,10 @@ async function runDoctorConfigPreflightOperation(
                 log: migrationLog,
                 recoverCorruptTargetStore: options.recoverCorruptTargetStore,
                 doctorOnlyStateMigrations: options.doctorOnlyStateMigrations,
+                invocationPurpose: options.invocationPurpose,
+                ...(options.agentDatabaseMigrationDiscovery
+                  ? { agentDatabaseMigrationDiscovery: options.agentDatabaseMigrationDiscovery }
+                  : {}),
                 beforeWorkspaceStateMigration: options.beforeWorkspaceStateMigration,
                 onStepReceipt: (receipt) => stateMigrationStepReceipts.push(receipt),
                 ...(gatewayStartupCheckpointRequired
@@ -575,36 +585,29 @@ async function runDoctorConfigPreflightOperation(
           doctorMediaPersistenceAttempted = options.doctorOnlyStateMigrations === true;
           noteStartupStateMigrationResult(legacyStateResult);
           if (options.doctorOnlyStateMigrations === true) {
-            await assertDoctorPreflightMigrationsComplete({
+            await completeDoctorPreflightMigrations({
               cfg: migrationConfig,
               stepReceipts: stateMigrationStepReceipts,
               report: noteStartupStateMigrationResult,
+              ...(gatewayStartupCheckpointRequired
+                ? {
+                    startup: {
+                      env: startupMigrationEnv,
+                      lease: startupMigrationLease,
+                      postSessionPluginMigration,
+                    },
+                  }
+                : {}),
             });
           }
         } else if (stateMigrationInput.pluginDoctorConfig) {
           const pluginDoctorConfig = stateMigrationInput.pluginDoctorConfig;
-          const cronMigrationConfig = cronMigration.retainStoreConfig(pluginDoctorConfig);
-          if (cronMigrationConfig) {
-            // A partially valid config cannot drive general core migrations, but its retired
-            // cron.store is still the sole authority for selecting and preserving that partition.
-            const { repairLegacyCronStoreWithoutPrompt } = await measurePreflightStep(
-              "cron-repair-import",
-              loadCronRepair,
-            );
-            noteStartupStateMigrationResult(
-              await measurePreflightStep("cron-repair", () =>
-                repairLegacyCronStoreWithoutPrompt({
-                  cfg: cronMigrationConfig,
-                  migrateCodexModelRefs: false,
-                }),
-              ),
-            );
-            const { migrateLegacyConfigMachineState } =
-              await import("../infra/state-migrations.config-machine-state.js");
-            noteStartupStateMigrationResult(
-              migrateLegacyConfigMachineState({ config: pluginDoctorConfig, env: process.env }),
-            );
-          }
+          await cronMigration.migrateRetainedStore({
+            config: pluginDoctorConfig,
+            env: process.env,
+            measure: measurePreflightStep,
+            report: noteStartupStateMigrationResult,
+          });
           await pluginMigrations.migrate(pluginDoctorConfig);
           await migrateTaskStateSidecars();
         }
@@ -715,7 +718,7 @@ async function runDoctorConfigPreflightOperation(
       shouldRecordStateCheckpoint,
       snapshotRead: configSnapshotRead,
       startupMigrationEnv,
-      startupMigrationHeartbeatError,
+      startupMigrationHeartbeatError: startupMigrationHeartbeat?.error,
       startupMigrationLease,
       startupMigrationWarnings,
       hasPendingPluginMigrations: pluginMigrations.hasPending(),
@@ -739,7 +742,7 @@ async function runDoctorConfigPreflightOperation(
       ...(postSessionPluginMigrationPlanBound ? { postSessionPluginMigrationPlanBound: true } : {}),
     };
   } finally {
-    clearInterval(startupMigrationHeartbeat);
+    startupMigrationHeartbeat?.stop();
     startupMigrationLease?.release();
   }
 }

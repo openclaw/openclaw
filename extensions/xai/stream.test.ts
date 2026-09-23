@@ -152,7 +152,7 @@ async function captureXaiResponsesPayloadWithThinking(
     cost: {
       input: 2,
       output: 6,
-      cacheRead: modelId === "grok-4.6" ? 0.5 : 0.3,
+      cacheRead: modelId === "grok-4.5" ? 0.3 : 0.5,
       cacheWrite: 0,
     },
     contextWindow: 500_000,
@@ -184,7 +184,7 @@ async function captureXaiResponsesPayloadWithThinking(
 
 describe("xai stream wrappers", () => {
   it.each(
-    ["grok-4.5", "grok-4.6"].flatMap((id) =>
+    ["grok-4.5", "grok-4.6", "grok-4.7"].flatMap((id) =>
       ["https://cli-chat-proxy.grok.com/v1", "https://CLI-CHAT-PROXY.GROK.COM:443/v1/"].map(
         (baseUrl) => ({ id, baseUrl }),
       ),
@@ -582,12 +582,16 @@ describe("xai stream wrappers", () => {
     expect(payload.include).toEqual(["reasoning.encrypted_content"]);
   }, 10_000);
 
-  it("preserves Grok 4.6 xhigh at the final xAI Responses payload boundary", async () => {
-    const payload = await captureXaiResponsesPayloadWithThinking("xhigh", "grok-4.6");
+  it.each(["grok-4.7", "grok-4.6"])(
+    "preserves %s xhigh at the final xAI Responses payload boundary",
+    async (modelId) => {
+      const payload = await captureXaiResponsesPayloadWithThinking("xhigh", modelId);
 
-    expect(payload.reasoning).toEqual({ effort: "xhigh", summary: "auto" });
-    expect(payload.include).toEqual(["reasoning.encrypted_content"]);
-  }, 10_000);
+      expect(payload.reasoning).toEqual({ effort: "xhigh", summary: "auto" });
+      expect(payload.include).toEqual(["reasoning.encrypted_content"]);
+    },
+    10_000,
+  );
 
   it("clamps unsupported Grok 4.5 off reasoning to low", async () => {
     const payload = await captureXaiResponsesPayloadWithThinking("off");

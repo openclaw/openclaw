@@ -10,22 +10,25 @@ openclaw-activity-session-media {
 }
 
 .activity-feed__media .chat-message-images {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  display: flex;
+  flex-direction: row;
   gap: 6px;
-  width: min(100%, 360px);
-  margin: 8px 0;
-}
-
-.activity-feed__media .chat-message-images--single {
-  grid-template-columns: minmax(0, 1fr);
-  width: min(100%, 240px);
+  width: 100%;
+  margin: 6px 0;
+  padding: 2px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
 }
 
 .activity-feed__media .chat-image-frame {
   position: relative;
   display: block;
+  flex: 0 0 128px;
+  width: 128px;
+  height: 80px;
   min-width: 0;
+  aspect-ratio: auto;
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -34,6 +37,7 @@ openclaw-activity-session-media {
 .activity-feed__media .chat-message-image-button {
   display: block;
   width: 100%;
+  height: 100%;
   padding: 0;
   border: 0;
   background: var(--bg-accent);
@@ -42,8 +46,8 @@ openclaw-activity-session-media {
 .activity-feed__media .chat-message-image {
   display: block;
   width: 100%;
-  height: 108px;
-  object-fit: cover;
+  height: 100%;
+  object-fit: contain;
 }
 
 .activity-feed__media .chat-image-actions {

@@ -6,6 +6,7 @@
 // styles/chat/text.css). Adding a kind here is the only place a new file glyph
 // starts, so the two surfaces cannot drift apart.
 export type FileKind =
+  | "skill"
   | "markdown"
   | "component"
   | "package"
@@ -22,6 +23,7 @@ const FILE_KIND_BY_NAME: Record<string, FileKind> = {
   "package-lock.json": "package",
   "package.json": "package",
   "pnpm-lock.yaml": "package",
+  "skill.md": "skill",
   "yarn.lock": "package",
 };
 

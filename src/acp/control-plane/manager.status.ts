@@ -16,6 +16,7 @@ import { resolveRuntimeOptionsFromMeta } from "./runtime-options.js";
 
 /** Reads a fresh ACP session status and reconciles runtime identifiers from the status response. */
 export async function runManagerGetSessionStatus(params: {
+  assertActive?: () => void;
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId: string;
@@ -30,6 +31,7 @@ export async function runManagerGetSessionStatus(params: {
   if (!isCurrentActor()) {
     throw createSupersededActorError(params.sessionKey);
   }
+  params.assertActive?.();
   params.throwIfAborted(params.signal);
   const resolution = params.resolveSession({
     cfg: params.cfg,
@@ -42,6 +44,7 @@ export async function runManagerGetSessionStatus(params: {
     handle: ensuredHandle,
     meta: initialMeta,
   } = await params.ensureRuntimeHandle({
+    assertActive: params.assertActive,
     cfg: params.cfg,
     sessionKey: params.sessionKey,
     agentId: params.agentId,
@@ -49,6 +52,7 @@ export async function runManagerGetSessionStatus(params: {
     isCurrentActor,
   });
   let handle = ensuredHandle;
+  params.assertActive?.();
   const capabilities = await resolveManagerRuntimeCapabilities({ runtime, handle });
   if (!isCurrentActor()) {
     throw createSupersededActorError(params.sessionKey);
@@ -58,6 +62,7 @@ export async function runManagerGetSessionStatus(params: {
     runtimeStatus = await withAcpRuntimeErrorBoundary({
       run: async () => {
         params.throwIfAborted(params.signal);
+        params.assertActive?.();
         const status = await runtime.getStatus!({
           handle,
           ...(params.signal ? { signal: params.signal } : {}),

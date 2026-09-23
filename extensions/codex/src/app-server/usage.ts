@@ -29,6 +29,7 @@ export async function fetchCodexAppServerUsageSnapshot(
   const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig: options.pluginConfig });
   const usage = await (options.readUsage ?? readCodexAppServerUsage)({
     timeoutMs: ctx.timeoutMs,
+    signal: ctx.signal,
     agentDir: ctx.agentDir,
     ...(ctx.authProfileId ? { authProfileId: ctx.authProfileId } : {}),
     config: ctx.config,

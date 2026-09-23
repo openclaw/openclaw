@@ -20,7 +20,6 @@ import {
   createSessionRowModelCacheKey,
   type SessionListRowContext,
 } from "./session-utils-contracts.js";
-import type { GatewaySessionRow } from "./session-utils.types.js";
 
 export function deriveSessionTitle(
   entry: SessionEntry | undefined,
@@ -80,56 +79,6 @@ export function prepareSessionTitleRead(
 
 export function resolvePositiveNumber(value: number | null | undefined): number | undefined {
   return asPositiveFiniteNumber(value);
-}
-
-type SessionCompactionCheckpointEntry = NonNullable<SessionEntry["compactionCheckpoints"]>[number];
-
-export function resolveSessionCompactionSummary(
-  entry?: Pick<SessionEntry, "compactionCheckpoints"> | null,
-): Pick<GatewaySessionRow, "compactionCheckpointCount" | "latestCompactionCheckpoint"> {
-  const checkpoints = entry?.compactionCheckpoints;
-  if (!Array.isArray(checkpoints)) {
-    return {};
-  }
-  let compactionCheckpointCount = 0;
-  let latest: SessionCompactionCheckpointEntry | undefined;
-  for (const value of checkpoints) {
-    if (!value || typeof value !== "object" || Array.isArray(value)) {
-      continue;
-    }
-    const checkpoint = value as {
-      checkpointId?: unknown;
-      createdAt?: unknown;
-      reason?: unknown;
-    };
-    const checkpointId = normalizeOptionalString(checkpoint.checkpointId);
-    const { createdAt, reason } = checkpoint;
-    if (
-      !checkpointId ||
-      typeof createdAt !== "number" ||
-      !Number.isFinite(createdAt) ||
-      (reason !== "manual" &&
-        reason !== "auto-threshold" &&
-        reason !== "overflow-retry" &&
-        reason !== "timeout-retry")
-    ) {
-      continue;
-    }
-    compactionCheckpointCount += 1;
-    if (!latest || createdAt > latest.createdAt) {
-      latest = value;
-    }
-  }
-  return {
-    compactionCheckpointCount,
-    latestCompactionCheckpoint: latest
-      ? {
-          checkpointId: latest.checkpointId.trim(),
-          createdAt: latest.createdAt,
-          reason: latest.reason,
-        }
-      : undefined,
-  };
 }
 
 function resolveModelCostConfigCached(
@@ -228,15 +177,18 @@ export function resolveSessionChildOwners(params: {
   entry: SessionEntry;
   now: number;
   subagentRuns: SessionListRowContext["subagentRuns"];
+  hasActiveRun?: boolean;
 }): string[] {
   const { key, entry, now, subagentRuns } = params;
   const latest = subagentRuns.getDisplaySubagentRun(key);
-  const keep = latest
-    ? shouldKeepSubagentRunChildLink(latest, {
-        activeDescendants: subagentRuns.countActiveDescendantRuns(key),
-        now,
-      })
-    : shouldKeepStoreOnlyChildLink(entry, now);
+  const keep =
+    params.hasActiveRun ||
+    (latest
+      ? shouldKeepSubagentRunChildLink(latest, {
+          activeDescendants: subagentRuns.countActiveDescendantRuns(key),
+          now,
+        })
+      : shouldKeepStoreOnlyChildLink(entry, now));
   if (!keep) {
     return [];
   }

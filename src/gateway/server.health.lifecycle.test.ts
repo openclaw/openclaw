@@ -23,7 +23,7 @@ afterEach(async () => {
     healthImport = undefined;
     vi.restoreAllMocks();
     vi.doUnmock("vitest");
-    vi.doUnmock("./server.js");
+    vi.doUnmock("../agents/prepared-model-runtime.test-support.js");
     vi.doUnmock("./server.e2e-ws-harness.js");
     vi.doUnmock("./server-restart-sentinel.js");
     vi.resetModules();
@@ -58,7 +58,10 @@ async function collectHealthFixture(signal: AbortSignal) {
   }));
   // Keep installGatewayTestHooks and its real environment lifecycle intact.
   // Only server construction is controlled; the normal suite proves health RPCs.
-  vi.doMock("./server.js", () => ({ resetPreparedModelCatalogForTest: prepare }));
+  vi.doMock("../agents/prepared-model-runtime.test-support.js", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("../agents/prepared-model-runtime.test-support.js")>()),
+    resetPreparedGatewayModelCatalogForTest: prepare,
+  }));
   vi.doMock("./server.e2e-ws-harness.js", () => ({ startGatewayServerHarness: start }));
   const cleanup = async () => {
     // Vitest's default stack order stops this phase on the first rejection.

@@ -18,11 +18,7 @@ import {
   classifyMediaReferenceSource,
   normalizeMediaReferenceSource,
 } from "../../media/media-reference.js";
-import type {
-  ImageCompressionModelPolicy,
-  ImageCompressionPolicy,
-  WebMediaResult,
-} from "../../media/web-media.js";
+import type { ImageCompressionPolicy, WebMediaResult } from "../../media/web-media.js";
 import {
   describeImageWithModel,
   describeImagesWithModel,
@@ -441,6 +437,7 @@ function resolveCompressionModelCandidates(params: {
 }
 
 async function resolveImageCompressionPolicy(params: {
+  abortSignal?: AbortSignal;
   cfg?: OpenClawConfig;
   imageModelConfig?: ImageModelConfig | null;
   modelOverride?: string;
@@ -451,9 +448,10 @@ async function resolveImageCompressionPolicy(params: {
 }): Promise<ImageCompressionPolicy> {
   const modelCandidates = resolveCompressionModelCandidates(params);
   const quality = params.cfg?.agents?.defaults?.imageQuality;
-  const models: ImageCompressionModelPolicy[] = await Promise.all(
-    modelCandidates.map(async (candidate): Promise<ImageCompressionModelPolicy> => {
-      return resolveImageCompressionModelPolicy({
+  const models = await Promise.all(
+    modelCandidates.map((candidate) =>
+      resolveImageCompressionModelPolicy({
+        abortSignal: params.abortSignal,
         cfg: params.cfg,
         provider: candidate.provider,
         model: candidate.model,
@@ -463,8 +461,8 @@ async function resolveImageCompressionPolicy(params: {
         deps: {
           resolveModelAsync: imageToolProviderDeps.resolveModelAsync,
         },
-      });
-    }),
+      }),
+    ),
   );
   return {
     imageCount: params.imageCount,
@@ -815,6 +813,7 @@ export function createImageTool(options?: {
           );
         }
         const imageCompression = await imageToolProviderDeps.resolveImageCompressionPolicy({
+          abortSignal: signal,
           cfg: options?.config,
           imageModelConfig,
           modelOverride,

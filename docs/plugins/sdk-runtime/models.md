@@ -40,6 +40,24 @@ compatible preparations share the existing generation's resources. A result from
 a closed host cannot start another completion; prepare again under the current
 host.
 
+## Low-level completions
+
+The `complete` and `completeSimple` helpers from `openclaw/plugin-sdk/llm` accept
+an optional fourth `assertCurrent` callback. It runs after transport setup and
+immediately before provider dispatch. A thrown error or an aborted
+`options.signal` prevents dispatch; the callback stays outside provider options.
+Existing three-argument calls remain supported.
+
+The `resolveOpenAIModelReasoningEfforts`, `resolveOpenAIReasoningEffortMap`, and
+`resolveOpenAIReasoningEffortMapping` helpers from the same SDK subpath read the
+OpenAI model's effort capabilities and configured native mappings.
+
+Native harnesses can use `selectSupportedReasoningEffort` from
+`openclaw/plugin-sdk/agent-harness-attempt-runtime` with their validated effort order and
+supported efforts. It keeps a supported request, otherwise chooses the next
+higher supported effort, or the highest available effort when none is higher.
+Backend adapters retain protocol validation and special-mode handling.
+
 ## Model namespaces
 
 <AccordionGroup>
@@ -127,6 +145,11 @@ host.
     active session's agent and do not silently fall back to the default agent. The
     result includes provider/model/agent attribution plus normalized token,
     cache, and estimated cost usage when available.
+
+    `usage.costUsd` is omitted when no recorded cost or configured/eligible catalog
+    pricing is available. Default-filled zero rates do not establish free usage.
+    Explicit operator zero pricing and provider-billed zero totals remain `0`;
+    recorded request costs retain their original pricing tiers.
 
     Direct completions can set `responseFormat` for provider-native constrained
     output. When the provider exposes them, the result also includes the concrete

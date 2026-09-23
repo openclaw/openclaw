@@ -21,6 +21,7 @@ import {
   type ModelCompatConfig,
   modelCostsEqual,
   type ProviderPlugin,
+  requiresClaudeMandatoryAdaptiveThinking,
   resolveClaudeFable5ModelIdentity,
   resolveClaudeModelIdentity,
   resolveClaudeMythos5ModelIdentity,
@@ -38,11 +39,8 @@ import {
   CLAUDE_CLI_PROFILE_ID,
   CLAUDE_MODEL_ID_ALIASES,
 } from "./cli-constants.js";
-import {
-  CLAUDE_CLI_BACKEND_ID,
-  CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS,
-  supportsClaudeDynamicSystemPromptSections,
-} from "./cli-shared.js";
+import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS } from "./cli-shared.js";
+import { createClaudeCodeVersionProbe } from "./cli-version.js";
 import {
   applyAnthropicConfigDefaults,
   normalizeAnthropicProviderConfigForProvider,
@@ -57,7 +55,11 @@ import {
   createClaudeSessionNodeInvokePolicies,
   registerClaudeSessionDiscovery,
 } from "./session-catalog-registration.js";
-import { isAnthropicOAuthApiKey, wrapAnthropicProviderStream } from "./stream-wrappers.js";
+import {
+  createAnthropicClaudeCodeIdentityWrapper,
+  isAnthropicOAuthApiKey,
+  wrapAnthropicProviderStream,
+} from "./stream-wrappers.js";
 import { fetchAnthropicUsage, resolveAnthropicUsageAuth } from "./usage.js";
 
 // Registration needs descriptors, not auth persistence or external credential discovery.
@@ -370,7 +372,7 @@ function buildAnthropicForwardCompatModel(
     ...(supportsClaudeNativeXhighEffort({ id: trimmedModelId })
       ? {
           thinkingLevelMap: {
-            ...(isAnthropicMandatoryClaude5Model(trimmedModelId)
+            ...(requiresClaudeMandatoryAdaptiveThinking({ id: trimmedModelId })
               ? { minimal: "low" as const }
               : {}),
             xhigh: "xhigh",
@@ -428,16 +430,11 @@ function isAnthropicGa1MModel(modelId: string): boolean {
   return supportsClaude1MContext({ id: modelId });
 }
 
-function isAnthropicFable5Model(modelId: string): boolean {
-  return resolveClaudeFable5ModelIdentity({ id: modelId }) !== undefined;
-}
-
-function isAnthropicMythos5Model(modelId: string): boolean {
-  return resolveClaudeMythos5ModelIdentity({ id: modelId }) !== undefined;
-}
-
 function isAnthropicMandatoryClaude5Model(modelId: string): boolean {
-  return isAnthropicFable5Model(modelId) || isAnthropicMythos5Model(modelId);
+  return (
+    resolveClaudeFable5ModelIdentity({ id: modelId }) !== undefined ||
+    resolveClaudeMythos5ModelIdentity({ id: modelId }) !== undefined
+  );
 }
 
 function isAnthropicSonnet5Model(modelId: string): boolean {
@@ -586,7 +583,7 @@ function applyAnthropicThinkingLevelMap(params: {
   modelId: string;
   model: ProviderRuntimeModel;
 }): ProviderRuntimeModel | undefined {
-  const mandatoryClaude5 = isAnthropicMandatoryClaude5Model(params.modelId);
+  const mandatoryClaude5 = requiresClaudeMandatoryAdaptiveThinking({ id: params.modelId });
   const nativeXhigh = mandatoryClaude5 || supportsClaudeNativeXhighEffort({ id: params.modelId });
   if (!supportsAnthropicNativeMaxEffort(params.modelId)) {
     return undefined;
@@ -882,29 +879,18 @@ export function buildAnthropicProvider(): ProviderPlugin {
 
 /** Register Anthropic provider, Claude CLI backend, and media understanding provider. */
 export function registerAnthropicPlugin(api: OpenClawPluginApi): void {
-  let supportsDynamicSystemPromptSections = false;
-  // Catalog discovery must not materialize the runtime for a CLI-only capability probe.
-  // First CLI executions share and await it before resolving immutable process argv.
-  const ensureDynamicSystemPromptSectionsSupport = createLazyRuntimeModule(async () => {
-    try {
-      const result = await api.runtime.system.runCommandWithTimeout(["claude", "--version"], {
-        timeoutMs: 1_500,
-        killProcessTree: true,
-        maxOutputBytes: { stdout: 1_024, stderr: 1_024 },
-      });
-      supportsDynamicSystemPromptSections =
-        result?.code === 0 && supportsClaudeDynamicSystemPromptSections(result.stdout);
-    } catch {
-      supportsDynamicSystemPromptSections = false;
-    }
+  const version = createClaudeCodeVersionProbe(api);
+  api.registerCliBackend(buildAnthropicCliBackend(version));
+  api.registerProvider({
+    ...buildAnthropicProvider(),
+    wrapStreamFn: (ctx) =>
+      createAnthropicClaudeCodeIdentityWrapper(
+        wrapAnthropicProviderStream(ctx),
+        version.resolveVersion,
+      ),
+    wrapSimpleCompletionStreamFn: (ctx) =>
+      createAnthropicClaudeCodeIdentityWrapper(ctx.streamFn, version.resolveVersion, ctx.sourceApi),
   });
-  api.registerCliBackend(
-    buildAnthropicCliBackend({
-      ensureDynamicSystemPromptSectionsSupport,
-      supportsDynamicSystemPromptSections: () => supportsDynamicSystemPromptSections,
-    }),
-  );
-  api.registerProvider(buildAnthropicProvider());
   api.registerMediaUnderstandingProvider(anthropicMediaUnderstandingProvider);
   registerClaudeSessionDiscovery(api);
   for (const policy of createClaudeSessionNodeInvokePolicies()) {

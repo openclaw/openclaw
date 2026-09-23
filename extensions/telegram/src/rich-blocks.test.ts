@@ -3,10 +3,8 @@ import stringWidth from "string-width";
 import { describe, expect, it } from "vitest";
 import { markdownToTelegramHtml } from "./format.js";
 import {
-  countInputRichBlockChars,
-  countInputRichBlockMedia,
-  countInputRichBlocks,
   inputRichBlocksToPlainText,
+  measureInputRichBlocks,
   type InputRichBlock,
   type RichText,
 } from "./rich-block-model.js";
@@ -764,7 +762,7 @@ describe("splitTelegramRichBlocks", () => {
     const chunks = splitTelegramRichBlocks(blocks, { textLimit: 32_768 });
     expect(chunks.length).toBeGreaterThan(1);
     for (const chunk of chunks) {
-      const chars = chunk.reduce((total, block) => total + countInputRichBlockChars(block), 0);
+      const { chars } = measureInputRichBlocks(chunk);
       expect(chars).toBeLessThanOrEqual(32_768);
     }
   });
@@ -783,7 +781,7 @@ describe("splitTelegramRichBlocks", () => {
     const { blocks } = markdownToTelegramRichBlocks(`**bold** ${"x".repeat(200)}`);
     const chunks = splitTelegramRichBlocks(blocks, { textLimit: 64 });
     for (const chunk of chunks) {
-      const chars = chunk.reduce((total, block) => total + countInputRichBlockChars(block), 0);
+      const { chars } = measureInputRichBlocks(chunk);
       expect(chars).toBeLessThanOrEqual(64);
     }
     const first = chunks[0]?.[0];
@@ -820,7 +818,7 @@ describe("splitTelegramRichBlocks", () => {
     };
     const chunks = splitTelegramRichBlocks([quote, table], { textLimit: 64 });
     for (const chunk of chunks) {
-      const chars = chunk.reduce((total, block) => total + countInputRichBlockChars(block), 0);
+      const { chars } = measureInputRichBlocks(chunk);
       expect(chars).toBeLessThanOrEqual(64);
     }
   });
@@ -840,7 +838,7 @@ describe("splitTelegramRichBlocks", () => {
       const chunks = splitTelegramRichBlocks([block], { blockLimit: 5 });
 
       expect(chunks).toHaveLength(2);
-      expect(chunks.every((chunk) => countInputRichBlocks(chunk) <= 5)).toBe(true);
+      expect(chunks.every((chunk) => measureInputRichBlocks(chunk).blocks <= 5)).toBe(true);
       expect(
         chunks
           .flat()
@@ -877,9 +875,9 @@ describe("splitTelegramRichBlocks", () => {
 
     expect(chunks).toHaveLength(3);
     expect(lists.flatMap((list) => list.items)).toEqual(items);
-    expect(countInputRichBlocks(chunks[0] ?? [])).toBeLessThanOrEqual(5);
-    expect(countInputRichBlocks(chunks[1] ?? [])).toBeGreaterThan(5);
-    expect(countInputRichBlocks(chunks[2] ?? [])).toBeLessThanOrEqual(5);
+    expect(measureInputRichBlocks(chunks[0] ?? []).blocks).toBeLessThanOrEqual(5);
+    expect(measureInputRichBlocks(chunks[1] ?? []).blocks).toBeGreaterThan(5);
+    expect(measureInputRichBlocks(chunks[2] ?? []).blocks).toBeLessThanOrEqual(5);
   });
 
   it("splits table rows and album media without duplicating captions", () => {
@@ -904,16 +902,12 @@ describe("splitTelegramRichBlocks", () => {
     const tables = tableChunks.flat().filter((block) => block.type === "table");
     const albums = mediaChunks.flat().filter((block) => block.type === "collage");
 
-    expect(tableChunks.every((chunk) => countInputRichBlocks(chunk) <= 5)).toBe(true);
+    expect(tableChunks.every((chunk) => measureInputRichBlocks(chunk).blocks <= 5)).toBe(true);
     expect(tables.flatMap((part) => part.cells)).toEqual(table.cells);
     expect(tables.flatMap((part) => (part.caption ? [part.caption] : []))).toEqual([
       "Table caption",
     ]);
-    expect(
-      mediaChunks.every(
-        (chunk) => chunk.reduce((total, block) => total + countInputRichBlockMedia(block), 0) <= 50,
-      ),
-    ).toBe(true);
+    expect(mediaChunks.every((chunk) => measureInputRichBlocks(chunk).media <= 50)).toBe(true);
     expect(albums.flatMap((album) => album.blocks)).toEqual(collage.blocks);
     expect(albums.flatMap((album) => (album.caption ? [album.caption.text] : []))).toEqual([
       "Album caption",
@@ -934,7 +928,9 @@ describe("rich message plan wiring", () => {
 
     expect(chunks.length).toBeGreaterThan(1);
     expect(
-      chunks.every((chunk) => countInputRichBlocks(chunk.richMessage?.blocks ?? []) <= 500),
+      chunks.every(
+        (chunk) => measureInputRichBlocks(chunk.richMessage?.blocks ?? []).blocks <= 500,
+      ),
     ).toBe(true);
     expect(lists.flatMap((list) => list.items).map((item) => item.value)).toEqual(
       Array.from({ length: 250 }, (_, index) => index + 1),

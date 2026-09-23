@@ -1,4 +1,3 @@
-// Feishu plugin module implements comment reaction behavior.
 import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";

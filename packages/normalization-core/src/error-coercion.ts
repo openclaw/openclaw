@@ -120,6 +120,22 @@ function stringifyUnknown(value: unknown): string {
   }
 }
 
+export function readErrorCauses(current: Record<string, unknown>): unknown[] {
+  if (!isErrorObject(current)) {
+    return [];
+  }
+  const cause = readProperty(current, "cause");
+  const errors = isAggregateErrorObject(current) ? readProperty(current, "errors") : undefined;
+  // Downlevel await-using emits a named Error; both failure fields exist even for nullish throws.
+  const suppressed =
+    readErrorText(current, "name") === "SuppressedError"
+      ? [readProperty(current, "error"), readProperty(current, "suppressed")].map((failure) =>
+          failure == null ? String(failure) : failure,
+        )
+      : [];
+  return [cause || undefined, ...(Array.isArray(errors) ? errors : []), ...suppressed];
+}
+
 /** Formats unknown errors with cause/aggregate details, structured codes, and secret redaction. */
 export function formatErrorMessage(value: unknown, options: FormatErrorMessageOptions): string {
   let formatted: string;
@@ -150,21 +166,7 @@ export function formatErrorMessage(value: unknown, options: FormatErrorMessageOp
         appendCauseMessage(String(code));
       }
     }
-    const causes = collectErrorGraphCandidates(value, (current) => {
-      if (!isErrorObject(current)) {
-        return [];
-      }
-      const cause = readProperty(current, "cause");
-      const errors = isAggregateErrorObject(current) ? readProperty(current, "errors") : undefined;
-      // Downlevel await-using emits a named Error; both failure fields exist even for nullish throws.
-      const suppressed =
-        readErrorText(current, "name") === "SuppressedError"
-          ? [readProperty(current, "error"), readProperty(current, "suppressed")].map((failure) =>
-              failure == null ? String(failure) : failure,
-            )
-          : [];
-      return [cause || undefined, ...(Array.isArray(errors) ? errors : []), ...suppressed];
-    });
+    const causes = collectErrorGraphCandidates(value, readErrorCauses);
     for (const cause of causes.slice(1)) {
       if (isErrorObject(cause)) {
         appendCauseErrorMessage(readErrorText(cause, "message"));

@@ -65,7 +65,7 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-basics", () => {
       streamMode: "off",
       telegramDeps: {
         ...telegramDepsForTest,
-        deliverInboundReplyWithMessageSendContext: undefined,
+        deliverStructuredInboundReplyWithMessageSendContext: undefined,
       },
     });
 
@@ -550,6 +550,7 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-basics", () => {
     "uses reply mode $replyToMode after retained pagination falls back to its suffix",
     async ({ replyToMode, expectedFallbackMode, keepsReply }) => {
       const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+      answerDraftStream.lastDeliveredText.mockReturnValue("visible prefix");
       answerDraftStream.remainingFinalContent.mockReturnValue({
         text: "unsent suffix",
         sourceText: "unsent suffix",
@@ -667,7 +668,12 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-basics", () => {
   ])(
     "uses reply mode $replyToMode for media after an accepted draft",
     async ({ replyToMode, expectedMediaMode, keepsReply }) => {
-      setupDraftStreams({ answerMessageId: 2001 });
+      const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+      answerDraftStream.hasConsumedReplyTarget.mockReturnValue(replyToMode !== "all");
+      answerDraftStream.currentMessageSnapshot.mockImplementation(() => {
+        const text = answerDraftStream.lastDeliveredText();
+        return text ? { text, sourceText: text, replyToMessageId: 1001 } : undefined;
+      });
       dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
         async ({ dispatcherOptions, replyOptions }) => {
           await replyOptions?.onPartialReply?.({ text: "photo" });

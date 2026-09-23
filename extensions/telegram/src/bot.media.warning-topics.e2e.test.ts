@@ -5,7 +5,11 @@ import {
   telegramBotDepsForTest,
   telegramMediaHarnessSendMessageSpy,
 } from "./bot.media.e2e.test-harness.js";
-import { createBotHandlerWithOptions, mockTelegramPngDownload } from "./bot.media.test-utils.js";
+import {
+  createBotHandlerWithOptions,
+  createTelegramPhotoForTest,
+  mockTelegramPngDownload,
+} from "./bot.media.test-utils.js";
 
 describe("Telegram media failure notices", () => {
   beforeEach(() => {
@@ -78,7 +82,7 @@ describe("Telegram media failure notices", () => {
           is_topic_message: true,
           caption: "Topic attachment",
           date: 1736380800,
-          photo: [{ file_id: "topic-attachment" }],
+          photo: [createTelegramPhotoForTest("topic-attachment")],
         },
         me: { username: "openclaw_bot", has_topics_enabled: true },
         getFile: async () => ({ file_path: "photos/topic-attachment.jpg" }),
@@ -127,7 +131,7 @@ describe("Telegram media failure notices", () => {
           message_id: 902,
           date: 1736380800,
           caption: "Channel attachment",
-          photo: [{ file_id: "channel-attachment" }],
+          photo: [createTelegramPhotoForTest("channel-attachment")],
         },
         me: { username: "openclaw_bot" },
         getFile: async () => ({ file_path: "photos/channel-attachment.jpg" }),
@@ -163,7 +167,7 @@ describe("Telegram media failure notices", () => {
           date: 1736380800,
           media_group_id: "failure-notice-album",
           caption: index === 0 ? "Album attachment" : undefined,
-          photo: [{ file_id: `album-${index}` }],
+          photo: [createTelegramPhotoForTest(`album-${index}`)],
         },
         me: { username: "openclaw_bot" },
         getFile: async () => ({ file_path: `photos/album-${index}.jpg` }),

@@ -172,6 +172,7 @@ export function createFixture(
     "src/process/supervisor/service-child-windows-job-native.ts",
     "src/infra/update-managed-service-handoff-runtime-assets.ts",
     "src/infra/update-managed-service-handoff-native-loader.ts",
+    "src/shared/deferred.ts",
     "src/shared/freebsd-process-identity.ts",
     "src/infra/node-runtime-executable.ts",
     "src/infra/runtime-dependency-ownership.ts",
@@ -192,6 +193,7 @@ export function createFixture(
   // The full config resolves these runtime inputs before selecting declaration groups.
   for (const source of [
     "src/worker/worker-deploy-browser-runtime.ts",
+    "src/plugin-sdk/facade-runtime.ts",
     "extensions/browser/src/browser/playwright-core.runtime.ts",
     "src/infra/net/undici-dispatcher-options.ts",
     "src/infra/command-explainer/tree-sitter-runtime.ts",

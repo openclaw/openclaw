@@ -64,14 +64,18 @@ export function isPidDefinitelyDead(pid: number): boolean {
   return isZombieProcess(pid);
 }
 
-function getDarwinProcessStartTime(pid: number, env: NodeJS.ProcessEnv): number | null {
+function getDarwinProcessStartTime(
+  pid: number,
+  env: NodeJS.ProcessEnv,
+  timeoutMs = PROCESS_START_TIMEOUT_MS,
+): number | null {
   try {
     const startedAt = childProcess
       .execFileSync("/bin/ps", ["-o", "lstart=", "-p", String(pid)], {
         encoding: "utf8",
         env: { ...resolveDiagnosticProcessEnv(env), LC_ALL: "C", TZ: "UTC" },
         stdio: ["ignore", "pipe", "ignore"],
-        timeout: PROCESS_START_TIMEOUT_MS,
+        timeout: timeoutMs,
         killSignal: "SIGKILL",
       })
       .trim();
@@ -111,7 +115,7 @@ export function getProcessStartTime(pid: number): number | null {
 export function getFileLockProcessStartTime(
   pid: number,
   env: NodeJS.ProcessEnv = process.env,
-  windowsTimeoutMs?: number,
+  timeoutMs?: number,
 ): number | null {
   if (!isValidPid(pid)) {
     return null;
@@ -122,9 +126,9 @@ export function getFileLockProcessStartTime(
   }
   const startTime =
     process.platform === "darwin"
-      ? getDarwinProcessStartTime(pid, env)
+      ? getDarwinProcessStartTime(pid, env, timeoutMs)
       : process.platform === "win32"
-        ? readWindowsProcessStartTimeSync(pid, windowsTimeoutMs, env)
+        ? readWindowsProcessStartTimeSync(pid, timeoutMs, env)
         : process.platform === "freebsd"
           ? readFreeBsdProcessStartTime(pid)
           : getProcessStartTime(pid);

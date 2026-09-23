@@ -301,15 +301,31 @@ export function assertCodexTurnStartResponse(value: unknown): CodexTurnStartResp
   return assertCodexShape(validateTurnStartResponse, normalized, "turn/start response");
 }
 
-/** Only the current text prompt may be echoed; capabilities and historical items are not passive. */
+/** Prompt echoes and attested managed-hook continuations cannot admit native capabilities. */
 export function assertCodexPassiveTurnItems(
   items: readonly CodexThreadItem[],
   prompt: string,
   taskLabel: string,
+  options: { allowManagedHookPrompts?: boolean } = {},
 ): void {
   let promptEchoSeen = false;
   for (const item of items) {
     if (item.type === "agentMessage" || item.type === "reasoning") {
+      continue;
+    }
+    if (
+      item.type === "hookPrompt" &&
+      options.allowManagedHookPrompts === true &&
+      Array.isArray(item.fragments) &&
+      item.fragments.length > 0 &&
+      item.fragments.every(
+        (fragment) =>
+          isJsonObject(fragment) &&
+          typeof fragment.text === "string" &&
+          typeof fragment.hookRunId === "string" &&
+          fragment.hookRunId.trim().length > 0,
+      )
+    ) {
       continue;
     }
     if (item.type === "userMessage" && !promptEchoSeen) {

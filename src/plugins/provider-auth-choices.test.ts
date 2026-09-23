@@ -172,6 +172,77 @@ describe("provider auth choice manifest helpers", () => {
     });
   });
 
+  it("preserves public metadata shape and shallow aliases across every choice reader", () => {
+    const scopes = ["text-inference"];
+    const channelLogin = { aliases: ["sign-in"] };
+    const futureMetadata = { version: 1 };
+    setSingleManifestProviderAuthChoices("demo", [
+      {
+        provider: "demo",
+        method: "api-key",
+        choiceId: "demo-key",
+        choiceLabel: "",
+        choiceHint: undefined,
+        onboardingScopes: scopes,
+        channelLogin,
+        futureMetadata,
+        optionKey: "demoKey",
+        cliFlag: "--demo-key",
+        cliOption: "--demo-key <key>",
+        cliDescription: "",
+        deprecatedChoiceIds: ["old-demo"],
+      },
+    ]);
+    const expected = {
+      pluginId: "demo",
+      providerId: "demo",
+      methodId: "api-key",
+      choiceId: "demo-key",
+      choiceLabel: "",
+      choiceHint: undefined,
+      onboardingScopes: scopes,
+      channelLogin,
+      futureMetadata,
+      optionKey: "demoKey",
+      cliFlag: "--demo-key",
+      cliOption: "--demo-key <key>",
+      cliDescription: "",
+      deprecatedChoiceIds: ["old-demo"],
+    };
+    for (const read of [
+      () => resolveManifestProviderAuthChoices()[0],
+      () => resolveManifestDeclaredProviderAuthChoices()[0],
+      () => resolveManifestProviderAuthChoice("demo-key"),
+      () => resolveManifestDeprecatedProviderAuthChoice("old-demo"),
+    ]) {
+      const value = read();
+      if (!value) {
+        throw new Error("Expected the declared auth choice");
+      }
+      expect(value).toStrictEqual(expected);
+      expect(Object.keys(value)).toEqual(Object.keys(expected));
+      expect(Object.hasOwn(value, "choiceHint")).toBe(true);
+      expect(Object.hasOwn(value, "origin")).toBe(false);
+      expect(Object.hasOwn(value, "declaration")).toBe(false);
+      expect(value.onboardingScopes).toBe(scopes);
+      expect(value.channelLogin).toBe(channelLogin);
+      expect(Reflect.get(value, "futureMetadata")).toBe(futureMetadata);
+      const again = read();
+      expect(Object.is(value, again)).toBe(false);
+      value.choiceLabel = "changed output";
+      expect(again).toStrictEqual(expected);
+    }
+    expect(resolveProviderOnboardAuthFlags()).toStrictEqual([
+      {
+        optionKey: "demoKey",
+        authChoice: "demo-key",
+        cliFlag: "--demo-key",
+        cliOption: "--demo-key <key>",
+        description: "",
+      },
+    ]);
+  });
+
   it("does not resolve equal-priority owners of the same login choice", () => {
     setManifestPlugins(
       ["first", "second"].map((id) => ({

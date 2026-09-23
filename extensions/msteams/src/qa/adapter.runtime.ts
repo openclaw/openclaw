@@ -146,6 +146,7 @@ export async function createMSTeamsQaTransportAdapter(
     await connector.close().catch(() => undefined);
     throw error;
   }
+  const bootstrapUrl = pathToFileURL(bootstrapPath).href;
 
   return {
     id: "msteams",
@@ -249,13 +250,11 @@ export async function createMSTeamsQaTransportAdapter(
       }) as Pick<OpenClawConfig, "channels" | "messages">,
     createRuntimeEnvPatch: () => ({
       OPENCLAW_BUILD_PRIVATE_QA: "1",
-      NODE_OPTIONS: [
-        process.env.NODE_OPTIONS?.trim(),
-        `--import=${pathToFileURL(bootstrapPath).href}`,
-      ]
+      NODE_OPTIONS: [process.env.NODE_OPTIONS?.trim(), `--import=${bootstrapUrl}`]
         .filter(Boolean)
         .join(" "),
     }),
+    createRuntimePreloads: () => [bootstrapUrl],
     waitReady: async ({ gateway, timeoutMs, pollIntervalMs }) =>
       await waitForMSTeamsChannelReady(gateway, timeoutMs, pollIntervalMs),
     buildAgentDelivery: ({ target }) => ({

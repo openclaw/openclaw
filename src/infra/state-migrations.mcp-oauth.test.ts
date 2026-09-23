@@ -6,10 +6,11 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { operatorMcpOAuthIdentity } from "../agents/mcp-oauth-identity.js";
-import { createMcpOAuthClientProvider } from "../agents/mcp-oauth-provider.js";
 import { clearMcpOAuthCredentials, resolveMcpOAuthAccessToken } from "../agents/mcp-oauth.js";
+import { withMcpOAuthProviderForTest } from "../agents/mcp-oauth.test-support.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
@@ -33,7 +34,8 @@ const DEFAULT_FILE_NAME = "server-0123456789abcdef.json";
 
 describe("legacy MCP OAuth Doctor migration", () => {
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
-    afterEach(() => {
+    afterEach(async () => {
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
       vi.unstubAllEnvs();
       cleanup();
@@ -307,23 +309,28 @@ describe("legacy MCP OAuth Doctor migration", () => {
         scope: "docs.read",
       }),
     ).rejects.toThrow("Run openclaw mcp login Remote Docs.");
-    const provider = createMcpOAuthClientProvider({
-      identity,
-      allowAuthorizationRedirect: true,
-    });
-    await provider.saveCodeVerifier("new-login-verifier");
-    expect(JSON.parse(storeRow(env, storeKey)?.store_json ?? "null")).toMatchObject({
-      credentialState: "uninitialized",
-    });
-    expect(JSON.parse(storeRow(env, storeKey)?.store_json ?? "null")).not.toHaveProperty(
-      "codeVerifier",
+    await withMcpOAuthProviderForTest(
+      {
+        identity,
+        allowAuthorizationRedirect: true,
+      },
+      async (provider) => {
+        await provider.saveCodeVerifier("new-login-verifier");
+        expect(JSON.parse(storeRow(env, storeKey)?.store_json ?? "null")).toMatchObject({
+          credentialState: "uninitialized",
+        });
+        expect(JSON.parse(storeRow(env, storeKey)?.store_json ?? "null")).not.toHaveProperty(
+          "codeVerifier",
+        );
+        await provider.redirectToAuthorization(new URL("https://auth.example.com/authorize"));
+      },
     );
-    await provider.redirectToAuthorization(new URL("https://auth.example.com/authorize"));
     const sourcePath = await writeLegacy({
       stateDir,
       fileName: `${storeKey}.json`,
     });
 
+    await closeOpenClawStateDatabaseAsync();
     const result = await migrate(stateDir, env);
 
     expect(result.warnings).toEqual([]);
@@ -645,6 +652,7 @@ describe("legacy MCP OAuth Doctor migration", () => {
     cases.push({ ...invalidUtf8, sourcePath: invalidUtf8Path });
 
     for (const testCase of cases) {
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
       const result = await migrate(testCase.stateDir, testCase.env);
       expect(result.warnings[0]).toContain("Failed reading legacy MCP OAuth store");

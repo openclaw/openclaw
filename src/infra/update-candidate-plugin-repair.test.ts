@@ -140,6 +140,36 @@ it("completes a declared Doctor module independently of the runtime entry", asyn
   expect(after.stdout.toString().trim()).toBe("sibling-ready");
 });
 
+it("completes a published rehearsal with import.meta retained at transformed position 1203:16", async () => {
+  const f = await fixture();
+  const content = `import value from "../shared/value.js";\n${"\n".repeat(1201)}const module1=import.meta;\nconsole.log(value);`;
+  await fs.writeFile(path.join(f.plugin, "index.mjs"), content);
+  await fs.writeFile(path.join(f.copiedPlugin, "index.mjs"), content);
+
+  const repaired = await completeUpdateCandidatePluginRehearsal(f);
+  expect(repaired.copiedFiles).toBeGreaterThan(0);
+  expect(repaired.warnings).toEqual([]);
+  const after = await f.run();
+  expect(after.code, after.stderr.toString()).toBe(0);
+  expect(after.stdout.toString().trim()).toBe("sibling-ready");
+});
+
+it("warns about an unparseable runtime entry and completes the sibling Doctor entry", async () => {
+  const f = await fixture("directory", "doctor");
+  const content = `${"\n".repeat(1202)}const module1=/(/;`;
+  await fs.writeFile(path.join(f.plugin, "index.mjs"), content);
+  await fs.writeFile(path.join(f.copiedPlugin, "index.mjs"), content);
+
+  const repaired = await completeUpdateCandidatePluginRehearsal(f);
+  expect(repaired.copiedFiles).toBeGreaterThan(0);
+  expect(repaired.warnings).toEqual([
+    expect.stringMatching(/plugin demo .*Invalid regular expression:.*\(1203:17\)/),
+  ]);
+  const after = await f.run();
+  expect(after.code, after.stderr.toString()).toBe(0);
+  expect(after.stdout.toString().trim()).toBe("sibling-ready");
+});
+
 it.each(["absolute path", "file URL"])(
   "retains an explicit external %s import in an already complete snapshot",
   async (kind) => {

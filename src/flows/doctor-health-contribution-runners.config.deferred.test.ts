@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDoctorPrompter } from "../commands/doctor-prompter.js";
 import { readConfigFileSnapshot } from "../config/config.js";
+import { hashConfigRaw } from "../config/io.read-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   readDeferredPluginMigrations,
@@ -87,6 +88,10 @@ describe("Doctor config persistence after deferred migrations", () => {
             prompter: createDoctorPrompter({ runtime, options }),
             configResult: {
               cfg,
+              confirmedConfigSource: {
+                path: initial.path,
+                hash: initial.hash ?? hashConfigRaw(initial.raw),
+              },
               shouldWriteConfig: true,
               skipWizardMetadataForIncludeWrite: include,
             },
@@ -97,9 +102,20 @@ describe("Doctor config persistence after deferred migrations", () => {
             env: state.env,
           };
 
+          const beforeFirstWrite = await fs.readFile(outputPath, "utf8");
+          const rootBefore = await fs.readFile(state.configPath, "utf8");
           await runInitialConfigWriteHealth(ctx);
           expect(ctx.configWriteRefusal).toBeUndefined();
           const firstRaw = await fs.readFile(outputPath, "utf8");
+          expect(await fs.readFile(outputPath + ".bak", "utf8")).toBe(beforeFirstWrite);
+          if (include) {
+            expect(await fs.readFile(state.configPath, "utf8")).toBe(rootBefore);
+          }
+          expect(ctx.configResult.confirmedConfigSource).toEqual({
+            path: state.configPath,
+            hash: (await readConfigFileSnapshot({ observe: false })).hash,
+          });
+          const firstReceipt = structuredClone(ctx.configResult.confirmedConfigSource);
           if (deferred) {
             expect(JSON.parse(firstRaw)).toHaveProperty(retiredPath, "legacy");
           } else {
@@ -126,7 +142,20 @@ describe("Doctor config persistence after deferred migrations", () => {
 
           vi.setSystemTime(new Date("2026-09-14T00:00:01Z"));
           await runWriteConfigHealth(ctx, { runPostWriteRepairs: false });
+          if (deferred) {
+            expect(ctx.configResult.confirmedConfigSource?.hash).not.toBe(firstReceipt?.hash);
+          }
+          expect(ctx.configResult.confirmedConfigSource).toEqual({
+            path: state.configPath,
+            hash: (await readConfigFileSnapshot({ observe: false })).hash,
+          });
           const finalRaw = await fs.readFile(outputPath, "utf8");
+          expect(await fs.readFile(outputPath + ".bak", "utf8")).toBe(
+            deferred ? firstRaw : beforeFirstWrite,
+          );
+          if (include) {
+            expect(await fs.readFile(state.configPath, "utf8")).toBe(rootBefore);
+          }
           expect(JSON.parse(finalRaw)).not.toHaveProperty(retiredPath);
           expect(JSON.parse(await fs.readFile(state.configPath, "utf8"))).toHaveProperty(
             "agents.defaults.workspace",

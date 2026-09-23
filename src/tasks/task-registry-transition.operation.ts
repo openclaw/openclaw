@@ -17,6 +17,7 @@ import {
   type TaskDeliveryStatus,
   type TaskEventRecord,
   type TaskRecord,
+  type TaskExecutionOwner,
   type TaskPersistenceReceipt,
   type TaskRuntime,
   type TaskStatus,
@@ -56,12 +57,27 @@ export type TaskRunTransition =
   | { kind: "state"; params: TaskRunStateTransitionParams }
   | { kind: "delivery"; params: TaskRunDeliveryTransitionParams };
 
-export type TaskRecordTransitionInput = TaskRunTransition & {
+type TaskRunOwnerTransition = {
+  kind: "run-owner";
+  params: { runId: string; executionOwner?: TaskExecutionOwner };
+};
+
+type TaskRecordSelection = {
   taskId: string;
   now: number;
+  expectedTask?: TaskPersistenceReceipt;
   /** Preserve an initial batch match across sibling writes; this is not live authority. */
   selection?: TaskPersistenceReceipt;
 };
+
+export type TaskRecordTransitionInput =
+  | (TaskRunTransition & TaskRecordSelection)
+  | (TaskRunOwnerTransition & {
+      taskId: string;
+      now: number;
+      expectedTask: TaskPersistenceReceipt;
+      selection?: never;
+    });
 
 type TaskRecordUpdate = {
   previous: TaskRecord;
@@ -82,6 +98,20 @@ export function prepareTaskRecordUpdate(
   now?: number,
 ): TaskRecordUpdate {
   const task = applyTaskRecordPatch(current, patch, now);
+  if (isTerminalTaskStatus(current.status)) {
+    const previousEventAt =
+      current.lastEventAt ?? current.endedAt ?? current.startedAt ?? current.createdAt;
+    const nextEventAt = task.lastEventAt ?? task.endedAt ?? task.startedAt ?? task.createdAt;
+    if (nextEventAt <= previousEventAt) {
+      // Terminal corrections can carry an earlier execution end time. Keep
+      // their public freshness clock advancing without extending execution.
+      task.lastEventAt = current.lastEventAt;
+      // Retention bookkeeping is persisted but is not new task activity.
+      if (!isEquivalentTaskRecord(current, { ...task, cleanupAfter: current.cleanupAfter })) {
+        task.lastEventAt = Math.max(now ?? Date.now(), previousEventAt + 1);
+      }
+    }
+  }
   return {
     previous: current,
     task,
@@ -186,8 +216,20 @@ function prepareStateTransition(
 
 function prepareTaskRecordTransition(
   current: TaskRecord,
-  input: TaskRunTransition & { now: number },
+  input: (TaskRunTransition | TaskRunOwnerTransition) & { now: number },
 ): TaskRecordTransitionReceipt | null {
+  if (input.kind === "run-owner") {
+    return {
+      ...(current.status === "running" && input.params.executionOwner
+        ? prepareTaskRecordUpdate(
+            current,
+            { executionOwner: input.params.executionOwner },
+            input.now,
+          )
+        : { previous: current, task: current, persisted: false, becomesTerminal: false }),
+      deliver: false,
+    };
+  }
   if (input.kind === "delivery") {
     return {
       ...prepareTaskRecordUpdate(
@@ -219,6 +261,7 @@ export type TaskRecordTransitionOperations = {
   /** False retains the legacy best-effort failed-row behavior; worker stores throw. */
   upsertTask: (task: TaskRecord) => boolean;
   beforePersist?: (receipt: TaskRecordTransitionReceipt) => void;
+  assertCurrent?: (receipt: TaskRecordTransitionReceipt) => void;
   deferCommit: (publish: () => void) => void;
   onCommitted: (receipt: TaskRecordTransitionReceipt) => void;
 };
@@ -232,10 +275,12 @@ export function runTaskRecordTransitionOperation(
     const current = operations.readCurrent();
     if (
       !current ||
-      (input.selection &&
+      (input.kind !== "run-owner" &&
+        input.selection &&
         (!matchesTaskPersistenceReceipt(current, input.selection) ||
           current.runId?.trim() !== input.params.runId.trim() ||
           filterTasksByRunScope([current], input.params).length === 0)) ||
+      (input.expectedTask && !matchesTaskPersistenceReceipt(current, input.expectedTask)) ||
       !operations.hasAuthoritativeBacking(current)
     ) {
       return null;
@@ -243,6 +288,9 @@ export function runTaskRecordTransitionOperation(
     return prepareTaskRecordTransition(current, input);
   };
   return operations.write(() => {
+    if (input.expectedTask && !operations.assertCurrent) {
+      throw new Error("A task persistence receipt requires live owner admission");
+    }
     const prepared = prepareCurrent();
     if (!prepared) {
       return null;
@@ -253,6 +301,7 @@ export function runTaskRecordTransitionOperation(
     if (!receipt) {
       return null;
     }
+    operations.assertCurrent?.(receipt);
     if (receipt.persisted && !operations.upsertTask(receipt.task)) {
       return null;
     }

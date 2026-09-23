@@ -15,7 +15,7 @@ import { resolveTranscriptSessionKeyBySessionId } from "../../config/sessions/se
 import { cronTaskRecordToRunLogEntry } from "../../cron/task-run-detail.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { parseCronRunScopeSuffix } from "../../sessions/session-key-utils.js";
-import { getTaskById } from "../../tasks/runtime-internal.js";
+import { prepareTaskRegistryRead } from "../../tasks/runtime-internal.js";
 import { resolveTaskHistoryHarness, taskTranscriptSessionKey } from "../../tasks/task-history.js";
 import type { TaskRecord } from "../../tasks/task-registry.types.js";
 import { canAccessTaskRequesterSession } from "../task-session-access.js";
@@ -68,7 +68,12 @@ export const taskHistoryHandler: GatewayRequestHandler = async (opts) => {
   }
   const fail = (message: string, code: ErrorCode = ErrorCodes.UNAVAILABLE) =>
     respond(false, undefined, errorShape(code, message));
-  const task = getTaskById(params.taskId);
+  const read = await prepareTaskRegistryRead();
+  if (!read) {
+    fail("Task activity did not stabilize. Refresh the task.");
+    return;
+  }
+  const task = read.getTaskById(params.taskId);
   const allowed = (value: TaskRecord | undefined): value is TaskRecord =>
     Boolean(
       value &&
@@ -109,7 +114,7 @@ export const taskHistoryHandler: GatewayRequestHandler = async (opts) => {
       }
     | undefined;
   const assertCurrent = () => {
-    const current = getTaskById(task.taskId);
+    const current = read.getTaskById(task.taskId);
     if (
       !active ||
       opts.signal?.aborted ||

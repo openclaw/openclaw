@@ -2,7 +2,12 @@ import type { PluginManifestRegistry } from "../plugins/manifest-registry.types.
 import type { ConfigValidationIssue, OpenClawConfig } from "./types.openclaw.js";
 
 export type ValidateConfigWithPluginsResult =
-  | { ok: true; config: OpenClawConfig; warnings: ConfigValidationIssue[] }
+  | {
+      ok: true;
+      config: OpenClawConfig;
+      warnings: ConfigValidationIssue[];
+      strictIssues?: ConfigValidationIssue[];
+    }
   | { ok: false; issues: ConfigValidationIssue[]; warnings: ConfigValidationIssue[] };
 
 export type PreparedConfigValidationPluginMetadata = {

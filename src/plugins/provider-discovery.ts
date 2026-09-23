@@ -40,6 +40,7 @@ function isSafeProviderConfigKey(value: string): boolean {
 type PreparedProviderStaticCatalogEntry = Readonly<{
   provider: ProviderPlugin;
   result: Awaited<ReturnType<typeof runProviderStaticCatalog>>;
+  providerConfigs: Readonly<Record<string, ModelProviderConfig>>;
 }>;
 
 export type PreparedProviderStaticCatalog = Readonly<{
@@ -238,6 +239,7 @@ export async function prepareProviderStaticCatalog(params: {
         Object.freeze({
           provider,
           result,
+          providerConfigs: normalizePluginDiscoveryResult({ provider, result }),
         }),
       );
     }
@@ -253,7 +255,7 @@ export function resolvePreparedProviderStaticConfigs(
 ): Record<string, ModelProviderConfig> {
   const providers: Record<string, ModelProviderConfig> = {};
   for (const entry of prepared?.entries ?? []) {
-    Object.assign(providers, normalizePluginDiscoveryResult(entry));
+    Object.assign(providers, entry.providerConfigs);
   }
   return providers;
 }

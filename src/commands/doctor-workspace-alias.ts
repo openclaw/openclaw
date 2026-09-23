@@ -13,6 +13,7 @@ import { readConfigFileSnapshot } from "../config/io.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { withSynchronousArtifactPreservingStateSnapshot } from "../state/openclaw-state-db-readonly.js";
 import { shortenHomePath } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
@@ -57,26 +58,29 @@ const REBIND_MESSAGES: Record<Exclude<WorkspaceAliasRebindOutcome, "rebound">, s
 export async function collectRepointedWorkspaceAliasFindings(
   cfg: OpenClawConfig,
 ): Promise<WorkspaceAliasFinding[]> {
-  const findings: WorkspaceAliasFinding[] = [];
-  for (const workspaceDir of await configuredWorkspaceDirs(cfg)) {
-    let message: string;
-    try {
-      const facts = detectRepointedWorkspaceAlias(workspaceDir);
-      if (!facts) {
-        continue;
+  const workspaceDirs = await configuredWorkspaceDirs(cfg);
+  return withSynchronousArtifactPreservingStateSnapshot(() => {
+    const findings: WorkspaceAliasFinding[] = [];
+    for (const workspaceDir of workspaceDirs) {
+      let message: string;
+      try {
+        const facts = detectRepointedWorkspaceAlias(workspaceDir);
+        if (!facts) {
+          continue;
+        }
+        message = `${describeRepointedWorkspaceAlias(facts)} Incoming messages cannot use this workspace until it is repaired.`;
+      } catch (error) {
+        message = `Workspace alias inspection failed for ${shortenHomePath(workspaceDir)}: ${formatErrorMessage(error)}`;
       }
-      message = `${describeRepointedWorkspaceAlias(facts)} Incoming messages cannot use this workspace until it is repaired.`;
-    } catch (error) {
-      message = `Workspace alias inspection failed for ${shortenHomePath(workspaceDir)}: ${formatErrorMessage(error)}`;
+      findings.push({
+        checkId: WORKSPACE_ALIAS_CHECK_ID,
+        severity: "warning",
+        message,
+        fixHint: REPAIR_HINT,
+      });
     }
-    findings.push({
-      checkId: WORKSPACE_ALIAS_CHECK_ID,
-      severity: "warning",
-      message,
-      fixHint: REPAIR_HINT,
-    });
-  }
-  return findings;
+    return findings;
+  });
 }
 
 async function maybeRepairRepointedWorkspaceAliases(params: {

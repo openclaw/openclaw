@@ -44,6 +44,7 @@ vi.mock("./agent-scope.js", () => ({
   resolveAgentDir: () => "/tmp/agent",
   resolveAgentWorkspaceDir: () => "/tmp/workspace",
   resolveDefaultAgentId: () => "main",
+  resolveSessionAgentIds: () => ({ defaultAgentId: "main", sessionAgentId: "main" }),
 }));
 vi.mock("./cli-backends.js", () => ({
   resolveCliBackendConfig: isolatedCompletionMocks.resolveCliBackendConfig,

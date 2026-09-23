@@ -4,9 +4,9 @@ import { createAdmittedHostCapabilityTestFixture } from "openclaw/plugin-sdk/plu
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as clientCleanup from "./attempt-client-cleanup.js";
 import { codexTestTurnIds } from "./codex-app-server.test-fixtures.js";
-import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
 import { CodexEphemeralTurn } from "./ephemeral-turn.js";
 import { CodexNativeToolLifecycleProjector } from "./event-projector-native-tool-lifecycle.js";
+import { createCodexTestBindingStore } from "./session-binding.test-helpers.js";
 import {
   createClientHarness,
   createCodexTestModel,
@@ -14,10 +14,10 @@ import {
 } from "./test-support.js";
 
 const {
-  readCodexAppServerBindingMock,
   getSharedCodexAppServerClientMock,
   retireSharedCodexAppServerClientIfCurrentMock,
   runCodexAppServerSideQuestion,
+  runCodexAppServerSideQuestionImpl,
   createFakeClient,
   threadResult,
   turnStartResult,
@@ -32,7 +32,6 @@ describe("runCodexAppServerSideQuestion", () => {
   useSideQuestionTestSetup();
 
   it("executes inherited Gateway shell tools through the side run's host authority", async () => {
-    dynamicToolBuildState.openClawCodingToolsFactory = undefined;
     const workspaceDir = tempDirs.make("codex-side-gateway-shell-");
     const config = { tools: { exec: { host: "gateway" as const, mode: "full" as const } } };
     const runId = "side-gateway-shell";
@@ -51,8 +50,7 @@ describe("runCodexAppServerSideQuestion", () => {
     const client = createFakeClient({ completeTurn: false, onTurnStart: turnStarted.resolve });
     getSharedCodexAppServerClientMock.mockResolvedValue(client);
     const parent = { threadId: "parent-thread", cwd: workspaceDir, model: "gpt-5.5" };
-    readCodexAppServerBindingMock.mockReturnValue(parent);
-    const run = runCodexAppServerSideQuestion(
+    const run = runCodexAppServerSideQuestionImpl(
       sideParams({
         cfg: config,
         runtimeModel: createCodexTestModel("openai"),
@@ -70,6 +68,7 @@ describe("runCodexAppServerSideQuestion", () => {
         hostCapabilities: host.hostCapabilities,
         opts: { runId },
       }),
+      { bindingStore: { ...createCodexTestBindingStore(), read: () => parent } },
     );
     try {
       await Promise.race([
@@ -273,7 +272,13 @@ describe("runCodexAppServerSideQuestion", () => {
       const controller = new AbortController();
       const client = createFakeClient({ completeTurn: false });
       const request = client.request.getMockImplementation()!;
+      const turnWaiting = createDeferred<void>();
       const waits = vi.spyOn(CodexEphemeralTurn.prototype, "wait");
+      CodexEphemeralTurn.prototype.wait = function (this: CodexEphemeralTurn, ...args) {
+        const pending = waits.apply(this, args);
+        turnWaiting.resolve();
+        return pending;
+      };
       const terminalCleanup = vi.spyOn(clientCleanup, "terminateCodexBackgroundTerminals");
       const finalize = vi.spyOn(CodexNativeToolLifecycleProjector.prototype, "finalizeActive");
       const projectorError = new Error("side projector finalization failed");
@@ -283,6 +288,7 @@ describe("runCodexAppServerSideQuestion", () => {
         });
       }
       const releaseTermination = createDeferred<void>();
+      const terminationStarted = createDeferred<void>();
       const terminals = new Map([
         ["parent-thread", new Set([10])],
         ["side-thread", new Set([20])],
@@ -294,6 +300,7 @@ describe("runCodexAppServerSideQuestion", () => {
         }
         if (method === "thread/backgroundTerminals/terminate") {
           const { threadId, processId } = requestParams as { threadId: string; processId: number };
+          terminationStarted.resolve();
           await releaseTermination.promise;
           if (!terminationFails) {
             terminals.get(threadId)?.delete(processId);
@@ -312,16 +319,35 @@ describe("runCodexAppServerSideQuestion", () => {
           settled = true;
         });
       try {
-        await vi.waitFor(() =>
-          expect(client.request.mock.calls.some(([method]) => method === "turn/start")).toBe(true),
-        );
+        const waiting = await Promise.race([
+          turnWaiting.promise.then(() => true),
+          terminationStarted.promise.then(() => false),
+          run.then(() => false),
+        ]);
+        if (!waiting) {
+          // Cleanup can be waiting on our terminal gate before the run settles.
+          releaseTermination.resolve();
+          throw new Error("Side question settled before waiting for its native turn", {
+            cause: await run,
+          });
+        }
+        expect(client.request.mock.calls.some(([method]) => method === "turn/start")).toBe(true);
         controller.abort();
-        await vi.waitFor(() =>
-          expect(client.request).toHaveBeenCalledWith(
-            "thread/backgroundTerminals/terminate",
-            { threadId: "side-thread", processId: 20 },
-            expect.any(Object),
-          ),
+        await Promise.race([
+          terminationStarted.promise,
+          run.then((result) => {
+            if (result instanceof Error) {
+              throw result;
+            }
+            throw new Error("Side question settled before cancellation cleanup was ready", {
+              cause: result,
+            });
+          }),
+        ]);
+        expect(client.request).toHaveBeenCalledWith(
+          "thread/backgroundTerminals/terminate",
+          { threadId: "side-thread", processId: 20 },
+          expect.any(Object),
         );
         expect(settled).toBe(false);
         expect(client.request.mock.calls.some(([method]) => method === "thread/unsubscribe")).toBe(

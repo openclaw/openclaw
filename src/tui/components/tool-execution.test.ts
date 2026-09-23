@@ -48,9 +48,20 @@ describe("ToolExecutionComponent", () => {
       }
       component.setExpanded(true);
 
-      const rendered = normalizeTestText(component.render(1_024).join("\n"));
-      for (const line of text.split("\n")) {
-        expect(rendered).toContain(line);
+      for (const phase of [undefined, "update", "end"] as const) {
+        if (phase) {
+          component.setActivity({
+            itemId: "tool:literal",
+            kind: "tool",
+            phase,
+            title: "Code Mode",
+            status: phase === "end" ? "completed" : "running",
+          });
+        }
+        const rendered = normalizeTestText(component.render(1_024).join("\n"));
+        for (const line of text.split("\n")) {
+          expect(rendered).toContain(line);
+        }
       }
     },
   );
@@ -183,21 +194,38 @@ describe("ToolExecutionComponent", () => {
     expect(rendered).toContain(literal);
   });
 
-  it.each([
-    { phase: "partial", complete: false },
-    { phase: "final", complete: true },
-  ])("keeps whitespace-only $phase tool output visually empty", ({ complete }) => {
-    const component = new ToolExecutionComponent("read_file", { path: "example.txt" });
-    const result = { content: [{ type: "text", text: "   \n  " }] };
-    if (complete) {
-      component.setResult(result);
-    } else {
-      component.setPartialResult(result);
-    }
-
-    const rendered = component.render(80).map(normalizeTestText).join("\n");
-    expect(rendered.includes("...")).toBe(!complete);
-  });
+  it.each(
+    [
+      { source: "whitespace-only", text: "   \n  ", placeholder: true },
+      { source: "ANSI-only", text: "\x1b[31m\x1b[0m", placeholder: false },
+    ].flatMap((row) => [
+      { ...row, phase: "partial", complete: false },
+      { ...row, phase: "final", complete: true },
+    ]),
+  )(
+    "keeps $source $phase output empty across activity transitions",
+    ({ text, placeholder, complete }) => {
+      const component = new ToolExecutionComponent("read_file", { path: "example.txt" });
+      const result = { content: [{ type: "text", text }] };
+      if (complete) {
+        component.setResult(result);
+      } else {
+        component.setPartialResult(result);
+      }
+      const hasPlaceholder = () =>
+        component.render(80).map(normalizeTestText).join("\n").includes("...");
+      expect(hasPlaceholder()).toBe(placeholder && !complete);
+      for (const phase of ["end", "update", "end"] as const) {
+        component.setActivity({ itemId: "tool:empty", kind: "tool", phase, title: "Empty output" });
+        expect(component.isActive).toBe(phase !== "end");
+        expect(hasPlaceholder()).toBe(placeholder && phase !== "end");
+      }
+      component.setActivity(null);
+      expect(component.render(80)).toEqual([]);
+      component.setExpanded(true);
+      expect(hasPlaceholder()).toBe(placeholder && !complete);
+    },
+  );
 
   it.each([
     { width: 20, characters: 8_192 },

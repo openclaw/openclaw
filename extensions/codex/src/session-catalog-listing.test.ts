@@ -426,7 +426,11 @@ describe("Codex supervision catalog", () => {
       ),
     );
     await Promise.all([
-      fs.symlink(configuredCodexHome, configuredCodexHomeAlias, "dir"),
+      fs.symlink(
+        configuredCodexHome,
+        configuredCodexHomeAlias,
+        process.platform === "win32" ? "junction" : "dir",
+      ),
       fs.writeFile(configuredFile, "not a directory"),
       fs
         .mkdir(fileAgentDir, { recursive: true })

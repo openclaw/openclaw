@@ -353,7 +353,8 @@ function setDreamingTestTime(offsetMinutes = 0) {
 }
 
 async function withDreamingTestClock(run: () => Promise<void>) {
-  vi.useFakeTimers();
+  // Worker lifecycle deadlines share real monotonic time; only dreaming's wall clock is synthetic.
+  vi.useFakeTimers({ toFake: ["Date"] });
   try {
     await run();
   } finally {
@@ -529,7 +530,7 @@ describe("memory-core dreaming phases", () => {
       workspaceDir,
     );
 
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(now);
     try {
       await beforeAgentReply(
@@ -1797,7 +1798,7 @@ describe("memory-core dreaming phases", () => {
       includeMainAgent: true,
     });
 
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-04-16T19:00:00.000Z"));
     try {
       await beforeAgentReply(
@@ -1901,7 +1902,7 @@ describe("memory-core dreaming phases", () => {
       includeMainAgent: true,
     });
 
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-04-16T19:00:00.000Z"));
     try {
       await beforeAgentReply(

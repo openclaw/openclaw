@@ -55,6 +55,7 @@ function sessionStructurallyMatchesConfiguredBinding(params: {
 
 /** Creates or replaces the ACP session required by one configured binding. */
 export async function ensureConfiguredAcpBindingSession(params: {
+  assertActive?: () => void;
   cfg: OpenClawConfig;
   spec: ConfiguredAcpBindingSpec;
 }): Promise<{ ok: true; sessionKey: string } | { ok: false; sessionKey: string; error: string }> {
@@ -84,7 +85,9 @@ export async function ensureConfiguredAcpBindingSession(params: {
       for (const key of ["model", "thinking"] as const) {
         const value = runtimeOptions[key];
         if (value !== undefined && normalizeText(currentOptions?.[key]) !== value) {
+          params.assertActive?.();
           currentOptions = await acpManager.setSessionConfigOption({
+            ...(params.assertActive ? { assertActive: params.assertActive } : {}),
             cfg: params.cfg,
             agentId: params.spec.agentId,
             sessionKey,
@@ -100,7 +103,9 @@ export async function ensureConfiguredAcpBindingSession(params: {
     }
 
     if (resolution.kind !== "none") {
+      params.assertActive?.();
       await acpManager.closeSession({
+        ...(params.assertActive ? { assertActive: params.assertActive } : {}),
         cfg: params.cfg,
         agentId: params.spec.agentId,
         sessionKey,
@@ -111,7 +116,9 @@ export async function ensureConfiguredAcpBindingSession(params: {
       });
     }
 
+    params.assertActive?.();
     await acpManager.initializeSession({
+      ...(params.assertActive ? { assertActive: params.assertActive } : {}),
       cfg: params.cfg,
       agentId: params.spec.agentId,
       sessionKey,
@@ -141,6 +148,7 @@ export async function ensureConfiguredAcpBindingSession(params: {
 
 /** Resolves a configured binding for a conversation and ensures its ACP session exists. */
 export async function ensureConfiguredAcpBindingReadyCore(params: {
+  assertActive?: () => void;
   cfg: OpenClawConfig;
   configuredBinding: ResolvedConfiguredAcpBinding | null;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
@@ -148,6 +156,7 @@ export async function ensureConfiguredAcpBindingReadyCore(params: {
     return { ok: true };
   }
   const ensured = await ensureConfiguredAcpBindingSession({
+    ...(params.assertActive ? { assertActive: params.assertActive } : {}),
     cfg: params.cfg,
     spec: params.configuredBinding.spec,
   });

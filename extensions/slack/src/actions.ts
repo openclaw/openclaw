@@ -1,4 +1,3 @@
-// Slack plugin module implements actions behavior.
 import type { Block, KnownBlock, WebClient } from "@slack/web-api";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-resolution";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";

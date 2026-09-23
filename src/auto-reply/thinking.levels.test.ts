@@ -708,6 +708,35 @@ describe("listThinkingLevels", () => {
     ).toBe(true);
   });
 
+  it("does not treat provider-native effort labels as user thinking aliases", () => {
+    const catalog = [
+      {
+        provider: "custom",
+        id: "native-efforts",
+        api: "openai-completions",
+        reasoning: true,
+        compat: { supportedReasoningEfforts: ["high", "XHIGH", "MAX", "extra-high", "auto"] },
+      },
+    ];
+
+    expect(listThinkingLevels("custom", "native-efforts", catalog, "openclaw")).toEqual([
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+    ]);
+    expect(
+      isThinkingLevelSupported({
+        provider: "custom",
+        model: "native-efforts",
+        level: "max",
+        catalog,
+        agentRuntime: "openclaw",
+      }),
+    ).toBe(false);
+  });
+
   it("uses advanced catalog efforts and derives OpenClaw Ultra from Max", () => {
     const catalog = [
       {

@@ -10,27 +10,25 @@ import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-m
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  isUsageCostRollupFresh,
-  readUsageCostRollups,
   refreshCostUsageCacheForAgent,
   resolveUsageCostAgentDir,
-  resolveUsageCostCacheDatabasePath,
-  resolveUsageCostPricingFingerprint,
 } from "./session-cost-usage-aggregation.js";
 import {
-  listUsageCountedTranscriptStats,
   readTranscriptRecords,
   readTranscriptRecordsBestEffort,
   resolveExistingUsageSessionFile,
-  resolveUsageCostTranscriptFile,
 } from "./session-cost-usage-collection.js";
 import {
-  computeUsageTokenTotals,
   createUsageCostResolver,
   parseUsageCostTranscriptEntryAsync,
-} from "./session-cost-usage-pricing.js";
-import { createUsageDayKeyFormatter } from "./session-cost-usage-projection.js";
-import { buildSessionCostSummaryFromRollup } from "./session-cost-usage-rollup.js";
+  resolveUsageCostPricingFingerprint,
+} from "./session-cost-usage-pricing-context.js";
+import { computeUsageTokenTotals } from "./session-cost-usage-pricing.js";
+import {
+  prepareUsageCostWorker,
+  resolveUsageCostWorkerDayBucket,
+  runUsageCostWorker,
+} from "./session-cost-usage-worker-runtime.js";
 import type {
   DiscoveredSession,
   SessionCostSummary,
@@ -51,13 +49,17 @@ export async function discoverAllSessions(params: {
   startMs?: number;
   endMs?: number;
 }): Promise<DiscoveredSession[]> {
-  const files = await listUsageCountedTranscriptStats(params.agentId, {
+  const result = await runUsageCostWorker(prepareUsageCostWorker(params), {
+    kind: "inventory",
     minMtimeMs: params.startMs,
   });
+  if (result.kind !== "inventory") {
+    throw new Error("Usage worker returned an invalid session inventory");
+  }
 
   const discovered = new Map<string, DiscoveredSession>();
 
-  for (const file of files) {
+  for (const file of result.files) {
     // Do not exclude by endMs: a session can have activity in range even if it continued later.
     const { sourcePath: sessionFile, sessionId } = file;
     if (!sessionId) {
@@ -111,18 +113,23 @@ export async function loadSessionCostSummary(params: {
   if (!sessionFile) {
     return null;
   }
-  const file = await resolveUsageCostTranscriptFile(sessionFile);
-  if (!file) {
+  const prepared = prepareUsageCostWorker({ ...params, sessionFiles: [sessionFile] });
+  const inventory = await runUsageCostWorker(prepared, {
+    kind: "inventory",
+    sessionFiles: [sessionFile],
+  });
+  if (inventory.kind !== "inventory") {
+    throw new Error("Usage worker returned an invalid session inventory");
+  }
+  if (inventory.files.length === 0) {
     return null;
   }
-  const agentDir = resolveUsageCostAgentDir(params.config, params.agentId);
-  const databasePath = resolveUsageCostCacheDatabasePath(params.agentId);
   while (
     (await refreshCostUsageCacheForAgent({
       config: params.config,
       agentId: params.agentId,
-      agentDir,
-      databasePath,
+      agentDir: prepared.agentDir,
+      databasePath: prepared.location.databasePath,
       sessionFiles: [sessionFile],
     })) === "busy"
   ) {
@@ -132,27 +139,23 @@ export async function loadSessionCostSummary(params: {
       setTimeout(resolve, USAGE_COST_DIRECT_REFRESH_RETRY_MS);
     });
   }
-  const currentFile = await resolveUsageCostTranscriptFile(sessionFile);
-  if (!currentFile) {
-    return null;
-  }
-  const pricingFingerprint = await resolveUsageCostPricingFingerprint(params.config, agentDir);
-  const stored = readUsageCostRollups(params.agentId, pricingFingerprint, databasePath, {
-    filePaths: [currentFile.filePath],
-  }).get(currentFile.filePath);
-  if (!stored || !isUsageCostRollupFresh({ stored, file: currentFile })) {
-    return null;
-  }
-  const hasExplicitRange = params.startMs !== undefined || params.endMs !== undefined;
-  return buildSessionCostSummaryFromRollup({
-    rollup: stored.entry.rollup,
-    sessionId: params.sessionId,
-    sessionFile,
-    startMs: params.startMs ?? Number.NEGATIVE_INFINITY,
-    endMs: params.endMs ?? Number.POSITIVE_INFINITY,
-    includeUntimestamped: params.includeUntimestamped === true || !hasExplicitRange,
-    formatDay: createUsageDayKeyFormatter(params.dayBucket),
+  const pricingFingerprint = await resolveUsageCostPricingFingerprint(
+    prepared.config,
+    prepared.agentDir,
+  );
+  const result = await runUsageCostWorker(prepared, {
+    kind: "sessions",
+    pricingFingerprint,
+    sessions: [{ sessionId: params.sessionId, sessionFile }],
+    startMs: params.startMs,
+    endMs: params.endMs,
+    includeUntimestamped: params.includeUntimestamped,
+    dayBucket: resolveUsageCostWorkerDayBucket(params.dayBucket),
   });
+  if (result.kind !== "sessions") {
+    throw new Error("Usage worker returned an invalid session summary");
+  }
+  return result.summaries[0] ?? null;
 }
 
 export async function loadSessionUsageTimeSeries(params: {

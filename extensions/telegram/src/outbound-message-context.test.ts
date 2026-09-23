@@ -1,27 +1,20 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { buildTelegramGroupPeerId } from "./bot/helpers.js";
-import { recordTelegramGroupHistoryEntry } from "./group-history-window.js";
+import { hasProviderObservedTelegramThreadBinding } from "./message-cache-codec.js";
 import { resolveTelegramMessageCacheScope } from "./message-cache-persistence.js";
-import {
-  createTelegramMessageCache,
-  hasProviderObservedTelegramThreadBinding,
-} from "./message-cache.js";
-import {
-  recordOutboundMessageForPromptContext,
-  registerTelegramOutboundGroupHistoryRecorder,
-} from "./outbound-message-context.js";
+import { createTelegramMessageCache } from "./message-cache.js";
+import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
 import { setTelegramPluginStateRuntimeForTests } from "./runtime-state.test-support.js";
 import {
   clearTelegramRuntimeForTest as clearTelegramRuntime,
   resetTelegramMessageCacheForTest as resetTelegramMessageCacheBucketsForTest,
 } from "./runtime.test-support.js";
 
-const cfg = {
-  session: { store: "/tmp/openclaw-telegram-outbound-context-test.json" },
-} satisfies OpenClawConfig;
+let cfg: OpenClawConfig;
+let testState: OpenClawTestState;
 
 async function recordAndRead(
   params: Omit<Parameters<typeof recordOutboundMessageForPromptContext>[0], "cfg">,
@@ -37,21 +30,27 @@ async function recordAndRead(
 
 function createPromptContextCache() {
   return createTelegramMessageCache({
-    scope: resolveTelegramMessageCacheScope(resolveStorePath(cfg.session.store)),
+    scope: resolveTelegramMessageCacheScope(resolveStorePath(cfg.session?.store)),
   });
 }
 
 describe("recordOutboundMessageForPromptContext", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    testState = await createOpenClawTestState({
+      label: "telegram-outbound-history",
+      layout: "state-only",
+    });
+    cfg = { session: { store: testState.statePath("sessions", "sessions.json") } };
     resetPluginStateStoreForTests();
     resetTelegramMessageCacheBucketsForTest();
     setTelegramPluginStateRuntimeForTests();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     clearTelegramRuntime();
     resetTelegramMessageCacheBucketsForTest();
     resetPluginStateStoreForTests();
+    await testState.cleanup();
   });
 
   it("uses the configured self name and drops stale Telegram display-name fields", async () => {
@@ -154,57 +153,57 @@ describe("recordOutboundMessageForPromptContext", () => {
     expect(cached?.threadBinding?.threadSpec).toEqual({ scope: "direct-messages", id: 77 });
   });
 
-  it("records forum and channel Direct Messages replies with the same topic ID in separate histories", async () => {
+  it("retains forum and channel Direct Messages thread provenance without exposing topicless history", async () => {
     const chatId = -1001;
-    const history = new Map<string, Array<{ sender: string; body: string; messageId: string }>>();
-    const unregister = registerTelegramOutboundGroupHistoryRecorder({
-      accountId: "default",
-      recorder: (record) =>
-        recordTelegramGroupHistoryEntry({
-          historyMap: history,
-          historyKey: buildTelegramGroupPeerId(record.chatId, record.threadSpec),
-          limit: 10,
-          entry: {
-            sender: "Configured Agent (you)",
-            body: record.text ?? "<media>",
-            messageId: String(record.messageId),
-          },
-        }),
-    });
-
-    try {
-      for (const { scope, messageId, body } of [
-        { scope: "forum", messageId: 710, body: "Forum reply" },
-        { scope: "direct-messages", messageId: 711, body: "Direct-topic reply" },
-      ] as const) {
-        await recordOutboundMessageForPromptContext({
-          cfg,
-          account: { accountId: "default", name: "Configured Agent" },
-          chatId,
-          messageId,
-          messageThreadId: 77,
-          successfulSendThread: { scope, id: 77 },
-          message: {
-            chat: { id: chatId, type: "supergroup" },
-            date: 1_736_380_700,
-            message_id: messageId,
-            ...(scope === "forum"
-              ? { message_thread_id: 77 }
-              : { direct_messages_topic: { topic_id: 77 } }),
-            text: body,
-          },
-        });
-      }
-
-      expect(history.get("-1001:direct-topic:77")).toEqual([
-        expect.objectContaining({ body: "Direct-topic reply", messageId: "711" }),
-      ]);
-      expect(history.get("-1001:topic:77")).toEqual([
-        expect.objectContaining({ body: "Forum reply", messageId: "710" }),
-      ]);
-    } finally {
-      unregister();
+    for (const { scope, messageId, body } of [
+      { scope: "forum", messageId: 710, body: "Forum reply" },
+      { scope: "direct-messages", messageId: 711, body: "Direct-topic reply" },
+    ] as const) {
+      await recordOutboundMessageForPromptContext({
+        cfg,
+        account: { accountId: "default", name: "Configured Agent" },
+        chatId,
+        messageId,
+        messageThreadId: 77,
+        successfulSendThread: { scope, id: 77 },
+        message: {
+          chat: { id: chatId, type: "supergroup" },
+          date: 1_736_380_700,
+          message_id: messageId,
+          ...(scope === "forum"
+            ? { message_thread_id: 77 }
+            : { direct_messages_topic: { topic_id: 77 } }),
+          text: body,
+        },
+      });
     }
+
+    resetTelegramMessageCacheBucketsForTest();
+    const cache = createPromptContextCache();
+    const history = await cache.readHistory({
+      accountId: "default",
+      chatId,
+      threadId: 77,
+      limit: 10,
+    });
+    expect(history.messages).toMatchObject([
+      {
+        messageId: "710",
+        body: "Forum reply",
+        sender: "Configured Agent (you)",
+        threadBinding: { threadSpec: { scope: "forum", id: 77 } },
+      },
+      {
+        messageId: "711",
+        body: "Direct-topic reply",
+        sender: "Configured Agent (you)",
+        threadBinding: { threadSpec: { scope: "direct-messages", id: 77 } },
+      },
+    ]);
+    expect(await cache.readHistory({ accountId: "default", chatId, limit: 10 })).toEqual({
+      messages: [],
+      hasMore: false,
+    });
   });
 
   it("binds a successful General-topic response from trusted send context", async () => {

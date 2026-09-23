@@ -175,6 +175,39 @@ describe("check-workflows", () => {
     );
   });
 
+  it("rejects a python3 below the pinned pre-commit runtime floor before building a venv", () => {
+    const tempDir = makeTempDir(tempDirs, "check-workflows-");
+    const binDir = path.join(tempDir, "bin");
+    const markerPath = path.join(tempDir, "venv-attempt.txt");
+    mkdirSync(binDir);
+    writeFileSync(
+      path.join(binDir, "python3"),
+      [
+        "#!/bin/sh",
+        'if [ "$1" = "--version" ]; then printf "Python 3.9.6\\n"; exit 0; fi',
+        'if [ "$1" = "-m" ] && [ "$2" = "pre_commit" ] && [ "$3" = "--version" ]; then exit 1; fi',
+        'printf "%s\\n" "$*" >> "$VENV_ATTEMPT_MARKER"',
+        "exit 1",
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+
+    const result = spawnSync(testNodeExecPath, ["--import", "tsx", scriptPath], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PATH: binDir,
+        VENV_ATTEMPT_MARKER: markerPath,
+      },
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("python3 is 3.9.6");
+    expect(result.stderr).toContain("pre-commit 4.6.2 requires Python >=3.10");
+    expect(existsSync(markerPath)).toBe(false);
+  });
+
   it("prints the missing runtime diagnostic when Python venv support is unavailable", () => {
     const tempDir = makeTempDir(tempDirs, "check-workflows-");
     const binDir = path.join(tempDir, "bin");
@@ -293,7 +326,9 @@ describe("check-workflows", () => {
       "blacksmith-16vcpu-windows-2025",
     );
     expect(native).not.toBe(probe);
-    expect(native.if).toBe("${{ inputs.run_windows_ci }}");
+    expect(native.if).toBe(
+      "${{ inputs.run_windows_ci && !inputs.run_private_node_provisioning && inputs.windows_ci_replay == '' }}",
+    );
     expect(native["runs-on"]).toBe("windows-2025");
     expect(probe.if).toBeUndefined();
     expect(probe["runs-on"]).toBe("${{ inputs.runner_label }}");
@@ -311,7 +346,9 @@ describe("check-workflows", () => {
     expect(probe.steps.some((step) => step.id?.startsWith("native_"))).toBe(false);
     expect(
       probe.steps.find((step) => step.name === "Keep runner alive for SSH inspection")?.if,
-    ).toBe("${{ always() && !cancelled() }}");
+    ).toBe(
+      "${{ always() && !cancelled() && !inputs.run_private_node_provisioning && inputs.windows_ci_replay == '' }}",
+    );
     expect(probe.steps.find((step) => step.name === "Enforce WSL2 requirement")?.if).toBe(
       "${{ always() && !cancelled() && inputs.require_wsl2 }}",
     );
@@ -325,7 +362,8 @@ describe("check-workflows", () => {
     });
     const preflight = native.steps[1]!;
     expect(preflight.name).toBe("Preflight native Scheduled Task session");
-    expect(preflight.if).toBe(native.if);
+    // The job excludes private proof and replay before allocation; native steps retain the CI opt-in.
+    expect(preflight.if).toBe("${{ inputs.run_windows_ci }}");
     expect(preflight.run).toContain(
       'if (-not [Environment]::UserInteractive) {\n  throw "Native Scheduled Task proof requires an interactive Windows runner session."\n}',
     );
@@ -356,7 +394,7 @@ describe("check-workflows", () => {
     });
     expect(native.steps.find((step) => step.name === "Setup Node.js")?.env).toMatchObject({
       REQUESTED_NODE_VERSION:
-        "${{ inputs.installed_startup_package != '' && inputs.startup_node_version || '24.x' }}",
+        "${{ inputs.windows_ci_replay != '' && env.OPENCLAW_WINDOWS_REPLAY_NODE_VERSION || inputs.installed_startup_package != '' && inputs.startup_node_version || '24.x' }}",
     });
     expect(native.steps.find((step) => step.name === "Setup pnpm")?.uses).toBe(
       "./.github/actions/setup-pnpm-store-cache",
@@ -373,9 +411,14 @@ describe("check-workflows", () => {
       type: "string",
     });
     expect(workflow.on.workflow_dispatch.inputs.startup_node_version?.default).toBe("26.8.2");
+    expect(workflow.on.workflow_dispatch.inputs.installed_startup_cpu_diagnostic).toMatchObject({
+      default: false,
+      type: "boolean",
+    });
     const validation = probe.steps.find((step) => step.id === "startup_input")!;
     expect(validation.env).toMatchObject({
       STARTUP_PACKAGE: "${{ inputs.installed_startup_package }}",
+      CPU_DIAGNOSTIC: "${{ inputs.installed_startup_cpu_diagnostic }}",
     });
     expect(validation.run).toContain("$producer.run_attempt");
     expect(validation.run).toContain("$artifact.digest");
@@ -392,11 +435,22 @@ describe("check-workflows", () => {
     const measure = probe.steps.find((step) => step.name === "Measure installed startup cohort")!;
     expect(measure.if).toBe("${{ inputs.installed_startup_package != '' }}");
     expect(measure.run).toContain("scripts/bench-gateway-startup.ts --installed-cohort");
+    expect(measure.env).toMatchObject({
+      CPU_DIAGNOSTIC: "${{ inputs.installed_startup_cpu_diagnostic }}",
+    });
+    expect(measure.run).toContain('if ($env:CPU_DIAGNOSTIC -eq "true")');
+    expect(measure.run).toContain('@("--installed-cpu-diagnostic")');
     expect(native.steps).not.toContainEqual(measure);
     const upload = probe.steps.find((step) => step.name === "Upload installed startup evidence")!;
     expect(upload.if).toBe("${{ always() && inputs.installed_startup_package != '' }}");
     expect(upload.with?.path).toBe(
-      ".artifacts/windows-installed-startup/*.json\n.artifacts/windows-installed-startup/*.log\n",
+      [
+        ".artifacts/windows-installed-startup/*.json",
+        ".artifacts/windows-installed-startup/*.log",
+        ".artifacts/windows-installed-startup/results.json.profiles/*.cpuprofile",
+        ".artifacts/windows-installed-startup/results.json.profiles/*.json",
+        "",
+      ].join("\n"),
     );
     expect(upload.with?.["if-no-files-found"]).toBe("error");
   });
@@ -410,7 +464,7 @@ describe("check-workflows", () => {
       (step) => step.name === "Remove retained native Scheduled Task evidence",
     )!;
     expect(proof["timeout-minutes"]).toBe(5);
-    expect(proof.if).toBe(native.if);
+    expect(proof.if).toBe("${{ inputs.run_windows_ci }}");
     expect(proof.env).toMatchObject({
       EXPECTED_HEAD: "${{ inputs.target_ref }}",
       CI_WINDOWS_SCHTASKS_ROOT:

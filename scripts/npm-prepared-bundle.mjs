@@ -22,6 +22,7 @@ import {
   inspectActionsArtifactZipWithPolicy,
   readBoundedRegularFile,
 } from "./lib/actions-artifact-archive.mjs";
+import { assertNpmShrinkwrapDependencies } from "./lib/npm-shrinkwrap-dependencies.mjs";
 import { isRecord } from "./lib/record-shared.mjs";
 import { resolveReleaseTagPackageIdentity } from "./lib/release-version.mjs";
 import { runReleaseToolingGh } from "./release-tooling-identity.mjs";
@@ -142,7 +143,7 @@ function validateProducer(producer, { repository, toolingSha, jobName }) {
   return producer;
 }
 
-function validateCorePackages(corePackages, version) {
+export function validatePreparedCorePackages(corePackages, version) {
   if (!Array.isArray(corePackages) || corePackages.length > CORE_PACKAGES.length) {
     throw new Error("Invalid prepared core package inventory.");
   }
@@ -207,7 +208,7 @@ export function validatePreparedNpmBundleDescriptor({
   fileName(pkg.fileName);
   digest(pkg.sha256, "root tarball digest");
   digest(descriptor.manifestSha256, "package manifest digest");
-  validateCorePackages(descriptor.corePackages, pkg.version);
+  validatePreparedCorePackages(descriptor.corePackages, pkg.version);
   if (descriptor.corePackages.some((entry) => entry.tarballName === pkg.fileName)) {
     throw new Error("Prepared root and core tarball filenames overlap.");
   }
@@ -699,18 +700,42 @@ export function prepareNpmPackageBundle({
   releaseTag: requestedReleaseTag = "",
   npmDistTag,
   producer,
+  prepareRootShrinkwrap = ({ aiTarballPath }) => {
+    execFileSync(
+      process.execPath,
+      [
+        "--import",
+        join(sourceDir, "scripts/tsx.mjs"),
+        join(sourceDir, "scripts/prepare-openclaw-npm-shrinkwrap.ts"),
+        aiTarballPath,
+      ],
+      { cwd: sourceDir, stdio: "inherit" },
+    );
+  },
   runPack = (directory, destination) =>
-    execFileSync("pnpm", ["--dir", directory, "pack", "--pack-destination", destination], {
-      env: {
-        ...process.env,
-        OPENCLAW_PREPACK_PREPARED: "1",
-        ...(/^[a-f0-9]{40}$/u.test(releaseRef)
-          ? { OPENCLAW_PREPACK_ALLOW_UNRELEASED_CHANGELOG: "1" }
-          : {}),
+    // Bundled dependencies only pack under the hoisted linker; prepack scripts stay enabled.
+    execFileSync(
+      "pnpm",
+      [
+        "--dir",
+        directory,
+        "pack",
+        "--config.node-linker=hoisted",
+        "--pack-destination",
+        destination,
+      ],
+      {
+        env: {
+          ...process.env,
+          OPENCLAW_PREPACK_PREPARED: "1",
+          ...(/^[a-f0-9]{40}$/u.test(releaseRef)
+            ? { OPENCLAW_PREPACK_ALLOW_UNRELEASED_CHANGELOG: "1" }
+            : {}),
+        },
+        stdio: "inherit",
+        timeout: 30 * 60 * 1000,
       },
-      stdio: "inherit",
-      timeout: 30 * 60 * 1000,
-    }),
+    ),
 }) {
   const { sourceSha, root, releaseTag, baseTag } = readReleaseSourceIdentity({
     sourceDir,
@@ -750,6 +775,21 @@ export function prepareNpmPackageBundle({
     if (manifest.name !== packageName || manifest.version !== root.version) {
       throw new Error(`Packed identity mismatch for ${packageName}.`);
     }
+    if (packageName === "openclaw") {
+      const entries = execFileSync("tar", ["-tzf", path], {
+        encoding: "utf8",
+        maxBuffer: 16 * 1024 * 1024,
+      }).split("\n");
+      if (entries.includes("package/npm-shrinkwrap.json")) {
+        const shrinkwrap = JSON.parse(
+          execFileSync("tar", ["-xOf", path, "package/npm-shrinkwrap.json"], {
+            encoding: "utf8",
+            maxBuffer: MAX_MANIFEST_BYTES,
+          }),
+        );
+        assertNpmShrinkwrapDependencies(manifest, shrinkwrap);
+      }
+    }
     return {
       packageName,
       packageVersion: root.version,
@@ -777,6 +817,13 @@ export function prepareNpmPackageBundle({
     }
     return [pack(directory, packageName)];
   });
+  const aiPackage = corePackageTarballs.find(({ packageName }) => packageName === "@openclaw/ai");
+  const hasRootShrinkwrap = existsSync(join(sourceDir, "npm-shrinkwrap.json"));
+  if (aiPackage && hasRootShrinkwrap) {
+    prepareRootShrinkwrap({
+      aiTarballPath: join(outputDir, aiPackage.tarballName),
+    });
+  }
   const packed = pack(sourceDir, "openclaw");
   const manifest = {
     schema: PACKAGE_MANIFEST_SCHEMA,

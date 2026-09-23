@@ -7,7 +7,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginLifecycleReason } from "../plugins/lifecycle.js";
 import { getActivePluginRegistry, getActivePluginRegistryVersion } from "../plugins/runtime.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/account-id.js";
-import { isTranscriptTitleOnlyConfigChange } from "../transcripts/config-reload.js";
 import { isPlainObject } from "../utils.js";
 import { canHotReloadGatewayAuthCredentials } from "./auth-resolve.js";
 
@@ -79,19 +78,12 @@ type ReloadPolicy = {
 };
 type ReloadRule = Omit<ReloadPolicy, "prefixes"> & { prefix: string };
 
-type ConfigReloadMetadata = {
-  kind: ReloadRule["kind"];
-};
-
 type GatewayReloadPlanOptions = {
   noopPaths?: Iterable<string>;
   forceChangedPaths?: Iterable<string>;
   /** Candidate config used to reject removed, unknown, or unresolvable account targets. */
   candidateConfig?: OpenClawConfig;
   previousConfig?: OpenClawConfig;
-  /** Authored comparison snapshots retain intent that runtime overlays may hide. */
-  previousCompareConfig?: OpenClawConfig;
-  candidateCompareConfig?: OpenClawConfig;
 };
 
 const PLUGIN_INSTALL_TIMESTAMP_KEYS = ["installedAt", "resolvedAt"] as const;
@@ -139,10 +131,17 @@ function expandReloadPolicies(policies: ReloadPolicy[]): ReloadRule[] {
     .toSorted(compareReloadRules);
 }
 
+const AGENT_ROSTER_RELOAD_ACTIONS: readonly ReloadAction[] = [
+  "restartHeartbeat",
+  "reconcileSystemJobs",
+  "refreshHooksPolicy",
+  "reloadInternalHooks",
+];
+
 const CORE_RELOAD_POLICIES: ReloadPolicy[] = [
   { prefixes: ["gateway.remote", "gateway.reload"], kind: "none" },
   {
-    prefixes: [...AUTH_CREDENTIAL_PATHS, "mcp.apps", "secrets.egressProxy"],
+    prefixes: [...AUTH_CREDENTIAL_PATHS, "mcp.apps", "secrets.egressProxy", "gateway.portals"],
     kind: "restart",
   },
   {
@@ -161,6 +160,7 @@ const CORE_RELOAD_POLICIES: ReloadPolicy[] = [
       "gateway.controlUi.embedSandbox",
       "gateway.controlUi.allowExternalEmbedUrls",
       "gateway.controlUi.automaticallyFetchFavicons",
+      "gateway.controlUi.experimental.customPlugins",
       "gateway.controlUi.allowedOrigins",
       "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback",
       "gateway.nodes.browser",
@@ -171,10 +171,18 @@ const CORE_RELOAD_POLICIES: ReloadPolicy[] = [
       "gateway.push.apns.relay",
       "gateway.terminal",
       "gateway.auth.rateLimit",
+      "gateway.roles",
+      "gateway.trustedProxies",
+      "gateway.allowRealIpFallback",
+      "gateway.auth.allowTailscale",
+      "gateway.auth.identityScopes",
+      "gateway.auth.trustedProxy",
       "diagnostics.enabled",
       "discovery.mdns.mode",
       "mcp.apps.sandboxOrigin",
       "agents.defaults",
+      "desktop.host",
+      "cloudWorkers",
     ],
     kind: "hot",
   },
@@ -200,12 +208,12 @@ const CORE_RELOAD_POLICIES: ReloadPolicy[] = [
   {
     prefixes: ["agents.entries"],
     kind: "hot",
-    actions: [
-      "restartHeartbeat",
-      "reconcileSystemJobs",
-      "refreshHooksPolicy",
-      "reloadInternalHooks",
-    ],
+    actions: AGENT_ROSTER_RELOAD_ACTIONS,
+  },
+  {
+    prefixes: ["agents.entries.*.decisionModel"],
+    kind: "hot",
+    actions: [...AGENT_ROSTER_RELOAD_ACTIONS, "reloadPlugins"],
   },
   {
     prefixes: ["agents.defaults.sessionStore", "agents.ownership"],
@@ -217,8 +225,14 @@ const CORE_RELOAD_POLICIES: ReloadPolicy[] = [
     kind: "hot",
     actions: ["reconcileSystemJobs"],
   },
+  {
+    prefixes: ["agents.defaults.decisionModel"],
+    kind: "hot",
+    actions: ["reloadPlugins"],
+  },
   { prefixes: ["plugins.load", "plugins.installs"], kind: "hot", actions: ["reloadPlugins"] },
   { prefixes: ["cron"], kind: "hot", actions: ["restartCron"] },
+  { prefixes: ["transcripts", "cloudWorkers.profiles"], kind: "hot", actions: ["reloadPlugins"] },
   { prefixes: ["mcp", "gateway.publicOrigin"], kind: "hot", actions: ["disposeMcpRuntimes"] },
   // Capability ownership changes replace the plugin generation that owns its routes.
   {
@@ -262,11 +276,11 @@ const DEFAULT_RELOAD_POLICIES: ReloadPolicy[] = [
       "broadcast",
       "memory.citations",
       "worktreeRoot",
-      "cloudWorkers.projectProfiles",
+      "worktreeAcceleration",
       "security.audit.suppressions",
       "security.installPolicy",
       "diagnostics.cacheTrace.enabled",
-      "acp.runtime.installCommand",
+      "acp",
       "attachments.ttlHours",
       "update.checkOnStart",
       "update.channel",
@@ -400,7 +414,7 @@ function matchRule(path: string): ReloadRule | undefined {
   return getReloadPolicyCatalog().rules.find(({ prefix }) => matchesReloadPrefix(path, prefix));
 }
 
-export function resolveConfigReloadMetadata(path: string): ConfigReloadMetadata {
+export function resolveConfigReloadMetadata(path: string): Pick<ReloadRule, "kind"> {
   if (isPluginInstallTimestampPath(path)) {
     return { kind: "none" };
   }
@@ -504,22 +518,6 @@ export function buildGatewayReloadPlan(
   };
 
   for (const path of changedPaths) {
-    // Arrays diff at their parent path. Titles configure future admissions;
-    // retaining this exact live capture must not rename or finalize its archive.
-    if (
-      path === "transcripts.autoStart" &&
-      !forceChangedPaths.has(path) &&
-      options.previousConfig &&
-      options.candidateConfig &&
-      options.candidateConfig.gateway?.reload?.mode !== "off" &&
-      isTranscriptTitleOnlyConfigChange(
-        options.previousCompareConfig ?? options.previousConfig,
-        options.candidateCompareConfig ?? options.candidateConfig,
-      )
-    ) {
-      plan.noopPaths.push(path);
-      continue;
-    }
     const isTimestampNoop =
       !forceChangedPaths.has(path) &&
       (noopPaths.size > 0 ? noopPaths.has(path) : isPluginInstallTimestampPath(path));

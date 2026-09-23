@@ -456,6 +456,7 @@ internal fun OpenClawWearApp(
     AppScaffold {
       OpenClawWearScreens(
         snapshot = snapshot,
+        readReply = viewModel::readReply,
         failure = failure,
         loading = state.loading,
         interaction = resolvedInteraction,

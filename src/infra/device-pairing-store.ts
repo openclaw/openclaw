@@ -1,5 +1,6 @@
 // SQLite row mapping for device pairing and bootstrap-token snapshots.
 // Immediate transactions preserve last-writer-wins semantics across Gateway and CLI processes.
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { DatabaseSync } from "node:sqlite";
 import {
   resolvePairingSetupAccess,
@@ -23,12 +24,18 @@ import {
   type OpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
-import { clearDeviceAuthTokenFromDatabase } from "./device-auth-store.js";
+import { clearDeviceAuthTokenFromDatabase } from "./device-auth-store.kernel.js";
 import { bindCloudWorkerSetupCompletion } from "./device-pairing-cloud-worker.js";
+import type { CloudWorkerSetupCompletionPublication } from "./device-pairing-read.types.js";
+import {
+  invalidateDevicePairingStoreCache,
+  readCachedDevicePairingStoreSnapshot,
+} from "./device-pairing-store-cache.js";
 import type {
   DeviceAuthToken,
   DeviceBootstrapTokenRecord,
   DevicePairingPendingRecord,
+  DevicePairingStoreState,
   DevicePairSetupCompletionRecord,
   PairedDevice,
   PairedDeviceApprovalKind,
@@ -40,13 +47,11 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
-import { readSqliteDataVersion } from "./node-sqlite.js";
 import { clearApnsRegistrationFromDatabase } from "./push-apns-store-transaction.js";
+import { stageSqliteTransactionState } from "./sqlite-post-commit.js";
+import { getSqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
 
-export type DevicePairingStoreState = {
-  pendingById: Record<string, DevicePairingPendingRecord>;
-  pairedByDeviceId: Record<string, PairedDevice>;
-};
+export type { DevicePairingStoreState } from "./device-pairing.types.js";
 
 const DEVICE_BOOTSTRAP_TOKEN_COLUMNS_WITHOUT_SETUP = [
   "device_id",
@@ -60,18 +65,6 @@ const DEVICE_BOOTSTRAP_TOKEN_COLUMNS_WITHOUT_SETUP = [
   "token_key",
   "ts",
 ] as const satisfies readonly (keyof DeviceBootstrapTokens)[];
-
-type DevicePairingStoreValidityToken = {
-  dataVersion: number;
-  totalChanges: number;
-};
-
-type DevicePairingStoreCache = {
-  connection: DatabaseSync;
-  path: string;
-  state: DevicePairingStoreState;
-  validityToken: DevicePairingStoreValidityToken;
-};
 
 type DevicePairingStoreMutation<T> = {
   mutated: boolean;
@@ -91,47 +84,23 @@ type PairedDevicePresenceUpdate<T> =
       lastSeenReason: string;
     };
 
-// One materialized pairing snapshot avoids rescanning both tables for every node catalog read.
-// The connection token detects other-process writes, and store-owned writes clear it post-commit;
-// without both paths, Gateway and CLI pairing mutations could leave node.list serving stale rows.
-let devicePairingStoreCache: DevicePairingStoreCache | undefined;
+const boundDatabase = new AsyncLocalStorage<OpenClawStateDatabase>();
+
+/** Keep nested domain kernels on the broker's admitted physical connection. */
+export function withDevicePairingStoreDatabase<T>(
+  database: OpenClawStateDatabase,
+  operate: () => T,
+): T {
+  return boundDatabase.run(database, operate);
+}
 
 /** Route an explicit pairing base dir (tests, alternate state roots) to that dir's DB. */
 function resolveDevicePairingStateDbOptions(baseDir?: string): OpenClawStateDatabaseOptions {
+  const database = boundDatabase.getStore();
+  if (database) {
+    return { database, path: database.path, env: getSqliteWorkerStateContext().environment };
+  }
   return baseDir ? { env: { ...process.env, OPENCLAW_STATE_DIR: baseDir } } : {};
-}
-
-function readTotalChanges(database: DatabaseSync): number {
-  const row = database.prepare("SELECT total_changes() AS value").get() as { value?: unknown };
-  if (typeof row.value !== "number") {
-    throw new Error("SQLite did not return a numeric total_changes() value");
-  }
-  return row.value;
-}
-
-function readDevicePairingStoreValidityToken(
-  database: DatabaseSync,
-): DevicePairingStoreValidityToken {
-  return {
-    dataVersion: readSqliteDataVersion(database),
-    totalChanges: readTotalChanges(database),
-  };
-}
-
-function devicePairingStoreValidityTokensEqual(
-  left: DevicePairingStoreValidityToken,
-  right: DevicePairingStoreValidityToken,
-): boolean {
-  return left.dataVersion === right.dataVersion && left.totalChanges === right.totalChanges;
-}
-
-function invalidateDevicePairingStoreCache(database: OpenClawStateDatabase): void {
-  if (
-    devicePairingStoreCache?.connection === database.db &&
-    devicePairingStoreCache.path === database.path
-  ) {
-    devicePairingStoreCache = undefined;
-  }
 }
 
 function runDevicePairingStoreMutation<T>(
@@ -140,11 +109,21 @@ function runDevicePairingStoreMutation<T>(
 ): T {
   const databaseOptions = resolveDevicePairingStateDbOptions(baseDir);
   const database = openOpenClawStateDatabase(databaseOptions);
-  const result = runOpenClawStateWriteTransaction(mutate, { ...databaseOptions, database });
-  if (result.mutated) {
-    invalidateDevicePairingStoreCache(database);
-  }
-  return result.value;
+  return runOpenClawStateWriteTransaction(
+    (transactionDatabase) => {
+      const result = mutate(transactionDatabase);
+      if (result.mutated) {
+        // Transaction-local reads bypass the cache; only real commits invalidate it.
+        stageSqliteTransactionState(transactionDatabase.db, {
+          stage: () => undefined,
+          rollback: () => undefined,
+          commit: () => invalidateDevicePairingStoreCache(transactionDatabase),
+        });
+      }
+      return result.value;
+    },
+    { ...databaseOptions, database },
+  );
 }
 
 // Read-back allowlist for the approved_via column. The Record type forces
@@ -375,32 +354,11 @@ export function readDevicePairingStoreStateFromDatabase(db: DatabaseSync): Devic
 /** Load the full pending + paired device snapshot from the shared state DB. */
 export function loadDevicePairingStoreState(baseDir?: string): DevicePairingStoreState {
   const database = openOpenClawStateDatabase(resolveDevicePairingStateDbOptions(baseDir));
-  const { db } = database;
-  const validityToken = readDevicePairingStoreValidityToken(db);
-  if (
-    devicePairingStoreCache?.connection === db &&
-    devicePairingStoreCache.path === database.path &&
-    devicePairingStoreValidityTokensEqual(devicePairingStoreCache.validityToken, validityToken)
-  ) {
-    return structuredClone(devicePairingStoreCache.state);
-  }
-  const state = readDevicePairingStoreStateFromDatabase(db);
-  devicePairingStoreCache = {
-    connection: db,
-    path: database.path,
-    state: structuredClone(state),
-    validityToken,
-  };
-  return state;
-}
-
-/** Load one paired-device row without materializing either pairing table. */
-export function loadPairedDevicePairingStoreRecord(
-  deviceId: string,
-  baseDir?: string,
-): PairedDevice | null {
-  const { db } = openOpenClawStateDatabase(resolveDevicePairingStateDbOptions(baseDir));
-  return loadPairedDevicePairingStoreRecordFromDatabase(db, deviceId);
+  return structuredClone(
+    readCachedDevicePairingStoreSnapshot(database.db, database.path, () =>
+      readDevicePairingStoreStateFromDatabase(database.db),
+    ).state,
+  );
 }
 
 /** Load one paired-device row from an existing shared-state transaction. */
@@ -527,6 +485,12 @@ export function loadDeviceBootstrapTokenRecords(
   baseDir?: string,
 ): Record<string, DeviceBootstrapTokenRecord> {
   const { db } = openOpenClawStateDatabase(resolveDevicePairingStateDbOptions(baseDir));
+  return readDeviceBootstrapTokenRecordsFromDatabase(db);
+}
+
+export function readDeviceBootstrapTokenRecordsFromDatabase(
+  db: DatabaseSync,
+): Record<string, DeviceBootstrapTokenRecord> {
   const kysely = getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db);
   const state: Record<string, DeviceBootstrapTokenRecord> = {};
   const hasSetupId = tableHasColumn(db, "device_bootstrap_tokens", "setup_id");
@@ -580,7 +544,11 @@ export function consumeDeviceBootstrapTokenWithSetupCompletionInTransaction(para
   oldestValidIssuedAtMs: number;
   retentionNowMs: number;
   retainUntilMs: number;
-  pairedDeviceMatches?: (device: PairedDevice | null) => boolean;
+  pairedDeviceMatches?: (
+    device: PairedDevice | null,
+    record: DeviceBootstrapTokenRecord,
+  ) => boolean;
+  recordWorkerEnvironment: (facts: CloudWorkerSetupCompletionPublication) => void;
   baseDir?: string;
 }): { record: DeviceBootstrapTokenRecord; completion?: DevicePairSetupCompletionRecord } | null {
   const token = params.token.trim();
@@ -610,7 +578,7 @@ export function consumeDeviceBootstrapTokenWithSetupCompletionInTransaction(para
       record.setupId || params.pairedDeviceMatches
         ? loadPairedDevicePairingStoreRecordFromDatabase(db, deviceId)
         : null;
-    if (params.pairedDeviceMatches && !params.pairedDeviceMatches(paired)) {
+    if (params.pairedDeviceMatches && !params.pairedDeviceMatches(paired, record)) {
       return null;
     }
     const deviceName = paired?.operatorLabel ?? paired?.displayName;
@@ -636,7 +604,7 @@ export function consumeDeviceBootstrapTokenWithSetupCompletionInTransaction(para
     }
     if (completion) {
       if (record.profile?.purpose === "cloud-worker") {
-        bindCloudWorkerSetupCompletion({ db, completion });
+        params.recordWorkerEnvironment(bindCloudWorkerSetupCompletion({ db, completion }));
       }
       executeSqliteQuerySync(
         db,

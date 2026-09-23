@@ -1,4 +1,3 @@
-// Msteams plugin module implements shared behavior.
 import { Buffer } from "node:buffer";
 import { lookup } from "node:dns/promises";
 import { responseWithRelease } from "openclaw/plugin-sdk/fetch-runtime";

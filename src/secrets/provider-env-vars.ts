@@ -233,7 +233,11 @@ function resolveManifestRuntimeAuthFacts(
 ) {
   const evidenceByProvider: Record<string, ProviderAuthEvidence[]> = {};
   const refs = new Set<string>();
-  const isEnabled = createInstalledPluginEnabledPredicate(snapshot.index.plugins, params?.config);
+  const isEnabled = createInstalledPluginEnabledPredicate(
+    snapshot.index.plugins,
+    params?.config,
+    params?.env,
+  );
   for (const { plugin, evidenceProviders, fallbackProviderRefs } of snapshot.owners
     .providerAuthContributions) {
     if (evidenceProviders.length === 0 && fallbackProviderRefs.length === 0) {

@@ -34,6 +34,7 @@ import { persistHookPackInstall } from "./hook-install-persistence.js";
 import { resolvePinnedNpmInstallRecordForCli } from "./npm-resolution.js";
 import {
   createHookPackInstallLogger,
+  createPluginInstallLogger,
   formatPluginInstallWithHookFallbackError,
 } from "./plugins-command-helpers.js";
 
@@ -242,14 +243,25 @@ export async function installPluginWithHookFallback(params: InstallParams): Prom
     }
   }
   const install = async (installRequest: PluginsInstallParams): Promise<InstallResult> => {
+    const runtime = params.runtime ?? defaultRuntime;
+    const logWarning = options.logger?.warn ?? createPluginInstallLogger(runtime).warn;
+    const warnings = new Set<string>();
+    // Local installs stream warnings that also appear in the final result;
+    // Gateway installs only return them. Both routes share one terminal sink.
+    const warn = (message: string) => {
+      if (!warnings.has(message)) {
+        warnings.add(message);
+        logWarning(message);
+      }
+    };
     try {
       const result = await execute({
         ...options,
+        logger: { ...options.logger, warn },
         request: installRequest,
       });
-      const runtime = params.runtime ?? defaultRuntime;
       for (const warning of result.warnings ?? []) {
-        runtime.log(theme.warn(warning));
+        warn(warning);
       }
       runtime.log(
         installRequest.source === "local" && installRequest.link

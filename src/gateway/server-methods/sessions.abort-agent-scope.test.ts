@@ -8,7 +8,6 @@ import {
   addSubagentRunForTests,
   getSubagentRunByChildSessionKey,
   resetSubagentRegistryForTests,
-  testing as subagentRegistryTesting,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -213,6 +212,14 @@ async function expectListedGlobalSessionActiveRun(params: {
   expectSessionsListActiveRun(respond, params.hasActiveRun);
 }
 
+vi.mock("../../agents/subagents/registry/subagent-registry-state.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../../agents/subagents/registry/subagent-registry-state.js")
+  >()),
+  persistSubagentRunsToDisk: () => {},
+  persistSubagentRunsToDiskOrThrow: () => {},
+}));
+
 describe("sessions.abort agent scope", () => {
   afterEach(() => {
     for (const projection of projections) {
@@ -220,22 +227,17 @@ describe("sessions.abort agent scope", () => {
     }
     projections.clear();
     resetSubagentRegistryForTests({ persist: false });
-    subagentRegistryTesting.setDepsForTest();
   });
 
   beforeEach(() => {
     chatAbortMock.mockReset();
     resolveSessionKeyForRunMock.mockReset();
-    loadSessionEntryMock.mockClear();
+    loadSessionEntryMock.mockReset();
     isEmbeddedAgentRunInProgressMock.mockReset();
     isEmbeddedAgentRunInProgressMock.mockReturnValue(false);
     abortEmbeddedAgentRunMock.mockReset();
     clearSessionQueuesMock.mockReset();
     clearSessionQueuesMock.mockReturnValue({ followupCleared: 0, laneCleared: 0, keys: [] });
-    subagentRegistryTesting.setDepsForTest({
-      persistSubagentRunsToDisk: () => {},
-      persistSubagentRunsToDiskOrThrow: () => {},
-    });
   });
 
   it("does not abort an active run whose session key belongs to another requested agent", async () => {
@@ -411,6 +413,11 @@ describe("sessions.abort agent scope", () => {
         removeChatRun: vi.fn(),
       },
     });
+
+    loadSessionEntryMock.mockImplementation((sessionKey: string) => ({
+      cfg: context.getRuntimeConfig(),
+      canonicalKey: sessionKey,
+    }));
 
     const respond = await callSessions(
       "sessions.abort",
@@ -732,7 +739,7 @@ describe("sessions.abort agent scope", () => {
       { context, reqId: "req-key-only-queue-abort" },
     );
 
-    expect(clearSessionQueuesMock).toHaveBeenCalledWith([sessionKey, sessionKey]);
+    expect(clearSessionQueuesMock).toHaveBeenCalledWith([sessionKey, sessionKey, undefined]);
     expect(abortEmbeddedAgentRunMock).not.toHaveBeenCalled();
     expect(respond).toHaveBeenCalledWith(
       true,

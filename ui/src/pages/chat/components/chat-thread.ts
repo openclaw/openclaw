@@ -1,6 +1,6 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
-import { githubLinkPrefetch } from "../../../components/github-link-prefetch.ts";
+import { linkReaderPrefetch } from "../../../components/link-reader-prefetch.ts";
 import { renderLoadingState } from "../../../components/loading-state.ts";
 import { markdownBlocks } from "../../../components/markdown-blocks.ts";
 import { handleMarkdownCodeBlockClick } from "../../../components/markdown-code-blocks.ts";
@@ -106,7 +106,7 @@ function renderTranscriptShell(
     <div
       class="chat-thread ${projection.isDirectThread ? "chat-thread--direct" : ""}"
       ${markdownBlocks(props.transcriptVisible ?? true)}
-      ${githubLinkPrefetch(props.sessionKey, (props.transcriptVisible ?? true) && !projection.showLoadingSkeleton, Boolean(props.gatewayClient?.connected))}
+      ${linkReaderPrefetch(props.sessionKey, (props.transcriptVisible ?? true) && !projection.showLoadingSkeleton, Boolean(props.gatewayClient?.connected))}
       ${ref((element) => {
         if (element instanceof HTMLElement) {
           hydrateLinkFavicons(element, props.fetchLinkFavicon);

@@ -4,6 +4,7 @@ import {
   projectOutboundPayloadPlanForDelivery,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { dispatchReplyWithBufferedBlockDispatcher as dispatchThroughSharedOwner } from "openclaw/plugin-sdk/reply-dispatch-runtime";
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { describe, expect, it, vi } from "vitest";
 import {
   describeTelegramDispatch,
@@ -66,7 +67,7 @@ describeTelegramDispatch("dispatchTelegramMessage fallback-topic-media", () => {
       events: ["fail-tool", "cancel-final"],
       fallback: false,
     },
-    { name: "partially delivered final", events: ["partial-final"], fallback: false },
+    { name: "partially delivered final", events: ["partial-final"], fallback: true },
     { name: "empty metadata reply", events: ["empty-final"], fallback: true },
   ])("preserves ordinary message fallback outcome for $name", async ({ events, fallback }) => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
@@ -146,10 +147,9 @@ describeTelegramDispatch("dispatchTelegramMessage fallback-topic-media", () => {
     ).resolves.toEqual({ kind: "completed" });
     expect(deliverReplies).toHaveBeenCalledTimes(Number(fallback));
     if (fallback) {
-      expect(deliverReplies).toHaveBeenCalledWith(
-        expect.objectContaining({
-          replies: [{ text: "No response generated. Please try again." }],
-        }),
+      const fallbackReply = deliverReplies.mock.calls[0]?.[0]?.replies[0];
+      expect(fallbackReply?.isError === true).toBe(
+        events.includes("fail-final") || events.includes("partial-final"),
       );
     }
   });
@@ -184,9 +184,12 @@ describeTelegramDispatch("dispatchTelegramMessage fallback-topic-media", () => {
   });
 
   it("uses resolved DM config for auto-topic-label overrides", async () => {
-    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
-      queuedFinal: true,
-    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async (params) =>
+      dispatchThroughSharedOwner({
+        ...params,
+        replyResolver: async () => ({ text: "Topic response" }),
+      }),
+    );
     loadSessionStore.mockReturnValue({ s1: {} });
     const bot = createBot();
 
@@ -222,9 +225,12 @@ describeTelegramDispatch("dispatchTelegramMessage fallback-topic-media", () => {
     loadSessionStore.mockReturnValue({
       [sessionKey]: { sessionId: "s1", updatedAt: 1 },
     });
-    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
-      queuedFinal: true,
-    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async (params) =>
+      dispatchThroughSharedOwner({
+        ...params,
+        replyResolver: async () => ({ text: "Topic response" }),
+      }),
+    );
     const bot = createBot();
     const base = "a".repeat(499);
     const rawBody = `${base}😀tail`;
@@ -361,7 +367,7 @@ describeTelegramDispatch("dispatchTelegramMessage fallback-topic-media", () => {
     expect(deliverReplies).toHaveBeenCalledOnce();
     expect(deliverReplies).toHaveBeenCalledWith(
       expect.objectContaining({
-        replies: [{ text: "No response generated. Please try again." }],
+        replies: [expect.objectContaining({ isError: true })],
       }),
     );
   });
@@ -487,7 +493,6 @@ describeTelegramDispatch("dispatchTelegramMessage fallback-topic-media", () => {
     };
 
     it("deduplicates block-sent media from final reply", async () => {
-      deliverReplies.mockResolvedValue({ delivered: true });
       deliverInboundReplyWithMessageSendContext.mockResolvedValue({
         status: "handled_visible",
         delivery: { messageIds: ["101"], visibleReplySent: true },
@@ -507,13 +512,14 @@ describeTelegramDispatch("dispatchTelegramMessage fallback-topic-media", () => {
         telegramDeps: telegramDepsForTest,
       });
 
-      expect(finalDeliveryPayload().mediaUrls).toEqual([]);
+      const finalPayload = finalDeliveryPayload();
+      expect(resolveSendableOutboundReplyParts(finalPayload).mediaUrls).toEqual([]);
+      expect(finalPayload.text).toBe("Here is the image");
     });
 
     it("does not restore block-sent legacy media when the final includes another attachment", async () => {
       const sentMediaUrl = "/tmp/cat.jpg";
       const remainingMediaUrl = "/tmp/dog.jpg";
-      deliverReplies.mockResolvedValue({ delivered: true });
       deliverInboundReplyWithMessageSendContext.mockResolvedValue({
         status: "handled_visible",
         delivery: { messageIds: ["101"], visibleReplySent: true },
@@ -551,7 +557,6 @@ describeTelegramDispatch("dispatchTelegramMessage fallback-topic-media", () => {
 
     it("preserves final media when block delivery reports no visible send", async () => {
       deliverReplies.mockResolvedValueOnce({ delivered: false });
-      deliverReplies.mockResolvedValue({ delivered: true });
       deliverInboundReplyWithMessageSendContext.mockResolvedValue({
         status: "handled_visible",
         delivery: { messageIds: ["101"], visibleReplySent: true },
@@ -576,7 +581,6 @@ describeTelegramDispatch("dispatchTelegramMessage fallback-topic-media", () => {
 
     it("preserves final media when block delivery fails", async () => {
       deliverReplies.mockRejectedValueOnce(new Error("Telegram API error"));
-      deliverReplies.mockResolvedValue({ delivered: true });
       deliverInboundReplyWithMessageSendContext.mockResolvedValue({
         status: "handled_visible",
         delivery: { messageIds: ["101"], visibleReplySent: true },

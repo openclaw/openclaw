@@ -8,7 +8,7 @@
 
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
-import { resolveExecTitle } from "../../../../src/agents/tool-display-exec.js";
+import { resolveExecCode, resolveExecTitle } from "../../../../src/agents/tool-display-exec.js";
 import {
   buildWriteDiffLines,
   computeLineDiff,
@@ -252,15 +252,6 @@ function resolveTextEditorCommand(args: unknown): TextEditorCommand | undefined 
   }
 }
 
-export function resolveToolCallTargetPaths(name: string, args?: unknown): string[] {
-  const record = asRecord(args);
-  if (PATCH_TOOL_NAMES.has(normalizeKey(name))) {
-    return parsePatchView(record)?.paths ?? [];
-  }
-  const path = resolvePathArg(record);
-  return path ? [path] : [];
-}
-
 function resolveToolCallKind(name: string, args?: unknown): ToolCallKind {
   const key = normalizeKey(name);
   if (TEXT_EDITOR_TOOL_NAMES.has(key)) {
@@ -355,7 +346,7 @@ function buildToolCallView(
       kind,
       title: COMMAND_TOOL_NAMES.has(key) ? resolveExecTitle(args) : undefined,
       command: command ? unwrapShellWrapperCommand(command) : command,
-      code: args ? readNonBlankString(args.code) : undefined,
+      code: resolveExecCode(args),
     };
   }
 

@@ -9,7 +9,8 @@ export class TranscriptEndAnchor {
   }
 
   capture(element: HTMLDivElement | null): void {
-    this.offset = maxTranscriptScrollOffset(element);
+    const max = maxTranscriptScrollOffset(element);
+    this.offset = element && max !== null && Math.abs(max - element.scrollTop) <= 1 ? max : null;
   }
 
   reconcile(

@@ -17,7 +17,7 @@ menus, full chat opens, and dashboard launch links. Switching experiences hides
 the previous experience's windows, keeps their loaded drafts, and cancels
 pending window opens. If a window was visible, the same Gateway opens in the
 selected experience. **Settings…** always opens web Dashboard settings;
-**Connection…** and **About OpenClaw** remain native.
+**Connection…** and **About OpenClaw** open the native Connection window; About selects its **About** tab.
 
 Gateway and account changes still refresh hidden Dashboard windows. Saved web
 drafts recover within the same Gateway address and authenticated account; they
@@ -131,6 +131,11 @@ account retains its browser preferences. Changing accounts or removing a
 browser-authenticated profile clears its isolated dashboard browser data;
 removing any profile also removes its saved credentials.
 
+If images or files prompt you to **Sign in to continue loading content**, choose
+**Sign in** in the Mac app. The app renews the affected Gateway's session and
+returns to the open conversation. Signing in to an ordinary browser tab alone
+does not refresh the Mac app's separate browser session.
+
 Choose **File → New Gateway Window…** or press Cmd-N, then select a Gateway.
 The picker includes the primary Gateway, **This Mac** when it also hosts a local
 Gateway, and saved profiles. It remembers the selected Gateway. Every selection
@@ -214,19 +219,19 @@ repair connectivity without a working Dashboard.
 
 Press Option-Space (⌥Space) or choose **Quick Chat** from the menu bar menu to open a floating composer for the main session. Open **Dashboard → Settings → This Mac → App** to change the global shortcut in a native recorder panel, then choose **Done**.
 
-Quick Chat shows the targeted agent (avatar or emoji, with the agent's name as the placeholder) and sends to that agent's main session. After Return accepts a send, the bar stays open and expands downward with the streamed Markdown reply and recent transcript. The bar input remains the composer. Press Command-Return to send and open the same target in the full chat window, Shift-Return for a newline, or Escape to dismiss the whole bar and reply area. Clicking outside also dismisses it. When relevant macOS permissions are missing, an attached strip offers **Grant** and **Not now** actions.
+Quick Chat shows the targeted agent (avatar or emoji, with the agent's name as the placeholder) and sends to that agent's main session. Its two-row composer keeps the draft above attachment, model, thinking, dictation, and send controls, matching the web chat layout. After Return accepts a send, the bar stays open and reveals the streamed Markdown reply and recent transcript above the same composer. The chevron expands or collapses the conversation without clearing the draft or interrupting the reply. Completed task details scroll with the transcript instead of occupying the writing area. Press Command-Return to send and open the same target in the full chat window, Shift-Return for a newline, or Escape to dismiss the whole bar and reply area. Clicking outside also dismisses it. Connection messages appear only when attention is needed. When relevant macOS permissions are missing, an attached strip offers **Grant** and **Not now** actions.
 
 Use the microphone button to dictate into the composer. Partial speech results replace the dictated span live while preserving text that was already in the composer. Press the button again, Return, or Escape to stop; sending, hiding, or unfocusing Quick Chat also releases the microphone. The first use asks for macOS Microphone and Speech Recognition access. Quick Chat uses Apple Speech and may use its network services; only passive Voice Wake requires on-device recognition.
 
-The compact model control shows the target session's current model and reasoning level. A model choice updates that session and therefore persists there, while a reasoning choice applies only to each message sent from the current Quick Chat presentation. Local choices reset when the bar hides. Switching agents or choosing a recent session keeps explicit choices but reloads the newly targeted session's underlying model state.
+The model control shows the target session's current model. The separate **Effort** control opens a stepped thinking slider with the levels advertised by that model, plus Fast mode when supported. Drag the slider or use its arrow keys to choose a level; **Use session default** restores inherited settings. The context ring shows the conversation's usage when available and offers **Compact Thread**. A model choice updates that session and therefore persists there, while a reasoning choice applies only to each message sent from the current Quick Chat presentation. Local choices reset when the bar hides. Switching agents or choosing a recent session keeps explicit choices but reloads the newly targeted session's underlying model state.
 
 Click the history button to choose from the five most recently updated sessions or return to **New message to &lt;agent&gt;**. A recent selection sends to that exact session and changes the placeholder to **Reply in &lt;session&gt;**. Hiding Quick Chat resets this temporary target to the selected agent's main session; switching agents from the avatar menu also clears it.
 
 Command-Return opens the conversation of the agent that received the send in the selected Web or Native experience, including when session scope is global.
 
-The camera button opens a menu for **Capture Window…** or **Capture Area…**. Window capture labels every visible window; area capture dims each display while you drag a region and shows its live size. The selected screenshot is sent to the chosen agent with any typed text as its caption. The first use asks for macOS Screen Recording access. Escape, clicking empty space, or clicking without a meaningful area drag cancels.
+Choose **+ → Capture a screenshot** for **Capture Window…** or **Capture Area…**. Window capture labels every visible window; area capture dims each display while you drag a region and shows its live size. The selected screenshot is sent to the chosen agent with any typed text as its caption. The first use asks for macOS Screen Recording access. Escape, clicking empty space, or clicking without a meaningful area drag cancels.
 
-Use the document-text button to attach text from the focused app's focused window. Quick Chat shows the result as a removable context chip rather than placing the captured text in the composer; sending appends the chip's text to the outgoing message and then clears it. This requires macOS Accessibility permission. Attached text also clears whenever Quick Chat closes, so context from one presentation cannot leak into a later send.
+Choose **+ → Attach text from &lt;app&gt;** to attach text from the focused app's focused window. Quick Chat shows the result as a removable context chip rather than placing the captured text in the composer; sending appends the chip's text to the outgoing message and then clears it. This requires macOS Accessibility permission. Attached text also clears whenever Quick Chat closes, so context from one presentation cannot leak into a later send.
 
 After a reply finishes, choose **Paste to &lt;app&gt;** to copy its visible assistant text, excluding hidden reasoning, to the general pasteboard and paste it into the app that was frontmost. This requires macOS Accessibility permission. The action replaces the current pasteboard contents and then hides Quick Chat.
 

@@ -50,6 +50,8 @@ export type TalkRealtimeRelayEventPayload =
       role: "user" | "assistant";
       text: string;
       final: boolean;
+      textMode?: "snapshot";
+      transcriptId?: string;
     }
   | {
       relaySessionId: string;
@@ -93,11 +95,12 @@ export type RelayAgentControlProviderSubmission = {
 type RelayProvider = RealtimeVoiceProviderPlugin;
 export class TalkRealtimeRelayOutputOwnership {
   mode: "turn-bound" | "exact-response" = "turn-bound";
-  phase: "unowned" | "owned" | "cancelling" = "unowned";
+  phase: "unowned" | "owned" | "cancelling" | "discarding" = "unowned";
   outputGeneration = 0;
   turnId?: string;
   responseId?: string;
   drain?: { promise: Promise<void>; resolve: () => void };
+  private cancelledTerminal?: { responseId?: string };
 
   constructor(
     private readonly activeTurnId: () => string | undefined,
@@ -105,9 +108,28 @@ export class TalkRealtimeRelayOutputOwnership {
     private readonly fail: (message: string) => void,
   ) {}
 
+  get discarding(): boolean {
+    return this.phase === "discarding";
+  }
+
+  isDiscarding(generation: number): boolean {
+    return this.discarding && this.outputGeneration === generation;
+  }
+
+  get suppressingOutput(): boolean {
+    return this.phase === "cancelling" || this.discarding;
+  }
+
   responseCreated(responseId: string | undefined): boolean {
     const normalizedResponseId = responseId?.trim();
+    if (this.discarding) {
+      if (!normalizedResponseId || normalizedResponseId === this.responseId) {
+        return false;
+      }
+      this.finish(this.responseId);
+    }
     if (this.phase === "unowned") {
+      this.cancelledTerminal = undefined;
       Object.assign(this, {
         mode: normalizedResponseId ? ("exact-response" as const) : ("turn-bound" as const),
         phase: "owned" as const,
@@ -129,6 +151,9 @@ export class TalkRealtimeRelayOutputOwnership {
   }
 
   resolve(claim: boolean): string | undefined {
+    if (this.discarding) {
+      return undefined;
+    }
     const activeTurnId = this.activeTurnId();
     if (
       this.phase !== "cancelling" &&
@@ -137,6 +162,7 @@ export class TalkRealtimeRelayOutputOwnership {
       claim &&
       this.phase === "unowned"
     ) {
+      this.cancelledTerminal = undefined;
       Object.assign(this, { phase: "owned" as const, turnId: activeTurnId });
     }
     const turnId =
@@ -148,7 +174,7 @@ export class TalkRealtimeRelayOutputOwnership {
   }
 
   finish(responseId: string | undefined, cancellationEvent = false) {
-    const cancelled = this.phase === "cancelling";
+    const cancelled = this.suppressingOutput;
     if (
       (cancellationEvent && !cancelled) ||
       (this.mode === "exact-response" &&
@@ -161,6 +187,23 @@ export class TalkRealtimeRelayOutputOwnership {
     return cancelled ? "cancelled" : "completed";
   }
 
+  /** Resume input without releasing the unconfirmed provider response's output ownership. */
+  completeCancellationLocally(): number | undefined {
+    if (this.phase !== "cancelling") {
+      return undefined;
+    }
+    this.phase = "discarding";
+    this.drain?.resolve();
+    return ++this.outputGeneration;
+  }
+
+  resetContinuity(): void {
+    this.outputGeneration += 1;
+    this.cancelledTerminal = undefined;
+    this.drain?.resolve();
+    Object.assign(this, { phase: "unowned" as const, turnId: undefined, responseId: undefined });
+  }
+
   bind(provider: RelayProvider, runAgentConsult: RealtimeVoiceAgentConsultRunner): RelayProvider {
     return {
       ...provider,
@@ -168,14 +211,37 @@ export class TalkRealtimeRelayOutputOwnership {
         provider.createBridge({
           ...request,
           onEvent: (event) => {
-            if (
-              event.direction === "server" &&
-              event.type === "response.created" &&
-              !this.responseCreated(event.responseId)
-            ) {
-              return;
+            if (event.direction === "server") {
+              if (event.type === "response.done" || event.type === "response.cancelled") {
+                if (
+                  this.cancelledTerminal &&
+                  this.cancelledTerminal.responseId === event.responseId
+                ) {
+                  this.cancelledTerminal = undefined;
+                  return;
+                }
+                if (this.suppressingOutput) {
+                  this.finish(event.responseId, true);
+                  return;
+                }
+              }
+              if (event.type === "response.created" && !this.responseCreated(event.responseId)) {
+                return;
+              }
             }
             request.onEvent?.(event);
+          },
+          onResponseDone: (outcome) => {
+            // The Talk turn is already cancelled. Settle its provider owner before the
+            // harness rejects that terminal or mistakes it for a successor input turn.
+            if (this.suppressingOutput) {
+              if (this.finish(outcome.responseId) !== "ignore") {
+                // Typed providers may emit a diagnostic legacy twin in the same dispatch.
+                this.cancelledTerminal = { responseId: outcome.responseId };
+              }
+              return;
+            }
+            request.onResponseDone?.(outcome);
           },
           runAgentConsult,
         }),

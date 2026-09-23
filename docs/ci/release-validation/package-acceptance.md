@@ -69,6 +69,14 @@ different bytes; preserving published dist-tags alone does not isolate them.
 After those baseline commands, candidate installs keep using the verified
 candidate registry, including its exact-version dependencies.
 
+The `legacy-operator-state` and `msteams-polls` companion fixtures preserve the
+published archive for its package name/version across both registry phases.
+When the candidate companion has that same version, installation assertions
+require the retained published bytes. A different version selects and verifies
+the prepared candidate archive. This keeps same-version core update proof from
+simulating an npm republish; testing changed companion bytes requires a distinct
+companion version.
+
 Expanded release qualification requires the candidate's `YYYY.M.PATCH` base version
 to be at least the trusted workflow package's base version, ignoring prerelease
 suffixes for this comparison. It then reads immutable source-directory metadata for
@@ -111,6 +119,15 @@ All supported baseline rows require successful updates. Existing synthetic
 `base` and reported-issue fixtures retain their success assertions and run once
 on the candidate-relative predecessor. The lane does not run an extra Doctor or
 omit those fixtures to turn a failed schema upgrade into a pass.
+
+Current cross-OS tooling runs packaged fresh-install and upgrade checks on both
+Node 24.19.0 and the Node 26.1.0 support floor across Linux, Windows, and macOS.
+Windows packaged fresh-install retains Node 24.16.0 for its Node 24 cell because
+of the later libuv file-watcher regression. Both runtime variants consume the
+same prepared candidate tarball. A focused `suite_filter` selects both Node
+variants; the Node 26 jobs and artifacts have distinct names. Installer and
+source-update lanes keep their existing Node 24 coverage. Explicitly selecting
+older `workflow_ref` tooling retains that revision's historical matrix.
 
 The Windows packaged and installer fresh lanes also verify that an installed package can import a browser-control override from a raw absolute Windows path. The OpenAI cross-OS agent-turn smoke defaults to `OPENCLAW_CROSS_OS_OPENAI_MODEL` when set, otherwise `openai/gpt-5.6-luna`, so the install and gateway proof uses the lower-cost GPT-5.6 test tier.
 

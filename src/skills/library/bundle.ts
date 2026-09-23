@@ -361,7 +361,10 @@ function describeSkillTreeFailure(error: unknown): string {
 export async function readSkillBundleTree(
   directory: string,
   includePath?: (filePath: string) => boolean,
-  options?: { symlinks?: "reject" | "follow-within-root" },
+  options?: {
+    symlinks?: "reject" | "follow-within-root";
+    assertFileAccess?: (requestedPath: string, canonicalPath: string) => void;
+  },
 ): Promise<SkillLibraryFile[]> {
   const symlinks = options?.symlinks ?? "reject";
   const include = includePath ? (entry: { path: string }) => includePath(entry.path) : undefined;
@@ -431,6 +434,7 @@ export async function readSkillBundleTree(
           `path=${JSON.stringify(entry.path)}.`,
       );
     }
+    options?.assertFileAccess?.(entry.path, read.realPath);
     const { buffer, stat } = read;
     total += buffer.length;
     if (total > SKILL_LIBRARY_MAX_BUNDLE_BYTES || files.length >= SKILL_LIBRARY_MAX_FILES) {
