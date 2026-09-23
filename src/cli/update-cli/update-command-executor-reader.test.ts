@@ -353,7 +353,7 @@ describe("invocation-scoped update ownership reader", () => {
   const damage = [
     {
       name: "missing database",
-      windowsSharingDenial: true,
+      windowsSharingError: "EBUSY",
       apply: () => fs.renameSync(databasePath, path.join(root, "retained.sqlite")),
     },
     { name: "empty database", apply: () => fs.truncateSync(databasePath, 0) },
@@ -392,7 +392,7 @@ describe("invocation-scoped update ownership reader", () => {
     },
     {
       name: "replacement database",
-      windowsSharingDenial: true,
+      windowsSharingError: "EPERM",
       apply: () => {
         const replacement = path.join(directory, "replacement.sqlite");
         fs.copyFileSync(databasePath, replacement);
@@ -406,7 +406,7 @@ describe("invocation-scoped update ownership reader", () => {
     },
     {
       name: "replacement parent retaining the database inode",
-      windowsSharingDenial: true,
+      windowsSharingError: "EPERM",
       apply: () => {
         const retained = path.join(root, "retained-parent");
         fs.renameSync(directory, retained);
@@ -435,7 +435,7 @@ describe("invocation-scoped update ownership reader", () => {
 
   it.each(damage)(
     "preserves authority for $name after warming the reader without repair or sidecars",
-    async ({ apply, windowsSharingDenial }) => {
+    async ({ apply, windowsSharingError }) => {
       let before: ReturnType<typeof snapshot> | undefined;
       let refusal: unknown;
       let nativeDenial = false;
@@ -451,8 +451,8 @@ describe("invocation-scoped update ownership reader", () => {
           // attempted mutation was refused and the original authority still
           // works; platforms permitting replacement must reject its fence.
           expect(process.platform).toBe("win32");
-          expect(windowsSharingDenial).toBe(true);
-          expect(mutationError).toMatchObject({ code: "EPERM" });
+          expect(windowsSharingError).toBeDefined();
+          expect(mutationError).toMatchObject({ code: windowsSharingError });
           expect(snapshot()).toEqual(intact);
           fence.assertCurrent();
           nativeDenial = true;
