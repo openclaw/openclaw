@@ -26,6 +26,8 @@ export type PluginManifestTheme = {
   name: string;
   description: string;
   source: string;
+  hats?: Record<string, string>;
+  critters?: Record<string, { source: string; title?: string; crossMs?: number }>;
 };
 
 /** Top-level plugin manifest format. */
@@ -392,10 +394,25 @@ export type PluginManifestBackupResource = {
   relativePath: string;
 };
 
+/** Provider-authored limits and result semantics available before runtime activation. */
+export type DecisionProviderCapabilities = {
+  questionTypes: ("boolean" | "choice" | "score")[];
+  maxQuestions?: number;
+  maxChoiceAlternatives?: number;
+  maxScoreLevels?: number;
+  maxInputTokens?: number;
+  /** Token accounting follows the provider encoder, including its rubric overhead. */
+  inputTokenScope?: "encoded-question" | "state-plus-each-criterion";
+  requiresBooleanCriteria?: boolean;
+  /** A provider metric is not a calibrated probability that the answer is correct. */
+  confidence?: "provider-specific" | "none";
+};
+
 export type PluginManifestDecisionModel = {
   provider: string;
   id: string;
   name: string;
+  capabilities?: DecisionProviderCapabilities;
 };
 
 export type PluginManifest = {
@@ -527,6 +544,8 @@ export type PluginManifest = {
 };
 
 export type PluginManifestContracts = {
+  /** Executor ids implemented by the plugin's code-mode-executor-api artifact. */
+  codeModeExecutors?: string[];
   embeddedExtensionFactories?: string[];
   agentToolResultMiddleware?: string[];
   trustedToolPolicies?: string[];

@@ -10,7 +10,6 @@ import { closeOpenClawAgentDatabasesAsync } from "./openclaw-agent-db-lifecycle.
 import { clearOpenClawAgentDatabaseValidationCache } from "./openclaw-agent-db-validation-cache.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
-import type { OpenClawStateMutationOperation } from "./openclaw-state-lease-context.js";
 import { withOpenClawStateLease, type OpenClawStateLeaseContext } from "./openclaw-state-lease.js";
 
 type MaintenanceScope = {
@@ -88,24 +87,6 @@ async function runMaintenanceScope<T>(
           ) {
             assertAdmission();
             return track(owner.withDatabaseFileExclusion!(operation, bind));
-          },
-        }
-      : {}),
-    ...(owner.withDatabaseFileMutation
-      ? {
-          withDatabaseFileMutation<Value, Captured>(
-            operation: OpenClawStateMutationOperation<Value, Captured>,
-          ) {
-            assertAdmission();
-            return track(
-              owner.withDatabaseFileMutation!({
-                ...operation,
-                assertCurrent() {
-                  assertCurrent();
-                  operation.assertCurrent();
-                },
-              }),
-            );
           },
         }
       : {}),

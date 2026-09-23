@@ -30,7 +30,8 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../src/test-utils/openclaw-test-state.js";
-import { acquireTestPortBlock } from "../../src/test-utils/port-claims.js";
+import { reserveTestPortListener } from "../../src/test-utils/port-claims.js";
+import { cleanupSessionStateForTest } from "../../src/test-utils/session-state-cleanup.js";
 import { sleep } from "../../src/utils.js";
 import { decodeUtf8Tail } from "./bounded-child-output.js";
 import { runQaGatewayFixture } from "./qa-gateway-cleanup.js";
@@ -753,11 +754,15 @@ export async function createOpenClawTestInstance(
     if (options.port !== undefined) {
       port = options.port;
     } else {
-      const claimed = await acquireTestPortBlock({ offsets: [0, 1], signal });
-      port = claimed.port;
-      releasePortClaims = claimed.release;
-      signal?.throwIfAborted();
-      reservation = await reserveGatewayPort(port, options.verifyCleanup);
+      const reserved = await reserveTestPortListener({
+        offsets: [0, 1],
+        signal,
+        createListener: () => net.createServer((socket) => socket.destroy()),
+        verifyCleanup: options.verifyCleanup,
+      });
+      port = reserved.claim.port;
+      releasePortClaims = reserved.claim.release;
+      reservation = { release: reserved.releaseListener };
     }
     signal?.throwIfAborted();
     state = await createOpenClawTestState({
@@ -969,6 +974,8 @@ export async function createOpenClawTestInstance(
           ...(options.gatewayArgs ?? []),
         ];
         await stopGatewayChild({ forceWindowsTree: true });
+        // Parent-side seeds retain leases that the child's startup maintenance must acquire.
+        await cleanupSessionStateForTest({ stateDir: state.stateDir, rootPath: state.root });
         signal?.throwIfAborted();
         const deadline = Date.now() + (options.startTimeoutMs ?? GATEWAY_START_TIMEOUT_MS);
         let restarts = 0;

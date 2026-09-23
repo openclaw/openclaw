@@ -17,7 +17,7 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../p
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createWorkerComputerTool } from "../../worker/computer-runtime.js";
 import { createDesktopSessionRegistry } from "../desktop/session-registry.js";
-import { createTestApprovalManager } from "../exec-approval-manager.test-support.js";
+import { createTestApprovalFixture } from "../exec-approval-manager.test-support.js";
 import {
   createApprovalClientLookup,
   createOperatorClient,
@@ -421,46 +421,56 @@ describe("session computer transport", () => {
   it("keeps session and live run authority on clientless policy approvals", async (testContext) => {
     const h = createHarness();
     const { transport, prepared } = await h.prepare();
-    const manager = createTestApprovalManager<PluginApprovalRequestPayload>(testContext, {
+    const fixture = createTestApprovalFixture<PluginApprovalRequestPayload>(testContext, {
       approvalKind: "plugin",
       validateAgentRuntimeDelegatedAuthority: (authority) =>
         validateAgentRunDelegatedAuthority(authority) &&
         (authority.kind === "local" || h.options.placements.validateTurnClaim(authority.turnClaim)),
     });
-    const context = h.state.context!;
-    context.pluginApprovalManager = manager;
-    context.getApprovalClientConnIds = createApprovalClientLookup([createOperatorClient()]);
-    h.policyHandle.mockImplementationOnce(async (policy) => {
-      const approval = await policy.approvals?.request({
-        title: "Session desktop action",
-        description: "Approve the bound desktop action",
+    const { manager } = fixture;
+    try {
+      await fixture.run(async () => {
+        const context = h.state.context!;
+        context.pluginApprovalManager = manager;
+        context.getApprovalClientConnIds = createApprovalClientLookup([createOperatorClient()]);
+        h.policyHandle.mockImplementationOnce(async (policy) => {
+          const approval = await policy.approvals?.request({
+            title: "Session desktop action",
+            description: "Approve the bound desktop action",
+          });
+          if (approval?.decision !== "allow-once") {
+            return { ok: false, message: "approval required" };
+          }
+          return await policy.invokeNode();
+        });
+        const { record, pending: operation } = await expectSinglePendingApproval(
+          manager,
+          context,
+          () => fixture.track(transport.invoke(request("type"))),
+        );
+        expect(record.request).toMatchObject({
+          agentId: "main",
+          sessionKey: h.state.placement.sessionKey,
+          runId: h.claim.runId,
+        });
+        expect(record.agentRuntimeDelegatedAuthority).toMatchObject({
+          kind: "worker",
+          turnClaim: h.claim,
+          operationalRunInstance: h.run,
+        });
+        expect(await manager.resolve(record.id, "allow-once")).toBe(true);
+        await expect(operation).resolves.toMatchObject({ ok: true });
+        expect((await manager.getSnapshot(record.id))?.consumedDecision).toBe("allow-once");
+        releaseAgentRunDelegatedAuthority(h.authority);
+        h.releaseClaim();
+        h.policyHandle.mockClear();
+        await prepared.close("completion");
+        expect(h.policyHandle).not.toHaveBeenCalled();
+        expect(await manager.listPendingRecords()).toEqual([]);
       });
-      if (approval?.decision !== "allow-once") {
-        return { ok: false, message: "approval required" };
-      }
-      return await policy.invokeNode();
-    });
-    const operation = transport.invoke(request("type"));
-    const record = await expectSinglePendingApproval(manager);
-    expect(record.request).toMatchObject({
-      agentId: "main",
-      sessionKey: h.state.placement.sessionKey,
-      runId: h.claim.runId,
-    });
-    expect(record.agentRuntimeDelegatedAuthority).toMatchObject({
-      kind: "worker",
-      turnClaim: h.claim,
-      operationalRunInstance: h.run,
-    });
-    expect(await manager.resolve(record.id, "allow-once")).toBe(true);
-    await expect(operation).resolves.toMatchObject({ ok: true });
-    expect((await manager.getSnapshot(record.id))?.consumedDecision).toBe("allow-once");
-    releaseAgentRunDelegatedAuthority(h.authority);
-    h.releaseClaim();
-    h.policyHandle.mockClear();
-    await prepared.close("completion");
-    expect(h.policyHandle).not.toHaveBeenCalled();
-    expect(await manager.listPendingRecords()).toEqual([]);
+    } finally {
+      await prepared.close("completion");
+    }
   });
 
   it.each([

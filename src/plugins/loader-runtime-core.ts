@@ -47,7 +47,11 @@ import { setPluginRuntimeLoadContext } from "./runtime/load-context.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { hasKind } from "./slots.js";
 
-type PluginLoadInput = { source: string; signature: string; config: PreparedPluginConfig };
+type PluginLoadInput = {
+  source: string;
+  signature: string | undefined;
+  config: PreparedPluginConfig;
+};
 const registryInputs = new WeakMap<PluginRegistry, Map<string, PluginLoadInput>>();
 
 /** Captured JSON inputs ignore object key order, but preserve array order and values. */
@@ -185,7 +189,6 @@ export function loadOpenClawPluginsCore(
                 subagent: options.runtimeOptions?.subagent ?? borrowedSubagent,
                 nodes: options.runtimeOptions?.nodes ?? borrowedNodes,
               },
-              loadPluginModule,
             });
     const capabilityCatalogContext =
       options.capabilityCatalogContext ??
@@ -281,7 +284,7 @@ export function loadOpenClawPluginsCore(
         context.normalized.entries[normalizePluginPolicyId(manifest.id)] ?? {};
       const preparedConfig: PreparedPluginConfig = { input: JSON.stringify(pluginConfig) };
       const degradedPlugin = findActiveDegradedPlugin(manifest.id);
-      const signature = JSON.stringify([
+      const signatureInputs = [
         candidate.source,
         candidate.origin,
         [installOwner, installOwner ? context.installRecords[installOwner] : undefined],
@@ -301,7 +304,26 @@ export function loadOpenClawPluginsCore(
         validateOnly,
         options.toolDiscovery === true,
         options.mode,
-      ]);
+      ];
+      let signature: string | undefined;
+      try {
+        signature = JSON.stringify(signatureInputs);
+      } catch (error) {
+        // A malformed external schema must reach the validation diagnostic, not abort
+        // sibling loading while preparing an optional runtime-retention signature.
+        if (
+          !(error instanceof RangeError) ||
+          candidate.origin === "bundled" ||
+          prepareRuntimePluginConfig({
+            candidate,
+            manifestRecord: manifest,
+            context,
+            preparedConfig,
+          }).ok
+        ) {
+          throw error;
+        }
+      }
       inputs.set(manifest.id, { source: candidate.source, signature, config: preparedConfig });
       const previous = options.previousRegistry?.plugins.find(
         (record) => record.id === manifest.id,
@@ -309,6 +331,7 @@ export function loadOpenClawPluginsCore(
       const previousInput =
         options.previousRegistry && registryInputs.get(options.previousRegistry)?.get(manifest.id);
       if (
+        signature !== undefined &&
         previous &&
         previousInput &&
         !replacedIds.has(manifest.id) &&

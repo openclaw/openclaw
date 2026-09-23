@@ -7,6 +7,10 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
+  readSqliteTranscriptPayload,
+  sqliteTranscriptPayloadColumns,
+} from "../../../lib/sqlite-transcript-payload.mjs";
+import {
   resolveWorkerCellExport,
   resolveWorkerCellFunctionBinding,
 } from "./worker-cell-package.mjs";
@@ -615,9 +619,14 @@ async function snapshot(ctx, stage, packageRoot, bindings) {
     ),
     transcript: rows(
       db.prepare(
-        "SELECT session_id,seq,event_json,created_at FROM transcript_events WHERE session_id IN ('00000000-0000-4000-8000-000000000001','00000000-0000-4000-8000-000000000002') ORDER BY session_id,seq",
+        `SELECT session_id,seq,${sqliteTranscriptPayloadColumns(db)},created_at FROM transcript_events WHERE session_id IN ('00000000-0000-4000-8000-000000000001','00000000-0000-4000-8000-000000000002') ORDER BY session_id,seq`,
       ),
-    ),
+    ).map((row) => ({
+      session_id: row.session_id,
+      seq: row.seq,
+      event_json: readSqliteTranscriptPayload(row),
+      created_at: row.created_at,
+    })),
   }));
   const expectedSchema = ["published-import", "before-schema"].includes(stage)
     ? BASELINE_AGENT_SCHEMA

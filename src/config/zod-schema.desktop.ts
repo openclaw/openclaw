@@ -7,7 +7,7 @@ import { configUiMetadata } from "./zod-schema.sensitive.js";
 const DesktopHostConfigShape = {
   enabled: z.boolean().register(configUiMetadata, {
     label: "Desktop Sharing",
-    help: "Enables this machine's desktop source. Paired macOS, Windows, and Linux nodes default to enabled; an explicit desktop-app sharing preference takes precedence. The Gateway host Labs source defaults to disabled. Restart the owning node or Gateway after config changes.",
+    help: "Enables this machine's desktop source. Paired macOS, Windows, and Linux nodes default to enabled; an explicit desktop-app sharing preference takes precedence. The Gateway host Labs source defaults to disabled and applies changes live. Restart a paired node after changing its desktop config.",
   }),
   managed: z.boolean().optional().register(configUiMetadata, {
     label: "Managed Linux Host Desktop",

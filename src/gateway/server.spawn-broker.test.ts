@@ -235,7 +235,7 @@ describe.skipIf(process.platform === "win32")("Gateway spawn broker lifetime", (
     }
   });
 
-  it.each(["beforeAdopt", "afterAdopt", "close-before-sidecars"] as const)(
+  nodeIt.each(["beforeAdopt", "afterAdopt", "close-before-sidecars"] as const)(
     "joins an outer CLI admission before broker extinction when core fails at %s",
     async (phase) => {
       await withAgentDatabaseStartupAdmission(async (admission) => {

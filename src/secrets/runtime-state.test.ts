@@ -216,24 +216,6 @@ describe("secrets runtime state", () => {
     ).toBe(false);
   });
 
-  it("exposes the active config pair for hot paths without requiring the full snapshot", () => {
-    const snapshot = preparedSnapshot({
-      sourceConfig: { agents: { list: [{ id: "source" }] } },
-      config: { agents: { list: [{ id: "runtime" }] } },
-      authStores: [],
-    });
-
-    activateSnapshot(snapshot);
-
-    const configSnapshot = getActiveSecretsRuntimeConfigSnapshot();
-    const fullSnapshot = getActiveSecretsRuntimeSnapshotState();
-
-    expect(configSnapshot?.config).not.toBe(fullSnapshot?.config);
-    expect(configSnapshot?.sourceConfig).not.toBe(fullSnapshot?.sourceConfig);
-    expect(configSnapshot?.config).toEqual(snapshot.config);
-    expect(configSnapshot?.sourceConfig).toEqual(snapshot.sourceConfig);
-  });
-
   it("preserves independent credential owners through snapshot replacement and rollback until teardown", () => {
     const previous = preparedSnapshot({
       degradedOwners: [

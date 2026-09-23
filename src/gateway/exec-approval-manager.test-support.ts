@@ -31,16 +31,47 @@ export function createTestApprovalManager<TPayload = ExecApprovalRequestPayload>
   test: TestContext,
   options: Omit<ExecApprovalManagerOptions<TPayload>, "persistence"> = {},
 ): ExecApprovalManager<TPayload> {
+  return createTestApprovalFixture(test, options).manager;
+}
+
+/** Prepare the real worker before a request starts its approval deadline. */
+export async function createPreparedTestApprovalManager<TPayload = ExecApprovalRequestPayload>(
+  test: TestContext,
+  options: Omit<ExecApprovalManagerOptions<TPayload>, "persistence"> = {},
+) {
+  const fixture = createTestApprovalFixture(test, options);
+  await operatorApprovalStore.listPendingOperatorApprovals({
+    databaseOptions: fixture.databaseOptions,
+  });
+  return fixture;
+}
+
+export function createTestApprovalFixture<TPayload = ExecApprovalRequestPayload>(
+  test: TestContext,
+  options: Omit<ExecApprovalManagerOptions<TPayload>, "persistence"> = {},
+) {
   test.signal.throwIfAborted();
   const restoreClock = installTestApprovalClock();
   test.onTestFinished(() => restoreClock?.());
   const fixture = createFixtureLifetime();
   let manager: ExecApprovalManager<TPayload> | undefined;
   let databasePath: string | undefined = undefined;
+  const requests: Promise<unknown>[] = [];
+  let body: Promise<unknown> | undefined;
+  async function drainRequests() {
+    try {
+      await manager?.drain();
+    } finally {
+      // Manager retirement settles observers; their outer RPC/policy continuations
+      // still own the database until they have unwound.
+      await Promise.allSettled(requests);
+    }
+  }
   // Register on the actual test, never once through a cached helper module.
   test.onTestFinished(() => {
     void fixture.verifyCleanup(async () => {
-      await manager?.drain();
+      await drainRequests();
+      await Promise.allSettled([body]);
       if (databasePath) {
         await closeOpenClawStateDatabaseByPathAsync(databasePath);
       }
@@ -60,7 +91,26 @@ export function createTestApprovalManager<TPayload = ExecApprovalRequestPayload>
       ...options,
       persistence: { runtimeEpoch: randomUUID(), databaseOptions },
     });
-    return manager;
+    return {
+      manager,
+      databaseOptions,
+      track: <T>(request: Promise<T>) => {
+        requests.push(request);
+        void request.catch(() => {});
+        return request;
+      },
+      run: <T>(callback: () => Promise<T>) => {
+        const work = fixture.run(async () => {
+          try {
+            return await callback();
+          } finally {
+            await drainRequests();
+          }
+        });
+        body = work;
+        return work;
+      },
+    };
   } catch (error) {
     // A failed open can include failed closure of an unpublished handle.
     // Retain its inputs rather than certify cleanup from an empty cache.

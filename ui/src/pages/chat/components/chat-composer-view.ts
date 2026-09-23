@@ -290,10 +290,9 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
           {
             gatewayScope: props.gatewayScope,
             sessionIdentity: props.progressCardIdentity,
-            activeRunId: props.runId,
+            cardLifetime: props.progressCardLifetime,
             readingHistory: props.readingHistory,
             onManipulate: props.onProgressManipulate,
-            completedRunId: props.runStatus?.phase === "done" ? props.runStatus.runId : null,
           },
           props.connected && canCompose ? props.progressCardRefresh : undefined,
         )}
@@ -545,6 +544,9 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                     placeholder=${dictation?.active ? "" : placeholder}
                     rows="1"
                   ></textarea>
+                  <span class="agent-chat__composer-placeholder" aria-hidden="true"
+                    >${dictation?.active ? "" : placeholder}</span
+                  >
                   <span
                     id=${slashMenuAnnouncementId}
                     class="sr-only"

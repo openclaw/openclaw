@@ -13,6 +13,58 @@ read_when:
 
 OpenClaw loads `USER.md` beside `MEMORY.md` at session start. It has a separate small bootstrap budget, and edits are picked up on later turns in a long-lived session. If the file is absent, startup continues without it.
 
+## Personal USER files on a shared Gateway
+
+Keep workspace-root `USER.md` for shared defaults. To add preferences for one
+signed-in person, create `users/<canonical-profile-id>/USER.md` in the **agent
+workspace**, not the task's Git worktree. Obtain the durable profile ID from the
+Gateway's authenticated profile/People data; do not use a display name, GitHub
+login, email, or a profile ID pasted into a message. This uses existing session
+ownership and creation records; no schema or configuration change is needed.
+
+Each session selects **one personal `USER.md`**: the assigned human owner's file
+first, otherwise the authenticated human creator's file. An agent or system
+assignment does not prevent that creator fallback. For eligible external chat
+turns, OpenClaw loads the shared file first and the selected personal file second.
+The personal file supplements, rather than replaces, the shared file, overriding
+conflicting shared user preferences, not project rules or security policy. The
+workspace-root `USER.md` remains shared regardless of the workspace directory's name.
+
+Files are refreshed on later turns. Reassigning the session changes personal
+context on the next new turn, not the running turn. Another participant can steer
+under the normal permission and queue rules without switching personal context.
+Queued and collected messages from multiple people keep the session's selection;
+the current sender does not select a different file. Profile merges select the
+surviving canonical ID; move the preferences to that directory yourself. OpenClaw
+does not merge files or create a dossier.
+
+Missing files or missing qualifying human identity use shared defaults only. A
+human assignment without a profile ID does not fall back to the creator. Display
+labels, channel sender IDs, unknown-source creator IDs, and agent owners cannot
+select a personal file. Internal events and delegated tasks do not automatically
+inherit a personal profile. Subagent bootstrap still contains only its existing
+allowed project instructions. The shared local owner profile represents all
+connections using that identity, not separate people; use per-person sign-in on
+a team Gateway.
+
+Personal files use the existing guarded reads and memory provenance checks.
+Symlink aliases are not accepted. Each personal file must fit wholly within the
+4,000-character USER budget (or a lower configured per-file/remaining total
+budget); otherwise it is omitted with a warning rather than partially injected.
+Shared files retain their existing limits. Existing harness-specific bootstrap
+suppression still applies: for example, the embedded runner's
+`contextInjection: "never"` and `continuation-skip` settings, and lightweight
+bootstrap modes. Use the default `always` mode to refresh session-selected
+personal instructions on later turns.
+This selection is supported by the local embedded, generic CLI, and native Codex
+bootstrap paths. ACP agents, realtime sessions, and remote worker execution do
+not gain per-person selection from this feature.
+
+This is **prompt selection, not filesystem secrecy**. Workspace tools, trusted
+plugins, shared transcripts, and previously generated responses can expose other
+context. Reassigning the session or changing participants does not erase
+conversation history. Do not store secrets in these files.
+
 ## Gateway profile and GitHub credit
 
 Your authenticated Gateway profile is separate from `USER.md`. Open **Settings → Profile → Identity** to set the display name and avatar shown to other people on the Gateway. A custom OpenClaw avatar remains authoritative when a GitHub account is verified. The Profile header follows your live user identity, including names cleared from another browser, even when several agents are configured. Unidentified connections retain the default-agent preview.
@@ -53,6 +105,45 @@ When a session has someone to credit, its system prompt lists the exact trailers
 
 Turning **Git co-author credit** off stops attribution for future runs. It does not rewrite commits that already contain the public trailer.
 
+## Channel identity links
+
+An administrator can attest that a stable channel sender belongs to an existing Gateway profile. The link includes the channel, the configured channel account, and the sender's native ID. Display names, usernames, and `session.identityLinks` do not establish this association.
+
+All three Gateway methods require `operator.admin`:
+
+| Method                        | Parameters              | Result                                      |
+| ----------------------------- | ----------------------- | ------------------------------------------- |
+| `users.linkChannelIdentity`   | `profileId`, `identity` | The canonical profile ID and saved identity |
+| `users.listChannelIdentities` | `profileId`             | `links` for that profile                    |
+| `users.unlinkChannelIdentity` | `profileId`, `identity` | `removed`                                   |
+
+For example, the `identity` object for a Discord user is:
+
+```json
+{
+  "channelId": "discord",
+  "accountId": "team-bot",
+  "senderId": "100000000000000001"
+}
+```
+
+Use the exact configured account ID and immutable sender ID. An identical sender ID on another account is a different binding. Repeating the same link is safe. A link already owned by another profile must first be explicitly unlinked from that profile. Unlinking also checks the expected profile, so a stale request cannot remove someone else's binding. The shared **Owner** profile is not a person and cannot receive these links.
+
+Links follow explicit profile merges and the surviving profile's current role. Linking does not rename or merge people, rewrite transcript attribution, assign session ownership, or change session visibility. Permission resolution separately checks the trusted incoming sender and the linked person's current authority.
+
+Every linked sender whose current effective operator role includes `operator.admin` receives channel-owner authority automatically while any role-required person-access grant remains active. The role name does not matter, and no extra `gateway.auth.identityScopes` grant is needed. When operator roles are not configured, a matching administrative identity-scope grant supplies this authority instead. A configured nonadmin role prevents that fallback. Removing the link, demoting the person, or removing the role's administrative scope revokes inherited authority. Authority is rechecked before pending privileged actions take effect; already accepted operations finish their required cleanup. Explicit `commands.ownerAllowFrom` entries remain independent. See [Operator scopes](/gateway/operator-scopes).
+
+Managed updates retain the original person-access grant through staging and a
+required authorization check before parking the Gateway. Once parking is
+accepted, the native updater owns completion or recovery of that update while
+profile, role, and configuration checks remain current. A restarted policy service
+or renewed invitation does not authorize a new request on the original grant.
+See [Restart handoff](/cli/update/how-updates-run#restart-handoff).
+
+Channel policies and explicit command allowlists still apply, including to native commands. Cosmetic profile changes do not cancel an authorized request; changing its identity link or role requires a fresh request.
+
+These records use the existing shared-state identity table without changing its schema version. Older builds ignore the channel binding namespace; downgrading disables this recognition without converting the links into login accounts. Upgrading does not guess or backfill channel identities. Administrators can inspect and remove the links through the same methods after upgrading again.
+
 ## GitHub connections
 
 Open **Settings → Profile → GitHub connections** to connect **My GitHub** without changing the shared **System GitHub** account. Both accounts and their connection status remain visible together. Viewing these connections does not require selecting an agent or configuring a default agent. Connecting a credential does not change your verified GitHub sign-in identity, display name, avatar, Git co-author credit preference, or OpenClaw permissions.
@@ -74,6 +165,12 @@ If the Gateway rejects the selected account before accepting the first publicati
 Publication state survives navigation between chats, including when an inactive chat pane is unloaded. Split panes showing the same chat share its publication progress and retry. The page retains up to 32 publication attempts within the current authenticated Gateway connection. At capacity, existing retries remain available. Dismiss a completed PR row, or select **Choose a new publication** after a failed attempt, before starting another. Read-only operators can dismiss an observed completed result without publishing or confirming anything.
 
 Shared publication progress comes from Gateway-owned receipts. **Check status** reads the recorded outcome without executing publication again. Receipt changes refresh the UI through the existing session event stream, with bursts coalesced behind an active request; recovering that event subscription also refreshes any pending observation. Reloading or reconnecting discovers the latest applicable shared receipt for the current session and workspace, including a completion missed while offline. Dismissing the completed PR row or choosing a new publication after failure acknowledges that terminal receipt for the current presentation, so a refresh does not immediately restore it. Completed shared requests can be recovered from the Gateway instead of retaining an offscreen browser operation. Personal receipts and confirmation remain bound to their original authenticated owner.
+
+Queued shared publication also retains the person who requested it, their original permission ceiling, and any access grant required when the request was accepted. Expired or revoked guest access prevents further GitHub writes, including after a restart. A new invitation or later staff role does not authorize the old guest request. Saved work, existing PRs, and separately authorized requests remain intact. The Gateway can still record a GitHub result accepted before access ended; an unavailable readback keeps that original outcome pending for reconciliation.
+
+For requests backed by an access grant, moving one of the person's original email aliases to another profile also ends publication authority. Restoring the alias does not revive the old request. Display changes and aliases added after the request, including their later removal, do not cancel it.
+
+Older unfinished shared requests without this requester binding require a new authorized publication request. Inspect their recorded or unconfirmed GitHub effects first. Published receipts remain readable, and a plugin that is still starting defers recovery until its original grant can be checked.
 
 Pending session deletion blocks publication actions without discarding the original request. A failed deletion restores its retry. Confirmed deletion retires the attempt. The page clears this memory on reload or connection changes. Profile, session access, and workspace changes also retire affected browser state; they never retarget an existing Gateway request.
 

@@ -115,6 +115,24 @@ export class VisitorAccessService {
 
   /** The canonical profile's email aliases select an active grant, never a GitHub display login. */
   authorize(emails: readonly string[]): PluginGatewayAccessAuthority {
+    const authority = this.readAuthority(emails);
+    if (!authority) {
+      throw new VisitorAccessError(
+        "An active visitor invitation is required. Ask a maintainer to invite or renew access.",
+      );
+    }
+    return authority;
+  }
+
+  /** Unlike admission, an unavailable grant map must leave durable requests pending. */
+  resume(emails: readonly string[], grantId: string): PluginGatewayAccessAuthority | undefined {
+    return this.readAuthority(emails, grantId);
+  }
+
+  private readAuthority(
+    emails: readonly string[],
+    grantId?: string,
+  ): PluginGatewayAccessAuthority | undefined {
     this.assertOpen();
     if (!this.ready) {
       throw new VisitorAccessError("Visitor access is starting; retry shortly.");
@@ -125,13 +143,13 @@ export class VisitorAccessService {
       .find(
         (entry) =>
           entry &&
+          grantIdSchema.safeParse(entry.grant.grantId).success &&
+          (grantId === undefined || entry.grant.grantId === grantId) &&
           !entry.controller.signal.aborted &&
           (entry.grant.expiresAt === null || entry.grant.expiresAt > now),
       );
     if (!state) {
-      throw new VisitorAccessError(
-        "An active visitor invitation is required. Ask a maintainer to invite or renew access.",
-      );
+      return undefined;
     }
     const assertCurrent = () => {
       this.assertOpen();
@@ -143,6 +161,7 @@ export class VisitorAccessService {
       }
     };
     return Object.freeze({
+      grantId: state.grant.grantId,
       assertCurrent,
       signal: this.signal
         ? AbortSignal.any([state.controller.signal, this.signal])

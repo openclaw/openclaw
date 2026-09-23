@@ -232,6 +232,7 @@ function runSwarmNoteBridge(params: {
   emitSessionLifecycleEvent({
     sessionKey,
     reason: "swarm-note",
+    scope: "runtime",
     swarmGroupId: resolveCodeModeSwarmGroupId(params.ctx),
     kind,
     text: text.trim(),

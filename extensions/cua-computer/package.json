@@ -6,7 +6,7 @@
   "dependencies": {
     "@trycua/cua-driver": "0.28.2",
     "rastermill": "0.3.3",
-    "zod": "4.6.4"
+    "zod": "4.6.5"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

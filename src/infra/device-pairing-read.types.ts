@@ -27,10 +27,17 @@ export type DevicePairingReadReply = {
   | { type: "devicePairing.bootstrapContext"; context: BoundDeviceBootstrapContext | null }
 );
 
+export type CloudWorkerSetupCompletionPublication = {
+  environmentId: string;
+  nodeDeviceId: string;
+  updatedAtMs: number;
+};
+
 export type DevicePairingCommitReceipt = {
   kind: "devicePairing";
   beforeRevision: string;
   revision: string;
   changed: DevicePairingBindingFact[];
   tokensReplaced?: { deviceId: string; roles: string[] };
+  workerEnvironment?: CloudWorkerSetupCompletionPublication;
 };

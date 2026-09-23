@@ -3111,9 +3111,11 @@ docker_e2e_docker_run_cmd run demo
     expect(publishedRunner).toContain(
       [
         'if [ "$SCENARIO" = "watchos-direct-node" ] || [ "$SCENARIO" = "mobile-pairing-reconnect" ] || [ "$WORKER_CELL" = "1" ]; then',
-        "  unset OPENAI_API_KEY DISCORD_BOT_TOKEN TELEGRAM_BOT_TOKEN",
+        "  unset OPENAI_API_KEY ANTHROPIC_API_KEY GEMINI_API_KEY DISCORD_BOT_TOKEN TELEGRAM_BOT_TOKEN",
         "else",
         '  export OPENAI_API_KEY="sk-openclaw-upgrade-survivor"',
+        '  export ANTHROPIC_API_KEY="sk-ant-openclaw-upgrade-survivor"',
+        '  export GEMINI_API_KEY="upgrade-survivor-gemini-key"',
         '  export DISCORD_BOT_TOKEN="upgrade-survivor-discord-token"',
         '  export TELEGRAM_BOT_TOKEN="123456:upgrade-survivor-telegram-token"',
         "fi",

@@ -220,9 +220,13 @@ function resultRequest(invokeId: string) {
 }
 
 describe("draining Gateway completion ownership", () => {
-  it.for(["exec.approval.resolve", "approval.resolve"] as const)(
-    "admits only an exact live approval continuation through %s",
-    async (method, testContext) => {
+  it.for(
+    completionDrainModes.flatMap((mode) =>
+      (["exec.approval.resolve", "approval.resolve"] as const).map((method) => ({ mode, method })),
+    ),
+  )(
+    "admits only an exact live approval continuation through $method during $mode",
+    async ({ mode, method }, testContext) => {
       const manager = createTestApprovalManager(testContext);
       managerCleanups.push(() => manager.drain());
       const client = createClient("operator");
@@ -243,8 +247,7 @@ describe("draining Gateway completion ownership", () => {
       await ownerReady.promise;
       expect(getActiveGatewayRootWorkCount()).toBe(1);
 
-      const suspension = tryBeginGatewaySuspendAdmission(() => {});
-      expect(suspension?.drain()).toBe(true);
+      const suspension = closeAdmission(mode);
       const handler = vi.fn<GatewayRequestHandler>(async ({ respond }) => {
         respond(true, { applied: await manager.resolve("approval-owned", "allow-once") });
       });
@@ -274,22 +277,140 @@ describe("draining Gateway completion ownership", () => {
       expect(accepted).toHaveBeenCalledWith(true, { applied: true });
       await expect(owner).resolves.toBe("allow-once");
       expect(getActiveGatewayRootWorkCount()).toBe(0);
-      expect(suspension?.release()).toBe(true);
+      if (suspension) {
+        expect(suspension.release()).toBe(true);
+      }
     },
   );
 
-  it("admits exact question inspection and resolution without admitting unrelated roots", async () => {
-    const manager = new QuestionManager();
-    managerCleanups.push(() => manager.close());
-    const client = createClient("operator");
-    const context = createContext({ questionManager: manager });
-    const root = tryBeginGatewayRootWorkAdmission();
-    if (!root) {
-      throw new Error("expected admitted question owner");
-    }
-    await root.run(async () => {
-      manager.request({
-        id: "question-owned",
+  it.each(completionDrainModes)(
+    "admits exact question inspection and resolution during %s without admitting unrelated roots",
+    async (mode) => {
+      const manager = new QuestionManager();
+      managerCleanups.push(() => manager.close());
+      const client = createClient("operator");
+      const context = createContext({ questionManager: manager });
+      const root = tryBeginGatewayRootWorkAdmission();
+      if (!root) {
+        throw new Error("expected admitted question owner");
+      }
+      await root.run(async () => {
+        manager.request({
+          id: "question-owned",
+          questions: [
+            {
+              questionId: "choice",
+              header: "Choice",
+              question: "Continue?",
+              options: [],
+              isOther: true,
+            },
+          ],
+          timeoutMs: 60_000,
+        });
+      });
+      root.release();
+      // question.request returns before question.waitAnswer begins. The pending
+      // question itself retains the exact admitted root across that RPC boundary.
+      expect(getActiveGatewayRootWorkCount()).toBe(1);
+      const answer = manager.waitAnswer("question-owned");
+      const suspension = closeAdmission(mode);
+
+      const newWork = vi.fn();
+      const refused = await dispatch({
+        method: "question.request",
+        requestParams: { id: "question-new" },
+        context,
+        client,
+        handler: newWork,
+      });
+      expect(refused).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({ code: "UNAVAILABLE" }),
+      );
+      expect(newWork).not.toHaveBeenCalled();
+
+      const inspected = await dispatch({
+        method: "question.get",
+        requestParams: { id: "question-owned" },
+        context,
+        client,
+        handler: ({ respond }) => respond(true, { question: manager.get("question-owned") }),
+      });
+      expect(inspected).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ question: expect.any(Object) }),
+      );
+      expect(getActiveGatewayRootWorkCount()).toBe(1);
+
+      const unrelated = await dispatch({
+        method: "question.resolve",
+        requestParams: { id: "question-unrelated" },
+        context,
+        client,
+        handler: vi.fn(),
+      });
+      expect(unrelated).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({ code: "UNAVAILABLE" }),
+      );
+
+      const answered = await dispatch({
+        method: "question.resolve",
+        requestParams: { id: "question-owned" },
+        context,
+        client,
+        handler: ({ respond }) => {
+          respond(true, manager.resolve("question-owned", { answers: { choice: ["yes"] } }));
+        },
+      });
+      expect(answered).toHaveBeenCalledWith(true, {
+        status: "answered",
+        answers: { answers: { choice: ["yes"] } },
+      });
+      expect(manager.get("question-owned")).toMatchObject({ status: "answered" });
+      await expect(answer).resolves.toEqual({
+        status: "answered",
+        answers: { answers: { choice: ["yes"] } },
+      });
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+      const replay = await dispatch({
+        method: "question.resolve",
+        requestParams: { id: "question-owned" },
+        context,
+        client,
+        handler: newWork,
+      });
+      expect(replay).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({ code: "UNAVAILABLE" }),
+      );
+      expect(newWork).not.toHaveBeenCalled();
+      if (suspension) {
+        expect(suspension.release()).toBe(true);
+      }
+    },
+  );
+
+  it.each(
+    completionDrainModes.flatMap((mode) =>
+      ["question.get", "question.resolve"].map((method) => ({ mode, method })),
+    ),
+  )(
+    "does not borrow a replacement question root for $method during $mode after synchronous expiry",
+    async ({ mode, method }) => {
+      const manager = new QuestionManager();
+      managerCleanups.push(() => manager.close());
+      const originalRoot = tryBeginGatewayRootWorkAdmission();
+      const replacementRoot = tryBeginGatewayRootWorkAdmission();
+      if (!originalRoot || !replacementRoot) {
+        throw new Error("expected both admitted question producers");
+      }
+      const request = {
+        id: "question-reused",
         questions: [
           {
             questionId: "choice",
@@ -300,57 +421,58 @@ describe("draining Gateway completion ownership", () => {
           },
         ],
         timeoutMs: 60_000,
-      });
-    });
-    root.release();
-    // question.request returns before question.waitAnswer begins. The pending
-    // question itself retains the exact admitted root across that RPC boundary.
-    expect(getActiveGatewayRootWorkCount()).toBe(1);
-    const suspension = tryBeginGatewaySuspendAdmission(() => {});
-    expect(suspension?.drain()).toBe(true);
-
-    const inspected = await dispatch({
-      method: "question.get",
-      requestParams: { id: "question-owned" },
-      context,
-      client,
-      handler: ({ respond }) => respond(true, { question: manager.get("question-owned") }),
-    });
-    expect(inspected).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ question: expect.any(Object) }),
-    );
-
-    const unrelated = await dispatch({
-      method: "question.resolve",
-      requestParams: { id: "question-unrelated" },
-      context,
-      client,
-      handler: vi.fn(),
-    });
-    expect(unrelated).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "UNAVAILABLE" }),
-    );
-
-    const answered = await dispatch({
-      method: "question.resolve",
-      requestParams: { id: "question-owned" },
-      context,
-      client,
-      handler: ({ respond }) => {
-        respond(true, manager.resolve("question-owned", { answers: { choice: ["yes"] } }));
-      },
-    });
-    expect(answered).toHaveBeenCalledWith(true, {
-      status: "answered",
-      answers: { answers: { choice: ["yes"] } },
-    });
-    expect(manager.get("question-owned")).toMatchObject({ status: "answered" });
-    expect(getActiveGatewayRootWorkCount()).toBe(0);
-    expect(suspension?.release()).toBe(true);
-  });
+      };
+      let replacement: Promise<void> | undefined;
+      const original = await originalRoot.run(async () =>
+        manager.request({
+          ...request,
+          onResolved: () => {
+            manager.reset();
+            // The second producer was admitted before drain, independently of the old question.
+            replacement = replacementRoot.run(async () => {
+              manager.request(request);
+            });
+          },
+        }),
+      );
+      originalRoot.release();
+      expect(getActiveGatewayRootWorkCount()).toBe(2);
+      const suspension = closeAdmission(mode);
+      const now = vi.spyOn(Date, "now").mockReturnValue(original.expiresAtMs + 1);
+      const handler = vi.fn<GatewayRequestHandler>();
+      try {
+        const response = await dispatch({
+          method,
+          requestParams: { id: request.id },
+          context: createContext({ questionManager: manager }),
+          client: createClient("operator"),
+          handler,
+        });
+        expect(response).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({ code: "UNAVAILABLE" }),
+        );
+        expect(handler).not.toHaveBeenCalled();
+        await replacement;
+        expect(manager.get(request.id)).toMatchObject({
+          status: "pending",
+          createdAtMs: original.expiresAtMs + 1,
+        });
+        expect(getActiveGatewayRootWorkCount()).toBe(1);
+      } finally {
+        now.mockRestore();
+        await replacement;
+        originalRoot.release();
+        replacementRoot.release();
+        manager.close();
+        expect(getActiveGatewayRootWorkCount()).toBe(0);
+        if (suspension) {
+          expect(suspension.release()).toBe(true);
+        }
+      }
+    },
+  );
 
   it.each(completionDrainModes)(
     "admits only the registered node's exact live progress and result during %s",

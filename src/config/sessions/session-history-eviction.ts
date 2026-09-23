@@ -48,6 +48,7 @@ import {
 } from "./session-accessor.sqlite-references.js";
 import {
   getSessionKysely,
+  observeSqliteSessionWrite,
   resolveSqliteScope,
   resolveSqliteTranscriptArchiveDirectory,
   runExclusiveSqliteSessionWrite,
@@ -101,7 +102,7 @@ export async function inspectSqliteSessionHistoryDiskBudget(
       diskBudget: {
         ...diskBudget,
         deferredReason: "checkpoint-incomplete",
-        checkpoint: blocked.checkpoint,
+        checkpoint: blocked.checkpoint?.health,
         walBytesBefore: usage.databaseWalBytes,
         walBytesAfter: usage.databaseWalBytes,
       },
@@ -392,7 +393,7 @@ async function enforceSessionHistoryMaintenanceSerialized(
       maxBytes: maxDiskBytes,
       highWaterBytes,
       deferred: {
-        checkpoint: blocked.checkpoint,
+        checkpoint: blocked.checkpoint?.health,
         walBytesBefore: initialUsage.databaseWalBytes,
         walBytesAfter: initialUsage.databaseWalBytes,
       },
@@ -436,7 +437,7 @@ async function enforceSessionHistoryMaintenanceForDatabase(
   const pruneArchives = (trigger: SqliteSessionArchivePruningDiagnostics["trigger"]) => {
     const archivePruning: SqliteSessionArchivePruningDiagnostics = { trigger };
     return withSqliteSessionPageReclamation(databaseOptions, (reclaimPages) =>
-      runExclusiveSqliteSessionWrite(
+      observeSqliteSessionWrite(
         resolved,
         async () =>
           pruneAllSessionTranscriptArchivesToHighWater({
@@ -446,6 +447,8 @@ async function enforceSessionHistoryMaintenanceForDatabase(
             highWaterBytes,
             storePath: params.storePath,
             reclaimPages,
+            withArchiveWrite: (write) =>
+              runExclusiveSqliteSessionWrite(resolved, write, "session.history.archive-prune"),
             onCheckpointIncomplete: (checkpoint) =>
               deferPhysicalBudgetForCheckpoint(params, databasePath, checkpoint),
           }),
@@ -668,7 +671,7 @@ async function enforceSessionHistoryMaintenanceForDatabase(
         const checkpointCompleted = await withSqliteSessionPageReclamation(
           databaseOptions,
           (reclaimPages) =>
-            runExclusiveSqliteSessionWrite(
+            observeSqliteSessionWrite(
               resolved,
               async () => {
                 try {

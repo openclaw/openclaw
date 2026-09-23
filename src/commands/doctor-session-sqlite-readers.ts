@@ -15,6 +15,7 @@ import type { FileEntry } from "../agents/sessions/session-manager-types.js";
 import { extractGeneratedTranscriptSessionId } from "../config/sessions/generated-transcript-session-id.js";
 import type { TranscriptEvent } from "../config/sessions/session-accessor.js";
 import {
+  getSessionKysely,
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
@@ -22,11 +23,16 @@ import {
   parseOpaqueLeafEntry,
   parseParentLinkedOpaqueEntry,
 } from "../config/sessions/session-entry-codec.js";
+import { transcriptEventReadBytesSql } from "../config/sessions/session-transcript-read-bytes.js";
 import type { SessionStoreTarget as ResolvedSessionStoreTarget } from "../config/sessions/targets.js";
-import { resolveAllAgentSessionStoreCandidateTargetsSync } from "../config/sessions/targets.js";
+import {
+  resolveAllAgentSessionStoreCandidateTargetsSync,
+  resolveConfiguredAgentDatabaseTargets,
+} from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
+import { createRetainedAgentDatabaseMatcher } from "../state/agent-deletion-discovery.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { tableExists, tableHasColumn } from "../state/openclaw-state-db-schema-helpers.js";
 
@@ -503,13 +509,17 @@ export function readOnlySqliteDbStats(target: SessionStoreTarget): ReadOnlySqlit
         },
       };
     }
+    // Logical payload bytes exclude JSONL separators; identity rows retain the database's encoding.
+    const eventBytes = tableHasColumn(database, "transcript_events", "event_zstd")
+      ? transcriptEventReadBytesSql().compile(getSessionKysely(database)).sql
+      : "octet_length(event_json)";
     const totalRow = database
-      .prepare("SELECT COALESCE(SUM(LENGTH(event_json)), 0) AS row_bytes FROM transcript_events")
+      .prepare(`SELECT COALESCE(SUM(${eventBytes}), 0) AS row_bytes FROM transcript_events`)
       .get() as { row_bytes?: unknown } | undefined;
     const largestRows = database
       .prepare(
         `
-          SELECT session_id, COUNT(*) AS events, COALESCE(SUM(LENGTH(event_json)), 0) AS row_bytes
+          SELECT session_id, COUNT(*) AS events, COALESCE(SUM(${eventBytes}), 0) AS row_bytes
           FROM transcript_events
           GROUP BY session_id
           ORDER BY row_bytes DESC, events DESC, session_id ASC
@@ -571,14 +581,25 @@ export function resolveTargetSqlitePath(
 export function projectExistingAgentDatabaseTargets(
   targets: readonly SessionStoreTarget[],
   env: NodeJS.ProcessEnv,
+  cfg: OpenClawConfig,
 ): ExistingAgentDatabaseTarget[] {
   const seenPaths = new Set<string>();
+  const isRetained = createRetainedAgentDatabaseMatcher(env, () =>
+    resolveConfiguredAgentDatabaseTargets(cfg, { env }),
+  );
   return targets.flatMap((target) => {
-    if (readAgentDatabaseAdmissionRefusal(target.agentId, { env })) {
+    if (
+      isRetained(target.storePath, target.agentId) ||
+      readAgentDatabaseAdmissionRefusal(target.agentId, { env })
+    ) {
       return [];
     }
     const sqlitePath = resolveTargetSqlitePath(target, env);
-    if (seenPaths.has(sqlitePath) || !fs.existsSync(sqlitePath)) {
+    if (
+      isRetained(sqlitePath, target.agentId) ||
+      seenPaths.has(sqlitePath) ||
+      !fs.existsSync(sqlitePath)
+    ) {
       return [];
     }
     seenPaths.add(sqlitePath);
@@ -593,6 +614,7 @@ export function listExistingAgentDatabaseTargets(
   return projectExistingAgentDatabaseTargets(
     resolveAllAgentSessionStoreCandidateTargetsSync(cfg, { env }),
     env,
+    cfg,
   );
 }
 

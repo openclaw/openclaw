@@ -1,7 +1,12 @@
 // Covers streaming chunk boundaries for embedded-agent text blocks.
 import { describe, expect, it, vi } from "vitest";
 import * as fences from "../../packages/markdown-core/src/fences.js";
+import { markdownToIR } from "../../packages/markdown-core/src/ir.js";
+import { runNodeScript } from "../../test/helpers/run-node-script.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { EmbeddedBlockChunker } from "./embedded-agent-block-chunker.js";
+import { agentProcessTestEntrypoints } from "./process-runtime.test-support.js";
 
 function createFlushOnParagraphChunker(params: { minChars: number; maxChars: number }) {
   return new EmbeddedBlockChunker({
@@ -117,6 +122,183 @@ describe("EmbeddedBlockChunker", () => {
     },
   );
 
+  it.each([
+    {
+      name: "ordinary drain",
+      deltas: ["    A_153587\n\n    B_153587"],
+      force: false,
+      code: "A_153587\n\nB_153587\n",
+    },
+    {
+      name: "incomplete blank-line delta",
+      deltas: ["    A_153587\n\n", "    B_153587"],
+      force: false,
+      code: "A_153587\n\nB_153587\n",
+    },
+    {
+      name: "fitting tail in an oversized forced drain",
+      deltas: ["Intro text here.\n\n    line one\n    line two\n\n    line four\n    line five"],
+      force: true,
+      code: "line one\nline two\n\nline four\nline five\n",
+    },
+    {
+      name: "tab indentation with literal excess spaces",
+      deltas: ["\t  A_153587\n\n\tB_153587"],
+      force: false,
+      code: "  A_153587\n\nB_153587\n",
+    },
+    {
+      name: "literal fence markers",
+      deltas: ["    ``` marker\n\n    tail"],
+      force: false,
+      code: "``` marker\n\ntail\n",
+    },
+  ])("preserves rendered indented code through $name", ({ deltas, force, code }) => {
+    const chunker = new EmbeddedBlockChunker({
+      minChars: 1,
+      maxChars: 60,
+      breakPreference: "paragraph",
+    });
+    const chunks: string[] = [];
+    for (const delta of deltas) {
+      chunker.append(delta);
+      if (!force) {
+        chunks.push(...drainChunks(chunker));
+      }
+    }
+    chunks.push(...drainChunks(chunker, true));
+
+    const renderedCode = chunks.flatMap((chunk) => {
+      const ir = markdownToIR(chunk);
+      return ir.styles
+        .filter((span) => span.style === "code_block")
+        .map((span) => ir.text.slice(span.start, span.end));
+    });
+    expect(renderedCode).toEqual([code]);
+    expectChunksWithinLength(chunks, 60);
+    expect(chunker.consumedLength).toBe(deltas.join("").length);
+  });
+
+  it.each([
+    { force: false, body: `${"A".repeat(56)} TAIL_153587` },
+    { force: true, body: `${"A".repeat(56)} TAIL_153587` },
+    { force: false, body: `${"A".repeat(51)}😀 TAIL_153587` },
+  ])(
+    "retains literal space and code ownership across an oversized indented line (force: $force, body: $body)",
+    ({ force, body }) => {
+      const source = `    ${body}`;
+      const chunker = new EmbeddedBlockChunker({ minChars: 10, maxChars: 60 });
+      const chunks: string[] = [];
+      const sources: string[] = [];
+      const emit = (chunk: string, options?: { sourceText: string }) => {
+        chunks.push(chunk);
+        sources.push(options?.sourceText ?? "");
+      };
+      chunker.append(source);
+      chunker.drain({ force, emit });
+      chunker.drain({ force: true, emit });
+
+      const code = chunks.map((chunk) => {
+        const ir = markdownToIR(chunk);
+        const span = ir.styles.find((entry) => entry.style === "code_block");
+        expect(span).toBeDefined();
+        if (!span) {
+          throw new Error("indented continuation rendered as prose");
+        }
+        expect(ir.text.slice(0, span.start).trim()).toBe("");
+        expect(ir.text.slice(span.end).trim()).toBe("");
+        // This fixture has no authored line ending; IR adds one per code block.
+        return ir.text.slice(span.start, span.end).replace(/\n$/, "");
+      });
+      expect(code.join("")).toBe(body);
+      expect(sources.join("")).toBe(source);
+      expect(chunker.consumedLength).toBe(source.length);
+      expectChunksWithinLength(chunks, 60);
+    },
+  );
+
+  it.each([false, true])(
+    "completes Unicode code followed by a long whitespace run (force: %s)",
+    async (force) => {
+      // A synchronous stalled drain needs an external deadline, not Vitest's in-process timer.
+      const chunkerUrl = resolveRuntimeWorkerUrl(agentProcessTestEntrypoints.blockChunker);
+      const result = await runNodeScript(
+        [
+          ...resolveRuntimeWorkerArgv(chunkerUrl, resolveTestNodeExecPath()).slice(0, -1),
+          "--input-type=module",
+          "--eval",
+          `
+            import assert from "node:assert/strict";
+            import { EmbeddedBlockChunker } from ${JSON.stringify(chunkerUrl.href)};
+            import { markdownToIR } from ${JSON.stringify(resolveRuntimeWorkerUrl(agentProcessTestEntrypoints.markdownIr).href)};
+            const body = "A".repeat(52) + "\\u{1f600}" + " ".repeat(60) + "B";
+            const source = "    " + body;
+            const chunker = new EmbeddedBlockChunker({ minChars: 10, maxChars: 60 });
+            const chunks = [];
+            const sources = [];
+            const emit = (text, metadata) => {
+              chunks.push(text);
+              sources.push(metadata.sourceText);
+            };
+            chunker.append(source);
+            console.log("drain-started");
+            chunker.drain({ force: ${force}, emit });
+            chunker.drain({ force: true, emit });
+            assert.equal(chunks.map((chunk) => {
+              assert.ok(chunk.length <= 60 && chunk.isWellFormed());
+              const ir = markdownToIR(chunk);
+              const span = ir.styles.find((entry) => entry.style === "code_block");
+              assert.ok(span, "continuation lost code formatting");
+              assert.equal(span.start, 0);
+              assert.equal(span.end, ir.text.length);
+              return ir.text.slice(span.start, span.end).replace(/\\n$/, "");
+            }).join(""), body);
+            assert.equal(sources.join(""), source);
+            assert.equal(chunker.consumedLength, source.length);
+            assert.equal(chunker.hasBuffered(), false);
+            console.log("drain-completed");
+          `,
+        ],
+        process.env,
+        5_000,
+        { requireProcessTreeExit: true },
+      );
+      expect(result.error, result.stdout + result.stderr).toBeUndefined();
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+    },
+  );
+
+  it.each([">     literal", "- item\n\n      literal"])(
+    "leaves nested-container Markdown unchanged: %s",
+    (source) => {
+      const chunker = new EmbeddedBlockChunker({ minChars: 50, maxChars: 60 });
+      chunker.append(source);
+      expect(drainChunks(chunker)).toEqual([]);
+      expect(drainChunks(chunker, true)).toEqual([source]);
+    },
+  );
+
+  it("reconciles indented source after a cap without replaying delivered code", () => {
+    const chunker = new EmbeddedBlockChunker({ minChars: 10, maxChars: 60 });
+    chunker.append(`    ${"A".repeat(56)}old`);
+    const first = drainChunks(chunker);
+    expect(chunker.consumedLength).toBe(56);
+    const snapshot = `    ${"A".repeat(52)}NEW`;
+    expect(chunker.replace(snapshot)).toBe(true);
+    const chunks = [...first, ...drainChunks(chunker, true)];
+    const code = chunks.map((chunk) => {
+      const ir = markdownToIR(chunk);
+      return ir.styles
+        .filter((span) => span.style === "code_block")
+        .map((span) => ir.text.slice(span.start, span.end).replace(/\n$/, ""))
+        .join("");
+    });
+    expect(code.join("")).toBe(`${"A".repeat(52)}NEW`);
+    expect(chunker.consumedLength).toBe(snapshot.length);
+    expect(chunker.sourceLength).toBe(snapshot.length);
+    expect(drainChunks(chunker, true)).toEqual([]);
+  });
+
   it("balances an unfinished fence at the exact cap and retains its later continuation", () => {
     const chunker = new EmbeddedBlockChunker({
       minChars: 8,
@@ -189,6 +371,39 @@ describe("EmbeddedBlockChunker", () => {
       ]);
     },
   );
+
+  it("preserves code and source coverage across shortened fence metadata and indented code", () => {
+    const body = `${"A".repeat(56)} TAIL`;
+    const source = `\`\`\`${"language".repeat(20)}\nreal\n\`\`\`\n\n    ${body}`;
+    const chunker = new EmbeddedBlockChunker({ minChars: 1, maxChars: 60 });
+    const chunks: string[] = [];
+    const sources: string[] = [];
+    chunker.append(source);
+    chunker.drain({
+      force: true,
+      emit: (text, options) => {
+        chunks.push(text);
+        sources.push(options?.sourceText ?? "");
+      },
+    });
+    const code = chunks.flatMap((text) => {
+      const ir = markdownToIR(text);
+      return ir.styles
+        .filter((span) => span.style === "code_block")
+        .map((span) => ir.text.slice(span.start, span.end));
+    });
+    expect(code[0]).toBe("real\n");
+    // This indented body has no authored newline; each rendered fragment adds one.
+    expect(
+      code
+        .slice(1)
+        .map((text) => text.replace(/\n$/u, ""))
+        .join(""),
+    ).toBe(body);
+    expect(sources.join("")).toBe(source);
+    expect(chunker.consumedLength).toBe(source.length);
+    expectChunksWithinLength(chunks, 60);
+  });
 
   it.each([
     { name: "below the cap", suffix: "Unchanged paragraph follows.\n", ready: false },

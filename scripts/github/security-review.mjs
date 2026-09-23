@@ -2,8 +2,19 @@
 
 import { appendFile } from "node:fs/promises";
 import { reviewDependencyChanges } from "./dependency-guard.mjs";
-import { assertGuardUnchanged, findMaintainerApproval, readGuardReview } from "./guard-review.mjs";
-import { publishGuardStatus } from "./guard-shared.mjs";
+import {
+  SupersededReviewError,
+  assertGuardUnchanged,
+  findMaintainerApproval,
+  readGuardReview,
+} from "./guard-review.mjs";
+import {
+  GitHubDiffDataError,
+  GitHubRateLimitError,
+  GitHubStatusPublicationError,
+  publishGuardStatus,
+  withSecurityReviewRecovery,
+} from "./guard-shared.mjs";
 import { securityReviewRollout } from "./security-review-rollout.mjs";
 import { reviewSecuritySensitiveChanges } from "./security-sensitive-guard.mjs";
 
@@ -55,7 +66,28 @@ async function ciState(review) {
   for (const candidate of candidates) {
     ciRunState(candidate);
   }
-  const run = candidates.toSorted((left, right) => right.id - left.id)[0];
+  // Delayed draft events can create wholly skipped PR runs after runnable CI.
+  let run;
+  for (const candidate of candidates.toSorted((left, right) => right.id - left.id)) {
+    if (
+      candidate.event !== "pull_request" ||
+      candidate.status !== "completed" ||
+      candidate.conclusion !== "skipped"
+    ) {
+      run = candidate;
+      break;
+    }
+    // Reruns retain their ID; a skipped list entry can already have a new attempt.
+    const current = await api.request(`${root}/runs/${candidate.id}`);
+    const currentState = ciRunState(current);
+    if (current.id !== candidate.id || current.head_sha !== candidate.head_sha) {
+      throw new Error("The CI run identity changed during security review.");
+    }
+    if (currentState !== "completed" || current.conclusion !== "skipped") {
+      run = current;
+      break;
+    }
+  }
   if (!run || run.status !== "completed") {
     return "pending";
   }
@@ -92,12 +124,14 @@ async function ciState(review) {
     : "failure";
 }
 
+let diffRecoveryReview;
+
 async function main() {
   const mode = process.env.OPENCLAW_SECURITY_REVIEW_MODE ?? "enforce";
   if (!["detect", "autoscrub", "enforce"].includes(mode)) {
     throw new Error(`Unknown security review mode: ${mode}`);
   }
-  const review = await readGuardReview();
+  const review = await readGuardReview(diffRecoveryReview);
   if (!review) {
     return;
   }
@@ -120,6 +154,15 @@ async function main() {
             allowed = false;
           }
         } catch (error) {
+          if (
+            error instanceof GitHubRateLimitError ||
+            ((error instanceof GitHubStatusPublicationError ||
+              error instanceof GitHubDiffDataError ||
+              error instanceof SupersededReviewError) &&
+              errors.length === 0)
+          ) {
+            throw error;
+          }
           errors.push(error instanceof Error ? error.message : String(error));
         }
       }
@@ -187,18 +230,46 @@ async function main() {
       "CI and applicable security review requirements passed",
     );
   } catch (error) {
+    if (error instanceof GitHubDiffDataError) {
+      diffRecoveryReview = review;
+    }
+    if (
+      error instanceof GitHubRateLimitError ||
+      error instanceof GitHubStatusPublicationError ||
+      error instanceof SupersededReviewError
+    ) {
+      throw error;
+    }
     await publishGuardStatus(
       review,
       "failure",
       "CI or security review failed; see workflow details",
+    ).catch(
+      /** @param {unknown} publicationError */ (publicationError) => {
+        if (
+          error instanceof GitHubDiffDataError &&
+          (publicationError instanceof GitHubRateLimitError ||
+            publicationError instanceof GitHubStatusPublicationError)
+        ) {
+          // Keep publication timing and the diff's original PR identity together.
+          throw publicationError;
+        }
+        console.error(
+          publicationError instanceof Error ? publicationError.message : String(publicationError),
+        );
+      },
     );
     throw error;
   }
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  main().catch(
+  withSecurityReviewRecovery(main).catch(
     /** @param {unknown} error */ (error) => {
+      if (error instanceof SupersededReviewError) {
+        console.log(error.message);
+        return;
+      }
       console.error(error instanceof Error ? error.message : String(error));
       process.exitCode = 1;
     },

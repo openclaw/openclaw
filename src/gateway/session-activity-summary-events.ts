@@ -3,14 +3,14 @@ import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 
 export async function broadcastSessionActivitySummary(
-  target: { key: string; agentId: string },
+  target: { key: string; agentId: string; storePath: string },
   params: {
     getSessionRowProjection?: () => SessionRowProjection | undefined;
     broadcast: GatewayBroadcastFn;
   },
 ): Promise<void> {
   const projection = params.getSessionRowProjection?.();
-  const query = { key: target.key, agentId: target.agentId };
+  const query = { key: target.key, agentId: target.agentId, storePath: target.storePath };
   const captured = projection?.capture(query);
   const publish = () => {
     if (projection && (!captured || !projection.isCurrent(captured))) {

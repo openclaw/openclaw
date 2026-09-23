@@ -20,6 +20,7 @@ afterEach(() => resetPluginRuntimeStateForTest());
 test("keeps thinking defaults separate for distinct literal model IDs", async () => {
   await withStateDirEnv("reply-thinking-identities-", async () => {
     const selection = await createModelSelectionState({
+      agentId: "main",
       cfg: { plugins: { enabled: false } },
       agentCfg: undefined,
       defaultProvider: "custom",
@@ -77,6 +78,7 @@ test.each(["origin", "notice"])(
             }),
       };
       const selection = await createModelSelectionState({
+        agentId: "main",
         cfg: { plugins: { enabled: false } },
         agentCfg: undefined,
         sessionEntry: entry,

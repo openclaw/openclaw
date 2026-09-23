@@ -8,11 +8,23 @@ import type {
   InitialTaskFlowLinkResult,
   InitialTaskManagedCancellationResult,
 } from "./task-initial-flow.kernel.js";
+import type {
+  TaskStateNotificationAcknowledgement,
+  TaskNotificationDeliveryUpdate,
+} from "./task-notification.operation.js";
 import type { TaskCreateInput, TaskCreateResult } from "./task-registry-create.kernel.js";
 import type { TaskRecordTransitionReceipt } from "./task-registry-transition.kernel.js";
 import type { TaskPersistenceReceipt, TaskRuntime } from "./task-registry.types.js";
 
 export type TaskInitialWorkerOperations = {
+  "tasks.updateNotificationDelivery": {
+    input: TaskNotificationDeliveryUpdate;
+    output: TaskRecordTransitionReceipt | null;
+  };
+  "tasks.acknowledgeStateChange": {
+    input: TaskStateNotificationAcknowledgement;
+    output: TaskRecordTransitionReceipt | null;
+  };
   "tasks.createRecord": { input: TaskCreateInput; output: TaskCreateResult };
   "tasks.finalizeActive": {
     input: {

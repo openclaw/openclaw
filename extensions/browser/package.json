@@ -11,7 +11,7 @@
     "playwright-core": "1.63.0",
     "typebox": "1.3.30",
     "yargs-parser": "22.0.0",
-    "zod": "4.6.4"
+    "zod": "4.6.5"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",

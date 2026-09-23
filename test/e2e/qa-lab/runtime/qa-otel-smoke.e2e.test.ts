@@ -8,7 +8,14 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { gzipSync } from "node:zlib";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../../../src/infra/runtime-worker-url.js";
+import { qaOtelSmokeEntrypoint } from "./qa-otel-smoke-entrypoint.test-support.js";
 import { testing } from "./qa-otel-smoke-runtime.js";
+
+const runtimeUrl = resolveRuntimeWorkerUrl(qaOtelSmokeEntrypoint);
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -22,11 +29,10 @@ describe("qa-otel-smoke receiver bounds", () => {
     configuredBodyLimitLoad = spawnSync(
       process.execPath,
       [
-        "--import",
-        "tsx",
+        ...resolveRuntimeWorkerArgv(runtimeUrl).slice(0, -1),
         "--input-type=module",
         "--eval",
-        'await import("./test/e2e/qa-lab/runtime/qa-otel-smoke-runtime.ts");',
+        `await import(${JSON.stringify(runtimeUrl.href)});`,
       ],
       {
         encoding: "utf8",
@@ -189,13 +195,7 @@ describe("qa-otel-smoke receiver bounds", () => {
     try {
       const result = spawnSync(
         process.execPath,
-        [
-          "--import",
-          "tsx",
-          "test/e2e/qa-lab/runtime/qa-otel-smoke-runtime.ts",
-          "--output-dir",
-          tempRoot,
-        ],
+        [...resolveRuntimeWorkerArgv(runtimeUrl), "--output-dir", tempRoot],
         {
           cwd: process.cwd(),
           encoding: "utf8",

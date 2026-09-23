@@ -149,7 +149,7 @@ describe("worker placement shutdown replay", () => {
       const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
       const environments = support.createService(support.createProvider());
       const intent = deriveEnvironmentIntent(`session-dispatch:${REQUEST.sessionId}:1`);
-      support.testState.store.createIntent({
+      await support.testState.store.createIntent({
         ...intent,
         providerId: "fake",
         profileId: "development",
@@ -232,7 +232,7 @@ describe("worker placement shutdown replay", () => {
             .list()
             .find((record) => record.provisionOperationId === operationId)!;
           if (destroyRequested) {
-            support.testState.store.requestDestroy({
+            await support.testState.store.requestDestroy({
               environmentId: environment.environmentId,
               state: environment.state,
             });

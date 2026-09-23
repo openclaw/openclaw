@@ -66,6 +66,9 @@ export type GatewayCoreRequestParams = {
   "users.listModelAccounts": UsersSchema.UsersListModelAccountsParams;
   "users.selectModelAccount": UsersSchema.UsersSelectModelAccountParams;
   "users.linkAuthProfile": UsersSchema.UsersLinkAuthProfileParams;
+  "users.linkChannelIdentity": UsersSchema.UsersLinkChannelIdentityParams;
+  "users.unlinkChannelIdentity": UsersSchema.UsersUnlinkChannelIdentityParams;
+  "users.listChannelIdentities": UsersSchema.UsersListChannelIdentitiesParams;
   "users.unlinkAuthProfile": UsersSchema.UsersUnlinkAuthProfileParams;
   "users.github.status": Static<typeof UsersSchema.UsersGitHubStatusParamsSchema>;
   "users.github.authorize.start": Static<typeof UsersSchema.UsersGitHubAuthorizeStartParamsSchema>;

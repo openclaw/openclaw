@@ -670,8 +670,12 @@ class ChatQuestionPanel extends OpenClawLightDomElement {
                 >
                   ${
                     this.pendingAction?.kind === "skip"
-                      ? t("chat.questions.skipping")
-                      : t("chat.questions.skip")
+                      ? t(
+                          model.nonBlocking
+                            ? "chat.asyncQuestions.dismissing"
+                            : "chat.questions.skipping",
+                        )
+                      : t(model.nonBlocking ? "chat.asyncQuestions.dismiss" : "chat.questions.skip")
                   }
                 </button>`
               : nothing

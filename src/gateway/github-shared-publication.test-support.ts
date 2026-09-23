@@ -1,3 +1,4 @@
+import type { RepositoryGitHubPublicationRow } from "../state/github-publication-read.types.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -17,11 +18,9 @@ import {
   WORKSPACE_TREE,
   createTestGitHubPublicationCoordinator,
   githubPublicationTestMocks,
+  systemPublicationRequester,
 } from "./github-publication.test-support.js";
-import {
-  repositoryGitHubPublicationDigest,
-  type RepositoryGitHubPublicationRow,
-} from "./github-repository-publication-store.js";
+import { repositoryGitHubPublicationDigest } from "./github-repository-publication-store.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
 export const sharedPublicationSession: SharedGitHubPublicationSession = {
@@ -62,6 +61,8 @@ export function insertSharedWorktreeReceipt(
       requestDigest: digestGitHubPublicationRequest({ ...request, sessionId: session.sessionId }),
       sessionId: session.sessionId,
       lifecycleRevision: session.lifecycleRevision ?? null,
+      requester: systemPublicationRequester.snapshot,
+      assertCurrent: systemPublicationRequester.assertCurrent,
       now: options.createdAtMs ?? 1_000,
       worktree: {
         id: options.worktreeId ?? "worktree-1",
@@ -111,6 +112,7 @@ export function repositoryReceipt(
     request_id: "repository-request",
     idempotency_key: "repository-key",
     request_digest: "",
+    requester_authority_json: null,
     session_id: SESSION_ID,
     session_lifecycle_revision: null,
     session_key: SESSION_KEY,

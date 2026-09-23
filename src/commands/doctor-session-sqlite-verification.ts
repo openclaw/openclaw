@@ -5,6 +5,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveLegacyTranscriptPaths } from "../config/sessions/legacy-store-inspection.js";
 import { withSqliteSessionImportStage } from "../config/sessions/session-accessor.sqlite-import-stage.js";
 import { getSessionKysely } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { transcriptEventJsonSql } from "../config/sessions/transcript-payload.js";
 import { readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
 import { executeSqliteQueryTakeFirstSync, iterateSqliteQuerySync } from "../infra/kysely-sync.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
@@ -55,7 +56,7 @@ function verifyTranscriptEvents(
         database,
         db
           .selectFrom("transcript_events")
-          .select("event_json")
+          .select(transcriptEventJsonSql(database).as("event_json"))
           .where("session_id", "=", source.sessionId)
           .orderBy("seq", "asc"),
       )) {
@@ -72,6 +73,9 @@ function verifyTranscriptEvents(
         // Canonical history may contain newer events, but must preserve source order and repeats.
         if (event.event_json === expected.value.eventJson) {
           expected = sourceRows.next();
+          if (expected.done) {
+            break;
+          }
         }
       }
       let missingEvents = 0;

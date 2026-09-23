@@ -40,7 +40,7 @@ describe("worker turn recovery after environment reconciliation errors", () => {
   afterEach(cleanupWorkerTurnLauncherTest);
 
   it("settles a stale-build turn when a lost shared node rejects its stop acknowledgement", async () => {
-    const store = createWorkerEnvironmentStore({ database: openOpenClawStateDatabase() });
+    const store = await createWorkerEnvironmentStore({ database: openOpenClawStateDatabase() });
     let installation = {
       ...BUNDLE_ARTIFACT,
       protocolFeatures: [
@@ -111,15 +111,19 @@ describe("worker turn recovery after environment reconciliation errors", () => {
       isStopping: () => false,
     });
     try {
-      store.createIntent({
+      await store.createIntent({
         environmentId: ENVIRONMENT_ID,
         providerId: provider.id,
         profileId: "development",
         profileSnapshot: { executionMode: "worker-turn", settings: { device: "node-1" } },
         provisionOperationId: "shared-node-recovery",
       });
-      store.transition({ environmentId: ENVIRONMENT_ID, from: "requested", to: "provisioning" });
-      const ready = store.transition({
+      await store.transition({
+        environmentId: ENVIRONMENT_ID,
+        from: "requested",
+        to: "provisioning",
+      });
+      const ready = await store.transition({
         environmentId: ENVIRONMENT_ID,
         from: "provisioning",
         to: "ready",

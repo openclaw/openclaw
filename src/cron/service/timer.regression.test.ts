@@ -20,11 +20,7 @@ import {
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { CRON_TASK_KIND } from "../../tasks/cron-task-contract.js";
 import { cancelTaskById, listTaskRecords } from "../../tasks/task-registry.js";
-import {
-  resetTaskRegistryControlRuntimeForTests,
-  resetTaskRegistryForTests,
-  setTaskRegistryControlRuntimeForTests,
-} from "../../tasks/task-runtime.test-helpers.js";
+import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import {
   advanceCronActiveJobGeneration,
   clearCronJobActive,
@@ -90,9 +86,11 @@ function findCronTaskByBaseRunId(baseRunId: string) {
   );
 }
 
-function installCronCancellationControlRuntime() {
-  setTaskRegistryControlRuntimeForTests({
-    cancelActiveCronTaskRun,
+vi.mock("../../tasks/task-registry-control.runtime.js", async () => {
+  const cron = await import("./active-run-cancellation.js");
+  return {
+    cancelBackgroundExecSession: () => false,
+    cancelActiveCronTaskRun: cron.cancelActiveCronTaskRun,
     getAcpSessionManager: () => ({
       cancelSession: async () => {
         throw new Error("Unexpected ACP cancellation");
@@ -101,8 +99,8 @@ function installCronCancellationControlRuntime() {
     killSubagentRunAdmin: async () => {
       throw new Error("Unexpected subagent cancellation");
     },
-  });
-}
+  };
+});
 
 describe("cron service timer regressions", () => {
   it("caps timer delay to 60s for far-future schedules", async () => {
@@ -507,7 +505,6 @@ describe("cron service timer regressions", () => {
         throw new Error("Expected timeout-disabled cron task row");
       }
 
-      installCronCancellationControlRuntime();
       const cancelResult = await cancelTaskById({
         cfg: {} as never,
         taskId: task.taskId,
@@ -531,7 +528,6 @@ describe("cron service timer regressions", () => {
       await vi.waitFor(() => expect(getSuspensionVisibleCronTaskRunCount()).toBe(0));
       vi.useRealTimers();
       resetActiveCronTaskRunsForTests();
-      resetTaskRegistryControlRuntimeForTests();
       resetTaskRegistryForTests();
     }
   });
@@ -702,7 +698,6 @@ describe("cron service timer regressions", () => {
       expect(task.status).toBe("running");
       expect(task.taskKind).toBe(CRON_TASK_KIND);
 
-      installCronCancellationControlRuntime();
       const cancelResult = await cancelTaskById({
         cfg: {} as never,
         taskId: task.taskId,
@@ -729,7 +724,6 @@ describe("cron service timer regressions", () => {
       await vi.waitFor(() => expect(getSuspensionVisibleCronTaskRunCount()).toBe(0));
       vi.useRealTimers();
       resetActiveCronTaskRunsForTests();
-      resetTaskRegistryControlRuntimeForTests();
       resetTaskRegistryForTests();
     }
   });
@@ -1172,7 +1166,6 @@ describe("cron service timer regressions", () => {
         }
         expect(task.status).toBe("running");
 
-        installCronCancellationControlRuntime();
         const cancelResult = await cancelTaskById({
           cfg: {} as never,
           taskId: task.taskId,
@@ -1205,7 +1198,6 @@ describe("cron service timer regressions", () => {
         await Promise.allSettled([timerPromise, heartbeatResult.promise]);
         await vi.waitFor(() => expect(getSuspensionVisibleCronTaskRunCount()).toBe(0));
         resetActiveCronTaskRunsForTests();
-        resetTaskRegistryControlRuntimeForTests();
         resetTaskRegistryForTests();
         vi.useRealTimers();
       }
@@ -1276,7 +1268,6 @@ describe("cron service timer regressions", () => {
         throw new Error("Expected main-target script cron task row");
       }
 
-      installCronCancellationControlRuntime();
       const cancelResult = await cancelTaskById({
         cfg: {} as never,
         taskId: task.taskId,
@@ -1302,7 +1293,6 @@ describe("cron service timer regressions", () => {
       await Promise.allSettled([timerPromise, runnerResult.promise]);
       await vi.waitFor(() => expect(getSuspensionVisibleCronTaskRunCount()).toBe(0));
       resetActiveCronTaskRunsForTests();
-      resetTaskRegistryControlRuntimeForTests();
       resetTaskRegistryForTests();
       vi.useRealTimers();
     }
@@ -1365,7 +1355,6 @@ describe("cron service timer regressions", () => {
       await Promise.allSettled([timerPromise, heartbeatResult.promise]);
       await vi.waitFor(() => expect(getSuspensionVisibleCronTaskRunCount()).toBe(0));
       resetActiveCronTaskRunsForTests();
-      resetTaskRegistryControlRuntimeForTests();
       resetTaskRegistryForTests();
       vi.useRealTimers();
     }

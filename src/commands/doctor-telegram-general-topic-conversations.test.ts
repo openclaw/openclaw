@@ -16,16 +16,21 @@ import { resolveDoctorContributionHealthChecks } from "../flows/doctor-health-co
 import { runDoctorHealthRepairs } from "../flows/doctor-repair-flow.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-} from "../state/openclaw-agent-db.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 
 const CHECK_ID = "core/doctor/telegram-general-topic-conversations";
 
 describe("doctor Telegram General-topic conversation repair", () => {
-  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+    afterEach(async () => {
+      for (const root of tempDirs.dirs) {
+        await cleanupSessionStateForTest({ stateDir: path.join(root, "state"), rootPath: root });
+      }
+      cleanup();
+    }),
+  );
   let cfg: OpenClawConfig;
   let env: NodeJS.ProcessEnv;
   let storePath: string;
@@ -39,10 +44,6 @@ describe("doctor Telegram General-topic conversation repair", () => {
       OPENCLAW_CONFIG_PATH: path.join(root, "missing-openclaw.json"),
       OPENCLAW_STATE_DIR: path.join(root, "state"),
     };
-  });
-
-  afterEach(() => {
-    closeOpenClawAgentDatabasesForTest();
   });
 
   it("merges an upgraded General-topic related binding exactly once", async () => {

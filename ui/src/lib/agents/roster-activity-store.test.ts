@@ -93,7 +93,7 @@ describe("roster activity lifecycle", () => {
     try {
       await vi.advanceTimersByTimeAsync(0);
       emit({ type: "event", event: "sessions.changed", payload: { reason: "stores" } });
-      await vi.advanceTimersByTimeAsync(200);
+      await vi.advanceTimersByTimeAsync(5_000);
       expect(store.snapshot.error).toBe("List unavailable");
       emit({
         type: "event",
@@ -399,8 +399,7 @@ describe("roster activity lifecycle", () => {
         await vi.advanceTimersByTimeAsync(100);
       }
       console.info(`activity roster events/s=10 fetchMs=1000 requests/min=${reads - 1}`);
-      expect(reads - 1).toBeGreaterThan(1);
-      expect(reads - 1).toBeLessThanOrEqual(15);
+      expect(reads - 1).toBe(10);
     } finally {
       detach();
       await vi.advanceTimersByTimeAsync(1_000);
@@ -509,6 +508,7 @@ describe("roster activity lifecycle", () => {
   });
 
   it("shares cross-agent rows and reconciles activity, unread, and new membership", async () => {
+    vi.useFakeTimers();
     let rows: GatewaySessionRow[] = [
       { key: "agent:main:pinned", kind: "direct", pinned: true, updatedAt: 1 },
       { key: "agent:ember:task", kind: "direct", updatedAt: 2 },
@@ -546,17 +546,17 @@ describe("roster activity lifecycle", () => {
           hasActiveRun: false,
         },
       );
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 250);
-      });
+      await vi.advanceTimersByTimeAsync(5_000);
       expect(load).toHaveBeenCalledTimes(1);
       rows = [...rows, { key: "agent:main:new", kind: "direct", updatedAt: 6 }];
       emit({ type: "event", event: "sessions.changed", payload: { session: rows[3] } });
-      await vi.waitFor(() => expect(store.snapshot.result?.sessions).toHaveLength(4));
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(store.snapshot.result?.sessions).toHaveLength(4);
       expect(load).toHaveBeenCalledTimes(2);
     } finally {
       detach();
       detachSecond();
+      vi.useRealTimers();
     }
   });
 

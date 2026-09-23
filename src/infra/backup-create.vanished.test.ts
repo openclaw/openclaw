@@ -124,6 +124,11 @@ it.each([
   ...(fsSync.constants.O_NOFOLLOW ? ["replace-around-open" as const] : []),
 ] as const)("archives a complete regular file through %s", async (mutation) => {
   await withOpenClawTestState({ layout: "split", scenario: "minimal" }, async (state) => {
+    // Keep concurrent backups out of this fixture's warning inventory.
+    const scratchRoot = state.path("scratch");
+    await fs.mkdir(scratchRoot);
+    Object.assign(state.envVars, { TMPDIR: scratchRoot, TMP: scratchRoot, TEMP: scratchRoot });
+    state.applyEnv();
     await state.writeConfig({ agents: { entries: { main: { workspace: state.workspaceDir } } } });
     const source = path.join(state.workspaceDir, "current.txt");
     const replacement = state.path("replacement");

@@ -1,16 +1,10 @@
 // Tests for gateway runtime subscription wiring.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createChannelParticipantAdmissionEvidence } from "../../test/helpers/channel-admission-evidence.js";
 import { createDeferred } from "../../test/helpers/promise.js";
-import {
-  configureExecutionIdentityAdmissionSink,
-  enqueueExecutionIdentityContextAtAdmission,
-  hasExecutionIdentityAdmissionSink,
-} from "../audit/execution-identity-admission.js";
-import { consumeChannelAdmissionEvidence } from "../channels/message-access/admission-evidence.js";
+import { configureExecutionIdentityAdmissionSink } from "../audit/execution-identity-admission.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   type AgentEventPayload,
-  emitAgentAuditEvent,
   emitAgentEvent,
   emitAgentEventForOwner,
   getAgentEventLifecycleGeneration,
@@ -42,11 +36,7 @@ import {
   waitForChatAbortControllerRemoval,
   waitForChatAbortTerminalPersistence,
 } from "./chat-abort-lifecycle-internal.js";
-import {
-  abortChatRunById,
-  registerChatAbortController,
-  removeChatAbortControllerEntry,
-} from "./chat-abort.js";
+import { abortChatRunById, removeChatAbortControllerEntry } from "./chat-abort.js";
 import type { AgentEventHandlerOptions } from "./server-chat.js";
 import { registerActivitySummaryPublicationTests } from "./server-runtime-subscriptions.activity-summary.test-support.js";
 import { registerTaskEventSubscriptionTests } from "./server-runtime-subscriptions.task-events.test-support.js";
@@ -55,6 +45,8 @@ import {
   createSubscriptionTestFixture,
   lifecycleState,
   readLifecycleState,
+  registerSubscriptionChatRun,
+  registerAuditSubscriptionTests,
 } from "./server-runtime-subscriptions.test-support.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 
@@ -68,13 +60,11 @@ function waitForFast<T>(
 const { log: mockLog, warn, createParams } = createSubscriptionTestFixture();
 
 const auditTestState = vi.hoisted(() => ({
-  enabled: true,
-  messageMode: "off" as "off" | "direct" | "all",
   created: 0,
   recorded: 0,
+  messages: 0,
   identityRecorded: 0,
   decisionRecorded: 0,
-  executionIdentityEnabled: false,
   stopped: 0,
 }));
 const agentEventHandlerMocks = vi.hoisted(() => ({
@@ -86,7 +76,7 @@ const transcriptBroadcastMocks = vi.hoisted(() => ({
   useActualHandler: false,
   readMessageById: vi.fn(),
 }));
-const runtimeConfigState = vi.hoisted(() => ({ value: {} as Record<string, unknown> }));
+const runtimeConfigState = vi.hoisted(() => ({ value: {} as OpenClawConfig }));
 const observeActivitySummary = vi.hoisted(() =>
   vi.fn<
     (
@@ -114,35 +104,40 @@ vi.mock("../config/io.js", () => ({
   getRuntimeConfig: () => runtimeConfigState.value,
 }));
 
-vi.mock("../audit/audit-config.js", () => ({
-  isAuditLedgerEnabled: () => auditTestState.enabled,
-  isExecutionIdentityCollectionEnabled: () => auditTestState.executionIdentityEnabled,
-  resolveAuditMessageMode: () => auditTestState.messageMode,
-}));
-
-vi.mock("../audit/audit-recorder.js", () => ({
-  createAuditEventRecorder: () => {
-    auditTestState.created += 1;
-    return {
-      record: vi.fn(() => {
-        auditTestState.recorded += 1;
-      }),
-      recordTool: vi.fn(),
-      recordMessage: vi.fn(),
-      recordExecutionIdentity: vi.fn(() => {
-        auditTestState.identityRecorded += 1;
-        return true;
-      }),
-      recordExecutionDecision: vi.fn(() => {
-        auditTestState.decisionRecorded += 1;
-        return true;
-      }),
-      stop: vi.fn(async () => {
-        auditTestState.stopped += 1;
-      }),
-    };
-  },
-}));
+vi.mock("../audit/audit-recorder.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../audit/audit-recorder.js")>();
+  return {
+    createAuditEventRecorder: (options: Parameters<typeof actual.createAuditEventRecorder>[0]) => {
+      auditTestState.created += 1;
+      return actual.createAuditEventRecorder({
+        ...options,
+        writer: {
+          ready: Promise.resolve(),
+          record: (event) => {
+            if (event.kind === "message") {
+              auditTestState.messages += 1;
+            } else {
+              auditTestState.recorded += 1;
+            }
+            return true;
+          },
+          recordExecutionIdentity: () => {
+            auditTestState.identityRecorded += 1;
+            return true;
+          },
+          recordExecutionDecision: () => {
+            auditTestState.decisionRecorded += 1;
+            return true;
+          },
+          recordExecutionDecisionWork: () => true,
+          stop: async () => {
+            auditTestState.stopped += 1;
+          },
+        },
+      });
+    },
+  };
+});
 
 vi.mock("./server-chat.js", () => ({
   createAgentEventHandler: (...args: unknown[]) => agentEventHandlerMocks.create(...args),
@@ -193,13 +188,11 @@ describe("startGatewayEventSubscriptions", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    auditTestState.enabled = true;
-    auditTestState.messageMode = "off";
     auditTestState.created = 0;
     auditTestState.recorded = 0;
+    auditTestState.messages = 0;
     auditTestState.identityRecorded = 0;
     auditTestState.decisionRecorded = 0;
-    auditTestState.executionIdentityEnabled = false;
     auditTestState.stopped = 0;
     transcriptBroadcastMocks.useActualHandler = false;
     transcriptBroadcastMocks.readMessageById.mockReset();
@@ -318,75 +311,14 @@ describe("startGatewayEventSubscriptions", () => {
     }
   });
 
-  it("records audit events by default and stops the recorder on unsubscribe", async () => {
-    unsubs = startGatewayEventSubscriptions(createParams());
-
-    expect(auditTestState.created).toBe(1);
-    emitAgentAuditEvent({
-      runId: "enabled-audit",
-      stream: "lifecycle",
-      data: { phase: "start", startedAt: 1_000 },
-    });
-    expect(auditTestState.recorded).toBe(1);
-    expect(hasExecutionIdentityAdmissionSink()).toBe(true);
-    expect(
-      enqueueExecutionIdentityContextAtAdmission(
-        {
-          runId: "gateway-admission",
-          agentId: "main",
-          ingress: { kind: "system", boundary: "gateway.boot", state: "present" },
-          runtime: { kind: "embedded" },
-        },
-        { enabled: true, runtimeInstanceId: "runtime-1" },
-      )?.accepted,
-    ).toBe(true);
-    expect(auditTestState.identityRecorded).toBe(1);
-    await unsubs.agentUnsub();
-    expect(auditTestState.stopped).toBe(1);
-    expect(hasExecutionIdentityAdmissionSink()).toBe(false);
-  });
-
-  it("owns channel evidence collection for the configured gateway lifecycle", async () => {
-    auditTestState.executionIdentityEnabled = true;
-    unsubs = startGatewayEventSubscriptions(createParams());
-
-    const evidence = createChannelParticipantAdmissionEvidence({
-      channelId: "test",
-      participantId: "person-1",
-    });
-    expect(evidence).toBeDefined();
-
-    await unsubs.agentUnsub();
-    expect(consumeChannelAdmissionEvidence(evidence)).toMatchObject({ ingressState: "unknown" });
-    expect(
-      createChannelParticipantAdmissionEvidence({
-        channelId: "test",
-        participantId: "person-2",
-      }),
-    ).toBeUndefined();
-  });
-
-  it("keeps retention maintenance but creates no producers when audit.enabled is false", async () => {
-    auditTestState.enabled = false;
-    unsubs = startGatewayEventSubscriptions(createParams());
-
-    expect(auditTestState.created).toBe(1);
-    emitAgentAuditEvent({
-      runId: "disabled-private",
-      stream: "lifecycle",
-      data: { phase: "start", startedAt: 1_000 },
-    });
-    emitAgentEvent({
-      runId: "disabled-public",
-      stream: "lifecycle",
-      data: { phase: "start", startedAt: 1_000 },
-    });
-    expect(auditTestState.recorded).toBe(0);
-    await waitForFast(() => expect(warn).toHaveBeenCalledOnce());
-    warn.mockClear();
-    // Disabled wiring must still unsubscribe cleanly.
-    await unsubs.agentUnsub();
-    expect(auditTestState.stopped).toBe(1);
+  registerAuditSubscriptionTests({
+    start: () => {
+      unsubs = startGatewayEventSubscriptions(createParams());
+      return unsubs;
+    },
+    runtimeConfigState,
+    auditTestState,
+    warn,
   });
 
   it("logs lazy agent event handler failures", async () => {
@@ -490,17 +422,12 @@ describe("startGatewayEventSubscriptions", () => {
     const sessionKey = "agent:main:main";
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
     const params = createParams();
-    const registration = registerChatAbortController({
-      chatAbortControllers: params.chatAbortControllers,
+    const registration = registerSubscriptionChatRun(params, {
       runId,
       sessionId: "session-lifecycle-table",
       sessionKey,
-      timeoutMs: 60_000,
       lifecycleGeneration,
     });
-    if (!registration.entry) {
-      throw new Error("expected registered chat abort controller");
-    }
     const entry = registration.entry;
     const transitions: LifecycleTransition[] = [
       { state: "Registered", lifecycle: readLifecycleState(entry) },
@@ -571,19 +498,12 @@ describe("startGatewayEventSubscriptions", () => {
       const params = createParams();
       const runId = "captured-terminal";
       const sessionKey = "agent:main:captured-terminal";
-      const register = () => {
-        const registration = registerChatAbortController({
-          chatAbortControllers: params.chatAbortControllers,
+      const register = () =>
+        registerSubscriptionChatRun(params, {
           runId,
           sessionId: "captured-session",
           sessionKey,
-          timeoutMs: 60_000,
-        });
-        if (!registration.entry) {
-          throw new Error("expected captured registration");
-        }
-        return registration.entry;
-      };
+        }).entry;
       const entry = register();
       const terminal = createDeferred();
       const successor = createDeferred();
@@ -713,17 +633,12 @@ describe("startGatewayEventSubscriptions", () => {
       const runId = `run-retired-${phase}`;
       const currentLifecycleGeneration = getAgentEventLifecycleGeneration();
       const params = createParams();
-      const registration = registerChatAbortController({
-        chatAbortControllers: params.chatAbortControllers,
+      const registration = registerSubscriptionChatRun(params, {
         runId,
         sessionId: `session-retired-${phase}`,
         sessionKey: "agent:main:main",
-        timeoutMs: 60_000,
         lifecycleGeneration: `${currentLifecycleGeneration}-retired`,
       });
-      if (!registration.entry) {
-        throw new Error("expected registered chat abort controller");
-      }
       const registered = readLifecycleState(registration.entry);
       agentEventHandlerMocks.create.mockReturnValue(
         Object.assign(
@@ -780,18 +695,13 @@ describe("startGatewayEventSubscriptions", () => {
       const sessionKey = "agent:main:main";
       const lifecycleGeneration = getAgentEventLifecycleGeneration();
       const params = createParams();
-      const registration = registerChatAbortController({
-        chatAbortControllers: params.chatAbortControllers,
+      const registration = registerSubscriptionChatRun(params, {
         runId,
         sessionId: "session-abort-persistence-bridge",
         sessionKey,
-        timeoutMs: 60_000,
         lifecycleGeneration,
         ...(hidden ? { controlUiVisible: false, projectSessionActive: false } : {}),
       });
-      if (!registration.entry) {
-        throw new Error("expected registered chat abort controller");
-      }
       const entry = registration.entry;
       claimAgentRunContext(runId, {
         lifecycleGeneration,

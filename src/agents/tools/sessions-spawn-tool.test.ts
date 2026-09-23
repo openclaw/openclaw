@@ -38,8 +38,8 @@ const hoisted = vi.hoisted(() => {
   };
 });
 
-vi.mock("../subagents/spawn/subagent-spawn-deps.js", () => ({
-  getSubagentSpawnDeps: () => ({ prepareModelChoice: hoisted.prepareModelChoiceMock }),
+vi.mock("../subagents/spawn/subagent-spawn.runtime.js", () => ({
+  prepareModelChoice: hoisted.prepareModelChoiceMock,
 }));
 
 vi.mock("../subagents/spawn/subagent-spawn.js", () => ({

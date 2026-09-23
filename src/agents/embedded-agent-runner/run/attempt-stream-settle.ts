@@ -75,6 +75,7 @@ import {
 import { selectCompactionTimeoutSnapshot } from "./compaction-timeout.js";
 import { materializeProviderContext } from "./images.js";
 import { wrapStreamFnWithMessageTransform } from "./message-transform-stream-wrapper.js";
+import { wrapStreamFnWithProviderReviewContinuation } from "./provider-review-continuation.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
 /**
@@ -558,6 +559,15 @@ export async function prepareEmbeddedAttemptTransport(input: {
   session.agent.streamFn = wrapStreamFnWithProviderPromptState({
     streamFn: session.agent.streamFn,
     ...input.providerPromptState,
+  });
+  session.agent.streamFn = wrapStreamFnWithProviderReviewContinuation({
+    streamFn: session.agent.streamFn,
+    acknowledgment: attempt.providerReviewAcknowledgment,
+    runId: attempt.runId,
+    assertCurrent: () => {
+      input.abortSignal.throwIfAborted();
+      assertRunCurrent?.();
+    },
   });
   const providerTextTransforms = resolveProviderTextTransforms({
     provider: attempt.provider,

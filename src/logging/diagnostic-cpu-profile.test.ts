@@ -3,6 +3,9 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
+import { diagnosticProfileEntrypoints } from "./diagnostic-profile-runtime.test-support.js";
 
 const native = vi.hoisted(() => ({
   connect: vi.fn(),
@@ -536,19 +539,19 @@ describe("diagnostic CPU profile owner", () => {
     "captures a real Node profile in an isolated child without opening a listener",
     async ({ signal }) => {
       // Keep V8 coverage and mocked inspector/timers in the test worker. The
-      // fresh child exercises the actual owner with only the repo's TS loader.
+      // fresh child exercises the prepared owner without inheriting either.
       const env: NodeJS.ProcessEnv = {};
       for (const key of ["PATH", "TMPDIR", "TMP", "TEMP"]) {
         if (process.env[key]) {
           env[key] = process.env[key];
         }
       }
-      const ownerUrl = new URL("./diagnostic-cpu-profile.ts", import.meta.url).href;
+      const ownerUrl = resolveRuntimeWorkerUrl(diagnosticProfileEntrypoints.cpu);
       const root = fileURLToPath(new URL("../../", import.meta.url));
       const source = `
 import assert from 'node:assert/strict';
 import { url } from 'node:inspector/promises';
-import { captureDiagnosticCpuProfile } from ${JSON.stringify(ownerUrl)};
+import { captureDiagnosticCpuProfile } from ${JSON.stringify(ownerUrl.href)};
 assert.equal(url(), undefined);
 const pid = process.pid;
 const outcome = await captureDiagnosticCpuProfile({ signal: new AbortController().signal, hasAuthority: () => true });
@@ -569,8 +572,7 @@ console.log(JSON.stringify({ node: process.version, platform: process.platform, 
 `;
       const result = await runNodeScript(
         [
-          "--import",
-          fileURLToPath(new URL("../../scripts/tsx.mjs", import.meta.url)),
+          ...resolveRuntimeWorkerArgv(ownerUrl, resolveTestNodeExecPath()).slice(0, -1),
           "--input-type=module",
           "--eval",
           source,

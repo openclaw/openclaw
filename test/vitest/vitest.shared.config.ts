@@ -7,6 +7,7 @@ import normalizationCorePackageJson from "../../packages/normalization-core/pack
 import { pluginSdkSubpaths } from "../../scripts/lib/plugin-sdk-entries.mts";
 import privateLocalOnlyPluginSdkSubpaths from "../../scripts/lib/plugin-sdk-private-local-only-subpaths.json" with { type: "json" };
 import { createStateSchemaInlinePlugin } from "../../scripts/lib/state-schema-inline-plugin.mts";
+import { resolveTsxImport } from "../../scripts/lib/tsx-cli-shim.mjs";
 import {
   isCiLikeEnv,
   resolveLocalVitestScheduling,
@@ -16,7 +17,11 @@ import {
   BUNDLED_PLUGIN_ROOT_DIR,
   BUNDLED_PLUGIN_TEST_GLOB,
 } from "./vitest.bundled-plugin-paths.ts";
-import { loadVitestPerformanceConfig } from "./vitest.performance-config.ts";
+import { sharedVitestExcludePatterns } from "./vitest.pattern-file.ts";
+import {
+  createVitestProjectCachePlugin,
+  loadVitestPerformanceConfig,
+} from "./vitest.performance-config.ts";
 import { createRedactingReporterPlugin } from "./vitest.reporters.ts";
 import { shouldPrintVitestThrottle } from "./vitest.system-load.ts";
 import { DEFAULT_VITEST_TEST_TIMEOUT_MS } from "./vitest.timeouts.ts";
@@ -87,22 +92,31 @@ export function resolveSharedVitestWorkerConfig(params: {
   isCI?: boolean;
   isWindows?: boolean;
   localScheduling?: LocalVitestScheduling;
-}): Pick<LocalVitestScheduling, "fileParallelism" | "maxWorkers"> {
+}): Pick<LocalVitestScheduling, "fileParallelism" | "maxWorkers"> & {
+  pool: "forks" | "threads";
+} {
   const env = params.env ?? process.env;
   const local = params.localScheduling ?? localScheduling;
+  const windows = params.isWindows ?? isWindows;
+  // Windows concurrent thread spawns can inherit one another's temporary pipe
+  // handles. Separate processes keep those writers out of unrelated child trees.
+  const pool = windows ? "forks" : "threads";
   if (hasWorkerOverride(env)) {
     return {
+      pool,
       fileParallelism: local.fileParallelism,
       maxWorkers: local.maxWorkers,
     };
   }
   if (params.isCI ?? isCI) {
     return {
+      pool,
       fileParallelism: true,
-      maxWorkers: (params.isWindows ?? isWindows) ? 2 : 3,
+      maxWorkers: windows ? 2 : 3,
     };
   }
   return {
+    pool,
     fileParallelism: local.fileParallelism,
     maxWorkers: local.maxWorkers,
   };
@@ -144,6 +158,7 @@ export const sharedVitestConfig = {
     },
     createStateSchemaInlinePlugin(repoRoot),
     compiledSubprocessesPlugin(),
+    createVitestProjectCachePlugin(),
     createRedactingReporterPlugin(),
   ],
   resolve: {
@@ -492,7 +507,9 @@ export const sharedVitestConfig = {
     unstubEnvs: true,
     unstubGlobals: true,
     isolate: false,
-    pool: "threads" as const,
+    pool: workerConfig.pool,
+    // Native imports keep the invocation owner's isolated source-cache policy.
+    execArgv: process.versions.bun ? [] : ["--import", resolveTsxImport(repoRoot)],
     runner: nonIsolatedRunnerPath,
     maxWorkers: workerConfig.maxWorkers,
     fileParallelism: workerConfig.fileParallelism,
@@ -531,18 +548,7 @@ export const sharedVitestConfig = {
       "ui/src/pages/chat/tool-stream.node.test.ts",
     ],
     setupFiles: [resolveRepoRootPath("test/setup.ts")],
-    exclude: [
-      "dist/**",
-      "test/fixtures/**",
-      "apps/macos/**",
-      "apps/macos/.build/**",
-      "**/node_modules/**",
-      "**/vendor/**",
-      "dist/OpenClaw.app/**",
-      "**/._*",
-      "**/*.live.test.ts",
-      "**/*.e2e.test.ts",
-    ],
+    exclude: [...sharedVitestExcludePatterns],
     coverage: {
       provider: "v8" as const,
       reporter: ["text", "lcov"],

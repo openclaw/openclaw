@@ -25,7 +25,7 @@ import {
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
-import type { PluginRuntime } from "../plugins/runtime/types.js";
+import { createPluginRuntime } from "../plugins/runtime/index.js";
 import { startPluginServices, type PluginServicesHandle } from "../plugins/services.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import type { OpenClawPluginApi } from "../plugins/types.js";
@@ -78,7 +78,7 @@ export async function createPluginReloadRecoveryFixture(
   const createBuilder = () =>
     createPluginRegistry({
       logger: log,
-      runtime: {} as PluginRuntime,
+      runtime: createPluginRuntime(),
       activateGlobalSideEffects: false,
     });
   const previous = createBuilder();

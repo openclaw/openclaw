@@ -9806,6 +9806,7 @@ struct ChatViewModelTests {
         let defaults = try #require(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
         let modelPickerStore = ChatModelPickerStore(defaults: defaults)
+        let firstPatchGate = AsyncGate()
         let now = Date().timeIntervalSince1970 * 1000
         let history = historyPayload()
         let sessions = sessionsResponse(
@@ -9822,7 +9823,7 @@ struct ChatViewModelTests {
             modelResponses: [models],
             setSessionModelHook: { model in
                 if model == "openai/gpt-5.4" {
-                    try await Task.sleep(for: .milliseconds(200))
+                    await firstPatchGate.wait()
                 }
             },
             modelPickerStore: modelPickerStore)
@@ -9830,10 +9831,17 @@ struct ChatViewModelTests {
         try await loadAndWaitBootstrap(vm: vm)
 
         await MainActor.run { vm.selectModel("openai/gpt-5.4") }
-        try await waitUntil("older model patch starts") {
-            await transport.patchedModels() == ["openai/gpt-5.4"]
+        do {
+            try await waitUntil("older model patch starts") {
+                await transport.patchedModels() == ["openai/gpt-5.4"]
+            }
+        } catch {
+            await firstPatchGate.open()
+            await vm.waitForPendingSessionSettings(in: "main")
+            throw error
         }
         await MainActor.run { vm.selectModel("openai/gpt-5.4-pro") }
+        await firstPatchGate.open()
 
         try await waitUntil("two model patches issued") {
             await transport.patchedModels() == ["openai/gpt-5.4", "openai/gpt-5.4-pro"]

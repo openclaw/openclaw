@@ -118,7 +118,7 @@ const discoveryCategoryDefinitions = [
   ["agent-runtimes", "Agent runtimes", "Agent execution and native sessions.", "bot"],
   ["memory", "Memory", "Memory systems.", "database"],
   ["context", "Context", "Context tools.", "book-open"],
-  ["voice", "Voice", "Voice tools.", "message-square"],
+  ["voice", "Voice", "Voice tools.", "mic"],
   ["web", "Web", "Web tools.", "globe"],
   ["media", "Media", "Media tools.", "palette"],
   ["security", "Security", "Security tools.", "shield"],

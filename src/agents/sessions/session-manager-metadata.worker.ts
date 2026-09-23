@@ -32,6 +32,7 @@ import type {
   SqliteWorkerBackend,
   SqliteWorkerCommand,
 } from "../../infra/sqlite-worker-contract.js";
+import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import {
@@ -39,16 +40,16 @@ import {
   type OpenClawStateWorkerErrorPayload,
 } from "../../state/openclaw-state-worker-error.js";
 import type {
-  PreparedSessionTranscriptReload,
-  SessionManagerBoundedContextLimits,
-} from "./session-manager-core.js";
-import type {
   ModelChangeEntry,
   SessionHeader,
   ThinkingLevelChangeEntry,
 } from "./session-manager-types.js";
+import type {
+  PreparedSessionTranscriptReload,
+  SessionManagerBoundedContextLimits,
+} from "./session-manager-view-types.js";
 
-type MetadataTarget = SessionTranscriptWriteScope & SessionTranscriptRuntimeTarget;
+type MetadataTarget = Omit<SessionTranscriptWriteScope, "env"> & SessionTranscriptRuntimeTarget;
 
 export type SessionMetadataOperations = {
   "session.metadata.initialize": {
@@ -173,13 +174,16 @@ export function bindSqliteWorkerBackend(
     command: SqliteWorkerCommand<SessionMetadataOperations>,
   ): SessionMetadataWorkerOperations[keyof SessionMetadataWorkerOperations]["output"] => {
     assertOpen();
-    const resolved = resolveSqliteTranscriptScope(command.input.scope);
+    // Database execution already carries the captured host environment. Command payloads
+    // must not transport process.env or its non-cloneable Windows semantics proxy.
+    const scope = { ...command.input.scope, env: getSqliteWorkerStateContext().environment };
+    const resolved = resolveSqliteTranscriptScope(scope);
     const options = toDatabaseOptions(resolved);
     if (options.path !== context.databasePath) {
       throw new Error("Session metadata target changed its database owner");
     }
     if (command.type === "session.metadata.mutation") {
-      return { ok: true, value: readTranscriptMutationAtSync(command.input.scope) };
+      return { ok: true, value: readTranscriptMutationAtSync(scope) };
     }
     assertCanonicalSessionKeyWrite(resolved.sessionKey, resolved.agentId);
     const outcome = runOpenClawAgentWriteTransaction<
@@ -195,7 +199,7 @@ export function bindSqliteWorkerBackend(
         const result = ensureSessionEntryInTransaction(
           database,
           resolved,
-          command.input.scope,
+          scope,
           command.input.entry,
           command.input.initialWriterRunId,
         );
@@ -204,7 +208,7 @@ export function bindSqliteWorkerBackend(
       }
       let projectionNeedsReconcile = false;
       const snapshot = appendTranscriptEventSnapshotSync(
-        command.input.scope,
+        scope,
         command.input.event,
         command.input.options,
         {
@@ -225,7 +229,7 @@ export function bindSqliteWorkerBackend(
       "snapshot" in outcome.value &&
       outcome.value.snapshot.ok
     ) {
-      const { event, view, scope } = command.input;
+      const { event, view } = command.input;
       const committed = outcome.value.snapshot.value;
       if (!committed.result.appended) {
         return outcome;

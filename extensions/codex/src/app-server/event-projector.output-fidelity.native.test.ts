@@ -247,8 +247,10 @@ describe("native Codex tool response fidelity", () => {
           .find((item) => item.type === "commandExecution" && item.id === callId),
         "native command execution",
       );
-      expect(command).toMatchObject({ status: "completed", exitCode: 0, aggregatedOutput: source });
-      expect(output).not.toBe(command.aggregatedOutput);
+      // Completion aggregates use a late streaming subscriber and can be null.
+      // Check the independently buffered response against the next request below.
+      expect(command).toMatchObject({ status: "completed", exitCode: 0 });
+      expect(output).not.toBe(source);
       expect(output).toContain("Process exited with code 0\n");
       expect(output).toContain("Output:\n");
       if (maxOutputTokens === 24_000) {

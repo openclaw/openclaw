@@ -21,6 +21,7 @@ import {
 } from "./device-bootstrap.worker-types.js";
 import { normalizeDevicePublicKeyBase64Url } from "./device-identity.js";
 import { requestDevicePairingMutationAdmission } from "./device-pairing-mutation.worker.js";
+import type { CloudWorkerSetupCompletionPublication } from "./device-pairing-read.types.js";
 import {
   confirmDevicePairSetupCompletionDeliveryInTransaction,
   consumeDeviceBootstrapTokenWithSetupCompletionInTransaction,
@@ -210,12 +211,14 @@ function ensureDevicePairSetupBootstrapToken(
  */
 function consumeDeviceBootstrapTokenWithSetupCompletion(
   params: DeviceBootstrapOperations["bootstrap.consume"]["input"],
+  recordWorkerEnvironment: (facts: CloudWorkerSetupCompletionPublication) => void,
 ): DeviceBootstrapOperations["bootstrap.consume"]["output"] {
   const nowMs = params.nowMs;
   return consumeDeviceBootstrapTokenWithSetupCompletionInTransaction({
     token: params.token,
     deviceId: params.deviceId,
     completedAtMs: params.completedAtMs,
+    recordWorkerEnvironment,
     oldestValidIssuedAtMs: nowMs - DEVICE_BOOTSTRAP_TOKEN_TTL_MS,
     // Retention follows the store clock rather than an injected event time.
     retentionNowMs: nowMs,
@@ -517,6 +520,7 @@ export function getBoundDeviceBootstrapContextFromRecords(
 export function executeDeviceBootstrapMutation(
   command: DeviceBootstrapCommand,
   database: OpenClawStateDatabase,
+  recordWorkerEnvironment: (facts: CloudWorkerSetupCompletionPublication) => void,
 ): DeviceBootstrapOperations[keyof DeviceBootstrapOperations]["output"] {
   return withDevicePairingStoreDatabase(database, () => {
     switch (command.type) {
@@ -525,7 +529,10 @@ export function executeDeviceBootstrapMutation(
       case "bootstrap.ensure":
         return ensureDevicePairSetupBootstrapToken(command.input);
       case "bootstrap.consume":
-        return consumeDeviceBootstrapTokenWithSetupCompletion(command.input);
+        return consumeDeviceBootstrapTokenWithSetupCompletion(
+          command.input,
+          recordWorkerEnvironment,
+        );
       case "bootstrap.confirm":
         return confirmDevicePairSetupCompletionDelivery(command.input);
       case "bootstrap.readCompletion":

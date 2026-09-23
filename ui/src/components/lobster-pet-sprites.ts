@@ -3,9 +3,7 @@
 // homage parts, ledge visitors, and the bottle. Pure presentation; all
 // selection logic stays in lobster-pet-look.ts.
 import { svg, type TemplateResult } from "lit";
-import type { ThemeCritterId } from "../../../packages/gateway-protocol/src/theme.ts";
 import type {
-  LobsterPasserKind,
   LobsterPetAccessory,
   LobsterPetAntennae,
   LobsterPetPaletteId,
@@ -611,15 +609,13 @@ function renderJellyfishSvg() {
   `;
 }
 
-export const PASSER_SPRITES: Record<
-  Exclude<LobsterPasserKind, "stranger" | ThemeCritterId>,
-  () => TemplateResult
-> = {
-  crab: renderCrabSvg,
-  snail: renderSnailSvg,
-  duck: renderDuckSvg,
-  jellyfish: renderJellyfishSvg,
-};
+export const PASSER_SPRITES: Record<"crab" | "snail" | "duck" | "jellyfish", () => TemplateResult> =
+  {
+    crab: renderCrabSvg,
+    snail: renderSnailSvg,
+    duck: renderDuckSvg,
+    jellyfish: renderJellyfishSvg,
+  };
 
 // While hovering, a closed bottle keeps its secret; opening swaps the title
 // to the fortune — the pet-name tooltip channel, so no i18n surface.
@@ -656,7 +652,7 @@ export const BALLOON = svg`
   </svg>
 `;
 
-export const PASSER_TITLES: Record<Exclude<LobsterPasserKind, ThemeCritterId>, string> = {
+export const PASSER_TITLES: Record<"stranger" | keyof typeof PASSER_SPRITES, string> = {
   stranger: "a stranger",
   crab: "definitely a lobster",
   snail: "in no particular hurry",

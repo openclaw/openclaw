@@ -30,6 +30,7 @@ export type DurableQuestionDraft = {
   itemId: string;
   signature: string;
   edited: boolean;
+  dismissed?: boolean;
   answers: { selected: string[]; freeText: string }[];
   reopenedAfterBoundary?: string;
 };
@@ -118,6 +119,7 @@ function isQuestionDraft(value: unknown): value is DurableQuestionDraft {
     typeof draft.itemId === "string" &&
     typeof draft.signature === "string" &&
     typeof draft.edited === "boolean" &&
+    (draft.dismissed === undefined || typeof draft.dismissed === "boolean") &&
     (draft.reopenedAfterBoundary === undefined ||
       typeof draft.reopenedAfterBoundary === "string") &&
     Array.isArray(draft.answers) &&

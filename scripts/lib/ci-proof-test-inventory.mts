@@ -1,3 +1,5 @@
+import { stateStartupCorpusTestFiles } from "../../test/vitest/vitest.startup-corpus-paths.mjs";
+
 // Complete process/lifecycle proofs run on main and release verification.
 // Keep this explicit: E2E-named package and browser boundary tests stay on PRs.
 export const CI_PROOF_TEST_FILES = [
@@ -5,6 +7,7 @@ export const CI_PROOF_TEST_FILES = [
   "src/commands/doctor-config-preflight.refusal.process.test.ts",
   "src/gateway/server.codex-failure-recovery.test.ts",
   "test/e2e/qa-lab/plugins/discord-show-widget-contextual-presenter.e2e.test.ts",
+  "test/e2e/qa-lab/runtime/sessions-send-visible-child.product-proof.e2e.test.ts",
   "test/scripts/doctor-config-preflight-plugin-index.built-cli.e2e.test.ts",
   "test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts",
   "test/scripts/sqlite-sessions-transcripts-flip-proof.e2e.test.ts",
@@ -14,4 +17,20 @@ const proofTestFiles = new Set<string>(CI_PROOF_TEST_FILES);
 
 export function isCiProofTestFile(file: string): boolean {
   return proofTestFiles.has(file);
+}
+
+// Native process and released-state matrices retain their canonical Vitest
+// owners, but automatic CI runs them only when the test itself changes.
+export const RELEASE_ONLY_RUNTIME_TEST_FILES = [
+  "src/flows/doctor-health.test.ts",
+  "src/infra/update-managed-service-handoff-foreground.test.ts",
+  "src/node-host/node-worker-supervisor.recovery.test.ts",
+  "src/state/openclaw-database-preflight.lifecycle.test.ts",
+  ...stateStartupCorpusTestFiles,
+] as const;
+
+const releaseOnlyRuntimeTestFiles = new Set<string>(RELEASE_ONLY_RUNTIME_TEST_FILES);
+
+export function isReleaseOnlyRuntimeTestFile(file: string): boolean {
+  return releaseOnlyRuntimeTestFiles.has(file);
 }

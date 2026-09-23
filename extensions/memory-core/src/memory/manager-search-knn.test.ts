@@ -3,6 +3,7 @@ import {
   openNodeSqliteDatabase,
 } from "openclaw/plugin-sdk/memory-core-host-engine-knn";
 import {
+  encodeMemoryEmbedding,
   ensureMemoryIndexSchema,
   loadSqliteVecExtension,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
@@ -24,7 +25,7 @@ describe("memory vector KNN decision counts", () => {
       const insertChunk = db.prepare(
         `INSERT INTO memory_index_chunks
           (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
-         VALUES (?, ?, 'memory', 1, 1, ?, 'target', ?, '[1,0]', 1)`,
+         VALUES (?, ?, 'memory', 1, 1, ?, 'target', ?, ?, 1)`,
       );
       const insertVector = db.prepare(
         "INSERT INTO memory_index_chunks_vec (id, embedding) VALUES (?, ?)",
@@ -33,7 +34,7 @@ describe("memory vector KNN decision counts", () => {
       db.exec("BEGIN");
       for (let index = 0; index < 100; index += 1) {
         const id = `chunk-${index}`;
-        insertChunk.run(id, `memory/${id}.md`, id, `text ${id}`);
+        insertChunk.run(id, `memory/${id}.md`, id, `text ${id}`, encodeMemoryEmbedding([1, 0]));
         insertVector.run(id, vector);
       }
       db.exec("COMMIT; ANALYZE");
@@ -95,7 +96,14 @@ describe("memory vector KNN decision counts", () => {
         const id = `chunk-${index}`;
         const model = index < 1000 ? "target" : "other";
         const vector = index < 1000 ? [0, 1] : [1, 0];
-        insertChunk.run(id, `memory/${id}.md`, id, model, `text ${id}`, JSON.stringify(vector));
+        insertChunk.run(
+          id,
+          `memory/${id}.md`,
+          id,
+          model,
+          `text ${id}`,
+          encodeMemoryEmbedding(vector),
+        );
         insertVector.run(id, vectorToBlob(vector));
       }
       db.exec("COMMIT");

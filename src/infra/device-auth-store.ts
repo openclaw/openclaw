@@ -125,18 +125,16 @@ async function executeDeviceAuth<Type extends DeviceAuthCommand>(
   return result;
 }
 
-/** Open the shared actor during request preparation without reading or caching token facts. */
+/** Prepare the command runtime before connection work, without reading or caching token facts. */
 export async function prepareDeviceAuthStore(
   params: DeviceAuthOperation & { readOnly?: boolean },
 ): Promise<void> {
-  const { context, assertActive } = captureDeviceAuthOperation(params);
-  assertActive();
-  const prepare = async () => {};
-  const options = { assertCurrent: assertActive };
-  await (params.readOnly
-    ? runOpenClawStateWorkerOperation(context, prepare, { ...options, existingOnly: true })
-    : runOpenClawStateWorkerOperation(context, prepare, options));
-  assertActive();
+  await executeDeviceAuth(
+    captureDeviceAuthOperation(params),
+    "deviceAuth.prepare",
+    undefined,
+    params.readOnly === true,
+  );
 }
 
 async function readDeviceAuth(

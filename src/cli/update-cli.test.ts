@@ -62,10 +62,14 @@ import type { TempHomeEnv } from "../test-utils/temp-home.js";
 import { VERSION } from "../version.js";
 import { createCliRuntimeCapture, getMockCallOutput } from "./test-runtime-capture.js";
 import {
+  createChangedPostCoreUpdateOptions,
+  createConfigValidationFailure,
+  createUpdateCliBaseSnapshot,
   createUpdateCliConfigFixtures,
   pluginSyncResult,
   npmPluginUpdateResult,
   postCoreConvergenceResult,
+  mockPostCoreConvergenceOnce,
   stableConfig,
   stableWhatsAppConfig,
 } from "./update-cli/update-cli-config.test-support.js";
@@ -235,11 +239,22 @@ vi.mock("../infra/update-repair-agent.js", () => ({
 vi.mock("../infra/update-candidate-canary.js", () => ({
   validateUpdateCandidateCanary: candidateValidation,
 }));
-// Runtime generation and publication have real owner/process coverage; CLI
-// orchestration must not rebuild the checkout behind its simulated updater.
+// Runtime retention and publication have real owner/process coverage; CLI
+// orchestration must not copy or rebuild the checkout behind its simulated updater.
 vi.mock("./update-cli/update-command-runtime.js", () => ({
   completeSourceUpdateRuntime: sourceRuntimeCompletion,
 }));
+vi.mock("../infra/update-retained-runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/update-retained-runtime.js")>();
+  const withRetainedUpdateRuntime: typeof actual.withRetainedUpdateRuntime = (
+    moduleUrl,
+    operation,
+  ) =>
+    actual.withRetainedUpdateRuntime(moduleUrl, () =>
+      operation(async ({ assertCurrent }) => assertCurrent()),
+    );
+  return { withRetainedUpdateRuntime };
+});
 vi.mock("../infra/update-candidate-state.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/update-candidate-state.js")>()),
   readUpdateStateSchemaVersions: stateSchemaVersions,
@@ -445,6 +460,7 @@ vi.mock("../process/exec.js", async (importOriginal) => {
     await import("./update-cli/update-command-transport.test-support.js");
   const actual = await importOriginal<typeof import("../process/exec.js")>();
   return {
+    isPlainCommandExitFailure: actual.isPlainCommandExitFailure,
     // The real snapshot worker has separate WAL/source-inode boundary coverage.
     // Retain real rehearsal config projection and drift checks in this CLI fixture.
     runCommandBuffered: async (argv: string[], options: { input: string; timeoutMs?: number }) => {
@@ -556,13 +572,18 @@ vi.mock("../plugins/installed-plugin-index-store-write.js", async (importOrigina
 });
 
 vi.mock("../commands/doctor/shared/post-core-plugin-convergence.js", () => ({
-  runPostCorePluginConvergence: vi.fn(async (params: { baselineInstallRecords?: unknown }) => ({
-    changes: [],
-    warnings: [],
-    errored: false,
-    smokeFailures: [],
-    installRecords: params.baselineInstallRecords ?? {},
-  })),
+  runPostCorePluginConvergence: vi.fn(
+    async (params: { cfg: OpenClawConfig; baselineInstallRecords?: unknown }) => ({
+      config: params.cfg,
+      configChanges: [],
+      installedPluginIdRecovery: new Map(),
+      changes: [],
+      warnings: [],
+      errored: false,
+      smokeFailures: [],
+      installRecords: params.baselineInstallRecords ?? {},
+    }),
+  ),
 }));
 
 vi.mock("../config/backup-rotation.js", async (importOriginal) => ({
@@ -699,16 +720,13 @@ vi.mock("../commands/triage.js", () => ({ triageCommand }));
 vi.mock("../commands/triage-failure.js", () => ({ triageAfterFailure }));
 vi.mock("./update-cli/update-command-report.js", () => updateFailureActionMocks);
 
-const { mockUpdateStateSnapshotWorker } =
+const { createUpdateStateProfileInitializer, mockUpdateStateSnapshotWorker } =
   await import("./update-cli-state-snapshot.test-support.js");
 const { updateGitCheckout } = await import("../infra/update-runner-git.js");
 const { createUpdateRun, getUpdateRun, listUpdateRuns } =
   await import("../infra/update-run-ledger.js");
-const {
-  openOpenClawStateDatabase,
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-} = await import("../state/openclaw-state-db.js");
+const { closeOpenClawStateDatabaseAsync, closeOpenClawStateDatabaseForTest } =
+  await import("../state/openclaw-state-db.js");
 // Real recovery dependencies need the initialized runtime and child-process mocks.
 const { runUpdateFailureTriage } = await import("../infra/update-triage.js");
 const { resolveOpenClawPackageRoot, resolveOpenClawPackageRootSync } =
@@ -767,7 +785,8 @@ const { updateStatusCommand } = await import("./update-cli/status.js");
 const { updateWizardCommand } = await import("./update-cli/wizard.js");
 const updateCliShared = await import("./update-cli/shared.js");
 const { resolveGitInstallDir } = updateCliShared;
-const { clearRestartSentinel, readRestartSentinel } = await import("../infra/restart-sentinel.js");
+const { clearRestartSentinelIfRevision, readRestartSentinel } =
+  await import("../infra/restart-sentinel.js");
 
 function requireValue<T>(value: T | undefined, label: string): T {
   if (value === undefined) {
@@ -808,28 +827,13 @@ describe("update-cli", () => {
     return dir;
   };
 
-  // Ordinary update cases model the existing schema advertised by their inspection fixture.
-  const initializeExistingUpdateProfile = (env: NodeJS.ProcessEnv = process.env) => {
-    const database = openOpenClawStateDatabase({ env });
-    fixtureStateDatabases.add(database.path);
-    closeOpenClawStateDatabaseForTest();
-  };
+  const initializeExistingUpdateProfile = createUpdateStateProfileInitializer(
+    fixtureRoot,
+    fixtureStateDatabases,
+  );
 
-  const baseConfig = {} as OpenClawConfig;
-  const baseSnapshot: ConfigFileSnapshot = {
-    path: "/tmp/openclaw-config.json",
-    exists: true,
-    raw: "{}",
-    parsed: {},
-    resolved: baseConfig,
-    sourceConfig: baseConfig,
-    valid: true,
-    config: baseConfig,
-    runtimeConfig: baseConfig,
-    issues: [],
-    warnings: [],
-    legacyIssues: [],
-  };
+  const baseConfig: OpenClawConfig = {};
+  const baseSnapshot = createUpdateCliBaseSnapshot(baseConfig);
 
   const clawHubRiskWarning =
     "╭─ ClawHub Security Audit ─────────────────────────────────╮\n" +
@@ -1150,6 +1154,18 @@ describe("update-cli", () => {
     );
   };
 
+  const useNativeScheduledTaskControl = async () => {
+    const nativeTaskControl = await vi.importActual<typeof import("../daemon/schtasks-control.js")>(
+      "../daemon/schtasks-control.js",
+    );
+    suspendScheduledTaskAutoStartForUpdate.mockImplementation(
+      nativeTaskControl.suspendScheduledTaskAutoStartForUpdate,
+    );
+    resumeScheduledTaskAutoStartAfterUpdate.mockImplementation(
+      nativeTaskControl.resumeScheduledTaskAutoStartAfterUpdate,
+    );
+  };
+
   const runUpdateCliScenario = async (testCase: UpdateCliScenario) => {
     vi.clearAllMocks();
     await testCase.run();
@@ -1359,29 +1375,7 @@ describe("update-cli", () => {
 
   const completeChangedPostCorePluginUpdate = (
     overrides: Partial<Parameters<typeof completePostCorePluginUpdate>[0]> = {},
-  ) =>
-    completePostCorePluginUpdate({
-      root: "/tmp/openclaw-updated-root",
-      pluginUpdate: {
-        status: "ok",
-        changed: true,
-        warnings: [],
-        sync: {
-          changed: false,
-          switchedToBundled: [],
-          switchedToNpm: [],
-          warnings: [],
-          errors: [],
-        },
-        npm: { changed: true, outcomes: [] },
-        integrityDrifts: [],
-      },
-      freshDoctorRequired: true,
-      yes: true,
-      json: true,
-      timeoutMs: 30_000,
-      ...overrides,
-    });
+  ) => completePostCorePluginUpdate(createChangedPostCoreUpdateOptions(overrides));
 
   const setupNpmUpdatedRootRefresh = () => {
     const updatedRoot = createCaseDir("openclaw-updated-root");
@@ -3771,11 +3765,9 @@ describe("update-cli", () => {
     vi.spyOn(doctorChild, "inspectUpdateDoctorChildSupport").mockResolvedValue(true);
     mockGitUpdateAfterMutation();
     vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(FRESH_POST_UPDATE_ENTRYPOINT);
-    runPostCorePluginConvergenceSpy.mockResolvedValueOnce(
-      postCoreConvergenceResult({
-        changes: ["Repaired configured plugin install records."],
-      }),
-    );
+    mockPostCoreConvergenceOnce(runPostCorePluginConvergenceSpy, {
+      changes: ["Repaired configured plugin install records."],
+    });
 
     await updateCommand({ yes: true, restart: false });
 
@@ -3812,38 +3804,39 @@ describe("update-cli", () => {
     expect(resolveGatewayInstallEntrypoint).toHaveBeenCalledTimes(1);
   });
 
-  it("returns a structured error when the fresh plugin doctor cannot run", async () => {
+  it("records diagnostics as a warning when the fresh plugin doctor cannot run", async () => {
     vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(
       "/tmp/openclaw-updated-entry.mjs",
     );
     vi.mocked(runExec).mockRejectedValueOnce(
       Object.assign(new Error("Command failed: " + "long-argv-prefix ".repeat(100)), {
-        stderr: "doctor process failed: config migration refused",
+        stderr: "doctor process failed: optional plugin repair unavailable",
         stdout: "doctor diagnostic output",
       }),
     );
     const result = await completeChangedPostCorePluginUpdate();
 
     expect(result.pluginUpdate).toMatchObject({
-      status: "error",
+      status: "warning",
       reason: "post-plugin-doctor-execution-failed",
     });
-    expect(result.pluginUpdate.warnings?.at(-1)?.reason).toContain("doctor process failed");
-    expect(result.pluginUpdate.warnings?.at(-1)?.reason).toContain("doctor diagnostic output");
-    expect(result.pluginUpdate.warnings?.at(-1)?.reason).not.toContain("long-argv-prefix");
+    expect(result.pluginUpdate.warnings?.at(-1)?.message).toContain("doctor process failed");
+    expect(result.pluginUpdate.warnings?.at(-1)?.message).toContain("doctor diagnostic output");
+    expect(result.pluginUpdate.warnings?.at(-1)?.message).not.toContain("long-argv-prefix");
   });
 
   it("keeps an invalid config authoritative after a fresh plugin doctor failure", async () => {
     vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(
       "/tmp/openclaw-updated-entry.mjs",
     );
+    const issues = [{ path: "channels.signal.httpUrl", message: "legacy Signal transport field" }];
     vi.mocked(runExec)
       .mockRejectedValueOnce(new Error("doctor process failed"))
-      .mockRejectedValueOnce(new Error("config invalid"));
+      .mockRejectedValueOnce(createConfigValidationFailure(issues));
     vi.mocked(readConfigFileSnapshot).mockResolvedValueOnce(
       configSnapshot(baseConfig, {
         valid: false,
-        issues: [{ path: "channels.signal.httpUrl", message: "legacy Signal transport field" }],
+        issues,
       }),
     );
 
@@ -3864,7 +3857,7 @@ describe("update-cli", () => {
 
     expect(result.pluginUpdate).toMatchObject({
       status: "error",
-      reason: "post-plugin-doctor-invalid-config",
+      reason: "post-plugin-doctor-execution-failed",
     });
     expect(result.pluginUpdate.warnings?.[0]?.reason).toContain("entrypoint lookup failed");
     expect(runExec).not.toHaveBeenCalled();
@@ -3926,8 +3919,9 @@ describe("update-cli", () => {
           'Plugin "reporting-fixture" could not be loaded. Run `openclaw doctor --fix` to check and repair the load problem.',
         guidance: ["openclaw doctor --fix"],
       };
-      runPostCorePluginConvergenceSpy.mockResolvedValueOnce({
-        ...postCoreConvergenceResult({ warnings, errored }),
+      mockPostCoreConvergenceOnce(runPostCorePluginConvergenceSpy, {
+        warnings,
+        errored,
         notices: [notice],
       });
       const { updatePluginsAfterCoreUpdate } =
@@ -4024,8 +4018,7 @@ describe("update-cli", () => {
       false,
       { ...baseConfig, plugins: { ...baseConfig.plugins, installs: records } },
     );
-    runPostCorePluginConvergenceSpy.mockResolvedValueOnce({
-      ...postCoreConvergenceResult(),
+    mockPostCoreConvergenceOnce(runPostCorePluginConvergenceSpy, {
       installRecords: records,
     });
     const { updatePluginsAfterCoreUpdate } = await import("./update-cli/update-command-plugins.js");
@@ -4113,8 +4106,7 @@ describe("update-cli", () => {
       false,
       { ...baseConfig, plugins: { ...baseConfig.plugins, installs: beforeRecords } },
     );
-    runPostCorePluginConvergenceSpy.mockResolvedValueOnce({
-      ...postCoreConvergenceResult(),
+    mockPostCoreConvergenceOnce(runPostCorePluginConvergenceSpy, {
       installRecords: entry.removed ? {} : { discord: record },
     });
     const { updatePluginsAfterCoreUpdate } = await import("./update-cli/update-command-plugins.js");
@@ -4137,8 +4129,8 @@ describe("update-cli", () => {
       code: PLUGIN_CAPABILITY_CONSENT_REQUIRED,
       message: "Operator review token changed.",
     };
-    runPostCorePluginConvergenceSpy.mockResolvedValueOnce({
-      ...postCoreConvergenceResult({ errored: true }),
+    mockPostCoreConvergenceOnce(runPostCorePluginConvergenceSpy, {
+      errored: true,
       outcomes: [consentOutcome],
     });
     const { updatePluginsAfterCoreUpdate } = await import("./update-cli/update-command-plugins.js");
@@ -4159,8 +4151,8 @@ describe("update-cli", () => {
   it("clears a retry notice when post-core repair succeeds", async () => {
     const failure = { pluginId: "demo", status: "error" as const, message: "Registry unavailable" };
     mockNpmPluginOutcomes([failure]);
-    runPostCorePluginConvergenceSpy.mockResolvedValueOnce({
-      ...postCoreConvergenceResult({ changes: ['Repaired plugin "demo".'] }),
+    mockPostCoreConvergenceOnce(runPostCorePluginConvergenceSpy, {
+      changes: ['Repaired plugin "demo".'],
       repairedPluginIds: ["demo"],
       installRecords: {
         demo: { source: "npm", spec: "@example/demo", installPath: "/p/demo", version: "1.0.1" },
@@ -4850,8 +4842,7 @@ describe("update-cli", () => {
         false,
         { ...baseConfig, plugins: { ...baseConfig.plugins, installs: records } },
       );
-      runPostCorePluginConvergenceSpy.mockResolvedValueOnce({
-        ...postCoreConvergenceResult(),
+      mockPostCoreConvergenceOnce(runPostCorePluginConvergenceSpy, {
         installRecords: repaired ? { demo: { ...record, version: "2.0.0" } } : records,
       });
 
@@ -5188,7 +5179,7 @@ describe("update-cli", () => {
             expect.objectContaining({
               step: "requested",
               status: "failed",
-              detail: "Exit code: 1",
+              detail: `Exit code: 1; ${boundary} failed`,
               exitCode: 1,
               failureFacts: [
                 expect.objectContaining({ check: "requested", message: failure.message }),
@@ -6536,19 +6527,17 @@ describe("update-cli", () => {
 
   it("finishes the core update and retains extended-stable after a plugin convergence failure", async () => {
     await mockPackageInstallAtCaseDir();
-    runPostCorePluginConvergenceSpy.mockResolvedValueOnce(
-      postCoreConvergenceResult({
-        warnings: [
-          {
-            pluginId: "demo",
-            reason: "plugin smoke failed",
-            message: "plugin smoke failed",
-            guidance: ["Run openclaw update repair."],
-          },
-        ],
-        errored: true,
-      }),
-    );
+    mockPostCoreConvergenceOnce(runPostCorePluginConvergenceSpy, {
+      warnings: [
+        {
+          pluginId: "demo",
+          reason: "plugin smoke failed",
+          message: "plugin smoke failed",
+          guidance: ["Run openclaw update repair."],
+        },
+      ],
+      errored: true,
+    });
 
     await updateCommand({ channel: "extended-stable", yes: true, json: true, restart: false });
 
@@ -6601,7 +6590,7 @@ describe("update-cli", () => {
         true,
         { ...baseConfig, plugins: { ...baseConfig.plugins, installs: { brave: updatedRecord } } },
       );
-      runPostCorePluginConvergenceSpy.mockImplementationOnce(async () => {
+      runPostCorePluginConvergenceSpy.mockImplementationOnce(async ({ cfg }) => {
         if (failure === "changed owner") {
           primeServiceCommand([
             "node",
@@ -6614,6 +6603,7 @@ describe("update-cli", () => {
         }
         return {
           ...postCoreConvergenceResult(),
+          config: cfg,
           installRecords: { brave: updatedRecord },
         };
       });
@@ -6636,7 +6626,7 @@ describe("update-cli", () => {
           throw new Error("listener check failed after stop");
         });
       }
-      if (failure) {
+      if (failure && failure !== "doctor") {
         await expect(updateCommand({ yes: true, restart, json: true })).rejects.toEqual(
           new ExitError(1),
         );
@@ -6662,7 +6652,16 @@ describe("update-cli", () => {
         postUpdate: {
           plugins: {
             changed: true,
-            warnings: [],
+            status: failure === "doctor" ? "warning" : "ok",
+            warnings:
+              failure === "doctor"
+                ? [
+                    expect.objectContaining({
+                      reason: "doctor-advisory",
+                      message: expect.stringContaining("plugin Doctor failed"),
+                    }),
+                  ]
+                : [],
             npm: { outcomes: [expect.objectContaining({ pluginId: "brave", status: "updated" })] },
           },
         },
@@ -6671,6 +6670,19 @@ describe("update-cli", () => {
       expect(freshRestartCalls()).toHaveLength(restart && running ? 1 : 0);
       expect(packageInstallCommandCall()).toBeUndefined();
       expect(candidateValidation).not.toHaveBeenCalled();
+      if (failure === "doctor") {
+        expect(listUpdateRuns({ limit: 1 })[0]).toMatchObject({
+          status: "succeeded",
+          verification: { serviceRunning: true, readyz: true },
+          steps: expect.arrayContaining([
+            expect.objectContaining({
+              step: "warning:finalize:plugins:0",
+              status: "completed",
+              detail: expect.stringContaining("plugin Doctor failed"),
+            }),
+          ]),
+        });
+      }
       if (!restart) {
         expect(lastWriteJsonCall()).toMatchObject({
           run: {
@@ -6868,8 +6880,7 @@ describe("update-cli", () => {
         false,
         { ...baseConfig, plugins: { ...baseConfig.plugins, installs: records } },
       );
-      runPostCorePluginConvergenceSpy.mockResolvedValueOnce({
-        ...postCoreConvergenceResult(),
+      mockPostCoreConvergenceOnce(runPostCorePluginConvergenceSpy, {
         installRecords: records,
       });
 
@@ -7176,20 +7187,20 @@ describe("update-cli", () => {
             }),
           }),
         );
-        expect(getErrorOutput()).toContain("bytes needed");
-        expect(getErrorOutput()).toContain("33554432 bytes free");
+        expect(getErrorOutput()).toContain("MiB needed");
+        expect(getErrorOutput()).toContain("32 MiB free");
+        expect(getErrorOutput()).toContain("Free space on a reported filesystem or set TMPDIR");
         expect(getErrorOutput()).toContain("SQLite family");
       } else {
         expectPackageInstallSpec("openclaw@9999.0.0");
         expect(lastWriteJsonCall()).toMatchObject({ status: "ok" });
-        expect(record?.steps).toContainEqual(
-          expect.objectContaining({
-            step: "warning:snapshot-space-preflight",
-            detail: expect.stringContaining("Snapshot capacity estimate incomplete"),
-          }),
-        );
-        expect(getErrorOutput()).toContain("SQLite family");
-        expect(getErrorOutput()).toContain("openclaw.sqlite");
+        expect(
+          record?.steps.filter((step) => step.step.startsWith("warning:snapshot-space-preflight")),
+        ).toEqual([]);
+        expect(record?.steps.map(({ detail }) => detail).join("\n")).toContain("SQLite family");
+        expect(record?.steps.map(({ detail }) => detail).join("\n")).toContain("openclaw.sqlite");
+        expect(getErrorOutput()).not.toContain("SQLite family");
+        expect(getErrorOutput()).not.toContain("Snapshot capacity estimate incomplete");
       }
     },
   );
@@ -7447,7 +7458,7 @@ describe("update-cli", () => {
           }),
         ],
       });
-      expect(JSON.stringify(lastWriteJsonCall())).toContain("gateway status --deep");
+      expect(JSON.stringify(lastWriteJsonCall())).toContain("openclaw update status");
     },
   );
 
@@ -7830,7 +7841,7 @@ describe("update-cli", () => {
     vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValue(
       path.join(pkgRoot, "dist", "index.js"),
     );
-    runPostCorePluginConvergenceSpy.mockResolvedValueOnce(postCoreConvergenceResult());
+    mockPostCoreConvergenceOnce(runPostCorePluginConvergenceSpy);
     vi.mocked(runExec).mockResolvedValue({ stdout: "", stderr: "" });
     mockNpmGlobalCommands(nodeModules, async (argv) => {
       if (argv[0] === "npm" && argv[1] === "i" && argv.includes("--prefix")) {
@@ -9213,15 +9224,7 @@ describe("update-cli", () => {
           OPENCLAW_WORKSPACE_DIR: target.defaultWorkspaceDir,
         },
       );
-      const nativeTaskControl = await vi.importActual<
-        typeof import("../daemon/schtasks-control.js")
-      >("../daemon/schtasks-control.js");
-      suspendScheduledTaskAutoStartForUpdate.mockImplementation(
-        nativeTaskControl.suspendScheduledTaskAutoStartForUpdate,
-      );
-      resumeScheduledTaskAutoStartAfterUpdate.mockImplementation(
-        nativeTaskControl.resumeScheduledTaskAutoStartAfterUpdate,
-      );
+      await useNativeScheduledTaskControl();
       const configuredRunCommand = vi.mocked(runCommandWithTimeout).getMockImplementation();
       if (!configuredRunCommand) {
         throw new Error("Expected installed package command fixture");
@@ -9354,15 +9357,7 @@ describe("update-cli", () => {
         expectedVersion: "1.0.0",
         probeError: fault === "none" ? undefined : "candidate readiness failed",
       };
-      const nativeTaskControl = await vi.importActual<
-        typeof import("../daemon/schtasks-control.js")
-      >("../daemon/schtasks-control.js");
-      suspendScheduledTaskAutoStartForUpdate.mockImplementation(
-        nativeTaskControl.suspendScheduledTaskAutoStartForUpdate,
-      );
-      resumeScheduledTaskAutoStartAfterUpdate.mockImplementation(
-        nativeTaskControl.resumeScheduledTaskAutoStartAfterUpdate,
-      );
+      await useNativeScheduledTaskControl();
       const configuredRunCommand = requireValue(
         vi.mocked(runCommandWithTimeout).getMockImplementation(),
         "native update command fixture",
@@ -9526,20 +9521,8 @@ describe("update-cli", () => {
         version: "1.0.0",
       });
       expect(defaultRuntime.exit).not.toHaveBeenCalled();
-      expect(listUpdateRuns({ limit: 1 })).toMatchObject([
-        {
-          phase: "finished",
-          status: "failed",
-          reason: "runtime-verification-failed",
-          steps: expect.arrayContaining([
-            expect.objectContaining({
-              step: "post-install-verify",
-              status: "failed",
-              detail: expect.stringContaining("interrupted lifecycle"),
-            }),
-          ]),
-        },
-      ]);
+      expect(serviceRestart).not.toHaveBeenCalled();
+      runtimeRecovery.expectInterruptedDoctorPackageRollback(listUpdateRuns({ limit: 1 }));
     } finally {
       platformSpy.mockRestore();
       processOnSpy.mockRestore();
@@ -9604,15 +9587,7 @@ describe("update-cli", () => {
     async ({ verified, compensationFails }) => {
       vi.spyOn(process, "platform", "get").mockReturnValue("win32");
       mockRunningManagedGateway(["node", path.join(process.cwd(), "dist", "index.js"), "gateway"]);
-      const nativeTaskControl = await vi.importActual<
-        typeof import("../daemon/schtasks-control.js")
-      >("../daemon/schtasks-control.js");
-      suspendScheduledTaskAutoStartForUpdate.mockImplementation(
-        nativeTaskControl.suspendScheduledTaskAutoStartForUpdate,
-      );
-      resumeScheduledTaskAutoStartAfterUpdate.mockImplementation(
-        nativeTaskControl.resumeScheduledTaskAutoStartAfterUpdate,
-      );
+      await useNativeScheduledTaskControl();
       const runFixture = requireValue(
         vi.mocked(runCommandWithTimeout).getMockImplementation(),
         "managed task command fixture",
@@ -10692,6 +10667,8 @@ describe("update-cli", () => {
     expectNoSideEffects(serviceStop, prepareRestartScript, serviceRestart, runDaemonRestart);
     expect(updateGitCheckout).toHaveBeenCalledTimes(1);
     expect(mutationAdmitted).toHaveBeenCalledOnce();
+    expect(freshRestartCalls()).toHaveLength(0);
+    expect(gatewayCommandCall(otherEntrypoint, "install")).toBeUndefined();
   });
 
   it("never starts the candidate after plugin post-update invalidates config", async () => {
@@ -10708,7 +10685,10 @@ describe("update-cli", () => {
     mockGitUpdateAfterMutation();
     vi.mocked(runExec).mockImplementation(async (_file, args) => {
       if (args[1] === "config" && args[2] === "validate") {
-        throw new Error("target plugin config invalid");
+        throw createConfigValidationFailure(
+          invalidPostUpdateSnapshot.issues,
+          "target plugin config invalid",
+        );
       }
       return { stdout: new Date(Date.now() - 1000).toString(), stderr: "" };
     });
@@ -10726,55 +10706,6 @@ describe("update-cli", () => {
     );
     expect(getLogOutput()).toContain("OpenClaw update failed: post-update-plugins.");
     expect(getErrorOutput()).not.toContain("Update failed during plugin post-update sync.");
-  });
-
-  it("keeps the core stopped for plugin Doctor and never restarts after Doctor fails", async () => {
-    // This path exercises delegated Doctor ownership, independent of repository build artifacts.
-    vi.spyOn(doctorChild, "inspectUpdateDoctorChildSupport").mockResolvedValue(true);
-    const serviceEntrypoint = path.join(process.cwd(), "dist", "index.js");
-    mockRunningManagedGateway(["node", serviceEntrypoint, "gateway", "run"]);
-    mockGitUpdateAfterMutation();
-    mockNpmPluginOutcomes([], true);
-    vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValue(serviceEntrypoint);
-    const runFixtureCommand = requireValue(
-      vi.mocked(runCommandWithTimeout).getMockImplementation(),
-      "command effect fixture",
-    );
-    vi.mocked(runCommandWithTimeout).mockImplementation(async (argv, options) => {
-      if (argv.at(-1) === "--doctor") {
-        return commandResult({ code: 1, stderr: "doctor process failed" });
-      }
-      return runFixtureCommand(argv, options);
-    });
-    await expect(updateCommand({ yes: true })).rejects.toEqual(new ExitError(1));
-
-    expect(serviceStop).toHaveBeenCalledOnce();
-    expect(runRestartScript).not.toHaveBeenCalled();
-    const packageOrder = requireValue(
-      updateNpmInstalledPlugins.mock.invocationCallOrder[0],
-      "plugin packages",
-    );
-    const stopOrder = requireValue(serviceStop.mock.invocationCallOrder[0], "core stop");
-    const doctorCallIndex = commandCalls().findIndex(([argv]) => argv.at(-1) === "--doctor");
-    const doctorOrder = requireValue(
-      vi.mocked(runCommandWithTimeout).mock.invocationCallOrder[doctorCallIndex],
-      "plugin Doctor",
-    );
-    expect(stopOrder).toBeLessThan(packageOrder);
-    expect(packageOrder).toBeLessThan(doctorOrder);
-    expect(
-      vi
-        .mocked(runExec)
-        .mock.calls.filter(([, args]) => ["doctor", "config"].includes(args[1] ?? ""))
-        .map(([, args]) => args.slice(1)),
-    ).toEqual([["config", "validate", "--json"]]);
-    expectDelegatedPluginDoctorInput(commandCalls()[doctorCallIndex]?.[1].input);
-    expect(serviceRestart).not.toHaveBeenCalled();
-    expect(freshRestartCalls()).toHaveLength(0);
-
-    expect(defaultRuntime.exit).not.toHaveBeenCalled();
-    expect(getLogOutput()).toContain("OpenClaw update failed: post-update-plugins.");
-    expect(getLogOutput()).not.toContain("OpenClaw updated");
   });
 
   it("keeps managed service stop output off stdout during json package updates", async () => {
@@ -11665,8 +11596,7 @@ describe("update-cli", () => {
         true,
         { ...baseConfig, plugins: { ...baseConfig.plugins, installs: { brave: updated } } },
       );
-      runPostCorePluginConvergenceSpy.mockResolvedValueOnce({
-        ...postCoreConvergenceResult(),
+      mockPostCoreConvergenceOnce(runPostCorePluginConvergenceSpy, {
         installRecords: { brave: updated },
       });
 
@@ -13115,7 +13045,11 @@ describe("update-cli", () => {
           if (consumed) {
             const respond = expectDefined(callGateway.getMockImplementation(), "health response");
             callGateway.mockImplementation(async (opts) => {
-              sentinelConsumed = (await clearRestartSentinel()) || sentinelConsumed;
+              const current = await readRestartSentinel();
+              if (current) {
+                sentinelConsumed =
+                  (await clearRestartSentinelIfRevision(current.revision)) || sentinelConsumed;
+              }
               return respond(opts);
             });
           }

@@ -8,6 +8,10 @@ import { CHAT_HISTORY_MAX_ENTRIES } from "../../../packages/gateway-protocol/src
 import { resolveAgentConfig } from "../../agents/agent-scope.js";
 import { findModelCatalogEntry } from "../../agents/model-catalog.js";
 import { resolveConfiguredThinkingDefault } from "../../agents/model-thinking-default.js";
+import {
+  getSubagentSessionListReadSnapshotIdentity,
+  prepareOptionalSubagentSessionListReadCache,
+} from "../../agents/subagents/registry/subagent-registry-state.js";
 import { composeTranscriptDisplay } from "../../chat/transcript-display-position.js";
 import {
   listSessionPendingInputReceipts,
@@ -54,7 +58,6 @@ import {
   CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES,
   createChatHistoryByteCounter,
   createChatHistoryActivityProjection,
-  chatHistoryActivityBytes,
   replaceOversizedChatHistoryMessages,
   reportOmittedChatHistory,
   trimChatHistoryActivity,
@@ -72,7 +75,6 @@ import {
   type ChatHistoryMethod,
 } from "./chat-history-recovery.js";
 import { handleChatMetadataRequest } from "./chat-metadata-handler.js";
-import { validateChatSelectedAgent } from "./chat-origin-routing.js";
 import { readChatPendingInputs } from "./chat-pending-inputs.js";
 import { handleChatStartupRequest } from "./chat-startup-handler.js";
 import { prepareChatStartupRequester } from "./chat-startup-requester.js";
@@ -134,6 +136,10 @@ export async function handleChatHistoryRequest({
     );
     return;
   }
+  if (!getSubagentSessionListReadSnapshotIdentity()) {
+    await prepareOptionalSubagentSessionListReadCache();
+  }
+  signal?.throwIfAborted();
   const requestConfig = context.getRuntimeConfig();
   const agentIdOverride = normalizeOptionalText((params as { agentId?: string }).agentId);
   const requestedAgent = resolveRequestedSessionAgentId(requestConfig, sessionKey, agentIdOverride);
@@ -144,13 +150,17 @@ export async function handleChatHistoryRequest({
   const selectedSession = measureDiagnosticsTimelineSpanSync(
     `gateway.${method}.session_entry`,
     () =>
-      loadGatewaySessionEntryReadOnly(sessionKey, {
-        agentId: requestedAgent.agentId,
-        // Exact reads own their nested JSON; history only projects that snapshot.
-        clone: false,
-        includeStoreChildEntries: true,
-        projection: "list",
-      }),
+      loadGatewaySessionEntryReadOnly(
+        sessionKey,
+        {
+          agentId: requestedAgent.agentId,
+          // Exact reads own their nested JSON; history only projects that snapshot.
+          clone: false,
+          includeStoreChildEntries: true,
+          projection: "list",
+        },
+        requestConfig,
+      ),
     {
       config: requestConfig,
       phase: method,
@@ -164,15 +174,6 @@ export async function handleChatHistoryRequest({
     canonicalKey,
     legacyKey,
   } = selectedSession;
-  const selectedAgent = validateChatSelectedAgent({
-    cfg,
-    requestedSessionKey: sessionKey,
-    explicitAgentId: agentIdOverride,
-  });
-  if (!selectedAgent.ok) {
-    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, selectedAgent.error));
-    return;
-  }
   const authorizeSharing = (current: typeof selectedSession) => {
     const sharing = prepareSessionSharing({ client, cfg: current.cfg });
     if (
@@ -485,13 +486,12 @@ export async function handleChatHistoryRequest({
       if (sessionInfo) {
         Object.assign(sessionInfo, currentSharing);
       }
-      const activeRunAgentId = sessionAgentId;
       const activeRunState = resolveVisibleActiveSessionRunState({
         context,
         requestedKey: sessionKey,
         canonicalKey,
         sessionId,
-        ...(activeRunAgentId ? { agentId: activeRunAgentId } : {}),
+        ...(sessionAgentId ? { agentId: sessionAgentId } : {}),
         defaultAgentId: compatibilityOwnerAgentId,
         // History stays active until the terminal row is queryable or its write fails.
         includeTerminalPersistence: true,
@@ -593,7 +593,7 @@ export async function handleChatHistoryRequest({
           // falls back to the default agent for alias keys, misses the abort entry's
           // stored key, and drops the in-flight snapshot for non-default agents.
           canonicalSessionKey: canonicalKey,
-          agentId: activeRunAgentId,
+          agentId: sessionAgentId,
           defaultAgentId: compatibilityOwnerAgentId,
         }) ?? embeddedRecovery;
       if (cursor !== undefined) {
@@ -661,7 +661,8 @@ export async function handleChatHistoryRequest({
           const boundedInFlightRun = boundInFlightRunSnapshotForChatHistory({
             snapshot: inFlightRun,
             messages: delta.messages,
-            maxBytes: maxHistoryBytes - chatHistoryActivityBytes(delta.activity),
+            getMessagesBytes: () => delta.messagesBytes,
+            maxBytes: maxHistoryBytes - delta.activityBytes,
           });
           respond(true, {
             kind: "delta",

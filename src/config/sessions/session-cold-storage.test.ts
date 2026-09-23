@@ -53,6 +53,7 @@ import {
   maintenanceConfig,
 } from "./session-cold-storage.test-support.js";
 import { waitForSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
+import { transcriptEventJsonSql } from "./transcript-payload.js";
 
 const tempDirs = createTempDirTracker();
 const databasePaths: string[] = [];
@@ -176,7 +177,7 @@ describe("cold transcript storage workers", () => {
         database,
         getNodeSqliteKysely<DB>(database)
           .selectFrom("transcript_events")
-          .select("event_json")
+          .select(transcriptEventJsonSql(database).as("event_json"))
           .where("session_id", "=", sessionId)
           .orderBy("seq"),
       ).rows) {
@@ -685,7 +686,7 @@ describe("cold transcript storage workers", () => {
           fixture
             .database()
             .prepare(`SELECT f.message_id FROM session_transcript_fts_rows m
-            JOIN session_transcript_fts f ON f.rowid=m.fts_rowid AND f.session_id=m.session_id
+            JOIN session_transcript_fts f ON f.rowid=m.id AND f.session_id=m.session_id
             WHERE m.session_id=? ORDER BY f.message_id`)
             .all(historicalId),
         ).toEqual([{ message_id: "history-assistant" }, { message_id: "history-user" }]);

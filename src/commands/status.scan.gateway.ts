@@ -168,11 +168,19 @@ export async function scanStatusJsonGateway(
         ...(!status
           ? [
               {
-                fields: ["agents", "sessions", "heartbeat", "tasks", "taskAudit"],
+                fields: ["agents", "sessions", "heartbeat", "tasks", "taskAudit", "channelSummary"],
                 reason: projectionError,
               },
             ]
-          : []),
+          : summary.channelSummary.length === 0
+            ? [
+                {
+                  fields: ["channelSummary"],
+                  reason:
+                    "Online status skips channel summaries; an empty channelSummary was not collected. Use openclaw channels status, or openclaw channels status --probe for live account checks.",
+                },
+              ]
+            : []),
         ...(!cliProjection
           ? [
               {

@@ -48,7 +48,6 @@ import {
 } from "../test/vitest/vitest.gateway-server-paths.mjs";
 import { intersectIncludePatterns } from "../test/vitest/vitest.include-patterns.ts";
 import { packageContractTestFiles } from "../test/vitest/vitest.package-contract-paths.mjs";
-import { resolveVitestFsModuleCacheRoot } from "../test/vitest/vitest.performance-config.ts";
 import {
   isPluginSdkLightTarget,
   pluginSdkLightTestFiles,
@@ -100,13 +99,13 @@ import {
   splitExtensionTestProcessTargets,
 } from "./lib/extension-test-plan.mts";
 import {
-  GATEWAY_SERVER_TEST_PROCESS_COUNT,
-  listGatewayServerTestTargets,
+  createGatewayServerTestTargetChunks,
   splitTestTargetChunks as splitTargetChunks,
 } from "./lib/gateway-server-test-plan.mts";
 import { readTestSelectorSourceFacts } from "./lib/test-selector-source-facts.mts";
 // CI imports planning before dependency installation; execution owners stay outside this closure.
 import { resolveVitestCliEntry } from "./lib/vitest-build-prerequisites.mts";
+import { resolveVitestCacheRoot, resolveVitestCacheSlotPath } from "./lib/vitest-cache-slots.mts";
 import {
   collectVitestFileFilters,
   resolveBooleanModeFlag,
@@ -795,6 +794,10 @@ const SOURCE_TEST_TARGETS = new Map([
   ["src/plugins/runtime-sidecar-paths-baseline.ts", RUNTIME_SIDECAR_BASELINE_OWNER_TEST_TARGETS],
   ["src/plugins/runtime-sidecar-paths.ts", RUNTIME_SIDECAR_PATH_CONSUMER_TEST_TARGETS],
   ["ui/config/control-ui-chunking.ts", ["ui/src/app/control-ui-chunking.test.ts"]],
+  [
+    "ui/config/control-ui-boot-modules.json",
+    ["ui/src/app/control-ui-chunking.test.ts", "ui/src/app/vite-config.node.test.ts"],
+  ],
   ["ui/config/control-ui-locales.ts", ["ui/src/app/vite-config.node.test.ts"]],
   [
     "src/plugin-sdk/test-helpers/directory-ids.ts",
@@ -1191,6 +1194,9 @@ function createBoundedExtensionPlans(
       return [];
     }
     const chunks = splitExtensionTestProcessTargets(config, scopedTargets);
+    if (chunks.length === 0) {
+      return [];
+    }
     if (chunks.length <= 1) {
       return [
         {
@@ -1218,6 +1224,10 @@ function createBoundedExtensionPlans(
       : roots,
     forwardedArgs,
   );
+  if (chunks.length === 0) {
+    // Preserve exact requests for Vitest's existing empty-test diagnostic, never a broad fallback.
+    return ownsIncludeSelection(plan.includePatterns, ownedTargets) ? [plan] : [];
+  }
   if (chunks.length <= 1) {
     return [plan];
   }
@@ -1973,21 +1983,22 @@ function resolveAffectedTestsFromTargetedImportScan(
   return [...new Set(targets)].toSorted((left, right) => left.localeCompare(right));
 }
 
-function getImportGraph(cwd: string) {
-  if (cachedImportGraph && cachedImportGraphCwd === cwd) {
+function getImportGraph(cwd: string, options: ImportGraphOptions = {}) {
+  const cacheKey = `${cwd}\0${options.tooling === true}`;
+  if (cachedImportGraph && cachedImportGraphCwd === cacheKey) {
     return cachedImportGraph;
   }
 
-  const files = listImportGraphFilesForCwd(cwd);
+  const files = listImportGraphFilesForCwd(cwd, options);
   const fileSet = new Set(files);
   const reverseImports = new Map<string, string[]>();
   const testFiles = new Set(
     files.filter((file) => isTestFileTarget(file) && !file.endsWith(".live.test.ts")),
   );
 
-  readImportGraphEdges(cwd, files, fileSet);
+  readImportGraphEdges(cwd, files, fileSet, options.tooling);
   for (const file of files) {
-    const edges = cachedImportGraphEdges.get(`${cwd}\0false\0${file}`);
+    const edges = cachedImportGraphEdges.get(`${cwd}\0${options.tooling === true}\0${file}`);
     if (!edges) {
       continue;
     }
@@ -1999,7 +2010,7 @@ function getImportGraph(cwd: string) {
   }
 
   cachedImportGraph = { reverseImports, testFiles };
-  cachedImportGraphCwd = cwd;
+  cachedImportGraphCwd = cacheKey;
   return cachedImportGraph;
 }
 
@@ -2052,19 +2063,19 @@ export function hasImportGraphImpactOnTargets(
 }
 
 function resolveAffectedTestsFromImportGraph(
-  changedPath: string,
+  changedPath: string | string[],
   cwd: string,
-  options: { forceFull?: boolean } = {},
+  options: ImportGraphOptions & { forceFull?: boolean } = {},
 ) {
-  if (options.forceFull !== true) {
-    const targetedTargets = resolveAffectedTestsFromTargetedImportScan(changedPath, cwd);
+  if (options.forceFull !== true && typeof changedPath === "string") {
+    const targetedTargets = resolveAffectedTestsFromTargetedImportScan(changedPath, cwd, options);
     if (targetedTargets !== null) {
       return targetedTargets;
     }
   }
 
-  const { reverseImports, testFiles } = getImportGraph(cwd);
-  const queue = [changedPath];
+  const { reverseImports, testFiles } = getImportGraph(cwd, options);
+  const queue = typeof changedPath === "string" ? [changedPath] : [...changedPath];
   const seen = new Set(queue);
   const targets = [];
 
@@ -2082,6 +2093,15 @@ function resolveAffectedTestsFromImportGraph(
   }
 
   return [...new Set(targets)].toSorted((left, right) => left.localeCompare(right));
+}
+
+/** Whole-area UI fallback also owns host tests importing UI and changed-source readers. */
+export function resolveControlUiTestConsumers(changedPaths: string[], cwd = process.cwd()) {
+  const uiFiles = listImportGraphFilesForCwd(cwd, { tooling: true }).filter(isControlUiSourcePath);
+  return uniqueOrdered([
+    ...resolveAffectedTestsFromImportGraph(uiFiles, cwd, { forceFull: true, tooling: true }),
+    ...resolveDirectToolingReferenceTests(changedPaths, cwd),
+  ]).filter((file) => !isControlUiSourcePath(file));
 }
 
 function resolveVitestConfigTargetKind(relative: string) {
@@ -2257,7 +2277,7 @@ function resolveDocsI18nGoTargets(changedPath: string) {
   }
   const targets = ["test/scripts/docs-i18n.test.ts"];
   if (changedPath === "scripts/docs-i18n/go.mod") {
-    targets.push("test/scripts/ci-workflow-guards.test.ts");
+    targets.push("test/scripts/ci-workflow-planning.test.ts");
   }
   return targets;
 }
@@ -2301,6 +2321,8 @@ const packageAcceptance = "package-acceptance-workflow";
 const dockerBuild = "docker-build-helper";
 const dockerE2e = "docker-e2e-plan";
 const workflowGuards = "ci-workflow-guards";
+const workflowPlanning = "ci-workflow-planning";
+const workflowEvidence = "ci-workflow-evidence";
 const pluginPrerelease = "plugin-prerelease-test-plan";
 const releaseCheck = "test/release-check.test.ts";
 const installDocker = "test-install-sh-docker";
@@ -2336,6 +2358,7 @@ const pluginSdkEntryOwners = [
 // unambiguous scripts and direct imports without a second inventory.
 const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
   [".github/workflows/ci.yml", ["ci-platform-checkout", "ci-linux-git", "ci-git-owner"]],
+  [".github/actions/setup-android-toolchain/action.yml", [workflowPlanning]],
   [".github/workflows/docs-sync-publish.yml", ["docs-sync-publish"]],
   [".github/workflows/docs-agent.yml", ["docs-agent-workflow"]],
   ["scripts/generate-ci-git-owner.mts", ["ci-git-owner"]],
@@ -2539,7 +2562,16 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
     /^(?:git-hooks\/pre-commit|scripts\/pre-commit\/(?:guard-staged-content\.mjs|filter-staged-files\.mjs|format-staged\.sh|run-node-tool\.sh)|test\/git-hooks-pre-commit\.test-support\.ts)$/u,
     ["test/git-hooks-pre-commit.test.ts", "test/git-hooks-pre-commit-boundaries.test.ts"],
   ],
-  [/^scripts\/pr$/u, ["pr-merge", "pr-merge-outcome", "pr-operation-lock", "pr-wrappers"]],
+  [
+    /^scripts\/pr$/u,
+    [
+      "pr-merge",
+      "pr-merge-outcome",
+      "pr-merge-qualified-refusal",
+      "pr-operation-lock",
+      "pr-wrappers",
+    ],
+  ],
   [
     /^scripts\/pr-lib\/crabbox-gate-contract\.mjs$/u,
     ["pr-crabbox-gate-publisher", "pr-crabbox-merge-bypass"],
@@ -2564,6 +2596,8 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
     /^\.github\/workflows\/ci\.yml$/u,
     [
       workflowGuards,
+      workflowPlanning,
+      workflowEvidence,
       "changed-lanes",
       "check-workflows",
       "plugin-contract-test-plan",
@@ -2577,7 +2611,10 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   ],
   [/^\.github\/workflows\/ci-check-arm-testbox\.yml$/u, [workflowGuards, packageAcceptance]],
   [/^\.github\/workflows\/crabbox-hydrate\.yml$/u, [workflowGuards, packageAcceptance]],
-  [/^\.github\/workflows\/ci-build-artifacts-testbox\.yml$/u, [packageAcceptance, workflowGuards]],
+  [
+    /^\.github\/workflows\/ci-build-artifacts-testbox\.yml$/u,
+    [packageAcceptance, workflowGuards, workflowPlanning],
+  ],
   [
     /^\.github\/workflows\/full-release-validation\.yml$/u,
     [
@@ -2600,7 +2637,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   ],
   [
     /^\.github\/workflows\/openclaw-release-checks\.yml$/u,
-    [packageAcceptance, crossOsReleaseChecks, pluginPrerelease, installDocker],
+    [packageAcceptance, crossOsReleaseChecks, pluginPrerelease, installDocker, workflowEvidence],
   ],
   [
     /^\.github\/workflows\/docker-release(?:-prepare)?\.yml$/u,
@@ -2674,6 +2711,10 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   ],
   [/^\.github\/workflows\/android-release\.yml$/u, [packageAcceptance, workflowGuards]],
   [
+    /^\.github\/workflows\/(?:qa-profile-evidence|maturity-scorecard|mantis-discord-(?:status-reactions|thread-attachment))\.yml$/u,
+    [workflowEvidence],
+  ],
+  [
     /^\.github\/(?:actions\/(?:ensure-base-commit|git-owner|publish-generated-pr|mantis-validate-trusted-ref)\/|workflows\/(?:workflow-sanity|qa-profile-evidence|maturity-scorecard|docs-agent|docs-sync-publish|openclaw-performance|linux-app-release|macos-release|npm-placeholder-bootstrap|plugin-clawhub-release|plugin-npm-release|mantis-(?:discord-(?:smoke|status-reactions|thread-attachment)|slack-desktop-smoke|web-ui-chat-proof))\.yml$)/u,
     [
       "ci-git-owner",
@@ -2710,8 +2751,8 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   [/^scripts\/run-node\.(?:mjs|mts)$/u, [runNode]],
   [/^scripts\/ios-write-swift-filelist\.m[jt]s$/u, ["ios-run"]],
   [
-    /^scripts\/pr-lib\/(?:merge(?:-outcome)?\.sh|merge-legacy-refusal\.mjs)$/u,
-    ["pr-merge", "pr-merge-outcome"],
+    /^scripts\/pr-lib\/(?:merge(?:-outcome)?\.sh|merge-(?:legacy|pre-dispatch)-refusal\.mjs)$/u,
+    ["pr-merge", "pr-merge-outcome", "pr-merge-pre-dispatch-refusal", "pr-merge-qualified-refusal"],
   ],
   [/^scripts\/plugin-clawhub-publish\.sh$/u, ["test/plugin-clawhub-release.test.ts"]],
   [/^scripts\/openclaw-npm-postpublish-verify\.ts$/u, [npmPostpublish]],
@@ -2903,7 +2944,10 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
     ],
   ],
   [/^scripts\/lib\/plistbuddy\.sh$/u, ["create-dmg", "package-mac-app", "package-mac-dist"]],
-  [/^scripts\/lib\/swift-toolchain\.sh$/u, ["package-mac-app", "package-mac-dist"]],
+  [
+    /^scripts\/lib\/swift-toolchain\.sh$/u,
+    ["package-mac-app", "package-mac-dist", "xcode-test-logs"],
+  ],
   [/^scripts\/stage-cua-driver-macos\.sh$/u, ["package-mac-app"]],
   [
     /^scripts\/(stage-cloudflared-macos\.sh|lib\/cloudflared-macos\.json)$/u,
@@ -3296,20 +3340,61 @@ function resolveGithubYamlGuardTargets(changedPath: string) {
   return null;
 }
 
-function resolveDirectToolingReferenceTests(changedPath: string, cwd: string) {
+function resolveDirectToolingReferenceTests(changedPath: string | string[], cwd: string) {
+  const changedPaths = typeof changedPath === "string" ? [changedPath] : changedPath;
+  const matches = listImportGraphGrepMatches(cwd, changedPaths, {
+    tooling: true,
+    testFilesOnly: true,
+  });
+  return changedPaths.flatMap((filePath) =>
+    (matches.get(filePath) ?? [])
+      .filter(
+        ({ file, references }) =>
+          file !== "test/scripts/test-projects.test.ts" &&
+          !file.endsWith(".live.test.ts") &&
+          isTestFileTarget(file) &&
+          references.has(filePath),
+      )
+      .map(({ file }) => file),
+  );
+}
+
+function hasToolingSourceOwner(changedPath: string, implementationPath: string): boolean {
+  const facts = getChangedPathFacts(changedPath);
   return (
-    listImportGraphGrepMatches(cwd, [changedPath], { tooling: true, testFilesOnly: true }).get(
-      changedPath,
-    ) ?? []
-  )
-    .filter(
-      ({ file, references }) =>
-        file !== "test/scripts/test-projects.test.ts" &&
-        !file.endsWith(".live.test.ts") &&
-        isTestFileTarget(file) &&
-        references.has(changedPath),
-    )
-    .map(({ file }) => file);
+    facts.surface === "rootTooling" ||
+    changedPath === "Dockerfile" ||
+    changedPath === ".crabbox.yaml" ||
+    changedPath.startsWith(".agents/") ||
+    isToolingScriptPath(implementationPath) ||
+    (facts.surface === "app" && /\/(?:fastlane|scripts)\//u.test(changedPath)) ||
+    (facts.surface === "extension" && /\/(?:scripts\/|package\.json$)/u.test(changedPath)) ||
+    (facts.surface === "rootTest" && changedPath.startsWith("test/e2e/qa-lab/"))
+  );
+}
+
+/** Inputs that retain the full maintainer-tooling family in automatic CI. */
+export function isToolingTestOwnerPath(changedPath: string): boolean {
+  const implementationPath = changedPath.endsWith(".d.mts")
+    ? changedPath.replace(/\.d\.mts$/u, ".mjs")
+    : changedPath;
+  const facts = getChangedPathFacts(changedPath);
+  return (
+    isToolingIsolatedTestFile(changedPath) ||
+    changedPath.startsWith("scripts/") ||
+    changedPath.startsWith("src/scripts/") ||
+    changedPath.startsWith("config/ci-") ||
+    changedPath.startsWith(".github/") ||
+    changedPath.startsWith("test/scripts/") ||
+    facts.surface === "rootGlobal" ||
+    facts.surface === "rootTest" ||
+    facts.surface === "testFixture" ||
+    facts.surface === "legacyRootAsset" ||
+    facts.surface === "unknown" ||
+    EXACT_TOOLING_TARGETS.has(implementationPath) ||
+    resolveSemanticToolingTargets(implementationPath).length > 0 ||
+    hasToolingSourceOwner(changedPath, implementationPath)
+  );
 }
 
 function resolveToolingTestTargets(changedPath: string, cwd = process.cwd()) {
@@ -3349,17 +3434,14 @@ function resolveToolingTestTargets(changedPath: string, cwd = process.cwd()) {
   const exactTargets = exactOwners ? resolveToolingTestOwnerTargets(...exactOwners) : [];
   const semanticTargets = resolveSemanticToolingTargets(implementationPath);
   const facts = getChangedPathFacts(changedPath);
+  const toolingTestSource =
+    changedPath.startsWith("test/scripts/") &&
+    TOOLING_IMPORTABLE_FILE_EXTENSIONS.some((ext) => implementationPath.endsWith(ext));
   const hasToolingOwner =
     exactTargets.length > 0 ||
     semanticTargets.length > 0 ||
-    facts.surface === "rootTooling" ||
-    changedPath === "Dockerfile" ||
-    changedPath === ".crabbox.yaml" ||
-    changedPath.startsWith(".agents/") ||
-    isToolingScriptPath(implementationPath) ||
-    (facts.surface === "app" && /\/(?:fastlane|scripts)\//u.test(changedPath)) ||
-    (facts.surface === "extension" && /\/(?:scripts\/|package\.json$)/u.test(changedPath)) ||
-    (facts.surface === "rootTest" && changedPath.startsWith("test/e2e/qa-lab/"));
+    toolingTestSource ||
+    hasToolingSourceOwner(changedPath, implementationPath);
   if (!hasToolingOwner) {
     return null;
   }
@@ -3399,9 +3481,13 @@ function resolveToolingTestTargets(changedPath: string, cwd = process.cwd()) {
     TOOLING_IMPORTABLE_FILE_EXTENSIONS.some((ext) => implementationPath.endsWith(ext))
       ? resolveAffectedTestsFromTargetedImportScan(implementationPath, cwd, {
           tooling: true,
-          direct: true,
+          direct: !toolingTestSource,
         })
       : [];
+  if (toolingTestSource && importGraphResult === null) {
+    // Keep caller fallbacks; a partial literal reference cannot prove an opaque frontier.
+    return null;
+  }
   const importGraphTargets = importGraphResult ?? [];
   const referenceTargets =
     githubYaml || (semanticTargets.length === 0 && !hasDirectOwner)
@@ -3685,7 +3771,10 @@ function classifyTarget(arg: string, cwd: string, beforeDatabaseWorkerOwnership 
   if (configTargetKind) {
     return configTargetKind;
   }
-  if (gatewayPluginTestFiles.includes(relative)) {
+  if (
+    gatewayPluginTestFiles.includes(relative) &&
+    (beforeDatabaseWorkerOwnership || !gatewayDatabaseWorkerTestFiles.includes(relative))
+  ) {
     return "gatewayMethods";
   }
   if (beforeDatabaseWorkerOwnership) {
@@ -3751,6 +3840,9 @@ function classifyTarget(arg: string, cwd: string, beforeDatabaseWorkerOwnership 
   // Otherwise a thin wrapper can move a stateful tooling test into a shared worker.
   if (isToolingIsolatedTestFile(relative)) {
     return "toolingIsolated";
+  }
+  if (isCliProcessTestFile(relative)) {
+    return "cliProcess";
   }
   if (resolveUnitFastTimerTestIncludePattern(relative)) {
     return "unitFastFakeTimers";
@@ -3846,9 +3938,6 @@ function classifyTarget(arg: string, cwd: string, beforeDatabaseWorkerOwnership 
   }
   if (isPathAtOrUnder(relative, "src/acp")) {
     return "acp";
-  }
-  if (isCliProcessTestFile(relative)) {
-    return "cliProcess";
   }
   if (isPathAtOrUnder(relative, "src/cli")) {
     return "cli";
@@ -4187,7 +4276,7 @@ export function buildVitestRunPlans(
   }
   const impliedToolingIsolatedTargets = !watchMode
     ? toolingIsolatedTestFiles.filter((file) =>
-        toolingTargets.some((targetArg) =>
+        classifiedTargets.some(({ targetArg }) =>
           includePatternMatchesAnyFile(toScopedIncludePattern(targetArg, cwd), [file]),
         ),
       )
@@ -4453,7 +4542,7 @@ export function buildFullSuiteVitestRunPlans(args: string[], cwd = process.cwd()
     const configs = expandShard ? shard.projects : [shard.config];
     return configs.flatMap((config) => {
       if (expandShard && targetArgs.length === 0) {
-        let chunks: string[][] = [];
+        let chunks: string[][] | null = null;
         if (config === AGENTS_CORE_VITEST_CONFIG) {
           // A single non-isolated agents-core process grows until its worker can
           // exit under the full-suite memory load. Bound each process lifetime.
@@ -4481,17 +4570,14 @@ export function buildFullSuiteVitestRunPlans(args: string[], cwd = process.cwd()
           const chunkCount = Math.ceil(targets.length / FULL_SUITE_TOOLING_TEST_TARGET_CHUNK_SIZE);
           chunks = splitTargetChunks(targets, chunkCount);
         } else if (config === GATEWAY_SERVER_VITEST_CONFIG) {
-          chunks = splitTargetChunks(
-            listGatewayServerTestTargets(cwd),
-            GATEWAY_SERVER_TEST_PROCESS_COUNT,
-          );
+          chunks = createGatewayServerTestTargetChunks(cwd);
         } else {
           const roots = EXTENSION_TEST_PROCESS_ROOTS.get(config);
           if (roots) {
             chunks = createExtensionTestProcessTargetChunks(config, roots, forwardedArgs);
           }
         }
-        if (chunks.length > 0) {
+        if (chunks !== null) {
           return chunks.map((targets) => ({
             config,
             forwardedArgs: [...forwardedArgs, ...targets],
@@ -4623,53 +4709,63 @@ export function resolveParallelFullSuiteConcurrency(
   return Math.min(resolveLocalFullSuiteProfile(env, hostInfo).shardParallelism, specCount);
 }
 
-function sanitizeVitestCachePathSegment(value: string) {
-  return (
-    value
-      .replace(/[^a-zA-Z0-9._-]+/gu, "-")
-      .replace(/^-+|-+$/gu, "")
-      .slice(0, 180) || "default"
-  );
-}
-
 export function applyParallelVitestCachePaths<T extends VitestSpecShape>(
   specs: T[],
   params: { cwd?: string; env?: NodeJS.ProcessEnv } = {},
 ): Array<CacheAssignedSpec<T>> {
   const baseEnv = params.env ?? process.env;
   const cwd = params.cwd ?? process.cwd();
-  const configuredCacheRoot = baseEnv[FS_MODULE_CACHE_PATH_ENV_KEY]?.trim() || undefined;
-  // CI publishes a persistent cache root, not a writer-safe leaf. Every
-  // concurrent Vitest process still needs its own live directory below it.
-  const cacheRoot = configuredCacheRoot ?? resolveVitestFsModuleCacheRoot(cwd);
-  return specs.map((spec, index) => {
+  const sharedRoot = baseEnv.OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT?.trim();
+  // Project callers historically supplied a root through PATH. ROOT makes CI's
+  // ownership explicit while a simultaneous PATH remains a caller-owned leaf.
+  const legacyRoot = sharedRoot ? undefined : baseEnv[FS_MODULE_CACHE_PATH_ENV_KEY]?.trim();
+  const cacheRoot = legacyRoot || resolveVitestCacheRoot(baseEnv, cwd);
+  const configSlots = new Map<string, number>();
+  return specs.map((spec) => {
     const specCachePath = spec.env?.[FS_MODULE_CACHE_PATH_ENV_KEY]?.trim();
-    if (specCachePath && specCachePath !== configuredCacheRoot) {
+    if (
+      spec.cacheAssignment?.kind === "caller" ||
+      (spec.cacheAssignment?.kind !== "scheduler" && specCachePath && specCachePath !== legacyRoot)
+    ) {
       return { ...spec, cacheAssignment: spec.cacheAssignment ?? { kind: "caller" } };
     }
-    const cacheSegment = sanitizeVitestCachePathSegment(`${index}-${spec.config}`);
+    const firstSlot = resolveVitestCacheSlotPath(cacheRoot, spec.config, 0, cwd);
+    const slot = configSlots.get(firstSlot) ?? 0;
+    configSlots.set(firstSlot, slot + 1);
     return {
       ...spec,
       cacheAssignment: { kind: "scheduler", root: cacheRoot },
       env: {
         ...spec.env,
-        [FS_MODULE_CACHE_PATH_ENV_KEY]: path.join(cacheRoot, cacheSegment),
+        [FS_MODULE_CACHE_PATH_ENV_KEY]: resolveVitestCacheSlotPath(
+          cacheRoot,
+          spec.config,
+          slot,
+          cwd,
+        ),
       },
     };
   });
 }
 
-export function applyDefaultMultiSpecVitestCachePaths<T extends WatchableVitestSpecShape>(
+export function applyDefaultVitestCachePaths<T extends WatchableVitestSpecShape>(
   specs: T[],
   params: { cwd?: string; env?: NodeJS.ProcessEnv } = {},
 ): Array<CacheAssignedSpec<T>> {
-  if (specs.length <= 1 || specs.some((spec) => spec.watchMode)) {
+  if (specs.some((spec) => spec.watchMode)) {
     return specs;
   }
-  // Same-config process lifetimes run one after another and must keep the
-  // restored CI seed. Isolating them would make every Telegram file pay a
-  // silent cold import.
-  if (specs.every((spec) => spec.config === specs[0]?.config)) {
+  const baseEnv = params.env ?? process.env;
+  const oneConfig = specs.length <= 1 || specs.every((spec) => spec.config === specs[0]?.config);
+  // Before ROOT existed these serial callers owned PATH as an exact leaf.
+  if (
+    !baseEnv.OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT?.trim() &&
+    baseEnv[FS_MODULE_CACHE_PATH_ENV_KEY]?.trim() &&
+    oneConfig
+  ) {
+    return specs;
+  }
+  if (process.platform === "win32" && oneConfig) {
     return specs;
   }
   return applyParallelVitestCachePaths(specs, params);

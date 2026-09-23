@@ -1,8 +1,10 @@
+import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import {
   createThemeDefinitionFixture,
   createThemePaletteFixture,
 } from "../../../test/helpers/theme-fixture.js";
+import { ThemesImportParamsSchema } from "./schema/themes.js";
 import {
   isThemeId,
   normalizeThemeDefinition,
@@ -70,6 +72,57 @@ describe("portable theme definition", () => {
     ).toEqual([]);
   });
 
+  it.each(["fedora", "crown", "santa", "party", "pumpkin"] as const)(
+    "accepts the %s avatar hat in portable definitions and import requests",
+    (avatarHat) => {
+      const definition = createThemeDefinitionFixture({ avatarHat });
+      expect(normalizeThemeDefinition(definition).avatarHat).toBe(avatarHat);
+      expect(Value.Check(ThemesImportParamsSchema, { id: "hat-theme", definition })).toBe(true);
+    },
+  );
+
+  it.each(["beanie", "monocle", "sprout", "patch", "barnacle", null])(
+    "keeps undeclared avatar hat %j out of personal definitions",
+    (avatarHat) => {
+      const definition = { ...createThemeDefinitionFixture(), avatarHat };
+      expect(() => normalizeThemeDefinition(definition)).toThrow(
+        "theme.avatarHat must be one of fedora, crown, santa, party, pumpkin",
+      );
+      expect(Value.Check(ThemesImportParamsSchema, { id: "hat-theme", definition })).toBe(
+        avatarHat !== null,
+      );
+    },
+  );
+
+  it("accepts plugin artwork only from declared IDs of the corresponding kind", () => {
+    const definition = createThemeDefinitionFixture({ avatarHat: "beret", critters: ["ferris"] });
+    expect(() => normalizeThemeDefinition(definition)).toThrow(
+      "theme.critters[0] must be one of penguin, fedora",
+    );
+    expect(() =>
+      normalizeThemeDefinition(definition, { hatIds: ["ferris"], critterIds: ["beret"] }),
+    ).toThrow("theme.critters[0]");
+    expect(
+      normalizeThemeDefinition(definition, { hatIds: ["beret"], critterIds: ["ferris"] }),
+    ).toMatchObject({ avatarHat: "beret", critters: ["ferris"] });
+    expect(Value.Check(ThemesImportParamsSchema, { id: "hat-theme", definition })).toBe(true);
+    expect(parseThemeDefinition(definition)).toBeNull();
+  });
+
+  it.each(["", "Beret", "a".repeat(33), "beret.svg", "<svg>"])(
+    "rejects nonportable artwork ID %j at the wire boundary",
+    (id) => {
+      for (const branding of [{ avatarHat: id }, { critters: [id] }]) {
+        expect(
+          Value.Check(ThemesImportParamsSchema, {
+            id: "hat-theme",
+            definition: createThemeDefinitionFixture(branding),
+          }),
+        ).toBe(false);
+      }
+    },
+  );
+
   it.each([
     { fields: { mascot: "robot" }, message: "theme.mascot must be one of claw, none" },
     { fields: { workingPhrases: "Building" }, message: "must be an array" },
@@ -99,8 +152,6 @@ describe("portable theme definition", () => {
       fields: { critters: [" Penguin "] },
       message: "theme.critters[0] must be one of penguin, fedora",
     },
-    { fields: { avatarHat: "beanie" }, message: "theme.avatarHat must be one of fedora" },
-    { fields: { avatarHat: null }, message: "theme.avatarHat must be one of fedora" },
   ])("rejects invalid branding $fields", ({ fields, message }) => {
     expect(() =>
       normalizeThemeDefinition({ ...createThemeDefinitionFixture(), ...fields }),

@@ -50,6 +50,7 @@ export * from "./schema/sessions-suggestions.js";
 export * from "./schema/sessions-activity-summary.js";
 export * from "./schema/sessions-delete.js";
 export * from "./schema/sessions-goal.js";
+export * from "./schema/sessions-provider-review.js";
 export {
   SESSION_CREATE_IDEMPOTENCY_RETENTION_MS,
   SESSION_CREATE_RETRY_WINDOW_MS,

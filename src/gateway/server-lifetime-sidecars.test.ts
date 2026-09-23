@@ -1,18 +1,24 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { deserialize } from "node:v8";
+import { MessageChannel, Worker } from "node:worker_threads";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import {
   getProcessCleanupBudget,
   runWithProcessCleanupBudget,
 } from "../process/supervisor/cleanup-budget.js";
 import { writeSecretStoreEntry } from "../secrets/store/secret-store.js";
+import * as secretStore from "../secrets/store/secret-store.js";
 import {
-  closeOpenClawStateDatabaseForTest,
+  closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { holdStateDatabaseCoordinator } from "../test-utils/state-database-contention.js";
 import { attachInitialGatewayLifetimeSidecars } from "./server-lifetime-sidecars.js";
 import {
   emitSessionsChanged,
@@ -62,9 +68,10 @@ function writeStoredSecret(name: string, value: string): void {
   });
 }
 
-afterEach(() => {
+afterEach(async () => {
   vi.useRealTimers();
-  closeOpenClawStateDatabaseForTest();
+  vi.restoreAllMocks();
+  await closeOpenClawStateDatabaseAsync();
   for (const root of roots.splice(0)) {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -80,6 +87,117 @@ describe("gateway lifetime sidecars", () => {
       stop: oauth.stop,
     });
     oauth.install.mockReset().mockReturnValue(oauth.uninstall);
+  });
+
+  test("keeps scheduled secret expiry responsive and joins its accepted sweep on shutdown", async () => {
+    await withEnvAsync({ OPENCLAW_STATE_DIR: createStateDir() }, async () => {
+      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+      const owner = createGatewaySidecarStopOwner();
+      const sweeps: Promise<number>[] = [];
+      const purge = secretStore.purgeExpiredSecretStoreEntries;
+      const openingMessages = vi.spyOn(Worker.prototype, "postMessage");
+      const observePurge = vi
+        .spyOn(secretStore, "purgeExpiredSecretStoreEntries")
+        .mockImplementation((...args) => {
+          const result = purge(...args);
+          sweeps.push(Promise.resolve(result));
+          return result;
+        });
+      await attachInitialGatewayLifetimeSidecars({
+        chatMetadataLifecycle: { attachContext: vi.fn(async () => {}) } as never,
+        gatewayRequestContext: {} as never,
+        flushPendingSessionsChangedEvents: vi.fn(),
+        minimalTestGateway: false,
+        logWarning: vi.fn(),
+        publishSidecars: owner.publish,
+      });
+      expect(await Promise.all(sweeps)).toEqual([0]);
+      const context = captureOpenClawStateWorkerContext();
+      const openIndex = openingMessages.mock.calls.findIndex(([message]) => {
+        const request = asOptionalRecord(message);
+        return request?.type === "open" && request.databasePath === context.admission.databasePath;
+      });
+      const worker = openingMessages.mock.contexts[openIndex];
+      openingMessages.mockRestore();
+      const handoff = "github-setup-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+      writeStoredSecret(handoff, "synthetic-expired-handoff");
+      openOpenClawStateDatabase()
+        .db.prepare("UPDATE secret_store_entries SET created_at_ms = ? WHERE name = ?")
+        .run(Date.now() - 11 * 60_000, handoff);
+      const holder = holdStateDatabaseCoordinator(
+        context.admission.databasePath,
+        context.coordinatorRuntime,
+        5_000,
+      );
+      const hostYielded = createDeferred<number>();
+      const checkpoint = new MessageChannel();
+      checkpoint.port1.once("message", () => hostYielded.resolve(Atomics.load(holder.released, 0)));
+      const dispatched = createDeferred();
+      const post = worker instanceof Worker ? worker.postMessage.bind(worker) : undefined;
+      const observeDispatch =
+        worker instanceof Worker && post
+          ? vi.spyOn(worker, "postMessage").mockImplementation((message, transferList) => {
+              const request = asOptionalRecord(message);
+              if (
+                request?.type === "execute" &&
+                request.input instanceof Uint8Array &&
+                asOptionalRecord(deserialize(request.input))?.type === "secrets.purge"
+              ) {
+                dispatched.resolve();
+              }
+              return post(message, transferList);
+            })
+          : undefined;
+      let stopping: Promise<void> | undefined;
+      try {
+        await holder.ready;
+        checkpoint.port2.postMessage(null);
+        vi.advanceTimersByTime(60_000);
+        await withEnvAsync({ OPENCLAW_STATE_DIR: createStateDir() }, async () => {
+          expect(
+            await withTestTimeout(hostYielded.promise, 10_000, "Expiry did not yield to the host"),
+          ).toBe(0);
+          expect(worker).toBeInstanceOf(Worker);
+          await withTestTimeout(
+            dispatched.promise,
+            5_000,
+            "Expiry did not reach its shared-state worker",
+          );
+          vi.advanceTimersByTime(60_000);
+          expect(sweeps).toHaveLength(2);
+          let stopped = false;
+          stopping = owner.stop().then(() => {
+            stopped = true;
+          });
+          const stopCheckpoint = createDeferred();
+          checkpoint.port1.once("message", () => stopCheckpoint.resolve());
+          checkpoint.port2.postMessage(null);
+          await withTestTimeout(
+            stopCheckpoint.promise,
+            5_000,
+            "Shutdown did not yield to the host",
+          );
+          expect(stopped).toBe(false);
+          expect(Atomics.load(holder.released, 0)).toBe(0);
+          holder.release();
+          await expect(holder.joined).resolves.toBe(0);
+          await stopping;
+          expect(await sweeps[1]).toBe(1);
+
+          vi.advanceTimersByTime(60_000);
+          expect(sweeps).toHaveLength(2);
+        });
+        expect(countStoredRows(handoff)).toBe(0);
+      } finally {
+        checkpoint.port1.close();
+        checkpoint.port2.close();
+        holder.release();
+        await Promise.allSettled([...sweeps, holder.joined, stopping]);
+        await owner.stop();
+        observeDispatch?.mockRestore();
+        observePurge.mockRestore();
+      }
+    });
   });
 
   test("keeps pre-published sidecars reachable by shutdown", async () => {
@@ -235,13 +353,20 @@ describe("gateway lifetime sidecars", () => {
     "owns startup and scheduled handoff expiry when minimalTestGateway=$minimalTestGateway",
     async ({ minimalTestGateway, expectedHandoffRows }) => {
       await withEnvAsync({ OPENCLAW_STATE_DIR: createStateDir() }, async () => {
-        vi.useFakeTimers();
+        vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
         vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
         const startupHandoff = "github-setup-55555555555555555555555555555555";
         writeStoredSecret(startupHandoff, "temporary-value");
         writeStoredSecret("RETAINED_SECRET", "retained-value");
         vi.setSystemTime(new Date("2026-01-01T00:11:00.000Z"));
         const owner = createGatewaySidecarStopOwner();
+        const purge = secretStore.purgeExpiredSecretStoreEntries;
+        const sweeps: Promise<number>[] = [];
+        vi.spyOn(secretStore, "purgeExpiredSecretStoreEntries").mockImplementation((...args) => {
+          const operation = purge(...args);
+          sweeps.push(operation);
+          return operation;
+        });
 
         await attachInitialGatewayLifetimeSidecars({
           chatMetadataLifecycle: { attachContext: vi.fn(async () => {}) } as never,
@@ -251,11 +376,14 @@ describe("gateway lifetime sidecars", () => {
           logWarning: vi.fn(),
           publishSidecars: owner.publish,
         });
+        await Promise.all(sweeps);
         expect(countStoredRows(startupHandoff)).toBe(expectedHandoffRows);
 
         const scheduledHandoff = "github-setup-77777777777777777777777777777777";
         writeStoredSecret(scheduledHandoff, "scheduled-value");
-        await vi.advanceTimersByTimeAsync(11 * 60_000);
+        vi.setSystemTime(new Date("2026-01-01T00:22:00.000Z"));
+        await vi.advanceTimersByTimeAsync(60_000);
+        await Promise.all(sweeps);
 
         expect(countStoredRows(scheduledHandoff)).toBe(expectedHandoffRows);
         expect(countStoredRows("RETAINED_SECRET")).toBe(1);

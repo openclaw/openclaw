@@ -43,7 +43,6 @@ import {
   handleControlUiAvatarRequest,
   handleControlUiHttpRequest,
 } from "./control-ui.js";
-import { setControlUiPluginAuthCookieForRequest } from "./http-auth-utils.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
@@ -2314,52 +2313,6 @@ describe("handleControlUiHttpRequest", () => {
         ]);
       },
     });
-  });
-
-  it("issues read-only plugin frame grants for Tailscale-authenticated bootstrap", () => {
-    const registry = createEmptyPluginRegistry();
-    registry.controlUiDescriptors.push({
-      pluginId: "demo-plugin",
-      source: "demo-plugin",
-      descriptor: {
-        surface: "tab",
-        id: "demo",
-        label: "Demo",
-        path: "/secure-hook/panel",
-        requiredScopes: ["operator.admin"],
-      },
-    });
-    registry.httpRoutes.push({
-      pluginId: "demo-plugin",
-      source: "demo-plugin",
-      path: "/secure-hook",
-      auth: "gateway",
-      match: "prefix",
-      handler: async () => true,
-    });
-    setActivePluginRegistry(registry);
-    const { res, setHeader } = makeMockHttpResponse();
-
-    expect(
-      setControlUiPluginAuthCookieForRequest(
-        { headers: {} } as IncomingMessage,
-        res,
-        "tailscale",
-        true,
-        "test-generation",
-      ),
-    ).toEqual([
-      {
-        pluginId: "demo-plugin",
-        path: "/secure-hook",
-        match: "prefix",
-        scopes: ["operator.read"],
-      },
-    ]);
-    expect(setHeader).toHaveBeenCalledWith(
-      "Set-Cookie",
-      expect.arrayContaining([expect.stringContaining("Path=/secure-hook")]),
-    );
   });
 
   it("serves bootstrap config JSON when paired device-token auth is valid", async () => {

@@ -658,7 +658,7 @@ export function refreshPreparedModelRuntimeSnapshots(
       }
       throw refreshError;
     });
-  return startup ? startup.wait(publication) : publication;
+  return publicationQueue.complete(publication, isPublicationCurrent, options, startup);
 }
 
 async function drainPendingAuthMutations(commit?: () => void): Promise<void> {

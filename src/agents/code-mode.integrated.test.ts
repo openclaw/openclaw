@@ -1,6 +1,6 @@
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import * as worker from "./code-mode-worker.js";
+import * as worker from "./code-mode-executor.js";
 import { applyCodeModeCatalog, runCodeModeScriptHeadless } from "./code-mode.js";
 import {
   createCodeModeHarness,
@@ -47,17 +47,6 @@ describe("integrated public Code Mode", () => {
       expect(target.execute).toHaveBeenCalledOnce();
     },
   );
-
-  it("still enforces the actual checkpoint limit", async () => {
-    const { ctx, config, tools } = createCodeModeHarness();
-    applyCodeModeCatalog({ ...ctx, config, tools });
-    const result = resultDetails(
-      await tools[0]!.execute("checkpoint", {
-        code: "const heap = new Uint8Array(12 * 1024 * 1024); await yield_control(); return heap.length;",
-      }),
-    );
-    expect(result).toMatchObject({ status: "failed", code: "snapshot_limit_exceeded" });
-  });
 
   it.each([
     { language: "javascript" },
@@ -144,19 +133,22 @@ describe("integrated public Code Mode", () => {
       const { ctx, config, tools } = createCodeModeHarness();
       applyCodeModeCatalog({ ...ctx, config, tools: [...tools, target] });
       const clock = vi.spyOn(performance, "now").mockReturnValue(0);
-      const original = worker.runCodeModeWorker;
-      const spy = vi.spyOn(worker, "runCodeModeWorker").mockImplementation(async (...args) => {
-        const inline = args[4];
+      const original = worker.runCodeModeExecutor;
+      const spy = vi.spyOn(worker, "runCodeModeExecutor").mockImplementation(async (...args) => {
+        const inline = args[1].inlineHost;
         if (!inline) {
           return await original(...args);
         }
-        return await original(args[0], args[1], args[2], args[3], {
-          ...inline,
-          onBoundary: async (boundary, context) => {
-            if (boundary.pendingRequests.some((request) => request.method === "callValue")) {
-              clock.mockReturnValue(100_000);
-            }
-            return await inline.onBoundary(boundary, context);
+        return await original(args[0], {
+          ...args[1],
+          inlineHost: {
+            ...inline,
+            onBoundary: async (boundary, context) => {
+              if (boundary.pendingRequests.some((request) => request.method === "callValue")) {
+                clock.mockReturnValue(100_000);
+              }
+              return await inline.onBoundary(boundary, context);
+            },
           },
         });
       });

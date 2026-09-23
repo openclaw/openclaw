@@ -80,6 +80,26 @@ afterEach(() => {
 });
 
 describe("server-owned pending input display", () => {
+  it.each(["held", "failed", "waiting-reconnect"] as const)(
+    "describes interrupted input with a %s browser owner accurately",
+    (sendState) => {
+      const items = buildPendingInputItems([{ ...input, state: "interrupted" }], undefined, [
+        {
+          id: "retained-input",
+          text: "Retained input",
+          createdAt: 1,
+          sendRunId: input.runId,
+          sendState,
+        },
+      ]);
+      expect(items.filter((item) => item.kind === "notice").map((item) => item.text)).toEqual([
+        sendState === "waiting-reconnect"
+          ? "Interrupted by a Gateway restart. This saved message will resume when the session is ready."
+          : "Interrupted before the agent started it. It will not run automatically; copy it and send again.",
+      ]);
+    },
+  );
+
   it("shows a durable receipt while an accepted input waits for workspace sync", () => {
     const queued = { ...input, state: "queued" as const };
 
@@ -880,7 +900,9 @@ describe("server-owned pending input display", () => {
     });
   });
 
-  it("keeps unconsumed input in order without a generic queue notice", () => {
+  it("keeps unconsumed input after persisted history without a generic queue notice", () => {
+    // Custody accepted at 100 is not in the transcript, so it floors after the
+    // reply persisted at 150 instead of interleaving by acceptance time.
     const earlier = { role: "assistant", content: "Earlier reply", timestamp: 50 };
     const later = { role: "assistant", content: "Later reply", timestamp: 150 };
     const items = buildChatItems({
@@ -897,13 +919,12 @@ describe("server-owned pending input display", () => {
     });
 
     expect(items).toMatchObject([
-      { kind: "group", role: "assistant", messages: [{ message: earlier }] },
+      { kind: "group", role: "assistant", messages: [{ message: earlier }, { message: later }] },
       {
         kind: "group",
         role: "user",
         messages: [{ message: { content: "Keep my accepted input" } }],
       },
-      { kind: "group", role: "assistant", messages: [{ message: later }] },
     ]);
   });
 

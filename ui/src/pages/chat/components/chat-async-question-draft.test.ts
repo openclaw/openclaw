@@ -1,14 +1,17 @@
 /* @vitest-environment jsdom */
+import { render } from "lit";
 import { beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { DurableQuestionDraft } from "../../../lib/chat/composer-draft-store.runtime.ts";
 import {
   createAsyncQuestionPanelProps,
   createAsyncQuestionPresentation,
+  renderAsyncQuestionSummary,
 } from "./chat-async-question.ts";
 import { getTranscriptState, resetThreadPresentation } from "./chat-thread-interactions.ts";
 
-const storage = vi.hoisted(() => ({ read: vi.fn(), write: vi.fn() }));
+const storage = vi.hoisted(() => ({ read: vi.fn(), write: vi.fn(), toast: vi.fn() }));
+vi.mock("../../../lib/toast.ts", () => ({ showToast: storage.toast }));
 vi.mock("../../../lib/chat/composer-draft-store.runtime.ts", () => ({
   readDurableComposerDraft: storage.read,
   writeDurableComposerDraft: storage.write,
@@ -57,6 +60,7 @@ beforeEach(() => {
   storage.read.mockReset().mockResolvedValue({ status: "not-found" });
   storage.write.mockReset().mockResolvedValue({ status: "persisted" });
   props.onAsyncQuestionSubmit.mockClear();
+  storage.toast.mockClear();
 });
 
 it("preserves an edited draft across reconnect and session navigation without retargeting old callbacks", async () => {
@@ -188,7 +192,7 @@ it("does not turn a reopened but untouched question into an edited draft on relo
   expect(current.asyncQuestionDrafts.get(question.itemId)?.edited).toBe(false);
 });
 
-it("retires a skipped answer instead of recovering it as a protected draft after reload", async () => {
+it("keeps a dismissed answer out of pending questions after reload and later completion", async () => {
   let stored = { revision: 10, writeId: "saved", questionDrafts: [saved] };
   storage.read.mockImplementation(async () => ({ status: "found", draft: stored }));
   storage.write.mockImplementation(async (_scope, draft, options) => {
@@ -202,7 +206,7 @@ it("retires a skipped answer instead of recovering it as a protected draft after
   await createAsyncQuestionPanelProps(question, presentation, {}).onSkip?.();
   await settled(current);
 
-  expect(stored.questionDrafts).toEqual([]);
+  expect(stored.questionDrafts).toEqual([{ ...saved, dismissed: true }]);
   expect(props.onAsyncQuestionSubmit).not.toHaveBeenCalled();
   const remounted = state();
   const laterProps = {
@@ -218,7 +222,8 @@ it("retires a skipped answer instead of recovering it as a protected draft after
   const recovered = createAsyncQuestionPresentation(remounted, laterProps);
   expect(recovered.pending).toEqual([]);
   expect(recovered.archived.has(question.itemId)).toBe(true);
-  expect(recovered.drafts.get(question.itemId)?.edited).not.toBe(true);
+  expect(recovered.drafts.get(question.itemId)).toMatchObject({ status: "skipped", edited: true });
+  expect(recovered.drafts.get(question.itemId)?.answers.get("0")?.freeText).toBe("Saved answer");
 });
 
 it.each(["storage-failed", "conflict"])(
@@ -297,6 +302,130 @@ it("retires disposed-pane callbacks without renewing pre-deletion draft intent",
   expect(storage.write).not.toHaveBeenCalled();
 });
 
+it("durably dismisses only the optional question and offers Undo without sending or cancelling work", async () => {
+  const current = state();
+  const presentation = createAsyncQuestionPresentation(current, props);
+  edit(presentation, "Keep this answer for later");
+  await presentation.dismiss(question.itemId);
+  expect(createAsyncQuestionPresentation(current, props).pending).toHaveLength(0);
+  const stored = storage.write.mock.calls.at(-1)?.[1];
+  expect(stored.questionDrafts).toEqual([
+    expect.objectContaining({
+      dismissed: true,
+      answers: [{ selected: [], freeText: "Keep this answer for later" }],
+    }),
+  ]);
+  expect(props.onAsyncQuestionSubmit).not.toHaveBeenCalled();
+  const undo = storage.toast.mock.calls.at(-1)?.[0];
+  expect(undo.actionLabel).toBe("Undo");
+  undo.onAction();
+  await settled(current);
+  expect(createAsyncQuestionPresentation(current, props).pending).toHaveLength(1);
+  expect(current.asyncQuestionDrafts.get(question.itemId)?.answers.get("0")?.freeText).toBe(
+    "Keep this answer for later",
+  );
+  expect(storage.write.mock.calls.at(-1)?.[1].questionDrafts[0].dismissed).toBeUndefined();
+
+  storage.read.mockResolvedValue({
+    status: "found",
+    draft: {
+      revision: stored.revision,
+      writeId: "dismissed",
+      questionDrafts: stored.questionDrafts,
+    },
+  });
+  const remounted = state();
+  createAsyncQuestionPresentation(remounted, { ...props, connectionEpoch: 2 });
+  await settled(remounted);
+  const restored = createAsyncQuestionPresentation(remounted, { ...props, connectionEpoch: 2 });
+  expect(restored.pending).toHaveLength(0);
+  void restored.reopen(question.itemId);
+  await settled(remounted);
+  expect(
+    createAsyncQuestionPresentation(remounted, { ...props, connectionEpoch: 2 }).pending,
+  ).toHaveLength(1);
+  expect(remounted.asyncQuestionDrafts.get(question.itemId)?.answers.get("0")?.freeText).toBe(
+    "Keep this answer for later",
+  );
+  expect(props.onAsyncQuestionSubmit).not.toHaveBeenCalled();
+});
+
+it("makes a failed dismissal save visible and keeps Undo available", async () => {
+  storage.write.mockResolvedValue({ status: "storage-failed" });
+  const current = state();
+  const presentation = createAsyncQuestionPresentation(current, props);
+  await presentation.dismiss(question.itemId);
+  const toast = storage.toast.mock.calls.at(-1)?.[0];
+  expect(toast.message).toContain("not saved");
+  expect(toast.actionLabel).toBe("Undo");
+  toast.onAction();
+  await settled(current);
+  expect(createAsyncQuestionPresentation(current, props).pending).toHaveLength(1);
+});
+
+it("reopens from Undo against the latest completion boundary, not the dismissed render", async () => {
+  const current = state();
+  const initial = {
+    ...props,
+    messages: [{ ...props.messages[0], runId: "original-run" }],
+  };
+  await createAsyncQuestionPresentation(current, initial).dismiss(question.itemId);
+  const undo = storage.toast.mock.calls.at(-1)?.[0];
+  const advanced = {
+    ...initial,
+    messages: [
+      ...initial.messages,
+      ...["original-run", "successor-run"].map((runId, index) => ({
+        role: "assistant",
+        runId,
+        phase: "final_answer",
+        stopReason: "stop",
+        content: "Finished the requested work.",
+        __openclaw: { id: `final-${runId}`, seq: index + 2, runTerminal: true },
+      })),
+    ],
+  };
+  expect(createAsyncQuestionPresentation(current, advanced).pending).toHaveLength(0);
+  undo.onAction();
+  await settled(current);
+  const reopened = createAsyncQuestionPresentation(current, advanced);
+  expect(reopened.pending.map((entry) => entry.itemId)).toEqual([question.itemId]);
+  expect(reopened.drafts.get(question.itemId)?.edited).not.toBe(true);
+  expect(props.onAsyncQuestionSubmit).not.toHaveBeenCalled();
+});
+
+it.each(["reopened", "answered"])(
+  "does not announce a delayed dismissal after the question was %s",
+  async (outcome) => {
+    const pendingWrite = createDeferred<unknown>();
+    storage.write.mockReturnValue(pendingWrite.promise);
+    const current = state();
+    const presentation = createAsyncQuestionPresentation(current, props);
+    await settled(current);
+    const dismissal = presentation.dismiss(question.itemId);
+    await vi.waitFor(() => expect(storage.write).toHaveBeenCalledOnce());
+    if (outcome === "reopened") {
+      void presentation.reopen(question.itemId);
+    } else {
+      createAsyncQuestionPresentation(current, {
+        ...props,
+        messages: [
+          ...props.messages,
+          {
+            role: "user",
+            content: "> Which audience?\n\nEveryone",
+            __openclaw: { id: "canonical-answer", seq: 2 },
+          },
+        ],
+      });
+    }
+    pendingWrite.resolve({ status: "persisted" });
+    await dismissal;
+    await settled(current);
+    expect(storage.toast).not.toHaveBeenCalled();
+  },
+);
+
 it.each(["gatewayOwner", "recoveryScope"] as const)(
   "rereads retired drafts after a direct authenticated owner switch (%s)",
   async (ownerField) => {
@@ -347,5 +476,261 @@ it.each(["gatewayOwner", "recoveryScope"] as const)(
     expect(storage.write).not.toHaveBeenCalled();
     expect(previousSession.invalidated).toBe(true);
     expect(current.asyncQuestionDrafts.get(question.itemId)?.answers.get("0")?.freeText).toBe("");
+  },
+);
+
+it.each(["Undo", "Answer"])(
+  "keeps %s visibly pending until removing dismissal survives a remount",
+  async (action) => {
+    const onReopen = vi.fn();
+    const activeProps = { ...props, onReopen };
+    const current = state();
+    const initial = createAsyncQuestionPresentation(current, activeProps);
+    edit(initial, "Keep this answer for later");
+    await initial.dismiss(question.itemId);
+    const writesBeforeReopen = storage.write.mock.calls.length;
+    let stored = storage.write.mock.calls.at(-1)![1];
+    storage.read.mockImplementation(async () => ({
+      status: "found",
+      draft: { ...stored, writeId: "committed" },
+    }));
+    const pendingWrite = createDeferred();
+    storage.write.mockImplementation(async (_scope, record) => {
+      await pendingWrite.promise;
+      stored = record;
+      return { status: "persisted" };
+    });
+    const dismissed = createAsyncQuestionPresentation(current, activeProps);
+    if (action === "Undo") {
+      storage.toast.mock.calls.at(-1)![0].onAction();
+    } else {
+      void dismissed.reopen(question.itemId);
+    }
+    const restoring = createAsyncQuestionPresentation(current, activeProps);
+    expect(restoring.pending).toHaveLength(0);
+    expect(onReopen).not.toHaveBeenCalled();
+    const summary = document.createElement("div");
+    render(renderAsyncQuestionSummary(question, restoring), summary);
+    expect(summary.textContent).toContain("Restoring answer");
+    expect(summary.querySelector<HTMLButtonElement>("button")?.disabled).toBe(true);
+    render(null, summary);
+
+    // Establish that the reopening transaction has reached its held write before
+    // mounting a second reader; this is the delayed commit boundary under test.
+    await vi.waitFor(() => expect(storage.write).toHaveBeenCalledTimes(writesBeforeReopen + 1));
+    // Reload before the transaction commits still reads dismissed, not a claimed restore.
+    const duringSave = state();
+    createAsyncQuestionPresentation(duringSave, activeProps);
+    await settled(duringSave);
+    expect(createAsyncQuestionPresentation(duringSave, activeProps).pending).toHaveLength(0);
+    pendingWrite.resolve();
+    await settled(current);
+    await vi.waitFor(() => expect(onReopen).toHaveBeenCalledOnce());
+    const reloaded = state();
+    createAsyncQuestionPresentation(reloaded, activeProps);
+    await settled(reloaded);
+    const recovered = createAsyncQuestionPresentation(reloaded, activeProps);
+    expect(recovered.pending).toHaveLength(1);
+    expect(recovered.drafts.get(question.itemId)?.answers.get("0")?.freeText).toBe(
+      "Keep this answer for later",
+    );
+    expect(props.onAsyncQuestionSubmit).not.toHaveBeenCalled();
+  },
+);
+
+it("does not reopen a canonically answered question when its restoration save finishes", async () => {
+  storage.read.mockResolvedValue({
+    status: "found",
+    draft: { revision: 10, writeId: "dismissed", questionDrafts: [{ ...saved, dismissed: true }] },
+  });
+  const onReopen = vi.fn();
+  const activeProps = { ...props, onReopen };
+  const current = state();
+  createAsyncQuestionPresentation(current, activeProps);
+  await settled(current);
+  const pendingWrite = createDeferred<unknown>();
+  storage.write.mockReturnValue(pendingWrite.promise);
+  const reopening = createAsyncQuestionPresentation(current, activeProps).reopen(question.itemId);
+  await vi.waitFor(() => expect(storage.write).toHaveBeenCalledOnce());
+  const answeredProps = {
+    ...activeProps,
+    messages: [
+      ...props.messages,
+      {
+        role: "user",
+        content: "> Which audience?\n\nEveryone",
+        __openclaw: { id: "canonical-answer", seq: 2 },
+      },
+    ],
+  };
+  createAsyncQuestionPresentation(current, answeredProps);
+  pendingWrite.resolve({ status: "persisted" });
+  await reopening;
+  expect(onReopen).not.toHaveBeenCalled();
+  expect(createAsyncQuestionPresentation(current, answeredProps).pending).toHaveLength(0);
+});
+
+it("does not expand a replacement owner after a delayed restoration save", async () => {
+  storage.read.mockResolvedValueOnce({
+    status: "found",
+    draft: { revision: 10, writeId: "dismissed", questionDrafts: [{ ...saved, dismissed: true }] },
+  });
+  const onReopen = vi.fn();
+  const activeProps = { ...props, onReopen };
+  const current = state();
+  createAsyncQuestionPresentation(current, activeProps);
+  await settled(current);
+  const pendingWrite = createDeferred<unknown>();
+  storage.write.mockReturnValue(pendingWrite.promise);
+  const reopening = createAsyncQuestionPresentation(current, activeProps).reopen(question.itemId);
+  await vi.waitFor(() => expect(storage.write).toHaveBeenCalledOnce());
+  createAsyncQuestionPresentation(current, {
+    ...activeProps,
+    asyncQuestionStorage: { ...owner, recoveryScope: "person-b" },
+  });
+  pendingWrite.resolve({ status: "persisted" });
+  await reopening;
+  expect(onReopen).not.toHaveBeenCalled();
+  expect(current.asyncQuestionDrafts.get(question.itemId)?.answers.get("0")?.freeText).toBe("");
+});
+
+it("saves the latest completion boundary before completing a delayed Undo", async () => {
+  const onReopen = vi.fn();
+  const initialProps = {
+    ...props,
+    onReopen,
+    messages: [{ ...props.messages[0], runId: "original-run" }],
+  };
+  const current = state();
+  await createAsyncQuestionPresentation(current, initialProps).dismiss(question.itemId);
+  const firstWrite = createDeferred<unknown>();
+  const latestWrite = createDeferred<unknown>();
+  storage.write
+    .mockClear()
+    .mockReturnValueOnce(firstWrite.promise)
+    .mockReturnValueOnce(latestWrite.promise);
+  const reopening = createAsyncQuestionPresentation(current, initialProps).reopen(question.itemId);
+  await vi.waitFor(() => expect(storage.write).toHaveBeenCalledTimes(1));
+  const latestProps = {
+    ...initialProps,
+    messages: [
+      ...initialProps.messages,
+      ...["original-run", "successor-run"].map((runId, index) => ({
+        role: "assistant",
+        runId,
+        phase: "final_answer",
+        stopReason: "stop",
+        content: "Finished the requested work.",
+        __openclaw: { id: `final-${runId}`, seq: index + 2, runTerminal: true },
+      })),
+    ],
+  };
+  createAsyncQuestionPresentation(current, latestProps);
+  firstWrite.resolve({ status: "persisted" });
+  await vi.waitFor(() => expect(storage.write).toHaveBeenCalledTimes(2));
+  expect(onReopen).not.toHaveBeenCalled();
+  expect(createAsyncQuestionPresentation(current, latestProps).pending).toHaveLength(0);
+  const latestStored = storage.write.mock.calls[1]![1];
+  expect(latestStored.questionDrafts[0].reopenedAfterBoundary).toBeTruthy();
+  latestWrite.resolve({ status: "persisted" });
+  await reopening;
+  expect(onReopen).toHaveBeenCalledOnce();
+  storage.read.mockResolvedValue({
+    status: "found",
+    draft: { ...latestStored, writeId: "latest" },
+  });
+  const reloaded = state();
+  createAsyncQuestionPresentation(reloaded, latestProps);
+  await settled(reloaded);
+  expect(createAsyncQuestionPresentation(reloaded, latestProps).pending).toHaveLength(1);
+});
+
+it("keeps answering available with an unsaved warning when restoring a dismissal cannot persist", async () => {
+  storage.read.mockResolvedValue({
+    status: "found",
+    draft: { revision: 10, writeId: "dismissed", questionDrafts: [{ ...saved, dismissed: true }] },
+  });
+  const current = state();
+  createAsyncQuestionPresentation(current, props);
+  await settled(current);
+  storage.write.mockResolvedValue({ status: "storage-failed" });
+  await createAsyncQuestionPresentation(current, props).reopen(question.itemId);
+  const reopened = createAsyncQuestionPresentation(current, props);
+  expect(reopened.pending).toHaveLength(1);
+  expect(reopened.storageError).toContain("not saved");
+  expect(reopened.drafts.get(question.itemId)?.answers.get("0")?.freeText).toBe("Saved answer");
+});
+
+it.each(["mounted", "reloaded"] as const)(
+  "preserves ambiguous free-text answers when a failed queued answer is discarded (%s)",
+  async (mount) => {
+    const multiQuestion = {
+      itemId: "free-text",
+      questions: [{ title: "Audience?" }, { title: "Format?" }],
+    };
+    const answers = ["Include this example:\n\n> Format?\n\nKeep quoted text", "Detailed"];
+    let stored: unknown;
+    storage.read.mockImplementation(async () =>
+      stored ? { status: "found", draft: stored } : { status: "not-found" },
+    );
+    storage.write.mockImplementation(async (_scope, draft, options) => {
+      stored = { ...draft, writeId: options.writeId };
+      return { status: "persisted" };
+    });
+    const current = state();
+    const submit = vi.fn(async (_message: string) => true);
+    current.transcriptRenderContext.onAsyncQuestionSubmit = submit;
+    const activeProps = {
+      ...props,
+      onAsyncQuestionSubmit: submit,
+      messages: [{ role: "assistant", openclawAsyncDelivery: multiQuestion }],
+    };
+    const initial = createAsyncQuestionPresentation(current, activeProps);
+    const panel = createAsyncQuestionPanelProps(multiQuestion, initial, {});
+    for (const [index, freeText] of answers.entries()) {
+      panel.model.drafts.set(String(index), { selected: new Set(), freeText });
+    }
+    panel.onChange?.();
+    await panel.onSubmit?.({ "0": [answers[0]!], "1": [answers[1]!] });
+    await settled(current);
+    const queued = {
+      id: "failed-free-text",
+      asyncQuestionItemId: multiQuestion.itemId,
+      text: submit.mock.calls[0]![0],
+      createdAt: 1,
+      sendState: "failed" as const,
+    };
+    const recoveredState = mount === "reloaded" ? state() : current;
+    const deliveryProps = { ...activeProps, queue: [queued] };
+    createAsyncQuestionPresentation(recoveredState, deliveryProps);
+    await settled(recoveredState);
+    const delivered = createAsyncQuestionPresentation(recoveredState, deliveryProps);
+    expect(delivered.pending).toEqual([]);
+    const summary = document.createElement("div");
+    render(renderAsyncQuestionSummary(multiQuestion, delivered), summary);
+    expect(summary.textContent).toContain(queued.text);
+    const revisedText = queued.text.replace("Include this example:", "Updated in the outbox:");
+    render(
+      renderAsyncQuestionSummary(
+        multiQuestion,
+        createAsyncQuestionPresentation(recoveredState, {
+          ...deliveryProps,
+          queue: [{ ...queued, text: revisedText }],
+        }),
+      ),
+      summary,
+    );
+    expect(summary.textContent).toContain(revisedText);
+    expect(summary.textContent).not.toContain("Include this example:");
+    render(null, summary);
+    delivered.discard(queued);
+    const reopened = createAsyncQuestionPresentation(recoveredState, activeProps);
+    expect(reopened.pending.map((entry) => entry.itemId)).toEqual([multiQuestion.itemId]);
+    expect(
+      [...createAsyncQuestionPanelProps(multiQuestion, reopened, {}).model.drafts.values()].map(
+        (answer) => answer.freeText,
+      ),
+    ).toEqual(answers);
+    await settled(recoveredState);
   },
 );

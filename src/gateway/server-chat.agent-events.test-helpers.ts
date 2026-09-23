@@ -1,4 +1,5 @@
 import { vi } from "vitest";
+import { getRuntimeConfig as getCurrentRuntimeConfig } from "../config/io.js";
 import type { AgentEventPayload, AgentEventStream } from "../infra/agent-events.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createChatRunState } from "./server-chat-state.js";
@@ -93,8 +94,7 @@ export function createChatVisionModelCatalogSnapshot(): Awaited<
 export function createDirectChatContext(
   overrides: Partial<GatewayRequestContext> = {},
 ): GatewayRequestContext {
-  const config = {};
-  const getRuntimeConfig = overrides.getRuntimeConfig ?? (() => config);
+  const getRuntimeConfig = overrides.getRuntimeConfig ?? getCurrentRuntimeConfig;
   const loadGatewayModelCatalog =
     overrides.loadGatewayModelCatalog ??
     vi.fn<GatewayRequestContext["loadGatewayModelCatalog"]>(async () =>

@@ -1,6 +1,5 @@
 import type { SessionDeliveryState } from "../../../config/sessions/types.js";
 import type { CallGatewayOptions } from "../../../gateway/call.js";
-import type { AgentEventPayload } from "../../../infra/agent-events.js";
 import type { AgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.types.js";
 
 export type LifecycleData = {
@@ -15,8 +14,6 @@ export type LifecycleData = {
   timeoutPhase?: string;
   providerStarted?: boolean;
 };
-export type LifecycleEvent = Pick<AgentEventPayload, "runId"> &
-  Partial<Omit<AgentEventPayload, "runId" | "data">> & { data?: LifecycleData };
 
 export type SessionStoreEntry = {
   sessionId: string;

@@ -33,6 +33,8 @@ type ProviderPolicyRegistry = { plugins: readonly PluginManifestRecord[] };
 type ProviderPolicyMetadata = {
   manifestRegistry?: ProviderPolicyRegistry;
   loadManifestRegistry?: () => ProviderPolicyRegistry | undefined;
+  /** Direct result from this synchronous resolution; null records an observed miss. */
+  directSurface?: BundledProviderPolicySurface | null;
 };
 
 function resolveBundledProviderPolicyPlugin(
@@ -64,7 +66,10 @@ export function resolveBundledProviderPolicySurface(
   if (!normalizedProviderId) {
     return null;
   }
-  const directSurface = resolveDirectBundledProviderPolicySurface(normalizedProviderId);
+  const directSurface =
+    options.directSurface === undefined
+      ? resolveDirectBundledProviderPolicySurface(normalizedProviderId)
+      : options.directSurface;
   if (directSurface) {
     return directSurface;
   }
@@ -86,7 +91,11 @@ export function resolveBundledProviderPolicySurface(
 /** Resolves provider policy hooks from bundled or trusted official plugin artifacts. */
 export function resolveProviderPolicySurface(
   providerId: string,
-  options: { manifestRegistry?: ProviderPolicyRegistry; config?: OpenClawConfig } = {},
+  options: {
+    manifestRegistry?: ProviderPolicyRegistry;
+    config?: OpenClawConfig;
+    directSurface?: BundledProviderPolicySurface | null;
+  } = {},
 ): ProviderPolicySurface | null {
   if (options.config?.plugins) {
     const registry =

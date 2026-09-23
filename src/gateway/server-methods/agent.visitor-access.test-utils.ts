@@ -19,12 +19,12 @@ import * as mutationAdmission from "../../infra/sqlite-worker-operation-admissio
 import { withPluginRuntimeGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import {
-  ensureGatewayOwnerProfile,
-  ensureProfileForEmail,
-  getUserProfileListItem,
-  linkEmail,
-  setUserProfileRole,
-} from "../../state/user-profiles.js";
+  ensureCanonicalGatewayOwnerProfile,
+  ensureCanonicalUserProfileForEmail,
+  linkCanonicalUserProfileEmail,
+  setCanonicalUserProfileRole,
+} from "../../state/user-profile-writes.js";
+import { getUserProfileListItem } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   captureGatewayDeviceRevocation,
@@ -89,8 +89,8 @@ describe("visitor access admitted caller", () => {
           },
         );
         prime(SESSION_ID, config);
-        const profile = setUserProfileRole(
-          ensureProfileForEmail("source@example.test").id,
+        const profile = await setCanonicalUserProfileRole(
+          (await ensureCanonicalUserProfileForEmail("source@example.test")).id,
           scenario === "writer" ? "writer" : "admin",
         );
         const provider = createAccessPolicyTransport();
@@ -349,12 +349,17 @@ describe("visitor access admitted caller", () => {
         { sessionId: SESSION_ID, updatedAt: Date.now(), visibility: "shared" },
       );
       prime(SESSION_ID, config);
-      const owner = getUserProfileListItem(ensureGatewayOwnerProfile("Existing owner").id);
-      const staffId = ensureProfileForEmail("staff@example.test").id;
-      setUserProfileRole(staffId, "writer");
-      const staff = linkEmail("staff-alias@example.test", staffId);
+      const owner = getUserProfileListItem(
+        (await ensureCanonicalGatewayOwnerProfile("Existing owner")).id,
+      );
+      const staffId = (await ensureCanonicalUserProfileForEmail("staff@example.test")).id;
+      await setCanonicalUserProfileRole(staffId, "writer");
+      const { profile: staff } = await linkCanonicalUserProfileEmail(
+        "staff-alias@example.test",
+        staffId,
+      );
       const unassigned = getUserProfileListItem(
-        ensureProfileForEmail("existing-unassigned@example.test").id,
+        (await ensureCanonicalUserProfileForEmail("existing-unassigned@example.test")).id,
       );
       const now = Date.now();
       const day = 86_400_000;
@@ -385,7 +390,7 @@ describe("visitor access admitted caller", () => {
       });
       try {
         for (const profile of [unassigned, staff, owner]) {
-          expect(resolveGatewayOperatorAccessAuthority(profile.id, config)).toBeUndefined();
+          expect(resolveGatewayOperatorAccessAuthority(profile.id, config)).toBeNull();
         }
         const existing = createVisitorGrantStore(state.env);
         await existing.register(active.email, active);
@@ -431,9 +436,7 @@ describe("visitor access admitted caller", () => {
           resolveGatewayOperatorAccessAuthority(unassigned.id, restrictedConfig),
         ).toThrow(GatewayOperatorAccessDeniedError);
         for (const profile of [staff, owner]) {
-          expect(
-            resolveGatewayOperatorAccessAuthority(profile.id, restrictedConfig),
-          ).toBeUndefined();
+          expect(resolveGatewayOperatorAccessAuthority(profile.id, restrictedConfig)).toBeNull();
         }
         const reopenedOwner = getUserProfileListItem(owner.id);
         const connection = new AbortController();

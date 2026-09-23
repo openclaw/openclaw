@@ -141,10 +141,21 @@ set -euo pipefail
 source "$SCRIPTS/pr-lib/common.sh"
 source "$SCRIPTS/pr-lib/changelog.sh"
 source "$SCRIPTS/pr-lib/gates.sh"
+source "$SCRIPTS/pr-lib/review.sh"
 enter_worktree() { PR_MAIN_SHA="$MAIN_SHA"; }
 refresh_prep_branch_for_reviewed_head() { :; }
 checkout_prep_branch() { :; }
-run_quiet_logged() { printf 'gate:%s\\n' "$1"; }
+# Review authority is covered by the preparation fixtures; this isolates release classification.
+require_prepared_review() { :; }
+run_quiet_logged() {
+  if [ "$1" = 'hosted CI/Testbox gates' ]; then
+    jq -se --slurpfile expected metadata.json '
+      length == 1 and
+      (.[0] | {headRefName,title,baseRefName,headRefOid,isCrossRepository}) == $expected[0]
+    ' >/dev/null || return 1
+  fi
+  printf 'gate:%s\\n' "$1"
+}
 prepare_gates 42
 `,
     ],

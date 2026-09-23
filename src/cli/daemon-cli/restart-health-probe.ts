@@ -284,11 +284,13 @@ export async function confirmGatewayReachable(params: {
   try {
     const context = params.config
       ? { config: params.config, auth: params.auth }
-      : await resolveGatewayRestartProbeContext(params.env);
+      : await resolveGatewayRestartProbeContext(params.env, undefined, params.signal);
+    params.signal?.throwIfAborted();
     const auth = params.auth ?? context.auth;
     const configuredProbe =
       params.configuredProbe ?? createConfiguredGatewayLocalProbe(context.config);
     const target = await configuredProbe.resolveWebSocketTarget(params.port, params.signal);
+    params.signal?.throwIfAborted();
     if (!target) {
       return { ...result, probeError: "gateway TLS certificate unavailable" };
     }
@@ -360,7 +362,9 @@ export type GatewayRestartProbeContext = {
 export async function resolveGatewayRestartProbeContext(
   env: NodeJS.ProcessEnv | undefined,
   explicitAuth?: GatewayRestartProbeAuth,
+  signal?: AbortSignal,
 ): Promise<GatewayRestartProbeContext> {
+  signal?.throwIfAborted();
   const mergedEnv: NodeJS.ProcessEnv = { ...process.env, ...env };
   const cfg = await createConfigIO({
     env: mergedEnv,
@@ -370,12 +374,14 @@ export async function resolveGatewayRestartProbeContext(
   })
     .readBestEffortConfig()
     .catch((): OpenClawConfig => ({}));
+  signal?.throwIfAborted();
   const resolved = await resolveGatewayProbeAuthSafeWithSecretInputs({
     cfg,
     mode: "local",
     env: mergedEnv,
     explicitAuth,
   });
+  signal?.throwIfAborted();
   return { auth: resolved.auth, config: cfg };
 }
 

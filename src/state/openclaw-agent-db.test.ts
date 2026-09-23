@@ -61,6 +61,7 @@ import {
 } from "./openclaw-agent-db.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
 import { removeCanonicalValidationFromHistoricalAgentFixture } from "./openclaw-agent-db.test-support.js";
+import { materializeV21WorkerAgentDatabase } from "./openclaw-agent-schema-v21.test-support.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -195,12 +196,8 @@ function ensureV13WorkerAgentDatabaseTemplate(): string {
     env: { OPENCLAW_STATE_DIR: stateDir },
   });
   fs.mkdirSync(path.dirname(databasePath), { recursive: true });
-  fs.copyFileSync(
-    ensureCurrentWorkerAgentDatabaseTemplate(),
-    databasePath,
-    fs.constants.COPYFILE_EXCL,
-  );
-  downgradeCurrentAgentDatabaseToV13(databasePath);
+  materializeV21WorkerAgentDatabase(stateDir);
+  downgradeV21AgentDatabaseToV13(databasePath);
 
   const { DatabaseSync } = requireNodeSqlite();
   const checkpoint = new DatabaseSync(databasePath);
@@ -305,7 +302,7 @@ const tempVolumeIsNormalizationInsensitive = (() => {
   }
 })();
 
-function downgradeCurrentAgentDatabaseToV13(databasePath: string): void {
+function downgradeV21AgentDatabaseToV13(databasePath: string): void {
   const { DatabaseSync } = requireNodeSqlite();
   const database = new DatabaseSync(databasePath);
   try {
@@ -1513,7 +1510,7 @@ describe("openclaw agent database", () => {
     async (hasRetainedArchives) => {
       const stateDir = createTempStateDir();
       const options = { agentId: "worker-1", env: { OPENCLAW_STATE_DIR: stateDir } };
-      const databasePath = materializeCurrentWorkerAgentDatabase(stateDir);
+      const databasePath = materializeV21WorkerAgentDatabase(stateDir);
       const { DatabaseSync } = requireNodeSqlite();
       const legacy = new DatabaseSync(databasePath);
       removeCanonicalValidationFromHistoricalAgentFixture(legacy);
@@ -1557,7 +1554,9 @@ describe("openclaw agent database", () => {
         expect(db.prepare("SELECT schema_version FROM schema_meta").get()).toEqual({
           schema_version: OPENCLAW_AGENT_SCHEMA_VERSION,
         });
-        expect(db.prepare("SELECT * FROM transcript_events").all()).toEqual(eventsBefore);
+        expect(
+          db.prepare("SELECT session_id, seq, event_json, created_at FROM transcript_events").all(),
+        ).toEqual(eventsBefore);
         expect(db.prepare("SELECT * FROM session_windows").all()).toEqual(windowsBefore);
         expect(db.prepare("SELECT * FROM transcript_rewrite_watermarks").all()).toEqual(
           generationBefore,
@@ -1577,7 +1576,7 @@ describe("openclaw agent database", () => {
   it("rolls back cold storage, canonical validation and both version markers if schema publication fails", async () => {
     const stateDir = createTempStateDir();
     const options = { agentId: "worker-1", env: { OPENCLAW_STATE_DIR: stateDir } };
-    const databasePath = materializeCurrentWorkerAgentDatabase(stateDir);
+    const databasePath = materializeV21WorkerAgentDatabase(stateDir);
     const { DatabaseSync } = requireNodeSqlite();
     const legacy = new DatabaseSync(databasePath);
     removeCanonicalValidationFromHistoricalAgentFixture(legacy);
@@ -1950,7 +1949,7 @@ describe("openclaw agent database", () => {
   it("retires tenant-free lease storage when upgrading version 16", async () => {
     const stateDir = createTempStateDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };
-    const databasePath = materializeCurrentWorkerAgentDatabase(stateDir);
+    const databasePath = materializeV21WorkerAgentDatabase(stateDir);
 
     const { DatabaseSync } = requireNodeSqlite();
     const legacy = new DatabaseSync(databasePath);
@@ -2145,7 +2144,7 @@ describe("openclaw agent database", () => {
   it("migrates version 8 tables to STRICT without losing agent state", async () => {
     const stateDir = createTempStateDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };
-    const databasePath = materializeCurrentWorkerAgentDatabase(stateDir);
+    const databasePath = materializeV21WorkerAgentDatabase(stateDir);
 
     const { DatabaseSync } = requireNodeSqlite();
     const legacy = new DatabaseSync(databasePath);
@@ -3942,7 +3941,7 @@ describe("openclaw agent database", () => {
   it("repairs schema-19 additive session-key surfaces before upgrading schema validation", async () => {
     const stateDir = createTempStateDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };
-    const databasePath = materializeCurrentWorkerAgentDatabase(stateDir);
+    const databasePath = materializeV21WorkerAgentDatabase(stateDir);
 
     const { DatabaseSync } = requireNodeSqlite();
     const shippedSchema = new DatabaseSync(databasePath);
@@ -4004,7 +4003,7 @@ describe("openclaw agent database", () => {
   it("installs schema-19 session additions before maintenance index repair", async () => {
     const stateDir = createTempStateDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };
-    const databasePath = materializeCurrentWorkerAgentDatabase(stateDir);
+    const databasePath = materializeV21WorkerAgentDatabase(stateDir);
 
     const { DatabaseSync } = requireNodeSqlite();
     const drifted = new DatabaseSync(databasePath);
@@ -4226,7 +4225,7 @@ describe("openclaw agent database", () => {
   it("rejects a missing stable v14 table before the v15 migration", async () => {
     const stateDir = createTempStateDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };
-    const databasePath = materializeCurrentWorkerAgentDatabase(stateDir);
+    const databasePath = materializeV21WorkerAgentDatabase(stateDir);
 
     const { DatabaseSync } = requireNodeSqlite();
     const damaged = new DatabaseSync(databasePath);
@@ -4260,7 +4259,7 @@ describe("openclaw agent database", () => {
   it("adds post-v14 suggestion tables during the v15 migration", async () => {
     const stateDir = createTempStateDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };
-    const databasePath = materializeCurrentWorkerAgentDatabase(stateDir);
+    const databasePath = materializeV21WorkerAgentDatabase(stateDir);
 
     const { DatabaseSync } = requireNodeSqlite();
     const legacy = new DatabaseSync(databasePath);

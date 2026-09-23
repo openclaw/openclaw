@@ -1,9 +1,10 @@
 import { MessageChannel, type Worker, type MessagePort } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { releaseOpenClawAgentDatabaseLease } from "../../state/openclaw-agent-db-lease.js";
 import {
   closeOpenClawAgentDatabaseByPath,
+  closeOpenClawAgentDatabaseByPathAsync,
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
@@ -14,6 +15,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { persistSessionTranscriptTurn } from "./session-accessor.js";
+import { closeSessionTranscriptReconcileWorkerPool } from "./session-transcript-reconcile-pool.js";
 import {
   reconcileSessionTranscriptIndexes,
   waitForSessionTranscriptIndexReconcile,
@@ -219,6 +221,21 @@ it.each([
               String(a.lease_id).localeCompare(String(b.lease_id)),
             ),
           );
+          await expect(closeOpenClawAgentDatabaseByPathAsync(database.path)).rejects.toThrow(
+            "Agent database resource drainage failed",
+          );
+          expect(database.db.isOpen).toBe(true);
+          observer.beforeCreate = undefined;
+          observer.onTask = undefined;
+          if (triggerInstalled) {
+            state.db.exec("DROP TRIGGER reject_test_lease_release");
+            triggerInstalled = false;
+          }
+          const closing = closeOpenClawAgentDatabaseByPathAsync(database.path);
+          const poolClosing = closeSessionTranscriptReconcileWorkerPool();
+          await expect(closing).resolves.toBe(true);
+          await poolClosing;
+          expect(readLeases()).toEqual([]);
         } else {
           expect(String(result.error)).not.toContain("cleanup incomplete");
           expect(readLeases()).toEqual(baseline);
@@ -231,10 +248,9 @@ it.each([
         if (triggerInstalled) {
           openOpenClawStateDatabase().db.exec("DROP TRIGGER reject_test_lease_release");
         }
-        if (leaseId) {
-          releaseOpenClawAgentDatabaseLease(leaseId);
-        }
-        closeOpenClawAgentDatabasesForTest();
+        observer.beforeCreate = undefined;
+        observer.onTask = undefined;
+        await closeOpenClawAgentDatabasesAsync(stateDir);
         closeOpenClawStateDatabaseForTest();
       }
     });

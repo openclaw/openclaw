@@ -32,6 +32,7 @@ import type {
   SqliteSessionReclamationDiagnostics,
 } from "./session-accessor.sqlite-contract.js";
 import { readSessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.js";
+import { withSqliteSessionPageReclamation } from "./session-accessor.sqlite-page-reclamation.js";
 import { withSqliteReclamationAuthorization } from "./session-accessor.sqlite-reclamation-commit.js";
 import {
   resolveSqliteTranscriptReadScope,
@@ -49,6 +50,7 @@ import type {
   SessionColdPreparationWorkerData,
   SessionColdWorkerData,
 } from "./session-cold-storage-worker.js";
+import { reclaimSqliteFreePages } from "./session-history-archive-pruning.js";
 import { collectAdmissionProtectedSessionIds } from "./session-history-eviction.js";
 import { resolveSessionStoreTargets } from "./targets.js";
 
@@ -85,7 +87,7 @@ async function runColdMutation(
 ): Promise<SessionColdMutationResult> {
   return await withSqliteMutationWorkerLifetime(
     plan.databaseOptions,
-    async ({ assertCurrent: assertRequestCurrent, commitGate }) => {
+    async ({ assertCurrent: assertRequestCurrent, commitGate, signal }) => {
       const retained = await runExclusiveSqliteSessionWrite(
         plan.databaseOptions,
         async () => {
@@ -116,6 +118,7 @@ async function runColdMutation(
               cleanupIncomplete?: boolean;
             }>({
               diagnostics,
+              signal,
               expectedMessageType: "reclaimed",
               validationOwner: { database, isCurrent: claim.isCurrent },
               onCommitRequest: () => {
@@ -148,6 +151,15 @@ async function runColdMutation(
         if (!completed || completed.cleanupIncomplete) {
           throw new Error(
             "Cold transcript worker cleanup is incomplete; restart OpenClaw before another maintenance operation",
+          );
+        }
+        if (plan.kind !== "cold-restore") {
+          await withSqliteSessionPageReclamation(plan.databaseOptions, (reclaimPages) =>
+            reclaimSqliteFreePages(plan.databaseOptions, undefined, {
+              reclaimPages,
+              maxPages: 64 * 512,
+              assertCurrent: assertAllowed,
+            }),
           );
         }
         if (plan.kind === "cold-restore" && completed.result.restored && claim.isCurrent()) {

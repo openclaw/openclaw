@@ -1,4 +1,4 @@
-/** Subscribed embedded tool lifecycles, including real QuickJS bridge coverage. */
+/** Subscribed embedded tool lifecycles, including real executor bridge coverage. */
 import { getEventListeners } from "node:events";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -638,7 +638,7 @@ describe("Code Mode subscribed bridge lifecycle", () => {
         );
         expect(pending.settled).toBeUndefined();
         expect(otherPending.settled).toBeUndefined();
-        expect(ownerState.snapshot.memory.byteLength).toBeGreaterThan(0);
+        expect(ownerState.continuation.retainedBytes).toBeGreaterThan(0);
         expect(testing.resumingRunIds.size).toBe(0);
 
         // Both exec calls have returned; no wait is in flight to perform owner cleanup.
@@ -976,7 +976,7 @@ describe("Code Mode subscribed bridge lifecycle", () => {
         } else if (close === "catalog") {
           clearToolSearchCatalog(harness);
         } else {
-          disposeAllCodeModeRuns();
+          await disposeAllCodeModeRuns();
         }
 
         await expect(pending.promise).resolves.toBeUndefined();

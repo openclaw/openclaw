@@ -50,6 +50,9 @@ async function performVolatileCleanup(
       : undefined;
   };
   while (true) {
+    if (params.isCurrent?.() === false) {
+      return 0;
+    }
     const current = resolveCurrent();
     if (!current) {
       return 0;
@@ -156,6 +159,9 @@ async function closeTrackedTabs(
 export async function closeTrackedBrowserTabsForSessions(
   params: CloseParams & { sessionKeys: Array<string | undefined>; now?: number },
 ): Promise<number> {
+  if (params.isCurrent?.() === false) {
+    return 0;
+  }
   let dashboardClosed = 0;
   if (
     readDurableTabs(params.onWarn).some((tab) => tab.dashboard) ||
@@ -163,6 +169,9 @@ export async function closeTrackedBrowserTabsForSessions(
   ) {
     const { reconcileBrowserDashboards } = await import("../browser-dashboard.js");
     dashboardClosed = await reconcileBrowserDashboards(params);
+  }
+  if (params.isCurrent?.() === false) {
+    return dashboardClosed;
   }
   const tabs = selectTrackedTabsForSessions({
     durable: readDurableTabs(params.onWarn),

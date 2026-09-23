@@ -99,13 +99,14 @@ export async function finalizeRestartUpdateRun(
     );
     if (updateRun.phase === "verifying" && updateRun.status === "running") {
       const { createUpdateRunNotifier } = await import("./update-run-notice.runtime.js");
-      await createUpdateRunNotifier(
+      const notify = await createUpdateRunNotifier(
         updateRun,
         undefined,
         undefined,
         undefined,
         context,
-      )(updateRun, "verifying");
+      );
+      await notify(updateRun, "verifying");
     }
     // A managed handoff preserves its original trigger, while an unmanaged RPC
     // also reaches restarting. Only the recorded owner can finish CLI verification.

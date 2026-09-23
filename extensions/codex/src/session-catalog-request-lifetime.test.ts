@@ -373,15 +373,37 @@ describe("resident catalog hydration request lifetime", () => {
     expect(h.frames).toHaveLength(2);
   });
 
-  it("keeps a hydrated home usable after native timeouts would have expired", async () => {
-    const pending = observeHydration(h.control.initialize());
-    h.reply(await h.frame(0), "resident");
-    await pending;
-    const resident = await h.control.listPage({});
+  it("bounds cold list waits without aborting shared hydration or expiring resident pages", async () => {
+    const factory = h.newFactory(60_000);
+    const control = factory.forRequest("main");
+    const hydration = observeHydration(control.initialize());
+    const frame = await h.frame(0);
+    const delivered = vi.fn();
+    const rejected = vi.fn();
+    const listed = control.listPage({}).then(delivered, rejected);
+    await nextTurn();
+
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(delivered).not.toHaveBeenCalled();
+    expect(rejected).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(rejected).toHaveBeenCalledWith(
+      expect.objectContaining({ code: "APP_SERVER_UNAVAILABLE" }),
+    );
+    expect(delivered).not.toHaveBeenCalled();
+    expect(factory.hasActiveWork()).toBe(true);
+    expect(getCurrentSharedClientEntry(h.companion)?.activeLeases).toBe(2);
+
+    await vi.advanceTimersByTimeAsync(15_000);
+    h.reply(frame, "resident");
+    await hydration;
+    await listed;
+    const resident = await control.listPage({});
+    expect(resident.sessions).toMatchObject([{ threadId: "resident" }]);
     h.advanceClock();
-    await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS + 1);
-    await expect(h.control.listPage({})).resolves.toEqual(resident);
-    await expect(h.control.listPage({ limit: 10 })).resolves.toEqual(resident);
+    await vi.advanceTimersByTimeAsync(60_001);
+    await expect(control.listPage({})).resolves.toEqual(resident);
+    await expect(control.listPage({ limit: 10 })).resolves.toEqual(resident);
     expect(h.frames).toHaveLength(1);
     expect(getCurrentSharedClientEntry(h.companion)?.activeLeases).toBe(1);
   });

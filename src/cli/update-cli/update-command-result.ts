@@ -2,6 +2,7 @@
 import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import type { TriageFailureContext } from "../../commands/triage-prompt.js";
+import { formatServiceInspectionReason } from "../../daemon/service-inspection-error.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import {
   attachErrorDiagnostic,
@@ -112,7 +113,9 @@ export function collectServiceInspectionFailureFacts(
         createUpdateFailureFact({
           check: "managed-service",
           code: verdict.inspectionReason ?? "service-inspection-unavailable",
-          message: verdict.message,
+          message: verdict.inspectionReason
+            ? formatServiceInspectionReason(verdict.inspectionReason)
+            : verdict.message,
         }),
       ]
     : undefined;
@@ -365,7 +368,7 @@ export async function withUpdateAdmissionReporting<T>(
         durationMs: 0,
       }),
       opts,
-      { nextAction: message },
+      { readHistory: false, nextAction: message },
     );
     return exitCliAfterOutput(defaultRuntime, 1);
   }

@@ -9,8 +9,10 @@ import {
 import { collectRegistryInvocationInstances } from "../plugins/plugin-invocation-scope.js";
 import { getPluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
 import {
+  bindPluginRegistryLifetime,
   capturePluginRegistryLifecycleEpoch,
   capturePluginRegistryLifecycleSignal,
+  getPluginRegistryLifetime,
   getPluginRegistryResourceOwner,
   markPluginRegistryActive,
   isPluginRegistryRetired,
@@ -42,11 +44,10 @@ const log = createSubsystemLogger("agents/prepared-model-runtime");
 type Lifetime = ReturnType<typeof createLifetime>;
 // Source and compiled consumers can share the same generation and registry objects.
 // Share only cleanup ownership; model/auth snapshots keep their existing module identity.
-const { generations, registries, active, retirements, publications } = resolveGlobalSingleton(
+const { generations, active, retirements, publications } = resolveGlobalSingleton(
   Symbol.for("openclaw.preparedPluginLifetimes"),
   () => ({
     generations: new WeakMap<PreparedModelRuntimePluginGeneration, Lifetime>(),
-    registries: new WeakMap<PluginRegistry, Lifetime>(),
     active: new Set<Lifetime>(),
     retirements: new Set<Promise<void>>(),
     publications: new WeakMap<
@@ -133,7 +134,7 @@ export function retainPreparedPluginRegistry(
     return inspection.retain().release;
   }
   const registry = getPluginRegistryResourceOwner(registryView);
-  let lifetime = registries.get(registry);
+  let lifetime = getPluginRegistryLifetime(registry);
   if (!lifetime) {
     // Gateway-root and other externally activated registries remain borrowed.
     if (capturePluginRegistryLifecycleEpoch(registry)) {
@@ -151,7 +152,7 @@ export function retainPreparedPluginRegistry(
         throw new PluginRuntimeCloseRetainedError(error);
       }
     });
-    registries.set(registry, lifetime);
+    bindPluginRegistryLifetime(registry, lifetime);
   }
   return lifetime.retain();
 }

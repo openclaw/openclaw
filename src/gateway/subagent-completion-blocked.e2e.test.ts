@@ -1,5 +1,5 @@
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
 import { settleSubagentCompletionDelivery } from "../agents/subagents/completion/subagent-completion-admission.store.js";
 import { SUBAGENT_ENDED_REASON_COMPLETE } from "../agents/subagents/registry/subagent-lifecycle-events.js";
@@ -8,7 +8,6 @@ import {
   getSubagentRunByRunId,
   resetSubagentRegistryForTests,
   resumeSubagentRun,
-  testing,
 } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { ensureTaskRegistryReady, getTaskById } from "../tasks/runtime-internal.js";
 import { publishTaskRecordAfterAtomicStore } from "../tasks/task-registry.js";
@@ -20,6 +19,14 @@ import {
   withGatewayServer,
   writeSessionStore,
 } from "./test-helpers.js";
+
+vi.mock("../agents/subagents/announce/subagent-announce.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/subagents/announce/subagent-announce.js")>()),
+  runSubagentAnnounceFlow: async () => "retryable",
+}));
+vi.mock("../agents/subagents/announce/subagent-announce.requester-settle-wake.js", () => ({
+  maybeWakeRequesterAfterAllChildrenSettled: async () => false,
+}));
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -89,10 +96,6 @@ describe("subagent completion blocked Gateway E2E", () => {
         addSubagentRunForTests(subagent);
         ensureTaskRegistryReady();
         publishTaskRecordAfterAtomicStore(task);
-        testing.setDepsForTest({
-          runSubagentAnnounceFlow: async () => "retryable",
-          maybeWakeRequesterAfterAllChildrenSettled: async () => false,
-        });
 
         resumeSubagentRun(subagent.runId);
 
@@ -111,7 +114,6 @@ describe("subagent completion blocked Gateway E2E", () => {
         });
       });
     } finally {
-      testing.setDepsForTest();
       resetSubagentRegistryForTests({ persist: false });
       process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = "1";
     }

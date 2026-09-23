@@ -92,6 +92,8 @@ Read:
 - `.github/workflows/codeql-critical-quality.yml`
 - `docs/ci.md`
 - `test/scripts/ci-workflow-guards.test.ts`
+- `test/scripts/ci-workflow-planning.test.ts`
+- `test/scripts/ci-workflow-evidence.test.ts`
 - touched planner files under `scripts/lib/*ci*`, `scripts/lib/*test-plan*`, or
   `scripts/ci-changed-scope.mjs`
 
@@ -189,7 +191,8 @@ Do not:
 
 ## Current OpenClaw Knobs
 
-These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
+These are intentionally guarded by the `ci-workflow-guards`,
+`ci-workflow-planning`, and `ci-workflow-evidence` tests under `test/scripts/`:
 
 - `CI` concurrency key version, PR cancellation, and canonical `main`'s two
   non-canceling parity slots, each with one coalesced pending tip.
@@ -270,8 +273,11 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   OpenClawKit test, and Swabble test graphs in `packages`.
   Ordinary full-scope manual validation adds independent release compilation,
   moves the guards to `release`, and retains health renders in `tests`.
-  All phases use GitHub-hosted `macos-26`, `max-parallel: 2`, and the existing
-  30-minute budget. This adds one hosted job and no Blacksmith registrations;
+  All phases use Xcode 27 on GitHub-hosted `xcode-27` (preview macOS 27),
+  `max-parallel: 2`, and the existing 30-minute budget. The toolchain rollout
+  changes no hosted/Blacksmith placement, job counts, coverage, or Swift 6.3
+  source-language minimum. Require complete native proof and old/new job timings.
+  The existing package split adds one hosted job and no Blacksmith registrations;
   measure complete hosted timing including duplicated setup. Packages do not
   restore or save app build products. Build caches stay phase-owned; the sole eligible shared
   SwiftPM cache writer is regular `tests` or full-validation `release`.
@@ -289,7 +295,11 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   and Debug/native-test phases, both screenshot shards, and the evidence reducer.
   Frozen full-manual targets keep their Debug-only contract without screenshots;
   npm qualification still defers native jobs. All iOS build phases and screenshot
-  shards use `macos-26` from the first attempt.
+  shards use Xcode 27 on GitHub-hosted `xcode-27` from the first attempt.
+  All four Periphery scans use the same toolchain and retain the checksum-pinned
+  3.8.0 release pending native compatibility proof for both app scans and both
+  shared consumers. Preserve zero findings and exact-USR intersection; selecting
+  the new runner is not compatibility proof.
   The conservative full-tier non-Node inventory, including Control UI performance, is
   87 rows, or 88 for historical UI targets. Excluding those four hosted rows
   plus all three macOS Swift phases and the always-hosted aggregate gate leaves at
@@ -309,6 +319,37 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   Targeted plans retain the full built-artifact
   boundary gate. `main` uses compact integration; manual and release runs use
   full named shards.
+- `RELEASE_ONLY_TOOLING_SHARDS` in the Node planner owns the complete
+  `core-tooling` family: ordinary tooling stripes plus the isolated/Docker
+  catalogs. Matching non-E2E/non-live maintainer leaves in mixed fast configs
+  join the same tier. Preserve their ordinary, isolated or fake-timer config,
+  process pins and product neighbors; reduced groups need subset timing identities.
+  The five `test/scripts/*.e2e.test.ts` product integration gates stay outside
+  this tier. Product-only canonical PRs omit the family in precise and compact
+  fallback plans. Tooling tests or owners select the full family: `scripts/**`,
+  `src/scripts/**`, `test/**`, `.github/**`, `config/**`, root package/pnpm inputs,
+  tooling configs, and other tooling facts owned by
+  `scripts/test-projects.test-support.mts`, including Docker, agent/Crabbox,
+  app script/Fastlane and extension script/package inputs. Directly changed
+  tooling tests therefore retain PR coverage. Keep each config's complete
+  inventory, exclusions, process metadata, timing floors and runner policy.
+  Every CI manual dispatch includes the family; Full Release Validation's
+  frozen-candidate `normal_ci` child executes it before regular publication
+  admission. An independent duplicate release test is not required: these same
+  tests supply that proof. Fork repositories retain full tooling because they
+  do not use canonical targeting. Main already omitted named tooling shards;
+  it now also omits maintainer leaves formerly retained by fast configs,
+  including on tooling-owner changes. A regression introduced by a later main
+  merge is invisible to main CI until an affected PR or full validation runs it. Existing
+  `ci-gate` aggregates selected jobs, without requiring tooling proof against a
+  later main revision. Report historical file-seconds, emitted rows, runner-class
+  counts and predicted longest jobs separately; fewer test-seconds do not prove
+  a workflow wall-time saving.
+  CI's plugin flag stays false even on dispatch because Plugin Prerelease owns
+  that separate sweep. Do not infer release inclusion from a shard name or
+  conflate regular full-campaign publication with approved preflight-only beta
+  exceptions. Product security, migration, storage, protocol, SDK and
+  update-correctness tests are outside this move.
 - The combined Node matrix admits compact and plugin descriptors by estimated
   duration within the same cap. Catch-all, QA and provider configs use the
   existing 90-file envelope budget with native Vitest sharding; retain complete
@@ -316,7 +357,7 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   plugin row, including the five added QA/provider rows, in the burst envelope.
 - Precise and fallback plugin groups retain separate child processes, including process-bounded
   configs. Compatible envelopes, including repeated configs, run one at a time
-  within 240 predicted seconds without a pair-count limit; expanded serial compact
+  within 300 predicted seconds without a pair-count limit; expanded serial compact
   jobs use 210. The rebased 124-envelope inventory emits 50 extension rows and
   125/119/130 PR Node rows on Blacksmith/hybrid/GitHub; push Node rows are
   57/46/55 and compact PR rows are 77/71/82. These fit the landed 130/70/90
@@ -361,6 +402,11 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   The canonical shard executor admits two CI children only with at least eight
   available CPUs and 24 GiB actual memory; otherwise it admits one. Inner project
   parallelism stays one and each overlapping child keeps two Vitest workers.
+  The measured Gateway server-isolated/database-worker family uses at most eight
+  workers only in a serial, non-frozen self-hosted job with at least eight actual
+  CPUs and 28 GiB memory. Its 20.70 GiB observed aggregate RSS leaves the existing
+  25% reserve at that floor. Preserve its two-worker fallback, other groups' pins,
+  hosted planning, complete inventory, and old timing generations until refit.
   The primary GitHub profile remains serial at 210s. Failed-job-only hybrid
   retries retain the original wider matrix on hosted Ubuntu, clamp to one child,
   and keep two workers per child; they can exceed the eight-minute normal-run
@@ -369,10 +415,11 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
 - The whole Blacksmith agent-support group requests `blacksmith-32vcpu-ubuntu-2404`.
   Its file inventory and resource-derived worker policy remain unchanged.
 - Numbered Blacksmith tooling bins request the same 32-vCPU class after packing.
-  Keep their logical classes, names, file inventories, serial project/file
-  execution and two-worker pins. This adds no jobs and does not promote hosted
-  or hybrid tooling. The native two-CPU/8-GB tails require a larger-host timing
-  comparison; capacity alone is not a measured speedup.
+  Keep their logical classes, names, file inventories, serial project execution
+  and two-worker pins. Tooling files use the shared worker scheduler; price their
+  current file costs by effective workers without dividing the longest file.
+  Docker helper fixtures retain their separate serial config. This does not
+  promote hosted or hybrid tooling; capacity alone is not a measured speedup.
 - Numbered tooling measurements are collected in `toolingFileSeconds` ahead of
   planner activation, which remains blocked on hosted/hybrid row capacity. The daily refit samples the
   newest five successful PR CI runs because main-push plans omit this family.
@@ -504,10 +551,10 @@ the current circuit breaker.
 For workflow-only or docs/skill-only changes in a Codex worktree:
 
 ```bash
-node scripts/run-vitest.mjs test/scripts/ci-workflow-guards.test.ts
+node scripts/run-vitest.mjs test/scripts/ci-workflow-guards.test.ts test/scripts/ci-workflow-planning.test.ts test/scripts/ci-workflow-evidence.test.ts
 node --import tsx scripts/check-workflows.mts
 node scripts/docs-list.js
-./node_modules/.bin/oxfmt --check .github/workflows/ci.yml .github/workflows/codeql-critical-quality.yml docs/ci.md test/scripts/ci-workflow-guards.test.ts .agents/skills/openclaw-ci-limits/SKILL.md .agents/skills/openclaw-ci-limits/agents/openai.yaml
+./node_modules/.bin/oxfmt --check .github/workflows/ci.yml .github/workflows/codeql-critical-quality.yml docs/ci.md test/scripts/ci-workflow-guards.test.ts test/scripts/ci-workflow-planning.test.ts test/scripts/ci-workflow-evidence.test.ts test/scripts/ci-workflow.test-support.ts .agents/skills/openclaw-ci-limits/SKILL.md .agents/skills/openclaw-ci-limits/agents/openai.yaml
 git diff --check
 ```
 

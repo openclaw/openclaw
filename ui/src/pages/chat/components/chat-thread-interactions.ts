@@ -70,6 +70,7 @@ export type ChatThreadState = {
   asyncQuestionRevision: number;
   asyncQuestionScope?: string;
   asyncQuestionGeneration?: number;
+  asyncQuestionPresentation?: AsyncQuestionPresentation;
   turnRecapWatch: TurnRecapWatch | null;
   searchOpen: boolean;
   searchQuery: string;
@@ -80,7 +81,12 @@ export type ChatThreadState = {
   transcriptRenderContext: {
     onSetReply?: (target: MessageReplyTarget) => void;
     onOpenReply?: (replyToId: string) => void;
-    onAsyncQuestionSubmit?: (message: string) => Promise<boolean>;
+    onAsyncQuestionDiscard?: (item: ChatQueueItem) => void;
+    onAsyncQuestionSubmit?: (
+      message: string,
+      itemId?: string,
+      sourceMessageId?: string,
+    ) => Promise<boolean>;
   };
 };
 

@@ -111,6 +111,28 @@ Prepared facts contain file locations and failures, never a live reader. Do not
 rewrite assistant text or transcript messages to insert Gateway file paths.
 When the capability is absent, this remote attachment preparation is unavailable.
 
+## Shared attempt mechanics
+
+Official harnesses use the JavaScript-only private
+`openclaw/plugin-sdk/agent-harness-attempt-runtime` for deadlines, cancellation,
+and lifecycle/event publication; it is not a third-party Plugin SDK contract.
+`createAgentHarnessAttemptDeadlineController` takes the original `startedAtMs`,
+execution `timeoutMs`, backend `settlementTimeoutMs`, abort `signal`, and timeout
+callback. The first `beginSettlement(receivedAtMs)` starts an absolute settlement
+deadline; repeated calls do not extend it. Abort or `dispose()` closes it.
+`createAgentHarnessAttemptCancellation` retains explicit cancellation reasons
+and freezes admission at the terminal boundary. `emitAgentHarnessAttemptEvent`
+isolates observer failures, and `createAgentHarnessAttemptLifecycle` gates
+lifecycle events and deduplicates execution phases. Native interruption,
+completion decisions, output flushing, and cleanup remain backend-owned.
+
+The private `openclaw/plugin-sdk/agent-harness-tool-runtime` provides correlated
+execution promises and argument/start snapshots through
+`createAgentHarnessToolExecutionRegistry` and
+`createAgentHarnessToolExecutionBoundaryRegistry`. Consumed snapshots cannot be
+republished by late completion. Core tool guards and `observeToolTerminal`
+remain authoritative; native decoding and result encoding stay with the harness.
+
 ## Terminal outcome classification
 
 Native harnesses that own their own protocol projection can use

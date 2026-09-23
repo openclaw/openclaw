@@ -1,5 +1,8 @@
 import type { Message } from "grammy/types";
-import { isAbortRequestText } from "openclaw/plugin-sdk/command-primitives-runtime";
+import {
+  isAbortRequestText,
+  isBtwRequestText,
+} from "openclaw/plugin-sdk/command-primitives-runtime";
 import type {
   DmPolicy,
   OpenClawConfig,
@@ -46,6 +49,7 @@ import {
 import type { TelegramContext } from "./bot/types.js";
 import { resolveTelegramCommandIngressAuthorization } from "./ingress.js";
 import type { TelegramMessageDispatchReplayClaim } from "./message-dispatch-dedupe.js";
+import { isTelegramControlLaneText } from "./sequential-key.js";
 
 export interface TelegramInboundProcessing {
   processInboundMessage: (params: TelegramInboundMessage) => Promise<TelegramInboundDisposition>;
@@ -98,14 +102,8 @@ export function createTelegramInboundProcessing({
     releaseDispatchDedupeClaims,
     createSpooledReplayParticipantForBufferedWork,
   } = message;
-  const {
-    cancelPending,
-    inboundDebouncer,
-    resolveTelegramDebounceEntryMs,
-    shouldDebounceTelegramEntry,
-    resolveTelegramDebounceLane,
-    handleTextFragment,
-  } = createTelegramInboundBuffers({ params: { cfg, accountId, bot, runtime, opts }, message });
+  const { cancelPending, inboundDebouncer, resolveTelegramDebounceLane } =
+    createTelegramInboundBuffers({ params: { cfg, accountId, bot, runtime, opts }, message });
 
   const { handleMediaGroup, resolveUnaddressedGroupMediaDisposition } = createTelegramInboundMedia({
     params: {
@@ -153,6 +151,9 @@ export function createTelegramInboundProcessing({
     const messageText = getTelegramTextParts(msg).text;
     const botUsername = ctx.me?.username;
     const isAbortControlMessage = isAbortRequestText(messageText, { botUsername });
+    const bypassTextBuffer =
+      isTelegramControlLaneText({ rawText: messageText, botUsername }) ||
+      isBtwRequestText(messageText, { botUsername });
     let abortControlAuthorized: Promise<boolean> | undefined;
     const isAuthorizedAbortControlMessage = () => {
       if (!isAbortControlMessage || !senderId) {
@@ -179,23 +180,6 @@ export function createTelegramInboundProcessing({
 
     if (await isAuthorizedAbortControlMessage()) {
       cancelPending({ chatId, threadSpec, senderId });
-    }
-
-    if (
-      await handleTextFragment({
-        ctx,
-        msg,
-        chatId,
-        threadSpec,
-        storeAllowFrom,
-        isAbortControlMessage,
-        promptContextMinTimestampMs,
-        promptContextAmbientWatermark,
-        dispatchDedupeClaims,
-        channelIngressResolver,
-      })
-    ) {
-      return { kind: "buffered", buffer: "text-fragment" };
     }
 
     if (
@@ -337,12 +321,12 @@ export function createTelegramInboundProcessing({
       threadSpec,
     });
     const debounceLane = resolveTelegramDebounceLane(msg);
-    const debounceKey = senderId
+    const debounceSenderId = senderId || (msg.from?.id != null ? String(msg.from.id) : "");
+    const debounceKey = debounceSenderId
       ? buildTelegramInboundDebounceKey({
           accountId,
           conversationKey,
-          senderId,
-          debounceLane,
+          senderId: debounceSenderId,
         })
       : null;
     const debounceEntry: TelegramDebounceEntry = {
@@ -351,7 +335,8 @@ export function createTelegramInboundProcessing({
       allMedia,
       storeAllowFrom,
       receivedAtMs: Date.now(),
-      debounceKey: isAbortControlMessage ? null : debounceKey,
+      // Waiting here would hold the shared control lane and block /stop in other topics.
+      debounceKey: bypassTextBuffer ? null : debounceKey,
       debounceLane,
       botUsername,
       threadSpec,
@@ -359,11 +344,7 @@ export function createTelegramInboundProcessing({
       dispatchDedupeClaims,
       channelIngressResolvers: [channelIngressResolver],
     };
-    const shouldBufferDebounce = Boolean(
-      debounceEntry.debounceKey &&
-      resolveTelegramDebounceEntryMs(debounceEntry) > 0 &&
-      shouldDebounceTelegramEntry(debounceEntry),
-    );
+    const shouldBufferDebounce = inboundDebouncer.shouldBuffer(debounceEntry);
     if (shouldBufferDebounce) {
       debounceEntry.spooledReplayParticipant = createSpooledReplayParticipantForBufferedWork(
         `inbound-debounce:${debounceEntry.debounceKey}`,

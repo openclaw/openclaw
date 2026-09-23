@@ -68,7 +68,7 @@ Credentials reserved for Control UI link previews are excluded from both agent a
 
 Set an agent's display name, emoji, and avatar under **Agent settings → Overview → Identity**. The identity is stored with that agent and is shared by Control UI clients. Where the transcript shows avatars, saved and streaming assistant replies use the configured agent image or text avatar. Agents without a configured avatar omit the repeated fallback icon.
 
-In **Agent settings → Files**, unsaved edits stay with their agent when you switch file tabs or select another agent and return. Returning reads the current file from disk while preserving your edits; if the file changed elsewhere, saving keeps the existing conflict recovery choices. These drafts live only in the open Agents settings page: save before leaving the page, reloading the browser, or changing Gateway connections. An ordinary reconnect preserves them.
+In **Agent settings → Files**, an unread file stays unavailable for editing and preview until its content loads. If the initial read fails, choose **Refresh** to retry. Files already loaded and retained drafts stay editable during refresh; **Reset** becomes available once the current file content loads. Unsaved edits stay with their agent when you switch file tabs or select another agent and return. Returning reads the current file from disk while preserving your edits; if the file changed elsewhere, saving keeps the existing conflict recovery choices. These drafts live only in the open Agents settings page: save before leaving the page, reloading the browser, or changing Gateway connections. An ordinary reconnect preserves them.
 
 Elsewhere, agents without a custom image or emoji use a generated face that fills the circular avatar. Its color, eyes, mouth, and solid or pastel background come from the agent ID, so the same agent keeps the same face across reloads and clients. Renaming the agent's display name does not change its face. Generated faces are decorative and do not indicate activity or model choice.
 
@@ -95,7 +95,7 @@ Gateway in this browser without reconnecting. Session edits and connection edits
 have independent Save/Apply and Discard actions. Switching Gateways restores
 that Gateway's saved session selection.
 
-Open **Settings → Gateway** to see the **Gateway Host** card with the Gateway machine, LAN address, operating system, runtime, uptime, CPU load, memory, and space for each mounted local disk. Linux EFI boot partitions mounted at `/boot/efi` or `/efi` are omitted. The card shares a five-second `system.info` refresh with the activity graphs while visible; mounted-disk discovery reuses its ten-second snapshot. CPU count and model share a two-second snapshot; process counters and event-loop health stay live on every request. Linux disk sampling reads filesystem statistics directly and does not require the `df` utility. The RPC requires the `operator.read` scope. If mounted-disk discovery is unavailable, the card retains the state-directory disk reading when available. Connections without the required scope omit the card. Shimmer placeholders appear while the first stats are being fetched and remain still with reduced motion enabled; refreshes keep the previous readings and uptime visible. Disk paths appear in their labels without duplicate tooltips.
+Open **Settings → Gateway** to see the **Gateway Host** card with the Gateway machine, LAN address, operating system, runtime, uptime, CPU load, memory, and space for each mounted local disk. Linux EFI boot partitions mounted at `/boot/efi` or `/efi` are omitted. The card shares a five-second `system.info` refresh with the activity graphs while visible; mounted-disk discovery reuses its ten-second snapshot. CPU count and model are sampled once when the Gateway process starts; restart the Gateway to reflect CPU topology changes. Process counters, load averages, and event-loop health stay live on every request. Linux disk sampling reads filesystem statistics directly and does not require the `df` utility. The RPC requires the `operator.read` scope. If mounted-disk discovery is unavailable, the card retains the state-directory disk reading when available. Connections without the required scope omit the card. Shimmer placeholders appear while the first stats are being fetched and remain still with reduced motion enabled; refreshes keep the previous readings and uptime visible. Disk paths appear in their labels without duplicate tooltips.
 
 The **Connection** card also shows average ping and p50, p95, and p99 round-trip
 times in milliseconds. It samples every five seconds while the page is visible
@@ -137,7 +137,9 @@ The Appearance panel has the built-in Claw, Knot, Dash, Absolutely, Tide, Beacon
 
 Theme stylesheets can set `--chat-composer-corner-shape` (default `superellipse(1.5)`) to give the chat composer a different corner family, such as `scoop scoop round round`, in browsers that draw `corner-shape`; other browsers keep the circular corners.
 
-Themes can choose a neutral prompt mark instead of the lobster mascot and supply their own long-wait status vocabulary. They can also add occasional penguin or fedora visitors to the composer ledge and occasional fedora hats on agent avatars. A theme without the mascot hides the resident lobster and visiting lobster strangers while ordinary ledge traffic continues under the unchanged **Lobster visits** toggle. See the [theme definition fields](/tools/theme#create-and-apply-a-personal-theme) for the portable settings and limits.
+Themes can choose a neutral prompt mark instead of the lobster mascot and supply their own long-wait status vocabulary. They can also add occasional penguin or fedora visitors to the composer ledge and occasional hats on agent avatars from the `fedora`, `crown`, `santa`, `party`, and `pumpkin` catalog. A theme without the mascot hides the resident lobster and visiting lobster strangers while ordinary ledge traffic continues under the unchanged **Lobster visits** toggle. See the [theme definition fields](/tools/theme#create-and-apply-a-personal-theme) for the portable settings and limits.
+
+Plugin themes can also bring their own SVG hats and composer visitors through [declared artwork](/plugins/manifest/surfaces#themes).
 
 Every built-in theme includes matching light and dark background artwork across the app canvas. The small, bundled lossless WebP images stay quiet behind content and follow the selected mode, including System. Plugin, personal, and imported palettes use neutral artwork. New-session and chat composers use a lightly translucent surface instead of repeating the image; navigation, menus, and reading cards retain their own surfaces. No external image requests are required. Increased contrast and forced colors hide the artwork and make composers opaque; reduced transparency also makes composers opaque.
 
@@ -192,20 +194,29 @@ the Control UI. For example, a base path of `/openclaw` uses
 optional plugin is disabled.
 
 The **Plugins** hub at `/plugins` browses the catalog. Its **Skills** and
-**Workshop** tabs open the per-agent skill manager at `/skills` and Skill
+**Skill workshop** tabs open the per-agent skill manager at `/skills` and Skill
 Workshop at `/skills/workshop`. **Settings → Plugins** at `/settings/plugins`
-shows the local inventory, with search and installed/enabled filters. Select a
-plugin to open its overview.
+shows the searchable local inventory. Select a plugin to open its overview.
 
-Opening a plugin shows its description, publisher, supported capabilities, and
-full README on one overview. Select a tool to read its full description. The
-metadata rail shows available release details, categories, repository, and
+Opening a plugin shows its description, publisher when available, skills, tools,
+MCP servers, and full README on one overview. Select a tool to read its full
+description. The metadata rail shows available release details, categories, repository, and
 documentation. Security audits link to ClawHub.
 
-Installed plugins offer **Reload plugin**, **Enable** or **Disable**, **Uninstall**
-when removable, and **Settings**. Installing from a catalog overview keeps the
-same URL and changes those actions in place. **Settings** opens an addressable
-editor with plugin configuration and permissions; Back returns to the overview.
+Installed, disabled plugins put **Enable** first as the primary action, followed
+by **Ask OpenClaw**. Enabled plugins put primary **Ask OpenClaw** first, followed
+by **Disable**. Both rows then offer **Uninstall** when removable and an icon
+button for **Settings**. Uninstalled plugins put **Install** first. **Install**
+starts installation immediately and accepts the staged plugin’s declared
+capabilities without changing your hook and model permissions. Configured
+install-policy warnings still require an explicit acknowledgment. Installing from
+a catalog overview keeps the same URL. Its progress popover shows the reported
+steps and elapsed time, including runtime application. Installed actions appear
+only after the Gateway returns the final result.
+Ready new plugins become enabled; missing required configuration or an existing
+disabled choice keeps them disabled. **Settings** opens an addressable
+editor with plugin configuration and editable **Permissions** controls; Back returns
+to the overview.
 Existing `#configuration` links still open the editor. Local controls and the
 installed README remain available when optional ClawHub metadata cannot load.
 The catalog shows featured plugins and category shelves. Search queries
@@ -223,7 +234,7 @@ Copy controls. Reading a bundle requires `operator.read`.
 
 The **Skills** tab keeps the skill status report, enable/disable toggles, API
 key entry, and inline ClawHub skill search, scoped to the selected agent. The
-**Workshop** tab shows installed skills and pending
+**Skill workshop** tab shows installed skills and pending
 [skill proposals](/tools/skill-workshop). **Learn from past conversations** opens
 a normal session with the selected agent's configured model and permitted tools.
 The agent chooses which history and skills to inspect, following the current
@@ -239,8 +250,12 @@ enabling, disabling, or removing a plugin and changing MCP servers require
 `operator.admin`; those actions stay disabled for read-only operators.
 
 Plugin-declared credential fields support masked key entry and an inline key-signup
-link. The eye reveals only the key you are entering; it never retrieves the stored
-secret. Leaving an empty input unchanged preserves its existing credential.
+link. The eye reveals the key you are entering. With no new key entered,
+administrators can choose **Show API key** to retrieve the stored literal for that
+field and current config revision. A revealed saved value is hidden again when
+the field, configuration revision, or Gateway connection changes. Secret references
+and environment values are never resolved or revealed. Leaving an empty input
+unchanged preserves its existing credential.
 
 Administrators can inspect and edit a declared credential's secret reference: its
 source (`env`, `file`, `exec`, or `store`), provider alias, and identifier. The
@@ -260,7 +275,7 @@ the ordinary schema editor.
 
 ClawHub installs run through the Gateway and keep the same trust, integrity,
 and plugin-install policy checks as other Gateway-mediated installs. Install,
-enable, disable, remove, and Reload actions wait for runtime application without
+enable, disable, and remove actions wait for runtime application without
 restarting the Gateway. Ordinary plugin config edits also apply automatically
 in the default hybrid reload mode. See
 [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect)

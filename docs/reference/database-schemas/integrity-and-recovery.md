@@ -27,12 +27,23 @@ the existing single shared-state lease owner; independent Gateways must not shar
 mutable agent databases across state directories.
 
 Within a live lifecycle, an admitted owner can still lend its revocable,
-file-bound runtime proof to another handle. This also requires a matching
-verification record and a live lease; deleted or mismatched records force a
-full check even when runtime proof remains in memory.
+file-bound runtime proof to another handle with a live lease in the same known
+process. This proof does not require the persisted restart receipt. Peer leases
+with matching process ID and start time do not consume or block publication of
+that receipt; each handle retains its own lease until cleanup finishes.
+Explicit invalidation revokes shared runtime proof as well as durable metadata,
+including stale admission and unsettled Worker cleanup. A successful native close
+with a reader-blocked checkpoint removes restart metadata but preserves live
+runtime proof; failed close or uncertain storage errors revoke both. Cold opens and restarts
+still require matching clean-close metadata or a full check.
 Cleanup workers and native agent execution workers borrow that proof under their
 existing writer admission. Cleanup workers return new verification to the Gateway
 after they finish.
+Reclamation retains one Worker connection per database, so alternating agents
+reuse their admitted handles. Requests still share the archive FIFO. Each Worker
+retires after 30 idle minutes, on database close, or when idle under critical
+memory pressure; failed cleanup retains its original lease until settlement.
+Integrity revocation, schema checks, and update behavior are unchanged.
 Native execution workers can also borrow retained host proof after the host handle
 closes or is evicted. The receiving opener rechecks the physical file identity and
 shared revocation cell; a closed handle alone does not discard valid proof.
@@ -92,7 +103,7 @@ Shared-state integrity, schema, version, and ownership checks remain in place.
 
 Schema compatibility preflight can read agent schema headers without a full integrity scan. For ordinary rollback-mode agent databases and complete WAL families, a read-only child reads the schema version and optional writer build in one fresh SQLite transaction, including committed WAL changes, without copying unrelated database contents. Its source-reader lease stays held through native close; cancellation and timeout wait for child closure. Parent-side diagnostics do not open or close the live agent file, preserving the parent's SQLite locks. As with the previous online-backup reader, native SQLite may update SHM read marks or rebuild existing SHM after a quiescent family reopens; the database and WAL contents remain unchanged. The Gateway carries successful header facts from admission to its later compatibility preflight only while the database, WAL, and rollback-journal files are unchanged. Changed or uncertain files are inspected again. Full readiness and writable admission retain their existing validation and fresh authority checks.
 
-Private snapshots remain necessary inside owner-held source-exclusion or canonical-mutation scopes, for incomplete WAL families whose inspection would create source sidecars, and for rollback journals requiring private recovery. Those cases use the existing snapshot owner and deadline; ordinary inspection errors do not trigger a full-copy fallback. Shared-state preflight is unchanged. `openclaw database preflight` performs the release-local shape comparison for an explicit copied file. The background verifier also scans already-open databases about once daily.
+Private snapshots remain necessary inside owner-held source-exclusion scopes, for incomplete WAL families whose inspection would create source sidecars, and for rollback journals requiring private recovery. Those cases use the existing snapshot owner and deadline; ordinary inspection errors do not trigger a full-copy fallback. Shared-state preflight is unchanged. `openclaw database preflight` performs the release-local shape comparison for an explicit copied file. The background verifier also scans already-open databases about once daily.
 
 Concurrent asynchronous requests for the same physical live database share one
 snapshot operation. When the canonical runtime already owns an open SQLite
@@ -247,8 +258,8 @@ Live snapshots use the online-backup worker. Artifact-preserving scopes and sync
 Full startup readiness checks agent ownership, integrity, foreign keys, and schema
 in one fresh read-only transaction in a disposable child. Complete WAL families
 and rollback-mode databases without journals do not need a full private copy.
-Empty files, incomplete WAL families, rollback recovery, and source-exclusion or
-canonical-mutation scopes retain private snapshot inspection. The parent waits
+Empty files, incomplete WAL families, rollback recovery, and source-exclusion
+scopes retain private snapshot inspection. The parent waits
 for native close before accepting the result or releasing its scope. The source
 database and WAL remain unchanged; native WAL readers may update SHM read marks.
 Admission before the migration lease and the fresh check before migration writes
@@ -336,6 +347,15 @@ filesystem probes: each missing suffix permits up to 8,192 UTF-16 code units, wi
 at most 32,768 forward filesystem observations. Simplify unusually long paths if
 those limits are exceeded. Incomplete probe cleanup never becomes a cached
 path-identity result.
+
+### A mount probe times out while opening a local database
+
+On macOS, native filesystem inspection can confirm APFS after mount enumeration
+times out. For a canonical database directory, OpenClaw then keeps WAL enabled
+instead of attempting a rollback-mode transition that conflicts with other open
+connections. Unknown filesystems, failed native inspection, and aliased paths
+retain the conservative rollback policy. The existing rules for network and
+cross-VM filesystems, including the refusal to write through SSHFS, still apply.
 
 ### A legacy Workshop index prevents shared-state reads
 

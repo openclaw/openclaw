@@ -10,6 +10,7 @@ import {
 import { SqliteCoordinatorError } from "./sqlite-coordinator.js";
 import { retainSqliteWriteAdmissionService } from "./sqlite-transaction.js";
 import {
+  borrowSqliteWorkerLifecycle,
   prepareSqliteWorkerLifecycle,
   releaseSqliteWorkerLifecycle,
 } from "./sqlite-worker-broker-admission.js";
@@ -67,6 +68,12 @@ export function dispatchSqliteWorkerJob(
     onRejected(failure, retire);
   };
   job.rejectPreparation = (error) => reject(error, true);
+  const actor = [...slot.actors].find((candidate) => candidate.id === job.request.actor);
+  // Host grants must remain serviceable while a native caller waits on lifecycle custody.
+  job.requireStateLifecycle ||=
+    (job.request.stateContext ?? actor?.stateContext) !== undefined &&
+    (job.request.type === "close" ||
+      (job.request.type === "execute" && job.createAdmission !== undefined));
   if (job.requireStateLifecycle) {
     job.cancelPreparation = new AbortController();
   }
@@ -81,7 +88,6 @@ export function dispatchSqliteWorkerJob(
   };
   try {
     assertDispatchable();
-    const actor = [...slot.actors].find((candidate) => candidate.id === job.request.actor);
     const dispatch = () => {
       try {
         assertDispatchable();
@@ -123,6 +129,7 @@ function postSqliteWorkerJob(
     const preparation = createSqliteWorkerLifecyclePreparation({
       assertCurrent: assertDispatchable,
       signal: job.cancelPreparation.signal,
+      borrow: () => borrowSqliteWorkerLifecycle(job, actor),
       admit: () => prepareSqliteWorkerOperationAdmission(job, actor),
       dispatch: dispatched,
       receiveResult(reply, pumping) {
@@ -324,24 +331,26 @@ function decodeSqliteWorkerCleanupError(job: Job, payload: OpenClawStateWorkerEr
   );
 }
 
+export type SqliteWorkerReplyOwner = {
+  fail(
+    reason: unknown,
+    currentError?: Error,
+    completed?: CompletedSqliteWorkerOutcome,
+    openOutcome?: "refused-before-agent-open",
+  ): void;
+  finish(
+    job: Job,
+    error?: unknown,
+    value?: unknown,
+    settlement?: SqliteWorkerOperationSettlement,
+  ): void;
+  dispatch(): void;
+};
+
 export function receiveSqliteWorkerReply(
   slot: Pick<Slot, "current" | "failed"> & { worker: Pick<Slot["worker"], "postMessage"> },
   reply: SqliteWorkerReply,
-  owner: {
-    fail(
-      reason: unknown,
-      currentError?: Error,
-      completed?: CompletedSqliteWorkerOutcome,
-      openOutcome?: "refused-before-agent-open",
-    ): void;
-    finish(
-      job: Job,
-      error?: unknown,
-      value?: unknown,
-      settlement?: SqliteWorkerOperationSettlement,
-    ): void;
-    dispatch(): void;
-  },
+  owner: SqliteWorkerReplyOwner,
   pumping = false,
 ): void {
   const job = slot.current;
@@ -498,18 +507,20 @@ export function settleFailedSqliteWorkerJobs({
         { kind: "completed" },
       );
     } else if (current) {
+      const failure =
+        currentError ??
+        new SqliteWorkerError(
+          `SQLite worker stopped before its result was received: ${error.message}`,
+          current.request.type === "execute" && current.nativeDispatched
+            ? "outcome-unknown"
+            : "unavailable",
+        );
+      if (!currentError) {
+        failure.cause = error;
+      }
       finish(
         current,
-        withSqliteWorkerCleanupFailure(
-          currentError ??
-            new SqliteWorkerError(
-              `SQLite worker stopped before its result was received: ${error.message}`,
-              current.request.type === "execute" && current.nativeDispatched
-                ? "outcome-unknown"
-                : "unavailable",
-            ),
-          cleanupError,
-        ),
+        withSqliteWorkerCleanupFailure(failure, cleanupError),
         undefined,
         current.nativeDispatched
           ? retired && openOutcome === "refused-before-agent-open"

@@ -125,6 +125,7 @@ import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-d
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import type { ElevatedLevel } from "../thinking.js";
+import { registerModelRuntimeDirectiveTests } from "./directive-handling.model-runtime.test-support.js";
 import { createModelSelectionStateFixture } from "./model-selection.test-support.js";
 
 let handleDirectiveOnly: typeof import("./directive-handling.impl.js").handleDirectiveOnly;
@@ -154,7 +155,7 @@ vi.mock("../../agents/agent-scope.js", () => ({
   listAgentEntries: () => [],
   resolveAgentConfig: vi.fn(() => ({})),
   resolveAgentDir: vi.fn(() => "/tmp/agent"),
-  resolveAgentEffectiveModelPrimary: vi.fn(() => undefined),
+  resolveNativeModelPrimary: vi.fn(() => undefined),
   resolveAgentModelFallbacksOverride: vi.fn(() => undefined),
   resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
   resolveSessionAgentIds: () => ({ sessionAgentId: "main" }),
@@ -384,6 +385,7 @@ function resolveModelSelectionForCommand(params: {
 
 async function persistModelDirectiveForTest(params: {
   command: string;
+  directiveOnly?: boolean;
   agentId?: string;
   profiles?: Record<string, ApiKeyProfile>;
   cfg?: OpenClawConfig;
@@ -401,9 +403,10 @@ async function persistModelDirectiveForTest(params: {
     setAuthProfiles(params.profiles);
   }
   const originalDirectives = parseInlineSessionDirectives(params.command);
-  const commandBody = originalDirectives.cleaned.trim()
-    ? params.command
-    : `${params.command} continue with the request`;
+  const commandBody =
+    params.directiveOnly || originalDirectives.cleaned.trim()
+      ? params.command
+      : `${params.command} continue with the request`;
   const directives = parseInlineSessionDirectives(commandBody);
   const cfg = params.cfg ?? baseConfig();
   const sessionEntry = params.sessionEntry ?? createSessionEntry();
@@ -1299,29 +1302,13 @@ describe("/model chat UX", () => {
     expect(sessionEntry.agentRuntimeOverride).toBeUndefined();
   });
 
-  it.each(["", " --runtime codex"])(
-    "rejects an incompatible runtime without changing the session (%s)",
-    async (runtime) => {
-      const sessionEntry = createSessionEntry({
-        providerOverride: "openai",
-        modelOverride: "gpt-4o",
-        modelOverrideSource: "user",
-        agentRuntimeOverride: "codex",
-      });
-      const { persisted } = await persistModelDirectiveForTest({
-        command: `/model anthropic/claude-opus-4-6${runtime} hello`,
-        allowedModelKeys: ["anthropic/claude-opus-4-6", "openai/gpt-4o"],
-        sessionEntry,
-        provider: "openai",
-        model: "gpt-4o",
-        initialModelLabel: "openai/gpt-4o",
-      });
-
-      expect(persisted.errorText).toContain('Runtime "codex" is not supported');
-      expect(sessionEntry.agentRuntimeOverride).toBe("codex");
-      expect(sessionEntry.modelOverride).toBe("gpt-4o");
-    },
-  );
+  registerModelRuntimeDirectiveTests({
+    createSessionEntry,
+    createGptAliasIndex,
+    persistModelDirectiveForTest,
+    queueMocks,
+    stickyModelMock,
+  });
 
   it("rejects model/runtime transactions that target an unsupported runtime", async () => {
     vi.mocked(enqueueSystemEvent).mockClear();
@@ -1605,7 +1592,10 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
   });
 
   it("preserves an explicit runtime pin when a model switch omits --runtime", async () => {
-    const sessionEntry = createSessionEntry({ agentRuntimeOverride: "codex" });
+    const sessionEntry = createSessionEntry({
+      agentRuntimeOverride: "codex",
+      nativeRuntimeConsent: "codex",
+    });
     await handleDirectiveOnly(
       createHandleParams({
         directives: parseInlineSessionDirectives("/model openai/gpt-4o"),
@@ -1614,6 +1604,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     );
 
     expect(sessionEntry.agentRuntimeOverride).toBe("codex");
+    expect(sessionEntry.nativeRuntimeConsent).toBe("codex");
   });
 
   it("rejects model and runtime changes for model-locked sessions", async () => {

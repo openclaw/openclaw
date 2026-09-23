@@ -8,6 +8,7 @@ import {
   marginCases,
   marginScenario,
   measureMargin,
+  resizeMarginViewport,
 } from "./chat-mobile-bubble-margin.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -78,7 +79,7 @@ suite.define(() => {
             // Each width starts from the verified desktop geometry in the same fixture.
             for (const width of [390, 430]) {
               const label = `${testCase.id} at ${width} px in ${theme}`;
-              await page.setViewportSize({ width, height: 1200 });
+              await resizeMarginViewport(page, width);
               if (!("excluded" in testCase)) {
                 await expect
                   .poll(
@@ -124,7 +125,7 @@ suite.define(() => {
                   await toggle.first().click();
                 }
               }
-              await page.setViewportSize({ width: 1440, height: 1200 });
+              await resizeMarginViewport(page, 1440);
               await expect
                 .poll(
                   async () => {
