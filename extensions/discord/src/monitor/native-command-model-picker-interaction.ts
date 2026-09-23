@@ -58,16 +58,7 @@ import type {
 function resolveModelPickerSelectionValue(
   interaction: ButtonInteraction | StringSelectMenuInteraction,
 ): string | null {
-  const rawValues = (interaction as { values?: string[] }).values;
-  if (!Array.isArray(rawValues) || rawValues.length === 0) {
-    return null;
-  }
-  const first = rawValues[0];
-  if (typeof first !== "string") {
-    return null;
-  }
-  const trimmed = first.trim();
-  return trimmed || null;
+  return normalizeOptionalString(interaction.values?.[0]) ?? null;
 }
 
 function resolveRuntimeToken(
@@ -403,15 +394,16 @@ async function handleDiscordModelPickerInteraction(params: {
     return;
   }
 
-  if (parsed.action === "bucket" && parsed.view === "models") {
+  if (parsed.view === "models" && (parsed.action === "bucket" || parsed.action === "back")) {
     const provider = resolveModelPickerProvider({
       parsedProvider,
       currentModelRef,
       data: pickerData,
     });
+    const selectingBucket = parsed.action === "bucket";
     await updateModelsView(provider, {
-      page: 1,
-      modelBucket: resolveSelectedBucket(interaction),
+      page: selectingBucket ? 1 : parsed.page,
+      modelBucket: selectingBucket ? resolveSelectedBucket(interaction) : parsed.modelBucket,
       pendingRuntime: resolvePendingRuntime({ data: pickerData, provider, parsed }),
     });
     return;
@@ -441,19 +433,6 @@ async function handleDiscordModelPickerInteraction(params: {
       modelBucket: parsed.modelBucket,
       ...(pendingModel ? { pendingModel: `${provider}/${pendingModel}` } : {}),
       pendingModelIndex: pendingModelIndex ?? undefined,
-      pendingRuntime: resolvePendingRuntime({ data: pickerData, provider, parsed }),
-    });
-    return;
-  }
-
-  if (parsed.action === "back" && parsed.view === "models") {
-    const provider = resolveModelPickerProvider({
-      parsedProvider,
-      currentModelRef,
-      data: pickerData,
-    });
-    await updateModelsView(provider, {
-      modelBucket: parsed.modelBucket,
       pendingRuntime: resolvePendingRuntime({ data: pickerData, provider, parsed }),
     });
     return;
@@ -537,13 +516,12 @@ async function handleDiscordModelPickerInteraction(params: {
     // fallback, derive from the user's current durable model so the
     // browse-bucket position survives a runtime change without anything
     // pending.
-    const currentModelOnly = splitDiscordModelRef(currentModelRef ?? "");
     const derivedModelBucket =
       parsed.modelBucket ??
       (selectedModel
         ? findModelBucketId(pickerData, provider, selectedModel)
-        : currentModelOnly && currentModelOnly.provider === provider
-          ? findModelBucketId(pickerData, provider, currentModelOnly.model)
+        : currentModel && currentModel.provider === provider
+          ? findModelBucketId(pickerData, provider, currentModel.model)
           : undefined);
     await updateModelsView(provider, {
       modelBucket: derivedModelBucket,
@@ -697,40 +675,28 @@ type DiscordModelPickerFallbackParams = {
   dispatchCommandInteraction: DispatchDiscordCommandInteraction;
 };
 
-class DiscordModelPickerFallbackButton extends Button {
-  label = "modelpick";
-  customId = `${DISCORD_MODEL_PICKER_CUSTOM_ID_KEY}:seed=btn`;
-
-  constructor(private readonly params: DiscordModelPickerFallbackParams) {
-    super();
-  }
-
-  override async run(interaction: ButtonInteraction, data: ComponentData) {
-    await handleDiscordModelPickerInteraction({ ...this.params, interaction, data });
-  }
-}
-
-class DiscordModelPickerFallbackSelect extends StringSelectMenu {
-  customId = `${DISCORD_MODEL_PICKER_CUSTOM_ID_KEY}:seed=sel`;
-  options = [];
-
-  constructor(private readonly params: DiscordModelPickerFallbackParams) {
-    super();
-  }
-
-  override async run(interaction: StringSelectMenuInteraction, data: ComponentData) {
-    await handleDiscordModelPickerInteraction({ ...this.params, interaction, data });
-  }
-}
-
 export function createDiscordModelPickerFallbackButton(
   params: DiscordModelPickerFallbackParams,
 ): Button {
-  return new DiscordModelPickerFallbackButton(params);
+  return new (class extends Button {
+    label = "modelpick";
+    customId = `${DISCORD_MODEL_PICKER_CUSTOM_ID_KEY}:seed=btn`;
+
+    override async run(interaction: ButtonInteraction, data: ComponentData) {
+      await handleDiscordModelPickerInteraction({ ...params, interaction, data });
+    }
+  })();
 }
 
 export function createDiscordModelPickerFallbackSelect(
   params: DiscordModelPickerFallbackParams,
 ): StringSelectMenu {
-  return new DiscordModelPickerFallbackSelect(params);
+  return new (class extends StringSelectMenu {
+    customId = `${DISCORD_MODEL_PICKER_CUSTOM_ID_KEY}:seed=sel`;
+    options = [];
+
+    override async run(interaction: StringSelectMenuInteraction, data: ComponentData) {
+      await handleDiscordModelPickerInteraction({ ...params, interaction, data });
+    }
+  })();
 }
