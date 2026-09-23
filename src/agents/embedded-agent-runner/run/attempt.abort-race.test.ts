@@ -1,9 +1,10 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { emitAgentEvent } from "../../../infra/agent-events.js";
-import { setEmbeddedMode } from "../../../infra/embedded-mode.js";
+import { isEmbeddedMode, setEmbeddedMode } from "../../../infra/embedded-mode.js";
 import {
   EmbeddedPluginApprovalBroker,
+  getEmbeddedPluginApprovalBroker,
   setEmbeddedPluginApprovalBroker,
 } from "../../../infra/embedded-plugin-approval-broker.js";
 import { buildAgentRunTerminalOutcomeFromAttempt } from "../../agent-run-terminal-outcome.js";
@@ -20,6 +21,17 @@ import {
 
 const hoisted = getHoisted();
 const tempPaths: string[] = [];
+
+function rejectWhenAttemptSettles(attempt: Promise<unknown>, readiness: string): Promise<never> {
+  return attempt.then(
+    () => {
+      throw new Error(`embedded attempt settled before ${readiness}`);
+    },
+    (error: unknown) => {
+      throw error;
+    },
+  );
+}
 
 describe("runEmbeddedAttempt abort races", () => {
   beforeAll(async () => {
@@ -108,9 +120,15 @@ describe("runEmbeddedAttempt abort races", () => {
         },
       });
 
-      await promptTimerInstalled.promise;
+      await Promise.race([
+        promptTimerInstalled.promise,
+        rejectWhenAttemptSettles(activeAttempt!, "prompt timer installation"),
+      ]);
       await vi.advanceTimersByTimeAsync(40);
-      await approvalRequested.promise;
+      await Promise.race([
+        approvalRequested.promise,
+        rejectWhenAttemptSettles(activeAttempt!, "approval request publication"),
+      ]);
       const approval = broker.listPending()[0];
       if (!approval) {
         throw new Error("approval broker did not publish a pending request");
@@ -155,6 +173,8 @@ describe("runEmbeddedAttempt abort races", () => {
       broker.stop();
       setEmbeddedPluginApprovalBroker(null);
       setEmbeddedMode(false);
+      expect(getEmbeddedPluginApprovalBroker()).toBeNull();
+      expect(isEmbeddedMode()).toBe(false);
     }
   });
 
