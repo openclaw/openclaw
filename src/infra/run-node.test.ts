@@ -40,8 +40,6 @@ import {
   DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_ALT,
   DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_0229A108,
   DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_2026_9_1,
-  DIST_LEGACY_CLI_EXIT_COMPAT,
-  DIST_LEGACY_CLI_EXIT_COMPAT_ALT,
   DIST_STABLE_ROOT_RUNTIME_SOURCE,
   DIST_STABLE_ROOT_RUNTIME_SOURCE_ALT,
   DIST_STABLE_ROOT_RUNTIME_ALIAS,
@@ -355,8 +353,6 @@ describe("run-node script", () => {
     await setupStampedProject(tmp, {
       files: {
         [DIST_CHANNEL_CATALOG]: '{"entries":[]}\n',
-        [DIST_LEGACY_CLI_EXIT_COMPAT]: "export function hasMemoryRuntime() { return false; }\n",
-        [DIST_LEGACY_CLI_EXIT_COMPAT_ALT]: "export function hasMemoryRuntime() { return false; }\n",
       },
       oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE],
     });
@@ -715,10 +711,6 @@ describe("run-node script", () => {
     tmp,
   }) => {
     await setupStampedProject(tmp, {
-      files: {
-        [DIST_LEGACY_CLI_EXIT_COMPAT]: "export function hasMemoryRuntime() { return false; }\n",
-        [DIST_LEGACY_CLI_EXIT_COMPAT_ALT]: "export function hasMemoryRuntime() { return false; }\n",
-      },
       oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE],
     });
     await fs.rm(resolvePath(tmp, DIST_OPENCLAW_ALIAS_PACKAGE));
@@ -1725,8 +1717,6 @@ describe("run-node script", () => {
       files: {
         [DIST_PLUGIN_SDK_CORE]: "export const core = true;\n",
         [DIST_CHANNEL_CATALOG]: '{"entries":[]}\n',
-        [DIST_LEGACY_CLI_EXIT_COMPAT]: "export function hasMemoryRuntime() { return false; }\n",
-        [DIST_LEGACY_CLI_EXIT_COMPAT_ALT]: "export function hasMemoryRuntime() { return false; }\n",
         [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123","inputsClean":true}\n',
       },
     });
@@ -1886,8 +1876,8 @@ describe("run-node script", () => {
       files: {
         [DIST_STABLE_ROOT_RUNTIME_SOURCE]: "export const value = 1;\n",
         [DIST_STABLE_ROOT_RUNTIME_ALIAS]: "export * from './model-catalog.runtime-AbCd1234.js';\n",
-        [DIST_LEGACY_ROOT_RUNTIME_TARGET]: "export const aborted = true;\n",
-        [DIST_LEGACY_ROOT_RUNTIME_COMPAT]: "export * from './abort.runtime.js';\n",
+        [DIST_LEGACY_ROOT_RUNTIME_TARGET]: "export const transform = true;\n",
+        [DIST_LEGACY_ROOT_RUNTIME_COMPAT]: "export * from './text-transforms.runtime.js';\n",
         [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123","inputsClean":true}\n',
       },
     });
@@ -1899,7 +1889,6 @@ describe("run-node script", () => {
       DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_ALT,
       DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_0229A108,
       DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_2026_9_1,
-      DIST_LEGACY_CLI_EXIT_COMPAT,
       DIST_STABLE_ROOT_RUNTIME_ALIAS,
       DIST_LEGACY_ROOT_RUNTIME_COMPAT,
     ]) {

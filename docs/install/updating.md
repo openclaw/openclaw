@@ -17,6 +17,14 @@ Before a significant update, [create a verified backup](#before-updating-create-
 Automatic config copies and migration recovery originals are not a full-state
 backup.
 
+For installations older than June 2026, first update to `2026.6.1` and run
+`openclaw doctor --fix` before updating further. Current releases no longer ship
+the pre-June hashed runtime aliases or import the old `tasks/runs.sqlite`,
+`flows/registry.sqlite`, and `plugin-state/state.sqlite` databases. Back up before
+the intermediate update; current Doctor leaves those old files untouched.
+June-and-later shared task, flow, and plugin state continues to use the existing
+database migrations.
+
 ## Recommended: `openclaw update`
 
 Detects your install type (npm, pnpm, Bun, or git), checks the new version while

@@ -2933,8 +2933,7 @@ src/infra/state-migrations.runtime-state.ts	7
 src/infra/state-migrations.session-store.ts	9
 src/infra/state-migrations.shared-auth-store.ts	1
 src/infra/state-migrations.state-dir.ts	1
-src/infra/state-migrations.storage.ts	14
-src/infra/state-migrations.task-sidecar-rows.ts	8
+src/infra/state-migrations.storage.ts	9
 src/infra/state-migrations.tui-last-session.ts	2
 src/infra/state-migrations.update-check.ts	2
 src/infra/state-migrations.workspace-setup-store.ts	2
@@ -2984,7 +2983,7 @@ src/logging/state.ts	6
 src/logging/subsystem.ts	4
 src/logging/timestamps.ts	1
 src/mcp/channel-bridge.ts	6
-src/mcp/channel-shared.ts	3
+src/mcp/channel-shared.ts	2
 src/mcp/codex-supervision-tools-serve.ts	6
 src/mcp/openclaw-tools-serve-config.ts	1
 src/mcp/plugin-tools-handlers.ts	2

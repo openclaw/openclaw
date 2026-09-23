@@ -135,10 +135,7 @@ import {
   collectPluginDoctorStateMigrationPlans,
   runPluginDoctorStateMigrationPlans,
 } from "./state-migrations.plugin-doctor.js";
-import {
-  migrateLegacyInstalledPluginIndex,
-  migrateLegacyPluginStateSidecar,
-} from "./state-migrations.plugin-state.js";
+import { migrateLegacyInstalledPluginIndex } from "./state-migrations.plugin-state.js";
 import {
   buildLegacyStateMigrationPreludeSteps,
   buildUnresolvedBlockedPreludeSteps,
@@ -186,15 +183,6 @@ import {
   createStateSchemaMigrationStep,
   describeStateSchemaMigration,
 } from "./state-migrations.state-schema.js";
-import {
-  PLUGIN_STATE_SQLITE_SIDECAR_SUFFIXES,
-  TASK_STATE_SQLITE_SIDECAR_SUFFIXES,
-  hasPendingSqliteSidecarArchive,
-  migrateLegacyTaskStateSidecars,
-  resolveLegacyFlowRunsSidecarPath,
-  resolveLegacyPluginStateSidecarPath,
-  resolveLegacyTaskRunsSidecarPath,
-} from "./state-migrations.storage.js";
 import {
   detectLegacySubagentRegistry,
   migrateLegacySubagentRegistry,
@@ -470,12 +458,6 @@ export async function detectLegacyStateMigrations(params: {
       : [],
   );
   const hasLegacyAgentDir = legacyAgentSources.length > 0;
-  const pluginStateSidecarPath = resolveLegacyPluginStateSidecarPath(stateDir);
-  const hasPluginStateSidecar = migrationFileExists(pluginStateSidecarPath);
-  const hasPendingPluginStateSidecarArchive = hasPendingSqliteSidecarArchive(
-    pluginStateSidecarPath,
-    PLUGIN_STATE_SQLITE_SIDECAR_SUFFIXES,
-  );
   const pluginInstallIndexPath = resolveLegacyInstalledPluginIndexStorePath({ stateDir });
   const hasPluginInstallIndex = migrationFileExists(pluginInstallIndexPath);
   const debugProxyCaptureSidecar = detectLegacyDebugProxyCaptureSidecar(stateDir, env);
@@ -489,21 +471,6 @@ export async function detectLegacyStateMigrations(params: {
     doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
     artifactPreservingReadOnly: params.artifactPreservingReadOnly,
   });
-  const taskRunsSidecarPath = resolveLegacyTaskRunsSidecarPath(stateDir);
-  const flowRunsSidecarPath = resolveLegacyFlowRunsSidecarPath(stateDir);
-  const hasPendingTaskRunsSidecarArchive = hasPendingSqliteSidecarArchive(
-    taskRunsSidecarPath,
-    TASK_STATE_SQLITE_SIDECAR_SUFFIXES,
-  );
-  const hasPendingFlowRunsSidecarArchive = hasPendingSqliteSidecarArchive(
-    flowRunsSidecarPath,
-    TASK_STATE_SQLITE_SIDECAR_SUFFIXES,
-  );
-  const hasTaskStateSidecars =
-    migrationFileExists(taskRunsSidecarPath) ||
-    migrationFileExists(flowRunsSidecarPath) ||
-    hasPendingTaskRunsSidecarArchive ||
-    hasPendingFlowRunsSidecarArchive;
   const deliveryQueues = detectLegacyDeliveryQueueFiles(stateDir);
   const pairingStoreFiles =
     params.mode === "automatic" ? [] : await listLegacyPairingStoreFiles(stateDir);
@@ -721,11 +688,6 @@ export async function detectLegacyStateMigrations(params: {
       ...legacyAgentSources.map(({ legacyDir }) => `- Agent dir: ${legacyDir} → ${targetAgentDir}`),
     );
   }
-  if (hasPluginStateSidecar) {
-    preview.push(`- Plugin state sidecar: ${pluginStateSidecarPath} → shared SQLite state`);
-  } else if (hasPendingPluginStateSidecarArchive) {
-    preview.push(`- Plugin state sidecar: finish archive cleanup for ${pluginStateSidecarPath}`);
-  }
   if (hasPluginInstallIndex) {
     preview.push(`- Plugin install index: ${pluginInstallIndexPath} → shared SQLite state`);
   }
@@ -749,16 +711,6 @@ export async function detectLegacyStateMigrations(params: {
     preview.push(
       `- Managed worktrees: canonicalize ${worktrees.pathRewrites.length} persisted ${worktrees.pathRewrites.length === 1 ? "path" : "paths"} for symlinked state directories`,
     );
-  }
-  if (migrationFileExists(taskRunsSidecarPath)) {
-    preview.push(`- Task registry sidecar: ${taskRunsSidecarPath} → shared SQLite state`);
-  } else if (hasPendingTaskRunsSidecarArchive) {
-    preview.push(`- Task registry sidecar: finish archive cleanup for ${taskRunsSidecarPath}`);
-  }
-  if (migrationFileExists(flowRunsSidecarPath)) {
-    preview.push(`- Task flow sidecar: ${flowRunsSidecarPath} → shared SQLite state`);
-  } else if (hasPendingFlowRunsSidecarArchive) {
-    preview.push(`- Task flow sidecar: finish archive cleanup for ${flowRunsSidecarPath}`);
   }
   const stateMigrationPreviews: Array<readonly [hasLegacy: boolean, message: string]> = [
     [
@@ -865,10 +817,6 @@ export async function detectLegacyStateMigrations(params: {
       hasLegacy: pluginPlans.length > 0,
       plans: pluginPlans,
     },
-    pluginStateSidecar: {
-      sourcePath: pluginStateSidecarPath,
-      hasLegacy: hasPluginStateSidecar || hasPendingPluginStateSidecarArchive,
-    },
     pluginInstallIndex: {
       sourcePath: pluginInstallIndexPath,
       hasLegacy: hasPluginInstallIndex,
@@ -880,11 +828,6 @@ export async function detectLegacyStateMigrations(params: {
     },
     sharedAuthStore,
     worktrees,
-    taskStateSidecars: {
-      taskRunsPath: taskRunsSidecarPath,
-      flowRunsPath: flowRunsSidecarPath,
-      hasLegacy: hasTaskStateSidecars,
-    },
     deliveryQueues,
     pairingStores: { sourcePaths: pairingStoreFiles, hasLegacy: pairingStoreFiles.length > 0 },
     voiceWake: {
@@ -937,9 +880,7 @@ const unresolvedMigrationStepLayout = [
   ["meeting-transcripts", "shared", "all"],
   ["managed-worktrees", "shared", "all"],
   ["shared-auth-store", "shared", "all"],
-  ["plugin-state-sidecar", "shared", "all"],
   ["debug-proxy-capture", "shared", "all"],
-  ["task-state-sidecars", "shared", "all"],
   ["voice-wake", "shared", "all"],
   ["update-check", "shared", "all"],
   ["config-health", "shared", "all"],
@@ -1352,8 +1293,6 @@ function buildLegacyStateMigrationSteps(
   const repairSessionFiles = isDoctor && !params.skipAgentScopedMigrations;
   const pathEndpoints = (...paths: Array<string | undefined>): LegacyStateMigrationEndpoint[] =>
     paths.flatMap((entry) => (entry ? [{ kind: "path" as const, path: entry }] : []));
-  const sqliteEndpoints = (...paths: Array<string | undefined>): LegacyStateMigrationEndpoint[] =>
-    paths.flatMap((entry) => (entry ? [{ kind: "sqlite" as const, path: entry }] : []));
   type StepSpec = readonly [
     source: LegacyStateMigrationEndpoint[],
     required: boolean | PreparedLegacyStateMigrationStep["requiredness"],
@@ -1432,25 +1371,12 @@ function buildLegacyStateMigrationSteps(
         : [],
       detected.sharedAuthStore.sourcePath ? "conditional" : false,
     ],
-    "plugin-state-sidecar": [
-      detected.pluginStateSidecar.sourcePath
-        ? [{ kind: "sqlite" as const, path: detected.pluginStateSidecar.sourcePath }]
-        : [],
-      detected.pluginStateSidecar.hasLegacy,
-    ],
     "debug-proxy-capture": [
       pathEndpoints(
         detected.debugProxyCaptureSidecar.sourcePath,
         detected.debugProxyCaptureSidecar.blobDir,
       ),
       detected.debugProxyCaptureSidecar.hasLegacy,
-    ],
-    "task-state-sidecars": [
-      sqliteEndpoints(
-        detected.taskStateSidecars.taskRunsPath,
-        detected.taskStateSidecars.flowRunsPath,
-      ),
-      detected.taskStateSidecars.hasLegacy,
     ],
     "delivery-queues": [
       [
@@ -1672,7 +1598,6 @@ function buildLegacyStateMigrationSteps(
 
   const sharedSteps: LegacyStateMigrationStep[] = [
     ownerStep("shared-auth-store", detected.sharedAuthStore, migrateSharedAuthStore, "shared"),
-    sharedStep("plugin-state-sidecar", () => migrateLegacyPluginStateSidecar({ stateDir })),
     ownerStep(
       "debug-proxy-capture",
       detected.debugProxyCaptureSidecar,
@@ -1680,7 +1605,6 @@ function buildLegacyStateMigrationSteps(
       "shared",
       false,
     ),
-    sharedStep("task-state-sidecars", () => migrateLegacyTaskStateSidecars({ stateDir })),
     ownerStep("voice-wake", detected.voiceWake, migrateLegacyVoiceWakeSettings, "shared"),
     ownerStep("update-check", detected.updateCheck, migrateLegacyUpdateCheckState, "shared"),
     ownerStep("config-health", detected.configHealth, migrateLegacyConfigHealth, "shared", false),
@@ -3603,14 +3527,12 @@ async function executeLegacyStateMigrations(
     !detected.sessions.hasLegacy &&
     !detected.agentDir.hasLegacy &&
     !detected.pluginPlans?.hasLegacy &&
-    !detected.pluginStateSidecar.hasLegacy &&
     !detected.pluginInstallIndex.hasLegacy &&
     !detected.debugProxyCaptureSidecar.hasLegacy &&
     !detected.stateSchema.hasLegacy &&
     !detected.sharedAuthStore.hasLegacy &&
     !detected.worktrees.hasLegacy &&
     detected.worktrees.pathRewrites.length === 0 &&
-    !detected.taskStateSidecars.hasLegacy &&
     !detected.deliveryQueues.hasLegacy &&
     !detected.voiceWake.hasLegacy &&
     !detected.updateCheck.hasLegacy &&
