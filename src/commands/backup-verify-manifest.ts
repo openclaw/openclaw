@@ -144,7 +144,7 @@ function parseBackupManifestSqliteSnapshots(
       }
       identity = { role: "agent", agentId };
     }
-    const owner = snapshot.role === "global" ? "global" : `agent:${snapshot.agentId}`;
+    const owner = identity.role === "global" ? "global" : `agent:${identity.agentId}`;
     // Archives must restore portably, even when created on a case-sensitive host.
     const sourceKey = sourcePath.replaceAll("\\", "/").normalize("NFC").toLowerCase();
     if (owners.has(owner) || paths.has(sourceKey)) {
