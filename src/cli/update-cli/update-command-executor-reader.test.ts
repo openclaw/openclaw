@@ -67,6 +67,11 @@ afterEach(() => {
   try {
     expect(opened.every((database) => !database.isOpen)).toBe(true);
   } finally {
+    for (const database of opened) {
+      if (database.isOpen) {
+        database.close();
+      }
+    }
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
   }
@@ -299,10 +304,9 @@ describe("invocation-scoped update ownership reader", () => {
       if (options?.readOnly && ++reads === 2) {
         // The first read precedes the physical pin; the second belongs to the
         // newly pinned invocation reader and must not survive failed admission.
-        const retained = path.join(root, "retained.sqlite");
-        fs.renameSync(databasePath, retained);
-        fs.copyFileSync(retained, databasePath);
-        fs.chmodSync(databasePath, 0o600);
+        // Adding a hard link changes physical authority on Windows too, where
+        // SQLite's open handle prevents renaming or replacing the database.
+        fs.linkSync(databasePath, path.join(root, "linked.sqlite"));
         before = snapshot();
       }
       return database;
@@ -349,6 +353,7 @@ describe("invocation-scoped update ownership reader", () => {
   const damage = [
     {
       name: "missing database",
+      windowsSharingDenial: true,
       apply: () => fs.renameSync(databasePath, path.join(root, "retained.sqlite")),
     },
     { name: "empty database", apply: () => fs.truncateSync(databasePath, 0) },
@@ -387,15 +392,21 @@ describe("invocation-scoped update ownership reader", () => {
     },
     {
       name: "replacement database",
+      windowsSharingDenial: true,
       apply: () => {
         const replacement = path.join(directory, "replacement.sqlite");
         fs.copyFileSync(databasePath, replacement);
         fs.chmodSync(replacement, 0o600);
-        fs.renameSync(replacement, databasePath);
+        try {
+          fs.renameSync(replacement, databasePath);
+        } finally {
+          fs.rmSync(replacement, { force: true });
+        }
       },
     },
     {
       name: "replacement parent retaining the database inode",
+      windowsSharingDenial: true,
       apply: () => {
         const retained = path.join(root, "retained-parent");
         fs.renameSync(directory, retained);
@@ -423,21 +434,41 @@ describe("invocation-scoped update ownership reader", () => {
   ];
 
   it.each(damage)(
-    "refuses $name after warming the reader without repairing or creating sidecars",
-    async ({ apply }) => {
+    "preserves authority for $name after warming the reader without repair or sidecars",
+    async ({ apply, windowsSharingDenial }) => {
       let before: ReturnType<typeof snapshot> | undefined;
       let refusal: unknown;
-      await expect(
-        withUpdateCommandExecutor(randomUUID(), async (executor) => {
-          const fence = await executor.enter(root);
-          for (let i = 0; i < 3; i++) {
-            fence.assertCurrent();
-          }
-          apply();
-          before = snapshot();
-          refusal = captureFailure(fence.assertCurrent);
-        }),
-      ).rejects.toThrow();
+      let nativeDenial = false;
+      const failure = await withUpdateCommandExecutor(randomUUID(), async (executor) => {
+        const fence = await executor.enter(root);
+        for (let i = 0; i < 3; i++) {
+          fence.assertCurrent();
+        }
+        const intact = snapshot();
+        const mutationError = captureFailure(apply);
+        if (mutationError) {
+          // Native Windows SQLite handles deny path replacement. Prove the
+          // attempted mutation was refused and the original authority still
+          // works; platforms permitting replacement must reject its fence.
+          expect(process.platform).toBe("win32");
+          expect(windowsSharingDenial).toBe(true);
+          expect(mutationError).toMatchObject({ code: "EPERM" });
+          expect(snapshot()).toEqual(intact);
+          fence.assertCurrent();
+          nativeDenial = true;
+          return;
+        }
+        before = snapshot();
+        refusal = captureFailure(fence.assertCurrent);
+      }).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      if (nativeDenial) {
+        expect(failure).toBeUndefined();
+        return;
+      }
+      expect(failure).toBeInstanceOf(Error);
       expect(refusal).toBeInstanceOf(UpdateCommandRecoveryPendingError);
       expect(before).toBeDefined();
       expect(snapshot()).toEqual(before);
