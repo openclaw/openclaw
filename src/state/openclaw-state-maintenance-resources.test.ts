@@ -3,7 +3,6 @@ import { Worker } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
 import { beginDoctorMaintenance } from "../commands/doctor-maintenance.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
-import * as workerUrls from "../infra/runtime-worker-url.js";
 import { captureCoordinatorDatabase } from "../infra/sqlite-coordinator.test-support.js";
 import * as workerStores from "../infra/sqlite-worker-store.js";
 import { acquireGatewayLifecycleCoordinator } from "../infra/state-database-coordinator.js";
@@ -294,9 +293,12 @@ it("reopens shared state after another owner completes failed-admission cleanup"
       }
     `,
     );
+    const openSharedState = workerStores.openSharedStateSqliteWorkerStore;
     const opening = vi
-      .spyOn(workerUrls, "resolveRuntimeWorkerUrl")
-      .mockReturnValueOnce(pathToFileURL(backendPath));
+      .spyOn(workerStores, "openSharedStateSqliteWorkerStore")
+      .mockImplementationOnce((options, ...args) =>
+        openSharedState({ ...options, moduleUrl: pathToFileURL(backendPath) }, ...args),
+      );
     const close = vi.spyOn(database, "close").mockImplementationOnce(() => {
       throw new Error("Fixture native coordinator close remains pending");
     });
@@ -315,7 +317,10 @@ it("reopens shared state after another owner completes failed-admission cleanup"
         input: { ownerKey: "agent:main:cleanup-handoff" },
       });
     try {
-      await expect(read()).rejects.toThrow("SQLite worker failure and cleanup failed");
+      await expect(read()).rejects.toMatchObject({
+        message: "SQLite worker failure and cleanup failed",
+        cause: { message: "Fixture shared-state factory failed" },
+      });
       opening.mockRestore();
       dispatch.mockRestore();
       expect(database.isOpen).toBe(true);

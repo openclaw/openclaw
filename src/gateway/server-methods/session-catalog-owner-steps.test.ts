@@ -55,7 +55,7 @@ describe("catalog list step owner", () => {
         }),
       );
       hoisted.activeRegistry.sessionCatalogs = [{ provider: catalog }];
-      const active = Array.from({ length: 3 }, (_, index) =>
+      const active = Array.from({ length: 15 }, (_, index) =>
         listSessionCatalogProvider(
           provider(`blocking-${index}`, { list: () => blockers.promise }),
           {},

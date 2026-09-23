@@ -417,6 +417,7 @@ class WorktreesPage extends OpenClawLightDomElement {
       <button
         class="btn"
         title=${this.canAdmin ? "" : t("worktrees.adminRequired")}
+        aria-expanded=${String(this.createOpen)}
         ?disabled=${!this.canAdmin || this.creating}
         @click=${() => this.toggleCreate()}
       >

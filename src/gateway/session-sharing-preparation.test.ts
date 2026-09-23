@@ -51,7 +51,7 @@ it.each(["durable", "incognito"] as const)(
         ...(kind === "incognito" ? { incognito: true } : {}),
       };
       replaceSessionEntrySync(scope, entry);
-      addSessionMember(scope, { identityId: "requester", addedBy: "creator" });
+      await addSessionMember(scope, { identityId: "requester", addedBy: "creator" });
       const client = sharingPolicyClient({
         user: "requester",
         scopes: kind === "incognito" ? ["operator.admin"] : ["operator.read", "operator.write"],
@@ -112,7 +112,7 @@ it.each(["durable", "incognito"] as const)(
         replaceSessionEntrySync(scope, { ...entry, label: "cosmetic change", updatedAt: 2 });
         assertWithoutSql(true);
         expect(observed.at(-1)).toEqual({ visibility: "read-only", member: true });
-        removeSessionMember(scope, "requester");
+        await removeSessionMember(scope, "requester");
         assertWithoutSql(kind === "incognito");
         expect(observed.at(-1)).toEqual({ visibility: "read-only", member: false });
         observed.length = 0;
@@ -207,24 +207,51 @@ it("requires an existing session before preparing sharing facts", async () => {
     await expect(prepareSessionMutationFacts({ cfg, sessionKey, agentId: "main" })).rejects.toThrow(
       unavailableMessage,
     );
-    replaceSessionEntrySync(
-      { agentId: "main", sessionKey: "agent:main:existing", storePath },
-      { sessionId: "existing", updatedAt: 1 },
-    );
+    const missingDatabase = await prepareSessionMutationFacts({
+      cfg,
+      sessionKey,
+      agentId: "main",
+      allowMissing: true,
+    });
+    try {
+      expect(missingDatabase.readCurrent(cfg).target).toBeNull();
+      sessionChanges.emit({ all: true, scope: "catalog" });
+      expect(missingDatabase.readCurrent(cfg).target).toBeNull();
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: "agent:main:existing", storePath },
+        { sessionId: "existing", updatedAt: 1 },
+      );
+      expect(() => missingDatabase.readCurrent(cfg)).toThrow(unavailableMessage);
+    } finally {
+      missingDatabase.release();
+    }
     await expect(prepareSessionMutationFacts({ cfg, sessionKey, agentId: "main" })).rejects.toThrow(
       unavailableMessage,
     );
-    replaceSessionEntrySync(
-      { agentId: "main", sessionKey, storePath },
-      {
-        sessionId: "new-restricted-session",
-        lifecycleRevision: "new-restricted-generation",
-        updatedAt: 1,
-        visibility: "draft",
-        sandbox: "required",
-        createdActor: { type: "human", source: "profile", id: "other" },
-      },
-    );
+    const missingEntry = await prepareSessionMutationFacts({
+      cfg,
+      sessionKey,
+      agentId: "main",
+      allowMissing: true,
+    });
+    try {
+      sessionChanges.emit({ all: true, scope: "catalog" });
+      expect(missingEntry.readCurrent(cfg).target).toBeNull();
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey, storePath },
+        {
+          sessionId: "new-restricted-session",
+          lifecycleRevision: "new-restricted-generation",
+          updatedAt: 1,
+          visibility: "draft",
+          sandbox: "required",
+          createdActor: { type: "human", source: "profile", id: "other" },
+        },
+      );
+      expect(() => missingEntry.readCurrent(cfg)).toThrow(unavailableMessage);
+    } finally {
+      missingEntry.release();
+    }
     const prepared = await prepareSessionMutationFacts({ cfg, sessionKey, agentId: "main" });
     try {
       const client = sharingPolicyClient({ user: "requester" });

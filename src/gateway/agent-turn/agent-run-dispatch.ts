@@ -374,22 +374,42 @@ export function dispatchAgentRunFromGateway(
           },
         }
       : ingressOptsWithSpawnFacts;
-    if (createdTask) {
-      bindTrackedTaskOwner();
+    const invoke = () =>
+      runWithCanonicalSkillWorkspace(params.canonicalSkillWorkspaceDir, () =>
+        agentCommandFromGatewayIngress(
+          cronCreatorAuthorityCapability
+            ? { ...ingressOptsWithTaskBinding, cronCreatorAuthorityCapability }
+            : ingressOptsWithTaskBinding,
+          defaultRuntime,
+          params.context.deps,
+          {
+            restoreAdmittedRecovery: params.restoreAdmittedRecovery,
+          },
+          params.commandRuntimeContext,
+        ),
+      );
+    const cancel = task && createTrackedTaskCancellation(task);
+    if (createdTask && task && cancel) {
+      const assertTaskOwnerCurrent = () => {
+        assertCurrent();
+        if (
+          !ownsRunRegistration() ||
+          params.context.chatAbortControllers.get(params.runId) !== registeredRunEntry
+        ) {
+          throw new Error("Task no longer owns its Gateway run registration.");
+        }
+      };
+      return createdTask.bindRunOwner(cancel, assertTaskOwnerCurrent).then((binding) => {
+        releaseTaskOwner = binding.release;
+        originalTaskRunOwner = binding.owner;
+        assertTaskOwnerCurrent();
+        if (getTaskRunOwner(task) !== binding.owner) {
+          throw new Error("Task run owner was replaced before Gateway activation.");
+        }
+        return invoke();
+      });
     }
-    return runWithCanonicalSkillWorkspace(params.canonicalSkillWorkspaceDir, () =>
-      agentCommandFromGatewayIngress(
-        cronCreatorAuthorityCapability
-          ? { ...ingressOptsWithTaskBinding, cronCreatorAuthorityCapability }
-          : ingressOptsWithTaskBinding,
-        defaultRuntime,
-        params.context.deps,
-        {
-          restoreAdmittedRecovery: params.restoreAdmittedRecovery,
-        },
-        params.commandRuntimeContext,
-      ),
-    );
+    return invoke();
   };
   const runAgent = () => {
     try {
@@ -634,19 +654,24 @@ export function dispatchAgentRunFromGateway(
       releaseTaskOwner?.();
     });
 
-  if (finalizeLegacyRun) {
-    bindTrackedTaskOwner();
+  if (finalizeLegacyRun && trackedTask) {
+    const cancel = createTrackedTaskCancellation(trackedTask);
+    if (cancel) {
+      releaseTaskOwner = bindTaskRunOwner(trackedTask, cancel);
+      originalTaskRunOwner = getTaskRunOwner(trackedTask);
+    }
   }
 
-  function bindTrackedTaskOwner() {
+  function createTrackedTaskCancellation(
+    task: TaskRecord,
+  ): Parameters<typeof bindTaskRunOwner>[1] | undefined {
     const entry = registeredRunEntry;
-    if (trackedTask && entry?.controller === params.abortController) {
-      const task = trackedTask;
+    if (entry?.controller === params.abortController) {
       const taskId = task.taskId;
       const operationalRunInstance = registeredRunInstance;
       const lifecycleGeneration = registeredLifecycleGeneration;
       const sessionKey = registeredSessionKey;
-      releaseTaskOwner = bindTaskRunOwner(task, async (reason) => {
+      return async (reason) => {
         const authority = entry.agentRunDelegatedAuthority;
         if (
           !operationalRunInstance ||
@@ -688,9 +713,9 @@ export function dispatchAgentRunFromGateway(
           return err("Task cancellation was not confirmed. Inspect its final result.");
         }
         return ok(current);
-      });
-      originalTaskRunOwner = getTaskRunOwner(task);
+      };
     }
+    return undefined;
   }
   // Gateway shutdown must join this execution, not just its admission.
   return runCompletion;

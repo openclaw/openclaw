@@ -125,11 +125,11 @@ describe("type suppression inventory", () => {
     ).toEqual(
       [
         "extensions/openai/realtime-quicksilver-session-lifecycle.test.ts:@ts-expect-error JavaScript callers must still fail before reserving a native session.",
-        "src/infra/kysely-sync.types.test.ts:@ts-expect-error Kysely checks selected column string literals.",
-        "src/infra/kysely-sync.types.test.ts:@ts-expect-error Kysely checks table string literals.",
-        "src/infra/kysely-sync.types.test.ts:@ts-expect-error Kysely checks where-reference string literals.",
-        "src/infra/kysely-sync.types.test.ts:@ts-expect-error Kysely checks grouped column string literals.",
-        "src/infra/kysely-sync.types.test.ts:@ts-expect-error Kysely checks order references and selected aliases.",
+        "test/type-contracts/kysely-sync.ts:@ts-expect-error Kysely checks selected column string literals.",
+        "test/type-contracts/kysely-sync.ts:@ts-expect-error Kysely checks table string literals.",
+        "test/type-contracts/kysely-sync.ts:@ts-expect-error Kysely checks where-reference string literals.",
+        "test/type-contracts/kysely-sync.ts:@ts-expect-error Kysely checks grouped column string literals.",
+        "test/type-contracts/kysely-sync.ts:@ts-expect-error Kysely checks order references and selected aliases.",
         "src/infra/net/fetch-guard.socks.test.ts:@ts-expect-error Undici's Node TLS intersection rejects its runtime-valid null timeout.",
         "src/infra/net/fetch-guard.socks.test.ts:@ts-expect-error Undici's Node TLS intersection rejects its runtime-valid null timeout.",
         "src/infra/net/fetch-guard.socks.test.ts:@ts-expect-error Undici's Node TLS intersection rejects its runtime-valid null timeout.",

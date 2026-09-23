@@ -195,6 +195,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
               source.killReconciliation?.taskCancellationAccepted === true,
           });
 
+    const restoreCompletionAuthority = subagentRuns.transferCompletionAuthority(source, next);
     if (previousRunId !== nextRunId) {
       this.options.runs.delete(previousRunId);
     }
@@ -238,6 +239,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
         this.options.persistOrThrow(...changedRunIds);
       }
     } catch (error) {
+      restoreCompletionAuthority();
       this.restoreKillReconciliationSnapshots(killReconciliationSnapshots);
       for (const [member, wake] of wakeSnapshots) {
         member.requesterSettleWake = wake;

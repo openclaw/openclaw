@@ -260,7 +260,11 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   ["src/gateway/session-message-events.test.ts", 26],
   ["src/gateway/tool-resolution.test.ts", 43],
   ["test/scripts/test-projects-routing.test.ts", 21],
-  ["ui/src/components/app-sidebar.test.ts", 28],
+  // Single-worker Node file spans after splitting the sidebar's serial case groups.
+  ["ui/src/components/app-sidebar.catalog.test.ts", 4],
+  ["ui/src/components/app-sidebar.interactions.test.ts", 6],
+  ["ui/src/components/app-sidebar.people.test.ts", 13],
+  ["ui/src/components/app-sidebar.sessions.test.ts", 10],
   ["ui/src/pages/chat/chat-responsive.browser.test.ts", 30],
   // Focused cold proof is ~34s after right-sizing and concurrent crash phases.
   ["test/scripts/bench-sqlite-reliability.test.ts", 34],
@@ -298,8 +302,15 @@ const DEFAULT_STRIPE_FILE_SECONDS = 3;
 // Run 33364935118: 494 unlisted tooling files used 945.94s including imports/setup.
 const DEFAULT_TOOLING_STRIPE_FILE_SECONDS = 2;
 
-export function estimateVitestToolingFileSeconds(file: string): number {
-  return STRIPE_FILE_SECONDS_HINTS.get(file) ?? DEFAULT_TOOLING_STRIPE_FILE_SECONDS;
+export function estimateVitestToolingFileSeconds(
+  file: string,
+  measuredSeconds?: Readonly<Record<string, number>>,
+): number {
+  return (
+    measuredSeconds?.[file] ??
+    STRIPE_FILE_SECONDS_HINTS.get(file) ??
+    DEFAULT_TOOLING_STRIPE_FILE_SECONDS
+  );
 }
 
 export function estimateVitestTestFileSeconds(file: string): number {

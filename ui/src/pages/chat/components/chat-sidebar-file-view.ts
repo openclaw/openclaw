@@ -6,6 +6,7 @@ import { renderPanelLoadingSkeleton } from "../../../components/panel-loading-sk
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerCodeBlocksEnglish } from "../../../i18n/locales/en-code-blocks.ts";
+import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
 import type { EditorId } from "../../../lib/editor-links.ts";
 import { getSafeLocalStorage } from "../../../local-storage.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
@@ -13,6 +14,7 @@ import { renderChatSidebarEditorMenu } from "./chat-sidebar-editor-menu.ts";
 import { detectLineSeparator } from "./file-line-separator.ts";
 
 registerCodeBlocksEnglish();
+registerFilePreviewEnglish();
 
 type FileSidebarContent = Extract<SidebarContent, { kind: "file" }>;
 
@@ -264,7 +266,7 @@ export function renderSidebarFile(
                   @input=${(event: Event & { currentTarget: HTMLInputElement }) =>
                     controls.onSearchInput(event.currentTarget.value)}
                 />
-                <span class="file-view__search-counter"
+                <span class="file-view__search-counter" role="status"
                   >${matchNumber}/${controls.matches.length}</span
                 >
                 <button

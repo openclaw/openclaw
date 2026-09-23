@@ -117,7 +117,7 @@ export function renderSettingsPageHeader(props: SettingsPageHeaderProps): Templa
   return html`
     <section class="content-header content-header--settings">
       <div>
-        <div class="page-title">${props.title}</div>
+        <h1 class="page-title">${props.title}</h1>
         ${props.subtitle ? html`<div class="page-subtitle">${props.subtitle}</div>` : nothing}
       </div>
       ${

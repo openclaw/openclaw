@@ -13,6 +13,7 @@ import type { ImageLightboxItem } from "../../../components/image-lightbox.types
 import type { MarkdownGitHubContext } from "../../../components/markdown-render-options.ts";
 import type { SessionLinkTarget } from "../../../components/markdown-session-links.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import { type EditorId, openEditor } from "../../../lib/editor-links.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
@@ -40,6 +41,8 @@ import {
   saveFileWrapPreference,
 } from "./chat-sidebar-file-view.ts";
 import type { FileEditorViewHandle } from "./file-editor-view.ts";
+
+registerFilePreviewEnglish();
 
 type FileSidebarContent = Extract<SidebarContent, { kind: "file" }>;
 

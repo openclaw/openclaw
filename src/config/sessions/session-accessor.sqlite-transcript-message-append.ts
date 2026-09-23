@@ -144,6 +144,7 @@ export function appendTranscriptMessageInTransaction<TMessage>(
     appendMode?: "side";
   },
   preparedMessage?: PreparedTranscriptMessageAppend<TMessage>,
+  projection?: { scheduleProjectionReconcile?: boolean; onProjectionReconcileNeeded?: () => void },
 ): TranscriptMessageAppendResult<TMessage> | undefined {
   const pending = resolveSessionPendingInputAppend(database, resolved, options.message);
   if (
@@ -258,6 +259,7 @@ export function appendTranscriptMessageInTransaction<TMessage>(
     eventJson = serializePreparedMessageEvent(envelope, preparedMessage.messageJson);
   }
   const appended = appendTranscriptEventInTransaction(database, resolved, event, {
+    ...projection,
     eventJson,
     preparedPayload: preparedMessage?.physicalPayload,
     idempotencyKeyMode:

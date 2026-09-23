@@ -11,6 +11,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as visibility from "../shared/session-list-visibility.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
@@ -527,7 +528,6 @@ test("refreshes cached lists after placement readiness and refuses disposed resp
         opts: { archived: true, activeMinutes: 1 },
       });
       await entered.promise;
-      expect(selected).not.toHaveBeenCalled();
       alice.connect.scopes = ["operator.read"];
       clock.mockReturnValue(initialNow + 60_001);
       replaceSessionEntrySync(
@@ -539,11 +539,28 @@ test("refreshes cached lists after placement readiness and refuses disposed resp
       const result = await pending;
       expect(result.sessions.map((row) => row.sessionId)).toEqual(["stable"]);
       expect(result.sessions[0]?.sharingRole).toBe("viewer");
+      // The publication can leave unselected archives dirty; warm its completed revision.
+      await listProjectedSessions({
+        projection,
+        client: alice,
+        opts: { archived: true, activeMinutes: 1 },
+      });
+      selected.mockClear();
+      readProjection.mockClear();
+      const warm = await listProjectedSessions({
+        projection,
+        client: alice,
+        opts: { archived: true, activeMinutes: 1 },
+      });
+      expect(warm.sessions.map((row) => row.sessionId)).toEqual(["stable"]);
+      expect(selected).not.toHaveBeenCalled();
+      expect(readProjection).not.toHaveBeenCalled();
 
       alice.connect.scopes = ["operator.admin"];
       entered = createDeferredCore();
       paused = createDeferredCore<WorkerSessionPlacementProjection>();
       hold = true;
+      sessionChanges.emit({ all: true, scope: "worker-placements" });
       const onResult = vi.fn();
       pending = listProjectedSessions({
         projection,

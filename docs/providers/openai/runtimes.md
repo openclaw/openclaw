@@ -73,6 +73,69 @@ selection, including `openai/gpt-5.5`, unless you explicitly use
 only when you want API-key auth for an agent model.
 </Note>
 
+## Agents API MVP
+
+The separate Agents API plugin (`@openclaw/agentsapi`) registers the explicit
+`agentsapi` harness, alongside the Codex plugin. The OpenAI provider plugin
+continues to own model routes and API-key authentication.
+Select a model in `agents.defaults.model.primary` and set its
+`agents.defaults.models["openai/<model>"].agentRuntime.id` to `"agentsapi"`.
+Use OpenAI API-key authentication. The harness sends the configured model to the
+Agents API without a model allowlist; unsupported models return the API error.
+Execution uses an OpenAI-hosted Linux VM. Reasoning follows the configured
+thinking level and model metadata: keep a supported effort, otherwise choose
+the next higher supported effort, or the highest available when none is higher.
+The selected effort applies to new sessions and later turns in existing
+sessions. `adaptive` and omitted native efforts use the model default; updating
+an existing session resets its effort to that default. The single-agent MVP
+does not support `ultra` delegation. Automatic runtime selection is unchanged.
+
+```json5
+{
+  agents: {
+    defaults: {
+      model: { primary: "openai/gpt-6-astra" },
+      models: {
+        "openai/gpt-6-astra": { agentRuntime: { id: "agentsapi" } },
+      },
+    },
+  },
+}
+```
+
+If `plugins.allow` is configured, include `agentsapi` alongside `openai`.
+The standalone plugin keeps native session identifiers in plugin state. It uses
+the shared harness runtime for leases, generation admission, deletion rollback,
+cancellation, deadlines, and lifecycle events. Agents API protocol events,
+native completion receipts, and transcript projection remain plugin-owned.
+Reset sessions created
+by the earlier in-provider prototype once when switching to this package.
+
+A restricted API key needs Agents and Responses read/write plus Models read
+permission so the service can retrieve the selected model when creating a session.
+
+Agents API owns the persistent agent session and workspace. OpenClaw stores
+the session binding in plugin SQLite state and mirrors text replies into its
+normal transcript. Follow-up messages reuse the agent session; input during
+a running turn steers it, and interruption cancels its remote turn. `/new`
+and `/reset` start a fresh session on the next message. Reset and local session
+deletion retire the binding; the Agents API retains the remote history and
+workspace, which can be managed through its API.
+
+If the event stream closes, the harness subscribes again and reconciles saved
+turns and input receipts before accepting completion. It does not resubmit the
+user's message. Native token usage is best effort; unavailable usage currently
+appears as zero in OpenClaw's usage totals.
+
+New Agents API sessions enable built-in web search in live mode. Sessions
+created before web search was enabled need `/new` or `/reset` to pick it up.
+
+This MVP supports text, built-in web search, and native hosted-workspace commands. Apps, connectors,
+OpenClaw dynamic tools, file transfer, image generation, custom context engines,
+and self-hosted executors are outside its scope. Admitted turns are marked
+unsafe for replay because hosted commands may already have run. OpenClaw can
+continue the existing session after a transient provider failure.
+
 ## Native Codex app-server auth
 
 The native Codex app-server harness uses `openai/*` model refs when an eligible

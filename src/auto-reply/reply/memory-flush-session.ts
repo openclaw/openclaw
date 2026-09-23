@@ -24,8 +24,9 @@ export async function prepareMemoryFlushSession(params: {
   params.signal?.throwIfAborted();
   await waitForSessionTranscriptProjection(params.source, params.signal);
   params.signal?.throwIfAborted();
-  const sessionManager = withSessionContextAdmission(params.source, params.admission, () =>
-    SessionManager.openDetachedBounded(params.source, {
+  const sessionManager = await withSessionContextAdmission(params.source, params.admission, () =>
+    SessionManager.openDetachedBoundedAsync(params.source, {
+      signal: params.signal,
       cwd: params.workspaceDir,
       maxBytes: MAX_VISIBLE_MESSAGE_MAX_BYTES,
       maxEvents: MAX_VISIBLE_MESSAGE_MAX_MESSAGES,

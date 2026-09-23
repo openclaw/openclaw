@@ -13,6 +13,7 @@ import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import {
   getModelRefStatus,
   resolveAllowedModelRef,
+  resolveDefaultModelForAgent,
   type ModelRef,
 } from "../../agents/model-selection.js";
 import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
@@ -24,6 +25,7 @@ import { refreshQueuedFollowupSession } from "../../auto-reply/reply/queue.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { isSessionStatusModelPatchOrigin } from "../session-model-patch-origin.js";
 import type { SessionWorkerPlacementContext } from "../worker-environments/session-placement-lifecycle.js";
 import { resolveGatewayModelSelectionPolicy } from "./session-model-selection-policy.js";
 import { resolveSessionWorkerPlacementPatchError } from "./sessions-shared.js";
@@ -39,6 +41,7 @@ export function persistSessionPatchModelSelection(params: {
   // Combined execution-policy recovery is explicitly scoped to this chat, even
   // when ordinary model selections normally update agent/global defaults.
   if (
+    isSessionStatusModelPatchOrigin() ||
     typeof params.patch.model !== "string" ||
     params.patch.sandboxMode !== undefined ||
     params.patch.nativeRuntimeConsent !== undefined ||
@@ -117,6 +120,13 @@ export function resolveSessionPatchModelSelection(params: {
   | { ok: true; provider: string; model: string; profile?: string; isDefault: boolean }
   | { ok: false; error: string } {
   const { model: modelWithoutProfile, profile } = splitTrailingAuthProfile(params.raw);
+  const statusDefault = isSessionStatusModelPatchOrigin()
+    ? resolveDefaultModelForAgent({ cfg: params.cfg, agentId: params.agentId })
+    : undefined;
+  const isDefault = (ref: ModelRef) =>
+    statusDefault !== undefined &&
+    ref.provider === statusDefault.provider &&
+    ref.model === statusDefault.model;
   if (params.preparedModelSelection) {
     const ref = params.preparedModelSelection;
     if (modelWithoutProfile !== `${ref.provider}/${ref.model}`) {
@@ -134,7 +144,7 @@ export function resolveSessionPatchModelSelection(params: {
       },
     });
     return status.allowed
-      ? { ok: true, ...ref, ...(profile ? { profile } : {}), isDefault: false }
+      ? { ok: true, ...ref, ...(profile ? { profile } : {}), isDefault: isDefault(ref) }
       : { ok: false, error: `model not allowed: ${status.key}` };
   }
   const resolved = resolveAllowedModelRef({
@@ -156,9 +166,8 @@ export function resolveSessionPatchModelSelection(params: {
     provider: resolved.ref.provider,
     model: resolved.ref.model,
     ...(profile ? { profile } : {}),
-    // A concrete model request is a pin even when it currently equals the
-    // configured default. Only the explicit null patch represents Default.
-    isDefault: false,
+    // Direct patches pin concrete models; status retains its configured-default reset contract.
+    isDefault: isDefault(resolved.ref),
   };
 }
 

@@ -19,11 +19,7 @@ import {
   type SandboxContext,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import * as agentHarnessTaskRuntime from "openclaw/plugin-sdk/agent-harness-task-runtime";
-import type {
-  AgentHarnessTaskRecord,
-  AgentHarnessTaskRuntime,
-  AgentHarnessTaskRuntimeScope,
-} from "openclaw/plugin-sdk/agent-harness-task-runtime";
+import type { AgentHarnessTaskRuntimeScope } from "openclaw/plugin-sdk/agent-harness-task-runtime";
 import { toErrorObject as toLintErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
@@ -36,6 +32,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runCopilotAttempt } from "./attempt.js";
 import {
   makeAssistantMessageEvent,
+  makeFailingNativeTaskRuntime,
   makeFakePool,
   makeFakeSdk,
   projectAgentRunAttemptTerminal,
@@ -3042,30 +3039,7 @@ describe("runCopilotAttempt", () => {
     "cleans up after native task finalization fails (deferred: %s)",
     async (deferred) => {
       const failure = new Error("native task persistence failed");
-      const task: AgentHarnessTaskRecord = {
-        taskId: "native-task",
-        runId: "copilot-agent:call-1",
-        runtime: "subagent",
-        taskKind: "copilot-native",
-        requesterSessionKey: "agent:main:main",
-        ownerKey: "agent:main:main",
-        scopeKind: "session",
-        task: "inspect",
-        status: "running",
-        notifyPolicy: "silent",
-        deliveryStatus: "not_applicable",
-        createdAt: 0,
-      };
-      const runtime: AgentHarnessTaskRuntime = {
-        createRunningTaskRun: () => task,
-        tryCreateRunningTaskRun: () => task,
-        recordTaskRunProgressByRunId: () => [],
-        finalizeTaskRunByRunId: () => {
-          throw failure;
-        },
-        setDetachedTaskDeliveryStatusByRunId: () => [],
-        listTaskRecords: () => [task],
-      };
+      const runtime = makeFailingNativeTaskRuntime(failure);
       vi.spyOn(agentHarnessTaskRuntime, "createAgentHarnessTaskRuntime").mockReturnValue(runtime);
       const sdk = makeFakeSdk((session) => {
         session.sendAndWait.mockImplementationOnce(async () => {

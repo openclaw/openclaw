@@ -76,6 +76,7 @@ import { buildSystemPromptToolLines } from "./system-prompt-tool-list.js";
 import type { PromptMode, SilentReplyPromptMode } from "./system-prompt.types.js";
 import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 import { buildUiPresentationPrompt } from "./ui-presentation-prompt.js";
+import { buildProactiveSubagentOrchestrationSection } from "./ultra-orchestration.js";
 import {
   buildWatchedSessionsPromptLines,
   type PreparedWatchedSessionsPrompt,
@@ -118,23 +119,6 @@ export type SystemPromptRuntimeInfo = {
 
 function normalizeSubagentDelegationMode(mode?: SubagentDelegationMode): SubagentDelegationMode {
   return mode === "prefer" ? "prefer" : "suggest";
-}
-
-function buildProactiveSubagentOrchestrationSection(params: {
-  enabled: boolean;
-  hasSessionsSpawn: boolean;
-}): string[] {
-  if (!params.enabled || !params.hasSessionsSpawn) {
-    return [];
-  }
-  return [
-    "## Proactive Sub-Agent Orchestration",
-    "Ultra active. Use `sessions_spawn` when independent work improves speed/quality.",
-    "- Parallelize independent investigation, implementation, verification.",
-    "- Simple/tightly coupled stays local.",
-    "- Give bounded objective; synthesize before reply.",
-    "",
-  ];
 }
 
 const stablePromptPrefixCache = new Map<string, StablePromptPrefixCacheEntry>();

@@ -169,7 +169,7 @@ describe("Node Code Mode worker custody", () => {
           expect(result.status).toBe("completed");
           expect(fixture.executions.at(-1)).toMatchObject({
             input: { config: { timeoutMs: 750 }, executionTimeoutMs: 300 },
-            options: { timeoutMs: 2750 },
+            options: { timeoutMs: 750 },
           });
         } else {
           expect(result).toMatchObject({ status: "failed", code: "timeout" });

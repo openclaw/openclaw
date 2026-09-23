@@ -44,6 +44,11 @@ the update keeps the active CLI's installation as its target and refreshes the
 service through `gateway install --force` before verifying the restarted Gateway.
 The old service command remains the recovery identity until that handoff succeeds.
 Reconciliation failures are recorded as warnings with a manual repair command.
+The code update can report success while service reconciliation remains pending;
+a stopped service stays stopped until repaired. On Linux, regeneration preserves
+the order of retained `PATH` entries and prepends newly added managed entries.
+Paths carried over solely from the old definition still pass the existing safety
+filters. If the definition cannot be preserved, reconciliation requires manual repair.
 Deployment-owned definitions retain their existing installation owner.
 Pending package-publication recovery in either the CLI or selected service
 installation blocks writable preparation. Follow the package recovery command
@@ -107,6 +112,8 @@ include the FreeBSD fixes; changes on `main` are not a published release.
 Stop and start the Gateway through its actual supervisor or foreground process
 owner around the manual replacement. This recovery does not add CLI-managed
 FreeBSD rc.d service updates.
+
+After an upgrade, check the [FreeBSD model-runtime limitation](/install/installer#install-clish) before starting agent turns.
 </Note>
 
 An already-installed registry package version or Git target SHA still runs plugin maintenance, repairs eligible old OpenClaw release pins, and restarts a running managed Gateway when plugins change or its service points at another installation, unless `--no-restart` is set. Unchanged runs finish as `skipped` / `already-current`.

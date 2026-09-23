@@ -8,6 +8,8 @@ export type AgentRuntimeSpawnModelAutoSelection = {
 };
 
 export type AgentRuntimeSessionSpawnContext = {
+  /** Host-verified human requester; inherited ownership still requires a matching parent owner. */
+  requesterProfileId?: string;
   completionOwnerSessionKey?: string;
   resolvedModel?: ProviderModelRef;
   inheritedToolPolicy: {

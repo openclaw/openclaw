@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { prepareGithubIssue } from "../infra/github-issue.js";
-import { VERSION } from "../version.js";
+import type { DoctorSessionSqliteIssue } from "../infra/session-sqlite-migration-issues.js";
 import {
   canonicalMigrationFilePath,
   readSessionSqliteMigrationManifest,
@@ -13,9 +13,9 @@ import {
   type SessionSqliteMigrationGithubIssue,
   type SessionSqliteMigrationTargetInput,
   type SessionSqliteMigrationTargetManifest,
-} from "./doctor-session-sqlite-migration-run.js";
+} from "../infra/session-sqlite-migration-manifest.js";
+import { VERSION } from "../version.js";
 import type {
-  DoctorSessionSqliteIssue,
   DoctorSessionSqliteTargetReport,
   SessionSqliteMigrationFailureIssue,
 } from "./doctor-session-sqlite-types.js";

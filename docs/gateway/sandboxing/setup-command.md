@@ -10,6 +10,11 @@ The hook that runs once after a sandbox container is created, and the defaults t
 
 `setupCommand` runs **once** after the sandbox container is created (not on every run). It executes inside the container via `sh -lc`.
 
+If access is revoked before setup completes, OpenClaw retains the container and
+its saved data for inspection. Later requests reject that incomplete container
+instead of restarting it or replaying setup. Preserve any needed container data
+before explicitly [recreating the sandbox](/cli/sandbox).
+
 Paths:
 
 - Global: `agents.defaults.sandbox.docker.setupCommand`

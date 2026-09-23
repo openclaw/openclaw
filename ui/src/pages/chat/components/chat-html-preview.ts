@@ -3,9 +3,12 @@ import { LazyCustomElementRequestController } from "../../../app/lazy-custom-ele
 import { isStaleChunkImportError } from "../../../app/stale-chunk-reload.ts";
 import { renderLazyViewError } from "../../../components/lazy-view-error.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import type { SidebarContent, AttachmentSidebarRuntime } from "./chat-sidebar-content-types.ts";
 import type { FileViewControls } from "./chat-sidebar-file-view.ts";
+
+registerFilePreviewEnglish();
 
 export { LazyCustomElementRequestController };
 

@@ -2,7 +2,7 @@ import { consume } from "@lit/context";
 import { initialState, Task, TaskStatus } from "@lit/task";
 import { html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
-import type { AgentsListResult, SkillStatusReport } from "../../api/types.ts";
+import type { SkillStatusReport } from "../../api/types.ts";
 import {
   applicationContext,
   type ApplicationContext,
@@ -48,7 +48,6 @@ export type SkillsRouteData = {
   gateway: ApplicationContext["gateway"];
   gatewaySnapshot: ApplicationGatewaySnapshot;
   agents: ApplicationContext["agents"];
-  agentsList: AgentsListResult | null;
   selectedAgentId: string | null;
   selectionIntentRevision: number;
   report: SkillStatusReport | null;
@@ -465,6 +464,7 @@ class SkillsPage extends OpenClawLightDomElement {
           aria-labelledby=${this.surface === "discovery" ? "plugins-tab-skills" : nothing}
         >
           ${renderSkills({
+            state: this,
             surface: this.surface,
             libraryEntries: this.library.list?.entries ?? [],
             onLibraryOpen: (skillId) => void this.library.open(skillId),
@@ -477,36 +477,10 @@ class SkillsPage extends OpenClawLightDomElement {
                   `
                 : renderSkillLibrary(this.library),
             showInventory: this.library.showWorkspace,
-            personalImport: !this.library.showWorkspace,
             canUpdate: this.canUpdateSkills(),
             canInstall: this.canInstallFromClawHub(),
-            connected: this.gateway.connected,
             loading: this.skillsLoading || agents.agentsLoading || this.library.busy,
-            report: this.skillsReport,
             error,
-            filter: this.skillsFilter,
-            statusFilter: this.skillsStatusFilter,
-            edits: this.skillEdits,
-            messages: this.skillMessages,
-            operation: this.skillOperation,
-            detailKey: this.skillsDetailKey,
-            detailTab: this.skillsDetailTab,
-            clawhubVerdicts: this.clawhubVerdicts,
-            clawhubVerdictsLoading: this.clawhubVerdictsLoading,
-            clawhubVerdictsError: this.clawhubVerdictsError,
-            skillCardContents: this.skillCardContents,
-            skillCardLoadingKey: this.skillCardLoadingKey,
-            skillCardErrors: this.skillCardErrors,
-            clawhubQuery: this.clawhubSearchQuery,
-            clawhubResults: this.clawhubSearchResults,
-            clawhubIconUrls: this.clawhubIconUrls,
-            clawhubSearchLoading: this.clawhubSearchLoading,
-            clawhubSearchError: this.clawhubSearchError,
-            clawhubDetail: this.clawhubDetail,
-            clawhubDetailRef: this.clawhubDetailRef,
-            clawhubDetailLoading: this.clawhubDetailLoading,
-            clawhubDetailError: this.clawhubDetailError,
-            clawhubInstallMessage: this.clawhubInstallMessage,
             onFilterChange: (next) => (this.skillsFilter = next),
             onStatusFilterChange: (next) => (this.skillsStatusFilter = next),
             onRefresh: () => void this.refreshPage(),

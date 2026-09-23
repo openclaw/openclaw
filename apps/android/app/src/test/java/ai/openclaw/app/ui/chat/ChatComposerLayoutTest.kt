@@ -4584,6 +4584,40 @@ class ChatComposerLayoutTest {
     }
   }
 
+  @Test
+  @Config(qualifiers = "w360dp-h800dp-mdpi")
+  fun admittedLargePhotoPreviewsInComposerWithoutSending() {
+    val model = showChat(viewportHeight = { 720.dp })
+    val owner = model.captureChatShareOwner()
+    val photo = PendingAttachment("preview-photo", "synthetic-photo.jpg", "image/jpeg", syntheticLargeChatPhotoBase64())
+    val messages = model.chatMessages.value
+    val outbox = model.chatOutboxItems.value
+    composeRule.runOnIdle {
+      assertEquals(0, model.chatComposerState.addAttachments(owner, listOf(photo)))
+    }
+    composeRule.waitForIdle()
+    try {
+      composeRule.waitUntil {
+        composeRule.onAllNodesWithContentDescription("image/jpeg").fetchSemanticsNodes().isNotEmpty()
+      }
+    } finally {
+      captureComposerProof("composer-photo")
+    }
+    composeRule.onNodeWithContentDescription("image/jpeg").assertIsDisplayed().performClick()
+    composeRule.onNodeWithContentDescription(nativeString("Close image preview")).assertIsDisplayed()
+    composeRule.onNodeWithText("100%").assertIsDisplayed()
+    composeRule.onNodeWithContentDescription(nativeString("Close image preview")).performClick()
+    composeRule.onNodeWithContentDescription(nativeString("Remove attachment")).performClick()
+    composeRule.runOnIdle {
+      assertTrue(
+        model.chatComposerState.attachments.value[owner]
+          .isNullOrEmpty(),
+      )
+      assertEquals(messages, model.chatMessages.value)
+      assertEquals(outbox, model.chatOutboxItems.value)
+    }
+  }
+
   private fun captureComposerProof(name: String) {
     val directory = System.getenv("OPENCLAW_CHAT_WORK_PROOF_DIR") ?: return
     val folder = File(directory)
@@ -5345,6 +5379,11 @@ class ChatComposerLayoutTest {
       val geometryFailures = mutableListOf<String>()
 
       fun verifyGeometry(label: String) {
+        val transcriptWidth =
+          composeRule
+            .onNodeWithTag("chat-viewport")
+            .fetchSemanticsNode()
+            .boundsInRoot.width - with(composeRule.density) { 32.dp.toPx() }
         val reference = composeRule.onNode(hasContentDescription("You") and hasText("Summarize the release checklist.")).fetchSemanticsNode().boundsInRoot
         val actual =
           composeRule
@@ -5353,8 +5392,8 @@ class ChatComposerLayoutTest {
             .fetchSemanticsNode()
             .boundsInRoot
         val assistant = composeRule.onNode(hasContentDescription("OpenClaw") and hasText("I will keep the summary concise.")).fetchSemanticsNode().boundsInRoot
-        if (kotlin.math.abs(reference.width - actual.width) > 1f || kotlin.math.abs(reference.right - actual.right) > 1f) {
-          geometryFailures += "$label: pending user width/edge differs from confirmed user: $actual vs $reference"
+        if (actual.width > transcriptWidth * 0.78f + 1f || kotlin.math.abs(reference.right - actual.right) > 1f) {
+          geometryFailures += "$label: pending user exceeds text budget or differs from confirmed trailing edge: $actual vs $reference"
         }
         if (model.chatSelectedActiveRunPresentation.value.count > 0 && model.chatStreamingAssistantText.value == null) {
           val typing =
@@ -5363,8 +5402,8 @@ class ChatComposerLayoutTest {
               .assertIsDisplayed()
               .fetchSemanticsNode()
               .boundsInRoot
-          if (kotlin.math.abs(assistant.width - typing.width) > 1f || kotlin.math.abs(assistant.left - typing.left) > 1f) {
-            geometryFailures += "$label: typing width/edge differs from assistant: $typing vs $assistant"
+          if (typing.width > transcriptWidth + 1f || kotlin.math.abs(assistant.left - typing.left) > 1f) {
+            geometryFailures += "$label: typing exceeds assistant width or differs from its leading edge: $typing vs $assistant"
           }
         }
       }

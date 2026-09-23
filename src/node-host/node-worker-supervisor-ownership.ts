@@ -80,6 +80,26 @@ type NodeWorkerActiveTurn = {
   settling?: Promise<void>;
 };
 
+/** Retain prepared workspace custody until the admitted launch settles. */
+export async function launchWithNodeWorkerPreparedWorkspace(params: {
+  workspace: Pick<NodeWorkerWorkspaceRuntime, "acquirePreparedWorkspace">;
+  request: Parameters<NodeWorkerWorkspaceRuntime["acquirePreparedWorkspace"]>[0];
+  signal: AbortSignal;
+  isCurrent: () => boolean;
+  launch: (homeDir?: string) => Promise<NodeWorkerLaunchReceipt>;
+}): Promise<NodeWorkerLaunchReceipt> {
+  const workspace = await params.workspace.acquirePreparedWorkspace(params.request);
+  try {
+    params.signal.throwIfAborted();
+    if (!params.isCurrent()) {
+      throw new Error("node worker environment is stopping");
+    }
+    return await params.launch(workspace?.homeDir);
+  } finally {
+    workspace?.release();
+  }
+}
+
 export function createNodeWorkerActiveTurn(claim: NodeWorkerLaunchClaim): NodeWorkerActiveTurn {
   const { promise, resolve } = createDeferredCore();
   return { claim, done: promise, settle: resolve, cancelled: false };

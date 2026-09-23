@@ -7,17 +7,68 @@ import {
   resolveAgentSessionStoreTargetsSync,
   resolveAllAgentSessionStoreCandidateTargetsSync,
   resolveAllAgentSessionStoreTargetsSync,
+  resolveConfiguredAgentDatabaseTargets,
   resolveSessionStoreTargets,
   type SessionStoreTarget as ResolvedSessionStoreTarget,
 } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isPathInside } from "../infra/path-guards.js";
+import { canonicalMigrationFilePath } from "../infra/session-sqlite-migration-manifest.js";
+import { resolveTargetSqlitePath } from "../infra/session-sqlite-migration-readers.js";
+import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { createRetainedAgentDatabaseMatcher } from "../state/agent-deletion-discovery.js";
 import type { HistoricalArchiveSources } from "./doctor-session-sqlite-discovery.js";
-import { canonicalMigrationFilePath } from "./doctor-session-sqlite-migration-run.js";
-import { resolveTargetSqlitePath } from "./doctor-session-sqlite-readers.js";
 import type { DoctorSessionSqliteMode } from "./doctor-session-sqlite-types.js";
 
 type SessionStoreTarget = ResolvedSessionStoreTarget & { sqlitePath?: string };
+
+export function resolveDoctorSessionSqliteMaintenancePaths(
+  targets: readonly SessionStoreTarget[],
+): string[] {
+  const protectedPaths = new Set<string>();
+  for (const target of targets) {
+    for (const databasePath of resolveSqliteDatabaseFilePaths(resolveTargetSqlitePath(target))) {
+      protectedPaths.add(databasePath);
+    }
+  }
+  return [...protectedPaths];
+}
+
+export function resolveDoctorSessionSqliteMaintenanceRoots(
+  targets: readonly SessionStoreTarget[],
+  env: NodeJS.ProcessEnv,
+): string[] {
+  const stateDir = path.resolve(resolveStateDir(env));
+  const roots = new Set([stateDir]);
+  for (const target of targets) {
+    const sqlitePath = resolveTargetSqlitePath(target);
+    if (isPathWithin(stateDir, target.storePath) && isPathWithin(stateDir, sqlitePath)) {
+      continue;
+    }
+    const commonRoot = commonPathAncestor(path.dirname(target.storePath), path.dirname(sqlitePath));
+    const parentRoot = path.dirname(commonRoot);
+    roots.add(parentRoot === path.parse(commonRoot).root ? commonRoot : parentRoot);
+  }
+  return [...roots];
+}
+
+function isPathWithin(rootPath: string, candidatePath: string): boolean {
+  return isPathInside(rootPath, path.resolve(candidatePath));
+}
+
+function commonPathAncestor(leftPath: string, rightPath: string): string {
+  let currentPath = path.resolve(leftPath);
+  const resolvedRightPath = path.resolve(rightPath);
+  while (!isPathWithin(currentPath, resolvedRightPath)) {
+    const parentPath = path.dirname(currentPath);
+    if (parentPath === currentPath) {
+      return currentPath;
+    }
+    currentPath = parentPath;
+  }
+  return currentPath;
+}
 
 export function resolveDoctorSessionSqliteTargets(params: {
   allAgents?: boolean;
@@ -26,9 +77,11 @@ export function resolveDoctorSessionSqliteTargets(params: {
   env: NodeJS.ProcessEnv;
   mode: DoctorSessionSqliteMode;
   store?: string;
-}): SessionStoreTarget[] {
+}): { targets: SessionStoreTarget[]; knownTargets?: SessionStoreTarget[] } {
   if (params.store) {
-    return resolveSessionStoreTargets(params.cfg, { store: params.store }, { env: params.env });
+    return {
+      targets: resolveSessionStoreTargets(params.cfg, { store: params.store }, { env: params.env }),
+    };
   }
   const discoversHistory =
     params.mode === "dry-run" || params.mode === "import" || params.mode === "validate";
@@ -41,38 +94,59 @@ export function resolveDoctorSessionSqliteTargets(params: {
       env: params.env,
     });
     if (!params.agent) {
-      return candidates;
+      return { targets: candidates, knownTargets: candidates };
     }
     const requestedAgentId = normalizeAgentId(params.agent);
-    return candidates.filter((target) => normalizeAgentId(target.agentId) === requestedAgentId);
+    return {
+      targets: candidates.filter((target) => normalizeAgentId(target.agentId) === requestedAgentId),
+      knownTargets: candidates,
+    };
   }
   if (params.agent) {
-    return resolveAgentSessionStoreTargetsSync(params.cfg, params.agent, { env: params.env });
+    return {
+      targets: resolveAgentSessionStoreTargetsSync(params.cfg, params.agent, { env: params.env }),
+    };
   }
   if (params.allAgents) {
     // Discovery must admit validated directories even before either registry exists.
-    const targets = discoversHistory
+    const candidates = discoversHistory
       ? resolveAllAgentSessionStoreCandidateTargetsSync(params.cfg, { env: params.env })
       : resolveAllAgentSessionStoreTargetsSync(params.cfg, { env: params.env });
-    if (!discoversHistory) {
-      return targets;
-    }
     const legacyStorePath = path.join(resolveStateDir(params.env), "sessions", "sessions.json");
-    if (!fs.existsSync(legacyStorePath)) {
-      return targets;
-    }
-    const legacyTargets = resolveSessionStoreTargets(
-      params.cfg,
-      { allAgents: true },
-      { env: params.env },
-    ).map((target) => ({
-      agentId: target.agentId,
-      sqlitePath: resolveTargetSqlitePath(target),
-      storePath: legacyStorePath,
+    const legacyTargets =
+      discoversHistory && fs.existsSync(legacyStorePath)
+        ? resolveSessionStoreTargets(params.cfg, { allAgents: true }, { env: params.env }).map(
+            (target) => ({
+              agentId: target.agentId,
+              sqlitePath: resolveTargetSqlitePath(target, params.env),
+              storePath: legacyStorePath,
+            }),
+          )
+        : [];
+    const targets = [...legacyTargets, ...candidates].map((target) => ({
+      target,
+      sqlitePath: resolveTargetSqlitePath(target, params.env),
     }));
-    return [...legacyTargets, ...targets];
+    const isRetained = createRetainedAgentDatabaseMatcher(
+      params.env,
+      () => resolveConfiguredAgentDatabaseTargets(params.cfg, { env: params.env }),
+      {
+        kind: "legacy-database",
+        readDatabasePaths: () => targets.map(({ sqlitePath }) => sqlitePath),
+      },
+    );
+    return {
+      targets: targets
+        .filter(
+          ({ target, sqlitePath }) =>
+            !isRetained(target.storePath, target.agentId) &&
+            !isRetained(sqlitePath, target.agentId),
+        )
+        .map(({ target }) => target),
+      knownTargets: targets.map(({ target }) => target),
+    };
   }
-  return resolveSessionStoreTargets(params.cfg, {}, { env: params.env });
+  return { targets: resolveSessionStoreTargets(params.cfg, {}, { env: params.env }) };
 }
 
 export function filterLegacySessionStoreTargets(

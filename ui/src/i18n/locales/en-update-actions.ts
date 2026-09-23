@@ -38,8 +38,8 @@ const enUpdateActions = {
     report: {
       title: "Report update failure",
       message:
-        "Review the sanitized report below. Confirming will submit it with the authenticated GitHub CLI when available; otherwise OpenClaw will offer a prefilled issue link or save the sanitized report locally.",
-      submit: "Submit report",
+        "Review the sanitized report below. Named administrators receive a prefilled issue to review and submit with their own GitHub account in their browser. Gateway owners authorize submission with the host's GitHub CLI account when available; otherwise OpenClaw offers a browser handoff or saves the sanitized report locally.",
+      submit: "Continue",
       cancel: "Cancel",
     },
   },

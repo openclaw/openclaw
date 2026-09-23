@@ -54,7 +54,7 @@ export function renderPluginDetailShell(props: {
     ${renderPluginDetailBreadcrumb(props)}
     <div class="plugin-catalog-detail__hero">
       ${props.icon ? html`<div class="plugin-catalog-detail__icon" aria-hidden="true">${props.icon}</div>` : nothing}
-      <main>
+      <div class="plugin-catalog-detail__heading">
         <div class="plugin-catalog-detail__title-row">
           <h1 id=${titleId}>${props.name}</h1>
         </div>
@@ -65,7 +65,7 @@ export function renderPluginDetailShell(props: {
             : nothing
         }
         <div class="plugin-catalog-detail__actions">${props.titleAction ?? nothing}</div>
-      </main>
+      </div>
     </div>
     <div class="plugin-catalog-detail__content">
       <section class="plugin-catalog-detail__panel">${props.panel}</section>

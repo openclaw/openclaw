@@ -92,8 +92,8 @@ export default definePluginEntry({
   grant new authority, or permit starting work after the owner retires. Providers
   remain responsible for bounded work that settles after cancellation.
 
-  The Gateway admits at most four foreground catalog lists or fill steps at once,
-  with one active step per provider ID and up to 32 queued steps globally. Queued
+  The Gateway admits at most 16 foreground catalog lists or fill steps at once,
+  with one active step and up to 32 queued steps per provider ID. Queued
   work keeps FIFO order within each provider; the oldest eligible step starts when
   capacity becomes available. A slow provider cannot occupy every slot. Lists for
   the same provider wait their turn, including calls from different clients.

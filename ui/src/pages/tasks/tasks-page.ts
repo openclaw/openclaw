@@ -169,6 +169,7 @@ class TasksPage extends OpenClawLightDomElement {
   @state() private cancellingTaskIds = new Set<string>();
 
   @state() private transcriptTaskId: string | null = null;
+  private transcriptTrigger: HTMLButtonElement | null = null;
   private readonly transcriptHost: TaskTranscriptHost = {
     client: null,
     connected: false,
@@ -476,8 +477,9 @@ class TasksPage extends OpenClawLightDomElement {
     }
   }
 
-  private async viewTranscript(taskId: string) {
+  private async viewTranscript(taskId: string, trigger: HTMLButtonElement) {
     this.transcriptTaskId = taskId;
+    this.transcriptTrigger = trigger;
     await this.updateComplete;
     if (!this.isConnected || this.transcriptTaskId !== taskId) {
       return;
@@ -487,9 +489,14 @@ class TasksPage extends OpenClawLightDomElement {
     transcript?.scrollIntoView({ block: "start", behavior: "instant" });
   }
 
-  private closeTranscript() {
+  private closeTranscript(restoreFocus = false) {
+    const trigger = this.transcriptTrigger;
+    this.transcriptTrigger = null;
     resetTaskDetail(this.transcriptHost);
     this.transcriptTaskId = null;
+    if (restoreFocus && trigger?.isConnected) {
+      trigger.focus();
+    }
   }
 
   private reconcileTranscriptSelection() {
@@ -515,7 +522,7 @@ class TasksPage extends OpenClawLightDomElement {
     >
       <div class="tasks-transcript__header">
         <h2>${taskTitle(task)}</h2>
-        <button class="btn btn--sm" type="button" @click=${() => this.closeTranscript()}>
+        <button class="btn btn--sm" type="button" @click=${() => this.closeTranscript(true)}>
           ${t("common.close")}
         </button>
       </div>
@@ -570,7 +577,7 @@ class TasksPage extends OpenClawLightDomElement {
           onRetry: (taskId) => void this.recoverTask(taskId, "retry"),
           onDismiss: (taskId) => void this.recoverTask(taskId, "dismiss"),
           onCopyResult: (taskId) => void this.copyTaskResult(taskId),
-          onViewTranscript: (taskId) => void this.viewTranscript(taskId),
+          onViewTranscript: (taskId, trigger) => void this.viewTranscript(taskId, trigger),
           onNavigateToChat: (sessionKey) => {
             const face = resolveSessionPreferredFaceForKey(this.context, sessionKey);
             this.context.navigate(

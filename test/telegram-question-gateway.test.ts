@@ -76,10 +76,11 @@ describe("Telegram question Gateway resolution", () => {
       createSecretStoreWriteService({ reloadSecrets: async () => ({ warningCount: 0 }) }),
     );
     const gatewayCalls: string[] = [];
+    const runtimeConfig = {};
     const dispatch = async ({ method, params }: QuestionGatewayCall): Promise<unknown> => {
       gatewayCalls.push(method);
       const result = await callGatewayHandler(handlers, method, params ?? {}, {
-        context: { broadcast: () => undefined },
+        context: { broadcast: () => undefined, getRuntimeConfig: () => runtimeConfig },
       });
       if (!result.ok) {
         throw new Error(`question Gateway method ${method} rejected its request`);

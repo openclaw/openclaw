@@ -27,6 +27,7 @@ type LiveModelPolicyRef = ModelRef &
   Pick<Parameters<typeof resolveProviderModernModelRef>[0], "config" | "workspaceDir" | "env">;
 
 const HIGH_SIGNAL_LIVE_MODEL_PRIORITY = [
+  "anthropic/claude-opus-5-5",
   "anthropic/claude-opus-5",
   "anthropic/claude-opus-4-8",
   "anthropic/claude-sonnet-5",

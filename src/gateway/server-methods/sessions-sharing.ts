@@ -25,7 +25,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { sessionCreatorProfileId } from "../../config/sessions/session-entry-provenance.js";
 import { resolveSessionPublicShare } from "../../config/sessions/session-public-share.js";
-import { listSessionMembersInWorker } from "../../config/sessions/session-transcript-worker-runtime.js";
+import { listSessionMembersInWorker } from "../../config/sessions/session-sharing-store.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
@@ -50,6 +50,11 @@ import {
 } from "../session-sharing.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { emitSessionsChanged } from "./session-change-event.js";
+import {
+  requireCurrentManagedTarget,
+  sharingExpectedEntry,
+  assertCurrentSharingManager,
+} from "./sessions-sharing-authority.js";
 import { knownSessionIdentities, type SharingActorFacts } from "./sessions-sharing-identities.js";
 import type { GatewayClient, GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -179,42 +184,6 @@ function requireManageableTarget(params: {
     return null;
   }
   return { target, role };
-}
-
-// Manager authorization runs before the lifecycle fence, so a session can be
-// reset or recreated under the same key while a mutation waits. Requiring the
-// same session instance and a still-valid manager role inside the fence keeps
-// a stale owner from mutating the replacement session's sharing state.
-function requireCurrentManagedTarget(params: {
-  cfg: ReturnType<GatewayRequestContext["getRuntimeConfig"]>;
-  client: GatewayClient | null;
-  authorized: NonNullable<ReturnType<typeof resolveSessionSharingTarget>>;
-  operation?: "read" | "mutation";
-}): NonNullable<ReturnType<typeof resolveSessionSharingTarget>> {
-  const current = resolveSessionSharingTarget({
-    cfg: params.cfg,
-    sessionKey: params.authorized.canonicalKey,
-    agentId: params.authorized.agentId,
-  });
-  if (
-    !current ||
-    current.agentId !== params.authorized.agentId ||
-    current.canonicalKey !== params.authorized.canonicalKey ||
-    current.storeKey !== params.authorized.storeKey ||
-    current.storePath !== params.authorized.storePath ||
-    current.entry.sessionId !== params.authorized.entry.sessionId
-  ) {
-    throw new Error(`session changed before sharing ${params.operation ?? "mutation"}`);
-  }
-  const role = resolveSessionSharingRole({
-    client: params.client,
-    cfg: params.cfg,
-    target: current,
-  });
-  if (!canManageSessionSharing(role)) {
-    throw new Error(`session ownership changed before sharing ${params.operation ?? "mutation"}`);
-  }
-  return current;
 }
 
 function publishSharingChange(params: {
@@ -633,12 +602,19 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
         storePath: current.storePath,
       };
       const now = Date.now();
-      const added = addSessionMember(scope, {
-        identityId: params.identityId,
-        addedBy: sharingActorStorageRef(actor),
-        addedAt: now,
-        expectedSessionId: current.entry.sessionId,
-      });
+      const added = await addSessionMember(
+        scope,
+        {
+          identityId: params.identityId,
+          addedBy: sharingActorStorageRef(actor),
+          addedAt: now,
+          expectedSessionId: current.entry.sessionId,
+          expectedEntry: sharingExpectedEntry(current),
+        },
+        () => {
+          assertCurrentSharingManager({ context, client, target: current });
+        },
+      );
       if (!added.inserted) {
         return;
       }
@@ -691,11 +667,15 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
         sessionKey: current.storeKey,
         storePath: current.storePath,
       };
-      const removed = removeSessionMember(
+      const removed = await removeSessionMember(
         scope,
         params.identityId,
         undefined,
         current.entry.sessionId,
+        () => {
+          assertCurrentSharingManager({ context, client, target: current });
+        },
+        sharingExpectedEntry(current),
       );
       if (!removed) {
         return;
