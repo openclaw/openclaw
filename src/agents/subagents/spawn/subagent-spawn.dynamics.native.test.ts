@@ -12,10 +12,12 @@ import {
   configureInMemoryTaskStoresForTests,
   resetTaskRegistryForTests,
 } from "../../../tasks/task-registry.test-support.js";
-import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
 import { createTestRegistry } from "../../../test-utils/channel-plugins.js";
+import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
+import { SubagentRegistryWriteError } from "../registry/subagent-registry-persistence.js";
+import * as registryState from "../registry/subagent-registry-state.js";
 import { resetSubagentRegistryForTests } from "../registry/subagent-registry.test-helpers.js";
 import { prepareDynamicsSpawn } from "../swarm/dynamics/dynamics-spawn.js";
 import { testing as swarmSchedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
@@ -26,6 +28,8 @@ vi.mock("../../runtime-plugins.js", () => ({
   loadAgentRuntimePluginRegistryHandle:
     vi.fn<typeof import("../../runtime-plugins.js").loadAgentRuntimePluginRegistryHandle>(),
 }));
+
+vi.mock("../registry/subagent-registry-state.js", { spy: true });
 
 const envSnapshot = captureEnv(["OPENCLAW_CONFIG_PATH", "OPENCLAW_STATE_DIR"]);
 let stateDir = "";
@@ -99,6 +103,24 @@ async function launchPreparedVerifier() {
   );
 }
 
+function installInProcessRegistryPersistenceForTests(): void {
+  const persist = vi.mocked(registryState.persistSubagentRunsToDiskOrThrow);
+  const persistAsync = vi.mocked(registryState.persistSubagentRunsToDiskAsyncOrThrow);
+  persistAsync.mockReset().mockImplementation(async (runs, ids, options) => {
+    const snapshot = structuredClone(runs);
+    await Promise.resolve();
+    let committed = false;
+    try {
+      options.assertCurrent?.();
+      persist(snapshot, ids);
+      committed = true;
+      options.onCommitted?.();
+    } catch (error) {
+      throw new SubagentRegistryWriteError(committed ? "committed" : "not-committed", error);
+    }
+  });
+}
+
 describe("native dynamics spawn boundary", () => {
   beforeEach(async () => {
     resetGatewayWorkAdmission();
@@ -109,6 +131,7 @@ describe("native dynamics spawn boundary", () => {
     // Queued subagent admission creates its task through the real registry; keep that
     // owner in-process so the suite never depends on a host SQLite broker.
     configureInMemoryTaskStoresForTests();
+    installInProcessRegistryPersistenceForTests();
     stateDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-dynamics-native-"));
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
     setTestEnvValue("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));

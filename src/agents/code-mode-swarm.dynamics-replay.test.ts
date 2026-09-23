@@ -13,17 +13,17 @@ import {
   configureInMemoryTaskStoresForTests,
   resetTaskRegistryForTests,
 } from "../tasks/task-registry.test-support.js";
+import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
-import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { codeModeSwarmHandlers } from "./code-mode-swarm.runtime.js";
 import { applyCodeModeCatalog, createCodeModeTools } from "./code-mode.js";
 import { loadAgentRuntimePluginRegistryHandle } from "./runtime-plugins.js";
 import { subagentRuns } from "./subagents/registry/subagent-registry-memory.js";
+import { SubagentRegistryWriteError } from "./subagents/registry/subagent-registry-persistence.js";
+import * as registryState from "./subagents/registry/subagent-registry-state.js";
 import { restoreSubagentRunsFromDisk } from "./subagents/registry/subagent-registry-state.js";
-import {
-  resetSubagentRegistryForTests,
-} from "./subagents/registry/subagent-registry.test-helpers.js";
+import { resetSubagentRegistryForTests } from "./subagents/registry/subagent-registry.test-helpers.js";
 import { spawnSubagentDirect } from "./subagents/spawn/subagent-spawn.js";
 import { testing as subagentSpawnTesting } from "./subagents/spawn/subagent-spawn.test-support.js";
 import { prepareDynamicsSpawn } from "./subagents/swarm/dynamics/dynamics-spawn.js";
@@ -37,6 +37,8 @@ vi.mock("./runtime-plugins.js", () => ({
   loadAgentRuntimePluginRegistryHandle:
     vi.fn<typeof import("./runtime-plugins.js").loadAgentRuntimePluginRegistryHandle>(),
 }));
+
+vi.mock("./subagents/registry/subagent-registry-state.js", { spy: true });
 
 const envSnapshot = captureEnv(["OPENCLAW_CONFIG_PATH", "OPENCLAW_STATE_DIR"]);
 const task = "Verify the frozen candidate against the acceptance criteria.";
@@ -119,6 +121,27 @@ async function writeConfig(): Promise<OpenClawConfig> {
   return config;
 }
 
+function installInProcessRegistryPersistenceForTests(): void {
+  const persist = vi.mocked(registryState.persistSubagentRunsToDiskOrThrow);
+  const persistAsync = vi.mocked(registryState.persistSubagentRunsToDiskAsyncOrThrow);
+  // Queued registration awaits the async owner. In agents-core worker threads the shared-state
+  // SQLite broker refuses non-main-thread writers, so bridge to the sync owner that still
+  // commits the production SQLite snapshot used by restoreSubagentRunsFromDisk.
+  persistAsync.mockReset().mockImplementation(async (runs, ids, options) => {
+    const snapshot = structuredClone(runs);
+    await Promise.resolve();
+    let committed = false;
+    try {
+      options.assertCurrent?.();
+      persist(snapshot, ids);
+      committed = true;
+      options.onCommitted?.();
+    } catch (error) {
+      throw new SubagentRegistryWriteError(committed ? "committed" : "not-committed", error);
+    }
+  });
+}
+
 describe("Code Mode dynamics native replay", () => {
   beforeEach(async () => {
     resetGatewayWorkAdmission();
@@ -129,6 +152,7 @@ describe("Code Mode dynamics native replay", () => {
     // Queued subagent admission creates its task through the real registry; keep that
     // owner in-process so the suite never depends on a host SQLite broker.
     configureInMemoryTaskStoresForTests();
+    installInProcessRegistryPersistenceForTests();
     stateDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-dynamics-replay-"));
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
     setTestEnvValue("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
@@ -192,10 +216,11 @@ describe("Code Mode dynamics native replay", () => {
     swarmSchedulerTesting.reset();
     resetSubagentRegistryForTests({ persist: false });
     expect(restoreSubagentRunsFromDisk({ runs: subagentRuns })).toBe(1);
+    // Caller-facing collector identity is swarmRunId; entry.runId is the Gateway child run.
     expect(
       [...subagentRuns.values()].find((entry) => entry.swarmLaunchReplayKey === replayKey),
     ).toMatchObject({
-      runId: seeded.runId,
+      swarmRunId: seeded.runId,
       swarmLaunchRequestFingerprint: fingerprint(input),
     });
 
