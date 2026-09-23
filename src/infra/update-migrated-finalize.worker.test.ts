@@ -437,3 +437,82 @@ it.each([
     );
   }
 });
+
+it.each([
+  { name: "stops it", stopped: true },
+  { name: "keeps the transferred state when the candidate cannot stop it", stopped: false },
+])(
+  "inspects an uninspected predecessor service from a legacy parent and $name",
+  async ({ stopped }) => {
+    const transferred = {
+      stopped: false,
+      inspected: false,
+      runtimeInspected: false,
+      running: false,
+      serviceMutationAllowed: false,
+      serviceUpdateVerdict: { kind: "unavailable", message: "legacy inspection unavailable" },
+    };
+    const candidate = {
+      stopped,
+      inspected: true,
+      runtimeInspected: true,
+      running: true,
+      servicePid: 631,
+      serviceEnv: {},
+      serviceUpdateVerdict: { kind: "unresolved", root: "/synthetic", fingerprint: "f" },
+    };
+    const input = {
+      executor: {},
+      bufferedSteps: [],
+      resultPath: "/synthetic/result.json",
+      params: {
+        root: "/synthetic",
+        shouldRestart: true,
+        updateStepTimeoutMs: 1_000,
+        opts: { json: true, run: { runId: "synthetic-run", env: {}, activationTimeoutMs: 1_000 } },
+        rollbackBlockedReason: "state-migrated-no-rollback",
+        preUpdatePluginInstallRecords: {},
+        preManagedServiceStop: transferred,
+        result: { ...result, steps: [], runId: "synthetic-run" },
+      },
+    };
+    const settled = createDeferredCore();
+    fixture.close.mockImplementation(async () => settled.resolve());
+    fixture.stopService.mockImplementation(async (params: { onStopped?: (s: unknown) => void }) => {
+      if (stopped) {
+        params.onStopped?.(candidate);
+      }
+      return candidate;
+    });
+    fixture.finish.mockImplementation(async (params: { result: typeof result }) => params.result);
+    fixture.terminal.mockReturnValue({ runId: "synthetic-run", status: "succeeded" });
+    process.argv = [process.execPath, "update-migrated-finalize.worker.js"];
+    vi.spyOn(process.stdin, Symbol.asyncIterator).mockImplementation(async function* () {
+      yield JSON.stringify(input);
+      return undefined;
+    });
+
+    await import("./update-migrated-finalize.worker.js");
+    await settled.promise;
+
+    expect(fixture.stopService).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        updateInstallKind: "package",
+        root: "/synthetic",
+        shouldRestart: true,
+        phase: "prepare",
+        jsonMode: true,
+        timeoutMs: 1_000,
+      }),
+    );
+    const finished = fixture.finish.mock.calls[0]?.[0] as {
+      preManagedServiceStop?: typeof candidate;
+      result: { steps: Array<{ name: string }> };
+    };
+    expect(finished.preManagedServiceStop).toEqual(candidate);
+    expect(finished.result.steps.map((step) => step.name)).toEqual(
+      stopped ? ["managed-service"] : [],
+    );
+    expect(process.exitCode).toBe(originalExitCode);
+  },
+);

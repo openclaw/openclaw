@@ -252,9 +252,26 @@ export async function readSystemdDefinitionMutationCapability(
     } catch (error) {
       const owned =
         isSystemSystemdOwnershipError(error) && error.ownership.status !== "unverifiable";
-      return owned
-        ? { kind: "sealed", reason: "system-owned" }
-        : { kind: "unknown", reason: "system-ownership-unverified" };
+      if (owned) {
+        return { kind: "sealed", reason: "system-owned" };
+      }
+      const unverified = { kind: "unknown", reason: "system-ownership-unverified" } as const;
+      // A loaded user unit whose artifacts this account owns is the manager in
+      // charge; an unreachable system manager cannot make it a competing owner.
+      if (!options?.requireLoaded || !isSystemSystemdOwnershipError(error)) {
+        return unverified;
+      }
+      const loaded = await inspect(
+        env,
+        options.environment ?? env,
+        remaining(),
+        true,
+        options.systemdReadBinding,
+      ).then(
+        (inspection) => inspection.capability,
+        () => undefined,
+      );
+      return loaded?.kind === "writable" ? loaded : unverified;
     }
   }
   try {
