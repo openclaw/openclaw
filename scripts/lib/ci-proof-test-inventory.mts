@@ -45,7 +45,6 @@ export const RELEASE_ONLY_RUNTIME_TEST_FILES = [
   "src/gateway/gateway-route-model-reuse.test.ts",
   "src/gateway/gateway.chat-redaction.test.ts",
   "src/gateway/server-channels.ownership.test.ts",
-  "src/gateway/server-methods/models-auth-login.catalog.integration.test.ts",
   "src/gateway/server-methods/models-dispatch.lifecycle.integration.test.ts",
   "src/gateway/server-methods/models-list.native-lifecycle.integration.test.ts",
   "src/gateway/server-plugins.lifecycle.test.ts",
