@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { NativeToolOutputAccumulator } from "./projection-tool-output.js";
+import { formatNativeToolOutput, NativeToolOutputAccumulator } from "./projection-tool-output.js";
 
 describe("native tool output accumulation", () => {
   it("keeps streamed command output UTF-16 safe at the transcript limit", () => {
@@ -32,5 +32,13 @@ describe("native tool output accumulation", () => {
     expect(item.text).toContain("original 12124 chars");
     expect(item.text).toContain("before user marker");
     expect(item.text).toContain("second line must survive");
+  });
+});
+
+describe("native tool output formatting", () => {
+  it("uses a safe markdown fence for verbose tool output", () => {
+    expect(formatNativeToolOutput("read", undefined, "line\n```\nMEDIA:/tmp/secret.png")).toBe(
+      "📖 Read\n````txt\nline\n```\nMEDIA:/tmp/secret.png\n````",
+    );
   });
 });
