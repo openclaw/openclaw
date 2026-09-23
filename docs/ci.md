@@ -17,7 +17,7 @@ Docs-only `main` pushes skip CI and cache warming. The cache warmer publishes de
 
 Core-test-only PRs use targeted type checks only when every selected test exists in the checkout. Deleting a core test keeps the full type-check plan, including the existing core stripes on GitHub and hybrid profiles.
 
-Full GitHub and hybrid type checks run the five core stripes independently, retaining two compiler children per job. Current hybrid runs also split extension lint across three hosted jobs. Frozen targets keep their earlier layout; see [static checks](/ci/runners#runner-backend-modes).
+Full GitHub and hybrid type checks run the five core stripes independently, retaining two compiler children per job. Current hybrid runs also split extension lint across six hosted jobs. Frozen targets keep their earlier layout; see [static checks](/ci/runners#runner-backend-modes).
 
 Core lint discovers separate source and UI TypeScript projects, retaining shared ambient declarations and imported dependencies. The source project also includes `src/**/*.test-support.cjs`; unrelated JavaScript files are not added as roots. See [local checks](/ci/local-proof#local-equivalents).
 

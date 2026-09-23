@@ -1791,6 +1791,7 @@ describe("ci workflow guards", () => {
       count: number,
       options: Partial<Parameters<typeof runCiManifestFixture>[0]> = {},
     ) {
+      expect(count).toBeGreaterThanOrEqual(0);
       return runCiManifestFixture({
         bundledPlanner: true,
         eventName: "push",
@@ -1804,7 +1805,13 @@ describe("ci workflow guards", () => {
           shardName: `hosted-node-${index}`,
         })),
         ...options,
-        scopeEnv: { OPENCLAW_CI_RUN_UI_TESTS: "true", ...options.scopeEnv },
+        scopeEnv: {
+          // Keep room below the admission boundary before adding synthetic Node rows.
+          OPENCLAW_CI_RUN_MACOS: "false",
+          OPENCLAW_CI_RUN_NATIVE_I18N: "false",
+          OPENCLAW_CI_RUN_UI_TESTS: "true",
+          ...options.scopeEnv,
+        },
       });
     }
 
@@ -2131,7 +2138,7 @@ describe("ci workflow guards", () => {
       );
       expect(base.filter((name) => name === "macos-node")).toHaveLength(3);
       expect(base.filter((name) => name === "check-lint-hosted-extension-shard")).toHaveLength(
-        runnerProfile === "hybrid" ? 3 : 0,
+        runnerProfile === "hybrid" ? 6 : 0,
       );
     });
 

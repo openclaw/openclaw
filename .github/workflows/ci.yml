@@ -2255,7 +2255,7 @@ jobs:
               "checks-node-core-test-nondist-shard": count(manifest.run_checks_node_core_nondist, hostedNodeRows),
               "check-shard": count(manifest.run_check, 4),
               "check-lint-hosted-core-shard": count(manifest.run_check && usesHostedRunnerProfile, runnerProfile === "hybrid" && !releaseGate ? 2 : 5),
-              "check-lint-hosted-extension-shard": count(manifest.run_check && runnerProfile === "hybrid" && !releaseGate, 3),
+              "check-lint-hosted-extension-shard": count(manifest.run_check && runnerProfile === "hybrid" && !releaseGate, 6),
               "check-additional-shard": count(manifest.run_check_additional, hostedAdditionalRows),
               "check-docs": count(manifest.run_check_docs),
               "skills-python": count(manifest.run_skills_python_job),
@@ -4697,9 +4697,9 @@ jobs:
     timeout-minutes: 15
     strategy:
       fail-fast: false
-      max-parallel: 3
+      max-parallel: 6
       matrix:
-        stripe: [1, 2, 3]
+        stripe: [1, 2, 3, 4, 5, 6]
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
@@ -4736,7 +4736,7 @@ jobs:
         run: |
           set -euo pipefail
           node --import tsx scripts/run-oxlint-shards.mts \
-            --only=extensions --extension-stripe="$EXTENSION_STRIPE/3" --threads=1
+            --only=extensions --extension-stripe="$EXTENSION_STRIPE/6" --threads=1
 
   # Run each complete core stripe independently; the central row owns the tail.
   # Keep two compiler children per row and the frozen target's paired layout.

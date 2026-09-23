@@ -8654,7 +8654,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           ...(failStripe === undefined
             ? []
             : [
-                `if [[ " $* " == *" --core-stripe=${failStripe}/5 "* || " $* " == *" --extension-stripe=${failStripe}/3 "* ]]; then exit 23; fi`,
+                `if [[ " $* " == *" --core-stripe=${failStripe}/5 "* || " $* " == *" --extension-stripe=${failStripe}/6 "* ]]; then exit 23; fi`,
               ]),
         ]);
       }
@@ -8858,14 +8858,14 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(runLintOwner({ capability: true, lane: "check", profile: "hybrid" })).toEqual([
       "node --import tsx scripts/run-oxlint-shards.mts --only=scripts --threads=1",
     ]);
-    expect(hostedExtensionLint.strategy.matrix.stripe).toEqual([1, 2, 3]);
+    expect(hostedExtensionLint.strategy.matrix.stripe).toEqual([1, 2, 3, 4, 5, 6]);
     expect(hostedExtensionLint.strategy["fail-fast"]).toBe(false);
-    expect(hostedExtensionLint.strategy["max-parallel"]).toBe(3);
+    expect(hostedExtensionLint.strategy["max-parallel"]).toBe(6);
     for (const stripe of hostedExtensionLint.strategy.matrix.stripe) {
       expect(
         runLintOwner({ capability: true, lane: "extensions", profile: "hybrid", stripe }),
       ).toEqual([
-        `node --import tsx scripts/run-oxlint-shards.mts --only=extensions --extension-stripe=${stripe}/3 --threads=1`,
+        `node --import tsx scripts/run-oxlint-shards.mts --only=extensions --extension-stripe=${stripe}/6 --threads=1`,
       ]);
     }
     runLintOwner({
