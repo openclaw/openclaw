@@ -210,7 +210,7 @@ jobs:
           set -euo pipefail
           bundle _2.6.9_ install --jobs 4 --retry 3
           bundle _2.6.9_ check
-          test "$(bundle _2.6.9_ exec ruby -e 'require "fastlane"; print Fastlane::VERSION')" = "2.239.0"
+          test "$(bundle _2.6.9_ exec ruby -e 'require "fastlane"; print Fastlane::VERSION')" = "2.240.1"
 
       - name: Select Xcode 27
         run: |
@@ -449,7 +449,7 @@ jobs:
           set -euo pipefail
           bundle _2.6.9_ install --jobs 4 --retry 3
           bundle _2.6.9_ check
-          test "$(bundle _2.6.9_ exec ruby -e 'require "fastlane"; print Fastlane::VERSION')" = "2.239.0"
+          test "$(bundle _2.6.9_ exec ruby -e 'require "fastlane"; print Fastlane::VERSION')" = "2.240.1"
 
       - name: Revalidate inspection authority immediately before credential access
         id: inspection-authority

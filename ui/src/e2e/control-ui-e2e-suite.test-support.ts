@@ -8,17 +8,7 @@ import {
   type Locator,
   type Page,
 } from "playwright";
-import {
-  afterAll,
-  afterEach,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  inject,
-  vi,
-  type TestContext,
-} from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, inject, vi } from "vitest";
 import { getActiveGatewayRootWorkCount } from "../../../src/process/gateway-work-admission.js";
 import { createDeferredCore } from "../../../src/shared/deferred.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.js";
@@ -57,6 +47,10 @@ type ControlUiE2eScenario<T> = {
   release?: () => Promise<void>;
   retainedState?: () => string | undefined;
 };
+type ControlUiE2eScenarioContext = {
+  signal: AbortSignal;
+  onTestFinished: (cleanup: () => void | Promise<void>, timeout?: number) => void;
+};
 type ControlUiE2eSuite = {
   readonly artifactDir: string;
   readonly browser: Browser;
@@ -64,7 +58,10 @@ type ControlUiE2eSuite = {
   closeBrowserContext: (context: BrowserContext) => Promise<void>;
   define: (defineTests: () => void) => void;
   newBrowserContext: (options: Parameters<Browser["newContext"]>[0]) => Promise<BrowserContext>;
-  runScenario: <T>(context: TestContext, scenario: ControlUiE2eScenario<T>) => Promise<T>;
+  runScenario: <T>(
+    context: ControlUiE2eScenarioContext,
+    scenario: ControlUiE2eScenario<T>,
+  ) => Promise<T>;
   withPage: <T>(
     options: Parameters<Browser["newContext"]>[0],
     run: (fixture: ControlUiE2ePage) => Promise<T>,
@@ -361,7 +358,10 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
     },
     closeBrowserContext,
     newBrowserContext,
-    runScenario<T>(context: TestContext, scenario: ControlUiE2eScenario<T>): Promise<T> {
+    runScenario<T>(
+      context: ControlUiE2eScenarioContext,
+      scenario: ControlUiE2eScenario<T>,
+    ): Promise<T> {
       assertControlUiForkActive();
       if (stopping || activeScenario) {
         throw new Error("A Control UI E2E scenario still owns the suite");

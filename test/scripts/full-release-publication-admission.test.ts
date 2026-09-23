@@ -809,7 +809,7 @@ globalThis.fetch = async (input, init = {}) => {
     write(
       tooling,
       "package.json",
-      JSON.stringify({ ...manifest, version, dependencies: { yaml: "2.9.0" } }),
+      JSON.stringify({ ...manifest, version, dependencies: { yaml: "2.9.1" } }),
     );
     writePlugins(tooling);
     write(tooling, "apps/android/version.json", androidVersion);
