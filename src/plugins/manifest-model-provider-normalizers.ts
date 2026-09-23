@@ -3,9 +3,12 @@ import { normalizeModelCatalogProviderId } from "@openclaw/model-catalog-core/mo
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import { normalizeTrimmedStringList } from "../../packages/normalization-core/src/string-normalization.js";
 import { ENV_SECRET_REF_ID_RE } from "../config/types.secrets.js";
-import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { isRecord } from "../utils.js";
-import { normalizeManifestStringRecord } from "./manifest-capability-normalizers.js";
+import {
+  normalizeManifestObjectList,
+  normalizeManifestStringRecord,
+  normalizeNamedMetadataRecord,
+} from "./manifest-capability-normalizers.js";
 import type {
   PluginManifestModelIdNormalization,
   PluginManifestModelIdNormalizationProvider,
@@ -81,22 +84,11 @@ export function normalizeManifestModelPricing(
 function normalizeManifestModelIdPrefixRules(
   value: unknown,
 ): PluginManifestModelIdPrefixRule[] | undefined {
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  const rules: PluginManifestModelIdPrefixRule[] = [];
-  for (const rawRule of value) {
-    if (!isRecord(rawRule)) {
-      continue;
-    }
+  return normalizeManifestObjectList(value, (rawRule) => {
     const modelPrefix = normalizeOptionalString(rawRule.modelPrefix);
     const prefix = normalizeOptionalString(rawRule.prefix);
-    if (!modelPrefix || !prefix) {
-      continue;
-    }
-    rules.push({ modelPrefix, prefix });
-  }
-  return rules.length > 0 ? rules : undefined;
+    return modelPrefix && prefix ? { modelPrefix, prefix } : undefined;
+  });
 }
 
 function normalizeManifestModelIdNormalizationProvider(
@@ -146,18 +138,10 @@ export function normalizeManifestModelIdNormalization(
 export function normalizeManifestProviderEndpoints(
   value: unknown,
 ): PluginManifestProviderEndpoint[] | undefined {
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-
-  const endpoints: PluginManifestProviderEndpoint[] = [];
-  for (const rawEndpoint of value) {
-    if (!isRecord(rawEndpoint)) {
-      continue;
-    }
+  return normalizeManifestObjectList(value, (rawEndpoint) => {
     const endpointClass = normalizeOptionalString(rawEndpoint.endpointClass);
     if (!endpointClass) {
-      continue;
+      return undefined;
     }
     const hosts = normalizeTrimmedStringList(rawEndpoint.hosts).map((host) => host.toLowerCase());
     const hostSuffixes = normalizeTrimmedStringList(rawEndpoint.hostSuffixes).map((host) =>
@@ -169,19 +153,17 @@ export function normalizeManifestProviderEndpoints(
       rawEndpoint.googleVertexRegionHostSuffix,
     )?.toLowerCase();
     if (hosts.length === 0 && hostSuffixes.length === 0 && baseUrls.length === 0) {
-      continue;
+      return undefined;
     }
-    endpoints.push({
+    return {
       endpointClass,
       ...(hosts.length > 0 ? { hosts } : {}),
       ...(hostSuffixes.length > 0 ? { hostSuffixes } : {}),
       ...(baseUrls.length > 0 ? { baseUrls } : {}),
       ...(googleVertexRegion ? { googleVertexRegion } : {}),
       ...(googleVertexRegionHostSuffix ? { googleVertexRegionHostSuffix } : {}),
-    });
-  }
-
-  return endpoints.length > 0 ? endpoints : undefined;
+    };
+  });
 }
 
 function normalizeManifestProviderRequestProvider(
@@ -267,18 +249,10 @@ function normalizeManifestPositiveInteger(value: unknown, max: number): number |
 export function normalizeManifestSecretProviderIntegrations(
   value: unknown,
 ): Record<string, PluginManifestSecretProviderIntegration> | undefined {
-  if (!isRecord(value)) {
-    return undefined;
-  }
-  const normalized: Record<string, PluginManifestSecretProviderIntegration> = Object.create(null);
-  for (const [rawId, rawIntegration] of Object.entries(value)) {
-    const id = normalizeOptionalString(rawId) ?? "";
-    if (!id || isBlockedObjectKey(id) || !isRecord(rawIntegration)) {
-      continue;
-    }
+  return normalizeNamedMetadataRecord(value, (rawIntegration) => {
     const command = normalizeOptionalString(rawIntegration.command);
     if (rawIntegration.source !== "exec" || command !== SECRET_PROVIDER_NODE_COMMAND_PLACEHOLDER) {
-      continue;
+      return undefined;
     }
     const providerAlias = normalizeOptionalString(rawIntegration.providerAlias);
     const displayName = normalizeOptionalString(rawIntegration.displayName);
@@ -304,7 +278,7 @@ export function normalizeManifestSecretProviderIntegrations(
       maxItems: MAX_SECRET_PROVIDER_EXEC_PASS_ENV,
       pattern: ENV_SECRET_REF_ID_RE,
     });
-    normalized[id] = {
+    return {
       ...(providerAlias ? { providerAlias } : {}),
       ...(displayName ? { displayName } : {}),
       ...(description ? { description } : {}),
@@ -320,6 +294,5 @@ export function normalizeManifestSecretProviderIntegrations(
       ...(env ? { env } : {}),
       ...(passEnv ? { passEnv } : {}),
     };
-  }
-  return Object.keys(normalized).length > 0 ? normalized : undefined;
+  });
 }
