@@ -165,7 +165,7 @@ before-call hooks adjust the arguments. It uses one per-invocation context acros
 host and SDK chunks and does not dispatch a second before-call hook.
 
 Accepted background task metadata is available through `isAsyncStartedToolResult`
-and `readAsyncStartedTaskIds` from `openclaw/plugin-sdk/agent-harness-runtime`.
+and `readAsyncStartedTaskIds` from `openclaw/plugin-sdk/agent-harness-tool-runtime`.
 Retain accepted work independently of result presentation so recovery cannot
 replay it.
 

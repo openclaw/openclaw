@@ -487,11 +487,7 @@ export function createCodexDynamicToolBridge(params: {
             schema: toolEntry.inputSchema,
             value,
           }),
-        beforeSnapshotResult: ({
-          rawResult,
-          rawIsError,
-          executedArguments: executedArgs,
-        }) => {
+        beforeSnapshotResult: ({ rawResult, rawIsError, executedArguments: executedArgs }) => {
           executedArgsForPresentation = executedArgs;
           rawIsErrorForPresentation = rawIsError;
           const messageDelivery = readEmbeddedMessageDeliveryFact(
@@ -612,7 +608,12 @@ export function createCodexDynamicToolBridge(params: {
             confirmedMessagingTarget,
             deliveredSourceReply,
           } = messagingFacts;
-          notifyAgentToolResult(options?.onAgentToolResult, toolName, observerResult, resultIsError);
+          notifyAgentToolResult(
+            options?.onAgentToolResult,
+            toolName,
+            observerResult,
+            resultIsError,
+          );
           void runAgentHarnessAfterToolCallHook({
             toolName,
             toolCallId: call.callId,
@@ -657,7 +658,8 @@ export function createCodexDynamicToolBridge(params: {
             contentItems,
             success: !resultIsError,
             diagnosticTerminalType: terminalType,
-            diagnosticTerminalReason: resultFailureKind === "blocked" ? undefined : resultFailureKind,
+            diagnosticTerminalReason:
+              resultFailureKind === "blocked" ? undefined : resultFailureKind,
             transcriptDetails: asOptionalRecord(sanitizeToolResult(result))?.details,
           };
           const toolConfirmedSourceReply =
@@ -1058,17 +1060,5 @@ function convertToolContent(
       imageUrl,
     },
   ];
-}
-function readFirstString(record: Record<string, unknown>, keys: string[]): string | undefined {
-  for (const key of keys) {
-    const value = record[key];
-    if (typeof value === "string" && value.trim()) {
-      return value.trim();
-    }
-    if (typeof value === "number" && Number.isFinite(value)) {
-      return String(value);
-    }
-  }
-  return undefined;
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
