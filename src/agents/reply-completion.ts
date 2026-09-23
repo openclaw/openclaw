@@ -6,9 +6,9 @@ export type ReplyDeliveryState = "delivered" | "pending" | "missing";
 export type ReplyDeliveryObserver = (
   minimumAssistantMessageIndex?: number,
 ) => Promise<ReplyDeliveryState>;
-type ReplyCompletionEvidence = "ready" | "delivered" | "pending" | "blocked" | "empty";
+type ReplyCompletionEvidence = "ready" | "delivered" | "pending" | "blocked" | "silent" | "empty";
 
-/** Model output cannot waive a required reply. Only the input owner selects expectation. */
+/** The input owner selects expectation; terminal evidence preserves intentional silence. */
 export type ReplyCompletion =
   | {
       readonly expectation: "required";
@@ -47,7 +47,7 @@ export function resolveReplyExpectation(params: {
   );
 }
 
-/** Reconcile host policy with output/custody facts, never with a model's silence request. */
+/** Reconcile reply policy with terminal output and delivery evidence. */
 export function resolveReplyCompletion(
   expectation: ReplyExpectation,
   evidence: ReplyCompletionEvidence,
