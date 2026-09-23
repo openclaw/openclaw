@@ -250,7 +250,9 @@ describe("openclaw.setup provider resolution", () => {
         });
         const signal = expectDefined(params.signal, "activation signal");
         await new Promise<void>((resolve, reject) => {
-          signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+          signal.addEventListener("abort", () => reject(new Error("activation aborted")), {
+            once: true,
+          });
           void signedIn.promise.then(resolve);
         });
         return { ok: true, modelRef: "openai/gpt-5.6-luna", latencyMs: 1, lines: [] };
