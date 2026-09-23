@@ -295,6 +295,7 @@
     "!dist/extensions/cloudflare-ai-gateway/**",
     "!dist/extensions/codex/**",
     "!dist/extensions/copilot/**",
+    "!dist/extensions/databricks/**",
     "!dist/extensions/deepinfra/**",
     "!dist/extensions/deepseek/**",
     "!dist/extensions/diagnostics-otel/**",
