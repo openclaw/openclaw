@@ -1,6 +1,5 @@
 import path from "node:path";
 import type { PreparedSessionHistoryReadTarget } from "../../gateway/session-history-read.types.js";
-import type { ReadSessionMessageByIdResult } from "../../gateway/session-transcript-read-kernel.js";
 import { prepareGatewaySessionStoreReadSources } from "../../gateway/session-utils-store-sources.js";
 import {
   DEFAULT_WORKER_PENDING_BYTES,
@@ -23,6 +22,7 @@ import { prepareSessionTranscriptReadTargetCore } from "./session-accessor.trans
 import { readRestoredSessionTranscript } from "./session-cold-storage-read.js";
 import type {
   ChatHistoryPage,
+  ReadSessionMessageByIdResult,
   SessionHistoryDelta,
   SessionHistorySnapshot,
   SessionHistoryWorkerRequest,

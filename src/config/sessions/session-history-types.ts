@@ -1,4 +1,3 @@
-import type { ReadSessionMessageByIdResult } from "../../gateway/session-transcript-read-kernel.js";
 import type { AgentHistoryActivity } from "../../infra/agent-activity-events.js";
 import type {
   SessionTranscriptDisplayDeltaResult,
@@ -97,6 +96,14 @@ export type SessionHistorySubagentFacts = {
 export type SessionHistoryDelta = {
   delta: SessionTranscriptDisplayDeltaResult;
   subagentCoordination: SessionHistorySubagentFacts;
+};
+
+export type ReadSessionMessageByIdResult = {
+  message?: unknown;
+  seq?: number;
+  oversized: boolean;
+  found: boolean;
+  serializedBytes?: number;
 };
 
 export type SessionHistoryWorkerRequest =
