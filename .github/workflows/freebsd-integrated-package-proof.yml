@@ -1,0 +1,345 @@
+# Temporary exact-source package producer. Close unmerged after native proof custody.
+name: Temporary recovery package proof
+on:
+  push:
+    branches: [test/recovery-r46-package-proof]
+    paths: [.github/workflows/freebsd-integrated-package-proof.yml]
+permissions:
+  contents: read
+  actions: read
+  pull-requests: read
+concurrency:
+  group: recovery-r46-package-156825
+  cancel-in-progress: false
+jobs:
+  candidate-package:
+    if: >-
+      github.repository == 'openclaw/openclaw' && github.run_attempt == 1 &&
+      github.event_name == 'push' && github.actor == 'vincentkoc' &&
+      github.ref == 'refs/heads/test/recovery-r46-package-proof' &&
+      github.event.before == '46b31b9be34887aed768f62fcdff0ab587e297dd' &&
+      github.event.after == github.sha && !github.event.deleted && !github.event.forced
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+      CI: "true"
+      NODE_OPTIONS: --max-old-space-size=8192
+      OPENCLAW_VITEST_MAX_WORKERS: "2"
+      CANDIDATE_SHA: 46b31b9be34887aed768f62fcdff0ab587e297dd
+      CANDIDATE_TREE: 24fd664934d33c9ea39832fc0d5554f67693ee7b
+      CARRIER_SHA: ${{ github.sha }}
+      WORKFLOW_SHA: ${{ github.workflow_sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 8
+          persist-credentials: false
+      - name: Bind the workflow-only carrier and live draft to the reviewed recovery source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ "$CARRIER_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$CARRIER_SHA"
+          test "$(git show -s --format=%P HEAD)" = "$CANDIDATE_SHA"
+          test "$(git rev-parse "$CANDIDATE_SHA^{tree}")" = "$CANDIDATE_TREE"
+          test "$(git show -s --format=%P "$CANDIDATE_SHA")" = 'da49edc07afc02b20d0c68ac098f42af72935f3b'
+          python3 -I -S - <<'PYTHON'
+          import os,subprocess
+          assert subprocess.check_output(['git','diff','--name-only',os.environ['CANDIDATE_SHA'],'HEAD'],text=True).splitlines()==[
+              '.github/workflows/freebsd-integrated-package-proof.yml']
+          PYTHON
+          test -z "$(git status --porcelain)"
+          git -c gc.auto=0 -c maintenance.auto=false fetch --no-tags --depth=1 --no-write-fetch-head origin "$WORKFLOW_SHA"
+          test "$(git rev-parse "$CARRIER_SHA:.github/workflows/freebsd-integrated-package-proof.yml")" = "$(git rev-parse "$WORKFLOW_SHA:.github/workflows/freebsd-integrated-package-proof.yml")"
+          mkdir "$RUNNER_TEMP/recovery-r46-proof"
+          python3 -I -S - <<'PYTHON'
+          import hashlib,json,os,subprocess
+          from pathlib import Path
+          def api(path): return json.loads(subprocess.check_output(['gh','api',path]))
+          repo='openclaw/openclaw'
+          pr=api(f'repos/{repo}/pulls/156825')
+          assert pr['state']=='open' and pr['draft'] and pr['auto_merge'] is None and pr['number']==156825
+          assert pr['user']['login']=='vincentkoc' and pr['base']['ref']=='main'
+          assert pr['head']['sha']==os.environ['CARRIER_SHA'] and pr['head']['ref']=='test/recovery-r46-package-proof'
+          assert pr['head']['repo']['full_name']==pr['base']['repo']['full_name']==repo
+          component=api(f'repos/{repo}/pulls/156523')
+          assert component['state']=='open' and component['head']['sha']==os.environ['CANDIDATE_SHA']
+          assert component['head']['repo']['full_name']==repo and component['base']['ref']=='main'
+          candidate=api(f'repos/{repo}/commits/{os.environ["CANDIDATE_SHA"]}')
+          assert candidate['sha']==os.environ['CANDIDATE_SHA'] and candidate['commit']['tree']['sha']==os.environ['CANDIDATE_TREE']
+          assert candidate['commit']['verification']['verified'] is True
+          assert [p['sha'] for p in candidate['parents']]==['da49edc07afc02b20d0c68ac098f42af72935f3b']
+          carrier=api(f'repos/{repo}/commits/{os.environ["CARRIER_SHA"]}')
+          assert carrier['sha']==os.environ['CARRIER_SHA'] and carrier['commit']['verification']['verified'] is True
+          assert [p['sha'] for p in carrier['parents']]==[os.environ['CANDIDATE_SHA']]
+          workflow='.github/workflows/freebsd-integrated-package-proof.yml'
+          data=subprocess.check_output(['git','show',os.environ['CARRIER_SHA']+':'+workflow])
+          receipt=dict(source=os.environ['CANDIDATE_SHA'],tree=os.environ['CANDIDATE_TREE'],carrier=os.environ['CARRIER_SHA'],workflow=os.environ['WORKFLOW_SHA'],workflowSha256=hashlib.sha256(data).hexdigest(),
+            components=[dict(pr=156523,source=os.environ['CANDIDATE_SHA'])],sourceParents=[p['sha'] for p in candidate['parents']],
+            eventSha=os.environ['GITHUB_SHA'],event='push',previousCarrier=os.environ['CANDIDATE_SHA'],pullRequest=156825,run=os.environ['GITHUB_RUN_ID'],attempt=os.environ['GITHUB_RUN_ATTEMPT'],scope='one canonical recovery package build; no primary or diagnostic product composition; released-updater proof remains separate')
+          Path(os.environ['RUNNER_TEMP'],'recovery-r46-proof','source-binding.json').write_text(json.dumps(receipt,indent=2)+'\n')
+          print(json.dumps(receipt))
+          PYTHON
+          cat > "$RUNNER_TEMP/recovery-r46-source-inventory.py" <<'PYTHON'
+          import gzip,hashlib,json,os,stat,subprocess,sys
+          from pathlib import Path
+          rows=[]
+          for raw in subprocess.check_output(['git','ls-files','--stage','-z']).split(b'\0'):
+              if not raw: continue
+              info,name=raw.split(b'\t',1);mode,oid,stage=info.decode().split();assert stage=='0'
+              path=os.fsdecode(name);p=Path(path);s=p.lstat()
+              if mode=='120000':
+                  assert stat.S_ISLNK(s.st_mode);data=os.fsencode(os.readlink(p))
+              else:
+                  assert mode in ('100644','100755') and stat.S_ISREG(s.st_mode)
+                  assert bool(s.st_mode & 0o111)==(mode=='100755');data=p.read_bytes()
+              assert hashlib.sha1(b'blob '+str(len(data)).encode()+b'\0'+data).hexdigest()==oid
+              rows.append([path,mode,len(data),hashlib.sha256(data).hexdigest()])
+          encoded=json.dumps(rows,separators=(',',':'),ensure_ascii=True).encode()
+          receipt=dict(source=os.environ['CANDIDATE_SHA'],tree=os.environ['CANDIDATE_TREE'],files=len(rows),sha256=hashlib.sha256(encoded).hexdigest())
+          proof=Path(os.environ['RUNNER_TEMP'],'recovery-r46-proof');phase=sys.argv[1]
+          assert phase in ('before','after') and len(encoded)<=16*1024*1024
+          if phase=='after':
+              assert receipt==json.loads((proof/'source-before.json').read_text())
+              assert encoded==gzip.decompress((proof/'source-before.inventory.json.gz').read_bytes())
+          # Retain every path/mode/length/hash row, not only its aggregate digest.
+          (proof/('source-'+phase+'.inventory.json.gz')).write_bytes(gzip.compress(encoded,mtime=0))
+          (proof/('source-'+phase+'.json')).write_text(json.dumps(receipt,indent=2)+'\n')
+          print(json.dumps(receipt))
+          PYTHON
+      - name: Prepare the canonical Git lifecycle owner
+        uses: ./.github/actions/git-owner
+      - name: Set up one frozen toolchain without a harness dependency install
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: "24.21.0"
+          install-bun: "false"
+          install-deps: "false"
+          cache-mode: "off"
+      - name: Create one isolated product root and frozen dependency install
+        run: |
+          set -euo pipefail
+          test "$(node -p process.versions.node)" = 24.21.0
+          test "$(pnpm --version)" = 12.4.0
+          test ! -e node_modules
+          python3 -I -S "$CI_GIT_OWNER" --git 120 worktree add --detach "$RUNNER_TEMP/recovery-r46-candidate" "$CANDIDATE_SHA"
+          cd "$RUNNER_TEMP/recovery-r46-candidate"
+          python3 -I -S "$RUNNER_TEMP/recovery-r46-source-inventory.py" before
+          CI=true DEPENDENCY_CACHE=false DEPENDENCY_CACHE_HIT=false FROZEN_LOCKFILE=true \
+            bash .github/actions/setup-node-env/install-dependencies.sh
+          git diff --exit-code
+          git diff --cached --exit-code
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict'; import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path';
+          import {createHash} from 'node:crypto'; import {execFileSync} from 'node:child_process'; import {createRequire} from 'node:module';
+          const root=process.cwd(),sha=b=>createHash('sha256').update(b).digest('hex');
+          const fingerprint=execFileSync(process.execPath,[`${root}/.github/actions/setup-node-env/dependency-fingerprint.mjs`,'--workspace',root,'--frozen-lockfile','true'],{encoding:'utf8'}).trim();
+          assert(!fs.lstatSync(`${root}/node_modules`).isSymbolicLink());
+          assert.equal(process.platform,'linux'); assert.equal(process.arch,'x64');
+          assert(process.report.getReport().header.glibcVersionRuntime,'this producer requires the selected GNU native package');
+          const require=createRequire(`${root}/package.json`),fsSafeMeta=require.resolve('@openclaw/fs-safe/package.json');
+          const fsSafeRoot=path.dirname(fs.realpathSync(fsSafeMeta)),meta=JSON.parse(fs.readFileSync(fsSafeMeta));
+          assert.equal(meta.name,'@openclaw/fs-safe'); assert.equal(meta.version,'0.18.2');
+          const nativeNames=['darwin-arm64','darwin-x64','linux-arm64-gnu','linux-arm64-musl','linux-x64-gnu','linux-x64-musl','win32-x64-msvc'].map(t=>`@openclaw/fs-safe-${t}`);
+          assert.deepEqual(Object.keys(meta.optionalDependencies).filter(n=>n.startsWith('@openclaw/fs-safe-')).sort(),nativeNames.toSorted());
+          for(const name of nativeNames) assert.equal(meta.optionalDependencies[name],'0.18.2');
+          const nativeName='@openclaw/fs-safe-linux-x64-gnu';
+          const nativeEntry=fs.realpathSync(createRequire(fsSafeMeta).resolve(nativeName));
+          let nativeRoot=path.dirname(nativeEntry);
+          while(!fs.existsSync(path.join(nativeRoot,'package.json'))) { const parent=path.dirname(nativeRoot); assert.notEqual(parent,nativeRoot); nativeRoot=parent; }
+          const nativeMeta=JSON.parse(fs.readFileSync(path.join(nativeRoot,'package.json')));
+          assert.equal(nativeMeta.name,nativeName); assert.equal(nativeMeta.version,'0.18.2');
+          function inventory(directory) {
+            const files=[];
+            function walk(relative) {
+              for(const name of fs.readdirSync(path.join(directory,relative)).sort()) {
+                if(name==='node_modules') continue;
+                const member=path.join(relative,name),file=path.join(directory,member),stat=fs.lstatSync(file);
+                assert(!stat.isSymbolicLink(),`unexpected package symlink: ${member}`);
+                if(stat.isDirectory()) walk(member);
+                else { assert(stat.isFile()); files.push({path:member,bytes:stat.size,sha256:sha(fs.readFileSync(file))}); }
+              }
+            }
+            walk(''); assert(files.length>0); return {files,inventorySha256:sha(JSON.stringify(files))};
+          }
+          const fsSafe=inventory(fsSafeRoot),native=inventory(nativeRoot);
+          for(const file of ['package.json','dist/advanced.js','dist/native.js','dist/file-hash.js']) assert(fsSafe.files.some(f=>f.path===file));
+          assert(native.files.some(f=>f.path.endsWith('.node')));
+          const inputPaths=['package.json','pnpm-lock.yaml','pnpm-workspace.yaml',...['file-transfer','llama-cpp','migrate-claude','onepassword','openshell','signal'].map(n=>`extensions/${n}/package.json`)];
+          const inputs=Object.fromEntries(inputPaths.map(p=>[p,sha(fs.readFileSync(p))]));
+          for(const p of inputPaths) assert.equal(inputs[p],sha(execFileSync('git',['show',`${process.env.CANDIDATE_SHA}:${p}`])));
+          assert.equal(inputs['package.json'],'5db3c5a7a09006d8cea7750641d2e6a76e3c858e480a8dfb06585a046b7083be');
+          assert.equal(inputs['pnpm-lock.yaml'],'2378e5e5eb6a63f417bd4577fe74b3b5d6b46393d82a44a2e16cf361443a0c36');
+          assert.equal(inputs['pnpm-workspace.yaml'],'8cd6666eee1dba62d902b42fd06287b77b09429601b73a06168e57dd56d48be9');
+          const {parseAllDocuments}=require('yaml');
+          const docs=parseAllDocuments(fs.readFileSync('pnpm-lock.yaml','utf8')); assert.equal(docs.length,2);
+          for(const doc of docs) assert.equal(doc.errors.length,0);
+          const lock=docs[1].toJS();
+          const fsSafeLock=lock.packages['@openclaw/fs-safe@0.18.2'].resolution.integrity;
+          const nativeLock=lock.packages[`${nativeName}@0.18.2`].resolution.integrity;
+          assert.equal(fsSafeLock,'sha512-ZurOE7wousc+xT1HhVw+/lkqLHms378GcHz8O9dlMAsXY+MGNLKpZncmjpuEVHPz292n82FC1mp2SCCRUnvbNg==');
+          assert.equal(nativeLock,'sha512-4h596MLiKBr0frgSkruX6SHUsF8OfRJmwuqAQnGRGRewPZyUczlDFCbzkybg7J96cLA5qr7t25FiyB/wEls+Kw==');
+          const nativeBinding=require(nativeEntry); assert.equal(typeof nativeBinding,'object');
+          const receipt={source:process.env.CANDIDATE_SHA,node:process.versions.node,pnpm:execFileSync('pnpm',['--version'],{encoding:'utf8'}).trim(),
+            platform:process.platform,arch:process.arch,cpus:os.cpus().length,memory:os.totalmem(),dependencyFingerprint:fingerprint,
+            toolchainSha256:sha(fs.readFileSync(process.execPath)),inputs,
+            fsSafe:{version:meta.version,lockIntegrity:fsSafeLock,...fsSafe},native:{name:nativeName,version:nativeMeta.version,lockIntegrity:nativeLock,loaded:true,entry:path.relative(nativeRoot,nativeEntry),...native},
+            scope:'actual frozen producer install, including ACPX 0.19.1 and Codex importer/override 0.155.1; no Codex runtime compatibility verdict; final operator dependency custody remains separate'};
+          fs.writeFileSync(`${process.env.RUNNER_TEMP}/recovery-r46-proof/toolchain.json`,JSON.stringify(receipt,null,2)+'\n',{flag:'wx'});
+          console.log(JSON.stringify(receipt));
+          NODE
+      - name: Build the final canonical package once
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/recovery-r46-candidate"
+          started=$(date +%s)
+          set +e
+          node scripts/package-openclaw-for-docker.mjs --allow-unreleased-changelog \
+            --output-dir "$RUNNER_TEMP/recovery-r46-proof/unsealed" --output-name candidate.tgz \
+            --pack-json "$RUNNER_TEMP/recovery-r46-proof/unsealed/candidate-pack.original.json" 2>&1 | tee "$RUNNER_TEMP/recovery-r46-proof/package-build.log"
+          statuses=("${PIPESTATUS[@]}")
+          set -e
+          python3 -I -S - "$started" "${statuses[0]}" "${statuses[1]}" <<'PYTHON'
+          import json,os,sys,time
+          from pathlib import Path
+          receipt=dict(source=os.environ['CANDIDATE_SHA'],run=os.environ['GITHUB_RUN_ID'],attempt=os.environ['GITHUB_RUN_ATTEMPT'],
+            command='node scripts/package-openclaw-for-docker.mjs --allow-unreleased-changelog --output-dir <package-dir> --output-name candidate.tgz --pack-json <pack-json>',
+            exit=int(sys.argv[2]),captureExit=int(sys.argv[3]),elapsedSeconds=int(time.time())-int(sys.argv[1]))
+          Path(os.environ['RUNNER_TEMP'],'recovery-r46-proof','build-command.json').write_text(json.dumps(receipt,indent=2)+'\n')
+          print(json.dumps(receipt))
+          PYTHON
+          test "${statuses[0]}" = 0
+          test "${statuses[1]}" = 0
+          git diff --exit-code
+          git diff --cached --exit-code
+      - name: Authenticate the complete package and emitted finalizer
+        run: |
+          set -euo pipefail
+          python3 -I -S - <<'PYTHON'
+          import hashlib,json,os,tarfile
+          from pathlib import Path,PurePosixPath
+          root=Path(os.environ['RUNNER_TEMP']);proof=root/'recovery-r46-proof'
+          source=root/'recovery-r46-candidate';package=proof/'unsealed/candidate.tgz'
+          digest=lambda data:hashlib.sha256(data).hexdigest()
+          with tarfile.open(package,'r:gz') as archive:
+              members=archive.getmembers();names=[m.name for m in members];assert len(names)==len(set(names))
+              inventory=[]
+              for member in members:
+                  parts=PurePosixPath(member.name).parts
+                  assert parts and parts[0]=='package' and '..' not in parts and not member.name.startswith('/') and '\\' not in member.name
+                  assert member.isfile() or member.isdir()
+                  if member.isfile():
+                      data=archive.extractfile(member).read()
+                      inventory.append(dict(path=member.name,bytes=len(data),mode=member.mode,sha256=digest(data)))
+              def read(name):
+                  member=archive.getmember('package/'+name);assert member.isfile()
+                  return archive.extractfile(member).read()
+              meta=json.loads(read('package.json'));build=json.loads(read('dist/build-info.json'))
+              assert meta['name']=='openclaw' and meta['version']=='2026.9.5'
+              assert meta['dependencies']['@openclaw/fs-safe']=='0.18.2'
+              assert build['commit']==os.environ['CANDIDATE_SHA'] and isinstance(build['buildId'],str) and build['buildId']
+              worker_path='dist/infra/update-migrated-finalize.worker.js';worker=read(worker_path)
+              assert worker==(source/worker_path).read_bytes()
+              entries=[]
+              for prefix,manifest_path,build_root in [('', 'package.json', source),('node_modules/@openclaw/ai/', 'node_modules/@openclaw/ai/package.json', source/'packages/ai')]:
+                  manifest=json.loads(read(manifest_path));entry=manifest['main'].removeprefix('./')
+                  assert '..' not in PurePosixPath(entry).parts and not entry.startswith('/')
+                  data=read(prefix+entry);assert data==(build_root/entry).read_bytes()
+                  entries.append(dict(package=manifest['name'],path=prefix+entry,bytes=len(data),sha256=digest(data)))
+              assert [e['package'] for e in entries]==['openclaw','@openclaw/ai']
+              receipt=dict(source=os.environ['CANDIDATE_SHA'],tree=os.environ['CANDIDATE_TREE'],version=meta['version'],build=build,
+                  packageBytes=package.stat().st_size,packageSha256=hashlib.file_digest(package.open('rb'),'sha256').hexdigest(),
+                  fsSafe=meta['dependencies']['@openclaw/fs-safe'],entries=entries,finalizer=dict(path=worker_path,bytes=len(worker),sha256=digest(worker)),
+                  memberCount=len(members),regularFileCount=len(inventory),inventorySha256=digest(json.dumps(inventory,separators=(',',':')).encode()),
+                  scope='actual complete package and emitted bytes; no native or upgrade outcome inferred')
+          (proof/'package-inventory.json').write_text(json.dumps(inventory,indent=2)+'\n')
+          (proof/'package.json').write_text(json.dumps(receipt,indent=2)+'\n')
+          print(json.dumps(receipt))
+          PYTHON
+      - name: Seal the package and immutable source archive for native consumers
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/recovery-r46-candidate"
+          proof="$RUNNER_TEMP/recovery-r46-proof"
+          python3 -I -S "$RUNNER_TEMP/recovery-r46-source-inventory.py" after
+          git diff --exit-code
+          git diff --cached --exit-code
+          git archive --format=tar.gz --prefix=openclaw/ "$CANDIDATE_SHA" > "$proof/source.tar.gz"
+          node scripts/install-smoke-candidate-payload.mts seal \
+            --archive "$proof/source.tar.gz" --package-dir "$RUNNER_TEMP/recovery-r46-proof/unsealed" \
+            --output-dir "$proof/payload" --repository "$GITHUB_REPOSITORY" --target-sha "$CANDIDATE_SHA" \
+            --harness-repository "$GITHUB_REPOSITORY" --harness-sha "$CARRIER_SHA" \
+            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT"
+          cp "$RUNNER_TEMP/recovery-r46-proof/unsealed/candidate-pack.original.json" "$proof/canonical-pack.json"
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';import fs from 'node:fs';import {createHash} from 'node:crypto';
+          const dir=`${process.env.RUNNER_TEMP}/recovery-r46-proof`,sha=f=>createHash('sha256').update(fs.readFileSync(f)).digest('hex');
+          const pkg=JSON.parse(fs.readFileSync(`${dir}/package.json`,'utf8'));
+          const manifest=JSON.parse(fs.readFileSync(`${dir}/payload/install-smoke-candidate-payload.json`,'utf8'));
+          assert.equal(manifest.targetSha,process.env.CANDIDATE_SHA);assert.equal(manifest.harnessSha,process.env.CARRIER_SHA);
+          assert.equal(manifest.runId,process.env.GITHUB_RUN_ID);assert.equal(manifest.runAttempt,process.env.GITHUB_RUN_ATTEMPT);
+          assert.equal(manifest.repository,'openclaw/openclaw');assert.equal(manifest.harnessRepository,'openclaw/openclaw');
+          assert.equal(manifest.packageVersion,'2026.9.5');assert.equal(manifest.sourceArchiveSha256,sha(`${dir}/source.tar.gz`));
+          const tar=manifest.files.find(f=>f.name==='candidate.tgz');assert(tar);assert.equal(tar.sha256,pkg.packageSha256);assert.equal(tar.size,pkg.packageBytes);
+          assert.equal(sha(`${dir}/payload/candidate.tgz`),pkg.packageSha256);
+          const originalTar=`${dir}/unsealed/candidate.tgz`,originalPack=`${dir}/unsealed/candidate-pack.original.json`;
+          assert(fs.lstatSync(originalTar).isFile());assert(fs.lstatSync(originalPack).isFile());
+          assert.equal(fs.statSync(originalTar).size,pkg.packageBytes);assert.equal(sha(originalTar),pkg.packageSha256);
+          const originalPackSha256=sha(originalPack);assert.equal(sha(`${dir}/canonical-pack.json`),originalPackSha256);
+          // Failure before this point retains the original unsealed package and pack receipt.
+          // Remove only the verified duplicate after canonical sealing, never failed outputs.
+          fs.unlinkSync(originalTar);fs.unlinkSync(originalPack);fs.rmdirSync(`${dir}/unsealed`);
+          const receipt={source:process.env.CANDIDATE_SHA,tree:process.env.CANDIDATE_TREE,carrier:process.env.CARRIER_SHA,
+            run:process.env.GITHUB_RUN_ID,attempt:process.env.GITHUB_RUN_ATTEMPT,complete:true,packageBuildPassed:true,
+            fsSafe:'0.18.2',packageVersion:manifest.packageVersion,buildId:pkg.build.buildId,
+            manifestSha256:sha(`${dir}/payload/install-smoke-candidate-payload.json`),sourceArchiveSha256:manifest.sourceArchiveSha256,
+            packageSha256:pkg.packageSha256,packageBytes:pkg.packageBytes,inventorySha256:pkg.inventorySha256,originalPackSha256,
+            nativeProof:'unrun; separate authenticated published-updater and installed-candidate refusal proof required'};
+          fs.writeFileSync(`${dir}/complete.json`,JSON.stringify(receipt,null,2)+'\n',{flag:'wx'});console.log(JSON.stringify(receipt));
+          NODE
+      - name: Bind complete original evidence without changing the build outcome
+        if: always()
+        env:
+          ORIGINAL_JOB_STATUS: ${{ job.status }}
+        run: |
+          set -euo pipefail
+          python3 -I -S - <<'EVIDENCE'
+          import hashlib,json,os,stat,sys
+          from pathlib import Path
+          root=Path(os.environ['RUNNER_TEMP'],'recovery-r46-proof');root.mkdir(exist_ok=True)
+          rows=[];errors=[];total=0
+          for p in sorted(root.rglob('*')):
+              info=p.lstat()
+              if stat.S_ISDIR(info.st_mode): continue
+              relative=p.relative_to(root).as_posix()
+              if not stat.S_ISREG(info.st_mode) or info.st_nlink!=1:
+                  errors.append('nonregular or linked evidence: '+relative);continue
+              total+=info.st_size
+              # Empty regular command logs are original evidence too; command outcome is separate.
+              rows.append(dict(path=relative,bytes=info.st_size,sha256=hashlib.file_digest(p.open('rb'),'sha256').hexdigest()))
+          required={'source-binding.json','source-before.json','source-before.inventory.json.gz','source-after.json','source-after.inventory.json.gz','toolchain.json','build-command.json','package-build.log','package-inventory.json','package.json','canonical-pack.json','source.tar.gz','complete.json','payload/candidate.tgz','payload/install-smoke-candidate-payload.json'}
+          missing=sorted(required-{row['path'] for row in rows})
+          if os.environ['ORIGINAL_JOB_STATUS']=='success' and missing: errors.append('successful producer missing required originals')
+          if len(rows)>64 or total>1024*1024*1024: errors.append('complete original evidence exceeds bounded producer budget; no truncation performed')
+          receipt=dict(source=os.environ['CANDIDATE_SHA'],tree=os.environ['CANDIDATE_TREE'],carrier=os.environ['CARRIER_SHA'],run=os.environ['GITHUB_RUN_ID'],attempt=os.environ['GITHUB_RUN_ATTEMPT'],originalJobStatus=os.environ['ORIGINAL_JOB_STATUS'],captureComplete=not errors,productPassed=os.environ['ORIGINAL_JOB_STATUS']=='success' and not errors and not missing,missing=missing,errors=errors,files=rows,totalBytes=total,maximumFiles=64,maximumBytes=1024*1024*1024)
+          encoded=(json.dumps(receipt,indent=2)+'\n').encode();assert len(encoded)<=128*1024
+          (root/'evidence-manifest.json').write_bytes(encoded)
+          print(json.dumps(dict(originalJobStatus=receipt['originalJobStatus'],captureComplete=receipt['captureComplete'],productPassed=receipt['productPassed'],files=len(rows),bytes=total,missing=missing,errors=errors)))
+          if errors: sys.exit(1)
+          EVIDENCE
+      - name: Retain the exact package, source and original custody receipts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: recovery-r46-package-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/recovery-r46-proof
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
