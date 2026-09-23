@@ -3,8 +3,8 @@ import { asNullableRecord as asRecord } from "@openclaw/normalization-core/recor
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ChatPendingInputsPage } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { composeTranscriptDisplay } from "../../../../src/chat/transcript-display-position.js";
+import { readAssistantTextBlocksForPhase } from "../../../../src/shared/chat-message-content.js";
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
-import { t } from "../../i18n/index.ts";
 import {
   type ChatGuardianNotice,
   type ChatItem,
@@ -39,6 +39,7 @@ import {
   resolveWorkingProgress,
   shouldRenderQueuedSendInThread,
 } from "./chat-progress.ts";
+import { projectChatSystemNotice } from "./chat-system-notice.ts";
 import { groupMessages } from "./chat-thread-grouping.ts";
 import {
   appendCanvasBlockToAssistantMessage,
@@ -59,8 +60,8 @@ import {
   timestampAfterVisibleItems,
   transcriptPositionTimestamp,
   type TurnInsertionBounds,
-  userTurnRunId,
 } from "./chat-thread-items.ts";
+import { latestWorkingPreamble } from "./chat-thread-preamble.ts";
 import {
   applyPersistedToolInvocationBounds,
   findCurrentTurnBounds,
@@ -74,7 +75,6 @@ import {
 import { coalesceToolActivityMessages } from "./chat-tool-activity-coalesce.ts";
 import { safeNormalizeMessage } from "./chat-turn-boundary.ts";
 import { selectChatInputDisplay } from "./history-merge.ts";
-import { resolveSystemNoticeKind } from "./system-notice-kinds.ts";
 import {
   isLiveTerminalForRun,
   readLiveTerminalRunId,
@@ -278,31 +278,10 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       continue;
     }
 
-    const provenance = asRecord(raw.provenance);
-    if (role === "user" && provenance?.kind === "internal_system") {
-      const noticeKind = resolveSystemNoticeKind(
-        typeof provenance.sourceTool === "string" ? provenance.sourceTool : undefined,
-      );
-      const text = noticeKind?.summaryKey
-        ? t(noticeKind.summaryKey)
-        : extractTextCached(msg)?.replace(/^\[System\] /u, "");
-      if (text?.trim()) {
-        items.push({
-          kind: "notice",
-          key: itemKey,
-          icon: noticeKind?.icon ?? "cpu",
-          label: noticeKind ? t(noticeKind.labelKey) : t("common.system"),
-          ...(noticeKind?.startsTurn === false ? {} : { startsTurn: true }),
-          ...(noticeKind?.collapsedBody ? { collapsedBody: true } : {}),
-          text,
-          timestamp: normalized.timestamp,
-          ...optionalBoundaryIdentity(userTurnRunId(msg)),
-        });
-      }
-      continue;
+    const projected = projectChatSystemNotice(item, normalized);
+    if (projected) {
+      items.push(projected);
     }
-
-    items.push(item);
   }
   const queuedSends = props.queue ?? [];
   const { queue: threadQueuedSends, pendingInputs } = selectChatInputDisplay(
@@ -327,31 +306,6 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       earliest == null ? queued.createdAt : Math.min(earliest, queued.createdAt),
     null,
   );
-  // Transient projections merge into stable history + queued-send rows by timestamp.
-  // Stable rows keep their relative order despite client and Gateway clock skew.
-  const pendingInputItems = buildPendingInputItems(
-    pendingInputs,
-    props.searchOpen ? props.searchQuery : undefined,
-    props.queue,
-    props.workspaceSyncPendingRunIds,
-    props.workerSetupPending,
-    props.messageRecovery,
-  );
-  const projections: ChatProjection[] = pendingInputItems.map((item) => ({ item }));
-  if (compaction && compactionKey && !hasPersistedCompaction) {
-    const timestamp = compaction.startedAt ?? compaction.completedAt ?? Date.now();
-    projections.push({
-      item: {
-        ...buildCompactionDividerItem(
-          {},
-          timestamp,
-          0,
-          compaction.phase === "complete" ? "complete" : "active",
-        ),
-        key: compactionKey,
-      },
-    });
-  }
   const appendQueuedSend = (queued: ChatQueueItem) => {
     if (!shouldRenderQueuedSendInThread(queued)) {
       return;
@@ -465,6 +419,37 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   items = items.filter(
     (item) => item.kind !== "message" || hasRenderableNormalizedMessage(item.message),
   );
+  // Transient projections merge into stable history + queued-send rows by timestamp.
+  // Stable rows keep their relative order despite client and Gateway clock skew.
+  const pendingInputItems = buildPendingInputItems(
+    pendingInputs,
+    props.searchOpen ? props.searchQuery : undefined,
+    props.queue,
+    props.workspaceSyncPendingRunIds,
+    props.workerSetupPending,
+    props.messageRecovery,
+  );
+  // Custody follows visible history. Choose its floor after canvas placement and
+  // hidden-row filtering so the anchor survives projection insertion.
+  const custodyFloor = items.at(-1)?.key;
+  const projections: ChatProjection[] = pendingInputItems.map((item) => ({
+    item,
+    ...(custodyFloor ? { bounds: { afterKey: custodyFloor } } : {}),
+  }));
+  if (compaction && compactionKey && !hasPersistedCompaction) {
+    const timestamp = compaction.startedAt ?? compaction.completedAt ?? Date.now();
+    projections.push({
+      item: {
+        ...buildCompactionDividerItem(
+          {},
+          timestamp,
+          0,
+          compaction.phase === "complete" ? "complete" : "active",
+        ),
+        key: compactionKey,
+      },
+    });
+  }
   const segments = props.streamSegments;
   const afterBoundaryBySegment = new Map<ChatStreamSegment, string>();
   let latestBoundaryRunId: string | undefined;
@@ -720,10 +705,36 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   if (showWorkingIndicator) {
     const workingProgress = resolveProgress();
     const workingRunId = props.runId ?? workingProgress.runId;
+    const preamble = latestWorkingPreamble(props, workingRunId);
+    if (preamble) {
+      // Move only this live presentation into the status row. The canonical
+      // messages remain intact for history, reconnect, and terminal settlement.
+      items = items.flatMap((item): ChatItem[] => {
+        if (item.kind === "message" && item.message === preamble.message) {
+          const message = asRecord(item.message)!;
+          const commentary = new Set(readAssistantTextBlocksForPhase(message, "commentary"));
+          const content = Array.isArray(message.content)
+            ? message.content.filter((block) => !commentary.has(block))
+            : [];
+          // Mixed envelopes can carry answers or tool calls beside commentary.
+          // Project those blocks unchanged instead of hiding the whole message.
+          return commentary.size && content.length
+            ? [{ ...item, message: { ...message, content, phase: undefined } }]
+            : [];
+        }
+        return item.kind === "stream" &&
+          item.runId === workingRunId &&
+          preamble.itemId &&
+          item.key === `stream-seg:${props.sessionKey}:${preamble.itemId}`
+          ? []
+          : [item];
+      });
+    }
     appendActiveRunItem({
       kind: "reading-indicator",
       key: workingProgress.key,
       startedAt: workingProgress.startedAt,
+      ...(preamble ? { preamble: preamble.text } : {}),
       ...optionalRunIdentity(workingRunId),
       ...optionalBoundaryIdentity(latestBoundaryRunId ?? workingRunId),
     });

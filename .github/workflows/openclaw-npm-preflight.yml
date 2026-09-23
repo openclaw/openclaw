@@ -192,7 +192,34 @@ jobs:
       - name: Check source, test types, and architecture
         env:
           OPENCLAW_LOCAL_CHECK: "0"
-        run: pnpm check --include-test-types --include-architecture
+        run: |
+          set -euo pipefail
+          harness_root="$RUNNER_TEMP/npm-preflight-release-harness"
+          [[ ! -e "$harness_root" ]]
+          mv .release-harness "$harness_root"
+          restore_harness() { mv "$harness_root" .release-harness; }
+          trap restore_harness EXIT
+          pnpm check --include-test-types --include-architecture
+          restore_harness
+          trap - EXIT
+
+      - name: Enforce plugin compatibility release readiness
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if jq -e '.scripts["plugins:boundary-report:ci"] | type == "string"' package.json >/dev/null; then
+            pnpm plugins:boundary-report:ci
+            exit 0
+          fi
+          gate_introduction=38ba27834dd3f98c19d5833e0598dfef3abb7587
+          target_sha="$(git rev-parse HEAD)"
+          relationship="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${gate_introduction}...${target_sha}" --jq .status)"
+          if [[ "$relationship" != "behind" ]]; then
+            echo "Target is not proven to predate plugins:boundary-report:ci (relationship: $relationship)." >&2
+            exit 1
+          fi
+          echo '::warning::Frozen target predates the plugin compatibility release gate; skipping target-owned compatibility readiness.'
 
       - name: Seal source-check evidence
         id: source_evidence

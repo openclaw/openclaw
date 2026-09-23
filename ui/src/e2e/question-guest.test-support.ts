@@ -51,6 +51,7 @@ export async function createGuestQuestionFixture(deliver: (frame: unknown) => Pr
     { agentId: "main", sessionKey: guestQuestionSessionKey },
     {
       sessionId: "guest-question-session",
+      lifecycleRevision: "guest-question-generation",
       updatedAt: Date.now(),
       visibility: "shared",
       createdActor: { type: "human", source: "profile", id: profile.id },

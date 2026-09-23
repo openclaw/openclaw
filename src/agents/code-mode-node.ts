@@ -24,6 +24,7 @@ import type {
   CodeModeWorkerResult,
 } from "./code-mode-executor-types.js";
 import { EMPTY_CODE_MODE_OUTPUT } from "./code-mode-json.js";
+import { CodeModeNodeProgress } from "./code-mode-node-progress.js";
 import {
   CODE_MODE_WORKER_WATCHDOG_GRACE_MS,
   type CodeModeWorkerBoundary,
@@ -31,11 +32,12 @@ import {
 } from "./code-mode-worker-types.js";
 
 type NodePool = {
-  tasks: WorkerTaskPool<NodeInput, CodeModeWorkerThreadResult<undefined>>;
+  tasks: WorkerTaskPool<NodeWorkerInput, CodeModeWorkerThreadResult<undefined>>;
   url: string;
   memoryLimitBytes: number;
 };
 type NodeInput = CodeModeExecutorStartInput | CodeModeExecutorResumeInput;
+type NodeWorkerInput = NodeInput & { progress: SharedArrayBuffer; inlineHost: boolean };
 const retiringPools = new Set<NodePool>();
 let idle: { owner: NodePool; timer: NodeJS.Timeout } | undefined;
 
@@ -106,7 +108,7 @@ async function releasePool(owner: NodePool): Promise<void> {
       onError: (error) =>
         process.emitWarning(`Code Mode worker retirement failed: ${formatErrorMessage(error)}`),
     });
-  }, 60_000);
+  }, 5 * 60_000);
   timer.unref();
   idle = { owner, timer };
 }
@@ -164,6 +166,12 @@ async function run(
   startedAt = performance.now(),
 ): Promise<CodeModeWorkerResult> {
   const inlineHost = options.inlineHost;
+  const progress = new CodeModeNodeProgress(input.config.maxOutputBytes);
+  const deadline = new AbortController();
+  const signal = options.signal
+    ? AbortSignal.any([options.signal, deadline.signal])
+    : deadline.signal;
+  let timer: NodeJS.Timeout | undefined;
   let admittedTimeoutMs = 0;
   let retained = false;
   try {
@@ -177,38 +185,52 @@ async function run(
         if (admittedTimeoutMs <= 0) {
           throw new CodeModeHeadlessTimeoutError();
         }
-        return { ...input, config: { ...input.config, timeoutMs: admittedTimeoutMs } };
+        return {
+          ...input,
+          progress: progress.buffer,
+          inlineHost: Boolean(inlineHost),
+          config: { ...input.config, timeoutMs: admittedTimeoutMs },
+        };
       },
       {
-        timeoutMs: options.timeoutMs - preparationMs,
-        signal: options.signal,
+        timeoutMs: Math.min(options.timeoutMs, input.config.timeoutMs) - preparationMs,
+        signal,
         inputBytes: input.kind === "exec" ? input.source.length * 2 : 0,
-        onInputConsumed: inlineHost?.onInputConsumed,
-        onRequest: inlineHost
-          ? async (value, context): Promise<WorkerTaskResponse> => {
-              if (!isRecord(value) || value.status !== "boundary") {
-                throw new Error("invalid code mode worker boundary");
-              }
-              if (!Number.isFinite(admittedTimeoutMs) || admittedTimeoutMs <= 0) {
-                throw new Error("invalid code mode worker admission budget");
-              }
-              if (value.networkContentObserved === true) {
-                inlineHost?.onNetworkContent?.();
-              }
-              const { onConsumed, ...command } = await inlineHost.onBoundary(
-                // SAFETY: The private Node worker emits the shared typed boundary protocol.
-                value as CodeModeWorkerBoundary,
-                { ...context, maxTimeoutMs: admittedTimeoutMs },
-              );
-              return {
-                input: command,
-                onConsumed,
-                timeoutMs:
-                  (command.kind === "continue" ? command.timeoutMs : 0) +
-                  CODE_MODE_WORKER_WATCHDOG_GRACE_MS,
-              };
-            }
-          : undefined,
+        onInputConsumed: () => {
+          if (input.kind === "exec") {
+            timer = setTimeout(
+              () => deadline.abort(new CodeModeHeadlessTimeoutError()),
+              Math.max(0, progress.deadline - performance.timeOrigin - performance.now()),
+            );
+          }
+          inlineHost?.onInputConsumed?.();
+        },
+        onRequest: async (value, context): Promise<WorkerTaskResponse> => {
+          clearTimeout(timer);
+          if (!inlineHost || !isRecord(value) || value.status !== "boundary") {
+            throw new Error("invalid code mode worker boundary");
+          }
+          if (!Number.isFinite(admittedTimeoutMs) || admittedTimeoutMs <= 0) {
+            throw new Error("invalid code mode worker admission budget");
+          }
+          if (value.networkContentObserved === true) {
+            inlineHost?.onNetworkContent?.();
+          }
+          const response = inlineHost.onBoundary(
+            // SAFETY: The private Node worker emits the shared typed boundary protocol.
+            value as CodeModeWorkerBoundary,
+            { ...context, maxTimeoutMs: admittedTimeoutMs },
+          );
+          // Delivery is synchronous; the Worker is parked until this exchange gets its reply.
+          progress.resetOutput();
+          const { onConsumed, ...command } = await response;
+          return {
+            input: command,
+            onConsumed,
+            timeoutMs:
+              command.kind === "continue" ? command.timeoutMs : CODE_MODE_WORKER_WATCHDOG_GRACE_MS,
+          };
+        },
       },
     );
     if (result.networkContentObserved === true) {
@@ -224,12 +246,20 @@ async function run(
     }
     return result;
   } catch (error) {
-    const reason = options.signal?.aborted ? options.signal.reason : error;
+    const reason = signal.aborted ? signal.reason : error;
     if (
       reason instanceof CodeModeHeadlessTimeoutError ||
       (error instanceof WorkerTaskError && error.code === "timeout")
     ) {
-      return failure("code mode timeout exceeded", "timeout");
+      if (progress.networkContentObserved) {
+        inlineHost?.onNetworkContent?.();
+      }
+      return {
+        ...failure("code mode timeout exceeded", "timeout"),
+        failurePhase: progress.deadline ? "guest" : "host",
+        output: progress.output(),
+        ...(progress.networkContentObserved ? { networkContentObserved: true } : {}),
+      };
     }
     if (options.signal?.aborted || reason instanceof CodeModeHeadlessAbortError) {
       return failure("code mode execution aborted", "aborted");
@@ -239,6 +269,7 @@ async function run(
       error instanceof WorkerTaskError ? "runtime_unavailable" : codeModeFailureCode(error),
     );
   } finally {
+    clearTimeout(timer);
     if (!retained) {
       await closePool(pool);
     }

@@ -218,7 +218,7 @@ describe("production lint suppressions", () => {
         "src/agents/mcp-http-transport.ts|unicorn/prefer-add-event-listener|6",
         // JSON parser causes can quote reflected credentials from authenticated provider responses.
         "src/agents/provider-http-errors.ts|preserve-caught-error|1",
-        "src/agents/sessions/session-manager-entries.ts|unicorn/prefer-structured-clone|1",
+        "src/agents/sessions/session-manager-persistence.ts|unicorn/prefer-structured-clone|1",
         "src/channels/plugins/channel-runtime-surface.types.ts|typescript/no-unnecessary-type-parameters|1",
         "src/channels/plugins/contracts/test-helpers.ts|typescript/no-unnecessary-type-parameters|1",
         "src/channels/plugins/types.plugin.ts|typescript/no-explicit-any|1",
@@ -237,7 +237,6 @@ describe("production lint suppressions", () => {
         "src/gateway/test-helpers.server.ts|typescript/no-unnecessary-type-parameters|1",
         "src/hooks/module-loader.ts|typescript/no-unnecessary-type-parameters|1",
         "src/infra/device-pairing-store.ts|typescript/no-unnecessary-type-parameters|1",
-        "src/infra/exec-approvals-effective.ts|typescript/no-unnecessary-type-parameters|1",
         "src/infra/json-file.ts|typescript-eslint/no-unnecessary-type-parameters|1",
         "src/infra/net/fetch-guard.ts|no-warning-comments|1",
         // Undici invokes its method-shaped clientFactory callback without an options receiver.

@@ -20,6 +20,7 @@ import { bindBrowserDashboardEvents } from "./src/browser-dashboard-events.js";
 import {
   BROWSER_REQUEST_GATEWAY_METHOD,
   BROWSER_REQUEST_GATEWAY_SCOPE,
+  SESSION_BROWSER_REQUEST_GATEWAY_METHOD,
 } from "./src/browser-gateway-contract.js";
 import {
   BROWSER_PROXY_COMMAND,
@@ -316,8 +317,8 @@ export function registerBrowserPlugin(api: OpenClawPluginApi) {
     surface: "widget",
     label: "Browser",
     description:
-      "An HTTP(S) dashboard shared with the agent's managed browser. Author with dashboard widget_put, then use the browser tool's dashboard selector to interact with that same page.",
-    requiredScopes: ["operator.admin"],
+      "An interactive HTTP(S) browser dashboard. Session writers share an isolated session context with the agent's dashboard selector; administrators use the separate managed-profile browser. Author with dashboard widget_put.",
+    requiredScopes: ["operator.sessions.write"],
     schema: {
       type: "object",
       additionalProperties: false,
@@ -331,7 +332,8 @@ export function registerBrowserPlugin(api: OpenClawPluginApi) {
         profile: {
           type: "string",
           maxLength: 128,
-          description: "Local managed Browser profile; defaults to openclaw",
+          description:
+            "Administrator-only local managed profile (default openclaw). Session browser uses the configured default profile; omit this property.",
         },
       },
     },
@@ -385,6 +387,17 @@ export function registerBrowserPlugin(api: OpenClawPluginApi) {
     },
     {
       scope: BROWSER_REQUEST_GATEWAY_SCOPE,
+    },
+  );
+  api.registerGatewayMethod(
+    SESSION_BROWSER_REQUEST_GATEWAY_METHOD,
+    async (opts) => {
+      const { handleSessionBrowserGatewayRequest } = await loadBrowserRegistrationRuntimeModule();
+      return handleSessionBrowserGatewayRequest(opts);
+    },
+    {
+      scope: "operator.write",
+      sessionAccess: { mode: "write", allowOwnSessionScope: true, requiredTool: "browser" },
     },
   );
   // Remote extension relay: lets the Chrome extension connect directly to this

@@ -14,7 +14,7 @@ import {
   formatCliProcessFailure,
   runCliProcessChild,
 } from "./cli-process-child.test-helpers.js";
-import { registerCoreCliByName } from "./program/command-registry.js";
+import { registerCoreCliByName } from "./program/command-registry-core.js";
 import { createProgramContext } from "./program/context.js";
 import { registerSubCliByName } from "./program/register.subclis.js";
 

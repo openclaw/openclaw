@@ -35,6 +35,11 @@ import {
   resolveUpdateCandidateStateIdentity,
   resolveUpdateCandidateStatePath,
 } from "./update-candidate-paths.js";
+import {
+  UpdateCandidatePluginCodeLinkReceiptSchema,
+  sealUpdateCandidatePluginCodeLinks,
+  type UpdateCandidatePluginCodeLink,
+} from "./update-candidate-plugin-code-links.js";
 import type { UpdateStateInspectionProgress } from "./update-candidate-state.diagnostics.js";
 import {
   parseUpdateStateInspectionWorker,
@@ -53,6 +58,7 @@ export type UpdateStateSchemaVersion = z.infer<typeof UpdateStateSchemaVersionsS
 export const UpdateCandidateStateSnapshotSchema = z.object({
   versions: UpdateStateSchemaVersionsSchema,
   pluginPaths: z.record(z.string(), z.string()),
+  pluginCodeLinks: UpdateCandidatePluginCodeLinkReceiptSchema.optional(),
 });
 type StateInput = { stateDir: string; config: OpenClawConfig; env?: NodeJS.ProcessEnv };
 type CandidateStateDatabase = Pick<
@@ -690,6 +696,19 @@ export async function snapshotUpdateCandidateState(
     });
   }
   const versions = publishStateDatabaseVersions(files, inspected);
-  const pluginPaths = await copyUpdateCandidatePlugins(plugins, input);
-  return { versions, pluginPaths };
+  const pluginCodeLinks: UpdateCandidatePluginCodeLink[] = [];
+  const pluginPaths = await copyUpdateCandidatePlugins(plugins, {
+    ...input,
+    onCodeLink: (fact) => {
+      pluginCodeLinks.push(fact);
+    },
+  });
+  return {
+    versions,
+    pluginPaths,
+    pluginCodeLinks: await sealUpdateCandidatePluginCodeLinks(
+      input.pluginPlanPath,
+      pluginCodeLinks,
+    ),
+  };
 }

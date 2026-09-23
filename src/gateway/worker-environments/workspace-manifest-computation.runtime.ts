@@ -75,9 +75,13 @@ async function withHashes<T>(
 
 export function executeWorkspaceManifestComputation<
   Command extends WorkspaceManifestComputationCommand,
->(command: Command): Promise<WorkspaceManifestComputationOperations[Command["type"]]["output"]>;
+>(
+  command: Command,
+  assertBeforeMutation?: () => void,
+): Promise<WorkspaceManifestComputationOperations[Command["type"]]["output"]>;
 export async function executeWorkspaceManifestComputation(
   command: WorkspaceManifestComputationCommand,
+  assertBeforeMutation?: () => void,
 ): Promise<WorkspaceManifestComputationResult> {
   switch (command.type) {
     case "workspace.manifest.nodes": {
@@ -105,7 +109,11 @@ export async function executeWorkspaceManifestComputation(
     case "workspace.manifest.stage-input": {
       const { buildWorkspaceStageInput } =
         await import("./workspace-result-preparation.runtime.js");
-      return await buildWorkspaceStageInput(command.input);
+      return await buildWorkspaceStageInput(command.input, assertBeforeMutation);
+    }
+    case "workspace.manifest.tree-input": {
+      const { buildWorkspaceTreeInput } = await import("./workspace-result-preparation.runtime.js");
+      return await buildWorkspaceTreeInput(decodeManifestValue(command), assertBeforeMutation);
     }
     case "workspace.manifest.entries": {
       const { readStagedWorkerWorkspaceEntries } =

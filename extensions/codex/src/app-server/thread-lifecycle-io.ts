@@ -140,6 +140,9 @@ export async function resumeExistingCodexThread(
       (await params.buildFinalConfigPatch?.({
         action: "resume",
         binding: resumeBinding,
+        ...(context.nativeModelInputTools
+          ? { nativeModelInputTools: context.nativeModelInputTools }
+          : {}),
       })) ?? {
         configPatch: params.finalConfigPatch,
         nativeHookRelayGeneration: params.nativeHookRelayGeneration,
@@ -206,14 +209,12 @@ export async function resumeExistingCodexThread(
             params.client,
             params.inferenceRoute,
             resumeParams.config,
+            requestModelProvider ??
+              (resumeBinding.preserveNativeModel
+                ? (configuration.modelProvider ?? undefined)
+                : undefined),
+            params.inferenceProviderRoutes,
           );
-          if (
-            params.inferenceRoute &&
-            resumeParams.modelProvider != null &&
-            resumeParams.modelProvider !== "openai"
-          ) {
-            throw new Error("Codex inference route requires the native OpenAI provider");
-          }
         },
       }),
     );
@@ -487,7 +488,12 @@ export async function startFreshCodexThread(
         params.pluginThreadConfig?.build(),
       )))
     : undefined;
-  const finalConfigPatch = (await params.buildFinalConfigPatch?.({ action: "start" })) ?? {
+  const finalConfigPatch = (await params.buildFinalConfigPatch?.({
+    action: "start",
+    ...(context.nativeModelInputTools
+      ? { nativeModelInputTools: context.nativeModelInputTools }
+      : {}),
+  })) ?? {
     configPatch: params.finalConfigPatch,
     nativeHookRelayGeneration: params.nativeHookRelayGeneration,
   };
@@ -533,14 +539,13 @@ export async function startFreshCodexThread(
   };
   const assertInferenceCurrent = () => {
     assertCurrent();
-    assertCodexInferenceRouteConfig(params.client, params.inferenceRoute, startParams.config);
-    if (
-      params.inferenceRoute &&
-      startParams.modelProvider != null &&
-      startParams.modelProvider !== "openai"
-    ) {
-      throw new Error("Codex inference route requires the native OpenAI provider");
-    }
+    assertCodexInferenceRouteConfig(
+      params.client,
+      params.inferenceRoute,
+      startParams.config,
+      requestModelProvider,
+      params.inferenceProviderRoutes,
+    );
   };
   const threadStartResponse = await lifecycleTiming.measure("thread-start-request", async () => {
     try {
@@ -591,6 +596,7 @@ export async function startFreshCodexThread(
   }
   const rolloutPath = resolveCodexThreadRolloutPath(response.thread);
   const modelProvider = resolveCodexAppServerModelProvider({
+    homeScope: params.appServer.start.homeScope,
     provider: params.params.provider,
     authProfileId: params.params.authProfileId,
     authProfileStore: params.params.authProfileStore,

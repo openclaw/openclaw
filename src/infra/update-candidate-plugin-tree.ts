@@ -1,18 +1,24 @@
-import fsSync, { type BigIntStats } from "node:fs";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
-import { sameFileMutationFingerprint } from "./file-descriptor.js";
 import { root as openRoot } from "./fs-safe.js";
 import { tryReadJson } from "./json-files.js";
 import { parseRegistryNpmSpec } from "./npm-registry-spec.js";
 import { hasNodeErrorCode, isPathInside } from "./path-guards.js";
+import type { UpdateCandidatePluginCodeLink } from "./update-candidate-plugin-code-links.js";
+import {
+  assertUpdateCandidatePluginEntryStat,
+  isUpdateCandidateHostLauncher,
+  publishUpdateCandidatePluginTreeLinks,
+  resolveUpdateCandidatePluginTreeTargets,
+  verifyUpdateCandidatePluginTree,
+} from "./update-candidate-plugin-tree-links.js";
 import {
   readRuntimeModulesManifest,
   relocateRuntimeEntry,
-  relocateRuntimePath,
   type RuntimeRelocation,
 } from "./update-runtime-relocation.js";
 
@@ -54,10 +60,6 @@ export const UpdateCandidatePluginTreePlanSchema = z.object({
   edges: z.array(z.object({ source: z.string(), target: z.string(), real: z.string() })),
 });
 export type UpdateCandidatePluginTreePlan = z.infer<typeof UpdateCandidatePluginTreePlanSchema>;
-
-const isHostLauncher = (file: string) =>
-  path.basename(path.dirname(file)) === ".bin" &&
-  ["openclaw", "openclaw.cmd", "openclaw.ps1"].includes(path.basename(file));
 
 async function dependencyOwner(target: string, withinRetainedHost = false): Promise<string> {
   // A pnpm package resolves dependencies beside its package directory. Preserve
@@ -399,7 +401,8 @@ export async function prepareUpdateCandidatePluginTrees(params: {
       if (
         (covered(real) && !(insideHost(real) && isRetainedDependency(real))) ||
         hostRoots.has(real) ||
-        (isHostLauncher(file) && [...hostRoots].some((root) => isPathInside(root, real)))
+        (isUpdateCandidateHostLauncher(file) &&
+          [...hostRoots].some((root) => isPathInside(root, real)))
       ) {
         continue;
       }
@@ -453,7 +456,7 @@ export async function prepareUpdateCandidatePluginTrees(params: {
   }
   for (const [file, { target, real }] of edges) {
     const host = [...hostRoots].find(
-      (root) => real === root || (isHostLauncher(file) && isPathInside(root, real)),
+      (root) => real === root || (isUpdateCandidateHostLauncher(file) && isPathInside(root, real)),
     );
     relocations.push({
       sourceRoot: target,
@@ -501,93 +504,19 @@ export async function copyUpdateCandidatePluginTrees(
     targetStateDir: string;
     candidateRoot: string;
     onProgress?: () => void | Promise<void>;
+    onCodeLink?: (fact: UpdateCandidatePluginCodeLink) => void;
   },
 ): Promise<void> {
-  const privateRoot = resolvePathViaExistingAncestorSync(path.resolve(params.targetStateDir));
-  const candidateRoot = resolvePathViaExistingAncestorSync(path.resolve(params.candidateRoot));
-  if (candidateRoot !== plan.candidateRoot) {
-    throw new Error("Plugin files changed during update preparation; rerun the update");
-  }
-  const rebase = (file: string) =>
-    relocateRuntimePath(file, [{ sourceRoot: plan.privateRoot, destinationRoot: privateRoot }]);
-  const copies = plan.copies.map<[string, string]>(([source, target]) => [source, rebase(target)]);
-  const hostLinks = new Set(plan.hostLinks.map(rebase));
-  const relocations = plan.relocations.map(({ sourceRoot, destinationRoot }) => ({
-    sourceRoot,
-    destinationRoot: rebase(destinationRoot),
-  }));
-  const assertBindings = async () => {
-    for (const [source, real] of plan.moduleBindings) {
-      if ((await fs.realpath(source)) !== real) {
-        throw new Error(`Plugin module owner changed after snapshot inventory: ${source}`);
-      }
-    }
-    for (const edge of plan.edges) {
-      const target = path.resolve(path.dirname(edge.source), await fs.readlink(edge.source));
-      const real = await fs.realpath(edge.source).catch((error: unknown) => {
-        if (hasNodeErrorCode(error, "ENOENT") || hasNodeErrorCode(error, "ELOOP")) {
-          return target;
-        }
-        throw error;
-      });
-      if (target !== edge.target || real !== edge.real) {
-        throw new Error(`Plugin link changed after snapshot inventory: ${edge.source}`);
-      }
-    }
-  };
-  const destinationFor = (source: string) => {
-    const owner = copies.find(([root]) => isPathInside(root, source));
-    if (!owner) {
-      throw new Error("Inventoried plugin entry has no copy owner");
-    }
-    return path.join(owner[1], path.relative(owner[0], source));
-  };
-  const assertEntryStat = (entry: UpdateCandidatePluginEntry, current: BigIntStats) => {
-    const sameKind =
-      entry.kind === "directory"
-        ? current.isDirectory()
-        : entry.kind === "file"
-          ? current.isFile()
-          : current.isSymbolicLink();
-    const sameIdentity =
-      current.dev.toString() === entry.dev && current.ino.toString() === entry.ino;
-    const sameMode = Number(current.mode & 0o7777n) === entry.mode;
-    if (!sameKind || !sameIdentity || !sameMode) {
-      throw new Error(`Plugin entry changed after snapshot inventory: ${entry.path}`);
-    }
-    const sameFile =
-      entry.kind !== "file" ||
-      sameFileMutationFingerprint(current, {
-        dev: BigInt(entry.dev),
-        ino: BigInt(entry.ino),
-        size: BigInt(entry.size),
-        birthtimeNs: BigInt(entry.birthtimeNs),
-        mtimeNs: BigInt(entry.mtimeNs),
-        ctimeNs: BigInt(entry.ctimeNs),
-      });
-    if (!sameFile || (entry.kind === "symlink" && current.size !== BigInt(entry.size))) {
-      throw new Error(`Plugin entry changed after snapshot inventory: ${entry.path}`);
-    }
-  };
+  const targets = resolveUpdateCandidatePluginTreeTargets(plan, params);
+  const { privateRoot, candidateRoot, copies, hostLinks, relocations, destinationFor } = targets;
   const assertEntry = async (entry: UpdateCandidatePluginEntry) => {
     await params.onProgress?.();
-    assertEntryStat(entry, await fs.lstat(entry.path, { bigint: true }));
+    assertUpdateCandidatePluginEntryStat(entry, await fs.lstat(entry.path, { bigint: true }));
     if (entry.kind === "symlink" && (await fs.readlink(entry.path)) !== entry.link) {
       throw new Error(`Plugin entry changed after snapshot inventory: ${entry.path}`);
     }
   };
-  await assertBindings();
-  for (const [, target] of copies) {
-    const destination = resolvePathViaExistingAncestorSync(target);
-    if (!isPathInside(privateRoot, destination)) {
-      throw new Error("Plugin copy destination escapes update state");
-    }
-    for (const [other] of copies) {
-      if (isPathInside(other, destination) || isPathInside(destination, other)) {
-        throw new Error("Plugin copy source overlaps its destination");
-      }
-    }
-  }
+  await targets.assertBindings();
   for (const entry of plan.entries) {
     await assertEntry(entry);
   }
@@ -611,7 +540,10 @@ export async function copyUpdateCandidatePluginTrees(
         mode: entry.mode | 0o600,
         sourceHardlinks: "allow",
         assertBeforeMutation: () =>
-          assertEntryStat(entry, fsSync.lstatSync(entry.path, { bigint: true })),
+          assertUpdateCandidatePluginEntryStat(
+            entry,
+            fsSync.lstatSync(entry.path, { bigint: true }),
+          ),
       });
       await assertEntry(entry);
     }
@@ -624,7 +556,7 @@ export async function copyUpdateCandidatePluginTrees(
       await fs.symlink(entry.link, destination, entry.linkType);
     }
   }
-  await assertBindings();
+  await targets.assertBindings();
   for (const entry of plan.entries) {
     await assertEntry(entry);
   }
@@ -634,87 +566,18 @@ export async function copyUpdateCandidatePluginTrees(
       await relocateRuntimeEntry(target, entry.path, target, entry.kind, relocations);
     }
   }
-  // Projection owns these private links. Installer peer-link policy expects a
-  // literal node_modules directory and cannot bind a relocated module owner.
-  for (const link of hostLinks) {
-    if (!isPathInside(privateRoot, resolvePathViaExistingAncestorSync(path.dirname(link)))) {
-      throw new Error("Plugin host link escapes update state");
-    }
-    await fs.mkdir(path.dirname(link), { recursive: true });
-    const existing = await fs.lstat(link).catch((error: unknown) => {
-      if (hasNodeErrorCode(error, "ENOENT")) {
-        return undefined;
-      }
-      throw error;
-    });
-    if (existing) {
-      if (
-        !existing.isSymbolicLink() ||
-        path.resolve(path.dirname(link), await fs.readlink(link)) !== candidateRoot
-      ) {
-        throw new Error("Plugin host link conflicts with its update owner");
-      }
-    } else {
-      await fs.symlink(candidateRoot, link, process.platform === "win32" ? "junction" : "dir");
-    }
-  }
-  const privateAliases: string[] = [];
-  for (const [sourceAlias, sourceTarget] of plan.aliases) {
-    const alias = rebase(sourceAlias);
-    const target = rebase(sourceTarget);
-    if (!isPathInside(privateRoot, resolvePathViaExistingAncestorSync(path.dirname(alias)))) {
-      throw new Error("Plugin module alias escapes update state");
-    }
-    const existing = await fs.lstat(alias).catch((error: unknown) => {
-      if (hasNodeErrorCode(error, "ENOENT")) {
-        return undefined;
-      }
-      throw error;
-    });
-    if (existing) {
-      if ((await fs.realpath(alias)) !== (await fs.realpath(target))) {
-        throw new Error("Plugin module alias conflicts with its private owner");
-      }
-    } else {
-      await fs.mkdir(path.dirname(alias), { recursive: true });
-      await fs.symlink(target, alias, process.platform === "win32" ? "junction" : "dir");
-    }
-    privateAliases.push(alias);
-  }
-  async function verify(file: string): Promise<void> {
-    const stat = await fs.lstat(file);
-    if (hostLinks.has(file)) {
-      if (
-        !stat.isSymbolicLink() ||
-        path.resolve(path.dirname(file), await fs.readlink(file)) !== candidateRoot
-      ) {
-        throw new Error("Copied plugin host link does not target the update");
-      }
-      return;
-    }
-    // Inspect the entry before traversal, including standalone module aliases;
-    // following a copied root link can otherwise accept an entirely live tree.
-    if (stat.isSymbolicLink()) {
-      const target = path.resolve(path.dirname(file), await fs.readlink(file));
-      if (
-        !isPathInside(privateRoot, target) &&
-        !(isHostLauncher(file) && isPathInside(candidateRoot, target))
-      ) {
-        throw new Error("Copied plugin symlink escapes update state");
-      }
-      return;
-    }
-    if (stat.isDirectory()) {
-      for (const entry of await fs.readdir(file)) {
-        await verify(path.join(file, entry));
-      }
-    }
-  }
+  const privateAliases = await publishUpdateCandidatePluginTreeLinks({
+    privateRoot,
+    candidateRoot,
+    hostLinks,
+    aliases: targets.aliases,
+  });
+  const verification = { privateRoot, candidateRoot, hostLinks, onCodeLink: params.onCodeLink };
   for (const alias of privateAliases) {
-    await verify(alias);
+    await verifyUpdateCandidatePluginTree(alias, verification);
   }
   for (const [, target] of copies) {
-    await verify(target);
+    await verifyUpdateCandidatePluginTree(target, verification);
   }
   for (const entry of plan.entries) {
     if (entry.kind === "file" && (entry.mode & 0o600) !== 0o600) {

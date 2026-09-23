@@ -136,9 +136,9 @@ export { fingerprintResolvedAuthProfileCredential } from "../agents/execution-au
 export type {
   AgentHarnessUserInputAnswers,
   AgentHarnessUserInputOption,
-  AgentHarnessUserInputPromptOptions,
   AgentHarnessUserInputQuestion,
-} from "../agents/harness/user-input-bridge.js";
+} from "../agents/harness/user-input-types.js";
+export type { AgentHarnessUserInputPromptOptions } from "../agents/harness/user-input-bridge.js";
 export type { AgentHarnessQuestionGatewayCall } from "../agents/harness/gateway-question-dispatch.js";
 type EmbeddedRunAttemptParamsBase = Omit<
   CoreEmbeddedRunAttemptParams,
@@ -233,7 +233,7 @@ export { buildAgentRuntimePlan } from "../agents/runtime-plan/build.js";
 export { prepareAgentRuntimeAuth } from "../agents/runtime-plan/prepare-auth.js";
 export { classifyEmbeddedAgentRunResultForModelFallback } from "../agents/embedded-agent-runner/result-fallback-classifier.js";
 export { resolveUserPath } from "../utils.js";
-export { callGatewayTool } from "../agents/tools/gateway.js";
+export { callGatewayTool, readGatewayToolOperatorScopes } from "../agents/tools/gateway.js";
 export { hasGatewayToolRoutingContext } from "../agents/tools/in-process-gateway.js";
 export type { NodeListNode } from "../agents/tools/nodes-utils.js";
 export {

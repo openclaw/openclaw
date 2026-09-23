@@ -26,7 +26,6 @@ async function loadSkillsRouteData(
       gateway,
       gatewaySnapshot,
       agents,
-      agentsList: null,
       selectedAgentId: null,
       selectionIntentRevision,
       report: null,
@@ -36,12 +35,10 @@ async function loadSkillsRouteData(
   }
 
   let error: string | null = null;
-  let agentsList: SkillsRouteData["agentsList"] = null;
   let selectedAgentId: string | null = null;
   let report: SkillsRouteData["report"] = null;
   try {
     const loadedAgentsList = await agents.ensureList();
-    agentsList = loadedAgentsList;
     const requestedAgentId =
       search.get("agent") ?? selection.selectedId ?? loadedAgentsList?.defaultId;
     selectedAgentId = loadedAgentsList?.agents.some((agent) => agent.id === requestedAgentId)
@@ -61,7 +58,6 @@ async function loadSkillsRouteData(
     gateway,
     gatewaySnapshot,
     agents,
-    agentsList,
     selectedAgentId,
     selectionIntentRevision,
     report,

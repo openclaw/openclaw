@@ -1,7 +1,7 @@
 // SSH-verified node pairing e2e: real gateway server on the LAN self-connect
 // harness, with the SSH probe runtime mocked at the module boundary.
 import { beforeEach, expect, test, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { writeConfigFile } from "../config/config.js";
 import { getRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { GatewayNodePairingConfig } from "../config/types.gateway.js";
@@ -173,6 +173,16 @@ describeWithLanNodePairingServer("gateway ssh-verified node pairing auto-approve
         // A completed matching probe can authorize the first connection. Hold it
         // until the pending handshake and retry-hint assertions have finished.
         const probe = createDeferred<NodeIdentityProbeResult>();
+        const published =
+          createDeferred<Awaited<ReturnType<typeof pairingApprovals.approveDevicePairing>>>();
+        const approve = pairingApprovals.approveDevicePairing;
+        const approval = vi
+          .spyOn(pairingApprovals, "approveDevicePairing")
+          .mockImplementation((requestId, options, baseDir) => {
+            const result = approve(requestId, options, baseDir);
+            published.resolve(result);
+            return result;
+          });
         probeMock.mockImplementation(() => probe.promise);
         let bodyFailure: { error: unknown } | undefined;
         try {
@@ -197,14 +207,16 @@ describeWithLanNodePairingServer("gateway ssh-verified node pairing auto-approve
             stdout: `motd noise\n{"deviceId":"${loaded.identity.deviceId}","publicKey":"${loaded.publicKey}"}\n`,
           });
 
-          const paired = await waitFor(async () => {
-            const record = await getPairedDevice(loaded.identity.deviceId);
-            // Wait for the ssh-verified provenance specifically: the approval
-            // and its read-back must survive the SQLite round-trip.
-            return record?.approvedVia === "ssh-verified" ? record : null;
-          }, "ssh-verified device approval");
-          expect(paired.approvedVia).toBe("ssh-verified");
-          expect(paired.publicKey).toBe(loaded.publicKey);
+          // Approval settles after the worker commits and publishes the paired record.
+          const result = await withTestTimeout(
+            published.promise,
+            8_000,
+            "timed out waiting for ssh-verified device approval",
+          );
+          expect(result?.status).toBe("approved");
+          const paired = await getPairedDevice(loaded.identity.deviceId);
+          expect(paired?.approvedVia).toBe("ssh-verified");
+          expect(paired?.publicKey).toBe(loaded.publicKey);
           expect(probeMock).toHaveBeenCalledWith(expect.objectContaining({ host: lanIp }));
 
           const second = await connectNode();
@@ -236,6 +248,8 @@ describeWithLanNodePairingServer("gateway ssh-verified node pairing auto-approve
             );
           }
           throw cleanupError;
+        } finally {
+          approval.mockRestore();
         }
         if (bodyFailure) {
           throw bodyFailure.error;

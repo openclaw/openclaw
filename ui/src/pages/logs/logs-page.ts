@@ -54,6 +54,7 @@ class LogsPage extends OpenClawLightDomElement {
       void this.loadLogs({ quiet: true });
     },
     false,
+    "visible",
   );
   private contentScrollFrame: number | null = null;
   private logsTaskQuiet = false;

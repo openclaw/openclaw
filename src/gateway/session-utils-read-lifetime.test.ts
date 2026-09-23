@@ -24,7 +24,11 @@ it.each(["alias replacement", "cold-store close", "same-file reopen"] as const)(
       for (const storePath of [original, replacement]) {
         await upsertSessionEntryCore(
           { agentId: "main", storePath, sessionKey },
-          { sessionId: "identical-session", updatedAt: 1 },
+          {
+            sessionId: "identical-session",
+            lifecycleRevision: "identical-generation",
+            updatedAt: 1,
+          },
         );
         // Settle seed workers, then restore the warm handle before testing read lifetime.
         await closeOpenClawAgentDatabaseByPathAsync(storePath);

@@ -19,6 +19,7 @@ import {
   OpenClawStateOwnershipError,
   OpenClawStateOwnershipMetadataError,
 } from "./openclaw-state-ownership.js";
+import { SessionMetadataUnavailableError } from "./session-metadata-unavailable-error.js";
 
 type MaintenanceKind = ConstructorParameters<typeof StartupMaintenanceRequiredError>[0];
 type StateMigrationKind = ConstructorParameters<
@@ -59,6 +60,11 @@ export type ErrorIdentity =
     }
   | { type: "maintenance"; kind: MaintenanceKind }
   | { type: "state-migration"; kind: StateMigrationKind; pathname: string }
+  | {
+      type: "session-metadata";
+      reason: SessionMetadataUnavailableError["reason"];
+      missingTables: readonly string[];
+    }
   | { type: "agent-media-migration"; pathname: string; schemaVersion: number };
 
 export function identifyError(error: Error): ErrorIdentity {
@@ -87,6 +93,13 @@ export function identifyError(error: Error): ErrorIdentity {
   }
   if (error instanceof McpOAuthStoreCorruptionError) {
     return { type: "mcp-oauth-corruption" };
+  }
+  if (error instanceof SessionMetadataUnavailableError) {
+    return {
+      type: "session-metadata",
+      reason: error.reason,
+      missingTables: [...error.missingTables],
+    };
   }
   if (error instanceof SkillUploadRequestError) {
     return { type: "skill-upload-request" };
@@ -205,6 +218,12 @@ export function parseIdentity(node: Record<string, unknown>): ErrorIdentity | un
     case "skill-upload-request":
     case "mcp-oauth-corruption":
       return { type: node.type };
+    case "session-metadata":
+      return (node.reason === "schema-missing" || node.reason === "table-missing") &&
+        Array.isArray(node.missingTables) &&
+        node.missingTables.every((table: unknown) => typeof table === "string")
+        ? { type: node.type, reason: node.reason, missingTables: [...node.missingTables] }
+        : undefined;
     case "coordinator-contention":
       return node.family === "gateway-lifecycle" ||
         node.family === "state-lifecycle" ||
@@ -267,6 +286,8 @@ export function createError(node: ErrorIdentity & { message: string }): Error {
       return new WorkerSessionAlreadyAttachedError(node.sessionId, node.environmentId);
     case "workspace-alias-repointed":
       return new WorkspaceAliasRepointedError(node);
+    case "session-metadata":
+      return new SessionMetadataUnavailableError(node.reason, undefined, node.missingTables);
     case "error":
       return new Error(node.message);
     case "range-error":

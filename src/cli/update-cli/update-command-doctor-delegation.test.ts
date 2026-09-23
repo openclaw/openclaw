@@ -14,8 +14,13 @@ import {
   type UpdatePostInstallDoctorResult,
 } from "../../infra/update-doctor-result.js";
 import { UpdateRequesterRevokedError } from "../../infra/update-requester-authority.js";
+import { createUpdateRun } from "../../infra/update-run-ledger.js";
+import { loadUpdateRecovery } from "../../infra/update-run-recovery.js";
 import type { UpdateStepResult } from "../../infra/update-runner-types.js";
 import * as processRunner from "../../process/exec.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { waitForPidToExit } from "../../test-utils/process-tree.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
@@ -58,56 +63,68 @@ beforeEach(() => {
   vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(path.join(root, "tmp"));
 });
 afterEach(() => {
+  closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
 
-it("binds the real Doctor child while the parent remains suspended, then resumes the parent", async () => {
-  const runId = randomUUID();
-  const runUtf8 = processRunner.runUtf8CommandWithTimeout;
-  let spawned = false;
-  await withUpdateCommandExecutor(runId, async (executor) => {
-    const fence = await executor.enter(root, { serviceRoot });
-    const opts: UpdateCommandOptions = { run: { runId, env, executorFence: fence } };
-    const guards = createUpdateCommandExecutionGuards(opts, root);
-    vi.spyOn(processRunner, "runUtf8CommandWithTimeout").mockImplementation(
-      async (_argv, options) => {
-        assert(typeof options !== "number", "Doctor supplies input-admission options");
-        // Only the Doctor program is substituted. Spawn, PID binding, input ordering,
-        // native executor custody, and process-tree settlement are the production owners.
-        expect(() => fence.assertCurrent()).toThrow("The update process is still running.");
-        spawned = true;
-        return runUtf8(
-          [
-            process.execPath,
-            "-e",
-            "let s='';process.stdin.setEncoding('utf8');process.stdin.on('data',x=>s+=x);process.stdin.on('end',()=>require('node:fs').writeFileSync(process.argv[1],s));",
-            received,
-          ],
-          options,
-        );
-      },
-    );
-    const result = await runPackageUpdateDoctor({
-      root,
-      timeoutMs: 5000,
-      progress: {},
-      managedServiceEnv: env,
-      getDoctorContext: () => ({
-        runId,
-        executorFence: fence,
-        inputHash: hashConfigRaw("{}\n"),
-        changes: [],
-        ...guards,
-      }),
+it.each([false, true])(
+  "resumes the parent after its bound Doctor (shared schema migrated=%s)",
+  async (migrated) => {
+    const runId = createUpdateRun({ trigger: "cli" }, { env }).runId;
+    closeOpenClawStateDatabaseForTest();
+    const runUtf8 = processRunner.runUtf8CommandWithTimeout;
+    let spawned = false;
+    await withUpdateCommandExecutor(runId, async (executor) => {
+      const fence = await executor.enter(root, { serviceRoot });
+      const opts: UpdateCommandOptions = { run: { runId, env, executorFence: fence } };
+      const guards = createUpdateCommandExecutionGuards(opts, root);
+      vi.spyOn(processRunner, "runUtf8CommandWithTimeout").mockImplementation(
+        async (_argv, options) => {
+          assert(typeof options !== "number", "Doctor supplies input-admission options");
+          // Only the Doctor program is substituted. Spawn, PID binding, input ordering,
+          // native executor custody, and process-tree settlement are the production owners.
+          expect(() => fence.assertCurrent()).toThrow("The update process is still running.");
+          spawned = true;
+          return runUtf8(
+            [
+              process.execPath,
+              "-e",
+              `let s='';process.stdin.setEncoding('utf8');process.stdin.on('data',x=>s+=x);process.stdin.on('end',()=>{
+              require('node:fs').writeFileSync(process.argv[1],s);
+              ${migrated ? `const db=new (require('node:sqlite').DatabaseSync)(${JSON.stringify(resolveOpenClawStateSqlitePath(env))});db.exec(${JSON.stringify(`BEGIN IMMEDIATE; PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1}; UPDATE schema_meta SET schema_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1} WHERE meta_key = 'primary'; COMMIT;`)});db.close();` : ""}
+            });`,
+              received,
+            ],
+            options,
+          );
+        },
+      );
+      const result = await runPackageUpdateDoctor({
+        root,
+        timeoutMs: 5000,
+        progress: {},
+        managedServiceEnv: env,
+        getDoctorContext: () => ({
+          runId,
+          executorFence: fence,
+          inputHash: hashConfigRaw("{}\n"),
+          changes: [],
+          ...guards,
+        }),
+      });
+      expect(result).toMatchObject({ exitCode: 0 });
+      expect(spawned).toBe(true);
+      expect(JSON.parse(fs.readFileSync(received, "utf8"))).toMatchObject({ runId, root });
+      fence.assertCurrent();
+      guards.assertCurrent();
+      if (migrated) {
+        expect(() => loadUpdateRecovery(runId, { env })).toThrow(/newer schema version/);
+      }
+      expect(fs.readFileSync(configPath, "utf8")).toBe("{}\n");
     });
-    expect(result).toMatchObject({ exitCode: 0 });
-    expect(spawned).toBe(true);
-    expect(JSON.parse(fs.readFileSync(received, "utf8"))).toMatchObject({ runId, root });
-    fence.assertCurrent();
-    expect(fs.readFileSync(configPath, "utf8")).toBe("{}\n");
-  });
-});
+  },
+);
 
 it.each([
   "requester-revoked",
@@ -216,7 +233,6 @@ it.each([
     const runUtf8 = processRunner.runUtf8CommandWithTimeout;
     let childPid: number | undefined;
     let resultPath: string | undefined;
-    let requesterCurrent = true;
     let authorityRefusal: unknown;
     const receipt: UpdatePostInstallDoctorResult =
       exitCode === UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE
@@ -234,7 +250,7 @@ it.each([
           executorFence: fence,
           requesterAuthority: {
             requester: { channel: "test", senderId: "owner" },
-            isCurrent: () => requesterCurrent,
+            isCurrent: () => true,
           },
         },
       };
@@ -264,7 +280,8 @@ it.each([
           assert(resultPath);
           await writeUpdatePostInstallDoctorResult({ resultPath, result: receipt });
           if (revokeAfterSettlement) {
-            requesterCurrent = false;
+            assert(opts.run?.requesterAuthority);
+            opts.run.requesterAuthority = { ...opts.run.requesterAuthority };
           }
           return result;
         },

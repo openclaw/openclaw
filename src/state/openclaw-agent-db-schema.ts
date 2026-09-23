@@ -147,12 +147,13 @@ export function* agentDatabaseIntegrityBeforeMutationSteps(
         validateAfterRepair: () =>
           assertOpenClawAgentCurrentRuntimeSchema(database, { agentId, pathname }),
         diagnostics,
-        reuseIntegrity: canReuseOpenClawAgentIntegrityVerification(
-          pathname,
-          verification,
-          migrationPending || hasPendingCurrentVersionMigration,
-          reuseRuntimeIntegrity,
-        ),
+        reuseIntegrity:
+          reuseRuntimeIntegrity ||
+          canReuseOpenClawAgentIntegrityVerification(
+            pathname,
+            verification,
+            migrationPending || hasPendingCurrentVersionMigration,
+          ),
       },
     );
     if (rebuiltIndexes.length > 0) {

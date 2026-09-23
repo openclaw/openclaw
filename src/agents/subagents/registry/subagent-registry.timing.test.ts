@@ -3,10 +3,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./subagent-registry.mocks.shared.js";
+import "./subagent-registry.persistence.mocks.test-support.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../../config/config.js";
 import { patchSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import { callGateway } from "../../../gateway/call.js";
+import { racePromiseWithAbortSignal } from "../../../infra/abort-signal.js";
 import { onAgentEvent } from "../../../infra/agent-events.js";
 import { flushLogger, setLoggerOverride } from "../../../logging/logger.js";
 import { resolveOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.js";
@@ -20,22 +23,30 @@ import {
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
 import {
   cleanupSubagentRegistryPersistenceTest,
-  createSubagentRegistryTestDeps,
   readSubagentSessionStore,
   settleSubagentRegistryPersistenceWork,
 } from "./subagent-registry.persistence.test-support.js";
-import {
-  loadSubagentRegistryFromSqlite,
-  saveSubagentRegistryToSqlite,
-} from "./subagent-registry.store.sqlite.js";
+import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
 import {
   registerSubagentRun,
   resetSubagentRegistryForTests,
-  testing,
 } from "./subagent-registry.test-helpers.js";
 
 const { announce } = vi.hoisted(() => ({ announce: vi.fn(async () => "delivered" as const) }));
-vi.mock("../announce/subagent-announce.js", () => ({ runSubagentAnnounceFlow: announce }));
+vi.mock("../announce/subagent-announce.js", async (importOriginal) => {
+  const { hasUsableSessionEntry } =
+    await importOriginal<typeof import("../announce/subagent-announce.js")>();
+  return {
+    hasUsableSessionEntry,
+    runSubagentAnnounceFlow: announce,
+    captureSubagentCompletionReply: vi.fn(async () => undefined),
+  };
+});
+vi.mock("./subagent-registry-state.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./subagent-registry-state.js")>();
+  const { saveSubagentRegistryToSqlite } = await import("./subagent-registry.store.sqlite.js");
+  return { ...actual, persistSubagentRunsToDisk: saveSubagentRegistryToSqlite };
+});
 
 describe("subagent timing completion", () => {
   const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
@@ -44,6 +55,7 @@ describe("subagent timing completion", () => {
   let logFile: string;
 
   beforeEach(() => {
+    setRuntimeConfigSnapshot({});
     stateDir = tempDirs.make("openclaw-subagent-timing-reproduction-");
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
     logFile = path.join(stateDir, "reproduction.log");
@@ -55,19 +67,12 @@ describe("subagent timing completion", () => {
     vi.mocked(callGateway).mockReset();
     vi.mocked(onAgentEvent).mockReset();
     vi.mocked(onAgentEvent).mockReturnValue(() => undefined);
-    testing.setDepsForTest({
-      ...createSubagentRegistryTestDeps(),
-      callGateway,
-      persistSubagentRunsToDisk: saveSubagentRegistryToSqlite,
-      runSubagentAnnounceFlow: announce,
-    });
   });
 
   afterEach(async () => {
     await cleanupSubagentRegistryPersistenceTest({
       stateDir,
       resetRegistry: () => resetSubagentRegistryForTests({ persist: false }),
-      resetDeps: () => testing.setDepsForTest(),
       closeDatabases: () => {
         resetTaskRegistryForTests({ persist: false });
         resetTaskFlowRegistryForTests({ persist: false });
@@ -75,10 +80,11 @@ describe("subagent timing completion", () => {
     });
     configureTaskRegistryMaintenance({ runtimeAuthoritative: false });
     setLoggerOverride(null);
+    clearRuntimeConfigSnapshot();
     envSnapshot.restore();
   });
 
-  it.each(["wait-only", "sequential", "overlap"] as const)("%s", async (mode) => {
+  it.for(["wait-only", "sequential", "overlap"] as const)("%s", async (mode, { signal }) => {
     const runId = `timing-repro-${mode}`;
     const childSessionKey = `agent:main:subagent:${mode}`;
     const requesterSessionKey = "agent:main:main";
@@ -142,8 +148,8 @@ describe("subagent timing completion", () => {
       }
     };
     const waitForCleanup = async () => {
-      await vi.waitFor(() => expect(readRun()?.cleanupCompletedAt).toEqual(expect.any(Number)));
       await settleSubagentRegistryPersistenceWork();
+      expect(readRun()?.cleanupCompletedAt).toEqual(expect.any(Number));
     };
     if (mode === "overlap") {
       const entered = createDeferred();
@@ -161,14 +167,34 @@ describe("subagent timing completion", () => {
       );
       try {
         await entered.promise;
-        const queueDepth = () =>
-          SQLITE_SESSION_WRITER_QUEUES.get(resolveOpenClawAgentSqlitePath({ agentId: "main" }))
-            ?.pending.length ?? 0;
-        expect(queueDepth()).toBe(0);
-        emitTerminal();
-        await vi.waitFor(() => expect(queueDepth()).toBe(1));
-        waiting.resolve(terminal);
-        await vi.waitFor(() => expect(queueDepth()).toBe(2));
+        const queue = SQLITE_SESSION_WRITER_QUEUES.get(storePath);
+        if (!queue) {
+          throw new Error("session writer did not retain its queue");
+        }
+        const lifecycleQueued = createDeferred();
+        const waiterQueued = createDeferred();
+        const push = queue.pending.push.bind(queue.pending);
+        // Task finalization awaits a worker before these writes reach the FIFO.
+        const enqueueObserver = vi.spyOn(queue.pending, "push").mockImplementation((...tasks) => {
+          const depth = push(...tasks);
+          if (depth === 1) {
+            lifecycleQueued.resolve();
+          } else if (depth === 2) {
+            waiterQueued.resolve();
+          }
+          return depth;
+        });
+        try {
+          expect(queue.pending.length).toBe(0);
+          emitTerminal();
+          await racePromiseWithAbortSignal(lifecycleQueued.promise, signal);
+          expect(queue.pending.length).toBe(1);
+          waiting.resolve(terminal);
+          await racePromiseWithAbortSignal(waiterQueued.promise, signal);
+          expect(queue.pending.length).toBe(2);
+        } finally {
+          enqueueObserver.mockRestore();
+        }
       } finally {
         waiting.resolve(terminal);
         released.resolve();

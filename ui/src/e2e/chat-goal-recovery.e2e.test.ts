@@ -180,6 +180,7 @@ suite.define(() => {
                 ),
               ),
             ).toHaveLength(0);
+            await page.screenshot({ path: path.join(artifacts, "recovery-unavailable.png") });
             await page.reload();
             await original.waitFor();
             expect(

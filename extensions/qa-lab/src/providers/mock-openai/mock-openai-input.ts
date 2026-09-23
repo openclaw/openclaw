@@ -162,7 +162,7 @@ export function resolveMockSubagentTurn(input: ResponsesInputItem[]):
       continue;
     }
     if (
-      /^\[Subagent Context\] Every subagent spawned from this session has now settled/mu.test(
+      /^(?:\[[A-Za-z]{3} \d{4}-\d{2}-\d{2} [^\]\r\n]+\] )?\[Subagent Context\] Every subagent spawned from this session has now settled/mu.test(
         current,
       )
     ) {

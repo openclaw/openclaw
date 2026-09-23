@@ -322,17 +322,24 @@ try {
   }
   const manager = read("src/agents/agent-bundle-mcp-manager-api.ts");
   const ownerName = manager === null ? "runtime" : "manager-api";
-  const acquire = manager === null ? "getOrCreateSessionMcpRuntime" : "acquireSessionMcpRuntime";
   const owner = parse(`src/agents/agent-bundle-mcp-${ownerName}.ts`,
     manager ?? required("src/agents/agent-bundle-mcp-runtime.ts"));
-  if (!hasExport(owner, acquire) || !hasExport(owner, "disposeAllSessionMcpRuntimes") ||
-      !hasImport(clientModule, `${client.dist}/agents/agent-bundle-mcp-${ownerName}.js`,
-        [acquire, "disposeAllSessionMcpRuntimes"]) ||
+  const contracts = manager === null
+    ? [{ acquire: "getOrCreateSessionMcpRuntime", mode: "legacy" }]
+    : [
+        { acquire: "getOrCreateSessionMcpRuntime", mode: "legacy" },
+        { acquire: "acquireSessionMcpRuntime", mode: "current" },
+      ];
+  const matches = contracts.filter(({ acquire }) =>
+    hasExport(owner, acquire) &&
+    hasImport(clientModule, `${client.dist}/agents/agent-bundle-mcp-${ownerName}.js`,
+      [acquire, "disposeAllSessionMcpRuntimes"]));
+  if (matches.length !== 1 || !hasExport(owner, "disposeAllSessionMcpRuntimes") ||
       (manager !== null && client.path !== layouts[1].path) ||
       importsOwner(clientModule, manager === null ? "manager-api" : "runtime")) {
     fail("unrecognized selected bundle client/API contract");
   }
-  process.stdout.write(`${manager === null ? "legacy" : "current"}:${client.path}`);
+  process.stdout.write(`${matches[0].mode}:${client.path}`);
 } catch (error) {
   console.error(`frozen bundle contract: unable to read selected bundle source: ${error.message}`);
   process.exitCode = 2;

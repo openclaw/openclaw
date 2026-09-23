@@ -6,6 +6,8 @@ import {
   appendSessionTranscriptReport,
   type SessionTranscriptWriteScope,
 } from "../config/sessions/session-accessor.js";
+import { appendSessionTranscriptReportNative } from "../config/sessions/session-accessor.sqlite-transcript-reports.js";
+import { withSessionTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
 import { redactSensitiveText } from "../logging/redact.js";
 
 const SESSION_RUN_ERROR_MAX_CHARS = 160;
@@ -22,29 +24,37 @@ export async function recordGatewaySessionRunFailure(params: {
   runId: string;
   error: unknown;
   assertCommitAllowed?: () => void;
-  settleSession?: () => undefined;
+  settleStartupSession?: () => undefined;
 }): Promise<void> {
   const { runId } = params;
   const error = truncateUtf16Safe(sanitizeSessionRunError(params.error), 512) || "unknown error";
-  const result = await appendSessionTranscriptReport(params.target, {
-    kind: "custom",
-    customTypes: [RUN_FAILED_BEFORE_REPLY_TRANSCRIPT_TYPE],
-    suppressWhenAssistantRun: runId,
-    selectReport: (latest) => {
-      params.assertCommitAllowed?.();
-      params.settleSession?.();
-      params.assertCommitAllowed?.();
-      if (isRecord(latest?.details) && latest.details.runId === runId) {
-        return undefined;
-      }
-      return {
-        customType: RUN_FAILED_BEFORE_REPLY_TRANSCRIPT_TYPE,
-        content: `This turn ended before a reply: ${error}`,
-        display: true,
-        details: { runId, error },
-      };
-    },
-  });
+  const append = params.settleStartupSession
+    ? appendSessionTranscriptReportNative
+    : appendSessionTranscriptReport;
+  const result = await withSessionTranscriptWriteAssertion(
+    params.target,
+    () => params.assertCommitAllowed?.(),
+    () =>
+      append(params.target, {
+        kind: "custom",
+        customTypes: [RUN_FAILED_BEFORE_REPLY_TRANSCRIPT_TYPE],
+        suppressWhenAssistantRun: runId,
+        selectReport: (latest) => {
+          params.assertCommitAllowed?.();
+          params.settleStartupSession?.();
+          params.assertCommitAllowed?.();
+          if (isRecord(latest?.details) && latest.details.runId === runId) {
+            return undefined;
+          }
+          return {
+            customType: RUN_FAILED_BEFORE_REPLY_TRANSCRIPT_TYPE,
+            content: `This turn ended before a reply: ${error}`,
+            display: true,
+            details: { runId, error },
+          };
+        },
+      }),
+  );
   if (!result.ok) {
     throw new Error(`Failed run notice could not be appended: ${result.error.code}`);
   }

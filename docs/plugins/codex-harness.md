@@ -286,8 +286,10 @@ generic peak requires a paged state API.
 
 Pasted text saved as a `.txt` attachment is extracted by OpenClaw and included in
 the current turn as untrusted external content, subject to the existing file
-extraction limits. This also applies to adopted and forked Codex sessions with
-locked model selection. Images continue through Codex's native image input.
+extraction limits. Extracted attachments use the sender's filename in model context,
+even when the stored or staged copy has a generated name. This also applies to
+adopted and forked Codex sessions with locked model selection. Images continue
+through Codex's native image input.
 
 Remote Codex app-servers can run on a different machine from the Gateway. Set
 `remoteWorkspaceRoot` to validate remote workspace attachment paths. OpenClaw
@@ -476,8 +478,8 @@ same child result after the parent replies.
 
 - The official `@openclaw/codex` plugin installed. Include `codex` in
   `plugins.allow` if your config uses an allowlist.
-- Managed Codex app-server `0.154.0`. The plugin ships and manages
-  `@openai/codex` `0.154.0` by default, so a `codex` command on `PATH` does not
+- Managed Codex app-server `0.155.1`. The plugin ships and manages
+  `@openai/codex` `0.155.1` by default, so a `codex` command on `PATH` does not
   affect normal startup. Explicit custom, remote, and macOS desktop-owned
   app-servers must report a parseable semantic version of `0.149.0` or newer.
   Newer versions continue with a compatibility warning and normal runtime

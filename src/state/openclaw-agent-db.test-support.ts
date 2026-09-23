@@ -1,6 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { canonicalSessionValidationSchemaSql } from "./openclaw-agent-canonical-validation-schema.js";
 import { agentDatabaseLifecycle as cache } from "./openclaw-agent-db-lifecycle.js";
+import { resolveQuarantineStorePath } from "./openclaw-quarantine-store.js";
 
 /** Remove only the schema owner's future projection before carving a historical database. */
 export function removeCanonicalValidationFromHistoricalAgentFixture(database: DatabaseSync): void {
@@ -29,4 +31,14 @@ export function listOpenClawAgentDatabasesForTest(): Array<{ agentId: string; pa
       (left, right) =>
         left.agentId.localeCompare(right.agentId) || left.path.localeCompare(right.path),
     );
+}
+
+/** Model missing restart metadata without invoking the runtime invalidation owner. */
+export function removeAgentIntegrityMetadataForTest(env: NodeJS.ProcessEnv): void {
+  const store = openNodeSqliteDatabase(resolveQuarantineStorePath(env));
+  try {
+    store.exec("DELETE FROM agent_integrity_verifications");
+  } finally {
+    store.close();
+  }
 }

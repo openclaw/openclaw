@@ -275,6 +275,8 @@ describe("detectChangedScope", () => {
       "scripts/install-xcodegen.sh",
       "scripts/lib/swift-toolchain.sh",
       "scripts/lint-swift.sh",
+      "scripts/run-swiftlint.mts",
+      "scripts/lib/check-limits.mts",
       "scripts/prepare-apple-mermaid.mjs",
     ]) {
       expect(detectChangedScope([toolingPath])).toEqual({

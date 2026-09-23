@@ -37,7 +37,11 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
-import { getActiveCronJobCount, resetCronActiveJobs } from "./active-jobs.js";
+import {
+  getActiveCronJobCount,
+  resetCronActiveJobs,
+  waitForActiveCronJobs,
+} from "./active-jobs.js";
 import { heartbeatTaskDeclarationKey } from "./heartbeat-task.js";
 import { writeCronJobScratch } from "./scratch-store.js";
 import { CronService, type CronEvent } from "./service.js";
@@ -142,9 +146,27 @@ async function createPollFixture(options: { scratch?: string; isolated?: boolean
     );
     runner = startHeartbeatRunner({ cfg, runOnce });
     const events: CronEvent[] = [];
+    const finished = () => events.filter((event) => event.action === "finished");
+    let registered = createDeferred();
+    let completed = createDeferred();
     const request = vi.fn<NonNullable<CronServiceDeps["requestHeartbeatAndWait"]>>(
-      (opts, lifecycle) => requestHeartbeatAndWait({ ...opts, coalesceMs: 250 }, lifecycle),
+      (opts, lifecycle) => {
+        const pending = requestHeartbeatAndWait({ ...opts, coalesceMs: 250 }, lifecycle);
+        registered.resolve();
+        registered = createDeferred();
+        return pending;
+      },
     );
+    async function waitForRequest(count: number) {
+      while (request.mock.calls.length < count) {
+        await registered.promise;
+      }
+    }
+    async function waitForFinished(count: number) {
+      while (finished().length < count) {
+        await completed.promise;
+      }
+    }
     cron = new CronService({
       storePath,
       cronEnabled: true,
@@ -160,7 +182,13 @@ async function createPollFixture(options: { scratch?: string; isolated?: boolean
       requestHeartbeat,
       requestHeartbeatAndWait: request,
       runIsolatedAgentJob: async () => ({ status: "skipped", error: "unused test boundary" }),
-      onEvent: (event) => events.push(structuredClone(event)),
+      onEvent: (event) => {
+        events.push(structuredClone(event));
+        if (event.action === "finished") {
+          completed.resolve();
+          completed = createDeferred();
+        }
+      },
     });
     await cron.start();
     const added = await cron.add(
@@ -197,8 +225,6 @@ async function createPollFixture(options: { scratch?: string; isolated?: boolean
         await work;
       };
     }
-    const finished = () => events.filter((event) => event.action === "finished");
-
     return {
       cron,
       runner,
@@ -210,7 +236,9 @@ async function createPollFixture(options: { scratch?: string; isolated?: boolean
       deps,
       runOnce,
       request,
+      waitForRequest,
       finished,
+      waitForFinished,
       holdLane,
       close,
     };
@@ -240,15 +268,30 @@ describe("native heartbeat busy poll settlement", () => {
     "ends a busy $label poll before its deadline and executes only the next persisted tick",
     async ({ scratch }) => {
       await withPollFixture(
-        async ({ cron, monitor, storePath, reply, runOnce, request, finished, holdLane }) => {
+        async ({
+          cron,
+          monitor,
+          storePath,
+          reply,
+          runOnce,
+          request,
+          waitForRequest,
+          finished,
+          waitForFinished,
+          holdLane,
+        }) => {
           const releaseMain = await holdLane(CommandLane.Main);
           const firstTick = monitor.state.nextRunAtMs!;
           await vi.advanceTimersByTimeAsync(firstTick - Date.now());
-          await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+          await waitForRequest(1);
+          expect(request).toHaveBeenCalledOnce();
           // Observe the full original watchdog window on both versions. The
           // unfixed scheduler records a timeout; the fixed poll settled promptly.
           await vi.advanceTimersByTimeAsync(600_001);
-          await vi.waitFor(() => expect(finished()).toHaveLength(1));
+          await waitForFinished(1);
+          expect(finished()).toHaveLength(1);
+          // Finished precedes schedule maintenance and release of the active marker.
+          await expect(waitForActiveCronJobs(0)).resolves.toEqual({ drained: true, active: 0 });
           const skipped = finished()[0];
           expect(skipped).toMatchObject({
             status: "skipped",
@@ -296,11 +339,14 @@ describe("native heartbeat busy poll settlement", () => {
           await vi.advanceTimersByTimeAsync(nextTick - Date.now() - 1);
           expect(runOnce).toHaveBeenCalledOnce();
           await vi.advanceTimersByTimeAsync(1);
-          await vi.waitFor(() => expect(runOnce).toHaveBeenCalledTimes(2));
+          await waitForRequest(2);
+          await vi.advanceTimersByTimeAsync(250);
+          expect(runOnce).toHaveBeenCalledTimes(2);
           // Wait for the admitted turn itself, not a short polling deadline while
           // its first lazy-loaded reply path is preparing under fake timers.
           await runOnce.mock.results[1]?.value;
-          await vi.waitFor(() => expect(finished()).toHaveLength(2));
+          await waitForFinished(2);
+          expect(finished()).toHaveLength(2);
           expect(finished()[1]).toMatchObject({ status: "ok", completionStatus: "succeeded" });
           expect(reply).toHaveBeenCalledOnce();
           expect(runOnce).toHaveBeenCalledTimes(2);
@@ -313,11 +359,23 @@ describe("native heartbeat busy poll settlement", () => {
 
   it("keeps cron-in-progress and native force semantics while a direct manual wake still retries", async () => {
     await withPollFixture(
-      async ({ cron, monitor, sessionKey, reply, runOnce, request, finished, holdLane }) => {
+      async ({
+        cron,
+        monitor,
+        sessionKey,
+        reply,
+        runOnce,
+        request,
+        waitForRequest,
+        finished,
+        holdLane,
+      }) => {
         const releaseCron = await holdLane(CommandLane.CronNested);
         const forced = cron.run(monitor.id, "force");
-        await vi.waitFor(() => expect(finished()).toHaveLength(1));
+        await waitForRequest(1);
+        await vi.advanceTimersByTimeAsync(250);
         await expect(forced).resolves.toMatchObject({ ok: true, ran: true });
+        expect(finished()).toHaveLength(1);
         expect(request).toHaveBeenCalledWith(
           expect.objectContaining({
             source: "interval",
@@ -356,7 +414,16 @@ describe("native heartbeat busy poll settlement", () => {
     "retains a poll carrying a queued %s event and reports its eventual failure to the original parent",
     async (kind) => {
       await withPollFixture(
-        async ({ cron, monitor, sessionKey, reply, request, finished, holdLane }) => {
+        async ({
+          cron,
+          monitor,
+          sessionKey,
+          reply,
+          request,
+          waitForRequest,
+          finished,
+          holdLane,
+        }) => {
           const releaseMain = await holdLane(CommandLane.Main);
           const text =
             kind === "cron" ? "Reminder: Check the retained reminder" : "Retained generic event";
@@ -369,7 +436,8 @@ describe("native heartbeat busy poll settlement", () => {
             return undefined;
           });
           const parent = cron.run(monitor.id, "force");
-          await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+          await waitForRequest(1);
+          expect(request).toHaveBeenCalledOnce();
           await vi.advanceTimersByTimeAsync(250);
           expect(finished()).toHaveLength(0);
           expect(peekSystemEventEntries(sessionKey).map((entry) => entry.text)).toContain(text);
@@ -393,7 +461,7 @@ describe("native heartbeat busy poll settlement", () => {
     "coalesces a native monitor with a task, retains the exact payload, and settles both parents on %s",
     async (outcome) => {
       await withPollFixture(
-        async ({ cron, monitor, reply, runOnce, request, finished, holdLane }) => {
+        async ({ cron, monitor, reply, runOnce, request, waitForRequest, finished, holdLane }) => {
           if (outcome === "failure") {
             reply.mockImplementationOnce(async (_ctx, options) => {
               setHeartbeatAgentTurnStatus(options, "failed");
@@ -415,17 +483,9 @@ describe("native heartbeat busy poll settlement", () => {
           );
           const task = "job" in added ? added.job : added;
           const releaseMain = await holdLane(CommandLane.Main);
-          const bothRequested = createDeferred();
-          request.mockImplementation((opts, lifecycle) => {
-            const pending = requestHeartbeatAndWait({ ...opts, coalesceMs: 250 }, lifecycle);
-            if (request.mock.calls.length === 2) {
-              bothRequested.resolve();
-            }
-            return pending;
-          });
           const parents = [cron.run(monitor.id, "force"), cron.run(task.id, "force")];
           // Polling with vi.waitFor advances the coalescer while SQLite admission is still pending.
-          await bothRequested.promise;
+          await waitForRequest(2);
           expect(request).toHaveBeenCalledTimes(2);
           await vi.advanceTimersByTimeAsync(250);
           expect(runOnce).toHaveBeenCalledOnce();
@@ -458,7 +518,17 @@ describe("native heartbeat busy poll settlement", () => {
 
   it("retains late isolated admission and a subsequent pre-execution busy retry", async () => {
     await withPollFixture(
-      async ({ cron, monitor, deps, reply, runOnce, request, finished, holdLane }) => {
+      async ({
+        cron,
+        monitor,
+        deps,
+        reply,
+        runOnce,
+        request,
+        waitForRequest,
+        finished,
+        holdLane,
+      }) => {
         // The wake-stage check is clear; the second check is in preparation after
         // delivery resolution. This is the actual late admission boundary.
         deps.isReplyRunActive = vi
@@ -467,7 +537,8 @@ describe("native heartbeat busy poll settlement", () => {
           .mockReturnValueOnce(true)
           .mockReturnValue(false);
         const parent = cron.run(monitor.id, "force");
-        await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+        await waitForRequest(1);
+        expect(request).toHaveBeenCalledOnce();
         await vi.advanceTimersByTimeAsync(250);
         expect(deps.isReplyRunActive).toHaveBeenCalledTimes(2);
         expect(finished()).toHaveLength(0);
@@ -488,38 +559,45 @@ describe("native heartbeat busy poll settlement", () => {
   });
 
   it("still times out executing work and never overwrites the parent error on late completion", async () => {
-    await withPollFixture(async ({ cron, monitor, reply, runOnce, request, finished }) => {
-      const releaseReply = createDeferred();
-      reply.mockImplementationOnce(async () => {
-        await releaseReply.promise;
-        return createHeartbeatToolResponsePayload({
-          outcome: "progress",
-          notify: false,
-          summary: "Late completion",
+    await withPollFixture(
+      async ({ cron, monitor, reply, runOnce, request, waitForRequest, finished }) => {
+        const releaseReply = createDeferred();
+        const replyStarted = createDeferred();
+        reply.mockImplementationOnce(async () => {
+          replyStarted.resolve();
+          await releaseReply.promise;
+          return createHeartbeatToolResponsePayload({
+            outcome: "progress",
+            notify: false,
+            summary: "Late completion",
+          });
         });
-      });
-      const parent = cron.run(monitor.id, "force");
-      try {
-        await vi.waitFor(() => expect(reply).toHaveBeenCalledOnce());
-        const waiterSignal = request.mock.calls[0]?.[1].abortSignal;
-        expect(waiterSignal?.aborted).toBe(false);
-        await vi.advanceTimersByTimeAsync(600_000);
-        await expect(parent).resolves.toMatchObject({ ok: true, ran: true });
-        expect(waiterSignal?.aborted).toBe(true);
-        expect(finished()).toHaveLength(1);
-        expect(finished()[0]).toMatchObject({
-          status: "error",
-          error: expect.stringContaining("job execution timed out"),
-        });
-        const failedState = structuredClone(cron.getJob(monitor.id)?.state);
-        releaseReply.resolve();
-        await runOnce.mock.results[0]?.value;
-        await vi.advanceTimersByTimeAsync(1_000);
-        expect(finished()).toHaveLength(1);
-        expect(cron.getJob(monitor.id)?.state).toEqual(failedState);
-      } finally {
-        releaseReply.resolve();
-      }
-    });
+        const parent = cron.run(monitor.id, "force");
+        try {
+          await waitForRequest(1);
+          await vi.advanceTimersByTimeAsync(250);
+          await replyStarted.promise;
+          expect(reply).toHaveBeenCalledOnce();
+          const waiterSignal = request.mock.calls[0]?.[1].abortSignal;
+          expect(waiterSignal?.aborted).toBe(false);
+          await vi.advanceTimersByTimeAsync(600_000);
+          await expect(parent).resolves.toMatchObject({ ok: true, ran: true });
+          expect(waiterSignal?.aborted).toBe(true);
+          expect(finished()).toHaveLength(1);
+          expect(finished()[0]).toMatchObject({
+            status: "error",
+            error: expect.stringContaining("job execution timed out"),
+          });
+          const failedState = structuredClone(cron.getJob(monitor.id)?.state);
+          releaseReply.resolve();
+          await runOnce.mock.results[0]?.value;
+          await vi.advanceTimersByTimeAsync(1_000);
+          expect(finished()).toHaveLength(1);
+          expect(cron.getJob(monitor.id)?.state).toEqual(failedState);
+        } finally {
+          releaseReply.resolve();
+        }
+      },
+    );
   });
 });

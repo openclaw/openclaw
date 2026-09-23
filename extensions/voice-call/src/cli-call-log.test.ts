@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -142,7 +143,7 @@ describe("voice-call diagnostic stream ownership", () => {
     });
     const read = vi.spyOn(fs, "readSync");
     await expect(command("tail", "--since", "0")).rejects.toBe(stopped);
-    expect(Buffer.concat(output)).toEqual(Buffer.concat([bytes, Buffer.from("\n")]));
+    assert.deepStrictEqual(Buffer.concat(output), Buffer.concat([bytes, Buffer.from("\n")]));
     expect(read.mock.calls.every(([, buffer]) => buffer.byteLength <= 64 * 1024)).toBe(true);
   });
 

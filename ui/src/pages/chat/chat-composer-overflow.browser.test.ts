@@ -1,17 +1,19 @@
 import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { page } from "vitest/browser";
+import { page, userEvent } from "vitest/browser";
 import "@awesome.me/webawesome/dist/styles/themes/default.css";
 import type { SessionGoal } from "../../api/types.ts";
 import { renderComposerMenu } from "../../components/composer-menu.ts";
 import { createComposerProps } from "./chat-composer.test-support.ts";
 import { renderAttachmentPreview } from "./components/chat-attachments.ts";
-import { renderChatGoal } from "./components/chat-composer-goal.ts";
+import { clearGoalElapsedTimers, renderChatGoal } from "./components/chat-composer-goal.ts";
 import { getChatComposerState, resetChatComposerState } from "./components/chat-composer-state.ts";
 import { renderChatComposer } from "./components/chat-composer.ts";
+import { subscribeTranscriptScroll } from "./components/chat-transcript-scroll-events.ts";
 import baseStyles from "../../styles/base.css?inline";
 import contextStripStyles from "../../styles/chat/composer-context-strip.css?inline";
 import goalStyles from "../../styles/chat/composer-progress.css?inline";
+import queueStyles from "../../styles/chat/composer-queue.css?inline";
 import composerSurfaceStyles from "../../styles/chat/composer-surface.css?inline";
 import composerStyles from "../../styles/chat/composer.css?inline";
 
@@ -51,6 +53,7 @@ describe("composer overflow presentation", () => {
     container.remove();
     styles.remove();
     resetChatComposerState();
+    clearGoalElapsedTimers();
   });
 
   it.each([390, 2048])(
@@ -422,6 +425,7 @@ describe("composer overflow presentation", () => {
     "ellipsizes empty focused and blurred composers at $viewport px without clipping drafts",
     async ({ viewport, width }) => {
       await page.viewport(viewport, 800);
+      container.classList.add("chat");
       container.style.width = `${width}px`;
       const props = createComposerProps({
         assistantName: "A deliberately long assistant name ".repeat(8),
@@ -430,7 +434,12 @@ describe("composer overflow presentation", () => {
           draw();
         },
       });
-      const draw = () => render(renderChatComposer(props), container);
+      const draw = () =>
+        render(
+          html`<div class="chat-thread"></div>
+            ${renderChatComposer(props)}`,
+          container,
+        );
       draw();
       const textarea = container.querySelector<HTMLTextAreaElement>(
         ".agent-chat__composer-combobox > textarea",
@@ -440,6 +449,27 @@ describe("composer overflow presentation", () => {
       )!;
       const control = page.elementLocator(textarea);
       await afterLayout();
+      const expectStableSize = async (draft: string) => {
+        const mutations = vi.fn();
+        const observer = new MutationObserver(mutations);
+        observer.observe(textarea, { attributes: true, attributeFilter: ["style"] });
+        const resized = vi.fn();
+        const stop = subscribeTranscriptScroll(
+          container.querySelector<HTMLElement>(".chat-thread")!,
+          resized,
+        );
+        const height = textarea.clientHeight;
+        try {
+          await control.fill(draft);
+          await afterLayout();
+          expect(textarea.clientHeight).toBe(height);
+          expect(mutations).not.toHaveBeenCalled();
+          expect(resized).not.toHaveBeenCalled();
+        } finally {
+          observer.disconnect();
+          stop();
+        }
+      };
 
       expect(placeholder).not.toBeNull();
       expect(placeholder.textContent).toBe(textarea.placeholder);
@@ -464,6 +494,7 @@ describe("composer overflow presentation", () => {
       }
 
       const emptyHeight = textarea.clientHeight;
+      await expectStableSize("A short editable draft.");
       const draft =
         "A typed line that wraps within the available composer width. ".repeat(8) +
         "\nA second editable line.";
@@ -474,6 +505,8 @@ describe("composer overflow presentation", () => {
       expect(placeholder.checkVisibility()).toBe(false);
       expect(getComputedStyle(textarea).whiteSpace).toBe("pre-wrap");
       expect(textarea.clientHeight).toBeGreaterThan(emptyHeight);
+      expect(textarea.scrollHeight).toBeGreaterThan(textarea.clientHeight);
+      await expectStableSize(`${draft}\nAnother line in the capped draft.`);
 
       await control.fill("");
       await afterLayout();
@@ -532,6 +565,100 @@ describe("composer overflow presentation", () => {
     container.style.width = "760px";
     await expectEdges(element, false);
   });
+
+  it.each([
+    [320, "active"],
+    [390, "paused"],
+    [560, "blocked"],
+  ] as const)(
+    "aligns the expanded %s px %s header and keeps controls above the objective",
+    async (width, status) => {
+      await page.viewport(width, 800);
+      styles.textContent += queueStyles;
+      container.className = "agent-chat__composer-shell";
+      container.style.width = `${width - 32}px`;
+      const state = getChatComposerState("mobile-actions");
+      const goal: SessionGoal = {
+        schemaVersion: 1,
+        id: "mobile-actions",
+        objective: "Verify the deployment and summarize its health checks.\n".repeat(12),
+        status,
+        lastStatusNote: "Review the deployment results before continuing.",
+        createdAt: 1000,
+        updatedAt: 61000,
+        tokenStart: 0,
+        tokensUsed: 1500,
+        continuationTurns: 0,
+      };
+      const onGoalAction = vi.fn();
+      const onGoalEdit = vi.fn();
+      const draw = () =>
+        render(
+          html`<div class="agent-chat__goal-float">
+            ${renderChatGoal(state, goal, {
+              canAct: true,
+              onGoalAction,
+              onGoalEdit,
+              requestUpdate: draw,
+            })}
+          </div>`,
+          container,
+        );
+      draw();
+      const commands = container.querySelector<HTMLElement>(".agent-chat__goal-command-actions")!;
+      expect(getComputedStyle(commands).display).toBe("none");
+      await page.getByRole("button", { name: "Show goal details", exact: true }).click();
+      await afterLayout();
+      const objective = container.querySelector<HTMLElement>(".agent-chat__goal-detail-objective")!;
+      const commandBox = commands.getBoundingClientRect();
+      expect(commandBox.height).toBeGreaterThan(0);
+      expect(commandBox.bottom).toBeLessThanOrEqual(objective.getBoundingClientRect().top);
+      const centers = [
+        ".agent-chat__goal-icon svg",
+        ".agent-chat__goal-label",
+        ".agent-chat__goal-expand svg",
+      ].map((selector) => {
+        const box = container.querySelector(selector)!.getBoundingClientRect();
+        return box.top + box.height / 2;
+      });
+      expect(Math.max(...centers) - Math.min(...centers)).toBeLessThanOrEqual(1);
+      const cardBox = container.querySelector(".agent-chat__goal")!.getBoundingClientRect();
+      for (const button of commands.querySelectorAll<HTMLButtonElement>("button")) {
+        const box = button.getBoundingClientRect();
+        expect(box.left).toBeGreaterThanOrEqual(cardBox.left);
+        expect(box.right).toBeLessThanOrEqual(cardBox.right);
+        expect(box.height).toBeGreaterThanOrEqual(24);
+        expect(box.height).toBeLessThanOrEqual(30);
+        expect(
+          button.contains(
+            document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2),
+          ),
+        ).toBe(true);
+        await page.elementLocator(button).click();
+      }
+      expect(onGoalEdit).toHaveBeenCalledWith(goal);
+      expect(onGoalAction.mock.calls).toEqual([
+        [goal.id, status === "active" ? "pause" : "resume"],
+        [goal.id, "clear"],
+      ]);
+      await userEvent.tab({ shift: true });
+      expect(document.activeElement).toBe(
+        commands.querySelector(
+          status === "active" ? ".agent-chat__goal-pause" : ".agent-chat__goal-resume",
+        ),
+      );
+      await userEvent.keyboard("{Enter}");
+      expect(onGoalAction).toHaveBeenLastCalledWith(
+        goal.id,
+        status === "active" ? "pause" : "resume",
+      );
+      objective.scrollTop = objective.scrollHeight;
+      await afterLayout();
+      expect(commands.getBoundingClientRect().top).toBe(commandBox.top);
+      await page.getByRole("button", { name: "Hide goal details", exact: true }).click();
+      expect(getComputedStyle(commands).display).toBe("none");
+    },
+  );
 
   it("preserves expanded mobile goal edges as its objective changes and scrolls", async () => {
     await page.viewport(480, 800);

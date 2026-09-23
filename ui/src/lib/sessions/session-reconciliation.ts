@@ -333,7 +333,13 @@ export function createSessionReconciliation(host: Host) {
       host.publish({ ...state, result, agentId });
     }
     notify?.();
-    if (row && rowIsCurrent && rowsChanged) {
+    // Cached lineage reuses held rows and must not invalidate their supplying lists.
+    if (
+      row &&
+      rowIsCurrent &&
+      rowsChanged &&
+      (observation || sourceCanonicalListRevision === undefined)
+    ) {
       host.roster.invalidateManagedLists(
         parseAgentSessionKey(row.key)?.agentId ?? historyAgentId,
         accepted || row,

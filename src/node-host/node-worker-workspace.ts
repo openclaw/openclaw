@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
@@ -52,6 +51,11 @@ import {
   type NodeWorkerWorkspaceSession as WorkspaceSession,
 } from "./node-worker-workspace-identity.js";
 import { NodeWorkerWorkspaceProcesses } from "./node-worker-workspace-processes.js";
+import {
+  listOwnedEntries,
+  listOwnedDirectories,
+  removeIfEmpty,
+} from "./node-worker-workspace-retention.js";
 import { runNodeWorkerWorkspaceSeed } from "./node-worker-workspace-seeds.js";
 
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -59,37 +63,6 @@ const WORKSPACE_RETENTION_DELETE_LIMIT = 256;
 const ENVIRONMENT_HASH_PATTERN = /^[a-f0-9]{16}$/u;
 const SESSION_HASH_PATTERN = /^[a-f0-9]{32}$/u;
 const MANIFEST_FILE_PATTERN = /^[a-f0-9]{64}\.json$/u;
-
-async function listOwnedEntries(parent: string): Promise<fs.Dirent[]> {
-  try {
-    return (await fsp.readdir(parent, { withFileTypes: true })).toSorted((left, right) =>
-      left.name.localeCompare(right.name),
-    );
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return [];
-    }
-    throw error;
-  }
-}
-
-async function listOwnedDirectories(parent: string): Promise<string[]> {
-  return (await listOwnedEntries(parent))
-    .filter((entry) => entry.isDirectory() && !entry.isSymbolicLink())
-    .map((entry) => entry.name);
-}
-
-async function removeIfEmpty(target: string, signal?: AbortSignal): Promise<void> {
-  signal?.throwIfAborted();
-  try {
-    await fsp.rmdir(target);
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code !== "ENOENT" && code !== "ENOTEMPTY" && code !== "EEXIST") {
-      throw error;
-    }
-  }
-}
 
 /** Runs trusted worker transport commands only from a node-owned session workspace. */
 export class NodeWorkerWorkspaceRuntime {
@@ -143,10 +116,10 @@ export class NodeWorkerWorkspaceRuntime {
     return await this.prepared.prepare(input, signal);
   }
 
-  acquirePreparedWorkspace(
+  async acquirePreparedWorkspace(
     request: Omit<NodeWorkerManagedWorkspaceRequest, "sessionKey"> & { sessionKey?: string },
   ) {
-    if (!this.prepared.store?.find(request.environmentId)) {
+    if (!(await this.prepared.store?.find(request.environmentId))) {
       if (isPathInside(this.prepared.root, request.workspaceDir)) {
         throw new Error("INVALID_REQUEST: prepared workspace binding is missing");
       }
@@ -155,16 +128,28 @@ export class NodeWorkerWorkspaceRuntime {
     if (!request.sessionKey) {
       throw new Error("INVALID_REQUEST: prepared workspace acquisition requires its bound session");
     }
-    return this.acquireManagedWorkspace({ ...request, sessionKey: request.sessionKey });
+    return this.acquireManagedWorkspaceAsync({ ...request, sessionKey: request.sessionKey });
   }
 
-  /** Claims an existing identity-derived workspace against concurrent retention. */
-  acquireManagedWorkspace(request: NodeWorkerManagedWorkspaceRequest): {
-    workspaceDir: string;
-    homeDir?: string;
-    release: () => void;
-  } {
-    const prepared = this.prepared.store?.find(request.environmentId);
+  /** @deprecated Retained for the public synchronous plugin workspace capability. */
+  acquireManagedWorkspace(request: NodeWorkerManagedWorkspaceRequest) {
+    const prepared = this.prepared.store?.findSync(request.environmentId);
+    return this.acquireWorkspaceIdentity(request, prepared);
+  }
+
+  async acquireManagedWorkspaceAsync(
+    request: NodeWorkerManagedWorkspaceRequest,
+  ): Promise<{ workspaceDir: string; homeDir?: string; release: () => void }> {
+    const captured = { ...request };
+    return this.prepared.acquire(captured.environmentId, (row) =>
+      this.acquireWorkspaceIdentity(captured, row),
+    );
+  }
+
+  private acquireWorkspaceIdentity(
+    request: NodeWorkerManagedWorkspaceRequest,
+    prepared?: import("./node-worker-prepared-workspace-store.js").NodeWorkerPreparedWorkspaceRow,
+  ) {
     const identity = prepared
       ? resolveNodePreparedWorkspaceIdentity(this.prepared.root, prepared, request)
       : resolveNodeManagedWorkspaceIdentity(this.root, request);
@@ -316,6 +301,12 @@ export class NodeWorkerWorkspaceRuntime {
         currentProtection().has(generationKey),
       params.signal,
       refreshLaunches,
+      (generationKey) => {
+        this.deletingWorkspaceGenerations.add(generationKey);
+        return () => {
+          this.deletingWorkspaceGenerations.delete(generationKey);
+        };
+      },
     );
     for (const generationKey of retired.generationKeys) {
       this.latestTransferredManifest.delete(generationKey);
@@ -511,7 +502,7 @@ export class NodeWorkerWorkspaceRuntime {
   ): Promise<NodeWorkerWorkspaceExecResult> {
     const environmentHash = hashPathComponent(input.environmentId, 16);
     const sessionHash = hashPathComponent(input.sessionId, 32);
-    const registered = this.prepared.store?.find(input.environmentId);
+    const registered = await this.prepared.store?.find(input.environmentId);
     const sessionRootCandidate = registered
       ? path.dirname(registered.workspace_dir)
       : path.join(this.root, input.gatewayNamespace, "workspaces", environmentHash, sessionHash);
@@ -528,7 +519,8 @@ export class NodeWorkerWorkspaceRuntime {
     try {
       return await serializeNodeWorkerWorkspace(sessionRootCandidate, async () => {
         signal?.throwIfAborted();
-        const prepared = this.prepared.store?.find(input.environmentId);
+        const prepared = await this.prepared.store?.find(input.environmentId);
+        signal?.throwIfAborted();
         if (
           input.preparationKey !== undefined &&
           prepared?.preparation_key !== input.preparationKey

@@ -1,10 +1,13 @@
 // Parallels Update Job Timeout tests cover parallels update job timeout script behavior.
 import { spawnSync } from "node:child_process";
-import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runTimedUpdateJob } from "../../scripts/e2e/parallels/update-job-timeout.ts";
+import { scriptProcessEntrypoints } from "../../scripts/script-process-runtime.test-support.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../src/infra/runtime-worker-url.js";
 
 describe("Parallels update job timeout", () => {
   afterEach(() => {
@@ -189,11 +192,9 @@ describe("Parallels update job timeout", () => {
   });
 
   it("keeps the process alive long enough to write logs for hung runners", () => {
-    const moduleUrl = pathToFileURL(
-      path.resolve("scripts/e2e/parallels/update-job-timeout.ts"),
-    ).href;
+    const moduleUrl = resolveRuntimeWorkerUrl(scriptProcessEntrypoints.updateJobTimeout);
     const probe = `
-import { runTimedUpdateJob } from ${JSON.stringify(moduleUrl)};
+import { runTimedUpdateJob } from ${JSON.stringify(moduleUrl.href)};
 const events = [];
 const result = await runTimedUpdateJob({
   abortSettleMs: 25,
@@ -209,7 +210,7 @@ console.log(JSON.stringify({ events, result }));
 
     const child = spawnSync(
       process.execPath,
-      ["--import", "tsx", "--input-type=module", "--eval", probe],
+      [...resolveRuntimeWorkerArgv(moduleUrl).slice(0, -1), "--input-type=module", "--eval", probe],
       {
         cwd: process.cwd(),
         encoding: "utf8",

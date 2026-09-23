@@ -223,7 +223,7 @@ it.each(["agent", "chat"] as const)(
         visibility: "shared" as const,
       };
       await upsertSessionEntryCore(scope, entry);
-      addSessionMember(scope, { identityId: "member", addedBy: "owner" });
+      await addSessionMember(scope, { identityId: "member", addedBy: "owner" });
       const runId = `compaction-${kind}`;
       const run = registerSubscriptionChatRun(params, {
         runId,

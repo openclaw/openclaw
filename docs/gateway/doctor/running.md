@@ -66,6 +66,11 @@ openclaw doctor
     another live owner must stop before repair can proceed. Malformed or
     conflicting retained files require the manual recovery named in the error.
 
+    When the shared database is already current, preparation leaves the running
+    Gateway's worker environments available. Actual schema repairs retire the old
+    database resources before later maintenance continues, including when repair
+    cleanup fails.
+
   </Tab>
   <Tab title="--deep">
     ```bash

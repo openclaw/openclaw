@@ -72,7 +72,9 @@ type DispatchRepositoryOptions = {
   targetAlreadyRemote?: boolean;
 };
 const repositoryTemplateDirs = useAutoCleanupTempDirTracker(afterAll);
-let dispatchRepositoryTemplate: ReturnType<typeof createDispatchRepository> | undefined;
+const dispatchRepositoryTemplates = new Map<string, ReturnType<typeof createDispatchRepository>>();
+type DispatchWorkflow = { on?: { workflow_dispatch?: { inputs?: Record<string, unknown> } } };
+const dispatchWorkflows = new Map<string, DispatchWorkflow>();
 
 function createDispatchRepository(root: string, options: DispatchRepositoryOptions = {}) {
   const origin = join(root, "origin.git");
@@ -146,17 +148,23 @@ console.log(JSON.stringify({ valid: true, current: { runId: "123" }, root: { run
 }
 
 function prepareDispatchRepository(root: string, options: DispatchRepositoryOptions) {
-  if (
-    options.releaseRef !== undefined ||
-    options.workflowSource !== undefined ||
-    options.targetSource !== undefined ||
-    options.targetAlreadyRemote === false
-  ) {
-    return createDispatchRepository(root, options);
+  const key = JSON.stringify([
+    options.releaseRef ?? "release/2026.8.1",
+    options.workflowSource ?? CURRENT_WORKFLOW_SOURCE,
+    options.targetSource ?? {},
+    options.targetAlreadyRemote !== false,
+  ]);
+  let template = dispatchRepositoryTemplates.get(key);
+  if (!template) {
+    template = createDispatchRepository(
+      repositoryTemplateDirs.make("openclaw-release-dispatch-template-"),
+      options,
+    );
+    // Copy packed immutable history, while every case retains its own object store.
+    runGit(template.origin, ["repack", "-ad"]);
+    runGit(template.checkout, ["repack", "-ad"]);
+    dispatchRepositoryTemplates.set(key, template);
   }
-  const template = (dispatchRepositoryTemplate ??= createDispatchRepository(
-    repositoryTemplateDirs.make("openclaw-release-dispatch-template-"),
-  ));
   const origin = join(root, "origin.git");
   const checkout = join(root, "checkout");
   // Each case can change refs, config and objects without touching the prepared history.
@@ -333,11 +341,15 @@ Atomics.wait = (array, index, value, timeout) => {
     root,
     options,
   );
-  const workflow = parseYaml(
-    readFileSync(join(checkout, ".github", "workflows", "full-release-validation.yml"), "utf8"),
-  ) as {
-    on?: { workflow_dispatch?: { inputs?: Record<string, unknown> } };
-  };
+  const workflowSource = readFileSync(
+    join(checkout, ".github", "workflows", "full-release-validation.yml"),
+    "utf8",
+  );
+  let workflow = dispatchWorkflows.get(workflowSource);
+  if (!workflow) {
+    workflow = parseYaml(workflowSource) as DispatchWorkflow;
+    dispatchWorkflows.set(workflowSource, workflow);
+  }
   const declaredWorkflowInputs = Object.keys(workflow.on?.workflow_dispatch?.inputs ?? {});
   writeFileSync(
     artifactFixturePath,
@@ -852,8 +864,11 @@ describe("full-release-validation-at-sha", () => {
     }
   });
 
-  it("retains explicit publication wire values and reopens the same request read-only", () => {
+  it("retains publication and lane inputs in the envelope and reopens the same request read-only", () => {
     const fixture = createDispatchFixture();
+    const excluded = ["extensions/example/src/example.test.ts"];
+    const excludedJson = JSON.stringify(excluded, null, 1);
+    const knownFlakyJson = JSON.stringify(["normalCi:checks-node"], null, 1);
     const selection = JSON.stringify(
       {
         route: "normal",
@@ -873,6 +888,10 @@ describe("full-release-validation-at-sha", () => {
         "validation_purpose=publish",
         "-f",
         `publication_selection_json=${selection}`,
+        "-f",
+        `extension_test_exclude_patterns_json=${excludedJson}`,
+        "-f",
+        `known_flaky_jobs_json=${knownFlakyJson}`,
       ]);
       expect(result.status, result.stderr).toBe(0);
       const record = JSON.parse(readFileSync(fixture.requestPath(), "utf8"));
@@ -885,11 +904,18 @@ describe("full-release-validation-at-sha", () => {
         },
         validationPurpose: "publish",
         publicationSelection: JSON.parse(selection),
+        laneInputs: {
+          extension_test_exclude_patterns_json: JSON.stringify(excluded),
+          known_flaky_jobs_json: JSON.stringify(["normalCi:checks-node"]),
+        },
       });
       expect(record.request.inputs.trusted_workflow_json).toBe(wire);
       expect(fixture.readPayload().body.inputs.trusted_workflow_json).toBe(wire);
       expect(record.request.inputs).not.toHaveProperty("validation_purpose");
       expect(record.request.wireInputs).not.toHaveProperty("publication_selection_json");
+      expect(record.request.wireInputs).not.toHaveProperty("extension_test_exclude_patterns_json");
+      expect(record.request.wireInputs).not.toHaveProperty("known_flaky_jobs_json");
+      expect(Object.keys(fixture.readPayload().body.inputs)).toHaveLength(25);
       const before = readFileSync(fixture.requestPath());
       const callsBefore = fixture.readCalls(fixture.ghCallsPath).length;
       const reopened = fixture.run(
@@ -900,10 +926,21 @@ describe("full-release-validation-at-sha", () => {
           "validation_purpose=publish",
           "-f",
           `publication_selection_json=${JSON.stringify(JSON.parse(selection))}`,
+          "-f",
+          `extension_test_exclude_patterns_json=${excludedJson}`,
+          "-f",
+          `known_flaky_jobs_json=${knownFlakyJson}`,
         ],
         true,
       );
       expect(reopened.status, reopened.stderr).toBe(0);
+      expect(readFileSync(fixture.requestPath())).toEqual(before);
+      const changedExclusion = fixture.run(
+        ["--request-file", fixture.requestPath(), "-f", "extension_test_exclude_patterns_json=[]"],
+        true,
+      );
+      expect(changedExclusion.status).toBe(1);
+      expect(changedExclusion.stderr).toContain("conflict with the retained request");
       expect(readFileSync(fixture.requestPath())).toEqual(before);
       expect(
         fixture
@@ -1718,6 +1755,36 @@ describe("full-release-validation-at-sha", () => {
       fixture.cleanup();
     }
   });
+
+  it.each([
+    {
+      name: "packed lane",
+      marker: "FULL_RELEASE_LANE_INPUTS_CONTRACT",
+      input: 'extension_test_exclude_patterns_json=["extensions/example/src/example.test.ts"]',
+      error: "does not support packed lane inputs",
+    },
+    {
+      name: "declared flake",
+      marker: "FULL_RELEASE_FLAKE_RETRY_CONTRACT",
+      input: 'known_flaky_jobs_json=["normalCi:checks-node"]',
+      error: "does not support declared flake retries",
+    },
+  ])(
+    "refuses unsupported $name controls before creating refs or dispatching",
+    ({ marker, input, error }) => {
+      const fixture = createDispatchFixture({
+        workflowSource: CURRENT_WORKFLOW_SOURCE.replace(`  ${marker}: "1"\n`, ""),
+      });
+      try {
+        const result = fixture.run(["--workflow-sha", fixture.workflowSha, "-f", input]);
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain(error);
+        expect(fixture.readCalls(fixture.ghCallsPath)).toEqual([]);
+      } finally {
+        fixture.cleanup();
+      }
+    },
+  );
 
   it.each([false, true])(
     "reopens the same retained request without mutations (explicit=%s)",

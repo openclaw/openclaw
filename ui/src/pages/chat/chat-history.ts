@@ -11,6 +11,7 @@ import { loadChatBranches } from "./chat-history-branches.ts";
 import { hydrateChatHistory } from "./chat-history-hydration.ts";
 import { CHAT_HISTORY_REQUEST_LIMIT } from "./chat-history-request.ts";
 import type { ObservedChatHistoryResult } from "./chat-history-snapshot.ts";
+import { historySessionId } from "./chat-history-snapshot.ts";
 import {
   chatHistoryRequests,
   getChatHistoryLoadState,
@@ -39,6 +40,9 @@ export async function loadChatHistory(
     ? resolveUiSelectedSessionAgentId(state)
     : undefined;
   const startup = opts.startup === true;
+  const creationPending =
+    state.chatSubmissions?.creation?.sessionKey === sessionKey ||
+    state.hasPendingInitialTurn?.(sessionKey);
   const requests = chatHistoryRequests(state);
   if (!state.client || !state.connected) {
     setChatHistoryLoad(state, { phase: "pending-connection", sessionKey, requestAgentId, startup });
@@ -180,6 +184,8 @@ export async function loadChatHistory(
           sessionKey,
           requestAgentId,
           sessionInfo: result.sessionInfo,
+          // A read begun during creation cannot prove that its provisional key expired.
+          sessionId: historySessionId(result) ?? (creationPending ? undefined : null),
         });
       } else if (
         state.sessionKey === sessionKey &&
