@@ -24,32 +24,32 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRealpathOrAbsolute as canonicalFilePath } from "../infra/boundary-path.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { normalizeLegacySessionEntryDelivery as normalizeSessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
-import { migrateLegacySessionCreator } from "../state/creator-namespace-migration.js";
 import {
   readMigrationArtifactIdentity,
   sameMigrationArtifact,
   type MigrationArtifactIdentity,
-} from "./doctor-session-sqlite-artifact.js";
+} from "../infra/session-sqlite-migration-artifact.js";
+import {
+  isSessionSqliteMigrationWarning,
+  type DoctorSessionSqliteIssue,
+} from "../infra/session-sqlite-migration-issues.js";
 import {
   HISTORICAL_IMPORT_REASON,
   canonicalMigrationFilePath,
   assertSafeSessionSqliteMigrationDirectory,
   type SessionSqliteMigrationMove,
-} from "./doctor-session-sqlite-migration-run.js";
+} from "../infra/session-sqlite-migration-manifest.js";
 import {
   readLegacyPrimaryTranscriptIdentity,
   readTranscriptFingerprint,
   type ReadOnlySqliteValidationSnapshot,
-} from "./doctor-session-sqlite-readers.js";
+} from "../infra/session-sqlite-migration-readers.js";
+import { normalizeLegacySessionEntryDelivery as normalizeSessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
+import { migrateLegacySessionCreator } from "../state/creator-namespace-migration.js";
 import {
   collectRecoveryInventory,
   type RecoveryArtifactReference,
 } from "./doctor-session-sqlite-recovery-inventory.js";
-import {
-  isSessionSqliteMigrationWarning,
-  type DoctorSessionSqliteIssue,
-} from "./doctor-session-sqlite-types.js";
 
 export type LegacySessionRecord = {
   entry: SessionEntry;

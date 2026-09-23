@@ -2,8 +2,13 @@ import type { SessionStoreTarget } from "../config/sessions/targets.js";
 /** Shared type contracts for doctor-owned session SQLite migration reports. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { DeferredPluginSessionImport } from "../infra/deferred-plugin-session-sources.js";
+import {
+  isSessionSqliteMigrationWarning,
+  type DoctorSessionSqliteIssue,
+  type DoctorSessionSqliteRestoreConflict,
+} from "../infra/session-sqlite-migration-issues.js";
+import type { SessionSqliteMigrationTargetInput } from "../infra/session-sqlite-migration-manifest.js";
 import type { LegacySessionRecord } from "./doctor-session-sqlite-discovery.js";
-import type { SessionSqliteMigrationTargetInput } from "./doctor-session-sqlite-migration-run.js";
 
 export type LegacyArchiveTarget = {
   sourceTarget: SessionStoreTarget & { sqlitePath?: string };
@@ -16,31 +21,6 @@ export type LegacyArchiveTarget = {
   sourceConflicts?: Map<string, string>;
   verifiedSources?: DeferredPluginSessionImport["sources"];
 };
-
-export type DoctorSessionSqliteIssue = {
-  code: string;
-  message: string;
-  sessionKey?: string;
-};
-
-const SESSION_SQLITE_WARNING_ISSUE_CODES = new Set([
-  "active_sqlite_transcript_jsonl",
-  "entry_invalid",
-  "historical_transcript_deferred",
-  "historical_duplicate_settled",
-  "legacy_index_informational",
-  "plugin_migration_source_retained",
-  "retained_plugin_source_index_rebuilt",
-  "retained_plugin_source_conflict",
-  "transcript_archive_failed",
-  "transcript_malformed",
-  "transcript_missing",
-  "unreferenced_jsonl_archive_failed",
-]);
-
-export function isSessionSqliteMigrationWarning(issue: DoctorSessionSqliteIssue): boolean {
-  return SESSION_SQLITE_WARNING_ISSUE_CODES.has(issue.code);
-}
 
 export function countBlockingSessionSqliteIssues(report: DoctorSessionSqliteTargetReport): number {
   return report.issues.filter((issue) => !isSessionSqliteMigrationWarning(issue)).length;
@@ -61,12 +41,6 @@ export function isInformationalMissingSessionIndex(
 ): boolean {
   return report.issues.some((issue) => issue.code === "legacy_index_informational");
 }
-
-export type DoctorSessionSqliteRestoreConflict = {
-  archivePath: string;
-  reason: string;
-  sourcePath: string;
-};
 
 export type DoctorSessionSqliteRestoreReport = {
   conflicts: DoctorSessionSqliteRestoreConflict[];

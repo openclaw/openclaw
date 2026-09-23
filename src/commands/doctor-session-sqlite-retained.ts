@@ -11,15 +11,13 @@ import {
   type DeferredPluginSessionImport,
 } from "../infra/deferred-plugin-session-sources.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { planSessionJsonlArchiveMove } from "./doctor-session-sqlite-archive.js";
 import {
   moveMigrationArtifact,
   readMigrationArtifactIdentity,
   sameMigrationArtifact,
   type MigrationArtifactIdentity,
-} from "./doctor-session-sqlite-artifact.js";
-import { countLegacyTranscript } from "./doctor-session-sqlite-diagnostics.js";
-import type { LegacySessionRecord } from "./doctor-session-sqlite-discovery.js";
+} from "../infra/session-sqlite-migration-artifact.js";
+import type { DoctorSessionSqliteIssue } from "../infra/session-sqlite-migration-issues.js";
 import {
   canonicalMigrationFilePath,
   createSessionSqliteMigrationRun,
@@ -29,13 +27,15 @@ import {
   writeSessionSqliteMigrationManifest,
   type ActiveSessionSqliteMigrationRun,
   type SessionSqliteMigrationTargetInput,
-} from "./doctor-session-sqlite-migration-run.js";
+} from "../infra/session-sqlite-migration-manifest.js";
 import {
   readTranscriptFingerprint,
   resolveTargetSqlitePath,
-} from "./doctor-session-sqlite-readers.js";
+} from "../infra/session-sqlite-migration-readers.js";
+import { planSessionJsonlArchiveMove } from "./doctor-session-sqlite-archive.js";
+import { countLegacyTranscript } from "./doctor-session-sqlite-diagnostics.js";
+import type { LegacySessionRecord } from "./doctor-session-sqlite-discovery.js";
 import type {
-  DoctorSessionSqliteIssue,
   DoctorSessionSqliteMode,
   DoctorSessionSqliteTargetReport,
 } from "./doctor-session-sqlite-types.js";

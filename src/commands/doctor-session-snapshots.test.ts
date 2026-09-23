@@ -13,10 +13,10 @@ import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-s
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runSessionSnapshotsHealth } from "../flows/doctor-health-contribution-runners.state.js";
+import { readMigrationArtifactIdentity } from "../infra/session-sqlite-migration-artifact.js";
 import { saveLegacySessionStore as saveSessionStore } from "../infra/state-migrations.legacy-session-store.js";
 import type { Skill } from "../skills/loading/skill-contract.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { readMigrationArtifactIdentity } from "./doctor-session-sqlite-artifact.js";
 import { seedDeferredPluginSessionSource } from "./doctor-session-sqlite.deferred-plugin.test-support.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
 

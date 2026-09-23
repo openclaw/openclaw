@@ -1,10 +1,4 @@
 import path from "node:path";
-import {
-  readLegacyPrimaryTranscriptIdentity,
-  readOnlySqliteDbStats,
-  readOnlySqliteValidationSnapshot,
-} from "../commands/doctor-session-sqlite-readers.js";
-import { verifyCanonicalSessionTranscriptSources } from "../commands/doctor-session-sqlite-verification.js";
 import { isPrimarySessionTranscriptFileName } from "../config/sessions/artifacts.js";
 import {
   isLegacySessionRecordOwnedByTarget,
@@ -14,6 +8,12 @@ import {
   type LegacySessionStoreTarget,
 } from "../config/sessions/legacy-store-inspection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  readLegacyPrimaryTranscriptIdentity,
+  readOnlySqliteDbStats,
+  readOnlySqliteValidationSnapshot,
+} from "./session-sqlite-migration-readers.js";
+import { verifyCanonicalSessionTranscriptSources } from "./session-sqlite-transcript-verification.js";
 
 /** A replaced database cannot inherit completed-import authority from an old inode. */
 export function verifyDeferredSessionDatabase(params: {

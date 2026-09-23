@@ -5,21 +5,6 @@ import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import {
-  MigrationArtifactSchema,
-  readMigrationArtifactIdentity,
-  sameMigrationArtifact,
-  statMigrationPath,
-  type MigrationArtifactIdentity,
-} from "../commands/doctor-session-sqlite-artifact.js";
-import type { LegacySessionRecord } from "../commands/doctor-session-sqlite-discovery.js";
-import {
-  canonicalMigrationFilePath,
-  filterRestoreManifestTargets,
-  listSessionSqliteMigrationManifestPaths,
-  readSessionSqliteMigrationManifest,
-  resolveSessionSqliteMigrationRunsDir,
-} from "../commands/doctor-session-sqlite-migration-run.js";
-import {
   isPrimarySessionTranscriptFileName,
   resolveTrajectoryPath,
   resolveTrajectoryPointerPath,
@@ -40,6 +25,21 @@ import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js"
 import type { DeferredPluginMigration } from "./deferred-plugin-migrations.js";
 import { verifyDeferredSessionDatabase } from "./deferred-plugin-session-verification.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
+import {
+  MigrationArtifactSchema,
+  readMigrationArtifactIdentity,
+  sameMigrationArtifact,
+  statMigrationPath,
+  type MigrationArtifactIdentity,
+} from "./session-sqlite-migration-artifact.js";
+import {
+  canonicalMigrationFilePath,
+  filterRestoreManifestTargets,
+  listSessionSqliteMigrationManifestPaths,
+  readSessionSqliteMigrationManifest,
+  resolveSessionSqliteMigrationRunsDir,
+} from "./session-sqlite-migration-manifest.js";
+import type { TranscriptFileFingerprint } from "./session-sqlite-migration-readers.js";
 import { recordStartupMigrationWarnings } from "./state-migrations.messages.js";
 import {
   readLegacyMigrationReceiptFromDatabase,
@@ -81,7 +81,7 @@ export type DeferredPluginSessionImport = z.infer<typeof receiptSchema>;
 export function captureDeferredPluginSessionSources(params: {
   storePath: string;
   indexIdentity: MigrationArtifactIdentity;
-  records: readonly Pick<LegacySessionRecord, "transcriptPath" | "sourceFingerprint">[];
+  records: readonly { transcriptPath?: string; sourceFingerprint?: TranscriptFileFingerprint }[];
   unreferencedJsonlFiles: readonly string[];
   referencedPaths?: ReadonlySet<string>;
 }): DeferredPluginSessionImport["sources"] {

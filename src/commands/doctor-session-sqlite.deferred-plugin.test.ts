@@ -16,6 +16,8 @@ import {
   recordDeferredPluginMigrations,
 } from "../infra/deferred-plugin-migrations.js";
 import * as directoryDurability from "../infra/directory-durability.js";
+import { isSessionSqliteMigrationWarning } from "../infra/session-sqlite-migration-issues.js";
+import * as migrationRun from "../infra/session-sqlite-migration-manifest.js";
 import {
   beginAgentDeletionJournal,
   completeAgentDeletionJournalInDatabase,
@@ -29,8 +31,6 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import * as migrationRun from "./doctor-session-sqlite-migration-run.js";
-import { isSessionSqliteMigrationWarning } from "./doctor-session-sqlite-types.js";
 import { seedDeferredPluginSessionSource } from "./doctor-session-sqlite.deferred-plugin.test-support.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
 import { noteSessionTranscriptHealth } from "./doctor-session-transcripts.js";

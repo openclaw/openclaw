@@ -31,18 +31,41 @@ import {
 } from "../infra/deferred-plugin-session-sources.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { prepareLegacyAcpMigrationSource } from "../infra/legacy-acp-migration-source.js";
+import {
+  readMigrationArtifactIdentity,
+  sameMigrationArtifact,
+  moveMigrationArtifact,
+  type MigrationArtifactIdentity,
+} from "../infra/session-sqlite-migration-artifact.js";
+import type { DoctorSessionSqliteIssue } from "../infra/session-sqlite-migration-issues.js";
+import {
+  HISTORICAL_IMPORT_REASON,
+  canonicalMigrationFilePath,
+  assertSafeSessionSqliteMigrationMove,
+  createSessionSqliteMigrationRun,
+  recordCompletedMigrationMoves,
+  recordPlannedMigrationMoves,
+  updateMigrationManifestTarget,
+  writeSessionSqliteMigrationManifest,
+  type ActiveSessionSqliteMigrationRun,
+  type SessionSqliteMigrationTargetInput,
+  type SessionSqliteMigrationMove,
+} from "../infra/session-sqlite-migration-manifest.js";
+import {
+  countTranscriptEventsForPath,
+  createTranscriptEventReader,
+  readOnlySqliteValidationSnapshot,
+  readTranscriptFingerprint,
+  readSqliteEntryCount,
+  resolveTargetSqlitePath,
+  type ReadOnlySqliteValidationSnapshot,
+} from "../infra/session-sqlite-migration-readers.js";
 import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { prepareActiveSqliteTranscriptSettlement } from "./doctor-session-sqlite-active.js";
 import {
   planImportedTranscriptArtifactsToArchive,
   planSessionJsonlArchiveMove,
 } from "./doctor-session-sqlite-archive.js";
-import {
-  readMigrationArtifactIdentity,
-  sameMigrationArtifact,
-  moveMigrationArtifact,
-  type MigrationArtifactIdentity,
-} from "./doctor-session-sqlite-artifact.js";
 import {
   appendActiveSqliteTranscriptFileIssues,
   appendRetainedPluginSessionSourceIssue,
@@ -62,29 +85,7 @@ import {
   type LegacySessionRecord,
 } from "./doctor-session-sqlite-discovery.js";
 import { writeSessionSqliteMigrationFailureReports } from "./doctor-session-sqlite-failure.js";
-import {
-  HISTORICAL_IMPORT_REASON,
-  canonicalMigrationFilePath,
-  assertSafeSessionSqliteMigrationMove,
-  createSessionSqliteMigrationRun,
-  recordCompletedMigrationMoves,
-  recordPlannedMigrationMoves,
-  updateMigrationManifestTarget,
-  writeSessionSqliteMigrationManifest,
-  type ActiveSessionSqliteMigrationRun,
-  type SessionSqliteMigrationTargetInput,
-  type SessionSqliteMigrationMove,
-} from "./doctor-session-sqlite-migration-run.js";
 import { createMissingSessionIndexVerifier } from "./doctor-session-sqlite-missing-index.js";
-import {
-  countTranscriptEventsForPath,
-  createTranscriptEventReader,
-  readOnlySqliteValidationSnapshot,
-  readTranscriptFingerprint,
-  readSqliteEntryCount,
-  resolveTargetSqlitePath,
-  type ReadOnlySqliteValidationSnapshot,
-} from "./doctor-session-sqlite-readers.js";
 import { recoverDoctorSessionSqliteTargets } from "./doctor-session-sqlite-recover-report.js";
 import { restoreDoctorSessionSqliteTargets } from "./doctor-session-sqlite-restore-report.js";
 import { reconcileSessionSqliteMigrationPublications } from "./doctor-session-sqlite-restore.js";
@@ -105,7 +106,6 @@ import {
   countBlockingSessionSqliteIssues,
   isRetainedSourceIssue,
   isInformationalMissingSessionIndex,
-  type DoctorSessionSqliteIssue,
   type DoctorSessionSqliteMode,
   type DoctorSessionSqliteOptions,
   type DoctorSessionSqliteReport,

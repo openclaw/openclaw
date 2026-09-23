@@ -19,12 +19,12 @@ import {
   resolveVerifiedSessionSource,
   type SessionSourceVerification,
 } from "../infra/deferred-plugin-session-sources.js";
+import * as migrationArtifact from "../infra/session-sqlite-migration-artifact.js";
+import * as migrationRun from "../infra/session-sqlite-migration-manifest.js";
 import { ExitError } from "../runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import * as migrationArtifact from "./doctor-session-sqlite-artifact.js";
-import * as migrationRun from "./doctor-session-sqlite-migration-run.js";
 import { readSessionSqliteMigrationWarnings } from "./doctor-session-sqlite-warnings.js";
 import { seedDeferredPluginSessionSource } from "./doctor-session-sqlite.deferred-plugin.test-support.js";
 import { runDoctorSessionSqlite, type DoctorSessionSqliteReport } from "./doctor-session-sqlite.js";

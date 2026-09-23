@@ -13,12 +13,12 @@ import {
 } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isPathInside } from "../infra/path-guards.js";
+import { canonicalMigrationFilePath } from "../infra/session-sqlite-migration-manifest.js";
+import { resolveTargetSqlitePath } from "../infra/session-sqlite-migration-readers.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { createRetainedAgentDatabaseMatcher } from "../state/agent-deletion-discovery.js";
 import type { HistoricalArchiveSources } from "./doctor-session-sqlite-discovery.js";
-import { canonicalMigrationFilePath } from "./doctor-session-sqlite-migration-run.js";
-import { resolveTargetSqlitePath } from "./doctor-session-sqlite-readers.js";
 import type { DoctorSessionSqliteMode } from "./doctor-session-sqlite-types.js";
 
 type SessionStoreTarget = ResolvedSessionStoreTarget & { sqlitePath?: string };

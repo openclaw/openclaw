@@ -17,9 +17,9 @@ import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/sess
 import { assertSessionStoreMigrationComplete } from "../config/sessions/startup-migration.js";
 import { readDeferredPluginSessionImport } from "../infra/deferred-plugin-session-sources.js";
 import * as directoryDurability from "../infra/directory-durability.js";
+import { readSessionSqliteMigrationManifest } from "../infra/session-sqlite-migration-manifest.js";
 import { createPluginDoctorStateMigrationContext } from "../infra/state-migrations.plugin-doctor-context.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { readSessionSqliteMigrationManifest } from "./doctor-session-sqlite-migration-run.js";
 import { countBlockingSessionSqliteIssues } from "./doctor-session-sqlite-types.js";
 import { seedDeferredPluginSessionSource } from "./doctor-session-sqlite.deferred-plugin.test-support.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
