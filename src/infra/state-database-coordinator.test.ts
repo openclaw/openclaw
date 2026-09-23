@@ -1,6 +1,7 @@
 import { once } from "node:events";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -14,6 +15,7 @@ import {
   acquireGatewayLifecycleCoordinator,
   acquireStateDatabaseCoordinator,
   acquireStateDatabaseHandleExclusion,
+  resetStateLifecycleRuntimeDirectoryCacheForTest,
   resolveStateDatabaseCoordinatorPath,
   resolveStateLifecycleRuntimeDirectory,
   tryCreateGatewaySchemaFenceDelegate,
@@ -166,6 +168,76 @@ describe("state database coordinator", () => {
       }
     });
     expect(resolveStateLifecycleRuntimeDirectory()).toBe(original);
+  });
+
+  describe("default runtime directory resolution (OPENCLAW_LOCKS_DIR / Termux fallback)", () => {
+    const env = captureEnv(["OPENCLAW_LOCKS_DIR"]);
+    afterEach(() => {
+      resetStateLifecycleRuntimeDirectoryCacheForTest();
+      env.restore();
+    });
+
+    it("prefers the OPENCLAW_LOCKS_DIR override over the /tmp probe", () => {
+      if (process.platform === "win32") {
+        return;
+      }
+      const target = tempDirs.make("openclaw-locks-dir-override-");
+      setTestEnvValue("OPENCLAW_LOCKS_DIR", target);
+      expect(resolveStateLifecycleRuntimeDirectory()).toBe(target);
+    });
+
+    it("falls back to the user-scoped state directory when /tmp is not writable", () => {
+      if (process.platform === "win32") {
+        return;
+      }
+      const originalAccessSync = fsSync.accessSync;
+      const accessSpy = vi
+        .spyOn(fsSync, "accessSync")
+        .mockImplementation(((target: unknown, ...rest: unknown[]) => {
+          if (target === "/tmp") {
+            throw Object.assign(new Error("EROFS: read-only file system"), { code: "EROFS" });
+          }
+          return originalAccessSync(target, ...(rest as [NodeJS.Constant, (err: boolean | undefined) => void]));
+        }) as typeof fsSync.accessSync);
+      try {
+        resetStateLifecycleRuntimeDirectoryCacheForTest();
+        expect(resolveStateLifecycleRuntimeDirectory()).toBe(
+          path.join(os.homedir(), ".openclaw", "locks"),
+        );
+        // The fallback result is cached for the process lifetime.
+        accessSpy.mockRestore();
+        expect(resolveStateLifecycleRuntimeDirectory()).toBe(
+          path.join(os.homedir(), ".openclaw", "locks"),
+        );
+      } finally {
+        accessSpy.mockRestore();
+        resetStateLifecycleRuntimeDirectoryCacheForTest();
+      }
+    });
+
+    it("keeps /tmp when it is writable", () => {
+      if (process.platform === "win32") {
+        return;
+      }
+      // On Termux/Android the /tmp probe legitimately fails (the shell user
+      // cannot write /tmp), so assert whichever branch the real probe takes.
+      let tmpWritable = false;
+      try {
+        fsSync.accessSync("/tmp", fsSync.constants.W_OK);
+        tmpWritable = true;
+      } catch {
+        tmpWritable = false;
+      }
+      resetStateLifecycleRuntimeDirectoryCacheForTest();
+      try {
+        const expected = tmpWritable
+          ? "/tmp"
+          : path.join(os.homedir(), ".openclaw", "locks");
+        expect(resolveStateLifecycleRuntimeDirectory()).toBe(expected);
+      } finally {
+        resetStateLifecycleRuntimeDirectoryCacheForTest();
+      }
+    });
   });
 
   it.each([

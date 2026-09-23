@@ -1,5 +1,6 @@
 // Coordinates Gateway presence and shared-state lifecycle operations outside removable state.
 import { AsyncLocalStorage } from "node:async_hooks";
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { MessagePort } from "node:worker_threads";
@@ -90,9 +91,43 @@ export function resolveStateLifecycleRuntimeDirectory(): string {
   if (captured !== undefined) {
     return captured.directory;
   }
-  return process.platform === "win32"
-    ? path.join(os.homedir(), "AppData", "Local", "OpenClaw", "locks")
-    : "/tmp";
+  if (process.platform === "win32") {
+    return path.join(os.homedir(), "AppData", "Local", "OpenClaw", "locks");
+  }
+  // Explicit override wins and skips the /tmp probe (tests pin directories this way).
+  const override = process.env.OPENCLAW_LOCKS_DIR?.trim();
+  if (override) {
+    return override;
+  }
+  // /tmp is writable for the normal desktop/server owner but not for the
+  // Termux/Android shell user, whose /tmp lives outside the app sandbox and
+  // is owned by another user. Fall back to the user-scoped state directory so
+  // the gateway can still run where /tmp is not usable.
+  const posixRuntimeDirectory = posixCoordinatorRoot();
+  return posixRuntimeDirectory;
+}
+
+// Cached so the default-resolution path stays allocation-free; the probe only
+// runs once per process.
+let cachedPosixCoordinatorRoot: string | undefined;
+
+function posixCoordinatorRoot(): string {
+  if (cachedPosixCoordinatorRoot !== undefined) {
+    return cachedPosixCoordinatorRoot;
+  }
+  let root = "/tmp";
+  try {
+    fs.accessSync(root, fs.constants.W_OK);
+  } catch {
+    root = path.join(os.homedir(), ".openclaw", "locks");
+  }
+  cachedPosixCoordinatorRoot = root;
+  return root;
+}
+
+/** Test-only: re-run the /tmp writability probe (e.g. after mocking fs). */
+export function resetStateLifecycleRuntimeDirectoryCacheForTest(): void {
+  cachedPosixCoordinatorRoot = undefined;
 }
 
 /** Capture the directory owner's retention policy before crossing an async or worker boundary. */
