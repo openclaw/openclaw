@@ -109,7 +109,7 @@ suite.define(() => {
             JSON.stringify({ sessionKey }),
           ]);
           expect(history.code, history.stderr).toBe(0);
-          return (JSON.parse(history.stdout) as Frame["payload"]).inFlightRun;
+          return (JSON.parse(history.stdout) as NonNullable<Frame["payload"]>).inFlightRun;
         };
         const url = new URL(suite.server.baseUrl);
         url.pathname = "/chat/main/reconnect-continuity";
