@@ -77,7 +77,9 @@ export function createAgentsApiMessageProjection(
       if (
         (event.type === "agent.session.turn.item.added" ||
           event.type === "agent.session.turn.item.done") &&
-        event.item.type === "message" && event.item.role === "assistant" && event.item.id
+        event.item.type === "message" &&
+        event.item.role === "assistant" &&
+        event.item.id
       ) {
         assistantPhases.set(event.item.id, event.item.phase);
         if (event.type === "agent.session.turn.item.done") {

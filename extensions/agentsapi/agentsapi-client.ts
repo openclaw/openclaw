@@ -6,21 +6,22 @@ import type { Turn } from "openai/resources/beta/agents/sessions/turns";
 import { responseWithRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 
-export type { AgentSessionEvent as AgentsApiEvent, AgentSessionItem as AgentsApiItem, Turn as AgentsApiTurn };
+export type {
+  AgentSessionEvent as AgentsApiEvent,
+  AgentSessionItem as AgentsApiItem,
+  Turn as AgentsApiTurn,
+};
 
 /** The SDK owns the wire protocol; OpenClaw retains native session authority. */
 export class AgentsApiClient {
   private readonly sessions: OpenAI["beta"]["agents"]["sessions"];
 
-  constructor(apiKey: string, private readonly assertCurrent: () => void) {
+  constructor(
+    apiKey: string,
+    private readonly assertCurrent: () => void,
+  ) {
     this.sessions = new OpenAI({
       apiKey,
-      adminAPIKey: null,
-      baseURL: "https://api.openai.com/v1",
-      organization: null,
-      project: null,
-      logLevel: "off",
-      maxRetries: 2,
       fetch: async (input, init) => {
         this.assertCurrent();
         const guarded = await fetchWithSsrFGuard({
@@ -42,15 +43,18 @@ export class AgentsApiClient {
   }
 
   async create(signal: AbortSignal, instructions: string, model: string): Promise<string> {
-    const session = await this.sessions.create({
-      agent: {
-        model,
-        instructions,
-        reasoning: { effort: "low" },
-        multi_agent: { enabled: false },
+    const session = await this.sessions.create(
+      {
+        agent: {
+          model,
+          instructions,
+          reasoning: { effort: "low" },
+          multi_agent: { enabled: false },
+        },
+        environment: { type: "openai_hosted" },
       },
-      environment: { type: "openai_hosted" },
-    }, { signal, headers: { "Idempotency-Key": randomUUID() } });
+      { signal, headers: { "Idempotency-Key": randomUUID() } },
+    );
     this.assertCurrent();
     return session.id;
   }
@@ -78,11 +82,15 @@ export class AgentsApiClient {
 
   async turns(sessionId: string, signal: AbortSignal, after?: string, latestOnly = false) {
     const turns: Turn[] = [];
-    const pages = this.sessions.turns.list(sessionId, {
-      order: latestOnly ? "desc" : "asc",
-      limit: latestOnly ? 1 : 100,
-      after,
-    }, { signal });
+    const pages = this.sessions.turns.list(
+      sessionId,
+      {
+        order: latestOnly ? "desc" : "asc",
+        limit: latestOnly ? 1 : 100,
+        after,
+      },
+      { signal },
+    );
     for await (const page of (await pages).iterPages()) {
       this.assertCurrent();
       if (page.data.some((turn) => turn.session_id !== sessionId || turn.subagent_id !== null)) {
@@ -100,21 +108,31 @@ export class AgentsApiClient {
   }
 
   async message(sessionId: string, text: string, signal: AbortSignal): Promise<void> {
-    await this.sessions.events.create(sessionId, {
-      events: [{
-        type: "agent.session.input.message",
-        input: [{ role: "user", content: [{ type: "input_text", text }] }],
-      }],
-      "Idempotency-Key": randomUUID(),
-    }, { signal });
+    await this.sessions.events.create(
+      sessionId,
+      {
+        events: [
+          {
+            type: "agent.session.input.message",
+            input: [{ role: "user", content: [{ type: "input_text", text }] }],
+          },
+        ],
+        "Idempotency-Key": randomUUID(),
+      },
+      { signal },
+    );
     this.assertCurrent();
   }
 
   async cancel(sessionId: string, signal: AbortSignal): Promise<void> {
-    await this.sessions.events.create(sessionId, {
-      events: [{ type: "agent.session.input.cancel" }],
-      "Idempotency-Key": randomUUID(),
-    }, { signal });
+    await this.sessions.events.create(
+      sessionId,
+      {
+        events: [{ type: "agent.session.input.cancel" }],
+        "Idempotency-Key": randomUUID(),
+      },
+      { signal },
+    );
     this.assertCurrent();
     // The input acknowledgement is not a settlement barrier for hosted work.
     while (true) {
