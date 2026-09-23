@@ -179,7 +179,7 @@ it("opens an unconfigured external store without reconstructing unknown deletion
     undefined,
     () => {},
   );
-  const opening = await Promise.allSettled([generation.runExisting(source, async () => "opened")]);
+  const opening = await Promise.allSettled([generation.run(source, async () => "opened")]);
   const closing = await Promise.allSettled([generation.close()]);
   expect(opening).toEqual([{ status: "fulfilled", value: "opened" }]);
   expect(closing).toEqual([{ status: "fulfilled", value: undefined }]);
