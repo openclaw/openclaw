@@ -3,6 +3,7 @@ import type { HelloOk } from "@openclaw/gateway-protocol";
 import { describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import { GatewayClient } from "./client.js";
+import { resolveGatewayMaxPayloadBytes } from "./payload-limits.js";
 import type { GatewayProtocolConnectAuthority } from "./protocol-client-contract.js";
 import type { GatewayProtocolSocket } from "./protocol-client.js";
 
@@ -30,7 +31,19 @@ function protocolHarness(client: GatewayClient): ProtocolHarness {
 }
 
 function payloadHarness(client: GatewayClient): PayloadHarness {
-  return client as unknown as PayloadHarness;
+  const adapter = client as unknown as Pick<PayloadHarness, "handleConnectHello">;
+  const protocol = protocolHarness(client) as ProtocolHarness & {
+    maxPayloadBytes: number | undefined;
+  };
+  return {
+    handleConnectHello: (hello, assembled, authority) => {
+      protocol.maxPayloadBytes = resolveGatewayMaxPayloadBytes(hello.policy);
+      adapter.handleConnectHello(hello, assembled, authority);
+    },
+    get maxPayloadBytes() {
+      return protocol.maxPayloadBytes;
+    },
+  };
 }
 
 function currentConnectAuthority(): GatewayProtocolConnectAuthority {

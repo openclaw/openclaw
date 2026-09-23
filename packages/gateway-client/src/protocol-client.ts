@@ -5,6 +5,7 @@ import {
 } from "@openclaw/gateway-protocol/frame-guards";
 import { RetrySupervisor, sleepWithAbort } from "@openclaw/retry";
 import { GatewayEventListeners } from "./event-listeners.js";
+import { resolveGatewayMaxPayloadBytes, validateGatewayRequestFrame } from "./payload-limits.js";
 import { GatewayPendingRequests, type GatewayProtocolRequestTiming } from "./pending-request.js";
 import type {
   CloseSnapshot,
@@ -59,6 +60,7 @@ export class GatewayProtocolClient<TPlan> {
   private reconnectSignal: AbortSignal | null = null;
   private socketOpened = false;
   private helloReceived = false;
+  maxPayloadBytes: number | undefined;
   private connectFailure: GatewayProtocolCloseContext["connectFailure"];
   private connectTiming: ConnectTimingState | null = null;
   private stoppedSocket?: { socket: GatewayProtocolSocket; context: CloseSnapshot };
@@ -141,7 +143,11 @@ export class GatewayProtocolClient<TPlan> {
     return this.requests.request<T>(
       {
         send: (frame) => {
-          this.opts.validateRequestFrame?.(frame, method, !this.helloReceived);
+          if (this.opts.validateRequestFrame) {
+            this.opts.validateRequestFrame(frame, method, !this.helloReceived);
+          } else {
+            validateGatewayRequestFrame(frame, method, this.maxPayloadBytes, !this.helloReceived);
+          }
           socket.send(frame);
         },
       },
@@ -367,6 +373,7 @@ export class GatewayProtocolClient<TPlan> {
           return;
         }
         this.helloReceived = true;
+        this.maxPayloadBytes = resolveGatewayMaxPayloadBytes(hello.policy);
         this.clearHandshakeTimer();
         this.connectFailure = undefined;
         this.reconnectSupervisor.reset();
