@@ -84,6 +84,7 @@ import { handleChatSend, handleTrustedInternalChatSend } from "./chat-send-handl
 import { readChatSendDedupeResponse } from "./chat-send-pre-admission.js";
 import {
   createChatDirectiveSuiteResources,
+  expectClaimOnlyTranscriptMedia,
   seedChatDirectiveFileTranscript,
 } from "./chat.directive-tags.test-support.js";
 import { initializeSessionReadContext } from "./sessions-read-cache.test-support.js";
@@ -620,28 +621,6 @@ const { handleDirectExternalChatSend } = await import("./chat-send-external-entr
 // Multi-media transcript mirroring can exceed 1s on loaded CI before the async broadcast lands.
 async function waitForAssertion(assertion: () => void, timeoutMs = 5_000, stepMs = 2) {
   await vi.waitFor(assertion, { interval: stepMs, timeout: timeoutMs });
-}
-
-function expectClaimOnlyTranscriptMedia(
-  message: unknown,
-  expectedMedia: unknown[],
-  forbiddenValues: string[],
-) {
-  const media = (
-    message as { __openclaw?: { media?: Array<Record<string, unknown>> } } | undefined
-  )?.["__openclaw"]?.media;
-  expect(media).toEqual(expectedMedia);
-  for (const fact of media ?? []) {
-    expect(fact.url).toMatch(/^media:\/\/inbound\/[^?#]+$/u);
-    expect(fact).not.toHaveProperty("path");
-    expect(fact).not.toHaveProperty("workspaceDir");
-    expect(fact).not.toHaveProperty("data");
-  }
-  const serialized = JSON.stringify(message);
-  expect(serialized).not.toContain("base64");
-  for (const value of forbiddenValues) {
-    expect(serialized).not.toContain(value);
-  }
 }
 
 function createFixturePaths(prefix: string): { dir: string; transcriptPath: string } {
@@ -6270,6 +6249,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   });
 
   it("prepares non-image chat.send attachments as claim-only media refs without dispatch images", async () => {
+    const fileName = "brief café 雪 🦞.pdf";
     await createReadyChatTranscript("openclaw-chat-send-user-transcript-file-");
     mockState.triggerAgentRunStart = true;
     setSavedMediaResults(["/tmp/chat-send-brief.pdf", "application/pdf"]);
@@ -6279,7 +6259,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       requestParams: {
         attachments: [
           createFileAttachment(
-            "brief.pdf",
+            fileName,
             "application/pdf",
             Buffer.from("%PDF-1.4\n").toString("base64"),
           ),
@@ -6295,6 +6275,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         | undefined;
       expect(mockState.lastDispatchImages).toBeUndefined();
       expect(mockState.lastDispatchImageOrder).toBeUndefined();
+      expect(mockState.lastDispatchCtx?.media).toEqual([
+        expect.objectContaining({ path: "/tmp/chat-send-brief.pdf", fileName }),
+      ]);
       expect(mockState.lastDispatchCtx?.Body).toBe(
         "summarize this\n[media attached: media://inbound/saved-media]",
       );
@@ -6310,7 +6293,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
             url: "media://inbound/saved-media",
             contentType: "application/pdf",
             kind: "document",
-            fileName: "brief.pdf",
+            fileName,
             sizeBytes: 9,
             hydrationSuppressed: true,
           },
